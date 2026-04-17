@@ -2,6 +2,8 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"fmt"
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
@@ -58,9 +60,13 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
 			for _, tc := range msg.ToolCalls {
+				var input map[string]any
+				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
+					return nil, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
+				}
 				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(
 					tc.ID,
-					tc.Function.Arguments,
+					input,
 					tc.Function.Name,
 				))
 			}
@@ -113,12 +119,16 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		case "text":
 			response.Content += block.Text
 		case "tool_use":
+			argsJSON, err := json.Marshal(block.Input)
+			if err != nil {
+				return nil, fmt.Errorf("failed to marshal tool input: %w", err)
+			}
 			response.ToolCalls = append(response.ToolCalls, ToolCall{
 				ID:   block.ID,
 				Type: "function",
 				Function: ToolCallFunction{
 					Name:      block.Name,
-					Arguments: string(block.Input),
+					Arguments: string(argsJSON),
 				},
 			})
 		}
