@@ -114,12 +114,45 @@ func ReadFile(args string) (string, error) {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	if isBlockedDevicePath(argsMap.Path) {
+		return "", fmt.Errorf("cannot read from blocked device path: %s", argsMap.Path)
+	}
+
 	content, err := os.ReadFile(argsMap.Path)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
 	return string(content), nil
+}
+
+var blockedDevicePaths = map[string]bool{
+	"/dev/zero":     true,
+	"/dev/random":   true,
+	"/dev/urandom":  true,
+	"/dev/full":     true,
+	"/dev/stdin":    true,
+	"/dev/tty":      true,
+	"/dev/console":  true,
+	"/dev/stdout":   true,
+	"/dev/stderr":   true,
+	"/dev/fd/0":     true,
+	"/dev/fd/1":     true,
+	"/dev/fd/2":     true,
+}
+
+func isBlockedDevicePath(filePath string) bool {
+	if blockedDevicePaths[filePath] {
+		return true
+	}
+	// /proc/self/fd/0-2 and /proc/<pid>/fd/0-2 are Linux aliases for stdio
+	if len(filePath) >= 11 && filePath[:6] == "/proc/" {
+		// Check endsWith for /fd/0, /fd/1, /fd/2
+		if len(filePath) >= 10 && (filePath[len(filePath)-5:] == "/fd/0" || filePath[len(filePath)-5:] == "/fd/1" || filePath[len(filePath)-5:] == "/fd/2") {
+			return true
+		}
+	}
+	return false
 }
 
 // WriteFile is the Write tool implementation
