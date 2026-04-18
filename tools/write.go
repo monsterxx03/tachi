@@ -6,8 +6,20 @@ import (
 	"os"
 )
 
-// WriteFile is the Write tool implementation
-func WriteFile(args string) (string, error) {
+// WriteTool writes content to a file
+type WriteTool struct{}
+
+func (t WriteTool) Name() string        { return "Write" }
+func (t WriteTool) Description() string { return "Write content to a file" }
+func (t WriteTool) Properties() map[string]PropertySchema {
+	return map[string]PropertySchema{
+		"path":    {Type: "string", Description: "The path to write to"},
+		"content": {Type: "string", Description: "The content to write"},
+	}
+}
+func (t WriteTool) Required() []string    { return []string{"path", "content"} }
+func (t WriteTool) Parallel() bool       { return false }
+func (t WriteTool) Execute(args string) (string, error) {
 	var argsMap struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`

@@ -17,50 +17,20 @@ type GlobResult struct {
 	Truncated  bool     `json:"truncated"`
 }
 
-// extractGlobBaseDirectory extracts the static base directory from a glob pattern.
-// The base directory is everything before the first glob special character (* ? [ {).
-// Returns the directory portion and the remaining relative pattern.
-func extractGlobBaseDirectory(pattern string) (baseDir string, relativePattern string) {
-	// Find the first glob special character: *, ?, [, {
-	globChars := []string{"*", "?", "[", "{"}
-	firstGlobIndex := -1
+// GlobTool finds files matching a glob pattern using ripgrep
+type GlobTool struct{}
 
-	for _, char := range globChars {
-		idx := strings.Index(pattern, char)
-		if idx != -1 && (firstGlobIndex == -1 || idx < firstGlobIndex) {
-			firstGlobIndex = idx
-		}
+func (t GlobTool) Name() string        { return "Glob" }
+func (t GlobTool) Description() string { return "Find files matching a glob pattern using ripgrep" }
+func (t GlobTool) Properties() map[string]PropertySchema {
+	return map[string]PropertySchema{
+		"pattern": {Type: "string", Description: "The glob pattern to match (e.g., **/*.ts)"},
+		"path":    {Type: "string", Description: "The directory to search in (defaults to current directory)"},
 	}
-
-	if firstGlobIndex == -1 {
-		// No glob characters - this is a literal path
-		dir := filepath.Dir(pattern)
-		file := filepath.Base(pattern)
-		return dir, file
-	}
-
-	// Get everything before the first glob character
-	staticPrefix := pattern[:firstGlobIndex]
-
-	// Find the last path separator in the static prefix
-	lastSepIndex := strings.LastIndex(staticPrefix, "/")
-	if lastSepIndex == -1 {
-		lastSepIndex = strings.LastIndex(staticPrefix, string(filepath.Separator))
-	}
-
-	if lastSepIndex == -1 {
-		// No path separator before the glob - pattern is relative to cwd
-		return "", pattern
-	}
-
-	baseDir = staticPrefix[:lastSepIndex]
-	relativePattern = pattern[lastSepIndex+1:]
-
-	return baseDir, relativePattern
 }
-
-// GlobFile is the Glob tool implementation using ripgrep
-func GlobFile(args string) (string, error) {
+func (t GlobTool) Required() []string    { return []string{"pattern"} }
+func (t GlobTool) Parallel() bool       { return true }
+func (t GlobTool) Execute(args string) (string, error) {
 	// Check if ripgrep is available
 	if _, err := exec.LookPath("rg"); err != nil {
 		return "", fmt.Errorf("ripgrep (rg) not found in PATH: %w", err)
@@ -165,6 +135,48 @@ func GlobFile(args string) (string, error) {
 		Filenames:  filenames,
 		Truncated:  truncated,
 	})
+}
+
+// extractGlobBaseDirectory extracts the static base directory from a glob pattern.
+// The base directory is everything before the first glob special character (* ? [ {).
+// Returns the directory portion and the remaining relative pattern.
+func extractGlobBaseDirectory(pattern string) (baseDir string, relativePattern string) {
+	// Find the first glob special character: *, ?, [, {
+	globChars := []string{"*", "?", "[", "{"}
+	firstGlobIndex := -1
+
+	for _, char := range globChars {
+		idx := strings.Index(pattern, char)
+		if idx != -1 && (firstGlobIndex == -1 || idx < firstGlobIndex) {
+			firstGlobIndex = idx
+		}
+	}
+
+	if firstGlobIndex == -1 {
+		// No glob characters - this is a literal path
+		dir := filepath.Dir(pattern)
+		file := filepath.Base(pattern)
+		return dir, file
+	}
+
+	// Get everything before the first glob character
+	staticPrefix := pattern[:firstGlobIndex]
+
+	// Find the last path separator in the static prefix
+	lastSepIndex := strings.LastIndex(staticPrefix, "/")
+	if lastSepIndex == -1 {
+		lastSepIndex = strings.LastIndex(staticPrefix, string(filepath.Separator))
+	}
+
+	if lastSepIndex == -1 {
+		// No path separator before the glob - pattern is relative to cwd
+		return "", pattern
+	}
+
+	baseDir = staticPrefix[:lastSepIndex]
+	relativePattern = pattern[lastSepIndex+1:]
+
+	return baseDir, relativePattern
 }
 
 func marshalGlobResult(result GlobResult) (string, error) {

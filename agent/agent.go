@@ -38,42 +38,10 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 
 // RegisterTools registers tools with the agent
 func (a *AIAgent) RegisterTools() {
-	// Register Read tool
-	a.toolRegistry.Register(
-		"Read",
-		"Read the contents of a file",
-		map[string]tools.PropertySchema{
-			"path":   {Type: "string", Description: "The path to the file to read"},
-			"offset": {Type: "number", Description: "Line number to start reading from (1-indexed, default: 1)"},
-			"limit":  {Type: "number", Description: "Number of lines to read (default: all lines from offset)"},
-		},
-		[]string{"path"},
-		tools.ReadFile,
-	)
-
-	// Register Write tool
-	a.toolRegistry.Register(
-		"Write",
-		"Write content to a file",
-		map[string]tools.PropertySchema{
-			"path":    {Type: "string", Description: "The path to write to"},
-			"content": {Type: "string", Description: "The content to write"},
-		},
-		[]string{"path", "content"},
-		tools.WriteFile,
-	)
-
-	// Register Glob tool
-	a.toolRegistry.Register(
-		"Glob",
-		"Find files matching a glob pattern using ripgrep",
-		map[string]tools.PropertySchema{
-			"pattern": {Type: "string", Description: "The glob pattern to match (e.g., **/*.ts)"},
-			"path":    {Type: "string", Description: "The directory to search in (defaults to current directory)"},
-		},
-		[]string{"pattern"},
-		tools.GlobFile,
-	)
+	// Register tools - each tool implements the Tool interface
+	a.toolRegistry.Register(tools.ReadTool{})
+	a.toolRegistry.Register(tools.WriteTool{})
+	a.toolRegistry.Register(tools.GlobTool{})
 }
 
 // RunResult represents the result of running the agent

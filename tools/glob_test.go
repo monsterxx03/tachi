@@ -80,7 +80,8 @@ func TestGlobFile_BasicPattern(t *testing.T) {
 	tmpDir := setupTestDir(t)
 	defer os.RemoveAll(tmpDir)
 
-	result, err := GlobFile(`{"pattern": "**/*.go", "path": "` + tmpDir + `"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "**/*.go", "path": "` + tmpDir + `"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -106,7 +107,8 @@ func TestGlobFile_SpecificDirectory(t *testing.T) {
 	tmpDir := setupTestDir(t)
 	defer os.RemoveAll(tmpDir)
 
-	result, err := GlobFile(`{"pattern": "src/**/*.go", "path": "` + tmpDir + `"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "src/**/*.go", "path": "` + tmpDir + `"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -132,7 +134,8 @@ func TestGlobFile_SingleFilePattern(t *testing.T) {
 
 	// Note: ripgrep's --glob *.go matches .go files at any level recursively
 	// To match only in root directory, use a pattern like "./ *.go"
-	result, err := GlobFile(`{"pattern": "*.go", "path": "` + tmpDir + `"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "*.go", "path": "` + tmpDir + `"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -159,7 +162,8 @@ func TestGlobFile_AbsolutePattern(t *testing.T) {
 
 	// Test with absolute pattern
 	pattern := filepath.Join(tmpDir, "src/**/*.go")
-	result, err := GlobFile(`{"pattern": "` + pattern + `"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "` + pattern + `"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -182,7 +186,8 @@ func TestGlobFile_NoMatches(t *testing.T) {
 	tmpDir := setupTestDir(t)
 	defer os.RemoveAll(tmpDir)
 
-	result, err := GlobFile(`{"pattern": "**/*.nonexistent", "path": "` + tmpDir + `"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "**/*.nonexistent", "path": "` + tmpDir + `"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -201,7 +206,8 @@ func TestGlobFile_NoMatches(t *testing.T) {
 }
 
 func TestGlobFile_EmptyPattern(t *testing.T) {
-	_, err := GlobFile(`{"pattern": ""}`)
+	tool := GlobTool{}
+	_, err := tool.Execute(`{"pattern": ""}`)
 	if err == nil {
 		t.Error("Expected error for empty pattern")
 	}
@@ -215,7 +221,8 @@ func TestGlobFile_DurationAndTruncatedFields(t *testing.T) {
 	tmpDir := setupTestDir(t)
 	defer os.RemoveAll(tmpDir)
 
-	result, err := GlobFile(`{"pattern": "**/*.go", "path": "` + tmpDir + `"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "**/*.go", "path": "` + tmpDir + `"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -249,7 +256,8 @@ func TestGlobFile_RelativePaths(t *testing.T) {
 		t.Fatalf("Failed to chdir: %v", err)
 	}
 
-	result, err := GlobFile(`{"pattern": "src/**/*.go"}`)
+	tool := GlobTool{}
+	result, err := tool.Execute(`{"pattern": "src/**/*.go"}`)
 	if err != nil {
 		t.Fatalf("GlobFile failed: %v", err)
 	}
@@ -275,7 +283,8 @@ func TestGlobFile_RipgrepNotFound(t *testing.T) {
 	// Set PATH to a directory that definitely doesn't have rg
 	os.Setenv("PATH", "/tmp")
 
-	_, err := GlobFile(`{"pattern": "**/*.go"}`)
+	tool := GlobTool{}
+	_, err := tool.Execute(`{"pattern": "**/*.go"}`)
 	if err == nil || !strings.Contains(err.Error(), "ripgrep") {
 		t.Errorf("Expected error about ripgrep not found, got: %v", err)
 	}

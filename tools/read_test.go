@@ -7,7 +7,9 @@ import (
 	"testing"
 )
 
-func TestReadFile(t *testing.T) {
+func TestReadTool(t *testing.T) {
+	tool := ReadTool{}
+
 	// Create a test file
 	content := "Hello, World!"
 	err := os.WriteFile("/tmp/test_read.txt", []byte(content), 0644)
@@ -17,23 +19,26 @@ func TestReadFile(t *testing.T) {
 	defer os.Remove("/tmp/test_read.txt")
 
 	// Test Read
-	result, err := ReadFile(`{"path": "/tmp/test_read.txt"}`)
+	result, err := tool.Execute(`{"path": "/tmp/test_read.txt"}`)
 	if err != nil {
-		t.Fatalf("ReadFile failed: %v", err)
+		t.Fatalf("ReadTool.Execute failed: %v", err)
 	}
 	if result != content {
 		t.Errorf("Expected %q, got %q", content, result)
 	}
 }
 
-func TestReadFileNotFound(t *testing.T) {
-	_, err := ReadFile(`{"path": "/nonexistent/file.txt"}`)
+func TestReadToolNotFound(t *testing.T) {
+	tool := ReadTool{}
+	_, err := tool.Execute(`{"path": "/nonexistent/file.txt"}`)
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
 	}
 }
 
-func TestReadFileWithOffsetAndLimit(t *testing.T) {
+func TestReadToolWithOffsetAndLimit(t *testing.T) {
+	tool := ReadTool{}
+
 	// Create a test file with 10 lines
 	var lines []string
 	for i := 1; i <= 10; i++ {
@@ -74,9 +79,9 @@ func TestReadFileWithOffsetAndLimit(t *testing.T) {
 				args = `{"path": "/tmp/test_read_offset.txt"}`
 			}
 
-			result, err := ReadFile(args)
+			result, err := tool.Execute(args)
 			if err != nil {
-				t.Fatalf("ReadFile failed: %v", err)
+				t.Fatalf("ReadTool.Execute failed: %v", err)
 			}
 			if result != tt.want {
 				t.Errorf("Expected %q, got %q", tt.want, result)
@@ -85,7 +90,9 @@ func TestReadFileWithOffsetAndLimit(t *testing.T) {
 	}
 }
 
-func TestReadFileBinary(t *testing.T) {
+func TestReadToolBinary(t *testing.T) {
+	tool := ReadTool{}
+
 	// Create a binary file with null bytes
 	binaryContent := []byte{0x00, 0x01, 0x02, 'h', 'e', 'l', 'l', 'o'}
 	err := os.WriteFile("/tmp/test_binary.bin", binaryContent, 0644)
@@ -94,7 +101,7 @@ func TestReadFileBinary(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_binary.bin")
 
-	_, err = ReadFile(`{"path": "/tmp/test_binary.bin"}`)
+	_, err = tool.Execute(`{"path": "/tmp/test_binary.bin"}`)
 	if err == nil {
 		t.Error("Expected error for binary file")
 	}
@@ -103,7 +110,9 @@ func TestReadFileBinary(t *testing.T) {
 	}
 }
 
-func TestReadFileTooLarge(t *testing.T) {
+func TestReadToolTooLarge(t *testing.T) {
+	tool := ReadTool{}
+
 	// Create a file larger than 256KB
 	largeContent := make([]byte, 257*1024) // 257KB
 	for i := range largeContent {
@@ -115,7 +124,7 @@ func TestReadFileTooLarge(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_large.txt")
 
-	_, err = ReadFile(`{"path": "/tmp/test_large.txt"}`)
+	_, err = tool.Execute(`{"path": "/tmp/test_large.txt"}`)
 	if err == nil {
 		t.Error("Expected error for large file")
 	}
@@ -130,7 +139,9 @@ func TestReadFileTooLarge(t *testing.T) {
 	}
 }
 
-func TestReadFileAtLimit(t *testing.T) {
+func TestReadToolAtLimit(t *testing.T) {
+	tool := ReadTool{}
+
 	// Create a file exactly at 256KB
 	limitContent := make([]byte, 256*1024) // exactly 256KB
 	for i := range limitContent {
@@ -143,7 +154,7 @@ func TestReadFileAtLimit(t *testing.T) {
 	defer os.Remove("/tmp/test_at_limit.txt")
 
 	// Should not error - exactly at limit
-	_, err = ReadFile(`{"path": "/tmp/test_at_limit.txt"}`)
+	_, err = tool.Execute(`{"path": "/tmp/test_at_limit.txt"}`)
 	if err != nil {
 		t.Errorf("Should not error at exactly 256KB, got: %v", err)
 	}
