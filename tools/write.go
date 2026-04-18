@@ -9,16 +9,16 @@ import (
 // WriteTool writes content to a file
 type WriteTool struct{}
 
-func (t WriteTool) Name() string        { return "Write" }
-func (t WriteTool) Description() string { return "Write content to a file" }
+func (t WriteTool) Name() string        { return "WriteFile" }
+func (t WriteTool) Description() string { return "Writes a file to the local filesystem." }
 func (t WriteTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":    {Type: "string", Description: "The path to write to"},
 		"content": {Type: "string", Description: "The content to write"},
 	}
 }
-func (t WriteTool) Required() []string    { return []string{"path", "content"} }
-func (t WriteTool) Parallel() bool       { return false }
+func (t WriteTool) Required() []string { return []string{"path", "content"} }
+func (t WriteTool) Parallel() bool     { return false }
 func (t WriteTool) Execute(args string) (string, error) {
 	var argsMap struct {
 		Path    string `json:"path"`

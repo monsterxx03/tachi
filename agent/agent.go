@@ -9,6 +9,8 @@ import (
 	"github.com/monsterxx03/tachi/tools"
 )
 
+const defaultMaxTokens = 32000
+
 // IterationBudget tracks remaining iterations
 type IterationBudget struct {
 	Remaining int
@@ -55,7 +57,7 @@ type RunResult struct {
 // RunConversation is the main agent loop
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, maxTokens int) *RunResult {
 	if maxTokens <= 0 {
-		maxTokens = 32000
+		maxTokens = defaultMaxTokens
 	}
 
 	// Initialize conversation history

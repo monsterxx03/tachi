@@ -17,7 +17,7 @@ func ErrFileTooLarge(actualSize, limitSize int64) error {
 // ReadTool reads the contents of a file
 type ReadTool struct{}
 
-func (t ReadTool) Name() string        { return "Read" }
+func (t ReadTool) Name() string        { return "ReadFile" }
 func (t ReadTool) Description() string { return "Read the contents of a file" }
 func (t ReadTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
@@ -26,8 +26,8 @@ func (t ReadTool) Properties() map[string]PropertySchema {
 		"limit":  {Type: "number", Description: "Number of lines to read (default: all lines from offset)"},
 	}
 }
-func (t ReadTool) Required() []string    { return []string{"path"} }
-func (t ReadTool) Parallel() bool       { return true }
+func (t ReadTool) Required() []string { return []string{"path"} }
+func (t ReadTool) Parallel() bool     { return true }
 func (t ReadTool) Execute(args string) (string, error) {
 	var argsMap struct {
 		Path   string `json:"path"`
