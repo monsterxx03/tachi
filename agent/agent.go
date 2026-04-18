@@ -19,8 +19,8 @@ type IterationBudget struct {
 type AIAgent struct {
 	model           string
 	provider        llm.Provider
-	maxIterations  int
-	toolRegistry   *tools.Registry
+	maxIterations   int
+	toolRegistry    *tools.Registry
 	iterationBudget *IterationBudget
 	budgetGraceCall bool
 }
@@ -31,7 +31,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		model:           model,
 		provider:        provider,
 		maxIterations:   maxIterations,
-		toolRegistry:   tools.NewRegistry(),
+		toolRegistry:    tools.NewRegistry(),
 		iterationBudget: &IterationBudget{Remaining: maxIterations},
 	}
 }
@@ -43,7 +43,9 @@ func (a *AIAgent) RegisterTools() {
 		"Read",
 		"Read the contents of a file",
 		map[string]tools.PropertySchema{
-			"path": {Type: "string", Description: "The path to the file to read"},
+			"path":   {Type: "string", Description: "The path to the file to read"},
+			"offset": {Type: "number", Description: "Line number to start reading from (1-indexed, default: 1)"},
+			"limit":  {Type: "number", Description: "Number of lines to read (default: all lines from offset)"},
 		},
 		[]string{"path"},
 		tools.ReadFile,
@@ -60,11 +62,23 @@ func (a *AIAgent) RegisterTools() {
 		[]string{"path", "content"},
 		tools.WriteFile,
 	)
+
+	// Register Glob tool
+	a.toolRegistry.Register(
+		"Glob",
+		"Find files matching a glob pattern using ripgrep",
+		map[string]tools.PropertySchema{
+			"pattern": {Type: "string", Description: "The glob pattern to match (e.g., **/*.ts)"},
+			"path":    {Type: "string", Description: "The directory to search in (defaults to current directory)"},
+		},
+		[]string{"pattern"},
+		tools.GlobFile,
+	)
 }
 
 // RunResult represents the result of running the agent
 type RunResult struct {
-	Response        string
+	Response       string
 	IterationsUsed int
 	ExitReason     string
 	Error          error
@@ -73,7 +87,7 @@ type RunResult struct {
 // RunConversation is the main agent loop
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, maxTokens int) *RunResult {
 	if maxTokens <= 0 {
-		maxTokens = 4096
+		maxTokens = 32000
 	}
 
 	// Initialize conversation history
@@ -99,7 +113,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 			} `json:"properties"`
 			Required []string `json:"required"`
 		}{
-			Type:       schema.Parameters.Type,
+			Type: schema.Parameters.Type,
 			Properties: make(map[string]struct {
 				Type        string `json:"type"`
 				Description string `json:"description"`
@@ -179,9 +193,9 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 			messages = append(messages, assistantMsg)
 
 			return &RunResult{
-				Response:        cleanResponse(response.Content),
-				IterationsUsed:  apiCallCount,
-				ExitReason:      "stop",
+				Response:       cleanResponse(response.Content),
+				IterationsUsed: apiCallCount,
+				ExitReason:     "stop",
 			}
 
 		case "tool_calls", "tool_use":
@@ -241,9 +255,9 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 		default:
 			// Unknown finish reason, treat as stop
 			return &RunResult{
-				Response:        response.Content,
-				IterationsUsed:  apiCallCount,
-				ExitReason:      "stop",
+				Response:       response.Content,
+				IterationsUsed: apiCallCount,
+				ExitReason:     "stop",
 			}
 		}
 	}

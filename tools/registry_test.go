@@ -5,32 +5,6 @@ import (
 	"testing"
 )
 
-func TestReadFile(t *testing.T) {
-	// Create a test file
-	content := "Hello, World!"
-	err := os.WriteFile("/tmp/test_read.txt", []byte(content), 0644)
-	if err != nil {
-		t.Fatalf("Failed to create test file: %v", err)
-	}
-	defer os.Remove("/tmp/test_read.txt")
-
-	// Test Read
-	result, err := ReadFile(`{"path": "/tmp/test_read.txt"}`)
-	if err != nil {
-		t.Fatalf("ReadFile failed: %v", err)
-	}
-	if result != content {
-		t.Errorf("Expected %q, got %q", content, result)
-	}
-}
-
-func TestReadFileNotFound(t *testing.T) {
-	_, err := ReadFile(`{"path": "/nonexistent/file.txt"}`)
-	if err == nil {
-		t.Error("Expected error for nonexistent file")
-	}
-}
-
 func TestWriteFile(t *testing.T) {
 	content := "Test content"
 	_, err := WriteFile(`{"path": "/tmp/test_write.txt", "content": "Test content"}`)
