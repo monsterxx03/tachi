@@ -38,6 +38,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.ReadTool{})
 	a.toolRegistry.Register(tools.WriteTool{})
+	a.toolRegistry.Register(tools.EditTool{})
 	a.toolRegistry.Register(tools.GlobTool{})
 }
 
