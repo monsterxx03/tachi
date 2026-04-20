@@ -4,6 +4,25 @@ import (
 	"context"
 )
 
+type ThinkingBlock struct {
+	Type      string // "thinking" | "redacted_thinking"
+	Thinking  string
+	Signature string
+	Data      string // for redacted_thinking
+}
+
+type Usage struct {
+	InputTokens              int64
+	OutputTokens             int64
+	CacheCreationInputTokens int64
+	CacheReadInputTokens     int64
+}
+
+type ChatOptions struct {
+	MaxTokens      int
+	ThinkingBudget int64 // 0 = disabled, >0 = token budget
+}
+
 // Tool represents a function tool that can be called by the LLM
 type Tool struct {
 	Name        string `json:"name"`
@@ -20,12 +39,13 @@ type Tool struct {
 
 // Message represents a chat message
 type Message struct {
-	Role         string     `json:"role"`
-	Content      string     `json:"content"`
-	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID   string     `json:"tool_call_id,omitempty"`
-	Name         string     `json:"name,omitempty"`
-	Reasoning    string     `json:"reasoning,omitempty"`
+	Role           string         `json:"role"`
+	Content        string         `json:"content"`
+	ToolCalls      []ToolCall     `json:"tool_calls,omitempty"`
+	ToolCallID     string         `json:"tool_call_id,omitempty"`
+	Name           string         `json:"name,omitempty"`
+	IsError        bool           `json:"is_error,omitempty"`
+	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
 // ToolCallFunction represents the function called by the LLM
@@ -43,16 +63,16 @@ type ToolCall struct {
 
 // Response represents an LLM response
 type Response struct {
-	Content      string     `json:"content"`
-	ToolCalls    []ToolCall `json:"tool_calls,omitempty"`
-	FinishReason string     `json:"finish_reason"`
-	Reasoning    string     `json:"reasoning,omitempty"`
+	Content        string          `json:"content"`
+	ToolCalls      []ToolCall      `json:"tool_calls,omitempty"`
+	FinishReason   string          `json:"finish_reason"`
+	Reasoning      string          `json:"reasoning,omitempty"`
+	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
+	Usage          *Usage          `json:"usage,omitempty"`
 }
 
 // Provider defines the interface for LLM providers
 type Provider interface {
-	// Name returns the provider name
 	Name() string
-	// CreateChat sends a chat request to the LLM
-	CreateChat(ctx context.Context, messages []Message, tools []Tool, maxTokens int) (*Response, error)
+	CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error)
 }

@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"strings"
+	"log"
 
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/tools"
@@ -11,13 +11,11 @@ import (
 
 const defaultMaxTokens = 32000
 
-// IterationBudget tracks remaining iterations
 type IterationBudget struct {
 	Remaining int
 	Parent    *IterationBudget
 }
 
-// AIAgent is the main agent implementation
 type AIAgent struct {
 	model           string
 	provider        llm.Provider
@@ -27,7 +25,6 @@ type AIAgent struct {
 	budgetGraceCall bool
 }
 
-// NewAIAgent creates a new AIAgent
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
 	return &AIAgent{
 		model:           model,
@@ -38,15 +35,12 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 	}
 }
 
-// RegisterTools registers tools with the agent
 func (a *AIAgent) RegisterTools() {
-	// Register tools - each tool implements the Tool interface
 	a.toolRegistry.Register(tools.ReadTool{})
 	a.toolRegistry.Register(tools.WriteTool{})
 	a.toolRegistry.Register(tools.GlobTool{})
 }
 
-// RunResult represents the result of running the agent
 type RunResult struct {
 	Response       string
 	IterationsUsed int
@@ -54,16 +48,13 @@ type RunResult struct {
 	Error          error
 }
 
-// RunConversation is the main agent loop
-func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, maxTokens int) *RunResult {
-	if maxTokens <= 0 {
-		maxTokens = defaultMaxTokens
+func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, opts llm.ChatOptions) *RunResult {
+	if opts.MaxTokens <= 0 {
+		opts.MaxTokens = defaultMaxTokens
 	}
 
-	// Initialize conversation history
 	messages := make([]llm.Message, 0)
 
-	// Add system prompt if provided
 	if systemPrompt != "" {
 		messages = append(messages, llm.Message{
 			Role:    "system",
@@ -71,7 +62,11 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 		})
 	}
 
-	// Build tool list for LLM
+	messages = append(messages, llm.Message{
+		Role:    "user",
+		Content: userMessage,
+	})
+
 	toolSchemas := a.toolRegistry.GetSchemas()
 	llmTools := make([]llm.Tool, 0, len(toolSchemas))
 	for _, schema := range toolSchemas {
@@ -111,7 +106,6 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 	const maxLengthContinueRetries = 3
 
 	for {
-		// Check iteration budget
 		if !a.iterationBudget.consume() && !a.budgetGraceCall {
 			return &RunResult{
 				ExitReason:     "budget_exhausted",
@@ -120,7 +114,6 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 			}
 		}
 
-		// Check context cancellation
 		select {
 		case <-ctx.Done():
 			return &RunResult{
@@ -131,19 +124,8 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 		default:
 		}
 
-		// Build messages for API call
-		apiMessages := make([]llm.Message, len(messages))
-		copy(apiMessages, messages)
-
-		// Add user message
-		apiMessages = append(apiMessages, llm.Message{
-			Role:    "user",
-			Content: userMessage,
-		})
-
-		// Make API call
 		apiCallCount++
-		response, err := a.provider.CreateChat(ctx, apiMessages, llmTools, maxTokens)
+		response, err := a.provider.CreateChat(ctx, messages, llmTools, opts)
 		if err != nil {
 			return &RunResult{
 				ExitReason:     "error",
@@ -152,30 +134,33 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 			}
 		}
 
-		// Handle finish reason
+		if response.Usage != nil {
+			log.Printf("[usage] input=%d output=%d cache_create=%d cache_read=%d",
+				response.Usage.InputTokens, response.Usage.OutputTokens,
+				response.Usage.CacheCreationInputTokens, response.Usage.CacheReadInputTokens)
+		}
+
 		switch response.FinishReason {
 		case "stop", "end_turn":
-			// Normal completion - return the response
-			assistantMsg := llm.Message{
-				Role:    "assistant",
-				Content: response.Content,
-			}
-			messages = append(messages, assistantMsg)
+			messages = append(messages, llm.Message{
+				Role:           "assistant",
+				Content:        response.Content,
+				ThinkingBlocks: response.ThinkingBlocks,
+			})
 
 			return &RunResult{
-				Response:       cleanResponse(response.Content),
+				Response:       response.Content,
 				IterationsUsed: apiCallCount,
 				ExitReason:     "stop",
 			}
 
 		case "tool_calls", "tool_use":
-			// Assistant wants to call tools
 			assistantMsg := llm.Message{
-				Role:    "assistant",
-				Content: response.Content,
+				Role:           "assistant",
+				Content:        response.Content,
+				ThinkingBlocks: response.ThinkingBlocks,
 			}
 
-			// Convert tool calls to message format
 			for _, tc := range response.ToolCalls {
 				assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, llm.ToolCall{
 					ID:   tc.ID,
@@ -188,24 +173,23 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 			}
 			messages = append(messages, assistantMsg)
 
-			// Execute tool calls
 			for _, tc := range response.ToolCalls {
-				result, err := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
-				if err != nil {
-					result = fmt.Sprintf("Error: %v", err)
-				}
-				messages = append(messages, llm.Message{
+				result, execErr := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
+				toolMsg := llm.Message{
 					Role:       "tool",
-					Content:    result,
 					ToolCallID: tc.ID,
-				})
+				}
+				if execErr != nil {
+					toolMsg.Content = fmt.Sprintf("Error: %v", execErr)
+					toolMsg.IsError = true
+				} else {
+					toolMsg.Content = result
+				}
+				messages = append(messages, toolMsg)
 			}
-
-			// Continue the loop to get the next response
 			continue
 
 		case "max_tokens", "length":
-			// Response was truncated
 			lengthContinueRetries++
 			if lengthContinueRetries >= maxLengthContinueRetries {
 				return &RunResult{
@@ -215,15 +199,18 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 				}
 			}
 
-			// Add continuation message to ask model to continue
+			messages = append(messages, llm.Message{
+				Role:           "assistant",
+				Content:        response.Content,
+				ThinkingBlocks: response.ThinkingBlocks,
+			})
 			messages = append(messages, llm.Message{
 				Role:    "user",
-				Content: "[System: Your previous response was truncated. Please continue.]",
+				Content: "Please continue where you left off.",
 			})
 			continue
 
 		default:
-			// Unknown finish reason, treat as stop
 			return &RunResult{
 				Response:       response.Content,
 				IterationsUsed: apiCallCount,
@@ -233,7 +220,6 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 	}
 }
 
-// consume tries to consume one from the budget
 func (b *IterationBudget) consume() bool {
 	if b.Remaining > 0 {
 		b.Remaining--
@@ -243,12 +229,4 @@ func (b *IterationBudget) consume() bool {
 		return b.Parent.consume()
 	}
 	return false
-}
-
-// cleanResponse removes any thinking blocks from the response
-func cleanResponse(s string) string {
-	// Remove <think>...</think> blocks
-	s = strings.ReplaceAll(s, "<think>", "")
-	s = strings.ReplaceAll(s, "</think>", "")
-	return strings.TrimSpace(s)
 }

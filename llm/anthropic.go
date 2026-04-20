@@ -9,14 +9,11 @@ import (
 	"github.com/anthropics/anthropic-sdk-go/option"
 )
 
-// AnthropicProvider implements Provider for Anthropic Messages API
 type AnthropicProvider struct {
 	client anthropic.Client
 	model  string
 }
 
-// NewAnthropicProvider creates a new Anthropic provider
-// baseURL can be empty for default Anthropic API, or set to a custom endpoint (e.g., proxy URL)
 func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -31,44 +28,63 @@ func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
 	}
 }
 
-// Name returns the provider name
 func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
-// CreateChat sends a chat request to Anthropic
-func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, maxTokens int) (*Response, error) {
+func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
 	var systemPrompt string
-	anthropicMessages := make([]anthropic.MessageParam, 0)
+	var anthropicMessages []anthropic.MessageParam
 
-	for _, msg := range messages {
+	for i := 0; i < len(messages); i++ {
+		msg := messages[i]
+
 		if msg.Role == "system" {
 			systemPrompt = msg.Content
 			continue
 		}
 
+		if msg.Role == "tool" {
+			// Merge consecutive tool messages into a single user message
+			var blocks []anthropic.ContentBlockParamUnion
+			for ; i < len(messages) && messages[i].Role == "tool"; i++ {
+				blocks = append(blocks, anthropic.NewToolResultBlock(
+					messages[i].ToolCallID,
+					messages[i].Content,
+					messages[i].IsError,
+				))
+			}
+			i-- // outer loop will increment
+			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
+				Role:    anthropic.MessageParamRoleUser,
+				Content: blocks,
+			})
+			continue
+		}
+
 		var contentBlocks []anthropic.ContentBlockParamUnion
 
-		if msg.Role == "tool" {
-			contentBlocks = append(contentBlocks, anthropic.NewToolResultBlock(
-				msg.ToolCallID,
-				msg.Content,
-				false,
-			))
-		} else if len(msg.ToolCalls) > 0 {
+		if msg.Role == "assistant" {
+			// Reconstruct thinking blocks for conversation history
+			for _, tb := range msg.ThinkingBlocks {
+				switch tb.Type {
+				case "thinking":
+					contentBlocks = append(contentBlocks, anthropic.NewThinkingBlock(tb.Signature, tb.Thinking))
+				case "redacted_thinking":
+					contentBlocks = append(contentBlocks, anthropic.NewRedactedThinkingBlock(tb.Data))
+				}
+			}
+
 			if msg.Content != "" {
 				contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 			}
+
 			for _, tc := range msg.ToolCalls {
 				var input map[string]any
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
 					return nil, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
 				}
-				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(
-					tc.ID,
-					input,
-					tc.Function.Name,
-				))
+				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(tc.ID, input, tc.Function.Name))
 			}
 		} else {
 			contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
@@ -81,7 +97,6 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		})
 	}
 
-	// Convert tools to Anthropic format
 	anthropicTools := make([]anthropic.ToolUnionParam, 0, len(tools))
 	for _, tool := range tools {
 		anthropicTools = append(anthropicTools, anthropic.ToolUnionParam{
@@ -98,11 +113,22 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 	}
 
 	req := anthropic.MessageNewParams{
-		Model:     anthropic.Model(p.model),
-		MaxTokens: int64(maxTokens),
-		System:    []anthropic.TextBlockParam{{Text: systemPrompt}},
-		Messages:  anthropicMessages,
-		Tools:     anthropicTools,
+		Model:        anthropic.Model(p.model),
+		MaxTokens:    int64(opts.MaxTokens),
+		Messages:     anthropicMessages,
+		Tools:        anthropicTools,
+		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+	}
+
+	if systemPrompt != "" {
+		req.System = []anthropic.TextBlockParam{{
+			Text:         systemPrompt,
+			CacheControl: anthropic.NewCacheControlEphemeralParam(),
+		}}
+	}
+
+	if opts.ThinkingBudget > 0 {
+		req.Thinking = anthropic.ThinkingConfigParamOfEnabled(opts.ThinkingBudget)
 	}
 
 	resp, err := p.client.Messages.New(ctx, req)
@@ -112,12 +138,30 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 
 	response := &Response{
 		FinishReason: string(resp.StopReason),
+		Usage: &Usage{
+			InputTokens:              resp.Usage.InputTokens,
+			OutputTokens:             resp.Usage.OutputTokens,
+			CacheCreationInputTokens: resp.Usage.CacheCreationInputTokens,
+			CacheReadInputTokens:     resp.Usage.CacheReadInputTokens,
+		},
 	}
 
 	for _, block := range resp.Content {
 		switch block.Type {
 		case "text":
 			response.Content += block.Text
+		case "thinking":
+			response.ThinkingBlocks = append(response.ThinkingBlocks, ThinkingBlock{
+				Type:      "thinking",
+				Thinking:  block.Thinking,
+				Signature: block.Signature,
+			})
+			response.Reasoning += block.Thinking
+		case "redacted_thinking":
+			response.ThinkingBlocks = append(response.ThinkingBlocks, ThinkingBlock{
+				Type: "redacted_thinking",
+				Data: block.Data,
+			})
 		case "tool_use":
 			argsJSON, err := json.Marshal(block.Input)
 			if err != nil {

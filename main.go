@@ -114,7 +114,7 @@ func runTest(ctx context.Context, aiAgent *agent.AIAgent, systemPrompt string) e
 	fmt.Println("User: Write 'Hello, World!' to /tmp/test.txt and then read it back")
 	fmt.Println()
 
-	result := aiAgent.RunConversation(ctx, "Write 'Hello, World!' to /tmp/test.txt and then read it back", systemPrompt, 4096)
+	result := aiAgent.RunConversation(ctx, "Write 'Hello, World!' to /tmp/test.txt and then read it back", systemPrompt, llm.ChatOptions{MaxTokens: 4096})
 
 	fmt.Printf("Exit Reason: %s\n", result.ExitReason)
 	fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)

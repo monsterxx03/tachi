@@ -32,7 +32,7 @@ func (p *OpenAIProvider) Name() string {
 }
 
 // CreateChat sends a chat request to OpenAI
-func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, maxTokens int) (*Response, error) {
+func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
 	// Convert messages to OpenAI format
 	openaiMessages := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, msg := range messages {
@@ -72,7 +72,7 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		Model:       p.model,
 		Messages:    openaiMessages,
 		Tools:       openaiTools,
-		MaxTokens:   maxTokens,
+		MaxTokens:   opts.MaxTokens,
 		Temperature: 0.7,
 	}
 
