@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -33,33 +32,25 @@ func (t GlobTool) Properties() map[string]PropertySchema {
 func (t GlobTool) Required() []string    { return []string{"pattern"} }
 func (t GlobTool) Parallel() bool       { return true }
 func (t GlobTool) Execute(args string) (string, error) {
-	// Check if ripgrep is available
-	if _, err := exec.LookPath("rg"); err != nil {
-		return "", fmt.Errorf("ripgrep (rg) not found in PATH: %w", err)
+	if err := checkRipgrep(); err != nil {
+		return "", err
 	}
 
 	var argsMap struct {
 		Pattern string `json:"pattern"`
 		Path    string `json:"path"`
 	}
-	if err := json.Unmarshal([]byte(args), &argsMap); err != nil {
-		return "", fmt.Errorf("invalid arguments: %w", err)
+	if err := parseArgs(args, &argsMap); err != nil {
+		return "", err
 	}
 
 	if argsMap.Pattern == "" {
 		return "", fmt.Errorf("pattern is required")
 	}
 
-	// Default to current working directory
-	searchDir := argsMap.Path
-	if searchDir == "" {
-		searchDir = "."
-	}
-
-	// Resolve to absolute path for ripgrep's search directory
-	absSearchDir, err := filepath.Abs(searchDir)
+	absSearchDir, err := resolveSearchPath(argsMap.Path)
 	if err != nil {
-		return "", fmt.Errorf("failed to resolve path: %w", err)
+		return "", err
 	}
 
 	var searchPattern string
@@ -93,13 +84,10 @@ func (t GlobTool) Execute(args string) (string, error) {
 	cmd.Dir = searchBaseDir
 	output, err := cmd.Output()
 	if err != nil {
-		// If no files found, return empty result
-		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
-			return marshalGlobResult(GlobResult{
+		if isRgNoMatch(err) {
+			return marshalResult(GlobResult{
 				DurationMs: time.Since(start).Milliseconds(),
-				NumFiles:   0,
 				Filenames:  []string{},
-				Truncated:  false,
 			})
 		}
 		return "", fmt.Errorf("ripgrep failed: %w", err)
@@ -114,14 +102,7 @@ func (t GlobTool) Execute(args string) (string, error) {
 		if line == "" {
 			continue
 		}
-		// Convert to relative path from original searchDir (absSearchDir)
-		relPath, err := filepath.Rel(absSearchDir, filepath.Join(searchBaseDir, line))
-		if err != nil {
-			relPath = filepath.Join(searchBaseDir, line)
-		}
-		// Normalize path separators to forward slashes
-		relPath = filepath.ToSlash(relPath)
-		filenames = append(filenames, relPath)
+		filenames = append(filenames, toRelativePath(filepath.Join(searchBaseDir, line), absSearchDir))
 	}
 
 	// Apply limit
@@ -131,7 +112,7 @@ func (t GlobTool) Execute(args string) (string, error) {
 		filenames = filenames[:maxResults]
 	}
 
-	return marshalGlobResult(GlobResult{
+	return marshalResult(GlobResult{
 		DurationMs: duration,
 		NumFiles:   len(filenames),
 		Filenames:  filenames,
@@ -181,10 +162,3 @@ func extractGlobBaseDirectory(pattern string) (baseDir string, relativePattern s
 	return baseDir, relativePattern
 }
 
-func marshalGlobResult(result GlobResult) (string, error) {
-	data, err := json.Marshal(result)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
-}

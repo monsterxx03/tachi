@@ -34,6 +34,11 @@ func main() {
 						Name:  "base-url",
 						Usage: "Base URL for OpenAI API",
 					},
+					&cli.StringFlag{
+						Name:    "prompt",
+						Aliases: []string{"p"},
+						Usage:   "User prompt to send",
+					},
 				},
 				Action: runTestOpenAI,
 			},
@@ -48,6 +53,11 @@ func main() {
 					&cli.StringFlag{
 						Name:  "base-url",
 						Usage: "Base URL for Anthropic API",
+					},
+					&cli.StringFlag{
+						Name:    "prompt",
+						Aliases: []string{"p"},
+						Usage:   "User prompt to send",
 					},
 				},
 				Action: runTestAnthropic,
@@ -82,7 +92,7 @@ func runTestOpenAI(ctx context.Context, c *cli.Command) error {
 	fmt.Printf("Model: %s\n", model)
 	fmt.Printf("Base URL: %s\n\n", baseURL)
 
-	return runTest(ctx, aiAgent, defaultSystemPrompt)
+	return runTest(ctx, aiAgent, defaultSystemPrompt, c.String("prompt"))
 }
 
 func runTestAnthropic(ctx context.Context, c *cli.Command) error {
@@ -107,14 +117,16 @@ func runTestAnthropic(ctx context.Context, c *cli.Command) error {
 	fmt.Printf("Model: %s\n", model)
 	fmt.Printf("Base URL: %s\n\n", baseURL)
 
-	return runTest(ctx, aiAgent, defaultSystemPrompt)
+	return runTest(ctx, aiAgent, defaultSystemPrompt, c.String("prompt"))
 }
 
-func runTest(ctx context.Context, aiAgent *agent.AIAgent, systemPrompt string) error {
-	fmt.Println("User: Write 'Hello, World!' to /tmp/test.txt and then read it back")
-	fmt.Println()
+func runTest(ctx context.Context, aiAgent *agent.AIAgent, systemPrompt string, userPrompt string) error {
+	if userPrompt == "" {
+		userPrompt = "Write 'Hello, World!' to /tmp/test.txt and then read it back"
+	}
+	fmt.Printf("User: %s\n\n", userPrompt)
 
-	result := aiAgent.RunConversation(ctx, "Write 'Hello, World!' to /tmp/test.txt and then read it back", systemPrompt, llm.ChatOptions{MaxTokens: 4096})
+	result := aiAgent.RunConversation(ctx, userPrompt, systemPrompt, llm.ChatOptions{MaxTokens: 4096})
 
 	fmt.Printf("Exit Reason: %s\n", result.ExitReason)
 	fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)
