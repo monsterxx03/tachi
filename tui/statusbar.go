@@ -21,10 +21,12 @@ func NewStatusBar(providerInfo string) StatusBar {
 	return StatusBar{providerInfo: providerInfo}
 }
 
-func (s *StatusBar) SetWidth(w int)        { s.width = w }
-func (s *StatusBar) SetState(st state)     { s.state = st }
-func (s *StatusBar) SetUsage(u *llm.Usage) { s.totalUsage = u }
-func (s *StatusBar) SetCopyMode(b bool)    { s.copyMode = b }
+func (s *StatusBar) SetWidth(w int)            { s.width = w }
+func (s *StatusBar) SetState(st state)         { s.state = st }
+func (s *StatusBar) SetUsage(u *llm.Usage)     { s.totalUsage = u }
+func (s *StatusBar) SetCopyMode(b bool)        { s.copyMode = b }
+func (s *StatusBar) SetProviderInfo(info string) { s.providerInfo = info }
+func (s *StatusBar) ProviderInfo() string        { return s.providerInfo }
 
 func (s StatusBar) View() string {
 	var dot string

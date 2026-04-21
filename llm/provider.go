@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"fmt"
 )
 
 type ThinkingBlock struct {
@@ -97,4 +98,15 @@ type Provider interface {
 	Name() string
 	CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error)
 	CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error)
+}
+
+func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) {
+	switch providerType {
+	case "openai":
+		return NewOpenAIProvider(apiKey, baseURL, model), nil
+	case "anthropic":
+		return NewAnthropicProvider(apiKey, baseURL, model), nil
+	default:
+		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
+	}
 }

@@ -43,29 +43,17 @@ func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
 		return nil, fmt.Errorf("provider %q not found in providers list", providerName)
 	}
 
-	if pCfg.Type == "" {
-		return nil, fmt.Errorf("provider %q has no type set", providerName)
-	}
-
-	model := pCfg.Model
+	overridden := *pCfg
 	if flags.ModelSet {
-		model = flags.Model
+		overridden.Model = flags.Model
 	}
-	if model == "" {
-		return nil, fmt.Errorf("model is required for provider %q; set it in config or use --model", providerName)
-	}
-
-	baseURL := pCfg.BaseURL
 	if flags.BaseURLSet {
-		baseURL = flags.BaseURL
+		overridden.BaseURL = flags.BaseURL
 	}
 
-	apiKey, envName := resolveAPIKey(pCfg)
-	if apiKey == "" {
-		if envName != "" {
-			return nil, fmt.Errorf("API key required for provider %q; set %s or add api_key in config", providerName, envName)
-		}
-		return nil, fmt.Errorf("API key required for provider %q; add api_key in config", providerName)
+	resolved, err := ResolveProviderConfig(&overridden)
+	if err != nil {
+		return nil, err
 	}
 
 	maxTokens := cfg.MaxTokens
@@ -79,12 +67,7 @@ func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
 	}
 
 	return &ResolvedConfig{
-		Provider: ResolvedProvider{
-			Type:    pCfg.Type,
-			Model:   model,
-			BaseURL: baseURL,
-			APIKey:  apiKey,
-		},
+		Provider:       *resolved,
 		MaxTokens:      maxTokens,
 		MaxIterations:  maxIterations,
 		ThinkingBudget: cfg.ThinkingBudget,
@@ -104,8 +87,8 @@ func resolveProviderName(cfg *Config, flags CLIFlags) string {
 	return ""
 }
 
-func resolveAPIKey(pCfg *ProviderConfig) (key string, envName string) {
-	envName = envForProviderType(pCfg.Type)
+func ResolveAPIKey(pCfg *ProviderConfig) (key string, envName string) {
+	envName = EnvForProviderType(pCfg.Type)
 	if envName != "" {
 		if v := os.Getenv(envName); v != "" {
 			return v, envName
@@ -114,7 +97,29 @@ func resolveAPIKey(pCfg *ProviderConfig) (key string, envName string) {
 	return pCfg.APIKey, envName
 }
 
-func envForProviderType(providerType string) string {
+func ResolveProviderConfig(pCfg *ProviderConfig) (*ResolvedProvider, error) {
+	if pCfg.Type == "" {
+		return nil, fmt.Errorf("provider %q has no type set", pCfg.Name)
+	}
+	if pCfg.Model == "" {
+		return nil, fmt.Errorf("model is required for provider %q", pCfg.Name)
+	}
+	apiKey, envName := ResolveAPIKey(pCfg)
+	if apiKey == "" {
+		if envName != "" {
+			return nil, fmt.Errorf("API key required for provider %q; set %s or add api_key in config", pCfg.Name, envName)
+		}
+		return nil, fmt.Errorf("API key required for provider %q; add api_key in config", pCfg.Name)
+	}
+	return &ResolvedProvider{
+		Type:    pCfg.Type,
+		Model:   pCfg.Model,
+		BaseURL: pCfg.BaseURL,
+		APIKey:  apiKey,
+	}, nil
+}
+
+func EnvForProviderType(providerType string) string {
 	switch providerType {
 	case ProviderTypeOpenAI:
 		return "OPENAI_API_KEY"

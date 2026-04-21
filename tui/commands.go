@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 type Command struct {
@@ -22,6 +24,38 @@ var commands = []Command{
 		Name:        "/quit",
 		Description: "Exit tachi",
 		handler:     func(m *Model) tea.Cmd { return tea.Quit },
+	},
+	{
+		Name:        "/model",
+		Description: "Switch provider/model",
+		handler: func(m *Model) tea.Cmd {
+			cfg := m.cfg
+			if cfg == nil {
+				freshCfg, err := config.Load()
+				if err != nil {
+					m.chatview.AddMessage(chatMessage{
+						Role:    "assistant",
+						Content: "No providers configured in ~/.tachi/config.yaml",
+					})
+					return nil
+				}
+				cfg = freshCfg
+				m.cfg = cfg
+			}
+			if len(cfg.Providers) == 0 {
+				m.chatview.AddMessage(chatMessage{
+					Role:    "assistant",
+					Content: "No providers configured in ~/.tachi/config.yaml",
+				})
+				return nil
+			}
+			m.providerItems = cfg.Providers
+			m.providerSelIdx = 0
+			m.state = stateSelectingModel
+			m.input.SetEnabled(false)
+			m.layout()
+			return nil
+		},
 	},
 }
 

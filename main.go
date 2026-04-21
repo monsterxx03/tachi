@@ -105,12 +105,7 @@ func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
 	return f
 }
 
-func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load config: %w", err)
-	}
-
+func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
 	flags := extractCLIFlags(cmd)
 	resolved, err := config.Resolve(cfg, flags)
 	if err != nil {
@@ -120,29 +115,34 @@ func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, er
 		resolved.MaxTokens = config.MaxAllowedTokens
 	}
 
-	var provider llm.Provider
-	switch resolved.Provider.Type {
-	case config.ProviderTypeOpenAI:
-		provider = llm.NewOpenAIProvider(
-			resolved.Provider.APIKey,
-			resolved.Provider.BaseURL,
-			resolved.Provider.Model,
-		)
-	case config.ProviderTypeAnthropic:
-		provider = llm.NewAnthropicProvider(
-			resolved.Provider.APIKey,
-			resolved.Provider.BaseURL,
-			resolved.Provider.Model,
-		)
-	default:
-		return nil, nil, fmt.Errorf("unsupported provider type: %s", resolved.Provider.Type)
+	provider, err := llm.NewProvider(
+		resolved.Provider.Type,
+		resolved.Provider.APIKey,
+		resolved.Provider.BaseURL,
+		resolved.Provider.Model,
+	)
+	if err != nil {
+		return nil, nil, err
 	}
 
 	return provider, resolved, nil
 }
 
+func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
+	cfg, err := config.Load()
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to load config: %w", err)
+	}
+	return resolveProviderFromConfig(cfg, cmd)
+}
+
 func runTUI(ctx context.Context, cmd *cli.Command) error {
-	provider, resolved, err := resolveProvider(cmd)
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	provider, resolved, err := resolveProviderFromConfig(cfg, cmd)
 	if err != nil {
 		return err
 	}
@@ -160,6 +160,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 			ThinkingBudget: resolved.ThinkingBudget,
 		},
 		ProviderInfo: providerInfo,
+		Config:       cfg,
 	})
 }
 

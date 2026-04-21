@@ -36,6 +36,11 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 	}
 }
 
+func (a *AIAgent) SetProvider(provider llm.Provider, model string) {
+	a.provider = provider
+	a.model = model
+}
+
 func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.ReadTool{})
 	a.toolRegistry.Register(tools.WriteTool{})

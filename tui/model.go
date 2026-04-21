@@ -2,11 +2,14 @@ package tui
 
 import (
 	"context"
+	"fmt"
+	"strings"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -16,6 +19,7 @@ const (
 	stateIdle state = iota
 	stateWaiting
 	stateStreaming
+	stateSelectingModel
 )
 
 type toolCallDisplay struct {
@@ -51,6 +55,10 @@ type Model struct {
 	cancelFunc context.CancelFunc
 	eventCh    <-chan agent.AgentEvent
 	totalUsage llm.Usage
+
+	cfg            *config.Config
+	providerItems  []config.ProviderConfig
+	providerSelIdx int
 }
 
 type ModelConfig struct {
@@ -58,6 +66,7 @@ type ModelConfig struct {
 	SystemPrompt string
 	ChatOpts     llm.ChatOptions
 	ProviderInfo string
+	Config       *config.Config
 }
 
 func NewModel(cfg ModelConfig) *Model {
@@ -69,6 +78,7 @@ func NewModel(cfg ModelConfig) *Model {
 		systemPrompt: cfg.SystemPrompt,
 		chatOpts:     cfg.ChatOpts,
 		state:        stateIdle,
+		cfg:          cfg.Config,
 	}
 }
 
@@ -87,11 +97,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
+			if m.state == stateSelectingModel {
+				m.exitModelSelect("")
+				return m, nil
+			}
 			if m.state != stateIdle && m.cancelFunc != nil {
 				m.cancelFunc()
 				return m, nil
 			}
 			return m, tea.Quit
+		}
+		if m.state == stateSelectingModel {
+			switch msg.String() {
+			case "up", "ctrl+k", "ctrl+p":
+				if m.providerSelIdx > 0 {
+					m.providerSelIdx--
+				}
+			case "down", "ctrl+j", "ctrl+n":
+				if m.providerSelIdx < len(m.providerItems)-1 {
+					m.providerSelIdx++
+				}
+			case "enter":
+				m.switchToProvider(m.providerSelIdx)
+			case "esc":
+				m.exitModelSelect("")
+			}
+			return m, nil
 		}
 		if m.state == stateIdle {
 			switch msg.String() {
@@ -151,7 +182,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 func (m *Model) layout() {
 	statusHeight := 1
-	chatHeight := m.height - m.input.Height() - statusHeight
+	inputHeight := m.input.Height()
+	if m.state == stateSelectingModel {
+		inputHeight = len(m.providerItems) + 1
+	}
+	chatHeight := m.height - inputHeight - statusHeight
 	if chatHeight < 1 {
 		chatHeight = 1
 	}
@@ -258,14 +293,75 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	return m.nextEvent()
 }
 
+func (m *Model) exitModelSelect(msg string) {
+	if msg != "" {
+		m.chatview.AddMessage(chatMessage{Role: "assistant", Content: msg})
+	}
+	m.providerItems = nil
+	m.providerSelIdx = 0
+	m.setState(stateIdle)
+	m.layout()
+}
+
+func (m *Model) switchToProvider(idx int) {
+	pCfg := &m.providerItems[idx]
+	resolved, err := config.ResolveProviderConfig(pCfg)
+	if err != nil {
+		m.exitModelSelect("Error: " + err.Error())
+		return
+	}
+	provider, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		m.exitModelSelect("Error: " + err.Error())
+		return
+	}
+	m.agent.SetProvider(provider, resolved.Model)
+	providerInfo := fmt.Sprintf("%s (%s)", resolved.Type, resolved.Model)
+	m.statusbar.SetProviderInfo(providerInfo)
+	m.exitModelSelect(fmt.Sprintf("Switched to %s", providerInfo))
+}
+
+func (m *Model) renderProviderSelection() string {
+	var b strings.Builder
+	b.WriteString(dimStyle.Render("Select provider (↑↓ Enter Esc)") + "\n")
+
+	currentInfo := m.statusbar.ProviderInfo()
+	maxNameLen := 0
+	for _, p := range m.providerItems {
+		if len(p.Name) > maxNameLen {
+			maxNameLen = len(p.Name)
+		}
+	}
+	for idx, p := range m.providerItems {
+		info := fmt.Sprintf("%s (%s)", p.Type, p.Model)
+		active := " "
+		if info == currentInfo {
+			active = "*"
+		}
+		line := fmt.Sprintf(" %s %-*s  %s", active, maxNameLen, p.Name, info)
+		if idx == m.providerSelIdx {
+			b.WriteString(completionSelectedStyle.Width(m.width).Render(line))
+		} else {
+			b.WriteString(completionNormalStyle.Width(m.width).Render(line))
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 func (m *Model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("Loading...")
 	}
 
+	inputSection := m.input.View()
+	if m.state == stateSelectingModel {
+		inputSection = m.renderProviderSelection()
+	}
+
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Top,
 		m.chatview.View(),
-		m.input.View(),
+		inputSection,
 		m.statusbar.View(),
 	))
 	v.AltScreen = true
