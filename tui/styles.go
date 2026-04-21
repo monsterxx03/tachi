@@ -50,4 +50,14 @@ var (
 
 	completionNormalStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#6E738D"))
+
+	userMsgStyle = lipgloss.NewStyle().
+			Border(lipgloss.NormalBorder(), false, false, false, true).
+			BorderForeground(lipgloss.Color("#7DC4E4")).
+			PaddingLeft(1)
+
+	assistantMsgStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(lipgloss.Color("#A6DA95")).
+				PaddingLeft(1)
 )

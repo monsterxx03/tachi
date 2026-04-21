@@ -204,15 +204,15 @@ func (c *ChatView) rebuildCache() {
 }
 
 func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
+	inner := c.width - 2
+	if inner < 1 {
+		inner = 1
+	}
 	switch msg.Role {
 	case "user":
-		fmt.Fprintf(b, "%s\n%s\n\n",
-			userLabelStyle.Render("You:"),
-			msg.Content)
+		fmt.Fprintf(b, "%s\n\n", userMsgStyle.Width(inner).Render(msg.Content))
 	case "assistant":
-		fmt.Fprintf(b, "%s\n%s\n\n",
-			assistantLabelStyle.Render("tachi:"),
-			msg.Content)
+		fmt.Fprintf(b, "%s\n\n", assistantMsgStyle.Width(inner).Render(msg.Content))
 	case "thinking":
 		thinking := truncateThinking(msg.Content, 500)
 		fmt.Fprintf(b, "%s\n\n",
@@ -230,10 +230,12 @@ func (c *ChatView) refresh() {
 	var b strings.Builder
 	b.WriteString(c.renderedCache.String())
 
+	inner := c.width - 2
+	if inner < 1 {
+		inner = 1
+	}
 	if c.state == stateWaiting {
-		fmt.Fprintf(&b, "%s %s\n",
-			assistantLabelStyle.Render("tachi:"),
-			c.spinner.View())
+		fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(c.spinner.View()))
 	} else if c.state == stateStreaming {
 		if c.currentThinking.Len() > 0 {
 			thinking := truncateThinking(c.currentThinking.String(), 500)
@@ -243,9 +245,7 @@ func (c *ChatView) refresh() {
 			fmt.Fprintf(&b, "%s\n", c.renderToolCall(tc))
 		}
 		if c.currentText.Len() > 0 {
-			fmt.Fprintf(&b, "%s\n%s\n",
-				assistantLabelStyle.Render("tachi:"),
-				c.currentText.String())
+			fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(c.currentText.String()))
 		}
 	}
 
