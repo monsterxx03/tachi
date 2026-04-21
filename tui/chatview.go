@@ -28,7 +28,7 @@ type ChatView struct {
 
 	mdRenderer    *glamour.TermRenderer
 	mdRenderWidth int
-	renderedCache strings.Builder
+	renderedCache string
 	userScrolled  bool
 }
 
@@ -80,12 +80,18 @@ func (c *ChatView) AddMessage(msg chatMessage) {
 
 func (c *ChatView) AppendTextDelta(s string) {
 	c.state = stateStreaming
+	if c.hasCompletedTools() {
+		c.flushTurn()
+	}
 	c.currentText.WriteString(s)
 	c.refresh()
 }
 
 func (c *ChatView) AppendThinkingDelta(s string) {
 	c.state = stateStreaming
+	if c.hasCompletedTools() {
+		c.flushTurn()
+	}
 	c.currentThinking.WriteString(s)
 	c.refresh()
 }
@@ -100,6 +106,7 @@ func (c *ChatView) UpdateToolArgs(id, args string) {
 	for i := range c.currentTools {
 		if c.currentTools[i].ID == id {
 			c.currentTools[i].Args = args
+			c.currentTools[i].Preview = agent.GetToolArgsPreview(c.currentTools[i].Name, args)
 			break
 		}
 	}
@@ -119,14 +126,42 @@ func (c *ChatView) UpdateToolResult(id, result string, isError bool) {
 }
 
 func (c *ChatView) FinishStreaming() {
-	content := c.currentText.String()
-	rendered := c.renderMarkdown(content)
+	c.flushTurn()
+	c.userScrolled = false
+	c.refresh()
+}
+
+func (c *ChatView) hasCompletedTools() bool {
+	if len(c.currentTools) == 0 {
+		return false
+	}
+	for _, tc := range c.currentTools {
+		if !tc.Done {
+			return false
+		}
+	}
+	return true
+}
+
+func (c *ChatView) flushTurn() {
+	if c.currentThinking.Len() == 0 && c.currentText.Len() == 0 && len(c.currentTools) == 0 {
+		return
+	}
 
 	if c.currentThinking.Len() > 0 {
 		c.messages = append(c.messages, chatMessage{
 			Role:    "thinking",
 			Content: c.currentThinking.String(),
 		})
+		c.currentThinking.Reset()
+	}
+
+	if c.currentText.Len() > 0 {
+		c.messages = append(c.messages, chatMessage{
+			Role:    "assistant",
+			Content: c.currentText.String(),
+		})
+		c.currentText.Reset()
 	}
 
 	for _, tc := range c.currentTools {
@@ -135,16 +170,9 @@ func (c *ChatView) FinishStreaming() {
 			Content: c.renderToolCall(tc),
 		})
 	}
+	c.currentTools = nil
 
-	c.messages = append(c.messages, chatMessage{
-		Role:    "assistant",
-		Content: rendered,
-	})
-
-	c.ResetStreaming()
-	c.userScrolled = false
 	c.invalidateCache()
-	c.refresh()
 }
 
 func (c *ChatView) ResetStreaming() {
@@ -198,14 +226,15 @@ func (c ChatView) View() string {
 // --- internal rendering ---
 
 func (c *ChatView) invalidateCache() {
-	c.renderedCache.Reset()
+	c.renderedCache = ""
 }
 
 func (c *ChatView) rebuildCache() {
-	c.renderedCache.Reset()
+	var b strings.Builder
 	for _, msg := range c.messages {
-		c.renderMessageTo(&c.renderedCache, msg)
+		c.renderMessageTo(&b, msg)
 	}
+	c.renderedCache = b.String()
 }
 
 func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
@@ -217,7 +246,8 @@ func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
 	case "user":
 		fmt.Fprintf(b, "%s\n\n", userMsgStyle.Width(inner).Render(msg.Content))
 	case "assistant":
-		fmt.Fprintf(b, "%s\n\n", assistantMsgStyle.Width(inner).Render(msg.Content))
+		rendered := c.renderMarkdown(msg.Content)
+		fmt.Fprintf(b, "%s\n\n", assistantMsgStyle.Width(inner).Render(rendered))
 	case "thinking":
 		thinking := truncateThinking(msg.Content, 500)
 		fmt.Fprintf(b, "%s\n\n",
@@ -228,12 +258,12 @@ func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
 }
 
 func (c *ChatView) refresh() {
-	if c.renderedCache.Len() == 0 && len(c.messages) > 0 {
+	if c.renderedCache == "" && len(c.messages) > 0 {
 		c.rebuildCache()
 	}
 
 	var b strings.Builder
-	b.WriteString(c.renderedCache.String())
+	b.WriteString(c.renderedCache)
 
 	inner := c.width - 2
 	if inner < 1 {
@@ -246,13 +276,11 @@ func (c *ChatView) refresh() {
 			thinking := truncateThinking(c.currentThinking.String(), 500)
 			fmt.Fprintf(&b, "%s\n", thinkingStyle.Render("Thinking: "+thinking))
 		}
+		if c.currentText.Len() > 0 {
+			fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(c.currentText.String()))
+		}
 		for _, tc := range c.currentTools {
 			fmt.Fprintf(&b, "%s\n", c.renderToolCall(tc))
-		}
-		if c.currentText.Len() > 0 {
-			text := c.currentText.String()
-			rendered := c.renderMarkdown(text)
-			fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(rendered))
 		}
 	}
 
@@ -275,7 +303,7 @@ func (c *ChatView) renderMarkdown(text string) string {
 }
 
 func (c *ChatView) renderToolCall(tc toolCallDisplay) string {
-	preview := agent.GetToolArgsPreview(tc.Name, tc.Args)
+	preview := tc.Preview
 	var b strings.Builder
 
 	if tc.Done {

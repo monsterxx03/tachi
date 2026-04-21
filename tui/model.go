@@ -22,6 +22,7 @@ type toolCallDisplay struct {
 	Name    string
 	ID      string
 	Args    string
+	Preview string
 	Result  string
 	IsError bool
 	Done    bool
