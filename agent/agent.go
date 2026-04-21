@@ -50,6 +50,10 @@ func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.BashTool{})
 }
 
+func (a *AIAgent) RegisterTool(tool tools.Tool) {
+	a.toolRegistry.Register(tool)
+}
+
 type RunResult struct {
 	Response       string
 	IterationsUsed int
@@ -542,6 +546,13 @@ func GetToolArgsPreview(name, argsJSON string) string {
 				return c[:60] + "..."
 			}
 			return c
+		}
+	case "WebSearch":
+		if q, ok := args["query"].(string); ok {
+			if len(q) > 60 {
+				return q[:60] + "..."
+			}
+			return q
 		}
 	}
 	return argsJSON

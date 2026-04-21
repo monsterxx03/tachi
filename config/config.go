@@ -28,18 +28,27 @@ type ProviderConfig struct {
 	APIKey  string `yaml:"api_key"`
 }
 
+type WebSearchConfig struct {
+	Type string `yaml:"type"` // brave, serper, serpapi
+	Key  string `yaml:"key"`
+}
+
 type Config struct {
 	Provider       string           `yaml:"provider"`
 	MaxTokens      int              `yaml:"max_tokens"`
 	MaxIterations  int              `yaml:"max_iterations"`
 	ThinkingBudget int64            `yaml:"thinking_budget"`
 	Providers      []ProviderConfig `yaml:"providers"`
+	WebSearch      WebSearchConfig  `yaml:"web_search"`
 }
 
 func DefaultConfig() *Config {
 	return &Config{
 		MaxTokens:     DefaultMaxTokens,
 		MaxIterations: DefaultMaxIterations,
+		WebSearch: WebSearchConfig{
+			Type: "brave",
+		},
 	}
 }
 
@@ -86,6 +95,10 @@ func LoadFrom(path string) (*Config, error) {
 	}
 	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = DefaultMaxIterations
+	}
+	// Set default web search type if not specified
+	if cfg.WebSearch.Type == "" {
+		cfg.WebSearch.Type = "brave"
 	}
 	return cfg, nil
 }
@@ -141,6 +154,10 @@ func Init() (string, error) {
 				BaseURL: "https://api.minimaxi.com/v1",
 				APIKey:  "<your-api-key>",
 			},
+		},
+		WebSearch: WebSearchConfig{
+			Type: "brave",
+			Key:  "<your-web-search-api-key>",
 		},
 	}
 

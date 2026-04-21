@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/tools"
 	"github.com/monsterxx03/tachi/tui"
 	"github.com/urfave/cli/v3"
 )
@@ -105,6 +106,14 @@ func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
 	return f
 }
 
+func registerTools(aiAgent *agent.AIAgent, cfg *config.Config) {
+	aiAgent.RegisterTools()
+	ws := tools.WebSearchTool{ProviderType: cfg.WebSearch.Type, APIKey: cfg.WebSearch.Key}
+	if _, key := ws.ResolveProvider(); key != "" {
+		aiAgent.RegisterTool(ws)
+	}
+}
+
 func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
 	flags := extractCLIFlags(cmd)
 	resolved, err := config.Resolve(cfg, flags)
@@ -148,7 +157,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
-	aiAgent.RegisterTools()
+	registerTools(aiAgent, cfg)
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
 
@@ -165,13 +174,18 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 }
 
 func runAgent(ctx context.Context, cmd *cli.Command) error {
-	provider, resolved, err := resolveProvider(cmd)
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	provider, resolved, err := resolveProviderFromConfig(cfg, cmd)
 	if err != nil {
 		return err
 	}
 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
-	aiAgent.RegisterTools()
+	registerTools(aiAgent, cfg)
 
 	prompt := cmd.String("prompt")
 	if prompt == "" {
