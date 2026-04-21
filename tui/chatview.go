@@ -177,6 +177,11 @@ func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
 		c.viewport, cmd = c.viewport.Update(msg)
 		cmds = append(cmds, cmd)
 		c.userScrolled = !c.viewport.AtBottom()
+	case tea.KeyMsg:
+		var cmd tea.Cmd
+		c.viewport, cmd = c.viewport.Update(msg)
+		cmds = append(cmds, cmd)
+		c.userScrolled = !c.viewport.AtBottom()
 	}
 
 	return c, tea.Batch(cmds...)
@@ -245,7 +250,9 @@ func (c *ChatView) refresh() {
 			fmt.Fprintf(&b, "%s\n", c.renderToolCall(tc))
 		}
 		if c.currentText.Len() > 0 {
-			fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(c.currentText.String()))
+			text := c.currentText.String()
+			rendered := c.renderMarkdown(text)
+			fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(rendered))
 		}
 	}
 

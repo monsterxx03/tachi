@@ -60,4 +60,9 @@ var (
 				Border(lipgloss.NormalBorder(), false, false, false, true).
 				BorderForeground(lipgloss.Color("#A6DA95")).
 				PaddingLeft(1)
+
+	selectModeStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#1E2030")).
+			Background(lipgloss.Color("#EED49F"))
 )

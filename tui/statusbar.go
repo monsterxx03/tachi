@@ -14,6 +14,7 @@ type StatusBar struct {
 	providerInfo string
 	state        state
 	totalUsage   *llm.Usage
+	copyMode     bool
 }
 
 func NewStatusBar(providerInfo string) StatusBar {
@@ -23,6 +24,7 @@ func NewStatusBar(providerInfo string) StatusBar {
 func (s *StatusBar) SetWidth(w int)        { s.width = w }
 func (s *StatusBar) SetState(st state)     { s.state = st }
 func (s *StatusBar) SetUsage(u *llm.Usage) { s.totalUsage = u }
+func (s *StatusBar) SetCopyMode(b bool)    { s.copyMode = b }
 
 func (s StatusBar) View() string {
 	var dot string
@@ -36,6 +38,9 @@ func (s StatusBar) View() string {
 	}
 
 	left := fmt.Sprintf(" %s %s | %s", dot, "tachi", s.providerInfo)
+	if s.copyMode {
+		left += " | " + selectModeStyle.Render("SELECT")
+	}
 
 	var right string
 	if s.totalUsage != nil && (s.totalUsage.InputTokens > 0 || s.totalUsage.OutputTokens > 0) {

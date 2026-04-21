@@ -13,7 +13,7 @@ import (
 type state int
 
 const (
-	stateIdle      state = iota
+	stateIdle state = iota
 	stateWaiting
 	stateStreaming
 )
@@ -46,6 +46,7 @@ type Model struct {
 	history      []llm.Message
 
 	state      state
+	copyMode   bool
 	cancelFunc context.CancelFunc
 	eventCh    <-chan agent.AgentEvent
 	totalUsage llm.Usage
@@ -92,6 +93,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		if m.state == stateIdle {
+			switch msg.String() {
+			case "ctrl+s":
+				m.copyMode = !m.copyMode
+				m.statusbar.SetCopyMode(m.copyMode)
+				return m, nil
+			case "esc":
+				if m.copyMode {
+					m.copyMode = false
+					m.statusbar.SetCopyMode(false)
+					return m, nil
+				}
+			case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+				var cmd tea.Cmd
+				m.chatview, cmd = m.chatview.Update(msg)
+				cmds = append(cmds, cmd)
+				return m, tea.Batch(cmds...)
+			}
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
@@ -108,6 +126,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case agentEventMsg:
 		cmd := m.handleAgentEvent(agent.AgentEvent(msg))
 		if cmd != nil {
+			cmds = append(cmds, cmd)
+		}
+
+	case tea.PasteMsg:
+		if m.state == stateIdle {
+			var cmd tea.Cmd
+			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
 		}
 
@@ -243,7 +268,9 @@ func (m *Model) View() tea.View {
 		m.statusbar.View(),
 	))
 	v.AltScreen = true
-	v.MouseMode = tea.MouseModeCellMotion
+	if !m.copyMode {
+		v.MouseMode = tea.MouseModeCellMotion
+	}
 	return v
 }
 
