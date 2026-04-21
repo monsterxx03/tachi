@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/urfave/cli/v3"
 )
@@ -23,36 +24,41 @@ func main() {
 		Usage: "AI Agent CLI",
 		Commands: []*cli.Command{
 			{
-				Name:  "test-openai",
-				Usage: "Test OpenAI provider with tool calling",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  "model",
-						Usage: "Model to use",
-					},
-					&cli.StringFlag{
-						Name:  "base-url",
-						Usage: "Base URL for OpenAI API",
-					},
-					&cli.StringFlag{
-						Name:    "prompt",
-						Aliases: []string{"p"},
-						Usage:   "User prompt to send",
-					},
+				Name:  "init",
+				Usage: "Initialize example config at ~/.tachi/config.yaml",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					path, err := config.Init()
+					if err != nil {
+						return err
+					}
+					fmt.Printf("Config created: %s\n", path)
+					fmt.Println("Edit the file to set your API keys and provider settings.")
+					return nil
 				},
-				Action: runTestOpenAI,
 			},
 			{
-				Name:  "test-anthropic",
-				Usage: "Test Anthropic/MiniMax provider with tool calling",
+				Name:  "run",
+				Usage: "Run the AI agent",
 				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "provider",
+						Usage: "Provider name from config",
+					},
 					&cli.StringFlag{
 						Name:  "model",
 						Usage: "Model to use",
 					},
 					&cli.StringFlag{
 						Name:  "base-url",
-						Usage: "Base URL for Anthropic API",
+						Usage: "Base URL for the API",
+					},
+					&cli.IntFlag{
+						Name:  "max-tokens",
+						Usage: "Max tokens for responses",
+					},
+					&cli.IntFlag{
+						Name:  "max-iterations",
+						Usage: "Max agent loop iterations",
 					},
 					&cli.StringFlag{
 						Name:    "prompt",
@@ -60,7 +66,7 @@ func main() {
 						Usage:   "User prompt to send",
 					},
 				},
-				Action: runTestAnthropic,
+				Action: runAgent,
 			},
 		},
 	}
@@ -70,68 +76,82 @@ func main() {
 	}
 }
 
-func runTestOpenAI(ctx context.Context, c *cli.Command) error {
-	apiKey := os.Getenv("OPENAI_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY environment variable is required")
+func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
+	var f config.CLIFlags
+	if cmd.IsSet("provider") {
+		f.Provider = cmd.String("provider")
+		f.ProviderSet = true
 	}
-
-	model := c.String("model")
-	if model == "" {
-		model = "MiniMax-M2.7"
+	if cmd.IsSet("model") {
+		f.Model = cmd.String("model")
+		f.ModelSet = true
 	}
-	baseURL := c.String("base-url")
-	if baseURL == "" {
-		baseURL = "https://api.minimaxi.com/v1"
+	if cmd.IsSet("base-url") {
+		f.BaseURL = cmd.String("base-url")
+		f.BaseURLSet = true
 	}
-	provider := llm.NewOpenAIProvider(apiKey, baseURL, model)
-	aiAgent := agent.NewAIAgent(provider, model, 10)
-	aiAgent.RegisterTools()
-
-	fmt.Println("=== OpenAI Test ===")
-	fmt.Printf("Model: %s\n", model)
-	fmt.Printf("Base URL: %s\n\n", baseURL)
-
-	return runTest(ctx, aiAgent, defaultSystemPrompt, c.String("prompt"))
+	if cmd.IsSet("max-tokens") {
+		f.MaxTokens = int(cmd.Int("max-tokens"))
+		f.MaxTokensSet = true
+	}
+	if cmd.IsSet("max-iterations") {
+		f.MaxIterations = int(cmd.Int("max-iterations"))
+		f.MaxIterationsSet = true
+	}
+	return f
 }
 
-func runTestAnthropic(ctx context.Context, c *cli.Command) error {
-	apiKey := os.Getenv("ANTHROPIC_API_KEY")
-	if apiKey == "" {
-		return fmt.Errorf("ANTHROPIC_API_KEY environment variable is required")
+func runAgent(ctx context.Context, cmd *cli.Command) error {
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	model := c.String("model")
-	if model == "" {
-		model = "MiniMax-M2.7"
+	flags := extractCLIFlags(cmd)
+	resolved, err := config.Resolve(cfg, flags)
+	if err != nil {
+		return err
 	}
-	baseURL := c.String("base-url")
-	if baseURL == "" {
-		baseURL = "https://api.minimaxi.com/anthropic"
+	if resolved.MaxTokens > config.MaxAllowedTokens {
+		resolved.MaxTokens = config.MaxAllowedTokens
 	}
-	provider := llm.NewAnthropicProvider(apiKey, baseURL, model)
-	aiAgent := agent.NewAIAgent(provider, model, 10)
+
+	var provider llm.Provider
+	switch resolved.Provider.Type {
+	case config.ProviderTypeOpenAI:
+		provider = llm.NewOpenAIProvider(
+			resolved.Provider.APIKey,
+			resolved.Provider.BaseURL,
+			resolved.Provider.Model,
+		)
+	case config.ProviderTypeAnthropic:
+		provider = llm.NewAnthropicProvider(
+			resolved.Provider.APIKey,
+			resolved.Provider.BaseURL,
+			resolved.Provider.Model,
+		)
+	default:
+		return fmt.Errorf("unsupported provider type: %s", resolved.Provider.Type)
+	}
+
+	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.RegisterTools()
 
-	fmt.Println("=== Anthropic/MiniMax Test ===")
-	fmt.Printf("Model: %s\n", model)
-	fmt.Printf("Base URL: %s\n\n", baseURL)
-
-	return runTest(ctx, aiAgent, defaultSystemPrompt, c.String("prompt"))
-}
-
-func runTest(ctx context.Context, aiAgent *agent.AIAgent, systemPrompt string, userPrompt string) error {
-	if userPrompt == "" {
-		userPrompt = "Write 'Hello, World!' to /tmp/test.txt and then read it back"
+	prompt := cmd.String("prompt")
+	if prompt == "" {
+		prompt = "Write 'Hello, World!' to /tmp/test.txt and then read it back"
 	}
-	fmt.Printf("User: %s\n\n", userPrompt)
+	fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+	fmt.Printf("User: %s\n\n", prompt)
 
-	result := aiAgent.RunConversation(ctx, userPrompt, systemPrompt, llm.ChatOptions{MaxTokens: 4096})
+	result := aiAgent.RunConversation(ctx, prompt, defaultSystemPrompt, llm.ChatOptions{
+		MaxTokens:      resolved.MaxTokens,
+		ThinkingBudget: resolved.ThinkingBudget,
+	})
 
 	fmt.Printf("Exit Reason: %s\n", result.ExitReason)
 	fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)
-	fmt.Println()
-	fmt.Printf("Response:\n%s\n", result.Response)
+	fmt.Printf("\nResponse:\n%s\n", result.Response)
 
 	if result.Error != nil {
 		return fmt.Errorf("error: %v", result.Error)

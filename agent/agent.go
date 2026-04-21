@@ -9,7 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/tools"
 )
 
-const defaultMaxTokens = 32000
+const defaultMaxTokens = 4096
 
 type IterationBudget struct {
 	Remaining int
