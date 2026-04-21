@@ -41,6 +41,7 @@ func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.EditTool{})
 	a.toolRegistry.Register(tools.GlobTool{})
 	a.toolRegistry.Register(tools.GrepTool{})
+	a.toolRegistry.Register(tools.BashTool{})
 }
 
 type RunResult struct {
