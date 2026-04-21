@@ -24,12 +24,9 @@ var (
 
 	statusBarStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6E738D")).
-			Background(lipgloss.Color("#1E2030")).
-			Padding(0, 1)
+			Background(lipgloss.Color("#1E2030"))
 
-	inputBorderStyle = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder(), true, false, false, false).
-				BorderForeground(lipgloss.Color("#363A4F"))
+	inputStyle = lipgloss.NewStyle()
 
 	dimStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6E738D"))
@@ -37,4 +34,20 @@ var (
 	thinkingStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#8087A2")).
 			Italic(true)
+
+	stateIdleStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6DA95"))
+
+	stateWaitingStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#EED49F"))
+
+	stateStreamingStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#8AADF4"))
+
+	completionSelectedStyle = lipgloss.NewStyle().
+					Background(lipgloss.Color("#363A4F")).
+					Foreground(lipgloss.Color("#CAD3F5"))
+
+	completionNormalStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6E738D"))
 )

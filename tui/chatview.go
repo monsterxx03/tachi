@@ -29,6 +29,7 @@ type ChatView struct {
 	mdRenderer    *glamour.TermRenderer
 	mdRenderWidth int
 	renderedCache strings.Builder
+	userScrolled  bool
 }
 
 func NewChatView() ChatView {
@@ -72,6 +73,7 @@ func (c *ChatView) SetState(st state) { c.state = st }
 
 func (c *ChatView) AddMessage(msg chatMessage) {
 	c.messages = append(c.messages, msg)
+	c.userScrolled = false
 	c.invalidateCache()
 	c.refresh()
 }
@@ -140,6 +142,7 @@ func (c *ChatView) FinishStreaming() {
 	})
 
 	c.ResetStreaming()
+	c.userScrolled = false
 	c.invalidateCache()
 	c.refresh()
 }
@@ -148,6 +151,14 @@ func (c *ChatView) ResetStreaming() {
 	c.currentText.Reset()
 	c.currentThinking.Reset()
 	c.currentTools = nil
+}
+
+func (c *ChatView) Clear() {
+	c.messages = nil
+	c.ResetStreaming()
+	c.userScrolled = false
+	c.invalidateCache()
+	c.refresh()
 }
 
 func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
@@ -165,6 +176,7 @@ func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
 		var cmd tea.Cmd
 		c.viewport, cmd = c.viewport.Update(msg)
 		cmds = append(cmds, cmd)
+		c.userScrolled = !c.viewport.AtBottom()
 	}
 
 	return c, tea.Batch(cmds...)
@@ -202,10 +214,7 @@ func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
 			assistantLabelStyle.Render("tachi:"),
 			msg.Content)
 	case "thinking":
-		thinking := msg.Content
-		if len(thinking) > 300 {
-			thinking = thinking[:300] + "..."
-		}
+		thinking := truncateThinking(msg.Content, 500)
 		fmt.Fprintf(b, "%s\n\n",
 			thinkingStyle.Render("Thinking: "+thinking))
 	case "tool_calls":
@@ -227,10 +236,7 @@ func (c *ChatView) refresh() {
 			c.spinner.View())
 	} else if c.state == stateStreaming {
 		if c.currentThinking.Len() > 0 {
-			thinking := c.currentThinking.String()
-			if len(thinking) > 300 {
-				thinking = thinking[:300] + "..."
-			}
+			thinking := truncateThinking(c.currentThinking.String(), 500)
 			fmt.Fprintf(&b, "%s\n", thinkingStyle.Render("Thinking: "+thinking))
 		}
 		for _, tc := range c.currentTools {
@@ -245,7 +251,9 @@ func (c *ChatView) refresh() {
 
 	content := lipgloss.NewStyle().Width(c.width).Render(b.String())
 	c.viewport.SetContent(content)
-	c.viewport.GotoBottom()
+	if !c.userScrolled {
+		c.viewport.GotoBottom()
+	}
 }
 
 func (c *ChatView) renderMarkdown(text string) string {
@@ -296,4 +304,12 @@ func truncate(s string, maxLen int) string {
 		return s[:maxLen] + "..."
 	}
 	return s
+}
+
+func truncateThinking(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	half := (maxLen - 5) / 2
+	return s[:half] + "\n...\n" + s[len(s)-half:]
 }

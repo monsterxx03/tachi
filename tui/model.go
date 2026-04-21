@@ -48,6 +48,7 @@ type Model struct {
 	state      state
 	cancelFunc context.CancelFunc
 	eventCh    <-chan agent.AgentEvent
+	totalUsage llm.Usage
 }
 
 type ModelConfig struct {
@@ -84,8 +85,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		if msg.String() == "ctrl+c" {
-			if m.cancelFunc != nil {
+			if m.state != stateIdle && m.cancelFunc != nil {
 				m.cancelFunc()
+				return m, nil
 			}
 			return m, tea.Quit
 		}
@@ -93,10 +95,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
 			cmds = append(cmds, cmd)
+			m.layout()
 		}
 
 	case InputSubmitMsg:
-		return m, m.sendMessage(string(msg))
+		text := string(msg)
+		if cmd := findCommand(text); cmd != nil {
+			return m, cmd.handler(m)
+		}
+		return m, m.sendMessage(text)
 
 	case agentEventMsg:
 		cmd := m.handleAgentEvent(agent.AgentEvent(msg))
@@ -117,9 +124,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) layout() {
-	inputHeight := 3
 	statusHeight := 1
-	chatHeight := m.height - inputHeight - statusHeight
+	chatHeight := m.height - m.input.Height() - statusHeight
 	if chatHeight < 1 {
 		chatHeight = 1
 	}
@@ -192,6 +198,13 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
+		if event.Usage != nil {
+			m.totalUsage.InputTokens += event.Usage.InputTokens
+			m.totalUsage.OutputTokens += event.Usage.OutputTokens
+			m.totalUsage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
+			m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+			m.statusbar.SetUsage(&m.totalUsage)
+		}
 		m.chatview.FinishStreaming()
 		m.setState(stateIdle)
 		m.cancelFunc = nil
@@ -225,9 +238,9 @@ func (m *Model) View() tea.View {
 	}
 
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Top,
-		m.statusbar.View(),
 		m.chatview.View(),
 		m.input.View(),
+		m.statusbar.View(),
 	))
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion

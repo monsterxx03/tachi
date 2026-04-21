@@ -5,37 +5,57 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+
+	"github.com/monsterxx03/tachi/llm"
 )
 
 type StatusBar struct {
 	width        int
 	providerInfo string
 	state        state
+	totalUsage   *llm.Usage
 }
 
 func NewStatusBar(providerInfo string) StatusBar {
 	return StatusBar{providerInfo: providerInfo}
 }
 
-func (s *StatusBar) SetWidth(w int)    { s.width = w }
-func (s *StatusBar) SetState(st state) { s.state = st }
+func (s *StatusBar) SetWidth(w int)        { s.width = w }
+func (s *StatusBar) SetState(st state)     { s.state = st }
+func (s *StatusBar) SetUsage(u *llm.Usage) { s.totalUsage = u }
 
 func (s StatusBar) View() string {
-	left := fmt.Sprintf(" tachi | %s", s.providerInfo)
-	var right string
+	var dot string
 	switch s.state {
-	case stateWaiting:
-		right = "waiting... "
-	case stateStreaming:
-		right = "streaming... "
 	case stateIdle:
-		right = "ready "
+		dot = stateIdleStyle.Render("●")
+	case stateWaiting:
+		dot = stateWaitingStyle.Render("●")
+	case stateStreaming:
+		dot = stateStreamingStyle.Render("●")
 	}
+
+	left := fmt.Sprintf(" %s %s | %s", dot, "tachi", s.providerInfo)
+
+	var right string
+	if s.totalUsage != nil && (s.totalUsage.InputTokens > 0 || s.totalUsage.OutputTokens > 0) {
+		right = fmt.Sprintf("in: %s  out: %s ",
+			formatTokens(s.totalUsage.InputTokens), formatTokens(s.totalUsage.OutputTokens))
+	}
+
 	gap := s.width - lipgloss.Width(left) - lipgloss.Width(right)
 	if gap < 0 {
 		gap = 0
 	}
-	return statusBarStyle.Width(s.width).Render(
-		left + strings.Repeat(" ", gap) + right,
-	)
+	return statusBarStyle.Render(left + strings.Repeat(" ", gap) + right)
+}
+
+func formatTokens(n int64) string {
+	if n >= 1_000_000 {
+		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
+	}
+	if n >= 1_000 {
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	}
+	return fmt.Sprintf("%d", n)
 }

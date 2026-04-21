@@ -208,6 +208,7 @@ type AgentEvent struct {
 	ToolIsError   bool
 	Result        *RunResult
 	Messages      []llm.Message
+	Usage         *llm.Usage
 }
 
 // RunConversationStream runs a streaming agent conversation loop.
@@ -292,6 +293,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			var currentToolArgs []strings.Builder
 			var thinkingBlocks []llm.ThinkingBlock
 			var finishReason string
+			var turnUsage *llm.Usage
 
 			for event := range streamCh {
 				switch event.Type {
@@ -321,6 +323,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 				case llm.StreamEventMessageDelta, llm.StreamEventDone:
 					finishReason = event.FinishReason
+					if event.Usage != nil {
+						turnUsage = event.Usage
+					}
 
 				case llm.StreamEventError:
 					ch <- AgentEvent{
@@ -361,6 +366,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				ch <- AgentEvent{
 					Type:     AgentEventTurnComplete,
 					Messages: messages,
+					Usage:    turnUsage,
 					Result: &RunResult{
 						Response:       textContent.String(),
 						IterationsUsed: apiCallCount,
@@ -447,6 +453,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				ch <- AgentEvent{
 					Type:     AgentEventTurnComplete,
 					Messages: messages,
+					Usage:    turnUsage,
 					Result: &RunResult{
 						Response:       textContent.String(),
 						IterationsUsed: apiCallCount,
