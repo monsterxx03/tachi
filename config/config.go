@@ -15,7 +15,7 @@ const (
 
 	DefaultMaxTokens          = 32000
 	MaxAllowedTokens          = 4096
-	DefaultMaxIterations      = 10
+	DefaultMaxIterations      = 50
 	DefaultWebSearchTimeout   = 30
 	DefaultWebSearchMaxResults = 10
 	configDirName             = ".tachi"

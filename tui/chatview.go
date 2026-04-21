@@ -254,6 +254,8 @@ func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
 			thinkingStyle.Render("Thinking: "+thinking))
 	case "tool_calls":
 		fmt.Fprintf(b, "%s\n\n", msg.Content)
+	case "tool_confirmation":
+		fmt.Fprintf(b, "%s\n\n", toolConfirmStyle.Width(inner).Render(renderDiffWithHighlight(msg.Content, inner)))
 	}
 }
 
@@ -347,4 +349,35 @@ func truncateThinking(s string, maxLen int) string {
 	}
 	half := (maxLen - 5) / 2
 	return s[:half] + "\n...\n" + s[len(s)-half:]
+}
+
+// renderDiffWithHighlight renders diff content with syntax highlighting for +/- lines
+func renderDiffWithHighlight(content string, width int) string {
+	lines := strings.Split(content, "\n")
+	var b strings.Builder
+
+	for _, line := range lines {
+		if len(line) == 0 {
+			continue
+		}
+		switch line[0] {
+		case '-':
+			// Deleted line
+			b.WriteString(diffDeletedStyle.Render(line))
+			b.WriteString("\n")
+		case '+':
+			// Added line
+			b.WriteString(diffAddedStyle.Render(line))
+			b.WriteString("\n")
+		case '@':
+			// Diff header (@@ -x,y +x,y @@)
+			b.WriteString(diffHeaderStyle.Render(line))
+			b.WriteString("\n")
+		default:
+			// Context line
+			b.WriteString(diffContextStyle.Render(line))
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }

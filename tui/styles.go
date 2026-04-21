@@ -65,4 +65,26 @@ var (
 			Bold(true).
 			Foreground(lipgloss.Color("#1E2030")).
 			Background(lipgloss.Color("#EED49F"))
+
+	confirmStyle = lipgloss.NewStyle().
+			Bold(true).
+			Foreground(lipgloss.Color("#EED49F"))
+
+	toolConfirmStyle = lipgloss.NewStyle().
+				Border(lipgloss.NormalBorder(), false, false, false, true).
+				BorderForeground(lipgloss.Color("#F5A97F")).
+				PaddingLeft(1)
+
+	diffDeletedStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#ED8796")) // Red for deleted
+
+	diffAddedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6DA95")) // Green for added
+
+	diffContextStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6E738D")) // Dim for context
+
+	diffHeaderStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F5A97F")).
+			Bold(true)
 )

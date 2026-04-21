@@ -11,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 type state int
@@ -20,6 +21,7 @@ const (
 	stateWaiting
 	stateStreaming
 	stateSelectingModel
+	stateAwaitingConfirmation
 )
 
 type toolCallDisplay struct {
@@ -30,6 +32,13 @@ type toolCallDisplay struct {
 	Result  string
 	IsError bool
 	Done    bool
+}
+
+type pendingConfirm struct {
+	toolName string
+	toolID   string
+	toolArgs string
+	diff     string
 }
 
 type chatMessage struct {
@@ -50,11 +59,12 @@ type Model struct {
 	chatOpts     llm.ChatOptions
 	history      []llm.Message
 
-	state      state
-	copyMode   bool
-	cancelFunc context.CancelFunc
-	eventCh    <-chan agent.AgentEvent
-	totalUsage llm.Usage
+	state             state
+	copyMode         bool
+	cancelFunc       context.CancelFunc
+	eventCh          <-chan agent.AgentEvent
+	totalUsage       llm.Usage
+	pendingConfirm   *pendingConfirm
 
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
@@ -124,6 +134,21 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.state == stateAwaitingConfirmation {
+			switch msg.String() {
+			case "y", "Y", "enter":
+				m.agent.ConfirmTool(true)
+				m.pendingConfirm = nil
+				m.setState(stateStreaming)
+				return m, m.nextEvent()
+			case "n", "N", "esc":
+				m.agent.ConfirmTool(false)
+				m.pendingConfirm = nil
+				m.setState(stateStreaming)
+				return m, m.nextEvent()
+			}
+			return m, nil
+		}
 		if m.state == stateIdle {
 			switch msg.String() {
 			case "ctrl+s":
@@ -171,6 +196,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case streamDoneMsg:
 		// no-op
 
+	case tickMsg:
+		// Re-render when in confirmation state, continue ticking
+		if m.state == stateAwaitingConfirmation {
+			cmds = append(cmds, m.tick())
+		}
+
 	default:
 		var cmd tea.Cmd
 		m.chatview, cmd = m.chatview.Update(msg)
@@ -185,6 +216,12 @@ func (m *Model) layout() {
 	inputHeight := m.input.Height()
 	if m.state == stateSelectingModel {
 		inputHeight = len(m.providerItems) + 1
+	} else if m.state == stateAwaitingConfirmation {
+		// Estimate height based on diff content (roughly 1 line per 80 chars + header/footer)
+		if m.pendingConfirm != nil {
+			diffLines := strings.Count(m.pendingConfirm.diff, "\n") + 1
+			inputHeight = min(10+diffLines, m.height/3) // Min 10, max 1/3 of screen
+		}
 	}
 	chatHeight := m.height - inputHeight - statusHeight
 	if chatHeight < 1 {
@@ -230,6 +267,14 @@ func (m *Model) nextEvent() tea.Cmd {
 	}
 }
 
+type tickMsg struct{}
+
+func (m *Model) tick() tea.Cmd {
+	return func() tea.Msg {
+		return tickMsg{}
+	}
+}
+
 func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	switch event.Type {
 	case agent.AgentEventTextDelta:
@@ -250,6 +295,27 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventToolCallArgs:
 		m.chatview.UpdateToolArgs(event.ToolID, event.ToolArgs)
 		return m.nextEvent()
+
+	case agent.AgentEventToolConfirmation:
+		debuglog.Log("TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
+		m.pendingConfirm = &pendingConfirm{
+			toolName: event.ToolName,
+			toolID:   event.ToolID,
+			toolArgs: event.ToolArgs,
+			diff:     event.ToolDiff,
+		}
+		m.setState(stateAwaitingConfirmation)
+		// Show diff as a message in chatview
+		m.chatview.AddMessage(chatMessage{
+			Role:    "tool_confirmation",
+			Content: "Edit File Confirmation\n" + event.ToolDiff,
+		})
+		if len(event.ToolDiff) > 100 {
+			debuglog.Log("TUI: diff preview: %s...", event.ToolDiff[:100])
+		} else {
+			debuglog.Log("TUI: diff: %s", event.ToolDiff)
+		}
+		return nil
 
 	case agent.AgentEventToolResult:
 		m.chatview.UpdateToolResult(event.ToolID, event.ToolResult, event.ToolIsError)
@@ -349,6 +415,12 @@ func (m *Model) renderProviderSelection() string {
 	return b.String()
 }
 
+func (m *Model) renderConfirmPrompt() string {
+	var b strings.Builder
+	b.WriteString(confirmStyle.Render("Apply this edit? [y/n]: "))
+	return b.String()
+}
+
 func (m *Model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("Loading...")
@@ -357,6 +429,8 @@ func (m *Model) View() tea.View {
 	inputSection := m.input.View()
 	if m.state == stateSelectingModel {
 		inputSection = m.renderProviderSelection()
+	} else if m.state == stateAwaitingConfirmation {
+		inputSection = m.renderConfirmPrompt()
 	}
 
 	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Top,

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/tools"
 )
 
@@ -24,6 +26,8 @@ type AIAgent struct {
 	toolRegistry    *tools.Registry
 	iterationBudget *IterationBudget
 	budgetGraceCall bool
+	confirmCh       chan tools.ToolPendingError // Channel to send pending confirmations to TUI
+	confirmRespCh   chan bool                  // Channel to receive confirmation response from TUI
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -33,6 +37,29 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		maxIterations:   maxIterations,
 		toolRegistry:    tools.NewRegistry(),
 		iterationBudget: &IterationBudget{Remaining: maxIterations},
+		confirmCh:       make(chan tools.ToolPendingError, 1),
+		confirmRespCh:   make(chan bool, 1),
+	}
+}
+
+// SendConfirmation sends a pending confirmation request and waits for response
+func (a *AIAgent) SendConfirmation(pending tools.ToolPendingError) bool {
+	a.confirmCh <- pending
+	select {
+	case confirmed := <-a.confirmRespCh:
+		return confirmed
+	case <-time.After(5 * time.Minute):
+		// Timeout after 5 minutes
+		return false
+	}
+}
+
+// ConfirmTool is called by TUI to respond to a confirmation request
+func (a *AIAgent) ConfirmTool(confirmed bool) {
+	select {
+	case a.confirmRespCh <- confirmed:
+	default:
+		// Channel already has a value or is not waiting
 	}
 }
 
@@ -197,13 +224,14 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 }
 
 const (
-	AgentEventTextDelta     = "text_delta"
-	AgentEventThinkingDelta = "thinking_delta"
-	AgentEventToolCallStart = "tool_call_start"
-	AgentEventToolCallArgs  = "tool_call_args"
-	AgentEventToolResult    = "tool_result"
-	AgentEventTurnComplete  = "turn_complete"
-	AgentEventError         = "error"
+	AgentEventTextDelta         = "text_delta"
+	AgentEventThinkingDelta     = "thinking_delta"
+	AgentEventToolCallStart     = "tool_call_start"
+	AgentEventToolCallArgs      = "tool_call_args"
+	AgentEventToolConfirmation  = "tool_confirmation"
+	AgentEventToolResult        = "tool_result"
+	AgentEventTurnComplete      = "turn_complete"
+	AgentEventError             = "error"
 )
 
 type AgentEvent struct {
@@ -215,6 +243,7 @@ type AgentEvent struct {
 	ToolArgs      string
 	ToolResult    string
 	ToolIsError   bool
+	ToolDiff      string
 	Result        *RunResult
 	Messages      []llm.Message
 	Usage         *llm.Usage
@@ -402,6 +431,42 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 					}
 
 					result, execErr := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
+
+					// Handle tools that require confirmation
+					if pending, ok := execErr.(*tools.ToolPendingError); ok {
+						debuglog.Log("Agent: EditTool requires confirmation, diff length: %d", len(pending.Diff))
+						// Send confirmation request to TUI and wait for response
+						ch <- AgentEvent{
+							Type:     AgentEventToolConfirmation,
+							ToolName: tc.Function.Name,
+							ToolID:   tc.ID,
+							ToolArgs: pending.Args,
+							ToolDiff: pending.Diff,
+						}
+
+						// Wait for confirmation or cancellation
+						select {
+						case confirmed := <-a.confirmRespCh:
+							if confirmed {
+								// User confirmed, execute the tool
+								result, execErr = a.toolRegistry.ExecuteConfirmed(tc.Function.Name, pending.Args)
+							} else {
+								// User cancelled - stop the agent loop
+								ch <- AgentEvent{
+									Type: "error",
+									Result: &RunResult{
+										ExitReason: "cancelled",
+										Error:      fmt.Errorf("edit cancelled by user"),
+									},
+								}
+								return
+							}
+						case <-ctx.Done():
+							result = ""
+							execErr = ctx.Err()
+						}
+					}
+
 					toolMsg := llm.Message{
 						Role:       "tool",
 						ToolCallID: tc.ID,

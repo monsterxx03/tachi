@@ -18,6 +18,25 @@ type Tool interface {
 	Execute(args string) (string, error)
 }
 
+// ConfirmationTool is an optional interface for tools that require
+// user confirmation before execution. The tool should return a diff
+// preview via GetDiff() when NeedsConfirmation() returns true.
+type ConfirmationTool interface {
+	NeedsConfirmation() bool
+	GetDiff(args string) (string, error)
+}
+
+// ToolPendingError indicates a tool requires user confirmation before execution
+type ToolPendingError struct {
+	Name string
+	Args string
+	Diff string
+}
+
+func (e *ToolPendingError) Error() string {
+	return "tool requires confirmation"
+}
+
 // Schema defines the JSON schema for a tool
 type Schema struct {
 	Name        string
@@ -64,6 +83,12 @@ func (r *Registry) Register(tool Tool) {
 
 // Invoke calls a tool with the given arguments
 func (r *Registry) Invoke(name string, args string) (string, error) {
+	return r.InvokeWithTool(name, args, nil)
+}
+
+// InvokeWithTool calls a tool with the given arguments and returns the tool instance.
+// If confirmCh is provided and the tool requires confirmation, it returns a ToolPendingError.
+func (r *Registry) InvokeWithTool(name string, args string, confirmCh chan<- bool) (string, error) {
 	tool, ok := r.tools[name]
 	if !ok {
 		return "", &UnknownToolError{name}
@@ -73,6 +98,24 @@ func (r *Registry) Invoke(name string, args string) (string, error) {
 		return "", err
 	}
 
+	// Check if tool requires confirmation
+	if ct, ok := tool.(ConfirmationTool); ok && ct.NeedsConfirmation() {
+		diff, err := ct.GetDiff(args)
+		if err != nil {
+			return "", err
+		}
+		return "", &ToolPendingError{Name: name, Args: args, Diff: diff}
+	}
+
+	return tool.Execute(args)
+}
+
+// ExecuteConfirmed executes a tool that was previously pending confirmation
+func (r *Registry) ExecuteConfirmed(name string, args string) (string, error) {
+	tool, ok := r.tools[name]
+	if !ok {
+		return "", &UnknownToolError{name}
+	}
 	return tool.Execute(args)
 }
 

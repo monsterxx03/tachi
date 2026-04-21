@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/tools"
 	"github.com/monsterxx03/tachi/tui"
 	"github.com/urfave/cli/v3"
@@ -151,6 +152,11 @@ func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, er
 }
 
 func runTUI(ctx context.Context, cmd *cli.Command) error {
+	if err := debuglog.Init(); err != nil {
+		fmt.Printf("Warning: failed to init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
