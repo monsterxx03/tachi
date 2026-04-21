@@ -13,11 +13,13 @@ const (
 	ProviderTypeOpenAI    = "openai"
 	ProviderTypeAnthropic = "anthropic"
 
-	DefaultMaxTokens     = 32000
-	MaxAllowedTokens     = 4096
-	DefaultMaxIterations = 10
-	configDirName        = ".tachi"
-	configFileName       = "config.yaml"
+	DefaultMaxTokens          = 32000
+	MaxAllowedTokens          = 4096
+	DefaultMaxIterations      = 10
+	DefaultWebSearchTimeout   = 30
+	DefaultWebSearchMaxResults = 10
+	configDirName             = ".tachi"
+	configFileName            = "config.yaml"
 )
 
 type ProviderConfig struct {
@@ -29,8 +31,10 @@ type ProviderConfig struct {
 }
 
 type WebSearchConfig struct {
-	Type string `yaml:"type"` // brave, serper, serpapi
-	Key  string `yaml:"key"`
+	Type       string `yaml:"type"` // brave, serper, serpapi
+	Key        string `yaml:"key"`
+	Timeout    int    `yaml:"timeout"`
+	MaxResults int    `yaml:"max_results"`
 }
 
 type Config struct {
@@ -47,7 +51,9 @@ func DefaultConfig() *Config {
 		MaxTokens:     DefaultMaxTokens,
 		MaxIterations: DefaultMaxIterations,
 		WebSearch: WebSearchConfig{
-			Type: "brave",
+			Type:       "brave",
+			Timeout:    DefaultWebSearchTimeout,
+			MaxResults: DefaultWebSearchMaxResults,
 		},
 	}
 }
@@ -96,9 +102,14 @@ func LoadFrom(path string) (*Config, error) {
 	if cfg.MaxIterations == 0 {
 		cfg.MaxIterations = DefaultMaxIterations
 	}
-	// Set default web search type if not specified
 	if cfg.WebSearch.Type == "" {
 		cfg.WebSearch.Type = "brave"
+	}
+	if cfg.WebSearch.Timeout == 0 {
+		cfg.WebSearch.Timeout = DefaultWebSearchTimeout
+	}
+	if cfg.WebSearch.MaxResults == 0 {
+		cfg.WebSearch.MaxResults = DefaultWebSearchMaxResults
 	}
 	return cfg, nil
 }
@@ -156,8 +167,10 @@ func Init() (string, error) {
 			},
 		},
 		WebSearch: WebSearchConfig{
-			Type: "brave",
-			Key:  "<your-web-search-api-key>",
+			Type:       "brave",
+			Key:        "<your-web-search-api-key>",
+			Timeout:    DefaultWebSearchTimeout,
+			MaxResults: DefaultWebSearchMaxResults,
 		},
 	}
 

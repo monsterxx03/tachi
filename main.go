@@ -108,7 +108,12 @@ func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
 
 func registerTools(aiAgent *agent.AIAgent, cfg *config.Config) {
 	aiAgent.RegisterTools()
-	ws := tools.WebSearchTool{ProviderType: cfg.WebSearch.Type, APIKey: cfg.WebSearch.Key}
+	ws := tools.WebSearchTool{
+		ProviderType: cfg.WebSearch.Type,
+		APIKey:       cfg.WebSearch.Key,
+		Timeout:      cfg.WebSearch.Timeout,
+		MaxResults:   cfg.WebSearch.MaxResults,
+	}
 	if _, key := ws.ResolveProvider(); key != "" {
 		aiAgent.RegisterTool(ws)
 	}

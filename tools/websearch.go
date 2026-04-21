@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -12,12 +13,6 @@ import (
 	"time"
 )
 
-const (
-	defaultSearchTimeout = 30 * time.Second
-	maxSearchResults     = 10
-)
-
-// SearchResult represents a single search result
 type SearchResult struct {
 	Title       string `json:"title"`
 	Link        string `json:"link"`
@@ -25,7 +20,6 @@ type SearchResult struct {
 	DisplayLink string `json:"displayLink,omitempty"`
 }
 
-// WebSearchResult represents the complete search result
 type WebSearchResult struct {
 	Query        string         `json:"query"`
 	NumResults   int            `json:"numResults"`
@@ -35,17 +29,16 @@ type WebSearchResult struct {
 	ErrorMessage string         `json:"error,omitempty"`
 }
 
-// webSearchArgs defines the arguments for the WebSearch tool
 type webSearchArgs struct {
 	Query string `json:"query"`
 	Num   *int   `json:"num"`
 }
 
-// WebSearchTool performs web searches using various search providers.
-// ProviderType and APIKey can be set from config; env vars are used as fallback.
 type WebSearchTool struct {
-	ProviderType string // brave, serper, serpapi
+	ProviderType string
 	APIKey       string
+	Timeout      int
+	MaxResults   int
 }
 
 func (t WebSearchTool) Name() string { return "WebSearch" }
@@ -73,10 +66,7 @@ func (t WebSearchTool) Execute(args string) (string, error) {
 
 	numResults := 5
 	if a.Num != nil && *a.Num > 0 {
-		numResults = min(*a.Num, maxSearchResults)
-		if numResults < 1 {
-			numResults = 5
-		}
+		numResults = min(*a.Num, t.MaxResults)
 	}
 
 	start := time.Now()
@@ -89,11 +79,11 @@ func (t WebSearchTool) Execute(args string) (string, error) {
 	var result *WebSearchResult
 	switch providerType {
 	case "serper":
-		result = searchWithSerper(a.Query, numResults, apiKey)
+		result = t.searchWithSerper(a.Query, numResults, apiKey)
 	case "serpapi":
-		result = searchWithSerpAPI(a.Query, numResults, apiKey)
+		result = t.searchWithSerpAPI(a.Query, numResults, apiKey)
 	case "brave":
-		result = searchWithBrave(a.Query, numResults, apiKey)
+		result = t.searchWithBrave(a.Query, numResults, apiKey)
 	default:
 		return "", fmt.Errorf("unsupported web search provider: %s", providerType)
 	}
@@ -120,17 +110,16 @@ func (t WebSearchTool) ResolveProvider() (providerType, apiKey string) {
 	return "", ""
 }
 
-// searchWithSerper performs a search using Serper.dev API
-func searchWithSerper(query string, num int, apiKey string) *WebSearchResult {
+func (t WebSearchTool) searchWithSerper(query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
 
 	payload := map[string]interface{}{
-		"q":    query,
-		"num":  num,
-		"hl":   "en",
-		"gl":   "us",
+		"q":   query,
+		"num": num,
+		"hl":  "en",
+		"gl":  "us",
 	}
 
 	jsonPayload, err := json.Marshal(payload)
@@ -139,10 +128,10 @@ func searchWithSerper(query string, num int, apiKey string) *WebSearchResult {
 		return result
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultSearchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://google.serper.dev/search", strings.NewReader(string(jsonPayload)))
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://google.serper.dev/search", bytes.NewReader(jsonPayload))
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("failed to create request: %v", err)
 		return result
@@ -151,8 +140,7 @@ func searchWithSerper(query string, num int, apiKey string) *WebSearchResult {
 	req.Header.Set("X-API-KEY", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	client := &http.Client{Timeout: defaultSearchTimeout}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("request failed: %v", err)
 		return result
@@ -202,8 +190,7 @@ func searchWithSerper(query string, num int, apiKey string) *WebSearchResult {
 	return result
 }
 
-// searchWithSerpAPI performs a search using SerpAPI
-func searchWithSerpAPI(query string, num int, apiKey string) *WebSearchResult {
+func (t WebSearchTool) searchWithSerpAPI(query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -217,7 +204,7 @@ func searchWithSerpAPI(query string, num int, apiKey string) *WebSearchResult {
 	params.Set("hl", "en")
 	params.Set("gl", "us")
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultSearchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
 	defer cancel()
 
 	reqURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
@@ -227,8 +214,7 @@ func searchWithSerpAPI(query string, num int, apiKey string) *WebSearchResult {
 		return result
 	}
 
-	client := &http.Client{Timeout: defaultSearchTimeout}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("request failed: %v", err)
 		return result
@@ -276,8 +262,7 @@ func searchWithSerpAPI(query string, num int, apiKey string) *WebSearchResult {
 	return result
 }
 
-// searchWithBrave performs a search using Brave Search API
-func searchWithBrave(query string, num int, apiKey string) *WebSearchResult {
+func (t WebSearchTool) searchWithBrave(query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -289,7 +274,7 @@ func searchWithBrave(query string, num int, apiKey string) *WebSearchResult {
 	params.Set("offset", "0")
 	params.Set("mkt", "en-US")
 
-	ctx, cancel := context.WithTimeout(context.Background(), defaultSearchTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
 	defer cancel()
 
 	reqURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
@@ -302,8 +287,7 @@ func searchWithBrave(query string, num int, apiKey string) *WebSearchResult {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Subscription-Token", apiKey)
 
-	client := &http.Client{Timeout: defaultSearchTimeout}
-	resp, err := client.Do(req)
+	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("request failed: %v", err)
 		return result
