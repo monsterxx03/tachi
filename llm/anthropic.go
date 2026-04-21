@@ -32,7 +32,7 @@ func (p *AnthropicProvider) Name() string {
 	return "anthropic"
 }
 
-func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
+func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts ChatOptions) (*anthropic.MessageNewParams, error) {
 	var systemPrompt string
 	var anthropicMessages []anthropic.MessageParam
 
@@ -45,7 +45,6 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		}
 
 		if msg.Role == "tool" {
-			// Merge consecutive tool messages into a single user message
 			var blocks []anthropic.ContentBlockParamUnion
 			for ; i < len(messages) && messages[i].Role == "tool"; i++ {
 				blocks = append(blocks, anthropic.NewToolResultBlock(
@@ -54,7 +53,7 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 					messages[i].IsError,
 				))
 			}
-			i-- // outer loop will increment
+			i--
 			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
 				Role:    anthropic.MessageParamRoleUser,
 				Content: blocks,
@@ -65,7 +64,6 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		var contentBlocks []anthropic.ContentBlockParamUnion
 
 		if msg.Role == "assistant" {
-			// Reconstruct thinking blocks for conversation history
 			for _, tb := range msg.ThinkingBlocks {
 				switch tb.Type {
 				case "thinking":
@@ -112,7 +110,7 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		})
 	}
 
-	req := anthropic.MessageNewParams{
+	req := &anthropic.MessageNewParams{
 		Model:        anthropic.Model(p.model),
 		MaxTokens:    int64(opts.MaxTokens),
 		Messages:     anthropicMessages,
@@ -131,7 +129,16 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		req.Thinking = anthropic.ThinkingConfigParamOfEnabled(opts.ThinkingBudget)
 	}
 
-	resp, err := p.client.Messages.New(ctx, req)
+	return req, nil
+}
+
+func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
+	req, err := p.buildRequest(messages, tools, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	resp, err := p.client.Messages.New(ctx, *req)
 	if err != nil {
 		return nil, err
 	}
@@ -179,4 +186,75 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 	}
 
 	return response, nil
+}
+
+func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error) {
+	req, err := p.buildRequest(messages, tools, opts)
+	if err != nil {
+		return nil, err
+	}
+
+	stream := p.client.Messages.NewStreaming(ctx, *req)
+
+	ch := make(chan StreamEvent, 32)
+	go func() {
+		defer close(ch)
+		acc := anthropic.Message{}
+		for stream.Next() {
+			event := stream.Current()
+			acc.Accumulate(event)
+
+			switch ev := event.AsAny().(type) {
+			case anthropic.ContentBlockStartEvent:
+				block := ev.ContentBlock
+				if block.Type == "tool_use" {
+					ch <- StreamEvent{
+						Type: StreamEventToolUseStart,
+						ToolCall: &ToolCall{
+							ID:   block.ID,
+							Type: "function",
+							Function: ToolCallFunction{
+								Name: block.Name,
+							},
+						},
+					}
+				}
+			case anthropic.ContentBlockDeltaEvent:
+				switch delta := ev.Delta.AsAny().(type) {
+				case anthropic.TextDelta:
+					ch <- StreamEvent{Type: StreamEventTextDelta, TextDelta: delta.Text}
+				case anthropic.ThinkingDelta:
+					ch <- StreamEvent{Type: StreamEventThinkingDelta, ThinkingDelta: delta.Thinking}
+				case anthropic.InputJSONDelta:
+					ch <- StreamEvent{Type: StreamEventInputJSONDelta, InputDelta: delta.PartialJSON}
+				}
+			case anthropic.MessageDeltaEvent:
+				ch <- StreamEvent{
+					Type:         StreamEventMessageDelta,
+					FinishReason: string(ev.Delta.StopReason),
+					Usage: &Usage{
+						OutputTokens: ev.Usage.OutputTokens,
+					},
+				}
+			}
+		}
+
+		if stream.Err() != nil {
+			ch <- StreamEvent{Type: StreamEventError, Error: stream.Err()}
+			return
+		}
+
+		ch <- StreamEvent{
+			Type:         StreamEventDone,
+			FinishReason: string(acc.StopReason),
+			Usage: &Usage{
+				InputTokens:              acc.Usage.InputTokens,
+				OutputTokens:             acc.Usage.OutputTokens,
+				CacheCreationInputTokens: acc.Usage.CacheCreationInputTokens,
+				CacheReadInputTokens:     acc.Usage.CacheReadInputTokens,
+			},
+		}
+	}()
+
+	return ch, nil
 }

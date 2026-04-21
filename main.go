@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/tui"
 	"github.com/urfave/cli/v3"
 )
 
@@ -18,10 +19,35 @@ const defaultSystemPrompt = `You are a helpful AI assistant. You have access to 
 
 Use tools when needed to fulfill user requests.`
 
+var commonFlags = []cli.Flag{
+	&cli.StringFlag{
+		Name:  "provider",
+		Usage: "Provider name from config",
+	},
+	&cli.StringFlag{
+		Name:  "model",
+		Usage: "Model to use",
+	},
+	&cli.StringFlag{
+		Name:  "base-url",
+		Usage: "Base URL for the API",
+	},
+	&cli.IntFlag{
+		Name:  "max-tokens",
+		Usage: "Max tokens for responses",
+	},
+	&cli.IntFlag{
+		Name:  "max-iterations",
+		Usage: "Max agent loop iterations",
+	},
+}
+
 func main() {
 	app := &cli.Command{
-		Name:  "tachi",
-		Usage: "AI Agent CLI",
+		Name:   "tachi",
+		Usage:  "AI Agent CLI",
+		Flags:  commonFlags,
+		Action: runTUI,
 		Commands: []*cli.Command{
 			{
 				Name:  "init",
@@ -38,34 +64,12 @@ func main() {
 			},
 			{
 				Name:  "run",
-				Usage: "Run the AI agent",
-				Flags: []cli.Flag{
-					&cli.StringFlag{
-						Name:  "provider",
-						Usage: "Provider name from config",
-					},
-					&cli.StringFlag{
-						Name:  "model",
-						Usage: "Model to use",
-					},
-					&cli.StringFlag{
-						Name:  "base-url",
-						Usage: "Base URL for the API",
-					},
-					&cli.IntFlag{
-						Name:  "max-tokens",
-						Usage: "Max tokens for responses",
-					},
-					&cli.IntFlag{
-						Name:  "max-iterations",
-						Usage: "Max agent loop iterations",
-					},
-					&cli.StringFlag{
-						Name:    "prompt",
-						Aliases: []string{"p"},
-						Usage:   "User prompt to send",
-					},
-				},
+				Usage: "Run the AI agent (single-turn)",
+				Flags: append(commonFlags, &cli.StringFlag{
+					Name:    "prompt",
+					Aliases: []string{"p"},
+					Usage:   "User prompt to send",
+				}),
 				Action: runAgent,
 			},
 		},
@@ -101,16 +105,16 @@ func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
 	return f
 }
 
-func runAgent(ctx context.Context, cmd *cli.Command) error {
+func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
 	cfg, err := config.Load()
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return nil, nil, fmt.Errorf("failed to load config: %w", err)
 	}
 
 	flags := extractCLIFlags(cmd)
 	resolved, err := config.Resolve(cfg, flags)
 	if err != nil {
-		return err
+		return nil, nil, err
 	}
 	if resolved.MaxTokens > config.MaxAllowedTokens {
 		resolved.MaxTokens = config.MaxAllowedTokens
@@ -131,7 +135,38 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 			resolved.Provider.Model,
 		)
 	default:
-		return fmt.Errorf("unsupported provider type: %s", resolved.Provider.Type)
+		return nil, nil, fmt.Errorf("unsupported provider type: %s", resolved.Provider.Type)
+	}
+
+	return provider, resolved, nil
+}
+
+func runTUI(ctx context.Context, cmd *cli.Command) error {
+	provider, resolved, err := resolveProvider(cmd)
+	if err != nil {
+		return err
+	}
+
+	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
+	aiAgent.RegisterTools()
+
+	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
+
+	return tui.Run(tui.ModelConfig{
+		Agent:        aiAgent,
+		SystemPrompt: defaultSystemPrompt,
+		ChatOpts: llm.ChatOptions{
+			MaxTokens:      resolved.MaxTokens,
+			ThinkingBudget: resolved.ThinkingBudget,
+		},
+		ProviderInfo: providerInfo,
+	})
+}
+
+func runAgent(ctx context.Context, cmd *cli.Command) error {
+	provider, resolved, err := resolveProvider(cmd)
+	if err != nil {
+		return err
 	}
 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)

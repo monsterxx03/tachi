@@ -71,8 +71,30 @@ type Response struct {
 	Usage          *Usage          `json:"usage,omitempty"`
 }
 
+const (
+	StreamEventTextDelta     = "text_delta"
+	StreamEventThinkingDelta = "thinking_delta"
+	StreamEventToolUseStart  = "tool_use_start"
+	StreamEventInputJSONDelta = "input_json_delta"
+	StreamEventMessageDelta  = "message_delta"
+	StreamEventDone          = "done"
+	StreamEventError         = "error"
+)
+
+type StreamEvent struct {
+	Type          string
+	TextDelta     string
+	ThinkingDelta string
+	ToolCall      *ToolCall
+	InputDelta    string
+	FinishReason  string
+	Usage         *Usage
+	Error         error
+}
+
 // Provider defines the interface for LLM providers
 type Provider interface {
 	Name() string
 	CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error)
+	CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error)
 }
