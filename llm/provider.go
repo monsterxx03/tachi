@@ -20,8 +20,7 @@ type Usage struct {
 }
 
 type ChatOptions struct {
-	MaxTokens      int
-	ThinkingBudget int64 // 0 = disabled, >0 = token budget
+	MaxTokens int
 }
 
 // Tool represents a function tool that can be called by the LLM

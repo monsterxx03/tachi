@@ -125,9 +125,7 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts 
 		}}
 	}
 
-	if opts.ThinkingBudget > 0 {
-		req.Thinking = anthropic.ThinkingConfigParamOfEnabled(opts.ThinkingBudget)
-	}
+	req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
 
 	return req, nil
 }

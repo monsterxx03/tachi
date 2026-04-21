@@ -170,8 +170,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		Agent:        aiAgent,
 		SystemPrompt: defaultSystemPrompt,
 		ChatOpts: llm.ChatOptions{
-			MaxTokens:      resolved.MaxTokens,
-			ThinkingBudget: resolved.ThinkingBudget,
+			MaxTokens: resolved.MaxTokens,
 		},
 		ProviderInfo: providerInfo,
 		Config:       cfg,
@@ -200,8 +199,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	fmt.Printf("User: %s\n\n", prompt)
 
 	result := aiAgent.RunConversation(ctx, prompt, defaultSystemPrompt, llm.ChatOptions{
-		MaxTokens:      resolved.MaxTokens,
-		ThinkingBudget: resolved.ThinkingBudget,
+		MaxTokens: resolved.MaxTokens,
 	})
 
 	fmt.Printf("Exit Reason: %s\n", result.ExitReason)

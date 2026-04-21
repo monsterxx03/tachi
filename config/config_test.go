@@ -16,7 +16,6 @@ func TestDefaultConfig(t *testing.T) {
 	assert.Equal(t, DefaultMaxIterations, cfg.MaxIterations)
 	assert.Empty(t, cfg.Provider)
 	assert.Empty(t, cfg.Providers)
-	assert.Equal(t, int64(0), cfg.ThinkingBudget)
 }
 
 func TestLoadFrom_NonExistent(t *testing.T) {
@@ -33,7 +32,6 @@ func TestLoadFrom_ValidYAML(t *testing.T) {
 	yaml := `provider: my-provider
 max_tokens: 8000
 max_iterations: 5
-thinking_budget: 10000
 providers:
   - name: my-provider
     type: anthropic
@@ -53,7 +51,6 @@ providers:
 	assert.Equal(t, "my-provider", cfg.Provider)
 	assert.Equal(t, 8000, cfg.MaxTokens)
 	assert.Equal(t, 5, cfg.MaxIterations)
-	assert.Equal(t, int64(10000), cfg.ThinkingBudget)
 	assert.Len(t, cfg.Providers, 2)
 	assert.Equal(t, "my-provider", cfg.Providers[0].Name)
 	assert.Equal(t, "anthropic", cfg.Providers[0].Type)
@@ -85,10 +82,9 @@ func TestSaveAndLoad(t *testing.T) {
 	path := filepath.Join(dir, "config.yaml")
 
 	original := &Config{
-		Provider:       "test-provider",
-		MaxTokens:      16000,
-		MaxIterations:  20,
-		ThinkingBudget: 5000,
+		Provider:      "test-provider",
+		MaxTokens:     16000,
+		MaxIterations: 20,
 		Providers: []ProviderConfig{
 			{
 				Name:    "test-provider",
@@ -109,7 +105,6 @@ func TestSaveAndLoad(t *testing.T) {
 	assert.Equal(t, original.Provider, loaded.Provider)
 	assert.Equal(t, original.MaxTokens, loaded.MaxTokens)
 	assert.Equal(t, original.MaxIterations, loaded.MaxIterations)
-	assert.Equal(t, original.ThinkingBudget, loaded.ThinkingBudget)
 	assert.Len(t, loaded.Providers, 1)
 	assert.Equal(t, original.Providers[0], loaded.Providers[0])
 }
@@ -136,10 +131,9 @@ func TestFindProvider(t *testing.T) {
 func TestResolve_FullConfig(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	cfg := &Config{
-		Provider:       "my-provider",
-		MaxTokens:      8000,
-		MaxIterations:  5,
-		ThinkingBudget: 10000,
+		Provider:      "my-provider",
+		MaxTokens:     8000,
+		MaxIterations: 5,
 		Providers: []ProviderConfig{
 			{
 				Name:    "my-provider",
@@ -159,7 +153,6 @@ func TestResolve_FullConfig(t *testing.T) {
 	assert.Equal(t, "sk-from-config", resolved.Provider.APIKey)
 	assert.Equal(t, 8000, resolved.MaxTokens)
 	assert.Equal(t, 5, resolved.MaxIterations)
-	assert.Equal(t, int64(10000), resolved.ThinkingBudget)
 }
 
 func TestResolve_FlagOverrides(t *testing.T) {

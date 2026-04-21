@@ -41,7 +41,6 @@ type Config struct {
 	Provider       string           `yaml:"provider"`
 	MaxTokens      int              `yaml:"max_tokens"`
 	MaxIterations  int              `yaml:"max_iterations"`
-	ThinkingBudget int64            `yaml:"thinking_budget"`
 	Providers      []ProviderConfig `yaml:"providers"`
 	WebSearch      WebSearchConfig  `yaml:"web_search"`
 }

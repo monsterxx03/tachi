@@ -26,10 +26,9 @@ type ResolvedProvider struct {
 }
 
 type ResolvedConfig struct {
-	Provider       ResolvedProvider
-	MaxTokens      int
-	MaxIterations  int
-	ThinkingBudget int64
+	Provider      ResolvedProvider
+	MaxTokens     int
+	MaxIterations int
 }
 
 func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
@@ -70,7 +69,6 @@ func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
 		Provider:       *resolved,
 		MaxTokens:      maxTokens,
 		MaxIterations:  maxIterations,
-		ThinkingBudget: cfg.ThinkingBudget,
 	}, nil
 }
 
