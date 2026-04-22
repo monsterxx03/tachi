@@ -175,3 +175,14 @@ type MissingArgError struct {
 func (e *MissingArgError) Error() string {
 	return "missing required argument '" + e.Arg + "' for tool " + e.Name
 }
+
+// AskUserQuestionError indicates a tool is an AskUserQuestion tool that needs user input
+type AskUserQuestionError struct {
+	ToolName string
+	Args     string
+	Questions []Question
+}
+
+func (e *AskUserQuestionError) Error() string {
+	return "tool requires user input"
+}

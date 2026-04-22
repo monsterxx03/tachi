@@ -22,6 +22,7 @@ const (
 	stateStreaming
 	stateSelectingModel
 	stateAwaitingConfirmation
+	stateAskUserQuestion
 )
 
 type toolCallDisplay struct {
@@ -66,6 +67,7 @@ type Model struct {
 	eventCh          <-chan agent.AgentEvent
 	totalUsage       llm.Usage
 	pendingConfirm   *pendingConfirm
+	askUserView      *AskUserView
 
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
@@ -153,6 +155,29 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		}
+		if m.state == stateAskUserQuestion {
+			if m.askUserView == nil {
+				m.setState(stateStreaming)
+				return m, nil
+			}
+			submit, cancelled := m.askUserView.HandleKey(msg.String())
+			if cancelled {
+				m.agent.RespondToAskUser(nil, nil)
+				m.askUserView = nil
+				m.setState(stateStreaming)
+				m.layout()
+				return m, m.nextEvent()
+			}
+			if submit {
+				answers := m.askUserView.GetAnswers()
+				m.agent.RespondToAskUser(answers, nil)
+				m.askUserView = nil
+				m.setState(stateStreaming)
+				m.layout()
+				return m, m.nextEvent()
+			}
+			return m, nil
+		}
 		if m.state == stateIdle {
 			switch msg.String() {
 			case "ctrl+s":
@@ -213,8 +238,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case tickMsg:
-		// Re-render when in confirmation state, continue ticking
-		if m.state == stateAwaitingConfirmation {
+		// Re-render when in confirmation or ask-user state, continue ticking
+		if m.state == stateAwaitingConfirmation || m.state == stateAskUserQuestion {
 			cmds = append(cmds, m.tick())
 		}
 	}
@@ -232,6 +257,12 @@ func (m *Model) layout() {
 		if m.pendingConfirm != nil {
 			diffLines := strings.Count(m.pendingConfirm.diff, "\n") + 1
 			inputHeight = min(10+diffLines, m.height/3) // Min 10, max 1/3 of screen
+		}
+	} else if m.state == stateAskUserQuestion {
+		// Estimate height based on AskUserView
+		if m.askUserView != nil {
+			// Use a fixed estimate since we can't easily count options without access to the view's questions
+			inputHeight = 15 // enough for a few options
 		}
 	}
 	chatHeight := m.height - inputHeight - statusHeight
@@ -326,6 +357,26 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		} else {
 			debuglog.Log("TUI: diff: %s", event.ToolDiff)
 		}
+		return nil
+
+	case agent.AgentEventAskUser:
+		debuglog.Log("TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
+		m.askUserView = NewAskUserView(event.Questions)
+		m.setState(stateAskUserQuestion)
+		// Build question display message
+		var b strings.Builder
+		b.WriteString("Questions for you:\n\n")
+		for i, q := range event.Questions {
+			b.WriteString(fmt.Sprintf("[%d] %s (%s)\n", i+1, q.Question, q.Header))
+			for j, opt := range q.Options {
+				b.WriteString(fmt.Sprintf("    %d. %s - %s\n", j+1, opt.Label, opt.Description))
+			}
+			b.WriteString("\n")
+		}
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: b.String(),
+		})
 		return nil
 
 	case agent.AgentEventToolResult:
@@ -433,6 +484,13 @@ func (m *Model) renderConfirmPrompt() string {
 	return b.String()
 }
 
+func (m *Model) renderAskUserPrompt() string {
+	if m.askUserView == nil {
+		return ""
+	}
+	return m.askUserView.Render()
+}
+
 func (m *Model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("Loading...")
@@ -443,6 +501,8 @@ func (m *Model) View() tea.View {
 		inputSection = m.renderProviderSelection()
 	} else if m.state == stateAwaitingConfirmation {
 		inputSection = m.renderConfirmPrompt()
+	} else if m.state == stateAskUserQuestion {
+		inputSection = m.renderAskUserPrompt()
 	}
 
 	var content strings.Builder

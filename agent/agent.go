@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -25,6 +26,7 @@ type AIAgent struct {
 	iterationBudget *IterationBudget
 	budgetGraceCall bool
 	confirmRespCh   chan bool // Channel to receive confirmation response from TUI
+	askUserRespCh   chan tools.AskUserResult // Channel to receive AskUserQuestion responses from TUI
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -35,6 +37,16 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		toolRegistry:    tools.NewRegistry(),
 		iterationBudget: &IterationBudget{Remaining: maxIterations},
 		confirmRespCh:   make(chan bool, 1),
+		askUserRespCh:   make(chan tools.AskUserResult, 1),
+	}
+}
+
+// RespondToAskUser is called by TUI to respond to an AskUserQuestion request
+func (a *AIAgent) RespondToAskUser(answers map[string]string, annotations map[string]string) {
+	select {
+	case a.askUserRespCh <- tools.AskUserResult{Answers: answers, Annotations: annotations}:
+	default:
+		// Channel already has a value or is not waiting
 	}
 }
 
@@ -59,6 +71,7 @@ func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.GlobTool{})
 	a.toolRegistry.Register(tools.GrepTool{})
 	a.toolRegistry.Register(tools.BashTool{})
+	a.toolRegistry.Register(tools.AskUserTool{})
 }
 
 func (a *AIAgent) RegisterTool(tool tools.Tool) {
@@ -100,6 +113,7 @@ const (
 	AgentEventToolResult        = "tool_result"
 	AgentEventTurnComplete      = "turn_complete"
 	AgentEventError             = "error"
+	AgentEventAskUser           = "ask_user_question"
 )
 
 type AgentEvent struct {
@@ -112,6 +126,7 @@ type AgentEvent struct {
 	ToolResult    string
 	ToolIsError   bool
 	ToolDiff      string
+	Questions     []tools.Question // For AskUserQuestion tool
 	Result        *RunResult
 	Messages      []llm.Message
 	Usage         *llm.Usage
@@ -235,6 +250,33 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 				} else {
 					return nil, errCancelled
 				}
+			case <-ctx.Done():
+				result = ""
+				execErr = ctx.Err()
+			}
+		}
+
+		// Handle AskUserQuestion tool - wait for TUI to provide answers
+		if askErr, ok := execErr.(*tools.AskUserQuestionError); ok {
+			debuglog.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(askErr.Questions))
+			ch <- AgentEvent{
+				Type:      AgentEventAskUser,
+				ToolName:  askErr.ToolName,
+				ToolID:    tc.ID,
+				ToolArgs:  askErr.Args,
+				Questions: askErr.Questions,
+			}
+
+			select {
+			case resp := <-a.askUserRespCh:
+				// TUI has provided the answers, build the result
+				resultData, _ := json.Marshal(map[string]interface{}{
+					"questions":  askErr.Questions,
+					"answers":    resp.Answers,
+					"annotations": resp.Annotations,
+				})
+				result = string(resultData)
+				execErr = nil
 			case <-ctx.Done():
 				result = ""
 				execErr = ctx.Err()

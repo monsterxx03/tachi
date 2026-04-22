@@ -87,4 +87,7 @@ var (
 	diffHeaderStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F5A97F")).
 			Bold(true)
+
+	boldStyle = lipgloss.NewStyle().
+			Bold(true)
 )
