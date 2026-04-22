@@ -81,14 +81,9 @@ func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
-// Invoke calls a tool with the given arguments
+// Invoke calls a tool with the given arguments.
+// If the tool requires confirmation, it returns a ToolPendingError instead of executing.
 func (r *Registry) Invoke(name string, args string) (string, error) {
-	return r.InvokeWithTool(name, args, nil)
-}
-
-// InvokeWithTool calls a tool with the given arguments and returns the tool instance.
-// If confirmCh is provided and the tool requires confirmation, it returns a ToolPendingError.
-func (r *Registry) InvokeWithTool(name string, args string, confirmCh chan<- bool) (string, error) {
 	tool, ok := r.tools[name]
 	if !ok {
 		return "", &UnknownToolError{name}
@@ -98,7 +93,6 @@ func (r *Registry) InvokeWithTool(name string, args string, confirmCh chan<- boo
 		return "", err
 	}
 
-	// Check if tool requires confirmation
 	if ct, ok := tool.(ConfirmationTool); ok && ct.NeedsConfirmation() {
 		diff, err := ct.GetDiff(args)
 		if err != nil {

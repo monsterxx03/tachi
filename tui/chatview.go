@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"encoding/json"
 	"fmt"
 	"strings"
 
@@ -9,8 +10,6 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
-
-	"github.com/monsterxx03/tachi/agent"
 )
 
 type ChatView struct {
@@ -106,7 +105,7 @@ func (c *ChatView) UpdateToolArgs(id, args string) {
 	for i := range c.currentTools {
 		if c.currentTools[i].ID == id {
 			c.currentTools[i].Args = args
-			c.currentTools[i].Preview = agent.GetToolArgsPreview(c.currentTools[i].Name, args)
+			c.currentTools[i].Preview = getToolArgsPreview(c.currentTools[i].Name, args)
 			break
 		}
 	}
@@ -349,6 +348,50 @@ func truncateThinking(s string, maxLen int) string {
 	}
 	half := (maxLen - 5) / 2
 	return s[:half] + "\n...\n" + s[len(s)-half:]
+}
+
+func getToolArgsPreview(name, argsJSON string) string {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return argsJSON
+	}
+	switch name {
+	case "ReadFile":
+		if p, ok := args["path"].(string); ok {
+			return p
+		}
+	case "WriteFile":
+		if p, ok := args["path"].(string); ok {
+			return p
+		}
+	case "EditFile":
+		if p, ok := args["file_path"].(string); ok {
+			return p
+		}
+	case "Glob":
+		if p, ok := args["pattern"].(string); ok {
+			return p
+		}
+	case "Grep":
+		if p, ok := args["pattern"].(string); ok {
+			return p
+		}
+	case "Bash":
+		if c, ok := args["command"].(string); ok {
+			if len(c) > 60 {
+				return c[:60] + "..."
+			}
+			return c
+		}
+	case "WebSearch":
+		if q, ok := args["query"].(string); ok {
+			if len(q) > 60 {
+				return q[:60] + "..."
+			}
+			return q
+		}
+	}
+	return argsJSON
 }
 
 // renderDiffWithHighlight renders diff content with syntax highlighting for +/- lines

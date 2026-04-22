@@ -51,8 +51,7 @@ var commands = []Command{
 			}
 			m.providerItems = cfg.Providers
 			m.providerSelIdx = 0
-			m.state = stateSelectingModel
-			m.input.SetEnabled(false)
+			m.setState(stateSelectingModel)
 			m.layout()
 			return nil
 		},

@@ -23,18 +23,37 @@ type ChatOptions struct {
 	MaxTokens int
 }
 
-// Tool represents a function tool that can be called by the LLM
-type Tool struct {
-	Name        string `json:"name"`
+// ToolParameterProperty describes a single property in a tool's parameter schema.
+type ToolParameterProperty struct {
+	Type        string `json:"type"`
 	Description string `json:"description"`
-	Parameters  struct {
-		Type       string `json:"type"`
-		Properties map[string]struct {
-			Type        string `json:"type"`
-			Description string `json:"description"`
-		} `json:"properties"`
-		Required []string `json:"required"`
-	} `json:"parameters"`
+}
+
+// ToolParameters describes the JSON Schema for a tool's input parameters.
+type ToolParameters struct {
+	Type       string                           `json:"type"`
+	Properties map[string]ToolParameterProperty `json:"properties"`
+	Required   []string                         `json:"required"`
+}
+
+// Tool represents a function tool that can be called by the LLM.
+type Tool struct {
+	Name        string         `json:"name"`
+	Description string         `json:"description"`
+	Parameters  ToolParameters `json:"parameters"`
+}
+
+// NewTool constructs a Tool from its component parts.
+func NewTool(name, description string, properties map[string]ToolParameterProperty, required []string) Tool {
+	return Tool{
+		Name:        name,
+		Description: description,
+		Parameters: ToolParameters{
+			Type:       "object",
+			Properties: properties,
+			Required:   required,
+		},
+	}
 }
 
 // Message represents a chat message

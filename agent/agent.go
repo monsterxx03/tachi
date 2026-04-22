@@ -2,10 +2,8 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -26,8 +24,7 @@ type AIAgent struct {
 	toolRegistry    *tools.Registry
 	iterationBudget *IterationBudget
 	budgetGraceCall bool
-	confirmCh       chan tools.ToolPendingError // Channel to send pending confirmations to TUI
-	confirmRespCh   chan bool                  // Channel to receive confirmation response from TUI
+	confirmRespCh   chan bool // Channel to receive confirmation response from TUI
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -37,20 +34,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		maxIterations:   maxIterations,
 		toolRegistry:    tools.NewRegistry(),
 		iterationBudget: &IterationBudget{Remaining: maxIterations},
-		confirmCh:       make(chan tools.ToolPendingError, 1),
 		confirmRespCh:   make(chan bool, 1),
-	}
-}
-
-// SendConfirmation sends a pending confirmation request and waits for response
-func (a *AIAgent) SendConfirmation(pending tools.ToolPendingError) bool {
-	a.confirmCh <- pending
-	select {
-	case confirmed := <-a.confirmRespCh:
-		return confirmed
-	case <-time.After(5 * time.Minute):
-		// Timeout after 5 minutes
-		return false
 	}
 }
 
@@ -89,138 +73,22 @@ type RunResult struct {
 }
 
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, opts llm.ChatOptions) *RunResult {
-	if opts.MaxTokens <= 0 {
-		opts.MaxTokens = defaultMaxTokens
-	}
-
-	messages := make([]llm.Message, 0)
-
-	if systemPrompt != "" {
-		messages = append(messages, llm.Message{
-			Role:    "system",
-			Content: systemPrompt,
-		})
-	}
-
-	messages = append(messages, llm.Message{
-		Role:    "user",
-		Content: userMessage,
-	})
-
-	llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
-
-	apiCallCount := 0
-	lengthContinueRetries := 0
-	const maxLengthContinueRetries = 3
-
-	for {
-		if !a.iterationBudget.consume() && !a.budgetGraceCall {
-			return &RunResult{
-				ExitReason:     "budget_exhausted",
-				IterationsUsed: apiCallCount,
-				Error:          fmt.Errorf("iteration budget exhausted"),
-			}
-		}
-
-		select {
-		case <-ctx.Done():
-			return &RunResult{
-				ExitReason:     "interrupted",
-				IterationsUsed: apiCallCount,
-				Error:          ctx.Err(),
-			}
-		default:
-		}
-
-		apiCallCount++
-		response, err := a.provider.CreateChat(ctx, messages, llmTools, opts)
-		if err != nil {
-			return &RunResult{
-				ExitReason:     "error",
-				IterationsUsed: apiCallCount,
-				Error:          fmt.Errorf("API call failed: %w", err),
-			}
-		}
-
-
-		switch response.FinishReason {
-		case "stop", "end_turn":
-			messages = append(messages, llm.Message{
-				Role:           "assistant",
-				Content:        response.Content,
-				ThinkingBlocks: response.ThinkingBlocks,
-			})
-
-			return &RunResult{
-				Response:       response.Content,
-				IterationsUsed: apiCallCount,
-				ExitReason:     "stop",
-			}
-
-		case "tool_calls", "tool_use":
-			assistantMsg := llm.Message{
-				Role:           "assistant",
-				Content:        response.Content,
-				ThinkingBlocks: response.ThinkingBlocks,
-			}
-
-			for _, tc := range response.ToolCalls {
-				assistantMsg.ToolCalls = append(assistantMsg.ToolCalls, llm.ToolCall{
-					ID:   tc.ID,
-					Type: tc.Type,
-					Function: llm.ToolCallFunction{
-						Name:      tc.Function.Name,
-						Arguments: tc.Function.Arguments,
-					},
-				})
-			}
-			messages = append(messages, assistantMsg)
-
-			for _, tc := range response.ToolCalls {
-				result, execErr := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
-				toolMsg := llm.Message{
-					Role:       "tool",
-					ToolCallID: tc.ID,
-				}
-				if execErr != nil {
-					toolMsg.Content = fmt.Sprintf("Error: %v", execErr)
-					toolMsg.IsError = true
-				} else {
-					toolMsg.Content = result
-				}
-				messages = append(messages, toolMsg)
-			}
-			continue
-
-		case "max_tokens", "length":
-			lengthContinueRetries++
-			if lengthContinueRetries >= maxLengthContinueRetries {
-				return &RunResult{
-					ExitReason:     "length_exhausted",
-					IterationsUsed: apiCallCount,
-					Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
-				}
-			}
-
-			messages = append(messages, llm.Message{
-				Role:           "assistant",
-				Content:        response.Content,
-				ThinkingBlocks: response.ThinkingBlocks,
-			})
-			messages = append(messages, llm.Message{
-				Role:    "user",
-				Content: "Please continue where you left off.",
-			})
-			continue
-
-		default:
-			return &RunResult{
-				Response:       response.Content,
-				IterationsUsed: apiCallCount,
-				ExitReason:     "stop",
-			}
+	ch := a.RunConversationStream(ctx, nil, userMessage, systemPrompt, opts)
+	var result *RunResult
+	for event := range ch {
+		switch event.Type {
+		case AgentEventTurnComplete:
+			result = event.Result
+		case AgentEventError:
+			result = event.Result
+		case AgentEventToolConfirmation:
+			a.ConfirmTool(true)
 		}
 	}
+	if result == nil {
+		result = &RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
+	}
+	return result
 }
 
 const (
@@ -249,6 +117,219 @@ type AgentEvent struct {
 	Usage         *llm.Usage
 }
 
+var errCancelled = fmt.Errorf("edit cancelled by user")
+
+type streamAccumulator struct {
+	text         strings.Builder
+	thinking     strings.Builder
+	signature    strings.Builder
+	toolCalls    []llm.ToolCall
+	toolArgs     []strings.Builder
+	thinkBlocks  []llm.ThinkingBlock
+	finishReason string
+	usage        *llm.Usage
+}
+
+func (acc *streamAccumulator) finalize() {
+	for i := range acc.toolCalls {
+		if i < len(acc.toolArgs) {
+			acc.toolCalls[i].Function.Arguments = acc.toolArgs[i].String()
+		}
+	}
+	if acc.thinking.Len() > 0 {
+		acc.thinkBlocks = append(acc.thinkBlocks, llm.ThinkingBlock{
+			Type:      "thinking",
+			Thinking:  acc.thinking.String(),
+			Signature: acc.signature.String(),
+		})
+	}
+}
+
+func (acc *streamAccumulator) assistantMessage() llm.Message {
+	return llm.Message{
+		Role:           "assistant",
+		Content:        acc.text.String(),
+		ThinkingBlocks: acc.thinkBlocks,
+		ToolCalls:      acc.toolCalls,
+	}
+}
+
+// consumeStream reads all events from the LLM stream, forwards deltas to the
+// event channel, and returns the accumulated result.
+func (a *AIAgent) consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCallCount int) (*streamAccumulator, error) {
+	acc := &streamAccumulator{}
+
+	for event := range streamCh {
+		switch event.Type {
+		case llm.StreamEventTextDelta:
+			acc.text.WriteString(event.TextDelta)
+			ch <- AgentEvent{Type: AgentEventTextDelta, TextDelta: event.TextDelta}
+
+		case llm.StreamEventThinkingDelta:
+			acc.thinking.WriteString(event.ThinkingDelta)
+			ch <- AgentEvent{Type: AgentEventThinkingDelta, ThinkingDelta: event.ThinkingDelta}
+
+		case llm.StreamEventSignatureDelta:
+			acc.signature.WriteString(event.SignatureDelta)
+
+		case llm.StreamEventToolUseStart:
+			if event.ToolCall != nil {
+				acc.toolCalls = append(acc.toolCalls, *event.ToolCall)
+				acc.toolArgs = append(acc.toolArgs, strings.Builder{})
+				ch <- AgentEvent{
+					Type:     AgentEventToolCallStart,
+					ToolName: event.ToolCall.Function.Name,
+					ToolID:   event.ToolCall.ID,
+				}
+			}
+
+		case llm.StreamEventInputJSONDelta:
+			if len(acc.toolArgs) > 0 {
+				acc.toolArgs[len(acc.toolArgs)-1].WriteString(event.InputDelta)
+			}
+
+		case llm.StreamEventMessageDelta, llm.StreamEventDone:
+			acc.finishReason = event.FinishReason
+			if event.Usage != nil {
+				acc.usage = event.Usage
+			}
+
+		case llm.StreamEventError:
+			return nil, fmt.Errorf("stream error (iteration %d): %w", apiCallCount, event.Error)
+		}
+	}
+
+	acc.finalize()
+	return acc, nil
+}
+
+// executeToolCalls invokes each tool call, handling confirmation flow for tools
+// that require it. Returns the tool result messages to append to history.
+func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
+	var toolMsgs []llm.Message
+
+	for _, tc := range toolCalls {
+		ch <- AgentEvent{
+			Type:     AgentEventToolCallArgs,
+			ToolName: tc.Function.Name,
+			ToolID:   tc.ID,
+			ToolArgs: tc.Function.Arguments,
+		}
+
+		result, execErr := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
+
+		if pending, ok := execErr.(*tools.ToolPendingError); ok {
+			debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(pending.Diff))
+			ch <- AgentEvent{
+				Type:     AgentEventToolConfirmation,
+				ToolName: tc.Function.Name,
+				ToolID:   tc.ID,
+				ToolArgs: pending.Args,
+				ToolDiff: pending.Diff,
+			}
+
+			select {
+			case confirmed := <-a.confirmRespCh:
+				if confirmed {
+					result, execErr = a.toolRegistry.ExecuteConfirmed(tc.Function.Name, pending.Args)
+				} else {
+					return nil, errCancelled
+				}
+			case <-ctx.Done():
+				result = ""
+				execErr = ctx.Err()
+			}
+		}
+
+		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
+		if execErr != nil {
+			toolMsg.Content = fmt.Sprintf("Error: %v", execErr)
+			toolMsg.IsError = true
+			ch <- AgentEvent{
+				Type: AgentEventToolResult, ToolName: tc.Function.Name,
+				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
+			}
+		} else {
+			toolMsg.Content = result
+			ch <- AgentEvent{
+				Type: AgentEventToolResult, ToolName: tc.Function.Name,
+				ToolID: tc.ID, ToolResult: result,
+			}
+		}
+		toolMsgs = append(toolMsgs, toolMsg)
+	}
+
+	return toolMsgs, nil
+}
+
+// handleFinishReason processes the LLM's finish reason and updates messages accordingly.
+// Returns true if the agent loop should continue, false if it should stop.
+func (a *AIAgent) handleFinishReason(
+	ctx context.Context,
+	acc *streamAccumulator,
+	messages *[]llm.Message,
+	ch chan<- AgentEvent,
+	apiCallCount int,
+	lengthRetries *int,
+) bool {
+	const maxLengthContinueRetries = 3
+
+	switch acc.finishReason {
+	case "stop", "end_turn":
+		msg := acc.assistantMessage()
+		msg.ToolCalls = nil
+		*messages = append(*messages, msg)
+		ch <- AgentEvent{
+			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
+			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop"},
+		}
+		return false
+
+	case "tool_calls", "tool_use":
+		*messages = append(*messages, acc.assistantMessage())
+
+		toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
+		if err != nil {
+			ch <- AgentEvent{
+				Type:   AgentEventError,
+				Result: &RunResult{ExitReason: "cancelled", Error: err},
+			}
+			return false
+		}
+		*messages = append(*messages, toolMsgs...)
+		return true
+
+	case "max_tokens", "length":
+		*lengthRetries++
+		if *lengthRetries >= maxLengthContinueRetries {
+			ch <- AgentEvent{
+				Type: AgentEventError,
+				Result: &RunResult{
+					ExitReason:     "length_exhausted",
+					IterationsUsed: apiCallCount,
+					Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+				},
+			}
+			return false
+		}
+		msg := acc.assistantMessage()
+		msg.ToolCalls = nil
+		*messages = append(*messages, msg)
+		*messages = append(*messages, llm.Message{Role: "user", Content: "Please continue where you left off."})
+		return true
+
+	default:
+		msg := acc.assistantMessage()
+		msg.ToolCalls = nil
+		*messages = append(*messages, msg)
+		ch <- AgentEvent{
+			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
+			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop"},
+		}
+		return false
+	}
+}
+
 // RunConversationStream runs a streaming agent conversation loop.
 // It accepts existing message history for multi-turn support.
 // Returns a channel of AgentEvents that the TUI consumes.
@@ -266,33 +347,20 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		copy(messages, history)
 
 		if len(messages) == 0 && systemPrompt != "" {
-			messages = append(messages, llm.Message{
-				Role:    "system",
-				Content: systemPrompt,
-			})
+			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 		}
+		messages = append(messages, llm.Message{Role: "user", Content: userMessage})
 
-		messages = append(messages, llm.Message{
-			Role:    "user",
-			Content: userMessage,
-		})
-
-		toolSchemas := a.toolRegistry.GetSchemas()
-		llmTools := a.buildLLMTools(toolSchemas)
+		llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
 
 		apiCallCount := 0
 		lengthContinueRetries := 0
-		const maxLengthContinueRetries = 3
 
 		for {
 			if !a.iterationBudget.consume() && !a.budgetGraceCall {
 				ch <- AgentEvent{
-					Type: AgentEventError,
-					Result: &RunResult{
-						ExitReason:     "budget_exhausted",
-						IterationsUsed: apiCallCount,
-						Error:          fmt.Errorf("iteration budget exhausted"),
-					},
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},
 				}
 				return
 			}
@@ -300,12 +368,8 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			select {
 			case <-ctx.Done():
 				ch <- AgentEvent{
-					Type: AgentEventError,
-					Result: &RunResult{
-						ExitReason:     "interrupted",
-						IterationsUsed: apiCallCount,
-						Error:          ctx.Err(),
-					},
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Error: ctx.Err()},
 				}
 				return
 			default:
@@ -315,230 +379,22 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			streamCh, err := a.provider.CreateChatStream(ctx, messages, llmTools, opts)
 			if err != nil {
 				ch <- AgentEvent{
-					Type: AgentEventError,
-					Result: &RunResult{
-						ExitReason:     "error",
-						IterationsUsed: apiCallCount,
-						Error:          fmt.Errorf("API call failed: %w", err),
-					},
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: fmt.Errorf("API call failed: %w", err)},
 				}
 				return
 			}
 
-			var textContent strings.Builder
-			var thinkingContent strings.Builder
-			var signatureContent strings.Builder
-			var currentToolCalls []llm.ToolCall
-			var currentToolArgs []strings.Builder
-			var thinkingBlocks []llm.ThinkingBlock
-			var finishReason string
-			var turnUsage *llm.Usage
-
-			for event := range streamCh {
-				switch event.Type {
-				case llm.StreamEventTextDelta:
-					textContent.WriteString(event.TextDelta)
-					ch <- AgentEvent{Type: AgentEventTextDelta, TextDelta: event.TextDelta}
-
-				case llm.StreamEventThinkingDelta:
-					thinkingContent.WriteString(event.ThinkingDelta)
-					ch <- AgentEvent{Type: AgentEventThinkingDelta, ThinkingDelta: event.ThinkingDelta}
-
-				case llm.StreamEventSignatureDelta:
-					signatureContent.WriteString(event.SignatureDelta)
-
-				case llm.StreamEventToolUseStart:
-					if event.ToolCall != nil {
-						currentToolCalls = append(currentToolCalls, *event.ToolCall)
-						currentToolArgs = append(currentToolArgs, strings.Builder{})
-						ch <- AgentEvent{
-							Type:     AgentEventToolCallStart,
-							ToolName: event.ToolCall.Function.Name,
-							ToolID:   event.ToolCall.ID,
-						}
-					}
-
-				case llm.StreamEventInputJSONDelta:
-					if len(currentToolArgs) > 0 {
-						currentToolArgs[len(currentToolArgs)-1].WriteString(event.InputDelta)
-					}
-
-				case llm.StreamEventMessageDelta, llm.StreamEventDone:
-					finishReason = event.FinishReason
-					if event.Usage != nil {
-						turnUsage = event.Usage
-					}
-
-				case llm.StreamEventError:
-					ch <- AgentEvent{
-						Type: "error",
-						Result: &RunResult{
-							ExitReason:     "error",
-							IterationsUsed: apiCallCount,
-							Error:          event.Error,
-						},
-					}
-					return
-				}
-			}
-
-			for i := range currentToolCalls {
-				if i < len(currentToolArgs) {
-					currentToolCalls[i].Function.Arguments = currentToolArgs[i].String()
-				}
-			}
-
-			if thinkingContent.Len() > 0 {
-				thinkingBlocks = append(thinkingBlocks, llm.ThinkingBlock{
-					Type:      "thinking",
-					Thinking:  thinkingContent.String(),
-					Signature: signatureContent.String(),
-				})
-			}
-
-
-			switch finishReason {
-			case "stop", "end_turn":
-				assistantMsg := llm.Message{
-					Role:           "assistant",
-					Content:        textContent.String(),
-					ThinkingBlocks: thinkingBlocks,
-				}
-				messages = append(messages, assistantMsg)
-
+			acc, err := a.consumeStream(streamCh, ch, apiCallCount)
+			if err != nil {
 				ch <- AgentEvent{
-					Type:     AgentEventTurnComplete,
-					Messages: messages,
-					Usage:    turnUsage,
-					Result: &RunResult{
-						Response:       textContent.String(),
-						IterationsUsed: apiCallCount,
-						ExitReason:     "stop",
-					},
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: err},
 				}
 				return
+			}
 
-			case "tool_calls", "tool_use":
-				assistantMsg := llm.Message{
-					Role:           "assistant",
-					Content:        textContent.String(),
-					ThinkingBlocks: thinkingBlocks,
-					ToolCalls:      currentToolCalls,
-				}
-				messages = append(messages, assistantMsg)
-
-				for _, tc := range currentToolCalls {
-					ch <- AgentEvent{
-						Type:     AgentEventToolCallArgs,
-						ToolName: tc.Function.Name,
-						ToolID:   tc.ID,
-						ToolArgs: tc.Function.Arguments,
-					}
-
-					result, execErr := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
-
-					// Handle tools that require confirmation
-					if pending, ok := execErr.(*tools.ToolPendingError); ok {
-						debuglog.Log("Agent: EditTool requires confirmation, diff length: %d", len(pending.Diff))
-						// Send confirmation request to TUI and wait for response
-						ch <- AgentEvent{
-							Type:     AgentEventToolConfirmation,
-							ToolName: tc.Function.Name,
-							ToolID:   tc.ID,
-							ToolArgs: pending.Args,
-							ToolDiff: pending.Diff,
-						}
-
-						// Wait for confirmation or cancellation
-						select {
-						case confirmed := <-a.confirmRespCh:
-							if confirmed {
-								// User confirmed, execute the tool
-								result, execErr = a.toolRegistry.ExecuteConfirmed(tc.Function.Name, pending.Args)
-							} else {
-								// User cancelled - stop the agent loop
-								ch <- AgentEvent{
-									Type: "error",
-									Result: &RunResult{
-										ExitReason: "cancelled",
-										Error:      fmt.Errorf("edit cancelled by user"),
-									},
-								}
-								return
-							}
-						case <-ctx.Done():
-							result = ""
-							execErr = ctx.Err()
-						}
-					}
-
-					toolMsg := llm.Message{
-						Role:       "tool",
-						ToolCallID: tc.ID,
-					}
-					if execErr != nil {
-						toolMsg.Content = fmt.Sprintf("Error: %v", execErr)
-						toolMsg.IsError = true
-						ch <- AgentEvent{
-							Type:        AgentEventToolResult,
-							ToolName:    tc.Function.Name,
-							ToolID:      tc.ID,
-							ToolResult:  toolMsg.Content,
-							ToolIsError: true,
-						}
-					} else {
-						toolMsg.Content = result
-						ch <- AgentEvent{
-							Type:       AgentEventToolResult,
-							ToolName:   tc.Function.Name,
-							ToolID:     tc.ID,
-							ToolResult: result,
-						}
-					}
-					messages = append(messages, toolMsg)
-				}
-				continue
-
-			case "max_tokens", "length":
-				lengthContinueRetries++
-				if lengthContinueRetries >= maxLengthContinueRetries {
-					ch <- AgentEvent{
-						Type: "error",
-						Result: &RunResult{
-							ExitReason:     "length_exhausted",
-							IterationsUsed: apiCallCount,
-							Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
-						},
-					}
-					return
-				}
-				messages = append(messages, llm.Message{
-					Role:           "assistant",
-					Content:        textContent.String(),
-					ThinkingBlocks: thinkingBlocks,
-				})
-				messages = append(messages, llm.Message{
-					Role:    "user",
-					Content: "Please continue where you left off.",
-				})
-				continue
-
-			default:
-				messages = append(messages, llm.Message{
-					Role:           "assistant",
-					Content:        textContent.String(),
-					ThinkingBlocks: thinkingBlocks,
-				})
-				ch <- AgentEvent{
-					Type:     AgentEventTurnComplete,
-					Messages: messages,
-					Usage:    turnUsage,
-					Result: &RunResult{
-						Response:       textContent.String(),
-						IterationsUsed: apiCallCount,
-						ExitReason:     "stop",
-					},
-				}
+			if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
 				return
 			}
 		}
@@ -550,83 +406,15 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 func (a *AIAgent) buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
 	llmTools := make([]llm.Tool, 0, len(toolSchemas))
 	for _, schema := range toolSchemas {
-		props := make(map[string]struct {
-			Type        string `json:"type"`
-			Description string `json:"description"`
-		})
+		props := make(map[string]llm.ToolParameterProperty, len(schema.Parameters.Properties))
 		for name, prop := range schema.Parameters.Properties {
-			props[name] = struct {
-				Type        string `json:"type"`
-				Description string `json:"description"`
-			}{
-				Type:        prop.Type,
-				Description: prop.Description,
-			}
+			props[name] = llm.ToolParameterProperty{Type: prop.Type, Description: prop.Description}
 		}
-		llmTools = append(llmTools, llm.Tool{
-			Name:        schema.Name,
-			Description: schema.Description,
-			Parameters: struct {
-				Type       string `json:"type"`
-				Properties map[string]struct {
-					Type        string `json:"type"`
-					Description string `json:"description"`
-				} `json:"properties"`
-				Required []string `json:"required"`
-			}{
-				Type:       schema.Parameters.Type,
-				Properties: props,
-				Required:   schema.Parameters.Required,
-			},
-		})
+		llmTools = append(llmTools, llm.NewTool(schema.Name, schema.Description, props, schema.Parameters.Required))
 	}
 	return llmTools
 }
 
-// GetToolArgsPreview extracts a short preview from tool call arguments JSON
-func GetToolArgsPreview(name, argsJSON string) string {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return argsJSON
-	}
-	switch name {
-	case "ReadFile":
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-	case "WriteFile":
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-	case "EditFile":
-		if p, ok := args["file_path"].(string); ok {
-			return p
-		}
-	case "Glob":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case "Grep":
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case "Bash":
-		if c, ok := args["command"].(string); ok {
-			if len(c) > 60 {
-				return c[:60] + "..."
-			}
-			return c
-		}
-	case "WebSearch":
-		if q, ok := args["query"].(string); ok {
-			if len(q) > 60 {
-				return q[:60] + "..."
-			}
-			return q
-		}
-	}
-	return argsJSON
-}
 
 func (b *IterationBudget) consume() bool {
 	if b.Remaining > 0 {
