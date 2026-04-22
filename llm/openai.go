@@ -111,12 +111,12 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 
 func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error) {
 	req := openai.ChatCompletionRequest{
-		Model:       p.model,
-		Messages:    p.convertMessages(messages),
-		Tools:       p.convertTools(tools),
-		MaxTokens:   opts.MaxTokens,
-		Temperature: 0.7,
-		Stream:      true,
+		Model:               p.model,
+		Messages:            p.convertMessages(messages),
+		Tools:               p.convertTools(tools),
+		MaxCompletionTokens: opts.MaxTokens,
+		// Temperature:         0.7,
+		Stream: true,
 	}
 
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
