@@ -253,6 +253,8 @@ func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
 			thinkingStyle.Render("Thinking: "+thinking))
 	case "tool_calls":
 		fmt.Fprintf(b, "%s\n\n", msg.Content)
+	case "error":
+		fmt.Fprintf(b, "%s\n\n", toolResultErrStyle.Width(inner).Render("Error: "+msg.Content))
 	case "tool_confirmation":
 		fmt.Fprintf(b, "%s\n\n", toolConfirmStyle.Width(inner).Render(renderDiffWithHighlight(msg.Content, inner)))
 	}

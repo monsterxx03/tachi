@@ -387,9 +387,13 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 			acc, err := a.consumeStream(streamCh, ch, apiCallCount)
 			if err != nil {
+				exitReason := "error"
+				if ctx.Err() != nil {
+					exitReason = "interrupted"
+				}
 				ch <- AgentEvent{
 					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: err},
+					Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
 				}
 				return
 			}

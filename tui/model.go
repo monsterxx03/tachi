@@ -342,14 +342,15 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
-		errMsg := "Unknown error"
-		if event.Result != nil && event.Result.Error != nil {
-			errMsg = event.Result.Error.Error()
+		if event.Result != nil && event.Result.ExitReason == "interrupted" {
+			m.chatview.FinishStreaming()
+		} else {
+			errMsg := "Unknown error"
+			if event.Result != nil && event.Result.Error != nil {
+				errMsg = event.Result.Error.Error()
+			}
+			m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
 		}
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: toolResultErrStyle.Render("Error: " + errMsg),
-		})
 		m.setState(stateIdle)
 		m.cancelFunc = nil
 		m.eventCh = nil
