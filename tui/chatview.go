@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -14,7 +13,6 @@ import (
 
 type ChatView struct {
 	viewport viewport.Model
-	spinner  spinner.Model
 	messages []chatMessage
 	width    int
 	height   int
@@ -32,13 +30,11 @@ type ChatView struct {
 }
 
 func NewChatView() ChatView {
-	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
 	md, _ := glamour.NewTermRenderer(
 		glamour.WithAutoStyle(),
 		glamour.WithWordWrap(80),
 	)
 	return ChatView{
-		spinner:    sp,
 		mdRenderer: md,
 	}
 }
@@ -192,13 +188,6 @@ func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
 	var cmds []tea.Cmd
 
 	switch msg.(type) {
-	case spinner.TickMsg:
-		if c.state == stateWaiting {
-			var cmd tea.Cmd
-			c.spinner, cmd = c.spinner.Update(msg)
-			cmds = append(cmds, cmd)
-			c.refresh()
-		}
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
 		c.viewport, cmd = c.viewport.Update(msg)
@@ -212,10 +201,6 @@ func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
 	}
 
 	return c, tea.Batch(cmds...)
-}
-
-func (c *ChatView) SpinnerTick() tea.Cmd {
-	return c.spinner.Tick
 }
 
 func (c ChatView) View() string {
@@ -272,9 +257,7 @@ func (c *ChatView) refresh() {
 	if inner < 1 {
 		inner = 1
 	}
-	if c.state == stateWaiting {
-		fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(c.spinner.View()))
-	} else if c.state == stateStreaming {
+	if c.state == stateStreaming {
 		if c.currentThinking.Len() > 0 {
 			thinking := truncateThinking(c.currentThinking.String(), 500)
 			fmt.Fprintf(&b, "%s\n", thinkingStyle.Render("Thinking: "+thinking))

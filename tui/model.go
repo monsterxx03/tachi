@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
@@ -47,9 +47,10 @@ type chatMessage struct {
 }
 
 type Model struct {
-	statusbar StatusBar
-	chatview  ChatView
-	input     InputArea
+	statusbar    StatusBar
+	chatview     ChatView
+	input        InputArea
+	spinner      spinner.Model
 
 	width  int
 	height int
@@ -81,10 +82,11 @@ type ModelConfig struct {
 
 func NewModel(cfg ModelConfig) *Model {
 	return &Model{
-		statusbar:    NewStatusBar(cfg.ProviderInfo),
-		chatview:     NewChatView(),
-		input:        NewInputArea(),
-		agent:        cfg.Agent,
+		statusbar: NewStatusBar(cfg.ProviderInfo),
+		chatview:  NewChatView(),
+		input:     NewInputArea(),
+		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot)),
+		agent:     cfg.Agent,
 		systemPrompt: cfg.SystemPrompt,
 		chatOpts:     cfg.ChatOpts,
 		state:        stateIdle,
@@ -175,6 +177,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.layout()
 		}
 
+	case tea.MouseWheelMsg:
+		var cmd tea.Cmd
+		m.chatview, cmd = m.chatview.Update(msg)
+		cmds = append(cmds, cmd)
+
 	case InputSubmitMsg:
 		text := string(msg)
 		if cmd := findCommand(text); cmd != nil {
@@ -197,6 +204,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case streamDoneMsg:
 		// no-op
+
+	case spinner.TickMsg:
+		if m.state == stateWaiting {
+			var cmd tea.Cmd
+			m.spinner, cmd = m.spinner.Update(msg)
+			cmds = append(cmds, cmd)
+		}
 
 	case tickMsg:
 		// Re-render when in confirmation state, continue ticking
@@ -248,7 +262,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, text, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
-		m.chatview.SpinnerTick(),
+		m.spinner.Tick,
 		m.nextEvent(),
 	)
 }
@@ -431,11 +445,20 @@ func (m *Model) View() tea.View {
 		inputSection = m.renderConfirmPrompt()
 	}
 
-	v := tea.NewView(lipgloss.JoinVertical(lipgloss.Top,
-		m.chatview.View(),
-		inputSection,
-		m.statusbar.View(),
-	))
+	var content strings.Builder
+	content.WriteString(m.chatview.View())
+
+	if m.state == stateWaiting {
+		content.WriteString("\n")
+		content.WriteString(assistantMsgStyle.Width(m.width - 2).Render(m.spinner.View()))
+	}
+
+	content.WriteString("\n")
+	content.WriteString(inputSection)
+	content.WriteString("\n")
+	content.WriteString(m.statusbar.View())
+
+	v := tea.NewView(content.String())
 	v.AltScreen = true
 	if !m.copyMode {
 		v.MouseMode = tea.MouseModeCellMotion
