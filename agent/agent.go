@@ -327,6 +327,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 			var textContent strings.Builder
 			var thinkingContent strings.Builder
+			var signatureContent strings.Builder
 			var currentToolCalls []llm.ToolCall
 			var currentToolArgs []strings.Builder
 			var thinkingBlocks []llm.ThinkingBlock
@@ -342,6 +343,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				case llm.StreamEventThinkingDelta:
 					thinkingContent.WriteString(event.ThinkingDelta)
 					ch <- AgentEvent{Type: AgentEventThinkingDelta, ThinkingDelta: event.ThinkingDelta}
+
+				case llm.StreamEventSignatureDelta:
+					signatureContent.WriteString(event.SignatureDelta)
 
 				case llm.StreamEventToolUseStart:
 					if event.ToolCall != nil {
@@ -386,8 +390,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 			if thinkingContent.Len() > 0 {
 				thinkingBlocks = append(thinkingBlocks, llm.ThinkingBlock{
-					Type:     "thinking",
-					Thinking: thinkingContent.String(),
+					Type:      "thinking",
+					Thinking:  thinkingContent.String(),
+					Signature: signatureContent.String(),
 				})
 			}
 

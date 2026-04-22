@@ -72,24 +72,26 @@ type Response struct {
 }
 
 const (
-	StreamEventTextDelta     = "text_delta"
-	StreamEventThinkingDelta = "thinking_delta"
-	StreamEventToolUseStart  = "tool_use_start"
+	StreamEventTextDelta      = "text_delta"
+	StreamEventThinkingDelta  = "thinking_delta"
+	StreamEventSignatureDelta = "signature_delta"
+	StreamEventToolUseStart   = "tool_use_start"
 	StreamEventInputJSONDelta = "input_json_delta"
-	StreamEventMessageDelta  = "message_delta"
-	StreamEventDone          = "done"
-	StreamEventError         = "error"
+	StreamEventMessageDelta   = "message_delta"
+	StreamEventDone           = "done"
+	StreamEventError          = "error"
 )
 
 type StreamEvent struct {
-	Type          string
-	TextDelta     string
-	ThinkingDelta string
-	ToolCall      *ToolCall
-	InputDelta    string
-	FinishReason  string
-	Usage         *Usage
-	Error         error
+	Type           string
+	TextDelta      string
+	ThinkingDelta  string
+	SignatureDelta string
+	ToolCall       *ToolCall
+	InputDelta     string
+	FinishReason   string
+	Usage          *Usage
+	Error          error
 }
 
 // Provider defines the interface for LLM providers

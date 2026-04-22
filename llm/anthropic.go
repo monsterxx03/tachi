@@ -111,11 +111,12 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts 
 	}
 
 	req := &anthropic.MessageNewParams{
-		Model:        anthropic.Model(p.model),
-		MaxTokens:    int64(opts.MaxTokens),
-		Messages:     anthropicMessages,
-		Tools:        anthropicTools,
-		CacheControl: anthropic.NewCacheControlEphemeralParam(),
+		Model:     anthropic.Model(p.model),
+		MaxTokens: int64(opts.MaxTokens),
+		Messages:  anthropicMessages,
+		Tools:     anthropicTools,
+		// FIXME: why auto prompt on top level not working?
+		// CacheControl: anthropic.NewCacheControlEphemeralParam(),
 	}
 
 	if systemPrompt != "" {
@@ -223,6 +224,8 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 					ch <- StreamEvent{Type: StreamEventTextDelta, TextDelta: delta.Text}
 				case anthropic.ThinkingDelta:
 					ch <- StreamEvent{Type: StreamEventThinkingDelta, ThinkingDelta: delta.Thinking}
+				case anthropic.SignatureDelta:
+					ch <- StreamEvent{Type: StreamEventSignatureDelta, SignatureDelta: delta.Signature}
 				case anthropic.InputJSONDelta:
 					ch <- StreamEvent{Type: StreamEventInputJSONDelta, InputDelta: delta.PartialJSON}
 				}
