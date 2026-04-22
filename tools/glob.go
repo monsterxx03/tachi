@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"path/filepath"
@@ -31,7 +32,8 @@ func (t GlobTool) Properties() map[string]PropertySchema {
 }
 func (t GlobTool) Required() []string    { return []string{"pattern"} }
 func (t GlobTool) Parallel() bool       { return true }
-func (t GlobTool) Execute(args string) (string, error) {
+
+func (t GlobTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	if err := checkRipgrep(); err != nil {
 		return "", err
 	}
@@ -79,8 +81,18 @@ func (t GlobTool) Execute(args string) (string, error) {
 		"--hidden",
 	}
 
+	// Create timeout context, merging with parent context if provided
+	var cancelFn context.CancelFunc
+	var execCtx context.Context
+	if ctx == nil {
+		execCtx, cancelFn = context.WithTimeout(context.Background(), 30*time.Second)
+	} else {
+		execCtx, cancelFn = context.WithTimeout(ctx, 30*time.Second)
+	}
+	defer cancelFn()
+
 	start := time.Now()
-	cmd := exec.Command("rg", rgArgs...)
+	cmd := exec.CommandContext(execCtx, "rg", rgArgs...)
 	cmd.Dir = searchBaseDir
 	output, err := cmd.Output()
 	if err != nil {

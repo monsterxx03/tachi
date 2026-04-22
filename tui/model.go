@@ -203,11 +203,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.state == stateAwaitingConfirmation {
 			cmds = append(cmds, m.tick())
 		}
-
-	default:
-		var cmd tea.Cmd
-		m.chatview, cmd = m.chatview.Update(msg)
-		cmds = append(cmds, cmd)
 	}
 
 	return m, tea.Batch(cmds...)

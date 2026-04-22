@@ -1,6 +1,9 @@
 package tools
 
-import "encoding/json"
+import (
+	"context"
+	"encoding/json"
+)
 
 // PropertySchema defines a single property in the schema
 type PropertySchema struct {
@@ -15,7 +18,7 @@ type Tool interface {
 	Properties() map[string]PropertySchema
 	Required() []string
 	Parallel() bool
-	Execute(args string) (string, error)
+	ExecuteContext(ctx context.Context, args string) (string, error)
 }
 
 // ConfirmationTool is an optional interface for tools that require
@@ -81,9 +84,9 @@ func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
-// Invoke calls a tool with the given arguments.
+// Invoke calls a tool with the given arguments and context.
 // If the tool requires confirmation, it returns a ToolPendingError instead of executing.
-func (r *Registry) Invoke(name string, args string) (string, error) {
+func (r *Registry) Invoke(ctx context.Context, name string, args string) (string, error) {
 	tool, ok := r.tools[name]
 	if !ok {
 		return "", &UnknownToolError{name}
@@ -101,16 +104,17 @@ func (r *Registry) Invoke(name string, args string) (string, error) {
 		return "", &ToolPendingError{Name: name, Args: args, Diff: diff}
 	}
 
-	return tool.Execute(args)
+	return tool.ExecuteContext(ctx, args)
 }
 
-// ExecuteConfirmed executes a tool that was previously pending confirmation
-func (r *Registry) ExecuteConfirmed(name string, args string) (string, error) {
+// ExecuteConfirmed executes a tool that was previously pending confirmation, with context
+func (r *Registry) ExecuteConfirmed(ctx context.Context, name string, args string) (string, error) {
 	tool, ok := r.tools[name]
 	if !ok {
 		return "", &UnknownToolError{name}
 	}
-	return tool.Execute(args)
+
+	return tool.ExecuteContext(ctx, args)
 }
 
 // validateArgs checks if the arguments match the tool's schema

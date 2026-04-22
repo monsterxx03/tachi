@@ -44,7 +44,7 @@ func (t BashTool) Properties() map[string]PropertySchema {
 func (t BashTool) Required() []string { return []string{"command"} }
 func (t BashTool) Parallel() bool     { return false }
 
-func (t BashTool) Execute(args string) (string, error) {
+func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var a bashArgs
 	if err := parseArgs(args, &a); err != nil {
 		return "", err
@@ -62,8 +62,14 @@ func (t BashTool) Execute(args string) (string, error) {
 		}
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), timeout)
-	defer cancel()
+	// Create a new context with timeout if none provided
+	var cancelFn context.CancelFunc
+	if ctx == nil {
+		ctx, cancelFn = context.WithTimeout(context.Background(), timeout)
+	} else {
+		ctx, cancelFn = context.WithTimeout(ctx, timeout)
+	}
+	defer cancelFn()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", a.Command)
 	cmd.Dir = getWorkingDir()

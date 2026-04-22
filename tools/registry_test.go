@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"testing"
 )
@@ -8,7 +9,7 @@ import (
 func TestWriteTool(t *testing.T) {
 	tool := WriteTool{}
 	content := "Test content"
-	_, err := tool.Execute(`{"path": "/tmp/test_write.txt", "content": "Test content"}`)
+	_, err := tool.ExecuteContext(nil,`{"path": "/tmp/test_write.txt", "content": "Test content"}`)
 	if err != nil {
 		t.Fatalf("WriteTool.Execute failed: %v", err)
 	}
@@ -43,6 +44,9 @@ func (t testTool) Parallel() bool    { return true }
 func (t testTool) Execute(args string) (string, error) {
 	return t.fn(args)
 }
+func (t testTool) ExecuteContext(ctx context.Context, args string) (string, error) {
+	return t.fn(args)
+}
 
 func TestRegistry(t *testing.T) {
 	reg := NewRegistry()
@@ -59,7 +63,7 @@ func TestRegistry(t *testing.T) {
 	})
 
 	// Test invoking registered tool
-	result, err := reg.Invoke("test", `{"arg1": "value1"}`)
+	result, err := reg.Invoke(nil,"test", `{"arg1": "value1"}`)
 	if err != nil {
 		t.Errorf("Invoke failed: %v", err)
 	}
@@ -68,13 +72,13 @@ func TestRegistry(t *testing.T) {
 	}
 
 	// Test unknown tool
-	_, err = reg.Invoke("unknown", "{}")
+	_, err = reg.Invoke(nil,"unknown", "{}")
 	if err == nil {
 		t.Error("Expected error for unknown tool")
 	}
 
 	// Test missing required argument
-	_, err = reg.Invoke("test", "{}")
+	_, err = reg.Invoke(nil,"test", "{}")
 	if err == nil {
 		t.Error("Expected error for missing required argument")
 	}

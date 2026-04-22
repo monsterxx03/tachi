@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -84,7 +85,7 @@ func (t EditTool) GetDiff(args string) (string, error) {
 	return generateDiffSnippet(content, newContent, actualOld, a.NewString), nil
 }
 
-func (t EditTool) Execute(args string) (string, error) {
+func (t EditTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var a struct {
 		FilePath   string `json:"file_path"`
 		OldString  string `json:"old_string"`

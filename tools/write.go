@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -19,7 +20,8 @@ func (t WriteTool) Properties() map[string]PropertySchema {
 }
 func (t WriteTool) Required() []string { return []string{"path", "content"} }
 func (t WriteTool) Parallel() bool     { return false }
-func (t WriteTool) Execute(args string) (string, error) {
+
+func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var argsMap struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`

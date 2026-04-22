@@ -19,7 +19,7 @@ func TestReadTool(t *testing.T) {
 	defer os.Remove("/tmp/test_read.txt")
 
 	// Test Read
-	result, err := tool.Execute(`{"path": "/tmp/test_read.txt"}`)
+	result, err := tool.ExecuteContext(nil,`{"path": "/tmp/test_read.txt"}`)
 	if err != nil {
 		t.Fatalf("ReadTool.Execute failed: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestReadTool(t *testing.T) {
 
 func TestReadToolNotFound(t *testing.T) {
 	tool := ReadTool{}
-	_, err := tool.Execute(`{"path": "/nonexistent/file.txt"}`)
+	_, err := tool.ExecuteContext(nil,`{"path": "/nonexistent/file.txt"}`)
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
 	}
@@ -79,7 +79,7 @@ func TestReadToolWithOffsetAndLimit(t *testing.T) {
 				args = `{"path": "/tmp/test_read_offset.txt"}`
 			}
 
-			result, err := tool.Execute(args)
+			result, err := tool.ExecuteContext(nil,args)
 			if err != nil {
 				t.Fatalf("ReadTool.Execute failed: %v", err)
 			}
@@ -101,7 +101,7 @@ func TestReadToolBinary(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_binary.bin")
 
-	_, err = tool.Execute(`{"path": "/tmp/test_binary.bin"}`)
+	_, err = tool.ExecuteContext(nil,`{"path": "/tmp/test_binary.bin"}`)
 	if err == nil {
 		t.Error("Expected error for binary file")
 	}
@@ -124,7 +124,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_large.txt")
 
-	_, err = tool.Execute(`{"path": "/tmp/test_large.txt"}`)
+	_, err = tool.ExecuteContext(nil,`{"path": "/tmp/test_large.txt"}`)
 	if err == nil {
 		t.Error("Expected error for large file")
 	}
@@ -154,7 +154,7 @@ func TestReadToolAtLimit(t *testing.T) {
 	defer os.Remove("/tmp/test_at_limit.txt")
 
 	// Should not error - exactly at limit
-	_, err = tool.Execute(`{"path": "/tmp/test_at_limit.txt"}`)
+	_, err = tool.ExecuteContext(nil,`{"path": "/tmp/test_at_limit.txt"}`)
 	if err != nil {
 		t.Errorf("Should not error at exactly 256KB, got: %v", err)
 	}

@@ -54,7 +54,7 @@ func (t WebSearchTool) Properties() map[string]PropertySchema {
 func (t WebSearchTool) Required() []string { return []string{"query"} }
 func (t WebSearchTool) Parallel() bool     { return true }
 
-func (t WebSearchTool) Execute(args string) (string, error) {
+func (t WebSearchTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var a webSearchArgs
 	if err := parseArgs(args, &a); err != nil {
 		return "", err
@@ -79,11 +79,11 @@ func (t WebSearchTool) Execute(args string) (string, error) {
 	var result *WebSearchResult
 	switch providerType {
 	case "serper":
-		result = t.searchWithSerper(a.Query, numResults, apiKey)
+		result = t.searchWithSerper(ctx, a.Query, numResults, apiKey)
 	case "serpapi":
-		result = t.searchWithSerpAPI(a.Query, numResults, apiKey)
+		result = t.searchWithSerpAPI(ctx, a.Query, numResults, apiKey)
 	case "brave":
-		result = t.searchWithBrave(a.Query, numResults, apiKey)
+		result = t.searchWithBrave(ctx, a.Query, numResults, apiKey)
 	default:
 		return "", fmt.Errorf("unsupported web search provider: %s", providerType)
 	}
@@ -110,7 +110,7 @@ func (t WebSearchTool) ResolveProvider() (providerType, apiKey string) {
 	return "", ""
 }
 
-func (t WebSearchTool) searchWithSerper(query string, num int, apiKey string) *WebSearchResult {
+func (t WebSearchTool) searchWithSerper(ctx context.Context, query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -128,8 +128,14 @@ func (t WebSearchTool) searchWithSerper(query string, num int, apiKey string) *W
 		return result
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
-	defer cancel()
+	// Merge with provided context if it's cancellable
+	var cancelFn context.CancelFunc
+	if ctx == nil {
+		ctx, cancelFn = context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
+	} else {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(t.Timeout)*time.Second)
+	}
+	defer cancelFn()
 
 	req, err := http.NewRequestWithContext(ctx, "POST", "https://google.serper.dev/search", bytes.NewReader(jsonPayload))
 	if err != nil {
@@ -190,7 +196,7 @@ func (t WebSearchTool) searchWithSerper(query string, num int, apiKey string) *W
 	return result
 }
 
-func (t WebSearchTool) searchWithSerpAPI(query string, num int, apiKey string) *WebSearchResult {
+func (t WebSearchTool) searchWithSerpAPI(ctx context.Context, query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -204,8 +210,14 @@ func (t WebSearchTool) searchWithSerpAPI(query string, num int, apiKey string) *
 	params.Set("hl", "en")
 	params.Set("gl", "us")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
-	defer cancel()
+	// Merge with provided context if it's cancellable
+	var cancelFn context.CancelFunc
+	if ctx == nil {
+		ctx, cancelFn = context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
+	} else {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(t.Timeout)*time.Second)
+	}
+	defer cancelFn()
 
 	reqURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)
@@ -262,7 +274,7 @@ func (t WebSearchTool) searchWithSerpAPI(query string, num int, apiKey string) *
 	return result
 }
 
-func (t WebSearchTool) searchWithBrave(query string, num int, apiKey string) *WebSearchResult {
+func (t WebSearchTool) searchWithBrave(ctx context.Context, query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -274,8 +286,14 @@ func (t WebSearchTool) searchWithBrave(query string, num int, apiKey string) *We
 	params.Set("offset", "0")
 	params.Set("mkt", "en-US")
 
-	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
-	defer cancel()
+	// Merge with provided context if it's cancellable
+	var cancelFn context.CancelFunc
+	if ctx == nil {
+		ctx, cancelFn = context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
+	} else {
+		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(t.Timeout)*time.Second)
+	}
+	defer cancelFn()
 
 	reqURL := fmt.Sprintf("%s?%s", baseURL, params.Encode())
 	req, err := http.NewRequestWithContext(ctx, "GET", reqURL, nil)

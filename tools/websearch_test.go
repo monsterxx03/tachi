@@ -35,7 +35,7 @@ func TestWebSearchTool_Properties(t *testing.T) {
 func TestWebSearchTool_Execute_MissingQuery(t *testing.T) {
 	tool := WebSearchTool{}
 	args := `{}`
-	_, err := tool.Execute(args)
+	_, err := tool.ExecuteContext(nil,args)
 	if err == nil {
 		t.Error("Expected error for missing query")
 	}
@@ -44,7 +44,7 @@ func TestWebSearchTool_Execute_MissingQuery(t *testing.T) {
 func TestWebSearchTool_Execute_EmptyQuery(t *testing.T) {
 	tool := WebSearchTool{}
 	args := `{"query": ""}`
-	_, err := tool.Execute(args)
+	_, err := tool.ExecuteContext(nil,args)
 	if err == nil {
 		t.Error("Expected error for empty query")
 	}
@@ -54,7 +54,7 @@ func TestWebSearchTool_Execute_NoAPIKey(t *testing.T) {
 	// This test will fail if no API key is configured
 	tool := WebSearchTool{}
 	args := `{"query": "test"}`
-	_, err := tool.Execute(args)
+	_, err := tool.ExecuteContext(nil,args)
 	if err == nil {
 		t.Error("Expected error when no API key is configured")
 	}

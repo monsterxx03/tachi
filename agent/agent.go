@@ -216,7 +216,7 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			ToolArgs: tc.Function.Arguments,
 		}
 
-		result, execErr := a.toolRegistry.Invoke(tc.Function.Name, tc.Function.Arguments)
+		result, execErr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 
 		if pending, ok := execErr.(*tools.ToolPendingError); ok {
 			debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(pending.Diff))
@@ -231,7 +231,7 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			select {
 			case confirmed := <-a.confirmRespCh:
 				if confirmed {
-					result, execErr = a.toolRegistry.ExecuteConfirmed(tc.Function.Name, pending.Args)
+					result, execErr = a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, pending.Args)
 				} else {
 					return nil, errCancelled
 				}

@@ -60,7 +60,7 @@ func (t GrepTool) Properties() map[string]PropertySchema {
 func (t GrepTool) Required() []string { return []string{"pattern"} }
 func (t GrepTool) Parallel() bool     { return true }
 
-func (t GrepTool) Execute(args string) (string, error) {
+func (t GrepTool) ExecuteContext(parentCtx context.Context, args string) (string, error) {
 	if err := checkRipgrep(); err != nil {
 		return "", err
 	}
@@ -96,8 +96,15 @@ func (t GrepTool) Execute(args string) (string, error) {
 	rgArgs := buildRgArgs(&a)
 	rgArgs = append(rgArgs, absPath)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	// Create timeout context, merging with parent context if provided
+	var cancelFn context.CancelFunc
+	var ctx context.Context
+	if parentCtx == nil {
+		ctx, cancelFn = context.WithTimeout(context.Background(), 30*time.Second)
+	} else {
+		ctx, cancelFn = context.WithTimeout(parentCtx, 30*time.Second)
+	}
+	defer cancelFn()
 
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "rg", rgArgs...)

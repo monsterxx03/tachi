@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -28,7 +29,8 @@ func (t ReadTool) Properties() map[string]PropertySchema {
 }
 func (t ReadTool) Required() []string { return []string{"path"} }
 func (t ReadTool) Parallel() bool     { return true }
-func (t ReadTool) Execute(args string) (string, error) {
+
+func (t ReadTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var argsMap struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
