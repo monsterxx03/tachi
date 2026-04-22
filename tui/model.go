@@ -140,11 +140,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.agent.ConfirmTool(true)
 				m.pendingConfirm = nil
 				m.setState(stateStreaming)
+				m.layout()
 				return m, m.nextEvent()
 			case "n", "N", "esc":
 				m.agent.ConfirmTool(false)
 				m.pendingConfirm = nil
 				m.setState(stateStreaming)
+				m.layout()
 				return m, m.nextEvent()
 			}
 			return m, nil
