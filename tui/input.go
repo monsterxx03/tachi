@@ -80,6 +80,12 @@ func (i InputArea) Height() int {
 	return 2 + len(i.completions)
 }
 
+// 正在上下翻历史（此时不以 / 前缀触发补全，避免与历史键冲突）。
+func (i InputArea) browsingHistory() bool { return i.histIdx >= 0 }
+
+// slash 补全列表参与 Tab / 方向键 等（与 browsingHistory 互斥）。
+func (i InputArea) completionsOn() bool { return i.histIdx < 0 && len(i.completions) > 0 }
+
 func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	if !i.enabled {
 		return i, nil
@@ -88,7 +94,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "up", "ctrl+p":
-			if len(i.completions) > 0 {
+			if i.completionsOn() {
 				if i.selectedIdx > 0 {
 					i.selectedIdx--
 				}
@@ -98,7 +104,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "down", "ctrl+n":
-			if len(i.completions) > 0 {
+			if i.completionsOn() {
 				if i.selectedIdx < len(i.completions)-1 {
 					i.selectedIdx++
 				}
@@ -108,14 +114,14 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "tab":
-			if len(i.completions) > 0 {
+			if i.completionsOn() {
 				i.textarea.SetValue(i.completions[i.selectedIdx].Name)
 				i.textarea.CursorEnd()
 				i.updateCompletions()
 				return i, nil
 			}
 		case "esc":
-			if len(i.completions) > 0 {
+			if i.completionsOn() {
 				i.completions = nil
 				i.selectedIdx = 0
 				return i, nil
@@ -124,7 +130,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			i.textarea.InsertString("\n")
 			return i, nil
 		case "enter":
-			if len(i.completions) > 0 {
+			if i.completionsOn() {
 				name := i.completions[i.selectedIdx].Name
 				i.pushHistoryLine(name)
 				i.textarea.Reset()
@@ -148,6 +154,9 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 
 	var cmd tea.Cmd
 	i.textarea, cmd = i.textarea.Update(msg)
+	if i.browsingHistory() {
+		i.clearHistoryNav()
+	}
 	i.updateCompletions()
 	return i, cmd
 }
@@ -217,6 +226,11 @@ func (i *InputArea) pushHistoryLine(line string) {
 }
 
 func (i *InputArea) updateCompletions() {
+	if i.browsingHistory() {
+		i.completions = nil
+		i.selectedIdx = 0
+		return
+	}
 	val := i.textarea.Value()
 	if strings.HasPrefix(val, "/") {
 		i.completions = matchCommands(val)
