@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
-
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/tools"
@@ -24,9 +23,8 @@ type AIAgent struct {
 	maxIterations   int
 	toolRegistry    *tools.Registry
 	iterationBudget *IterationBudget
-	budgetGraceCall bool
-	confirmRespCh   chan bool // Channel to receive confirmation response from TUI
-	askUserRespCh   chan tools.AskUserResult // Channel to receive AskUserQuestion responses from TUI
+	confirmRespCh   chan bool
+	askUserRespCh   chan tools.AskUserResult
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -135,14 +133,15 @@ type AgentEvent struct {
 var errCancelled = fmt.Errorf("edit cancelled by user")
 
 type streamAccumulator struct {
-	text         strings.Builder
-	thinking     strings.Builder
-	signature    strings.Builder
-	toolCalls    []llm.ToolCall
-	toolArgs     []strings.Builder
-	thinkBlocks  []llm.ThinkingBlock
-	finishReason string
-	usage        *llm.Usage
+	text           strings.Builder
+	thinking       strings.Builder
+	signature      strings.Builder
+	toolCalls      []llm.ToolCall
+	toolArgs       []strings.Builder
+	toolIndexMap   map[int]int // OpenAI tool index -> toolArgs slice index
+	thinkBlocks    []llm.ThinkingBlock
+	finishReason   string
+	usage          *llm.Usage
 }
 
 func (acc *streamAccumulator) finalize() {
@@ -172,7 +171,9 @@ func (acc *streamAccumulator) assistantMessage() llm.Message {
 // consumeStream reads all events from the LLM stream, forwards deltas to the
 // event channel, and returns the accumulated result.
 func (a *AIAgent) consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCallCount int) (*streamAccumulator, error) {
-	acc := &streamAccumulator{}
+	acc := &streamAccumulator{
+		toolIndexMap: make(map[int]int),
+	}
 
 	for event := range streamCh {
 		switch event.Type {
@@ -189,6 +190,8 @@ func (a *AIAgent) consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- Agent
 
 		case llm.StreamEventToolUseStart:
 			if event.ToolCall != nil {
+				sliceIdx := len(acc.toolCalls)
+				acc.toolIndexMap[event.ToolIndex] = sliceIdx
 				acc.toolCalls = append(acc.toolCalls, *event.ToolCall)
 				acc.toolArgs = append(acc.toolArgs, strings.Builder{})
 				ch <- AgentEvent{
@@ -199,7 +202,9 @@ func (a *AIAgent) consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- Agent
 			}
 
 		case llm.StreamEventInputJSONDelta:
-			if len(acc.toolArgs) > 0 {
+			if idx, ok := acc.toolIndexMap[event.ToolIndex]; ok && idx < len(acc.toolArgs) {
+				acc.toolArgs[idx].WriteString(event.InputDelta)
+			} else if len(acc.toolArgs) > 0 {
 				acc.toolArgs[len(acc.toolArgs)-1].WriteString(event.InputDelta)
 			}
 
@@ -231,71 +236,70 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			ToolArgs: tc.Function.Arguments,
 		}
 
-		result, execErr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
+		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 
-		if pending, ok := execErr.(*tools.ToolPendingError); ok {
-			debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(pending.Diff))
+		if tr.Status == tools.ToolResultPendingConfirm {
+			debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
 			ch <- AgentEvent{
 				Type:     AgentEventToolConfirmation,
 				ToolName: tc.Function.Name,
 				ToolID:   tc.ID,
-				ToolArgs: pending.Args,
-				ToolDiff: pending.Diff,
+				ToolArgs: tr.Args,
+				ToolDiff: tr.Diff,
 			}
 
 			select {
 			case confirmed := <-a.confirmRespCh:
 				if confirmed {
-					result, execErr = a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, pending.Args)
+					output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+					tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
+					if err != nil {
+						tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
+					}
 				} else {
 					return nil, errCancelled
 				}
 			case <-ctx.Done():
-				result = ""
-				execErr = ctx.Err()
+				tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
 			}
 		}
 
-		// Handle AskUserQuestion tool - wait for TUI to provide answers
-		if askErr, ok := execErr.(*tools.AskUserQuestionError); ok {
-			debuglog.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(askErr.Questions))
+		if tr.Status == tools.ToolResultNeedUserInput {
+			debuglog.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(tr.Questions))
 			ch <- AgentEvent{
 				Type:      AgentEventAskUser,
-				ToolName:  askErr.ToolName,
+				ToolName:  tr.Name,
 				ToolID:    tc.ID,
-				ToolArgs:  askErr.Args,
-				Questions: askErr.Questions,
+				ToolArgs:  tr.Args,
+				Questions: tr.Questions,
 			}
 
 			select {
 			case resp := <-a.askUserRespCh:
-				// TUI has provided the answers, build the result
 				resultData, _ := json.Marshal(map[string]interface{}{
-					"questions":  askErr.Questions,
-					"answers":    resp.Answers,
+					"questions":   tr.Questions,
+					"answers":     resp.Answers,
 					"annotations": resp.Annotations,
 				})
-				result = string(resultData)
-				execErr = nil
+				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: string(resultData)}
 			case <-ctx.Done():
-				result = ""
-				execErr = ctx.Err()
+				tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
 			}
 		}
 
 		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
-		if execErr != nil {
-			toolMsg.Content = fmt.Sprintf("Error: %v", execErr)
+		if tr.Status == tools.ToolResultError {
+			toolMsg.Content = "Error: " + tr.Err.Error()
 			toolMsg.IsError = true
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
 			}
 		} else {
-			toolMsg.Content = result
+			toolMsg.Content = tr.Output
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: result,
+				ToolID: tc.ID, ToolResult: tr.Output,
 			}
 		}
 		toolMsgs = append(toolMsgs, toolMsg)
@@ -317,16 +321,6 @@ func (a *AIAgent) handleFinishReason(
 	const maxLengthContinueRetries = 3
 
 	switch acc.finishReason {
-	case "stop", "end_turn":
-		msg := acc.assistantMessage()
-		msg.ToolCalls = nil
-		*messages = append(*messages, msg)
-		ch <- AgentEvent{
-			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop"},
-		}
-		return false
-
 	case "tool_calls", "tool_use":
 		*messages = append(*messages, acc.assistantMessage())
 
@@ -339,6 +333,7 @@ func (a *AIAgent) handleFinishReason(
 			return false
 		}
 		*messages = append(*messages, toolMsgs...)
+		*lengthRetries = 0
 		return true
 
 	case "max_tokens", "length":
@@ -361,6 +356,7 @@ func (a *AIAgent) handleFinishReason(
 		return true
 
 	default:
+		*lengthRetries = 0
 		msg := acc.assistantMessage()
 		msg.ToolCalls = nil
 		*messages = append(*messages, msg)
@@ -399,7 +395,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		lengthContinueRetries := 0
 
 		for {
-			if !a.iterationBudget.consume() && !a.budgetGraceCall {
+			if !a.iterationBudget.consume() {
 				ch <- AgentEvent{
 					Type:   AgentEventError,
 					Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},

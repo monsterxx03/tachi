@@ -30,15 +30,23 @@ type ConfirmationTool interface {
 	GetDiff(args string) (string, error)
 }
 
-// ToolPendingError indicates a tool requires user confirmation before execution
-type ToolPendingError struct {
-	Name string
-	Args string
-	Diff string
-}
+type ToolResultStatus int
 
-func (e *ToolPendingError) Error() string {
-	return "tool requires confirmation"
+const (
+	ToolResultSuccess ToolResultStatus = iota
+	ToolResultPendingConfirm
+	ToolResultNeedUserInput
+	ToolResultError
+)
+
+type ToolResult struct {
+	Status    ToolResultStatus
+	Output    string
+	Err       error
+	Name      string
+	Args      string
+	Diff      string
+	Questions []Question
 }
 
 // Schema defines the JSON schema for a tool
@@ -86,26 +94,32 @@ func (r *Registry) Register(tool Tool) {
 }
 
 // Invoke calls a tool with the given arguments and context.
-// If the tool requires confirmation, it returns a ToolPendingError instead of executing.
-func (r *Registry) Invoke(ctx context.Context, name string, args string) (string, error) {
+func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolResult {
 	tool, ok := r.tools[name]
 	if !ok {
-		return "", &UnknownToolError{name}
+		return ToolResult{Status: ToolResultError, Err: &UnknownToolError{name}}
 	}
 
 	if err := validateArgs(tool, args); err != nil {
-		return "", err
+		return ToolResult{Status: ToolResultError, Err: err}
 	}
 
 	if ct, ok := tool.(ConfirmationTool); ok && ct.NeedsConfirmation() {
 		diff, err := ct.GetDiff(args)
 		if err != nil {
-			return "", err
+			return ToolResult{Status: ToolResultError, Err: err}
 		}
-		return "", &ToolPendingError{Name: name, Args: args, Diff: diff}
+		return ToolResult{Status: ToolResultPendingConfirm, Name: name, Args: args, Diff: diff}
 	}
 
-	return tool.ExecuteContext(ctx, args)
+	result, err := tool.ExecuteContext(ctx, args)
+	if askErr, ok := err.(*AskUserQuestionError); ok {
+		return ToolResult{Status: ToolResultNeedUserInput, Name: askErr.ToolName, Args: askErr.Args, Questions: askErr.Questions}
+	}
+	if err != nil {
+		return ToolResult{Status: ToolResultError, Err: err}
+	}
+	return ToolResult{Status: ToolResultSuccess, Output: result}
 }
 
 // ExecuteConfirmed executes a tool that was previously pending confirmation, with context

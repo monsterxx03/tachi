@@ -108,6 +108,7 @@ type StreamEvent struct {
 	ThinkingDelta  string
 	SignatureDelta string
 	ToolCall       *ToolCall
+	ToolIndex      int // OpenAI parallel tool call index
 	InputDelta     string
 	FinishReason   string
 	Usage          *Usage

@@ -18,7 +18,7 @@ type ChatView struct {
 	height   int
 	ready    bool
 
-	state           state
+	streaming       bool
 	currentText     strings.Builder
 	currentThinking strings.Builder
 	currentTools    []toolCallDisplay
@@ -64,7 +64,7 @@ func (c *ChatView) SetSize(w, h int) {
 	c.refresh()
 }
 
-func (c *ChatView) SetState(st state) { c.state = st }
+func (c *ChatView) SetStreaming(streaming bool) { c.streaming = streaming }
 
 func (c *ChatView) AddMessage(msg chatMessage) {
 	c.messages = append(c.messages, msg)
@@ -74,7 +74,6 @@ func (c *ChatView) AddMessage(msg chatMessage) {
 }
 
 func (c *ChatView) AppendTextDelta(s string) {
-	c.state = stateStreaming
 	if c.hasCompletedTools() {
 		c.flushTurn()
 	}
@@ -83,7 +82,6 @@ func (c *ChatView) AppendTextDelta(s string) {
 }
 
 func (c *ChatView) AppendThinkingDelta(s string) {
-	c.state = stateStreaming
 	if c.hasCompletedTools() {
 		c.flushTurn()
 	}
@@ -92,7 +90,6 @@ func (c *ChatView) AppendThinkingDelta(s string) {
 }
 
 func (c *ChatView) AddToolCall(name, id string) {
-	c.state = stateStreaming
 	c.currentTools = append(c.currentTools, toolCallDisplay{Name: name, ID: id})
 	c.refresh()
 }
@@ -257,7 +254,7 @@ func (c *ChatView) refresh() {
 	if inner < 1 {
 		inner = 1
 	}
-	if c.state == stateStreaming {
+	if c.streaming {
 		if c.currentThinking.Len() > 0 {
 			thinking := truncateThinking(c.currentThinking.String(), 500)
 			fmt.Fprintf(&b, "%s\n", thinkingStyle.Render("Thinking: "+thinking))

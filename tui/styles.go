@@ -5,14 +5,6 @@ import (
 )
 
 var (
-	userLabelStyle = lipgloss.NewStyle().
-			Bold(true).
-			Foreground(lipgloss.Color("#7DC4E4"))
-
-	assistantLabelStyle = lipgloss.NewStyle().
-				Bold(true).
-				Foreground(lipgloss.Color("#A6DA95"))
-
 	toolCallStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F5A97F"))
 
@@ -43,6 +35,9 @@ var (
 
 	stateStreamingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8AADF4"))
+
+	stateConfirmStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#F5A97F"))
 
 	completionSelectedStyle = lipgloss.NewStyle().
 					Background(lipgloss.Color("#363A4F")).

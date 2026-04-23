@@ -160,7 +160,8 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 				}
 				if tc.ID != "" {
 					ch <- StreamEvent{
-						Type: StreamEventToolUseStart,
+						Type:      StreamEventToolUseStart,
+						ToolIndex: idx,
 						ToolCall: &ToolCall{
 							ID:   tc.ID,
 							Type: "function",
@@ -169,10 +170,9 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 							},
 						},
 					}
-					_ = idx
 				}
 				if tc.Function.Arguments != "" {
-					ch <- StreamEvent{Type: StreamEventInputJSONDelta, InputDelta: tc.Function.Arguments}
+					ch <- StreamEvent{Type: StreamEventInputJSONDelta, ToolIndex: idx, InputDelta: tc.Function.Arguments}
 				}
 			}
 

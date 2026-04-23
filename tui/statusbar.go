@@ -37,6 +37,10 @@ func (s StatusBar) View() string {
 		dot = stateWaitingStyle.Render("●")
 	case stateStreaming:
 		dot = stateStreamingStyle.Render("●")
+	case stateSelectingModel:
+		dot = stateWaitingStyle.Render("●")
+	case stateAwaitingConfirmation, stateAskUserQuestion:
+		dot = stateConfirmStyle.Render("●")
 	}
 
 	left := fmt.Sprintf(" %s %s | %s", dot, "tachi", s.providerInfo)

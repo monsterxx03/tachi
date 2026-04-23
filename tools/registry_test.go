@@ -63,23 +63,23 @@ func TestRegistry(t *testing.T) {
 	})
 
 	// Test invoking registered tool
-	result, err := reg.Invoke(nil,"test", `{"arg1": "value1"}`)
-	if err != nil {
-		t.Errorf("Invoke failed: %v", err)
+	tr := reg.Invoke(nil, "test", `{"arg1": "value1"}`)
+	if tr.Status != ToolResultSuccess {
+		t.Errorf("Invoke failed: %v", tr.Err)
 	}
-	if result != "success" {
-		t.Errorf("Expected 'success', got %q", result)
+	if tr.Output != "success" {
+		t.Errorf("Expected 'success', got %q", tr.Output)
 	}
 
 	// Test unknown tool
-	_, err = reg.Invoke(nil,"unknown", "{}")
-	if err == nil {
+	tr = reg.Invoke(nil, "unknown", "{}")
+	if tr.Status != ToolResultError {
 		t.Error("Expected error for unknown tool")
 	}
 
 	// Test missing required argument
-	_, err = reg.Invoke(nil,"test", "{}")
-	if err == nil {
+	tr = reg.Invoke(nil, "test", "{}")
+	if tr.Status != ToolResultError {
 		t.Error("Expected error for missing required argument")
 	}
 }

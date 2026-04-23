@@ -140,12 +140,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, cmd
 		}
 
-	case tickMsg:
-		if m.state == stateAwaitingConfirmation || m.state == stateAskUserQuestion {
-			return m, m.tick()
-		}
-
 	case streamDoneMsg:
+		if m.state != stateIdle {
+			m.chatview.FinishStreaming()
+			m.setState(stateIdle)
+			m.cancelFunc = nil
+			m.eventCh = nil
+		}
 	}
 
 	return m, nil
@@ -284,7 +285,7 @@ func (m *Model) layout() {
 func (m *Model) setState(st state) {
 	m.state = st
 	m.statusbar.SetState(st)
-	m.chatview.SetState(st)
+	m.chatview.SetStreaming(st == stateStreaming)
 	m.input.SetEnabled(st == stateIdle)
 }
 
@@ -312,14 +313,6 @@ func (m *Model) nextEvent() tea.Cmd {
 			return streamDoneMsg{}
 		}
 		return agentEventMsg(event)
-	}
-}
-
-type tickMsg struct{}
-
-func (m *Model) tick() tea.Cmd {
-	return func() tea.Msg {
-		return tickMsg{}
 	}
 }
 
