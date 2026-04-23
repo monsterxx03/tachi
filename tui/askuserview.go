@@ -2,6 +2,7 @@ package tui
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/monsterxx03/tachi/tools"
@@ -10,70 +11,78 @@ import (
 // AskUserView handles the AskUserQuestion tool interaction
 type AskUserView struct {
 	questions   []tools.Question
-	selected     map[int]int // question index -> selected option index (-1 = not selected)
+	selected    map[int]map[int]bool // question index -> set of selected option indices
 	curQuestion int
-	cursorPos   int // cursor position within options
+	cursorPos   int
 	width       int
-	height      int
 }
 
-func NewAskUserView(questions []tools.Question) *AskUserView {
-	selected := make(map[int]int)
-	for i := range questions {
-		selected[i] = -1 // -1 means no selection
-	}
+func NewAskUserView(questions []tools.Question, width int) *AskUserView {
 	return &AskUserView{
-		questions:   questions,
-		selected:   selected,
-		curQuestion: 0,
-		cursorPos:   0,
+		questions: questions,
+		selected:  make(map[int]map[int]bool),
+		width:     width,
 	}
 }
 
-func (v *AskUserView) SetSize(width, height int) {
-	v.width = width
-	v.height = height
+// Height returns the number of lines this view will render.
+func (v *AskUserView) Height() int {
+	if len(v.questions) == 0 {
+		return 0
+	}
+	q := v.questions[v.curQuestion]
+	// hint(1) + progress(1) + blank(1) + question(1) + header(1) + options + blank(1) + summary header(1) + answered questions
+	h := 6 + len(q.Options) + 1
+	for i := 0; i < len(v.questions); i++ {
+		if len(v.selected[i]) > 0 {
+			h++
+		}
+	}
+	return h
 }
 
-// HandleKey handles keyboard input for the AskUserView
-// Returns: submit (true to submit answers, false to cancel)
 func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
+	q := v.questions[v.curQuestion]
+
 	switch key {
 	case "up", "k":
 		if v.cursorPos > 0 {
 			v.cursorPos--
 		}
 	case "down", "j":
-		if v.cursorPos < len(v.questions[v.curQuestion].Options)-1 {
+		if v.cursorPos < len(q.Options)-1 {
 			v.cursorPos++
 		}
-	case "enter":
-		// Select current option and either move to next or submit
-		if v.cursorPos >= 0 && v.cursorPos < len(v.questions[v.curQuestion].Options) {
-			v.selected[v.curQuestion] = v.cursorPos
-		}
-		if v.curQuestion < len(v.questions)-1 {
-			v.curQuestion++
+	case "left", "backspace", "h":
+		if v.curQuestion > 0 {
+			v.curQuestion--
 			v.cursorPos = 0
-		} else {
-			return true, false
 		}
+	case "space":
+		v.toggleOption(v.cursorPos)
+	case "enter":
+		if q.MultiSelect {
+			if len(v.selected[v.curQuestion]) == 0 {
+				return false, false
+			}
+			return v.advance()
+		}
+		// single select: select current + advance
+		v.selectSingle(v.cursorPos)
+		return v.advance()
 	case "esc":
 		return false, true
-	}
-	// Number keys 1-4 to select
-	for i := 1; i <= 4; i++ {
-		if key == fmt.Sprintf("%d", i) {
-			optIdx := i - 1
-			if optIdx >= 0 && optIdx < len(v.questions[v.curQuestion].Options) {
-				v.selected[v.curQuestion] = optIdx
-				v.cursorPos = optIdx
-				// Move to next question or auto-submit if last
-				if v.curQuestion < len(v.questions)-1 {
-					v.curQuestion++
-					v.cursorPos = 0
+	default:
+		if n, err := strconv.Atoi(key); err == nil && n >= 1 && n <= 4 {
+			optIdx := n - 1
+			if optIdx < len(q.Options) {
+				if q.MultiSelect {
+					v.toggleOption(optIdx)
+					v.cursorPos = optIdx
 				} else {
-					return true, false
+					v.selectSingle(optIdx)
+					v.cursorPos = optIdx
+					return v.advance()
 				}
 			}
 		}
@@ -81,59 +90,135 @@ func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
 	return false, false
 }
 
-// GetAnswers returns the selected answers
+func (v *AskUserView) ensureSelected(qIdx int) map[int]bool {
+	sel := v.selected[qIdx]
+	if sel == nil {
+		sel = make(map[int]bool)
+		v.selected[qIdx] = sel
+	}
+	return sel
+}
+
+func (v *AskUserView) toggleOption(idx int) {
+	sel := v.ensureSelected(v.curQuestion)
+	if sel[idx] {
+		delete(sel, idx)
+	} else {
+		sel[idx] = true
+	}
+}
+
+func (v *AskUserView) selectSingle(idx int) {
+	v.selected[v.curQuestion] = map[int]bool{idx: true}
+}
+
+func (v *AskUserView) selectedLabels(qIdx int) []string {
+	q := v.questions[qIdx]
+	sel := v.selected[qIdx]
+	var labels []string
+	for i, opt := range q.Options {
+		if sel[i] {
+			labels = append(labels, opt.Label)
+		}
+	}
+	return labels
+}
+
+func (v *AskUserView) advance() (submit bool, cancelled bool) {
+	if v.curQuestion < len(v.questions)-1 {
+		v.curQuestion++
+		v.cursorPos = 0
+		return false, false
+	}
+	return true, false
+}
+
 func (v *AskUserView) GetAnswers() map[string]string {
 	answers := make(map[string]string)
-	for qIdx, optIdx := range v.selected {
-		if optIdx >= 0 && qIdx < len(v.questions) && optIdx < len(v.questions[qIdx].Options) {
-			answers[v.questions[qIdx].Question] = v.questions[qIdx].Options[optIdx].Label
+	for i, q := range v.questions {
+		if labels := v.selectedLabels(i); len(labels) > 0 {
+			answers[q.Question] = strings.Join(labels, ", ")
 		}
 	}
 	return answers
 }
 
-// Render renders the AskUserView
 func (v *AskUserView) Render() string {
 	if len(v.questions) == 0 {
 		return ""
 	}
 
 	var b strings.Builder
+	q := v.questions[v.curQuestion]
+	w := v.width
 
-	// Instructions
-	b.WriteString(dimStyle.Render("Use ↑↓ to navigate, number to select, Enter to submit, Esc to cancel") + "\n")
-	b.WriteString(dimStyle.Render(fmt.Sprintf("Question %d of %d:", v.curQuestion+1, len(v.questions))) + "\n")
+	// Hint line
+	hint := "↑↓ navigate  "
+	if q.MultiSelect {
+		hint += "Space toggle  Enter confirm  "
+	} else {
+		hint += "1-4/Enter select  "
+	}
+	if v.curQuestion > 0 {
+		hint += "← back  "
+	}
+	hint += "Esc cancel"
+	b.WriteString(dimStyle.Render(hint) + "\n")
+
+	// Progress
+	progress := fmt.Sprintf("Question %d/%d", v.curQuestion+1, len(v.questions))
+	b.WriteString(confirmStyle.Render(progress) + "\n")
 	b.WriteString("\n")
 
-	q := v.questions[v.curQuestion]
+	// Question text
 	b.WriteString(boldStyle.Render(q.Question) + "\n")
-	b.WriteString(fmt.Sprintf("(%s)\n", q.Header))
+
+	// Header tag
+	b.WriteString(toolCallStyle.Render("["+q.Header+"]") + "\n")
 
 	// Options
 	for i, opt := range q.Options {
-		prefix := "  "
-		if i == v.cursorPos {
-			prefix = " >"
-		}
-		selected := ""
-		if v.selected[v.curQuestion] == i {
-			selected = " [x]"
-		}
-		b.WriteString(fmt.Sprintf("%s%d. %s%s - %s\n", prefix, i+1, opt.Label, selected, opt.Description))
-	}
+		isSelected := v.selected[v.curQuestion][i]
+		isCursor := i == v.cursorPos
 
-	// Show summary of all answers so far at the bottom
-	b.WriteString("\n")
-	b.WriteString(dimStyle.Render("Your answers:"))
-	for qIdx, optIdx := range v.selected {
-		if optIdx >= 0 && qIdx < len(v.questions) {
-			q := v.questions[qIdx]
-			if optIdx < len(q.Options) {
-				b.WriteString(fmt.Sprintf(" %s: %s;", q.Question, q.Options[optIdx].Label))
+		var marker string
+		if q.MultiSelect {
+			if isSelected {
+				marker = "[x] "
+			} else {
+				marker = "[ ] "
+			}
+		} else {
+			if isSelected {
+				marker = " ● "
+			} else {
+				marker = " ○ "
 			}
 		}
+
+		line := fmt.Sprintf(" %s%d. %s — %s", marker, i+1, opt.Label, opt.Description)
+		if isCursor {
+			b.WriteString(completionSelectedStyle.Width(w).Render(line))
+		} else {
+			b.WriteString(completionNormalStyle.Width(w).Render(line))
+		}
+		b.WriteString("\n")
 	}
+
+	// Summary of answered questions
 	b.WriteString("\n")
+	var hasSummary bool
+	for i := range v.questions {
+		labels := v.selectedLabels(i)
+		if len(labels) == 0 {
+			continue
+		}
+		if !hasSummary {
+			b.WriteString(dimStyle.Render("Answers:") + "\n")
+			hasSummary = true
+		}
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  %s → %s", v.questions[i].Header, strings.Join(labels, ", "))) + "\n")
+	}
 
 	return b.String()
 }

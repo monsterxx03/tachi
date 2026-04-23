@@ -259,10 +259,8 @@ func (m *Model) layout() {
 			inputHeight = min(10+diffLines, m.height/3) // Min 10, max 1/3 of screen
 		}
 	} else if m.state == stateAskUserQuestion {
-		// Estimate height based on AskUserView
 		if m.askUserView != nil {
-			// Use a fixed estimate since we can't easily count options without access to the view's questions
-			inputHeight = 15 // enough for a few options
+			inputHeight = min(m.askUserView.Height(), m.height/2)
 		}
 	}
 	chatHeight := m.height - inputHeight - statusHeight
@@ -361,22 +359,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 	case agent.AgentEventAskUser:
 		debuglog.Log("TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
-		m.askUserView = NewAskUserView(event.Questions)
+		m.askUserView = NewAskUserView(event.Questions, m.width)
 		m.setState(stateAskUserQuestion)
-		// Build question display message
-		var b strings.Builder
-		b.WriteString("Questions for you:\n\n")
-		for i, q := range event.Questions {
-			b.WriteString(fmt.Sprintf("[%d] %s (%s)\n", i+1, q.Question, q.Header))
-			for j, opt := range q.Options {
-				b.WriteString(fmt.Sprintf("    %d. %s - %s\n", j+1, opt.Label, opt.Description))
-			}
-			b.WriteString("\n")
-		}
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: b.String(),
-		})
+		m.layout()
 		return nil
 
 	case agent.AgentEventToolResult:
