@@ -20,11 +20,11 @@ type InputArea struct {
 	completions []Command
 	selectedIdx int
 
-	history      []string
-	historyMax   int
-	histIdx      int
-	histScratch  string
-	historyPath  string
+	history     []string
+	historyMax  int
+	histIdx     int
+	histScratch string
+	historyPath string
 }
 
 func NewInputArea(historyMax int, historyPath string) InputArea {
@@ -87,7 +87,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
-		case "up", "ctrl+k", "ctrl+p":
+		case "up", "ctrl+p":
 			if len(i.completions) > 0 {
 				if i.selectedIdx > 0 {
 					i.selectedIdx--
@@ -97,7 +97,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			if i.historyMax > 0 && i.historyKeyPrev() {
 				return i, nil
 			}
-		case "down", "ctrl+j", "ctrl+n":
+		case "down", "ctrl+n":
 			if len(i.completions) > 0 {
 				if i.selectedIdx < len(i.completions)-1 {
 					i.selectedIdx++

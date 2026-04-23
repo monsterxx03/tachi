@@ -56,6 +56,13 @@ var commands = []Command{
 			return nil
 		},
 	},
+	{
+		Name:        "/commit",
+		Description: "Ask LLM to write commit message and commit via Bash (git)",
+		handler: func(m *Model) tea.Cmd {
+			return m.sendCommitCommand()
+		},
+	},
 }
 
 func matchCommands(prefix string) []Command {
