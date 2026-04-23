@@ -41,6 +41,26 @@ func (t AskUserTool) Properties() map[string]PropertySchema {
 		"questions": {
 			Type:        "array",
 			Description: "Questions to ask the user (1-4 questions). Each question has: question (the question text), header (short label shown as chip), options (array of 2-4 options with label and description), and multiSelect (boolean to allow multiple selections).",
+			Items: map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"question":    map[string]any{"type": "string", "description": "The question to ask the user"},
+					"header":      map[string]any{"type": "string", "description": "Short label displayed as a chip/tag"},
+					"multiSelect": map[string]any{"type": "boolean", "description": "Whether to allow multiple selections"},
+					"options": map[string]any{
+						"type": "array",
+						"items": map[string]any{
+							"type": "object",
+							"properties": map[string]any{
+								"label":       map[string]any{"type": "string", "description": "Display text for this option"},
+								"description": map[string]any{"type": "string", "description": "Explanation of this option"},
+							},
+							"required": []string{"label", "description"},
+						},
+					},
+				},
+				"required": []string{"question", "header", "options", "multiSelect"},
+			},
 		},
 	}
 }

@@ -454,7 +454,7 @@ func (a *AIAgent) buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
 	for _, schema := range toolSchemas {
 		props := make(map[string]llm.ToolParameterProperty, len(schema.Parameters.Properties))
 		for name, prop := range schema.Parameters.Properties {
-			props[name] = llm.ToolParameterProperty{Type: prop.Type, Description: prop.Description}
+			props[name] = llm.ToolParameterProperty{Type: prop.Type, Description: prop.Description, Items: prop.Items}
 		}
 		llmTools = append(llmTools, llm.NewTool(schema.Name, schema.Description, props, schema.Parameters.Required))
 	}

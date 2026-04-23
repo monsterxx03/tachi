@@ -27,6 +27,7 @@ type ChatOptions struct {
 type ToolParameterProperty struct {
 	Type        string `json:"type"`
 	Description string `json:"description"`
+	Items       any    `json:"items,omitempty"`
 }
 
 // ToolParameters describes the JSON Schema for a tool's input parameters.

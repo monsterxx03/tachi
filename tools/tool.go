@@ -9,6 +9,7 @@ import (
 type PropertySchema struct {
 	Type        string
 	Description string
+	Items       any // JSON Schema for array element type
 }
 
 // Tool is the interface that all tools must implement
