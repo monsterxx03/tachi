@@ -51,7 +51,6 @@ type Model struct {
 	statusbar    StatusBar
 	chatview     ChatView
 	input        InputArea
-	spinner      spinner.Model
 
 	width  int
 	height int
@@ -87,7 +86,6 @@ func NewModel(cfg ModelConfig) *Model {
 		statusbar: NewStatusBar(cfg.ProviderInfo),
 		chatview:  NewChatView(),
 		input:     NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
-		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot)),
 		agent:     cfg.Agent,
 		systemPrompt: cfg.SystemPrompt,
 		chatOpts:     cfg.ChatOpts,
@@ -134,10 +132,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case spinner.TickMsg:
-		if m.state == stateWaiting {
-			var cmd tea.Cmd
-			m.spinner, cmd = m.spinner.Update(msg)
-			return m, cmd
+		if m.state == stateWaiting || m.state == stateStreaming {
+			return m, m.statusbar.Update(msg)
 		}
 
 	case streamDoneMsg:
@@ -300,7 +296,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, text, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
-		m.spinner.Tick,
+		m.statusbar.Tick(),
 		m.nextEvent(),
 	)
 }
@@ -317,7 +313,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, commitUserPrompt(), m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
-		m.spinner.Tick,
+		m.statusbar.Tick(),
 		m.nextEvent(),
 	)
 }
@@ -510,12 +506,6 @@ func (m *Model) View() tea.View {
 
 	var content strings.Builder
 	content.WriteString(m.chatview.View())
-
-	if m.state == stateWaiting {
-		content.WriteString("\n")
-		content.WriteString(assistantMsgStyle.Width(m.width - 2).Render(m.spinner.View()))
-	}
-
 	content.WriteString("\n")
 	content.WriteString(inputSection)
 	content.WriteString("\n")

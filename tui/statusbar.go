@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"strings"
 
+	"charm.land/bubbles/v2/spinner"
+	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
 	"github.com/monsterxx03/tachi/llm"
@@ -15,18 +17,28 @@ type StatusBar struct {
 	state        state
 	totalUsage   *llm.Usage
 	copyMode     bool
+	spinner      spinner.Model
 }
 
 func NewStatusBar(providerInfo string) StatusBar {
-	return StatusBar{providerInfo: providerInfo}
+	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
+	return StatusBar{providerInfo: providerInfo, spinner: sp}
 }
 
-func (s *StatusBar) SetWidth(w int)            { s.width = w }
-func (s *StatusBar) SetState(st state)         { s.state = st }
-func (s *StatusBar) SetUsage(u *llm.Usage)     { s.totalUsage = u }
-func (s *StatusBar) SetCopyMode(b bool)        { s.copyMode = b }
-func (s *StatusBar) SetProviderInfo(info string) { s.providerInfo = info }
-func (s *StatusBar) ProviderInfo() string        { return s.providerInfo }
+func (s *StatusBar) SetWidth(w int)              { s.width = w }
+func (s *StatusBar) SetState(st state)           { s.state = st }
+func (s *StatusBar) SetUsage(u *llm.Usage)       { s.totalUsage = u }
+func (s *StatusBar) SetCopyMode(b bool)          { s.copyMode = b }
+func (s *StatusBar) SetProviderInfo(info string)  { s.providerInfo = info }
+func (s *StatusBar) ProviderInfo() string         { return s.providerInfo }
+
+func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
+
+func (s *StatusBar) Update(msg spinner.TickMsg) tea.Cmd {
+	var cmd tea.Cmd
+	s.spinner, cmd = s.spinner.Update(msg)
+	return cmd
+}
 
 func (s StatusBar) View() string {
 	var dot string
@@ -34,9 +46,9 @@ func (s StatusBar) View() string {
 	case stateIdle:
 		dot = stateIdleStyle.Render("●")
 	case stateWaiting:
-		dot = stateWaitingStyle.Render("●")
+		dot = stateWaitingStyle.Render(s.spinner.View())
 	case stateStreaming:
-		dot = stateStreamingStyle.Render("●")
+		dot = stateStreamingStyle.Render(s.spinner.View())
 	case stateSelectingModel:
 		dot = stateWaitingStyle.Render("●")
 	case stateAwaitingConfirmation, stateAskUserQuestion:
