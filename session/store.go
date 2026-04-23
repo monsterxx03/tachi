@@ -1,0 +1,208 @@
+package session
+
+import (
+	"bufio"
+	"encoding/json"
+	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// Store defines the interface for session persistence
+type Store interface {
+	CreateSession(session *Session) error
+	LoadMeta(id string) (*Session, error)
+	AppendMessage(id string, msg *Message) error
+	LoadMessages(id string) ([]Message, error)
+	UpdateMeta(session *Session) error
+	ListSessions() ([]*Session, error)
+	DeleteSession(id string) error
+}
+
+// FileStore implements Store interface using filesystem
+type FileStore struct {
+	baseDir string
+}
+
+// NewFileStore creates a new FileStore
+func NewFileStore(baseDir string) (*FileStore, error) {
+	if err := os.MkdirAll(baseDir, 0700); err != nil {
+		return nil, fmt.Errorf("create session dir: %w", err)
+	}
+	return &FileStore{baseDir: baseDir}, nil
+}
+
+func (s *FileStore) sessionDir(id string) string {
+	return filepath.Join(s.baseDir, id)
+}
+
+func (s *FileStore) metaPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "meta.json")
+}
+
+func (s *FileStore) messagesPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "messages.jsonl")
+}
+
+// CreateSession creates a new session directory and meta.json
+func (s *FileStore) CreateSession(session *Session) error {
+	dir := s.sessionDir(session.ID)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create session dir: %w", err)
+	}
+
+	data, err := json.Marshal(session)
+	if err != nil {
+		return fmt.Errorf("marshal meta: %w", err)
+	}
+
+	if err := os.WriteFile(s.metaPath(session.ID), data, 0600); err != nil {
+		return fmt.Errorf("write meta.json: %w", err)
+	}
+
+	// Create empty messages.jsonl
+	f, err := os.Create(s.messagesPath(session.ID))
+	if err != nil {
+		return fmt.Errorf("create messages.jsonl: %w", err)
+	}
+	f.Close()
+
+	return nil
+}
+
+// LoadMeta loads meta.json for a session
+func (s *FileStore) LoadMeta(id string) (*Session, error) {
+	data, err := os.ReadFile(s.metaPath(id))
+	if err != nil {
+		return nil, fmt.Errorf("read meta.json: %w", err)
+	}
+
+	var session Session
+	if err := json.Unmarshal(data, &session); err != nil {
+		return nil, fmt.Errorf("unmarshal meta: %w", err)
+	}
+
+	return &session, nil
+}
+
+// AppendMessage appends a message to the session's messages.jsonl
+func (s *FileStore) AppendMessage(id string, msg *Message) error {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		return fmt.Errorf("marshal message: %w", err)
+	}
+
+	f, err := os.OpenFile(s.messagesPath(id), os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("open messages.jsonl: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write message: %w", err)
+	}
+
+	return nil
+}
+
+// LoadMessages reads all messages from messages.jsonl
+func (s *FileStore) LoadMessages(id string) ([]Message, error) {
+	f, err := os.Open(s.messagesPath(id))
+	if err != nil {
+		return nil, fmt.Errorf("open messages.jsonl: %w", err)
+	}
+	defer f.Close()
+
+	var messages []Message
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+
+		var msg Message
+		if err := json.Unmarshal(line, &msg); err != nil {
+			return nil, fmt.Errorf("unmarshal message: %w", err)
+		}
+		messages = append(messages, msg)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan messages: %w", err)
+	}
+
+	return messages, nil
+}
+
+// UpdateMeta updates the meta.json file
+func (s *FileStore) UpdateMeta(session *Session) error {
+	data, err := json.Marshal(session)
+	if err != nil {
+		return fmt.Errorf("marshal meta: %w", err)
+	}
+
+	if err := os.WriteFile(s.metaPath(session.ID), data, 0600); err != nil {
+		return fmt.Errorf("write meta.json: %w", err)
+	}
+
+	return nil
+}
+
+// ListSessions returns all sessions sorted by created_at descending
+func (s *FileStore) ListSessions() ([]*Session, error) {
+	entries, err := os.ReadDir(s.baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("read session dir: %w", err)
+	}
+
+	var sessions []*Session
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+
+		id := entry.Name()
+		session, err := s.LoadMeta(id)
+		if err != nil {
+			continue // skip invalid sessions
+		}
+
+		sessions = append(sessions, session)
+	}
+
+	// Sort by CreatedAt descending (newest first)
+	sort.Slice(sessions, func(i, j int) bool {
+		return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
+	})
+
+	return sessions, nil
+}
+
+// DeleteSession removes a session directory
+func (s *FileStore) DeleteSession(id string) error {
+	dir := s.sessionDir(id)
+	return os.RemoveAll(dir)
+}
+
+// GenerateID generates a new session ID in format: YYYY-MM-DD-HHMMSS-uuid
+func GenerateID() string {
+	t := time.Now()
+	shortUUID := uuid.New().String()[:8]
+	return fmt.Sprintf("%d-%02d-%02d-%02d%02d%02d-%s",
+		t.Year(), t.Month(), t.Day(),
+		t.Hour(), t.Minute(), t.Second(),
+		shortUUID)
+}
+
+// ExtractTitle extracts the first user message content as title (max 50 chars)
+func ExtractTitle(content string) string {
+	if len(content) > 50 {
+		return content[:47] + "..."
+	}
+	return content
+}

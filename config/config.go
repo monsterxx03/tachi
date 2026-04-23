@@ -13,8 +13,8 @@ const (
 	ProviderTypeOpenAI    = "openai"
 	ProviderTypeAnthropic = "anthropic"
 
-	DefaultMaxTokens          = 32000
-	MaxAllowedTokens          = 4096
+	DefaultMaxTokens           = 32000
+	MaxAllowedTokens           = 4096
 	DefaultMaxIterations      = 50
 	DefaultWebSearchTimeout   = 30
 	DefaultWebSearchMaxResults = 10
@@ -22,6 +22,7 @@ const (
 	configDirName                = ".tachi"
 	configFileName               = "config.yaml"
 	inputHistoryFileName         = "input_history"
+	sessionDirName               = "session"
 )
 
 type ProviderConfig struct {
@@ -89,6 +90,15 @@ func InputHistoryPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, inputHistoryFileName), nil
+}
+
+// SessionDir 返回会话存储目录路径：~/.tachi/session
+func SessionDir() (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, sessionDirName), nil
 }
 
 func Load() (*Config, error) {

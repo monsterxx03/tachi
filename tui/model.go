@@ -83,10 +83,10 @@ type ModelConfig struct {
 
 func NewModel(cfg ModelConfig) *Model {
 	return &Model{
-		statusbar: NewStatusBar(cfg.ProviderInfo),
-		chatview:  NewChatView(),
-		input:     NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
-		agent:     cfg.Agent,
+		statusbar:    NewStatusBar(cfg.ProviderInfo),
+		chatview:     NewChatView(),
+		input:        NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
+		agent:        cfg.Agent,
 		systemPrompt: cfg.SystemPrompt,
 		chatOpts:     cfg.ChatOpts,
 		state:        stateIdle,

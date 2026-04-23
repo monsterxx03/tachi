@@ -8,6 +8,7 @@ require (
 	charm.land/lipgloss/v2 v2.0.3
 	github.com/anthropics/anthropic-sdk-go v1.36.0
 	github.com/charmbracelet/glamour v1.0.0
+	github.com/google/uuid v1.6.0
 	github.com/sashabaranov/go-openai v1.41.2
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.8.0

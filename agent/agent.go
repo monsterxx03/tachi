@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tools"
 )
 
@@ -26,6 +28,7 @@ type AIAgent struct {
 	confirmRespCh     chan bool
 	askUserRespCh     chan tools.AskUserResult
 	skipEditConfirm   bool
+	sessionManager    *session.Manager
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -65,6 +68,10 @@ func (a *AIAgent) SetProvider(provider llm.Provider, model string) {
 
 func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 	a.skipEditConfirm = skip
+}
+
+func (a *AIAgent) SetSessionManager(sm *session.Manager) {
+	a.sessionManager = sm
 }
 
 func (a *AIAgent) RegisterTools() {
@@ -374,6 +381,15 @@ func (a *AIAgent) handleFinishReason(
 		msg := acc.assistantMessage()
 		msg.ToolCalls = nil
 		*messages = append(*messages, msg)
+
+		// Append assistant response to session
+		if a.sessionManager != nil && acc.text.Len() > 0 {
+			a.sessionManager.AppendMessage(&session.Message{
+				Type:    session.MessageTypeAssistant,
+				Content: acc.text.String(),
+			})
+		}
+
 		ch <- AgentEvent{
 			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
 			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop"},
@@ -407,6 +423,24 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		apiCallCount := 0
 		lengthContinueRetries := 0
+
+		// Session management: create session if needed and append user message
+		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
+			provider := a.provider.Name()
+			if _, err := a.sessionManager.New(provider, a.model); err != nil {
+				debuglog.Log("Agent: failed to create session: %v", err)
+			}
+		}
+		if a.sessionManager != nil {
+			a.sessionManager.AppendMessage(&session.Message{
+				Type:    session.MessageTypeUser,
+				Content: userMessage,
+			})
+			// Set title from first user message
+			if curr := a.sessionManager.Current(); curr != nil && curr.Title == "" {
+				a.sessionManager.SetTitle(userMessage)
+			}
+		}
 
 		for {
 			if !a.iterationBudget.consume() {

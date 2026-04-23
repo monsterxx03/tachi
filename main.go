@@ -14,6 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tools"
 	"github.com/monsterxx03/tachi/tui"
 	"github.com/urfave/cli/v3"
@@ -219,6 +220,14 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
 
+	// Initialize session manager and attach to agent
+	sessionManager, err := session.NewManager()
+	if err != nil {
+		fmt.Printf("Warning: failed to init session manager: %v\n", err)
+	} else {
+		aiAgent.SetSessionManager(sessionManager)
+	}
+
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
 		SystemPrompt: buildSystemPrompt(),
@@ -226,7 +235,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 			MaxTokens: resolved.MaxTokens,
 		},
 		ProviderInfo: providerInfo,
-		Config:       cfg,
+		Config:      cfg,
 	})
 }
 
