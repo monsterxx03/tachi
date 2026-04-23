@@ -21,7 +21,10 @@ type EditTool struct{}
 
 func (t EditTool) Name() string { return "EditFile" }
 func (t EditTool) Description() string {
-	return "You must use your ReadFile tool at least once in the conversation before editing. This tool will error if you attempt an edit without reading the file. Performs exact string replacements in files. Specify old_string to find and new_string to replace with. Use replace_all to replace all occurrences. To create a new file, use an empty old_string."
+	return "You must use your ReadFile tool at least once in the conversation before editing. " +
+		"This tool will error if you attempt an edit without reading the file. " +
+		"Performs exact string replacements in files. Specify old_string to find and new_string to replace with. " +
+		"Use replace_all to replace all occurrences. To create a new file, use an empty old_string."
 }
 func (t EditTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

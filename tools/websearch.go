@@ -43,7 +43,10 @@ type WebSearchTool struct {
 
 func (t WebSearchTool) Name() string { return "WebSearch" }
 func (t WebSearchTool) Description() string {
-	return "Performs a web search using a search engine API. Returns search results including titles, links, and snippets. Requires a search provider API key to be configured via environment variables (SERPER_API_KEY for Serper.dev, SERPAPI_KEY for SerpAPI, or BRAVE_API_KEY for Brave Search)."
+	return "Performs a web search using a search engine API. " +
+		"Returns search results including titles, links, and snippets. " +
+		"Requires a search provider API key to be configured via environment variables " +
+		"(SERPER_API_KEY for Serper.dev, SERPAPI_KEY for SerpAPI, or BRAVE_API_KEY for Brave Search)."
 }
 func (t WebSearchTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

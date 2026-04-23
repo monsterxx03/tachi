@@ -33,7 +33,16 @@ type AskUserTool struct{}
 func (t AskUserTool) Name() string { return "AskUserQuestion" }
 
 func (t AskUserTool) Description() string {
-	return "Use this tool when you need to ask the user questions during execution. This allows you to:\n1. Gather user preferences or requirements\n2. Clarify ambiguous instructions\n3. Get decisions on implementation choices as you work\n4. Offer choices to the user about what direction to take.\n\nUsage notes:\n- Users will always be able to select \"Other\" to provide custom text input\n- Use multiSelect: true to allow multiple answers to be selected for a question\n- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label"
+	return "Use this tool when you need to ask the user questions during execution. " +
+		"This allows you to:\n" +
+		"1. Gather user preferences or requirements\n" +
+		"2. Clarify ambiguous instructions\n" +
+		"3. Get decisions on implementation choices as you work\n" +
+		"4. Offer choices to the user about what direction to take.\n\n" +
+		"Usage notes:\n" +
+		"- Users will always be able to select \"Other\" to provide custom text input\n" +
+		"- Use multiSelect: true to allow multiple answers to be selected for a question\n" +
+		"- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label"
 }
 
 func (t AskUserTool) Properties() map[string]PropertySchema {

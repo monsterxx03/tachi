@@ -22,7 +22,10 @@ type GlobTool struct{}
 
 func (t GlobTool) Name() string        { return "Glob" }
 func (t GlobTool) Description() string {
-	return "Find files matching a glob pattern using ripgrep. Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". Returns matching file paths sorted by modification time. Use this tool when you need to find files by name patterns."
+	return "Find files matching a glob pattern using ripgrep. " +
+		"Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". " +
+		"Returns matching file paths sorted by modification time. " +
+		"Use this tool when you need to find files by name patterns."
 }
 func (t GlobTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

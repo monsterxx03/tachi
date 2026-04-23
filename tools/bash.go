@@ -33,7 +33,9 @@ type BashTool struct{}
 
 func (t BashTool) Name() string { return "Bash" }
 func (t BashTool) Description() string {
-	return "Executes a shell command and returns its output. The working directory persists between commands. Use for running build commands, tests, git operations, and other shell tasks."
+	return "Executes a shell command and returns its output. " +
+		"The working directory persists between commands. " +
+		"Use for running build commands, tests, git operations, and other shell tasks."
 }
 func (t BashTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

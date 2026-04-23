@@ -42,7 +42,9 @@ type GrepTool struct{}
 
 func (t GrepTool) Name() string { return "Grep" }
 func (t GrepTool) Description() string {
-	return "Search file contents using ripgrep. Supports regex patterns, file type filtering, and glob filtering. Returns matching file paths by default, or matching lines with context in content mode."
+	return "Search file contents using ripgrep. " +
+		"Supports regex patterns, file type filtering, and glob filtering. " +
+		"Returns matching file paths by default, or matching lines with context in content mode."
 }
 func (t GrepTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
