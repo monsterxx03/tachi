@@ -101,111 +101,20 @@ func (m *Model) Init() tea.Cmd {
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
-	var cmds []tea.Cmd
-
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
 		m.layout()
+		return m, nil
 
 	case tea.KeyMsg:
-		if msg.String() == "ctrl+c" {
-			if m.state == stateSelectingModel {
-				m.exitModelSelect("")
-				return m, nil
-			}
-			if m.state != stateIdle && m.cancelFunc != nil {
-				m.cancelFunc()
-				return m, nil
-			}
-			return m, tea.Quit
-		}
-		if m.state == stateSelectingModel {
-			switch msg.String() {
-			case "up", "ctrl+k", "ctrl+p":
-				if m.providerSelIdx > 0 {
-					m.providerSelIdx--
-				}
-			case "down", "ctrl+j", "ctrl+n":
-				if m.providerSelIdx < len(m.providerItems)-1 {
-					m.providerSelIdx++
-				}
-			case "enter":
-				m.switchToProvider(m.providerSelIdx)
-			case "esc":
-				m.exitModelSelect("")
-			}
-			return m, nil
-		}
-		if m.state == stateAwaitingConfirmation {
-			switch msg.String() {
-			case "y", "Y", "enter":
-				m.agent.ConfirmTool(true)
-				m.pendingConfirm = nil
-				m.setState(stateStreaming)
-				m.layout()
-				return m, m.nextEvent()
-			case "n", "N", "esc":
-				m.agent.ConfirmTool(false)
-				m.pendingConfirm = nil
-				m.setState(stateStreaming)
-				m.layout()
-				return m, m.nextEvent()
-			}
-			return m, nil
-		}
-		if m.state == stateAskUserQuestion {
-			if m.askUserView == nil {
-				m.setState(stateStreaming)
-				return m, nil
-			}
-			submit, cancelled := m.askUserView.HandleKey(msg.String())
-			if cancelled {
-				m.agent.RespondToAskUser(nil, nil)
-				m.askUserView = nil
-				m.setState(stateStreaming)
-				m.layout()
-				return m, m.nextEvent()
-			}
-			if submit {
-				answers := m.askUserView.GetAnswers()
-				m.agent.RespondToAskUser(answers, nil)
-				m.askUserView = nil
-				m.setState(stateStreaming)
-				m.layout()
-				return m, m.nextEvent()
-			}
-			return m, nil
-		}
-		if m.state == stateIdle {
-			switch msg.String() {
-			case "ctrl+s":
-				m.copyMode = !m.copyMode
-				m.statusbar.SetCopyMode(m.copyMode)
-				return m, nil
-			case "esc":
-				if m.copyMode {
-					m.copyMode = false
-					m.statusbar.SetCopyMode(false)
-					return m, nil
-				}
-			case "pgup", "pgdown", "ctrl+u", "ctrl+d":
-				var cmd tea.Cmd
-				m.chatview, cmd = m.chatview.Update(msg)
-				cmds = append(cmds, cmd)
-				return m, tea.Batch(cmds...)
-			}
-			var cmd tea.Cmd
-			m.input, cmd = m.input.Update(msg)
-			cmds = append(cmds, cmd)
-			m.layout()
-		}
+		return m.handleKeyMsg(msg)
 
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
 		m.chatview, cmd = m.chatview.Update(msg)
-		cmds = append(cmds, cmd)
+		return m, cmd
 
 	case InputSubmitMsg:
 		text := string(msg)
@@ -215,36 +124,135 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.sendMessage(text)
 
 	case agentEventMsg:
-		cmd := m.handleAgentEvent(agent.AgentEvent(msg))
-		if cmd != nil {
-			cmds = append(cmds, cmd)
-		}
+		return m, m.handleAgentEvent(agent.AgentEvent(msg))
 
 	case tea.PasteMsg:
 		if m.state == stateIdle {
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
-			cmds = append(cmds, cmd)
+			return m, cmd
 		}
-
-	case streamDoneMsg:
-		// no-op
 
 	case spinner.TickMsg:
 		if m.state == stateWaiting {
 			var cmd tea.Cmd
 			m.spinner, cmd = m.spinner.Update(msg)
-			cmds = append(cmds, cmd)
+			return m, cmd
 		}
 
 	case tickMsg:
-		// Re-render when in confirmation or ask-user state, continue ticking
 		if m.state == stateAwaitingConfirmation || m.state == stateAskUserQuestion {
-			cmds = append(cmds, m.tick())
+			return m, m.tick()
 		}
+
+	case streamDoneMsg:
 	}
 
-	return m, tea.Batch(cmds...)
+	return m, nil
+}
+
+func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.String() == "ctrl+c" {
+		return m.handleCtrlC()
+	}
+	switch m.state {
+	case stateSelectingModel:
+		return m.handleKeySelectingModel(msg)
+	case stateAwaitingConfirmation:
+		return m.handleKeyConfirmation(msg)
+	case stateAskUserQuestion:
+		return m.handleKeyAskUser(msg)
+	case stateIdle:
+		return m.handleKeyIdle(msg)
+	}
+	return m, nil
+}
+
+func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
+	if m.state == stateSelectingModel {
+		m.exitModelSelect("")
+		return m, nil
+	}
+	if m.state != stateIdle && m.cancelFunc != nil {
+		m.cancelFunc()
+		return m, nil
+	}
+	return m, tea.Quit
+}
+
+func (m *Model) handleKeySelectingModel(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "up", "ctrl+k", "ctrl+p":
+		if m.providerSelIdx > 0 {
+			m.providerSelIdx--
+		}
+	case "down", "ctrl+j", "ctrl+n":
+		if m.providerSelIdx < len(m.providerItems)-1 {
+			m.providerSelIdx++
+		}
+	case "enter":
+		m.switchToProvider(m.providerSelIdx)
+	case "esc":
+		m.exitModelSelect("")
+	}
+	return m, nil
+}
+
+func (m *Model) handleKeyConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "y", "Y", "enter":
+		m.agent.ConfirmTool(true)
+	case "n", "N", "esc":
+		m.agent.ConfirmTool(false)
+	default:
+		return m, nil
+	}
+	m.pendingConfirm = nil
+	m.setState(stateStreaming)
+	m.layout()
+	return m, m.nextEvent()
+}
+
+func (m *Model) handleKeyAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.askUserView == nil {
+		m.setState(stateStreaming)
+		return m, nil
+	}
+	submit, cancelled := m.askUserView.HandleKey(msg.String())
+	if cancelled {
+		m.agent.RespondToAskUser(nil, nil)
+	} else if submit {
+		m.agent.RespondToAskUser(m.askUserView.GetAnswers(), nil)
+	} else {
+		return m, nil
+	}
+	m.askUserView = nil
+	m.setState(stateStreaming)
+	m.layout()
+	return m, m.nextEvent()
+}
+
+func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+s":
+		m.copyMode = !m.copyMode
+		m.statusbar.SetCopyMode(m.copyMode)
+		return m, nil
+	case "esc":
+		if m.copyMode {
+			m.copyMode = false
+			m.statusbar.SetCopyMode(false)
+			return m, nil
+		}
+	case "pgup", "pgdown", "ctrl+u", "ctrl+d":
+		var cmd tea.Cmd
+		m.chatview, cmd = m.chatview.Update(msg)
+		return m, cmd
+	}
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	m.layout()
+	return m, cmd
 }
 
 func (m *Model) layout() {
