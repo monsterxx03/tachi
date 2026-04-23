@@ -5,6 +5,9 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"os/exec"
+	"runtime"
+	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
@@ -15,11 +18,33 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-const defaultSystemPrompt = `You are a helpful AI assistant. You have access to tools:
-- Read: Read the contents of a file
-- Write: Write content to a file
+func buildSystemPrompt() string {
+	var sb strings.Builder
+	sb.WriteString("You are a helpful AI assistant.\nUse tools when needed to fulfill user requests.\n\n")
+	sb.WriteString("## Environment\n\n")
 
-Use tools when needed to fulfill user requests.`
+	if cwd, err := os.Getwd(); err == nil {
+		sb.WriteString("- Working directory: " + cwd + "\n")
+	}
+
+	isGitRepo := false
+	if err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Run(); err == nil {
+		isGitRepo = true
+	}
+	if isGitRepo {
+		sb.WriteString("- Git repository: yes\n")
+	} else {
+		sb.WriteString("- Git repository: no\n")
+	}
+
+	sb.WriteString("- OS: " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
+
+	if shell := os.Getenv("SHELL"); shell != "" {
+		sb.WriteString("- Shell: " + shell + "\n")
+	}
+
+	return sb.String()
+}
 
 var commonFlags = []cli.Flag{
 	&cli.StringFlag{
@@ -174,7 +199,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
-		SystemPrompt: defaultSystemPrompt,
+		SystemPrompt: buildSystemPrompt(),
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: resolved.MaxTokens,
 		},
@@ -204,7 +229,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
 	fmt.Printf("User: %s\n\n", prompt)
 
-	result := aiAgent.RunConversation(ctx, prompt, defaultSystemPrompt, llm.ChatOptions{
+	result := aiAgent.RunConversation(ctx, prompt, buildSystemPrompt(), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 
