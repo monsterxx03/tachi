@@ -48,9 +48,9 @@ type chatMessage struct {
 }
 
 type Model struct {
-	statusbar    StatusBar
-	chatview     ChatView
-	input        InputArea
+	statusbar StatusBar
+	chatview  ChatView
+	input     InputArea
 
 	width  int
 	height int
@@ -60,13 +60,13 @@ type Model struct {
 	chatOpts     llm.ChatOptions
 	history      []llm.Message
 
-	state             state
-	copyMode         bool
-	cancelFunc       context.CancelFunc
-	eventCh          <-chan agent.AgentEvent
-	totalUsage       llm.Usage
-	pendingConfirm   *pendingConfirm
-	askUserView      *AskUserView
+	state          state
+	copyMode       bool
+	cancelFunc     context.CancelFunc
+	eventCh        <-chan agent.AgentEvent
+	totalUsage     llm.Usage
+	pendingConfirm *pendingConfirm
+	askUserView    *AskUserView
 
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
@@ -230,6 +230,7 @@ func (m *Model) handleKeyAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	oldHeight := m.input.Height()
 	switch msg.String() {
 	case "ctrl+s":
 		m.copyMode = !m.copyMode
@@ -248,7 +249,9 @@ func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
-	m.layout()
+	if m.input.Height() != oldHeight {
+		m.layout()
+	}
 	return m, cmd
 }
 
