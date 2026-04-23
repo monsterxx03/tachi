@@ -7,6 +7,8 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 type InputSubmitMsg string
@@ -17,11 +19,17 @@ type InputArea struct {
 	enabled     bool
 	completions []Command
 	selectedIdx int
+
+	history      []string
+	historyMax   int
+	histIdx      int
+	histScratch  string
+	historyPath  string
 }
 
-func NewInputArea() InputArea {
+func NewInputArea(historyMax int, historyPath string) InputArea {
 	ta := textarea.New()
-	ta.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline)"
+	ta.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
 	ta.Prompt = "> "
 	ta.CharLimit = 0
 	ta.SetHeight(1)
@@ -32,7 +40,18 @@ func NewInputArea() InputArea {
 	ta.SetStyles(styles)
 	ta.Focus()
 
-	return InputArea{textarea: ta, enabled: true}
+	history := make([]string, 0)
+	if historyMax > 0 && historyPath != "" {
+		history = loadInputHistoryFile(historyPath, historyMax)
+	}
+	return InputArea{
+		textarea:    ta,
+		enabled:     true,
+		history:     history,
+		historyMax:  historyMax,
+		histIdx:     -1,
+		historyPath: historyPath,
+	}
 }
 
 func (i *InputArea) SetWidth(w int) {
@@ -43,12 +62,16 @@ func (i *InputArea) SetWidth(w int) {
 func (i *InputArea) SetEnabled(enabled bool) {
 	i.enabled = enabled
 	if enabled {
-		i.textarea.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline)"
+		i.textarea.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
+		i.histIdx = -1
+		i.histScratch = ""
 		i.textarea.Focus()
 	} else {
 		i.textarea.Placeholder = "Ctrl+C to interrupt"
 		i.completions = nil
 		i.selectedIdx = 0
+		i.histIdx = -1
+		i.histScratch = ""
 		i.textarea.Blur()
 	}
 }
@@ -71,11 +94,17 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				}
 				return i, nil
 			}
+			if i.historyMax > 0 && i.historyKeyPrev() {
+				return i, nil
+			}
 		case "down", "ctrl+j", "ctrl+n":
 			if len(i.completions) > 0 {
 				if i.selectedIdx < len(i.completions)-1 {
 					i.selectedIdx++
 				}
+				return i, nil
+			}
+			if i.historyMax > 0 && i.historyKeyNext() {
 				return i, nil
 			}
 		case "tab":
@@ -97,7 +126,9 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 		case "enter":
 			if len(i.completions) > 0 {
 				name := i.completions[i.selectedIdx].Name
+				i.pushHistoryLine(name)
 				i.textarea.Reset()
+				i.clearHistoryNav()
 				i.completions = nil
 				i.selectedIdx = 0
 				return i, func() tea.Msg { return InputSubmitMsg(name) }
@@ -106,7 +137,9 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			if text == "" {
 				return i, nil
 			}
+			i.pushHistoryLine(text)
 			i.textarea.Reset()
+			i.clearHistoryNav()
 			i.completions = nil
 			i.selectedIdx = 0
 			return i, func() tea.Msg { return InputSubmitMsg(text) }
@@ -117,6 +150,70 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	i.textarea, cmd = i.textarea.Update(msg)
 	i.updateCompletions()
 	return i, cmd
+}
+
+func (i *InputArea) clearHistoryNav() {
+	i.histIdx = -1
+	i.histScratch = ""
+}
+
+func (i *InputArea) setHistoryValue(s string) {
+	i.textarea.SetValue(s)
+	i.textarea.CursorEnd()
+	i.updateCompletions()
+}
+
+func (i *InputArea) historyKeyPrev() bool {
+	if len(i.history) == 0 {
+		return false
+	}
+	if i.histIdx < 0 {
+		i.histScratch = i.textarea.Value()
+		i.histIdx = len(i.history) - 1
+		i.setHistoryValue(i.history[i.histIdx])
+		return true
+	}
+	if i.histIdx == 0 {
+		return true
+	}
+	i.histIdx--
+	i.setHistoryValue(i.history[i.histIdx])
+	return true
+}
+
+func (i *InputArea) historyKeyNext() bool {
+	if i.histIdx < 0 {
+		return false
+	}
+	if i.histIdx < len(i.history)-1 {
+		i.histIdx++
+		i.setHistoryValue(i.history[i.histIdx])
+		return true
+	}
+	i.histIdx = -1
+	i.setHistoryValue(i.histScratch)
+	return true
+}
+
+func (i *InputArea) pushHistoryLine(line string) {
+	if i.historyMax <= 0 {
+		return
+	}
+	if line == "" {
+		return
+	}
+	if len(i.history) > 0 && i.history[len(i.history)-1] == line {
+		return
+	}
+	i.history = append(i.history, line)
+	if len(i.history) > i.historyMax {
+		i.history = i.history[1:]
+	}
+	if i.historyPath != "" {
+		if err := saveInputHistoryFile(i.historyPath, i.history); err != nil {
+			debuglog.Log("input history: save: %v", err)
+		}
+	}
 }
 
 func (i *InputArea) updateCompletions() {

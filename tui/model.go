@@ -86,7 +86,7 @@ func NewModel(cfg ModelConfig) *Model {
 	return &Model{
 		statusbar: NewStatusBar(cfg.ProviderInfo),
 		chatview:  NewChatView(),
-		input:     NewInputArea(),
+		input:     NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
 		spinner:   spinner.New(spinner.WithSpinner(spinner.Dot)),
 		agent:     cfg.Agent,
 		systemPrompt: cfg.SystemPrompt,
@@ -510,6 +510,20 @@ func (m *Model) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
+}
+
+func inputHistoryMax(c *config.Config) int {
+	if c == nil {
+		return config.DefaultTUIInputHistoryLimit
+	}
+	return c.TUIInputHistoryMax()
+}
+
+func inputHistoryFilePath() string {
+	if p, err := config.InputHistoryPath(); err == nil {
+		return p
+	}
+	return ""
 }
 
 func Run(cfg ModelConfig) error {

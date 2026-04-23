@@ -109,6 +109,32 @@ func TestSaveAndLoad(t *testing.T) {
 	assert.Equal(t, original.Providers[0], loaded.Providers[0])
 }
 
+func TestInputHistoryPath(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	p, err := InputHistoryPath()
+	require.NoError(t, err)
+	assert.Equal(t, filepath.Join(home, ".tachi", "input_history"), p)
+}
+
+func TestTUIInputHistoryMax(t *testing.T) {
+	assert.Equal(t, DefaultTUIInputHistoryLimit, (&Config{}).TUIInputHistoryMax())
+
+	z := 0
+	assert.Equal(t, 0, (&Config{TUI: TUIConfig{InputHistoryLimit: &z}}).TUIInputHistoryMax())
+
+	five := 5
+	assert.Equal(t, 5, (&Config{TUI: TUIConfig{InputHistoryLimit: &five}}).TUIInputHistoryMax())
+
+	neg := -1
+	assert.Equal(t, 0, (&Config{TUI: TUIConfig{InputHistoryLimit: &neg}}).TUIInputHistoryMax())
+
+	t.Run("nil config", func(t *testing.T) {
+		var c *Config
+		assert.Equal(t, DefaultTUIInputHistoryLimit, c.TUIInputHistoryMax())
+	})
+}
+
 func TestFindProvider(t *testing.T) {
 	cfg := &Config{
 		Providers: []ProviderConfig{

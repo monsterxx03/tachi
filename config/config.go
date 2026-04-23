@@ -18,8 +18,10 @@ const (
 	DefaultMaxIterations      = 50
 	DefaultWebSearchTimeout   = 30
 	DefaultWebSearchMaxResults = 10
-	configDirName             = ".tachi"
-	configFileName            = "config.yaml"
+	DefaultTUIInputHistoryLimit = 10
+	configDirName                = ".tachi"
+	configFileName               = "config.yaml"
+	inputHistoryFileName         = "input_history"
 )
 
 type ProviderConfig struct {
@@ -37,12 +39,18 @@ type WebSearchConfig struct {
 	MaxResults int    `yaml:"max_results"`
 }
 
+// TUIConfig 控制终端界面行为。InputHistoryLimit 为 nil 时使用 DefaultTUIInputHistoryLimit 条；显式 0 表示不记录历史。
+type TUIConfig struct {
+	InputHistoryLimit *int `yaml:"input_history_limit"`
+}
+
 type Config struct {
 	Provider       string           `yaml:"provider"`
 	MaxTokens      int              `yaml:"max_tokens"`
 	MaxIterations  int              `yaml:"max_iterations"`
 	Providers      []ProviderConfig `yaml:"providers"`
 	WebSearch      WebSearchConfig  `yaml:"web_search"`
+	TUI            TUIConfig        `yaml:"tui"`
 }
 
 func DefaultConfig() *Config {
@@ -71,6 +79,15 @@ func configPath() (string, error) {
 		return "", err
 	}
 	return filepath.Join(dir, configFileName), nil
+}
+
+// InputHistoryPath 返回终端输入历史文件路径：~/.tachi/input_history
+func InputHistoryPath() (string, error) {
+	dir, err := configDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, inputHistoryFileName), nil
 }
 
 func Load() (*Config, error) {
@@ -200,4 +217,15 @@ func (c *Config) FindProvider(name string) *ProviderConfig {
 		}
 	}
 	return nil
+}
+
+// TUIInputHistoryMax 返回输入区最多保留的历史条数。未配置 tui.input_history_limit 时返回 DefaultTUIInputHistoryLimit；显式为负数时按 0 处理（不记录历史）。
+func (c *Config) TUIInputHistoryMax() int {
+	if c == nil || c.TUI.InputHistoryLimit == nil {
+		return DefaultTUIInputHistoryLimit
+	}
+	if *c.TUI.InputHistoryLimit < 0 {
+		return 0
+	}
+	return *c.TUI.InputHistoryLimit
 }
