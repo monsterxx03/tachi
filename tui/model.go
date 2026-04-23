@@ -318,6 +318,23 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	)
 }
 
+// sendInitCommand sends the init prompt to LLM to generate .tachi.md
+func (m *Model) sendInitCommand() tea.Cmd {
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/init"})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, InitPromptTemplate, m.systemPrompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
 func (m *Model) nextEvent() tea.Cmd {
 	ch := m.eventCh
 	return func() tea.Msg {
