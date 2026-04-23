@@ -42,6 +42,7 @@ type WebSearchConfig struct {
 // TUIConfig 控制终端界面行为。InputHistoryLimit 为 nil 时使用 DefaultTUIInputHistoryLimit 条；显式 0 表示不记录历史。
 type TUIConfig struct {
 	InputHistoryLimit *int `yaml:"input_history_limit"`
+	SkipEditConfirm   bool `yaml:"skip_edit_confirm"`
 }
 
 type Config struct {

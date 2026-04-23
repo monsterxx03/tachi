@@ -18,13 +18,14 @@ type IterationBudget struct {
 }
 
 type AIAgent struct {
-	model           string
-	provider        llm.Provider
-	maxIterations   int
-	toolRegistry    *tools.Registry
-	iterationBudget *IterationBudget
-	confirmRespCh   chan bool
-	askUserRespCh   chan tools.AskUserResult
+	model             string
+	provider          llm.Provider
+	maxIterations     int
+	toolRegistry      *tools.Registry
+	iterationBudget   *IterationBudget
+	confirmRespCh     chan bool
+	askUserRespCh     chan tools.AskUserResult
+	skipEditConfirm   bool
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -60,6 +61,10 @@ func (a *AIAgent) ConfirmTool(confirmed bool) {
 func (a *AIAgent) SetProvider(provider llm.Provider, model string) {
 	a.provider = provider
 	a.model = model
+}
+
+func (a *AIAgent) SetSkipEditConfirm(skip bool) {
+	a.skipEditConfirm = skip
 }
 
 func (a *AIAgent) RegisterTools() {
@@ -239,28 +244,37 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 
 		if tr.Status == tools.ToolResultPendingConfirm {
-			debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
-			ch <- AgentEvent{
-				Type:     AgentEventToolConfirmation,
-				ToolName: tc.Function.Name,
-				ToolID:   tc.ID,
-				ToolArgs: tr.Args,
-				ToolDiff: tr.Diff,
-			}
-
-			select {
-			case confirmed := <-a.confirmRespCh:
-				if confirmed {
-					output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
-					tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
-					if err != nil {
-						tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
-					}
-				} else {
-					return nil, errCancelled
+			if a.skipEditConfirm {
+				debuglog.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)
+				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
+				if err != nil {
+					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
 				}
-			case <-ctx.Done():
-				tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
+			} else {
+				debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
+				ch <- AgentEvent{
+					Type:     AgentEventToolConfirmation,
+					ToolName: tc.Function.Name,
+					ToolID:   tc.ID,
+					ToolArgs: tr.Args,
+					ToolDiff: tr.Diff,
+				}
+
+				select {
+				case confirmed := <-a.confirmRespCh:
+					if confirmed {
+						output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
+						if err != nil {
+							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
+						}
+					} else {
+						return nil, errCancelled
+					}
+				case <-ctx.Done():
+					tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
+				}
 			}
 		}
 
