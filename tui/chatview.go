@@ -5,18 +5,32 @@ import (
 	"fmt"
 	"strings"
 
-	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
-	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
 )
 
+const chatMouseScrollLines = 5
+
+// messageCacheItem is one committed chat row with a width-keyed render cache.
+type messageCacheItem struct {
+	msg          chatMessage
+	cached       string
+	cachedHeight int
+	innerW       int
+}
+
+func (m *messageCacheItem) clearCache() {
+	m.cached = ""
+	m.cachedHeight = 0
+	m.innerW = 0
+}
+
 type ChatView struct {
-	viewport viewport.Model
-	messages []chatMessage
-	width    int
-	height   int
-	ready    bool
+	list    ScrollList
+	items   []*messageCacheItem
+	width   int
+	height  int
+	content string
 
 	streaming       bool
 	currentText     strings.Builder
@@ -25,7 +39,6 @@ type ChatView struct {
 
 	mdRenderer    *glamour.TermRenderer
 	mdRenderWidth int
-	renderedCache string
 	userScrolled  bool
 }
 
@@ -36,20 +49,14 @@ func NewChatView() ChatView {
 	)
 	return ChatView{
 		mdRenderer: md,
+		list:       NewScrollList(1),
 	}
 }
 
 func (c *ChatView) SetSize(w, h int) {
 	c.width = w
 	c.height = h
-
-	if !c.ready {
-		c.viewport = viewport.New(viewport.WithWidth(w), viewport.WithHeight(h))
-		c.ready = true
-	} else {
-		c.viewport.SetWidth(w)
-		c.viewport.SetHeight(h)
-	}
+	c.list.SetHeight(h)
 
 	newWrapWidth := w - 4
 	if newWrapWidth != c.mdRenderWidth {
@@ -60,16 +67,15 @@ func (c *ChatView) SetSize(w, h int) {
 		c.mdRenderer = md
 		c.mdRenderWidth = newWrapWidth
 	}
-	c.invalidateCache()
+	c.invalidateAllCaches()
 	c.refresh()
 }
 
 func (c *ChatView) SetStreaming(streaming bool) { c.streaming = streaming }
 
 func (c *ChatView) AddMessage(msg chatMessage) {
-	c.messages = append(c.messages, msg)
+	c.items = append(c.items, &messageCacheItem{msg: msg})
 	c.userScrolled = false
-	c.invalidateCache()
 	c.refresh()
 }
 
@@ -141,30 +147,28 @@ func (c *ChatView) flushTurn() {
 	}
 
 	if c.currentThinking.Len() > 0 {
-		c.messages = append(c.messages, chatMessage{
+		c.items = append(c.items, &messageCacheItem{msg: chatMessage{
 			Role:    "thinking",
 			Content: c.currentThinking.String(),
-		})
+		}})
 		c.currentThinking.Reset()
 	}
 
 	if c.currentText.Len() > 0 {
-		c.messages = append(c.messages, chatMessage{
+		c.items = append(c.items, &messageCacheItem{msg: chatMessage{
 			Role:    "assistant",
 			Content: c.currentText.String(),
-		})
+		}})
 		c.currentText.Reset()
 	}
 
 	for _, tc := range c.currentTools {
-		c.messages = append(c.messages, chatMessage{
+		c.items = append(c.items, &messageCacheItem{msg: chatMessage{
 			Role:    "tool_calls",
 			Content: c.renderToolCall(tc),
-		})
+		}})
 	}
 	c.currentTools = nil
-
-	c.invalidateCache()
 }
 
 func (c *ChatView) ResetStreaming() {
@@ -174,104 +178,196 @@ func (c *ChatView) ResetStreaming() {
 }
 
 func (c *ChatView) Clear() {
-	c.messages = nil
+	c.items = nil
 	c.ResetStreaming()
 	c.userScrolled = false
-	c.invalidateCache()
+	c.list.Reset()
 	c.refresh()
 }
 
 func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
-	var cmds []tea.Cmd
-
-	switch msg.(type) {
+	switch msg := msg.(type) {
 	case tea.MouseWheelMsg:
-		var cmd tea.Cmd
-		c.viewport, cmd = c.viewport.Update(msg)
-		cmds = append(cmds, cmd)
-		c.userScrolled = !c.viewport.AtBottom()
+		switch msg.Button {
+		case tea.MouseWheelUp:
+			c.list.ScrollBy(&c, -chatMouseScrollLines)
+		case tea.MouseWheelDown:
+			c.list.ScrollBy(&c, chatMouseScrollLines)
+		default:
+			return c, nil
+		}
+		c.userScrolled = !c.list.AtBottom(&c)
+		c.refresh()
 	case tea.KeyMsg:
-		var cmd tea.Cmd
-		c.viewport, cmd = c.viewport.Update(msg)
-		cmds = append(cmds, cmd)
-		c.userScrolled = !c.viewport.AtBottom()
+		s := msg.String()
+		switch s {
+		case "pgup":
+			c.list.ScrollBy(&c, -max(c.list.Height()/2, 1))
+			c.userScrolled = !c.list.AtBottom(&c)
+			c.refresh()
+		case "pgdown":
+			c.list.ScrollBy(&c, max(c.list.Height()/2, 1))
+			c.userScrolled = !c.list.AtBottom(&c)
+			c.refresh()
+		case "ctrl+u":
+			c.list.ScrollBy(&c, -chatMouseScrollLines)
+			c.userScrolled = !c.list.AtBottom(&c)
+			c.refresh()
+		case "ctrl+d":
+			c.list.ScrollBy(&c, chatMouseScrollLines)
+			c.userScrolled = !c.list.AtBottom(&c)
+			c.refresh()
+		}
 	}
-
-	return c, tea.Batch(cmds...)
+	return c, nil
 }
 
 func (c ChatView) View() string {
-	return c.viewport.View()
-}
-
-// --- internal rendering ---
-
-func (c *ChatView) invalidateCache() {
-	c.renderedCache = ""
-}
-
-func (c *ChatView) rebuildCache() {
-	var b strings.Builder
-	for _, msg := range c.messages {
-		c.renderMessageTo(&b, msg)
+	if c.height <= 0 {
+		return c.content
 	}
-	c.renderedCache = b.String()
+	lines := strings.Count(c.content, "\n") + 1
+	if c.content == "" {
+		lines = 0
+	}
+	if lines >= c.height {
+		return c.content
+	}
+	var b strings.Builder
+	b.Grow(len(c.content) + c.height)
+	b.WriteString(c.content)
+	for range c.height - lines {
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
-func (c *ChatView) renderMessageTo(b *strings.Builder, msg chatMessage) {
+// ListItemProvider 实现
+
+func (c *ChatView) ListLen() int {
+	n := len(c.items)
+	if c.streamVisible() {
+		n++
+	}
+	return n
+}
+
+func (c *ChatView) ListItem(idx int) ListItem {
+	n := c.ListLen()
+	if idx < 0 || idx >= n {
+		return ListItem{}
+	}
+	if idx < len(c.items) {
+		s, h := c.renderItemCached(c.items[idx])
+		return ListItem{Content: s, Height: h}
+	}
+	s := strings.TrimRight(c.renderStreamBlock(), "\n")
+	if s == "" {
+		return ListItem{}
+	}
+	return ListItem{Content: s, Height: strings.Count(s, "\n") + 1}
+}
+
+func (c *ChatView) ListItemHeight(idx int) int {
+	if idx < len(c.items) {
+		_, h := c.renderItemCached(c.items[idx])
+		return h
+	}
+	return c.ListItem(idx).Height
+}
+
+func (c *ChatView) streamVisible() bool {
+	if !c.streaming {
+		return false
+	}
+	if c.currentThinking.Len() > 0 {
+		return true
+	}
+	if c.currentText.Len() > 0 {
+		return true
+	}
+	return len(c.currentTools) > 0
+}
+
+func (c *ChatView) renderItemCached(m *messageCacheItem) (string, int) {
 	inner := c.width - 2
 	if inner < 1 {
 		inner = 1
 	}
+	if m.cached != "" && m.innerW == inner {
+		return m.cached, m.cachedHeight
+	}
+	s := strings.TrimRight(c.renderMessageContent(m.msg, inner), "\n")
+	h := 0
+	if s != "" {
+		h = strings.Count(s, "\n") + 1
+	}
+	m.cached = s
+	m.cachedHeight = h
+	m.innerW = inner
+	return s, h
+}
+
+func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 	switch msg.Role {
 	case "user":
-		fmt.Fprintf(b, "%s\n\n", userMsgStyle.Width(inner).Render(msg.Content))
+		return userMsgStyle.Width(inner).Render(msg.Content)
 	case "assistant":
 		rendered := c.renderMarkdown(msg.Content)
-		fmt.Fprintf(b, "%s\n\n", assistantMsgStyle.Width(inner).Render(rendered))
+		return assistantMsgStyle.Width(inner).Render(rendered)
 	case "thinking":
 		thinking := truncateThinking(msg.Content, 500)
-		fmt.Fprintf(b, "%s\n\n",
-			thinkingStyle.Render("Thinking: "+thinking))
+		return thinkingStyle.Render("Thinking: " + thinking)
 	case "tool_calls":
-		fmt.Fprintf(b, "%s\n\n", msg.Content)
+		return msg.Content
 	case "error":
-		fmt.Fprintf(b, "%s\n\n", toolResultErrStyle.Width(inner).Render("Error: "+msg.Content))
+		return toolResultErrStyle.Width(inner).Render("Error: " + msg.Content)
 	case "tool_confirmation":
-		fmt.Fprintf(b, "%s\n\n", toolConfirmStyle.Width(inner).Render(renderDiffWithHighlight(msg.Content, inner)))
+		return toolConfirmStyle.Width(inner).Render(renderDiffWithHighlight(msg.Content, inner))
+	default:
+		return msg.Content
+	}
+}
+
+func (c *ChatView) renderStreamBlock() string {
+	inner := c.width - 2
+	if inner < 1 {
+		inner = 1
+	}
+	var b strings.Builder
+	if c.currentThinking.Len() > 0 {
+		thinking := truncateThinking(c.currentThinking.String(), 500)
+		b.WriteString(thinkingStyle.Render("Thinking: " + thinking))
+		b.WriteString("\n")
+	}
+	if c.currentText.Len() > 0 {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(assistantMsgStyle.Width(inner).Render(c.currentText.String()))
+	}
+	for _, tc := range c.currentTools {
+		if b.Len() > 0 {
+			b.WriteString("\n")
+		}
+		b.WriteString(c.renderToolCall(tc))
+	}
+	return b.String()
+}
+
+func (c *ChatView) invalidateAllCaches() {
+	for _, it := range c.items {
+		if it != nil {
+			it.clearCache()
+		}
 	}
 }
 
 func (c *ChatView) refresh() {
-	if c.renderedCache == "" && len(c.messages) > 0 {
-		c.rebuildCache()
-	}
-
-	var b strings.Builder
-	b.WriteString(c.renderedCache)
-
-	inner := c.width - 2
-	if inner < 1 {
-		inner = 1
-	}
-	if c.streaming {
-		if c.currentThinking.Len() > 0 {
-			thinking := truncateThinking(c.currentThinking.String(), 500)
-			fmt.Fprintf(&b, "%s\n", thinkingStyle.Render("Thinking: "+thinking))
-		}
-		if c.currentText.Len() > 0 {
-			fmt.Fprintf(&b, "%s\n", assistantMsgStyle.Width(inner).Render(c.currentText.String()))
-		}
-		for _, tc := range c.currentTools {
-			fmt.Fprintf(&b, "%s\n", c.renderToolCall(tc))
-		}
-	}
-
-	content := lipgloss.NewStyle().Width(c.width).Render(b.String())
-	c.viewport.SetContent(content)
 	if !c.userScrolled {
-		c.viewport.GotoBottom()
+		c.list.ScrollToBottom(c)
 	}
+	c.content = c.list.Render(c)
 }
 
 func (c *ChatView) renderMarkdown(text string) string {
@@ -359,11 +455,11 @@ func getToolArgsPreview(name, argsJSON string) string {
 			return p
 		}
 	case "Bash":
-		if c, ok := args["command"].(string); ok {
-			if len(c) > 60 {
-				return c[:60] + "..."
+		if cmd, ok := args["command"].(string); ok {
+			if len(cmd) > 60 {
+				return cmd[:60] + "..."
 			}
-			return c
+			return cmd
 		}
 	case "WebSearch":
 		if q, ok := args["query"].(string); ok {
@@ -387,19 +483,15 @@ func renderDiffWithHighlight(content string, width int) string {
 		}
 		switch line[0] {
 		case '-':
-			// Deleted line
 			b.WriteString(diffDeletedStyle.Render(line))
 			b.WriteString("\n")
 		case '+':
-			// Added line
 			b.WriteString(diffAddedStyle.Render(line))
 			b.WriteString("\n")
 		case '@':
-			// Diff header (@@ -x,y +x,y @@)
 			b.WriteString(diffHeaderStyle.Render(line))
 			b.WriteString("\n")
 		default:
-			// Context line
 			b.WriteString(diffContextStyle.Render(line))
 			b.WriteString("\n")
 		}
