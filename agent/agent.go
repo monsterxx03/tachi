@@ -33,13 +33,12 @@ type AIAgent struct {
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
 	return &AIAgent{
-		model:           model,
-		provider:        provider,
-		maxIterations:   maxIterations,
-		toolRegistry:    tools.NewRegistry(),
-		iterationBudget: &IterationBudget{Remaining: maxIterations},
-		confirmRespCh:   make(chan bool, 1),
-		askUserRespCh:   make(chan tools.AskUserResult, 1),
+		model:         model,
+		provider:      provider,
+		maxIterations: maxIterations,
+		toolRegistry:  tools.NewRegistry(),
+		confirmRespCh: make(chan bool, 1),
+		askUserRespCh: make(chan tools.AskUserResult, 1),
 	}
 }
 
@@ -423,6 +422,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		apiCallCount := 0
 		lengthContinueRetries := 0
+
+		// Initialize iteration budget for this conversation
+		a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
 
 		// Session management: create session if needed and append user message
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
