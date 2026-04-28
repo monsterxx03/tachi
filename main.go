@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/mcpsupport"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/systemreminder"
@@ -184,6 +185,30 @@ func registerTools(aiAgent *agent.AIAgent, cfg *config.Config) {
 	}
 }
 
+// connectMCPServers connects to configured MCP servers and registers their tools
+// with the agent. Returns the manager for later cleanup (may be nil if no servers
+// are configured).
+func connectMCPServers(ctx context.Context, aiAgent *agent.AIAgent, cfg *config.Config) (*mcpsupport.Manager, error) {
+	if !cfg.MCPEnabled() {
+		return nil, nil
+	}
+
+	mgr := mcpsupport.NewManager()
+	mcpTools, errs := mgr.ConnectAll(ctx, cfg.MCPServers)
+
+	for _, err := range errs {
+		debuglog.Log("MCP: load error: %v", err)
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+
+	for _, t := range mcpTools {
+		aiAgent.RegisterTool(t)
+		debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+	}
+
+	return mgr, nil
+}
+
 func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
 	flags := extractCLIFlags(cmd)
 	resolved, err := config.Resolve(cfg, flags)
@@ -282,6 +307,15 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	registerTools(aiAgent, cfg)
 
+	// Connect to MCP servers if configured
+	mcpMgr, err := connectMCPServers(ctx, aiAgent, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: MCP configuration error: %v\n", err)
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
+
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
 
 	// Initialize session manager and attach to agent
@@ -318,11 +352,11 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: resolved.MaxTokens,
 		},
-		ProviderInfo:        providerInfo,
-		Config:              cfg,
-		ContextWindow:       resolved.Provider.ContextWindow,
-		InitialHistory:      initialHistory,
-		InitialSessionMsgs:  initialSessionMsgs,
+		ProviderInfo:       providerInfo,
+		Config:             cfg,
+		ContextWindow:      resolved.Provider.ContextWindow,
+		InitialHistory:     initialHistory,
+		InitialSessionMsgs: initialSessionMsgs,
 	})
 }
 
@@ -342,6 +376,15 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetReminderCollector(buildReminderCollector(cfg))
 	registerTools(aiAgent, cfg)
+
+	// Connect to MCP servers if configured
+	mcpMgr, err := connectMCPServers(ctx, aiAgent, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: MCP configuration error: %v\n", err)
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
 
 	prompt := cmd.String("prompt")
 	if prompt == "" {

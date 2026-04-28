@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/monsterxx03/tachi/llm"
 	"gopkg.in/yaml.v3"
@@ -19,6 +20,7 @@ const (
 	DefaultTUIInputHistoryLimit             = 10
 	DefaultIterationWarningThreshold        = 5
 	DefaultTokenWarningThresholdPct         = 80
+	DefaultMCPConnectTimeout                = 5 * time.Second
 	configDirName                           = ".tachi"
 	configFileName                          = "config.yaml"
 	inputHistoryFileName                    = "input_history"
@@ -41,6 +43,26 @@ type WebSearchConfig struct {
 	MaxResults int    `yaml:"max_results"`
 }
 
+// MCPTransportType represents the type of MCP transport protocol
+type MCPTransportType string
+
+const (
+	MCPTransportStdio MCPTransportType = "stdio"
+	MCPTransportHTTP  MCPTransportType = "http"
+)
+
+// MCPServerConfig represents a single MCP server connection configuration
+type MCPServerConfig struct {
+	Name    string            `yaml:"name"`
+	Type    MCPTransportType  `yaml:"type"` // "stdio" or "http"
+	Command string            `yaml:"command,omitempty"`
+	Args    []string          `yaml:"args,omitempty"`
+	Env     map[string]string `yaml:"env,omitempty"`
+	URL     string            `yaml:"url,omitempty"`     // For http transport
+	Headers map[string]string `yaml:"headers,omitempty"` // For http transport
+	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
+}
+
 // TUIConfig 控制终端界面行为。InputHistoryLimit 为 nil 时使用 DefaultTUIInputHistoryLimit 条；显式 0 表示不记录历史。
 type TUIConfig struct {
 	InputHistoryLimit *int `yaml:"input_history_limit"`
@@ -59,6 +81,7 @@ type Config struct {
 	MaxIterations  int                   `yaml:"max_iterations"`
 	Providers      []ProviderConfig      `yaml:"providers"`
 	WebSearch      WebSearchConfig       `yaml:"web_search"`
+	MCPServers     []MCPServerConfig     `yaml:"mcp_servers"`
 	TUI            TUIConfig             `yaml:"tui"`
 	SystemReminder SystemReminderConfig  `yaml:"system_reminder"`
 }
@@ -236,6 +259,19 @@ func (c *Config) FindProvider(name string) *ProviderConfig {
 		}
 	}
 	return nil
+}
+
+// MCPEnabled returns true if at least one MCP server is configured.
+func (c *Config) MCPEnabled() bool {
+	return len(c.MCPServers) > 0
+}
+
+// MCPTimeout returns the timeout for connecting to an MCP server.
+func (srv *MCPServerConfig) MCPTimeout() time.Duration {
+	if srv.Timeout != nil && *srv.Timeout > 0 {
+		return *srv.Timeout
+	}
+	return DefaultMCPConnectTimeout
 }
 
 // TUIInputHistoryMax 返回输入区最多保留的历史条数。未配置 tui.input_history_limit 时返回 DefaultTUIInputHistoryLimit；显式为负数时按 0 处理（不记录历史）。
