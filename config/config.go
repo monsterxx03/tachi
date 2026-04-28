@@ -24,11 +24,12 @@ const (
 )
 
 type ProviderConfig struct {
-	Name    string `yaml:"name"`
-	Type    string `yaml:"type"`
-	Model   string `yaml:"model"`
-	BaseURL string `yaml:"base_url"`
-	APIKey  string `yaml:"api_key"`
+	Name          string `yaml:"name"`
+	Type          string `yaml:"type"`
+	Model         string `yaml:"model"`
+	BaseURL       string `yaml:"base_url"`
+	APIKey        string `yaml:"api_key"`
+	ContextWindow *int64 `yaml:"context_window"` // Manual override for model context window (tokens)
 }
 
 type WebSearchConfig struct {

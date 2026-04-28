@@ -80,13 +80,14 @@ type ModelConfig struct {
 	ChatOpts           llm.ChatOptions
 	ProviderInfo       string
 	Config             *config.Config
+	ContextWindow      int64
 	InitialHistory     []llm.Message
 	InitialSessionMsgs []session.Message
 }
 
 func NewModel(cfg ModelConfig) *Model {
 	m := &Model{
-		statusbar:    NewStatusBar(cfg.ProviderInfo),
+		statusbar:    NewStatusBar(cfg.ProviderInfo, cfg.ContextWindow),
 		chatview:     NewChatView(),
 		input:        NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
 		agent:        cfg.Agent,
@@ -476,6 +477,7 @@ func (m *Model) switchToProvider(idx int) {
 	m.agent.SetProvider(provider, resolved.Model)
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Type, resolved.Model)
 	m.statusbar.SetProviderInfo(providerInfo)
+	m.statusbar.SetContextWindow(resolved.ContextWindow)
 	m.exitModelSelect(fmt.Sprintf("Switched to %s", providerInfo))
 }
 

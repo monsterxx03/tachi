@@ -83,6 +83,15 @@ var (
 			Foreground(lipgloss.Color("#F5A97F")).
 			Bold(true)
 
+	usageNormalStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A6DA95"))
+
+	usageWarnStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#EED49F"))
+
+	usageHighStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ED8796"))
+
 	boldStyle = lipgloss.NewStyle().
 			Bold(true)
 )

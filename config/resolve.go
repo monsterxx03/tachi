@@ -7,6 +7,9 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 )
 
+// DefaultContextWindow is used when the model is unknown and no override is configured.
+const DefaultContextWindow int64 = 128_000
+
 type CLIFlags struct {
 	Provider         string
 	ProviderSet      bool
@@ -21,10 +24,11 @@ type CLIFlags struct {
 }
 
 type ResolvedProvider struct {
-	Type    string
-	Model   string
-	BaseURL string
-	APIKey  string
+	Type          string
+	Model         string
+	BaseURL       string
+	APIKey        string
+	ContextWindow int64 // Resolved context window size (from model info or config override)
 }
 
 type ResolvedConfig struct {
@@ -111,11 +115,21 @@ func ResolveProviderConfig(pCfg *ProviderConfig) (*ResolvedProvider, error) {
 		}
 		return nil, fmt.Errorf("API key required for provider %q; add api_key in config", pCfg.Name)
 	}
+
+	// Resolve context window: config override > model info lookup > default
+	contextWindow := DefaultContextWindow
+	if pCfg.ContextWindow != nil && *pCfg.ContextWindow > 0 {
+		contextWindow = *pCfg.ContextWindow
+	} else if cw := llm.ModelContextWindow(pCfg.Model); cw > 0 {
+		contextWindow = cw
+	}
+
 	return &ResolvedProvider{
-		Type:    pCfg.Type,
-		Model:   pCfg.Model,
-		BaseURL: pCfg.BaseURL,
-		APIKey:  apiKey,
+		Type:          pCfg.Type,
+		Model:         pCfg.Model,
+		BaseURL:       pCfg.BaseURL,
+		APIKey:        apiKey,
+		ContextWindow: contextWindow,
 	}, nil
 }
 

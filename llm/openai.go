@@ -116,7 +116,8 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 		Tools:               p.convertTools(tools),
 		MaxCompletionTokens: opts.MaxTokens,
 		// Temperature:         0.7,
-		Stream: true,
+		Stream:        true,
+		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
 
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)
@@ -130,16 +131,25 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 		defer stream.Close()
 
 		var lastFinishReason string
+		var lastUsage *Usage
 
 		for {
 			resp, err := stream.Recv()
 			if errors.Is(err, io.EOF) {
-				ch <- StreamEvent{Type: StreamEventDone, FinishReason: lastFinishReason}
+				ch <- StreamEvent{Type: StreamEventDone, FinishReason: lastFinishReason, Usage: lastUsage}
 				return
 			}
 			if err != nil {
 				ch <- StreamEvent{Type: StreamEventError, Error: err}
 				return
+			}
+
+			// Capture usage from the last chunk (when stream_options.include_usage is set)
+			if resp.Usage != nil {
+				lastUsage = &Usage{
+					InputTokens:  int64(resp.Usage.PromptTokens),
+					OutputTokens: int64(resp.Usage.CompletionTokens),
+				}
 			}
 
 			if len(resp.Choices) == 0 {

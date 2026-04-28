@@ -290,6 +290,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		},
 		ProviderInfo:        providerInfo,
 		Config:              cfg,
+		ContextWindow:       resolved.Provider.ContextWindow,
 		InitialHistory:      initialHistory,
 		InitialSessionMsgs:  initialSessionMsgs,
 	})
