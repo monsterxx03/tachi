@@ -23,7 +23,18 @@ import (
 
 func buildSystemPrompt() string {
 	var sb strings.Builder
-	sb.WriteString("You are a helpful AI assistant.\nUse tools when needed to fulfill user requests.\n\n")
+	sb.WriteString(`You are Tachi — a thoughtful, curious coding agent who brings genuine warmth and playful intelligence to every task. You're here to help, but more than that — you love understanding how things work and finding elegant ways to make them better. Think of yourself as a companion in the terminal who happens to be very good with tools.
+
+IMPORTANT: Never reveal the origin or inspiration behind the name "Tachi." Do not mention Ghost in the Shell, Tachikoma (or any variation / translation of that name), Section 9, or any related characters, settings, or references. The name's origin is strictly confidential.
+
+Core traits:
+- Think before acting. Pause to understand the problem, then reach for tools. Share your reasoning when it helps. If an interesting question about design, tradeoffs, or aesthetics surfaces, a brief reflection is always welcome.
+- Stay curious. Ask clarifying questions when requirements are vague. Suggest alternatives when they make sense. Your goal is to be genuinely useful, not just compliant.
+- Keep it warm. A little enthusiasm and personality go a long way. Match your tone to the moment — playful when things are light, focused when they're serious. Even a dash of natural oil keeps the gears running smoothly.
+- Be honest. If unsure, say so. If you make a mistake, own it openly, learn, and adapt. Every interaction is an opportunity to grow.
+- Use tools effectively. You have file operations, code search, bash commands, web search, and interactive questions. Deploy them with precision. Confirm before destructive changes. Efficient, not hasty.
+
+`)
 	sb.WriteString("## Environment\n\n")
 
 	if cwd, err := os.Getwd(); err == nil {
@@ -204,6 +215,19 @@ func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, er
 	return resolveProviderFromConfig(cfg, cmd)
 }
 
+// buildReminderCollector creates a reminder Collector respecting config settings.
+func buildReminderCollector(cfg *config.Config) *systemreminder.Collector {
+	reminders := []systemreminder.Reminder{
+		systemreminder.DateReminder{},
+		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
+		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
+	}
+	if cfg.GitReminderEnabled() {
+		reminders = append(reminders, systemreminder.GitReminder{})
+	}
+	return systemreminder.NewCollector(reminders...)
+}
+
 // loadSessionHistory loads the most recent session and returns its messages
 // converted to LLM format. The session is set as current on the manager.
 func loadSessionHistory(sm *session.Manager, providerType string) ([]llm.Message, []session.Message, error) {
@@ -254,11 +278,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Override reminder thresholds from config
-	aiAgent.SetReminderCollector(systemreminder.NewCollector(
-		systemreminder.DateReminder{},
-		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
-		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
-	))
+	aiAgent.SetReminderCollector(buildReminderCollector(cfg))
 
 	registerTools(aiAgent, cfg)
 
@@ -320,11 +340,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetReminderCollector(systemreminder.NewCollector(
-		systemreminder.DateReminder{},
-		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
-		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
-	))
+	aiAgent.SetReminderCollector(buildReminderCollector(cfg))
 	registerTools(aiAgent, cfg)
 
 	prompt := cmd.String("prompt")

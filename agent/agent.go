@@ -47,6 +47,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		askUserRespCh: make(chan tools.AskUserResult, 1),
 		reminderCollector: systemreminder.NewCollector(
 			systemreminder.DateReminder{},
+			systemreminder.GitReminder{},
 			systemreminder.IterationWarningReminder{Threshold: config.DefaultIterationWarningThreshold},
 			systemreminder.TokenWarningReminder{ThresholdPct: config.DefaultTokenWarningThresholdPct},
 		),

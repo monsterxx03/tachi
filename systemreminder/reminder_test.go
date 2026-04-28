@@ -189,3 +189,61 @@ func TestWrapUserMessage_WithReminders(t *testing.T) {
 		t.Errorf("expected original message at end, got: %s", result)
 	}
 }
+
+func TestGitReminder_FirstMessage(t *testing.T) {
+	r := GitReminder{}
+	lines := r.Generate(Context{
+		IsFirstMessage: true,
+		Now:            time.Date(2025, 7, 15, 0, 0, 0, 0, time.UTC),
+	})
+	if lines == nil {
+		t.Fatal("expected lines in a git repo, got nil")
+	}
+	if len(lines) == 0 {
+		t.Fatal("expected at least one line")
+	}
+	// First line should be branch or detached HEAD info
+	if !strings.HasPrefix(lines[0], "Git branch:") && !strings.HasPrefix(lines[0], "Git HEAD:") {
+		t.Errorf("expected git branch/HEAD line, got: %s", lines[0])
+	}
+	// There should be a git status line
+	foundStatus := false
+	for _, line := range lines {
+		if strings.HasPrefix(line, "Git status:") {
+			foundStatus = true
+			break
+		}
+	}
+	if !foundStatus {
+		t.Errorf("expected 'Git status:' line, got: %v", lines)
+	}
+}
+
+func TestGitReminder_NotFirstMessage(t *testing.T) {
+	r := GitReminder{}
+	lines := r.Generate(Context{IsFirstMessage: false})
+	if lines != nil {
+		t.Errorf("expected nil when not first message, got: %v", lines)
+	}
+}
+
+func TestCollector_WithGitReminder(t *testing.T) {
+	c := NewCollector(DateReminder{}, GitReminder{})
+	result := c.Collect(Context{
+		IsFirstMessage: true,
+		Now:            time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+	})
+	if !strings.Contains(result, "<system-reminder>") {
+		t.Errorf("expected <system-reminder> tag, got: %s", result)
+	}
+	if !strings.Contains(result, "Sunday, June 1, 2025") {
+		t.Errorf("expected date, got: %s", result)
+	}
+	// Should contain git info since we're in a repo
+	if !strings.Contains(result, "Git") {
+		t.Errorf("expected git info, got: %s", result)
+	}
+	if strings.Count(result, "<system-reminder>") != 1 {
+		t.Errorf("expected one opening tag, got: %s", result)
+	}
+}

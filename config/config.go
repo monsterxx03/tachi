@@ -48,8 +48,9 @@ type TUIConfig struct {
 }
 
 type SystemReminderConfig struct {
-	IterationWarningThreshold *int `yaml:"iteration_warning_threshold"`
-	TokenWarningThresholdPct  *int `yaml:"token_warning_threshold_pct"`
+	IterationWarningThreshold *int  `yaml:"iteration_warning_threshold"`
+	TokenWarningThresholdPct  *int  `yaml:"token_warning_threshold_pct"`
+	GitReminder               *bool `yaml:"git_reminder"` // true by default (enabled); set false to disable
 }
 
 type Config struct {
@@ -255,6 +256,15 @@ func (c *Config) IterationWarningThreshold() int {
 		return DefaultIterationWarningThreshold
 	}
 	return *c.SystemReminder.IterationWarningThreshold
+}
+
+// GitReminderEnabled returns whether the git status reminder is active.
+// Defaults to true when not explicitly configured.
+func (c *Config) GitReminderEnabled() bool {
+	if c == nil || c.SystemReminder.GitReminder == nil {
+		return true
+	}
+	return *c.SystemReminder.GitReminder
 }
 
 // TokenWarningThresholdPct returns the context-window usage percentage at
