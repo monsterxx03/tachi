@@ -29,12 +29,20 @@ func NewManager() *Manager {
 	}
 }
 
-// ConnectAll connects to all configured MCP servers. It returns a slice of
-// MCPTool wrappers that were discovered, along with any per-server errors
-// (non-fatal; some servers may succeed while others fail).
+// ConnectAll connects to all configured MCP servers concurrently. Each server
+// connection runs in its own goroutine so a slow or failing server does not
+// block others. Returns all discovered MCPTool wrappers and any per-server
+// errors (non-fatal; some servers may succeed while others fail).
 func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConfig) ([]MCPTool, []error) {
-	var tools []MCPTool
-	var errs []error
+	var wg sync.WaitGroup
+
+	// Collected concurrently — protected by a single mutex since both
+	// slices are always accessed together in critical sections.
+	var (
+		mu    sync.Mutex
+		tools []MCPTool
+		errs  []error
+	)
 
 	for i := range servers {
 		srv := &servers[i]
@@ -42,14 +50,21 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 			debuglog.Log("MCP: server %q is disabled, skipping", srv.Name)
 			continue
 		}
-		serverTools, err := m.connect(ctx, srv)
-		if err != nil {
-			errs = append(errs, fmt.Errorf("mcp server %q: %w", srv.Name, err))
-			continue
-		}
-		tools = append(tools, serverTools...)
+
+		wg.Go(func() {
+			serverTools, err := m.connect(ctx, srv)
+
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				errs = append(errs, fmt.Errorf("mcp server %q: %w", srv.Name, err))
+				return
+			}
+			tools = append(tools, serverTools...)
+		})
 	}
 
+	wg.Wait()
 	return tools, errs
 }
 

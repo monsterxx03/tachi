@@ -324,7 +324,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, commitUserPrompt(), m.systemPrompt, m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, commitUserPrompt(m.agent.Model()), m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

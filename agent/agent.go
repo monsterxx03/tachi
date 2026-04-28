@@ -77,6 +77,11 @@ func (a *AIAgent) SetProvider(provider llm.Provider, model string) {
 	a.model = model
 }
 
+// Model returns the current model name.
+func (a *AIAgent) Model() string {
+	return a.model
+}
+
 func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 	a.skipEditConfirm = skip
 }
