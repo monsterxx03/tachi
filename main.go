@@ -192,35 +192,6 @@ func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provid
 	return provider, resolved, nil
 }
 
-// loadSessionHistory loads the most recent session and returns its messages
-// converted to LLM format. The session is set as current on the manager.
-func loadSessionHistory(sm *session.Manager, providerType string) ([]llm.Message, []session.Message, error) {
-	sessions, err := sm.List()
-	if err != nil {
-		return nil, nil, fmt.Errorf("list sessions: %w", err)
-	}
-	if len(sessions) == 0 {
-		return nil, nil, fmt.Errorf("no sessions to resume")
-	}
-
-	latest := sessions[0] // Sorted by CreatedAt descending
-	if _, err := sm.Load(latest.ID); err != nil {
-		return nil, nil, fmt.Errorf("load session %s: %w", latest.ID, err)
-	}
-
-	sessionMsgs, err := sm.LoadMessages()
-	if err != nil {
-		return nil, nil, fmt.Errorf("load messages: %w", err)
-	}
-
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, providerType)
-	if err != nil {
-		return nil, nil, fmt.Errorf("convert session messages: %w", err)
-	}
-
-	return llmMsgs, sessionMsgs, nil
-}
-
 func runTUI(ctx context.Context, cmd *cli.Command) error {
 	if err := debuglog.Init(); err != nil {
 		fmt.Printf("Warning: failed to init debug log: %v\n", err)
@@ -251,31 +222,22 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
 
-	// Initialize session manager and attach to agent
-	sessionManager, err := session.NewManager()
-	if err != nil {
-		fmt.Printf("Warning: failed to init session manager: %v\n", err)
-	} else {
-		aiAgent.SetSessionManager(sessionManager)
-	}
-
 	var initialHistory []llm.Message
 	var initialSessionMsgs []session.Message
 
 	if cmd.Bool("resume") {
-		if sessionManager == nil {
-			return fmt.Errorf("cannot resume: session manager unavailable")
-		}
-		history, sessMsgs, err := loadSessionHistory(sessionManager, resolved.Provider.Type)
+		history, sessMsgs, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt())
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
 		initialHistory = history
 		initialSessionMsgs = sessMsgs
-		// Prepend current system prompt to history
-		sysPrompt := buildSystemPrompt()
-		if sysPrompt != "" {
-			initialHistory = append([]llm.Message{{Role: "system", Content: sysPrompt}}, initialHistory...)
+	} else {
+		sm, err := session.NewManager()
+		if err != nil {
+			fmt.Printf("Warning: failed to init session manager: %v\n", err)
+		} else {
+			aiAgent.SetSessionManager(sm)
 		}
 	}
 
@@ -326,20 +288,11 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	var history []llm.Message
 
 	if cmd.Bool("resume") {
-		sessionManager, err := session.NewManager()
-		if err != nil {
-			return fmt.Errorf("session manager: %w", err)
-		}
-		llmMsgs, _, err := loadSessionHistory(sessionManager, resolved.Provider.Type)
+		llmMsgs, _, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt())
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
 		history = llmMsgs
-		sysPrompt := buildSystemPrompt()
-		if sysPrompt != "" {
-			history = append([]llm.Message{{Role: "system", Content: sysPrompt}}, history...)
-		}
-		aiAgent.SetSessionManager(sessionManager)
 	}
 
 	// Use streaming API to support history
