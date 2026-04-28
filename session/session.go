@@ -25,12 +25,14 @@ const (
 )
 
 type Message struct {
-	Type      MessageType `json:"type"`
-	Content   string     `json:"content,omitempty"`
-	Name      string     `json:"name,omitempty"`
-	Args      any        `json:"args,omitempty"`
-	Result    string     `json:"result,omitempty"`
-	IsError   bool       `json:"is_error,omitempty"`
-	Diff      string     `json:"diff,omitempty"`
-	Timestamp time.Time  `json:"timestamp"`
+	Type       MessageType `json:"type"`
+	Content    string      `json:"content,omitempty"`
+	Name       string      `json:"name,omitempty"`
+	Signature  string      `json:"signature,omitempty"`
+	Args       any         `json:"args,omitempty"`
+	Result     string      `json:"result,omitempty"`
+	IsError    bool        `json:"is_error,omitempty"`
+	Diff       string      `json:"diff,omitempty"`
+	ToolCallID string      `json:"tool_call_id,omitempty"`
+	Timestamp  time.Time   `json:"timestamp"`
 }

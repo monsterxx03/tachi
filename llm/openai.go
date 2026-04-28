@@ -26,7 +26,7 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 }
 
 func (p *OpenAIProvider) Name() string {
-	return "openai"
+	return ProviderTypeOpenAI
 }
 
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {

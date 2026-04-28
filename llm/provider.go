@@ -5,6 +5,12 @@ import (
 	"fmt"
 )
 
+// Provider type constants.
+const (
+	ProviderTypeOpenAI    = "openai"
+	ProviderTypeAnthropic = "anthropic"
+)
+
 type ThinkingBlock struct {
 	Type      string // "thinking" | "redacted_thinking"
 	Thinking  string
@@ -124,9 +130,9 @@ type Provider interface {
 
 func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) {
 	switch providerType {
-	case "openai":
+	case ProviderTypeOpenAI:
 		return NewOpenAIProvider(apiKey, baseURL, model), nil
-	case "anthropic":
+	case ProviderTypeAnthropic:
 		return NewAnthropicProvider(apiKey, baseURL, model), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)

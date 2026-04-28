@@ -29,7 +29,7 @@ func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
 }
 
 func (p *AnthropicProvider) Name() string {
-	return "anthropic"
+	return ProviderTypeAnthropic
 }
 
 func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts ChatOptions) (*anthropic.MessageNewParams, error) {

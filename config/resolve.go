@@ -3,6 +3,8 @@ package config
 import (
 	"fmt"
 	"os"
+
+	"github.com/monsterxx03/tachi/llm"
 )
 
 type CLIFlags struct {
@@ -119,9 +121,9 @@ func ResolveProviderConfig(pCfg *ProviderConfig) (*ResolvedProvider, error) {
 
 func EnvForProviderType(providerType string) string {
 	switch providerType {
-	case ProviderTypeOpenAI:
+	case llm.ProviderTypeOpenAI:
 		return "OPENAI_API_KEY"
-	case ProviderTypeAnthropic:
+	case llm.ProviderTypeAnthropic:
 		return "ANTHROPIC_API_KEY"
 	default:
 		return ""

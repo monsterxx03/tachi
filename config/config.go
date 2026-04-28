@@ -6,23 +6,21 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/monsterxx03/tachi/llm"
 	"gopkg.in/yaml.v3"
 )
 
 const (
-	ProviderTypeOpenAI    = "openai"
-	ProviderTypeAnthropic = "anthropic"
-
-	DefaultMaxTokens           = 32000
-	MaxAllowedTokens           = 4096
-	DefaultMaxIterations      = 50
-	DefaultWebSearchTimeout   = 30
-	DefaultWebSearchMaxResults = 10
+	DefaultMaxTokens            = 32000
+	MaxAllowedTokens            = 4096
+	DefaultMaxIterations        = 50
+	DefaultWebSearchTimeout     = 30
+	DefaultWebSearchMaxResults  = 10
 	DefaultTUIInputHistoryLimit = 10
-	configDirName                = ".tachi"
-	configFileName               = "config.yaml"
-	inputHistoryFileName         = "input_history"
-	sessionDirName               = "session"
+	configDirName               = ".tachi"
+	configFileName              = "config.yaml"
+	inputHistoryFileName        = "input_history"
+	sessionDirName              = "session"
 )
 
 type ProviderConfig struct {
@@ -180,14 +178,14 @@ func Init() (string, error) {
 		Providers: []ProviderConfig{
 			{
 				Name:    "minimax-anthropic",
-				Type:    ProviderTypeAnthropic,
+				Type:    llm.ProviderTypeAnthropic,
 				Model:   "MiniMax-M2.7",
 				BaseURL: "https://api.minimaxi.com/anthropic",
 				APIKey:  "<your-api-key>",
 			},
 			{
 				Name:    "minimax-openai",
-				Type:    ProviderTypeOpenAI,
+				Type:    llm.ProviderTypeOpenAI,
 				Model:   "MiniMax-M2.7",
 				BaseURL: "https://api.minimaxi.com/v1",
 				APIKey:  "<your-api-key>",

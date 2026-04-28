@@ -73,6 +73,15 @@ func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	a.sessionManager = sm
 }
 
+func (a *AIAgent) recordSession(msg *session.Message) {
+	if a.sessionManager == nil {
+		return
+	}
+	if err := a.sessionManager.AppendMessage(msg); err != nil {
+		debuglog.Log("Agent: failed to record session message: %v", err)
+	}
+}
+
 func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.ReadTool{})
 	a.toolRegistry.Register(tools.WriteTool{})
@@ -247,6 +256,14 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 			ToolArgs: tc.Function.Arguments,
 		}
 
+		// Record tool call in session
+		a.recordSession(&session.Message{
+			Type:       session.MessageTypeToolCall,
+			Name:       tc.Function.Name,
+			Args:       tc.Function.Arguments,
+			ToolCallID: tc.ID,
+		})
+
 		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 
 		if tr.Status == tools.ToolResultPendingConfirm {
@@ -322,6 +339,16 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 				ToolID: tc.ID, ToolResult: tr.Output,
 			}
 		}
+
+		// Record tool result in session
+		a.recordSession(&session.Message{
+			Type:       session.MessageTypeToolResult,
+			Name:       tc.Function.Name,
+			Result:     toolMsg.Content,
+			IsError:    toolMsg.IsError,
+			ToolCallID: tc.ID,
+		})
+
 		toolMsgs = append(toolMsgs, toolMsg)
 	}
 
@@ -342,6 +369,22 @@ func (a *AIAgent) handleFinishReason(
 
 	switch acc.finishReason {
 	case "tool_calls", "tool_use":
+		// Record thinking blocks in session
+		for _, tb := range acc.thinkBlocks {
+			a.recordSession(&session.Message{
+				Type:      session.MessageTypeThinking,
+				Content:   tb.Thinking,
+				Signature: tb.Signature,
+			})
+		}
+		// Record assistant text in session (may be empty)
+		if acc.text.Len() > 0 {
+			a.recordSession(&session.Message{
+				Type:    session.MessageTypeAssistant,
+				Content: acc.text.String(),
+			})
+		}
+
 		*messages = append(*messages, acc.assistantMessage())
 
 		toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
@@ -369,10 +412,32 @@ func (a *AIAgent) handleFinishReason(
 			}
 			return false
 		}
+		// Record thinking blocks in session
+		for _, tb := range acc.thinkBlocks {
+			a.recordSession(&session.Message{
+				Type:      session.MessageTypeThinking,
+				Content:   tb.Thinking,
+				Signature: tb.Signature,
+			})
+		}
+		// Record partial assistant text
+		if acc.text.Len() > 0 {
+			a.recordSession(&session.Message{
+				Type:    session.MessageTypeAssistant,
+				Content: acc.text.String(),
+			})
+		}
+		// Record continuation prompt
+		continuationText := "Please continue where you left off."
+		a.recordSession(&session.Message{
+			Type:    session.MessageTypeUser,
+			Content: continuationText,
+		})
+
 		msg := acc.assistantMessage()
 		msg.ToolCalls = nil
 		*messages = append(*messages, msg)
-		*messages = append(*messages, llm.Message{Role: "user", Content: "Please continue where you left off."})
+		*messages = append(*messages, llm.Message{Role: "user", Content: continuationText})
 		return true
 
 	default:
@@ -381,9 +446,17 @@ func (a *AIAgent) handleFinishReason(
 		msg.ToolCalls = nil
 		*messages = append(*messages, msg)
 
+		// Record thinking blocks in session
+		for _, tb := range acc.thinkBlocks {
+			a.recordSession(&session.Message{
+				Type:      session.MessageTypeThinking,
+				Content:   tb.Thinking,
+				Signature: tb.Signature,
+			})
+		}
 		// Append assistant response to session
-		if a.sessionManager != nil && acc.text.Len() > 0 {
-			a.sessionManager.AppendMessage(&session.Message{
+		if acc.text.Len() > 0 {
+			a.recordSession(&session.Message{
 				Type:    session.MessageTypeAssistant,
 				Content: acc.text.String(),
 			})
@@ -434,7 +507,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 		}
 		if a.sessionManager != nil {
-			a.sessionManager.AppendMessage(&session.Message{
+			a.recordSession(&session.Message{
 				Type:    session.MessageTypeUser,
 				Content: userMessage,
 			})
