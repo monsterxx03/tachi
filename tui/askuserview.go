@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/monsterxx03/tachi/tools"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // AskUserView handles the AskUserQuestion tool interaction

@@ -1,4 +1,4 @@
-package mcpsupport
+package mcp
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"fmt"
 
 	"github.com/mark3labs/mcp-go/mcp"
-	"github.com/monsterxx03/tachi/tools"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // MCPTool wraps an MCP server tool as a Tachi Tool implementation.

@@ -13,11 +13,8 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/mcpsupport"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
-	"github.com/monsterxx03/tachi/systemreminder"
-	"github.com/monsterxx03/tachi/tools"
 	"github.com/monsterxx03/tachi/tui"
 	"github.com/urfave/cli/v3"
 )
@@ -172,43 +169,6 @@ func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
 	return f
 }
 
-func registerTools(aiAgent *agent.AIAgent, cfg *config.Config) {
-	aiAgent.RegisterTools()
-	ws := tools.WebSearchTool{
-		ProviderType: cfg.WebSearch.Type,
-		APIKey:       cfg.WebSearch.Key,
-		Timeout:      cfg.WebSearch.Timeout,
-		MaxResults:   cfg.WebSearch.MaxResults,
-	}
-	if _, key := ws.ResolveProvider(); key != "" {
-		aiAgent.RegisterTool(ws)
-	}
-}
-
-// connectMCPServers connects to configured MCP servers and registers their tools
-// with the agent. Returns the manager for later cleanup (may be nil if no servers
-// are configured).
-func connectMCPServers(ctx context.Context, aiAgent *agent.AIAgent, cfg *config.Config) (*mcpsupport.Manager, error) {
-	if !cfg.MCPEnabled() {
-		return nil, nil
-	}
-
-	mgr := mcpsupport.NewManager()
-	mcpTools, errs := mgr.ConnectAll(ctx, cfg.MCPServers)
-
-	for _, err := range errs {
-		debuglog.Log("MCP: load error: %v", err)
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-	}
-
-	for _, t := range mcpTools {
-		aiAgent.RegisterTool(t)
-		debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
-	}
-
-	return mgr, nil
-}
-
 func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
 	flags := extractCLIFlags(cmd)
 	resolved, err := config.Resolve(cfg, flags)
@@ -230,27 +190,6 @@ func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provid
 	}
 
 	return provider, resolved, nil
-}
-
-func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
-	cfg, err := config.Load()
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to load config: %w", err)
-	}
-	return resolveProviderFromConfig(cfg, cmd)
-}
-
-// buildReminderCollector creates a reminder Collector respecting config settings.
-func buildReminderCollector(cfg *config.Config) *systemreminder.Collector {
-	reminders := []systemreminder.Reminder{
-		systemreminder.DateReminder{},
-		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
-		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
-	}
-	if cfg.GitReminderEnabled() {
-		reminders = append(reminders, systemreminder.GitReminder{})
-	}
-	return systemreminder.NewCollector(reminders...)
 }
 
 // loadSessionHistory loads the most recent session and returns its messages
@@ -302,15 +241,9 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
-	// Override reminder thresholds from config
-	aiAgent.SetReminderCollector(buildReminderCollector(cfg))
-
-	registerTools(aiAgent, cfg)
-
-	// Connect to MCP servers if configured
-	mcpMgr, err := connectMCPServers(ctx, aiAgent, cfg)
+	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: MCP configuration error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
 	}
 	if mcpMgr != nil {
 		defer mcpMgr.Close()
@@ -374,13 +307,10 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetReminderCollector(buildReminderCollector(cfg))
-	registerTools(aiAgent, cfg)
 
-	// Connect to MCP servers if configured
-	mcpMgr, err := connectMCPServers(ctx, aiAgent, cfg)
+	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: MCP configuration error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
 	}
 	if mcpMgr != nil {
 		defer mcpMgr.Close()

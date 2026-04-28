@@ -1,6 +1,6 @@
-// Package mcpsupport manages MCP (Model Context Protocol) server connections
+// Package mcp manages MCP (Model Context Protocol) server connections
 // and exposes their tools through the Tachi tool registry.
-package mcpsupport
+package mcp
 
 import (
 	"context"

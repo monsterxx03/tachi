@@ -4,15 +4,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
-	"github.com/monsterxx03/tachi/systemreminder"
-	"github.com/monsterxx03/tachi/tools"
+	"github.com/monsterxx03/tachi/agent/systemreminder"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 const defaultMaxTokens = 4096
@@ -670,6 +672,50 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool) systemreminder.Conte
 // active. The actual filtering is done by Collect().
 func (a *AIAgent) shouldInjectLoopReminder() bool {
 	return a.reminderCollector != nil
+}
+
+// Configure wires up all agent sub-systems from config: reminders, built-in
+// tools, web search, and MCP server connections. Returns the MCP manager for
+// later cleanup (may be nil).
+func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
+	// --- reminders ---
+	reminders := []systemreminder.Reminder{
+		systemreminder.DateReminder{},
+		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
+		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
+	}
+	if cfg.GitReminderEnabled() {
+		reminders = append(reminders, systemreminder.GitReminder{})
+	}
+	a.reminderCollector = systemreminder.NewCollector(reminders...)
+
+	// --- built-in tools + web search ---
+	a.RegisterTools()
+	ws := tools.WebSearchTool{
+		ProviderType: cfg.WebSearch.Type,
+		APIKey:       cfg.WebSearch.Key,
+		Timeout:      cfg.WebSearch.Timeout,
+		MaxResults:   cfg.WebSearch.MaxResults,
+	}
+	if _, key := ws.ResolveProvider(); key != "" {
+		a.RegisterTool(ws)
+	}
+
+	// --- MCP servers ---
+	if !cfg.MCPEnabled() {
+		return nil, nil
+	}
+	mgr := mcp.NewManager()
+	mcpTools, errs := mgr.ConnectAll(ctx, cfg.MCPServers)
+	for _, err := range errs {
+		debuglog.Log("MCP: load error: %v", err)
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+	for _, t := range mcpTools {
+		a.RegisterTool(t)
+		debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+	}
+	return mgr, nil
 }
 
 
