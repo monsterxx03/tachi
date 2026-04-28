@@ -42,6 +42,8 @@ func (m *Manager) Current() *Session {
 
 // HasCurrent returns true if there is an active session
 func (m *Manager) HasCurrent() bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	return m.current != nil
 }
 
@@ -72,6 +74,14 @@ func (m *Manager) SetCurrent(session *Session) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.current = session
+}
+
+// EndCurrent ends the current session without deleting it from disk.
+// The next call to HasCurrent() will return false.
+func (m *Manager) EndCurrent() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.current = nil
 }
 
 // AppendMessage appends a message to the current session and persists immediately

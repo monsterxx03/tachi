@@ -51,7 +51,12 @@ var commands = []Command{
 	{
 		Name:        "/clear",
 		Description: "Clear conversation history",
-		handler:     func(m *Model) tea.Cmd { m.history = nil; m.chatview.Clear(); return nil },
+		handler: func(m *Model) tea.Cmd {
+			m.history = nil
+			m.chatview.Clear()
+			m.agent.ClearSession()
+			return nil
+		},
 	},
 	{
 		Name:        "/quit",
