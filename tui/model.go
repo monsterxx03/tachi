@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 )
 
 type state int
@@ -74,15 +75,17 @@ type Model struct {
 }
 
 type ModelConfig struct {
-	Agent        *agent.AIAgent
-	SystemPrompt string
-	ChatOpts     llm.ChatOptions
-	ProviderInfo string
-	Config       *config.Config
+	Agent              *agent.AIAgent
+	SystemPrompt       string
+	ChatOpts           llm.ChatOptions
+	ProviderInfo       string
+	Config             *config.Config
+	InitialHistory     []llm.Message
+	InitialSessionMsgs []session.Message
 }
 
 func NewModel(cfg ModelConfig) *Model {
-	return &Model{
+	m := &Model{
 		statusbar:    NewStatusBar(cfg.ProviderInfo),
 		chatview:     NewChatView(),
 		input:        NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
@@ -92,6 +95,13 @@ func NewModel(cfg ModelConfig) *Model {
 		state:        stateIdle,
 		cfg:          cfg.Config,
 	}
+
+	if len(cfg.InitialHistory) > 0 {
+		m.history = cfg.InitialHistory
+		m.chatview.LoadHistory(cfg.InitialSessionMsgs)
+	}
+
+	return m
 }
 
 func (m *Model) Init() tea.Cmd {

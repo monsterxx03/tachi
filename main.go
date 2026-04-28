@@ -69,6 +69,11 @@ func loadTachiMd() (string, error) {
 }
 
 var commonFlags = []cli.Flag{
+	&cli.BoolFlag{
+		Name:    "resume",
+		Aliases: []string{"r"},
+		Usage:   "Resume the most recent session",
+	},
 	&cli.StringFlag{
 		Name:  "provider",
 		Usage: "Provider name from config",
@@ -198,6 +203,35 @@ func resolveProvider(cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, er
 	return resolveProviderFromConfig(cfg, cmd)
 }
 
+// loadSessionHistory loads the most recent session and returns its messages
+// converted to LLM format. The session is set as current on the manager.
+func loadSessionHistory(sm *session.Manager, providerType string) ([]llm.Message, []session.Message, error) {
+	sessions, err := sm.List()
+	if err != nil {
+		return nil, nil, fmt.Errorf("list sessions: %w", err)
+	}
+	if len(sessions) == 0 {
+		return nil, nil, fmt.Errorf("no sessions to resume")
+	}
+
+	latest := sessions[0] // Sorted by CreatedAt descending
+	if _, err := sm.Load(latest.ID); err != nil {
+		return nil, nil, fmt.Errorf("load session %s: %w", latest.ID, err)
+	}
+
+	sessionMsgs, err := sm.LoadMessages()
+	if err != nil {
+		return nil, nil, fmt.Errorf("load messages: %w", err)
+	}
+
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, providerType)
+	if err != nil {
+		return nil, nil, fmt.Errorf("convert session messages: %w", err)
+	}
+
+	return llmMsgs, sessionMsgs, nil
+}
+
 func runTUI(ctx context.Context, cmd *cli.Command) error {
 	if err := debuglog.Init(); err != nil {
 		fmt.Printf("Warning: failed to init debug log: %v\n", err)
@@ -228,14 +262,36 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		aiAgent.SetSessionManager(sessionManager)
 	}
 
+	var initialHistory []llm.Message
+	var initialSessionMsgs []session.Message
+
+	if cmd.Bool("resume") {
+		if sessionManager == nil {
+			return fmt.Errorf("cannot resume: session manager unavailable")
+		}
+		history, sessMsgs, err := loadSessionHistory(sessionManager, resolved.Provider.Type)
+		if err != nil {
+			return fmt.Errorf("resume failed: %w", err)
+		}
+		initialHistory = history
+		initialSessionMsgs = sessMsgs
+		// Prepend current system prompt to history
+		sysPrompt := buildSystemPrompt()
+		if sysPrompt != "" {
+			initialHistory = append([]llm.Message{{Role: "system", Content: sysPrompt}}, initialHistory...)
+		}
+	}
+
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
 		SystemPrompt: buildSystemPrompt(),
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: resolved.MaxTokens,
 		},
-		ProviderInfo: providerInfo,
-		Config:      cfg,
+		ProviderInfo:        providerInfo,
+		Config:              cfg,
+		InitialHistory:      initialHistory,
+		InitialSessionMsgs:  initialSessionMsgs,
 	})
 }
 
@@ -261,9 +317,44 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
 	fmt.Printf("User: %s\n\n", prompt)
 
-	result := aiAgent.RunConversation(ctx, prompt, buildSystemPrompt(), llm.ChatOptions{
+	var history []llm.Message
+
+	if cmd.Bool("resume") {
+		sessionManager, err := session.NewManager()
+		if err != nil {
+			return fmt.Errorf("session manager: %w", err)
+		}
+		llmMsgs, _, err := loadSessionHistory(sessionManager, resolved.Provider.Type)
+		if err != nil {
+			return fmt.Errorf("resume failed: %w", err)
+		}
+		history = llmMsgs
+		sysPrompt := buildSystemPrompt()
+		if sysPrompt != "" {
+			history = append([]llm.Message{{Role: "system", Content: sysPrompt}}, history...)
+		}
+		aiAgent.SetSessionManager(sessionManager)
+	}
+
+	// Use streaming API to support history
+	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
+
+	var result *agent.RunResult
+	for event := range ch {
+		switch event.Type {
+		case agent.AgentEventTurnComplete:
+			result = event.Result
+		case agent.AgentEventError:
+			result = event.Result
+		case agent.AgentEventToolConfirmation:
+			aiAgent.ConfirmTool(true)
+		}
+	}
+	if result == nil {
+		result = &agent.RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
+	}
 
 	fmt.Printf("Exit Reason: %s\n", result.ExitReason)
 	fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)

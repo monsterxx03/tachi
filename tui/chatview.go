@@ -7,6 +7,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
+
+	"github.com/monsterxx03/tachi/session"
 )
 
 const chatMouseScrollLines = 5
@@ -183,6 +185,75 @@ func (c *ChatView) Clear() {
 	c.userScrolled = false
 	c.list.Reset()
 	c.refresh()
+}
+
+// LoadHistory loads session messages into the chat view for display when
+// resuming a previous session. Tool calls are paired with their results.
+func (c *ChatView) LoadHistory(sessionMsgs []session.Message) {
+	// First pass: index tool results by ToolCallID
+	toolResults := make(map[string]session.Message)
+	for _, msg := range sessionMsgs {
+		if msg.Type == session.MessageTypeToolResult {
+			toolResults[msg.ToolCallID] = msg
+		}
+	}
+
+	for _, msg := range sessionMsgs {
+		switch msg.Type {
+		case session.MessageTypeUser:
+			c.items = append(c.items, &messageCacheItem{msg: chatMessage{
+				Role: "user", Content: msg.Content,
+			}})
+		case session.MessageTypeAssistant:
+			c.items = append(c.items, &messageCacheItem{msg: chatMessage{
+				Role: "assistant", Content: msg.Content,
+			}})
+		case session.MessageTypeThinking:
+			c.items = append(c.items, &messageCacheItem{msg: chatMessage{
+				Role: "thinking", Content: msg.Content,
+			}})
+		case session.MessageTypeToolCall:
+			argsStr := convertSessionArgsToString(msg.Args)
+			result, hasResult := toolResults[msg.ToolCallID]
+			tc := toolCallDisplay{
+				Name:    msg.Name,
+				ID:      msg.ToolCallID,
+				Args:    argsStr,
+				Preview: getToolArgsPreview(msg.Name, argsStr),
+				Done:    hasResult,
+			}
+			if hasResult {
+				tc.Result = result.Result
+				tc.IsError = result.IsError
+			}
+			c.items = append(c.items, &messageCacheItem{msg: chatMessage{
+				Role: "tool_calls", Content: c.renderToolCall(tc),
+			}})
+		case session.MessageTypeToolResult, session.MessageTypeConfirm:
+			// Tool results are rendered inline with their tool call; confirm is UI-only
+		}
+	}
+
+	c.userScrolled = false
+	c.refresh()
+}
+
+// convertSessionArgsToString converts the Args field from session (stored as any)
+// to a JSON string for display.
+func convertSessionArgsToString(args any) string {
+	if args == nil {
+		return "{}"
+	}
+	switch v := args.(type) {
+	case string:
+		return v
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return "{}"
+		}
+		return string(data)
+	}
 }
 
 func (c ChatView) Update(msg tea.Msg) (ChatView, tea.Cmd) {
