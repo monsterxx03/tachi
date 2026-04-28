@@ -13,12 +13,19 @@ import (
 
 type InputSubmitMsg string
 
+// InputArea provides the TUI input with slash-command completions and @-file
+// fuzzy-search completions.
 type InputArea struct {
 	textarea    textarea.Model
 	width       int
 	enabled     bool
 	completions []Command
 	selectedIdx int
+
+	// @-file completions
+	atFileQuery      string
+	atFileMatches    []atFileMatch
+	atFileSelectedIdx int
 
 	history     []string
 	historyMax  int
@@ -65,11 +72,13 @@ func (i *InputArea) SetEnabled(enabled bool) {
 		i.textarea.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
 		i.histIdx = -1
 		i.histScratch = ""
+		i.clearAtFileCompletions()
 		i.textarea.Focus()
 	} else {
 		i.textarea.Placeholder = "Ctrl+C to interrupt"
 		i.completions = nil
 		i.selectedIdx = 0
+		i.clearAtFileCompletions()
 		i.histIdx = -1
 		i.histScratch = ""
 		i.textarea.Blur()
@@ -77,7 +86,11 @@ func (i *InputArea) SetEnabled(enabled bool) {
 }
 
 func (i InputArea) Height() int {
-	return 2 + len(i.completions)
+	h := 2 + len(i.completions)
+	if i.atFileMatches != nil {
+		h += 1 + len(i.atFileMatches) // header + matches
+	}
+	return h
 }
 
 // 正在上下翻历史（此时不以 / 前缀触发补全，避免与历史键冲突）。
@@ -85,6 +98,15 @@ func (i InputArea) browsingHistory() bool { return i.histIdx >= 0 }
 
 // slash 补全列表参与 Tab / 方向键 等（与 browsingHistory 互斥）。
 func (i InputArea) completionsOn() bool { return i.histIdx < 0 && len(i.completions) > 0 }
+
+// @-file 补全列表参与 Tab / 方向键 等（与 browsingHistory 互斥）。
+func (i InputArea) atFileCompletionsOn() bool { return i.histIdx < 0 && i.atFileMatches != nil }
+
+func (i *InputArea) clearAtFileCompletions() {
+	i.atFileQuery = ""
+	i.atFileMatches = nil
+	i.atFileSelectedIdx = 0
+}
 
 func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	if !i.enabled {
@@ -94,6 +116,12 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
 		switch keyMsg.String() {
 		case "up", "ctrl+p":
+			if i.atFileCompletionsOn() {
+				if i.atFileSelectedIdx < len(i.atFileMatches)-1 {
+					i.atFileSelectedIdx++
+				}
+				return i, nil
+			}
 			if i.completionsOn() {
 				if i.selectedIdx > 0 {
 					i.selectedIdx--
@@ -104,6 +132,12 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "down", "ctrl+n":
+			if i.atFileCompletionsOn() {
+				if i.atFileSelectedIdx > 0 {
+					i.atFileSelectedIdx--
+				}
+				return i, nil
+			}
 			if i.completionsOn() {
 				if i.selectedIdx < len(i.completions)-1 {
 					i.selectedIdx++
@@ -114,6 +148,11 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "tab":
+			if i.atFileCompletionsOn() {
+				i.applyAtFileCompletion()
+				i.updateCompletions()
+				return i, nil
+			}
 			if i.completionsOn() {
 				i.textarea.SetValue(i.completions[i.selectedIdx].Name)
 				i.textarea.CursorEnd()
@@ -121,6 +160,10 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 		case "esc":
+			if i.atFileCompletionsOn() {
+				i.clearAtFileCompletions()
+				return i, nil
+			}
 			if i.completionsOn() {
 				i.completions = nil
 				i.selectedIdx = 0
@@ -130,6 +173,12 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			i.textarea.InsertString("\n")
 			return i, nil
 		case "enter":
+			if i.atFileCompletionsOn() {
+				i.applyAtFileCompletion()
+				i.clearAtFileCompletions()
+				i.updateCompletions()
+				return i, nil
+			}
 			if i.completionsOn() {
 				name := i.completions[i.selectedIdx].Name
 				i.pushHistoryLine(name)
@@ -146,6 +195,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			i.pushHistoryLine(text)
 			i.textarea.Reset()
 			i.clearHistoryNav()
+			i.clearAtFileCompletions()
 			i.completions = nil
 			i.selectedIdx = 0
 			return i, func() tea.Msg { return InputSubmitMsg(text) }
@@ -159,6 +209,26 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	}
 	i.updateCompletions()
 	return i, cmd
+}
+
+func (i *InputArea) applyAtFileCompletion() {
+	if !i.atFileCompletionsOn() {
+		return
+	}
+	match := i.atFileMatches[i.atFileSelectedIdx]
+
+	// Replace "@query" with "@match.Path " in the textarea value
+	val := i.textarea.Value()
+	atPos := findLastAt(val)
+	if atPos < 0 {
+		return
+	}
+
+	before := val[:atPos]
+	after := val[atPos+len(i.atFileQuery)+1:]
+	newVal := before + "@" + match.Path + " " + after
+	i.textarea.SetValue(newVal)
+	i.textarea.CursorEnd()
 }
 
 func (i *InputArea) clearHistoryNav() {
@@ -229,6 +299,7 @@ func (i *InputArea) updateCompletions() {
 	if i.browsingHistory() {
 		i.completions = nil
 		i.selectedIdx = 0
+		i.clearAtFileCompletions()
 		return
 	}
 	val := i.textarea.Value()
@@ -237,33 +308,93 @@ func (i *InputArea) updateCompletions() {
 		if i.selectedIdx >= len(i.completions) {
 			i.selectedIdx = 0
 		}
+		i.clearAtFileCompletions()
 	} else {
 		i.completions = nil
 		i.selectedIdx = 0
+		i.updateAtFileCompletions(val)
 	}
 }
 
+func (i *InputArea) updateAtFileCompletions(val string) {
+	atPos := findLastAt(val)
+	if atPos < 0 {
+		i.clearAtFileCompletions()
+		return
+	}
+
+	query := val[atPos+1:]
+	// Don't trigger if query contains a space (already completed)
+	if strings.Contains(query, " ") {
+		i.clearAtFileCompletions()
+		return
+	}
+
+	if query == i.atFileQuery && i.atFileMatches != nil {
+		return // No change, skip search
+	}
+
+	matches, err := searchAtFiles(query)
+	if err != nil || len(matches) == 0 {
+		i.clearAtFileCompletions()
+		return
+	}
+
+	i.atFileQuery = query
+	i.atFileMatches = matches
+	i.atFileSelectedIdx = 0 // best score, rendered at bottom
+}
+
 func (i InputArea) View() string {
-	if len(i.completions) == 0 {
+	hasCompletions := len(i.completions) > 0
+	hasAtFiles := i.atFileMatches != nil
+
+	if !hasCompletions && !hasAtFiles {
 		return inputStyle.Width(i.width).Render(i.textarea.View())
 	}
 
 	var b strings.Builder
-	maxNameLen := 0
-	for _, cmd := range i.completions {
-		if len(cmd.Name) > maxNameLen {
-			maxNameLen = len(cmd.Name)
+
+	// Render slash command completions first
+	if hasCompletions {
+		maxNameLen := 0
+		for _, cmd := range i.completions {
+			if len(cmd.Name) > maxNameLen {
+				maxNameLen = len(cmd.Name)
+			}
+		}
+		for idx, cmd := range i.completions {
+			line := fmt.Sprintf("  %-*s  %s", maxNameLen, cmd.Name, cmd.Description)
+			if idx == i.selectedIdx {
+				b.WriteString(completionSelectedStyle.Width(i.width).Render(line))
+			} else {
+				b.WriteString(completionNormalStyle.Width(i.width).Render(line))
+			}
+			b.WriteString("\n")
 		}
 	}
-	for idx, cmd := range i.completions {
-		line := fmt.Sprintf("  %-*s  %s", maxNameLen, cmd.Name, cmd.Description)
-		if idx == i.selectedIdx {
-			b.WriteString(completionSelectedStyle.Width(i.width).Render(line))
-		} else {
-			b.WriteString(completionNormalStyle.Width(i.width).Render(line))
-		}
+
+	// Render @-file completions (best score at the bottom)
+	if hasAtFiles {
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  @ files matching %q:", i.atFileQuery)))
 		b.WriteString("\n")
+
+		for idx := len(i.atFileMatches) - 1; idx >= 0; idx-- {
+			m := i.atFileMatches[idx]
+			icon := "  "
+			if m.IsDir {
+				icon = " D"
+			}
+			line := fmt.Sprintf("%s %s", icon, m.Path)
+			if idx == i.atFileSelectedIdx {
+				b.WriteString(completionSelectedStyle.Width(i.width).Render(line))
+			} else {
+				b.WriteString(completionNormalStyle.Width(i.width).Render(line))
+			}
+			b.WriteString("\n")
+		}
 	}
+
 	b.WriteString(inputStyle.Width(i.width).Render(i.textarea.View()))
 	return b.String()
 }

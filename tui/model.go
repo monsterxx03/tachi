@@ -304,10 +304,14 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	m.setState(stateWaiting)
 	m.chatview.ResetStreaming()
 
+	// Expand @path references: inject file/directory contents into the
+	// message sent to the LLM, but keep the TUI display unexpanded.
+	expandedText := ExpandAtReferences(text)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, text, m.systemPrompt, m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expandedText, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),
