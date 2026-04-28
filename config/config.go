@@ -61,6 +61,12 @@ type MCPServerConfig struct {
 	URL     string            `yaml:"url,omitempty"`     // For http transport
 	Headers map[string]string `yaml:"headers,omitempty"` // For http transport
 	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
+	Enabled *bool             `yaml:"enabled,omitempty"` // Whether to load this server (default: true)
+}
+
+// IsEnabled returns whether the server should be loaded. Defaults to true.
+func (srv *MCPServerConfig) IsEnabled() bool {
+	return srv.Enabled == nil || *srv.Enabled
 }
 
 // TUIConfig 控制终端界面行为。InputHistoryLimit 为 nil 时使用 DefaultTUIInputHistoryLimit 条；显式 0 表示不记录历史。

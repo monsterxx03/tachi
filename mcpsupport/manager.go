@@ -38,6 +38,10 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 
 	for i := range servers {
 		srv := &servers[i]
+		if !srv.IsEnabled() {
+			debuglog.Log("MCP: server %q is disabled, skipping", srv.Name)
+			continue
+		}
 		serverTools, err := m.connect(ctx, srv)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("mcp server %q: %w", srv.Name, err))
