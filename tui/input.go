@@ -23,8 +23,8 @@ type InputArea struct {
 	selectedIdx int
 
 	// @-file completions
-	atFileQuery      string
-	atFileMatches    []atFileMatch
+	atFileQuery       string
+	atFileMatches     []atFileMatch
 	atFileSelectedIdx int
 
 	history     []string
@@ -37,9 +37,20 @@ type InputArea struct {
 func NewInputArea(historyMax int, historyPath string) InputArea {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
-	ta.Prompt = "> "
+	// Only show the "> " prompt on the first visual line. Wrapped continuation
+	// lines get a 2-space indent instead to keep alignment without clutter.
+	ta.Prompt = ""
+	ta.SetPromptFunc(2, func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return "> "
+		}
+		return "  "
+	})
 	ta.CharLimit = 0
-	ta.SetHeight(1)
+	ta.DynamicHeight = true
+	ta.MinHeight = 1
+	ta.MaxHeight = 15
+	ta.MaxContentHeight = 30
 	ta.ShowLineNumbers = false
 	ta.KeyMap.InsertNewline.SetEnabled(false)
 	styles := textarea.DefaultDarkStyles()
@@ -66,6 +77,26 @@ func (i *InputArea) SetWidth(w int) {
 	i.textarea.SetWidth(w - 2)
 }
 
+// SetMaxHeight dynamically caps the total height of the input area (textarea +
+// completions) to at most maxTotal. This allows the parent layout to constrain
+// the input area and force internal scrolling in the textarea when screen space
+// is tight.
+func (i *InputArea) SetMaxHeight(maxTotal int) {
+	// Reserve lines for slash-completions and @-file completions
+	completionLines := 0
+	if i.completions != nil {
+		completionLines = len(i.completions)
+	}
+	if i.atFileMatches != nil {
+		completionLines += 1 + len(i.atFileMatches) // header + matches
+	}
+	maxTA := maxTotal - completionLines
+	if maxTA < 1 {
+		maxTA = 1
+	}
+	i.textarea.MaxHeight = maxTA
+}
+
 func (i *InputArea) SetEnabled(enabled bool) {
 	i.enabled = enabled
 	if enabled {
@@ -86,7 +117,7 @@ func (i *InputArea) SetEnabled(enabled bool) {
 }
 
 func (i InputArea) Height() int {
-	h := 2 + len(i.completions)
+	h := i.textarea.Height() + len(i.completions)
 	if i.atFileMatches != nil {
 		h += 1 + len(i.atFileMatches) // header + matches
 	}

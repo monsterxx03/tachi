@@ -137,8 +137,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.PasteMsg:
 		if m.state == stateIdle {
+			oldHeight := m.input.Height()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
+			if m.input.Height() != oldHeight {
+				m.layout()
+			}
 			return m, cmd
 		}
 
@@ -267,29 +271,49 @@ func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) layout() {
-	statusHeight := 1
+	const (
+		statusHeight     = 1
+		separatorsHeight = 2 // two "\n" in View() between sections
+		minChatHeight    = 3
+	)
+
+	// Set widths first — Height() depends on textarea width for wrapping
+	m.statusbar.SetWidth(m.width)
+	m.input.SetWidth(m.width)
+
 	inputHeight := m.input.Height()
-	if m.state == stateSelectingModel {
-		inputHeight = len(m.providerItems) + 1
-	} else if m.state == stateAwaitingConfirmation {
+
+	switch m.state {
+	case stateSelectingModel:
+		inputHeight = min(len(m.providerItems)+1, m.height/2)
+	case stateAwaitingConfirmation:
 		// Estimate height based on diff content (roughly 1 line per 80 chars + header/footer)
 		if m.pendingConfirm != nil {
 			diffLines := strings.Count(m.pendingConfirm.diff, "\n") + 1
-			inputHeight = min(10+diffLines, m.height/3) // Min 10, max 1/3 of screen
+			inputHeight = min(10+diffLines, m.height/3)
 		}
-	} else if m.state == stateAskUserQuestion {
+	case stateAskUserQuestion:
 		if m.askUserView != nil {
 			inputHeight = min(m.askUserView.Height(), m.height/2)
 		}
-	}
-	chatHeight := m.height - inputHeight - statusHeight
-	if chatHeight < 1 {
-		chatHeight = 1
+	default:
+		// For regular text input, dynamically cap the textarea height so the
+		// statusbar stays anchored at the bottom. Content that doesn't fit
+		// scrolls internally inside the textarea.
+		maxInputHeight := m.height - statusHeight - separatorsHeight - minChatHeight
+		if maxInputHeight < 1 {
+			maxInputHeight = 1
+		}
+		m.input.SetMaxHeight(maxInputHeight)
+		inputHeight = m.input.Height()
 	}
 
-	m.statusbar.SetWidth(m.width)
+	chatHeight := m.height - inputHeight - statusHeight - separatorsHeight
+	if chatHeight < minChatHeight {
+		chatHeight = minChatHeight
+	}
+
 	m.chatview.SetSize(m.width, chatHeight)
-	m.input.SetWidth(m.width)
 }
 
 func (m *Model) setState(st state) {
