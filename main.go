@@ -250,6 +250,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	registerTools(aiAgent, cfg)
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)

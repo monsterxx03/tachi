@@ -5,10 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
+	"github.com/monsterxx03/tachi/systemreminder"
 	"github.com/monsterxx03/tachi/tools"
 )
 
@@ -20,15 +22,18 @@ type IterationBudget struct {
 }
 
 type AIAgent struct {
-	model             string
-	provider          llm.Provider
-	maxIterations     int
-	toolRegistry      *tools.Registry
-	iterationBudget   *IterationBudget
-	confirmRespCh     chan bool
-	askUserRespCh     chan tools.AskUserResult
-	skipEditConfirm   bool
-	sessionManager    *session.Manager
+	model              string
+	provider           llm.Provider
+	maxIterations      int
+	toolRegistry       *tools.Registry
+	iterationBudget    *IterationBudget
+	confirmRespCh      chan bool
+	askUserRespCh      chan tools.AskUserResult
+	skipEditConfirm    bool
+	sessionManager     *session.Manager
+	reminderCollector  *systemreminder.Collector
+	contextWindow      int64
+	lastInputTokens    int64
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -39,6 +44,11 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		toolRegistry:  tools.NewRegistry(),
 		confirmRespCh: make(chan bool, 1),
 		askUserRespCh: make(chan tools.AskUserResult, 1),
+		reminderCollector: systemreminder.NewCollector(
+			systemreminder.DateReminder{},
+			systemreminder.IterationWarningReminder{},
+			systemreminder.TokenWarningReminder{},
+		),
 	}
 }
 
@@ -71,6 +81,17 @@ func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 
 func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	a.sessionManager = sm
+}
+
+// SetContextWindow sets the model's context window size for token-warning reminders.
+func (a *AIAgent) SetContextWindow(window int64) {
+	a.contextWindow = window
+}
+
+// SetReminderCollector replaces the default reminder collector. Useful for
+// tests or when callers want full control over which reminders fire.
+func (a *AIAgent) SetReminderCollector(c *systemreminder.Collector) {
+	a.reminderCollector = c
 }
 
 // ClearSession ends the current session so a new one will be created on the next message.
@@ -435,17 +456,26 @@ func (a *AIAgent) handleFinishReason(
 				Content: acc.text.String(),
 			})
 		}
-		// Record continuation prompt
+		// Record continuation prompt (original, unwrapped)
 		continuationText := "Please continue where you left off."
 		a.recordSession(&session.Message{
 			Type:    session.MessageTypeUser,
 			Content: continuationText,
 		})
 
+		// Track input tokens for token-warning reminders
+		if acc.usage != nil {
+			a.lastInputTokens = acc.usage.InputTokens
+		}
+
+		// Wrap the continuation message with reminders
+		rctx := a.buildReminderContext(false)
+		wrappedContinuation := a.reminderCollector.WrapUserMessage(continuationText, rctx)
+
 		msg := acc.assistantMessage()
 		msg.ToolCalls = nil
 		*messages = append(*messages, msg)
-		*messages = append(*messages, llm.Message{Role: "user", Content: continuationText})
+		*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
 		return true
 
 	default:
@@ -494,10 +524,16 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		messages := make([]llm.Message, len(history))
 		copy(messages, history)
 
+		isFirstMessage := len(messages) == 0
+
 		if len(messages) == 0 && systemPrompt != "" {
 			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 		}
-		messages = append(messages, llm.Message{Role: "user", Content: userMessage})
+
+		// Build reminder context for the initial user message.
+		rctx := a.buildReminderContext(isFirstMessage)
+		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
+		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
 		llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
 
@@ -515,6 +551,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 		}
 		if a.sessionManager != nil {
+			// Record the original user message (without system-reminder wrappers)
 			a.recordSession(&session.Message{
 				Type:    session.MessageTypeUser,
 				Content: userMessage,
@@ -567,8 +604,23 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				return
 			}
 
+			// Track input tokens for token-warning reminders
+			if acc.usage != nil {
+				a.lastInputTokens = acc.usage.InputTokens
+			}
+
 			if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
 				return
+			}
+
+			// After tool results are appended and we're about to loop back,
+			// inject a system-reminder user message with iteration/token warnings.
+			// Date reminder won't fire here (IsFirstMessage is false).
+			if a.shouldInjectLoopReminder() {
+				rctx := a.buildReminderContext(false)
+				if block := a.reminderCollector.Collect(rctx); block != "" {
+					messages = append(messages, llm.Message{Role: "user", Content: block})
+				}
 			}
 		}
 	}()
@@ -586,6 +638,31 @@ func (a *AIAgent) buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
 		llmTools = append(llmTools, llm.NewTool(schema.Name, schema.Description, props, schema.Parameters.Required))
 	}
 	return llmTools
+}
+
+// buildReminderContext constructs the systemreminder.Context used when
+// generating reminders for a user message (or loop injection).
+func (a *AIAgent) buildReminderContext(isFirstMessage bool) systemreminder.Context {
+	iterLeft := 0
+	if a.iterationBudget != nil {
+		iterLeft = a.iterationBudget.Remaining
+	}
+	return systemreminder.Context{
+		IsFirstMessage:  isFirstMessage,
+		IterationsLeft:  iterLeft,
+		MaxIterations:   a.maxIterations,
+		InputTokens:     a.lastInputTokens,
+		ContextWindow:   a.contextWindow,
+		Now:             time.Now(),
+	}
+}
+
+// shouldInjectLoopReminder returns true when we should inject a
+// system-reminder user message before the next API call.
+// Currently true whenever iteration or token warnings are likely to be
+// active. The actual filtering is done by Collect().
+func (a *AIAgent) shouldInjectLoopReminder() bool {
+	return a.reminderCollector != nil
 }
 
 
