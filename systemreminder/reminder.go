@@ -102,40 +102,51 @@ func (DateReminder) Generate(ctx Context) []string {
 
 // IterationWarningReminder warns when the agent loop is running low on
 // iterations so the model knows to finish its work efficiently.
-type IterationWarningReminder struct{}
+// Threshold is the remaining-iteration count at or below which the warning fires.
+type IterationWarningReminder struct {
+	Threshold int
+}
 
-func (IterationWarningReminder) Generate(ctx Context) []string {
+func (r IterationWarningReminder) Generate(ctx Context) []string {
 	if ctx.MaxIterations <= 0 || ctx.IterationsLeft <= 0 {
 		return nil
 	}
-	// Only warn when there are 2 or fewer iterations left.
-	if ctx.IterationsLeft > 2 {
+	if r.Threshold <= 0 {
+		return nil
+	}
+	if ctx.IterationsLeft > r.Threshold {
 		return nil
 	}
 	line := fmt.Sprintf(
 		"Iteration budget: %d of %d iterations remaining. Complete your work as efficiently as possible.",
 		ctx.IterationsLeft, ctx.MaxIterations,
 	)
-	debuglog.Log("systemreminder: IterationWarningReminder firing: %q", line)
+	debuglog.Log("systemreminder: IterationWarningReminder firing (threshold=%d): %q", r.Threshold, line)
 	return []string{line}
 }
 
-// TokenWarningReminder warns when the input token count exceeds 60% of the
-// context window, so the model can adjust its output verbosity.
-type TokenWarningReminder struct{}
+// TokenWarningReminder warns when the input token count exceeds a percentage
+// of the context window, so the model can adjust its output verbosity.
+// ThresholdPct is the usage percentage at or above which the warning fires.
+type TokenWarningReminder struct {
+	ThresholdPct int
+}
 
-func (TokenWarningReminder) Generate(ctx Context) []string {
+func (r TokenWarningReminder) Generate(ctx Context) []string {
 	if ctx.ContextWindow <= 0 || ctx.InputTokens <= 0 {
 		return nil
 	}
-	pct := float64(ctx.InputTokens) / float64(ctx.ContextWindow)
-	if pct < 0.6 {
+	if r.ThresholdPct <= 0 {
+		return nil
+	}
+	pct := float64(ctx.InputTokens) / float64(ctx.ContextWindow) * 100
+	if pct < float64(r.ThresholdPct) {
 		return nil
 	}
 	line := fmt.Sprintf(
 		"Context window usage: %.0f%% (%d / %d input tokens). Be concise and minimize unnecessary output.",
-		pct*100, ctx.InputTokens, ctx.ContextWindow,
+		pct, ctx.InputTokens, ctx.ContextWindow,
 	)
-	debuglog.Log("systemreminder: TokenWarningReminder firing: %q", line)
+	debuglog.Log("systemreminder: TokenWarningReminder firing (threshold=%d%%): %q", r.ThresholdPct, line)
 	return []string{line}
 }

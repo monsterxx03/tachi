@@ -307,3 +307,27 @@ func TestResolve_MissingType(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no type set")
 }
+
+func TestIterationWarningThreshold(t *testing.T) {
+	assert.Equal(t, DefaultIterationWarningThreshold, (&Config{}).IterationWarningThreshold())
+
+	three := 3
+	assert.Equal(t, 3, (&Config{SystemReminder: SystemReminderConfig{IterationWarningThreshold: &three}}).IterationWarningThreshold())
+
+	t.Run("nil config", func(t *testing.T) {
+		var c *Config
+		assert.Equal(t, DefaultIterationWarningThreshold, c.IterationWarningThreshold())
+	})
+}
+
+func TestTokenWarningThresholdPct(t *testing.T) {
+	assert.Equal(t, DefaultTokenWarningThresholdPct, (&Config{}).TokenWarningThresholdPct())
+
+	ninety := 90
+	assert.Equal(t, 90, (&Config{SystemReminder: SystemReminderConfig{TokenWarningThresholdPct: &ninety}}).TokenWarningThresholdPct())
+
+	t.Run("nil config", func(t *testing.T) {
+		var c *Config
+		assert.Equal(t, DefaultTokenWarningThresholdPct, c.TokenWarningThresholdPct())
+	})
+}

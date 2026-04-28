@@ -15,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
+	"github.com/monsterxx03/tachi/systemreminder"
 	"github.com/monsterxx03/tachi/tools"
 	"github.com/monsterxx03/tachi/tui"
 	"github.com/urfave/cli/v3"
@@ -251,6 +252,14 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+
+	// Override reminder thresholds from config
+	aiAgent.SetReminderCollector(systemreminder.NewCollector(
+		systemreminder.DateReminder{},
+		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
+		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
+	))
+
 	registerTools(aiAgent, cfg)
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
@@ -310,6 +319,12 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	aiAgent.SetReminderCollector(systemreminder.NewCollector(
+		systemreminder.DateReminder{},
+		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
+		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
+	))
 	registerTools(aiAgent, cfg)
 
 	prompt := cmd.String("prompt")

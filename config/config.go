@@ -11,16 +11,18 @@ import (
 )
 
 const (
-	DefaultMaxTokens            = 32000
-	MaxAllowedTokens            = 4096
-	DefaultMaxIterations        = 50
-	DefaultWebSearchTimeout     = 30
-	DefaultWebSearchMaxResults  = 10
-	DefaultTUIInputHistoryLimit = 10
-	configDirName               = ".tachi"
-	configFileName              = "config.yaml"
-	inputHistoryFileName        = "input_history"
-	sessionDirName              = "session"
+	DefaultMaxTokens                        = 32000
+	MaxAllowedTokens                        = 4096
+	DefaultMaxIterations                    = 50
+	DefaultWebSearchTimeout                 = 30
+	DefaultWebSearchMaxResults              = 10
+	DefaultTUIInputHistoryLimit             = 10
+	DefaultIterationWarningThreshold        = 5
+	DefaultTokenWarningThresholdPct         = 80
+	configDirName                           = ".tachi"
+	configFileName                          = "config.yaml"
+	inputHistoryFileName                    = "input_history"
+	sessionDirName                          = "session"
 )
 
 type ProviderConfig struct {
@@ -45,13 +47,19 @@ type TUIConfig struct {
 	SkipEditConfirm   bool `yaml:"skip_edit_confirm"`
 }
 
+type SystemReminderConfig struct {
+	IterationWarningThreshold *int `yaml:"iteration_warning_threshold"`
+	TokenWarningThresholdPct  *int `yaml:"token_warning_threshold_pct"`
+}
+
 type Config struct {
-	Provider       string           `yaml:"provider"`
-	MaxTokens      int              `yaml:"max_tokens"`
-	MaxIterations  int              `yaml:"max_iterations"`
-	Providers      []ProviderConfig `yaml:"providers"`
-	WebSearch      WebSearchConfig  `yaml:"web_search"`
-	TUI            TUIConfig        `yaml:"tui"`
+	Provider       string                `yaml:"provider"`
+	MaxTokens      int                   `yaml:"max_tokens"`
+	MaxIterations  int                   `yaml:"max_iterations"`
+	Providers      []ProviderConfig      `yaml:"providers"`
+	WebSearch      WebSearchConfig       `yaml:"web_search"`
+	TUI            TUIConfig             `yaml:"tui"`
+	SystemReminder SystemReminderConfig  `yaml:"system_reminder"`
 }
 
 func DefaultConfig() *Config {
@@ -238,4 +246,22 @@ func (c *Config) TUIInputHistoryMax() int {
 		return 0
 	}
 	return *c.TUI.InputHistoryLimit
+}
+
+// IterationWarningThreshold returns the remaining-iteration count at which
+// the agent should warn. Defaults to DefaultIterationWarningThreshold.
+func (c *Config) IterationWarningThreshold() int {
+	if c == nil || c.SystemReminder.IterationWarningThreshold == nil {
+		return DefaultIterationWarningThreshold
+	}
+	return *c.SystemReminder.IterationWarningThreshold
+}
+
+// TokenWarningThresholdPct returns the context-window usage percentage at
+// which the agent should warn. Defaults to DefaultTokenWarningThresholdPct.
+func (c *Config) TokenWarningThresholdPct() int {
+	if c == nil || c.SystemReminder.TokenWarningThresholdPct == nil {
+		return DefaultTokenWarningThresholdPct
+	}
+	return *c.SystemReminder.TokenWarningThresholdPct
 }

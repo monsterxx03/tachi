@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
@@ -46,8 +47,8 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		askUserRespCh: make(chan tools.AskUserResult, 1),
 		reminderCollector: systemreminder.NewCollector(
 			systemreminder.DateReminder{},
-			systemreminder.IterationWarningReminder{},
-			systemreminder.TokenWarningReminder{},
+			systemreminder.IterationWarningReminder{Threshold: config.DefaultIterationWarningThreshold},
+			systemreminder.TokenWarningReminder{ThresholdPct: config.DefaultTokenWarningThresholdPct},
 		),
 	}
 }
