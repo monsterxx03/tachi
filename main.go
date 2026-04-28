@@ -252,6 +252,8 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		ContextWindow:      resolved.Provider.ContextWindow,
 		InitialHistory:     initialHistory,
 		InitialSessionMsgs: initialSessionMsgs,
+		MCPManager:         mcpMgr,
+		MCPServers:         cfg.MCPServers,
 	})
 }
 

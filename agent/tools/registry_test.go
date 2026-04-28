@@ -82,4 +82,18 @@ func TestRegistry(t *testing.T) {
 	if tr.Status != ToolResultError {
 		t.Error("Expected error for missing required argument")
 	}
+
+	// Test Unregister
+	if !reg.Unregister("test") {
+		t.Error("Expected Unregister to return true for registered tool")
+	}
+	tr = reg.Invoke(nil, "test", `{"arg1": "value1"}`)
+	if tr.Status != ToolResultError {
+		t.Error("Expected error after unregistering tool")
+	}
+
+	// Test Unregister non-existent tool
+	if reg.Unregister("nonexistent") {
+		t.Error("Expected Unregister to return false for unknown tool")
+	}
 }

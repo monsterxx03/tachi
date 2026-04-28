@@ -134,6 +134,16 @@ func (a *AIAgent) RegisterTool(tool tools.Tool) {
 	a.toolRegistry.Register(tool)
 }
 
+// UnregisterTool removes a tool from the agent's registry by name.
+func (a *AIAgent) UnregisterTool(name string) {
+	a.toolRegistry.Unregister(name)
+}
+
+// ToolSchemas returns all tool schemas currently registered with the agent.
+func (a *AIAgent) ToolSchemas() []tools.Schema {
+	return a.toolRegistry.GetSchemas()
+}
+
 type RunResult struct {
 	Response       string
 	IterationsUsed int

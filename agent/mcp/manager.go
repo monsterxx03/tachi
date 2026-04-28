@@ -175,7 +175,55 @@ func (m *Manager) CallTool(ctx context.Context, serverName string, toolName stri
 	return c.CallTool(ctx, req)
 }
 
-// Close disconnects all MCP server connections gracefully.
+// IsConnected returns whether an MCP server is currently connected.
+func (m *Manager) IsConnected(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	_, ok := m.clients[name]
+	return ok
+}
+
+// ConnectedServers returns a list of all connected server names.
+func (m *Manager) ConnectedServers() []string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	servers := make([]string, 0, len(m.clients))
+	for name := range m.clients {
+		servers = append(servers, name)
+	}
+	return servers
+}
+
+// Disconnect closes the connection to a specific MCP server and removes it
+// from the manager. Returns nil if the server was not connected.
+func (m *Manager) Disconnect(name string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	c, ok := m.clients[name]
+	if !ok {
+		return nil
+	}
+	delete(m.clients, name)
+	if err := c.Close(); err != nil {
+		debuglog.Log("MCP: error disconnecting %q: %v", name, err)
+		return fmt.Errorf("disconnect %q: %w", name, err)
+	}
+	debuglog.Log("MCP: disconnected %q", name)
+	return nil
+}
+
+// Reconnect disconnects an existing server connection (if any) and
+// establishes a fresh connection using the given config. Returns the
+// server's tools on success.
+func (m *Manager) Reconnect(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
+	// Disconnect existing connection (ignore errors)
+	if _, ok := m.clients[srv.Name]; ok {
+		_ = m.Disconnect(srv.Name)
+	}
+
+	return m.connect(ctx, srv)
+}
 func (m *Manager) Close() {
 	m.mu.Lock()
 	defer m.mu.Unlock()

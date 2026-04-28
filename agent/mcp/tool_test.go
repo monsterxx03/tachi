@@ -230,6 +230,22 @@ func TestManager_CallTool_NotConnected(t *testing.T) {
 	assert.Contains(t, err.Error(), "not connected")
 }
 
+func TestManager_IsConnected(t *testing.T) {
+	mgr := NewManager()
+	assert.False(t, mgr.IsConnected("nonexistent"))
+}
+
+func TestManager_ConnectedServers_Empty(t *testing.T) {
+	mgr := NewManager()
+	assert.Empty(t, mgr.ConnectedServers())
+}
+
+func TestManager_Disconnect_NotConnected(t *testing.T) {
+	mgr := NewManager()
+	err := mgr.Disconnect("nonexistent")
+	assert.NoError(t, err, "Disconnect on non-existent server should be a no-op")
+}
+
 func TestMCPTool_JSONArgsParsing(t *testing.T) {
 	// Test that JSON args are correctly parsed into map[string]any
 	args := `{"name": "World", "count": 5}`

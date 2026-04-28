@@ -93,6 +93,14 @@ func (r *Registry) Register(tool Tool) {
 	r.tools[tool.Name()] = tool
 }
 
+// Unregister removes a tool from the registry by name.
+// Returns true if the tool was removed, false if it wasn't registered.
+func (r *Registry) Unregister(name string) bool {
+	_, ok := r.tools[name]
+	delete(r.tools, name)
+	return ok
+}
+
 // Invoke calls a tool with the given arguments and context.
 func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolResult {
 	tool, ok := r.tools[name]

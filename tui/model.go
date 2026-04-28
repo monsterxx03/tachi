@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -72,6 +73,10 @@ type Model struct {
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
 	providerSelIdx int
+
+	mcpManager      *mcp.Manager
+	mcpServers      []config.MCPServerConfig
+	subcommandInput string // raw input text for subcommand parsing (e.g. "/mcp list")
 }
 
 type ModelConfig struct {
@@ -83,6 +88,8 @@ type ModelConfig struct {
 	ContextWindow      int64
 	InitialHistory     []llm.Message
 	InitialSessionMsgs []session.Message
+	MCPManager         *mcp.Manager
+	MCPServers         []config.MCPServerConfig
 }
 
 func NewModel(cfg ModelConfig) *Model {
@@ -95,6 +102,8 @@ func NewModel(cfg ModelConfig) *Model {
 		chatOpts:     cfg.ChatOpts,
 		state:        stateIdle,
 		cfg:          cfg.Config,
+		mcpManager:   cfg.MCPManager,
+		mcpServers:   cfg.MCPServers,
 	}
 
 	if len(cfg.InitialHistory) > 0 {
@@ -127,7 +136,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InputSubmitMsg:
 		text := string(msg)
-		if cmd := findCommand(text); cmd != nil {
+		cmd := findCommand(text)
+		if cmd == nil {
+			cmd = findCommandByPrefix(text)
+		}
+		if cmd != nil {
+			m.subcommandInput = text
 			return m, cmd.handler(m)
 		}
 		return m, m.sendMessage(text)
@@ -158,6 +172,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cancelFunc = nil
 			m.eventCh = nil
 		}
+
+	case mcpStatusMsg:
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: msg.content,
+		})
 	}
 
 	return m, nil
