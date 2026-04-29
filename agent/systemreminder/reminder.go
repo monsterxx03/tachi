@@ -174,8 +174,6 @@ func (ProjectContextReminder) Generate(ctx Context) []string {
 		return nil
 	}
 
-	debuglog.Log("systemreminder: ProjectContextReminder firing: %d bytes", len(content))
-
 	return []string{
 		"## Project Context (.tachi.md)",
 		"",
@@ -236,7 +234,5 @@ func (GitReminder) Generate(ctx Context) []string {
 	if len(lines) == 0 {
 		return nil
 	}
-
-	debuglog.Log("systemreminder: GitReminder firing: %d lines", len(lines))
 	return lines
 }

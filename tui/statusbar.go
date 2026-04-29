@@ -51,7 +51,7 @@ func (s StatusBar) View() string {
 		dot = stateWaitingStyle.Render(s.spinner.View())
 	case stateStreaming:
 		dot = stateStreamingStyle.Render(s.spinner.View())
-	case stateSelectingModel:
+	case stateSelectingModel, stateSelectingSession:
 		dot = stateWaitingStyle.Render("●")
 	case stateAwaitingConfirmation, stateAskUserQuestion:
 		dot = stateConfirmStyle.Render("●")

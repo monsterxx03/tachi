@@ -119,6 +119,52 @@ var commands = []Command{
 			return m.handleMCPCommand()
 		},
 	},
+	{
+		Name:        "/sessions",
+		Description: "Browse and reload previous sessions",
+		handler: func(m *Model) tea.Cmd {
+			sm := m.agent.SessionManager()
+			if sm == nil {
+				m.chatview.AddMessage(chatMessage{
+					Role:    "assistant",
+					Content: "No session manager available",
+				})
+				return nil
+			}
+			sessions, err := sm.List()
+			if err != nil {
+				m.chatview.AddMessage(chatMessage{
+					Role:    "assistant",
+					Content: fmt.Sprintf("Failed to list sessions: %v", err),
+				})
+				return nil
+			}
+			if len(sessions) == 0 {
+				m.chatview.AddMessage(chatMessage{
+					Role:    "assistant",
+					Content: "No sessions found",
+				})
+				return nil
+			}
+			m.sessionList = sessions
+			m.sessionSelIdx = 0
+			m.sessionScrollOff = 0
+			// Pre-select the current session if it's in the list
+			if curr := sm.Current(); curr != nil {
+				for i, s := range sessions {
+					if s.ID == curr.ID {
+						m.sessionSelIdx = i
+						break
+					}
+				}
+			}
+			// Ensure the pre-selected session is visible
+			m.clampSessionScroll()
+			m.setState(stateSelectingSession)
+			m.layout()
+			return nil
+		},
+	},
 }
 
 func matchCommands(prefix string) []Command {

@@ -105,6 +105,11 @@ func (a *AIAgent) SetReminderCollector(c *systemreminder.Collector) {
 	a.reminderCollector = c
 }
 
+// SessionManager returns the session manager, or nil if none is set.
+func (a *AIAgent) SessionManager() *session.Manager {
+	return a.sessionManager
+}
+
 // ClearSession ends the current session so a new one will be created on the next message.
 // Used by /clear command to start a fresh session.
 func (a *AIAgent) ClearSession() {
