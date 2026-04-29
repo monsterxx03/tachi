@@ -7,6 +7,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 type AnthropicProvider struct {
@@ -80,7 +81,10 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts 
 			for _, tc := range msg.ToolCalls {
 				var input map[string]any
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
-					return nil, fmt.Errorf("failed to unmarshal tool call arguments: %w", err)
+					// Arguments may be incomplete (e.g. truncated stream);
+					// degrade gracefully so the error doesn't abort the entire request.
+					debuglog.Log("anthropic: failed to unmarshal tool call %s arguments: %v (args: %s)", tc.ID, err, tc.Function.Arguments)
+					input = map[string]any{}
 				}
 				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(tc.ID, input, tc.Function.Name))
 			}
