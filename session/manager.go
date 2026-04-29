@@ -122,6 +122,46 @@ func (m *Manager) SetTitle(title string) error {
 	return m.store.UpdateMeta(m.current)
 }
 
+// SetThreadID records the channel ThreadID on the session for later lookup.
+func (m *Manager) SetThreadID(threadID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return fmt.Errorf("no active session")
+	}
+
+	m.current.ThreadID = threadID
+	m.current.UpdatedAt = time.Now()
+
+	return m.store.UpdateMeta(m.current)
+}
+
+// FindByThreadID looks up a session by its ThreadID field, loads it,
+// and returns it. Returns nil if no session matches.
+func (m *Manager) FindByThreadID(threadID string) (*Session, error) {
+	if threadID == "" {
+		return nil, nil
+	}
+
+	sessions, err := m.List()
+	if err != nil {
+		return nil, fmt.Errorf("list sessions: %w", err)
+	}
+
+	for _, s := range sessions {
+		if s.ThreadID == threadID {
+			_, err := m.Load(s.ID)
+			if err != nil {
+				return nil, fmt.Errorf("load session: %w", err)
+			}
+			return s, nil
+		}
+	}
+
+	return nil, nil
+}
+
 // List returns all sessions sorted by created_at descending
 func (m *Manager) List() ([]*Session, error) {
 	return m.store.ListSessions()

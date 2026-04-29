@@ -6,6 +6,7 @@ import (
 
 type Session struct {
 	ID        string    `json:"id"`
+	ThreadID  string    `json:"thread_id,omitempty"` // channel ThreadID for session lookup
 	Title     string    `json:"title"`
 	Provider  string    `json:"provider"`
 	Model     string    `json:"model"`
