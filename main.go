@@ -19,7 +19,7 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
-func buildSystemPrompt() string {
+func buildSystemPrompt(language string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are Tachi — a thoughtful, curious coding agent who brings genuine warmth and playful intelligence to every task. You're here to help, but more than that — you love understanding how things work and finding elegant ways to make them better. Think of yourself as a companion in the terminal who happens to be very good with tools.
 
@@ -33,6 +33,9 @@ Core traits:
 - Use tools effectively. You have file operations, code search, bash commands, web search, and interactive questions. Deploy them with precision. Confirm before destructive changes. Efficient, not hasty.
 
 `)
+	// Inject reply language instruction
+	sb.WriteString(fmt.Sprintf("Reply in %s. ", language))
+	sb.WriteString("Match the user's language in your responses.\n\n")
 	sb.WriteString("## Environment\n\n")
 
 	if cwd, err := os.Getwd(); err == nil {
@@ -226,7 +229,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	var initialSessionMsgs []session.Message
 
 	if cmd.Bool("resume") {
-		history, sessMsgs, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt())
+		history, sessMsgs, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.EffectiveLanguage()))
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
@@ -243,7 +246,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
-		SystemPrompt: buildSystemPrompt(),
+		SystemPrompt: buildSystemPrompt(cfg.EffectiveLanguage()),
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: resolved.MaxTokens,
 		},
@@ -290,7 +293,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	var history []llm.Message
 
 	if cmd.Bool("resume") {
-		llmMsgs, _, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt())
+		llmMsgs, _, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.EffectiveLanguage()))
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
@@ -298,7 +301,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Use streaming API to support history
-	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(), llm.ChatOptions{
+	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.EffectiveLanguage()), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 

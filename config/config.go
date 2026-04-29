@@ -90,6 +90,7 @@ type Config struct {
 	MCPServers     []MCPServerConfig     `yaml:"mcp_servers"`
 	TUI            TUIConfig             `yaml:"tui"`
 	SystemReminder SystemReminderConfig  `yaml:"system_reminder"`
+	Language       string                `yaml:"language"` // Reply language for LLM; defaults to English
 }
 
 func DefaultConfig() *Config {
@@ -307,6 +308,15 @@ func (c *Config) GitReminderEnabled() bool {
 		return true
 	}
 	return *c.SystemReminder.GitReminder
+}
+
+// EffectiveLanguage returns the configured reply language for the LLM.
+// Defaults to "English" when no language is configured.
+func (c *Config) EffectiveLanguage() string {
+	if c == nil || c.Language == "" {
+		return "English"
+	}
+	return c.Language
 }
 
 // TokenWarningThresholdPct returns the context-window usage percentage at

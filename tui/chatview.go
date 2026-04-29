@@ -387,7 +387,7 @@ func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 		rendered := c.renderMarkdown(msg.Content)
 		return assistantMsgStyle.Width(inner).Render(rendered)
 	case "thinking":
-		thinking := truncateThinking(msg.Content, 500)
+		thinking := truncateThinking(msg.Content, 5)
 		return thinkingStyle.Render("Thinking: " + thinking)
 	case "tool_calls":
 		return msg.Content
@@ -407,7 +407,7 @@ func (c *ChatView) renderStreamBlock() string {
 	}
 	var b strings.Builder
 	if c.currentThinking.Len() > 0 {
-		thinking := truncateThinking(c.currentThinking.String(), 500)
+		thinking := truncateThinking(c.currentThinking.String(), 5)
 		b.WriteString(thinkingStyle.Render("Thinking: " + thinking))
 		b.WriteString("\n")
 	}
@@ -491,12 +491,17 @@ func truncate(s string, maxLen int) string {
 	return s
 }
 
-func truncateThinking(s string, maxLen int) string {
-	if len(s) <= maxLen {
+// truncateThinking collapses a thinking block to show only the last N lines,
+// with a "… (N more lines)" indicator when truncation occurs.
+// This keeps the chat view readable when thinking blocks are very long.
+func truncateThinking(s string, maxLines int) string {
+	lines := strings.Split(s, "\n")
+	if len(lines) <= maxLines {
 		return s
 	}
-	half := (maxLen - 5) / 2
-	return s[:half] + "\n...\n" + s[len(s)-half:]
+	hidden := len(lines) - maxLines
+	lastLines := strings.Join(lines[hidden:], "\n")
+	return fmt.Sprintf("… (%d more lines)", hidden) + "\n" + lastLines
 }
 
 func getToolArgsPreview(name, argsJSON string) string {

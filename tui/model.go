@@ -63,6 +63,8 @@ type Model struct {
 	history      []llm.Message
 
 	state          state
+	thinkingMode   bool
+	thinkingView   ThinkingView
 	copyMode       bool
 	cancelFunc     context.CancelFunc
 	eventCh        <-chan agent.AgentEvent
@@ -104,6 +106,7 @@ func NewModel(cfg ModelConfig) *Model {
 		cfg:          cfg.Config,
 		mcpManager:   cfg.MCPManager,
 		mcpServers:   cfg.MCPServers,
+		thinkingView: NewThinkingView(),
 	}
 
 	if len(cfg.InitialHistory) > 0 {
@@ -127,9 +130,23 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		// In thinking mode, route scroll keys to the thinking view
+		if m.thinkingMode {
+			s := msg.String()
+			if s == "pgup" || s == "pgdown" || s == "ctrl+u" || s == "ctrl+d" {
+				var cmd tea.Cmd
+				m.thinkingView, cmd = m.thinkingView.Update(msg)
+				return m, cmd
+			}
+		}
 		return m.handleKeyMsg(msg)
 
 	case tea.MouseWheelMsg:
+		if m.thinkingMode {
+			var cmd tea.Cmd
+			m.thinkingView, cmd = m.thinkingView.Update(msg)
+			return m, cmd
+		}
 		var cmd tea.Cmd
 		m.chatview, cmd = m.chatview.Update(msg)
 		return m, cmd
@@ -186,6 +203,16 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if msg.String() == "ctrl+c" {
 		return m.handleCtrlC()
+	}
+	// Ctrl+O toggles thinking-only view anytime
+	if msg.String() == "ctrl+o" {
+		m.thinkingMode = !m.thinkingMode
+		if !m.thinkingMode {
+			// Return to chat; auto-scroll
+			m.chatview.userScrolled = false
+			m.chatview.refresh()
+		}
+		return m, nil
 	}
 	switch m.state {
 	case stateSelectingModel:
@@ -347,6 +374,8 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	m.chatview.AddMessage(chatMessage{Role: "user", Content: text})
 	m.setState(stateWaiting)
 	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
 
 	// Expand @path references: inject file/directory contents into the
 	// message sent to the LLM, but keep the TUI display unexpanded.
@@ -368,6 +397,8 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/commit"})
 	m.setState(stateWaiting)
 	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
@@ -385,6 +416,8 @@ func (m *Model) sendInitCommand() tea.Cmd {
 	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/init"})
 	m.setState(stateWaiting)
 	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
@@ -418,6 +451,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventThinkingDelta:
 		m.setState(stateStreaming)
 		m.chatview.AppendThinkingDelta(event.ThinkingDelta)
+		m.thinkingView.Append(event.ThinkingDelta)
 		return m.nextEvent()
 
 	case agent.AgentEventToolCallStart:
@@ -585,7 +619,15 @@ func (m *Model) View() tea.View {
 	}
 
 	var content strings.Builder
-	content.WriteString(m.chatview.View())
+
+	if m.thinkingMode {
+		// Thinking-only view: replaces chat with full thinking output
+		// Height matches what layout() gives to chatview (m.height - input - statusbar - 2 separators)
+		m.thinkingView.SetSize(m.width, m.height-m.input.Height()-3)
+		content.WriteString(m.thinkingView.ViewString())
+	} else {
+		content.WriteString(m.chatview.View())
+	}
 	content.WriteString("\n")
 	content.WriteString(inputSection)
 	content.WriteString("\n")

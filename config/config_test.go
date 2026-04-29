@@ -331,3 +331,15 @@ func TestTokenWarningThresholdPct(t *testing.T) {
 		assert.Equal(t, DefaultTokenWarningThresholdPct, c.TokenWarningThresholdPct())
 	})
 }
+
+func TestEffectiveLanguage(t *testing.T) {
+	// Default
+	assert.Equal(t, "English", (&Config{}).EffectiveLanguage())
+	// Explicitly set
+	assert.Equal(t, "Chinese", (&Config{Language: "Chinese"}).EffectiveLanguage())
+	// Empty string defaults
+	assert.Equal(t, "English", (&Config{Language: ""}).EffectiveLanguage())
+	// Nil config
+	var c *Config
+	assert.Equal(t, "English", c.EffectiveLanguage())
+}
