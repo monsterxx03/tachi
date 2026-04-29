@@ -83,7 +83,7 @@ type Manager struct {
 func NewManager(mcfg ManagerConfig) *Manager {
 	maxIters := mcfg.MaxIterations
 	if maxIters <= 0 {
-		maxIters = mcfg.Config.MaxIterations
+		maxIters = mcfg.Config.GetMaxIterations()
 	}
 	return &Manager{
 		cfg:          mcfg.Config,

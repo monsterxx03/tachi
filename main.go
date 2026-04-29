@@ -250,7 +250,14 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
+	// For single-shot run mode, 0 (unlimited) is capped to the default 50
+	// to prevent runaway loops. Use --max-iterations N to set an explicit limit.
+	maxIters := resolved.MaxIterations
+	if maxIters <= 0 {
+		maxIters = config.DefaultMaxIterations
+	}
+
+	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, maxIters)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 

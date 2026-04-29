@@ -66,7 +66,7 @@ func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
 		maxTokens = flags.MaxTokens
 	}
 
-	maxIterations := cfg.MaxIterations
+	maxIterations := cfg.GetMaxIterations()
 	if flags.MaxIterationsSet {
 		maxIterations = flags.MaxIterations
 	}

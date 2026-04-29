@@ -21,6 +21,7 @@ const defaultMaxTokens = 4096
 
 type IterationBudget struct {
 	Remaining int
+	Unlimited bool // When true, consume() always returns true.
 	Parent    *IterationBudget
 }
 
@@ -560,8 +561,13 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		apiCallCount := 0
 		lengthContinueRetries := 0
 
-		// Initialize iteration budget for this conversation
-		a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
+		// Initialize iteration budget for this conversation.
+		// 0 means unlimited (no cap); >0 is an explicit limit.
+		if a.maxIterations == 0 {
+			a.iterationBudget = &IterationBudget{Unlimited: true}
+		} else {
+			a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
+		}
 
 		// Session management: create session if needed and append user message
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
@@ -772,6 +778,9 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 
 
 func (b *IterationBudget) consume() bool {
+	if b.Unlimited {
+		return true
+	}
 	if b.Remaining > 0 {
 		b.Remaining--
 		return true

@@ -84,7 +84,7 @@ type SystemReminderConfig struct {
 type Config struct {
 	Provider       string                `yaml:"provider"`
 	MaxTokens      int                   `yaml:"max_tokens"`
-	MaxIterations  int                   `yaml:"max_iterations"`
+	MaxIterations  *int                  `yaml:"max_iterations"` // nil = default; 0 = unlimited; >0 = explicit limit
 	Providers      []ProviderConfig      `yaml:"providers"`
 	WebSearch      WebSearchConfig       `yaml:"web_search"`
 	MCPServers     []MCPServerConfig     `yaml:"mcp_servers"`
@@ -96,7 +96,7 @@ type Config struct {
 func DefaultConfig() *Config {
 	return &Config{
 		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: DefaultMaxIterations,
+		MaxIterations: intPtr(DefaultMaxIterations),
 		WebSearch: WebSearchConfig{
 			Type:       "brave",
 			Timeout:    DefaultWebSearchTimeout,
@@ -164,9 +164,10 @@ func LoadFrom(path string) (*Config, error) {
 	if cfg.MaxTokens == 0 {
 		cfg.MaxTokens = DefaultMaxTokens
 	}
-	if cfg.MaxIterations == 0 {
-		cfg.MaxIterations = DefaultMaxIterations
+	if cfg.MaxIterations == nil {
+		cfg.MaxIterations = intPtr(DefaultMaxIterations)
 	}
+	// If explicitly set to 0, keep it as 0 (meaning unlimited).
 	if cfg.WebSearch.Type == "" {
 		cfg.WebSearch.Type = "brave"
 	}
@@ -214,7 +215,7 @@ func Init() (string, error) {
 	cfg := &Config{
 		Provider:      "minimax-anthropic",
 		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: DefaultMaxIterations,
+		MaxIterations: intPtr(DefaultMaxIterations),
 		Providers: []ProviderConfig{
 			{
 				Name:    "minimax-anthropic",
@@ -326,4 +327,20 @@ func (c *Config) TokenWarningThresholdPct() int {
 		return DefaultTokenWarningThresholdPct
 	}
 	return *c.SystemReminder.TokenWarningThresholdPct
+}
+
+// GetMaxIterations returns the effective max iterations:
+// - nil → DefaultMaxIterations (50)
+// - 0 → 0 (unlimited)
+// - >0 → explicit value
+func (c *Config) GetMaxIterations() int {
+	if c == nil || c.MaxIterations == nil {
+		return DefaultMaxIterations
+	}
+	return *c.MaxIterations
+}
+
+// intPtr returns a pointer to the given int. Helper for config initialization.
+func intPtr(v int) *int {
+	return &v
 }

@@ -13,7 +13,7 @@ import (
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
 	assert.Equal(t, DefaultMaxTokens, cfg.MaxTokens)
-	assert.Equal(t, DefaultMaxIterations, cfg.MaxIterations)
+	assert.Equal(t, DefaultMaxIterations, *cfg.MaxIterations)
 	assert.Empty(t, cfg.Provider)
 	assert.Empty(t, cfg.Providers)
 }
@@ -22,7 +22,7 @@ func TestLoadFrom_NonExistent(t *testing.T) {
 	cfg, err := LoadFrom("/tmp/tachi-test-nonexistent/config.yaml")
 	require.NoError(t, err)
 	assert.Equal(t, DefaultMaxTokens, cfg.MaxTokens)
-	assert.Equal(t, DefaultMaxIterations, cfg.MaxIterations)
+	assert.Equal(t, DefaultMaxIterations, *cfg.MaxIterations)
 }
 
 func TestLoadFrom_ValidYAML(t *testing.T) {
@@ -50,7 +50,7 @@ providers:
 	require.NoError(t, err)
 	assert.Equal(t, "my-provider", cfg.Provider)
 	assert.Equal(t, 8000, cfg.MaxTokens)
-	assert.Equal(t, 5, cfg.MaxIterations)
+	assert.Equal(t, 5, *cfg.MaxIterations)
 	assert.Len(t, cfg.Providers, 2)
 	assert.Equal(t, "my-provider", cfg.Providers[0].Name)
 	assert.Equal(t, "anthropic", cfg.Providers[0].Type)
@@ -74,7 +74,7 @@ func TestLoadFrom_ZeroValueDefaults(t *testing.T) {
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
 	assert.Equal(t, DefaultMaxTokens, cfg.MaxTokens)
-	assert.Equal(t, DefaultMaxIterations, cfg.MaxIterations)
+	assert.Equal(t, DefaultMaxIterations, *cfg.MaxIterations)
 }
 
 func TestSaveAndLoad(t *testing.T) {
@@ -84,7 +84,7 @@ func TestSaveAndLoad(t *testing.T) {
 	original := &Config{
 		Provider:      "test-provider",
 		MaxTokens:     16000,
-		MaxIterations: 20,
+		MaxIterations: intPtr(20),
 		Providers: []ProviderConfig{
 			{
 				Name:    "test-provider",
@@ -159,7 +159,7 @@ func TestResolve_FullConfig(t *testing.T) {
 	cfg := &Config{
 		Provider:      "my-provider",
 		MaxTokens:     8000,
-		MaxIterations: 5,
+		MaxIterations: intPtr(5),
 		Providers: []ProviderConfig{
 			{
 				Name:    "my-provider",
@@ -186,7 +186,7 @@ func TestResolve_FlagOverrides(t *testing.T) {
 	cfg := &Config{
 		Provider:      "test",
 		MaxTokens:     8000,
-		MaxIterations: 5,
+		MaxIterations: intPtr(5),
 		Providers: []ProviderConfig{
 			{Name: "test", Type: "openai", Model: "gpt-4", BaseURL: "https://original.com", APIKey: "sk-test"},
 		},
@@ -264,7 +264,7 @@ func TestResolve_SingleProviderAutoSelect(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	cfg := &Config{
 		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: DefaultMaxIterations,
+		MaxIterations: intPtr(DefaultMaxIterations),
 		Providers: []ProviderConfig{
 			{Name: "only-one", Type: "openai", Model: "gpt-4", APIKey: "sk-test"},
 		},
@@ -280,7 +280,7 @@ func TestResolve_FlagSelectsProvider(t *testing.T) {
 	cfg := &Config{
 		Provider:      "alpha",
 		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: DefaultMaxIterations,
+		MaxIterations: intPtr(DefaultMaxIterations),
 		Providers: []ProviderConfig{
 			{Name: "alpha", Type: "openai", Model: "gpt-4", APIKey: "sk-a"},
 			{Name: "beta", Type: "anthropic", Model: "claude-3", APIKey: "sk-b"},

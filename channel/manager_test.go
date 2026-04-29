@@ -126,7 +126,7 @@ func TestIncomingOutgoingMessage(t *testing.T) {
 
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.MaxIterations = 10
+	*cfg.MaxIterations = 10
 
 	mgr := NewManager(ManagerConfig{
 		Config:        cfg,
@@ -141,7 +141,7 @@ func TestNewManager(t *testing.T) {
 
 func TestNewManagerDefaults(t *testing.T) {
 	cfg := config.DefaultConfig()
-	cfg.MaxIterations = 25
+	*cfg.MaxIterations = 25
 
 	mgr := NewManager(ManagerConfig{
 		Config:       cfg,
