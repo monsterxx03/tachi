@@ -49,6 +49,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		askUserRespCh: make(chan tools.AskUserResult, 1),
 		reminderCollector: systemreminder.NewCollector(
 			systemreminder.DateReminder{},
+			systemreminder.ProjectContextReminder{},
 			systemreminder.GitReminder{},
 			systemreminder.IterationWarningReminder{Threshold: config.DefaultIterationWarningThreshold},
 			systemreminder.TokenWarningReminder{ThresholdPct: config.DefaultTokenWarningThresholdPct},
@@ -691,6 +692,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	// --- reminders ---
 	reminders := []systemreminder.Reminder{
 		systemreminder.DateReminder{},
+		systemreminder.ProjectContextReminder{},
 		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
 		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
 	}

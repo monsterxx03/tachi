@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -58,27 +57,7 @@ Core traits:
 		sb.WriteString("- Shell: " + shell + "\n")
 	}
 
-	// Load .tachi.md if exists
-	if tachiContent, err := loadTachiMd(); err == nil && tachiContent != "" {
-		sb.WriteString("\n## Project Context (.tachi.md)\n\n")
-		sb.WriteString(tachiContent)
-		sb.WriteString("\n")
-	}
-
 	return sb.String()
-}
-
-func loadTachiMd() (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", err
-	}
-	path := filepath.Join(cwd, ".tachi.md")
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	return string(data), nil
 }
 
 var commonFlags = []cli.Flag{

@@ -500,7 +500,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.history = event.Messages
 		}
 		if event.Usage != nil {
-			m.totalUsage.InputTokens += event.Usage.InputTokens
+			// InputTokens from the API already reflects the total context size
+			// (all prior messages included), so we take the latest value instead
+			// of accumulating (which would produce a nonsense inflated number).
+			m.totalUsage.InputTokens = event.Usage.InputTokens
 			m.totalUsage.OutputTokens += event.Usage.OutputTokens
 			m.totalUsage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
 			m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
