@@ -32,6 +32,12 @@ type InputArea struct {
 	histIdx     int
 	histScratch string
 	historyPath string
+
+	// Paste threshold — when a paste exceeds this many lines, the content is
+	// collapsed into a placeholder to avoid flooding the chat UI. pasteBuffer
+	// holds the full pasted text, which is sent to the LLM on submit.
+	pasteBuffer    string
+	pasteThreshold int
 }
 
 func NewInputArea(historyMax int, historyPath string) InputArea {
@@ -69,6 +75,7 @@ func NewInputArea(historyMax int, historyPath string) InputArea {
 		historyMax:  historyMax,
 		histIdx:     -1,
 		historyPath: historyPath,
+		pasteThreshold: 5,
 	}
 }
 
@@ -139,9 +146,59 @@ func (i *InputArea) clearAtFileCompletions() {
 	i.atFileSelectedIdx = 0
 }
 
+// pastePlaceholder returns a compact, dim-styled label for a large paste so
+// the input area doesn't flood the chat UI with hundreds of lines.
+func (i *InputArea) pastePlaceholder(lines int) string {
+	return fmt.Sprintf("[Pasted %d lines]", lines)
+}
+
+// handlePaste intercepts a clipboard paste. If the content exceeds
+// pasteThreshold lines, the full text is stored in pasteBuffer and a compact
+// placeholder is shown instead. Otherwise the text is inserted normally.
+func (i *InputArea) handlePaste(text string) (InputArea, tea.Cmd) {
+	// Always clear any existing pasteBuffer first — each paste replaces
+	// the previous one (no stacking).
+	i.expandPasteBuffer()
+
+	lineCount := strings.Count(text, "\n") + 1
+	if lineCount <= i.pasteThreshold || i.pasteThreshold <= 0 {
+		// Short paste: insert directly
+		i.textarea.InsertString(text)
+		return *i, nil
+	}
+
+	// Large paste: stash full text and show a placeholder in the textarea.
+	i.pasteBuffer = text
+	i.textarea.InsertString(i.pastePlaceholder(lineCount))
+	return *i, nil
+}
+
+// expandPasteBuffer restores the full pasted content into the textarea in
+// place of the placeholder, then clears pasteBuffer. Safe to call even when
+// there is no pending paste.
+func (i *InputArea) expandPasteBuffer() {
+	if i.pasteBuffer == "" {
+		return
+	}
+	// Determine what the placeholder looks like and replace it.
+	lineCount := strings.Count(i.pasteBuffer, "\n") + 1
+	placeholder := i.pastePlaceholder(lineCount)
+	val := i.textarea.Value()
+	val = strings.Replace(val, placeholder, i.pasteBuffer, 1)
+	i.textarea.SetValue(val)
+	i.textarea.CursorEnd()
+	i.pasteBuffer = ""
+}
+
 func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 	if !i.enabled {
 		return i, nil
+	}
+
+	// Intercept PasteMsg: if content exceeds threshold, collapse into a
+	// placeholder to avoid flooding the chat UI.
+	if pasteMsg, ok := msg.(tea.PasteMsg); ok {
+		return i.handlePaste(pasteMsg.Content)
 	}
 
 	if keyMsg, ok := msg.(tea.KeyMsg); ok {
@@ -212,6 +269,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 			}
 			if i.completionsOn() {
 				name := i.completions[i.selectedIdx].Name
+				i.expandPasteBuffer()
 				i.pushHistoryLine(name)
 				i.textarea.Reset()
 				i.clearHistoryNav()
@@ -219,6 +277,7 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				i.selectedIdx = 0
 				return i, func() tea.Msg { return InputSubmitMsg(name) }
 			}
+			i.expandPasteBuffer()
 			text := strings.TrimSpace(i.textarea.Value())
 			if text == "" {
 				return i, nil
