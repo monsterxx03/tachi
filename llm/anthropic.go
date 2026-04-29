@@ -238,7 +238,10 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 					Type:         StreamEventMessageDelta,
 					FinishReason: string(ev.Delta.StopReason),
 					Usage: &Usage{
-						OutputTokens: ev.Usage.OutputTokens,
+						InputTokens:              ev.Usage.InputTokens,
+						OutputTokens:             ev.Usage.OutputTokens,
+						CacheCreationInputTokens: ev.Usage.CacheCreationInputTokens,
+						CacheReadInputTokens:     ev.Usage.CacheReadInputTokens,
 					},
 				}
 			}
