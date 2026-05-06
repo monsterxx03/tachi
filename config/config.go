@@ -20,6 +20,7 @@ const (
 	DefaultTUIInputHistoryLimit             = 10
 	DefaultIterationWarningThreshold        = 5
 	DefaultTokenWarningThresholdPct         = 80
+	DefaultSessionCleanupMaxCount           = 100
 	DefaultMCPConnectTimeout                = 5 * time.Second
 	configDirName                           = ".tachi"
 	configFileName                          = "config.yaml"
@@ -101,10 +102,11 @@ type SystemReminderConfig struct {
 }
 
 type Config struct {
-	Provider        string                `yaml:"provider"`
-	MaxTokens       int                   `yaml:"max_tokens"`
-	MaxIterations   *int                  `yaml:"max_iterations"` // nil = default; 0 = unlimited; >0 = explicit limit
-	Providers       []ProviderConfig      `yaml:"providers"`
+	Provider               string                `yaml:"provider"`
+	MaxTokens              int                   `yaml:"max_tokens"`
+	MaxIterations          *int                  `yaml:"max_iterations"`          // nil = default; 0 = unlimited; >0 = explicit limit
+	SessionCleanupMaxCount *int                  `yaml:"session_cleanup_max_count"` // nil = default (100); 0 = no cleanup; >0 = explicit
+	Providers              []ProviderConfig      `yaml:"providers"`
 	WebSearch       WebSearchConfig       `yaml:"web_search"`
 	MCPServers      []MCPServerConfig     `yaml:"mcp_servers"`
 	TUI             TUIConfig             `yaml:"tui"`
@@ -387,6 +389,17 @@ func (c *Config) EffectiveCommitProvider() string {
 		return ""
 	}
 	return c.CommitProvider
+}
+
+// EffectiveSessionCleanupMaxCount returns the maximum number of sessions to retain.
+// - nil → DefaultSessionCleanupMaxCount (100)
+// - 0 → 0 (no cleanup)
+// - >0 → explicit value
+func (c *Config) EffectiveSessionCleanupMaxCount() int {
+	if c == nil || c.SessionCleanupMaxCount == nil {
+		return DefaultSessionCleanupMaxCount
+	}
+	return *c.SessionCleanupMaxCount
 }
 
 // intPtr returns a pointer to the given int. Helper for config initialization.

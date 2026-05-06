@@ -221,6 +221,8 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		if err != nil {
 			fmt.Printf("Warning: failed to init session manager: %v\n", err)
 		} else {
+			sm.SetMaxKeep(cfg.EffectiveSessionCleanupMaxCount())
+			sm.CleanupOldSessions()
 			aiAgent.SetSessionManager(sm)
 		}
 	}

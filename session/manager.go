@@ -6,12 +6,14 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 type Manager struct {
-	store   Store
-	current *Session
-	mu      sync.Mutex
+	store         Store
+	current       *Session
+	maxKeep       int // max sessions to retain; 0 = no cleanup
+	mu            sync.Mutex
 }
 
 func NewManager() (*Manager, error) {
@@ -25,12 +27,76 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 
-	return &Manager{store: store}, nil
+	return &Manager{store: store, maxKeep: config.DefaultSessionCleanupMaxCount}, nil
 }
 
 // NewManagerWithStore creates a Manager with a custom store implementation
 func NewManagerWithStore(store Store) *Manager {
 	return &Manager{store: store}
+}
+
+// SetMaxKeep sets the maximum number of sessions to retain.
+// 0 means no automatic cleanup.
+func (m *Manager) SetMaxKeep(maxKeep int) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.maxKeep = maxKeep
+}
+
+// CleanupOldSessions removes the oldest sessions when the total count exceeds
+// maxKeep. Sessions are sorted by CreatedAt descending (newest first), so the
+// oldest sessions are at the end of the list. The current session is never
+// deleted. Returns the number of sessions removed.
+func (m *Manager) CleanupOldSessions() (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.cleanupLocked(), nil
+}
+
+// cleanupLocked is the lock-holding variant of CleanupOldSessions.
+// Caller must hold m.mu.
+func (m *Manager) cleanupLocked() int {
+	if m.maxKeep <= 0 {
+		return 0
+	}
+
+	sessions, err := m.store.ListSessions()
+	if err != nil {
+		debuglog.Log("session cleanup: list sessions error: %v", err)
+		return 0
+	}
+
+	if len(sessions) <= m.maxKeep {
+		return 0
+	}
+
+	// sessions are sorted newest-first, so excess are at the end
+	excess := sessions[m.maxKeep:]
+
+	// Collect current session ID to avoid deleting it
+	currentID := ""
+	if m.current != nil {
+		currentID = m.current.ID
+	}
+
+	removed := 0
+	for _, s := range excess {
+		if s.ID == currentID {
+			continue
+		}
+		if err := m.store.DeleteSession(s.ID); err != nil {
+			// Log but continue — best-effort cleanup
+			debuglog.Log("session cleanup: failed to delete %s: %v", s.ID, err)
+			continue
+		}
+		removed++
+	}
+
+	if removed > 0 {
+		debuglog.Log("session cleanup: removed %d old sessions (maxKeep=%d)", removed, m.maxKeep)
+	}
+
+	return removed
 }
 
 // Current returns the current session
@@ -66,6 +132,10 @@ func (m *Manager) New(provider, model string) (*Session, error) {
 	}
 
 	m.current = session
+
+	// Clean up old sessions if we exceed the limit (lock already held).
+	m.cleanupLocked()
+
 	return session, nil
 }
 

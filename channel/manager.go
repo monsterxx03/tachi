@@ -339,12 +339,19 @@ func (m *Manager) initProvider() error {
 // newSessionManager creates a session manager backed by m.sessionStore
 // (if set) or the default ~/.tachi/session directory.
 func (m *Manager) newSessionManager() *session.Manager {
+	var sm *session.Manager
 	if m.sessionStore != nil {
-		return session.NewManagerWithStore(m.sessionStore)
+		sm = session.NewManagerWithStore(m.sessionStore)
+	} else {
+		var err error
+		sm, err = session.NewManager()
+		if err != nil {
+			debuglog.Log("channel: session manager fallback failed: %v", err)
+			return sm
+		}
 	}
-	sm, err := session.NewManager()
-	if err != nil {
-		debuglog.Log("channel: session manager fallback failed: %v", err)
+	if m.cfg != nil {
+		sm.SetMaxKeep(m.cfg.EffectiveSessionCleanupMaxCount())
 	}
 	return sm
 }
