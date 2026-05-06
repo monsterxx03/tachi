@@ -121,7 +121,22 @@ func NewModel(cfg ModelConfig) *Model {
 		m.chatview.LoadHistory(cfg.InitialSessionMsgs)
 	}
 
+	// If there's already a current session (e.g. --resume), sync to statusbar.
+	m.syncSessionInfo()
+
 	return m
+}
+
+func (m *Model) syncSessionInfo() {
+	sm := m.agent.SessionManager()
+	if sm == nil {
+		return
+	}
+	if curr := sm.Current(); curr != nil {
+		m.statusbar.SetSessionInfo(curr.Title, curr.ID)
+	} else {
+		m.statusbar.SetSessionInfo("", "")
+	}
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -542,6 +557,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.statusbar.SetUsage(&m.totalUsage)
 		}
 		m.chatview.FinishStreaming()
+		m.syncSessionInfo()
 		m.setState(stateIdle)
 		m.cancelFunc = nil
 		m.eventCh = nil
@@ -841,6 +857,8 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 		m.exitSessionSelect(fmt.Sprintf("Failed to load session: %v", err))
 		return m, nil
 	}
+
+	m.syncSessionInfo()
 
 	// Load messages and convert to LLM format
 	sessionMsgs, err := sm.LoadMessages()

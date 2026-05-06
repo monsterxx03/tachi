@@ -94,4 +94,7 @@ var (
 
 	boldStyle = lipgloss.NewStyle().
 			Bold(true)
+
+	sessionInfoStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#B8C0E0"))
 )

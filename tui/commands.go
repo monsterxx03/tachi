@@ -61,6 +61,7 @@ var commands = []Command{
 			m.history = nil
 			m.chatview.Clear()
 			m.agent.ClearSession()
+			m.statusbar.SetSessionInfo("", "")
 			return nil
 		},
 	},

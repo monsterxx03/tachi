@@ -19,7 +19,13 @@ type StatusBar struct {
 	contextWindow int64
 	copyMode      bool
 	spinner       spinner.Model
+	sessionTitle  string
+	sessionID     string
 }
+
+const (
+	maxSessionTitleLen = 30
+)
 
 func NewStatusBar(providerInfo string, contextWindow int64) StatusBar {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
@@ -32,6 +38,7 @@ func (s *StatusBar) SetUsage(u *llm.Usage)         { s.totalUsage = u }
 func (s *StatusBar) SetCopyMode(b bool)            { s.copyMode = b }
 func (s *StatusBar) SetProviderInfo(info string)    { s.providerInfo = info }
 func (s *StatusBar) SetContextWindow(cw int64)      { s.contextWindow = cw }
+func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s.sessionID = id }
 func (s *StatusBar) ProviderInfo() string           { return s.providerInfo }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
@@ -57,7 +64,27 @@ func (s StatusBar) View() string {
 		dot = stateConfirmStyle.Render("●")
 	}
 
-	left := fmt.Sprintf(" %s %s | %s", dot, "tachi", s.providerInfo)
+	left := fmt.Sprintf(" %s %s", dot, "tachi")
+
+	// Session info: title · #shortID
+	if s.sessionID != "" {
+		title := s.sessionTitle
+		if title == "" {
+			title = "(untitled)"
+		}
+		runes := []rune(title)
+		if len(runes) > maxSessionTitleLen {
+			title = string(runes[:maxSessionTitleLen-1]) + "…"
+		}
+		// Session ID format: YYYY-MM-DD-HHMMSS-uuid8 — show only the uuid suffix
+		id := s.sessionID
+		if idx := strings.LastIndex(id, "-"); idx >= 0 && idx+1 < len(id) {
+			id = id[idx+1:]
+		}
+		left += " " + sessionInfoStyle.Render(fmt.Sprintf("· %s · #%s", title, id))
+	}
+
+	left += " | " + s.providerInfo
 	if s.copyMode {
 		left += " | " + selectModeStyle.Render("SELECT")
 	}
