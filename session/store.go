@@ -199,10 +199,12 @@ func GenerateID() string {
 		shortUUID)
 }
 
-// ExtractTitle extracts the first user message content as title (max 50 chars)
+// ExtractTitle extracts the first user message content as title (max 50 runes).
+// Uses rune-based truncation to safely handle multi-byte characters (e.g. CJK).
 func ExtractTitle(content string) string {
-	if len(content) > 50 {
-		return content[:47] + "..."
+	runes := []rune(content)
+	if len(runes) > 50 {
+		return string(runes[:47]) + "…"
 	}
 	return content
 }

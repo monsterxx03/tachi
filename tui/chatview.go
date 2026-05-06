@@ -532,15 +532,17 @@ func getToolArgsPreview(name, argsJSON string) string {
 		}
 	case "Bash":
 		if cmd, ok := args["command"].(string); ok {
-			if len(cmd) > 60 {
-				return cmd[:60] + "..."
+			runes := []rune(cmd)
+			if len(runes) > 60 {
+				return string(runes[:57]) + "…"
 			}
 			return cmd
 		}
 	case "WebSearch":
 		if q, ok := args["query"].(string); ok {
-			if len(q) > 60 {
-				return q[:60] + "..."
+			runes := []rune(q)
+			if len(runes) > 60 {
+				return string(runes[:57]) + "…"
 			}
 			return q
 		}

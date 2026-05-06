@@ -796,10 +796,11 @@ func (m *Model) renderSessionSelection() string {
 		if title == "" {
 			title = "(untitled)"
 		}
-		// Truncate title for display alignment
+		// Truncate title for display alignment (rune-aware)
 		displayTitle := title
-		if len(displayTitle) > 40 {
-			displayTitle = displayTitle[:37] + "..."
+		titleRunes := []rune(displayTitle)
+		if len(titleRunes) > 40 {
+			displayTitle = string(titleRunes[:37]) + "…"
 		}
 		modelInfo := fmt.Sprintf("%s (%s)", s.Provider, s.Model)
 

@@ -72,10 +72,8 @@ func (s StatusBar) View() string {
 		if title == "" {
 			title = "(untitled)"
 		}
-		runes := []rune(title)
-		if len(runes) > maxSessionTitleLen {
-			title = string(runes[:maxSessionTitleLen-1]) + "…"
-		}
+		// Truncate title with rune awareness
+		title = s.truncateTitle(title)
 		// Session ID format: YYYY-MM-DD-HHMMSS-uuid8 — show only the uuid suffix
 		id := s.sessionID
 		if idx := strings.LastIndex(id, "-"); idx >= 0 && idx+1 < len(id) {
@@ -98,7 +96,20 @@ func (s StatusBar) View() string {
 	if gap < 0 {
 		gap = 0
 	}
-	return statusBarStyle.Render(left + strings.Repeat(" ", gap) + right)
+	// Use MaxWidth to let lipgloss safely truncate the line to terminal width,
+	// handling ANSI sequences and wide (CJK) characters correctly.
+	return statusBarStyle.Copy().Width(s.width).Render(left + strings.Repeat(" ", gap) + right)
+}
+
+// truncateTitle returns the session title truncated to no more than
+// maxSessionTitleLen runes. Uses rune-aware truncation to safely
+// handle multi-byte characters (e.g. CJK).
+func (s StatusBar) truncateTitle(title string) string {
+	runes := []rune(title)
+	if len(runes) > maxSessionTitleLen {
+		return string(runes[:maxSessionTitleLen-1]) + "…"
+	}
+	return title
 }
 
 func (s StatusBar) buildUsageRight() string {

@@ -22,13 +22,23 @@ func TestExtractTitle(t *testing.T) {
 		{"short", "short"},
 		{"exactly fifty characters is this string 123456", "exactly fifty characters is this string 123456"}, // 46 chars
 		{"12345678901234567890123456789012345678901234567890", "12345678901234567890123456789012345678901234567890"}, // 50 chars, no truncation
-		{"123456789012345678901234567890123456789012345678901", "12345678901234567890123456789012345678901234567..."}, // 51 chars -> truncated
+		{"123456789012345678901234567890123456789012345678901", "12345678901234567890123456789012345678901234567…"}, // 51 chars -> truncated
+		// CJK characters: each is 3 bytes in UTF-8. Byte-level truncation would corrupt these.
+		{"你好世界", "你好世界"},                                                                                         // 4 runes, well under 50
+		{"这是一个测试标题用于验证中文截断功能是否正常工作", "这是一个测试标题用于验证中文截断功能是否正常工作"},                                       // 20 runes, under 50
+		{"这是一个很长的中文标题用于测试截断功能是否正常运作当标题超过五十个字符时应该被正确截断而不是出现乱码这个问题需要被修复以确保用户体验良好", "这是一个很长的中文标题用于测试截断功能是否正常运作当标题超过五十个字符时应该被正确截断而不是出…"}, // 68 runes -> truncated at 47 + "…"
+		// Mixed CJK and ASCII
+		{"Hello世界ThisIsAMixedTitleWithChineseCharacters用来测试混合字符截断", "Hello世界ThisIsAMixedTitleWithChineseCharacters用来…"}, // 55 runes -> truncated at 47 + "…"
 	}
 
 	for _, tt := range tests {
 		result := ExtractTitle(tt.input)
 		if result != tt.expected {
 			t.Errorf("ExtractTitle(%q) = %q, want %q", tt.input, result, tt.expected)
+		}
+		// Verify result is valid UTF-8
+		if len(result) > 0 {
+			_ = []rune(result) // will panic if invalid UTF-8, but let's be explicit
 		}
 	}
 }
