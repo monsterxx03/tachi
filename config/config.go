@@ -60,6 +60,8 @@ type MCPOAuthConfig struct {
 	ClientURI             string   `yaml:"client_uri,omitempty"`
 	Scopes                []string `yaml:"scopes,omitempty"`
 	AuthServerMetadataURL string   `yaml:"auth_server_metadata_url,omitempty"` // Override auto-discovery
+	CallbackHost          string   `yaml:"callback_host,omitempty"`            // OAuth callback host (default: 127.0.0.1)
+	CallbackPort          int      `yaml:"callback_port,omitempty"`            // OAuth callback port (default: auto, same as port range default)
 }
 
 // MCPServerConfig represents a single MCP server connection configuration

@@ -27,6 +27,22 @@ const (
 	oauthCallbackTimeout = 5 * time.Minute
 )
 
+// oauthRedirectURI returns the OAuth2 redirect_uri for the server's config.
+// CallbackHost defaults to 127.0.0.1; CallbackPort defaults to the automatic
+// port range start (18273) so the URI is consistent between auth request and
+// token exchange even in manual mode (no actual listener needed).
+func oauthRedirectURI(srv *config.MCPServerConfig) string {
+	host := srv.OAuth.CallbackHost
+	if host == "" {
+		host = "127.0.0.1"
+	}
+	port := srv.OAuth.CallbackPort
+	if port == 0 {
+		port = oauthLocalPortStart
+	}
+	return fmt.Sprintf("http://%s:%d%s", host, port, oauthCallbackPath)
+}
+
 // OAuthRequiredError signals that a server requires OAuth2 authorization
 // before tools can be discovered. The caller should run the OAuth flow
 // and then retry the connection.
@@ -60,27 +76,15 @@ func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn fun
 		return fmt.Errorf("DCR: %w", err)
 	}
 
-	baseURL := stripQueryFragment(srv.URL)
-
-	oauthCfg := transport.OAuthConfig{
-		ClientID:              srv.OAuth.ClientID,
-		ClientSecret:          srv.OAuth.ClientSecret,
-		ClientURI:             srv.OAuth.ClientURI,
-		Scopes:                srv.OAuth.Scopes,
-		PKCEEnabled:           true,
-		AuthServerMetadataURL: srv.OAuth.AuthServerMetadataURL,
-		TokenStore:            store,
-	}
-
 	// 1) Browser callback
-	if err := tryBrowserCallback(ctx, srv.Name, oauthCfg, baseURL); err == nil {
+	if err := tryBrowserCallback(ctx, srv); err == nil {
 		return nil
 	} else {
 		debuglog.Log("MCP: browser callback failed for %q: %v", srv.Name, err)
 	}
 
 	// 2) Manual fallback
-	return startManualFlow(ctx, srv.Name, oauthCfg, baseURL, runErrFn)
+	return startManualFlow(ctx, srv, runErrFn)
 }
 
 // CompleteManualAuth finishes the manual OAuth flow by exchanging the
@@ -99,9 +103,18 @@ func CompleteManualAuth(ctx context.Context, srv *config.MCPServerConfig, redire
 		return fmt.Errorf("DCR: %w", err)
 	}
 
-	code, _, err := parseRedirectURL(redirectURL)
+	code, redirectState, err := parseRedirectURL(redirectURL)
 	if err != nil {
 		return err
+	}
+
+	// Load the pending state persisted by startManualFlow
+	pending, err := store.GetPendingState(ctx)
+	if err != nil {
+		return fmt.Errorf("no pending OAuth state (may have expired or already been used): %w", err)
+	}
+	if pending.State != "" && pending.State != redirectState {
+		return fmt.Errorf("OAuth state mismatch — possible CSRF attack")
 	}
 
 	baseURL := stripQueryFragment(srv.URL)
@@ -113,9 +126,10 @@ func CompleteManualAuth(ctx context.Context, srv *config.MCPServerConfig, redire
 		PKCEEnabled:           true,
 		AuthServerMetadataURL: srv.OAuth.AuthServerMetadataURL,
 		TokenStore:            store,
+		RedirectURI:           oauthRedirectURI(srv),
 	}
 
-	return exchangeCode(ctx, oauthCfg, baseURL, code)
+	return exchangeCode(ctx, oauthCfg, baseURL, code, pending.CodeVerifier)
 }
 
 // ensureClientID guarantees that srv.OAuth.ClientID is non-empty by the
@@ -451,16 +465,38 @@ func buildWellKnownURLs(baseURL, suffix string) []string {
 
 // --- browser callback ---
 
-func tryBrowserCallback(ctx context.Context, name string, cfg transport.OAuthConfig, baseURL string) error {
-	port, err := findAvailablePort()
+func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig) error {
+	store, err := NewFileTokenStore(srv.Name)
 	if err != nil {
-		return err
+		return fmt.Errorf("token store: %w", err)
 	}
 
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d%s", port, oauthCallbackPath)
-	cfg.RedirectURI = redirectURI
+	baseURL := stripQueryFragment(srv.URL)
 
-	handler := transport.NewOAuthHandler(cfg)
+	if srv.OAuth.CallbackHost == "" {
+		srv.OAuth.CallbackHost = "127.0.0.1"
+	}
+
+	if srv.OAuth.CallbackPort == 0 {
+		port, err := findAvailablePort(srv.OAuth.CallbackHost)
+		if err != nil {
+			return err
+		}
+		srv.OAuth.CallbackPort = port
+	}
+
+	oauthCfg := transport.OAuthConfig{
+		ClientID:              srv.OAuth.ClientID,
+		ClientSecret:          srv.OAuth.ClientSecret,
+		ClientURI:             srv.OAuth.ClientURI,
+		Scopes:                srv.OAuth.Scopes,
+		PKCEEnabled:           true,
+		AuthServerMetadataURL: srv.OAuth.AuthServerMetadataURL,
+		TokenStore:            store,
+		RedirectURI:           oauthRedirectURI(srv),
+	}
+
+	handler := transport.NewOAuthHandler(oauthCfg)
 	handler.SetBaseURL(baseURL)
 
 	state, err := transport.GenerateState()
@@ -510,8 +546,9 @@ func tryBrowserCallback(ctx context.Context, name string, cfg transport.OAuthCon
 		close(done)
 	})
 
-	srv := &http.Server{
-		Addr:           fmt.Sprintf("127.0.0.1:%d", port),
+	serverAddr := fmt.Sprintf("%s:%d", srv.OAuth.CallbackHost, srv.OAuth.CallbackPort)
+	httpSrv := &http.Server{
+		Addr:           serverAddr,
 		Handler:        mux,
 		ReadTimeout:    10 * time.Second,
 		WriteTimeout:   10 * time.Second,
@@ -519,14 +556,18 @@ func tryBrowserCallback(ctx context.Context, name string, cfg transport.OAuthCon
 		MaxHeaderBytes: 1 << 20,
 	}
 
-	ln, err := net.Listen("tcp", srv.Addr)
+	ln, err := net.Listen("tcp", httpSrv.Addr)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	go func() { _ = srv.Serve(ln) }()
-	defer srv.Close()
+	go func() { _ = httpSrv.Serve(ln) }()
+	defer httpSrv.Close()
 
-	_ = openBrowser(authURL)
+	// Open the browser. If that fails (e.g. headless server), bail immediately
+	// rather than waiting 5 minutes for a callback that will never arrive.
+	if err := openBrowser(authURL); err != nil {
+		return fmt.Errorf("cannot open browser: %w", err)
+	}
 
 	select {
 	case <-done:
@@ -541,7 +582,7 @@ func tryBrowserCallback(ctx context.Context, name string, cfg transport.OAuthCon
 		if err := handler.ProcessAuthorizationResponse(ctx, gotCode, state, codeVerifier); err != nil {
 			return fmt.Errorf("token exchange: %w", err)
 		}
-		debuglog.Log("MCP: browser OAuth succeeded for %q", name)
+		debuglog.Log("MCP: browser OAuth succeeded for %q", srv.Name)
 		return nil
 
 	case <-ctx.Done():
@@ -554,15 +595,173 @@ func tryBrowserCallback(ctx context.Context, name string, cfg transport.OAuthCon
 
 // --- manual flow ---
 
-func startManualFlow(ctx context.Context, name string, cfg transport.OAuthConfig, baseURL string, runErrFn func(string)) error {
-	state, _ := transport.GenerateState()
-	cfg.RedirectURI = "urn:ietf:wg:oauth:2.0:oob"
+func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn func(string)) error {
+	store, err := NewFileTokenStore(srv.Name)
+	if err != nil {
+		return err
+	}
 
-	handler := transport.NewOAuthHandler(cfg)
+	// Resolve callback address before building the OAuth config so the
+	// redirect_uri in the auth request matches the actual listener.
+	if srv.OAuth.CallbackHost == "" {
+		srv.OAuth.CallbackHost = "127.0.0.1"
+	}
+	if srv.OAuth.CallbackPort == 0 {
+		p, err := findAvailablePort(srv.OAuth.CallbackHost)
+		if err != nil {
+			// Can't listen anywhere — skip straight to pure manual.
+			// We still need the oauthCfg to build the auth URL, but
+			// there's no point trying to listen.
+			return deliverManualInstructions(runErrFn, srv.Name, buildManualAuthURL(ctx, srv, store))
+		}
+		srv.OAuth.CallbackPort = p
+	}
+
+	oauthCfg := transport.OAuthConfig{
+		ClientID:              srv.OAuth.ClientID,
+		ClientSecret:          srv.OAuth.ClientSecret,
+		ClientURI:             srv.OAuth.ClientURI,
+		Scopes:                srv.OAuth.Scopes,
+		PKCEEnabled:           true,
+		AuthServerMetadataURL: srv.OAuth.AuthServerMetadataURL,
+		TokenStore:            store,
+		RedirectURI:           oauthRedirectURI(srv),
+	}
+
+	baseURL := stripQueryFragment(srv.URL)
+	handler := transport.NewOAuthHandler(oauthCfg)
 	handler.SetBaseURL(baseURL)
 
-	authURL, _ := handler.GetAuthorizationURL(ctx, state, "")
+	state, _ := transport.GenerateState()
+	codeVerifier, _ := transport.GenerateCodeVerifier()
+	codeChallenge := transport.GenerateCodeChallenge(codeVerifier)
 
+	// Persist state + verifier so CompleteManualAuth can pick them up
+	_ = store.SavePendingState(ctx, &OAuthPendingState{
+		State:        state,
+		CodeVerifier: codeVerifier,
+	})
+
+	authURL, _ := handler.GetAuthorizationURL(ctx, state, codeChallenge)
+	debuglog.Log("MCP: manual OAuth authorize URL for %q: %s", srv.Name, authURL)
+
+	mux := http.NewServeMux()
+	var (
+		mu      sync.Mutex
+		gotCode string
+		gotErr  string
+	)
+	done := make(chan struct{})
+
+	mux.HandleFunc(oauthCallbackPath, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		code := q.Get("code")
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		if e := q.Get("error"); e != "" {
+			gotErr = fmt.Sprintf("OAuth error: %s — %s", e, q.Get("error_description"))
+			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>%s</p></body></html>", gotErr)
+			close(done)
+			return
+		}
+		if q.Get("state") != state {
+			gotErr = "state mismatch — possible CSRF attack"
+			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>State mismatch</p></body></html>")
+			close(done)
+			return
+		}
+
+		gotCode = code
+		fmt.Fprintf(w, "<html><body><h1>Auth Successful ✓</h1><p>You can close this window.</p></body></html>")
+		close(done)
+	})
+
+	serverAddr := fmt.Sprintf("%s:%d", srv.OAuth.CallbackHost, srv.OAuth.CallbackPort)
+	httpSrv := &http.Server{
+		Addr:           serverAddr,
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    oauthCallbackTimeout,
+		MaxHeaderBytes: 1 << 20,
+	}
+
+	ln, err := net.Listen("tcp", httpSrv.Addr)
+	if err != nil {
+		return deliverManualInstructions(runErrFn, srv.Name, authURL)
+	}
+	go func() { _ = httpSrv.Serve(ln) }()
+	defer httpSrv.Close()
+
+	// Show the URL and wait for callback or timeout
+	runErrFn(fmt.Sprintf(
+		"**%s** requires OAuth authorization.\n\n"+
+			"1. Open this URL:\n   %s\n\n"+
+			"Waiting for authorization...",
+		srv.Name, authURL,
+	))
+
+	select {
+	case <-done:
+		mu.Lock()
+		defer mu.Unlock()
+		if gotErr != "" {
+			return errors.New(gotErr)
+		}
+		if gotCode == "" {
+			return errors.New("no authorization code received")
+		}
+		if err := handler.ProcessAuthorizationResponse(ctx, gotCode, state, codeVerifier); err != nil {
+			return fmt.Errorf("token exchange: %w", err)
+		}
+		debuglog.Log("MCP: manual callback OAuth succeeded for %q", srv.Name)
+		return nil
+
+	case <-ctx.Done():
+		return ctx.Err()
+
+	case <-time.After(oauthCallbackTimeout):
+		return deliverManualInstructions(runErrFn, srv.Name, authURL)
+	}
+}
+
+// buildManualAuthURL generates an authorization URL for the pure-manual
+// path (no listener possible), persisting state + verifier for later exchange.
+func buildManualAuthURL(ctx context.Context, srv *config.MCPServerConfig, store *FileTokenStore) string {
+	oauthCfg := transport.OAuthConfig{
+		ClientID:              srv.OAuth.ClientID,
+		ClientSecret:          srv.OAuth.ClientSecret,
+		ClientURI:             srv.OAuth.ClientURI,
+		Scopes:                srv.OAuth.Scopes,
+		PKCEEnabled:           true,
+		AuthServerMetadataURL: srv.OAuth.AuthServerMetadataURL,
+		TokenStore:            store,
+		RedirectURI:           oauthRedirectURI(srv),
+	}
+
+	baseURL := stripQueryFragment(srv.URL)
+	handler := transport.NewOAuthHandler(oauthCfg)
+	handler.SetBaseURL(baseURL)
+
+	state, _ := transport.GenerateState()
+	codeVerifier, _ := transport.GenerateCodeVerifier()
+	codeChallenge := transport.GenerateCodeChallenge(codeVerifier)
+
+	_ = store.SavePendingState(ctx, &OAuthPendingState{
+		State:        state,
+		CodeVerifier: codeVerifier,
+	})
+
+	authURL, _ := handler.GetAuthorizationURL(ctx, state, codeChallenge)
+	debuglog.Log("MCP: no-listener OAuth authorize URL for %q: %s", srv.Name, authURL)
+	return authURL
+}
+
+// deliverManualInstructions informs the user how to complete the OAuth flow
+// by pasting the redirect URL back.
+func deliverManualInstructions(runErrFn func(string), serverName, authURL string) error {
 	runErrFn(fmt.Sprintf(
 		"**%s** requires OAuth authorization.\n\n"+
 			"1. Open this URL:\n   %s\n\n"+
@@ -570,15 +769,14 @@ func startManualFlow(ctx context.Context, name string, cfg transport.OAuthConfig
 			"3. **Copy the full URL** from your browser's address bar\n"+
 			"   (the page may not load — that's expected).\n\n"+
 			"4. Run: `/mcp auth %s <pasted-url>`",
-		name, authURL, name,
+		serverName, authURL, serverName,
 	))
-
-	return &OAuthRequiredError{ServerName: name}
+	return &OAuthRequiredError{ServerName: serverName}
 }
 
 // --- helpers ---
 
-func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string, code string) error {
+func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string, code string, codeVerifier string) error {
 	handler := transport.NewOAuthHandler(cfg)
 	handler.SetBaseURL(baseURL)
 
@@ -594,6 +792,9 @@ func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string
 	data.Set("redirect_uri", cfg.RedirectURI)
 	if cfg.ClientSecret != "" {
 		data.Set("client_secret", cfg.ClientSecret)
+	}
+	if codeVerifier != "" {
+		data.Set("code_verifier", codeVerifier)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, meta.TokenEndpoint, strings.NewReader(data.Encode()))
@@ -630,9 +831,9 @@ func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string
 	return nil
 }
 
-func findAvailablePort() (int, error) {
+func findAvailablePort(host string) (int, error) {
 	for port := oauthLocalPortStart; port < oauthLocalPortEnd; port++ {
-		ln, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+		ln, err := net.Listen("tcp", fmt.Sprintf("%s:%d", host, port))
 		if err == nil {
 			_ = ln.Close()
 			return port, nil

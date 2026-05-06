@@ -357,13 +357,7 @@ func (m *Model) mcpToggle(name string) tea.Cmd {
 
 	ch := make(chan string, 1)
 	go m.connectAndRegisterMCP(srv, ch)
-	return func() tea.Msg {
-		content, ok := <-ch
-		if !ok {
-			return nil
-		}
-		return mcpStatusMsg{content: content}
-	}
+	return readNextMCPStatus(ch)
 }
 
 // mcpReconnect reconnects to a disconnected MCP server by name.
@@ -418,13 +412,7 @@ func (m *Model) mcpReconnect(name string) tea.Cmd {
 
 	ch := make(chan string, 1)
 	go m.reconnectAndRegisterMCP(srv, ch)
-	return func() tea.Msg {
-		content, ok := <-ch
-		if !ok {
-			return nil
-		}
-		return mcpStatusMsg{content: content}
-	}
+	return readNextMCPStatus(ch)
 }
 
 // mcpAuth initiates or completes the OAuth2 flow for an HTTP MCP server.
@@ -484,7 +472,8 @@ func (m *Model) mcpAuth(name string) tea.Cmd {
 }
 
 // startInteractiveOAuth runs the OAuth flow asynchronously and reports results.
-// All status messages are accumulated and delivered as a single message.
+// Intermediate messages (e.g. "Open this URL") are sent to the TUI immediately
+// via the channel so the user sees them even while the flow is still running.
 func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 	m.chatview.AddMessage(chatMessage{
 		Role:    "assistant",
@@ -493,20 +482,20 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 
 	ch := make(chan string, 1)
 	go func() {
-		var msgs []string
-		defer func() {
-			if len(msgs) > 0 {
-				ch <- strings.Join(msgs, "\n\n")
+		defer close(ch)
+
+		// errFn sends a message to TUI immediately — needed because
+		// startManualFlow may block waiting for a callback and we must
+		// surface the "Open this URL" prompt right away.
+		errFn := func(msg string) {
+			select {
+			case ch <- msg:
+			default:
 			}
-			close(ch)
-		}()
+		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
-
-		errFn := func(msg string) {
-			msgs = append(msgs, msg)
-		}
 
 		if err := mcp.RunOAuthFlow(ctx, srv, errFn); err != nil {
 			debuglog.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
@@ -515,19 +504,19 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 			// here would just repeat the same info — skip it.
 			var oauthErr *mcp.OAuthRequiredError
 			if !errors.As(err, &oauthErr) {
-				msgs = append(msgs, fmt.Sprintf("OAuth failed for **%s**: %v", srv.Name, err))
+				ch <- fmt.Sprintf("OAuth failed for **%s**: %v", srv.Name, err)
 			}
 			return
 		}
 
-		msgs = append(msgs, fmt.Sprintf("OAuth authorization successful for **%s**! Reconnecting...", srv.Name))
+		ch <- fmt.Sprintf("OAuth authorization successful for **%s**! Reconnecting...", srv.Name)
 
 		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 		defer reconnectCancel()
 
 		tools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
 		if err != nil {
-			msgs = append(msgs, fmt.Sprintf("Reconnect failed for **%s**: %v", srv.Name, err))
+			ch <- fmt.Sprintf("Reconnect failed for **%s**: %v", srv.Name, err)
 			return
 		}
 
@@ -536,16 +525,10 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 			debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
 		}
 
-		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
+		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools))
 	}()
 
-	return func() tea.Msg {
-		content, ok := <-ch
-		if !ok {
-			return nil
-		}
-		return mcpStatusMsg{content: content}
-	}
+	return readNextMCPStatus(ch)
 }
 
 // completeManualOAuth finishes the manual OAuth flow with the pasted redirect URL,
@@ -594,12 +577,19 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
 	}()
 
+	return readNextMCPStatus(ch)
+}
+
+// readNextMCPStatus reads the next message from the channel and returns a
+// mcpStatusMsg. If the channel is closed, returns nil (no more messages).
+// This enables a goroutine to stream multiple status updates to the TUI.
+func readNextMCPStatus(ch <-chan string) tea.Cmd {
 	return func() tea.Msg {
 		content, ok := <-ch
 		if !ok {
 			return nil
 		}
-		return mcpStatusMsg{content: content}
+		return mcpStatusMsg{content: content, nextCh: ch}
 	}
 }
 

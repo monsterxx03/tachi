@@ -200,6 +200,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			Role:    "assistant",
 			Content: msg.content,
 		})
+		if msg.nextCh != nil {
+			return m, readNextMCPStatus(msg.nextCh)
+		}
 	}
 
 	return m, nil

@@ -22,6 +22,14 @@ type DCRInfo struct {
 	AuthServerMetadataURL string `json:"auth_server_metadata_url,omitempty"`
 }
 
+// OAuthPendingState holds the ephemeral OAuth2 authorization state and PKCE
+// verifier for a manual flow that spans two CLI invocations (startManualFlow
+// → user pastes URL → CompleteManualAuth).
+type OAuthPendingState struct {
+	State        string `json:"state"`
+	CodeVerifier string `json:"code_verifier"`
+}
+
 // dcrTokenPath returns the path to a server's DCR info file.
 func dcrTokenPath(serverName string) (string, error) {
 	dir, err := mcpTokensDir()
@@ -53,9 +61,10 @@ func mcpTokenPath(serverName string) (string, error) {
 // Each server gets its own JSON file for tokens and, when DCR is used, a
 // separate _dcr.json file for the dynamically registered client credentials.
 type FileTokenStore struct {
-	serverName string
-	tokenPath  string
-	dcrPath    string
+	serverName   string
+	tokenPath    string
+	dcrPath      string
+	pendingPath  string
 }
 
 // NewFileTokenStore creates a FileTokenStore for the given server.
@@ -69,10 +78,15 @@ func NewFileTokenStore(serverName string) (*FileTokenStore, error) {
 	if err != nil {
 		return nil, err
 	}
+	pendingPath, err := mcpPendingPath(serverName)
+	if err != nil {
+		return nil, err
+	}
 	return &FileTokenStore{
-		serverName: serverName,
-		tokenPath:  tokenPath,
-		dcrPath:    dcrPath,
+		serverName:  serverName,
+		tokenPath:   tokenPath,
+		dcrPath:     dcrPath,
+		pendingPath: pendingPath,
 	}, nil
 }
 
@@ -171,4 +185,68 @@ func (s *FileTokenStore) SaveDCRInfo(ctx context.Context, info *DCRInfo) error {
 
 	debuglog.Log("MCP: saved DCR info for %q", s.serverName)
 	return nil
+}
+
+// mcpPendingPath returns the path to a server's pending OAuth state file.
+func mcpPendingPath(serverName string) (string, error) {
+	dir, err := mcpTokensDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, serverName+"_pending.json"), nil
+}
+
+// SavePendingState persists the OAuth2 authorization state and PKCE verifier
+// for a manual flow so that CompleteManualAuth can pick them up later.
+func (s *FileTokenStore) SavePendingState(ctx context.Context, state *OAuthPendingState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	dir := filepath.Dir(s.pendingPath)
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return fmt.Errorf("create token dir %q: %w", dir, err)
+	}
+
+	data, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return fmt.Errorf("marshal pending state: %w", err)
+	}
+
+	if err := os.WriteFile(s.pendingPath, data, 0600); err != nil {
+		return fmt.Errorf("write pending state %q: %w", s.pendingPath, err)
+	}
+
+	debuglog.Log("MCP: saved pending OAuth state for %q", s.serverName)
+	return nil
+}
+
+// GetPendingState loads the pending OAuth2 authorization state from disk,
+// then deletes the file so it can't be replayed.
+// Returns transport.ErrNoToken if no pending state exists.
+func (s *FileTokenStore) GetPendingState(ctx context.Context) (*OAuthPendingState, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
+	data, err := os.ReadFile(s.pendingPath)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, transport.ErrNoToken
+		}
+		return nil, fmt.Errorf("read pending state %q: %w", s.pendingPath, err)
+	}
+
+	var state OAuthPendingState
+	if err := json.Unmarshal(data, &state); err != nil {
+		debuglog.Log("MCP: failed to parse pending state %q: %v", s.pendingPath, err)
+		return nil, transport.ErrNoToken
+	}
+
+	// Consume the pending state — don't allow replay
+	if err := os.Remove(s.pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		debuglog.Log("MCP: failed to remove pending state %q: %v", s.pendingPath, err)
+	}
+	debuglog.Log("MCP: loaded and consumed pending OAuth state for %q", s.serverName)
+	return &state, nil
 }
