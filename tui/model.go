@@ -711,8 +711,6 @@ func (m *Model) clampSessionScroll() {
 // Session selection handlers
 
 func (m *Model) handleKeySelectingSession(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	visibleRows := m.sessionVisibleRows()
-
 	switch msg.String() {
 	case "up", "ctrl+k", "ctrl+p":
 		if m.sessionSelIdx > 0 {
