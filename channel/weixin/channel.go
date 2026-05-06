@@ -13,9 +13,10 @@ import (
 
 // Channel implements the channel.Channel interface for WeChat iLink Bot.
 type Channel struct {
-	cfg   config.WeixinConfig
-	store *stateStore
-	cli   *client
+	cfg            config.WeixinConfig
+	store          *stateStore
+	cli            *client
+	typingTickets  *typingTicketCache
 
 	// Resolved at login time.
 	accountID string   // ilink_bot_id, e.g. "a1b2c3d4@im.bot"
@@ -37,10 +38,12 @@ func NewChannel(cfg config.WeixinConfig) (*Channel, error) {
 		return nil, fmt.Errorf("weixin: state store: %w", err)
 	}
 
+	cli := newClient()
 	return &Channel{
-		cfg:   cfg,
-		store: store,
-		cli:   newClient(),
+		cfg:           cfg,
+		store:         store,
+		cli:           cli,
+		typingTickets: newTypingTicketCache(cli),
 	}, nil
 }
 

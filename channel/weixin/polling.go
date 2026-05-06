@@ -142,8 +142,15 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 
 	debuglog.Log("weixin: dispatching msg from %s (thread=%s): %s", msg.FromUserID, threadID, truncate(text, 100))
 
+	// Start typing indicator while LLM processes.
+	typingDone := make(chan struct{})
+	go ch.runTyping(ctx, msg.FromUserID, typingDone)
+
 	// Dispatch to agent handler.
 	outMsg, err := handler(ctx, inMsg)
+
+	// Stop typing.
+	close(typingDone)
 	if err != nil {
 		debuglog.Log("weixin: handler error for %s: %v", threadID, err)
 		// Send error message back to user.
@@ -162,65 +169,43 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 
 // --- Typing Indicator ---
 
-// typingTicker manages the periodic "typing" status update to WeChat.
-type typingTicker struct {
-	mu       sync.Mutex
-	stopCh   chan struct{}
-	stopped  bool
-	client   *client
-	userID   string
-	ticket   string
-}
-
-// newTypingTicker creates a typing indicator ticker.
-func (ch *Channel) newTypingTicker(userID string, ticket string) *typingTicker {
-	return &typingTicker{
-		stopCh: make(chan struct{}),
-		client: ch.cli,
-		userID: userID,
-		ticket: ticket,
+// runTyping sends typing status every 5 seconds until done is closed.
+// Must be called in its own goroutine.
+func (ch *Channel) runTyping(ctx context.Context, userID string, done <-chan struct{}) {
+	ticket, err := ch.typingTickets.get(userID, "")
+	if err != nil {
+		debuglog.Log("weixin: typing ticket fetch failed for %s: %v", userID, err)
+		return
 	}
-}
 
-// start begins sending typing status every 5 seconds.
-func (t *typingTicker) start() {
-	go func() {
-		ticker := time.NewTicker(5 * time.Second)
-		defer ticker.Stop()
+	// Send initial typing immediately.
+	ch.sendTyping(userID, ticket, TypingStatusTyping)
 
-		// Send immediately.
-		t.send(TypingStatusTyping)
+	ticker := time.NewTicker(5 * time.Second)
+	defer ticker.Stop()
 
-		for {
-			select {
-			case <-ticker.C:
-				t.send(TypingStatusTyping)
-			case <-t.stopCh:
-				t.send(TypingStatusCancel)
-				return
-			}
+	for {
+		select {
+		case <-ticker.C:
+			ch.sendTyping(userID, ticket, TypingStatusTyping)
+		case <-done:
+			ch.sendTyping(userID, ticket, TypingStatusCancel)
+			return
+		case <-ctx.Done():
+			ch.sendTyping(userID, ticket, TypingStatusCancel)
+			return
 		}
-	}()
-}
-
-// stop stops the typing indicator.
-func (t *typingTicker) stop() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if !t.stopped {
-		t.stopped = true
-		close(t.stopCh)
 	}
 }
 
-func (t *typingTicker) send(status int) {
+func (ch *Channel) sendTyping(userID, ticket string, status int) {
 	req := &SendTypingRequest{
-		ILinkUserID:  t.userID,
-		TypingTicket: t.ticket,
+		ILinkUserID:  userID,
+		TypingTicket: ticket,
 		Status:       status,
 		BaseInfo:     BaseInfo{ChannelVersion: defaultChannelVersion},
 	}
-	if err := t.client.sendTyping(req); err != nil {
+	if err := ch.cli.sendTyping(req); err != nil {
 		debuglog.Log("weixin: sendTyping error: %v", err)
 	}
 }
@@ -228,10 +213,10 @@ func (t *typingTicker) send(status int) {
 // --- Typing Ticket Cache ---
 
 type typingTicketCache struct {
-	mu         sync.Mutex
-	ticket     string
-	expiresAt  time.Time
-	client     *client
+	mu        sync.Mutex
+	ticket    string
+	expiresAt time.Time
+	client    *client
 }
 
 const typingTicketTTL = 24 * time.Hour
