@@ -31,6 +31,11 @@ type ManagerConfig struct {
 	// MaxIterations caps the agent-loop iterations per message.
 	// If zero, uses config.MaxIterations.
 	MaxIterations int
+
+	// SessionStore overrides the default file-based session store.
+	// If nil, sessions are stored under ~/.tachi/session (default).
+	// Tests should inject a FileStore backed by a temporary directory.
+	SessionStore session.Store
 }
 
 // Manager orchestrates Channel implementations and bridges them to agent instances.
@@ -75,6 +80,9 @@ type Manager struct {
 	provider       llm.Provider
 	resolvedConfig *config.ResolvedConfig
 
+	// Session store override (nil = use default ~/.tachi/session).
+	sessionStore session.Store
+
 	mu       sync.Mutex
 	channels []Channel
 }
@@ -91,6 +99,7 @@ func NewManager(mcfg ManagerConfig) *Manager {
 		providerName: mcfg.ProviderName,
 		modelName:    mcfg.ModelName,
 		maxIters:     maxIters,
+		sessionStore: mcfg.SessionStore,
 	}
 }
 
@@ -185,7 +194,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	if err != nil {
 		debuglog.Log("channel: session setup for thread %s: %v", msg.ThreadID, err)
 		// Continue anyway with a fresh session manager and no history.
-		sm, _ = session.NewManager()
+		sm = m.newSessionManager()
 		priorHistory = nil
 	}
 
@@ -327,6 +336,19 @@ func (m *Manager) initProvider() error {
 	return m.initErr
 }
 
+// newSessionManager creates a session manager backed by m.sessionStore
+// (if set) or the default ~/.tachi/session directory.
+func (m *Manager) newSessionManager() *session.Manager {
+	if m.sessionStore != nil {
+		return session.NewManagerWithStore(m.sessionStore)
+	}
+	sm, err := session.NewManager()
+	if err != nil {
+		debuglog.Log("channel: session manager fallback failed: %v", err)
+	}
+	return sm
+}
+
 // --- Session helpers ---
 
 // loadThreadSession looks up a session by ThreadID (via session.ThreadID field).
@@ -334,9 +356,15 @@ func (m *Manager) initProvider() error {
 // converted LLM message history. If not found, creates a new session manager
 // with a fresh session and returns nil history.
 func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Message, error) {
-	sm, err := session.NewManager()
-	if err != nil {
-		return nil, nil, fmt.Errorf("session manager: %w", err)
+	var sm *session.Manager
+	if m.sessionStore != nil {
+		sm = session.NewManagerWithStore(m.sessionStore)
+	} else {
+		var err error
+		sm, err = session.NewManager()
+		if err != nil {
+			return nil, nil, fmt.Errorf("session manager: %w", err)
+		}
 	}
 
 	// Try to find an existing session for this ThreadID.

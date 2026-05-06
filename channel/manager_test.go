@@ -17,6 +17,17 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// ---- helpers ----
+
+// newTempSessionStore creates a FileStore backed by a test-temporary directory
+// that is automatically cleaned up when the test finishes.
+func newTempSessionStore(t *testing.T) *sesspkg.FileStore {
+	t.Helper()
+	store, err := sesspkg.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	return store
+}
+
 // ---- Mock Channel ----
 
 type mockChannel struct {
@@ -342,6 +353,7 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 	mgr := NewManager(ManagerConfig{
 		Config:       cfg,
 		SystemPrompt: "test prompt",
+		SessionStore: newTempSessionStore(t),
 	})
 	// Inject resolved config so loadThreadSession can call sm.New().
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -372,9 +384,11 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 // with a prior session, loadThreadSession returns the converted history.
 func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	cfg := config.DefaultConfig()
+	store := newTempSessionStore(t)
 	mgr := NewManager(ManagerConfig{
 		Config:       cfg,
 		SystemPrompt: "test prompt",
+		SessionStore: store,
 	})
 	mgr.resolvedConfig = &config.ResolvedConfig{
 		Provider: config.ResolvedProvider{
