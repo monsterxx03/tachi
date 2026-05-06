@@ -41,7 +41,6 @@ type AIAgent struct {
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
-	commitModelName    string       // model name for the commit provider (for co-author trailer)
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -170,18 +169,7 @@ func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
 	}
 
 	a.commitProvider = cp
-	a.commitModelName = resolved.Model
 	debuglog.Log("Agent: using commit provider %q (%s/%s) for /commit message generation", cpName, resolved.Type, resolved.Model)
-}
-
-// CommitModelName returns the model name used for commit message generation
-// (for the Co-authored-by trailer). Returns the main model if no commit
-// provider is configured.
-func (a *AIAgent) CommitModelName() string {
-	if a.commitModelName != "" {
-		return a.commitModelName
-	}
-	return a.model
 }
 
 // CommitProvider returns the dedicated commit provider, or nil if none is configured

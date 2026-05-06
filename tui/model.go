@@ -422,7 +422,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	m.cancelFunc = cancel
 
 	commitProvider := m.agent.CommitProvider()
-	commitModel := m.agent.CommitModelName()
+	commitModel := m.agent.Model()
 
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
 		commitUserPrompt(commitModel), m.chatOpts)
