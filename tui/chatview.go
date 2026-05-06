@@ -546,6 +546,14 @@ func getToolArgsPreview(name, argsJSON string) string {
 			}
 			return q
 		}
+	case "WebFetch":
+		if u, ok := args["url"].(string); ok {
+			runes := []rune(u)
+			if len(runes) > 60 {
+				return "WebFetch: " + string(runes[:57]) + "…"
+			}
+			return "WebFetch: " + u
+		}
 	}
 	return argsJSON
 }

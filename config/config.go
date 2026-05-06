@@ -17,6 +17,7 @@ const (
 	DefaultMaxIterations                    = 50
 	DefaultWebSearchTimeout                 = 30
 	DefaultWebSearchMaxResults              = 10
+	DefaultWebFetchTimeout                  = 60
 	DefaultTUIInputHistoryLimit             = 10
 	DefaultIterationWarningThreshold        = 5
 	DefaultTokenWarningThresholdPct         = 80
@@ -43,6 +44,11 @@ type WebSearchConfig struct {
 	Timeout    int    `yaml:"timeout"`
 	MaxResults int    `yaml:"max_results"`
 	Proxy      string `yaml:"proxy"` // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+}
+
+type WebFetchConfig struct {
+	Timeout int    `yaml:"timeout"` // HTTP request timeout in seconds (default 60)
+	Proxy   string `yaml:"proxy"`   // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 }
 
 // MCPTransportType represents the type of MCP transport protocol
@@ -122,6 +128,7 @@ type Config struct {
 	SessionCleanupMaxCount *int                  `yaml:"session_cleanup_max_count"` // nil = default (100); 0 = no cleanup; >0 = explicit
 	Providers              []ProviderConfig      `yaml:"providers"`
 	WebSearch       WebSearchConfig       `yaml:"web_search"`
+	WebFetch        WebFetchConfig        `yaml:"web_fetch"`
 	MCPServers      []MCPServerConfig     `yaml:"mcp_servers"`
 	TUI             TUIConfig             `yaml:"tui"`
 	SystemReminder  SystemReminderConfig  `yaml:"system_reminder"`
@@ -140,6 +147,9 @@ func DefaultConfig() *Config {
 			Type:       "brave",
 			Timeout:    DefaultWebSearchTimeout,
 			MaxResults: DefaultWebSearchMaxResults,
+		},
+		WebFetch: WebFetchConfig{
+			Timeout: DefaultWebFetchTimeout,
 		},
 	}
 }
@@ -216,6 +226,9 @@ func LoadFrom(path string) (*Config, error) {
 	if cfg.WebSearch.MaxResults == 0 {
 		cfg.WebSearch.MaxResults = DefaultWebSearchMaxResults
 	}
+	if cfg.WebFetch.Timeout == 0 {
+		cfg.WebFetch.Timeout = DefaultWebFetchTimeout
+	}
 	return cfg, nil
 }
 
@@ -276,6 +289,10 @@ func Init() (string, error) {
 			Key:        "<your-web-search-api-key>",
 			Timeout:    DefaultWebSearchTimeout,
 			MaxResults: DefaultWebSearchMaxResults,
+		},
+		WebFetch: WebFetchConfig{
+			Timeout: DefaultWebFetchTimeout,
+			// Proxy: "socks5://127.0.0.1:1080",
 		},
 	}
 

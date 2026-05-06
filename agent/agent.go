@@ -899,6 +899,13 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.RegisterTool(&ws)
 	}
 
+	// WebFetch — always registered, no API key needed.
+	wf := tools.WebFetchTool{
+		Timeout: cfg.WebFetch.Timeout,
+		Proxy:   cfg.WebFetch.Proxy,
+	}
+	a.RegisterTool(&wf)
+
 	// --- MCP servers ---
 	if !cfg.MCPEnabled() {
 		return nil, nil
