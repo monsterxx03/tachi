@@ -10,7 +10,10 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
 type SearchResult struct {
@@ -39,25 +42,43 @@ type WebSearchTool struct {
 	APIKey       string
 	Timeout      int
 	MaxResults   int
+	Proxy        string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
+
+	clientOnce sync.Once
+	httpClient *http.Client
 }
 
-func (t WebSearchTool) Name() string { return "WebSearch" }
-func (t WebSearchTool) Description() string {
+// getHTTPClient returns a cached *http.Client. The client is built once
+// (lazily) and reused across every search call, preserving connection
+// pooling and proxy connections.
+func (t *WebSearchTool) getHTTPClient() *http.Client {
+	t.clientOnce.Do(func() {
+		c, err := proxy.NewHTTPClient(t.Proxy, time.Duration(t.Timeout)*time.Second)
+		if err != nil {
+			c = &http.Client{Timeout: time.Duration(t.Timeout) * time.Second}
+		}
+		t.httpClient = c
+	})
+	return t.httpClient
+}
+
+func (t *WebSearchTool) Name() string { return "WebSearch" }
+func (t *WebSearchTool) Description() string {
 	return "Performs a web search using a search engine API. " +
 		"Returns search results including titles, links, and snippets. " +
 		"Requires a search provider API key to be configured via environment variables " +
 		"(SERPER_API_KEY for Serper.dev, SERPAPI_KEY for SerpAPI, or BRAVE_API_KEY for Brave Search)."
 }
-func (t WebSearchTool) Properties() map[string]PropertySchema {
+func (t *WebSearchTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"query": {Type: "string", Description: "The search query to execute"},
 		"num":   {Type: "integer", Description: "Number of results to return (default: 5, max: 10)"},
 	}
 }
-func (t WebSearchTool) Required() []string { return []string{"query"} }
-func (t WebSearchTool) Parallel() bool     { return true }
+func (t *WebSearchTool) Required() []string { return []string{"query"} }
+func (t *WebSearchTool) Parallel() bool     { return true }
 
-func (t WebSearchTool) ExecuteContext(ctx context.Context, args string) (string, error) {
+func (t *WebSearchTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var a webSearchArgs
 	if err := parseArgs(args, &a); err != nil {
 		return "", err
@@ -79,14 +100,16 @@ func (t WebSearchTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("no search provider API key configured. Set web_search.key in ~/.tachi/config.yaml, or set SERPER_API_KEY / SERPAPI_KEY / BRAVE_API_KEY environment variable")
 	}
 
+	client := t.getHTTPClient()
+
 	var result *WebSearchResult
 	switch providerType {
 	case "serper":
-		result = t.searchWithSerper(ctx, a.Query, numResults, apiKey)
+		result = t.searchWithSerper(ctx, client, a.Query, numResults, apiKey)
 	case "serpapi":
-		result = t.searchWithSerpAPI(ctx, a.Query, numResults, apiKey)
+		result = t.searchWithSerpAPI(ctx, client, a.Query, numResults, apiKey)
 	case "brave":
-		result = t.searchWithBrave(ctx, a.Query, numResults, apiKey)
+		result = t.searchWithBrave(ctx, client, a.Query, numResults, apiKey)
 	default:
 		return "", fmt.Errorf("unsupported web search provider: %s", providerType)
 	}
@@ -97,7 +120,7 @@ func (t WebSearchTool) ExecuteContext(ctx context.Context, args string) (string,
 	return marshalResult(result)
 }
 
-func (t WebSearchTool) ResolveProvider() (providerType, apiKey string) {
+func (t *WebSearchTool) ResolveProvider() (providerType, apiKey string) {
 	if t.APIKey != "" && t.ProviderType != "" {
 		return t.ProviderType, t.APIKey
 	}
@@ -113,7 +136,7 @@ func (t WebSearchTool) ResolveProvider() (providerType, apiKey string) {
 	return "", ""
 }
 
-func (t WebSearchTool) searchWithSerper(ctx context.Context, query string, num int, apiKey string) *WebSearchResult {
+func (t *WebSearchTool) searchWithSerper(ctx context.Context, client *http.Client, query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -149,7 +172,7 @@ func (t WebSearchTool) searchWithSerper(ctx context.Context, query string, num i
 	req.Header.Set("X-API-KEY", apiKey)
 	req.Header.Set("Content-Type", "application/json")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("request failed: %v", err)
 		return result
@@ -199,7 +222,7 @@ func (t WebSearchTool) searchWithSerper(ctx context.Context, query string, num i
 	return result
 }
 
-func (t WebSearchTool) searchWithSerpAPI(ctx context.Context, query string, num int, apiKey string) *WebSearchResult {
+func (t *WebSearchTool) searchWithSerpAPI(ctx context.Context, client *http.Client, query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -229,7 +252,7 @@ func (t WebSearchTool) searchWithSerpAPI(ctx context.Context, query string, num 
 		return result
 	}
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("request failed: %v", err)
 		return result
@@ -277,7 +300,7 @@ func (t WebSearchTool) searchWithSerpAPI(ctx context.Context, query string, num 
 	return result
 }
 
-func (t WebSearchTool) searchWithBrave(ctx context.Context, query string, num int, apiKey string) *WebSearchResult {
+func (t *WebSearchTool) searchWithBrave(ctx context.Context, client *http.Client, query string, num int, apiKey string) *WebSearchResult {
 	result := &WebSearchResult{
 		Query: query,
 	}
@@ -308,7 +331,7 @@ func (t WebSearchTool) searchWithBrave(ctx context.Context, query string, num in
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("X-Subscription-Token", apiKey)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		result.ErrorMessage = fmt.Sprintf("request failed: %v", err)
 		return result

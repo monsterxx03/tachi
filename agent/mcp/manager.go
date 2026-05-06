@@ -16,6 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
 // Manager manages the lifecycle of MCP client connections and their tools.
@@ -163,6 +164,16 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 	}
 	if len(srv.Headers) > 0 {
 		opts = append(opts, transport.WithHTTPHeaders(srv.Headers))
+	}
+	// Proxy support for HTTP MCP servers.
+	if srv.Proxy != "" {
+		httpClient, err := proxy.NewHTTPClient(srv.Proxy, timeout)
+		if err != nil {
+			debuglog.Log("MCP: invalid proxy %q for server %q: %v", srv.Proxy, srv.Name, err)
+		} else {
+			opts = append(opts, transport.WithHTTPBasicClient(httpClient))
+			debuglog.Log("MCP: using proxy %q for server %q", srv.Proxy, srv.Name)
+		}
 	}
 	// If OAuth isn't explicitly configured, check for persisted token / DCR
 	// info on disk — a previous DCR-based auth may have left valid tokens.

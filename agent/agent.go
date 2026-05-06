@@ -8,13 +8,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/agent/mcp"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
-	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 )
 
 const defaultMaxTokens = 4096
@@ -242,7 +242,7 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 		},
 	}
 
-	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 50})
+	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 500})
 	if err != nil {
 		debuglog.Log("Agent: failed to generate title: %v, falling back to truncation", err)
 		return session.ExtractTitle(firstMessage)
@@ -342,15 +342,15 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 }
 
 const (
-	AgentEventTextDelta         = "text_delta"
-	AgentEventThinkingDelta     = "thinking_delta"
-	AgentEventToolCallStart     = "tool_call_start"
-	AgentEventToolCallArgs      = "tool_call_args"
-	AgentEventToolConfirmation  = "tool_confirmation"
-	AgentEventToolResult        = "tool_result"
-	AgentEventTurnComplete      = "turn_complete"
-	AgentEventError             = "error"
-	AgentEventAskUser           = "ask_user_question"
+	AgentEventTextDelta        = "text_delta"
+	AgentEventThinkingDelta    = "thinking_delta"
+	AgentEventToolCallStart    = "tool_call_start"
+	AgentEventToolCallArgs     = "tool_call_args"
+	AgentEventToolConfirmation = "tool_confirmation"
+	AgentEventToolResult       = "tool_result"
+	AgentEventTurnComplete     = "turn_complete"
+	AgentEventError            = "error"
+	AgentEventAskUser          = "ask_user_question"
 )
 
 type AgentEvent struct {
@@ -372,15 +372,15 @@ type AgentEvent struct {
 var errCancelled = fmt.Errorf("edit cancelled by user")
 
 type streamAccumulator struct {
-	text           strings.Builder
-	thinking       strings.Builder
-	signature      strings.Builder
-	toolCalls      []llm.ToolCall
-	toolArgs       []strings.Builder
-	toolIndexMap   map[int]int // OpenAI tool index -> toolArgs slice index
-	thinkBlocks    []llm.ThinkingBlock
-	finishReason   string
-	usage          *llm.Usage
+	text         strings.Builder
+	thinking     strings.Builder
+	signature    strings.Builder
+	toolCalls    []llm.ToolCall
+	toolArgs     []strings.Builder
+	toolIndexMap map[int]int // OpenAI tool index -> toolArgs slice index
+	thinkBlocks  []llm.ThinkingBlock
+	finishReason string
+	usage        *llm.Usage
 }
 
 func (acc *streamAccumulator) finalize() {
@@ -853,12 +853,12 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool) systemreminder.Conte
 		iterLeft = a.iterationBudget.Remaining
 	}
 	return systemreminder.Context{
-		IsFirstMessage:  isFirstMessage,
-		IterationsLeft:  iterLeft,
-		MaxIterations:   a.maxIterations,
-		InputTokens:     a.lastInputTokens,
-		ContextWindow:   a.contextWindow,
-		Now:             time.Now(),
+		IsFirstMessage: isFirstMessage,
+		IterationsLeft: iterLeft,
+		MaxIterations:  a.maxIterations,
+		InputTokens:    a.lastInputTokens,
+		ContextWindow:  a.contextWindow,
+		Now:            time.Now(),
 	}
 }
 
@@ -893,9 +893,10 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		APIKey:       cfg.WebSearch.Key,
 		Timeout:      cfg.WebSearch.Timeout,
 		MaxResults:   cfg.WebSearch.MaxResults,
+		Proxy:        cfg.WebSearch.Proxy,
 	}
 	if _, key := ws.ResolveProvider(); key != "" {
-		a.RegisterTool(ws)
+		a.RegisterTool(&ws)
 	}
 
 	// --- MCP servers ---
@@ -954,7 +955,6 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	a.sessionManager = sm
 	return llmMsgs, sessionMsgs, nil
 }
-
 
 func (b *IterationBudget) consume() bool {
 	if b.Unlimited {

@@ -42,6 +42,7 @@ type WebSearchConfig struct {
 	Key        string `yaml:"key"`
 	Timeout    int    `yaml:"timeout"`
 	MaxResults int    `yaml:"max_results"`
+	Proxy      string `yaml:"proxy"` // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
 }
 
 // MCPTransportType represents the type of MCP transport protocol
@@ -74,6 +75,7 @@ type MCPServerConfig struct {
 	Env     map[string]string `yaml:"env,omitempty"`
 	URL     string            `yaml:"url,omitempty"`     // For http transport
 	Headers map[string]string `yaml:"headers,omitempty"` // For http transport
+	Proxy   string            `yaml:"proxy,omitempty"`   // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
 	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
 	Enabled *bool             `yaml:"enabled,omitempty"` // Whether to load this server (default: true)
 	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`   // OAuth2 configuration (http transport only)
