@@ -212,77 +212,7 @@ func (a *AIAgent) RunOneOffStream(
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
-		llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
-
-		apiCallCount := 0
-		lengthContinueRetries := 0
-
-		// Initialize iteration budget for this run.
-		if a.maxIterations == 0 {
-			a.iterationBudget = &IterationBudget{Unlimited: true}
-		} else {
-			a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
-		}
-
-		for {
-			if !a.iterationBudget.consume() {
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},
-				}
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Error: ctx.Err()},
-				}
-				return
-			default:
-			}
-
-			apiCallCount++
-			streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
-			if err != nil {
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: fmt.Errorf("API call failed: %w", err)},
-				}
-				return
-			}
-
-			acc, err := a.consumeStream(streamCh, ch, apiCallCount)
-			if err != nil {
-				exitReason := "error"
-				if ctx.Err() != nil {
-					exitReason = "interrupted"
-				}
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
-				}
-				return
-			}
-
-			// Track input tokens for token-warning reminders
-			if acc.usage != nil {
-				a.lastInputTokens = acc.usage.InputTokens
-			}
-
-			if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
-				return
-			}
-
-			// After tool results, inject system-reminder warnings.
-			if a.shouldInjectLoopReminder() {
-				rctx := a.buildReminderContext(false)
-				if block := a.reminderCollector.Collect(rctx); block != "" {
-					messages = append(messages, llm.Message{Role: "user", Content: block})
-				}
-			}
-		}
+		a.runAgentLoop(ctx, provider, messages, opts, ch)
 	}()
 
 	return ch
@@ -795,19 +725,6 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
-		llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
-
-		apiCallCount := 0
-		lengthContinueRetries := 0
-
-		// Initialize iteration budget for this conversation.
-		// 0 means unlimited (no cap); >0 is an explicit limit.
-		if a.maxIterations == 0 {
-			a.iterationBudget = &IterationBudget{Unlimited: true}
-		} else {
-			a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
-		}
-
 		// Session management: create session if needed and append user message
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
 			provider := a.provider.Name()
@@ -827,70 +744,93 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 		}
 
-		for {
-			if !a.iterationBudget.consume() {
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},
-				}
-				return
-			}
-
-			select {
-			case <-ctx.Done():
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Error: ctx.Err()},
-				}
-				return
-			default:
-			}
-
-			apiCallCount++
-			streamCh, err := a.provider.CreateChatStream(ctx, messages, llmTools, opts)
-			if err != nil {
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: fmt.Errorf("API call failed: %w", err)},
-				}
-				return
-			}
-
-			acc, err := a.consumeStream(streamCh, ch, apiCallCount)
-			if err != nil {
-				exitReason := "error"
-				if ctx.Err() != nil {
-					exitReason = "interrupted"
-				}
-				ch <- AgentEvent{
-					Type:   AgentEventError,
-					Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
-				}
-				return
-			}
-
-			// Track input tokens for token-warning reminders
-			if acc.usage != nil {
-				a.lastInputTokens = acc.usage.InputTokens
-			}
-
-			if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
-				return
-			}
-
-			// After tool results are appended and we're about to loop back,
-			// inject a system-reminder user message with iteration/token warnings.
-			// Date reminder won't fire here (IsFirstMessage is false).
-			if a.shouldInjectLoopReminder() {
-				rctx := a.buildReminderContext(false)
-				if block := a.reminderCollector.Collect(rctx); block != "" {
-					messages = append(messages, llm.Message{Role: "user", Content: block})
-				}
-			}
-		}
+		a.runAgentLoop(ctx, a.provider, messages, opts, ch)
 	}()
 
 	return ch
+}
+
+// runAgentLoop is the shared event loop used by both RunConversationStream
+// and RunOneOffStream. It handles iteration budgets, streaming, tool
+// execution, length continuation, and system-reminder injection.
+func (a *AIAgent) runAgentLoop(
+	ctx context.Context,
+	provider llm.Provider,
+	messages []llm.Message,
+	opts llm.ChatOptions,
+	ch chan<- AgentEvent,
+) {
+	llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
+
+	apiCallCount := 0
+	lengthContinueRetries := 0
+
+	// Initialize iteration budget.
+	if a.maxIterations == 0 {
+		a.iterationBudget = &IterationBudget{Unlimited: true}
+	} else {
+		a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
+	}
+
+	for {
+		if !a.iterationBudget.consume() {
+			ch <- AgentEvent{
+				Type:   AgentEventError,
+				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},
+			}
+			return
+		}
+
+		select {
+		case <-ctx.Done():
+			ch <- AgentEvent{
+				Type:   AgentEventError,
+				Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Error: ctx.Err()},
+			}
+			return
+		default:
+		}
+
+		apiCallCount++
+		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
+		if err != nil {
+			ch <- AgentEvent{
+				Type:   AgentEventError,
+				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: fmt.Errorf("API call failed: %w", err)},
+			}
+			return
+		}
+
+		acc, err := a.consumeStream(streamCh, ch, apiCallCount)
+		if err != nil {
+			exitReason := "error"
+			if ctx.Err() != nil {
+				exitReason = "interrupted"
+			}
+			ch <- AgentEvent{
+				Type:   AgentEventError,
+				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
+			}
+			return
+		}
+
+		// Track input tokens for token-warning reminders
+		if acc.usage != nil {
+			a.lastInputTokens = acc.usage.InputTokens
+		}
+
+		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
+			return
+		}
+
+		// After tool results, inject system-reminder warnings.
+		if a.shouldInjectLoopReminder() {
+			rctx := a.buildReminderContext(false)
+			if block := a.reminderCollector.Collect(rctx); block != "" {
+				messages = append(messages, llm.Message{Role: "user", Content: block})
+			}
+		}
+	}
 }
 
 func (a *AIAgent) buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
