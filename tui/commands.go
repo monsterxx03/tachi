@@ -55,8 +55,8 @@ type Command struct {
 
 var commands = []Command{
 	{
-		Name:        "/clear",
-		Description: "Clear conversation history",
+		Name:        "/new",
+		Description: "Start new conversation",
 		handler: func(m *Model) tea.Cmd {
 			m.history = nil
 			m.chatview.Clear()

@@ -167,7 +167,15 @@ func (m *Manager) buildHandler() MessageHandler {
 
 // process builds an agent, sets up a per-thread session, runs the conversation
 // with auto-confirm, and returns the response text.
+//
+// Slash commands (messages starting with "/") are intercepted and handled
+// directly without invoking the LLM. Currently supported: /new, /mcp.
 func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, error) {
+	// --- slash command interception ---
+	if strings.HasPrefix(msg.Content, "/") {
+		return m.handleSlashCommand(msg)
+	}
+
 	if m.resolvedConfig == nil || m.provider == nil {
 		return "", fmt.Errorf("channel manager not initialized; call Start() first")
 	}
@@ -218,6 +226,86 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	})
 
 	return m.drainEvents(eventCh, aiAgent)
+}
+
+// handleSlashCommand dispatches message starting with "/" to the appropriate
+// handler. Returns the response text for the channel to send back.
+func (m *Manager) handleSlashCommand(msg IncomingMessage) (string, error) {
+	parts := strings.Fields(msg.Content)
+	if len(parts) == 0 {
+		return "", nil
+	}
+	cmd := parts[0]
+
+	switch cmd {
+	case "/new":
+		return m.handleNewCommand(msg.ThreadID)
+	case "/mcp":
+		return m.handleMCPList()
+	default:
+		debuglog.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers", cmd), nil
+	}
+}
+
+// handleNewCommand ends the current session for the given ThreadID so the
+// next message starts a fresh conversation.
+func (m *Manager) handleNewCommand(threadID string) (string, error) {
+	sm := m.newSessionManager()
+	if sm == nil {
+		return "", fmt.Errorf("session manager unavailable")
+	}
+
+	sess, err := sm.FindByThreadID(threadID)
+	if err != nil {
+		debuglog.Log("channel: /new find session for %s: %v", threadID, err)
+	}
+
+	if sess != nil {
+		// Clear the ThreadID on the old session so FindByThreadID won't
+		// match it on the next message, then end the current session.
+		if err := sm.SetThreadID(""); err != nil {
+			debuglog.Log("channel: /new clear thread_id for %s: %v", threadID, err)
+		}
+		sm.EndCurrent()
+		debuglog.Log("channel: /new ended session %s for thread %s", sess.ID, threadID)
+	}
+
+	return "✅ Started a new conversation. Previous session has been ended.", nil
+}
+
+// handleMCPList returns a formatted list of configured MCP servers.
+func (m *Manager) handleMCPList() (string, error) {
+	servers := m.cfg.MCPServers
+	if len(servers) == 0 {
+		return "No MCP servers configured.", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("MCP Servers:\n")
+
+	for _, srv := range servers {
+		enabled := srv.IsEnabled()
+		status := "Disabled"
+		if enabled {
+			status = "Enabled"
+		}
+
+		transport := "?"
+		switch srv.Type {
+		case config.MCPTransportStdio:
+			transport = fmt.Sprintf("stdio (%s)", srv.Command)
+		case config.MCPTransportHTTP:
+			transport = fmt.Sprintf("http (%s)", srv.URL)
+		}
+
+		fmt.Fprintf(&sb, "\n- %s [%s]\n  Transport: %s\n", srv.Name, status, transport)
+		if srv.HasOAuth() {
+			sb.WriteString("  OAuth: configured\n")
+		}
+	}
+
+	return sb.String(), nil
 }
 
 // drainEvents consumes all AgentEvents, returning the final assistant text or

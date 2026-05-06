@@ -13,7 +13,7 @@ Input remains enabled during `stateStreaming`. Messages submitted during streami
 - **Auto-drain**: in the `AgentEventTurnComplete` handler, if `pendingQueue` is non-empty, join all entries with `"\n\n"`, clear the queue, and auto-send as a single message.
 - **Ctrl+C**: cancels the current stream and drops the pending queue (user interrupted for a reason).
 - **Confirmation / AskUser states**: input stays disabled during these — the user must respond to the active prompt first.
-- **`/clear`** also drains/clears the pending queue.
+- **`/new`** also drains/clears the pending queue.
 - **Edge case**: modifying the textarea during streaming works normally — any keypress edits the current pending draft, same as `stateIdle`.
 
 ## Implementation notes

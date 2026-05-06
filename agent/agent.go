@@ -275,7 +275,7 @@ func (a *AIAgent) SessionManager() *session.Manager {
 }
 
 // ClearSession ends the current session so a new one will be created on the next message.
-// Used by /clear command to start a fresh session.
+// Used by /new command to start a fresh session.
 func (a *AIAgent) ClearSession() {
 	if a.sessionManager != nil {
 		a.sessionManager.EndCurrent()
