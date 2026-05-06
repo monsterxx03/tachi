@@ -40,6 +40,8 @@ type AIAgent struct {
 	lastInputTokens    int64
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
+	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
+	commitModelName    string       // model name for the commit provider (for co-author trailer)
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -138,6 +140,164 @@ func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
 
 	a.titleModelProvider = tp
 	debuglog.Log("Agent: using title provider %q (%s/%s) for session title generation", tpName, resolved.Type, resolved.Model)
+}
+
+// SetupCommitProvider resolves and creates a dedicated LLM provider for /commit
+// message generation from config. When commit_provider is empty or not found,
+// commit generation falls back to the main conversation provider.
+func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
+	cpName := cfg.EffectiveCommitProvider()
+	if cpName == "" {
+		return
+	}
+
+	cpCfg := cfg.FindProvider(cpName)
+	if cpCfg == nil {
+		debuglog.Log("Agent: commit_provider %q not found in providers list, falling back to main model", cpName)
+		return
+	}
+
+	resolved, err := config.ResolveProviderConfig(cpCfg)
+	if err != nil {
+		debuglog.Log("Agent: failed to resolve commit provider %q: %v, falling back to main model", cpName, err)
+		return
+	}
+
+	cp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		debuglog.Log("Agent: failed to create commit provider %q: %v, falling back to main model", cpName, err)
+		return
+	}
+
+	a.commitProvider = cp
+	a.commitModelName = resolved.Model
+	debuglog.Log("Agent: using commit provider %q (%s/%s) for /commit message generation", cpName, resolved.Type, resolved.Model)
+}
+
+// CommitModelName returns the model name used for commit message generation
+// (for the Co-authored-by trailer). Returns the main model if no commit
+// provider is configured.
+func (a *AIAgent) CommitModelName() string {
+	if a.commitModelName != "" {
+		return a.commitModelName
+	}
+	return a.model
+}
+
+// CommitProvider returns the dedicated commit provider, or nil if none is configured
+// (caller should fall back to the main provider).
+func (a *AIAgent) CommitProvider() llm.Provider {
+	return a.commitProvider
+}
+
+// RunOneOffStream runs a single-turn streaming conversation with a clean
+// history (no inherited messages) using the given provider. No session
+// recording is performed — this is for one-off tasks like /commit or /init.
+// If provider is nil, falls back to a.provider.
+func (a *AIAgent) RunOneOffStream(
+	ctx context.Context,
+	provider llm.Provider,
+	systemPrompt string,
+	userMessage string,
+	opts llm.ChatOptions,
+) <-chan AgentEvent {
+	ch := make(chan AgentEvent, 64)
+
+	go func() {
+		defer close(ch)
+
+		if provider == nil {
+			provider = a.provider
+		}
+
+		if opts.MaxTokens <= 0 {
+			opts.MaxTokens = defaultMaxTokens
+		}
+
+		// Build fresh messages: system + wrapped user message, no history
+		messages := make([]llm.Message, 0, 2)
+		if systemPrompt != "" {
+			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+		}
+
+		rctx := a.buildReminderContext(true)
+		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
+		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
+
+		llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
+
+		apiCallCount := 0
+		lengthContinueRetries := 0
+
+		// Initialize iteration budget for this run.
+		if a.maxIterations == 0 {
+			a.iterationBudget = &IterationBudget{Unlimited: true}
+		} else {
+			a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
+		}
+
+		for {
+			if !a.iterationBudget.consume() {
+				ch <- AgentEvent{
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},
+				}
+				return
+			}
+
+			select {
+			case <-ctx.Done():
+				ch <- AgentEvent{
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Error: ctx.Err()},
+				}
+				return
+			default:
+			}
+
+			apiCallCount++
+			streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
+			if err != nil {
+				ch <- AgentEvent{
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: fmt.Errorf("API call failed: %w", err)},
+				}
+				return
+			}
+
+			acc, err := a.consumeStream(streamCh, ch, apiCallCount)
+			if err != nil {
+				exitReason := "error"
+				if ctx.Err() != nil {
+					exitReason = "interrupted"
+				}
+				ch <- AgentEvent{
+					Type:   AgentEventError,
+					Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
+				}
+				return
+			}
+
+			// Track input tokens for token-warning reminders
+			if acc.usage != nil {
+				a.lastInputTokens = acc.usage.InputTokens
+			}
+
+			if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
+				return
+			}
+
+			// After tool results, inject system-reminder warnings.
+			if a.shouldInjectLoopReminder() {
+				rctx := a.buildReminderContext(false)
+				if block := a.reminderCollector.Collect(rctx); block != "" {
+					messages = append(messages, llm.Message{Role: "user", Content: block})
+				}
+			}
+		}
+	}()
+
+	return ch
 }
 
 // generateTitle uses the LLM to produce a concise session title from the first

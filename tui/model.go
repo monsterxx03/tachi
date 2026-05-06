@@ -408,7 +408,9 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	)
 }
 
-// sendCommitCommand 只把任务说明发给 LLM，由模型用 Bash 工具自行执行 git 并提交（不在此处 exec 任何命令）。
+// sendCommitCommand 使用干净的对话上下文（不继承历史）把任务说明发给 LLM，
+// 由模型用 Bash 工具自行执行 git 并提交（不在此处 exec 任何命令）。
+// 如果配置了 commit_provider，使用专用 provider；否则回退到主 provider。
 func (m *Model) sendCommitCommand() tea.Cmd {
 	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/commit"})
 	m.setState(stateWaiting)
@@ -419,7 +421,11 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, commitUserPrompt(m.agent.Model()), m.systemPrompt, m.chatOpts)
+	commitProvider := m.agent.CommitProvider()
+	commitModel := m.agent.CommitModelName()
+
+	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
+		commitUserPrompt(commitModel), m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

@@ -112,6 +112,7 @@ type Config struct {
 	Language        string                `yaml:"language"`         // Reply language for LLM; defaults to English
 	TitleGeneration *bool                 `yaml:"title_generation"` // true by default; set false to use truncation
 	TitleProvider   string                `yaml:"title_provider"`   // optional: provider name for title generation (defaults to main provider)
+	CommitProvider  string                `yaml:"commit_provider"`  // optional: provider name for /commit (defaults to main provider)
 }
 
 func DefaultConfig() *Config {
@@ -377,6 +378,15 @@ func (c *Config) EffectiveTitleProvider() string {
 		return ""
 	}
 	return c.TitleProvider
+}
+
+// EffectiveCommitProvider returns the provider name to use for /commit message generation.
+// Returns empty string when not configured (meaning: use main provider).
+func (c *Config) EffectiveCommitProvider() string {
+	if c == nil {
+		return ""
+	}
+	return c.CommitProvider
 }
 
 // intPtr returns a pointer to the given int. Helper for config initialization.
