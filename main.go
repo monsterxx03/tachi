@@ -193,6 +193,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	aiAgent.SetupTitleProvider(cfg)
 
 	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {
@@ -260,6 +261,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, maxIters)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	aiAgent.SetupTitleProvider(cfg)
 
 	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {

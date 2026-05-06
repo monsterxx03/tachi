@@ -166,6 +166,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, m.maxIters)
 	aiAgent.SetSkipEditConfirm(true)
 	aiAgent.SetContextWindow(m.resolvedConfig.Provider.ContextWindow)
+	aiAgent.SetupTitleProvider(m.cfg)
 
 	mcpMgr, err := aiAgent.Configure(ctx, m.cfg)
 	if err != nil {

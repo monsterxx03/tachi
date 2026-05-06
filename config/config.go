@@ -101,15 +101,17 @@ type SystemReminderConfig struct {
 }
 
 type Config struct {
-	Provider       string                `yaml:"provider"`
-	MaxTokens      int                   `yaml:"max_tokens"`
-	MaxIterations  *int                  `yaml:"max_iterations"` // nil = default; 0 = unlimited; >0 = explicit limit
-	Providers      []ProviderConfig      `yaml:"providers"`
-	WebSearch      WebSearchConfig       `yaml:"web_search"`
-	MCPServers     []MCPServerConfig     `yaml:"mcp_servers"`
-	TUI            TUIConfig             `yaml:"tui"`
-	SystemReminder SystemReminderConfig  `yaml:"system_reminder"`
-	Language       string                `yaml:"language"` // Reply language for LLM; defaults to English
+	Provider        string                `yaml:"provider"`
+	MaxTokens       int                   `yaml:"max_tokens"`
+	MaxIterations   *int                  `yaml:"max_iterations"` // nil = default; 0 = unlimited; >0 = explicit limit
+	Providers       []ProviderConfig      `yaml:"providers"`
+	WebSearch       WebSearchConfig       `yaml:"web_search"`
+	MCPServers      []MCPServerConfig     `yaml:"mcp_servers"`
+	TUI             TUIConfig             `yaml:"tui"`
+	SystemReminder  SystemReminderConfig  `yaml:"system_reminder"`
+	Language        string                `yaml:"language"`         // Reply language for LLM; defaults to English
+	TitleGeneration *bool                 `yaml:"title_generation"` // true by default; set false to use truncation
+	TitleProvider   string                `yaml:"title_provider"`   // optional: provider name for title generation (defaults to main provider)
 }
 
 func DefaultConfig() *Config {
@@ -357,6 +359,24 @@ func (c *Config) GetMaxIterations() int {
 		return DefaultMaxIterations
 	}
 	return *c.MaxIterations
+}
+
+// TitleGenerationEnabled returns whether LLM-based title generation is active.
+// Defaults to true when not explicitly configured.
+func (c *Config) TitleGenerationEnabled() bool {
+	if c == nil || c.TitleGeneration == nil {
+		return true
+	}
+	return *c.TitleGeneration
+}
+
+// EffectiveTitleProvider returns the provider name to use for title generation.
+// Returns empty string when not configured (meaning: use main provider).
+func (c *Config) EffectiveTitleProvider() string {
+	if c == nil {
+		return ""
+	}
+	return c.TitleProvider
 }
 
 // intPtr returns a pointer to the given int. Helper for config initialization.

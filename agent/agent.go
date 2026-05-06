@@ -38,6 +38,8 @@ type AIAgent struct {
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
 	lastInputTokens    int64
+	titleModelProvider llm.Provider // optional: dedicated provider for title generation
+	titleGenEnabled    bool         // whether LLM-based title generation is active
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -92,6 +94,90 @@ func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 
 func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	a.sessionManager = sm
+}
+
+// SetTitleModelProvider sets a dedicated LLM provider for title generation.
+// When nil (the default), title generation falls back to a.truncation-based title.
+func (a *AIAgent) SetTitleModelProvider(provider llm.Provider) {
+	a.titleModelProvider = provider
+}
+
+// SetTitleGenEnabled enables or disables LLM-based title generation.
+func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
+	a.titleGenEnabled = enabled
+}
+
+// SetupTitleProvider resolves and creates a dedicated LLM provider for title
+// generation from config. When title_provider is empty or not found, title
+// generation falls back to the main conversation provider.
+func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
+	a.titleGenEnabled = cfg.TitleGenerationEnabled()
+
+	tpName := cfg.EffectiveTitleProvider()
+	if tpName == "" {
+		return
+	}
+
+	tpCfg := cfg.FindProvider(tpName)
+	if tpCfg == nil {
+		debuglog.Log("Agent: title_provider %q not found in providers list, falling back to main model", tpName)
+		return
+	}
+
+	resolved, err := config.ResolveProviderConfig(tpCfg)
+	if err != nil {
+		debuglog.Log("Agent: failed to resolve title provider %q: %v, falling back to main model", tpName, err)
+		return
+	}
+
+	tp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		debuglog.Log("Agent: failed to create title provider %q: %v, falling back to main model", tpName, err)
+		return
+	}
+
+	a.titleModelProvider = tp
+	debuglog.Log("Agent: using title provider %q (%s/%s) for session title generation", tpName, resolved.Type, resolved.Model)
+}
+
+// generateTitle uses the LLM to produce a concise session title from the first
+// user message. Falls back to truncation on any error, empty response, or when
+// title generation is disabled.
+func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string {
+	if !a.titleGenEnabled {
+		return session.ExtractTitle(firstMessage)
+	}
+
+	p := a.titleModelProvider
+	if p == nil {
+		p = a.provider
+	}
+
+	messages := []llm.Message{
+		{
+			Role:    "system",
+			Content: "Generate a short, concise title (max 50 characters) for a conversation that starts with this user message. Output ONLY the title, no quotes, no explanation, no preamble.",
+		},
+		{
+			Role:    "user",
+			Content: firstMessage,
+		},
+	}
+
+	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 50})
+	if err != nil {
+		debuglog.Log("Agent: failed to generate title: %v, falling back to truncation", err)
+		return session.ExtractTitle(firstMessage)
+	}
+
+	title := strings.TrimSpace(resp.Content)
+	if title == "" {
+		debuglog.Log("Agent: LLM returned empty title, falling back to truncation")
+		return session.ExtractTitle(firstMessage)
+	}
+
+	// Enforce max length via existing ExtractTitle
+	return session.ExtractTitle(title)
 }
 
 // SetContextWindow sets the model's context window size for token-warning reminders.
@@ -587,9 +673,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				Type:    session.MessageTypeUser,
 				Content: userMessage,
 			})
-			// Set title from first user message
+			// Set title from first user message (LLM-generated or truncated)
 			if curr := a.sessionManager.Current(); curr != nil && curr.Title == "" {
-				a.sessionManager.SetTitle(userMessage)
+				a.sessionManager.SetTitle(a.generateTitle(ctx, userMessage))
 			}
 		}
 
