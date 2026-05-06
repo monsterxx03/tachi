@@ -10,6 +10,8 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/channel"
+	"github.com/monsterxx03/tachi/channel/weixin"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -90,9 +92,9 @@ var commonFlags = []cli.Flag{
 
 func main() {
 	app := &cli.Command{
-		Name:   "tachi",
-		Usage:  "AI Agent CLI",
-		Flags:  commonFlags,
+		Name:  "tachi",
+		Usage: "AI Agent CLI",
+		Flags: commonFlags,
 		Action: runTUI,
 		Commands: []*cli.Command{
 			{
@@ -117,6 +119,12 @@ func main() {
 					Usage:   "User prompt to send",
 				}),
 				Action: runAgent,
+			},
+			{
+				Name:  "channel",
+				Usage: "Start all enabled channels from config (e.g., weixin)",
+				Flags: commonFlags,
+				Action: runChannels,
 			},
 		},
 	}
@@ -319,5 +327,51 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if result.Error != nil {
 		return fmt.Errorf("error: %v", result.Error)
 	}
+	return nil
+}
+
+// runChannels starts all enabled channels declared in config (e.g., weixin).
+// Each channel runs in its own goroutine. Blocks until all channels exit or
+// the context is cancelled.
+func runChannels(ctx context.Context, cmd *cli.Command) error {
+	if err := debuglog.Init(); err != nil {
+		fmt.Printf("Warning: failed to init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	manager := channel.NewManager(channel.ManagerConfig{
+		Config:       cfg,
+		SystemPrompt: buildSystemPrompt(cfg.EffectiveLanguage()),
+	})
+
+	hadAny := false
+
+	// --- Weixin channel ---
+	if cfg.Channel.Weixin.Enabled {
+		wxCh, err := weixin.NewChannel(cfg.Channel.Weixin)
+		if err != nil {
+			return fmt.Errorf("weixin channel: %w", err)
+		}
+		manager.Add(wxCh)
+		hadAny = true
+		fmt.Println("[channel] weixin channel registered")
+	}
+
+	if !hadAny {
+		return fmt.Errorf("no channels enabled in config; set weixin.enabled: true or add other channel configs")
+	}
+
+	if err := manager.Start(ctx); err != nil {
+		return fmt.Errorf("channel manager start: %w", err)
+	}
+
+	// Block until context is cancelled.
+	<-ctx.Done()
+	fmt.Println("[channel] shutting down...")
 	return nil
 }

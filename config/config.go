@@ -101,6 +101,18 @@ type SystemReminderConfig struct {
 	GitReminder               *bool `yaml:"git_reminder"` // true by default (enabled); set false to disable
 }
 
+// WeixinConfig holds iLink Bot channel configuration.
+type WeixinConfig struct {
+	Enabled  bool   `yaml:"enabled"`
+	StateDir string `yaml:"state_dir"` // State directory (default: ~/.tachi/weixin)
+	RouteTag string `yaml:"route_tag"` // Optional SKRouteTag for routing
+}
+
+// ChannelConfig groups configuration for all IM channel backends.
+type ChannelConfig struct {
+	Weixin WeixinConfig `yaml:"weixin"`
+}
+
 type Config struct {
 	Provider               string                `yaml:"provider"`
 	MaxTokens              int                   `yaml:"max_tokens"`
@@ -114,7 +126,8 @@ type Config struct {
 	Language        string                `yaml:"language"`         // Reply language for LLM; defaults to English
 	TitleGeneration *bool                 `yaml:"title_generation"` // true by default; set false to use truncation
 	TitleProvider   string                `yaml:"title_provider"`   // optional: provider name for title generation (defaults to main provider)
-	CommitProvider  string                `yaml:"commit_provider"`  // optional: provider name for /commit (defaults to main provider)
+	CommitProvider  string                `yaml:"commit_provider"`   // optional: provider name for /commit (defaults to main provider)
+	Channel         ChannelConfig         `yaml:"channel"`            // IM channel backends
 }
 
 func DefaultConfig() *Config {
