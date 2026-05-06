@@ -73,6 +73,8 @@ type Model struct {
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
 
+	savedHistory []llm.Message // conversation history saved before a one-off run (e.g. /commit)
+
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
 	providerSelIdx int
@@ -418,6 +420,11 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	m.thinkingView.Reset()
 	m.thinkingMode = false
 
+	// Save conversation history so we can restore it after the one-off
+	// commit run completes (RunOneOffStream overwrites m.history).
+	m.savedHistory = make([]llm.Message, len(m.history))
+	copy(m.savedHistory, m.history)
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
@@ -521,7 +528,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
-		if event.Usage != nil {
+		if m.savedHistory != nil {
+			m.history = m.savedHistory
+			m.savedHistory = nil
+		} else if event.Usage != nil {
 			// InputTokens from the API already reflects the total context size
 			// (all prior messages included), so we take the latest value instead
 			// of accumulating (which would produce a nonsense inflated number).
@@ -540,6 +550,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventError:
 		if event.Messages != nil {
 			m.history = event.Messages
+		}
+		if m.savedHistory != nil {
+			m.history = m.savedHistory
+			m.savedHistory = nil
 		}
 		if event.Result != nil && event.Result.ExitReason == "interrupted" {
 			m.chatview.FinishStreaming()
