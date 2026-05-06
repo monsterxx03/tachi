@@ -2,12 +2,14 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
@@ -114,7 +116,7 @@ var commands = []Command{
 	},
 	{
 		Name:        "/mcp",
-		Description: "Manage MCP servers (list, toggle, reconnect)",
+		Description: "Manage MCP servers (list, toggle, reconnect, auth)",
 		handler: func(m *Model) tea.Cmd {
 			return m.handleMCPCommand()
 		},
@@ -225,6 +227,8 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 		return m.mcpToggle(arg)
 	case "reconnect":
 		return m.mcpReconnect(arg)
+	case "auth":
+		return m.mcpAuth(arg)
 	default:
 		// "list" or bare "/mcp"
 		return m.mcpList()
@@ -270,6 +274,15 @@ func (m *Model) mcpList() tea.Cmd {
 
 		fmt.Fprintf(&sb, "- **%s** (%s)\n  Transport: %s\n",
 			srv.Name, status, transport)
+		if srv.HasOAuth() {
+			oauthStatus := "no token"
+			if connected && m.mcpManager != nil {
+				if h := m.mcpManager.GetOAuthHandler(srv.Name); h != nil {
+					oauthStatus = "configured"
+				}
+			}
+			fmt.Fprintf(&sb, "  OAuth: %s\n", oauthStatus)
+		}
 	}
 
 	m.chatview.AddMessage(chatMessage{
@@ -405,6 +418,182 @@ func (m *Model) mcpReconnect(name string) tea.Cmd {
 
 	ch := make(chan string, 1)
 	go m.reconnectAndRegisterMCP(srv, ch)
+	return func() tea.Msg {
+		content, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return mcpStatusMsg{content: content}
+	}
+}
+
+// mcpAuth initiates or completes the OAuth2 flow for an HTTP MCP server.
+// Usage: /mcp auth <name> [redirect-url]
+// If redirect-url is provided, it completes the manual flow.
+// Otherwise it starts the interactive flow (browser callback → manual fallback).
+func (m *Model) mcpAuth(name string) tea.Cmd {
+	if name == "" {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "Usage: `/mcp auth <name>` — authorize an MCP server, or `/mcp auth <name> <redirect-url>` to complete manual flow",
+		})
+		return nil
+	}
+
+	if m.mcpManager == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No MCP manager available",
+		})
+		return nil
+	}
+
+	// Find server config
+	var srv *config.MCPServerConfig
+	for i := range m.mcpServers {
+		if m.mcpServers[i].Name == name {
+			srv = &m.mcpServers[i]
+			break
+		}
+	}
+	if srv == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("MCP server **%s** not found in config", name),
+		})
+		return nil
+	}
+
+	if srv.Type != config.MCPTransportHTTP {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("OAuth is only supported for HTTP MCP servers. **%s** is stdio.", name),
+		})
+		return nil
+	}
+
+	// Check if there's a redirect URL arg (manual flow completion)
+	parts := strings.Fields(m.subcommandInput)
+	if len(parts) > 3 {
+		redirectURL := strings.Join(parts[3:], " ")
+		return m.completeManualOAuth(srv, redirectURL)
+	}
+
+	// Start interactive flow
+	return m.startInteractiveOAuth(srv)
+}
+
+// startInteractiveOAuth runs the OAuth flow asynchronously and reports results.
+// All status messages are accumulated and delivered as a single message.
+func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
+	m.chatview.AddMessage(chatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("Starting OAuth authorization for **%s**...", srv.Name),
+	})
+
+	ch := make(chan string, 1)
+	go func() {
+		var msgs []string
+		defer func() {
+			if len(msgs) > 0 {
+				ch <- strings.Join(msgs, "\n\n")
+			}
+			close(ch)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		errFn := func(msg string) {
+			msgs = append(msgs, msg)
+		}
+
+		if err := mcp.RunOAuthFlow(ctx, srv, errFn); err != nil {
+			debuglog.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
+			// When the browser flow fails and we fall back to manual flow,
+			// errFn has already delivered the instructions. An OAuthRequiredError
+			// here would just repeat the same info — skip it.
+			var oauthErr *mcp.OAuthRequiredError
+			if !errors.As(err, &oauthErr) {
+				msgs = append(msgs, fmt.Sprintf("OAuth failed for **%s**: %v", srv.Name, err))
+			}
+			return
+		}
+
+		msgs = append(msgs, fmt.Sprintf("OAuth authorization successful for **%s**! Reconnecting...", srv.Name))
+
+		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
+		defer reconnectCancel()
+
+		tools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
+		if err != nil {
+			msgs = append(msgs, fmt.Sprintf("Reconnect failed for **%s**: %v", srv.Name, err))
+			return
+		}
+
+		for _, t := range tools {
+			m.agent.RegisterTool(t)
+			debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		}
+
+		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
+	}()
+
+	return func() tea.Msg {
+		content, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return mcpStatusMsg{content: content}
+	}
+}
+
+// completeManualOAuth finishes the manual OAuth flow with the pasted redirect URL,
+// then reconnects the server.
+func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL string) tea.Cmd {
+	m.chatview.AddMessage(chatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("Completing OAuth authorization for **%s**...", srv.Name),
+	})
+
+	ch := make(chan string, 1)
+	go func() {
+		var msgs []string
+		defer func() {
+			if len(msgs) > 0 {
+				ch <- strings.Join(msgs, "\n\n")
+			}
+			close(ch)
+		}()
+
+		ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
+		defer cancel()
+
+		if err := mcp.CompleteManualAuth(ctx, srv, redirectURL); err != nil {
+			debuglog.Log("MCP: manual OAuth failed for %q: %v", srv.Name, err)
+			msgs = append(msgs, fmt.Sprintf("OAuth authorization failed for **%s**: %v", srv.Name, err))
+			return
+		}
+
+		msgs = append(msgs, fmt.Sprintf("OAuth authorization successful for **%s**! Reconnecting...", srv.Name))
+
+		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
+		defer reconnectCancel()
+
+		tools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
+		if err != nil {
+			msgs = append(msgs, fmt.Sprintf("Reconnect failed for **%s**: %v", srv.Name, err))
+			return
+		}
+
+		for _, t := range tools {
+			m.agent.RegisterTool(t)
+			debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		}
+
+		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
+	}()
+
 	return func() tea.Msg {
 		content, ok := <-ch
 		if !ok {

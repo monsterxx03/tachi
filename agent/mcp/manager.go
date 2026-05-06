@@ -4,7 +4,9 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -110,6 +112,12 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	toolsResult, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		c.Close()
+		// If OAuth is configured but the token isn't available yet,
+		// the transport returns ErrOAuthAuthorizationRequired.
+		// Give a user-friendly hint.
+		if errors.Is(err, transport.ErrOAuthAuthorizationRequired) {
+			return nil, &OAuthRequiredError{ServerName: srv.Name}
+		}
 		return nil, fmt.Errorf("list tools failed: %w", err)
 	}
 
@@ -156,7 +164,73 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 	if len(srv.Headers) > 0 {
 		opts = append(opts, transport.WithHTTPHeaders(srv.Headers))
 	}
+	// If OAuth isn't explicitly configured, check for persisted token / DCR
+	// info on disk — a previous DCR-based auth may have left valid tokens.
+	if !srv.HasOAuth() && hasPersistedAuth(srv.Name) {
+		srv.OAuth = &config.MCPOAuthConfig{}
+	}
+	if srv.HasOAuth() {
+		opts = append(opts, m.oauthOption(srv))
+	}
 	return client.NewStreamableHttpClient(srv.URL, opts...)
+}
+
+// hasPersistedAuth returns true if there's a token file or DCR info file
+// on disk for the given server name. Used to auto-detect OAuth that was set
+// up via DCR in a prior session, without explicit oauth: config.
+func hasPersistedAuth(serverName string) bool {
+	tokenPath, err := mcpTokenPath(serverName)
+	if err != nil {
+		return false
+	}
+	if _, err := os.Stat(tokenPath); err == nil {
+		return true
+	}
+	dcrPath, err := dcrTokenPath(serverName)
+	if err != nil {
+		return false
+	}
+	_, err = os.Stat(dcrPath)
+	return err == nil
+}
+
+// oauthOption builds the WithHTTPOAuth transport option from the server config.
+// If ClientID is empty but persisted DCR info exists, it is loaded from disk
+// so that token refresh works across process restarts.
+func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableHTTPCOption {
+	oauthCfg := srv.OAuth
+	tokenStore, err := NewFileTokenStore(srv.Name)
+	if err != nil {
+		debuglog.Log("MCP: failed to create token store for %q: %v", srv.Name, err)
+		tokenStore = nil
+	}
+
+	clientID := oauthCfg.ClientID
+	clientSecret := oauthCfg.ClientSecret
+
+	// DCR: if config has no client_id, try persisted DCR info for refresh support
+	if clientID == "" && tokenStore != nil {
+		if dcr, err := tokenStore.GetDCRInfo(context.Background()); err == nil {
+			clientID = dcr.ClientID
+			clientSecret = dcr.ClientSecret
+			debuglog.Log("MCP: loaded DCR client_id for %q from disk", srv.Name)
+		}
+	}
+
+	var scopes []string
+	if len(oauthCfg.Scopes) > 0 {
+		scopes = oauthCfg.Scopes
+	}
+
+	return transport.WithHTTPOAuth(transport.OAuthConfig{
+		ClientID:                 clientID,
+		ClientSecret:             clientSecret,
+		ClientURI:                oauthCfg.ClientURI,
+		Scopes:                   scopes,
+		PKCEEnabled:              true,
+		AuthServerMetadataURL:    oauthCfg.AuthServerMetadataURL,
+		TokenStore:               tokenStore,
+	})
 }
 
 // CallTool invokes a tool on the named MCP server.
@@ -173,6 +247,23 @@ func (m *Manager) CallTool(ctx context.Context, serverName string, toolName stri
 	req.Params.Arguments = arguments
 
 	return c.CallTool(ctx, req)
+}
+
+// GetOAuthHandler returns the OAuthHandler for a connected HTTP server,
+// or nil if the server is not connected or has no OAuth configured.
+func (m *Manager) GetOAuthHandler(name string) *transport.OAuthHandler {
+	m.mu.RLock()
+	c, ok := m.clients[name]
+	m.mu.RUnlock()
+	if !ok {
+		return nil
+	}
+
+	trans := c.GetTransport()
+	if httpConn, ok := trans.(*transport.StreamableHTTP); ok {
+		return httpConn.GetOAuthHandler()
+	}
+	return nil
 }
 
 // IsConnected returns whether an MCP server is currently connected.

@@ -51,6 +51,17 @@ const (
 	MCPTransportHTTP  MCPTransportType = "http"
 )
 
+// MCPOAuthConfig holds OAuth2 configuration for HTTP MCP servers.
+// If ClientID is empty, dynamic client registration (DCR) is attempted
+// automatically on the first OAuth flow.
+type MCPOAuthConfig struct {
+	ClientID              string   `yaml:"client_id,omitempty"`
+	ClientSecret          string   `yaml:"client_secret,omitempty"`
+	ClientURI             string   `yaml:"client_uri,omitempty"`
+	Scopes                []string `yaml:"scopes,omitempty"`
+	AuthServerMetadataURL string   `yaml:"auth_server_metadata_url,omitempty"` // Override auto-discovery
+}
+
 // MCPServerConfig represents a single MCP server connection configuration
 type MCPServerConfig struct {
 	Name    string            `yaml:"name"`
@@ -62,6 +73,12 @@ type MCPServerConfig struct {
 	Headers map[string]string `yaml:"headers,omitempty"` // For http transport
 	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
 	Enabled *bool             `yaml:"enabled,omitempty"` // Whether to load this server (default: true)
+	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`   // OAuth2 configuration (http transport only)
+}
+
+// HasOAuth returns true if the server has OAuth2 configured.
+func (srv *MCPServerConfig) HasOAuth() bool {
+	return srv.OAuth != nil
 }
 
 // IsEnabled returns whether the server should be loaded. Defaults to true.
