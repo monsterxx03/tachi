@@ -198,7 +198,8 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, resolved.MaxIterations)
+	// TUI is interactive — no iteration budget cap (0 = unlimited).
+	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, 0)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)

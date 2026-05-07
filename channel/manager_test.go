@@ -137,31 +137,26 @@ func TestIncomingOutgoingMessage(t *testing.T) {
 
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()
-	*cfg.MaxIterations = 10
 
 	mgr := NewManager(ManagerConfig{
-		Config:        cfg,
-		SystemPrompt:  "test prompt",
-		MaxIterations: 5,
+		Config:       cfg,
+		SystemPrompt: "test prompt",
 	})
 
 	require.NotNil(t, mgr)
-	assert.Equal(t, 5, mgr.maxIters)
 	assert.Equal(t, "test prompt", mgr.systemPrompt)
 }
 
 func TestNewManagerDefaults(t *testing.T) {
 	cfg := config.DefaultConfig()
-	*cfg.MaxIterations = 25
 
 	mgr := NewManager(ManagerConfig{
 		Config:       cfg,
 		SystemPrompt: "test prompt",
-		// MaxIterations == 0 → falls back to config.MaxIterations.
 	})
 
 	require.NotNil(t, mgr)
-	assert.Equal(t, 25, mgr.maxIters)
+	assert.Equal(t, "test prompt", mgr.systemPrompt)
 }
 
 func TestManagerAddChannel(t *testing.T) {
@@ -363,7 +358,6 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 			ContextWindow: 128_000,
 		},
 		MaxTokens:     4096,
-		MaxIterations: 10,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -397,7 +391,6 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 			ContextWindow: 128_000,
 		},
 		MaxTokens:     4096,
-		MaxIterations: 10,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 

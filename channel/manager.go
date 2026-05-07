@@ -28,10 +28,6 @@ type ManagerConfig struct {
 	// ModelName overrides the model. If empty, uses the provider's configured model.
 	ModelName string
 
-	// MaxIterations caps the agent-loop iterations per message.
-	// If zero, uses config.MaxIterations.
-	MaxIterations int
-
 	// SessionStore overrides the default file-based session store.
 	// If nil, sessions are stored under ~/.tachi/session (default).
 	// Tests should inject a FileStore backed by a temporary directory.
@@ -72,7 +68,6 @@ type Manager struct {
 	systemPrompt string
 	providerName string
 	modelName    string
-	maxIters     int
 
 	// Lazy-initialized.
 	initOnce       sync.Once
@@ -90,17 +85,13 @@ type Manager struct {
 }
 
 // NewManager creates a Manager.
+// Channels are interactive — the iteration budget is always unlimited (0).
 func NewManager(mcfg ManagerConfig) *Manager {
-	maxIters := mcfg.MaxIterations
-	if maxIters <= 0 {
-		maxIters = mcfg.Config.GetMaxIterations()
-	}
 	return &Manager{
 		cfg:          mcfg.Config,
 		systemPrompt: mcfg.SystemPrompt,
 		providerName: mcfg.ProviderName,
 		modelName:    mcfg.ModelName,
-		maxIters:     maxIters,
 		sessionStore: mcfg.SessionStore,
 		logger:       debuglog.DefaultLogger.WithSource("channel:manager"),
 	}
@@ -183,7 +174,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 		return "", fmt.Errorf("channel manager not initialized; call Start() first")
 	}
 
-	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, m.maxIters)
+	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, 0)
 	aiAgent.SetSkipEditConfirm(true)
 	aiAgent.SetContextWindow(m.resolvedConfig.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(m.cfg)
