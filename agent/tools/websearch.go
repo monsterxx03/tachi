@@ -40,7 +40,7 @@ type webSearchArgs struct {
 type WebSearchTool struct {
 	ProviderType string
 	APIKey       string
-	Timeout      int
+	Timeout      time.Duration
 	MaxResults   int
 	Proxy        string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 
@@ -53,9 +53,9 @@ type WebSearchTool struct {
 // pooling and proxy connections.
 func (t *WebSearchTool) getHTTPClient() *http.Client {
 	t.clientOnce.Do(func() {
-		c, err := proxy.NewHTTPClient(t.Proxy, time.Duration(t.Timeout)*time.Second)
+		c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
 		if err != nil {
-			c = &http.Client{Timeout: time.Duration(t.Timeout) * time.Second}
+			c = &http.Client{Timeout: t.Timeout}
 		}
 		t.httpClient = c
 	})
@@ -157,9 +157,9 @@ func (t *WebSearchTool) searchWithSerper(ctx context.Context, client *http.Clien
 	// Merge with provided context if it's cancellable
 	var cancelFn context.CancelFunc
 	if ctx == nil {
-		ctx, cancelFn = context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
+		ctx, cancelFn = context.WithTimeout(context.Background(), t.Timeout)
 	} else {
-		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(t.Timeout)*time.Second)
+		ctx, cancelFn = context.WithTimeout(ctx, t.Timeout)
 	}
 	defer cancelFn()
 
@@ -239,9 +239,9 @@ func (t *WebSearchTool) searchWithSerpAPI(ctx context.Context, client *http.Clie
 	// Merge with provided context if it's cancellable
 	var cancelFn context.CancelFunc
 	if ctx == nil {
-		ctx, cancelFn = context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
+		ctx, cancelFn = context.WithTimeout(context.Background(), t.Timeout)
 	} else {
-		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(t.Timeout)*time.Second)
+		ctx, cancelFn = context.WithTimeout(ctx, t.Timeout)
 	}
 	defer cancelFn()
 
@@ -315,9 +315,9 @@ func (t *WebSearchTool) searchWithBrave(ctx context.Context, client *http.Client
 	// Merge with provided context if it's cancellable
 	var cancelFn context.CancelFunc
 	if ctx == nil {
-		ctx, cancelFn = context.WithTimeout(context.Background(), time.Duration(t.Timeout)*time.Second)
+		ctx, cancelFn = context.WithTimeout(context.Background(), t.Timeout)
 	} else {
-		ctx, cancelFn = context.WithTimeout(ctx, time.Duration(t.Timeout)*time.Second)
+		ctx, cancelFn = context.WithTimeout(ctx, t.Timeout)
 	}
 	defer cancelFn()
 

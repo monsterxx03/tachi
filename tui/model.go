@@ -700,9 +700,9 @@ func (m *Model) View() tea.View {
 
 func inputHistoryMax(c *config.Config) int {
 	if c == nil {
-		return config.DefaultTUIInputHistoryLimit
+		return 10
 	}
-	return c.TUIInputHistoryMax()
+	return c.TUI.InputHistoryLimit
 }
 
 func inputHistoryFilePath() string {

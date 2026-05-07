@@ -439,7 +439,7 @@ func (m *Manager) newSessionManager() *session.Manager {
 		}
 	}
 	if m.cfg != nil {
-		sm.SetMaxKeep(m.cfg.EffectiveSessionCleanupMaxCount())
+		sm.SetMaxKeep(m.cfg.SessionCleanupMaxCount)
 	}
 	return sm
 }

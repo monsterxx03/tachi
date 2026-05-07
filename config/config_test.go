@@ -117,22 +117,16 @@ func TestInputHistoryPath(t *testing.T) {
 	assert.Equal(t, filepath.Join(home, ".tachi", "input_history"), p)
 }
 
-func TestTUIInputHistoryMax(t *testing.T) {
-	assert.Equal(t, DefaultTUIInputHistoryLimit, (&Config{}).TUIInputHistoryMax())
+func TestTUIInputHistoryLimit(t *testing.T) {
+	// Default via defaults.Set
+	assert.Equal(t, 10, DefaultConfig().TUI.InputHistoryLimit)
 
-	z := 0
-	assert.Equal(t, 0, (&Config{TUI: TUIConfig{InputHistoryLimit: &z}}).TUIInputHistoryMax())
+	// Explicitly set
+	assert.Equal(t, 5, (&Config{TUI: TUIConfig{InputHistoryLimit: 5}}).TUI.InputHistoryLimit)
 
-	five := 5
-	assert.Equal(t, 5, (&Config{TUI: TUIConfig{InputHistoryLimit: &five}}).TUIInputHistoryMax())
-
-	neg := -1
-	assert.Equal(t, 0, (&Config{TUI: TUIConfig{InputHistoryLimit: &neg}}).TUIInputHistoryMax())
-
-	t.Run("nil config", func(t *testing.T) {
-		var c *Config
-		assert.Equal(t, DefaultTUIInputHistoryLimit, c.TUIInputHistoryMax())
-	})
+	// Zero struct (no defaults applied)
+	var c Config
+	assert.Equal(t, 0, c.TUI.InputHistoryLimit)
 }
 
 func TestFindProvider(t *testing.T) {
@@ -309,37 +303,37 @@ func TestResolve_MissingType(t *testing.T) {
 }
 
 func TestIterationWarningThreshold(t *testing.T) {
-	assert.Equal(t, DefaultIterationWarningThreshold, (&Config{}).IterationWarningThreshold())
+	// Default via defaults.Set
+	assert.Equal(t, 5, DefaultConfig().SystemReminder.IterationWarningThreshold)
 
-	three := 3
-	assert.Equal(t, 3, (&Config{SystemReminder: SystemReminderConfig{IterationWarningThreshold: &three}}).IterationWarningThreshold())
+	// Explicitly set
+	assert.Equal(t, 3, (&Config{SystemReminder: SystemReminderConfig{IterationWarningThreshold: 3}}).SystemReminder.IterationWarningThreshold)
 
-	t.Run("nil config", func(t *testing.T) {
-		var c *Config
-		assert.Equal(t, DefaultIterationWarningThreshold, c.IterationWarningThreshold())
-	})
+	// Zero struct (no defaults applied)
+	var c Config
+	assert.Equal(t, 0, c.SystemReminder.IterationWarningThreshold)
 }
 
 func TestTokenWarningThresholdPct(t *testing.T) {
-	assert.Equal(t, DefaultTokenWarningThresholdPct, (&Config{}).TokenWarningThresholdPct())
+	// Default via defaults.Set
+	assert.Equal(t, 80, DefaultConfig().SystemReminder.TokenWarningThresholdPct)
 
-	ninety := 90
-	assert.Equal(t, 90, (&Config{SystemReminder: SystemReminderConfig{TokenWarningThresholdPct: &ninety}}).TokenWarningThresholdPct())
+	// Explicitly set
+	assert.Equal(t, 90, (&Config{SystemReminder: SystemReminderConfig{TokenWarningThresholdPct: 90}}).SystemReminder.TokenWarningThresholdPct)
 
-	t.Run("nil config", func(t *testing.T) {
-		var c *Config
-		assert.Equal(t, DefaultTokenWarningThresholdPct, c.TokenWarningThresholdPct())
-	})
+	// Zero struct (no defaults applied)
+	var c Config
+	assert.Equal(t, 0, c.SystemReminder.TokenWarningThresholdPct)
 }
 
 func TestEffectiveLanguage(t *testing.T) {
-	// Default
-	assert.Equal(t, "English", (&Config{}).EffectiveLanguage())
+	// Default via defaults.Set
+	assert.Equal(t, "English", DefaultConfig().Language)
+
 	// Explicitly set
-	assert.Equal(t, "Chinese", (&Config{Language: "Chinese"}).EffectiveLanguage())
-	// Empty string defaults
-	assert.Equal(t, "English", (&Config{Language: ""}).EffectiveLanguage())
-	// Nil config
-	var c *Config
-	assert.Equal(t, "English", c.EffectiveLanguage())
+	assert.Equal(t, "Chinese", (&Config{Language: "Chinese"}).Language)
+
+	// Zero struct (no defaults applied)
+	var c Config
+	assert.Equal(t, "", c.Language)
 }

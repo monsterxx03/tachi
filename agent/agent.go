@@ -55,8 +55,8 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 			systemreminder.DateReminder{},
 			systemreminder.ProjectContextReminder{},
 			systemreminder.GitReminder{},
-			systemreminder.IterationWarningReminder{Threshold: config.DefaultIterationWarningThreshold},
-			systemreminder.TokenWarningReminder{ThresholdPct: config.DefaultTokenWarningThresholdPct},
+			systemreminder.IterationWarningReminder{Threshold: 5},
+			systemreminder.TokenWarningReminder{ThresholdPct: 80},
 		),
 	}
 }
@@ -112,9 +112,9 @@ func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
 // generation from config. When title_provider is empty or not found, title
 // generation falls back to the main conversation provider.
 func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
-	a.titleGenEnabled = cfg.TitleGenerationEnabled()
+	a.titleGenEnabled = cfg.TitleGeneration == nil || *cfg.TitleGeneration
 
-	tpName := cfg.EffectiveTitleProvider()
+	tpName := cfg.TitleProvider
 	if tpName == "" {
 		return
 	}
@@ -145,7 +145,7 @@ func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
 // message generation from config. When commit_provider is empty or not found,
 // commit generation falls back to the main conversation provider.
 func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
-	cpName := cfg.EffectiveCommitProvider()
+	cpName := cfg.CommitProvider
 	if cpName == "" {
 		return
 	}
@@ -878,10 +878,10 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	reminders := []systemreminder.Reminder{
 		systemreminder.DateReminder{},
 		systemreminder.ProjectContextReminder{},
-		systemreminder.IterationWarningReminder{Threshold: cfg.IterationWarningThreshold()},
-		systemreminder.TokenWarningReminder{ThresholdPct: cfg.TokenWarningThresholdPct()},
+		systemreminder.IterationWarningReminder{Threshold: cfg.SystemReminder.IterationWarningThreshold},
+		systemreminder.TokenWarningReminder{ThresholdPct: cfg.SystemReminder.TokenWarningThresholdPct},
 	}
-	if cfg.GitReminderEnabled() {
+	if cfg.SystemReminder.GitReminder == nil || *cfg.SystemReminder.GitReminder {
 		reminders = append(reminders, systemreminder.GitReminder{})
 	}
 	a.reminderCollector = systemreminder.NewCollector(reminders...)

@@ -218,7 +218,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	var initialSessionMsgs []session.Message
 
 	if cmd.Bool("resume") {
-		history, sessMsgs, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.EffectiveLanguage()))
+		history, sessMsgs, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.Language))
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
@@ -229,7 +229,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		if err != nil {
 			fmt.Printf("Warning: failed to init session manager: %v\n", err)
 		} else {
-			sm.SetMaxKeep(cfg.EffectiveSessionCleanupMaxCount())
+			sm.SetMaxKeep(cfg.SessionCleanupMaxCount)
 			sm.CleanupOldSessions()
 			aiAgent.SetSessionManager(sm)
 		}
@@ -237,7 +237,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
-		SystemPrompt: buildSystemPrompt(cfg.EffectiveLanguage()),
+		SystemPrompt: buildSystemPrompt(cfg.Language),
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: resolved.MaxTokens,
 		},
@@ -293,7 +293,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	var history []llm.Message
 
 	if cmd.Bool("resume") {
-		llmMsgs, _, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.EffectiveLanguage()))
+		llmMsgs, _, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.Language))
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
@@ -301,7 +301,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Use streaming API to support history
-	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.EffectiveLanguage()), llm.ChatOptions{
+	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 
@@ -346,7 +346,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 
 	manager := channel.NewManager(channel.ManagerConfig{
 		Config:       cfg,
-		SystemPrompt: buildSystemPrompt(cfg.EffectiveLanguage()),
+		SystemPrompt: buildSystemPrompt(cfg.Language),
 	})
 
 	hadAny := false

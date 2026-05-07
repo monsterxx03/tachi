@@ -16,7 +16,6 @@ import (
 
 const (
 	webFetchMaxURLLength    = 2000
-	webFetchTimeoutSec      = 60
 	webFetchMaxRedirects    = 10
 	webFetchMaxContentBytes = 10 * 1024 * 1024 // 10MB
 	webFetchMaxReturnChars  = 100_000
@@ -46,8 +45,8 @@ type webFetchOutput struct {
 // HTML pages are automatically converted. It supports optional proxy
 // and caches responses for 15 minutes.
 type WebFetchTool struct {
-	Timeout int    // HTTP request timeout in seconds (default 60)
-	Proxy   string // Optional proxy URL
+	Timeout time.Duration // HTTP request timeout (default 60s)
+	Proxy   string        // Optional proxy URL
 
 	clientOnce sync.Once
 	httpClient *http.Client
@@ -55,7 +54,6 @@ type WebFetchTool struct {
 
 func (t *WebFetchTool) Name() string        { return "WebFetch" }
 func (t *WebFetchTool) Parallel() bool       { return true }
-func (t *WebFetchTool) timeout() int         { if t.Timeout <= 0 { return webFetchTimeoutSec }; return t.Timeout }
 
 func (t *WebFetchTool) Description() string {
 	return "Fetches content from a specified URL and converts HTML to markdown. " +
@@ -76,9 +74,9 @@ func (t *WebFetchTool) Required() []string { return []string{"url"} }
 
 func (t *WebFetchTool) getHTTPClient() *http.Client {
 	t.clientOnce.Do(func() {
-		c, err := proxy.NewHTTPClient(t.Proxy, time.Duration(t.timeout())*time.Second)
+		c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
 		if err != nil {
-			c = &http.Client{Timeout: time.Duration(t.timeout()) * time.Second}
+			c = &http.Client{Timeout: t.Timeout}
 		}
 		t.httpClient = c
 	})

@@ -27,7 +27,7 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 
-	return &Manager{store: store, maxKeep: config.DefaultSessionCleanupMaxCount}, nil
+	return &Manager{store: store, maxKeep: 100}, nil
 }
 
 // NewManagerWithStore creates a Manager with a custom store implementation

@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/creasty/defaults"
 	"github.com/monsterxx03/tachi/llm"
 	"gopkg.in/yaml.v3"
 )
@@ -15,13 +16,6 @@ const (
 	DefaultMaxTokens                        = 32000
 	MaxAllowedTokens                        = 4096
 	DefaultMaxIterations                    = 50
-	DefaultWebSearchTimeout                 = 30
-	DefaultWebSearchMaxResults              = 10
-	DefaultWebFetchTimeout                  = 60
-	DefaultTUIInputHistoryLimit             = 10
-	DefaultIterationWarningThreshold        = 5
-	DefaultTokenWarningThresholdPct         = 80
-	DefaultSessionCleanupMaxCount           = 100
 	DefaultMCPConnectTimeout                = 5 * time.Second
 	configDirName                           = ".tachi"
 	configFileName                          = "config.yaml"
@@ -39,16 +33,16 @@ type ProviderConfig struct {
 }
 
 type WebSearchConfig struct {
-	Type       string `yaml:"type"` // brave, serper, serpapi
-	Key        string `yaml:"key"`
-	Timeout    int    `yaml:"timeout"`
-	MaxResults int    `yaml:"max_results"`
-	Proxy      string `yaml:"proxy"` // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+	Type       string        `yaml:"type" default:"brave"` // brave, serper, serpapi
+	Key        string        `yaml:"key"`
+	Timeout    time.Duration `yaml:"timeout" default:"30s"`
+	MaxResults int           `yaml:"max_results" default:"10"`
+	Proxy      string        `yaml:"proxy"` // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
 }
 
 type WebFetchConfig struct {
-	Timeout int    `yaml:"timeout"` // HTTP request timeout in seconds (default 60)
-	Proxy   string `yaml:"proxy"`   // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
+	Timeout time.Duration `yaml:"timeout" default:"60s"` // HTTP request timeout
+	Proxy   string        `yaml:"proxy"`                 // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 }
 
 // MCPTransportType represents the type of MCP transport protocol
@@ -68,8 +62,8 @@ type MCPOAuthConfig struct {
 	ClientURI             string   `yaml:"client_uri,omitempty"`
 	Scopes                []string `yaml:"scopes,omitempty"`
 	AuthServerMetadataURL string   `yaml:"auth_server_metadata_url,omitempty"` // Override auto-discovery
-	CallbackHost          string   `yaml:"callback_host,omitempty"`            // OAuth callback host (default: 127.0.0.1)
-	CallbackPort          int      `yaml:"callback_port,omitempty"`            // OAuth callback port (default: auto, same as port range default)
+	CallbackHost          string   `yaml:"callback_host,omitempty" default:"127.0.0.1"` // OAuth callback host
+	CallbackPort          int      `yaml:"callback_port,omitempty"`                      // OAuth callback port (default: auto)
 }
 
 // MCPServerConfig represents a single MCP server connection configuration
@@ -83,7 +77,7 @@ type MCPServerConfig struct {
 	Headers map[string]string `yaml:"headers,omitempty"` // For http transport
 	Proxy   string            `yaml:"proxy,omitempty"`   // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
 	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
-	Enabled *bool             `yaml:"enabled,omitempty"` // Whether to load this server (default: true)
+	Enabled *bool             `yaml:"enabled,omitempty" default:"true"` // Whether to load this server
 	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`   // OAuth2 configuration (http transport only)
 }
 
@@ -97,16 +91,16 @@ func (srv *MCPServerConfig) IsEnabled() bool {
 	return srv.Enabled == nil || *srv.Enabled
 }
 
-// TUIConfig 控制终端界面行为。InputHistoryLimit 为 nil 时使用 DefaultTUIInputHistoryLimit 条；显式 0 表示不记录历史。
+// TUIConfig 控制终端界面行为。
 type TUIConfig struct {
-	InputHistoryLimit *int `yaml:"input_history_limit"`
+	InputHistoryLimit int  `yaml:"input_history_limit" default:"10"`
 	SkipEditConfirm   bool `yaml:"skip_edit_confirm"`
 }
 
 type SystemReminderConfig struct {
-	IterationWarningThreshold *int  `yaml:"iteration_warning_threshold"`
-	TokenWarningThresholdPct  *int  `yaml:"token_warning_threshold_pct"`
-	GitReminder               *bool `yaml:"git_reminder"` // true by default (enabled); set false to disable
+	IterationWarningThreshold int   `yaml:"iteration_warning_threshold" default:"5"`
+	TokenWarningThresholdPct  int   `yaml:"token_warning_threshold_pct" default:"80"`
+	GitReminder               *bool `yaml:"git_reminder" default:"true"` // set false to disable
 }
 
 // WeixinConfig holds iLink Bot channel configuration.
@@ -123,35 +117,28 @@ type ChannelConfig struct {
 
 type Config struct {
 	Provider               string                `yaml:"provider"`
-	MaxTokens              int                   `yaml:"max_tokens"`
-	MaxIterations          *int                  `yaml:"max_iterations"`          // nil = default; 0 = unlimited; >0 = explicit limit
-	SessionCleanupMaxCount *int                  `yaml:"session_cleanup_max_count"` // nil = default (100); 0 = no cleanup; >0 = explicit
+	MaxTokens              int                   `yaml:"max_tokens" default:"32000"`
+	MaxIterations          *int                  `yaml:"max_iterations" default:"50"`          // nil = default; 0 = unlimited; >0 = explicit limit
+	SessionCleanupMaxCount int                   `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
 	Providers              []ProviderConfig      `yaml:"providers"`
-	WebSearch       WebSearchConfig       `yaml:"web_search"`
-	WebFetch        WebFetchConfig        `yaml:"web_fetch"`
-	MCPServers      []MCPServerConfig     `yaml:"mcp_servers"`
-	TUI             TUIConfig             `yaml:"tui"`
-	SystemReminder  SystemReminderConfig  `yaml:"system_reminder"`
-	Language        string                `yaml:"language"`         // Reply language for LLM; defaults to English
-	TitleGeneration *bool                 `yaml:"title_generation"` // true by default; set false to use truncation
-	TitleProvider   string                `yaml:"title_provider"`   // optional: provider name for title generation (defaults to main provider)
-	CommitProvider  string                `yaml:"commit_provider"`   // optional: provider name for /commit (defaults to main provider)
-	Channel         ChannelConfig         `yaml:"channel"`            // IM channel backends
+	WebSearch              WebSearchConfig       `yaml:"web_search"`
+	WebFetch               WebFetchConfig        `yaml:"web_fetch"`
+	MCPServers             []MCPServerConfig     `yaml:"mcp_servers"`
+	TUI                    TUIConfig             `yaml:"tui"`
+	SystemReminder         SystemReminderConfig  `yaml:"system_reminder"`
+	Language               string                `yaml:"language" default:"English"` // Reply language for LLM
+	TitleGeneration        *bool                 `yaml:"title_generation" default:"true"` // set false to use truncation
+	TitleProvider          string                `yaml:"title_provider"`   // optional: provider name for title generation (defaults to main provider)
+	CommitProvider         string                `yaml:"commit_provider"`  // optional: provider name for /commit (defaults to main provider)
+	Channel                ChannelConfig         `yaml:"channel"`          // IM channel backends
 }
 
 func DefaultConfig() *Config {
-	return &Config{
-		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: intPtr(DefaultMaxIterations),
-		WebSearch: WebSearchConfig{
-			Type:       "brave",
-			Timeout:    DefaultWebSearchTimeout,
-			MaxResults: DefaultWebSearchMaxResults,
-		},
-		WebFetch: WebFetchConfig{
-			Timeout: DefaultWebFetchTimeout,
-		},
+	cfg := &Config{}
+	if err := defaults.Set(cfg); err != nil {
+		panic(fmt.Sprintf("config: failed to apply defaults: %v", err))
 	}
+	return cfg
 }
 
 func configDir() (string, error) {
@@ -210,25 +197,11 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, err
 	}
 
-	if cfg.MaxTokens == 0 {
-		cfg.MaxTokens = DefaultMaxTokens
+	// Apply defaults to any fields not set in the YAML.
+	if err := defaults.Set(cfg); err != nil {
+		return nil, fmt.Errorf("config defaults: %w", err)
 	}
-	if cfg.MaxIterations == nil {
-		cfg.MaxIterations = intPtr(DefaultMaxIterations)
-	}
-	// If explicitly set to 0, keep it as 0 (meaning unlimited).
-	if cfg.WebSearch.Type == "" {
-		cfg.WebSearch.Type = "brave"
-	}
-	if cfg.WebSearch.Timeout == 0 {
-		cfg.WebSearch.Timeout = DefaultWebSearchTimeout
-	}
-	if cfg.WebSearch.MaxResults == 0 {
-		cfg.WebSearch.MaxResults = DefaultWebSearchMaxResults
-	}
-	if cfg.WebFetch.Timeout == 0 {
-		cfg.WebFetch.Timeout = DefaultWebFetchTimeout
-	}
+
 	return cfg, nil
 }
 
@@ -264,37 +237,30 @@ func Init() (string, error) {
 		return "", err
 	}
 
-	cfg := &Config{
-		Provider:      "minimax-anthropic",
-		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: intPtr(DefaultMaxIterations),
-		Providers: []ProviderConfig{
-			{
-				Name:    "minimax-anthropic",
-				Type:    llm.ProviderTypeAnthropic,
-				Model:   "MiniMax-M2.7",
-				BaseURL: "https://api.minimaxi.com/anthropic",
-				APIKey:  "<your-api-key>",
-			},
-			{
-				Name:    "minimax-openai",
-				Type:    llm.ProviderTypeOpenAI,
-				Model:   "MiniMax-M2.7",
-				BaseURL: "https://api.minimaxi.com/v1",
-				APIKey:  "<your-api-key>",
-			},
+	cfg := &Config{}
+	if err := defaults.Set(cfg); err != nil {
+		return "", fmt.Errorf("config defaults: %w", err)
+	}
+
+	// Init-specific overrides (not defaults — user-facing template values).
+	cfg.Provider = "minimax-anthropic"
+	cfg.Providers = []ProviderConfig{
+		{
+			Name:    "minimax-anthropic",
+			Type:    llm.ProviderTypeAnthropic,
+			Model:   "MiniMax-M2.7",
+			BaseURL: "https://api.minimaxi.com/anthropic",
+			APIKey:  "<your-api-key>",
 		},
-		WebSearch: WebSearchConfig{
-			Type:       "brave",
-			Key:        "<your-web-search-api-key>",
-			Timeout:    DefaultWebSearchTimeout,
-			MaxResults: DefaultWebSearchMaxResults,
-		},
-		WebFetch: WebFetchConfig{
-			Timeout: DefaultWebFetchTimeout,
-			// Proxy: "socks5://127.0.0.1:1080",
+		{
+			Name:    "minimax-openai",
+			Type:    llm.ProviderTypeOpenAI,
+			Model:   "MiniMax-M2.7",
+			BaseURL: "https://api.minimaxi.com/v1",
+			APIKey:  "<your-api-key>",
 		},
 	}
+	cfg.WebSearch.Key = "<your-web-search-api-key>"
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -338,53 +304,6 @@ func (srv *MCPServerConfig) MCPTimeout() time.Duration {
 	return DefaultMCPConnectTimeout
 }
 
-// TUIInputHistoryMax 返回输入区最多保留的历史条数。未配置 tui.input_history_limit 时返回 DefaultTUIInputHistoryLimit；显式为负数时按 0 处理（不记录历史）。
-func (c *Config) TUIInputHistoryMax() int {
-	if c == nil || c.TUI.InputHistoryLimit == nil {
-		return DefaultTUIInputHistoryLimit
-	}
-	if *c.TUI.InputHistoryLimit < 0 {
-		return 0
-	}
-	return *c.TUI.InputHistoryLimit
-}
-
-// IterationWarningThreshold returns the remaining-iteration count at which
-// the agent should warn. Defaults to DefaultIterationWarningThreshold.
-func (c *Config) IterationWarningThreshold() int {
-	if c == nil || c.SystemReminder.IterationWarningThreshold == nil {
-		return DefaultIterationWarningThreshold
-	}
-	return *c.SystemReminder.IterationWarningThreshold
-}
-
-// GitReminderEnabled returns whether the git status reminder is active.
-// Defaults to true when not explicitly configured.
-func (c *Config) GitReminderEnabled() bool {
-	if c == nil || c.SystemReminder.GitReminder == nil {
-		return true
-	}
-	return *c.SystemReminder.GitReminder
-}
-
-// EffectiveLanguage returns the configured reply language for the LLM.
-// Defaults to "English" when no language is configured.
-func (c *Config) EffectiveLanguage() string {
-	if c == nil || c.Language == "" {
-		return "English"
-	}
-	return c.Language
-}
-
-// TokenWarningThresholdPct returns the context-window usage percentage at
-// which the agent should warn. Defaults to DefaultTokenWarningThresholdPct.
-func (c *Config) TokenWarningThresholdPct() int {
-	if c == nil || c.SystemReminder.TokenWarningThresholdPct == nil {
-		return DefaultTokenWarningThresholdPct
-	}
-	return *c.SystemReminder.TokenWarningThresholdPct
-}
-
 // GetMaxIterations returns the effective max iterations:
 // - nil → DefaultMaxIterations (50)
 // - 0 → 0 (unlimited)
@@ -394,44 +313,6 @@ func (c *Config) GetMaxIterations() int {
 		return DefaultMaxIterations
 	}
 	return *c.MaxIterations
-}
-
-// TitleGenerationEnabled returns whether LLM-based title generation is active.
-// Defaults to true when not explicitly configured.
-func (c *Config) TitleGenerationEnabled() bool {
-	if c == nil || c.TitleGeneration == nil {
-		return true
-	}
-	return *c.TitleGeneration
-}
-
-// EffectiveTitleProvider returns the provider name to use for title generation.
-// Returns empty string when not configured (meaning: use main provider).
-func (c *Config) EffectiveTitleProvider() string {
-	if c == nil {
-		return ""
-	}
-	return c.TitleProvider
-}
-
-// EffectiveCommitProvider returns the provider name to use for /commit message generation.
-// Returns empty string when not configured (meaning: use main provider).
-func (c *Config) EffectiveCommitProvider() string {
-	if c == nil {
-		return ""
-	}
-	return c.CommitProvider
-}
-
-// EffectiveSessionCleanupMaxCount returns the maximum number of sessions to retain.
-// - nil → DefaultSessionCleanupMaxCount (100)
-// - 0 → 0 (no cleanup)
-// - >0 → explicit value
-func (c *Config) EffectiveSessionCleanupMaxCount() int {
-	if c == nil || c.SessionCleanupMaxCount == nil {
-		return DefaultSessionCleanupMaxCount
-	}
-	return *c.SessionCleanupMaxCount
 }
 
 // intPtr returns a pointer to the given int. Helper for config initialization.
