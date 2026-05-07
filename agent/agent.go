@@ -50,8 +50,8 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		maxIterations:   maxIterations,
 		titleGenEnabled: true,
 		toolRegistry:    tools.NewRegistry(),
-		confirmRespCh: make(chan bool, 1),
-		askUserRespCh: make(chan tools.AskUserResult, 1),
+		confirmRespCh:   make(chan bool, 1),
+		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		reminderCollector: systemreminder.NewCollector(
 			systemreminder.DateReminder{},
 			systemreminder.ProjectContextReminder{},
@@ -254,6 +254,8 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 		debuglog.Log("Agent: LLM returned empty title, falling back to truncation")
 		return session.ExtractTitle(firstMessage)
 	}
+
+	debuglog.Log("Agent: LLM generated title: %s", title)
 
 	// Enforce max length via existing ExtractTitle
 	return session.ExtractTitle(title)
@@ -919,7 +921,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	}
 	for _, t := range mcpTools {
 		a.RegisterTool(t)
-		debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		debuglog.Log("MCP: registered tool %s", t.Name())
 	}
 	return mgr, nil
 }

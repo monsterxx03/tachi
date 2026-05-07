@@ -64,14 +64,24 @@ func NewCollector(reminders ...Reminder) *Collector {
 // Returns an empty string when no reminders are active.
 func (c *Collector) Collect(ctx Context) string {
 	var parts []string
+	var firedNames []string
 	for _, r := range c.reminders {
-		parts = append(parts, r.Generate(ctx)...)
+		generated := r.Generate(ctx)
+		if len(generated) > 0 {
+			// Extract the short type name (without package path) for logging.
+			typeName := fmt.Sprintf("%T", r)
+			if idx := strings.LastIndex(typeName, "."); idx >= 0 {
+				typeName = typeName[idx+1:]
+			}
+			firedNames = append(firedNames, typeName)
+			parts = append(parts, generated...)
+		}
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	block := "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"
-	debuglog.Log("systemreminder: injecting %d reminder(s):\n%s", len(parts), block)
+	debuglog.Log("systemreminder: firing reminder(s): %s", strings.Join(firedNames, ", "))
 	return block
 }
 
