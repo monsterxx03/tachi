@@ -565,6 +565,12 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.eventCh = nil
 		return nil
 
+	case agent.AgentEventSessionTitle:
+		// Title generated early: refresh statusbar immediately without
+		// waiting for TurnComplete.
+		m.syncSessionInfo()
+		return m.nextEvent()
+
 	case agent.AgentEventError:
 		if event.Messages != nil {
 			m.history = event.Messages

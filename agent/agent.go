@@ -362,6 +362,7 @@ const (
 	AgentEventTurnComplete     = "turn_complete"
 	AgentEventError            = "error"
 	AgentEventAskUser          = "ask_user_question"
+	AgentEventSessionTitle     = "session_title"
 )
 
 type AgentEvent struct {
@@ -378,6 +379,7 @@ type AgentEvent struct {
 	Result        *RunResult
 	Messages      []llm.Message
 	Usage         *llm.Usage
+	Title         string // For AgentEventSessionTitle
 }
 
 var errCancelled = fmt.Errorf("edit cancelled by user")
@@ -751,7 +753,10 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			})
 			// Set title from first user message (LLM-generated or truncated)
 			if curr := a.sessionManager.Current(); curr != nil && curr.Title == "" {
-				a.sessionManager.SetTitle(a.generateTitle(ctx, userMessage))
+				title := a.generateTitle(ctx, userMessage)
+				a.sessionManager.SetTitle(title)
+				// Notify TUI immediately so statusbar can refresh before LLM finishes
+				ch <- AgentEvent{Type: AgentEventSessionTitle, Title: title}
 			}
 		}
 
