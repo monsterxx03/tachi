@@ -1,6 +1,7 @@
 package debuglog
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"os"
@@ -14,8 +15,9 @@ const (
 )
 
 var (
-	logger       *slog.Logger
-	rotateWriter *rotatingWriter
+	DefaultLogger       *Logger
+	rotateWriter        *rotatingWriter
+	internalSlog *slog.Logger
 )
 
 // Init initializes the debug logger, writing to ~/.tachi/logs/debug.log
@@ -37,9 +39,11 @@ func Init() error {
 	}
 	rotateWriter = rw
 
-	logger = slog.New(slog.NewTextHandler(rw, &slog.HandlerOptions{
+	internalSlog = slog.New(slog.NewTextHandler(rw, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
 	}))
+
+	DefaultLogger = &Logger{slog: internalSlog.With(slog.String("source", "tui"))}
 
 	return nil
 }
@@ -51,18 +55,62 @@ func Close() {
 	}
 }
 
-// Log writes a formatted message to the debug log at INFO level.
-// Format and args follow the same convention as fmt.Sprintf.
-func Log(format string, args ...interface{}) {
-	if logger != nil {
-		logger.Info(fmt.Sprintf(format, args...))
-	}
+// Logger is a debug logger that carries a source identifier, wrapping slog.Logger.
+// The zero value is safe — Log is a no-op on a nil Logger.
+type Logger struct {
+	slog *slog.Logger
 }
 
-// Logger returns the underlying slog.Logger for callers that want
+// WithSource returns a new Logger that includes a "source" attribute.
+// Callers should use this to tag log entries with their origin (e.g. "channel:weixin").
+func (l *Logger) WithSource(source string) *Logger {
+	if l == nil || l.slog == nil {
+		return l
+	}
+	return &Logger{slog: l.slog.With(slog.String("source", source))}
+}
+
+// Log writes a formatted message at INFO level.
+// Uses the default logger (source=tui) if called with a nil Logger.
+func (l *Logger) Log(format string, args ...interface{}) {
+	if l == nil || l.slog == nil {
+		if DefaultLogger != nil {
+			DefaultLogger.Log(format, args...)
+		}
+		return
+	}
+	l.slog.Info(fmt.Sprintf(format, args...))
+}
+
+// Log writes a formatted message to the debug log, extracting the Logger from ctx.
+// If ctx carries no logger, falls back to DefaultLogger (source=tui).
+// Format and args follow the same convention as fmt.Sprintf.
+func Log(ctx context.Context, format string, args ...interface{}) {
+	l := FromContext(ctx)
+	l.Log(format, args...)
+}
+
+// SlogLogger returns the underlying slog.Logger for callers that want
 // structured logging with custom levels, attributes, or groups.
-func Logger() *slog.Logger {
-	return logger
+func SlogLogger() *slog.Logger {
+	return internalSlog
+}
+
+// --- context helpers ---
+
+type loggerKey struct{}
+
+// WithLogger attaches a Logger to the context for downstream consumption.
+func WithLogger(ctx context.Context, l *Logger) context.Context {
+	return context.WithValue(ctx, loggerKey{}, l)
+}
+
+// FromContext retrieves the Logger from ctx. Falls back to DefaultLogger.
+func FromContext(ctx context.Context) *Logger {
+	if l, ok := ctx.Value(loggerKey{}).(*Logger); ok && l != nil {
+		return l
+	}
+	return DefaultLogger
 }
 
 // rotatingWriter implements io.Writer with size-based log rotation.

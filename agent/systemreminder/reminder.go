@@ -51,12 +51,19 @@ type Reminder interface {
 // single <system-reminder>...</system-reminder> block.
 type Collector struct {
 	reminders []Reminder
+	logger    *debuglog.Logger
 }
 
 // NewCollector creates a Collector that consults the given reminders.
 // When called with no arguments the collector always produces empty output.
 func NewCollector(reminders ...Reminder) *Collector {
-	return &Collector{reminders: reminders}
+	return &Collector{reminders: reminders, logger: debuglog.DefaultLogger}
+}
+
+// SetLogger overrides the collector's logger. Channel callers use this to inject
+// a channel-specific logger so debug output is tagged with the correct source.
+func (c *Collector) SetLogger(l *debuglog.Logger) {
+	c.logger = l
 }
 
 // Collect queries every registered reminder and, if any produce output,
@@ -81,7 +88,7 @@ func (c *Collector) Collect(ctx Context) string {
 		return ""
 	}
 	block := "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"
-	debuglog.Log("systemreminder: firing reminder(s): %s", strings.Join(firedNames, ", "))
+	c.logger.Log("systemreminder: firing reminder(s): %s", strings.Join(firedNames, ", "))
 	return block
 }
 
@@ -108,7 +115,7 @@ func (DateReminder) Generate(ctx Context) []string {
 		return nil
 	}
 	line := fmt.Sprintf("Current date: %s", ctx.Now.Format("Monday, January 2, 2006"))
-	debuglog.Log("systemreminder: DateReminder firing: %q", line)
+	debuglog.DefaultLogger.Log("systemreminder: DateReminder firing: %q", line)
 	return []string{line}
 }
 
@@ -133,7 +140,7 @@ func (r IterationWarningReminder) Generate(ctx Context) []string {
 		"Iteration budget: %d of %d iterations remaining. Complete your work as efficiently as possible.",
 		ctx.IterationsLeft, ctx.MaxIterations,
 	)
-	debuglog.Log("systemreminder: IterationWarningReminder firing (threshold=%d): %q", r.Threshold, line)
+	debuglog.DefaultLogger.Log("systemreminder: IterationWarningReminder firing (threshold=%d): %q", r.Threshold, line)
 	return []string{line}
 }
 
@@ -159,7 +166,7 @@ func (r TokenWarningReminder) Generate(ctx Context) []string {
 		"Context window usage: %.0f%% (%d / %d input tokens). Be concise and minimize unnecessary output.",
 		pct, ctx.InputTokens, ctx.ContextWindow,
 	)
-	debuglog.Log("systemreminder: TokenWarningReminder firing (threshold=%d%%): %q", r.ThresholdPct, line)
+	debuglog.DefaultLogger.Log("systemreminder: TokenWarningReminder firing (threshold=%d%%): %q", r.ThresholdPct, line)
 	return []string{line}
 }
 

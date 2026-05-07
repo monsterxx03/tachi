@@ -86,6 +86,8 @@ type Model struct {
 	sessionList      []*session.Session // for /sessions selection
 	sessionSelIdx    int
 	sessionScrollOff int // scroll offset for session list
+
+	logger *debuglog.Logger
 }
 
 type ModelConfig struct {
@@ -508,7 +510,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventToolConfirmation:
-		debuglog.Log("TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
+		m.logger.Log("TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
 		m.pendingConfirm = &pendingConfirm{
 			toolName: event.ToolName,
 			toolID:   event.ToolID,
@@ -522,14 +524,14 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			Content: "Edit File Confirmation\n" + event.ToolDiff,
 		})
 		if len(event.ToolDiff) > 100 {
-			debuglog.Log("TUI: diff preview: %s...", event.ToolDiff[:100])
+			m.logger.Log("TUI: diff preview: %s...", event.ToolDiff[:100])
 		} else {
-			debuglog.Log("TUI: diff: %s", event.ToolDiff)
+			m.logger.Log("TUI: diff: %s", event.ToolDiff)
 		}
 		return nil
 
 	case agent.AgentEventAskUser:
-		debuglog.Log("TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
+		m.logger.Log("TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
 		m.askUserView = NewAskUserView(event.Questions, m.width)
 		m.setState(stateAskUserQuestion)
 		m.layout()

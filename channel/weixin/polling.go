@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/channel"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 // --- Polling Loop ---
@@ -30,17 +29,17 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 	for {
 		select {
 		case <-ctx.Done():
-			debuglog.Log("weixin: polling loop exiting (ctx cancelled)")
+			ch.logger.Log("weixin: polling loop exiting (ctx cancelled)")
 			return nil
 		default:
 		}
 
 		resp, err := ch.cli.getUpdates(buf)
 		if err != nil {
-			debuglog.Log("weixin: getUpdates error: %v", err)
+			ch.logger.Log("weixin: getUpdates error: %v", err)
 			failures++
 			if failures >= maxConsecutiveFailures {
-				debuglog.Log("weixin: %d consecutive failures, backing off for %v", failures, longBackoff)
+				ch.logger.Log("weixin: %d consecutive failures, backing off for %v", failures, longBackoff)
 				select {
 				case <-ctx.Done():
 					return nil
@@ -65,7 +64,7 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 
 		// Handle session expiry.
 		if resp.ErrCode == ErrCodeSessionExpired {
-			debuglog.Log("weixin: session expired, pausing for %v", sessionExpiredPause)
+			ch.logger.Log("weixin: session expired, pausing for %v", sessionExpiredPause)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -76,10 +75,10 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 		}
 
 		if resp.Ret != 0 {
-			debuglog.Log("weixin: getUpdates ret=%d, errcode=%d", resp.Ret, resp.ErrCode)
+			ch.logger.Log("weixin: getUpdates ret=%d, errcode=%d", resp.Ret, resp.ErrCode)
 			failures++
 			if failures >= maxConsecutiveFailures {
-				debuglog.Log("weixin: %d consecutive non-zero ret, backing off for %v", failures, longBackoff)
+				ch.logger.Log("weixin: %d consecutive non-zero ret, backing off for %v", failures, longBackoff)
 				select {
 				case <-ctx.Done():
 					return nil
@@ -122,7 +121,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 
 	// Check allowlist.
 	if !ch.store.isUserAllowed(ch.accountID, msg.FromUserID) {
-		debuglog.Log("weixin: user %s not in allowlist, ignoring", msg.FromUserID)
+		ch.logger.Log("weixin: user %s not in allowlist, ignoring", msg.FromUserID)
 		return
 	}
 
@@ -140,7 +139,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		ChannelID: msg.GroupID,
 	}
 
-	debuglog.Log("weixin: dispatching msg from %s (thread=%s): %s", msg.FromUserID, threadID, truncate(text, 100))
+	ch.logger.Log("weixin: dispatching msg from %s (thread=%s): %s", msg.FromUserID, threadID, truncate(text, 100))
 
 	// Start typing indicator while LLM processes.
 	typingDone := make(chan struct{})
@@ -152,7 +151,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	// Stop typing.
 	close(typingDone)
 	if err != nil {
-		debuglog.Log("weixin: handler error for %s: %v", threadID, err)
+		ch.logger.Log("weixin: handler error for %s: %v", threadID, err)
 		// Send error message back to user.
 		errorText := fmt.Sprintf("❌ %v", err)
 		ch.sendTextReply(msg.FromUserID, msg.ContextToken, errorText)
@@ -174,7 +173,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 func (ch *Channel) runTyping(ctx context.Context, userID string, done <-chan struct{}) {
 	ticket, err := ch.typingTickets.get(userID, "")
 	if err != nil {
-		debuglog.Log("weixin: typing ticket fetch failed for %s: %v", userID, err)
+		ch.logger.Log("weixin: typing ticket fetch failed for %s: %v", userID, err)
 		return
 	}
 
@@ -206,7 +205,7 @@ func (ch *Channel) sendTyping(userID, ticket string, status int) {
 		BaseInfo:     BaseInfo{ChannelVersion: defaultChannelVersion},
 	}
 	if err := ch.cli.sendTyping(req); err != nil {
-		debuglog.Log("weixin: sendTyping error: %v", err)
+		ch.logger.Log("weixin: sendTyping error: %v", err)
 	}
 }
 

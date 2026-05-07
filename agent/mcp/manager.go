@@ -22,6 +22,7 @@ import (
 // Manager manages the lifecycle of MCP client connections and their tools.
 type Manager struct {
 	clients map[string]*client.Client // server name -> client
+	logger  *debuglog.Logger
 	mu      sync.RWMutex
 }
 
@@ -29,7 +30,14 @@ type Manager struct {
 func NewManager() *Manager {
 	return &Manager{
 		clients: make(map[string]*client.Client),
+		logger:  debuglog.DefaultLogger,
 	}
+}
+
+// SetLogger overrides the manager's logger. Channel callers use this to inject
+// a channel-specific logger so debug output is tagged with the correct source.
+func (m *Manager) SetLogger(l *debuglog.Logger) {
+	m.logger = l
 }
 
 // ConnectAll connects to all configured MCP servers concurrently. Each server
@@ -50,7 +58,7 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 	for i := range servers {
 		srv := &servers[i]
 		if !srv.IsEnabled() {
-			debuglog.Log("MCP: server %q is disabled, skipping", srv.Name)
+			debuglog.Log(ctx, "MCP: server %q is disabled, skipping", srv.Name)
 			continue
 		}
 
@@ -106,7 +114,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
 
-	debuglog.Log("MCP: connected to server %q (%s)",
+	debuglog.Log(ctx, "MCP: connected to server %q (%s)",
 		srv.Name, srv.Type)
 
 	// Discover tools
@@ -126,7 +134,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	m.clients[srv.Name] = c
 	m.mu.Unlock()
 
-	debuglog.Log("MCP: server %q has %d tools", srv.Name, len(toolsResult.Tools))
+	debuglog.Log(ctx, "MCP: server %q has %d tools", srv.Name, len(toolsResult.Tools))
 
 	// Wrap tools
 	mcpTools := make([]MCPTool, 0, len(toolsResult.Tools))
@@ -169,10 +177,10 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 	if srv.Proxy != "" {
 		httpClient, err := proxy.NewHTTPClient(srv.Proxy, timeout)
 		if err != nil {
-			debuglog.Log("MCP: invalid proxy %q for server %q: %v", srv.Proxy, srv.Name, err)
+			m.logger.Log("MCP: invalid proxy %q for server %q: %v", srv.Proxy, srv.Name, err)
 		} else {
 			opts = append(opts, transport.WithHTTPBasicClient(httpClient))
-			debuglog.Log("MCP: using proxy %q for server %q", srv.Proxy, srv.Name)
+			m.logger.Log("MCP: using proxy %q for server %q", srv.Proxy, srv.Name)
 		}
 	}
 	// If OAuth isn't explicitly configured, check for persisted token / DCR
@@ -212,7 +220,7 @@ func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableH
 	oauthCfg := srv.OAuth
 	tokenStore, err := NewFileTokenStore(srv.Name)
 	if err != nil {
-		debuglog.Log("MCP: failed to create token store for %q: %v", srv.Name, err)
+		m.logger.Log("MCP: failed to create token store for %q: %v", srv.Name, err)
 		tokenStore = nil
 	}
 
@@ -224,7 +232,7 @@ func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableH
 		if dcr, err := tokenStore.GetDCRInfo(context.Background()); err == nil {
 			clientID = dcr.ClientID
 			clientSecret = dcr.ClientSecret
-			debuglog.Log("MCP: loaded DCR client_id for %q from disk", srv.Name)
+			m.logger.Log("MCP: loaded DCR client_id for %q from disk", srv.Name)
 		}
 	}
 
@@ -308,10 +316,10 @@ func (m *Manager) Disconnect(name string) error {
 	}
 	delete(m.clients, name)
 	if err := c.Close(); err != nil {
-		debuglog.Log("MCP: error disconnecting %q: %v", name, err)
+		m.logger.Log("MCP: error disconnecting %q: %v", name, err)
 		return fmt.Errorf("disconnect %q: %w", name, err)
 	}
-	debuglog.Log("MCP: disconnected %q", name)
+	m.logger.Log("MCP: disconnected %q", name)
 	return nil
 }
 
@@ -332,7 +340,7 @@ func (m *Manager) Close() {
 
 	for name, c := range m.clients {
 		if err := c.Close(); err != nil {
-			debuglog.Log("MCP: error closing client %q: %v", name, err)
+			m.logger.Log("MCP: error closing client %q: %v", name, err)
 		}
 	}
 	m.clients = make(map[string]*client.Client)

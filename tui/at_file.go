@@ -66,7 +66,7 @@ func getCachedTrie() (*pathtrie.PathTrie, error) {
 	t := pathtrie.New(paths)
 	atFileTrie = t
 	atFileTrieTTL = time.Now()
-	debuglog.Log("at_file: built trie with %d files", t.FileCount())
+	debuglog.DefaultLogger.Log("at_file: built trie with %d files", t.FileCount())
 	return t, nil
 }
 
@@ -232,7 +232,7 @@ func ExpandAtReferences(message string) string {
 			if path != "" {
 				content, err := resolveAtReference(path)
 				if err != nil {
-					debuglog.Log("at_file: resolve %q: %v", path, err)
+					debuglog.DefaultLogger.Log("at_file: resolve %q: %v", path, err)
 				} else {
 					result.WriteString("\n\n--- Content of ")
 					result.WriteString(path)
@@ -252,7 +252,7 @@ func ExpandAtReferences(message string) string {
 	}
 
 	if expanded {
-		debuglog.Log("at_file: expanded @ references in message")
+		debuglog.DefaultLogger.Log("at_file: expanded @ references in message")
 	}
 
 	return result.String()

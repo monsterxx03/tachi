@@ -22,6 +22,8 @@ type Channel struct {
 	accountID string   // ilink_bot_id, e.g. "a1b2c3d4@im.bot"
 	userID    string   // ilink_user_id, the scanner's WeChat ID
 	botToken  string   // bearer token for API calls
+
+	logger *debuglog.Logger
 }
 
 // NewChannel creates a Weixin channel. It validates config, initialises the
@@ -44,6 +46,7 @@ func NewChannel(cfg config.WeixinConfig) (*Channel, error) {
 		store:         store,
 		cli:           cli,
 		typingTickets: newTypingTicketCache(cli),
+		logger:        debuglog.DefaultLogger.WithSource("channel:weixin"),
 	}, nil
 }
 
@@ -66,7 +69,7 @@ func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) erro
 
 	ch.cli.SetBotToken(ch.botToken)
 
-	debuglog.Log("weixin: logged in as %s (bot=%s, user=%s)", ch.accountID, ch.botToken[:8]+"...", ch.userID)
+	ch.logger.Log("weixin: logged in as %s (bot=%s, user=%s)", ch.accountID, ch.botToken[:8]+"...", ch.userID)
 	fmt.Printf("[weixin] logged in as %s\n", ch.accountID)
 
 	// --- Long-polling loop ---
@@ -95,7 +98,7 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 		// Ensure the configured user is in the allowlist (may be missing from
 		// accounts created before this fix was applied).
 		if !ch.store.isUserAllowed(ch.accountID, ch.userID) {
-			debuglog.Log("weixin: auto-adding user %s to allowlist", ch.userID)
+			ch.logger.Log("weixin: auto-adding user %s to allowlist", ch.userID)
 			allowFrom := &AllowFromData{
 				Version:   1,
 				AllowFrom: []string{ch.userID},
@@ -103,7 +106,7 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 			ch.store.saveAllowFrom(ch.accountID, allowFrom)
 		}
 
-		debuglog.Log("weixin: loaded stored account %s", accounts[0])
+		ch.logger.Log("weixin: loaded stored account %s", accounts[0])
 		return nil
 	}
 
@@ -168,7 +171,7 @@ func (ch *Channel) qrLogin(ctx context.Context) error {
 				AllowFrom: []string{ch.userID},
 			}
 			if err := ch.store.saveAllowFrom(ch.accountID, allowFrom); err != nil {
-				debuglog.Log("weixin: warning: failed to save allowFrom: %v", err)
+				ch.logger.Log("weixin: warning: failed to save allowFrom: %v", err)
 			}
 
 			// Clean up duplicate accounts for the same userId.
@@ -220,7 +223,7 @@ func (ch *Channel) deduplicateAccounts() {
 			continue
 		}
 		if data.UserID == ch.userID {
-			debuglog.Log("weixin: removing duplicate account %s (same user %s)", aid, ch.userID)
+			ch.logger.Log("weixin: removing duplicate account %s (same user %s)", aid, ch.userID)
 			ch.store.deleteAccount(aid)
 		}
 	}

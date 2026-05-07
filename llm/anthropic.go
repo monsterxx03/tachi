@@ -33,7 +33,7 @@ func (p *AnthropicProvider) Name() string {
 	return ProviderTypeAnthropic
 }
 
-func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts ChatOptions) (*anthropic.MessageNewParams, error) {
+func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*anthropic.MessageNewParams, error) {
 	var systemPrompt string
 	var anthropicMessages []anthropic.MessageParam
 
@@ -83,7 +83,7 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts 
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
 					// Arguments may be incomplete (e.g. truncated stream);
 					// degrade gracefully so the error doesn't abort the entire request.
-					debuglog.Log("anthropic: failed to unmarshal tool call %s arguments: %v (args: %s)", tc.ID, err, tc.Function.Arguments)
+					debuglog.Log(ctx, "anthropic: failed to unmarshal tool call %s arguments: %v (args: %s)", tc.ID, err, tc.Function.Arguments)
 					input = map[string]any{}
 				}
 				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(tc.ID, input, tc.Function.Name))
@@ -136,7 +136,7 @@ func (p *AnthropicProvider) buildRequest(messages []Message, tools []Tool, opts 
 }
 
 func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
-	req, err := p.buildRequest(messages, tools, opts)
+	req, err := p.buildRequest(ctx, messages, tools, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 }
 
 func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error) {
-	req, err := p.buildRequest(messages, tools, opts)
+	req, err := p.buildRequest(ctx, messages, tools, opts)
 	if err != nil {
 		return nil, err
 	}

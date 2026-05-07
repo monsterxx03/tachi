@@ -14,6 +14,7 @@ type Manager struct {
 	current       *Session
 	maxKeep       int // max sessions to retain; 0 = no cleanup
 	mu            sync.Mutex
+	logger        *debuglog.Logger
 }
 
 func NewManager() (*Manager, error) {
@@ -27,12 +28,12 @@ func NewManager() (*Manager, error) {
 		return nil, err
 	}
 
-	return &Manager{store: store, maxKeep: 100}, nil
+	return &Manager{store: store, maxKeep: 100, logger: debuglog.DefaultLogger}, nil
 }
 
 // NewManagerWithStore creates a Manager with a custom store implementation
 func NewManagerWithStore(store Store) *Manager {
-	return &Manager{store: store}
+	return &Manager{store: store, logger: debuglog.DefaultLogger}
 }
 
 // SetMaxKeep sets the maximum number of sessions to retain.
@@ -62,7 +63,7 @@ func (m *Manager) cleanupLocked() int {
 
 	sessions, err := m.store.ListSessions()
 	if err != nil {
-		debuglog.Log("session cleanup: list sessions error: %v", err)
+		m.logger.Log("session cleanup: list sessions error: %v", err)
 		return 0
 	}
 
@@ -86,14 +87,14 @@ func (m *Manager) cleanupLocked() int {
 		}
 		if err := m.store.DeleteSession(s.ID); err != nil {
 			// Log but continue — best-effort cleanup
-			debuglog.Log("session cleanup: failed to delete %s: %v", s.ID, err)
+			m.logger.Log("session cleanup: failed to delete %s: %v", s.ID, err)
 			continue
 		}
 		removed++
 	}
 
 	if removed > 0 {
-		debuglog.Log("session cleanup: removed %d old sessions (maxKeep=%d)", removed, m.maxKeep)
+		m.logger.Log("session cleanup: removed %d old sessions (maxKeep=%d)", removed, m.maxKeep)
 	}
 
 	return removed

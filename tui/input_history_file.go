@@ -18,12 +18,12 @@ func loadInputHistoryFile(path string, limit int) []string {
 		if errors.Is(err, os.ErrNotExist) {
 			return make([]string, 0)
 		}
-		debuglog.Log("input history: read %s: %v", path, err)
+		debuglog.DefaultLogger.Log("input history: read %s: %v", path, err)
 		return make([]string, 0)
 	}
 	var entries []string
 	if err := json.Unmarshal(data, &entries); err != nil {
-		debuglog.Log("input history: parse %s: %v", path, err)
+		debuglog.DefaultLogger.Log("input history: parse %s: %v", path, err)
 		return make([]string, 0)
 	}
 	if len(entries) > limit {

@@ -38,6 +38,8 @@ type client struct {
 	getConfigTimeout     time.Duration
 	sendTypingTimeout    time.Duration
 	qrStatusTimeout      time.Duration
+
+	logger *debuglog.Logger
 }
 
 func newClient() *client {
@@ -50,6 +52,7 @@ func newClient() *client {
 		getConfigTimeout:     10 * time.Second,
 		sendTypingTimeout:    10 * time.Second,
 		qrStatusTimeout:      35 * time.Second,
+		logger:              debuglog.DefaultLogger.WithSource("channel:weixin-client"),
 	}
 }
 
@@ -114,7 +117,7 @@ func (c *client) doWithTimeout(method, url string, body []byte, timeout time.Dur
 		req.Header.Set("Content-Length", strconv.Itoa(len(body)))
 	}
 
-	debuglog.Log("weixin-client: %s %s", method, url)
+	c.logger.Log("weixin-client: %s %s", method, url)
 	return hc.Do(req)
 }
 
@@ -137,7 +140,7 @@ func apiPost[Resp any](c *client, path string, reqBody any, timeout time.Duratio
 		return nil, fmt.Errorf("read response for %s: %w", path, err)
 	}
 
-	debuglog.Log("weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+	c.logger.Log("weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
 
 	var result Resp
 	if err := json.Unmarshal(respBytes, &result); err != nil {
@@ -160,7 +163,7 @@ func apiGet[Resp any](c *client, path string, timeout time.Duration) (*Resp, err
 		return nil, fmt.Errorf("read response for %s: %w", path, err)
 	}
 
-	debuglog.Log("weixin-client: GET %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+	c.logger.Log("weixin-client: GET %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
 
 	var result Resp
 	if err := json.Unmarshal(respBytes, &result); err != nil {
@@ -197,7 +200,7 @@ func (c *client) cdnUpload(url string, data []byte) (encryptedParam string, err 
 	req.Header.Set("Content-Type", "application/octet-stream")
 	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
 
-	debuglog.Log("weixin-client: CDN POST %s (%d bytes)", url, len(data))
+	c.logger.Log("weixin-client: CDN POST %s (%d bytes)", url, len(data))
 	resp, err := hc.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("CDN upload: %w", err)
@@ -221,7 +224,7 @@ func (c *client) cdnDownload(url string) ([]byte, error) {
 		return nil, fmt.Errorf("create CDN download request: %w", err)
 	}
 
-	debuglog.Log("weixin-client: CDN GET %s", url)
+	c.logger.Log("weixin-client: CDN GET %s", url)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("CDN download: %w", err)

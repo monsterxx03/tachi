@@ -38,6 +38,8 @@ type InputArea struct {
 	// holds the full pasted text, which is sent to the LLM on submit.
 	pasteBuffer    string
 	pasteThreshold int
+
+	logger *debuglog.Logger
 }
 
 func NewInputArea(historyMax int, historyPath string) InputArea {
@@ -76,6 +78,7 @@ func NewInputArea(historyMax int, historyPath string) InputArea {
 		histIdx:     -1,
 		historyPath: historyPath,
 		pasteThreshold: 5,
+		logger:      debuglog.DefaultLogger,
 	}
 }
 
@@ -380,7 +383,7 @@ func (i *InputArea) pushHistoryLine(line string) {
 	}
 	if i.historyPath != "" {
 		if err := saveInputHistoryFile(i.historyPath, i.history); err != nil {
-			debuglog.Log("input history: save: %v", err)
+			i.logger.Log("input history: save: %v", err)
 		}
 	}
 }

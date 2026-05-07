@@ -7,8 +7,6 @@ import (
 	"fmt"
 	"strings"
 	"time"
-
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 // --- Message Extraction ---
@@ -98,16 +96,16 @@ func (ch *Channel) sendTextReply(toUserID, contextToken, text string) error {
 
 	resp, err := ch.cli.sendMessage(req)
 	if err != nil {
-		debuglog.Log("weixin: sendMessage error to %s: %v", toUserID, err)
+		ch.logger.Log("weixin: sendMessage error to %s: %v", toUserID, err)
 		return err
 	}
 
 	if resp.ErrCode != 0 {
-		debuglog.Log("weixin: sendMessage to %s: errcode=%d errmsg=%s", toUserID, resp.ErrCode, resp.ErrMsg)
+		ch.logger.Log("weixin: sendMessage to %s: errcode=%d errmsg=%s", toUserID, resp.ErrCode, resp.ErrMsg)
 		return fmt.Errorf("sendMessage errcode=%d %s", resp.ErrCode, resp.ErrMsg)
 	}
 
-	debuglog.Log("weixin: sent text reply to %s (%d chars)", toUserID, len(text))
+	ch.logger.Log("weixin: sent text reply to %s (%d chars)", toUserID, len(text))
 	return nil
 }
 
@@ -170,7 +168,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 				return err // 4xx, don't retry.
 			}
 			if i < 2 {
-				debuglog.Log("weixin: CDN upload retry %d: %v", i+1, err)
+				ch.logger.Log("weixin: CDN upload retry %d: %v", i+1, err)
 				time.Sleep(time.Duration(i+1) * time.Second)
 			}
 		} else {
@@ -249,7 +247,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 		return fmt.Errorf("sendMessage media errcode=%d %s", sendResp.ErrCode, sendResp.ErrMsg)
 	}
 
-	debuglog.Log("weixin: sent media reply to %s (%s, %d bytes)", toUserID, fileName, rawSize)
+	ch.logger.Log("weixin: sent media reply to %s (%s, %d bytes)", toUserID, fileName, rawSize)
 	return nil
 }
 

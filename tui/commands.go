@@ -11,7 +11,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md
@@ -499,7 +498,7 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 		defer cancel()
 
 		if err := mcp.RunOAuthFlow(ctx, srv, errFn); err != nil {
-			debuglog.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
+			m.logger.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
 			// When the browser flow fails and we fall back to manual flow,
 			// errFn has already delivered the instructions. An OAuthRequiredError
 			// here would just repeat the same info — skip it.
@@ -523,7 +522,7 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 
 		for _, t := range tools {
 			m.agent.RegisterTool(t)
-			debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+			m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
 		}
 
 		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools))
@@ -554,7 +553,7 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 		defer cancel()
 
 		if err := mcp.CompleteManualAuth(ctx, srv, redirectURL); err != nil {
-			debuglog.Log("MCP: manual OAuth failed for %q: %v", srv.Name, err)
+			m.logger.Log("MCP: manual OAuth failed for %q: %v", srv.Name, err)
 			msgs = append(msgs, fmt.Sprintf("OAuth authorization failed for **%s**: %v", srv.Name, err))
 			return
 		}
@@ -572,7 +571,7 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 
 		for _, t := range tools {
 			m.agent.RegisterTool(t)
-			debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+			m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
 		}
 
 		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
@@ -603,14 +602,14 @@ func (m *Model) connectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- str
 
 	tools, err := m.mcpManager.Reconnect(ctx, srv)
 	if err != nil {
-		debuglog.Log("MCP: failed to connect %q: %v", srv.Name, err)
+		m.logger.Log("MCP: failed to connect %q: %v", srv.Name, err)
 		ch <- fmt.Sprintf("Failed to connect to **%s**: %v", srv.Name, err)
 		return
 	}
 
 	for _, t := range tools {
 		m.agent.RegisterTool(t)
-		debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
 	}
 
 	ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s)", srv.Name, len(tools))
@@ -631,7 +630,7 @@ func (m *Model) reconnectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- s
 
 	for _, t := range tools {
 		m.agent.RegisterTool(t)
-		debuglog.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
 	}
 
 	ch <- fmt.Sprintf("MCP server **%s** reconnected with %d tool(s)", srv.Name, len(tools))

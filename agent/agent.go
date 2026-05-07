@@ -41,6 +41,7 @@ type AIAgent struct {
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
+	logger             *debuglog.Logger
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -52,6 +53,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		toolRegistry:    tools.NewRegistry(),
 		confirmRespCh:   make(chan bool, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
+		logger:          debuglog.DefaultLogger,
 		reminderCollector: systemreminder.NewCollector(
 			systemreminder.DateReminder{},
 			systemreminder.ProjectContextReminder{},
@@ -60,6 +62,12 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 			systemreminder.TokenWarningReminder{ThresholdPct: 80},
 		),
 	}
+}
+
+// SetLogger overrides the agent's logger. Channel callers use this to inject
+// a channel-specific logger so debug output is tagged with the correct source.
+func (a *AIAgent) SetLogger(l *debuglog.Logger) {
+	a.logger = l
 }
 
 // RespondToAskUser is called by TUI to respond to an AskUserQuestion request
@@ -122,24 +130,24 @@ func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
 
 	tpCfg := cfg.FindProvider(tpName)
 	if tpCfg == nil {
-		debuglog.Log("Agent: title_provider %q not found in providers list, falling back to main model", tpName)
+		a.logger.Log("Agent: title_provider %q not found in providers list, falling back to main model", tpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(tpCfg)
 	if err != nil {
-		debuglog.Log("Agent: failed to resolve title provider %q: %v, falling back to main model", tpName, err)
+		a.logger.Log("Agent: failed to resolve title provider %q: %v, falling back to main model", tpName, err)
 		return
 	}
 
 	tp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		debuglog.Log("Agent: failed to create title provider %q: %v, falling back to main model", tpName, err)
+		a.logger.Log("Agent: failed to create title provider %q: %v, falling back to main model", tpName, err)
 		return
 	}
 
 	a.titleModelProvider = tp
-	debuglog.Log("Agent: using title provider %q (%s/%s) for session title generation", tpName, resolved.Type, resolved.Model)
+	a.logger.Log("Agent: using title provider %q (%s/%s) for session title generation", tpName, resolved.Type, resolved.Model)
 }
 
 // SetupCommitProvider resolves and creates a dedicated LLM provider for /commit
@@ -153,24 +161,24 @@ func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
 
 	cpCfg := cfg.FindProvider(cpName)
 	if cpCfg == nil {
-		debuglog.Log("Agent: commit_provider %q not found in providers list, falling back to main model", cpName)
+		a.logger.Log("Agent: commit_provider %q not found in providers list, falling back to main model", cpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(cpCfg)
 	if err != nil {
-		debuglog.Log("Agent: failed to resolve commit provider %q: %v, falling back to main model", cpName, err)
+		a.logger.Log("Agent: failed to resolve commit provider %q: %v, falling back to main model", cpName, err)
 		return
 	}
 
 	cp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		debuglog.Log("Agent: failed to create commit provider %q: %v, falling back to main model", cpName, err)
+		a.logger.Log("Agent: failed to create commit provider %q: %v, falling back to main model", cpName, err)
 		return
 	}
 
 	a.commitProvider = cp
-	debuglog.Log("Agent: using commit provider %q (%s/%s) for /commit message generation", cpName, resolved.Type, resolved.Model)
+	a.logger.Log("Agent: using commit provider %q (%s/%s) for /commit message generation", cpName, resolved.Type, resolved.Model)
 }
 
 // CommitProvider returns the dedicated commit provider, or nil if none is configured
@@ -245,17 +253,17 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 
 	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 500})
 	if err != nil {
-		debuglog.Log("Agent: failed to generate title: %v, falling back to truncation", err)
+		a.logger.Log("Agent: failed to generate title: %v, falling back to truncation", err)
 		return session.ExtractTitle(firstMessage)
 	}
 
 	title := strings.TrimSpace(resp.Content)
 	if title == "" {
-		debuglog.Log("Agent: LLM returned empty title, falling back to truncation")
+		a.logger.Log("Agent: LLM returned empty title, falling back to truncation")
 		return session.ExtractTitle(firstMessage)
 	}
 
-	debuglog.Log("Agent: LLM generated title: %s", title)
+	a.logger.Log("Agent: LLM generated title: %s", title)
 
 	// Enforce max length via existing ExtractTitle
 	return session.ExtractTitle(title)
@@ -290,7 +298,7 @@ func (a *AIAgent) recordSession(msg *session.Message) {
 		return
 	}
 	if err := a.sessionManager.AppendMessage(msg); err != nil {
-		debuglog.Log("Agent: failed to record session message: %v", err)
+		a.logger.Log("Agent: failed to record session message: %v", err)
 	}
 }
 
@@ -490,14 +498,14 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 
 		if tr.Status == tools.ToolResultPendingConfirm {
 			if a.skipEditConfirm {
-				debuglog.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)
+				a.logger.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)
 				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
 				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
 				if err != nil {
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
 				}
 			} else {
-				debuglog.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
+				a.logger.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
 				ch <- AgentEvent{
 					Type:     AgentEventToolConfirmation,
 					ToolName: tc.Function.Name,
@@ -524,7 +532,7 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 		}
 
 		if tr.Status == tools.ToolResultNeedUserInput {
-			debuglog.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(tr.Questions))
+			a.logger.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(tr.Questions))
 			ch <- AgentEvent{
 				Type:      AgentEventAskUser,
 				ToolName:  tr.Name,
@@ -732,7 +740,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
 			provider := a.provider.Name()
 			if _, err := a.sessionManager.New(provider, a.model); err != nil {
-				debuglog.Log("Agent: failed to create session: %v", err)
+				a.logger.Log("Agent: failed to create session: %v", err)
 			}
 		}
 		if a.sessionManager != nil {
@@ -888,6 +896,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		reminders = append(reminders, systemreminder.GitReminder{})
 	}
 	a.reminderCollector = systemreminder.NewCollector(reminders...)
+	a.reminderCollector.SetLogger(a.logger)
 
 	// --- built-in tools + web search ---
 	a.RegisterTools()
@@ -914,14 +923,15 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		return nil, nil
 	}
 	mgr := mcp.NewManager()
+	mgr.SetLogger(a.logger)
 	mcpTools, errs := mgr.ConnectAll(ctx, cfg.MCPServers)
 	for _, err := range errs {
-		debuglog.Log("MCP: load error: %v", err)
+		a.logger.Log("MCP: load error: %v", err)
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
 	for _, t := range mcpTools {
 		a.RegisterTool(t)
-		debuglog.Log("MCP: registered tool %s", t.Name())
+		a.logger.Log("MCP: registered tool %s", t.Name())
 	}
 	return mgr, nil
 }

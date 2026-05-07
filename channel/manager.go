@@ -85,6 +85,8 @@ type Manager struct {
 
 	mu       sync.Mutex
 	channels []Channel
+
+	logger *debuglog.Logger
 }
 
 // NewManager creates a Manager.
@@ -100,6 +102,7 @@ func NewManager(mcfg ManagerConfig) *Manager {
 		modelName:    mcfg.ModelName,
 		maxIters:     maxIters,
 		sessionStore: mcfg.SessionStore,
+		logger:       debuglog.DefaultLogger.WithSource("channel:manager"),
 	}
 }
 
@@ -130,11 +133,11 @@ func (m *Manager) Start(ctx context.Context) error {
 
 	for _, ch := range chans {
 		go func(ch Channel) {
-			debuglog.Log("channel: %s starting", ch.Name())
+			m.logger.Log("channel: %s starting", ch.Name())
 			if err := ch.Run(ctx, handler); err != nil {
-				debuglog.Log("channel: %s exited: %v", ch.Name(), err)
+				m.logger.Log("channel: %s exited: %v", ch.Name(), err)
 			} else {
-				debuglog.Log("channel: %s exited cleanly", ch.Name())
+				m.logger.Log("channel: %s exited cleanly", ch.Name())
 			}
 		}(ch)
 	}
@@ -146,7 +149,7 @@ func (m *Manager) Start(ctx context.Context) error {
 // message through a fresh agent instance.
 func (m *Manager) buildHandler() MessageHandler {
 	return func(ctx context.Context, msg IncomingMessage) (OutgoingMessage, error) {
-		debuglog.Log("channel: recv thread=%s id=%s len=%d",
+		m.logger.Log("channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
 		result, err := m.process(ctx, msg)
@@ -200,7 +203,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	// Per-thread session.
 	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
 	if err != nil {
-		debuglog.Log("channel: session setup for thread %s: %v", msg.ThreadID, err)
+		m.logger.Log("channel: session setup for thread %s: %v", msg.ThreadID, err)
 		// Continue anyway with a fresh session manager and no history.
 		sm = m.newSessionManager()
 		priorHistory = nil
@@ -211,7 +214,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	// create a session here so the agent can still record.
 	if sm != nil && !sm.HasCurrent() {
 		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model); err != nil {
-			debuglog.Log("channel: create fallback session: %v", err)
+			m.logger.Log("channel: create fallback session: %v", err)
 		} else {
 			sm.SetThreadID(msg.ThreadID)
 		}
@@ -243,7 +246,7 @@ func (m *Manager) handleSlashCommand(msg IncomingMessage) (string, error) {
 	case "/mcp":
 		return m.handleMCPList()
 	default:
-		debuglog.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
+		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
 		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers", cmd), nil
 	}
 }
@@ -258,17 +261,17 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
-		debuglog.Log("channel: /new find session for %s: %v", threadID, err)
+		m.logger.Log("channel: /new find session for %s: %v", threadID, err)
 	}
 
 	if sess != nil {
 		// Clear the ThreadID on the old session so FindByThreadID won't
 		// match it on the next message, then end the current session.
 		if err := sm.SetThreadID(""); err != nil {
-			debuglog.Log("channel: /new clear thread_id for %s: %v", threadID, err)
+			m.logger.Log("channel: /new clear thread_id for %s: %v", threadID, err)
 		}
 		sm.EndCurrent()
-		debuglog.Log("channel: /new ended session %s for thread %s", sess.ID, threadID)
+		m.logger.Log("channel: /new ended session %s for thread %s", sess.ID, threadID)
 	}
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
@@ -327,26 +330,26 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 			// preservation on resume.
 
 		case agent.AgentEventToolCallStart:
-			debuglog.Log("channel: tool call start: %s", event.ToolName)
+			m.logger.Log("channel: tool call start: %s", event.ToolName)
 
 		case agent.AgentEventToolCallArgs:
-			debuglog.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
+			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
 
 		case agent.AgentEventToolConfirmation:
 			// Should not happen with skip_edit_confirm=true, but handle safely.
-			debuglog.Log("channel: auto-approving unexpected confirmation: %s", event.ToolName)
+			m.logger.Log("channel: auto-approving unexpected confirmation: %s", event.ToolName)
 			aiAgent.ConfirmTool(true)
 
 		case agent.AgentEventAskUser:
 			// Should not happen with AskUser unregistered, but handle safely.
-			debuglog.Log("channel: auto-rejecting unexpected AskUser")
+			m.logger.Log("channel: auto-rejecting unexpected AskUser")
 			aiAgent.RespondToAskUser(nil, nil)
 
 		case agent.AgentEventToolResult:
 			if event.ToolIsError {
-				debuglog.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
+				m.logger.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
 			} else {
-				debuglog.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
+				m.logger.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
 			}
 
 		case agent.AgentEventTurnComplete:
@@ -434,7 +437,7 @@ func (m *Manager) newSessionManager() *session.Manager {
 		var err error
 		sm, err = session.NewManager()
 		if err != nil {
-			debuglog.Log("channel: session manager fallback failed: %v", err)
+			m.logger.Log("channel: session manager fallback failed: %v", err)
 			return sm
 		}
 	}
@@ -466,7 +469,7 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
 		// Non-fatal — we'll start a fresh session.
-		debuglog.Log("channel: find session for %s: %v", threadID, err)
+		m.logger.Log("channel: find session for %s: %v", threadID, err)
 		return sm, nil, nil
 	}
 
@@ -477,7 +480,7 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {
-			debuglog.Log("channel: set thread_id for %s: %v", threadID, err)
+			m.logger.Log("channel: set thread_id for %s: %v", threadID, err)
 		}
 		return sm, nil, nil
 	}
@@ -497,7 +500,7 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}
 
-	debuglog.Log("channel: session %s thread=%s: %d session msgs → %d llm msgs",
+	m.logger.Log("channel: session %s thread=%s: %d session msgs → %d llm msgs",
 		sess.ID, threadID, len(sessionMsgs), len(llmMsgs))
 
 	return sm, llmMsgs, nil
