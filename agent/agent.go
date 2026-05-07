@@ -45,10 +45,11 @@ type AIAgent struct {
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
 	return &AIAgent{
-		model:         model,
-		provider:      provider,
-		maxIterations: maxIterations,
-		toolRegistry:  tools.NewRegistry(),
+		model:           model,
+		provider:        provider,
+		maxIterations:   maxIterations,
+		titleGenEnabled: true,
+		toolRegistry:    tools.NewRegistry(),
 		confirmRespCh: make(chan bool, 1),
 		askUserRespCh: make(chan tools.AskUserResult, 1),
 		reminderCollector: systemreminder.NewCollector(
