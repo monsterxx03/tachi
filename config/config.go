@@ -13,14 +13,14 @@ import (
 )
 
 const (
-	DefaultMaxTokens                        = 32000
-	MaxAllowedTokens                        = 4096
-	DefaultMaxIterations                    = 50
-	DefaultMCPConnectTimeout                = 5 * time.Second
-	configDirName                           = ".tachi"
-	configFileName                          = "config.yaml"
-	inputHistoryFileName                    = "input_history"
-	sessionDirName                          = "session"
+	DefaultMaxTokens         = 128000
+	MaxAllowedTokens         = 4096
+	DefaultMaxIterations     = 50
+	DefaultMCPConnectTimeout = 5 * time.Second
+	configDirName            = ".tachi"
+	configFileName           = "config.yaml"
+	inputHistoryFileName     = "input_history"
+	sessionDirName           = "session"
 )
 
 type ProviderConfig struct {
@@ -61,9 +61,9 @@ type MCPOAuthConfig struct {
 	ClientSecret          string   `yaml:"client_secret,omitempty"`
 	ClientURI             string   `yaml:"client_uri,omitempty"`
 	Scopes                []string `yaml:"scopes,omitempty"`
-	AuthServerMetadataURL string   `yaml:"auth_server_metadata_url,omitempty"` // Override auto-discovery
+	AuthServerMetadataURL string   `yaml:"auth_server_metadata_url,omitempty"`          // Override auto-discovery
 	CallbackHost          string   `yaml:"callback_host,omitempty" default:"127.0.0.1"` // OAuth callback host
-	CallbackPort          int      `yaml:"callback_port,omitempty"`                      // OAuth callback port (default: auto)
+	CallbackPort          int      `yaml:"callback_port,omitempty"`                     // OAuth callback port (default: auto)
 }
 
 // MCPServerConfig represents a single MCP server connection configuration
@@ -73,12 +73,12 @@ type MCPServerConfig struct {
 	Command string            `yaml:"command,omitempty"`
 	Args    []string          `yaml:"args,omitempty"`
 	Env     map[string]string `yaml:"env,omitempty"`
-	URL     string            `yaml:"url,omitempty"`     // For http transport
-	Headers map[string]string `yaml:"headers,omitempty"` // For http transport
-	Proxy   string            `yaml:"proxy,omitempty"`   // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
-	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
+	URL     string            `yaml:"url,omitempty"`                    // For http transport
+	Headers map[string]string `yaml:"headers,omitempty"`                // For http transport
+	Proxy   string            `yaml:"proxy,omitempty"`                  // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
+	Timeout *time.Duration    `yaml:"timeout,omitempty"`                // Connect timeout (default: 5s)
 	Enabled *bool             `yaml:"enabled,omitempty" default:"true"` // Whether to load this server
-	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`   // OAuth2 configuration (http transport only)
+	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
 
 	// Profile is the MCP profile this server originates from.
 	// Empty string means it came from mcp_servers (always loaded).
@@ -131,23 +131,23 @@ type ChannelConfig struct {
 }
 
 type Config struct {
-	Provider               string                `yaml:"provider"`
-	MaxTokens              int                   `yaml:"max_tokens" default:"32000"`
-	MaxIterations          *int                  `yaml:"max_iterations" default:"50"`          // nil = default; 0 = unlimited; >0 = explicit limit
-	SessionCleanupMaxCount int                   `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
-	Providers              []ProviderConfig      `yaml:"providers"`
-	WebSearch              WebSearchConfig       `yaml:"web_search"`
-	WebFetch               WebFetchConfig        `yaml:"web_fetch"`
-	MCPServers             []MCPServerConfig               `yaml:"mcp_servers"`
-	MCPProfiles            map[string][]MCPServerConfig     `yaml:"mcp_profiles"`      // Profile name -> servers
-	ActiveMCPProfile       string                           `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
-	TUI                    TUIConfig             `yaml:"tui"`
-	SystemReminder         SystemReminderConfig  `yaml:"system_reminder"`
-	Language               string                `yaml:"language" default:"English"` // Reply language for LLM
-	TitleGeneration        *bool                 `yaml:"title_generation" default:"true"` // set false to use truncation
-	TitleProvider          string                `yaml:"title_provider"`   // optional: provider name for title generation (defaults to main provider)
-	CommitProvider         string                `yaml:"commit_provider"`  // optional: provider name for /commit (defaults to main provider)
-	Channel                ChannelConfig         `yaml:"channel"`          // IM channel backends
+	Provider               string                       `yaml:"provider"`
+	MaxTokens              int                          `yaml:"max_tokens" default:"128000"`
+	MaxIterations          *int                         `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
+	SessionCleanupMaxCount int                          `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
+	Providers              []ProviderConfig             `yaml:"providers"`
+	WebSearch              WebSearchConfig              `yaml:"web_search"`
+	WebFetch               WebFetchConfig               `yaml:"web_fetch"`
+	MCPServers             []MCPServerConfig            `yaml:"mcp_servers"`
+	MCPProfiles            map[string][]MCPServerConfig `yaml:"mcp_profiles"`       // Profile name -> servers
+	ActiveMCPProfile       string                       `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
+	TUI                    TUIConfig                    `yaml:"tui"`
+	SystemReminder         SystemReminderConfig         `yaml:"system_reminder"`
+	Language               string                       `yaml:"language" default:"English"`      // Reply language for LLM
+	TitleGeneration        *bool                        `yaml:"title_generation" default:"true"` // set false to use truncation
+	TitleProvider          string                       `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
+	CommitProvider         string                       `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
+	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
 }
 
 func DefaultConfig() *Config {

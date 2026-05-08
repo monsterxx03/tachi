@@ -387,97 +387,6 @@ type AgentEvent struct {
 
 var errCancelled = fmt.Errorf("edit cancelled by user")
 
-type streamAccumulator struct {
-	text         strings.Builder
-	thinking     strings.Builder
-	signature    strings.Builder
-	toolCalls    []llm.ToolCall
-	toolArgs     []strings.Builder
-	toolIndexMap map[int]int // OpenAI tool index -> toolArgs slice index
-	thinkBlocks  []llm.ThinkingBlock
-	finishReason string
-	usage        *llm.Usage
-}
-
-func (acc *streamAccumulator) finalize() {
-	for i := range acc.toolCalls {
-		if i < len(acc.toolArgs) {
-			acc.toolCalls[i].Function.Arguments = acc.toolArgs[i].String()
-		}
-	}
-	if acc.thinking.Len() > 0 {
-		acc.thinkBlocks = append(acc.thinkBlocks, llm.ThinkingBlock{
-			Type:      "thinking",
-			Thinking:  acc.thinking.String(),
-			Signature: acc.signature.String(),
-		})
-	}
-}
-
-func (acc *streamAccumulator) assistantMessage() llm.Message {
-	return llm.Message{
-		Role:           "assistant",
-		Content:        acc.text.String(),
-		ThinkingBlocks: acc.thinkBlocks,
-		ToolCalls:      acc.toolCalls,
-	}
-}
-
-// consumeStream reads all events from the LLM stream, forwards deltas to the
-// event channel, and returns the accumulated result.
-func (a *AIAgent) consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCallCount int) (*streamAccumulator, error) {
-	acc := &streamAccumulator{
-		toolIndexMap: make(map[int]int),
-	}
-
-	for event := range streamCh {
-		switch event.Type {
-		case llm.StreamEventTextDelta:
-			acc.text.WriteString(event.TextDelta)
-			ch <- AgentEvent{Type: AgentEventTextDelta, TextDelta: event.TextDelta}
-
-		case llm.StreamEventThinkingDelta:
-			acc.thinking.WriteString(event.ThinkingDelta)
-			ch <- AgentEvent{Type: AgentEventThinkingDelta, ThinkingDelta: event.ThinkingDelta}
-
-		case llm.StreamEventSignatureDelta:
-			acc.signature.WriteString(event.SignatureDelta)
-
-		case llm.StreamEventToolUseStart:
-			if event.ToolCall != nil {
-				sliceIdx := len(acc.toolCalls)
-				acc.toolIndexMap[event.ToolIndex] = sliceIdx
-				acc.toolCalls = append(acc.toolCalls, *event.ToolCall)
-				acc.toolArgs = append(acc.toolArgs, strings.Builder{})
-				ch <- AgentEvent{
-					Type:     AgentEventToolCallStart,
-					ToolName: event.ToolCall.Function.Name,
-					ToolID:   event.ToolCall.ID,
-				}
-			}
-
-		case llm.StreamEventInputJSONDelta:
-			if idx, ok := acc.toolIndexMap[event.ToolIndex]; ok && idx < len(acc.toolArgs) {
-				acc.toolArgs[idx].WriteString(event.InputDelta)
-			} else if len(acc.toolArgs) > 0 {
-				acc.toolArgs[len(acc.toolArgs)-1].WriteString(event.InputDelta)
-			}
-
-		case llm.StreamEventMessageDelta, llm.StreamEventDone:
-			acc.finishReason = event.FinishReason
-			if event.Usage != nil {
-				acc.usage = event.Usage
-			}
-
-		case llm.StreamEventError:
-			return nil, fmt.Errorf("stream error (iteration %d): %w", apiCallCount, event.Error)
-		}
-	}
-
-	acc.finalize()
-	return acc, nil
-}
-
 // executeToolCalls invokes each tool call, handling confirmation flow for tools
 // that require it. Returns the tool result messages to append to history.
 func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
@@ -800,7 +709,7 @@ func (a *AIAgent) runAgentLoop(
 	opts llm.ChatOptions,
 	ch chan<- AgentEvent,
 ) {
-	llmTools := a.buildLLMTools(a.toolRegistry.GetSchemas())
+	llmTools := buildLLMTools(a.toolRegistry.GetSchemas())
 
 	apiCallCount := 0
 	lengthContinueRetries := 0
@@ -841,7 +750,7 @@ func (a *AIAgent) runAgentLoop(
 			return
 		}
 
-		acc, err := a.consumeStream(streamCh, ch, apiCallCount)
+		acc, err := consumeStream(streamCh, ch, apiCallCount)
 		if err != nil {
 			exitReason := "error"
 			if ctx.Err() != nil {
@@ -873,7 +782,9 @@ func (a *AIAgent) runAgentLoop(
 	}
 }
 
-func (a *AIAgent) buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
+// buildLLMTools converts tool schemas from the agent's registry into the
+// llm.Tool format understood by provider APIs.
+func buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
 	llmTools := make([]llm.Tool, 0, len(toolSchemas))
 	for _, schema := range toolSchemas {
 		props := make(map[string]llm.ToolParameterProperty, len(schema.Parameters.Properties))
