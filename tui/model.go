@@ -463,8 +463,14 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	commitProvider := m.agent.CommitProvider()
 	commitModel := m.agent.Model()
 
+	// Disable thinking for /commit: the commit message task is simple and
+	// avoiding thinking saves tokens/latency.
+	commitOpts := m.chatOpts
+	thinkingDisabled := false
+	commitOpts.Thinking = &thinkingDisabled
+
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
-		commitUserPrompt(commitModel), m.chatOpts)
+		commitUserPrompt(commitModel), commitOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

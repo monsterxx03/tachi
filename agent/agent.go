@@ -253,7 +253,8 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 		},
 	}
 
-	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 500})
+	thinkingDisabled := false
+	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 500, Thinking: &thinkingDisabled})
 	if err != nil {
 		a.logger.Log("Agent: failed to generate title: %v, falling back to truncation", err)
 		return session.ExtractTitle(firstMessage)

@@ -27,6 +27,10 @@ type Usage struct {
 
 type ChatOptions struct {
 	MaxTokens int
+	// Thinking controls the thinking/reasoning mode.
+	// nil = provider default (adaptive for Anthropic, enabled for DeepSeek)
+	// true = enabled, false = disabled
+	Thinking *bool
 }
 
 // ToolParameterProperty describes a single property in a tool's parameter schema.

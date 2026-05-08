@@ -130,7 +130,12 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 		}}
 	}
 
-	req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+	if opts.Thinking != nil && !*opts.Thinking {
+		disabled := anthropic.NewThinkingConfigDisabledParam()
+		req.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
+	} else {
+		req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+	}
 
 	return req, nil
 }
