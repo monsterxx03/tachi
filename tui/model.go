@@ -99,6 +99,7 @@ type ModelConfig struct {
 	ContextWindow      int64
 	InitialHistory     []llm.Message
 	InitialSessionMsgs []session.Message
+	InitialSessionList []*session.Session // for --resume: show session selection UI on startup
 	MCPManager         *mcp.Manager
 	MCPServers         []config.MCPServerConfig
 }
@@ -123,7 +124,20 @@ func NewModel(cfg ModelConfig) *Model {
 		m.chatview.LoadHistory(cfg.InitialSessionMsgs)
 	}
 
-	// If there's already a current session (e.g. --resume), sync to statusbar.
+	if len(cfg.InitialSessionList) > 0 {
+		m.sessionList = cfg.InitialSessionList
+		m.sessionSelIdx = 0
+		m.clampSessionScroll()
+		m.setState(stateSelectingSession)
+	} else if cfg.InitialSessionList != nil {
+		// --resume with no sessions available
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No sessions found to resume.",
+		})
+	}
+
+	// Sync session info to the statusbar if there's already a current session.
 	m.syncSessionInfo()
 
 	return m

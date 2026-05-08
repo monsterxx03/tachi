@@ -215,16 +215,22 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
 
-	var initialHistory []llm.Message
-	var initialSessionMsgs []session.Message
+	var initialSessionList []*session.Session
 
 	if cmd.Bool("resume") {
-		history, sessMsgs, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.Language))
+		sm, err := session.NewManager()
 		if err != nil {
-			return fmt.Errorf("resume failed: %w", err)
+			return fmt.Errorf("session manager: %w", err)
 		}
-		initialHistory = history
-		initialSessionMsgs = sessMsgs
+		sm.SetMaxKeep(cfg.SessionCleanupMaxCount)
+		sm.CleanupOldSessions()
+		aiAgent.SetSessionManager(sm)
+
+		sessions, err := sm.List()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to list sessions: %v\n", err)
+		}
+		initialSessionList = sessions
 	} else {
 		sm, err := session.NewManager()
 		if err != nil {
@@ -245,8 +251,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		ProviderInfo:       providerInfo,
 		Config:             cfg,
 		ContextWindow:      resolved.Provider.ContextWindow,
-		InitialHistory:     initialHistory,
-		InitialSessionMsgs: initialSessionMsgs,
+		InitialSessionList: initialSessionList,
 		MCPManager:         mcpMgr,
 		MCPServers:         cfg.MCPServers,
 	})
