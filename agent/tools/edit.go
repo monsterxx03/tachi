@@ -28,19 +28,19 @@ func (t EditTool) Description() string {
 }
 func (t EditTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
-		"file_path":   {Type: "string", Description: "The absolute path to the file to modify"},
+		"path":   {Type: "string", Description: "The absolute path to the file to modify"},
 		"old_string":  {Type: "string", Description: "The text to replace"},
 		"new_string":  {Type: "string", Description: "The text to replace it with"},
 		"replace_all": {Type: "boolean", Description: "Replace all occurrences of old_string (default false)"},
 	}
 }
-func (t EditTool) Required() []string      { return []string{"file_path", "old_string", "new_string"} }
+func (t EditTool) Required() []string      { return []string{"path", "old_string", "new_string"} }
 func (t EditTool) Parallel() bool          { return false }
 func (t EditTool) NeedsConfirmation() bool { return true }
 
 func (t EditTool) GetDiff(args string) (string, error) {
 	var a struct {
-		FilePath   string `json:"file_path"`
+		FilePath   string `json:"path"`
 		OldString  string `json:"old_string"`
 		NewString  string `json:"new_string"`
 		ReplaceAll bool   `json:"replace_all"`
@@ -90,7 +90,7 @@ func (t EditTool) GetDiff(args string) (string, error) {
 
 func (t EditTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var a struct {
-		FilePath   string `json:"file_path"`
+		FilePath   string `json:"path"`
 		OldString  string `json:"old_string"`
 		NewString  string `json:"new_string"`
 		ReplaceAll bool   `json:"replace_all"`

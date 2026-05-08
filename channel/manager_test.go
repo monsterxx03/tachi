@@ -266,7 +266,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 					ID: "tc-1",
 					Function: llm.ToolCallFunction{
 						Name:      "EditFile",
-						Arguments: `{"file_path":"/tmp/test.txt","old_string":"foo","new_string":"bar"}`,
+						Arguments: `{"path":"/tmp/test.txt","old_string":"foo","new_string":"bar"}`,
 					},
 				},
 			}

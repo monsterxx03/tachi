@@ -519,7 +519,7 @@ func getToolArgsPreview(name, argsJSON string) string {
 			return p
 		}
 	case "EditFile":
-		if p, ok := args["file_path"].(string); ok {
+		if p, ok := args["path"].(string); ok {
 			return p
 		}
 	case "Glob":
