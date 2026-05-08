@@ -274,6 +274,9 @@ func (m *Model) mcpList() tea.Cmd {
 
 		fmt.Fprintf(&sb, "- **%s** (%s)\n  Transport: %s\n",
 			srv.Name, status, transport)
+		if srv.Profile != "" {
+			fmt.Fprintf(&sb, "  Profile: `%s`\n", srv.Profile)
+		}
 		if srv.HasOAuth() {
 			oauthStatus := "no token"
 			if connected && m.mcpManager != nil {

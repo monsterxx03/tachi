@@ -67,7 +67,7 @@ func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn fun
 		srv.OAuth = &config.MCPOAuthConfig{}
 	}
 
-	store, err := NewFileTokenStore(srv.Name)
+	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
 		return fmt.Errorf("token store: %w", err)
 	}
@@ -94,7 +94,7 @@ func CompleteManualAuth(ctx context.Context, srv *config.MCPServerConfig, redire
 		srv.OAuth = &config.MCPOAuthConfig{}
 	}
 
-	store, err := NewFileTokenStore(srv.Name)
+	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
 		return fmt.Errorf("token store: %w", err)
 	}
@@ -466,7 +466,7 @@ func buildWellKnownURLs(baseURL, suffix string) []string {
 // --- browser callback ---
 
 func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig) error {
-	store, err := NewFileTokenStore(srv.Name)
+	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
 		return fmt.Errorf("token store: %w", err)
 	}
@@ -596,7 +596,7 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig) error 
 // --- manual flow ---
 
 func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn func(string)) error {
-	store, err := NewFileTokenStore(srv.Name)
+	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
 		return err
 	}

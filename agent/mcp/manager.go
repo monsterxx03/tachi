@@ -185,7 +185,7 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 	}
 	// If OAuth isn't explicitly configured, check for persisted token / DCR
 	// info on disk — a previous DCR-based auth may have left valid tokens.
-	if !srv.HasOAuth() && hasPersistedAuth(srv.Name) {
+	if !srv.HasOAuth() && hasPersistedAuth(srv.TokenStorageName()) {
 		srv.OAuth = &config.MCPOAuthConfig{}
 	}
 	if srv.HasOAuth() {
@@ -195,17 +195,17 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 }
 
 // hasPersistedAuth returns true if there's a token file or DCR info file
-// on disk for the given server name. Used to auto-detect OAuth that was set
+// on disk for the given storage key. Used to auto-detect OAuth that was set
 // up via DCR in a prior session, without explicit oauth: config.
-func hasPersistedAuth(serverName string) bool {
-	tokenPath, err := mcpTokenPath(serverName)
+func hasPersistedAuth(storageKey string) bool {
+	tokenPath, err := mcpTokenPath(storageKey)
 	if err != nil {
 		return false
 	}
 	if _, err := os.Stat(tokenPath); err == nil {
 		return true
 	}
-	dcrPath, err := dcrTokenPath(serverName)
+	dcrPath, err := dcrTokenPath(storageKey)
 	if err != nil {
 		return false
 	}
@@ -218,9 +218,9 @@ func hasPersistedAuth(serverName string) bool {
 // so that token refresh works across process restarts.
 func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableHTTPCOption {
 	oauthCfg := srv.OAuth
-	tokenStore, err := NewFileTokenStore(srv.Name)
+	tokenStore, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
-		m.logger.Log("MCP: failed to create token store for %q: %v", srv.Name, err)
+		m.logger.Log("MCP: failed to create token store for %q: %v", srv.TokenStorageName(), err)
 		tokenStore = nil
 	}
 

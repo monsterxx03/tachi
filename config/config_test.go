@@ -337,3 +337,197 @@ func TestEffectiveLanguage(t *testing.T) {
 	var c Config
 	assert.Equal(t, "", c.Language)
 }
+
+// --- MCP Profile expansion tests ---
+
+func TestExpandMCPProfiles_NoProfile(t *testing.T) {
+	cfg := &Config{
+		MCPServers: []MCPServerConfig{
+			{Name: "always-on", Type: MCPTransportHTTP, URL: "https://always.example.com"},
+		},
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.NoError(t, err)
+	assert.Len(t, cfg.MCPServers, 1)
+	assert.Equal(t, "always-on", cfg.MCPServers[0].Name)
+	assert.Empty(t, cfg.MCPServers[0].Profile)
+}
+
+func TestExpandMCPProfiles_ActiveProfile(t *testing.T) {
+	cfg := &Config{
+		MCPServers: []MCPServerConfig{
+			{Name: "always-on", Type: MCPTransportHTTP, URL: "https://always.example.com"},
+		},
+		MCPProfiles: map[string][]MCPServerConfig{
+			"test": {
+				{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://test.example.com/mcp"},
+			},
+		},
+		ActiveMCPProfile: "test",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.NoError(t, err)
+	assert.Len(t, cfg.MCPServers, 2)
+
+	// always-on stays untouched
+	assert.Equal(t, "always-on", cfg.MCPServers[0].Name)
+	assert.Empty(t, cfg.MCPServers[0].Profile)
+
+	// profile server stamped correctly
+	assert.Equal(t, "platform-svc", cfg.MCPServers[1].Name)
+	assert.Equal(t, "test", cfg.MCPServers[1].Profile)
+	assert.Equal(t, "https://test.example.com/mcp", cfg.MCPServers[1].URL)
+}
+
+func TestExpandMCPProfiles_MultipleInProfile(t *testing.T) {
+	cfg := &Config{
+		MCPProfiles: map[string][]MCPServerConfig{
+			"uat": {
+				{Name: "svc-a", Type: MCPTransportHTTP, URL: "https://uat.example.com/a"},
+				{Name: "svc-b", Type: MCPTransportHTTP, URL: "https://uat.example.com/b"},
+			},
+		},
+		ActiveMCPProfile: "uat",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.NoError(t, err)
+	assert.Len(t, cfg.MCPServers, 2)
+	assert.Equal(t, "svc-a", cfg.MCPServers[0].Name)
+	assert.Equal(t, "uat", cfg.MCPServers[0].Profile)
+	assert.Equal(t, "svc-b", cfg.MCPServers[1].Name)
+	assert.Equal(t, "uat", cfg.MCPServers[1].Profile)
+}
+
+func TestExpandMCPProfiles_DefaultsApplied(t *testing.T) {
+	cfg := &Config{
+		MCPProfiles: map[string][]MCPServerConfig{
+			"prod": {
+				{Name: "svc", Type: MCPTransportHTTP, URL: "https://prod.example.com"},
+			},
+		},
+		ActiveMCPProfile: "prod",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.NoError(t, err)
+
+	// Enabled defaults to true
+	assert.True(t, cfg.MCPServers[0].IsEnabled())
+}
+
+func TestExpandMCPProfiles_MissingProfile(t *testing.T) {
+	cfg := &Config{
+		ActiveMCPProfile: "nonexistent",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "not found in mcp_profiles")
+}
+
+func TestExpandMCPProfiles_ConflictWithMCPservers(t *testing.T) {
+	cfg := &Config{
+		MCPServers: []MCPServerConfig{
+			{Name: "shared-name", Type: MCPTransportHTTP, URL: "https://always.example.com"},
+		},
+		MCPProfiles: map[string][]MCPServerConfig{
+			"test": {
+				{Name: "shared-name", Type: MCPTransportHTTP, URL: "https://test.example.com"},
+			},
+		},
+		ActiveMCPProfile: "test",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "name conflict")
+	assert.Contains(t, err.Error(), "shared-name")
+}
+
+func TestExpandMCPProfiles_DuplicateInProfile(t *testing.T) {
+	cfg := &Config{
+		MCPProfiles: map[string][]MCPServerConfig{
+			"test": {
+				{Name: "dup", Type: MCPTransportHTTP, URL: "https://a.example.com"},
+				{Name: "dup", Type: MCPTransportHTTP, URL: "https://b.example.com"},
+			},
+		},
+		ActiveMCPProfile: "test",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "duplicate name")
+	assert.Contains(t, err.Error(), "dup")
+}
+
+func TestExpandMCPProfiles_EmptyName(t *testing.T) {
+	cfg := &Config{
+		MCPProfiles: map[string][]MCPServerConfig{
+			"test": {
+				{Type: MCPTransportHTTP, URL: "https://no-name.example.com"},
+			},
+		},
+		ActiveMCPProfile: "test",
+	}
+	err := cfg.ExpandMCPProfiles()
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "has no name")
+}
+
+func TestExpandMCPProfiles_ProfileNotSerialized(t *testing.T) {
+	// Verify the Profile field does not appear in YAML output for individual servers.
+	cfg := &Config{
+		MCPServers: []MCPServerConfig{
+			{Name: "svc", Type: MCPTransportHTTP, URL: "https://example.com", Profile: "test"},
+		},
+	}
+	data, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	// The Profile field should be yaml:"-" and not appear under mcp_servers items.
+	// Use a more targeted check than "profile" (which would match mcp_profiles key).
+	assert.NotContains(t, string(data), "profile: test")
+}
+
+func TestTokenStorageName(t *testing.T) {
+	// Always-loaded server
+	srv := &MCPServerConfig{Name: "test-mcp"}
+	assert.Equal(t, "test-mcp", srv.TokenStorageName())
+
+	// Profile server
+	srv2 := &MCPServerConfig{Name: "platform-svc", Profile: "test"}
+	assert.Equal(t, "platform-svc_test", srv2.TokenStorageName())
+
+	// Different profile
+	srv3 := &MCPServerConfig{Name: "platform-svc", Profile: "prod"}
+	assert.Equal(t, "platform-svc_prod", srv3.TokenStorageName())
+}
+
+func TestLoadFrom_WithProfile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	yamlContent := `provider: test
+providers:
+  - name: test
+    type: openai
+    model: gpt-4
+    api_key: sk-test
+mcp_servers:
+  - name: always-on
+    type: http
+    url: https://always.example.com
+mcp_profiles:
+  test:
+    - name: platform-svc
+      type: http
+      url: https://test.example.com/mcp
+active_mcp_profile: test
+`
+	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.Len(t, cfg.MCPServers, 2)
+	assert.Equal(t, "always-on", cfg.MCPServers[0].Name)
+	assert.Empty(t, cfg.MCPServers[0].Profile)
+	assert.Equal(t, "platform-svc", cfg.MCPServers[1].Name)
+	assert.Equal(t, "test", cfg.MCPServers[1].Profile)
+	assert.Equal(t, "test", cfg.ActiveMCPProfile)
+}

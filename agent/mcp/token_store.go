@@ -31,12 +31,12 @@ type OAuthPendingState struct {
 }
 
 // dcrTokenPath returns the path to a server's DCR info file.
-func dcrTokenPath(serverName string) (string, error) {
+func dcrTokenPath(storageKey string) (string, error) {
 	dir, err := mcpTokensDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, serverName+"_dcr.json"), nil
+	return filepath.Join(dir, storageKey+"_dcr.json"), nil
 }
 
 // mcpTokensDir returns the path to the MCP tokens storage directory.
@@ -49,43 +49,43 @@ func mcpTokensDir() (string, error) {
 }
 
 // mcpTokenPath returns the path to a specific server's token file.
-func mcpTokenPath(serverName string) (string, error) {
+func mcpTokenPath(storageKey string) (string, error) {
 	dir, err := mcpTokensDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, serverName+".json"), nil
+	return filepath.Join(dir, storageKey+".json"), nil
 }
 
 // FileTokenStore persists OAuth tokens to disk under ~/.tachi/mcp_tokens/.
 // Each server gets its own JSON file for tokens and, when DCR is used, a
 // separate _dcr.json file for the dynamically registered client credentials.
 type FileTokenStore struct {
-	serverName   string
-	tokenPath    string
-	dcrPath      string
-	pendingPath  string
+	storageKey  string
+	tokenPath   string
+	dcrPath     string
+	pendingPath string
 }
 
-// NewFileTokenStore creates a FileTokenStore for the given server.
+// NewFileTokenStore creates a FileTokenStore for the given storage key.
 // The files are created lazily on first save; the directory is created eagerly.
-func NewFileTokenStore(serverName string) (*FileTokenStore, error) {
-	tokenPath, err := mcpTokenPath(serverName)
+func NewFileTokenStore(storageKey string) (*FileTokenStore, error) {
+	tokenPath, err := mcpTokenPath(storageKey)
 	if err != nil {
 		return nil, err
 	}
-	dcrPath, err := dcrTokenPath(serverName)
+	dcrPath, err := dcrTokenPath(storageKey)
 	if err != nil {
 		return nil, err
 	}
-	pendingPath, err := mcpPendingPath(serverName)
+	pendingPath, err := mcpPendingPath(storageKey)
 	if err != nil {
 		return nil, err
 	}
 	return &FileTokenStore{
-		serverName:  serverName,
-		tokenPath:   tokenPath,
-		dcrPath:     dcrPath,
+		storageKey: storageKey,
+		tokenPath:  tokenPath,
+		dcrPath:    dcrPath,
 		pendingPath: pendingPath,
 	}, nil
 }
@@ -135,7 +135,7 @@ func (s *FileTokenStore) SaveToken(ctx context.Context, token *transport.Token) 
 		return fmt.Errorf("write token file %q: %w", s.tokenPath, err)
 	}
 
-	debuglog.Log(ctx, "MCP: saved token for server %q to %s", s.serverName, s.tokenPath)
+	debuglog.Log(ctx, "MCP: saved token for server %q to %s", s.storageKey, s.tokenPath)
 	return nil
 }
 
@@ -183,17 +183,17 @@ func (s *FileTokenStore) SaveDCRInfo(ctx context.Context, info *DCRInfo) error {
 		return fmt.Errorf("write DCR file %q: %w", s.dcrPath, err)
 	}
 
-	debuglog.Log(ctx, "MCP: saved DCR info for %q", s.serverName)
+	debuglog.Log(ctx, "MCP: saved DCR info for %q", s.storageKey)
 	return nil
 }
 
 // mcpPendingPath returns the path to a server's pending OAuth state file.
-func mcpPendingPath(serverName string) (string, error) {
+func mcpPendingPath(storageKey string) (string, error) {
 	dir, err := mcpTokensDir()
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, serverName+"_pending.json"), nil
+	return filepath.Join(dir, storageKey+"_pending.json"), nil
 }
 
 // SavePendingState persists the OAuth2 authorization state and PKCE verifier
@@ -217,7 +217,7 @@ func (s *FileTokenStore) SavePendingState(ctx context.Context, state *OAuthPendi
 		return fmt.Errorf("write pending state %q: %w", s.pendingPath, err)
 	}
 
-	debuglog.Log(ctx, "MCP: saved pending OAuth state for %q", s.serverName)
+	debuglog.Log(ctx, "MCP: saved pending OAuth state for %q", s.storageKey)
 	return nil
 }
 
@@ -247,6 +247,6 @@ func (s *FileTokenStore) GetPendingState(ctx context.Context) (*OAuthPendingStat
 	if err := os.Remove(s.pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
 		debuglog.Log(ctx, "MCP: failed to remove pending state %q: %v", s.pendingPath, err)
 	}
-	debuglog.Log(ctx, "MCP: loaded and consumed pending OAuth state for %q", s.serverName)
+	debuglog.Log(ctx, "MCP: loaded and consumed pending OAuth state for %q", s.storageKey)
 	return &state, nil
 }

@@ -79,11 +79,26 @@ type MCPServerConfig struct {
 	Timeout *time.Duration    `yaml:"timeout,omitempty"` // Connect timeout (default: 5s)
 	Enabled *bool             `yaml:"enabled,omitempty" default:"true"` // Whether to load this server
 	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`   // OAuth2 configuration (http transport only)
+
+	// Profile is the MCP profile this server originates from.
+	// Empty string means it came from mcp_servers (always loaded).
+	// Set internally during config expansion; not serialized to YAML.
+	Profile string `yaml:"-"`
 }
 
 // HasOAuth returns true if the server has OAuth2 configured.
 func (srv *MCPServerConfig) HasOAuth() bool {
 	return srv.OAuth != nil
+}
+
+// TokenStorageName returns the key used for on-disk token storage.
+// For always-loaded servers this is the server name. For profile servers,
+// the profile name is appended to avoid collisions across environments.
+func (srv *MCPServerConfig) TokenStorageName() string {
+	if srv.Profile == "" {
+		return srv.Name
+	}
+	return srv.Name + "_" + srv.Profile
 }
 
 // IsEnabled returns whether the server should be loaded. Defaults to true.
@@ -123,7 +138,9 @@ type Config struct {
 	Providers              []ProviderConfig      `yaml:"providers"`
 	WebSearch              WebSearchConfig       `yaml:"web_search"`
 	WebFetch               WebFetchConfig        `yaml:"web_fetch"`
-	MCPServers             []MCPServerConfig     `yaml:"mcp_servers"`
+	MCPServers             []MCPServerConfig               `yaml:"mcp_servers"`
+	MCPProfiles            map[string][]MCPServerConfig     `yaml:"mcp_profiles"`      // Profile name -> servers
+	ActiveMCPProfile       string                           `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
 	TUI                    TUIConfig             `yaml:"tui"`
 	SystemReminder         SystemReminderConfig  `yaml:"system_reminder"`
 	Language               string                `yaml:"language" default:"English"` // Reply language for LLM
@@ -200,6 +217,11 @@ func LoadFrom(path string) (*Config, error) {
 	// Apply defaults to any fields not set in the YAML.
 	if err := defaults.Set(cfg); err != nil {
 		return nil, fmt.Errorf("config defaults: %w", err)
+	}
+
+	// Expand MCP profile into MCPServers.
+	if err := cfg.ExpandMCPProfiles(); err != nil {
+		return nil, fmt.Errorf("mcp profiles: %w", err)
 	}
 
 	return cfg, nil
@@ -294,6 +316,60 @@ func (c *Config) FindProvider(name string) *ProviderConfig {
 // MCPEnabled returns true if at least one MCP server is configured.
 func (c *Config) MCPEnabled() bool {
 	return len(c.MCPServers) > 0
+}
+
+// ExpandMCPProfiles merges the active MCP profile's servers into MCPServers.
+// Each server from the profile gets its Profile field set to the profile name.
+// Returns an error if a profile server name conflicts with an mcp_servers entry
+// or with another server in the same profile.
+func (c *Config) ExpandMCPProfiles() error {
+	if c.ActiveMCPProfile == "" {
+		return nil
+	}
+
+	profileServers, ok := c.MCPProfiles[c.ActiveMCPProfile]
+	if !ok {
+		return fmt.Errorf("active_mcp_profile %q not found in mcp_profiles", c.ActiveMCPProfile)
+	}
+
+	// Build a lookup of existing mcp_servers names for conflict detection.
+	existing := make(map[string]bool, len(c.MCPServers))
+	for _, srv := range c.MCPServers {
+		existing[srv.Name] = true
+	}
+
+	// Check conflicts within the profile itself.
+	seenInProfile := make(map[string]bool, len(profileServers))
+	for i := range profileServers {
+		srv := &profileServers[i]
+		if srv.Name == "" {
+			return fmt.Errorf("profile %q: server at index %d has no name", c.ActiveMCPProfile, i)
+		}
+		if existing[srv.Name] {
+			return fmt.Errorf(
+				"server name conflict: %q in profile %q collides with an mcp_servers entry of the same name",
+				srv.Name, c.ActiveMCPProfile,
+			)
+		}
+		if seenInProfile[srv.Name] {
+			return fmt.Errorf(
+				"server name conflict: duplicate name %q in profile %q",
+				srv.Name, c.ActiveMCPProfile,
+			)
+		}
+		seenInProfile[srv.Name] = true
+	}
+
+	// Stamp profile origin and append.
+	for i := range profileServers {
+		profileServers[i].Profile = c.ActiveMCPProfile
+		if err := defaults.Set(&profileServers[i]); err != nil {
+			return fmt.Errorf("profile %q server %q: defaults: %w", c.ActiveMCPProfile, profileServers[i].Name, err)
+		}
+	}
+
+	c.MCPServers = append(c.MCPServers, profileServers...)
+	return nil
 }
 
 // MCPTimeout returns the timeout for connecting to an MCP server.
