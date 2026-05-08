@@ -115,17 +115,18 @@ func (m *Manager) HasCurrent() bool {
 }
 
 // New creates a new session
-func (m *Manager) New(provider, model string) (*Session, error) {
+func (m *Manager) New(provider, model, workingDir string) (*Session, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	now := time.Now()
 	session := &Session{
-		ID:        GenerateID(),
-		Provider:  provider,
-		Model:     model,
-		CreatedAt: now,
-		UpdatedAt: now,
+		ID:         GenerateID(),
+		Provider:   provider,
+		Model:      model,
+		WorkingDir: workingDir,
+		CreatedAt:  now,
+		UpdatedAt:  now,
 	}
 
 	if err := m.store.CreateSession(session); err != nil {

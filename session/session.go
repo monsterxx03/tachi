@@ -5,13 +5,14 @@ import (
 )
 
 type Session struct {
-	ID        string    `json:"id"`
-	ThreadID  string    `json:"thread_id,omitempty"` // channel ThreadID for session lookup
-	Title     string    `json:"title"`
-	Provider  string    `json:"provider"`
-	Model     string    `json:"model"`
-	CreatedAt time.Time `json:"created_at"`
-	UpdatedAt time.Time `json:"updated_at"`
+	ID         string    `json:"id"`
+	ThreadID   string    `json:"thread_id,omitempty"` // channel ThreadID for session lookup
+	Title      string    `json:"title"`
+	Provider   string    `json:"provider"`
+	Model      string    `json:"model"`
+	WorkingDir string    `json:"working_dir,omitempty"` // working directory at session creation time
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 type MessageType string

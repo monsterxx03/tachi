@@ -3,6 +3,7 @@ package channel
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 
@@ -204,7 +205,8 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	// one, the agent's RunConversationStream will use it. If it failed,
 	// create a session here so the agent can still record.
 	if sm != nil && !sm.HasCurrent() {
-		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model); err != nil {
+		wd, _ := os.Getwd()
+		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
 			m.logger.Log("channel: create fallback session: %v", err)
 		} else {
 			sm.SetThreadID(msg.ThreadID)
@@ -467,7 +469,8 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 	if sess == nil {
 		// No existing session → create a new one now. The agent will
 		// record the first message.
-		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model); err != nil {
+		wd, _ := os.Getwd()
+		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {

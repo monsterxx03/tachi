@@ -750,7 +750,8 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// Session management: create session if needed and append user message
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
 			provider := a.provider.Name()
-			if _, err := a.sessionManager.New(provider, a.model); err != nil {
+			wd, _ := os.Getwd()
+			if _, err := a.sessionManager.New(provider, a.model, wd); err != nil {
 				a.logger.Log("Agent: failed to create session: %v", err)
 			}
 		}
@@ -984,6 +985,13 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	latest := sessions[0]
 	if _, err := sm.Load(latest.ID); err != nil {
 		return nil, nil, fmt.Errorf("load session %s: %w", latest.ID, err)
+	}
+
+	// Restore working directory if recorded
+	if latest.WorkingDir != "" {
+		if err := os.Chdir(latest.WorkingDir); err != nil {
+			a.logger.Log("Agent: failed to chdir to %s: %v", latest.WorkingDir, err)
+		}
 	}
 
 	sessionMsgs, err := sm.LoadMessages()

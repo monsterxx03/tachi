@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"charm.land/bubbles/v2/spinner"
@@ -879,6 +880,16 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	if _, err := sm.Load(s.ID); err != nil {
 		m.exitSessionSelect(fmt.Sprintf("Failed to load session: %v", err))
 		return m, nil
+	}
+
+	// Restore working directory if recorded
+	if s.WorkingDir != "" {
+		if err := os.Chdir(s.WorkingDir); err != nil {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: fmt.Sprintf("⚠ Failed to change to session's working directory %s: %v", s.WorkingDir, err),
+			})
+		}
 	}
 
 	m.syncSessionInfo()
