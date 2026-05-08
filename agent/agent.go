@@ -38,6 +38,7 @@ type AIAgent struct {
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
 	lastInputTokens    int64
+	lastMessageDate    string // calendar date (2006-01-02) of last processed user message; empty initially
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
@@ -219,6 +220,7 @@ func (a *AIAgent) RunOneOffStream(
 
 		rctx := a.buildReminderContext(true)
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
+		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
 		a.runAgentLoop(ctx, provider, messages, opts, ch)
@@ -742,6 +744,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		rctx := a.buildReminderContext(reminderIsFirst)
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
+		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
 		// Session management: create session if needed and append user message
@@ -888,12 +891,13 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool) systemreminder.Conte
 		iterLeft = a.iterationBudget.Remaining
 	}
 	return systemreminder.Context{
-		IsFirstMessage: isFirstMessage,
-		IterationsLeft: iterLeft,
-		MaxIterations:  a.maxIterations,
-		InputTokens:    a.lastInputTokens,
-		ContextWindow:  a.contextWindow,
-		Now:            time.Now(),
+		IsFirstMessage:  isFirstMessage,
+		IterationsLeft:  iterLeft,
+		MaxIterations:   a.maxIterations,
+		InputTokens:     a.lastInputTokens,
+		ContextWindow:   a.contextWindow,
+		Now:             time.Now(),
+		LastMessageDate: a.lastMessageDate,
 	}
 }
 

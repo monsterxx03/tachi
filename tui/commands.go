@@ -525,7 +525,7 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 
 		for _, t := range tools {
 			m.agent.RegisterTool(t)
-			m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+			m.logger.Log("MCP: registered tool %s", t.Name())
 		}
 
 		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools))
@@ -574,7 +574,7 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 
 		for _, t := range tools {
 			m.agent.RegisterTool(t)
-			m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+			m.logger.Log("MCP: registered tool %s", t.Name())
 		}
 
 		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
@@ -612,7 +612,7 @@ func (m *Model) connectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- str
 
 	for _, t := range tools {
 		m.agent.RegisterTool(t)
-		m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		m.logger.Log("MCP: registered tool %s", t.Name())
 	}
 
 	ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s)", srv.Name, len(tools))
@@ -633,7 +633,7 @@ func (m *Model) reconnectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- s
 
 	for _, t := range tools {
 		m.agent.RegisterTool(t)
-		m.logger.Log("MCP: registered tool %s (%s)", t.Name(), t.Description())
+		m.logger.Log("MCP: registered tool %s", t.Name())
 	}
 
 	ch <- fmt.Sprintf("MCP server **%s** reconnected with %d tool(s)", srv.Name, len(tools))
