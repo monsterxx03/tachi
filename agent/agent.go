@@ -733,8 +733,14 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 		}
 
-		// Build reminder context for the initial user message.
-		rctx := a.buildReminderContext(isFirstMessage)
+		// When resuming a session, date/project-context/git reminders were
+		// not stored — they're ephemeral by design. Re-inject them into the
+		// wrapped user message (not as a separate message, which would
+		// violate the user/assistant alternation requirement of LLM APIs).
+		// historyHasReminder prevents duplication on subsequent turns.
+		reminderIsFirst := isFirstMessage || (len(history) > 0 && !historyHasReminder(history))
+
+		rctx := a.buildReminderContext(reminderIsFirst)
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
@@ -764,6 +770,19 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 	}()
 
 	return ch
+}
+
+// historyHasReminder checks whether the given message history already contains
+// a synthetic <system-reminder> block injected by a previous resume. This
+// prevents duplication when the TUI re-sends the full history on subsequent
+// user messages within the same resumed session.
+func historyHasReminder(history []llm.Message) bool {
+	for _, msg := range history {
+		if msg.Role == "user" && strings.HasPrefix(msg.Content, "<system-reminder>") {
+			return true
+		}
+	}
+	return false
 }
 
 // runAgentLoop is the shared event loop used by both RunConversationStream
