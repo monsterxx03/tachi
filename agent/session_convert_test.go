@@ -187,7 +187,7 @@ func TestConvertSessionToLLMMessages_ContinuationAfterMaxTokens(t *testing.T) {
 	sessionMsgs := []session.Message{
 		{Type: session.MessageTypeThinking, Content: "This is a long", Signature: "sig-1"},
 		{Type: session.MessageTypeAssistant, Content: "partial response"},
-		{Type: session.MessageTypeUser, Content: "Please continue where you left off."},
+		{Type: session.MessageTypeUser, Content: "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."},
 		{Type: session.MessageTypeThinking, Content: "Continuing", Signature: "sig-2"},
 		{Type: session.MessageTypeAssistant, Content: "more text"},
 	}
@@ -205,7 +205,7 @@ func TestConvertSessionToLLMMessages_ContinuationAfterMaxTokens(t *testing.T) {
 				{Type: "thinking", Thinking: "This is a long", Signature: "sig-1"},
 			},
 		},
-		{Role: "user", Content: "Please continue where you left off."},
+		{Role: "user", Content: "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."},
 		{
 			Role:    "assistant",
 			Content: "more text",

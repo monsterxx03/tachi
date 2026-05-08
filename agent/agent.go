@@ -545,7 +545,9 @@ func (a *AIAgent) handleFinishReason(
 
 	case "max_tokens", "length":
 		*lengthRetries++
+		a.logger.Log("Agent: finish_reason=%s, continuation retry %d/%d", acc.finishReason, *lengthRetries, maxLengthContinueRetries)
 		if *lengthRetries >= maxLengthContinueRetries {
+			a.logger.Log("Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
 			ch <- AgentEvent{
 				Type: AgentEventError,
 				Result: &RunResult{
@@ -572,7 +574,7 @@ func (a *AIAgent) handleFinishReason(
 			})
 		}
 		// Record continuation prompt (original, unwrapped)
-		continuationText := "Please continue where you left off."
+		continuationText := "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
 		a.recordSession(&session.Message{
 			Type:    session.MessageTypeUser,
 			Content: continuationText,
