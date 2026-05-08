@@ -217,7 +217,8 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 				block := ev.ContentBlock
 				if block.Type == "tool_use" {
 					ch <- StreamEvent{
-						Type: StreamEventToolUseStart,
+						Type:      StreamEventToolUseStart,
+						ToolIndex: int(ev.Index),
 						ToolCall: &ToolCall{
 							ID:   block.ID,
 							Type: "function",
@@ -236,7 +237,7 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 				case anthropic.SignatureDelta:
 					ch <- StreamEvent{Type: StreamEventSignatureDelta, SignatureDelta: delta.Signature}
 				case anthropic.InputJSONDelta:
-					ch <- StreamEvent{Type: StreamEventInputJSONDelta, InputDelta: delta.PartialJSON}
+					ch <- StreamEvent{Type: StreamEventInputJSONDelta, ToolIndex: int(ev.Index), InputDelta: delta.PartialJSON}
 				}
 			case anthropic.MessageDeltaEvent:
 				ch <- StreamEvent{
