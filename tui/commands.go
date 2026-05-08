@@ -230,8 +230,8 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 	case "auth":
 		return m.mcpAuth(arg)
 	default:
-		// "list" or bare "/mcp"
-		return m.mcpList()
+		// "list" or bare "/mcp" — open the overlay
+		return m.enterMCPOverlay()
 	}
 }
 

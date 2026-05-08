@@ -97,4 +97,43 @@ var (
 
 	sessionInfoStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#B8C0E0"))
+
+	// MCP overlay styles
+	mcpOverlayBorder = lipgloss.NewStyle().
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#8AADF4")).
+				Padding(1, 2)
+
+	mcpOverlayTitle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#8AADF4")).
+			Bold(true)
+
+	mcpOverlayHint = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6E738D"))
+
+	mcpToolHeader = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F5A97F"))
+
+	mcpToolName = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#C6A0F6"))
+
+	mcpServerConnected = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A6DA95"))
+
+	mcpServerDisconnected = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#ED8796"))
+
+	mcpServerSelected = lipgloss.NewStyle().
+				Background(lipgloss.Color("#363A4F")).
+				Foreground(lipgloss.Color("#CAD3F5"))
+
+	mcpOAuthBadge = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#EED49F")).
+			Background(lipgloss.Color("#5B4A3F"))
+
+	mcpStatusOK = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6DA95"))
+
+	mcpStatusWarn = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#EED49F"))
 )
