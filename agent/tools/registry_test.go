@@ -97,3 +97,41 @@ func TestRegistry(t *testing.T) {
 		t.Error("Expected Unregister to return false for unknown tool")
 	}
 }
+
+func TestRegistryIsParallel(t *testing.T) {
+	reg := NewRegistry()
+
+	// Unknown tool returns false
+	if reg.IsParallel("nonexistent") {
+		t.Error("Expected IsParallel to return false for unknown tool")
+	}
+
+	// Register a parallel tool
+	reg.Register(testTool{
+		name: "parallel_tool",
+		fn:   func(args string) (string, error) { return "", nil },
+	})
+	if !reg.IsParallel("parallel_tool") {
+		t.Error("Expected IsParallel to return true for parallel tool")
+	}
+
+	// Register a non-parallel tool
+	reg.Register(nonParallelTestTool{name: "serial_tool"})
+	if reg.IsParallel("serial_tool") {
+		t.Error("Expected IsParallel to return false for non-parallel tool")
+	}
+}
+
+// nonParallelTestTool is a tool that returns false for Parallel()
+type nonParallelTestTool struct {
+	name string
+}
+
+func (t nonParallelTestTool) Name() string                                         { return t.name }
+func (t nonParallelTestTool) Description() string                                  { return "non-parallel" }
+func (t nonParallelTestTool) Properties() map[string]PropertySchema                { return nil }
+func (t nonParallelTestTool) Required() []string                                   { return nil }
+func (t nonParallelTestTool) Parallel() bool                                       { return false }
+func (t nonParallelTestTool) ExecuteContext(ctx context.Context, args string) (string, error) {
+	return "", nil
+}

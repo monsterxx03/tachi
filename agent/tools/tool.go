@@ -130,6 +130,16 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 	return ToolResult{Status: ToolResultSuccess, Output: result}
 }
 
+// IsParallel returns whether the named tool supports parallel execution.
+// Returns false for unknown tools (conservative default).
+func (r *Registry) IsParallel(name string) bool {
+	tool, ok := r.tools[name]
+	if !ok {
+		return false
+	}
+	return tool.Parallel()
+}
+
 // ExecuteConfirmed executes a tool that was previously pending confirmation, with context
 func (r *Registry) ExecuteConfirmed(ctx context.Context, name string, args string) (string, error) {
 	tool, ok := r.tools[name]

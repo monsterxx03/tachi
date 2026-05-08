@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -385,119 +384,11 @@ type AgentEvent struct {
 	Title         string // For AgentEventSessionTitle
 }
 
-var errCancelled = fmt.Errorf("edit cancelled by user")
-
-// executeToolCalls invokes each tool call, handling confirmation flow for tools
-// that require it. Returns the tool result messages to append to history.
-func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
-	var toolMsgs []llm.Message
-
-	for _, tc := range toolCalls {
-		ch <- AgentEvent{
-			Type:     AgentEventToolCallArgs,
-			ToolName: tc.Function.Name,
-			ToolID:   tc.ID,
-			ToolArgs: tc.Function.Arguments,
-		}
-
-		// Record tool call in session
-		a.recordSession(&session.Message{
-			Type:       session.MessageTypeToolCall,
-			Name:       tc.Function.Name,
-			Args:       tc.Function.Arguments,
-			ToolCallID: tc.ID,
-		})
-
-		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
-
-		if tr.Status == tools.ToolResultPendingConfirm {
-			if a.skipEditConfirm {
-				a.logger.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)
-				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
-				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
-				if err != nil {
-					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
-				}
-			} else {
-				a.logger.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
-				ch <- AgentEvent{
-					Type:     AgentEventToolConfirmation,
-					ToolName: tc.Function.Name,
-					ToolID:   tc.ID,
-					ToolArgs: tr.Args,
-					ToolDiff: tr.Diff,
-				}
-
-				select {
-				case confirmed := <-a.confirmRespCh:
-					if confirmed {
-						output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
-						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
-						if err != nil {
-							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
-						}
-					} else {
-						return nil, errCancelled
-					}
-				case <-ctx.Done():
-					tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
-				}
-			}
-		}
-
-		if tr.Status == tools.ToolResultNeedUserInput {
-			a.logger.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(tr.Questions))
-			ch <- AgentEvent{
-				Type:      AgentEventAskUser,
-				ToolName:  tr.Name,
-				ToolID:    tc.ID,
-				ToolArgs:  tr.Args,
-				Questions: tr.Questions,
-			}
-
-			select {
-			case resp := <-a.askUserRespCh:
-				resultData, _ := json.Marshal(map[string]interface{}{
-					"questions":   tr.Questions,
-					"answers":     resp.Answers,
-					"annotations": resp.Annotations,
-				})
-				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: string(resultData)}
-			case <-ctx.Done():
-				tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
-			}
-		}
-
-		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
-		if tr.Status == tools.ToolResultError {
-			toolMsg.Content = "Error: " + tr.Err.Error()
-			toolMsg.IsError = true
-			ch <- AgentEvent{
-				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
-			}
-		} else {
-			toolMsg.Content = tr.Output
-			ch <- AgentEvent{
-				Type: AgentEventToolResult, ToolName: tc.Function.Name,
-				ToolID: tc.ID, ToolResult: tr.Output,
-			}
-		}
-
-		// Record tool result in session
-		a.recordSession(&session.Message{
-			Type:       session.MessageTypeToolResult,
-			Name:       tc.Function.Name,
-			Result:     toolMsg.Content,
-			IsError:    toolMsg.IsError,
-			ToolCallID: tc.ID,
-		})
-
-		toolMsgs = append(toolMsgs, toolMsg)
-	}
-
-	return toolMsgs, nil
-}
+var (
+	errCancelled                  = fmt.Errorf("edit cancelled by user")
+	errParallelConfirmUnsupported = fmt.Errorf("tool requiring confirmation cannot run in parallel group")
+	errParallelAskUserUnsupported = fmt.Errorf("tool requiring user input cannot run in parallel group")
+)
 
 // handleFinishReason processes the LLM's finish reason and updates messages accordingly.
 // Returns true if the agent loop should continue, false if it should stop.
