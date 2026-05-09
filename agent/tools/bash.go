@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
 const (
@@ -74,7 +77,7 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	defer cancelFn()
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", a.Command)
-	cmd.Dir = getWorkingDir()
+	cmd.Dir = wdctx.Dir(ctx)
 
 	var stdout, stderr limitedBuffer
 	stdout.maxSize = maxOutputSize + 256
@@ -141,19 +144,31 @@ func (lb *limitedBuffer) Bytes() []byte {
 	return lb.buf.Bytes()
 }
 
-var workingDir string
+var (
+	workingDir   string
+	workingDirMu sync.RWMutex
+)
 
 func getWorkingDir() string {
-	if workingDir != "" {
-		return workingDir
+	workingDirMu.RLock()
+	dir := workingDir
+	workingDirMu.RUnlock()
+	if dir != "" {
+		return dir
 	}
-	dir, err := os.Getwd()
+	cwd, err := os.Getwd()
 	if err != nil {
 		return "."
 	}
-	return dir
+	return cwd
 }
 
 func SetWorkingDir(dir string) {
+	workingDirMu.Lock()
 	workingDir = dir
+	workingDirMu.Unlock()
+}
+
+func init() {
+	wdctx.SetFallbackDir(getWorkingDir)
 }

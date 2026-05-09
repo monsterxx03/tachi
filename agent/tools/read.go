@@ -5,9 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
 const maxFileSize = 256 * 1024 // 256KB
@@ -57,12 +60,17 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if isBlockedDevicePath(argsMap.Path) {
+	filePath := argsMap.Path
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(wdctx.Dir(ctx), filePath)
+	}
+
+	if isBlockedDevicePath(filePath) {
 		return "", fmt.Errorf("cannot read from blocked device path: %s", argsMap.Path)
 	}
 
 	// Check file size before reading
-	info, err := os.Stat(argsMap.Path)
+	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
@@ -71,7 +79,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	}
 
 	// Check cache: if the file hasn't changed since last read, return a short hint
-	key := readCacheKey(argsMap.Path, argsMap.Offset, argsMap.Limit)
+	key := readCacheKey(filePath, argsMap.Offset, argsMap.Limit)
 	t.mu.RLock()
 	if cached, ok := t.cache[key]; ok {
 		if cached.mtime.Equal(info.ModTime()) && cached.size == info.Size() {
@@ -81,7 +89,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	}
 	t.mu.RUnlock()
 
-	content, err := os.ReadFile(argsMap.Path)
+	content, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}

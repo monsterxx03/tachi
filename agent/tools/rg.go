@@ -1,11 +1,14 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
 func checkRipgrep() error {
@@ -15,9 +18,12 @@ func checkRipgrep() error {
 	return nil
 }
 
-func resolveSearchPath(path string) (string, error) {
+func resolveSearchPath(ctx context.Context, path string) (string, error) {
 	if path == "" {
 		path = "."
+	}
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(wdctx.Dir(ctx), path)
 	}
 	abs, err := filepath.Abs(path)
 	if err != nil {

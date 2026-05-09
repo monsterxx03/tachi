@@ -90,7 +90,7 @@ func (t GrepTool) ExecuteContext(parentCtx context.Context, args string) (string
 		maxResults = *a.MaxResults
 	}
 
-	absPath, err := resolveSearchPath(a.Path)
+	absPath, err := resolveSearchPath(parentCtx, a.Path)
 	if err != nil {
 		return "", err
 	}

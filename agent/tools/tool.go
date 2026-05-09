@@ -34,7 +34,7 @@ type Tool interface {
 // preview via GetDiff() when NeedsConfirmation() returns true.
 type ConfirmationTool interface {
 	NeedsConfirmation() bool
-	GetDiff(args string) (string, error)
+	GetDiff(ctx context.Context, args string) (string, error)
 }
 
 type ToolResultStatus int
@@ -135,7 +135,7 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 	}
 
 	if ct, ok := tool.(ConfirmationTool); ok && ct.NeedsConfirmation() {
-		diff, err := ct.GetDiff(args)
+		diff, err := ct.GetDiff(ctx, args)
 		if err != nil {
 			return ToolResult{Status: ToolResultError, Err: err}
 		}

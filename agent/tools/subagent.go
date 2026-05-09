@@ -12,7 +12,7 @@ import (
 // This decouples the tool definition from the execution logic, making it
 // testable and allowing different executor implementations.
 type SubagentRunner interface {
-	RunSubagent(ctx context.Context, prompt string, allowedTools []string, maxIterations int) (string, error)
+	RunSubagent(ctx context.Context, args SubagentArgs) (string, error)
 	// AvailableToolNames returns the list of tool names available to sub-agents,
 	// used to populate the tool description dynamically so LLM knows valid values
 	// for the allowed_tools parameter.
@@ -23,9 +23,10 @@ type SubagentRunner interface {
 
 // SubagentArgs holds the parsed arguments for the SubAgent tool.
 type SubagentArgs struct {
-	Prompt        string   `json:"prompt"`
-	AllowedTools  []string `json:"allowed_tools"`
-	MaxIterations int      `json:"max_iterations"`
+	Prompt         string   `json:"prompt"`
+	AllowedTools   []string `json:"allowed_tools"`
+	MaxIterations  int      `json:"max_iterations"`
+	WorktreeBranch string   `json:"worktree_branch"` // Optional: git branch for worktree isolation
 }
 
 const subagentBaseDescription = `Delegate a self-contained task to an isolated sub-agent with its own context window and tool set. The sub-agent works independently and returns a single summary result.
@@ -78,6 +79,14 @@ func (t *SubagentTool) Properties() map[string]PropertySchema {
 			Type:        "number",
 			Description: "Optional override for the sub-agent's iteration budget. Default is 50. Use a lower value for simple tasks.",
 		},
+		"worktree_branch": {
+			Type: "string",
+			Description: "Optional: git branch to checkout in the sub-agent's isolated worktree. " +
+				"When empty, the worktree starts at detached HEAD (current commit). " +
+				"Only meaningful when worktree mode is enabled. " +
+				"Use this when the sub-agent needs to work on a specific branch " +
+				"(e.g., cross-branch analysis, parallel PR development).",
+		},
 	}
 }
 
@@ -91,12 +100,7 @@ func (t *SubagentTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	maxIters := sa.MaxIterations
-	if maxIters <= 0 {
-		maxIters = 0 // will use default in executor
-	}
-
-	result, err := t.runner.RunSubagent(ctx, sa.Prompt, sa.AllowedTools, maxIters)
+	result, err := t.runner.RunSubagent(ctx, sa)
 
 	// Output truncation protection
 	result = t.truncateOutput(result)

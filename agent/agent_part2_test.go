@@ -225,7 +225,7 @@ func (c *confirmTool) Properties() map[string]agenttools.PropertySchema  { retur
 func (c *confirmTool) Required() []string                              { return nil }
 func (c *confirmTool) Parallel() bool                                  { return false }
 func (c *confirmTool) NeedsConfirmation() bool                         { return true }
-func (c *confirmTool) GetDiff(args string) (string, error)             { return "diff preview", nil }
+func (c *confirmTool) GetDiff(ctx context.Context, args string) (string, error) { return "diff preview", nil }
 func (c *confirmTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var m map[string]interface{}
 	json.Unmarshal([]byte(args), &m)

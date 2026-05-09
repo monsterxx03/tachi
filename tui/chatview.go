@@ -575,6 +575,20 @@ func getToolArgsPreview(name, argsJSON string) string {
 			}
 			return "WebFetch: " + u
 		}
+	case "SubAgent":
+		prompt, _ := args["prompt"].(string)
+		branch, _ := args["worktree_branch"].(string)
+		if prompt == "" {
+			return argsJSON
+		}
+		runes := []rune(prompt)
+		if len(runes) > 60 {
+			prompt = string(runes[:57]) + "…"
+		}
+		if branch != "" {
+			return fmt.Sprintf("SubAgent [%s]: %s", branch, prompt)
+		}
+		return prompt
 	}
 	return argsJSON
 }

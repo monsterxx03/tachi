@@ -13,15 +13,11 @@ type mockRunner struct {
 	err            error
 	toolNames      []string
 	maxOutputChars int
-	calledPrompt   string
-	calledTools    []string
-	calledMaxIters int
+	calledArgs     SubagentArgs
 }
 
-func (m *mockRunner) RunSubagent(_ context.Context, prompt string, allowedTools []string, maxIterations int) (string, error) {
-	m.calledPrompt = prompt
-	m.calledTools = allowedTools
-	m.calledMaxIters = maxIterations
+func (m *mockRunner) RunSubagent(_ context.Context, args SubagentArgs) (string, error) {
+	m.calledArgs = args
 	return m.result, m.err
 }
 
@@ -79,8 +75,8 @@ func TestSubagentTool_ExecuteContext_Success(t *testing.T) {
 	if result != "task completed successfully" {
 		t.Errorf("unexpected result: %s", result)
 	}
-	if runner.calledPrompt != "find all TODO comments" {
-		t.Errorf("prompt not passed correctly: %s", runner.calledPrompt)
+	if runner.calledArgs.Prompt != "find all TODO comments" {
+		t.Errorf("prompt not passed correctly: %s", runner.calledArgs.Prompt)
 	}
 }
 
@@ -96,11 +92,28 @@ func TestSubagentTool_ExecuteContext_WithAllowedTools(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	if len(runner.calledTools) != 2 || runner.calledTools[0] != "ReadFile" || runner.calledTools[1] != "Grep" {
-		t.Errorf("allowed_tools not passed correctly: %v", runner.calledTools)
+	if len(runner.calledArgs.AllowedTools) != 2 || runner.calledArgs.AllowedTools[0] != "ReadFile" || runner.calledArgs.AllowedTools[1] != "Grep" {
+		t.Errorf("allowed_tools not passed correctly: %v", runner.calledArgs.AllowedTools)
 	}
-	if runner.calledMaxIters != 10 {
-		t.Errorf("max_iterations not passed correctly: %d", runner.calledMaxIters)
+	if runner.calledArgs.MaxIterations != 10 {
+		t.Errorf("max_iterations not passed correctly: %d", runner.calledArgs.MaxIterations)
+	}
+}
+
+func TestSubagentTool_ExecuteContext_WithWorktreeBranch(t *testing.T) {
+	runner := &mockRunner{
+		result:         "done",
+		maxOutputChars: 16384,
+	}
+	tool := NewSubagentTool(runner)
+
+	_, err := tool.ExecuteContext(context.Background(),
+		`{"prompt":"search on branch","worktree_branch":"feat/experiment"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if runner.calledArgs.WorktreeBranch != "feat/experiment" {
+		t.Errorf("worktree_branch not passed correctly: %s", runner.calledArgs.WorktreeBranch)
 	}
 }
 
@@ -220,7 +233,43 @@ func TestSubagentTool_Properties(t *testing.T) {
 	if _, ok := props["max_iterations"]; !ok {
 		t.Error("should have 'max_iterations' property")
 	}
+	if _, ok := props["worktree_branch"]; !ok {
+		t.Error("should have 'worktree_branch' property")
+	}
 	if props["allowed_tools"].Type != "array" {
 		t.Error("allowed_tools should be array type")
+	}
+}
+
+func TestSubagentArgs_Serialization(t *testing.T) {
+	args := SubagentArgs{
+		Prompt:         "test task",
+		AllowedTools:   []string{"ReadFile", "Grep"},
+		MaxIterations:  10,
+		WorktreeBranch: "feat/test",
+	}
+
+	// Verify all fields are serializable
+	data, err := marshalResult(args)
+	if err != nil {
+		t.Fatalf("failed to marshal: %v", err)
+	}
+
+	// Verify round-trip
+	var parsed SubagentArgs
+	if err := parseArgs(data, &parsed); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if parsed.Prompt != "test task" {
+		t.Errorf("prompt mismatch: %s", parsed.Prompt)
+	}
+	if len(parsed.AllowedTools) != 2 {
+		t.Errorf("allowed_tools length mismatch: %d", len(parsed.AllowedTools))
+	}
+	if parsed.MaxIterations != 10 {
+		t.Errorf("max_iterations mismatch: %d", parsed.MaxIterations)
+	}
+	if parsed.WorktreeBranch != "feat/test" {
+		t.Errorf("worktree_branch mismatch: %s", parsed.WorktreeBranch)
 	}
 }

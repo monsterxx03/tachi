@@ -55,6 +55,12 @@ type AIAgent struct {
 	subagentMaxConcurrency int          // sub-agent max concurrent instances
 	subagentMaxOutputChars int          // sub-agent output truncation threshold
 	subagentThinking       bool         // whether sub-agents enable thinking
+
+	// Worktree-related fields
+	subagentWorktree        bool   // enable git worktree isolation
+	subagentWorktreeDir     string // worktree storage directory
+	subagentWorktreeCleanup bool   // clean up after completion
+	subagentWorktreeBranch  string // default branch for worktree checkout
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -862,28 +868,34 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.RegisterTool(&wf)
 
 	// --- MCP servers ---
-	if !cfg.MCPEnabled() {
-		// --- SubAgent tool (no MCP) ---
-		a.SetupSubagentProvider(cfg)
-		executor := NewSubagentExecutor(a)
-		a.RegisterTool(tools.NewSubagentTool(executor))
-		return nil, nil
-	}
-	mgr := mcp.NewManager()
-	mgr.SetLogger(a.logger)
-	mcpTools, errs := mgr.ConnectAll(ctx, cfg.MCPServers)
-	for _, err := range errs {
-		a.logger.Log("MCP: load error: %v", err)
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-	}
-	for _, t := range mcpTools {
-		a.RegisterTool(t)
-		a.logger.Log("MCP: registered tool %s", t.Name())
+	var mgr *mcp.Manager
+	if cfg.MCPEnabled() {
+		mgr = mcp.NewManager()
+		mgr.SetLogger(a.logger)
+		mcpTools, errs := mgr.ConnectAll(ctx, cfg.MCPServers)
+		for _, err := range errs {
+			a.logger.Log("MCP: load error: %v", err)
+			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		}
+		for _, t := range mcpTools {
+			a.RegisterTool(t)
+			a.logger.Log("MCP: registered tool %s", t.Name())
+		}
 	}
 
 	// --- SubAgent tool ---
 	a.SetupSubagentProvider(cfg)
+	a.subagentWorktree = cfg.Subagent.Worktree
+	a.subagentWorktreeDir = cfg.Subagent.WorktreeDir
+	a.subagentWorktreeBranch = cfg.Subagent.WorktreeBranch
+	a.subagentWorktreeCleanup = true
+	if cfg.Subagent.WorktreeCleanup != nil {
+		a.subagentWorktreeCleanup = *cfg.Subagent.WorktreeCleanup
+	}
 	executor := NewSubagentExecutor(a)
+	if a.SubagentWorktree() {
+		executor.SetWorktreeManager(NewWorktreeManager(cfg, a.logger))
+	}
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
 	return mgr, nil
@@ -951,3 +963,17 @@ func (b *IterationBudget) consume() bool {
 	}
 	return false
 }
+
+// --- Worktree accessors ---
+
+// SubagentWorktree returns whether git worktree isolation is enabled.
+func (a *AIAgent) SubagentWorktree() bool { return a.subagentWorktree }
+
+// SubagentWorktreeDir returns the worktree storage directory.
+func (a *AIAgent) SubagentWorktreeDir() string { return a.subagentWorktreeDir }
+
+// SubagentWorktreeCleanup returns whether worktrees are cleaned up after completion.
+func (a *AIAgent) SubagentWorktreeCleanup() bool { return a.subagentWorktreeCleanup }
+
+// SubagentWorktreeBranch returns the default branch for worktree checkout.
+func (a *AIAgent) SubagentWorktreeBranch() string { return a.subagentWorktreeBranch }

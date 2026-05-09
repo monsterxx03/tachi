@@ -53,7 +53,7 @@ func (t GlobTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		return "", fmt.Errorf("pattern is required")
 	}
 
-	absSearchDir, err := resolveSearchPath(argsMap.Path)
+	absSearchDir, err := resolveSearchPath(ctx, argsMap.Path)
 	if err != nil {
 		return "", err
 	}

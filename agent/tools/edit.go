@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
 const (
@@ -38,7 +41,7 @@ func (t EditTool) Required() []string      { return []string{"path", "old_string
 func (t EditTool) Parallel() bool          { return false }
 func (t EditTool) NeedsConfirmation() bool { return true }
 
-func (t EditTool) GetDiff(args string) (string, error) {
+func (t EditTool) GetDiff(ctx context.Context, args string) (string, error) {
 	var a struct {
 		FilePath   string `json:"path"`
 		OldString  string `json:"old_string"`
@@ -49,12 +52,14 @@ func (t EditTool) GetDiff(args string) (string, error) {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
+	filePath := resolveEditPath(ctx, a.FilePath)
+
 	if a.OldString == "" {
 		// Creating new file - no diff needed, just show the content
-		return fmt.Sprintf("--- new file: %s\n+++ %s\n%s", a.FilePath, a.FilePath, a.NewString), nil
+		return fmt.Sprintf("--- new file: %s\n+++ %s\n%s", filePath, filePath, a.NewString), nil
 	}
 
-	info, err := os.Stat(a.FilePath)
+	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
@@ -62,20 +67,20 @@ func (t EditTool) GetDiff(args string) (string, error) {
 		return "", ErrFileTooLarge(info.Size(), maxFileSize)
 	}
 
-	raw, err := os.ReadFile(a.FilePath)
+	raw, err := os.ReadFile(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
 	if isBinaryFile(raw) {
-		return "", fmt.Errorf("cannot edit binary file: %s", a.FilePath)
+		return "", fmt.Errorf("cannot edit binary file: %s", filePath)
 	}
 
 	content := string(raw)
 
 	actualOld := findActualString(content, a.OldString)
 	if actualOld == "" {
-		return "", fmt.Errorf("old_string not found in %s", a.FilePath)
+		return "", fmt.Errorf("old_string not found in %s", filePath)
 	}
 
 	var newContent string
@@ -103,11 +108,13 @@ func (t EditTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		return "", fmt.Errorf("old_string and new_string are identical, no edit needed")
 	}
 
+	filePath := resolveEditPath(ctx, a.FilePath)
+
 	if a.OldString == "" {
-		return createNewFile(a.FilePath, a.NewString)
+		return createNewFile(filePath, a.NewString)
 	}
 
-	return editExistingFile(a.FilePath, a.OldString, a.NewString, a.ReplaceAll)
+	return editExistingFile(filePath, a.OldString, a.NewString, a.ReplaceAll)
 }
 
 func createNewFile(filePath, content string) (string, error) {
@@ -283,4 +290,13 @@ func findLineIndex(content, substr string) int {
 		return -1
 	}
 	return strings.Count(content[:idx], "\n")
+}
+
+// resolveEditPath resolves a file path for the Edit tool, making relative paths
+// relative to the context-provided working directory (for worktree isolation).
+func resolveEditPath(ctx context.Context, path string) string {
+	if filepath.IsAbs(path) {
+		return path
+	}
+	return filepath.Join(wdctx.Dir(ctx), path)
 }

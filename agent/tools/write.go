@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
+
+	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
 // WriteTool writes content to a file
@@ -30,7 +33,12 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	if err := os.WriteFile(argsMap.Path, []byte(argsMap.Content), 0644); err != nil {
+	filePath := argsMap.Path
+	if !filepath.IsAbs(filePath) {
+		filePath = filepath.Join(wdctx.Dir(ctx), filePath)
+	}
+
+	if err := os.WriteFile(filePath, []byte(argsMap.Content), 0644); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

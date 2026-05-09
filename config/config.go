@@ -128,12 +128,18 @@ type WeixinConfig struct {
 // SubagentConfig holds configuration for sub-agent execution.
 // When Provider/Model are empty, the main provider/model is used.
 type SubagentConfig struct {
-	Provider       string `yaml:"provider"`         // provider name, empty → use main
-	Model          string `yaml:"model"`            // model name, empty → use main
-	MaxIterations  int    `yaml:"max_iterations"`   // default: 50 (hardcoded fallback)
-	MaxConcurrency int    `yaml:"max_concurrency"`  // default: 4 (hardcoded fallback)
-	MaxOutputChars int    `yaml:"max_output_chars"` // default: 16384 (hardcoded fallback)
-	Thinking       bool   `yaml:"thinking"`         // default: false
+	Provider        string `yaml:"provider"`         // provider name, empty → use main
+	Model           string `yaml:"model"`            // model name, empty → use main
+	MaxIterations   int    `yaml:"max_iterations"`   // default: 50 (hardcoded fallback)
+	MaxConcurrency  int    `yaml:"max_concurrency"`  // default: 4 (hardcoded fallback)
+	MaxOutputChars  int    `yaml:"max_output_chars"` // default: 16384 (hardcoded fallback)
+	Thinking        bool   `yaml:"thinking"`         // default: false
+
+	// Worktree enables git worktree isolation for sub-agents (default: false).
+	Worktree        bool   `yaml:"worktree"`
+	WorktreeDir     string `yaml:"worktree_dir"`     // worktree storage directory (default: os.TempDir())
+	WorktreeCleanup *bool  `yaml:"worktree_cleanup"` // clean up after completion (default: true)
+	WorktreeBranch  string `yaml:"worktree_branch"`  // default branch for worktree checkout (empty = detached HEAD)
 }
 
 // ChannelConfig groups configuration for all IM channel backends.

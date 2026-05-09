@@ -33,6 +33,21 @@ Rules:
 
 Your output goes directly back to the main agent — no preamble, no closing remarks like "I've completed the task". Just the findings.`
 
+const subagentWorktreePrompt = `
+You are working in an isolated git worktree. Your working directory is a
+temporary checkout of the repository — changes here will NOT affect the main
+working tree unless you push or create a PR from this branch.
+
+- All file paths are relative to your worktree directory.
+- Use Bash to run git commands — they operate on this worktree in isolation.
+- Your worktree starts from %s (detached HEAD). You can commit, push, and
+  create branches as needed without affecting the main worktree.
+- Any file modifications you make will be automatically collected as a patch
+  and returned to the parent agent. You do NOT need to output diffs manually.
+- If you need to persist changes beyond the patch, push to remote.
+- IMPORTANT: In detached HEAD mode, commits not attached to a branch will be
+  garbage collected after ~28 days. Always push or create a branch to persist.`
+
 // SubagentExecutor implements tools.SubagentRunner by creating and running child
 // AIAgent instances. It also manages the concurrency semaphore for parallel
 // sub-agent execution.
@@ -40,6 +55,7 @@ type SubagentExecutor struct {
 	parentAgent *AIAgent
 	logger      *debuglog.Logger
 	sem         chan struct{} // concurrency semaphore, size = MaxConcurrency
+	worktreeMgr *WorktreeManager
 }
 
 // NewSubagentExecutor creates a new SubagentExecutor bound to the given parent agent.
@@ -50,6 +66,12 @@ func NewSubagentExecutor(parent *AIAgent) *SubagentExecutor {
 		logger:      parent.logger,
 		sem:         make(chan struct{}, maxConc),
 	}
+}
+
+// SetWorktreeManager sets the worktree manager for git worktree isolation.
+// When nil (default), worktree isolation is disabled.
+func (e *SubagentExecutor) SetWorktreeManager(wm *WorktreeManager) {
+	e.worktreeMgr = wm
 }
 
 // AvailableToolNames returns all tool names the sub-agent can use (for description).
@@ -77,9 +99,7 @@ func (e *SubagentExecutor) MaxOutputChars() int {
 // It blocks until the child completes or the context is cancelled.
 func (e *SubagentExecutor) RunSubagent(
 	ctx context.Context,
-	prompt string,
-	allowedTools []string,
-	maxIterations int,
+	args tools.SubagentArgs,
 ) (string, error) {
 	// Acquire concurrency semaphore (block until slot available or ctx cancelled)
 	select {
@@ -94,12 +114,44 @@ func (e *SubagentExecutor) RunSubagent(
 	model := e.parentAgent.SubagentModel()
 
 	// Determine iteration budget
+	maxIterations := args.MaxIterations
 	if maxIterations <= 0 {
 		maxIterations = e.parentAgent.SubagentMaxIterations()
 	}
 
 	// Create child agent with a unique ID for logging
 	shortID := uuid.New().String()[:8]
+
+	// Determine thinking configuration
+	thinking := e.parentAgent.SubagentThinking()
+
+	// Determine branch for worktree
+	branch := args.WorktreeBranch
+
+	// If worktree is enabled, delegate to WorktreeManager
+	if e.worktreeMgr != nil {
+		return e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, error) {
+			e.logger.Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
+			return e.runChildAgent(worktreeCtx, shortID, args, provider, model, maxIterations, thinking, branch, wtPath)
+		})
+	}
+
+	return e.runChildAgent(ctx, shortID, args, provider, model, maxIterations, thinking, "", "")
+}
+
+// runChildAgent is the internal method that creates and runs the child AIAgent.
+// When worktreePath is non-empty, the worktree prompt is appended to the system prompt.
+func (e *SubagentExecutor) runChildAgent(
+	ctx context.Context,
+	shortID string,
+	args tools.SubagentArgs,
+	provider llm.Provider,
+	model string,
+	maxIterations int,
+	thinking bool,
+	branch string,
+	worktreePath string,
+) (string, error) {
 	childLogger := e.logger.WithPrefix(fmt.Sprintf("[subagent:%s]", shortID))
 
 	child := NewAIAgent(provider, model, maxIterations)
@@ -108,7 +160,7 @@ func (e *SubagentExecutor) RunSubagent(
 	child.SetReminderCollector(nil) // Disable all system reminders
 
 	// Register filtered tools
-	child.RegisterToolsForSubagent(e.parentAgent, allowedTools)
+	child.RegisterToolsForSubagent(e.parentAgent, args.AllowedTools)
 
 	// Propagate transcript builder from context (parent injected it via
 	// transcript.WithBuilder before calling RunSubagent).
@@ -116,14 +168,23 @@ func (e *SubagentExecutor) RunSubagent(
 		child.SetTranscriptBuilder(subBuilder)
 	}
 
-	// Determine thinking configuration
-	thinking := e.parentAgent.SubagentThinking()
+	// Build system prompt
+	systemPrompt := subagentSystemPrompt
+	if worktreePath != "" {
+		// Explain which branch the worktree starts from.
+		// It is always detached HEAD — the branch is just the starting point.
+		source := branch
+		if source == "" {
+			source = "HEAD"
+		}
+		systemPrompt += fmt.Sprintf(subagentWorktreePrompt, source)
+	}
 
-	childLogger.Log("starting | prompt_len=%d tools=%d max_iters=%d thinking=%v",
-		len(prompt), len(child.ToolSchemas()), maxIterations, thinking)
+	childLogger.Log("starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%s",
+		len(args.Prompt), len(child.ToolSchemas()), maxIterations, thinking, fallbackIfEmpty(worktreePath, "no"))
 
 	// Run via RunOneOffStream
-	ch := child.RunOneOffStream(ctx, provider, subagentSystemPrompt, prompt, llm.ChatOptions{
+	ch := child.RunOneOffStream(ctx, provider, systemPrompt, args.Prompt, llm.ChatOptions{
 		MaxTokens: defaultMaxTokens,
 		Thinking:  &thinking,
 	})
@@ -160,6 +221,13 @@ func (e *SubagentExecutor) RunSubagent(
 		iterCount, duration, sb.Len())
 
 	return sb.String(), nil
+}
+
+func fallbackIfEmpty(s string, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 // RegisterToolsForSubagent registers a filtered subset of the parent's tools
