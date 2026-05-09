@@ -6,10 +6,12 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/channel"
 	"github.com/monsterxx03/tachi/channel/weixin"
 	"github.com/monsterxx03/tachi/config"
@@ -133,6 +135,39 @@ func main() {
 				Usage: "Start all enabled channels from config (e.g., weixin)",
 				Flags: commonFlags,
 				Action: runChannels,
+			},
+			{
+				Name:  "transcript",
+				Usage: "Visualize session transcripts",
+				Commands: []*cli.Command{
+					{
+						Name:   "list",
+						Usage:  "List all sessions with transcript data",
+						Action: transcriptList,
+					},
+					{
+						Name:  "show",
+						Usage: "Generate HTML report for a session transcript",
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "session",
+								Aliases: []string{"s"},
+								Usage:   "Session ID to visualize",
+							},
+							&cli.BoolFlag{
+								Name:    "latest",
+								Aliases: []string{"l"},
+								Usage:   "Show the most recent session",
+							},
+							&cli.BoolFlag{
+								Name:    "no-open",
+								Aliases: []string{"n"},
+								Usage:   "Don't open browser, just print path",
+							},
+						},
+						Action: transcriptShow,
+					},
+				},
 			},
 		},
 	}
@@ -404,5 +439,94 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	// Block until context is cancelled.
 	<-ctx.Done()
 	fmt.Println("[channel] shutting down...")
+	return nil
+}
+
+// ── Transcript visualization commands ────────────────────────────────────────
+
+func transcriptList(ctx context.Context, cmd *cli.Command) error {
+	mgr, err := session.NewManager()
+	if err != nil {
+		return fmt.Errorf("session manager: %w", err)
+	}
+
+	sessions, err := mgr.List()
+	if err != nil {
+		return fmt.Errorf("list sessions: %w", err)
+	}
+
+	fmt.Printf("%-40s  %-20s  %s\n", "SESSION ID", "DATE", "TITLE")
+	fmt.Println(strings.Repeat("─", 100))
+	for _, s := range sessions {
+		date := s.CreatedAt.Format("2006-01-02 15:04")
+		fmt.Printf("%-40s  %-20s  %s\n", s.ID, date, s.Title)
+	}
+	fmt.Printf("\n%d sessions total.\n", len(sessions))
+	fmt.Println("Use: tachi transcript show --session <id>    (or --latest)")
+	return nil
+}
+
+func transcriptShow(ctx context.Context, cmd *cli.Command) error {
+	mgr, err := session.NewManager()
+	if err != nil {
+		return fmt.Errorf("session manager: %w", err)
+	}
+
+	var sess *session.Session
+
+	if cmd.Bool("latest") {
+		sessions, err := mgr.List()
+		if err != nil {
+			return fmt.Errorf("list sessions: %w", err)
+		}
+		if len(sessions) == 0 {
+			return fmt.Errorf("no sessions found")
+		}
+		sess, err = mgr.Load(sessions[0].ID)
+		if err != nil {
+			return fmt.Errorf("load session: %w", err)
+		}
+	} else if id := cmd.String("session"); id != "" {
+		sess, err = mgr.Load(id)
+		if err != nil {
+			return fmt.Errorf("load session %q: %w", id, err)
+		}
+	} else {
+		return fmt.Errorf("specify --session <id> or --latest")
+	}
+
+	// Load the transcript for this session.
+	// Manager.LoadTranscript requires current to be set (done by Load above).
+	tr, err := mgr.LoadTranscript()
+	if err != nil {
+		return fmt.Errorf("load transcript: %w", err)
+	}
+	if tr == nil {
+		return fmt.Errorf("session %q has no transcript data yet.\nRun a conversation with this session to generate transcripts.", sess.ID)
+	}
+
+	// Build report data and generate HTML.
+	data := render.BuildReportData(sess, tr)
+	html, err := render.GenerateHTML(data)
+	if err != nil {
+		return fmt.Errorf("generate HTML: %w", err)
+	}
+
+	if cmd.Bool("no-open") {
+		// Write to stdout-compatible path
+		tmpDir := os.TempDir()
+		filename := filepath.Join(tmpDir, fmt.Sprintf("tachi-transcript-%s.html", sess.ID[:8]))
+		if err := os.WriteFile(filename, []byte(html), 0644); err != nil {
+			return fmt.Errorf("write file: %w", err)
+		}
+		fmt.Println(filename)
+		return nil
+	}
+
+	path, err := render.OpenInBrowser(html, sess.ID)
+	if err != nil {
+		return fmt.Errorf("open browser: %w\n\nHTML saved to: %s", err, path)
+	}
+	fmt.Printf("Transcript: %s\nOpened: %s\n", sess.Title, path)
 	return nil
 }

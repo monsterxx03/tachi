@@ -242,9 +242,11 @@ func (s *FileStore) LoadTranscript(id string) ([]byte, error) {
 		return nil, nil
 	}
 
-	// Reconstruct Transcript: {"session_id":"...","turns":[...]}
+	// Reconstruct Transcript: {"session_id":"<id>","turns":[...]}
 	var b strings.Builder
-	b.WriteString(`{"session_id":"","turns":[`)
+	b.WriteString(`{"session_id":"`)
+	b.WriteString(id)
+	b.WriteString(`","turns":[`)
 	for i, line := range lines {
 		if i > 0 {
 			b.WriteByte(',')
