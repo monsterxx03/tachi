@@ -47,6 +47,14 @@ type ChatView struct {
 	mdRenderer    *glamour.TermRenderer
 	mdRenderWidth int
 	userScrolled  bool
+
+	// Streaming markdown render cache.
+	// When stream text grows, we re-render complete lines through glamour
+	// and cache the result keyed by the length of the complete portion.
+	// This avoids calling glamour on every character delta — only newlines
+	// trigger a re-render.
+	streamMDRendered    string
+	streamMDCompleteLen int
 }
 
 func NewChatView() ChatView {
@@ -194,6 +202,8 @@ func (c *ChatView) ResetStreaming() {
 	c.currentText.Reset()
 	c.currentThinking.Reset()
 	c.currentTools = nil
+	c.streamMDRendered = ""
+	c.streamMDCompleteLen = 0
 }
 
 func (c *ChatView) Clear() {
@@ -465,13 +475,14 @@ func (c *ChatView) renderStreamBlock() string {
 	if c.currentThinking.Len() > 0 {
 		thinking := truncateThinking(c.currentThinking.String(), 5)
 		b.WriteString(thinkingStyle.Render("Thinking: " + thinking))
-		b.WriteString("\n")
 	}
 	if c.currentText.Len() > 0 {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(assistantMsgStyle.Width(inner).Render(c.currentText.String()))
+		b.WriteString(assistantMsgStyle.Width(inner).Render(
+			c.renderStreamText(c.currentText.String()),
+		))
 	}
 	for _, tc := range c.currentTools {
 		if b.Len() > 0 {
@@ -482,12 +493,41 @@ func (c *ChatView) renderStreamBlock() string {
 	return b.String()
 }
 
+// renderStreamText renders streaming text efficiently: complete lines are
+// markdown-rendered and cached; the trailing in-progress line is shown as
+// plain text to avoid flickering on partial markdown syntax.
+func (c *ChatView) renderStreamText(text string) string {
+	lastNL := strings.LastIndex(text, "\n")
+	if lastNL < 0 {
+		return text
+	}
+
+	completeLines := text[:lastNL+1]
+	inProgress := text[lastNL+1:]
+
+	if len(completeLines) != c.streamMDCompleteLen {
+		rendered := c.renderMarkdown(completeLines)
+		if rendered == "" {
+			rendered = completeLines
+		}
+		c.streamMDRendered = rendered
+		c.streamMDCompleteLen = len(completeLines)
+	}
+
+	if inProgress == "" {
+		return c.streamMDRendered
+	}
+	return c.streamMDRendered + inProgress
+}
+
 func (c *ChatView) invalidateAllCaches() {
 	for _, it := range c.items {
 		if it != nil {
 			it.clearCache()
 		}
 	}
+	c.streamMDRendered = ""
+	c.streamMDCompleteLen = 0
 }
 
 func (c *ChatView) refresh() {
