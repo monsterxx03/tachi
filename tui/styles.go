@@ -136,4 +136,18 @@ var (
 
 	mcpStatusWarn = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#EED49F"))
+
+	// MCP tool detail styles
+	mcpDetailColHeader = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#5B6078")).
+				Bold(true)
+
+	mcpDetailFieldName = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#7DC4E4"))
+
+	mcpDetailFieldType = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#A6DA95"))
+
+	mcpDetailFieldDesc = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#8087A2"))
 )

@@ -299,11 +299,28 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	var history []llm.Message
 
 	if cmd.Bool("resume") {
-		llmMsgs, _, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.Language))
+		llmMsgs, _, latest, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.Language))
 		if err != nil {
 			return fmt.Errorf("resume failed: %w", err)
 		}
 		history = llmMsgs
+
+		// Rebuild provider to match the session's original provider/model.
+		if latest.Provider != resolved.Provider.Type || latest.Model != resolved.Provider.Model {
+			sp, spErr := config.ResolveSessionProvider(cfg, latest.Provider, latest.Model)
+			if spErr != nil {
+				fmt.Fprintf(os.Stderr, "Warning: cannot restore session provider %q: %v\n", latest.Provider, spErr)
+			} else {
+				provider, provErr := llm.NewProvider(sp.Type, sp.APIKey, sp.BaseURL, sp.Model)
+				if provErr != nil {
+					fmt.Fprintf(os.Stderr, "Warning: cannot create session provider: %v\n", provErr)
+				} else {
+					aiAgent.SetProvider(provider, sp.Model)
+					resolved.Provider = *sp
+					fmt.Printf("Provider (restored): %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+				}
+			}
+		}
 	}
 
 	// Use streaming API to support history

@@ -773,23 +773,25 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 // ResumeSession loads the most recent session from disk, converts it to LLM
 // message format, prepends the given system prompt (if non-empty), and attaches
 // the session manager to the agent for ongoing session recording.
-func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Message, []session.Message, error) {
+// Returns the loaded session metadata alongside the messages so callers can
+// rebuild the provider to match the session's original provider/model.
+func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Message, []session.Message, *session.Session, error) {
 	sm, err := session.NewManager()
 	if err != nil {
-		return nil, nil, fmt.Errorf("session manager: %w", err)
+		return nil, nil, nil, fmt.Errorf("session manager: %w", err)
 	}
 
 	sessions, err := sm.List()
 	if err != nil {
-		return nil, nil, fmt.Errorf("list sessions: %w", err)
+		return nil, nil, nil, fmt.Errorf("list sessions: %w", err)
 	}
 	if len(sessions) == 0 {
-		return nil, nil, fmt.Errorf("no sessions to resume")
+		return nil, nil, nil, fmt.Errorf("no sessions to resume")
 	}
 
 	latest := sessions[0]
 	if _, err := sm.Load(latest.ID); err != nil {
-		return nil, nil, fmt.Errorf("load session %s: %w", latest.ID, err)
+		return nil, nil, nil, fmt.Errorf("load session %s: %w", latest.ID, err)
 	}
 
 	// Restore working directory if recorded
@@ -801,12 +803,12 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 
 	sessionMsgs, err := sm.LoadMessages()
 	if err != nil {
-		return nil, nil, fmt.Errorf("load messages: %w", err)
+		return nil, nil, nil, fmt.Errorf("load messages: %w", err)
 	}
 
 	llmMsgs, err := ConvertSessionToLLMMessages(sessionMsgs, providerType)
 	if err != nil {
-		return nil, nil, fmt.Errorf("convert session messages: %w", err)
+		return nil, nil, nil, fmt.Errorf("convert session messages: %w", err)
 	}
 
 	if systemPrompt != "" {
@@ -814,7 +816,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	}
 
 	a.sessionManager = sm
-	return llmMsgs, sessionMsgs, nil
+	return llmMsgs, sessionMsgs, latest, nil
 }
 
 func (b *IterationBudget) consume() bool {

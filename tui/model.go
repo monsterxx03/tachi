@@ -955,8 +955,8 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	m.chatview.Clear()
 	m.chatview.LoadHistory(sessionMsgs)
 
-	// Update status bar with session's provider/model
-	providerInfo := fmt.Sprintf("%s (%s)", s.Provider, s.Model)
+	// Rebuild provider to match the session's original provider/model.
+	providerInfo, providerRestored := m.restoreSessionProvider(s.Provider, s.Model)
 	m.statusbar.SetProviderInfo(providerInfo)
 	if cw := llm.ModelContextWindow(s.Model); cw > 0 {
 		m.statusbar.SetContextWindow(cw)
@@ -966,8 +966,31 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	if title == "" {
 		title = s.ID
 	}
-	m.exitSessionSelect(fmt.Sprintf("Switched to session: **%s**", title))
+	msg := fmt.Sprintf("Switched to session: **%s**", title)
+	if !providerRestored {
+		msg += fmt.Sprintf("\n⚠ Provider %s (%s) not found in config — using current provider. Messages may not be compatible.", s.Provider, s.Model)
+	}
+	m.exitSessionSelect(msg)
 	return m, nil
+}
+
+// restoreSessionProvider resolves and switches the agent's provider to match
+// the given session providerType and model. Returns the display string and
+// whether the provider was successfully restored.
+func (m *Model) restoreSessionProvider(providerType, model string) (string, bool) {
+	sp, err := config.ResolveSessionProvider(m.cfg, providerType, model)
+	if err != nil {
+		// Keep current provider, show the session's expected info
+		return fmt.Sprintf("%s (%s) [unmatched]", providerType, model), false
+	}
+
+	provider, err := llm.NewProvider(sp.Type, sp.APIKey, sp.BaseURL, sp.Model)
+	if err != nil {
+		return fmt.Sprintf("%s (%s) [error]", providerType, model), false
+	}
+
+	m.agent.SetProvider(provider, sp.Model)
+	return fmt.Sprintf("%s (%s)", sp.Type, sp.Model), true
 }
 
 // --- MCP overlay ---
@@ -1030,9 +1053,23 @@ func (m *Model) buildMCPServerItems() []MCPServerItem {
 		var tools []MCPToolItem
 		for _, schema := range m.agent.ToolSchemas() {
 			if strings.HasPrefix(schema.Name, prefix) {
+				params := make([]MCPParamItem, 0, len(schema.Parameters.Properties))
+				reqSet := make(map[string]bool, len(schema.Parameters.Required))
+				for _, r := range schema.Parameters.Required {
+					reqSet[r] = true
+				}
+				for pName, p := range schema.Parameters.Properties {
+					params = append(params, MCPParamItem{
+						Name:        pName,
+						Type:        p.Type,
+						Description: p.Description,
+						Required:    reqSet[pName],
+					})
+				}
 				tools = append(tools, MCPToolItem{
 					Name:        strings.TrimPrefix(schema.Name, prefix),
 					Description: schema.Description,
+					Parameters:  params,
 				})
 			}
 		}
