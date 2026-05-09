@@ -13,7 +13,7 @@ import (
 // WriteTool writes content to a file
 type WriteTool struct{}
 
-func (t WriteTool) Name() string        { return "WriteFile" }
+func (t WriteTool) Name() string        { return ToolNameWrite }
 func (t WriteTool) Description() string { return "Writes a file to the local filesystem." }
 func (t WriteTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

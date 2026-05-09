@@ -392,6 +392,31 @@ func (a *AIAgent) ToolNames() []string {
 	return a.toolRegistry.GetToolNames()
 }
 
+// SaveToolRegistry returns a snapshot of all currently registered tools.
+// Use RestoreToolRegistry to restore them later.
+func (a *AIAgent) SaveToolRegistry() map[string]tools.Tool {
+	saved := make(map[string]tools.Tool)
+	for _, name := range a.toolRegistry.GetToolNames() {
+		if tool := a.toolRegistry.GetTool(name); tool != nil {
+			saved[name] = tool
+		}
+	}
+	return saved
+}
+
+// RestoreToolRegistry clears the current tool registry and re-registers
+// the tools from the given snapshot (typically obtained from SaveToolRegistry).
+func (a *AIAgent) RestoreToolRegistry(saved map[string]tools.Tool) {
+	// Remove all currently registered tools
+	for _, name := range a.toolRegistry.GetToolNames() {
+		a.toolRegistry.Unregister(name)
+	}
+	// Re-register from saved snapshot
+	for _, tool := range saved {
+		a.toolRegistry.Register(tool)
+	}
+}
+
 type RunResult struct {
 	Response       string
 	IterationsUsed int

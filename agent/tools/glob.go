@@ -20,7 +20,7 @@ type GlobResult struct {
 // GlobTool finds files matching a glob pattern using ripgrep
 type GlobTool struct{}
 
-func (t GlobTool) Name() string        { return "Glob" }
+func (t GlobTool) Name() string        { return ToolNameGlob }
 func (t GlobTool) Description() string {
 	return "Find files matching a glob pattern using ripgrep. " +
 		"Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". " +

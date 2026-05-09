@@ -38,7 +38,7 @@ func NewReadTool() *ReadTool {
 	}
 }
 
-func (t *ReadTool) Name() string        { return "ReadFile" }
+func (t *ReadTool) Name() string        { return ToolNameRead }
 func (t *ReadTool) Description() string { return "Read the contents of a file" }
 func (t *ReadTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

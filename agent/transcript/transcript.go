@@ -8,6 +8,8 @@ package transcript
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // EventType enumerates the kinds of atomic events in an agent execution trace.
@@ -72,7 +74,7 @@ func countSubagentCalls(turns []Turn) int {
 	n := 0
 	for _, turn := range turns {
 		for _, ev := range turn.Events {
-			if ev.Name == "SubAgent" {
+			if ev.Name == tools.ToolNameSubAgent {
 				n++
 			}
 			// Recurse into children (recursive sub-agents)

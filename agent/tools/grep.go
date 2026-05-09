@@ -40,7 +40,7 @@ type grepArgs struct {
 
 type GrepTool struct{}
 
-func (t GrepTool) Name() string { return "Grep" }
+func (t GrepTool) Name() string { return ToolNameGrep }
 func (t GrepTool) Description() string {
 	return "Search file contents using ripgrep. " +
 		"Supports regex patterns, file type filtering, and glob filtering. " +

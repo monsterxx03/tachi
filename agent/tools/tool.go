@@ -8,8 +8,16 @@ import (
 // Tool name constants. Use these instead of string literals to avoid typos
 // and enable compile-time checking when filtering or comparing tool names.
 const (
-	ToolNameAskUser  = "AskUserQuestion"
-	ToolNameSubAgent = "SubAgent"
+	ToolNameAskUser   = "AskUserQuestion"
+	ToolNameSubAgent  = "SubAgent"
+	ToolNameBash      = "Bash"
+	ToolNameRead      = "ReadFile"
+	ToolNameWrite     = "WriteFile"
+	ToolNameEdit      = "EditFile"
+	ToolNameGlob      = "Glob"
+	ToolNameGrep      = "Grep"
+	ToolNameWebSearch = "WebSearch"
+	ToolNameWebFetch  = "WebFetch"
 )
 
 // PropertySchema defines a single property in the schema

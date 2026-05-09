@@ -3,6 +3,8 @@ package transcript
 import (
 	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // Builder incrementally constructs a Transcript during agent execution.
@@ -197,7 +199,7 @@ type ToolCallRecorder struct {
 // Returns nil for non-SubAgent tool calls. The first call creates the
 // sub-builder lazily, only when the tool name is "SubAgent".
 func (r *ToolCallRecorder) SubBuilder() *Builder {
-	if r.subBuilder == nil && r.evPtr.Name == "SubAgent" {
+	if r.subBuilder == nil && r.evPtr.Name == tools.ToolNameSubAgent {
 		r.subBuilder = NewBuilder()
 	}
 	return r.subBuilder

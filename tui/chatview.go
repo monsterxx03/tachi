@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -531,27 +532,27 @@ func getToolArgsPreview(name, argsJSON string) string {
 		return argsJSON
 	}
 	switch name {
-	case "ReadFile":
+	case tools.ToolNameRead:
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
-	case "WriteFile":
+	case tools.ToolNameWrite:
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
-	case "EditFile":
+	case tools.ToolNameEdit:
 		if p, ok := args["path"].(string); ok {
 			return p
 		}
-	case "Glob":
+	case tools.ToolNameGlob:
 		if p, ok := args["pattern"].(string); ok {
 			return p
 		}
-	case "Grep":
+	case tools.ToolNameGrep:
 		if p, ok := args["pattern"].(string); ok {
 			return p
 		}
-	case "Bash":
+	case tools.ToolNameBash:
 		if cmd, ok := args["command"].(string); ok {
 			runes := []rune(cmd)
 			if len(runes) > 60 {
@@ -559,7 +560,7 @@ func getToolArgsPreview(name, argsJSON string) string {
 			}
 			return cmd
 		}
-	case "WebSearch":
+	case tools.ToolNameWebSearch:
 		if q, ok := args["query"].(string); ok {
 			runes := []rune(q)
 			if len(runes) > 60 {
@@ -567,7 +568,7 @@ func getToolArgsPreview(name, argsJSON string) string {
 			}
 			return q
 		}
-	case "WebFetch":
+	case tools.ToolNameWebFetch:
 		if u, ok := args["url"].(string); ok {
 			runes := []rune(u)
 			if len(runes) > 60 {
@@ -575,7 +576,7 @@ func getToolArgsPreview(name, argsJSON string) string {
 			}
 			return "WebFetch: " + u
 		}
-	case "SubAgent":
+	case tools.ToolNameSubAgent:
 		prompt, _ := args["prompt"].(string)
 		branch, _ := args["worktree_branch"].(string)
 		if prompt == "" {

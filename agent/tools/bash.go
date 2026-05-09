@@ -34,7 +34,7 @@ type bashArgs struct {
 
 type BashTool struct{}
 
-func (t BashTool) Name() string { return "Bash" }
+func (t BashTool) Name() string { return ToolNameBash }
 func (t BashTool) Description() string {
 	return "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +

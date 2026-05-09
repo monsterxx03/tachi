@@ -62,7 +62,7 @@ func (t *WebSearchTool) getHTTPClient() *http.Client {
 	return t.httpClient
 }
 
-func (t *WebSearchTool) Name() string { return "WebSearch" }
+func (t *WebSearchTool) Name() string { return ToolNameWebSearch }
 func (t *WebSearchTool) Description() string {
 	return "Performs a web search using a search engine API. " +
 		"Returns search results including titles, links, and snippets. " +

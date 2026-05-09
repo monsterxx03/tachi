@@ -12,6 +12,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -78,6 +79,7 @@ type Model struct {
 	askUserView    *AskUserView
 
 	savedHistory []llm.Message // conversation history saved before a one-off run (e.g. /commit)
+	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
 
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
@@ -464,6 +466,15 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	m.savedHistory = make([]llm.Message, len(m.history))
 	copy(m.savedHistory, m.history)
 
+	// Save tool registry: /commit should only use the Bash tool.
+	// Save all tools, then unregister everything except Bash.
+	m.savedTools = m.agent.SaveToolRegistry()
+	for _, name := range m.agent.ToolNames() {
+		if name != tools.ToolNameBash {
+			m.agent.UnregisterTool(name)
+		}
+	}
+
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
@@ -595,6 +606,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
 			m.statusbar.SetUsage(&m.totalUsage)
 		}
+		if m.savedTools != nil {
+			m.agent.RestoreToolRegistry(m.savedTools)
+			m.savedTools = nil
+		}
 		m.chatview.FinishStreaming()
 		m.syncSessionInfo()
 		m.setState(stateIdle)
@@ -615,6 +630,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if m.savedHistory != nil {
 			m.history = m.savedHistory
 			m.savedHistory = nil
+		}
+		if m.savedTools != nil {
+			m.agent.RestoreToolRegistry(m.savedTools)
+			m.savedTools = nil
 		}
 		if event.Result != nil && event.Result.ExitReason == "interrupted" {
 			m.chatview.FinishStreaming()

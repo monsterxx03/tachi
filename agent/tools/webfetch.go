@@ -52,7 +52,7 @@ type WebFetchTool struct {
 	httpClient *http.Client
 }
 
-func (t *WebFetchTool) Name() string        { return "WebFetch" }
+func (t *WebFetchTool) Name() string        { return ToolNameWebFetch }
 func (t *WebFetchTool) Parallel() bool       { return true }
 
 func (t *WebFetchTool) Description() string {

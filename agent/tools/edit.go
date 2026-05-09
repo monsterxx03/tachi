@@ -22,7 +22,7 @@ const (
 // EditTool performs exact string replacements in files
 type EditTool struct{}
 
-func (t EditTool) Name() string { return "EditFile" }
+func (t EditTool) Name() string { return ToolNameEdit }
 func (t EditTool) Description() string {
 	return "You must use your ReadFile tool at least once in the conversation before editing. " +
 		"This tool will error if you attempt an edit without reading the file. " +
