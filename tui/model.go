@@ -81,6 +81,9 @@ type Model struct {
 	savedHistory []llm.Message // conversation history saved before a one-off run (e.g. /commit)
 	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
 
+	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
+	streamGen    int      // incremented on each new stream; used to ignore stale events
+
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
 	providerSelIdx int
@@ -202,6 +205,39 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if cmd == nil {
 			cmd = findCommandByPrefix(text)
 		}
+
+		// During streaming: queue regular messages, allow /new, block other commands.
+		if m.state == stateStreaming {
+			if cmd != nil && cmd.Name == "/new" {
+				// /new during streaming: clear queue, cancel current stream, reset.
+				m.pendingQueue = nil
+				m.chatview.RemovePendingItems()
+				m.statusbar.SetPendingCount(0)
+				if m.cancelFunc != nil {
+					m.cancelFunc()
+				}
+				m.subcommandInput = text
+				return m, cmd.handler(m)
+			}
+			if cmd != nil {
+				// Other slash commands: show a hint instead of queueing.
+				m.chatview.AddMessage(chatMessage{
+					Role:    "assistant",
+					Content: "请等待当前回合完成后再执行命令",
+				})
+				return m, nil
+			}
+			// Queue regular text for auto-send after TurnComplete.
+			if text == "" {
+				return m, nil
+			}
+			m.pendingQueue = append(m.pendingQueue, text)
+			m.chatview.AddPendingItem(text)
+			m.statusbar.SetPendingCount(len(m.pendingQueue))
+			return m, nil
+		}
+
+		// Normal (idle) state.
 		if cmd != nil {
 			m.subcommandInput = text
 			return m, cmd.handler(m)
@@ -209,10 +245,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.sendMessage(text)
 
 	case agentEventMsg:
-		return m, m.handleAgentEvent(agent.AgentEvent(msg))
+		if msg.gen != m.streamGen {
+			return m, nil // stale event from a previous stream
+		}
+		return m, m.handleAgentEvent(msg.event)
 
 	case tea.PasteMsg:
-		if m.state == stateIdle {
+		if m.state == stateIdle || m.state == stateStreaming {
 			oldHeight := m.input.Height()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -228,7 +267,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case streamDoneMsg:
+		if msg.gen != m.streamGen {
+			return m, nil // stale stream-close from a previous stream
+		}
 		if m.state != stateIdle {
+			m.pendingQueue = nil
+			m.chatview.RemovePendingItems()
+			m.statusbar.SetPendingCount(0)
 			m.chatview.FinishStreaming()
 			m.setState(stateIdle)
 			m.cancelFunc = nil
@@ -282,7 +327,7 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyAskUser(msg)
 	case stateManagingMCP:
 		return m.handleKeyManagingMCP(msg)
-	case stateIdle:
+	case stateIdle, stateStreaming:
 		return m.handleKeyIdle(msg)
 	}
 	return m, nil
@@ -303,6 +348,9 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	}
 	if m.state != stateIdle && m.cancelFunc != nil {
 		m.cancelFunc()
+		m.pendingQueue = nil
+		m.chatview.RemovePendingItems()
+		m.statusbar.SetPendingCount(0)
 		return m, nil
 	}
 	return m, tea.Quit
@@ -426,7 +474,7 @@ func (m *Model) setState(st state) {
 	m.state = st
 	m.statusbar.SetState(st)
 	m.chatview.SetStreaming(st == stateStreaming)
-	m.input.SetEnabled(st == stateIdle)
+	m.input.SetEnabled(st == stateIdle || st == stateStreaming)
 }
 
 func (m *Model) sendMessage(text string) tea.Cmd {
@@ -443,6 +491,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
+	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expandedText, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
@@ -487,6 +536,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	thinkingDisabled := false
 	commitOpts.Thinking = &thinkingDisabled
 
+	m.streamGen++
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
 		commitUserPrompt(commitModel), commitOpts)
 
@@ -507,6 +557,7 @@ func (m *Model) sendInitCommand() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
+	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, InitPromptTemplate, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
@@ -517,12 +568,13 @@ func (m *Model) sendInitCommand() tea.Cmd {
 
 func (m *Model) nextEvent() tea.Cmd {
 	ch := m.eventCh
+	gen := m.streamGen
 	return func() tea.Msg {
 		event, ok := <-ch
 		if !ok {
-			return streamDoneMsg{}
+			return streamDoneMsg{gen: gen}
 		}
-		return agentEventMsg(event)
+		return agentEventMsg{event: event, gen: gen}
 	}
 }
 
@@ -593,7 +645,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
-		if m.savedHistory != nil {
+		isOneOff := m.savedHistory != nil
+		if isOneOff {
 			m.history = m.savedHistory
 			m.savedHistory = nil
 		} else if event.Usage != nil {
@@ -612,6 +665,25 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		}
 		m.chatview.FinishStreaming()
 		m.syncSessionInfo()
+
+		// Drain pending queue if not in a one-off context (e.g. /commit, /init).
+		if len(m.pendingQueue) > 0 && !isOneOff {
+			combined := strings.Join(m.pendingQueue, "\n\n")
+			m.pendingQueue = nil
+			m.chatview.RemovePendingItems()
+			m.statusbar.SetPendingCount(0)
+			m.cancelFunc = nil
+			m.eventCh = nil
+			return m.sendMessage(combined)
+		}
+
+		// Discard pending queue for one-off contexts (savedHistory was set).
+		if isOneOff {
+			m.pendingQueue = nil
+			m.chatview.RemovePendingItems()
+			m.statusbar.SetPendingCount(0)
+		}
+
 		m.setState(stateIdle)
 		m.cancelFunc = nil
 		m.eventCh = nil
@@ -635,6 +707,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.agent.RestoreToolRegistry(m.savedTools)
 			m.savedTools = nil
 		}
+		// Clear pending queue on error (Ctrl+C clears it earlier in handleCtrlC,
+		// this handles non-interrupt errors like API failures).
+		m.pendingQueue = nil
+		m.chatview.RemovePendingItems()
+		m.statusbar.SetPendingCount(0)
 		if event.Result != nil && event.Result.ExitReason == "interrupted" {
 			m.chatview.FinishStreaming()
 		} else {

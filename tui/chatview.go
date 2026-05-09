@@ -40,6 +40,10 @@ type ChatView struct {
 	currentThinking strings.Builder
 	currentTools    []toolCallDisplay
 
+	// pendingItems are queued messages shown at the very bottom of chat,
+	// below any streaming output, so they stay visible during LLM output.
+	pendingItems []string
+
 	mdRenderer    *glamour.TermRenderer
 	mdRenderWidth int
 	userScrolled  bool
@@ -194,9 +198,28 @@ func (c *ChatView) ResetStreaming() {
 
 func (c *ChatView) Clear() {
 	c.items = nil
+	c.pendingItems = nil
 	c.ResetStreaming()
 	c.userScrolled = false
 	c.list.Reset()
+	c.refresh()
+}
+
+// AddPendingItem adds a pending message placeholder that always renders
+// at the bottom of the chat view, below any streaming output.
+func (c *ChatView) AddPendingItem(content string) {
+	c.pendingItems = append(c.pendingItems, content)
+	c.userScrolled = false
+	c.refresh()
+}
+
+// RemovePendingItems removes all pending message placeholders from the chat view.
+func (c *ChatView) RemovePendingItems() {
+	if len(c.pendingItems) == 0 {
+		return
+	}
+	c.pendingItems = nil
+	c.userScrolled = false
 	c.refresh()
 }
 
@@ -333,6 +356,7 @@ func (c *ChatView) ListLen() int {
 	if c.streamVisible() {
 		n++
 	}
+	n += len(c.pendingItems)
 	return n
 }
 
@@ -341,15 +365,34 @@ func (c *ChatView) ListItem(idx int) ListItem {
 	if idx < 0 || idx >= n {
 		return ListItem{}
 	}
+	// Normal cached items
 	if idx < len(c.items) {
 		s, h := c.renderItemCached(c.items[idx])
 		return ListItem{Content: s, Height: h}
 	}
-	s := strings.TrimRight(c.renderStreamBlock(), "\n")
-	if s == "" {
-		return ListItem{}
+	// Stream block (dynamic, not cached)
+	streamIdx := len(c.items)
+	if c.streamVisible() && idx == streamIdx {
+		s := strings.TrimRight(c.renderStreamBlock(), "\n")
+		if s == "" {
+			return ListItem{}
+		}
+		return ListItem{Content: s, Height: strings.Count(s, "\n") + 1}
 	}
-	return ListItem{Content: s, Height: strings.Count(s, "\n") + 1}
+	// Pending items — always at the very bottom
+	pendingIdx := idx - len(c.items)
+	if c.streamVisible() {
+		pendingIdx--
+	}
+	if pendingIdx >= 0 && pendingIdx < len(c.pendingItems) {
+		inner := c.width - 2
+		if inner < 1 {
+			inner = 1
+		}
+		s := pendingMsgStyle.Width(inner).Render("[待发送] " + c.pendingItems[pendingIdx])
+		return ListItem{Content: s, Height: 1}
+	}
+	return ListItem{}
 }
 
 func (c *ChatView) ListItemHeight(idx int) int {

@@ -21,6 +21,7 @@ type StatusBar struct {
 	spinner       spinner.Model
 	sessionTitle  string
 	sessionID     string
+	pendingCount  int
 }
 
 const (
@@ -40,6 +41,8 @@ func (s *StatusBar) SetProviderInfo(info string)    { s.providerInfo = info }
 func (s *StatusBar) SetContextWindow(cw int64)      { s.contextWindow = cw }
 func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s.sessionID = id }
 func (s *StatusBar) ProviderInfo() string           { return s.providerInfo }
+
+func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -83,6 +86,9 @@ func (s StatusBar) View() string {
 	}
 
 	left += " | " + s.providerInfo
+	if s.pendingCount > 0 {
+		left += " | " + pendingCountStyle.Render(fmt.Sprintf("⏳ %d pending", s.pendingCount))
+	}
 	if s.copyMode {
 		left += " | " + selectModeStyle.Render("SELECT")
 	}

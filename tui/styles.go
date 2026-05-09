@@ -150,4 +150,11 @@ var (
 
 	mcpDetailFieldDesc = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8087A2"))
+
+	pendingMsgStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#6E738D")).
+				Italic(true)
+
+	pendingCountStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#EED49F"))
 )

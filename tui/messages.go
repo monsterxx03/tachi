@@ -4,9 +4,18 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 )
 
-type agentEventMsg agent.AgentEvent
+// agentEventMsg wraps an agent event with a stream generation counter.
+// The generation is checked on receipt to ignore events from stale streams.
+type agentEventMsg struct {
+	event agent.AgentEvent
+	gen   int
+}
 
-type streamDoneMsg struct{}
+// streamDoneMsg signals that a stream's event channel has closed.
+// The generation is checked to avoid acting on a previous stream's close.
+type streamDoneMsg struct {
+	gen int
+}
 
 // mcpStatusMsg carries an async status message from MCP connect/reconnect operations
 // to be displayed in the chat view from within the TUI update loop.

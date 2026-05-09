@@ -57,6 +57,9 @@ var commands = []Command{
 		Name:        "/new",
 		Description: "Start new conversation",
 		handler: func(m *Model) tea.Cmd {
+			m.pendingQueue = nil
+			m.chatview.RemovePendingItems()
+			m.statusbar.SetPendingCount(0)
 			m.history = nil
 			m.chatview.Clear()
 			m.agent.ClearSession()
