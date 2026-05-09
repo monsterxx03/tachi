@@ -130,6 +130,8 @@ cmd.Dir = wdctx.Dir(ctx) // 替代 getWorkingDir()
 
 **全局变量保留**：`SetWorkingDir` / `getWorkingDir` 不删除，`wdctx.Dir` 在其 fallback 路径中调用 `getWorkingDir()`，确保向后兼容。
 
+**Worktree 模式下的 `cd` 语义**：当 context 中已设置 worktree 路径时，`wdctx.Dir(ctx)` 始终返回该固定值，不受 Bash `cd` 命令影响。这意味着 SubAgent 每次 Bash 调用都从 worktree root 开始执行。跨调用的目录切换需使用 `cd <dir> && <cmd>` 组合写法。这是有意为之的设计——避免并行 SubAgent 通过全局 `SetWorkingDir` 互相干扰。
+
 ### 3.3 文件工具的目录语义
 
 | 工具 | 受 worktree 影响？ | 说明 |
@@ -271,9 +273,58 @@ func (wm *WorktreeManager) Create(
       自动 git fetch origin <branch> 确保分支存在）
 2. ctx = wdctx.WithDir(ctx, worktreePath)
 3. result, err = fn(ctx, worktreePath)
-4. if cleanup: git worktree remove --force <worktreePath>
-5. return result, err
+4. patch = collectPatch(worktreePath)  // 新增：收集变更 patch
+5. if cleanup: git worktree remove --force <worktreePath>
+6. return result + patch, err
 ```
+
+**变更收集（Patch 输出）**：回调执行完毕、cleanup 之前，自动检测 worktree 中的文件变更并生成 patch：
+
+```go
+// collectPatch 在 worktree 中检测改动并生成统一 diff
+func (wm *WorktreeManager) collectPatch(worktreePath string) string {
+    // 1. git add -A（确保 untracked 文件也被 diff 捕获）
+    // 2. git diff --cached --stat（快速检查是否有改动）
+    // 3. 无改动 → 返回空字符串
+    // 4. 有改动 → git diff --cached（生成完整 unified diff）
+    // 5. 如果 patch 超过 maxPatchSize（默认 32KB）→ 截断 + 追加摘要
+    //    "... patch truncated (total: 128KB). Use worktree_cleanup=false to inspect."
+    // 6. 包裹为结构化输出:
+    //    "\n\n---\n[WORKTREE_PATCH]\n<patch content>\n[/WORKTREE_PATCH]"
+    return patchBlock
+}
+```
+
+**Patch 输出格式**：
+
+```
+<子 agent 的文本返回>
+
+---
+[WORKTREE_PATCH]
+diff --git a/main.go b/main.go
+index 1234567..abcdefg 100644
+--- a/main.go
++++ b/main.go
+@@ -10,3 +10,5 @@
+ func main() {
++    fmt.Println("hello")
+ }
+[/WORKTREE_PATCH]
+```
+
+**主 agent 消费 Patch 的方式**：
+
+- Patch 作为 SubAgent tool 返回值的一部分传回主 agent 的 conversation context
+- 主 agent 可通过 Bash 执行 `git apply` 将 patch 应用到主工作区
+- 或主 agent 读取 patch 内容后使用 EditFile 精确修改文件
+- **不做自动 apply** —— 让主 agent（或用户）决定是否采纳
+
+**为什么不自动 apply？**
+
+1. 主 agent 可能只需要 patch 中的部分改动
+2. 主工作区可能已经有变更，需要人工决策冲突
+3. 保持 SubAgent 的纯"建议"语义，主 agent 保留控制权
 
 **分支检查与获取**：如果指定分支在本地不存在，自动执行 `git fetch origin <branch>:<branch>` 拉取远程分支。
 
@@ -415,7 +466,9 @@ working tree unless you push or create a PR from this branch.
 - You are on branch <branch> (or detached HEAD). You can commit, push, and
   create branches as needed without affecting the main worktree.
 - When done, the worktree will be automatically cleaned up.
-- If you need to persist changes, push to remote or mention what to apply.
+- Any file modifications you make will be automatically collected as a patch
+  and returned to the parent agent. You do NOT need to output diffs manually.
+- If you need to persist changes beyond the patch, push to remote.
 - IMPORTANT: In detached HEAD mode, commits not attached to a branch will be
   garbage collected after ~28 days. Always push or create a branch to persist.
 ```
@@ -484,6 +537,10 @@ working tree unless you push or create a PR from this branch.
 | `WorktreeManager.Create` + cleanup=false | worktree 保留不删除 |
 | `WorktreeManager.Create` + 回调报错 | worktree 仍然被清理 |
 | `WorktreeManager.Create` + git add 失败 | 降级到共享目录，返回结果正常 |
+| `collectPatch` 无改动 | 返回空字符串，不追加 patch block |
+| `collectPatch` 有改动 | 返回 `[WORKTREE_PATCH]...[/WORKTREE_PATCH]` 格式 |
+| `collectPatch` 超大 patch | 截断到 maxPatchSize + 追加摘要信息 |
+| `collectPatch` 含 untracked 文件 | `git add -A` 后 untracked 也被收入 patch |
 | `WorktreeManager.Create` 并发 + 同分支 | 2 个 goroutine 指定相同 branch，均 `--detach` 成功互不冲突 |
 | `WorktreeManager.Create` 并发 + 不同分支 | 2 个 goroutine 各自独立 worktree + 互不影响 |
 | 分支优先级解析 | `args.WorktreeBranch` > `config.WorktreeBranch` > detached |
