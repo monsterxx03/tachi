@@ -49,17 +49,17 @@ const (
 //
 // Navigation model (three levels):
 //   1. Server list    — ↑↓ to select, Enter → enter tool list
-//   2. Tool list      — ↑↓ to select, Enter → open detail, Esc → back to servers
-//   3. Tool detail    — shows full description + parameter table, Esc → back to tool list
+//   2. Tool list      — ↑↓/jk to scroll, Enter → open detail for highlighted tool, Esc → back to servers
+//   3. Tool detail    — ↑↓/jk to scroll full description + parameters, Esc → back to tool list
 type MCPView struct {
 	servers  []MCPServerItem
 	selIdx   int
 
-	// Tool list state
-	focusOnTools     bool // true when cursor is in the tool list (not server list)
-	toolSelIdx       int  // selected tool index within the current server
-	toolScroll       int  // scroll offset for tool list / detail
+	// Tool panel state
+	focusOnTools      bool // true when in tool list or detail (not server list)
 	showingToolDetail bool // true when Enter was pressed on a tool to show its detail panel
+	detailToolIdx     int  // which tool's detail is being shown (only meaningful when showingToolDetail)
+	toolScroll        int  // scroll offset: in tool list = index of first visible tool; in detail = line offset
 
 	width  int
 	height int
@@ -80,7 +80,7 @@ func (v *MCPView) SetServers(items []MCPServerItem) {
 		v.selIdx = 0
 	}
 	v.focusOnTools = false
-	v.toolSelIdx = 0
+	v.detailToolIdx = 0
 	v.toolScroll = 0
 	v.showingToolDetail = false
 }
@@ -89,36 +89,6 @@ func (v *MCPView) SetServers(items []MCPServerItem) {
 func (v *MCPView) SetSize(w, h int) {
 	v.width = w
 	v.height = h
-}
-
-// CursorUp moves selection up at the current focus level.
-func (v *MCPView) CursorUp() {
-	if v.focusOnTools {
-		sel := v.SelectedServerItem()
-		if sel != nil && v.toolSelIdx > 0 {
-			v.toolSelIdx--
-		}
-	} else {
-		if v.selIdx > 0 {
-			v.selIdx--
-		}
-	}
-	v.toolScroll = 0
-}
-
-// CursorDown moves selection down at the current focus level.
-func (v *MCPView) CursorDown() {
-	if v.focusOnTools {
-		sel := v.SelectedServerItem()
-		if sel != nil && v.toolSelIdx < len(sel.Tools)-1 {
-			v.toolSelIdx++
-		}
-	} else {
-		if v.selIdx < len(v.servers)-1 {
-			v.selIdx++
-		}
-	}
-	v.toolScroll = 0
 }
 
 // SelectedServer returns the name of the currently highlighted server.
@@ -137,13 +107,16 @@ func (v *MCPView) SelectedServerItem() *MCPServerItem {
 	return &v.servers[v.selIdx]
 }
 
-// focusedTool returns the currently selected tool within the current server, or nil.
+// focusedTool returns the tool currently shown in detail, or nil.
 func (v *MCPView) focusedTool() *MCPToolItem {
 	sel := v.SelectedServerItem()
-	if sel == nil || v.toolSelIdx < 0 || v.toolSelIdx >= len(sel.Tools) {
+	if sel == nil || !v.showingToolDetail {
 		return nil
 	}
-	return &sel.Tools[v.toolSelIdx]
+	if v.detailToolIdx < 0 || v.detailToolIdx >= len(sel.Tools) {
+		return nil
+	}
+	return &sel.Tools[v.detailToolIdx]
 }
 
 // SetMessage displays a one-shot message at the bottom of the overlay.
@@ -157,22 +130,33 @@ func (v *MCPView) HandleKey(key string) MCPAction {
 
 	switch key {
 	case "up", "k":
-		v.CursorUp()
+		if v.showingToolDetail || v.focusOnTools {
+			if v.toolScroll > 0 {
+				v.toolScroll--
+			}
+		} else if v.selIdx > 0 {
+			v.selIdx--
+		}
 	case "down", "j":
-		v.CursorDown()
+		if v.showingToolDetail || v.focusOnTools {
+			v.toolScroll++
+		} else if v.selIdx < len(v.servers)-1 {
+			v.selIdx++
+		}
 	case "enter":
 		sel := v.SelectedServerItem()
 		if v.showingToolDetail {
-			// Already viewing tool detail — nothing more to open
+			// Nothing — already viewing detail
 		} else if v.focusOnTools {
-			// In tool list, viewing selected tool → open detail
-			if v.toolSelIdx >= 0 && sel != nil && v.toolSelIdx < len(sel.Tools) {
+			// Open detail for the tool at current scroll position
+			if sel != nil && v.toolScroll >= 0 && v.toolScroll < len(sel.Tools) {
+				v.detailToolIdx = v.toolScroll
 				v.showingToolDetail = true
+				v.toolScroll = 0
 			}
 		} else if sel != nil && len(sel.Tools) > 0 {
-			// In server list → enter tool list
+			// Enter tool list
 			v.focusOnTools = true
-			v.toolSelIdx = 0
 			v.toolScroll = 0
 		}
 	case "t":
@@ -181,18 +165,12 @@ func (v *MCPView) HandleKey(key string) MCPAction {
 		v.needAction = MCPActionReconnect
 	case "a":
 		v.needAction = MCPActionAuth
-	case "pgup", "ctrl+u":
-		if v.toolScroll > 0 {
-			v.toolScroll--
-		}
-	case "pgdown", "ctrl+d":
-		v.toolScroll++
 	case "esc", "q":
 		if v.showingToolDetail {
 			v.showingToolDetail = false
+			v.toolScroll = v.detailToolIdx
 		} else if v.focusOnTools {
 			v.focusOnTools = false
-			v.toolSelIdx = 0
 			v.toolScroll = 0
 		} else {
 			v.needAction = MCPActionDismiss
@@ -218,9 +196,9 @@ func (v *MCPView) View() string {
 	b.WriteString(mcpOverlayTitle.Render("MCP Servers"))
 	b.WriteString("  ")
 	if v.showingToolDetail {
-		b.WriteString(mcpOverlayHint.Render("↑↓ tool  Esc back  t/r/a ops"))
+		b.WriteString(mcpOverlayHint.Render("↑↓/jk scroll  Esc back  t/r/a ops"))
 	} else if v.focusOnTools {
-		b.WriteString(mcpOverlayHint.Render("↑↓ tool  Enter detail  Esc back  t/r/a ops"))
+		b.WriteString(mcpOverlayHint.Render("↑↓/jk scroll  Enter detail  Esc back  t/r/a ops"))
 	} else {
 		b.WriteString(mcpOverlayHint.Render("↑↓ nav  Enter tools  t toggle  r reconnect  a auth  Esc close"))
 	}
@@ -260,8 +238,8 @@ func (v *MCPView) View() string {
 		b.WriteString(mcpToolHeader.Render(fmt.Sprintf("── %s tools ──", sel.Name)))
 		b.WriteString("\n")
 
-		if v.showingToolDetail && v.toolSelIdx >= 0 && v.toolSelIdx < len(sel.Tools) {
-			v.renderToolDetail(&b, &sel.Tools[v.toolSelIdx])
+		if v.showingToolDetail && v.detailToolIdx >= 0 && v.detailToolIdx < len(sel.Tools) {
+			v.renderToolDetail(&b, &sel.Tools[v.detailToolIdx], toolArea)
 		} else if v.focusOnTools {
 			v.renderToolList(&b, sel.Tools, toolArea, true) // interactive — show cursor
 		} else {
@@ -382,7 +360,7 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 		descStyled := dimStyle.Render(desc)
 
 		cursor := " "
-		if interactive && i == v.toolSelIdx {
+		if interactive && i == v.toolScroll {
 			cursor = "▶"
 		}
 
@@ -391,7 +369,7 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 			strings.Repeat(" ", gap) +
 			descStyled
 
-		if interactive && i == v.toolSelIdx {
+		if interactive && i == v.toolScroll {
 			line = mcpServerSelected.Render(line)
 		}
 
@@ -421,44 +399,35 @@ func padRight(s string, targetW int) string {
 	return s + strings.Repeat(" ", targetW-w)
 }
 
-// renderToolDetail renders full description + parameter table for one tool.
-func (v *MCPView) renderToolDetail(b *strings.Builder, t *MCPToolItem) {
-	// Available text width inside border+padding:
-	//   border = 2 chars, padding = 2×2 = 4 chars → overhead = 6
-	//   Each line has "  " prefix = 2 chars
-	//   → wrapWidth = v.width - 8
+// renderToolDetail renders full description + parameter table for one tool
+// into a line slice. The caller applies scroll + maxLines to show the visible portion.
+func (v *MCPView) renderToolDetail(b *strings.Builder, t *MCPToolItem, maxLines int) {
+	// Build all lines into a slice controlled by toolScroll
+	var lines []string
+
+	// Available text width inside border+padding
 	wrapWidth := v.width - 8
 	if wrapWidth < 20 {
 		wrapWidth = 20
 	}
 
 	// Tool name
-	b.WriteString(mcpDetailFieldName.Render(fmt.Sprintf("  %s", t.Name)))
-	b.WriteString("\n")
-	b.WriteString("  ")
-	b.WriteString(strings.Repeat("─", wrapWidth))
-	b.WriteString("\n")
+	lines = append(lines, mcpDetailFieldName.Render(fmt.Sprintf("  %s", t.Name)))
+	lines = append(lines, "  "+strings.Repeat("─", wrapWidth))
 
-	// Full description — preserve original text, just word-wrap
+	// Full description
 	desc := strings.TrimSpace(t.Description)
 	for _, line := range wrapLines(desc, wrapWidth) {
-		b.WriteString("  ")
-		b.WriteString(mcpDetailFieldDesc.Render(line))
-		b.WriteString("\n")
+		lines = append(lines, "  "+mcpDetailFieldDesc.Render(line))
 	}
-	b.WriteString("\n")
+	lines = append(lines, "")
 
 	// Parameter table
 	if len(t.Parameters) > 0 {
-		b.WriteString("  ")
-		b.WriteString(mcpDetailColHeader.Render("Parameters"))
-		b.WriteString("\n")
-		b.WriteString("  ")
-		b.WriteString(strings.Repeat("─", wrapWidth))
-		b.WriteString("\n")
+		lines = append(lines, "  "+mcpDetailColHeader.Render("Parameters"))
+		lines = append(lines, "  "+strings.Repeat("─", wrapWidth))
 
 		for _, p := range t.Parameters {
-			// Parameter name + type + required
 			req := ""
 			if p.Required {
 				req = " " + mcpStatusOK.Render("required")
@@ -469,20 +438,36 @@ func (v *MCPView) renderToolDetail(b *strings.Builder, t *MCPToolItem) {
 				mcpDetailFieldName.Render(p.Name),
 				mcpDetailFieldType.Render(p.Type),
 				req)
-			b.WriteString(header)
-			b.WriteString("\n")
+			lines = append(lines, header)
 
-			// Parameter description — full text, wrapped with indent
 			if p.Description != "" {
 				pDesc := strings.TrimSpace(p.Description)
-				for _, line := range wrapLines(pDesc, wrapWidth-2) { // -2 for extra indent
-					b.WriteString("    ") // 4-space indent under param name
-					b.WriteString(mcpDetailFieldDesc.Render(line))
-					b.WriteString("\n")
+				for _, line := range wrapLines(pDesc, wrapWidth-2) {
+					lines = append(lines, "    "+mcpDetailFieldDesc.Render(line))
 				}
 			}
-			b.WriteString("\n")
+			lines = append(lines, "")
 		}
+	}
+
+	// Clamp scroll
+	if v.toolScroll >= len(lines) {
+		v.toolScroll = len(lines) - 1
+	}
+	if v.toolScroll < 0 {
+		v.toolScroll = 0
+	}
+
+	// Output only the visible slice
+	shown := 0
+	for i := v.toolScroll; i < len(lines) && shown < maxLines; i++ {
+		b.WriteString(lines[i])
+		b.WriteString("\n")
+		shown++
+	}
+	for shown < maxLines {
+		b.WriteString("\n")
+		shown++
 	}
 }
 
