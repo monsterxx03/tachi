@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/systemreminder"
-	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -145,7 +144,7 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 
 	a := newTestAgent(mp)
 	// Register a simple Bash-like tool that returns fixed output
-	a.RegisterTool(&echoTool{})
+	a.RegisterTool(echoStub())
 
 	ch := a.RunConversationStream(context.Background(), nil, "run echo", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -176,7 +175,7 @@ func TestAgentLoop_MultipleTurns(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&echoTool{})
+	a.RegisterTool(echoStub())
 
 	ch := a.RunConversationStream(context.Background(), nil, "do work", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -186,24 +185,25 @@ func TestAgentLoop_MultipleTurns(t *testing.T) {
 	assert.Equal(t, "stop", result.ExitReason)
 }
 
-// ---- echoTool: a minimal tool for testing ----
+// ---- Helper stubs ----
 
-type echoTool struct{}
-
-func (e *echoTool) Name() string                                  { return "Bash" }
-func (e *echoTool) Description() string                           { return "Run a command" }
-func (e *echoTool) Properties() map[string]agenttools.PropertySchema { return nil }
-func (e *echoTool) Required() []string                            { return nil }
-func (e *echoTool) Parallel() bool                                { return true }
-func (e *echoTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	var m map[string]interface{}
-	if err := json.Unmarshal([]byte(args), &m); err != nil {
-		return "", err
+// echoStub returns a Bash tool that parses JSON args and echoes back the command.
+func echoStub() *stubTool {
+	return &stubTool{
+		name:     "Bash",
+		desc:     "Run a command",
+		parallel: true,
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			var m map[string]interface{}
+			if err := json.Unmarshal([]byte(args), &m); err != nil {
+				return "", err
+			}
+			if cmd, ok := m["command"]; ok {
+				return fmt.Sprintf("executed: %s", cmd), nil
+			}
+			return "executed", nil
+		},
 	}
-	if cmd, ok := m["command"]; ok {
-		return fmt.Sprintf("executed: %s", cmd), nil
-	}
-	return "executed", nil
 }
 
 // ---- Tests: IterationBudget ----
@@ -241,7 +241,21 @@ func TestAgentLoop_IterationBudgetExhausted(t *testing.T) {
 
 	a := newTestAgent(mp)
 	a.maxIterations = 2 // only 2 iterations allowed
-	a.RegisterTool(&echoTool{})
+	a.RegisterTool(&stubTool{
+		name:     "Bash",
+		desc:     "Run a command",
+		parallel: true,
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			var m map[string]interface{}
+			if err := json.Unmarshal([]byte(args), &m); err != nil {
+				return "", err
+			}
+			if cmd, ok := m["command"]; ok {
+				return fmt.Sprintf("executed: %s", cmd), nil
+			}
+			return "executed", nil
+		},
+	})
 
 	ch := a.RunConversationStream(context.Background(), nil, "do a lot", "", llm.ChatOptions{MaxTokens: 4096})
 

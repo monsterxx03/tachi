@@ -2,10 +2,10 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"testing"
 
-	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -37,47 +37,44 @@ func multiToolCallSeq(calls ...struct{ Name, ID, Args string }) []llm.StreamEven
 	return events
 }
 
-// ---- Mock tools for parallel testing ----
+// ---- Stub helpers ----
 
-// slowTool introduces a small delay to verify parallelism.
-type slowTool struct {
-	name string
-	done chan struct{} // signaled when ExecuteContext is called
-}
-
-func (s *slowTool) Name() string                                    { return s.name }
-func (s *slowTool) Description() string                             { return "slow tool" }
-func (s *slowTool) Properties() map[string]agenttools.PropertySchema { return nil }
-func (s *slowTool) Required() []string                              { return nil }
-func (s *slowTool) Parallel() bool                                  { return true }
-func (s *slowTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	if s.done != nil {
-		close(s.done)
+// errorStub returns a Tool that always errors.
+func errorStub() *stubTool {
+	return &stubTool{
+		name:     "ErrorTool",
+		desc:     "Always errors",
+		parallel: true,
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			var m map[string]interface{}
+			json.Unmarshal([]byte(args), &m)
+			if msg, ok := m["msg"]; ok {
+				return "", fmt.Errorf("%s", msg)
+			}
+			return "", fmt.Errorf("error")
+		},
 	}
-	return fmt.Sprintf("%s:done", s.name), nil
 }
 
-// seqTool is a non-parallel tool for testing mixed grouping.
-type seqTool struct {
-	name string
+func slowStub(name string) *stubTool {
+	return &stubTool{name: name, parallel: true, executeFn: func(ctx context.Context, args string) (string, error) {
+		return name + ":done", nil
+	}}
 }
 
-func (s *seqTool) Name() string                                    { return s.name }
-func (s *seqTool) Description() string                             { return "sequential tool" }
-func (s *seqTool) Properties() map[string]agenttools.PropertySchema { return nil }
-func (s *seqTool) Required() []string                              { return nil }
-func (s *seqTool) Parallel() bool                                  { return false }
-func (s *seqTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	return fmt.Sprintf("%s:done", s.name), nil
+func seqStub(name string) *stubTool {
+	return &stubTool{name: name, parallel: false, executeFn: func(ctx context.Context, args string) (string, error) {
+		return name + ":done", nil
+	}}
 }
 
 // ---- groupToolCalls Tests ----
 
 func TestGroupToolCalls_AllParallel(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&slowTool{name: "Read"})
-	a.RegisterTool(&slowTool{name: "Grep"})
-	a.RegisterTool(&slowTool{name: "Glob"})
+	a.RegisterTool(slowStub("Read"))
+	a.RegisterTool(slowStub("Grep"))
+	a.RegisterTool(slowStub("Glob"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Read", Arguments: `{"path":"a"}`}},
@@ -93,8 +90,8 @@ func TestGroupToolCalls_AllParallel(t *testing.T) {
 
 func TestGroupToolCalls_AllSequential(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&seqTool{name: "EditFile"})
-	a.RegisterTool(&seqTool{name: "Bash"})
+	a.RegisterTool(seqStub("EditFile"))
+	a.RegisterTool(seqStub("Bash"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "EditFile", Arguments: "{}"}},
@@ -111,10 +108,10 @@ func TestGroupToolCalls_AllSequential(t *testing.T) {
 
 func TestGroupToolCalls_Mixed(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&slowTool{name: "Read"})
-	a.RegisterTool(&slowTool{name: "Grep"})
-	a.RegisterTool(&seqTool{name: "EditFile"})
-	a.RegisterTool(&slowTool{name: "Glob"})
+	a.RegisterTool(slowStub("Read"))
+	a.RegisterTool(slowStub("Grep"))
+	a.RegisterTool(seqStub("EditFile"))
+	a.RegisterTool(slowStub("Glob"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Read", Arguments: "{}"}},
@@ -154,7 +151,7 @@ func TestGroupToolCalls_Empty(t *testing.T) {
 
 func TestGroupToolCalls_SingleParallel(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&slowTool{name: "Read"})
+	a.RegisterTool(slowStub("Read"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Read", Arguments: "{}"}},
@@ -170,9 +167,9 @@ func TestGroupToolCalls_SingleParallel(t *testing.T) {
 
 func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&slowTool{name: "Read"})
-	a.RegisterTool(&slowTool{name: "Grep"})
-	a.RegisterTool(&slowTool{name: "Glob"})
+	a.RegisterTool(slowStub("Read"))
+	a.RegisterTool(slowStub("Grep"))
+	a.RegisterTool(slowStub("Glob"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Read", Arguments: `{"path":"a"}`}},
@@ -211,9 +208,9 @@ func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
 
 func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&slowTool{name: "Read"})
-	a.RegisterTool(&seqTool{name: "EditFile"})
-	a.RegisterTool(&slowTool{name: "Glob"})
+	a.RegisterTool(slowStub("Read"))
+	a.RegisterTool(seqStub("EditFile"))
+	a.RegisterTool(slowStub("Glob"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Read", Arguments: "{}"}},
@@ -239,9 +236,9 @@ func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
 func TestExecuteToolCalls_ResultOrderPreserved(t *testing.T) {
 	// Even though tools run concurrently, results must be in call order.
 	a := newTestAgent(nil)
-	a.RegisterTool(&slowTool{name: "ToolA"})
-	a.RegisterTool(&slowTool{name: "ToolB"})
-	a.RegisterTool(&slowTool{name: "ToolC"})
+	a.RegisterTool(slowStub("ToolA"))
+	a.RegisterTool(slowStub("ToolB"))
+	a.RegisterTool(slowStub("ToolC"))
 
 	toolCalls := []llm.ToolCall{
 		{ID: "a", Type: "function", Function: llm.ToolCallFunction{Name: "ToolA", Arguments: "{}"}},
@@ -276,9 +273,9 @@ func TestAgentLoop_ParallelToolCalls(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&slowTool{name: "ToolA"})
-	a.RegisterTool(&slowTool{name: "ToolB"})
-	a.RegisterTool(&slowTool{name: "ToolC"})
+	a.RegisterTool(slowStub("ToolA"))
+	a.RegisterTool(slowStub("ToolB"))
+	a.RegisterTool(slowStub("ToolC"))
 
 	ch := a.RunConversationStream(context.Background(), nil, "run three in parallel", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -320,10 +317,10 @@ func TestAgentLoop_MixedToolGroup(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&slowTool{name: "Read"})
-	a.RegisterTool(&slowTool{name: "Grep"})
-	a.RegisterTool(&seqTool{name: "EditFile"})
-	a.RegisterTool(&slowTool{name: "Glob"})
+	a.RegisterTool(slowStub("Read"))
+	a.RegisterTool(slowStub("Grep"))
+	a.RegisterTool(seqStub("EditFile"))
+	a.RegisterTool(slowStub("Glob"))
 
 	ch := a.RunConversationStream(context.Background(), nil, "mixed tools", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -348,9 +345,9 @@ func TestAgentLoop_ParallelToolError(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&slowTool{name: "ToolA"})
-	a.RegisterTool(&errorTool{})
-	a.RegisterTool(&slowTool{name: "ToolC"})
+	a.RegisterTool(slowStub("ToolA"))
+	a.RegisterTool(errorStub())
+	a.RegisterTool(slowStub("ToolC"))
 
 	ch := a.RunConversationStream(context.Background(), nil, "do parallel with one error", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -384,7 +381,7 @@ func TestAgentLoop_SingleParallelTool(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&slowTool{name: "ToolA"})
+	a.RegisterTool(slowStub("ToolA"))
 
 	ch := a.RunConversationStream(context.Background(), nil, "single tool", "", llm.ChatOptions{MaxTokens: 4096})
 

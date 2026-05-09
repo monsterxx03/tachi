@@ -91,7 +91,7 @@ func TestRunConversation_AutoConfirmsTool(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&echoTool{})
+	a.RegisterTool(echoStub())
 	result := a.RunConversation(context.Background(), "run a command", "", llm.ChatOptions{MaxTokens: 4096})
 
 	require.NotNil(t, result)
@@ -118,7 +118,19 @@ func TestExecuteToolCalls_UnknownTool(t *testing.T) {
 
 func TestExecuteToolCalls_ToolError(t *testing.T) {
 	a := newTestAgent(nil)
-	a.RegisterTool(&errorTool{})
+	a.RegisterTool(&stubTool{
+		name:     "ErrorTool",
+		desc:     "Always errors",
+		parallel: true,
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			var m map[string]interface{}
+			json.Unmarshal([]byte(args), &m)
+			if msg, ok := m["msg"]; ok {
+				return "", fmt.Errorf("%s", msg)
+			}
+			return "", fmt.Errorf("error")
+		},
+	})
 
 	toolCalls := []llm.ToolCall{
 		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "ErrorTool", Arguments: `{"msg":"fail"}`}},
@@ -141,23 +153,6 @@ func TestExecuteToolCalls_ToolError(t *testing.T) {
 	}
 	require.Len(t, toolResults, 1)
 	assert.True(t, toolResults[0].ToolIsError)
-}
-
-// errorTool always returns an error.
-type errorTool struct{}
-
-func (e *errorTool) Name() string                                   { return "ErrorTool" }
-func (e *errorTool) Description() string                            { return "Always errors" }
-func (e *errorTool) Properties() map[string]agenttools.PropertySchema  { return nil }
-func (e *errorTool) Required() []string                             { return nil }
-func (e *errorTool) Parallel() bool                                 { return true }
-func (e *errorTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	var m map[string]interface{}
-	json.Unmarshal([]byte(args), &m)
-	if msg, ok := m["msg"]; ok {
-		return "", fmt.Errorf("%s", msg)
-	}
-	return "", fmt.Errorf("error")
 }
 
 // ---- Tests: handleFinishReason via the agent loop ----
@@ -217,19 +212,19 @@ func TestAgentLoop_MaxTokensThenStop(t *testing.T) {
 
 // ---- Tests: ConfirmationTool integration via agent loop ----
 
-type confirmTool struct{}
-
-func (c *confirmTool) Name() string                                    { return "EditFile" }
-func (c *confirmTool) Description() string                             { return "Edit a file" }
-func (c *confirmTool) Properties() map[string]agenttools.PropertySchema  { return nil }
-func (c *confirmTool) Required() []string                              { return nil }
-func (c *confirmTool) Parallel() bool                                  { return false }
-func (c *confirmTool) NeedsConfirmation() bool                         { return true }
-func (c *confirmTool) GetDiff(ctx context.Context, args string) (string, error) { return "diff preview", nil }
-func (c *confirmTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	var m map[string]interface{}
-	json.Unmarshal([]byte(args), &m)
-	return fmt.Sprintf("edited %v", m["path"]), nil
+func confirmStub() *stubTool {
+	return &stubTool{
+		name:         "EditFile",
+		desc:         "Edit a file",
+		parallel:     false,
+		needsConfirm: true,
+		diffFn:       func(ctx context.Context, args string) (string, error) { return "diff preview", nil },
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			var m map[string]interface{}
+			json.Unmarshal([]byte(args), &m)
+			return fmt.Sprintf("edited %v", m["path"]), nil
+		},
+	}
 }
 
 func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
@@ -243,7 +238,7 @@ func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
 
 	a := newTestAgent(mp)
 	a.SetSkipEditConfirm(false) // require confirmation
-	a.RegisterTool(&confirmTool{})
+	a.RegisterTool(confirmStub())
 
 	ch := a.RunConversationStream(context.Background(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -271,7 +266,7 @@ func TestAgentLoop_ConfirmationToolDenied(t *testing.T) {
 
 	a := newTestAgent(mp)
 	a.SetSkipEditConfirm(false)
-	a.RegisterTool(&confirmTool{})
+	a.RegisterTool(confirmStub())
 
 	ch := a.RunConversationStream(context.Background(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -336,23 +331,23 @@ func TestAgentLoop_SessionRecording(t *testing.T) {
 
 // ---- Tests: AskUserQuestion via agent loop ----
 
-type askUserTestTool struct{}
-
-func (au *askUserTestTool) Name() string        { return agenttools.ToolNameAskUser }
-func (au *askUserTestTool) Description() string { return "Ask user" }
-func (au *askUserTestTool) Properties() map[string]agenttools.PropertySchema {
-	return map[string]agenttools.PropertySchema{
-		"questions": {Type: "array", Description: "Questions to ask"},
-	}
-}
-func (au *askUserTestTool) Required() []string { return []string{"questions"} }
-func (au *askUserTestTool) Parallel() bool     { return false }
-func (au *askUserTestTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	return "", &agenttools.AskUserQuestionError{
-		ToolName: agenttools.ToolNameAskUser,
-		Args:     args,
-		Questions: []agenttools.Question{
-			{Question: "What?", Header: "Q", Options: []agenttools.QuestionOption{{Label: "A", Description: "Desc"}}, MultiSelect: false},
+func askUserStub() *stubTool {
+	return &stubTool{
+		name: agenttools.ToolNameAskUser,
+		desc: "Ask user",
+		props: map[string]agenttools.PropertySchema{
+			"questions": {Type: "array", Description: "Questions to ask"},
+		},
+		required: []string{"questions"},
+		parallel: false,
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			return "", &agenttools.AskUserQuestionError{
+				ToolName: agenttools.ToolNameAskUser,
+				Args:     args,
+				Questions: []agenttools.Question{
+					{Question: "What?", Header: "Q", Options: []agenttools.QuestionOption{{Label: "A", Description: "Desc"}}, MultiSelect: false},
+				},
+			}
 		},
 	}
 }
@@ -367,7 +362,7 @@ func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.RegisterTool(&askUserTestTool{})
+	a.RegisterTool(askUserStub())
 
 	ch := a.RunConversationStream(context.Background(), nil, "ask me", "", llm.ChatOptions{MaxTokens: 4096})
 
