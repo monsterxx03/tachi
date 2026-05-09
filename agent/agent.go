@@ -305,7 +305,7 @@ func (a *AIAgent) recordSession(msg *session.Message) {
 }
 
 func (a *AIAgent) RegisterTools() {
-	a.toolRegistry.Register(tools.ReadTool{})
+	a.toolRegistry.Register(tools.NewReadTool())
 	a.toolRegistry.Register(tools.WriteTool{})
 	a.toolRegistry.Register(tools.EditTool{})
 	a.toolRegistry.Register(tools.GlobTool{})

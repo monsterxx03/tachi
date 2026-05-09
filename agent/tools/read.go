@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
+	"time"
 )
 
 const maxFileSize = 256 * 1024 // 256KB
@@ -15,22 +17,37 @@ func ErrFileTooLarge(actualSize, limitSize int64) error {
 	return fmt.Errorf("file too large: %d bytes (limit: %d bytes)", actualSize, limitSize)
 }
 
-// ReadTool reads the contents of a file
-type ReadTool struct{}
+type cachedEntry struct {
+	mtime time.Time
+	size  int64
+}
 
-func (t ReadTool) Name() string        { return "ReadFile" }
-func (t ReadTool) Description() string { return "Read the contents of a file" }
-func (t ReadTool) Properties() map[string]PropertySchema {
+// ReadTool reads the contents of a file
+type ReadTool struct {
+	mu    sync.RWMutex
+	cache map[string]cachedEntry
+}
+
+// NewReadTool creates a ReadTool with initialized cache state.
+func NewReadTool() *ReadTool {
+	return &ReadTool{
+		cache: make(map[string]cachedEntry),
+	}
+}
+
+func (t *ReadTool) Name() string        { return "ReadFile" }
+func (t *ReadTool) Description() string { return "Read the contents of a file" }
+func (t *ReadTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":   {Type: "string", Description: "The path to the file to read"},
 		"offset": {Type: "number", Description: "Line number to start reading from (1-indexed, default: 1)"},
 		"limit":  {Type: "number", Description: "Number of lines to read (default: all lines from offset)"},
 	}
 }
-func (t ReadTool) Required() []string { return []string{"path"} }
-func (t ReadTool) Parallel() bool     { return true }
+func (t *ReadTool) Required() []string { return []string{"path"} }
+func (t *ReadTool) Parallel() bool     { return true }
 
-func (t ReadTool) ExecuteContext(ctx context.Context, args string) (string, error) {
+func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var argsMap struct {
 		Path   string `json:"path"`
 		Offset int    `json:"offset"`
@@ -52,6 +69,17 @@ func (t ReadTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	if info.Size() > maxFileSize {
 		return "", ErrFileTooLarge(info.Size(), maxFileSize)
 	}
+
+	// Check cache: if the file hasn't changed since last read, return a short hint
+	key := readCacheKey(argsMap.Path, argsMap.Offset, argsMap.Limit)
+	t.mu.RLock()
+	if cached, ok := t.cache[key]; ok {
+		if cached.mtime.Equal(info.ModTime()) && cached.size == info.Size() {
+			t.mu.RUnlock()
+			return formatCacheHit(info.ModTime()), nil
+		}
+	}
+	t.mu.RUnlock()
 
 	content, err := os.ReadFile(argsMap.Path)
 	if err != nil {
@@ -82,7 +110,30 @@ func (t ReadTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		end = len(lines)
 	}
 
-	return strings.Join(lines[start:end], "\n"), nil
+	result := strings.Join(lines[start:end], "\n")
+
+	// Update cache
+	t.mu.Lock()
+	t.cache[key] = cachedEntry{
+		mtime: info.ModTime(),
+		size:  info.Size(),
+	}
+	t.mu.Unlock()
+
+	return result, nil
+}
+
+func readCacheKey(path string, offset, limit int) string {
+	return fmt.Sprintf("%s|%d|%d", path, offset, limit)
+}
+
+func formatCacheHit(mtime time.Time) string {
+	return fmt.Sprintf(
+		"[File unchanged since last read (mtime: %s). "+
+			"The content is identical to your earlier ReadFile result for this path. "+
+			"Please refer to your previous tool call output.]",
+		mtime.Format("2006-01-02T15:04:05-07:00"),
+	)
 }
 
 var blockedDevicePaths = map[string]bool{

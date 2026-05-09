@@ -4,11 +4,13 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 )
 
 func TestReadTool(t *testing.T) {
-	tool := ReadTool{}
+	tool := NewReadTool()
 
 	// Create a test file
 	content := "Hello, World!"
@@ -29,7 +31,7 @@ func TestReadTool(t *testing.T) {
 }
 
 func TestReadToolNotFound(t *testing.T) {
-	tool := ReadTool{}
+	tool := NewReadTool()
 	_, err := tool.ExecuteContext(nil,`{"path": "/nonexistent/file.txt"}`)
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
@@ -37,7 +39,7 @@ func TestReadToolNotFound(t *testing.T) {
 }
 
 func TestReadToolWithOffsetAndLimit(t *testing.T) {
-	tool := ReadTool{}
+	tool := NewReadTool()
 
 	// Create a test file with 10 lines
 	var lines []string
@@ -91,7 +93,7 @@ func TestReadToolWithOffsetAndLimit(t *testing.T) {
 }
 
 func TestReadToolBinary(t *testing.T) {
-	tool := ReadTool{}
+	tool := NewReadTool()
 
 	// Create a binary file with null bytes
 	binaryContent := []byte{0x00, 0x01, 0x02, 'h', 'e', 'l', 'l', 'o'}
@@ -111,7 +113,7 @@ func TestReadToolBinary(t *testing.T) {
 }
 
 func TestReadToolTooLarge(t *testing.T) {
-	tool := ReadTool{}
+	tool := NewReadTool()
 
 	// Create a file larger than 256KB
 	largeContent := make([]byte, 257*1024) // 257KB
@@ -140,7 +142,7 @@ func TestReadToolTooLarge(t *testing.T) {
 }
 
 func TestReadToolAtLimit(t *testing.T) {
-	tool := ReadTool{}
+	tool := NewReadTool()
 
 	// Create a file exactly at 256KB
 	limitContent := make([]byte, 256*1024) // exactly 256KB
@@ -158,4 +160,130 @@ func TestReadToolAtLimit(t *testing.T) {
 	if err != nil {
 		t.Errorf("Should not error at exactly 256KB, got: %v", err)
 	}
+}
+
+func TestReadToolCacheHit(t *testing.T) {
+	tool := NewReadTool()
+
+	content := "Hello, World!"
+	err := os.WriteFile("/tmp/test_read_cache.txt", []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_cache.txt")
+
+	// First read — should return full content
+	result1, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_cache.txt"}`)
+	if err != nil {
+		t.Fatalf("First read failed: %v", err)
+	}
+	if result1 != content {
+		t.Errorf("Expected %q, got %q", content, result1)
+	}
+
+	// Second read — file unchanged, should return cache hint
+	result2, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_cache.txt"}`)
+	if err != nil {
+		t.Fatalf("Second read failed: %v", err)
+	}
+	if !strings.Contains(result2, "File unchanged since last read") {
+		t.Errorf("Expected cache hit message, got: %q", result2)
+	}
+	if strings.Contains(result2, content) {
+		t.Error("Cache hit should not contain full file content")
+	}
+}
+
+func TestReadToolCacheMissAfterModify(t *testing.T) {
+	tool := NewReadTool()
+
+	content1 := "Hello"
+	err := os.WriteFile("/tmp/test_read_modify.txt", []byte(content1), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_modify.txt")
+
+	// First read
+	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_read_modify.txt"}`)
+	if err != nil {
+		t.Fatalf("First read failed: %v", err)
+	}
+
+	// Modify file — sleep to ensure mtime changes
+	time.Sleep(50 * time.Millisecond)
+	content2 := "Hello, World!"
+	err = os.WriteFile("/tmp/test_read_modify.txt", []byte(content2), 0644)
+	if err != nil {
+		t.Fatalf("Failed to modify test file: %v", err)
+	}
+
+	// Second read — should return new content (cache miss)
+	result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_modify.txt"}`)
+	if err != nil {
+		t.Fatalf("Second read failed: %v", err)
+	}
+	if result != content2 {
+		t.Errorf("Expected %q, got %q", content2, result)
+	}
+}
+
+func TestReadToolDifferentOffsetNotCached(t *testing.T) {
+	tool := NewReadTool()
+
+	// Create a 10-line file
+	lines := make([]string, 10)
+	for i := range lines {
+		lines[i] = fmt.Sprintf("line%d", i+1)
+	}
+	content := strings.Join(lines, "\n")
+	err := os.WriteFile("/tmp/test_read_offset_cache.txt", []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_offset_cache.txt")
+
+	// Read full file
+	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_read_offset_cache.txt"}`)
+	if err != nil {
+		t.Fatalf("First read failed: %v", err)
+	}
+
+	// Read with offset=5 — different cache key, should NOT hit cache
+	result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_offset_cache.txt", "offset": 5}`)
+	if err != nil {
+		t.Fatalf("Offset read failed: %v", err)
+	}
+	expected := "line5\nline6\nline7\nline8\nline9\nline10"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
+	}
+}
+
+func TestReadToolConcurrentCache(t *testing.T) {
+	tool := NewReadTool()
+
+	content := "concurrent test"
+	err := os.WriteFile("/tmp/test_read_concurrent.txt", []byte(content), 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_concurrent.txt")
+
+	var wg sync.WaitGroup
+	for i := 0; i < 10; i++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_concurrent.txt"}`)
+			if err != nil {
+				t.Errorf("Concurrent read failed: %v", err)
+				return
+			}
+			if result == "" {
+				t.Error("Got empty result")
+			}
+		}()
+	}
+	wg.Wait()
 }
