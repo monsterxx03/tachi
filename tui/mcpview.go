@@ -288,8 +288,10 @@ func (v *MCPView) View() string {
 	}
 	b.WriteString(msg)
 
-	content := mcpOverlayBorder.Render(b.String())
-	return lipgloss.Place(v.width, v.height, lipgloss.Center, lipgloss.Center, content)
+	// Wrap in border with MaxWidth to prevent CJK text overflow.
+	bordered := mcpOverlayBorder.Copy().MaxWidth(v.width).Render(b.String())
+
+	return lipgloss.Place(v.width, v.height, lipgloss.Center, lipgloss.Center, bordered)
 }
 
 func (v *MCPView) renderServerLine(i int, srv MCPServerItem) string {
@@ -354,15 +356,9 @@ func (v *MCPView) renderServerLine(i int, srv MCPServerItem) string {
 // renderToolList renders the compact tool list (name + one-line description).
 // When interactive is true, the cursor (▶) and selection highlight are shown.
 func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLines int, interactive bool) {
-	innerW := v.width - 8
-	if innerW < 20 {
-		innerW = 20
-	}
-	nameW := 24
-	descW := innerW - nameW - 2
-	if descW < 10 {
-		descW = 10
-	}
+	const nameW = 24
+	const descMaxRunes = 50 // truncate descriptions to keep list compact
+	gap := 2
 
 	shown := 0
 	for i := v.toolScroll; i < len(tools) && shown < maxLines; i++ {
@@ -372,22 +368,28 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 		if len(toolName) > nameW {
 			toolName = toolName[:nameW-1] + "…"
 		}
+		toolNameStyled := mcpToolName.Render(toolName)
 
+		// Take first line only, then truncate to descMaxRunes runes
 		desc := t.Description
 		if nl := strings.IndexByte(desc, '\n'); nl >= 0 {
 			desc = desc[:nl]
 		}
 		descRunes := []rune(desc)
-		if len(descRunes) > descW {
-			desc = string(descRunes[:descW-1]) + "…"
+		if len(descRunes) > descMaxRunes {
+			desc = string(descRunes[:descMaxRunes-1]) + "…"
 		}
+		descStyled := dimStyle.Render(desc)
 
 		cursor := " "
 		if interactive && i == v.toolSelIdx {
 			cursor = "▶"
 		}
-		line := fmt.Sprintf("%s %-*s  %s",
-			cursor, nameW, mcpToolName.Render(toolName), dimStyle.Render(desc))
+
+		line := cursor +
+			padRight(toolNameStyled, nameW+cursorOffset(cursor)) +
+			strings.Repeat(" ", gap) +
+			descStyled
 
 		if interactive && i == v.toolSelIdx {
 			line = mcpServerSelected.Render(line)
@@ -402,6 +404,21 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 		b.WriteString("\n")
 		shown++
 	}
+}
+
+// cursorOffset returns the visual width added by the cursor prefix ("▶" = 1 rune, " " = 1 rune).
+// Used to compensate in padRight so the name column stays aligned regardless of cursor.
+func cursorOffset(cursor string) int {
+	return lipgloss.Width(cursor)
+}
+
+// padRight pads s on the right so its visual width equals targetW, using spaces.
+func padRight(s string, targetW int) string {
+	w := lipgloss.Width(s)
+	if w >= targetW {
+		return s
+	}
+	return s + strings.Repeat(" ", targetW-w)
 }
 
 // renderToolDetail renders full description + parameter table for one tool.
@@ -469,29 +486,52 @@ func (v *MCPView) renderToolDetail(b *strings.Builder, t *MCPToolItem) {
 	}
 }
 
-// wrapLines splits text into lines no wider than maxW runes.
+// wrapLines splits text into lines no wider than maxW visual columns.
+// Uses lipgloss.Width to correctly measure CJK characters (2 columns each).
 func wrapLines(text string, maxW int) []string {
 	var lines []string
 	runes := []rune(text)
 
 	for len(runes) > 0 {
-		if len(runes) <= maxW {
-			lines = append(lines, string(runes))
-			break
+		// Find how many runes fit within maxW columns
+		var end int
+		var w int
+		for end = 0; end < len(runes); end++ {
+			cw := runeWidth(runes[end])
+			if w+cw > maxW {
+				break
+			}
+			w += cw
 		}
-		// Try to break at space
-		cut := maxW
-		for cut > maxW/2 && runes[cut] != ' ' {
-			cut--
+		if end == 0 {
+			// Single rune wider than maxW — force one rune
+			end = 1
 		}
-		if runes[cut] != ' ' {
-			cut = maxW
+		// Try to break backward at a space within the last third
+		cut := end
+		if end < len(runes) {
+			for i := end; i > end*2/3 && i > 0; i-- {
+				if runes[i-1] == ' ' {
+					cut = i
+					break
+				}
+			}
 		}
-		lines = append(lines, string(runes[:cut]))
-		if cut < len(runes) && runes[cut] == ' ' {
-			cut++
-		}
+		line := strings.TrimRight(string(runes[:cut]), " ")
+		lines = append(lines, line)
+		// Skip leading spaces on next chunk
 		runes = runes[cut:]
+		for len(runes) > 0 && runes[0] == ' ' {
+			runes = runes[1:]
+		}
+	}
+	if len(lines) == 0 {
+		lines = append(lines, "")
 	}
 	return lines
+}
+
+// runeWidth returns the terminal column width of a single rune.
+func runeWidth(r rune) int {
+	return lipgloss.Width(string(r))
 }
