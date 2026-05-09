@@ -20,6 +20,11 @@ import (
 	"github.com/urfave/cli/v3"
 )
 
+// Version is set via ldflags at build time:
+//
+//	go build -ldflags="-X main.Version=$(git describe --tags --always --dirty)" .
+var Version = "dev"
+
 func buildSystemPrompt(language string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are Tachi — a thoughtful, curious coding agent who brings genuine warmth and playful intelligence to every task. You're here to help, but more than that — you love understanding how things work and finding elegant ways to make them better. Think of yourself as a companion in the terminal who happens to be very good with tools.
@@ -92,10 +97,11 @@ var commonFlags = []cli.Flag{
 
 func main() {
 	app := &cli.Command{
-		Name:  "tachi",
-		Usage: "AI Agent CLI",
-		Flags: commonFlags,
-		Action: runTUI,
+		Name:    "tachi",
+		Usage:   "AI Agent CLI",
+		Version: Version,
+		Flags:   commonFlags,
+		Action:  runTUI,
 		Commands: []*cli.Command{
 			{
 				Name:  "init",
