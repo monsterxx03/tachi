@@ -9,13 +9,14 @@ import (
 	"github.com/sashabaranov/go-openai"
 )
 
-// sessionHeaderTransport wraps an http.RoundTripper and injects the
-// x-tachi-session-id header from context on every outgoing request.
-type sessionHeaderTransport struct {
+// tachiTransport wraps an http.RoundTripper and injects
+// User-Agent and x-tachi-session-id headers on every outgoing request.
+type tachiTransport struct {
 	base http.RoundTripper
 }
 
-func (t *sessionHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+func (t *tachiTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	req.Header.Set("User-Agent", userAgent())
 	if id, ok := SessionIDFromCtx(req.Context()); ok && id != "" {
 		req.Header.Set("x-tachi-session-id", id)
 	}
@@ -42,7 +43,7 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 		if baseTransport == nil {
 			baseTransport = http.DefaultTransport
 		}
-		client.Transport = &sessionHeaderTransport{base: baseTransport}
+		client.Transport = &tachiTransport{base: baseTransport}
 	}
 	client := openai.NewClientWithConfig(cfg)
 	return &OpenAIProvider{

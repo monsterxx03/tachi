@@ -96,6 +96,8 @@ var commonFlags = []cli.Flag{
 }
 
 func main() {
+	llm.Version = Version
+
 	app := &cli.Command{
 		Name:    "tachi",
 		Usage:   "AI Agent CLI",

@@ -5,6 +5,17 @@ import (
 	"fmt"
 )
 
+// Version is set from main at startup (populated via ldflags at build time).
+var Version string
+
+// userAgent returns the User-Agent header value for LLM API requests.
+func userAgent() string {
+	if Version != "" {
+		return "tachi/" + Version
+	}
+	return "tachi/dev"
+}
+
 // ctxKeySessionID is the context key for the x-tachi-session-id header value.
 type ctxKeySessionID struct{}
 

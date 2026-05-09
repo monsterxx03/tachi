@@ -18,6 +18,7 @@ type AnthropicProvider struct {
 func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
 	opts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
+		option.WithHeader("User-Agent", userAgent()),
 	}
 	if baseURL != "" {
 		opts = append(opts, option.WithBaseURL(baseURL))
