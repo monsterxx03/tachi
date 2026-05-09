@@ -180,13 +180,24 @@ func (e *SubagentExecutor) runChildAgent(
 		systemPrompt += fmt.Sprintf(subagentWorktreePrompt, source)
 	}
 
-	childLogger.Log("starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%s",
-		len(args.Prompt), len(child.ToolSchemas()), maxIterations, thinking, fallbackIfEmpty(worktreePath, "no"))
+	// Compose the subagent session ID for the x-tachi-session-id header.
+	// Format: <main_session_id>:<subagent_id> so backend analytics can
+	// correlate sub-agent API calls with their parent session.
+	subagentSessionID := shortID
+	if sm := e.parentAgent.SessionManager(); sm != nil {
+		if cur := sm.Current(); cur != nil {
+			subagentSessionID = cur.ID + ":" + shortID
+		}
+	}
+
+	childLogger.Log("starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%s session_id=%s",
+		len(args.Prompt), len(child.ToolSchemas()), maxIterations, thinking, fallbackIfEmpty(worktreePath, "no"), subagentSessionID)
 
 	// Run via RunOneOffStream
 	ch := child.RunOneOffStream(ctx, provider, systemPrompt, args.Prompt, llm.ChatOptions{
 		MaxTokens: defaultMaxTokens,
 		Thinking:  &thinking,
+		SessionID: subagentSessionID,
 	})
 
 	// Consume events, collect result + stats
