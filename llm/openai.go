@@ -4,9 +4,23 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net/http"
 
 	"github.com/sashabaranov/go-openai"
 )
+
+// sessionHeaderTransport wraps an http.RoundTripper and injects the
+// x-tachi-session-id header from context on every outgoing request.
+type sessionHeaderTransport struct {
+	base http.RoundTripper
+}
+
+func (t *sessionHeaderTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if id, ok := SessionIDFromCtx(req.Context()); ok && id != "" {
+		req.Header.Set("x-tachi-session-id", id)
+	}
+	return t.base.RoundTrip(req)
+}
 
 type OpenAIProvider struct {
 	client *openai.Client
@@ -17,6 +31,18 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		cfg.BaseURL = baseURL
+	}
+	// Wrap the default HTTP client with a transport that injects the session
+	// ID header from context, allowing per-request session tracking.
+	if cfg.HTTPClient == nil {
+		cfg.HTTPClient = &http.Client{}
+	}
+	if client, ok := cfg.HTTPClient.(*http.Client); ok {
+		baseTransport := client.Transport
+		if baseTransport == nil {
+			baseTransport = http.DefaultTransport
+		}
+		client.Transport = &sessionHeaderTransport{base: baseTransport}
 	}
 	client := openai.NewClientWithConfig(cfg)
 	return &OpenAIProvider{
@@ -77,6 +103,10 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		Temperature: 0.7,
 	}
 
+	if opts.SessionID != "" {
+		ctx = WithSessionID(ctx, opts.SessionID)
+	}
+
 	resp, err := p.client.CreateChatCompletion(ctx, req)
 	if err != nil {
 		return nil, err
@@ -118,6 +148,10 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 		// Temperature:         0.7,
 		Stream:        true,
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+	}
+
+	if opts.SessionID != "" {
+		ctx = WithSessionID(ctx, opts.SessionID)
 	}
 
 	stream, err := p.client.CreateChatCompletionStream(ctx, req)

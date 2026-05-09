@@ -146,7 +146,12 @@ func (p *AnthropicProvider) CreateChat(ctx context.Context, messages []Message, 
 		return nil, err
 	}
 
-	resp, err := p.client.Messages.New(ctx, *req)
+	reqOpts := []option.RequestOption{}
+	if opts.SessionID != "" {
+		reqOpts = append(reqOpts, option.WithHeader("x-tachi-session-id", opts.SessionID))
+	}
+
+	resp, err := p.client.Messages.New(ctx, *req, reqOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -202,7 +207,12 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 		return nil, err
 	}
 
-	stream := p.client.Messages.NewStreaming(ctx, *req)
+	reqOpts := []option.RequestOption{}
+	if opts.SessionID != "" {
+		reqOpts = append(reqOpts, option.WithHeader("x-tachi-session-id", opts.SessionID))
+	}
+
+	stream := p.client.Messages.NewStreaming(ctx, *req, reqOpts...)
 
 	ch := make(chan StreamEvent, 32)
 	go func() {

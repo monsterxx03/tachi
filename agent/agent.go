@@ -308,7 +308,11 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 	}
 
 	thinkingDisabled := false
-	resp, err := p.CreateChat(ctx, messages, nil, llm.ChatOptions{MaxTokens: 500, Thinking: &thinkingDisabled})
+	chatOpts := llm.ChatOptions{MaxTokens: 500, Thinking: &thinkingDisabled}
+	if a.sessionManager != nil && a.sessionManager.Current() != nil {
+		chatOpts.SessionID = a.sessionManager.Current().ID
+	}
+	resp, err := p.CreateChat(ctx, messages, nil, chatOpts)
 	if err != nil {
 		a.logger.Log("Agent: failed to generate title: %v, falling back to truncation", err)
 		return session.ExtractTitle(firstMessage)
@@ -703,6 +707,12 @@ func (a *AIAgent) runAgentLoop(
 	ch chan<- AgentEvent,
 ) {
 	llmTools := buildLLMTools(a.toolRegistry.GetSchemas())
+
+	// Inject the current session ID so it can be forwarded as the
+	// x-tachi-session-id header on outgoing LLM API requests.
+	if a.sessionManager != nil && a.sessionManager.Current() != nil {
+		opts.SessionID = a.sessionManager.Current().ID
+	}
 
 	apiCallCount := 0
 	lengthContinueRetries := 0

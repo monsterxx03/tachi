@@ -5,6 +5,21 @@ import (
 	"fmt"
 )
 
+// ctxKeySessionID is the context key for the x-tachi-session-id header value.
+type ctxKeySessionID struct{}
+
+// WithSessionID injects a session ID into the context so that HTTP transports
+// can attach it as an x-tachi-session-id header on outgoing API requests.
+func WithSessionID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, ctxKeySessionID{}, id)
+}
+
+// SessionIDFromCtx extracts the session ID previously stored via WithSessionID.
+func SessionIDFromCtx(ctx context.Context) (string, bool) {
+	id, ok := ctx.Value(ctxKeySessionID{}).(string)
+	return id, ok
+}
+
 // Provider type constants.
 const (
 	ProviderTypeOpenAI    = "openai"
@@ -31,6 +46,9 @@ type ChatOptions struct {
 	// nil = provider default (adaptive for Anthropic, enabled for DeepSeek)
 	// true = enabled, false = disabled
 	Thinking *bool
+	// SessionID, when non-empty, is sent as the x-tachi-session-id HTTP header
+	// on API calls to the LLM provider.
+	SessionID string
 }
 
 // ToolParameterProperty describes a single property in a tool's parameter schema.
