@@ -70,6 +70,15 @@ func (l *Logger) WithSource(source string) *Logger {
 	return &Logger{slog: l.slog.With(slog.String("source", source))}
 }
 
+// WithPrefix returns a new Logger that includes a "prefix" attribute.
+// Useful for distinguishing concurrent sub-agent instances in logs.
+func (l *Logger) WithPrefix(prefix string) *Logger {
+	if l == nil || l.slog == nil {
+		return l
+	}
+	return &Logger{slog: l.slog.With(slog.String("prefix", prefix))}
+}
+
 // Log writes a formatted message at INFO level.
 // Uses the default logger (source=tui) if called with a nil Logger.
 func (l *Logger) Log(format string, args ...interface{}) {

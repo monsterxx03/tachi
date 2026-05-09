@@ -42,6 +42,14 @@ type AIAgent struct {
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
 	logger             *debuglog.Logger
+
+	// Subagent-related fields
+	subagentProvider       llm.Provider // sub-agent dedicated provider (nil = fallback to main)
+	subagentModel          string       // sub-agent dedicated model ("" = fallback to main)
+	subagentMaxIterations  int          // sub-agent default iteration limit
+	subagentMaxConcurrency int          // sub-agent max concurrent instances
+	subagentMaxOutputChars int          // sub-agent output truncation threshold
+	subagentThinking       bool         // whether sub-agents enable thinking
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -326,6 +334,11 @@ func (a *AIAgent) UnregisterTool(name string) {
 // ToolSchemas returns all tool schemas currently registered with the agent.
 func (a *AIAgent) ToolSchemas() []tools.Schema {
 	return a.toolRegistry.GetSchemas()
+}
+
+// ToolNames returns registered tool names without triggering Description() calls.
+func (a *AIAgent) ToolNames() []string {
+	return a.toolRegistry.GetToolNames()
 }
 
 type RunResult struct {
@@ -754,6 +767,10 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 
 	// --- MCP servers ---
 	if !cfg.MCPEnabled() {
+		// --- SubAgent tool (no MCP) ---
+		a.SetupSubagentProvider(cfg)
+		executor := NewSubagentExecutor(a)
+		a.RegisterTool(tools.NewSubagentTool(executor))
 		return nil, nil
 	}
 	mgr := mcp.NewManager()
@@ -767,6 +784,12 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.RegisterTool(t)
 		a.logger.Log("MCP: registered tool %s", t.Name())
 	}
+
+	// --- SubAgent tool ---
+	a.SetupSubagentProvider(cfg)
+	executor := NewSubagentExecutor(a)
+	a.RegisterTool(tools.NewSubagentTool(executor))
+
 	return mgr, nil
 }
 

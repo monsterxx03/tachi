@@ -338,7 +338,7 @@ func TestAgentLoop_SessionRecording(t *testing.T) {
 
 type askUserTestTool struct{}
 
-func (au *askUserTestTool) Name() string        { return "AskUserQuestion" }
+func (au *askUserTestTool) Name() string        { return agenttools.ToolNameAskUser }
 func (au *askUserTestTool) Description() string { return "Ask user" }
 func (au *askUserTestTool) Properties() map[string]agenttools.PropertySchema {
 	return map[string]agenttools.PropertySchema{
@@ -349,7 +349,7 @@ func (au *askUserTestTool) Required() []string { return []string{"questions"} }
 func (au *askUserTestTool) Parallel() bool     { return false }
 func (au *askUserTestTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	return "", &agenttools.AskUserQuestionError{
-		ToolName: "AskUserQuestion",
+		ToolName: agenttools.ToolNameAskUser,
 		Args:     args,
 		Questions: []agenttools.Question{
 			{Question: "What?", Header: "Q", Options: []agenttools.QuestionOption{{Label: "A", Description: "Desc"}}, MultiSelect: false},
@@ -361,7 +361,7 @@ func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {
 	mp := &mockStreamProvider{
 		name: "mock",
 		sequences: [][]llm.StreamEvent{
-			toolCallSeq("AskUserQuestion", "call-1", `{"questions":[{"question":"q?","header":"Q","options":[{"label":"A","description":"D"}],"multiSelect":false}]}`),
+			toolCallSeq(agenttools.ToolNameAskUser, "call-1", `{"questions":[{"question":"q?","header":"Q","options":[{"label":"A","description":"D"}],"multiSelect":false}]}`),
 			textSeq("Got your answer"),
 		},
 	}

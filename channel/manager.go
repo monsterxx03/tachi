@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -190,7 +191,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	}
 
 	// Unregister AskUserQuestion — IM channels are non-interactive.
-	aiAgent.UnregisterTool("AskUserQuestion")
+	aiAgent.UnregisterTool(tools.ToolNameAskUser)
 
 	// Per-thread session.
 	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)

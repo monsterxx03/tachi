@@ -30,7 +30,7 @@ type AskUserResult struct {
 // AskUserTool asks the user multiple choice questions
 type AskUserTool struct{}
 
-func (t AskUserTool) Name() string { return "AskUserQuestion" }
+func (t AskUserTool) Name() string { return ToolNameAskUser }
 
 func (t AskUserTool) Description() string {
 	return "Use this tool when you need to ask the user questions during execution. " +
@@ -91,7 +91,7 @@ func (t AskUserTool) ExecuteContext(ctx context.Context, args string) (string, e
 	// Return a special error that contains the questions
 	// The agent will catch this and wait for TUI to provide answers
 	return "", &AskUserQuestionError{
-		ToolName:  "AskUserQuestion",
+		ToolName:  ToolNameAskUser,
 		Args:      args,
 		Questions: input.Questions,
 	}

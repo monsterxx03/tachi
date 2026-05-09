@@ -314,7 +314,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 				ToolCall: &llm.ToolCall{
 					ID: "tc-ask-1",
 					Function: llm.ToolCallFunction{
-						Name:      "AskUserQuestion",
+						Name:      agenttools.ToolNameAskUser,
 						Arguments: `{"questions":[{"question":"test?","header":"Test","options":[{"label":"A","description":"Option A"}],"multiSelect":false}]}`,
 					},
 				},

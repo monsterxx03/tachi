@@ -125,6 +125,17 @@ type WeixinConfig struct {
 	RouteTag string `yaml:"route_tag"` // Optional SKRouteTag for routing
 }
 
+// SubagentConfig holds configuration for sub-agent execution.
+// When Provider/Model are empty, the main provider/model is used.
+type SubagentConfig struct {
+	Provider       string `yaml:"provider"`         // provider name, empty → use main
+	Model          string `yaml:"model"`            // model name, empty → use main
+	MaxIterations  int    `yaml:"max_iterations"`   // default: 50 (hardcoded fallback)
+	MaxConcurrency int    `yaml:"max_concurrency"`  // default: 4 (hardcoded fallback)
+	MaxOutputChars int    `yaml:"max_output_chars"` // default: 16384 (hardcoded fallback)
+	Thinking       bool   `yaml:"thinking"`         // default: false
+}
+
 // ChannelConfig groups configuration for all IM channel backends.
 type ChannelConfig struct {
 	Weixin WeixinConfig `yaml:"weixin"`
@@ -148,6 +159,7 @@ type Config struct {
 	TitleProvider          string                       `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
 	CommitProvider         string                       `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
 	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
+	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
 }
 
 func DefaultConfig() *Config {

@@ -75,8 +75,11 @@ func (c *Collector) SetLogger(l *debuglog.Logger) {
 
 // Collect queries every registered reminder and, if any produce output,
 // wraps the combined lines in <system-reminder> tags.
-// Returns an empty string when no reminders are active.
+// Returns an empty string when no reminders are active or c is nil.
 func (c *Collector) Collect(ctx Context) string {
+	if c == nil {
+		return ""
+	}
 	var parts []string
 	var firedNames []string
 	for _, r := range c.reminders {
@@ -101,8 +104,11 @@ func (c *Collector) Collect(ctx Context) string {
 
 // WrapUserMessage prepends the <system-reminder> block (if any) to the
 // given user message content. This is a convenience helper so callers
-// don't need to manually check emptiness.
+// don't need to manually check emptiness. Safe to call on a nil Collector.
 func (c *Collector) WrapUserMessage(userMessage string, ctx Context) string {
+	if c == nil {
+		return userMessage
+	}
 	block := c.Collect(ctx)
 	if block == "" {
 		return userMessage

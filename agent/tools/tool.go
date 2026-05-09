@@ -5,6 +5,13 @@ import (
 	"encoding/json"
 )
 
+// Tool name constants. Use these instead of string literals to avoid typos
+// and enable compile-time checking when filtering or comparing tool names.
+const (
+	ToolNameAskUser  = "AskUserQuestion"
+	ToolNameSubAgent = "SubAgent"
+)
+
 // PropertySchema defines a single property in the schema
 type PropertySchema struct {
 	Type        string
@@ -99,6 +106,21 @@ func (r *Registry) Unregister(name string) bool {
 	_, ok := r.tools[name]
 	delete(r.tools, name)
 	return ok
+}
+
+// GetTool returns the tool with the given name, or nil if not found.
+func (r *Registry) GetTool(name string) Tool {
+	return r.tools[name]
+}
+
+// GetToolNames returns all registered tool names without triggering
+// Description() calls (which could cause recursion for self-referencing tools).
+func (r *Registry) GetToolNames() []string {
+	names := make([]string, 0, len(r.tools))
+	for name := range r.tools {
+		names = append(names, name)
+	}
+	return names
 }
 
 // Invoke calls a tool with the given arguments and context.
