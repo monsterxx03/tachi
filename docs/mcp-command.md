@@ -18,9 +18,8 @@ A `/mcp` slash command (or `Ctrl+M`) opens a dedicated **MCP Management Overlay*
 │  🔴 disabled-server             stdio  —                                          │
 │                                                                                    │
 │  ── test-1 tools ──────────────────────────────────────────────────────────────  │
-│  getArticleTree         获取 KM 知识库的文章树结构                                    │
-│  getArticleDetail       获取文章详情内容（标题、正文、元信息等）                         │
-│  searchResources        搜索 KM 知识库资源                                           │
+│  tool1         工具 1                                    │
+│  tool2         工具 2                         │
 │  …                                                                                 │
 │                                                                                    │
 │  ✓ test-1 connected, 6 tool(s)                                                   │
@@ -29,16 +28,16 @@ A `/mcp` slash command (or `Ctrl+M`) opens a dedicated **MCP Management Overlay*
 
 ### Keyboard bindings
 
-| 键 | 操作 |
-|------|------|
-| `↑` `↓` `k` `j` | 在 server 列表中移动 |
+| 键                | 操作                              |
+| ----------------- | --------------------------------- |
+| `↑` `↓` `k` `j`   | 在 server 列表中移动              |
 | `Enter` / `Space` | 展开/收起当前 server 的 tool 列表 |
-| `pgup` / `pgdown` | tool 列表翻页 |
-| `t` | toggle enabled/disabled |
-| `r` | reconnect |
-| `a` | auth（仅 HTTP+OAuth server） |
-| `Esc` / `q` | 关闭浮层 |
-| `Ctrl+C` | 关闭浮层 |
+| `pgup` / `pgdown` | tool 列表翻页                     |
+| `t`               | toggle enabled/disabled           |
+| `r`               | reconnect                         |
+| `a`               | auth（仅 HTTP+OAuth server）      |
+| `Esc` / `q`       | 关闭浮层                          |
+| `Ctrl+C`          | 关闭浮层                          |
 
 ### Subcommand compatibility
 
@@ -54,13 +53,13 @@ Bare `/mcp` or `/mcp list` opens the overlay.
 
 ### Components
 
-| 文件 | 说明 |
-|------|------|
-| `tui/mcpview.go` | 自包含的浮层组件：数据结构 `MCPServerItem` / `MCPToolItem`，渲染 `View()`，键盘处理 `HandleKey()` 返回 `MCPAction` |
-| `tui/model.go` | 新增 `stateManagingMCP` 状态、`mcpView` 字段、`handleKeyManagingMCP` / `enterMCPOverlay` / `exitMCPOverlay` |
-| `tui/commands.go` | `/mcp` 无 subcommand 时路由到 `enterMCPOverlay()` |
-| `tui/styles.go` | 新增 MCP 浮层相关 style（border, server/tool 颜色, OAuth badge 等） |
-| `tui/messages.go` | 新增 `mcpOverlayMsg` 类型，承载异步操作结果到 overlay |
+| 文件              | 说明                                                                                                               |
+| ----------------- | ------------------------------------------------------------------------------------------------------------------ |
+| `tui/mcpview.go`  | 自包含的浮层组件：数据结构 `MCPServerItem` / `MCPToolItem`，渲染 `View()`，键盘处理 `HandleKey()` 返回 `MCPAction` |
+| `tui/model.go`    | 新增 `stateManagingMCP` 状态、`mcpView` 字段、`handleKeyManagingMCP` / `enterMCPOverlay` / `exitMCPOverlay`        |
+| `tui/commands.go` | `/mcp` 无 subcommand 时路由到 `enterMCPOverlay()`                                                                  |
+| `tui/styles.go`   | 新增 MCP 浮层相关 style（border, server/tool 颜色, OAuth badge 等）                                                |
+| `tui/messages.go` | 新增 `mcpOverlayMsg` 类型，承载异步操作结果到 overlay                                                              |
 
 ### Data flow
 

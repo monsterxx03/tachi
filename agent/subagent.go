@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/transcript"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -108,6 +109,12 @@ func (e *SubagentExecutor) RunSubagent(
 
 	// Register filtered tools
 	child.RegisterToolsForSubagent(e.parentAgent, allowedTools)
+
+	// Propagate transcript builder from context (parent injected it via
+	// transcript.WithBuilder before calling RunSubagent).
+	if subBuilder := transcript.BuilderFromContext(ctx); subBuilder != nil {
+		child.SetTranscriptBuilder(subBuilder)
+	}
 
 	// Determine thinking configuration
 	thinking := e.parentAgent.SubagentThinking()

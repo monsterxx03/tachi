@@ -32,13 +32,14 @@ const (
 )
 
 type toolCallDisplay struct {
-	Name    string
-	ID      string
-	Args    string
-	Preview string
-	Result  string
-	IsError bool
-	Done    bool
+	Name       string
+	ID         string
+	Args       string
+	Preview    string
+	Result     string
+	IsError    bool
+	IsSubagent bool
+	Done       bool
 }
 
 type pendingConfirm struct {
@@ -566,6 +567,15 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 	case agent.AgentEventToolResult:
 		m.chatview.UpdateToolResult(event.ToolID, event.ToolResult, event.ToolIsError)
+		return m.nextEvent()
+
+	case agent.AgentEventSubagentStart:
+		// Sub-agent started — mark the tool call as having a subagent.
+		m.chatview.MarkSubagent(event.ToolID)
+		return m.nextEvent()
+
+	case agent.AgentEventSubagentDone:
+		// Sub-agent completed — TUI no-op (tool result will handle display).
 		return m.nextEvent()
 
 	case agent.AgentEventTurnComplete:

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"strings"
@@ -10,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/transcript"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -43,6 +45,9 @@ type AIAgent struct {
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
 	logger             *debuglog.Logger
 
+	// Transcript recording
+	transcriptBuilder *transcript.Builder
+
 	// Subagent-related fields
 	subagentProvider       llm.Provider // sub-agent dedicated provider (nil = fallback to main)
 	subagentModel          string       // sub-agent dedicated model ("" = fallback to main)
@@ -54,14 +59,15 @@ type AIAgent struct {
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
 	return &AIAgent{
-		model:           model,
-		provider:        provider,
-		maxIterations:   maxIterations,
-		titleGenEnabled: true,
-		toolRegistry:    tools.NewRegistry(),
-		confirmRespCh:   make(chan bool, 1),
-		askUserRespCh:   make(chan tools.AskUserResult, 1),
-		logger:          debuglog.DefaultLogger,
+		model:             model,
+		provider:          provider,
+		maxIterations:     maxIterations,
+		titleGenEnabled:   true,
+		toolRegistry:      tools.NewRegistry(),
+		confirmRespCh:     make(chan bool, 1),
+		askUserRespCh:     make(chan tools.AskUserResult, 1),
+		logger:            debuglog.DefaultLogger,
+		transcriptBuilder: transcript.NewBuilder(),
 		reminderCollector: systemreminder.NewCollector(
 			systemreminder.DateReminder{},
 			systemreminder.ProjectContextReminder{},
@@ -108,6 +114,41 @@ func (a *AIAgent) Model() string {
 
 func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 	a.skipEditConfirm = skip
+}
+
+// SetTranscriptBuilder sets the transcript builder for recording agent execution.
+func (a *AIAgent) SetTranscriptBuilder(b *transcript.Builder) {
+	a.transcriptBuilder = b
+}
+
+// TranscriptBuilder returns the current transcript builder (may be nil).
+func (a *AIAgent) TranscriptBuilder() *transcript.Builder {
+	return a.transcriptBuilder
+}
+
+func (a *AIAgent) recordTranscriptUser(content string) {
+	if a.transcriptBuilder != nil {
+		a.transcriptBuilder.RecordUserMessage(content)
+	}
+}
+
+func (a *AIAgent) recordTranscriptThinking(content string) {
+	if a.transcriptBuilder != nil {
+		a.transcriptBuilder.RecordThinking(content)
+	}
+}
+
+func (a *AIAgent) recordTranscriptText(content string) {
+	if a.transcriptBuilder != nil {
+		a.transcriptBuilder.RecordText(content)
+	}
+}
+
+func (a *AIAgent) recordTranscriptToolCall(name string, args string) *transcript.ToolCallRecorder {
+	if a.transcriptBuilder == nil {
+		return nil
+	}
+	return a.transcriptBuilder.RecordToolCall(name, args)
 }
 
 func (a *AIAgent) SetSessionManager(sm *session.Manager) {
@@ -378,6 +419,8 @@ const (
 	AgentEventError            = "error"
 	AgentEventAskUser          = "ask_user_question"
 	AgentEventSessionTitle     = "session_title"
+	AgentEventSubagentStart    = "subagent_start"
+	AgentEventSubagentDone     = "subagent_done"
 )
 
 type AgentEvent struct {
@@ -570,6 +613,8 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			if _, err := a.sessionManager.New(provider, a.model, wd); err != nil {
 				a.logger.Log("Agent: failed to create session: %v", err)
 			}
+			// New session — reset transcript to avoid mixing with previous session.
+			a.transcriptBuilder.Reset()
 		}
 		if a.sessionManager != nil {
 			// Record the original user message (without system-reminder wrappers)
@@ -586,10 +631,46 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 		}
 
+		// Record user message in transcript before the agent loop.
+		a.recordTranscriptUser(userMessage)
+		a.flushTranscriptTurns()
+
 		a.runAgentLoop(ctx, a.provider, messages, opts, ch)
+
+		// Persist transcript to session directory.
+		a.persistTranscript()
 	}()
 
 	return ch
+}
+
+// flushTranscriptTurns drains completed turns from the builder and appends
+// each as a JSON line to transcript.jsonl. This enables incremental, O(1)
+// writes — no full-scan rewrite and no unbounded in-memory accumulation.
+func (a *AIAgent) flushTranscriptTurns() {
+	if a.transcriptBuilder == nil || a.sessionManager == nil {
+		return
+	}
+	for _, turn := range a.transcriptBuilder.DrainCompletedTurns() {
+		data, err := json.Marshal(turn)
+		if err != nil {
+			a.logger.Log("Agent: failed to marshal transcript turn: %v", err)
+			continue
+		}
+		if err := a.sessionManager.AppendTranscriptTurn(data); err != nil {
+			a.logger.Log("Agent: failed to append transcript turn: %v", err)
+		}
+	}
+}
+
+// persistTranscript finalizes any remaining in-progress turn and flushes it.
+// Called at the end of a conversation to capture the last turn.
+func (a *AIAgent) persistTranscript() {
+	if a.transcriptBuilder == nil {
+		return
+	}
+	a.transcriptBuilder.FinalizeTurn()
+	a.flushTranscriptTurns()
 }
 
 // historyHasReminder checks whether the given message history already contains
@@ -646,6 +727,12 @@ func (a *AIAgent) runAgentLoop(
 		default:
 		}
 
+		// Transcript: start a new turn for this API call.
+		if a.transcriptBuilder != nil {
+			a.transcriptBuilder.StartTurn()
+			a.flushTranscriptTurns()
+		}
+
 		apiCallCount++
 		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
 		if err != nil {
@@ -667,6 +754,15 @@ func (a *AIAgent) runAgentLoop(
 				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
 			}
 			return
+		}
+
+		// Record transcript: thinking blocks (aggregated per block).
+		for _, tb := range acc.thinkBlocks {
+			a.recordTranscriptThinking(tb.Thinking)
+		}
+		// Record transcript: aggregated assistant text.
+		if acc.text.Len() > 0 {
+			a.recordTranscriptText(acc.text.String())
 		}
 
 		// Track input tokens for token-warning reminders

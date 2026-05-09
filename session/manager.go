@@ -5,6 +5,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/transcript"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
@@ -260,6 +261,43 @@ func (m *Manager) LoadMessages() ([]Message, error) {
 	}
 
 	return m.store.LoadMessages(m.current.ID)
+}
+
+// AppendTranscriptTurn appends a single completed turn to transcript.jsonl.
+func (m *Manager) AppendTranscriptTurn(data []byte) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return fmt.Errorf("no active session")
+	}
+
+	return m.store.AppendTranscriptTurn(m.current.ID, data)
+}
+
+// LoadTranscript reads and reconstructs the full transcript for the current session.
+// Returns nil, nil if no transcript exists for the session.
+func (m *Manager) LoadTranscript() (*transcript.Transcript, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return nil, fmt.Errorf("no active session")
+	}
+
+	data, err := m.store.LoadTranscript(m.current.ID)
+	if err != nil {
+		return nil, fmt.Errorf("load transcript: %w", err)
+	}
+	if data == nil {
+		return nil, nil
+	}
+
+	var t transcript.Transcript
+	if err := t.UnmarshalJSON(data); err != nil {
+		return nil, fmt.Errorf("unmarshal transcript: %w", err)
+	}
+	return &t, nil
 }
 
 // Delete deletes a session by ID

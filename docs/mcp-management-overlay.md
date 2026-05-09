@@ -59,12 +59,12 @@ type MCPView struct {
 
 核心方法：
 
-| 方法 | 说明 |
-|------|------|
-| `SetServers(items []MCPServerItem)` | 注入当前 server 列表 |
+| 方法                                       | 说明                             |
+| ------------------------------------------ | -------------------------------- |
+| `SetServers(items []MCPServerItem)`        | 注入当前 server 列表             |
 | `HandleKey(key string) (action MCPAction)` | 键盘处理，返回需要外部执行的操作 |
-| `SetMessage(msg string)` | 显示操作反馈（3 秒后自动清除） |
-| `View() string` | 渲染浮层 |
+| `SetMessage(msg string)`                   | 显示操作反馈（3 秒后自动清除）   |
+| `View() string`                            | 渲染浮层                         |
 
 #### MCPAction — 操作意图
 
@@ -95,17 +95,12 @@ const (
 ```
 ┌─ MCP Servers (↑↓ navigate, Enter expand, t toggle, r reconnect, a auth, Esc close) ──┐
 │                                                                                       │
-│  🟢 test-1                     stdio  • 6 tools                                     │
-│  🟢 test-2                         http   • 4 tools  [OAuth]                            │
+│  🟢 test1                     stdio  • 6 tools                                     │
+│  🟢 test2                         http   • 4 tools  [OAuth]                            │
 │  🔴 disabled-server             stdio  • —                                           │
 │                                                                                       │
-│  ── test-1 tools ─────────────────────────────────────────────────────────────────  │
-│  getArticleTree         获取 KM 知识库的文章树结构...                                   │
-│  getArticleDetail       获取文章详情内容（标题、正文、元信息等）...                        │
-│  searchResources        搜索 KM 知识库资源...                                          │
-│  getCollabOutline       获取 KM 协同文档的大纲结构...                                   │
-│  getTableRows           获取应用表格的行数据...                                         │
-│  getMeetingNoteList     获取当前用户的会议纪要列表...                                    │
+│  ── test1 tools ─────────────────────────────────────────────────────────────────  │
+│  tool1         工具 1...                                   │
 │                                                                                       │
 │  ✓ Connected with 6 tool(s)                                                          │
 └───────────────────────────────────────────────────────────────────────────────────────┘
@@ -118,14 +113,14 @@ const (
 
 ### 键盘绑定
 
-| 键 | 操作 |
-|------|------|
-| `↑` `↓` `k` `j` | 在 server 列表中移动 |
-| `Enter` / `Space` | 展开/收起 tool 列表 |
-| `t` | toggle enabled/disabled |
-| `r` | reconnect |
-| `a` | auth（仅 HTTP+OAuth server） |
-| `Esc` / `q` | 关闭浮层 |
+| 键                | 操作                         |
+| ----------------- | ---------------------------- |
+| `↑` `↓` `k` `j`   | 在 server 列表中移动         |
+| `Enter` / `Space` | 展开/收起 tool 列表          |
+| `t`               | toggle enabled/disabled      |
+| `r`               | reconnect                    |
+| `a`               | auth（仅 HTTP+OAuth server） |
+| `Esc` / `q`       | 关闭浮层                     |
 
 ### 交互流程
 
@@ -231,14 +226,14 @@ HandleKey → MCPAction → mcpToggle/mcpReconnect/mcpAuth
 
 ## Files to Create / Modify
 
-| 文件 | 操作 | 说明 |
-|------|------|------|
-| `tui/mcpview.go` | **新建** | MCP 浮层组件（~250 行） |
-| `tui/model.go` | **修改** | 新增 `stateManagingMCP`、`mcpView`、key handler、View 路由 |
-| `tui/messages.go` | **修改** | 可能需要新的消息类型（可复用现有 `mcpStatusMsg` 或直接 channel） |
-| `tui/commands.go` | **修改** | `/mcp` 无 subcommand 时进入浮层 |
-| `tui/styles.go` | **修改** | 新增 MCP 浮层相关 style（border、状态色） |
-| `docs/mcp-command.md` | **修改** | 更新文档，补充浮层交互说明 |
+| 文件                  | 操作     | 说明                                                             |
+| --------------------- | -------- | ---------------------------------------------------------------- |
+| `tui/mcpview.go`      | **新建** | MCP 浮层组件（~250 行）                                          |
+| `tui/model.go`        | **修改** | 新增 `stateManagingMCP`、`mcpView`、key handler、View 路由       |
+| `tui/messages.go`     | **修改** | 可能需要新的消息类型（可复用现有 `mcpStatusMsg` 或直接 channel） |
+| `tui/commands.go`     | **修改** | `/mcp` 无 subcommand 时进入浮层                                  |
+| `tui/styles.go`       | **修改** | 新增 MCP 浮层相关 style（border、状态色）                        |
+| `docs/mcp-command.md` | **修改** | 更新文档，补充浮层交互说明                                       |
 
 ## Open Questions
 

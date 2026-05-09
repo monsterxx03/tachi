@@ -125,6 +125,18 @@ func (c *ChatView) UpdateToolResult(id, result string, isError bool) {
 	c.refresh()
 }
 
+// MarkSubagent flags a tool call display as being a subagent invocation.
+// This adds a visual indicator in the TUI.
+func (c *ChatView) MarkSubagent(id string) {
+	for i := range c.currentTools {
+		if c.currentTools[i].ID == id {
+			c.currentTools[i].IsSubagent = true
+			break
+		}
+	}
+	c.refresh()
+}
+
 func (c *ChatView) FinishStreaming() {
 	c.flushTurn()
 	c.userScrolled = false
@@ -456,24 +468,33 @@ func (c *ChatView) renderToolCall(tc toolCallDisplay) string {
 	preview := tc.Preview
 	var b strings.Builder
 
+	nameTag := tc.Name
+	if tc.IsSubagent {
+		nameTag = tc.Name + " ⊞" // subagent indicator
+	}
+
 	if tc.Done {
 		if tc.IsError {
 			fmt.Fprintf(&b, "%s %s(%s)\n",
 				toolResultErrStyle.Render("x"),
-				toolCallStyle.Render(tc.Name),
+				toolCallStyle.Render(nameTag),
 				dimStyle.Render(preview))
 			fmt.Fprintf(&b, "  %s", toolResultErrStyle.Render(truncate(tc.Result, 200)))
 		} else {
 			fmt.Fprintf(&b, "%s %s(%s)\n",
 				toolResultOKStyle.Render("v"),
-				toolCallStyle.Render(tc.Name),
+				toolCallStyle.Render(nameTag),
 				dimStyle.Render(preview))
 			fmt.Fprintf(&b, "  %s", dimStyle.Render(truncate(tc.Result, 200)))
 		}
 	} else {
+		spinnerChar := "~"
+		if tc.IsSubagent {
+			spinnerChar = "⊡" // running subagent indicator
+		}
 		fmt.Fprintf(&b, "%s %s(%s)",
-			toolCallStyle.Render("~"),
-			toolCallStyle.Render(tc.Name),
+			toolCallStyle.Render(spinnerChar),
+			toolCallStyle.Render(nameTag),
 			dimStyle.Render(preview))
 	}
 
