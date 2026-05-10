@@ -79,6 +79,15 @@ func (l *Logger) WithPrefix(prefix string) *Logger {
 	return &Logger{slog: l.slog.With(slog.String("prefix", prefix))}
 }
 
+// WithSessionID returns a new Logger that includes a "session_id" attribute.
+// Use this to tag log entries with the current conversation session.
+func (l *Logger) WithSessionID(sessionID string) *Logger {
+	if l == nil || l.slog == nil {
+		return l
+	}
+	return &Logger{slog: l.slog.With(slog.String("session_id", sessionID))}
+}
+
 // Log writes a formatted message at INFO level.
 // Uses the default logger (source=tui) if called with a nil Logger.
 func (l *Logger) Log(format string, args ...interface{}) {

@@ -53,7 +53,6 @@ working tree unless you push or create a PR from this branch.
 // sub-agent execution.
 type SubagentExecutor struct {
 	parentAgent *AIAgent
-	logger      *debuglog.Logger
 	sem         chan struct{} // concurrency semaphore, size = MaxConcurrency
 	worktreeMgr *WorktreeManager
 }
@@ -63,7 +62,6 @@ func NewSubagentExecutor(parent *AIAgent) *SubagentExecutor {
 	maxConc := parent.SubagentMaxConcurrency()
 	return &SubagentExecutor{
 		parentAgent: parent,
-		logger:      parent.logger,
 		sem:         make(chan struct{}, maxConc),
 	}
 }
@@ -72,6 +70,12 @@ func NewSubagentExecutor(parent *AIAgent) *SubagentExecutor {
 // When nil (default), worktree isolation is disabled.
 func (e *SubagentExecutor) SetWorktreeManager(wm *WorktreeManager) {
 	e.worktreeMgr = wm
+}
+
+// logger returns the parent agent's current logger (which may have been
+// updated with a session ID after executor construction).
+func (e *SubagentExecutor) logger() *debuglog.Logger {
+	return e.parentAgent.logger
 }
 
 // AvailableToolNames returns all tool names the sub-agent can use (for description).
@@ -132,7 +136,7 @@ func (e *SubagentExecutor) RunSubagent(
 	// If worktree is enabled, delegate to WorktreeManager
 	if e.worktreeMgr != nil {
 		result, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, error) {
-			e.logger.Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
+			e.logger().Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
 			return e.runChildAgent(worktreeCtx, shortID, args, provider, model, maxIterations, thinking, branch, wtPath)
 		})
 		return result, shortID, err
@@ -155,7 +159,15 @@ func (e *SubagentExecutor) runChildAgent(
 	branch string,
 	worktreePath string,
 ) (string, error) {
-	childLogger := e.logger.WithPrefix(fmt.Sprintf("[subagent:%s]", shortID))
+	// Compose the subagent session ID for the x-tachi-session-id header.
+	subagentSessionID := shortID
+	if sm := e.parentAgent.SessionManager(); sm != nil {
+		if cur := sm.Current(); cur != nil {
+			subagentSessionID = cur.ID + ":" + shortID
+		}
+	}
+
+	childLogger := e.logger().WithSessionID(subagentSessionID).WithPrefix(fmt.Sprintf("[subagent:%s]", shortID))
 
 	child := NewAIAgent(provider, model, maxIterations)
 	child.SetSkipEditConfirm(true)
@@ -173,14 +185,6 @@ func (e *SubagentExecutor) runChildAgent(
 			source = "HEAD"
 		}
 		systemPrompt += fmt.Sprintf(subagentWorktreePrompt, source)
-	}
-
-	// Compose the subagent session ID for the x-tachi-session-id header.
-	subagentSessionID := shortID
-	if sm := e.parentAgent.SessionManager(); sm != nil {
-		if cur := sm.Current(); cur != nil {
-			subagentSessionID = cur.ID + ":" + shortID
-		}
 	}
 
 	// Create sub-agent recorder for persisting execution details

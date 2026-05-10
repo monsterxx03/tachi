@@ -59,8 +59,12 @@ func (p *OpenAIProvider) Name() string {
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, msg := range messages {
+		role := msg.Role
+		if role == RoleSteer {
+			role = "user" // OpenAI has independent "tool" role, steer as user is safe
+		}
 		m := openai.ChatCompletionMessage{
-			Role:       msg.Role,
+			Role:       role,
 			Content:    msg.Content,
 			Name:       msg.Name,
 			ToolCallID: msg.ToolCallID,

@@ -74,6 +74,7 @@ type Model struct {
 	copyMode       bool
 	cancelFunc     context.CancelFunc
 	eventCh        <-chan agent.AgentEvent
+	steerRespCh    chan string // agent → TUI: steer check requests use this to get pending input
 	totalUsage     llm.Usage
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
@@ -491,6 +492,10 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
+	// Set up steer channel so pending input can be injected at tool-call boundaries.
+	m.steerRespCh = make(chan string)
+	m.agent.SetSteerChannel(m.steerRespCh)
+
 	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expandedText, m.systemPrompt, m.chatOpts)
 
@@ -641,7 +646,31 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		// Sub-agent completed — TUI no-op (tool result will handle display).
 		return m.nextEvent()
 
+	case agent.AgentEventSteerCheck:
+		if len(m.pendingQueue) > 0 {
+			combined := strings.Join(m.pendingQueue, "\n\n")
+			m.pendingQueue = nil
+			m.chatview.RemovePendingItems()
+			m.statusbar.SetPendingCount(0)
+			// Expand @-file references before sending to the LLM.
+			expanded := ExpandAtReferences(combined)
+			// Add as a normal user message in chatview for visual continuity.
+			m.chatview.AddMessage(chatMessage{Role: "user", Content: combined})
+			// Send expanded steer text to agent (non-blocking with select).
+			select {
+			case m.steerRespCh <- expanded:
+			default:
+			}
+		} else {
+			select {
+			case m.steerRespCh <- "":
+			default:
+			}
+		}
+		return m.nextEvent()
+
 	case agent.AgentEventTurnComplete:
+		m.steerRespCh = nil
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
@@ -696,6 +725,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventError:
+		m.steerRespCh = nil
 		if event.Messages != nil {
 			m.history = event.Messages
 		}

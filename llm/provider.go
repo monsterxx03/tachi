@@ -96,6 +96,12 @@ func NewTool(name, description string, properties map[string]ToolParameterProper
 	}
 }
 
+// Message role constants.
+const (
+	RoleSteer = "steer" // Internal role: steer input injected at tool-call boundaries.
+	                     // Provider converters handle this differently based on API protocol.
+)
+
 // Message represents a chat message
 type Message struct {
 	Role           string         `json:"role"`

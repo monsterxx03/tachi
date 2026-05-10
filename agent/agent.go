@@ -32,6 +32,7 @@ type AIAgent struct {
 	iterationBudget    *IterationBudget
 	confirmRespCh      chan bool
 	askUserRespCh      chan tools.AskUserResult
+	steerRespCh        chan string // TUI → agent: pending input to inject at steer point
 	skipEditConfirm    bool
 	sessionManager     *session.Manager
 	reminderCollector  *systemreminder.Collector
@@ -100,6 +101,12 @@ func (a *AIAgent) ConfirmTool(confirmed bool) {
 	default:
 		// Channel already has a value or is not waiting
 	}
+}
+
+// SetSteerChannel sets the channel used for steer input injection.
+// The TUI writes pending user input to this channel at steer points.
+func (a *AIAgent) SetSteerChannel(ch chan string) {
+	a.steerRespCh = ch
 }
 
 func (a *AIAgent) SetProvider(provider llm.Provider, model string) {
@@ -216,6 +223,7 @@ func (a *AIAgent) RunOneOffStream(
 
 	go func() {
 		defer close(ch)
+		defer func() { a.steerRespCh = nil }()
 
 		if provider == nil {
 			provider = a.provider
@@ -415,6 +423,7 @@ const (
 	AgentEventSessionTitle     = "session_title"
 	AgentEventSubagentStart    = "subagent_start"
 	AgentEventSubagentDone     = "subagent_done"
+	AgentEventSteerCheck       = "steer_check" // agent requests TUI to check for pending input
 )
 
 type AgentEvent struct {
@@ -574,6 +583,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 	go func() {
 		defer close(ch)
+		defer func() { a.steerRespCh = nil }()
 
 		if opts.MaxTokens <= 0 {
 			opts.MaxTokens = defaultMaxTokens
@@ -606,6 +616,10 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			wd, _ := os.Getwd()
 			if _, err := a.sessionManager.New(provider, a.model, wd); err != nil {
 				a.logger.Log("Agent: failed to create session: %v", err)
+			}
+			// Update logger with session ID for debug log tracking
+			if cur := a.sessionManager.Current(); cur != nil {
+				a.logger = a.logger.WithSessionID(cur.ID)
 			}
 		}
 		if a.sessionManager != nil {
@@ -719,6 +733,29 @@ func (a *AIAgent) runAgentLoop(
 
 		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
 			return
+		}
+
+		// --- Steer Point: inject pending user input after tool results ---
+		// Only trigger after tool calls (not length continuation), to avoid
+		// consecutive user messages in providers that require alternating roles.
+		if (acc.finishReason == "tool_calls" || acc.finishReason == "tool_use") && a.steerRespCh != nil {
+			ch <- AgentEvent{Type: AgentEventSteerCheck}
+			select {
+			case steerText := <-a.steerRespCh:
+				if steerText != "" {
+					// Use internal "steer" role — provider converters handle this
+					// differently based on API protocol requirements:
+					//   - Anthropic: merged into tool_result user message as text block
+					//   - OpenAI: mapped to "user" role (no alternation conflict)
+					messages = append(messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
+					a.recordSession(&session.Message{
+						Type:    session.MessageTypeUser,
+						Content: steerText,
+					})
+				}
+			case <-ctx.Done():
+				return
+			}
 		}
 
 		// After tool results, inject system-reminder warnings.
@@ -888,6 +925,10 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	}
 
 	a.sessionManager = sm
+	// Update logger with session ID for debug log tracking
+	if cur := a.sessionManager.Current(); cur != nil {
+		a.logger = a.logger.WithSessionID(cur.ID)
+	}
 	return llmMsgs, sessionMsgs, latest, nil
 }
 
