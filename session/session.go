@@ -19,12 +19,20 @@ type MessageType string
 
 const (
 	MessageTypeUser       MessageType = "user"
-	MessageTypeAssistant MessageType = "assistant"
-	MessageTypeThinking  MessageType = "thinking"
-	MessageTypeToolCall   MessageType = "tool_call"
-	MessageTypeToolResult MessageType = "tool_result"
-	MessageTypeConfirm    MessageType = "confirm"
+	MessageTypeAssistant  MessageType = "assistant"
+	MessageTypeThinking   MessageType = "thinking"
+	MessageTypeToolCall    MessageType = "tool_call"
+	MessageTypeToolResult  MessageType = "tool_result"
+	MessageTypeConfirm     MessageType = "confirm"
 )
+
+// Usage records token usage from a single LLM API response.
+type Usage struct {
+	InputTokens              int64 `json:"input_tokens,omitempty"`
+	OutputTokens             int64 `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
+}
 
 type Message struct {
 	Type       MessageType `json:"type"`
@@ -37,5 +45,6 @@ type Message struct {
 	Diff       string      `json:"diff,omitempty"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	SubagentID string      `json:"subagent_id,omitempty"` // shortID for SubAgent tool_result → subagent/<id>.jsonl
+	Usage      *Usage      `json:"usage,omitempty"`       // token usage from the LLM response that produced this message
 	Timestamp  time.Time   `json:"timestamp"`
 }

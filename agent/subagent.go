@@ -281,6 +281,21 @@ func (e *SubagentExecutor) runChildAgent(
 			}
 			iterCount++
 
+		case AgentEventTurnComplete:
+			// Flush any remaining thinking + text, and record the final
+			// assistant message with token usage from this API call.
+			flushThinking()
+			if recorder != nil && (sb.Len() > 0 || event.Usage != nil) {
+				recorder.record(&session.Message{
+					Type:    session.MessageTypeAssistant,
+					Content: sb.String(),
+					Usage:   usageToSession(event.Usage),
+				})
+				sb.Reset()
+			} else {
+				sb.Reset()
+			}
+
 		case AgentEventError:
 			// Flush remaining thinking + text before returning
 			flushThinking()

@@ -449,6 +449,19 @@ var (
 	errParallelAskUserUnsupported = fmt.Errorf("tool requiring user input cannot run in parallel group")
 )
 
+// usageToSession converts an llm.Usage to a session.Usage for persistence.
+func usageToSession(u *llm.Usage) *session.Usage {
+	if u == nil {
+		return nil
+	}
+	return &session.Usage{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+	}
+}
+
 // handleFinishReason processes the LLM's finish reason and updates messages accordingly.
 // Returns true if the agent loop should continue, false if it should stop.
 func (a *AIAgent) handleFinishReason(
@@ -471,11 +484,12 @@ func (a *AIAgent) handleFinishReason(
 				Signature: tb.Signature,
 			})
 		}
-		// Record assistant text in session (may be empty)
-		if acc.text.Len() > 0 {
+		// Record assistant response with usage (always record when we have text or usage)
+		if acc.text.Len() > 0 || acc.usage != nil {
 			a.recordSession(&session.Message{
 				Type:    session.MessageTypeAssistant,
 				Content: acc.text.String(),
+				Usage:   usageToSession(acc.usage),
 			})
 		}
 
@@ -516,11 +530,12 @@ func (a *AIAgent) handleFinishReason(
 				Signature: tb.Signature,
 			})
 		}
-		// Record partial assistant text
-		if acc.text.Len() > 0 {
+		// Record partial assistant response with usage
+		if acc.text.Len() > 0 || acc.usage != nil {
 			a.recordSession(&session.Message{
 				Type:    session.MessageTypeAssistant,
 				Content: acc.text.String(),
+				Usage:   usageToSession(acc.usage),
 			})
 		}
 		// Record continuation prompt (original, unwrapped)
@@ -559,11 +574,12 @@ func (a *AIAgent) handleFinishReason(
 				Signature: tb.Signature,
 			})
 		}
-		// Append assistant response to session
-		if acc.text.Len() > 0 {
+		// Record assistant response with usage
+		if acc.text.Len() > 0 || acc.usage != nil {
 			a.recordSession(&session.Message{
 				Type:    session.MessageTypeAssistant,
 				Content: acc.text.String(),
+				Usage:   usageToSession(acc.usage),
 			})
 		}
 
@@ -913,6 +929,16 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	sessionMsgs, err := sm.LoadMessages()
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("load messages: %w", err)
+	}
+
+	// Restore lastInputTokens from the most recent assistant message with usage
+	// so that TokenWarningReminder works correctly in the resumed session.
+	for i := len(sessionMsgs) - 1; i >= 0; i-- {
+		if sessionMsgs[i].Type == session.MessageTypeAssistant && sessionMsgs[i].Usage != nil {
+			a.lastInputTokens = sessionMsgs[i].Usage.InputTokens
+			a.logger.Log("Agent: restored lastInputTokens=%d from session message", a.lastInputTokens)
+			break
+		}
 	}
 
 	llmMsgs, err := ConvertSessionToLLMMessages(sessionMsgs, providerType)
