@@ -14,37 +14,29 @@ import (
 )
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md
-const InitPromptTemplate = `Please analyze this codebase and create a .tachi.md file, which will be given to future instances of tachi to operate in this repository.
+const InitPromptTemplate = `Create (or improve) a .tachi.md file at the repo root. This file is read by future coding agent instances — write for agents, not humans. Keep it under 200 lines, terse and dense.
 
-What to add:
-1. Commands that will be commonly used, such as how to build, lint, and run tests. Include the necessary commands to develop in this codebase, such as how to run a single test.
-2. High-level code architecture and structure so that future instances can be productive more quickly. Focus on the "big picture" architecture that requires reading multiple files to understand.
+What to include:
+1. Build, lint, test commands (including how to run a single test).
+2. High-level architecture — the "big picture" that requires reading multiple files to discover. Use compact formats (tables, one-liners, signatures) over prose.
 
-Usage notes:
-- If there's already a .tachi.md, suggest improvements to it.
-- When you make the initial .tachi.md, do not repeat yourself and do not include obvious instructions like "Provide helpful error messages to users", "Write unit tests for all new utilities", "Never include sensitive information (API keys, tokens) in code or commits".
-- Avoid listing every component or file structure that can be easily discovered.
-- Don't include generic development practices.
-- If there are Cursor rules (in .cursor/rules/ or .cursorrules) or Copilot rules (in .github/copilot-instructions.md), make sure to include the important parts.
-- If there is a README.md, make sure to include the important parts.
-- Do not make up information such as "Common Development Tasks", "Tips for Development", "Support and Documentation" unless this is expressly included in other files that you read.
+Rules:
+- If .tachi.md exists, read it first and improve it in-place.
+- No generic advice ("write tests", "be helpful", "don't hardcode secrets").
+- No listing every file/dir — focus on relationships and non-obvious design decisions.
+- No made-up sections ("Common Tasks", "Tips", "Support").
+- If .cursor/rules/, .cursorrules, or .github/copilot-instructions.md exist, extract their key constraints.
+- If README.md exists, extract its essential info.
+- Use the WriteFile tool to write the result.
 
-## Context to gather
+Gather context first:
+  git status
+  git branch --show-current
+  git log --oneline -5
+  find . -maxdepth 1 -name 'Makefile' -o -name 'go.mod' -o -name 'package.json' -o -name 'README.md' -o -name '.cursorrules' -o -name 'CLAUDE.md' 2>/dev/null
+  ls -la
 
-Run these commands to understand the codebase:
-- "git status" - Current git status
-- "git branch --show-current" - Current branch
-- "git log --oneline -5" - Recent commits
-- "find . -name 'Makefile' -o -name 'go.mod' -o -name 'package.json' -o -name 'README.md' -o -name '.cursorrules' -o -name 'CLAUDE.md' 2>/dev/null | head -20" - Find key project files
-- "ls -la" - List root directory contents
-
-## Your task
-
-Analyze the codebase structure, read key files (README.md, Makefile, go.mod, package.json, etc.), and create a comprehensive .tachi.md file at the root of the repository. Use the WriteFile tool to create the file.
-
-If .tachi.md already exists, read it first and suggest improvements.
-
-The file should be concise but informative - focus on practical information needed to work effectively in this codebase.`
+Then read key files, understand the architecture, and produce the .tachi.md.`
 
 type Command struct {
 	Name        string
