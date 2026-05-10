@@ -591,3 +591,64 @@ func TestStatusBar_View_MillionTokens(t *testing.T) {
 		t.Errorf("should format 5.0M context window: got %q", view)
 	}
 }
+
+// ---- Cost display ----
+
+func withCost(cost float64) func(*StatusBar) {
+	return func(s *StatusBar) { s.sessionCost = cost }
+}
+
+func TestStatusBar_SetCost(t *testing.T) {
+	s := makeStatusBar()
+	s.SetCost(0.123)
+	if s.sessionCost != 0.123 {
+		t.Errorf("SetCost: want 0.123, got %v", s.sessionCost)
+	}
+}
+
+func TestStatusBar_View_CostDisplay(t *testing.T) {
+	s := makeStatusBar(
+		withWidth(120),
+		withState(stateIdle),
+		withCost(0.123),
+	)
+	view := s.View()
+	if !strings.Contains(view, "¥0.123") {
+		t.Errorf("should show cost: got %q", view)
+	}
+}
+
+func TestStatusBar_View_NoCostWhenZero(t *testing.T) {
+	s := makeStatusBar(
+		withWidth(120),
+		withState(stateIdle),
+		withCost(0),
+	)
+	view := s.View()
+	if strings.Contains(view, "¥") {
+		t.Errorf("should NOT show cost when 0: got %q", view)
+	}
+}
+
+func TestFormatCostCNY(t *testing.T) {
+	tests := []struct {
+		cost float64
+		want string
+	}{
+		{0, ""},
+		{0.0001, "<¥0.001"},
+		{0.001, "¥0.001"},
+		{0.123, "¥0.123"},
+		{1.0, "¥1.000"},
+		{10.5, "¥10.500"},
+		{100.0, "¥100.000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got := formatCostCNY(tt.cost)
+			if got != tt.want {
+				t.Errorf("formatCostCNY(%v) = %q, want %q", tt.cost, got, tt.want)
+			}
+		})
+	}
+}

@@ -157,4 +157,7 @@ var (
 
 	pendingCountStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#EED49F"))
+
+	costStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#8BD5CA"))
 )

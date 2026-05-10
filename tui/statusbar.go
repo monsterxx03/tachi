@@ -16,6 +16,7 @@ type StatusBar struct {
 	providerInfo  string
 	state         state
 	totalUsage    *llm.Usage
+	sessionCost   float64
 	contextWindow int64
 	copyMode      bool
 	spinner       spinner.Model
@@ -37,6 +38,7 @@ func (s *StatusBar) SetWidth(w int)               { s.width = w }
 func (s *StatusBar) SetState(st state)             { s.state = st }
 func (s *StatusBar) SetUsage(u *llm.Usage)         { s.totalUsage = u }
 func (s *StatusBar) SetCopyMode(b bool)            { s.copyMode = b }
+func (s *StatusBar) SetCost(cost float64)          { s.sessionCost = cost }
 func (s *StatusBar) SetProviderInfo(info string)    { s.providerInfo = info }
 func (s *StatusBar) SetContextWindow(cw int64)      { s.contextWindow = cw }
 func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s.sessionID = id }
@@ -94,7 +96,7 @@ func (s StatusBar) View() string {
 	}
 
 	var right string
-	if s.totalUsage != nil && s.totalUsage.InputTokens > 0 {
+	if (s.totalUsage != nil && s.totalUsage.InputTokens > 0) || s.sessionCost > 0 {
 		right = s.buildUsageRight()
 	}
 
@@ -119,16 +121,28 @@ func (s StatusBar) truncateTitle(title string) string {
 }
 
 func (s StatusBar) buildUsageRight() string {
+	var parts []string
+
+	// Cost display
+	if s.sessionCost > 0 {
+		costStr := formatCostCNY(s.sessionCost)
+		parts = append(parts, costStyle.Render(costStr))
+	}
+
 	// Context usage: show input tokens as fraction of context window
-	if s.totalUsage.InputTokens > 0 && s.contextWindow > 0 {
+	if s.totalUsage != nil && s.totalUsage.InputTokens > 0 && s.contextWindow > 0 {
 		pct := float64(s.totalUsage.InputTokens) / float64(s.contextWindow) * 100
 		ctxStr := fmt.Sprintf("ctx: %s/%s %s",
 			formatTokens(s.totalUsage.InputTokens),
 			formatTokens(s.contextWindow),
 			formatPercent(pct))
-		return usageColorStyle(pct).Render(ctxStr) + " "
+		parts = append(parts, usageColorStyle(pct).Render(ctxStr))
 	}
-	return ""
+
+	if len(parts) == 0 {
+		return ""
+	}
+	return strings.Join(parts, " ") + " "
 }
 
 func usageColorStyle(pct float64) lipgloss.Style {
@@ -157,4 +171,15 @@ func formatTokens(n int64) string {
 		return fmt.Sprintf("%.1fk", float64(n)/1_000)
 	}
 	return fmt.Sprintf("%d", n)
+}
+
+// formatCostCNY formats a cost value in CNY for display in the statusbar.
+func formatCostCNY(cost float64) string {
+	if cost <= 0 {
+		return ""
+	}
+	if cost < 0.001 {
+		return "<¥0.001"
+	}
+	return fmt.Sprintf("¥%.3f", cost)
 }

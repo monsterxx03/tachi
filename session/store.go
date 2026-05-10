@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/monsterxx03/tachi/config"
 )
 
 // Store defines the interface for session persistence
@@ -210,4 +211,59 @@ func ExtractTitle(content string) string {
 		return string(runes[:47]) + "…"
 	}
 	return content
+}
+
+// LoadSubagentMessages loads all subagent messages for a session.
+// Returns a map of subagentID → messages.
+func LoadSubagentMessages(sessionID string) (map[string][]Message, error) {
+	dir, err := config.SessionDir()
+	if err != nil {
+		return nil, fmt.Errorf("session dir: %w", err)
+	}
+
+	subDir := filepath.Join(dir, sessionID, "subagent")
+	entries, err := os.ReadDir(subDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil // No subagents
+		}
+		return nil, fmt.Errorf("read subagent dir: %w", err)
+	}
+
+	result := make(map[string][]Message)
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".jsonl" {
+			continue
+		}
+
+		subID := entry.Name()[:len(entry.Name())-len(".jsonl")]
+		path := filepath.Join(subDir, entry.Name())
+
+		f, err := os.Open(path)
+		if err != nil {
+			continue
+		}
+
+		var msgs []Message
+		scanner := bufio.NewScanner(f)
+		scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+		for scanner.Scan() {
+			line := scanner.Bytes()
+			if len(line) == 0 {
+				continue
+			}
+			var msg Message
+			if err := json.Unmarshal(line, &msg); err != nil {
+				continue
+			}
+			msgs = append(msgs, msg)
+		}
+		f.Close()
+
+		if len(msgs) > 0 {
+			result[subID] = msgs
+		}
+	}
+
+	return result, nil
 }

@@ -90,5 +90,6 @@ func (m *Model) switchToProvider(idx int) {
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Type, resolved.Model)
 	m.statusbar.SetProviderInfo(providerInfo)
 	m.statusbar.SetContextWindow(resolved.ContextWindow)
+	m.refreshSessionCost()
 	m.exitModelSelect(fmt.Sprintf("Switched to %s", providerInfo))
 }

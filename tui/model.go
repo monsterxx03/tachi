@@ -76,6 +76,7 @@ type Model struct {
 	eventCh        <-chan agent.AgentEvent
 	steerRespCh    chan string // agent → TUI: steer check requests use this to get pending input
 	totalUsage     llm.Usage
+	sessionCost    float64
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
 
@@ -133,6 +134,8 @@ func NewModel(cfg ModelConfig) *Model {
 	if len(cfg.InitialHistory) > 0 {
 		m.history = cfg.InitialHistory
 		m.chatview.LoadHistory(cfg.InitialSessionMsgs)
+		m.rebuildTotalUsage(cfg.InitialSessionMsgs)
+		m.refreshSessionCost()
 	}
 
 	if len(cfg.InitialSessionList) > 0 {
@@ -164,6 +167,69 @@ func (m *Model) syncSessionInfo() {
 	} else {
 		m.statusbar.SetSessionInfo("", "")
 	}
+}
+
+// resolveModelPrice resolves the effective pricing for the current model.
+// Checks provider config overrides first, then falls back to built-in pricing.
+func (m *Model) resolveModelPrice() *llm.ModelPrice {
+	model := m.agent.Model()
+
+	// Check for provider-level price overrides
+	if m.cfg != nil && m.cfg.Provider != "" {
+		pCfg := m.cfg.FindProvider(m.cfg.Provider)
+		if pCfg != nil {
+			return llm.ResolveModelPrice(
+				model,
+				pCfg.InputPrice,
+				pCfg.OutputPrice,
+				pCfg.CacheReadInputPrice,
+				pCfg.CacheCreationInputPrice,
+			)
+		}
+	}
+
+	return llm.ResolveModelPrice(model, nil, nil, nil, nil)
+}
+
+// refreshSessionCost recalculates the total session cost from stored messages
+// (including subagent messages) and updates the statusbar.
+func (m *Model) refreshSessionCost() {
+	sm := m.agent.SessionManager()
+	if sm == nil {
+		return
+	}
+	price := m.resolveModelPrice()
+	if price == nil {
+		m.sessionCost = 0
+		m.statusbar.SetCost(0)
+		return
+	}
+
+	// Recalculate from cumulative main conversation usage (tracked in totalUsage)
+	cost := llm.CalculateCost(&m.totalUsage, price)
+
+	// Add subagent costs by scanning subagent JSONL files
+	if curr := sm.Current(); curr != nil {
+		subMsgs, err := sm.LoadSubagentMessages(curr.ID)
+		if err == nil {
+			for _, msgs := range subMsgs {
+				for _, msg := range msgs {
+					if msg.Usage != nil {
+						usage := &llm.Usage{
+							InputTokens:              msg.Usage.InputTokens,
+							OutputTokens:             msg.Usage.OutputTokens,
+							CacheReadInputTokens:     msg.Usage.CacheReadInputTokens,
+							CacheCreationInputTokens: msg.Usage.CacheCreationInputTokens,
+						}
+						cost += llm.CalculateCost(usage, price)
+					}
+				}
+			}
+		}
+	}
+
+	m.sessionCost = cost
+	m.statusbar.SetCost(cost)
 }
 
 func (m *Model) Init() tea.Cmd {
@@ -643,7 +709,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventSubagentDone:
-		// Sub-agent completed — TUI no-op (tool result will handle display).
+		// Sub-agent completed — refresh cost to include subagent usage.
+		m.refreshSessionCost()
 		return m.nextEvent()
 
 	case agent.AgentEventSteerCheck:
@@ -687,6 +754,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.totalUsage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
 			m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
 			m.statusbar.SetUsage(&m.totalUsage)
+			m.refreshSessionCost()
 		}
 		if m.savedTools != nil {
 			m.agent.RestoreToolRegistry(m.savedTools)

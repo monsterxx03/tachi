@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // --- Session selection ---
@@ -184,6 +185,10 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
+	// Rebuild usage and cost from stored messages
+	m.rebuildTotalUsage(sessionMsgs)
+	m.refreshSessionCost()
+
 	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, s.Provider)
 	if err != nil {
 		m.exitSessionSelect(fmt.Sprintf("Failed to convert session: %v", err))
@@ -217,6 +222,27 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	}
 	m.exitSessionSelect(msg)
 	return m, nil
+}
+
+// rebuildTotalUsage reconstructs the cumulative totalUsage from session messages.
+// InputTokens from the last assistant message with usage = total input (API reports total).
+// OutputTokens and cache tokens are summed across all messages.
+func (m *Model) rebuildTotalUsage(msgs []session.Message) {
+	m.totalUsage = llm.Usage{}
+
+	var lastInput int64
+	for _, msg := range msgs {
+		if msg.Usage != nil {
+			if msg.Usage.InputTokens > 0 {
+				lastInput = msg.Usage.InputTokens
+			}
+			m.totalUsage.OutputTokens += msg.Usage.OutputTokens
+			m.totalUsage.CacheCreationInputTokens += msg.Usage.CacheCreationInputTokens
+			m.totalUsage.CacheReadInputTokens += msg.Usage.CacheReadInputTokens
+		}
+	}
+	m.totalUsage.InputTokens = lastInput
+	m.statusbar.SetUsage(&m.totalUsage)
 }
 
 // restoreSessionProvider resolves and switches the agent's provider to match

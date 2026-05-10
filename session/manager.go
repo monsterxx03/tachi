@@ -262,6 +262,12 @@ func (m *Manager) LoadMessages() ([]Message, error) {
 	return m.store.LoadMessages(m.current.ID)
 }
 
+// LoadSubagentMessages loads all subagent messages for a session.
+// Returns a map of subagentID → messages. Returns empty map if no subagents exist.
+func (m *Manager) LoadSubagentMessages(sessionID string) (map[string][]Message, error) {
+	return LoadSubagentMessages(sessionID)
+}
+
 // Delete deletes a session by ID
 func (m *Manager) Delete(id string) error {
 	return m.store.DeleteSession(id)

@@ -30,6 +30,13 @@ type ProviderConfig struct {
 	BaseURL       string `yaml:"base_url"`
 	APIKey        string `yaml:"api_key"`
 	ContextWindow *int64 `yaml:"context_window"` // Manual override for model context window (tokens)
+
+	// Pricing overrides (CNY per 1M tokens). When set, override built-in pricing.
+	// Leave nil to use built-in prices (if available). Set 0 to disable cost calculation.
+	InputPrice            *float64 `yaml:"input_price"`
+	OutputPrice           *float64 `yaml:"output_price"`
+	CacheReadInputPrice   *float64 `yaml:"cache_read_input_price"`
+	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price"`
 }
 
 type WebSearchConfig struct {
