@@ -495,18 +495,17 @@ func transcriptShow(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("specify --session <id> or --latest")
 	}
 
-	// Load the transcript for this session.
-	// Manager.LoadTranscript requires current to be set (done by Load above).
-	tr, err := mgr.LoadTranscript()
+	// Load messages for this session.
+	msgs, err := mgr.LoadMessages()
 	if err != nil {
-		return fmt.Errorf("load transcript: %w", err)
+		return fmt.Errorf("load messages: %w", err)
 	}
-	if tr == nil {
-		return fmt.Errorf("session %q has no transcript data yet.\nRun a conversation with this session to generate transcripts.", sess.ID)
+	if len(msgs) == 0 {
+		return fmt.Errorf("session %q has no messages yet.\nRun a conversation first.", sess.ID)
 	}
 
-	// Build report data and generate HTML.
-	data := render.BuildReportData(sess, tr)
+	// Build report data from session messages (transcript is replaced by session).
+	data := render.BuildReportDataFromMessages(sess, msgs)
 	html, err := render.GenerateHTML(data)
 	if err != nil {
 		return fmt.Errorf("generate HTML: %w", err)

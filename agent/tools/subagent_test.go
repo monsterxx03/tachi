@@ -16,9 +16,9 @@ type mockRunner struct {
 	calledArgs     SubagentArgs
 }
 
-func (m *mockRunner) RunSubagent(_ context.Context, args SubagentArgs) (string, error) {
+func (m *mockRunner) RunSubagent(_ context.Context, args SubagentArgs) (string, string, error) {
 	m.calledArgs = args
-	return m.result, m.err
+	return m.result, "", m.err
 }
 
 func (m *mockRunner) AvailableToolNames() []string { return m.toolNames }
@@ -271,5 +271,27 @@ func TestSubagentArgs_Serialization(t *testing.T) {
 	}
 	if parsed.WorktreeBranch != "feat/test" {
 		t.Errorf("worktree_branch mismatch: %s", parsed.WorktreeBranch)
+	}
+}
+
+func TestSubagentTool_LastSubagentID(t *testing.T) {
+	runner := &mockRunner{
+		result:         "done",
+		maxOutputChars: 16384,
+	}
+	tool := NewSubagentTool(runner)
+
+	// Before any invocation, ID should be empty
+	if id := tool.LastSubagentID(); id != "" {
+		t.Errorf("expected empty ID before invocation, got %q", id)
+	}
+}
+
+func TestSubagentIDCarrier_InToolResult(t *testing.T) {
+	// Verify that SubagentTool implements SubagentIDCarrier
+	tool := NewSubagentTool(&mockRunner{maxOutputChars: 16384})
+	var carrier SubagentIDCarrier = tool
+	if carrier.LastSubagentID() != "" {
+		t.Error("expected empty subagent ID before invocation")
 	}
 }

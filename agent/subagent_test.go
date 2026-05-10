@@ -170,8 +170,8 @@ type mockSubagentRunner struct {
 	maxOutput int
 }
 
-func (m *mockSubagentRunner) RunSubagent(_ context.Context, _ agenttools.SubagentArgs) (string, error) {
-	return "", nil
+func (m *mockSubagentRunner) RunSubagent(_ context.Context, _ agenttools.SubagentArgs) (string, string, error) {
+	return "", "", nil
 }
 func (m *mockSubagentRunner) AvailableToolNames() []string { return m.toolNames }
 func (m *mockSubagentRunner) MaxOutputChars() int          { return m.maxOutput }

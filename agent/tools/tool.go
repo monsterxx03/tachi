@@ -45,6 +45,12 @@ type ConfirmationTool interface {
 	GetDiff(ctx context.Context, args string) (string, error)
 }
 
+// SubagentIDCarrier is an optional interface for tools whose execution
+// produces a sub-agent ID that callers may want to track.
+type SubagentIDCarrier interface {
+	LastSubagentID() string
+}
+
 type ToolResultStatus int
 
 const (
@@ -55,13 +61,14 @@ const (
 )
 
 type ToolResult struct {
-	Status    ToolResultStatus
-	Output    string
-	Err       error
-	Name      string
-	Args      string
-	Diff      string
-	Questions []Question
+	Status     ToolResultStatus
+	Output     string
+	Err        error
+	Name       string
+	Args       string
+	Diff       string
+	Questions  []Question
+	SubagentID string // SubAgent shortID, for linking to subagent/<id>.jsonl
 }
 
 // Schema defines the JSON schema for a tool
@@ -157,7 +164,12 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 	if err != nil {
 		return ToolResult{Status: ToolResultError, Err: err}
 	}
-	return ToolResult{Status: ToolResultSuccess, Output: result}
+
+	tr := ToolResult{Status: ToolResultSuccess, Output: result}
+	if carrier, ok := tool.(SubagentIDCarrier); ok {
+		tr.SubagentID = carrier.LastSubagentID()
+	}
+	return tr
 }
 
 // IsParallel returns whether the named tool supports parallel execution.

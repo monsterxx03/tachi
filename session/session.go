@@ -36,5 +36,6 @@ type Message struct {
 	IsError    bool        `json:"is_error,omitempty"`
 	Diff       string      `json:"diff,omitempty"`
 	ToolCallID string      `json:"tool_call_id,omitempty"`
+	SubagentID string      `json:"subagent_id,omitempty"` // shortID for SubAgent tool_result → subagent/<id>.jsonl
 	Timestamp  time.Time   `json:"timestamp"`
 }

@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -22,8 +21,6 @@ type Store interface {
 	UpdateMeta(session *Session) error
 	ListSessions() ([]*Session, error)
 	DeleteSession(id string) error
-	AppendTranscriptTurn(id string, data []byte) error
-	LoadTranscript(id string) ([]byte, error)
 }
 
 // FileStore implements Store interface using filesystem
@@ -190,71 +187,6 @@ func (s *FileStore) ListSessions() ([]*Session, error) {
 func (s *FileStore) DeleteSession(id string) error {
 	dir := s.sessionDir(id)
 	return os.RemoveAll(dir)
-}
-
-// Transcript path helpers
-func (s *FileStore) transcriptPath(id string) string {
-	return filepath.Join(s.sessionDir(id), "transcript.jsonl")
-}
-
-// AppendTranscriptTurn appends a single turn as a JSON line to transcript.jsonl.
-func (s *FileStore) AppendTranscriptTurn(id string, data []byte) error {
-	f, err := os.OpenFile(s.transcriptPath(id), os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0600)
-	if err != nil {
-		return fmt.Errorf("open transcript.jsonl: %w", err)
-	}
-	defer f.Close()
-
-	if _, err := f.Write(append(data, '\n')); err != nil {
-		return fmt.Errorf("write transcript turn: %w", err)
-	}
-	return nil
-}
-
-// LoadTranscript reads transcript.jsonl and reconstructs a Transcript JSON.
-// Returns nil, nil if the file doesn't exist.
-func (s *FileStore) LoadTranscript(id string) ([]byte, error) {
-	f, err := os.Open(s.transcriptPath(id))
-	if err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("open transcript.jsonl: %w", err)
-	}
-	defer f.Close()
-
-	var lines [][]byte
-	scanner := bufio.NewScanner(f)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		// Copy the line since scanner reuses its buffer
-		cp := make([]byte, len(line))
-		copy(cp, line)
-		lines = append(lines, cp)
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("scan transcript.jsonl: %w", err)
-	}
-	if len(lines) == 0 {
-		return nil, nil
-	}
-
-	// Reconstruct Transcript: {"session_id":"<id>","turns":[...]}
-	var b strings.Builder
-	b.WriteString(`{"session_id":"`)
-	b.WriteString(id)
-	b.WriteString(`","turns":[`)
-	for i, line := range lines {
-		if i > 0 {
-			b.WriteByte(',')
-		}
-		b.Write(line)
-	}
-	b.WriteString(`]}`)
-	return []byte(b.String()), nil
 }
 
 // GenerateID generates a new session ID in format: YYYY-MM-DD-HHMMSS-uuid

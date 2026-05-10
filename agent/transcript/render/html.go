@@ -87,16 +87,7 @@ type KV struct {
 
 // BuildReportData converts a session and transcript into template-ready data.
 func BuildReportData(s *session.Session, tr *transcript.Transcript) *ReportData {
-	sv := &SessionView{
-		ID:        s.ID,
-		Title:     s.Title,
-		Provider:  s.Provider,
-		Model:     s.Model,
-		CreatedAt: formatTime(s.CreatedAt),
-		UpdatedAt: formatTime(s.UpdatedAt),
-		Duration:  formatDuration(s.CreatedAt, s.UpdatedAt),
-	}
-
+	sv := buildSessionView(s)
 	tv := buildTranscriptView(tr)
 	stats := buildStats(tr, s.CreatedAt, s.UpdatedAt)
 
@@ -104,6 +95,32 @@ func BuildReportData(s *session.Session, tr *transcript.Transcript) *ReportData 
 		Session:    sv,
 		Transcript: tv,
 		Stats:      stats,
+	}
+}
+
+// BuildReportDataFromMessages builds report data from session messages
+// (replaces the transcript-based approach).
+func BuildReportDataFromMessages(s *session.Session, msgs []session.Message) *ReportData {
+	sv := buildSessionView(s)
+	tv := buildTranscriptViewFromMessages(msgs)
+	stats := buildStatsFromMessages(msgs, s.CreatedAt, s.UpdatedAt)
+
+	return &ReportData{
+		Session:    sv,
+		Transcript: tv,
+		Stats:      stats,
+	}
+}
+
+func buildSessionView(s *session.Session) *SessionView {
+	return &SessionView{
+		ID:        s.ID,
+		Title:     s.Title,
+		Provider:  s.Provider,
+		Model:     s.Model,
+		CreatedAt: formatTime(s.CreatedAt),
+		UpdatedAt: formatTime(s.UpdatedAt),
+		Duration:  formatDuration(s.CreatedAt, s.UpdatedAt),
 	}
 }
 
@@ -259,6 +276,160 @@ func sortFreq(freq map[string]int) []KV {
 		}
 	}
 	return result
+}
+
+// buildTranscriptViewFromMessages builds a turn view from flat session messages.
+func buildTranscriptViewFromMessages(msgs []session.Message) *TranscriptView {
+	tv := &TranscriptView{}
+	if len(msgs) == 0 {
+		return tv
+	}
+
+	// Group messages into turns: each user message starts a new turn.
+	turnID := 1
+	var currentEvents []EventView
+
+	for _, msg := range msgs {
+		ev := sessionMessageToEventView(msg)
+
+		// User messages mark new turn boundaries
+		if msg.Type == session.MessageTypeUser && len(currentEvents) > 0 {
+			tv.Turns = append(tv.Turns, TurnView{ID: turnID, Events: currentEvents})
+			turnID++
+			currentEvents = nil
+		}
+		currentEvents = append(currentEvents, ev)
+	}
+
+	// Flush final turn
+	if len(currentEvents) > 0 {
+		tv.Turns = append(tv.Turns, TurnView{ID: turnID, Events: currentEvents})
+	}
+
+	return tv
+}
+
+// sessionMessageToEventView converts a session.Message to an EventView.
+func sessionMessageToEventView(msg session.Message) EventView {
+	ev := EventView{
+		Type:      string(msg.Type),
+		Timestamp: formatTime(msg.Timestamp),
+		Name:      msg.Name,
+		Content:   msg.Content,
+		IsError:   msg.IsError,
+	}
+
+	// Map session message types to transcript event types for display
+	switch msg.Type {
+	case session.MessageTypeUser:
+		ev.Type = "user"
+		ev.Content = msg.Content
+	case session.MessageTypeAssistant:
+		ev.Type = "text"
+		ev.Content = msg.Content
+	case session.MessageTypeThinking:
+		ev.Type = "thinking"
+		ev.Content = msg.Content
+	case session.MessageTypeToolCall:
+		ev.Type = "tool_call"
+		ev.ArgsRaw = convertArgsToString(msg.Args)
+		ev.ArgsJSON = formatArgsJSON(ev.ArgsRaw)
+	case session.MessageTypeToolResult:
+		ev.Type = "tool_result"
+		ev.Content = msg.Result
+	case session.MessageTypeConfirm:
+		ev.Type = "confirm"
+	default:
+		ev.Type = string(msg.Type)
+	}
+
+	ev.Icon, ev.CSSClass = sessionIconAndClass(msg)
+	return ev
+}
+
+// sessionIconAndClass returns icon and CSS class for a session message type.
+func sessionIconAndClass(msg session.Message) (icon, cssClass string) {
+	switch msg.Type {
+	case session.MessageTypeUser:
+		return "👤", "event-user"
+	case session.MessageTypeAssistant:
+		return "💬", "event-text"
+	case session.MessageTypeThinking:
+		return "💭", "event-thinking"
+	case session.MessageTypeToolCall:
+		if msg.Name == "SubAgent" {
+			return "🔀", "event-subagent"
+		}
+		return "🔧", "event-tool-call"
+	case session.MessageTypeToolResult:
+		if msg.IsError {
+			return "❌", "event-tool-result event-error"
+		}
+		return "📋", "event-tool-result"
+	default:
+		return "•", ""
+	}
+}
+
+// convertArgsToString converts msg.Args (any) to string.
+func convertArgsToString(args any) string {
+	if args == nil {
+		return ""
+	}
+	switch v := args.(type) {
+	case string:
+		return v
+	default:
+		data, err := json.Marshal(v)
+		if err != nil {
+			return fmt.Sprintf("%v", v)
+		}
+		return string(data)
+	}
+}
+
+// buildStatsFromMessages builds statistics from session messages.
+func buildStatsFromMessages(msgs []session.Message, created, updated time.Time) StatsView {
+	stats := StatsView{
+		TotalDuration: formatDuration(created, updated),
+	}
+	freq := map[string]int{}
+
+	for _, msg := range msgs {
+		switch msg.Type {
+		case session.MessageTypeUser:
+			stats.UserMsgCount++
+		case session.MessageTypeThinking:
+			stats.ThinkingCount++
+		case session.MessageTypeAssistant:
+			stats.TextCount++
+		case session.MessageTypeToolCall:
+			stats.ToolCallCount++
+			freq[msg.Name]++
+			if msg.Name == "SubAgent" {
+				stats.SubAgentCount++
+			}
+		case session.MessageTypeToolResult:
+			if msg.IsError {
+				stats.ToolErrorCount++
+			}
+		}
+	}
+
+	stats.TurnCount = countTurnsFromMessages(msgs)
+	stats.ToolFreq = sortFreq(freq)
+	return stats
+}
+
+// countTurnsFromMessages counts turns by user message boundaries.
+func countTurnsFromMessages(msgs []session.Message) int {
+	turns := 0
+	for _, msg := range msgs {
+		if msg.Type == session.MessageTypeUser {
+			turns++
+		}
+	}
+	return turns
 }
 
 func formatArgsJSON(raw string) string {

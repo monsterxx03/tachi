@@ -8,10 +8,10 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/agent/transcript"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 )
 
 const (
@@ -97,16 +97,17 @@ func (e *SubagentExecutor) MaxOutputChars() int {
 
 // RunSubagent creates and runs a child AIAgent to execute the given task.
 // It blocks until the child completes or the context is cancelled.
+// Returns (output, subagentID, error).
 func (e *SubagentExecutor) RunSubagent(
 	ctx context.Context,
 	args tools.SubagentArgs,
-) (string, error) {
+) (string, string, error) {
 	// Acquire concurrency semaphore (block until slot available or ctx cancelled)
 	select {
 	case e.sem <- struct{}{}:
 		defer func() { <-e.sem }()
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return "", "", ctx.Err()
 	}
 
 	// Determine provider and model (fallback logic)
@@ -130,13 +131,15 @@ func (e *SubagentExecutor) RunSubagent(
 
 	// If worktree is enabled, delegate to WorktreeManager
 	if e.worktreeMgr != nil {
-		return e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, error) {
+		result, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, error) {
 			e.logger.Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
 			return e.runChildAgent(worktreeCtx, shortID, args, provider, model, maxIterations, thinking, branch, wtPath)
 		})
+		return result, shortID, err
 	}
 
-	return e.runChildAgent(ctx, shortID, args, provider, model, maxIterations, thinking, "", "")
+	result, err := e.runChildAgent(ctx, shortID, args, provider, model, maxIterations, thinking, "", "")
+	return result, shortID, err
 }
 
 // runChildAgent is the internal method that creates and runs the child AIAgent.
@@ -162,17 +165,9 @@ func (e *SubagentExecutor) runChildAgent(
 	// Register filtered tools
 	child.RegisterToolsForSubagent(e.parentAgent, args.AllowedTools)
 
-	// Propagate transcript builder from context (parent injected it via
-	// transcript.WithBuilder before calling RunSubagent).
-	if subBuilder := transcript.BuilderFromContext(ctx); subBuilder != nil {
-		child.SetTranscriptBuilder(subBuilder)
-	}
-
 	// Build system prompt
 	systemPrompt := subagentSystemPrompt
 	if worktreePath != "" {
-		// Explain which branch the worktree starts from.
-		// It is always detached HEAD — the branch is just the starting point.
 		source := branch
 		if source == "" {
 			source = "HEAD"
@@ -181,12 +176,29 @@ func (e *SubagentExecutor) runChildAgent(
 	}
 
 	// Compose the subagent session ID for the x-tachi-session-id header.
-	// Format: <main_session_id>:<subagent_id> so backend analytics can
-	// correlate sub-agent API calls with their parent session.
 	subagentSessionID := shortID
 	if sm := e.parentAgent.SessionManager(); sm != nil {
 		if cur := sm.Current(); cur != nil {
 			subagentSessionID = cur.ID + ":" + shortID
+		}
+	}
+
+	// Create sub-agent recorder for persisting execution details
+	var recorder *subagentRecorder
+	if sm := e.parentAgent.SessionManager(); sm != nil {
+		if cur := sm.Current(); cur != nil {
+			var recErr error
+			recorder, recErr = newSubagentRecorder(cur.ID, shortID)
+			if recErr != nil {
+				childLogger.Log("failed to create subagent recorder: %v", recErr)
+			} else {
+				defer recorder.close()
+				// Record the task prompt as the first user message
+				recorder.record(&session.Message{
+					Type:    session.MessageTypeUser,
+					Content: args.Prompt,
+				})
+			}
 		}
 	}
 
@@ -200,18 +212,76 @@ func (e *SubagentExecutor) runChildAgent(
 		SessionID: subagentSessionID,
 	})
 
-	// Consume events, collect result + stats
+	// Consume events, collect result + stats, record to subagent JSONL
 	var sb strings.Builder
+	var thinkingBuf strings.Builder
 	startTime := time.Now()
 	iterCount := 0
 
+	// flushThinking records accumulated thinking as a session message
+	flushThinking := func() {
+		if recorder == nil || thinkingBuf.Len() == 0 {
+			return
+		}
+		recorder.record(&session.Message{
+			Type:    session.MessageTypeThinking,
+			Content: thinkingBuf.String(),
+		})
+		thinkingBuf.Reset()
+	}
+
+	// flushText records accumulated text as an assistant message
+	flushText := func() {
+		if recorder == nil || sb.Len() == 0 {
+			return
+		}
+		recorder.record(&session.Message{
+			Type:    session.MessageTypeAssistant,
+			Content: sb.String(),
+		})
+	}
+
 	for event := range ch {
 		switch event.Type {
+		case AgentEventThinkingDelta:
+			thinkingBuf.WriteString(event.ThinkingDelta)
+
 		case AgentEventTextDelta:
+			// Transition from thinking to text: flush the thinking block
+			flushThinking()
 			sb.WriteString(event.TextDelta)
+
+		case AgentEventToolCallArgs:
+			// Flush thinking + text before tool call
+			flushThinking()
+			flushText()
+			sb.Reset()
+			if recorder != nil {
+				recorder.record(&session.Message{
+					Type:       session.MessageTypeToolCall,
+					Name:       event.ToolName,
+					Args:       event.ToolArgs,
+					ToolCallID: event.ToolID,
+				})
+			}
+
 		case AgentEventToolResult:
+			if recorder != nil {
+				recorder.record(&session.Message{
+					Type:       session.MessageTypeToolResult,
+					Name:       event.ToolName,
+					Result:     event.ToolResult,
+					IsError:    event.ToolIsError,
+					ToolCallID: event.ToolID,
+				})
+			}
 			iterCount++
+
 		case AgentEventError:
+			// Flush remaining thinking + text before returning
+			flushThinking()
+			flushText()
+
 			duration := time.Since(startTime)
 			var errVal error
 			if event.Result != nil {
@@ -225,6 +295,10 @@ func (e *SubagentExecutor) runChildAgent(
 			return sb.String(), fmt.Errorf("sub-agent error")
 		}
 	}
+
+	// Flush any remaining thinking + text after the stream ends
+	flushThinking()
+	flushText()
 
 	// Log stats
 	duration := time.Since(startTime)

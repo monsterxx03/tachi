@@ -6,7 +6,6 @@ import (
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/agent/transcript"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -80,8 +79,7 @@ func (a *AIAgent) executeToolGroup(ctx context.Context, group toolGroup, ch chan
 // in parallel, and finally emits ToolResult events in order.
 func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
 	// Phase 1: Emit all ToolCallArgs events upfront so TUI can show spinners
-	recorders := make([]*transcript.ToolCallRecorder, len(toolCalls))
-	for i, tc := range toolCalls {
+	for _, tc := range toolCalls {
 		ch <- AgentEvent{
 			Type:     AgentEventToolCallArgs,
 			ToolName: tc.Function.Name,
@@ -95,8 +93,6 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			Args:       tc.Function.Arguments,
 			ToolCallID: tc.ID,
 		})
-		// Transcript: record tool call
-		recorders[i] = a.recordTranscriptToolCall(tc.Function.Name, tc.Function.Arguments)
 	}
 
 	// Phase 2: Execute all tools in parallel
@@ -105,8 +101,8 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	wg.Add(len(toolCalls))
 
 	// Emit SubagentStart events for sub-agent calls before execution (TUI indicator).
-	for i, tc := range toolCalls {
-		if tc.Function.Name == tools.ToolNameSubAgent && recorders[i] != nil {
+	for _, tc := range toolCalls {
+		if tc.Function.Name == tools.ToolNameSubAgent {
 			ch <- AgentEvent{
 				Type:     AgentEventSubagentStart,
 				ToolName: tc.Function.Name,
@@ -119,25 +115,19 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	for i, tc := range toolCalls {
 		go func(idx int, tc llm.ToolCall) {
 			defer wg.Done()
-			execCtx := ctx
-			// For SubAgent, inject the sub-builder into context for child agent.
-			if tc.Function.Name == tools.ToolNameSubAgent && recorders[idx] != nil {
-				execCtx = transcript.WithBuilder(execCtx, recorders[idx].SubBuilder())
-			}
-			results[idx] = a.toolRegistry.Invoke(execCtx, tc.Function.Name, tc.Function.Arguments)
+			results[idx] = a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 		}(i, tc)
 	}
 
 	wg.Wait()
 
-	// Phase 3: Process results in order, emit events, build messages, record transcript
+	// Phase 3: Process results in order, emit events, build messages
 	var toolMsgs []llm.Message
 	for i, tc := range toolCalls {
 		tr := results[i]
-		rec := recorders[i]
 
 		// Emit SubagentDone for sub-agent calls after execution completes.
-		if tc.Function.Name == tools.ToolNameSubAgent && rec != nil {
+		if tc.Function.Name == tools.ToolNameSubAgent {
 			ch <- AgentEvent{
 				Type:     AgentEventSubagentDone,
 				ToolName: tc.Function.Name,
@@ -183,12 +173,8 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			Result:     toolMsg.Content,
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
+			SubagentID: tr.SubagentID,
 		})
-
-		// Transcript: record tool result
-		if rec != nil {
-			rec.RecordToolResult(toolMsg.Content, toolMsg.IsError)
-		}
 
 		toolMsgs = append(toolMsgs, toolMsg)
 	}
@@ -217,14 +203,8 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			ToolCallID: tc.ID,
 		})
 
-		// Transcript: record tool call
-		tcRecorder := a.recordTranscriptToolCall(tc.Function.Name, tc.Function.Arguments)
-
-		// For SubAgent, inject the sub-builder into context so child agent can record.
-		execCtx := ctx
-		if tc.Function.Name == tools.ToolNameSubAgent && tcRecorder != nil {
-			execCtx = transcript.WithBuilder(ctx, tcRecorder.SubBuilder())
-			// Notify TUI that a subagent has started.
+		// For SubAgent: notify TUI that a subagent has started.
+		if tc.Function.Name == tools.ToolNameSubAgent {
 			ch <- AgentEvent{
 				Type:     AgentEventSubagentStart,
 				ToolName: tc.Function.Name,
@@ -233,7 +213,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			}
 		}
 
-		tr := a.toolRegistry.Invoke(execCtx, tc.Function.Name, tc.Function.Arguments)
+		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 
 		// Notify TUI that subagent has completed.
 		if tc.Function.Name == tools.ToolNameSubAgent {
@@ -325,12 +305,8 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			Result:     toolMsg.Content,
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
+			SubagentID: tr.SubagentID,
 		})
-
-		// Transcript: record tool result
-		if tcRecorder != nil {
-			tcRecorder.RecordToolResult(toolMsg.Content, toolMsg.IsError)
-		}
 
 		toolMsgs = append(toolMsgs, toolMsg)
 	}

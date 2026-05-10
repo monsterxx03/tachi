@@ -6,13 +6,17 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 )
 
 // SubagentRunner is the interface SubagentTool uses to delegate execution.
 // This decouples the tool definition from the execution logic, making it
 // testable and allowing different executor implementations.
 type SubagentRunner interface {
-	RunSubagent(ctx context.Context, args SubagentArgs) (string, error)
+	// RunSubagent executes a sub-agent task. Returns the output text,
+	// the sub-agent's shortID (for linking to its execution record),
+	// and any error.
+	RunSubagent(ctx context.Context, args SubagentArgs) (string, string, error)
 	// AvailableToolNames returns the list of tool names available to sub-agents,
 	// used to populate the tool description dynamically so LLM knows valid values
 	// for the allowed_tools parameter.
@@ -49,7 +53,9 @@ Tips for effective delegation:
 
 // SubagentTool delegates tasks to isolated sub-agents.
 type SubagentTool struct {
-	runner SubagentRunner
+	runner         SubagentRunner
+	mu             sync.Mutex
+	lastSubagentID string
 }
 
 // NewSubagentTool creates a new SubagentTool with the given runner.
@@ -100,7 +106,11 @@ func (t *SubagentTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	result, err := t.runner.RunSubagent(ctx, sa)
+	result, subagentID, err := t.runner.RunSubagent(ctx, sa)
+
+	t.mu.Lock()
+	t.lastSubagentID = subagentID
+	t.mu.Unlock()
 
 	// Output truncation protection
 	result = t.truncateOutput(result)
@@ -113,6 +123,14 @@ func (t *SubagentTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("sub-agent failed: %w", err)
 	}
 	return result, nil
+}
+
+// LastSubagentID returns the shortID of the most recently completed sub-agent
+// invocation. Safe for concurrent use.
+func (t *SubagentTool) LastSubagentID() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastSubagentID
 }
 
 func (t *SubagentTool) truncateOutput(s string) string {
