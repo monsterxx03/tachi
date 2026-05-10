@@ -119,6 +119,9 @@ func (s *FileStore) LoadMessages(id string) ([]Message, error) {
 
 	var messages []Message
 	scanner := bufio.NewScanner(f)
+	// Increase buffer size to handle large messages (default 64KB is
+	// insufficient for messages with large tool results or file contents).
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
 	for scanner.Scan() {
 		line := scanner.Bytes()
 		if len(line) == 0 {
