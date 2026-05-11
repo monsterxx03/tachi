@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 )
@@ -160,6 +162,13 @@ var commands = []Command{
 			m.setState(stateSelectingSession)
 			m.layout()
 			return nil
+		},
+	},
+	{
+		Name:        "/usage",
+		Description: "Show session ID, token usage, cost, and tool call counts",
+		handler: func(m *Model) tea.Cmd {
+			return m.handleUsageCommand()
 		},
 	},
 }
@@ -643,4 +652,98 @@ func (m *Model) unregisterMCPTools(serverName string) {
 			m.agent.UnregisterTool(schema.Name)
 		}
 	}
+}
+
+// handleUsageCommand builds a usage report and displays it in the chat view.
+func (m *Model) handleUsageCommand() tea.Cmd {
+	sm := m.agent.SessionManager()
+	if sm == nil || !sm.HasCurrent() {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No active session",
+		})
+		return nil
+	}
+
+	report, err := agent.ComputeSessionUsage(sm, m.resolveModelPrice(), m.agent.ContextWindow())
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Failed to compute usage: %v", err),
+		})
+		return nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("**📊 Session Usage**\n\n")
+
+	// Session info
+	sb.WriteString(fmt.Sprintf("**Session:** `%s`\n", report.Session.ID))
+	provider := report.Session.Provider
+	if provider == "" {
+		provider = "(unknown)"
+	}
+	sb.WriteString(fmt.Sprintf("**Provider:** %s\n", provider))
+	sb.WriteString(fmt.Sprintf("**Model:** %s\n", report.Session.Model))
+	title := report.Session.Title
+	if title == "" {
+		title = "(untitled)"
+	}
+	sb.WriteString(fmt.Sprintf("**Title:** %s\n\n", title))
+
+	// Token usage
+	u := report.Usage
+	sb.WriteString("**Token Usage**\n")
+	sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", formatTokens(u.InputTokens)))
+	if u.CacheReadInputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", formatTokens(u.CacheReadInputTokens)))
+	}
+	if u.CacheCreationInputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", formatTokens(u.CacheCreationInputTokens)))
+	}
+	cacheMissInput := u.InputTokens - u.CacheReadInputTokens
+	if cacheMissInput < 0 {
+		cacheMissInput = 0
+	}
+	if cacheMissInput != u.InputTokens {
+		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", formatTokens(cacheMissInput)))
+	}
+	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokens(u.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", formatTokens(u.InputTokens+u.OutputTokens)))
+	if report.ContextWindow > 0 && u.InputTokens > 0 {
+		pct := float64(u.InputTokens) / float64(report.ContextWindow) * 100
+		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", formatTokens(u.InputTokens), formatTokens(report.ContextWindow), pct))
+	}
+
+	// Cost
+	sb.WriteString("\n**Cost**\n")
+	if report.Cost <= 0 {
+		sb.WriteString("  No pricing data available\n")
+	} else {
+		sb.WriteString(fmt.Sprintf("  Total cost: **¥%.4f**\n", report.Cost))
+	}
+
+	// Tool calls
+	sb.WriteString("\n**Tool Calls**\n")
+	names := make([]string, 0, len(report.ToolCalls))
+	for name := range report.ToolCalls {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		st := report.ToolCalls[name]
+		line := fmt.Sprintf("  - **%s**: %d call(s)", name, st.Count)
+		if st.ErrCount > 0 {
+			line += fmt.Sprintf(" (%d failed)", st.ErrCount)
+		}
+		sb.WriteString(line + "\n")
+	}
+	sb.WriteString(fmt.Sprintf("\n  **Total:** %d main + %d subagent = **%d** call(s)\n",
+		report.MainCount, report.SubCount, report.MainCount+report.SubCount))
+
+	m.chatview.AddMessage(chatMessage{
+		Role:    "assistant",
+		Content: sb.String(),
+	})
+	return nil
 }

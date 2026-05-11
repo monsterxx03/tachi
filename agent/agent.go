@@ -293,6 +293,11 @@ func (a *AIAgent) SetContextWindow(window int64) {
 	a.contextWindow = window
 }
 
+// ContextWindow returns the model's context window size.
+func (a *AIAgent) ContextWindow() int64 {
+	return a.contextWindow
+}
+
 // SetReminderCollector replaces the default reminder collector. Useful for
 // tests or when callers want full control over which reminders fire.
 func (a *AIAgent) SetReminderCollector(c *systemreminder.Collector) {

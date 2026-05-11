@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"sort"
 	"strings"
 	"sync"
 
@@ -249,9 +250,11 @@ func (m *Manager) handleSlashCommand(msg IncomingMessage) (string, error) {
 		return m.handleNewCommand(msg.ThreadID)
 	case "/mcp":
 		return m.handleMCPList()
+	case "/usage":
+		return m.handleUsageCommand(msg.ThreadID)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /usage — Show session usage stats", cmd), nil
 	}
 }
 
@@ -311,6 +314,92 @@ func (m *Manager) handleMCPList() (string, error) {
 			sb.WriteString("  OAuth: configured\n")
 		}
 	}
+
+	return sb.String(), nil
+}
+
+// handleUsageCommand returns usage stats for the session associated with the ThreadID.
+func (m *Manager) handleUsageCommand(threadID string) (string, error) {
+	if threadID == "" {
+		return "No active session (no thread ID).", nil
+	}
+
+	sm := m.newSessionManager()
+	if sm == nil {
+		return "Session manager unavailable.", nil
+	}
+
+	_, err := sm.FindByThreadID(threadID)
+	if err != nil {
+		m.logger.Log("channel: /usage find session for %s: %v", threadID, err)
+		return "Failed to find session.", nil
+	}
+	if !sm.HasCurrent() {
+		return "No session found for this thread. Send a message first to start a session.", nil
+	}
+
+	// Resolve price
+	var price *llm.ModelPrice
+	if m.resolvedConfig != nil {
+		model := m.resolvedConfig.Provider.Model
+		if m.cfg != nil && m.cfg.Provider != "" {
+			pCfg := m.cfg.FindProvider(m.cfg.Provider)
+			if pCfg != nil {
+				price = llm.ResolveModelPrice(model, pCfg.InputPrice, pCfg.OutputPrice, pCfg.CacheReadInputPrice, pCfg.CacheCreationInputPrice)
+			}
+		}
+		if price == nil {
+			price = llm.ResolveModelPrice(model, nil, nil, nil, nil)
+		}
+	}
+
+	report, err := agent.ComputeSessionUsage(sm, price, 0)
+	if err != nil {
+		return fmt.Sprintf("Failed to compute usage: %v", err), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("📊 Session Usage\n\n")
+	sb.WriteString(fmt.Sprintf("Session: %s\n", report.Session.ID))
+	title := report.Session.Title
+	if title == "" {
+		title = "(untitled)"
+	}
+	sb.WriteString(fmt.Sprintf("Title: %s\n", title))
+	sb.WriteString(fmt.Sprintf("Provider: %s | Model: %s\n\n", report.Session.Provider, report.Session.Model))
+
+	u := report.Usage
+	sb.WriteString("Token Usage:\n")
+	sb.WriteString(fmt.Sprintf("  Input:  %d\n", u.InputTokens))
+	if u.CacheReadInputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache read: %d\n", u.CacheReadInputTokens))
+	}
+	if u.CacheCreationInputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Cache created: %d\n", u.CacheCreationInputTokens))
+	}
+	sb.WriteString(fmt.Sprintf("  Output: %d\n", u.OutputTokens))
+	sb.WriteString(fmt.Sprintf("  Total:  %d\n\n", u.InputTokens+u.OutputTokens))
+
+	if report.Cost > 0 {
+		sb.WriteString(fmt.Sprintf("Cost: ¥%.4f\n\n", report.Cost))
+	}
+
+	sb.WriteString("Tool Calls:\n")
+	names := make([]string, 0, len(report.ToolCalls))
+	for name := range report.ToolCalls {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		st := report.ToolCalls[name]
+		line := fmt.Sprintf("  %s: %d", name, st.Count)
+		if st.ErrCount > 0 {
+			line += fmt.Sprintf(" (%d failed)", st.ErrCount)
+		}
+		sb.WriteString(line + "\n")
+	}
+	sb.WriteString(fmt.Sprintf("\nTotal: %d main + %d subagent = %d call(s)",
+		report.MainCount, report.SubCount, report.MainCount+report.SubCount))
 
 	return sb.String(), nil
 }
