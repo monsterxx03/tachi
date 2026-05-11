@@ -19,6 +19,16 @@ const (
 	JobStatusPaused JobStatus = "paused"
 )
 
+// JobType categorises the schedule pattern of a job.
+type JobType string
+
+const (
+	// JobTypeRecurring fires repeatedly on the schedule (default).
+	JobTypeRecurring JobType = "recurring"
+	// JobTypeOneshot fires exactly once, then auto-deletes.
+	JobTypeOneshot JobType = "oneshot"
+)
+
 // Job represents a scheduled cron task.
 type Job struct {
 	// ID is a unique identifier (short prefix, e.g. "cr_a1b2c3").
@@ -29,6 +39,10 @@ type Job struct {
 
 	// Schedule is a cron expression (5-field or @every/@daily etc).
 	Schedule string `json:"schedule"`
+
+	// Type controls the schedule pattern: recurring (default) or oneshot.
+	// Oneshot jobs auto-delete after the first execution.
+	Type JobType `json:"type,omitempty"`
 
 	// Prompt is the message sent to the LLM when the cron fires.
 	Prompt string `json:"prompt"`

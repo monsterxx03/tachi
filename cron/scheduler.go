@@ -172,6 +172,9 @@ func (s *Scheduler) Create(job *Job) (*Job, error) {
 	if job.Status == "" {
 		job.Status = JobStatusActive
 	}
+	if job.Type == "" {
+		job.Type = JobTypeRecurring
+	}
 	if job.TargetType == "" {
 		job.TargetType = "channel"
 	}
@@ -204,6 +207,7 @@ type UpdateOpts struct {
 	Name     *string
 	Schedule *string
 	Prompt   *string
+	Type     *JobType
 	Timezone *string
 }
 
@@ -237,6 +241,9 @@ func (s *Scheduler) Update(id string, opts UpdateOpts) (*Job, error) {
 	}
 	if opts.Timezone != nil {
 		job.Timezone = *opts.Timezone
+	}
+	if opts.Type != nil {
+		job.Type = *opts.Type
 	}
 
 	if err := s.store.Update(job); err != nil {
@@ -376,7 +383,7 @@ func (s *Scheduler) addCronEntry(job *Job) (cron.EntryID, error) {
 }
 
 // fire handles the actual job trigger: acquires semaphore, runs handler,
-// and updates LastRun status.
+// updates LastRun status, and cleans up oneshot jobs.
 func (s *Scheduler) fire(job *Job) {
 	// Try to acquire semaphore (non-blocking).
 	select {
@@ -398,8 +405,6 @@ func (s *Scheduler) fire(job *Job) {
 
 	// Update last run status in store.
 	s.mu.Lock()
-	defer s.mu.Unlock()
-
 	// Reload job from store to get the latest version (may have been updated).
 	latest, storeErr := s.store.Get(job.ID)
 	if storeErr != nil || latest == nil {
@@ -419,6 +424,19 @@ func (s *Scheduler) fire(job *Job) {
 
 	if updateErr := s.store.Update(latest); updateErr != nil {
 		s.logger.Log("cron: failed to update last_run for job %s: %v", job.ID, updateErr)
+	}
+
+	isOneshot := latest.Type == JobTypeOneshot
+	s.mu.Unlock()
+
+	// Clean up oneshot jobs after releasing the lock to avoid deadlock
+	// (Delete also acquires s.mu).
+	if isOneshot {
+		if delErr := s.Delete(job.ID); delErr != nil {
+			s.logger.Log("cron: failed to clean up oneshot job %s: %v", job.ID, delErr)
+		} else {
+			s.logger.Log("cron: oneshot job %s (%s) completed and removed", job.ID, job.Name)
+		}
 	}
 }
 

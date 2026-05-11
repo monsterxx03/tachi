@@ -780,6 +780,9 @@ func (m *Manager) handleCronCommand() (string, error) {
 		if job.Status == cron.JobStatusPaused {
 			status = "⏸️ Paused"
 		}
+		if job.Type == cron.JobTypeOneshot {
+			status += " · Oneshot"
+		}
 		sb.WriteString(fmt.Sprintf("\n%s **%s** [%s]\n", status, job.Name, job.ID))
 		sb.WriteString(fmt.Sprintf("  Schedule: `%s`\n", job.Schedule))
 		sb.WriteString(fmt.Sprintf("  Prompt: %s\n", truncateForDisplay(job.Prompt, 60)))

@@ -39,6 +39,10 @@ func (t *CronTool) Parallel() bool { return false } // mutations should be seque
 func (t *CronTool) Description() string {
 	return `Manage scheduled cron jobs. Jobs automatically trigger at the specified schedule and send the prompt to the target thread.
 
+Job types:
+- recurring (default): Fire repeatedly on the schedule
+- oneshot: Fire exactly once, then auto-delete
+
 Actions:
 - list: List all cron jobs
 - create: Create a new cron job (requires: name, schedule, prompt)
@@ -71,6 +75,10 @@ func (t *CronTool) Properties() map[string]PropertySchema {
 			Type:        "string",
 			Description: "The prompt to send to the LLM when the job triggers (required for create)",
 		},
+		"type": {
+			Type:        "string",
+			Description: "Job type: \"recurring\" (default, repeat on schedule) or \"oneshot\" (fire once then auto-delete)",
+		},
 		"timezone": {
 			Type:        "string",
 			Description: "IANA timezone for schedule evaluation (default: system local). Example: Asia/Shanghai, UTC",
@@ -89,6 +97,7 @@ type cronArgs struct {
 	Name     string `json:"name"`
 	Schedule string `json:"schedule"`
 	Prompt   string `json:"prompt"`
+	Type     string `json:"type"`
 	Timezone string `json:"timezone"`
 }
 
@@ -165,6 +174,7 @@ func (t *CronTool) handleCreate(params cronArgs) (string, error) {
 		Name:           params.Name,
 		Schedule:       params.Schedule,
 		Prompt:         params.Prompt,
+		Type:           cron.JobType(params.Type),
 		Timezone:       params.Timezone,
 		TargetType:     "channel",
 		TargetThreadID: threadID,
@@ -211,6 +221,10 @@ func (t *CronTool) handleUpdate(params cronArgs) (string, error) {
 	}
 	if params.Timezone != "" {
 		opts.Timezone = &params.Timezone
+	}
+	if params.Type != "" {
+		t := cron.JobType(params.Type)
+		opts.Type = &t
 	}
 
 	updated, err := t.scheduler.Update(params.ID, opts)
@@ -273,8 +287,13 @@ func formatJobSummary(job *cron.Job) string {
 		status = "⏸️"
 	}
 
+	typeTag := ""
+	if job.Type == cron.JobTypeOneshot {
+		typeTag = " [oneshot]"
+	}
+
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s **%s** [%s] `%s`\n", status, job.Name, job.ID, job.Schedule))
+	sb.WriteString(fmt.Sprintf("%s **%s** [%s] `%s`%s\n", status, job.Name, job.ID, job.Schedule, typeTag))
 
 	// Prompts can be long; show a snippet.
 	promptPreview := job.Prompt
@@ -316,6 +335,9 @@ func formatJobDetail(job *cron.Job) string {
 
 	sb.WriteString(fmt.Sprintf("**%s** [%s]\n", job.Name, job.ID))
 	sb.WriteString(fmt.Sprintf("- Status: %s\n", status))
+	if job.Type == cron.JobTypeOneshot {
+		sb.WriteString(fmt.Sprintf("- Type: oneshot (auto-delete after execution)\n"))
+	}
 	sb.WriteString(fmt.Sprintf("- Schedule: `%s`\n", job.Schedule))
 
 	nextRun := computeNextRun(job.Schedule)
@@ -344,7 +366,11 @@ func formatJobDetail(job *cron.Job) string {
 
 func formatJobCreated(job *cron.Job) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("✅ Created cron job: **%s** (ID: `%s`)\n\n", job.Name, job.ID))
+	typeLabel := "recurring cron job"
+	if job.Type == cron.JobTypeOneshot {
+		typeLabel = "oneshot job (will auto-delete after execution)"
+	}
+	sb.WriteString(fmt.Sprintf("✅ Created %s: **%s** (ID: `%s`)\n\n", typeLabel, job.Name, job.ID))
 	sb.WriteString(fmt.Sprintf("- Schedule: `%s`\n", job.Schedule))
 
 	nextRun := computeNextRun(job.Schedule)

@@ -314,3 +314,126 @@ func TestScheduler_SemaphoreSkip(t *testing.T) {
 		assert.Equal(t, "cr_t1", triggered[0], "job1 should be executed")
 	}
 }
+
+func TestScheduler_OneshotAutoDelete(t *testing.T) {
+	// Verify that oneshot jobs are auto-deleted after execution.
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crons.json")
+	store := NewStore(path)
+
+	var mu sync.Mutex
+	var triggered []string
+
+	handler := func(ctx context.Context, job *Job) error {
+		mu.Lock()
+		triggered = append(triggered, job.ID)
+		mu.Unlock()
+		return nil
+	}
+
+	_ = debuglog.Init()
+	scheduler := NewScheduler(SchedulerConfig{
+		Store:            store,
+		Handler:          handler,
+		Logger:           debuglog.DefaultLogger,
+		MaxConcurrent:    3,
+		ExecutionTimeout: 5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Create separate scheduler context so fire() won't panic.
+	scheduler.ctx = ctx
+
+	// Create a oneshot job directly in the store.
+	oneshotJob := &Job{
+		ID:         "cr_oneshot1",
+		Name:       "One-shot Task",
+		Schedule:   "@every 1h",
+		Prompt:     "Run once",
+		Type:       JobTypeOneshot,
+		Status:     JobStatusActive,
+		TargetType: "channel",
+	}
+	require.NoError(t, store.Create(oneshotJob))
+
+	// Also create a recurring job for comparison.
+	recurJob := &Job{
+		ID:         "cr_recur1",
+		Name:       "Recurring Task",
+		Schedule:   "@every 1h",
+		Prompt:     "Run forever",
+		Type:       JobTypeRecurring,
+		Status:     JobStatusActive,
+		TargetType: "channel",
+	}
+	require.NoError(t, store.Create(recurJob))
+
+	// Fire both jobs.
+	go scheduler.fire(oneshotJob)
+	go scheduler.fire(recurJob)
+
+	// Wait for both to complete.
+	time.Sleep(200 * time.Millisecond)
+
+	mu.Lock()
+	count := len(triggered)
+	mu.Unlock()
+	assert.Equal(t, 2, count, "both jobs should execute")
+
+	// Verify oneshot job is gone from store.
+	got, err := scheduler.Get("cr_oneshot1")
+	require.NoError(t, err)
+	assert.Nil(t, got, "oneshot job should be auto-deleted after execution")
+
+	// Verify recurring job still exists.
+	got, err = scheduler.Get("cr_recur1")
+	require.NoError(t, err)
+	assert.NotNil(t, got, "recurring job should still exist")
+}
+
+func TestScheduler_OneshotDefaultIsRecurring(t *testing.T) {
+	// Verify that jobs without an explicit Type default to recurring
+	// and are not auto-deleted.
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "crons.json")
+	store := NewStore(path)
+
+	handler := func(ctx context.Context, job *Job) error {
+		return nil
+	}
+
+	_ = debuglog.Init()
+	scheduler := NewScheduler(SchedulerConfig{
+		Store:            store,
+		Handler:          handler,
+		Logger:           debuglog.DefaultLogger,
+		MaxConcurrent:    3,
+		ExecutionTimeout: 5 * time.Second,
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	scheduler.ctx = ctx
+
+	// Create through the scheduler API (tests the Create default path).
+	job, err := scheduler.Create(&Job{
+		Name:     "No Type Specified",
+		Schedule: "@every 1h",
+		Prompt:   "Test",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, JobTypeRecurring, job.Type, "default type should be recurring")
+
+	// Fire it.
+	scheduler.fire(job)
+	time.Sleep(100 * time.Millisecond)
+
+	// Should still exist (recurring jobs are not auto-deleted).
+	got, err := scheduler.Get(job.ID)
+	require.NoError(t, err)
+	assert.NotNil(t, got)
+}
