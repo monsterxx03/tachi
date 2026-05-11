@@ -290,14 +290,16 @@ func TestWorktreeManager_Create_FallbackToSharedDir_NoGitWorktree(t *testing.T) 
 	if !isGitRepo() {
 		t.Skip("not a git repository")
 	}
-	if gitWorktreeAvailable() {
-		t.Skip("this test is for environments without git worktree support")
-	}
 
 	tmpDir := t.TempDir()
+	// Use a file as WorktreeDir so that git worktree add always fails
+	// (it can't create a directory inside a regular file).
+	notADir := filepath.Join(tmpDir, "not-a-dir")
+	require.NoError(t, os.WriteFile(notADir, []byte("block"), 0644))
+
 	cfg := config.SubagentConfig{
 		Worktree:    true,
-		WorktreeDir: tmpDir,
+		WorktreeDir: notADir,
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
