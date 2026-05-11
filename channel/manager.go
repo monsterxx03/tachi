@@ -127,6 +127,16 @@ func (m *Manager) Start(ctx context.Context) error {
 	for _, ch := range chans {
 		go func(ch Channel) {
 			m.logger.Log("channel: %s starting", ch.Name())
+
+			// Lifecycle: OnStart → Run.
+			// OnStart gives the channel a chance to initialise before
+			// entering its message loop. If it fails, the channel is
+			// skipped entirely.
+			if err := ch.OnStart(ctx); err != nil {
+				m.logger.Log("channel: %s OnStart error: %v", ch.Name(), err)
+				return
+			}
+
 			if err := ch.Run(ctx, handler); err != nil {
 				m.logger.Log("channel: %s exited: %v", ch.Name(), err)
 			} else {

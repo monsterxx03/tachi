@@ -23,6 +23,14 @@ type Channel struct {
 	userID    string   // ilink_user_id, the scanner's WeChat ID
 	botToken  string   // bearer token for API calls
 
+	// Greeting message sent to the admin user after login.
+	// Set via OnStart() from config; empty = no greeting.
+	greeting string
+
+	// greetingSent is set to true after the startup greeting has been
+	// delivered (either in OnStart or Run), to prevent duplicate sends.
+	greetingSent bool
+
 	logger *debuglog.Logger
 }
 
@@ -72,8 +80,64 @@ func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) erro
 	ch.logger.Log("weixin: logged in as %s (bot=%s, user=%s)", ch.accountID, ch.botToken[:8]+"...", ch.userID)
 	fmt.Printf("[weixin] logged in as %s\n", ch.accountID)
 
+	// Send startup greeting if it wasn't already sent in OnStart.
+	// This covers the first-time setup path where no saved account
+	// existed at OnStart time — the greeting goes out right after
+	// the QR-code login completes.
+	if !ch.greetingSent && ch.greeting != "" && ch.userID != "" {
+		ch.logger.Log("weixin: sending startup greeting to %s", ch.userID)
+		if err := ch.sendTextReply(ch.userID, "", ch.greeting); err != nil {
+			// Non-fatal: log and continue.
+			ch.logger.Log("weixin: greeting send error: %v", err)
+		}
+	}
+
 	// --- Long-polling loop ---
 	return ch.pollingLoop(ctx, handler)
+}
+
+// OnStart implements channel.Channel. It resolves the greeting message
+// from config and, if a previously-saved account exists, sends the
+// greeting immediately — without waiting for Run() to complete login.
+//
+// When no saved account is available (first-time setup), the greeting
+// is deferred to Run() and sent after the QR-code login succeeds.
+func (ch *Channel) OnStart(ctx context.Context) error {
+	// Resolve greeting message.
+	msg := ch.cfg.Greeting
+	if msg == "" {
+		// Default greeting in Chinese (the primary language of WeChat users).
+		msg = "👋 你好！Tachi 已启动，随时可以开始工作～"
+	}
+	ch.greeting = msg
+
+	// If a saved account exists, we already know the admin user's ID and
+	// can send the startup greeting right away, before entering Run().
+	accounts, err := ch.store.loadAccountList()
+	if err != nil || len(accounts) == 0 {
+		return nil // no saved account; greeting will be sent in Run() after login
+	}
+
+	data, err := ch.store.loadAccount(accounts[0])
+	if err != nil {
+		ch.logger.Log("weixin: OnStart: load account: %v", err)
+		return nil // non-fatal
+	}
+
+	// Set up the client so we can send the greeting.
+	ch.accountID = accounts[0]
+	ch.userID = data.UserID
+	ch.botToken = data.Token
+	ch.cli.SetBaseURL(data.BaseURL)
+	ch.cli.SetBotToken(ch.botToken)
+	ch.cli.SetRouteTag(ch.cfg.RouteTag)
+
+	ch.logger.Log("weixin: sending startup greeting to %s", ch.userID)
+	if err := ch.sendTextReply(ch.userID, "", ch.greeting); err != nil {
+		ch.logger.Log("weixin: greeting send error: %v", err)
+	}
+	ch.greetingSent = true
+	return nil
 }
 
 // loadOrLogin attempts to load a previously stored account, falling back to

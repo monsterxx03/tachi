@@ -112,4 +112,12 @@ type Channel interface {
 	// need concurrent processing, the implementation can spawn goroutines
 	// per message and call the handler from them.
 	Run(ctx context.Context, handler MessageHandler) error
+
+	// OnStart is a lifecycle hook called by the Manager before Run().
+	// Channels can use this for pre-start initialization (e.g., loading
+	// credentials, warming caches, storing a greeting message).
+	//
+	// If OnStart returns an error, the channel is considered failed and
+	// Run() will not be called for it.
+	OnStart(ctx context.Context) error
 }

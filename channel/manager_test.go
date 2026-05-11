@@ -40,6 +40,10 @@ type mockChannel struct {
 
 func (m *mockChannel) Name() string { return m.name }
 
+func (m *mockChannel) OnStart(ctx context.Context) error {
+	return nil // mock: no pre-start setup needed
+}
+
 func (m *mockChannel) Run(ctx context.Context, handler MessageHandler) error {
 	m.mu.Lock()
 	m.lastHandler = handler

@@ -130,6 +130,7 @@ type WeixinConfig struct {
 	Enabled  bool   `yaml:"enabled"`
 	StateDir string `yaml:"state_dir"` // State directory (default: ~/.tachi/weixin)
 	RouteTag string `yaml:"route_tag"` // Optional SKRouteTag for routing
+	Greeting string `yaml:"greeting"`  // Startup greeting sent to the admin user after login (default: "👋 你好！Tachi 已启动，随时可以开始工作～")
 }
 
 // SubagentConfig holds configuration for sub-agent execution.
