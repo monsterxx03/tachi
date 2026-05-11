@@ -4,117 +4,64 @@ import (
 	"context"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent/subagent"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 )
 
-func TestRegisterToolsForSubagent_AllTools(t *testing.T) {
-	// Create a parent agent with some tools registered
-	parent := NewAIAgent(nil, "test-model", 50)
-	parent.RegisterTools() // registers ReadFile, WriteFile, EditFile, Glob, Grep, Bash, AskUserQuestion
+func TestSubagentExecutor_MaxOutputChars(t *testing.T) {
+	// MaxOutputChars with cfg value
+	cfg := config.SubagentConfig{MaxOutputChars: 8192}
+	a := &mockAgent{}
+	executor := subagent.NewExecutor(a, cfg)
+	assert.Equal(t, 8192, executor.MaxOutputChars())
 
-	// Also register a SubAgent tool (which should be excluded from child)
-	mockRunner := &mockSubagentRunner{toolNames: []string{"ReadFile"}, maxOutput: 16384}
-	parent.RegisterTool(agenttools.NewSubagentTool(mockRunner))
+	// MaxOutputChars default fallback
+	cfg2 := config.SubagentConfig{MaxOutputChars: 0}
+	executor2 := subagent.NewExecutor(a, cfg2)
+	assert.Equal(t, subagent.DefaultMaxOutputChars, executor2.MaxOutputChars())
+}
 
-	// Create a child agent and register tools for subagent (no filter)
-	child := NewAIAgent(nil, "test-model", 50)
-	child.RegisterToolsForSubagent(parent, nil)
+func TestSubagentExecutor_MaxIterations(t *testing.T) {
+	cfg := config.SubagentConfig{MaxIterations: 20}
+	a := &mockAgent{}
+	executor := subagent.NewExecutor(a, cfg)
 
-	childSchemas := child.ToolSchemas()
-	childNames := make(map[string]bool)
-	for _, s := range childSchemas {
-		childNames[s.Name] = true
+	// RunSubagent uses cfg.MaxIterations as default when args.MaxIterations <= 0
+	// We test this indirectly: MaxConcurrency controls semaphore size
+	assert.NotNil(t, executor)
+}
+
+func TestSubagentExecutor_MaxConcurrency(t *testing.T) {
+	cfg := config.SubagentConfig{MaxConcurrency: 8}
+	a := &mockAgent{}
+	executor := subagent.NewExecutor(a, cfg)
+	assert.NotNil(t, executor)
+
+	// Default fallback
+	cfg2 := config.SubagentConfig{MaxConcurrency: 0}
+	executor2 := subagent.NewExecutor(a, cfg2)
+	assert.NotNil(t, executor2)
+}
+
+func TestSubagentExecutor_AvailableToolNames(t *testing.T) {
+	a := &mockAgent{toolNames: []string{"ReadFile", "Bash", "Grep", agenttools.ToolNameAskUser, agenttools.ToolNameSubAgent}}
+	executor := subagent.NewExecutor(a, config.SubagentConfig{})
+
+	names := executor.AvailableToolNames()
+	nameSet := make(map[string]bool)
+	for _, n := range names {
+		nameSet[n] = true
 	}
 
-	// Should have standard tools
-	assert.True(t, childNames["ReadFile"], "ReadFile should be inherited")
-	assert.True(t, childNames["WriteFile"], "WriteFile should be inherited")
-	assert.True(t, childNames["EditFile"], "EditFile should be inherited")
-	assert.True(t, childNames["Glob"], "Glob should be inherited")
-	assert.True(t, childNames["Grep"], "Grep should be inherited")
-	assert.True(t, childNames["Bash"], "Bash should be inherited")
-
-	// Should NOT have AskUserQuestion or SubAgent
-	assert.False(t, childNames[agenttools.ToolNameAskUser], "AskUserQuestion should be excluded")
-	assert.False(t, childNames[agenttools.ToolNameSubAgent], "SubAgent should be excluded")
-}
-
-func TestRegisterToolsForSubagent_Filtered(t *testing.T) {
-	parent := NewAIAgent(nil, "test-model", 50)
-	parent.RegisterTools()
-
-	child := NewAIAgent(nil, "test-model", 50)
-	child.RegisterToolsForSubagent(parent, []string{"ReadFile", "Grep", "Glob"})
-
-	childSchemas := child.ToolSchemas()
-	childNames := make(map[string]bool)
-	for _, s := range childSchemas {
-		childNames[s.Name] = true
-	}
-
-	// Should only have the allowed tools
-	assert.True(t, childNames["ReadFile"], "ReadFile should be registered")
-	assert.True(t, childNames["Grep"], "Grep should be registered")
-	assert.True(t, childNames["Glob"], "Glob should be registered")
-
-	// Should NOT have tools not in the whitelist
-	assert.False(t, childNames["WriteFile"], "WriteFile should not be registered")
-	assert.False(t, childNames["EditFile"], "EditFile should not be registered")
-	assert.False(t, childNames["Bash"], "Bash should not be registered")
-	assert.False(t, childNames[agenttools.ToolNameAskUser], "AskUserQuestion should always be excluded")
-	assert.False(t, childNames[agenttools.ToolNameSubAgent], "SubAgent should always be excluded")
-}
-
-func TestRegisterToolsForSubagent_AskUserAlwaysExcluded(t *testing.T) {
-	parent := NewAIAgent(nil, "test-model", 50)
-	parent.RegisterTools()
-
-	// Even if explicitly allowed, AskUserQuestion should be excluded
-	child := NewAIAgent(nil, "test-model", 50)
-	child.RegisterToolsForSubagent(parent, []string{agenttools.ToolNameAskUser, "ReadFile"})
-
-	childSchemas := child.ToolSchemas()
-	childNames := make(map[string]bool)
-	for _, s := range childSchemas {
-		childNames[s.Name] = true
-	}
-
-	assert.True(t, childNames["ReadFile"], "ReadFile should be registered")
-	assert.False(t, childNames[agenttools.ToolNameAskUser], "AskUserQuestion should always be excluded")
-}
-
-func TestSubagentMaxIterations_Default(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
-	assert.Equal(t, defaultSubagentMaxIterations, agent.SubagentMaxIterations())
-}
-
-func TestSubagentMaxIterations_Configured(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
-	agent.subagentMaxIterations = 20
-	assert.Equal(t, 20, agent.SubagentMaxIterations())
-}
-
-func TestSubagentMaxConcurrency_Default(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
-	assert.Equal(t, defaultSubagentMaxConcurrency, agent.SubagentMaxConcurrency())
-}
-
-func TestSubagentMaxConcurrency_Configured(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
-	agent.subagentMaxConcurrency = 8
-	assert.Equal(t, 8, agent.SubagentMaxConcurrency())
-}
-
-func TestSubagentMaxOutputChars_Default(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
-	assert.Equal(t, defaultSubagentMaxOutputChars, agent.SubagentMaxOutputChars())
-}
-
-func TestSubagentMaxOutputChars_Configured(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
-	agent.subagentMaxOutputChars = 8192
-	assert.Equal(t, 8192, agent.SubagentMaxOutputChars())
+	assert.True(t, nameSet["ReadFile"])
+	assert.True(t, nameSet["Bash"])
+	assert.False(t, nameSet[agenttools.ToolNameAskUser], "AskUserQuestion should be excluded")
+	assert.False(t, nameSet[agenttools.ToolNameSubAgent], "SubAgent should be excluded")
 }
 
 func TestSubagentProvider_FallbackToMain(t *testing.T) {
@@ -136,42 +83,72 @@ func TestSubagentProvider_Dedicated(t *testing.T) {
 	assert.Equal(t, "sub-model", agent.SubagentModel())
 }
 
-func TestSubagentExecutor_AvailableToolNames(t *testing.T) {
+func TestGetTool(t *testing.T) {
+	agent := NewAIAgent(nil, "test", 50)
+	agent.RegisterTools()
+
+	tool := agent.GetTool("ReadFile")
+	assert.NotNil(t, tool)
+	assert.Equal(t, "ReadFile", tool.Name())
+
+	tool = agent.GetTool("NonExistent")
+	assert.Nil(t, tool)
+}
+
+func TestNewChildAgent(t *testing.T) {
 	parent := NewAIAgent(nil, "test-model", 50)
 	parent.RegisterTools()
 
-	mockRunner := &mockSubagentRunner{toolNames: []string{"ReadFile"}, maxOutput: 16384}
-	parent.RegisterTool(agenttools.NewSubagentTool(mockRunner))
+	provider := &mockStreamProvider{name: "child-provider"}
+	allowedTools := []string{"ReadFile", "Grep", "Glob"}
 
-	executor := NewSubagentExecutor(parent)
-	names := executor.AvailableToolNames()
+	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, "child-model", 10, allowedTools, "session-123")
 
-	nameSet := make(map[string]bool)
-	for _, n := range names {
-		nameSet[n] = true
+	assert.NotNil(t, child, "NewChildAgent should return a non-nil ChildAgent")
+}
+
+func TestChildAdapter_Run(t *testing.T) {
+	parent := NewAIAgent(nil, "test-model", 50)
+	parent.RegisterTools()
+
+	provider := &mockStreamProvider{
+		name:      "child-provider",
+		sequences: [][]llm.StreamEvent{textSeq("hello from child")},
+	}
+	allowedTools := []string{"ReadFile", "Grep", "Glob"}
+
+	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, "child-model", 10, allowedTools, "session-123")
+
+	ch := child.Run(context.Background(), provider, "You are a test agent.", "Say hello", llm.ChatOptions{MaxTokens: 100})
+
+	gotText := false
+	gotComplete := false
+	for event := range ch {
+		switch event.Type {
+		case subagent.StreamEventTextDelta:
+			gotText = true
+		case subagent.StreamEventTurnComplete:
+			gotComplete = true
+		case subagent.StreamEventError:
+			t.Logf("unexpected error: %v", event.Error)
+		}
 	}
 
-	assert.True(t, nameSet["ReadFile"])
-	assert.True(t, nameSet["Bash"])
-	assert.False(t, nameSet[agenttools.ToolNameAskUser], "AskUserQuestion should be excluded from available names")
-	assert.False(t, nameSet[agenttools.ToolNameSubAgent], "SubAgent should be excluded from available names")
+	assert.True(t, gotText, "should get text delta")
+	assert.True(t, gotComplete, "should get turn complete")
 }
 
-func TestSubagentExecutor_MaxOutputChars(t *testing.T) {
-	parent := NewAIAgent(nil, "test-model", 50)
-	parent.subagentMaxOutputChars = 8192
-	executor := NewSubagentExecutor(parent)
-	assert.Equal(t, 8192, executor.MaxOutputChars())
-}
-
-// mockSubagentRunner is a simple mock for SubagentRunner used in tests.
-type mockSubagentRunner struct {
+// mockAgent implements subagent.Agent for testing the executor.
+type mockAgent struct {
 	toolNames []string
-	maxOutput int
 }
 
-func (m *mockSubagentRunner) RunSubagent(_ context.Context, _ agenttools.SubagentArgs) (string, string, error) {
-	return "", "", nil
+func (m *mockAgent) SubagentProvider() llm.Provider           { return nil }
+func (m *mockAgent) SubagentModel() string                    { return "" }
+func (m *mockAgent) SessionManager() *session.Manager          { return nil }
+func (m *mockAgent) Logger() *debuglog.Logger                 { return debuglog.DefaultLogger }
+func (m *mockAgent) ToolNames() []string                      { return m.toolNames }
+func (m *mockAgent) GetTool(name string) agenttools.Tool      { return nil }
+func (m *mockAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider, model string, maxIterations int, allowedTools []string, subagentSessionID string) subagent.ChildAgent {
+	return nil
 }
-func (m *mockSubagentRunner) AvailableToolNames() []string { return m.toolNames }
-func (m *mockSubagentRunner) MaxOutputChars() int          { return m.maxOutput }

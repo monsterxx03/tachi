@@ -1,4 +1,4 @@
-package agent
+package subagent
 
 import (
 	"encoding/json"
@@ -11,15 +11,15 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// subagentRecorder handles writing sub-agent execution messages to a JSONL file
+// recorder handles writing sub-agent execution messages to a JSONL file
 // under <session-dir>/subagent/<shortID>.jsonl.
-type subagentRecorder struct {
+type recorder struct {
 	file   *os.File
 	logger *debuglog.Logger
 }
 
-// newSubagentRecorder creates a new recorder for the given session and sub-agent.
-func newSubagentRecorder(sessionID, shortID string) (*subagentRecorder, error) {
+// newRecorder creates a new recorder for the given session and sub-agent.
+func newRecorder(sessionID, shortID string) (*recorder, error) {
 	sessionDir, err := config.SessionDir()
 	if err != nil {
 		return nil, err
@@ -36,11 +36,11 @@ func newSubagentRecorder(sessionID, shortID string) (*subagentRecorder, error) {
 		return nil, err
 	}
 
-	return &subagentRecorder{file: f, logger: debuglog.DefaultLogger}, nil
+	return &recorder{file: f, logger: debuglog.DefaultLogger}, nil
 }
 
 // record appends a session.Message as a JSON line to the sub-agent's file.
-func (r *subagentRecorder) record(msg *session.Message) error {
+func (r *recorder) record(msg *session.Message) error {
 	msg.Timestamp = time.Now()
 	data, err := json.Marshal(msg)
 	if err != nil {
@@ -51,6 +51,6 @@ func (r *subagentRecorder) record(msg *session.Message) error {
 }
 
 // close closes the underlying file.
-func (r *subagentRecorder) close() error {
+func (r *recorder) close() error {
 	return r.file.Close()
 }

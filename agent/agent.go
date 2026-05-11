@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/subagent"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -44,19 +45,9 @@ type AIAgent struct {
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
 	logger             *debuglog.Logger
 
-	// Subagent-related fields
-	subagentProvider       llm.Provider // sub-agent dedicated provider (nil = fallback to main)
-	subagentModel          string       // sub-agent dedicated model ("" = fallback to main)
-	subagentMaxIterations  int          // sub-agent default iteration limit
-	subagentMaxConcurrency int          // sub-agent max concurrent instances
-	subagentMaxOutputChars int          // sub-agent output truncation threshold
-	subagentThinking       bool         // whether sub-agents enable thinking
-
-	// Worktree-related fields
-	subagentWorktree        bool   // enable git worktree isolation
-	subagentWorktreeDir     string // worktree storage directory
-	subagentWorktreeCleanup bool   // clean up after completion
-	subagentWorktreeBranch  string // default branch for worktree checkout
+	// Subagent-related fields (implements subagent.Agent interface)
+	subagentProvider llm.Provider // sub-agent dedicated provider (nil = fallback to main)
+	subagentModel    string       // sub-agent dedicated model ("" = fallback to main)
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -879,16 +870,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 
 	// --- SubAgent tool ---
 	a.SetupSubagentProvider(cfg)
-	a.subagentWorktree = cfg.Subagent.Worktree
-	a.subagentWorktreeDir = cfg.Subagent.WorktreeDir
-	a.subagentWorktreeBranch = cfg.Subagent.WorktreeBranch
-	a.subagentWorktreeCleanup = true
-	if cfg.Subagent.WorktreeCleanup != nil {
-		a.subagentWorktreeCleanup = *cfg.Subagent.WorktreeCleanup
-	}
-	executor := NewSubagentExecutor(a)
-	if a.SubagentWorktree() {
-		executor.SetWorktreeManager(NewWorktreeManager(cfg, a.logger))
+	executor := subagent.NewExecutor(a, cfg.Subagent)
+	if cfg.Subagent.Worktree {
+		executor.EnableWorktree(a.logger)
 	}
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
@@ -972,16 +956,171 @@ func (b *IterationBudget) consume() bool {
 	return false
 }
 
-// --- Worktree accessors ---
+// --- Subagent configuration accessors (implements subagent.Agent interface) ---
 
-// SubagentWorktree returns whether git worktree isolation is enabled.
-func (a *AIAgent) SubagentWorktree() bool { return a.subagentWorktree }
+// SubagentProvider returns the sub-agent provider or falls back to main.
+func (a *AIAgent) SubagentProvider() llm.Provider {
+	if a.subagentProvider != nil {
+		return a.subagentProvider
+	}
+	return a.provider
+}
 
-// SubagentWorktreeDir returns the worktree storage directory.
-func (a *AIAgent) SubagentWorktreeDir() string { return a.subagentWorktreeDir }
+// SubagentModel returns the sub-agent model or falls back to main.
+func (a *AIAgent) SubagentModel() string {
+	if a.subagentModel != "" {
+		return a.subagentModel
+	}
+	return a.model
+}
 
-// SubagentWorktreeCleanup returns whether worktrees are cleaned up after completion.
-func (a *AIAgent) SubagentWorktreeCleanup() bool { return a.subagentWorktreeCleanup }
+// Logger returns the agent's debug logger.
+func (a *AIAgent) Logger() *debuglog.Logger {
+	return a.logger
+}
 
-// SubagentWorktreeBranch returns the default branch for worktree checkout.
-func (a *AIAgent) SubagentWorktreeBranch() string { return a.subagentWorktreeBranch }
+// GetTool retrieves a tool from the agent's registry by name.
+func (a *AIAgent) GetTool(name string) tools.Tool {
+	return a.toolRegistry.GetTool(name)
+}
+
+// NewChildAgent creates a fully configured child agent backed by RunOneOffStream.
+// Implements the subagent.Agent interface.
+func (a *AIAgent) NewChildAgent(
+	logger *debuglog.Logger,
+	provider llm.Provider,
+	model string,
+	maxIterations int,
+	allowedTools []string,
+	subagentSessionID string,
+) subagent.ChildAgent {
+	return &childAdapter{
+		parent:          a,
+		childProvider:   provider,
+		childModel:      model,
+		maxIterations:   maxIterations,
+		allowedTools:    allowedTools,
+		sessionID:       subagentSessionID,
+		logger:          logger,
+	}
+}
+
+// childAdapter implements subagent.ChildAgent by creating a child AIAgent
+// and delegating to its RunOneOffStream. This keeps the subagent package
+// independent of the agent package's internal types.
+type childAdapter struct {
+	parent        *AIAgent
+	childProvider llm.Provider
+	childModel    string
+	maxIterations int
+	allowedTools  []string
+	sessionID     string
+	logger        *debuglog.Logger
+}
+
+func (c *childAdapter) Run(
+	ctx context.Context,
+	provider llm.Provider,
+	systemPrompt, userPrompt string,
+	opts llm.ChatOptions,
+) <-chan subagent.StreamEvent {
+	out := make(chan subagent.StreamEvent, 64)
+
+	go func() {
+		defer close(out)
+
+		child := NewAIAgent(c.childProvider, c.childModel, c.maxIterations)
+		child.SetSkipEditConfirm(true)
+		child.SetLogger(c.logger)
+		child.SetReminderCollector(nil) // no reminders for sub-agents
+
+		// Register filtered tools
+		for _, name := range c.allowedTools {
+			if tool := c.parent.toolRegistry.GetTool(name); tool != nil {
+				child.toolRegistry.Register(tool)
+			}
+		}
+
+		if opts.MaxTokens <= 0 {
+			opts.MaxTokens = defaultMaxTokens
+		}
+
+		// Run via RunOneOffStream — we consume parent agent events and
+		// translate them to the subagent-local StreamEvent type.
+		ch := child.RunOneOffStream(ctx, provider, systemPrompt, userPrompt, opts)
+		for event := range ch {
+			out <- translateEvent(event)
+		}
+	}()
+
+	return out
+}
+
+// translateEvent converts an AgentEvent to a subagent.StreamEvent.
+func translateEvent(e AgentEvent) subagent.StreamEvent {
+	se := subagent.StreamEvent{Usage: e.Usage}
+	switch e.Type {
+	case AgentEventTextDelta:
+		se.Type = subagent.StreamEventTextDelta
+		se.TextDelta = e.TextDelta
+	case AgentEventThinkingDelta:
+		se.Type = subagent.StreamEventThinkingDelta
+		se.ThinkingDelta = e.ThinkingDelta
+	case AgentEventToolCallArgs:
+		se.Type = subagent.StreamEventToolCallArgs
+		se.ToolName = e.ToolName
+		se.ToolArgs = e.ToolArgs
+		se.ToolID = e.ToolID
+	case AgentEventToolResult:
+		se.Type = subagent.StreamEventToolResult
+		se.ToolName = e.ToolName
+		se.ToolResult = e.ToolResult
+		se.ToolIsError = e.ToolIsError
+		se.ToolID = e.ToolID
+	case AgentEventTurnComplete:
+		se.Type = subagent.StreamEventTurnComplete
+	case AgentEventError:
+		se.Type = subagent.StreamEventError
+		se.Error = e.Result.Error
+	}
+	return se
+}
+
+// SetupSubagentProvider resolves and creates a dedicated LLM provider for
+// sub-agent execution from config. Falls back to main provider when not set.
+func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
+	sc := cfg.Subagent
+
+	// Resolve dedicated subagent provider if configured
+	if sc.Provider == "" {
+		return
+	}
+
+	pCfg := cfg.FindProvider(sc.Provider)
+	if pCfg == nil {
+		a.logger.Log("Agent: subagent.provider %q not found in providers list, falling back to main model", sc.Provider)
+		return
+	}
+
+	// If subagent has a model override, apply it
+	overridden := *pCfg
+	if sc.Model != "" {
+		overridden.Model = sc.Model
+	}
+
+	resolved, err := config.ResolveProviderConfig(&overridden)
+	if err != nil {
+		a.logger.Log("Agent: failed to resolve subagent provider %q: %v, falling back to main model", sc.Provider, err)
+		return
+	}
+
+	sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		a.logger.Log("Agent: failed to create subagent provider %q: %v, falling back to main model", sc.Provider, err)
+		return
+	}
+
+	a.subagentProvider = sp
+	a.subagentModel = resolved.Model
+	a.logger.Log("Agent: using subagent provider %q (%s/%s)", sc.Provider, resolved.Type, resolved.Model)
+}
