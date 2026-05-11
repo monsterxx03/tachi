@@ -173,7 +173,7 @@ func (s *Scheduler) Create(job *Job) (*Job, error) {
 		job.Status = JobStatusActive
 	}
 	if job.Type == "" {
-		job.Type = JobTypeRecurring
+		job.Type = JobTypeOneshot
 	}
 	if job.TargetType == "" {
 		job.TargetType = "channel"

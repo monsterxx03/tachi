@@ -39,9 +39,7 @@ func (t *CronTool) Parallel() bool { return false } // mutations should be seque
 func (t *CronTool) Description() string {
 	return `Manage scheduled cron jobs. Jobs automatically trigger at the specified schedule and send the prompt to the target thread.
 
-Job types:
-- recurring (default): Fire repeatedly on the schedule
-- oneshot: Fire exactly once, then auto-delete
+By default, jobs are oneshot — they fire ONCE then auto-delete. Only set type to "recurring" when the user explicitly asks for a repeating task (daily, weekly, every N hours, etc.).
 
 Actions:
 - list: List all cron jobs
@@ -77,7 +75,7 @@ func (t *CronTool) Properties() map[string]PropertySchema {
 		},
 		"type": {
 			Type:        "string",
-			Description: "Job type: \"recurring\" (default, repeat on schedule) or \"oneshot\" (fire once then auto-delete)",
+			Description: "Job type. Default is oneshot (fire once, auto-delete). Only set to \"recurring\" when the user explicitly asks for a repeating task like daily/weekly/every N hours.",
 		},
 		"timezone": {
 			Type:        "string",

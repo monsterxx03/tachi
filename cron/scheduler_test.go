@@ -394,9 +394,9 @@ func TestScheduler_OneshotAutoDelete(t *testing.T) {
 	assert.NotNil(t, got, "recurring job should still exist")
 }
 
-func TestScheduler_OneshotDefaultIsRecurring(t *testing.T) {
-	// Verify that jobs without an explicit Type default to recurring
-	// and are not auto-deleted.
+func TestScheduler_OneshotDefaultIsOneshot(t *testing.T) {
+	// Verify that jobs without an explicit Type default to oneshot
+	// and are auto-deleted after execution.
 
 	dir := t.TempDir()
 	path := filepath.Join(dir, "crons.json")
@@ -426,14 +426,14 @@ func TestScheduler_OneshotDefaultIsRecurring(t *testing.T) {
 		Prompt:   "Test",
 	})
 	require.NoError(t, err)
-	assert.Equal(t, JobTypeRecurring, job.Type, "default type should be recurring")
+	assert.Equal(t, JobTypeOneshot, job.Type, "default type should be oneshot")
 
 	// Fire it.
 	scheduler.fire(job)
 	time.Sleep(100 * time.Millisecond)
 
-	// Should still exist (recurring jobs are not auto-deleted).
+	// Should be auto-deleted (oneshot jobs are cleaned up).
 	got, err := scheduler.Get(job.ID)
 	require.NoError(t, err)
-	assert.NotNil(t, got)
+	assert.Nil(t, got, "oneshot job should be auto-deleted after execution")
 }
