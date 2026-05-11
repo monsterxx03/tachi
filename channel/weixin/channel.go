@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/channel"
@@ -60,6 +61,38 @@ func NewChannel(cfg config.WeixinConfig) (*Channel, error) {
 
 // Name returns the channel type identifier.
 func (ch *Channel) Name() string { return "weixin" }
+
+// Send implements channel.MessageSender for proactive message delivery
+// (used by cron job triggers). It parses the ThreadID into accountID and
+// userID, looks up the context token, and sends a text reply.
+func (ch *Channel) Send(ctx context.Context, msg channel.OutgoingMessage) error {
+	// Parse ThreadID: accountID:userID
+	parts := splitThreadID(msg.ThreadID)
+	if len(parts) != 2 {
+		return fmt.Errorf("weixin: invalid ThreadID %q for Send", msg.ThreadID)
+	}
+	accountID := parts[0]
+	userID := parts[1]
+
+	// Verify this is our account.
+	if accountID != ch.accountID {
+		return fmt.Errorf("weixin: ThreadID account %q does not match our account %q", accountID, ch.accountID)
+	}
+
+	// Load context token.
+	contextToken := ch.store.loadContextToken(accountID, userID)
+
+	return ch.sendTextReply(userID, contextToken, msg.Content)
+}
+
+// splitThreadID splits a ThreadID of the form "accountID:userID".
+func splitThreadID(threadID string) []string {
+	idx := strings.LastIndex(threadID, ":")
+	if idx < 0 {
+		return nil
+	}
+	return []string{threadID[:idx], threadID[idx+1:]}
+}
 
 // Run starts the channel's message loop. It first attempts to load stored
 // credentials; if none exist, it performs a QR-code login flow. Then it

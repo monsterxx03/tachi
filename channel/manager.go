@@ -7,10 +7,12 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
@@ -84,6 +86,9 @@ type Manager struct {
 	mu       sync.Mutex
 	channels []Channel
 
+	// Cron scheduler (only active in channel mode when enabled).
+	scheduler *cron.Scheduler
+
 	logger *debuglog.Logger
 }
 
@@ -118,6 +123,14 @@ func (m *Manager) Start(ctx context.Context) error {
 		return fmt.Errorf("channel: %w", err)
 	}
 
+	// Initialize cron scheduler if enabled.
+	if m.cfg != nil && m.cfg.Cron.IsEnabled() {
+		if err := m.initCron(ctx); err != nil {
+			m.logger.Log("channel: cron init failed: %v", err)
+			// Non-fatal: channels can still work without cron.
+		}
+	}
+
 	m.mu.Lock()
 	chans := make([]Channel, len(m.channels))
 	copy(chans, m.channels)
@@ -144,6 +157,13 @@ func (m *Manager) Start(ctx context.Context) error {
 				m.logger.Log("channel: %s exited cleanly", ch.Name())
 			}
 		}(ch)
+	}
+
+	// Start cron scheduler after channels are initialized.
+	if m.scheduler != nil {
+		if err := m.scheduler.Start(ctx); err != nil {
+			m.logger.Log("channel: cron scheduler start failed: %v", err)
+		}
 	}
 
 	return nil
@@ -204,6 +224,13 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 	// Unregister AskUserQuestion — IM channels are non-interactive.
 	aiAgent.UnregisterTool(tools.ToolNameAskUser)
 
+	// Register CronTool if scheduler is available.
+	if m.scheduler != nil {
+		aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string {
+			return msg.ThreadID
+		}))
+	}
+
 	// Per-thread session.
 	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
 	if err != nil {
@@ -252,9 +279,11 @@ func (m *Manager) handleSlashCommand(msg IncomingMessage) (string, error) {
 		return m.handleMCPList()
 	case "/usage":
 		return m.handleUsageCommand(msg.ThreadID)
+	case "/cron":
+		return m.handleCronCommand()
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /usage — Show session usage stats", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /usage — Show session usage stats\n  /cron — List cron jobs", cmd), nil
 	}
 }
 
@@ -598,4 +627,178 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 		sess.ID, threadID, len(sessionMsgs), len(llmMsgs))
 
 	return sm, llmMsgs, nil
+}
+
+// --- Cron Infrastructure ---
+
+// initCron creates the cron store and scheduler with the manager as the
+// trigger handler. Must be called before Start() fires channels.
+func (m *Manager) initCron(_ context.Context) error {
+	storePath := m.cfg.Cron.StorePath
+	if storePath == "" {
+		storePath = cron.DefaultStorePath()
+	}
+
+	store := cron.NewStore(storePath)
+	scheduler := cron.NewScheduler(cron.SchedulerConfig{
+		Store:            store,
+		Handler:          m.OnCronTrigger,
+		Logger:           m.logger,
+		MaxConcurrent:    m.cfg.Cron.MaxConcurrent,
+		ExecutionTimeout: m.cfg.Cron.ExecutionTimeout,
+	})
+
+	m.scheduler = scheduler
+	m.logger.Log("channel: cron initialized (path=%s, max_concurrent=%d, timeout=%v)",
+		storePath, m.cfg.Cron.MaxConcurrent, m.cfg.Cron.ExecutionTimeout)
+	return nil
+}
+
+// OnCronTrigger is the TriggerHandler callback invoked by the cron scheduler
+// when a job fires. It simulates an incoming message from the cron system:
+// builds an agent with the job's prompt as the user message, runs the agent
+// turn, and delivers the response to the target thread's channel.
+func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
+	m.logger.Log("channel: cron trigger job=%s (%s) thread=%s", job.ID, job.Name, job.TargetThreadID)
+
+	if m.resolvedConfig == nil || m.provider == nil {
+		return fmt.Errorf("channel: provider not initialized for cron trigger")
+	}
+
+	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, 0)
+	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetContextWindow(m.resolvedConfig.Provider.ContextWindow)
+	aiAgent.SetupTitleProvider(m.cfg)
+	aiAgent.SetupCommitProvider(m.cfg)
+
+	mcpMgr, err := aiAgent.Configure(ctx, m.cfg)
+	if err != nil {
+		return fmt.Errorf("cron: configure agent: %w", err)
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
+	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+
+	// Register CronTool so cron jobs can manage themselves.
+	aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string {
+		return job.TargetThreadID
+	}))
+
+	// Load/create session for the target thread.
+	sm, priorHistory, err := m.loadThreadSession(job.TargetThreadID)
+	if err != nil {
+		m.logger.Log("channel: cron session for %s: %v", job.TargetThreadID, err)
+		sm = m.newSessionManager()
+		priorHistory = nil
+	}
+
+	if sm != nil && !sm.HasCurrent() {
+		wd, _ := os.Getwd()
+		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
+			m.logger.Log("channel: cron create session: %v", err)
+		} else {
+			sm.SetThreadID(job.TargetThreadID)
+		}
+	}
+
+	if sm != nil {
+		aiAgent.SetSessionManager(sm)
+	}
+
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, job.Prompt, m.systemPrompt, llm.ChatOptions{
+		MaxTokens: m.resolvedConfig.MaxTokens,
+	})
+
+	result, err := m.drainEvents(eventCh, aiAgent)
+	if err != nil {
+		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
+		return err
+	}
+
+	// Deliver the response to the target thread's channel.
+	if result != "" {
+		m.deliverCronResponse(ctx, OutgoingMessage{
+			ThreadID: job.TargetThreadID,
+			Content:  result,
+			ReplyTo:  fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()),
+		})
+	}
+
+	return nil
+}
+
+// deliverCronResponse sends a cron-triggered response to the channel
+// responsible for the given ThreadID. It iterates all registered channels
+// and tries each one that implements MessageSender.
+func (m *Manager) deliverCronResponse(ctx context.Context, msg OutgoingMessage) {
+	m.mu.Lock()
+	chans := make([]Channel, len(m.channels))
+	copy(chans, m.channels)
+	m.mu.Unlock()
+
+	for _, ch := range chans {
+		sender, ok := ch.(MessageSender)
+		if !ok {
+			continue
+		}
+		if err := sender.Send(ctx, msg); err != nil {
+			m.logger.Log("channel: cron send to %s failed: %v", ch.Name(), err)
+		} else {
+			m.logger.Log("channel: cron response delivered to %s (thread=%s)", ch.Name(), msg.ThreadID)
+			return
+		}
+	}
+
+	m.logger.Log("channel: cron response not delivered — no channel accepted thread %s", msg.ThreadID)
+}
+
+// handleCronCommand handles the /cron slash command, listing all cron jobs.
+func (m *Manager) handleCronCommand() (string, error) {
+	if m.scheduler == nil {
+		return "Cron scheduler is not enabled. Set cron.enabled: true in config.yaml.", nil
+	}
+
+	jobs, err := m.scheduler.List()
+	if err != nil {
+		return "", fmt.Errorf("cron: list: %w", err)
+	}
+
+	if len(jobs) == 0 {
+		return "No cron jobs configured.\n\nYou can ask me to create one! Example:\n\"帮我设置一个每天早上9点的日报提醒\"", nil
+	}
+
+	sort.Slice(jobs, func(i, j int) bool {
+		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
+	})
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("📋 Cron Jobs (%d)\n", len(jobs)))
+
+	for _, job := range jobs {
+		status := "🟢 Active"
+		if job.Status == cron.JobStatusPaused {
+			status = "⏸️ Paused"
+		}
+		sb.WriteString(fmt.Sprintf("\n%s **%s** [%s]\n", status, job.Name, job.ID))
+		sb.WriteString(fmt.Sprintf("  Schedule: `%s`\n", job.Schedule))
+		sb.WriteString(fmt.Sprintf("  Prompt: %s\n", truncateForDisplay(job.Prompt, 60)))
+		if !job.LastRunAt.IsZero() {
+			icon := "✅"
+			if job.LastRunStatus == "error" {
+				icon = "❌"
+			}
+			sb.WriteString(fmt.Sprintf("  Last run: %s %s\n", icon, job.LastRunAt.Format("01-02 15:04")))
+		}
+	}
+
+	return sb.String(), nil
+}
+
+// truncateForDisplay limits a string for display in channel messages.
+func truncateForDisplay(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }

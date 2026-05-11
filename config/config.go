@@ -133,6 +133,19 @@ type WeixinConfig struct {
 	Greeting string `yaml:"greeting"`  // Startup greeting sent to the admin user after login (default: "👋 你好！Tachi 已启动，随时可以开始工作～")
 }
 
+// CronConfig holds cron scheduler configuration (only active in channel mode).
+type CronConfig struct {
+	Enabled          *bool         `yaml:"enabled" default:"true"` // whether to enable cron (default: true in channel mode)
+	StorePath        string        `yaml:"store_path"`             // custom store path (default: ~/.tachi/crons.json)
+	MaxConcurrent    int           `yaml:"max_concurrent" default:"3"`
+	ExecutionTimeout time.Duration `yaml:"execution_timeout" default:"5m"`
+}
+
+// IsEnabled returns whether the cron scheduler is enabled. Defaults to true.
+func (c *CronConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
 // SubagentConfig holds configuration for sub-agent execution.
 // When Provider/Model are empty, the main provider/model is used.
 type SubagentConfig struct {
@@ -174,6 +187,7 @@ type Config struct {
 	CommitProvider         string                       `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
 	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
+	Cron                   CronConfig                   `yaml:"cron"`                            // Cron scheduler (channel mode)
 }
 
 func DefaultConfig() *Config {

@@ -121,3 +121,12 @@ type Channel interface {
 	// Run() will not be called for it.
 	OnStart(ctx context.Context) error
 }
+
+// MessageSender is an optional interface for channels that support
+// proactive message delivery (not just request-response).
+// Required for cron and future push notification features.
+type MessageSender interface {
+	// Send delivers a message to the specified thread.
+	// Returns error if the thread is unknown or delivery fails.
+	Send(ctx context.Context, msg OutgoingMessage) error
+}
