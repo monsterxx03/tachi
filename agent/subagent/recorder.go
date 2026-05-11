@@ -13,6 +13,11 @@ import (
 
 // recorder handles writing sub-agent execution messages to a JSONL file
 // under <session-dir>/subagent/<shortID>.jsonl.
+//
+// sessionDirFn is a function that returns the session storage directory.
+// In production it defaults to config.SessionDir; tests can override it.
+var sessionDirFn = config.SessionDir
+
 type recorder struct {
 	file   *os.File
 	logger *debuglog.Logger
@@ -20,7 +25,7 @@ type recorder struct {
 
 // newRecorder creates a new recorder for the given session and sub-agent.
 func newRecorder(sessionID, shortID string) (*recorder, error) {
-	sessionDir, err := config.SessionDir()
+	sessionDir, err := sessionDirFn()
 	if err != nil {
 		return nil, err
 	}
