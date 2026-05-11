@@ -234,11 +234,11 @@ func ExpandAtReferences(message string) string {
 				if err != nil {
 					debuglog.DefaultLogger.Log("at_file: resolve %q: %v", path, err)
 				} else {
-					result.WriteString("\n\n--- Content of ")
+					result.WriteString("\n\n--- BEGIN UNTRUSTED FILE CONTENT: ")
 					result.WriteString(path)
 					result.WriteString(" ---\n")
 					result.WriteString(content)
-					result.WriteString("\n--- End of ")
+					result.WriteString("\n--- END UNTRUSTED FILE CONTENT: ")
 					result.WriteString(path)
 					result.WriteString(" ---")
 					expanded = true

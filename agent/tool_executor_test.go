@@ -186,9 +186,9 @@ func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
 	assert.False(t, msgs[0].IsError)
 	assert.False(t, msgs[1].IsError)
 	assert.False(t, msgs[2].IsError)
-	assert.Equal(t, "Read:done", msgs[0].Content)
-	assert.Equal(t, "Grep:done", msgs[1].Content)
-	assert.Equal(t, "Glob:done", msgs[2].Content)
+	assert.Equal(t, wrapToolOutput("Read", "Read:done"), msgs[0].Content)
+	assert.Equal(t, wrapToolOutput("Grep", "Grep:done"), msgs[1].Content)
+	assert.Equal(t, wrapToolOutput("Glob", "Glob:done"), msgs[2].Content)
 
 	close(ch)
 
@@ -224,11 +224,11 @@ func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
 	require.Len(t, msgs, 3)
 
 	assert.False(t, msgs[0].IsError)
-	assert.Equal(t, "Read:done", msgs[0].Content)
+	assert.Equal(t, wrapToolOutput("Read", "Read:done"), msgs[0].Content)
 	assert.False(t, msgs[1].IsError)
-	assert.Equal(t, "EditFile:done", msgs[1].Content)
+	assert.Equal(t, wrapToolOutput("EditFile", "EditFile:done"), msgs[1].Content)
 	assert.False(t, msgs[2].IsError)
-	assert.Equal(t, "Glob:done", msgs[2].Content)
+	assert.Equal(t, wrapToolOutput("Glob", "Glob:done"), msgs[2].Content)
 
 	close(ch)
 }
@@ -251,9 +251,9 @@ func TestExecuteToolCalls_ResultOrderPreserved(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
-	assert.Equal(t, "ToolA:done", msgs[0].Content)
-	assert.Equal(t, "ToolB:done", msgs[1].Content)
-	assert.Equal(t, "ToolC:done", msgs[2].Content)
+	assert.Equal(t, wrapToolOutput("ToolA", "ToolA:done"), msgs[0].Content)
+	assert.Equal(t, wrapToolOutput("ToolB", "ToolB:done"), msgs[1].Content)
+	assert.Equal(t, wrapToolOutput("ToolC", "ToolC:done"), msgs[2].Content)
 	close(ch)
 }
 
