@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -269,7 +270,7 @@ func (c *ChatView) LoadHistory(sessionMsgs []session.Message) {
 				Done:    hasResult,
 			}
 			if hasResult {
-				tc.Result = result.Result
+				tc.Result = agent.StripToolMarkers(result.Result)
 				tc.IsError = result.IsError
 			}
 			c.items = append(c.items, &messageCacheItem{msg: chatMessage{
