@@ -39,7 +39,7 @@ type AIAgent struct {
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
 	lastInputTokens    int64
-	lastMessageDate    string // calendar date (2006-01-02) of last processed user message; empty initially
+	lastMessageDate    string       // calendar date (2006-01-02) of last processed user message; empty initially
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
@@ -505,7 +505,7 @@ func (a *AIAgent) handleFinishReason(
 
 	case "max_tokens", "length":
 		*lengthRetries++
-		a.logger.Log("Agent: finish_reason=%s, continuation retry %d/%d", acc.finishReason, *lengthRetries, maxLengthContinueRetries)
+		a.logger.Log("Agent: text=%s, finish_reason=%s, continuation retry %d/%d", acc.text.String(), acc.finishReason, *lengthRetries, maxLengthContinueRetries)
 
 		// Record thinking blocks in session
 		for _, tb := range acc.thinkBlocks {
@@ -527,7 +527,13 @@ func (a *AIAgent) handleFinishReason(
 		// Append the assistant message to history so it is preserved for
 		// session resume — whether we continue or stop exhausted.
 		msg := acc.assistantMessage()
-		msg.ToolCalls = nil
+		// API protocol requires every tool_use to be paired with a
+		// tool_result; truncated tool calls that were never executed cannot
+		// satisfy this constraint, so we drop them and guide the model to
+		// retry via the context-aware continuation prompt below.
+		if len(msg.ToolCalls) > 0 {
+			msg.ToolCalls = nil
+		}
 		*messages = append(*messages, msg)
 
 		if *lengthRetries >= maxLengthContinueRetries {
@@ -551,7 +557,14 @@ func (a *AIAgent) handleFinishReason(
 		}
 
 		// Record continuation prompt (original, unwrapped)
-		continuationText := "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
+		var continuationText string
+		if len(acc.toolCalls) > 0 {
+			continuationText = "Your previous tool call was interrupted by the output token limit. Please retry the tool call."
+		} else if len(acc.thinkBlocks) > 0 && acc.text.Len() == 0 {
+			continuationText = "Please continue with your response. Break your output into smaller chunks to avoid hitting the output token limit."
+		} else {
+			continuationText = "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
+		}
 		a.recordSession(&session.Message{
 			Type:    session.MessageTypeUser,
 			Content: continuationText,
@@ -1013,13 +1026,13 @@ func (a *AIAgent) NewChildAgent(
 	subagentSessionID string,
 ) subagent.ChildAgent {
 	return &childAdapter{
-		parent:          a,
-		childProvider:   provider,
-		childModel:      model,
-		maxIterations:   maxIterations,
-		allowedTools:    allowedTools,
-		sessionID:       subagentSessionID,
-		logger:          logger,
+		parent:        a,
+		childProvider: provider,
+		childModel:    model,
+		maxIterations: maxIterations,
+		allowedTools:  allowedTools,
+		sessionID:     subagentSessionID,
+		logger:        logger,
 	}
 }
 

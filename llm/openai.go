@@ -2,6 +2,7 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -70,12 +71,18 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			ToolCallID: msg.ToolCallID,
 		}
 		for _, tc := range msg.ToolCalls {
+			args := tc.Function.Arguments
+			if args != "" && !json.Valid([]byte(args)) {
+				// Arguments may be incomplete (e.g. truncated by max_tokens);
+				// degrade to empty object rather than sending malformed JSON.
+				args = "{}"
+			}
 			m.ToolCalls = append(m.ToolCalls, openai.ToolCall{
 				ID:   tc.ID,
 				Type: openai.ToolType(tc.Type),
 				Function: openai.FunctionCall{
 					Name:      tc.Function.Name,
-					Arguments: tc.Function.Arguments,
+					Arguments: args,
 				},
 			})
 		}

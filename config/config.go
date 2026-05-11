@@ -14,7 +14,6 @@ import (
 
 const (
 	DefaultMaxTokens         = 128000
-	MaxAllowedTokens         = 4096
 	DefaultMaxIterations     = 50
 	DefaultMCPConnectTimeout = 5 * time.Second
 	configDirName            = ".tachi"
@@ -33,9 +32,9 @@ type ProviderConfig struct {
 
 	// Pricing overrides (CNY per 1M tokens). When set, override built-in pricing.
 	// Leave nil to use built-in prices (if available). Set 0 to disable cost calculation.
-	InputPrice            *float64 `yaml:"input_price"`
-	OutputPrice           *float64 `yaml:"output_price"`
-	CacheReadInputPrice   *float64 `yaml:"cache_read_input_price"`
+	InputPrice              *float64 `yaml:"input_price"`
+	OutputPrice             *float64 `yaml:"output_price"`
+	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price"`
 	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price"`
 }
 
@@ -149,12 +148,12 @@ func (c *CronConfig) IsEnabled() bool {
 // SubagentConfig holds configuration for sub-agent execution.
 // When Provider/Model are empty, the main provider/model is used.
 type SubagentConfig struct {
-	Provider        string `yaml:"provider"`         // provider name, empty → use main
-	Model           string `yaml:"model"`            // model name, empty → use main
-	MaxIterations   int    `yaml:"max_iterations"`   // default: 50 (hardcoded fallback)
-	MaxConcurrency  int    `yaml:"max_concurrency"`  // default: 4 (hardcoded fallback)
-	MaxOutputChars  int    `yaml:"max_output_chars"` // default: 16384 (hardcoded fallback)
-	Thinking        bool   `yaml:"thinking"`         // default: false
+	Provider       string `yaml:"provider"`         // provider name, empty → use main
+	Model          string `yaml:"model"`            // model name, empty → use main
+	MaxIterations  int    `yaml:"max_iterations"`   // default: 50 (hardcoded fallback)
+	MaxConcurrency int    `yaml:"max_concurrency"`  // default: 4 (hardcoded fallback)
+	MaxOutputChars int    `yaml:"max_output_chars"` // default: 16384 (hardcoded fallback)
+	Thinking       bool   `yaml:"thinking"`         // default: false
 
 	// Worktree enables git worktree isolation for sub-agents (default: false).
 	Worktree        bool   `yaml:"worktree"`

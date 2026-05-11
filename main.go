@@ -161,9 +161,9 @@ func main() {
 				Action: runAgent,
 			},
 			{
-				Name:  "channel",
-				Usage: "Start all enabled channels from config (e.g., weixin)",
-				Flags: commonFlags,
+				Name:   "channel",
+				Usage:  "Start all enabled channels from config (e.g., weixin)",
+				Flags:  commonFlags,
 				Action: runChannels,
 			},
 			{
@@ -237,9 +237,6 @@ func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provid
 	resolved, err := config.Resolve(cfg, flags)
 	if err != nil {
 		return nil, nil, err
-	}
-	if resolved.MaxTokens > config.MaxAllowedTokens {
-		resolved.MaxTokens = config.MaxAllowedTokens
 	}
 
 	provider, err := llm.NewProvider(
