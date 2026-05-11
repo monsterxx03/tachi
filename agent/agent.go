@@ -506,18 +506,7 @@ func (a *AIAgent) handleFinishReason(
 	case "max_tokens", "length":
 		*lengthRetries++
 		a.logger.Log("Agent: finish_reason=%s, continuation retry %d/%d", acc.finishReason, *lengthRetries, maxLengthContinueRetries)
-		if *lengthRetries >= maxLengthContinueRetries {
-			a.logger.Log("Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
-			ch <- AgentEvent{
-				Type: AgentEventError,
-				Result: &RunResult{
-					ExitReason:     "length_exhausted",
-					IterationsUsed: apiCallCount,
-					Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
-				},
-			}
-			return false
-		}
+
 		// Record thinking blocks in session
 		for _, tb := range acc.thinkBlocks {
 			a.recordSession(&session.Message{
@@ -534,6 +523,33 @@ func (a *AIAgent) handleFinishReason(
 				Usage:   usageToSession(acc.usage),
 			})
 		}
+
+		// Append the assistant message to history so it is preserved for
+		// session resume — whether we continue or stop exhausted.
+		msg := acc.assistantMessage()
+		msg.ToolCalls = nil
+		*messages = append(*messages, msg)
+
+		if *lengthRetries >= maxLengthContinueRetries {
+			a.logger.Log("Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
+			// Return the partial output as a normal turn completion instead
+			// of an error — the user already saw the text streaming, and
+			// discarding it (or showing a red error) is worse than delivering
+			// what we have with a note that it was truncated.
+			ch <- AgentEvent{
+				Type:     AgentEventTurnComplete,
+				Messages: *messages,
+				Usage:    acc.usage,
+				Result: &RunResult{
+					Response:       acc.text.String(),
+					IterationsUsed: apiCallCount,
+					ExitReason:     "length_exhausted",
+					Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+				},
+			}
+			return false
+		}
+
 		// Record continuation prompt (original, unwrapped)
 		continuationText := "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
 		a.recordSession(&session.Message{
@@ -550,9 +566,6 @@ func (a *AIAgent) handleFinishReason(
 		rctx := a.buildReminderContext(false)
 		wrappedContinuation := a.reminderCollector.WrapUserMessage(continuationText, rctx)
 
-		msg := acc.assistantMessage()
-		msg.ToolCalls = nil
-		*messages = append(*messages, msg)
 		*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
 		return true
 

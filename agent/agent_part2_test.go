@@ -185,6 +185,9 @@ func TestAgentLoop_MaxTokensContinueAndStop(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "length_exhausted", result.ExitReason)
 	assert.Contains(t, result.Error.Error(), "truncated after 3 continuation")
+	// Partial response should be preserved — the last iteration's text
+	// should be delivered to the caller rather than lost.
+	assert.Equal(t, "final", result.Response)
 }
 
 func TestAgentLoop_MaxTokensThenStop(t *testing.T) {
