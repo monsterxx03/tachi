@@ -210,14 +210,15 @@ func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	out, err := handler(ctx, msg)
+	result := handler(ctx, msg)
 
 	// Expect error: initProvider was never called, so provider is nil.
-	assert.Error(t, err)
+	assert.Error(t, result.Err)
 	// Handler still returns a structured OutgoingMessage with error text.
-	assert.Equal(t, "thread-1", out.ThreadID)
-	assert.Equal(t, "msg-1", out.ReplyTo)
-	assert.Contains(t, out.Content, "❌")
+	assert.Equal(t, "thread-1", result.Reply.ThreadID)
+	assert.Equal(t, "msg-1", result.Reply.ReplyTo)
+	assert.Contains(t, result.Reply.Content, "❌")
+	assert.False(t, result.Steered)
 }
 
 // TestDrainEvents_BasicResponse verifies drainEvents collects a clean

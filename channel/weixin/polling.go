@@ -146,24 +146,33 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	go ch.runTyping(ctx, msg.FromUserID, typingDone)
 
 	// Dispatch to agent handler.
-	outMsg, err := handler(ctx, inMsg)
+	result := handler(ctx, inMsg)
 
 	// Stop typing.
 	close(typingDone)
-	if err != nil {
-		ch.logger.Log("weixin: handler error for %s: %v", threadID, err)
+
+	if result.Steered {
+		// Message was injected into an already-running agent turn via steer.
+		// The original conversation will produce the final reply — nothing to
+		// send here.
+		ch.logger.Log("weixin: msg steered for thread=%s", threadID)
+		return
+	}
+
+	if result.Err != nil {
+		ch.logger.Log("weixin: handler error for %s: %v", threadID, result.Err)
 		// Send error message back to user.
-		errorText := fmt.Sprintf("❌ %v", err)
+		errorText := fmt.Sprintf("❌ %v", result.Err)
 		ch.sendTextReply(msg.FromUserID, msg.ContextToken, errorText)
 		return
 	}
 
-	if outMsg.Content == "" {
+	if result.Reply.Content == "" {
 		return
 	}
 
 	// Send the reply.
-	ch.sendTextReply(msg.FromUserID, msg.ContextToken, outMsg.Content)
+	ch.sendTextReply(msg.FromUserID, msg.ContextToken, result.Reply.Content)
 }
 
 // --- Typing Indicator ---

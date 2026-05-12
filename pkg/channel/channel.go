@@ -75,12 +75,31 @@ type OutgoingMessage struct {
 	ReplyTo string
 }
 
+
+// HandlerResult wraps the outcome of a MessageHandler call.
+//
+// When Steered is true, the message was injected into an already-running
+// agent turn via the steer mechanism and Reply should be discarded —
+// the channel should only stop its typing indicator without sending a reply.
+type HandlerResult struct {
+	Reply   OutgoingMessage // The final reply; zero value when Steered.
+	Steered bool            // True if the message was injected as steer input.
+	Err     error           // Non-nil when processing failed.
+}
+
 // MessageHandler processes an incoming message and returns a response.
-// It is called synchronously by the channel implementation. The handler
-// may block for an arbitrary amount of time (LLM inference + tool execution),
-// so channels with strict timeout requirements should wrap calls with a
-// context deadline.
-type MessageHandler func(ctx context.Context, msg IncomingMessage) (OutgoingMessage, error)
+//
+// Channels MUST check HandlerResult.Steered before sending a reply.
+// When Steered is true:
+//   - Reply is a zero-value OutgoingMessage (no reply to send)
+//   - The channel should stop its typing indicator and continue
+//     waiting for the original conversation to finish naturally
+//
+// The handler may block for an arbitrary amount of time when processing
+// the first message for a thread (LLM inference + tool execution).
+// Subsequent messages for the same thread while an agent turn is active
+// are injected via steer and return immediately with Steered=true.
+type MessageHandler func(ctx context.Context, msg IncomingMessage) HandlerResult
 
 // Channel defines the interface for IM channel backends.
 //

@@ -64,12 +64,17 @@ type Config struct {
 //   - If a confirmation or AskUser event somehow fires, drainEvents handles
 //     it gracefully (auto-confirm / auto-reject).
 //
-// # Concurrency
+// # Concurrency & Steer
 //
 // Each call to the handler creates a fresh agent instance — no mutable shared
 // state between concurrent message processing. The session.Manager provides
 // safe per-thread persistence. Multiple threads and multiple channels safely
 // interleave.
+//
+// When a message arrives for a thread that already has an active agent turn,
+// it is injected via the steer mechanism: the message is queued and delivered
+// to the agent at the next tool-call boundary, allowing the user to refine
+// instructions mid-turn without waiting for the current turn to finish.
 type Manager struct {
 	cfg          *config.Config
 	systemPrompt string
@@ -95,7 +100,29 @@ type Manager struct {
 	verboseState map[string]bool
 	verboseMu    sync.RWMutex
 
+	// Per-thread agent activations for steer support.
+	threadActMu     sync.Mutex
+	threadActivations map[string]*threadActivation
+
 	logger *debuglog.Logger
+}
+
+// threadActivation holds the state for an active agent turn on a thread.
+// When a new message arrives for a thread that already has a running agent,
+// the message is queued in pending and injected via steer.
+type threadActivation struct {
+	mu          sync.Mutex
+	steerRespCh chan string        // agent reads steer input from this
+	resultCh    chan handlerResult // agent sends final result here
+	pending     []string           // queued steer messages (BC merged)
+	ctx         context.Context    // agent context for cancellation
+}
+
+// handlerResult is the internal result type sent from the agent goroutine
+// back to the blocking handler.
+type handlerResult struct {
+	text string
+	err  error
 }
 
 // New creates a Manager.
@@ -183,52 +210,146 @@ func (m *Manager) Start(ctx context.Context) error {
 }
 
 // buildHandler returns a MessageHandler. Each call processes one incoming
-// message through a fresh agent instance.
+// message. The first message for a thread starts a blocking agent turn;
+// subsequent messages while an agent turn is active are injected via steer
+// and return immediately with Steered=true.
 func (m *Manager) buildHandler() channel.MessageHandler {
-	return func(ctx context.Context, msg channel.IncomingMessage) (channel.OutgoingMessage, error) {
+	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
 		m.logger.Log("channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
-		// sendProgress pushes an intermediate progress message to the
-		// same thread. Only effective in verbose mode.
+		// Slash commands are handled synchronously (no LLM invocation).
+		if strings.HasPrefix(msg.Content, "/") {
+			result, err := m.handleSlashCommand(msg)
+			if err != nil {
+				return channel.HandlerResult{
+					Reply: channel.OutgoingMessage{
+						ThreadID: msg.ThreadID,
+						Content:  fmt.Sprintf("❌ %v", err),
+						ReplyTo:  msg.MessageID,
+					},
+					Err: err,
+				}
+			}
+			return channel.HandlerResult{
+				Reply: channel.OutgoingMessage{
+					ThreadID: msg.ThreadID,
+					Content:  result,
+					ReplyTo:  msg.MessageID,
+				},
+			}
+		}
+
+		if m.resolvedConfig == nil || m.provider == nil {
+			return channel.HandlerResult{
+				Reply: channel.OutgoingMessage{
+					ThreadID: msg.ThreadID,
+					Content:  "❌ channel manager not initialized; call Start() first",
+					ReplyTo:  msg.MessageID,
+				},
+				Err: fmt.Errorf("channel manager not initialized"),
+			}
+		}
+
+		// sendProgress pushes intermediate tool results in verbose mode.
 		sendProgress := func(text string) {
 			m.sendToThread(ctx, msg.ThreadID, text, msg.MessageID)
 		}
 
-		result, err := m.process(ctx, msg, sendProgress)
-		if err != nil {
-			return channel.OutgoingMessage{
-				ThreadID: msg.ThreadID,
-				Content:  fmt.Sprintf("❌ %v", err),
-				ReplyTo:  msg.MessageID,
-			}, err
+		// Check if an agent is already running for this thread.
+		ta := m.activateThread(msg.ThreadID, ctx)
+
+		ta.mu.Lock()
+		if ta.steerRespCh != nil {
+			// Agent already running — queue this message as steer input.
+			ta.pending = append(ta.pending, msg.Content)
+			pendingLen := len(ta.pending)
+			ta.mu.Unlock()
+			m.logger.Log("channel: steer queued thread=%s pending=%d", msg.ThreadID, pendingLen)
+			return channel.HandlerResult{Steered: true}
 		}
-		return channel.OutgoingMessage{
-			ThreadID: msg.ThreadID,
-			Content:  result,
-			ReplyTo:  msg.MessageID,
-		}, nil
+
+		// First message for this thread — start the agent.
+		ta.steerRespCh = make(chan string)
+		ta.resultCh = make(chan handlerResult, 1)
+		ta.mu.Unlock()
+
+		// Run agent in a goroutine; handler blocks on the result channel.
+		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta)
+
+		select {
+		case result := <-ta.resultCh:
+			m.deactivateThread(msg.ThreadID)
+			if result.err != nil {
+				return channel.HandlerResult{
+					Reply: channel.OutgoingMessage{
+						ThreadID: msg.ThreadID,
+						Content:  fmt.Sprintf("❌ %v", result.err),
+						ReplyTo:  msg.MessageID,
+					},
+					Err: result.err,
+				}
+			}
+			return channel.HandlerResult{
+				Reply: channel.OutgoingMessage{
+					ThreadID: msg.ThreadID,
+					Content:  result.text,
+					ReplyTo:  msg.MessageID,
+				},
+			}
+		case <-ta.ctx.Done():
+			m.deactivateThread(msg.ThreadID)
+			return channel.HandlerResult{
+				Reply: channel.OutgoingMessage{
+					ThreadID: msg.ThreadID,
+					Content:  "❌ request cancelled",
+					ReplyTo:  msg.MessageID,
+				},
+				Err: ta.ctx.Err(),
+			}
+		}
 	}
 }
 
-// process builds an agent, sets up a per-thread session, runs the conversation
-// with auto-confirm, and returns the response text.
-//
-// Slash commands (messages starting with "/") are intercepted and handled
-// directly without invoking the LLM. Currently supported: /new, /mcp.
-//
-// sendProgress is called to push intermediate progress messages (tool call
-// results) to the channel during verbose mode. It is a no-op when the channel
-// does not support proactive send or when verbose is off.
-func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string)) (string, error) {
-	// --- slash command interception ---
-	if strings.HasPrefix(msg.Content, "/") {
-		return m.handleSlashCommand(msg)
+// activateThread returns the threadActivation for threadID, creating one
+// if it doesn't exist. The caller MUST check ta.steerRespCh to determine
+// whether the thread is already active (steer case) or new (start case).
+func (m *Manager) activateThread(threadID string, ctx context.Context) *threadActivation {
+	m.threadActMu.Lock()
+	defer m.threadActMu.Unlock()
+
+	if m.threadActivations == nil {
+		m.threadActivations = make(map[string]*threadActivation)
 	}
 
-	if m.resolvedConfig == nil || m.provider == nil {
-		return "", fmt.Errorf("channel manager not initialized; call Start() first")
+	ta, ok := m.threadActivations[threadID]
+	if !ok {
+		ta = &threadActivation{ctx: ctx}
+		m.threadActivations[threadID] = ta
 	}
+	return ta
+}
+
+// deactivateThread removes the thread activation for threadID.
+func (m *Manager) deactivateThread(threadID string) {
+	m.threadActMu.Lock()
+	defer m.threadActMu.Unlock()
+	delete(m.threadActivations, threadID)
+}
+
+// runAgentTurn creates an agent instance, loads the per-thread session,
+// runs the conversation stream with steer support, and delivers the result.
+func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation) {
+	defer func() {
+		// Unblock the handler on panic.
+		if r := recover(); r != nil {
+			m.logger.Log("channel: agent panic for thread=%s: %v", msg.ThreadID, r)
+			select {
+			case ta.resultCh <- handlerResult{err: fmt.Errorf("agent panic: %v", r)}:
+			default:
+			}
+		}
+	}()
 
 	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, 0)
 	aiAgent.SetSkipEditConfirm(true)
@@ -238,7 +359,8 @@ func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, send
 
 	mcpMgr, err := aiAgent.Configure(ctx, m.cfg)
 	if err != nil {
-		return "", fmt.Errorf("configure: %w", err)
+		ta.resultCh <- handlerResult{err: fmt.Errorf("configure: %w", err)}
+		return
 	}
 	if mcpMgr != nil {
 		defer mcpMgr.Close()
@@ -258,14 +380,11 @@ func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, send
 	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
 	if err != nil {
 		m.logger.Log("channel: session setup for thread %s: %v", msg.ThreadID, err)
-		// Continue anyway with a fresh session manager and no history.
 		sm = m.newSessionManager()
 		priorHistory = nil
 	}
 
-	// Ensure a session exists for recording. If loadThreadSession created
-	// one, the agent's RunConversationStream will use it. If it failed,
-	// create a session here so the agent can still record.
+	// Ensure a session exists for recording.
 	if sm != nil && !sm.HasCurrent() {
 		wd, _ := os.Getwd()
 		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
@@ -279,6 +398,9 @@ func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, send
 		aiAgent.SetSessionManager(sm)
 	}
 
+	// Wire up steer channel — this enables mid-turn user input injection.
+	aiAgent.SetSteerChannel(ta.steerRespCh)
+
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, msg.Content, m.systemPrompt, llm.ChatOptions{
 		MaxTokens: m.resolvedConfig.MaxTokens,
 	})
@@ -287,7 +409,8 @@ func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, send
 	verbose := m.verboseState != nil && m.verboseState[msg.ThreadID]
 	m.verboseMu.RUnlock()
 
-	return m.drainEvents(eventCh, aiAgent, verbose, sendProgress)
+	text, err := m.drainEventsWithSteer(eventCh, aiAgent, verbose, sendProgress, ta)
+	ta.resultCh <- handlerResult{text: text, err: err}
 }
 
 // --- CommandHandler bridge: typed slash command dispatch ---
@@ -613,6 +736,131 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 	// If we got an error but some text was produced, return the text.
 	// The agent may have been interrupted mid-response or hit a budget limit
 	// after outputting something useful.
+	if result == "" && lastErr == nil {
+		return "", nil
+	}
+	return result, nil
+}
+
+// drainEventsWithSteer is like drainEvents but also handles AgentEventSteerCheck
+// for mid-turn user input injection (steer mechanism). When the agent reaches a
+// tool-call boundary and requests steer input, we drain any queued pending
+// messages and deliver them to the agent.
+func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, verbose bool, sendProgress func(string), ta *threadActivation) (string, error) {
+	var text strings.Builder
+	var lastErr error
+
+	var pendingToolCalls map[string]string
+
+	for event := range ch {
+		switch event.Type {
+		case agent.AgentEventTextDelta:
+			text.WriteString(event.TextDelta)
+
+		case agent.AgentEventThinkingDelta:
+			// Thinking is internal to the agent; we don't expose it to IM.
+
+		case agent.AgentEventToolCallStart:
+			m.logger.Log("channel: tool call start: %s", event.ToolName)
+
+		case agent.AgentEventToolCallArgs:
+			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
+			if verbose {
+				if pendingToolCalls == nil {
+					pendingToolCalls = make(map[string]string)
+				}
+				pendingToolCalls[event.ToolID] = "🔧 " + summarizeToolCall(event.ToolName, event.ToolArgs)
+			}
+
+		case agent.AgentEventToolConfirmation:
+			m.logger.Log("channel: auto-approving unexpected confirmation: %s", event.ToolName)
+			aiAgent.ConfirmTool(true)
+
+		case agent.AgentEventAskUser:
+			m.logger.Log("channel: auto-rejecting unexpected AskUser")
+			aiAgent.RespondToAskUser(nil, nil)
+
+		case agent.AgentEventSteerCheck:
+			// Agent reached a tool boundary — inject any pending steer messages.
+			ta.mu.Lock()
+			joined := ""
+			if len(ta.pending) > 0 {
+				joined = strings.Join(ta.pending, "\n\n")
+				ta.pending = nil
+				m.logger.Log("channel: steer inject thread=%s content=%d chars", "", len(joined))
+			}
+			ta.mu.Unlock()
+
+			// Write to steerRespCh; agent is blocking on this read.
+			// Use select with ctx fallback to avoid deadlock on cancellation.
+			select {
+			case ta.steerRespCh <- joined:
+			case <-ta.ctx.Done():
+				return text.String(), ta.ctx.Err()
+			}
+
+		case agent.AgentEventToolResult:
+			if event.ToolIsError {
+				m.logger.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
+				if verbose {
+					line := "  ❌ Error: " + truncateToolResult(event.ToolResult)
+					if event.ToolDuration > 0 {
+						line += " " + formatToolDuration(event.ToolDuration)
+					}
+					callLine, ok := pendingToolCalls[event.ToolID]
+					if ok {
+						sendProgress(callLine + "\n" + line)
+						delete(pendingToolCalls, event.ToolID)
+					} else {
+						sendProgress("🔧 " + event.ToolName + "\n" + line)
+					}
+				}
+			} else {
+				m.logger.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
+				if verbose {
+					line := "  ✅ " + summarizeToolResult(event.ToolName, event.ToolResult)
+					if event.ToolDuration > 0 {
+						line += " " + formatToolDuration(event.ToolDuration)
+					}
+					callLine, ok := pendingToolCalls[event.ToolID]
+					if ok {
+						sendProgress(callLine + "\n" + line)
+						delete(pendingToolCalls, event.ToolID)
+					} else {
+						sendProgress("🔧 " + event.ToolName + "\n" + line)
+					}
+				}
+			}
+
+		case agent.AgentEventTurnComplete:
+			if event.Result != nil {
+				if event.Result.Response != "" {
+					text.Reset()
+					text.WriteString(event.Result.Response)
+				}
+				if event.Result.Error != nil {
+					lastErr = event.Result.Error
+				}
+			}
+
+		case agent.AgentEventError:
+			if event.Result != nil {
+				if event.Result.Response != "" {
+					text.Reset()
+					text.WriteString(event.Result.Response)
+				}
+				if event.Result.Error != nil {
+					lastErr = event.Result.Error
+				}
+			}
+		}
+	}
+
+	result := strings.TrimSpace(text.String())
+
+	if result == "" && lastErr != nil {
+		return "", lastErr
+	}
 	if result == "" && lastErr == nil {
 		return "", nil
 	}
