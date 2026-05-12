@@ -130,3 +130,47 @@ type MessageSender interface {
 	// Returns error if the thread is unknown or delivery fails.
 	Send(ctx context.Context, msg OutgoingMessage) error
 }
+
+// SlashCommand represents a typed slash command that channels can execute
+// programmatically without constructing fake IncomingMessage strings.
+//
+// This decouples channel lifecycle events from the text-based slash command
+// parsing path. For example, a channel detecting a new chat room can call
+// Command("new", threadID) instead of building "/new" as a message.
+type SlashCommand struct {
+	// Name is the command identifier (e.g., "new", "mcp", "usage", "cron", "v").
+	Name string
+
+	// ThreadID provides thread context for thread-scoped commands.
+	// Required for "new", "usage", "v"; ignored for global commands ("mcp", "cron").
+	ThreadID string
+}
+
+// CommandHandler executes a typed SlashCommand and returns the response text.
+// It allows channel implementations to invoke manager-level capabilities
+// directly — creating sessions, toggling verbose mode, listing MCP servers,
+// etc. — without routing through the text-based message handler.
+//
+// Channels receive this handler through the CommandChannel interface
+// before Run() is called. Channels that do not implement CommandChannel
+// continue to work exactly as before (backward compatible).
+type CommandHandler func(ctx context.Context, cmd SlashCommand) (string, error)
+
+// CommandChannel is an optional interface for channels that need
+// programmatic access to manager-level slash commands.
+//
+// Channels implementing this interface receive a CommandHandler via
+// SetCommandHandler, called by the Manager before Run(). The handler
+// can then be used at any point during the channel's lifecycle to
+// execute state-changing or query operations without constructing
+// pseudo-messages.
+//
+// Example use cases:
+//   - A channel detects a new chat room → calls handler(ctx, SlashCommand{Name: "new", ThreadID: tid})
+//   - Startup diagnostics → calls handler(ctx, SlashCommand{Name: "mcp"})
+//   - Admin commands from platform-specific syntax mapped to slash commands
+type CommandChannel interface {
+	// SetCommandHandler receives the CommandHandler for programmatic
+	// slash command execution. Called by Manager before Run().
+	SetCommandHandler(handler CommandHandler)
+}

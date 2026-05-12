@@ -143,10 +143,17 @@ func (m *Manager) Start(ctx context.Context) error {
 	m.mu.Unlock()
 
 	handler := m.buildHandler()
+	cmdHandler := m.buildCommandHandler()
 
 	for _, ch := range chans {
 		go func(ch channel.Channel) {
 			m.logger.Log("channel: %s starting", ch.Name())
+
+			// Inject CommandHandler if this channel supports it.
+			if cc, ok := ch.(channel.CommandChannel); ok {
+				cc.SetCommandHandler(cmdHandler)
+				m.logger.Log("channel: %s received CommandHandler", ch.Name())
+			}
 
 			// Lifecycle: OnStart → Run.
 			// OnStart gives the channel a chance to initialise before
@@ -281,6 +288,37 @@ func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, send
 	m.verboseMu.RUnlock()
 
 	return m.drainEvents(eventCh, aiAgent, verbose, sendProgress)
+}
+
+// --- CommandHandler bridge: typed slash command dispatch ---
+
+// buildCommandHandler returns a channel.CommandHandler that dispatches
+// typed SlashCommand values to the Manager's slash command methods.
+// This allows channels to invoke manager operations programmatically
+// without routing through the text-based message handler path.
+func (m *Manager) buildCommandHandler() channel.CommandHandler {
+	return func(ctx context.Context, cmd channel.SlashCommand) (string, error) {
+		return m.executeSlashCommand(cmd)
+	}
+}
+
+// executeSlashCommand dispatches a SlashCommand to the appropriate handler.
+func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) {
+	switch cmd.Name {
+	case "new":
+		return m.handleNewCommand(cmd.ThreadID)
+	case "mcp":
+		return m.handleMCPList()
+	case "usage":
+		return m.handleUsageCommand(cmd.ThreadID)
+	case "cron":
+		return m.handleCronCommand()
+	case "v":
+		return m.handleVerboseCommand(cmd.ThreadID)
+	default:
+		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
+		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v", cmd.Name), nil
+	}
 }
 
 // handleSlashCommand dispatches message starting with "/" to the appropriate

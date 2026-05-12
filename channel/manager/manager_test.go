@@ -567,4 +567,165 @@ func TestHandleVerboseCommand_ResetByNew(t *testing.T) {
 	mgr.verboseMu.RUnlock()
 }
 
+// TestCommandHandler_BuildAndDispatch verifies that buildCommandHandler
+// returns a working CommandHandler that dispatches to slash command methods.
+func TestCommandHandler_BuildAndDispatch(t *testing.T) {
+	cfg := config.DefaultConfig()
+	store := newTempSessionStore(t)
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+		SessionStore: store,
+	})
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "test-model",
+			ContextWindow: 128_000,
+		},
+		MaxTokens: 4096,
+	}
+	mgr.provider = &mockProvider{name: "mock"}
+
+	handler := mgr.buildCommandHandler()
+	require.NotNil(t, handler)
+
+	threadID := fmt.Sprintf("cmd-%s-%d", t.Name(), time.Now().UnixNano())
+
+	// /mcp (global, no ThreadID)
+	resp, err := handler(context.Background(), channel.SlashCommand{Name: "mcp"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "No MCP servers configured")
+
+	// /cron (global, scheduler nil → "not enabled")
+	resp, err = handler(context.Background(), channel.SlashCommand{Name: "cron"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "not enabled")
+
+	// /new (thread-scoped) — no session needed
+	resp, err = handler(context.Background(), channel.SlashCommand{Name: "new", ThreadID: threadID})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Started a new conversation")
+
+	// /v toggles (no session needed)
+	resp, err = handler(context.Background(), channel.SlashCommand{Name: "v", ThreadID: threadID})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "ON")
+
+	resp, err = handler(context.Background(), channel.SlashCommand{Name: "v", ThreadID: threadID})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "OFF")
+
+	// /usage requires a pre-existing session — load one first.
+	sm, _, err := mgr.loadThreadSession(threadID)
+	require.NoError(t, err)
+	require.NotNil(t, sm)
+	require.True(t, sm.HasCurrent())
+
+	msg := &sesspkg.Message{
+		Type:    sesspkg.MessageTypeUser,
+		Content: "hello",
+	}
+	_ = sm.AppendMessage(msg)
+
+	resp, err = handler(context.Background(), channel.SlashCommand{Name: "usage", ThreadID: threadID})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "📊 Session Usage")
+
+	// unknown command
+	resp, err = handler(context.Background(), channel.SlashCommand{Name: "nonexistent"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Unknown command")
+}
+
+// mockCommandChannel is a Channel that also implements CommandChannel,
+// capturing the handler for verification in tests.
+type mockCommandChannel struct {
+	mockChannel
+	cmdHandler channel.CommandHandler
+}
+
+func (m *mockCommandChannel) SetCommandHandler(handler channel.CommandHandler) {
+	m.cmdHandler = handler
+}
+
+// TestCommandChannel_Injection verifies that Manager injects a CommandHandler
+// into channels that implement the CommandChannel optional interface.
+// We test the injection logic directly without going through Start()
+// (which requires a real config provider).
+func TestCommandChannel_Injection(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test prompt",
+		SessionStore: newTempSessionStore(t),
+	})
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "test-model",
+			ContextWindow: 128_000,
+		},
+		MaxTokens: 4096,
+	}
+	mgr.provider = &mockProvider{name: "mock"}
+
+	// Build the handler and simulate the Start() injection logic.
+	cmdHandler := mgr.buildCommandHandler()
+
+	cmdCh := &mockCommandChannel{
+		mockChannel: mockChannel{name: "cmdchan"},
+	}
+
+	// Simulate the type assertion + injection that Start() would do.
+	if cc, ok := channel.Channel(cmdCh).(channel.CommandChannel); ok {
+		cc.SetCommandHandler(cmdHandler)
+	}
+	require.NotNil(t, cmdCh.cmdHandler, "CommandHandler should be injected")
+
+	// The injected handler should be functional.
+	resp, err := cmdCh.cmdHandler(context.Background(), channel.SlashCommand{Name: "mcp"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "No MCP servers configured")
+}
+
+// TestCommandChannel_NotInjectedToPlainChannel verifies that plain channels
+// (not implementing CommandChannel) don't receive anything and type assertion
+// succeeds without panicking.
+func TestCommandChannel_NotInjectedToPlainChannel(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test prompt",
+		SessionStore: newTempSessionStore(t),
+	})
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "test-model",
+			ContextWindow: 128_000,
+		},
+		MaxTokens: 4096,
+	}
+	mgr.provider = &mockProvider{name: "mock"}
+
+	cmdHandler := mgr.buildCommandHandler()
+
+	plainCh := &mockChannel{name: "plainchan"}
+
+	// Simulate the type assertion — should be false (no panic).
+	if cc, ok := channel.Channel(plainCh).(channel.CommandChannel); ok {
+		cc.SetCommandHandler(cmdHandler)
+		t.Error("plain channel should not implement CommandChannel")
+	}
+	// Pass: type assertion returned false, plain channel untouched.
+}
+
+// TestSlashCommand_StringRepresentation verifies SlashCommand struct field semantics.
+func TestSlashCommand_StringRepresentation(t *testing.T) {
+	cmd := channel.SlashCommand{Name: "new", ThreadID: "thread-1"}
+	assert.Equal(t, "new", cmd.Name)
+	assert.Equal(t, "thread-1", cmd.ThreadID)
+}
+
 func newInt64Ptr(v int64) *int64 { return &v }
