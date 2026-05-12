@@ -10,7 +10,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/channel"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	sesspkg "github.com/monsterxx03/tachi/session"

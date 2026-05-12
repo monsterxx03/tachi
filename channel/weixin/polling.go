@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monsterxx03/tachi/channel"
+	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
 // --- Polling Loop ---

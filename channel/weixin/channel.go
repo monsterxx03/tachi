@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monsterxx03/tachi/channel"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"gopkg.in/yaml.v3"

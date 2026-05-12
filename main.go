@@ -10,17 +10,19 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/urfave/cli/v3"
+
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
-	"github.com/monsterxx03/tachi/channel"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
-	_ "github.com/monsterxx03/tachi/channel/weixin"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tui"
-	"github.com/urfave/cli/v3"
+
+	_ "github.com/monsterxx03/tachi/channel/weixin"
 )
 
 // Version is set via ldflags at build time:

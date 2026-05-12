@@ -1,1 +1,7 @@
+# Build output
 tachi
+
+# Third-party channel plugins (local development only)
+third_party_channels.go
+go.work
+go.work.sum
