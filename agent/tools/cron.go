@@ -3,7 +3,7 @@ package tools
 import (
 	"context"
 	"fmt"
-	"sort"
+	"slices"
 	"strings"
 	"time"
 
@@ -135,8 +135,8 @@ func (t *CronTool) handleList() (string, error) {
 		return "No cron jobs configured.", nil
 	}
 
-	sort.Slice(jobs, func(i, j int) bool {
-		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
+	slices.SortFunc(jobs, func(a, b *cron.Job) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 
 	var sb strings.Builder

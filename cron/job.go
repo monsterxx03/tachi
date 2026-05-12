@@ -69,7 +69,7 @@ type Job struct {
 	UpdatedAt time.Time `json:"updated_at"`
 
 	// LastRunAt is when the job last fired (zero if never).
-	LastRunAt time.Time `json:"last_run_at,omitempty"`
+	LastRunAt time.Time `json:"last_run_at,omitzero"`
 
 	// LastRunStatus records the outcome of the last execution.
 	LastRunStatus string `json:"last_run_status,omitempty"`

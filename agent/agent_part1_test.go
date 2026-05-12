@@ -122,7 +122,7 @@ func TestAgentLoop_SimpleTextResponse(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	ch := a.RunConversationStream(context.Background(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -146,7 +146,7 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 	// Register a simple Bash-like tool that returns fixed output
 	a.RegisterTool(echoStub())
 
-	ch := a.RunConversationStream(context.Background(), nil, "run echo", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "run echo", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -177,7 +177,7 @@ func TestAgentLoop_MultipleTurns(t *testing.T) {
 	a := newTestAgent(mp)
 	a.RegisterTool(echoStub())
 
-	ch := a.RunConversationStream(context.Background(), nil, "do work", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "do work", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -257,7 +257,7 @@ func TestAgentLoop_IterationBudgetExhausted(t *testing.T) {
 		},
 	})
 
-	ch := a.RunConversationStream(context.Background(), nil, "do a lot", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "do a lot", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -274,7 +274,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 
 	ch := a.RunConversationStream(ctx, nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
@@ -290,7 +290,7 @@ func TestAgentLoop_APICallFailed(t *testing.T) {
 	a := newTestAgent(failingProvider)
 	a.maxIterations = 1
 
-	ch := a.RunConversationStream(context.Background(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -325,7 +325,7 @@ func TestAgentLoop_StreamErrorMidway(t *testing.T) {
 
 	a := newTestAgent(mp)
 
-	ch := a.RunConversationStream(context.Background(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)

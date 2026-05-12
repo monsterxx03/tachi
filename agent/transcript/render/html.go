@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"time"
 
@@ -267,14 +268,10 @@ func sortFreq(freq map[string]int) []KV {
 	for k, v := range freq {
 		result = append(result, KV{Key: k, Value: v})
 	}
-	// Simple bubble sort (n is small).
-	for i := 0; i < len(result); i++ {
-		for j := i + 1; j < len(result); j++ {
-			if result[j].Value > result[i].Value {
-				result[i], result[j] = result[j], result[i]
-			}
-		}
-	}
+	// Sort by value descending.
+	slices.SortFunc(result, func(a, b KV) int {
+		return b.Value - a.Value
+	})
 	return result
 }
 

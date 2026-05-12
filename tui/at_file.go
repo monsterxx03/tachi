@@ -1,12 +1,13 @@
 package tui
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -125,11 +126,14 @@ func listCwdImmediate(dir string) ([]atFileMatch, error) {
 		})
 	}
 
-	sort.Slice(matches, func(i, j int) bool {
-		if matches[i].IsDir != matches[j].IsDir {
-			return matches[i].IsDir
+	slices.SortFunc(matches, func(a, b atFileMatch) int {
+		if a.IsDir != b.IsDir {
+			if a.IsDir {
+				return -1
+			}
+			return 1
 		}
-		return strings.ToLower(matches[i].Path) < strings.ToLower(matches[j].Path)
+		return strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
 	})
 
 	return matches, nil
@@ -200,10 +204,8 @@ func readFileForAt(fullPath string) (string, error) {
 	}
 
 	checkLen := min(len(content), 8000)
-	for i := 0; i < checkLen; i++ {
-		if content[i] == 0 {
-			return "", fmt.Errorf("cannot include binary file")
-		}
+	if bytes.Contains(content[:checkLen], []byte{0}) {
+		return "", fmt.Errorf("cannot include binary file")
 	}
 
 	return string(content), nil

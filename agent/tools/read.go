@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -175,14 +176,6 @@ func isBlockedDevicePath(filePath string) bool {
 // isBinaryFile checks if the content appears to be binary
 // by looking for null bytes (\x00)
 func isBinaryFile(content []byte) bool {
-	checkLen := len(content)
-	if checkLen > 8000 {
-		checkLen = 8000
-	}
-	for i := 0; i < checkLen; i++ {
-		if content[i] == 0 {
-			return true
-		}
-	}
-	return false
+	checkLen := min(len(content), 8000)
+	return bytes.Contains(content[:checkLen], []byte{0})
 }

@@ -42,24 +42,25 @@ type WebSearchTool struct {
 	APIKey       string
 	Timeout      time.Duration
 	MaxResults   int
-	Proxy        string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
+	Proxy string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 
-	clientOnce sync.Once
-	httpClient *http.Client
+	getClient func() *http.Client // lazily initialized via sync.OnceValue
 }
 
 // getHTTPClient returns a cached *http.Client. The client is built once
 // (lazily) and reused across every search call, preserving connection
 // pooling and proxy connections.
 func (t *WebSearchTool) getHTTPClient() *http.Client {
-	t.clientOnce.Do(func() {
-		c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
-		if err != nil {
-			c = &http.Client{Timeout: t.Timeout}
-		}
-		t.httpClient = c
-	})
-	return t.httpClient
+	if t.getClient == nil {
+		t.getClient = sync.OnceValue(func() *http.Client {
+			c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
+			if err != nil {
+				return &http.Client{Timeout: t.Timeout}
+			}
+			return c
+		})
+	}
+	return t.getClient()
 }
 
 func (t *WebSearchTool) Name() string { return ToolNameWebSearch }

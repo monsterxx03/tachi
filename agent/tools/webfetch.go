@@ -48,12 +48,11 @@ type WebFetchTool struct {
 	Timeout time.Duration // HTTP request timeout (default 60s)
 	Proxy   string        // Optional proxy URL
 
-	clientOnce sync.Once
-	httpClient *http.Client
+	getClient func() *http.Client // lazily initialized via sync.OnceValue
 }
 
-func (t *WebFetchTool) Name() string        { return ToolNameWebFetch }
-func (t *WebFetchTool) Parallel() bool       { return true }
+func (t *WebFetchTool) Name() string  { return ToolNameWebFetch }
+func (t *WebFetchTool) Parallel() bool { return true }
 
 func (t *WebFetchTool) Description() string {
 	return "Fetches content from a specified URL and converts HTML to markdown. " +
@@ -73,14 +72,16 @@ func (t *WebFetchTool) Properties() map[string]PropertySchema {
 func (t *WebFetchTool) Required() []string { return []string{"url"} }
 
 func (t *WebFetchTool) getHTTPClient() *http.Client {
-	t.clientOnce.Do(func() {
-		c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
-		if err != nil {
-			c = &http.Client{Timeout: t.Timeout}
-		}
-		t.httpClient = c
-	})
-	return t.httpClient
+	if t.getClient == nil {
+		t.getClient = sync.OnceValue(func() *http.Client {
+			c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
+			if err != nil {
+				return &http.Client{Timeout: t.Timeout}
+			}
+			return c
+		})
+	}
+	return t.getClient()
 }
 
 // ---------------------------------------------------------------------------

@@ -160,7 +160,7 @@ func TestExecutor_RunSubagent_ContextCancelled(t *testing.T) {
 	// Fill the semaphore
 	exec.sem <- struct{}{}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
 	result, shortID, err := exec.RunSubagent(ctx, tools.SubagentArgs{Prompt: "test"})

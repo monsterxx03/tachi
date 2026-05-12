@@ -134,7 +134,6 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	// Phase 2: Execute all tools in parallel
 	results := make([]tools.ToolResult, len(toolCalls))
 	var wg sync.WaitGroup
-	wg.Add(len(toolCalls))
 
 	// Emit SubagentStart events for sub-agent calls before execution (TUI indicator).
 	for _, tc := range toolCalls {
@@ -149,10 +148,9 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	}
 
 	for i, tc := range toolCalls {
-		go func(idx int, tc llm.ToolCall) {
-			defer wg.Done()
-			results[idx] = a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
-		}(i, tc)
+		wg.Go(func() {
+			results[i] = a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
+		})
 	}
 
 	wg.Wait()

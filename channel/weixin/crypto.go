@@ -36,7 +36,7 @@ func pkcs7Unpad(data []byte) ([]byte, error) {
 		return nil, fmt.Errorf("invalid PKCS7 padding: %d", padding)
 	}
 	// Verify all padding bytes.
-	for i := 0; i < padding; i++ {
+	for i := range padding {
 		if data[len(data)-1-i] != byte(padding) {
 			return nil, fmt.Errorf("invalid PKCS7 padding sequence")
 		}

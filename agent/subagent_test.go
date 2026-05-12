@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"context"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/subagent"
@@ -119,7 +118,7 @@ func TestChildAdapter_Run(t *testing.T) {
 
 	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, "child-model", 10, allowedTools, "session-123")
 
-	ch := child.Run(context.Background(), provider, "You are a test agent.", "Say hello", llm.ChatOptions{MaxTokens: 100})
+	ch := child.Run(t.Context(), provider, "You are a test agent.", "Say hello", llm.ChatOptions{MaxTokens: 100})
 
 	gotText := false
 	gotComplete := false

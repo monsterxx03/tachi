@@ -180,7 +180,7 @@ func TestManagerAddChannel(t *testing.T) {
 
 func TestChannelStopsOnContextCancel(t *testing.T) {
 	ch := &mockChannel{name: "test-chan"}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 
 	done := make(chan struct{})
 	go func() {
@@ -209,7 +209,7 @@ func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
 		Content:   "hello",
 	}
 
-	ctx := context.Background()
+	ctx := t.Context()
 	result := handler(ctx, msg)
 
 	// Expect error: initProvider was never called, so provider is nil.
@@ -239,7 +239,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 	aiAgent.SetSkipEditConfirm(true)
 
 	eventCh := aiAgent.RunConversationStream(
-		context.Background(),
+		t.Context(),
 		nil,
 		"test message",
 		"system prompt",
@@ -288,7 +288,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	aiAgent.RegisterTool(agenttools.EditTool{})
 
 	eventCh := aiAgent.RunConversationStream(
-		context.Background(),
+		t.Context(),
 		nil,
 		"edit something",
 		"system prompt",
@@ -335,7 +335,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 	aiAgent.RegisterTool(agenttools.AskUserTool{})
 
 	eventCh := aiAgent.RunConversationStream(
-		context.Background(),
+		t.Context(),
 		nil,
 		"ask me something",
 		"system prompt",
@@ -477,7 +477,7 @@ func TestDrainEvents_VerboseMode(t *testing.T) {
 	aiAgent.RegisterTool(agenttools.BashTool{})
 
 	eventCh := aiAgent.RunConversationStream(
-		context.Background(),
+		t.Context(),
 		nil,
 		"build the project",
 		"system prompt",
@@ -594,26 +594,26 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	threadID := fmt.Sprintf("cmd-%s-%d", t.Name(), time.Now().UnixNano())
 
 	// /mcp (global, no ThreadID)
-	resp, err := handler(context.Background(), channel.SlashCommand{Name: "mcp"})
+	resp, err := handler(t.Context(), channel.SlashCommand{Name: "mcp"})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "No MCP servers configured")
 
 	// /cron (global, scheduler nil → "not enabled")
-	resp, err = handler(context.Background(), channel.SlashCommand{Name: "cron"})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "cron"})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "not enabled")
 
 	// /new (thread-scoped) — no session needed
-	resp, err = handler(context.Background(), channel.SlashCommand{Name: "new", ThreadID: threadID})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "new", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "Started a new conversation")
 
 	// /v toggles (no session needed)
-	resp, err = handler(context.Background(), channel.SlashCommand{Name: "v", ThreadID: threadID})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "v", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "ON")
 
-	resp, err = handler(context.Background(), channel.SlashCommand{Name: "v", ThreadID: threadID})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "v", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "OFF")
 
@@ -629,12 +629,12 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	}
 	_ = sm.AppendMessage(msg)
 
-	resp, err = handler(context.Background(), channel.SlashCommand{Name: "usage", ThreadID: threadID})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "usage", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "📊 Session Usage")
 
 	// unknown command
-	resp, err = handler(context.Background(), channel.SlashCommand{Name: "nonexistent"})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "nonexistent"})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "Unknown command")
 }
@@ -685,7 +685,7 @@ func TestCommandChannel_Injection(t *testing.T) {
 	require.NotNil(t, cmdCh.cmdHandler, "CommandHandler should be injected")
 
 	// The injected handler should be functional.
-	resp, err := cmdCh.cmdHandler(context.Background(), channel.SlashCommand{Name: "mcp"})
+	resp, err := cmdCh.cmdHandler(t.Context(), channel.SlashCommand{Name: "mcp"})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "No MCP servers configured")
 }

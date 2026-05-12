@@ -264,15 +264,15 @@ func generateDiffSnippet(oldContent, newContent, oldStr, newStr string) string {
 	}
 
 	// Show old lines (deleted) - prefix with -
-	for i := 0; i < len(changedLines); i++ {
+	for i, line := range changedLines {
 		lineNum := editStart + i + 1
-		fmt.Fprintf(&b, "-%d | %s\n", lineNum, changedLines[i])
+		fmt.Fprintf(&b, "-%d | %s\n", lineNum, line)
 	}
 
 	// Show new lines (added) - prefix with +
-	for i := 0; i < len(newChangedLines); i++ {
+	for i, line := range newChangedLines {
 		lineNum := editStart + i + 1
-		fmt.Fprintf(&b, "+%d | %s\n", lineNum, newChangedLines[i])
+		fmt.Fprintf(&b, "+%d | %s\n", lineNum, line)
 	}
 
 	// Show context after

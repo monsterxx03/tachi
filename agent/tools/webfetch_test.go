@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -44,7 +43,7 @@ func TestWebFetchTool_Parallel(t *testing.T) {
 
 func TestWebFetchTool_MissingURL(t *testing.T) {
 	tool := &WebFetchTool{}
-	_, err := tool.ExecuteContext(context.Background(), `{}`)
+	_, err := tool.ExecuteContext(t.Context(), `{}`)
 	if err == nil {
 		t.Fatal("expected error for missing url")
 	}
@@ -52,7 +51,7 @@ func TestWebFetchTool_MissingURL(t *testing.T) {
 
 func TestWebFetchTool_EmptyURL(t *testing.T) {
 	tool := &WebFetchTool{}
-	_, err := tool.ExecuteContext(context.Background(), `{"url": ""}`)
+	_, err := tool.ExecuteContext(t.Context(), `{"url": ""}`)
 	if err == nil {
 		t.Fatal("expected error for empty url")
 	}
@@ -60,7 +59,7 @@ func TestWebFetchTool_EmptyURL(t *testing.T) {
 
 func TestWebFetchTool_InvalidURL(t *testing.T) {
 	tool := &WebFetchTool{}
-	_, err := tool.ExecuteContext(context.Background(), `{"url": "not-a-valid-url"}`)
+	_, err := tool.ExecuteContext(t.Context(), `{"url": "not-a-valid-url"}`)
 	if err == nil {
 		t.Fatal("expected error for invalid URL")
 	}
@@ -68,7 +67,7 @@ func TestWebFetchTool_InvalidURL(t *testing.T) {
 
 func TestWebFetchTool_UnsupportedScheme(t *testing.T) {
 	tool := &WebFetchTool{}
-	_, err := tool.ExecuteContext(context.Background(), `{"url": "ftp://example.com/file"}`)
+	_, err := tool.ExecuteContext(t.Context(), `{"url": "ftp://example.com/file"}`)
 	if err == nil {
 		t.Fatal("expected error for unsupported scheme")
 	}
@@ -88,7 +87,7 @@ func TestWebFetchTool_HTMLConversion(t *testing.T) {
 	defer srv.Close()
 
 	tool := &WebFetchTool{}
-	result, err := tool.ExecuteContext(context.Background(), `{"url": "`+srv.URL+`"}`)
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -123,7 +122,7 @@ func TestWebFetchTool_WithPrompt(t *testing.T) {
 	defer srv.Close()
 
 	tool := &WebFetchTool{}
-	result, err := tool.ExecuteContext(context.Background(), `{"url": "`+srv.URL+`", "prompt": "extract key points"}`)
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`", "prompt": "extract key points"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -155,7 +154,7 @@ func TestWebFetchTool_Cache(t *testing.T) {
 	tool := &WebFetchTool{}
 
 	// First call — should hit the server.
-	_, err := tool.ExecuteContext(context.Background(), `{"url": "`+srv.URL+`"}`)
+	_, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
 	if err != nil {
 		t.Fatalf("first call: %v", err)
 	}
@@ -164,7 +163,7 @@ func TestWebFetchTool_Cache(t *testing.T) {
 	}
 
 	// Second call — should hit the cache.
-	_, err = tool.ExecuteContext(context.Background(), `{"url": "`+srv.URL+`"}`)
+	_, err = tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
 	if err != nil {
 		t.Fatalf("second call: %v", err)
 	}

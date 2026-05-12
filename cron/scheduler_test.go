@@ -44,7 +44,7 @@ func TestScheduler_Create(t *testing.T) {
 
 	scheduler, _ := newTestScheduler(t, handler)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	// Create a job with no trigger (just test CRUD).
@@ -81,7 +81,7 @@ func TestScheduler_PauseResume(t *testing.T) {
 
 	scheduler, _ := newTestScheduler(t, handler)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	job, err := scheduler.Create(&Job{
@@ -118,7 +118,7 @@ func TestScheduler_Update(t *testing.T) {
 
 	scheduler, _ := newTestScheduler(t, handler)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	job, err := scheduler.Create(&Job{
@@ -152,7 +152,7 @@ func TestScheduler_Delete(t *testing.T) {
 
 	scheduler, _ := newTestScheduler(t, handler)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	job, err := scheduler.Create(&Job{
@@ -240,7 +240,7 @@ func TestScheduler_StartupRecovery(t *testing.T) {
 		ExecutionTimeout: 5 * time.Minute,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	require.NoError(t, scheduler.Start(ctx))
@@ -281,7 +281,7 @@ func TestScheduler_SemaphoreSkip(t *testing.T) {
 		ExecutionTimeout: 5 * time.Second,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	// DON'T start the cron engine — we test semaphore directly.
@@ -341,7 +341,7 @@ func TestScheduler_OneshotAutoDelete(t *testing.T) {
 		ExecutionTimeout: 5 * time.Second,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 
 	// Create separate scheduler context so fire() won't panic.
@@ -415,7 +415,7 @@ func TestScheduler_OneshotDefaultIsOneshot(t *testing.T) {
 		ExecutionTimeout: 5 * time.Second,
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
 	scheduler.ctx = ctx
 

@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -39,6 +40,12 @@ type Config struct {
 	// If nil, sessions are stored under ~/.tachi/session (default).
 	// Tests should inject a FileStore backed by a temporary directory.
 	SessionStore session.Store
+}
+
+// initProviderResult holds the lazily-computed provider state.
+type initProviderResult struct {
+	provider llm.Provider
+	resolved *config.ResolvedConfig
 }
 
 // Manager orchestrates Channel implementations and bridges them to agent instances.
@@ -81,9 +88,8 @@ type Manager struct {
 	providerName string
 	modelName    string
 
-	// Lazy-initialized.
-	initOnce       sync.Once
-	initErr        error
+	// Lazy-initialized via sync.OnceValues.
+	initProviderFn func() (initProviderResult, error)
 	provider       llm.Provider
 	resolvedConfig *config.ResolvedConfig
 
@@ -604,11 +610,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 	}
 
 	sb.WriteString("Tool Calls:\n")
-	names := make([]string, 0, len(report.ToolCalls))
-	for name := range report.ToolCalls {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(report.ToolCalls))
 	for _, name := range names {
 		st := report.ToolCalls[name]
 		line := fmt.Sprintf("  %s: %d", name, st.Count)
@@ -870,38 +872,43 @@ func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agen
 // --- Provider resolution ---
 
 func (m *Manager) initProvider() error {
-	m.initOnce.Do(func() {
-		flags := config.CLIFlags{}
-		if m.providerName != "" {
-			flags.Provider = m.providerName
-			flags.ProviderSet = true
-		}
-		if m.modelName != "" {
-			flags.Model = m.modelName
-			flags.ModelSet = true
-		}
+	if m.initProviderFn == nil {
+		m.initProviderFn = sync.OnceValues(func() (initProviderResult, error) {
+			flags := config.CLIFlags{}
+			if m.providerName != "" {
+				flags.Provider = m.providerName
+				flags.ProviderSet = true
+			}
+			if m.modelName != "" {
+				flags.Model = m.modelName
+				flags.ModelSet = true
+			}
 
-		resolved, err := config.Resolve(m.cfg, flags)
-		if err != nil {
-			m.initErr = fmt.Errorf("resolve config: %w", err)
-			return
-		}
+			resolved, err := config.Resolve(m.cfg, flags)
+			if err != nil {
+				return initProviderResult{}, fmt.Errorf("resolve config: %w", err)
+			}
 
-		provider, err := llm.NewProvider(
-			resolved.Provider.Type,
-			resolved.Provider.APIKey,
-			resolved.Provider.BaseURL,
-			resolved.Provider.Model,
-		)
-		if err != nil {
-			m.initErr = fmt.Errorf("create provider: %w", err)
-			return
-		}
+			provider, err := llm.NewProvider(
+				resolved.Provider.Type,
+				resolved.Provider.APIKey,
+				resolved.Provider.BaseURL,
+				resolved.Provider.Model,
+			)
+			if err != nil {
+				return initProviderResult{}, fmt.Errorf("create provider: %w", err)
+			}
 
-		m.provider = provider
-		m.resolvedConfig = resolved
-	})
-	return m.initErr
+			return initProviderResult{provider: provider, resolved: resolved}, nil
+		})
+	}
+	result, err := m.initProviderFn()
+	if err != nil {
+		return err
+	}
+	m.provider = result.provider
+	m.resolvedConfig = result.resolved
+	return nil
 }
 
 // newSessionManager creates a session manager backed by m.sessionStore
@@ -1160,8 +1167,8 @@ func (m *Manager) handleCronCommand() (string, error) {
 		return "No cron jobs configured.\n\nYou can ask me to create one! Example:\n\"帮我设置一个每天早上9点的日报提醒\"", nil
 	}
 
-	sort.Slice(jobs, func(i, j int) bool {
-		return jobs[i].CreatedAt.Before(jobs[j].CreatedAt)
+	slices.SortFunc(jobs, func(a, b *cron.Job) int {
+		return a.CreatedAt.Compare(b.CreatedAt)
 	})
 
 	var sb strings.Builder

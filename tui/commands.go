@@ -4,7 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"sort"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -509,8 +510,7 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 			// When the browser flow fails and we fall back to manual flow,
 			// errFn has already delivered the instructions. An OAuthRequiredError
 			// here would just repeat the same info — skip it.
-			var oauthErr *mcp.OAuthRequiredError
-			if !errors.As(err, &oauthErr) {
+			if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); !ok {
 				ch <- fmt.Sprintf("OAuth failed for **%s**: %v", srv.Name, err)
 			}
 			return
@@ -725,11 +725,7 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 
 	// Tool calls
 	sb.WriteString("\n**Tool Calls**\n")
-	names := make([]string, 0, len(report.ToolCalls))
-	for name := range report.ToolCalls {
-		names = append(names, name)
-	}
-	sort.Strings(names)
+	names := slices.Sorted(maps.Keys(report.ToolCalls))
 	for _, name := range names {
 		st := report.ToolCalls[name]
 		line := fmt.Sprintf("  - **%s**: %d call(s)", name, st.Count)

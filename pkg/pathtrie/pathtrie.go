@@ -44,7 +44,7 @@ func (t *PathTrie) insert(path string) {
 		return
 	}
 	cur := t.root
-	for i := 0; i < len(path); i++ {
+	for i := range path {
 		b := path[i]
 		child, ok := cur.children[b]
 		if !ok {
@@ -214,7 +214,7 @@ func (t *PathTrie) Search(query string, topN int) []Match {
 // walkPrefix follows an exact (case-insensitive) path through the trie.
 func (t *PathTrie) walkPrefix(prefix string) *trieNode {
 	cur := t.root
-	for i := 0; i < len(prefix); i++ {
+	for i := range prefix {
 		b := prefix[i]
 		found := false
 		for cb, child := range cur.children {

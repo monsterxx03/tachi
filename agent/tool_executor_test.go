@@ -178,7 +178,7 @@ func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 32)
-	msgs, err := a.executeToolCalls(context.Background(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -219,7 +219,7 @@ func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 32)
-	msgs, err := a.executeToolCalls(context.Background(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -247,7 +247,7 @@ func TestExecuteToolCalls_ResultOrderPreserved(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 32)
-	msgs, err := a.executeToolCalls(context.Background(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -277,7 +277,7 @@ func TestAgentLoop_ParallelToolCalls(t *testing.T) {
 	a.RegisterTool(slowStub("ToolB"))
 	a.RegisterTool(slowStub("ToolC"))
 
-	ch := a.RunConversationStream(context.Background(), nil, "run three in parallel", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "run three in parallel", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -322,7 +322,7 @@ func TestAgentLoop_MixedToolGroup(t *testing.T) {
 	a.RegisterTool(seqStub("EditFile"))
 	a.RegisterTool(slowStub("Glob"))
 
-	ch := a.RunConversationStream(context.Background(), nil, "mixed tools", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "mixed tools", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -349,7 +349,7 @@ func TestAgentLoop_ParallelToolError(t *testing.T) {
 	a.RegisterTool(errorStub())
 	a.RegisterTool(slowStub("ToolC"))
 
-	ch := a.RunConversationStream(context.Background(), nil, "do parallel with one error", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "do parallel with one error", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -383,7 +383,7 @@ func TestAgentLoop_SingleParallelTool(t *testing.T) {
 	a := newTestAgent(mp)
 	a.RegisterTool(slowStub("ToolA"))
 
-	ch := a.RunConversationStream(context.Background(), nil, "single tool", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "single tool", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)

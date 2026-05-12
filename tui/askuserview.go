@@ -33,7 +33,7 @@ func (v *AskUserView) Height() int {
 	q := v.questions[v.curQuestion]
 	// hint(1) + progress(1) + blank(1) + question(1) + header(1) + options + blank(1) + summary header(1) + answered questions
 	h := 6 + len(q.Options) + 1
-	for i := 0; i < len(v.questions); i++ {
+	for i := range v.questions {
 		if len(v.selected[i]) > 0 {
 			h++
 		}

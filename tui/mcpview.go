@@ -246,7 +246,7 @@ func (v *MCPView) View() string {
 			v.renderToolList(&b, sel.Tools, toolArea, false) // read-only — no cursor
 		}
 	} else {
-		for i := 0; i < toolArea; i++ {
+		for range toolArea {
 			b.WriteString("\n")
 		}
 	}

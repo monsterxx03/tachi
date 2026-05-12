@@ -38,7 +38,7 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 	var systemPrompt string
 	var anthropicMessages []anthropic.MessageParam
 
-	for i := 0; i < len(messages); i++ {
+	for i := range len(messages) {
 		msg := messages[i]
 
 		if msg.Role == "system" {

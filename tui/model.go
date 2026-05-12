@@ -1171,8 +1171,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 
 		if err := mcp.RunOAuthFlow(ctx, srv, errFn); err != nil {
 			m.logger.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
-			var oauthErr *mcp.OAuthRequiredError
-			if !errors.As(err, &oauthErr) {
+			if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); !ok {
 				ch <- fmt.Sprintf("OAuth failed: %v", err)
 			}
 			return

@@ -74,7 +74,7 @@ func TestRunConversation(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	result := a.RunConversation(context.Background(), "hello", "", llm.ChatOptions{MaxTokens: 4096})
+	result := a.RunConversation(t.Context(), "hello", "", llm.ChatOptions{MaxTokens: 4096})
 
 	require.NotNil(t, result)
 	assert.Equal(t, "Response", result.Response)
@@ -92,7 +92,7 @@ func TestRunConversation_AutoConfirmsTool(t *testing.T) {
 
 	a := newTestAgent(mp)
 	a.RegisterTool(echoStub())
-	result := a.RunConversation(context.Background(), "run a command", "", llm.ChatOptions{MaxTokens: 4096})
+	result := a.RunConversation(t.Context(), "run a command", "", llm.ChatOptions{MaxTokens: 4096})
 
 	require.NotNil(t, result)
 	assert.Equal(t, "done", result.Response)
@@ -108,7 +108,7 @@ func TestExecuteToolCalls_UnknownTool(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 8)
-	msgs, err := a.executeToolCalls(context.Background(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
 	require.NoError(t, err) // unknown tool does not stop the loop, it returns an error result
 	require.Len(t, msgs, 1)
 	assert.True(t, msgs[0].IsError)
@@ -137,7 +137,7 @@ func TestExecuteToolCalls_ToolError(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 8)
-	msgs, err := a.executeToolCalls(context.Background(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.True(t, msgs[0].IsError)
@@ -179,7 +179,7 @@ func TestAgentLoop_MaxTokensContinueAndStop(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	ch := a.RunConversationStream(context.Background(), nil, "long response", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "long response", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -204,7 +204,7 @@ func TestAgentLoop_MaxTokensThenStop(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	ch := a.RunConversationStream(context.Background(), nil, "long", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "long", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -243,7 +243,7 @@ func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
 	a.SetSkipEditConfirm(false) // require confirmation
 	a.RegisterTool(confirmStub())
 
-	ch := a.RunConversationStream(context.Background(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
 
 	// Consume on a single goroutine — respond inline
 	var result *RunResult
@@ -271,7 +271,7 @@ func TestAgentLoop_ConfirmationToolDenied(t *testing.T) {
 	a.SetSkipEditConfirm(false)
 	a.RegisterTool(confirmStub())
 
-	ch := a.RunConversationStream(context.Background(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
 
 	var result *RunResult
 	for e := range ch {
@@ -302,7 +302,7 @@ func TestAgentLoop_SessionRecording(t *testing.T) {
 	sm := session.NewManagerWithStore(store)
 	a.SetSessionManager(sm)
 
-	ch := a.RunConversationStream(context.Background(), nil, "my message", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "my message", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
@@ -367,7 +367,7 @@ func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {
 	a := newTestAgent(mp)
 	a.RegisterTool(askUserStub())
 
-	ch := a.RunConversationStream(context.Background(), nil, "ask me", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(t.Context(), nil, "ask me", "", llm.ChatOptions{MaxTokens: 4096})
 
 	var result *RunResult
 	for e := range ch {

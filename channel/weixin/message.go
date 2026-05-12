@@ -161,7 +161,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 
 	var encryptedParam string
 	// Retry up to 3 times.
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		encryptedParam, err = ch.cli.cdnUpload(uploadURL, ciphertext)
 		if err != nil {
 			if strings.Contains(err.Error(), "client error") {

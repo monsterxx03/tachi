@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"time"
 
 	"github.com/google/uuid"
@@ -180,8 +180,8 @@ func (s *FileStore) ListSessions() ([]*Session, error) {
 	}
 
 	// Sort by CreatedAt descending (newest first)
-	sort.Slice(sessions, func(i, j int) bool {
-		return sessions[i].CreatedAt.After(sessions[j].CreatedAt)
+	slices.SortFunc(sessions, func(a, b *Session) int {
+		return b.CreatedAt.Compare(a.CreatedAt) // descending
 	})
 
 	return sessions, nil

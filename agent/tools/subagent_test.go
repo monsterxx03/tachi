@@ -68,7 +68,7 @@ func TestSubagentTool_ExecuteContext_Success(t *testing.T) {
 	}
 	tool := NewSubagentTool(runner)
 
-	result, err := tool.ExecuteContext(context.Background(), `{"prompt":"find all TODO comments"}`)
+	result, err := tool.ExecuteContext(t.Context(), `{"prompt":"find all TODO comments"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -87,7 +87,7 @@ func TestSubagentTool_ExecuteContext_WithAllowedTools(t *testing.T) {
 	}
 	tool := NewSubagentTool(runner)
 
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"prompt":"search code","allowed_tools":["ReadFile","Grep"],"max_iterations":10}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -107,7 +107,7 @@ func TestSubagentTool_ExecuteContext_WithWorktreeBranch(t *testing.T) {
 	}
 	tool := NewSubagentTool(runner)
 
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"prompt":"search on branch","worktree_branch":"feat/experiment"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -125,7 +125,7 @@ func TestSubagentTool_ExecuteContext_Error_NoPartialResult(t *testing.T) {
 	}
 	tool := NewSubagentTool(runner)
 
-	result, err := tool.ExecuteContext(context.Background(), `{"prompt":"do something"}`)
+	result, err := tool.ExecuteContext(t.Context(), `{"prompt":"do something"}`)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -145,7 +145,7 @@ func TestSubagentTool_ExecuteContext_Error_WithPartialResult(t *testing.T) {
 	}
 	tool := NewSubagentTool(runner)
 
-	result, err := tool.ExecuteContext(context.Background(), `{"prompt":"big task"}`)
+	result, err := tool.ExecuteContext(t.Context(), `{"prompt":"big task"}`)
 	if err != nil {
 		t.Fatalf("should not return error when partial result is available: %v", err)
 	}
@@ -211,7 +211,7 @@ func TestSubagentTool_InvalidJSON(t *testing.T) {
 	runner := &mockRunner{maxOutputChars: 16384}
 	tool := NewSubagentTool(runner)
 
-	_, err := tool.ExecuteContext(context.Background(), `{invalid json}`)
+	_, err := tool.ExecuteContext(t.Context(), `{invalid json}`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON")
 	}
