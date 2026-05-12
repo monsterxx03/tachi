@@ -41,6 +41,7 @@ type toolCallDisplay struct {
 	IsError    bool
 	IsSubagent bool
 	Done       bool
+	Duration   time.Duration
 }
 
 type pendingConfirm struct {
@@ -702,7 +703,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return nil
 
 	case agent.AgentEventToolResult:
-		m.chatview.UpdateToolResult(event.ToolID, event.ToolResult, event.ToolIsError)
+		m.chatview.UpdateToolResult(event.ToolID, event.ToolResult, event.ToolIsError, event.ToolDuration)
 		return m.nextEvent()
 
 	case agent.AgentEventSubagentStart:

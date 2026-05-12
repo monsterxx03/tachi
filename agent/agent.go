@@ -432,6 +432,7 @@ type AgentEvent struct {
 	ToolResult    string
 	ToolIsError   bool
 	ToolDiff      string
+	ToolDuration  time.Duration // Wall-clock duration of tool execution
 	Questions     []tools.Question // For AskUserQuestion tool
 	Result        *RunResult
 	Messages      []llm.Message
@@ -1108,6 +1109,7 @@ func translateEvent(e AgentEvent) subagent.StreamEvent {
 		se.ToolResult = e.ToolResult
 		se.ToolIsError = e.ToolIsError
 		se.ToolID = e.ToolID
+		se.ToolDuration = e.ToolDuration
 	case AgentEventTurnComplete:
 		se.Type = subagent.StreamEventTurnComplete
 	case AgentEventError:

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -192,6 +193,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
+				ToolDuration: tr.Duration,
 			}
 		} else {
 			wrapped := wrapToolOutput(tc.Function.Name, tr.Output)
@@ -199,6 +201,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: tr.Output,
+				ToolDuration: tr.Duration,
 			}
 		}
 
@@ -263,10 +266,11 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		if tr.Status == tools.ToolResultPendingConfirm {
 			if a.skipEditConfirm {
 				a.logger.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)
+				confirmStart := time.Now()
 				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
-				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
+				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 				if err != nil {
-					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
+					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
 				}
 			} else {
 				a.logger.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
@@ -281,10 +285,11 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				select {
 				case confirmed := <-a.confirmRespCh:
 					if confirmed {
+						confirmStart := time.Now()
 						output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
-						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output}
+						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 						if err != nil {
-							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err}
+							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
 						}
 					} else {
 						return nil, errCancelled
@@ -325,6 +330,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: toolMsg.Content, ToolIsError: true,
+				ToolDuration: tr.Duration,
 			}
 		} else {
 			wrapped := wrapToolOutput(tc.Function.Name, tr.Output)
@@ -332,6 +338,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: tr.Output,
+				ToolDuration: tr.Duration,
 			}
 		}
 

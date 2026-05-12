@@ -552,6 +552,9 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 				m.logger.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
 				if verbose {
 					line := "  ❌ Error: " + truncateToolResult(event.ToolResult)
+					if event.ToolDuration > 0 {
+						line += " " + formatToolDuration(event.ToolDuration)
+					}
 					callLine, ok := pendingToolCalls[event.ToolID]
 					if ok {
 						sendProgress(callLine + "\n" + line)
@@ -564,6 +567,9 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 				m.logger.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
 				if verbose {
 					line := "  ✅ " + summarizeToolResult(event.ToolName, event.ToolResult)
+					if event.ToolDuration > 0 {
+						line += " " + formatToolDuration(event.ToolDuration)
+					}
 					callLine, ok := pendingToolCalls[event.ToolID]
 					if ok {
 						sendProgress(callLine + "\n" + line)
@@ -1095,4 +1101,24 @@ func truncateForDisplay(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// formatToolDuration formats a time.Duration as a concise human-readable string
+// for channel display of tool execution results.
+func formatToolDuration(d time.Duration) string {
+	if d < time.Microsecond {
+		return "(<1µs)"
+	}
+	if d < time.Millisecond {
+		return fmt.Sprintf("(%dµs)", d.Microseconds())
+	}
+	if d < time.Second {
+		return fmt.Sprintf("(%.0fms)", float64(d.Microseconds())/1000)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("(%.1fs)", d.Seconds())
+	}
+	minutes := int(d.Minutes())
+	seconds := d.Seconds() - float64(minutes*60)
+	return fmt.Sprintf("(%dm%.0fs)", minutes, seconds)
 }

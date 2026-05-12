@@ -5,6 +5,7 @@ package subagent
 
 import (
 	"context"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -64,6 +65,7 @@ type StreamEvent struct {
 	ToolID        string
 	ToolResult    string
 	ToolIsError   bool
+	ToolDuration  time.Duration
 	Error         error
 	Usage         *llm.Usage
 }

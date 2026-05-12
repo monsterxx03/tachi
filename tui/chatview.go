@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/glamour"
@@ -127,12 +128,13 @@ func (c *ChatView) UpdateToolArgs(id, args string) {
 	c.refresh()
 }
 
-func (c *ChatView) UpdateToolResult(id, result string, isError bool) {
+func (c *ChatView) UpdateToolResult(id, result string, isError bool, duration time.Duration) {
 	for i := range c.currentTools {
 		if c.currentTools[i].ID == id {
 			c.currentTools[i].Result = result
 			c.currentTools[i].IsError = isError
 			c.currentTools[i].Done = true
+			c.currentTools[i].Duration = duration
 			break
 		}
 	}
@@ -583,7 +585,11 @@ func (c *ChatView) renderToolCall(tc toolCallDisplay) string {
 				toolResultOKStyle.Render("v"),
 				toolCallStyle.Render(nameTag),
 				dimStyle.Render(preview))
-			fmt.Fprintf(&b, "  %s", dimStyle.Render(truncate(tc.Result, 200)))
+			summary := dimStyle.Render(truncate(tc.Result, 200))
+			if tc.Duration > 0 {
+				summary += dimStyle.Render(" " + formatDuration(tc.Duration))
+			}
+			fmt.Fprintf(&b, "  %s", summary)
 		}
 	} else {
 		spinnerChar := "~"
@@ -741,4 +747,24 @@ func renderDiffWithHighlight(content string, width int) string {
 		}
 	}
 	return b.String()
+}
+
+// formatDuration formats a time.Duration as a concise human-readable string
+// suitable for display in tool execution results.
+func formatDuration(d time.Duration) string {
+	if d < time.Microsecond {
+		return "(<1µs)"
+	}
+	if d < time.Millisecond {
+		return fmt.Sprintf("(%dµs)", d.Microseconds())
+	}
+	if d < time.Second {
+		return fmt.Sprintf("(%.0fms)", float64(d.Microseconds())/1000)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("(%.1fs)", d.Seconds())
+	}
+	minutes := int(d.Minutes())
+	seconds := d.Seconds() - float64(minutes*60)
+	return fmt.Sprintf("(%dm%.0fs)", minutes, seconds)
 }

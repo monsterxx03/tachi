@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"time"
 )
 
 // Tool name constants. Use these instead of string literals to avoid typos
@@ -68,7 +69,8 @@ type ToolResult struct {
 	Args       string
 	Diff       string
 	Questions  []Question
-	SubagentID string // SubAgent shortID, for linking to subagent/<id>.jsonl
+	SubagentID string        // SubAgent shortID, for linking to subagent/<id>.jsonl
+	Duration   time.Duration // Wall-clock duration of tool execution
 }
 
 // Schema defines the JSON schema for a tool
@@ -157,15 +159,17 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 		return ToolResult{Status: ToolResultPendingConfirm, Name: name, Args: args, Diff: diff}
 	}
 
+	startTime := time.Now()
 	result, err := tool.ExecuteContext(ctx, args)
+	resultDuration := time.Since(startTime)
 	if askErr, ok := err.(*AskUserQuestionError); ok {
-		return ToolResult{Status: ToolResultNeedUserInput, Name: askErr.ToolName, Args: askErr.Args, Questions: askErr.Questions}
+		return ToolResult{Status: ToolResultNeedUserInput, Name: askErr.ToolName, Args: askErr.Args, Questions: askErr.Questions, Duration: resultDuration}
 	}
 	if err != nil {
-		return ToolResult{Status: ToolResultError, Err: err}
+		return ToolResult{Status: ToolResultError, Err: err, Duration: resultDuration}
 	}
 
-	tr := ToolResult{Status: ToolResultSuccess, Output: result}
+	tr := ToolResult{Status: ToolResultSuccess, Output: result, Duration: resultDuration}
 	if carrier, ok := tool.(SubagentIDCarrier); ok {
 		tr.SubagentID = carrier.LastSubagentID()
 	}
