@@ -1,9 +1,25 @@
 package channel
 
 import (
+	"context"
 	"errors"
 	"testing"
 )
+
+// ---- Mock for registry tests ----
+
+type mockChannel struct {
+	name string
+}
+
+func (m *mockChannel) Name() string { return m.name }
+
+func (m *mockChannel) OnStart(ctx context.Context) error { return nil }
+
+func (m *mockChannel) Run(ctx context.Context, handler MessageHandler) error {
+	<-ctx.Done()
+	return nil
+}
 
 // ---- Registry Tests ----
 

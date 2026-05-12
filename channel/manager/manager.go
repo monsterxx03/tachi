@@ -1,4 +1,4 @@
-package channel
+package manager
 
 import (
 	"context"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
@@ -18,10 +19,10 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// ManagerConfig holds the configuration for creating a Manager.
-type ManagerConfig struct {
-	// Config is the loaded tachi configuration (providers, web search, MCP, etc.).
-	Config *config.Config
+// Config holds the configuration for creating a Manager.
+type Config struct {
+	// Cfg is the loaded tachi configuration (providers, web search, MCP, etc.).
+	Cfg *config.Config
 
 	// SystemPrompt is the full system prompt used by all agent instances.
 	SystemPrompt string
@@ -84,7 +85,7 @@ type Manager struct {
 	sessionStore session.Store
 
 	mu       sync.Mutex
-	channels []Channel
+	channels []channel.Channel
 
 	// Cron scheduler (only active in channel mode when enabled).
 	scheduler *cron.Scheduler
@@ -92,11 +93,11 @@ type Manager struct {
 	logger *debuglog.Logger
 }
 
-// NewManager creates a Manager.
+// New creates a Manager.
 // Channels are interactive — the iteration budget is always unlimited (0).
-func NewManager(mcfg ManagerConfig) *Manager {
+func New(mcfg Config) *Manager {
 	return &Manager{
-		cfg:          mcfg.Config,
+		cfg:          mcfg.Cfg,
 		systemPrompt: mcfg.SystemPrompt,
 		providerName: mcfg.ProviderName,
 		modelName:    mcfg.ModelName,
@@ -106,7 +107,7 @@ func NewManager(mcfg ManagerConfig) *Manager {
 }
 
 // Add registers a Channel. Must be called before Start().
-func (m *Manager) Add(ch Channel) {
+func (m *Manager) Add(ch channel.Channel) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.channels = append(m.channels, ch)
@@ -132,14 +133,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	}
 
 	m.mu.Lock()
-	chans := make([]Channel, len(m.channels))
+	chans := make([]channel.Channel, len(m.channels))
 	copy(chans, m.channels)
 	m.mu.Unlock()
 
 	handler := m.buildHandler()
 
 	for _, ch := range chans {
-		go func(ch Channel) {
+		go func(ch channel.Channel) {
 			m.logger.Log("channel: %s starting", ch.Name())
 
 			// Lifecycle: OnStart → Run.
@@ -171,20 +172,20 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // buildHandler returns a MessageHandler. Each call processes one incoming
 // message through a fresh agent instance.
-func (m *Manager) buildHandler() MessageHandler {
-	return func(ctx context.Context, msg IncomingMessage) (OutgoingMessage, error) {
+func (m *Manager) buildHandler() channel.MessageHandler {
+	return func(ctx context.Context, msg channel.IncomingMessage) (channel.OutgoingMessage, error) {
 		m.logger.Log("channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
 		result, err := m.process(ctx, msg)
 		if err != nil {
-			return OutgoingMessage{
+			return channel.OutgoingMessage{
 				ThreadID: msg.ThreadID,
 				Content:  fmt.Sprintf("❌ %v", err),
 				ReplyTo:  msg.MessageID,
 			}, err
 		}
-		return OutgoingMessage{
+		return channel.OutgoingMessage{
 			ThreadID: msg.ThreadID,
 			Content:  result,
 			ReplyTo:  msg.MessageID,
@@ -197,7 +198,7 @@ func (m *Manager) buildHandler() MessageHandler {
 //
 // Slash commands (messages starting with "/") are intercepted and handled
 // directly without invoking the LLM. Currently supported: /new, /mcp.
-func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, error) {
+func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage) (string, error) {
 	// --- slash command interception ---
 	if strings.HasPrefix(msg.Content, "/") {
 		return m.handleSlashCommand(msg)
@@ -265,7 +266,7 @@ func (m *Manager) process(ctx context.Context, msg IncomingMessage) (string, err
 
 // handleSlashCommand dispatches message starting with "/" to the appropriate
 // handler. Returns the response text for the channel to send back.
-func (m *Manager) handleSlashCommand(msg IncomingMessage) (string, error) {
+func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error) {
 	parts := strings.Fields(msg.Content)
 	if len(parts) == 0 {
 		return "", nil
@@ -718,7 +719,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 
 	// Deliver the response to the target thread's channel.
 	if result != "" {
-		m.deliverCronResponse(ctx, OutgoingMessage{
+		m.deliverCronResponse(ctx, channel.OutgoingMessage{
 			ThreadID: job.TargetThreadID,
 			Content:  result,
 			ReplyTo:  fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()),
@@ -731,14 +732,14 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 // deliverCronResponse sends a cron-triggered response to the channel
 // responsible for the given ThreadID. It iterates all registered channels
 // and tries each one that implements MessageSender.
-func (m *Manager) deliverCronResponse(ctx context.Context, msg OutgoingMessage) {
+func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingMessage) {
 	m.mu.Lock()
-	chans := make([]Channel, len(m.channels))
+	chans := make([]channel.Channel, len(m.channels))
 	copy(chans, m.channels)
 	m.mu.Unlock()
 
 	for _, ch := range chans {
-		sender, ok := ch.(MessageSender)
+		sender, ok := ch.(channel.MessageSender)
 		if !ok {
 			continue
 		}

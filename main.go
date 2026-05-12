@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/channel"
+	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	_ "github.com/monsterxx03/tachi/channel/weixin"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -454,8 +455,8 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	manager := channel.NewManager(channel.ManagerConfig{
-		Config:       cfg,
+	mgr := channelmgr.New(channelmgr.Config{
+		Cfg:          cfg,
 		SystemPrompt: buildSystemPrompt(cfg.Language),
 	})
 
@@ -479,7 +480,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 			return fmt.Errorf("channel %q: create: %w", name, err)
 		}
 
-		manager.Add(ch)
+		mgr.Add(ch)
 		instantiated++
 		fmt.Printf("[channel] %s registered\n", name)
 	}
@@ -493,7 +494,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("no channel factories registered for any enabled channel: %v", names)
 	}
 
-	if err := manager.Start(ctx); err != nil {
+	if err := mgr.Start(ctx); err != nil {
 		return fmt.Errorf("channel manager start: %w", err)
 	}
 

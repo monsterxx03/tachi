@@ -1,4 +1,4 @@
-package channel
+package manager
 
 import (
 	"context"
@@ -10,6 +10,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	sesspkg "github.com/monsterxx03/tachi/session"
@@ -32,9 +33,9 @@ func newTempSessionStore(t *testing.T) *sesspkg.FileStore {
 
 type mockChannel struct {
 	name        string
-	runFunc     func(ctx context.Context, handler MessageHandler) error
+	runFunc     func(ctx context.Context, handler channel.MessageHandler) error
 	mu          sync.Mutex
-	lastHandler MessageHandler
+	lastHandler channel.MessageHandler
 	running     bool
 }
 
@@ -44,7 +45,7 @@ func (m *mockChannel) OnStart(ctx context.Context) error {
 	return nil // mock: no pre-start setup needed
 }
 
-func (m *mockChannel) Run(ctx context.Context, handler MessageHandler) error {
+func (m *mockChannel) Run(ctx context.Context, handler channel.MessageHandler) error {
 	m.mu.Lock()
 	m.lastHandler = handler
 	m.running = true
@@ -63,7 +64,7 @@ func (m *mockChannel) Run(ctx context.Context, handler MessageHandler) error {
 	return nil
 }
 
-func (m *mockChannel) getHandler() MessageHandler {
+func (m *mockChannel) getHandler() channel.MessageHandler {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.lastHandler
@@ -116,19 +117,19 @@ func (p *mockProvider) CreateChatStream(ctx context.Context, messages []llm.Mess
 // ---- Tests ----
 
 func TestChannelInterface(t *testing.T) {
-	var ch Channel = &mockChannel{name: "test"}
+	var ch channel.Channel = &mockChannel{name: "test"}
 	assert.Equal(t, "test", ch.Name())
 }
 
 func TestIncomingOutgoingMessage(t *testing.T) {
-	in := IncomingMessage{
+	in := channel.IncomingMessage{
 		ThreadID:  "user-42",
 		MessageID: "msg-1",
 		Content:   "hello",
 		ChannelID: "group-chat",
 	}
 
-	out := OutgoingMessage{
+	out := channel.OutgoingMessage{
 		ThreadID: in.ThreadID,
 		Content:  "hi there",
 		ReplyTo:  in.MessageID,
@@ -142,8 +143,8 @@ func TestIncomingOutgoingMessage(t *testing.T) {
 func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()
 
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test prompt",
 	})
 
@@ -154,8 +155,8 @@ func TestNewManager(t *testing.T) {
 func TestNewManagerDefaults(t *testing.T) {
 	cfg := config.DefaultConfig()
 
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test prompt",
 	})
 
@@ -164,8 +165,8 @@ func TestNewManagerDefaults(t *testing.T) {
 }
 
 func TestManagerAddChannel(t *testing.T) {
-	mgr := NewManager(ManagerConfig{
-		Config:       config.DefaultConfig(),
+	mgr := New(Config{
+		Cfg:          config.DefaultConfig(),
 		SystemPrompt: "test",
 	})
 
@@ -195,14 +196,14 @@ func TestChannelStopsOnContextCancel(t *testing.T) {
 }
 
 func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
-	mgr := NewManager(ManagerConfig{
-		Config:       config.DefaultConfig(),
+	mgr := New(Config{
+		Cfg:          config.DefaultConfig(),
 		SystemPrompt: "test prompt",
 	})
 
 	handler := mgr.buildHandler()
 
-	msg := IncomingMessage{
+	msg := channel.IncomingMessage{
 		ThreadID:  "thread-1",
 		MessageID: "msg-1",
 		Content:   "hello",
@@ -223,8 +224,8 @@ func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
 // text response from the agent event channel.
 func TestDrainEvents_BasicResponse(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test prompt",
 	})
 
@@ -254,8 +255,8 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 // we handle it), drainEvents auto-approves and continues.
 func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test",
 	})
 
@@ -303,8 +304,8 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 // auto-rejects AskUser events without blocking.
 func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test",
 	})
 
@@ -349,8 +350,8 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 // ThreadID, loadThreadSession creates a fresh session manager and session.
 func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test prompt",
 		SessionStore: newTempSessionStore(t),
 	})
@@ -361,7 +362,7 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 			Model:         "test-model",
 			ContextWindow: 128_000,
 		},
-		MaxTokens:     4096,
+		MaxTokens: 4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -383,8 +384,8 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	cfg := config.DefaultConfig()
 	store := newTempSessionStore(t)
-	mgr := NewManager(ManagerConfig{
-		Config:       cfg,
+	mgr := New(Config{
+		Cfg:          cfg,
 		SystemPrompt: "test prompt",
 		SessionStore: store,
 	})
@@ -394,7 +395,7 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 			Model:         "test-model",
 			ContextWindow: 128_000,
 		},
-		MaxTokens:     4096,
+		MaxTokens: 4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
