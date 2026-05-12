@@ -6,11 +6,11 @@ import (
 	"time"
 )
 
-func TestDateReminder_FirstMessage(t *testing.T) {
+func TestDateReminder_Fires(t *testing.T) {
 	r := DateReminder{}
 	lines := r.Generate(Context{
 		IsFirstMessage: true,
-		Now:            time.Date(2025, 7, 15, 0, 0, 0, 0, time.UTC),
+		Now:            time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
 	})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
@@ -18,41 +18,32 @@ func TestDateReminder_FirstMessage(t *testing.T) {
 	if !strings.Contains(lines[0], "Tuesday, July 15, 2025") {
 		t.Errorf("expected date in output, got: %s", lines[0])
 	}
-}
-
-func TestDateReminder_NotFirstMessage(t *testing.T) {
-	r := DateReminder{}
-	// Neither IsFirstMessage nor LastMessageDate set → no reminder.
-	lines := r.Generate(Context{IsFirstMessage: false})
-	if lines != nil {
-		t.Errorf("expected nil, got %v", lines)
+	if !strings.Contains(lines[0], "14:30:45") {
+		t.Errorf("expected time in output, got: %s", lines[0])
 	}
 }
 
-func TestDateReminder_DateChanged(t *testing.T) {
+func TestDateReminder_AlwaysFires(t *testing.T) {
+	r := DateReminder{}
+	// DateReminder now fires on every message regardless of IsFirstMessage or LastMessageDate.
+	lines := r.Generate(Context{IsFirstMessage: false})
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line (always fires), got %d", len(lines))
+	}
+}
+
+func TestDateReminder_AlwaysFiresWithDateChanged(t *testing.T) {
 	r := DateReminder{}
 	lines := r.Generate(Context{
 		IsFirstMessage:  false,
 		LastMessageDate: "2025-07-14",
-		Now:             time.Date(2025, 7, 15, 0, 0, 0, 0, time.UTC),
+		Now:             time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
 	})
 	if len(lines) != 1 {
-		t.Fatalf("expected 1 line when date changed, got %d", len(lines))
+		t.Fatalf("expected 1 line (always fires), got %d", len(lines))
 	}
 	if !strings.Contains(lines[0], "Tuesday, July 15, 2025") {
 		t.Errorf("expected date in output, got: %s", lines[0])
-	}
-}
-
-func TestDateReminder_SameDate(t *testing.T) {
-	r := DateReminder{}
-	lines := r.Generate(Context{
-		IsFirstMessage:  false,
-		LastMessageDate: "2025-07-15",
-		Now:             time.Date(2025, 7, 15, 0, 0, 0, 0, time.UTC),
-	})
-	if len(lines) != 0 {
-		t.Errorf("expected nil when same date, got %v", lines)
 	}
 }
 
@@ -141,7 +132,6 @@ func TestTokenWarningReminder_ZeroThreshold(t *testing.T) {
 
 func TestCollector_Empty(t *testing.T) {
 	c := NewCollector(
-		DateReminder{},
 		IterationWarningReminder{Threshold: 5},
 		TokenWarningReminder{ThresholdPct: 80},
 	)

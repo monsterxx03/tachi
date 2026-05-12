@@ -418,6 +418,8 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.pendingQueue = nil
 		m.chatview.RemovePendingItems()
 		m.statusbar.SetPendingCount(0)
+		// Immediate visual feedback: mark in-progress tool calls as interrupted.
+		m.chatview.MarkPendingToolsInterrupted()
 		return m, nil
 	}
 	return m, tea.Quit

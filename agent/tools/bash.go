@@ -3,6 +3,7 @@ package tools
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -93,10 +94,14 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		DurationMs: duration,
 	}
 
-	if ctx.Err() == context.DeadlineExceeded {
+	if err := ctx.Err(); err != nil {
 		result.Interrupted = true
 		result.Stdout, _ = trimAndTruncate(stdout.Bytes())
-		result.Stderr = fmt.Sprintf("Command timed out after %s", timeout)
+		if errors.Is(err, context.DeadlineExceeded) {
+			result.Stderr = fmt.Sprintf("Command timed out after %s", timeout)
+		} else {
+			result.Stderr = fmt.Sprintf("Command interrupted: %v", err)
+		}
 		result.ExitCode = -1
 		return marshalResult(result)
 	}

@@ -42,9 +42,7 @@ type Context struct {
 
 	// LastMessageDate is the calendar date (YYYY-MM-DD) of the most recent
 	// user message that was processed. It's empty for brand-new conversations.
-	// When the date changes between messages (e.g. the user comes back the
-	// next day in a long-running session), DateReminder fires to keep the
-	// model temporally aware.
+	// Used by reminders that need to know when a new day has started.
 	LastMessageDate string
 }
 
@@ -118,33 +116,15 @@ func (c *Collector) WrapUserMessage(userMessage string, ctx Context) string {
 
 // ---- Built-in reminders -----------------------------------------------------
 
-// DateReminder injects the current date on the first message of a brand-new
-// conversation, and again whenever the calendar date has changed since the
-// last processed user message. This keeps the model temporally aware without
-// hard-coding a date in the system prompt (which would go stale across long
-// sessions).
+// DateReminder injects the current date and time (precise to seconds) on every
+// user message. This keeps the model temporally aware without hard-coding a
+// date in the system prompt (which would go stale across long sessions).
 type DateReminder struct{}
 
 func (DateReminder) Generate(ctx Context) []string {
-	// Always fire on the first message.
-	if ctx.IsFirstMessage {
-		line := fmt.Sprintf("Current date: %s", ctx.Now.Format("Monday, January 2, 2006"))
-		debuglog.DefaultLogger.Log("systemreminder: DateReminder firing (first message): %q", line)
-		return []string{line}
-	}
-
-	// Fire when the calendar date has changed since the last message.
-	if ctx.LastMessageDate != "" {
-		today := ctx.Now.Format("2006-01-02")
-		if today != ctx.LastMessageDate {
-			line := fmt.Sprintf("Current date: %s", ctx.Now.Format("Monday, January 2, 2006"))
-			debuglog.DefaultLogger.Log("systemreminder: DateReminder firing (date changed %s -> %s): %q",
-				ctx.LastMessageDate, today, line)
-			return []string{line}
-		}
-	}
-
-	return nil
+	line := fmt.Sprintf("Current date: %s", ctx.Now.Format("Monday, January 2, 2006 15:04:05 MST"))
+	debuglog.DefaultLogger.Log("systemreminder: DateReminder firing: %q", line)
+	return []string{line}
 }
 
 // IterationWarningReminder warns when the agent loop is running low on

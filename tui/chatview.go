@@ -151,6 +151,19 @@ func (c *ChatView) MarkSubagent(id string) {
 	c.refresh()
 }
 
+// MarkPendingToolsInterrupted marks all in-progress (not Done) tool calls as
+// interrupted. Used when Ctrl+C cancels the agent loop during tool execution.
+func (c *ChatView) MarkPendingToolsInterrupted() {
+	for i := range c.currentTools {
+		if !c.currentTools[i].Done {
+			c.currentTools[i].IsError = true
+			c.currentTools[i].Result = "Interrupted"
+			c.currentTools[i].Done = true
+		}
+	}
+	c.refresh()
+}
+
 func (c *ChatView) FinishStreaming() {
 	c.flushTurn()
 	c.userScrolled = false
