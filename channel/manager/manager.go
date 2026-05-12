@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"sort"
@@ -90,6 +91,10 @@ type Manager struct {
 	// Cron scheduler (only active in channel mode when enabled).
 	scheduler *cron.Scheduler
 
+	// verboseState tracks per-thread verbose mode toggled by /v command.
+	verboseState map[string]bool
+	verboseMu    sync.RWMutex
+
 	logger *debuglog.Logger
 }
 
@@ -177,7 +182,13 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		m.logger.Log("channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
-		result, err := m.process(ctx, msg)
+		// sendProgress pushes an intermediate progress message to the
+		// same thread. Only effective in verbose mode.
+		sendProgress := func(text string) {
+			m.sendToThread(ctx, msg.ThreadID, text, msg.MessageID)
+		}
+
+		result, err := m.process(ctx, msg, sendProgress)
 		if err != nil {
 			return channel.OutgoingMessage{
 				ThreadID: msg.ThreadID,
@@ -198,7 +209,11 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 //
 // Slash commands (messages starting with "/") are intercepted and handled
 // directly without invoking the LLM. Currently supported: /new, /mcp.
-func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage) (string, error) {
+//
+// sendProgress is called to push intermediate progress messages (tool call
+// results) to the channel during verbose mode. It is a no-op when the channel
+// does not support proactive send or when verbose is off.
+func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string)) (string, error) {
 	// --- slash command interception ---
 	if strings.HasPrefix(msg.Content, "/") {
 		return m.handleSlashCommand(msg)
@@ -261,7 +276,11 @@ func (m *Manager) process(ctx context.Context, msg channel.IncomingMessage) (str
 		MaxTokens: m.resolvedConfig.MaxTokens,
 	})
 
-	return m.drainEvents(eventCh, aiAgent)
+	m.verboseMu.RLock()
+	verbose := m.verboseState != nil && m.verboseState[msg.ThreadID]
+	m.verboseMu.RUnlock()
+
+	return m.drainEvents(eventCh, aiAgent, verbose, sendProgress)
 }
 
 // handleSlashCommand dispatches message starting with "/" to the appropriate
@@ -282,9 +301,11 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 		return m.handleUsageCommand(msg.ThreadID)
 	case "/cron":
 		return m.handleCronCommand()
+	case "/v":
+		return m.handleVerboseCommand(msg.ThreadID)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /usage — Show session usage stats\n  /cron — List cron jobs", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /usage — Show session usage stats\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
 	}
 }
 
@@ -310,6 +331,13 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 		sm.EndCurrent()
 		m.logger.Log("channel: /new ended session %s for thread %s", sess.ID, threadID)
 	}
+
+	// Reset verbose state for the new session.
+	m.verboseMu.Lock()
+	if m.verboseState != nil {
+		delete(m.verboseState, threadID)
+	}
+	m.verboseMu.Unlock()
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
 }
@@ -438,9 +466,16 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 // an error. Because we control the agent instance, we can respond to any
 // confirmation/AskUser events inline — though with skip_edit_confirm=true
 // and AskUser unregistered, neither should appear.
-func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent) (string, error) {
+//
+// When verbose is true, tool call results are sent immediately via
+// sendProgress as they arrive, instead of being collected for a single
+// summary prefix.
+func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, verbose bool, sendProgress func(string)) (string, error) {
 	var text strings.Builder
 	var lastErr error
+
+	// verbose mode: pending tool call lines keyed by ToolID, flushed on result
+	var pendingToolCalls map[string]string // ToolID → "🔧 ToolName(args)"
 
 	for event := range ch {
 		switch event.Type {
@@ -457,6 +492,12 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 
 		case agent.AgentEventToolCallArgs:
 			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
+			if verbose {
+				if pendingToolCalls == nil {
+					pendingToolCalls = make(map[string]string)
+				}
+				pendingToolCalls[event.ToolID] = "🔧 " + summarizeToolCall(event.ToolName, event.ToolArgs)
+			}
 
 		case agent.AgentEventToolConfirmation:
 			// Should not happen with skip_edit_confirm=true, but handle safely.
@@ -471,8 +512,28 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 		case agent.AgentEventToolResult:
 			if event.ToolIsError {
 				m.logger.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
+				if verbose {
+					line := "  ❌ Error: " + truncateToolResult(event.ToolResult)
+					callLine, ok := pendingToolCalls[event.ToolID]
+					if ok {
+						sendProgress(callLine + "\n" + line)
+						delete(pendingToolCalls, event.ToolID)
+					} else {
+						sendProgress("🔧 " + event.ToolName + "\n" + line)
+					}
+				}
 			} else {
 				m.logger.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
+				if verbose {
+					line := "  ✅ " + summarizeToolResult(event.ToolName, event.ToolResult)
+					callLine, ok := pendingToolCalls[event.ToolID]
+					if ok {
+						sendProgress(callLine + "\n" + line)
+						delete(pendingToolCalls, event.ToolID)
+					} else {
+						sendProgress("🔧 " + event.ToolName + "\n" + line)
+					}
+				}
 			}
 
 		case agent.AgentEventTurnComplete:
@@ -501,6 +562,7 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 	}
 
 	result := strings.TrimSpace(text.String())
+
 	if result == "" && lastErr != nil {
 		return "", lastErr
 	}
@@ -711,7 +773,16 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		MaxTokens: m.resolvedConfig.MaxTokens,
 	})
 
-	result, err := m.drainEvents(eventCh, aiAgent)
+	m.verboseMu.RLock()
+	verbose := m.verboseState != nil && m.verboseState[job.TargetThreadID]
+	m.verboseMu.RUnlock()
+
+	// sendProgress for cron: deliver intermediate tool results inline.
+	sendProgress := func(text string) {
+		m.sendToThread(ctx, job.TargetThreadID, text, fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()))
+	}
+
+	result, err := m.drainEvents(eventCh, aiAgent, verbose, sendProgress)
 	if err != nil {
 		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
 		return err
@@ -752,6 +823,34 @@ func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingM
 	}
 
 	m.logger.Log("channel: cron response not delivered — no channel accepted thread %s", msg.ThreadID)
+}
+
+// sendToThread delivers a message to the channel responsible for the given
+// ThreadID. Used for intermediate progress messages in verbose mode.
+// This is best-effort — failures are logged but not propagated.
+func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo string) {
+	m.mu.Lock()
+	chans := make([]channel.Channel, len(m.channels))
+	copy(chans, m.channels)
+	m.mu.Unlock()
+
+	for _, ch := range chans {
+		sender, ok := ch.(channel.MessageSender)
+		if !ok {
+			continue
+		}
+		if err := sender.Send(ctx, channel.OutgoingMessage{
+			ThreadID: threadID,
+			Content:  text,
+			ReplyTo:  replyTo,
+		}); err != nil {
+			m.logger.Log("channel: sendToThread to %s failed: %v", ch.Name(), err)
+			return
+		}
+		m.logger.Log("channel: progress sent to %s (thread=%s)", ch.Name(), threadID)
+		return
+	}
+	m.logger.Log("channel: sendToThread — no channel accepted thread %s", threadID)
 }
 
 // handleCronCommand handles the /cron slash command, listing all cron jobs.
@@ -797,6 +896,159 @@ func (m *Manager) handleCronCommand() (string, error) {
 	}
 
 	return sb.String(), nil
+}
+
+// handleVerboseCommand toggles verbose tool call output for the given thread.
+// When on, subsequent replies include a summary of tool calls made by the agent.
+func (m *Manager) handleVerboseCommand(threadID string) (string, error) {
+	m.verboseMu.Lock()
+	if m.verboseState == nil {
+		m.verboseState = make(map[string]bool)
+	}
+	current := m.verboseState[threadID]
+	m.verboseState[threadID] = !current
+	m.verboseMu.Unlock()
+
+	if !current {
+		return "🔍 Verbose mode: ON\n后续回复将显示工具调用过程。", nil
+	}
+	return "🔍 Verbose mode: OFF\n后续回复仅显示最终结果。", nil
+}
+
+// --- Tool call summary helpers (used by drainEvents in verbose mode) ---
+
+// summarizeToolCall produces a one-line summary of a tool invocation.
+func summarizeToolCall(name, args string) string {
+	summary := summarizeToolArgs(name, args)
+	if summary == "" {
+		return name
+	}
+	return name + "(" + summary + ")"
+}
+
+// summarizeToolArgs extracts the most informative fields from tool call JSON.
+func summarizeToolArgs(name, args string) string {
+	switch name {
+	case tools.ToolNameRead:
+		var p struct {
+			Path   string `json:"path"`
+			Offset int    `json:"offset"`
+			Limit  int    `json:"limit"`
+		}
+		_ = json.Unmarshal([]byte(args), &p)
+		if p.Path == "" {
+			return ""
+		}
+		if p.Offset > 0 && p.Limit > 0 {
+			return fmt.Sprintf("%s L%d+%d", p.Path, p.Offset, p.Limit)
+		}
+		if p.Offset > 0 {
+			return fmt.Sprintf("%s L%d", p.Path, p.Offset)
+		}
+		if p.Limit > 0 {
+			return fmt.Sprintf("%s +%d", p.Path, p.Limit)
+		}
+		return p.Path
+
+	case tools.ToolNameBash:
+		var p struct{ Command string `json:"command"` }
+		_ = json.Unmarshal([]byte(args), &p)
+		return truncateForDisplay(p.Command, 60)
+
+	case tools.ToolNameWrite, tools.ToolNameEdit:
+		var p struct{ Path string `json:"path"` }
+		_ = json.Unmarshal([]byte(args), &p)
+		return p.Path
+
+	case tools.ToolNameGrep:
+		var p struct {
+			Path    string `json:"path"`
+			Pattern string `json:"pattern"`
+		}
+		_ = json.Unmarshal([]byte(args), &p)
+		if p.Path != "" && p.Pattern != "" {
+			return p.Path + " " + truncateForDisplay(p.Pattern, 30)
+		}
+		if p.Pattern != "" {
+			return truncateForDisplay(p.Pattern, 40)
+		}
+		return p.Path
+
+	case tools.ToolNameWebSearch:
+		var p struct{ Query string `json:"query"` }
+		_ = json.Unmarshal([]byte(args), &p)
+		return truncateForDisplay(p.Query, 40)
+
+	case tools.ToolNameWebFetch:
+		var p struct{ URL string `json:"url"` }
+		_ = json.Unmarshal([]byte(args), &p)
+		return truncateForDisplay(p.URL, 50)
+
+	case tools.ToolNameGlob:
+		var p struct{ Pattern string `json:"pattern"` }
+		_ = json.Unmarshal([]byte(args), &p)
+		return p.Pattern
+
+	case tools.ToolNameSubAgent:
+		var p struct{ Prompt string `json:"prompt"` }
+		_ = json.Unmarshal([]byte(args), &p)
+		return truncateForDisplay(p.Prompt, 60)
+
+	default:
+		return truncateForDisplay(args, 60)
+	}
+}
+
+// summarizeToolResult produces a one-line summary of a tool execution result.
+func summarizeToolResult(name, result string) string {
+	lineCount := strings.Count(result, "\n") + 1
+	byteLen := len(result)
+
+	switch name {
+	case tools.ToolNameRead:
+		return fmt.Sprintf("读取 %d 行", lineCount)
+	case tools.ToolNameWrite:
+		return "写入完成"
+	case tools.ToolNameEdit:
+		return "编辑完成"
+	case tools.ToolNameBash:
+		if byteLen <= 200 {
+			return result
+		}
+		return fmt.Sprintf("输出 %d 行 (%s)", lineCount, humanSize(byteLen))
+	case tools.ToolNameGrep:
+		return fmt.Sprintf("匹配 %d 行", lineCount)
+	case tools.ToolNameGlob:
+		return fmt.Sprintf("匹配 %d 个文件", lineCount)
+	case tools.ToolNameWebSearch:
+		return "搜索完成"
+	case tools.ToolNameWebFetch:
+		return fmt.Sprintf("抓取完成 (%s)", humanSize(byteLen))
+	default:
+		if byteLen <= 200 {
+			return result
+		}
+		return fmt.Sprintf("%d 行 (%s)", lineCount, humanSize(byteLen))
+	}
+}
+
+// truncateToolResult limits an error string for display.
+func truncateToolResult(s string) string {
+	if len(s) <= 150 {
+		return s
+	}
+	return s[:150] + "..."
+}
+
+// humanSize formats a byte count as a human-readable string.
+func humanSize(n int) string {
+	if n < 1024 {
+		return fmt.Sprintf("%dB", n)
+	}
+	if n < 1024*1024 {
+		return fmt.Sprintf("%.1fKB", float64(n)/1024)
+	}
+	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
 }
 
 // truncateForDisplay limits a string for display in channel messages.

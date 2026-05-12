@@ -618,6 +618,17 @@ func getToolArgsPreview(name, argsJSON string) string {
 	switch name {
 	case tools.ToolNameRead:
 		if p, ok := args["path"].(string); ok {
+			offset, hasOffset := toInt(args["offset"])
+			limit, hasLimit := toInt(args["limit"])
+			if hasOffset && offset > 0 {
+				if hasLimit && limit > 0 {
+					return fmt.Sprintf("%s L%d+%d", p, offset, limit)
+				}
+				return fmt.Sprintf("%s L%d", p, offset)
+			}
+			if hasLimit && limit > 0 {
+				return fmt.Sprintf("%s +%d", p, limit)
+			}
 			return p
 		}
 	case tools.ToolNameWrite:
@@ -676,6 +687,20 @@ func getToolArgsPreview(name, argsJSON string) string {
 		return prompt
 	}
 	return argsJSON
+}
+
+// toInt converts an any value to int. Accepts float64 (JSON number),
+// int, and int64. Returns 0, false for unsupported types.
+func toInt(v any) (int, bool) {
+	switch n := v.(type) {
+	case float64:
+		return int(n), true
+	case int:
+		return n, true
+	case int64:
+		return int(n), true
+	}
+	return 0, false
 }
 
 // renderDiffWithHighlight renders diff content with syntax highlighting for +/- lines
