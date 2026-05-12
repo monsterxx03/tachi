@@ -13,7 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/channel"
-	"github.com/monsterxx03/tachi/channel/weixin"
+	_ "github.com/monsterxx03/tachi/channel/weixin"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -423,9 +423,26 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-// runChannels starts all enabled channels declared in config (e.g., weixin).
-// Each channel runs in its own goroutine. Blocks until all channels exit or
-// the context is cancelled.
+// runChannels starts all channels declared in config.
+//
+// Channels are discovered via the registry (channel.Register). Each entry in
+// cfg.Channel.ActiveChannels() is matched to a registered factory by name.
+// For backward compatibility, the legacy cfg.Channel.Weixin.Enabled flag
+// is converted by ActiveChannels() into a "weixin" entry if not already
+// present in the new-style channels map.
+//
+// To add private channels, create a file like:
+//
+//	package main
+//	import _ "private-repo/tachi-channel-mybots"
+//
+// and configure them in config.yaml:
+//
+//	channel:
+//	  channels:
+//	    mybots:
+//	      enabled: true
+//	      token: "xxx"
 func runChannels(ctx context.Context, cmd *cli.Command) error {
 	if err := debuglog.Init(); err != nil {
 		fmt.Printf("Warning: failed to init debug log: %v\n", err)
@@ -442,21 +459,38 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 		SystemPrompt: buildSystemPrompt(cfg.Language),
 	})
 
-	hadAny := false
-
-	// --- Weixin channel ---
-	if cfg.Channel.Weixin.Enabled {
-		wxCh, err := weixin.NewChannel(cfg.Channel.Weixin)
-		if err != nil {
-			return fmt.Errorf("weixin channel: %w", err)
-		}
-		manager.Add(wxCh)
-		hadAny = true
-		fmt.Println("[channel] weixin channel registered")
+	active := cfg.Channel.ActiveChannels()
+	if len(active) == 0 {
+		return fmt.Errorf("no channels enabled in config; enable at least one channel")
 	}
 
-	if !hadAny {
-		return fmt.Errorf("no channels enabled in config; set weixin.enabled: true or add other channel configs")
+	// Instantiate channels from registry.
+	registered := channel.ListRegistered()
+	instantiated := 0
+	for name, rawCfg := range active {
+		factory, ok := registered[name]
+		if !ok {
+			fmt.Printf("[channel] WARNING: %q enabled in config but no factory registered (import its package?)\n", name)
+			continue
+		}
+
+		ch, err := factory(rawCfg)
+		if err != nil {
+			return fmt.Errorf("channel %q: create: %w", name, err)
+		}
+
+		manager.Add(ch)
+		instantiated++
+		fmt.Printf("[channel] %s registered\n", name)
+	}
+
+	// Verify at least one channel was instantiated.
+	if instantiated == 0 {
+		names := make([]string, 0, len(active))
+		for name := range active {
+			names = append(names, name)
+		}
+		return fmt.Errorf("no channel factories registered for any enabled channel: %v", names)
 	}
 
 	if err := manager.Start(ctx); err != nil {

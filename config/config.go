@@ -163,8 +163,72 @@ type SubagentConfig struct {
 }
 
 // ChannelConfig groups configuration for all IM channel backends.
+//
+// Legacy field: Weixin is the typed config for the built-in weixin channel.
+// For backward compatibility, if the Weixin.Enabled flag is set but no
+// "weixin" entry exists in Channels, weixin is auto-activated.
+//
+// Generic field: Channels maps channel name to its raw config. Each entry
+// must match the Name() of a registered Channel (via channel.Register).
+// Private channel repositories can drop a single Go file with:
+//
+//	import _ "private-repo/tachi-channel-mybots"
+//
+// and then activate it via config.yaml:
+//
+//	channel:
+//	  channels:
+//	    mybots:
+//	      enabled: true
+//	      token: "xxx"
 type ChannelConfig struct {
-	Weixin WeixinConfig `yaml:"weixin"`
+	Weixin   WeixinConfig               `yaml:"weixin"`
+	Channels map[string]map[string]any  `yaml:"channels"`
+}
+
+// ActiveChannels returns the raw configs for every enabled channel,
+// merging legacy Weixin config into the generic Channels map when needed.
+//
+// For backward compatibility: if the legacy weixin.enabled flag is set
+// and there's no "weixin" key in Channels, weixin is included by
+// converting its typed config. If both exist, Channels takes precedence.
+func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
+	result := make(map[string]map[string]any, len(cc.Channels))
+
+	// Copy generic channels that are enabled.
+	for name, rawCfg := range cc.Channels {
+		if isEnabled, ok := rawCfg["enabled"]; !ok || !toBool(isEnabled) {
+			continue
+		}
+		result[name] = rawCfg
+	}
+
+	// Legacy weixin: include if enabled and not already present in Channels.
+	if _, inChannels := result["weixin"]; !inChannels && cc.Weixin.Enabled {
+		result["weixin"] = map[string]any{
+			"enabled":   true,
+			"state_dir": cc.Weixin.StateDir,
+			"route_tag": cc.Weixin.RouteTag,
+			"greeting":  cc.Weixin.Greeting,
+		}
+	}
+
+	return result
+}
+
+// toBool converts a YAML-parsed value to a boolean. Handles both actual
+// booleans (from yaml.v3) and numeric representations.
+func toBool(v any) bool {
+	switch val := v.(type) {
+	case bool:
+		return val
+	case int:
+		return val != 0
+	case float64:
+		return val != 0
+	default:
+		return false
+	}
 }
 
 type Config struct {

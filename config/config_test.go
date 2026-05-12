@@ -531,3 +531,119 @@ active_mcp_profile: test
 	assert.Equal(t, "test", cfg.MCPServers[1].Profile)
 	assert.Equal(t, "test", cfg.ActiveMCPProfile)
 }
+
+// --- ActiveChannels tests ---
+
+func TestActiveChannels_LegacyWeixinOnly(t *testing.T) {
+	cc := &ChannelConfig{
+		Weixin: WeixinConfig{
+			Enabled:  true,
+			StateDir: "/tmp/wx",
+			Greeting: "hi",
+		},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Len(t, active, 1)
+	wx, ok := active["weixin"]
+	require.True(t, ok)
+	assert.Equal(t, true, wx["enabled"])
+	assert.Equal(t, "/tmp/wx", wx["state_dir"])
+	assert.Equal(t, "hi", wx["greeting"])
+}
+
+func TestActiveChannels_LegacyWeixinDisabled(t *testing.T) {
+	cc := &ChannelConfig{
+		Weixin: WeixinConfig{Enabled: false},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Empty(t, active)
+}
+
+func TestActiveChannels_GenericChannels(t *testing.T) {
+	cc := &ChannelConfig{
+		Channels: map[string]map[string]any{
+			"mybot": {"enabled": true, "token": "abc"},
+		},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Len(t, active, 1)
+	mb, ok := active["mybot"]
+	require.True(t, ok)
+	assert.Equal(t, "abc", mb["token"])
+}
+
+func TestActiveChannels_GenericDisabled(t *testing.T) {
+	cc := &ChannelConfig{
+		Channels: map[string]map[string]any{
+			"mybot": {"enabled": false},
+		},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Empty(t, active)
+}
+
+func TestActiveChannels_GenericMissingEnabled(t *testing.T) {
+	// If no "enabled" key, treat as disabled (defensive default).
+	cc := &ChannelConfig{
+		Channels: map[string]map[string]any{
+			"mybot": {"token": "abc"},
+		},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Empty(t, active)
+}
+
+func TestActiveChannels_LegacyOverridesGeneric(t *testing.T) {
+	// When both generic and legacy weixin are set, generic takes precedence.
+	cc := &ChannelConfig{
+		Weixin: WeixinConfig{Enabled: true, StateDir: "/legacy"},
+		Channels: map[string]map[string]any{
+			"weixin": {"enabled": true, "state_dir": "/generic"},
+		},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Len(t, active, 1)
+	wx, ok := active["weixin"]
+	require.True(t, ok)
+	assert.Equal(t, "/generic", wx["state_dir"], "generic should take precedence over legacy")
+}
+
+func TestActiveChannels_Mixed(t *testing.T) {
+	// Legacy weixin + generic other channel.
+	cc := &ChannelConfig{
+		Weixin: WeixinConfig{Enabled: true, StateDir: "/wx"},
+		Channels: map[string]map[string]any{
+			"mybot": {"enabled": true, "token": "x"},
+		},
+	}
+
+	active := cc.ActiveChannels()
+	assert.Len(t, active, 2)
+	assert.Contains(t, active, "weixin")
+	assert.Contains(t, active, "mybot")
+}
+
+func TestActiveChannels_Empty(t *testing.T) {
+	cc := &ChannelConfig{}
+	active := cc.ActiveChannels()
+	assert.Empty(t, active)
+}
+
+// --- toBool tests ---
+
+func TestToBool(t *testing.T) {
+	assert.True(t, toBool(true))
+	assert.False(t, toBool(false))
+	assert.True(t, toBool(1))
+	assert.False(t, toBool(0))
+	assert.True(t, toBool(1.0))
+	assert.False(t, toBool(0.0))
+	assert.False(t, toBool("yes"))  // not a bool-like string
+	assert.False(t, toBool(nil))
+}

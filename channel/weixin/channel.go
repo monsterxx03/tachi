@@ -10,7 +10,22 @@ import (
 	"github.com/monsterxx03/tachi/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"gopkg.in/yaml.v3"
 )
+
+func init() {
+	channel.Register("weixin", func(rawCfg map[string]any) (channel.Channel, error) {
+		b, err := yaml.Marshal(rawCfg)
+		if err != nil {
+			return nil, fmt.Errorf("weixin: marshal config: %w", err)
+		}
+		var cfg config.WeixinConfig
+		if err := yaml.Unmarshal(b, &cfg); err != nil {
+			return nil, fmt.Errorf("weixin: unmarshal config: %w", err)
+		}
+		return NewChannel(cfg)
+	})
+}
 
 // Channel implements the channel.Channel interface for WeChat iLink Bot.
 type Channel struct {
