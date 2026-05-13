@@ -88,7 +88,13 @@ func consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCal
 
 		case llm.StreamEventMessageDelta, llm.StreamEventDone:
 			acc.finishReason = event.FinishReason
-			if event.Usage != nil {
+			// Only update usage when it carries meaningful data (non-zero
+			// InputTokens).  The message_delta event from Anthropic carries
+			// the authoritative API usage; the done event from both providers
+			// wraps the final accumulated state.  A zero-input usage is a
+			// degenerate / test-only signal and should not overwrite a
+			// previously received real usage.
+			if event.Usage != nil && event.Usage.InputTokens > 0 {
 				acc.usage = event.Usage
 			}
 

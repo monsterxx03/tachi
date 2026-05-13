@@ -230,6 +230,7 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 	ch := make(chan StreamEvent, 32)
 	go func() {
 		defer close(ch)
+		var lastUsage *Usage // from MessageDeltaEvent — preferred over acc.Usage
 		acc := anthropic.Message{}
 		for stream.Next() {
 			event := stream.Current()
@@ -263,15 +264,16 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 					ch <- StreamEvent{Type: StreamEventInputJSONDelta, ToolIndex: int(ev.Index), InputDelta: delta.PartialJSON}
 				}
 			case anthropic.MessageDeltaEvent:
+				lastUsage = &Usage{
+					InputTokens:              ev.Usage.InputTokens,
+					OutputTokens:             ev.Usage.OutputTokens,
+					CacheCreationInputTokens: ev.Usage.CacheCreationInputTokens,
+					CacheReadInputTokens:     ev.Usage.CacheReadInputTokens,
+				}
 				ch <- StreamEvent{
 					Type:         StreamEventMessageDelta,
 					FinishReason: string(ev.Delta.StopReason),
-					Usage: &Usage{
-						InputTokens:              ev.Usage.InputTokens,
-						OutputTokens:             ev.Usage.OutputTokens,
-						CacheCreationInputTokens: ev.Usage.CacheCreationInputTokens,
-						CacheReadInputTokens:     ev.Usage.CacheReadInputTokens,
-					},
+					Usage:        lastUsage,
 				}
 			}
 		}
@@ -281,15 +283,22 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 			return
 		}
 
-		ch <- StreamEvent{
-			Type:         StreamEventDone,
-			FinishReason: string(acc.StopReason),
-			Usage: &Usage{
+		// Prefer the usage from MessageDeltaEvent (authoritative API accounting).
+		// Fall back to the accumulated usage from the SDK (OutputTokens only from
+		// MessageDeltaEvent; InputTokens from MessageStartEvent).
+		finishUsage := lastUsage
+		if finishUsage == nil {
+			finishUsage = &Usage{
 				InputTokens:              acc.Usage.InputTokens,
 				OutputTokens:             acc.Usage.OutputTokens,
 				CacheCreationInputTokens: acc.Usage.CacheCreationInputTokens,
 				CacheReadInputTokens:     acc.Usage.CacheReadInputTokens,
-			},
+			}
+		}
+		ch <- StreamEvent{
+			Type:         StreamEventDone,
+			FinishReason: string(acc.StopReason),
+			Usage:        finishUsage,
 		}
 	}()
 
