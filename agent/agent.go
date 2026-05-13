@@ -235,7 +235,7 @@ func (a *AIAgent) RunOneOffStream(
 			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
 		}
 
-		rctx := a.buildReminderContext(true)
+		rctx := a.buildReminderContext(true, false)
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
@@ -585,7 +585,7 @@ func (a *AIAgent) handleFinishReason(
 		}
 
 		// Wrap the continuation message with reminders
-		rctx := a.buildReminderContext(false)
+		rctx := a.buildReminderContext(false, false)
 		wrappedContinuation := a.reminderCollector.WrapUserMessage(continuationText, rctx)
 
 		*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
@@ -652,7 +652,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// historyHasReminder prevents duplication on subsequent turns.
 		reminderIsFirst := isFirstMessage || (len(history) > 0 && !historyHasReminder(history))
 
-		rctx := a.buildReminderContext(reminderIsFirst)
+		rctx := a.buildReminderContext(reminderIsFirst, false)
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
@@ -813,7 +813,7 @@ func (a *AIAgent) runAgentLoop(
 
 		// After tool results, inject system-reminder warnings.
 		if a.shouldInjectLoopReminder() {
-			rctx := a.buildReminderContext(false)
+			rctx := a.buildReminderContext(false, true)
 			if block := a.reminderCollector.Collect(rctx); block != "" {
 				messages = append(messages, llm.Message{Role: "user", Content: block})
 			}
@@ -837,7 +837,7 @@ func buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
 
 // buildReminderContext constructs the systemreminder.Context used when
 // generating reminders for a user message (or loop injection).
-func (a *AIAgent) buildReminderContext(isFirstMessage bool) systemreminder.Context {
+func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) systemreminder.Context {
 	iterLeft := 0
 	if a.iterationBudget != nil {
 		iterLeft = a.iterationBudget.Remaining
@@ -850,6 +850,7 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool) systemreminder.Conte
 		ContextWindow:   a.contextWindow,
 		Now:             time.Now(),
 		LastMessageDate: a.lastMessageDate,
+		IsToolResult:    isToolResult,
 	}
 }
 

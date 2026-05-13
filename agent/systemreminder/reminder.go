@@ -44,6 +44,12 @@ type Context struct {
 	// user message that was processed. It's empty for brand-new conversations.
 	// Used by reminders that need to know when a new day has started.
 	LastMessageDate string
+
+	// IsToolResult is true when the reminder block is being injected after
+	// tool results in the agent loop (not attached to a real user message).
+	// Reminders that are only meaningful for user-facing messages (e.g.,
+	// DateReminder) can skip when this is set.
+	IsToolResult bool
 }
 
 // Reminder generates one or more reminder lines given the current context.
@@ -122,6 +128,11 @@ func (c *Collector) WrapUserMessage(userMessage string, ctx Context) string {
 type DateReminder struct{}
 
 func (DateReminder) Generate(ctx Context) []string {
+	// DateReminder is only meaningful for real user messages — skip when
+	// the reminder block is injected after tool results in the agent loop.
+	if ctx.IsToolResult {
+		return nil
+	}
 	line := fmt.Sprintf("Current date: %s", ctx.Now.Format("Monday, January 2, 2006 15:04:05 MST"))
 	debuglog.DefaultLogger.Log("systemreminder: DateReminder firing: %q", line)
 	return []string{line}

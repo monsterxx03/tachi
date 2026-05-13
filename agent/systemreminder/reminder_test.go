@@ -25,10 +25,22 @@ func TestDateReminder_Fires(t *testing.T) {
 
 func TestDateReminder_AlwaysFires(t *testing.T) {
 	r := DateReminder{}
-	// DateReminder now fires on every message regardless of IsFirstMessage or LastMessageDate.
+	// DateReminder fires on every real user message, regardless of IsFirstMessage or LastMessageDate.
 	lines := r.Generate(Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line (always fires), got %d", len(lines))
+	}
+}
+
+func TestDateReminder_SkipsOnToolResult(t *testing.T) {
+	r := DateReminder{}
+	lines := r.Generate(Context{
+		IsFirstMessage: false,
+		Now:            time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
+		IsToolResult:   true,
+	})
+	if len(lines) != 0 {
+		t.Errorf("expected no output when IsToolResult is true, got: %v", lines)
 	}
 }
 
