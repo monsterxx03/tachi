@@ -455,6 +455,15 @@ var (
 )
 
 // usageToSession converts an llm.Usage to a session.Usage for persistence.
+// truncateForLog caps s at maxLen characters for use in debug log messages.
+// A "..." suffix is appended when truncation occurs.
+func truncateForLog(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
+}
+
 func usageToSession(u *llm.Usage) *session.Usage {
 	if u == nil {
 		return nil
@@ -508,6 +517,8 @@ func (a *AIAgent) handleFinishReason(
 			}
 			return false
 		}
+		a.logger.Log("Agent: executeToolCalls returned %d tool messages for %d tool calls",
+			len(toolMsgs), len(acc.toolCalls))
 		*messages = append(*messages, toolMsgs...)
 		*lengthRetries = 0
 		return true
@@ -751,6 +762,18 @@ func (a *AIAgent) runAgentLoop(
 		}
 
 		apiCallCount++
+		// Dump message roles for debugging tool result / steer / reminder ordering.
+		{
+			roles := make([]string, len(messages))
+			for i, m := range messages {
+				prefix := m.Role
+				if prefix == "tool" {
+					prefix += "(" + m.ToolCallID + ")"
+				}
+				roles[i] = prefix
+			}
+			a.logger.Log("Agent: apiCall#%d roles: %v", apiCallCount, roles)
+		}
 		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
 		if err != nil {
 			ch <- AgentEvent{
@@ -801,6 +824,7 @@ func (a *AIAgent) runAgentLoop(
 					//   - Anthropic: merged into tool_result user message as text block
 					//   - OpenAI: mapped to "user" role (no alternation conflict)
 					messages = append(messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
+					a.logger.Log("Agent: steer: injected RoleSteer msg, steerText=%q", truncateForLog(steerText, 80))
 					a.recordSession(&session.Message{
 						Type:    session.MessageTypeUser,
 						Content: steerText,
@@ -816,6 +840,7 @@ func (a *AIAgent) runAgentLoop(
 			rctx := a.buildReminderContext(false, true)
 			if block := a.reminderCollector.Collect(rctx); block != "" {
 				messages = append(messages, llm.Message{Role: "user", Content: block})
+				a.logger.Log("Agent: loop reminder injected, block=%q", truncateForLog(block, 200))
 			}
 		}
 	}
