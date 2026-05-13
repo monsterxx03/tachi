@@ -25,7 +25,7 @@ Skill 填补的是 **中粒度、可声明、可发现、可复用的横向能�
 | 声明式定义 | 一个目录 + 一个 SKILL.md = 一个 Skill |
 | 按需加载 | 不常驻 system prompt，触发时才注入完整指令 |
 | 双重激活 | 用户显式 `/skill-name` + LLM 自主路由 |
-| 缓存友好 | 注入为用户消息而非 system prompt，保护 prompt caching |
+| 缓存友好 | 元数据通过 system-reminder 注入（不破 prompt cache），完整内容按需加载为用户消息 |
 | 渐进式披露 | 元数据常驻（低 token 成本），完整内容按需加载 |
 | 项目级共享 | `.tachi/skills/` 跟随仓库，团队协作复用 |
 
@@ -104,7 +104,7 @@ LLM 在下一轮 API 调用中看到完整 Skill 指令
 
 ```
 所有 Skill 的 {name, description, tags} 压缩列表
-注入 system prompt（约 100 token / 10 个 Skill）
+注入 system-reminder（约 100 token / 10 个 Skill，不破坏 prompt cache）
        ↓
 LLM 判断任务需要某个 Skill
        ↓
@@ -325,7 +325,7 @@ type SkillsListTool struct {
 func BuildActivationMessage(sk *Skill, userInstruction string) string
 
 // BuildSkillListPrompt constructs the compact skill catalog injected into
-// the system prompt for LLM-based routing.
+// the system-reminder block for LLM-based routing.
 //
 // Format (XML-like, ~100 token / 10 skills):
 //
@@ -384,11 +384,97 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 }
 ```
 
-### 4.8 System Prompt 扩展 — `agent/systemreminder/`
+### 4.8 System Reminder 扩展 — `agent/systemreminder/`
 
-`BuildSkillListPrompt()` 的输出在 `Collector.Collect()` 中作为一条 reminder 注入，放在 project context 之后、iteration warning 之前。
+Skill 列表通过 **system-reminder** 管道注入，而非修改 system prompt。这个选择很关键：
 
-**注意**：只有当 `len(metas) > 0` 时才注入，避免额外 token 消耗。
+| 维度 | 注入到 system prompt | 注入到 system-reminder |
+|------|:--:|:--:|
+| Prompt cache | ❌ Skill 列表变化时 cache 部分失效 | ✅ system prompt 完全不变，cache 稳定 |
+| `/skill reload` | ❌ 需重启会话或动态重写 system prompt | ✅ 下次消息自动带新列表 |
+| 实现复杂度 | ❌ 需要动态修改 system prompt 的机制 | ✅ 复用现有 `Reminder` 接口 |
+
+#### 4.8.1 SkillListReminder — `agent/systemreminder/reminder.go`（新增类型）
+
+```go
+// SkillListReminder injects the compact skill catalog into every user message
+// so the LLM always knows what skills it can activate via skill_view().
+//
+// Unlike ProjectContextReminder (first message only), this fires on every message
+// — the ~100 token / 10 skills cost is negligible, and LLMs benefit from persistent
+// awareness of available skills across long conversations.
+type SkillListReminder struct {
+    store *skill.Store
+}
+
+func (r SkillListReminder) Generate(ctx Context) []string {
+    metas := r.store.List()
+    if len(metas) == 0 {
+        return nil // 零开销：没有 Skill 时不注入任何内容
+    }
+    prompt := skill.BuildSkillListPrompt(metas)
+    if prompt == "" {
+        return nil
+    }
+    return []string{prompt}
+}
+```
+
+#### 4.8.2 触发频率决策
+
+触发频率选择 **每条用户消息都触发**（与 `DateReminder` 相同策略），而非仅首条消息：
+
+| 策略 | 优势 | 劣势 |
+|------|------|------|
+| **每条消息**（✅ 选择） | LLM 不会"忘记"可用 Skill；`/skill reload` 即时生效 | 每条消息 +~100 token |
+| 仅首条消息 | 省 token | 长会话中 LLM 可能遗忘；`/skill reload` 到下次消息之间不生效 |
+
+~100 token / 10 skill 的代价很小（以 Claude 3.5 Sonnet 为例，输入价格 $3/M tokens，每次消息约 $0.0003），而 Skill 列表对 LLM 自主路由至关重要，值得做持久注入。
+
+#### 4.8.3 Collector 注册
+
+在 `AIAgent.Configure()` 中构造 `Collector` 时注册：
+
+```go
+collector := systemreminder.NewCollector(
+    systemreminder.DateReminder{},
+    systemreminder.ProjectContextReminder{},
+    systemreminder.GitReminder{},
+    systemreminder.SkillListReminder{store: skillStore}, // 新增
+    systemreminder.IterationWarningReminder{Threshold: ...},
+    systemreminder.TokenWarningReminder{ThresholdPct: ...},
+)
+```
+
+`SkillListReminder` 放在 `GitReminder` 之后、`IterationWarningReminder` 之前，保持 reminder 块内信息密度的语义分层。
+
+#### 4.8.4 System-Reminder 块结构
+
+一条典型消息的注入顺序：
+
+```
+<system-reminder>
+Current date: Wednesday, May 13, 2026 11:25:00 CST
+
+## Project Context (.tachi.md)
+...（仅首条消息）...
+
+Git branch: main
+Git status: clean
+
+<available_skills>
+  <skill name="code-review" description="Review code for bugs and security" tags="review,security"/>
+  <skill name="git-commit" description="Generate conventional commit messages" tags="git"/>
+</available_skills>
+
+To use a skill, call skill_view(name) or the user can type /skill-name.
+</system-reminder>
+```
+
+注意：
+- `ProjectContext` 和 `Git` 仅首条消息注入，后续消息不重复
+- `SkillList` **每条消息**都出现，确保 LLM 始终知道可用 Skill
+- 当 `len(metas) == 0` 时，`<available_skills>` 块完全不出现，零开销
 
 ---
 
@@ -413,7 +499,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 ### 5.2 LLM 自主路由流程
 
 ```
-1. system prompt 中包含 <available_skills> 列表
+1. system-reminder 块中包含 <available_skills> 列表
 2. User: "帮我审查一下最近的改动"
 3. LLM 看到 skill list，决定调用 skill_view("code-review")
 4. skill_view 工具执行:
@@ -447,8 +533,8 @@ activeSkills 集合跟踪已加载 Skill
 | `agent/skill/types.go` | **新文件** | `SkillMeta`、`Skill` 类型定义 + 测试用 mock 接口 |
 | `agent/tools/skills_list.go` | **新文件** | `SkillsListTool` — 列出可用 Skill |
 | `agent/tools/skill_view.go` | **新文件** | `SkillViewTool` — 按需加载 Skill 内容 |
-| `agent/agent.go` | 修改 | 新增 `skillStore`、`activeSkills` 字段 + `SetSkillStore()` + `ActivateSkill()` + `Configure()` 中注册 skill 工具 |
-| `agent/systemreminder/collector.go` | 修改 | `Collect()` 中注入 `BuildSkillListPrompt()` 输出（如有 Skill） |
+| `agent/agent.go` | 修改 | 新增 `skillStore`、`activeSkills` 字段 + `SetSkillStore()` + `ActivateSkill()` + `Configure()` 中注册 skill 工具 + `SkillListReminder` 加入 Collector |
+| `agent/systemreminder/reminder.go` | 修改 | 新增 `SkillListReminder` 类型 |
 | `tui/model.go` | 修改 | 收到 Skill 激活结果后显示确认消息 |
 | `tui/commands.go` | 修改 | 新增 `/skill` 斜杠命令（list / reload） |
 | `tui/input.go` | 修改 | 未匹配已知 command 时 fallback 到 skillStore.ResolveCommand |
@@ -475,6 +561,7 @@ activeSkills 集合跟踪已加载 Skill
 | `SkillsListTool` | Schema 正确、返回 JSON 格式正确 |
 | `SkillViewTool` | 首次加载返回完整内容 + linked files、带 file_path 加载子文件 |
 | `BuildSkillListPrompt()` | 空列表返回空字符串、XML 格式正确、转义特殊字符 |
+| `SkillListReminder` | skill 为空时不注入、skill 变化后 `/skill reload` 反映在 reminder 中 |
 | `BuildActivationMessage()` | 包含 activation note、skill body、supporting files 提示 |
 
 ### 集成测试
