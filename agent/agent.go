@@ -427,6 +427,7 @@ const (
 	AgentEventSubagentStart    = "subagent_start"
 	AgentEventSubagentDone     = "subagent_done"
 	AgentEventSteerCheck       = "steer_check" // agent requests TUI to check for pending input
+	AgentEventUsage            = "usage"       // incremental usage update after each API call
 )
 
 type AgentEvent struct {
@@ -775,6 +776,12 @@ func (a *AIAgent) runAgentLoop(
 		// Track input tokens for token-warning reminders
 		if acc.usage != nil {
 			a.lastInputTokens = acc.usage.InputTokens
+		}
+
+		// Emit incremental usage so the TUI statusbar updates context window / cost
+		// after every API call, not just at TurnComplete.
+		if acc.usage != nil {
+			ch <- AgentEvent{Type: AgentEventUsage, Usage: acc.usage}
 		}
 
 		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {

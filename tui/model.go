@@ -845,6 +845,19 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.chatview.UpdateToolResult(event.ToolID, event.ToolResult, event.ToolIsError, event.ToolDuration)
 		return m.nextEvent()
 
+	case agent.AgentEventUsage:
+		// Incremental usage update after each API call (not just final stop).
+		// Create a display copy with the latest InputTokens for the context
+		// window indicator, without touching m.totalUsage (which is the
+		// canonical accumulator, only updated at TurnComplete).
+		if event.Usage != nil {
+			displayUsage := m.totalUsage
+			displayUsage.InputTokens = event.Usage.InputTokens
+			m.statusbar.SetUsage(&displayUsage)
+			m.refreshSessionCost()
+		}
+		return m.nextEvent()
+
 	case agent.AgentEventSubagentStart:
 		// Sub-agent started — mark the tool call as having a subagent.
 		m.chatview.MarkSubagent(event.ToolID)
