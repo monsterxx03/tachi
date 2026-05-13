@@ -3,7 +3,6 @@ package weixin
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
 	"time"
 
@@ -341,11 +340,7 @@ func (ch *Channel) deduplicateAccounts() {
 	}
 }
 
-// defaultStateDir returns the default weixin state directory under ~/.tachi.
+// defaultStateDir returns the default weixin state directory.
 func defaultStateDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ".tachi/weixin"
-	}
-	return home + "/.tachi/weixin"
+	return config.WeixinStateDir()
 }

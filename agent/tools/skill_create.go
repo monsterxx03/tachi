@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // SkillCreator creates a new skill on the filesystem.
@@ -43,7 +45,7 @@ func NewSkillCreateTool(creator SkillCreator) *SkillCreateTool {
 func (t *SkillCreateTool) Name() string { return ToolNameSkillCreate }
 
 func (t *SkillCreateTool) Description() string {
-	return "Create a new skill. The skill will appear in skills_list and can be activated with /name or skill_view. Defaults to project-level; set source to \"global\" for ~/.tachi/skills/."
+	return fmt.Sprintf("Create a new skill. The skill will appear in skills_list and can be activated with /name or skill_view. Defaults to project-level; set source to \"global\" for %s/.", config.GlobalSkillsDir())
 }
 
 func (t *SkillCreateTool) Properties() map[string]PropertySchema {

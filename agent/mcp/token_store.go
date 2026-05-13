@@ -9,10 +9,9 @@ import (
 	"path/filepath"
 
 	"github.com/mark3labs/mcp-go/client/transport"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
-
-const mcpTokensDirName = "mcp_tokens"
 
 // DCRInfo holds a dynamically registered client's credentials,
 // persisted alongside OAuth tokens so client_id survives restarts.
@@ -32,32 +31,17 @@ type OAuthPendingState struct {
 
 // dcrTokenPath returns the path to a server's DCR info file.
 func dcrTokenPath(storageKey string) (string, error) {
-	dir, err := mcpTokensDir()
-	if err != nil {
-		return "", err
-	}
+	dir := config.MCPTokensDir()
 	return filepath.Join(dir, storageKey+"_dcr.json"), nil
-}
-
-// mcpTokensDir returns the path to the MCP tokens storage directory.
-func mcpTokensDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".tachi", mcpTokensDirName), nil
 }
 
 // mcpTokenPath returns the path to a specific server's token file.
 func mcpTokenPath(storageKey string) (string, error) {
-	dir, err := mcpTokensDir()
-	if err != nil {
-		return "", err
-	}
+	dir := config.MCPTokensDir()
 	return filepath.Join(dir, storageKey+".json"), nil
 }
 
-// FileTokenStore persists OAuth tokens to disk under ~/.tachi/mcp_tokens/.
+// FileTokenStore persists OAuth tokens to disk under the MCP tokens directory.
 // Each server gets its own JSON file for tokens and, when DCR is used, a
 // separate _dcr.json file for the dynamically registered client credentials.
 type FileTokenStore struct {
@@ -189,10 +173,7 @@ func (s *FileTokenStore) SaveDCRInfo(ctx context.Context, info *DCRInfo) error {
 
 // mcpPendingPath returns the path to a server's pending OAuth state file.
 func mcpPendingPath(storageKey string) (string, error) {
-	dir, err := mcpTokensDir()
-	if err != nil {
-		return "", err
-	}
+	dir := config.MCPTokensDir()
 	return filepath.Join(dir, storageKey+"_pending.json"), nil
 }
 

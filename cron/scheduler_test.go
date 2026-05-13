@@ -2,6 +2,7 @@ package cron
 
 import (
 	"context"
+	"os"
 	"path/filepath"
 	"sync"
 	"testing"
@@ -19,7 +20,7 @@ func newTestScheduler(t *testing.T, handler TriggerHandler) (*Scheduler, *Store)
 	path := filepath.Join(dir, "crons.json")
 	store := NewStore(path)
 
-	_ = debuglog.Init()
+	_ = debuglog.Init(os.TempDir())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
@@ -231,7 +232,7 @@ func TestScheduler_StartupRecovery(t *testing.T) {
 		return nil
 	}
 
-	_ = debuglog.Init()
+	_ = debuglog.Init(os.TempDir())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
@@ -256,7 +257,7 @@ func TestScheduler_SemaphoreSkip(t *testing.T) {
 	// Test that when max concurrent is reached, new triggers are skipped.
 	// We test this by directly driving the semaphore.
 
-	_ = debuglog.Init()
+	_ = debuglog.Init(os.TempDir())
 
 	dir := t.TempDir()
 	store := NewStore(filepath.Join(dir, "crons.json"))
@@ -332,7 +333,7 @@ func TestScheduler_OneshotAutoDelete(t *testing.T) {
 		return nil
 	}
 
-	_ = debuglog.Init()
+	_ = debuglog.Init(os.TempDir())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
@@ -406,7 +407,7 @@ func TestScheduler_OneshotDefaultIsOneshot(t *testing.T) {
 		return nil
 	}
 
-	_ = debuglog.Init()
+	_ = debuglog.Init(os.TempDir())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,

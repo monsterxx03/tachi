@@ -9,10 +9,12 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
@@ -98,7 +100,7 @@ func (t *WebSearchTool) ExecuteContext(ctx context.Context, args string) (string
 
 	providerType, apiKey := t.ResolveProvider()
 	if apiKey == "" {
-		return "", fmt.Errorf("no search provider API key configured. Set web_search.key in ~/.tachi/config.yaml, or set SERPER_API_KEY / SERPAPI_KEY / BRAVE_API_KEY environment variable")
+		return "", fmt.Errorf("no search provider API key configured. Set web_search.key in %s, or set SERPER_API_KEY / SERPAPI_KEY / BRAVE_API_KEY environment variable", filepath.Join(config.BaseDir(), "config.yaml"))
 	}
 
 	client := t.getHTTPClient()

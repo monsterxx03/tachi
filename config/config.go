@@ -20,7 +20,36 @@ const (
 	configFileName           = "config.yaml"
 	inputHistoryFileName     = "input_history"
 	sessionDirName           = "session"
+	logsDirName              = "logs"
+	mcpTokensDirName         = "mcp_tokens"
+	skillsDirName            = "skills"
+	weixinStateDirName       = "weixin"
+	cronStoreFileName        = "crons.json"
 )
+
+// baseDir is the base directory for all tachi state. Default: $HOME/.tachi.
+// Can be overridden via SetBaseDir() before any other config functions are called.
+var baseDir string
+
+// SetBaseDir overrides the default base directory. Must be called before
+// any other config functions (e.g., from main with a --home CLI flag).
+func SetBaseDir(dir string) {
+	baseDir = dir
+}
+
+// BaseDir returns the resolved base directory. If SetBaseDir was called,
+// returns that value. Otherwise falls back to $HOME/.tachi.
+func BaseDir() string {
+	if baseDir != "" {
+		return baseDir
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		// Best-effort fallback: return relative ".tachi"
+		return configDirName
+	}
+	return filepath.Join(home, configDirName)
+}
 
 type ProviderConfig struct {
 	Name          string `yaml:"name"`
@@ -261,38 +290,47 @@ func DefaultConfig() *Config {
 	return cfg
 }
 
-func configDir() (string, error) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, configDirName), nil
+func configDir() string {
+	return BaseDir()
 }
 
 func configPath() (string, error) {
-	dir, err := configDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, configFileName), nil
+	return filepath.Join(configDir(), configFileName), nil
 }
 
-// InputHistoryPath 返回终端输入历史文件路径：~/.tachi/input_history
+// InputHistoryPath 返回终端输入历史文件路径
 func InputHistoryPath() (string, error) {
-	dir, err := configDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, inputHistoryFileName), nil
+	return filepath.Join(configDir(), inputHistoryFileName), nil
 }
 
-// SessionDir 返回会话存储目录路径：~/.tachi/session
+// SessionDir 返回会话存储目录路径
 func SessionDir() (string, error) {
-	dir, err := configDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, sessionDirName), nil
+	return filepath.Join(configDir(), sessionDirName), nil
+}
+
+// LogsDir returns the path to the debug logs directory.
+func LogsDir() string {
+	return filepath.Join(BaseDir(), logsDirName)
+}
+
+// MCPTokensDir returns the path to the MCP OAuth tokens directory.
+func MCPTokensDir() string {
+	return filepath.Join(BaseDir(), mcpTokensDirName)
+}
+
+// GlobalSkillsDir returns the path to the global (user-level) skills directory.
+func GlobalSkillsDir() string {
+	return filepath.Join(BaseDir(), skillsDirName)
+}
+
+// WeixinStateDir returns the default path to the weixin state directory.
+func WeixinStateDir() string {
+	return filepath.Join(BaseDir(), weixinStateDirName)
+}
+
+// CronStorePath returns the default path for crons.json.
+func CronStorePath() string {
+	return filepath.Join(BaseDir(), cronStoreFileName)
 }
 
 func Load() (*Config, error) {
@@ -331,10 +369,7 @@ func LoadFrom(path string) (*Config, error) {
 }
 
 func Save(cfg *Config) error {
-	dir, err := configDir()
-	if err != nil {
-		return err
-	}
+	dir := configDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return err
 	}
@@ -354,10 +389,7 @@ func Init() (string, error) {
 		return "", err
 	}
 
-	dir, err := configDir()
-	if err != nil {
-		return "", err
-	}
+	dir := configDir()
 	if err := os.MkdirAll(dir, 0700); err != nil {
 		return "", err
 	}

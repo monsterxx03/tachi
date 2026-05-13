@@ -895,9 +895,7 @@ func (a *AIAgent) IsSkillActive(name string) bool {
 func (a *AIAgent) ReloadSkills() {
 	wd, _ := os.Getwd()
 	// Unregister old skill tools before creating new store.
-	a.UnregisterTool(tools.ToolNameSkillsList)
-	a.UnregisterTool(tools.ToolNameSkillView)
-	a.UnregisterTool(tools.ToolNameSkillCreate)
+	a.unregisterSkillTools()
 	a.skillStore = skill.NewStore(wd)
 	a.skillStore.SetLogger(a.logger)
 	a.activeSkills = make(map[string]bool)
@@ -925,6 +923,13 @@ func (a *AIAgent) registerSkillTools() {
 	a.RegisterTool(tools.NewSkillsListTool(a.skillStore))
 	a.RegisterTool(tools.NewSkillViewTool(a.skillStore))
 	a.RegisterTool(tools.NewSkillCreateTool(a.skillStore))
+}
+
+// unregisterSkillTools removes all skill tools from the agent's registry.
+func (a *AIAgent) unregisterSkillTools() {
+	a.UnregisterTool(tools.ToolNameSkillsList)
+	a.UnregisterTool(tools.ToolNameSkillView)
+	a.UnregisterTool(tools.ToolNameSkillCreate)
 }
 
 // rebuildSkillCollector constructs a new collector from baseReminders plus

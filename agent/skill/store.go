@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"gopkg.in/yaml.v3"
 )
@@ -41,11 +42,8 @@ func NewStore(projectRoot string) *Store {
 	}
 
 	// Priority 2: global personal skills
-	homeDir, err := os.UserHomeDir()
-	if err == nil {
-		dirs = append(dirs, filepath.Join(homeDir, ".tachi", "skills"))
-		source = append(source, SourceGlobal)
-	}
+	dirs = append(dirs, config.GlobalSkillsDir())
+	source = append(source, SourceGlobal)
 
 	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
 }

@@ -109,6 +109,10 @@ var commonFlags = []cli.Flag{
 		Usage:   "Resume the most recent session",
 	},
 	&cli.StringFlag{
+		Name:  "home",
+		Usage: "Base directory for tachi state (default: ~/.tachi)",
+	},
+	&cli.StringFlag{
 		Name:  "provider",
 		Usage: "Provider name from config",
 	},
@@ -138,11 +142,17 @@ func main() {
 		Usage:   "AI Agent CLI",
 		Version: Version,
 		Flags:   commonFlags,
+		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
+			if cmd.IsSet("home") {
+				config.SetBaseDir(cmd.String("home"))
+			}
+			return ctx, nil
+		},
 		Action:  runTUI,
 		Commands: []*cli.Command{
 			{
 				Name:  "init",
-				Usage: "Initialize example config at ~/.tachi/config.yaml",
+				Usage: "Initialize example config",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
 					path, err := config.Init()
 					if err != nil {
@@ -256,7 +266,7 @@ func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provid
 }
 
 func runTUI(ctx context.Context, cmd *cli.Command) error {
-	if err := debuglog.Init(); err != nil {
+	if err := debuglog.Init(config.LogsDir()); err != nil {
 		fmt.Printf("Warning: failed to init debug log: %v\n", err)
 	}
 	defer debuglog.Close()
@@ -447,7 +457,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 //	      enabled: true
 //	      token: "xxx"
 func runChannels(ctx context.Context, cmd *cli.Command) error {
-	if err := debuglog.Init(); err != nil {
+	if err := debuglog.Init(config.LogsDir()); err != nil {
 		fmt.Printf("Warning: failed to init debug log: %v\n", err)
 	}
 	defer debuglog.Close()

@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -40,7 +41,7 @@ type ResolvedConfig struct {
 func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
 	providerName := resolveProviderName(cfg, flags)
 	if providerName == "" {
-		return nil, fmt.Errorf("no provider configured; create ~/.tachi/config.yaml or use --provider")
+		return nil, fmt.Errorf("no provider configured; create %s or use --provider", filepath.Join(BaseDir(), "config.yaml"))
 	}
 
 	pCfg := cfg.FindProvider(providerName)

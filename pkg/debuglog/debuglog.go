@@ -20,15 +20,9 @@ var (
 	internalSlog *slog.Logger
 )
 
-// Init initializes the debug logger, writing to ~/.tachi/logs/debug.log
+// Init initializes the debug logger, writing to the given log directory
 // with rotation: each chunk is 10MB, keeping up to 10 chunks.
-func Init() error {
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		return err
-	}
-
-	logDir := filepath.Join(homeDir, ".tachi", "logs")
+func Init(logDir string) error {
 	if err := os.MkdirAll(logDir, 0755); err != nil {
 		return err
 	}
