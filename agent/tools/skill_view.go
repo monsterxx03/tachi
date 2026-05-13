@@ -7,10 +7,6 @@ import (
 	"sort"
 )
 
-const (
-	ToolNameSkillView = "skill_view"
-)
-
 // SkillLoader loads a skill by name and returns its full content.
 type SkillLoader interface {
 	LoadSkill(name string) (*SkillData, error)

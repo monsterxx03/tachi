@@ -4,14 +4,17 @@
 package skill
 
 import (
+	"path/filepath"
+
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // compile-time interface checks
 var (
-	_ tools.SkillLister = (*Store)(nil)
-	_ tools.SkillLoader = (*Store)(nil)
+	_ tools.SkillLister  = (*Store)(nil)
+	_ tools.SkillLoader  = (*Store)(nil)
+	_ tools.SkillCreator = (*Store)(nil)
 	_ systemreminder.SkillMetaProvider = (*Store)(nil)
 )
 
@@ -64,4 +67,21 @@ func (s *Store) ListSkillMetas() []systemreminder.SkillMetaRecord {
 		})
 	}
 	return records
+}
+
+// ---- tools.SkillCreator ----
+
+// CreateSkill implements tools.SkillCreator.
+func (s *Store) CreateSkill(params tools.SkillCreateParams) (*tools.SkillCreateResult, error) {
+	sk, err := s.Create(params.Name, params.Description, params.Body, params.Tags, params.Source, params.Overwrite)
+	if err != nil {
+		return nil, err
+	}
+	return &tools.SkillCreateResult{
+		Name:        sk.Meta.Name,
+		Description: sk.Meta.Description,
+		Tags:        sk.Meta.Tags,
+		Source:      sk.Meta.Source,
+		Path:        filepath.Join(sk.Dir, "SKILL.md"),
+	}, nil
 }

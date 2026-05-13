@@ -45,9 +45,12 @@ func TestNewStore(t *testing.T) {
 }
 
 func TestStoreListAndLoad(t *testing.T) {
-	// Create a temp project structure
+	// Create a temp project structure with isolated global dir
 	tmpDir := t.TempDir()
-	skillDir := filepath.Join(tmpDir, ".tachi", "skills", "code-review")
+	tmpGlobal := t.TempDir()
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	skillDir := filepath.Join(projectSkillDir, "code-review")
 	err := os.MkdirAll(skillDir, 0755)
 	if err != nil {
 		t.Fatal(err)
@@ -81,7 +84,7 @@ When reviewing code:
 		t.Fatal(err)
 	}
 
-	s := NewStore(tmpDir)
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
 
 	// Test List
 	metas := s.List()
@@ -131,7 +134,10 @@ When reviewing code:
 
 func TestStoreList_Empty(t *testing.T) {
 	tmpDir := t.TempDir()
-	s := NewStore(tmpDir)
+	tmpGlobal := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
 	metas := s.List()
 	if len(metas) != 0 {
 		t.Errorf("expected 0 skills, got %d", len(metas))
@@ -140,7 +146,10 @@ func TestStoreList_Empty(t *testing.T) {
 
 func TestStoreList_InvalidFrontmatter(t *testing.T) {
 	tmpDir := t.TempDir()
-	skillDir := filepath.Join(tmpDir, ".tachi", "skills", "bad-skill")
+	tmpGlobal := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+	skillDir := filepath.Join(projectSkillDir, "bad-skill")
 	err := os.MkdirAll(skillDir, 0755)
 	if err != nil {
 		t.Fatal(err)
@@ -154,7 +163,7 @@ This has no frontmatter.`
 		t.Fatal(err)
 	}
 
-	s := NewStore(tmpDir)
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
 	metas := s.List()
 	if len(metas) != 1 {
 		t.Fatalf("expected 1 skill (from directory name fallback), got %d", len(metas))
@@ -166,7 +175,10 @@ This has no frontmatter.`
 
 func TestStoreResolveCommand(t *testing.T) {
 	tmpDir := t.TempDir()
-	skillDir := filepath.Join(tmpDir, ".tachi", "skills", "code-review")
+	tmpGlobal := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+	skillDir := filepath.Join(projectSkillDir, "code-review")
 	err := os.MkdirAll(skillDir, 0755)
 	if err != nil {
 		t.Fatal(err)
@@ -181,7 +193,7 @@ Body
 		t.Fatal(err)
 	}
 
-	s := NewStore(tmpDir)
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
 
 	tests := []struct {
 		input    string
@@ -370,4 +382,174 @@ func searchSubstring(s, substr string) bool {
 		}
 	}
 	return false
+}
+
+func TestStoreCreate(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	tmpGlobal := t.TempDir()
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
+
+	// Test successful creation
+	sk, err := s.Create("test-skill", "A test skill", "# Test\n\nDo stuff.", []string{"test", "example"}, SourceProject, false)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	if sk.Meta.Name != "test-skill" {
+		t.Errorf("expected name 'test-skill', got %q", sk.Meta.Name)
+	}
+	if sk.Meta.Description != "A test skill" {
+		t.Errorf("expected description, got %q", sk.Meta.Description)
+	}
+	if len(sk.Meta.Tags) != 2 {
+		t.Errorf("expected 2 tags, got %d", len(sk.Meta.Tags))
+	}
+	if sk.Meta.Source != SourceProject {
+		t.Errorf("expected source 'project', got %q", sk.Meta.Source)
+	}
+	if sk.Body != "# Test\n\nDo stuff." {
+		t.Errorf("body mismatch: %q", sk.Body)
+	}
+
+	// Verify the file was actually written
+	skillFile := filepath.Join(projectSkillDir, "test-skill", "SKILL.md")
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		t.Fatalf("failed to read created SKILL.md: %v", err)
+	}
+	content := string(data)
+	if !contains(content, "name: test-skill") {
+		t.Error("SKILL.md should contain frontmatter name")
+	}
+	if !contains(content, "Do stuff.") {
+		t.Error("SKILL.md should contain body")
+	}
+	if !contains(content, "tags:") {
+		t.Error("SKILL.md should contain tags")
+	}
+
+	// Verify it appears in List
+	metas := s.List()
+	found := false
+	for _, m := range metas {
+		if m.Name == "test-skill" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("created skill should appear in List()")
+	}
+
+	// Test duplicate without overwrite
+	_, err = s.Create("test-skill", "Duplicate", "body", nil, SourceProject, false)
+	if err == nil {
+		t.Error("expected error for duplicate skill without overwrite")
+	}
+
+	// Test duplicate with overwrite
+	sk2, err := s.Create("test-skill", "Updated", "new body", []string{"updated"}, SourceProject, true)
+	if err != nil {
+		t.Fatalf("Create with overwrite failed: %v", err)
+	}
+	if sk2.Meta.Description != "Updated" {
+		t.Errorf("expected description 'Updated' after overwrite, got %q", sk2.Meta.Description)
+	}
+	if sk2.Body != "new body" {
+		t.Errorf("expected body 'new body' after overwrite, got %q", sk2.Body)
+	}
+
+	// Test global skill creation
+	sk3, err := s.Create("global-skill", "Global", "body", nil, SourceGlobal, false)
+	if err != nil {
+		t.Fatalf("Create global skill failed: %v", err)
+	}
+	if sk3.Meta.Source != SourceGlobal {
+		t.Errorf("expected source 'global', got %q", sk3.Meta.Source)
+	}
+}
+
+func TestStoreCreate_Validation(t *testing.T) {
+	tmpDir := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	s := newStore([]string{projectSkillDir}, []string{SourceProject})
+
+	// Invalid name
+	_, err := s.Create("Invalid Name", "desc", "body", nil, SourceProject, false)
+	if err == nil {
+		t.Error("expected error for invalid name")
+	}
+
+	// Description too long
+	longDesc := make([]byte, MaxDescriptionLen+1)
+	for i := range longDesc {
+		longDesc[i] = 'a'
+	}
+	_, err = s.Create("valid-name", string(longDesc), "body", nil, SourceProject, false)
+	if err == nil {
+		t.Error("expected error for too-long description")
+	}
+
+	// Unknown source
+	_, err = s.Create("valid-name", "desc", "body", nil, "unknown", false)
+	if err == nil {
+		t.Error("expected error for unknown source")
+	}
+}
+
+func TestStoreCreate_NoProjectDir(t *testing.T) {
+	// Simulate "no project dir" by using newStore with only a global dir
+	tmpGlobal := t.TempDir()
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+	s := newStore([]string{globalSkillDir}, []string{SourceGlobal})
+
+	sk, err := s.Create("global-only", "A global skill", "body", nil, SourceGlobal, false)
+	if err != nil {
+		t.Fatalf("Create global skill without project dir failed: %v", err)
+	}
+	if sk.Meta.Source != SourceGlobal {
+		t.Errorf("expected source 'global', got %q", sk.Meta.Source)
+	}
+
+	// Verify file written to the right place
+	skillFile := filepath.Join(globalSkillDir, "global-only", "SKILL.md")
+	if _, err := os.Stat(skillFile); os.IsNotExist(err) {
+		t.Errorf("expected SKILL.md at %s", skillFile)
+	}
+
+	// Project source should fail when no project dir
+	_, err = s.Create("project-fail", "desc", "body", nil, SourceProject, false)
+	if err == nil {
+		t.Error("expected error for project source when no project dir")
+	}
+}
+
+func TestBuildSkillMarkdown(t *testing.T) {
+	result := buildSkillMarkdown("my-skill", "A skill", "# Body\n\nText", []string{"tag1", "tag2"})
+
+	if !contains(result, "name: my-skill") {
+		t.Error("frontmatter should contain name")
+	}
+	if !contains(result, "description: A skill") {
+		t.Error("frontmatter should contain description")
+	}
+	if !contains(result, "tags:") {
+		t.Error("frontmatter should contain tags")
+	}
+	if !contains(result, "  - tag1") {
+		t.Error("frontmatter should list tags")
+	}
+	if !contains(result, "# Body") {
+		t.Error("should contain body")
+	}
+	if !contains(result, "Text\n") {
+		t.Error("should end with trailing newline")
+	}
+
+	// No tags
+	result2 := buildSkillMarkdown("untagged", "desc", "body", nil)
+	if contains(result2, "tags:") {
+		t.Error("should not contain tags when nil")
+	}
 }

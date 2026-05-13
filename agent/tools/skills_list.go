@@ -20,10 +20,6 @@ type SkillListEntry struct {
 	Source      string   `json:"source"` // "project" | "global"
 }
 
-const (
-	ToolNameSkillsList = "skills_list"
-)
-
 // SkillsListTool lists all available skills with metadata.
 type SkillsListTool struct {
 	lister SkillLister

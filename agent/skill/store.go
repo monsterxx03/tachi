@@ -23,6 +23,7 @@ type frontmatter struct {
 // Store manages skill discovery, loading, and caching.
 type Store struct {
 	dirs   []string // search directories, ordered by priority (highest first)
+	source []string // source label for each dir ("project" or "global")
 	logger *debuglog.Logger
 }
 
@@ -31,19 +32,27 @@ type Store struct {
 // global skills are scanned.
 func NewStore(projectRoot string) *Store {
 	var dirs []string
+	var source []string
 
 	// Priority 1: project-level skills (highest)
 	if projectRoot != "" {
 		dirs = append(dirs, filepath.Join(projectRoot, ".tachi", "skills"))
+		source = append(source, SourceProject)
 	}
 
 	// Priority 2: global personal skills
 	homeDir, err := os.UserHomeDir()
 	if err == nil {
 		dirs = append(dirs, filepath.Join(homeDir, ".tachi", "skills"))
+		source = append(source, SourceGlobal)
 	}
 
-	return &Store{dirs: dirs, logger: debuglog.DefaultLogger}
+	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
+}
+
+// newStore creates a Store with explicitly provided dirs and sources (for testing).
+func newStore(dirs, source []string) *Store {
+	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
 }
 
 // SetLogger sets the debug logger for this store.
@@ -59,10 +68,7 @@ func (s *Store) List() []SkillMeta {
 	var result []SkillMeta
 
 	for i, dir := range s.dirs {
-		source := SourceProject
-		if i > 0 {
-			source = SourceGlobal
-		}
+		source := s.source[i]
 
 		entries, err := os.ReadDir(dir)
 		if err != nil {
@@ -143,10 +149,7 @@ func (s *Store) List() []SkillMeta {
 // Respects priority: project skills shadow global ones.
 func (s *Store) Load(name string) (*Skill, error) {
 	for i, dir := range s.dirs {
-		source := SourceProject
-		if i > 0 {
-			source = SourceGlobal
-		}
+		source := s.source[i]
 
 		skillDir := filepath.Join(dir, name)
 		skillFile := filepath.Join(skillDir, "SKILL.md")
@@ -219,6 +222,97 @@ func (s *Store) ResolveCommand(cmd string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// Create writes a new skill to the filesystem at the appropriate location.
+// source must be "project" or "global". Returns the created Skill.
+// If overwrite is false and the skill already exists, an error is returned.
+func (s *Store) Create(name, description, body string, tags []string, source string, overwrite bool) (*Skill, error) {
+	if err := ValidateName(name); err != nil {
+		return nil, fmt.Errorf("invalid skill name: %w", err)
+	}
+	if len(description) > MaxDescriptionLen {
+		return nil, fmt.Errorf("description exceeds %d characters", MaxDescriptionLen)
+	}
+	if source != SourceProject && source != SourceGlobal {
+		return nil, fmt.Errorf("unknown source %q: must be %q or %q", source, SourceProject, SourceGlobal)
+	}
+
+	// Determine target directory
+	var targetDir string
+	found := false
+	for i, dir := range s.dirs {
+		if s.source[i] == source {
+			targetDir = dir
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nil, fmt.Errorf("skill directory for source %q is not available", source)
+	}
+
+	skillDir := filepath.Join(targetDir, name)
+
+	// Check for existing skill
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	if _, err := os.Stat(skillFile); err == nil {
+		if !overwrite {
+			return nil, fmt.Errorf("skill %q already exists at %s (use overwrite=true to replace)", name, skillFile)
+		}
+		s.logger.Log("skill: Create: overwriting existing skill %q at %s", name, skillFile)
+	}
+
+	// Create directory
+	if err := os.MkdirAll(skillDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create skill directory: %w", err)
+	}
+
+	// Build SKILL.md content
+	content := buildSkillMarkdown(name, description, body, tags)
+
+	if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
+	}
+
+	s.logger.Log("skill: Create: created skill %q at %s", name, skillFile)
+
+	return &Skill{
+		Meta: SkillMeta{
+			Name:        name,
+			Description: description,
+			Tags:        tags,
+			Source:      source,
+		},
+		Body:  body,
+		RawContent: content,
+		Dir:   skillDir,
+		Files: map[string]string{},
+	}, nil
+}
+
+// buildSkillMarkdown constructs the full SKILL.md content from fields.
+func buildSkillMarkdown(name, description, body string, tags []string) string {
+	var b strings.Builder
+
+	b.WriteString("---\n")
+	b.WriteString(fmt.Sprintf("name: %s\n", name))
+	b.WriteString(fmt.Sprintf("description: %s\n", description))
+	if len(tags) > 0 {
+		// Manually format YAML array to avoid dependency on yaml.Marshal for this simple case
+		b.WriteString("tags:\n")
+		for _, t := range tags {
+			b.WriteString(fmt.Sprintf("  - %s\n", t))
+		}
+	}
+	b.WriteString("---\n\n")
+	b.WriteString(body)
+
+	// Ensure trailing newline
+	if !strings.HasSuffix(body, "\n") {
+		b.WriteString("\n")
+	}
+	return b.String()
 }
 
 // parseFrontmatter extracts YAML frontmatter and body from SKILL.md content.
