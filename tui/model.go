@@ -274,6 +274,32 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd = findCommandByPrefix(text)
 		}
 
+		// If no command matched but input starts with "/", try skill resolution.
+		if cmd == nil && len(text) > 1 && text[0] == '/' {
+			store := m.agent.SkillStore()
+			if store != nil {
+				// Extract skill name and extra args (e.g., "/code-review main.go")
+				parts := strings.SplitN(text, " ", 2)
+				skillName := strings.TrimPrefix(parts[0], "/")
+				if name, found := store.ResolveCommand(skillName); found {
+					extraArgs := ""
+					if len(parts) > 1 {
+						extraArgs = parts[1]
+					}
+					// During streaming: can't activate skills mid-turn
+					if m.state == stateStreaming {
+						m.chatview.AddMessage(chatMessage{
+							Role:    "assistant",
+							Content: "请等待当前回合完成后再执行命令",
+						})
+						return m, nil
+					}
+					m.subcommandInput = text
+					return m, m.sendSkillMessage(name, extraArgs)
+				}
+			}
+		}
+
 		// During streaming: queue regular messages, allow /new, block other commands.
 		if m.state == stateStreaming {
 			if cmd != nil && cmd.Name == "/new" {
@@ -633,6 +659,119 @@ func (m *Model) sendInitCommand() tea.Cmd {
 
 	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, InitPromptTemplate, m.systemPrompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// handleSkillCommand handles the /skill slash command.
+// /skill              → list all available skills
+// /skill <name>       → activate a specific skill
+// /skill reload       → re-scan skill directories
+func (m *Model) handleSkillCommand() tea.Cmd {
+	store := m.agent.SkillStore()
+	if store == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "Skill system not available",
+		})
+		return nil
+	}
+
+	parts := strings.Fields(m.subcommandInput)
+	sub := ""
+	if len(parts) > 1 {
+		sub = parts[1]
+	}
+
+	switch sub {
+	case "", "list":
+		metas := store.List()
+		if len(metas) == 0 {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/` or `~/.tachi/skills/<name>/`.",
+			})
+			return nil
+		}
+
+		var sb strings.Builder
+		sb.WriteString("**Available Skills:**\n\n")
+		for _, meta := range metas {
+			sourceTag := ""
+			if meta.Source == "project" {
+				sourceTag = " 🏠"
+			}
+			sb.WriteString(fmt.Sprintf("- **%s**%s\n", meta.Name, sourceTag))
+			sb.WriteString(fmt.Sprintf("  %s\n", meta.Description))
+			if len(meta.Tags) > 0 {
+				sb.WriteString(fmt.Sprintf("  Tags: %s\n", strings.Join(meta.Tags, ", ")))
+			}
+			sb.WriteString(fmt.Sprintf("  Use `/ %s` to activate\n\n", meta.Name))
+		}
+		sb.WriteString(fmt.Sprintf("\n%d skill(s) total", len(metas)))
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: sb.String(),
+		})
+		return nil
+
+	case "reload":
+		// Re-create the store to pick up new/modified skills
+		m.agent.ReloadSkills()
+		metas := store.List()
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Skills reloaded — %d skill(s) found", len(metas)),
+		})
+		return nil
+
+	default:
+		// /skill <name> — activate a specific skill
+		return m.sendSkillMessage(sub, "")
+	}
+}
+
+// sendSkillMessage activates a skill and sends its instructions as a user message.
+// skillName is the skill to activate. extraArgs are additional text from the
+// command line (e.g., "main.go" from "/code-review main.go").
+func (m *Model) sendSkillMessage(skillName string, extraArgs string) tea.Cmd {
+	// Prevent duplicate activation within the same session.
+	if m.agent.IsSkillActive(skillName) {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Skill **%s** is already active in this session.", skillName),
+		})
+		return nil
+	}
+
+	msg, err := m.agent.ActivateSkill(skillName, extraArgs)
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Skill **%s** not found. Use `/skill` to see available skills.", skillName),
+		})
+		return nil
+	}
+
+	// Add the activation message as a system-style user message
+	m.chatview.AddMessage(chatMessage{
+		Role:    "user",
+		Content: fmt.Sprintf("/%s %s", skillName, extraArgs),
+	})
+
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.streamGen++
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, msg, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

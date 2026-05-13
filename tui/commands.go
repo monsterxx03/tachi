@@ -172,6 +172,13 @@ var commands = []Command{
 			return m.handleUsageCommand()
 		},
 	},
+	{
+		Name:        "/skill",
+		Description: "List available skills, activate a skill, or reload skill definitions",
+		handler: func(m *Model) tea.Cmd {
+			return m.handleSkillCommand()
+		},
+	},
 }
 
 func matchCommands(prefix string) []Command {

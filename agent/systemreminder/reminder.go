@@ -261,3 +261,77 @@ func (GitReminder) Generate(ctx Context) []string {
 	}
 	return lines
 }
+
+// ---- SkillListReminder ---------------------------------------------------
+
+// SkillMetaProvider provides a list of skill metadata for the reminder system.
+type SkillMetaProvider interface {
+	ListSkillMetas() []SkillMetaRecord
+}
+
+// SkillMetaRecord is a minimal representation of a skill for the reminder.
+type SkillMetaRecord struct {
+	Name        string
+	Description string
+	Tags        []string
+}
+
+// SkillListReminder injects the compact skill catalog into every user message
+// so the LLM always knows what skills it can activate via skill_view().
+type SkillListReminder struct {
+	provider SkillMetaProvider
+}
+
+// NewSkillListReminder creates a SkillListReminder backed by the given provider.
+func NewSkillListReminder(provider SkillMetaProvider) SkillListReminder {
+	return SkillListReminder{provider: provider}
+}
+
+func (r SkillListReminder) Generate(ctx Context) []string {
+	if r.provider == nil {
+		return nil
+	}
+	metas := r.provider.ListSkillMetas()
+	if len(metas) == 0 {
+		return nil
+	}
+	prompt := buildSkillListPrompt(metas)
+	if prompt == "" {
+		return nil
+	}
+	return []string{prompt}
+}
+
+// buildSkillListPrompt builds the XML-like skill catalog block.
+func buildSkillListPrompt(metas []SkillMetaRecord) string {
+	if len(metas) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString("<available_skills>\n")
+
+	for _, m := range metas {
+		desc := escapeXMLAttr(m.Description)
+		tagsStr := ""
+		if len(m.Tags) > 0 {
+			tagsStr = fmt.Sprintf(" tags=%q", strings.Join(m.Tags, ","))
+		}
+		b.WriteString(fmt.Sprintf("  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr))
+	}
+
+	b.WriteString("</available_skills>\n")
+	b.WriteString("\nTo use a skill, call skill_view(name) or the user can type /skill-name.")
+
+	return b.String()
+}
+
+// escapeXMLAttr escapes special XML/HTML characters in an attribute value.
+func escapeXMLAttr(s string) string {
+	s = strings.ReplaceAll(s, "&", "&amp;")
+	s = strings.ReplaceAll(s, "\"", "&quot;")
+	s = strings.ReplaceAll(s, "'", "&apos;")
+	s = strings.ReplaceAll(s, "<", "&lt;")
+	s = strings.ReplaceAll(s, ">", "&gt;")
+	return s
+}
