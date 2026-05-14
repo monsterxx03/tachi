@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -139,14 +141,16 @@ func listCwdImmediate(dir string) ([]atFileMatch, error) {
 
 // --- Reference resolution and message expansion ---
 
-// ExpandAtReferences takes a user message and converts all @path references
-// into annotated markers that tell the LLM where the file is, without
-// inlining its content. The LLM can then use ReadFile, Bash or Glob tools
-// to read the file when it needs to, saving context window space.
+const maxAtInlineSize = 256 * 1024 // 256KB — only inline text files under this
+
+// ExpandAtReferences takes a user message and expands all @path references.
 //
-// For files:   @main.go          →  [@file: main.go]
-// For dirs:    @src/              →  [@dir: src/]
-// On error:    @nonexistent.go    →  @nonexistent.go (left as-is)
+//   - Directories: inline the file listing via rg (original behavior).
+//   - Text files (no null bytes, ≤256KB): inline full content with
+//     --- BEGIN UNTRUSTED FILE CONTENT --- markers.
+//   - Binary files (PDF, Excel, images, etc.): annotate as [@file: path]
+//     and let the LLM use Bash/ReadFile tools to parse them.
+//   - Errors / not found: leave @path as-is.
 func ExpandAtReferences(message string) string {
 	var result strings.Builder
 	expanded := false
@@ -162,23 +166,47 @@ func ExpandAtReferences(message string) string {
 			path := message[i+1 : j]
 
 			if path != "" {
-				info, err := os.Stat(filepath.Join(cwd, path))
-				if err == nil {
-					if info.IsDir() {
-						result.WriteString("[@dir: ")
-						result.WriteString(path)
-						result.WriteString("]")
-					} else {
-						result.WriteString("[@file: ")
-						result.WriteString(path)
-						result.WriteString("]")
-					}
-					expanded = true
-				} else {
-					// File not found — keep original @path, the LLM will
-					// figure it out or the user can correct it.
+				fullPath := filepath.Join(cwd, path)
+				info, err := os.Stat(fullPath)
+				if err != nil {
+					// Not found — leave as-is.
 					result.WriteString("@")
 					result.WriteString(path)
+				} else if info.IsDir() {
+					// Directory — expand file listing.
+					if listing := expandDirListing(fullPath); listing != "" {
+						result.WriteString("@")
+						result.WriteString(path)
+						result.WriteString("\n\n--- BEGIN UNTRUSTED FILE CONTENT: ")
+						result.WriteString(path)
+						result.WriteString(" ---\n")
+						result.WriteString(listing)
+						result.WriteString("\n--- END UNTRUSTED FILE CONTENT: ")
+						result.WriteString(path)
+						result.WriteString(" ---")
+						expanded = true
+					} else {
+						result.WriteString("@")
+						result.WriteString(path)
+					}
+				} else if content, ok := tryReadTextFile(fullPath); ok {
+					// Text file — inline content.
+					result.WriteString("@")
+					result.WriteString(path)
+					result.WriteString("\n\n--- BEGIN UNTRUSTED FILE CONTENT: ")
+					result.WriteString(path)
+					result.WriteString(" ---\n")
+					result.WriteString(content)
+					result.WriteString("\n--- END UNTRUSTED FILE CONTENT: ")
+					result.WriteString(path)
+					result.WriteString(" ---")
+					expanded = true
+				} else {
+					// Binary file — annotate path, let LLM use tools.
+					result.WriteString("[@file: ")
+					result.WriteString(path)
+					result.WriteString("]")
+					expanded = true
 				}
 			} else {
 				result.WriteByte('@')
@@ -191,10 +219,67 @@ func ExpandAtReferences(message string) string {
 	}
 
 	if expanded {
-		debuglog.DefaultLogger.Log("at_file: resolved @ references in message")
+		debuglog.DefaultLogger.Log("at_file: expanded @ references in message")
 	}
 
 	return result.String()
+}
+
+// expandDirListing returns a recursive file listing for a directory.
+func expandDirListing(dir string) string {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--glob", "!.git")
+	cmd.Dir = dir
+	output, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+
+	var files []string
+	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			files = append(files, filepath.ToSlash(line))
+		}
+	}
+
+	if len(files) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	fmt.Fprintf(&b, "Directory contains %d files:\n", len(files))
+	for _, f := range files {
+		fmt.Fprintf(&b, "  %s\n", f)
+	}
+	return b.String()
+}
+
+// tryReadTextFile reads a file and returns its content if it looks like a
+// text file (no null bytes in the first 8KB) and is within the size limit.
+// Returns ok=false for binary files, oversized files, or read errors.
+func tryReadTextFile(fullPath string) (content string, ok bool) {
+	info, err := os.Stat(fullPath)
+	if err != nil {
+		return "", false
+	}
+	if info.Size() > maxAtInlineSize {
+		return "", false
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return "", false
+	}
+
+	checkLen := min(len(data), 8000)
+	if bytes.Contains(data[:checkLen], []byte{0}) {
+		return "", false // binary file
+	}
+
+	return string(data), true
 }
 
 // findLastAt finds the position of the last @ in s that is preceded by
