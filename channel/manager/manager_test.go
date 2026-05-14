@@ -855,6 +855,66 @@ func TestBuildUserMessageWithAttachments_BinaryFile(t *testing.T) {
 	}
 }
 
+func TestBuildUserMessageWithAttachments_TextFileWithSavedPath(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "帮我看下这个文件",
+		Attachments: []channel.Attachment{
+			{
+				Type:        channel.AttachmentTypeFile,
+				FileName:    "main.go",
+				TextContent: "package main\nfunc main() {}",
+				SavedPath:   "/home/user/.tachi/weixin_files/bot/u/main.go-12345",
+				Size:        42,
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	assert.True(t, contains(result, "已保存到"), "should mention saved path: %s", result)
+	assert.True(t, contains(result, "main.go-12345"), "should include full path: %s", result)
+	assert.True(t, contains(result, "package main"), "should include inline content: %s", result)
+	assert.True(t, contains(result, "帮我看下这个文件"), "should include original text: %s", result)
+}
+
+func TestBuildUserMessageWithAttachments_BinaryWithSavedPath(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "解析这个 PDF",
+		Attachments: []channel.Attachment{
+			{
+				Type:      channel.AttachmentTypeFile,
+				FileName:  "report.pdf",
+				MimeType:  "application/pdf",
+				Size:      204800,
+				SavedPath: "/home/user/.tachi/weixin_files/bot/u/report.pdf-abc",
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	assert.True(t, contains(result, "已保存到本地"), "should mention local save: %s", result)
+	assert.True(t, contains(result, "Bash"), "should mention Bash tool: %s", result)
+	assert.True(t, contains(result, "解析这个 PDF"), "should include original text: %s", result)
+}
+
+func TestBuildUserMessageWithAttachments_ImageWithSavedPath(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "这是什么图片？",
+		Attachments: []channel.Attachment{
+			{
+				Type:      channel.AttachmentTypeImage,
+				FileName:  "photo.jpg",
+				Size:      524288,
+				SavedPath: "/home/user/.tachi/weixin_files/bot/u/photo.jpg-xyz",
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	assert.True(t, contains(result, "已保存到"), "should mention saved path: %s", result)
+	assert.True(t, contains(result, "photo.jpg-xyz"), "should include file path: %s", result)
+	assert.True(t, contains(result, "这是什么图片？"), "should include original text: %s", result)
+}
+
 // contains is a simple substring check helper.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && containsStr(s, substr)

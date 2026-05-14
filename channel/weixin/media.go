@@ -2,10 +2,12 @@ package weixin
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/config"
 )
 
 // Max file sizes for CDN download.
@@ -14,6 +16,41 @@ const (
 	maxImageDownloadSize = 20 * 1024 * 1024 // 20 MB
 	maxTextContentChars  = 100 * 1024       // 100 KB — text content sent to LLM
 )
+
+// filesDir returns the base directory for persisting downloaded files:
+//
+//	~/.tachi/weixin/files/<normalizedAccountID>/
+func (ch *Channel) filesDir() string {
+	return filepath.Join(config.WeixinStateDir(), "files", normalizeID(ch.accountID))
+}
+
+// saveFile persists decrypted data to a file on disk and returns its path.
+// Files are saved under filesDir()/<normalizedUserID>/ with the original
+// filename. A random suffix is added to avoid collisions.
+func (ch *Channel) saveFile(userID string, filename string, data []byte) (string, error) {
+	dir := filepath.Join(ch.filesDir(), normalizeID(userID))
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		return "", fmt.Errorf("create files dir: %w", err)
+	}
+
+	f, err := os.CreateTemp(dir, filename+"-*")
+	if err != nil {
+		return "", fmt.Errorf("create temp file: %w", err)
+	}
+
+	path := f.Name()
+	if _, err := f.Write(data); err != nil {
+		f.Close()
+		os.Remove(path)
+		return "", fmt.Errorf("write file: %w", err)
+	}
+	if err := f.Close(); err != nil {
+		os.Remove(path)
+		return "", fmt.Errorf("close file: %w", err)
+	}
+
+	return path, nil
+}
 
 // isTextExtension reports whether a filename has a text-like extension that
 // we can safely read as UTF-8 and include in the LLM context.
@@ -125,10 +162,13 @@ func (ch *Channel) downloadMedia(ref *MediaRef) ([]byte, error) {
 	return plaintext, nil
 }
 
-// processMedia downloads and decrypts a list of MediaRefs, converting them
-// into channel.Attachment values. Failed downloads produce attachments with
-// a non-empty Error field so the user still gets notified.
-func (ch *Channel) processMedia(refs []MediaRef) []channel.Attachment {
+// processMedia downloads and decrypts a list of MediaRefs, converts them
+// into channel.Attachment values, and persists decrypted files to disk so
+// the LLM can access them through the Bash tool.
+//
+// Failed downloads produce attachments with a non-empty Error field so the
+// user still gets notified.
+func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attachment {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -148,13 +188,21 @@ func (ch *Channel) processMedia(refs []MediaRef) []channel.Attachment {
 			continue
 		}
 
+		// Save the decrypted file to disk so the LLM can access it via Bash.
+		filePath, saveErr := ch.saveFile(userID, ref.FileName, data)
+		if saveErr != nil {
+			ch.logger.Log("weixin: save file %s: %v", ref.FileName, saveErr)
+			// Non-fatal: still build the attachment without SavedPath.
+		}
+
 		switch ref.Type {
 		case MessageItemTypeFile:
 			att := channel.Attachment{
-				Type:     channel.AttachmentTypeFile,
-				FileName: ref.FileName,
-				Size:     int64(len(data)),
-				Content:  data,
+				Type:      channel.AttachmentTypeFile,
+				FileName:  ref.FileName,
+				Size:      int64(len(data)),
+				Content:   data,
+				SavedPath: filePath,
 			}
 
 			if isTextExtension(ref.FileName) {
@@ -172,11 +220,12 @@ func (ch *Channel) processMedia(refs []MediaRef) []channel.Attachment {
 
 		case MessageItemTypeImage:
 			attachments = append(attachments, channel.Attachment{
-				Type:     channel.AttachmentTypeImage,
-				FileName: ref.FileName,
-				Size:     int64(len(data)),
-				Content:  data,
-				MimeType: guessMimeType(ref.FileName),
+				Type:      channel.AttachmentTypeImage,
+				FileName:  ref.FileName,
+				Size:      int64(len(data)),
+				Content:   data,
+				MimeType:  guessMimeType(ref.FileName),
+				SavedPath: filePath,
 			})
 		}
 	}
@@ -205,3 +254,4 @@ func humanSize(n int) string {
 	}
 	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
 }
+

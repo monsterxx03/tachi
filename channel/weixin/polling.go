@@ -118,7 +118,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	// Download and decrypt any files / images attached to this message.
 	var attachments []channel.Attachment
 	if len(mediaRefs) > 0 {
-		attachments = ch.processMedia(mediaRefs)
+		attachments = ch.processMedia(mediaRefs, msg.FromUserID)
 		ch.logger.Log("weixin: processed %d media items for msg %d -> %d attachments",
 			len(mediaRefs), msg.MessageID, len(attachments))
 	}

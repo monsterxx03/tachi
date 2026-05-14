@@ -1,7 +1,14 @@
 package weixin
 
 import (
+	"bytes"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 func TestIsTextExtension(t *testing.T) {
@@ -95,4 +102,103 @@ func TestAttachmentTypeFromMedia(t *testing.T) {
 			t.Errorf("attachmentTypeFromMedia(%d) = %q, want %q", tt.mediaType, got, tt.want)
 		}
 	}
+}
+
+// --- saveFile / filesDir (uses t.TempDir via config.SetBaseDir) ---
+
+func TestSaveFileAndFilesDir(t *testing.T) {
+	// Redirect base dir to a temp directory that auto-cleans on test end.
+	origBase := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	ch := &Channel{
+		accountID: "test-bot@im.bot",
+		cli:       newClient(),
+		logger:    debuglog.DefaultLogger.WithSource("channel:weixin-test"),
+	}
+
+	// Verify filesDir path structure: <tmp>/weixin/files/test-bot-im-bot
+	dir := ch.filesDir()
+	expectedSuffix := "/weixin/files/test-bot-im-bot"
+	if !strings.HasSuffix(dir, expectedSuffix) {
+		t.Errorf("filesDir %q should end with %q", dir, expectedSuffix)
+	}
+
+	// Save a test file and verify content.
+	userID := "wx_user_123"
+	data := []byte("hello, this is a test file")
+	path, err := ch.saveFile(userID, "test.txt", data)
+	if err != nil {
+		t.Fatalf("saveFile: %v", err)
+	}
+
+	readback, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read saved file: %v", err)
+	}
+	if !bytes.Equal(readback, data) {
+		t.Errorf("saved file content mismatch: got %q, want %q", readback, data)
+	}
+
+	// Verify path contains user ID.
+	if !strings.Contains(filepath.ToSlash(path), normalizeID(userID)) {
+		t.Errorf("saved path %q should contain user dir %q", path, normalizeID(userID))
+	}
+
+	// Verify path contains original filename as prefix.
+	_, file := filepath.Split(path)
+	if !strings.HasPrefix(file, "test.txt-") {
+		t.Errorf("saved filename %q should start with 'test.txt-'", file)
+	}
+
+	// Save with empty userID — saves to account-level dir, no error.
+	path2, err := ch.saveFile("", "empty.txt", []byte("data"))
+	if err != nil {
+		t.Fatalf("saveFile with empty userID should not error: %v", err)
+	}
+	os.Remove(path2)
+}
+
+func TestFilesDirUsesWeixinStateDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	origBase := config.BaseDir()
+	config.SetBaseDir(tmpDir)
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	ch := &Channel{
+		accountID: "my-bot",
+		cli:       newClient(),
+		logger:    debuglog.DefaultLogger.WithSource("channel:weixin-test"),
+	}
+
+	dir := ch.filesDir()
+	// Should be under config.WeixinStateDir()/files/...
+	expectedPrefix := config.WeixinStateDir()
+	if !strings.HasPrefix(dir, expectedPrefix) {
+		t.Errorf("filesDir %q should start with WeixinStateDir %q", dir, expectedPrefix)
+	}
+	// Verify the file actually gets created.
+	path, err := ch.saveFile("u1", "x.txt", []byte("hello"))
+	if err != nil {
+		t.Fatalf("saveFile: %v", err)
+	}
+	if !strings.HasPrefix(path, tmpDir) {
+		t.Errorf("saved file %q should be under tmpDir %q", path, tmpDir)
+	}
+	os.Remove(path)
+}
+
+// contains is a simple substring check helper.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && containsStr(s, substr)
+}
+
+func containsStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
 }

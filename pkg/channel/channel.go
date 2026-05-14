@@ -73,6 +73,12 @@ type Attachment struct {
 	// Size is the plaintext size in bytes.
 	Size int64
 
+	// SavedPath is the local filesystem path where the decrypted file has been
+	// persisted. When set, the LLM can use the Bash tool to read/parse the file
+	// directly (e.g. pdftotext for PDFs, openpyxl for Excel) instead of relying
+	// solely on TextContent. Empty means the file was not saved to disk.
+	SavedPath string
+
 	// Error is non-empty when the attachment could not be downloaded or
 	// decrypted. Content/TextContent will be nil/empty in this case.
 	Error string
