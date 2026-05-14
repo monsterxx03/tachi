@@ -801,12 +801,6 @@ func (a *AIAgent) runAgentLoop(
 			a.lastInputTokens = acc.usage.InputTokens
 		}
 
-		// Emit incremental usage so the TUI statusbar updates context window / cost
-		// after every API call, not just at TurnComplete.
-		if acc.usage != nil {
-			ch <- AgentEvent{Type: AgentEventUsage, Usage: acc.usage}
-		}
-
 		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
 			return
 		}
