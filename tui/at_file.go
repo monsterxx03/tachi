@@ -1,9 +1,7 @@
 package tui
 
 import (
-	"bytes"
 	"context"
-	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,83 +139,18 @@ func listCwdImmediate(dir string) ([]atFileMatch, error) {
 
 // --- Reference resolution and message expansion ---
 
-const maxAtFileSize = 256 * 1024 // 256KB
-
-func resolveAtReference(path string) (string, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return "", fmt.Errorf("getcwd: %w", err)
-	}
-
-	fullPath := filepath.Join(cwd, path)
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		return "", fmt.Errorf("stat: %w", err)
-	}
-
-	if info.IsDir() {
-		return listDirContents(fullPath, path)
-	}
-
-	return readFileForAt(fullPath)
-}
-
-func listDirContents(dir, displayPath string) (string, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	cmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--glob", "!.git")
-	cmd.Dir = dir
-	output, err := cmd.Output()
-	if err != nil {
-		return "", fmt.Errorf("list dir: %w", err)
-	}
-
-	files := strings.Split(strings.TrimSpace(string(output)), "\n")
-	var nonEmpty []string
-	for _, f := range files {
-		if strings.TrimSpace(f) != "" {
-			nonEmpty = append(nonEmpty, filepath.ToSlash(f))
-		}
-	}
-
-	var b strings.Builder
-	fmt.Fprintf(&b, "Directory %s contains %d files:\n", displayPath, len(nonEmpty))
-	for _, f := range nonEmpty {
-		fmt.Fprintf(&b, "  %s\n", f)
-	}
-	return b.String(), nil
-}
-
-func readFileForAt(fullPath string) (string, error) {
-	info, err := os.Stat(fullPath)
-	if err != nil {
-		return "", fmt.Errorf("stat: %w", err)
-	}
-	if info.Size() > maxAtFileSize {
-		return "", fmt.Errorf("file too large: %d bytes (limit: %d)", info.Size(), maxAtFileSize)
-	}
-
-	content, err := os.ReadFile(fullPath)
-	if err != nil {
-		return "", fmt.Errorf("read: %w", err)
-	}
-
-	checkLen := min(len(content), 8000)
-	if bytes.Contains(content[:checkLen], []byte{0}) {
-		return "", fmt.Errorf("cannot include binary file")
-	}
-
-	return string(content), nil
-}
-
-// ExpandAtReferences takes a user message and expands all @path references
-// by injecting file/directory contents. The expanded message is what gets
-// sent to the LLM. The original @path markers are preserved so the LLM
-// knows which files were referenced.
+// ExpandAtReferences takes a user message and converts all @path references
+// into annotated markers that tell the LLM where the file is, without
+// inlining its content. The LLM can then use ReadFile, Bash or Glob tools
+// to read the file when it needs to, saving context window space.
+//
+// For files:   @main.go          →  [@file: main.go]
+// For dirs:    @src/              →  [@dir: src/]
+// On error:    @nonexistent.go    →  @nonexistent.go (left as-is)
 func ExpandAtReferences(message string) string {
 	var result strings.Builder
 	expanded := false
+	cwd, _ := os.Getwd()
 
 	i := 0
 	for i < len(message) {
@@ -228,23 +161,27 @@ func ExpandAtReferences(message string) string {
 			}
 			path := message[i+1 : j]
 
-			result.WriteString("@")
-			result.WriteString(path)
-
 			if path != "" {
-				content, err := resolveAtReference(path)
-				if err != nil {
-					debuglog.DefaultLogger.Log("at_file: resolve %q: %v", path, err)
-				} else {
-					result.WriteString("\n\n--- BEGIN UNTRUSTED FILE CONTENT: ")
-					result.WriteString(path)
-					result.WriteString(" ---\n")
-					result.WriteString(content)
-					result.WriteString("\n--- END UNTRUSTED FILE CONTENT: ")
-					result.WriteString(path)
-					result.WriteString(" ---")
+				info, err := os.Stat(filepath.Join(cwd, path))
+				if err == nil {
+					if info.IsDir() {
+						result.WriteString("[@dir: ")
+						result.WriteString(path)
+						result.WriteString("]")
+					} else {
+						result.WriteString("[@file: ")
+						result.WriteString(path)
+						result.WriteString("]")
+					}
 					expanded = true
+				} else {
+					// File not found — keep original @path, the LLM will
+					// figure it out or the user can correct it.
+					result.WriteString("@")
+					result.WriteString(path)
 				}
+			} else {
+				result.WriteByte('@')
 			}
 			i = j
 		} else {
@@ -254,7 +191,7 @@ func ExpandAtReferences(message string) string {
 	}
 
 	if expanded {
-		debuglog.DefaultLogger.Log("at_file: expanded @ references in message")
+		debuglog.DefaultLogger.Log("at_file: resolved @ references in message")
 	}
 
 	return result.String()
