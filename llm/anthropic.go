@@ -34,48 +34,59 @@ func (p *AnthropicProvider) Name() string {
 	return ProviderTypeAnthropic
 }
 
+// collectToolMessages gathers consecutive tool messages starting at startIdx,
+// and optionally merges a trailing steer message as a text block into the same
+// user message (to avoid violating Anthropic's strict user/assistant alternating
+// requirement). Returns the content blocks and the index to resume iteration from.
+func collectToolMessages(ctx context.Context, messages []Message, start int) ([]anthropic.ContentBlockParamUnion, int) {
+	var blocks []anthropic.ContentBlockParamUnion
+
+	// Consume consecutive tool messages.
+	end := start
+	for ; end < len(messages) && messages[end].Role == "tool"; end++ {
+		blocks = append(blocks, anthropic.NewToolResultBlock(
+			messages[end].ToolCallID,
+			messages[end].Content,
+			messages[end].IsError,
+		))
+	}
+
+	toolCount := end - start
+	debuglog.Log(ctx, "anthropic buildRequest: merged %d tool messages (indices %d-%d) into 1 user message",
+		toolCount, start, end-1)
+
+	// If the next message is steer, merge it as a text block into the same
+	// user message (tool results are already user-role; a separate steer user
+	// message would create two consecutive user messages).
+	if end < len(messages) && messages[end].Role == RoleSteer {
+		blocks = append(blocks, anthropic.NewTextBlock(messages[end].Content))
+		debuglog.Log(ctx, "anthropic buildRequest: merged steer msg (index %d) into same user message", end)
+		end++ // consumed steer
+	}
+
+	return blocks, end
+}
+
 func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*anthropic.MessageNewParams, error) {
 	var systemPrompt string
 	var anthropicMessages []anthropic.MessageParam
 
-	for i := 0; i < len(messages); i++ {
+	for i := 0; i < len(messages); {
 		msg := messages[i]
 
 		if msg.Role == "system" {
 			systemPrompt = msg.Content
+			i++
 			continue
 		}
 
 		if msg.Role == "tool" {
-			var blocks []anthropic.ContentBlockParamUnion
-			steerIdx := -1
-			startI := i
-			for ; i < len(messages) && messages[i].Role == "tool"; i++ {
-				blocks = append(blocks, anthropic.NewToolResultBlock(
-					messages[i].ToolCallID,
-					messages[i].Content,
-					messages[i].IsError,
-				))
-			}
-			debuglog.Log(ctx, "anthropic buildRequest: merged %d tool messages (indices %d-%d) into 1 user message",
-				i-startI, startI, i-1)
-			// Check if next message is steer — merge as text block into same user message.
-			// This avoids violating Anthropic's strict user/assistant alternating requirement
-			// (tool results are already user-role, a separate steer user message would be
-			// two consecutive user messages).
-			if i < len(messages) && messages[i].Role == RoleSteer {
-				blocks = append(blocks, anthropic.NewTextBlock(messages[i].Content))
-				debuglog.Log(ctx, "anthropic buildRequest: merged steer msg (index %d) into same user message", i)
-				steerIdx = i
-			}
-			i-- // back up for outer loop increment
+			blocks, next := collectToolMessages(ctx, messages, i)
+			i = next
 			anthropicMessages = append(anthropicMessages, anthropic.MessageParam{
 				Role:    anthropic.MessageParamRoleUser,
 				Content: blocks,
 			})
-			if steerIdx >= 0 {
-				i = steerIdx // skip the consumed steer message
-			}
 			continue
 		}
 
@@ -114,6 +125,7 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 			Role:    role,
 			Content: contentBlocks,
 		})
+		i++
 	}
 
 	anthropicTools := make([]anthropic.ToolUnionParam, 0, len(tools))
