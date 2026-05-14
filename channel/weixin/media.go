@@ -49,6 +49,7 @@ func (ch *Channel) saveFile(userID string, filename string, data []byte) (string
 		return "", fmt.Errorf("close file: %w", err)
 	}
 
+	ch.logger.Log("weixin: saved file %s (%s) -> %s", filename, humanSize(len(data)), path)
 	return path, nil
 }
 
