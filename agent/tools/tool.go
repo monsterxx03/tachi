@@ -3,6 +3,8 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -133,13 +135,21 @@ func (r *Registry) GetTool(name string) Tool {
 	return r.tools[name]
 }
 
-// GetToolNames returns all registered tool names without triggering
-// Description() calls (which could cause recursion for self-referencing tools).
+// GetToolNames returns all registered tool names in deterministic order
+// (built-in first alphabetically, then MCP tools alphabetically).
 func (r *Registry) GetToolNames() []string {
 	names := make([]string, 0, len(r.tools))
 	for name := range r.tools {
 		names = append(names, name)
 	}
+	sort.Slice(names, func(i, j int) bool {
+		iMCP := strings.HasPrefix(names[i], "mcp__")
+		jMCP := strings.HasPrefix(names[j], "mcp__")
+		if iMCP != jMCP {
+			return !iMCP
+		}
+		return names[i] < names[j]
+	})
 	return names
 }
 
@@ -220,12 +230,23 @@ func validateArgs(tool Tool, args string) error {
 	return nil
 }
 
-// GetSchemas returns all tool schemas
+// GetSchemas returns all tool schemas in deterministic order:
+// built-in tools first (alphabetically by name), then MCP tools (alphabetically).
+// Deterministic ordering is critical for LLM prompt caching — both OpenAI and
+// Anthropic cache the tools prefix, and any change in order invalidates the cache.
 func (r *Registry) GetSchemas() []Schema {
 	schemas := make([]Schema, 0, len(r.tools))
 	for _, t := range r.tools {
 		schemas = append(schemas, ToSchema(t))
 	}
+	sort.Slice(schemas, func(i, j int) bool {
+		iMCP := strings.HasPrefix(schemas[i].Name, "mcp__")
+		jMCP := strings.HasPrefix(schemas[j].Name, "mcp__")
+		if iMCP != jMCP {
+			return !iMCP // built-in tools before MCP tools
+		}
+		return schemas[i].Name < schemas[j].Name
+	})
 	return schemas
 }
 
