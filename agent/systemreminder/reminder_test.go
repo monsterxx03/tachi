@@ -277,3 +277,94 @@ func TestCollector_WithGitReminder(t *testing.T) {
 		t.Errorf("expected one opening tag, got: %s", result)
 	}
 }
+
+// ---- SkillListReminder tests -----------------------------------------------
+
+// mockSkillMetaProvider is a test stub that returns a fixed set of skills.
+type mockSkillMetaProvider struct {
+	metas []SkillMetaRecord
+}
+
+func (m *mockSkillMetaProvider) ListSkillMetas() []SkillMetaRecord {
+	return m.metas
+}
+
+func TestSkillListReminder_FiresOnFirstMessage(t *testing.T) {
+	r := NewSkillListReminder(&mockSkillMetaProvider{
+		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
+	})
+	lines := r.Generate(Context{IsFirstMessage: true})
+	if len(lines) != 1 {
+		t.Fatalf("expected 1 line on first message, got %d", len(lines))
+	}
+	if !strings.Contains(lines[0], `name="test"`) {
+		t.Errorf("expected skill 'test' in output, got: %s", lines[0])
+	}
+	if r.dirty {
+		t.Error("expected dirty to be false after firing")
+	}
+}
+
+func TestSkillListReminder_SkipsOnNonFirstWhenClean(t *testing.T) {
+	r := NewSkillListReminder(&mockSkillMetaProvider{
+		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
+	})
+	// First call: fires, clears dirty
+	lines := r.Generate(Context{IsFirstMessage: true})
+	if len(lines) != 1 {
+		t.Fatalf("first call should fire, got %d", len(lines))
+	}
+	// Second call: should skip
+	lines = r.Generate(Context{IsFirstMessage: false})
+	if len(lines) != 0 {
+		t.Errorf("expected no output when not first message and clean, got %d lines", len(lines))
+	}
+}
+
+func TestSkillListReminder_SkipsOnToolResult(t *testing.T) {
+	r := NewSkillListReminder(&mockSkillMetaProvider{
+		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
+	})
+	lines := r.Generate(Context{IsFirstMessage: false, IsToolResult: true})
+	if len(lines) != 0 {
+		t.Errorf("expected no output on tool result, got %d lines", len(lines))
+	}
+}
+
+func TestSkillListReminder_FiresWhenDirty(t *testing.T) {
+	r := NewSkillListReminder(&mockSkillMetaProvider{
+		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
+	})
+	// First call clears dirty
+	r.Generate(Context{IsFirstMessage: true})
+
+	// Simulate skill_create: make dirty again
+	r.dirty = true
+
+	lines := r.Generate(Context{IsFirstMessage: false})
+	if len(lines) != 1 {
+		t.Fatalf("expected to fire when dirty, got %d lines", len(lines))
+	}
+	if !strings.Contains(lines[0], `name="test"`) {
+		t.Errorf("expected skill 'test' in output, got: %s", lines[0])
+	}
+	if r.dirty {
+		t.Error("expected dirty to be cleared after firing")
+	}
+}
+
+func TestSkillListReminder_NilProvider(t *testing.T) {
+	r := NewSkillListReminder(nil)
+	lines := r.Generate(Context{IsFirstMessage: true})
+	if lines != nil {
+		t.Errorf("expected nil from nil provider, got %v", lines)
+	}
+}
+
+func TestSkillListReminder_EmptySkills(t *testing.T) {
+	r := NewSkillListReminder(&mockSkillMetaProvider{})
+	lines := r.Generate(Context{IsFirstMessage: true})
+	if lines != nil {
+		t.Errorf("expected nil from empty skills, got %v", lines)
+	}
+}

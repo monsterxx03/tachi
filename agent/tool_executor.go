@@ -261,6 +261,14 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			}
 		}
 
+		// When skill_create succeeds, rebuild the reminder collector so the
+		// SkillListReminder picks up the new skill from the store. Otherwise
+		// the LLM won't see the newly created skill in the next system-reminder
+		// block even though it exists on disk.
+		if tc.Function.Name == tools.ToolNameSkillCreate && tr.Status == tools.ToolResultSuccess {
+			a.rebuildSkillCollector()
+		}
+
 		if tr.Status == tools.ToolResultPendingConfirm {
 			if a.skipEditConfirm {
 				a.logger.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)

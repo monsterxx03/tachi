@@ -287,19 +287,34 @@ type SkillMetaRecord struct {
 	Tags        []string
 }
 
-// SkillListReminder injects the compact skill catalog into every user message
-// so the LLM always knows what skills it can activate via SkillView().
+// SkillListReminder injects the compact skill catalog so the LLM always knows
+// what skills it can activate via SkillView(). Unlike DateReminder, it only
+// fires on the first user message of a conversation or when the skill list has
+// changed (e.g., after skill_create). This avoids wasting context window on
+// repeated injections of a largely static catalog.
 type SkillListReminder struct {
 	provider SkillMetaProvider
+	dirty    bool // true when the skill list has changed and needs re-injection
 }
 
 // NewSkillListReminder creates a SkillListReminder backed by the given provider.
-func NewSkillListReminder(provider SkillMetaProvider) SkillListReminder {
-	return SkillListReminder{provider: provider}
+// The reminder starts dirty so it fires on the very first user message.
+func NewSkillListReminder(provider SkillMetaProvider) *SkillListReminder {
+	return &SkillListReminder{provider: provider, dirty: true}
 }
 
-func (r SkillListReminder) Generate(ctx Context) []string {
+func (r *SkillListReminder) Generate(ctx Context) []string {
 	if r.provider == nil {
+		return nil
+	}
+	// Don't inject skill list at tool-result boundaries — it's not transient
+	// contextual information and the LLM already knows what skills are available
+	// from the previous injection.
+	if ctx.IsToolResult {
+		return nil
+	}
+	// Only fire when skills have changed or on the first message.
+	if !r.dirty && !ctx.IsFirstMessage {
 		return nil
 	}
 	metas := r.provider.ListSkillMetas()
@@ -310,6 +325,7 @@ func (r SkillListReminder) Generate(ctx Context) []string {
 	if prompt == "" {
 		return nil
 	}
+	r.dirty = false
 	return []string{prompt}
 }
 
