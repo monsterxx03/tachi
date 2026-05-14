@@ -117,6 +117,105 @@ func TestExtractMessageText_MultipleItems(t *testing.T) {
 	}
 }
 
+func TestExtractMediaItems_File(t *testing.T) {
+	items := []MessageItem{
+		{
+			Type: MessageItemTypeFile,
+			FileItem: &FileItem{
+				FileName: "test.go",
+				Len:      "1024",
+				Media:    MediaData{EncryptQueryParam: "abc", AESKey: "a2V5MTIzNDU2Nzg5MDEyMzQ1Ng=="},
+			},
+		},
+	}
+
+	refs := extractMediaItems(items)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d", len(refs))
+	}
+	if refs[0].Type != MessageItemTypeFile {
+		t.Errorf("expected file type, got %d", refs[0].Type)
+	}
+	if refs[0].FileName != "test.go" {
+		t.Errorf("expected test.go, got %s", refs[0].FileName)
+	}
+	if refs[0].RawSize != 1024 {
+		t.Errorf("expected raw size 1024, got %d", refs[0].RawSize)
+	}
+}
+
+func TestExtractMediaItems_Image(t *testing.T) {
+	items := []MessageItem{
+		{
+			Type:      MessageItemTypeImage,
+			ImageItem: &MediaItem{AESKey: "abcdef1234567890abcdef1234567890"},
+		},
+	}
+
+	refs := extractMediaItems(items)
+	if len(refs) != 1 {
+		t.Fatalf("expected 1 ref, got %d", len(refs))
+	}
+	if refs[0].Type != MessageItemTypeImage {
+		t.Errorf("expected image type, got %d", refs[0].Type)
+	}
+	if refs[0].FileName != "image" {
+		t.Errorf("expected 'image', got %s", refs[0].FileName)
+	}
+	if refs[0].AESKey != "abcdef1234567890abcdef1234567890" {
+		t.Errorf("aes key mismatch")
+	}
+}
+
+func TestExtractMediaItems_Mixed(t *testing.T) {
+	items := []MessageItem{
+		{
+			Type:     MessageItemTypeText,
+			TextItem: &TextItem{Text: "hello"},
+		},
+		{
+			Type:      MessageItemTypeFile,
+			FileItem: &FileItem{
+				FileName: "data.csv",
+				Media:    MediaData{AESKey: "a2V5MTIzNDU2Nzg5MDEyMzQ1Ng=="},
+			},
+		},
+		{
+			Type:      MessageItemTypeImage,
+			ImageItem: &MediaItem{MidSize: 500},
+		},
+	}
+
+	refs := extractMediaItems(items)
+	if len(refs) != 2 {
+		t.Fatalf("expected 2 refs, got %d", len(refs))
+	}
+	if refs[0].Type != MessageItemTypeFile {
+		t.Errorf("first ref should be file, got %d", refs[0].Type)
+	}
+	if refs[1].Type != MessageItemTypeImage {
+		t.Errorf("second ref should be image, got %d", refs[1].Type)
+	}
+}
+
+func TestExtractMediaItems_NoMedia(t *testing.T) {
+	items := []MessageItem{
+		{
+			Type:     MessageItemTypeText,
+			TextItem: &TextItem{Text: "just text"},
+		},
+		{
+			Type:      MessageItemTypeVoice,
+			VoiceItem: &VoiceItem{Text: "voice note"},
+		},
+	}
+
+	refs := extractMediaItems(items)
+	if len(refs) != 0 {
+		t.Errorf("expected 0 refs, got %d", len(refs))
+	}
+}
+
 func TestGenerateClientID(t *testing.T) {
 	id1 := generateClientID()
 	id2 := generateClientID()

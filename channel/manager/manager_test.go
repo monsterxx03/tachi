@@ -730,3 +730,141 @@ func TestSlashCommand_StringRepresentation(t *testing.T) {
 }
 
 func newInt64Ptr(v int64) *int64 { return &v }
+
+func TestBuildUserMessageWithAttachments_NoAttachments(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "hello world",
+	}
+	result := buildUserMessageWithAttachments(msg)
+	if result != "hello world" {
+		t.Errorf("expected 'hello world', got %q", result)
+	}
+}
+
+func TestBuildUserMessageWithAttachments_TextFile(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "请帮我 review 这段代码",
+		Attachments: []channel.Attachment{
+			{
+				Type:        channel.AttachmentTypeFile,
+				FileName:    "main.go",
+				Size:        42,
+				TextContent: "package main\n\nfunc main() {\n\tprintln(\"hello\")\n}",
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	if !contains(result, "[文件: main.go]") {
+		t.Errorf("expected file header, got %q", result)
+	}
+	if !contains(result, "package main") {
+		t.Errorf("expected file content, got %q", result)
+	}
+	if !contains(result, "请帮我 review 这段代码") {
+		t.Errorf("expected original text, got %q", result)
+	}
+}
+
+func TestBuildUserMessageWithAttachments_Image(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "这是什么图片？",
+		Attachments: []channel.Attachment{
+			{
+				Type:     channel.AttachmentTypeImage,
+				FileName: "image.jpg",
+				Size:     65536,
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	if !contains(result, "[图片: image.jpg (64.0KB)]") {
+		t.Errorf("expected image summary, got %q", result)
+	}
+	if !contains(result, "这是什么图片？") {
+		t.Errorf("expected original text, got %q", result)
+	}
+}
+
+func TestBuildUserMessageWithAttachments_Error(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "看下这个文件",
+		Attachments: []channel.Attachment{
+			{
+				Type:     channel.AttachmentTypeFile,
+				FileName: "secret.pdf",
+				Error:    "download failed: connection reset",
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	if !contains(result, "下载失败") || !contains(result, "secret.pdf") {
+		t.Errorf("expected error info, got %q", result)
+	}
+	if !contains(result, "看下这个文件") {
+		t.Errorf("expected original text, got %q", result)
+	}
+}
+
+func TestBuildUserMessageWithAttachments_MultipleAttachments(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "",
+		Attachments: []channel.Attachment{
+			{
+				Type:        channel.AttachmentTypeFile,
+				FileName:    "a.txt",
+				TextContent: "file A",
+			},
+			{
+				Type:        channel.AttachmentTypeFile,
+				FileName:    "b.txt",
+				TextContent: "file B",
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	if !contains(result, "file A") || !contains(result, "file B") {
+		t.Errorf("expected both files, got %q", result)
+	}
+}
+
+func TestBuildUserMessageWithAttachments_BinaryFile(t *testing.T) {
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "解压这个文件",
+		Attachments: []channel.Attachment{
+			{
+				Type:     channel.AttachmentTypeFile,
+				FileName: "archive.zip",
+				MimeType: "application/zip",
+				Size:     1048576,
+				Content:  []byte{0x50, 0x4b, 0x03, 0x04}, // zip header
+			},
+		},
+	}
+	result := buildUserMessageWithAttachments(msg)
+	if !contains(result, "archive.zip") || !contains(result, "1.0MB") {
+		t.Errorf("expected binary file info, got %q", result)
+	}
+	if !contains(result, "解压这个文件") {
+		t.Errorf("expected original text, got %q", result)
+	}
+}
+
+// contains is a simple substring check helper.
+func contains(s, substr string) bool {
+	return len(s) >= len(substr) && containsStr(s, substr)
+}
+
+func containsStr(s, substr string) bool {
+	for i := 0; i <= len(s)-len(substr); i++ {
+		if s[i:i+len(substr)] == substr {
+			return true
+		}
+	}
+	return false
+}

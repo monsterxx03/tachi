@@ -407,7 +407,10 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// Wire up steer channel — this enables mid-turn user input injection.
 	aiAgent.SetSteerChannel(ta.steerRespCh)
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, msg.Content, m.systemPrompt, llm.ChatOptions{
+	// Build the user message text with attachment content prepended.
+	userContent := buildUserMessageWithAttachments(msg)
+
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
 		MaxTokens: m.resolvedConfig.MaxTokens,
 	})
 
@@ -1124,7 +1127,41 @@ func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingM
 	m.logger.Log("channel: cron response not delivered — no channel accepted thread %s", msg.ThreadID)
 }
 
-// sendToThread delivers a message to the channel responsible for the given
+// buildUserMessageWithAttachments constructs the user message text sent to
+// the LLM, prepending any file/attachment content before the user's own text.
+func buildUserMessageWithAttachments(msg channel.IncomingMessage) string {
+	if len(msg.Attachments) == 0 {
+		return msg.Content
+	}
+
+	var parts []string
+
+	for _, att := range msg.Attachments {
+		if att.Error != "" {
+			parts = append(parts, fmt.Sprintf("[文件: %s (下载失败: %s)]", att.FileName, att.Error))
+			continue
+		}
+
+		switch att.Type {
+		case channel.AttachmentTypeText, channel.AttachmentTypeFile:
+			if att.TextContent != "" {
+				parts = append(parts, fmt.Sprintf("[文件: %s]\n```\n%s\n```", att.FileName, att.TextContent))
+			} else {
+				parts = append(parts, fmt.Sprintf("[文件: %s (%s, %s)]",
+					att.FileName, att.MimeType, humanSize(int(att.Size))))
+			}
+
+		case channel.AttachmentTypeImage:
+			parts = append(parts, fmt.Sprintf("[图片: %s (%s)]", att.FileName, humanSize(int(att.Size))))
+		}
+	}
+
+	if msg.Content != "" {
+		parts = append(parts, msg.Content)
+	}
+
+	return strings.Join(parts, "\n\n")
+}
 // ThreadID. Used for intermediate progress messages in verbose mode.
 // This is best-effort — failures are logged but not propagated.
 func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo string) {

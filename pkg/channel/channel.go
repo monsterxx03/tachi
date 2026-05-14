@@ -43,6 +43,41 @@ package channel
 
 import "context"
 
+// AttachmentType categorises the type of file attachment in an incoming message.
+type AttachmentType string
+
+const (
+	AttachmentTypeText  AttachmentType = "text"
+	AttachmentTypeImage AttachmentType = "image"
+	AttachmentTypeFile  AttachmentType = "file"
+)
+
+// Attachment represents a file or media attachment received from an IM channel.
+type Attachment struct {
+	// Type indicates the kind of attachment (text, image, or generic file).
+	Type AttachmentType
+
+	// FileName is the original filename, if available (e.g. "report.pdf").
+	FileName string
+
+	// MimeType is a best-effort MIME type guess (e.g. "image/jpeg").
+	MimeType string
+
+	// Content is the raw decrypted bytes of the attachment.
+	Content []byte
+
+	// TextContent is the UTF-8 text extracted from the file (only for text-type
+	// files that were successfully decoded). Empty for binary files / images.
+	TextContent string
+
+	// Size is the plaintext size in bytes.
+	Size int64
+
+	// Error is non-empty when the attachment could not be downloaded or
+	// decrypted. Content/TextContent will be nil/empty in this case.
+	Error string
+}
+
 // IncomingMessage represents a message received from an IM channel.
 type IncomingMessage struct {
 	// ThreadID uniquely identifies the conversation thread. In WeChat this
@@ -60,6 +95,11 @@ type IncomingMessage struct {
 	// ChannelID is an optional higher-level grouping (e.g., Slack channel,
 	// WeChat group chat ID). Channels may use this for routing or logging.
 	ChannelID string
+
+	// Attachments holds any files or media sent alongside the text message.
+	// The channel implementation is responsible for downloading and decrypting
+	// the attachment data before populating this field.
+	Attachments []Attachment
 }
 
 // OutgoingMessage represents a response to send back to the IM channel.

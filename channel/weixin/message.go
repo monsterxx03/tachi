@@ -58,6 +58,53 @@ func extractRefText(ref *RefMessage) string {
 	return text
 }
 
+// --- Media Reference Extraction ---
+
+// MediaRef holds the extracted metadata for a media item in an incoming message.
+type MediaRef struct {
+	Type     int        // MessageItemTypeImage, MessageItemTypeFile, MessageItemTypeVideo
+	FileName string     // Original filename (may be empty for images)
+	Media    MediaData  // CDN media info
+	AESKey   string     // hex-encoded AES key (for images)
+	FileItem *FileItem  // non-nil for file type
+	ImageItem *MediaItem // non-nil for image type
+	RawSize  int        // plaintext size
+}
+
+// extractMediaItems extracts media references from message items.
+func extractMediaItems(items []MessageItem) []MediaRef {
+	var refs []MediaRef
+	for _, item := range items {
+		switch item.Type {
+		case MessageItemTypeFile:
+			if item.FileItem != nil {
+				rawSize := 0
+				if item.FileItem.Len != "" {
+					fmt.Sscanf(item.FileItem.Len, "%d", &rawSize)
+				}
+				refs = append(refs, MediaRef{
+					Type:     MessageItemTypeFile,
+					FileName: item.FileItem.FileName,
+					Media:    item.FileItem.Media,
+					FileItem: item.FileItem,
+					RawSize:  rawSize,
+				})
+			}
+		case MessageItemTypeImage:
+			if item.ImageItem != nil {
+				refs = append(refs, MediaRef{
+					Type:      MessageItemTypeImage,
+					FileName:  "image",
+					Media:     item.ImageItem.Media,
+					AESKey:    item.ImageItem.AESKey,
+					ImageItem: item.ImageItem,
+				})
+			}
+		}
+	}
+	return refs
+}
+
 // --- Message Sending ---
 
 // sendTextReply sends a plain-text reply message to a user.

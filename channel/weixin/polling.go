@@ -113,6 +113,15 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 
 	// Extract text content and media references.
 	text, _ := extractMessageText(msg.ItemList)
+	mediaRefs := extractMediaItems(msg.ItemList)
+
+	// Download and decrypt any files / images attached to this message.
+	var attachments []channel.Attachment
+	if len(mediaRefs) > 0 {
+		attachments = ch.processMedia(mediaRefs)
+		ch.logger.Log("weixin: processed %d media items for msg %d -> %d attachments",
+			len(mediaRefs), msg.MessageID, len(attachments))
+	}
 
 	// If we have a context_token, store it.
 	if msg.ContextToken != "" && msg.FromUserID != "" {
@@ -133,10 +142,11 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	}
 
 	inMsg := channel.IncomingMessage{
-		ThreadID:  threadID,
-		MessageID: messageID,
-		Content:   text,
-		ChannelID: msg.GroupID,
+		ThreadID:    threadID,
+		MessageID:   messageID,
+		Content:     text,
+		ChannelID:   msg.GroupID,
+		Attachments: attachments,
 	}
 
 	ch.logger.Log("weixin: dispatching msg from %s (thread=%s): %s", msg.FromUserID, threadID, truncate(text, 100))
