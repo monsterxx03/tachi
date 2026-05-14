@@ -35,7 +35,7 @@ func NewSkillViewTool(loader SkillLoader) *SkillViewTool {
 func (t *SkillViewTool) Name() string { return ToolNameSkillView }
 
 func (t *SkillViewTool) Description() string {
-	return "Load a skill's full instructions. Use skills_list first to see available skills."
+	return "Load a skill's full instructions. Use SkillsList first to see available skills."
 }
 
 func (t *SkillViewTool) Properties() map[string]PropertySchema {

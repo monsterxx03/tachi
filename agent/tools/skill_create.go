@@ -45,7 +45,7 @@ func NewSkillCreateTool(creator SkillCreator) *SkillCreateTool {
 func (t *SkillCreateTool) Name() string { return ToolNameSkillCreate }
 
 func (t *SkillCreateTool) Description() string {
-	return fmt.Sprintf("Create a new skill. The skill will appear in skills_list and can be activated with /name or skill_view. Defaults to project-level; set source to \"global\" for %s/.", config.GlobalSkillsDir())
+	return fmt.Sprintf("Create a new skill. The skill will appear in SkillsList and can be activated with /name or SkillView. Defaults to project-level; set source to \"global\" for %s/.", config.GlobalSkillsDir())
 }
 
 func (t *SkillCreateTool) Properties() map[string]PropertySchema {
@@ -120,7 +120,7 @@ func (t *SkillCreateTool) ExecuteContext(ctx context.Context, args string) (stri
 	}
 	output.Success = true
 	output.Skill = *result
-	output.Message = fmt.Sprintf("Skill %q created at %s. It will appear in skills_list immediately.", result.Name, result.Path)
+	output.Message = fmt.Sprintf("Skill %q created at %s. It will appear in SkillsList immediately.", result.Name, result.Path)
 
 	b, err := json.Marshal(output)
 	if err != nil {

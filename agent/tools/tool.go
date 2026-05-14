@@ -21,9 +21,9 @@ const (
 	ToolNameGrep      = "Grep"
 	ToolNameWebSearch = "WebSearch"
 	ToolNameWebFetch  = "WebFetch"
-	ToolNameSkillsList  = "skills_list"
-	ToolNameSkillView   = "skill_view"
-	ToolNameSkillCreate = "skill_create"
+	ToolNameSkillsList  = "SkillsList"
+	ToolNameSkillView   = "SkillView"
+	ToolNameSkillCreate = "SkillCreate"
 )
 
 // PropertySchema defines a single property in the schema

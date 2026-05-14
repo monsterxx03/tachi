@@ -33,7 +33,7 @@ func NewSkillsListTool(lister SkillLister) *SkillsListTool {
 func (t *SkillsListTool) Name() string { return ToolNameSkillsList }
 
 func (t *SkillsListTool) Description() string {
-	return "List available skills with name and description. Use skill_view(name) to load full content."
+	return "List available skills with name and description. Use SkillView(name) to load full content."
 }
 
 func (t *SkillsListTool) Properties() map[string]PropertySchema {

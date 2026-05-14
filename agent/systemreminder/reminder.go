@@ -288,7 +288,7 @@ type SkillMetaRecord struct {
 }
 
 // SkillListReminder injects the compact skill catalog into every user message
-// so the LLM always knows what skills it can activate via skill_view().
+// so the LLM always knows what skills it can activate via SkillView().
 type SkillListReminder struct {
 	provider SkillMetaProvider
 }
@@ -332,7 +332,7 @@ func buildSkillListPrompt(metas []SkillMetaRecord) string {
 	}
 
 	b.WriteString("</available_skills>\n")
-	b.WriteString("\nTo use a skill, call skill_view(name) or the user can type /skill-name.")
+	b.WriteString("\nTo use a skill, call SkillView(name) or the user can type /skill-name.")
 
 	return b.String()
 }
