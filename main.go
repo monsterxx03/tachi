@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"os"
@@ -166,11 +167,21 @@ func main() {
 			{
 				Name:  "run",
 				Usage: "Run the AI agent (single-turn)",
-				Flags: append(commonFlags, &cli.StringFlag{
-					Name:    "prompt",
-					Aliases: []string{"p"},
-					Usage:   "User prompt to send",
-				}),
+				Flags: append(commonFlags,
+					&cli.StringFlag{
+						Name:    "prompt",
+						Aliases: []string{"p"},
+						Usage:   "User prompt to send",
+					},
+					&cli.BoolFlag{
+						Name:  "json",
+						Usage: "Output structured JSON instead of human-readable text",
+					},
+					&cli.DurationFlag{
+						Name:  "timeout",
+						Usage: "Maximum execution time (e.g. 5m, 30s, 1h)",
+					},
+				),
 				Action: runAgent,
 			},
 			{
@@ -340,7 +351,56 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	})
 }
 
+// runJSONResult is the structured JSON output for `tachi run --json`.
+type runJSONResult struct {
+	ExitReason     string     `json:"exit_reason"`
+	IterationsUsed int        `json:"iterations_used"`
+	Usage          *usageJSON `json:"usage"`
+	Response       string     `json:"response"`
+	Error          string     `json:"error,omitempty"`
+}
+
+type usageJSON struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+}
+
+func usageToJSON(u *llm.Usage) *usageJSON {
+	if u == nil {
+		return nil
+	}
+	return &usageJSON{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+	}
+}
+
+// exitCodeForReason maps agent exit reasons to Unix exit codes.
+func exitCodeForReason(reason string) int {
+	switch reason {
+	case "stop":
+		return 0
+	case "budget_exhausted", "length_exhausted":
+		return 2
+	case "interrupted":
+		return 130 // standard SIGINT exit code
+	default: // "error", "cancelled", etc.
+		return 1
+	}
+}
+
 func runAgent(ctx context.Context, cmd *cli.Command) error {
+	// Apply optional timeout.
+	if timeout := cmd.Duration("timeout"); timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
@@ -376,8 +436,17 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if prompt == "" {
 		prompt = "Write 'Hello, World!' to /tmp/test.txt and then read it back"
 	}
-	fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
-	fmt.Printf("User: %s\n\n", prompt)
+
+	jsonOutput := cmd.Bool("json")
+
+	// In JSON mode, progress info goes to stderr so stdout is pure JSON.
+	if jsonOutput {
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+		fmt.Fprintf(os.Stderr, "User: %s\n\n", prompt)
+	} else {
+		fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+		fmt.Printf("User: %s\n\n", prompt)
+	}
 
 	var history []llm.Message
 
@@ -400,7 +469,12 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 				} else {
 					aiAgent.SetProvider(provider, sp.Model)
 					resolved.Provider = *sp
-					fmt.Printf("Provider (restored): %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+					restoreMsg := fmt.Sprintf("Provider (restored): %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+					if jsonOutput {
+						fmt.Fprintf(os.Stderr, "%s", restoreMsg)
+					} else {
+						fmt.Printf("%s", restoreMsg)
+					}
 				}
 			}
 		}
@@ -426,13 +500,27 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		result = &agent.RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
 	}
 
-	fmt.Printf("Exit Reason: %s\n", result.ExitReason)
-	fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)
-	fmt.Printf("\nResponse:\n%s\n", result.Response)
-
-	if result.Error != nil {
-		return fmt.Errorf("error: %v", result.Error)
+	if jsonOutput {
+		// Emit structured JSON to stdout.
+		jr := runJSONResult{
+			ExitReason:     result.ExitReason,
+			IterationsUsed: result.IterationsUsed,
+			Usage:          usageToJSON(result.Usage),
+			Response:       result.Response,
+		}
+		if result.Error != nil {
+			jr.Error = result.Error.Error()
+		}
+		out, _ := json.Marshal(jr)
+		fmt.Println(string(out))
+	} else {
+		fmt.Printf("Exit Reason: %s\n", result.ExitReason)
+		fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)
+		fmt.Printf("\nResponse:\n%s\n", result.Response)
 	}
+
+	// Map exit reason to proper exit code.
+	os.Exit(exitCodeForReason(result.ExitReason))
 	return nil
 }
 

@@ -392,6 +392,7 @@ type RunResult struct {
 	IterationsUsed int
 	ExitReason     string
 	Error          error
+	Usage          *llm.Usage // optional: token usage from the final turn
 }
 
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, opts llm.ChatOptions) *RunResult {
@@ -571,6 +572,7 @@ func (a *AIAgent) handleFinishReason(
 					IterationsUsed: apiCallCount,
 					ExitReason:     "length_exhausted",
 					Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+					Usage:          acc.usage,
 				},
 			}
 			return false
@@ -627,7 +629,7 @@ func (a *AIAgent) handleFinishReason(
 
 		ch <- AgentEvent{
 			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop"},
+			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop", Usage: acc.usage},
 		}
 		return false
 	}
