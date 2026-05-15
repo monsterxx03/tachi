@@ -4,12 +4,12 @@
 
 ## 前置条件
 
-| 依赖 | 说明 |
-|---|---|
-| [Harbor CLI](https://github.com/harbor-framework/harbor) | `pip install harbor` 或 `uv tool install harbor` |
-| [Docker](https://docs.docker.com/get-docker/) | Harbor 默认用 Docker 作为运行环境 |
-| Go 1.22+ | 编译 Tachi Linux 二进制 |
-| API Key | Anthropic 或 OpenAI |
+| 依赖                                                     | 说明                                                                |
+| -------------------------------------------------------- | ------------------------------------------------------------------- |
+| [Harbor CLI](https://github.com/harbor-framework/harbor) | `pip install harbor` 或 `uv tool install harbor`                    |
+| [Docker](https://docs.docker.com/get-docker/)            | Harbor 默认用 Docker 作为运行环境                                   |
+| Go 1.22+                                                 | 编译 Tachi Linux 二进制                                             |
+| API Key                                                  | DeepSeek `DEEPSEEK_API_KEY`（默认）或 Anthropic `ANTHROPIC_API_KEY` |
 
 ## 快速开始
 
@@ -22,15 +22,14 @@ make build-linux
 
 这会在当前目录生成 `tachi-linux-amd64`。
 
-### 2. 运行 Terminal-Bench
+### 2. 运行 Terminal-Bench（默认使用 deepseek-v4-pro）
 
 ```bash
-export ANTHROPIC_API_KEY="sk-ant-..."
+export DEEPSEEK_API_KEY="sk-..."
 
 harbor run \
     --dataset terminal-bench@2.0 \
-    --agent-import-path ./harbor_adapter/tachi_agent.py:TachiAgent \
-    --model anthropic/claude-sonnet-4-20250514 \
+    --agent-import-path harbor_adapter.tachi_agent:TachiAgent \
     --n-concurrent 4
 ```
 
@@ -38,21 +37,35 @@ harbor run \
 
 ```bash
 harbor run \
-    --task-id hello-world/hello-world \
+    --task hello-world/hello-world \
+    --agent-import-path harbor_adapter.tachi_agent:TachiAgent
+```
+
+### 使用其它模型
+
+```bash
+# 使用 Claude
+export ANTHROPIC_API_KEY="sk-ant-..."
+harbor run \
+    --dataset terminal-bench@2.0 \
     --agent-import-path ./harbor_adapter/tachi_agent.py:TachiAgent \
-    --model anthropic/claude-sonnet-4-20250514
+    --model anthropic/claude-sonnet-4-20250514 \
+    --n-concurrent 4
 ```
 
 ## 配置选项
 
 ### 环境变量
 
-| 变量 | 默认值 | 说明 |
-|---|---|---|
-| `TACHI_BINARY_PATH` | `./tachi-linux-amd64` | 自定义二进制路径 |
-| `TACHI_BINARY_URL` | — | 从 URL 下载二进制（优先级高于 `PATH`） |
-| `TACHI_MAX_ITERATIONS` | `50` | 最大 agent 循环次数 |
-| `TACHI_TIMEOUT` | `10m` | 单次执行超时 |
+| 变量                   | 默认值                | 说明                                                 |
+| ---------------------- | --------------------- | ---------------------------------------------------- |
+| `DEEPSEEK_API_KEY`     | —                     | DeepSeek API Key（默认模型 deepseek-v4-pro）         |
+| `ANTHROPIC_API_KEY`    | —                     | Anthropic API Key（使用 `--model anthropic/...` 时） |
+| `OPENAI_API_KEY`       | —                     | OpenAI API Key                                       |
+| `TACHI_BINARY_PATH`    | `./tachi-linux-amd64` | 自定义二进制路径                                     |
+| `TACHI_BINARY_URL`     | —                     | 从 URL 下载二进制（优先级高于 `PATH`）               |
+| `TACHI_MAX_ITERATIONS` | `50`                  | 最大 agent 循环次数                                  |
+| `TACHI_TIMEOUT`        | `10m`                 | 单次执行超时                                         |
 
 ### Agent 参数（`--ak`）
 
@@ -91,11 +104,11 @@ Tachi 的 JSON 输出格式：
 
 ### Exit Code 映射
 
-| Exit Reason | Exit Code | 含义 |
-|---|---|---|
-| `stop` | 0 | 正常完成 |
-| `error`, `cancelled` | 1 | 执行出错 |
-| `budget_exhausted`, `length_exhausted` | 2 | 配额耗尽 |
+| Exit Reason                            | Exit Code | 含义     |
+| -------------------------------------- | --------- | -------- |
+| `stop`                                 | 0         | 正常完成 |
+| `error`, `cancelled`                   | 1         | 执行出错 |
+| `budget_exhausted`, `length_exhausted` | 2         | 配额耗尽 |
 
 ## 架构
 

@@ -1,8 +1,13 @@
 # Build output
 tachi
+tachi-linux-amd64
+tachi-linux-arm64
 
 # Third-party channel plugins (local development only)
 third_party_channels.go
 go.work
 go.work.sum
 .tachi
+
+# harbor
+__pycache__
