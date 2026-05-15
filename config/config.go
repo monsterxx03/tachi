@@ -143,8 +143,14 @@ func (srv *MCPServerConfig) IsEnabled() bool {
 
 // TUIConfig 控制终端界面行为。
 type TUIConfig struct {
-	InputHistoryLimit int  `yaml:"input_history_limit" default:"10"`
-	SkipEditConfirm   bool `yaml:"skip_edit_confirm"`
+	InputHistoryLimit int   `yaml:"input_history_limit" default:"10"`
+	SkipEditConfirm   bool  `yaml:"skip_edit_confirm"`
+	NotifyOnComplete  *bool `yaml:"notify_on_complete" default:"true"` // 是否在 LLM 回合结束后发送终端通知
+}
+
+// NotifyEnabled 返回是否启用了回合结束通知。默认启用。
+func (t *TUIConfig) NotifyEnabled() bool {
+	return t.NotifyOnComplete == nil || *t.NotifyOnComplete
 }
 
 type SystemReminderConfig struct {

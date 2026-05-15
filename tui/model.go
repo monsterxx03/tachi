@@ -100,6 +100,8 @@ type Model struct {
 	sessionSelIdx    int
 	sessionScrollOff int // scroll offset for session list
 
+	notifyOnComplete bool // whether to send terminal notification on turn complete
+
 	logger *debuglog.Logger
 }
 
@@ -119,17 +121,18 @@ type ModelConfig struct {
 
 func NewModel(cfg ModelConfig) *Model {
 	m := &Model{
-		statusbar:    NewStatusBar(cfg.ProviderInfo, cfg.ContextWindow),
-		chatview:     NewChatView(),
-		input:        NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
-		agent:        cfg.Agent,
+		statusbar:   NewStatusBar(cfg.ProviderInfo, cfg.ContextWindow),
+		chatview:    NewChatView(),
+		input:       NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
+		agent:       cfg.Agent,
 		systemPrompt: cfg.SystemPrompt,
-		chatOpts:     cfg.ChatOpts,
-		state:        stateIdle,
-		cfg:          cfg.Config,
-		mcpManager:   cfg.MCPManager,
-		mcpServers:   cfg.MCPServers,
+		chatOpts:    cfg.ChatOpts,
+		state:       stateIdle,
+		cfg:         cfg.Config,
+		mcpManager:  cfg.MCPManager,
+		mcpServers:  cfg.MCPServers,
 		thinkingView: NewThinkingView(),
+		notifyOnComplete: cfg.Config.TUI.NotifyEnabled(),
 	}
 
 	if len(cfg.InitialHistory) > 0 {
@@ -905,6 +908,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.chatview.FinishStreaming()
 		m.syncSessionInfo()
 
+		// Send terminal notification when a turn completes (not for one-offs like /commit).
+		if m.notifyOnComplete && !isOneOff {
+			notifyTerminal("tachi", "Reply ready")
+		}
+
 		// Drain pending queue if not in a one-off context (e.g. /commit, /init).
 		if len(m.pendingQueue) > 0 && !isOneOff {
 			combined := strings.Join(m.pendingQueue, "\n\n")
@@ -960,6 +968,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 				errMsg = event.Result.Error.Error()
 			}
 			m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
+			// Notify on error (but not for user-initiated interruptions).
+			if m.notifyOnComplete {
+				notifyTerminal("tachi", "Error — "+errMsg)
+			}
 		}
 		m.setState(stateIdle)
 		m.cancelFunc = nil
