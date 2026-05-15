@@ -1,6 +1,8 @@
 package manager
 
 import (
+	"archive/zip"
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -1351,13 +1353,23 @@ func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.H
 	if fileName == "" {
 		fileName = "transcript"
 	}
-	fileName = fmt.Sprintf("%s-%s.html", fileName, sess.ID[:8])
+	htmlFileName := fmt.Sprintf("%s-%s.html", fileName, sess.ID[:8])
+	zipFileName := fmt.Sprintf("%s-%s-transcript.zip", fileName, sess.ID[:8])
 
 	m.logger.Log("channel: transcript generated for session %s (%d bytes)", sess.ID, len(html))
 
-	contentText := fmt.Sprintf("📊 Transcript: %s\n\nSession: %s\nTurns: %d · Tools: %d · Size: %s",
+	// Compress the HTML into a zip archive so WeChat (and other IM
+	// platforms that block .html files for security reasons) can
+	// deliver it as a regular file attachment. The user can extract
+	// and open the HTML in any browser.
+	zipData, err := zipFile(htmlFileName, []byte(html))
+	if err != nil {
+		return errReply(fmt.Errorf("compress transcript: %w", err))
+	}
+
+	contentText := fmt.Sprintf("📊 Transcript: %s\n\nSession: %s\nTurns: %d · Tools: %d · HTML: %s · Zip: %s",
 		sess.Title, sess.ID[:8],
-		data.Stats.TurnCount, data.Stats.ToolCallCount, humanSize(len(html)))
+		data.Stats.TurnCount, data.Stats.ToolCallCount, humanSize(len(html)), humanSize(len(zipData)))
 
 	return channel.HandlerResult{
 		Reply: channel.OutgoingMessage{
@@ -1366,14 +1378,31 @@ func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.H
 			Attachments: []channel.OutgoingAttachment{
 				{
 					Type:     channel.AttachmentTypeFile,
-					FileName: fileName,
-					MimeType: "text/html",
-					Data:     []byte(html),
+					FileName: zipFileName,
+					MimeType: "application/zip",
+					Data:     zipData,
 				},
 			},
 			ReplyTo: msg.MessageID,
 		},
 	}
+}
+
+// zipFile creates an in-memory ZIP archive containing a single file.
+func zipFile(name string, data []byte) ([]byte, error) {
+	var buf bytes.Buffer
+	w := zip.NewWriter(&buf)
+	f, err := w.Create(name)
+	if err != nil {
+		return nil, fmt.Errorf("create zip entry: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return nil, fmt.Errorf("write zip entry: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return nil, fmt.Errorf("close zip: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 // sanitizeFilename replaces characters that are problematic in filenames.
