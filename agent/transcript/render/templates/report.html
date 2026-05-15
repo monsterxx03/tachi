@@ -6,131 +6,153 @@
 <title>Tachi Transcript — {{.Session.Title}}</title>
 <style>
   :root {
-    --bg: #1a1b26; --bg2: #24283b; --bg-card: #1f2335;
-    --border: #3b4261; --text: #c0caf5; --muted: #565f89;
-    --dim: #9aa5ce; --accent: #7aa2f7; --green: #9ece6a;
-    --red: #f7768e; --orange: #e0af68; --purple: #bb9af7;
-    --cyan: #7dcfff; --radius: 8px;
+    --bg: #fafaf8;
+    --bg2: #f3f2ef;
+    --card: #ffffff;
+    --border: #e4e3df;
+    --border-strong: #d4d3ce;
+    --text: #2c2c28;
+    --text-dim: #6b6b65;
+    --muted: #9d9d95;
+    --accent: #4a9e6e;
+    --accent-soft: #e8f5ed;
+    --blue: #3b82c4;
+    --blue-soft: #eff6ff;
+    --yellow: #b8860b;
+    --yellow-soft: #fefce8;
+    --red: #d9444f;
+    --red-soft: #fef2f2;
+    --purple: #7c3aed;
+    --purple-soft: #f5f3ff;
+    --radius: 6px;
+    --shadow: 0 1px 3px rgba(0,0,0,.06);
     --mono: 'SF Mono','Fira Code','Cascadia Code',monospace;
     --sans: -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
   }
   *{margin:0;padding:0;box-sizing:border-box}
-  body{background:var(--bg);color:var(--text);font-family:var(--sans);line-height:1.6;min-height:100vh}
-  .header{background:var(--bg2);border-bottom:1px solid var(--border);padding:14px 24px;position:sticky;top:0;z-index:100}
-  .header-inner{max-width:1100px;margin:0 auto;display:flex;align-items:center;gap:10px}
-  .dot{width:10px;height:10px;border-radius:50%;display:inline-block}
-  .dot-r{background:var(--red)}.dot-y{background:var(--orange)}.dot-g{background:var(--green)}
-  .header-title{font-size:13px;color:var(--dim);margin-left:6px}
-  .main{max-width:1100px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 280px;gap:20px}
+  body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:16px;line-height:1.65;min-height:100vh}
+
+  /* ── Top bar ── */
+  .topbar{background:var(--card);border-bottom:1px solid var(--border);padding:14px 24px;position:sticky;top:0;z-index:100}
+  .topbar-inner{max-width:1200px;margin:0 auto;display:flex;align-items:center;gap:12px}
+  .logo{font-size:16px;font-weight:700;color:var(--accent);letter-spacing:-0.3px}
+  .topbar-title{font-size:14px;color:var(--text-dim)}
+
+  /* ── Layout ── */
+  .main{max-width:1200px;margin:0 auto;padding:24px;display:grid;grid-template-columns:1fr 300px;gap:24px}
+  #timeline{min-width:0;overflow:hidden}
   @media(max-width:800px){.main{grid-template-columns:1fr}.sidebar{order:-1}}
 
-  /* Session Card */
-  .sess{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:18px 20px;grid-column:1/-1}
-  .sess h1{font-size:17px;font-weight:600;margin-bottom:6px}
-  .sess-meta{display:flex;gap:16px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+  /* ── Session card ── */
+  .sess{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:20px 24px;grid-column:1/-1;box-shadow:var(--shadow)}
+  .sess h1{font-size:20px;font-weight:600;margin-bottom:8px;color:var(--text)}
+  .sess-meta{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--text-dim)}
   .sess-meta span{display:flex;align-items:center;gap:4px}
 
-  /* Sidebar */
+  /* ── Sidebar ── */
   .sidebar{display:flex;flex-direction:column;gap:14px}
-  .scard{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:14px}
-  .scard h3{font-size:10px;text-transform:uppercase;letter-spacing:1px;color:var(--muted);margin-bottom:10px}
-  .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:6px}
-  .sitem{text-align:center;padding:8px 4px;background:var(--bg);border-radius:5px}
-  .sitem .n{font-size:20px;font-weight:700;color:var(--accent)}
-  .sitem .l{font-size:10px;color:var(--muted)}
-  .flist{list-style:none;font-size:12px}
-  .flist li{display:flex;justify-content:space-between;padding:3px 0;border-bottom:1px solid var(--border)}
+  .scard{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:16px;box-shadow:var(--shadow)}
+  .scard h3{font-size:11px;text-transform:uppercase;letter-spacing:0.8px;color:var(--muted);margin-bottom:12px;font-weight:600}
+  .sgrid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+  .sitem{text-align:center;padding:10px 4px;background:var(--bg);border-radius:5px}
+  .sitem .n{font-size:22px;font-weight:700;color:var(--accent)}
+  .sitem .l{font-size:11px;color:var(--text-dim);margin-top:2px}
+  .flist{list-style:none;font-size:13px}
+  .flist li{display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--bg)}
   .flist li:last-child{border-bottom:none}
-  .fname{color:var(--orange);font-family:var(--mono);font-size:11px}
-  .fcnt{color:var(--dim)}
+  .fname{color:var(--text-dim);font-family:var(--mono);font-size:12px}
+  .fcnt{color:var(--muted);font-weight:500}
 
-  /* Toolbar */
-  .tbar{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:sticky;top:61px;z-index:50;margin-bottom:16px}
-  .search{flex:1;min-width:140px;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:5px 10px;color:var(--text);font-size:12px;outline:none}
+  /* ── Toolbar ── */
+  .tbar{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);padding:10px 14px;display:flex;gap:10px;align-items:center;flex-wrap:wrap;position:sticky;top:48px;z-index:50;margin-bottom:16px;box-shadow:var(--shadow)}
+  .search{flex:1;min-width:140px;background:var(--bg);border:1px solid var(--border);border-radius:5px;padding:6px 10px;color:var(--text);font-size:13px;outline:none;transition:border-color .15s}
   .search:focus{border-color:var(--accent)}
-  .fgrp{display:flex;gap:3px;flex-wrap:wrap}
-  .chip{font-size:10px;padding:3px 8px;border-radius:10px;border:1px solid var(--border);background:var(--bg);color:var(--dim);cursor:pointer;transition:all .15s;user-select:none;white-space:nowrap}
-  .chip.on{background:var(--accent);color:var(--bg);border-color:var(--accent)}
-  .chip:hover:not(.on){border-color:var(--muted)}
-  .btn{font-size:10px;padding:3px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg);color:var(--dim);cursor:pointer;white-space:nowrap}
-  .btn:hover{border-color:var(--accent);color:var(--text)}
-  .rcnt{font-size:10px;color:var(--muted);white-space:nowrap}
+  .search::placeholder{color:var(--muted)}
+  .fgrp{display:flex;gap:4px;flex-wrap:wrap}
+  .chip{font-size:11px;padding:3px 10px;border-radius:12px;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);cursor:pointer;transition:all .15s;user-select:none;white-space:nowrap}
+  .chip.on{background:var(--accent);color:#fff;border-color:var(--accent)}
+  .chip:hover:not(.on){border-color:var(--accent);color:var(--text)}
+  .btn{font-size:11px;padding:4px 10px;border-radius:5px;border:1px solid var(--border);background:var(--bg);color:var(--text-dim);cursor:pointer;white-space:nowrap;transition:all .15s}
+  .btn:hover{border-color:var(--accent);color:var(--accent)}
+  .rcnt{font-size:11px;color:var(--muted);white-space:nowrap}
 
-  /* Turn */
-  .turn{background:var(--bg-card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden}
-  .turn-header{display:flex;align-items:center;gap:8px;padding:10px 14px;cursor:pointer;user-select:none;transition:background .1s}
-  .turn-header:hover{background:var(--bg2)}
-  .turn-caret{font-size:10px;color:var(--muted);transition:transform .2s;width:14px;text-align:center;flex-shrink:0}
+  /* ── Turn ── */
+  .turn{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);margin-bottom:12px;overflow:hidden;box-shadow:var(--shadow)}
+  .turn-header{display:flex;align-items:center;gap:8px;padding:12px 16px;cursor:pointer;user-select:none;transition:background .1s}
+  .turn-header:hover{background:var(--bg)}
+  .turn-caret{font-size:11px;color:var(--muted);transition:transform .2s;width:14px;text-align:center;flex-shrink:0}
   .turn.collapsed .turn-caret{transform:rotate(-90deg)}
-  .turn-label{font-size:12px;font-weight:600;color:var(--accent);white-space:nowrap}
-  .turn-preview{font-size:12px;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
-  .turn-duration{font-size:10px;color:var(--muted);white-space:nowrap}
-  .turn-body{padding:0 14px 10px}
+  .turn-label{font-size:13px;font-weight:600;color:var(--accent);white-space:nowrap}
+  .turn-preview{font-size:13px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .turn-duration{font-size:11px;color:var(--muted);white-space:nowrap}
+  .turn-body{padding:0 16px 12px}
   .turn.collapsed .turn-body{display:none}
 
-  /* Events */
-  .ev{margin-bottom:6px;position:relative}
-  .ev-header{display:flex;align-items:flex-start;gap:8px;padding:6px 8px;border-radius:5px;cursor:default}
+  /* ── Events ── */
+  .ev{margin-bottom:6px}
+  .ev-header{display:flex;align-items:flex-start;gap:8px;padding:7px 10px;border-radius:var(--radius);cursor:default}
   .ev-header.clickable{cursor:pointer}
   .ev-header.clickable:hover{background:var(--bg)}
-  .ev-icon{flex-shrink:0;width:20px;text-align:center;font-size:13px}
-  .ev-body{margin-left:28px;padding:2px 0 4px 12px;border-left:2px solid var(--border)}
+  .ev-icon{flex-shrink:0;width:22px;text-align:center;font-size:14px}
+  .ev-body{margin-left:30px;padding:4px 0 6px 14px;border-left:2px solid var(--border);overflow:hidden;min-width:0}
   .ev-thinking .ev-body{border-left-color:var(--muted)}
   .ev-text .ev-body{border-left-color:var(--accent)}
-  .ev-tool_call .ev-body{border-left-color:var(--orange)}
-  .ev-tool_result .ev-body{border-left-color:var(--green)}
+  .ev-tool_call .ev-body{border-left-color:var(--yellow)}
+  .ev-tool_result .ev-body{border-left-color:var(--accent)}
   .ev-error .ev-body{border-left-color:var(--red)}
-  .ev-user .ev-body{border-left-color:var(--purple)}
+  .ev-user .ev-body{border-left-color:var(--blue)}
   .ev-subagent .ev-body{border-left-color:var(--purple)}
-  .ev-content{font-size:13px;color:var(--text);white-space:pre-wrap;word-break:break-word;line-height:1.55}
-  .ev-content.mono{font-family:var(--mono);font-size:11px}
-  .ev-thinking .ev-content{color:var(--muted);font-style:italic}
+  .ev-content{font-size:14px;color:var(--text);white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word;line-height:1.65}
+  .ev-content.mono{font-family:var(--mono);font-size:12px;line-height:1.55}
+  .ev-thinking .ev-content{color:var(--text-dim);font-style:italic}
   .ev-error .ev-content{color:var(--red)}
-  .ev-meta{font-size:10px;color:var(--muted);margin-top:2px;display:flex;gap:10px}
-  .ev-toggle{font-size:10px;color:var(--muted);cursor:pointer;user-select:none}
-  .ev-toggle:hover{color:var(--text)}
-  .ev-thinking .ev-body.collapsed{display:none}
-  .ev-args{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:6px 10px;margin-top:4px;font-family:var(--mono);font-size:11px;color:var(--dim);white-space:pre-wrap;max-height:200px;overflow-y:auto}
+  .ev-meta{font-size:11px;color:var(--muted);margin-top:3px;display:flex;gap:10px;flex-shrink:0}
+  .ev-toggle{font-size:12px;color:var(--accent);cursor:pointer;user-select:none;font-weight:500}
+  .ev-toggle:hover{opacity:.7}
+  .ev-body.collapsed{display:none}
+  .ev-args{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 12px;margin-top:4px;font-family:var(--mono);font-size:12px;color:var(--text-dim);white-space:pre-wrap;max-height:200px;overflow-y:auto;line-height:1.5}
+  .ev-tool_result .ev-body{overflow:hidden;min-width:0}
 
-  /* Children (sub-agent) */
-  .ev-children{margin-left:12px;margin-top:4px;padding-left:12px;border-left:1px dashed var(--border)}
+  /* ── Children (sub-agent) ── */
+  .ev-children{margin-left:12px;margin-top:6px;padding-left:14px;border-left:1px dashed var(--border-strong)}
   .ev-children.collapsed{display:none}
 
+  /* ── Empty ── */
   .empty-state{text-align:center;padding:60px 20px;color:var(--muted)}
-  .empty-state p{font-size:15px;margin-bottom:6px}
+  .empty-state p{font-size:16px;margin-bottom:6px}
 </style>
 </head>
 <body>
-<div class="header">
-  <div class="header-inner">
-    <span class="dot dot-r"></span><span class="dot dot-y"></span><span class="dot dot-g"></span>
-    <span class="header-title">Tachi Transcript</span>
+<div class="topbar">
+  <div class="topbar-inner">
+    <span class="logo">⚡ Tachi</span>
+    <span class="topbar-title">Transcript Report</span>
   </div>
 </div>
 <div class="main">
   <div class="sess">
-    <h1>🗣 {{.Session.Title}}</h1>
+    <h1>{{.Session.Title}}</h1>
     <div class="sess-meta">
       <span>📅 {{.Session.CreatedAt}}</span>
       <span>🤖 {{.Session.Provider}} / {{.Session.Model}}</span>
       <span>⏱ {{.Session.Duration}}</span>
-      <span>🆔 {{.Session.ID}}</span>
+      <span style="font-family:var(--mono);font-size:11px">🆔 {{.Session.ID}}</span>
     </div>
   </div>
 
   <div id="timeline">
     <div class="tbar">
-      <input class="search" type="text" id="search" placeholder="🔍 Search..." oninput="filter()">
+      <input class="search" type="text" id="search" placeholder="搜索事件..." oninput="filter()">
       <div class="fgrp" id="filters">
-        <span class="chip on" data-type="all" onclick="toggleChip(this)">All</span>
-        <span class="chip on" data-type="user" onclick="toggleChip(this)">👤 User</span>
-        <span class="chip on" data-type="thinking" onclick="toggleChip(this)">💭 Think</span>
-        <span class="chip on" data-type="text" onclick="toggleChip(this)">💬 Text</span>
-        <span class="chip on" data-type="tool_call" onclick="toggleChip(this)">🔧 Tool</span>
-        <span class="chip on" data-type="tool_result" onclick="toggleChip(this)">📋 Result</span>
+        <span class="chip on" data-type="all" onclick="toggleChip(this)">全部</span>
+        <span class="chip on" data-type="user" onclick="toggleChip(this)">👤 用户</span>
+        <span class="chip on" data-type="thinking" onclick="toggleChip(this)">💭 思考</span>
+        <span class="chip on" data-type="text" onclick="toggleChip(this)">💬 回复</span>
+        <span class="chip on" data-type="tool_call" onclick="toggleChip(this)">🔧 工具</span>
+        <span class="chip on" data-type="tool_result" onclick="toggleChip(this)">📋 结果</span>
       </div>
-      <button class="btn" onclick="expandAll()">⊞ All</button>
-      <button class="btn" onclick="collapseAll()">⊟ All</button>
+      <button class="btn" onclick="expandAll()">展开全部</button>
+      <button class="btn" onclick="collapseAll()">折叠全部</button>
       <span class="rcnt" id="rcnt"></span>
     </div>
 
@@ -150,28 +172,28 @@
 
     {{if not .Transcript.Turns}}
     <div class="empty-state">
-      <p>📭 No transcript data for this session.</p>
-      <p style="font-size:12px">Run a conversation first — transcripts are recorded during agent execution.</p>
+      <p>📭 暂无对话记录</p>
+      <p style="font-size:12px">进行一次对话后，这里会显示完整的执行记录。</p>
     </div>
     {{end}}
   </div>
 
   <div class="sidebar">
     <div class="scard">
-      <h3>📊 Stats</h3>
+      <h3>📊 统计</h3>
       <div class="sgrid">
-        <div class="sitem"><div class="n">{{.Stats.TurnCount}}</div><div class="l">Turns</div></div>
-        <div class="sitem"><div class="n">{{.Stats.UserMsgCount}}</div><div class="l">Messages</div></div>
-        <div class="sitem"><div class="n">{{.Stats.ToolCallCount}}</div><div class="l">Tool Calls</div></div>
-        <div class="sitem"><div class="n">{{.Stats.ThinkingCount}}</div><div class="l">Thinking</div></div>
-        <div class="sitem"><div class="n">{{.Stats.TextCount}}</div><div class="l">Replies</div></div>
-        <div class="sitem"><div class="n">{{.Stats.SubAgentCount}}</div><div class="l">Sub-agents</div></div>
+        <div class="sitem"><div class="n">{{.Stats.TurnCount}}</div><div class="l">轮次</div></div>
+        <div class="sitem"><div class="n">{{.Stats.UserMsgCount}}</div><div class="l">用户消息</div></div>
+        <div class="sitem"><div class="n">{{.Stats.ToolCallCount}}</div><div class="l">工具调用</div></div>
+        <div class="sitem"><div class="n">{{.Stats.ThinkingCount}}</div><div class="l">思考块</div></div>
+        <div class="sitem"><div class="n">{{.Stats.TextCount}}</div><div class="l">回复</div></div>
+        <div class="sitem"><div class="n">{{.Stats.SubAgentCount}}</div><div class="l">子代理</div></div>
       </div>
-      {{if .Stats.ToolErrorCount}}<div style="margin-top:6px;font-size:11px;color:var(--red)">⚠ {{.Stats.ToolErrorCount}} errors</div>{{end}}
+      {{if .Stats.ToolErrorCount}}<div style="margin-top:8px;font-size:11px;color:var(--red)">⚠ {{.Stats.ToolErrorCount}} 个错误</div>{{end}}
     </div>
     {{if .Stats.ToolFreq}}
     <div class="scard">
-      <h3>🔧 Tools</h3>
+      <h3>🔧 工具频率</h3>
       <ul class="flist">
         {{range .Stats.ToolFreq}}<li><span class="fname">{{.Key}}</span><span class="fcnt">×{{.Value}}</span></li>{{end}}
       </ul>
@@ -185,7 +207,7 @@
   {{if eq .Type "thinking"}}
   <div class="ev-header clickable" onclick="toggleThinking(this)">
     <span class="ev-icon">{{.Icon}}</span>
-    <span class="ev-toggle">▶ Thinking{{if .Name}} ({{.Name}}){{end}}</span>
+    <span class="ev-toggle" data-toggle-type="thinking">▶ 思考过程</span>
     <span class="ev-meta">{{.Timestamp}}</span>
   </div>
   <div class="ev-body collapsed">
@@ -206,8 +228,8 @@
   {{else if eq .Type "tool_call"}}
   <div class="ev-header">
     <span class="ev-icon">{{.Icon}}</span>
-    <span style="font-weight:600;color:var(--orange);font-size:13px">{{.Name}}</span>
-    {{if .HasChildren}}<span class="ev-toggle" onclick="toggleChildren(this)">▶ children</span>{{end}}
+    <span style="font-weight:600;color:var(--yellow);font-size:13px">{{.Name}}</span>
+    {{if .HasChildren}}<span class="ev-toggle" data-toggle-type="children" onclick="toggleChildren(this)">▶ 子代理</span>{{end}}
     <span class="ev-meta">{{.Timestamp}}</span>
   </div>
   <div class="ev-body">
@@ -219,12 +241,13 @@
     {{end}}
   </div>
   {{else if eq .Type "tool_result"}}
-  <div class="ev-header">
+  <div class="ev-header clickable" onclick="toggleResult(this)">
     <span class="ev-icon">{{.Icon}}</span>
-    <span style="color:var(--dim);font-size:12px">→ {{.Name}}</span>
+    <span class="ev-toggle" data-toggle-type="result">▶ 结果</span>
+    <span style="color:var(--text-dim);font-size:12px">→ {{.Name}}</span>
     <span class="ev-meta">{{.Timestamp}}</span>
   </div>
-  <div class="ev-body">
+  <div class="ev-body collapsed">
     <div class="ev-content mono">{{.Content}}</div>
   </div>
   {{end}}
@@ -266,34 +289,31 @@
       if (show) visible++;
     });
 
-    // Also show/hide turns based on whether they have visible events.
     document.querySelectorAll('.turn').forEach(function(turn) {
-      var visibleEvents = turn.querySelectorAll('.ev[style*="display:"]').length === 0 ?
-        turn.querySelectorAll('.ev').length :
-        turn.querySelectorAll('.ev:not([style*="display: none"])').length;
-      // Re-count properly
       var evs = turn.querySelectorAll('.ev');
       var vis = 0;
       evs.forEach(function(e) { if (e.style.display !== 'none') vis++; });
       turn.style.display = vis > 0 ? '' : 'none';
     });
 
-    document.getElementById('rcnt').textContent = visible + ' / ' + total + ' events';
+    document.getElementById('rcnt').textContent = visible + ' / ' + total + ' 个事件';
   }
 
   function toggleThinking(hdr) {
     var body = hdr.nextElementSibling;
-    var toggle = hdr.querySelector('.ev-toggle');
+    var tgl = hdr.querySelector('.ev-toggle');
     var collapsed = body.classList.toggle('collapsed');
-    if (toggle) {
-      toggle.textContent = collapsed ? '▶' : '▼';
-      var rest = toggle.textContent === '▶' ? toggle.textContent.length : 0;
-      // Keep the "Thinking" label
-      if (collapsed) {
-        toggle.textContent = '▶ Thinking' + (toggle.textContent.replace(/^[▶▼]\s*Thinking/, ''));
-      } else {
-        toggle.textContent = '▼ Thinking' + (toggle.textContent.replace(/^[▶▼]\s*Thinking/, ''));
-      }
+    if (tgl) {
+      tgl.textContent = collapsed ? '▶ 思考过程' : '▼ 思考过程';
+    }
+  }
+
+  function toggleResult(hdr) {
+    var body = hdr.nextElementSibling;
+    var tgl = hdr.querySelector('.ev-toggle');
+    var collapsed = body.classList.toggle('collapsed');
+    if (tgl) {
+      tgl.textContent = collapsed ? '▶ 结果' : '▼ 结果';
     }
   }
 
@@ -302,48 +322,55 @@
     var children = ev.querySelector('.ev-children');
     if (children) {
       var collapsed = children.classList.toggle('collapsed');
-      toggle.textContent = collapsed ? '▶ children' : '▼ children';
+      toggle.textContent = collapsed ? '▶ 子代理' : '▼ 子代理';
     }
   }
 
   function expandAll() {
     document.querySelectorAll('.ev-thinking .ev-body.collapsed').forEach(function(b) {
       b.classList.remove('collapsed');
-      var hdr = b.previousElementSibling;
-      if (hdr) {
-        var tgl = hdr.querySelector('.ev-toggle');
-        if (tgl) tgl.textContent = '▼ Thinking';
-      }
+    });
+    document.querySelectorAll('.ev-toggle[data-toggle-type="thinking"]').forEach(function(t) {
+      t.textContent = '▼ 思考过程';
+    });
+    document.querySelectorAll('.ev-tool_result .ev-body.collapsed').forEach(function(b) {
+      b.classList.remove('collapsed');
+    });
+    document.querySelectorAll('.ev-toggle[data-toggle-type="result"]').forEach(function(t) {
+      t.textContent = '▼ 结果';
     });
     document.querySelectorAll('.ev-children.collapsed').forEach(function(c) {
       c.classList.remove('collapsed');
     });
-    document.querySelectorAll('.ev-toggle').forEach(function(t) {
-      if (t.textContent.includes('children')) t.textContent = '▼ children';
+    document.querySelectorAll('.ev-toggle[data-toggle-type="children"]').forEach(function(t) {
+      t.textContent = '▼ 子代理';
     });
   }
 
   function collapseAll() {
     document.querySelectorAll('.ev-thinking .ev-body').forEach(function(b) {
       b.classList.add('collapsed');
-      var hdr = b.previousElementSibling;
-      if (hdr) {
-        var tgl = hdr.querySelector('.ev-toggle');
-        if (tgl) tgl.textContent = '▶ Thinking';
-      }
+    });
+    document.querySelectorAll('.ev-toggle[data-toggle-type="thinking"]').forEach(function(t) {
+      t.textContent = '▶ 思考过程';
+    });
+    document.querySelectorAll('.ev-tool_result .ev-body').forEach(function(b) {
+      b.classList.add('collapsed');
+    });
+    document.querySelectorAll('.ev-toggle[data-toggle-type="result"]').forEach(function(t) {
+      t.textContent = '▶ 结果';
     });
     document.querySelectorAll('.ev-children').forEach(function(c) {
       c.classList.add('collapsed');
     });
-    document.querySelectorAll('.ev-toggle').forEach(function(t) {
-      if (t.textContent.includes('children')) t.textContent = '▶ children';
+    document.querySelectorAll('.ev-toggle[data-toggle-type="children"]').forEach(function(t) {
+      t.textContent = '▶ 子代理';
     });
   }
 
-  // Initial count
   document.addEventListener('DOMContentLoaded', function() {
     var total = document.querySelectorAll('.ev').length;
-    document.getElementById('rcnt').textContent = total + ' events';
+    document.getElementById('rcnt').textContent = total + ' 个事件';
   });
 </script>
 </html>

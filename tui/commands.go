@@ -13,6 +13,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -177,6 +178,13 @@ var commands = []Command{
 		Description: "List available skills, activate a skill, or reload skill definitions",
 		handler: func(m *Model) tea.Cmd {
 			return m.handleSkillCommand()
+		},
+	},
+	{
+		Name:        "/transcript",
+		Description: "Generate session transcript report and open in browser",
+		handler: func(m *Model) tea.Cmd {
+			return m.handleTranscriptCommand()
 		},
 	},
 }
@@ -747,6 +755,72 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 	m.chatview.AddMessage(chatMessage{
 		Role:    "assistant",
 		Content: sb.String(),
+	})
+	return nil
+}
+
+// handleTranscriptCommand generates an HTML transcript report for the current
+// session, opens it in the default browser, and shows the result in the chat view.
+// If the browser cannot be opened, it displays the file path instead.
+func (m *Model) handleTranscriptCommand() tea.Cmd {
+	sm := m.agent.SessionManager()
+	if sm == nil || !sm.HasCurrent() {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No active session — start a conversation first",
+		})
+		return nil
+	}
+
+	// Load messages for the current session
+	msgs, err := sm.LoadMessages()
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Failed to load session messages: %v", err),
+		})
+		return nil
+	}
+	if len(msgs) == 0 {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No messages in current session yet — send a message first",
+		})
+		return nil
+	}
+
+	curr := sm.Current()
+
+	// Build report data from session messages
+	data := render.BuildReportDataFromMessages(curr, msgs)
+	html, err := render.GenerateHTML(data)
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Failed to generate transcript HTML: %v", err),
+		})
+		return nil
+	}
+
+	path, err := render.OpenInBrowser(html, curr.ID)
+	if err != nil {
+		// Browser couldn't be opened — show the file path in chat
+		m.chatview.AddMessage(chatMessage{
+			Role: "assistant",
+			Content: fmt.Sprintf(
+				"**📋 Transcript Report**\n\nBrowser could not be opened automatically.\n\nReport saved to:\n`%s`",
+				path,
+			),
+		})
+		return nil
+	}
+
+	m.chatview.AddMessage(chatMessage{
+		Role: "assistant",
+		Content: fmt.Sprintf(
+			"**📋 Transcript Report**\n\nSession: `%s`\nOpened: `%s`",
+			curr.Title, path,
+		),
 	})
 	return nil
 }
