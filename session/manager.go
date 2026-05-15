@@ -81,8 +81,20 @@ func (m *Manager) cleanupLocked() int {
 	}
 
 	removed := 0
+	skippedThread := 0
+	skipped := make([]string, 0)
 	for _, s := range excess {
 		if s.ID == currentID {
+			continue
+		}
+		// Skip sessions that are actively used by IM channels.
+		// A non-empty ThreadID means a channel thread is bound to
+		// this session — it will be found via FindByThreadID on
+		// the next message. Only completed threads (cleared via
+		// /new) should be cleaned up.
+		if s.ThreadID != "" {
+			skippedThread++
+			skipped = append(skipped, s.ID+"("+s.ThreadID+")")
 			continue
 		}
 		if err := m.store.DeleteSession(s.ID); err != nil {
@@ -93,6 +105,9 @@ func (m *Manager) cleanupLocked() int {
 		removed++
 	}
 
+	if skippedThread > 0 {
+		m.logger.Log("session cleanup: skipped %d session(s) with active ThreadID: %v", skippedThread, skipped)
+	}
 	if removed > 0 {
 		m.logger.Log("session cleanup: removed %d old sessions (maxKeep=%d)", removed, m.maxKeep)
 	}
