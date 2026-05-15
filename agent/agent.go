@@ -262,7 +262,7 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 	messages := []llm.Message{
 		{
 			Role:    "system",
-			Content: "Generate a short, concise title (max 50 characters) for a conversation that starts with this user message. Output ONLY the title, no quotes, no explanation, no preamble.",
+			Content: "Generate a short, concise title (max 10 characters) for a conversation that starts with this user message. Output ONLY the title, no quotes, no explanation, no preamble.",
 		},
 		{
 			Role:    "user",
@@ -440,7 +440,7 @@ type AgentEvent struct {
 	ToolResult    string
 	ToolIsError   bool
 	ToolDiff      string
-	ToolDuration  time.Duration // Wall-clock duration of tool execution
+	ToolDuration  time.Duration    // Wall-clock duration of tool execution
 	Questions     []tools.Question // For AskUserQuestion tool
 	Result        *RunResult
 	Messages      []llm.Message

@@ -62,6 +62,20 @@ func collectToolMessages(messages []Message, start int) ([]anthropic.ContentBloc
 	return blocks, end
 }
 
+// effortFromString converts a thinking effort string to the Anthropic SDK type.
+// Empty string defaults to "high". Recognized values: "low", "medium", "high", "xhigh", "max".
+func effortFromString(effort string) anthropic.OutputConfigEffort {
+	if effort == "" {
+		return anthropic.OutputConfigEffortHigh
+	}
+	switch effort {
+	case "low", "medium", "high", "xhigh", "max":
+		return anthropic.OutputConfigEffort(effort)
+	default:
+		return anthropic.OutputConfigEffortHigh
+	}
+}
+
 func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*anthropic.MessageNewParams, error) {
 	var systemPrompt string
 	var anthropicMessages []anthropic.MessageParam
@@ -159,6 +173,9 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 		req.Thinking = anthropic.ThinkingConfigParamUnion{OfDisabled: &disabled}
 	} else {
 		req.Thinking = anthropic.ThinkingConfigParamUnion{OfAdaptive: &anthropic.ThinkingConfigAdaptiveParam{}}
+		req.OutputConfig = anthropic.OutputConfigParam{
+			Effort: effortFromString(opts.ThinkingEffort),
+		}
 	}
 
 	return req, nil

@@ -57,6 +57,10 @@ type ChatOptions struct {
 	// nil = provider default (adaptive for Anthropic, enabled for DeepSeek)
 	// true = enabled, false = disabled
 	Thinking *bool
+	// ThinkingEffort sets the reasoning effort when thinking is enabled.
+	// Empty string defaults to "high". Supported values: "low", "medium", "high", "xhigh", "max".
+	// Set via Anthropic output_config.effort field; ignored by OpenAI provider.
+	ThinkingEffort string
 	// SessionID, when non-empty, is sent as the x-tachi-session-id HTTP header
 	// on API calls to the LLM provider.
 	SessionID string
