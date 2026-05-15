@@ -915,6 +915,267 @@ func TestBuildUserMessageWithAttachments_ImageWithSavedPath(t *testing.T) {
 	assert.True(t, contains(result, "这是什么图片？"), "should include original text: %s", result)
 }
 
+// TestHandleModelCommand_List verifies that /model (no args) lists all
+// configured providers, marking the active one with a star.
+func TestHandleModelCommand_List(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
+			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022"},
+			{Name: "deepseek", Type: "openai", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	// Set up the provider manually (simulating what initProvider would do).
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:  "openai",
+			Model: "gpt-5.2",
+			Name:  "gpt-5.2",
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "gpt-5.2"
+
+	resp, err := mgr.handleModelCommand("")
+	require.NoError(t, err)
+
+	assert.Contains(t, resp, "Configured models (3)")
+	assert.Contains(t, resp, "* gpt-5.2")     // active
+	assert.Contains(t, resp, " claude-haiku")  // not active, no star
+	assert.Contains(t, resp, " deepseek")      // not active, no star
+	assert.Contains(t, resp, "Type: openai  Model: gpt-5.2")
+	assert.Contains(t, resp, "Type: anthropic  Model: claude-3-5-haiku-20241022")
+	assert.Contains(t, resp, "/model <name> to switch")
+}
+
+// TestHandleModelCommand_Switch verifies that /model <name> successfully
+// switches the active provider.
+func TestHandleModelCommand_Switch(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
+			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "gpt-5.2",
+			Name:          "gpt-5.2",
+			ContextWindow: 128_000,
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "gpt-5.2"
+
+	resp, err := mgr.handleModelCommand("claude-haiku")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Switched to **claude-haiku**")
+	assert.Contains(t, resp, "anthropic")
+	assert.Contains(t, resp, "claude-3-5-haiku-20241022")
+
+	// Verify internal state was updated.
+	mgr.providerMu.RLock()
+	defer mgr.providerMu.RUnlock()
+
+	assert.Equal(t, "claude-haiku", mgr.currentProviderName)
+	assert.NotNil(t, mgr.provider)
+	assert.NotNil(t, mgr.resolvedConfig)
+	assert.Equal(t, "anthropic", mgr.resolvedConfig.Provider.Type)
+	assert.Equal(t, "claude-3-5-haiku-20241022", mgr.resolvedConfig.Provider.Model)
+}
+
+// TestHandleModelCommand_Unknown verifies that /model <unknown> returns
+// a helpful error message.
+func TestHandleModelCommand_Unknown(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:  "openai",
+			Model: "gpt-5.2",
+			Name:  "gpt-5.2",
+		},
+		MaxTokens: 4096,
+	}
+	mgr.currentProviderName = "gpt-5.2"
+
+	resp, err := mgr.handleModelCommand("nonexistent")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "not found")
+	assert.Contains(t, resp, "/model")
+}
+
+// TestHandleModelCommand_NoProviders verifies the empty providers case.
+func TestHandleModelCommand_NoProviders(t *testing.T) {
+	cfg := &config.Config{}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	resp, err := mgr.handleModelCommand("")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "No providers configured")
+}
+
+// TestHandleModelCommand_ListAfterSwitch verifies that after a switch,
+// the list marks the new active provider.
+func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
+			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "gpt-5.2",
+			Name:          "gpt-5.2",
+			ContextWindow: 128_000,
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "gpt-5.2"
+
+	// Before switch: gpt-5.2 is active.
+	resp, err := mgr.handleModelCommand("")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "* gpt-5.2")
+	assert.Contains(t, resp, " claude-haiku")
+
+	// Switch.
+	_, err = mgr.handleModelCommand("claude-haiku")
+	require.NoError(t, err)
+
+	// After switch: claude-haiku is active.
+	resp, err = mgr.handleModelCommand("")
+	require.NoError(t, err)
+	assert.Contains(t, resp, " gpt-5.2")
+	assert.Contains(t, resp, "* claude-haiku")
+}
+
+// TestHandleModelCommand_ViaTextSlash verifies /model via the text-based
+// slash command handler.
+func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
+			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "gpt-5.2",
+			Name:          "gpt-5.2",
+			ContextWindow: 128_000,
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "gpt-5.2"
+
+	// /model (list)
+	resp, err := mgr.handleSlashCommand(channel.IncomingMessage{
+		Content:   "/model",
+		ThreadID:  "thread-1",
+		MessageID: "msg-1",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Configured models (2)")
+	assert.Contains(t, resp, "* gpt-5.2")
+
+	// /model claude-haiku (switch)
+	resp, err = mgr.handleSlashCommand(channel.IncomingMessage{
+		Content:   "/model claude-haiku",
+		ThreadID:  "thread-1",
+		MessageID: "msg-2",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Switched to **claude-haiku**")
+
+	mgr.providerMu.RLock()
+	defer mgr.providerMu.RUnlock()
+	assert.Equal(t, "claude-haiku", mgr.currentProviderName)
+}
+
+// TestHandleModelCommand_ViaCommandHandler verifies /model via the typed
+// CommandHandler path.
+func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
+			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "gpt-5.2",
+			Name:          "gpt-5.2",
+			ContextWindow: 128_000,
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "gpt-5.2"
+
+	handler := mgr.buildCommandHandler()
+
+	// /model list via typed command.
+	resp, err := handler(t.Context(), channel.SlashCommand{Name: "model"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Configured models (2)")
+	assert.Contains(t, resp, "* gpt-5.2")
+
+	// /model switch via typed command.
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "model", Args: "claude-haiku"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Switched to **claude-haiku**")
+
+	mgr.providerMu.RLock()
+	assert.Equal(t, "claude-haiku", mgr.currentProviderName)
+	mgr.providerMu.RUnlock()
+}
+
 // contains is a simple substring check helper.
 func contains(s, substr string) bool {
 	return len(s) >= len(substr) && containsStr(s, substr)

@@ -49,6 +49,7 @@ type Config struct {
 type initProviderResult struct {
 	provider llm.Provider
 	resolved *config.ResolvedConfig
+	name     string // Provider config name from config (e.g., "gpt-5.2", "claude")
 }
 
 // Manager orchestrates Channel implementations and bridges them to agent instances.
@@ -88,13 +89,18 @@ type initProviderResult struct {
 type Manager struct {
 	cfg          *config.Config
 	systemPrompt string
-	providerName string
-	modelName    string
+	providerName         string
+	modelName            string
+	currentProviderName  string // Tracks which provider is currently active
 
 	// Lazy-initialized via sync.OnceValues.
 	initProviderFn func() (initProviderResult, error)
 	provider       llm.Provider
 	resolvedConfig *config.ResolvedConfig
+
+	// providerMu protects provider and resolvedConfig during model switching.
+	// Both are set once in initProvider() and can be updated by /model command.
+	providerMu sync.RWMutex
 
 	// Session store override (nil = use default ~/.tachi/session).
 	sessionStore session.Store
@@ -255,7 +261,8 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			}
 		}
 
-		if m.resolvedConfig == nil || m.provider == nil {
+		prov, resolved := m.getProvider()
+		if prov == nil || resolved == nil {
 			return channel.HandlerResult{
 				Reply: channel.OutgoingMessage{
 					ThreadID: msg.ThreadID,
@@ -366,9 +373,11 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}()
 
-	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, 0)
+	prov, resolved := m.getProvider()
+
+	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
 	aiAgent.SetSkipEditConfirm(true)
-	aiAgent.SetContextWindow(m.resolvedConfig.Provider.ContextWindow)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(m.cfg)
 	aiAgent.SetupCommitProvider(m.cfg)
 
@@ -402,7 +411,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// Ensure a session exists for recording.
 	if sm != nil && !sm.HasCurrent() {
 		wd, _ := os.Getwd()
-		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
+		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
 			m.logger.Log("channel: create fallback session: %v", err)
 		} else {
 			sm.SetThreadID(msg.ThreadID)
@@ -420,7 +429,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	userContent := buildUserMessageWithAttachments(msg)
 
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
-		MaxTokens: m.resolvedConfig.MaxTokens,
+		MaxTokens: resolved.MaxTokens,
 	})
 
 	m.verboseMu.RLock()
@@ -456,9 +465,11 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 		return m.handleCronCommand()
 	case "v":
 		return m.handleVerboseCommand(cmd.ThreadID)
+	case "model":
+		return m.handleModelCommand(cmd.Args)
 	default:
 		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
-		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v", cmd.Name), nil
+		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model", cmd.Name), nil
 	}
 }
 
@@ -482,14 +493,97 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 		return m.handleCronCommand()
 	case "/v":
 		return m.handleVerboseCommand(msg.ThreadID)
+	case "/model":
+		args := ""
+		if len(parts) > 1 {
+			args = strings.Join(parts[1:], " ")
+		}
+		return m.handleModelCommand(args)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /usage — Show session usage stats\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /usage — Show session usage stats\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
 	}
 }
 
-// handleNewCommand ends the current session for the given ThreadID so the
-// next message starts a fresh conversation.
+// handleModelCommand lists available providers/models or switches to a named provider.
+// /model          — list all configured providers with the current one marked
+// /model <name>   — switch to the named provider
+func (m *Manager) handleModelCommand(args string) (string, error) {
+	if m.cfg == nil || len(m.cfg.Providers) == 0 {
+		return "No providers configured.", nil
+	}
+
+	args = strings.TrimSpace(args)
+
+	if args == "" {
+		// List mode: show all providers.
+		return m.handleModelList()
+	}
+
+	// Switch mode: resolve and activate the named provider.
+	return m.handleModelSwitch(args)
+}
+
+// handleModelList returns a formatted list of all configured providers,
+// marking the currently active one with a star.
+func (m *Manager) handleModelList() (string, error) {
+	m.providerMu.RLock()
+	currentName := m.currentProviderName
+	m.providerMu.RUnlock()
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Configured models (%d):\n", len(m.cfg.Providers)))
+
+	for _, p := range m.cfg.Providers {
+		marker := " "
+		if p.Name == currentName {
+			marker = "*"
+		}
+		fmt.Fprintf(&sb, "\n%s %s\n", marker, p.Name)
+		fmt.Fprintf(&sb, "  Type: %s  Model: %s\n", p.Type, p.Model)
+	}
+
+	sb.WriteString("\nUse /model <name> to switch.")
+
+	return sb.String(), nil
+}
+
+// handleModelSwitch resolves and activates the named provider.
+func (m *Manager) handleModelSwitch(name string) (string, error) {
+	pCfg := m.cfg.FindProvider(name)
+	if pCfg == nil {
+		return fmt.Sprintf("Provider %q not found. Use /model to see available models.", name), nil
+	}
+
+	resolved, err := config.ResolveProviderConfig(pCfg)
+	if err != nil {
+		return "", fmt.Errorf("resolve provider %q: %w", name, err)
+	}
+
+	provider, err := llm.NewProvider(
+		resolved.Type,
+		resolved.APIKey,
+		resolved.BaseURL,
+		resolved.Model,
+	)
+	if err != nil {
+		return "", fmt.Errorf("create provider %q: %w", name, err)
+	}
+
+	m.providerMu.Lock()
+	m.provider = provider
+	m.resolvedConfig = &config.ResolvedConfig{
+		Provider:      *resolved,
+		MaxTokens:     m.resolvedConfig.MaxTokens,
+		MaxIterations: m.resolvedConfig.MaxIterations,
+	}
+	m.currentProviderName = name
+	m.providerMu.Unlock()
+
+	m.logger.Log("channel: /model switched to %s (%s/%s)", name, resolved.Type, resolved.Model)
+
+	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nNew conversations will use this model.", name, resolved.Type, resolved.Model), nil
+}
 func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	sm := m.newSessionManager()
 	if sm == nil {
@@ -577,13 +671,12 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 
 	// Resolve price
 	var price *llm.ModelPrice
-	if m.resolvedConfig != nil {
-		model := m.resolvedConfig.Provider.Model
-		if m.cfg != nil && m.cfg.Provider != "" {
-			pCfg := m.cfg.FindProvider(m.cfg.Provider)
-			if pCfg != nil {
-				price = llm.ResolveModelPrice(model, pCfg.InputPrice, pCfg.OutputPrice, pCfg.CacheReadInputPrice, pCfg.CacheCreationInputPrice)
-			}
+	_, resolved := m.getProvider()
+	if resolved != nil {
+		model := resolved.Provider.Model
+		pCfg := m.cfg.FindProvider(resolved.Provider.Name)
+		if pCfg != nil {
+			price = llm.ResolveModelPrice(model, pCfg.InputPrice, pCfg.OutputPrice, pCfg.CacheReadInputPrice, pCfg.CacheCreationInputPrice)
 		}
 		if price == nil {
 			price = llm.ResolveModelPrice(model, nil, nil, nil, nil)
@@ -883,6 +976,15 @@ func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agen
 
 // --- Provider resolution ---
 
+// getProvider returns the current provider and resolved config under read lock.
+// Use this in agent turn paths to safely read the provider state that may be
+// updated by the /model command.
+func (m *Manager) getProvider() (llm.Provider, *config.ResolvedConfig) {
+	m.providerMu.RLock()
+	defer m.providerMu.RUnlock()
+	return m.provider, m.resolvedConfig
+}
+
 func (m *Manager) initProvider() error {
 	if m.initProviderFn == nil {
 		m.initProviderFn = sync.OnceValues(func() (initProviderResult, error) {
@@ -911,15 +1013,21 @@ func (m *Manager) initProvider() error {
 				return initProviderResult{}, fmt.Errorf("create provider: %w", err)
 			}
 
-			return initProviderResult{provider: provider, resolved: resolved}, nil
+			// Capture the resolved provider name for /model display.
+			name := resolved.Provider.Name
+
+			return initProviderResult{provider: provider, resolved: resolved, name: name}, nil
 		})
 	}
 	result, err := m.initProviderFn()
 	if err != nil {
 		return err
 	}
+	m.providerMu.Lock()
 	m.provider = result.provider
 	m.resolvedConfig = result.resolved
+	m.currentProviderName = result.name
+	m.providerMu.Unlock()
 	return nil
 }
 
@@ -961,6 +1069,8 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 		}
 	}
 
+	_, resolved := m.getProvider()
+
 	// Try to find an existing session for this ThreadID.
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
@@ -973,7 +1083,7 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 		// No existing session → create a new one now. The agent will
 		// record the first message.
 		wd, _ := os.Getwd()
-		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
+		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {
@@ -992,7 +1102,7 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 		return sm, nil, nil
 	}
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, m.resolvedConfig.Provider.Type)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Type)
 	if err != nil {
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}
@@ -1035,13 +1145,14 @@ func (m *Manager) initCron(_ context.Context) error {
 func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	m.logger.Log("channel: cron trigger job=%s (%s) thread=%s", job.ID, job.Name, job.TargetThreadID)
 
-	if m.resolvedConfig == nil || m.provider == nil {
+	prov, resolved := m.getProvider()
+	if prov == nil || resolved == nil {
 		return fmt.Errorf("channel: provider not initialized for cron trigger")
 	}
 
-	aiAgent := agent.NewAIAgent(m.provider, m.resolvedConfig.Provider.Model, 0)
+	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
 	aiAgent.SetSkipEditConfirm(true)
-	aiAgent.SetContextWindow(m.resolvedConfig.Provider.ContextWindow)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(m.cfg)
 	aiAgent.SetupCommitProvider(m.cfg)
 
@@ -1069,7 +1180,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 
 	if sm != nil && !sm.HasCurrent() {
 		wd, _ := os.Getwd()
-		if _, err := sm.New(m.resolvedConfig.Provider.Type, m.resolvedConfig.Provider.Model, wd); err != nil {
+		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
 			m.logger.Log("channel: cron create session: %v", err)
 		} else {
 			sm.SetThreadID(job.TargetThreadID)
@@ -1081,7 +1192,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	}
 
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, job.Prompt, m.systemPrompt, llm.ChatOptions{
-		MaxTokens: m.resolvedConfig.MaxTokens,
+		MaxTokens: resolved.MaxTokens,
 	})
 
 	m.verboseMu.RLock()

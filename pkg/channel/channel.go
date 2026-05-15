@@ -226,12 +226,16 @@ type MessageSender interface {
 // parsing path. For example, a channel detecting a new chat room can call
 // Command("new", threadID) instead of building "/new" as a message.
 type SlashCommand struct {
-	// Name is the command identifier (e.g., "new", "mcp", "usage", "cron", "v").
+	// Name is the command identifier (e.g., "new", "mcp", "usage", "cron", "v", "model").
 	Name string
 
 	// ThreadID provides thread context for thread-scoped commands.
-	// Required for "new", "usage", "v"; ignored for global commands ("mcp", "cron").
+	// Required for "new", "usage", "v"; ignored for global commands ("mcp", "cron", "model").
 	ThreadID string
+
+	// Args holds command arguments, space-separated (e.g., "gpt-5.2" for "/model gpt-5.2").
+	// Empty for argument-less commands.
+	Args string
 }
 
 // CommandHandler executes a typed SlashCommand and returns the response text.

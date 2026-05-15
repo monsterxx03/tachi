@@ -29,7 +29,8 @@ type ResolvedProvider struct {
 	Model         string
 	BaseURL       string
 	APIKey        string
-	ContextWindow int64 // Resolved context window size (from model info or config override)
+	ContextWindow int64  // Resolved context window size (from model info or config override)
+	Name          string // Provider config name (e.g., "gpt-5.2", "claude")
 }
 
 type ResolvedConfig struct {
@@ -131,6 +132,7 @@ func ResolveProviderConfig(pCfg *ProviderConfig) (*ResolvedProvider, error) {
 		BaseURL:       pCfg.BaseURL,
 		APIKey:        apiKey,
 		ContextWindow: contextWindow,
+		Name:          pCfg.Name,
 	}, nil
 }
 
