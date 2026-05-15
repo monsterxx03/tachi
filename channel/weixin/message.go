@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
+	"net/url"
 	"strings"
 	"time"
 
@@ -205,7 +206,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 	uploadURL := uploadResp.UploadFullURL
 	if uploadURL == "" {
 		uploadURL = fmt.Sprintf("%s/upload?encrypted_query_param=%s&filekey=%s",
-			cdnBaseURL, uploadResp.UploadParam, fileKey)
+			cdnBaseURL, url.QueryEscape(uploadResp.UploadParam), url.QueryEscape(fileKey))
 	}
 
 	var encryptedParam string
@@ -233,7 +234,9 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 	}
 
 	// Step 3: sendMessage with media item.
-	aesKeyBase64 := base64.StdEncoding.EncodeToString(aesKey)
+	// Encode aes_key as base64(hex(key)) — this is the format cc-connect uses
+	// and what the WeChat client expects for decrypting sent media.
+	aesKeyBase64 := base64.StdEncoding.EncodeToString([]byte(aesKeyHex))
 	media := MediaData{
 		EncryptQueryParam: encryptedParam,
 		AESKey:            aesKeyBase64,
