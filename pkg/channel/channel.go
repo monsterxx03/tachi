@@ -108,13 +108,36 @@ type IncomingMessage struct {
 	Attachments []Attachment
 }
 
+// OutgoingAttachment represents a file or media attachment to be sent
+// to an IM channel as part of an OutgoingMessage. The channel implementation
+// decides how to deliver it (e.g., CDN upload for WeChat iLink).
+type OutgoingAttachment struct {
+	// Type indicates the kind of attachment.
+	Type AttachmentType
+
+	// FileName is the original filename (e.g. "report.pdf").
+	FileName string
+
+	// MimeType is a best-effort MIME type guess.
+	MimeType string
+
+	// Data is the raw byte content of the file.
+	Data []byte
+}
+
 // OutgoingMessage represents a response to send back to the IM channel.
 type OutgoingMessage struct {
 	// ThreadID routes the reply to the correct conversation.
 	ThreadID string
 
-	// Content is the response text to send.
+	// Content is the response text to send. May be empty if the message
+	// consists only of attachments.
 	Content string
+
+	// Attachments holds files or media to send alongside or instead of
+	// the text reply. The channel implementation is responsible for
+	// uploading and delivering each attachment.
+	Attachments []OutgoingAttachment
 
 	// ReplyTo references the IncomingMessage.MessageID this is replying to,
 	// so the IM backend can thread the reply correctly.

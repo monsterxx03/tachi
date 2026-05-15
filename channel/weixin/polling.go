@@ -177,12 +177,20 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		return
 	}
 
-	if result.Reply.Content == "" {
-		return
+	// Send text reply if there's content.
+	if result.Reply.Content != "" {
+		if err := ch.sendTextReply(msg.FromUserID, msg.ContextToken, result.Reply.Content); err != nil {
+			ch.logger.Log("weixin: sendTextReply error: %v", err)
+		}
 	}
 
-	// Send the reply.
-	ch.sendTextReply(msg.FromUserID, msg.ContextToken, result.Reply.Content)
+	// Send each attachment as a separate media message.
+	for _, att := range result.Reply.Attachments {
+		mediaType := channelAttachmentToILinkMediaType(att.Type)
+		if err := ch.sendMediaReply(msg.FromUserID, msg.ContextToken, att.Data, att.FileName, mediaType); err != nil {
+			ch.logger.Log("weixin: sendMediaReply error for %s: %v", att.FileName, err)
+		}
+	}
 }
 
 // --- Typing Indicator ---

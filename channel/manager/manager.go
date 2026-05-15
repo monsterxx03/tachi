@@ -13,6 +13,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
@@ -226,6 +227,12 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 		// Slash commands are handled synchronously (no LLM invocation).
 		if strings.HasPrefix(msg.Content, "/") {
+			// /transcript returns an attachment (HTML file), not plain text,
+			// so it's handled separately from the general slash command path.
+			if strings.HasPrefix(msg.Content, "/transcript") {
+				return m.handleTranscriptCommand(msg)
+			}
+
 			result, err := m.handleSlashCommand(msg)
 			if err != nil {
 				return channel.HandlerResult{
@@ -1270,6 +1277,129 @@ func (m *Manager) handleVerboseCommand(threadID string) (string, error) {
 		return "🔍 Verbose mode: ON\n后续回复将显示工具调用过程。", nil
 	}
 	return "🔍 Verbose mode: OFF\n后续回复仅显示最终结果。", nil
+}
+
+// handleTranscriptCommand generates an HTML transcript for the session
+// associated with the given thread and returns it as a file attachment.
+//
+// Usage in channel:
+//
+//	/transcript          — transcript for current thread's session
+//	/transcript --latest — transcript for the most recent session
+func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.HandlerResult {
+	errReply := func(err error) channel.HandlerResult {
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  fmt.Sprintf("❌ %v", err),
+				ReplyTo:  msg.MessageID,
+			},
+			Err: err,
+		}
+	}
+
+	sm := m.newSessionManager()
+	if sm == nil {
+		return errReply(fmt.Errorf("session manager unavailable"))
+	}
+
+	var sess *session.Session
+	var err error
+
+	parts := strings.Fields(msg.Content)
+	useLatest := len(parts) > 1 && parts[1] == "--latest"
+
+	if useLatest {
+		sessions, listErr := sm.List()
+		if listErr != nil {
+			return errReply(fmt.Errorf("list sessions: %w", listErr))
+		}
+		if len(sessions) == 0 {
+			return errReply(fmt.Errorf("no sessions found"))
+		}
+		sess, err = sm.Load(sessions[0].ID)
+		if err != nil {
+			return errReply(fmt.Errorf("load session: %w", err))
+		}
+	} else {
+		found, findErr := sm.FindByThreadID(msg.ThreadID)
+		if findErr != nil {
+			return errReply(fmt.Errorf("find session: %w", findErr))
+		}
+		if found == nil {
+			return errReply(fmt.Errorf("no session found for this thread. Send a message first to start a session."))
+		}
+		sess = found
+	}
+
+	msgs, err := sm.LoadMessages()
+	if err != nil {
+		return errReply(fmt.Errorf("load messages: %w", err))
+	}
+	if len(msgs) == 0 {
+		return errReply(fmt.Errorf("session %q has no messages yet. Run a conversation first.", sess.ID))
+	}
+
+	data := render.BuildReportDataFromMessages(sess, msgs)
+	html, err := render.GenerateHTML(data)
+	if err != nil {
+		return errReply(fmt.Errorf("generate HTML: %w", err))
+	}
+
+	// Use session title as filename, sanitized.
+	fileName := sanitizeFilename(sess.Title)
+	if fileName == "" {
+		fileName = "transcript"
+	}
+	fileName = fmt.Sprintf("%s-%s.html", fileName, sess.ID[:8])
+
+	m.logger.Log("channel: transcript generated for session %s (%d bytes)", sess.ID, len(html))
+
+	contentText := fmt.Sprintf("📊 Transcript: %s\n\nSession: %s\nTurns: %d · Tools: %d · Size: %s",
+		sess.Title, sess.ID[:8],
+		data.Stats.TurnCount, data.Stats.ToolCallCount, humanSize(len(html)))
+
+	return channel.HandlerResult{
+		Reply: channel.OutgoingMessage{
+			ThreadID: msg.ThreadID,
+			Content:  contentText,
+			Attachments: []channel.OutgoingAttachment{
+				{
+					Type:     channel.AttachmentTypeFile,
+					FileName: fileName,
+					MimeType: "text/html",
+					Data:     []byte(html),
+				},
+			},
+			ReplyTo: msg.MessageID,
+		},
+	}
+}
+
+// sanitizeFilename replaces characters that are problematic in filenames.
+func sanitizeFilename(s string) string {
+	if s == "" {
+		return ""
+	}
+	// Replace problematic chars with underscore.
+	replacer := strings.NewReplacer(
+		" ", "_",
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "",
+		"?", "",
+		"\"", "",
+		"<", "",
+		">", "",
+		"|", "",
+	)
+	result := replacer.Replace(s)
+	// Trim to reasonable length.
+	if len(result) > 60 {
+		result = result[:60]
+	}
+	return result
 }
 
 // --- Tool call summary helpers (used by drainEvents in verbose mode) ---

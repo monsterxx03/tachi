@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"strings"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
 // --- Message Extraction ---
@@ -299,6 +301,17 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 }
 
 // --- Helpers ---
+
+// channelAttachmentToILinkMediaType maps channel.AttachmentType to the
+// WeChat iLink media type used in getUploadUrl.
+func channelAttachmentToILinkMediaType(at channel.AttachmentType) int {
+	switch at {
+	case channel.AttachmentTypeImage:
+		return MediaTypeImage
+	default: // AttachmentTypeFile or AttachmentTypeText
+		return MediaTypeFile
+	}
+}
 
 // generateClientID creates a unique client ID for message dedup.
 func generateClientID() string {

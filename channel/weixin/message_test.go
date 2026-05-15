@@ -2,6 +2,8 @@ package weixin
 
 import (
 	"testing"
+
+	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
 func TestExtractMessageText_Plain(t *testing.T) {
@@ -281,6 +283,24 @@ func TestNormalizeID(t *testing.T) {
 		got := normalizeID(tt.input)
 		if got != tt.expected {
 			t.Errorf("normalizeID(%q) = %q, want %q", tt.input, got, tt.expected)
+		}
+	}
+}
+
+func TestChannelAttachmentToILinkMediaType(t *testing.T) {
+	tests := []struct {
+		at       channel.AttachmentType
+		expected int
+	}{
+		{channel.AttachmentTypeImage, MediaTypeImage},
+		{channel.AttachmentTypeFile, MediaTypeFile},
+		{channel.AttachmentTypeText, MediaTypeFile}, // text files go as MediaTypeFile
+	}
+
+	for _, tt := range tests {
+		got := channelAttachmentToILinkMediaType(tt.at)
+		if got != tt.expected {
+			t.Errorf("channelAttachmentToILinkMediaType(%q) = %d, want %d", tt.at, got, tt.expected)
 		}
 	}
 }
