@@ -180,6 +180,14 @@ func (c *CronConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// CompactTimeoutDefault is the default timeout for /compact operations.
+const CompactTimeoutDefault = 5 * time.Minute
+
+// CompactConfig holds configuration for the /compact command.
+type CompactConfig struct {
+	Timeout time.Duration `yaml:"timeout" default:"5m"` // Timeout for the compaction LLM call
+}
+
 // SubagentConfig holds configuration for sub-agent execution.
 // When Provider/Model are empty, the main provider/model is used.
 type SubagentConfig struct {
@@ -285,6 +293,7 @@ type Config struct {
 	CommitProvider         string                       `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
 	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
+	Compact                CompactConfig                `yaml:"compact"`                         // /compact command configuration
 	Cron                   CronConfig                   `yaml:"cron"`                            // Cron scheduler (channel mode)
 }
 

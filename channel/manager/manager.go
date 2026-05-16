@@ -467,9 +467,11 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 		return m.handleVerboseCommand(cmd.ThreadID)
 	case "model":
 		return m.handleModelCommand(cmd.Args)
+	case "compact":
+		return m.handleCompactCommand(cmd.ThreadID)
 	default:
 		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
-		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model", cmd.Name), nil
+		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model, compact", cmd.Name), nil
 	}
 }
 
@@ -499,9 +501,11 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 			args = strings.Join(parts[1:], " ")
 		}
 		return m.handleModelCommand(args)
+	case "/compact":
+		return m.handleCompactCommand(msg.ThreadID)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /usage — Show session usage stats\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
 	}
 }
 
@@ -613,6 +617,90 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	m.verboseMu.Unlock()
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
+}
+
+// handleCompactCommand handles the /compact command for channel mode.
+// It runs the compaction LLM call synchronously, creates a new session with the
+// summary, links old ↔ new sessions, and migrates the ThreadID.
+func (m *Manager) handleCompactCommand(threadID string) (string, error) {
+	// 1. Load session
+	sm := m.newSessionManager()
+	sess, err := sm.FindByThreadID(threadID)
+	if err != nil {
+		return "", fmt.Errorf("加载 session 失败: %w", err)
+	}
+	if sess == nil || !sm.HasCurrent() {
+		return "没有活跃的会话可以压缩。请先发送消息开始对话。", nil
+	}
+
+	sessionMsgs, err := sm.LoadMessages()
+	if err != nil {
+		return "", fmt.Errorf("加载消息失败: %w", err)
+	}
+	if len(sessionMsgs) < 2 {
+		return "对话太短，无需压缩。", nil
+	}
+
+	// 2. Get provider
+	prov, resolved := m.getProvider()
+	if prov == nil || resolved == nil {
+		return "", fmt.Errorf("provider 未初始化")
+	}
+
+	// 3. Convert to llm.Message for prompt building
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Type)
+	if err != nil {
+		return "", fmt.Errorf("转换消息失败: %w", err)
+	}
+	compactPrompt := agent.BuildCompactPrompt(llmMsgs)
+
+	// 4. Create agent (unlimited iterations)
+	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
+	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	mcpMgr, err := aiAgent.Configure(context.Background(), m.cfg)
+	if err != nil {
+		return "", fmt.Errorf("配置 agent 失败: %w", err)
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
+	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+
+	// 5. Run one-off with configurable timeout
+	compactTimeout := config.CompactTimeoutDefault
+	if m.cfg != nil {
+		compactTimeout = m.cfg.Compact.Timeout
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), compactTimeout)
+	defer cancel()
+
+	eventCh := aiAgent.RunOneOffStream(ctx, nil, "", compactPrompt, llm.ChatOptions{
+		MaxTokens: resolved.MaxTokens,
+	})
+
+	summary, err := agent.DrainCompactEvents(eventCh)
+	if err != nil {
+		return "", fmt.Errorf("压缩失败: %w", err)
+	}
+
+	// 6. Finalize (save summary as new session)
+	newHistory, err := agent.FinalizeCompact(sm, m.systemPrompt, summary)
+	if err != nil {
+		return "", fmt.Errorf("创建压缩会话失败: %w", err)
+	}
+	_ = newHistory // not needed by channel — next runAgentTurn will load from session
+
+	// 7. Migrate ThreadID to new session
+	if err := sm.SetThreadID(threadID); err != nil {
+		m.logger.Log("channel: /compact set thread_id: %v", err)
+	}
+
+	// 8. Format result
+	return fmt.Sprintf(
+		"🔍 对话已压缩\n\n原会话: %s (%s)\n消息数: %d\n\n摘要:\n%s",
+		sess.Title, sess.ID[:8], len(sessionMsgs), summary,
+	), nil
 }
 
 // handleMCPList returns a formatted list of configured MCP servers.

@@ -13,6 +13,15 @@ type Session struct {
 	WorkingDir string    `json:"working_dir,omitempty"` // working directory at session creation time
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+
+	// Compact-related fields: link to child/parent sessions after /compact.
+	// - CompactedChildID: set on the OLD session after compaction, pointing to the NEW session.
+	// - CompactedParentID: set on the NEW session, pointing to the OLD session.
+	// - CompactedParentTitle: title of the old session, so the new session doesn't need
+	//   to load the old session's meta to display the relationship.
+	CompactedChildID    string `json:"compacted_child_id,omitempty"`
+	CompactedParentID   string `json:"compacted_parent_id,omitempty"`
+	CompactedParentTitle string `json:"compacted_parent_title,omitempty"`
 }
 
 type MessageType string

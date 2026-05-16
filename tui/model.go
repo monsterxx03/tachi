@@ -83,6 +83,7 @@ type Model struct {
 
 	savedHistory []llm.Message // conversation history saved before a one-off run (e.g. /commit)
 	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
+	isCompacting bool          // true during compact LLM call (distinct from savedHistory)
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events
@@ -669,6 +670,66 @@ func (m *Model) sendInitCommand() tea.Cmd {
 	)
 }
 
+// handleCompactCommand handles the /compact slash command.
+// It sends the conversation history to the LLM for summarization, then creates
+// a new session with the summary, links old ↔ new sessions, and rebuilds the TUI.
+func (m *Model) handleCompactCommand() tea.Cmd {
+	// 1. Pre-checks
+	sm := m.agent.SessionManager()
+	if sm == nil || !sm.HasCurrent() {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "没有活跃的 session 可以压缩",
+		})
+		return nil
+	}
+	if len(m.history) == 0 {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "对话历史为空，无需压缩",
+		})
+		return nil
+	}
+
+	// 2. Show user intent and set state
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/compact"})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	// 3. Save state for rollback
+	m.savedHistory = make([]llm.Message, len(m.history))
+	copy(m.savedHistory, m.history)
+	m.isCompacting = true
+
+	// 4. Build compact prompt and run one-off
+	prompt := agent.BuildCompactPrompt(m.history)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.streamGen++
+	m.eventCh = m.agent.RunOneOffStream(ctx, nil, m.systemPrompt, prompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// formatCompactSummary formats the compact result for display in the chatview.
+func formatCompactSummary(summary string, oldMsgCount int) string {
+	var sb strings.Builder
+	sb.WriteString("🔍 **对话已压缩**\n\n")
+	sb.WriteString(fmt.Sprintf("旧消息数: %d 条\n", oldMsgCount))
+	sb.WriteString("\n---\n\n")
+	sb.WriteString(summary)
+	sb.WriteString("\n\n---\n")
+	sb.WriteString("💡 使用 `/sessions` 可查看旧会话的完整历史。\n")
+	return sb.String()
+}
+
 // handleSkillCommand handles the /skill slash command.
 // /skill              → list all available skills
 // /skill <name>       → activate a specific skill
@@ -886,6 +947,85 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
+
+		// Compact handling — before one-off restore
+		if m.isCompacting {
+			m.isCompacting = false
+			if event.Result != nil && event.Result.Error != nil {
+				// Failed — restore saved history
+				m.history = m.savedHistory
+				m.savedHistory = nil
+				m.chatview.AddMessage(chatMessage{
+					Role:    "error",
+					Content: "压缩失败: " + event.Result.Error.Error(),
+				})
+				m.chatview.FinishStreaming()
+				m.setState(stateIdle)
+				m.cancelFunc = nil
+				m.eventCh = nil
+				return nil
+			}
+
+			summary := event.Result.Response
+			sm := m.agent.SessionManager()
+
+			// Save old ThreadID before FinalizeCompact (sm.New changes current)
+			oldThreadID := ""
+			if oldSess := sm.Current(); oldSess != nil {
+				oldThreadID = oldSess.ThreadID
+			}
+
+			oldMsgCount := len(m.savedHistory)
+			newHistory, err := agent.FinalizeCompact(sm, m.systemPrompt, summary)
+			if err != nil {
+				m.history = m.savedHistory
+				m.savedHistory = nil
+				m.chatview.AddMessage(chatMessage{
+					Role:    "error",
+					Content: "压缩失败: " + err.Error(),
+				})
+				m.chatview.FinishStreaming()
+				m.setState(stateIdle)
+				m.cancelFunc = nil
+				m.eventCh = nil
+				return nil
+			}
+
+			// Migrate ThreadID to new session
+			if oldThreadID != "" {
+				sm.SetThreadID(oldThreadID)
+			}
+
+			m.history = newHistory
+			m.savedHistory = nil
+
+			// Update usage (compact LLM call's tokens count toward the session)
+			if event.Usage != nil {
+				m.totalUsage.InputTokens = event.Usage.InputTokens
+				m.totalUsage.OutputTokens += event.Usage.OutputTokens
+				m.totalUsage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
+				m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
+				m.statusbar.SetUsage(&m.totalUsage)
+				m.refreshSessionCost()
+			}
+
+			// Rebuild chatview for the new session
+			m.chatview.Clear()
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: formatCompactSummary(summary, oldMsgCount),
+			})
+			m.chatview.FinishStreaming()
+			m.syncSessionInfo()
+			m.setState(stateIdle)
+			m.pendingQueue = nil
+			m.chatview.RemovePendingItems()
+			m.statusbar.SetPendingCount(0)
+			m.cancelFunc = nil
+			m.eventCh = nil
+			return nil
+		}
+
 		isOneOff := m.savedHistory != nil
 		if isOneOff {
 			m.history = m.savedHistory

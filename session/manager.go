@@ -287,3 +287,15 @@ func (m *Manager) LoadSubagentMessages(sessionID string) (map[string][]Message, 
 func (m *Manager) Delete(id string) error {
 	return m.store.DeleteSession(id)
 }
+
+// UpdateMeta persists the given session's metadata. It is safe to call on
+// non-current sessions (e.g., updating compacted_child_id on the old session
+// after /compact). The Manager's current session pointer is NOT updated.
+func (m *Manager) UpdateMeta(session *Session) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if session == nil {
+		return fmt.Errorf("no session provided")
+	}
+	return m.store.UpdateMeta(session)
+}

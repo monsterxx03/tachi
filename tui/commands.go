@@ -107,6 +107,13 @@ var commands = []Command{
 		},
 	},
 	{
+		Name:        "/compact",
+		Description: "Compress conversation history into a summary and start a fresh session",
+		handler: func(m *Model) tea.Cmd {
+			return m.handleCompactCommand()
+		},
+	},
+	{
 		Name:        "/init",
 		Description: "Generate .tachi.md project context file via LLM",
 		handler: func(m *Model) tea.Cmd {
