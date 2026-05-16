@@ -15,10 +15,10 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
-	"github.com/monsterxx03/tachi/pkg/channel"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tui"
@@ -149,7 +149,7 @@ func main() {
 			}
 			return ctx, nil
 		},
-		Action:  runTUI,
+		Action: runTUI,
 		Commands: []*cli.Command{
 			{
 				Name:  "init",
@@ -440,10 +440,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	jsonOutput := cmd.Bool("json")
 
 	// In JSON mode, progress info goes to stderr so stdout is pure JSON.
-	if jsonOutput {
-		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
-		fmt.Fprintf(os.Stderr, "User: %s\n\n", prompt)
-	} else {
+	if !jsonOutput {
 		fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
 		fmt.Printf("User: %s\n\n", prompt)
 	}

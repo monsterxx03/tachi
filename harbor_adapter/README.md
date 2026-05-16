@@ -128,6 +128,40 @@ Host:
   └────────────────────────────────────────────┘
 ```
 
+## 调试技巧
+
+### 保留容器环境
+
+Harbor 评测完成后默认会删除 Docker 容器，不方便调试失败的任务。可以通过以下方式保留容器：
+
+```bash
+harbor run \
+    --no-delete \
+    --ek keep_containers=True \
+    --dataset terminal-bench@2.0 \
+    --agent-import-path ./harbor_adapter/tachi_agent.py:TachiAgent
+```
+
+**为什么需要两个参数？** Harbor 的容器生命周期有三层控制：
+
+| 选项                               | 容器            | 镜像    | Volumes |
+| ---------------------------------- | --------------- | ------- | ------- |
+| `--delete`（默认）                 | `down` 删除     | 删除    | 删除    |
+| `--no-delete`                      | `down` 删除     | 保留    | 保留    |
+| `--no-delete --ek keep_containers=True` | `stop` 保留 | 保留    | 保留    |
+
+> **注意：**`--no-delete` 名字有误导性——它只跳过 `docker compose down --rmi --volumes` 中的 `--rmi` 和 `--volumes`，但 `down` 命令本身仍然会删除容器。要真正保留容器，必须加上 `--ek keep_containers=True`，它会让 Harbor 改用 `docker compose stop`。
+
+保留容器后，可以手动进入：
+
+```bash
+# 找到容器名称（通常是 harbor 开头的 docker compose project）
+docker ps -a | grep harbor
+
+# 进入容器调试
+docker exec -it <container-name> bash
+```
+
 ## 项目结构
 
 ```
