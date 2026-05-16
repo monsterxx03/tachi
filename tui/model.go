@@ -671,8 +671,9 @@ func (m *Model) sendInitCommand() tea.Cmd {
 }
 
 // handleCompactCommand handles the /compact slash command.
-// It sends the conversation history to the LLM for summarization, then creates
-// a new session with the summary, links old ↔ new sessions, and rebuilds the TUI.
+// It appends a compact instruction to the current conversation so the LLM
+// can summarize using its existing context window (no history re-embedding).
+// After the turn completes, a new session is created with the summary.
 func (m *Model) handleCompactCommand() tea.Cmd {
 	// 1. Pre-checks
 	sm := m.agent.SessionManager()
@@ -703,14 +704,21 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	copy(m.savedHistory, m.history)
 	m.isCompacting = true
 
-	// 4. Build compact prompt and run one-off
-	prompt := agent.BuildCompactPrompt(m.history)
+	// 4. Clear tools so the LLM doesn't call tools during compact.
+	// Prompt also instructs "不要调用任何工具" as a double safeguard.
+	m.savedTools = m.agent.SaveToolRegistry()
+	m.agent.ClearToolRegistry()
+
+	// 5. Build compact instruction (no history — LLM sees history as context)
+	instruction := agent.BuildCompactInstruction()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
 
 	m.streamGen++
-	m.eventCh = m.agent.RunOneOffStream(ctx, nil, m.systemPrompt, prompt, m.chatOpts)
+	// Use RunConversationStream so the LLM sees the current session as
+	// structured history (role alternation, tool calls, etc.).
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -728,6 +736,23 @@ func formatCompactSummary(summary string, oldMsgCount int) string {
 	sb.WriteString("\n\n---\n")
 	sb.WriteString("💡 使用 `/sessions` 可查看旧会话的完整历史。\n")
 	return sb.String()
+}
+
+// rollbackCompact restores the pre-compact state (history + tools) and displays
+// an error in the chatview. Used when the compact LLM call fails or
+// FinalizeCompact returns an error.
+func (m *Model) rollbackCompact(errMsg string) {
+	m.history = m.savedHistory
+	m.savedHistory = nil
+	if m.savedTools != nil {
+		m.agent.RestoreToolRegistry(m.savedTools)
+		m.savedTools = nil
+	}
+	m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
+	m.chatview.FinishStreaming()
+	m.setState(stateIdle)
+	m.cancelFunc = nil
+	m.eventCh = nil
 }
 
 // handleSkillCommand handles the /skill slash command.
@@ -952,17 +977,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if m.isCompacting {
 			m.isCompacting = false
 			if event.Result != nil && event.Result.Error != nil {
-				// Failed — restore saved history
-				m.history = m.savedHistory
-				m.savedHistory = nil
-				m.chatview.AddMessage(chatMessage{
-					Role:    "error",
-					Content: "压缩失败: " + event.Result.Error.Error(),
-				})
-				m.chatview.FinishStreaming()
-				m.setState(stateIdle)
-				m.cancelFunc = nil
-				m.eventCh = nil
+				m.rollbackCompact("压缩失败: " + event.Result.Error.Error())
 				return nil
 			}
 
@@ -978,16 +993,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			oldMsgCount := len(m.savedHistory)
 			newHistory, err := agent.FinalizeCompact(sm, m.systemPrompt, summary)
 			if err != nil {
-				m.history = m.savedHistory
-				m.savedHistory = nil
-				m.chatview.AddMessage(chatMessage{
-					Role:    "error",
-					Content: "压缩失败: " + err.Error(),
-				})
-				m.chatview.FinishStreaming()
-				m.setState(stateIdle)
-				m.cancelFunc = nil
-				m.eventCh = nil
+				m.rollbackCompact("压缩失败: " + err.Error())
 				return nil
 			}
 
@@ -998,6 +1004,12 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 			m.history = newHistory
 			m.savedHistory = nil
+
+			// Restore tools (cleared before compact)
+			if m.savedTools != nil {
+				m.agent.RestoreToolRegistry(m.savedTools)
+				m.savedTools = nil
+			}
 
 			// Update usage (compact LLM call's tokens count toward the session)
 			if event.Usage != nil {

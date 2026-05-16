@@ -81,6 +81,32 @@ func TestBuildCompactPrompt_ThinkingBlocks(t *testing.T) {
 	assert.Contains(t, prompt, "让我思考一下")
 }
 
+func TestBuildCompactInstruction_Structure(t *testing.T) {
+	instruction := BuildCompactInstruction()
+	assert.Contains(t, instruction, "压缩摘要")
+	assert.Contains(t, instruction, "已完成的关键操作")
+	assert.Contains(t, instruction, "不要调用任何工具")
+	// Verify it does NOT embed actual conversation content:
+	// the old BuildCompactPrompt injects formatted markers like [工具调用: xxx],
+	// but BuildCompactInstruction only has the summarization instructions.
+	assert.NotContains(t, instruction, "[工具调用:")
+	assert.NotContains(t, instruction, "[工具结果:")
+}
+
+func TestBuildCompactInstruction_NoHistoryEmbedding(t *testing.T) {
+	history := []llm.Message{
+		{Role: "user", Content: "帮我重构用户模块"},
+		{Role: "assistant", Content: "好的，我来帮你重构用户模块。"},
+	}
+
+	prompt := BuildCompactPrompt(history)
+	instruction := BuildCompactInstruction()
+
+	// Old prompt embeds history; new instruction does not.
+	assert.Contains(t, prompt, "帮我重构用户模块")
+	assert.NotContains(t, instruction, "帮我重构用户模块")
+}
+
 func TestBuildCompactHistory_Structure(t *testing.T) {
 	systemPrompt := "You are Tachi."
 	summary := "用户希望重构用户模块。已完成注册功能迁移。"

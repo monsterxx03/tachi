@@ -387,6 +387,14 @@ func (a *AIAgent) RestoreToolRegistry(saved map[string]tools.Tool) {
 	}
 }
 
+// ClearToolRegistry removes all registered tools. Use when the LLM should
+// produce a response without invoking any tools (e.g. /compact summarization).
+func (a *AIAgent) ClearToolRegistry() {
+	for _, name := range a.toolRegistry.GetToolNames() {
+		a.toolRegistry.Unregister(name)
+	}
+}
+
 type RunResult struct {
 	Response       string
 	IterationsUsed int

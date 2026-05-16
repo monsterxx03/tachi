@@ -131,6 +131,7 @@ type threadActivation struct {
 	resultCh    chan handlerResult // agent sends final result here
 	pending     []string           // queued steer messages (BC merged)
 	ctx         context.Context    // agent context for cancellation
+	isCompact   bool               // true when this turn is a /compact operation
 }
 
 // handlerResult is the internal result type sent from the agent goroutine
@@ -233,8 +234,13 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		m.logger.Log("channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
-		// Slash commands are handled synchronously (no LLM invocation).
-		if strings.HasPrefix(msg.Content, "/") {
+		// /compact goes through the agent turn (with session context) rather
+		// than the synchronous slash-command path, so the LLM can summarize
+		// using its existing context window without re-sending all history.
+		isCompactCmd := strings.HasPrefix(msg.Content, "/compact")
+
+		// Other slash commands are handled synchronously (no LLM invocation).
+		if !isCompactCmd && strings.HasPrefix(msg.Content, "/") {
 			// /transcript returns an attachment (HTML file), not plain text,
 			// so it's handled separately from the general slash command path.
 			if strings.HasPrefix(msg.Content, "/transcript") {
@@ -280,6 +286,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 		// Check if an agent is already running for this thread.
 		ta := m.activateThread(msg.ThreadID, ctx)
+		ta.isCompact = isCompactCmd
 
 		ta.mu.Lock()
 		if ta.steerRespCh != nil {
@@ -295,6 +302,13 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		ta.steerRespCh = make(chan string)
 		ta.resultCh = make(chan handlerResult, 1)
 		ta.mu.Unlock()
+
+		// Transform /compact to compact instruction for the LLM.
+		// The LLM will summarize based on its existing session context
+		// without re-sending all history as text.
+		if isCompactCmd {
+			msg.Content = agent.BuildCompactInstruction()
+		}
 
 		// Run agent in a goroutine; handler blocks on the result channel.
 		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta)
@@ -312,6 +326,31 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 					Err: result.err,
 				}
 			}
+
+			// If this was a /compact turn, finalize the compact by creating
+			// a new session with the summary and migrating the ThreadID.
+			if isCompactCmd {
+				reply, err := m.finalizeCompactResult(msg.ThreadID, result.text)
+				if err != nil {
+					m.logger.Log("channel: finalizeCompactResult thread=%s err=%v", msg.ThreadID, err)
+					return channel.HandlerResult{
+						Reply: channel.OutgoingMessage{
+							ThreadID: msg.ThreadID,
+							Content:  fmt.Sprintf("❌ 压缩失败: %v", err),
+							ReplyTo:  msg.MessageID,
+						},
+						Err: err,
+					}
+				}
+				return channel.HandlerResult{
+					Reply: channel.OutgoingMessage{
+						ThreadID: msg.ThreadID,
+						Content:  reply,
+						ReplyTo:  msg.MessageID,
+					},
+				}
+			}
+
 			return channel.HandlerResult{
 				Reply: channel.OutgoingMessage{
 					ThreadID: msg.ThreadID,
@@ -400,6 +439,12 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}))
 	}
 
+	// For /compact turns, clear all tools — the LLM should summarize
+	// based on conversation context only, not make new tool calls.
+	if ta.isCompact {
+		aiAgent.ClearToolRegistry()
+	}
+
 	// Per-thread session.
 	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
 	if err != nil {
@@ -467,8 +512,6 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 		return m.handleVerboseCommand(cmd.ThreadID)
 	case "model":
 		return m.handleModelCommand(cmd.Args)
-	case "compact":
-		return m.handleCompactCommand(cmd.ThreadID)
 	default:
 		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
 		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model, compact", cmd.Name), nil
@@ -501,8 +544,6 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 			args = strings.Join(parts[1:], " ")
 		}
 		return m.handleModelCommand(args)
-	case "/compact":
-		return m.handleCompactCommand(msg.ThreadID)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
 		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
@@ -619,11 +660,14 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	return "✅ Started a new conversation. Previous session has been ended.", nil
 }
 
-// handleCompactCommand handles the /compact command for channel mode.
-// It runs the compaction LLM call synchronously, creates a new session with the
-// summary, links old ↔ new sessions, and migrates the ThreadID.
-func (m *Manager) handleCompactCommand(threadID string) (string, error) {
-	// 1. Load session
+// finalizeCompactResult creates a new session with the LLM-generated summary,
+// links it bidirectionally to the old session, migrates the ThreadID, and
+// returns a formatted result string for the channel response.
+//
+// Unlike the old handleCompactCommand, this does NOT run the LLM call itself —
+// the summary has already been generated by runAgentTurn using the current
+// session context (no history re-embedding).
+func (m *Manager) finalizeCompactResult(threadID string, summary string) (string, error) {
 	sm := m.newSessionManager()
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
@@ -637,66 +681,18 @@ func (m *Manager) handleCompactCommand(threadID string) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("加载消息失败: %w", err)
 	}
-	if len(sessionMsgs) < 2 {
-		return "对话太短，无需压缩。", nil
-	}
 
-	// 2. Get provider
-	prov, resolved := m.getProvider()
-	if prov == nil || resolved == nil {
-		return "", fmt.Errorf("provider 未初始化")
-	}
-
-	// 3. Convert to llm.Message for prompt building
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Type)
-	if err != nil {
-		return "", fmt.Errorf("转换消息失败: %w", err)
-	}
-	compactPrompt := agent.BuildCompactPrompt(llmMsgs)
-
-	// 4. Create agent (unlimited iterations)
-	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
-	aiAgent.SetSkipEditConfirm(true)
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	mcpMgr, err := aiAgent.Configure(context.Background(), m.cfg)
-	if err != nil {
-		return "", fmt.Errorf("配置 agent 失败: %w", err)
-	}
-	if mcpMgr != nil {
-		defer mcpMgr.Close()
-	}
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
-
-	// 5. Run one-off with configurable timeout
-	compactTimeout := config.CompactTimeoutDefault
-	if m.cfg != nil {
-		compactTimeout = m.cfg.Compact.Timeout
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), compactTimeout)
-	defer cancel()
-
-	eventCh := aiAgent.RunOneOffStream(ctx, nil, "", compactPrompt, llm.ChatOptions{
-		MaxTokens: resolved.MaxTokens,
-	})
-
-	summary, err := agent.DrainCompactEvents(eventCh)
-	if err != nil {
-		return "", fmt.Errorf("压缩失败: %w", err)
-	}
-
-	// 6. Finalize (save summary as new session)
-	newHistory, err := agent.FinalizeCompact(sm, m.systemPrompt, summary)
+	// Finalize: create new session, write summary, link old ↔ new.
+	_, err = agent.FinalizeCompact(sm, m.systemPrompt, summary)
 	if err != nil {
 		return "", fmt.Errorf("创建压缩会话失败: %w", err)
 	}
-	_ = newHistory // not needed by channel — next runAgentTurn will load from session
 
-	// 7. Migrate ThreadID to new session
+	// Migrate ThreadID to new session (sm.Current now points to the new session).
 	if err := sm.SetThreadID(threadID); err != nil {
 		m.logger.Log("channel: /compact set thread_id: %v", err)
 	}
 
-	// 8. Format result
 	return fmt.Sprintf(
 		"🔍 对话已压缩\n\n原会话: %s (%s)\n消息数: %d\n\n摘要:\n%s",
 		sess.Title, sess.ID[:8], len(sessionMsgs), summary,
