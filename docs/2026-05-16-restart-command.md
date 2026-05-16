@@ -1,255 +1,251 @@
 # /restart 命令 — 热重启自己
 
-> 版本: 1.0 | 日期: 2026-05-16 | 状态: 设计阶段
-> 关联: [Config Hot-Reload](./2026-05-16-config-hot-reload.md),
->       [session 存储](./2026-05-10-session-replace-transcript.md)
+> 版本: 2.0 | 日期: 2026-05-16 | 状态: 设计阶段
+> 关联: [Config Hot-Reload](./2026-05-16-config-hot-reload.md)
+>
+> 变更: v2.0 从 `syscall.Exec` 改为 `os.Exit(42)` + systemd `RestartForceExitStatus`
 
 ## 一、问题
 
-Tachi 在 channel 模式下（微信/Telegram）是一个常驻后台进程。
+Tachi 在 channel 模式下（微信/Telegram）是一个 systemd 管理的常驻后台进程。
 用户让我改自己代码后，需要我能**自己重启以加载新代码**。
 
-当前做不到——改完代码必须有人去终端 `systemctl restart tachi` 或
-kill 进程再拉起来。
+当前做不到——改完代码必须有人 ssh 上去跑 `systemctl restart tachi`。
 
-## 二、核心思路：syscall.Exec
+## 二、核心思路：exit(42) -> systemd 重启
 
-不用退出进程再让 systemd 拉起来。直接用 `syscall.Exec` **原地替换当前进程**：
+systemd 本身就是进程管理器。不需要在 Go 里模拟进程重启。
 
 ```
-                    ┌──────────────────────┐
-                    │    tachi (PID 1234)    │
-                    │  channel manager 跑着  │
-                    │  正在处理用户消息...     │
-                    └──────────┬───────────┘
-                               │ 用户输入 /restart
-                               ▼
-                    ┌──────────────────────┐
-                    │ 1. 保存当前 session    │
-                    │ 2. 断开 channel 连接   │
-                    │ 3. 杀掉 MCP 子进程     │
-                    │ 4. syscall.Exec()     │
-                    └──────────┬───────────┘
-                               │
-                    ┌──────────▼───────────┐
-                    │    tachi (PID 1234)    │  ← PID 不变！
-                    │  重新加载 config.yaml  │
-                    │  重连 channel          │
-                    │  开始处理用户消息       │
-                    └──────────────────────┘
+用户: /restart
+       ↓
+os.Exit(42)
+       ↓
+systemd 检测到退出码 42
+       ↓
+RestartForceExitStatus=42 → 启动新进程
+       ↓
+新进程读取新二进制、新 config.yaml
+       ↓
+"🔄 重启完成"
 ```
 
-**为什么 syscall.Exec 而不是退出让 systemd 重启：**
+### 为什么不是别的方式
 
-| 方案 | PID | systemd 感知 | 需要 sudo |
-|------|-----|-------------|-----------|
-| 退出 → systemd 拉起来 | 变 | 看到进程退出，可能误判为崩溃 | 不需要 |
-| `syscall.Exec` | **不变** | **零感知，永远不知道你重启过** | 不需要 |
-| `systemctl restart` | 变 | 正常流程 | 需要 |
+| 方案 | 问题 |
+|------|------|
+| `syscall.Exec` | **多此一举**。systemd 本来就是做进程管理的，我在 Go 里重写一遍？ |
+| `systemctl restart` | 需要 root 权限或 polkit，Tachi 以普通用户运行的话搞不定 |
+| `SIGUSR1` + 信号处理 | 可以，但不如 exit code 简单——信号处理要在进程里等当前 turn 结束，exit code 可以 `os.Exit` 之前自己决定什么时候 exit |
 
-**syscall.Exec 的代价**：当前 goroutine 全部暴毙。所以重启前必须：
-1. 保存 session 到磁盘
-2. 断开 channel（让用户看到"正在重启"）
-3. 杀掉 MCP 子进程（否则变孤儿）
+### 退出码约定
+
+```ini
+[Service]
+ExecStart=/usr/local/bin/tachi channel
+Restart=on-failure          # 非 0 退出重启，0 退出不重启
+RestartForceExitStatus=42   # 强制：42 也算"要重启"
+RestartSec=3
+```
+
+| 操作 | 退出码 | systemd 行为 |
+|------|--------|-------------|
+| `/restart` | 42 | **重启**（`RestartForceExitStatus` 生效） |
+| crash / panic | 非 0 | **重启**（`Restart=on-failure` 生效） |
+| 正常关机 | 0 | **不重启**（`Restart=on-failure` 不触发） |
+
+`RestartForceExitStatus=42` 的意思是：**即使 `Restart=on-failure` 的策略认为这个退出码不需要重启，但只要它是 42，就给我重启。**
+
+这样三个场景互不干扰：
+
+- 崩溃 → systemd 重启它（本来就会）
+- `/restart` → systemd 重启它（靠 42 触发）
+- 正常停机 → systemd 不重启（靠 0 抑制）
 
 ## 三、命令接口
 
 ```
-/restart          → 等当前 turn 结束 → 保存状态 → exec
-/restart force    → 立即 exec（当前正在跑的消息丢了别怪我）
+/restart          → 等当前 turn 结束 → 保存 session → os.Exit(42)
+/restart force    → 立即退出（当前 turn 丢了不管）
 ```
 
-channel 模式下的行为：
+### channel 模式下的行为
 
 ```
-用户: /restart
-        ↓
-Agent 检测到这是 slash command，不交给 LLM
-        ↓
-channel manager 停掉当前正在处理的 turn（force 则立即停）
-        ↓
-保存所有 session 到磁盘
-        ↓
-遍历 MCP servers，杀掉子进程
-        ↓
-断开 channel 连接，发送最后一条 "🔄 Tachi 正在重启..."
-        ↓
-syscall.Exec("/usr/local/bin/tachi", os.Args, os.Environ())
-        ↓
-新进程启动，重读 config.yaml
-重连 channel
-"🔄 重启完成，可以继续了"
+用户输入 /restart
+       ↓
+channel manager 拦截，不交给 LLM
+       ↓
+Graceful 模式：等当前在跑的 RunConversationStream 结束
+Force 模式：不等，直接走
+       ↓
+mgr.Stop() 断开所有 channel 连接
+       ↓
+os.Exit(42)
+       ↓
+systemd 看到 42 → 3 秒后拉起新进程
+新进程加载新二进制 → 重连 channel → 等用户说话
 ```
+
+### TUI 模式下的行为
+
+```
+> /restart
+⚠ TUI 模式下你直接 Ctrl+C 重新跑就行。
+  或者用 /config reload 来重读配置。
+```
+
+TUI 前台进程不走 systemd，没必要用这个命令。
 
 ## 四、实现细节
 
-### 4.1 channel.Manager 新增 Restart 方法
+### 4.1 改动量：极小
+
+| 改什么 | 在哪里 | 行数 |
+|--------|--------|------|
+| 拦截 `/restart` slash command | `channel/manager/manager.go` | ~20 行 |
+| `mgr.Restart()` 方法 | 同上 | ~15 行 |
+| 广播"正在重启"消息 | 同上 | ~5 行 |
+| **总计** | | **~40 行** |
+
+### 4.2 核心代码
 
 ```go
 // channel/manager/manager.go
 
+const RestartExitCode = 42
+
+// handleSlashCommand 处理用户输入中的 slash 命令。
+// 返回 true 表示已消费（不再发给 LLM）。
+func (m *Manager) handleSlashCommand(msg *Message) bool {
+    text := strings.TrimSpace(msg.Content)
+
+    switch {
+    case text == "/restart":
+        go m.restart(RestartGraceful)
+        return true
+    case text == "/restart force":
+        go m.restart(RestartForce)
+        return true
+    }
+
+    return false // 不是 slash 命令，正常走 LLM
+}
+
 type RestartMode int
 const (
-    RestartGraceful RestartMode = iota  // 等当前 turn 结束
-    RestartForce                         // 立即重启
+    RestartGraceful RestartMode = iota
+    RestartForce
 )
 
-// Restart 保存状态、断开连接、退出当前进程。
-// 返回一个 error 让调用者执行 syscall.Exec。
-// 永不返回（除非出错）。
-func (m *Manager) Restart(ctx context.Context, mode RestartMode) error {
-    // 1. 广播重启通知到所有 channel
-    m.broadcast("🔄 Tachi 正在重启...")
+func (m *Manager) restart(mode RestartMode) {
+    // 1. 发通知
+    m.broadcast("🔄 Tachi 正在重启，请稍候...")
 
-    // 2. 停掉 cron scheduler
-    if m.scheduler != nil {
-        m.scheduler.Stop()
+    // 2. 如果是 graceful 模式，等当前 turn 结束
+    if mode == RestartGraceful {
+        m.waitForCurrentTurn()
     }
 
     // 3. 停掉所有 channel
     m.stopAll()
 
-    // 4. 保存 session（每个 session 的最后一条消息）
-    if m.agent != nil && m.agent.SessionManager() != nil {
-        // session manager 的 JSONL 已经是实时写入的
-        // 只需确保关闭文件
-    }
+    // 4. session 已经是实时写入 JSONL 的，不用额外保存
+    //    MCP 子进程由 systemd 自动收孤儿
+    //    数据都在磁盘上了
 
-    // 5. 断开 MCP 连接（杀掉子进程）
-    if m.mcpMgr != nil {
-        m.mcpMgr.Close()
-    }
-
-    // 6. 返回，让调用者 exec
-    return nil
+    // 5. 退出，让 systemd 处理重启
+    os.Exit(RestartExitCode)
 }
 ```
 
-### 4.2  main.go 集成
+### 4.3 `waitForCurrentTurn` 的简单实现
+
+channel manager 在 `processMessage` 里调用 `RunConversationStream` 时，
+记录一个 `inFlight` 计数器。`/restart` 时轮询这个计数器归零。
 
 ```go
-// main.go
-
-func runChannels(ctx context.Context, cmd *cli.Command) error {
-    // ... 现有初始化逻辑 ...
-
-    if err := mgr.Start(ctx); err != nil {
-        return err
+func (m *Manager) waitForCurrentTurn() {
+    for i := 0; i < 300; i++ { // 最多等 5 分钟
+        if m.inFlight.Load() == 0 {
+            return
+        }
+        time.Sleep(time.Second)
     }
-
-    // 新增：等待 restart 信号
-    select {
-    case <-ctx.Done():
-        // 正常退出（SIGINT/SIGTERM）
-        return nil
-    case <-mgr.RestartCh():
-        // 收到 /restart 命令，准备 exec
-    }
-
-    // 执行 syscall.Exec
-    binary, _ := os.Executable()
-    // 保留原始参数和环境变量
-    syscall.Exec(binary, os.Args, os.Environ())
-
-    return nil
+    // 超时了？不等了，直接退走人
+    m.log("restart: grace period exceeded, forcing restart")
 }
 ```
 
-### 4.3  `/restart` 在 channel 层处理
+### 4.4 不需要的改动
 
-不能在 LLM 层处理——LLM 收到 `/restart` 时已经在 agent loop 里，
-等它返回再处理会增加复杂度和竞态。
-
-```go
-// channel/manager/manager.go
-
-func (m *Manager) handleSlashCommand(cmd string) bool {
-    switch {
-    case cmd == "/restart":
-        // 直接处理，不经过 LLM
-        m.restartCh <- struct{}{}
-        return true
-    case cmd == "/restart force":
-        m.restartCh <- struct{}{}
-        return true
-    }
-    return false  // 不是 slash command，交给 LLM
-}
-```
-
-### 4.4  TUI 模式下的 /restart
-
-TUI 模式下 `syscall.Exec` 不太好——TUI 进程通常跑在前台，
-用户重启的目的是加载新代码。但 TUI 有 `/config reload` 就够了。
-所以 TUI 下 `/restart` = 礼貌地告诉你"请在终端里重启"：
-
-```
-> /restart
-⚠ TUI 模式下不支持进程内重启。
-  请退出并重新运行 tachi。
-```
-
-或者也可以 exec——用户可能改了代码之后想快速验证。
-实际上 exec 在 TUI 下也完全可行。保持一致更好。
+| 不需要做 | 原因 |
+|---------|------|
+| ❌ 保存 session | `AppendMessage` 已经是实时写入磁盘的 |
+| ❌ 杀 MCP 子进程 | systemd 接管了进程组，会自动清理 |
+| ❌ `syscall.Exec` | 整个设计 v1 的核心，现在全部删掉 |
+| ❌ 复杂的生命周期管理 | 直接 `os.Exit` 完事，systemd 管一切 |
 
 ## 五、安全边界
 
 | 场景 | 行为 |
 |------|------|
-| `/restart` 时 LLM 正在回复 | Graceful 模式等 TurnComplete → 再 Exec |
-| `/restart force` 时 LLM 正在回复 | 直接终止 → 丢掉当前 turn |
-| syscall.Exec 失败（二进制被删了） | 报错退出，systemd 会拉起来 |
-| 有 MCP 子进程在跑 | Graceful 模式先停掉 |
-| 有 subagent 在跑 | Subagent 记录已写入 `subagent/<id>.jsonl`，不丢 |
-| YAML 语法错误导致新进程启动失败 | 新进程退出 → systemd 再次拉起 → 死循环？ |
-| | → 需要退避机制：如果 30 秒内重启超过 3 次，等 60 秒再试 |
+| `/restart` 时 LLM 正在回复 | Graceful 模式等 `inFlight == 0` |
+| `/restart force` | 不等，直接 os.Exit |
+| escape 分析发现不需要等待 channel 关闭 | 不关闭其实也行——核都爆了，channel 自己会断 |
+| 新二进制有问题（启动就崩） | systemd 会尝试重启，`RestartSec=3` 防止烧 CPU |
+| | `StartLimitInterval=30` + `StartLimitBurst=3` 防止无限循环 |
+| 用户重复输入 `/restart` | 第二个请求看到已在重启中，忽略 |
+| 正在跑 subagent | subagent 记录已写入 `subagent/<id>.jsonl`，重启后可以恢复 |
 
-## 六、与 /config reload 的关系
-
-```
-/config reload          → 只重读 YAML，不重启进程（hot 配置秒生效）
-                          不改代码，不改 provider，不改 channel
-
-/restart                → 整个进程 exec，加载新编译的二进制
-                          用于"我改了代码，重新编译了，让我试试"
-
-/config reload --warm   → 介于两者之间：重连 MCP、换 provider
-                          不 exec，不丢 PID
-```
-
-## 七、systemd unit 推荐配置
+## 六、systemd unit 完整配置
 
 ```ini
+[Unit]
+Description=Tachi AI Agent (Channel Mode)
+After=network.target
+
 [Service]
+Type=simple
+User=will
 ExecStart=/usr/local/bin/tachi channel
-Restart=always
-RestartSec=5
-# 炸了等 5 秒再起，防止快速崩->重启死循环
+
+# /restart 退出码 → 触发重启
+Restart=on-failure
+RestartForceExitStatus=42
+RestartSec=3
+
+# 防止快速崩溃死循环
+StartLimitInterval=30
+StartLimitBurst=3
+StartLimitAction=start
+
+[Install]
+WantedBy=default.target
 ```
 
-不需要特殊的退出码处理——syscall.Exec 进程从没退出过，
-systemd 永远看不到进程终止。
+## 七、和已有命令的对比
 
-## 八、进阶：持续集成后的自动化重启
+```
+/config reload    → 不改二进制，只改 YAML
+                    适合：改语言、改模型、改 API key
+                    hot 配置秒生效，不用重启
 
-除了手工 `/restart`，还可以结合文件监听：
+/restart          → 加载新二进制
+                    适合：改了代码、重新编译、部署了新版本
+                    os.Exit(42) → systemd 拉起
 
-```go
-// 当检测到 /usr/local/bin/tachi 文件被替换时（比如 CI 部署了新版本），
-// 自动触发优雅重启。
-//
-// Phase 2 可以考虑加一个 --watch 模式：
-//   tachi channel --watch
-// 用 fsnotify 监控二进制文件的 mtime 变化。
+手动 systemctl    → 管理员远程操作
+                    适合：改 unit 文件、升级 tachi 包
 ```
 
-但这是 Phase 2——先把手动 `/restart` 跑通。
+三者没有重叠，各自解决各自的问题。
 
-## 九、不做的事
+## 八、不做的事
 
 | 不做 | 原因 |
 |------|------|
-| ❌ systemctl restart | 需要 sudo 权限，`syscall.Exec` 不需要 |
-| ❌ Docker restart | 容器环境用 `SIGTERM` + 健康检查即可，exec 也行 |
-| ❌ 热加载 Go 插件 (plugin) | Go plugin 限制太多（版本必须完全一致），不如 exec 干净 |
-| ❌ 二进制文件自更新 | 安全风险太高，交给 CI/CD 做 |
+| ❌ 自动检测二进制变化重启 | 留着以后想做再做 |
+| ❌ Docker 兼容 | 你有 systemd，不需要 |
+| ❌ Mac launchd 支持 | 你跑在 Linux 上 |
+| ❌ Windows 服务支持 | 同上 |
