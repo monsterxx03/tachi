@@ -1,6 +1,7 @@
 # Native Memory — 会话记忆系统
 
-> 版本: 1.0 | 日期: 2026-05-16 | 状态: 设计阶段
+> 版本: 1.0 | 日期: 2026-05-16 | 状态: **被 v2 取代**
+> 被取代版本: [v2 可插拔 Memory Backend](./2026-05-17-memory.md)
 > 关联: [session 存储](./2026-05-10-session-replace-transcript.md),
 >       [systemreminder 机制](../agent/systemreminder/reminder.go)
 
