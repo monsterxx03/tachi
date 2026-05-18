@@ -10,6 +10,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
 // Mem9Backend stores memory in the mem9 cloud vector database.
@@ -38,8 +40,14 @@ func NewMem9Backend(cfg Config) (*Mem9Backend, error) {
 	if mode == "" {
 		mode = "smart"
 	}
+
+	httpClient, err := proxy.NewHTTPClient(cfg.Mem9.Proxy, cfg.Mem9.RequestTimeout)
+	if err != nil {
+		return nil, fmt.Errorf("mem9: create http client: %w", err)
+	}
+
 	return &Mem9Backend{
-		http:           &http.Client{Timeout: cfg.Mem9.RequestTimeout},
+		http:           httpClient,
 		baseURL:        baseURL,
 		apiKey:         cfg.Mem9.APIKey,
 		agentID:        agentID,

@@ -289,6 +289,7 @@ type Mem9SubConfig struct {
 	AgentID        string `yaml:"agent_id"`        // default: "tachi"
 	Mode           string `yaml:"mode"`            // default: "smart"
 	RequestTimeout string `yaml:"request_timeout"` // HTTP request timeout (default "15s")
+	Proxy          string `yaml:"proxy"`           // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
 }
 
 type Config struct {

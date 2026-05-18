@@ -79,6 +79,7 @@ type Mem9Config struct {
 	APIKey         string
 	AgentID        string        // default: "tachi"
 	Mode           string        // "smart" or "raw"
+	Proxy          string        // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 	RequestTimeout time.Duration // HTTP request timeout (default 15s)
 }
 

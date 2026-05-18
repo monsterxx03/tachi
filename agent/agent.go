@@ -1196,6 +1196,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 				APIKey:         cfg.Memory.Mem9.APIKey,
 				AgentID:        cfg.Memory.Mem9.AgentID,
 				Mode:           cfg.Memory.Mem9.Mode,
+				Proxy:          cfg.Memory.Mem9.Proxy,
 				RequestTimeout: reqTimeout,
 			},
 		}
