@@ -59,6 +59,7 @@ type AIAgent struct {
 	// Memory-related fields
 	memoryBackend  memory.Backend  // nil = memory not enabled
 	memoryTimeout  time.Duration   // context deadline for Store/Recall/Forget
+	skipMemory     bool            // set by RunOneOffStream to suppress turn-level memory writes
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -225,7 +226,8 @@ func (a *AIAgent) RunOneOffStream(
 
 	go func() {
 		defer close(ch)
-		defer func() { a.steerRespCh = nil }()
+		defer func() { a.steerRespCh = nil; a.skipMemory = false }()
+		a.skipMemory = true // suppress memory writes for one-off runs (e.g. /commit, /init)
 
 		if provider == nil {
 			provider = a.provider
@@ -351,11 +353,15 @@ func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory
 
 // storeTurnMemory writes the current turn's conversation to the memory backend.
 // Called after each assistant response completes (StoreScopeTurn).
+// No-ops when skipMemory is true (e.g. /commit, /init, sub-agents).
 func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 	if len(turnMsgs) == 0 {
 		return
 	}
 	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	if a.skipMemory {
 		return
 	}
 	sess := a.sessionManager.Current()
