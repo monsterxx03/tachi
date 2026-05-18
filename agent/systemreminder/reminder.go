@@ -64,6 +64,15 @@ type Reminder interface {
 	Generate(ctx Context) []string
 }
 
+// TaggedReminder is an optional interface that Reminders can implement
+// to declare their own XML wrapper tag. When a Reminder implements this,
+// its output is wrapped in <tag>...</tag> instead of the default
+// <system-reminder> block.
+type TaggedReminder interface {
+	Reminder
+	WrapperTag() string // e.g. "relevant-memories"
+}
+
 // Collector aggregates a set of Reminders and formats active ones into a
 // single <system-reminder>...</system-reminder> block.
 type Collector struct {
@@ -83,33 +92,73 @@ func (c *Collector) SetLogger(l *debuglog.Logger) {
 	c.logger = l
 }
 
-// Collect queries every registered reminder and, if any produce output,
-// wraps the combined lines in <system-reminder> tags.
+// Collect queries every registered reminder and groups output by wrapper tag.
+// Reminders that implement TaggedReminder get their own <tag>...</tag> block;
+// all others are combined into the default <system-reminder> block.
 // Returns an empty string when no reminders are active or c is nil.
 func (c *Collector) Collect(ctx Context) string {
 	if c == nil {
 		return ""
 	}
-	var parts []string
-	var firedNames []string
+
+	type group struct {
+		parts     []string
+		firedName string
+	}
+	defaultGroup := &group{}
+	taggedGroups := make(map[string]*group) // tag → group
+
 	for _, r := range c.reminders {
 		generated := r.Generate(ctx)
-		if len(generated) > 0 {
-			// Extract the short type name (without package path) for logging.
-			typeName := fmt.Sprintf("%T", r)
-			if idx := strings.LastIndex(typeName, "."); idx >= 0 {
-				typeName = typeName[idx+1:]
+		if len(generated) == 0 {
+			continue
+		}
+
+		// Extract the short type name for logging.
+		typeName := fmt.Sprintf("%T", r)
+		if idx := strings.LastIndex(typeName, "."); idx >= 0 {
+			typeName = typeName[idx+1:]
+		}
+
+		if tr, ok := r.(TaggedReminder); ok {
+			tag := tr.WrapperTag()
+			g := taggedGroups[tag]
+			if g == nil {
+				g = &group{firedName: tag}
+				taggedGroups[tag] = g
+			} else {
+				g.firedName += "+" + typeName
 			}
-			firedNames = append(firedNames, typeName)
-			parts = append(parts, generated...)
+			g.parts = append(g.parts, generated...)
+		} else {
+			if defaultGroup.firedName != "" {
+				defaultGroup.firedName += ", "
+			}
+			defaultGroup.firedName += typeName
+			defaultGroup.parts = append(defaultGroup.parts, generated...)
 		}
 	}
-	if len(parts) == 0 {
+
+	var blocks []string
+
+	// Build <system-reminder> block from default-group reminders.
+	if len(defaultGroup.parts) > 0 {
+		block := "<system-reminder>\n" + strings.Join(defaultGroup.parts, "\n") + "\n</system-reminder>"
+		blocks = append(blocks, block)
+		c.logger.Log("systemreminder: firing reminder(s): %s", defaultGroup.firedName)
+	}
+
+	// Build tagged blocks (e.g. <relevant-memories>).
+	for tag, g := range taggedGroups {
+		block := "<" + tag + ">\n" + strings.Join(g.parts, "\n") + "\n</" + tag + ">"
+		blocks = append(blocks, block)
+		c.logger.Log("systemreminder: firing tagged reminder(s): %s", g.firedName)
+	}
+
+	if len(blocks) == 0 {
 		return ""
 	}
-	block := "<system-reminder>\n" + strings.Join(parts, "\n") + "\n</system-reminder>"
-	c.logger.Log("systemreminder: firing reminder(s): %s", strings.Join(firedNames, ", "))
-	return block
+	return strings.Join(blocks, "\n")
 }
 
 // WrapUserMessage prepends the <system-reminder> block (if any) to the
@@ -378,9 +427,16 @@ func escapeXMLAttr(s string) string {
 // and wraps results in <relevant-memories> blocks.
 //
 // Calls Backend.Recall() which performs vector semantic search for mem9.
+// Implements TaggedReminder so output is wrapped in <relevant-memories>
+// rather than mixed into <system-reminder>.
 type MemoryRecallReminder struct {
 	Backend memory.Backend // nil = memory not configured
 	Limit   int            // max recall results (default 5)
+}
+
+// WrapperTag implements the TaggedReminder interface.
+func (r MemoryRecallReminder) WrapperTag() string {
+	return "relevant-memories"
 }
 
 // Generate implements the Reminder interface. Fires only on real user messages

@@ -368,3 +368,73 @@ func TestSkillListReminder_EmptySkills(t *testing.T) {
 		t.Errorf("expected nil from empty skills, got %v", lines)
 	}
 }
+
+// ---- TaggedReminder tests ---------------------------------------------------
+
+// mockTaggedReminder is a test stub that implements both Reminder and TaggedReminder.
+type mockTaggedReminder struct {
+	tag     string
+	content []string
+}
+
+func (m *mockTaggedReminder) Generate(_ Context) []string { return m.content }
+func (m *mockTaggedReminder) WrapperTag() string          { return m.tag }
+
+func TestTaggedReminder_WrappedInOwnTag(t *testing.T) {
+	c := NewCollector(
+		&mockTaggedReminder{tag: "relevant-memories", content: []string{"memory 1", "memory 2"}},
+	)
+	result := c.Collect(Context{IsFirstMessage: true})
+	if !strings.Contains(result, "<relevant-memories>") {
+		t.Errorf("expected <relevant-memories> tag, got: %s", result)
+	}
+	if !strings.Contains(result, "</relevant-memories>") {
+		t.Errorf("expected </relevant-memories> tag, got: %s", result)
+	}
+	if strings.Contains(result, "<system-reminder>") {
+		t.Errorf("expected no <system-reminder> tag for tagged-only reminders, got: %s", result)
+	}
+	if !strings.Contains(result, "memory 1") || !strings.Contains(result, "memory 2") {
+		t.Errorf("expected memory content, got: %s", result)
+	}
+}
+
+func TestTaggedReminder_MixedWithDefault(t *testing.T) {
+	c := NewCollector(
+		DateReminder{},
+		&mockTaggedReminder{tag: "relevant-memories", content: []string{"memory 1"}},
+	)
+	result := c.Collect(Context{
+		IsFirstMessage:  true,
+		Now:              time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+	})
+	// Should have both blocks
+	if !strings.Contains(result, "<system-reminder>") {
+		t.Errorf("expected <system-reminder> tag, got: %s", result)
+	}
+	if !strings.Contains(result, "<relevant-memories>") {
+		t.Errorf("expected <relevant-memories> tag, got: %s", result)
+	}
+	// <relevant-memories> should come after <system-reminder>
+	sysIdx := strings.Index(result, "<system-reminder>")
+	memIdx := strings.Index(result, "<relevant-memories>")
+	if sysIdx < 0 || memIdx < 0 || memIdx <= sysIdx {
+		t.Errorf("expected <system-reminder> before <relevant-memories>, got: %s", result)
+	}
+	if !strings.Contains(result, "Sunday, June 1, 2025") {
+		t.Errorf("expected date in system-reminder, got: %s", result)
+	}
+	if !strings.Contains(result, "memory 1") {
+		t.Errorf("expected memory in relevant-memories, got: %s", result)
+	}
+}
+
+func TestTaggedReminder_EmptyGenerate_NoBlock(t *testing.T) {
+	c := NewCollector(
+		&mockTaggedReminder{tag: "relevant-memories", content: nil},
+	)
+	result := c.Collect(Context{IsFirstMessage: true})
+	if result != "" {
+		t.Errorf("expected empty when no reminders fire, got: %s", result)
+	}
+}
