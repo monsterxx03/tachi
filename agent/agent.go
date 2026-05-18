@@ -340,6 +340,38 @@ func (a *AIAgent) MemoryBackend() memory.Backend {
 	return a.memoryBackend
 }
 
+// RecordMemory implements tools.MemoryRecorder. It persists an explicit
+// LLM-initiated memory to the memory backend, associated with the current
+// session. Returns an error if memory is not configured or no session is active.
+func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []string) error {
+	if a.memoryBackend == nil {
+		return fmt.Errorf("memory backend not configured")
+	}
+	if a.sessionManager == nil {
+		return fmt.Errorf("session manager not configured")
+	}
+	sess := a.sessionManager.Current()
+	if sess == nil {
+		return fmt.Errorf("no active session")
+	}
+
+	storeCtx, cancel := context.WithTimeout(ctx, a.memoryTimeout)
+	defer cancel()
+
+	err := a.memoryBackend.Store(storeCtx, memory.StoreOptions{
+		Scope:         memory.StoreScopeTurn,
+		SessionID:     sess.ID,
+		Tags:          tags,
+		DirectContent: content,
+	})
+	if err != nil {
+		a.logger.Log("RecordMemory: store failed: %v", err)
+		return err
+	}
+	a.logger.Log("RecordMemory: stored content=%q tags=%v", truncateForLog(content, 60), tags)
+	return nil
+}
+
 // collectTurnMessages extracts the last user message from the conversation
 // history and pairs it with the current assistant response text.
 func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory.Message {
@@ -1297,6 +1329,12 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		Proxy:   cfg.WebFetch.Proxy,
 	}
 	a.RegisterTool(&wf)
+
+	// --- RecordMemory tool (only when memory backend is configured) ---
+	if a.memoryBackend != nil {
+		a.RegisterTool(tools.NewRecordMemoryTool(a))
+		a.logger.Log("Memory: RecordMemory tool registered")
+	}
 
 	// --- MCP servers ---
 	var mgr *mcp.Manager

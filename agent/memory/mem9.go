@@ -72,7 +72,22 @@ var scopeFilters = map[StoreScope]ContentFilter{
 // Store writes memory to mem9 API. Only StoreScopeTurn is processed;
 // compact and session scopes are no-ops since mem9 already receives
 // turn-level data incrementally (API deduplicates by session_id).
+//
+// When opts.DirectContent is set, the content is written directly via the
+// content field (not ingest-based). Otherwise, opts.TurnMessages are filtered
+// and ingested via the messages field.
 func (b *Mem9Backend) Store(ctx context.Context, opts StoreOptions) error {
+	// Direct content write — no message filtering, uses the content API path.
+	if opts.DirectContent != "" {
+		body := map[string]any{
+			"content":    opts.DirectContent,
+			"tags":       opts.Tags,
+			"agent_id":   b.agentID,
+			"session_id": opts.SessionID,
+		}
+		return b.doRequest(ctx, "POST", "/v1alpha2/mem9s/memories", body, nil)
+	}
+
 	if opts.Scope != StoreScopeTurn {
 		return nil
 	}

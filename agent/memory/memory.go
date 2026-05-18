@@ -39,6 +39,12 @@ type StoreOptions struct {
 	Tags            []string   // keyword tags
 	TurnMessages    []Message  // current turn messages (user + assistant)
 	SessionMessages []Message  // all session messages (compact/session scopes)
+
+	// DirectContent is a plain-text content string for direct memory writes
+	// (not ingest-based). When set, it takes priority over TurnMessages and
+	// the backend stores the content directly — no message filtering is applied.
+	// Currently only supported by the mem9 backend.
+	DirectContent string
 }
 
 // Message represents a single conversation message sent to memory backends.
