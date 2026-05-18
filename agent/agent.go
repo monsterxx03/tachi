@@ -385,7 +385,7 @@ func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory
 	return nil
 }
 
-// withRepoTag appends a "repo:<name>" tag to the given tag slice when
+// withRepoTag appends a "project:<name>" tag to the given tag slice when
 // the current working directory is inside a git repository. Returns the
 // original slice unchanged otherwise.
 func withRepoTag(tags []string) []string {
@@ -432,11 +432,11 @@ func getRepoName() string {
 	return filepath.Base(strings.TrimSpace(string(out)))
 }
 
-// repoTag returns a tag in the form "repo:<name>" when inside a git repo,
+// repoTag returns a tag in the form "project:<name>" when inside a git repo,
 // or empty string otherwise.
 func repoTag() string {
 	if name := getRepoName(); name != "" {
-		return "repo:" + name
+		return "project:" + name
 	}
 	return ""
 }
