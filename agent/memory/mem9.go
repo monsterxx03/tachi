@@ -63,35 +63,21 @@ type ContentFilter struct {
 }
 
 // scopeFilters maps each StoreScope to its filtering parameters.
-// Based on mem9 Claude Code plugin's transcript-parser.mjs design.
+// Only Turn is used for mem9; Compact and Session are kept for the
+// interface contract but mem9 no-ops them.
 var scopeFilters = map[StoreScope]ContentFilter{
-	StoreScopeTurn:    {MaxMessages: 4, MaxBytes: 20 * 1024},
-	StoreScopeCompact: {MaxMessages: 12, MaxBytes: 120 * 1024},
-	StoreScopeSession: {MaxMessages: 4, MaxBytes: 20 * 1024},
+	StoreScopeTurn: {MaxMessages: 4, MaxBytes: 20 * 1024},
 }
 
-// Store writes memory to mem9 API. The scope determines which messages are
-// sent and how they are filtered. mem9 API deduplicates by session_id, so
-// repeated writes to the same session merge rather than duplicate.
+// Store writes memory to mem9 API. Only StoreScopeTurn is processed;
+// compact and session scopes are no-ops since mem9 already receives
+// turn-level data incrementally (API deduplicates by session_id).
 func (b *Mem9Backend) Store(ctx context.Context, opts StoreOptions) error {
-	// Select message source based on scope
-	var messages []Message
-	switch opts.Scope {
-	case StoreScopeTurn:
-		messages = opts.TurnMessages
-	case StoreScopeCompact:
-		messages = opts.SessionMessages
-	case StoreScopeSession:
-		messages = opts.TurnMessages
-		if len(messages) == 0 {
-			// Fall back to last 4 messages from the session
-			if len(opts.SessionMessages) > 4 {
-				messages = opts.SessionMessages[len(opts.SessionMessages)-4:]
-			} else {
-				messages = opts.SessionMessages
-			}
-		}
+	if opts.Scope != StoreScopeTurn {
+		return nil
 	}
+
+	messages := opts.TurnMessages
 
 	// Apply content filtering
 	filter := scopeFilters[opts.Scope]
@@ -164,19 +150,29 @@ func (b *Mem9Backend) Forget(ctx context.Context, id string) error {
 }
 
 // filterMessages applies content filtering to messages before uploading:
+//   - Discards entire batch if any user message is trivial (hello, 你好, etc.)
 //   - Strips injected <relevant-memories> blocks (prevents memory recursion)
 //   - Filters assistant-side system noise prefixes
 //   - Truncates by message count and byte budget (from tail, keeping newest)
 func (b *Mem9Backend) filterMessages(msgs []Message, filter ContentFilter) []Message {
+	// Reject batch if any user message is trivial
+	for _, m := range msgs {
+		if m.Role == "user" && isTrivialUserMessage(m.Content) {
+			return nil
+		}
+	}
+
 	var filtered []Message
 
 	for _, m := range msgs {
-		if m.Role == "assistant" && isNoiseContent(m.Content) {
+		// Strip noise blocks (e.g. <system-reminder>...</system-reminder>) and
+		// injected memory tags to prevent recursive memory storage
+		m.Content = stripNoiseTags(m.Content)
+		m.Content = stripMemoriesTag(m.Content)
+
+		if m.Content == "" {
 			continue
 		}
-
-		// Strip injected memory tags to prevent recursive memory storage
-		m.Content = stripMemoriesTag(m.Content)
 
 		filtered = append(filtered, m)
 	}
@@ -194,6 +190,24 @@ func (b *Mem9Backend) filterMessages(msgs []Message, filter ContentFilter) []Mes
 	}
 
 	return result
+}
+
+// isTrivialUserMessage returns true if the user message is a trivial
+// greeting/test noise that should not be persisted to memory.
+func isTrivialUserMessage(content string) bool {
+	s := strings.TrimSpace(content)
+	if s == "" {
+		return true
+	}
+	lower := strings.ToLower(s)
+	switch lower {
+	case "hello", "helo", "hi", "hey", "heyy", "heyyy",
+		"yo", "sup", "hola",
+		"你好", "哈喽", "在吗", "在？", "在?",
+		"测试", "test", "ceshi", "试用", "试试":
+		return true
+	}
+	return false
 }
 
 // doRequest makes an HTTP request to the mem9 API with standard headers.
@@ -233,9 +247,10 @@ func (b *Mem9Backend) doRequest(ctx context.Context, method, path string, body, 
 	return nil
 }
 
-// Noise prefixes from mem9's transcript-parser.mjs that should be filtered
-// from assistant-side content before storing.
-var noisePrefixes = []string{
+// noiseTags defines XML-like block tags that should be stripped from messages
+// before storage. These are system-injected blocks (e.g. <system-reminder>)
+// prepended to user messages that are not meaningful for memory recall.
+var noiseTags = []string{
 	"<local-command-caveat>",
 	"<local-command-stdout>",
 	"<command-name>",
@@ -244,15 +259,27 @@ var noisePrefixes = []string{
 	"<system-reminder>",
 }
 
-// isNoiseContent checks if assistant content starts with a known noise prefix.
-func isNoiseContent(content string) bool {
-	trimmed := strings.TrimSpace(content)
-	for _, prefix := range noisePrefixes {
-		if strings.HasPrefix(trimmed, prefix) {
-			return true
+// stripNoiseTags removes noise block tags and their content from s.
+// Each tag is expected to appear as a paired block (<tag>...</tag>).
+// The closing tag is derived by inserting "/" after the leading "<".
+func stripNoiseTags(s string) string {
+	for _, tag := range noiseTags {
+		endTag := tag[:1] + "/" + tag[1:]
+		for {
+			start := strings.Index(s, tag)
+			if start == -1 {
+				break
+			}
+			end := strings.Index(s[start:], endTag)
+			if end == -1 {
+				// Unmatched opening tag, remove from start to end
+				s = strings.TrimSpace(s[:start])
+				break
+			}
+			s = strings.TrimSpace(s[:start] + s[start+end+len(endTag):])
 		}
 	}
-	return false
+	return s
 }
 
 // stripMemoriesTag removes <relevant-memories>...</relevant-memories> blocks
