@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -60,6 +62,7 @@ type AIAgent struct {
 	memoryBackend  memory.Backend  // nil = memory not enabled
 	memoryTimeout  time.Duration   // context deadline for Store/Recall/Forget
 	skipMemory     bool            // set by RunOneOffStream to suppress turn-level memory writes
+	excludeRepos   []string        // git repo roots to skip all memory writes
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -351,6 +354,52 @@ func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory
 	return nil
 }
 
+// normalizeRepoPaths expands ~ to the home directory and cleans each path.
+// This way users can write ~/repos/tachi in config and it will match
+// the absolute path returned by git rev-parse --show-toplevel.
+func normalizeRepoPaths(paths []string) []string {
+	if len(paths) == 0 {
+		return paths
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return paths
+	}
+	normalized := make([]string, 0, len(paths))
+	for _, p := range paths {
+		s := strings.TrimSpace(p)
+		if s == "" {
+			continue
+		}
+		if strings.HasPrefix(s, "~/") {
+			s = filepath.Join(home, s[2:])
+		} else if s == "~" {
+			s = home
+		}
+		normalized = append(normalized, filepath.Clean(s))
+	}
+	return normalized
+}
+
+// isRepoExcluded checks whether the current git repo root is in the
+// exclude_repos list. If we're not in a git repo, returns false.
+func (a *AIAgent) isRepoExcluded() bool {
+	if len(a.excludeRepos) == 0 {
+		return false
+	}
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return false
+	}
+	repoRoot := strings.TrimSpace(string(out))
+	for _, excluded := range a.excludeRepos {
+		if filepath.Clean(repoRoot) == filepath.Clean(excluded) {
+			return true
+		}
+	}
+	return false
+}
+
 // storeTurnMemory writes the current turn's conversation to the memory backend.
 // Called after each assistant response completes (StoreScopeTurn).
 // No-ops when skipMemory is true (e.g. /commit, /init, sub-agents).
@@ -362,6 +411,9 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 		return
 	}
 	if a.skipMemory {
+		return
+	}
+	if a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -387,6 +439,9 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 // Exported so the TUI can call it before starting the compact LLM stream.
 func (a *AIAgent) StoreCompactMemory() {
 	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	if a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -421,6 +476,9 @@ func (a *AIAgent) StoreCompactMemory() {
 // Uses a unified interface — each backend handles its own format internally.
 func (a *AIAgent) StoreSessionMemory() {
 	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	if a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -1194,9 +1252,10 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		}
 
 		memCfg := memory.Config{
-			Type:    cfg.Memory.Type,
-			BaseDir: config.BaseDir(),
-			Timeout: timeout,
+			Type:         cfg.Memory.Type,
+			BaseDir:      config.BaseDir(),
+			Timeout:      timeout,
+			ExcludeRepos: cfg.Memory.ExcludeRepos,
 			Mem9: memory.Mem9Config{
 				APIURL:         cfg.Memory.Mem9.APIURL,
 				APIKey:         cfg.Memory.Mem9.APIKey,
@@ -1212,6 +1271,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		} else {
 			a.memoryBackend = backend
 			a.memoryTimeout = timeout
+			a.excludeRepos = normalizeRepoPaths(cfg.Memory.ExcludeRepos)
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
 		}
 	}

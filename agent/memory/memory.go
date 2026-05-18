@@ -67,10 +67,11 @@ type Backend interface {
 
 // Config is the common configuration for memory backends.
 type Config struct {
-	Type    string // "native" or "mem9"
-	BaseDir string // ~/.tachi/ (native uses this)
-	Timeout time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
-	Mem9    Mem9Config
+	Type         string // "native" or "mem9"
+	BaseDir      string // ~/.tachi/ (native uses this)
+	Timeout      time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
+	Mem9         Mem9Config
+	ExcludeRepos []string // git repo roots to skip memory writes
 }
 
 // Mem9Config holds mem9-specific configuration.
