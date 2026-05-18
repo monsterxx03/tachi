@@ -52,7 +52,7 @@ func (t *SkillCreateTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"name": {
 			Type:        "string",
-			Description: "Skill name (lowercase letters, digits, and hyphens, ≤64 characters)",
+			Description: "Skill name (≤64 characters, any characters allowed)",
 		},
 		"description": {
 			Type:        "string",

@@ -7,7 +7,11 @@ import (
 )
 
 func TestValidateName(t *testing.T) {
-	valid := []string{"code-review", "git-commit", "a", "abc123", "test1-test2"}
+	valid := []string{
+		"code-review", "git-commit", "a", "abc123", "test1-test2",
+		"CodeReview", "code review", "code_review", "code.review",
+		"代码审查", "中文技能", "测试-skill-1",
+	}
 	for _, name := range valid {
 		if err := ValidateName(name); err != nil {
 			t.Errorf("ValidateName(%q) should be valid, got: %v", name, err)
@@ -15,11 +19,7 @@ func TestValidateName(t *testing.T) {
 	}
 
 	invalid := map[string]string{
-		"":          "empty",
-		"CodeReview": "uppercase",
-		"code review": "space",
-		"code_review": "underscore",
-		"code.review": "dot",
+		"": "empty",
 	}
 	for name, reason := range invalid {
 		if err := ValidateName(name); err == nil {
@@ -475,8 +475,8 @@ func TestStoreCreate_Validation(t *testing.T) {
 	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
 	s := newStore([]string{projectSkillDir}, []string{SourceProject})
 
-	// Invalid name
-	_, err := s.Create("Invalid Name", "desc", "body", nil, SourceProject, false)
+	// Invalid name (empty)
+	_, err := s.Create("", "desc", "body", nil, SourceProject, false)
 	if err == nil {
 		t.Error("expected error for invalid name")
 	}

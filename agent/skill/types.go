@@ -27,20 +27,14 @@ const (
 	SourceGlobal  = "global"
 )
 
-// ValidateName checks whether a skill name conforms to the naming rules:
-// lowercase letters, digits, and hyphens, ≤64 characters.
+// ValidateName checks whether a skill name is valid:
+// non-empty, ≤64 characters.
 func ValidateName(name string) error {
 	if len(name) == 0 {
 		return fmt.Errorf("skill name must not be empty")
 	}
 	if len(name) > 64 {
 		return fmt.Errorf("skill name %q exceeds 64 characters", name)
-	}
-	for _, c := range name {
-		if (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' {
-			continue
-		}
-		return fmt.Errorf("skill name %q contains invalid character '%c' (only lowercase letters, digits, and hyphens allowed)", name, c)
 	}
 	return nil
 }
