@@ -349,9 +349,17 @@ type SkillMetaRecord struct {
 // fires on the first user message of a conversation or when the skill list has
 // changed (e.g., after skill_create). This avoids wasting context window on
 // repeated injections of a largely static catalog.
+//
+// Implements TaggedReminder so its output gets its own <available-skills> block
+// independent of <system-reminder>.
 type SkillListReminder struct {
 	provider SkillMetaProvider
 	dirty    bool // true when the skill list has changed and needs re-injection
+}
+
+// WrapperTag implements the TaggedReminder interface.
+func (r *SkillListReminder) WrapperTag() string {
+	return "available-skills"
 }
 
 // NewSkillListReminder creates a SkillListReminder backed by the given provider.
@@ -393,8 +401,6 @@ func buildSkillListPrompt(metas []SkillMetaRecord) string {
 	}
 
 	var b strings.Builder
-	b.WriteString("<available_skills>\n")
-
 	for _, m := range metas {
 		desc := escapeXMLAttr(m.Description)
 		tagsStr := ""
@@ -404,7 +410,6 @@ func buildSkillListPrompt(metas []SkillMetaRecord) string {
 		b.WriteString(fmt.Sprintf("  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr))
 	}
 
-	b.WriteString("</available_skills>\n")
 	b.WriteString("\nTo use a skill, call SkillView(name) or the user can type /skill-name.")
 
 	return b.String()
@@ -485,8 +490,9 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 	lines = append(lines, "Relevant memories from past sessions:")
 	for i, e := range entries {
 		content := e.Content
-		if len(content) > 120 {
-			content = content[:120] + "..."
+		runes := []rune(content)
+		if len(runes) > 120 {
+			content = string(runes[:120]) + "..."
 		}
 		var tags string
 		if len(e.Tags) > 0 {

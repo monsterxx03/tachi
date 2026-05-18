@@ -261,6 +261,7 @@ var noiseTags = []string{
 	"<command-message>",
 	"<task-notification>",
 	"<system-reminder>",
+	"<available-skills>",
 }
 
 // stripNoiseTags removes noise block tags and their content from s.
@@ -306,10 +307,14 @@ func stripMemoriesTag(content string) string {
 	return strings.TrimSpace(content)
 }
 
-// truncateStr truncates s to at most maxLen characters, appending "..." if trimmed.
+// truncateStr truncates s to at most maxLen characters (runes), appending
+// "..." if trimmed. Unlike byte-based slicing, this handles multi-byte
+// UTF-8 text (e.g. Chinese, emoji) correctly: 120 runes ≈ 120 characters
+// regardless of encoding.
 func truncateStr(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
