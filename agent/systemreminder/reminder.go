@@ -430,21 +430,26 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 		}
 		// Use a background context since this fires inside Collect()
 		entries, err := r.Backend.Recall(context.Background(), ctx.CurrentPrompt, limit)
-		if err == nil && len(entries) > 0 {
-			lines = append(lines, "Relevant memories from past sessions:")
-			for i, e := range entries {
-				content := e.Content
-				if len(content) > 120 {
-					content = content[:120] + "..."
+		if err != nil {
+			debuglog.DefaultLogger.Log("MemoryRecall: recall failed: %v", err)
+		} else {
+			debuglog.DefaultLogger.Log("MemoryRecall: recall returned %d entries", len(entries))
+			if len(entries) > 0 {
+				lines = append(lines, "Relevant memories from past sessions:")
+				for i, e := range entries {
+					content := e.Content
+					if len(content) > 120 {
+						content = content[:120] + "..."
+					}
+					var tags string
+					if len(e.Tags) > 0 {
+						tags = "[" + strings.Join(e.Tags, ", ") + "] "
+					}
+					age := memory.RelativeAge(e.Timestamp)
+					lines = append(lines, fmt.Sprintf("%d. %s%s%s", i+1, tags, age, content))
 				}
-				var tags string
-				if len(e.Tags) > 0 {
-					tags = "[" + strings.Join(e.Tags, ", ") + "] "
-				}
-				age := memory.RelativeAge(e.Timestamp)
-				lines = append(lines, fmt.Sprintf("%d. %s%s%s", i+1, tags, age, content))
+				lines = append(lines, "")
 			}
-			lines = append(lines, "")
 		}
 	}
 
@@ -458,9 +463,12 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 
 	// If only security notice + tags with no real content, skip injection
 	if len(indexLines) == 0 && !hasRecallResults(lines) {
+		debuglog.DefaultLogger.Log("MemoryRecall: no content to inject (no index, no recall results)")
 		return nil
 	}
 
+	debuglog.DefaultLogger.Log("MemoryRecall: injecting %d lines (index=%d, recall=%v)",
+		len(lines), len(indexLines), hasRecallResults(lines))
 	return lines
 }
 

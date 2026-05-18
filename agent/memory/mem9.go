@@ -120,7 +120,7 @@ func (b *Mem9Backend) Recall(ctx context.Context, query string, limit int) ([]En
 			Content   string   `json:"content"`
 			Tags      []string `json:"tags"`
 			Score     float64  `json:"confidence"`
-			CreatedAt int64    `json:"created_at"`
+			CreatedAt string   `json:"created_at"`
 		} `json:"memories"`
 	}
 
@@ -130,6 +130,10 @@ func (b *Mem9Backend) Recall(ctx context.Context, query string, limit int) ([]En
 
 	entries := make([]Entry, 0, len(result.Memories))
 	for _, m := range result.Memories {
+		ts := int64(0)
+		if t, err := time.Parse(time.RFC3339, m.CreatedAt); err == nil {
+			ts = t.Unix()
+		}
 		entries = append(entries, Entry{
 			ID:        m.ID,
 			SessionID: m.SessionID,
@@ -137,7 +141,7 @@ func (b *Mem9Backend) Recall(ctx context.Context, query string, limit int) ([]En
 			Content:   m.Content,
 			Tags:      m.Tags,
 			Score:     m.Score,
-			Timestamp: m.CreatedAt,
+			Timestamp: ts,
 		})
 	}
 	return entries, nil
