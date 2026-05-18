@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -361,7 +360,7 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 	err := a.memoryBackend.Store(storeCtx, memory.StoreOptions{
 		Scope:         memory.StoreScopeTurn,
 		SessionID:     sess.ID,
-		Tags:          tags,
+		Tags:          withRepoTag(tags),
 		DirectContent: content,
 	})
 	if err != nil {
@@ -384,6 +383,16 @@ func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory
 		}
 	}
 	return nil
+}
+
+// withRepoTag appends a "repo:<name>" tag to the given tag slice when
+// the current working directory is inside a git repository. Returns the
+// original slice unchanged otherwise.
+func withRepoTag(tags []string) []string {
+	if tag := repoTag(); tag != "" {
+		return append(tags, tag)
+	}
+	return tags
 }
 
 // normalizeRepoPaths expands ~ to the home directory and cleans each path.
@@ -411,6 +420,25 @@ func normalizeRepoPaths(paths []string) []string {
 		normalized = append(normalized, filepath.Clean(s))
 	}
 	return normalized
+}
+
+// getRepoName returns the name of the current git repository (the basename
+// of the repo root, e.g. "tachi"). Returns empty string if not in a git repo.
+func getRepoName() string {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(strings.TrimSpace(string(out)))
+}
+
+// repoTag returns a tag in the form "repo:<name>" when inside a git repo,
+// or empty string otherwise.
+func repoTag() string {
+	if name := getRepoName(); name != "" {
+		return "repo:" + name
+	}
+	return ""
 }
 
 // isRepoExcluded checks whether the current git repo root is in the
@@ -459,6 +487,7 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
 			Scope:        memory.StoreScopeTurn,
 			SessionID:    sess.ID,
+			Tags:         withRepoTag(nil),
 			TurnMessages: turnMsgs,
 		}); err != nil {
 			a.logger.Log("Memory(turn): store failed: %v", err)
@@ -495,6 +524,7 @@ func (a *AIAgent) StoreCompactMemory() {
 		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
 			Scope:           memory.StoreScopeCompact,
 			SessionID:       sess.ID,
+			Tags:            withRepoTag(nil),
 			SessionMessages: memMsgs,
 		}); err != nil {
 			a.logger.Log("Memory(compact): store failed: %v", err)
@@ -532,7 +562,7 @@ func (a *AIAgent) StoreSessionMemory() {
 		Scope:           memory.StoreScopeSession,
 		SessionID:       sess.ID,
 		SessionTitle:    sess.Title,
-		Tags:            extractTagsFromTitle(sess.Title),
+		Tags:            withRepoTag(nil),
 		SessionMessages: memMsgs,
 	}); err != nil {
 		a.logger.Log("Memory(session): store failed: %v", err)
@@ -557,25 +587,6 @@ func sessionMessagesToMemory(msgs []session.Message) []memory.Message {
 		})
 	}
 	return result
-}
-
-// extractTagsFromTitle derives simple keyword tags from a session title.
-func extractTagsFromTitle(title string) []string {
-	// Split on whitespace — works for English; Chinese titles without spaces
-	// will be kept as a single tag (which is fine for indexing).
-	words := strings.Fields(strings.ToLower(title))
-	seen := make(map[string]bool)
-	var tags []string
-	for _, w := range words {
-		w = strings.Trim(w, ",.;:!?()[]{}'\"")
-		// Use rune count so Chinese characters (3 bytes each in UTF-8)
-		// are measured correctly: require 2+ runes to be a useful tag.
-		if utf8.RuneCountInString(w) >= 2 && !seen[w] {
-			seen[w] = true
-			tags = append(tags, w)
-		}
-	}
-	return tags
 }
 
 func (a *AIAgent) recordSession(msg *session.Message) {

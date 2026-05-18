@@ -106,6 +106,7 @@ func (b *Mem9Backend) Store(ctx context.Context, opts StoreOptions) error {
 		"session_id": opts.SessionID,
 		"agent_id":   b.agentID,
 		"mode":       b.mode,
+		"tags":       opts.Tags,
 		"messages":   messages,
 	}
 
