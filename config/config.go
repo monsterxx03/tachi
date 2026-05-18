@@ -275,9 +275,9 @@ func toBool(v any) bool {
 }
 
 // MemoryConfig holds configuration for the pluggable memory system.
-// Type selects the backend: "" (disabled), "native", or "mem9".
+// Type selects the backend: "" (disabled) or "mem9".
 type MemoryConfig struct {
-	Type         string        `yaml:"type"`    // "native", "mem9", or "" (disabled)
+	Type         string        `yaml:"type"`    // "mem9" or "" (disabled)
 	Timeout      string        `yaml:"timeout"` // context deadline for Store/Recall/Forget (default "10s")
 	Mem9         Mem9SubConfig `yaml:"mem9"`
 	ExcludeRepos []string      `yaml:"exclude_repos"` // git repo roots to skip memory writes

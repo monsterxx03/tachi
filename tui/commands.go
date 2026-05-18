@@ -13,7 +13,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
-	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 )
@@ -845,7 +844,7 @@ func (m *Model) handleTranscriptCommand() tea.Cmd {
 }
 
 // handleForgetCommand handles the /forget slash command.
-// /forget          → list recent 20 memories with IDs
+// /forget          → list recent memories with IDs
 // /forget <id>     → delete memory with the given ID
 func (m *Model) handleForgetCommand() tea.Cmd {
 	backend := m.agent.MemoryBackend()
@@ -859,9 +858,18 @@ func (m *Model) handleForgetCommand() tea.Cmd {
 
 	parts := strings.Fields(m.subcommandInput)
 	if len(parts) < 2 || parts[1] == "list" {
-		// List recent index entries
-		lines := memory.ReadRecentIndex(config.BaseDir(), 20)
-		if len(lines) == 0 {
+		// List recent memories via recall
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		entries, err := backend.Recall(ctx, "", 20)
+		if err != nil {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: fmt.Sprintf("Failed to list memories: %v", err),
+			})
+			return nil
+		}
+		if len(entries) == 0 {
 			m.chatview.AddMessage(chatMessage{
 				Role:    "assistant",
 				Content: "No memories found.",
@@ -869,10 +877,13 @@ func (m *Model) handleForgetCommand() tea.Cmd {
 			return nil
 		}
 		var sb strings.Builder
-		sb.WriteString("**📝 Memory Index** (use `/forget <id>` to delete)\n\n")
-		for _, line := range lines {
-			sb.WriteString(memory.TrimID(line))
-			sb.WriteString("\n")
+		sb.WriteString("**📝 Memories** (use `/forget <id>` to delete)\n\n")
+		for _, e := range entries {
+			content := e.Content
+			if len(content) > 80 {
+				content = content[:80] + "..."
+			}
+			fmt.Fprintf(&sb, "`%s` %s\n", e.ID, content)
 		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",

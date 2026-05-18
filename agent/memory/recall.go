@@ -2,7 +2,6 @@ package memory
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -87,40 +86,4 @@ func RelativeAge(timestamp int64) string {
 		}
 		return fmt.Sprintf("(%d months ago) ", months)
 	}
-}
-
-// ReadRecentIndex reads the most recent N entries from the memory/log index file.
-// Returns the raw lines (with CRC32 ID prefix) as strings, most recent first.
-func ReadRecentIndex(baseDir string, maxEntries int) []string {
-	if maxEntries <= 0 {
-		maxEntries = 20
-	}
-	path := filepath.Join(baseDir, "memory", "log")
-	lines, err := readLines(path)
-	if err != nil || len(lines) == 0 {
-		return nil
-	}
-
-	// Most recent entries are at the end of the file
-	start := 0
-	if len(lines) > maxEntries {
-		start = len(lines) - maxEntries
-	}
-
-	// Reverse to show most recent first
-	result := make([]string, 0, maxEntries)
-	for i := len(lines) - 1; i >= start; i-- {
-		result = append(result, lines[i])
-	}
-	return result
-}
-
-// TrimID removes the CRC32 ID prefix from a memory/log line
-// (e.g., "a3f1 | 2026-05-17 | title" → "2026-05-17 | title").
-func TrimID(line string) string {
-	idx := strings.Index(line, " | ")
-	if idx < 0 {
-		return line
-	}
-	return line[idx+3:]
 }

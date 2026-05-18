@@ -489,7 +489,7 @@ func (a *AIAgent) StoreSessionMemory() {
 	msgs, err := a.sessionManager.LoadMessages()
 	if err != nil {
 		a.logger.Log("Memory(session): load messages failed: %v", err)
-		// Still try to write with just the title (native backend needs it)
+		// Still try to write with just the title
 	}
 
 	memMsgs := sessionMessagesToMemory(msgs)
@@ -1211,7 +1211,6 @@ func (a *AIAgent) rebuildSkillCollector() {
 	if a.memoryBackend != nil {
 		all = append(all, systemreminder.MemoryRecallReminder{
 			Backend: a.memoryBackend,
-			BaseDir: config.BaseDir(),
 			Limit:   5,
 		})
 	}
