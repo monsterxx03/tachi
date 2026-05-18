@@ -6,8 +6,10 @@ import (
 	"os"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/subagent"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -53,6 +55,10 @@ type AIAgent struct {
 	// Subagent-related fields (implements subagent.Agent interface)
 	subagentProvider llm.Provider // sub-agent dedicated provider (nil = fallback to main)
 	subagentModel    string       // sub-agent dedicated model ("" = fallback to main)
+
+	// Memory-related fields
+	memoryBackend  memory.Backend  // nil = memory not enabled
+	memoryTimeout  time.Duration   // context deadline for Store/Recall/Forget
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -324,6 +330,158 @@ func (a *AIAgent) ClearSession() {
 	a.activeSkills = nil
 }
 
+// MemoryBackend returns the configured memory backend, or nil if memory is disabled.
+func (a *AIAgent) MemoryBackend() memory.Backend {
+	return a.memoryBackend
+}
+
+// collectTurnMessages extracts the last user message from the conversation
+// history and pairs it with the current assistant response text.
+func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory.Message {
+	for i := len(*messages) - 1; i >= 0; i-- {
+		if (*messages)[i].Role == "user" {
+			return []memory.Message{
+				{Role: "user", Content: (*messages)[i].Content},
+				{Role: "assistant", Content: assistantText},
+			}
+		}
+	}
+	return nil
+}
+
+// storeTurnMemory writes the current turn's conversation to the memory backend.
+// Called after each assistant response completes (StoreScopeTurn).
+func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
+	if len(turnMsgs) == 0 {
+		return
+	}
+	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	sess := a.sessionManager.Current()
+	if sess == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		defer cancel()
+		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+			Scope:        memory.StoreScopeTurn,
+			SessionID:    sess.ID,
+			TurnMessages: turnMsgs,
+		}); err != nil {
+			a.logger.Log("Memory(turn): store failed: %v", err)
+		}
+	}()
+}
+
+// StoreCompactMemory writes the current session's messages to the memory
+// backend before context compaction (StoreScopeCompact).
+// Exported so the TUI can call it before starting the compact LLM stream.
+func (a *AIAgent) StoreCompactMemory() {
+	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	sess := a.sessionManager.Current()
+	if sess == nil {
+		return
+	}
+
+	msgs, err := a.sessionManager.LoadMessages()
+	if err != nil {
+		a.logger.Log("Memory(compact): load messages failed: %v", err)
+		return
+	}
+
+	memMsgs := sessionMessagesToMemory(msgs)
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		defer cancel()
+		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+			Scope:           memory.StoreScopeCompact,
+			SessionID:       sess.ID,
+			SessionMessages: memMsgs,
+		}); err != nil {
+			a.logger.Log("Memory(compact): store failed: %v", err)
+		}
+	}()
+}
+
+// StoreSessionMemory writes a session summary to the memory backend.
+// Called at session end or shutdown (StoreScopeSession).
+// Exported so the TUI can call it before ending/quitting.
+// Uses a unified interface — each backend handles its own format internally.
+func (a *AIAgent) StoreSessionMemory() {
+	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	sess := a.sessionManager.Current()
+	if sess == nil || sess.Title == "" {
+		return
+	}
+
+	msgs, err := a.sessionManager.LoadMessages()
+	if err != nil {
+		a.logger.Log("Memory(session): load messages failed: %v", err)
+		// Still try to write with just the title (native backend needs it)
+	}
+
+	memMsgs := sessionMessagesToMemory(msgs)
+
+	ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+	defer cancel()
+	if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+		Scope:           memory.StoreScopeSession,
+		SessionID:       sess.ID,
+		SessionTitle:    sess.Title,
+		Tags:            extractTagsFromTitle(sess.Title),
+		SessionMessages: memMsgs,
+	}); err != nil {
+		a.logger.Log("Memory(session): store failed: %v", err)
+	}
+}
+
+// sessionMessagesToMemory converts session.Message slice to memory.Message slice.
+func sessionMessagesToMemory(msgs []session.Message) []memory.Message {
+	result := make([]memory.Message, 0, len(msgs))
+	for _, m := range msgs {
+		// Only include user and assistant messages
+		if m.Type != session.MessageTypeUser && m.Type != session.MessageTypeAssistant {
+			continue
+		}
+		role := "user"
+		if m.Type == session.MessageTypeAssistant {
+			role = "assistant"
+		}
+		result = append(result, memory.Message{
+			Role:    role,
+			Content: m.Content,
+		})
+	}
+	return result
+}
+
+// extractTagsFromTitle derives simple keyword tags from a session title.
+func extractTagsFromTitle(title string) []string {
+	// Split on whitespace — works for English; Chinese titles without spaces
+	// will be kept as a single tag (which is fine for indexing).
+	words := strings.Fields(strings.ToLower(title))
+	seen := make(map[string]bool)
+	var tags []string
+	for _, w := range words {
+		w = strings.Trim(w, ",.;:!?()[]{}'\"")
+		// Use rune count so Chinese characters (3 bytes each in UTF-8)
+		// are measured correctly: require 2+ runes to be a useful tag.
+		if utf8.RuneCountInString(w) >= 2 && !seen[w] {
+			seen[w] = true
+			tags = append(tags, w)
+		}
+	}
+	return tags
+}
+
 func (a *AIAgent) recordSession(msg *session.Message) {
 	if a.sessionManager == nil {
 		return
@@ -583,6 +741,10 @@ func (a *AIAgent) handleFinishReason(
 					Usage:          acc.usage,
 				},
 			}
+
+			// Store turn-level memory after a truncated response
+			a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
+
 			return false
 		}
 
@@ -639,6 +801,10 @@ func (a *AIAgent) handleFinishReason(
 			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
 			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop", Usage: acc.usage},
 		}
+
+		// Store turn-level memory after a complete response
+		a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
+
 		return false
 	}
 }
@@ -970,11 +1136,22 @@ func (a *AIAgent) unregisterSkillTools() {
 }
 
 // rebuildSkillCollector constructs a new collector from baseReminders plus
-// a fresh SkillListReminder pointing at the current skillStore.
+// a fresh SkillListReminder pointing at the current skillStore, plus
+// a MemoryRecallReminder if memory is configured.
 func (a *AIAgent) rebuildSkillCollector() {
-	all := make([]systemreminder.Reminder, 0, len(baseReminders)+1)
+	all := make([]systemreminder.Reminder, 0, len(baseReminders)+2)
 	all = append(all, baseReminders...)
 	all = append(all, systemreminder.NewSkillListReminder(a.skillStore))
+
+	// Add MemoryRecallReminder if memory backend is configured
+	if a.memoryBackend != nil {
+		all = append(all, systemreminder.MemoryRecallReminder{
+			Backend: a.memoryBackend,
+			BaseDir: config.BaseDir(),
+			Limit:   5,
+		})
+	}
+
 	a.reminderCollector = systemreminder.NewCollector(all...)
 	a.reminderCollector.SetLogger(a.logger)
 }
@@ -992,6 +1169,44 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	}
 	if cfg.SystemReminder.GitReminder == nil || *cfg.SystemReminder.GitReminder {
 		baseReminders = append(baseReminders, systemreminder.GitReminder{})
+	}
+
+	// --- Memory backend (before skills — rebuildSkillCollector reads a.memoryBackend) ---
+	if cfg.Memory.Type != "" {
+		// Parse timeouts from config strings, with sensible defaults
+		timeout := 10 * time.Second
+		if cfg.Memory.Timeout != "" {
+			if d, err := time.ParseDuration(cfg.Memory.Timeout); err == nil && d > 0 {
+				timeout = d
+			}
+		}
+		reqTimeout := 15 * time.Second
+		if cfg.Memory.Mem9.RequestTimeout != "" {
+			if d, err := time.ParseDuration(cfg.Memory.Mem9.RequestTimeout); err == nil && d > 0 {
+				reqTimeout = d
+			}
+		}
+
+		memCfg := memory.Config{
+			Type:    cfg.Memory.Type,
+			BaseDir: config.BaseDir(),
+			Timeout: timeout,
+			Mem9: memory.Mem9Config{
+				APIURL:         cfg.Memory.Mem9.APIURL,
+				APIKey:         cfg.Memory.Mem9.APIKey,
+				AgentID:        cfg.Memory.Mem9.AgentID,
+				Mode:           cfg.Memory.Mem9.Mode,
+				RequestTimeout: reqTimeout,
+			},
+		}
+		backend, err := memory.New(cfg.Memory.Type, memCfg)
+		if err != nil {
+			a.logger.Log("Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
+		} else {
+			a.memoryBackend = backend
+			a.memoryTimeout = timeout
+			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
+		}
 	}
 
 	// --- Skill system ---

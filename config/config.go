@@ -274,6 +274,23 @@ func toBool(v any) bool {
 	}
 }
 
+// MemoryConfig holds configuration for the pluggable memory system.
+// Type selects the backend: "" (disabled), "native", or "mem9".
+type MemoryConfig struct {
+	Type    string        `yaml:"type"`    // "native", "mem9", or "" (disabled)
+	Timeout string        `yaml:"timeout"` // context deadline for Store/Recall/Forget (default "10s")
+	Mem9    Mem9SubConfig `yaml:"mem9"`
+}
+
+// Mem9SubConfig holds mem9-specific memory configuration.
+type Mem9SubConfig struct {
+	APIURL         string `yaml:"api_url"`         // default: https://api.mem9.ai
+	APIKey         string `yaml:"api_key"`
+	AgentID        string `yaml:"agent_id"`        // default: "tachi"
+	Mode           string `yaml:"mode"`            // default: "smart"
+	RequestTimeout string `yaml:"request_timeout"` // HTTP request timeout (default "15s")
+}
+
 type Config struct {
 	Provider               string                       `yaml:"provider"`
 	MaxTokens              int                          `yaml:"max_tokens" default:"128000"`
@@ -291,6 +308,7 @@ type Config struct {
 	TitleGeneration        *bool                        `yaml:"title_generation" default:"true"` // set false to use truncation
 	TitleProvider          string                       `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
 	CommitProvider         string                       `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
+	Memory                 MemoryConfig                 `yaml:"memory"`                          // pluggable memory backend
 	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
 	Compact                CompactConfig                `yaml:"compact"`                         // /compact command configuration

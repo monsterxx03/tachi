@@ -453,6 +453,9 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.chatview.MarkPendingToolsInterrupted()
 		return m, nil
 	}
+	if m.agent != nil {
+		m.agent.StoreSessionMemory()
+	}
 	return m, tea.Quit
 }
 
@@ -703,6 +706,9 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	m.savedHistory = make([]llm.Message, len(m.history))
 	copy(m.savedHistory, m.history)
 	m.isCompacting = true
+
+	// 3.5 Store current session memory before compaction
+	m.agent.StoreCompactMemory()
 
 	// 4. Clear tools so the LLM doesn't call tools during compact.
 	// Prompt also instructs "不要调用任何工具" as a double safeguard.

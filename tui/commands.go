@@ -13,6 +13,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 )
@@ -56,6 +57,7 @@ var commands = []Command{
 			m.pendingQueue = nil
 			m.chatview.RemovePendingItems()
 			m.statusbar.SetPendingCount(0)
+			m.agent.StoreSessionMemory()
 			m.history = nil
 			m.chatview.Clear()
 			m.agent.ClearSession()
@@ -66,7 +68,10 @@ var commands = []Command{
 	{
 		Name:        "/quit",
 		Description: "Exit tachi",
-		handler:     func(m *Model) tea.Cmd { return tea.Quit },
+		handler: func(m *Model) tea.Cmd {
+			m.agent.StoreSessionMemory()
+			return tea.Quit
+		},
 	},
 	{
 		Name:        "/model",
@@ -192,6 +197,13 @@ var commands = []Command{
 		Description: "Generate session transcript report and open in browser",
 		handler: func(m *Model) tea.Cmd {
 			return m.handleTranscriptCommand()
+		},
+	},
+	{
+		Name:        "/forget",
+		Description: "Forget specific memories (list or <id>)",
+		handler: func(m *Model) tea.Cmd {
+			return m.handleForgetCommand()
 		},
 	},
 }
@@ -828,6 +840,60 @@ func (m *Model) handleTranscriptCommand() tea.Cmd {
 			"**📋 Transcript Report**\n\nSession: `%s`\nOpened: `%s`",
 			curr.Title, path,
 		),
+	})
+	return nil
+}
+
+// handleForgetCommand handles the /forget slash command.
+// /forget          → list recent 20 memories with IDs
+// /forget <id>     → delete memory with the given ID
+func (m *Model) handleForgetCommand() tea.Cmd {
+	backend := m.agent.MemoryBackend()
+	if backend == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "Memory not enabled. Set `memory.type` in ~/.tachi/config.yaml.",
+		})
+		return nil
+	}
+
+	parts := strings.Fields(m.subcommandInput)
+	if len(parts) < 2 || parts[1] == "list" {
+		// List recent index entries
+		lines := memory.ReadRecentIndex(config.BaseDir(), 20)
+		if len(lines) == 0 {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "No memories found.",
+			})
+			return nil
+		}
+		var sb strings.Builder
+		sb.WriteString("**📝 Memory Index** (use `/forget <id>` to delete)\n\n")
+		for _, line := range lines {
+			sb.WriteString(memory.TrimID(line))
+			sb.WriteString("\n")
+		}
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: sb.String(),
+		})
+		return nil
+	}
+
+	id := parts[1]
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := backend.Forget(ctx, id); err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Failed to forget memory `%s`: %v", id, err),
+		})
+		return nil
+	}
+	m.chatview.AddMessage(chatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("Memory `%s` deleted.", id),
 	})
 	return nil
 }
