@@ -1051,18 +1051,6 @@ func (a *AIAgent) runAgentLoop(
 		}
 
 		apiCallCount++
-		// Dump message roles for debugging tool result / steer / reminder ordering.
-		{
-			roles := make([]string, len(messages))
-			for i, m := range messages {
-				prefix := m.Role
-				if prefix == "tool" {
-					prefix += "(" + m.ToolCallID + ")"
-				}
-				roles[i] = prefix
-			}
-			a.logger.Log("Agent: apiCall#%d roles: %v", apiCallCount, roles)
-		}
 		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
 		if err != nil {
 			ch <- AgentEvent{

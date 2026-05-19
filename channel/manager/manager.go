@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -115,6 +116,9 @@ type Manager struct {
 	verboseState map[string]bool
 	verboseMu    sync.RWMutex
 
+	// skillStore provides skill listing and activation for /skill command.
+	skillStore *skill.Store
+
 	// Per-thread agent activations for steer support.
 	threadActMu     sync.Mutex
 	threadActivations map[string]*threadActivation
@@ -144,12 +148,14 @@ type handlerResult struct {
 // New creates a Manager.
 // Channels are interactive — the iteration budget is always unlimited (0).
 func New(mcfg Config) *Manager {
+	wd, _ := os.Getwd()
 	return &Manager{
 		cfg:          mcfg.Cfg,
 		systemPrompt: mcfg.SystemPrompt,
 		providerName: mcfg.ProviderName,
 		modelName:    mcfg.ModelName,
 		sessionStore: mcfg.SessionStore,
+		skillStore:   skill.NewStore(wd),
 		logger:       debuglog.DefaultLogger.WithSource("channel:manager"),
 	}
 }
@@ -239,8 +245,31 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// using its existing context window without re-sending all history.
 		isCompactCmd := strings.HasPrefix(msg.Content, "/compact")
 
-		// Other slash commands are handled synchronously (no LLM invocation).
+		// Skill activation also goes through the agent turn so the LLM
+		// can read and apply the skill instructions as part of its context.
+		isSkillActivation := false
+		var skillActivationMsg string
 		if !isCompactCmd && strings.HasPrefix(msg.Content, "/") {
+			if skillName, extraArgs, ok := m.isSkillActivation(msg.Content); ok {
+				activationMsg, errMsg, err := m.prepareSkillActivation(skillName, extraArgs)
+				if err != nil {
+					return channel.HandlerResult{
+						Reply: channel.OutgoingMessage{
+							ThreadID: msg.ThreadID,
+							Content:  fmt.Sprintf("❌ %s", errMsg),
+							ReplyTo:  msg.MessageID,
+						},
+						Err: err,
+					}
+				}
+				isSkillActivation = true
+				skillActivationMsg = activationMsg
+			}
+		}
+
+		// Other slash commands are handled synchronously (no LLM invocation),
+		// EXCEPT compact (agent turn) and skill activation (agent turn).
+		if !isCompactCmd && !isSkillActivation && strings.HasPrefix(msg.Content, "/") {
 			// /transcript returns an attachment (HTML file), not plain text,
 			// so it's handled separately from the general slash command path.
 			if strings.HasPrefix(msg.Content, "/transcript") {
@@ -308,6 +337,12 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// without re-sending all history as text.
 		if isCompactCmd {
 			msg.Content = agent.BuildCompactInstruction()
+		}
+
+		// Transform skill activation to the skill's instruction message.
+		// The LLM will read the skill body and apply its instructions.
+		if isSkillActivation {
+			msg.Content = skillActivationMsg
 		}
 
 		// Run agent in a goroutine; handler blocks on the result channel.
@@ -512,9 +547,11 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 		return m.handleVerboseCommand(cmd.ThreadID)
 	case "model":
 		return m.handleModelCommand(cmd.Args)
+	case "skill":
+		return m.handleSkillCommand(cmd.Args)
 	default:
 		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
-		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model, compact", cmd.Name), nil
+		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model, skill, compact", cmd.Name), nil
 	}
 }
 
@@ -544,9 +581,15 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 			args = strings.Join(parts[1:], " ")
 		}
 		return m.handleModelCommand(args)
+	case "/skill":
+		args := ""
+		if len(parts) > 1 {
+			args = strings.Join(parts[1:], " ")
+		}
+		return m.handleSkillCommand(args)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
 	}
 }
 
@@ -1474,6 +1517,134 @@ func (m *Manager) handleVerboseCommand(threadID string) (string, error) {
 		return "🔍 Verbose mode: ON\n后续回复将显示工具调用过程。", nil
 	}
 	return "🔍 Verbose mode: OFF\n后续回复仅显示最终结果。", nil
+}
+
+// handleSkillCommand dispatches /skill sub-commands:
+//   /skill or /skill list  → list skills
+//   /skill reload          → re-scan skill directories
+//   /skill <name>          → handled via agent turn (not via this method)
+func (m *Manager) handleSkillCommand(args string) (string, error) {
+	args = strings.TrimSpace(args)
+	switch args {
+	case "", "list":
+		return m.handleSkillList()
+	case "reload":
+		return m.handleSkillReload()
+	default:
+		// /skill <name> — activation goes through agent turn.
+		// If we reach here via synchronous dispatch, the name is unknown.
+		// This shouldn't normally happen because buildHandler intercepts
+		// skill activations before handleSlashCommand, but we handle it
+		// gracefully via the CommandHandler path.
+		if m.skillStore != nil {
+			if _, found := m.skillStore.ResolveCommand(args); found {
+				return "", fmt.Errorf("skill activation requires an agent turn; send via message, not typed command")
+			}
+		}
+		return "Unknown /skill sub-command. Available: list, reload, <skill-name>", nil
+	}
+}
+
+// handleSkillList returns a formatted list of all available skills.
+func (m *Manager) handleSkillList() (string, error) {
+	if m.skillStore == nil {
+		return "Skill system not available.", nil
+	}
+
+	metas := m.skillStore.List()
+	if len(metas) == 0 {
+		return "没有可用的 Skill。\n\n在 `.tachi/skills/<name>/` 或 `~/.tachi/skills/<name>/` 下创建 `SKILL.md` 即可添加。", nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString("**可用 Skills:**\n\n")
+
+	for _, meta := range metas {
+		sourceTag := ""
+		if meta.Source == "project" {
+			sourceTag = " 🏠"
+		}
+		sb.WriteString(fmt.Sprintf("- **%s**%s\n", meta.Name, sourceTag))
+		sb.WriteString(fmt.Sprintf("  %s\n", meta.Description))
+		if len(meta.Tags) > 0 {
+			sb.WriteString(fmt.Sprintf("  标签: %s\n", strings.Join(meta.Tags, ", ")))
+		}
+		sb.WriteString(fmt.Sprintf("  使用 `/ %s` 或 `/skill %s` 激活\n\n", meta.Name, meta.Name))
+	}
+	sb.WriteString(fmt.Sprintf("%d 个 skill(s)", len(metas)))
+
+	return sb.String(), nil
+}
+
+// handleSkillReload re-scans skill directories and returns the updated count.
+func (m *Manager) handleSkillReload() (string, error) {
+	if m.skillStore == nil {
+		return "Skill system not available.", nil
+	}
+
+	wd, _ := os.Getwd()
+	m.skillStore = skill.NewStore(wd)
+	metas := m.skillStore.List()
+
+	return fmt.Sprintf("Skills 已重新加载 — 发现 %d 个 skill(s)", len(metas)), nil
+}
+
+// prepareSkillActivation builds the user message content for skill activation.
+// Returns the activation message string, or an error message as string + error.
+func (m *Manager) prepareSkillActivation(skillName string, extraArgs string) (string, string, error) {
+	if m.skillStore == nil {
+		return "", "Skill system not available.", fmt.Errorf("skill system not available")
+	}
+
+	sk, err := m.skillStore.Load(skillName)
+	if err != nil {
+		return "", fmt.Sprintf("Skill **%s** 未找到。使用 `/skill` 查看可用 skills。", skillName), err
+	}
+
+	msg := skill.BuildActivationMessage(sk, extraArgs)
+	return msg, "", nil
+}
+
+// isSkillActivation checks if the message is a skill activation pattern:
+//   - /skill <name> [args]
+//   - /<skillname> [args]
+//
+// Returns (skillName, extraArgs, isActivation).
+func (m *Manager) isSkillActivation(content string) (string, string, bool) {
+	parts := strings.Fields(strings.TrimPrefix(content, "/"))
+	if len(parts) == 0 {
+		return "", "", false
+	}
+
+	// /skill <name> [args]
+	if strings.HasPrefix(content, "/skill ") && len(parts) >= 2 {
+		sub := strings.TrimPrefix(content, "/skill ")
+		subParts := strings.Fields(sub)
+		if len(subParts) == 0 {
+			return "", "", false
+		}
+		skillName := subParts[0]
+		if skillName == "list" || skillName == "reload" {
+			return "", "", false // handled synchronously
+		}
+		extraArgs := ""
+		if len(subParts) > 1 {
+			extraArgs = strings.Join(subParts[1:], " ")
+		}
+		return skillName, extraArgs, true
+	}
+
+	// /<skillname> [args]
+	skillName := parts[0]
+	if name, found := m.skillStore.ResolveCommand(skillName); found {
+		extraArgs := ""
+		if len(parts) > 1 {
+			extraArgs = strings.Join(parts[1:], " ")
+		}
+		return name, extraArgs, true
+	}
+
+	return "", "", false
 }
 
 // handleTranscriptCommand generates an HTML transcript for the session

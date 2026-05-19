@@ -1189,3 +1189,181 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+// --- Skill command tests ---
+
+// TestHandleSkillList_Empty verifies that /skill list returns the "no skills"
+// message when no skills are defined.
+func TestHandleSkillList_Empty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	resp, err := mgr.handleSkillList()
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+}
+
+// TestHandleSkillReload verifies that /skill reload re-scans directories.
+func TestHandleSkillReload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	resp, err := mgr.handleSkillReload()
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Skills 已重新加载")
+	assert.Contains(t, resp, "0 个 skill(s)")
+}
+
+// TestHandleSkillCommand_List verifies /skill and /skill list via handleSkillCommand.
+func TestHandleSkillCommand_List(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	// /skill (empty args)
+	resp, err := mgr.handleSkillCommand("")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+
+	// /skill list
+	resp, err = mgr.handleSkillCommand("list")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+}
+
+// TestHandleSkillCommand_Reload verifies /skill reload via handleSkillCommand.
+func TestHandleSkillCommand_Reload(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	resp, err := mgr.handleSkillCommand("reload")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Skills 已重新加载")
+}
+
+// TestHandleSkillCommand_UnknownSub verifies /skill with unknown sub-command.
+func TestHandleSkillCommand_UnknownSub(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	resp, err := mgr.handleSkillCommand("unknown-skill")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Unknown /skill sub-command")
+}
+
+// TestSkillViaTextSlash_List verifies /skill via the text-based handler.
+func TestSkillViaTextSlash_List(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	resp, err := mgr.handleSlashCommand(channel.IncomingMessage{
+		Content:   "/skill",
+		ThreadID:  "thread-1",
+		MessageID: "msg-1",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+
+	resp, err = mgr.handleSlashCommand(channel.IncomingMessage{
+		Content:   "/skill list",
+		ThreadID:  "thread-1",
+		MessageID: "msg-2",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+
+	resp, err = mgr.handleSlashCommand(channel.IncomingMessage{
+		Content:   "/skill reload",
+		ThreadID:  "thread-1",
+		MessageID: "msg-3",
+	})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Skills 已重新加载")
+}
+
+// TestSkillViaCommandHandler verifies /skill via the typed CommandHandler.
+func TestSkillViaCommandHandler(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+	handler := mgr.buildCommandHandler()
+
+	// /skill list via typed command
+	resp, err := handler(t.Context(), channel.SlashCommand{Name: "skill"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+
+	// /skill list via typed command with Args
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "list"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有可用的 Skill")
+
+	// /skill reload
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "reload"})
+	require.NoError(t, err)
+	assert.Contains(t, resp, "Skills 已重新加载")
+}
+
+// TestIsSkillActivation_NoSkill verifies isSkillActivation returns false
+// for non-skill messages.
+func TestIsSkillActivation_NoSkill(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	_, _, ok := mgr.isSkillActivation("/help")
+	assert.False(t, ok)
+
+	_, _, ok = mgr.isSkillActivation("hello")
+	assert.False(t, ok)
+}
+
+// TestIsSkillActivation_ListNotActivation verifies /skill list and
+// /skill reload are not treated as skill activations.
+func TestIsSkillActivation_ListNotActivation(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	_, _, ok := mgr.isSkillActivation("/skill list")
+	assert.False(t, ok, "/skill list should not be an activation")
+
+	_, _, ok = mgr.isSkillActivation("/skill reload")
+	assert.False(t, ok, "/skill reload should not be an activation")
+}
+
+// TestPrepareSkillActivation_NotFound verifies error handling for unknown skills.
+func TestPrepareSkillActivation_NotFound(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SystemPrompt: "test",
+	})
+
+	_, errMsg, err := mgr.prepareSkillActivation("nonexistent-skill", "")
+	assert.Error(t, err)
+	assert.Contains(t, errMsg, "未找到")
+}
