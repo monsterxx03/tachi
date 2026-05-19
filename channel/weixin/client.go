@@ -30,6 +30,7 @@ type client struct {
 	baseURL  string
 	botToken string
 	routeTag string
+	botAgent string // v2.3.1+: bot_agent field in base_info
 
 	// Default timeouts per endpoint, in seconds.
 	getUpdatesTimeout   time.Duration
@@ -52,6 +53,7 @@ func newClient() *client {
 		getConfigTimeout:     10 * time.Second,
 		sendTypingTimeout:    10 * time.Second,
 		qrStatusTimeout:      35 * time.Second,
+		botAgent:             defaultBotAgent,
 		logger:              debuglog.DefaultLogger.WithSource("channel:weixin-client"),
 	}
 }
@@ -71,6 +73,19 @@ func (c *client) SetBotToken(token string) {
 // SetRouteTag sets the SKRouteTag header value.
 func (c *client) SetRouteTag(tag string) {
 	c.routeTag = tag
+}
+
+// SetBotAgent sets the bot_agent field sent in base_info (v2.3.1+).
+func (c *client) SetBotAgent(agent string) {
+	c.botAgent = agent
+}
+
+// buildBaseInfo constructs the BaseInfo payload for every API request.
+func (c *client) buildBaseInfo() BaseInfo {
+	return BaseInfo{
+		ChannelVersion: defaultChannelVersion,
+		BotAgent:       c.botAgent,
+	}
 }
 
 // --- Low-level helpers ---
@@ -113,9 +128,6 @@ func (c *client) doWithTimeout(method, url string, body []byte, timeout time.Dur
 		return nil, fmt.Errorf("create request: %w", err)
 	}
 	c.addCommonHeaders(req)
-	if body != nil {
-		req.Header.Set("Content-Length", strconv.Itoa(len(body)))
-	}
 
 	c.logger.Log("weixin-client: %s %s", method, url)
 	return hc.Do(req)
@@ -198,7 +210,6 @@ func (c *client) cdnUpload(url string, data []byte) (encryptedParam string, err 
 		return "", fmt.Errorf("create CDN upload request: %w", err)
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
-	req.Header.Set("Content-Length", strconv.Itoa(len(data)))
 
 	c.logger.Log("weixin-client: CDN POST %s (%d bytes)", url, len(data))
 	resp, err := hc.Do(req)
@@ -236,21 +247,29 @@ func (c *client) cdnDownload(url string) ([]byte, error) {
 
 // --- High-level API methods ---
 
-// getBotQRCode fetches the QR code for login.
-func (c *client) getBotQRCode() (*QRCodeResponse, error) {
-	return apiGet[QRCodeResponse](c, "/ilink/bot/get_bot_qrcode?bot_type=3", 30*time.Second)
+// getBotQRCode fetches the QR code for login (v2.3.1+: POST with local_token_list).
+func (c *client) getBotQRCode(req *QRLoginRequest) (*QRCodeResponse, error) {
+	if req == nil {
+		req = &QRLoginRequest{}
+	}
+	return apiPost[QRCodeResponse](c, "/ilink/bot/get_bot_qrcode?bot_type=3", req, 30*time.Second)
 }
 
 // getQRCodeStatus polls QR scan status.
-func (c *client) getQRCodeStatus(qrcode string) (*QRCodeStatusResponse, error) {
-	return apiGet[QRCodeStatusResponse](c, "/ilink/bot/get_qrcode_status?qrcode="+qrcode, c.qrStatusTimeout)
+// verifyCode is an optional pair-code for the need_verifycode flow (v2.3.1+).
+func (c *client) getQRCodeStatus(qrcode, verifyCode string) (*QRCodeStatusResponse, error) {
+	path := "/ilink/bot/get_qrcode_status?qrcode=" + qrcode
+	if verifyCode != "" {
+		path += "&verify_code=" + verifyCode
+	}
+	return apiGet[QRCodeStatusResponse](c, path, c.qrStatusTimeout)
 }
 
 // getUpdates performs long-polling for new messages.
 func (c *client) getUpdates(buf string) (*GetUpdatesResponse, error) {
 	return apiPost[GetUpdatesResponse](c, "/ilink/bot/getupdates", GetUpdatesRequest{
 		GetUpdatesBuf: buf,
-		BaseInfo:      BaseInfo{ChannelVersion: defaultChannelVersion},
+		BaseInfo:      c.buildBaseInfo(),
 	}, c.getUpdatesTimeout)
 }
 
@@ -273,4 +292,18 @@ func (c *client) getConfig(req *GetConfigRequest) (*GetConfigResponse, error) {
 func (c *client) sendTyping(req *SendTypingRequest) error {
 	_, err := apiPost[map[string]any](c, "/ilink/bot/sendtyping", req, c.sendTypingTimeout)
 	return err
+}
+
+// notifyStart notifies the server that this channel client is starting (v2.1.10+).
+func (c *client) notifyStart() (*NotifyStartResponse, error) {
+	return apiPost[NotifyStartResponse](c, "/ilink/bot/msg/notifystart", NotifyStartRequest{
+		BaseInfo: c.buildBaseInfo(),
+	}, c.getConfigTimeout)
+}
+
+// notifyStop notifies the server that this channel client is stopping (v2.1.10+).
+func (c *client) notifyStop() (*NotifyStopResponse, error) {
+	return apiPost[NotifyStopResponse](c, "/ilink/bot/msg/notifystop", NotifyStopRequest{
+		BaseInfo: c.buildBaseInfo(),
+	}, c.getConfigTimeout)
 }

@@ -32,6 +32,9 @@ const (
 	QRStatusConfirmed         = "confirmed"
 	QRStatusExpired           = "expired"
 	QRStatusScanedButRedirect = "scaned_but_redirect"
+	QRStatusNeedVerifyCode    = "need_verifycode"     // v2.3.1+: server requests pair-code
+	QRStatusVerifyCodeBlocked = "verify_code_blocked" // v2.3.1+: too many wrong attempts
+	QRStatusBindedRedirect    = "binded_redirect"     // v2.3.1+: bot already bound
 )
 
 // --- API Common ---
@@ -39,10 +42,21 @@ const (
 // BaseInfo is included in every API request body.
 type BaseInfo struct {
 	ChannelVersion string `json:"channel_version"`
+	BotAgent       string `json:"bot_agent,omitempty"`
 }
+
+// defaultBotAgent is the fallback value when no bot_agent is configured.
+const defaultBotAgent = "Tachi"
 
 // Default channel version as observed in protocol.
 const defaultChannelVersion = "2.1.7"
+
+// --- QR Login ---
+
+// QRLoginRequest is the body of POST /ilink/bot/get_bot_qrcode (v2.3.1+).
+type QRLoginRequest struct {
+	LocalTokenList []string `json:"local_token_list,omitempty"`
+}
 
 // --- getUpdates ---
 
@@ -193,7 +207,7 @@ type SendMessageResponse struct {
 	ErrMsg  string `json:"errmsg"`
 }
 
-// --- Media Upload / CDN ---
+// --- CDN ---
 
 // MediaType constants for getUploadUrl.
 const (
@@ -282,4 +296,28 @@ type ContextTokens map[string]string
 type AllowFromData struct {
 	Version   int      `json:"version"`
 	AllowFrom []string `json:"allowFrom"`
+}
+
+// --- notifyStart / notifyStop (v2.1.10+) ---
+
+// NotifyStartRequest is the body of POST /ilink/bot/msg/notifystart.
+type NotifyStartRequest struct {
+	BaseInfo BaseInfo `json:"base_info"`
+}
+
+// NotifyStartResponse is the response of POST /ilink/bot/msg/notifystart.
+type NotifyStartResponse struct {
+	Ret    int    `json:"ret"`
+	ErrMsg string `json:"errmsg"`
+}
+
+// NotifyStopRequest is the body of POST /ilink/bot/msg/notifystop.
+type NotifyStopRequest struct {
+	BaseInfo BaseInfo `json:"base_info"`
+}
+
+// NotifyStopResponse is the response of POST /ilink/bot/msg/notifystop.
+type NotifyStopResponse struct {
+	Ret    int    `json:"ret"`
+	ErrMsg string `json:"errmsg"`
 }

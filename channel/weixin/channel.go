@@ -113,6 +113,7 @@ func splitThreadID(threadID string) []string {
 // enters the long-polling receive loop.
 func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) error {
 	ch.cli.SetRouteTag(ch.cfg.RouteTag)
+	ch.cli.SetBotAgent(ch.cfg.BotAgent)
 
 	// --- Load existing account or login ---
 	if err := ch.loadOrLogin(ctx); err != nil {
@@ -138,6 +139,24 @@ func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) erro
 			ch.logger.Log("weixin: greeting send error: %v", err)
 		}
 	}
+
+	// Notify server that this channel client is starting (v2.1.10+).
+	ch.logger.Log("weixin: sending notifyStart...")
+	if resp, err := ch.cli.notifyStart(); err != nil {
+		ch.logger.Log("weixin: notifyStart error (ignored): %v", err)
+	} else if resp.Ret != 0 {
+		ch.logger.Log("weixin: notifyStart ret=%d errmsg=%s", resp.Ret, resp.ErrMsg)
+	}
+
+	// Ensure notifyStop is sent when Run exits for any reason.
+	defer func() {
+		ch.logger.Log("weixin: sending notifyStop...")
+		if resp, err := ch.cli.notifyStop(); err != nil {
+			ch.logger.Log("weixin: notifyStop error (ignored): %v", err)
+		} else if resp.Ret != 0 {
+			ch.logger.Log("weixin: notifyStop ret=%d errmsg=%s", resp.Ret, resp.ErrMsg)
+		}
+	}()
 
 	// --- Long-polling loop ---
 	return ch.pollingLoop(ctx, handler)
@@ -227,11 +246,18 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 
 // qrLogin performs the QR-code login flow: fetch QR → poll status until
 // confirmed or cancelled.
+//
+// Supports v2.3.1+ protocol extensions:
+//   - POST get_bot_qrcode with local_token_list for binded_redirect detection
+//   - need_verifycode / verify_code_blocked pair-code flow
+//   - binded_redirect for already-bound bot detection
 func (ch *Channel) qrLogin(ctx context.Context) error {
 	fmt.Println("[weixin] no stored account found. starting QR login...")
 	fmt.Println("[weixin] open the following URL and scan with WeChat:")
 
-	qr, err := ch.cli.getBotQRCode()
+	// Collect local bot tokens for binded_redirect detection.
+	localTokens := ch.collectLocalBotTokens()
+	qr, err := ch.cli.getBotQRCode(&QRLoginRequest{LocalTokenList: localTokens})
 	if err != nil {
 		return fmt.Errorf("get QR code: %w", err)
 	}
@@ -244,6 +270,9 @@ func (ch *Channel) qrLogin(ctx context.Context) error {
 	refreshCount := 0
 	const maxQRRefreshes = 3
 
+	// Track the pending verify code for need_verifycode flow.
+	var pendingVerifyCode string
+
 	for time.Now().Before(deadline) {
 		select {
 		case <-ctx.Done():
@@ -251,7 +280,7 @@ func (ch *Channel) qrLogin(ctx context.Context) error {
 		default:
 		}
 
-		status, err := ch.cli.getQRCodeStatus(qr.QRCode)
+		status, err := ch.cli.getQRCodeStatus(qr.QRCode, pendingVerifyCode)
 		if err != nil {
 			return fmt.Errorf("poll QR status: %w", err)
 		}
@@ -293,14 +322,54 @@ func (ch *Channel) qrLogin(ctx context.Context) error {
 			// Continue polling.
 
 		case QRStatusScaned:
+			// If we had a pending verify code, it was accepted.
+			if pendingVerifyCode != "" {
+				pendingVerifyCode = ""
+			}
 			fmt.Println("[weixin] scanned! waiting for confirmation on phone...")
+
+		case QRStatusNeedVerifyCode:
+			// Server requests a pair-code for verification.
+			prompt := "输入手机微信显示的数字，以继续连接："
+			if pendingVerifyCode != "" {
+				// Previous code was rejected.
+				prompt = "❌ 你输入的数字不匹配，请重新输入："
+			}
+			code, err := readStdinLine(prompt)
+			if err != nil {
+				return fmt.Errorf("read verify code: %w", err)
+			}
+			if code != "" {
+				pendingVerifyCode = code
+			}
+			// Continue polling immediately — the verify_code will be sent
+			// with the next getQRCodeStatus call.
+
+		case QRStatusVerifyCodeBlocked:
+			fmt.Println("[weixin] too many incorrect pair-code attempts, refreshing QR...")
+			pendingVerifyCode = ""
+			refreshCount++
+			if refreshCount > maxQRRefreshes {
+				return fmt.Errorf("verify code blocked after %d QR refreshes", maxQRRefreshes)
+			}
+			qr, err = ch.cli.getBotQRCode(&QRLoginRequest{LocalTokenList: localTokens})
+			if err != nil {
+				return fmt.Errorf("refresh QR code after blocked verify code: %w", err)
+			}
+			fmt.Printf("\n  %s\n\n", qr.QRCodeImgContent)
+
+		case QRStatusBindedRedirect:
+			// Bot is already bound to this client — load existing credentials.
+			fmt.Println("[weixin] bot already connected, loading existing account...")
+			return ch.loadExistingAccount(ctx)
 
 		case QRStatusExpired:
 			if refreshCount >= maxQRRefreshes {
 				return fmt.Errorf("QR code expired after %d refreshes", maxQRRefreshes)
 			}
 			fmt.Println("[weixin] QR expired, refreshing...")
-			qr, err = ch.cli.getBotQRCode()
+			pendingVerifyCode = ""
+			qr, err = ch.cli.getBotQRCode(&QRLoginRequest{LocalTokenList: localTokens})
 			if err != nil {
 				return fmt.Errorf("refresh QR code: %w", err)
 			}
@@ -316,6 +385,49 @@ func (ch *Channel) qrLogin(ctx context.Context) error {
 	}
 
 	return fmt.Errorf("QR login timed out after %v", overallTimeout)
+}
+
+// collectLocalBotTokens gathers bot tokens from stored accounts for the
+// local_token_list parameter used in get_bot_qrcode (v2.3.1+).
+// Returns up to 10 most recent tokens.
+func (ch *Channel) collectLocalBotTokens() []string {
+	accounts, err := ch.store.loadAccountList()
+	if err != nil {
+		return nil
+	}
+	// Collect tokens from newest accounts first.
+	var tokens []string
+	for i := len(accounts) - 1; i >= 0 && len(tokens) < 10; i-- {
+		data, err := ch.store.loadAccount(accounts[i])
+		if err != nil || data.Token == "" {
+			continue
+		}
+		tokens = append(tokens, data.Token)
+	}
+	return tokens
+}
+
+// loadExistingAccount loads the first stored account after binded_redirect.
+// This handles the case where the bot is already bound but credentials
+// exist locally.
+func (ch *Channel) loadExistingAccount(_ context.Context) error {
+	accounts, err := ch.store.loadAccountList()
+	if err != nil {
+		return fmt.Errorf("load accounts after binded_redirect: %w", err)
+	}
+	if len(accounts) == 0 {
+		return fmt.Errorf("binded_redirect but no stored accounts found")
+	}
+	data, err := ch.store.loadAccount(accounts[0])
+	if err != nil {
+		return fmt.Errorf("load account %s after binded_redirect: %w", accounts[0], err)
+	}
+	ch.accountID = accounts[0]
+	ch.userID = data.UserID
+	ch.botToken = data.Token
+	ch.cli.SetBaseURL(data.BaseURL)
+	ch.logger.Log("weixin: loaded existing account %s after binded_redirect", accounts[0])
+	return nil
 }
 
 // deduplicateAccounts removes old accounts that share the same userId as the
@@ -343,4 +455,16 @@ func (ch *Channel) deduplicateAccounts() {
 // defaultStateDir returns the default weixin state directory.
 func defaultStateDir() string {
 	return config.WeixinStateDir()
+}
+
+// readStdinLine reads a line of text from stdin with a prompt.
+// Used by the QR verify_code flow (need_verifycode).
+func readStdinLine(prompt string) (string, error) {
+	fmt.Print(prompt)
+	var input string
+	_, err := fmt.Scanln(&input)
+	if err != nil {
+		return "", err
+	}
+	return input, nil
 }

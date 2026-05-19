@@ -165,6 +165,7 @@ type WeixinConfig struct {
 	StateDir string `yaml:"state_dir"` // State directory (default: ~/.tachi/weixin)
 	RouteTag string `yaml:"route_tag"` // Optional SKRouteTag for routing
 	Greeting string `yaml:"greeting"`  // Startup greeting sent to the admin user after login (default: "👋 你好！Tachi 已启动，随时可以开始工作～")
+	BotAgent string `yaml:"bot_agent"` // v2.3.1+: bot_agent identity string (default: "Tachi")
 }
 
 // CronConfig holds cron scheduler configuration (only active in channel mode).
