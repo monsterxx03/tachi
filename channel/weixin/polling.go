@@ -3,6 +3,7 @@ package weixin
 import (
 	"context"
 	"fmt"
+	"os"
 	"sync"
 	"time"
 
@@ -185,9 +186,15 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	}
 
 	// Send each attachment as a separate media message.
+	// Supports both inline Data and deferred LocalPath (read from disk at send time).
 	for _, att := range result.Reply.Attachments {
 		mediaType := channelAttachmentToILinkMediaType(att.Type)
-		if err := ch.sendMediaReply(msg.FromUserID, msg.ContextToken, att.Data, att.FileName, mediaType); err != nil {
+		data, err := ch.resolveAttachmentData(att)
+		if err != nil {
+			ch.logger.Log("weixin: resolve attachment %s: %v", att.FileName, err)
+			continue
+		}
+		if err := ch.sendMediaReply(msg.FromUserID, msg.ContextToken, data, att.FileName, mediaType); err != nil {
 			ch.logger.Log("weixin: sendMediaReply error for %s: %v", att.FileName, err)
 		}
 	}
@@ -281,4 +288,20 @@ func (tc *typingTicketCache) get(userID string, contextToken string) (string, er
 	tc.mu.Unlock()
 
 	return resp.TypingTicket, nil
+}
+
+// resolveAttachmentData returns the attachment's raw bytes, reading from disk
+// when LocalPath is set (deferred I/O, avoids buffering data during agent turn).
+func (ch *Channel) resolveAttachmentData(att channel.OutgoingAttachment) ([]byte, error) {
+	if len(att.Data) > 0 {
+		return att.Data, nil
+	}
+	if att.LocalPath != "" {
+		data, err := os.ReadFile(att.LocalPath)
+		if err != nil {
+			return nil, fmt.Errorf("read %s from disk: %w", att.LocalPath, err)
+		}
+		return data, nil
+	}
+	return nil, fmt.Errorf("attachment %q has neither Data nor LocalPath", att.FileName)
 }

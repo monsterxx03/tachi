@@ -141,8 +141,9 @@ type threadActivation struct {
 // handlerResult is the internal result type sent from the agent goroutine
 // back to the blocking handler.
 type handlerResult struct {
-	text string
-	err  error
+	text        string
+	err         error
+	attachments []channel.OutgoingAttachment
 }
 
 // New creates a Manager.
@@ -354,9 +355,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			if result.err != nil {
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
-						ThreadID: msg.ThreadID,
-						Content:  fmt.Sprintf("❌ %v", result.err),
-						ReplyTo:  msg.MessageID,
+						ThreadID:    msg.ThreadID,
+						Content:     fmt.Sprintf("❌ %v", result.err),
+						ReplyTo:     msg.MessageID,
+						Attachments: result.attachments,
 					},
 					Err: result.err,
 				}
@@ -388,9 +390,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 			return channel.HandlerResult{
 				Reply: channel.OutgoingMessage{
-					ThreadID: msg.ThreadID,
-					Content:  result.text,
-					ReplyTo:  msg.MessageID,
+					ThreadID:    msg.ThreadID,
+					Content:     result.text,
+					ReplyTo:     msg.MessageID,
+					Attachments: result.attachments,
 				},
 			}
 		case <-ta.ctx.Done():
@@ -508,6 +511,25 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// Build the user message text with attachment content prepended.
 	userContent := buildUserMessageWithAttachments(msg)
 
+	// --- SendFile tool for file delivery via channel ---
+	// The tool is available in channel mode so the LLM can send files
+	// to the user (e.g. generated reports, screenshots, documents).
+	var attachmentMu sync.Mutex
+	var pendingAttachments []channel.OutgoingAttachment
+
+	sendFileTool := tools.NewSendFileTool()
+	sendFileTool.SetCallback(func(name, mimeType, localPath string) {
+		attachmentMu.Lock()
+		pendingAttachments = append(pendingAttachments, channel.OutgoingAttachment{
+			Type:      channel.AttachmentTypeFile,
+			FileName:  name,
+			MimeType:  mimeType,
+			LocalPath: localPath,
+		})
+		attachmentMu.Unlock()
+	})
+	aiAgent.RegisterTool(sendFileTool)
+
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
@@ -517,7 +539,14 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	m.verboseMu.RUnlock()
 
 	text, err := m.drainEventsWithSteer(eventCh, aiAgent, verbose, sendProgress, ta)
-	ta.resultCh <- handlerResult{text: text, err: err}
+
+	// Collect any pending file attachments from the SendFile tool.
+	attachmentMu.Lock()
+	attachments := make([]channel.OutgoingAttachment, len(pendingAttachments))
+	copy(attachments, pendingAttachments)
+	attachmentMu.Unlock()
+
+	ta.resultCh <- handlerResult{text: text, err: err, attachments: attachments}
 }
 
 // --- CommandHandler bridge: typed slash command dispatch ---

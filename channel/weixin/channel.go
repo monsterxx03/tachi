@@ -78,7 +78,7 @@ func (ch *Channel) Name() string { return "weixin" }
 
 // Send implements channel.MessageSender for proactive message delivery
 // (used by cron job triggers). It parses the ThreadID into accountID and
-// userID, looks up the context token, and sends a text reply.
+// userID, looks up the context token, and sends text + any file attachments.
 func (ch *Channel) Send(ctx context.Context, msg channel.OutgoingMessage) error {
 	// Parse ThreadID: accountID:userID
 	parts := splitThreadID(msg.ThreadID)
@@ -96,7 +96,28 @@ func (ch *Channel) Send(ctx context.Context, msg channel.OutgoingMessage) error 
 	// Load context token.
 	contextToken := ch.store.loadContextToken(accountID, userID)
 
-	return ch.sendTextReply(userID, contextToken, msg.Content)
+	// Send text content if present.
+	if msg.Content != "" {
+		if err := ch.sendTextReply(userID, contextToken, msg.Content); err != nil {
+			return fmt.Errorf("weixin: Send text: %w", err)
+		}
+	}
+
+	// Send each attachment as a separate media message.
+	// Supports both inline Data and deferred LocalPath (read from disk at send time).
+	for _, att := range msg.Attachments {
+		mediaType := channelAttachmentToILinkMediaType(att.Type)
+		data, err := ch.resolveAttachmentData(att)
+		if err != nil {
+			ch.logger.Log("weixin: Send resolve attachment %s: %v", att.FileName, err)
+			continue
+		}
+		if err := ch.sendMediaReply(userID, contextToken, data, att.FileName, mediaType); err != nil {
+			ch.logger.Log("weixin: Send attachment %s error: %v (continuing)", att.FileName, err)
+		}
+	}
+
+	return nil
 }
 
 // splitThreadID splits a ThreadID of the form "accountID:userID".

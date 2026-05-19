@@ -111,6 +111,9 @@ type IncomingMessage struct {
 // OutgoingAttachment represents a file or media attachment to be sent
 // to an IM channel as part of an OutgoingMessage. The channel implementation
 // decides how to deliver it (e.g., CDN upload for WeChat iLink).
+//
+// Either Data or LocalPath must be set. When LocalPath is set, the channel
+// reads the file from disk at send time rather than keeping it in memory.
 type OutgoingAttachment struct {
 	// Type indicates the kind of attachment.
 	Type AttachmentType
@@ -122,7 +125,13 @@ type OutgoingAttachment struct {
 	MimeType string
 
 	// Data is the raw byte content of the file.
+	// Leave nil when LocalPath is set.
 	Data []byte
+
+	// LocalPath is an alternative to Data — when set, the channel reads the
+	// file from this local path at send time instead of keeping it in memory.
+	// This avoids buffering large files during the agent turn.
+	LocalPath string
 }
 
 // OutgoingMessage represents a response to send back to the IM channel.
