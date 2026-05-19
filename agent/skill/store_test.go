@@ -303,7 +303,7 @@ func TestBuildSkillListPrompt(t *testing.T) {
   <skill name="git-commit" description="Commit messages"/>
 </available_skills>
 
-To use a skill, call SkillView(name) or the user can type /skill-name.`,
+To use a skill, call Skill(operation="view", name=...) or the user can type /skill-name.`,
 		},
 	}
 

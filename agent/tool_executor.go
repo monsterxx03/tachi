@@ -267,7 +267,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		// SkillListReminder picks up the new skill from the store. Otherwise
 		// the LLM won't see the newly created skill in the next system-reminder
 		// block even though it exists on disk.
-		if tc.Function.Name == tools.ToolNameSkillCreate && tr.Status == tools.ToolResultSuccess {
+		if tc.Function.Name == tools.ToolNameSkill && tr.Status == tools.ToolResultSuccess {
 			a.rebuildSkillCollector()
 		}
 

@@ -41,7 +41,7 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 			preview := firstLineOrTruncate(content, 100)
 			b.WriteString(fmt.Sprintf("  %s → %s\n", name, preview))
 		}
-		b.WriteString(fmt.Sprintf("Load with SkillView(name=%q, file_path=<path>)]\n", sk.Meta.Name))
+		b.WriteString(fmt.Sprintf("Load with Skill(operation=\"view\", name=%q, file_path=<path>)]\n", sk.Meta.Name))
 	}
 
 	return b.String()
@@ -57,7 +57,7 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 //	  <skill name="git-commit" description="Generate conventional commit messages" tags="git"/>
 //	</available_skills>
 //
-//	To use a skill, call SkillView(name) or the user can type /skill-name.
+//	To use a skill, call Skill(operation="view", name=...) or the user can type /skill-name.
 //
 // Returns an empty string when metas is empty.
 func BuildSkillListPrompt(metas []SkillMeta) string {
@@ -78,7 +78,7 @@ func BuildSkillListPrompt(metas []SkillMeta) string {
 	}
 
 	b.WriteString("</available_skills>\n")
-	b.WriteString("\nTo use a skill, call SkillView(name) or the user can type /skill-name.")
+	b.WriteString("\nTo use a skill, call Skill(operation=\"view\", name=...) or the user can type /skill-name.")
 
 	return b.String()
 }

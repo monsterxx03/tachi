@@ -1284,18 +1284,14 @@ func (a *AIAgent) initSkills() {
 	a.rebuildSkillCollector()
 }
 
-// registerSkillTools registers skill tools backed by the current skillStore.
+// registerSkillTools registers the skill tool backed by the current skillStore.
 func (a *AIAgent) registerSkillTools() {
-	a.RegisterTool(tools.NewSkillsListTool(a.skillStore))
-	a.RegisterTool(tools.NewSkillViewTool(a.skillStore))
-	a.RegisterTool(tools.NewSkillCreateTool(a.skillStore))
+	a.RegisterTool(tools.NewSkillTool(a.skillStore))
 }
 
-// unregisterSkillTools removes all skill tools from the agent's registry.
+// unregisterSkillTools removes the skill tool from the agent's registry.
 func (a *AIAgent) unregisterSkillTools() {
-	a.UnregisterTool(tools.ToolNameSkillsList)
-	a.UnregisterTool(tools.ToolNameSkillView)
-	a.UnregisterTool(tools.ToolNameSkillCreate)
+	a.UnregisterTool(tools.ToolNameSkill)
 }
 
 // rebuildSkillCollector constructs a new collector from baseReminders plus

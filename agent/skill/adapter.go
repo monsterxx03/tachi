@@ -12,9 +12,7 @@ import (
 
 // compile-time interface checks
 var (
-	_ tools.SkillLister  = (*Store)(nil)
-	_ tools.SkillLoader  = (*Store)(nil)
-	_ tools.SkillCreator = (*Store)(nil)
+	_ tools.SkillManager              = (*Store)(nil)
 	_ systemreminder.SkillMetaProvider = (*Store)(nil)
 )
 

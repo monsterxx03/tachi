@@ -413,7 +413,7 @@ func buildSkillListPrompt(metas []SkillMetaRecord) string {
 		b.WriteString(fmt.Sprintf("  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr))
 	}
 
-	b.WriteString("\nTo use a skill, call SkillView(name) or the user can type /skill-name.")
+	b.WriteString("\nTo use a skill, call Skill(operation=\"view\", name=...) or the user can type /skill-name.")
 
 	return b.String()
 }
