@@ -56,6 +56,9 @@ type Context struct {
 	// CurrentPrompt is the current user input. Set by WrapUserMessage before
 	// calling Collect so MemoryRecallReminder can use it as a search query.
 	CurrentPrompt string
+
+	// SkipRecall prevents memory recall (e.g. "tachi run" non-interactive mode).
+	SkipRecall bool
 }
 
 // Reminder generates one or more reminder lines given the current context.
@@ -453,6 +456,10 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 	}
 	// Only fire on real user messages, not at tool-result boundaries
 	if ctx.IsToolResult {
+		return nil
+	}
+	// Skip when caller explicitly suppresses recall (e.g. "tachi run" mode)
+	if ctx.SkipRecall {
 		return nil
 	}
 

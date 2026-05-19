@@ -61,6 +61,7 @@ type AIAgent struct {
 	memoryBackend  memory.Backend  // nil = memory not enabled
 	memoryTimeout  time.Duration   // context deadline for Store/Recall/Forget
 	skipMemory     bool            // set by RunOneOffStream to suppress turn-level memory writes
+	skipMemoryRecall bool            // set by main.go runAgent to suppress recall for "tachi run"
 	excludeRepos   []string        // git repo roots to skip all memory writes
 }
 
@@ -126,6 +127,11 @@ func (a *AIAgent) Model() string {
 
 func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 	a.skipEditConfirm = skip
+}
+
+// SetSkipMemoryRecall suppresses memory recall for non-interactive modes like "tachi run".
+func (a *AIAgent) SetSkipMemoryRecall(skip bool) {
+	a.skipMemoryRecall = skip
 }
 
 func (a *AIAgent) SetSessionManager(sm *session.Manager) {
@@ -1153,6 +1159,7 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		Now:             time.Now(),
 		LastMessageDate: a.lastMessageDate,
 		IsToolResult:    isToolResult,
+		SkipRecall:      a.skipMemoryRecall,
 	}
 }
 

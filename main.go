@@ -394,6 +394,12 @@ func exitCodeForReason(reason string) int {
 }
 
 func runAgent(ctx context.Context, cmd *cli.Command) error {
+	// Initialize debug logging.
+	if err := debuglog.Init(config.LogsDir()); err != nil {
+		fmt.Printf("Warning: failed to init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+
 	// Apply optional timeout.
 	if timeout := cmd.Duration("timeout"); timeout > 0 {
 		var cancel context.CancelFunc
@@ -420,6 +426,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, maxIters)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
+	aiAgent.SetSkipMemoryRecall(true) // "tachi run" is non-interactive — don't pollute prompt with memory recall
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)

@@ -48,7 +48,7 @@ harbor run \
 export ANTHROPIC_API_KEY="sk-ant-..."
 harbor run \
     --dataset terminal-bench@2.0 \
-    --agent-import-path ./harbor_adapter/tachi_agent.py:TachiAgent \
+    --agent-import-path harbor_adapter.tachi_agent:TachiAgent \
     --model anthropic/claude-sonnet-4-20250514 \
     --n-concurrent 4
 ```
@@ -139,16 +139,16 @@ harbor run \
     --no-delete \
     --ek keep_containers=True \
     --dataset terminal-bench@2.0 \
-    --agent-import-path ./harbor_adapter/tachi_agent.py:TachiAgent
+    --agent-import-path harbor_adapter.tachi_agent:TachiAgent
 ```
 
 **为什么需要两个参数？** Harbor 的容器生命周期有三层控制：
 
-| 选项                               | 容器            | 镜像    | Volumes |
-| ---------------------------------- | --------------- | ------- | ------- |
-| `--delete`（默认）                 | `down` 删除     | 删除    | 删除    |
-| `--no-delete`                      | `down` 删除     | 保留    | 保留    |
-| `--no-delete --ek keep_containers=True` | `stop` 保留 | 保留    | 保留    |
+| 选项                                    | 容器        | 镜像 | Volumes |
+| --------------------------------------- | ----------- | ---- | ------- |
+| `--delete`（默认）                      | `down` 删除 | 删除 | 删除    |
+| `--no-delete`                           | `down` 删除 | 保留 | 保留    |
+| `--no-delete --ek keep_containers=True` | `stop` 保留 | 保留 | 保留    |
 
 > **注意：**`--no-delete` 名字有误导性——它只跳过 `docker compose down --rmi --volumes` 中的 `--rmi` 和 `--volumes`，但 `down` 命令本身仍然会删除容器。要真正保留容器，必须加上 `--ek keep_containers=True`，它会让 Harbor 改用 `docker compose stop`。
 

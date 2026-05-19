@@ -160,6 +160,8 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	for i, tc := range toolCalls {
 		tr := results[i]
 
+		a.logger.Log("Tool: %s (parallel) dur=%v err=%v", tc.Function.Name, tr.Duration, tr.Err)
+
 		// Emit SubagentDone for sub-agent calls after execution completes.
 		if tc.Function.Name == tools.ToolNameSubAgent {
 			ch <- AgentEvent{
@@ -328,6 +330,8 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				tr = tools.ToolResult{Status: tools.ToolResultError, Err: ctx.Err()}
 			}
 		}
+
+		a.logger.Log("Tool: %s (sequential) dur=%v err=%v", tc.Function.Name, tr.Duration, tr.Err)
 
 		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
 		if tr.Status == tools.ToolResultError {
