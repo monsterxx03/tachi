@@ -21,6 +21,12 @@ func (t MCPTool) Name() string {
 	return fmt.Sprintf("mcp__%s__%s", t.serverName, t.serverTool.Name)
 }
 
+// ServerName returns the MCP server this tool belongs to.
+func (t MCPTool) ServerName() string { return t.serverName }
+
+// ToolName returns the original MCP-level tool name (without prefix).
+func (t MCPTool) ToolName() string { return t.serverTool.Name }
+
 // Description returns the tool description.
 func (t MCPTool) Description() string {
 	return fmt.Sprintf("[MCP:%s] %s", t.serverName, t.serverTool.Description)

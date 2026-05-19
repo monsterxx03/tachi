@@ -281,6 +281,7 @@ var noiseTags = []string{
 	"<task-notification>",
 	"<system-reminder>",
 	"<available-skills>",
+	"<available-deferred-tools>",
 }
 
 // stripNoiseTags removes noise block tags and their content from s.

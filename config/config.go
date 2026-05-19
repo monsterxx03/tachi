@@ -115,6 +115,10 @@ type MCPServerConfig struct {
 	Enabled *bool             `yaml:"enabled,omitempty" default:"true"` // Whether to load this server
 	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
 
+	// ToolSearch-specific options
+	AlwaysLoadTools []string          `yaml:"always_load_tools,omitempty"` // Tool names to always load (skip ToolSearch)
+	SearchHints     map[string]string `yaml:"search_hints,omitempty"`      // Override search hints: tool_name -> hint
+
 	// Profile is the MCP profile this server originates from.
 	// Empty string means it came from mcp_servers (always loaded).
 	// Set internally during config expansion; not serialized to YAML.
@@ -305,6 +309,7 @@ type Config struct {
 	MCPServers             []MCPServerConfig            `yaml:"mcp_servers"`
 	MCPProfiles            map[string][]MCPServerConfig `yaml:"mcp_profiles"`       // Profile name -> servers
 	ActiveMCPProfile       string                       `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
+	MCPToolSearch          MCPToolSearchConfig           `yaml:"mcp_tool_search"`
 	TUI                    TUIConfig                    `yaml:"tui"`
 	SystemReminder         SystemReminderConfig         `yaml:"system_reminder"`
 	Language               string                       `yaml:"language" default:"English"`      // Reply language for LLM
@@ -487,6 +492,18 @@ func (c *Config) FindProvider(name string) *ProviderConfig {
 // MCPEnabled returns true if at least one MCP server is configured.
 func (c *Config) MCPEnabled() bool {
 	return len(c.MCPServers) > 0
+}
+
+// MCPToolSearchConfig controls MCPSearchTools behavior.
+type MCPToolSearchConfig struct {
+	Enabled                *bool  `yaml:"enabled" default:"true"`           // false = load all tools directly (disable ToolSearch)
+	MinToolsForSearch      int    `yaml:"min_tools_for_search" default:"5"` // Auto-load all if total MCP tools <= this threshold
+	MaxDeferredSchemaBytes int    `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
+}
+
+// IsEnabled returns whether ToolSearch is active. Defaults to true.
+func (c *MCPToolSearchConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // ExpandMCPProfiles merges the active MCP profile's servers into MCPServers.

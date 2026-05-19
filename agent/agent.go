@@ -63,6 +63,10 @@ type AIAgent struct {
 	skipMemory     bool            // set by RunOneOffStream to suppress turn-level memory writes
 	skipMemoryRecall bool            // set by main.go runAgent to suppress recall for "tachi run"
 	excludeRepos   []string        // git repo roots to skip all memory writes
+
+	// MCP ToolSearch fields
+	deferredPool  *mcp.DeferredPool   // MCP tools available for search (nil = ToolSearch disabled)
+	discoveredSet *mcp.DiscoveredSet  // MCP tools discovered by LLM via MCPSearchTools
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -399,6 +403,24 @@ func withRepoTag(tags []string) []string {
 		return append(tags, tag)
 	}
 	return tags
+}
+
+// deferredToolProviderAdapter adapts mcp.DeferredPool to the
+// systemreminder.DeferredToolProvider interface.
+type deferredToolProviderAdapter struct {
+	pool *mcp.DeferredPool
+}
+
+func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord {
+	tools := a.pool.All()
+	records := make([]systemreminder.DeferredToolRecord, len(tools))
+	for i, t := range tools {
+		records[i] = systemreminder.DeferredToolRecord{
+			Name:        t.Name,
+			Description: t.Description,
+		}
+	}
+	return records
 }
 
 // normalizeRepoPaths expands ~ to the home directory and cleans each path.
@@ -1013,8 +1035,6 @@ func (a *AIAgent) runAgentLoop(
 	opts llm.ChatOptions,
 	ch chan<- AgentEvent,
 ) {
-	llmTools := buildLLMTools(a.toolRegistry.GetSchemas())
-
 	// Inject the current session ID so it can be forwarded as the
 	// x-tachi-session-id header on outgoing LLM API requests.
 	if a.sessionManager != nil && a.sessionManager.Current() != nil {
@@ -1051,6 +1071,13 @@ func (a *AIAgent) runAgentLoop(
 		}
 
 		apiCallCount++
+
+		// Rebuild tool schemas each iteration. When ToolSearch is active,
+		// newly discovered MCP tools are added to the list, enabling the LLM
+		// to call them. The tool list is monotonic (only grows), minimizing
+		// prompt cache invalidations.
+		llmTools := buildLLMTools(a.filterActiveSchemas(a.toolRegistry.GetSchemas()))
+
 		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
 		if err != nil {
 			ch <- AgentEvent{
@@ -1115,6 +1142,40 @@ func (a *AIAgent) runAgentLoop(
 			}
 		}
 	}
+}
+
+// filterActiveSchemas filters tool schemas for the LLM API call.
+// When ToolSearch is active (deferredPool != nil):
+//   - Built-in tools are always included
+//   - The MCPSearchTools tool is always included
+//   - MCP tools are only included if they've been discovered by the LLM
+//
+// When ToolSearch is not active (deferredPool == nil, e.g. no MCP servers):
+//   - All tools are included (unchanged behavior)
+func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
+	if a.deferredPool == nil || a.deferredPool.Len() == 0 {
+		// ToolSearch not active — include all schemas as-is
+		return schemas
+	}
+
+	active := make([]tools.Schema, 0, len(schemas))
+	for _, s := range schemas {
+		name := s.Name
+		switch {
+		case !tools.IsMCPSchema(name):
+			// Built-in tools are always included
+			active = append(active, s)
+		case tools.IsMCPSearchTool(name):
+			// The search tool itself is always included
+			active = append(active, s)
+		case a.discoveredSet != nil && a.discoveredSet.Contains(name):
+			// Discovered MCP tools are included
+			active = append(active, s)
+		default:
+			// Undiscovered MCP tools — excluded from LLM API call
+		}
+	}
+	return active
 }
 
 // buildLLMTools converts tool schemas from the agent's registry into the
@@ -1352,9 +1413,76 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 			a.logger.Log("MCP: load error: %v", err)
 			fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 		}
+
+		// Store all MCP tools for search and execution
+		a.deferredPool = mcp.NewDeferredPool()
+		a.discoveredSet = mcp.NewDiscoveredSet()
+
+		// Build server config lookup (name -> config)
+		serverCfgs := make(map[string]config.MCPServerConfig, len(cfg.MCPServers))
+		for _, srv := range cfg.MCPServers {
+			serverCfgs[srv.Name] = srv
+		}
+
+		// Decide whether ToolSearch is active
+		useToolSearch := cfg.MCPToolSearch.IsEnabled() && len(mcpTools) > cfg.MCPToolSearch.MinToolsForSearch
+
 		for _, t := range mcpTools {
+			// Register in Registry so Invoke() can find them at execution time
 			a.RegisterTool(t)
-			a.logger.Log("MCP: registered tool %s", t.Name())
+
+			// Check for per-server overrides
+			srvCfg, hasCfg := serverCfgs[t.ServerName()]
+
+			// Apply search hint override from config
+			var searchHint string
+			if hasCfg && srvCfg.SearchHints != nil {
+				searchHint = srvCfg.SearchHints[t.ToolName()]
+			}
+
+			// Store in deferred pool
+			dt := mcp.NewDeferredToolFromMCPTool(t, searchHint)
+			a.deferredPool.Add(dt)
+
+			// Auto-load when ToolSearch is disabled or tool is in always_load list
+			autoLoad := !useToolSearch
+			if !autoLoad && hasCfg {
+				for _, name := range srvCfg.AlwaysLoadTools {
+					if strings.EqualFold(name, t.ToolName()) {
+						autoLoad = true
+						break
+					}
+				}
+			}
+			if autoLoad {
+				a.discoveredSet.Add(t.Name())
+			}
+
+			a.logger.Log("MCP: registered tool %s (auto-load=%v)", t.Name(), autoLoad)
+		}
+
+		// Log summary
+		total := a.deferredPool.Len()
+		discovered := len(a.discoveredSet.List())
+		if useToolSearch {
+			a.logger.Log("MCP: ToolSearch active — %d/%d tools loaded (threshold=%d)",
+				discovered, total, cfg.MCPToolSearch.MinToolsForSearch)
+		} else {
+			a.logger.Log("MCP: all %d tools loaded (ToolSearch disabled or below threshold)", total)
+		}
+
+		// Register the MCPSearchTools tool
+		searchTool := tools.NewMCPSearchToolsTool(a.deferredPool, a.discoveredSet)
+		a.RegisterTool(searchTool)
+		a.logger.Log("MCP: registered MCPSearchTools tool")
+
+		// Register DeferredToolReminder only if there are undiscovered tools
+		if discovered < total {
+			baseReminders = append(baseReminders, systemreminder.DeferredToolReminder{
+				Provider: &deferredToolProviderAdapter{pool: a.deferredPool},
+				Tracker:  a.discoveredSet,
+			})
+			a.rebuildSkillCollector()
 		}
 	}
 
