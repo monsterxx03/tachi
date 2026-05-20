@@ -150,6 +150,13 @@ func (r *Registry) GetTool(name string) Tool {
 	return r.tools[name]
 }
 
+// getMCPOrder returns a copy of the MCP registration order for testing.
+func (r *Registry) getMCPOrder() []string {
+	result := make([]string, len(r.mcpOrder))
+	copy(result, r.mcpOrder)
+	return result
+}
+
 // GetToolNames returns all registered tool names in deterministic order:
 // built-in tools first (alphabetically), then MCP tools in registration order.
 func (r *Registry) GetToolNames() []string {

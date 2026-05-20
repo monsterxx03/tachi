@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestWriteTool(t *testing.T) {
@@ -73,6 +75,131 @@ func TestRegistry(t *testing.T) {
 	if reg.Unregister("nonexistent") {
 		t.Error("Expected Unregister to return false for unknown tool")
 	}
+}
+
+func TestRegistryMCPToolRegistrationOrder(t *testing.T) {
+	reg := NewRegistry()
+
+	// Register some built-in tools first
+	reg.Register(&stubTool{name: "Bash"})
+	reg.Register(&stubTool{name: "ReadFile"})
+	reg.Register(&stubTool{name: "EditFile"})
+
+	// Register MCP tools — order should be preserved
+	reg.Register(&stubTool{
+		name: "mcp__postgres__query",
+		desc: "Query a postgres database",
+	})
+	reg.Register(&stubTool{
+		name: "mcp__postgres__list_tables",
+		desc: "List all tables",
+	})
+	reg.Register(&stubTool{
+		name: "mcp__github__create_pr",
+		desc: "Create a pull request",
+	})
+
+	// GetToolNames: built-ins sorted, MCP tools in registration order
+	names := reg.GetToolNames()
+	builtinNames := names[:3]
+	mcpNames := names[3:]
+
+	assert.Equal(t, []string{"Bash", "EditFile", "ReadFile"}, builtinNames)
+	assert.Equal(t, []string{
+		"mcp__postgres__query",
+		"mcp__postgres__list_tables",
+		"mcp__github__create_pr",
+	}, mcpNames)
+
+	// GetSchemas: same ordering
+	schemas := reg.GetSchemas()
+	assert.Equal(t, "Bash", schemas[0].Name)
+	assert.Equal(t, "EditFile", schemas[1].Name)
+	assert.Equal(t, "ReadFile", schemas[2].Name)
+	assert.Equal(t, "mcp__postgres__query", schemas[3].Name)
+	assert.Equal(t, "mcp__postgres__list_tables", schemas[4].Name)
+	assert.Equal(t, "mcp__github__create_pr", schemas[5].Name)
+
+	// Register a new MCP tool later — should append at the end
+	reg.Register(&stubTool{
+		name: "mcp__filesystem__write",
+		desc: "Write a file",
+	})
+
+	names = reg.GetToolNames()
+	mcpNames = names[3:]
+	assert.Equal(t, []string{
+		"mcp__postgres__query",
+		"mcp__postgres__list_tables",
+		"mcp__github__create_pr",
+		"mcp__filesystem__write",
+	}, mcpNames, "Newly registered MCP tool should append at the end")
+}
+
+func TestRegistryMCPToolUnregisterOrder(t *testing.T) {
+	reg := NewRegistry()
+
+	reg.Register(&stubTool{name: "Bash"})
+	reg.Register(&stubTool{name: "mcp__a__tool"})
+	reg.Register(&stubTool{name: "mcp__b__tool"})
+	reg.Register(&stubTool{name: "mcp__c__tool"})
+
+	// Remove middle MCP tool, order of remaining should be preserved
+	reg.Unregister("mcp__b__tool")
+	names := reg.GetToolNames()
+	assert.Equal(t, []string{"Bash", "mcp__a__tool", "mcp__c__tool"}, names)
+
+	// Remove non-MCP tool — mcpOrder unaffected
+	reg.Unregister("Bash")
+	assert.Equal(t, []string{"mcp__a__tool", "mcp__c__tool"}, reg.GetToolNames())
+}
+
+func TestRegistryMCPToolOrderDeterministic(t *testing.T) {
+	reg := NewRegistry()
+
+	reg.Register(&stubTool{name: "mcp__z__tool"})
+	reg.Register(&stubTool{name: "mcp__a__tool"})
+	reg.Register(&stubTool{name: "mcp__m__tool"})
+
+	// Should be in registration order, not alphabetical
+	names := reg.GetToolNames()
+	assert.Equal(t, []string{"mcp__z__tool", "mcp__a__tool", "mcp__m__tool"}, names,
+		"MCP tools should be in registration order, not alphabetical")
+}
+
+func TestRegistryMCPToolIdempotentRegister(t *testing.T) {
+	reg := NewRegistry()
+
+	reg.Register(&stubTool{name: "mcp__postgres__query"})
+	reg.Register(&stubTool{name: "mcp__github__pr"})
+
+	// Re-register same tool — should not duplicate in mcpOrder
+	reg.Register(&stubTool{name: "mcp__postgres__query"})
+
+	mcpOrder := reg.getMCPOrder()
+	assert.Equal(t, []string{"mcp__postgres__query", "mcp__github__pr"}, mcpOrder,
+		"Re-registering same MCP tool should not create duplicate in mcpOrder")
+}
+
+func TestRegistryNoMCPTools(t *testing.T) {
+	reg := NewRegistry()
+
+	reg.Register(&stubTool{name: "Bash"})
+	reg.Register(&stubTool{name: "EditFile"})
+
+	names := reg.GetToolNames()
+	assert.Equal(t, []string{"Bash", "EditFile"}, names)
+	assert.Empty(t, reg.getMCPOrder())
+}
+
+func TestRegistryOnlyMCPTools(t *testing.T) {
+	reg := NewRegistry()
+
+	reg.Register(&stubTool{name: "mcp__b__tool"})
+	reg.Register(&stubTool{name: "mcp__a__tool"})
+
+	names := reg.GetToolNames()
+	assert.Equal(t, []string{"mcp__b__tool", "mcp__a__tool"}, names)
 }
 
 func TestRegistryIsParallel(t *testing.T) {
