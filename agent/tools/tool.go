@@ -106,7 +106,8 @@ func ToSchema(t Tool) Schema {
 
 // Registry maintains a collection of available tools
 type Registry struct {
-	tools map[string]Tool
+	tools    map[string]Tool
+	mcpOrder []string // registration order of MCP tools
 }
 
 // NewRegistry creates a new tool registry
@@ -116,9 +117,16 @@ func NewRegistry() *Registry {
 	}
 }
 
-// Register registers a tool with the registry
+// Register registers a tool with the registry.
+// For MCP tools, tracks registration order so GetSchemas() and GetToolNames()
+// return them in the order they were registered (newly discovered tools
+// always append at the end), keeping the tool list monotonic for prompt cache.
 func (r *Registry) Register(tool Tool) {
-	r.tools[tool.Name()] = tool
+	name := tool.Name()
+	if _, exists := r.tools[name]; !exists && strings.HasPrefix(name, "mcp__") {
+		r.mcpOrder = append(r.mcpOrder, name)
+	}
+	r.tools[name] = tool
 }
 
 // Unregister removes a tool from the registry by name.
@@ -126,6 +134,14 @@ func (r *Registry) Register(tool Tool) {
 func (r *Registry) Unregister(name string) bool {
 	_, ok := r.tools[name]
 	delete(r.tools, name)
+	if strings.HasPrefix(name, "mcp__") {
+		for i, n := range r.mcpOrder {
+			if n == name {
+				r.mcpOrder = append(r.mcpOrder[:i], r.mcpOrder[i+1:]...)
+				break
+			}
+		}
+	}
 	return ok
 }
 
@@ -134,21 +150,20 @@ func (r *Registry) GetTool(name string) Tool {
 	return r.tools[name]
 }
 
-// GetToolNames returns all registered tool names in deterministic order
-// (built-in first alphabetically, then MCP tools alphabetically).
+// GetToolNames returns all registered tool names in deterministic order:
+// built-in tools first (alphabetically), then MCP tools in registration order.
 func (r *Registry) GetToolNames() []string {
-	names := make([]string, 0, len(r.tools))
+	// Collect built-in names
+	var builtins []string
 	for name := range r.tools {
-		names = append(names, name)
-	}
-	sort.Slice(names, func(i, j int) bool {
-		iMCP := strings.HasPrefix(names[i], "mcp__")
-		jMCP := strings.HasPrefix(names[j], "mcp__")
-		if iMCP != jMCP {
-			return !iMCP
+		if !strings.HasPrefix(name, "mcp__") {
+			builtins = append(builtins, name)
 		}
-		return names[i] < names[j]
-	})
+	}
+	sort.Strings(builtins)
+
+	// MCP tools in registration order
+	names := append(builtins, r.mcpOrder...)
 	return names
 }
 
@@ -230,22 +245,31 @@ func validateArgs(tool Tool, args string) error {
 }
 
 // GetSchemas returns all tool schemas in deterministic order:
-// built-in tools first (alphabetically by name), then MCP tools (alphabetically).
-// Deterministic ordering is critical for LLM prompt caching — both OpenAI and
-// Anthropic cache the tools prefix, and any change in order invalidates the cache.
+// built-in tools first (alphabetically by name), then MCP tools in registration order.
+// Registration order ensures newly discovered tools always append at the end,
+// keeping the tool list monotonic for prompt cache stability.
 func (r *Registry) GetSchemas() []Schema {
 	schemas := make([]Schema, 0, len(r.tools))
+
+	// Built-in tools, sorted alphabetically
+	var builtinSchemas []Schema
 	for _, t := range r.tools {
-		schemas = append(schemas, ToSchema(t))
-	}
-	sort.Slice(schemas, func(i, j int) bool {
-		iMCP := strings.HasPrefix(schemas[i].Name, "mcp__")
-		jMCP := strings.HasPrefix(schemas[j].Name, "mcp__")
-		if iMCP != jMCP {
-			return !iMCP // built-in tools before MCP tools
+		if !strings.HasPrefix(t.Name(), "mcp__") {
+			builtinSchemas = append(builtinSchemas, ToSchema(t))
 		}
-		return schemas[i].Name < schemas[j].Name
+	}
+	sort.Slice(builtinSchemas, func(i, j int) bool {
+		return builtinSchemas[i].Name < builtinSchemas[j].Name
 	})
+	schemas = append(schemas, builtinSchemas...)
+
+	// MCP tools in registration order
+	for _, name := range r.mcpOrder {
+		if t, ok := r.tools[name]; ok {
+			schemas = append(schemas, ToSchema(t))
+		}
+	}
+
 	return schemas
 }
 

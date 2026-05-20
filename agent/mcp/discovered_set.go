@@ -3,10 +3,12 @@ package mcp
 import "sync"
 
 // DiscoveredSet tracks which MCP tools have been discovered by the LLM
-// via the MCPSearchTools tool. Thread-safe.
+// via the MCPSearchTools tool. Thread-safe. Preserves insertion order
+// so that List() returns tools in the order they were discovered.
 type DiscoveredSet struct {
 	mu    sync.RWMutex
 	names map[string]bool
+	order []string // insertion order
 }
 
 // NewDiscoveredSet creates an empty discovered set.
@@ -18,6 +20,9 @@ func NewDiscoveredSet() *DiscoveredSet {
 func (s *DiscoveredSet) Add(name string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.names[name] {
+		s.order = append(s.order, name)
+	}
 	s.names[name] = true
 }
 
@@ -28,13 +33,11 @@ func (s *DiscoveredSet) Contains(name string) bool {
 	return s.names[name]
 }
 
-// List returns a copy of all discovered tool names.
+// List returns a copy of all discovered tool names in discovery order.
 func (s *DiscoveredSet) List() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	result := make([]string, 0, len(s.names))
-	for name := range s.names {
-		result = append(result, name)
-	}
+	result := make([]string, len(s.order))
+	copy(result, s.order)
 	return result
 }
