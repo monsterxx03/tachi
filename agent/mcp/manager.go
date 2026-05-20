@@ -19,9 +19,19 @@ import (
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
+// MCPClient is the interface for MCP client operations used by Manager.
+// Extracted for testability — the real implementation is *client.Client
+// from github.com/mark3labs/mcp-go/client.
+type MCPClient interface {
+	Initialize(ctx context.Context, req mcp.InitializeRequest) (*mcp.InitializeResult, error)
+	ListTools(ctx context.Context, req mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+	CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	Close() error
+}
+
 // Manager manages the lifecycle of MCP client connections and their tools.
 type Manager struct {
-	clients map[string]*client.Client // server name -> client
+	clients map[string]MCPClient // server name -> client
 	logger  *debuglog.Logger
 	mu      sync.RWMutex
 }
@@ -29,7 +39,7 @@ type Manager struct {
 // NewManager creates an empty MCP client manager.
 func NewManager() *Manager {
 	return &Manager{
-		clients: make(map[string]*client.Client),
+		clients: make(map[string]MCPClient),
 		logger:  debuglog.DefaultLogger,
 	}
 }
@@ -85,7 +95,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	var c *client.Client
+	var c MCPClient
 	var err error
 
 	switch srv.Type {
@@ -149,7 +159,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	return mcpTools, nil
 }
 
-func (m *Manager) connectStdio(srv *config.MCPServerConfig) (*client.Client, error) {
+func (m *Manager) connectStdio(srv *config.MCPServerConfig) (MCPClient, error) {
 	command := srv.Command
 	if command == "" {
 		return nil, fmt.Errorf("command is required for stdio transport")
@@ -163,7 +173,7 @@ func (m *Manager) connectStdio(srv *config.MCPServerConfig) (*client.Client, err
 	return client.NewStdioMCPClient(command, env, srv.Args...)
 }
 
-func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration) (*client.Client, error) {
+func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration) (MCPClient, error) {
 	if srv.URL == "" {
 		return nil, fmt.Errorf("url is required for http transport")
 	}
@@ -278,9 +288,13 @@ func (m *Manager) GetOAuthHandler(name string) *transport.OAuthHandler {
 		return nil
 	}
 
-	trans := c.GetTransport()
-	if httpConn, ok := trans.(*transport.StreamableHTTP); ok {
-		return httpConn.GetOAuthHandler()
+	// Type-assert to *client.Client for GetTransport access.
+	// This only works for real mcp-go clients; mock clients return nil.
+	if realClient, ok := c.(*client.Client); ok {
+		trans := realClient.GetTransport()
+		if httpConn, ok := trans.(*transport.StreamableHTTP); ok {
+			return httpConn.GetOAuthHandler()
+		}
 	}
 	return nil
 }
@@ -343,7 +357,7 @@ func (m *Manager) Close() {
 			m.logger.Log("MCP: error closing client %q: %v", name, err)
 		}
 	}
-	m.clients = make(map[string]*client.Client)
+	m.clients = make(map[string]MCPClient)
 }
 
 // formatMCPResult formats a CallToolResult into a human-readable string.

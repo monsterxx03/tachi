@@ -218,7 +218,7 @@ func discoverAuthServerMetadataURL(ctx context.Context, srv *config.MCPServerCon
 
 	// 1) Get PRM URL(s)
 	var prmURLs []string
-	if url := probe401ResourceMetadata(ctx, baseURL); url != "" {
+	if url := probe401ResourceMetadata(ctx, client, baseURL); url != "" {
 		prmURLs = []string{url}
 		debuglog.Log(ctx, "MCP: got PRM URL from 401 WWW-Authenticate: %s", url)
 	} else {
@@ -381,7 +381,7 @@ func asMetadataURLs(issuerURL string) []string {
 
 // probe401ResourceMetadata sends a request to baseURL and extracts the
 // resource_metadata parameter from the WWW-Authenticate header on a 401.
-func probe401ResourceMetadata(ctx context.Context, baseURL string) string {
+func probe401ResourceMetadata(ctx context.Context, httpClient *http.Client, baseURL string) string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, baseURL, nil)
 	if err != nil {
 		return ""
@@ -389,7 +389,7 @@ func probe401ResourceMetadata(ctx context.Context, baseURL string) string {
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("MCP-Protocol-Version", "2025-03-26")
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return ""
 	}
