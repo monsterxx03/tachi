@@ -13,8 +13,10 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -908,4 +910,300 @@ func (m *Model) handleForgetCommand() tea.Cmd {
 		Content: fmt.Sprintf("Memory `%s` deleted.", id),
 	})
 	return nil
+}
+
+// ------- Agent-driven commands (trigger LLM conversations) -------
+
+func (m *Model) sendMessage(text string) tea.Cmd {
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: text})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	// Expand @path references: inject file/directory contents into the
+	// message sent to the LLM, but keep the TUI display unexpanded.
+	expandedText := ExpandAtReferences(text)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	// Set up steer channel so pending input can be injected at tool-call boundaries.
+	m.steerRespCh = make(chan string)
+	m.agent.SetSteerChannel(m.steerRespCh)
+
+	m.streamGen++
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expandedText, m.systemPrompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// sendCommitCommand 使用干净的对话上下文（不继承历史）把任务说明发给 LLM，
+// 由模型用 Bash 工具自行执行 git 并提交（不在此处 exec 任何命令）。
+// 如果配置了 commit_provider，使用专用 provider；否则回退到主 provider。
+func (m *Model) sendCommitCommand() tea.Cmd {
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/commit"})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	// Save conversation history so we can restore it after the one-off
+	// commit run completes (RunOneOffStream overwrites m.history).
+	m.savedHistory = make([]llm.Message, len(m.history))
+	copy(m.savedHistory, m.history)
+
+	// Save tool registry: /commit should only use the Bash tool.
+	// Save all tools, then unregister everything except Bash.
+	m.savedTools = m.agent.SaveToolRegistry()
+	for _, name := range m.agent.ToolNames() {
+		if name != tools.ToolNameBash {
+			m.agent.UnregisterTool(name)
+		}
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	commitProvider := m.agent.CommitProvider()
+	commitModel := m.agent.Model()
+
+	// Disable thinking for /commit: the commit message task is simple and
+	// avoiding thinking saves tokens/latency.
+	commitOpts := m.chatOpts
+	thinkingDisabled := false
+	commitOpts.Thinking = &thinkingDisabled
+
+	m.streamGen++
+	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
+		commitUserPrompt(commitModel), commitOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// sendInitCommand sends the init prompt to LLM to generate .tachi.md
+func (m *Model) sendInitCommand() tea.Cmd {
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/init"})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.streamGen++
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, InitPromptTemplate, m.systemPrompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// handleCompactCommand handles the /compact slash command.
+// It appends a compact instruction to the current conversation so the LLM
+// can summarize using its existing context window (no history re-embedding).
+// After the turn completes, a new session is created with the summary.
+func (m *Model) handleCompactCommand() tea.Cmd {
+	// 1. Pre-checks
+	sm := m.agent.SessionManager()
+	if sm == nil || !sm.HasCurrent() {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "没有活跃的 session 可以压缩",
+		})
+		return nil
+	}
+	if len(m.history) == 0 {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "对话历史为空，无需压缩",
+		})
+		return nil
+	}
+
+	// 2. Show user intent and set state
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/compact"})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	// 3. Save state for rollback
+	m.savedHistory = make([]llm.Message, len(m.history))
+	copy(m.savedHistory, m.history)
+	m.isCompacting = true
+
+	// 3.5 Store current session memory before compaction
+	m.agent.StoreCompactMemory()
+
+	// 4. Clear tools so the LLM doesn't call tools during compact.
+	// Prompt also instructs "不要调用任何工具" as a double safeguard.
+	m.savedTools = m.agent.SaveToolRegistry()
+	m.agent.ClearToolRegistry()
+
+	// 5. Build compact instruction (no history — LLM sees history as context)
+	instruction := agent.BuildCompactInstruction()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.streamGen++
+	// Use RunConversationStream so the LLM sees the current session as
+	// structured history (role alternation, tool calls, etc.).
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// formatCompactSummary formats the compact result for display in the chatview.
+func formatCompactSummary(summary string, oldMsgCount int) string {
+	var sb strings.Builder
+	sb.WriteString("🔍 **对话已压缩**\n\n")
+	sb.WriteString(fmt.Sprintf("旧消息数: %d 条\n", oldMsgCount))
+	sb.WriteString("\n---\n\n")
+	sb.WriteString(summary)
+	sb.WriteString("\n\n---\n")
+	sb.WriteString("💡 使用 `/sessions` 可查看旧会话的完整历史。\n")
+	return sb.String()
+}
+
+// rollbackCompact restores the pre-compact state (history + tools) and displays
+// an error in the chatview. Used when the compact LLM call fails or
+// FinalizeCompact returns an error.
+func (m *Model) rollbackCompact(errMsg string) {
+	m.history = m.savedHistory
+	m.savedHistory = nil
+	if m.savedTools != nil {
+		m.agent.RestoreToolRegistry(m.savedTools)
+		m.savedTools = nil
+	}
+	m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
+	m.chatview.FinishStreaming()
+	m.setState(stateIdle)
+	m.cancelFunc = nil
+	m.eventCh = nil
+}
+
+// handleSkillCommand handles the /skill slash command.
+// /skill              → list all available skills
+// /skill <name>       → activate a specific skill
+// /skill reload       → re-scan skill directories
+func (m *Model) handleSkillCommand() tea.Cmd {
+	store := m.agent.SkillStore()
+	if store == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "Skill system not available",
+		})
+		return nil
+	}
+
+	parts := strings.Fields(m.subcommandInput)
+	sub := ""
+	if len(parts) > 1 {
+		sub = parts[1]
+	}
+
+	switch sub {
+	case "", "list":
+		metas := store.List()
+		if len(metas) == 0 {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/` or `~/.tachi/skills/<name>/`.",
+			})
+			return nil
+		}
+
+		var sb strings.Builder
+		sb.WriteString("**Available Skills:**\n\n")
+		for _, meta := range metas {
+			sourceTag := ""
+			if meta.Source == "project" {
+				sourceTag = " 🏠"
+			}
+			sb.WriteString(fmt.Sprintf("- **%s**%s\n", meta.Name, sourceTag))
+			sb.WriteString(fmt.Sprintf("  %s\n", meta.Description))
+			if len(meta.Tags) > 0 {
+				sb.WriteString(fmt.Sprintf("  Tags: %s\n", strings.Join(meta.Tags, ", ")))
+			}
+			sb.WriteString(fmt.Sprintf("  Use `/ %s` to activate\n\n", meta.Name))
+		}
+		sb.WriteString(fmt.Sprintf("\n%d skill(s) total", len(metas)))
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: sb.String(),
+		})
+		return nil
+
+	case "reload":
+		// Re-create the store to pick up new/modified skills
+		m.agent.ReloadSkills()
+		metas := store.List()
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Skills reloaded — %d skill(s) found", len(metas)),
+		})
+		return nil
+
+	default:
+		// /skill <name> — activate a specific skill
+		return m.sendSkillMessage(sub, "")
+	}
+}
+
+// sendSkillMessage activates a skill and sends its instructions as a user message.
+// skillName is the skill to activate. extraArgs are additional text from the
+// command line (e.g., "main.go" from "/code-review main.go").
+func (m *Model) sendSkillMessage(skillName string, extraArgs string) tea.Cmd {
+	// Prevent duplicate activation within the same session.
+	if m.agent.IsSkillActive(skillName) {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Skill **%s** is already active in this session.", skillName),
+		})
+		return nil
+	}
+
+	msg, err := m.agent.ActivateSkill(skillName, extraArgs)
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Skill **%s** not found. Use `/skill` to see available skills.", skillName),
+		})
+		return nil
+	}
+
+	// Add the activation message as a system-style user message
+	m.chatview.AddMessage(chatMessage{
+		Role:    "user",
+		Content: fmt.Sprintf("/%s %s", skillName, extraArgs),
+	})
+
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.streamGen++
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, msg, m.systemPrompt, m.chatOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
 }
