@@ -61,7 +61,7 @@ type ChatView struct {
 
 func NewChatView() ChatView {
 	md, _ := glamour.NewTermRenderer(
-		glamour.WithAutoStyle(),
+		glamour.WithStandardStyle("dark"),
 		glamour.WithWordWrap(80),
 	)
 	return ChatView{
@@ -78,7 +78,7 @@ func (c *ChatView) SetSize(w, h int) {
 	newWrapWidth := w - 4
 	if newWrapWidth != c.mdRenderWidth {
 		md, _ := glamour.NewTermRenderer(
-			glamour.WithAutoStyle(),
+			glamour.WithStandardStyle("dark"),
 			glamour.WithWordWrap(newWrapWidth),
 		)
 		c.mdRenderer = md
