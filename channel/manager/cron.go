@@ -89,7 +89,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		aiAgent.SetSessionManager(sm)
 	}
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, job.Prompt, m.systemPrompt, llm.ChatOptions{
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), m.systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 
@@ -108,6 +108,13 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	if err != nil {
 		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
 		return err
+	}
+
+	// Check suppress policy: if the job uses when_relevant and the agent
+	// determined there's nothing actionable, skip delivery.
+	if job.ShouldSuppressResult(result) {
+		m.logger.Log("channel: cron job %s suppressed (notify=when_relevant, agent replied SILENT)", job.ID)
+		return nil
 	}
 
 	// Deliver the response to the target thread's channel.
@@ -145,4 +152,20 @@ func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingM
 	}
 
 	m.logger.Log("channel: cron response not delivered — no channel accepted thread %s", msg.ThreadID)
+}
+
+// buildCronPrompt constructs the effective prompt for a cron job execution.
+// If the job uses notify=when_relevant, a suppression instruction is appended
+// so the agent can reply with [SILENT] when there's nothing meaningful.
+func (m *Manager) buildCronPrompt(job *cron.Job) string {
+	if job.EffectiveNotify() != cron.NotifyWhenRelevant {
+		return job.Prompt
+	}
+
+	return job.Prompt + "\n\n" +
+		"[Notification policy: when_relevant]\n" +
+		"After completing the task, evaluate whether the result contains meaningful or actionable information for the user. " +
+		"If there is nothing new, no changes detected, or nothing worth reporting, respond with ONLY the text `[SILENT]` — " +
+		"do not include any other content. The notification will be suppressed and the user will not be disturbed. " +
+		"Only send actual content when there IS something noteworthy to report."
 }

@@ -6,10 +6,27 @@ package cron
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
 )
+
+// NotifyPolicy controls when a cron job delivers its result to the channel.
+type NotifyPolicy string
+
+const (
+	// NotifyAlways delivers the result to the channel unconditionally (default).
+	NotifyAlways NotifyPolicy = "always"
+	// NotifyWhenRelevant instructs the agent to self-evaluate whether the result
+	// is worth notifying the user about. If the agent deems it irrelevant
+	// (e.g. no changes detected), it responds with [SILENT] and delivery is skipped.
+	NotifyWhenRelevant NotifyPolicy = "when_relevant"
+)
+
+// SilentMarker is the sentinel string the agent outputs when a when_relevant
+// job has nothing worth reporting.
+const SilentMarker = "[SILENT]"
 
 // JobStatus represents the lifecycle state of a cron job.
 type JobStatus string
@@ -59,6 +76,11 @@ type Job struct {
 	// Timezone for schedule evaluation (default: system local).
 	Timezone string `json:"timezone,omitempty"`
 
+	// Notify controls delivery policy. "always" (default) sends every result;
+	// "when_relevant" asks the agent to evaluate relevance and suppress
+	// delivery when the result is not actionable (agent responds with [SILENT]).
+	Notify NotifyPolicy `json:"notify,omitempty"`
+
 	// MaxRetries is how many times to retry on execution failure (default: 0).
 	MaxRetries int `json:"max_retries,omitempty"`
 
@@ -85,4 +107,22 @@ type Job struct {
 func GenerateID() string {
 	uid := uuid.New().String()
 	return fmt.Sprintf("cr_%s", uid[:6])
+}
+
+// EffectiveNotify returns the job's notification policy, defaulting to NotifyAlways.
+func (j *Job) EffectiveNotify() NotifyPolicy {
+	if j.Notify == "" {
+		return NotifyAlways
+	}
+	return j.Notify
+}
+
+// ShouldSuppressResult returns true if the job has notify=when_relevant
+// and the agent result indicates nothing worth reporting.
+func (j *Job) ShouldSuppressResult(result string) bool {
+	if j.EffectiveNotify() != NotifyWhenRelevant {
+		return false
+	}
+	trimmed := strings.TrimSpace(result)
+	return trimmed == "" || trimmed == SilentMarker
 }

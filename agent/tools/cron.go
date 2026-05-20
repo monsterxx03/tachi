@@ -77,6 +77,10 @@ func (t *CronTool) Properties() map[string]PropertySchema {
 			Type:        "string",
 			Description: "Job type. Default is oneshot (fire once, auto-delete). Only set to \"recurring\" when the user explicitly asks for a repeating task like daily/weekly/every N hours.",
 		},
+		"notify": {
+			Type:        "string",
+			Description: `Notification policy. "always" (default) sends every result to the user. "when_relevant" suppresses notification when nothing meaningful is found (e.g. no changes, no updates). Use "when_relevant" when the user is monitoring something that changes infrequently (blog updates, CI status, dependency changes).`,
+		},
 		"timezone": {
 			Type:        "string",
 			Description: "IANA timezone for schedule evaluation (default: system local). Example: Asia/Shanghai, UTC",
@@ -96,6 +100,7 @@ type cronArgs struct {
 	Schedule string `json:"schedule"`
 	Prompt   string `json:"prompt"`
 	Type     string `json:"type"`
+	Notify   string `json:"notify"`
 	Timezone string `json:"timezone"`
 }
 
@@ -173,6 +178,7 @@ func (t *CronTool) handleCreate(params cronArgs) (string, error) {
 		Schedule:       params.Schedule,
 		Prompt:         params.Prompt,
 		Type:           cron.JobType(params.Type),
+		Notify:         cron.NotifyPolicy(params.Notify),
 		Timezone:       params.Timezone,
 		TargetType:     "channel",
 		TargetThreadID: threadID,
@@ -223,6 +229,10 @@ func (t *CronTool) handleUpdate(params cronArgs) (string, error) {
 	if params.Type != "" {
 		t := cron.JobType(params.Type)
 		opts.Type = &t
+	}
+	if params.Notify != "" {
+		n := cron.NotifyPolicy(params.Notify)
+		opts.Notify = &n
 	}
 
 	updated, err := t.scheduler.Update(params.ID, opts)
@@ -346,6 +356,9 @@ func formatJobDetail(job *cron.Job) string {
 
 	sb.WriteString(fmt.Sprintf("- Prompt: %s\n", job.Prompt))
 	sb.WriteString(fmt.Sprintf("- Target: channel thread %s\n", job.TargetThreadID))
+	if job.Notify == cron.NotifyWhenRelevant {
+		sb.WriteString("- Notify: when_relevant (suppresses if nothing new)\n")
+	}
 	if job.Timezone != "" {
 		sb.WriteString(fmt.Sprintf("- Timezone: %s\n", job.Timezone))
 	}

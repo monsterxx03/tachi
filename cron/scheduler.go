@@ -208,6 +208,7 @@ type UpdateOpts struct {
 	Schedule *string
 	Prompt   *string
 	Type     *JobType
+	Notify   *NotifyPolicy
 	Timezone *string
 }
 
@@ -244,6 +245,9 @@ func (s *Scheduler) Update(id string, opts UpdateOpts) (*Job, error) {
 	}
 	if opts.Type != nil {
 		job.Type = *opts.Type
+	}
+	if opts.Notify != nil {
+		job.Notify = *opts.Notify
 	}
 
 	if err := s.store.Update(job); err != nil {
