@@ -135,6 +135,8 @@ type threadActivation struct {
 	resultCh    chan handlerResult // agent sends final result here
 	pending     []string           // queued steer messages (BC merged)
 	ctx         context.Context    // agent context for cancellation
+	cancel      context.CancelFunc // cancels the agent turn
+	cancelled   bool               // true when this turn was cancelled externally
 	isCompact   bool               // true when this turn is a /compact operation
 }
 
@@ -351,7 +353,11 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 		select {
 		case result := <-ta.resultCh:
-			m.deactivateThread(msg.ThreadID)
+			m.deactivateThread(msg.ThreadID, ta)
+			if ta.cancelled {
+				// Turn was cancelled by /stop or /new.
+				return channel.HandlerResult{Steered: true}
+			}
 			if result.err != nil {
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
@@ -397,7 +403,12 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				},
 			}
 		case <-ta.ctx.Done():
-			m.deactivateThread(msg.ThreadID)
+			m.deactivateThread(msg.ThreadID, ta)
+			if ta.cancelled {
+				// Turn was cancelled by /stop or /new — suppress
+				// the "request cancelled" error reply.
+				return channel.HandlerResult{Steered: true}
+			}
 			return channel.HandlerResult{
 				Reply: channel.OutgoingMessage{
 					ThreadID: msg.ThreadID,
@@ -413,7 +424,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 // activateThread returns the threadActivation for threadID, creating one
 // if it doesn't exist. The caller MUST check ta.steerRespCh to determine
 // whether the thread is already active (steer case) or new (start case).
-func (m *Manager) activateThread(threadID string, ctx context.Context) *threadActivation {
+func (m *Manager) activateThread(threadID string, parentCtx context.Context) *threadActivation {
 	m.threadActMu.Lock()
 	defer m.threadActMu.Unlock()
 
@@ -423,17 +434,38 @@ func (m *Manager) activateThread(threadID string, ctx context.Context) *threadAc
 
 	ta, ok := m.threadActivations[threadID]
 	if !ok {
-		ta = &threadActivation{ctx: ctx}
+		ctx, cancel := context.WithCancel(parentCtx)
+		ta = &threadActivation{ctx: ctx, cancel: cancel}
 		m.threadActivations[threadID] = ta
 	}
 	return ta
 }
 
-// deactivateThread removes the thread activation for threadID.
-func (m *Manager) deactivateThread(threadID string) {
+// deactivateThread removes the thread activation for threadID,
+// but only if the stored activation still matches the one held by
+// the caller (pointer equality). This prevents a stale handler
+// goroutine from deleting a new activation created by /new or /stop.
+func (m *Manager) deactivateThread(threadID string, ta *threadActivation) {
 	m.threadActMu.Lock()
 	defer m.threadActMu.Unlock()
+	if cur, ok := m.threadActivations[threadID]; ok && cur == ta {
+		delete(m.threadActivations, threadID)
+	}
+}
+
+// cancelThreadTurn cancels the agent context for the given thread
+// and removes the activation from the map. Safe to call when no
+// turn is active.
+// Called by /stop and /new to terminate a running LLM turn.
+func (m *Manager) cancelThreadTurn(threadID string) {
+	m.threadActMu.Lock()
+	ta, ok := m.threadActivations[threadID]
+	if ok && ta.cancel != nil {
+		ta.cancelled = true
+		ta.cancel()
+	}
 	delete(m.threadActivations, threadID)
+	m.threadActMu.Unlock()
 }
 
 // runAgentTurn creates an agent instance, loads the per-thread session,
@@ -574,13 +606,15 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 		return m.handleCronCommand()
 	case "v":
 		return m.handleVerboseCommand(cmd.ThreadID)
+	case "stop":
+		return m.handleStopCommand(cmd.ThreadID)
 	case "model":
 		return m.handleModelCommand(cmd.Args)
 	case "skill":
 		return m.handleSkillCommand(cmd.Args)
 	default:
 		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
-		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, model, skill, compact", cmd.Name), nil
+		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, stop, model, skill, compact", cmd.Name), nil
 	}
 }
 
@@ -604,6 +638,8 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 		return m.handleCronCommand()
 	case "/v":
 		return m.handleVerboseCommand(msg.ThreadID)
+	case "/stop":
+		return m.handleStopCommand(msg.ThreadID)
 	case "/model":
 		args := ""
 		if len(parts) > 1 {
@@ -618,7 +654,7 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 		return m.handleSkillCommand(args)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd), nil
 	}
 }
 
@@ -702,6 +738,11 @@ func (m *Manager) handleModelSwitch(name string) (string, error) {
 	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nNew conversations will use this model.", name, resolved.Type, resolved.Model), nil
 }
 func (m *Manager) handleNewCommand(threadID string) (string, error) {
+	// Cancel any running agent turn first, so the next message
+	// starts a fresh conversation rather than being steered
+	// into the old turn.
+	m.cancelThreadTurn(threadID)
+
 	sm := m.newSessionManager()
 	if sm == nil {
 		return "", fmt.Errorf("session manager unavailable")
@@ -730,6 +771,14 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	m.verboseMu.Unlock()
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
+}
+
+// handleStopCommand stops the currently-running LLM turn for the given thread.
+// If no turn is active, returns a message indicating that.
+// /stop — stop the current LLM turn
+func (m *Manager) handleStopCommand(threadID string) (string, error) {
+	m.cancelThreadTurn(threadID)
+	return "⏹️ 已停止当前对话。", nil
 }
 
 // finalizeCompactResult creates a new session with the LLM-generated summary,

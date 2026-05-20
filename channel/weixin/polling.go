@@ -98,9 +98,13 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 			buf = resp.GetUpdatesBuf
 		}
 
-		// Process messages.
+		// Process messages concurrently — each in its own goroutine.
+		// This ensures the polling loop is not blocked by a long-running
+		// agent turn (e.g. an LLM conversation). Slash commands like
+		// /v, /usage, /mcp, /cron can execute immediately even while an
+		// agent turn is still in progress for the same thread.
 		for _, msg := range resp.Msgs {
-			ch.processMessage(ctx, msg, handler)
+			go ch.processMessage(ctx, msg, handler)
 		}
 	}
 }
