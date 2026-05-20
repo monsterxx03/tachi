@@ -4,16 +4,26 @@ import (
 	"strings"
 )
 
-// filterMarkdown strips markdown syntax from text for WeChat compatibility.
-// WeChat does not support standard Markdown rendering, so we remove:
-//   - code blocks (backticks) — keep content
-//   - > blockquote prefix
-//   - ### .. ###### heading prefixes
-//   - horizontal rules (---, ***, ___)
-//   - inline formatting (*bold*, _italic_, ~~strikethrough~~)
-//   - image syntax ![alt](url)
-//   - table formatting
-//   - leading whitespace/tabs for indentation
+// filterMarkdown strips unsupported markdown syntax from text for WeChat compatibility.
+//
+// Constructs PASSED THROUGH (markers preserved):
+//   - Code fences (```) with content
+//   - Inline code (`)
+//   - Tables (|...|)
+//   - Horizontal rules (---, ***, ___)
+//   - Bold (**)
+//   - Italic (*, _) wrapping non-CJK content
+//   - Bold-italic (***, ___) wrapping non-CJK content
+//   - Strikethrough (~~)
+//   - Blockquote (>)
+//   - Headings H1-H4 (#, ##, ###, ####)
+//   - Lists (-, *, 1.)
+//
+// Constructs FILTERED (markers stripped, content kept):
+//   - Headings H5/H6 (#####, ######) — prefix removed
+//   - Italic (*, _) wrapping CJK content — markers removed
+//   - Bold-italic (***, ___) wrapping CJK content — markers removed
+//   - Images (![alt](url)) — removed entirely
 func filterMarkdown(text string) string {
 	lines := strings.Split(text, "\n")
 	var out []string
@@ -22,48 +32,25 @@ func filterMarkdown(text string) string {
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 
-		// Toggle code block.
+		// Code fence: toggle and preserve the marker line.
 		if strings.HasPrefix(trimmed, "```") {
 			inCodeBlock = !inCodeBlock
+			out = append(out, line)
 			continue
 		}
 
+		// Inside code block — pass through verbatim.
 		if inCodeBlock {
 			out = append(out, line)
 			continue
 		}
 
-		// Remove horizontal rules.
-		if isHorizontalRule(trimmed) {
-			continue
-		}
+		// Process heading markers (H5/H6 stripped, H1-H4 preserved).
+		line = processHeading(line)
 
-		// Remove blockquote prefix.
-		if strings.HasPrefix(trimmed, "> ") {
-			line = strings.TrimPrefix(trimmed, "> ")
-			trimmed = line
-		}
-
-		// Remove heading markers.
-		for _, prefix := range []string{"###### ", "##### ", "#### ", "### "} {
-			if strings.HasPrefix(trimmed, prefix) {
-				line = strings.TrimPrefix(trimmed, prefix)
-				trimmed = line
-				break
-			}
-		}
-
-		// Process inline markdown.
+		// Inline processing: images and CJK-aware italic/bold-italic.
 		if trimmed != "" {
-			line = filterInline(trimmed)
-		}
-
-		// Skip empty lines that are purely markdown artifacts.
-		if strings.TrimSpace(line) == "" {
-			// Don't strip all empty lines, only if previous was empty too.
-			if len(out) > 0 && strings.TrimSpace(out[len(out)-1]) == "" {
-				continue
-			}
+			line = filterInline(line)
 		}
 
 		out = append(out, line)
@@ -77,122 +64,148 @@ func filterMarkdown(text string) string {
 	return strings.Join(out, "\n")
 }
 
-func isHorizontalRule(line string) bool {
-	// Remove spaces.
-	s := strings.ReplaceAll(line, " ", "")
-	if len(s) < 3 {
-		return false
-	}
-
-	// Check for ---, ***, ___
-	allSame := true
-	for i := 1; i < len(s); i++ {
-		if s[i] != s[0] {
-			allSame = false
-			break
+// processHeading strips H5/H6 prefixes but preserves H1-H4.
+func processHeading(line string) string {
+	trimmed := strings.TrimSpace(line)
+	for _, prefix := range []string{"###### ", "##### "} {
+		if strings.HasPrefix(trimmed, prefix) {
+			return strings.TrimPrefix(trimmed, prefix)
 		}
 	}
-
-	if !allSame {
-		return false
-	}
-
-	return s[0] == '-' || s[0] == '*' || s[0] == '_'
+	return line
 }
 
 // filterInline processes inline markdown within a single line.
+// Applies: image removal, then CJK-aware italic/bold-italic handling.
+// Bold (**/__), strikethrough (~~), and inline code (`) are preserved.
 func filterInline(line string) string {
-	// Remove images: ![alt](url)
+	// Remove images first: ![alt](url)
 	line = removeImages(line)
 
-	// Remove code spans: `code` → code
-	line = removeDelimited(line, '`')
-
-	// Remove bold: **text** → text
-	line = removeDelimited(line, '*')
-
-	// Remove italic: _text_ → text (but not __text__ which is bold)
-	// Handle __text__ first, then _text_
-	line = removeDoubleDelimited(line, '_')
-	line = removeDelimited(line, '_')
-
-	// Remove bold marker (double asterisks already handled above, but
-	// removeDelimited('*') might have left some triple-asterisks).
-	// Re-run to catch remaining.
-	line = removeDelimited(line, '~')
-
-	return strings.TrimSpace(line)
-}
-
-// removeDelimited removes content between matching delimiter chars,
-// stripping the delimiters themselves. E.g., `code` → code.
-func removeDelimited(s string, delim byte) string {
 	var result strings.Builder
 	i := 0
-	for i < len(s) {
-		if s[i] == delim {
-			// Find closing delimiter.
-			j := i + 1
-			for j < len(s) && s[j] != delim {
-				j++
-			}
-			if j < len(s) {
-				// Found closing — append content between.
-				result.WriteString(s[i+1 : j])
-				i = j + 1
-			} else {
-				// No closing — treat as literal.
-				result.WriteByte(delim)
-				i++
-			}
-		} else {
-			result.WriteByte(s[i])
-			i++
-		}
-	}
-	return result.String()
-}
+	for i < len(line) {
+		c := line[i]
 
-// removeDoubleDelimited removes **text** style pairs.
-func removeDoubleDelimited(s string, delim byte) string {
-	var result strings.Builder
-	i := 0
-	for i < len(s) {
-		if i+1 < len(s) && s[i] == delim && s[i+1] == delim {
-			// Find closing double delimiter.
-			j := i + 2
-			for j+1 < len(s) && !(s[j] == delim && s[j+1] == delim) {
-				j++
+		switch c {
+		case '*':
+			remaining := line[i:]
+			if hasPrefix(remaining, "***") {
+				// Triple asterisk: CJK-aware bold-italic.
+				i += processTripleDelim(&result, line, i, '*')
+				continue
 			}
-			if j+1 < len(s) {
-				// Found closing — append content between.
-				result.WriteString(s[i+2 : j])
-				i = j + 2
-			} else {
-				// No closing — treat as literal.
-				result.WriteByte(delim)
-				result.WriteByte(delim)
+			if hasPrefix(remaining, "**") {
+				// Double asterisk: bold — always preserve.
+				result.WriteString("**")
 				i += 2
+				continue
 			}
-		} else if i+2 < len(s) && s[i] == delim && s[i+1] == delim && s[i+2] == delim {
-			// Triple delimiter: ***text*** → skip.
-			j := i + 3
-			for j+2 < len(s) && !(s[j] == delim && s[j+1] == delim && s[j+2] == delim) {
-				j++
+			// Single asterisk: italic — CJK-aware, not if followed by space.
+			if i+1 < len(line) && line[i+1] != ' ' && line[i+1] != '\n' {
+				if n := processSingleDelim(&result, line, i, '*'); n > 0 {
+					i += n
+					continue
+				}
 			}
-			if j+2 < len(s) {
-				result.WriteString(s[i+3 : j])
-				i = j + 3
-			} else {
-				result.WriteByte(delim)
-				i++
+			result.WriteByte(c)
+			i++
+
+		case '_':
+			remaining := line[i:]
+			if hasPrefix(remaining, "___") {
+				i += processTripleDelim(&result, line, i, '_')
+				continue
 			}
-		} else {
-			result.WriteByte(s[i])
+			if hasPrefix(remaining, "__") {
+				result.WriteString("__")
+				i += 2
+				continue
+			}
+			// Single underscore: italic — CJK-aware.
+			if i+1 < len(line) && line[i+1] != ' ' && line[i+1] != '\n' {
+				if n := processSingleDelim(&result, line, i, '_'); n > 0 {
+					i += n
+					continue
+				}
+			}
+			result.WriteByte(c)
+			i++
+
+		default:
+			result.WriteByte(c)
 			i++
 		}
 	}
+
 	return result.String()
+}
+
+// hasPrefix checks if s starts with prefix without allocating.
+func hasPrefix(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+// processTripleDelim handles ***text*** or ___text___ with CJK awareness.
+// Returns the number of bytes consumed.
+func processTripleDelim(result *strings.Builder, line string, start int, delim byte) int {
+	delim3 := strings.Repeat(string(delim), 3)
+	closing := strings.Index(line[start+3:], delim3)
+	if closing == -1 {
+		// No closing — output opening delimiter and move on.
+		result.WriteString(delim3)
+		return 3
+	}
+	content := line[start+3 : start+3+closing]
+	if containsCJK(content) {
+		// CJK content — strip markers, keep content.
+		result.WriteString(content)
+	} else {
+		// Non-CJK — preserve markers and content.
+		result.WriteString(delim3)
+		result.WriteString(content)
+		result.WriteString(delim3)
+	}
+	return 6 + closing // skip past ***content***
+}
+
+// processSingleDelim handles *text* or _text_ with CJK awareness.
+// Returns the number of bytes consumed, or 0 if no matching closing delimiter found.
+func processSingleDelim(result *strings.Builder, line string, start int, delim byte) int {
+	closing := strings.IndexByte(line[start+1:], delim)
+	if closing == -1 {
+		return 0 // no closing delimiter found
+	}
+	content := line[start+1 : start+1+closing]
+	if containsCJK(content) {
+		// CJK content — strip markers, keep content.
+		result.WriteString(content)
+	} else {
+		// Non-CJK — preserve markers and content.
+		result.WriteByte(delim)
+		result.WriteString(content)
+		result.WriteByte(delim)
+	}
+	return 2 + closing // skip past *content*
+}
+
+// containsCJK reports whether text contains any CJK characters.
+func containsCJK(text string) bool {
+	for _, r := range text {
+		if isCJK(r) {
+			return true
+		}
+	}
+	return false
+}
+
+// isCJK checks if a rune is a CJK character.
+// Covers: CJK Radicals Supplement .. CJK Unified Ideographs,
+// Hangul Syllables, and CJK Compatibility Ideographs.
+func isCJK(r rune) bool {
+	return (r >= 0x2E80 && r <= 0x9FFF) || // CJK Radicals Supplement .. CJK Unified Ideographs
+		(r >= 0xAC00 && r <= 0xD7AF) || // Hangul Syllables
+		(r >= 0xF900 && r <= 0xFAFF) // CJK Compatibility Ideographs
 }
 
 // removeImages removes ![alt](url) patterns.
@@ -201,7 +214,7 @@ func removeImages(s string) string {
 	i := 0
 	for i < len(s) {
 		if i+1 < len(s) && s[i] == '!' && s[i+1] == '[' {
-			// Find closing ](url)
+			// Find closing ]
 			j := i + 2
 			for j < len(s) && s[j] != ']' {
 				j++
