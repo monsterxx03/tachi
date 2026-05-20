@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 )
@@ -102,10 +103,8 @@ func (s *stateStore) saveAccountList(list []string) error {
 
 func (s *stateStore) addAccountToList(accountID string) error {
 	list, _ := s.loadAccountList()
-	for _, a := range list {
-		if a == accountID {
-			return nil
-		}
+	if slices.Contains(list, accountID) {
+		return nil
 	}
 	list = append(list, accountID)
 	return s.saveAccountList(list)

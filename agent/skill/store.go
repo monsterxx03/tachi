@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -237,18 +238,11 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 	}
 
 	// Determine target directory
-	var targetDir string
-	found := false
-	for i, dir := range s.dirs {
-		if s.source[i] == source {
-			targetDir = dir
-			found = true
-			break
-		}
-	}
-	if !found {
+	idx := slices.Index(s.source, source)
+	if idx < 0 {
 		return nil, fmt.Errorf("skill directory for source %q is not available", source)
 	}
+	targetDir := s.dirs[idx]
 
 	skillDir := filepath.Join(targetDir, name)
 

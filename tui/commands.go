@@ -15,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md
@@ -163,11 +164,10 @@ var commands = []Command{
 			m.sessionScrollOff = 0
 			// Pre-select the current session if it's in the list
 			if curr := sm.Current(); curr != nil {
-				for i, s := range sessions {
-					if s.ID == curr.ID {
-						m.sessionSelIdx = i
-						break
-					}
+				if idx := slices.IndexFunc(sessions, func(s *session.Session) bool {
+					return s.ID == curr.ID
+				}); idx >= 0 {
+					m.sessionSelIdx = idx
 				}
 			}
 			// Ensure the pre-selected session is visible
@@ -223,10 +223,10 @@ func matchCommands(prefix string) []Command {
 }
 
 func findCommand(name string) *Command {
-	for i := range commands {
-		if commands[i].Name == name {
-			return &commands[i]
-		}
+	if idx := slices.IndexFunc(commands, func(c Command) bool {
+		return c.Name == name
+	}); idx >= 0 {
+		return &commands[idx]
 	}
 	return nil
 }
@@ -235,10 +235,10 @@ func findCommand(name string) *Command {
 // (e.g., "/mcp" matches "/mcp list", "/mcp toggle foo").
 // Exact matches are preferred; this is used as a fallback.
 func findCommandByPrefix(input string) *Command {
-	for i := range commands {
-		if input == commands[i].Name || strings.HasPrefix(input, commands[i].Name+" ") {
-			return &commands[i]
-		}
+	if idx := slices.IndexFunc(commands, func(c Command) bool {
+		return input == c.Name || strings.HasPrefix(input, c.Name+" ")
+	}); idx >= 0 {
+		return &commands[idx]
 	}
 	return nil
 }

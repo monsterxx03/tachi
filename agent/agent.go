@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -480,12 +481,9 @@ func (a *AIAgent) isRepoExcluded() bool {
 		return false
 	}
 	repoRoot := strings.TrimSpace(string(out))
-	for _, excluded := range a.excludeRepos {
-		if filepath.Clean(repoRoot) == filepath.Clean(excluded) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(a.excludeRepos, func(excluded string) bool {
+		return filepath.Clean(repoRoot) == filepath.Clean(excluded)
+	})
 }
 
 // storeTurnMemory writes the current turn's conversation to the memory backend.
@@ -1463,11 +1461,10 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 			// Auto-load when ToolSearch is disabled or tool is in always_load list
 			autoLoad := !useToolSearch
 			if !autoLoad && hasCfg {
-				for _, name := range srvCfg.AlwaysLoadTools {
-					if strings.EqualFold(name, t.ToolName()) {
-						autoLoad = true
-						break
-					}
+				if slices.ContainsFunc(srvCfg.AlwaysLoadTools, func(name string) bool {
+					return strings.EqualFold(name, t.ToolName())
+				}) {
+					autoLoad = true
 				}
 			}
 
