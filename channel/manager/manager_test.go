@@ -246,7 +246,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil)
+	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Hello, I'm Tachi!", result)
 }
@@ -295,7 +295,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil)
+	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil, nil)
 	t.Logf("result=%q err=%v", result, err)
 	// Either result is set (tool executed) or err (file not found) — neither
 	// case is a deadlock. The function must return.
@@ -342,7 +342,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil)
+	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil, nil)
 	t.Logf("result=%q err=%v", result, err)
 	// Must not deadlock — either completes with an error or empty response.
 }
@@ -490,7 +490,7 @@ func TestDrainEvents_VerboseMode(t *testing.T) {
 		progressMsgs = append(progressMsgs, text)
 	}
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return true }, sendProgress)
+	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return true }, sendProgress, nil)
 	require.NoError(t, err)
 	// Final result should NOT contain the tool call prefix (it's streamed).
 	assert.NotContains(t, result, "🔍 工具调用过程:")
