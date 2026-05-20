@@ -566,11 +566,15 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		MaxTokens: resolved.MaxTokens,
 	})
 
-	m.verboseMu.RLock()
-	verbose := m.verboseState != nil && m.verboseState[msg.ThreadID]
-	m.verboseMu.RUnlock()
+	// Use a closure so /v toggles mid-turn are visible immediately,
+	// rather than using the captured bool which is a one-time snapshot.
+	isVerbose := func() bool {
+		m.verboseMu.RLock()
+		defer m.verboseMu.RUnlock()
+		return m.verboseState != nil && m.verboseState[msg.ThreadID]
+	}
 
-	text, err := m.drainEventsWithSteer(eventCh, aiAgent, verbose, sendProgress, ta)
+	text, err := m.drainEventsWithSteer(eventCh, aiAgent, isVerbose, sendProgress, ta)
 
 	// Collect any pending file attachments from the SendFile tool.
 	attachmentMu.Lock()
@@ -940,10 +944,10 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 // confirmation/AskUser events inline — though with skip_edit_confirm=true
 // and AskUser unregistered, neither should appear.
 //
-// When verbose is true, tool call results are sent immediately via
-// sendProgress as they arrive, instead of being collected for a single
-// summary prefix.
-func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, verbose bool, sendProgress func(string)) (string, error) {
+// verboseFn is called on each tool event to check whether verbose mode is
+// currently active. Using a function (rather than a captured bool) allows
+// /v toggles mid-turn to take effect immediately.
+func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, verboseFn func() bool, sendProgress func(string)) (string, error) {
 	var text strings.Builder
 	var lastErr error
 
@@ -965,7 +969,7 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 
 		case agent.AgentEventToolCallArgs:
 			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
-			if verbose {
+			if verboseFn() {
 				if pendingToolCalls == nil {
 					pendingToolCalls = make(map[string]string)
 				}
@@ -985,7 +989,7 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 		case agent.AgentEventToolResult:
 			if event.ToolIsError {
 				m.logger.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
-				if verbose {
+				if verboseFn() {
 					line := "  ❌ Error: " + truncateToolResult(event.ToolResult)
 					if event.ToolDuration > 0 {
 						line += " " + formatToolDuration(event.ToolDuration)
@@ -1000,7 +1004,7 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 				}
 			} else {
 				m.logger.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
-				if verbose {
+				if verboseFn() {
 					line := "  ✅ " + summarizeToolResult(event.ToolName, event.ToolResult)
 					if event.ToolDuration > 0 {
 						line += " " + formatToolDuration(event.ToolDuration)
@@ -1058,7 +1062,7 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 // for mid-turn user input injection (steer mechanism). When the agent reaches a
 // tool-call boundary and requests steer input, we drain any queued pending
 // messages and deliver them to the agent.
-func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, verbose bool, sendProgress func(string), ta *threadActivation) (string, error) {
+func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, verboseFn func() bool, sendProgress func(string), ta *threadActivation) (string, error) {
 	var text strings.Builder
 	var lastErr error
 
@@ -1077,7 +1081,7 @@ func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agen
 
 		case agent.AgentEventToolCallArgs:
 			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
-			if verbose {
+			if verboseFn() {
 				if pendingToolCalls == nil {
 					pendingToolCalls = make(map[string]string)
 				}
@@ -1114,7 +1118,7 @@ func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agen
 		case agent.AgentEventToolResult:
 			if event.ToolIsError {
 				m.logger.Log("channel: tool %s error: %s", event.ToolName, event.ToolResult)
-				if verbose {
+				if verboseFn() {
 					line := "  ❌ Error: " + truncateToolResult(event.ToolResult)
 					if event.ToolDuration > 0 {
 						line += " " + formatToolDuration(event.ToolDuration)
@@ -1129,7 +1133,7 @@ func (m *Manager) drainEventsWithSteer(ch <-chan agent.AgentEvent, aiAgent *agen
 				}
 			} else {
 				m.logger.Log("channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
-				if verbose {
+				if verboseFn() {
 					line := "  ✅ " + summarizeToolResult(event.ToolName, event.ToolResult)
 					if event.ToolDuration > 0 {
 						line += " " + formatToolDuration(event.ToolDuration)
@@ -1400,16 +1404,18 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		MaxTokens: resolved.MaxTokens,
 	})
 
-	m.verboseMu.RLock()
-	verbose := m.verboseState != nil && m.verboseState[job.TargetThreadID]
-	m.verboseMu.RUnlock()
+	isVerbose := func() bool {
+		m.verboseMu.RLock()
+		defer m.verboseMu.RUnlock()
+		return m.verboseState != nil && m.verboseState[job.TargetThreadID]
+	}
 
 	// sendProgress for cron: deliver intermediate tool results inline.
 	sendProgress := func(text string) {
 		m.sendToThread(ctx, job.TargetThreadID, text, fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()))
 	}
 
-	result, err := m.drainEvents(eventCh, aiAgent, verbose, sendProgress)
+	result, err := m.drainEvents(eventCh, aiAgent, isVerbose, sendProgress)
 	if err != nil {
 		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
 		return err
