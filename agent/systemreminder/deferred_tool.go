@@ -43,6 +43,11 @@ func (r DeferredToolReminder) Generate(ctx Context) []string {
 	if r.Provider == nil {
 		return nil
 	}
+	// Only fire on the first user message — the tool catalog is static
+	// per session and repeating it on every message adds unnecessary noise.
+	if !ctx.IsFirstMessage {
+		return nil
+	}
 	// Don't inject at tool-result boundaries — not meaningful there.
 	if ctx.IsToolResult {
 		return nil

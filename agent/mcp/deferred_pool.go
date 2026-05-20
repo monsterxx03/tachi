@@ -10,13 +10,15 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 )
 
-// DeferredTool holds metadata about an MCP tool for search purposes.
+// DeferredTool holds metadata about an MCP tool for search purposes
+// and the actual tool instance for lazy registration.
 type DeferredTool struct {
 	Name        string       // "mcp__postgres__query"
 	ServerName  string       // "postgres"
 	Description string       // original description from MCP
 	SearchHint  string       // search keywords hint
 	Schema      tools.Schema // full parameter schema
+	Tool        tools.Tool   // actual MCP tool instance for lazy registration
 }
 
 // DeferredPool stores all MCP tools that are not yet loaded into the
@@ -381,6 +383,7 @@ func NewDeferredToolFromMCPTool(t MCPTool, searchHintOverride string) *DeferredT
 		Description: t.serverTool.Description,
 		SearchHint:  hint,
 		Schema:      tools.ToSchema(t),
+		Tool:        t,
 	}
 }
 

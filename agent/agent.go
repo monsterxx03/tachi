@@ -1159,22 +1159,45 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 	}
 
 	active := make([]tools.Schema, 0, len(schemas))
+	seen := make(map[string]bool)
+
 	for _, s := range schemas {
 		name := s.Name
 		switch {
 		case !tools.IsMCPSchema(name):
 			// Built-in tools are always included
 			active = append(active, s)
+			seen[name] = true
 		case tools.IsMCPSearchTool(name):
 			// The search tool itself is always included
 			active = append(active, s)
+			seen[name] = true
 		case a.discoveredSet != nil && a.discoveredSet.Contains(name):
 			// Discovered MCP tools are included
 			active = append(active, s)
+			seen[name] = true
 		default:
 			// Undiscovered MCP tools — excluded from LLM API call
 		}
 	}
+
+	// Merge discovered tools that are in deferredPool but not yet registered.
+	// This handles the gap between MCPSearchTools discovery and the next
+	// filterActiveSchemas call: the tool may be in discoveredSet but not yet
+	// in the Registry (lazy registration happens at Invoke time).
+	if a.discoveredSet != nil && a.deferredPool != nil {
+		for _, name := range a.discoveredSet.List() {
+			if seen[name] {
+				continue
+			}
+			dt := a.deferredPool.Get(name)
+			if dt != nil {
+				active = append(active, dt.Schema)
+				seen[name] = true
+			}
+		}
+	}
+
 	return active
 }
 
@@ -1424,9 +1447,6 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		useToolSearch := cfg.MCPToolSearch.IsEnabled() && len(mcpTools) > cfg.MCPToolSearch.MinToolsForSearch
 
 		for _, t := range mcpTools {
-			// Register in Registry so Invoke() can find them at execution time
-			a.RegisterTool(t)
-
 			// Check for per-server overrides
 			srvCfg, hasCfg := serverCfgs[t.ServerName()]
 
@@ -1436,7 +1456,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 				searchHint = srvCfg.SearchHints[t.ToolName()]
 			}
 
-			// Store in deferred pool
+			// Store in deferred pool (always — needed for search and Invoke fallback)
 			dt := mcp.NewDeferredToolFromMCPTool(t, searchHint)
 			a.deferredPool.Add(dt)
 
@@ -1450,11 +1470,17 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 					}
 				}
 			}
+
+			// Lazy registration: only register in Registry when auto-loading.
+			// Non-auto-loaded tools stay only in deferredPool and are registered
+			// on first use (via executeToolCallsSequential fallback) or when
+			// discovered through MCPSearchTools.
 			if autoLoad {
+				a.RegisterTool(t)
 				a.discoveredSet.Add(t.Name())
 			}
 
-			a.logger.Log("MCP: registered tool %s (auto-load=%v)", t.Name(), autoLoad)
+			a.logger.Log("MCP: %s tool %s (auto-load=%v)", map[bool]string{true: "registered", false: "deferred"}[autoLoad], t.Name(), autoLoad)
 		}
 
 		// Log summary
@@ -1596,6 +1622,27 @@ func (a *AIAgent) Logger() *debuglog.Logger {
 // GetTool retrieves a tool from the agent's registry by name.
 func (a *AIAgent) GetTool(name string) tools.Tool {
 	return a.toolRegistry.GetTool(name)
+}
+
+// lazyRegisterMCPTool ensures an MCP tool is in the Registry before invocation.
+// When ToolSearch is active, non-auto-loaded MCP tools stay only in deferredPool
+// until first use. This method bridges: if the tool is an MCP tool and not yet
+// in the Registry, it registers the DeferredTool.Tool instance.
+// Returns nil if the tool is already registered or is not an MCP tool.
+func (a *AIAgent) lazyRegisterMCPTool(name string) error {
+	if a.deferredPool == nil || !tools.IsMCPSchema(name) {
+		return nil
+	}
+	// Already registered
+	if a.toolRegistry.GetTool(name) != nil {
+		return nil
+	}
+	deferredTool := a.deferredPool.Get(name)
+	if deferredTool == nil || deferredTool.Tool == nil {
+		return fmt.Errorf("deferred MCP tool %q not found", name)
+	}
+	a.toolRegistry.Register(deferredTool.Tool)
+	return nil
 }
 
 // NewChildAgent creates a fully configured child agent backed by RunOneOffStream.

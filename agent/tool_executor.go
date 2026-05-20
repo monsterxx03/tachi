@@ -149,6 +149,8 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 
 	for i, tc := range toolCalls {
 		wg.Go(func() {
+			// Lazy-register MCP tools before parallel invocation
+			_ = a.lazyRegisterMCPTool(tc.Function.Name)
 			results[i] = a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 		})
 	}
@@ -251,6 +253,11 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				ToolArgs: tc.Function.Arguments,
 			}
 		}
+
+		// Lazy-register MCP tools that haven't been loaded yet (ToolSearch deferral).
+		// This handles the edge case where the LLM calls a tool by name without
+		// first discovering it via MCPSearchTools.
+		_ = a.lazyRegisterMCPTool(tc.Function.Name)
 
 		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
 
