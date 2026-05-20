@@ -93,13 +93,14 @@ func xmlEscape(s string) string {
 	return s
 }
 
-// firstLineOrTruncate returns the first line or first maxLen characters.
+// firstLineOrTruncate returns the first line or first maxLen characters (runes).
 func firstLineOrTruncate(s string, maxLen int) string {
 	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
 		s = s[:idx]
 	}
-	if len(s) > maxLen {
-		s = s[:maxLen] + "..."
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		s = string(runes[:maxLen]) + "..."
 	}
 	return s
 }

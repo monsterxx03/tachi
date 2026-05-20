@@ -295,8 +295,9 @@ func formatJobSummary(job *cron.Job) string {
 
 	// Prompts can be long; show a snippet.
 	promptPreview := job.Prompt
-	if len(promptPreview) > 80 {
-		promptPreview = promptPreview[:80] + "..."
+	runes := []rune(promptPreview)
+	if len(runes) > 80 {
+		promptPreview = string(runes[:80]) + "..."
 	}
 	sb.WriteString(fmt.Sprintf("  Prompt: %s\n", promptPreview))
 

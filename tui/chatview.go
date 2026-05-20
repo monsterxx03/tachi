@@ -610,8 +610,9 @@ func truncate(s string, maxLen int) string {
 	if len(lines) > 1 {
 		s = lines[0]
 	}
-	if len(s) > maxLen {
-		return s[:maxLen] + "..."
+	runes := []rune(s)
+	if len(runes) > maxLen {
+		return string(runes[:maxLen]) + "..."
 	}
 	return s
 }

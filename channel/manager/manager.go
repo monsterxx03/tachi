@@ -1819,9 +1819,10 @@ func sanitizeFilename(s string) string {
 		"|", "",
 	)
 	result := replacer.Replace(s)
-	// Trim to reasonable length.
-	if len(result) > 60 {
-		result = result[:60]
+	// Trim to reasonable length (rune-aware).
+	runes := []rune(result)
+	if len(runes) > 60 {
+		result = string(runes[:60])
 	}
 	return result
 }
@@ -1943,12 +1944,13 @@ func summarizeToolResult(name, result string) string {
 	}
 }
 
-// truncateToolResult limits an error string for display.
+// truncateToolResult limits an error string for display (rune-aware).
 func truncateToolResult(s string) string {
-	if len(s) <= 150 {
+	runes := []rune(s)
+	if len(runes) <= 150 {
 		return s
 	}
-	return s[:150] + "..."
+	return string(runes[:150]) + "..."
 }
 
 // humanSize formats a byte count as a human-readable string.
@@ -1963,11 +1965,13 @@ func humanSize(n int) string {
 }
 
 // truncateForDisplay limits a string for display in channel messages.
+// Uses rune-aware truncation to handle multi-byte characters (e.g. Chinese).
 func truncateForDisplay(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
 // formatToolDuration formats a time.Duration as a concise human-readable string

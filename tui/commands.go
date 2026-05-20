@@ -880,8 +880,9 @@ func (m *Model) handleForgetCommand() tea.Cmd {
 		sb.WriteString("**📝 Memories** (use `/forget <id>` to delete)\n\n")
 		for _, e := range entries {
 			content := e.Content
-			if len(content) > 80 {
-				content = content[:80] + "..."
+			runes := []rune(content)
+			if len(runes) > 80 {
+				content = string(runes[:80]) + "..."
 			}
 			fmt.Fprintf(&sb, "`%s` %s\n", e.ID, content)
 		}

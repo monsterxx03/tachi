@@ -923,7 +923,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			Content: "Edit File Confirmation\n" + event.ToolDiff,
 		})
 		if len(event.ToolDiff) > 100 {
-			m.logger.Log("TUI: diff preview: %s...", event.ToolDiff[:100])
+			runes := []rune(event.ToolDiff)
+			preview := string(runes[:100])
+			m.logger.Log("TUI: diff preview: %s...", preview)
 		} else {
 			m.logger.Log("TUI: diff: %s", event.ToolDiff)
 		}

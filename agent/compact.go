@@ -78,14 +78,16 @@ func BuildCompactPrompt(history []llm.Message) string {
 			}
 		case "tool":
 			content := msg.Content
-			if len(content) > maxToolResultLen {
-				content = content[:maxToolResultLen] + "..."
+			runes := []rune(content)
+			if len(runes) > maxToolResultLen {
+				content = string(runes[:maxToolResultLen]) + "..."
 			}
 			sb.WriteString(fmt.Sprintf("[工具结果: %s]\n", content))
 		default:
 			content := msg.Content
-			if len(content) > 500 {
-				content = content[:500] + "..."
+			runes := []rune(content)
+			if len(runes) > 500 {
+				content = string(runes[:500]) + "..."
 			}
 			sb.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, content))
 		}
@@ -95,13 +97,14 @@ func BuildCompactPrompt(history []llm.Message) string {
 	return sb.String()
 }
 
-// truncateContent truncates s to at most maxLen characters.
+// truncateContent truncates s to at most maxLen characters (runes).
 // A "..." suffix is appended when truncation occurs.
 func truncateContent(s string, maxLen int) string {
-	if len(s) <= maxLen {
+	runes := []rune(s)
+	if len(runes) <= maxLen {
 		return s
 	}
-	return s[:maxLen] + "..."
+	return string(runes[:maxLen]) + "..."
 }
 
 // FinalizeCompact creates a new session containing the compacted summary,
