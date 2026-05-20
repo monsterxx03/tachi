@@ -51,12 +51,17 @@ func collectToolMessages(messages []Message, start int) ([]anthropic.ContentBloc
 		))
 	}
 
-	// If the next message is steer, merge it as a text block into the same
-	// user message (tool results are already user-role; a separate steer user
-	// message would create two consecutive user messages).
-	if end < len(messages) && messages[end].Role == RoleSteer {
+	// If the next message is steer or a regular user message, merge it as a
+	// text block into the same user message (tool results are already user-role;
+	// a separate user message would create two consecutive user messages in
+	// violation of Anthropic's strict alternation requirement). This handles:
+	//   1. Steer: user input injected at tool-call boundaries during a turn
+	//   2. Resume: session ended with tool results; user's next message would
+	//      otherwise form consecutive user messages
+	//   3. Loop reminders: system warnings injected after tool results
+	if end < len(messages) && (messages[end].Role == RoleSteer || messages[end].Role == "user") {
 		blocks = append(blocks, anthropic.NewTextBlock(messages[end].Content))
-		end++ // consumed steer
+		end++ // consumed
 	}
 
 	return blocks, end

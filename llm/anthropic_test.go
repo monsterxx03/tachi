@@ -208,7 +208,11 @@ func TestBuildRequest_MultipleToolsWithSteer(t *testing.T) {
 }
 
 func TestBuildRequest_ToolMessagesNoSteer_ThenUserFollowUp(t *testing.T) {
-	// Verify no steer after tool → next message consumed correctly
+	// Tool results followed by a regular user message are now merged into
+	// one user message (same as steer behavior) to avoid consecutive user
+	// messages that violate Anthropic's alternation requirement.
+	// This handles the resume scenario: session ended with tool results,
+	// user sends "继续" on resume.
 	p := NewAnthropicProvider("key", "", "claude-sonnet-4-6")
 	msgs := []Message{
 		{Role: "user", Content: "Do something"},
@@ -224,22 +228,18 @@ func TestBuildRequest_ToolMessagesNoSteer_ThenUserFollowUp(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Messages: user, assistant, user(tool), user
-	if len(req.Messages) != 4 {
-		t.Fatalf("expected 4 messages, got %d", len(req.Messages))
+	// Messages: user, assistant, user(tool + follow-up merged)
+	if len(req.Messages) != 3 {
+		t.Fatalf("expected 3 messages, got %d", len(req.Messages))
 	}
 
-	// Third message is tool result merged to user
-	if req.Messages[2].Role != anthropic.MessageParamRoleUser {
-		t.Errorf("msg 2: expected user (tool result), got %s", req.Messages[2].Role)
+	// Third message is tool result + follow-up user text merged
+	mergedMsg := req.Messages[2]
+	if mergedMsg.Role != anthropic.MessageParamRoleUser {
+		t.Errorf("merged message: expected user role, got %s", mergedMsg.Role)
 	}
-	// Fourth message is the follow-up user message
-	if req.Messages[3].Role != anthropic.MessageParamRoleUser {
-		t.Errorf("msg 3: expected user, got %s", req.Messages[3].Role)
-	}
-	// Follow-up message content should be intact
-	if len(req.Messages[3].Content) != 1 {
-		t.Errorf("msg 3: expected 1 content block, got %d", len(req.Messages[3].Content))
+	if len(mergedMsg.Content) != 2 {
+		t.Errorf("expected 2 content blocks (tool result + user text), got %d", len(mergedMsg.Content))
 	}
 }
 
@@ -466,11 +466,14 @@ func TestBuildRequest_ToolMessagesAtStart_NoCrash(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Tool result at start → should be a user message, then the real user message
-	if len(req.Messages) != 2 {
-		t.Fatalf("expected 2 messages, got %d", len(req.Messages))
+	// Tool result at start followed by user → merged into one user message
+	if len(req.Messages) != 1 {
+		t.Fatalf("expected 1 message, got %d", len(req.Messages))
 	}
 	if req.Messages[0].Role != anthropic.MessageParamRoleUser {
 		t.Errorf("msg 0: expected user, got %s", req.Messages[0].Role)
+	}
+	if len(req.Messages[0].Content) != 2 {
+		t.Errorf("expected 2 content blocks (tool result + user text), got %d", len(req.Messages[0].Content))
 	}
 }
