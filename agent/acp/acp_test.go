@@ -13,6 +13,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/session"
 )
 
 func TestInitialize(t *testing.T) {
@@ -30,6 +31,7 @@ func TestInitialize(t *testing.T) {
 	assert.Equal(t, "test-version", resp.AgentInfo.Version)
 	assert.True(t, resp.AgentCapabilities.PromptCapabilities.EmbeddedContext)
 	assert.True(t, resp.AgentCapabilities.McpCapabilities.Http)
+	assert.True(t, resp.AgentCapabilities.LoadSession)
 	assert.NotNil(t, resp.AgentCapabilities.SessionCapabilities.List)
 	assert.NotNil(t, resp.AgentCapabilities.SessionCapabilities.Close)
 	assert.NotNil(t, resp.AgentCapabilities.SessionCapabilities.Resume)
@@ -609,3 +611,165 @@ func TestBuildACPAvailableCommands_NilAgent(t *testing.T) {
 		"nil agent should still return static commands (no skills)")
 }
 
+
+// ── findLatestSessionByCwd tests ────────────────────────────────────────────
+
+func TestFindLatestSessionByCwd_NoSessions(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store)
+
+	result := findLatestSessionByCwd(sm, "/some/path")
+	assert.Nil(t, result, "expected nil when no sessions exist")
+}
+
+func TestFindLatestSessionByCwd_FindsMatching(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store)
+
+	// Create a session with matching cwd
+	sess, err := sm.New("openai", "gpt-4", "/my/project")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+
+	result := findLatestSessionByCwd(sm, "/my/project")
+	require.NotNil(t, result)
+	assert.Equal(t, sess.ID, result.ID)
+}
+
+func TestFindLatestSessionByCwd_NoMatch(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store)
+
+	_, err = sm.New("openai", "gpt-4", "/project/a")
+	require.NoError(t, err)
+
+	// Different cwd — should not match
+	result := findLatestSessionByCwd(sm, "/project/b")
+	assert.Nil(t, result, "expected nil for non-matching cwd")
+}
+
+func TestFindLatestSessionByCwd_ReturnsLatest(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store)
+
+	// Create sessions with different cwds, last one matching
+	_, err = sm.New("openai", "gpt-4", "/project/other")
+	require.NoError(t, err)
+
+	sess2, err := sm.New("openai", "gpt-4", "/project/target")
+	require.NoError(t, err)
+
+	_, err = sm.New("openai", "gpt-4", "/project/another")
+	require.NoError(t, err)
+
+	// The second session matches /project/target.
+	result := findLatestSessionByCwd(sm, "/project/target")
+	require.NotNil(t, result)
+	assert.Equal(t, sess2.ID, result.ID)
+}
+
+func TestFindLatestSessionByCwd_MultipleMatching_ReturnsNewest(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store)
+
+	// Create multiple sessions with same cwd
+	_, err = sm.New("openai", "gpt-4", "/project/shared")
+	require.NoError(t, err)
+	_, err = sm.New("openai", "gpt-4", "/project/shared")
+	require.NoError(t, err)
+	sess3, err := sm.New("openai", "gpt-4", "/project/shared")
+	require.NoError(t, err)
+
+	// Should return the most recent (sess3)
+	result := findLatestSessionByCwd(sm, "/project/shared")
+	require.NotNil(t, result)
+	assert.Equal(t, sess3.ID, result.ID,
+		"expected the newest session with matching cwd")
+}
+
+// ── LoadSession tests ───────────────────────────────────────────────────────
+
+func TestLoadSession_NoProvider(t *testing.T) {
+	// With an empty config (no providers), LoadSession should return an error.
+	origBase := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	cfg := config.DefaultConfig()
+	ta := NewTachiAgent(cfg, "test")
+
+	_, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+		Cwd: "/tmp/test-project",
+	})
+	assert.Error(t, err)
+	assert.Contains(t, err.Error(), "no provider configured")
+}
+
+func TestLoadSession_CreatesNewSession(t *testing.T) {
+	origBase := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	cfg := config.DefaultConfig()
+	cfg.Providers = []config.ProviderConfig{
+		{
+			Name:    "test-provider",
+			Type:    "openai",
+			Model:   "gpt-4o-mini",
+			APIKey:  "sk-test-key-12345",
+			BaseURL: "https://api.openai.com/v1",
+		},
+	}
+	cfg.Provider = "test-provider"
+
+	ta := NewTachiAgent(cfg, "test")
+
+	resp, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+		Cwd: "/tmp/test-project",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp) // LoadSessionResponse is empty on success
+}
+
+func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
+	origBase := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	cfg := config.DefaultConfig()
+	cfg.Providers = []config.ProviderConfig{
+		{
+			Name:   "test-provider",
+			Type:   "openai",
+			Model:  "gpt-4o-mini",
+			APIKey: "sk-test-key-12345",
+		},
+	}
+	cfg.Provider = "test-provider"
+
+	// Create a session on disk with matching cwd
+	sm, err := session.NewManager()
+	require.NoError(t, err)
+	sess, err := sm.New("openai", "gpt-4o-mini", "/existing/project")
+	require.NoError(t, err)
+	sessID := sess.ID
+	sm.EndCurrent()
+
+	// Now load it via ACP
+	ta := NewTachiAgent(cfg, "test")
+	resp, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+		Cwd: "/existing/project",
+	})
+	require.NoError(t, err)
+	assert.Empty(t, resp)
+
+	// Verify the ACP session was created with the same disk session ID
+	acpSess, ok := ta.sessions.Get(sessID)
+	require.True(t, ok, "ACP session should exist with the disk session ID")
+	assert.Equal(t, "/existing/project", acpSess.cwd)
+}

@@ -72,6 +72,20 @@ func streamToACP(
 					stopReason = mapStopReason(event.Result.ExitReason)
 				}
 
+			case agent.AgentEventSessionTitle:
+				// Send title update to the editor so it can display the session name
+				title := event.Title
+				if title != "" {
+					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+						SessionId: sessionID,
+						Update: acp.SessionUpdate{
+							SessionInfoUpdate: &acp.SessionSessionInfoUpdate{
+								Title: acp.Ptr(title),
+							},
+						},
+					})
+				}
+
 			case agent.AgentEventError:
 				stopReason = acp.StopReasonEndTurn
 				if event.Result != nil && event.Result.Error != nil {
@@ -89,7 +103,6 @@ func streamToACP(
 				// Events we intentionally ignore in ACP mode:
 				// AgentEventToolCallArgs — incremental args, ACP doesn't need
 				// AgentEventSteerCheck — ACP doesn't use steer
-				// AgentEventSessionTitle — ACP doesn't use title gen
 				// AgentEventSubagentStart/Done — internal detail
 				// AgentEventUsage — internal stats
 				// AgentEventAskUser — AskUser tool is unregistered

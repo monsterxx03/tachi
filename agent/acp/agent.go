@@ -51,7 +51,7 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
-			LoadSession: false,
+			LoadSession: true,
 			SessionCapabilities: acp.SessionCapabilities{
 				List:   &acp.SessionListCapabilities{},
 				Close:  &acp.SessionCloseCapabilities{},
@@ -108,7 +108,6 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetTitleGenEnabled(false) // Editor manages titles
 	// Don't set steer channel — ACP doesn't use mid-turn injection
 
 	// Configure agent (registers tools, connects MCP, sets up memory/skills)
@@ -400,7 +399,6 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent := agent.NewAIAgent(provider, provModel, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetTitleGenEnabled(false)
 
 	mcpMgr, cfgErr := aiAgent.Configure(ctx, t.cfg)
 	if cfgErr != nil {
@@ -420,6 +418,136 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 
 	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
 	return acp.ResumeSessionResponse{}, nil
+}
+
+// LoadSession creates a new ACP session, optionally restoring a previous
+// Tachi session from disk that matches the working directory.
+//
+// When the editor opens a workspace (e.g., VS Code window, Zed project),
+// it calls LoadSession with the workspace root as Cwd. We scan disk for
+// the most recent Tachi session in that directory and restore it, so the
+// user picks up where they left off. If no matching session exists, a
+// fresh session is created (same as NewSession).
+func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
+	t.logger.Log("ACP: LoadSession called, cwd=%s", req.Cwd)
+
+	cwd := req.Cwd
+	if cwd == "" {
+		var err error
+		cwd, err = os.Getwd()
+		if err != nil {
+			return acp.LoadSessionResponse{}, fmt.Errorf("cannot determine working directory: %w", err)
+		}
+	}
+
+	// Resolve provider from config
+	resolved, err := config.Resolve(t.cfg, config.CLIFlags{})
+	if err != nil {
+		return acp.LoadSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
+	}
+
+	provider, err := llm.NewProvider(
+		resolved.Provider.Type,
+		resolved.Provider.APIKey,
+		resolved.Provider.BaseURL,
+		resolved.Provider.Model,
+	)
+	if err != nil {
+		return acp.LoadSessionResponse{}, fmt.Errorf("create provider: %w", err)
+	}
+
+	// Create independent AIAgent
+	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, 0)
+	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+
+	// Configure agent (registers tools, connects MCP, sets up memory/skills)
+	mcpMgr, cfgErr := aiAgent.Configure(ctx, t.cfg)
+	if cfgErr != nil {
+		t.logger.Log("ACP: LoadSession configure warning: %v", cfgErr)
+	}
+
+	// Connect editor-provided MCP servers
+	if len(req.McpServers) > 0 && mcpMgr != nil {
+		editorServers := convertMCPServers(req.McpServers, t.cfg.ACP.MCPConflictPolicy, t.cfg.MCPServers)
+		if len(editorServers) > 0 {
+			editorTools, errs := mcpMgr.ConnectAll(ctx, editorServers)
+			for _, e := range errs {
+				t.logger.Log("ACP: LoadSession editor MCP connect error: %v", e)
+			}
+			for _, tool := range editorTools {
+				aiAgent.RegisterTool(tool)
+			}
+		}
+	}
+
+	// Remove AskUser tool
+	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+
+	// Set up session manager — try to find an existing session by cwd
+	sm, smErr := session.NewManager()
+	if smErr != nil {
+		t.logger.Log("ACP: LoadSession session manager init warning: %v", smErr)
+	} else {
+		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
+
+		// Scan disk for the most recent session in this cwd
+		loaded := findLatestSessionByCwd(sm, cwd)
+		if loaded != nil {
+			t.logger.Log("ACP: LoadSession found existing disk session id=%s", loaded.ID)
+			// Set as current — AIAgent will resume from this session's history
+			aiAgent.SetSessionManager(sm)
+		} else {
+			t.logger.Log("ACP: LoadSession no existing session for cwd=%s, creating new", cwd)
+			sm.New(resolved.Provider.Type, resolved.Provider.Model, cwd)
+			aiAgent.SetSessionManager(sm)
+		}
+	}
+
+	// Create ACP session
+	sess := t.sessions.New(ctx, cwd, resolved.Provider.Type, t.cfg, aiAgent, mcpMgr, sm)
+
+	// Wire up permission handler
+	if t.conn != nil {
+		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
+	}
+
+	// Defer available commands notification (see NewSession for rationale)
+	acpCommands := buildACPAvailableCommands(aiAgent)
+	sessID := acp.SessionId(sess.ID)
+	time.AfterFunc(0, func() {
+		if t.conn != nil {
+			_ = t.conn.SessionUpdate(context.Background(), acp.SessionNotification{
+				SessionId: sessID,
+				Update: acp.SessionUpdate{
+					AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+						AvailableCommands: acpCommands,
+					},
+				},
+			})
+		}
+	})
+
+	t.logger.Log("ACP: session loaded id=%s", sess.ID)
+	return acp.LoadSessionResponse{}, nil
+}
+
+// findLatestSessionByCwd scans disk sessions and returns the most recent
+// session whose WorkingDir matches the given cwd. Returns nil if none found.
+func findLatestSessionByCwd(sm *session.Manager, cwd string) *session.Session {
+	all, err := sm.List()
+	if err != nil {
+		return nil
+	}
+	for _, s := range all {
+		if s.WorkingDir == cwd {
+			// Load to make it the current session
+			if _, loadErr := sm.Load(s.ID); loadErr == nil {
+				return s
+			}
+		}
+	}
+	return nil
 }
 
 // Authenticate is not supported — returns empty response.
