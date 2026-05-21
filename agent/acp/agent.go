@@ -197,8 +197,10 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
-	// Create cancellable prompt context with working directory
-	promptCtx, promptCancel := context.WithCancel(sess.ctx)
+	// Create cancellable prompt context with working directory.
+	// Derive from ctx (SDK's per-prompt cancellable context) so the SDK's
+	// built-in session/cancel mechanism can interrupt the agent loop.
+	promptCtx, promptCancel := context.WithCancel(ctx)
 	defer promptCancel()
 	sess.setPromptCancel(promptCancel)
 	defer sess.setPromptCancel(nil)
