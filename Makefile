@@ -1,4 +1,4 @@
-.PHONY: build build-linux test
+.PHONY: build build-linux test test-cover test-cover-html
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -15,3 +15,18 @@ build-linux-arm64:
 
 test:
 	go test ./...
+
+test-cover:
+	@echo "=== Running tests with coverage ==="
+	@go test -coverprofile=coverage.out ./...
+	@echo ""
+	@echo "=== Per-package coverage ==="
+	@go tool cover -func=coverage.out | sort -k 3 -r
+	@echo ""
+	@echo "=== Total coverage: $$(go tool cover -func=coverage.out | tail -1 | awk '{print $$NF}') ==="
+	@rm -f coverage.out
+
+test-cover-html:
+	go test -coverprofile=coverage.out ./... && \
+	go tool cover -html=coverage.out && \
+	rm -f coverage.out

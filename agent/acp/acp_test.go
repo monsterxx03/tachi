@@ -2,12 +2,16 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
+	"io"
+	"os/exec"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -236,4 +240,286 @@ func TestConvertMCPServers_ConflictPolicy(t *testing.T) {
 	result = convertMCPServers(acpServers, "agent_wins", existing)
 	assert.Len(t, result, 1)
 	assert.Equal(t, "new-server", result[0].Name)
+}
+
+func TestConvertMCPServers_NilStdio(t *testing.T) {
+	acpServers := []acp.McpServer{
+		{Stdio: nil}, // non-stdio — should be skipped
+		{Stdio: &acp.McpServerStdio{Name: "valid", Command: "/bin/valid"}},
+	}
+	result := convertMCPServers(acpServers, "client_wins", nil)
+	require.Len(t, result, 1)
+	assert.Equal(t, "valid", result[0].Name)
+}
+
+func TestConvertMCPServers_EmptyNameUsesCommand(t *testing.T) {
+	acpServers := []acp.McpServer{
+		{Stdio: &acp.McpServerStdio{Name: "", Command: "/bin/mcp-server"}},
+	}
+	result := convertMCPServers(acpServers, "client_wins", nil)
+	require.Len(t, result, 1)
+	assert.Equal(t, "/bin/mcp-server", result[0].Name)
+}
+
+func TestConvertMCPServers_EnvConversion(t *testing.T) {
+	acpServers := []acp.McpServer{
+		{Stdio: &acp.McpServerStdio{
+			Name:    "env-server",
+			Command: "/bin/mcp",
+			Env: []acp.EnvVariable{
+				{Name: "KEY", Value: "val1"},
+				{Name: "TOKEN", Value: "secret"},
+			},
+		}},
+	}
+	result := convertMCPServers(acpServers, "client_wins", nil)
+	require.Len(t, result, 1)
+	assert.Equal(t, "val1", result[0].Env["KEY"])
+	assert.Equal(t, "secret", result[0].Env["TOKEN"])
+}
+
+func TestSetConnection(t *testing.T) {
+	cfg := config.DefaultConfig()
+	ta := NewTachiAgent(cfg, "1.0")
+	// Just ensure it doesn't panic — conn is nil-safe in tests
+	ta.SetConnection(nil)
+}
+
+func TestStubMethods_ReturnEmpty(t *testing.T) {
+	cfg := config.DefaultConfig()
+	ta := NewTachiAgent(cfg, "1.0")
+
+	t.Run("Authenticate", func(t *testing.T) {
+		resp, err := ta.Authenticate(context.Background(), acp.AuthenticateRequest{})
+		assert.NoError(t, err)
+		assert.Empty(t, resp)
+	})
+
+	t.Run("SetSessionConfigOption", func(t *testing.T) {
+		resp, err := ta.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{})
+		assert.NoError(t, err)
+		assert.Empty(t, resp)
+	})
+
+	t.Run("SetSessionMode", func(t *testing.T) {
+		resp, err := ta.SetSessionMode(context.Background(), acp.SetSessionModeRequest{})
+		assert.NoError(t, err)
+		assert.Empty(t, resp)
+	})
+}
+
+func TestCloseAll(t *testing.T) {
+	cfg := config.DefaultConfig()
+	ta := NewTachiAgent(cfg, "1.0")
+
+	// Add sessions
+	sess := ta.sessions.New(context.Background(), "/tmp", "test", nil, nil, nil)
+	assert.Len(t, ta.sessions.List(), 1)
+
+	ta.CloseAll()
+	assert.Empty(t, ta.sessions.List())
+	assert.Error(t, sess.ctx.Err()) // context should be cancelled
+}
+
+func TestACPSession_CloseWithMCPandSessionManager(t *testing.T) {
+	sm := NewACPSessionManager()
+	// No MCP manager, no session manager — just verify Close works
+	sess := sm.New(context.Background(), "/tmp", "test", nil, nil, nil)
+	assert.NotPanics(t, func() { sess.Close() })
+	assert.Error(t, sess.ctx.Err())
+}
+
+func TestACPSession_setPromptCancel(t *testing.T) {
+	sm := NewACPSessionManager()
+	sess := sm.New(context.Background(), "/tmp", "test", nil, nil, nil)
+
+	// setPromptCancel stores and clears the cancel func
+	cancelCalled := false
+	cancelFn := func() { cancelCalled = true }
+	sess.setPromptCancel(cancelFn)
+	assert.NotNil(t, sess.promptCancel)
+
+	// Invoke it
+	sess.promptCancel()
+	assert.True(t, cancelCalled)
+
+	// Clear it
+	sess.setPromptCancel(nil)
+	assert.Nil(t, sess.promptCancel)
+}
+
+func TestBuildSystemPromptForCwd(t *testing.T) {
+	t.Run("contains basic info", func(t *testing.T) {
+		prompt := buildSystemPromptForCwd("中文", "/home/user/project")
+		assert.Contains(t, prompt, "Reply in 中文")
+		assert.Contains(t, prompt, "- Working directory: /home/user/project")
+		assert.Contains(t, prompt, "Tachi")
+	})
+
+	t.Run("language fallback", func(t *testing.T) {
+		prompt := buildSystemPromptForCwd("", "/tmp")
+		assert.Contains(t, prompt, "Reply in ")
+	})
+
+	t.Run("git detection", func(t *testing.T) {
+		// Use a temp dir that's not a git repo
+		prompt := buildSystemPromptForCwd("en", "/nonexistent-dir")
+		assert.Contains(t, prompt, "Git repository: no")
+	})
+}
+
+func TestBuildSystemPromptForCwd_InGitRepo(t *testing.T) {
+	// Create temp dir and init git repo
+	tmpDir := t.TempDir()
+	err := exec.Command("git", "-C", tmpDir, "init").Run()
+	require.NoError(t, err)
+
+	prompt := buildSystemPromptForCwd("en", tmpDir)
+	assert.Contains(t, prompt, "Git repository: yes")
+	assert.Contains(t, prompt, "Working directory: "+tmpDir)
+}
+
+// Build a minimal mock ACP agent for testing buildPermissionHandler.
+type mockACPAgent struct {
+	acp.Agent
+	initializeCalled bool
+}
+
+func (m *mockACPAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
+	m.initializeCalled = true
+	return acp.InitializeResponse{ProtocolVersion: acp.ProtocolVersionNumber}, nil
+}
+
+func TestBuildPermissionHandler_AllowOnce(t *testing.T) {
+	// Two independent pipes: agent→client, client→agent
+	agentToClientR, agentToClientW := io.Pipe()
+	clientToAgentR, clientToAgentW := io.Pipe()
+
+	mockAgent := &mockACPAgent{}
+	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
+	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
+
+	// Build the handler
+	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	handler := buildPermissionHandler(conn, "test-session", aiAgent)
+
+	// Goroutine simulates the ACP client reading the JSON-RPC request and sending a response
+	go func() {
+		var reqMap map[string]interface{}
+		decoder := json.NewDecoder(agentToClientR)
+		err := decoder.Decode(&reqMap)
+		require.NoError(t, err)
+
+		// Correct format: outcome discriminator "selected" with optionId in camelCase
+		response := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      reqMap["id"],
+			"result": map[string]interface{}{
+				"outcome": map[string]interface{}{
+					"outcome":  "selected",
+					"optionId": "allow",
+				},
+			},
+		}
+		json.NewEncoder(clientToAgentW).Encode(response)
+	}()
+
+	approved, err := handler(context.Background(), "EditFile", "tool-1", "diff content", "args here")
+	assert.NoError(t, err)
+	assert.True(t, approved)
+}
+
+func TestBuildPermissionHandler_Reject(t *testing.T) {
+	agentToClientR, agentToClientW := io.Pipe()
+	clientToAgentR, clientToAgentW := io.Pipe()
+
+	mockAgent := &mockACPAgent{}
+	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
+	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
+
+	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	handler := buildPermissionHandler(conn, "test-session", aiAgent)
+
+	go func() {
+		var reqMap map[string]interface{}
+		json.NewDecoder(agentToClientR).Decode(&reqMap)
+		response := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      reqMap["id"],
+			"result": map[string]interface{}{
+				"outcome": map[string]interface{}{
+					"outcome":  "selected",
+					"optionId": "reject",
+				},
+			},
+		}
+		json.NewEncoder(clientToAgentW).Encode(response)
+	}()
+
+	approved, err := handler(context.Background(), "EditFile", "tool-1", "diff", "args")
+	assert.NoError(t, err)
+	assert.False(t, approved)
+}
+
+func TestBuildPermissionHandler_AllowAll(t *testing.T) {
+	agentToClientR, agentToClientW := io.Pipe()
+	clientToAgentR, clientToAgentW := io.Pipe()
+
+	mockAgent := &mockACPAgent{}
+	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
+	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
+
+	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	handler := buildPermissionHandler(conn, "test-session", aiAgent)
+
+	go func() {
+		var reqMap map[string]interface{}
+		json.NewDecoder(agentToClientR).Decode(&reqMap)
+		response := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      reqMap["id"],
+			"result": map[string]interface{}{
+				"outcome": map[string]interface{}{
+					"outcome":  "selected",
+					"optionId": "allow_all",
+				},
+			},
+		}
+		json.NewEncoder(clientToAgentW).Encode(response)
+	}()
+
+	approved, err := handler(context.Background(), "EditFile", "tool-2", "diff", "args")
+	assert.NoError(t, err)
+	assert.True(t, approved)
+}
+
+func TestBuildPermissionHandler_Cancelled(t *testing.T) {
+	agentToClientR, agentToClientW := io.Pipe()
+	clientToAgentR, clientToAgentW := io.Pipe()
+
+	mockAgent := &mockACPAgent{}
+	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
+	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
+
+	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	handler := buildPermissionHandler(conn, "test-session", aiAgent)
+
+	go func() {
+		var reqMap map[string]interface{}
+		json.NewDecoder(agentToClientR).Decode(&reqMap)
+		response := map[string]interface{}{
+			"jsonrpc": "2.0",
+			"id":      reqMap["id"],
+			"result": map[string]interface{}{
+				"outcome": map[string]interface{}{
+					"outcome": "cancelled",
+				},
+			},
+		}
+		json.NewEncoder(clientToAgentW).Encode(response)
+	}()
+
+	approved, err := handler(context.Background(), "EditFile", "tool-3", "diff", "args")
+	assert.NoError(t, err)
+	assert.False(t, approved)
 }
