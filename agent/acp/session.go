@@ -57,6 +57,8 @@ func NewACPSessionManager() *ACPSessionManager {
 }
 
 // New creates a new ACPSession with the given parameters.
+// The ACP session ID is derived from the Tachi session ID (if available) to maintain
+// a direct mapping between ACP sessions and on-disk session storage.
 func (sm *ACPSessionManager) New(
 	parentCtx context.Context,
 	cwd string,
@@ -68,8 +70,17 @@ func (sm *ACPSessionManager) New(
 	sessCtx, sessCancel := context.WithCancel(context.Background())
 	_ = parentCtx // parentCtx not used for session lifecycle (sessions outlive individual requests)
 
+	// Use Tachi session ID as ACP session ID for direct mapping.
+	// This allows editors to resume sessions by the same ID that's stored on disk.
+	id := uuid.New().String()
+	if sessMgr != nil {
+		if cur := sessMgr.Current(); cur != nil {
+			id = cur.ID
+		}
+	}
+
 	sess := &ACPSession{
-		ID:           uuid.New().String(),
+		ID:           id,
 		cwd:          cwd,
 		providerType: providerType,
 		agent:        aiAgent,
