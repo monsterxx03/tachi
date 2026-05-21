@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log"
 	"os"
 	"path/filepath"
@@ -380,6 +381,16 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	prompt := cmd.String("prompt")
+	if prompt == "" {
+		// Check if stdin is being piped (not a terminal).
+		stat, err := os.Stdin.Stat()
+		if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
+			pipeData, readErr := io.ReadAll(os.Stdin)
+			if readErr == nil && len(pipeData) > 0 {
+				prompt = strings.TrimSpace(string(pipeData))
+			}
+		}
+	}
 	if prompt == "" {
 		prompt = "Write 'Hello, World!' to /tmp/test.txt and then read it back"
 	}
