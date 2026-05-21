@@ -2,17 +2,14 @@ package tui
 
 import (
 	"fmt"
-	"regexp"
-	"strings"
-)
 
-// coAuthorEmailDomain is used to build the Co-authored-by trailer email address.
-const coAuthorEmailDomain = "@tachi"
+	"github.com/monsterxx03/tachi/agent"
+)
 
 // commitUserPrompt builds the commit prompt including co-author instructions
 // for the current model.
 func commitUserPrompt(modelName string) string {
-	coAuthor := modelToCoAuthor(modelName)
+	coAuthor := agent.ModelToCoAuthor(modelName)
 	backtick := "`"
 	return fmt.Sprintf(`## Context to gather (use the Bash tool — do not assume output without running commands)
 
@@ -40,22 +37,4 @@ The second -m line adds a Co-authored-by trailer that GitHub recognizes
 Example:
   git commit -m "Fix null pointer in config loader" -m "Co-authored-by: SomeModel-1.0 <somemodel-1.0@tachi>"
 `, backtick, coAuthor)
-}
-
-// modelToCoAuthor converts a model name to a valid Co-authored-by name + email pair.
-// The email local part is the model name lowercased with non-alphanumeric chars replaced by hyphens.
-func modelToCoAuthor(modelName string) string {
-	if modelName == "" {
-		return "AI <ai@tachi>"
-	}
-	emailLocal := sanitizeModelName(modelName)
-	return modelName + " <" + emailLocal + coAuthorEmailDomain + ">"
-}
-
-// sanitizeModelName lowercases and replaces non-alphanumeric sequences with a single hyphen.
-var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9]+`)
-
-func sanitizeModelName(name string) string {
-	lower := strings.ToLower(name)
-	return sanitizeRe.ReplaceAllString(lower, "-")
 }

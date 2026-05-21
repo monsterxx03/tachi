@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -133,8 +134,8 @@ func (s StatusBar) buildUsageRight() string {
 	if s.totalUsage != nil && s.totalUsage.InputTokens > 0 && s.contextWindow > 0 {
 		pct := float64(s.totalUsage.InputTokens) / float64(s.contextWindow) * 100
 		ctxStr := fmt.Sprintf("ctx: %s/%s %s",
-			formatTokens(s.totalUsage.InputTokens),
-			formatTokens(s.contextWindow),
+			agent.FormatTokens(s.totalUsage.InputTokens),
+			agent.FormatTokens(s.contextWindow),
 			formatPercent(pct))
 		parts = append(parts, usageColorStyle(pct).Render(ctxStr))
 	}
@@ -161,16 +162,6 @@ func formatPercent(pct float64) string {
 		return "~100%"
 	}
 	return fmt.Sprintf("%.0f%%", pct)
-}
-
-func formatTokens(n int64) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	}
-	if n >= 1_000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
-	}
-	return fmt.Sprintf("%d", n)
 }
 
 // formatCostCNY formats a cost value in CNY for display in the statusbar.

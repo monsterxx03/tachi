@@ -32,7 +32,6 @@
 | `/usage` | 纯计算 | ✅ | `ComputeSessionUsage`，无需 LLM |
 | `/skill` | 管理操作 + LLM | ✅ | `list` 可用；`<name>` 可激活并调 LLM |
 | `/transcript` | 生成报表 | ⚠️ | 可生成 HTML，但编辑器未必支持打开 |
-| `/forget` | 内存管理 | ✅ | `list` / `<id>` 直接操作 |
 
 ### 2.2 ACP 当前缺失
 
@@ -521,18 +520,7 @@ func handleACPSkill(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 }
 ```
 
-#### 3.4.7 `/forget`
-
-```
-输入: list | <id>
-逻辑:
-  - list: memory.Backend.Recall(ctx, "", 20) → 列举
-  - <id>: memory.Backend.Forget(ctx, id) → 确认
-```
-
-纯计算，不调 LLM。与 `/usage` 同类。
-
-#### 3.4.8 `/transcript`
+#### 3.4.7 `/transcript`
 
 ```
 输入: (无参数)
@@ -604,12 +592,6 @@ var acpCommands = []ACPSlashCommand{
         Description: "List or activate skills",
         InputHint:   "list | <name> [args]",
         Handler:     handleACPSkill,
-    },
-    {
-        Name:        "/forget",
-        Description: "Forget specific memories (list or <id>)",
-        InputHint:   "list | <id>",
-        Handler:     handleACPForget,
     },
     {
         Name:        "/transcript",
@@ -718,7 +700,6 @@ func handleACPCompact(ctx, sess, conn, args) (acp.StopReason, error)
 func handleACPUsage(ctx, sess, conn, args) (acp.StopReason, error)
 func handleACPMCP(ctx, sess, conn, args) (acp.StopReason, error)
 func handleACPSkill(ctx, sess, conn, args) (acp.StopReason, error)
-func handleACPForget(ctx, sess, conn, args) (acp.StopReason, error)
 func handleACPTranscript(ctx, sess, conn, args) (acp.StopReason, error)
 ```
 
@@ -803,7 +784,6 @@ type ACPSession struct {
 
 - [ ] `/usage` handler
 - [ ] `/mcp list` + `/mcp reconnect` handler
-- [ ] `/forget list` + `/forget <id>` handler
 - [ ] `/transcript` handler
 - [ ] `/skill list` handler
 - [ ] 验证：各命令返回正确结果，无需 LLM 调用
@@ -886,7 +866,7 @@ func handleACPUsage(ctx context.Context, ...) {
 | `agent/acp/stream.go` | 复用 `streamToACP()`，部分 handler（如 compact）可能需要 `streamAndCollectCompact` 变体 |
 | `agent/compact.go` | 复用 `BuildCompactInstruction()`、`FinalizeCompact()`、`DrainCompactEvents()` |
 | `agent/usage.go` | 复用 `ComputeSessionUsage()` |
-| `agent/agent_memory.go` | 复用 `MemoryBackend().Recall()` / `Forget()` |
+| `agent/agent_memory.go` | 不变 |
 | `agent/agent_skill.go` | 复用 `SkillStore()`、`ActivateSkill()`、`IsSkillActive()` |
 | `agent/agent_provider.go` | 复用 `CommitProvider()` |
 | `agent/acp/permission.go` | 不变——slash command handler 内部运行的工具调用仍走 permission handler |

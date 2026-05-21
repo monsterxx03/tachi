@@ -20,30 +20,9 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// InitPromptTemplate is the prompt sent to LLM to generate .tachi.md
-const InitPromptTemplate = `Create (or improve) a .tachi.md file at the repo root. This file is read by future coding agent instances — write for agents, not humans. Keep it under 200 lines, terse and dense.
-
-What to include:
-1. Build, lint, test commands (including how to run a single test).
-2. High-level architecture — the "big picture" that requires reading multiple files to discover. Use compact formats (tables, one-liners, signatures) over prose.
-
-Rules:
-- If .tachi.md exists, read it first and improve it in-place.
-- No generic advice ("write tests", "be helpful", "don't hardcode secrets").
-- No listing every file/dir — focus on relationships and non-obvious design decisions.
-- No made-up sections ("Common Tasks", "Tips", "Support").
-- If .cursor/rules/, .cursorrules, or .github/copilot-instructions.md exist, extract their key constraints.
-- If README.md exists, extract its essential info.
-- Use the WriteFile tool to write the result.
-
-Gather context first:
-  git status
-  git branch --show-current
-  git log --oneline -5
-  find . -maxdepth 1 -name 'Makefile' -o -name 'go.mod' -o -name 'package.json' -o -name 'README.md' -o -name '.cursorrules' -o -name 'CLAUDE.md' 2>/dev/null
-  ls -la
-
-Then read key files, understand the architecture, and produce the .tachi.md.`
+// InitPromptTemplate is the prompt sent to LLM to generate .tachi.md.
+// Deprecated: use agent.InitPromptTemplate instead.
+var InitPromptTemplate = agent.InitPromptTemplate
 
 type Command struct {
 	Name        string
@@ -729,25 +708,25 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 	// Token usage
 	u := report.Usage
 	sb.WriteString("**Token Usage**\n")
-	sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", formatTokens(u.InputTokens)))
+	sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", agent.FormatTokens(u.InputTokens)))
 	if u.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", formatTokens(u.CacheReadInputTokens)))
+		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", agent.FormatTokens(u.CacheReadInputTokens)))
 	}
 	if u.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", formatTokens(u.CacheCreationInputTokens)))
+		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", agent.FormatTokens(u.CacheCreationInputTokens)))
 	}
 	cacheMissInput := u.InputTokens - u.CacheReadInputTokens
 	if cacheMissInput < 0 {
 		cacheMissInput = 0
 	}
 	if cacheMissInput != u.InputTokens {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", formatTokens(cacheMissInput)))
+		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", agent.FormatTokens(cacheMissInput)))
 	}
-	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokens(u.OutputTokens)))
-	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", formatTokens(u.InputTokens+u.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", agent.FormatTokens(u.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
 	if report.ContextWindow > 0 && u.InputTokens > 0 {
 		pct := float64(u.InputTokens) / float64(report.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", formatTokens(u.InputTokens), formatTokens(report.ContextWindow), pct))
+		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.InputTokens), agent.FormatTokens(report.ContextWindow), pct))
 	}
 
 	// Cost
@@ -999,7 +978,7 @@ func (m *Model) sendInitCommand() tea.Cmd {
 	m.cancelFunc = cancel
 
 	m.streamGen++
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, InitPromptTemplate, m.systemPrompt, m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, agent.InitPromptTemplate, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

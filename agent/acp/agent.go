@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -144,12 +145,37 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, resolved.Provider.Type, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, cwd, resolved.Provider.Type, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Wire up permission handler for this session
 	if t.conn != nil {
 		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
 	}
+
+	// Defer available commands notification to avoid a race condition on the
+	// client side: the session/update notification must arrive AFTER the
+	// session/new response, because client-side ACP libraries (e.g. agentic.nvim)
+	// subscribe to session updates only *after* receiving the session/new
+	// response callback. If the notification arrives first, the subscriber
+	// hasn't been registered yet and the update gets silently dropped.
+	//
+	// Using time.AfterFunc(0, ...) ensures the notification is sent from a
+	// separate goroutine, so the NewSession response (written synchronously
+	// by the SDK after this function returns) hits the wire first.
+	acpCommands := buildACPAvailableCommands(aiAgent)
+	sessID := acp.SessionId(sess.ID)
+	time.AfterFunc(0, func() {
+		if t.conn != nil {
+			_ = t.conn.SessionUpdate(context.Background(), acp.SessionNotification{
+				SessionId: sessID,
+				Update: acp.SessionUpdate{
+					AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+						AvailableCommands: acpCommands,
+					},
+				},
+			})
+		}
+	})
 
 	t.logger.Log("ACP: session created id=%s", sess.ID)
 	return acp.NewSessionResponse{
@@ -182,6 +208,17 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 
 	// Convert ACP content blocks to Tachi message
 	userMsg := convertContentBlocks(req.Prompt)
+
+	// ---- Slash command interception ----
+	if cmd, args := parseSlashCommand(userMsg, sess.agent); cmd != nil {
+		t.logger.Log("ACP: slash command detected: %s (args=%q)", cmd.Name, args)
+		stopReason, err := cmd.Handler(promptCtx, sess, t.conn, args)
+		if err != nil {
+			return acp.PromptResponse{}, err
+		}
+		return acp.PromptResponse{StopReason: stopReason}, nil
+	}
+	// ---- END ----
 
 	// Build history from session
 	var history []llm.Message
@@ -372,7 +409,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent.SetSessionManager(diskMgr)
 
 	// Create ACP session with existing disk session manager
-	sess := t.sessions.New(ctx, cwd, provType, aiAgent, mcpMgr, diskMgr)
+	sess := t.sessions.New(ctx, cwd, provType, t.cfg, aiAgent, mcpMgr, diskMgr)
 
 	// Wire up permission handler
 	if t.conn != nil {

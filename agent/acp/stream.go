@@ -110,6 +110,10 @@ func mapToolKind(toolName string) acp.ToolKind {
 		return acp.ToolKindEdit
 	case tools.ToolNameBash:
 		return acp.ToolKindExecute
+	case tools.ToolNameGlob, tools.ToolNameGrep:
+		return acp.ToolKindSearch
+	case tools.ToolNameWebSearch, tools.ToolNameWebFetch:
+		return acp.ToolKindFetch
 	default:
 		return ""
 	}

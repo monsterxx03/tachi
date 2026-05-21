@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -16,6 +17,7 @@ type ACPSession struct {
 	ID           string
 	cwd          string
 	providerType string
+	cfg          *config.Config // for slash command handler access (provider resolution, language, etc.)
 
 	agent   *agent.AIAgent
 	mcpMgr  *mcp.Manager
@@ -63,6 +65,7 @@ func (sm *ACPSessionManager) New(
 	parentCtx context.Context,
 	cwd string,
 	providerType string,
+	cfg *config.Config,
 	aiAgent *agent.AIAgent,
 	mcpMgr *mcp.Manager,
 	sessMgr *session.Manager,
@@ -83,6 +86,7 @@ func (sm *ACPSessionManager) New(
 		ID:           id,
 		cwd:          cwd,
 		providerType: providerType,
+		cfg:          cfg,
 		agent:        aiAgent,
 		mcpMgr:       mcpMgr,
 		sessMgr:      sessMgr,
