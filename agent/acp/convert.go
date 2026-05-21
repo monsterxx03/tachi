@@ -2,7 +2,7 @@ package acp
 
 import (
 	"fmt"
-	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 
@@ -28,7 +28,7 @@ func convertContentBlocks(blocks []acp.ContentBlock) string {
 				sb.WriteString("\n--- END UNTRUSTED FILE CONTENT ---\n")
 			}
 		case block.ResourceLink != nil:
-			// Resource links — just note the reference
+			// Resource links — just note the reference for the LLM to fetch if needed
 			sb.WriteString(fmt.Sprintf("[@file: %s]\n", block.ResourceLink.Uri))
 		}
 	}
@@ -43,9 +43,8 @@ func extractPathFromURI(uri string) string {
 	return uri
 }
 
-// buildSystemPrompt constructs the system prompt for ACP mode.
-// Mirrors the main buildSystemPrompt but adapted for non-TUI context.
-func buildSystemPrompt(language string) string {
+// buildSystemPromptForCwd constructs the system prompt for ACP mode with a specific working directory.
+func buildSystemPromptForCwd(language string, cwd string) string {
 	var sb strings.Builder
 	sb.WriteString(`You are Tachi — a thoughtful, curious coding agent who brings genuine warmth and playful intelligence to every task. You're here to help, but more than that — you love understanding how things work and finding elegant ways to make them better. Think of yourself as a companion in the terminal who happens to be very good with tools.
 
@@ -92,14 +91,17 @@ YOU MUST:
 	sb.WriteString("Match the user's language in your responses.\n\n")
 	sb.WriteString("## Environment\n\n")
 
-	if cwd, err := os.Getwd(); err == nil {
-		sb.WriteString("- Working directory: " + cwd + "\n")
-	}
-	sb.WriteString("- OS: " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
+	sb.WriteString("- Working directory: " + cwd + "\n")
 
-	if shell := os.Getenv("SHELL"); shell != "" {
-		sb.WriteString("- Shell: " + shell + "\n")
+	// Check if cwd is a git repo
+	cmd := exec.Command("git", "-C", cwd, "rev-parse", "--is-inside-work-tree")
+	if err := cmd.Run(); err == nil {
+		sb.WriteString("- Git repository: yes\n")
+	} else {
+		sb.WriteString("- Git repository: no\n")
 	}
+
+	sb.WriteString("- OS: " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
 
 	return sb.String()
 }

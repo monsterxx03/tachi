@@ -185,6 +185,22 @@ func (c *CronConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// ACPConfig holds configuration for the ACP (Agent Client Protocol) agent mode.
+type ACPConfig struct {
+	// ConnectConfiguredMCP controls whether to connect MCP servers from config.yaml
+	// when a new ACP session starts. Defaults to true.
+	ConnectConfiguredMCP *bool `yaml:"connect_configured_mcp"`
+	// MCPConflictPolicy determines what happens when an editor sends an MCP server
+	// with the same name as one in config.yaml. "client_wins" (default) uses the
+	// editor's version; "agent_wins" keeps the config.yaml version.
+	MCPConflictPolicy string `yaml:"mcp_conflict_policy" default:"client_wins"`
+}
+
+// ShouldConnectConfiguredMCP returns whether to connect config.yaml MCP servers in ACP mode.
+func (c *ACPConfig) ShouldConnectConfiguredMCP() bool {
+	return c.ConnectConfiguredMCP == nil || *c.ConnectConfiguredMCP
+}
+
 // CompactTimeoutDefault is the default timeout for /compact operations.
 const CompactTimeoutDefault = 5 * time.Minute
 
@@ -321,6 +337,7 @@ type Config struct {
 	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
 	Compact                CompactConfig                `yaml:"compact"`                         // /compact command configuration
 	Cron                   CronConfig                   `yaml:"cron"`                            // Cron scheduler (channel mode)
+	ACP                    ACPConfig                    `yaml:"acp"`                             // ACP agent configuration
 }
 
 func DefaultConfig() *Config {

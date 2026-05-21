@@ -10,7 +10,9 @@ import (
 
 // buildPermissionHandler creates a PermissionHandler that delegates to the ACP
 // client's RequestPermission flow. It returns whether the user approved the action.
-func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string) agent.PermissionHandler {
+// If the user selects "allow_all", the agent's permission mode is switched to Skip
+// for the remainder of the session.
+func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string, aiAgent *agent.AIAgent) agent.PermissionHandler {
 	return func(ctx context.Context, toolName, toolID, diff, args string) (bool, error) {
 		// Build content to show in the permission dialog
 		var content []acp.ToolCallContent
@@ -57,8 +59,14 @@ func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string) age
 			return false, nil
 		}
 
-		// "allow_all" could be used to switch to PermissionModeSkip,
-		// but that requires access to the AIAgent — handled externally if needed.
-		return resp.Outcome.Selected.OptionId == "allow" || resp.Outcome.Selected.OptionId == "allow_all", nil
+		optionID := resp.Outcome.Selected.OptionId
+
+		// "allow_all" → switch to PermissionModeSkip for the rest of this session
+		if optionID == "allow_all" {
+			aiAgent.SetPermissionMode(agent.PermissionModeSkip)
+			return true, nil
+		}
+
+		return optionID == "allow", nil
 	}
 }

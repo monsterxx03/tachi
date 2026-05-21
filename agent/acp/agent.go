@@ -12,6 +12,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -123,6 +124,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	if smErr != nil {
 		t.logger.Log("ACP: session manager init warning: %v", smErr)
 	} else {
+		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
 		sm.New(resolved.Provider.Type, resolved.Provider.Model, cwd)
 		aiAgent.SetSessionManager(sm)
 	}
@@ -132,7 +134,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 
 	// Wire up permission handler for this session
 	if t.conn != nil {
-		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID))
+		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
 	}
 
 	t.logger.Log("ACP: session created id=%s", sess.ID)
@@ -155,11 +157,14 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
-	// Create cancellable prompt context
+	// Create cancellable prompt context with working directory
 	promptCtx, promptCancel := context.WithCancel(sess.ctx)
 	defer promptCancel()
 	sess.setPromptCancel(promptCancel)
 	defer sess.setPromptCancel(nil)
+
+	// Bind session's working directory to context so tools resolve relative paths correctly
+	promptCtx = wdctx.WithDir(promptCtx, sess.cwd)
 
 	// Convert ACP content blocks to Tachi message
 	userMsg := convertContentBlocks(req.Prompt)
@@ -176,8 +181,8 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 		}
 	}
 
-	// Build system prompt
-	systemPrompt := buildSystemPrompt(t.cfg.Language)
+	// Build system prompt (use session cwd for environment info)
+	systemPrompt := buildSystemPromptForCwd(t.cfg.Language, sess.cwd)
 
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{
@@ -224,22 +229,61 @@ func (t *TachiAgent) CloseSession(_ context.Context, req acp.CloseSessionRequest
 	return acp.CloseSessionResponse{}, nil
 }
 
-// ListSessions lists all known ACP sessions.
+// ListSessions lists active in-memory sessions, optionally filtered by cwd.
+// Also includes recent sessions from disk that match the filter.
 func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
 	t.logger.Log("ACP: ListSessions called")
 
+	// Start with in-memory sessions
 	sessions := t.sessions.List()
 	infos := make([]acp.SessionInfo, 0, len(sessions))
+	inMemory := make(map[string]bool)
+
 	for _, sess := range sessions {
+		if req.Cwd != nil && *req.Cwd != sess.cwd {
+			continue
+		}
 		info := acp.SessionInfo{
 			SessionId: acp.SessionId(sess.ID),
 			Cwd:       sess.cwd,
 		}
-		// Filter by cwd if specified
-		if req.Cwd != nil && *req.Cwd != sess.cwd {
-			continue
+		if sess.sessMgr != nil {
+			if cur := sess.sessMgr.Current(); cur != nil {
+				if cur.Title != "" {
+					info.Title = &cur.Title
+				}
+				ts := cur.UpdatedAt.Format("2006-01-02T15:04:05Z")
+				info.UpdatedAt = &ts
+			}
 		}
 		infos = append(infos, info)
+		inMemory[sess.ID] = true
+	}
+
+	// Also scan disk for recent sessions not currently in-memory
+	diskMgr, err := session.NewManager()
+	if err == nil {
+		diskSessions, listErr := diskMgr.List()
+		if listErr == nil {
+			for _, ds := range diskSessions {
+				if inMemory[ds.ID] {
+					continue
+				}
+				if req.Cwd != nil && *req.Cwd != ds.WorkingDir {
+					continue
+				}
+				info := acp.SessionInfo{
+					SessionId: acp.SessionId(ds.ID),
+					Cwd:       ds.WorkingDir,
+				}
+				if ds.Title != "" {
+					info.Title = &ds.Title
+				}
+				ts := ds.UpdatedAt.Format("2006-01-02T15:04:05Z")
+				info.UpdatedAt = &ts
+				infos = append(infos, info)
+			}
+		}
 	}
 
 	return acp.ListSessionsResponse{
@@ -247,15 +291,81 @@ func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest
 	}, nil
 }
 
-// ResumeSession resumes an existing session.
-func (t *TachiAgent) ResumeSession(_ context.Context, req acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	_, ok := t.sessions.Get(string(req.SessionId))
-	if !ok {
-		return acp.ResumeSessionResponse{}, fmt.Errorf("session not found: %s", req.SessionId)
+// ResumeSession resumes an existing session. If the session is still in-memory,
+// it's simply acknowledged. If not, we attempt to reload from disk.
+func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
+	t.logger.Log("ACP: ResumeSession called for session %s", req.SessionId)
+
+	// Check if already in memory
+	if _, ok := t.sessions.Get(string(req.SessionId)); ok {
+		return acp.ResumeSessionResponse{}, nil
 	}
 
-	t.logger.Log("ACP: ResumeSession called for session %s", req.SessionId)
-	// Session is still in memory — just acknowledge
+	// Try to load from disk
+	diskMgr, err := session.NewManager()
+	if err != nil {
+		return acp.ResumeSessionResponse{}, fmt.Errorf("session manager: %w", err)
+	}
+
+	sessionID := string(req.SessionId)
+	loaded, err := diskMgr.Load(sessionID)
+	if err != nil {
+		return acp.ResumeSessionResponse{}, fmt.Errorf("load session %s: %w", sessionID, err)
+	}
+
+	cwd := req.Cwd
+	if cwd == "" {
+		cwd = loaded.WorkingDir
+	}
+
+	// Rebuild AIAgent for this resumed session
+	resolved, err := config.Resolve(t.cfg, config.CLIFlags{})
+	if err != nil {
+		return acp.ResumeSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
+	}
+
+	// Use session's original provider if available
+	provType := resolved.Provider.Type
+	provModel := resolved.Provider.Model
+	if loaded.Provider != "" {
+		provType = loaded.Provider
+	}
+	if loaded.Model != "" {
+		provModel = loaded.Model
+	}
+
+	provider, err := llm.NewProvider(
+		provType,
+		resolved.Provider.APIKey,
+		resolved.Provider.BaseURL,
+		provModel,
+	)
+	if err != nil {
+		return acp.ResumeSessionResponse{}, fmt.Errorf("create provider: %w", err)
+	}
+
+	aiAgent := agent.NewAIAgent(provider, provModel, 0)
+	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	aiAgent.SetTitleGenEnabled(false)
+
+	mcpMgr, cfgErr := aiAgent.Configure(ctx, t.cfg)
+	if cfgErr != nil {
+		t.logger.Log("ACP: resume configure warning: %v", cfgErr)
+	}
+
+	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	aiAgent.SetSessionManager(diskMgr)
+
+	// Create ACP session with existing disk session manager
+	sess := t.sessions.New(ctx, cwd, provType, aiAgent, mcpMgr, diskMgr)
+
+	// Wire up permission handler
+	if t.conn != nil {
+		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
+	}
+
+	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
 	return acp.ResumeSessionResponse{}, nil
 }
 
