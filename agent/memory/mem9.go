@@ -302,6 +302,10 @@ func stripNoiseTags(s string) string {
 				break
 			}
 			s = strings.TrimSpace(s[:start] + s[start+end+len(endTag):])
+			// Collapse consecutive newlines from block removal
+			for strings.Contains(s, "\n\n") {
+				s = strings.ReplaceAll(s, "\n\n", "\n")
+			}
 		}
 	}
 	return s
