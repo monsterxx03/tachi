@@ -13,7 +13,10 @@ import (
 
 	"github.com/urfave/cli/v3"
 
+	acp "github.com/coder/acp-go-sdk"
+
 	"github.com/monsterxx03/tachi/agent"
+	acppkg "github.com/monsterxx03/tachi/agent/acp"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
@@ -189,6 +192,13 @@ func main() {
 				Usage:  "Start all enabled channels from config (e.g., weixin)",
 				Flags:  commonFlags,
 				Action: runChannels,
+			},
+			{
+				Name:  "acp",
+				Usage: "Run as ACP agent (JSON-RPC 2.0 over stdio)",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					return runACPAgent(ctx)
+				},
 			},
 			{
 				Name:  "transcript",
@@ -605,6 +615,36 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	// Block until context is cancelled.
 	<-ctx.Done()
 	fmt.Println("[channel] shutting down...")
+	return nil
+}
+
+// ── ACP Agent ────────────────────────────────────────────────────────────────
+
+func runACPAgent(ctx context.Context) error {
+	// Initialize debug logging (stdout is reserved for JSON-RPC, use file logging).
+	if err := debuglog.Init(config.LogsDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "tachi: warning: failed to init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	fmt.Fprintf(os.Stderr, "tachi: ACP agent started (version %s)\n", Version)
+
+	// Create TachiAgent (AIAgent instances are created per-session in NewSession)
+	tachiAgent := acppkg.NewTachiAgent(cfg, Version)
+	defer tachiAgent.CloseAll()
+
+	// Start SDK connection (blocks until stdin EOF)
+	conn := acp.NewAgentSideConnection(tachiAgent, os.Stdout, os.Stdin)
+	tachiAgent.SetConnection(conn)
+
+	// Wait for connection to end (editor closed, stdin EOF)
+	<-conn.Done()
+	fmt.Fprintf(os.Stderr, "tachi: ACP agent shutting down\n")
 	return nil
 }
 

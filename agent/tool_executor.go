@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -279,15 +280,33 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		}
 
 		if tr.Status == tools.ToolResultPendingConfirm {
-			if a.skipEditConfirm {
-				a.logger.Log("Agent: tool %s skipping confirmation (skip_edit_confirm=true)", tc.Function.Name)
+			switch a.permissionMode {
+			case PermissionModeSkip:
+				a.logger.Log("Agent: tool %s skipping confirmation (permission_mode=skip)", tc.Function.Name)
 				confirmStart := time.Now()
 				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
 				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 				if err != nil {
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
 				}
-			} else {
+
+			case PermissionModeExternal:
+				a.logger.Log("Agent: tool %s requesting external permission, diff length: %d", tc.Function.Name, len(tr.Diff))
+				approved, permErr := a.permissionHandler(ctx, tc.Function.Name, tc.ID, tr.Diff, tr.Args)
+				if permErr != nil {
+					tr = tools.ToolResult{Status: tools.ToolResultError, Err: permErr}
+				} else if !approved {
+					tr = tools.ToolResult{Status: tools.ToolResultError, Err: errors.New("permission denied by client")}
+				} else {
+					confirmStart := time.Now()
+					output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+					tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
+					if err != nil {
+						tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
+					}
+				}
+
+			default: // PermissionModeTUI
 				a.logger.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
 				ch <- AgentEvent{
 					Type:     AgentEventToolConfirmation,

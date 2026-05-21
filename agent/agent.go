@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -35,6 +36,23 @@ func (b *IterationBudget) consume() bool {
 	return false
 }
 
+// PermissionMode controls how tool confirmation requests are handled.
+type PermissionMode int
+
+const (
+	// PermissionModeTUI emits events and blocks on confirmRespCh (interactive TUI).
+	PermissionModeTUI PermissionMode = iota
+	// PermissionModeSkip auto-approves all confirmations (subagent, channel, tachi run).
+	PermissionModeSkip
+	// PermissionModeExternal delegates to an external handler (ACP).
+	PermissionModeExternal
+)
+
+// PermissionHandler is called by PermissionModeExternal to decide tool execution.
+// It receives the tool name, tool call ID, diff preview, and raw args.
+// Returns (approved, error).
+type PermissionHandler func(ctx context.Context, toolName, toolID, diff, args string) (bool, error)
+
 type AIAgent struct {
 	model              string
 	provider           llm.Provider
@@ -44,7 +62,8 @@ type AIAgent struct {
 	confirmRespCh      chan bool
 	askUserRespCh      chan tools.AskUserResult
 	steerRespCh        chan string // TUI → agent: pending input to inject at steer point
-	skipEditConfirm    bool
+	permissionMode     PermissionMode
+	permissionHandler  PermissionHandler
 	sessionManager     *session.Manager
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
@@ -144,8 +163,24 @@ func (a *AIAgent) Model() string {
 	return a.model
 }
 
+// SetPermissionMode sets how tool confirmation requests are handled.
+func (a *AIAgent) SetPermissionMode(mode PermissionMode) {
+	a.permissionMode = mode
+}
+
+// SetPermissionHandler sets the external permission handler for PermissionModeExternal.
+func (a *AIAgent) SetPermissionHandler(h PermissionHandler) {
+	a.permissionHandler = h
+}
+
+// SetSkipEditConfirm is a backward-compatible helper that maps to PermissionMode.
+// Deprecated: Use SetPermissionMode instead.
 func (a *AIAgent) SetSkipEditConfirm(skip bool) {
-	a.skipEditConfirm = skip
+	if skip {
+		a.permissionMode = PermissionModeSkip
+	} else {
+		a.permissionMode = PermissionModeTUI
+	}
 }
 
 // SetSkipMemoryRecall suppresses memory recall for non-interactive modes like "tachi run".
