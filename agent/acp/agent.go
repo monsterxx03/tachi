@@ -116,6 +116,20 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		t.logger.Log("ACP: agent configure warning: %v", err)
 	}
 
+	// Connect editor-provided MCP servers (if any)
+	if len(req.McpServers) > 0 && mcpMgr != nil {
+		editorServers := convertMCPServers(req.McpServers, t.cfg.ACP.MCPConflictPolicy, t.cfg.MCPServers)
+		if len(editorServers) > 0 {
+			editorTools, errs := mcpMgr.ConnectAll(ctx, editorServers)
+			for _, e := range errs {
+				t.logger.Log("ACP: editor MCP connect error: %v", e)
+			}
+			for _, tool := range editorTools {
+				aiAgent.RegisterTool(tool)
+			}
+		}
+	}
+
 	// Remove AskUser tool — ACP has no interactive question flow
 	aiAgent.UnregisterTool(tools.ToolNameAskUser)
 
