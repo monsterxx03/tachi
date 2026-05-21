@@ -136,6 +136,10 @@ func listCwdImmediate(dir string) ([]atFileMatch, error) {
 		return strings.Compare(strings.ToLower(a.Path), strings.ToLower(b.Path))
 	})
 
+	if len(matches) > atFileMaxResults {
+		matches = matches[:atFileMaxResults]
+	}
+
 	return matches, nil
 }
 
