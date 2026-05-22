@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
@@ -155,13 +157,22 @@ func (i *InputArea) pastePlaceholder(lines int) string {
 	return fmt.Sprintf("[Pasted %d lines]", lines)
 }
 
-// handlePaste intercepts a clipboard paste. If the content exceeds
-// pasteThreshold lines, the full text is stored in pasteBuffer and a compact
-// placeholder is shown instead. Otherwise the text is inserted normally.
+// handlePaste intercepts a clipboard paste. If the content looks like one or
+// more file paths that exist on disk (e.g. dragged-and-dropped from Finder), it
+// converts them to @-references for the existing @-file expansion system.
+// Otherwise it falls through to the large-paste threshold handling.
 func (i *InputArea) handlePaste(text string) (InputArea, tea.Cmd) {
 	// Always clear any existing pasteBuffer first — each paste replaces
 	// the previous one (no stacking).
 	i.expandPasteBuffer()
+
+	// File drag-and-drop detection: if the pasted text looks like file
+	// path(s) and they exist on disk, wrap them as @-references.
+	if wrapped, ok := i.wrapDroppedFiles(text); ok {
+		i.logger.Log("input: detected dragged file(s): %q → %q", text, wrapped)
+		i.textarea.InsertString(wrapped)
+		return *i, nil
+	}
 
 	lineCount := strings.Count(text, "\n") + 1
 	if lineCount <= i.pasteThreshold || i.pasteThreshold <= 0 {
@@ -191,6 +202,99 @@ func (i *InputArea) expandPasteBuffer() {
 	i.textarea.SetValue(val)
 	i.textarea.CursorEnd()
 	i.pasteBuffer = ""
+}
+
+// wrapDroppedFiles checks if the pasted text looks like one or more file paths
+// dragged from the system (Finder, file manager, etc.). If all parts resolve to
+// existing files or directories on disk, it converts them to @-references (e.g.,
+// "/Users/me/proj/foo.go" → "@foo.go") for the @-file expansion system.
+//
+// Returns the transformed text and true on success, or ("", false) to fall
+// through to normal paste handling.
+func (i *InputArea) wrapDroppedFiles(text string) (string, bool) {
+	text = strings.TrimSpace(text)
+	if text == "" {
+		return "", false
+	}
+
+	// Split by unescaped spaces. This handles file names with spaces,
+	// which terminals like kitty and iTerm2 escape with backslash.
+	parts := splitUnescaped(text)
+	if len(parts) == 0 {
+		return "", false
+	}
+
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+
+	var wrapped []string
+	for _, part := range parts {
+		part = strings.TrimSpace(part)
+		if part == "" {
+			continue
+		}
+
+		// Expand ~ to home directory (some terminals may paste ~ paths)
+		resolved := part
+		if strings.HasPrefix(resolved, "~") {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return "", false
+			}
+			resolved = filepath.Join(home, resolved[1:])
+		}
+
+		// Verify the path actually exists on disk
+		if _, err := os.Stat(resolved); err != nil {
+			return "", false
+		}
+
+		// Convert to relative path if possible (cleaner @-references)
+		rel, err := filepath.Rel(cwd, resolved)
+		if err == nil && !strings.HasPrefix(rel, "..") {
+			wrapped = append(wrapped, "@"+rel)
+		} else {
+			// Outside cwd — use the original text
+			wrapped = append(wrapped, "@"+part)
+		}
+	}
+
+	if len(wrapped) > 0 {
+		return strings.Join(wrapped, " "), true
+	}
+	return "", false
+}
+
+// splitUnescaped splits text by spaces, respecting backslash-escaped spaces.
+// This handles file paths with spaces as produced by kitty, iTerm2, and other
+// terminals when dragging files (e.g., "/path/to/my\ file.txt").
+func splitUnescaped(text string) []string {
+	var parts []string
+	var current strings.Builder
+	escaped := false
+	for _, ch := range text {
+		if escaped {
+			current.WriteRune(ch)
+			escaped = false
+			continue
+		}
+		if ch == '\\' {
+			escaped = true
+			continue
+		}
+		if ch == ' ' {
+			parts = append(parts, current.String())
+			current.Reset()
+			continue
+		}
+		current.WriteRune(ch)
+	}
+	if current.Len() > 0 {
+		parts = append(parts, current.String())
+	}
+	return parts
 }
 
 func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
