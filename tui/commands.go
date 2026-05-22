@@ -958,7 +958,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 
 	m.streamGen++
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
-		commitUserPrompt(commitModel), commitOpts)
+		agent.CommitUserPrompt(commitModel), commitOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),
