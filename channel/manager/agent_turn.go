@@ -270,6 +270,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	prov, resolved := m.getProvider()
 
 	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
+	aiAgent.SetProcessManager(m.processManager) // shared PM survives individual turns
 	aiAgent.SetSkipEditConfirm(true)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(m.cfg)

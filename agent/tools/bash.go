@@ -41,6 +41,12 @@ type BashTool struct {
 	processManager *ProcessManager
 }
 
+// NewBashTool creates a BashTool with an optional ProcessManager for
+// background process support. Pass nil to disable background operations.
+func NewBashTool(pm *ProcessManager) *BashTool {
+	return &BashTool{processManager: pm}
+}
+
 func (t BashTool) Name() string { return ToolNameBash }
 func (t BashTool) Description() string {
 	return "Executes a shell command and returns its output. " +
@@ -69,18 +75,21 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	}
 
 	pm := t.processManager
-	if pm == nil {
-		pm = GlobalProcessManager()
-	}
 
 	// list_bg: list all background processes
 	if a.ListBg {
+		if pm == nil {
+			return "", fmt.Errorf("background process management is not available (no ProcessManager configured)")
+		}
 		list := pm.List()
 		return marshalResult(list)
 	}
 
 	// stop_name: stop a background process by name
 	if a.StopName != "" {
+		if pm == nil {
+			return "", fmt.Errorf("background process management is not available (no ProcessManager configured)")
+		}
 		info, err := pm.Stop(a.StopName)
 		if err != nil {
 			return "", err
@@ -90,6 +99,9 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 
 	// background: start a background process
 	if a.Background {
+		if pm == nil {
+			return "", fmt.Errorf("background process management is not available (no ProcessManager configured)")
+		}
 		if a.Command == "" {
 			return "", fmt.Errorf("command is required for background mode")
 		}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
@@ -114,6 +115,11 @@ type Manager struct {
 	threadActMu     sync.Mutex
 	threadActivations map[string]*threadActivation
 
+	// Shared ProcessManager for background processes across all agent turns.
+	// Per-turn AIAgent instances are ephemeral, but background processes must
+	// survive across turns. The Manager owns and cleans up this shared PM.
+	processManager *tools.ProcessManager
+
 	logger *debuglog.Logger
 }
 
@@ -144,13 +150,14 @@ type handlerResult struct {
 func New(mcfg Config) *Manager {
 	wd, _ := os.Getwd()
 	return &Manager{
-		cfg:          mcfg.Cfg,
-		systemPrompt: mcfg.SystemPrompt,
-		providerName: mcfg.ProviderName,
-		modelName:    mcfg.ModelName,
-		sessionStore: mcfg.SessionStore,
-		skillStore:   skill.NewStore(wd),
-		logger:       debuglog.DefaultLogger.WithSource("channel:manager"),
+		cfg:            mcfg.Cfg,
+		systemPrompt:   mcfg.SystemPrompt,
+		providerName:   mcfg.ProviderName,
+		modelName:      mcfg.ModelName,
+		sessionStore:   mcfg.SessionStore,
+		skillStore:     skill.NewStore(wd),
+		processManager: tools.NewProcessManager(),
+		logger:         debuglog.DefaultLogger.WithSource("channel:manager"),
 	}
 }
 
@@ -390,4 +397,12 @@ func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo stri
 		return
 	}
 	m.logger.Log("channel: sendToThread — no channel accepted thread %s", threadID)
+}
+
+// Close releases all resources held by the Manager, including killing all
+// tracked background processes. Safe to call multiple times.
+func (m *Manager) Close() {
+	if m.processManager != nil {
+		m.processManager.KillAll()
+	}
 }

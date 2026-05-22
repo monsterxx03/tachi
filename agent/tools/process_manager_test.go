@@ -241,15 +241,9 @@ func TestProcessManager_StopNonExistent(t *testing.T) {
 	}
 }
 
-func TestGlobalProcessManager_Singleton(t *testing.T) {
-	pm1 := GlobalProcessManager()
-	pm2 := GlobalProcessManager()
-	if pm1 != pm2 {
-		t.Error("GlobalProcessManager should return the same instance")
-	}
-}
-
-func TestKillAllBackground_NoManager(t *testing.T) {
-	// Should not panic when no manager exists
-	KillAllBackground()
+func TestProcessManager_CloseCalledFromAgent(t *testing.T) {
+	// Simulates the AIAgent.Close() path: ProcessManager is agent-owned
+	// and KillAll() cleans up tracked background processes.
+	pm := NewProcessManager()
+	pm.KillAll() // should not panic when no processes are tracked
 }

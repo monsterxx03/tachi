@@ -16,7 +16,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	acppkg "github.com/monsterxx03/tachi/agent/acp"
-	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
@@ -248,7 +247,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	if mcpMgr != nil {
 		defer mcpMgr.Close()
 	}
-	defer tools.KillAllBackground()
+	defer aiAgent.Close()
 
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
 
@@ -381,7 +380,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if mcpMgr != nil {
 		defer mcpMgr.Close()
 	}
-	defer tools.KillAllBackground()
+	defer aiAgent.Close()
 
 	prompt := cmd.String("prompt")
 	if prompt == "" {
@@ -559,7 +558,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	// Block until context is cancelled.
 	<-ctx.Done()
 	fmt.Println("[channel] shutting down...")
-	tools.KillAllBackground()
+	mgr.Close()
 	return nil
 }
 
@@ -590,7 +589,6 @@ func runACPAgent(ctx context.Context) error {
 	// Wait for connection to end (editor closed, stdin EOF)
 	<-conn.Done()
 	fmt.Fprintf(os.Stderr, "tachi: ACP agent shutting down\n")
-	tools.KillAllBackground()
 	return nil
 }
 

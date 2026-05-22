@@ -279,23 +279,3 @@ func (pm *ProcessManager) DrainCompleted() []ManagedProcessInfo {
 	})
 	return completed
 }
-
-// ---------------------------------------------------------------------------
-// Global ProcessManager singleton
-// ---------------------------------------------------------------------------
-
-var globalPM = sync.OnceValue(func() *ProcessManager {
-	return NewProcessManager()
-})
-
-// GlobalProcessManager returns the global ProcessManager singleton.
-func GlobalProcessManager() *ProcessManager {
-	return globalPM()
-}
-
-// KillAllBackground stops all background processes managed by the global
-// ProcessManager. Intended for use from agent cleanup paths (agent loop exit,
-// program shutdown).
-func KillAllBackground() {
-	globalPM().KillAll()
-}

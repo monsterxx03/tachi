@@ -48,6 +48,9 @@ func (s *ACPSession) Close() {
 	if s.sessMgr != nil {
 		s.sessMgr.EndCurrent()
 	}
+	if s.agent != nil {
+		s.agent.Close()
+	}
 }
 
 // ACPSessionManager manages all active ACP sessions.

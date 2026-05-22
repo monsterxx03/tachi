@@ -93,6 +93,10 @@ type AIAgent struct {
 	deferredPool  *mcp.DeferredPool  // MCP tools available for search (nil = ToolSearch disabled)
 	discoveredSet *mcp.DiscoveredSet // MCP tools discovered by LLM via MCPSearchTools
 
+	// processManager manages background processes started by BashTool.
+	// Tied to the agent lifecycle — Close() kills all tracked processes.
+	processManager *tools.ProcessManager
+
 	// baseReminders stores the non-skill reminders assembled during Configure.
 	// rebuildSkillCollector uses this to re-apply SkillListReminder on reload.
 	baseReminders []systemreminder.Reminder
@@ -105,6 +109,7 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		maxIterations:   maxIterations,
 		titleGenEnabled: true,
 		toolRegistry:    tools.NewRegistry(),
+		processManager:  tools.NewProcessManager(),
 		confirmRespCh:   make(chan bool, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		logger:          debuglog.DefaultLogger,
@@ -245,7 +250,7 @@ func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.EditTool{})
 	a.toolRegistry.Register(tools.GlobTool{})
 	a.toolRegistry.Register(tools.GrepTool{})
-	a.toolRegistry.Register(tools.BashTool{})
+	a.toolRegistry.Register(tools.NewBashTool(a.processManager))
 	a.toolRegistry.Register(tools.AskUserTool{})
 }
 
@@ -298,6 +303,22 @@ func (a *AIAgent) RestoreToolRegistry(saved map[string]tools.Tool) {
 func (a *AIAgent) ClearToolRegistry() {
 	for _, name := range a.toolRegistry.GetToolNames() {
 		a.toolRegistry.Unregister(name)
+	}
+}
+
+// SetProcessManager injects a ProcessManager for background process tracking.
+// Used by channel Manager to share a single PM across per-turn AIAgent instances.
+// Has no effect after RegisterTools() has already been called, so call it before
+// Configure().
+func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
+	a.processManager = pm
+}
+
+// Close releases resources held by the agent, including killing all tracked
+// background processes. Safe to call on a nil agent.
+func (a *AIAgent) Close() {
+	if a.processManager != nil {
+		a.processManager.KillAll()
 	}
 }
 
