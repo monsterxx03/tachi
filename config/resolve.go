@@ -11,19 +11,6 @@ import (
 // DefaultContextWindow is used when the model is unknown and no override is configured.
 const DefaultContextWindow int64 = 128_000
 
-type CLIFlags struct {
-	Provider         string
-	ProviderSet      bool
-	Model            string
-	ModelSet         bool
-	BaseURL          string
-	BaseURLSet       bool
-	MaxTokens        int
-	MaxTokensSet     bool
-	MaxIterations    int
-	MaxIterationsSet bool
-}
-
 type ResolvedProvider struct {
 	Type          string
 	Model         string
@@ -39,10 +26,10 @@ type ResolvedConfig struct {
 	MaxIterations int
 }
 
-func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
-	providerName := resolveProviderName(cfg, flags)
+func Resolve(cfg *Config) (*ResolvedConfig, error) {
+	providerName := resolveProviderName(cfg)
 	if providerName == "" {
-		return nil, fmt.Errorf("no provider configured; create %s or use --provider", filepath.Join(BaseDir(), "config.yaml"))
+		return nil, fmt.Errorf("no provider configured; create %s", filepath.Join(BaseDir(), "config.yaml"))
 	}
 
 	pCfg := cfg.FindProvider(providerName)
@@ -50,40 +37,19 @@ func Resolve(cfg *Config, flags CLIFlags) (*ResolvedConfig, error) {
 		return nil, fmt.Errorf("provider %q not found in providers list", providerName)
 	}
 
-	overridden := *pCfg
-	if flags.ModelSet {
-		overridden.Model = flags.Model
-	}
-	if flags.BaseURLSet {
-		overridden.BaseURL = flags.BaseURL
-	}
-
-	resolved, err := ResolveProviderConfig(&overridden)
+	resolved, err := ResolveProviderConfig(pCfg)
 	if err != nil {
 		return nil, err
 	}
 
-	maxTokens := cfg.MaxTokens
-	if flags.MaxTokensSet {
-		maxTokens = flags.MaxTokens
-	}
-
-	maxIterations := cfg.GetMaxIterations()
-	if flags.MaxIterationsSet {
-		maxIterations = flags.MaxIterations
-	}
-
 	return &ResolvedConfig{
-		Provider:       *resolved,
-		MaxTokens:      maxTokens,
-		MaxIterations:  maxIterations,
+		Provider:      *resolved,
+		MaxTokens:     cfg.MaxTokens,
+		MaxIterations: cfg.GetMaxIterations(),
 	}, nil
 }
 
-func resolveProviderName(cfg *Config, flags CLIFlags) string {
-	if flags.ProviderSet {
-		return flags.Provider
-	}
+func resolveProviderName(cfg *Config) string {
 	if cfg.Provider != "" {
 		return cfg.Provider
 	}

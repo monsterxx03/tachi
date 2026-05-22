@@ -47,26 +47,6 @@ var commonFlags = []cli.Flag{
 		Name:  "home",
 		Usage: "Base directory for tachi state (default: ~/.tachi)",
 	},
-	&cli.StringFlag{
-		Name:  "provider",
-		Usage: "Provider name from config",
-	},
-	&cli.StringFlag{
-		Name:  "model",
-		Usage: "Model to use",
-	},
-	&cli.StringFlag{
-		Name:  "base-url",
-		Usage: "Base URL for the API",
-	},
-	&cli.IntFlag{
-		Name:  "max-tokens",
-		Usage: "Max tokens for responses",
-	},
-	&cli.IntFlag{
-		Name:  "max-iterations",
-		Usage: "Max agent loop iterations",
-	},
 }
 
 func main() {
@@ -172,34 +152,8 @@ func main() {
 	}
 }
 
-func extractCLIFlags(cmd *cli.Command) config.CLIFlags {
-	var f config.CLIFlags
-	if cmd.IsSet("provider") {
-		f.Provider = cmd.String("provider")
-		f.ProviderSet = true
-	}
-	if cmd.IsSet("model") {
-		f.Model = cmd.String("model")
-		f.ModelSet = true
-	}
-	if cmd.IsSet("base-url") {
-		f.BaseURL = cmd.String("base-url")
-		f.BaseURLSet = true
-	}
-	if cmd.IsSet("max-tokens") {
-		f.MaxTokens = int(cmd.Int("max-tokens"))
-		f.MaxTokensSet = true
-	}
-	if cmd.IsSet("max-iterations") {
-		f.MaxIterations = int(cmd.Int("max-iterations"))
-		f.MaxIterationsSet = true
-	}
-	return f
-}
-
-func resolveProviderFromConfig(cfg *config.Config, cmd *cli.Command) (llm.Provider, *config.ResolvedConfig, error) {
-	flags := extractCLIFlags(cmd)
-	resolved, err := config.Resolve(cfg, flags)
+func resolveProviderFromConfig(cfg *config.Config) (llm.Provider, *config.ResolvedConfig, error) {
+	resolved, err := config.Resolve(cfg)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -228,7 +182,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	provider, resolved, err := resolveProviderFromConfig(cfg, cmd)
+	provider, resolved, err := resolveProviderFromConfig(cfg)
 	if err != nil {
 		return err
 	}
@@ -354,13 +308,13 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
 
-	provider, resolved, err := resolveProviderFromConfig(cfg, cmd)
+	provider, resolved, err := resolveProviderFromConfig(cfg)
 	if err != nil {
 		return err
 	}
 
 	// For single-shot run mode, 0 (unlimited) is capped to the default 50
-	// to prevent runaway loops. Use --max-iterations N to set an explicit limit.
+	// to prevent runaway loops. Set max_iterations in config to set an explicit limit.
 	maxIters := resolved.MaxIterations
 	if maxIters <= 0 {
 		maxIters = config.DefaultMaxIterations

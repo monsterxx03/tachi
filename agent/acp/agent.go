@@ -89,7 +89,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	}
 
 	// Resolve provider from config
-	resolved, err := config.Resolve(t.cfg, config.CLIFlags{})
+	resolved, err := config.Resolve(t.cfg)
 	if err != nil {
 		return acp.NewSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
@@ -375,7 +375,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	}
 
 	// Rebuild AIAgent for this resumed session
-	resolved, err := config.Resolve(t.cfg, config.CLIFlags{})
+	resolved, err := config.Resolve(t.cfg)
 	if err != nil {
 		return acp.ResumeSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
@@ -470,7 +470,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	}
 
 	// Resolve provider from config
-	resolved, err := config.Resolve(t.cfg, config.CLIFlags{})
+	resolved, err := config.Resolve(t.cfg)
 	if err != nil {
 		return acp.LoadSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}

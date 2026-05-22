@@ -9,12 +9,6 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// SetTitleModelProvider sets a dedicated LLM provider for title generation.
-// When nil (the default), title generation falls back to a.truncation-based title.
-func (a *AIAgent) SetTitleModelProvider(provider llm.Provider) {
-	a.titleModelProvider = provider
-}
-
 // SetTitleGenEnabled enables or disables LLM-based title generation.
 func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
 	a.titleGenEnabled = enabled

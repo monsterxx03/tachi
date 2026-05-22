@@ -165,6 +165,7 @@ fi
 # ── Export env vars for the adapter ───────────────────────────────────
 
 export TACHI_BINARY_PATH="$BINARY"
+export TACHI_MAX_ITERATIONS="$MAX_ITERATIONS"
 
 # Model → provider API key mapping
 if [[ "$MODEL" == deepseek* ]] || [[ "$MODEL" == deepseek/* ]]; then
@@ -186,7 +187,6 @@ BASE_FLAGS=(
     --agent-import-path "harbor_adapter.tachi_agent:TachiAgent"
     --model "$MODEL"
     -n "$N_CONCURRENT"
-    --ak "max_iterations=$MAX_ITERATIONS"
     --ak "timeout=$TIMEOUT"
     --ek "keep_containers=True"
 )

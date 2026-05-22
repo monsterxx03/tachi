@@ -246,17 +246,15 @@ func (m *Manager) getProvider() (llm.Provider, *config.ResolvedConfig) {
 func (m *Manager) initProvider() error {
 	if m.initProviderFn == nil {
 		m.initProviderFn = sync.OnceValues(func() (initProviderResult, error) {
-			flags := config.CLIFlags{}
+			// If a channel-specific provider name is configured, override.
+			cfg := m.cfg
 			if m.providerName != "" {
-				flags.Provider = m.providerName
-				flags.ProviderSet = true
-			}
-			if m.modelName != "" {
-				flags.Model = m.modelName
-				flags.ModelSet = true
+				cfgCopy := *m.cfg
+				cfgCopy.Provider = m.providerName
+				cfg = &cfgCopy
 			}
 
-			resolved, err := config.Resolve(m.cfg, flags)
+			resolved, err := config.Resolve(cfg)
 			if err != nil {
 				return initProviderResult{}, fmt.Errorf("resolve config: %w", err)
 			}

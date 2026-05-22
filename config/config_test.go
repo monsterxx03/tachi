@@ -165,7 +165,7 @@ func TestResolve_FullConfig(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg, CLIFlags{})
+	resolved, err := Resolve(cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "anthropic", resolved.Provider.Type)
 	assert.Equal(t, "claude-3", resolved.Provider.Model)
@@ -173,36 +173,6 @@ func TestResolve_FullConfig(t *testing.T) {
 	assert.Equal(t, "sk-from-config", resolved.Provider.APIKey)
 	assert.Equal(t, 8000, resolved.MaxTokens)
 	assert.Equal(t, 5, resolved.MaxIterations)
-}
-
-func TestResolve_FlagOverrides(t *testing.T) {
-	t.Setenv("OPENAI_API_KEY", "")
-	cfg := &Config{
-		Provider:      "test",
-		MaxTokens:     8000,
-		MaxIterations: intPtr(5),
-		Providers: []ProviderConfig{
-			{Name: "test", Type: "openai", Model: "gpt-4", BaseURL: "https://original.com", APIKey: "sk-test"},
-		},
-	}
-
-	flags := CLIFlags{
-		Model:            "gpt-4o",
-		ModelSet:         true,
-		BaseURL:          "https://override.com",
-		BaseURLSet:       true,
-		MaxTokens:        16000,
-		MaxTokensSet:     true,
-		MaxIterations:    20,
-		MaxIterationsSet: true,
-	}
-
-	resolved, err := Resolve(cfg, flags)
-	require.NoError(t, err)
-	assert.Equal(t, "gpt-4o", resolved.Provider.Model)
-	assert.Equal(t, "https://override.com", resolved.Provider.BaseURL)
-	assert.Equal(t, 16000, resolved.MaxTokens)
-	assert.Equal(t, 20, resolved.MaxIterations)
 }
 
 func TestResolve_EnvOverridesAPIKey(t *testing.T) {
@@ -214,7 +184,7 @@ func TestResolve_EnvOverridesAPIKey(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg, CLIFlags{})
+	resolved, err := Resolve(cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "sk-from-env", resolved.Provider.APIKey)
 }
@@ -228,7 +198,7 @@ func TestResolve_MissingAPIKey(t *testing.T) {
 		},
 	}
 
-	_, err := Resolve(cfg, CLIFlags{})
+	_, err := Resolve(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "API key required")
 	assert.Contains(t, err.Error(), "OPENAI_API_KEY")
@@ -242,14 +212,14 @@ func TestResolve_MissingProvider(t *testing.T) {
 		},
 	}
 
-	_, err := Resolve(cfg, CLIFlags{})
+	_, err := Resolve(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
 
 func TestResolve_NoProviderConfigured(t *testing.T) {
 	cfg := DefaultConfig()
-	_, err := Resolve(cfg, CLIFlags{})
+	_, err := Resolve(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no provider configured")
 }
@@ -264,15 +234,15 @@ func TestResolve_SingleProviderAutoSelect(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg, CLIFlags{})
+	resolved, err := Resolve(cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "gpt-4", resolved.Provider.Model)
 }
 
-func TestResolve_FlagSelectsProvider(t *testing.T) {
+func TestResolve_ConfigSelectsProvider(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	cfg := &Config{
-		Provider:      "alpha",
+		Provider:      "beta",
 		MaxTokens:     DefaultMaxTokens,
 		MaxIterations: intPtr(DefaultMaxIterations),
 		Providers: []ProviderConfig{
@@ -281,8 +251,7 @@ func TestResolve_FlagSelectsProvider(t *testing.T) {
 		},
 	}
 
-	flags := CLIFlags{Provider: "beta", ProviderSet: true}
-	resolved, err := Resolve(cfg, flags)
+	resolved, err := Resolve(cfg)
 	require.NoError(t, err)
 	assert.Equal(t, "anthropic", resolved.Provider.Type)
 	assert.Equal(t, "claude-3", resolved.Provider.Model)
@@ -297,7 +266,7 @@ func TestResolve_MissingType(t *testing.T) {
 		},
 	}
 
-	_, err := Resolve(cfg, CLIFlags{})
+	_, err := Resolve(cfg)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no type set")
 }
