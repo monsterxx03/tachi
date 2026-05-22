@@ -221,14 +221,18 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	}
 	// ---- END ----
 
-	// Build history from session
+	// Build history from cache (populated on previous turns) or disk (first turn)
 	var history []llm.Message
-	if sess.sessMgr != nil {
+	if sess.history != nil {
+		history = sess.history
+	} else if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
 			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType)
 			if convErr == nil {
 				history = llmMsgs
+			} else {
+				t.logger.Log("ACP: Prompt ConvertSessionToLLMMessages failed: %v", convErr)
 			}
 		}
 	}
@@ -421,15 +425,16 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 }
 
 // LoadSession creates a new ACP session, optionally restoring a previous
-// Tachi session from disk that matches the working directory.
+// Tachi session from disk.
 //
-// When the editor opens a workspace (e.g., VS Code window, Zed project),
-// it calls LoadSession with the workspace root as Cwd. We scan disk for
-// the most recent Tachi session in that directory and restore it, so the
-// user picks up where they left off. If no matching session exists, a
-// fresh session is created (same as NewSession).
+// Two lookup modes:
+//   - If req.SessionId is provided, loads that specific session (ACP spec path).
+//   - Otherwise, scans disk for the most recent session matching req.Cwd
+//     (fallback for editors that don't track session IDs across restarts).
+//
+// If no matching session exists, a fresh session is created (same as NewSession).
 func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
-	t.logger.Log("ACP: LoadSession called, cwd=%s", req.Cwd)
+	t.logger.Log("ACP: LoadSession called, sessionId=%s, cwd=%s", req.SessionId, req.Cwd)
 
 	cwd := req.Cwd
 	if cwd == "" {
@@ -440,24 +445,60 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	}
 
+	// Try to load an existing session from disk first (before creating provider,
+	// so we can use the session's stored provider/model if available).
+	sm, smErr := session.NewManager()
+	var loaded *session.Session
+	if smErr == nil {
+		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
+
+		if req.SessionId != "" {
+			// Primary path: load by explicit session ID (ACP spec)
+			s, loadErr := sm.Load(string(req.SessionId))
+			if loadErr != nil {
+				t.logger.Log("ACP: LoadSession cannot load sessionId=%s: %v", req.SessionId, loadErr)
+			} else {
+				loaded = s
+				t.logger.Log("ACP: LoadSession loaded by sessionId=%s", req.SessionId)
+			}
+		} else {
+			// Fallback: scan disk by cwd (editors that don't track session IDs)
+			loaded = findLatestSessionByCwd(sm, cwd)
+		}
+	} else {
+		t.logger.Log("ACP: LoadSession session manager init warning: %v", smErr)
+	}
+
 	// Resolve provider from config
 	resolved, err := config.Resolve(t.cfg, config.CLIFlags{})
 	if err != nil {
 		return acp.LoadSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
 
+	// Use session's stored provider/model if available (matches ResumeSession behavior)
+	provType := resolved.Provider.Type
+	provModel := resolved.Provider.Model
+	if loaded != nil {
+		if loaded.Provider != "" {
+			provType = loaded.Provider
+		}
+		if loaded.Model != "" {
+			provModel = loaded.Model
+		}
+	}
+
 	provider, err := llm.NewProvider(
-		resolved.Provider.Type,
+		provType,
 		resolved.Provider.APIKey,
 		resolved.Provider.BaseURL,
-		resolved.Provider.Model,
+		provModel,
 	)
 	if err != nil {
 		return acp.LoadSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
 
 	// Create independent AIAgent
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, 0)
+	aiAgent := agent.NewAIAgent(provider, provModel, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
@@ -484,32 +525,31 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	// Remove AskUser tool
 	aiAgent.UnregisterTool(tools.ToolNameAskUser)
 
-	// Set up session manager — try to find an existing session by cwd
-	sm, smErr := session.NewManager()
-	if smErr != nil {
-		t.logger.Log("ACP: LoadSession session manager init warning: %v", smErr)
-	} else {
-		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
-
-		// Scan disk for the most recent session in this cwd
-		loaded := findLatestSessionByCwd(sm, cwd)
+	// Set session manager on AIAgent
+	if sm != nil {
 		if loaded != nil {
-			t.logger.Log("ACP: LoadSession found existing disk session id=%s", loaded.ID)
-			// Set as current — AIAgent will resume from this session's history
+			// Session already loaded as current — AIAgent will resume from its history
 			aiAgent.SetSessionManager(sm)
 		} else {
-			t.logger.Log("ACP: LoadSession no existing session for cwd=%s, creating new", cwd)
-			sm.New(resolved.Provider.Type, resolved.Provider.Model, cwd)
+			t.logger.Log("ACP: LoadSession no existing session, creating new")
+			sm.New(provType, provModel, cwd)
 			aiAgent.SetSessionManager(sm)
 		}
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, resolved.Provider.Type, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, cwd, provType, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Wire up permission handler
 	if t.conn != nil {
 		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
+	}
+
+	// Replay session history — required by ACP spec for session/load.
+	// Must happen synchronously BEFORE the response so the client receives
+	// all message history before considering the session ready.
+	if loaded != nil && t.conn != nil {
+		replaySessionHistory(context.Background(), t.conn, sess)
 	}
 
 	// Defer available commands notification (see NewSession for rationale)

@@ -289,6 +289,8 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType)
 			if convErr == nil {
 				history = llmMsgs
+			} else {
+				debuglog.DefaultLogger.Log("ACP: ConvertSessionToLLMMessages failed: %v", convErr)
 			}
 		}
 	}
@@ -650,6 +652,8 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType)
 			if convErr == nil {
 				history = llmMsgs
+			} else {
+				debuglog.DefaultLogger.Log("ACP: ConvertSessionToLLMMessages failed: %v", convErr)
 			}
 		}
 	}

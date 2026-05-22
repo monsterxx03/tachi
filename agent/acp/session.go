@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -22,6 +23,10 @@ type ACPSession struct {
 	agent   *agent.AIAgent
 	mcpMgr  *mcp.Manager
 	sessMgr *session.Manager
+
+	// Cached conversation history (llm.Message format), updated after each turn.
+	// Avoids re-reading messages.jsonl from disk on every Prompt.
+	history []llm.Message
 
 	ctx          context.Context
 	cancel       context.CancelFunc

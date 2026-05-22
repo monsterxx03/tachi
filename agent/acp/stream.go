@@ -7,6 +7,8 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // streamToACP consumes the AgentEvent channel and converts events into ACP
@@ -70,6 +72,11 @@ func streamToACP(
 			case agent.AgentEventTurnComplete:
 				if event.Result != nil {
 					stopReason = mapStopReason(event.Result.ExitReason)
+				}
+				// Cache the full message history so subsequent Prompt calls
+				// can reuse it instead of re-reading messages.jsonl from disk.
+				if event.Messages != nil {
+					sess.history = event.Messages
 				}
 
 			case agent.AgentEventSessionTitle:
@@ -141,5 +148,79 @@ func mapStopReason(exitReason string) acp.StopReason {
 		return acp.StopReasonCancelled
 	default:
 		return acp.StopReasonEndTurn
+	}
+}
+
+// replaySessionHistory replays all stored messages from a loaded session as ACP
+// session/update notifications. This satisfies the session/load protocol requirement
+// that the agent MUST replay the entire conversation history to the client.
+func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, sess *ACPSession) {
+	if conn == nil || sess.sessMgr == nil {
+		return
+	}
+
+	msgs, err := sess.sessMgr.LoadMessages()
+	if err != nil || len(msgs) == 0 {
+		return
+	}
+
+	sessionID := acp.SessionId(sess.ID)
+
+	for _, msg := range msgs {
+		switch msg.Type {
+		case session.MessageTypeUser:
+			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+				SessionId: sessionID,
+				Update:    acp.UpdateUserMessageText(msg.Content),
+			})
+
+		case session.MessageTypeAssistant:
+			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+				SessionId: sessionID,
+				Update:    acp.UpdateAgentMessageText(msg.Content),
+			})
+
+		case session.MessageTypeThinking:
+			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+				SessionId: sessionID,
+				Update:    acp.UpdateAgentThoughtText(msg.Content),
+			})
+
+		case session.MessageTypeToolCall:
+			update := acp.StartToolCall(
+				acp.ToolCallId(msg.ToolCallID),
+				msg.Name,
+				acp.WithStartKind(mapToolKind(msg.Name)),
+				acp.WithStartStatus(acp.ToolCallStatusInProgress),
+			)
+			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+				SessionId: sessionID,
+				Update:    update,
+			})
+
+		case session.MessageTypeToolResult:
+			status := acp.ToolCallStatusCompleted
+			if msg.IsError {
+				status = acp.ToolCallStatusFailed
+			}
+			update := acp.UpdateToolCall(
+				acp.ToolCallId(msg.ToolCallID),
+				acp.WithUpdateStatus(status),
+			)
+			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+				SessionId: sessionID,
+				Update:    update,
+			})
+
+		// MessageTypeConfirm is internal — skip in replay
+		}
+	}
+
+	// Cache the converted LLM history so the first Prompt call
+	// reuses it instead of re-reading messages.jsonl from disk.
+	if llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType); convErr == nil {
+		sess.history = llmMsgs
+	} else {
+		debuglog.DefaultLogger.Log("ACP: replaySessionHistory ConvertSessionToLLMMessages failed: %v", convErr)
 	}
 }
