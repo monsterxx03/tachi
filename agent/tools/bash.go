@@ -29,22 +29,34 @@ type BashResult struct {
 }
 
 type bashArgs struct {
-	Command string `json:"command"`
-	Timeout *int   `json:"timeout"`
+	Command    string `json:"command"`
+	Timeout    *int   `json:"timeout,omitempty"`
+	Background bool   `json:"background,omitempty"`
+	BgName     string `json:"bg_name,omitempty"`
+	StopName   string `json:"stop_name,omitempty"`
+	ListBg     bool   `json:"list_bg,omitempty"`
 }
 
-type BashTool struct{}
+type BashTool struct {
+	processManager *ProcessManager
+}
 
 func (t BashTool) Name() string { return ToolNameBash }
 func (t BashTool) Description() string {
 	return "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +
-		"Use for running build commands, tests, git operations, and other shell tasks."
+		"Use for running build commands, tests, git operations, and other shell tasks. " +
+		"Run long-lived commands in background with background=true and stop with stop_name. " +
+		"Use list_bg to list all background processes."
 }
 func (t BashTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
-		"command": {Type: "string", Description: "The bash command to execute"},
-		"timeout": {Type: "integer", Description: "Optional timeout in milliseconds (max 600000, default 120000)"},
+		"command":    {Type: "string", Description: "The bash command to execute"},
+		"timeout":    {Type: "integer", Description: "Optional timeout in milliseconds (max 600000, default 120000)"},
+		"background": {Type: "boolean", Description: "Set true to run this command in the background. Requires bg_name."},
+		"bg_name":    {Type: "string", Description: "A unique name for this background process. Required when background=true. Use this name with stop_name to stop it later."},
+		"stop_name":  {Type: "string", Description: "Stop a background process by its bg_name."},
+		"list_bg":    {Type: "boolean", Description: "Set true to list all running background processes."},
 	}
 }
 func (t BashTool) Required() []string { return []string{"command"} }
@@ -56,6 +68,42 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		return "", err
 	}
 
+	pm := t.processManager
+	if pm == nil {
+		pm = GlobalProcessManager()
+	}
+
+	// list_bg: list all background processes
+	if a.ListBg {
+		list := pm.List()
+		return marshalResult(list)
+	}
+
+	// stop_name: stop a background process by name
+	if a.StopName != "" {
+		info, err := pm.Stop(a.StopName)
+		if err != nil {
+			return "", err
+		}
+		return marshalResult(info)
+	}
+
+	// background: start a background process
+	if a.Background {
+		if a.Command == "" {
+			return "", fmt.Errorf("command is required for background mode")
+		}
+		if a.BgName == "" {
+			return "", fmt.Errorf("bg_name is required for background mode")
+		}
+		info, err := pm.Start(ctx, a.BgName, a.Command)
+		if err != nil {
+			return "", err
+		}
+		return marshalResult(info)
+	}
+
+	// Default: foreground execution (original behavior)
 	if a.Command == "" {
 		return "", fmt.Errorf("command is required")
 	}
