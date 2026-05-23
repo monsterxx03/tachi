@@ -91,7 +91,7 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 
 // connect establishes a connection to a single MCP server and discovers its tools.
 func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
-	timeout := srv.MCPTimeout()
+	timeout := srv.Timeout
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
@@ -252,13 +252,13 @@ func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableH
 	}
 
 	return transport.WithHTTPOAuth(transport.OAuthConfig{
-		ClientID:                 clientID,
-		ClientSecret:             clientSecret,
-		ClientURI:                oauthCfg.ClientURI,
-		Scopes:                   scopes,
-		PKCEEnabled:              true,
-		AuthServerMetadataURL:    oauthCfg.AuthServerMetadataURL,
-		TokenStore:               tokenStore,
+		ClientID:              clientID,
+		ClientSecret:          clientSecret,
+		ClientURI:             oauthCfg.ClientURI,
+		Scopes:                scopes,
+		PKCEEnabled:           true,
+		AuthServerMetadataURL: oauthCfg.AuthServerMetadataURL,
+		TokenStore:            tokenStore,
 	})
 }
 

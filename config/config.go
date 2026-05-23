@@ -13,18 +13,17 @@ import (
 )
 
 const (
-	DefaultMaxTokens         = 128000
-	DefaultMaxIterations     = 50
-	DefaultMCPConnectTimeout = 5 * time.Second
-	configDirName            = ".tachi"
-	configFileName           = "config.yaml"
-	inputHistoryFileName     = "input_history"
-	sessionDirName           = "session"
-	logsDirName              = "logs"
-	mcpTokensDirName         = "mcp_tokens"
-	skillsDirName            = "skills"
-	weixinStateDirName       = "weixin"
-	cronStoreFileName        = "crons.json"
+	DefaultMaxTokens     = 128000
+	DefaultMaxIterations = 50
+	configDirName        = ".tachi"
+	configFileName       = "config.yaml"
+	inputHistoryFileName = "input_history"
+	sessionDirName       = "session"
+	logsDirName          = "logs"
+	mcpTokensDirName     = "mcp_tokens"
+	skillsDirName        = "skills"
+	weixinStateDirName   = "weixin"
+	cronStoreFileName    = "crons.json"
 )
 
 // baseDir is the base directory for all tachi state. Default: $HOME/.tachi.
@@ -111,7 +110,7 @@ type MCPServerConfig struct {
 	URL     string            `yaml:"url,omitempty"`                    // For http transport
 	Headers map[string]string `yaml:"headers,omitempty"`                // For http transport
 	Proxy   string            `yaml:"proxy,omitempty"`                  // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
-	Timeout *time.Duration    `yaml:"timeout,omitempty"`                // Connect timeout (default: 5s)
+	Timeout time.Duration     `yaml:"timeout,omitempty" default:"10s"`  // Connect timeout (default: 10s)
 	Enabled *bool             `yaml:"enabled,omitempty" default:"true"` // Whether to load this server
 	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
 
@@ -201,9 +200,6 @@ func (c *ACPConfig) ShouldConnectConfiguredMCP() bool {
 	return c.ConnectConfiguredMCP == nil || *c.ConnectConfiguredMCP
 }
 
-// CompactTimeoutDefault is the default timeout for /compact operations.
-const CompactTimeoutDefault = 5 * time.Minute
-
 // CompactConfig holds configuration for the /compact command.
 type CompactConfig struct {
 	Timeout time.Duration `yaml:"timeout" default:"5m"` // Timeout for the compaction LLM call
@@ -246,8 +242,8 @@ type SubagentConfig struct {
 //	      enabled: true
 //	      token: "xxx"
 type ChannelConfig struct {
-	Weixin   WeixinConfig               `yaml:"weixin"`
-	Channels map[string]map[string]any  `yaml:"channels"`
+	Weixin   WeixinConfig              `yaml:"weixin"`
+	Channels map[string]map[string]any `yaml:"channels"`
 }
 
 // ActiveChannels returns the raw configs for every enabled channel,
@@ -306,7 +302,7 @@ type MemoryConfig struct {
 
 // Mem9SubConfig holds mem9-specific memory configuration.
 type Mem9SubConfig struct {
-	APIURL         string `yaml:"api_url"`         // default: https://api.mem9.ai
+	APIURL         string `yaml:"api_url"` // default: https://api.mem9.ai
 	APIKey         string `yaml:"api_key"`
 	AgentID        string `yaml:"agent_id"`        // default: "tachi"
 	Mode           string `yaml:"mode"`            // default: "smart"
@@ -325,7 +321,7 @@ type Config struct {
 	MCPServers             []MCPServerConfig            `yaml:"mcp_servers"`
 	MCPProfiles            map[string][]MCPServerConfig `yaml:"mcp_profiles"`       // Profile name -> servers
 	ActiveMCPProfile       string                       `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
-	MCPToolSearch          MCPToolSearchConfig           `yaml:"mcp_tool_search"`
+	MCPToolSearch          MCPToolSearchConfig          `yaml:"mcp_tool_search"`
 	TUI                    TUIConfig                    `yaml:"tui"`
 	SystemReminder         SystemReminderConfig         `yaml:"system_reminder"`
 	Language               string                       `yaml:"language" default:"English"`      // Reply language for LLM
@@ -458,20 +454,20 @@ func Init() (string, error) {
 	}
 
 	// Init-specific overrides (not defaults — user-facing template values).
-	cfg.Provider = "minimax-anthropic"
+	cfg.Provider = "deepseek"
 	cfg.Providers = []ProviderConfig{
 		{
-			Name:    "minimax-anthropic",
+			Name:    "deepseek-v4-flash",
 			Type:    llm.ProviderTypeAnthropic,
-			Model:   "MiniMax-M2.7",
-			BaseURL: "https://api.minimaxi.com/anthropic",
+			Model:   "deepseek-v4-flash",
+			BaseURL: "https://api.deepseek.com/anthropic",
 			APIKey:  "<your-api-key>",
 		},
 		{
-			Name:    "minimax-openai",
-			Type:    llm.ProviderTypeOpenAI,
-			Model:   "MiniMax-M2.7",
-			BaseURL: "https://api.minimaxi.com/v1",
+			Name:    "deepseek-v4-pro",
+			Type:    llm.ProviderTypeAnthropic,
+			Model:   "deepseek-v4-pro",
+			BaseURL: "https://api.deepseek.com/anthropic",
 			APIKey:  "<your-api-key>",
 		},
 	}
@@ -513,9 +509,9 @@ func (c *Config) MCPEnabled() bool {
 
 // MCPToolSearchConfig controls MCPSearchTools behavior.
 type MCPToolSearchConfig struct {
-	Enabled                *bool  `yaml:"enabled" default:"true"`           // false = load all tools directly (disable ToolSearch)
-	MinToolsForSearch      int    `yaml:"min_tools_for_search" default:"5"` // Auto-load all if total MCP tools <= this threshold
-	MaxDeferredSchemaBytes int    `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
+	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
+	MinToolsForSearch      int   `yaml:"min_tools_for_search" default:"5"`          // Auto-load all if total MCP tools <= this threshold
+	MaxDeferredSchemaBytes int   `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
 }
 
 // IsEnabled returns whether ToolSearch is active. Defaults to true.
@@ -575,14 +571,6 @@ func (c *Config) ExpandMCPProfiles() error {
 
 	c.MCPServers = append(c.MCPServers, profileServers...)
 	return nil
-}
-
-// MCPTimeout returns the timeout for connecting to an MCP server.
-func (srv *MCPServerConfig) MCPTimeout() time.Duration {
-	if srv.Timeout != nil && *srv.Timeout > 0 {
-		return *srv.Timeout
-	}
-	return DefaultMCPConnectTimeout
 }
 
 // GetMaxIterations returns the effective max iterations:
