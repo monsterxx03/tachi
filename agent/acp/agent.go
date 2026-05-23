@@ -453,20 +453,28 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
 
 		if req.SessionId != "" {
-			// Primary path: load by explicit session ID (ACP spec)
+			// Primary path: load by explicit session ID (ACP spec).
+			// If the session doesn't exist on disk, return an error (unlike the cwd
+			// fallback below which gracefully creates a new session). This matches
+			// ResumeSession's behavior — the client explicitly requested a session
+			// ID, so we should not silently create a different one.
 			s, loadErr := sm.Load(string(req.SessionId))
 			if loadErr != nil {
 				t.logger.Log("ACP: LoadSession cannot load sessionId=%s: %v", req.SessionId, loadErr)
-			} else {
-				loaded = s
-				t.logger.Log("ACP: LoadSession loaded by sessionId=%s", req.SessionId)
+				return acp.LoadSessionResponse{}, fmt.Errorf("session not found on disk: %s", req.SessionId)
 			}
+			loaded = s
+			t.logger.Log("ACP: LoadSession loaded by sessionId=%s", req.SessionId)
 		} else {
 			// Fallback: scan disk by cwd (editors that don't track session IDs)
 			loaded = findLatestSessionByCwd(sm, cwd)
 		}
 	} else {
 		t.logger.Log("ACP: LoadSession session manager init warning: %v", smErr)
+		// If session manager failed AND a specific session was requested, we can't proceed.
+		if req.SessionId != "" {
+			return acp.LoadSessionResponse{}, fmt.Errorf("session manager unavailable, cannot load session: %s", req.SessionId)
+		}
 	}
 
 	// Resolve provider from config

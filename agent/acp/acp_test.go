@@ -196,3 +196,37 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 	require.True(t, ok, "ACP session should exist with the disk session ID")
 	assert.Equal(t, "/existing/project", acpSess.cwd)
 }
+
+func TestLoadSession_WithSessionId_NotFound_ReturnsError(t *testing.T) {
+	// When LoadSession is called with an explicit sessionId that doesn't
+	// exist on disk, it should return an error (not silently create a new session).
+	origBase := config.BaseDir()
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir(origBase) })
+
+	cfg := config.DefaultConfig()
+	cfg.Providers = []config.ProviderConfig{
+		{
+			Name:   "test-provider",
+			Type:   "openai",
+			Model:  "gpt-4o-mini",
+			APIKey: "sk-test-key-12345",
+		},
+	}
+	cfg.Provider = "test-provider"
+
+	ta := NewTachiAgent(cfg, "test")
+
+	// Try to load a non-existent session by explicit ID
+	_, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+		SessionId:  "non-existent-session-id",
+		Cwd:        "/tmp/test-project",
+		McpServers: []acp.McpServer{},
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "session not found on disk")
+
+	// Verify no ACP session was created for this non-existent ID
+	_, ok := ta.sessions.Get("non-existent-session-id")
+	assert.False(t, ok, "ACP session should NOT exist for a non-existent session ID")
+}
