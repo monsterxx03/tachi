@@ -160,6 +160,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 			// Update usage (compact LLM call's tokens count toward the session)
 			m.accumulateUsage(event.Usage)
+			if event.Usage != nil {
+				m.totalUsage.LastInputTokens = event.Usage.InputTokens
+			}
 
 			// Rebuild chatview for the new session
 			m.chatview.Clear()
@@ -185,6 +188,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		}
 		if event.Usage != nil {
 			m.accumulateUsage(event.Usage)
+			m.totalUsage.LastInputTokens = event.Usage.InputTokens
 		}
 		if m.savedTools != nil {
 			m.agent.RestoreToolRegistry(m.savedTools)

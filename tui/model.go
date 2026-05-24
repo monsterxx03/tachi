@@ -214,7 +214,6 @@ func (m *Model) accumulateUsage(u *llm.Usage) {
 		return
 	}
 	m.totalUsage.InputTokens += u.InputTokens
-	m.totalUsage.LastInputTokens = u.InputTokens
 	m.totalUsage.OutputTokens += u.OutputTokens
 	m.totalUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
 	m.totalUsage.CacheReadInputTokens += u.CacheReadInputTokens
