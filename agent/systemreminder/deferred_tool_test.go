@@ -41,16 +41,18 @@ func TestDeferredToolReminder_EmptyPool(t *testing.T) {
 }
 
 func TestDeferredToolReminder_NotFirstMessage(t *testing.T) {
-	r := DeferredToolReminder{
+	r := &DeferredToolReminder{
 		Provider: &stubDeferredProvider{
 			tools: []DeferredToolRecord{
 				{Name: "mcp__pg__query", Description: "Query database"},
 			},
 		},
 	}
+	// With async MCP init, the reminder should fire on ANY non-tool-result
+	// message where undiscovered tools exist, not just the first message.
 	lines := r.Generate(Context{IsFirstMessage: false})
-	if lines != nil {
-		t.Errorf("expected nil when not first message, got %v", lines)
+	if lines == nil {
+		t.Error("expected non-nil with undiscovered tools even if not first message")
 	}
 }
 
@@ -199,6 +201,26 @@ func TestDeferredToolReminder_FirstLineOnly(t *testing.T) {
 	}
 	if !contains(lines[0], "mcp__x__y — foo") {
 		t.Errorf("expected 'name — desc' format, got: %s", lines[0])
+	}
+}
+
+func TestDeferredToolReminder_FiresOnlyOnce(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query database"},
+			},
+		},
+	}
+	// First call should fire
+	lines1 := r.Generate(Context{})
+	if lines1 == nil {
+		t.Fatal("expected output on first call")
+	}
+	// Second call should NOT fire (HasFired = true)
+	lines2 := r.Generate(Context{})
+	if lines2 != nil {
+		t.Error("expected nil on second call (HasFired guard)")
 	}
 }
 

@@ -93,6 +93,10 @@ type AIAgent struct {
 	deferredPool  *mcp.DeferredPool  // MCP tools available for search (nil = ToolSearch disabled)
 	discoveredSet *mcp.DiscoveredSet // MCP tools discovered by LLM via MCPSearchTools
 
+	// MCP async init
+	mcpManager  *mcp.Manager  // MCP connection manager
+	mcpInitDone chan struct{} // closed when background MCP init completes
+
 	// processManager manages background processes started by BashTool.
 	// Tied to the agent lifecycle — Close() kills all tracked processes.
 	processManager *tools.ProcessManager

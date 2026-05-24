@@ -24,6 +24,8 @@ type StatusBar struct {
 	sessionTitle  string
 	sessionID     string
 	pendingCount  int
+	mcpReady      bool // true when MCP async init completes
+	mcpEnabled    bool // true when MCP servers are configured
 }
 
 const (
@@ -46,6 +48,8 @@ func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s
 func (s *StatusBar) ProviderInfo() string           { return s.providerInfo }
 
 func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
+func (s *StatusBar) SetMCPReady(v bool)   { s.mcpReady = v }
+func (s *StatusBar) SetMCPEnabled(v bool) { s.mcpEnabled = v }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -89,6 +93,11 @@ func (s StatusBar) View() string {
 	}
 
 	left += " | " + s.providerInfo
+	if s.mcpEnabled && !s.mcpReady {
+		left += " | " + mcpConnectingStyle.Render("MCP: connecting...")
+	} else if s.mcpEnabled && s.mcpReady {
+		left += " | " + mcpReadyStyle.Render("MCP: ready")
+	}
 	if s.pendingCount > 0 {
 		left += " | " + pendingCountStyle.Render(fmt.Sprintf("⏳ %d pending", s.pendingCount))
 	}

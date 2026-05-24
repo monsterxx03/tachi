@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/urfave/cli/v3"
 
@@ -335,6 +336,14 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		defer mcpMgr.Close()
 	}
 	defer aiAgent.Close()
+
+	// Wait briefly for MCP to connect so the first LLM call has tools available.
+	mcpCtx, mcpCancel := context.WithTimeout(ctx, 5*time.Second)
+	if err := aiAgent.WaitForMCP(mcpCtx); err != nil {
+		// Timeout is not fatal — tools become available on subsequent iterations.
+		fmt.Fprintf(os.Stderr, "MCP: background init still in progress (continuing)...\n")
+	}
+	mcpCancel()
 
 	prompt := cmd.String("prompt")
 	if prompt == "" {

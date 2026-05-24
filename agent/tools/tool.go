@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -106,6 +107,7 @@ func ToSchema(t Tool) Schema {
 
 // Registry maintains a collection of available tools
 type Registry struct {
+	mu       sync.RWMutex
 	tools    map[string]Tool
 	mcpOrder []string // registration order of MCP tools
 }
@@ -122,6 +124,8 @@ func NewRegistry() *Registry {
 // return them in the order they were registered (newly discovered tools
 // always append at the end), keeping the tool list monotonic for prompt cache.
 func (r *Registry) Register(tool Tool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	name := tool.Name()
 	if _, exists := r.tools[name]; !exists && strings.HasPrefix(name, "mcp__") {
 		r.mcpOrder = append(r.mcpOrder, name)
@@ -132,6 +136,8 @@ func (r *Registry) Register(tool Tool) {
 // Unregister removes a tool from the registry by name.
 // Returns true if the tool was removed, false if it wasn't registered.
 func (r *Registry) Unregister(name string) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	_, ok := r.tools[name]
 	delete(r.tools, name)
 	if strings.HasPrefix(name, "mcp__") {
@@ -147,11 +153,15 @@ func (r *Registry) Unregister(name string) bool {
 
 // GetTool returns the tool with the given name, or nil if not found.
 func (r *Registry) GetTool(name string) Tool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	return r.tools[name]
 }
 
 // getMCPOrder returns a copy of the MCP registration order for testing.
 func (r *Registry) getMCPOrder() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	result := make([]string, len(r.mcpOrder))
 	copy(result, r.mcpOrder)
 	return result
@@ -160,6 +170,8 @@ func (r *Registry) getMCPOrder() []string {
 // GetToolNames returns all registered tool names in deterministic order:
 // built-in tools first (alphabetically), then MCP tools in registration order.
 func (r *Registry) GetToolNames() []string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	// Collect built-in names
 	var builtins []string
 	for name := range r.tools {
@@ -176,7 +188,9 @@ func (r *Registry) GetToolNames() []string {
 
 // Invoke calls a tool with the given arguments and context.
 func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolResult {
+	r.mu.RLock()
 	tool, ok := r.tools[name]
+	r.mu.RUnlock()
 	if !ok {
 		return ToolResult{Status: ToolResultError, Err: &UnknownToolError{name}}
 	}
@@ -213,6 +227,8 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 // IsParallel returns whether the named tool supports parallel execution.
 // Returns false for unknown tools (conservative default).
 func (r *Registry) IsParallel(name string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	tool, ok := r.tools[name]
 	if !ok {
 		return false
@@ -222,7 +238,9 @@ func (r *Registry) IsParallel(name string) bool {
 
 // ExecuteConfirmed executes a tool that was previously pending confirmation, with context
 func (r *Registry) ExecuteConfirmed(ctx context.Context, name string, args string) (string, error) {
+	r.mu.RLock()
 	tool, ok := r.tools[name]
+	r.mu.RUnlock()
 	if !ok {
 		return "", &UnknownToolError{name}
 	}
@@ -256,6 +274,8 @@ func validateArgs(tool Tool, args string) error {
 // Registration order ensures newly discovered tools always append at the end,
 // keeping the tool list monotonic for prompt cache stability.
 func (r *Registry) GetSchemas() []Schema {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
 	schemas := make([]Schema, 0, len(r.tools))
 
 	// Built-in tools, sorted alphabetically

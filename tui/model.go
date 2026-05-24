@@ -101,8 +101,13 @@ type Model struct {
 
 	notifyOnComplete bool // whether to send terminal notification on turn complete
 
+	mcpReady bool // whether MCP background init has completed
+
 	logger *debuglog.Logger
 }
+
+// MCPReadyMsg is sent to the TUI when MCP background initialization completes.
+type MCPReadyMsg struct{}
 
 type ModelConfig struct {
 	Agent              *agent.AIAgent
@@ -156,6 +161,13 @@ func NewModel(cfg ModelConfig) *Model {
 
 	// Sync session info to the statusbar if there's already a current session.
 	m.syncSessionInfo()
+
+	// Start watching for MCP background init completion (async connect).
+	// This returns immediately; the actual wait happens in the background.
+	if len(m.mcpServers) > 0 || m.agent.MCPReady() != nil {
+		m.statusbar.SetMCPEnabled(true)
+	}
+	m.waitForMCP()
 
 	return m
 }
@@ -235,8 +247,44 @@ func (m *Model) refreshSessionCost() {
 	m.statusbar.SetCost(cost)
 }
 
+// waitForMCP starts a background goroutine that waits for MCP async init
+// and sends an MCPReadyMsg to the TUI when complete. Does nothing if
+// MCP isn't configured.
+func (m *Model) waitForMCP() {
+	if m.agent == nil {
+		return
+	}
+	m.mcpReady = false
+
+	// Use a tea.Cmd for proper lifecycle — Bubble Tea will run it in a goroutine.
+	// But since we call waitForMCP from NewModel before the program starts,
+	// we return a command via the Init() method instead.
+}
+
+// mcpReadyCmd returns a tea.Cmd that waits for MCP background init to complete.
+func (m *Model) mcpReadyCmd() tea.Cmd {
+	if m.agent == nil {
+		return nil
+	}
+	readyCh := m.agent.MCPReady()
+	return func() tea.Msg {
+		<-readyCh
+		return MCPReadyMsg{}
+	}
+}
+
+// handleMCPReady is called when MCP background init completes.
+// It updates the model state and logs completion.
+func (m *Model) handleMCPReady() {
+	m.mcpReady = true
+	m.statusbar.SetMCPReady(true)
+	if m.logger != nil {
+		m.logger.Log("TUI: MCP background init completed")
+	}
+}
+
 func (m *Model) Init() tea.Cmd {
-	return nil
+	return tea.Batch(m.mcpReadyCmd())
 }
 
 func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -245,6 +293,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.layout()
+		return m, nil
+
+	case MCPReadyMsg:
+		m.handleMCPReady()
 		return m, nil
 
 	case tea.KeyMsg:
