@@ -536,18 +536,15 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 		defer reconnectCancel()
 
-		tools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
+		mcpTools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
 		if err != nil {
 			ch <- fmt.Sprintf("Reconnect failed for **%s**: %v", srv.Name, err)
 			return
 		}
 
-		for _, t := range tools {
-			m.agent.RegisterTool(t)
-			m.logger.Log("MCP: registered tool %s", t.Name())
-		}
+		count := m.agent.AddDeferredMCPTools(mcpTools)
 
-		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools))
+		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓ — 使用 MCPSearchTools 搜索并加载", srv.Name, count)
 	}()
 
 	return readNextMCPStatus(ch)
@@ -585,18 +582,15 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 		defer reconnectCancel()
 
-		tools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
+		mcpTools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
 		if err != nil {
 			msgs = append(msgs, fmt.Sprintf("Reconnect failed for **%s**: %v", srv.Name, err))
 			return
 		}
 
-		for _, t := range tools {
-			m.agent.RegisterTool(t)
-			m.logger.Log("MCP: registered tool %s", t.Name())
-		}
+		count := m.agent.AddDeferredMCPTools(mcpTools)
 
-		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓", srv.Name, len(tools)))
+		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓ — 使用 MCPSearchTools 搜索并加载", srv.Name, count))
 	}()
 
 	return readNextMCPStatus(ch)
@@ -615,47 +609,45 @@ func readNextMCPStatus(ch <-chan string) tea.Cmd {
 	}
 }
 
-// connectAndRegisterMCP connects to a server and registers its tools.
+// connectAndRegisterMCP connects to a server and adds its tools to the
+// deferred pool (not directly registered), so the LLM learns about them
+// via the <available-deferred-tools> system reminder and MCPSearchTools.
 // Sends the result message to ch for safe delivery in the TUI update loop.
 func (m *Model) connectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 	defer cancel()
 
-	tools, err := m.mcpManager.Reconnect(ctx, srv)
+	mcpTools, err := m.mcpManager.Reconnect(ctx, srv)
 	if err != nil {
 		m.logger.Log("MCP: failed to connect %q: %v", srv.Name, err)
 		ch <- fmt.Sprintf("Failed to connect to **%s**: %v", srv.Name, err)
 		return
 	}
 
-	for _, t := range tools {
-		m.agent.RegisterTool(t)
-		m.logger.Log("MCP: registered tool %s", t.Name())
-	}
+	count := m.agent.AddDeferredMCPTools(mcpTools)
 
-	ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s)", srv.Name, len(tools))
+	ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) — 使用 MCPSearchTools 搜索并加载", srv.Name, count)
 }
 
-// reconnectAndRegisterMCP reconnects to a server and registers its tools.
+// reconnectAndRegisterMCP reconnects to a server and adds its tools to the
+// deferred pool (not directly registered), so the LLM learns about them
+// via the <available-deferred-tools> system reminder and MCPSearchTools.
 // Sends the result message to ch for safe delivery in the TUI update loop.
 func (m *Model) reconnectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 	defer cancel()
 
-	tools, err := m.mcpManager.Reconnect(ctx, srv)
+	mcpTools, err := m.mcpManager.Reconnect(ctx, srv)
 	if err != nil {
 		ch <- fmt.Sprintf("Failed to reconnect to **%s**: %v", srv.Name, err)
 		return
 	}
 
-	for _, t := range tools {
-		m.agent.RegisterTool(t)
-		m.logger.Log("MCP: registered tool %s", t.Name())
-	}
+	count := m.agent.AddDeferredMCPTools(mcpTools)
 
-	ch <- fmt.Sprintf("MCP server **%s** reconnected with %d tool(s)", srv.Name, len(tools))
+	ch <- fmt.Sprintf("MCP server **%s** reconnected with %d tool(s) — 使用 MCPSearchTools 搜索并加载", srv.Name, count)
 }
 
 // handleUsageCommand builds a usage report and displays it in the chat view.

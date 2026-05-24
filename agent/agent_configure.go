@@ -244,13 +244,15 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 		a.logger.Log("MCP: all %d tools loaded (ToolSearch disabled or below threshold)", total)
 	}
 
+	// Create DeferredToolReminder (always, for potential use via toggle)
+	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
+		Provider: &deferredToolProviderAdapter{pool: a.deferredPool},
+		Tracker:  a.discoveredSet,
+	}
+
 	// Register DeferredToolReminder only if there are undiscovered tools
 	if discovered < total {
-		reminder := &systemreminder.DeferredToolReminder{
-			Provider: &deferredToolProviderAdapter{pool: a.deferredPool},
-			Tracker:  a.discoveredSet,
-		}
-		a.baseReminders = append(a.baseReminders, reminder)
+		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
 		a.rebuildSkillCollector()
 		a.logger.Log("MCP: DeferredToolReminder added (%d undiscovered of %d)",
 			total-discovered, total)

@@ -32,6 +32,7 @@ type MCPToolItem struct {
 	Name        string
 	Description string
 	Parameters  []MCPParamItem
+	Deferred    bool // true when tool is in deferred pool but not yet registered
 }
 
 // MCPAction represents a user-requested operation on a server.
@@ -347,6 +348,11 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 			toolName = toolName[:nameW-1] + "…"
 		}
 		toolNameStyled := mcpToolName.Render(toolName)
+
+		// Deferred indicator for tools not yet loaded into the LLM
+		if t.Deferred {
+			toolNameStyled += " " + dimStyle.Render("📦")
+		}
 
 		// Take first line only, then truncate to descMaxRunes runes
 		desc := t.Description

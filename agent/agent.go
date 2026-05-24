@@ -95,6 +95,11 @@ type AIAgent struct {
 	deferredPool  *mcp.DeferredPool  // MCP tools available for search (nil = ToolSearch disabled)
 	discoveredSet *mcp.DiscoveredSet // MCP tools discovered by LLM via MCPSearchTools
 
+	// DeferredToolReminder reference — allows mid-session reset when user
+	// manually enables an MCP server (tools go into deferredPool, reminder
+	// fires again to hint LLM about them).
+	deferredToolReminder *systemreminder.DeferredToolReminder
+
 	// MCP async init
 	mcpManager  *mcp.Manager  // MCP connection manager
 	mcpInitDone chan struct{} // closed when background MCP init completes
@@ -303,6 +308,69 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 			}
 		}
 	}
+}
+
+// DeferredPool returns the MCP deferred pool, or nil if ToolSearch is disabled.
+func (a *AIAgent) DeferredPool() *mcp.DeferredPool {
+	return a.deferredPool
+}
+
+// AddDeferredMCPTools adds MCP tools to the deferred pool and marks the
+// DeferredToolReminder as dirty so it fires on the next user message.
+// This is used when a user manually enables an MCP server mid-session —
+// tools are deferred (not immediately visible to the LLM) and hinted via
+// the <available-deferred-tools> system reminder.
+// Returns the number of tools added.
+func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
+	if a.deferredPool == nil {
+		return 0
+	}
+	count := 0
+	for _, t := range tools {
+		dt := mcp.NewDeferredToolFromMCPTool(t, "")
+		a.deferredPool.Add(dt)
+		count++
+		a.logger.Log("MCP: deferred tool %s (user toggle)", t.Name())
+	}
+	a.NotifyDeferredToolsAdded()
+	a.logger.Log("MCP: added %d tools to deferred pool from toggle", count)
+	return count
+}
+
+// NotifyDeferredToolsAdded marks the DeferredToolReminder as dirty and ensures
+// it's registered in the reminder collector so the LLM is notified of newly
+// available deferred tools on the next user message. Safe to call even when
+// the reminder hasn't been set up yet.
+func (a *AIAgent) NotifyDeferredToolsAdded() {
+	if a.deferredToolReminder == nil {
+		// DeferredToolReminder hasn't been created yet (e.g., ToolSearch
+		// was disabled during init). Create one now.
+		if a.deferredPool == nil {
+			return
+		}
+		a.deferredToolReminder = &systemreminder.DeferredToolReminder{
+			Provider: &deferredToolProviderAdapter{pool: a.deferredPool},
+			Tracker:  a.discoveredSet,
+			Dirty:    true,
+		}
+	} else {
+		a.deferredToolReminder.Dirty = true
+	}
+
+	// Ensure it's in baseReminders
+	found := false
+	for _, r := range a.baseReminders {
+		if r == a.deferredToolReminder {
+			found = true
+			break
+		}
+	}
+	if !found {
+		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
+	}
+
+	a.rebuildSkillCollector()
+	a.logger.Log("MCP: DeferredToolReminder marked dirty, collector rebuilt")
 }
 
 // ToolSchemas returns all tool schemas currently registered with the agent.

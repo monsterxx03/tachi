@@ -10,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -54,7 +55,8 @@ func (m *Model) exitMCPOverlay() {
 	m.layout()
 }
 
-// buildMCPServerItems collects current server state into display items.
+// buildMCPServerItems collects current server state into display items,
+// including both registered and deferred (not yet loaded) MCP tools.
 func (m *Model) buildMCPServerItems() []MCPServerItem {
 	items := make([]MCPServerItem, 0, len(m.mcpServers))
 	for _, srv := range m.mcpServers {
@@ -65,30 +67,54 @@ func (m *Model) buildMCPServerItems() []MCPServerItem {
 		}
 
 		typeStr := string(srv.Type)
-
-		// Gather tools for this server
 		prefix := fmt.Sprintf("mcp__%s__", srv.Name)
+		seen := make(map[string]bool) // dedup by tool name
+
+		// Build helper to convert schema + DeferredTool to MCPToolItem
+		schemaToItem := func(name, desc string, params tools.ParametersSchema) MCPToolItem {
+			itemParams := make([]MCPParamItem, 0, len(params.Properties))
+			reqSet := make(map[string]bool, len(params.Required))
+			for _, r := range params.Required {
+				reqSet[r] = true
+			}
+			for pName, p := range params.Properties {
+				itemParams = append(itemParams, MCPParamItem{
+					Name:        pName,
+					Type:        p.Type,
+					Description: p.Description,
+					Required:    reqSet[pName],
+				})
+			}
+			return MCPToolItem{
+				Name:        name,
+				Description: desc,
+				Parameters:  itemParams,
+			}
+		}
+
 		var tools []MCPToolItem
+
+		// 1. Collect registered tools (already loaded into LLM)
 		for _, schema := range m.agent.ToolSchemas() {
 			if strings.HasPrefix(schema.Name, prefix) {
-				params := make([]MCPParamItem, 0, len(schema.Parameters.Properties))
-				reqSet := make(map[string]bool, len(schema.Parameters.Required))
-				for _, r := range schema.Parameters.Required {
-					reqSet[r] = true
+				toolName := strings.TrimPrefix(schema.Name, prefix)
+				item := schemaToItem(toolName, schema.Description, schema.Parameters)
+				item.Deferred = false
+				tools = append(tools, item)
+				seen[schema.Name] = true
+			}
+		}
+
+		// 2. Collect deferred tools (not yet loaded — from deferred pool)
+		if dp := m.agent.DeferredPool(); dp != nil {
+			for _, dt := range dp.All() {
+				if strings.HasPrefix(dt.Name, prefix) && !seen[dt.Name] {
+					toolName := strings.TrimPrefix(dt.Name, prefix)
+					item := schemaToItem(toolName, dt.Description, dt.Schema.Parameters)
+					item.Deferred = true
+					tools = append(tools, item)
+					seen[dt.Name] = true
 				}
-				for pName, p := range schema.Parameters.Properties {
-					params = append(params, MCPParamItem{
-						Name:        pName,
-						Type:        p.Type,
-						Description: p.Description,
-						Required:    reqSet[pName],
-					})
-				}
-				tools = append(tools, MCPToolItem{
-					Name:        strings.TrimPrefix(schema.Name, prefix),
-					Description: schema.Description,
-					Parameters:  params,
-				})
 			}
 		}
 
@@ -289,56 +315,54 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 		defer reconnectCancel()
 
-		tools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
+		mcpTools, err := m.mcpManager.Reconnect(reconnectCtx, srv)
 		if err != nil {
 			ch <- fmt.Sprintf("Reconnect failed: %v", err)
 			return
 		}
 
-		for _, t := range tools {
-			m.agent.RegisterTool(t)
-		}
+		count := m.agent.AddDeferredMCPTools(mcpTools)
 
-		ch <- fmt.Sprintf("✓ %s connected with %d tool(s)", srv.Name, len(tools))
+		ch <- fmt.Sprintf("✓ %s connected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
 	}()
 
 	return readNextMCPOverlayMsg(ch)
 }
 
-// mcpOverlayConnectAndRegister connects and registers tools, then sends result.
+// mcpOverlayConnectAndRegister connects to a server and adds its tools to the
+// deferred pool (not directly registered), so the LLM learns about them
+// via the <available-deferred-tools> system reminder and MCPSearchTools.
 func (m *Model) mcpOverlayConnectAndRegister(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 	defer cancel()
 
-	tools, err := m.mcpManager.Reconnect(ctx, srv)
+	mcpTools, err := m.mcpManager.Reconnect(ctx, srv)
 	if err != nil {
 		ch <- fmt.Sprintf("Failed to connect %s: %v", srv.Name, err)
 		return
 	}
 
-	for _, t := range tools {
-		m.agent.RegisterTool(t)
-	}
+	count := m.agent.AddDeferredMCPTools(mcpTools)
 
-	ch <- fmt.Sprintf("✓ %s connected with %d tool(s)", srv.Name, len(tools))
+	ch <- fmt.Sprintf("✓ %s connected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
 }
 
-// mcpOverlayReconnectAndRegister reconnects and registers tools, then sends result.
+// mcpOverlayReconnectAndRegister reconnects to a server and adds its tools to the
+// deferred pool (not directly registered), so the LLM learns about them
+// via the <available-deferred-tools> system reminder and MCPSearchTools.
 func (m *Model) mcpOverlayReconnectAndRegister(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
 	defer cancel()
 
-	tools, err := m.mcpManager.Reconnect(ctx, srv)
+	mcpTools, err := m.mcpManager.Reconnect(ctx, srv)
 	if err != nil {
 		ch <- fmt.Sprintf("Failed to reconnect %s: %v", srv.Name, err)
 		return
 	}
 
-	for _, t := range tools {
-		m.agent.RegisterTool(t)
-	}
+	count := m.agent.AddDeferredMCPTools(mcpTools)
 
-	ch <- fmt.Sprintf("✓ %s reconnected with %d tool(s)", srv.Name, len(tools))
+	ch <- fmt.Sprintf("✓ %s reconnected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
 }

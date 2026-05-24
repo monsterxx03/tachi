@@ -30,7 +30,8 @@ type DeferredToolTracker interface {
 // With async MCP init, tools may not be known on the very first user message
 // (deferredPool is empty). The reminder fires on the first message where
 // undiscovered tools exist, whether that's message #1 or #N. It fires at
-// most once per session (HasFired guard).
+// most once per session (HasFired guard), but can re-fire when Dirty is set
+// to true (e.g., user manually enabled an MCP server mid-session).
 //
 // Implements TaggedReminder so output gets its own <available-deferred-tools>
 // block independent of <system-reminder>.
@@ -38,6 +39,7 @@ type DeferredToolReminder struct {
 	Provider  DeferredToolProvider
 	Tracker   DeferredToolTracker
 	HasFired  bool // set to true after generating output; prevents repeats
+	Dirty     bool // when true, re-fires even if HasFired (for mid-session toggle)
 }
 
 // WrapperTag implements the TaggedReminder interface.
@@ -49,11 +51,8 @@ func (r *DeferredToolReminder) Generate(ctx Context) []string {
 	if r.Provider == nil {
 		return nil
 	}
-	// Fire at most once per session. This works correctly with async MCP
-	// init: if the pool is empty on the first message, we skip; when MCP
-	// connects and tools become available, the reminder fires on the next
-	// message (only once).
-	if r.HasFired {
+	// Fire at most once per session, unless marked Dirty (new tools added mid-session).
+	if r.HasFired && !r.Dirty {
 		return nil
 	}
 	// Don't inject at tool-result boundaries — not meaningful there.
@@ -75,10 +74,14 @@ func (r *DeferredToolReminder) Generate(ctx Context) []string {
 	}
 
 	if len(undiscovered) == 0 {
+		// All tools are discovered — nothing to hint about.
+		// Keep HasFired as-is, but clear Dirty since there's nothing to report.
+		r.Dirty = false
 		return nil
 	}
 
 	r.HasFired = true
+	r.Dirty = false
 
 	var lines []string
 	for _, t := range undiscovered {
