@@ -188,7 +188,12 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		}
 		if event.Usage != nil {
 			m.accumulateUsage(event.Usage)
-			m.totalUsage.LastInputTokens = event.Usage.InputTokens
+			// For one-off commands (e.g. /commit), only accumulate tokens and cost;
+			// don't overwrite the context-usage numerator (LastInputTokens) so the
+			// statusbar continues showing the main conversation's context fraction.
+			if !isOneOff {
+				m.totalUsage.LastInputTokens = event.Usage.InputTokens
+			}
 		}
 		if m.savedTools != nil {
 			m.agent.RestoreToolRegistry(m.savedTools)
