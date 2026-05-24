@@ -348,7 +348,7 @@ func configDir() string {
 	return BaseDir()
 }
 
-func configPath() (string, error) {
+func ConfigPath() (string, error) {
 	return filepath.Join(configDir(), configFileName), nil
 }
 
@@ -388,7 +388,7 @@ func CronStorePath() string {
 }
 
 func Load() (*Config, error) {
-	path, err := configPath()
+	path, err := ConfigPath()
 	if err != nil {
 		return nil, err
 	}
@@ -438,7 +438,7 @@ func Save(cfg *Config) error {
 }
 
 func Init() (string, error) {
-	path, err := configPath()
+	path, err := ConfigPath()
 	if err != nil {
 		return "", err
 	}

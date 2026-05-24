@@ -7,6 +7,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -57,7 +58,13 @@ func main() {
 		Name:    "tachi",
 		Usage:   "AI Agent CLI",
 		Version: Version,
-		Flags:   commonFlags,
+		Flags: append(commonFlags,
+			&cli.BoolFlag{
+				Name:    "edit",
+				Aliases: []string{"e"},
+				Usage:   "Open config file in editor",
+			},
+		),
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			if cmd.IsSet("home") {
 				config.SetBaseDir(cmd.String("home"))
@@ -173,6 +180,34 @@ func resolveProviderFromConfig(cfg *config.Config) (llm.Provider, *config.Resolv
 }
 
 func runTUI(ctx context.Context, cmd *cli.Command) error {
+	// If -e/--edit flag is set, open the config file in the default editor and exit.
+	if cmd.Bool("edit") {
+		path, err := config.ConfigPath()
+		if err != nil {
+			return fmt.Errorf("config path: %w", err)
+		}
+		editor := os.Getenv("EDITOR")
+		if editor == "" {
+			for _, candidate := range []string{"nvim", "vim", "vi", "code"} {
+				if p, err := exec.LookPath(candidate); err == nil {
+					editor = p
+					break
+				}
+			}
+		}
+		if editor == "" {
+			return fmt.Errorf("no editor found; set $EDITOR or install one of: vi, nano, vim, code")
+		}
+		editCmd := exec.Command(editor, path)
+		editCmd.Stdin = os.Stdin
+		editCmd.Stdout = os.Stdout
+		editCmd.Stderr = os.Stderr
+		if err := editCmd.Run(); err != nil {
+			return fmt.Errorf("editor failed: %w", err)
+		}
+		return nil
+	}
+
 	if err := debuglog.Init(config.LogsDir()); err != nil {
 		fmt.Printf("Warning: failed to init debug log: %v\n", err)
 	}
