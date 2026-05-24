@@ -225,8 +225,9 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 }
 
 // rebuildTotalUsage reconstructs the cumulative totalUsage from session messages.
-// InputTokens is summed across all messages (cumulative input cost).
-// LastInputTokens is the most recent API input token count (for context-window display).
+// InputTokens is summed across all messages (cumulative input + cost basis).
+// LastInputTokens is the most recent API input token count (retained for /usage
+// display and cache-miss breakdown, but no longer used for statusbar context %).
 func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 	m.totalUsage = llm.Usage{}
 

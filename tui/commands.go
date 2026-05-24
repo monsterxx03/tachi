@@ -721,9 +721,9 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 	}
 	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", agent.FormatTokens(u.OutputTokens)))
 	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
-	if report.ContextWindow > 0 && u.LastInputTokens > 0 {
-		pct := float64(u.LastInputTokens) / float64(report.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.LastInputTokens), agent.FormatTokens(report.ContextWindow), pct))
+	if report.ContextWindow > 0 && u.InputTokens > 0 {
+		pct := float64(u.InputTokens) / float64(report.ContextWindow) * 100
+		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.InputTokens), agent.FormatTokens(report.ContextWindow), pct))
 	}
 
 	// Cost
