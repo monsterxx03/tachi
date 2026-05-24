@@ -45,7 +45,12 @@ type ThinkingBlock struct {
 }
 
 type Usage struct {
-	InputTokens              int64
+	// InputTokens is the cumulative total of input tokens across all API calls
+	// in the session (summed, not replaced).
+	InputTokens int64
+	// LastInputTokens is the input token count from the most recent API call.
+	// This is the "current context size" — used for context-window percentage display.
+	LastInputTokens int64
 	OutputTokens             int64
 	CacheCreationInputTokens int64
 	CacheReadInputTokens     int64

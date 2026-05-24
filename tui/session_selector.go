@@ -225,8 +225,8 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 }
 
 // rebuildTotalUsage reconstructs the cumulative totalUsage from session messages.
-// InputTokens from the last assistant message with usage = total input (API reports total).
-// OutputTokens and cache tokens are summed across all messages.
+// InputTokens is summed across all messages (cumulative input cost).
+// LastInputTokens is the most recent API input token count (for context-window display).
 func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 	m.totalUsage = llm.Usage{}
 
@@ -236,12 +236,13 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 			if msg.Usage.InputTokens > 0 {
 				lastInput = msg.Usage.InputTokens
 			}
+			m.totalUsage.InputTokens += msg.Usage.InputTokens // ← now accumulated
 			m.totalUsage.OutputTokens += msg.Usage.OutputTokens
 			m.totalUsage.CacheCreationInputTokens += msg.Usage.CacheCreationInputTokens
 			m.totalUsage.CacheReadInputTokens += msg.Usage.CacheReadInputTokens
 		}
 	}
-	m.totalUsage.InputTokens = lastInput
+	m.totalUsage.LastInputTokens = lastInput
 	m.statusbar.SetUsage(&m.totalUsage)
 }
 

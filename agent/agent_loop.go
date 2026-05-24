@@ -379,6 +379,12 @@ func (a *AIAgent) handleFinishReason(
 
 		*messages = append(*messages, acc.assistantMessage())
 
+		// Emit incremental usage update after each tool-call API round
+		// so the TUI can update totalUsage and status bar in real time.
+		if acc.usage != nil {
+			ch <- AgentEvent{Type: AgentEventUsage, Usage: acc.usage}
+		}
+
 		toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
 		if err != nil {
 			ch <- AgentEvent{

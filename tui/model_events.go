@@ -42,6 +42,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.chatview.UpdateToolArgs(event.ToolID, event.ToolArgs)
 		return m.nextEvent()
 
+	case agent.AgentEventUsage:
+		// Incremental usage update after each tool-call API round.
+		m.accumulateUsage(event.Usage)
+		return m.nextEvent()
+
 	case agent.AgentEventToolConfirmation:
 		m.logger.Log("TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
 		m.pendingConfirm = &pendingConfirm{
@@ -154,14 +159,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			}
 
 			// Update usage (compact LLM call's tokens count toward the session)
-			if event.Usage != nil {
-				m.totalUsage.InputTokens = event.Usage.InputTokens
-				m.totalUsage.OutputTokens += event.Usage.OutputTokens
-				m.totalUsage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
-				m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
-				m.statusbar.SetUsage(&m.totalUsage)
-				m.refreshSessionCost()
-			}
+			m.accumulateUsage(event.Usage)
 
 			// Rebuild chatview for the new session
 			m.chatview.Clear()
@@ -184,16 +182,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if isOneOff {
 			m.history = m.savedHistory
 			m.savedHistory = nil
-		} else if event.Usage != nil {
-			// InputTokens from the API already reflects the total context size
-			// (all prior messages included), so we take the latest value instead
-			// of accumulating (which would produce a nonsense inflated number).
-			m.totalUsage.InputTokens = event.Usage.InputTokens
-			m.totalUsage.OutputTokens += event.Usage.OutputTokens
-			m.totalUsage.CacheCreationInputTokens += event.Usage.CacheCreationInputTokens
-			m.totalUsage.CacheReadInputTokens += event.Usage.CacheReadInputTokens
-			m.statusbar.SetUsage(&m.totalUsage)
-			m.refreshSessionCost()
+		}
+		if event.Usage != nil {
+			m.accumulateUsage(event.Usage)
 		}
 		if m.savedTools != nil {
 			m.agent.RestoreToolRegistry(m.savedTools)

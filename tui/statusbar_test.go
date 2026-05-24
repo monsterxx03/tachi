@@ -24,7 +24,9 @@ func withWidth(w int) func(*StatusBar) {
 }
 
 func withUsage(input, output int64) func(*StatusBar) {
-	return func(s *StatusBar) { s.totalUsage = &llm.Usage{InputTokens: input, OutputTokens: output} }
+	return func(s *StatusBar) {
+		s.totalUsage = &llm.Usage{InputTokens: input, LastInputTokens: input, OutputTokens: output}
+	}
 }
 
 func withSession(title, id string) func(*StatusBar) {

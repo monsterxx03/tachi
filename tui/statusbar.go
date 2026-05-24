@@ -139,11 +139,11 @@ func (s StatusBar) buildUsageRight() string {
 		parts = append(parts, costStyle.Render(costStr))
 	}
 
-	// Context usage: show input tokens as fraction of context window
-	if s.totalUsage != nil && s.totalUsage.InputTokens > 0 && s.contextWindow > 0 {
-		pct := float64(s.totalUsage.InputTokens) / float64(s.contextWindow) * 100
+	// Context usage: show last prompt tokens as fraction of context window
+	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 && s.contextWindow > 0 {
+		pct := float64(s.totalUsage.LastInputTokens) / float64(s.contextWindow) * 100
 		ctxStr := fmt.Sprintf("ctx: %s/%s %s",
-			agent.FormatTokens(s.totalUsage.InputTokens),
+			agent.FormatTokens(s.totalUsage.LastInputTokens),
 			agent.FormatTokens(s.contextWindow),
 			formatPercent(pct))
 		parts = append(parts, usageColorStyle(pct).Render(ctxStr))

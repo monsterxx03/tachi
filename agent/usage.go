@@ -47,20 +47,22 @@ func ComputeSessionUsage(sm *session.Manager, price *llm.ModelPrice, contextWind
 	}
 
 	// ---- usage ----
-	var totalOutput, totalCacheRead, totalCacheCreation int64
+	var totalInput, totalOutput, totalCacheRead, totalCacheCreation int64
 	var lastInput int64
 	for _, msg := range msgs {
 		if msg.Usage != nil {
 			if msg.Usage.InputTokens > 0 {
 				lastInput = msg.Usage.InputTokens
 			}
+			totalInput += msg.Usage.InputTokens
 			totalOutput += msg.Usage.OutputTokens
 			totalCacheCreation += msg.Usage.CacheCreationInputTokens
 			totalCacheRead += msg.Usage.CacheReadInputTokens
 		}
 	}
 	usage := llm.Usage{
-		InputTokens:              lastInput,
+		InputTokens:              totalInput,
+		LastInputTokens:          lastInput,
 		OutputTokens:             totalOutput,
 		CacheCreationInputTokens: totalCacheCreation,
 		CacheReadInputTokens:     totalCacheRead,

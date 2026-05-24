@@ -206,6 +206,22 @@ func (m *Model) resolveModelPrice() *llm.ModelPrice {
 	return llm.ResolveModelPrice(model, nil, nil, nil, nil)
 }
 
+// accumulateUsage merges an llm.Usage into totalUsage and refreshes the
+// status bar and cost display. Called after each API call (tool-call rounds
+// and TurnComplete) to keep the status bar in sync.
+func (m *Model) accumulateUsage(u *llm.Usage) {
+	if u == nil {
+		return
+	}
+	m.totalUsage.InputTokens += u.InputTokens
+	m.totalUsage.LastInputTokens = u.InputTokens
+	m.totalUsage.OutputTokens += u.OutputTokens
+	m.totalUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
+	m.totalUsage.CacheReadInputTokens += u.CacheReadInputTokens
+	m.statusbar.SetUsage(&m.totalUsage)
+	m.refreshSessionCost()
+}
+
 // refreshSessionCost recalculates the total session cost from stored messages
 // (including subagent messages) and updates the statusbar.
 func (m *Model) refreshSessionCost() {

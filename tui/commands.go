@@ -698,25 +698,32 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 	// Token usage
 	u := report.Usage
 	sb.WriteString("**Token Usage**\n")
-	sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", agent.FormatTokens(u.InputTokens)))
+	sb.WriteString(fmt.Sprintf("  Total input (accumulated): %s\n", agent.FormatTokens(u.InputTokens)))
+	if u.LastInputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Last input (context):      %s\n", agent.FormatTokens(u.LastInputTokens)))
+	}
 	if u.CacheReadInputTokens > 0 {
 		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", agent.FormatTokens(u.CacheReadInputTokens)))
 	}
 	if u.CacheCreationInputTokens > 0 {
 		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", agent.FormatTokens(u.CacheCreationInputTokens)))
 	}
-	cacheMissInput := u.InputTokens - u.CacheReadInputTokens
+	lastInput := u.LastInputTokens
+	if lastInput == 0 {
+		lastInput = u.InputTokens
+	}
+	cacheMissInput := lastInput - u.CacheReadInputTokens
 	if cacheMissInput < 0 {
 		cacheMissInput = 0
 	}
-	if cacheMissInput != u.InputTokens {
+	if cacheMissInput != lastInput {
 		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", agent.FormatTokens(cacheMissInput)))
 	}
 	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", agent.FormatTokens(u.OutputTokens)))
 	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
-	if report.ContextWindow > 0 && u.InputTokens > 0 {
-		pct := float64(u.InputTokens) / float64(report.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.InputTokens), agent.FormatTokens(report.ContextWindow), pct))
+	if report.ContextWindow > 0 && u.LastInputTokens > 0 {
+		pct := float64(u.LastInputTokens) / float64(report.ContextWindow) * 100
+		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.LastInputTokens), agent.FormatTokens(report.ContextWindow), pct))
 	}
 
 	// Cost
