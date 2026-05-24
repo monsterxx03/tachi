@@ -68,6 +68,21 @@ func (p *DeferredPool) All() []*DeferredTool {
 	return result
 }
 
+// RemoveByServer removes all tools belonging to the given server from the pool.
+// Returns the number of tools removed.
+func (p *DeferredPool) RemoveByServer(serverName string) int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	removed := 0
+	for name, t := range p.tools {
+		if t.ServerName == serverName {
+			delete(p.tools, name)
+			removed++
+		}
+	}
+	return removed
+}
+
 // SearchResult is a single search result returned by Search.
 type SearchResult = tools.MCPSearchResultItem
 

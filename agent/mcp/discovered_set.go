@@ -33,6 +33,22 @@ func (s *DiscoveredSet) Contains(name string) bool {
 	return s.names[name]
 }
 
+// Remove removes a single tool from the discovered set. Idempotent.
+func (s *DiscoveredSet) Remove(name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.names[name] {
+		delete(s.names, name)
+		// Remove from order slice
+		for i, n := range s.order {
+			if n == name {
+				s.order = append(s.order[:i], s.order[i+1:]...)
+				break
+			}
+		}
+	}
+}
+
 // List returns a copy of all discovered tool names in discovery order.
 func (s *DiscoveredSet) List() []string {
 	s.mu.RLock()

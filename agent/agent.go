@@ -2,6 +2,8 @@ package agent
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -265,6 +267,42 @@ func (a *AIAgent) RegisterTool(tool tools.Tool) {
 // UnregisterTool removes a tool from the agent's registry by name.
 func (a *AIAgent) UnregisterTool(name string) {
 	a.toolRegistry.Unregister(name)
+}
+
+// UnregisterMCPServer removes all tools belonging to an MCP server from
+// every data structure: the active tool registry, the deferred pool, and
+// the discovered set. This ensures that disabling a server via /mcp toggle
+// fully cleans up — no stale tool references remain in DeferredToolReminder
+// or MCPSearchTools.
+func (a *AIAgent) UnregisterMCPServer(serverName string) {
+	prefix := fmt.Sprintf("mcp__%s__", serverName)
+
+	// 1. Unregister from active tool registry
+	for _, name := range a.toolRegistry.GetToolNames() {
+		if strings.HasPrefix(name, prefix) {
+			a.toolRegistry.Unregister(name)
+			a.logger.Log("MCP: unregistered tool %s from registry", name)
+		}
+	}
+
+	// 2. Remove from deferred pool
+	if a.deferredPool != nil {
+		removed := a.deferredPool.RemoveByServer(serverName)
+		if removed > 0 {
+			a.logger.Log("MCP: removed %d tools from deferred pool for server %s", removed, serverName)
+		}
+	}
+
+	// 3. Remove from discovered set
+	if a.discoveredSet != nil {
+		// Collect tool names with this prefix from the discovered set
+		for _, name := range a.discoveredSet.List() {
+			if strings.HasPrefix(name, prefix) {
+				a.discoveredSet.Remove(name)
+				a.logger.Log("MCP: removed tool %s from discovered set", name)
+			}
+		}
+	}
 }
 
 // ToolSchemas returns all tool schemas currently registered with the agent.

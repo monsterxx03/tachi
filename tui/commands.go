@@ -350,7 +350,7 @@ func (m *Model) mcpToggle(name string) tea.Cmd {
 		// Disconnect and unregister tools
 		if m.mcpManager != nil {
 			_ = m.mcpManager.Disconnect(srv.Name)
-			m.unregisterMCPTools(srv.Name)
+			m.agent.UnregisterMCPServer(srv.Name)
 		}
 
 		m.chatview.AddMessage(chatMessage{
@@ -424,8 +424,9 @@ func (m *Model) mcpReconnect(name string) tea.Cmd {
 		return nil
 	}
 
-	// Unregister old tools, then reconnect asynchronously
-	m.unregisterMCPTools(name)
+	// Full cleanup of registry, deferred pool, and discovered set,
+	// then reconnect asynchronously
+	m.agent.UnregisterMCPServer(name)
 
 	m.chatview.AddMessage(chatMessage{
 		Role:    "assistant",
@@ -655,17 +656,6 @@ func (m *Model) reconnectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- s
 	}
 
 	ch <- fmt.Sprintf("MCP server **%s** reconnected with %d tool(s)", srv.Name, len(tools))
-}
-
-// unregisterMCPTools removes all tools belonging to a server from the
-// agent's tool registry. Tool names follow the pattern mcp__<server>__<tool>.
-func (m *Model) unregisterMCPTools(serverName string) {
-	prefix := fmt.Sprintf("mcp__%s__", serverName)
-	for _, schema := range m.agent.ToolSchemas() {
-		if strings.HasPrefix(schema.Name, prefix) {
-			m.agent.UnregisterTool(schema.Name)
-		}
-	}
 }
 
 // handleUsageCommand builds a usage report and displays it in the chat view.

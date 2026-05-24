@@ -180,7 +180,7 @@ func (m *Model) mcpOverlayToggle(name string) tea.Cmd {
 		srv.Enabled = &disabled
 		if m.mcpManager != nil {
 			_ = m.mcpManager.Disconnect(srv.Name)
-			m.unregisterMCPTools(srv.Name)
+			m.agent.UnregisterMCPServer(srv.Name)
 		}
 		m.refreshMCPServerItems()
 		m.mcpView.SetMessage(fmt.Sprintf("✓ %s disabled", name))
@@ -228,7 +228,7 @@ func (m *Model) mcpOverlayReconnect(name string) tea.Cmd {
 		return nil
 	}
 
-	m.unregisterMCPTools(name)
+	m.agent.UnregisterMCPServer(name)
 	m.mcpView.SetMessage(fmt.Sprintf("Reconnecting %s...", name))
 
 	ch := make(chan string, 1)
