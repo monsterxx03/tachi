@@ -152,15 +152,32 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 		ta.mu.Lock()
 		if ta.steerRespCh != nil {
-			// Agent already running — queue this message as steer input.
-			ta.pending = append(ta.pending, msg.Content)
-			pendingLen := len(ta.pending)
+			// /compact and /skill activation require a fresh agent turn with
+			// session context — they cannot be injected as steer text because
+			// the LLM would see the raw command string instead of the
+			// transformed instruction. Cancel the running turn and restart.
+			if isCompactCmd || isSkillActivation {
+				ta.mu.Unlock()
+				m.cancelThreadTurn(msg.ThreadID)
+				m.logger.Log("channel: cancelled running turn for %s, restarting with compact/skill", msg.ThreadID)
+				// Activate a fresh thread for the new turn.
+				ta = m.activateThread(msg.ThreadID, ctx)
+				ta.isCompact = isCompactCmd
+			} else {
+				// Agent already running — queue this message as steer input.
+				ta.pending = append(ta.pending, msg.Content)
+				pendingLen := len(ta.pending)
+				ta.mu.Unlock()
+				m.logger.Log("channel: steer queued thread=%s pending=%d", msg.ThreadID, pendingLen)
+				return channel.HandlerResult{Steered: true}
+			}
+		} else {
 			ta.mu.Unlock()
-			m.logger.Log("channel: steer queued thread=%s pending=%d", msg.ThreadID, pendingLen)
-			return channel.HandlerResult{Steered: true}
 		}
 
-		// First message for this thread — start the agent.
+		// First message for this thread (or fresh activation after cancel) —
+		// start the agent.
+		ta.mu.Lock()
 		ta.steerRespCh = make(chan string)
 		ta.resultCh = make(chan handlerResult, 1)
 		ta.mu.Unlock()
