@@ -7,6 +7,36 @@ import (
 	"time"
 )
 
+// waitForProcess polls pm.Get(name) at a short interval until the process
+// exits (or is killed/errored), or until the timeout elapses. It returns the
+// final process info on success, or calls t.Fatalf on timeout.
+//
+// Using this instead of time.Sleep makes tests faster (quick-exiting processes
+// are detected within milliseconds) and more reliable (no flaky fixed sleeps).
+func waitForProcess(t *testing.T, pm *ProcessManager, name string, timeout time.Duration) *ManagedProcessInfo {
+	t.Helper()
+	deadline := time.After(timeout)
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+
+	for {
+		info := pm.Get(name)
+		if info != nil && info.Status != ProcessRunning {
+			return info
+		}
+		select {
+		case <-deadline:
+			info := pm.Get(name)
+			if info != nil {
+				t.Fatalf("timed out waiting for process %q to exit (status=%s)", name, info.Status)
+			}
+			t.Fatalf("timed out waiting for process %q to exit (not found)", name)
+			return nil
+		case <-tick.C:
+		}
+	}
+}
+
 func TestProcessManager_StartStop(t *testing.T) {
 	pm := NewProcessManager()
 
@@ -107,8 +137,8 @@ func TestProcessManager_StopAlreadyExited(t *testing.T) {
 
 	pm.Start(t.Context(), "quick", "true") // exits immediately
 
-	// Wait for it to exit
-	time.Sleep(200 * time.Millisecond)
+	// Wait for it to exit (polling is faster and more reliable than fixed sleep)
+	waitForProcess(t, pm, "quick", 5*time.Second)
 
 	info, err := pm.Stop("quick")
 	if err != nil {
@@ -151,7 +181,7 @@ func TestProcessManager_DrainCompleted(t *testing.T) {
 	}
 
 	// Wait for the quick one to exit
-	time.Sleep(500 * time.Millisecond)
+	waitForProcess(t, pm, "done1", 5*time.Second)
 
 	completed := pm.DrainCompleted()
 	if len(completed) != 1 {
@@ -183,14 +213,9 @@ func TestProcessManager_OutputCapture(t *testing.T) {
 	}
 
 	// Wait for the process to complete — the background goroutine in Start()
-	// will handle cmd.Wait(). Give it time then check via Get().
-	time.Sleep(2 * time.Second)
+	// will handle cmd.Wait(). Polling is faster and more reliable than fixed sleep.
+	info = waitForProcess(t, pm, "output-test", 5*time.Second)
 
-	// Re-fetch after exit
-	info = pm.Get("output-test")
-	if info == nil {
-		t.Fatal("process should still be in map (not yet drained)")
-	}
 	if info.Status != ProcessExited {
 		t.Errorf("expected status exited, got %s", info.Status)
 	}
