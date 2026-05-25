@@ -3,12 +3,14 @@ package manager
 import (
 	"archive/zip"
 	"bytes"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
@@ -20,12 +22,17 @@ import (
 // so the LLM can use the Bash tool to read/parse the file directly — useful
 // for PDFs (pdftotext), Excel (openpyxl), archives, or any format that needs
 // programmatic extraction.
-func buildUserMessageWithAttachments(msg channel.IncomingMessage) string {
+//
+// Image attachments with raw bytes are returned as ContentParts for multi-modal
+// LLM input (vision). A text placeholder is still included in the message text
+// so the LLM sees the image reference even when ContentParts are not supported.
+func buildUserMessageWithAttachments(msg channel.IncomingMessage) (string, []llm.ContentPart) {
 	if len(msg.Attachments) == 0 {
-		return msg.Content
+		return msg.Content, nil
 	}
 
 	var parts []string
+	var images []llm.ContentPart
 
 	for _, att := range msg.Attachments {
 		if att.Error != "" {
@@ -59,6 +66,20 @@ func buildUserMessageWithAttachments(msg channel.IncomingMessage) string {
 				imgMsg = fmt.Sprintf("[图片: %s (已保存到 %s, %s)]", att.FileName, att.SavedPath, humanSize(int(att.Size)))
 			}
 			parts = append(parts, imgMsg)
+
+			// If we have the raw image bytes, include as a multi-modal ContentPart
+			// so the LLM can actually "see" the image via vision.
+			if len(att.Content) > 0 {
+				mimeType := att.MimeType
+				if mimeType == "" {
+					mimeType = "image/jpeg" // default fallback
+				}
+				images = append(images, llm.ContentPart{
+					Type:      llm.ContentPartImage,
+					MediaType: mimeType,
+					Data:      base64.StdEncoding.EncodeToString(att.Content),
+				})
+			}
 		}
 	}
 
@@ -66,7 +87,7 @@ func buildUserMessageWithAttachments(msg channel.IncomingMessage) string {
 		parts = append(parts, msg.Content)
 	}
 
-	return strings.Join(parts, "\n\n")
+	return strings.Join(parts, "\n\n"), images
 }
 
 // zipFile creates an in-memory ZIP archive containing a single file.

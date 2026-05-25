@@ -8,15 +8,28 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
 
-// convertContentBlocks converts ACP ContentBlock slice to a plain text user message.
-func convertContentBlocks(blocks []acp.ContentBlock) string {
+// convertContentBlocks converts ACP ContentBlock slice to a plain text user message
+// and extracts image parts for multi-modal input.
+func convertContentBlocks(blocks []acp.ContentBlock) (string, []llm.ContentPart) {
 	var sb strings.Builder
+	var images []llm.ContentPart
+
 	for _, block := range blocks {
 		switch {
 		case block.Text != nil:
 			sb.WriteString(block.Text.Text)
+		case block.Image != nil:
+			// Image block — extract as ContentPart for multi-modal LLM input.
+			images = append(images, llm.ContentPart{
+				Type:      llm.ContentPartImage,
+				MediaType: block.Image.MimeType,
+				Data:      block.Image.Data,
+			})
+			// Also add a text placeholder so the message makes sense as plain text.
+			sb.WriteString("[图片]")
 		case block.Resource != nil:
 			// Inline embedded resources like Tachi's @-file format
 			if block.Resource.Resource.TextResourceContents != nil {
@@ -33,7 +46,7 @@ func convertContentBlocks(blocks []acp.ContentBlock) string {
 			sb.WriteString(fmt.Sprintf("[@file: %s]\n", block.ResourceLink.Uri))
 		}
 	}
-	return sb.String()
+	return sb.String(), images
 }
 
 // extractPathFromURI extracts a filesystem path from a file:// URI.

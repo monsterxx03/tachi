@@ -891,7 +891,8 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 
 	// Expand @path references: inject file/directory contents into the
 	// message sent to the LLM, but keep the TUI display unexpanded.
-	expandedText := ExpandAtReferences(text)
+	// Images are extracted as structured ContentParts for multi-modal input.
+	expanded := ExpandAtReferences(text)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel
@@ -900,8 +901,13 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	m.steerRespCh = make(chan string)
 	m.agent.SetSteerChannel(m.steerRespCh)
 
+	// Attach images (if any) for the next RunConversationStream call.
+	if len(expanded.Images) > 0 {
+		m.agent.SetPendingImages(expanded.Images)
+	}
+
 	m.streamGen++
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expandedText, m.systemPrompt, m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

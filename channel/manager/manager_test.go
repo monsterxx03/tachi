@@ -736,7 +736,7 @@ func TestBuildUserMessageWithAttachments_NoAttachments(t *testing.T) {
 		ThreadID: "test",
 		Content:  "hello world",
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	if result != "hello world" {
 		t.Errorf("expected 'hello world', got %q", result)
 	}
@@ -755,7 +755,7 @@ func TestBuildUserMessageWithAttachments_TextFile(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	if !contains(result, "[文件: main.go]") {
 		t.Errorf("expected file header, got %q", result)
 	}
@@ -779,7 +779,7 @@ func TestBuildUserMessageWithAttachments_Image(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	if !contains(result, "[图片: image.jpg (64.0KB)]") {
 		t.Errorf("expected image summary, got %q", result)
 	}
@@ -800,7 +800,7 @@ func TestBuildUserMessageWithAttachments_Error(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	if !contains(result, "下载失败") || !contains(result, "secret.pdf") {
 		t.Errorf("expected error info, got %q", result)
 	}
@@ -826,7 +826,7 @@ func TestBuildUserMessageWithAttachments_MultipleAttachments(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	if !contains(result, "file A") || !contains(result, "file B") {
 		t.Errorf("expected both files, got %q", result)
 	}
@@ -846,7 +846,7 @@ func TestBuildUserMessageWithAttachments_BinaryFile(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	if !contains(result, "archive.zip") || !contains(result, "1.0MB") {
 		t.Errorf("expected binary file info, got %q", result)
 	}
@@ -869,7 +869,7 @@ func TestBuildUserMessageWithAttachments_TextFileWithSavedPath(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	assert.True(t, contains(result, "已保存到"), "should mention saved path: %s", result)
 	assert.True(t, contains(result, "main.go-12345"), "should include full path: %s", result)
 	assert.True(t, contains(result, "package main"), "should include inline content: %s", result)
@@ -890,7 +890,7 @@ func TestBuildUserMessageWithAttachments_BinaryWithSavedPath(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	assert.True(t, contains(result, "已保存到本地"), "should mention local save: %s", result)
 	assert.True(t, contains(result, "Bash"), "should mention Bash tool: %s", result)
 	assert.True(t, contains(result, "解析这个 PDF"), "should include original text: %s", result)
@@ -909,10 +909,33 @@ func TestBuildUserMessageWithAttachments_ImageWithSavedPath(t *testing.T) {
 			},
 		},
 	}
-	result := buildUserMessageWithAttachments(msg)
+	result, _ := buildUserMessageWithAttachments(msg)
 	assert.True(t, contains(result, "已保存到"), "should mention saved path: %s", result)
 	assert.True(t, contains(result, "photo.jpg-xyz"), "should include file path: %s", result)
 	assert.True(t, contains(result, "这是什么图片？"), "should include original text: %s", result)
+}
+
+func TestBuildUserMessageWithAttachments_ImageWithContent(t *testing.T) {
+	imageBytes := []byte{0xFF, 0xD8, 0xFF, 0xE0} // fake JPEG header
+	msg := channel.IncomingMessage{
+		ThreadID: "test",
+		Content:  "describe this",
+		Attachments: []channel.Attachment{
+			{
+				Type:     channel.AttachmentTypeImage,
+				FileName: "photo.jpg",
+				MimeType: "image/jpeg",
+				Content:  imageBytes,
+				Size:     int64(len(imageBytes)),
+			},
+		},
+	}
+	result, images := buildUserMessageWithAttachments(msg)
+	assert.True(t, contains(result, "describe this"), "should include user text")
+	assert.True(t, contains(result, "[图片: photo.jpg"), "should include image marker")
+	assert.Len(t, images, 1, "should return one image part")
+	assert.Equal(t, "image/jpeg", images[0].MediaType)
+	assert.NotEmpty(t, images[0].Data, "should have base64 data")
 }
 
 // TestHandleModelCommand_List verifies that /model (no args) lists all

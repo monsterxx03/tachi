@@ -179,7 +179,25 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		rctx := a.buildReminderContext(reminderIsFirst, false)
 		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
-		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
+
+		userMsg := llm.Message{Role: "user", Content: wrappedUser}
+
+		// Attach pending images as multi-modal content parts.
+		// When images are present, build ContentParts with text + images so
+		// providers can format them correctly (e.g. Anthropic image blocks,
+		// OpenAI multi-content arrays).
+		if len(a.pendingImages) > 0 {
+			parts := make([]llm.ContentPart, 0, 1+len(a.pendingImages))
+			parts = append(parts, llm.ContentPart{
+				Type: llm.ContentPartText,
+				Text: wrappedUser,
+			})
+			parts = append(parts, a.pendingImages...)
+			userMsg.ContentParts = parts
+			a.pendingImages = nil // consumed
+		}
+
+		messages = append(messages, userMsg)
 
 		// Session management: create session if needed and append user message
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {

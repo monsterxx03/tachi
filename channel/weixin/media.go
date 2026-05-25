@@ -220,12 +220,17 @@ func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attach
 			attachments = append(attachments, att)
 
 		case MessageItemTypeImage:
+			// WeChat images are always JPEG (even when FileName lacks an extension).
+			mimeType := guessMimeType(ref.FileName)
+			if mimeType == "application/octet-stream" {
+				mimeType = "image/jpeg"
+			}
 			attachments = append(attachments, channel.Attachment{
 				Type:      channel.AttachmentTypeImage,
 				FileName:  ref.FileName,
 				Size:      int64(len(data)),
 				Content:   data,
-				MimeType:  guessMimeType(ref.FileName),
+				MimeType:  mimeType,
 				SavedPath: filePath,
 			})
 		}

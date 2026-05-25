@@ -98,12 +98,16 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.chatview.RemovePendingItems()
 			m.statusbar.SetPendingCount(0)
 			// Expand @-file references before sending to the LLM.
-			expanded := ExpandAtReferences(combined)
+			expandResult := ExpandAtReferences(combined)
 			// Add as a normal user message in chatview for visual continuity.
 			m.chatview.AddMessage(chatMessage{Role: "user", Content: combined})
+			// Attach images from steer expansion (if any).
+			if len(expandResult.Images) > 0 {
+				m.agent.SetPendingImages(expandResult.Images)
+			}
 			// Send expanded steer text to agent (non-blocking with select).
 			select {
-			case m.steerRespCh <- expanded:
+			case m.steerRespCh <- expandResult.Text:
 			default:
 			}
 		} else {

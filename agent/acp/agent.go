@@ -62,7 +62,7 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 				Sse:  false,
 			},
 			PromptCapabilities: acp.PromptCapabilities{
-				Image:           false,
+				Image:           true,
 				Audio:           false,
 				EmbeddedContext: true,
 			},
@@ -208,7 +208,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	promptCtx = wdctx.WithDir(promptCtx, sess.cwd)
 
 	// Convert ACP content blocks to Tachi message
-	userMsg := convertContentBlocks(req.Prompt)
+	userMsg, userImages := convertContentBlocks(req.Prompt)
 
 	// ---- Slash command interception ----
 	if cmd, args := parseSlashCommand(userMsg, sess.agent); cmd != nil {
@@ -220,6 +220,11 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 		return acp.PromptResponse{StopReason: stopReason}, nil
 	}
 	// ---- END ----
+
+	// Attach images (if any) for multi-modal LLM input.
+	if len(userImages) > 0 {
+		sess.agent.SetPendingImages(userImages)
+	}
 
 	// Build history from cache (populated on previous turns) or disk (first turn)
 	var history []llm.Message

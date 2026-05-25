@@ -11,7 +11,7 @@ func TestConvertContentBlocks_TextOnly(t *testing.T) {
 	blocks := []acp.ContentBlock{
 		acp.TextBlock("Hello, world!"),
 	}
-	result := convertContentBlocks(blocks)
+	result, _ := convertContentBlocks(blocks)
 	assert.Equal(t, "Hello, world!", result)
 }
 
@@ -20,7 +20,7 @@ func TestConvertContentBlocks_MultipleBlocks(t *testing.T) {
 		acp.TextBlock("First part. "),
 		acp.TextBlock("Second part."),
 	}
-	result := convertContentBlocks(blocks)
+	result, _ := convertContentBlocks(blocks)
 	assert.Equal(t, "First part. Second part.", result)
 }
 
@@ -34,7 +34,7 @@ func TestConvertContentBlocks_ResourceEmbed(t *testing.T) {
 			},
 		}),
 	}
-	result := convertContentBlocks(blocks)
+	result, _ := convertContentBlocks(blocks)
 	expected := "Check this file:\n--- BEGIN UNTRUSTED FILE CONTENT: /tmp/test.go ---\npackage main\n\n--- END UNTRUSTED FILE CONTENT ---\n"
 	assert.Equal(t, expected, result)
 }
@@ -43,8 +43,51 @@ func TestConvertContentBlocks_ResourceLink(t *testing.T) {
 	blocks := []acp.ContentBlock{
 		acp.ResourceLinkBlock("test.txt", "file:///tmp/test.txt"),
 	}
-	result := convertContentBlocks(blocks)
+	result, _ := convertContentBlocks(blocks)
 	assert.Contains(t, result, "[@file: file:///tmp/test.txt]")
+}
+
+func TestConvertContentBlocks_Image(t *testing.T) {
+	blocks := []acp.ContentBlock{
+		acp.TextBlock("What's in this image? "),
+		{
+			Image: &acp.ContentBlockImage{
+				Type:     "image",
+				MimeType: "image/png",
+				Data:     "iVBORw0KGgoAAAANS", // fake base64
+			},
+		},
+	}
+	text, images := convertContentBlocks(blocks)
+	assert.Equal(t, "What's in this image? [图片]", text)
+	assert.Len(t, images, 1)
+	assert.Equal(t, "image/png", images[0].MediaType)
+	assert.Equal(t, "iVBORw0KGgoAAAANS", images[0].Data)
+}
+
+func TestConvertContentBlocks_MultipleImages(t *testing.T) {
+	blocks := []acp.ContentBlock{
+		acp.TextBlock("Compare these: "),
+		{
+			Image: &acp.ContentBlockImage{
+				Type:     "image",
+				MimeType: "image/jpeg",
+				Data:     "base64data1",
+			},
+		},
+		{
+			Image: &acp.ContentBlockImage{
+				Type:     "image",
+				MimeType: "image/png",
+				Data:     "base64data2",
+			},
+		},
+	}
+	text, images := convertContentBlocks(blocks)
+	assert.Equal(t, "Compare these: [图片][图片]", text)
+	assert.Len(t, images, 2)
+	assert.Equal(t, "image/jpeg", images[0].MediaType)
+	assert.Equal(t, "image/png", images[1].MediaType)
 }
 
 func TestExtractPathFromURI(t *testing.T) {

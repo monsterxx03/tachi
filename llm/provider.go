@@ -111,10 +111,29 @@ const (
 	                     // Provider converters handle this differently based on API protocol.
 )
 
+// ContentPartType identifies the type of a content part.
+type ContentPartType string
+
+const (
+	ContentPartText  ContentPartType = "text"
+	ContentPartImage ContentPartType = "image"
+)
+
+// ContentPart represents a single part of a multi-modal message.
+// When Message.ContentParts is non-empty, providers use it instead of
+// Message.Content to construct the API request (enabling image inputs).
+type ContentPart struct {
+	Type      ContentPartType `json:"type"`
+	Text      string          `json:"text,omitempty"`       // for ContentPartText
+	MediaType string          `json:"media_type,omitempty"` // e.g. "image/jpeg", "image/png"
+	Data      string          `json:"data,omitempty"`       // base64-encoded image data
+}
+
 // Message represents a chat message
 type Message struct {
 	Role           string         `json:"role"`
 	Content        string         `json:"content"`
+	ContentParts   []ContentPart  `json:"content_parts,omitempty"` // multi-modal content; when set, providers prefer this over Content
 	ToolCalls      []ToolCall     `json:"tool_calls,omitempty"`
 	ToolCallID     string         `json:"tool_call_id,omitempty"`
 	Name           string         `json:"name,omitempty"`

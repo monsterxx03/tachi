@@ -108,6 +108,10 @@ type AIAgent struct {
 	// Tied to the agent lifecycle — Close() kills all tracked processes.
 	processManager *tools.ProcessManager
 
+	// pendingImages holds image content parts to attach to the next user message.
+	// Set via SetPendingImages, consumed (and cleared) by RunConversationStream.
+	pendingImages []llm.ContentPart
+
 	// baseReminders stores the non-skill reminders assembled during Configure.
 	// rebuildSkillCollector uses this to re-apply SkillListReminder on reload.
 	baseReminders []systemreminder.Reminder
@@ -422,6 +426,13 @@ func (a *AIAgent) ClearToolRegistry() {
 // Configure().
 func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
 	a.processManager = pm
+}
+
+// SetPendingImages sets image content parts to attach to the next user message
+// sent via RunConversationStream. The images are consumed (cleared) after use.
+// Call this before RunConversationStream when the user message includes images.
+func (a *AIAgent) SetPendingImages(images []llm.ContentPart) {
+	a.pendingImages = images
 }
 
 // Close releases resources held by the agent, including killing all tracked

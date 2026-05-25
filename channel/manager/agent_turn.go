@@ -344,7 +344,12 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	aiAgent.SetSteerChannel(ta.steerRespCh)
 
 	// Build the user message text with attachment content prepended.
-	userContent := buildUserMessageWithAttachments(msg)
+	userContent, userImages := buildUserMessageWithAttachments(msg)
+
+	// Attach images (if any) for multi-modal LLM input (vision).
+	if len(userImages) > 0 {
+		aiAgent.SetPendingImages(userImages)
+	}
 
 	// --- SendFile tool for file delivery via channel ---
 	// The tool is available in channel mode so the LLM can send files

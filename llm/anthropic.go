@@ -130,6 +130,18 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 				}
 				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(tc.ID, input, tc.Function.Name))
 			}
+		} else if len(msg.ContentParts) > 0 {
+			// Multi-modal message (text + images)
+			for _, part := range msg.ContentParts {
+				switch part.Type {
+				case ContentPartText:
+					if part.Text != "" {
+						contentBlocks = append(contentBlocks, anthropic.NewTextBlock(part.Text))
+					}
+				case ContentPartImage:
+					contentBlocks = append(contentBlocks, anthropic.NewImageBlockBase64(part.MediaType, part.Data))
+				}
+			}
 		} else {
 			contentBlocks = append(contentBlocks, anthropic.NewTextBlock(msg.Content))
 		}

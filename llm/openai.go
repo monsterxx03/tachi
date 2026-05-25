@@ -66,10 +66,35 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		}
 		m := openai.ChatCompletionMessage{
 			Role:       role,
-			Content:    msg.Content,
 			Name:       msg.Name,
 			ToolCallID: msg.ToolCallID,
 		}
+
+		// Multi-modal content: use MultiContent when ContentParts are present
+		if len(msg.ContentParts) > 0 {
+			for _, part := range msg.ContentParts {
+				switch part.Type {
+				case ContentPartText:
+					m.MultiContent = append(m.MultiContent, openai.ChatMessagePart{
+						Type: openai.ChatMessagePartTypeText,
+						Text: part.Text,
+					})
+				case ContentPartImage:
+					// OpenAI expects data URIs: "data:<mediaType>;base64,<data>"
+					dataURI := "data:" + part.MediaType + ";base64," + part.Data
+					m.MultiContent = append(m.MultiContent, openai.ChatMessagePart{
+						Type: openai.ChatMessagePartTypeImageURL,
+						ImageURL: &openai.ChatMessageImageURL{
+							URL:    dataURI,
+							Detail: openai.ImageURLDetailAuto,
+						},
+					})
+				}
+			}
+		} else {
+			m.Content = msg.Content
+		}
+
 		for _, tc := range msg.ToolCalls {
 			args := tc.Function.Arguments
 			if args != "" && !json.Valid([]byte(args)) {

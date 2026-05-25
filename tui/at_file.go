@@ -3,6 +3,7 @@ package tui
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"fmt"
 	"os"
 	"os/exec"
@@ -12,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/pkg/pathtrie"
 )
@@ -147,16 +149,37 @@ func listCwdImmediate(dir string) ([]atFileMatch, error) {
 
 const maxAtInlineSize = 256 * 1024 // 256KB — only inline text files under this
 
+// maxAtImageSize is the maximum image file size to embed as base64 (20MB).
+const maxAtImageSize = 20 * 1024 * 1024
+
+// imageExtensions maps file extensions to MIME types for supported image formats.
+var imageExtensions = map[string]string{
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".png":  "image/png",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+}
+
+// ExpandResult holds the result of expanding @-file references in a message.
+type ExpandResult struct {
+	Text   string            // The expanded text message
+	Images []llm.ContentPart // Image parts extracted from @-file references
+}
+
 // ExpandAtReferences takes a user message and expands all @path references.
 //
 //   - Directories: inline the file listing via rg (original behavior).
 //   - Text files (no null bytes, ≤256KB): inline full content with
 //     --- BEGIN UNTRUSTED FILE CONTENT --- markers.
-//   - Binary files (PDF, Excel, images, etc.): annotate as [@file: path]
+//   - Image files (jpg, png, gif, webp ≤20MB): extracted as ContentPart images
+//     for multi-modal LLM input.
+//   - Other binary files (PDF, Excel, etc.): annotate as [@file: path]
 //     and let the LLM use Bash/ReadFile tools to parse them.
 //   - Errors / not found: leave @path as-is.
-func ExpandAtReferences(message string) string {
+func ExpandAtReferences(message string) ExpandResult {
 	var result strings.Builder
+	var images []llm.ContentPart
 	expanded := false
 	cwd, _ := os.Getwd()
 
@@ -193,6 +216,13 @@ func ExpandAtReferences(message string) string {
 						result.WriteString("@")
 						result.WriteString(path)
 					}
+				} else if imgPart, ok := tryReadImageFile(fullPath); ok {
+					// Image file — extract as ContentPart for multi-modal input.
+					images = append(images, imgPart)
+					result.WriteString("[图片: ")
+					result.WriteString(path)
+					result.WriteString("]")
+					expanded = true
 				} else if content, ok := tryReadTextFile(fullPath); ok {
 					// Text file — inline content.
 					result.WriteString("@")
@@ -223,10 +253,40 @@ func ExpandAtReferences(message string) string {
 	}
 
 	if expanded {
-		debuglog.DefaultLogger.Log("at_file: expanded @ references in message")
+		debuglog.DefaultLogger.Log("at_file: expanded @ references in message (images=%d)", len(images))
 	}
 
-	return result.String()
+	return ExpandResult{
+		Text:   result.String(),
+		Images: images,
+	}
+}
+
+// tryReadImageFile reads an image file and returns a ContentPart if it's a
+// supported image format (JPEG, PNG, GIF, WebP) and within the size limit.
+// Returns ok=false for non-image files, oversized files, or read errors.
+func tryReadImageFile(fullPath string) (llm.ContentPart, bool) {
+	ext := strings.ToLower(filepath.Ext(fullPath))
+	mimeType, isImage := imageExtensions[ext]
+	if !isImage {
+		return llm.ContentPart{}, false
+	}
+
+	info, err := os.Stat(fullPath)
+	if err != nil || info.Size() > maxAtImageSize {
+		return llm.ContentPart{}, false
+	}
+
+	data, err := os.ReadFile(fullPath)
+	if err != nil {
+		return llm.ContentPart{}, false
+	}
+
+	return llm.ContentPart{
+		Type:      llm.ContentPartImage,
+		MediaType: mimeType,
+		Data:      base64.StdEncoding.EncodeToString(data),
+	}, true
 }
 
 // expandDirListing returns a recursive file listing for a directory.
