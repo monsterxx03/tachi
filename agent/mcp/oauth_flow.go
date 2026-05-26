@@ -87,6 +87,31 @@ func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn fun
 	return startManualFlow(ctx, srv, runErrFn)
 }
 
+// RunManualOAuthFlow performs the OAuth2 flow without attempting to open a
+// browser. It is the preferred entry point for headless environments such as
+// IM channel bots where a desktop browser is not available.
+//
+// DCR is performed automatically when ClientID is not configured.
+// The authorisation URL is delivered via runErrFn so the caller can forward
+// it to the user through whatever notification channel is appropriate.
+// The user must then paste the redirect URL back using CompleteManualAuth.
+func RunManualOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn func(string)) error {
+	if srv.OAuth == nil {
+		srv.OAuth = &config.MCPOAuthConfig{}
+	}
+
+	store, err := NewFileTokenStore(srv.TokenStorageName())
+	if err != nil {
+		return fmt.Errorf("token store: %w", err)
+	}
+
+	if err := ensureClientID(ctx, srv, store); err != nil {
+		return fmt.Errorf("DCR: %w", err)
+	}
+
+	return startManualFlow(ctx, srv, runErrFn)
+}
+
 // CompleteManualAuth finishes the manual OAuth flow by exchanging the
 // redirect URL pasted by the user for a token.
 func CompleteManualAuth(ctx context.Context, srv *config.MCPServerConfig, redirectURL string) error {

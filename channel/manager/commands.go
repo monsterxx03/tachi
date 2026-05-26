@@ -38,6 +38,16 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 	case "new":
 		return m.handleNewCommand(cmd.ThreadID)
 	case "mcp":
+		if cmd.Args != "" {
+			argParts := strings.Fields(cmd.Args)
+			if len(argParts) > 0 && argParts[0] == "auth" {
+				serverName := ""
+				if len(argParts) > 1 {
+					serverName = argParts[1]
+				}
+				return m.handleMCPAuth(cmd.ThreadID, serverName)
+			}
+		}
 		return m.handleMCPList()
 	case "usage":
 		return m.handleUsageCommand(cmd.ThreadID)
@@ -70,7 +80,20 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 	case "/new":
 		return m.handleNewCommand(msg.ThreadID)
 	case "/mcp":
-		return m.handleMCPList()
+		sub := ""
+		if len(parts) > 1 {
+			sub = parts[1]
+		}
+		switch sub {
+		case "auth":
+			serverName := ""
+			if len(parts) > 2 {
+				serverName = parts[2]
+			}
+			return m.handleMCPAuth(msg.ThreadID, serverName)
+		default:
+			return m.handleMCPList()
+		}
 	case "/usage":
 		return m.handleUsageCommand(msg.ThreadID)
 	case "/cron":
@@ -93,7 +116,7 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error
 		return m.handleSkillCommand(args)
 	default:
 		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd), nil
+		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /mcp auth <server> — Start OAuth authorization for an MCP server\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd), nil
 	}
 }
 
@@ -268,6 +291,70 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string) (string
 }
 
 // --- /mcp ---
+
+// handleMCPAuth starts the OAuth2 flow for an HTTP MCP server.
+//
+// Usage: /mcp auth <server>
+//
+// Runs in a background goroutine and skips the browser-open step entirely
+// (channel mode is headless). startManualFlow binds a local callback listener
+// on the configured callback_host (e.g. 10.x.x.x) and sends the authorization
+// URL to the user via sendToThread. The OAuth provider redirects the user's
+// browser to that address; the listener catches the code and completes the
+// exchange automatically — no paste-back required.
+//
+// On success the token is persisted to disk; the next agent turn will
+// automatically connect to the server using the stored credentials.
+func (m *Manager) handleMCPAuth(threadID, serverName string) (string, error) {
+	if serverName == "" {
+		return "Usage: `/mcp auth <server>` — authorize an HTTP MCP server", nil
+	}
+
+	if m.cfg == nil {
+		return "", fmt.Errorf("manager config unavailable")
+	}
+
+	// Find the server config.
+	var srv *config.MCPServerConfig
+	for i := range m.cfg.MCPServers {
+		if m.cfg.MCPServers[i].Name == serverName {
+			srv = &m.cfg.MCPServers[i]
+			break
+		}
+	}
+	if srv == nil {
+		return fmt.Sprintf("MCP server **%s** not found. Use `/mcp` to list configured servers.", serverName), nil
+	}
+	if srv.Type != config.MCPTransportHTTP {
+		return fmt.Sprintf("OAuth is only supported for HTTP MCP servers. **%s** uses stdio transport.", serverName), nil
+	}
+
+	// Run the OAuth flow in a background goroutine so we can return an
+	// immediate acknowledgement. RunManualOAuthFlow skips the browser-open
+	// attempt; startManualFlow binds on the configured callback_host and
+	// sends the authorization URL to the user via statusFn.
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+		defer cancel()
+
+		statusFn := func(msg string) {
+			m.sendToThread(context.Background(), threadID, msg, "")
+		}
+
+		if err := mcp.RunManualOAuthFlow(ctx, srv, statusFn); err != nil {
+			m.logger.Log("channel: /mcp auth flow for %q failed: %v", serverName, err)
+			m.sendToThread(context.Background(), threadID,
+				fmt.Sprintf("❌ OAuth failed for **%s**: %v", serverName, err), "")
+			return
+		}
+
+		m.logger.Log("channel: /mcp auth flow for %q succeeded", serverName)
+		m.sendToThread(context.Background(), threadID,
+			fmt.Sprintf("✅ OAuth authorization successful for **%s**!\n\nSend a message to start using the server's tools.", serverName), "")
+	}()
+
+	return fmt.Sprintf("🔐 Starting OAuth authorization for **%s**...\n\nThe authorization URL will be sent to you in a moment.", serverName), nil
+}
 
 // handleMCPList returns a formatted list of configured MCP servers.
 func (m *Manager) handleMCPList() (string, error) {
