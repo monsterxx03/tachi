@@ -288,21 +288,21 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 
 	m.mcpView.SetMessage(fmt.Sprintf("Starting OAuth for %s...", name))
 
-	ch := make(chan string, 4)
+	ch := make(chan string, 8)
 	go func() {
 		defer close(ch)
-
-		errFn := func(msg string) {
-			select {
-			case ch <- msg:
-			default:
-			}
-		}
 
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 		defer cancel()
 
-		if err := mcp.RunOAuthFlow(ctx, srv, errFn); err != nil {
+		statusFn := func(msg string) {
+			select {
+			case ch <- msg:
+			case <-ctx.Done():
+			}
+		}
+
+		if err := mcp.RunOAuthFlow(ctx, srv, statusFn); err != nil {
 			m.logger.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
 			if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); !ok {
 				ch <- fmt.Sprintf("OAuth failed: %v", err)

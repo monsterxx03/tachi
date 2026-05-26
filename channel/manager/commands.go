@@ -7,8 +7,10 @@ import (
 	"os"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
@@ -293,12 +295,63 @@ func (m *Manager) handleMCPList() (string, error) {
 		}
 
 		fmt.Fprintf(&sb, "\n- %s [%s]\n  Transport: %s\n", srv.Name, status, transport)
-		if srv.HasOAuth() {
-			sb.WriteString("  OAuth: configured\n")
+
+		// Show OAuth authentication status for HTTP servers.
+		if srv.Type == config.MCPTransportHTTP && (srv.HasOAuth() || hasTokenOnDisk(srv.TokenStorageName())) {
+			sb.WriteString(fmt.Sprintf("  OAuth: %s\n", oauthStatusString(&srv)))
 		}
 	}
 
 	return sb.String(), nil
+}
+
+// oauthStatusString returns a human-readable OAuth status for the server.
+func oauthStatusString(srv *config.MCPServerConfig) string {
+	store, err := mcp.NewFileTokenStore(srv.TokenStorageName())
+	if err != nil {
+		return "⚠️ error"
+	}
+
+	token, err := store.GetToken(context.Background())
+	if err != nil || token == nil {
+		return "❌ not authenticated"
+	}
+
+	if token.IsExpired() {
+		if token.RefreshToken != "" {
+			return "🔄 expired (has refresh_token)"
+		}
+		return "❌ expired"
+	}
+
+	expiresIn := ""
+	if !token.ExpiresAt.IsZero() {
+		remaining := time.Until(token.ExpiresAt)
+		if remaining > 24*time.Hour {
+			expiresIn = fmt.Sprintf(", expires in %dd", int(remaining.Hours()/24))
+		} else if remaining > time.Hour {
+			expiresIn = fmt.Sprintf(", expires in %dh", int(remaining.Hours()))
+		} else {
+			expiresIn = fmt.Sprintf(", expires in %dm", int(remaining.Minutes()))
+		}
+	}
+
+	return fmt.Sprintf("✅ authenticated%s", expiresIn)
+}
+
+// hasTokenOnDisk checks if there's any persisted token or DCR info for the storage key.
+func hasTokenOnDisk(storageKey string) bool {
+	store, err := mcp.NewFileTokenStore(storageKey)
+	if err != nil {
+		return false
+	}
+	if _, err := store.GetToken(context.Background()); err == nil {
+		return true
+	}
+	if _, err := store.GetDCRInfo(context.Background()); err == nil {
+		return true
+	}
+	return false
 }
 
 // --- /usage ---

@@ -700,13 +700,8 @@ func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn 
 	go func() { _ = httpSrv.Serve(ln) }()
 	defer httpSrv.Close()
 
-	// Show the URL and wait for callback or timeout
-	runErrFn(fmt.Sprintf(
-		"**%s** requires OAuth authorization.\n\n"+
-			"1. Open this URL:\n   %s\n\n"+
-			"Waiting for authorization...",
-		srv.Name, authURL,
-	))
+	// Show auth URL and waiting status in one message.
+	runErrFn(fmt.Sprintf("Auth URL:\n%s\n\nWaiting for callback...", authURL))
 
 	select {
 	case <-done:
