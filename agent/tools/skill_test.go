@@ -10,11 +10,18 @@ import (
 // ---- stubs ----
 
 type stubSkillManager struct {
-	entries []SkillListEntry
-	skills  map[string]*SkillData
-	created []SkillCreateParams
-	createErr error
+	entries      []SkillListEntry
+	skills       map[string]*SkillData
+	created      []SkillCreateParams
+	createErr    error
 	createResult *SkillCreateResult
+
+	deleted     []struct{ name, source string }
+	deleteErr   error
+
+	updated     []SkillUpdateParams
+	updateErr   error
+	updateResult *SkillUpdateResult
 }
 
 func (s *stubSkillManager) ListSkills() []SkillListEntry {
@@ -37,6 +44,33 @@ func (s *stubSkillManager) CreateSkill(params SkillCreateParams) (*SkillCreateRe
 		return s.createResult, nil
 	}
 	return &SkillCreateResult{
+		Name:        params.Name,
+		Description: params.Description,
+		Tags:        params.Tags,
+		Source:      params.Source,
+		Path:        "/tmp/test/" + params.Name + "/SKILL.md",
+	}, nil
+}
+
+func (s *stubSkillManager) DeleteSkill(name, source string) error {
+	s.deleted = append(s.deleted, struct{ name, source string }{name, source})
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
+	// Simulate: remove from skills map
+	delete(s.skills, name)
+	return nil
+}
+
+func (s *stubSkillManager) UpdateSkill(params SkillUpdateParams) (*SkillUpdateResult, error) {
+	s.updated = append(s.updated, params)
+	if s.updateErr != nil {
+		return nil, s.updateErr
+	}
+	if s.updateResult != nil {
+		return s.updateResult, nil
+	}
+	return &SkillUpdateResult{
 		Name:        params.Name,
 		Description: params.Description,
 		Tags:        params.Tags,
@@ -255,5 +289,137 @@ func TestSkillTool_InvalidOperation(t *testing.T) {
 	_, err = tool.ExecuteContext(t.Context(), `{}`)
 	if err == nil {
 		t.Error("expected error when operation is missing")
+	}
+}
+
+// ---- Delete Operation ----
+
+func TestSkillTool_Delete(t *testing.T) {
+	mgr := &stubSkillManager{
+		skills: map[string]*SkillData{
+			"temp-skill": {
+				Name:        "temp-skill",
+				Description: "Temporary skill",
+			},
+		},
+	}
+	tool := NewSkillTool(mgr)
+
+	// Test basic delete
+	result, err := tool.ExecuteContext(t.Context(), `{"operation": "delete", "name": "temp-skill"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Error("result should contain success=true")
+	}
+	if !strings.Contains(result, "temp-skill") {
+		t.Error("result should contain skill name")
+	}
+	if len(mgr.deleted) != 1 {
+		t.Fatalf("expected 1 delete call, got %d", len(mgr.deleted))
+	}
+	if mgr.deleted[0].name != "temp-skill" {
+		t.Errorf("expected name=temp-skill, got %s", mgr.deleted[0].name)
+	}
+
+	// Test delete with source
+	_, err = tool.ExecuteContext(t.Context(), `{"operation": "delete", "name": "global-skill", "source": "global"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mgr.deleted[1].source != "global" {
+		t.Errorf("expected source=global, got %s", mgr.deleted[1].source)
+	}
+
+	// Test delete with missing name
+	_, err = tool.ExecuteContext(t.Context(), `{"operation": "delete"}`)
+	if err == nil {
+		t.Error("expected error when name is missing")
+	}
+
+	// Test error propagation
+	errMgr := &stubSkillManager{deleteErr: fmt.Errorf("not found")}
+	errTool := NewSkillTool(errMgr)
+	_, err = errTool.ExecuteContext(t.Context(), `{"operation": "delete", "name": "x"}`)
+	if err == nil {
+		t.Error("expected error propagation")
+	}
+}
+
+// ---- Update Operation ----
+
+func TestSkillTool_Update(t *testing.T) {
+	mgr := &stubSkillManager{
+		skills: map[string]*SkillData{
+			"my-skill": {
+				Name:        "my-skill",
+				Description: "Original description",
+				Body:        "Original body",
+				Source:      "project",
+				Dir:         "/tmp/test",
+			},
+		},
+	}
+	tool := NewSkillTool(mgr)
+
+	// Test partial update (only description)
+	result, err := tool.ExecuteContext(t.Context(), `{
+		"operation": "update",
+		"name": "my-skill",
+		"description": "Updated description"
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(result, `"success":true`) {
+		t.Error("result should contain success=true")
+	}
+	if !strings.Contains(result, "my-skill") {
+		t.Error("result should contain skill name")
+	}
+	if len(mgr.updated) != 1 {
+		t.Fatalf("expected 1 update call, got %d", len(mgr.updated))
+	}
+	u := mgr.updated[0]
+	if u.Description != "Updated description" {
+		t.Errorf("expected description='Updated description', got %s", u.Description)
+	}
+
+	// Test full update
+	_, err = tool.ExecuteContext(t.Context(), `{
+		"operation": "update",
+		"name": "my-skill",
+		"description": "New desc",
+		"body": "New body",
+		"tags": ["tag1", "tag2"],
+		"source": "global"
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	u2 := mgr.updated[1]
+	if u2.Body != "New body" {
+		t.Errorf("expected body='New body', got %s", u2.Body)
+	}
+	if len(u2.Tags) != 2 {
+		t.Errorf("expected 2 tags, got %d", len(u2.Tags))
+	}
+	if u2.Source != "global" {
+		t.Errorf("expected source=global, got %s", u2.Source)
+	}
+
+	// Test update with missing name
+	_, err = tool.ExecuteContext(t.Context(), `{"operation": "update"}`)
+	if err == nil {
+		t.Error("expected error when name is missing")
+	}
+
+	// Test error propagation
+	errMgr := &stubSkillManager{updateErr: fmt.Errorf("not found")}
+	errTool := NewSkillTool(errMgr)
+	_, err = errTool.ExecuteContext(t.Context(), `{"operation": "update", "name": "x"}`)
+	if err == nil {
+		t.Error("expected error propagation")
 	}
 }

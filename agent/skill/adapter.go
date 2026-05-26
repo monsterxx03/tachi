@@ -83,3 +83,27 @@ func (s *Store) CreateSkill(params tools.SkillCreateParams) (*tools.SkillCreateR
 		Path:        filepath.Join(sk.Dir, "SKILL.md"),
 	}, nil
 }
+
+// ---- tools.SkillDeleter ----
+
+// DeleteSkill implements tools.SkillDeleter.
+func (s *Store) DeleteSkill(name, source string) error {
+	return s.Delete(name, source)
+}
+
+// ---- tools.SkillUpdater ----
+
+// UpdateSkill implements tools.SkillUpdater.
+func (s *Store) UpdateSkill(params tools.SkillUpdateParams) (*tools.SkillUpdateResult, error) {
+	sk, err := s.Update(params.Name, params.Description, params.Body, params.Tags, params.Source)
+	if err != nil {
+		return nil, err
+	}
+	return &tools.SkillUpdateResult{
+		Name:        sk.Meta.Name,
+		Description: sk.Meta.Description,
+		Tags:        sk.Meta.Tags,
+		Source:      sk.Meta.Source,
+		Path:        filepath.Join(sk.Dir, "SKILL.md"),
+	}, nil
+}

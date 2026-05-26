@@ -283,6 +283,133 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 	}, nil
 }
 
+// Delete removes a skill from the filesystem. source narrows the search scope
+// ("project" or "global"); empty means search all dirs.
+func (s *Store) Delete(name string, source string) error {
+	if err := ValidateName(name); err != nil {
+		return fmt.Errorf("invalid skill name: %w", err)
+	}
+
+	skillDir, _, err := s.findSkillDir(name, source)
+	if err != nil {
+		return err
+	}
+
+	if err := os.RemoveAll(skillDir); err != nil {
+		return fmt.Errorf("failed to delete skill directory %q: %w", skillDir, err)
+	}
+
+	s.logger.Log("skill: Delete: removed skill %q at %s", name, skillDir)
+	return nil
+}
+
+// Update modifies an existing skill's description, body, and/or tags.
+// name is required. description, body, and tags are optional — only non-zero
+// values are applied (empty string keeps existing description/body; nil tags
+// keeps existing tags). source narrows the search scope ("project" or
+// "global"); empty means search all dirs (respects priority).
+func (s *Store) Update(name string, description, body string, tags []string, source string) (*Skill, error) {
+	if err := ValidateName(name); err != nil {
+		return nil, fmt.Errorf("invalid skill name: %w", err)
+	}
+	if description != "" && len(description) > MaxDescriptionLen {
+		return nil, fmt.Errorf("description exceeds %d characters", MaxDescriptionLen)
+	}
+
+	// Find the skill directory, respecting source if specified
+	skillDir, effectiveSource, err := s.findSkillDir(name, source)
+	if err != nil {
+		return nil, fmt.Errorf("skill %q not found: %w", name, err)
+	}
+
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+
+	// If no fields are being updated, just re-read and return
+	if description == "" && body == "" && tags == nil {
+		return s.Load(name)
+	}
+
+	// Parse existing file to merge updates
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read SKILL.md: %w", err)
+	}
+
+	fm, existingBody, parseErr := parseFrontmatter(string(data))
+	if parseErr != nil {
+		// Parse error — treat as raw body without frontmatter
+		fm = &frontmatter{Name: name}
+		existingBody = string(data)
+	}
+
+	// Apply updates (zero means keep existing)
+	if description == "" {
+		if fm.Description != "" {
+			description = fm.Description
+		} else {
+			description = truncateDescription(existingBody, MaxDescriptionLen)
+		}
+	}
+	if body == "" {
+		body = existingBody
+	}
+	if tags == nil {
+		tags = fm.Tags
+	}
+
+	// Build new SKILL.md
+	content := buildSkillMarkdown(name, description, body, tags)
+
+	if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
+	}
+
+	s.logger.Log("skill: Update: updated skill %q at %s", name, skillFile)
+
+	return &Skill{
+		Meta: SkillMeta{
+			Name:        name,
+			Description: description,
+			Tags:        tags,
+			Source:      effectiveSource,
+		},
+		Body:       body,
+		RawContent: content,
+		Dir:        skillDir,
+		Files:      loadSupportingFilesSafe(skillDir),
+	}, nil
+}
+
+// findSkillDir locates the on-disk directory for a named skill.
+// source narrows search — empty means search all dirs.
+func (s *Store) findSkillDir(name, source string) (string, string, error) {
+	if source != "" {
+		if source != SourceProject && source != SourceGlobal {
+			return "", "", fmt.Errorf("unknown source %q: must be %q or %q", source, SourceProject, SourceGlobal)
+		}
+		idx := slices.Index(s.source, source)
+		if idx < 0 {
+			return "", "", fmt.Errorf("skill directory for source %q is not available", source)
+		}
+		skillDir := filepath.Join(s.dirs[idx], name)
+		skillFile := filepath.Join(skillDir, "SKILL.md")
+		if _, err := os.Stat(skillFile); err != nil {
+			return "", "", fmt.Errorf("skill %q not found in source %q", name, source)
+		}
+		return skillDir, source, nil
+	}
+
+	// Search all dirs in priority order
+	for i, dir := range s.dirs {
+		skillDir := filepath.Join(dir, name)
+		skillFile := filepath.Join(skillDir, "SKILL.md")
+		if _, err := os.Stat(skillFile); err == nil {
+			return skillDir, s.source[i], nil
+		}
+	}
+	return "", "", fmt.Errorf("skill %q not found", name)
+}
+
 // buildSkillMarkdown constructs the full SKILL.md content from fields.
 func buildSkillMarkdown(name, description, body string, tags []string) string {
 	var b strings.Builder
@@ -385,6 +512,15 @@ func loadSupportingFiles(dir string) (map[string]string, error) {
 		return nil, err
 	}
 	return result, nil
+}
+
+// loadSupportingFilesSafe is like loadSupportingFiles but returns nil on error.
+func loadSupportingFilesSafe(dir string) map[string]string {
+	files, err := loadSupportingFiles(dir)
+	if err != nil {
+		return nil
+	}
+	return files
 }
 
 // isBinary detects binary content by checking for null bytes in the first 8KB.

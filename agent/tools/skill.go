@@ -45,6 +45,16 @@ type SkillCreator interface {
 	CreateSkill(params SkillCreateParams) (*SkillCreateResult, error)
 }
 
+// SkillDeleter deletes a skill from the filesystem.
+type SkillDeleter interface {
+	DeleteSkill(name string, source string) error
+}
+
+// SkillUpdater updates an existing skill on the filesystem.
+type SkillUpdater interface {
+	UpdateSkill(params SkillUpdateParams) (*SkillUpdateResult, error)
+}
+
 // SkillCreateParams holds the parameters for creating a new skill.
 type SkillCreateParams struct {
 	Name        string   `json:"name"`
@@ -64,11 +74,31 @@ type SkillCreateResult struct {
 	Path        string   `json:"path"` // full path to the created SKILL.md
 }
 
+// SkillUpdateParams holds the parameters for updating a skill.
+type SkillUpdateParams struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"` // optional: if empty, keep existing
+	Body        string   `json:"body"`        // optional: if empty, keep existing
+	Tags        []string `json:"tags"`        // optional: if nil, keep existing
+	Source      string   `json:"source"`      // optional: narrow search scope
+}
+
+// SkillUpdateResult holds the result after successful skill update.
+type SkillUpdateResult struct {
+	Name        string   `json:"name"`
+	Description string   `json:"description"`
+	Tags        []string `json:"tags"`
+	Source      string   `json:"source"`
+	Path        string   `json:"path"` // full path to the updated SKILL.md
+}
+
 // SkillManager combines all skill operations into a single interface.
 type SkillManager interface {
 	SkillLister
 	SkillLoader
 	SkillCreator
+	SkillDeleter
+	SkillUpdater
 }
 
 // ---- Merged Tool ----
@@ -86,10 +116,12 @@ func NewSkillTool(mgr SkillManager) *SkillTool {
 func (t *SkillTool) Name() string { return ToolNameSkill }
 
 func (t *SkillTool) Description() string {
-	return "Manage skills: list available skills, view skill content, or create new skills. " +
+	return "Manage skills: list available skills, view skill content, create new skills, update existing skills, or delete skills. " +
 		"Use operation=\"list\" to browse available skills. " +
 		"Use operation=\"view\" (with name) to load a skill's full instructions. " +
 		"Use operation=\"create\" (with name, description, body) to create a new skill. " +
+		"Use operation=\"update\" (with name) to modify an existing skill. " +
+		"Use operation=\"delete\" (with name) to delete a skill. " +
 		fmt.Sprintf("Defaults to project-level (.tachi/skills/); set source=\"global\" for %s/.", config.GlobalSkillsDir())
 }
 
@@ -97,19 +129,19 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"operation": {
 			Type:        "string",
-			Description: `Operation to perform: "list" (browse available skills), "view" (load skill content), or "create" (create a new skill)`,
+			Description: `Operation to perform: "list" (browse available skills), "view" (load skill content), "create" (create a new skill), "update" (modify an existing skill), or "delete" (delete a skill)`,
 		},
 		"name": {
 			Type:        "string",
-			Description: "Skill name (≤64 characters). Required for view and create operations.",
+			Description: "Skill name (≤64 characters). Required for view, create, update, and delete operations.",
 		},
 		"description": {
 			Type:        "string",
-			Description: "One-line description of what this skill does (≤1024 characters). Required for create operation.",
+			Description: "One-line description of what this skill does (≤1024 characters). Required for create operation. Optional for update (omit to keep existing).",
 		},
 		"body": {
 			Type:        "string",
-			Description: "Skill instructions in Markdown. Required for create operation.",
+			Description: "Skill instructions in Markdown. Required for create operation. Optional for update (omit to keep existing).",
 		},
 		"tag": {
 			Type:        "string",
@@ -121,11 +153,11 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 		},
 		"tags": {
 			Type:        "array",
-			Description: "Optional tags for categorization (e.g., [\"git\", \"review\"]). Only used with operation=\"create\".",
+			Description: "Optional tags for categorization (e.g., [\"git\", \"review\"]). Used with create and update operations.",
 		},
 		"source": {
 			Type:        "string",
-			Description: `Where to create the skill: "project" (default, .tachi/skills/) or "global" (~/.tachi/skills/). Only used with operation="create".`,
+			Description: `Where to operate: "project" (default, .tachi/skills/) or "global" (~/.tachi/skills/). Used with create, update, and delete operations. For delete/update, narrows search scope.`,
 		},
 		"overwrite": {
 			Type:        "boolean",
@@ -163,8 +195,12 @@ func (t *SkillTool) ExecuteContext(ctx context.Context, args string) (string, er
 		return t.executeView(params.Name, params.FilePath)
 	case "create":
 		return t.executeCreate(params.Name, params.Description, params.Body, params.Tags, params.Source, params.Overwrite)
+	case "delete":
+		return t.executeDelete(params.Name, params.Source)
+	case "update":
+		return t.executeUpdate(params.Name, params.Description, params.Body, params.Tags, params.Source)
 	default:
-		return "", fmt.Errorf("unknown operation %q: must be one of \"list\", \"view\", \"create\"", params.Operation)
+		return "", fmt.Errorf("unknown operation %q: must be one of \"list\", \"view\", \"create\", \"update\", \"delete\"", params.Operation)
 	}
 }
 
@@ -290,6 +326,62 @@ func (t *SkillTool) executeCreate(name, description, body string, tags []string,
 	output.Success = true
 	output.Skill = *result
 	output.Message = fmt.Sprintf("Skill %q created at %s. It will appear in SkillsList (use operation=\"list\") immediately.", result.Name, result.Path)
+
+	b, err := json.Marshal(output)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal result: %w", err)
+	}
+	return string(b), nil
+}
+
+func (t *SkillTool) executeDelete(name, source string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name is required for delete operation")
+	}
+
+	err := t.mgr.DeleteSkill(name, source)
+	if err != nil {
+		return "", err
+	}
+
+	var output struct {
+		Success bool   `json:"success"`
+		Message string `json:"message"`
+	}
+	output.Success = true
+	output.Message = fmt.Sprintf("Skill %q has been deleted.", name)
+
+	b, err := json.Marshal(output)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal result: %w", err)
+	}
+	return string(b), nil
+}
+
+func (t *SkillTool) executeUpdate(name, description, body string, tags []string, source string) (string, error) {
+	if name == "" {
+		return "", fmt.Errorf("name is required for update operation")
+	}
+
+	result, err := t.mgr.UpdateSkill(SkillUpdateParams{
+		Name:        name,
+		Description: description,
+		Body:        body,
+		Tags:        tags,
+		Source:      source,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	var output struct {
+		Success bool              `json:"success"`
+		Skill   SkillUpdateResult `json:"skill"`
+		Message string            `json:"message"`
+	}
+	output.Success = true
+	output.Skill = *result
+	output.Message = fmt.Sprintf("Skill %q updated at %s.", result.Name, result.Path)
 
 	b, err := json.Marshal(output)
 	if err != nil {
