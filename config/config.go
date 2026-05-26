@@ -3,8 +3,10 @@ package config
 import (
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/creasty/defaults"
@@ -130,13 +132,22 @@ func (srv *MCPServerConfig) HasOAuth() bool {
 }
 
 // TokenStorageName returns the key used for on-disk token storage.
-// For always-loaded servers this is the server name. For profile servers,
-// the profile name is appended to avoid collisions across environments.
+// For HTTP servers, the URL host is used so that servers behind the same
+// gateway (same host) automatically share a single OAuth token.
+// For stdio servers, the server name is used.
+// Profile servers append the profile name to avoid cross-environment collisions.
 func (srv *MCPServerConfig) TokenStorageName() string {
-	if srv.Profile == "" {
-		return srv.Name
+	base := srv.Name
+	if srv.Type == MCPTransportHTTP && srv.URL != "" {
+		if u, err := url.Parse(srv.URL); err == nil && u.Host != "" {
+			// Sanitize host for use as filename (replace : with _)
+			base = strings.ReplaceAll(u.Host, ":", "_")
+		}
 	}
-	return srv.Name + "_" + srv.Profile
+	if srv.Profile == "" {
+		return base
+	}
+	return base + "_" + srv.Profile
 }
 
 // IsEnabled returns whether the server should be loaded. Defaults to true.

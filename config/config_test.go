@@ -455,17 +455,34 @@ func TestExpandMCPProfiles_ProfileNotSerialized(t *testing.T) {
 }
 
 func TestTokenStorageName(t *testing.T) {
-	// Always-loaded server
-	srv := &MCPServerConfig{Name: "test-mcp"}
+	// Stdio server: uses server name
+	srv := &MCPServerConfig{Name: "test-mcp", Type: MCPTransportStdio}
 	assert.Equal(t, "test-mcp", srv.TokenStorageName())
 
-	// Profile server
-	srv2 := &MCPServerConfig{Name: "platform-svc", Profile: "test"}
-	assert.Equal(t, "platform-svc_test", srv2.TokenStorageName())
+	// HTTP server without URL: falls back to server name
+	srv2 := &MCPServerConfig{Name: "no-url-http", Type: MCPTransportHTTP}
+	assert.Equal(t, "no-url-http", srv2.TokenStorageName())
 
-	// Different profile
-	srv3 := &MCPServerConfig{Name: "platform-svc", Profile: "prod"}
-	assert.Equal(t, "platform-svc_prod", srv3.TokenStorageName())
+	// HTTP server with URL: uses host
+	srv3 := &MCPServerConfig{Name: "svc-a", Type: MCPTransportHTTP, URL: "https://gateway.internal.com/svc-a/mcp"}
+	assert.Equal(t, "gateway.internal.com", srv3.TokenStorageName())
+
+	// HTTP server with URL and port: sanitizes colon
+	srv4 := &MCPServerConfig{Name: "svc-b", Type: MCPTransportHTTP, URL: "https://gateway.internal.com:8443/svc-b"}
+	assert.Equal(t, "gateway.internal.com_8443", srv4.TokenStorageName())
+
+	// Same host, different paths → same token storage key (the core feature)
+	srv5 := &MCPServerConfig{Name: "svc-x", Type: MCPTransportHTTP, URL: "https://gateway.internal.com/svc-x/mcp"}
+	srv6 := &MCPServerConfig{Name: "svc-y", Type: MCPTransportHTTP, URL: "https://gateway.internal.com/svc-y/mcp"}
+	assert.Equal(t, srv5.TokenStorageName(), srv6.TokenStorageName())
+
+	// Profile server (HTTP): host + profile suffix
+	srv7 := &MCPServerConfig{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://test.example.com/mcp", Profile: "test"}
+	assert.Equal(t, "test.example.com_test", srv7.TokenStorageName())
+
+	// Profile server (stdio): name + profile suffix
+	srv8 := &MCPServerConfig{Name: "platform-svc", Type: MCPTransportStdio, Profile: "prod"}
+	assert.Equal(t, "platform-svc_prod", srv8.TokenStorageName())
 }
 
 func TestLoadFrom_WithProfile(t *testing.T) {
