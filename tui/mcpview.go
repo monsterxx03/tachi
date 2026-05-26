@@ -205,9 +205,19 @@ func (v *MCPView) View() string {
 	}
 	b.WriteString("\n")
 
+	// Pre-wrap the message so that long lines (e.g. OAuth auth URLs with no
+	// spaces) are hard-wrapped to fit the overlay width, and we know the
+	// exact line count before sizing the server/tool areas.
+	const maxMsgLines = 8
+	innerW := v.width - 6 // mirror renderServerLine's innerW
+	if innerW < 20 {
+		innerW = 20
+	}
+	wrappedMsg, msgLineCount := v.prepareMessage(innerW, maxMsgLines)
+
 	// Compute split: 35% server list, 65% tool area (of inner height)
-	innerH := v.height - 2       // border lines
-	constantH := 1 + 1 + 1       // title + tool-header + message
+	innerH := v.height - 2              // border lines
+	constantH := 1 + 1 + msgLineCount  // title + tool-header + message
 	availH := innerH - constantH
 	if availH < 2 {
 		availH = 2
@@ -253,8 +263,10 @@ func (v *MCPView) View() string {
 	}
 
 	// --- Message bar ---
-	msg := v.message
-	if msg == "" {
+	if wrappedMsg != "" {
+		b.WriteString(wrappedMsg)
+	} else {
+		msg := ""
 		if sel != nil {
 			if sel.Connected {
 				msg = mcpStatusOK.Render(fmt.Sprintf("✓ %s connected, %d tool(s)", sel.Name, len(sel.Tools)))
@@ -264,8 +276,8 @@ func (v *MCPView) View() string {
 				msg = dimStyle.Render(fmt.Sprintf("%s is disabled", sel.Name))
 			}
 		}
+		b.WriteString(msg)
 	}
-	b.WriteString(msg)
 
 	// Wrap in border with MaxWidth to prevent CJK text overflow.
 	bordered := mcpOverlayBorder.Copy().MaxWidth(v.width).Render(b.String())
@@ -525,4 +537,27 @@ func wrapLines(text string, maxW int) []string {
 // runeWidth returns the terminal column width of a single rune.
 func runeWidth(r rune) int {
 	return lipgloss.Width(string(r))
+}
+
+// prepareMessage wraps v.message to fit within maxW columns and caps the
+// result at maxLines lines. It returns the final string (empty when
+// v.message is "") and the line count (≥1 even when message is empty, so
+// the layout always reserves space for the default status line).
+//
+// Each raw line is passed through wrapLines so that long lines with no
+// spaces (e.g. OAuth authorization URLs) are hard-wrapped at character
+// boundaries rather than truncated.
+func (v *MCPView) prepareMessage(maxW, maxLines int) (msg string, lineCount int) {
+	if v.message == "" {
+		return "", 1
+	}
+
+	var all []string
+	for _, raw := range strings.Split(v.message, "\n") {
+		all = append(all, wrapLines(raw, maxW)...)
+	}
+	if len(all) > maxLines {
+		all = all[:maxLines]
+	}
+	return strings.Join(all, "\n"), len(all)
 }
