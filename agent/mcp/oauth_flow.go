@@ -77,7 +77,7 @@ func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn fun
 	}
 
 	// 1) Browser callback
-	if err := tryBrowserCallback(ctx, srv); err == nil {
+	if err := tryBrowserCallback(ctx, srv, runErrFn); err == nil {
 		return nil
 	} else {
 		debuglog.Log(ctx, "MCP: browser callback failed for %q: %v", srv.Name, err)
@@ -465,7 +465,7 @@ func buildWellKnownURLs(baseURL, suffix string) []string {
 
 // --- browser callback ---
 
-func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig) error {
+func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, statusFn func(string)) error {
 	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
 		return fmt.Errorf("token store: %w", err)
@@ -510,6 +510,11 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig) error 
 	authURL, err := handler.GetAuthorizationURL(ctx, state, codeChallenge)
 	if err != nil {
 		return fmt.Errorf("auth URL: %w", err)
+	}
+
+	// Report the auth URL to the TUI so the user can see/copy it.
+	if statusFn != nil {
+		statusFn(fmt.Sprintf("Auth URL (opening browser):\n%s", authURL))
 	}
 
 	// Local callback server

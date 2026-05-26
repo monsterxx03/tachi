@@ -288,7 +288,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 
 	m.mcpView.SetMessage(fmt.Sprintf("Starting OAuth for %s...", name))
 
-	ch := make(chan string, 1)
+	ch := make(chan string, 4)
 	go func() {
 		defer close(ch)
 
@@ -310,6 +310,19 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 			return
 		}
 
+		// Collect all servers that share the same token (same host).
+		tokenKey := srv.TokenStorageName()
+		var siblings []*config.MCPServerConfig
+		for i := range m.mcpServers {
+			s := &m.mcpServers[i]
+			if s.Name == srv.Name {
+				continue
+			}
+			if s.IsEnabled() && s.Type == config.MCPTransportHTTP && s.TokenStorageName() == tokenKey {
+				siblings = append(siblings, s)
+			}
+		}
+
 		ch <- fmt.Sprintf("OAuth OK for %s — reconnecting...", srv.Name)
 
 		reconnectCtx, reconnectCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
@@ -322,8 +335,20 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 		}
 
 		count := m.agent.AddDeferredMCPTools(mcpTools)
+		ch <- fmt.Sprintf("✓ %s connected with %d tool(s)", srv.Name, count)
 
-		ch <- fmt.Sprintf("✓ %s connected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
+		// Reconnect sibling servers sharing the same OAuth token.
+		for _, sib := range siblings {
+			sibCtx, sibCancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
+			sibTools, sibErr := m.mcpManager.Reconnect(sibCtx, sib)
+			sibCancel()
+			if sibErr != nil {
+				m.logger.Log("MCP: sibling reconnect %q failed: %v", sib.Name, sibErr)
+				continue
+			}
+			sibCount := m.agent.AddDeferredMCPTools(sibTools)
+			ch <- fmt.Sprintf("✓ %s connected with %d tool(s) (shared token)", sib.Name, sibCount)
+		}
 	}()
 
 	return readNextMCPOverlayMsg(ch)
