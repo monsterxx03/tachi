@@ -54,6 +54,38 @@ func newStore(dirs, source []string) *Store {
 	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
 }
 
+// NewStoreWithDirs creates a Store scanning the given directories in priority
+// order (highest first). Each entry in sources must be either SourceProject or
+// SourceGlobal and have the same length as dirs. Intended for tests and other
+// callers that need an isolated, hermetic skill scope.
+func NewStoreWithDirs(dirs, sources []string) *Store {
+	return newStore(dirs, sources)
+}
+
+// Reload is a no-op placeholder for callers that want to drop any internal
+// caches a Store might keep. List() and Load() always re-read the disk, so
+// no state needs to be cleared today — but exposing this method lets callers
+// express the intent ("re-scan now") and stay forward-compatible.
+//
+// Returns the number of skills currently visible, mirroring List() length.
+func (s *Store) Reload() int {
+	return len(s.List())
+}
+
+// Dirs returns the directories this store scans, in priority order.
+func (s *Store) Dirs() []string {
+	out := make([]string, len(s.dirs))
+	copy(out, s.dirs)
+	return out
+}
+
+// Sources returns the source labels parallel to Dirs().
+func (s *Store) Sources() []string {
+	out := make([]string, len(s.source))
+	copy(out, s.source)
+	return out
+}
+
 // SetLogger sets the debug logger for this store.
 func (s *Store) SetLogger(l *debuglog.Logger) {
 	s.logger = l

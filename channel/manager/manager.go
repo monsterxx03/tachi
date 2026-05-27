@@ -37,6 +37,13 @@ type Config struct {
 	// If nil, sessions are stored under ~/.tachi/session (default).
 	// Tests should inject a FileStore backed by a temporary directory.
 	SessionStore session.Store
+
+	// SkillStore overrides the default skill store. If nil, the manager
+	// auto-builds one scanning the project's `.tachi/skills/` and the
+	// user-global skill directory. Tests should inject a hermetic store
+	// (e.g. via skill.NewStoreWithDirs) so they don't pick up real skills
+	// from the host filesystem.
+	SkillStore *skill.Store
 }
 
 // initProviderResult holds the lazily-computed provider state.
@@ -175,13 +182,17 @@ type handlerResult struct {
 // Channels are interactive — the iteration budget is always unlimited (0).
 func New(mcfg Config) *Manager {
 	wd, _ := os.Getwd()
+	skillStore := mcfg.SkillStore
+	if skillStore == nil {
+		skillStore = skill.NewStore(wd)
+	}
 	return &Manager{
 		cfg:            mcfg.Cfg,
 		systemPrompt:   mcfg.SystemPrompt,
 		providerName:   mcfg.ProviderName,
 		modelName:      mcfg.ModelName,
 		sessionStore:   mcfg.SessionStore,
-		skillStore:     skill.NewStore(wd),
+		skillStore:     skillStore,
 		processManager: tools.NewProcessManager(),
 		logger:         debuglog.DefaultLogger.WithSource("channel:manager"),
 	}

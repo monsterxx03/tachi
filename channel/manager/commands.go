@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"os"
 	"slices"
 	"strings"
 	"time"
@@ -666,8 +665,11 @@ func (m *Manager) handleSkillReload() (string, error) {
 		return "Skill system not available.", nil
 	}
 
-	wd, _ := os.Getwd()
-	m.skillStore = skill.NewStore(wd)
+	// Re-scan using the same directory scope the store was constructed
+	// with. (Tests that injected a hermetic store via Config.SkillStore
+	// keep their scope; production callers that used the default
+	// ~/.tachi/skills layout get the same dirs back.)
+	m.skillStore = skill.NewStoreWithDirs(m.skillStore.Dirs(), m.skillStore.Sources())
 	metas := m.skillStore.List()
 
 	return fmt.Sprintf("Skills 已重新加载 — 发现 %d 个 skill(s)", len(metas)), nil

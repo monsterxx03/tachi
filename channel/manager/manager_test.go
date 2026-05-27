@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/skill"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/config"
@@ -1222,6 +1223,7 @@ func TestHandleSkillList_Empty(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillList()
@@ -1235,6 +1237,7 @@ func TestHandleSkillReload(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillReload()
@@ -1249,6 +1252,7 @@ func TestHandleSkillCommand_List(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
 	// /skill (empty args)
@@ -1268,6 +1272,7 @@ func TestHandleSkillCommand_Reload(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillCommand("reload")
@@ -1281,6 +1286,7 @@ func TestHandleSkillCommand_UnknownSub(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillCommand("unknown-skill")
@@ -1294,6 +1300,7 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSlashCommand(channel.IncomingMessage{
@@ -1327,6 +1334,7 @@ func TestSkillViaCommandHandler(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          cfg,
 		SystemPrompt: "test",
+		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 	handler := mgr.buildCommandHandler()
 
