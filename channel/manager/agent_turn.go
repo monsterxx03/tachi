@@ -3,9 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
-	"os"
 	"strings"
-	"sync"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -270,10 +268,19 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 // --- Agent turn ---
 
-// runAgentTurn loads the per-thread cached AIAgent, attaches a session and
-// steer channel, and runs a single conversation turn. Per-turn ephemeral
-// tools (CronTool, SendFileTool) are scoped via SaveToolRegistry/Restore so
-// they don't leak into the next turn.
+// runAgentTurn executes one user-driven turn for a thread. It supports two
+// modes, dispatched on ta.isCompact:
+//
+//   - Normal turn (ta.isCompact == false): grabs the per-thread cached
+//     AIAgent, scopes ephemeral tools (CronTool, SendFileTool) via
+//     SaveToolRegistry/Restore, and collects file attachments.
+//   - Compact turn (ta.isCompact == true): builds a one-off throwaway agent
+//     with ClearToolRegistry so /compact summarizes from session context
+//     only, without polluting the cached agent's tool set.
+//
+// The two modes share session loading, steer wiring, image attachment, and
+// drainEvents — only the agent-acquisition and tool-registration steps
+// differ, so they're isolated in acquireForTurn.
 func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation) {
 	defer func() {
 		// Unblock the handler on panic.
@@ -286,160 +293,28 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}()
 
-	// /compact runs against an isolated, throwaway agent so that
-	// ClearToolRegistry() doesn't pollute the cached agent's tool set.
-	if ta.isCompact {
-		m.runCompactTurn(ctx, msg, sendProgress, ta)
-		return
-	}
-
-	_, resolved := m.getProvider()
-
-	ca, err := m.acquireAgent(ctx, msg.ThreadID)
-	if err != nil {
-		ta.resultCh <- handlerResult{err: fmt.Errorf("acquire agent: %w", err)}
-		return
-	}
-	defer m.releaseAgent(ca)
-
-	aiAgent := ca.agent
-
-	// Snapshot the registry so we can cleanly remove per-turn ephemeral
-	// tools (CronTool, SendFileTool) at the end of this turn.
-	snap := aiAgent.SaveToolRegistry()
-	defer aiAgent.RestoreToolRegistry(snap)
-
-	// Register CronTool if scheduler is available.
-	if m.scheduler != nil {
-		aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string {
-			return msg.ThreadID
-		}))
-	}
-
-	// Per-thread session.
-	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
-	if err != nil {
-		m.logger.Log("channel: session setup for thread %s: %v", msg.ThreadID, err)
-		sm = m.newSessionManager()
-		priorHistory = nil
-	}
-
-	// Ensure a session exists for recording.
-	if sm != nil && !sm.HasCurrent() {
-		wd, _ := os.Getwd()
-		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
-			m.logger.Log("channel: create fallback session: %v", err)
-		} else {
-			sm.SetThreadID(msg.ThreadID)
-		}
-	}
-
-	if sm != nil {
-		aiAgent.SetSessionManager(sm)
-	}
-
-	// Wire up steer channel — this enables mid-turn user input injection.
-	aiAgent.SetSteerChannel(ta.steerRespCh)
-
-	// Build the user message text with attachment content prepended.
-	userContent, userImages := buildUserMessageWithAttachments(msg)
-
-	// Attach images (if any) for multi-modal LLM input (vision).
-	if len(userImages) > 0 {
-		aiAgent.SetPendingImages(userImages)
-	}
-
-	// --- SendFile tool for file delivery via channel ---
-	// The tool is available in channel mode so the LLM can send files
-	// to the user (e.g. generated reports, screenshots, documents).
-	// MUST be re-registered each turn because the callback closure captures
-	// the per-turn `pendingAttachments` slice.
-	var attachmentMu sync.Mutex
-	var pendingAttachments []channel.OutgoingAttachment
-
-	sendFileTool := tools.NewSendFileTool()
-	sendFileTool.SetCallback(func(name, mimeType, localPath string) {
-		attachmentMu.Lock()
-		pendingAttachments = append(pendingAttachments, channel.OutgoingAttachment{
-			Type:      channel.AttachmentTypeFile,
-			FileName:  name,
-			MimeType:  mimeType,
-			LocalPath: localPath,
-		})
-		attachmentMu.Unlock()
-	})
-	aiAgent.RegisterTool(sendFileTool)
-
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
-		MaxTokens: resolved.MaxTokens,
-	})
-
-	// Use a closure so /v toggles mid-turn are visible immediately,
-	// rather than using the captured bool which is a one-time snapshot.
-	isVerbose := func() bool {
-		m.verboseMu.RLock()
-		defer m.verboseMu.RUnlock()
-		return m.verboseState != nil && m.verboseState[msg.ThreadID]
-	}
-
-	text, err := m.drainEvents(eventCh, aiAgent, isVerbose, sendProgress, ta)
-
-	// Collect any pending file attachments from the SendFile tool.
-	attachmentMu.Lock()
-	attachments := make([]channel.OutgoingAttachment, len(pendingAttachments))
-	copy(attachments, pendingAttachments)
-	attachmentMu.Unlock()
-
-	ta.resultCh <- handlerResult{text: text, err: err, attachments: attachments}
-}
-
-// runCompactTurn runs a /compact summarization against a throwaway AIAgent
-// so the registry-clearing semantics (ClearToolRegistry) don't pollute the
-// cached agent's tool set. Cached agents survive across turns and intentionally
-// retain their tools, skills, and discovered MCP set; /compact's "no tools"
-// stance is incompatible with that lifecycle, so we run it in isolation.
-//
-// The compact agent still uses the shared MCP state (cheap, harmless — it
-// won't touch the deferred pool because all tools are cleared anyway), the
-// shared ProcessManager, and the same per-thread session.
-func (m *Manager) runCompactTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation) {
 	_, resolved := m.getProvider()
 	if resolved == nil {
 		ta.resultCh <- handlerResult{err: fmt.Errorf("channel: provider not initialized")}
 		return
 	}
 
-	aiAgent, err := m.buildAgent(ctx, msg.ThreadID)
+	// Mode-specific prologue: cached agent vs throwaway compact agent.
+	aiAgent, sink, cleanup, err := m.acquireForTurn(ctx, msg.ThreadID, ta.isCompact)
 	if err != nil {
-		ta.resultCh <- handlerResult{err: fmt.Errorf("compact: build agent: %w", err)}
+		ta.resultCh <- handlerResult{err: err}
 		return
 	}
-	// Throwaway — release resources when this turn ends.
-	defer aiAgent.Close()
+	defer cleanup()
 
-	// /compact: no tool calls — only summarize from session context.
-	aiAgent.ClearToolRegistry()
-
-	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
-	if err != nil {
-		m.logger.Log("channel: compact session setup for thread %s: %v", msg.ThreadID, err)
-		sm = m.newSessionManager()
-		priorHistory = nil
-	}
-	if sm != nil && !sm.HasCurrent() {
-		wd, _ := os.Getwd()
-		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
-			m.logger.Log("channel: compact create session: %v", err)
-		} else {
-			sm.SetThreadID(msg.ThreadID)
-		}
-	}
+	// Per-thread session.
+	sm, priorHistory := m.prepareThreadSession(msg.ThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
 	}
 
+	// Steer channel + user content (text + images).
 	aiAgent.SetSteerChannel(ta.steerRespCh)
-
 	userContent, userImages := buildUserMessageWithAttachments(msg)
 	if len(userImages) > 0 {
 		aiAgent.SetPendingImages(userImages)
@@ -448,13 +323,58 @@ func (m *Manager) runCompactTurn(ctx context.Context, msg channel.IncomingMessag
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
+	text, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(msg.ThreadID), sendProgress, ta)
 
-	isVerbose := func() bool {
-		m.verboseMu.RLock()
-		defer m.verboseMu.RUnlock()
-		return m.verboseState != nil && m.verboseState[msg.ThreadID]
+	var attachments []channel.OutgoingAttachment
+	if sink != nil {
+		attachments = sink.snapshot()
+	}
+	ta.resultCh <- handlerResult{text: text, err: err, attachments: attachments}
+}
+
+// acquireForTurn handles the mode-specific prologue: choose between cached
+// agent (normal turn) and throwaway agent (/compact), apply the registry
+// scope, and register per-turn tools.
+//
+// Returns (agent, sink, cleanup, err). sink is non-nil only on the normal
+// path and accumulates SendFile attachments. cleanup MUST be called via
+// defer; it restores the registry / closes the throwaway agent / releases
+// the cached-agent lock in the right order.
+func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*agent.AIAgent, *attachmentSink, func(), error) {
+	if isCompact {
+		aiAgent, err := m.buildAgent(ctx, threadID)
+		if err != nil {
+			return nil, nil, nil, fmt.Errorf("compact: build agent: %w", err)
+		}
+		// /compact: no tool calls — only summarize from session context.
+		aiAgent.ClearToolRegistry()
+		cleanup := func() { aiAgent.Close() }
+		return aiAgent, nil, cleanup, nil
 	}
 
-	text, err := m.drainEvents(eventCh, aiAgent, isVerbose, sendProgress, ta)
-	ta.resultCh <- handlerResult{text: text, err: err}
+	ca, err := m.acquireAgent(ctx, threadID)
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("acquire agent: %w", err)
+	}
+	aiAgent := ca.agent
+
+	// Snapshot the registry so per-turn ephemeral tools (CronTool,
+	// SendFileTool) don't leak into the next turn on this cached agent.
+	snap := aiAgent.SaveToolRegistry()
+
+	// CronTool — only present when scheduler is wired.
+	if m.scheduler != nil {
+		aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string { return threadID }))
+	}
+
+	// SendFileTool — its callback closure captures a fresh sink, so it
+	// MUST be re-registered each turn.
+	sendFileTool, sink := newSendFileTool()
+	aiAgent.RegisterTool(sendFileTool)
+
+	cleanup := func() {
+		aiAgent.RestoreToolRegistry(snap)
+		m.releaseAgent(ca)
+	}
+	return aiAgent, sink, cleanup, nil
 }

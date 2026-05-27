@@ -1,0 +1,90 @@
+package manager
+
+import (
+	"os"
+	"sync"
+
+	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/session"
+)
+
+// prepareThreadSession returns a ready-to-use session manager and prior LLM
+// history for the given thread. If an existing session exists for the
+// ThreadID it is reloaded; otherwise a fresh session is created. All errors
+// are logged and degraded — callers receive a usable (sm, history) pair or
+// (nil, nil) when even the fallback path fails.
+//
+// Used by every entry point that runs an agent turn on a thread:
+// runAgentTurn (cached + compact) and OnCronTrigger.
+func (m *Manager) prepareThreadSession(threadID string, resolved *config.ResolvedConfig) (*session.Manager, []llm.Message) {
+	sm, priorHistory, err := m.loadThreadSession(threadID)
+	if err != nil {
+		m.logger.Log("channel: session setup for thread %s: %v", threadID, err)
+		sm = m.newSessionManager()
+		priorHistory = nil
+	}
+
+	if sm != nil && !sm.HasCurrent() {
+		wd, _ := os.Getwd()
+		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
+			m.logger.Log("channel: create fallback session for %s: %v", threadID, err)
+		} else {
+			sm.SetThreadID(threadID)
+		}
+	}
+	return sm, priorHistory
+}
+
+// isVerboseFor returns a closure that reads the current verbose state for
+// the given thread. The closure is evaluated each time it's called, so /v
+// toggles mid-turn are observed immediately rather than captured once.
+func (m *Manager) isVerboseFor(threadID string) func() bool {
+	return func() bool {
+		m.verboseMu.RLock()
+		defer m.verboseMu.RUnlock()
+		return m.verboseState != nil && m.verboseState[threadID]
+	}
+}
+
+// attachmentSink collects file attachments produced by the SendFile tool
+// during a single turn. The sink is registered as the tool's callback;
+// once the turn ends the caller calls Snapshot() to get the final list.
+//
+// Concurrency: SendFile may be invoked from parallel sub-tools, so the
+// internal slice is mutex-guarded.
+type attachmentSink struct {
+	mu   sync.Mutex
+	list []channel.OutgoingAttachment
+}
+
+// snapshot returns a copy of the collected attachments. Safe to call after
+// the turn has ended.
+func (s *attachmentSink) snapshot() []channel.OutgoingAttachment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]channel.OutgoingAttachment, len(s.list))
+	copy(out, s.list)
+	return out
+}
+
+// newSendFileTool builds a SendFile tool wired to a fresh attachmentSink.
+// The caller must register the returned tool on the agent for this turn,
+// and read sink.Snapshot() after drainEvents returns.
+func newSendFileTool() (*tools.SendFileTool, *attachmentSink) {
+	sink := &attachmentSink{}
+	t := tools.NewSendFileTool()
+	t.SetCallback(func(name, mimeType, localPath string) {
+		sink.mu.Lock()
+		sink.list = append(sink.list, channel.OutgoingAttachment{
+			Type:      channel.AttachmentTypeFile,
+			FileName:  name,
+			MimeType:  mimeType,
+			LocalPath: localPath,
+		})
+		sink.mu.Unlock()
+	})
+	return t, sink
+}

@@ -3,7 +3,6 @@ package manager
 import (
 	"context"
 	"fmt"
-	"os"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -65,23 +64,8 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		return job.TargetThreadID
 	}))
 
-	// Load/create session for the target thread.
-	sm, priorHistory, err := m.loadThreadSession(job.TargetThreadID)
-	if err != nil {
-		m.logger.Log("channel: cron session for %s: %v", job.TargetThreadID, err)
-		sm = m.newSessionManager()
-		priorHistory = nil
-	}
-
-	if sm != nil && !sm.HasCurrent() {
-		wd, _ := os.Getwd()
-		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
-			m.logger.Log("channel: cron create session: %v", err)
-		} else {
-			sm.SetThreadID(job.TargetThreadID)
-		}
-	}
-
+	// Per-thread session.
+	sm, priorHistory := m.prepareThreadSession(job.TargetThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
 	}
@@ -90,18 +74,12 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		MaxTokens: resolved.MaxTokens,
 	})
 
-	isVerbose := func() bool {
-		m.verboseMu.RLock()
-		defer m.verboseMu.RUnlock()
-		return m.verboseState != nil && m.verboseState[job.TargetThreadID]
-	}
-
 	// sendProgress for cron: deliver intermediate tool results inline.
 	sendProgress := func(text string) {
 		m.sendToThread(ctx, job.TargetThreadID, text, fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()))
 	}
 
-	result, err := m.drainEvents(eventCh, aiAgent, isVerbose, sendProgress, nil)
+	result, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(job.TargetThreadID), sendProgress, nil)
 	if err != nil {
 		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
 		return err
