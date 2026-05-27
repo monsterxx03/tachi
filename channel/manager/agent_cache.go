@@ -8,6 +8,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // cachedAgent wraps a per-thread AIAgent with serialization (so a single
@@ -19,6 +20,13 @@ type cachedAgent struct {
 	agent        *agent.AIAgent
 	providerName string // currentProviderName when the agent was built
 	model        string // resolved model when the agent was built
+
+	// history caches the full LLM message slice (system prompt + all prior
+	// turns) so each new turn can pass it directly to RunConversationStream
+	// without reloading from disk. Updated after every completed turn via
+	// agent.GetLastMessages(). Nil until the first turn completes (or after
+	// an eviction), at which point prepareThreadSession loads from disk once.
+	history []llm.Message
 }
 
 // initSharedMCP lazily creates the shared MCP manager and kicks off async

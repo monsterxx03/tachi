@@ -230,6 +230,9 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						Err: err,
 					}
 				}
+				// Evict the cached agent so the next turn reloads history from
+				// the newly-created compacted session (via disk fallback).
+				m.evictAgent(msg.ThreadID)
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
 						ThreadID: msg.ThreadID,
@@ -300,17 +303,29 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	}
 
 	// Mode-specific prologue: cached agent vs throwaway compact agent.
-	aiAgent, sink, cleanup, err := m.acquireForTurn(ctx, msg.ThreadID, ta.isCompact)
+	aiAgent, ca, sink, cleanup, err := m.acquireForTurn(ctx, msg.ThreadID, ta.isCompact)
 	if err != nil {
 		ta.resultCh <- handlerResult{err: err}
 		return
 	}
 	defer cleanup()
 
-	// Per-thread session.
-	sm, priorHistory := m.prepareThreadSession(msg.ThreadID, resolved)
+	// Per-thread session — always needed for session recording (JSONL).
+	// For compact turns, we also need the history from disk since there's
+	// no in-memory cache (throwaway agent).
+	sm, diskHistory := m.prepareThreadSession(msg.ThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
+	}
+
+	// Use the in-memory cached history when available (normal turns).
+	// This keeps the message prefix stable across turns, maximising prompt
+	// cache hit rates. Fall back to disk-loaded history on first turn or
+	// after agent eviction (ca.history == nil).
+	priorHistory := diskHistory
+	if ca != nil && ca.history != nil {
+		priorHistory = ca.history
+		m.logger.Log("channel: thread=%s using cached history (%d msgs)", msg.ThreadID, len(ca.history))
 	}
 
 	// Steer channel + user content (text + images).
@@ -325,6 +340,17 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	})
 	text, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(msg.ThreadID), sendProgress, ta)
 
+	// Update the in-memory history cache with the full message slice from
+	// this turn (history + wrapped user msg + assistant + tool results).
+	// We always update even on error/cancel so the cached state stays
+	// consistent with what was sent to the LLM and recorded in the session.
+	if ca != nil {
+		if msgs := aiAgent.GetLastMessages(); len(msgs) > 0 {
+			ca.history = msgs
+			m.logger.Log("channel: thread=%s updated cached history (%d msgs)", msg.ThreadID, len(msgs))
+		}
+	}
+
 	var attachments []channel.OutgoingAttachment
 	if sink != nil {
 		attachments = sink.snapshot()
@@ -336,25 +362,28 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 // agent (normal turn) and throwaway agent (/compact), apply the registry
 // scope, and register per-turn tools.
 //
-// Returns (agent, sink, cleanup, err). sink is non-nil only on the normal
-// path and accumulates SendFile attachments. cleanup MUST be called via
-// defer; it restores the registry / closes the throwaway agent / releases
-// the cached-agent lock in the right order.
-func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*agent.AIAgent, *attachmentSink, func(), error) {
+// Returns (agent, ca, sink, cleanup, err).
+// ca is the cachedAgent for normal turns (nil for /compact throwaway agents).
+// Callers use ca.history as the prior-history input to RunConversationStream
+// and update ca.history via agent.GetLastMessages() after the turn.
+// sink is non-nil only on the normal path and accumulates SendFile attachments.
+// cleanup MUST be called via defer; it restores the registry / closes the
+// throwaway agent / releases the cached-agent lock in the right order.
+func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*agent.AIAgent, *cachedAgent, *attachmentSink, func(), error) {
 	if isCompact {
 		aiAgent, err := m.buildAgent(ctx, threadID)
 		if err != nil {
-			return nil, nil, nil, fmt.Errorf("compact: build agent: %w", err)
+			return nil, nil, nil, nil, fmt.Errorf("compact: build agent: %w", err)
 		}
 		// /compact: no tool calls — only summarize from session context.
 		aiAgent.ClearToolRegistry()
 		cleanup := func() { aiAgent.Close() }
-		return aiAgent, nil, cleanup, nil
+		return aiAgent, nil, nil, cleanup, nil
 	}
 
 	ca, err := m.acquireAgent(ctx, threadID)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("acquire agent: %w", err)
+		return nil, nil, nil, nil, fmt.Errorf("acquire agent: %w", err)
 	}
 	aiAgent := ca.agent
 
@@ -376,5 +405,5 @@ func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact
 		aiAgent.RestoreToolRegistry(snap)
 		m.releaseAgent(ca)
 	}
-	return aiAgent, sink, cleanup, nil
+	return aiAgent, ca, sink, cleanup, nil
 }

@@ -381,8 +381,12 @@ func (r *SkillListReminder) Generate(ctx Context) []string {
 	if ctx.IsToolResult {
 		return nil
 	}
-	// Only fire when skills have changed or on the first message.
-	if !r.dirty && !ctx.IsFirstMessage {
+	// Only fire when the skill list has changed (or on the very first call,
+	// since dirty starts as true). We intentionally do NOT use ctx.IsFirstMessage
+	// here: in channel mode the session stores raw (unwrapped) user messages,
+	// so historyHasReminder() always returns false, making reminderIsFirst=true
+	// on every turn and causing the skill list to be re-injected on every message.
+	if !r.dirty {
 		return nil
 	}
 	metas := r.provider.ListSkillMetas()

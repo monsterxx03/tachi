@@ -118,6 +118,13 @@ type AIAgent struct {
 	// Set via SetPendingImages, consumed (and cleared) by RunConversationStream.
 	pendingImages []llm.ContentPart
 
+	// lastMessages is the final LLM message slice after a RunConversationStream
+	// or RunOneOffStream call completes. It includes all messages sent to the
+	// LLM during that turn (history + current user + assistant + tool results).
+	// Channel mode reads this via GetLastMessages() to maintain an in-memory
+	// history cache on the cachedAgent, avoiding repeated disk reloads.
+	lastMessages []llm.Message
+
 	// baseReminders stores the non-skill reminders assembled during Configure.
 	// rebuildSkillCollector uses this to re-apply SkillListReminder on reload.
 	baseReminders []systemreminder.Reminder
@@ -479,6 +486,17 @@ func (a *AIAgent) SetSharedMCP(mgr *mcp.Manager) {
 // Call this before RunConversationStream when the user message includes images.
 func (a *AIAgent) SetPendingImages(images []llm.ContentPart) {
 	a.pendingImages = images
+}
+
+// GetLastMessages returns the final LLM message slice from the most recent
+// RunConversationStream call. The slice includes every message exchanged
+// during that turn: the prior history, the (wrapped) user message, and all
+// assistant + tool-call + tool-result messages produced by the agent loop.
+// It is safe to read only after the event channel returned by
+// RunConversationStream has been fully drained (channel closed).
+// Returns nil if no turn has completed yet.
+func (a *AIAgent) GetLastMessages() []llm.Message {
+	return a.lastMessages
 }
 
 // Close releases resources held by the agent, including killing all tracked

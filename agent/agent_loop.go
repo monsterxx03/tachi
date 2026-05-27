@@ -255,6 +255,12 @@ func (a *AIAgent) runAgentLoop(
 	opts llm.ChatOptions,
 	ch chan<- AgentEvent,
 ) {
+	// Capture the final message slice (including all assistant/tool messages
+	// appended during the loop) so callers can read it via GetLastMessages()
+	// after the event channel is drained. The closure captures messages by
+	// reference, so it sees the value at the time runAgentLoop returns.
+	defer func() { a.lastMessages = messages }()
+
 	// Inject the current session ID so it can be forwarded as the
 	// x-tachi-session-id header on outgoing LLM API requests.
 	if a.sessionManager != nil && a.sessionManager.Current() != nil {

@@ -65,9 +65,15 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	}))
 
 	// Per-thread session.
-	sm, priorHistory := m.prepareThreadSession(job.TargetThreadID, resolved)
+	sm, diskHistory := m.prepareThreadSession(job.TargetThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
+	}
+
+	// Use cached in-memory history when available; fall back to disk on first run.
+	priorHistory := diskHistory
+	if ca.history != nil {
+		priorHistory = ca.history
 	}
 
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), m.systemPrompt, llm.ChatOptions{
@@ -80,6 +86,12 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	}
 
 	result, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(job.TargetThreadID), sendProgress, nil)
+
+	// Update cached history after cron turn.
+	if msgs := aiAgent.GetLastMessages(); len(msgs) > 0 {
+		ca.history = msgs
+	}
+
 	if err != nil {
 		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
 		return err
