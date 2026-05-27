@@ -99,6 +99,71 @@ func (m *Manager) WaitInit(ctx context.Context) error {
 	}
 }
 
+// PopulateFromConnect connects to all servers in cfg.MCPServers, inflates the
+// manager's deferred pool with every discovered tool, and adds the subset of
+// "auto-load" tools (when ToolSearch is disabled, or the per-server
+// always_load list matches) to the discovered set.
+//
+// The discovered set is the contract used by AIAgent.filterActiveSchemas:
+// any tool in it is exposed to the LLM. Whether the tool is also eagerly
+// registered into a tool.Registry is up to the caller — single-agent callers
+// register them on the spot, while channel mode leaves them lazy and lets
+// AIAgent.lazyRegisterMCPTool do the registration on first invocation.
+//
+// Returns:
+//   - autoLoad: tools the caller may want to RegisterTool eagerly
+//   - all:      every discovered tool (already added to pool)
+//   - errs:     per-server connection errors (non-fatal; partial discovery is fine)
+//
+// PopulateFromConnect does NOT call MarkInitDone — the caller decides when
+// initialization is "done" (e.g. after additionally registering reminders).
+func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (autoLoad, all []MCPTool, errs []error) {
+	all, errs = m.ConnectAll(ctx, cfg.MCPServers)
+	if len(all) == 0 {
+		return nil, nil, errs
+	}
+
+	// Build server config lookup once.
+	serverCfgs := make(map[string]config.MCPServerConfig, len(cfg.MCPServers))
+	for _, srv := range cfg.MCPServers {
+		serverCfgs[srv.Name] = srv
+	}
+
+	useToolSearch := cfg.MCPToolSearch.IsEnabled() &&
+		len(all) > cfg.MCPToolSearch.MinToolsForSearch
+
+	for _, t := range all {
+		srvCfg, hasCfg := serverCfgs[t.ServerName()]
+
+		var searchHint string
+		if hasCfg && srvCfg.SearchHints != nil {
+			searchHint = srvCfg.SearchHints[t.ToolName()]
+		}
+
+		dt := NewDeferredToolFromMCPTool(t, searchHint)
+		m.pool.Add(dt)
+
+		isAutoLoad := !useToolSearch
+		if !isAutoLoad && hasCfg {
+			for _, name := range srvCfg.AlwaysLoadTools {
+				if strings.EqualFold(name, t.ToolName()) {
+					isAutoLoad = true
+					break
+				}
+			}
+		}
+
+		if isAutoLoad {
+			m.set.Add(t.Name())
+			autoLoad = append(autoLoad, t)
+		}
+	}
+
+	m.logger.Log("MCP: populated %d tools (%d auto-load, ToolSearch=%v, threshold=%d)",
+		m.pool.Len(), len(autoLoad), useToolSearch, cfg.MCPToolSearch.MinToolsForSearch)
+	return autoLoad, all, errs
+}
+
 // SetLogger overrides the manager's logger. Channel callers use this to inject
 // a channel-specific logger so debug output is tagged with the correct source.
 func (m *Manager) SetLogger(l *debuglog.Logger) {

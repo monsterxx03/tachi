@@ -8,7 +8,6 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 )
 
 // cachedAgent wraps a per-thread AIAgent with serialization (so a single
@@ -56,68 +55,19 @@ func (m *Manager) initSharedMCP() *mcp.Manager {
 	return m.sharedMCPMgr
 }
 
-// populateSharedMCP runs ConnectAll once and inflates the manager's deferred
-// pool. Auto-load tools (when ToolSearch is disabled or per-server
-// always_load list matches) are added to the discovered set, but NOT
-// registered into any tool registry — registration happens per-agent
-// via lazyRegisterMCPTool when Invoke() is called.
+// populateSharedMCP delegates to mcp.Manager.PopulateFromConnect to discover
+// tools, fill the deferred pool, and add auto-load tools to the discovered
+// set. Channel mode does NOT eagerly register tools into any agent's registry —
+// AIAgent.lazyRegisterMCPTool handles registration on first invocation.
 //
 // Errors are logged; partial discovery is acceptable.
 func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	defer mgr.MarkInitDone()
 
-	pool := mgr.Pool()
-	set := mgr.DiscoveredSet()
-
-	mcpTools, errs := mgr.ConnectAll(ctx, m.cfg.MCPServers)
+	_, _, errs := mgr.PopulateFromConnect(ctx, m.cfg)
 	for _, err := range errs {
 		m.logger.Log("channel: shared MCP load error: %v", err)
 	}
-	if len(mcpTools) == 0 {
-		m.logger.Log("channel: shared MCP discovered 0 tools")
-		return
-	}
-
-	// Build server config lookup.
-	serverCfgs := make(map[string]config.MCPServerConfig, len(m.cfg.MCPServers))
-	for _, srv := range m.cfg.MCPServers {
-		serverCfgs[srv.Name] = srv
-	}
-
-	useToolSearch := m.cfg.MCPToolSearch.IsEnabled() &&
-		len(mcpTools) > m.cfg.MCPToolSearch.MinToolsForSearch
-
-	for _, t := range mcpTools {
-		var searchHint string
-		if srvCfg, ok := serverCfgs[t.ServerName()]; ok && srvCfg.SearchHints != nil {
-			searchHint = srvCfg.SearchHints[t.ToolName()]
-		}
-
-		dt := mcp.NewDeferredToolFromMCPTool(t, searchHint)
-		pool.Add(dt)
-
-		// Auto-load decision (no actual registration here — agents
-		// lazy-register from the deferred pool on demand).
-		autoLoad := !useToolSearch
-		if !autoLoad {
-			if srvCfg, ok := serverCfgs[t.ServerName()]; ok {
-				for _, name := range srvCfg.AlwaysLoadTools {
-					if name == t.ToolName() {
-						autoLoad = true
-						break
-					}
-				}
-			}
-		}
-		if autoLoad {
-			set.Add(t.Name())
-		}
-	}
-
-	total := pool.Len()
-	discovered := len(set.List())
-	m.logger.Log("channel: shared MCP populated — %d tools (%d auto-discovered, ToolSearch=%v)",
-		total, discovered, useToolSearch)
 }
 
 // acquireAgent returns the cached AIAgent for the given threadID, creating

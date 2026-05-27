@@ -4,8 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"slices"
-	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -202,79 +200,38 @@ func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Ma
 	return mgr, nil
 }
 
-// connectMCPBackground connects to all MCP servers, discovers their tools,
-// populates the deferred pool, and registers auto-load tools.
+// connectMCPBackground populates the manager's deferred pool, registers
+// auto-load tools into the agent's registry, and attaches DeferredToolReminder.
 // Runs in a background goroutine started by InitMCPAsync.
 func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) {
 	defer a.mcpManager.MarkInitDone()
 	defer a.logger.Log("MCP: async init completed")
 
-	pool := a.mcpManager.Pool()
-	set := a.mcpManager.DiscoveredSet()
-
-	mcpTools, errs := a.mcpManager.ConnectAll(ctx, cfg.MCPServers)
+	autoLoad, all, errs := a.mcpManager.PopulateFromConnect(ctx, cfg)
 	for _, err := range errs {
 		a.logger.Log("MCP: load error: %v", err)
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
-
-	if len(mcpTools) == 0 {
+	if len(all) == 0 {
 		a.logger.Log("MCP: no tools discovered from any server")
 		return
 	}
 
-	// Build server config lookup (name -> config)
-	serverCfgs := make(map[string]config.MCPServerConfig, len(cfg.MCPServers))
-	for _, srv := range cfg.MCPServers {
-		serverCfgs[srv.Name] = srv
+	// Single-agent path: eagerly register auto-load tools so they are
+	// visible to the agent's tool registry without going through the
+	// lazy-register fallback. Channel mode skips this and relies on
+	// AIAgent.lazyRegisterMCPTool at first invocation.
+	for _, t := range autoLoad {
+		a.RegisterTool(t)
+	}
+	if len(autoLoad) > 0 {
+		a.logger.Log("MCP: %d tools auto-registered async", len(autoLoad))
 	}
 
-	// Decide whether ToolSearch is active
-	useToolSearch := cfg.MCPToolSearch.IsEnabled() && len(mcpTools) > cfg.MCPToolSearch.MinToolsForSearch
-
-	newlyRegistered := 0
-	for _, t := range mcpTools {
-		// Check for per-server overrides
-		srvCfg, hasCfg := serverCfgs[t.ServerName()]
-
-		// Apply search hint override from config
-		var searchHint string
-		if hasCfg && srvCfg.SearchHints != nil {
-			searchHint = srvCfg.SearchHints[t.ToolName()]
-		}
-
-		// Store in deferred pool (always — needed for search and Invoke fallback)
-		dt := mcp.NewDeferredToolFromMCPTool(t, searchHint)
-		pool.Add(dt)
-
-		// Auto-load when ToolSearch is disabled or tool is in always_load list
-		autoLoad := !useToolSearch
-		if !autoLoad && hasCfg {
-			if slices.ContainsFunc(srvCfg.AlwaysLoadTools, func(name string) bool {
-				return strings.EqualFold(name, t.ToolName())
-			}) {
-				autoLoad = true
-			}
-		}
-
-		if autoLoad {
-			a.RegisterTool(t)
-			set.Add(t.Name())
-			newlyRegistered++
-		}
-
-		a.logger.Log("MCP: %s tool %s (auto-load=%v)", map[bool]string{true: "registered", false: "deferred"}[autoLoad], t.Name(), autoLoad)
-	}
-
-	// Log summary
+	pool := a.mcpManager.Pool()
+	set := a.mcpManager.DiscoveredSet()
 	total := pool.Len()
 	discovered := len(set.List())
-	if useToolSearch {
-		a.logger.Log("MCP: ToolSearch active — %d/%d tools loaded (threshold=%d)",
-			discovered, total, cfg.MCPToolSearch.MinToolsForSearch)
-	} else {
-		a.logger.Log("MCP: all %d tools loaded (ToolSearch disabled or below threshold)", total)
-	}
 
 	// Create DeferredToolReminder (always, for potential use via toggle)
 	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
@@ -288,10 +245,6 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 		a.rebuildSkillCollector()
 		a.logger.Log("MCP: DeferredToolReminder added (%d undiscovered of %d)",
 			total-discovered, total)
-	}
-
-	if newlyRegistered > 0 {
-		a.logger.Log("MCP: %d tools auto-registered async", newlyRegistered)
 	}
 }
 
