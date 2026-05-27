@@ -104,6 +104,12 @@ type AIAgent struct {
 	mcpManager  *mcp.Manager  // MCP connection manager
 	mcpInitDone chan struct{} // closed when background MCP init completes
 
+	// sharedMCP is true when mcpManager/deferredPool/discoveredSet/mcpInitDone
+	// were injected via SetSharedMCP and should not be re-created or torn down
+	// by Configure/Close. Used by channel.Manager to share one MCP backend
+	// across many cached AIAgent instances.
+	sharedMCP bool
+
 	// processManager manages background processes started by BashTool.
 	// Tied to the agent lifecycle — Close() kills all tracked processes.
 	processManager *tools.ProcessManager
@@ -426,6 +432,24 @@ func (a *AIAgent) ClearToolRegistry() {
 // Configure().
 func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
 	a.processManager = pm
+}
+
+// SetSharedMCP injects a pre-built set of MCP state to be shared across
+// multiple AIAgent instances (e.g. per-thread cached agents in channel mode).
+// When called BEFORE Configure(), the InitMCPAsync step is skipped — the
+// agent reuses the provided manager/pool/set instead of creating its own.
+//
+// initDone may be a channel that is closed once async tool discovery has
+// finished; pass nil if the caller does not track readiness.
+//
+// Close() will not tear down shared MCP — the owner (channel.Manager) is
+// responsible for closing the manager when the process exits.
+func (a *AIAgent) SetSharedMCP(mgr *mcp.Manager, pool *mcp.DeferredPool, set *mcp.DiscoveredSet, initDone chan struct{}) {
+	a.mcpManager = mgr
+	a.deferredPool = pool
+	a.discoveredSet = set
+	a.mcpInitDone = initDone
+	a.sharedMCP = true
 }
 
 // SetPendingImages sets image content parts to attach to the next user message

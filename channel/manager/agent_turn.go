@@ -270,8 +270,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 // --- Agent turn ---
 
-// runAgentTurn creates an agent instance, loads the per-thread session,
-// runs the conversation stream with steer support, and delivers the result.
+// runAgentTurn loads the per-thread cached AIAgent, attaches a session and
+// steer channel, and runs a single conversation turn. Per-turn ephemeral
+// tools (CronTool, SendFileTool) are scoped via SaveToolRegistry/Restore so
+// they don't leak into the next turn.
 func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation) {
 	defer func() {
 		// Unblock the handler on panic.
@@ -284,38 +286,34 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}()
 
-	prov, resolved := m.getProvider()
-
-	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
-	aiAgent.SetProcessManager(m.processManager) // shared PM survives individual turns
-	aiAgent.SetSkipEditConfirm(true)
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(m.cfg)
-	aiAgent.SetupCommitProvider(m.cfg)
-
-	mcpMgr, err := aiAgent.Configure(ctx, m.cfg)
-	if err != nil {
-		ta.resultCh <- handlerResult{err: fmt.Errorf("configure: %w", err)}
+	// /compact runs against an isolated, throwaway agent so that
+	// ClearToolRegistry() doesn't pollute the cached agent's tool set.
+	if ta.isCompact {
+		m.runCompactTurn(ctx, msg, sendProgress, ta)
 		return
 	}
-	if mcpMgr != nil {
-		defer mcpMgr.Close()
-	}
 
-	// Unregister AskUserQuestion — IM channels are non-interactive.
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	_, resolved := m.getProvider()
+
+	ca, err := m.acquireAgent(ctx, msg.ThreadID)
+	if err != nil {
+		ta.resultCh <- handlerResult{err: fmt.Errorf("acquire agent: %w", err)}
+		return
+	}
+	defer m.releaseAgent(ca)
+
+	aiAgent := ca.agent
+
+	// Snapshot the registry so we can cleanly remove per-turn ephemeral
+	// tools (CronTool, SendFileTool) at the end of this turn.
+	snap := aiAgent.SaveToolRegistry()
+	defer aiAgent.RestoreToolRegistry(snap)
 
 	// Register CronTool if scheduler is available.
 	if m.scheduler != nil {
 		aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string {
 			return msg.ThreadID
 		}))
-	}
-
-	// For /compact turns, clear all tools — the LLM should summarize
-	// based on conversation context only, not make new tool calls.
-	if ta.isCompact {
-		aiAgent.ClearToolRegistry()
 	}
 
 	// Per-thread session.
@@ -354,6 +352,8 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	// --- SendFile tool for file delivery via channel ---
 	// The tool is available in channel mode so the LLM can send files
 	// to the user (e.g. generated reports, screenshots, documents).
+	// MUST be re-registered each turn because the callback closure captures
+	// the per-turn `pendingAttachments` slice.
 	var attachmentMu sync.Mutex
 	var pendingAttachments []channel.OutgoingAttachment
 
@@ -391,4 +391,70 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	attachmentMu.Unlock()
 
 	ta.resultCh <- handlerResult{text: text, err: err, attachments: attachments}
+}
+
+// runCompactTurn runs a /compact summarization against a throwaway AIAgent
+// so the registry-clearing semantics (ClearToolRegistry) don't pollute the
+// cached agent's tool set. Cached agents survive across turns and intentionally
+// retain their tools, skills, and discovered MCP set; /compact's "no tools"
+// stance is incompatible with that lifecycle, so we run it in isolation.
+//
+// The compact agent still uses the shared MCP state (cheap, harmless — it
+// won't touch the deferred pool because all tools are cleared anyway), the
+// shared ProcessManager, and the same per-thread session.
+func (m *Manager) runCompactTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation) {
+	_, resolved := m.getProvider()
+	if resolved == nil {
+		ta.resultCh <- handlerResult{err: fmt.Errorf("channel: provider not initialized")}
+		return
+	}
+
+	aiAgent, err := m.buildAgent(ctx, msg.ThreadID)
+	if err != nil {
+		ta.resultCh <- handlerResult{err: fmt.Errorf("compact: build agent: %w", err)}
+		return
+	}
+	// Throwaway — release resources when this turn ends.
+	defer aiAgent.Close()
+
+	// /compact: no tool calls — only summarize from session context.
+	aiAgent.ClearToolRegistry()
+
+	sm, priorHistory, err := m.loadThreadSession(msg.ThreadID)
+	if err != nil {
+		m.logger.Log("channel: compact session setup for thread %s: %v", msg.ThreadID, err)
+		sm = m.newSessionManager()
+		priorHistory = nil
+	}
+	if sm != nil && !sm.HasCurrent() {
+		wd, _ := os.Getwd()
+		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
+			m.logger.Log("channel: compact create session: %v", err)
+		} else {
+			sm.SetThreadID(msg.ThreadID)
+		}
+	}
+	if sm != nil {
+		aiAgent.SetSessionManager(sm)
+	}
+
+	aiAgent.SetSteerChannel(ta.steerRespCh)
+
+	userContent, userImages := buildUserMessageWithAttachments(msg)
+	if len(userImages) > 0 {
+		aiAgent.SetPendingImages(userImages)
+	}
+
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
+		MaxTokens: resolved.MaxTokens,
+	})
+
+	isVerbose := func() bool {
+		m.verboseMu.RLock()
+		defer m.verboseMu.RUnlock()
+		return m.verboseState != nil && m.verboseState[msg.ThreadID]
+	}
+
+	text, err := m.drainEvents(eventCh, aiAgent, isVerbose, sendProgress, ta)
+	ta.resultCh <- handlerResult{text: text, err: err}
 }

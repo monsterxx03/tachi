@@ -6,7 +6,6 @@ import (
 	"os"
 	"time"
 
-	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
@@ -37,31 +36,29 @@ func (m *Manager) initCron(_ context.Context) error {
 }
 
 // OnCronTrigger is the TriggerHandler callback invoked by the cron scheduler
-// when a job fires. It simulates an incoming message from the cron system:
-// builds an agent with the job's prompt as the user message, runs the agent
-// turn, and delivers the response to the target thread's channel.
+// when a job fires. It simulates an incoming message from the cron system,
+// reuses the per-thread cached AIAgent (so MCP discoveredSet, skills, etc.
+// stay consistent with regular messages on the same thread), and delivers
+// the response to the target thread's channel.
 func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	m.logger.Log("channel: cron trigger job=%s (%s) thread=%s", job.ID, job.Name, job.TargetThreadID)
 
-	prov, resolved := m.getProvider()
-	if prov == nil || resolved == nil {
+	_, resolved := m.getProvider()
+	if resolved == nil {
 		return fmt.Errorf("channel: provider not initialized for cron trigger")
 	}
 
-	aiAgent := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
-	aiAgent.SetSkipEditConfirm(true)
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(m.cfg)
-	aiAgent.SetupCommitProvider(m.cfg)
-
-	mcpMgr, err := aiAgent.Configure(ctx, m.cfg)
+	ca, err := m.acquireAgent(ctx, job.TargetThreadID)
 	if err != nil {
-		return fmt.Errorf("cron: configure agent: %w", err)
+		return fmt.Errorf("cron: acquire agent: %w", err)
 	}
-	if mcpMgr != nil {
-		defer mcpMgr.Close()
-	}
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	defer m.releaseAgent(ca)
+	aiAgent := ca.agent
+
+	// Snapshot the registry so the cron-scoped tools we register below
+	// (CronTool) don't leak into the next regular message turn.
+	snap := aiAgent.SaveToolRegistry()
+	defer aiAgent.RestoreToolRegistry(snap)
 
 	// Register CronTool so cron jobs can manage themselves.
 	aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string {

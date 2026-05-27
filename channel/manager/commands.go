@@ -197,6 +197,11 @@ func (m *Manager) handleModelSwitch(name string) (string, error) {
 	m.currentProviderName = name
 	m.providerMu.Unlock()
 
+	// Drop every cached AIAgent so the next message rebuilds against the
+	// new provider/model. (acquireAgent also detects this via providerName
+	// comparison, but evicting up-front frees resources sooner.)
+	m.evictAllAgents()
+
 	m.logger.Log("channel: /model switched to %s (%s/%s)", name, resolved.Type, resolved.Model)
 
 	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nNew conversations will use this model.", name, resolved.Type, resolved.Model), nil
@@ -209,6 +214,11 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	// starts a fresh conversation rather than being steered
 	// into the old turn.
 	m.cancelThreadTurn(threadID)
+
+	// Drop the cached AIAgent for this thread so any state that
+	// accumulated during the previous session (skill activation,
+	// reminder cadence, MCP discovered set, etc.) is reset.
+	m.evictAgent(threadID)
 
 	sm := m.newSessionManager()
 	if sm == nil {

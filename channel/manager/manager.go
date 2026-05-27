@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -119,6 +120,31 @@ type Manager struct {
 	// Per-turn AIAgent instances are ephemeral, but background processes must
 	// survive across turns. The Manager owns and cleans up this shared PM.
 	processManager *tools.ProcessManager
+
+	// --- Per-thread AIAgent cache (B-full) ---
+	//
+	// Agent state that is meaningful to accumulate across turns of the same
+	// thread (skill activation, MCP discoveredSet, reminder cadence, etc.) is
+	// preserved by reusing the same *AIAgent for every message arriving on a
+	// given ThreadID. Cross-thread state isolation is preserved because each
+	// thread has its own cached agent.
+	agentCacheMu sync.Mutex
+	agentCache   map[string]*cachedAgent
+
+	// --- Shared MCP backend ---
+	//
+	// All cached agents share a single MCP manager + deferred pool +
+	// discovered set. This avoids per-turn reconnection of MCP servers and
+	// preserves "tools the LLM has discovered via MCPSearchTools" across
+	// turns and across threads (the discovered set is essentially a hint
+	// about which tool schemas to expose; it does not leak data between
+	// threads). Lazily initialized on first agent acquisition.
+	sharedMCPOnce sync.Once
+	sharedMCPMu   sync.RWMutex
+	sharedMCPMgr  *mcp.Manager
+	sharedPool    *mcp.DeferredPool
+	sharedSet     *mcp.DiscoveredSet
+	sharedMCPDone chan struct{}
 
 	logger *debuglog.Logger
 }
@@ -398,8 +424,19 @@ func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo stri
 }
 
 // Close releases all resources held by the Manager, including killing all
-// tracked background processes. Safe to call multiple times.
+// tracked background processes, evicting cached agents, and tearing down
+// the shared MCP manager. Safe to call multiple times.
 func (m *Manager) Close() {
+	m.evictAllAgents()
+
+	m.sharedMCPMu.Lock()
+	mgr := m.sharedMCPMgr
+	m.sharedMCPMgr = nil
+	m.sharedMCPMu.Unlock()
+	if mgr != nil {
+		mgr.Close()
+	}
+
 	if m.processManager != nil {
 		m.processManager.KillAll()
 	}

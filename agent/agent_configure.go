@@ -123,7 +123,16 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 
 	// --- MCP servers (async) ---
 	var mgr *mcp.Manager
-	if cfg.MCPEnabled() {
+	if a.sharedMCP {
+		// Shared MCP was injected via SetSharedMCP — reuse it. The owner
+		// (e.g. channel.Manager) is responsible for ConnectAll/Close, so we
+		// return nil here to keep the caller's `defer mgr.Close()` a no-op.
+		// We still register the search tool and DeferredToolReminder so this
+		// agent can use the shared deferred pool for tool discovery.
+		a.attachSharedMCPReminder()
+		searchTool := tools.NewMCPSearchToolsTool(a.deferredPool, a.discoveredSet)
+		a.RegisterTool(searchTool)
+	} else if cfg.MCPEnabled() {
 		var err error
 		mgr, err = a.InitMCPAsync(ctx, cfg)
 		if err != nil {
@@ -140,6 +149,26 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
 	return mgr, nil
+}
+
+// attachSharedMCPReminder configures DeferredToolReminder for an agent
+// that uses a shared deferred pool (injected via SetSharedMCP). Mirrors the
+// final reminder-attach logic from connectMCPBackground, but skips the
+// connection / discovery phase.
+func (a *AIAgent) attachSharedMCPReminder() {
+	if a.deferredPool == nil || a.discoveredSet == nil {
+		return
+	}
+	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
+		Provider: &deferredToolProviderAdapter{pool: a.deferredPool},
+		Tracker:  a.discoveredSet,
+	}
+	total := a.deferredPool.Len()
+	discovered := len(a.discoveredSet.List())
+	if discovered < total {
+		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
+		a.rebuildSkillCollector()
+	}
 }
 
 // InitMCPAsync starts MCP server connections in a background goroutine
