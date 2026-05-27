@@ -58,9 +58,31 @@ type initProviderResult struct {
 // # Responsibilities
 //
 //   - Channel lifecycle: starts/stops multiple Channel goroutines via Start().
-//   - Message processing: on each incoming message, creates an agent, loads
-//     or creates a per-thread session, runs one agent turn with auto-confirm
-//     semantics, and returns the response.
+//   - Message processing: on each incoming message, looks up (or builds) a
+//     per-thread cached AIAgent, loads or creates a per-thread session, runs
+//     one agent turn with auto-confirm semantics, and returns the response.
+//
+// # Agent Lifecycle
+//
+// Each ThreadID maps to a long-lived *AIAgent stored in agentCache. The cached
+// agent is reused for every subsequent message on the same thread, so state
+// that is meaningful to accumulate across turns — MCP discoveredSet, skill
+// activations, lastInputTokens for token-warning reminders, etc. — survives
+// without being reset on every message. Per-turn ephemeral tools (CronTool,
+// SendFileTool) are scoped via SaveToolRegistry / RestoreToolRegistry so they
+// don't leak into the next turn.
+//
+// The cached agent is rebuilt or evicted in three cases:
+//   - /new on a thread → that thread's cached agent is dropped so the next
+//     message starts cleanly.
+//   - /model switches the active provider → all cached agents are evicted
+//     because they were built against the old provider/model.
+//   - /compact runs a one-off summarization against a throwaway agent (with
+//     ClearToolRegistry) so the cached agent's tool set isn't disturbed.
+//
+// All cached agents share a single *mcp.Manager + DeferredPool + DiscoveredSet
+// (see initSharedMCP). MCP servers connect once at first use and are torn down
+// in Manager.Close(); they are NOT reconnected per message.
 //
 // # Session Model
 //
@@ -78,10 +100,13 @@ type initProviderResult struct {
 //
 // # Concurrency & Steer
 //
-// Each call to the handler creates a fresh agent instance — no mutable shared
-// state between concurrent message processing. The session.Manager provides
-// safe per-thread persistence. Multiple threads and multiple channels safely
-// interleave.
+// Cross-thread isolation comes from per-ThreadID cached agents (separate map
+// entries) and per-thread sessions on disk. Same-thread serialization is
+// enforced at two layers: the threadActivation gate prevents two handler
+// goroutines from running concurrently on one thread (the second message is
+// queued via steer instead), and cachedAgent.mu adds a defense-in-depth lock
+// so paths that bypass threadActivation (e.g. cron triggers landing on the
+// same thread as a regular message) cannot race on the same *AIAgent.
 //
 // When a message arrives for a thread that already has an active agent turn,
 // it is injected via the steer mechanism: the message is queued and delivered
@@ -140,18 +165,14 @@ type Manager struct {
 
 	// --- Shared MCP backend ---
 	//
-	// All cached agents share a single MCP manager + deferred pool +
-	// discovered set. This avoids per-turn reconnection of MCP servers and
+	// All cached agents share a single *mcp.Manager. The manager owns the
+	// DeferredPool, DiscoveredSet, and init-done channel — see agent/mcp/
+	// for details. This avoids per-turn reconnection of MCP servers and
 	// preserves "tools the LLM has discovered via MCPSearchTools" across
-	// turns and across threads (the discovered set is essentially a hint
-	// about which tool schemas to expose; it does not leak data between
-	// threads). Lazily initialized on first agent acquisition.
+	// turns and across threads. Lazily initialized on first agent acquisition.
 	sharedMCPOnce sync.Once
 	sharedMCPMu   sync.RWMutex
 	sharedMCPMgr  *mcp.Manager
-	sharedPool    *mcp.DeferredPool
-	sharedSet     *mcp.DiscoveredSet
-	sharedMCPDone chan struct{}
 
 	logger *debuglog.Logger
 }

@@ -537,15 +537,17 @@ func (a *AIAgent) handleFinishReason(
 }
 
 // filterActiveSchemas filters tool schemas for the LLM API call.
-// When ToolSearch is active (deferredPool != nil):
+// When ToolSearch is active (deferred pool non-empty):
 //   - Built-in tools are always included
 //   - The MCPSearchTools tool is always included
 //   - MCP tools are only included if they've been discovered by the LLM
 //
-// When ToolSearch is not active (deferredPool == nil, e.g. no MCP servers):
+// When ToolSearch is not active (no MCP manager, e.g. no MCP servers):
 //   - All tools are included (unchanged behavior)
 func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
-	if a.deferredPool == nil || a.deferredPool.Len() == 0 {
+	pool := a.DeferredPool()
+	set := a.discoveredSet()
+	if pool == nil || pool.Len() == 0 {
 		// ToolSearch not active — include all schemas as-is
 		return schemas
 	}
@@ -564,7 +566,7 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 			// The search tool itself is always included
 			active = append(active, s)
 			seen[name] = true
-		case a.discoveredSet != nil && a.discoveredSet.Contains(name):
+		case set != nil && set.Contains(name):
 			// Discovered MCP tools are included
 			active = append(active, s)
 			seen[name] = true
@@ -573,16 +575,16 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 		}
 	}
 
-	// Merge discovered tools that are in deferredPool but not yet registered.
+	// Merge discovered tools that are in deferred pool but not yet registered.
 	// This handles the gap between MCPSearchTools discovery and the next
 	// filterActiveSchemas call: the tool may be in discoveredSet but not yet
 	// in the Registry (lazy registration happens at Invoke time).
-	if a.discoveredSet != nil && a.deferredPool != nil {
-		for _, name := range a.discoveredSet.List() {
+	if set != nil {
+		for _, name := range set.List() {
 			if seen[name] {
 				continue
 			}
-			dt := a.deferredPool.Get(name)
+			dt := pool.Get(name)
 			if dt != nil {
 				active = append(active, dt.Schema)
 				seen[name] = true

@@ -133,19 +133,20 @@ func translateEvent(e AgentEvent) subagent.StreamEvent {
 }
 
 // lazyRegisterMCPTool ensures an MCP tool is in the Registry before invocation.
-// When ToolSearch is active, non-auto-loaded MCP tools stay only in deferredPool
-// until first use. This method bridges: if the tool is an MCP tool and not yet
-// in the Registry, it registers the DeferredTool.Tool instance.
+// When ToolSearch is active, non-auto-loaded MCP tools stay only in the
+// deferred pool until first use. This method bridges: if the tool is an MCP
+// tool and not yet in the Registry, it registers the DeferredTool.Tool instance.
 // Returns nil if the tool is already registered or is not an MCP tool.
 func (a *AIAgent) lazyRegisterMCPTool(name string) error {
-	if a.deferredPool == nil || !tools.IsMCPSchema(name) {
+	pool := a.DeferredPool()
+	if pool == nil || !tools.IsMCPSchema(name) {
 		return nil
 	}
 	// Already registered
 	if a.toolRegistry.GetTool(name) != nil {
 		return nil
 	}
-	deferredTool := a.deferredPool.Get(name)
+	deferredTool := pool.Get(name)
 	if deferredTool == nil || deferredTool.Tool == nil {
 		return fmt.Errorf("deferred MCP tool %q not found", name)
 	}

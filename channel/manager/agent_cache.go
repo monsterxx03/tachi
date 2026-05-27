@@ -22,13 +22,13 @@ type cachedAgent struct {
 	model        string // resolved model when the agent was built
 }
 
-// initSharedMCP lazily creates the shared MCP manager + deferred pool +
-// discovered set, and kicks off async ConnectAll. Subsequent calls are
-// no-ops (sync.Once).
+// initSharedMCP lazily creates the shared MCP manager and kicks off async
+// ConnectAll. Subsequent calls are no-ops (sync.Once). The returned manager
+// owns its own DeferredPool / DiscoveredSet / init-done channel; agents
+// access them through the manager rather than via separate fields.
 //
-// Returns (manager, pool, set, done-chan). All may be nil if MCP is not
-// configured in cfg.
-func (m *Manager) initSharedMCP() (*mcp.Manager, *mcp.DeferredPool, *mcp.DiscoveredSet, chan struct{}) {
+// Returns nil if MCP is not configured in cfg.
+func (m *Manager) initSharedMCP() *mcp.Manager {
 	m.sharedMCPOnce.Do(func() {
 		if m.cfg == nil || !m.cfg.MCPEnabled() {
 			m.logger.Log("channel: shared MCP skipped (not enabled)")
@@ -37,21 +37,15 @@ func (m *Manager) initSharedMCP() (*mcp.Manager, *mcp.DeferredPool, *mcp.Discove
 
 		mgr := mcp.NewManager()
 		mgr.SetLogger(m.logger)
-		pool := mcp.NewDeferredPool()
-		set := mcp.NewDiscoveredSet()
-		done := make(chan struct{})
 
 		m.sharedMCPMu.Lock()
 		m.sharedMCPMgr = mgr
-		m.sharedPool = pool
-		m.sharedSet = set
-		m.sharedMCPDone = done
 		m.sharedMCPMu.Unlock()
 
 		// Connect and populate pool in the background. context.Background()
 		// is intentional: shared MCP outlives any single triggering message
 		// and is torn down explicitly by Manager.Close().
-		go m.populateSharedMCP(context.Background(), mgr, pool, set, done)
+		go m.populateSharedMCP(context.Background(), mgr)
 
 		m.logger.Log("channel: shared MCP initialized (%d servers)",
 			len(m.cfg.MCPServers))
@@ -59,24 +53,21 @@ func (m *Manager) initSharedMCP() (*mcp.Manager, *mcp.DeferredPool, *mcp.Discove
 
 	m.sharedMCPMu.RLock()
 	defer m.sharedMCPMu.RUnlock()
-	return m.sharedMCPMgr, m.sharedPool, m.sharedSet, m.sharedMCPDone
+	return m.sharedMCPMgr
 }
 
-// populateSharedMCP runs ConnectAll once and inflates the shared deferred
+// populateSharedMCP runs ConnectAll once and inflates the manager's deferred
 // pool. Auto-load tools (when ToolSearch is disabled or per-server
 // always_load list matches) are added to the discovered set, but NOT
 // registered into any tool registry — registration happens per-agent
 // via lazyRegisterMCPTool when Invoke() is called.
 //
 // Errors are logged; partial discovery is acceptable.
-func (m *Manager) populateSharedMCP(
-	ctx context.Context,
-	mgr *mcp.Manager,
-	pool *mcp.DeferredPool,
-	set *mcp.DiscoveredSet,
-	done chan struct{},
-) {
-	defer close(done)
+func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
+	defer mgr.MarkInitDone()
+
+	pool := mgr.Pool()
+	set := mgr.DiscoveredSet()
 
 	mcpTools, errs := mgr.ConnectAll(ctx, m.cfg.MCPServers)
 	for _, err := range errs {
@@ -238,9 +229,8 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string) (*agent.AIAge
 
 	// Inject shared MCP — Configure() will skip InitMCPAsync.
 	if m.cfg != nil && m.cfg.MCPEnabled() {
-		mgr, pool, set, done := m.initSharedMCP()
-		if mgr != nil {
-			a.SetSharedMCP(mgr, pool, set, done)
+		if mgr := m.initSharedMCP(); mgr != nil {
+			a.SetSharedMCP(mgr)
 		}
 	}
 

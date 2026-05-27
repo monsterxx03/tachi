@@ -30,17 +30,72 @@ type MCPClient interface {
 }
 
 // Manager manages the lifecycle of MCP client connections and their tools.
+//
+// Manager also owns the ToolSearch state — DeferredPool (all discovered MCP
+// tools, searchable but not yet registered with the LLM), DiscoveredSet (the
+// subset of tools the LLM has explicitly opted into via MCPSearchTools), and
+// the initDone channel that signals async ConnectAll completion. These are
+// owned here because they share the manager's lifecycle: they're created when
+// a manager is built and torn down when it's closed. Callers (AIAgent,
+// channel.Manager) used to hold them as separate fields; that worked but
+// duplicated lifecycle bookkeeping at every layer. Now there is one source of
+// truth.
+//
+// Pool / DiscoveredSet / InitDone are always non-nil after NewManager.
+// MarkInitDone closes the init channel exactly once when ConnectAll-style
+// population is finished.
 type Manager struct {
 	clients map[string]MCPClient // server name -> client
 	logger  *debuglog.Logger
 	mu      sync.RWMutex
+
+	pool     *DeferredPool
+	set      *DiscoveredSet
+	initDone chan struct{}
+
+	initDoneOnce sync.Once
 }
 
 // NewManager creates an empty MCP client manager.
 func NewManager() *Manager {
 	return &Manager{
-		clients: make(map[string]MCPClient),
-		logger:  debuglog.DefaultLogger,
+		clients:  make(map[string]MCPClient),
+		logger:   debuglog.DefaultLogger,
+		pool:     NewDeferredPool(),
+		set:      NewDiscoveredSet(),
+		initDone: make(chan struct{}),
+	}
+}
+
+// Pool returns the deferred-tool pool owned by this manager. Always non-nil.
+func (m *Manager) Pool() *DeferredPool { return m.pool }
+
+// DiscoveredSet returns the discovered-tools set owned by this manager.
+// Always non-nil.
+func (m *Manager) DiscoveredSet() *DiscoveredSet { return m.set }
+
+// InitDone returns a channel that is closed once the manager's async
+// initialization (ConnectAll + pool population) has finished. Callers can
+// select on it (or use WaitInit) to block until tools are ready.
+//
+// If the manager is never populated (e.g. no servers configured), the channel
+// stays open. Callers that don't care should not block on it.
+func (m *Manager) InitDone() <-chan struct{} { return m.initDone }
+
+// MarkInitDone closes the InitDone channel, idempotently. Should be called
+// once after ConnectAll-style population has finished.
+func (m *Manager) MarkInitDone() {
+	m.initDoneOnce.Do(func() { close(m.initDone) })
+}
+
+// WaitInit blocks until MarkInitDone is called or the context is cancelled.
+// Returns ctx.Err() on cancellation, nil on success.
+func (m *Manager) WaitInit(ctx context.Context) error {
+	select {
+	case <-m.initDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
 	}
 }
 

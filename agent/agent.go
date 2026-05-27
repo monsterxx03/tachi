@@ -91,22 +91,22 @@ type AIAgent struct {
 	skipMemoryRecall bool           // set by main.go runAgent to suppress recall for "tachi run"
 	excludeRepos     []string       // git repo roots to skip all memory writes
 
-	// MCP ToolSearch fields
-	deferredPool  *mcp.DeferredPool  // MCP tools available for search (nil = ToolSearch disabled)
-	discoveredSet *mcp.DiscoveredSet // MCP tools discovered by LLM via MCPSearchTools
+	// MCP ToolSearch fields are owned by mcpManager. The agent reads them via
+	// mcpManager.Pool() / mcpManager.DiscoveredSet() rather than holding its
+	// own references — there is one source of truth for ToolSearch state per
+	// manager, which can be shared across agents (e.g. channel mode).
 
 	// DeferredToolReminder reference — allows mid-session reset when user
-	// manually enables an MCP server (tools go into deferredPool, reminder
+	// manually enables an MCP server (tools go into the manager's pool, reminder
 	// fires again to hint LLM about them).
 	deferredToolReminder *systemreminder.DeferredToolReminder
 
 	// MCP async init
-	mcpManager  *mcp.Manager  // MCP connection manager
-	mcpInitDone chan struct{} // closed when background MCP init completes
+	mcpManager *mcp.Manager // MCP connection manager (also owns pool/set/initDone)
 
-	// sharedMCP is true when mcpManager/deferredPool/discoveredSet/mcpInitDone
-	// were injected via SetSharedMCP and should not be re-created or torn down
-	// by Configure/Close. Used by channel.Manager to share one MCP backend
+	// sharedMCP is true when mcpManager was injected via SetSharedMCP and
+	// should not be re-created or torn down by Configure/Close. Used by
+	// channel.Manager to share one MCP backend
 	// across many cached AIAgent instances.
 	sharedMCP bool
 
@@ -300,29 +300,54 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 		}
 	}
 
+	pool := a.DeferredPool()
+	set := a.discoveredSet()
+
 	// 2. Remove from deferred pool
-	if a.deferredPool != nil {
-		removed := a.deferredPool.RemoveByServer(serverName)
+	if pool != nil {
+		removed := pool.RemoveByServer(serverName)
 		if removed > 0 {
 			a.logger.Log("MCP: removed %d tools from deferred pool for server %s", removed, serverName)
 		}
 	}
 
 	// 3. Remove from discovered set
-	if a.discoveredSet != nil {
+	if set != nil {
 		// Collect tool names with this prefix from the discovered set
-		for _, name := range a.discoveredSet.List() {
+		for _, name := range set.List() {
 			if strings.HasPrefix(name, prefix) {
-				a.discoveredSet.Remove(name)
+				set.Remove(name)
 				a.logger.Log("MCP: removed tool %s from discovered set", name)
 			}
 		}
 	}
 }
 
-// DeferredPool returns the MCP deferred pool, or nil if ToolSearch is disabled.
+// DeferredPool returns the MCP deferred pool owned by the agent's
+// MCP manager, or nil if no manager is configured (i.e. MCP disabled).
 func (a *AIAgent) DeferredPool() *mcp.DeferredPool {
-	return a.deferredPool
+	if a.mcpManager == nil {
+		return nil
+	}
+	return a.mcpManager.Pool()
+}
+
+// discoveredSet returns the MCP discovered set owned by the agent's
+// MCP manager, or nil if no manager is configured. Internal helper.
+func (a *AIAgent) discoveredSet() *mcp.DiscoveredSet {
+	if a.mcpManager == nil {
+		return nil
+	}
+	return a.mcpManager.DiscoveredSet()
+}
+
+// mcpInitDone returns the channel that signals async MCP init completion,
+// or nil if no MCP manager is configured. Internal helper.
+func (a *AIAgent) mcpInitDoneCh() <-chan struct{} {
+	if a.mcpManager == nil {
+		return nil
+	}
+	return a.mcpManager.InitDone()
 }
 
 // AddDeferredMCPTools adds MCP tools to the deferred pool and marks the
@@ -332,13 +357,14 @@ func (a *AIAgent) DeferredPool() *mcp.DeferredPool {
 // the <available-deferred-tools> system reminder.
 // Returns the number of tools added.
 func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
-	if a.deferredPool == nil {
+	pool := a.DeferredPool()
+	if pool == nil {
 		return 0
 	}
 	count := 0
 	for _, t := range tools {
 		dt := mcp.NewDeferredToolFromMCPTool(t, "")
-		a.deferredPool.Add(dt)
+		pool.Add(dt)
 		count++
 		a.logger.Log("MCP: deferred tool %s (user toggle)", t.Name())
 	}
@@ -352,15 +378,16 @@ func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
 // available deferred tools on the next user message. Safe to call even when
 // the reminder hasn't been set up yet.
 func (a *AIAgent) NotifyDeferredToolsAdded() {
+	pool := a.DeferredPool()
 	if a.deferredToolReminder == nil {
 		// DeferredToolReminder hasn't been created yet (e.g., ToolSearch
 		// was disabled during init). Create one now.
-		if a.deferredPool == nil {
+		if pool == nil {
 			return
 		}
 		a.deferredToolReminder = &systemreminder.DeferredToolReminder{
-			Provider: &deferredToolProviderAdapter{pool: a.deferredPool},
-			Tracker:  a.discoveredSet,
+			Provider: &deferredToolProviderAdapter{pool: pool},
+			Tracker:  a.discoveredSet(),
 			Dirty:    true,
 		}
 	} else {
@@ -434,21 +461,16 @@ func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
 	a.processManager = pm
 }
 
-// SetSharedMCP injects a pre-built set of MCP state to be shared across
-// multiple AIAgent instances (e.g. per-thread cached agents in channel mode).
-// When called BEFORE Configure(), the InitMCPAsync step is skipped — the
-// agent reuses the provided manager/pool/set instead of creating its own.
-//
-// initDone may be a channel that is closed once async tool discovery has
-// finished; pass nil if the caller does not track readiness.
+// SetSharedMCP injects a pre-built MCP manager to be shared across multiple
+// AIAgent instances (e.g. per-thread cached agents in channel mode). When
+// called BEFORE Configure(), the InitMCPAsync step is skipped — the agent
+// reuses the provided manager (which carries pool, discovered set, and
+// initDone channel) instead of creating its own.
 //
 // Close() will not tear down shared MCP — the owner (channel.Manager) is
 // responsible for closing the manager when the process exits.
-func (a *AIAgent) SetSharedMCP(mgr *mcp.Manager, pool *mcp.DeferredPool, set *mcp.DiscoveredSet, initDone chan struct{}) {
+func (a *AIAgent) SetSharedMCP(mgr *mcp.Manager) {
 	a.mcpManager = mgr
-	a.deferredPool = pool
-	a.discoveredSet = set
-	a.mcpInitDone = initDone
 	a.sharedMCP = true
 }
 
