@@ -89,7 +89,7 @@ func (wm *WorktreeManager) createWorktree(ctx context.Context, branch string) (s
 		return "", fmt.Errorf("not a git repository")
 	}
 
-	if trimmed := strings.TrimPrefix(branch, "origin/"); trimmed != branch {
+	if trimmed, ok := strings.CutPrefix(branch, "origin/"); ok {
 		return "", fmt.Errorf("branch name %q looks like a remote tracking ref; use %q instead", branch, trimmed)
 	}
 

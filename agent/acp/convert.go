@@ -51,8 +51,8 @@ func convertContentBlocks(blocks []acp.ContentBlock) (string, []llm.ContentPart)
 
 // extractPathFromURI extracts a filesystem path from a file:// URI.
 func extractPathFromURI(uri string) string {
-	if strings.HasPrefix(uri, "file://") {
-		return strings.TrimPrefix(uri, "file://")
+	if after, ok := strings.CutPrefix(uri, "file://"); ok {
+		return after
 	}
 	return uri
 }

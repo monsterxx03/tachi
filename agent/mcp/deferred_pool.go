@@ -167,7 +167,7 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 func (p *DeferredPool) searchAll(allTools []*DeferredTool, maxResults int) []SearchResult {
 	n := min(len(allTools), maxResults)
 	results := make([]SearchResult, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		results[i] = p.toResult(allTools[i])
 	}
 	return results
@@ -241,7 +241,7 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 
 	n := min(len(scoredTools), maxResults)
 	results := make([]SearchResult, n)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		results[i] = p.toResult(scoredTools[i].tool)
 	}
 	return results
@@ -256,7 +256,7 @@ func parseToolName(name string) []string {
 	}
 	rest := strings.ToLower(name[5:]) // strip "mcp__"
 	var parts []string
-	for _, segment := range strings.Split(rest, "__") {
+	for segment := range strings.SplitSeq(rest, "__") {
 		for _, word := range splitOnUnderscoreOrCamel(segment) {
 			if word != "" {
 				parts = append(parts, word)
@@ -270,7 +270,7 @@ func parseToolName(name string) []string {
 func splitOnUnderscoreOrCamel(s string) []string {
 	// First split on underscores
 	var segments []string
-	for _, part := range strings.Split(s, "_") {
+	for part := range strings.SplitSeq(s, "_") {
 		if part == "" {
 			continue
 		}

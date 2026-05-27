@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"testing"
 
-	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
+	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
@@ -19,9 +19,9 @@ import (
 // mockStreamProvider implements llm.Provider and lets tests control the
 // exact stream events produced, including multi-turn sequences.
 type mockStreamProvider struct {
-	name       string
-	sequences  [][]llm.StreamEvent // each entry is one API call's full stream
-	callIdx    int
+	name      string
+	sequences [][]llm.StreamEvent // each entry is one API call's full stream
+	callIdx   int
 }
 
 func (p *mockStreamProvider) Name() string { return p.name }
@@ -137,7 +137,7 @@ func echoStub() *stubTool {
 		desc:     "Run a command",
 		parallel: true,
 		executeFn: func(ctx context.Context, args string) (string, error) {
-			var m map[string]interface{}
+			var m map[string]any
 			if err := json.Unmarshal([]byte(args), &m); err != nil {
 				return "", err
 			}
@@ -157,7 +157,7 @@ func confirmStub() *stubTool {
 		needsConfirm: true,
 		diffFn:       func(ctx context.Context, args string) (string, error) { return "diff preview", nil },
 		executeFn: func(ctx context.Context, args string) (string, error) {
-			var m map[string]interface{}
+			var m map[string]any
 			json.Unmarshal([]byte(args), &m)
 			return fmt.Sprintf("edited %v", m["path"]), nil
 		},
@@ -275,7 +275,7 @@ func TestIterationBudget_Consume(t *testing.T) {
 
 func TestIterationBudget_Unlimited(t *testing.T) {
 	b := &IterationBudget{Unlimited: true}
-	for i := 0; i < 1000; i++ {
+	for range 1000 {
 		assert.True(t, b.consume())
 	}
 }
@@ -297,7 +297,7 @@ func TestAgentLoop_IterationBudgetExhausted(t *testing.T) {
 		desc:     "Run a command",
 		parallel: true,
 		executeFn: func(ctx context.Context, args string) (string, error) {
-			var m map[string]interface{}
+			var m map[string]any
 			if err := json.Unmarshal([]byte(args), &m); err != nil {
 				return "", err
 			}
@@ -480,7 +480,7 @@ func TestExecuteToolCalls_ToolError(t *testing.T) {
 		desc:     "Always errors",
 		parallel: true,
 		executeFn: func(ctx context.Context, args string) (string, error) {
-			var m map[string]interface{}
+			var m map[string]any
 			json.Unmarshal([]byte(args), &m)
 			if msg, ok := m["msg"]; ok {
 				return "", fmt.Errorf("%s", msg)

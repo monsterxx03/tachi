@@ -77,8 +77,8 @@ func TestUsageToSession_Nil(t *testing.T) {
 
 func TestUsageToSession(t *testing.T) {
 	usage := &llm.Usage{
-		InputTokens:  1000,
-		OutputTokens: 500,
+		InputTokens:              1000,
+		OutputTokens:             500,
 		CacheCreationInputTokens: 200,
 		CacheReadInputTokens:     100,
 	}
@@ -104,7 +104,7 @@ func TestExecutor_NewExecutorDefaultConcurrency(t *testing.T) {
 	assert.NotNil(t, exec)
 
 	// Verify semaphore capacity equals default by trying to fill it
-	for i := 0; i < DefaultMaxConcurrency; i++ {
+	for i := range DefaultMaxConcurrency {
 		select {
 		case exec.sem <- struct{}{}:
 			// good
@@ -191,7 +191,7 @@ func TestWorktreeManager_Create_FallbackOnFailure(t *testing.T) {
 func TestNewWorktreeManager_Defaults(t *testing.T) {
 	cfg := config.SubagentConfig{
 		Worktree:        true,
-		WorktreeCleanup: boolPtr(false),
+		WorktreeCleanup: new(false),
 		WorktreeBranch:  "main",
 		WorktreeDir:     "/tmp/test-worktrees",
 	}
@@ -250,12 +250,12 @@ type fakeAgent struct {
 	childAgentFactory func(logger *debuglog.Logger, provider llm.Provider, model string, maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
 }
 
-func (a *fakeAgent) SubagentProvider() llm.Provider          { return a.provider }
-func (a *fakeAgent) SubagentModel() string                    { return a.model }
-func (a *fakeAgent) SessionManager() *session.Manager          { return nil }
-func (a *fakeAgent) Logger() *debuglog.Logger                 { return debuglog.DefaultLogger }
-func (a *fakeAgent) ToolNames() []string                      { return a.toolNames }
-func (a *fakeAgent) GetTool(name string) tools.Tool           { return nil }
+func (a *fakeAgent) SubagentProvider() llm.Provider   { return a.provider }
+func (a *fakeAgent) SubagentModel() string            { return a.model }
+func (a *fakeAgent) SessionManager() *session.Manager { return nil }
+func (a *fakeAgent) Logger() *debuglog.Logger         { return debuglog.DefaultLogger }
+func (a *fakeAgent) ToolNames() []string              { return a.toolNames }
+func (a *fakeAgent) GetTool(name string) tools.Tool   { return nil }
 
 func (a *fakeAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider, model string,
 	maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent {
@@ -286,7 +286,8 @@ func (c *fakeChildAgent) Run(ctx context.Context, provider llm.Provider,
 	return ch
 }
 
-func boolPtr(b bool) *bool { return &b }
+//go:fix inline
+func boolPtr(b bool) *bool { return new(b) }
 
 // ---- Verify interface compliance ----
 

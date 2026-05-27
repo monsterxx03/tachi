@@ -65,10 +65,7 @@ func CalculateCost(usage *Usage, price *ModelPrice) float64 {
 
 	// Cache miss input tokens = total input - cache read (if cache read is reported).
 	// API reports InputTokens as total (cache miss + cache hit).
-	cacheMissInput := usage.InputTokens - usage.CacheReadInputTokens
-	if cacheMissInput < 0 {
-		cacheMissInput = 0
-	}
+	cacheMissInput := max(usage.InputTokens-usage.CacheReadInputTokens, 0)
 
 	// Cache read price falls back to regular input price if not set.
 	cacheReadPrice := price.CacheReadInputPrice

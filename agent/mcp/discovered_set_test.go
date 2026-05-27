@@ -69,14 +69,14 @@ func TestDiscoveredSet_Concurrency(t *testing.T) {
 	done := make(chan bool)
 
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			s.Add("mcp__x__tool")
 		}
 		done <- true
 	}()
 
 	go func() {
-		for i := 0; i < 100; i++ {
+		for range 100 {
 			_ = s.List()
 		}
 		done <- true

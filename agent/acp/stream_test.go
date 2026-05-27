@@ -506,10 +506,8 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 	}))
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range 10 {
+		wg.Go(func() {
 			conn, w, ch := mockACPConn(t)
 
 			acpSess := &ACPSession{
@@ -523,7 +521,7 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 			replaySessionHistory(context.Background(), conn, acpSess)
 			notifications := drainNotifications(w, ch)
 			assert.Len(t, notifications, 1)
-		}()
+		})
 	}
 	wg.Wait()
 }
@@ -632,4 +630,3 @@ func assertString(v any) string {
 	s, _ := v.(string)
 	return s
 }
-

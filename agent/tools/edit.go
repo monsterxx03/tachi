@@ -31,7 +31,7 @@ func (t EditTool) Description() string {
 }
 func (t EditTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
-		"path":   {Type: "string", Description: "The absolute path to the file to modify"},
+		"path":        {Type: "string", Description: "The absolute path to the file to modify"},
 		"old_string":  {Type: "string", Description: "The text to replace"},
 		"new_string":  {Type: "string", Description: "The text to replace it with"},
 		"replace_all": {Type: "boolean", Description: "Replace all occurrences of old_string (default false)"},
@@ -285,11 +285,11 @@ func generateDiffSnippet(oldContent, newContent, oldStr, newStr string) string {
 
 // findLineIndex returns the 0-indexed line number where substr first appears.
 func findLineIndex(content, substr string) int {
-	idx := strings.Index(content, substr)
-	if idx < 0 {
+	before, _, ok := strings.Cut(content, substr)
+	if !ok {
 		return -1
 	}
-	return strings.Count(content[:idx], "\n")
+	return strings.Count(before, "\n")
 }
 
 // resolveEditPath resolves a file path for the Edit tool, making relative paths

@@ -346,7 +346,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 
 			select {
 			case resp := <-a.askUserRespCh:
-				resultData, _ := json.Marshal(map[string]interface{}{
+				resultData, _ := json.Marshal(map[string]any{
 					"questions":   tr.Questions,
 					"answers":     resp.Answers,
 					"annotations": resp.Annotations,

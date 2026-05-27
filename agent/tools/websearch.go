@@ -44,7 +44,7 @@ type WebSearchTool struct {
 	APIKey       string
 	Timeout      time.Duration
 	MaxResults   int
-	Proxy string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
+	Proxy        string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 
 	getClient func() *http.Client // lazily initialized via sync.OnceValue
 }
@@ -144,7 +144,7 @@ func (t *WebSearchTool) searchWithSerper(ctx context.Context, client *http.Clien
 		Query: query,
 	}
 
-	payload := map[string]interface{}{
+	payload := map[string]any{
 		"q":   query,
 		"num": num,
 		"hl":  "en",
@@ -358,9 +358,9 @@ func (t *WebSearchTool) searchWithBrave(ctx context.Context, client *http.Client
 		} `json:"query"`
 		Web struct {
 			Results []struct {
-				Title   string `json:"title"`
-				URL     string `json:"url"`
-				Desc    string `json:"description"`
+				Title string `json:"title"`
+				URL   string `json:"url"`
+				Desc  string `json:"description"`
 			} `json:"results"`
 		} `json:"web"`
 	}

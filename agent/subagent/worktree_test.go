@@ -37,7 +37,7 @@ func TestWorktreeManager_Create_DetachedHEAD(t *testing.T) {
 	cfg := config.SubagentConfig{
 		Worktree:        true,
 		WorktreeDir:     tmpDir,
-		WorktreeCleanup: boolPtr(true),
+		WorktreeCleanup: new(true),
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
@@ -80,7 +80,7 @@ func TestWorktreeManager_Create_NoCleanup(t *testing.T) {
 	cfg := config.SubagentConfig{
 		Worktree:        true,
 		WorktreeDir:     tmpDir,
-		WorktreeCleanup: boolPtr(false),
+		WorktreeCleanup: new(false),
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 

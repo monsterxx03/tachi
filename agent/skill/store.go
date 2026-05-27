@@ -308,10 +308,10 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 			Tags:        tags,
 			Source:      source,
 		},
-		Body:  body,
+		Body:       body,
 		RawContent: content,
-		Dir:   skillDir,
-		Files: map[string]string{},
+		Dir:        skillDir,
+		Files:      map[string]string{},
 	}, nil
 }
 
@@ -475,13 +475,13 @@ func parseFrontmatter(content string) (*frontmatter, string, error) {
 
 	// Find closing delimiter
 	rest := content[3:] // skip opening "---"
-	endIdx := strings.Index(rest, "\n---")
-	if endIdx < 0 {
+	before, after, ok := strings.Cut(rest, "\n---")
+	if !ok {
 		return nil, content, fmt.Errorf("unclosed frontmatter")
 	}
 
-	yamlBlock := rest[:endIdx]
-	body := rest[endIdx+4:] // skip "\n---"
+	yamlBlock := before
+	body := after // skip "\n---"
 
 	// Handle optional trailing newline(s) after closing delimiter
 	body = strings.TrimLeft(body, "\n")
@@ -557,16 +557,8 @@ func loadSupportingFilesSafe(dir string) map[string]string {
 
 // isBinary detects binary content by checking for null bytes in the first 8KB.
 func isBinary(data []byte) bool {
-	checkLen := len(data)
-	if checkLen > 8192 {
-		checkLen = 8192
-	}
-	for _, b := range data[:checkLen] {
-		if b == 0 {
-			return true
-		}
-	}
-	return false
+	checkLen := min(len(data), 8192)
+	return slices.Contains(data[:checkLen], 0)
 }
 
 // truncateDescription truncates text to maxLen characters for use as

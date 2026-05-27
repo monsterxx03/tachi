@@ -460,6 +460,6 @@ func (w loggerWriter) Write(p []byte) (n int, err error) {
 	return len(p), nil
 }
 
-func (w loggerWriter) Printf(format string, args ...interface{}) {
+func (w loggerWriter) Printf(format string, args ...any) {
 	w.logger.Log("cron: "+format, args...)
 }

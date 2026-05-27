@@ -12,8 +12,8 @@ import (
 // testDeferredTool is a helper to create DeferredTool instances for tests.
 func testDeferredTool(name, serverName, desc string) *DeferredTool {
 	return &DeferredTool{
-		Name:       name,
-		ServerName: serverName,
+		Name:        name,
+		ServerName:  serverName,
 		Description: desc,
 	}
 }
@@ -188,7 +188,7 @@ func TestSearch_Keyword_ScoreWithServer(t *testing.T) {
 
 func TestSearch_MaxResultsBounds(t *testing.T) {
 	p := NewDeferredPool()
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		name := fmt.Sprintf("mcp__x__tool_%d", i)
 		p.Add(testDeferredTool(name, "x", ""))
 	}
@@ -388,9 +388,9 @@ func TestTokenize(t *testing.T) {
 		{"hello world", []string{"hello", "world"}},
 		{"  spaced  out  ", []string{"spaced", "out"}},
 		{"+mustHave optional", []string{"+mustHave", "optional"}},
-		{"+x", []string{"+x"}},           // single char after + preserved with + prefix
+		{"+x", []string{"+x"}}, // single char after + preserved with + prefix
 		{"", nil},
-		{"a", []string{"a"}},             // single char is kept
+		{"a", []string{"a"}}, // single char is kept
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -454,7 +454,7 @@ func TestScoreTool(t *testing.T) {
 
 func TestContains(t *testing.T) {
 	assert.True(t, contains([]string{"a", "b", "c"}, "a"))
-	assert.True(t, contains([]string{"a", "b", "c"}, "A"))  // case insensitive
+	assert.True(t, contains([]string{"a", "b", "c"}, "A")) // case insensitive
 	assert.False(t, contains([]string{"a", "b", "c"}, "d"))
 	assert.False(t, contains(nil, "a"))
 }
@@ -481,14 +481,14 @@ func TestDeferredPool_ConcurrentAccess(t *testing.T) {
 	done := make(chan bool)
 
 	go func() {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			p.Add(testDeferredTool("mcp__x__tool", "x", ""))
 		}
 		done <- true
 	}()
 
 	go func() {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			_ = p.Len()
 			_ = p.Get("mcp__x__tool")
 			_ = p.All()
@@ -497,7 +497,7 @@ func TestDeferredPool_ConcurrentAccess(t *testing.T) {
 	}()
 
 	go func() {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			p.Search("x", 5)
 		}
 		done <- true

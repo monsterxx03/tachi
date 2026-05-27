@@ -87,7 +87,7 @@ func streamToACP(
 						SessionId: sessionID,
 						Update: acp.SessionUpdate{
 							SessionInfoUpdate: &acp.SessionSessionInfoUpdate{
-								Title: acp.Ptr(title),
+								Title: new(title),
 							},
 						},
 					})
@@ -212,7 +212,7 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 				Update:    update,
 			})
 
-		// MessageTypeConfirm is internal — skip in replay
+			// MessageTypeConfirm is internal — skip in replay
 		}
 	}
 

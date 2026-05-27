@@ -15,11 +15,11 @@ import (
 
 // stubMCPClient implements MCPClient for testing.
 type stubMCPClient struct {
-	mu          sync.Mutex
-	initialize  func(ctx context.Context, req mcp.InitializeRequest) (*mcp.InitializeResult, error)
-	listTools   func(ctx context.Context, req mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
-	callTool    func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
-	closeFn     func() error
+	mu         sync.Mutex
+	initialize func(ctx context.Context, req mcp.InitializeRequest) (*mcp.InitializeResult, error)
+	listTools  func(ctx context.Context, req mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
+	callTool   func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	closeFn    func() error
 }
 
 func (s *stubMCPClient) Initialize(ctx context.Context, req mcp.InitializeRequest) (*mcp.InitializeResult, error) {
@@ -216,7 +216,7 @@ func TestManager_Concurrency(t *testing.T) {
 	m := NewManager()
 
 	var wg sync.WaitGroup
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		wg.Go(func() {
 			addTestClient(m, "server", &stubMCPClient{})
 		})
@@ -270,7 +270,7 @@ func TestManager_ConnectAll_DisabledServers(t *testing.T) {
 
 	// A disabled server should be skipped
 	servers := []config.MCPServerConfig{
-		{Name: "disabled-server", Enabled: boolPtr(false)},
+		{Name: "disabled-server", Enabled: new(false)},
 	}
 
 	tools, errs := m.ConnectAll(context.Background(), servers)
@@ -278,4 +278,5 @@ func TestManager_ConnectAll_DisabledServers(t *testing.T) {
 	assert.Empty(t, errs)
 }
 
-func boolPtr(b bool) *bool { return &b }
+//go:fix inline
+func boolPtr(b bool) *bool { return new(b) }

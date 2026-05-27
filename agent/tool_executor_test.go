@@ -46,7 +46,7 @@ func errorStub() *stubTool {
 		desc:     "Always errors",
 		parallel: true,
 		executeFn: func(ctx context.Context, args string) (string, error) {
-			var m map[string]interface{}
+			var m map[string]any
 			json.Unmarshal([]byte(args), &m)
 			if msg, ok := m["msg"]; ok {
 				return "", fmt.Errorf("%s", msg)

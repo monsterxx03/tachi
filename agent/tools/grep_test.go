@@ -18,13 +18,13 @@ func setupGrepTestDir(t *testing.T) string {
 	t.Cleanup(func() { os.RemoveAll(tmpDir) })
 
 	files := map[string]string{
-		"main.go":            "package main\n\nfunc main() {\n\tfmt.Println(\"hello world\")\n}\n",
-		"lib.go":             "package main\n\nfunc helper() string {\n\treturn \"hello\"\n}\n",
-		"src/utils.go":       "package src\n\nfunc Uppercase(s string) string {\n\treturn strings.ToUpper(s)\n}\n",
-		"src/utils_test.go":  "package src\n\nfunc TestUppercase(t *testing.T) {\n\tresult := Uppercase(\"hello\")\n}\n",
-		"docs/readme.md":     "# Project\n\nThis is a test project.\nIt contains hello world examples.\n",
-		"data.json":          "{\"key\": \"hello\", \"value\": 42}\n",
-		".hidden/secret.go":  "package hidden\n\nvar secret = \"hello hidden\"\n",
+		"main.go":           "package main\n\nfunc main() {\n\tfmt.Println(\"hello world\")\n}\n",
+		"lib.go":            "package main\n\nfunc helper() string {\n\treturn \"hello\"\n}\n",
+		"src/utils.go":      "package src\n\nfunc Uppercase(s string) string {\n\treturn strings.ToUpper(s)\n}\n",
+		"src/utils_test.go": "package src\n\nfunc TestUppercase(t *testing.T) {\n\tresult := Uppercase(\"hello\")\n}\n",
+		"docs/readme.md":    "# Project\n\nThis is a test project.\nIt contains hello world examples.\n",
+		"data.json":         "{\"key\": \"hello\", \"value\": 42}\n",
+		".hidden/secret.go": "package hidden\n\nvar secret = \"hello hidden\"\n",
 	}
 
 	for name, content := range files {
@@ -61,7 +61,7 @@ func TestGrep_FilesWithMatches(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -85,7 +85,7 @@ func TestGrep_ContentMode(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `", "output_mode": "content"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "content"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -107,7 +107,7 @@ func TestGrep_ContentModeWithContext(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `", "output_mode": "content", "context_lines": 1}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "content", "context_lines": 1}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestGrep_CountMode(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `", "output_mode": "count"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "count"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -145,7 +145,7 @@ func TestGrep_GlobFilter(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `", "glob": "*.go"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`", "glob": "*.go"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -163,7 +163,7 @@ func TestGrep_TypeFilter(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `", "type": "go"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`", "type": "go"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -181,7 +181,7 @@ func TestGrep_CaseInsensitive(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "HELLO", "path": "` + tmpDir + `", "case_insensitive": true}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "HELLO", "path": "`+tmpDir+`", "case_insensitive": true}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -197,7 +197,7 @@ func TestGrep_CaseSensitiveNoMatch(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "HELLO", "path": "` + tmpDir + `"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "HELLO", "path": "`+tmpDir+`"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -213,7 +213,7 @@ func TestGrep_RegexPattern(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "func\\s+\\w+\\(", "path": "` + tmpDir + `", "type": "go"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "func\\s+\\w+\\(", "path": "`+tmpDir+`", "type": "go"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestGrep_NoMatches(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "nonexistent_string_xyz", "path": "` + tmpDir + `"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "nonexistent_string_xyz", "path": "`+tmpDir+`"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -242,7 +242,7 @@ func TestGrep_NoMatches(t *testing.T) {
 
 func TestGrep_EmptyPattern(t *testing.T) {
 	tool := GrepTool{}
-	_, err := tool.ExecuteContext(nil,`{"pattern": ""}`)
+	_, err := tool.ExecuteContext(nil, `{"pattern": ""}`)
 	if err == nil {
 		t.Error("Expected error for empty pattern")
 	}
@@ -250,7 +250,7 @@ func TestGrep_EmptyPattern(t *testing.T) {
 
 func TestGrep_InvalidOutputMode(t *testing.T) {
 	tool := GrepTool{}
-	_, err := tool.ExecuteContext(nil,`{"pattern": "test", "output_mode": "invalid"}`)
+	_, err := tool.ExecuteContext(nil, `{"pattern": "test", "output_mode": "invalid"}`)
 	if err == nil {
 		t.Error("Expected error for invalid output_mode")
 	}
@@ -261,7 +261,7 @@ func TestGrep_HiddenFiles(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello hidden", "path": "` + tmpDir + `"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello hidden", "path": "`+tmpDir+`"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -286,7 +286,7 @@ func TestGrep_PatternStartingWithDash(t *testing.T) {
 	}
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "-flag", "path": "` + tmpDir + `"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "-flag", "path": "`+tmpDir+`"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestGrep_RipgrepNotFound(t *testing.T) {
 	os.Setenv("PATH", "/tmp")
 
 	tool := GrepTool{}
-	_, err := tool.ExecuteContext(nil,`{"pattern": "test"}`)
+	_, err := tool.ExecuteContext(nil, `{"pattern": "test"}`)
 	if err == nil || !strings.Contains(err.Error(), "ripgrep") {
 		t.Errorf("Expected error about ripgrep not found, got: %v", err)
 	}
@@ -323,7 +323,7 @@ func TestGrep_Multiline(t *testing.T) {
 	}
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "start.middle", "path": "` + tmpDir + `", "multiline": true}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "start.middle", "path": "`+tmpDir+`", "multiline": true}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
@@ -339,13 +339,13 @@ func TestGrep_RelativePaths(t *testing.T) {
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(nil,`{"pattern": "hello", "path": "` + tmpDir + `", "output_mode": "content"}`)
+	raw, err := tool.ExecuteContext(nil, `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "content"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
 	r := parseGrepResult(t, raw)
-	for _, line := range strings.Split(r.Content, "\n") {
+	for line := range strings.SplitSeq(r.Content, "\n") {
 		if line == "" || line == "--" {
 			continue
 		}

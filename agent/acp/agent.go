@@ -69,7 +69,7 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 		},
 		AgentInfo: &acp.Implementation{
 			Name:    "tachi",
-			Title:   acp.Ptr("Tachi"),
+			Title:   new("Tachi"),
 			Version: t.version,
 		},
 	}, nil

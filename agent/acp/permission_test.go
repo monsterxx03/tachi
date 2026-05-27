@@ -39,17 +39,17 @@ func TestBuildPermissionHandler_AllowOnce(t *testing.T) {
 
 	// Goroutine simulates the ACP client reading the JSON-RPC request and sending a response
 	go func() {
-		var reqMap map[string]interface{}
+		var reqMap map[string]any
 		decoder := json.NewDecoder(agentToClientR)
 		err := decoder.Decode(&reqMap)
 		require.NoError(t, err)
 
 		// Correct format: outcome discriminator "selected" with optionId in camelCase
-		response := map[string]interface{}{
+		response := map[string]any{
 			"jsonrpc": "2.0",
 			"id":      reqMap["id"],
-			"result": map[string]interface{}{
-				"outcome": map[string]interface{}{
+			"result": map[string]any{
+				"outcome": map[string]any{
 					"outcome":  "selected",
 					"optionId": "allow",
 				},
@@ -75,13 +75,13 @@ func TestBuildPermissionHandler_Reject(t *testing.T) {
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	go func() {
-		var reqMap map[string]interface{}
+		var reqMap map[string]any
 		json.NewDecoder(agentToClientR).Decode(&reqMap)
-		response := map[string]interface{}{
+		response := map[string]any{
 			"jsonrpc": "2.0",
 			"id":      reqMap["id"],
-			"result": map[string]interface{}{
-				"outcome": map[string]interface{}{
+			"result": map[string]any{
+				"outcome": map[string]any{
 					"outcome":  "selected",
 					"optionId": "reject",
 				},
@@ -107,13 +107,13 @@ func TestBuildPermissionHandler_AllowAll(t *testing.T) {
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	go func() {
-		var reqMap map[string]interface{}
+		var reqMap map[string]any
 		json.NewDecoder(agentToClientR).Decode(&reqMap)
-		response := map[string]interface{}{
+		response := map[string]any{
 			"jsonrpc": "2.0",
 			"id":      reqMap["id"],
-			"result": map[string]interface{}{
-				"outcome": map[string]interface{}{
+			"result": map[string]any{
+				"outcome": map[string]any{
 					"outcome":  "selected",
 					"optionId": "allow_all",
 				},
@@ -139,13 +139,13 @@ func TestBuildPermissionHandler_Cancelled(t *testing.T) {
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	go func() {
-		var reqMap map[string]interface{}
+		var reqMap map[string]any
 		json.NewDecoder(agentToClientR).Decode(&reqMap)
-		response := map[string]interface{}{
+		response := map[string]any{
 			"jsonrpc": "2.0",
 			"id":      reqMap["id"],
-			"result": map[string]interface{}{
-				"outcome": map[string]interface{}{
+			"result": map[string]any{
+				"outcome": map[string]any{
 					"outcome": "cancelled",
 				},
 			},
