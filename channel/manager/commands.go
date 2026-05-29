@@ -61,62 +61,28 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 	case "skill":
 		return m.handleSkillCommand(cmd.Args)
 	default:
-		m.logger.Log("channel: unknown command via CommandHandler: %s", cmd.Name)
-		return fmt.Sprintf("Unknown command: %s. Available: new, mcp, usage, cron, v, stop, model, skill, compact", cmd.Name), nil
+		m.logger.Log("channel: unknown slash command: %s (thread=%s)", cmd.Name, cmd.ThreadID)
+		return fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /mcp auth <server> — Start OAuth authorization for an MCP server\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd.Name), nil
 	}
 }
 
-// handleSlashCommand dispatches message starting with "/" to the appropriate
-// handler. Returns the response text for the channel to send back.
+// handleSlashCommand parses a text-based slash command from an IncomingMessage
+// into a typed SlashCommand, then delegates to executeSlashCommand.
 func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error) {
 	parts := strings.Fields(msg.Content)
 	if len(parts) == 0 {
 		return "", nil
 	}
-	cmd := parts[0]
-
-	switch cmd {
-	case "/new":
-		return m.handleNewCommand(msg.ThreadID)
-	case "/mcp":
-		sub := ""
-		if len(parts) > 1 {
-			sub = parts[1]
-		}
-		switch sub {
-		case "auth":
-			serverName := ""
-			if len(parts) > 2 {
-				serverName = parts[2]
-			}
-			return m.handleMCPAuth(msg.ThreadID, serverName)
-		default:
-			return m.handleMCPList()
-		}
-	case "/usage":
-		return m.handleUsageCommand(msg.ThreadID)
-	case "/cron":
-		return m.handleCronCommand()
-	case "/v":
-		return m.handleVerboseCommand(msg.ThreadID)
-	case "/stop":
-		return m.handleStopCommand(msg.ThreadID)
-	case "/model":
-		args := ""
-		if len(parts) > 1 {
-			args = strings.Join(parts[1:], " ")
-		}
-		return m.handleModelCommand(args)
-	case "/skill":
-		args := ""
-		if len(parts) > 1 {
-			args = strings.Join(parts[1:], " ")
-		}
-		return m.handleSkillCommand(args)
-	default:
-		m.logger.Log("channel: unknown slash command from thread %s: %s", msg.ThreadID, cmd)
-		return fmt.Sprintf("Unknown command: %s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /mcp auth <server> — Start OAuth authorization for an MCP server\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd), nil
+	name := strings.TrimPrefix(parts[0], "/")
+	args := ""
+	if len(parts) > 1 {
+		args = strings.Join(parts[1:], " ")
 	}
+	return m.executeSlashCommand(channel.SlashCommand{
+		Name:     name,
+		ThreadID: msg.ThreadID,
+		Args:     args,
+	})
 }
 
 // --- /model ---
