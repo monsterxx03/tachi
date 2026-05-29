@@ -502,8 +502,8 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 	for i, e := range entries {
 		content := e.Content
 		runes := []rune(content)
-		if len(runes) > 120 {
-			content = string(runes[:120]) + "..."
+		if len(runes) > 1000 {
+			content = string(runes[:1000]) + "..."
 		}
 		var tags string
 		if len(e.Tags) > 0 {

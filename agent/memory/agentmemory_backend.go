@@ -3,6 +3,7 @@ package memory
 import (
 	"context"
 	"fmt"
+	"strconv"
 	"strings"
 	"time"
 
@@ -75,10 +76,10 @@ func (b *AgentMemoryBackend) Recall(ctx context.Context, query string, limit int
 		entries = append(entries, Entry{
 			ID:        m.ID,
 			SessionID: m.SessionID,
-			Summary:   truncateStr(m.Content, 80),
-			Content:   m.Content,
+			Summary:   truncateStr(m.Title, 80),
+			Content:   m.Title,
 			Score:     m.Score,
-			Timestamp: m.Timestamp,
+			Timestamp: parseTimestamp(m.Timestamp),
 		})
 	}
 	return entries, nil
@@ -92,11 +93,12 @@ func (b *AgentMemoryBackend) Forget(ctx context.Context, id string) error {
 }
 
 // formatMessages formats StoreOptions into a plain-text representation
-// suitable for storing in agentmemory.
+// suitable for storing in agentmemory. It strips noise blocks and memory
+// tags from content before formatting.
 func (b *AgentMemoryBackend) formatMessages(opts StoreOptions) string {
 	// Direct content takes priority
 	if opts.DirectContent != "" {
-		return opts.DirectContent
+		return stripNoiseTags(opts.DirectContent)
 	}
 
 	// Format from turn or session messages
@@ -110,12 +112,47 @@ func (b *AgentMemoryBackend) formatMessages(opts StoreOptions) string {
 
 	var sb strings.Builder
 	for _, m := range messages {
+		content := stripNoiseTags(m.Content)
+		if content == "" {
+			continue
+		}
 		prefix := "User: "
 		if m.Role == "assistant" {
 			prefix = "Assistant: "
 		}
-		sb.WriteString(prefix + m.Content + "\n")
+		sb.WriteString(prefix + content + "\n")
 	}
 	return strings.TrimSpace(sb.String())
+}
+
+// parseTimestamp parses an ISO 8601 timestamp string from agentmemory
+// (e.g. "2026-05-30T00:32:12.533Z") into a Unix timestamp in seconds.
+// Returns 0 if parsing fails.
+func parseTimestamp(ts string) int64 {
+	if ts == "" {
+		return 0
+	}
+	// Try ISO 8601 (RFC3339) — with and without fractional seconds
+	t, err := time.Parse(time.RFC3339, ts)
+	if err == nil {
+		return t.Unix()
+	}
+	t, err = time.Parse("2006-01-02T15:04:05Z", ts)
+	if err == nil {
+		return t.Unix()
+	}
+	t, err = time.Parse("2006-01-02T15:04:05.000Z", ts)
+	if err == nil {
+		return t.Unix()
+	}
+	// Try Unix timestamp as string (seconds or milliseconds)
+	n, err := strconv.ParseInt(ts, 10, 64)
+	if err == nil {
+		if n > 1e12 { // milliseconds → seconds
+			return n / 1000
+		}
+		return n
+	}
+	return 0
 }
 

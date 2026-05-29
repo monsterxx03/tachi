@@ -59,10 +59,12 @@ func (c *Client) Health(ctx context.Context) bool {
 }
 
 // StartSession notifies agentmemory that a new session has begun.
-func (c *Client) StartSession(ctx context.Context, sessionID, projectPath string) error {
+// agentmemory expects camelCase JSON fields: sessionId, project, cwd.
+func (c *Client) StartSession(ctx context.Context, sessionID, project, cwd string) error {
 	body, _ := json.Marshal(map[string]string{
-		"session_id":   sessionID,
-		"project_path": projectPath,
+		"sessionId": sessionID,
+		"project":   project,
+		"cwd":       cwd,
 	})
 	return c.doPost(ctx, "/agentmemory/session/start", body, nil)
 }
@@ -70,7 +72,7 @@ func (c *Client) StartSession(ctx context.Context, sessionID, projectPath string
 // EndSession notifies agentmemory that the current session has ended,
 // triggering memory consolidation.
 func (c *Client) EndSession(ctx context.Context, sessionID string) error {
-	body, _ := json.Marshal(map[string]string{"session_id": sessionID})
+	body, _ := json.Marshal(map[string]string{"sessionId": sessionID})
 	return c.doPost(ctx, "/agentmemory/session/end", body, nil)
 }
 
@@ -78,7 +80,7 @@ func (c *Client) EndSession(ctx context.Context, sessionID string) error {
 type RememberPayload struct {
 	Content   string   `json:"content"`
 	Tags      []string `json:"tags,omitempty"`
-	SessionID string   `json:"session_id"`
+	SessionID string   `json:"sessionId"`
 }
 
 // Remember stores a memory entry in agentmemory.
@@ -88,12 +90,15 @@ func (c *Client) Remember(ctx context.Context, p RememberPayload) error {
 }
 
 // MemoryEntry is a single memory result returned by SmartSearch.
+// agentmemory returns CompactSearchResult format:
+//   obsId, sessionId, title, type, score, timestamp
+// The title field contains the memory content summary.
 type MemoryEntry struct {
-	ID        string  `json:"id"`
-	Content   string  `json:"content"`
+	ID        string  `json:"obsId"`
+	Title     string  `json:"title"`
 	Score     float64 `json:"score"`
-	Timestamp int64   `json:"timestamp"`
-	SessionID string  `json:"session_id"`
+	Timestamp string  `json:"timestamp"`
+	SessionID string  `json:"sessionId"`
 }
 
 // SmartSearch performs hybrid retrieval (BM25 + vector + knowledge graph)
@@ -102,7 +107,7 @@ func (c *Client) SmartSearch(ctx context.Context, query string, limit int) ([]Me
 	if limit <= 0 {
 		limit = 5
 	}
-	body, _ := json.Marshal(map[string]any{"query": query, "top_k": limit})
+	body, _ := json.Marshal(map[string]any{"query": query, "limit": limit})
 
 	var result struct {
 		Results []MemoryEntry `json:"results"`
@@ -114,17 +119,10 @@ func (c *Client) SmartSearch(ctx context.Context, query string, limit int) ([]Me
 }
 
 // Forget deletes a memory entry by its ID.
+// agentmemory expects POST /agentmemory/forget with {"memoryId": id}.
 func (c *Client) Forget(ctx context.Context, id string) error {
-	req, err := http.NewRequestWithContext(ctx, "DELETE", c.baseURL+"/agentmemory/forget/"+id, nil)
-	if err != nil {
-		return err
-	}
-	resp, err := c.httpClient.Do(req)
-	if err != nil {
-		return err
-	}
-	resp.Body.Close()
-	return nil
+	body, _ := json.Marshal(map[string]string{"memoryId": id})
+	return c.doPost(ctx, "/agentmemory/forget", body, nil)
 }
 
 // doPost is a helper that sends a POST request with JSON body and optionally

@@ -189,7 +189,6 @@ func (b *Mem9Backend) filterMessages(msgs []Message, filter ContentFilter) []Mes
 		// Strip noise blocks (e.g. <system-reminder>...</system-reminder>) and
 		// injected memory tags to prevent recursive memory storage
 		m.Content = stripNoiseTags(m.Content)
-		m.Content = stripMemoriesTag(m.Content)
 
 		if m.Content == "" {
 			continue
@@ -268,67 +267,6 @@ func (b *Mem9Backend) doRequest(ctx context.Context, method, path string, body, 
 		return json.NewDecoder(resp.Body).Decode(result)
 	}
 	return nil
-}
-
-// noiseTags defines XML-like block tags that should be stripped from messages
-// before storage. These are system-injected blocks (e.g. <system-reminder>)
-// prepended to user messages that are not meaningful for memory recall.
-var noiseTags = []string{
-	"<local-command-caveat>",
-	"<local-command-stdout>",
-	"<command-name>",
-	"<command-message>",
-	"<task-notification>",
-	"<system-reminder>",
-	"<available-skills>",
-	"<available-deferred-tools>",
-}
-
-// stripNoiseTags removes noise block tags and their content from s.
-// Each tag is expected to appear as a paired block (<tag>...</tag>).
-// The closing tag is derived by inserting "/" after the leading "<".
-func stripNoiseTags(s string) string {
-	for _, tag := range noiseTags {
-		endTag := tag[:1] + "/" + tag[1:]
-		for {
-			start := strings.Index(s, tag)
-			if start == -1 {
-				break
-			}
-			end := strings.Index(s[start:], endTag)
-			if end == -1 {
-				// Unmatched opening tag, remove from start to end
-				s = strings.TrimSpace(s[:start])
-				break
-			}
-			s = strings.TrimSpace(s[:start] + s[start+end+len(endTag):])
-			// Collapse consecutive newlines from block removal
-			for strings.Contains(s, "\n\n") {
-				s = strings.ReplaceAll(s, "\n\n", "\n")
-			}
-		}
-	}
-	return s
-}
-
-// stripMemoriesTag removes <relevant-memories>...</relevant-memories> blocks
-// from content to prevent recursive memory storage.
-func stripMemoriesTag(content string) string {
-	startTag := "<relevant-memories>"
-	endTag := "</relevant-memories>"
-	for {
-		start := strings.Index(content, startTag)
-		if start == -1 {
-			break
-		}
-		end := strings.Index(content[start:], endTag)
-		if end == -1 {
-			content = content[:start]
-			break
-		}
-		content = content[:start] + content[start+end+len(endTag):]
-	}
-	return strings.TrimSpace(content)
 }
 
 // truncateStr truncates s to at most maxLen characters (runes), appending
