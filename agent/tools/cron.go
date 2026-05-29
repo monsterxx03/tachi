@@ -131,13 +131,26 @@ func (t *CronTool) ExecuteContext(ctx context.Context, args string) (string, err
 }
 
 func (t *CronTool) handleList() (string, error) {
-	jobs, err := t.scheduler.List()
+	allJobs, err := t.scheduler.List()
 	if err != nil {
 		return "", fmt.Errorf("cron: list: %w", err)
 	}
 
+	// Filter jobs by current thread ID.
+	threadID := ""
+	if t.threadIDFunc != nil {
+		threadID = t.threadIDFunc()
+	}
+
+	var jobs []*cron.Job
+	for _, job := range allJobs {
+		if threadID == "" || job.TargetThreadID == threadID {
+			jobs = append(jobs, job)
+		}
+	}
+
 	if len(jobs) == 0 {
-		return "No cron jobs configured.", nil
+		return "No cron jobs configured for this thread.", nil
 	}
 
 	slices.SortFunc(jobs, func(a, b *cron.Job) int {
