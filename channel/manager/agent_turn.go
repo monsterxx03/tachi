@@ -101,30 +101,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// Other slash commands are handled synchronously (no LLM invocation),
 		// EXCEPT compact (agent turn) and skill activation (agent turn).
 		if !isCompactCmd && !isSkillActivation && strings.HasPrefix(msg.Content, "/") {
-			// /transcript returns an attachment (HTML file), not plain text,
-			// so it's handled separately from the general slash command path.
-			if strings.HasPrefix(msg.Content, "/transcript") {
-				return m.handleTranscriptCommand(msg)
-			}
-
-			result, err := m.handleSlashCommand(msg)
-			if err != nil {
-				return channel.HandlerResult{
-					Reply: channel.OutgoingMessage{
-						ThreadID: msg.ThreadID,
-						Content:  fmt.Sprintf("❌ %v", err),
-						ReplyTo:  msg.MessageID,
-					},
-					Err: err,
-				}
-			}
-			return channel.HandlerResult{
-				Reply: channel.OutgoingMessage{
-					ThreadID: msg.ThreadID,
-					Content:  result,
-					ReplyTo:  msg.MessageID,
-				},
-			}
+			return m.handleSlashCommand(msg)
 		}
 
 		prov, resolved := m.getProvider()

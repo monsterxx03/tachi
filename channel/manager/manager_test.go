@@ -1133,22 +1133,22 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	mgr.currentProviderName = "gpt-5.2"
 
 	// /model (list)
-	resp, err := mgr.handleSlashCommand(channel.IncomingMessage{
+	result := mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/model",
 		ThreadID:  "thread-1",
 		MessageID: "msg-1",
 	})
-	require.NoError(t, err)
+	resp := result.Reply.Content
 	assert.Contains(t, resp, "Configured models (2)")
 	assert.Contains(t, resp, "* gpt-5.2")
 
 	// /model claude-haiku (switch)
-	resp, err = mgr.handleSlashCommand(channel.IncomingMessage{
+	result = mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/model claude-haiku",
 		ThreadID:  "thread-1",
 		MessageID: "msg-2",
 	})
-	require.NoError(t, err)
+	resp = result.Reply.Content
 	assert.Contains(t, resp, "Switched to **claude-haiku**")
 
 	mgr.providerMu.RLock()
@@ -1303,28 +1303,28 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
-	resp, err := mgr.handleSlashCommand(channel.IncomingMessage{
+	result := mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/skill",
 		ThreadID:  "thread-1",
 		MessageID: "msg-1",
 	})
-	require.NoError(t, err)
+	resp := result.Reply.Content
 	assert.Contains(t, resp, "没有可用的 Skill")
 
-	resp, err = mgr.handleSlashCommand(channel.IncomingMessage{
+	result = mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/skill list",
 		ThreadID:  "thread-1",
 		MessageID: "msg-2",
 	})
-	require.NoError(t, err)
+	resp = result.Reply.Content
 	assert.Contains(t, resp, "没有可用的 Skill")
 
-	resp, err = mgr.handleSlashCommand(channel.IncomingMessage{
+	result = mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/skill reload",
 		ThreadID:  "thread-1",
 		MessageID: "msg-3",
 	})
-	require.NoError(t, err)
+	resp = result.Reply.Content
 	assert.Contains(t, resp, "Skills 已重新加载")
 }
 

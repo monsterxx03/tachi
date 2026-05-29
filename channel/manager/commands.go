@@ -27,15 +27,22 @@ import (
 // without routing through the text-based message handler path.
 func (m *Manager) buildCommandHandler() channel.CommandHandler {
 	return func(ctx context.Context, cmd channel.SlashCommand) (string, error) {
-		return m.executeSlashCommand(cmd)
+		result, err := m.executeSlashCommand(cmd)
+		if err != nil {
+			return "", err
+		}
+		return result.Reply.Content, result.Err
 	}
 }
 
 // executeSlashCommand dispatches a SlashCommand to the appropriate handler.
-func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) {
+// Returns a HandlerResult so commands that need file attachments (e.g. /transcript)
+// can include them. Text-only commands return HandlerResult with just Content set.
+func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.HandlerResult, error) {
 	switch cmd.Name {
 	case "new":
-		return m.handleNewCommand(cmd.ThreadID)
+		text, err := m.handleNewCommand(cmd.ThreadID)
+		return textHandlerResult(text), err
 	case "mcp":
 		if cmd.Args != "" {
 			argParts := strings.Fields(cmd.Args)
@@ -44,45 +51,86 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (string, error) 
 				if len(argParts) > 1 {
 					serverName = argParts[1]
 				}
-				return m.handleMCPAuth(cmd.ThreadID, serverName)
+				text, err := m.handleMCPAuth(cmd.ThreadID, serverName)
+				return textHandlerResult(text), err
 			}
 		}
-		return m.handleMCPList()
+		text, err := m.handleMCPList()
+		return textHandlerResult(text), err
 	case "usage":
-		return m.handleUsageCommand(cmd.ThreadID)
+		text, err := m.handleUsageCommand(cmd.ThreadID)
+		return textHandlerResult(text), err
 	case "cron":
-		return m.handleCronCommand()
+		text, err := m.handleCronCommand()
+		return textHandlerResult(text), err
 	case "v":
-		return m.handleVerboseCommand(cmd.ThreadID)
+		text, err := m.handleVerboseCommand(cmd.ThreadID)
+		return textHandlerResult(text), err
 	case "stop":
-		return m.handleStopCommand(cmd.ThreadID)
+		text, err := m.handleStopCommand(cmd.ThreadID)
+		return textHandlerResult(text), err
 	case "model":
-		return m.handleModelCommand(cmd.Args)
+		text, err := m.handleModelCommand(cmd.Args)
+		return textHandlerResult(text), err
 	case "skill":
-		return m.handleSkillCommand(cmd.Args)
+		text, err := m.handleSkillCommand(cmd.Args)
+		return textHandlerResult(text), err
+	case "transcript":
+		return m.handleTranscriptCommand(cmd.ThreadID, cmd.Args), nil
 	default:
 		m.logger.Log("channel: unknown slash command: %s (thread=%s)", cmd.Name, cmd.ThreadID)
-		return fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /mcp auth <server> — Start OAuth authorization for an MCP server\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd.Name), nil
+		return textHandlerResult(fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /mcp auth <server> — Start OAuth authorization for an MCP server\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd.Name)), nil
+	}
+}
+
+// textHandlerResult wraps a text string into a HandlerResult with just Content set.
+// The caller (handleSlashCommand) fills in ThreadID/ReplyTo for the channel reply.
+func textHandlerResult(text string) channel.HandlerResult {
+	return channel.HandlerResult{
+		Reply: channel.OutgoingMessage{
+			Content: text,
+		},
 	}
 }
 
 // handleSlashCommand parses a text-based slash command from an IncomingMessage
 // into a typed SlashCommand, then delegates to executeSlashCommand.
-func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) (string, error) {
+// Returns a fully populated HandlerResult with ThreadID and ReplyTo set.
+func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) channel.HandlerResult {
 	parts := strings.Fields(msg.Content)
 	if len(parts) == 0 {
-		return "", nil
+		return channel.HandlerResult{}
 	}
 	name := strings.TrimPrefix(parts[0], "/")
 	args := ""
 	if len(parts) > 1 {
 		args = strings.Join(parts[1:], " ")
 	}
-	return m.executeSlashCommand(channel.SlashCommand{
+	result, err := m.executeSlashCommand(channel.SlashCommand{
 		Name:     name,
 		ThreadID: msg.ThreadID,
 		Args:     args,
 	})
+	if err != nil {
+		// Errors from text-only handlers: wrap in a reply with ThreadID/ReplyTo.
+		result = channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  fmt.Sprintf("❌ %v", err),
+				ReplyTo:  msg.MessageID,
+			},
+			Err: err,
+		}
+	}
+	// Fill in ThreadID/ReplyTo for text-only commands that don't set them.
+	// Commands like /transcript already set these themselves.
+	if result.Reply.ThreadID == "" {
+		result.Reply.ThreadID = msg.ThreadID
+	}
+	if result.Reply.ReplyTo == "" {
+		result.Reply.ReplyTo = msg.MessageID
+	}
+	return result
 }
 
 // --- /model ---
@@ -704,17 +752,17 @@ func (m *Manager) isSkillActivation(content string) (string, string, bool) {
 // handleTranscriptCommand generates an HTML transcript for the session
 // associated with the given thread and returns it as a file attachment.
 //
-// Usage in channel:
+// Called from executeSlashCommand for the "transcript" case.
 //
-//	/transcript          — transcript for current thread's session
-//	/transcript --latest — transcript for the most recent session
-func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.HandlerResult {
+// Args:
+//   - threadID: the thread whose session to render (or "" if using --latest)
+//   - args: command arguments (e.g. "--latest")
+func (m *Manager) handleTranscriptCommand(threadID, args string) channel.HandlerResult {
 	errReply := func(err error) channel.HandlerResult {
 		return channel.HandlerResult{
 			Reply: channel.OutgoingMessage{
-				ThreadID: msg.ThreadID,
+				ThreadID: threadID,
 				Content:  fmt.Sprintf("❌ %v", err),
-				ReplyTo:  msg.MessageID,
 			},
 			Err: err,
 		}
@@ -728,8 +776,8 @@ func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.H
 	var sess *session.Session
 	var err error
 
-	parts := strings.Fields(msg.Content)
-	useLatest := len(parts) > 1 && parts[1] == "--latest"
+	parts := strings.Fields(args)
+	useLatest := len(parts) > 0 && parts[0] == "--latest"
 
 	if useLatest {
 		sessions, listErr := sm.List()
@@ -744,7 +792,7 @@ func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.H
 			return errReply(fmt.Errorf("load session: %w", err))
 		}
 	} else {
-		found, findErr := sm.FindByThreadID(msg.ThreadID)
+		found, findErr := sm.FindByThreadID(threadID)
 		if findErr != nil {
 			return errReply(fmt.Errorf("find session: %w", findErr))
 		}
@@ -793,8 +841,8 @@ func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.H
 
 	return channel.HandlerResult{
 		Reply: channel.OutgoingMessage{
-			ThreadID: msg.ThreadID,
 			Content:  contentText,
+			ThreadID: threadID,
 			Attachments: []channel.OutgoingAttachment{
 				{
 					Type:     channel.AttachmentTypeFile,
@@ -803,7 +851,6 @@ func (m *Manager) handleTranscriptCommand(msg channel.IncomingMessage) channel.H
 					Data:     zipData,
 				},
 			},
-			ReplyTo: msg.MessageID,
 		},
 	}
 }
