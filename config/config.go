@@ -303,12 +303,18 @@ func toBool(v any) bool {
 }
 
 // MemoryConfig holds configuration for the pluggable memory system.
-// Type selects the backend: "" (disabled) or "mem9".
+// Type selects the backend: "" (disabled), "mem9", or "agentmemory".
 type MemoryConfig struct {
-	Type         string        `yaml:"type"`    // "mem9" or "" (disabled)
-	Timeout      string        `yaml:"timeout"` // context deadline for Store/Recall/Forget (default "10s")
-	Mem9         Mem9SubConfig `yaml:"mem9"`
-	ExcludeRepos []string      `yaml:"exclude_repos"` // git repo roots to skip memory writes
+	Type         string               `yaml:"type"`    // "mem9" or "agentmemory" or "" (disabled)
+	Timeout      string               `yaml:"timeout"` // context deadline for Store/Recall/Forget (default "10s")
+	Mem9         Mem9SubConfig        `yaml:"mem9"`
+	AgentMemory  AgentMemorySubConfig `yaml:"agentmemory"`
+	ExcludeRepos []string             `yaml:"exclude_repos"` // git repo roots to skip memory writes
+}
+
+// AgentMemorySubConfig holds agentmemory-specific configuration.
+type AgentMemorySubConfig struct {
+	APIURL string `yaml:"api_url"` // agentmemory server URL (default: http://localhost:3111)
 }
 
 // Mem9SubConfig holds mem9-specific memory configuration.

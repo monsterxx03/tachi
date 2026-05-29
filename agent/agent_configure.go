@@ -78,6 +78,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 				Proxy:          cfg.Memory.Mem9.Proxy,
 				RequestTimeout: reqTimeout,
 			},
+			AgentMemory: memory.AgentMemoryConfig{
+				APIURL: cfg.Memory.AgentMemory.APIURL,
+			},
 		}
 		backend, err := memory.New(cfg.Memory.Type, memCfg)
 		if err != nil {

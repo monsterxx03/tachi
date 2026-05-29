@@ -72,10 +72,11 @@ type Backend interface {
 
 // Config is the common configuration for memory backends.
 type Config struct {
-	Type         string        // backend type (e.g., "mem9")
+	Type         string        // backend type (e.g., "mem9", "agentmemory")
 	BaseDir      string        // ~/.tachi/
 	Timeout      time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
 	Mem9         Mem9Config
+	AgentMemory  AgentMemoryConfig // agentmemory-specific config
 	ExcludeRepos []string // git repo roots to skip memory writes
 }
 
@@ -100,6 +101,8 @@ func New(backendType string, cfg Config) (Backend, error) {
 	switch backendType {
 	case "mem9":
 		return NewMem9Backend(cfg)
+	case "agentmemory":
+		return NewAgentMemoryBackend(cfg)
 	default:
 		return nil, fmt.Errorf("unknown memory backend: %s", backendType)
 	}
