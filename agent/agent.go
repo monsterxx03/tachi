@@ -299,6 +299,12 @@ func (a *AIAgent) RegisterTools() {
 		Timeout: a.webFetchCfg.Timeout,
 		Proxy:   a.webFetchCfg.Proxy,
 	})
+
+	// RecordMemory / MemoryRecall — only when memory backend is configured
+	if a.memory != nil {
+		a.toolRegistry.Register(tools.NewRecordMemoryTool(a))
+		a.toolRegistry.Register(tools.NewMemoryRecallTool(a.memory.Backend))
+	}
 }
 
 func (a *AIAgent) RegisterTool(tool tools.Tool) {

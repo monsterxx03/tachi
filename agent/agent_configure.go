@@ -73,13 +73,6 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.webFetchCfg = cfg.WebFetch
 	a.RegisterTools()
 
-	// --- RecordMemory / MemoryRecall tools (only when memory backend is configured) ---
-	if a.memory != nil {
-		a.RegisterTool(tools.NewRecordMemoryTool(a))
-		a.RegisterTool(tools.NewMemoryRecallTool(a.memory.Backend))
-		a.logger.Log("Memory: RecordMemory and MemoryRecall tools registered")
-	}
-
 	// --- MCP servers (async) ---
 	var mgr *mcp.Manager
 	if a.sharedMCP {
