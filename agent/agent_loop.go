@@ -118,8 +118,10 @@ func (a *AIAgent) RunOneOffStream(
 
 	go func() {
 		defer close(ch)
-		defer func() { a.steerRespCh = nil; a.skipMemory = false }()
-		a.skipMemory = true // suppress memory writes for one-off runs (e.g. /commit, /init)
+		if a.memory != nil {
+			defer func() { a.memory.SkipWrites = false }()
+			a.memory.SkipWrites = true // suppress memory writes for one-off runs (e.g. /commit, /init)
+		}
 
 		if provider == nil {
 			provider = a.provider
@@ -633,7 +635,7 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		Now:             time.Now(),
 		LastMessageDate: a.lastMessageDate,
 		IsToolResult:    isToolResult,
-		SkipRecall:      a.skipMemoryRecall,
+		SkipRecall:      a.memory != nil && a.memory.SkipRecall,
 	}
 }
 

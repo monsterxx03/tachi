@@ -96,14 +96,14 @@ func (a *AIAgent) groupToolCalls(toolCalls []llm.ToolCall) []toolGroup {
 // On success, hookType is set to "post_tool_use".
 // On failure, hookType is set to "post_tool_failure".
 //
-// input and output are truncated to memoryToolResultMaxLen (in runes, default 8000)
+// input and output are truncated to MemoryState.ToolResultMaxLen (in runes, default 8000)
 // before storing, to keep memory entries at a reasonable size. UTF-8 safe —
 // multi-byte characters (e.g. Chinese) are never split.
 func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) {
-	if a.memoryBackend == nil || a.sessionManager == nil {
+	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.skipMemory || a.isRepoExcluded() {
+	if a.memory.SkipWrites || a.memory.IsRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -112,7 +112,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	}
 
 	// Truncate input and output to keep memory entries reasonable.
-	maxLen := a.memoryToolResultMaxLen
+	maxLen := a.memory.ToolResultMaxLen
 	if maxLen <= 0 {
 		maxLen = 8000 // default
 	}
@@ -125,10 +125,10 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
 		defer cancel()
 		cwd, _ := os.Getwd()
-		if err := a.memoryBackend.Observe(ctx, memory.ObserveOptions{
+		if err := a.memory.Backend.Observe(ctx, memory.ObserveOptions{
 			HookType:   hookType,
 			SessionID:  sess.ID,
 			Project:    getRepoName(),

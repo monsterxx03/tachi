@@ -88,11 +88,11 @@ func (a *AIAgent) rebuildSkillCollector() {
 	all = append(all, systemreminder.NewSkillListReminder(a.skillStore))
 
 	// Add MemoryRecallReminder if memory backend is configured
-	if a.memoryBackend != nil {
+	if a.memory != nil {
 		all = append(all, systemreminder.MemoryRecallReminder{
-			Backend: a.memoryBackend,
+			Backend: a.memory.Backend,
 			Limit:   5,
-			Timeout: a.memoryTimeout,
+			Timeout: a.memory.Timeout,
 		})
 	}
 

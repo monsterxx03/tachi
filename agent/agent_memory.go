@@ -6,7 +6,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -16,45 +15,17 @@ import (
 
 // MemoryBackend returns the configured memory backend, or nil if memory is disabled.
 func (a *AIAgent) MemoryBackend() memory.Backend {
-	return a.memoryBackend
-}
-
-// RecallMemory implements tools.MemoryRecaller. It searches the memory
-// backend for memories semantically relevant to the query and returns
-// a human-readable summary. Returns an error if memory is not configured.
-func (a *AIAgent) RecallMemory(ctx context.Context, query string, limit int) (string, error) {
-	if a.memoryBackend == nil {
-		return "", fmt.Errorf("memory backend not configured")
+	if a.memory == nil {
+		return nil
 	}
-
-	entries, err := a.memoryBackend.Recall(ctx, query, limit)
-	if err != nil {
-		return "", err
-	}
-
-	if len(entries) == 0 {
-		return `{"query":"` + query + `","limit":` + fmt.Sprintf("%d", limit) + `,"results":[],"message":"No relevant memories found."}`, nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d relevant memories:\n\n", len(entries)))
-	for i, e := range entries {
-		sb.WriteString(fmt.Sprintf("--- Memory %d (relevance: %.2f) ---\n", i+1, e.Score))
-		if e.SessionID != "" {
-			sb.WriteString(fmt.Sprintf("Session: %s\n", e.SessionID))
-		}
-		sb.WriteString(e.Content)
-		sb.WriteString("\n")
-	}
-
-	return sb.String(), nil
+	return a.memory.Backend
 }
 
 // RecordMemory implements tools.MemoryRecorder. It persists an explicit
 // LLM-initiated memory to the memory backend, associated with the current
 // session. Returns an error if memory is not configured or no session is active.
 func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []string) error {
-	if a.memoryBackend == nil {
+	if a.memory == nil {
 		return fmt.Errorf("memory backend not configured")
 	}
 	if a.sessionManager == nil {
@@ -65,10 +36,10 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 		return fmt.Errorf("no active session")
 	}
 
-	storeCtx, cancel := context.WithTimeout(ctx, a.memoryTimeout)
+	storeCtx, cancel := context.WithTimeout(ctx, a.memory.Timeout)
 	defer cancel()
 
-	err := a.memoryBackend.Store(storeCtx, memory.StoreOptions{
+	err := a.memory.Backend.Store(storeCtx, memory.StoreOptions{
 		Scope:         memory.StoreScopeTurn,
 		SessionID:     sess.ID,
 		Tags:          withRepoTag(tags),
@@ -86,7 +57,7 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 // Called after session creation in RunConversationStream and ResumeSession.
 // No-ops when memory is not configured.
 func (a *AIAgent) StartSessionMemory() {
-	if a.memoryBackend == nil || a.sessionManager == nil {
+	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -95,9 +66,9 @@ func (a *AIAgent) StartSessionMemory() {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
 		defer cancel()
-		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 			Scope:     memory.StoreScopeStart,
 			SessionID: sess.ID,
 			Tags:      withRepoTag(nil),
@@ -177,36 +148,20 @@ func repoTag() string {
 	return ""
 }
 
-// isRepoExcluded checks whether the current git repo root is in the
-// exclude_repos list. If we're not in a git repo, returns false.
-func (a *AIAgent) isRepoExcluded() bool {
-	if len(a.excludeRepos) == 0 {
-		return false
-	}
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return false
-	}
-	repoRoot := strings.TrimSpace(string(out))
-	return slices.ContainsFunc(a.excludeRepos, func(excluded string) bool {
-		return filepath.Clean(repoRoot) == filepath.Clean(excluded)
-	})
-}
-
 // storeTurnMemory writes the current turn's conversation to the memory backend.
 // Called after each assistant response completes (StoreScopeTurn).
-// No-ops when skipMemory is true (e.g. /commit, /init, sub-agents).
+// No-ops when memory.SkipWrites is true (e.g. /commit, /init, sub-agents).
 func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 	if len(turnMsgs) == 0 {
 		return
 	}
-	if a.memoryBackend == nil || a.sessionManager == nil {
+	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.skipMemory {
+	if a.memory.SkipWrites {
 		return
 	}
-	if a.isRepoExcluded() {
+	if a.memory.IsRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -215,9 +170,9 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
 		defer cancel()
-		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 			Scope:        memory.StoreScopeTurn,
 			SessionID:    sess.ID,
 			Tags:         withRepoTag(nil),
@@ -232,10 +187,10 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 // backend before context compaction (StoreScopeCompact).
 // Exported so the TUI can call it before starting the compact LLM stream.
 func (a *AIAgent) StoreCompactMemory() {
-	if a.memoryBackend == nil || a.sessionManager == nil {
+	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.isRepoExcluded() {
+	if a.memory.IsRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -252,9 +207,9 @@ func (a *AIAgent) StoreCompactMemory() {
 	memMsgs := sessionMessagesToMemory(msgs)
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
 		defer cancel()
-		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 			Scope:           memory.StoreScopeCompact,
 			SessionID:       sess.ID,
 			Tags:            withRepoTag(nil),
@@ -270,10 +225,10 @@ func (a *AIAgent) StoreCompactMemory() {
 // Exported so the TUI can call it before ending/quitting.
 // Uses a unified interface — each backend handles its own format internally.
 func (a *AIAgent) StoreSessionMemory() {
-	if a.memoryBackend == nil || a.sessionManager == nil {
+	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.isRepoExcluded() {
+	if a.memory.IsRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -289,9 +244,9 @@ func (a *AIAgent) StoreSessionMemory() {
 
 	memMsgs := sessionMessagesToMemory(msgs)
 
-	ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
 	defer cancel()
-	if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+	if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 		Scope:           memory.StoreScopeSession,
 		SessionID:       sess.ID,
 		SessionTitle:    sess.Title,

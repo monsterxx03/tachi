@@ -4,10 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
-	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -85,12 +83,7 @@ type AIAgent struct {
 	subagentModel    string       // sub-agent dedicated model ("" = fallback to main)
 
 	// Memory-related fields
-	memoryBackend         memory.Backend // nil = memory not enabled
-	memoryTimeout          time.Duration  // context deadline for Store/Recall/Forget
-	memoryToolResultMaxLen int            // max chars for tool result in memory (0 = no limit)
-	skipMemory             bool           // set by RunOneOffStream to suppress turn-level memory writes
-	skipMemoryRecall       bool           // set by main.go runAgent to suppress recall for "tachi run"
-	excludeRepos           []string       // git repo roots to skip all memory writes
+	memory *MemoryState // nil = memory not enabled
 
 	// MCP ToolSearch fields are owned by mcpManager. The agent reads them via
 	// mcpManager.Pool() / mcpManager.DiscoveredSet() rather than holding its
@@ -219,7 +212,9 @@ func (a *AIAgent) SetSkipEditConfirm(skip bool) {
 
 // SetSkipMemoryRecall suppresses memory recall for non-interactive modes like "tachi run".
 func (a *AIAgent) SetSkipMemoryRecall(skip bool) {
-	a.skipMemoryRecall = skip
+	if a.memory != nil {
+		a.memory.SkipRecall = skip
+	}
 }
 
 func (a *AIAgent) SetSessionManager(sm *session.Manager) {

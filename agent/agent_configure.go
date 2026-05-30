@@ -49,7 +49,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.baseReminders = append(a.baseReminders, systemreminder.GitReminder{})
 	}
 
-	// --- Memory backend (before skills — rebuildSkillCollector reads a.memoryBackend) ---
+	// --- Memory backend (before skills — rebuildSkillCollector reads a.memory) ---
 	if cfg.Memory.Type != "" {
 		// Parse timeout from config (default:"10s" applied by defaults.Set)
 		var timeout time.Duration
@@ -87,10 +87,12 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		if err != nil {
 			a.logger.Log("Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
 		} else {
-			a.memoryBackend = backend
-			a.memoryTimeout = timeout
-			a.memoryToolResultMaxLen = cfg.Memory.ToolResultMaxLen
-			a.excludeRepos = normalizeRepoPaths(cfg.Memory.ExcludeRepos)
+			a.memory = &MemoryState{
+				Backend:          backend,
+				Timeout:          timeout,
+				ToolResultMaxLen: cfg.Memory.ToolResultMaxLen,
+				ExcludeRepos:     normalizeRepoPaths(cfg.Memory.ExcludeRepos),
+			}
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
 		}
 	}
@@ -119,9 +121,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.RegisterTool(&wf)
 
 	// --- RecordMemory / MemoryRecall tools (only when memory backend is configured) ---
-	if a.memoryBackend != nil {
+	if a.memory != nil {
 		a.RegisterTool(tools.NewRecordMemoryTool(a))
-		a.RegisterTool(tools.NewMemoryRecallTool(a))
+		a.RegisterTool(tools.NewMemoryRecallTool(a.memory.Backend))
 		a.logger.Log("Memory: RecordMemory and MemoryRecall tools registered")
 	}
 

@@ -65,11 +65,11 @@ func TestNormalizeRepoPaths_Mixed(t *testing.T) {
 	}, result)
 }
 
-// ---- Tests: isRepoExcluded ----
+// ---- Tests: MemoryState.IsRepoExcluded ----
 
 func TestIsRepoExcluded_NoExcludeList(t *testing.T) {
-	a := &AIAgent{excludeRepos: nil}
-	assert.False(t, a.isRepoExcluded())
+	m := &MemoryState{ExcludeRepos: nil}
+	assert.False(t, m.IsRepoExcluded())
 }
 
 func TestIsRepoExcluded_NotInGitRepo(t *testing.T) {
@@ -80,14 +80,14 @@ func TestIsRepoExcluded_NotInGitRepo(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	defer func() { _ = os.Chdir(origWd) }()
 
-	a := &AIAgent{excludeRepos: []string{dir}}
-	assert.False(t, a.isRepoExcluded())
+	m := &MemoryState{ExcludeRepos: []string{dir}}
+	assert.False(t, m.IsRepoExcluded())
 }
 
 func TestIsRepoExcluded_CurrentRepoNotInList(t *testing.T) {
 	// We're inside the tachi repo itself, which won't be in the list
-	a := &AIAgent{excludeRepos: []string{"/some/other/repo"}}
-	assert.False(t, a.isRepoExcluded())
+	m := &MemoryState{ExcludeRepos: []string{"/some/other/repo"}}
+	assert.False(t, m.IsRepoExcluded())
 }
 
 func TestIsRepoExcluded_CurrentRepoMatches(t *testing.T) {
@@ -96,8 +96,8 @@ func TestIsRepoExcluded_CurrentRepoMatches(t *testing.T) {
 	require.NoError(t, err)
 	repoRoot := strings.TrimSpace(string(out))
 
-	a := &AIAgent{excludeRepos: []string{"/some/other", repoRoot}}
-	assert.True(t, a.isRepoExcluded())
+	m := &MemoryState{ExcludeRepos: []string{"/some/other", repoRoot}}
+	assert.True(t, m.IsRepoExcluded())
 }
 
 func TestIsRepoExcluded_PartialPrefixNoMatch(t *testing.T) {
@@ -107,6 +107,6 @@ func TestIsRepoExcluded_PartialPrefixNoMatch(t *testing.T) {
 	repoRoot := strings.TrimSpace(string(out))
 
 	// A parent directory should NOT match
-	a := &AIAgent{excludeRepos: []string{repoRoot[:len(repoRoot)/2]}}
-	assert.False(t, a.isRepoExcluded())
+	m := &MemoryState{ExcludeRepos: []string{repoRoot[:len(repoRoot)/2]}}
+	assert.False(t, m.IsRepoExcluded())
 }

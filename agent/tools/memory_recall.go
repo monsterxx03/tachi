@@ -5,19 +5,12 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/monsterxx03/tachi/agent/memory"
 )
 
 // Tool name constant for the MemoryRecall tool.
 const ToolNameMemoryRecall = "MemoryRecall"
-
-// MemoryRecaller is the interface that MemoryRecallTool uses to perform
-// semantic search on persisted memories. Decouples the tool definition
-// from the agent's memory and session management.
-type MemoryRecaller interface {
-	// RecallMemory searches memories semantically relevant to the query.
-	// Returns a human-readable summary string of matching entries.
-	RecallMemory(ctx context.Context, query string, limit int) (string, error)
-}
 
 // MemoryRecallTool allows the LLM to search past memories for information
 // relevant to the current task. It complements RecordMemory — while the
@@ -29,12 +22,12 @@ type MemoryRecaller interface {
 // decisions, configuration details, or anything else worth remembering.
 // It supplements the automatic semantic recall that happens on every turn.
 type MemoryRecallTool struct {
-	recaller MemoryRecaller
+	backend memory.Backend
 }
 
-// NewMemoryRecallTool creates a MemoryRecallTool backed by the given recaller.
-func NewMemoryRecallTool(recaller MemoryRecaller) *MemoryRecallTool {
-	return &MemoryRecallTool{recaller: recaller}
+// NewMemoryRecallTool creates a MemoryRecallTool backed by the given backend.
+func NewMemoryRecallTool(backend memory.Backend) *MemoryRecallTool {
+	return &MemoryRecallTool{backend: backend}
 }
 
 func (t *MemoryRecallTool) Name() string { return ToolNameMemoryRecall }
@@ -69,18 +62,6 @@ func (t *MemoryRecallTool) Required() []string {
 
 func (t *MemoryRecallTool) Parallel() bool { return true }
 
-type memoryRecallResult struct {
-	Query   string            `json:"query"`
-	Limit   int               `json:"limit"`
-	Results []memoryRecallHit `json:"results,omitempty"`
-	Message string            `json:"message,omitempty"`
-}
-
-type memoryRecallHit struct {
-	Content string  `json:"content"`
-	Score   float64 `json:"score"`
-}
-
 func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var params struct {
 		Query string `json:"query"`
@@ -94,8 +75,8 @@ func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (str
 		return "", fmt.Errorf("query is required")
 	}
 
-	if t.recaller == nil {
-		return "", fmt.Errorf("memory recaller not available")
+	if t.backend == nil {
+		return "", fmt.Errorf("memory backend not configured")
 	}
 
 	if params.Limit <= 0 {
@@ -105,10 +86,32 @@ func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (str
 		params.Limit = 20
 	}
 
-	resultStr, err := t.recaller.RecallMemory(ctx, params.Query, params.Limit)
+	entries, err := t.backend.Recall(ctx, params.Query, params.Limit)
 	if err != nil {
 		return "", fmt.Errorf("failed to recall memories: %w", err)
 	}
 
-	return resultStr, nil
+	if len(entries) == 0 {
+		result := map[string]interface{}{
+			"query":   params.Query,
+			"limit":   params.Limit,
+			"results": []interface{}{},
+			"message": "No relevant memories found.",
+		}
+		b, _ := json.Marshal(result)
+		return string(b), nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d relevant memories:\n\n", len(entries)))
+	for i, e := range entries {
+		sb.WriteString(fmt.Sprintf("--- Memory %d (relevance: %.2f) ---\n", i+1, e.Score))
+		if e.SessionID != "" {
+			sb.WriteString(fmt.Sprintf("Session: %s\n", e.SessionID))
+		}
+		sb.WriteString(e.Content)
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
 }
