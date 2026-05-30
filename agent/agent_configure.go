@@ -60,11 +60,11 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		}
 	}
 
-	// --- Skill system ---
+	// --- Skill system (needs a.cfg for memory config) ---
+	a.cfg = cfg
 	a.initSkills()
 
 	// --- built-in tools + web search ---
-	a.cfg = cfg
 	a.RegisterTools()
 
 	// --- MCP servers (async) ---
