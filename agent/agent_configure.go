@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -51,45 +50,14 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 
 	// --- Memory backend (before skills — rebuildSkillCollector reads a.memory) ---
 	if cfg.Memory.Type != "" {
-		// Parse timeout from config (default:"10s" applied by defaults.Set)
-		var timeout time.Duration
-		if d, err := time.ParseDuration(cfg.Memory.Timeout); err == nil {
-			timeout = d
-		}
-		if timeout <= 0 {
-			timeout = 10 * time.Second
-		}
-		reqTimeout := 15 * time.Second
-		if cfg.Memory.Mem9.RequestTimeout != "" {
-			if d, err := time.ParseDuration(cfg.Memory.Mem9.RequestTimeout); err == nil && d > 0 {
-				reqTimeout = d
-			}
-		}
-
-		memCfg := memory.Config{
-			Type:         cfg.Memory.Type,
-			BaseDir:      config.BaseDir(),
-			Timeout:      timeout,
-			ExcludeRepos: cfg.Memory.ExcludeRepos,
-			Mem9: memory.Mem9Config{
-				APIURL:         cfg.Memory.Mem9.APIURL,
-				APIKey:         cfg.Memory.Mem9.APIKey,
-				AgentID:        cfg.Memory.Mem9.AgentID,
-				Mode:           cfg.Memory.Mem9.Mode,
-				Proxy:          cfg.Memory.Mem9.Proxy,
-				RequestTimeout: reqTimeout,
-			},
-			AgentMemory: memory.AgentMemoryConfig{
-				APIURL: cfg.Memory.AgentMemory.APIURL,
-			},
-		}
+		memCfg := cfg.Memory.ToMemoryConfig()
 		backend, err := memory.New(cfg.Memory.Type, memCfg)
 		if err != nil {
 			a.logger.Log("Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
 		} else {
 			a.memory = &MemoryState{
 				Backend:          backend,
-				Timeout:          timeout,
+				Timeout:          memCfg.Timeout,
 				ToolResultMaxLen: cfg.Memory.ToolResultMaxLen,
 				ExcludeRepos:     normalizeRepoPaths(cfg.Memory.ExcludeRepos),
 			}

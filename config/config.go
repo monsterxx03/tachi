@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/creasty/defaults"
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/llm"
 	"gopkg.in/yaml.v3"
 )
@@ -326,6 +327,45 @@ type Mem9SubConfig struct {
 	Mode           string `yaml:"mode"`            // default: "smart"
 	RequestTimeout string `yaml:"request_timeout"` // HTTP request timeout (default "15s")
 	Proxy          string `yaml:"proxy"`           // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+}
+
+// ToMemoryConfig converts the YAML-level MemoryConfig to the runtime
+// memory.Config used by backends. Handles string-to-duration parsing and
+// injects the base directory.
+func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
+	var timeout time.Duration
+	if d, err := time.ParseDuration(mc.Timeout); err == nil {
+		timeout = d
+	}
+	if timeout <= 0 {
+		timeout = 10 * time.Second
+	}
+
+	var reqTimeout time.Duration
+	if d, err := time.ParseDuration(mc.Mem9.RequestTimeout); err == nil && d > 0 {
+		reqTimeout = d
+	}
+	if reqTimeout <= 0 {
+		reqTimeout = 15 * time.Second
+	}
+
+	return memory.Config{
+		Type:         mc.Type,
+		BaseDir:      BaseDir(),
+		Timeout:      timeout,
+		ExcludeRepos: mc.ExcludeRepos,
+		Mem9: memory.Mem9Config{
+			APIURL:         mc.Mem9.APIURL,
+			APIKey:         mc.Mem9.APIKey,
+			AgentID:        mc.Mem9.AgentID,
+			Mode:           mc.Mem9.Mode,
+			Proxy:          mc.Mem9.Proxy,
+			RequestTimeout: reqTimeout,
+		},
+		AgentMemory: memory.AgentMemoryConfig{
+			APIURL: mc.AgentMemory.APIURL,
+		},
+	}
 }
 
 type Config struct {
