@@ -142,6 +142,7 @@ func (a *AIAgent) RunOneOffStream(
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
+		a.estimateAndUpdateTokens(messages)
 		a.runAgentLoop(ctx, provider, messages, opts, ch)
 	}()
 
@@ -230,6 +231,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 		}
 
+		a.estimateAndUpdateTokens(messages)
 		a.runAgentLoop(ctx, a.provider, messages, opts, ch)
 	}()
 
@@ -365,6 +367,7 @@ func (a *AIAgent) runAgentLoop(
 
 		// After tool results, inject system-reminder warnings.
 		if a.shouldInjectLoopReminder() {
+			a.estimateAndUpdateTokens(messages)
 			rctx := a.buildReminderContext(false, true)
 			if block := a.reminderCollector.Collect(rctx); block != "" {
 				messages = append(messages, llm.Message{Role: "user", Content: block})
