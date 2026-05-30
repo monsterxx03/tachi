@@ -69,24 +69,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.initSkills()
 
 	// --- built-in tools + web search ---
+	a.webSearchCfg = cfg.WebSearch
+	a.webFetchCfg = cfg.WebFetch
 	a.RegisterTools()
-	ws := tools.WebSearchTool{
-		ProviderType: cfg.WebSearch.Type,
-		APIKey:       cfg.WebSearch.Key,
-		Timeout:      cfg.WebSearch.Timeout,
-		MaxResults:   cfg.WebSearch.MaxResults,
-		Proxy:        cfg.WebSearch.Proxy,
-	}
-	if _, key := ws.ResolveProvider(); key != "" {
-		a.RegisterTool(&ws)
-	}
-
-	// WebFetch — always registered, no API key needed.
-	wf := tools.WebFetchTool{
-		Timeout: cfg.WebFetch.Timeout,
-		Proxy:   cfg.WebFetch.Proxy,
-	}
-	a.RegisterTool(&wf)
 
 	// --- RecordMemory / MemoryRecall tools (only when memory backend is configured) ---
 	if a.memory != nil {

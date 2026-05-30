@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
@@ -84,6 +85,10 @@ type AIAgent struct {
 
 	// Memory-related fields
 	memory *MemoryState // nil = memory not enabled
+
+	// Tool configs (set by Configure before RegisterTools)
+	webSearchCfg config.WebSearchConfig
+	webFetchCfg  config.WebFetchConfig
 
 	// MCP ToolSearch fields are owned by mcpManager. The agent reads them via
 	// mcpManager.Pool() / mcpManager.DiscoveredSet() rather than holding its
@@ -276,6 +281,24 @@ func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.GrepTool{})
 	a.toolRegistry.Register(tools.NewBashTool(a.processManager))
 	a.toolRegistry.Register(tools.AskUserTool{})
+
+	// WebSearch — only register if provider + key are configured
+	ws := tools.WebSearchTool{
+		ProviderType: a.webSearchCfg.Type,
+		APIKey:       a.webSearchCfg.Key,
+		Timeout:      a.webSearchCfg.Timeout,
+		MaxResults:   a.webSearchCfg.MaxResults,
+		Proxy:        a.webSearchCfg.Proxy,
+	}
+	if _, key := ws.ResolveProvider(); key != "" {
+		a.toolRegistry.Register(&ws)
+	}
+
+	// WebFetch — always registered, no API key needed.
+	a.toolRegistry.Register(&tools.WebFetchTool{
+		Timeout: a.webFetchCfg.Timeout,
+		Proxy:   a.webFetchCfg.Proxy,
+	})
 }
 
 func (a *AIAgent) RegisterTool(tool tools.Tool) {
