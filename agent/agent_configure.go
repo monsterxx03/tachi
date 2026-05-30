@@ -88,6 +88,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		} else {
 			a.memoryBackend = backend
 			a.memoryTimeout = timeout
+			a.memoryToolResultMaxLen = cfg.Memory.ToolResultMaxLen
 			a.excludeRepos = normalizeRepoPaths(cfg.Memory.ExcludeRepos)
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
 		}

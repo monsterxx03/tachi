@@ -92,6 +92,10 @@ func (a *AIAgent) groupToolCalls(toolCalls []llm.ToolCall) []toolGroup {
 // backend. No-ops when memory is not configured or no session is active.
 // This provides tool-level granularity (vs turn-level in storeTurnMemory),
 // enabling semantic search across individual tool calls like "那次 ReadFile 读到了什么".
+//
+// input and output are truncated to memoryToolResultMaxLen (in runes, default 8000)
+// before storing, to keep memory entries at a reasonable size. UTF-8 safe —
+// multi-byte characters (e.g. Chinese) are never split.
 func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) {
 	if a.memoryBackend == nil || a.sessionManager == nil {
 		return
@@ -103,6 +107,14 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	if sess == nil {
 		return
 	}
+
+	// Truncate input and output to keep memory entries reasonable.
+	maxLen := a.memoryToolResultMaxLen
+	if maxLen <= 0 {
+		maxLen = 8000 // default
+	}
+	input = truncateString(input, maxLen)
+	output = truncateString(output, maxLen)
 
 	content := fmt.Sprintf("Tool %s (input: %s) → %s", toolName, input, output)
 	if isError {
@@ -121,6 +133,20 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 			a.logger.Log("Memory(tool): store failed for %s: %v", toolName, err)
 		}
 	}()
+}
+
+// truncateString truncates a string to at most maxRunes runes (Unicode code points).
+// UTF-8 safe — multi-byte characters like Chinese (each 3 bytes) are never split.
+// Returns the original string unchanged when maxRunes <= 0 or len(runes) <= maxRunes.
+func truncateString(s string, maxRunes int) string {
+	if maxRunes <= 0 {
+		return s
+	}
+	runes := []rune(s)
+	if len(runes) <= maxRunes {
+		return s
+	}
+	return string(runes[:maxRunes])
 }
 
 // executeToolCalls is the main entry point for tool execution. It groups

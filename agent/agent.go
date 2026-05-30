@@ -85,11 +85,12 @@ type AIAgent struct {
 	subagentModel    string       // sub-agent dedicated model ("" = fallback to main)
 
 	// Memory-related fields
-	memoryBackend    memory.Backend // nil = memory not enabled
-	memoryTimeout    time.Duration  // context deadline for Store/Recall/Forget
-	skipMemory       bool           // set by RunOneOffStream to suppress turn-level memory writes
-	skipMemoryRecall bool           // set by main.go runAgent to suppress recall for "tachi run"
-	excludeRepos     []string       // git repo roots to skip all memory writes
+	memoryBackend         memory.Backend // nil = memory not enabled
+	memoryTimeout          time.Duration  // context deadline for Store/Recall/Forget
+	memoryToolResultMaxLen int            // max chars for tool result in memory (0 = no limit)
+	skipMemory             bool           // set by RunOneOffStream to suppress turn-level memory writes
+	skipMemoryRecall       bool           // set by main.go runAgent to suppress recall for "tachi run"
+	excludeRepos           []string       // git repo roots to skip all memory writes
 
 	// MCP ToolSearch fields are owned by mcpManager. The agent reads them via
 	// mcpManager.Pool() / mcpManager.DiscoveredSet() rather than holding its
