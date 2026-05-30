@@ -103,7 +103,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.memory.SkipWrites || a.memory.IsRepoExcluded() {
+	if a.memory.SkipWrites || a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -112,7 +112,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	}
 
 	// Truncate input and output to keep memory entries reasonable.
-	maxLen := a.memory.ToolResultMaxLen
+	maxLen := a.cfg.Memory.ToolResultMaxLen
 	if maxLen <= 0 {
 		maxLen = 8000 // default
 	}
@@ -125,7 +125,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
 		defer cancel()
 		cwd, _ := os.Getwd()
 		if err := a.memory.Backend.Observe(ctx, memory.ObserveOptions{

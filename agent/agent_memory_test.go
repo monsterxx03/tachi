@@ -6,6 +6,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -65,11 +66,11 @@ func TestNormalizeRepoPaths_Mixed(t *testing.T) {
 	}, result)
 }
 
-// ---- Tests: MemoryState.IsRepoExcluded ----
+// ---- Tests: AIAgent.isRepoExcluded ----
 
 func TestIsRepoExcluded_NoExcludeList(t *testing.T) {
-	m := &MemoryState{ExcludeRepos: nil}
-	assert.False(t, m.IsRepoExcluded())
+	a := &AIAgent{cfg: &config.Config{}}
+	assert.False(t, a.isRepoExcluded())
 }
 
 func TestIsRepoExcluded_NotInGitRepo(t *testing.T) {
@@ -80,14 +81,14 @@ func TestIsRepoExcluded_NotInGitRepo(t *testing.T) {
 	require.NoError(t, os.Chdir(dir))
 	defer func() { _ = os.Chdir(origWd) }()
 
-	m := &MemoryState{ExcludeRepos: []string{dir}}
-	assert.False(t, m.IsRepoExcluded())
+	a := &AIAgent{cfg: &config.Config{Memory: config.MemoryConfig{ExcludeRepos: []string{dir}}}}
+	assert.False(t, a.isRepoExcluded())
 }
 
 func TestIsRepoExcluded_CurrentRepoNotInList(t *testing.T) {
 	// We're inside the tachi repo itself, which won't be in the list
-	m := &MemoryState{ExcludeRepos: []string{"/some/other/repo"}}
-	assert.False(t, m.IsRepoExcluded())
+	a := &AIAgent{cfg: &config.Config{Memory: config.MemoryConfig{ExcludeRepos: []string{"/some/other/repo"}}}}
+	assert.False(t, a.isRepoExcluded())
 }
 
 func TestIsRepoExcluded_CurrentRepoMatches(t *testing.T) {
@@ -96,8 +97,8 @@ func TestIsRepoExcluded_CurrentRepoMatches(t *testing.T) {
 	require.NoError(t, err)
 	repoRoot := strings.TrimSpace(string(out))
 
-	m := &MemoryState{ExcludeRepos: []string{"/some/other", repoRoot}}
-	assert.True(t, m.IsRepoExcluded())
+	a := &AIAgent{cfg: &config.Config{Memory: config.MemoryConfig{ExcludeRepos: []string{"/some/other", repoRoot}}}}
+	assert.True(t, a.isRepoExcluded())
 }
 
 func TestIsRepoExcluded_PartialPrefixNoMatch(t *testing.T) {
@@ -107,6 +108,6 @@ func TestIsRepoExcluded_PartialPrefixNoMatch(t *testing.T) {
 	repoRoot := strings.TrimSpace(string(out))
 
 	// A parent directory should NOT match
-	m := &MemoryState{ExcludeRepos: []string{repoRoot[:len(repoRoot)/2]}}
-	assert.False(t, m.IsRepoExcluded())
+	a := &AIAgent{cfg: &config.Config{Memory: config.MemoryConfig{ExcludeRepos: []string{repoRoot[:len(repoRoot)/2]}}}}
+	assert.False(t, a.isRepoExcluded())
 }

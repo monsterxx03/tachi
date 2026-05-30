@@ -55,12 +55,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		if err != nil {
 			a.logger.Log("Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
 		} else {
-			a.memory = &MemoryState{
-				Backend:          backend,
-				Timeout:          memCfg.Timeout,
-				ToolResultMaxLen: cfg.Memory.ToolResultMaxLen,
-				ExcludeRepos:     normalizeRepoPaths(cfg.Memory.ExcludeRepos),
-			}
+			a.memory = &MemoryState{Backend: backend}
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
 		}
 	}

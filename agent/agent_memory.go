@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -36,7 +37,7 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 		return fmt.Errorf("no active session")
 	}
 
-	storeCtx, cancel := context.WithTimeout(ctx, a.memory.Timeout)
+	storeCtx, cancel := context.WithTimeout(ctx, a.cfg.Memory.Timeout)
 	defer cancel()
 
 	err := a.memory.Backend.Store(storeCtx, memory.StoreOptions{
@@ -66,7 +67,7 @@ func (a *AIAgent) StartSessionMemory() {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
 		defer cancel()
 		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 			Scope:     memory.StoreScopeStart,
@@ -100,6 +101,24 @@ func withRepoTag(tags []string) []string {
 		return append(tags, tag)
 	}
 	return tags
+}
+
+// isRepoExcluded checks whether the current git repo root is in the
+// memory.exclude_repos config list. Returns false when not in a git repo
+// or when the list is empty.
+func (a *AIAgent) isRepoExcluded() bool {
+	if a.cfg == nil || len(a.cfg.Memory.ExcludeRepos) == 0 {
+		return false
+	}
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return false
+	}
+	repoRoot := strings.TrimSpace(string(out))
+	normalized := normalizeRepoPaths(a.cfg.Memory.ExcludeRepos)
+	return slices.ContainsFunc(normalized, func(excluded string) bool {
+		return filepath.Clean(repoRoot) == filepath.Clean(excluded)
+	})
 }
 
 // normalizeRepoPaths expands ~ to the home directory and cleans each path.
@@ -161,7 +180,7 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 	if a.memory.SkipWrites {
 		return
 	}
-	if a.memory.IsRepoExcluded() {
+	if a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -170,7 +189,7 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
 		defer cancel()
 		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 			Scope:        memory.StoreScopeTurn,
@@ -190,7 +209,7 @@ func (a *AIAgent) StoreCompactMemory() {
 	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.memory.IsRepoExcluded() {
+	if a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -207,7 +226,7 @@ func (a *AIAgent) StoreCompactMemory() {
 	memMsgs := sessionMessagesToMemory(msgs)
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
+		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
 		defer cancel()
 		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 			Scope:           memory.StoreScopeCompact,
@@ -228,7 +247,7 @@ func (a *AIAgent) StoreSessionMemory() {
 	if a.memory == nil || a.sessionManager == nil {
 		return
 	}
-	if a.memory.IsRepoExcluded() {
+	if a.isRepoExcluded() {
 		return
 	}
 	sess := a.sessionManager.Current()
@@ -244,7 +263,7 @@ func (a *AIAgent) StoreSessionMemory() {
 
 	memMsgs := sessionMessagesToMemory(msgs)
 
-	ctx, cancel := context.WithTimeout(context.Background(), a.memory.Timeout)
+	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
 	defer cancel()
 	if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
 		Scope:           memory.StoreScopeSession,
