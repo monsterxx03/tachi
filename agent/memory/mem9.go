@@ -19,12 +19,11 @@ import (
 // It writes at all three scopes (turn/compact/session) with content filtering,
 // and uses vector semantic search for recall.
 type Mem9Backend struct {
-	http           *http.Client
-	baseURL        string
-	apiKey         string
-	agentID        string
-	mode           string
-	requestTimeout time.Duration
+	http    *http.Client
+	baseURL string
+	apiKey  string
+	agentID string
+	mode    string
 }
 
 // NewMem9Backend creates a Mem9Backend using the given config.
@@ -42,18 +41,17 @@ func NewMem9Backend(cfg Config) (*Mem9Backend, error) {
 		mode = "smart"
 	}
 
-	httpClient, err := proxy.NewHTTPClient(cfg.Mem9.Proxy, cfg.Mem9.RequestTimeout)
+	httpClient, err := proxy.NewHTTPClient(cfg.Mem9.Proxy, cfg.Timeout)
 	if err != nil {
 		return nil, fmt.Errorf("mem9: create http client: %w", err)
 	}
 
 	return &Mem9Backend{
-		http:           httpClient,
-		baseURL:        baseURL,
-		apiKey:         cfg.Mem9.APIKey,
-		agentID:        agentID,
-		mode:           mode,
-		requestTimeout: cfg.Mem9.RequestTimeout,
+		http:    httpClient,
+		baseURL: baseURL,
+		apiKey:  cfg.Mem9.APIKey,
+		agentID: agentID,
+		mode:    mode,
 	}, nil
 }
 

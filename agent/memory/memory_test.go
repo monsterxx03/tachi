@@ -40,7 +40,7 @@ func TestNew_DefaultTimeouts(t *testing.T) {
 			APIKey: "test-key",
 		},
 	}
-	// Timeout and Mem9.RequestTimeout are both 0, should get defaults.
+	// Timeout is 0, should get default 10s.
 	b, err := New("mem9", cfg)
 	if err != nil {
 		t.Fatalf("New(mem9): unexpected error: %v", err)
@@ -49,17 +49,16 @@ func TestNew_DefaultTimeouts(t *testing.T) {
 	if !ok {
 		t.Fatal("expected *Mem9Backend")
 	}
-	if mb.requestTimeout != 15*time.Second {
-		t.Errorf("requestTimeout = %v, want 15s", mb.requestTimeout)
+	if mb.http.Timeout != 10*time.Second {
+		t.Errorf("http.Timeout = %v, want 10s", mb.http.Timeout)
 	}
 }
 
 func TestNew_CustomTimeouts(t *testing.T) {
 	cfg := Config{
-		Timeout: 5 * time.Second,
+		Timeout: 20 * time.Second,
 		Mem9: Mem9Config{
-			APIKey:         "test-key",
-			RequestTimeout: 20 * time.Second,
+			APIKey: "test-key",
 		},
 	}
 	b, err := New("mem9", cfg)
@@ -70,8 +69,8 @@ func TestNew_CustomTimeouts(t *testing.T) {
 	if !ok {
 		t.Fatal("expected *Mem9Backend")
 	}
-	if mb.requestTimeout != 20*time.Second {
-		t.Errorf("requestTimeout = %v, want 20s", mb.requestTimeout)
+	if mb.http.Timeout != 20*time.Second {
+		t.Errorf("http.Timeout = %v, want 20s", mb.http.Timeout)
 	}
 }
 

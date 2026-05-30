@@ -102,21 +102,17 @@ type Config struct {
 
 // Mem9Config holds mem9-specific configuration.
 type Mem9Config struct {
-	APIURL         string        // default: https://api.mem9.ai
-	APIKey         string
-	AgentID        string        // default: "tachi"
-	Mode           string        // "smart" or "raw"
-	Proxy          string        // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
-	RequestTimeout time.Duration // HTTP request timeout (default 15s)
+	APIURL  string // default: https://api.mem9.ai
+	APIKey  string
+	AgentID string // default: "tachi"
+	Mode    string // "smart" or "raw"
+	Proxy   string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 }
 
 // New creates a backend by type.
 func New(backendType string, cfg Config) (Backend, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
-	}
-	if cfg.Mem9.RequestTimeout <= 0 {
-		cfg.Mem9.RequestTimeout = 15 * time.Second
 	}
 	switch backendType {
 	case "mem9":

@@ -321,12 +321,11 @@ type AgentMemorySubConfig struct {
 
 // Mem9SubConfig holds mem9-specific memory configuration.
 type Mem9SubConfig struct {
-	APIURL         string `yaml:"api_url"` // default: https://api.mem9.ai
-	APIKey         string `yaml:"api_key"`
-	AgentID        string `yaml:"agent_id"`        // default: "tachi"
-	Mode           string `yaml:"mode"`            // default: "smart"
-	RequestTimeout string `yaml:"request_timeout"` // HTTP request timeout (default "15s")
-	Proxy          string `yaml:"proxy"`           // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+	APIURL  string `yaml:"api_url"` // default: https://api.mem9.ai
+	APIKey  string `yaml:"api_key"`
+	AgentID string `yaml:"agent_id"` // default: "tachi"
+	Mode    string `yaml:"mode"`     // default: "smart"
+	Proxy   string `yaml:"proxy"`    // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
 }
 
 // ToMemoryConfig converts the YAML-level MemoryConfig to the runtime
@@ -341,26 +340,17 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 		timeout = 10 * time.Second
 	}
 
-	var reqTimeout time.Duration
-	if d, err := time.ParseDuration(mc.Mem9.RequestTimeout); err == nil && d > 0 {
-		reqTimeout = d
-	}
-	if reqTimeout <= 0 {
-		reqTimeout = 15 * time.Second
-	}
-
 	return memory.Config{
 		Type:         mc.Type,
 		BaseDir:      BaseDir(),
 		Timeout:      timeout,
 		ExcludeRepos: mc.ExcludeRepos,
 		Mem9: memory.Mem9Config{
-			APIURL:         mc.Mem9.APIURL,
-			APIKey:         mc.Mem9.APIKey,
-			AgentID:        mc.Mem9.AgentID,
-			Mode:           mc.Mem9.Mode,
-			Proxy:          mc.Mem9.Proxy,
-			RequestTimeout: reqTimeout,
+			APIURL:  mc.Mem9.APIURL,
+			APIKey:  mc.Mem9.APIKey,
+			AgentID: mc.Mem9.AgentID,
+			Mode:    mc.Mem9.Mode,
+			Proxy:   mc.Mem9.Proxy,
 		},
 		AgentMemory: memory.AgentMemoryConfig{
 			APIURL: mc.AgentMemory.APIURL,
