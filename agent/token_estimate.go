@@ -65,9 +65,6 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, tools []ll
 // messages and updates a.lastInputTokens so that buildReminderContext and
 // TokenWarningReminder see the current (not previous-turn) context size.
 func (a *AIAgent) estimateAndUpdateTokens(messages []llm.Message) {
-	if a.cfg == nil {
-		return
-	}
 	tools := buildLLMTools(a.filterActiveSchemas(a.toolRegistry.GetSchemas()))
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
