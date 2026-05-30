@@ -68,8 +68,8 @@ func filterMarkdown(text string) string {
 func processHeading(line string) string {
 	trimmed := strings.TrimSpace(line)
 	for _, prefix := range []string{"###### ", "##### "} {
-		if strings.HasPrefix(trimmed, prefix) {
-			return strings.TrimPrefix(trimmed, prefix)
+		if after, ok := strings.CutPrefix(trimmed, prefix); ok {
+			return after
 		}
 	}
 	return line

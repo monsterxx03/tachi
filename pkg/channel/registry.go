@@ -1,5 +1,7 @@
 package channel
 
+import "maps"
+
 import "sync"
 
 // Factory creates a Channel from its raw YAML config map.
@@ -50,8 +52,6 @@ func ListRegistered() map[string]Factory {
 	registryMu.RLock()
 	defer registryMu.RUnlock()
 	m := make(map[string]Factory, len(registry))
-	for k, v := range registry {
-		m[k] = v
-	}
+	maps.Copy(m, registry)
 	return m
 }

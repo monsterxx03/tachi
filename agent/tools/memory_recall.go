@@ -92,10 +92,10 @@ func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (str
 	}
 
 	if len(entries) == 0 {
-		result := map[string]interface{}{
+		result := map[string]any{
 			"query":   params.Query,
 			"limit":   params.Limit,
-			"results": []interface{}{},
+			"results": []any{},
 			"message": "No relevant memories found.",
 		}
 		b, _ := json.Marshal(result)

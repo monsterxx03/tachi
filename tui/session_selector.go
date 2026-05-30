@@ -24,10 +24,7 @@ import (
 func (m *Model) sessionVisibleRows() int {
 	// Calculate visible rows (excluding the title line)
 	// This matches layout(): inputHeight = min(len+2, height/2), minus 1 for title
-	n := m.height/2 - 1
-	if n < 1 {
-		n = 1
-	}
+	n := max(m.height/2-1, 1)
 	if n > len(m.sessionList) {
 		n = len(m.sessionList)
 	}
@@ -37,10 +34,7 @@ func (m *Model) sessionVisibleRows() int {
 func (m *Model) clampSessionScroll() {
 	visibleRows := m.sessionVisibleRows()
 	// Ensure scroll offset is within valid range
-	maxScroll := len(m.sessionList) - visibleRows
-	if maxScroll < 0 {
-		maxScroll = 0
-	}
+	maxScroll := max(len(m.sessionList)-visibleRows, 0)
 	if m.sessionScrollOff > maxScroll {
 		m.sessionScrollOff = maxScroll
 	}
@@ -91,10 +85,7 @@ func (m *Model) renderSessionSelection() string {
 	}
 
 	visibleRows := m.sessionVisibleRows()
-	end := m.sessionScrollOff + visibleRows
-	if end > len(m.sessionList) {
-		end = len(m.sessionList)
-	}
+	end := min(m.sessionScrollOff+visibleRows, len(m.sessionList))
 
 	for idx := m.sessionScrollOff; idx < end; idx++ {
 		s := m.sessionList[idx]

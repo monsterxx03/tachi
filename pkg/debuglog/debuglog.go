@@ -15,9 +15,9 @@ const (
 )
 
 var (
-	DefaultLogger       *Logger
-	rotateWriter        *rotatingWriter
-	internalSlog *slog.Logger
+	DefaultLogger *Logger
+	rotateWriter  *rotatingWriter
+	internalSlog  *slog.Logger
 )
 
 // Init initializes the debug logger, writing to the given log directory
@@ -84,7 +84,7 @@ func (l *Logger) WithSessionID(sessionID string) *Logger {
 
 // Log writes a formatted message at INFO level.
 // Uses the default logger (source=tui) if called with a nil Logger.
-func (l *Logger) Log(format string, args ...interface{}) {
+func (l *Logger) Log(format string, args ...any) {
 	if l == nil || l.slog == nil {
 		if DefaultLogger != nil {
 			DefaultLogger.Log(format, args...)
@@ -97,7 +97,7 @@ func (l *Logger) Log(format string, args ...interface{}) {
 // Log writes a formatted message to the debug log, extracting the Logger from ctx.
 // If ctx carries no logger, falls back to DefaultLogger (source=tui).
 // Format and args follow the same convention as fmt.Sprintf.
-func Log(ctx context.Context, format string, args ...interface{}) {
+func Log(ctx context.Context, format string, args ...any) {
 	l := FromContext(ctx)
 	l.Log(format, args...)
 }

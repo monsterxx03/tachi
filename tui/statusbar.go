@@ -37,19 +37,19 @@ func NewStatusBar(providerInfo string, contextWindow int64) StatusBar {
 	return StatusBar{providerInfo: providerInfo, contextWindow: contextWindow, spinner: sp}
 }
 
-func (s *StatusBar) SetWidth(w int)               { s.width = w }
-func (s *StatusBar) SetState(st state)             { s.state = st }
-func (s *StatusBar) SetUsage(u *llm.Usage)         { s.totalUsage = u }
-func (s *StatusBar) SetCopyMode(b bool)            { s.copyMode = b }
-func (s *StatusBar) SetCost(cost float64)          { s.sessionCost = cost }
-func (s *StatusBar) SetProviderInfo(info string)    { s.providerInfo = info }
-func (s *StatusBar) SetContextWindow(cw int64)      { s.contextWindow = cw }
+func (s *StatusBar) SetWidth(w int)                  { s.width = w }
+func (s *StatusBar) SetState(st state)               { s.state = st }
+func (s *StatusBar) SetUsage(u *llm.Usage)           { s.totalUsage = u }
+func (s *StatusBar) SetCopyMode(b bool)              { s.copyMode = b }
+func (s *StatusBar) SetCost(cost float64)            { s.sessionCost = cost }
+func (s *StatusBar) SetProviderInfo(info string)     { s.providerInfo = info }
+func (s *StatusBar) SetContextWindow(cw int64)       { s.contextWindow = cw }
 func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s.sessionID = id }
-func (s *StatusBar) ProviderInfo() string           { return s.providerInfo }
+func (s *StatusBar) ProviderInfo() string            { return s.providerInfo }
 
 func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
-func (s *StatusBar) SetMCPReady(v bool)   { s.mcpReady = v }
-func (s *StatusBar) SetMCPEnabled(v bool) { s.mcpEnabled = v }
+func (s *StatusBar) SetMCPReady(v bool)    { s.mcpReady = v }
+func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -110,10 +110,7 @@ func (s StatusBar) View() string {
 		right = s.buildUsageRight()
 	}
 
-	gap := s.width - lipgloss.Width(left) - lipgloss.Width(right)
-	if gap < 0 {
-		gap = 0
-	}
+	gap := max(s.width-lipgloss.Width(left)-lipgloss.Width(right), 0)
 	// Use MaxWidth to let lipgloss safely truncate the line to terminal width,
 	// handling ANSI sequences and wide (CJK) characters correctly.
 	return statusBarStyle.Copy().Width(s.width).Render(left + strings.Repeat(" ", gap) + right)

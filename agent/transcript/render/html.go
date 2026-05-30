@@ -54,30 +54,30 @@ type TurnView struct {
 
 // EventView is a display-friendly event.
 type EventView struct {
-	Type      string       `json:"type"`
-	Timestamp string       `json:"ts"`
-	Name      string       `json:"name,omitempty"`
-	Content   string       `json:"content,omitempty"`
-	ArgsJSON  string       `json:"args_json,omitempty"`  // formatted JSON
-	ArgsRaw   string       `json:"args_raw,omitempty"`   // raw string
-	IsError   bool         `json:"is_error,omitempty"`
-	HasChildren bool       `json:"has_children,omitempty"`
-	Children  []EventView  `json:"children,omitempty"`
-	Icon      string       `json:"icon"`
-	CSSClass  string       `json:"css_class"`
+	Type        string      `json:"type"`
+	Timestamp   string      `json:"ts"`
+	Name        string      `json:"name,omitempty"`
+	Content     string      `json:"content,omitempty"`
+	ArgsJSON    string      `json:"args_json,omitempty"` // formatted JSON
+	ArgsRaw     string      `json:"args_raw,omitempty"`  // raw string
+	IsError     bool        `json:"is_error,omitempty"`
+	HasChildren bool        `json:"has_children,omitempty"`
+	Children    []EventView `json:"children,omitempty"`
+	Icon        string      `json:"icon"`
+	CSSClass    string      `json:"css_class"`
 }
 
 // StatsView holds aggregated statistics for the transcript.
 type StatsView struct {
-	TurnCount      int            `json:"turn_count"`
-	UserMsgCount   int            `json:"user_msg_count"`
-	ToolCallCount  int            `json:"tool_call_count"`
-	ToolErrorCount int            `json:"tool_error_count"`
-	ThinkingCount  int            `json:"thinking_count"`
-	TextCount      int            `json:"text_count"`
-	SubAgentCount  int            `json:"subagent_count"`
-	ToolFreq       []KV           `json:"tool_freq"`
-	TotalDuration  string         `json:"total_duration"`
+	TurnCount      int    `json:"turn_count"`
+	UserMsgCount   int    `json:"user_msg_count"`
+	ToolCallCount  int    `json:"tool_call_count"`
+	ToolErrorCount int    `json:"tool_error_count"`
+	ThinkingCount  int    `json:"thinking_count"`
+	TextCount      int    `json:"text_count"`
+	SubAgentCount  int    `json:"subagent_count"`
+	ToolFreq       []KV   `json:"tool_freq"`
+	TotalDuration  string `json:"total_duration"`
 }
 
 // KV is a key-value pair for sorted display.
@@ -434,7 +434,7 @@ func formatArgsJSON(raw string) string {
 		return ""
 	}
 	// Try to pretty-print JSON.
-	var v interface{}
+	var v any
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		return raw // Not valid JSON, return as-is.
 	}
@@ -449,7 +449,7 @@ func formatArgsJSON(raw string) string {
 // The caller should provide an io.Writer (typically *os.File).
 func GenerateHTML(data *ReportData) (string, error) {
 	tmpl, err := template.New("report").Funcs(template.FuncMap{
-		"json": func(v interface{}) template.JS {
+		"json": func(v any) template.JS {
 			b, _ := json.Marshal(v)
 			return template.JS(b)
 		},

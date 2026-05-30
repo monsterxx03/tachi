@@ -59,7 +59,7 @@ func getCachedTrie() (*pathtrie.PathTrie, error) {
 	}
 
 	var paths []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			paths = append(paths, filepath.ToSlash(line))
@@ -302,7 +302,7 @@ func expandDirListing(dir string) string {
 	}
 
 	var files []string
-	for _, line := range strings.Split(strings.TrimSpace(string(output)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(output)), "\n") {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			files = append(files, filepath.ToSlash(line))

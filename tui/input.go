@@ -73,14 +73,14 @@ func NewInputArea(historyMax int, historyPath string) InputArea {
 		history = loadInputHistoryFile(historyPath, historyMax)
 	}
 	return InputArea{
-		textarea:    ta,
-		enabled:     true,
-		history:     history,
-		historyMax:  historyMax,
-		histIdx:     -1,
-		historyPath: historyPath,
+		textarea:       ta,
+		enabled:        true,
+		history:        history,
+		historyMax:     historyMax,
+		histIdx:        -1,
+		historyPath:    historyPath,
 		pasteThreshold: 5,
-		logger:      debuglog.DefaultLogger,
+		logger:         debuglog.DefaultLogger,
 	}
 }
 
@@ -102,10 +102,7 @@ func (i *InputArea) SetMaxHeight(maxTotal int) {
 	if i.atFileMatches != nil {
 		completionLines += 1 + len(i.atFileMatches) // header + matches
 	}
-	maxTA := maxTotal - completionLines
-	if maxTA < 1 {
-		maxTA = 1
-	}
+	maxTA := max(maxTotal-completionLines, 1)
 	i.textarea.MaxHeight = maxTA
 }
 

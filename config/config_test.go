@@ -84,7 +84,7 @@ func TestSaveAndLoad(t *testing.T) {
 	original := &Config{
 		Provider:      "test-provider",
 		MaxTokens:     16000,
-		MaxIterations: intPtr(20),
+		MaxIterations: new(20),
 		Providers: []ProviderConfig{
 			{
 				Name:    "test-provider",
@@ -153,7 +153,7 @@ func TestResolve_FullConfig(t *testing.T) {
 	cfg := &Config{
 		Provider:      "my-provider",
 		MaxTokens:     8000,
-		MaxIterations: intPtr(5),
+		MaxIterations: new(5),
 		Providers: []ProviderConfig{
 			{
 				Name:    "my-provider",
@@ -228,7 +228,7 @@ func TestResolve_SingleProviderAutoSelect(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	cfg := &Config{
 		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: intPtr(DefaultMaxIterations),
+		MaxIterations: new(DefaultMaxIterations),
 		Providers: []ProviderConfig{
 			{Name: "only-one", Type: "openai", Model: "gpt-4", APIKey: "sk-test"},
 		},
@@ -244,7 +244,7 @@ func TestResolve_ConfigSelectsProvider(t *testing.T) {
 	cfg := &Config{
 		Provider:      "beta",
 		MaxTokens:     DefaultMaxTokens,
-		MaxIterations: intPtr(DefaultMaxIterations),
+		MaxIterations: new(DefaultMaxIterations),
 		Providers: []ProviderConfig{
 			{Name: "alpha", Type: "openai", Model: "gpt-4", APIKey: "sk-a"},
 			{Name: "beta", Type: "anthropic", Model: "claude-3", APIKey: "sk-b"},
@@ -630,6 +630,6 @@ func TestToBool(t *testing.T) {
 	assert.False(t, toBool(0))
 	assert.True(t, toBool(1.0))
 	assert.False(t, toBool(0.0))
-	assert.False(t, toBool("yes"))  // not a bool-like string
+	assert.False(t, toBool("yes")) // not a bool-like string
 	assert.False(t, toBool(nil))
 }

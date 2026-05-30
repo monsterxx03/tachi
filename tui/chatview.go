@@ -411,10 +411,7 @@ func (c *ChatView) ListItem(idx int) ListItem {
 		pendingIdx--
 	}
 	if pendingIdx >= 0 && pendingIdx < len(c.pendingItems) {
-		inner := c.width - 2
-		if inner < 1 {
-			inner = 1
-		}
+		inner := max(c.width-2, 1)
 		s := pendingMsgStyle.Width(inner).Render("[待发送] " + c.pendingItems[pendingIdx])
 		return ListItem{Content: s, Height: 1}
 	}
@@ -443,10 +440,7 @@ func (c *ChatView) streamVisible() bool {
 }
 
 func (c *ChatView) renderItemCached(m *messageCacheItem) (string, int) {
-	inner := c.width - 2
-	if inner < 1 {
-		inner = 1
-	}
+	inner := max(c.width-2, 1)
 	if m.cached != "" && m.innerW == inner {
 		return m.cached, m.cachedHeight
 	}
@@ -483,10 +477,7 @@ func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 }
 
 func (c *ChatView) renderStreamBlock() string {
-	inner := c.width - 2
-	if inner < 1 {
-		inner = 1
-	}
+	inner := max(c.width-2, 1)
 	var b strings.Builder
 	if c.currentThinking.Len() > 0 {
 		thinking := truncateThinking(c.currentThinking.String(), 5)

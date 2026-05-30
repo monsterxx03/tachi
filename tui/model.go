@@ -79,9 +79,9 @@ type Model struct {
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
 
-	savedHistory []llm.Message       // conversation history saved before a one-off run (e.g. /commit)
+	savedHistory []llm.Message         // conversation history saved before a one-off run (e.g. /commit)
 	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
-	isCompacting bool                // true during compact LLM call (distinct from savedHistory)
+	isCompacting bool                  // true during compact LLM call (distinct from savedHistory)
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events
@@ -125,17 +125,17 @@ type ModelConfig struct {
 
 func NewModel(cfg ModelConfig) *Model {
 	m := &Model{
-		statusbar:   NewStatusBar(cfg.ProviderInfo, cfg.ContextWindow),
-		chatview:    NewChatView(),
-		input:       NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
-		agent:       cfg.Agent,
-		systemPrompt: cfg.SystemPrompt,
-		chatOpts:    cfg.ChatOpts,
-		state:       stateIdle,
-		cfg:         cfg.Config,
-		mcpManager:  cfg.MCPManager,
-		mcpServers:  cfg.MCPServers,
-		thinkingView: NewThinkingView(),
+		statusbar:        NewStatusBar(cfg.ProviderInfo, cfg.ContextWindow),
+		chatview:         NewChatView(),
+		input:            NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
+		agent:            cfg.Agent,
+		systemPrompt:     cfg.SystemPrompt,
+		chatOpts:         cfg.ChatOpts,
+		state:            stateIdle,
+		cfg:              cfg.Config,
+		mcpManager:       cfg.MCPManager,
+		mcpServers:       cfg.MCPServers,
+		thinkingView:     NewThinkingView(),
 		notifyOnComplete: cfg.Config.TUI.NotifyEnabled(),
 	}
 
@@ -622,18 +622,12 @@ func (m *Model) layout() {
 		// For regular text input, dynamically cap the textarea height so the
 		// statusbar stays anchored at the bottom. Content that doesn't fit
 		// scrolls internally inside the textarea.
-		maxInputHeight := m.height - statusHeight - separatorsHeight - minChatHeight
-		if maxInputHeight < 1 {
-			maxInputHeight = 1
-		}
+		maxInputHeight := max(m.height-statusHeight-separatorsHeight-minChatHeight, 1)
 		m.input.SetMaxHeight(maxInputHeight)
 		inputHeight = m.input.Height()
 	}
 
-	chatHeight := m.height - inputHeight - statusHeight - separatorsHeight
-	if chatHeight < minChatHeight {
-		chatHeight = minChatHeight
-	}
+	chatHeight := max(m.height-inputHeight-statusHeight-separatorsHeight, minChatHeight)
 
 	m.chatview.SetSize(m.width, chatHeight)
 }

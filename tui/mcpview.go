@@ -49,12 +49,12 @@ const (
 // MCPView renders the MCP management overlay with server list, tool list, and tool detail.
 //
 // Navigation model (three levels):
-//   1. Server list    — ↑↓ to select, Enter → enter tool list
-//   2. Tool list      — ↑↓/jk to scroll, Enter → open detail for highlighted tool, Esc → back to servers
-//   3. Tool detail    — ↑↓/jk to scroll full description + parameters, Esc → back to tool list
+//  1. Server list    — ↑↓ to select, Enter → enter tool list
+//  2. Tool list      — ↑↓/jk to scroll, Enter → open detail for highlighted tool, Esc → back to servers
+//  3. Tool detail    — ↑↓/jk to scroll full description + parameters, Esc → back to tool list
 type MCPView struct {
-	servers  []MCPServerItem
-	selIdx   int
+	servers []MCPServerItem
+	selIdx  int
 
 	// Tool panel state
 	focusOnTools      bool // true when in tool list or detail (not server list)
@@ -209,27 +209,17 @@ func (v *MCPView) View() string {
 	// spaces) are hard-wrapped to fit the overlay width, and we know the
 	// exact line count before sizing the server/tool areas.
 	const maxMsgLines = 8
-	innerW := v.width - 6 // mirror renderServerLine's innerW
-	if innerW < 20 {
-		innerW = 20
-	}
+	innerW := max(
+		// mirror renderServerLine's innerW
+		v.width-6, 20)
 	wrappedMsg, msgLineCount := v.prepareMessage(innerW, maxMsgLines)
 
 	// Compute split: 35% server list, 65% tool area (of inner height)
-	innerH := v.height - 2              // border lines
-	constantH := 1 + 1 + msgLineCount  // title + tool-header + message
-	availH := innerH - constantH
-	if availH < 2 {
-		availH = 2
-	}
-	serverArea := availH * 35 / 100
-	if serverArea < 1 {
-		serverArea = 1
-	}
-	toolArea := availH - serverArea
-	if toolArea < 1 {
-		toolArea = 1
-	}
+	innerH := v.height - 2            // border lines
+	constantH := 1 + 1 + msgLineCount // title + tool-header + message
+	availH := max(innerH-constantH, 2)
+	serverArea := max(availH*35/100, 1)
+	toolArea := max(availH-serverArea, 1)
 
 	// --- Server list ---
 	for i, srv := range v.servers {
@@ -319,16 +309,12 @@ func (v *MCPView) renderServerLine(i int, srv MCPServerItem) string {
 	suffix := fmt.Sprintf("%s  %s%s%s", typeBadge, toolStr, oauthBadge, profileBadge)
 	// suffix text is plain ASCII (no ANSI) so len(suffix) == visual width
 
-	innerW := v.width - 6
-	if innerW < 20 {
-		innerW = 20
-	}
+	innerW := max(v.width-6, 20)
 	// prefix = icon + space + " " before name
 	prefixW := 3
-	nameW := innerW - prefixW - len(suffix) - 1 // -1 for space between name and suffix
-	if nameW < 3 {
-		nameW = 3
-	}
+	nameW := max(
+		// -1 for space between name and suffix
+		innerW-prefixW-len(suffix)-1, 3)
 
 	name := srv.Name
 	if len(name) > nameW {
@@ -424,10 +410,7 @@ func (v *MCPView) renderToolDetail(b *strings.Builder, t *MCPToolItem, maxLines 
 	var lines []string
 
 	// Available text width inside border+padding
-	wrapWidth := v.width - 8
-	if wrapWidth < 20 {
-		wrapWidth = 20
-	}
+	wrapWidth := max(v.width-8, 20)
 
 	// Tool name
 	lines = append(lines, mcpDetailFieldName.Render(fmt.Sprintf("  %s", t.Name)))
@@ -553,7 +536,7 @@ func (v *MCPView) prepareMessage(maxW, maxLines int) (msg string, lineCount int)
 	}
 
 	var all []string
-	for _, raw := range strings.Split(v.message, "\n") {
+	for raw := range strings.SplitSeq(v.message, "\n") {
 		all = append(all, wrapLines(raw, maxW)...)
 	}
 	if len(all) > maxLines {

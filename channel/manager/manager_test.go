@@ -11,9 +11,9 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/skill"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/channel"
 	sesspkg "github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -730,7 +730,8 @@ func TestSlashCommand_StringRepresentation(t *testing.T) {
 	assert.Equal(t, "thread-1", cmd.ThreadID)
 }
 
-func newInt64Ptr(v int64) *int64 { return &v }
+//go:fix inline
+func newInt64Ptr(v int64) *int64 { return new(v) }
 
 func TestBuildUserMessageWithAttachments_NoAttachments(t *testing.T) {
 	msg := channel.IncomingMessage{
@@ -971,8 +972,8 @@ func TestHandleModelCommand_List(t *testing.T) {
 
 	assert.Contains(t, resp, "Configured models (3)")
 	assert.Contains(t, resp, "* gpt-5.2")     // active
-	assert.Contains(t, resp, " claude-haiku")  // not active, no star
-	assert.Contains(t, resp, " deepseek")      // not active, no star
+	assert.Contains(t, resp, " claude-haiku") // not active, no star
+	assert.Contains(t, resp, " deepseek")     // not active, no star
 	assert.Contains(t, resp, "Type: openai  Model: gpt-5.2")
 	assert.Contains(t, resp, "Type: anthropic  Model: claude-3-5-haiku-20241022")
 	assert.Contains(t, resp, "/model <name> to switch")

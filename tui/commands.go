@@ -704,10 +704,7 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 	if lastInput == 0 {
 		lastInput = u.InputTokens
 	}
-	cacheMissInput := lastInput - u.CacheReadInputTokens
-	if cacheMissInput < 0 {
-		cacheMissInput = 0
-	}
+	cacheMissInput := max(lastInput-u.CacheReadInputTokens, 0)
 	if cacheMissInput != lastInput {
 		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", agent.FormatTokens(cacheMissInput)))
 	}

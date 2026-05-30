@@ -1,6 +1,7 @@
 package weixin
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -449,12 +450,13 @@ func TestFilterMarkdown_OnlyNewlines(t *testing.T) {
 }
 
 func TestFilterMarkdown_VeryLongInput(t *testing.T) {
-	longText := "word "
+	var longText strings.Builder
+	longText.WriteString("word ")
 	for range 1000 {
-		longText += "word "
+		longText.WriteString("word ")
 	}
-	got := filterMarkdown(longText)
-	if got != longText {
+	got := filterMarkdown(longText.String())
+	if got != longText.String() {
 		t.Errorf("long input should pass through unchanged")
 	}
 }

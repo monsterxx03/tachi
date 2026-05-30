@@ -10,7 +10,7 @@ func TestManagerCleanup_BelowLimit(t *testing.T) {
 	mgr.SetMaxKeep(5)
 
 	// Create 3 sessions — should not trigger cleanup
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
@@ -32,7 +32,7 @@ func TestManagerCleanup_ExceedsLimit(t *testing.T) {
 	mgr.SetMaxKeep(3)
 
 	// Create 5 sessions — should trigger cleanup, retaining 3
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
@@ -54,7 +54,7 @@ func TestManagerCleanup_ZeroMaxKeep(t *testing.T) {
 	mgr.SetMaxKeep(0) // no cleanup
 
 	// Create 5 sessions — should not trigger cleanup
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		_, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
@@ -77,7 +77,7 @@ func TestManagerCleanup_PreservesNewest(t *testing.T) {
 
 	// Create 4 sessions
 	var sessionIDs []string
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		sess, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
@@ -141,7 +141,7 @@ func TestManagerCleanup_ExplicitNoop(t *testing.T) {
 	mgr := NewManagerWithStore(store)
 	mgr.SetMaxKeep(100)
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
@@ -168,7 +168,7 @@ func TestManagerCleanup_PreservesChannelSessions(t *testing.T) {
 	// Create 5 sessions. Mark some with ThreadID to simulate
 	// active channel threads.
 	var channelIDs []string
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		sess, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
@@ -218,7 +218,7 @@ func TestManagerCleanup_RemovesClearedThreadSessions(t *testing.T) {
 	mgr.SetMaxKeep(1)
 
 	// Create 3 sessions, all with ThreadID.
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		_, err := mgr.New("openai", "gpt-4", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)

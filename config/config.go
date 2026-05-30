@@ -306,12 +306,12 @@ func toBool(v any) bool {
 // MemoryConfig holds configuration for the pluggable memory system.
 // Type selects the backend: "" (disabled), "mem9", or "agentmemory".
 type MemoryConfig struct {
-	Type               string          `yaml:"type"`                // "mem9" or "agentmemory" or "" (disabled)
-	Timeout            time.Duration   `yaml:"timeout" default:"10s"` // context deadline for Store/Recall/Forget
-	ToolResultMaxLen   int             `yaml:"tool_result_max_len"` // max chars for tool result in memory (default 8000, 0 = no limit)
-	Mem9               Mem9SubConfig   `yaml:"mem9"`
-	AgentMemory        AgentMemorySubConfig `yaml:"agentmemory"`
-	ExcludeRepos       []string        `yaml:"exclude_repos"` // git repo roots to skip memory writes
+	Type             string               `yaml:"type"`                  // "mem9" or "agentmemory" or "" (disabled)
+	Timeout          time.Duration        `yaml:"timeout" default:"10s"` // context deadline for Store/Recall/Forget
+	ToolResultMaxLen int                  `yaml:"tool_result_max_len"`   // max chars for tool result in memory (default 8000, 0 = no limit)
+	Mem9             Mem9SubConfig        `yaml:"mem9"`
+	AgentMemory      AgentMemorySubConfig `yaml:"agentmemory"`
+	ExcludeRepos     []string             `yaml:"exclude_repos"` // git repo roots to skip memory writes
 }
 
 // AgentMemorySubConfig holds agentmemory-specific configuration.
@@ -627,9 +627,4 @@ func (c *Config) GetMaxIterations() int {
 		return DefaultMaxIterations
 	}
 	return *c.MaxIterations
-}
-
-// intPtr returns a pointer to the given int. Helper for config initialization.
-func intPtr(v int) *int {
-	return &v
 }

@@ -96,8 +96,8 @@ func (m *Model) buildMCPServerItems() []MCPServerItem {
 
 		// 1. Collect registered tools (already loaded into LLM)
 		for _, schema := range m.agent.ToolSchemas() {
-			if strings.HasPrefix(schema.Name, prefix) {
-				toolName := strings.TrimPrefix(schema.Name, prefix)
+			if after, ok := strings.CutPrefix(schema.Name, prefix); ok {
+				toolName := after
 				item := schemaToItem(toolName, schema.Description, schema.Parameters)
 				item.Deferred = false
 				tools = append(tools, item)

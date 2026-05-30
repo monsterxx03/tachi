@@ -3,6 +3,7 @@ package pathtrie
 import (
 	"fmt"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"testing"
@@ -216,7 +217,7 @@ func TestSearchPrefixScoped(t *testing.T) {
 
 func TestSearchTopN(t *testing.T) {
 	var ps []string
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		ps = append(ps, fmt.Sprintf("dir/file_%03d.txt", i))
 	}
 	tr := New(ps)
@@ -285,10 +286,10 @@ func TestEmptyQuery(t *testing.T) {
 
 func TestScoreOrdering(t *testing.T) {
 	tr := New(paths(
-		"abc.go",     // depth 5: 22 - 5 = 17
-		"axbxc.go",   // depth 7: 16 - 7 = 9
-		"abx.go",     // depth 5: 16 - 5 = 11
-		"abcdef.go",  // depth 9: 22 - 9 = 13
+		"abc.go",    // depth 5: 22 - 5 = 17
+		"axbxc.go",  // depth 7: 16 - 7 = 9
+		"abx.go",    // depth 5: 16 - 5 = 11
+		"abcdef.go", // depth 9: 22 - 9 = 13
 	))
 
 	got := tr.Search("abc", 10)
@@ -316,12 +317,7 @@ func TestWalkPrefixExactCase(t *testing.T) {
 var _ = reflect.TypeOf
 
 func contains(ss []string, s string) bool {
-	for _, x := range ss {
-		if x == s {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ss, s)
 }
 
 func TestPathTrieSiblings(t *testing.T) {
@@ -391,7 +387,7 @@ func TestSearchResultCount(t *testing.T) {
 	// Fork a copy of the trie and ensure result count matches FileCount when
 	// query matches everything.
 	var ps []string
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		ps = append(ps, fmt.Sprintf("x/file_%d.go", i))
 	}
 	tr := New(ps)
@@ -438,7 +434,7 @@ func TestInsert_EmptyPathsIgnored(t *testing.T) {
 
 func BenchmarkBuild(b *testing.B) {
 	var ps []string
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		ps = append(ps, fmt.Sprintf("src/module/sub/pkg/file_%04d.go", i))
 	}
 	b.ResetTimer()
@@ -449,7 +445,7 @@ func BenchmarkBuild(b *testing.B) {
 
 func BenchmarkSearch(b *testing.B) {
 	var ps []string
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		ps = append(ps, fmt.Sprintf("src/module/sub/pkg/file_%04d.go", i))
 	}
 	tr := New(ps)
@@ -461,7 +457,7 @@ func BenchmarkSearch(b *testing.B) {
 
 func BenchmarkSearchPrefixScoped(b *testing.B) {
 	var ps []string
-	for i := 0; i < 5000; i++ {
+	for i := range 5000 {
 		ps = append(ps, fmt.Sprintf("src/module/sub/pkg/file_%04d.go", i))
 	}
 	tr := New(ps)
@@ -478,7 +474,7 @@ func BenchmarkSearchWeirdChars(b *testing.B) {
 		"foo/.hidden",
 		"foo/@special.go",
 	}
-	for i := 0; i < 500; i++ {
+	for i := range 500 {
 		ps = append(ps, fmt.Sprintf("src/file_%04d.go", i))
 	}
 	tr := New(ps)

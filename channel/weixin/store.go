@@ -211,10 +211,5 @@ func (s *stateStore) isUserAllowed(accountID, userID string) bool {
 	if err != nil {
 		return false
 	}
-	for _, u := range data.AllowFrom {
-		if u == userID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(data.AllowFrom, userID)
 }
