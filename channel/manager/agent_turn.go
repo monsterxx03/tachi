@@ -293,6 +293,8 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	sm, diskHistory := m.prepareThreadSession(msg.ThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
+		// Notify memory backend when a new session was created
+		aiAgent.StartSessionMemory()
 	}
 
 	// Use the in-memory cached history when available (normal turns).

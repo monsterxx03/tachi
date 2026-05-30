@@ -1,6 +1,6 @@
 # agentmemory 集成方案
 
-> 版本: 1.0 | 日期: 2026-05-29 | 状态: 设计阶段
+> 版本: 1.1 | 日期: 2026-05-30 | 状态: 已实现
 > 关联: [Memory 设计](./2026-05-17-memory.md)
 > 关联: [agentmemory GitHub](https://github.com/rohitg00/agentmemory)
 
@@ -65,7 +65,7 @@ Tachi 当前已有两个记忆后端：
 ### 1.3 关键设计原则
 
 1. **纯 HTTP，不管理进程生命周期** — Tachi 只通过 HTTP 调用 agentmemory，不负责启动/停止。用户自己 `npx @agentmemory/agentmemory` 或者 Docker 部署
-2. **利用现有 `memory.Backend` 接口** — 新增一个 `agentmemory` 后端实现，agent loop 代码一行不改
+2. **利用现有 `memory.Backend` 接口** — 新增一个 `agentmemory` 后端实现，通过新增 `StoreScopeStart` scope 来通知 session 开始，不修改 Backend 接口签名
 3. **现有 turn 级 hook 已够用** — 工具执行点 (`tool_executor.go`) 当前没有 memory 集成，但现有的 `storeTurnMemory`（每次回复后）+ `storeCompactMemory`（压缩前）+ `storeSessionMemory`（会话结束）三级写入已经覆盖了主要记忆场景
 
 ---
@@ -388,7 +388,7 @@ Tachi 现有代码中，下面这些 hook 点**不需要修改**，接入 `agent
 | 每次用户消息 | `systemreminder` 框架 | `Backend.Recall()` | `POST /smart-search` | **0** |
 | `/forget` 命令 | TUI 命令处理 | `Backend.Forget()` | `DELETE /forget/:id` | **0** |
 
-**真正需要改的只有 3 处，全部在配置/工厂层：**
+**真正需要改的只有 4 处，全部在配置/工厂层：**
 
 | # | 文件 | 改动 | 行数 |
 |:-:|:-----|:-----|:----:|
@@ -398,6 +398,48 @@ Tachi 现有代码中，下面这些 hook 点**不需要修改**，接入 `agent
 | 4 | `config/config.go` | 加 `AgentMemory` 配置结构 | +8 |
 | 5 | `agent/agent_configure.go` | 透传 AgentMemory 配置 | +2 |
 | **总计** | | | **~233 行** |
+
+### 4.3 StartSession 集成（StoreScopeStart）
+
+`StartSession` 在 client 层已实现（`POST /agentmemory/session/start`），但之前未被任何调用方使用。v1 集成方案：
+
+1. **`agent/memory/memory.go`**: 新增 `StoreScopeStart StoreScope = "start"` 常量
+2. **`agent/memory/agentmemory_backend.go`**: `Store()` 中 `case StoreScopeStart` → 调用 `client.StartSession(sessionID, project, cwd)`
+3. **`agent/agent_memory.go`**: 新增 `StartSessionMemory()` 方法，用 goroutine 异步调用 `Backend.Store(StoreScopeStart)`
+4. **`agent/agent_loop.go`**: `RunConversationStream` 中 session 创建后调用 `a.StartSessionMemory()`
+5. **`agent/agent_configure.go`**: `ResumeSession` 中 session 加载后调用 `a.StartSessionMemory()`
+6. **`channel/manager/agent_turn.go`** + **`channel/manager/cron.go`**: `SetSessionManager` 后调用 `agent.StartSessionMemory()`
+
+`resolveProject()` 和 `resolveCWD()` 辅助函数放在 `agentmemory_backend.go` 中——project 来自 git repo root basename，cwd 来自 `os.Getwd()`。
+
+调用链路：
+
+```
+TUI: RunConversationStream
+  → sessionManager.New()        ← 创建 Tachi session
+  → StartSessionMemory()
+    → Backend.Store(StoreScopeStart)
+      → AgentMemoryBackend.Store(StoreScopeStart)
+        → client.StartSession()  ← POST /agentmemory/session/start
+
+Channel: prepareThreadSession
+  → sm.New()                     ← 创建 Tachi session
+  → SetSessionManager(sm)
+  → agent.StartSessionMemory()
+    → ... (同上)
+
+Resume: ResumeSession
+  → sm.Load()                    ← 加载已有 session
+  → sessionManager = sm
+  → StartSessionMemory()
+    → ... (同上)
+```
+
+| 触发时机 | 调用位置 | 映射到 agentmemory API |
+|:---------|:---------|:----------------------|
+| 新 session 创建后 | `RunConversationStream` | `POST /session/start` |
+| 频道新 thread 首次消息 | `agent_turn.go` / `cron.go` | `POST /session/start` |
+| 恢复已有 session | `ResumeSession` | `POST /session/start` |
 
 ---
 

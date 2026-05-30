@@ -331,5 +331,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	if cur := a.sessionManager.Current(); cur != nil {
 		a.logger = a.logger.WithSessionID(cur.ID)
 	}
+	// Notify memory backend that the resumed session is active
+	a.StartSessionMemory()
 	return llmMsgs, sessionMsgs, latest, nil
 }

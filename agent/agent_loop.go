@@ -210,6 +210,8 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			if cur := a.sessionManager.Current(); cur != nil {
 				a.logger = a.logger.WithSessionID(cur.ID)
 			}
+			// Notify memory backend that a new session has started
+			a.StartSessionMemory()
 		}
 		if a.sessionManager != nil {
 			// Record the original user message (without system-reminder wrappers)

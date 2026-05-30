@@ -3,6 +3,9 @@ package memory
 import (
 	"context"
 	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +33,7 @@ type AgentMemoryConfig struct {
 
 // Store writes memory to agentmemory. It delegates to the appropriate
 // agentmemory API based on the StoreScope:
+//   - StoreScopeStart:                   POST /agentmemory/session/start
 //   - StoreScopeTurn/StoreScopeCompact: POST /agentmemory/remember
 //   - StoreScopeSession:                 POST /agentmemory/session/end
 func (b *AgentMemoryBackend) Store(ctx context.Context, opts StoreOptions) error {
@@ -37,6 +41,9 @@ func (b *AgentMemoryBackend) Store(ctx context.Context, opts StoreOptions) error
 	defer cancel()
 
 	switch opts.Scope {
+	case StoreScopeStart:
+		return b.client.StartSession(ctx, opts.SessionID, resolveProject(), resolveCWD())
+
 	case StoreScopeTurn, StoreScopeCompact:
 		content := b.formatMessages(opts)
 		if content == "" {
@@ -154,5 +161,32 @@ func parseTimestamp(ts string) int64 {
 		return n
 	}
 	return 0
+}
+
+// resolveProject returns the project identifier for agentmemory's session/start
+// endpoint. It uses the git repo root if available, falling back to the hostname.
+func resolveProject() string {
+	if name := projectFromGit(); name != "" {
+		return name
+	}
+	return "unknown"
+}
+
+// resolveCWD returns the current working directory.
+func resolveCWD() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return cwd
+}
+
+// projectFromGit returns the git repo root basename (e.g. "tachi").
+func projectFromGit() string {
+	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
+	if err != nil {
+		return ""
+	}
+	return filepath.Base(strings.TrimSpace(string(out)))
 }
 

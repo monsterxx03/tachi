@@ -51,6 +51,31 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 	return nil
 }
 
+// StartSessionMemory notifies the memory backend that a new session has begun.
+// Called after session creation in RunConversationStream and ResumeSession.
+// No-ops when memory is not configured.
+func (a *AIAgent) StartSessionMemory() {
+	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	sess := a.sessionManager.Current()
+	if sess == nil {
+		return
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
+		defer cancel()
+		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+			Scope:     memory.StoreScopeStart,
+			SessionID: sess.ID,
+			Tags:      withRepoTag(nil),
+		}); err != nil {
+			a.logger.Log("Memory(start): start session failed: %v", err)
+		}
+	}()
+}
+
 // collectTurnMessages extracts the last user message from the conversation
 // history and pairs it with the current assistant response text.
 func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory.Message {

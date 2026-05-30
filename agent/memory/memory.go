@@ -29,6 +29,7 @@ const (
 	StoreScopeTurn    StoreScope = "turn"    // after each conversation turn completes
 	StoreScopeCompact StoreScope = "compact" // before context compaction
 	StoreScopeSession StoreScope = "session" // at session end
+	StoreScopeStart   StoreScope = "start"   // at session creation (notify backend)
 )
 
 // StoreOptions controls Store behavior.
