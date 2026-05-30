@@ -86,9 +86,8 @@ type AIAgent struct {
 	// Memory-related fields
 	memory *MemoryState // nil = memory not enabled
 
-	// Tool configs (set by Configure before RegisterTools)
-	webSearchCfg config.WebSearchConfig
-	webFetchCfg  config.WebFetchConfig
+	// Config reference (set by Configure — used by RegisterTools and sub-systems)
+	cfg *config.Config
 
 	// MCP ToolSearch fields are owned by mcpManager. The agent reads them via
 	// mcpManager.Pool() / mcpManager.DiscoveredSet() rather than holding its
@@ -283,22 +282,24 @@ func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.AskUserTool{})
 
 	// WebSearch — only register if provider + key are configured
-	ws := tools.WebSearchTool{
-		ProviderType: a.webSearchCfg.Type,
-		APIKey:       a.webSearchCfg.Key,
-		Timeout:      a.webSearchCfg.Timeout,
-		MaxResults:   a.webSearchCfg.MaxResults,
-		Proxy:        a.webSearchCfg.Proxy,
-	}
-	if _, key := ws.ResolveProvider(); key != "" {
-		a.toolRegistry.Register(&ws)
-	}
+	if a.cfg != nil {
+		ws := tools.WebSearchTool{
+			ProviderType: a.cfg.WebSearch.Type,
+			APIKey:       a.cfg.WebSearch.Key,
+			Timeout:      a.cfg.WebSearch.Timeout,
+			MaxResults:   a.cfg.WebSearch.MaxResults,
+			Proxy:        a.cfg.WebSearch.Proxy,
+		}
+		if _, key := ws.ResolveProvider(); key != "" {
+			a.toolRegistry.Register(&ws)
+		}
 
-	// WebFetch — always registered, no API key needed.
-	a.toolRegistry.Register(&tools.WebFetchTool{
-		Timeout: a.webFetchCfg.Timeout,
-		Proxy:   a.webFetchCfg.Proxy,
-	})
+		// WebFetch — always registered, no API key needed.
+		a.toolRegistry.Register(&tools.WebFetchTool{
+			Timeout: a.cfg.WebFetch.Timeout,
+			Proxy:   a.cfg.WebFetch.Proxy,
+		})
+	}
 
 	// RecordMemory / MemoryRecall — only when memory backend is configured
 	if a.memory != nil {

@@ -69,8 +69,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.initSkills()
 
 	// --- built-in tools + web search ---
-	a.webSearchCfg = cfg.WebSearch
-	a.webFetchCfg = cfg.WebFetch
+	a.cfg = cfg
 	a.RegisterTools()
 
 	// --- MCP servers (async) ---
