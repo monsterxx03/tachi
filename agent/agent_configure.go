@@ -116,10 +116,11 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	}
 	a.RegisterTool(&wf)
 
-	// --- RecordMemory tool (only when memory backend is configured) ---
+	// --- RecordMemory / MemoryRecall tools (only when memory backend is configured) ---
 	if a.memoryBackend != nil {
 		a.RegisterTool(tools.NewRecordMemoryTool(a))
-		a.logger.Log("Memory: RecordMemory tool registered")
+		a.RegisterTool(tools.NewMemoryRecallTool(a))
+		a.logger.Log("Memory: RecordMemory and MemoryRecall tools registered")
 	}
 
 	// --- MCP servers (async) ---

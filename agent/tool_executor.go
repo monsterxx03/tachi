@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -85,6 +86,41 @@ func (a *AIAgent) groupToolCalls(toolCalls []llm.ToolCall) []toolGroup {
 	}
 
 	return groups
+}
+
+// storeToolMemory asynchronously records a tool execution result to the memory
+// backend. No-ops when memory is not configured or no session is active.
+// This provides tool-level granularity (vs turn-level in storeTurnMemory),
+// enabling semantic search across individual tool calls like "那次 ReadFile 读到了什么".
+func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) {
+	if a.memoryBackend == nil || a.sessionManager == nil {
+		return
+	}
+	if a.skipMemory || a.isRepoExcluded() {
+		return
+	}
+	sess := a.sessionManager.Current()
+	if sess == nil {
+		return
+	}
+
+	content := fmt.Sprintf("Tool %s (input: %s) → %s", toolName, input, output)
+	if isError {
+		content = fmt.Sprintf("Tool %s failed: %s (input: %s)", toolName, output, input)
+	}
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
+			Scope:         memory.StoreScopeTurn,
+			SessionID:     sess.ID,
+			Tags:          []string{"tool:" + toolName},
+			DirectContent: content,
+		}); err != nil {
+			a.logger.Log("Memory(tool): store failed for %s: %v", toolName, err)
+		}
+	}()
 }
 
 // executeToolCalls is the main entry point for tool execution. It groups
@@ -217,6 +253,13 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
 		})
+
+		// Store tool execution in memory for semantic search (parallel path)
+		toolOutput := tr.Output
+		if tr.Err != nil {
+			toolOutput = tr.Err.Error()
+		}
+		a.storeToolMemory(tc.Function.Name, tc.Function.Arguments, toolOutput, toolMsg.IsError)
 
 		toolMsgs = append(toolMsgs, toolMsg)
 	}
@@ -387,6 +430,13 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
 		})
+
+		// Store tool execution in memory for semantic search (sequential path)
+		toolOutput := tr.Output
+		if tr.Err != nil {
+			toolOutput = tr.Err.Error()
+		}
+		a.storeToolMemory(tc.Function.Name, tc.Function.Arguments, toolOutput, toolMsg.IsError)
 
 		toolMsgs = append(toolMsgs, toolMsg)
 	}

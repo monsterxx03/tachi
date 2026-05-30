@@ -16,13 +16,15 @@ import (
 // AgentMemoryBackend implements the Backend interface by storing memories
 // in an agentmemory server via HTTP.
 type AgentMemoryBackend struct {
-	client *agentmemory.Client
+	client  *agentmemory.Client
+	timeout time.Duration
 }
 
 // NewAgentMemoryBackend creates a new AgentMemoryBackend.
 func NewAgentMemoryBackend(cfg Config) (*AgentMemoryBackend, error) {
 	return &AgentMemoryBackend{
-		client: agentmemory.NewClient(cfg.AgentMemory.APIURL, cfg.Timeout),
+		client:  agentmemory.NewClient(cfg.AgentMemory.APIURL, cfg.Timeout),
+		timeout: cfg.Timeout,
 	}, nil
 }
 
@@ -37,7 +39,7 @@ type AgentMemoryConfig struct {
 //   - StoreScopeTurn/StoreScopeCompact: POST /agentmemory/remember
 //   - StoreScopeSession:                 POST /agentmemory/session/end
 func (b *AgentMemoryBackend) Store(ctx context.Context, opts StoreOptions) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 
 	switch opts.Scope {
@@ -66,7 +68,7 @@ func (b *AgentMemoryBackend) Store(ctx context.Context, opts StoreOptions) error
 // Recall searches agentmemory for memories semantically relevant to the query.
 // It uses agentmemory's hybrid retrieval (BM25 + vector + knowledge graph).
 func (b *AgentMemoryBackend) Recall(ctx context.Context, query string, limit int) ([]Entry, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 
 	if query == "" {
@@ -94,7 +96,7 @@ func (b *AgentMemoryBackend) Recall(ctx context.Context, query string, limit int
 
 // Forget deletes a memory entry from agentmemory by its ID.
 func (b *AgentMemoryBackend) Forget(ctx context.Context, id string) error {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
 	defer cancel()
 	return b.client.Forget(ctx, id)
 }

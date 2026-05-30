@@ -19,6 +19,37 @@ func (a *AIAgent) MemoryBackend() memory.Backend {
 	return a.memoryBackend
 }
 
+// RecallMemory implements tools.MemoryRecaller. It searches the memory
+// backend for memories semantically relevant to the query and returns
+// a human-readable summary. Returns an error if memory is not configured.
+func (a *AIAgent) RecallMemory(ctx context.Context, query string, limit int) (string, error) {
+	if a.memoryBackend == nil {
+		return "", fmt.Errorf("memory backend not configured")
+	}
+
+	entries, err := a.memoryBackend.Recall(ctx, query, limit)
+	if err != nil {
+		return "", err
+	}
+
+	if len(entries) == 0 {
+		return `{"query":"` + query + `","limit":` + fmt.Sprintf("%d", limit) + `,"results":[],"message":"No relevant memories found."}`, nil
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("Found %d relevant memories:\n\n", len(entries)))
+	for i, e := range entries {
+		sb.WriteString(fmt.Sprintf("--- Memory %d (relevance: %.2f) ---\n", i+1, e.Score))
+		if e.SessionID != "" {
+			sb.WriteString(fmt.Sprintf("Session: %s\n", e.SessionID))
+		}
+		sb.WriteString(e.Content)
+		sb.WriteString("\n")
+	}
+
+	return sb.String(), nil
+}
+
 // RecordMemory implements tools.MemoryRecorder. It persists an explicit
 // LLM-initiated memory to the memory backend, associated with the current
 // session. Returns an error if memory is not configured or no session is active.
