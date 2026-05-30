@@ -125,7 +125,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	}
 
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), a.memoryTimeout)
 		defer cancel()
 		cwd, _ := os.Getwd()
 		if err := a.memoryBackend.Observe(ctx, memory.ObserveOptions{

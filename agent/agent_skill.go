@@ -92,6 +92,7 @@ func (a *AIAgent) rebuildSkillCollector() {
 		all = append(all, systemreminder.MemoryRecallReminder{
 			Backend: a.memoryBackend,
 			Limit:   5,
+			Timeout: a.memoryTimeout,
 		})
 	}
 

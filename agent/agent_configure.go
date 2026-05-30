@@ -51,12 +51,13 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 
 	// --- Memory backend (before skills — rebuildSkillCollector reads a.memoryBackend) ---
 	if cfg.Memory.Type != "" {
-		// Parse timeouts from config strings, with sensible defaults
-		timeout := 10 * time.Second
-		if cfg.Memory.Timeout != "" {
-			if d, err := time.ParseDuration(cfg.Memory.Timeout); err == nil && d > 0 {
-				timeout = d
-			}
+		// Parse timeout from config (default:"10s" applied by defaults.Set)
+		var timeout time.Duration
+		if d, err := time.ParseDuration(cfg.Memory.Timeout); err == nil {
+			timeout = d
+		}
+		if timeout <= 0 {
+			timeout = 10 * time.Second
 		}
 		reqTimeout := 15 * time.Second
 		if cfg.Memory.Mem9.RequestTimeout != "" {

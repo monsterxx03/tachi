@@ -441,9 +441,14 @@ func escapeXMLAttr(s string) string {
 // Calls Backend.Recall() which performs vector semantic search for mem9.
 // Implements TaggedReminder so output is wrapped in <relevant-memories>
 // rather than mixed into <system-reminder>.
+//
+// Timeout controls the maximum duration of the Recall call. A timeout of 0
+// or less defaults to 3 seconds — recall is best-effort and should not delay
+// the conversation flow.
 type MemoryRecallReminder struct {
 	Backend memory.Backend // nil = memory not configured
 	Limit   int            // max recall results (default 5)
+	Timeout time.Duration  // recall timeout (0 = default 3s)
 }
 
 // WrapperTag implements the TaggedReminder interface.
@@ -477,7 +482,17 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 		limit = 5
 	}
 
-	entries, err := r.Backend.Recall(context.Background(), ctx.CurrentPrompt, limit)
+	// Recall is best-effort — use a short timeout so it never blocks the
+	// conversation flow. If the backend is slow or unreachable, the LLM
+	// simply won't get memory context on this turn.
+	recallTimeout := r.Timeout
+	if recallTimeout <= 0 {
+		recallTimeout = 3 * time.Second
+	}
+	recallCtx, cancel := context.WithTimeout(context.Background(), recallTimeout)
+	defer cancel()
+
+	entries, err := r.Backend.Recall(recallCtx, ctx.CurrentPrompt, limit)
 	if err != nil {
 		debuglog.DefaultLogger.Log("MemoryRecall: recall failed: %v", err)
 		return nil
