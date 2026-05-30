@@ -69,6 +69,25 @@ type Backend interface {
 
 	// Forget deletes a memory by ID. Used by /forget command.
 	Forget(ctx context.Context, id string) error
+
+	// Observe records a contextual observation to the memory backend.
+	// Used by the agent to log tool execution results as structured events
+	// with a hook type indicating the nature of the observation.
+	// The mem9 backend implements this as a no-op.
+	Observe(ctx context.Context, opts ObserveOptions) error
+}
+
+// ObserveOptions controls Observe behavior.
+type ObserveOptions struct {
+	HookType    string // e.g. "post_tool_use", "post_tool_failure"
+	SessionID   string // session identifier
+	Project     string // project name (git repo root basename)
+	CWD         string // current working directory
+	ToolName    string // tool that was executed
+	ToolInput   string // tool invocation arguments
+	ToolOutput  string // tool result or error message
+	IsError     bool   // whether the tool execution failed
+	Timestamp   string // ISO 8601 timestamp
 }
 
 // Config is the common configuration for memory backends.

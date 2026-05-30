@@ -118,6 +118,26 @@ func (c *Client) SmartSearch(ctx context.Context, query string, limit int) ([]Me
 	return result.Results, nil
 }
 
+// ObservePayload is the request body for recording a tool observation.
+// Field names use camelCase per agentmemory's JSON API convention.
+type ObservePayload struct {
+	HookType  string `json:"hookType"`
+	SessionID string `json:"sessionId"`
+	Project   string `json:"project"`
+	CWD       string `json:"cwd"`
+	Timestamp string `json:"timestamp"`
+	Data      any    `json:"data,omitempty"`
+}
+
+// Observe records a contextual observation (e.g. tool use) to agentmemory.
+// The hookType determines how the observation is classified:
+//   - "post_tool_use":     successful tool execution
+//   - "post_tool_failure": failed tool execution
+func (c *Client) Observe(ctx context.Context, p ObservePayload) error {
+	body, _ := json.Marshal(p)
+	return c.doPost(ctx, "/agentmemory/observe", body, nil)
+}
+
 // Forget deletes a memory entry by its ID.
 // agentmemory expects POST /agentmemory/forget with {"memoryId": id}.
 func (c *Client) Forget(ctx context.Context, id string) error {

@@ -170,6 +170,12 @@ func (b *Mem9Backend) Forget(ctx context.Context, id string) error {
 	return b.doRequest(ctx, "DELETE", u, nil, nil)
 }
 
+// Observe is a no-op for the mem9 backend. mem9 uses Store for turn-level
+// memory and does not support per-tool-call observation events.
+func (b *Mem9Backend) Observe(ctx context.Context, opts ObserveOptions) error {
+	return nil
+}
+
 // filterMessages applies content filtering to messages before uploading:
 //   - Discards entire batch if any user message is trivial (hello, 你好, etc.)
 //   - Strips injected <relevant-memories> blocks (prevents memory recursion)

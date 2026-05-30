@@ -101,6 +101,56 @@ func (b *AgentMemoryBackend) Forget(ctx context.Context, id string) error {
 	return b.client.Forget(ctx, id)
 }
 
+// Observe records a tool observation to agentmemory via POST /agentmemory/observe.
+// This provides per-tool-call observability for the agentmemory backend,
+// enabling semantic search and dashboard tracking of tool usage.
+// The mem9 backend ignores Observe (no-op for memory consistency).
+func (b *AgentMemoryBackend) Observe(ctx context.Context, opts ObserveOptions) error {
+	ctx, cancel := context.WithTimeout(ctx, b.timeout)
+	defer cancel()
+
+	hookType := opts.HookType
+	if hookType == "" {
+		hookType = "post_tool_use"
+	}
+
+	timestamp := opts.Timestamp
+	if timestamp == "" {
+		timestamp = time.Now().UTC().Format(time.RFC3339)
+	}
+
+	project := opts.Project
+	if project == "" {
+		project = resolveProject()
+	}
+
+	cwd := opts.CWD
+	if cwd == "" {
+		cwd = resolveCWD()
+	}
+
+	// Build the data payload with tool execution details
+	data := map[string]any{
+		"toolName":  opts.ToolName,
+		"toolInput": opts.ToolInput,
+	}
+
+	if opts.IsError {
+		data["error"] = opts.ToolOutput
+	} else {
+		data["toolOutput"] = opts.ToolOutput
+	}
+
+	return b.client.Observe(ctx, agentmemory.ObservePayload{
+		HookType:  hookType,
+		SessionID: opts.SessionID,
+		Project:   project,
+		CWD:       cwd,
+		Timestamp: timestamp,
+		Data:      data,
+	})
+}
+
 // formatMessages formats StoreOptions into a plain-text representation
 // suitable for storing in agentmemory. It strips noise blocks and memory
 // tags from content before formatting.

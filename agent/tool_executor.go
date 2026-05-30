@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -89,9 +90,11 @@ func (a *AIAgent) groupToolCalls(toolCalls []llm.ToolCall) []toolGroup {
 }
 
 // storeToolMemory asynchronously records a tool execution result to the memory
-// backend. No-ops when memory is not configured or no session is active.
-// This provides tool-level granularity (vs turn-level in storeTurnMemory),
-// enabling semantic search across individual tool calls like "那次 ReadFile 读到了什么".
+// backend via the Observe API. No-ops when memory is not configured or no
+// session is active.
+//
+// On success, hookType is set to "post_tool_use".
+// On failure, hookType is set to "post_tool_failure".
 //
 // input and output are truncated to memoryToolResultMaxLen (in runes, default 8000)
 // before storing, to keep memory entries at a reasonable size. UTF-8 safe —
@@ -116,21 +119,27 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 	input = truncateString(input, maxLen)
 	output = truncateString(output, maxLen)
 
-	content := fmt.Sprintf("Tool %s (input: %s) → %s", toolName, input, output)
+	hookType := "post_tool_use"
 	if isError {
-		content = fmt.Sprintf("Tool %s failed: %s (input: %s)", toolName, output, input)
+		hookType = "post_tool_failure"
 	}
 
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
-		if err := a.memoryBackend.Store(ctx, memory.StoreOptions{
-			Scope:         memory.StoreScopeTurn,
-			SessionID:     sess.ID,
-			Tags:          []string{"tool:" + toolName},
-			DirectContent: content,
+		cwd, _ := os.Getwd()
+		if err := a.memoryBackend.Observe(ctx, memory.ObserveOptions{
+			HookType:   hookType,
+			SessionID:  sess.ID,
+			Project:    getRepoName(),
+			CWD:        cwd,
+			ToolName:   toolName,
+			ToolInput:  input,
+			ToolOutput: output,
+			IsError:    isError,
+			Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
-			a.logger.Log("Memory(tool): store failed for %s: %v", toolName, err)
+			a.logger.Log("Memory(tool): observe failed for %s: %v", toolName, err)
 		}
 	}()
 }
