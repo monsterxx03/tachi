@@ -84,6 +84,25 @@ func usageToSession(u *llm.Usage) *session.Usage {
 	}
 }
 
+// recordAssistantTurn persists an assistant response (text, usage, thinking
+// blocks) to the session store. Safe to call with zero values.
+func (a *AIAgent) recordAssistantTurn(text string, usage *llm.Usage, thinkBlocks []llm.ThinkingBlock) {
+	for _, tb := range thinkBlocks {
+		a.recordSession(&session.Message{
+			Type:      session.MessageTypeThinking,
+			Content:   tb.Thinking,
+			Signature: tb.Signature,
+		})
+	}
+	if text != "" || usage != nil {
+		a.recordSession(&session.Message{
+			Type:    session.MessageTypeAssistant,
+			Content: text,
+			Usage:   usageToSession(usage),
+		})
+	}
+}
+
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, opts llm.ChatOptions) *RunResult {
 	ch := a.RunConversationStream(ctx, nil, userMessage, systemPrompt, opts)
 	var result *RunResult
@@ -282,12 +301,7 @@ func (a *AIAgent) runAgentLoop(
 	apiCallCount := 0
 	lengthContinueRetries := 0
 
-	// Initialize iteration budget.
-	if a.maxIterations == 0 {
-		a.iterationBudget = &IterationBudget{Unlimited: true}
-	} else {
-		a.iterationBudget = &IterationBudget{Remaining: a.maxIterations}
-	}
+	a.iterationBudget = NewIterationBudget(a.maxIterations)
 
 	for {
 		if !a.iterationBudget.consume() {
@@ -341,40 +355,6 @@ func (a *AIAgent) runAgentLoop(
 		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
 			return
 		}
-
-		// --- Steer Point: inject pending user input after tool results ---
-		// Only trigger after tool calls (not length continuation), to avoid
-		// consecutive user messages in providers that require alternating roles.
-		if (acc.finishReason == "tool_calls" || acc.finishReason == "tool_use") && a.steerRespCh != nil {
-			ch <- AgentEvent{Type: AgentEventSteerCheck}
-			select {
-			case steerText := <-a.steerRespCh:
-				if steerText != "" {
-					// Use internal "steer" role — provider converters handle this
-					// differently based on API protocol requirements:
-					//   - Anthropic: merged into tool_result user message as text block
-					//   - OpenAI: mapped to "user" role (no alternation conflict)
-					messages = append(messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
-					a.logger.Log("Agent: steer: injected RoleSteer msg, steerText=%q", truncateForLog(steerText, 80))
-					a.recordSession(&session.Message{
-						Type:    session.MessageTypeUser,
-						Content: steerText,
-					})
-				}
-			case <-ctx.Done():
-				return
-			}
-		}
-
-		// After tool results, inject system-reminder warnings.
-		if a.shouldInjectLoopReminder() {
-			a.estimateAndUpdateTokens(messages)
-			rctx := a.buildReminderContext(false, true)
-			if block := a.reminderCollector.Collect(rctx); block != "" {
-				messages = append(messages, llm.Message{Role: "user", Content: block})
-				a.logger.Log("Agent: loop reminder injected, block=%q", truncateForLog(block, 200))
-			}
-		}
 	}
 }
 
@@ -388,161 +368,181 @@ func (a *AIAgent) handleFinishReason(
 	apiCallCount int,
 	lengthRetries *int,
 ) bool {
-	const maxLengthContinueRetries = 3
-
 	switch acc.finishReason {
 	case "tool_calls", "tool_use":
-		// Record thinking blocks in session
-		for _, tb := range acc.thinkBlocks {
-			a.recordSession(&session.Message{
-				Type:      session.MessageTypeThinking,
-				Content:   tb.Thinking,
-				Signature: tb.Signature,
-			})
-		}
-		// Record assistant response with usage (always record when we have text or usage)
-		if acc.text.Len() > 0 || acc.usage != nil {
-			a.recordSession(&session.Message{
-				Type:    session.MessageTypeAssistant,
-				Content: acc.text.String(),
-				Usage:   usageToSession(acc.usage),
-			})
-		}
-
-		*messages = append(*messages, acc.assistantMessage())
-
-		// Emit incremental usage update after each tool-call API round
-		// so the TUI can update totalUsage and status bar in real time.
-		if acc.usage != nil {
-			ch <- AgentEvent{Type: AgentEventUsage, Usage: acc.usage}
-		}
-
-		toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
-		if err != nil {
-			ch <- AgentEvent{
-				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "cancelled", Error: err},
-			}
-			return false
-		}
-		a.logger.Log("Agent: executeToolCalls returned %d tool messages for %d tool calls",
-			len(toolMsgs), len(acc.toolCalls))
-		*messages = append(*messages, toolMsgs...)
-		*lengthRetries = 0
-		return true
-
+		return a.handleToolCallFinish(ctx, acc, messages, ch, apiCallCount, lengthRetries)
 	case "max_tokens", "length":
-		*lengthRetries++
-		a.logger.Log("Agent: text=%s, finish_reason=%s, continuation retry %d/%d", acc.text.String(), acc.finishReason, *lengthRetries, maxLengthContinueRetries)
+		return a.handleLengthFinish(ctx, acc, messages, ch, apiCallCount, lengthRetries)
+	default:
+		return a.handleStopFinish(ctx, acc, messages, ch, apiCallCount, lengthRetries)
+	}
+}
 
-		// Record thinking blocks in session
-		for _, tb := range acc.thinkBlocks {
-			a.recordSession(&session.Message{
-				Type:      session.MessageTypeThinking,
-				Content:   tb.Thinking,
-				Signature: tb.Signature,
-			})
-		}
-		// Record partial assistant response with usage
-		if acc.text.Len() > 0 || acc.usage != nil {
-			a.recordSession(&session.Message{
-				Type:    session.MessageTypeAssistant,
-				Content: acc.text.String(),
-				Usage:   usageToSession(acc.usage),
-			})
-		}
+// handleToolCallFinish processes a tool-call response: records the assistant
+// turn, executes tools, handles steer input, and injects loop reminders.
+func (a *AIAgent) handleToolCallFinish(
+	ctx context.Context,
+	acc *streamAccumulator,
+	messages *[]llm.Message,
+	ch chan<- AgentEvent,
+	apiCallCount int,
+	lengthRetries *int,
+) bool {
+	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
-		// Append the assistant message to history so it is preserved for
-		// session resume — whether we continue or stop exhausted.
-		msg := acc.assistantMessage()
-		// API protocol requires every tool_use to be paired with a
-		// tool_result; truncated tool calls that were never executed cannot
-		// satisfy this constraint, so we drop them and guide the model to
-		// retry via the context-aware continuation prompt below.
-		if len(msg.ToolCalls) > 0 {
-			msg.ToolCalls = nil
-		}
-		*messages = append(*messages, msg)
+	*messages = append(*messages, acc.assistantMessage())
 
-		if *lengthRetries >= maxLengthContinueRetries {
-			a.logger.Log("Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
-			// Return the partial output as a normal turn completion instead
-			// of an error — the user already saw the text streaming, and
-			// discarding it (or showing a red error) is worse than delivering
-			// what we have with a note that it was truncated.
-			ch <- AgentEvent{
-				Type:     AgentEventTurnComplete,
-				Messages: *messages,
-				Usage:    acc.usage,
-				Result: &RunResult{
-					Response:       acc.text.String(),
-					IterationsUsed: apiCallCount,
-					ExitReason:     "length_exhausted",
-					Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
-					Usage:          acc.usage,
-				},
+	// Emit incremental usage update after each tool-call API round
+	// so the TUI can update totalUsage and status bar in real time.
+	if acc.usage != nil {
+		ch <- AgentEvent{Type: AgentEventUsage, Usage: acc.usage}
+	}
+
+	toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
+	if err != nil {
+		ch <- AgentEvent{
+			Type:   AgentEventError,
+			Result: &RunResult{ExitReason: "cancelled", Error: err},
+		}
+		return false
+	}
+	a.logger.Log("Agent: executeToolCalls returned %d tool messages for %d tool calls",
+		len(toolMsgs), len(acc.toolCalls))
+	*messages = append(*messages, toolMsgs...)
+	*lengthRetries = 0
+
+	// --- Steer Point: inject pending user input after tool results ---
+	if a.steerRespCh != nil {
+		ch <- AgentEvent{Type: AgentEventSteerCheck}
+		select {
+		case steerText := <-a.steerRespCh:
+			if steerText != "" {
+				*messages = append(*messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
+				a.logger.Log("Agent: steer: injected RoleSteer msg, steerText=%q", truncateForLog(steerText, 80))
+				a.recordSession(&session.Message{
+					Type:    session.MessageTypeUser,
+					Content: steerText,
+				})
 			}
-
-			// Store turn-level memory after a truncated response
-			a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
-
+		case <-ctx.Done():
 			return false
 		}
+	}
 
-		// Record continuation prompt (original, unwrapped)
-		var continuationText string
-		if len(acc.toolCalls) > 0 {
-			continuationText = "Your previous tool call was interrupted by the output token limit. Please retry the tool call."
-		} else if len(acc.thinkBlocks) > 0 && acc.text.Len() == 0 {
-			continuationText = "Please continue with your response. Break your output into smaller chunks to avoid hitting the output token limit."
-		} else {
-			continuationText = "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
-		}
-		a.recordSession(&session.Message{
-			Type:    session.MessageTypeUser,
-			Content: continuationText,
-		})
+	// --- Loop Reminders: inject iteration/token warnings ---
+	a.estimateAndUpdateTokens(*messages)
+	rctx := a.buildReminderContext(false, true)
+	if block := a.reminderCollector.Collect(rctx); block != "" {
+		*messages = append(*messages, llm.Message{Role: "user", Content: block})
+		a.logger.Log("Agent: loop reminder injected, block=%q", truncateForLog(block, 200))
+	}
 
-		// Wrap the continuation message with reminders
-		rctx := a.buildReminderContext(false, false)
-		wrappedContinuation := a.reminderCollector.WrapUserMessage(continuationText, rctx)
+	return true
+}
 
-		*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
-		return true
+const maxLengthContinueRetries = 3
 
-	default:
-		*lengthRetries = 0
-		msg := acc.assistantMessage()
+// handleLengthFinish processes a truncated (length/max_tokens) response:
+// records partial output, appends a continuation prompt, and handles
+// exhaustion after too many retries.
+func (a *AIAgent) handleLengthFinish(
+	ctx context.Context,
+	acc *streamAccumulator,
+	messages *[]llm.Message,
+	ch chan<- AgentEvent,
+	apiCallCount int,
+	lengthRetries *int,
+) bool {
+	*lengthRetries++
+	a.logger.Log("Agent: text=%s, finish_reason=%s, continuation retry %d/%d", acc.text.String(), acc.finishReason, *lengthRetries, maxLengthContinueRetries)
+
+	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
+
+	// Append the assistant message to history so it is preserved for
+	// session resume — whether we continue or stop exhausted.
+	msg := acc.assistantMessage()
+	// API protocol requires every tool_use to be paired with a
+	// tool_result; truncated tool calls that were never executed cannot
+	// satisfy this constraint, so we drop them and guide the model to
+	// retry via the context-aware continuation prompt below.
+	if len(msg.ToolCalls) > 0 {
 		msg.ToolCalls = nil
-		*messages = append(*messages, msg)
+	}
+	*messages = append(*messages, msg)
 
-		// Record thinking blocks in session
-		for _, tb := range acc.thinkBlocks {
-			a.recordSession(&session.Message{
-				Type:      session.MessageTypeThinking,
-				Content:   tb.Thinking,
-				Signature: tb.Signature,
-			})
-		}
-		// Record assistant response with usage
-		if acc.text.Len() > 0 || acc.usage != nil {
-			a.recordSession(&session.Message{
-				Type:    session.MessageTypeAssistant,
-				Content: acc.text.String(),
-				Usage:   usageToSession(acc.usage),
-			})
-		}
-
+	if *lengthRetries >= maxLengthContinueRetries {
+		a.logger.Log("Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
+		// Return the partial output as a normal turn completion instead
+		// of an error — the user already saw the text streaming, and
+		// discarding it (or showing a red error) is worse than delivering
+		// what we have with a note that it was truncated.
 		ch <- AgentEvent{
-			Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-			Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop", Usage: acc.usage},
+			Type:     AgentEventTurnComplete,
+			Messages: *messages,
+			Usage:    acc.usage,
+			Result: &RunResult{
+				Response:       acc.text.String(),
+				IterationsUsed: apiCallCount,
+				ExitReason:     "length_exhausted",
+				Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+				Usage:          acc.usage,
+			},
 		}
 
-		// Store turn-level memory after a complete response
+		// Store turn-level memory after a truncated response
 		a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
 
 		return false
 	}
+
+	// Record continuation prompt (original, unwrapped)
+	var continuationText string
+	if len(acc.toolCalls) > 0 {
+		continuationText = "Your previous tool call was interrupted by the output token limit. Please retry the tool call."
+	} else if len(acc.thinkBlocks) > 0 && acc.text.Len() == 0 {
+		continuationText = "Please continue with your response. Break your output into smaller chunks to avoid hitting the output token limit."
+	} else {
+		continuationText = "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
+	}
+	a.recordSession(&session.Message{
+		Type:    session.MessageTypeUser,
+		Content: continuationText,
+	})
+
+	// Wrap the continuation message with reminders
+	rctx := a.buildReminderContext(false, false)
+	wrappedContinuation := a.reminderCollector.WrapUserMessage(continuationText, rctx)
+
+	*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
+	return true
+}
+
+// handleStopFinish processes a normal stop response: records the assistant
+// turn, emits TurnComplete, and stores turn-level memory.
+func (a *AIAgent) handleStopFinish(
+	ctx context.Context,
+	acc *streamAccumulator,
+	messages *[]llm.Message,
+	ch chan<- AgentEvent,
+	apiCallCount int,
+	lengthRetries *int,
+) bool {
+	*lengthRetries = 0
+	msg := acc.assistantMessage()
+	msg.ToolCalls = nil
+	*messages = append(*messages, msg)
+
+	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
+
+	ch <- AgentEvent{
+		Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop", Usage: acc.usage},
+	}
+
+	// Store turn-level memory after a complete response
+	a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
+
+	return false
 }
 
 // filterActiveSchemas filters tool schemas for the LLM API call.
@@ -636,12 +636,4 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		IsToolResult:    isToolResult,
 		SkipRecall:      a.memory != nil && a.memory.SkipRecall,
 	}
-}
-
-// shouldInjectLoopReminder returns true when we should inject a
-// system-reminder user message before the next API call.
-// Currently true whenever iteration or token warnings are likely to be
-// active. The actual filtering is done by Collect().
-func (a *AIAgent) shouldInjectLoopReminder() bool {
-	return a.reminderCollector != nil
 }

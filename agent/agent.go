@@ -37,6 +37,15 @@ func (b *IterationBudget) consume() bool {
 	return false
 }
 
+// NewIterationBudget creates a new iteration budget. When maxIterations is 0,
+// the budget is unlimited (conversation mode). Otherwise it has a fixed cap.
+func NewIterationBudget(maxIterations int) *IterationBudget {
+	if maxIterations == 0 {
+		return &IterationBudget{Unlimited: true}
+	}
+	return &IterationBudget{Remaining: maxIterations}
+}
+
 // PermissionMode controls how tool confirmation requests are handled.
 type PermissionMode int
 
@@ -139,13 +148,6 @@ func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent
 		confirmRespCh:   make(chan bool, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		logger:          debuglog.DefaultLogger,
-		reminderCollector: systemreminder.NewCollector(
-			systemreminder.DateReminder{},
-			systemreminder.ProjectContextReminder{},
-			systemreminder.GitReminder{},
-			systemreminder.IterationWarningReminder{Threshold: 5},
-			systemreminder.TokenWarningReminder{ThresholdPct: 80},
-		),
 	}
 }
 
