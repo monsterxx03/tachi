@@ -118,6 +118,13 @@ func (a *AIAgent) RunOneOffStream(
 
 	go func() {
 		defer close(ch)
+
+		// Save and restore lastInputTokens so one-off calls don't
+		// pollute the main conversation's context estimate (used by
+		// TokenWarningReminder and the TUI statusbar context fraction).
+		savedTokens := a.lastInputTokens
+		defer func() { a.lastInputTokens = savedTokens }()
+
 		if a.memory != nil {
 			defer func() { a.memory.SkipWrites = false }()
 			a.memory.SkipWrites = true // suppress memory writes for one-off runs (e.g. /commit, /init)
@@ -142,7 +149,6 @@ func (a *AIAgent) RunOneOffStream(
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
-		a.estimateAndUpdateTokens(messages)
 		a.runAgentLoop(ctx, provider, messages, opts, ch)
 	}()
 
