@@ -136,14 +136,16 @@ func (s StatusBar) buildUsageRight() string {
 		parts = append(parts, costStyle.Render(costStr))
 	}
 
-	// Context usage: show accumulated input tokens as fraction of context window.
-	// InputTokens accumulates across all API calls in the session (each tool-call
-	// round re-sends the full history), so it grows monotonically. This gives a
-	// rough "total tokens consumed" picture rather than per-call context size.
-	if s.totalUsage != nil && s.totalUsage.InputTokens > 0 && s.contextWindow > 0 {
-		pct := float64(s.totalUsage.InputTokens) / float64(s.contextWindow) * 100
+	// Context usage: show the most recent per-call input token estimate
+	// as a fraction of the context window. Unlike InputTokens (which
+	// accumulates across all API calls in the session and grows
+	// monotonically), LastInputTokens reflects the true per-call context
+	// size — the number of tokens sent in the most recent API request,
+	// estimated locally before the call.
+	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 && s.contextWindow > 0 {
+		pct := float64(s.totalUsage.LastInputTokens) / float64(s.contextWindow) * 100
 		ctxStr := fmt.Sprintf("ctx: %s/%s %s",
-			agent.FormatTokens(s.totalUsage.InputTokens),
+			agent.FormatTokens(s.totalUsage.LastInputTokens),
 			agent.FormatTokens(s.contextWindow),
 			formatPercent(pct))
 		parts = append(parts, usageColorStyle(pct).Render(ctxStr))

@@ -194,7 +194,6 @@ func (DateReminder) Generate(ctx Context) []string {
 		return nil
 	}
 	line := fmt.Sprintf("Current date: %s", ctx.Now.Format("Monday, January 2, 2006 15:04:05 MST"))
-	debuglog.DefaultLogger.Log("systemreminder: DateReminder firing: %q", line)
 	return []string{line}
 }
 

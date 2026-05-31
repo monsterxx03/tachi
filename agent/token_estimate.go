@@ -69,11 +69,13 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []
 // estimateAndUpdateTokens estimates the total input tokens for the current
 // messages and updates a.lastInputTokens so that buildReminderContext and
 // TokenWarningReminder see the current (not previous-turn) context size.
+// Also updates a.lastInputEstimate for the TUI statusbar context fraction.
 func (a *AIAgent) estimateAndUpdateTokens(messages []llm.Message) {
 	schemas := a.filterActiveSchemas(a.toolRegistry.GetSchemas())
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content
 	}
-	a.lastInputTokens = estimateInputTokens(messages, systemPrompt, schemas)
+	est := estimateInputTokens(messages, systemPrompt, schemas)
+	a.lastInputTokens = est
 }

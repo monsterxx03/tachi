@@ -68,7 +68,7 @@ type AIAgent struct {
 	sessionManager     *session.Manager
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
-	lastInputTokens    int64
+	lastInputTokens    int64 // local token estimate (conservative), set by estimateAndUpdateTokens
 	lastMessageDate    string       // calendar date (2006-01-02) of last processed user message; empty initially
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
@@ -228,6 +228,14 @@ func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 // SetContextWindow sets the model's context window size for token-warning reminders.
 func (a *AIAgent) SetContextWindow(window int64) {
 	a.contextWindow = window
+}
+
+// LastInputEstimate returns the local token estimate for the most recent
+// API call, computed by estimateAndUpdateTokens before the call. This is
+// deliberately conservative (overestimates) and is used for both
+// token-warning reminders and the TUI statusbar context fraction.
+func (a *AIAgent) LastInputEstimate() int64 {
+	return a.lastInputTokens
 }
 
 // ContextWindow returns the model's context window size.

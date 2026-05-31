@@ -45,6 +45,12 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventUsage:
 		// Incremental usage update after each tool-call API round.
 		m.accumulateUsage(event.Usage)
+		// Update LastInputTokens from the local estimate (per-call context size)
+		// instead of accumulating, so the statusbar shows the true per-call
+		// context fraction rather than the monotonically growing total.
+		if est := m.agent.LastInputEstimate(); est > 0 {
+			m.totalUsage.LastInputTokens = est
+		}
 		return m.nextEvent()
 
 	case agent.AgentEventToolConfirmation:
@@ -164,8 +170,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 			// Update usage (compact LLM call's tokens count toward the session)
 			m.accumulateUsage(event.Usage)
-			if event.Usage != nil {
-				m.totalUsage.LastInputTokens = event.Usage.InputTokens
+			if est := m.agent.LastInputEstimate(); est > 0 {
+				m.totalUsage.LastInputTokens = est
 			}
 
 			// Rebuild chatview for the new session
@@ -196,7 +202,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			// don't overwrite the context-usage numerator (LastInputTokens) so the
 			// statusbar continues showing the main conversation's context fraction.
 			if !isOneOff {
-				m.totalUsage.LastInputTokens = event.Usage.InputTokens
+				if est := m.agent.LastInputEstimate(); est > 0 {
+					m.totalUsage.LastInputTokens = est
+				}
 			}
 		}
 		if m.savedTools != nil {

@@ -332,11 +332,6 @@ func (a *AIAgent) runAgentLoop(
 			return
 		}
 
-		// Track input tokens for token-warning reminders
-		if acc.usage != nil {
-			a.lastInputTokens = acc.usage.InputTokens
-		}
-
 		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
 			return
 		}
@@ -501,11 +496,6 @@ func (a *AIAgent) handleFinishReason(
 			Type:    session.MessageTypeUser,
 			Content: continuationText,
 		})
-
-		// Track input tokens for token-warning reminders
-		if acc.usage != nil {
-			a.lastInputTokens = acc.usage.InputTokens
-		}
 
 		// Wrap the continuation message with reminders
 		rctx := a.buildReminderContext(false, false)
