@@ -79,7 +79,19 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		return m.handleTranscriptCommand(cmd.ThreadID, cmd.Args), nil
 	default:
 		m.logger.Log("channel: unknown slash command: %s (thread=%s)", cmd.Name, cmd.ThreadID)
-		return textHandlerResult(fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n  /new — Start a new conversation\n  /mcp — List configured MCP servers\n  /mcp auth <server> — Start OAuth authorization for an MCP server\n  /model — List or switch provider/model\n  /skill — List or activate skills\n  /usage — Show session usage stats\n  /compact — Compress conversation history\n  /cron — List cron jobs\n  /v — Toggle verbose tool call output\n  /stop — Stop the current LLM turn", cmd.Name)), nil
+		// Build available commands list from shared registry.
+		var help strings.Builder
+		help.WriteString(fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n", cmd.Name))
+		for _, def := range cmds.ForMode(cmds.ModeChannel) {
+			switch def.Name {
+			case "mcp":
+				help.WriteString(fmt.Sprintf("  /%-12s — %s\n", def.Name, def.Description))
+				help.WriteString("  /mcp auth <server> — Start OAuth authorization for an MCP server\n")
+			default:
+				help.WriteString(fmt.Sprintf("  /%-12s — %s\n", def.Name, def.Description))
+			}
+		}
+		return textHandlerResult(help.String()), nil
 	}
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -31,63 +32,36 @@ type ACPSlashCommand struct {
 }
 
 // ---------------------------------------------------------------------------
-// Command registry
+// Command handler registry
 // ---------------------------------------------------------------------------
 
-var acpCommands = []ACPSlashCommand{
-	{
-		Name:        "commit",
-		Description: "Generate commit message for staged changes and commit via git",
-		Handler:     handleACPCommit,
-	},
-	{
-		Name:        "init",
-		Description: "Generate .tachi.md project context file",
-		Handler:     handleACPInit,
-	},
-	{
-		Name:        "compact",
-		Description: "Compress conversation history into a summary and start fresh",
-		Handler:     handleACPCompact,
-	},
-	{
-		Name:        "usage",
-		Description: "Show token usage, cost, and tool call statistics",
-		Handler:     handleACPUsage,
-	},
-	{
-		Name:        "mcp",
-		Description: "Manage MCP servers (list, reconnect)",
-		InputHint:   "list | reconnect <name>",
-		Handler:     handleACPMCP,
-	},
-	{
-		Name:        "skill",
-		Description: "List or activate skills",
-		InputHint:   "list | <name> [args]",
-		Handler:     handleACPSkill,
-	},
-	{
-		Name:        "transcript",
-		Description: "Generate session transcript report",
-		Handler:     handleACPTranscript,
-	},
+var acpCommandHandlers = map[string]func(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error){
+	"commit":    handleACPCommit,
+	"init":      handleACPInit,
+	"compact":   handleACPCompact,
+	"usage":     handleACPUsage,
+	"mcp":       handleACPMCP,
+	"skill":     handleACPSkill,
+	"transcript": handleACPTranscript,
 }
 
 // buildACPAvailableCommands builds the ACP AvailableCommand list from the
-// static command registry, plus dynamic skill commands from the skill store.
+// shared cmds.Registry filtered for ACP mode, plus dynamic skill commands.
 func buildACPAvailableCommands(aiAgent *agent.AIAgent) []acp.AvailableCommand {
-	result := make([]acp.AvailableCommand, 0, len(acpCommands)+16)
+	result := make([]acp.AvailableCommand, 0, len(acpCommandHandlers)+16)
 
-	// Static commands
-	for _, cmd := range acpCommands {
-		ac := acp.AvailableCommand{
-			Name:        cmd.Name,
-			Description: cmd.Description,
+	// Static commands from shared registry
+	for _, def := range cmds.ForMode(cmds.ModeACP) {
+		if _, ok := acpCommandHandlers[def.Name]; !ok {
+			continue
 		}
-		if cmd.InputHint != "" {
+		ac := acp.AvailableCommand{
+			Name:        def.Name,
+			Description: def.Description,
+		}
+		if def.InputHint != "" {
 			ac.Input = &acp.AvailableCommandInput{
-				Unstructured: &acp.UnstructuredCommandInput{Hint: cmd.InputHint},
+				Unstructured: &acp.UnstructuredCommandInput{Hint: def.InputHint},
 			}
 		}
 		result = append(result, ac)
@@ -157,25 +131,41 @@ func parseSlashCommand(msg string, aiAgent *agent.AIAgent) (*ACPSlashCommand, st
 	return nil, ""
 }
 
-// findACPCommand finds a command by exact name match.
+// findACPCommand finds a command by exact name match from the shared registry.
 func findACPCommand(name string) *ACPSlashCommand {
-	for _, cmd := range acpCommands {
-		if cmd.Name == name {
-			return &cmd
-		}
+	def := cmds.Find(name)
+	if def == nil || !slices.Contains(def.Modes, cmds.ModeACP) {
+		return nil
 	}
-	return nil
+	h, ok := acpCommandHandlers[name]
+	if !ok {
+		return nil
+	}
+	return &ACPSlashCommand{
+		Name:        def.Name,
+		Description: def.Description,
+		InputHint:   def.InputHint,
+		Handler:     h,
+	}
 }
 
 // findACPCommandByPrefix finds a command that is a prefix of the input
-// (e.g., "/mcp" matches "/mcp list").
+// (e.g., "mcp" matches "mcp list").
 func findACPCommandByPrefix(input string) *ACPSlashCommand {
-	for _, cmd := range acpCommands {
-		if input == cmd.Name || strings.HasPrefix(input, cmd.Name+" ") {
-			return &cmd
-		}
+	def := cmds.FindByPrefix(input)
+	if def == nil || !slices.Contains(def.Modes, cmds.ModeACP) {
+		return nil
 	}
-	return nil
+	h, ok := acpCommandHandlers[def.Name]
+	if !ok {
+		return nil
+	}
+	return &ACPSlashCommand{
+		Name:        def.Name,
+		Description: def.Description,
+		InputHint:   def.InputHint,
+		Handler:     h,
+	}
 }
 
 // makeACPSkillHandler returns a handler function for dynamic skill commands.

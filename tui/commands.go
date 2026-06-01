@@ -30,191 +30,164 @@ type Command struct {
 	handler     func(*Model) tea.Cmd
 }
 
-var commands = []Command{
-	{
-		Name:        "/new",
-		Description: "Start new conversation",
-		handler: func(m *Model) tea.Cmd {
-			m.pendingQueue = nil
-			m.chatview.RemovePendingItems()
-			m.statusbar.SetPendingCount(0)
-			m.agent.StoreSessionMemory()
-			m.history = nil
-			m.chatview.Clear()
-			m.agent.ClearSession()
-			m.statusbar.SetSessionInfo("", "")
-			return nil
-		},
+var commandHandlers = map[string]func(*Model) tea.Cmd{
+	"new": func(m *Model) tea.Cmd {
+		m.pendingQueue = nil
+		m.chatview.RemovePendingItems()
+		m.statusbar.SetPendingCount(0)
+		m.agent.StoreSessionMemory()
+		m.history = nil
+		m.chatview.Clear()
+		m.agent.ClearSession()
+		m.statusbar.SetSessionInfo("", "")
+		return nil
 	},
-	{
-		Name:        "/quit",
-		Description: "Exit tachi",
-		handler: func(m *Model) tea.Cmd {
-			m.agent.StoreSessionMemory()
-			return tea.Quit
-		},
+	"quit": func(m *Model) tea.Cmd {
+		m.agent.StoreSessionMemory()
+		return tea.Quit
 	},
-	{
-		Name:        "/model",
-		Description: "Switch provider/model",
-		handler: func(m *Model) tea.Cmd {
-			cfg := m.cfg
-			if cfg == nil {
-				freshCfg, err := config.Load()
-				if err != nil {
-					m.chatview.AddMessage(chatMessage{
-						Role:    "assistant",
-						Content: "No providers configured in ~/.tachi/config.yaml",
-					})
-					return nil
-				}
-				cfg = freshCfg
-				m.cfg = cfg
-			}
-			if len(cfg.Providers) == 0 {
+	"model": func(m *Model) tea.Cmd {
+		cfg := m.cfg
+		if cfg == nil {
+			freshCfg, err := config.Load()
+			if err != nil {
 				m.chatview.AddMessage(chatMessage{
 					Role:    "assistant",
 					Content: "No providers configured in ~/.tachi/config.yaml",
 				})
 				return nil
 			}
-			m.providerItems = cfg.Providers
-			m.providerSelIdx = 0
-			m.setState(stateSelectingModel)
-			m.layout()
+			cfg = freshCfg
+			m.cfg = cfg
+		}
+		if len(cfg.Providers) == 0 {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "No providers configured in ~/.tachi/config.yaml",
+			})
 			return nil
-		},
+		}
+		m.providerItems = cfg.Providers
+		m.providerSelIdx = 0
+		m.setState(stateSelectingModel)
+		m.layout()
+		return nil
 	},
-	{
-		Name:        "/commit",
-		Description: "Ask LLM to write commit message and commit via Bash (git)",
-		handler: func(m *Model) tea.Cmd {
-			return m.sendCommitCommand()
-		},
+	"commit": func(m *Model) tea.Cmd {
+		return m.sendCommitCommand()
 	},
-	{
-		Name:        "/compact",
-		Description: "Compress conversation history into a summary and start a fresh session",
-		handler: func(m *Model) tea.Cmd {
-			return m.handleCompactCommand()
-		},
+	"compact": func(m *Model) tea.Cmd {
+		return m.handleCompactCommand()
 	},
-	{
-		Name:        "/init",
-		Description: "Generate .tachi.md project context file via LLM",
-		handler: func(m *Model) tea.Cmd {
-			return m.sendInitCommand()
-		},
+	"init": func(m *Model) tea.Cmd {
+		return m.sendInitCommand()
 	},
-	{
-		Name:        "/mcp",
-		Description: "Manage MCP servers (list, toggle, reconnect, auth)",
-		handler: func(m *Model) tea.Cmd {
-			return m.handleMCPCommand()
-		},
+	"mcp": func(m *Model) tea.Cmd {
+		return m.handleMCPCommand()
 	},
-	{
-		Name:        "/sessions",
-		Description: "Browse and reload previous sessions",
-		handler: func(m *Model) tea.Cmd {
-			sm := m.agent.SessionManager()
-			if sm == nil {
-				m.chatview.AddMessage(chatMessage{
-					Role:    "assistant",
-					Content: "No session manager available",
-				})
-				return nil
-			}
-			sessions, err := sm.List()
-			if err != nil {
-				m.chatview.AddMessage(chatMessage{
-					Role:    "assistant",
-					Content: fmt.Sprintf("Failed to list sessions: %v", err),
-				})
-				return nil
-			}
-			if len(sessions) == 0 {
-				m.chatview.AddMessage(chatMessage{
-					Role:    "assistant",
-					Content: "No sessions found",
-				})
-				return nil
-			}
-			m.sessionList = sessions
-			m.sessionSelIdx = 0
-			m.sessionScrollOff = 0
-			// Pre-select the current session if it's in the list
-			if curr := sm.Current(); curr != nil {
-				if idx := slices.IndexFunc(sessions, func(s *session.Session) bool {
-					return s.ID == curr.ID
-				}); idx >= 0 {
-					m.sessionSelIdx = idx
-				}
-			}
-			// Ensure the pre-selected session is visible
-			m.clampSessionScroll()
-			m.setState(stateSelectingSession)
-			m.layout()
+	"sessions": func(m *Model) tea.Cmd {
+		sm := m.agent.SessionManager()
+		if sm == nil {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "No session manager available",
+			})
 			return nil
-		},
+		}
+		sessions, err := sm.List()
+		if err != nil {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: fmt.Sprintf("Failed to list sessions: %v", err),
+			})
+			return nil
+		}
+		if len(sessions) == 0 {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "No sessions found",
+			})
+			return nil
+		}
+		m.sessionList = sessions
+		m.sessionSelIdx = 0
+		m.sessionScrollOff = 0
+		// Pre-select the current session if it's in the list
+		if curr := sm.Current(); curr != nil {
+			if idx := slices.IndexFunc(sessions, func(s *session.Session) bool {
+				return s.ID == curr.ID
+			}); idx >= 0 {
+				m.sessionSelIdx = idx
+			}
+		}
+		// Ensure the pre-selected session is visible
+		m.clampSessionScroll()
+		m.setState(stateSelectingSession)
+		m.layout()
+		return nil
 	},
-	{
-		Name:        "/usage",
-		Description: "Show session ID, token usage, cost, and tool call counts",
-		handler: func(m *Model) tea.Cmd {
-			return m.handleUsageCommand()
-		},
+	"usage": func(m *Model) tea.Cmd {
+		return m.handleUsageCommand()
 	},
-	{
-		Name:        "/skill",
-		Description: "List available skills, activate a skill, or reload skill definitions",
-		handler: func(m *Model) tea.Cmd {
-			return m.handleSkillCommand()
-		},
+	"skill": func(m *Model) tea.Cmd {
+		return m.handleSkillCommand()
 	},
-	{
-		Name:        "/transcript",
-		Description: "Generate session transcript report and open in browser",
-		handler: func(m *Model) tea.Cmd {
-			return m.handleTranscriptCommand()
-		},
+	"transcript": func(m *Model) tea.Cmd {
+		return m.handleTranscriptCommand()
 	},
 }
 
 func matchCommands(prefix string) []Command {
-	if prefix == "/" {
-		out := make([]Command, len(commands))
-		copy(out, commands)
-		return out
-	}
+	stripped := strings.TrimPrefix(prefix, "/")
+	defs := cmds.MatchPrefixForMode(stripped, cmds.ModeTUI)
 	var out []Command
-	for _, cmd := range commands {
-		if strings.HasPrefix(cmd.Name, prefix) {
-			out = append(out, cmd)
+	for _, d := range defs {
+		if h, ok := commandHandlers[d.Name]; ok {
+			out = append(out, Command{
+				Name:        "/" + d.Name,
+				Description: d.Description,
+				handler:     h,
+			})
 		}
 	}
 	return out
 }
 
 func findCommand(name string) *Command {
-	if idx := slices.IndexFunc(commands, func(c Command) bool {
-		return c.Name == name
-	}); idx >= 0 {
-		return &commands[idx]
+	stripped := strings.TrimPrefix(name, "/")
+	def := cmds.Find(stripped)
+	if def == nil || !slices.Contains(def.Modes, cmds.ModeTUI) {
+		return nil
 	}
-	return nil
+	h, ok := commandHandlers[stripped]
+	if !ok {
+		return nil
+	}
+	return &Command{
+		Name:        "/" + def.Name,
+		Description: def.Description,
+		handler:     h,
+	}
 }
 
 // findCommandByPrefix matches commands that are prefixes of the input
 // (e.g., "/mcp" matches "/mcp list", "/mcp toggle foo").
 // Exact matches are preferred; this is used as a fallback.
 func findCommandByPrefix(input string) *Command {
-	if idx := slices.IndexFunc(commands, func(c Command) bool {
-		return input == c.Name || strings.HasPrefix(input, c.Name+" ")
-	}); idx >= 0 {
-		return &commands[idx]
+	stripped := strings.TrimPrefix(input, "/")
+	def := cmds.FindByPrefix(stripped)
+	if def == nil || !slices.Contains(def.Modes, cmds.ModeTUI) {
+		return nil
 	}
-	return nil
+	h, ok := commandHandlers[def.Name]
+	if !ok {
+		return nil
+	}
+	return &Command{
+		Name:        "/" + def.Name,
+		Description: def.Description,
+		handler:     h,
+	}
 }
 
 // mcpCommandTimeout is the timeout for MCP connect/reconnect operations
