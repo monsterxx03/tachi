@@ -120,6 +120,7 @@ type MCPServerConfig struct {
 	// ToolSearch-specific options
 	AlwaysLoadTools []string          `yaml:"always_load_tools,omitempty"` // Tool names to always load (skip ToolSearch)
 	SearchHints     map[string]string `yaml:"search_hints,omitempty"`      // Override search hints: tool_name -> hint
+	Whitelist       []string          `yaml:"whitelist,omitempty"`         // If set, only these tools are loaded from the server; all others are ignored
 
 	// Profile is the MCP profile this server originates from.
 	// Empty string means it came from mcp_servers (always loaded).

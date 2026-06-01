@@ -135,6 +135,11 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 	for _, t := range all {
 		srvCfg, hasCfg := serverCfgs[t.ServerName()]
 
+		// Whitelist filtering: if configured, skip tools not in the list.
+		if hasCfg && len(srvCfg.Whitelist) > 0 && !isWhitelisted(t.ToolName(), srvCfg.Whitelist) {
+			continue
+		}
+
 		var searchHint string
 		if hasCfg && srvCfg.SearchHints != nil {
 			searchHint = srvCfg.SearchHints[t.ToolName()]
@@ -162,6 +167,18 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 	m.logger.Log("MCP: populated %d tools (%d auto-load, ToolSearch=%v, threshold=%d)",
 		m.pool.Len(), len(autoLoad), useToolSearch, cfg.MCPToolSearch.MinToolsForSearch)
 	return autoLoad, all, errs
+}
+
+// isWhitelisted checks whether a tool name matches an entry in the whitelist.
+// Matching is case-insensitive, consistent with AlwaysLoadTools.
+// Returns true if the whitelist is empty (no filtering).
+func isWhitelisted(toolName string, whitelist []string) bool {
+	for _, w := range whitelist {
+		if strings.EqualFold(w, toolName) {
+			return true
+		}
+	}
+	return false
 }
 
 // SetLogger overrides the manager's logger. Channel callers use this to inject

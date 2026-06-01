@@ -280,3 +280,50 @@ func TestManager_ConnectAll_DisabledServers(t *testing.T) {
 
 //go:fix inline
 func boolPtr(b bool) *bool { return new(b) }
+
+func TestIsWhitelisted(t *testing.T) {
+	tests := []struct {
+		name      string
+		toolName  string
+		whitelist []string
+		want      bool
+	}{
+		{
+			name:      "exact match",
+			toolName:  "search_users",
+			whitelist: []string{"search_users", "get_calendar"},
+			want:      true,
+		},
+		{
+			name:      "case insensitive match",
+			toolName:  "Search_Users",
+			whitelist: []string{"search_users"},
+			want:      true,
+		},
+		{
+			name:      "no match",
+			toolName:  "delete_everything",
+			whitelist: []string{"search_users", "get_calendar"},
+			want:      false,
+		},
+		{
+			name:      "empty whitelist — no filtering",
+			toolName:  "anything",
+			whitelist: nil,
+			want:      false, // isWhitelisted returns false for empty list; caller checks len>0
+		},
+		{
+			name:      "partial substring is not a match",
+			toolName:  "search_users_admin",
+			whitelist: []string{"search_users"},
+			want:      false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isWhitelisted(tt.toolName, tt.whitelist)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
