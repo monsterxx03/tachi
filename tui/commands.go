@@ -710,9 +710,19 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 	}
 	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", agent.FormatTokens(u.OutputTokens)))
 	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
-	if report.ContextWindow > 0 && u.InputTokens > 0 {
-		pct := float64(u.InputTokens) / float64(report.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.InputTokens), agent.FormatTokens(report.ContextWindow), pct))
+	if report.ContextWindow > 0 {
+		// Use estimated tokens for context percentage (matches statusbar).
+		// m.totalUsage.LastInputTokens is set from agent.LastInputEstimate()
+		// during events, while report.Usage.LastInputTokens is actual API usage.
+		estInput := m.totalUsage.LastInputTokens
+		if estInput == 0 {
+			estInput = lastInput // fallback to API value (e.g. /usage after session reload)
+		}
+		if estInput > 0 {
+			pct := float64(estInput) / float64(report.ContextWindow) * 100
+			sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
+				agent.FormatTokens(estInput), agent.FormatTokens(report.ContextWindow), pct))
+		}
 	}
 
 	// Cost

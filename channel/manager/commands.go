@@ -538,11 +538,13 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		return "No session found for this thread. Send a message first to start a session.", nil
 	}
 
-	// Resolve price
+	// Resolve price and context window
 	var price *llm.ModelPrice
+	var contextWindow int64
 	_, resolved := m.getProvider()
 	if resolved != nil {
 		model := resolved.Provider.Model
+		contextWindow = resolved.Provider.ContextWindow
 		pCfg := m.cfg.FindProvider(resolved.Provider.Name)
 		if pCfg != nil {
 			price = llm.ResolveModelPrice(model, pCfg.InputPrice, pCfg.OutputPrice, pCfg.CacheReadInputPrice, pCfg.CacheCreationInputPrice)
@@ -552,7 +554,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		}
 	}
 
-	report, err := agent.ComputeSessionUsage(sm, price, 0)
+	report, err := agent.ComputeSessionUsage(sm, price, contextWindow)
 	if err != nil {
 		return fmt.Sprintf("Failed to compute usage: %v", err), nil
 	}
@@ -569,21 +571,34 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 
 	u := report.Usage
 	sb.WriteString("Token Usage:\n")
-	sb.WriteString(fmt.Sprintf("  Input:  %d\n", u.InputTokens))
+	sb.WriteString(fmt.Sprintf("  Input:  %s\n", agent.FormatTokens(u.InputTokens)))
+	if u.LastInputTokens > 0 {
+		sb.WriteString(fmt.Sprintf("  Last input (context):  %s\n", agent.FormatTokens(u.LastInputTokens)))
+	}
 	if u.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache read: %d\n", u.CacheReadInputTokens))
+		sb.WriteString(fmt.Sprintf("  Cache read:  %s\n", agent.FormatTokens(u.CacheReadInputTokens)))
 	}
 	if u.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache created: %d\n", u.CacheCreationInputTokens))
+		sb.WriteString(fmt.Sprintf("  Cache created:  %s\n", agent.FormatTokens(u.CacheCreationInputTokens)))
 	}
-	sb.WriteString(fmt.Sprintf("  Output: %d\n", u.OutputTokens))
-	sb.WriteString(fmt.Sprintf("  Total:  %d\n\n", u.InputTokens+u.OutputTokens))
+	sb.WriteString(fmt.Sprintf("  Output:  %s\n", agent.FormatTokens(u.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("  Total:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
+	lastInput := u.LastInputTokens
+	if lastInput == 0 {
+		lastInput = u.InputTokens
+	}
+	if report.ContextWindow > 0 && lastInput > 0 {
+		pct := float64(lastInput) / float64(report.ContextWindow) * 100
+		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
+			agent.FormatTokens(lastInput), agent.FormatTokens(report.ContextWindow), pct))
+	}
 
+	// Cost
 	if report.Cost > 0 {
-		sb.WriteString(fmt.Sprintf("Cost: ¥%.4f\n\n", report.Cost))
+		sb.WriteString(fmt.Sprintf("\nCost: ¥%.4f\n", report.Cost))
 	}
 
-	sb.WriteString("Tool Calls:\n")
+	sb.WriteString("\nTool Calls:\n")
 	names := slices.Sorted(maps.Keys(report.ToolCalls))
 	for _, name := range names {
 		st := report.ToolCalls[name]
