@@ -69,15 +69,15 @@ func FormatUsageReport(info *UsageReportInfo) string {
 
 	// Token usage
 	sb.WriteString("**Token Usage**\n")
-	sb.WriteString(fmt.Sprintf("  Total input (accumulated): %s\n", formatTokens(info.InputTokens)))
+	sb.WriteString(fmt.Sprintf("  Total input (accumulated): %s\n", FormatTokens(info.InputTokens)))
 	if info.LastInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Last input (context):      %s\n", formatTokens(info.LastInputTokens)))
+		sb.WriteString(fmt.Sprintf("  Last input (context):      %s\n", FormatTokens(info.LastInputTokens)))
 	}
 	if info.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", formatTokens(info.CacheReadInputTokens)))
+		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", FormatTokens(info.CacheReadInputTokens)))
 	}
 	if info.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", formatTokens(info.CacheCreationInputTokens)))
+		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", FormatTokens(info.CacheCreationInputTokens)))
 	}
 	lastInput := info.LastInputTokens
 	if lastInput == 0 {
@@ -85,10 +85,10 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	}
 	cacheMissInput := max(lastInput-info.CacheReadInputTokens, 0)
 	if cacheMissInput != lastInput {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", formatTokens(cacheMissInput)))
+		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", FormatTokens(cacheMissInput)))
 	}
-	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", formatTokens(info.OutputTokens)))
-	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", formatTokens(info.InputTokens+info.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", FormatTokens(info.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", FormatTokens(info.InputTokens+info.OutputTokens)))
 
 	// Context percentage
 	if info.ContextWindow > 0 {
@@ -99,7 +99,7 @@ func FormatUsageReport(info *UsageReportInfo) string {
 		if estInput > 0 {
 			pct := float64(estInput) / float64(info.ContextWindow) * 100
 			sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
-				formatTokens(estInput), formatTokens(info.ContextWindow), pct))
+				FormatTokens(estInput), FormatTokens(info.ContextWindow), pct))
 		}
 	}
 
@@ -227,7 +227,7 @@ func FormatMCPList(servers []MCPServerInfo) string {
 // helpers
 // ---------------------------------------------------------------------------
 
-func formatTokens(n int64) string {
+func FormatTokens(n int64) string {
 	if n >= 1_000_000 {
 		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
 	}

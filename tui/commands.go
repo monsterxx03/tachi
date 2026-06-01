@@ -21,8 +21,8 @@ import (
 )
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md.
-// Deprecated: use agent.InitPromptTemplate instead.
-var InitPromptTemplate = agent.InitPromptTemplate
+// Deprecated: use cmds.InitPromptTemplate instead.
+var InitPromptTemplate = cmds.InitPromptTemplate
 
 type Command struct {
 	Name        string
@@ -177,13 +177,6 @@ var commands = []Command{
 		Description: "Generate session transcript report and open in browser",
 		handler: func(m *Model) tea.Cmd {
 			return m.handleTranscriptCommand()
-		},
-	},
-	{
-		Name:        "/forget",
-		Description: "Forget specific memories (list or <id>)",
-		handler: func(m *Model) tea.Cmd {
-			return m.handleForgetCommand()
 		},
 	},
 }
@@ -767,73 +760,6 @@ func (m *Model) handleTranscriptCommand() tea.Cmd {
 	return nil
 }
 
-// handleForgetCommand handles the /forget slash command.
-// /forget          → list recent memories with IDs
-// /forget <id>     → delete memory with the given ID
-func (m *Model) handleForgetCommand() tea.Cmd {
-	backend := m.agent.MemoryBackend()
-	if backend == nil {
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: "Memory not enabled. Set `memory.type` in ~/.tachi/config.yaml.",
-		})
-		return nil
-	}
-
-	parts := strings.Fields(m.subcommandInput)
-	if len(parts) < 2 || parts[1] == "list" {
-		// List recent memories via recall
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		entries, err := backend.Recall(ctx, "", 20)
-		if err != nil {
-			m.chatview.AddMessage(chatMessage{
-				Role:    "assistant",
-				Content: fmt.Sprintf("Failed to list memories: %v", err),
-			})
-			return nil
-		}
-		if len(entries) == 0 {
-			m.chatview.AddMessage(chatMessage{
-				Role:    "assistant",
-				Content: "No memories found.",
-			})
-			return nil
-		}
-		var sb strings.Builder
-		sb.WriteString("**📝 Memories** (use `/forget <id>` to delete)\n\n")
-		for _, e := range entries {
-			content := e.Content
-			runes := []rune(content)
-			if len(runes) > 80 {
-				content = string(runes[:80]) + "..."
-			}
-			fmt.Fprintf(&sb, "`%s` %s\n", e.ID, content)
-		}
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: sb.String(),
-		})
-		return nil
-	}
-
-	id := parts[1]
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := backend.Forget(ctx, id); err != nil {
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("Failed to forget memory `%s`: %v", id, err),
-		})
-		return nil
-	}
-	m.chatview.AddMessage(chatMessage{
-		Role:    "assistant",
-		Content: fmt.Sprintf("Memory `%s` deleted.", id),
-	})
-	return nil
-}
-
 // ------- Agent-driven commands (trigger LLM conversations) -------
 
 func (m *Model) sendMessage(text string) tea.Cmd {
@@ -907,7 +833,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 
 	m.streamGen++
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
-		agent.CommitUserPrompt(commitModel), commitOpts)
+		cmds.CommitUserPrompt(commitModel), commitOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -927,7 +853,7 @@ func (m *Model) sendInitCommand() tea.Cmd {
 	m.cancelFunc = cancel
 
 	m.streamGen++
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, agent.InitPromptTemplate, m.systemPrompt, m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, cmds.InitPromptTemplate, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -978,7 +904,7 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	m.agent.ClearToolRegistry()
 
 	// 5. Build compact instruction (no history — LLM sees history as context)
-	instruction := agent.BuildCompactInstruction()
+	instruction := cmds.BuildCompactInstruction()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -161,7 +162,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// The LLM will summarize based on its existing session context
 		// without re-sending all history as text.
 		if isCompactCmd {
-			msg.Content = agent.BuildCompactInstruction()
+			msg.Content = cmds.BuildCompactInstruction()
 		}
 
 		// Transform skill activation to the skill's instruction message.

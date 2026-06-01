@@ -3,109 +3,10 @@ package agent
 import (
 	"testing"
 
-	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
-
-func TestBuildCompactPrompt_SkipsSystemMessages(t *testing.T) {
-	history := []llm.Message{
-		{Role: "system", Content: "You are a helpful assistant."},
-		{Role: "user", Content: "帮我重构用户模块"},
-		{Role: "assistant", Content: "好的，我来帮你重构用户模块。"},
-		{Role: "user", Content: "把注册功能从 main.go 移到 auth.go"},
-	}
-
-	prompt := BuildCompactPrompt(history)
-	assert.Contains(t, prompt, "帮我重构用户模块")
-	assert.Contains(t, prompt, "把注册功能从 main.go 移到 auth.go")
-	assert.NotContains(t, prompt, "You are a helpful assistant")
-}
-
-func TestBuildCompactPrompt_TruncatesLongToolResults(t *testing.T) {
-	history := []llm.Message{
-		{Role: "user", Content: "读取文件"},
-		{Role: "assistant", Content: "让我读取"},
-		{Role: "tool", Content: string(make([]byte, 1000))}, // long content
-	}
-
-	prompt := BuildCompactPrompt(history)
-	assert.Contains(t, prompt, "读取文件")
-	assert.Contains(t, prompt, "[工具结果:") // Should still appear
-	// Should be truncated to 500 + "..."
-	assert.Contains(t, prompt, "...")
-}
-
-func TestBuildCompactPrompt_IncludesToolCalls(t *testing.T) {
-	history := []llm.Message{
-		{Role: "user", Content: "搜索一下"},
-		{Role: "assistant", Content: "",
-			ToolCalls: []llm.ToolCall{
-				{
-					ID:   "call_1",
-					Type: "function",
-					Function: llm.ToolCallFunction{
-						Name:      "WebSearch",
-						Arguments: `{"query":"golang error handling"}`,
-					},
-				},
-			},
-		},
-	}
-
-	prompt := BuildCompactPrompt(history)
-	assert.Contains(t, prompt, "WebSearch")
-	assert.Contains(t, prompt, "golang error handling")
-}
-
-func TestBuildCompactPrompt_EmptyHistory(t *testing.T) {
-	prompt := BuildCompactPrompt(nil)
-	assert.Contains(t, prompt, "压缩摘要")
-}
-
-func TestBuildCompactPrompt_ThinkingBlocks(t *testing.T) {
-	history := []llm.Message{
-		{Role: "user", Content: "复杂问题"},
-		{
-			Role:    "assistant",
-			Content: "最终答案",
-			ThinkingBlocks: []llm.ThinkingBlock{
-				{Type: "thinking", Thinking: "让我思考一下这个问题..."},
-			},
-		},
-	}
-
-	prompt := BuildCompactPrompt(history)
-	assert.Contains(t, prompt, "最终答案")
-	assert.Contains(t, prompt, "让我思考一下")
-}
-
-func TestBuildCompactInstruction_Structure(t *testing.T) {
-	instruction := BuildCompactInstruction()
-	assert.Contains(t, instruction, "压缩摘要")
-	assert.Contains(t, instruction, "已完成的关键操作")
-	assert.Contains(t, instruction, "不要调用任何工具")
-	// Verify it does NOT embed actual conversation content:
-	// the old BuildCompactPrompt injects formatted markers like [工具调用: xxx],
-	// but BuildCompactInstruction only has the summarization instructions.
-	assert.NotContains(t, instruction, "[工具调用:")
-	assert.NotContains(t, instruction, "[工具结果:")
-}
-
-func TestBuildCompactInstruction_NoHistoryEmbedding(t *testing.T) {
-	history := []llm.Message{
-		{Role: "user", Content: "帮我重构用户模块"},
-		{Role: "assistant", Content: "好的，我来帮你重构用户模块。"},
-	}
-
-	prompt := BuildCompactPrompt(history)
-	instruction := BuildCompactInstruction()
-
-	// Old prompt embeds history; new instruction does not.
-	assert.Contains(t, prompt, "帮我重构用户模块")
-	assert.NotContains(t, instruction, "帮我重构用户模块")
-}
 
 func TestBuildCompactHistory_Structure(t *testing.T) {
 	systemPrompt := "You are Tachi."

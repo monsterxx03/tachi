@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -335,34 +335,34 @@ func TestStatusBar_View_NoUsageWhenContextWindowZero(t *testing.T) {
 // ---- Token formatting ----
 
 func TestFormatTokens_Zero(t *testing.T) {
-	if got := agent.FormatTokens(0); got != "0" {
+	if got := cmds.FormatTokens(0); got != "0" {
 		t.Errorf("FormatTokens(0) = %q, want %q", got, "0")
 	}
 }
 
 func TestFormatTokens_Small(t *testing.T) {
-	if got := agent.FormatTokens(42); got != "42" {
+	if got := cmds.FormatTokens(42); got != "42" {
 		t.Errorf("FormatTokens(42) = %q, want %q", got, "42")
 	}
 }
 
 func TestFormatTokens_Kilo(t *testing.T) {
-	if got := agent.FormatTokens(1_000); got != "1.0k" {
+	if got := cmds.FormatTokens(1_000); got != "1.0k" {
 		t.Errorf("FormatTokens(1000) = %q, want %q", got, "1.0k")
 	}
-	if got := agent.FormatTokens(2_500); got != "2.5k" {
+	if got := cmds.FormatTokens(2_500); got != "2.5k" {
 		t.Errorf("FormatTokens(2500) = %q, want %q", got, "2.5k")
 	}
-	if got := agent.FormatTokens(128_000); got != "128.0k" {
+	if got := cmds.FormatTokens(128_000); got != "128.0k" {
 		t.Errorf("FormatTokens(128000) = %q, want %q", got, "128.0k")
 	}
 }
 
 func TestFormatTokens_Million(t *testing.T) {
-	if got := agent.FormatTokens(1_000_000); got != "1.0M" {
+	if got := cmds.FormatTokens(1_000_000); got != "1.0M" {
 		t.Errorf("FormatTokens(1000000) = %q, want %q", got, "1.0M")
 	}
-	if got := agent.FormatTokens(2_500_000); got != "2.5M" {
+	if got := cmds.FormatTokens(2_500_000); got != "2.5M" {
 		t.Errorf("FormatTokens(2500000) = %q, want %q", got, "2.5M")
 	}
 }

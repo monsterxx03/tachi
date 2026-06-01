@@ -1,4 +1,4 @@
-package agent
+package commands
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md.
 const InitPromptTemplate = `Create (or improve) a .tachi.md file at the repo root. This file is read by future coding agent instances — write for agents, not humans. Keep it under 200 lines, terse and dense.

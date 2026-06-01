@@ -236,7 +236,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
 
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
-		agent.CommitUserPrompt(model), opts)
+		cmds.CommitUserPrompt(model), opts)
 
 	return streamToACP(ctx, sess, conn, eventCh), nil
 }
@@ -264,7 +264,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 
 	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
 
-	eventCh := sess.agent.RunConversationStream(ctx, history, agent.InitPromptTemplate, systemPrompt,
+	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
 	return streamToACP(ctx, sess, conn, eventCh), nil
@@ -296,7 +296,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	// Run compact turn — use DrainCompactEvents approach (simple, reliable)
 	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
 	eventCh := sess.agent.RunConversationStream(ctx, nil,
-		agent.BuildCompactInstruction(), systemPrompt,
+		cmds.BuildCompactInstruction(), systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens},
 	)
 

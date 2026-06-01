@@ -8,7 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
-	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -145,8 +145,8 @@ func (s StatusBar) buildUsageRight() string {
 	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 && s.contextWindow > 0 {
 		pct := float64(s.totalUsage.LastInputTokens) / float64(s.contextWindow) * 100
 		ctxStr := fmt.Sprintf("ctx: %s/%s %s",
-			agent.FormatTokens(s.totalUsage.LastInputTokens),
-			agent.FormatTokens(s.contextWindow),
+			cmds.FormatTokens(s.totalUsage.LastInputTokens),
+			cmds.FormatTokens(s.contextWindow),
 			formatPercent(pct))
 		parts = append(parts, usageColorStyle(pct).Render(ctxStr))
 	}

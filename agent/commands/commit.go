@@ -1,20 +1,9 @@
-package agent
+package commands
 
 import (
 	"fmt"
 	"strings"
 )
-
-// FormatTokens formats a token count for display (e.g. "1.2k", "3.5M").
-func FormatTokens(n int64) string {
-	if n >= 1_000_000 {
-		return fmt.Sprintf("%.1fM", float64(n)/1_000_000)
-	}
-	if n >= 1_000 {
-		return fmt.Sprintf("%.1fk", float64(n)/1_000)
-	}
-	return fmt.Sprintf("%d", n)
-}
 
 // ModelToCoAuthor converts a model name to a valid Co-authored-by name + email pair.
 // The email local part is the model name lowercased with non-alphanumeric chars replaced by hyphens.
