@@ -3,12 +3,12 @@ package manager
 import (
 	"context"
 	"fmt"
-	"maps"
 	"slices"
 	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
@@ -559,59 +559,30 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		return fmt.Sprintf("Failed to compute usage: %v", err), nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("📊 Session Usage\n\n")
-	sb.WriteString(fmt.Sprintf("Session: %s\n", report.Session.ID))
-	title := report.Session.Title
-	if title == "" {
-		title = "(untitled)"
-	}
-	sb.WriteString(fmt.Sprintf("Title: %s\n", title))
-	sb.WriteString(fmt.Sprintf("Provider: %s | Model: %s\n\n", report.Session.Provider, report.Session.Model))
-
-	u := report.Usage
-	sb.WriteString("Token Usage:\n")
-	sb.WriteString(fmt.Sprintf("  Input:  %s\n", agent.FormatTokens(u.InputTokens)))
-	if u.LastInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Last input (context):  %s\n", agent.FormatTokens(u.LastInputTokens)))
-	}
-	if u.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache read:  %s\n", agent.FormatTokens(u.CacheReadInputTokens)))
-	}
-	if u.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache created:  %s\n", agent.FormatTokens(u.CacheCreationInputTokens)))
-	}
-	sb.WriteString(fmt.Sprintf("  Output:  %s\n", agent.FormatTokens(u.OutputTokens)))
-	sb.WriteString(fmt.Sprintf("  Total:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
-	lastInput := u.LastInputTokens
-	if lastInput == 0 {
-		lastInput = u.InputTokens
-	}
-	if report.ContextWindow > 0 && lastInput > 0 {
-		pct := float64(lastInput) / float64(report.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
-			agent.FormatTokens(lastInput), agent.FormatTokens(report.ContextWindow), pct))
+	// Convert tool call stats to shared type
+	toolCalls := make(map[string]*cmds.ToolCallStat, len(report.ToolCalls))
+	for name, st := range report.ToolCalls {
+		toolCalls[name] = &cmds.ToolCallStat{Count: st.Count, ErrCount: st.ErrCount}
 	}
 
-	// Cost
-	if report.Cost > 0 {
-		sb.WriteString(fmt.Sprintf("\nCost: ¥%.4f\n", report.Cost))
+	info := &cmds.UsageReportInfo{
+		SessionID:                report.Session.ID,
+		Provider:                 report.Session.Provider,
+		Model:                    report.Session.Model,
+		Title:                    report.Session.Title,
+		ContextWindow:            report.ContextWindow,
+		InputTokens:              report.Usage.InputTokens,
+		LastInputTokens:          report.Usage.LastInputTokens,
+		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
+		OutputTokens:             report.Usage.OutputTokens,
+		Cost:                     report.Cost,
+		ToolCalls:                toolCalls,
+		MainCount:                report.MainCount,
+		SubCount:                 report.SubCount,
 	}
 
-	sb.WriteString("\nTool Calls:\n")
-	names := slices.Sorted(maps.Keys(report.ToolCalls))
-	for _, name := range names {
-		st := report.ToolCalls[name]
-		line := fmt.Sprintf("  %s: %d", name, st.Count)
-		if st.ErrCount > 0 {
-			line += fmt.Sprintf(" (%d failed)", st.ErrCount)
-		}
-		sb.WriteString(line + "\n")
-	}
-	sb.WriteString(fmt.Sprintf("\nTotal: %d main + %d subagent = %d call(s)",
-		report.MainCount, report.SubCount, report.MainCount+report.SubCount))
-
-	return sb.String(), nil
+	return cmds.FormatUsageReport(info), nil
 }
 
 // --- /cron ---
@@ -716,28 +687,7 @@ func (m *Manager) handleSkillList() (string, error) {
 	}
 
 	metas := m.skillStore.List()
-	if len(metas) == 0 {
-		return "没有可用的 Skill。\n\n在 `.tachi/skills/<name>/` 或 `~/.tachi/skills/<name>/` 下创建 `SKILL.md` 即可添加。", nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("**可用 Skills:**\n\n")
-
-	for _, meta := range metas {
-		sourceTag := ""
-		if meta.Source == "project" {
-			sourceTag = " 🏠"
-		}
-		sb.WriteString(fmt.Sprintf("- **%s**%s\n", meta.Name, sourceTag))
-		sb.WriteString(fmt.Sprintf("  %s\n", meta.Description))
-		if len(meta.Tags) > 0 {
-			sb.WriteString(fmt.Sprintf("  标签: %s\n", strings.Join(meta.Tags, ", ")))
-		}
-		sb.WriteString(fmt.Sprintf("  使用 `/ %s` 或 `/skill %s` 激活\n\n", meta.Name, meta.Name))
-	}
-	sb.WriteString(fmt.Sprintf("%d 个 skill(s)", len(metas)))
-
-	return sb.String(), nil
+	return cmds.FormatSkillList(metas), nil
 }
 
 // handleSkillReload re-scans skill directories and returns the updated count.
@@ -889,22 +839,12 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 		fileName = "transcript"
 	}
 	htmlFileName := fmt.Sprintf("%s-%s.html", fileName, sess.ID[:8])
-	zipFileName := fmt.Sprintf("%s-%s-transcript.zip", fileName, sess.ID[:8])
 
 	m.logger.Log("channel: transcript generated for session %s (%d bytes)", sess.ID, len(html))
 
-	// Compress the HTML into a zip archive so WeChat (and other IM
-	// platforms that block .html files for security reasons) can
-	// deliver it as a regular file attachment. The user can extract
-	// and open the HTML in any browser.
-	zipData, err := zipFile(htmlFileName, []byte(html))
-	if err != nil {
-		return errReply(fmt.Errorf("compress transcript: %w", err))
-	}
-
-	contentText := fmt.Sprintf("📊 Transcript: %s\n\nSession: %s\nTurns: %d · Tools: %d · HTML: %s · Zip: %s",
+	contentText := fmt.Sprintf("📊 Transcript: %s\n\nSession: %s\nTurns: %d · Tools: %d · Size: %s",
 		sess.Title, sess.ID[:8],
-		data.Stats.TurnCount, data.Stats.ToolCallCount, humanSize(len(html)), humanSize(len(zipData)))
+		data.Stats.TurnCount, data.Stats.ToolCallCount, humanSize(len(html)))
 
 	return channel.HandlerResult{
 		Reply: channel.OutgoingMessage{
@@ -913,9 +853,9 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 			Attachments: []channel.OutgoingAttachment{
 				{
 					Type:     channel.AttachmentTypeFile,
-					FileName: zipFileName,
-					MimeType: "application/zip",
-					Data:     zipData,
+					FileName: htmlFileName,
+					MimeType: "text/html",
+					Data:     []byte(html),
 				},
 			},
 		},

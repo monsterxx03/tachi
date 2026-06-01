@@ -632,7 +632,7 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 
 	resp, err = handler(t.Context(), channel.SlashCommand{Name: "usage", ThreadID: threadID})
 	require.NoError(t, err)
-	assert.Contains(t, resp, "📊 Session Usage")
+	assert.Contains(t, resp, "📊 **Session Usage**")
 
 	// unknown command
 	resp, err = handler(t.Context(), channel.SlashCommand{Name: "nonexistent"})
@@ -1229,7 +1229,7 @@ func TestHandleSkillList_Empty(t *testing.T) {
 
 	resp, err := mgr.handleSkillList()
 	require.NoError(t, err)
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 }
 
 // TestHandleSkillReload verifies that /skill reload re-scans directories.
@@ -1259,12 +1259,12 @@ func TestHandleSkillCommand_List(t *testing.T) {
 	// /skill (empty args)
 	resp, err := mgr.handleSkillCommand("")
 	require.NoError(t, err)
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 
 	// /skill list
 	resp, err = mgr.handleSkillCommand("list")
 	require.NoError(t, err)
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 }
 
 // TestHandleSkillCommand_Reload verifies /skill reload via handleSkillCommand.
@@ -1310,7 +1310,7 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 		MessageID: "msg-1",
 	})
 	resp := result.Reply.Content
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 
 	result = mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/skill list",
@@ -1318,7 +1318,7 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 		MessageID: "msg-2",
 	})
 	resp = result.Reply.Content
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 
 	result = mgr.handleSlashCommand(channel.IncomingMessage{
 		Content:   "/skill reload",
@@ -1342,12 +1342,12 @@ func TestSkillViaCommandHandler(t *testing.T) {
 	// /skill list via typed command
 	resp, err := handler(t.Context(), channel.SlashCommand{Name: "skill"})
 	require.NoError(t, err)
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 
 	// /skill list via typed command with Args
 	resp, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "list"})
 	require.NoError(t, err)
-	assert.Contains(t, resp, "没有可用的 Skill")
+	assert.Contains(t, resp, "No skills found")
 
 	// /skill reload
 	resp, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "reload"})

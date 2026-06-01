@@ -12,6 +12,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
@@ -352,70 +353,32 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		return acp.StopReasonEndTurn, nil
 	}
 
-	text := formatUsageReportACP(report)
+	// Convert to shared UsageReportInfo
+	toolCalls := make(map[string]*cmds.ToolCallStat, len(report.ToolCalls))
+	for name, st := range report.ToolCalls {
+		toolCalls[name] = &cmds.ToolCallStat{Count: st.Count, ErrCount: st.ErrCount}
+	}
+	info := &cmds.UsageReportInfo{
+		SessionID:                report.Session.ID,
+		Provider:                 report.Session.Provider,
+		Model:                    report.Session.Model,
+		Title:                    report.Session.Title,
+		ContextWindow:            report.ContextWindow,
+		InputTokens:              report.Usage.InputTokens,
+		LastInputTokens:          report.Usage.LastInputTokens,
+		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
+		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
+		OutputTokens:             report.Usage.OutputTokens,
+		EstimatedInputTokens:     0,
+		Cost:                     report.Cost,
+		ToolCalls:                toolCalls,
+		MainCount:                report.MainCount,
+		SubCount:                 report.SubCount,
+	}
+
+	text := cmds.FormatUsageReport(info)
 	sendTextUpdate(ctx, conn, sessionID, text)
 	return acp.StopReasonEndTurn, nil
-}
-
-// formatUsageReportACP formats a usage report as plain text (not Markdown).
-func formatUsageReportACP(report *agent.SessionUsageReport) string {
-	var sb strings.Builder
-	sb.WriteString("📊 Session Usage\n\n")
-
-	// Session info
-	sb.WriteString(fmt.Sprintf("Session: %s\n", report.Session.ID))
-	provider := report.Session.Provider
-	if provider == "" {
-		provider = "(unknown)"
-	}
-	sb.WriteString(fmt.Sprintf("Provider: %s\n", provider))
-	sb.WriteString(fmt.Sprintf("Model: %s\n", report.Session.Model))
-	title := report.Session.Title
-	if title == "" {
-		title = "(untitled)"
-	}
-	sb.WriteString(fmt.Sprintf("Title: %s\n\n", title))
-
-	// Token usage
-	u := report.Usage
-	sb.WriteString("Token Usage\n")
-	sb.WriteString(fmt.Sprintf("  Input tokens: %s\n", agent.FormatTokens(u.InputTokens)))
-	if u.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache read:  %s\n", agent.FormatTokens(u.CacheReadInputTokens)))
-	}
-	if u.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Cache created: %s\n", agent.FormatTokens(u.CacheCreationInputTokens)))
-	}
-	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", agent.FormatTokens(u.OutputTokens)))
-	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", agent.FormatTokens(u.InputTokens+u.OutputTokens)))
-	if report.ContextWindow > 0 && u.InputTokens > 0 {
-		pct := float64(u.InputTokens) / float64(report.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n", agent.FormatTokens(u.InputTokens), agent.FormatTokens(report.ContextWindow), pct))
-	}
-
-	// Cost
-	sb.WriteString("\nCost\n")
-	if report.Cost <= 0 {
-		sb.WriteString("  No pricing data available\n")
-	} else {
-		sb.WriteString(fmt.Sprintf("  Total cost: ¥%.4f\n", report.Cost))
-	}
-
-	// Tool calls
-	sb.WriteString("\nTool Calls\n")
-	names := slices.Sorted(maps.Keys(report.ToolCalls))
-	for _, name := range names {
-		st := report.ToolCalls[name]
-		line := fmt.Sprintf("  - %s: %d call(s)", name, st.Count)
-		if st.ErrCount > 0 {
-			line += fmt.Sprintf(" (%d failed)", st.ErrCount)
-		}
-		sb.WriteString(line + "\n")
-	}
-	sb.WriteString(fmt.Sprintf("\n  Total: %d main + %d subagent = %d call(s)\n",
-		report.MainCount, report.SubCount, report.MainCount+report.SubCount))
-
-	return sb.String()
 }
 
 // ---------------------------------------------------------------------------
@@ -577,22 +540,8 @@ func handleACPSkillList(ctx context.Context, sess *ACPSession, conn *acp.AgentSi
 		return acp.StopReasonEndTurn, nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("Available Skills:\n\n")
-	for _, meta := range metas {
-		sourceTag := ""
-		if meta.Source == "project" {
-			sourceTag = " 🏠"
-		}
-		sb.WriteString(fmt.Sprintf("  - %s%s\n", meta.Name, sourceTag))
-		sb.WriteString(fmt.Sprintf("    %s\n", meta.Description))
-		if len(meta.Tags) > 0 {
-			sb.WriteString(fmt.Sprintf("    Tags: %s\n", strings.Join(meta.Tags, ", ")))
-		}
-	}
-	sb.WriteString(fmt.Sprintf("\n%d skill(s) total", len(metas)))
-
-	sendTextUpdate(ctx, conn, sessionID, sb.String())
+	text := cmds.FormatSkillList(metas)
+	sendTextUpdate(ctx, conn, sessionID, text)
 	return acp.StopReasonEndTurn, nil
 }
 

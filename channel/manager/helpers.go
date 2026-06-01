@@ -1,8 +1,6 @@
 package manager
 
 import (
-	"archive/zip"
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -88,23 +86,6 @@ func buildUserMessageWithAttachments(msg channel.IncomingMessage) (string, []llm
 	}
 
 	return strings.Join(parts, "\n\n"), images
-}
-
-// zipFile creates an in-memory ZIP archive containing a single file.
-func zipFile(name string, data []byte) ([]byte, error) {
-	var buf bytes.Buffer
-	w := zip.NewWriter(&buf)
-	f, err := w.Create(name)
-	if err != nil {
-		return nil, fmt.Errorf("create zip entry: %w", err)
-	}
-	if _, err := f.Write(data); err != nil {
-		return nil, fmt.Errorf("write zip entry: %w", err)
-	}
-	if err := w.Close(); err != nil {
-		return nil, fmt.Errorf("close zip: %w", err)
-	}
-	return buf.Bytes(), nil
 }
 
 // sanitizeFilename replaces characters that are problematic in filenames.
