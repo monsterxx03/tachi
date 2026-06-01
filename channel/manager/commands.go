@@ -379,36 +379,88 @@ func (m *Manager) handleMCPAuth(threadID, serverName string) (string, error) {
 	return fmt.Sprintf("🔐 Starting OAuth authorization for **%s**...\n\nThe authorization URL will be sent to you in a moment.", serverName), nil
 }
 
-// handleMCPList returns a formatted list of configured MCP servers.
+// handleMCPList returns a markdown-formatted list of configured MCP servers
+// with their discovered (loaded) tools when the shared MCP manager is available.
 func (m *Manager) handleMCPList() (string, error) {
 	servers := m.cfg.MCPServers
 	if len(servers) == 0 {
 		return "No MCP servers configured.", nil
 	}
 
-	var sb strings.Builder
-	sb.WriteString("MCP Servers:\n")
+	// Collect tool info from shared MCP manager (if available).
+	var poolToolsByServer map[string][]*mcp.DeferredTool
+	var discovered map[string]bool
+	mgr := m.initSharedMCP()
+	if mgr != nil {
+		discovered = make(map[string]bool)
+		for _, name := range mgr.DiscoveredSet().List() {
+			discovered[name] = true
+		}
+		poolToolsByServer = make(map[string][]*mcp.DeferredTool)
+		for _, dt := range mgr.Pool().All() {
+			poolToolsByServer[dt.ServerName] = append(poolToolsByServer[dt.ServerName], dt)
+		}
+	}
 
-	for _, srv := range servers {
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**MCP Servers** (%d)\n\n", len(servers)))
+
+	for i, srv := range servers {
 		enabled := srv.IsEnabled()
-		status := "Disabled"
+
+		// Build status badge.
+		status := "⚪ Disabled"
 		if enabled {
-			status = "Enabled"
+			if mgr != nil {
+				if mgr.IsConnected(srv.Name) {
+					status = "🟢 Connected"
+				} else {
+					status = "🔴 Disconnected"
+				}
+			} else {
+				status = "Enabled"
+			}
 		}
 
+		// Build transport line.
 		transport := "?"
 		switch srv.Type {
 		case config.MCPTransportStdio:
-			transport = fmt.Sprintf("stdio (%s)", srv.Command)
+			transport = fmt.Sprintf("`stdio` — `%s`", srv.Command)
 		case config.MCPTransportHTTP:
-			transport = fmt.Sprintf("http (%s)", srv.URL)
+			transport = fmt.Sprintf("`http` — `%s`", srv.URL)
 		}
 
-		fmt.Fprintf(&sb, "\n- %s [%s]\n  Transport: %s\n", srv.Name, status, transport)
+		sb.WriteString(fmt.Sprintf("**%s** [%s]\n%s\n", srv.Name, status, transport))
 
 		// Show OAuth authentication status for HTTP servers.
 		if srv.Type == config.MCPTransportHTTP && (srv.HasOAuth() || hasTokenOnDisk(srv.TokenStorageName())) {
-			sb.WriteString(fmt.Sprintf("  OAuth: %s\n", oauthStatusString(&srv)))
+			sb.WriteString(fmt.Sprintf("OAuth: %s\n", oauthStatusString(&srv)))
+		}
+
+		// Show tools for this server from the deferred pool.
+		if tools, ok := poolToolsByServer[srv.Name]; ok && len(tools) > 0 {
+			discoveredCount := 0
+			for _, dt := range tools {
+				if discovered[dt.Name] {
+					discoveredCount++
+				}
+			}
+			sb.WriteString(fmt.Sprintf("**%d** tools (%d loaded)\n", len(tools), discoveredCount))
+			for _, dt := range tools {
+				marker := "○"
+				if discovered[dt.Name] {
+					marker = "✓"
+				}
+				toolName := strings.TrimPrefix(dt.Name, "mcp__"+srv.Name+"__")
+				sb.WriteString(fmt.Sprintf("- %s `%s`\n", marker, toolName))
+			}
+		} else if poolToolsByServer != nil {
+			sb.WriteString("_tools pending discovery_\n")
+		}
+
+		if i < len(servers)-1 {
+			sb.WriteString("\n")
 		}
 	}
 
