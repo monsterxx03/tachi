@@ -3,10 +3,8 @@ package acp
 import (
 	"context"
 	"fmt"
-	"maps"
 	"os"
 	"path/filepath"
-	"slices"
 	"strings"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -414,55 +412,14 @@ func handleACPMCP(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConn
 func handleACPMCPList(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection) (acp.StopReason, error) {
 	sessionID := acp.SessionId(sess.ID)
 
-	mgr := sess.mcpMgr
-	if mgr == nil {
-		sendTextUpdate(ctx, conn, sessionID, "No MCP manager available.")
+	servers := sess.cfg.MCPServers
+	if len(servers) == 0 {
+		sendTextUpdate(ctx, conn, sessionID, "No MCP servers configured.")
 		return acp.StopReasonEndTurn, nil
 	}
 
-	// List servers by iterating MCP tools in the agent's registry.
-	toolSchemas := sess.agent.ToolSchemas()
-	var mcpToolNames []string
-	for _, s := range toolSchemas {
-		if strings.HasPrefix(s.Name, "mcp__") {
-			mcpToolNames = append(mcpToolNames, s.Name)
-		}
-	}
-
-	var sb strings.Builder
-	sb.WriteString("MCP Servers\n\n")
-
-	// Group by server name
-	serverTools := make(map[string][]string)
-	for _, tn := range mcpToolNames {
-		// Name format: mcp__<server>__<tool>
-		parts := strings.SplitN(tn, "__", 3)
-		if len(parts) >= 3 {
-			server := parts[1]
-			toolName := parts[2]
-			serverTools[server] = append(serverTools[server], toolName)
-		}
-	}
-
-	if len(serverTools) == 0 {
-		sb.WriteString("  No MCP tools registered.\n")
-	} else {
-		servers := slices.Sorted(maps.Keys(serverTools))
-		for _, srv := range servers {
-			connected := mgr.IsConnected(srv)
-			status := "🔴 Disconnected"
-			if connected {
-				status = "🟢 Connected"
-			}
-			tools := serverTools[srv]
-			fmt.Fprintf(&sb, "  - %s (%s) — %d tool(s)\n", srv, status, len(tools))
-			for _, t := range tools {
-				fmt.Fprintf(&sb, "      • %s\n", t)
-			}
-		}
-	}
-
-	sendTextUpdate(ctx, conn, sessionID, sb.String())
+	infos := cmds.BuildMCPServerInfos(servers, sess.mcpMgr)
+	sendTextUpdate(ctx, conn, sessionID, cmds.FormatMCPList(infos))
 	return acp.StopReasonEndTurn, nil
 }
 

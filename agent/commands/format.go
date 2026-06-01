@@ -159,6 +159,71 @@ func FormatSkillList(metas []skill.SkillMeta) string {
 }
 
 // ---------------------------------------------------------------------------
+// /mcp list formatting
+// ---------------------------------------------------------------------------
+
+// MCPServerInfo holds the data needed to format one MCP server entry.
+type MCPServerInfo struct {
+	Name      string
+	Status    string // e.g. "🟢 Connected", "🔴 Disconnected", "⚪ Disabled"
+	Transport string // e.g. "`stdio` — `cmd`" or "`http` — `url`"
+	OAuth     string // optional OAuth status line (empty to omit)
+	Tools     []MCPToolInfo
+	// ToolsPending indicates tools exist but haven't been discovered yet.
+	ToolsPending bool
+}
+
+// MCPToolInfo describes a single tool within an MCP server.
+type MCPToolInfo struct {
+	Name       string // short name (without mcp__server__ prefix)
+	Discovered bool   // whether it's been loaded into the active set
+}
+
+// FormatMCPList produces a markdown-formatted list of MCP servers with their
+// status, transport, OAuth info, and tool lists.
+func FormatMCPList(servers []MCPServerInfo) string {
+	if len(servers) == 0 {
+		return "No MCP servers configured."
+	}
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf("**MCP Servers** (%d)\n\n", len(servers)))
+
+	for i, srv := range servers {
+		sb.WriteString(fmt.Sprintf("**%s** [%s]\n%s\n", srv.Name, srv.Status, srv.Transport))
+
+		if srv.OAuth != "" {
+			sb.WriteString(fmt.Sprintf("OAuth: %s\n", srv.OAuth))
+		}
+
+		if len(srv.Tools) > 0 {
+			discoveredCount := 0
+			for _, t := range srv.Tools {
+				if t.Discovered {
+					discoveredCount++
+				}
+			}
+			sb.WriteString(fmt.Sprintf("**%d** tools (%d loaded)\n", len(srv.Tools), discoveredCount))
+			for _, t := range srv.Tools {
+				marker := "○"
+				if t.Discovered {
+					marker = "✓"
+				}
+				sb.WriteString(fmt.Sprintf("- %s `%s`\n", marker, t.Name))
+			}
+		} else if srv.ToolsPending {
+			sb.WriteString("_tools pending discovery_\n")
+		}
+
+		if i < len(servers)-1 {
+			sb.WriteString("\n")
+		}
+	}
+
+	return sb.String()
+}
+
+// ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------
 
