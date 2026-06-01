@@ -357,7 +357,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
 		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
 		OutputTokens:             report.Usage.OutputTokens,
-		EstimatedInputTokens:     0,
+		EstimatedInputTokens:     sess.agent.LastInputEstimate(),
 		Cost:                     report.Cost,
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,

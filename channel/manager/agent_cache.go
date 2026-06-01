@@ -243,3 +243,17 @@ func (m *Manager) evictAllAgents() {
 // errProviderNotInitialized is returned when acquireAgent runs before
 // initProvider has populated the manager's provider state.
 var errProviderNotInitialized = errors.New("channel: provider not initialized; call Start() first")
+
+// getAgentEstimate returns the LastInputEstimate from the cached agent for
+// the given thread, or 0 if no agent exists. Uses a short lock on
+// agentCacheMu — does NOT acquire ca.mu — so this is safe for quick reads
+// (e.g. /usage). A stale or zero value is acceptable for display purposes.
+func (m *Manager) getAgentEstimate(threadID string) int64 {
+	m.agentCacheMu.Lock()
+	defer m.agentCacheMu.Unlock()
+	ca, ok := m.agentCache[threadID]
+	if !ok || ca.agent == nil {
+		return 0
+	}
+	return ca.agent.LastInputEstimate()
+}

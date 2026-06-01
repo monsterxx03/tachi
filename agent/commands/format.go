@@ -29,8 +29,10 @@ type UsageReportInfo struct {
 	CacheCreationInputTokens int64
 	OutputTokens             int64
 
-	// EstimatedInputTokens is the heuristic estimate (used by TUI statusbar).
-	// When > 0, it overrides LastInputTokens for context percentage display.
+	// EstimatedInputTokens is the local heuristic estimate (chars/4) of
+	// the most recent API call's input tokens, set by estimateAndUpdateTokens
+	// before each LLM call. This is the numerator used for context percentage
+	// display across TUI, channel, and ACP modes.
 	EstimatedInputTokens int64
 
 	Cost float64
@@ -90,17 +92,13 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", FormatTokens(info.OutputTokens)))
 	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", FormatTokens(info.InputTokens+info.OutputTokens)))
 
-	// Context percentage
-	if info.ContextWindow > 0 {
-		estInput := info.EstimatedInputTokens
-		if estInput == 0 {
-			estInput = lastInput
-		}
-		if estInput > 0 {
-			pct := float64(estInput) / float64(info.ContextWindow) * 100
-			sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
-				FormatTokens(estInput), FormatTokens(info.ContextWindow), pct))
-		}
+	// Context percentage — uses EstimatedInputTokens as the sole numerator.
+	// No fallback: if the heuristic estimate is unavailable (0), the context
+	// fraction is simply not shown.
+	if info.ContextWindow > 0 && info.EstimatedInputTokens > 0 {
+		pct := float64(info.EstimatedInputTokens) / float64(info.ContextWindow) * 100
+		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
+			FormatTokens(info.EstimatedInputTokens), FormatTokens(info.ContextWindow), pct))
 	}
 
 	// Cost

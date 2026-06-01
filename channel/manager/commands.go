@@ -464,6 +464,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
 		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
 		OutputTokens:             report.Usage.OutputTokens,
+		EstimatedInputTokens:     m.getAgentEstimate(threadID),
 		Cost:                     report.Cost,
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,
