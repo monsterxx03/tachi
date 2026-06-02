@@ -154,6 +154,9 @@ func matchCommands(prefix string) []Command {
 }
 
 func findCommand(name string) *Command {
+	if !strings.HasPrefix(name, "/") {
+		return nil
+	}
 	stripped := strings.TrimPrefix(name, "/")
 	def := cmds.Find(stripped)
 	if def == nil || !slices.Contains(def.Modes, cmds.ModeTUI) {
@@ -174,6 +177,9 @@ func findCommand(name string) *Command {
 // (e.g., "/mcp" matches "/mcp list", "/mcp toggle foo").
 // Exact matches are preferred; this is used as a fallback.
 func findCommandByPrefix(input string) *Command {
+	if !strings.HasPrefix(input, "/") {
+		return nil
+	}
 	stripped := strings.TrimPrefix(input, "/")
 	def := cmds.FindByPrefix(stripped)
 	if def == nil || !slices.Contains(def.Modes, cmds.ModeTUI) {
