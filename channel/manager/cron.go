@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
@@ -78,7 +79,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		priorHistory = ca.history
 	}
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), m.systemPrompt, llm.ChatOptions{
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ""), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 

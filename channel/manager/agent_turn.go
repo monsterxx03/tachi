@@ -315,7 +315,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		aiAgent.SetPendingImages(userImages)
 	}
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, m.systemPrompt, llm.ChatOptions{
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, agent.BuildSystemPrompt(m.cfg.Language, ""), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 	text, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(msg.ThreadID), sendProgress, ta)

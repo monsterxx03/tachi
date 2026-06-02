@@ -23,9 +23,6 @@ type Config struct {
 	// Cfg is the loaded tachi configuration (providers, web search, MCP, etc.).
 	Cfg *config.Config
 
-	// SystemPrompt is the full system prompt used by all agent instances.
-	SystemPrompt string
-
 	// ProviderName overrides the default provider from config.
 	// If empty, uses the config's default provider.
 	ProviderName string
@@ -114,7 +111,6 @@ type initProviderResult struct {
 // instructions mid-turn without waiting for the current turn to finish.
 type Manager struct {
 	cfg          *config.Config
-	systemPrompt string
 	providerName string
 	modelName    string
 	currentProviderName  string // Tracks which provider is currently active
@@ -209,7 +205,6 @@ func New(mcfg Config) *Manager {
 	}
 	return &Manager{
 		cfg:            mcfg.Cfg,
-		systemPrompt:   mcfg.SystemPrompt,
 		providerName:   mcfg.ProviderName,
 		modelName:      mcfg.ModelName,
 		sessionStore:   mcfg.SessionStore,

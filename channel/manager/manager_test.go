@@ -146,11 +146,9 @@ func TestNewManager(t *testing.T) {
 
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 	})
 
 	require.NotNil(t, mgr)
-	assert.Equal(t, "test prompt", mgr.systemPrompt)
 }
 
 func TestNewManagerDefaults(t *testing.T) {
@@ -158,17 +156,14 @@ func TestNewManagerDefaults(t *testing.T) {
 
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 	})
 
 	require.NotNil(t, mgr)
-	assert.Equal(t, "test prompt", mgr.systemPrompt)
 }
 
 func TestManagerAddChannel(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          config.DefaultConfig(),
-		SystemPrompt: "test",
 	})
 
 	mgr.Add(&mockChannel{name: "chan-a"})
@@ -199,7 +194,6 @@ func TestChannelStopsOnContextCancel(t *testing.T) {
 func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
 	mgr := New(Config{
 		Cfg:          config.DefaultConfig(),
-		SystemPrompt: "test prompt",
 	})
 
 	handler := mgr.buildHandler()
@@ -228,7 +222,6 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 	})
 
 	mp := &mockProvider{
@@ -259,7 +252,6 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	mp := &mockProvider{}
@@ -308,7 +300,6 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	mp := &mockProvider{}
@@ -354,7 +345,6 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 		SessionStore: newTempSessionStore(t),
 	})
 	// Inject resolved config so loadThreadSession can call sm.New().
@@ -388,7 +378,6 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	store := newTempSessionStore(t)
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 		SessionStore: store,
 	})
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -433,7 +422,6 @@ func TestDrainEvents_VerboseMode(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 	})
 
 	// Create a provider that returns a tool_calls response followed by text.
@@ -508,7 +496,6 @@ func TestHandleVerboseCommand(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	threadID := "thread-v-test"
@@ -537,7 +524,6 @@ func TestHandleVerboseCommand_ResetByNew(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -576,7 +562,6 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	store := newTempSessionStore(t)
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SessionStore: store,
 	})
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -659,7 +644,6 @@ func TestCommandChannel_Injection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -698,7 +682,6 @@ func TestCommandChannel_NotInjectedToPlainChannel(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test prompt",
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -952,7 +935,6 @@ func TestHandleModelCommand_List(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 	// Set up the provider manually (simulating what initProvider would do).
 	mgr.provider = &mockProvider{name: "openai"}
@@ -990,7 +972,6 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1032,7 +1013,6 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1056,7 +1036,6 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 	cfg := &config.Config{}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	resp, err := mgr.handleModelCommand("")
@@ -1075,7 +1054,6 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1118,7 +1096,6 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1168,7 +1145,6 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1223,7 +1199,6 @@ func TestHandleSkillList_Empty(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
@@ -1237,7 +1212,6 @@ func TestHandleSkillReload(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
@@ -1252,7 +1226,6 @@ func TestHandleSkillCommand_List(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
@@ -1272,7 +1245,6 @@ func TestHandleSkillCommand_Reload(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
@@ -1286,7 +1258,6 @@ func TestHandleSkillCommand_UnknownSub(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
@@ -1300,7 +1271,6 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 
@@ -1334,7 +1304,6 @@ func TestSkillViaCommandHandler(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 		SkillStore:   skill.NewStoreWithDirs(nil, nil),
 	})
 	handler := mgr.buildCommandHandler()
@@ -1361,7 +1330,6 @@ func TestIsSkillActivation_NoSkill(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	_, _, ok := mgr.isSkillActivation("/help")
@@ -1377,7 +1345,6 @@ func TestIsSkillActivation_ListNotActivation(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	_, _, ok := mgr.isSkillActivation("/skill list")
@@ -1392,7 +1359,6 @@ func TestPrepareSkillActivation_NotFound(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
 		Cfg:          cfg,
-		SystemPrompt: "test",
 	})
 
 	_, errMsg, err := mgr.prepareSkillActivation("nonexistent-skill", "")

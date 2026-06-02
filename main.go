@@ -511,8 +511,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	mgr := channelmgr.New(channelmgr.Config{
-		Cfg:          cfg,
-		SystemPrompt: buildSystemPrompt(cfg.Language),
+		Cfg: cfg,
 	})
 
 	active := cfg.Channel.ActiveChannels()

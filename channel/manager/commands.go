@@ -309,7 +309,7 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string) (string
 	}
 
 	// Finalize: create new session, write summary, link old ↔ new.
-	_, err = agent.FinalizeCompact(sm, m.systemPrompt, summary)
+	_, err = agent.FinalizeCompact(sm, agent.BuildSystemPrompt(m.cfg.Language, ""), summary)
 	if err != nil {
 		return "", fmt.Errorf("创建压缩会话失败: %w", err)
 	}
