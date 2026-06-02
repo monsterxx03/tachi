@@ -24,10 +24,7 @@ import (
 func (m *Model) sessionVisibleRows() int {
 	// Calculate visible rows (excluding the title line)
 	// This matches layout(): inputHeight = min(len+2, height/2), minus 1 for title
-	n := max(m.height/2-1, 1)
-	if n > len(m.sessionList) {
-		n = len(m.sessionList)
-	}
+	n := min(max(m.height/2-1, 1), len(m.sessionList))
 	return n
 }
 

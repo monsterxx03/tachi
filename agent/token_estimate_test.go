@@ -117,8 +117,8 @@ func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
 			Description: "Edit or create files",
 			Parameters: agenttools.ParametersSchema{
 				Properties: map[string]agenttools.PropertySchema{
-					"file_path": {Type: "string", Description: "Target file"},
-					"content":   {Type: "string", Description: "New content"},
+					"file_path":  {Type: "string", Description: "Target file"},
+					"content":    {Type: "string", Description: "New content"},
 					"old_string": {Type: "string", Description: "Text to replace"},
 				},
 			},
@@ -128,7 +128,7 @@ func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
 	assert.Greater(t, n, int64(0))
 
 	// tool overhead: 2*4 = 8
-	// Read: name(4/4=1) + desc(11/4=2) + 1 prop*8 = 1+2+8 = 11, so that part is 8+11 = 19 for tools... 
+	// Read: name(4/4=1) + desc(11/4=2) + 1 prop*8 = 1+2+8 = 11, so that part is 8+11 = 19 for tools...
 	// Actually let me compute precisely:
 	// Name "Read" = 4 → (4+3)/4 = 1
 	// Description "Read a file" = 11 → (11+3)/4 = 3
@@ -196,7 +196,7 @@ func TestEstimateInputTokens_SystemPromptFromMessages(t *testing.T) {
 func TestEstimateInputTokens_LargeToolSchema(t *testing.T) {
 	// Many properties to test iteration correctness
 	props := make(map[string]agenttools.PropertySchema)
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		name := string(rune('a' + i))
 		props[string(name)] = agenttools.PropertySchema{
 			Type:        "string",
