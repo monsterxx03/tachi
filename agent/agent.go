@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/monsterxx03/tachi/agent/tools/hashline"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -284,9 +285,35 @@ func (a *AIAgent) recordSession(msg *session.Message) {
 // --- Tool Registry ---
 
 func (a *AIAgent) RegisterTools() {
-	a.toolRegistry.Register(tools.NewReadTool())
+	isHashline := a.cfg != nil && a.cfg.Edit.Mode == "hashline"
+
+	// Shared snapshot store for hashline mode — ReadTool records, EditTool verifies
+	var snapshotStore *hashline.SnapshotStore
+	if isHashline {
+		snapshotStore = hashline.NewSnapshotStore()
+	}
+
+	// ReadFile — with optional hashline mode
+	readTool := tools.NewReadTool()
+	if isHashline {
+		readTool.SetHashlineMode(true, snapshotStore)
+	}
+	a.toolRegistry.Register(readTool)
+
 	a.toolRegistry.Register(tools.WriteTool{})
-	a.toolRegistry.Register(tools.EditTool{})
+
+	// EditFile — with optional hashline mode
+	editTool := tools.NewEditTool()
+	if isHashline {
+		fuzzyThreshold := a.cfg.Edit.FuzzyThreshold
+		if fuzzyThreshold <= 0 {
+			fuzzyThreshold = 0.95
+		}
+		editTool.SetHashlineMode(true, snapshotStore, fuzzyThreshold)
+	}
+	a.toolRegistry.Register(editTool)
+	a.toolRegistry.Register(editTool)
+
 	a.toolRegistry.Register(tools.GlobTool{})
 	a.toolRegistry.Register(tools.GrepTool{})
 	a.toolRegistry.Register(tools.NewBashTool(a.processManager))

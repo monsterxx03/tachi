@@ -278,7 +278,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	aiAgent.SetSkipEditConfirm(true)
 	// Register EditFile so the tool call can be dispatched (it will error on
 	// file read, but the key assertion is: it doesn't deadlock).
-	aiAgent.RegisterTool(agenttools.EditTool{})
+	aiAgent.RegisterTool(agenttools.NewEditTool())
 
 	eventCh := aiAgent.RunConversationStream(
 		t.Context(),

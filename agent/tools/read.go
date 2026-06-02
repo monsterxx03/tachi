@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/tools/hashline"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
@@ -28,8 +29,10 @@ type cachedEntry struct {
 
 // ReadTool reads the contents of a file
 type ReadTool struct {
-	mu    sync.RWMutex
-	cache map[string]cachedEntry
+	mu            sync.RWMutex
+	cache         map[string]cachedEntry
+	snapshotStore *hashline.SnapshotStore // hashline snapshot store (nil when hashline disabled)
+	hashlineMode  bool                // true = output hashline format
 }
 
 // NewReadTool creates a ReadTool with initialized cache state.
@@ -37,6 +40,12 @@ func NewReadTool() *ReadTool {
 	return &ReadTool{
 		cache: make(map[string]cachedEntry),
 	}
+}
+
+// SetHashlineMode enables/disables hashline output format and sets the snapshot store.
+func (t *ReadTool) SetHashlineMode(enabled bool, store *hashline.SnapshotStore) {
+	t.hashlineMode = enabled
+	t.snapshotStore = store
 }
 
 func (t *ReadTool) Name() string        { return ToolNameRead }
@@ -129,7 +138,35 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	}
 	t.mu.Unlock()
 
+	// Hashline mode: return formatted output with ¶path#tag + line numbers
+	if t.hashlineMode && t.snapshotStore != nil {
+		fullContent := string(content)
+		tag := t.snapshotStore.Record(filePath, fullContent)
+		return t.formatHashlineOutput(ctx, filePath, strings.Join(lines[start:end], "\n"), start+1, tag), nil
+		}
 	return result, nil
+}
+
+// formatHashlineOutput returns file content in hashline format:
+//
+//	¶path#tag
+//	N:line content
+//	...
+func (t *ReadTool) formatHashlineOutput(ctx context.Context, path, content string, offset int, tag string) string {
+	lines := strings.Split(content, "\n")
+
+	var sb strings.Builder
+	displayPath := path
+	if rel, err := filepath.Rel(wdctx.Dir(ctx), path); err == nil && len(rel) < len(path) {
+		displayPath = rel
+	}
+
+	fmt.Fprintf(&sb, "¶%s#%s\n", displayPath, tag)
+	for i, line := range lines {
+		lineNum := offset + i
+		fmt.Fprintf(&sb, "%d:%s\n", lineNum, line)
+	}
+	return sb.String()
 }
 
 func readCacheKey(path string, offset, limit int) string {

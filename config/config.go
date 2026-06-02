@@ -197,6 +197,13 @@ func (c *CronConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// EditConfig holds configuration for the edit mode.
+// EditConfig holds configuration for the edit mode.
+type EditConfig struct {
+	Mode           string  `yaml:"mode" default:"hashline"`           // hashline | replace
+	FuzzyThreshold float64 `yaml:"fuzzy_threshold" default:"0.95"`   // 0.0-1.0, line content fuzzy matching tolerance
+}
+
 // ACPConfig holds configuration for the ACP (Agent Client Protocol) agent mode.
 type ACPConfig struct {
 	// ConnectConfiguredMCP controls whether to connect MCP servers from config.yaml
@@ -380,6 +387,7 @@ type Config struct {
 	Compact                CompactConfig                `yaml:"compact"`                         // /compact command configuration
 	Cron                   CronConfig                   `yaml:"cron"`                            // Cron scheduler (channel mode)
 	ACP                    ACPConfig                    `yaml:"acp"`                             // ACP agent configuration
+	Edit                   EditConfig                   `yaml:"edit"`                            // Edit mode configuration
 }
 
 func DefaultConfig() *Config {
