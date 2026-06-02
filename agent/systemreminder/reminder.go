@@ -85,6 +85,11 @@ func NewCollector(reminders ...Reminder) *Collector {
 	return &Collector{reminders: reminders, logger: debuglog.DefaultLogger}
 }
 
+// AddReminder appends a reminder to the collector without rebuilding.
+func (c *Collector) AddReminder(r Reminder) {
+	c.reminders = append(c.reminders, r)
+}
+
 // SetLogger overrides the collector's logger. Channel callers use this to inject
 // a channel-specific logger so debug output is tagged with the correct source.
 func (c *Collector) SetLogger(l *debuglog.Logger) {

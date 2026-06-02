@@ -349,12 +349,10 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			}
 		}
 
-		// When skill_create succeeds, rebuild the reminder collector so the
-		// SkillListReminder picks up the new skill from the store. Otherwise
-		// the LLM won't see the newly created skill in the next system-reminder
-		// block even though it exists on disk.
+		// When skill_create succeeds, mark the SkillListReminder dirty so the
+		// updated skill list is injected on the next user message.
 		if tc.Function.Name == tools.ToolNameSkill && tr.Status == tools.ToolResultSuccess {
-			a.rebuildSkillCollector()
+			a.skillListReminder.MarkDirty()
 		}
 
 		if tr.Status == tools.ToolResultPendingConfirm {

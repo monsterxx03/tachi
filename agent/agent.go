@@ -108,6 +108,11 @@ type AIAgent struct {
 	// fires again to hint LLM about them).
 	deferredToolReminder *systemreminder.DeferredToolReminder
 
+	// skillListReminder is the live SkillListReminder in the reminderCollector.
+	// Stored so we can mutate it (MarkDirty / SetProvider) without rebuilding
+	// the entire collector.
+	skillListReminder *systemreminder.SkillListReminder
+
 	// MCP async init
 	mcpManager *mcp.Manager // MCP connection manager (also owns pool/set/initDone)
 
@@ -133,7 +138,8 @@ type AIAgent struct {
 	lastMessages []llm.Message
 
 	// baseReminders stores the non-skill reminders assembled during Configure.
-	// rebuildSkillCollector uses this to re-apply SkillListReminder on reload.
+	// buildReminderCollector combines these with the live skillListReminder and
+	// MemoryRecallReminder.
 	baseReminders []systemreminder.Reminder
 }
 
@@ -447,10 +453,10 @@ func (a *AIAgent) NotifyDeferredToolsAdded() {
 	}
 	if !found {
 		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
+		a.reminderCollector.AddReminder(a.deferredToolReminder)
 	}
 
-	a.rebuildSkillCollector()
-	a.logger.Log("MCP: DeferredToolReminder marked dirty, collector rebuilt")
+	a.logger.Log("MCP: DeferredToolReminder marked dirty")
 }
 
 // ToolSchemas returns all tool schemas currently registered with the agent.

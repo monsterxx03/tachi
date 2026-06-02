@@ -41,6 +41,19 @@ func NewSkillListReminder(provider SkillMetaProvider) *SkillListReminder {
 	return &SkillListReminder{provider: provider, dirty: true}
 }
 
+// MarkDirty forces the reminder to re-fire on the next user message,
+// even if it has already fired in this session.
+func (r *SkillListReminder) MarkDirty() {
+	r.dirty = true
+}
+
+// SetProvider updates the skill store backing and marks the reminder dirty
+// so the updated skill list is re-injected.
+func (r *SkillListReminder) SetProvider(provider SkillMetaProvider) {
+	r.provider = provider
+	r.dirty = true
+}
+
 func (r *SkillListReminder) Generate(ctx Context) []string {
 	if r.provider == nil {
 		return nil

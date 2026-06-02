@@ -48,7 +48,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.baseReminders = append(a.baseReminders, systemreminder.GitReminder{})
 	}
 
-	// --- Memory backend (before skills — rebuildSkillCollector reads a.memory) ---
+	// --- Memory backend (before skills — buildReminderCollector reads a.memory) ---
 	if cfg.Memory.Type != "" {
 		memCfg := cfg.Memory.ToMemoryConfig()
 		backend, err := memory.New(cfg.Memory.Type, memCfg)
@@ -63,6 +63,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	// --- Skill system (needs a.cfg for memory config) ---
 	a.cfg = cfg
 	a.initSkills()
+
+	// --- Reminder collector (after memory + skills, before MCP) ---
+	a.buildReminderCollector()
 
 	// --- built-in tools + web search ---
 	a.RegisterTools()
@@ -115,7 +118,7 @@ func (a *AIAgent) attachSharedMCPReminder() {
 	discovered := len(set.List())
 	if discovered < total {
 		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
-		a.rebuildSkillCollector()
+		a.reminderCollector.AddReminder(a.deferredToolReminder)
 	}
 }
 
@@ -190,7 +193,7 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 	// Register DeferredToolReminder only if there are undiscovered tools
 	if discovered < total {
 		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
-		a.rebuildSkillCollector()
+		a.reminderCollector.AddReminder(a.deferredToolReminder)
 		a.logger.Log("MCP: DeferredToolReminder added (%d undiscovered of %d)",
 			total-discovered, total)
 	}
