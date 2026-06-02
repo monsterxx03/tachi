@@ -37,17 +37,6 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 // tools, web search, and MCP server connections. Returns the MCP manager for
 // later cleanup (may be nil).
 func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
-	// --- reminders ---
-	a.baseReminders = []systemreminder.Reminder{
-		systemreminder.DateReminder{},
-		systemreminder.ProjectContextReminder{},
-		systemreminder.IterationWarningReminder{Threshold: cfg.SystemReminder.IterationWarningThreshold},
-		systemreminder.TokenWarningReminder{ThresholdPct: cfg.SystemReminder.TokenWarningThresholdPct},
-	}
-	if cfg.SystemReminder.GitReminder == nil || *cfg.SystemReminder.GitReminder {
-		a.baseReminders = append(a.baseReminders, systemreminder.GitReminder{})
-	}
-
 	// --- Memory backend (before skills — buildReminderCollector reads a.memory) ---
 	if cfg.Memory.Type != "" {
 		memCfg := cfg.Memory.ToMemoryConfig()
@@ -117,7 +106,6 @@ func (a *AIAgent) attachSharedMCPReminder() {
 	total := pool.Len()
 	discovered := len(set.List())
 	if discovered < total {
-		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
 		a.reminderCollector.AddReminder(a.deferredToolReminder)
 	}
 }
@@ -192,7 +180,6 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 
 	// Register DeferredToolReminder only if there are undiscovered tools
 	if discovered < total {
-		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
 		a.reminderCollector.AddReminder(a.deferredToolReminder)
 		a.logger.Log("MCP: DeferredToolReminder added (%d undiscovered of %d)",
 			total-discovered, total)
@@ -282,4 +269,32 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	// Notify memory backend that the resumed session is active
 	a.StartSessionMemory()
 	return llmMsgs, sessionMsgs, latest, nil
+}
+
+// buildReminderCollector builds the reminder collector with core reminders,
+// the live skill list reminder, and MemoryRecallReminder (if memory is
+// configured). Called once during Configure after sub-systems are initialized.
+func (a *AIAgent) buildReminderCollector() {
+	core := []systemreminder.Reminder{
+		systemreminder.DateReminder{},
+		systemreminder.ProjectContextReminder{},
+		systemreminder.IterationWarningReminder{Threshold: a.cfg.SystemReminder.IterationWarningThreshold},
+		systemreminder.TokenWarningReminder{ThresholdPct: a.cfg.SystemReminder.TokenWarningThresholdPct},
+	}
+	if a.cfg.SystemReminder.GitReminder == nil || *a.cfg.SystemReminder.GitReminder {
+		core = append(core, systemreminder.GitReminder{})
+	}
+
+	all := make([]systemreminder.Reminder, 0, len(core)+2)
+	all = append(all, core...)
+	all = append(all, a.skillListReminder)
+	if a.memory != nil {
+		all = append(all, systemreminder.MemoryRecallReminder{
+			Backend: a.memory.Backend,
+			Limit:   5,
+			Timeout: a.cfg.Memory.Timeout,
+		})
+	}
+	a.reminderCollector = systemreminder.NewCollector(all...)
+	a.reminderCollector.SetLogger(a.logger)
 }

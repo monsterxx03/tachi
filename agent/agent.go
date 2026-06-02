@@ -136,11 +136,6 @@ type AIAgent struct {
 	// Channel mode reads this via GetLastMessages() to maintain an in-memory
 	// history cache on the cachedAgent, avoiding repeated disk reloads.
 	lastMessages []llm.Message
-
-	// baseReminders stores the non-skill reminders assembled during Configure.
-	// buildReminderCollector combines these with the live skillListReminder and
-	// MemoryRecallReminder.
-	baseReminders []systemreminder.Reminder
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -443,18 +438,8 @@ func (a *AIAgent) NotifyDeferredToolsAdded() {
 		a.deferredToolReminder.Dirty = true
 	}
 
-	// Ensure it's in baseReminders
-	found := false
-	for _, r := range a.baseReminders {
-		if r == a.deferredToolReminder {
-			found = true
-			break
-		}
-	}
-	if !found {
-		a.baseReminders = append(a.baseReminders, a.deferredToolReminder)
-		a.reminderCollector.AddReminder(a.deferredToolReminder)
-	}
+	// Ensure it's registered in the reminder collector
+	a.reminderCollector.AddReminder(a.deferredToolReminder)
 
 	a.logger.Log("MCP: DeferredToolReminder marked dirty")
 }

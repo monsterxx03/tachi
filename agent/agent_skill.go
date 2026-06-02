@@ -67,24 +67,6 @@ func (a *AIAgent) initSkills() {
 	}
 }
 
-// buildReminderCollector assembles the reminder collector from baseReminders
-// plus the live skillListReminder and MemoryRecallReminder (if configured).
-// Called once during Configure after all sub-systems are initialized.
-func (a *AIAgent) buildReminderCollector() {
-	all := make([]systemreminder.Reminder, 0, len(a.baseReminders)+2)
-	all = append(all, a.baseReminders...)
-	all = append(all, a.skillListReminder)
-	if a.memory != nil {
-		all = append(all, systemreminder.MemoryRecallReminder{
-			Backend: a.memory.Backend,
-			Limit:   5,
-			Timeout: a.cfg.Memory.Timeout,
-		})
-	}
-	a.reminderCollector = systemreminder.NewCollector(all...)
-	a.reminderCollector.SetLogger(a.logger)
-}
-
 // registerSkillTools registers the skill tool backed by the current skillStore.
 func (a *AIAgent) registerSkillTools() {
 	a.RegisterTool(tools.NewSkillTool(a.skillStore))
