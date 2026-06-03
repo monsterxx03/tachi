@@ -2,7 +2,7 @@ package hashline
 
 import (
 	"crypto/sha256"
-	"fmt"
+	"encoding/hex"
 	"sync"
 	"time"
 )
@@ -16,7 +16,7 @@ type SnapshotEntry struct {
 
 // SnapshotStore maintains file version history using a two-layer hash design:
 //
-//	First layer: 3-hex short tag (e.g. "a1f") — LLM-visible friendly label.
+//	First layer: 4-hex short tag (e.g. "a1f0") — LLM-visible friendly label.
 //	Second layer: Full SHA-256 (64 hex chars) — real version credential.
 //
 // Internal structure: path → { tag → SnapshotEntry }
@@ -35,16 +35,19 @@ func NewSnapshotStore() *SnapshotStore {
 	}
 }
 
-// Record stores a snapshot of the file content and returns its 3-hex tag.
+// Record stores a snapshot of the file content and returns its 4-hex tag.
 // If the exact same content was already recorded for this path, returns
 // the existing tag. Otherwise computes a new tag and stores the entry.
 func (s *SnapshotStore) Record(path, content string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
+	// Compute SHA-256 once and derive both full hash and short tag from it.
+	h := sha256.Sum256([]byte(content))
+	fullHash := hex.EncodeToString(h[:])
+
 	// Check if this exact content was already recorded under any tag
 	if entries, ok := s.snapshots[path]; ok {
-		fullHash := computeFullHash(content)
 		for _, entry := range entries {
 			if entry.FullHash == fullHash {
 				return entry.Tag
@@ -52,8 +55,7 @@ func (s *SnapshotStore) Record(path, content string) string {
 		}
 	}
 	// Compute tag, resolving collisions
-	tag := resolveTag(s.snapshots[path], content)
-	fullHash := computeFullHash(content)
+	tag := resolveTag(s.snapshots[path], h, fullHash)
 
 	if s.snapshots[path] == nil {
 		s.snapshots[path] = make(map[string]SnapshotEntry)
@@ -154,26 +156,27 @@ func (s *SnapshotStore) GetEntry(path, tag string) *SnapshotEntry {
 // computeFullHash returns the full SHA-256 hex string.
 func computeFullHash(content string) string {
 	h := sha256.Sum256([]byte(content))
-	return fmt.Sprintf("%x", h)
+	return hex.EncodeToString(h[:])
 }
 
-// resolveTag computes a unique tag for the given content, handling collisions
+// resolveTag computes a unique tag for the given content hash, handling collisions
 // by expanding to more hex characters if the tag already exists for a different
 // content version.
-func resolveTag(entries map[string]SnapshotEntry, content string) string {
-	tag := ComputeTag(content)
+// h is the SHA-256 hash of the content, fullHash is its hex encoding.
+func resolveTag(entries map[string]SnapshotEntry, h [32]byte, fullHash string) string {
+	tag := hex.EncodeToString(h[:2])
 	if entries == nil {
 		return tag
 	}
 
 	for bytes := 2; bytes <= 32; bytes++ {
-		if existing, exists := entries[tag]; !exists || existing.FullHash == computeFullHash(content) {
+		if existing, exists := entries[tag]; !exists || existing.FullHash == fullHash {
 			return tag
 		}
 		// Collision: expand tag by one more byte (2 hex chars)
-		tag = computeTagBytes(content, bytes+1)
+		tag = hex.EncodeToString(h[:bytes+1])
 	}
 
 	// Extremely unlikely: all 32-byte tags collide. Use full SHA-256 hex.
-	return computeFullHash(content)
+	return fullHash
 }

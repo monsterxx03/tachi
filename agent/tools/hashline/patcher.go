@@ -264,14 +264,10 @@ func applyOperations(ops []Operation, lines []string) ([]string, applyStats) {
 			}
 			lineOps[op.Start].insertBefore = op.Body
 		case OpInsertAfter:
-			endLine := op.End
-			if endLine == 0 {
-				endLine = op.Start
+			if lineOps[op.Start] == nil {
+				lineOps[op.Start] = &lineOp{}
 			}
-			if lineOps[endLine] == nil {
-				lineOps[endLine] = &lineOp{}
-			}
-			lineOps[endLine].insertAfter = op.Body
+			lineOps[op.Start].insertAfter = op.Body
 		case OpInsertHead:
 			headLines = op.Body
 		case OpInsertTail:

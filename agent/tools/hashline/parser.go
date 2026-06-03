@@ -172,6 +172,20 @@ func parseOperations(lines []string) ([]Operation, error) {
 
 	flushPendingOp := func() error {
 		if pendingOp != nil {
+			switch pendingOp.Type {
+			case OpReplace:
+				if len(currentBody) == 0 {
+					return fmt.Errorf("%s", ErrEmptyReplace)
+				}
+			case OpDelete:
+				if len(currentBody) > 0 {
+					return fmt.Errorf("%s", ErrDeleteTakesNoBody)
+				}
+			case OpInsertBefore, OpInsertAfter, OpInsertHead, OpInsertTail:
+				if len(currentBody) == 0 {
+					return fmt.Errorf("%s", ErrEmptyInsert)
+				}
+			}
 			pendingOp.Body = currentBody
 			ops = append(ops, *pendingOp)
 			pendingOp = nil

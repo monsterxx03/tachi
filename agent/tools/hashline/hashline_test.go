@@ -278,6 +278,65 @@ func TestParseNoOperations(t *testing.T) {
 	}
 }
 
+func TestParseEmptyReplaceBody(t *testing.T) {
+	// replace without body rows should fail
+	input := "¶file.go#a1f0\nreplace 1..1:\n"
+	_, err := Parse(input, "/test")
+	if err == nil {
+		t.Fatal("expected error for replace with empty body")
+	}
+}
+
+func TestParseDeleteWithBody(t *testing.T) {
+	// delete with body rows should fail
+	input := "¶file.go#a1f0\ndelete 3..5\n+unexpected body\n"
+	_, err := Parse(input, "/test")
+	if err == nil {
+		t.Fatal("expected error for delete with body rows")
+	}
+}
+
+func TestParseEmptyInsertBody(t *testing.T) {
+	// insert without body rows should fail
+	tests := []string{
+		"¶file.go#a1f0\ninsert before 2:\n",
+		"¶file.go#a1f0\ninsert after 3:\n",
+		"¶file.go#a1f0\ninsert head:\n",
+		"¶file.go#a1f0\ninsert tail:\n",
+	}
+	for _, input := range tests {
+		_, err := Parse(input, "/test")
+		if err == nil {
+			t.Fatalf("expected error for empty insert body: %q", input)
+		}
+	}
+}
+
+func TestParseReplaceWithBodySucceeds(t *testing.T) {
+	// replace with at least one body row should succeed
+	input := "¶file.go#a1f0\nreplace 1..3:\n+replacement\n"
+	_, err := Parse(input, "/test")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestParseInsertWithBodySucceeds(t *testing.T) {
+	// insert with at least one body row should succeed
+	tests := []string{
+		"¶file.go#a1f0\ninsert before 2:\n+line\n",
+		"¶file.go#a1f0\ninsert after 3:\n+line\n",
+		"¶file.go#a1f0\ninsert head:\n+line\n",
+		"¶file.go#a1f0\ninsert tail:\n+line\n",
+	}
+	for _, input := range tests {
+		_, err := Parse(input, "/test")
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", input, err)
+		}
+	}
+}
+
 // --- Patcher (with FakeFileSystem) ---
 
 type fakeFileSystem struct {
