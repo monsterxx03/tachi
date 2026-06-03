@@ -16,17 +16,19 @@ import (
 )
 
 const (
-	DefaultMaxTokens     = 128000
-	DefaultMaxIterations = 50
-	configDirName        = ".tachi"
-	configFileName       = "config.yaml"
-	inputHistoryFileName = "input_history"
-	sessionDirName       = "session"
-	logsDirName          = "logs"
-	mcpTokensDirName     = "mcp_tokens"
-	skillsDirName        = "skills"
-	weixinStateDirName   = "weixin"
-	cronStoreFileName    = "crons.json"
+	DefaultMaxTokens          = 128000
+	DefaultMaxIterations      = 50
+	configDirName             = ".tachi"
+	configFileName            = "config.yaml"
+	inputHistoryFileName      = "input_history"
+	sessionDirName            = "session"
+	logsDirName               = "logs"
+	mcpTokensDirName          = "mcp_tokens"
+	skillsDirName             = "skills"
+	weixinStateDirName        = "weixin"
+	cronStoreFileName         = "crons.json"
+	toolResultsDirName        = "tool_results"
+	defaultToolResultMaxChars = 50000
 )
 
 // baseDir is the base directory for all tachi state. Default: $HOME/.tachi.
@@ -225,6 +227,34 @@ type CompactConfig struct {
 	Timeout time.Duration `yaml:"timeout" default:"5m"` // Timeout for the compaction LLM call
 }
 
+// ToolResultConfig holds configuration for tool result size limits and
+// file persistence of oversized results. When a tool result exceeds
+// MaxChars, the full output is saved to disk and a truncated preview
+// with file path is returned to the LLM instead.
+type ToolResultConfig struct {
+	MaxChars int    `yaml:"max_chars"` // max chars for tool result passed to LLM (default 50000, 0 = no limit)
+	FileDir  string `yaml:"file_dir"`  // dir for storing oversized results (default: ~/.tachi/tool_results)
+}
+
+// MaxResultChars returns the effective max chars threshold. Falls back to
+// defaultToolResultMaxChars (50000) when unconfigured. Returns 0 only when
+// explicitly set to 0 (which means no limit).
+func (c *ToolResultConfig) MaxResultChars() int {
+	if c.MaxChars == 0 && c.FileDir == "" {
+		return defaultToolResultMaxChars
+	}
+	return c.MaxChars
+}
+
+// ResultFileDir returns the effective directory for storing oversized results.
+// Falls back to ~/.tachi/tool_results when unconfigured.
+func (c *ToolResultConfig) ResultFileDir() string {
+	if c.FileDir != "" {
+		return c.FileDir
+	}
+	return ToolResultsDir()
+}
+
 // SubagentConfig holds configuration for sub-agent execution.
 // When Provider/Model are empty, the main provider/model is used.
 type SubagentConfig struct {
@@ -385,6 +415,7 @@ type Config struct {
 	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
 	Compact                CompactConfig                `yaml:"compact"`                         // /compact command configuration
+	ToolResult             ToolResultConfig             `yaml:"tool_result"`                      // tool result size limits and file persistence
 	Cron                   CronConfig                   `yaml:"cron"`                            // Cron scheduler (channel mode)
 	ACP                    ACPConfig                    `yaml:"acp"`                             // ACP agent configuration
 	Edit                   EditConfig                   `yaml:"edit"`                            // Edit mode configuration
@@ -434,6 +465,11 @@ func GlobalSkillsDir() string {
 // WeixinStateDir returns the default path to the weixin state directory.
 func WeixinStateDir() string {
 	return filepath.Join(BaseDir(), weixinStateDirName)
+}
+
+// ToolResultsDir returns the path to the tool results storage directory.
+func ToolResultsDir() string {
+	return filepath.Join(BaseDir(), toolResultsDirName)
 }
 
 // CronStorePath returns the default path for crons.json.

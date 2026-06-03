@@ -91,5 +91,13 @@ func (t MCPTool) ExecuteContext(ctx context.Context, args string) (string, error
 		return "", fmt.Errorf("MCP tool %s failed: %w", t.serverTool.Name, err)
 	}
 
-	return formatMCPResult(result)
+	output, formatErr := formatMCPResult(result)
+	if formatErr != nil {
+		return "", formatErr
+	}
+
+	// Apply result size limit: save oversized results to disk and return preview.
+	output = truncateToolOutput(output, t.manager.ToolResultMaxChars(), t.manager.ToolResultFileDir(), t.Name())
+
+	return output, nil
 }

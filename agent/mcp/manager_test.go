@@ -66,13 +66,13 @@ func addTestClient(m *Manager, name string, client MCPClient) {
 }
 
 func TestNewManager(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	assert.NotNil(t, m)
 	assert.Empty(t, m.ConnectedServers())
 }
 
 func TestManager_IsConnected(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	assert.False(t, m.IsConnected("nonexistent"))
 
 	addTestClient(m, "test-server", &stubMCPClient{})
@@ -80,7 +80,7 @@ func TestManager_IsConnected(t *testing.T) {
 }
 
 func TestManager_ConnectedServers(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	addTestClient(m, "server-a", &stubMCPClient{})
 	addTestClient(m, "server-b", &stubMCPClient{})
 
@@ -89,13 +89,13 @@ func TestManager_ConnectedServers(t *testing.T) {
 }
 
 func TestManager_Disconnect_NotConnected(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	err := m.Disconnect("nonexistent")
 	assert.NoError(t, err)
 }
 
 func TestManager_Disconnect_Success(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	closed := false
 	addTestClient(m, "test-server", &stubMCPClient{
@@ -112,7 +112,7 @@ func TestManager_Disconnect_Success(t *testing.T) {
 }
 
 func TestManager_Close(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	var mu sync.Mutex
 	closeCount := 0
@@ -139,14 +139,14 @@ func TestManager_Close(t *testing.T) {
 }
 
 func TestManager_CallTool_NotConnected(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	_, err := m.CallTool(context.Background(), "nonexistent", "tool", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }
 
 func TestManager_CallTool_Success(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	addTestClient(m, "test-server", &stubMCPClient{
 		callTool: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -165,7 +165,7 @@ func TestManager_CallTool_Success(t *testing.T) {
 }
 
 func TestManager_CallTool_Error(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	addTestClient(m, "test-server", &stubMCPClient{
 		callTool: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -179,21 +179,21 @@ func TestManager_CallTool_Error(t *testing.T) {
 }
 
 func TestManager_GetOAuthHandler_NotConnected(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	h := m.GetOAuthHandler("nonexistent")
 	assert.Nil(t, h)
 }
 
 func TestManager_GetOAuthHandler_StubClient(t *testing.T) {
 	// Stub clients (not *client.Client) should return nil OAuth handler
-	m := NewManager()
+	m := NewManager(0, "")
 	addTestClient(m, "test-server", &stubMCPClient{})
 	h := m.GetOAuthHandler("test-server")
 	assert.Nil(t, h)
 }
 
 func TestManager_SetLogger(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	// SetLogger just stores the logger reference; no return to check.
 	// Verify it doesn't panic.
 	m.SetLogger(debuglog.DefaultLogger)
@@ -201,7 +201,7 @@ func TestManager_SetLogger(t *testing.T) {
 }
 
 func TestManager_Reconnect_ServerNotConnected(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	// ConnectAll to an empty config — should succeed with no tools
 	config.SetBaseDir(t.TempDir())
@@ -213,7 +213,7 @@ func TestManager_Reconnect_ServerNotConnected(t *testing.T) {
 }
 
 func TestManager_Concurrency(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	var wg sync.WaitGroup
 	for range 10 {
@@ -232,7 +232,7 @@ func TestManager_Concurrency(t *testing.T) {
 }
 
 func TestManager_Disconnect_CloseError(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	addTestClient(m, "failing-server", &stubMCPClient{
 		closeFn: func() error {
@@ -248,7 +248,7 @@ func TestManager_Disconnect_CloseError(t *testing.T) {
 }
 
 func TestManager_Close_SomeErrors(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 
 	addTestClient(m, "good-server", &stubMCPClient{
 		closeFn: func() error { return nil },
@@ -263,7 +263,7 @@ func TestManager_Close_SomeErrors(t *testing.T) {
 }
 
 func TestManager_ConnectAll_DisabledServers(t *testing.T) {
-	m := NewManager()
+	m := NewManager(0, "")
 	baseDir := t.TempDir()
 	config.SetBaseDir(baseDir)
 	t.Cleanup(func() { config.SetBaseDir("") })

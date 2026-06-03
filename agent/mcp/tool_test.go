@@ -179,7 +179,7 @@ func TestMCPTool_ExecuteContext_EmptyArgs(t *testing.T) {
 	// With no manager, ExecuteContext should panic (nil pointer dereference).
 	// This is an expected constraint: the tool must always have a manager.
 	// We validate this by ensuring the function panics.
-	mgr := NewManager()
+	mgr := NewManager(0, "")
 	tool := MCPTool{
 		serverName: "test",
 		serverTool: &mcp.Tool{Name: "test"},
@@ -218,7 +218,7 @@ func TestContentToStringNonText(t *testing.T) {
 }
 
 func TestManager_NewManager(t *testing.T) {
-	mgr := NewManager()
+	mgr := NewManager(0, "")
 	assert.NotNil(t, mgr)
 	assert.Empty(t, mgr.clients)
 }

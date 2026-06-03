@@ -42,7 +42,7 @@ func (m *Manager) initSharedMCP() *mcp.Manager {
 			return
 		}
 
-		mgr := mcp.NewManager()
+		mgr := mcp.NewManager(m.cfg.ToolResult.MaxResultChars(), m.cfg.ToolResult.ResultFileDir())
 		mgr.SetLogger(m.logger)
 
 		m.sharedMCPMu.Lock()

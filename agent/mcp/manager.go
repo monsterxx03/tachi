@@ -54,21 +54,40 @@ type Manager struct {
 	initDone chan struct{}
 
 	initDoneOnce sync.Once
+
+	// Tool result truncation — configured from config.ToolResult.
+	// 0 means no limit (opt-out).
+	maxResultChars int
+	resultFileDir  string
 }
 
-// NewManager creates an empty MCP client manager.
-func NewManager() *Manager {
+// NewManager creates an empty MCP client manager with the given tool result
+// truncation config. maxChars <= 0 means no limit. Old tool result files in
+// fileDir are cleaned up on construction (best-effort, errors are logged).
+func NewManager(maxChars int, fileDir string) *Manager {
+	if fileDir != "" {
+		cleanupOldToolResults(fileDir, defaultToolResultMaxAge)
+	}
 	return &Manager{
-		clients:  make(map[string]MCPClient),
-		logger:   debuglog.DefaultLogger,
-		pool:     NewDeferredPool(),
-		set:      NewDiscoveredSet(),
-		initDone: make(chan struct{}),
+		clients:        make(map[string]MCPClient),
+		logger:         debuglog.DefaultLogger,
+		pool:           NewDeferredPool(),
+		set:            NewDiscoveredSet(),
+		initDone:       make(chan struct{}),
+		maxResultChars: maxChars,
+		resultFileDir:  fileDir,
 	}
 }
 
 // Pool returns the deferred-tool pool owned by this manager. Always non-nil.
 func (m *Manager) Pool() *DeferredPool { return m.pool }
+
+// ToolResultMaxChars returns the configured max chars for tool results.
+// 0 means no limit.
+func (m *Manager) ToolResultMaxChars() int { return m.maxResultChars }
+
+// ToolResultFileDir returns the configured directory for storing oversized results.
+func (m *Manager) ToolResultFileDir() string { return m.resultFileDir }
 
 // DiscoveredSet returns the discovered-tools set owned by this manager.
 // Always non-nil.

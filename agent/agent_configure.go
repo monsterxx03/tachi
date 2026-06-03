@@ -121,7 +121,7 @@ func (a *AIAgent) attachSharedMCPReminder() {
 // Thread-safe: tools are registered via the (now thread-safe) Registry,
 // and the deferred pool has its own mutex.
 func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
-	mgr := mcp.NewManager()
+	mgr := mcp.NewManager(cfg.ToolResult.MaxResultChars(), cfg.ToolResult.ResultFileDir())
 	mgr.SetLogger(a.logger)
 	a.mcpManager = mgr
 
