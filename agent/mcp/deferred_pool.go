@@ -89,7 +89,6 @@ type SearchResult = tools.MCPSearchResultItem
 // Search finds tools matching the query string.
 //
 // Query forms:
-//   - "exact:ToolName"          — exact name match, returns that tool directly
 //   - "select:Name1,Name2"     — fetch exact tools by name (comma-separated)
 //   - "keyword1 keyword2"      — keyword search, scored by relevance
 //   - "+mustHave term"         — "+" prefix means term is required in name/server
@@ -113,18 +112,7 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 		return p.searchAll(allTools, maxResults)
 	}
 
-	// 1. Exact match via "exact:" prefix
-	if exact, ok := strings.CutPrefix(query, "exact:"); ok {
-		name := strings.TrimSpace(exact)
-		for _, t := range allTools {
-			if strings.EqualFold(t.Name, name) {
-				return []SearchResult{p.toResult(t)}
-			}
-		}
-		return nil
-	}
-
-	// 2. Direct selection via "select:" prefix
+	// 1. Direct selection via "select:" prefix
 	if sel, ok := strings.CutPrefix(query, "select:"); ok {
 		names := strings.Split(sel, ",")
 		var results []SearchResult
@@ -195,9 +183,19 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 			optional = append(optional, term)
 		}
 	}
-	allScoringTerms := optional
-	if len(required) > 0 {
-		allScoringTerms = append(required, optional...)
+	var allScoringTerms []string
+	seen := make(map[string]bool)
+	for _, t := range required {
+		if !seen[t] {
+			seen[t] = true
+			allScoringTerms = append(allScoringTerms, t)
+		}
+	}
+	for _, t := range optional {
+		if !seen[t] {
+			seen[t] = true
+			allScoringTerms = append(allScoringTerms, t)
+		}
 	}
 
 	type scored struct {
@@ -213,7 +211,7 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 		if len(required) > 0 {
 			matchesAll := true
 			for _, req := range required {
-				if !matchesAny(req, parts, t.Description, t.SearchHint) {
+				if !matchesAny(req, parts, t.Description, t.SearchHint, t.ServerName) {
 					matchesAll = false
 					break
 				}
@@ -247,19 +245,18 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 	return results
 }
 
-// parseToolName splits a tool name into searchable parts.
 // "mcp__postgres__query" → ["postgres", "query"]
-// "mcp__github__create_pr" → ["github", "create", "pr"]
+// "mcp__github__createPullRequest" → ["github", "create", "pull", "request"]
 func parseToolName(name string) []string {
 	if !strings.HasPrefix(name, "mcp__") {
 		return []string{strings.ToLower(name)}
 	}
-	rest := strings.ToLower(name[5:]) // strip "mcp__"
+	rest := name[5:] // keep original case for CamelCase detection
 	var parts []string
 	for segment := range strings.SplitSeq(rest, "__") {
 		for _, word := range splitOnUnderscoreOrCamel(segment) {
 			if word != "" {
-				parts = append(parts, word)
+				parts = append(parts, strings.ToLower(word))
 			}
 		}
 	}
@@ -303,7 +300,7 @@ func tokenize(query string) []string {
 			continue
 		}
 		if strings.HasPrefix(clean, "+") && len(clean) > 1 {
-			term := strings.TrimSpace(clean[1:])
+			term := strings.TrimLeft(clean, "+")
 			if term != "" {
 				result = append(result, "+"+term)
 			}
@@ -315,10 +312,19 @@ func tokenize(query string) []string {
 }
 
 // matchesAny checks if a term matches any part of the tool metadata.
-func matchesAny(term string, parts []string, description, searchHint string) bool {
+func matchesAny(term string, parts []string, description, searchHint, serverName string) bool {
 	termLower := strings.ToLower(term)
 	descLower := strings.ToLower(description)
 	hintLower := strings.ToLower(searchHint)
+
+	// Check server name
+	serverLower := strings.ToLower(serverName)
+	if serverLower == termLower {
+		return true
+	}
+	if strings.Contains(serverLower, termLower) {
+		return true
+	}
 
 	// Check tool name parts
 	for _, p := range parts {

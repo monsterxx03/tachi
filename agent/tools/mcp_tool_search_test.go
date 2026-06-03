@@ -127,7 +127,7 @@ func TestMCPSearchToolsTool_Execute_TrackerCalled(t *testing.T) {
 		tracker,
 	)
 
-	_, err := tool.ExecuteContext(context.Background(), `{"query": "exact:mcp__pg__query"}`)
+	_, err := tool.ExecuteContext(context.Background(), `{"query": "select:mcp__pg__query"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

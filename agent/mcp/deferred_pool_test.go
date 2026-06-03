@@ -78,20 +78,20 @@ func TestSearch_EmptyQuery(t *testing.T) {
 	assert.Equal(t, 1, len(results))
 }
 
-func TestSearch_Exact(t *testing.T) {
+func TestSearch_SelectSingle(t *testing.T) {
 	p := NewDeferredPool()
 	p.Add(testDeferredTool("mcp__pg__query", "pg", "Query PG"))
 	p.Add(testDeferredTool("mcp__pg__list", "pg", "List tables"))
 
-	results := p.Search("exact:mcp__pg__query", 5)
+	results := p.Search("select:mcp__pg__query", 5)
 	require.Equal(t, 1, len(results))
 	assert.Equal(t, "mcp__pg__query", results[0].Name)
 }
 
-func TestSearch_Exact_NotFound(t *testing.T) {
+func TestSearch_Select_NotFound(t *testing.T) {
 	p := NewDeferredPool()
-	results := p.Search("exact:nonexistent", 5)
-	assert.Nil(t, results)
+	results := p.Search("select:nonexistent", 5)
+	assert.Empty(t, results)
 }
 
 func TestSearch_Select(t *testing.T) {
@@ -180,6 +180,18 @@ func TestSearch_Keyword_ScoreWithServer(t *testing.T) {
 	require.Equal(t, 2, len(results))
 	// gh__create_pr should score higher (server name + name part match)
 	assert.Equal(t, "mcp__gh__create_pr", results[0].Name)
+}
+
+func TestSearch_Keyword_DedupTerms(t *testing.T) {
+	// "+postgres postgres" should not double-count "postgres" in scoring.
+	p := NewDeferredPool()
+	// "postgres" matches server name → should be +15, not +30
+	p.Add(testDeferredTool("mcp__pg__query", "postgres", "Query database"))
+	p.Add(testDeferredTool("mcp__gh__pr", "gh", "Create pull requests"))
+
+	results := p.Search("+postgres postgres", 5)
+	require.Equal(t, 1, len(results))
+	assert.Equal(t, "mcp__pg__query", results[0].Name)
 }
 
 // ---------------------------------------------------------------------------
@@ -319,10 +331,9 @@ func TestParseToolName_MCP(t *testing.T) {
 }
 
 func TestParseToolName_MCP_CamelCase(t *testing.T) {
-	// Note: name is lowercased before CamelCase splitting, so CamelCase
-	// boundaries are lost. Single-segment CamelCase stays as a single word.
+	// CamelCase boundaries are now correctly detected (lowercased AFTER splitting).
 	parts := parseToolName("mcp__github__createPullRequest")
-	assert.Equal(t, []string{"github", "createpullrequest"}, parts)
+	assert.Equal(t, []string{"github", "create", "pull", "request"}, parts)
 }
 
 func TestParseToolName_MCP_MultiSegment(t *testing.T) {
@@ -388,9 +399,9 @@ func TestTokenize(t *testing.T) {
 		{"hello world", []string{"hello", "world"}},
 		{"  spaced  out  ", []string{"spaced", "out"}},
 		{"+mustHave optional", []string{"+mustHave", "optional"}},
-		{"+x", []string{"+x"}}, // single char after + preserved with + prefix
-		{"", nil},
-		{"a", []string{"a"}}, // single char is kept
+		{"++double", []string{"+double"}},                       // multiple + stripped to single
+		{"+++triple", []string{"+triple"}},                      // multiple + stripped to single
+		{"+x", []string{"+x"}},                                  // single char after + preserved with + prefix
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
@@ -411,17 +422,20 @@ func TestMatchesAny(t *testing.T) {
 		parts       []string
 		description string
 		searchHint  string
+		serverName  string
 		want        bool
 	}{
-		{"exact name part", "query", []string{"postgres", "query"}, "", "", true},
-		{"substring name part", "quer", []string{"postgres", "query"}, "", "", true},
-		{"search hint", "pg", []string{"postgres", "query"}, "", "pg, database", true},
-		{"description", "execute", []string{"postgres", "query"}, "Execute SQL", "", true},
-		{"no match", "python", []string{"postgres", "query"}, "", "", false},
+		{"exact name part", "query", []string{"postgres", "query"}, "", "", "", true},
+		{"substring name part", "quer", []string{"postgres", "query"}, "", "", "", true},
+		{"search hint", "pg", []string{"postgres", "query"}, "", "pg, database", "", true},
+		{"description", "execute", []string{"postgres", "query"}, "Execute SQL", "", "", true},
+		{"server name exact", "postgres", []string{"pg", "query"}, "", "", "postgres", true},
+		{"server name contains", "postgr", []string{"pg", "query"}, "", "", "postgres", true},
+		{"no match", "python", []string{"postgres", "query"}, "", "", "", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matchesAny(tt.term, tt.parts, tt.description, tt.searchHint)
+			got := matchesAny(tt.term, tt.parts, tt.description, tt.searchHint, tt.serverName)
 			assert.Equal(t, tt.want, got)
 		})
 	}

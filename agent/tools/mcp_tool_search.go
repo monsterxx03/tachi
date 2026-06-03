@@ -59,9 +59,10 @@ func (t *MCPSearchToolsTool) Description() string {
 		"Query forms: \"select:ToolName1,ToolName2\" for exact names, " +
 		"\"mcp__serverName\" for all tools of a server, " +
 		"or keywords like \"database query\" for relevance search. " +
+		"Prefix a term with + to require it (e.g. \"+postgres query\"). " +
 		"Once loaded, a tool can be called like any built-in tool."
-}
 
+}
 func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"query": {
