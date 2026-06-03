@@ -19,6 +19,13 @@ type DeferredTool struct {
 	SearchHint  string       // search keywords hint
 	Schema      tools.Schema // full parameter schema
 	Tool        tools.Tool   // actual MCP tool instance for lazy registration
+
+	// Cached search fields — computed once at creation, never modified.
+	// Avoids repeated ToLower/parseToolName/regex compilation in hot search paths.
+	nameParts   []string // parsed tool name parts (lowercased)
+	descLower   string
+	hintLower   string
+	serverLower string
 }
 
 // DeferredPool stores all MCP tools that are not yet loaded into the
@@ -26,6 +33,24 @@ type DeferredTool struct {
 type DeferredPool struct {
 	mu    sync.RWMutex
 	tools map[string]*DeferredTool
+}
+
+// searchTerm is a pre-compiled search term for efficient matching.
+// The regex pattern is compiled once per query, not per tool.
+type searchTerm struct {
+	raw      string
+	required bool
+	pattern  *regexp.Regexp // compiled \b word boundary pattern
+}
+
+// compileWordPattern compiles a word-boundary regex for the given term.
+func compileWordPattern(term string) *regexp.Regexp {
+	pattern := `\b` + regexp.QuoteMeta(term) + `\b`
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return nil
+	}
+	return re
 }
 
 // NewDeferredPool creates an empty deferred pool.
@@ -170,31 +195,39 @@ func (p *DeferredPool) toResult(t *DeferredTool) SearchResult {
 }
 
 // keywordSearch scores tools by keyword relevance and returns top results.
+// Uses pre-compiled regex patterns and cached lowercase fields to avoid
+// repeated allocations in the inner loop.
 func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxResults int) []SearchResult {
 	query = strings.ToLower(strings.TrimSpace(query))
-	terms := tokenize(query)
+	tokens := tokenize(query)
 
-	// Partition into required (+prefixed) and optional terms
-	var required, optional []string
-	for _, term := range terms {
-		if strings.HasPrefix(term, "+") && len(term) > 1 {
-			required = append(required, term[1:])
+	// Build pre-compiled search terms — regex compiled once per term, reused across all tools
+	var allTerms []searchTerm
+	for _, tok := range tokens {
+		if strings.HasPrefix(tok, "+") && len(tok) > 1 {
+			allTerms = append(allTerms, searchTerm{
+				raw:      tok[1:],
+				required: true,
+				pattern:  compileWordPattern(tok[1:]),
+			})
 		} else {
-			optional = append(optional, term)
+			allTerms = append(allTerms, searchTerm{
+				raw:     tok,
+				pattern: compileWordPattern(tok),
+			})
 		}
 	}
-	var allScoringTerms []string
+
+	// Partition: dedup scoring terms, collect required terms for pre-filter
 	seen := make(map[string]bool)
-	for _, t := range required {
-		if !seen[t] {
-			seen[t] = true
-			allScoringTerms = append(allScoringTerms, t)
+	var requiredTerms, scoringTerms []searchTerm
+	for _, st := range allTerms {
+		if !seen[st.raw] {
+			seen[st.raw] = true
+			scoringTerms = append(scoringTerms, st)
 		}
-	}
-	for _, t := range optional {
-		if !seen[t] {
-			seen[t] = true
-			allScoringTerms = append(allScoringTerms, t)
+		if st.required {
+			requiredTerms = append(requiredTerms, st)
 		}
 	}
 
@@ -205,26 +238,22 @@ func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxRes
 	var scoredTools []scored
 
 	for _, t := range tools {
-		parts := parseToolName(t.Name)
-
 		// Pre-filter: ALL required terms must match
-		if len(required) > 0 {
-			matchesAll := true
-			for _, req := range required {
-				if !matchesAny(req, parts, t.Description, t.SearchHint, t.ServerName) {
-					matchesAll = false
-					break
-				}
-			}
-			if !matchesAll {
-				continue
+		skip := false
+		for _, rt := range requiredTerms {
+			if !matchesAny(rt, t) {
+				skip = true
+				break
 			}
 		}
+		if skip {
+			continue
+		}
 
-		// Score against all terms
+		// Single scoring pass — uses cached fields + pre-compiled regex
 		totalScore := 0
-		for _, term := range allScoringTerms {
-			totalScore += scoreTool(term, parts, t.Description, t.SearchHint, t.ServerName)
+		for _, st := range scoringTerms {
+			totalScore += scoreTool(st, t)
 		}
 
 		if totalScore > 0 {
@@ -311,63 +340,51 @@ func tokenize(query string) []string {
 	return result
 }
 
-// matchesAny checks if a term matches any part of the tool metadata.
-func matchesAny(term string, parts []string, description, searchHint, serverName string) bool {
-	termLower := strings.ToLower(term)
-	descLower := strings.ToLower(description)
-	hintLower := strings.ToLower(searchHint)
+// matchesAny checks if a search term matches any part of the tool metadata.
+// Uses pre-compiled regex and cached lowercase fields — no regex compilation in hot path.
+func matchesAny(st searchTerm, t *DeferredTool) bool {
+	termLower := strings.ToLower(st.raw)
 
-	// Check server name
-	serverLower := strings.ToLower(serverName)
-	if serverLower == termLower {
-		return true
-	}
-	if strings.Contains(serverLower, termLower) {
+	// Server name
+	if t.serverLower == termLower || strings.Contains(t.serverLower, termLower) {
 		return true
 	}
 
-	// Check tool name parts
-	for _, p := range parts {
-		if p == termLower {
-			return true
-		}
-		if strings.Contains(p, termLower) {
+	// Tool name parts (pre-parsed, lowercased)
+	for _, p := range t.nameParts {
+		if p == termLower || strings.Contains(p, termLower) {
 			return true
 		}
 	}
 
-	// Check search hint (compiled regex for word boundary)
-	pattern := `\b` + regexp.QuoteMeta(termLower) + `\b`
-	if matched, _ := regexp.MatchString(pattern, hintLower); matched {
+	// Search hint (pre-compiled regex)
+	if st.pattern != nil && st.pattern.MatchString(t.hintLower) {
 		return true
 	}
 
-	// Check description
-	if matched, _ := regexp.MatchString(pattern, descLower); matched {
+	// Description (pre-compiled regex)
+	if st.pattern != nil && st.pattern.MatchString(t.descLower) {
 		return true
 	}
 
 	return false
 }
 
-// scoreTool calculates a relevance score for a term against tool metadata.
-func scoreTool(term string, parts []string, description, searchHint, serverName string) int {
-	termLower := strings.ToLower(term)
-	descLower := strings.ToLower(description)
-	hintLower := strings.ToLower(searchHint)
-	serverLower := strings.ToLower(serverName)
-
+// scoreTool calculates a relevance score for a search term against tool metadata.
+// Uses pre-compiled regex and cached lowercase fields — no regex compilation in hot path.
+func scoreTool(st searchTerm, t *DeferredTool) int {
+	termLower := strings.ToLower(st.raw)
 	score := 0
 
-	// Server name match (highest — user looking for a specific server)
-	if serverLower == termLower {
+	// Server name match (highest — user likely looking for a specific server)
+	if t.serverLower == termLower {
 		score += 15
-	} else if strings.Contains(serverLower, termLower) {
+	} else if strings.Contains(t.serverLower, termLower) {
 		score += 8
 	}
 
-	// Exact part match in tool name
-	for _, p := range parts {
+	// Tool name parts (pre-parsed, lowercased)
+	for _, p := range t.nameParts {
 		if p == termLower {
 			score += 10
 		} else if strings.Contains(p, termLower) {
@@ -375,14 +392,13 @@ func scoreTool(term string, parts []string, description, searchHint, serverName 
 		}
 	}
 
-	// Search hint match (curated signal)
-	pattern := `\b` + regexp.QuoteMeta(termLower) + `\b`
-	if matched, _ := regexp.MatchString(pattern, hintLower); matched {
+	// Search hint (curated signal, pre-compiled regex)
+	if st.pattern != nil && st.pattern.MatchString(t.hintLower) {
 		score += 4
 	}
 
-	// Description match
-	if matched, _ := regexp.MatchString(pattern, descLower); matched {
+	// Description (pre-compiled regex)
+	if st.pattern != nil && st.pattern.MatchString(t.descLower) {
 		score += 2
 	}
 
@@ -398,13 +414,22 @@ func NewDeferredToolFromMCPTool(t MCPTool, searchHintOverride string) *DeferredT
 		hint = buildSearchHint(t)
 	}
 
+	name := t.Name()
+	serverName := t.serverName
+	desc := t.serverTool.Description
+
 	return &DeferredTool{
-		Name:        t.Name(),
-		ServerName:  t.serverName,
-		Description: t.serverTool.Description,
+		Name:        name,
+		ServerName:  serverName,
+		Description: desc,
 		SearchHint:  hint,
 		Schema:      tools.ToSchema(t),
 		Tool:        t,
+		// Cached search fields — computed once, reused across all searches
+		nameParts:   parseToolName(name),
+		descLower:   strings.ToLower(desc),
+		hintLower:   strings.ToLower(hint),
+		serverLower: strings.ToLower(serverName),
 	}
 }
 

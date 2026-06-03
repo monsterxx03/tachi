@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/mark3labs/mcp-go/mcp"
@@ -15,6 +16,10 @@ func testDeferredTool(name, serverName, desc string) *DeferredTool {
 		Name:        name,
 		ServerName:  serverName,
 		Description: desc,
+		nameParts:   parseToolName(name),
+		descLower:   strings.ToLower(desc),
+		hintLower:   "",
+		serverLower: strings.ToLower(serverName),
 	}
 }
 
@@ -417,25 +422,41 @@ func TestTokenize(t *testing.T) {
 
 func TestMatchesAny(t *testing.T) {
 	tests := []struct {
-		name        string
-		term        string
-		parts       []string
-		description string
-		searchHint  string
-		serverName  string
-		want        bool
+		name string
+		term string
+		tool *DeferredTool
+		want bool
 	}{
-		{"exact name part", "query", []string{"postgres", "query"}, "", "", "", true},
-		{"substring name part", "quer", []string{"postgres", "query"}, "", "", "", true},
-		{"search hint", "pg", []string{"postgres", "query"}, "", "pg, database", "", true},
-		{"description", "execute", []string{"postgres", "query"}, "Execute SQL", "", "", true},
-		{"server name exact", "postgres", []string{"pg", "query"}, "", "", "postgres", true},
-		{"server name contains", "postgr", []string{"pg", "query"}, "", "", "postgres", true},
-		{"no match", "python", []string{"postgres", "query"}, "", "", "", false},
+		{"exact name part", "query", &DeferredTool{
+			nameParts: []string{"postgres", "query"},
+		}, true},
+		{"substring name part", "quer", &DeferredTool{
+			nameParts: []string{"postgres", "query"},
+		}, true},
+		{"search hint", "pg", &DeferredTool{
+			nameParts: []string{"postgres", "query"},
+			hintLower: "pg, database",
+		}, true},
+		{"description", "execute", &DeferredTool{
+			nameParts: []string{"postgres", "query"},
+			descLower: "execute sql",
+		}, true},
+		{"server name exact", "postgres", &DeferredTool{
+			nameParts:   []string{"pg", "query"},
+			serverLower: "postgres",
+		}, true},
+		{"server name contains", "postgr", &DeferredTool{
+			nameParts:   []string{"pg", "query"},
+			serverLower: "postgres",
+		}, true},
+		{"no match", "python", &DeferredTool{
+			nameParts: []string{"postgres", "query"},
+		}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := matchesAny(tt.term, tt.parts, tt.description, tt.searchHint, tt.serverName)
+			st := searchTerm{raw: tt.term, pattern: compileWordPattern(tt.term)}
+			got := matchesAny(st, tt.tool)
 			assert.Equal(t, tt.want, got)
 		})
 	}
@@ -446,20 +467,22 @@ func TestMatchesAny(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func TestScoreTool(t *testing.T) {
-	parts := []string{"postgres", "query"}
-	desc := "Execute SQL queries against PostgreSQL"
-	hint := "postgres, query, sql, database"
-	server := "postgres"
+	dt := &DeferredTool{
+		nameParts:   []string{"postgres", "query"},
+		descLower:   "execute sql queries against postgresql",
+		hintLower:   "postgres, query, sql, database",
+		serverLower: "postgres",
+	}
 
 	// Server exact match
-	assert.Greater(t, scoreTool("postgres", parts, desc, hint, server), 0)
+	assert.Greater(t, scoreTool(searchTerm{raw: "postgres", pattern: compileWordPattern("postgres")}, dt), 0)
 	// Name part exact match
-	assert.Greater(t, scoreTool("query", parts, desc, hint, server), 0)
+	assert.Greater(t, scoreTool(searchTerm{raw: "query", pattern: compileWordPattern("query")}, dt), 0)
 	// Description match (lowest)
-	score := scoreTool("execute", parts, desc, hint, server)
+	score := scoreTool(searchTerm{raw: "execute", pattern: compileWordPattern("execute")}, dt)
 	assert.Greater(t, score, 0)
 	// No match
-	assert.Equal(t, 0, scoreTool("python", parts, desc, hint, server))
+	assert.Equal(t, 0, scoreTool(searchTerm{raw: "python", pattern: compileWordPattern("python")}, dt))
 }
 
 // ---------------------------------------------------------------------------
