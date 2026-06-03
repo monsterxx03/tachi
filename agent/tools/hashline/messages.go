@@ -37,6 +37,16 @@ func ErrSnapshotRequired(path string) error {
 	)
 }
 
+// ErrStaleTag returns an error when a tag is not found for a path that has other
+// recorded snapshots (i.e., the file was read before but the tag is outdated).
+func ErrStaleTag(path, tag string) error {
+	return fmt.Errorf(
+		"Tag %q not found for %s — the file has been edited since this tag was issued. "+
+			"Re-read the file with the ReadFile tool to get the current tag and line numbers.",
+		tag, path,
+	)
+}
+
 // ErrLineOutOfRange returns an error when an operation references a line beyond the file.
 func ErrLineOutOfRange(line, totalLines int) error {
 	return fmt.Errorf(
@@ -85,5 +95,16 @@ func ErrContextLineOutOfRange(lineNum, totalLines int) error {
 		"Context line %d is beyond the file's %d lines. "+
 			"The file may have changed since you read it. Re-read with the ReadFile tool.",
 		lineNum, totalLines,
+	)
+}
+
+// ErrOverlappingRange returns an error when two replace/delete operations
+// target the same line.
+func ErrOverlappingRange(line int) error {
+	return fmt.Errorf(
+		"Line %d is targeted by multiple replace/delete operations. "+
+			"Each line can only be replaced or deleted once per edit. "+
+			"Combine the overlapping operations into a single `replace` or `delete` range.",
+		line,
 	)
 }

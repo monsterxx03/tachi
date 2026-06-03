@@ -143,7 +143,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		fullContent := string(content)
 		tag := t.snapshotStore.Record(filePath, fullContent)
 		return t.formatHashlineOutput(ctx, filePath, strings.Join(lines[start:end], "\n"), start+1, tag), nil
-		}
+	}
 	return result, nil
 }
 

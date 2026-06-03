@@ -1158,3 +1158,219 @@ func TestPatcherApplyWithContextLines(t *testing.T) {
 		t.Fatalf("content was not updated:\n%s", saved)
 	}
 }
+// --- OpType.String() ---
+
+func TestOpTypeString(t *testing.T) {
+	tests := []struct {
+		op   OpType
+		want string
+	}{
+		{OpReplace, "replace"},
+		{OpDelete, "delete"},
+		{OpInsertBefore, "insert_before"},
+		{OpInsertAfter, "insert_after"},
+		{OpInsertHead, "insert_head"},
+		{OpInsertTail, "insert_tail"},
+		{OpType(99), "unknown"},
+	}
+	for _, tt := range tests {
+		if got := tt.op.String(); got != tt.want {
+			t.Errorf("OpType(%d).String() = %q, want %q", tt.op, got, tt.want)
+		}
+	}
+}
+
+// --- Uppercase Hex Tag ---
+
+func TestParseUppercaseHexTag(t *testing.T) {
+	input := "¶file.go#A1F0\nreplace 1..1:\n+new\n"
+	sections, err := Parse(input, "/test")
+	if err != nil {
+		t.Fatalf("Parse() with uppercase hex tag failed: %v", err)
+	}
+	if sections[0].Tag != "a1f0" {
+		t.Fatalf("tag should be lowercased: got %q", sections[0].Tag)
+	}
+}
+
+func TestParseMixedCaseHexTag(t *testing.T) {
+	input := "¶file.go#aB3C\ndelete 2\n"
+	sections, err := Parse(input, "/test")
+	if err != nil {
+		t.Fatalf("Parse() with mixed-case hex tag failed: %v", err)
+	}
+	if sections[0].Tag != "ab3c" {
+		t.Fatalf("tag should be lowercased: got %q", sections[0].Tag)
+	}
+}
+
+// --- Minus Row Detection ---
+
+func TestParseMinusRowError(t *testing.T) {
+	input := "¶file.go#a1f0\nreplace 2..2:\n-old line\n+new line\n"
+	_, err := Parse(input, "/test")
+	if err == nil {
+		t.Fatal("expected error for `-` row in body")
+	}
+	if !strings.Contains(err.Error(), "not valid in hashline") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// --- Overlapping Range Detection ---
+
+func TestPatcherOverlappingRanges(t *testing.T) {
+	fs := newFakeFS()
+	snapshots := NewSnapshotStore()
+	patcher := NewPatcher(fs, snapshots)
+
+	path := "/test/file.go"
+	fs.files[path] = "a\nb\nc\nd\ne\n"
+	tag := snapshots.Record(path, fs.files[path])
+
+	section := Section{
+		Path: path,
+		Tag:  tag,
+		Operations: []Operation{
+			{Type: OpReplace, Start: 2, End: 4, Body: []string{"x"}},
+			{Type: OpDelete, Start: 3, End: 5},
+		},
+	}
+
+	_, err := patcher.Prepare(section)
+	if err == nil {
+		t.Fatal("expected error for overlapping ranges")
+	}
+	if !strings.Contains(err.Error(), "multiple replace/delete") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+// --- Multiple Insert to Same Line ---
+
+func TestPatcherMultipleInsertAfterSameLine(t *testing.T) {
+	fs := newFakeFS()
+	snapshots := NewSnapshotStore()
+	patcher := NewPatcher(fs, snapshots)
+
+	path := "/test/file.go"
+	fs.files[path] = "a\nb\nc\n"
+	tag := snapshots.Record(path, fs.files[path])
+
+	section := Section{
+		Path: path,
+		Tag:  tag,
+		Operations: []Operation{
+			{Type: OpInsertAfter, Start: 1, Body: []string{"x"}},
+			{Type: OpInsertAfter, Start: 1, Body: []string{"y"}},
+		},
+	}
+
+	prepared, err := patcher.Prepare(section)
+	if err != nil {
+		t.Fatalf("Prepare() failed: %v", err)
+	}
+
+	// Both inserts should be preserved (not overwritten)
+	want := "a\nx\ny\nb\nc\n"
+	if prepared.NewContent != want {
+		t.Fatalf("NewContent = %q, want %q", prepared.NewContent, want)
+	}
+}
+
+func TestPatcherMultipleInsertBeforeSameLine(t *testing.T) {
+	fs := newFakeFS()
+	snapshots := NewSnapshotStore()
+	patcher := NewPatcher(fs, snapshots)
+
+	path := "/test/file.go"
+	fs.files[path] = "a\nb\nc\n"
+	tag := snapshots.Record(path, fs.files[path])
+
+	section := Section{
+		Path: path,
+		Tag:  tag,
+		Operations: []Operation{
+			{Type: OpInsertBefore, Start: 2, Body: []string{"x"}},
+			{Type: OpInsertBefore, Start: 2, Body: []string{"y"}},
+		},
+	}
+
+	prepared, err := patcher.Prepare(section)
+	if err != nil {
+		t.Fatalf("Prepare() failed: %v", err)
+	}
+
+	want := "a\nx\ny\nb\nc\n"
+	if prepared.NewContent != want {
+		t.Fatalf("NewContent = %q, want %q", prepared.NewContent, want)
+	}
+}
+
+// --- Stale Tag vs Missing Snapshot ---
+
+func TestSnapshotStoreStaleTagError(t *testing.T) {
+	s := NewSnapshotStore()
+	path := "/tmp/test.go"
+
+	// Record a snapshot
+	s.Record(path, "content v1")
+
+	// Try to verify with a non-existent tag
+	err := s.Verify(path, "ffff", "content v1")
+	if err == nil {
+		t.Fatal("expected error for stale tag")
+	}
+	if !strings.Contains(err.Error(), "not found") {
+		t.Fatalf("expected stale tag error, got: %v", err)
+	}
+}
+
+func TestSnapshotStoreNoSnapshotError(t *testing.T) {
+	s := NewSnapshotStore()
+
+	// Try to verify a path that was never recorded
+	err := s.Verify("/unknown/file.go", "abcd", "content")
+	if err == nil {
+		t.Fatal("expected error for unknown path")
+	}
+	if !strings.Contains(err.Error(), "No snapshot recorded") {
+		t.Fatalf("expected snapshot-required error, got: %v", err)
+	}
+}
+
+// --- Apply Rollback ---
+
+func TestPatcherApplyRollbackOnCommitFailure(t *testing.T) {
+	fs := newFakeFS()
+	snapshots := NewSnapshotStore()
+	patcher := NewPatcher(fs, snapshots)
+
+	// Set up two files
+	fs.files["/test/a.go"] = "line1\nline2\n"
+	fs.files["/test/b.go"] = "aaa\nbbb\n"
+	tagA := snapshots.Record("/test/a.go", fs.files["/test/a.go"])
+	tagB := snapshots.Record("/test/b.go", fs.files["/test/b.go"])
+
+	// Create an input that edits both files, but use a failingFS for the second commit
+	input := "¶a.go#" + tagA + "\nreplace 1..1:\n+modified\n\n¶b.go#" + tagB + "\nreplace 1..1:\n+changed\n"
+
+	// First apply normally — both should succeed
+	results, err := patcher.Apply(input, "/test")
+	if err != nil {
+		t.Fatalf("Apply() should succeed: %v", err)
+	}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+
+	// Verify both files were updated
+	contentA, _ := fs.Read("/test/a.go")
+	if !strings.Contains(contentA, "modified") {
+		t.Fatal("a.go should be modified")
+	}
+	contentB, _ := fs.Read("/test/b.go")
+	if !strings.Contains(contentB, "changed") {
+		t.Fatal("b.go should be modified")
+	}
+}

@@ -20,7 +20,7 @@ var (
 	contextLineRe  = regexp.MustCompile(`^(\d+):(.*)$`)
 )
 
-var headerRe = regexp.MustCompile(`^¶(.+)#([0-9a-f]{4,})\s*$`)
+var headerRe = regexp.MustCompile(`^¶(.+)#([0-9a-fA-F]{4,})\s*$`)
 
 // Parse parses hashline operation-format text into a list of sections.
 // cwd is used to resolve relative display paths to absolute paths.
@@ -87,7 +87,7 @@ func parseSection(block, cwd string) (Section, error) {
 	}
 
 	displayPath := headerMatch[1]
-	tag := headerMatch[2]
+	tag := strings.ToLower(headerMatch[2])
 
 	// Resolve display path to absolute path
 	absPath := displayPath
@@ -219,7 +219,12 @@ func parseOperations(lines []string) ([]Operation, error) {
 			continue
 		}
 
-		// Skip lines that don't match (comments, blank lines with text)
+		// Detect common LLM mistake: `-` rows (diff-style deletion lines)
+		if strings.HasPrefix(trimmed, "-") {
+			return nil, fmt.Errorf("%s", ErrMinusRow)
+		}
+
+		// Skip lines that don't match (comments, etc.)
 		continue
 	}
 

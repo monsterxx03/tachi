@@ -20,8 +20,7 @@ const (
 	rightDoubleCurlyQuote = '\u201D' // "
 )
 
-// EditTool performs exact string replacements in files
-// EditTool performs exact string replacements in files
+// EditTool performs exact string replacements in files.
 type EditTool struct {
 	hashlineMode  bool                     // true = hashline mode (parse input, use patcher)
 	snapshotStore *hashline.SnapshotStore  // hashline snapshot store (nil when hashline disabled)
@@ -33,7 +32,6 @@ func NewEditTool() *EditTool {
 	return &EditTool{}
 }
 
-// SetHashlineMode enables/disables hashline editing mode.
 // SetHashlineMode enables/disables hashline editing mode.
 // store is the snapshot store used for tag verification.
 // threshold is the fuzzy matching tolerance for context line validation (0.0-1.0), default 0.95.

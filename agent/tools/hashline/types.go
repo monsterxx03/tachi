@@ -12,6 +12,26 @@ const (
 	OpInsertTail                  // insert tail: +body
 )
 
+// String returns the operation type name for debugging.
+func (t OpType) String() string {
+	switch t {
+	case OpReplace:
+		return "replace"
+	case OpDelete:
+		return "delete"
+	case OpInsertBefore:
+		return "insert_before"
+	case OpInsertAfter:
+		return "insert_after"
+	case OpInsertHead:
+		return "insert_head"
+	case OpInsertTail:
+		return "insert_tail"
+	default:
+		return "unknown"
+	}
+}
+
 // Operation represents a single edit operation within a section.
 type Operation struct {
 	Type  OpType

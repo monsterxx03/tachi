@@ -90,8 +90,11 @@ func (s *SnapshotStore) Verify(path, tag, currentContent string) error {
 	entry, tagOk := entries[tag]
 	s.mu.RUnlock()
 
-	if !pathOk || !tagOk {
+	if !pathOk {
 		return ErrSnapshotRequired(path)
+	}
+	if !tagOk {
+		return ErrStaleTag(path, tag)
 	}
 
 	currentHash := computeFullHash(currentContent)

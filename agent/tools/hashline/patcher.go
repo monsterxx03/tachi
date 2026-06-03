@@ -64,7 +64,6 @@ type SectionResult struct {
 }
 
 // Patcher applies hashline edits in a two-phase prepare/commit workflow.
-// Patcher applies hashline edits in a two-phase prepare/commit workflow.
 type Patcher struct {
 	fs            FileSystem
 	snapshots     *SnapshotStore
@@ -190,6 +189,7 @@ func (p *Patcher) Commit(prepared *PreparedSection) (*SectionResult, error) {
 }
 
 // Apply parses hashline input, validates all sections, then commits them all.
+// If any commit fails after partial writes, it attempts to roll back already-committed files.
 func (p *Patcher) Apply(input, cwd string) ([]SectionResult, error) {
 	sections, err := Parse(input, cwd)
 	if err != nil {
@@ -206,9 +206,14 @@ func (p *Patcher) Apply(input, cwd string) ([]SectionResult, error) {
 	}
 
 	results := make([]SectionResult, 0, len(prepared))
-	for _, ps := range prepared {
+	for i, ps := range prepared {
 		result, err := p.Commit(ps)
 		if err != nil {
+			// Roll back already-committed files
+			for j := range i {
+				_ = p.fs.Write(prepared[j].Path, prepared[j].OldContent)
+				p.snapshots.InvalidateTag(prepared[j].Path, results[j].Tag)
+			}
 			return nil, fmt.Errorf("commit %s: %w", ps.Path, err)
 		}
 		results = append(results, *result)
@@ -257,21 +262,21 @@ func applyOperations(ops []Operation, lines []string) ([]string, applyStats) {
 			if lineOps[op.Start] == nil {
 				lineOps[op.Start] = &lineOp{}
 			}
-			lineOps[op.Start].replacement = op.Body
+			lineOps[op.Start].replacement = append(lineOps[op.Start].replacement, op.Body...)
 		case OpInsertBefore:
 			if lineOps[op.Start] == nil {
 				lineOps[op.Start] = &lineOp{}
 			}
-			lineOps[op.Start].insertBefore = op.Body
+			lineOps[op.Start].insertBefore = append(lineOps[op.Start].insertBefore, op.Body...)
 		case OpInsertAfter:
 			if lineOps[op.Start] == nil {
 				lineOps[op.Start] = &lineOp{}
 			}
-			lineOps[op.Start].insertAfter = op.Body
+			lineOps[op.Start].insertAfter = append(lineOps[op.Start].insertAfter, op.Body...)
 		case OpInsertHead:
-			headLines = op.Body
+			headLines = append(headLines, op.Body...)
 		case OpInsertTail:
-			tailLines = op.Body
+			tailLines = append(tailLines, op.Body...)
 		}
 	}
 
@@ -327,8 +332,12 @@ func applyOperations(ops []Operation, lines []string) ([]string, applyStats) {
 	return result, stats
 }
 
-// validateOperations checks that all operation line numbers are valid.
+// validateOperations checks that all operation line numbers are valid
+// and detects overlapping replace/delete ranges.
 func validateOperations(ops []Operation, totalLines int) error {
+	// Track which lines are targeted by replace/delete for overlap detection
+	touched := make(map[int]bool)
+
 	for _, op := range ops {
 		switch op.Type {
 		case OpReplace, OpDelete:
@@ -337,6 +346,12 @@ func validateOperations(ops []Operation, totalLines int) error {
 			}
 			if op.End < op.Start || op.End > totalLines {
 				return ErrLineOutOfRange(op.End, totalLines)
+			}
+			for i := op.Start; i <= op.End; i++ {
+				if touched[i] {
+					return ErrOverlappingRange(i)
+				}
+				touched[i] = true
 			}
 		case OpInsertBefore, OpInsertAfter:
 			if op.Start < 1 || op.Start > totalLines {

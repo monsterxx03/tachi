@@ -312,7 +312,6 @@ func (a *AIAgent) RegisterTools() {
 		editTool.SetHashlineMode(true, snapshotStore, fuzzyThreshold)
 	}
 	a.toolRegistry.Register(editTool)
-	a.toolRegistry.Register(editTool)
 
 	a.toolRegistry.Register(tools.GlobTool{})
 	a.toolRegistry.Register(tools.GrepTool{})
