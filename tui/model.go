@@ -544,7 +544,14 @@ func (m *Model) handleKeyAskUser(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.setState(stateStreaming)
 		return m, nil
 	}
-	submit, cancelled := m.askUserView.HandleKey(msg.String())
+	// Forward scroll keys to chatview so the user can read context
+	// messages that may have been pushed up by the AskUser form.
+	s := msg.String()
+	if s == "pgup" || s == "pgdown" || s == "ctrl+u" || s == "ctrl+d" {
+		m.chatview, _ = m.chatview.Update(msg)
+		return m, nil
+	}
+	submit, cancelled := m.askUserView.HandleKey(s)
 	if cancelled {
 		m.agent.RespondToAskUser(nil, nil)
 	} else if submit {
