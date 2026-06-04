@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Hashline 编辑算法 — 深入解析</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --surface: #161b22;
+    --surface2: #21262d;
+    --border: #30363d;
+    --text: #c9d1d9;
+    --text2: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --red: #f85149;
+    --yellow: #d2991d;
+    --purple: #a371f7;
+    --orange: #d18616;
+    --code-bg: #1c2128;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    line-height: 1.7;
+    max-width: 960px;
+    margin: 0 auto;
+    padding: 40px 20px;
+  }
+  h1 { font-size: 2.2em; margin-bottom: 0.3em; color: #fff; }
+  h2 { font-size: 1.6em; margin: 2em 0 0.6em; color: #f0f6fc; border-bottom: 1px solid var(--border); padding-bottom: 0.3em; }
+  h3 { font-size: 1.2em; margin: 1.5em 0 0.5em; color: #e6edf3; }
+  p, li { margin: 0.5em 0; color: var(--text); }
+  ul, ol { padding-left: 1.5em; }
+  a { color: var(--accent); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+  code {
+    font-family: 'SF Mono', 'Fira Code', 'Cascadia Code', monospace;
+    font-size: 0.9em;
+    background: var(--code-bg);
+    padding: 2px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+  }
+  pre {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 16px;
+    overflow-x: auto;
+    margin: 0.8em 0;
+    font-size: 0.88em;
+  }
+  pre code {
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: inherit;
+  }
+  .subtitle { color: var(--text2); font-size: 1.1em; margin-bottom: 2em; }
+
+  /* Diagram / Card Styles */
+  .diagram {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    margin: 1.5em 0;
+    position: relative;
+  }
+  .diagram-title {
+    font-weight: 700;
+    font-size: 0.85em;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: var(--text2);
+    margin-bottom: 16px;
+  }
+
+  /* Flow */
+  .flow {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: center;
+    padding: 8px 0;
+  }
+  .flow-box {
+    background: var(--surface2);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 16px;
+    text-align: center;
+    font-weight: 600;
+    font-size: 0.88em;
+    min-width: 80px;
+  }
+  .flow-box.accent { border-color: var(--accent); color: var(--accent); }
+  .flow-box.green { border-color: var(--green); color: var(--green); }
+  .flow-box.red { border-color: var(--red); color: var(--red); }
+  .flow-box.yellow { border-color: var(--yellow); color: var(--yellow); }
+  .flow-box.purple { border-color: var(--purple); color: var(--purple); }
+  .flow-arrow { color: var(--text2); font-size: 1.4em; font-weight: 700; }
+
+  /* Two-column comparison */
+  .compare {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 16px;
+    margin: 1em 0;
+  }
+  @media (max-width: 700px) { .compare { grid-template-columns: 1fr; } }
+  .compare-col {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+  }
+  .compare-col h4 { margin: 0 0 8px; font-size: 0.95em; }
+  .compare-col .tag {
+    display: inline-block;
+    font-size: 0.72em;
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-weight: 700;
+    margin-left: 6px;
+    vertical-align: middle;
+  }
+  .tag.go { background: #00add815; color: #00add8; border: 1px solid #00add840; }
+  .tag.ts { background: #3178c615; color: #3178c6; border: 1px solid #3178c640; }
+
+  /* File format visual */
+  .file-block {
+    background: var(--code-bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 12px 16px;
+    font-family: 'SF Mono', monospace;
+    font-size: 0.85em;
+    line-height: 1.6;
+  }
+  .file-block .hl { color: var(--yellow); }
+  .file-block .kw { color: var(--purple); }
+  .file-block .num { color: var(--accent); }
+  .file-block .body { color: var(--green); }
+  .file-block .ctx { color: var(--text2); }
+  .file-block .err { color: var(--red); }
+
+  /* Bug cards */
+  .bug-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-left: 4px solid var(--red);
+    border-radius: 0 10px 10px 0;
+    padding: 16px 20px;
+    margin: 1em 0;
+  }
+  .bug-card.fixed {
+    border-left-color: var(--green);
+    opacity: 0.6;
+    position: relative;
+  }
+  .bug-card.fixed::after {
+    content: "✅ FIXED";
+    position: absolute;
+    right: 16px; top: 16px;
+    font-size: 0.72em;
+    color: var(--green);
+    font-weight: 700;
+  }
+  .bug-card h4 { margin: 0 0 4px; font-size: 1em; }
+  .bug-card .sev {
+    display: inline-block;
+    font-size: 0.7em;
+    padding: 1px 6px;
+    border-radius: 3px;
+    font-weight: 700;
+    margin-right: 6px;
+  }
+  .sev.p0 { background: #f8514920; color: var(--red); }
+  .sev.p1 { background: #d2991d20; color: var(--yellow); }
+
+  /* Step number */
+  .step-num {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px; height: 26px;
+    background: var(--accent);
+    color: #fff;
+    border-radius: 50%;
+    font-size: 0.78em;
+    font-weight: 700;
+    margin-right: 8px;
+    flex-shrink: 0;
+  }
+
+  .op-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 1em 0;
+    font-size: 0.9em;
+  }
+  .op-table th {
+    background: var(--surface2);
+    text-align: left;
+    padding: 8px 12px;
+    font-weight: 600;
+    border-bottom: 2px solid var(--border);
+  }
+  .op-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border);
+  }
+  .op-table code { font-size: 0.85em; }
+
+  .note {
+    background: #58a6ff10;
+    border: 1px solid #58a6ff30;
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 1em 0;
+    font-size: 0.9em;
+  }
+
+  .info-banner {
+    background: var(--surface);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    padding: 12px 16px;
+    margin: 2em 0 1em;
+    text-align: center;
+    color: var(--accent);
+    font-weight: 600;
+    font-size: 0.9em;
+  }
+</style>
+</head>
+<body>
+
+<h1>Hashline 编辑算法</h1>
+<p class="subtitle">从协议设计到两阶段事务的完整解析 — 附 Tachi(Go) 与 oh-my-pi(TypeScript) 实现对比</p>
+
+<div class="info-banner">
+  本文档基于 <strong>oh-my-pi</strong> (TypeScript / Bun) 和 <strong>Tachi</strong> (Go) 两个独立实现对比撰写。<br>
+  两者都以 oh-my-pi 的 hashline 协议为参考，但在细节上有显著差异。
+</div>
+
+<!-- ============================================================ -->
+<h2>一、设计动机：为什么需要 Hashline？</h2>
+
+<p>
+  传统<strong>字符串替换</strong>编辑（<code>old_string → new_string</code>）有三个致命弱点：
+</p>
+<ol>
+  <li><strong>歧义匹配</strong> — 如果 <code>"}"</code> 在文件中出现 10 次，LLM 需要提供足够大的上下文才能唯一定位</li>
+  <li><strong>编码陷阱</strong> — 不可见字符（全角空格、零宽连接符、curly quote）导致匹配失败</li>
+  <li><strong>无版本绑定</strong> — 读文件后如果被 lint-staged / git checkout 等外部进程修改了，编辑会作用于错误内容上</li>
+</ol>
+
+<p>
+  Hashline 用<strong>行号锚定 + 内容哈希版本绑定</strong>解决了这三个问题：LLM 按行号精确瞄准目标，快照 tag 确保文件未被篡改。
+</p>
+
+<div class="diagram">
+  <div class="diagram-title">Hashline 一次编辑的完整流程</div>
+  <div class="flow">
+    <div class="flow-box accent">ReadFile</div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box">记录快照<br><small>Record(path, content)</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box yellow">返回 ¶path#TAG<br>+ 行号内容</div>
+  </div>
+  <div style="text-align:center;margin:8px 0;color:var(--text2)">LLM 生成编辑指令 ↓</div>
+  <div class="flow">
+    <div class="flow-box accent">EditFile<br><small>hashline 模式</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box purple">Parse<br><small>解析 header+ops</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box yellow">Prepare<br><small>验证 tag → 内存应用</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box green">Commit<br><small>写入磁盘 + 新 tag</small></div>
+  </div>
+</div>
+
+<p>核心思想可以总结为三点：</p>
+<ul>
+  <li>🔢 <strong>行号即精确锚点</strong> — 用数字代替模糊的字符串匹配</li>
+  <li>🔐 <strong>快照 tag 即乐观锁</strong> — 基于整个文件内容的哈希，保证读写的原子性</li>
+  <li>🔄 <strong>两阶段事务</strong> — Prepare（验证所有）→ Commit（全部落盘），支持多文件回滚</li>
+</ul>
+
+<!-- ============================================================ -->
+<h2>二、Section 协议格式</h2>
+
+<h3>2.1 基本结构</h3>
+
+<div class="file-block">
+<span class="ctx"># 文件头：¶路径#4位16进制tag</span>
+<span class="hl">¶</span>src/main.go<span class="hl">#</span><span class="num">A1F0</span><br>
+<br>
+<span class="ctx"># 可选：上下文校验行（N:预期内容）</span>
+<span class="ctx">1:package main</span><br>
+<span class="ctx">2:</span><br>
+<span class="ctx">3:import "fmt"</span><br>
+<br>
+<span class="ctx"># 操作命令 + body</span>
+<span class="kw">replace</span> <span class="num">5</span>..<span class="num">5</span>:<br>
+<span class="body">+func greet(name string) string {</span><br>
+<span class="body">+    return fmt.Sprintf("Hello, %s", name)</span><br>
+<span class="body">+}</span><br>
+<br>
+<span class="kw">delete</span> <span class="num">8</span>..<span class="num">10</span><br>
+<br>
+<span class="kw">insert after</span> <span class="num">3</span>:<br>
+<span class="body">+import "os"</span><br>
+<br>
+<span class="kw">insert head</span>:<br>
+<span class="body">+// Code generated; DO NOT EDIT.</span><br>
+<br>
+<span class="kw">insert tail</span>:<br>
+<span class="body">+</span><br>
+<span class="body">+// End of file</span>
+</div>
+
+<p>一个 <strong>Section</strong> 对应一个文件。多个 Section 可以出现在同一个 EditFile 调用中（用 <code>¶</code> header 分隔）。</p>
+
+<h3>2.2 操作类型全景</h3>
+
+<table class="op-table">
+  <thead>
+    <tr><th>操作</th><th>语法</th><th>Body</th><th>含义</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td><strong>replace</strong></td>
+      <td><code>replace N..M:</code></td>
+      <td>需要 <code>+行</code></td>
+      <td>删除第 N-M 行，用 body 行替换</td>
+    </tr>
+    <tr>
+      <td><strong>delete</strong></td>
+      <td><code>delete N..M</code></td>
+      <td>不允许</td>
+      <td>删除第 N-M 行（无冒号）</td>
+    </tr>
+    <tr>
+      <td><strong>insert before</strong></td>
+      <td><code>insert before N:</code></td>
+      <td>需要 <code>+行</code></td>
+      <td>在第 N 行之前插入</td>
+    </tr>
+    <tr>
+      <td><strong>insert after</strong></td>
+      <td><code>insert after N:</code></td>
+      <td>需要 <code>+行</code></td>
+      <td>在第 N 行之后插入</td>
+    </tr>
+    <tr>
+      <td><strong>insert head</strong></td>
+      <td><code>insert head:</code></td>
+      <td>需要 <code>+行</code></td>
+      <td>在文件开头插入</td>
+    </tr>
+    <tr>
+      <td><strong>insert tail</strong></td>
+      <td><code>insert tail:</code></td>
+      <td>需要 <code>+行</code></td>
+      <td>在文件末尾插入</td>
+    </tr>
+  </tbody>
+</table>
+
+<div class="note">
+  <strong>关键规则：</strong><br>
+  • 行号始终引用<strong>原始文件</strong>（ReadFile 时看到的编号），操作顺序不影响行号<br>
+  • <code>replace N..N:</code> 就是替换一行；body 可以有任意多行<br>
+  • <code>delete N</code> 等价于 <code>delete N..N</code><br>
+  • 想插入一个空行？写 <code>+</code>（+ 后无内容）<br>
+  • 想插入字面 <code>-text</code>？写 <code>+-text</code>
+</div>
+
+<!-- ============================================================ -->
+<h2>三、快照存储与 Tag 验证</h2>
+
+<h3>3.1 双层哈希设计</h3>
+
+<p>
+  Tag 看起来像 <code>A1F0</code>（4 个 hex 字符），但背后是完整的 SHA-256。
+</p>
+
+<div class="compare">
+  <div class="compare-col">
+    <h4>oh-my-pi (TS) <span class="tag ts">TypeScript</span></h4>
+    <pre><code>// format.ts — computeFileHash
+function normalizeFileHashText(text: string): string {
+  return text.replace(/[ \t\r]+(?=\n|$)/g, "");
+}
+
+export function computeFileHash(text: string): string {
+  const normalized = normalizeFileHashText(text);
+  const low16 = Bun.hash.xxHash32(normalized, 0) & 0xffff;
+  return low16.toString(16).padStart(4, "0").toUpperCase();
+}</code></pre>
+    <p style="font-size:0.85em;color:var(--text2)">
+      • 用 xxHash32（极快）取低 16 bit → 4 hex<br>
+      • 哈希前做 <strong>per-line trailing whitespace strip</strong><br>
+      • 这样可以容忍编辑器和 CI 的尾空白差异
+    </p>
+  </div>
+  <div class="compare-col">
+    <h4>Tachi (Go) <span class="tag go">Go</span></h4>
+    <pre><code>// hash.go — ComputeTag
+func ComputeTag(content string) string {
+  return computeTagBytes(content, 2)
+}
+
+func computeTagBytes(content string, numBytes int) string {
+  h := sha256.Sum256([]byte(content))
+  return hex.EncodeToString(h[:numBytes])
+}</code></pre>
+    <p style="font-size:0.85em;color:var(--text2)">
+      • 用 SHA-256 取前 2 字节 → 4 hex<br>
+      • <strong>不做 trailing whitespace strip</strong><br>
+      • 因此对编辑器自动 trim 行为更敏感
+    </p>
+  </div>
+</div>
+
+<h3>3.2 SnapshotStore：内容寻址的版本管理</h3>
+
+<div class="diagram">
+  <div class="diagram-title">SnapshotStore 内部结构</div>
+  <pre><code>// 双层索引：path → tag → SnapshotEntry
+snapshots: {
+  "src/main.go": {
+    "a1f0": { tag: "a1f0", fullHash: "e3b0c442...", timestamp: ... },
+    "b2c1": { tag: "b2c1", fullHash: "6a09e667...", timestamp: ... },
+  },
+  "src/utils.go": {
+    "f0a3": { tag: "f0a3", fullHash: "...", timestamp: ... },
+  }
+}</code></pre>
+
+  <p style="margin-top:12px">
+    <strong>Record(path, content)</strong> — ReadFile 调用：存快照，返回 4-hex tag<br>
+    <strong>Verify(path, tag, currentContent)</strong> — Prepare 调用：用 FullHash 精确比对，防止 hash 碰撞<br>
+    <strong>InvalidateTag(path, tag)</strong> — 回滚时使用：删掉过期 tag
+  </p>
+</div>
+
+<div class="note">
+  <strong>oh-my-pi 的优势：</strong><br>
+  • <code>SnapshotStore.byHash(path, hash)</code> — 按 tag 反查完整文件文本<br>
+  • 这是 <strong>Recovery 机制</strong>的前提：当 live 文件与 tag 不匹配时，可以用存储的历史版本做 3-way merge<br>
+  • Tachi 的 SnapshotStore 没有这个反查能力，所以 Recovery 无法实现
+</div>
+
+<!-- ============================================================ -->
+<h2>四、两阶段事务（Prepare → Commit）</h2>
+
+<h3>4.1 Prepare 阶段（全在内存，不写盘）</h3>
+
+<div class="diagram">
+  <div class="diagram-title">Prepare 执行流程</div>
+  <div class="flow">
+    <div class="flow-box"><span class="step-num">1</span>Read file<br><small>OSFileSystem</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box yellow"><span class="step-num">2</span>Verify tag<br><small>SnapshotStore</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box"><span class="step-num">3</span>Validate ops<br><small>行号范围/重叠检测</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box purple"><span class="step-num">4</span>Validate context<br><small>fuzzy line match</small></div>
+    <div class="flow-arrow">→</div>
+    <div class="flow-box accent"><span class="step-num">5</span>Apply in memory<br><small>applyOperations</small></div>
+  </div>
+</div>
+
+<p><strong>关键点：</strong>所有 Section 的 Prepare 全部通过后，才开始 Commit。任何一个失败，整个调用返回错误，<strong>不会有部分写入</strong>。</p>
+
+<h3>4.2 Commit 阶段</h3>
+
+<p>Commit 是单个 Section 的写入，步骤简单：</p>
+<ol>
+  <li><strong>Write</strong> 新内容到磁盘（保留原 BOM 和行尾风格 — oh-my-pi 独有）</li>
+  <li><strong>Record</strong> 新快照（返回新的 tag 给 LLM 锚定下一轮编辑）</li>
+  <li>如果某个 Commit 失败（磁盘满等），<strong>回滚已写入的文件</strong> + invalidate 其 tag</li>
+</ol>
+
+<h3>4.3 Apply 的核心算法</h3>
+
+<div class="compare">
+  <div class="compare-col">
+    <h4>oh-my-pi <span class="tag ts">TypeScript</span></h4>
+    <pre><code>// apply.ts — 原子化编辑模型
+// parse 阶段：每个 replace N..M: + body
+//   展开为：
+//     N 个 "insert" (replacement body 行)
+//   + (M-N+1) 个 "delete" (原行)
+
+// applyEdits 阶段：
+// 1. bucket anchor edits by line
+// 2. process bottom-up (high line → low)
+//    这样行号偏移不影响未处理的 bucket
+// 3. per line: beforeInsert + replacement + afterInsert
+// 4. repairReplacementBoundaries
+//    → boundary echo detection
+//    → delimiter balance repair</code></pre>
+  </div>
+  <div class="compare-col">
+    <h4>Tachi <span class="tag go">Go</span></h4>
+    <pre><code>// patcher.go — 单 pass 合并
+// applyOperations 用 map[int]*lineOp
+// 收集每个原始行号的操作：
+
+type lineOp struct {
+  deleted      bool
+  replacement  []string
+  insertBefore []string
+  insertAfter  []string
+}
+
+// 一次遍历原始行：
+// for each line:
+//   → insertBefore
+//   → if deleted: replacement (skip original)
+//   → else: original line
+//   → insertAfter</code></pre>
+  </div>
+</div>
+
+<p>
+  oh-my-pi 的设计更"原子化"（把 replace 拆成 insert+delete 原子操作，bucket 化后 bottom-up），而 Tachi 用了更直接的"行号→操作"映射。两者的正确性在<strong>多个操作作用于同一行号</strong>时表现不同，这也是我们后续发现 bug 的根源。
+</p>
+
+<!-- ============================================================ -->
+<h2>五、Recovery（oh-my-pi 独有）</h2>
+
+<p>
+  当 <code>Verify(tag, currentContent)</code> 失败时（文件在 ReadFile 后被外部进程修改），oh-my-pi 不直接报错，而是尝试<strong>三种恢复策略</strong>：
+</p>
+
+<div class="diagram">
+  <div class="diagram-title">Recovery 决策树</div>
+  <pre><code>Tag 不匹配 → 查找历史版本
+
+  ┌─ 找到历史版本？
+  │
+  ├─ YES ── 是 HEAD（外部修改）？
+  │         ├─ 在历史版本上 apply → 3-way-merge 到 live
+  │         │   成功？→ ✅ 应用 + RECOVERY_EXTERNAL_WARNING
+  │         │   失败 ↓
+  │         │
+  │         └─ 是 session-chain（自己在 session 内改过）？
+  │            ├─ 行数相等 AND anchor 行内容未变？
+  │            │  → replay 在 live content 上
+  │            │    成功？→ ✅ RECOVERY_SESSION_REPLAY_WARNING
+  │            │    失败？→ ❌ mismatcherror
+  │            │
+  │            └─ line count diff → ❌ mismatcherror
+  │
+  └─ NO 历史版本 → ❌ mismatchError</code></pre>
+</div>
+
+<div class="note">
+  <strong>还有一个捷径：</strong>如果所有操作都是 <code>insert head</code> / <code>insert tail</code>（位置稳定，不受内容变化影响），即使 tag 不匹配，oh-my-pi 也只会发一个 warning 而不是 hard error。Tachi 的 Fix #4 正是移植了这个逻辑。
+</div>
+
+<!-- ============================================================ -->
+<h2>六、两个实现的关键差异（及发现的 Bug）</h2>
+
+<div class="bug-card fixed">
+  <h4><span class="sev p0">P0</span> Bug #1：CRLF 文件 Tag 必然不匹配</h4>
+  <p>
+    <strong>根因：</strong>ReadFile 存快照时用的是<strong>原始字节</strong>（含 <code>\r\n</code>），
+    但 Patcher.OSFileSystem.Read() 已经 <code>normalizeLineEndings</code>（<code>\r\n → \n</code>），
+    hash 不同 → 首次编辑必失败。
+  </p>
+  <p>
+    <strong>修复：</strong>ReadFile 在 <code>Record()</code> 之前也调用 <code>NormalizeLineEndings</code>。
+  </p>
+</div>
+
+<div class="bug-card fixed">
+  <h4><span class="sev p0">P0</span> Bug #2：insertAfter 在 deleted 行上被静默丢弃</h4>
+  <p>
+    <strong>根因：</strong><code>applyOperations</code> 中 <code>continue</code> 跳过了 <code>insertAfter</code> 代码块。
+    当 LLM 写 <code>replace 2..2: +新内容</code> 同时 <code>insert after 2: +追加</code> 时，追加内容消失。
+  </p>
+  <p>
+    <strong>修复：</strong>在 <code>continue</code> 之前也处理 <code>lo.insertAfter</code>。
+  </p>
+</div>
+
+<div class="bug-card fixed">
+  <h4><span class="sev p0">P0</span> Bug #3：空行被当作 Section 分隔符</h4>
+  <p>
+    <strong>根因：</strong><code>splitSections</code> 用空行切分 section，但 section 内部 body 也可能有空行（操作之间分隔、<code>+</code> 插入空行）。
+  </p>
+  <p>
+    <strong>修复：</strong>改为按 <code>¶PATH#TAG</code> header 分隔。
+  </p>
+</div>
+
+<div class="bug-card fixed">
+  <h4><span class="sev p1">P1</span> Bug #4：无 head/tail-only stale tag 的降级处理</h4>
+  <p>
+    <strong>修复：</strong>纯 head/tail 操作对 stale tag 不 fatal，改为 warning + 应用到 live content。
+  </p>
+</div>
+
+<div class="bug-card fixed">
+  <h4><span class="sev p1">P1</span> Bug #5：bare body line（无 + 前缀）被静默丢弃</h4>
+  <p>
+    <strong>修复：</strong>Auto-pipe 进 body 内容（匹配 oh-my-pi 的 <code>BARE_BODY_AUTO_PIPED_WARNING</code>）。
+  </p>
+</div>
+
+<div class="bug-card">
+  <h4><span class="sev p1">P1</span> 未修复：无完整 Recovery 机制</h4>
+  <p>
+    oh-my-pi 的三阶段 Recovery（3-way-merge / session-chain replay / head-tail warning）Tachi 仅实现了最后一级。
+    前两级需要 <code>SnapshotStore.byHash()</code> 反查能力和 <code>diff</code> 库支持。
+  </p>
+</div>
+
+<div class="bug-card">
+  <h4><span class="sev p1">P2</span> 未修复：无 Boundary Echo / Delimiter Balance Repair</h4>
+  <p>
+    oh-my-pi 的 <code>repairReplacementBoundaries</code> 自动修复 LLM 常见的边界错误（range 包含未改动的函数签名/括号），
+    Tachi 完全没有这类修复。
+  </p>
+</div>
+
+<!-- ============================================================ -->
+<h2>七、协议设计中的巧妙细节</h2>
+
+<h3>7.1 上下文校验行（Context Lines）</h3>
+<p>
+  在操作命令之前，LLM 可以<strong>可选地</strong>写入 <code>N:预期内容</code> 行作为"二次确认"：
+</p>
+<div class="file-block">
+<span class="hl">¶</span>config.go<span class="hl">#</span><span class="num">B2C1</span><br>
+<span class="ctx">15:func (s *Server) Listen(addr string) error {</span><br>
+<span class="ctx">16:    ln, err := net.Listen("tcp", addr)</span><br>
+<span class="kw">replace</span> <span class="num">15</span>..<span class="num">16</span>:<br>
+<span class="body">+func (s *Server) Listen(addr string, opts ...Option) error {</span><br>
+<span class="body">+    ln, err := s.createListener(addr, opts...)</span>
+</div>
+<p>
+  Patcher 用 <strong>Levenshtein 模糊匹配</strong>（默认阈值 0.95）比对上下文行与文件实际内容。这是一个精致的双重保险：
+  tag 保证文件整体未被改过，context line 额外保证「你要改的这几行确实是你以为的那几行」。
+</p>
+
+<h3>7.2 操作顺序独立于行号</h3>
+<p>
+  所有操作的<strong>行号参数始终引用原始文件</strong>。无论 section 里有 5 个操作还是 50 个，它们同时基于同一份原始内容计算结果。
+  这极大降低了 LLM 的认知负担 — 它不需要推算"删掉第 3 行后第 5 行变成了第几行"。
+</p>
+
+<h3>7.3 Content-Addressable 去重</h3>
+<p>
+  如果两次 ReadFile 读到完全相同的文件内容，<code>Record()</code> 返回<strong>同一个 tag</strong>。
+  这不仅节约了存储，更重要的是给了 LLM 一个清晰的信号："你之前看到的文件没变，可以放心继续操作。"
+</p>
+
+<!-- ============================================================ -->
+<h2>八、数据结构全景图</h2>
+
+<div class="diagram">
+  <div class="diagram-title">核心类型关系</div>
+  <pre><code>Section {
+  Path:         string           // 绝对路径
+  Tag:          string           // 4-hex snapshot tag
+  Operations:   []Operation      // 编辑操作列表
+  ContextLines: map[int]string   // 可选的行号→内容校验
+}
+
+Operation {
+  Type:  OpReplace | OpDelete | OpInsertBefore |
+         OpInsertAfter | OpInsertHead | OpInsertTail
+  Start: int        // 1-indexed（replace/delete 的起行）
+  End:   int        // 1-indexed（replace/delete 的止行）
+  Body:  []string   // + 行内容（insert/replace）
+}
+
+SnapshotStore {
+  snapshots: path → tag → SnapshotEntry {
+    Tag:       string     // "a1f0"
+    FullHash:  string     // 完整 SHA-256 hex
+    Timestamp: time.Time
+  }
+}
+
+PreparedSection {     // Prepare 的输出，Commit 的输入
+  Path, NewContent, OldContent, Changes, Added, Removed
+  Warnings: []string  // 非致命警告（head/tail stale 等）
+}</code></pre>
+</div>
+
+<!-- ============================================================ -->
+<h2>九、总结</h2>
+
+<p>
+  Hashline 协议的精髓在于<strong>用哈希做乐观锁、用行号做精确索引</strong>，把文件编辑变成了一个具备 ACID 特性的小事务。两个实现（oh-my-pi TypeScript 和 Tachi Go）各有侧重：
+</p>
+
+<ul>
+  <li><strong>oh-my-pi</strong> 是"全功能参考实现"：normalized hash、Recovery、boundary repair、BOM/line-ending 保留、block edit（tree-sitter 感知的语法块替换）</li>
+  <li><strong>Tachi</strong> 是"精简版学习者"：核心正确但缺少韧性层（Recovery、boundary repair），在 LLM 不那么"听话"的时候更容易失败</li>
+</ul>
+
+<p>
+  本次发现的 5 个 bug 修复后，Tachi 的编辑成功率会显著提升 — 尤其是 P0 级别的 CRLF mismatch 和 insertAfter 丢弃，这两个是日常使用中最高频的失败场景。
+</p>
+
+<p style="margin-top:2em;color:var(--text2);font-size:0.85em;text-align:center;">
+  文档生成于 2026-06-04 · 基于 Tachi commit <code>64fdbd2</code> · oh-my-pi <code>packages/hashline</code>
+</p>
+
+</body>
+</html>

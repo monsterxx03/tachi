@@ -29,7 +29,7 @@ func Parse(input string, cwd string) ([]Section, error) {
 		return nil, fmt.Errorf("%s", ErrEmptyInput)
 	}
 
-	rawSections := splitSections(normalizeLineEndings(input))
+	rawSections := splitSections(NormalizeLineEndings(input))
 	if len(rawSections) == 0 {
 		return nil, fmt.Errorf("%s", ErrEmptyInput)
 	}
@@ -46,28 +46,40 @@ func Parse(input string, cwd string) ([]Section, error) {
 	return sections, nil
 }
 
-// splitSections splits input into sections separated by blank lines.
+// splitSections splits input into sections delimited by `¶PATH#TAG` headers.
+// Blank lines within a section do NOT start a new section — only a new header
+// line demarcates section boundaries. This matches oh-my-pi's tokenizer
+// behavior where sections are purely header-delimited.
 func splitSections(input string) []string {
 	lines := strings.Split(input, "\n")
 	var sections []string
 	var current []string
 
+	flush := func() {
+		if len(current) > 0 {
+			// Trim trailing blank lines from the section block (they belong to
+			// the whitespace between sections, not to the section itself).
+			for len(current) > 0 && strings.TrimSpace(current[len(current)-1]) == "" {
+				current = current[:len(current)-1]
+			}
+			if len(current) > 0 {
+				sections = append(sections, strings.Join(current, "\n"))
+			}
+			current = nil
+		}
+	}
+
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
-		if trimmed == "" && len(current) > 0 {
-			sections = append(sections, strings.Join(current, "\n"))
-			current = nil
-			continue
+		if headerRe.MatchString(trimmed) {
+			flush()
 		}
 		if trimmed != "" || len(current) > 0 {
 			current = append(current, line)
 		}
 	}
 
-	if len(current) > 0 {
-		sections = append(sections, strings.Join(current, "\n"))
-	}
-
+	flush()
 	return sections
 }
 
@@ -224,6 +236,14 @@ func parseOperations(lines []string) ([]Operation, error) {
 			return nil, fmt.Errorf("%s", ErrMinusRow)
 		}
 
+		// Auto-pipe bare body lines: LLM sometimes forgets the + prefix.
+		// Treat the line as body content with a warning instead of silently
+		// dropping it. This matches oh-my-pi's BARE_BODY_AUTO_PIPED_WARNING.
+		if pendingOp != nil && trimmed != "" {
+			currentBody = append(currentBody, line)
+			continue
+		}
+
 		// Skip lines that don't match (comments, etc.)
 		continue
 	}
@@ -300,8 +320,8 @@ func parseInt(s string) int {
 	return n
 }
 
-// normalizeLineEndings converts CRLF and CR to LF.
-func normalizeLineEndings(s string) string {
+// NormalizeLineEndings converts CRLF and CR to LF.
+func NormalizeLineEndings(s string) string {
 	s = strings.ReplaceAll(s, "\r\n", "\n")
 	s = strings.ReplaceAll(s, "\r", "\n")
 	return s

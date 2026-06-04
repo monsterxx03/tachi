@@ -140,8 +140,12 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 
 	// Hashline mode: return formatted output with ¶path#tag + line numbers
 	if t.hashlineMode && t.snapshotStore != nil {
+		// Normalize before recording so the snapshot tag matches what
+		// Patcher.OSFileSystem.Read returns (which normalizes CRLF→LF).
+		// Without this, CRLF files get a different hash on Read vs. Edit.
 		fullContent := string(content)
-		tag := t.snapshotStore.Record(filePath, fullContent)
+		normalized := hashline.NormalizeLineEndings(fullContent)
+		tag := t.snapshotStore.Record(filePath, normalized)
 		return t.formatHashlineOutput(ctx, filePath, strings.Join(lines[start:end], "\n"), start+1, tag), nil
 	}
 	return result, nil

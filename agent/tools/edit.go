@@ -253,6 +253,9 @@ func (t *EditTool) executeHashline(ctx context.Context, input string) (string, e
 			r.Path, r.Changes, r.Added, r.Removed, r.Tag)
 		sb.WriteString(summary)
 		sb.WriteString("\n")
+		for _, w := range r.Warnings {
+			sb.WriteString(fmt.Sprintf("[warning] %s\n", w))
+		}
 	}
 	return sb.String(), nil
 }

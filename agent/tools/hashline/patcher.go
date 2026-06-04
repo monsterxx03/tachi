@@ -22,7 +22,7 @@ func (OSFileSystem) Read(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	return normalizeLineEndings(string(data)), nil
+	return NormalizeLineEndings(string(data)), nil
 }
 
 func (OSFileSystem) Write(path string, content string) error {
@@ -52,15 +52,17 @@ type PreparedSection struct {
 	Changes    int // number of lines changed
 	Added      int // number of lines added
 	Removed    int // number of lines removed
+	Warnings   []string // non-fatal warnings (e.g. head/tail-only stale tag)
 }
 
 // SectionResult reports the outcome of a committed edit.
 type SectionResult struct {
-	Path    string
-	Tag     string
-	Changes int
-	Added   int
-	Removed int
+	Path     string
+	Tag      string
+	Changes  int
+	Added    int
+	Removed  int
+	Warnings []string // non-fatal warnings surfaced to the caller
 }
 
 // Patcher applies hashline edits in a two-phase prepare/commit workflow.
@@ -98,9 +100,21 @@ func (p *Patcher) Prepare(section Section) (*PreparedSection, error) {
 		return nil, fmt.Errorf("read file %s: %w", section.Path, err)
 	}
 
-	// Verify hash tag
+	// Verify hash tag. If it fails but all operations are head/tail-only
+	// (no anchor-scoped ops), apply on the live content with a warning
+	// instead of hard-failing. Head/tail inserts are position-stable:
+	// "start" and "end" cannot move with content drift.
+	var warnings []string
 	if err := p.snapshots.Verify(section.Path, section.Tag, content); err != nil {
-		return nil, err
+		if hasAnchorScopedOps(section.Operations) {
+			return nil, err
+		}
+		// Head/tail-only: stale tag is non-fatal
+		warnings = append(warnings, fmt.Sprintf(
+			"Snapshot tag for %s is stale, but edits are head/tail-only so they were applied to the live content. "+
+				"Re-read the file if you need to anchor on specific line numbers.",
+			section.Path,
+		))
 	}
 
 	lines := strings.Split(content, "\n")
@@ -137,6 +151,7 @@ func (p *Patcher) Prepare(section Section) (*PreparedSection, error) {
 		Changes:    stats.changes,
 		Added:      stats.added,
 		Removed:    stats.removed,
+		Warnings:   warnings,
 	}, nil
 }
 
@@ -180,11 +195,12 @@ func (p *Patcher) Commit(prepared *PreparedSection) (*SectionResult, error) {
 	tag := p.snapshots.Record(prepared.Path, prepared.NewContent)
 
 	return &SectionResult{
-		Path:    prepared.Path,
-		Tag:     tag,
-		Changes: prepared.Changes,
-		Added:   prepared.Added,
-		Removed: prepared.Removed,
+		Path:     prepared.Path,
+		Tag:      tag,
+		Changes:  prepared.Changes,
+		Added:    prepared.Added,
+		Removed:  prepared.Removed,
+		Warnings: prepared.Warnings,
 	}, nil
 }
 
@@ -298,6 +314,12 @@ func applyOperations(ops []Operation, lines []string) ([]string, applyStats) {
 			if lo.replacement != nil {
 				result = append(result, lo.replacement...)
 			}
+			// Insert-after still applies even when the anchor line is deleted
+			// (e.g. replace 2..2: +replaced then insert after 2: +extra).
+			// This mirrors oh-my-pi's bottom-up per-line bucket behavior.
+			if lo.insertAfter != nil {
+				result = append(result, lo.insertAfter...)
+			}
 			continue
 		}
 
@@ -360,4 +382,19 @@ func validateOperations(ops []Operation, totalLines int) error {
 		}
 	}
 	return nil
+}
+
+// hasAnchorScopedOps returns true when any operation references a concrete
+// line number (replace, delete, insert before/after). Only head/tail inserts
+// are position-stable when the file content drifts.
+func hasAnchorScopedOps(ops []Operation) bool {
+	for _, op := range ops {
+		switch op.Type {
+		case OpInsertHead, OpInsertTail:
+			// position-stable — continue
+		default:
+			return true
+		}
+	}
+	return false
 }
