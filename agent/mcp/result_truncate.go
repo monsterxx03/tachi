@@ -11,13 +11,13 @@ import (
 )
 
 const (
-	truncationPreviewChars    = 2000
-	defaultToolResultMaxAge   = 24 * time.Hour
+	defaultToolResultMaxAge = 24 * time.Hour
 )
 
 // truncateToolOutput checks if a tool result exceeds maxChars and, if so,
-// saves the full output to disk and returns a truncation message with
-// a preview and the file path so the LLM can read more via ReadFile.
+// saves the full output to disk and returns a compact message with the file
+// path so the LLM can read more via ReadFile — no preview content is included
+// to avoid context bloat.
 //
 // When maxChars <= 0, the result is returned unchanged (no limit).
 func truncateToolOutput(result string, maxChars int, fileDir string, toolName string) string {
@@ -49,30 +49,15 @@ func truncateToolOutput(result string, maxChars int, fileDir string, toolName st
 	// Best-effort background cleanup of old files.
 	go cleanupOldToolResults(fileDir, defaultToolResultMaxAge)
 
-	// Build preview (first N chars, broken at newline boundary when possible).
-	preview, hasMore := buildPreview(result, truncationPreviewChars)
-
 	var sb strings.Builder
-	// Use multi-line header for LLM readability but compact enough.
 	sb.WriteString(fmt.Sprintf(
-		"[OUTPUT TOO LARGE]\nFull output (%d chars) exceeds limit (%d chars).\n",
+		"[OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
 		len(result), maxChars,
 	))
-	sb.WriteString(fmt.Sprintf("Saved to: %s\n\n", filepath))
-	sb.WriteString(fmt.Sprintf("Preview (first %d chars):\n", truncationPreviewChars))
-	sb.WriteString(preview)
-	if hasMore {
-		sb.WriteString("\n...")
-	}
 	sb.WriteString(fmt.Sprintf(
-		"\n\n[... %d chars truncated ...]\n\n",
-		len(result)-maxChars,
-	))
-	sb.WriteString(fmt.Sprintf(
-		"Use ReadFile with offset and limit to read the full output from:\n  %s",
+		"Use ReadFile to read the full output from:\n  %s",
 		filepath,
 	))
-
 	return sb.String()
 }
 
@@ -85,20 +70,6 @@ func hardTruncate(result string, maxChars int, toolName string) string {
 			"Use pagination or filtering on the MCP server if available.]",
 		maxChars, truncated, len(result)-maxChars,
 	)
-}
-
-// buildPreview returns the first maxBytes of content, breaking at the last
-// newline if one exists in the second half of the preview range.
-func buildPreview(content string, maxBytes int) (preview string, hasMore bool) {
-	if len(content) <= maxBytes {
-		return content, false
-	}
-	truncated := content[:maxBytes]
-	// Find last newline in the second half for a clean break.
-	if lastNL := strings.LastIndex(truncated, "\n"); lastNL > maxBytes/2 {
-		return content[:lastNL+1], true
-	}
-	return truncated, true
 }
 
 // sanitizeForFilename replaces characters that are problematic in filenames.

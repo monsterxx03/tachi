@@ -38,15 +38,18 @@ func TestTruncateToolOutput_OverLimit_FilePersistence(t *testing.T) {
 		t.Errorf("expected truncated output, got %d chars (input %d)", len(output), len(result))
 	}
 
-	// Should contain the truncation markers.
+	// Should contain the truncation marker and file path — but NOT preview content.
 	if !strings.Contains(output, "[OUTPUT TOO LARGE]") {
 		t.Error("output should contain [OUTPUT TOO LARGE] marker")
 	}
-	if !strings.Contains(output, "Saved to:") {
-		t.Error("output should contain file path")
+	if !strings.Contains(output, "Use ReadFile") {
+		t.Error("output should contain ReadFile instruction")
 	}
-	if !strings.Contains(output, "ReadFile with offset and limit") {
-		t.Error("output should contain ReadFile instructions")
+	if !strings.Contains(output, tmpDir) {
+		t.Error("output should contain the file directory path")
+	}
+	if strings.Contains(output, "Preview") {
+		t.Error("output should NOT contain preview content")
 	}
 
 	// Verify the file was created.
@@ -122,38 +125,6 @@ func TestSanitizeForFilename(t *testing.T) {
 	}
 }
 
-func TestBuildPreview(t *testing.T) {
-	t.Run("short enough", func(t *testing.T) {
-		preview, hasMore := buildPreview("hello", 100)
-		if preview != "hello" || hasMore {
-			t.Errorf("got (%q, %v), want (hello, false)", preview, hasMore)
-		}
-	})
-
-	t.Run("truncates at newline", func(t *testing.T) {
-		// 30 chars per line, 3 lines = 90 chars, limit 80
-		content := strings.Repeat("abcdefghij\n", 10)
-		preview, hasMore := buildPreview(content, 80)
-		if !hasMore {
-			t.Error("should have more")
-		}
-		// Should break at a newline, not mid-line.
-		if !strings.HasSuffix(preview, "\n") {
-			t.Error("should break at newline boundary")
-		}
-	})
-
-	t.Run("no good newline", func(t *testing.T) {
-		content := strings.Repeat("x", 200)
-		preview, hasMore := buildPreview(content, 100)
-		if !hasMore {
-			t.Error("should have more")
-		}
-		if len(preview) != 100 {
-			t.Errorf("expected 100 chars, got %d", len(preview))
-		}
-	})
-}
 
 func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 	// Build an MCPTool backed by a Manager with a stub client that returns
@@ -181,7 +152,6 @@ func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-
 	// Should be truncated.
 	if !strings.Contains(output, "[OUTPUT TOO LARGE]") {
 		t.Error("expected truncated output")
@@ -190,12 +160,12 @@ func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 		t.Errorf("output should be shorter than original (%d >= %d)", len(output), len(largeContent))
 	}
 
-	// Should contain file path + ReadFile instruction.
-	if !strings.Contains(output, "Saved to:") {
-		t.Error("should contain file path")
-	}
-	if !strings.Contains(output, "ReadFile") {
+	// Should contain file path + ReadFile instruction — but NOT preview content.
+	if !strings.Contains(output, "Use ReadFile") {
 		t.Error("should contain ReadFile instruction")
+	}
+	if strings.Contains(output, "Preview") {
+		t.Error("should NOT contain preview content")
 	}
 }
 
