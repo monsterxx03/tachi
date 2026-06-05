@@ -247,7 +247,7 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 
 // connect establishes a connection to a single MCP server and discovers its tools.
 func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
-	timeout := srv.Timeout
+	timeout := time.Duration(srv.Timeout)
 	ctx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 

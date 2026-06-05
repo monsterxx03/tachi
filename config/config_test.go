@@ -1,6 +1,7 @@
 package config
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -307,152 +308,270 @@ func TestEffectiveLanguage(t *testing.T) {
 	assert.Equal(t, "", c.Language)
 }
 
-// --- MCP Profile expansion tests ---
+// --- MCP JSON config tests ---
 
-func TestExpandMCPProfiles_NoProfile(t *testing.T) {
-	cfg := &Config{
-		MCPServers: []MCPServerConfig{
-			{Name: "always-on", Type: MCPTransportHTTP, URL: "https://always.example.com"},
-		},
-	}
-	err := cfg.ExpandMCPProfiles()
+func TestLoadMCPConfig_NoFiles(t *testing.T) {
+	// When no JSON files exist, returns nil, nil.
+	servers, err := LoadMCPConfig("", t.TempDir())
 	require.NoError(t, err)
-	assert.Len(t, cfg.MCPServers, 1)
-	assert.Equal(t, "always-on", cfg.MCPServers[0].Name)
-	assert.Empty(t, cfg.MCPServers[0].Profile)
+	assert.Nil(t, servers)
 }
 
-func TestExpandMCPProfiles_ActiveProfile(t *testing.T) {
-	cfg := &Config{
-		MCPServers: []MCPServerConfig{
-			{Name: "always-on", Type: MCPTransportHTTP, URL: "https://always.example.com"},
-		},
-		MCPProfiles: map[string][]MCPServerConfig{
-			"test": {
-				{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://test.example.com/mcp"},
-			},
-		},
-		ActiveMCPProfile: "test",
-	}
-	err := cfg.ExpandMCPProfiles()
+func TestLoadMCPConfig_GlobalOnly(t *testing.T) {
+	// Set up a fake global base dir with mcp.json.
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "global-svc", Type: MCPTransportHTTP, URL: "https://global.example.com"},
+	})
+
+	// workDir = "" → skip project-level
+	servers, err := LoadMCPConfig("", "")
 	require.NoError(t, err)
-	assert.Len(t, cfg.MCPServers, 2)
-
-	// always-on stays untouched
-	assert.Equal(t, "always-on", cfg.MCPServers[0].Name)
-	assert.Empty(t, cfg.MCPServers[0].Profile)
-
-	// profile server stamped correctly
-	assert.Equal(t, "platform-svc", cfg.MCPServers[1].Name)
-	assert.Equal(t, "test", cfg.MCPServers[1].Profile)
-	assert.Equal(t, "https://test.example.com/mcp", cfg.MCPServers[1].URL)
+	require.Len(t, servers, 1)
+	assert.Equal(t, "global-svc", servers[0].Name)
+	assert.Empty(t, servers[0].Profile)
+	assert.True(t, servers[0].IsEnabled()) // defaults applied
 }
 
-func TestExpandMCPProfiles_MultipleInProfile(t *testing.T) {
-	cfg := &Config{
-		MCPProfiles: map[string][]MCPServerConfig{
-			"uat": {
-				{Name: "svc-a", Type: MCPTransportHTTP, URL: "https://uat.example.com/a"},
-				{Name: "svc-b", Type: MCPTransportHTTP, URL: "https://uat.example.com/b"},
-			},
-		},
-		ActiveMCPProfile: "uat",
-	}
-	err := cfg.ExpandMCPProfiles()
+func TestLoadMCPConfig_ProjectOverridesGlobal(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "shared-svc", Type: MCPTransportHTTP, URL: "https://global.example.com"},
+		{Name: "global-only", Type: MCPTransportStdio, Command: "/bin/global"},
+	})
+
+	projectDir := t.TempDir()
+	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpConfigFileName), []MCPServerConfig{
+		{Name: "shared-svc", Type: MCPTransportHTTP, URL: "https://project.example.com"},
+		{Name: "project-only", Type: MCPTransportStdio, Command: "/bin/project"},
+	})
+
+	servers, err := LoadMCPConfig("", projectDir)
 	require.NoError(t, err)
-	assert.Len(t, cfg.MCPServers, 2)
-	assert.Equal(t, "svc-a", cfg.MCPServers[0].Name)
-	assert.Equal(t, "uat", cfg.MCPServers[0].Profile)
-	assert.Equal(t, "svc-b", cfg.MCPServers[1].Name)
-	assert.Equal(t, "uat", cfg.MCPServers[1].Profile)
+	require.Len(t, servers, 3)
+
+	// shared-svc: project overrides global
+	assert.Equal(t, "https://project.example.com", servers[0].URL)
+	// global-only: preserved
+	assert.Equal(t, "global-only", servers[1].Name)
+	// project-only: appended
+	assert.Equal(t, "project-only", servers[2].Name)
 }
 
-func TestExpandMCPProfiles_DefaultsApplied(t *testing.T) {
-	cfg := &Config{
-		MCPProfiles: map[string][]MCPServerConfig{
-			"prod": {
-				{Name: "svc", Type: MCPTransportHTTP, URL: "https://prod.example.com"},
-			},
-		},
-		ActiveMCPProfile: "prod",
-	}
-	err := cfg.ExpandMCPProfiles()
-	require.NoError(t, err)
+func TestLoadMCPConfig_WithProfile(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
 
-	// Enabled defaults to true
-	assert.True(t, cfg.MCPServers[0].IsEnabled())
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "always-on", Type: MCPTransportHTTP, URL: "https://always.example.com"},
+	})
+	writeMCPJSON(t, filepath.Join(globalDir, mcpProfileFileName("prod")), []MCPServerConfig{
+		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://prod.example.com/mcp"},
+	})
+
+	servers, err := LoadMCPConfig("prod", "")
+	require.NoError(t, err)
+	require.Len(t, servers, 2)
+
+	// always-on: base, no profile
+	assert.Equal(t, "always-on", servers[0].Name)
+	assert.Empty(t, servers[0].Profile)
+
+	// platform-svc: from profile, stamped
+	assert.Equal(t, "platform-svc", servers[1].Name)
+	assert.Equal(t, "prod", servers[1].Profile)
+	assert.Equal(t, "https://prod.example.com/mcp", servers[1].URL)
 }
 
-func TestExpandMCPProfiles_MissingProfile(t *testing.T) {
-	cfg := &Config{
-		ActiveMCPProfile: "nonexistent",
-	}
-	err := cfg.ExpandMCPProfiles()
+func TestLoadMCPConfig_ProfileOverrideBase(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://default.example.com"},
+	})
+	writeMCPJSON(t, filepath.Join(globalDir, mcpProfileFileName("prod")), []MCPServerConfig{
+		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://prod.example.com"},
+	})
+
+	servers, err := LoadMCPConfig("prod", "")
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
+
+	// Profile overrides base for same-named server
+	assert.Equal(t, "https://prod.example.com", servers[0].URL)
+	assert.Equal(t, "prod", servers[0].Profile)
+}
+
+func TestLoadMCPConfig_ProfileNotFound(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "base-only", Type: MCPTransportHTTP, URL: "https://base.example.com"},
+	})
+	// No mcp.prod.json — should NOT be an error.
+
+	servers, err := LoadMCPConfig("prod", "")
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
+	assert.Equal(t, "base-only", servers[0].Name)
+	assert.Empty(t, servers[0].Profile)
+}
+
+func TestLoadMCPConfig_ProjectProfile(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "base-svc", Type: MCPTransportHTTP, URL: "https://base.example.com"},
+	})
+	writeMCPJSON(t, filepath.Join(globalDir, mcpProfileFileName("prod")), []MCPServerConfig{
+		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://global-prod.example.com"},
+	})
+
+	projectDir := t.TempDir()
+	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpProfileFileName("prod")), []MCPServerConfig{
+		{Name: "platform-svc", Type: MCPTransportHTTP, URL: "https://project-prod.example.com"},
+	})
+
+	servers, err := LoadMCPConfig("prod", projectDir)
+	require.NoError(t, err)
+	require.Len(t, servers, 2)
+
+	// platform-svc: project profile overrides global profile
+	assert.Equal(t, "platform-svc", servers[1].Name)
+	assert.Equal(t, "prod", servers[1].Profile)
+	assert.Equal(t, "https://project-prod.example.com", servers[1].URL)
+}
+
+func TestLoadMCPConfig_DuplicateInFile(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "dup", Type: MCPTransportHTTP, URL: "https://a.example.com"},
+		{Name: "dup", Type: MCPTransportHTTP, URL: "https://b.example.com"},
+	})
+
+	_, err := LoadMCPConfig("", "")
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found in mcp_profiles")
+	assert.Contains(t, err.Error(), "duplicate mcp server name")
 }
 
-func TestExpandMCPProfiles_ConflictWithMCPservers(t *testing.T) {
-	cfg := &Config{
-		MCPServers: []MCPServerConfig{
-			{Name: "shared-name", Type: MCPTransportHTTP, URL: "https://always.example.com"},
-		},
-		MCPProfiles: map[string][]MCPServerConfig{
-			"test": {
-				{Name: "shared-name", Type: MCPTransportHTTP, URL: "https://test.example.com"},
-			},
-		},
-		ActiveMCPProfile: "test",
-	}
-	err := cfg.ExpandMCPProfiles()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "name conflict")
-	assert.Contains(t, err.Error(), "shared-name")
-}
+func TestLoadMCPConfig_EmptyName(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
 
-func TestExpandMCPProfiles_DuplicateInProfile(t *testing.T) {
-	cfg := &Config{
-		MCPProfiles: map[string][]MCPServerConfig{
-			"test": {
-				{Name: "dup", Type: MCPTransportHTTP, URL: "https://a.example.com"},
-				{Name: "dup", Type: MCPTransportHTTP, URL: "https://b.example.com"},
-			},
-		},
-		ActiveMCPProfile: "test",
-	}
-	err := cfg.ExpandMCPProfiles()
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "duplicate name")
-	assert.Contains(t, err.Error(), "dup")
-}
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Type: MCPTransportHTTP, URL: "https://no-name.example.com"},
+	})
 
-func TestExpandMCPProfiles_EmptyName(t *testing.T) {
-	cfg := &Config{
-		MCPProfiles: map[string][]MCPServerConfig{
-			"test": {
-				{Type: MCPTransportHTTP, URL: "https://no-name.example.com"},
-			},
-		},
-		ActiveMCPProfile: "test",
-	}
-	err := cfg.ExpandMCPProfiles()
+	_, err := LoadMCPConfig("", "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "has no name")
 }
 
-func TestExpandMCPProfiles_ProfileNotSerialized(t *testing.T) {
-	// Verify the Profile field does not appear in YAML output for individual servers.
+func TestLoadMCPConfig_DefaultsApplied(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "svc", Type: MCPTransportHTTP, URL: "https://example.com"},
+	})
+
+	servers, err := LoadMCPConfig("", "")
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
+	assert.True(t, servers[0].IsEnabled()) // Enabled defaults to true
+}
+
+func TestLoadMCPServers_Integration(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "global-svc", Type: MCPTransportHTTP, URL: "https://global.example.com"},
+	})
+
+	cfg := &Config{}
+	err := cfg.LoadMCPServers("") // no project dir
+	require.NoError(t, err)
+	require.Len(t, cfg.MCPServers, 1)
+	assert.Equal(t, "global-svc", cfg.MCPServers[0].Name)
+}
+
+func TestLoadMCPServers_NoFilesEmpty(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+	// No mcp.json files at all.
+
+	cfg := &Config{}
+	err := cfg.LoadMCPServers("")
+	require.NoError(t, err)
+	// MCPServers stays empty when no JSON files exist
+	assert.Empty(t, cfg.MCPServers)
+}
+
+func TestLoadMCPServers_ReplacesExisting(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), []MCPServerConfig{
+		{Name: "json-svc", Type: MCPTransportHTTP, URL: "https://json.example.com"},
+	})
+
+	// MCPServers could have been set elsewhere (e.g. programmatically) —
+	// JSON replaces it.
 	cfg := &Config{
 		MCPServers: []MCPServerConfig{
-			{Name: "svc", Type: MCPTransportHTTP, URL: "https://example.com", Profile: "test"},
+			{Name: "stale-svc", Type: MCPTransportHTTP, URL: "https://stale.example.com"},
 		},
 	}
-	data, err := yaml.Marshal(cfg)
+	err := cfg.LoadMCPServers("")
 	require.NoError(t, err)
-	// The Profile field should be yaml:"-" and not appear under mcp_servers items.
-	// Use a more targeted check than "profile" (which would match mcp_profiles key).
-	assert.NotContains(t, string(data), "profile: test")
+	require.Len(t, cfg.MCPServers, 1)
+	assert.Equal(t, "json-svc", cfg.MCPServers[0].Name)
 }
+
+// writeMCPJSON creates a directory if needed and writes an mcp.json file.
+func writeMCPJSON(t *testing.T, path string, servers []MCPServerConfig) {
+	t.Helper()
+	dir := filepath.Dir(path)
+	require.NoError(t, os.MkdirAll(dir, 0700))
+	data, err := json.Marshal(mcpConfigFile{Servers: servers})
+	require.NoError(t, err)
+	require.NoError(t, os.WriteFile(path, data, 0600))
+}
+
 
 func TestTokenStorageName(t *testing.T) {
 	// Stdio server: uses server name
@@ -489,6 +608,8 @@ func TestLoadFrom_WithProfile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")
 
+	// mcp_servers in YAML is ignored (MCPServers is yaml:"-").
+	// Only active_mcp_profile is read from YAML.
 	yamlContent := `provider: test
 providers:
   - name: test
@@ -496,25 +617,18 @@ providers:
     model: gpt-4
     api_key: sk-test
 mcp_servers:
-  - name: always-on
+  - name: ignored-svc
     type: http
-    url: https://always.example.com
-mcp_profiles:
-  test:
-    - name: platform-svc
-      type: http
-      url: https://test.example.com/mcp
+    url: https://ignored.example.com
 active_mcp_profile: test
 `
 	require.NoError(t, os.WriteFile(path, []byte(yamlContent), 0600))
 
 	cfg, err := LoadFrom(path)
 	require.NoError(t, err)
-	assert.Len(t, cfg.MCPServers, 2)
-	assert.Equal(t, "always-on", cfg.MCPServers[0].Name)
-	assert.Empty(t, cfg.MCPServers[0].Profile)
-	assert.Equal(t, "platform-svc", cfg.MCPServers[1].Name)
-	assert.Equal(t, "test", cfg.MCPServers[1].Profile)
+	// mcp_servers in YAML is NOT loaded — MCPServers is yaml:"-"
+	assert.Empty(t, cfg.MCPServers)
+	// active_mcp_profile is still read — used by LoadMCPServers() later
 	assert.Equal(t, "test", cfg.ActiveMCPProfile)
 }
 

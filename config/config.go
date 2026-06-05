@@ -96,38 +96,39 @@ const (
 // If ClientID is empty, dynamic client registration (DCR) is attempted
 // automatically on the first OAuth flow.
 type MCPOAuthConfig struct {
-	ClientID              string   `yaml:"client_id,omitempty"`
-	ClientSecret          string   `yaml:"client_secret,omitempty"`
-	ClientURI             string   `yaml:"client_uri,omitempty"`
-	Scopes                []string `yaml:"scopes,omitempty"`
-	AuthServerMetadataURL string   `yaml:"auth_server_metadata_url,omitempty"`          // Override auto-discovery
-	CallbackHost          string   `yaml:"callback_host,omitempty" default:"127.0.0.1"` // OAuth callback host
-	CallbackPort          int      `yaml:"callback_port,omitempty"`                     // OAuth callback port (default: auto)
+	ClientID              string   `json:"client_id,omitempty"`
+	ClientSecret          string   `json:"client_secret,omitempty"`
+	ClientURI             string   `json:"client_uri,omitempty"`
+	Scopes                []string `json:"scopes,omitempty"`
+	AuthServerMetadataURL string   `json:"auth_server_metadata_url,omitempty"`          // Override auto-discovery
+	CallbackHost          string   `json:"callback_host,omitempty" default:"127.0.0.1"` // OAuth callback host
+	CallbackPort          int      `json:"callback_port,omitempty"`                     // OAuth callback port (default: auto)
 }
 
-// MCPServerConfig represents a single MCP server connection configuration
+// MCPServerConfig represents a single MCP server connection configuration.
+// Loaded from JSON files (mcp.json).
 type MCPServerConfig struct {
-	Name    string            `yaml:"name"`
-	Type    MCPTransportType  `yaml:"type"` // "stdio" or "http"
-	Command string            `yaml:"command,omitempty"`
-	Args    []string          `yaml:"args,omitempty"`
-	Env     map[string]string `yaml:"env,omitempty"`
-	URL     string            `yaml:"url,omitempty"`                    // For http transport
-	Headers map[string]string `yaml:"headers,omitempty"`                // For http transport
-	Proxy   string            `yaml:"proxy,omitempty"`                  // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
-	Timeout time.Duration     `yaml:"timeout,omitempty" default:"10s"`  // Connect timeout (default: 10s)
-	Enabled *bool             `yaml:"enabled,omitempty" default:"true"` // Whether to load this server
-	OAuth   *MCPOAuthConfig   `yaml:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
+	Name    string            `json:"name"`
+	Type    MCPTransportType  `json:"type"` // "stdio" or "http"
+	Command string            `json:"command,omitempty"`
+	Args    []string          `json:"args,omitempty"`
+	Env     map[string]string `json:"env,omitempty"`
+	URL     string            `json:"url,omitempty"`                    // For http transport
+	Headers map[string]string `json:"headers,omitempty"`                // For http transport
+	Proxy   string            `json:"proxy,omitempty"`                  // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
+	Timeout Duration          `json:"timeout,omitempty"`                  // Connect timeout (default: 10s)
+	Enabled *bool             `json:"enabled,omitempty" default:"true"` // Whether to load this server
+	OAuth   *MCPOAuthConfig   `json:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
 
 	// ToolSearch-specific options
-	AlwaysLoadTools []string          `yaml:"always_load_tools,omitempty"` // Tool names to always load (skip ToolSearch)
-	SearchHints     map[string]string `yaml:"search_hints,omitempty"`      // Override search hints: tool_name -> hint
-	Whitelist       []string          `yaml:"whitelist,omitempty"`         // If set, only these tools are loaded from the server; all others are ignored
+	AlwaysLoadTools []string          `json:"always_load_tools,omitempty"` // Tool names to always load (skip ToolSearch)
+	SearchHints     map[string]string `json:"search_hints,omitempty"`      // Override search hints: tool_name -> hint
+	Whitelist       []string          `json:"whitelist,omitempty"`         // If set, only these tools are loaded from the server; all others are ignored
 
 	// Profile is the MCP profile this server originates from.
-	// Empty string means it came from mcp_servers (always loaded).
-	// Set internally during config expansion; not serialized to YAML.
-	Profile string `yaml:"-"`
+	// Empty string means it came from a base file (always loaded).
+	// Set internally during config loading; not serialized.
+	Profile string `json:"-"`
 }
 
 // HasOAuth returns true if the server has OAuth2 configured.
@@ -401,8 +402,7 @@ type Config struct {
 	Providers              []ProviderConfig             `yaml:"providers"`
 	WebSearch              WebSearchConfig              `yaml:"web_search"`
 	WebFetch               WebFetchConfig               `yaml:"web_fetch"`
-	MCPServers             []MCPServerConfig            `yaml:"mcp_servers"`
-	MCPProfiles            map[string][]MCPServerConfig `yaml:"mcp_profiles"`       // Profile name -> servers
+	MCPServers             []MCPServerConfig            `yaml:"-"`                 // Loaded from JSON files via LoadMCPServers(); not in YAML
 	ActiveMCPProfile       string                       `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
 	MCPToolSearch          MCPToolSearchConfig          `yaml:"mcp_tool_search"`
 	TUI                    TUIConfig                    `yaml:"tui"`
@@ -504,11 +504,6 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("config defaults: %w", err)
 	}
 
-	// Expand MCP profile into MCPServers.
-	if err := cfg.ExpandMCPProfiles(); err != nil {
-		return nil, fmt.Errorf("mcp profiles: %w", err)
-	}
-
 	return cfg, nil
 }
 
@@ -597,6 +592,28 @@ func (c *Config) MCPEnabled() bool {
 	return len(c.MCPServers) > 0
 }
 
+// LoadMCPServers loads MCP server config from JSON files (mcp.json).
+// workDir is the project root directory (usually cwd); set to "" to skip
+// project-level files and only load global.
+//
+// If JSON files are found, their servers replace whatever is currently in
+// c.MCPServers. If no JSON files exist, c.MCPServers is left unchanged
+// (typically empty, since YAML mcp_servers is no longer supported).
+//
+// Profile origin is tracked via the Profile field on each server:
+// servers from base files (mcp.json) get empty string, servers from
+// profile files (mcp.{profile}.json) get the profile name.
+func (c *Config) LoadMCPServers(workDir string) error {
+	servers, err := LoadMCPConfig(c.ActiveMCPProfile, workDir)
+	if err != nil {
+		return err
+	}
+	if servers != nil {
+		c.MCPServers = servers
+	}
+	return nil
+}
+
 // MCPToolSearchConfig controls MCPSearchTools behavior.
 type MCPToolSearchConfig struct {
 	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
@@ -607,60 +624,6 @@ type MCPToolSearchConfig struct {
 // IsEnabled returns whether ToolSearch is active. Defaults to true.
 func (c *MCPToolSearchConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
-}
-
-// ExpandMCPProfiles merges the active MCP profile's servers into MCPServers.
-// Each server from the profile gets its Profile field set to the profile name.
-// Returns an error if a profile server name conflicts with an mcp_servers entry
-// or with another server in the same profile.
-func (c *Config) ExpandMCPProfiles() error {
-	if c.ActiveMCPProfile == "" {
-		return nil
-	}
-
-	profileServers, ok := c.MCPProfiles[c.ActiveMCPProfile]
-	if !ok {
-		return fmt.Errorf("active_mcp_profile %q not found in mcp_profiles", c.ActiveMCPProfile)
-	}
-
-	// Build a lookup of existing mcp_servers names for conflict detection.
-	existing := make(map[string]bool, len(c.MCPServers))
-	for _, srv := range c.MCPServers {
-		existing[srv.Name] = true
-	}
-
-	// Check conflicts within the profile itself.
-	seenInProfile := make(map[string]bool, len(profileServers))
-	for i := range profileServers {
-		srv := &profileServers[i]
-		if srv.Name == "" {
-			return fmt.Errorf("profile %q: server at index %d has no name", c.ActiveMCPProfile, i)
-		}
-		if existing[srv.Name] {
-			return fmt.Errorf(
-				"server name conflict: %q in profile %q collides with an mcp_servers entry of the same name",
-				srv.Name, c.ActiveMCPProfile,
-			)
-		}
-		if seenInProfile[srv.Name] {
-			return fmt.Errorf(
-				"server name conflict: duplicate name %q in profile %q",
-				srv.Name, c.ActiveMCPProfile,
-			)
-		}
-		seenInProfile[srv.Name] = true
-	}
-
-	// Stamp profile origin and append.
-	for i := range profileServers {
-		profileServers[i].Profile = c.ActiveMCPProfile
-		if err := defaults.Set(&profileServers[i]); err != nil {
-			return fmt.Errorf("profile %q server %q: defaults: %w", c.ActiveMCPProfile, profileServers[i].Name, err)
-		}
-	}
-
-	c.MCPServers = append(c.MCPServers, profileServers...)
-	return nil
 }
 
 // GetMaxIterations returns the effective max iterations:
