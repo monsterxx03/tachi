@@ -36,6 +36,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventToolCallStart:
 		m.setState(stateStreaming)
 		m.chatview.AddToolCall(event.ToolName, event.ToolID)
+		// Reset thinking view: thinking for this turn is complete when
+		// tool calls start. The next turn (after tool results) will
+		// accumulate fresh thinking.
+		m.thinkingView.Reset()
 		return m.nextEvent()
 
 	case agent.AgentEventToolCallArgs:
