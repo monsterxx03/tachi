@@ -59,6 +59,11 @@ type Manager struct {
 	// 0 means no limit (opt-out).
 	maxResultChars int
 	resultFileDir  string
+
+	// Tool list refresh — background polling for HTTP MCP servers.
+	refresher   *Refresher
+	toolCache   *toolListCache
+	serverTypes map[string]bool // server name -> is HTTP (true) or stdio (false)
 }
 
 // NewManager creates an empty MCP client manager with the given tool result
@@ -76,6 +81,8 @@ func NewManager(maxChars int, fileDir string) *Manager {
 		initDone:       make(chan struct{}),
 		maxResultChars: maxChars,
 		resultFileDir:  fileDir,
+		toolCache:      newToolListCache(),
+		serverTypes:    make(map[string]bool),
 	}
 }
 
@@ -181,6 +188,16 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 			m.set.Add(t.Name())
 			autoLoad = append(autoLoad, t)
 		}
+	}
+
+	// Initialize tool cache snapshots for refresh diffing.
+	// Group tools by server to create one snapshot per server.
+	serverTools := make(map[string][]MCPTool)
+	for _, t := range all {
+		serverTools[t.ServerName()] = append(serverTools[t.ServerName()], t)
+	}
+	for serverName, tools := range serverTools {
+		m.toolCache.Snapshot(serverName, tools)
 	}
 
 	m.logger.Log("MCP: populated %d tools (%d auto-load, ToolSearch=%v, threshold=%d)",
@@ -298,6 +315,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 
 	m.mu.Lock()
 	m.clients[srv.Name] = c
+	m.serverTypes[srv.Name] = srv.Type == config.MCPTransportHTTP
 	m.mu.Unlock()
 
 	debuglog.Log(ctx, "MCP: server %q has %d tools", srv.Name, len(toolsResult.Tools))
@@ -461,6 +479,40 @@ func (m *Manager) IsConnected(name string) bool {
 	defer m.mu.RUnlock()
 	_, ok := m.clients[name]
 	return ok
+}
+
+// StartRefresher begins background polling of HTTP MCP server tool lists at
+// the given interval. Changes are reported via the callback. If a refresher
+// is already running, this is a no-op.
+//
+// The callback receives a ToolListDelta describing what changed. It runs in
+// the refresher's goroutine and should not block for long. Typically the
+// caller updates its own tool registry and marks the DeferredToolReminder
+// as dirty for system-reminder notification.
+func (m *Manager) StartRefresher(ctx context.Context, interval time.Duration, cb RefreshCallback) {
+	if m.refresher != nil {
+		m.refresher.Stop()
+	}
+	m.refresher = NewRefresher(m, interval)
+	m.refresher.OnRefresh(cb)
+	m.refresher.Start(ctx)
+	m.logger.Log("MCP: tool list refresher started (interval=%v)", interval)
+}
+
+// StopRefresher stops the background tool list polling, if running.
+func (m *Manager) StopRefresher() {
+	if m.refresher != nil {
+		m.refresher.Stop()
+		m.refresher = nil
+		m.logger.Log("MCP: tool list refresher stopped")
+	}
+}
+
+// IsHTTPServer returns true if the given server uses HTTP transport.
+func (m *Manager) IsHTTPServer(name string) bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.serverTypes[name]
 }
 
 // ConnectedServers returns a list of all connected server names.

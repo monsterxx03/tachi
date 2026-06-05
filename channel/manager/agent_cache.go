@@ -76,6 +76,18 @@ func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	for _, err := range errs {
 		m.logger.Log("channel: shared MCP load error: %v", err)
 	}
+
+	// Start background refresher for HTTP MCP servers in channel mode.
+	// Tools are lazily registered (per-agent, on first invocation), so the
+	// callback only needs to log changes — pool/discovered-set updates are
+	// handled by Manager.applyToolDelta internally.
+	interval := m.cfg.MCPToolRefresh.RefreshInterval()
+	if interval > 0 {
+		mgr.StartRefresher(ctx, interval, func(delta *mcp.ToolListDelta) {
+			m.logger.Log("channel: MCP refresh detected changes on %q: +%d -%d ~%d",
+				delta.ServerName, len(delta.Added), len(delta.Removed), len(delta.Modified))
+		})
+	}
 }
 
 // acquireAgent returns the cached AIAgent for the given threadID, creating

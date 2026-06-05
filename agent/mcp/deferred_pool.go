@@ -108,6 +108,16 @@ func (p *DeferredPool) RemoveByServer(serverName string) int {
 	return removed
 }
 
+// Remove removes a single tool from the pool by its full name.
+// Returns the removed tool, or nil if not found.
+func (p *DeferredPool) Remove(name string) *DeferredTool {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	t := p.tools[name]
+	delete(p.tools, name)
+	return t
+}
+
 // SearchResult is a single search result returned by Search.
 type SearchResult = tools.MCPSearchResultItem
 

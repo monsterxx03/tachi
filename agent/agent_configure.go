@@ -110,6 +110,80 @@ func (a *AIAgent) attachSharedMCPReminder() {
 	}
 }
 
+// startMCPToolRefresher starts background tool list polling for HTTP MCP
+// servers if enabled in config. The callback handles registry updates and
+// system-reminder notification when tool changes are detected.
+func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config) {
+	if a.mcpManager == nil {
+		return
+	}
+
+	interval := cfg.MCPToolRefresh.RefreshInterval()
+	if interval <= 0 {
+		a.logger.Log("MCP: tool list refresh disabled")
+		return
+	}
+
+	// Only start if there are HTTP servers connected
+	hasHTTPServer := false
+	for _, srv := range cfg.MCPServers {
+		if srv.Type == config.MCPTransportHTTP && srv.IsEnabled() {
+			hasHTTPServer = true
+			break
+		}
+	}
+	if !hasHTTPServer {
+		a.logger.Log("MCP: no HTTP servers, skipping tool list refresher")
+		return
+	}
+
+	a.mcpManager.StartRefresher(ctx, interval, func(delta *mcp.ToolListDelta) {
+		a.onMCPToolsRefreshed(delta)
+	})
+}
+
+// onMCPToolsRefreshed handles tool list changes detected by the background
+// refresher. It updates the tool registry (for eagerly-registered tools) and
+// marks the DeferredToolReminder dirty so the LLM is notified.
+func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
+	prefix := "mcp__" + delta.ServerName + "__"
+
+	// 1. Remove tools from the active registry if they were eagerly registered
+	for _, name := range delta.Removed {
+		fullName := prefix + name
+		if a.toolRegistry.GetTool(fullName) != nil {
+			a.toolRegistry.Unregister(fullName)
+			a.logger.Log("MCP: refresh unregistered %s from tool registry", fullName)
+		}
+	}
+
+	// 2. For modified tools that were eagerly registered, re-register with new schema.
+	//    The pool has already been updated by Manager.applyToolDelta — we just need
+	//    to update the registry if the tool was auto-loaded.
+	for _, t := range delta.Modified {
+		fullName := t.Name()
+		if a.toolRegistry.GetTool(fullName) != nil {
+			// Re-register with the updated tool instance
+			a.toolRegistry.Unregister(fullName)
+			a.RegisterTool(t)
+			a.logger.Log("MCP: refresh re-registered %s with updated schema", fullName)
+		}
+	}
+
+	// 3. Notify the LLM about newly available tools
+	if len(delta.Added) > 0 {
+		a.NotifyDeferredToolsAdded()
+	}
+
+	// 4. Log summary
+	totalChanges := len(delta.Added) + len(delta.Removed) + len(delta.Modified)
+	if totalChanges > 0 {
+		a.logger.Log("MCP: refresh applied %d changes on %q (+%d -%d ~%d)",
+			totalChanges, delta.ServerName,
+			len(delta.Added), len(delta.Removed), len(delta.Modified))
+	}
+}
+
 // InitMCPAsync starts MCP server connections in a background goroutine
 // and returns immediately. The manager (which owns the deferred pool,
 // discovered set, and init-done channel) is set up synchronously; actual
@@ -184,6 +258,9 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 		a.logger.Log("MCP: DeferredToolReminder added (%d undiscovered of %d)",
 			total-discovered, total)
 	}
+
+	// Start background tool list refresher for HTTP MCP servers
+	a.startMCPToolRefresher(ctx, cfg)
 }
 
 // WaitForMCP blocks until the background MCP initialization completes,

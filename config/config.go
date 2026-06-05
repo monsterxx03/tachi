@@ -405,6 +405,7 @@ type Config struct {
 	MCPServers             []MCPServerConfig            `yaml:"-"`                 // Loaded from JSON files via LoadMCPServers(); not in YAML
 	ActiveMCPProfile       string                       `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
 	MCPToolSearch          MCPToolSearchConfig          `yaml:"mcp_tool_search"`
+	MCPToolRefresh         MCPToolRefreshConfig         `yaml:"mcp_tool_refresh"`
 	TUI                    TUIConfig                    `yaml:"tui"`
 	SystemReminder         SystemReminderConfig         `yaml:"system_reminder"`
 	Language               string                       `yaml:"language" default:"English"`      // Reply language for LLM
@@ -619,6 +620,27 @@ type MCPToolSearchConfig struct {
 	Enabled                *bool `yaml:"enabled" default:"true"`                    // false = load all tools directly (disable ToolSearch)
 	MinToolsForSearch      int   `yaml:"min_tools_for_search" default:"5"`          // Auto-load all if total MCP tools <= this threshold
 	MaxDeferredSchemaBytes int   `yaml:"max_deferred_schema_bytes" default:"50000"` // Max bytes per stored schema
+}
+
+// MCPToolRefreshConfig controls background tool list polling for HTTP MCP servers.
+// When enabled, the agent periodically calls ListTools on connected HTTP servers
+// and updates the deferred pool / discovered set if tools have changed.
+type MCPToolRefreshConfig struct {
+	Enabled  *bool         `yaml:"enabled" default:"true"`           // false = disable background refresh
+	Interval time.Duration `yaml:"interval" default:"1m"`           // polling interval (0 = disabled)
+}
+
+// IsEnabled returns whether tool refresh is active. Defaults to true.
+func (c *MCPToolRefreshConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// RefreshInterval returns the polling interval. Returns 0 if refresh is disabled.
+func (c *MCPToolRefreshConfig) RefreshInterval() time.Duration {
+	if !c.IsEnabled() {
+		return 0
+	}
+	return c.Interval
 }
 
 // IsEnabled returns whether ToolSearch is active. Defaults to true.
