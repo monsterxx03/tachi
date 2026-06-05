@@ -36,7 +36,7 @@ func (m *Model) enterMCPOverlay() tea.Cmd {
 	if len(m.mcpServers) == 0 {
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
-			Content: "No MCP servers configured in ~/.tachi/config.yaml",
+			Content: "No MCP servers configured in ~/.tachi/mcp.json or .tachi/mcp.json",
 		})
 		return nil
 	}

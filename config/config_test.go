@@ -312,6 +312,10 @@ func TestEffectiveLanguage(t *testing.T) {
 
 func TestLoadMCPConfig_NoFiles(t *testing.T) {
 	// When no JSON files exist, returns nil, nil.
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	SetBaseDir(t.TempDir())
+
 	servers, err := LoadMCPConfig("", t.TempDir())
 	require.NoError(t, err)
 	assert.Nil(t, servers)

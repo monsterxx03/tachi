@@ -441,7 +441,7 @@ func handleACPMCPReconnect(ctx context.Context, sess *ACPSession, conn *acp.Agen
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("MCP server **%s** is already connected.", name))
 	} else {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf(
-			"MCP server **%s** is disconnected. To reconnect, please configure it in config.yaml and start a new session.", name))
+			"MCP server **%s** is disconnected. To reconnect, configure it in mcp.json and start a new session.", name))
 	}
 
 	return acp.StopReasonEndTurn, nil
