@@ -15,6 +15,9 @@ import (
 //  3. Creates a new session with the compacted summary via FinalizeCompact.
 //  4. Notifies the memory backend of the new session.
 //
+// It returns the LLM-generated summary, the new (compacted) conversation
+// history, and any error encountered.
+//
 // It uses context.Background() with the configured timeout so that a
 // conversation interruption (ctx cancellation) does not produce orphan
 // sessions. The conversation's cancellation signal is forwarded to the
@@ -22,7 +25,7 @@ import (
 //
 // doCompact does NOT clear or restore the tool registry — it calls
 // CreateChat directly with tools=nil, so no registry state is affected.
-func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
+func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summary string, newHistory []llm.Message, err error) {
 	// 1. Independent timeout: use Background() so conversation cancellation
 	//    doesn't leave orphan sessions behind.
 	compactCtx, cancel := context.WithTimeout(context.Background(), a.cfg.Compact.Timeout)
@@ -50,10 +53,10 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.
 		MaxTokens: a.cfg.Compact.MaxTokens,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("compact LLM call: %w", err)
+		return "", nil, fmt.Errorf("compact LLM call: %w", err)
 	}
 
-	summary := resp.Content
+	summary = resp.Content
 
 	// 5. Persist the old session to memory before compaction.
 	a.StoreCompactMemory()
@@ -63,18 +66,18 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content
 	}
-	newHistory, err := FinalizeCompact(a.sessionManager, systemPrompt, summary)
+	newHistory, err = FinalizeCompact(a.sessionManager, systemPrompt, summary)
 	if err != nil {
 		// FinalizeCompact may have created a new session (sm.New succeeded)
 		// before failing. Try to clean up the orphan.
 		if cur := a.sessionManager.Current(); cur != nil && cur.CompactedParentID != "" {
 			_ = a.sessionManager.Delete(cur.ID) // best-effort
 		}
-		return nil, fmt.Errorf("finalize compact: %w", err)
+		return "", nil, fmt.Errorf("finalize compact: %w", err)
 	}
 
 	// 7. Notify the memory backend that a new session has started.
 	a.StartSessionMemory()
 
-	return newHistory, nil
+	return summary, newHistory, nil
 }

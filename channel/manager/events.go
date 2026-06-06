@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -119,6 +120,22 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 							sendProgress("🔧 " + event.ToolName + "\n" + line)
 						}
 					}
+				}
+			}
+
+		case agent.AgentEventAutoCompactStart:
+			// Compact is in progress; nothing to do yet.
+
+		case agent.AgentEventAutoCompactDone:
+			if event.Result != nil && event.Result.Error != nil {
+				// Compact failed — notify via progress if available.
+				if sendProgress != nil {
+					sendProgress(fmt.Sprintf("⚠️ 对话压缩失败: %v，将保留原始上下文继续对话。", event.Result.Error))
+				}
+			} else if event.CompactSummary != "" {
+				// Compact succeeded — send summary as progress notification.
+				if sendProgress != nil {
+					sendProgress(fmt.Sprintf("🔍 对话已压缩（旧消息数: %d 条）\n%s", event.OldMsgCount, event.CompactSummary))
 				}
 			}
 

@@ -907,7 +907,6 @@ func formatCompactSummary(summary string, oldMsgCount int) string {
 	sb.WriteString("\n---\n\n")
 	sb.WriteString(summary)
 	sb.WriteString("\n\n---\n")
-	sb.WriteString("💡 使用 `/sessions` 可查看旧会话的完整历史。\n")
 	return sb.String()
 }
 

@@ -471,6 +471,8 @@ func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 		return toolResultErrStyle.Width(inner).Render("Error: " + msg.Content)
 	case "tool_confirmation":
 		return toolConfirmStyle.Width(inner).Render(renderDiffWithHighlight(msg.Content, inner))
+	case "compact_done":
+		return compactDoneStyle.Width(inner).Render(msg.Content)
 	default:
 		return msg.Content
 	}

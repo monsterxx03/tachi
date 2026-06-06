@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -260,6 +261,21 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventAutoCompactDone:
 		m.isCompacting = false
 		m.statusbar.SetCompacting(false)
+		if event.Result != nil && event.Result.Error != nil {
+			// Compact failed — notify the user but continue.
+			m.chatview.AddMessage(chatMessage{
+				Role:    "compact_done",
+				Content: fmt.Sprintf("⚠️ 对话压缩失败: %v，将保留原始上下文继续对话。", event.Result.Error),
+			})
+		} else {
+			// Compact succeeded — show the summary inline and continue.
+			m.chatview.SetStreaming(false)
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: formatCompactSummary(event.CompactSummary, event.OldMsgCount),
+			})
+			m.chatview.FinishStreaming()
+		}
 		// Sync session info — compact may have created a new session
 		// (different ID, title inherited from old).
 		m.syncSessionInfo()

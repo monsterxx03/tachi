@@ -41,21 +41,23 @@ const (
 )
 
 type AgentEvent struct {
-	Type          string
-	TextDelta     string
-	ThinkingDelta string
-	ToolName      string
-	ToolID        string
-	ToolArgs      string
-	ToolResult    string
-	ToolIsError   bool
-	ToolDiff      string
-	ToolDuration  time.Duration    // Wall-clock duration of tool execution
-	Questions     []tools.Question // For AskUserQuestion tool
-	Result        *RunResult
-	Messages      []llm.Message
-	Usage         *llm.Usage
-	Title         string // For AgentEventSessionTitle
+	Type           string
+	TextDelta      string
+	ThinkingDelta  string
+	ToolName       string
+	ToolID         string
+	ToolArgs       string
+	ToolResult     string
+	ToolIsError    bool
+	ToolDiff       string
+	ToolDuration   time.Duration    // Wall-clock duration of tool execution
+	Questions      []tools.Question // For AskUserQuestion tool
+	Result         *RunResult
+	Messages       []llm.Message
+	Usage          *llm.Usage
+	Title          string // For AgentEventSessionTitle
+	CompactSummary string // For AgentEventAutoCompactDone: LLM-generated summary
+	OldMsgCount    int    // For AgentEventAutoCompactDone: message count before compact
 }
 
 var (
@@ -335,18 +337,24 @@ func (a *AIAgent) runAgentLoop(
 		// next iteration continues normally with the new context.
 		if a.shouldAutoCompact() {
 			ch <- AgentEvent{Type: AgentEventAutoCompactStart}
-			newHistory, err := a.doCompact(ctx, messages)
+			summary, newHistory, err := a.doCompact(ctx, messages)
 			if err != nil {
 				a.logger.Log("Auto compact failed: %v", err)
+				ch <- AgentEvent{Type: AgentEventAutoCompactDone, Result: &RunResult{Error: err}}
 				// Non-fatal: continue with the existing (over-large)
 				// history. The next iteration will try again — eventual
 				// success if the LLM responds before hitting the limit.
 			} else {
+				oldMsgCount := len(messages)
 				messages = newHistory
 				a.setCompactCooldown()
 				a.logger.Log("Auto compact completed, new history has %d messages", len(messages))
+				ch <- AgentEvent{
+					Type:           AgentEventAutoCompactDone,
+					CompactSummary: summary,
+					OldMsgCount:    oldMsgCount,
+				}
 			}
-			ch <- AgentEvent{Type: AgentEventAutoCompactDone}
 			continue // next iteration with new (or original) history
 		}
 

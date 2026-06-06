@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"fmt"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -90,6 +91,29 @@ func streamToACP(
 								Title: new(title),
 							},
 						},
+					})
+				}
+
+			case agent.AgentEventAutoCompactStart:
+				// Compact in progress; send a brief notification.
+				_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+					SessionId: sessionID,
+					Update:    acp.UpdateAgentMessageText("🔄 正在压缩对话历史……"),
+				})
+
+			case agent.AgentEventAutoCompactDone:
+				if event.Result != nil && event.Result.Error != nil {
+					// Compact failed.
+					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+						SessionId: sessionID,
+						Update:    acp.UpdateAgentMessageText(fmt.Sprintf("⚠️ 对话压缩失败: %v", event.Result.Error)),
+					})
+				} else if event.CompactSummary != "" {
+					// Compact succeeded — send the summary.
+					summary := fmt.Sprintf("🔍 **对话已压缩**（旧消息数: %d 条）\n\n%s", event.OldMsgCount, event.CompactSummary)
+					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+						SessionId: sessionID,
+						Update:    acp.UpdateAgentMessageText(summary),
 					})
 				}
 

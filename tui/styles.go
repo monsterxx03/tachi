@@ -167,4 +167,9 @@ var (
 
 	mcpReadyStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A6DA95"))
+
+	compactDoneStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#8BD5CA")).
+				Italic(true).
+				PaddingLeft(1)
 )
