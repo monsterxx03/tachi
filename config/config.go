@@ -116,7 +116,7 @@ type MCPServerConfig struct {
 	URL     string            `json:"url,omitempty"`                    // For http transport
 	Headers map[string]string `json:"headers,omitempty"`                // For http transport
 	Proxy   string            `json:"proxy,omitempty"`                  // Optional proxy URL (only for http transport; e.g. socks5://127.0.0.1:1080)
-	Timeout Duration          `json:"timeout,omitempty"`                  // Connect timeout (default: 10s)
+	Timeout Duration          `json:"timeout,omitempty"`                // Connect timeout (default: 10s)
 	Enabled *bool             `json:"enabled,omitempty" default:"true"` // Whether to load this server
 	OAuth   *MCPOAuthConfig   `json:"oauth,omitempty"`                  // OAuth2 configuration (http transport only)
 
@@ -201,10 +201,9 @@ func (c *CronConfig) IsEnabled() bool {
 }
 
 // EditConfig holds configuration for the edit mode.
-// EditConfig holds configuration for the edit mode.
 type EditConfig struct {
-	Mode           string  `yaml:"mode" default:"hashline"`           // hashline | replace
-	FuzzyThreshold float64 `yaml:"fuzzy_threshold" default:"0.95"`   // 0.0-1.0, line content fuzzy matching tolerance
+	Mode           string  `yaml:"mode" default:"replace"`         // replace | hashline
+	FuzzyThreshold float64 `yaml:"fuzzy_threshold" default:"0.95"` // 0.0-1.0, line content fuzzy matching tolerance
 }
 
 // ACPConfig holds configuration for the ACP (Agent Client Protocol) agent mode.
@@ -395,31 +394,31 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 }
 
 type Config struct {
-	Provider               string                       `yaml:"provider"`
-	MaxTokens              int                          `yaml:"max_tokens" default:"128000"`
-	MaxIterations          *int                         `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
-	SessionCleanupMaxCount int                          `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
-	Providers              []ProviderConfig             `yaml:"providers"`
-	WebSearch              WebSearchConfig              `yaml:"web_search"`
-	WebFetch               WebFetchConfig               `yaml:"web_fetch"`
-	MCPServers             []MCPServerConfig            `yaml:"-"`                 // Loaded from JSON files via LoadMCPServers(); not in YAML
-	ActiveMCPProfile       string                       `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
-	MCPToolSearch          MCPToolSearchConfig          `yaml:"mcp_tool_search"`
-	MCPToolRefresh         MCPToolRefreshConfig         `yaml:"mcp_tool_refresh"`
-	TUI                    TUIConfig                    `yaml:"tui"`
-	SystemReminder         SystemReminderConfig         `yaml:"system_reminder"`
-	Language               string                       `yaml:"language" default:"English"`      // Reply language for LLM
-	TitleGeneration        *bool                        `yaml:"title_generation" default:"true"` // set false to use truncation
-	TitleProvider          string                       `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
-	CommitProvider         string                       `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
-	Memory                 MemoryConfig                 `yaml:"memory"`                          // pluggable memory backend
-	Channel                ChannelConfig                `yaml:"channel"`                         // IM channel backends
-	Subagent               SubagentConfig               `yaml:"subagent"`                        // Sub-agent configuration
-	Compact                CompactConfig                `yaml:"compact"`                         // /compact command configuration
-	ToolResult             ToolResultConfig             `yaml:"tool_result"`                      // tool result size limits and file persistence
-	Cron                   CronConfig                   `yaml:"cron"`                            // Cron scheduler (channel mode)
-	ACP                    ACPConfig                    `yaml:"acp"`                             // ACP agent configuration
-	Edit                   EditConfig                   `yaml:"edit"`                            // Edit mode configuration
+	Provider               string               `yaml:"provider"`
+	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`
+	MaxIterations          *int                 `yaml:"max_iterations" default:"50"`             // nil = default; 0 = unlimited; >0 = explicit limit
+	SessionCleanupMaxCount int                  `yaml:"session_cleanup_max_count" default:"100"` // max sessions to retain
+	Providers              []ProviderConfig     `yaml:"providers"`
+	WebSearch              WebSearchConfig      `yaml:"web_search"`
+	WebFetch               WebFetchConfig       `yaml:"web_fetch"`
+	MCPServers             []MCPServerConfig    `yaml:"-"`                  // Loaded from JSON files via LoadMCPServers(); not in YAML
+	ActiveMCPProfile       string               `yaml:"active_mcp_profile"` // Which profile to load (empty = none)
+	MCPToolSearch          MCPToolSearchConfig  `yaml:"mcp_tool_search"`
+	MCPToolRefresh         MCPToolRefreshConfig `yaml:"mcp_tool_refresh"`
+	TUI                    TUIConfig            `yaml:"tui"`
+	SystemReminder         SystemReminderConfig `yaml:"system_reminder"`
+	Language               string               `yaml:"language" default:"English"`      // Reply language for LLM
+	TitleGeneration        *bool                `yaml:"title_generation" default:"true"` // set false to use truncation
+	TitleProvider          string               `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
+	CommitProvider         string               `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
+	Memory                 MemoryConfig         `yaml:"memory"`                          // pluggable memory backend
+	Channel                ChannelConfig        `yaml:"channel"`                         // IM channel backends
+	Subagent               SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration
+	Compact                CompactConfig        `yaml:"compact"`                         // /compact command configuration
+	ToolResult             ToolResultConfig     `yaml:"tool_result"`                     // tool result size limits and file persistence
+	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
+	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
+	Edit                   EditConfig           `yaml:"edit"`                            // Edit mode configuration
 }
 
 func DefaultConfig() *Config {
@@ -626,8 +625,8 @@ type MCPToolSearchConfig struct {
 // When enabled, the agent periodically calls ListTools on connected HTTP servers
 // and updates the deferred pool / discovered set if tools have changed.
 type MCPToolRefreshConfig struct {
-	Enabled  *bool         `yaml:"enabled" default:"true"`           // false = disable background refresh
-	Interval time.Duration `yaml:"interval" default:"1m"`           // polling interval (0 = disabled)
+	Enabled  *bool         `yaml:"enabled" default:"true"` // false = disable background refresh
+	Interval time.Duration `yaml:"interval" default:"1m"`  // polling interval (0 = disabled)
 }
 
 // IsEnabled returns whether tool refresh is active. Defaults to true.
