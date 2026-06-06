@@ -40,7 +40,7 @@
 | `BuildCompactInstruction()` | 构造压缩 prompt（中文） |
 | `FinalizeCompact(sm, systemPrompt, summary)` | 创建新 session，双向链接，返回 newHistory |
 | `StoreCompactMemory()` | 压缩前持久化当前 session 到 memory backend |
-| `DrainCompactEvents(ch)` | 收集 compact 结果 |
+| `DrainCompactEvents(ch)` | 收集 compact 结果（仅手动 /compact 用） |
 
 ### 2.3 现有配置
 
@@ -59,13 +59,20 @@ type CompactConfig struct {
 
 `a.lastInputTokens` 现在是**当前上下文**的预估值（不是上一轮的滞后值）。
 
+> 注意：`estimateInputTokens()` 的性能已经过优化——直接接受 `[]tools.Schema` 避免 `buildLLMTools` 的全量转换开销（`token_estimate.go:26`）。
+
 ## 3. 设计
 
 ### 3.1 核心思路
 
-在 agent loop 中，每次 tool 执行结束（即 `estimateAndUpdateTokens` 刚更新完 `lastInputTokens` 之后），检查：**预估 token 数是否超过 context_window × threshold**，如果超过且未压缩过，自动触发压缩。
+在 agent loop 中，**每次 LLM 调用前**检查 token 水位。如果预估 token 数超过 `context_window × threshold` 且未处于冷却期，自动触发压缩。
 
-整个流程对用户透明——进度反馈显示在状态栏中。
+与手动 `/compact` 的关键区别：
+- 自动压缩在 agent loop **内部同步完成**，不经过 TUI 编排
+- 使用 `provider.CreateChat`（非流式）直接调 LLM，不走 `RunOneOffStream`
+- 压缩成功后替换 `messages` 指针，下一轮 loop 用新 history 继续
+
+整个流程对用户透明——进度反馈通过事件发送到 TUI 状态栏。
 
 ### 3.2 配置
 
@@ -73,27 +80,36 @@ type CompactConfig struct {
 
 ```go
 type CompactConfig struct {
-    Timeout   time.Duration `yaml:"timeout" default:"5m"`    // 压缩 LLM 调用超时
-    Auto      bool          `yaml:"auto" default:"true"`     // 是否启用自动压缩
-    Threshold float64       `yaml:"threshold" default:"0.8"` // 触发阈值 (lastInputTokens / contextWindow)
+    Timeout    time.Duration `yaml:"timeout" default:"5m"`     // 压缩 LLM 调用超时
+    MaxTokens  int           `yaml:"max_tokens" default:"4096"` // 压缩 LLM 响应的 max_tokens
+    Auto       bool          `yaml:"auto" default:"true"`       // 是否启用自动压缩
+    Threshold  float64       `yaml:"threshold" default:"0.75"`  // 触发阈值 (lastInputTokens / contextWindow)
 }
 ```
 
-解释：
+字段说明：
+- `Timeout`: 压缩 LLM 调用的独立超时（使用 `context.Background()` + `WithTimeout`，不依赖 conversation 的 ctx）
+- `MaxTokens`: 压缩响应的最大 token 数。摘要不需要太长，4096 足够
 - `Auto`: 默认启用，用户可设 `false` 关闭
-- `Threshold`: `lastInputTokens / contextWindow >= threshold` 时触发（0.8 = 80%）
+- `Threshold`: `lastInputTokens / contextWindow >= threshold` 时触发。默认 0.75（75%）而非 0.8，因为压缩 LLM 调用本身也需要 token 预算（headroom）
 
 触发条件（同时满足）：
-- `Auto == true`
+- `Auto == true && a.cfg != nil`
+- `a.contextWindow > 0`
 - `lastInputTokens >= contextWindow * Threshold`
+- 不处于冷却期（见 §3.5）
 
 ### 3.3 Agent 侧改动
 
 #### 3.3.1 `agent/token_estimate.go` — 增加 compact 判定
 
-新增 `shouldAutoCompact() bool` 方法：
-
 ```go
+// shouldAutoCompact checks whether the current context is large enough
+// to warrant automatic compaction. Returns false if:
+// - auto-compact is disabled in config
+// - context window is unknown (<= 0)
+// - token estimate is below the threshold
+// - we're still in the cooldown period after a previous compact
 func (a *AIAgent) shouldAutoCompact() bool {
     if a.cfg == nil || !a.cfg.Compact.Auto {
         return false
@@ -101,257 +117,367 @@ func (a *AIAgent) shouldAutoCompact() bool {
     if a.contextWindow <= 0 {
         return false
     }
+    if a.isCompactCooldown() {
+        return false
+    }
+
     pct := float64(a.lastInputTokens) / float64(a.contextWindow)
     threshold := a.cfg.Compact.Threshold
-    reserved := a.cfg.Compact.Reserved
-    return pct >= threshold || (a.contextWindow-a.lastInputTokens) < reserved
+    return pct >= threshold
 }
 ```
+
+> 注意：不引入 `Reserved` 字段。纯百分比判断更简单，`Threshold` 的默认值 0.75 已隐含 headroom。
 
 #### 3.3.2 `agent/agent_loop.go` — 插入自动压缩点
 
-在 `runAgentLoop` 中，每次 tool 执行完后（loop reminder 注入前），增加检查：
+检查点放在 `runAgentLoop` 的 **loop 顶部，每次 LLM 调用之前**：
 
 ```go
-// After tool results, inject system-reminder warnings.
-if a.shouldInjectLoopReminder() {
-    a.estimateAndUpdateTokens(messages)
-
-    // 自动压缩检查
-    if a.shouldAutoCompact() {
-        // 1. 发送 AutoCompactStart 事件
-        // 2. 执行压缩（类似 /compact 逻辑）
-        // 3. 替换 messages 为压缩后的新 history
-        // 4. 发送 AutoCompactComplete 事件
-        // 5. 重置相关状态
-        continue  // 跳过 loop reminder，下一轮用新 history
-    }
-
-    rctx := a.buildReminderContext(false, true)
+func (a *AIAgent) runAgentLoop(
+    ctx context.Context,
+    provider llm.Provider,
+    messages []llm.Message,
+    opts llm.ChatOptions,
+    ch chan<- AgentEvent,
+) {
     // ...
-}
-```
+    for {
+        if !a.iterationBudget.consume() {
+            // ... budget exhausted
+            return
+        }
 
-但这里有一个关键问题：压缩需要 LLM 调用，而 `runAgentLoop` 里已经有 LLM 流。最简单的做法是**发送事件让 TUI 侧触发压缩**，而不是在 agent loop 里嵌套压缩。
+        select {
+        case <-ctx.Done():
+            // ... interrupted
+            return
+        default:
+        }
 
-#### 3.3.3 事件驱动方案（推荐）
+        // ── Auto-compact check (before LLM call) ──
+        if a.shouldAutoCompact() {
+            ch <- AgentEvent{Type: AgentEventAutoCompactStart}
+            newHistory, err := a.doCompact(ctx, messages)
+            if err != nil {
+                a.logger.Log("Auto compact failed: %v", err)
+                // 压缩失败不中断对话，继续用原来的 history
+                // （但会标明当前仍处于高水位）
+            } else {
+                messages = newHistory
+                a.setCompactCooldown()
+                a.logger.Log("Auto compact completed, new history has %d messages", len(messages))
+            }
+            continue // 下一轮 loop 用新 history（或原 history）
+        }
 
-新增 AgentEvent 类型：
-
-```go
-const (
-    AgentEventAutoCompactTriggered = "auto_compact_triggered"
-    AgentEventAutoCompactStart     = "auto_compact_start"
-    AgentEventAutoCompactDone      = "auto_compact_done"
-)
-```
-
-流程：
-
-```
-Agent loop:
-  1. Tool 执行完毕
-  2. estimateAndUpdateTokens → 发现需要压缩
-  3. 发送 AgentEventAutoCompactTriggered(estimatedTokens, contextWindow)
-  4. 暂停当前 loop（等待 TUI 信号）
-  5. 暂时 return（以特殊状态退出，不报错）
-
-TUI (model_events.go):
-  6. 收到 AutoCompactTriggered
-  7. 保存当前状态（类似 /compact）
-  8. 清除 tool registry
-  9. 调用 RunOneOffStream(compactInstruction, history)
-  10. 收到结果 → 调用 FinalizeCompact
-  11. 更新 history = newHistory
-  12. 恢复 tool registry
-  13. 发送 AutoCompactDone 事件（或直接触发新一轮对话）
-
-  ↓
-
-Agent loop (新轮次):
-  14. 用新 history 继续正常对话
-```
-
-但实际上，`RunOneOffStream` 是单独启动一个 goroutine，而 agent loop 也在 goroutine 里。两者之间的协调比较复杂。
-
-#### 3.3.4 简化方案：Agent 内同步压缩
-
-更简洁的方案：在 agent loop 内同步完成压缩，不依赖 TUI 事件。
-
-```go
-// runAgentLoop 内部
-if a.shouldAutoCompact() {
-    compactResult, err := a.doCompact(ctx, messages)
-    if err != nil {
-        // 压缩失败，继续（发 warning）
-        a.logger.Log("Auto compact failed: %v", err)
-    } else {
-        // 替换 messages 为压缩后历史
-        *messages = compactResult
-        // 重置迭代计数器？不重置，算一次迭代
-        continue // 直接下一轮 loop
+        // ── 原有的 LLM 调用逻辑 ──
+        apiCallCount++
+        llmTools := buildLLMTools(a.filterActiveSchemas(a.toolRegistry.GetSchemas()))
+        streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
+        // ...
     }
 }
 ```
 
-`doCompact()` 的实现：
+这样选择 loop 顶部的原因：
+1. **回合间压缩**：压缩发生在两次 LLM 调用之间，语义干净——不会在 tool 执行中途插入压缩
+2. **覆盖所有 finish reason**：不管 `tool_calls`、`stop` 还是 `length`，下次 loop 迭代都会检查
+3. **避免状态污染**：压缩替换 `messages` 后，新 history 立即生效，不影响当前轮的 tool 执行
+
+#### 3.3.3 `doCompact` 实现（最终方案）
+
+直接调 `provider.CreateChat`，不走 agent loop，不嵌套 stream：
 
 ```go
 func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
-    // 1. 保存当前 tools（怕被清掉）
-    savedTools := a.SaveToolRegistry()
-    a.ClearToolRegistry()
+    // 1. 独立超时：使用 Background() + Timeout 而不是 parent ctx，
+    //    避免 conversation 取消时中断压缩（否则可能产生孤儿 session）
+    compactCtx, cancel := context.WithTimeout(context.Background(), a.cfg.Compact.Timeout)
+    defer cancel()
 
-    // 2. 调用压缩 LLM（用 RunOneOffStream，不含工具）
+    // 转发 conversation 的取消信号——如果用户主动退出，也取消压缩
+    go func() {
+        select {
+        case <-ctx.Done():
+            cancel()
+        case <-compactCtx.Done():
+        }
+    }()
+
+    // 2. 构建压缩 prompt（不嵌入 history，history 作为结构化 context 传入）
+    compactPrompt := commands.BuildCompactInstruction(a.cfg.Language)
+    compactMsgs := make([]llm.Message, len(messages))
+    copy(compactMsgs, messages)
+    compactMsgs = append(compactMsgs, llm.Message{Role: "user", Content: compactPrompt})
+
+    // 3. 直接调 provider（非流式）
+    resp, err := a.provider.CreateChat(compactCtx, compactMsgs, nil, llm.ChatOptions{
+        MaxTokens: a.cfg.Compact.MaxTokens,
+    })
+    if err != nil {
+        return nil, fmt.Errorf("compact LLM call: %w", err)
+    }
+
+    summary := resp.Content
+
+    // 4. 写 memory（压缩前持久化当前 session）
+    a.StoreCompactMemory()
+
+    // 5. FinalizeCompact 创建新 session
     systemPrompt := ""
     if len(messages) > 0 && messages[0].Role == "system" {
         systemPrompt = messages[0].Content
     }
-    ch := a.RunOneOffStream(ctx, messages, BuildCompactInstruction(), systemPrompt, llm.ChatOptions{
-        MaxTokens: 4096,
-    })
-  
-    summary, err := DrainCompactEvents(ch)
-    if err != nil {
-        a.RestoreToolRegistry(savedTools)
-        return nil, fmt.Errorf("compact LLM call: %w", err)
-    }
-
-    // 3. 写 memory
-    a.StoreCompactMemory()
-
-    // 4. Finalize
     newHistory, err := FinalizeCompact(a.sessionManager, systemPrompt, summary)
-    a.RestoreToolRegistry(savedTools)
     if err != nil {
         return nil, fmt.Errorf("finalize compact: %w", err)
     }
+
+    // 6. 通知 memory backend 新 session 已启动
+    a.StartSessionMemory()
+
     return newHistory, nil
 }
 ```
 
-但这里有一个问题：`RunOneOffStream` 会修改 agent 的 `skipMemory` 或类似状态，而且在 `doCompact` 的 ctx 基础上，同时运行两个流可能冲突。
+关键设计决策：
+- **用 `context.Background()`** 而不是传入的 `ctx`：防止 conversation 取消导致压缩中断后产生孤儿 session
+- **转发取消信号**：用户主动退出时仍然取消压缩，避免不必要的 API 调用
+- **没有保存/恢复 tool registry**：因为 `CreateChat` 不走 agent loop，tools 参数传 `nil` 即可，不影响 registry
+- **`StartSessionMemory()`**：`FinalizeCompact` 创建新 session 后需要通知 memory backend（手动 /compact 时由后续 `RunConversationStream` 隐式触发，但自动压缩不经过那个路径）
 
-#### 3.3.5 推荐方案：专用 provider 调用
+#### 3.3.4 事件通知
 
-最干净的方案：不让 `doCompact` 走 agent loop，而是直接调 provider：
+两个事件足够：
 
 ```go
-func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
-    // 1. 构建压缩 prompt
-    compactPrompt := BuildCompactInstruction()
-    
-    // 2. 直接调 provider
-    compactMsgs := append([]llm.Message(nil), messages...)
-    compactMsgs = append(compactMsgs, llm.Message{Role: "user", Content: compactPrompt})
-    
-    resp, err := a.provider.CreateChat(ctx, compactMsgs, nil, llm.ChatOptions{
-        MaxTokens: a.cfg.Compact.MaxTokens,
-    })
-    if err != nil {
-        return nil, fmt.Errorf("compact: %w", err)
-    }
-  
-    summary := resp.Content
-
-    // 3. 写 memory
-    a.StoreCompactMemory()
-
-    // 4. Finalize
-    systemPrompt := ""
-    if len(messages) > 0 && messages[0].Role == "system" {
-        systemPrompt = messages[0].Content
-    }
-    return FinalizeCompact(a.sessionManager, systemPrompt, summary)
-}
+const (
+    AgentEventAutoCompactStart = "auto_compact_start" // 开始压缩（agent loop 即将阻塞）
+    AgentEventAutoCompactDone  = "auto_compact_done"  // 压缩完成
+)
 ```
 
-`CreateChat`（非流式）是 `Provider` 接口已支持的方法，不需要 stream，简单可靠。
+压缩完成后，agent loop 继续运行，用新 history 调用 LLM，最终产出一个正常的 `TurnComplete`。
 
 ### 3.4 TUI 侧改动
 
 #### 3.4.1 状态栏显示
 
-状态栏新增一个状态指示：当正在自动压缩时显示 `[compacting...]`。
+收到 `AutoCompactStart` 时状态栏显示 `[compacting...]`，收到 `AutoCompactDone` 时恢复。
 
-新增 `stateAutoCompacting` 状态（或复用现有状态机制）。
+由于压缩是同步 `CreateChat`（非流式），不显示实时进度。初版不做流式进度。
 
 #### 3.4.2 事件处理
 
-新增事件类型：
-
 ```go
-const (
-    AgentEventAutoCompactStart = "auto_compact_start" // 开始压缩
-    AgentEventAutoCompactDone  = "auto_compact_done"  // 压缩完成，带 newHistory
-)
+// model_events.go
+case AgentEventAutoCompactStart:
+    m.isCompacting = true  // 复用现有字段
+    // 状态栏自动显示 [compacting...]
+
+case AgentEventAutoCompactDone:
+    m.isCompacting = false
+    // 新 history 已经在 agent loop 里生效
+    // 下一条 TurnComplete 会显示压缩摘要
 ```
 
-`TurnComplete` 事件正常发出——压缩成功后，agent loop 的后续对话会产出一个新的 TurnComplete，包含压缩摘要。
+不需要像手动 `/compact` 那样保存/恢复 history、清除 tool registry——这些都由 agent 内部完成了。
 
 ### 3.5 压缩安全
 
-1. **防重复压缩**：每轮 tool 执行后只检查一次，成功压缩后设置 `a.compactedThisTurn = true`，在下一轮新 user message 时复位。或者记录已压缩时的消息数/轮数。
+#### 3.5.1 冷却机制
 
-2. **最小间隔**：压缩后设置 `compactCooldown` 标记，在下一轮新 user message 到达时复位。防止同一轮连续触发。
+压缩成功后设置冷却标记，避免连续触发：
 
-3. **回滚**：复用 `/compact` 的 `rollbackCompact` 机制。
+```go
+// agent.go — 新增字段
+lastCompactTokenEstimate int64   // 上次压缩时的 token 估计值
+compactCooldownUntil     int64   // 冷却到期时的消息数
+```
 
-4. **并发安全**：压缩在 agent loop goroutine 内同步执行，无并发问题。
+冷却条件：**token 增长小于 20%** 时不重新触发。
+
+```go
+func (a *AIAgent) shouldAutoCompact() bool {
+    // ...基础检查...
+    
+    if a.isCompactCooldown() {
+        return false
+    }
+    
+    pct := float64(a.lastInputTokens) / float64(a.contextWindow)
+    return pct >= a.cfg.Compact.Threshold
+}
+
+func (a *AIAgent) isCompactCooldown() bool {
+    if a.lastCompactTokenEstimate == 0 {
+        return false // 从未压缩过
+    }
+    // 只有 token 增长超过 20% 才重新触发
+    growth := float64(a.lastInputTokens) / float64(a.lastCompactTokenEstimate)
+    return growth < 1.2
+}
+
+func (a *AIAgent) setCompactCooldown() {
+    a.lastCompactTokenEstimate = a.lastInputTokens
+}
+```
+
+这样设计的好处：
+- 不需要依赖消息数，不受消息类型影响
+- 用户继续对话后 token 自然增长，到 20% 阈值后自动解除冷却
+- 如果用户发了大量内容，token 陡增，冷却会更快解除
+
+#### 3.5.2 孤儿 session 防护
+
+`doCompact` 的压缩失败路径需要清理孤儿 session：
+
+```go
+func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.Message, error) {
+    // ...
+    newHistory, err := FinalizeCompact(a.sessionManager, systemPrompt, summary)
+    if err != nil {
+        // FinalizeCompact 可能已创建新 session（sm.New 成功但后续步骤失败）
+        // 尝试删除孤儿 session
+        if cur := a.sessionManager.Current(); cur != nil {
+            // 检查是否是新创建的 session（没有实际对话内容）
+            if cur.CompactedParentID != "" {
+                _ = a.sessionManager.Delete(cur.ID) // best-effort
+            }
+        }
+        return nil, fmt.Errorf("finalize compact: %w", err)
+    }
+    // ...
+}
+```
+
+> 需要 `session.Manager` 暴露 `Delete(id)` 方法，或使用 `sm.DeleteCurrent()`。
+
+#### 3.5.3 回滚
+
+如果用户对压缩结果不满意，可以使用手动的 `/compact rollback` 机制（复用现有的 `rollbackCompact`）。
+
+自动压缩不会自动回滚——它和手动压缩创建相同结构的 session（带 `CompactedParentID` 链接），用户可以在 session 列表中看到父子关系，随时回退。
+
+#### 3.5.4 并发安全
+
+压缩在 agent loop goroutine 内同步执行，无并发问题。唯一的外部影响是通过 `ch` 发送事件——`ch` 是带缓冲的 channel（cap=64），不会阻塞。
 
 ### 3.6 与 `/compact` 的差异
 
 | 方面 | `/compact`（手动） | 自动压缩 |
 |------|-------------------|---------|
 | 触发 | 用户输入命令 | 自动检测 context 水位 |
-| 调用方式 | TUI → `RunOneOffStream` | Agent → `provider.CreateChat` |
-| LLM 工具 | 清除 tool registry | 清除 tool registry |
-| session 处理 | `FinalizeCompact` | 相同 |
-| TUI 通知 | `TurnComplete` + compact 处理 | `AutoCompactStart/Done` |
-| 回滚 | `rollbackCompact` | 同 |
+| LLM 调用方式 | TUI → `RunOneOffStream`（走 agent loop） | Agent → `provider.CreateChat`（直调） |
+| LLM 工具 | 清除 tool registry（双保险） | 不传 tools（`CreateChat` 的 tools=ni） |
+| session 处理 | `FinalizeCompact`（TUI 侧调用） | 相同（agent 侧调用） |
+| TUI 变动 | 保存/恢复 history + tools | `AutoCompactStart/Done` 两个事件 |
+| 冷却 | 无（用户手动触发） | 20% token 增长冷却 |
+| 孤儿 session | 极少（用户手动操作） | `doCompact` 失败时清理 |
 
 ## 4. 实现步骤
 
-### Step 1: 配置扩展
+### Step 1: 配置扩展 ← P0
 
-`config/config.go` — `CompactConfig` 新增字段和默认值。
+`config/config.go` — `CompactConfig` 新增 `Auto`、`Threshold`、`MaxTokens` 字段和默认值。
 
-### Step 2: Agent 判定方法
+```go
+type CompactConfig struct {
+    Timeout   time.Duration `yaml:"timeout" default:"5m"`
+    MaxTokens int           `yaml:"max_tokens" default:"4096"`
+    Auto      bool          `yaml:"auto" default:"true"`
+    Threshold float64       `yaml:"threshold" default:"0.75"`
+}
+```
 
-`agent/token_estimate.go` — 新增 `shouldAutoCompact()`。
+### Step 2: Agent 判定方法 ← P0
 
-`agent/agent.go` — 新增 `compactedThisTurn bool` 或 `turnCountSinceCompact int` 字段。
+- `agent/token_estimate.go` — 新增 `shouldAutoCompact()`
+- `agent/agent.go` — 新增 `lastCompactTokenEstimate int64` 字段
 
-### Step 3: Agent 同步压缩
+### Step 3: Agent 同步压缩 ← P0
 
-`agent/compact.go` — 新增 `doCompact(ctx, messages) ([]llm.Message, error)`。
+`agent/compact.go` 或 `agent/agent_compact.go` — 新增 `doCompact(ctx, messages)` 实现。
 
-### Step 4: Agent loop 插入
+### Step 4: Agent loop 插入 ← P0
 
-`agent/agent_loop.go` — `runAgentLoop` 中调用 `shouldAutoCompact()`，触发后调用 `doCompact()`。
+`agent/agent_loop.go` — `runAgentLoop` loop 顶部插入检查点（§3.3.2）。
 
-### Step 5: 事件通知
+### Step 5: 冷却机制 ← P0
 
-`agent/agent_loop.go` — 新增事件类型，压缩完成时发 `AutoCompactDone`。
+`agent/agent.go` — `isCompactCooldown()` / `setCompactCooldown()` 方法。
 
-### Step 6: TUI 状态栏
+### Step 6: 孤儿 session 防护 ← P1
 
-`tui/statusbar.go` — 显示 auto compact 进度。
+`session/manager.go` — 暴露 `Delete(id)` 方法（如尚不存在）；`doCompact` 失败时清理。
 
-### Step 7: TUI 事件处理
+### Step 7: 事件类型 ← P1
 
-`tui/model_events.go` — 处理 `AutoCompactStart/Done`，更新 chatview。
+`agent/agent_loop.go` — 新增 `AgentEventAutoCompactStart` / `AgentEventAutoCompactDone` 事件。
+
+### Step 8: TUI 状态栏 ← P1
+
+`tui/statusbar.go` — 收到 `AutoCompactStart` 时显示 `[compacting...]`。
+
+### Step 9: TUI 事件处理 ← P1
+
+`tui/model_events.go` — 处理 `AutoCompactStart/Done`，更新 `m.isCompacting`。
+
+### Step 10: `language` 适配 ← P2
+
+`agent/commands/compact.go` — `BuildCompactInstruction(language string)` 支持中/英文。
+
+### Step 11: 测试 ← P2
+
+- `agent/token_estimate_test.go` — `TestShouldAutoCompact` 单元测试
+- `agent/agent_compact_test.go` — `TestDoCompact` 集成测试（mock provider）
 
 ## 5. 未解决问题
 
-1. **`provider.CreateChat` 超时处理** — 压缩 LLM 调用可能耗时较长，需要独立的 context/timeout。现有 `CompactConfig.Timeout`（5m）可用。
+### 5.1 多模型场景
 
-2. **多模型场景** — compact 调用是否使用主模型？目前 `/compact` 用的是主模型，但压缩理论上可以用更便宜的模型。初版复用主模型。
+compact 调用是否使用主模型？目前 `/compact` 用的是主模型，但压缩理论上可以用更便宜的模型。初版复用主模型。后续可考虑 `CompactConfig.Provider` / `CompactConfig.Model` 字段。
 
-3. **压缩精度** — 现有 `BuildCompactInstruction` 是中文 prompt，对于英文对话可能不够优雅。初版不改变。
+### 5.2 压缩 LLM 超限风险
 
-4. **频率控制** — 如果每次 tool 执行后都检查，成功压缩后设置冷却标记，在下一轮新 user message 时复位，不会在同一轮内重复压缩。
+`doCompact` 把完整 history + compact prompt 发给 LLM。如果 history 本身就接近 context window 上限（比如 128K 用了 100K），压缩 LLM 调用也可能超限。
 
-5. **Channel 模式兼容** — channel 模式下也需要自动压缩。逻辑相同，只是 TUI 事件替换为 channel 通知。
+有两种应对思路：
+1. **Threshold 默认 0.75**（而非 0.8）：预留 25% headroom（128K × 25% = 32K），足够容纳 compact prompt + 响应
+2. **裁剪 history**：如果 history 超出预留空间，只发最近的 N 条消息（见 §5.6）
 
-6. **流式压缩进度** — 压缩 LLM 调用如果用 `CreateChatStream`（非 `CreateChat`），可以在状态栏显示流式输出。初版用 `CreateChat`（简单），后续可升级。
+初版用方案 1，足够安全。
+
+### 5.3 `BuildCompactInstruction` 语言适配
+
+现有压缩 prompt 是中文。如果 `config.Language == "English"`，LLM 可能仍然用中文回复压缩摘要，导致用户看到中英混杂的界面。
+
+解决方案：`BuildCompactInstruction(language string)` 根据 language 参数选择模板。
+
+### 5.4 孤儿 session 清理
+
+`doCompact` 失败时尝试删除孤儿 session（§3.5.2）。但更彻底的方案是定期后台清理：启动时扫描所有 session，删除 `len(messages) <= 2` 且 `CompactedParentID != ""` 的孤儿。
+
+初版不做后台清理，只做 `doCompact` 失败时的即时清理。
+
+### 5.5 Channel 模式兼容
+
+Channel 模式下也需要自动压缩。逻辑与 TUI 模式相同：
+- `doCompact` 不依赖 TUI，完全在 agent 内部完成
+- `AutoCompactStart/Done` 事件可以忽略（channel 模式不渲染状态栏）
+- 唯一区别：channel 模式下 `contextWindow` 需要从 provider config 获取
+
+### 5.6 history 裁剪策略
+
+如果 conversation 超长（比如 200 条消息），把完整 history 发给压缩 LLM 可能本身就很贵。可以考虑只发**最近 N 条消息 + 早期摘要**（如果已有）。
+
+具体实现复杂，初版不做。`ContextWindow` 128K 以上的模型可以容纳大部分真实对话。
+
+### 5.7 流式压缩进度
+
+`CreateChat` 是非流式的，压缩期间用户看不到任何输出。如果压缩耗时较长（超过 10s），用户可能怀疑卡住了。
+
+后续可升级为 `CreateChatStream`，在 agent loop 内消费 stream 并定期发送进度更新事件，让状态栏显示 `[compacting: 正在生成摘要...]`。
+
+初版用 `CreateChat`（简单），且默认 5m 超时 + 75% threshold，正常对话的压缩通常在几秒内完成。

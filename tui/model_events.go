@@ -252,6 +252,19 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.syncSessionInfo()
 		return m.nextEvent()
 
+	case agent.AgentEventAutoCompactStart:
+		m.isCompacting = true
+		m.statusbar.SetCompacting(true)
+		return m.nextEvent()
+
+	case agent.AgentEventAutoCompactDone:
+		m.isCompacting = false
+		m.statusbar.SetCompacting(false)
+		// Sync session info — compact may have created a new session
+		// (different ID, title inherited from old).
+		m.syncSessionInfo()
+		return m.nextEvent()
+
 	case agent.AgentEventError:
 		m.steerRespCh = nil
 		if event.Messages != nil {

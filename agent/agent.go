@@ -137,6 +137,11 @@ type AIAgent struct {
 	// Channel mode reads this via GetLastMessages() to maintain an in-memory
 	// history cache on the cachedAgent, avoiding repeated disk reloads.
 	lastMessages []llm.Message
+
+	// lastCompactTokenEstimate tracks the token estimate at the time of the
+	// most recent auto-compact. Used by shouldAutoCompact's cooldown logic:
+	// auto-compact won't retrigger until token estimate grows by >20%.
+	lastCompactTokenEstimate int64
 }
 
 func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
@@ -240,6 +245,23 @@ func (a *AIAgent) SetContextWindow(window int64) {
 // token-warning reminders and the TUI statusbar context fraction.
 func (a *AIAgent) LastInputEstimate() int64 {
 	return a.lastInputTokens
+}
+
+// isCompactCooldown returns true if the token estimate has not grown
+// significantly (>= 20%) since the last auto-compact. This prevents
+// repeated compaction on the same session within a single conversation.
+func (a *AIAgent) isCompactCooldown() bool {
+	if a.lastCompactTokenEstimate == 0 {
+		return false // never compacted
+	}
+	growth := float64(a.lastInputTokens) / float64(a.lastCompactTokenEstimate)
+	return growth < 1.2
+}
+
+// setCompactCooldown records the current token estimate so that
+// isCompactCooldown can prevent immediate re-compaction.
+func (a *AIAgent) setCompactCooldown() {
+	a.lastCompactTokenEstimate = a.lastInputTokens
 }
 
 // ContextWindow returns the model's context window size.

@@ -13,7 +13,28 @@ import (
 // (e.g. via RunConversationStream with the session's prior messages).
 // System messages are skipped in the instruction since they are already
 // transmitted as structured context.
-func BuildCompactInstruction() string {
+//
+// language controls the output language of the instruction:
+//   - "Chinese" (default): returns a Chinese instruction
+//   - "English": returns an English instruction
+//   - any other value falls back to Chinese
+func BuildCompactInstruction(language string) string {
+	if strings.EqualFold(language, "English") {
+		return "Please compress the above conversation into a concise yet comprehensive summary.\n\n" +
+			"The summary MUST include:\n" +
+			"1. The user's main goals and questions\n" +
+			"2. Key actions and modifications completed (specific file names, commands, config changes)\n" +
+			"3. Important findings and conclusions\n" +
+			"4. Current state and remaining issues\n" +
+			"5. Working environment (directory, branch, etc.)\n\n" +
+			"Constraints:\n" +
+			"- Maintain information density — remove repetition and irrelevant content\n" +
+			"- Preserve specific file names, commands, config values and other critical details\n" +
+			"- Do NOT add new analysis or suggestions — only summarize what happened\n" +
+			"- Do NOT call any tools — output the summary text directly\n\n" +
+			"Output the compressed summary:"
+	}
+
 	return "请将以上对话历史压缩成一份简洁但全面的综合摘要。\n\n" +
 		"摘要必须包含：\n" +
 		"1. 用户的主要目标和问题\n" +

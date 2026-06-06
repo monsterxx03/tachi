@@ -26,6 +26,7 @@ type StatusBar struct {
 	pendingCount  int
 	mcpReady      bool // true when MCP async init completes
 	mcpEnabled    bool // true when MCP servers are configured
+	compacting    bool // true when auto-compaction is in progress
 }
 
 const (
@@ -50,6 +51,7 @@ func (s *StatusBar) ProviderInfo() string            { return s.providerInfo }
 func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
 func (s *StatusBar) SetMCPReady(v bool)    { s.mcpReady = v }
 func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
+func (s *StatusBar) SetCompacting(v bool)  { s.compacting = v }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -100,6 +102,9 @@ func (s StatusBar) View() string {
 	}
 	if s.pendingCount > 0 {
 		left += " | " + pendingCountStyle.Render(fmt.Sprintf("⏳ %d pending", s.pendingCount))
+	}
+	if s.compacting {
+		left += " | " + mcpConnectingStyle.Render("compacting...")
 	}
 	if s.copyMode {
 		left += " | " + selectModeStyle.Render("SELECT")

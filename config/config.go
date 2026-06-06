@@ -222,9 +222,13 @@ func (c *ACPConfig) ShouldConnectConfiguredMCP() bool {
 	return c.ConnectConfiguredMCP == nil || *c.ConnectConfiguredMCP
 }
 
-// CompactConfig holds configuration for the /compact command.
+// CompactConfig holds configuration for session compaction.
+// Used by both the /compact command and auto-compact (when enabled).
 type CompactConfig struct {
-	Timeout time.Duration `yaml:"timeout" default:"5m"` // Timeout for the compaction LLM call
+	Timeout   time.Duration `yaml:"timeout" default:"5m"`     // Timeout for the compaction LLM call
+	MaxTokens int           `yaml:"max_tokens" default:"4096"` // Max tokens for the compact response (summary)
+	Auto      bool          `yaml:"auto" default:"true"`       // Enable automatic compaction when context is near limit
+	Threshold float64       `yaml:"threshold" default:"0.75"`  // Trigger ratio: lastInputTokens / contextWindow >= threshold
 }
 
 // ToolResultConfig holds configuration for tool result size limits and

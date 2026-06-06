@@ -79,3 +79,23 @@ func (a *AIAgent) estimateAndUpdateTokens(messages []llm.Message) {
 	est := estimateInputTokens(messages, systemPrompt, schemas)
 	a.lastInputTokens = est
 }
+
+// shouldAutoCompact checks whether automatic compaction should be triggered.
+// Returns true when all of the following hold:
+//   - auto-compact is enabled in config
+//   - context window is known
+//   - estimated input tokens >= contextWindow * threshold
+//   - not in cooldown (token estimate hasn't grown 20% since last compact)
+func (a *AIAgent) shouldAutoCompact() bool {
+	if a.cfg == nil || !a.cfg.Compact.Auto {
+		return false
+	}
+	if a.contextWindow <= 0 {
+		return false
+	}
+	if a.isCompactCooldown() {
+		return false
+	}
+	pct := float64(a.lastInputTokens) / float64(a.contextWindow)
+	return pct >= a.cfg.Compact.Threshold
+}

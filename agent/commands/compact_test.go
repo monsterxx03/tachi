@@ -80,7 +80,7 @@ func TestBuildCompactPrompt_ThinkingBlocks(t *testing.T) {
 }
 
 func TestBuildCompactInstruction_Structure(t *testing.T) {
-	instruction := BuildCompactInstruction()
+	instruction := BuildCompactInstruction("")
 	assert.Contains(t, instruction, "压缩摘要")
 	assert.Contains(t, instruction, "已完成的关键操作")
 	assert.Contains(t, instruction, "不要调用任何工具")
@@ -89,6 +89,12 @@ func TestBuildCompactInstruction_Structure(t *testing.T) {
 	// but BuildCompactInstruction only has the summarization instructions.
 	assert.NotContains(t, instruction, "[工具调用:")
 	assert.NotContains(t, instruction, "[工具结果:")
+
+	// English variant
+	englishInstr := BuildCompactInstruction("English")
+	assert.Contains(t, englishInstr, "compressed summary")
+	assert.Contains(t, englishInstr, "Key actions")
+	assert.Contains(t, englishInstr, "Do NOT call any tools")
 }
 
 func TestBuildCompactInstruction_NoHistoryEmbedding(t *testing.T) {
@@ -98,7 +104,7 @@ func TestBuildCompactInstruction_NoHistoryEmbedding(t *testing.T) {
 	}
 
 	prompt := BuildCompactPrompt(history)
-	instruction := BuildCompactInstruction()
+	instruction := BuildCompactInstruction("")
 
 	// Old prompt embeds history; new instruction does not.
 	assert.Contains(t, prompt, "帮我重构用户模块")

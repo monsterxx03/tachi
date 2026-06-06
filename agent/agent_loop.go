@@ -34,8 +34,10 @@ const (
 	AgentEventSessionTitle     = "session_title"
 	AgentEventSubagentStart    = "subagent_start"
 	AgentEventSubagentDone     = "subagent_done"
-	AgentEventSteerCheck       = "steer_check" // agent requests TUI to check for pending input
-	AgentEventUsage            = "usage"       // incremental usage update after each API call
+	AgentEventSteerCheck       = "steer_check"        // agent requests TUI to check for pending input
+	AgentEventUsage            = "usage"              // incremental usage update after each API call
+	AgentEventAutoCompactStart = "auto_compact_start" // agent is about to begin auto-compaction
+	AgentEventAutoCompactDone  = "auto_compact_done"  // agent completed auto-compaction
 )
 
 type AgentEvent struct {
@@ -320,6 +322,28 @@ func (a *AIAgent) runAgentLoop(
 			}
 			return
 		default:
+		}
+
+		// ── Auto-compact check (before LLM call) ──
+		// Check happens at the loop top so it fires regardless of the
+		// previous iteration's finish reason (tool_calls, stop, length).
+		// Compaction replaces messages with a shorter history, and the
+		// next iteration continues normally with the new context.
+		if a.shouldAutoCompact() {
+			ch <- AgentEvent{Type: AgentEventAutoCompactStart}
+			newHistory, err := a.doCompact(ctx, messages)
+			if err != nil {
+				a.logger.Log("Auto compact failed: %v", err)
+				// Non-fatal: continue with the existing (over-large)
+				// history. The next iteration will try again — eventual
+				// success if the LLM responds before hitting the limit.
+			} else {
+				messages = newHistory
+				a.setCompactCooldown()
+				a.logger.Log("Auto compact completed, new history has %d messages", len(messages))
+			}
+			ch <- AgentEvent{Type: AgentEventAutoCompactDone}
+			continue // next iteration with new (or original) history
 		}
 
 		apiCallCount++
