@@ -286,7 +286,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	// Run compact turn — use DrainCompactEvents approach (simple, reliable)
 	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
 	eventCh := sess.agent.RunConversationStream(ctx, nil,
-		cmds.BuildCompactInstruction(sess.cfg.Language), systemPrompt,
+		cmds.BuildCompactInstruction(), systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens},
 	)
 

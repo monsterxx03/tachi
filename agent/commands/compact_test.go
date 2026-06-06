@@ -30,7 +30,7 @@ func TestBuildCompactPrompt_TruncatesLongToolResults(t *testing.T) {
 
 	prompt := BuildCompactPrompt(history)
 	assert.Contains(t, prompt, "读取文件")
-	assert.Contains(t, prompt, "[工具结果:") // Should still appear
+	assert.Contains(t, prompt, "[Tool Result:") // Should still appear
 	// Should be truncated to 500 + "..."
 	assert.Contains(t, prompt, "...")
 }
@@ -59,7 +59,7 @@ func TestBuildCompactPrompt_IncludesToolCalls(t *testing.T) {
 
 func TestBuildCompactPrompt_EmptyHistory(t *testing.T) {
 	prompt := BuildCompactPrompt(nil)
-	assert.Contains(t, prompt, "压缩摘要")
+	assert.Contains(t, prompt, "compressed summary")
 }
 
 func TestBuildCompactPrompt_ThinkingBlocks(t *testing.T) {
@@ -80,21 +80,15 @@ func TestBuildCompactPrompt_ThinkingBlocks(t *testing.T) {
 }
 
 func TestBuildCompactInstruction_Structure(t *testing.T) {
-	instruction := BuildCompactInstruction("")
-	assert.Contains(t, instruction, "压缩摘要")
-	assert.Contains(t, instruction, "已完成的关键操作")
-	assert.Contains(t, instruction, "不要调用任何工具")
+	instruction := BuildCompactInstruction()
+	assert.Contains(t, instruction, "compressed summary")
+	assert.Contains(t, instruction, "Key actions")
+	assert.Contains(t, instruction, "Do NOT call any tools")
 	// Verify it does NOT embed actual conversation content:
-	// the old BuildCompactPrompt injects formatted markers like [工具调用: xxx],
+	// the old BuildCompactPrompt injects formatted markers like [Tool Call: xxx],
 	// but BuildCompactInstruction only has the summarization instructions.
-	assert.NotContains(t, instruction, "[工具调用:")
-	assert.NotContains(t, instruction, "[工具结果:")
-
-	// English variant
-	englishInstr := BuildCompactInstruction("English")
-	assert.Contains(t, englishInstr, "compressed summary")
-	assert.Contains(t, englishInstr, "Key actions")
-	assert.Contains(t, englishInstr, "Do NOT call any tools")
+	assert.NotContains(t, instruction, "[Tool Call:")
+	assert.NotContains(t, instruction, "[Tool Result:")
 }
 
 func TestBuildCompactInstruction_NoHistoryEmbedding(t *testing.T) {
@@ -104,7 +98,7 @@ func TestBuildCompactInstruction_NoHistoryEmbedding(t *testing.T) {
 	}
 
 	prompt := BuildCompactPrompt(history)
-	instruction := BuildCompactInstruction("")
+	instruction := BuildCompactInstruction()
 
 	// Old prompt embeds history; new instruction does not.
 	assert.Contains(t, prompt, "帮我重构用户模块")

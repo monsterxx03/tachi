@@ -883,7 +883,7 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	m.agent.ClearToolRegistry()
 
 	// 5. Build compact instruction (no history — LLM sees history as context)
-	instruction := cmds.BuildCompactInstruction(m.cfg.Language)
+	instruction := cmds.BuildCompactInstruction()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel

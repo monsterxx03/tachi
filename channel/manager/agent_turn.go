@@ -162,7 +162,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// The LLM will summarize based on its existing session context
 		// without re-sending all history as text.
 		if isCompactCmd {
-			msg.Content = cmds.BuildCompactInstruction(m.cfg.Language)
+			msg.Content = cmds.BuildCompactInstruction()
 		}
 
 		// Transform skill activation to the skill's instruction message.
