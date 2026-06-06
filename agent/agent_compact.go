@@ -38,11 +38,7 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) ([]llm.
 	}()
 
 	// 2. Build the compact prompt (language-aware).
-	language := ""
-	if a.cfg != nil {
-		language = a.cfg.Language
-	}
-	compactPrompt := commands.BuildCompactInstruction(language)
+	compactPrompt := commands.BuildCompactInstruction(a.cfg.Language)
 
 	// 3. Append the compact instruction as a user message.
 	compactMsgs := make([]llm.Message, len(messages))
