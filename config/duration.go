@@ -19,7 +19,7 @@ func (d Duration) MarshalJSON() ([]byte, error) {
 // UnmarshalJSON implements json.Unmarshaler, accepting both string ("10s")
 // and numeric (nanoseconds) representations for compatibility.
 func (d *Duration) UnmarshalJSON(b []byte) error {
-	var v interface{}
+	var v any
 	if err := json.Unmarshal(b, &v); err != nil {
 		return err
 	}

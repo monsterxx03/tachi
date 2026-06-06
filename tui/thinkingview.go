@@ -4,8 +4,8 @@ import (
 	"strings"
 	"unicode"
 
-	"github.com/mattn/go-runewidth"
 	tea "charm.land/bubbletea/v2"
+	"github.com/mattn/go-runewidth"
 )
 
 // ThinkingView is a full-height scrollable view that shows the live thinking
@@ -151,19 +151,15 @@ func (tv *ThinkingView) refresh() {
 // wrapContent wraps text to tv.width - 2 characters (gutter), measuring
 // display width via runewidth for CJK support.
 func (tv *ThinkingView) wrapContent(text string) string {
-	w := tv.width - 2 // gutter
-	if w < 1 {
-		w = 1
-	}
+	w := max(
+		// gutter
+		tv.width-2, 1)
 	return wordWrap(text, w)
 }
 
 // wrappedLineCount returns the number of lines after wrapping text.
 func (tv *ThinkingView) wrappedLineCount(text string) int {
-	w := tv.width - 2
-	if w < 1 {
-		w = 1
-	}
+	w := max(tv.width-2, 1)
 	return wordWrapLineCount(text, w)
 }
 
@@ -175,7 +171,7 @@ func wordWrap(text string, maxWidth int) string {
 	}
 
 	var out strings.Builder
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if out.Len() > 0 {
 			out.WriteByte('\n')
 		}
@@ -243,7 +239,7 @@ func wordWrapLineCount(text string, maxWidth int) int {
 	}
 
 	n := 0
-	for _, line := range strings.Split(text, "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		w := runewidth.StringWidth(line)
 		if w <= maxWidth || line == "" {
 			n++
