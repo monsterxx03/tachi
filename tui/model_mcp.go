@@ -209,7 +209,7 @@ func (m *Model) mcpOverlayToggle(name string) tea.Cmd {
 			m.agent.UnregisterMCPServer(srv.Name)
 		}
 		m.refreshMCPServerItems()
-		m.mcpView.SetMessage(fmt.Sprintf("✓ %s disabled", name))
+		m.mcpView.SetMessage(fmt.Sprintf("● %s disabled", name))
 		return nil
 	}
 
@@ -218,7 +218,7 @@ func (m *Model) mcpOverlayToggle(name string) tea.Cmd {
 	srv.Enabled = &enabled
 
 	if m.mcpManager == nil {
-		m.mcpView.SetMessage(fmt.Sprintf("✓ %s enabled (no manager)", name))
+		m.mcpView.SetMessage(fmt.Sprintf("● %s enabled (no manager)", name))
 		m.refreshMCPServerItems()
 		return nil
 	}
@@ -335,7 +335,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 		}
 
 		count := m.agent.AddDeferredMCPTools(mcpTools)
-		ch <- fmt.Sprintf("✓ %s connected with %d tool(s)", srv.Name, count)
+		ch <- fmt.Sprintf("● %s connected with %d tool(s)", srv.Name, count)
 
 		// Reconnect sibling servers sharing the same OAuth token.
 		for _, sib := range siblings {
@@ -347,7 +347,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 				continue
 			}
 			sibCount := m.agent.AddDeferredMCPTools(sibTools)
-			ch <- fmt.Sprintf("✓ %s connected with %d tool(s) (shared token)", sib.Name, sibCount)
+			ch <- fmt.Sprintf("● %s connected with %d tool(s) (shared token)", sib.Name, sibCount)
 		}
 	}()
 
@@ -370,7 +370,7 @@ func (m *Model) mcpOverlayConnectAndRegister(srv *config.MCPServerConfig, ch cha
 
 	count := m.agent.AddDeferredMCPTools(mcpTools)
 
-	ch <- fmt.Sprintf("✓ %s connected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
+	ch <- fmt.Sprintf("● %s connected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
 }
 
 // mcpOverlayReconnectAndRegister reconnects to a server and adds its tools to the
@@ -389,5 +389,5 @@ func (m *Model) mcpOverlayReconnectAndRegister(srv *config.MCPServerConfig, ch c
 
 	count := m.agent.AddDeferredMCPTools(mcpTools)
 
-	ch <- fmt.Sprintf("✓ %s reconnected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
+	ch <- fmt.Sprintf("● %s reconnected with %d tool(s) — MCPSearchTools 可搜索加载", srv.Name, count)
 }

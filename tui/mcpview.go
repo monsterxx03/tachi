@@ -259,9 +259,9 @@ func (v *MCPView) View() string {
 		msg := ""
 		if sel != nil {
 			if sel.Connected {
-				msg = mcpStatusOK.Render(fmt.Sprintf("✓ %s connected, %d tool(s)", sel.Name, len(sel.Tools)))
+				msg = mcpStatusOK.Render(fmt.Sprintf("● %s connected, %d tool(s)", sel.Name, len(sel.Tools)))
 			} else if sel.Enabled {
-				msg = mcpStatusWarn.Render(fmt.Sprintf("⚠ %s enabled but not connected", sel.Name))
+				msg = mcpStatusWarn.Render(fmt.Sprintf("● %s enabled but not connected", sel.Name))
 			} else {
 				msg = dimStyle.Render(fmt.Sprintf("%s is disabled", sel.Name))
 			}
@@ -276,14 +276,14 @@ func (v *MCPView) View() string {
 }
 
 func (v *MCPView) renderServerLine(i int, srv MCPServerItem) string {
-	icon := "⚪"
+	icon := "○"
 	style := dimStyle
 	if srv.Enabled {
 		if srv.Connected {
-			icon = "🟢"
+			icon = "●"
 			style = mcpServerConnected
 		} else {
-			icon = "🔴"
+			icon = "●"
 			style = mcpServerDisconnected
 		}
 	}
@@ -347,9 +347,9 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 		}
 		toolNameStyled := mcpToolName.Render(toolName)
 
-		// Deferred indicator for tools not yet loaded into the LLM
+		// Deferred tools are shown in dim color (not yet loaded into LLM)
 		if t.Deferred {
-			toolNameStyled += " " + dimStyle.Render("📦")
+			toolNameStyled = dimStyle.Render(toolName)
 		}
 
 		// Take first line only, then truncate to descMaxRunes runes

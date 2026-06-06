@@ -246,12 +246,12 @@ func (m *Model) mcpList() tea.Cmd {
 			connected = m.mcpManager.IsConnected(srv.Name)
 		}
 
-		status := "⚪ Disabled"
+		status := "○ Disabled"
 		if enabled {
 			if connected {
-				status = "🟢 Connected"
+				status = "● Connected"
 			} else {
-				status = "🔴 Disconnected"
+				status = "● Disconnected"
 			}
 		}
 
@@ -516,7 +516,7 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 
 		count := m.agent.AddDeferredMCPTools(mcpTools)
 
-		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓ — 使用 MCPSearchTools 搜索并加载", srv.Name, count)
+		ch <- fmt.Sprintf("MCP server **%s** connected with %d tool(s) — 使用 MCPSearchTools 搜索并加载", srv.Name, count)
 	}()
 
 	return readNextMCPStatus(ch)
@@ -562,7 +562,7 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 
 		count := m.agent.AddDeferredMCPTools(mcpTools)
 
-		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) ✓ — 使用 MCPSearchTools 搜索并加载", srv.Name, count))
+		msgs = append(msgs, fmt.Sprintf("MCP server **%s** connected with %d tool(s) — 使用 MCPSearchTools 搜索并加载", srv.Name, count))
 	}()
 
 	return readNextMCPStatus(ch)
