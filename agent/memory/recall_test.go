@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -120,9 +121,14 @@ func TestRelativeAge_Future(t *testing.T) {
 }
 
 func TestRelativeAge_Zero(t *testing.T) {
-	// Unix epoch (0) is Jan 1 1970 — over 50 years ago, so falls into "months ago"
+	// Unix epoch (0) is Jan 1 1970 — many years ago, so falls into "months ago"
+	// Calculate expected months dynamically to avoid hardcoding a time-dependent value.
+	now := time.Now()
+	epoch := time.Unix(0, 0)
+	expectedMonths := int(now.Sub(epoch).Hours() / (24 * 30))
+	expected := fmt.Sprintf("(%d months ago) ", expectedMonths)
 	result := RelativeAge(int64(0))
-	if result != "(686 months ago) " {
-		t.Errorf("RelativeAge(0) = %q, want %q", result, "(686 months ago) ")
+	if result != expected {
+		t.Errorf("RelativeAge(0) = %q, want %q (diff may be due to rounding)", result, expected)
 	}
 }
