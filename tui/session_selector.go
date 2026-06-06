@@ -214,18 +214,21 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 
 // rebuildTotalUsage reconstructs the cumulative totalUsage from session messages.
 // InputTokens is summed across all messages (cumulative input + cost basis).
-// LastInputTokens is the most recent API input token count (retained for /usage
-// display and cache-miss breakdown, but no longer used for statusbar context %).
+// LastInputTokens prefers the local estimate (EstimatedInputTokens) so the
+// statusbar context % matches what was shown during the active conversation.
+// Falls back to the API-returned InputTokens for sessions saved before this field existed.
 func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 	m.totalUsage = llm.Usage{}
 
 	var lastInput int64
 	for _, msg := range msgs {
 		if msg.Usage != nil {
-			if msg.Usage.InputTokens > 0 {
-				lastInput = msg.Usage.InputTokens
+			if msg.Usage.EstimatedInputTokens > 0 {
+				lastInput = msg.Usage.EstimatedInputTokens
+			} else if msg.Usage.InputTokens > 0 {
+				lastInput = msg.Usage.InputTokens // fallback for old sessions
 			}
-			m.totalUsage.InputTokens += msg.Usage.InputTokens // ← now accumulated
+			m.totalUsage.InputTokens += msg.Usage.InputTokens
 			m.totalUsage.OutputTokens += msg.Usage.OutputTokens
 			m.totalUsage.CacheCreationInputTokens += msg.Usage.CacheCreationInputTokens
 			m.totalUsage.CacheReadInputTokens += msg.Usage.CacheReadInputTokens

@@ -97,10 +97,14 @@ func (a *AIAgent) recordAssistantTurn(text string, usage *llm.Usage, thinkBlocks
 		})
 	}
 	if text != "" || usage != nil {
+		su := usageToSession(usage)
+		if su != nil {
+			su.EstimatedInputTokens = a.lastInputTokens
+		}
 		a.recordSession(&session.Message{
 			Type:    session.MessageTypeAssistant,
 			Content: text,
-			Usage:   usageToSession(usage),
+			Usage:   su,
 		})
 	}
 }

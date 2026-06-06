@@ -37,10 +37,11 @@ const (
 
 // Usage records token usage from a single LLM API response.
 type Usage struct {
-	InputTokens              int64 `json:"input_tokens,omitempty"`
-	OutputTokens             int64 `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
+	InputTokens              int64  `json:"input_tokens,omitempty"`
+	OutputTokens             int64  `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64  `json:"cache_read_input_tokens,omitempty"`
+	EstimatedInputTokens     int64  `json:"estimated_input_tokens,omitempty"` // chars/4 local estimate — matches what statusbar showed during conversation
 }
 
 type Message struct {
