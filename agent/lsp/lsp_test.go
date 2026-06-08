@@ -200,7 +200,7 @@ func TestLSPToolFormatting(t *testing.T) {
 	wd := "/test/project"
 
 	t.Run("goToDefinition", func(t *testing.T) {
-		result := formatGoToDefinition(Location{
+		result := FormatGoToDefinition(Location{
 			URI: "file:///test/project/src/main.go",
 			Range: Range{
 				Start: Position{Line: 42, Character: 5},
@@ -213,7 +213,7 @@ func TestLSPToolFormatting(t *testing.T) {
 	})
 
 	t.Run("goToDefinition_multiple", func(t *testing.T) {
-		result := formatGoToDefinition([]Location{
+		result := FormatGoToDefinition([]Location{
 			{URI: "file:///test/project/src/a.go", Range: Range{Start: Position{Line: 1, Character: 0}, End: Position{Line: 1, Character: 5}}},
 			{URI: "file:///test/project/src/b.go", Range: Range{Start: Position{Line: 10, Character: 3}, End: Position{Line: 10, Character: 8}}},
 		}, wd)
@@ -223,7 +223,7 @@ func TestLSPToolFormatting(t *testing.T) {
 	})
 
 	t.Run("hover", func(t *testing.T) {
-		result := formatHover(&Hover{
+		result := FormatHover(&Hover{
 			Contents: MarkupContent{Kind: "markdown", Value: "**func** Foo()"},
 		}, wd)
 		if !strings.Contains(result, "Foo") {
@@ -232,7 +232,7 @@ func TestLSPToolFormatting(t *testing.T) {
 	})
 
 	t.Run("findReferences_grouped", func(t *testing.T) {
-		result := formatFindReferences([]Location{
+		result := FormatFindReferences([]Location{
 			{URI: "file:///test/project/src/main.go", Range: Range{Start: Position{Line: 5, Character: 0}, End: Position{Line: 5, Character: 5}}},
 			{URI: "file:///test/project/src/main.go", Range: Range{Start: Position{Line: 12, Character: 3}, End: Position{Line: 12, Character: 8}}},
 		}, wd)
@@ -270,7 +270,7 @@ func TestLSPToolFormatting(t *testing.T) {
 	})
 
 	t.Run("workspaceSymbol", func(t *testing.T) {
-		result := formatWorkspaceSymbol([]SymbolInformation{
+		result := FormatWorkspaceSymbol([]SymbolInformation{
 			{Name: "Foo", Kind: SKFunction, Location: Location{URI: "file:///test/project/src/main.go", Range: Range{Start: Position{Line: 1, Character: 0}}}},
 			{Name: "Bar", Kind: SKVariable, Location: Location{URI: "file:///test/project/src/utils.go", Range: Range{Start: Position{Line: 5, Character: 0}}}},
 		}, wd)
@@ -280,13 +280,13 @@ func TestLSPToolFormatting(t *testing.T) {
 	})
 
 	t.Run("no_results", func(t *testing.T) {
-		if r := formatGoToDefinition(nil, wd); r != "No definition found." {
+		if r := FormatGoToDefinition(nil, wd); r != "No definition found." {
 			t.Fatalf("expected 'No definition found.', got: %s", r)
 		}
-		if r := formatFindReferences(nil, wd); r != "No references found." {
+		if r := FormatFindReferences(nil, wd); r != "No references found." {
 			t.Fatalf("expected 'No references found.', got: %s", r)
 		}
-		if r := formatHover(nil, wd); r != "No hover information available." {
+		if r := FormatHover(nil, wd); r != "No hover information available." {
 			t.Fatalf("expected 'No hover information available.', got: %s", r)
 		}
 	})
@@ -306,27 +306,6 @@ func TestLSPServerConfig(t *testing.T) {
 	}
 	if len(cfg.Extensions) != 1 || cfg.Extensions[0] != ".go" {
 		t.Fatalf("expected [.go], got %v", cfg.Extensions)
-	}
-}
-
-// TestLSPToolResultStruct tests the marshal/unmarshal of tool results.
-func TestLSPToolResultStruct(t *testing.T) {
-	result := marshalResult("goToDefinition", "Defined in src/main.go:42:5", "/abs/path/main.go", 1, 1)
-	var out struct {
-		Operation   string `json:"operation"`
-		Result      string `json:"result"`
-		FilePath    string `json:"filePath"`
-		ResultCount int    `json:"resultCount"`
-		FileCount   int    `json:"fileCount"`
-	}
-	if err := json.Unmarshal([]byte(result), &out); err != nil {
-		t.Fatalf("unmarshal failed: %v", err)
-	}
-	if out.Operation != "goToDefinition" {
-		t.Fatalf("expected goToDefinition, got %s", out.Operation)
-	}
-	if out.ResultCount != 1 {
-		t.Fatalf("expected resultCount 1, got %d", out.ResultCount)
 	}
 }
 
@@ -391,7 +370,7 @@ func TestDetectLanguage(t *testing.T) {
 
 // TestFindReferencesEmptyResult verifies empty reference results.
 func TestFindReferencesEmptyResult(t *testing.T) {
-	for _, r := range []string{formatFindReferences([]Location{}, "/test"), formatFindReferences(nil, "/test")} {
+	for _, r := range []string{FormatFindReferences([]Location{}, "/test"), FormatFindReferences(nil, "/test")} {
 		if r != "No references found." {
 			t.Fatalf("expected 'No references found.', got: %s", r)
 		}
@@ -400,7 +379,7 @@ func TestFindReferencesEmptyResult(t *testing.T) {
 
 // TestURIHelpers tests URI conversion.
 func TestURIHelpers(t *testing.T) {
-	uri := pathToURI("/home/user/project/main.go")
+	uri := PathToURI("/home/user/project/main.go")
 	if !strings.HasPrefix(uri, "file://") {
 		t.Fatalf("expected file:// URI, got: %s", uri)
 	}
@@ -408,39 +387,6 @@ func TestURIHelpers(t *testing.T) {
 	if path != "/home/user/project/main.go" {
 		t.Fatalf("expected /home/user/project/main.go, got: %s", path)
 	}
-}
-
-// TestDiagnosticSortedOutput tests diagnostic helpers.
-func TestDiagnosticSortedOutput(t *testing.T) {
-	t.Run("severity_strings", func(t *testing.T) {
-		for _, tc := range []struct {
-			sev DiagnosticSeverity
-			exp string
-		}{
-			{SeverityError, "Error"},
-			{SeverityWarning, "Warning"},
-			{SeverityInformation, "Info"},
-			{SeverityHint, "Hint"},
-		} {
-			if s := severityString(tc.sev); s != tc.exp {
-				t.Fatalf("expected %s, got %s", tc.exp, s)
-			}
-		}
-	})
-
-	t.Run("count_by_severity", func(t *testing.T) {
-		diags := []Diagnostic{
-			{Severity: SeverityError, Message: "err1"},
-			{Severity: SeverityError, Message: "err2"},
-			{Severity: SeverityWarning, Message: "warn1"},
-		}
-		if c := countBySeverity(diags, SeverityError); c != 2 {
-			t.Fatalf("expected 2 errors, got %d", c)
-		}
-		if c := countBySeverity(diags, SeverityWarning); c != 1 {
-			t.Fatalf("expected 1 warning, got %d", c)
-		}
-	})
 }
 
 // TestSymbolKindStrings tests SymbolKind string conversion.

@@ -92,8 +92,8 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	if cfg.LSP.Enabled && len(cfg.LSP.Servers) > 0 {
 		lspCfg := convertLSPConfig(&cfg.LSP)
 		a.lspManager = lsp.NewManager(lspCfg)
-		a.RegisterTool(lsp.NewLSPTool(a.lspManager))
-		a.RegisterTool(lsp.NewLSPDiagnosticsTool(a.lspManager))
+		a.RegisterTool(tools.NewLSPTool(a.lspManager))
+		a.RegisterTool(tools.NewLSPDiagnosticsTool(a.lspManager))
 		a.reminderCollector.AddReminder(&systemreminder.LSPStatusReminder{Provider: a.lspManager})
 		a.logger.Log("LSP: initialized with %d server(s)", len(lspCfg.Servers))
 	}

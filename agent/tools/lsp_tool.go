@@ -1,4 +1,4 @@
-package lsp
+package tools
 
 import (
 	"context"
@@ -6,15 +6,15 @@ import (
 	"fmt"
 	"path/filepath"
 
-	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
-// ToolName is the name exposed to the LLM.
-const ToolName = "LSP"
+// LSPToolName is the name exposed to the LLM.
+const LSPToolName = "LSP"
 
-// Description is the tool description shown to the LLM.
-const Description = `Interact with Language Server Protocol (LSP) servers for code intelligence.
+// LSPDescription is the tool description shown to the LLM.
+const LSPDescription = `Interact with Language Server Protocol (LSP) servers for code intelligence.
 
 Supported operations:
 - goToDefinition: Find where a symbol is defined
@@ -32,20 +32,20 @@ workspaceSymbol requires a query string and a filePath (any file in the workspac
 
 // LSPTool implements the tools.Tool interface for LSP code intelligence.
 type LSPTool struct {
-	manager *LSPManager
+	manager *lsp.LSPManager
 }
 
 // NewLSPTool creates a new LSP tool.
-func NewLSPTool(manager *LSPManager) *LSPTool {
+func NewLSPTool(manager *lsp.LSPManager) *LSPTool {
 	return &LSPTool{manager: manager}
 }
 
-func (t *LSPTool) Name() string { return ToolName }
+func (t *LSPTool) Name() string { return LSPToolName }
 
-func (t *LSPTool) Description() string { return Description }
+func (t *LSPTool) Description() string { return LSPDescription }
 
-func (t *LSPTool) Properties() map[string]tools.PropertySchema {
-	return map[string]tools.PropertySchema{
+func (t *LSPTool) Properties() map[string]PropertySchema {
+	return map[string]PropertySchema{
 		"operation": {
 			Type:        "string",
 			Description: "The LSP operation to perform. Valid values: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls",
@@ -84,7 +84,7 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		Query     string `json:"query,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
-		return marshalError("LSP", fmt.Sprintf("invalid arguments: %v", err)), nil
+		return lspMarshalError("LSP", fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 
 	// Resolve file path relative to working directory.
@@ -98,18 +98,18 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	// Get or start the LSP server for this file type.
 	server, err := t.manager.GetServer(ctx, absPath)
 	if err != nil {
-		return marshalError(input.Operation, fmt.Sprintf("LSP server error: %v", err)), nil
+		return lspMarshalError(input.Operation, fmt.Sprintf("LSP server error: %v", err)), nil
 	}
 	if server == nil {
 		ext := filepath.Ext(absPath)
-		return marshalError(input.Operation, fmt.Sprintf("No LSP server available for file type %s", ext)), nil
+		return lspMarshalError(input.Operation, fmt.Sprintf("No LSP server available for file type %s", ext)), nil
 	}
 
-	uri := pathToURI(absPath)
+	uri := lsp.PathToURI(absPath)
 
 	// Sync file to LSP server (didOpen if not yet open).
 	if err := t.manager.SyncFile(ctx, absPath); err != nil {
-		return marshalError(input.Operation, fmt.Sprintf("file sync error: %v", err)), nil
+		return lspMarshalError(input.Operation, fmt.Sprintf("file sync error: %v", err)), nil
 	}
 
 	// Convert 1-based to 0-based.
@@ -119,7 +119,7 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	// Capability pre-checks.
 	caps := server.Capabilities()
 	if msg := checkCapability(input.Operation, caps); msg != "" {
-		return marshalError(input.Operation, msg), nil
+		return lspMarshalError(input.Operation, msg), nil
 	}
 
 	// Execute the requested operation.
@@ -143,35 +143,35 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	case "outgoingCalls":
 		return t.outgoingCalls(ctx, server, uri, absPath, line, char, wd)
 	default:
-		return marshalError(input.Operation, fmt.Sprintf("unknown operation: %s", input.Operation)), nil
+		return lspMarshalError(input.Operation, fmt.Sprintf("unknown operation: %s", input.Operation)), nil
 	}
 }
 
-func (t *LSPTool) goToDefinition(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) goToDefinition(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 	}
 	var result json.RawMessage
 	if err := srv.Call(ctx, "textDocument/definition", params, &result); err != nil {
-		return marshalResult("goToDefinition", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("goToDefinition", err.Error(), absPath, 0, 0), nil
 	}
 	return formatRawLocations("goToDefinition", result, wd, absPath)
 }
 
-func (t *LSPTool) findReferences(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) findReferences(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 		"context":      map[string]any{"includeDeclaration": true},
 	}
-	var locations []Location
+	var locations []lsp.Location
 	if err := srv.Call(ctx, "textDocument/references", params, &locations); err != nil {
-		return marshalResult("findReferences", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("findReferences", err.Error(), absPath, 0, 0), nil
 	}
 	// Filter out gitignored files.
 	if len(locations) > 0 && wd != "" {
-		locations = filterGitIgnored(locations, wd)
+		locations = lsp.FilterGitIgnored(locations, wd)
 	}
 	// Truncate if over limit.
 	maxR := t.maxResults()
@@ -180,7 +180,7 @@ func (t *LSPTool) findReferences(ctx context.Context, srv *LSPServer, uri, absPa
 	if truncated {
 		locations = locations[:maxR]
 	}
-	formatted := formatFindReferences(locations, wd)
+	formatted := lsp.FormatFindReferences(locations, wd)
 	if truncated {
 		formatted += fmt.Sprintf("\n\n… and %d more results (truncated to %d)", origCount-maxR, maxR)
 	}
@@ -196,41 +196,41 @@ func (t *LSPTool) findReferences(ctx context.Context, srv *LSPServer, uri, absPa
 		}
 		fileCount = len(files)
 	}
-	return marshalResult("findReferences", formatted, absPath, resultCount, fileCount), nil
+	return lspMarshalResult("findReferences", formatted, absPath, resultCount, fileCount), nil
 }
 
-func (t *LSPTool) hover(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) hover(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 	}
-	var result Hover
+	var result lsp.Hover
 	if err := srv.Call(ctx, "textDocument/hover", params, &result); err != nil {
-		return marshalResult("hover", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("hover", err.Error(), absPath, 0, 0), nil
 	}
-	formatted := formatHover(&result, wd)
-	return marshalResult("hover", formatted, absPath, 1, 1), nil
+	formatted := lsp.FormatHover(&result, wd)
+	return lspMarshalResult("hover", formatted, absPath, 1, 1), nil
 }
 
-func (t *LSPTool) documentSymbol(ctx context.Context, srv *LSPServer, uri, absPath, wd string) (string, error) {
+func (t *LSPTool) documentSymbol(ctx context.Context, srv *lsp.LSPServer, uri, absPath, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 	}
 	var result json.RawMessage
 	if err := srv.Call(ctx, "textDocument/documentSymbol", params, &result); err != nil {
-		return marshalResult("documentSymbol", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("documentSymbol", err.Error(), absPath, 0, 0), nil
 	}
 	formatted := formatDocumentSymbolResult(result, wd)
-	return marshalResult("documentSymbol", formatted, absPath, 0, 1), nil
+	return lspMarshalResult("documentSymbol", formatted, absPath, 0, 1), nil
 }
 
-func (t *LSPTool) workspaceSymbol(ctx context.Context, srv *LSPServer, uri, query, wd string) (string, error) {
+func (t *LSPTool) workspaceSymbol(ctx context.Context, srv *lsp.LSPServer, uri, query, wd string) (string, error) {
 	params := map[string]any{
 		"query": query,
 	}
-	var symbols []SymbolInformation
+	var symbols []lsp.SymbolInformation
 	if err := srv.Call(ctx, "workspace/symbol", params, &symbols); err != nil {
-		return marshalResult("workspaceSymbol", err.Error(), "", 0, 0), nil
+		return lspMarshalResult("workspaceSymbol", err.Error(), "", 0, 0), nil
 	}
 	// Truncate if over limit.
 	maxR := t.maxResults()
@@ -239,7 +239,7 @@ func (t *LSPTool) workspaceSymbol(ctx context.Context, srv *LSPServer, uri, quer
 	if truncated {
 		symbols = symbols[:maxR]
 	}
-	formatted := formatWorkspaceSymbol(symbols, wd)
+	formatted := lsp.FormatWorkspaceSymbol(symbols, wd)
 	if truncated {
 		formatted += fmt.Sprintf("\n\n… and %d more symbols (truncated to %d)", origCount-maxR, maxR)
 	}
@@ -250,77 +250,77 @@ func (t *LSPTool) workspaceSymbol(ctx context.Context, srv *LSPServer, uri, quer
 			files[sym.Location.URI] = struct{}{}
 		}
 	}
-	return marshalResult("workspaceSymbol", formatted, "", resultCount, len(files)), nil
+	return lspMarshalResult("workspaceSymbol", formatted, "", resultCount, len(files)), nil
 }
 
-func (t *LSPTool) goToImplementation(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) goToImplementation(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 	}
 	var result json.RawMessage
 	if err := srv.Call(ctx, "textDocument/implementation", params, &result); err != nil {
-		return marshalResult("goToImplementation", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("goToImplementation", err.Error(), absPath, 0, 0), nil
 	}
 	return formatRawLocations("goToImplementation", result, wd, absPath)
 }
 
-func (t *LSPTool) prepareCallHierarchy(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) prepareCallHierarchy(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 	}
-	var items []CallHierarchyItem
+	var items []lsp.CallHierarchyItem
 	if err := srv.Call(ctx, "textDocument/prepareCallHierarchy", params, &items); err != nil {
-		return marshalResult("prepareCallHierarchy", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("prepareCallHierarchy", err.Error(), absPath, 0, 0), nil
 	}
-	formatted := formatPrepareCallHierarchy(items, wd)
-	return marshalResult("prepareCallHierarchy", formatted, absPath, len(items), countUniqueFiles(items)), nil
+	formatted := lsp.FormatPrepareCallHierarchy(items, wd)
+	return lspMarshalResult("prepareCallHierarchy", formatted, absPath, len(items), countUniqueFiles(items)), nil
 }
 
-func (t *LSPTool) incomingCalls(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) incomingCalls(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	// Two-step: prepareCallHierarchy → incomingCalls
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 	}
-	var items []CallHierarchyItem
+	var items []lsp.CallHierarchyItem
 	if err := srv.Call(ctx, "textDocument/prepareCallHierarchy", params, &items); err != nil || len(items) == 0 {
 		if err != nil {
-			return marshalResult("incomingCalls", err.Error(), absPath, 0, 0), nil
+			return lspMarshalResult("incomingCalls", err.Error(), absPath, 0, 0), nil
 		}
-		return marshalResult("incomingCalls", "No call hierarchy item found at this position.", absPath, 0, 0), nil
+		return lspMarshalResult("incomingCalls", "No call hierarchy item found at this position.", absPath, 0, 0), nil
 	}
 
 	callParams := map[string]any{"item": items[0]}
-	var calls []CallHierarchyIncomingCall
+	var calls []lsp.CallHierarchyIncomingCall
 	if err := srv.Call(ctx, "callHierarchy/incomingCalls", callParams, &calls); err != nil {
-		return marshalResult("incomingCalls", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("incomingCalls", err.Error(), absPath, 0, 0), nil
 	}
-	formatted := formatIncomingCalls(calls, wd)
-	return marshalResult("incomingCalls", formatted, absPath, len(calls), countUniqueFilesFromItems(calls)), nil
+	formatted := lsp.FormatIncomingCalls(calls, wd)
+	return lspMarshalResult("incomingCalls", formatted, absPath, len(calls), countUniqueFilesFromItems(calls)), nil
 }
 
-func (t *LSPTool) outgoingCalls(ctx context.Context, srv *LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
+func (t *LSPTool) outgoingCalls(ctx context.Context, srv *lsp.LSPServer, uri, absPath string, line, char uint32, wd string) (string, error) {
 	params := map[string]any{
 		"textDocument": map[string]any{"uri": uri},
 		"position":     map[string]any{"line": line, "character": char},
 	}
-	var items []CallHierarchyItem
+	var items []lsp.CallHierarchyItem
 	if err := srv.Call(ctx, "textDocument/prepareCallHierarchy", params, &items); err != nil || len(items) == 0 {
 		if err != nil {
-			return marshalResult("outgoingCalls", err.Error(), absPath, 0, 0), nil
+			return lspMarshalResult("outgoingCalls", err.Error(), absPath, 0, 0), nil
 		}
-		return marshalResult("outgoingCalls", "No call hierarchy item found at this position.", absPath, 0, 0), nil
+		return lspMarshalResult("outgoingCalls", "No call hierarchy item found at this position.", absPath, 0, 0), nil
 	}
 
 	callParams := map[string]any{"item": items[0]}
-	var calls []CallHierarchyOutgoingCall
+	var calls []lsp.CallHierarchyOutgoingCall
 	if err := srv.Call(ctx, "callHierarchy/outgoingCalls", callParams, &calls); err != nil {
-		return marshalResult("outgoingCalls", err.Error(), absPath, 0, 0), nil
+		return lspMarshalResult("outgoingCalls", err.Error(), absPath, 0, 0), nil
 	}
-	formatted := formatOutgoingCalls(calls, wd)
-	return marshalResult("outgoingCalls", formatted, absPath, len(calls), countUniqueFilesFromOutgoingItems(calls)), nil
+	formatted := lsp.FormatOutgoingCalls(calls, wd)
+	return lspMarshalResult("outgoingCalls", formatted, absPath, len(calls), countUniqueFilesFromOutgoingItems(calls)), nil
 }
 
 // --- helpers ---
@@ -333,7 +333,7 @@ type lspToolOutput struct {
 	FileCount   int    `json:"fileCount,omitempty"`
 }
 
-func marshalResult(op, result, filePath string, resultCount, fileCount int) string {
+func lspMarshalResult(op, result, filePath string, resultCount, fileCount int) string {
 	out := lspToolOutput{
 		Operation:   op,
 		Result:      result,
@@ -345,44 +345,44 @@ func marshalResult(op, result, filePath string, resultCount, fileCount int) stri
 	return string(b)
 }
 
-func marshalError(op, msg string) string {
-	return marshalResult(op, msg, "", 0, 0)
+func lspMarshalError(op, msg string) string {
+	return lspMarshalResult(op, msg, "", 0, 0)
 }
 
 // formatRawLocations handles raw JSON responses for operations that return
 // Location, Location[], LocationLink, or LocationLink[].
 func formatRawLocations(op string, raw json.RawMessage, wd, absPath string) (string, error) {
 	if raw == nil || string(raw) == "null" {
-		return marshalResult(op, formatGoToDefinition(nil, wd), absPath, 0, 0), nil
+		return lspMarshalResult(op, lsp.FormatGoToDefinition(nil, wd), absPath, 0, 0), nil
 	}
 
 	// Try as LocationLink array first — it has more specific field names
 	// (targetUri, targetRange) that won't accidentally match Location's (uri, range).
 	// This avoids false positives from Go's json decoder silently accepting
 	// unknown fields on mismatched types.
-	var links []LocationLink
+	var links []lsp.LocationLink
 	if err := json.Unmarshal(raw, &links); err == nil && len(links) > 0 && links[0].TargetURI != "" {
-		formatted := formatGoToDefinition(links, wd)
+		formatted := lsp.FormatGoToDefinition(links, wd)
 		files := map[string]struct{}{}
 		for _, link := range links {
 			if link.TargetURI != "" {
 				files[link.TargetURI] = struct{}{}
 			}
 		}
-		return marshalResult(op, formatted, absPath, len(links), len(files)), nil
+		return lspMarshalResult(op, formatted, absPath, len(links), len(files)), nil
 	}
 
 	// Try as single LocationLink.
-	var link LocationLink
+	var link lsp.LocationLink
 	if err := json.Unmarshal(raw, &link); err == nil && link.TargetURI != "" {
-		formatted := formatGoToDefinition(link, wd)
-		return marshalResult(op, formatted, absPath, 1, 1), nil
+		formatted := lsp.FormatGoToDefinition(link, wd)
+		return lspMarshalResult(op, formatted, absPath, 1, 1), nil
 	}
 
 	// Try as Location array.
-	var locs []Location
+	var locs []lsp.Location
 	if err := json.Unmarshal(raw, &locs); err == nil {
-		formatted := formatGoToDefinition(locs, wd)
+		formatted := lsp.FormatGoToDefinition(locs, wd)
 		resultCount := len(locs)
 		files := map[string]struct{}{}
 		for _, loc := range locs {
@@ -390,41 +390,41 @@ func formatRawLocations(op string, raw json.RawMessage, wd, absPath string) (str
 				files[loc.URI] = struct{}{}
 			}
 		}
-		return marshalResult(op, formatted, absPath, resultCount, len(files)), nil
+		return lspMarshalResult(op, formatted, absPath, resultCount, len(files)), nil
 	}
 
 	// Try as single Location.
-	var loc Location
+	var loc lsp.Location
 	if err := json.Unmarshal(raw, &loc); err == nil {
-		formatted := formatGoToDefinition(loc, wd)
-		return marshalResult(op, formatted, absPath, 1, 1), nil
+		formatted := lsp.FormatGoToDefinition(loc, wd)
+		return lspMarshalResult(op, formatted, absPath, 1, 1), nil
 	}
 
-	return marshalResult(op, "No definition found.", absPath, 0, 0), nil
+	return lspMarshalResult(op, "No definition found.", absPath, 0, 0), nil
 }
 
 // formatDocumentSymbolResult handles both DocumentSymbol[] and SymbolInformation[] JSON.
 func formatDocumentSymbolResult(raw json.RawMessage, wd string) string {
 	if raw == nil || string(raw) == "null" {
-		return formatDocumentSymbol(nil, wd)
+		return lsp.FormatDocumentSymbol(nil, wd)
 	}
 
 	// Try DocumentSymbol[] first (hierarchical).
-	var docSyms []DocumentSymbol
+	var docSyms []lsp.DocumentSymbol
 	if err := json.Unmarshal(raw, &docSyms); err == nil && len(docSyms) > 0 {
-		return formatDocumentSymbol(docSyms, wd)
+		return lsp.FormatDocumentSymbol(docSyms, wd)
 	}
 
 	// Try SymbolInformation[] (flat).
-	var infoSyms []SymbolInformation
+	var infoSyms []lsp.SymbolInformation
 	if err := json.Unmarshal(raw, &infoSyms); err == nil {
-		return formatDocumentSymbol(infoSyms, wd)
+		return lsp.FormatDocumentSymbol(infoSyms, wd)
 	}
 
 	return "No symbols found in document."
 }
 
-func countUniqueFiles(items []CallHierarchyItem) int {
+func countUniqueFiles(items []lsp.CallHierarchyItem) int {
 	files := map[string]struct{}{}
 	for _, item := range items {
 		if item.URI != "" {
@@ -434,7 +434,7 @@ func countUniqueFiles(items []CallHierarchyItem) int {
 	return len(files)
 }
 
-func countUniqueFilesFromItems(calls []CallHierarchyIncomingCall) int {
+func countUniqueFilesFromItems(calls []lsp.CallHierarchyIncomingCall) int {
 	files := map[string]struct{}{}
 	for _, call := range calls {
 		if call.From.URI != "" {
@@ -444,7 +444,7 @@ func countUniqueFilesFromItems(calls []CallHierarchyIncomingCall) int {
 	return len(files)
 }
 
-func countUniqueFilesFromOutgoingItems(calls []CallHierarchyOutgoingCall) int {
+func countUniqueFilesFromOutgoingItems(calls []lsp.CallHierarchyOutgoingCall) int {
 	files := map[string]struct{}{}
 	for _, call := range calls {
 		if call.To.URI != "" {
@@ -456,7 +456,7 @@ func countUniqueFilesFromOutgoingItems(calls []CallHierarchyOutgoingCall) int {
 
 // checkCapability verifies the server supports the requested operation.
 // Returns an error message string, or empty string if supported.
-func checkCapability(op string, caps ServerCapabilities) string {
+func checkCapability(op string, caps lsp.ServerCapabilities) string {
 	switch op {
 	case "goToDefinition":
 		if caps.DefinitionProvider == nil {
@@ -524,4 +524,4 @@ func (t *LSPTool) maxResults() int {
 }
 
 // Ensure LSPTool implements tools.Tool.
-var _ tools.Tool = (*LSPTool)(nil)
+var _ Tool = (*LSPTool)(nil)

@@ -1,4 +1,4 @@
-package lsp
+package tools
 
 import (
 	"context"
@@ -9,14 +9,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
-// DiagnosticsToolName is the name exposed to the LLM.
-const DiagnosticsToolName = "LSPDiagnostics"
+// LSPDiagnosticsToolName is the name exposed to the LLM.
+const LSPDiagnosticsToolName = "LSPDiagnostics"
 
-const diagnosticsDescription = `Get diagnostic information (errors, warnings, hints) from LSP servers.
+const lspDiagnosticsDescription = `Get diagnostic information (errors, warnings, hints) from LSP servers.
 
 If filePath is provided, returns diagnostics for that specific file.
 If filePath is empty, returns a summary of all diagnostics across the workspace.
@@ -25,20 +25,20 @@ Use this to check for errors after editing code, or to understand what's wrong w
 
 // LSPDiagnosticsTool implements tools.Tool for querying LSP diagnostics.
 type LSPDiagnosticsTool struct {
-	manager *LSPManager
+	manager *lsp.LSPManager
 }
 
 // NewLSPDiagnosticsTool creates a new LSP diagnostics tool.
-func NewLSPDiagnosticsTool(manager *LSPManager) *LSPDiagnosticsTool {
+func NewLSPDiagnosticsTool(manager *lsp.LSPManager) *LSPDiagnosticsTool {
 	return &LSPDiagnosticsTool{manager: manager}
 }
 
-func (t *LSPDiagnosticsTool) Name() string { return DiagnosticsToolName }
+func (t *LSPDiagnosticsTool) Name() string { return LSPDiagnosticsToolName }
 
-func (t *LSPDiagnosticsTool) Description() string { return diagnosticsDescription }
+func (t *LSPDiagnosticsTool) Description() string { return lspDiagnosticsDescription }
 
-func (t *LSPDiagnosticsTool) Properties() map[string]tools.PropertySchema {
-	return map[string]tools.PropertySchema{
+func (t *LSPDiagnosticsTool) Properties() map[string]PropertySchema {
+	return map[string]PropertySchema{
 		"filePath": {
 			Type:        "string",
 			Description: "Optional path to a specific file. If empty, returns project-wide diagnostic summary.",
@@ -76,7 +76,7 @@ func (t *LSPDiagnosticsTool) fileDiagnostics(ctx context.Context, filePath, wd s
 		absPath = filepath.Join(wd, absPath)
 	}
 	absPath = filepath.Clean(absPath)
-	uri := pathToURI(absPath)
+	uri := lsp.PathToURI(absPath)
 
 	// Ensure file is opened on the server.
 	if err := t.manager.SyncFile(ctx, absPath); err != nil {
@@ -107,8 +107,8 @@ func (t *LSPDiagnosticsTool) fileDiagnostics(ctx context.Context, filePath, wd s
 		lines = append(lines, fmt.Sprintf("%s: %s:%d:%d: %s", sev, relPath, line, col, d.Message))
 	}
 
-	errCount := countBySeverity(diags, SeverityError)
-	warnCount := countBySeverity(diags, SeverityWarning)
+	errCount := countBySeverity(diags, lsp.SeverityError)
+	warnCount := countBySeverity(diags, lsp.SeverityWarning)
 
 	summary := fmt.Sprintf("Found %d diagnostics (%d errors, %d warnings):\n\n%s",
 		len(diags), errCount, warnCount, strings.Join(lines, "\n"))
@@ -124,10 +124,10 @@ func (t *LSPDiagnosticsTool) projectSummary(wd string) (string, error) {
 	}
 	var summaries []serverSummary
 
-	for _, srv := range sortedServers(t.manager.Servers()) {
+	for _, srv := range sortedLSPServers(t.manager.Servers()) {
 		diags := srv.GetDiagnostics()
 		total := 0
-		var allDiags []Diagnostic
+		var allDiags []lsp.Diagnostic
 		for _, d := range diags {
 			total += len(d)
 			allDiags = append(allDiags, d...)
@@ -137,8 +137,8 @@ func (t *LSPDiagnosticsTool) projectSummary(wd string) (string, error) {
 		}
 		summaries = append(summaries, serverSummary{
 			Name:   srv.Name(),
-			Errors: countBySeverity(allDiags, SeverityError),
-			Warns:  countBySeverity(allDiags, SeverityWarning),
+			Errors: countBySeverity(allDiags, lsp.SeverityError),
+			Warns:  countBySeverity(allDiags, lsp.SeverityWarning),
 			Total:  total,
 		})
 	}
@@ -168,22 +168,22 @@ func marshalDiagResult(result string) string {
 	return string(b)
 }
 
-func severityString(sev DiagnosticSeverity) string {
+func severityString(sev lsp.DiagnosticSeverity) string {
 	switch sev {
-	case SeverityError:
+	case lsp.SeverityError:
 		return "Error"
-	case SeverityWarning:
+	case lsp.SeverityWarning:
 		return "Warning"
-	case SeverityInformation:
+	case lsp.SeverityInformation:
 		return "Info"
-	case SeverityHint:
+	case lsp.SeverityHint:
 		return "Hint"
 	default:
 		return "Unknown"
 	}
 }
 
-func countBySeverity(diags []Diagnostic, sev DiagnosticSeverity) int {
+func countBySeverity(diags []lsp.Diagnostic, sev lsp.DiagnosticSeverity) int {
 	count := 0
 	for _, d := range diags {
 		if d.Severity == sev {
@@ -193,17 +193,17 @@ func countBySeverity(diags []Diagnostic, sev DiagnosticSeverity) int {
 	return count
 }
 
-// Ensure LSPDiagnosticsTool implements tools.Tool.
-var _ tools.Tool = (*LSPDiagnosticsTool)(nil)
+// Ensure LSPDiagnosticsTool implements Tool.
+var _ Tool = (*LSPDiagnosticsTool)(nil)
 
-// sortedServers returns servers in alphabetical order by name.
-func sortedServers(servers map[string]*LSPServer) []*LSPServer {
+// sortedLSPServers returns servers in alphabetical order by name.
+func sortedLSPServers(servers map[string]*lsp.LSPServer) []*lsp.LSPServer {
 	names := make([]string, 0, len(servers))
 	for name := range servers {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	result := make([]*LSPServer, len(names))
+	result := make([]*lsp.LSPServer, len(names))
 	for i, name := range names {
 		result[i] = servers[name]
 	}

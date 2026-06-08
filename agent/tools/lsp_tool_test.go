@@ -1,10 +1,12 @@
-package lsp
+package tools
 
 import (
 	"context"
 	"encoding/json"
 	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/agent/lsp"
 )
 
 // =============================================================================
@@ -26,10 +28,7 @@ func TestLSPToolInvalidArgs(t *testing.T) {
 }
 
 // TestLSPToolUnknownOperation tests that an unknown operation is rejected.
-// Note: fully testing the switch fallthrough requires a running LSP server,
-// which is covered by the integration test (TestLSPServerLifecycle).
 func TestLSPToolUnknownOperation(t *testing.T) {
-	// Verify the tool description declares all expected operations.
 	tool := NewLSPTool(nil)
 	desc := tool.Description()
 	expected := []string{
@@ -42,7 +41,6 @@ func TestLSPToolUnknownOperation(t *testing.T) {
 			t.Errorf("description missing operation: %s", op)
 		}
 	}
-	// Verify unknown operation is not declared.
 	if strings.Contains(desc, "flyToMoon") {
 		t.Fatal("flyToMoon should not be in description")
 	}
@@ -50,12 +48,12 @@ func TestLSPToolUnknownOperation(t *testing.T) {
 
 // TestLSPToolNoServer tests ExecuteContext when no server matches the extension.
 func TestLSPToolNoServer(t *testing.T) {
-	cfg := &Config{
-		Servers: []ServerConfig{
+	cfg := &lsp.Config{
+		Servers: []lsp.ServerConfig{
 			{Name: "gopls", Command: "gopls", Extensions: []string{".go"}},
 		},
 	}
-	m := NewManager(cfg)
+	m := lsp.NewManager(cfg)
 	tool := NewLSPTool(m)
 
 	input := `{"operation": "goToDefinition", "filePath": "/tmp/test.py", "line": 1, "character": 1}`
@@ -126,9 +124,9 @@ func TestFormatRawLocations(t *testing.T) {
 	})
 }
 
-// TestMarshalError tests the marshalError helper.
-func TestMarshalError(t *testing.T) {
-	result := marshalError("hover", "something went wrong")
+// TestLSPMarshalError tests the lspMarshalError helper.
+func TestLSPMarshalError(t *testing.T) {
+	result := lspMarshalError("hover", "something went wrong")
 	if !strings.Contains(result, "something went wrong") {
 		t.Fatalf("expected error message, got: %s", result)
 	}

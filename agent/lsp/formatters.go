@@ -7,8 +7,8 @@ import (
 	"strings"
 )
 
-// formatGoToDefinition formats Location / LocationLink results.
-func formatGoToDefinition(result any, cwd string) string {
+// FormatGoToDefinition formats Location / LocationLink results.
+func FormatGoToDefinition(result any, cwd string) string {
 	switch r := result.(type) {
 	case nil:
 		return "No definition found."
@@ -56,8 +56,8 @@ func formatGoToDefinition(result any, cwd string) string {
 	return "No definition found."
 }
 
-// formatFindReferences formats Location results grouped by file.
-func formatFindReferences(result []Location, cwd string) string {
+// FormatFindReferences formats Location results grouped by file.
+func FormatFindReferences(result []Location, cwd string) string {
 	if len(result) == 0 {
 		return "No references found."
 	}
@@ -86,8 +86,8 @@ func formatFindReferences(result []Location, cwd string) string {
 	return strings.Join(lines, "\n")
 }
 
-// formatHover formats hover results.
-func formatHover(result *Hover, cwd string) string {
+// FormatHover formats hover results.
+func FormatHover(result *Hover, cwd string) string {
 	if result == nil {
 		return "No hover information available."
 	}
@@ -100,8 +100,8 @@ func formatHover(result *Hover, cwd string) string {
 	return content
 }
 
-// formatDocumentSymbol formats hierarchical document symbols.
-func formatDocumentSymbol(result any, cwd string) string {
+// FormatDocumentSymbol formats hierarchical document symbols.
+func FormatDocumentSymbol(result any, cwd string) string {
 	switch r := result.(type) {
 	case nil:
 		return "No symbols found in document."
@@ -116,7 +116,7 @@ func formatDocumentSymbol(result any, cwd string) string {
 		}
 		return strings.Join(lines, "\n")
 	case []SymbolInformation:
-		return formatWorkspaceSymbol(r, cwd)
+		return FormatWorkspaceSymbol(r, cwd)
 	}
 	return "No symbols found in document."
 }
@@ -135,8 +135,8 @@ func formatDocSymNode(sym DocumentSymbol, indent int) []string {
 	return lines
 }
 
-// formatWorkspaceSymbol formats symbol information results.
-func formatWorkspaceSymbol(result []SymbolInformation, cwd string) string {
+// FormatWorkspaceSymbol formats symbol information results.
+func FormatWorkspaceSymbol(result []SymbolInformation, cwd string) string {
 	if len(result) == 0 {
 		return "No symbols found in workspace."
 	}
@@ -168,8 +168,8 @@ func formatWorkspaceSymbol(result []SymbolInformation, cwd string) string {
 	return strings.Join(lines, "\n")
 }
 
-// formatPrepareCallHierarchy formats call hierarchy items.
-func formatPrepareCallHierarchy(result []CallHierarchyItem, cwd string) string {
+// FormatPrepareCallHierarchy formats call hierarchy items.
+func FormatPrepareCallHierarchy(result []CallHierarchyItem, cwd string) string {
 	if len(result) == 0 {
 		return "No call hierarchy item found at this position."
 	}
@@ -184,8 +184,8 @@ func formatPrepareCallHierarchy(result []CallHierarchyItem, cwd string) string {
 	return strings.Join(lines, "\n")
 }
 
-// formatIncomingCalls formats incoming calls.
-func formatIncomingCalls(result []CallHierarchyIncomingCall, cwd string) string {
+// FormatIncomingCalls formats incoming calls.
+func FormatIncomingCalls(result []CallHierarchyIncomingCall, cwd string) string {
 	if len(result) == 0 {
 		return "No incoming calls found (nothing calls this function)."
 	}
@@ -217,8 +217,8 @@ func formatIncomingCalls(result []CallHierarchyIncomingCall, cwd string) string 
 	return strings.Join(lines, "\n")
 }
 
-// formatOutgoingCalls formats outgoing calls.
-func formatOutgoingCalls(result []CallHierarchyOutgoingCall, cwd string) string {
+// FormatOutgoingCalls formats outgoing calls.
+func FormatOutgoingCalls(result []CallHierarchyOutgoingCall, cwd string) string {
 	if len(result) == 0 {
 		return "No outgoing calls found (this function calls nothing)."
 	}

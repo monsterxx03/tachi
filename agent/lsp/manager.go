@@ -38,7 +38,7 @@ func NewManager(cfg *Config) *LSPManager {
 		rootURI := srvCfg.WorkspaceFolder
 		if rootURI == "" {
 			cwd, _ := os.Getwd()
-			rootURI = pathToURI(cwd)
+			rootURI = PathToURI(cwd)
 		}
 
 		server := NewLSPServer(srvCfg.Name, srvCfg, rootURI)
@@ -99,7 +99,7 @@ func (m *LSPManager) SyncFile(ctx context.Context, filePath string) error {
 		return nil
 	}
 
-	uri := pathToURI(filePath)
+	uri := PathToURI(filePath)
 	if server.IsFileOpen(uri) {
 		// File already open — send didChange if content changed.
 		content, err := os.ReadFile(filePath)
@@ -232,8 +232,8 @@ func detectLanguage(filePath string) string {
 	}
 }
 
-// pathToURI converts a file path to a file:// URI.
-func pathToURI(filePath string) string {
+// PathToURI converts a file path to a file:// URI.
+func PathToURI(filePath string) string {
 	abs, err := filepath.Abs(filePath)
 	if err != nil {
 		abs = filePath

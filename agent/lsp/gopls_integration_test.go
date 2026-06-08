@@ -42,7 +42,7 @@ func Add(a, b int) int {
 		t.Fatal(err)
 	}
 
-	rootURI := pathToURI(dir)
+	rootURI := PathToURI(dir)
 	cfg := ServerConfig{
 		Name:       "gopls",
 		Command:    "gopls",
@@ -69,7 +69,7 @@ func Add(a, b int) int {
 	t.Logf("gopls started, state=%d", server.State())
 
 	// Open the file.
-	uri := pathToURI(srcPath)
+	uri := PathToURI(srcPath)
 	content, _ := os.ReadFile(srcPath)
 	if err := server.OpenFile(ctx, uri, "go", string(content)); err != nil {
 		t.Fatalf("open file: %v", err)

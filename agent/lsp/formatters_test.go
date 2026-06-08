@@ -23,7 +23,7 @@ func TestFormatCallHierarchy(t *testing.T) {
 				End:   Position{Line: 15, Character: 1},
 			},
 		}}
-		result := formatPrepareCallHierarchy(items, wd)
+		result := FormatPrepareCallHierarchy(items, wd)
 		if !strings.Contains(result, "handleRequest") {
 			t.Fatalf("expected handleRequest in result, got: %s", result)
 		}
@@ -37,14 +37,14 @@ func TestFormatCallHierarchy(t *testing.T) {
 			{Name: "foo", Kind: SKFunction, URI: "file:///test/project/a.go", Range: Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 0}}},
 			{Name: "bar", Kind: SKFunction, URI: "file:///test/project/b.go", Range: Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 0}}},
 		}
-		result := formatPrepareCallHierarchy(items, wd)
+		result := FormatPrepareCallHierarchy(items, wd)
 		if !strings.Contains(result, "2 call hierarchy items") {
 			t.Fatalf("expected '2 call hierarchy items', got: %s", result)
 		}
 	})
 
 	t.Run("empty", func(t *testing.T) {
-		result := formatPrepareCallHierarchy(nil, wd)
+		result := FormatPrepareCallHierarchy(nil, wd)
 		if result != "No call hierarchy item found at this position." {
 			t.Fatalf("expected no items message, got: %s", result)
 		}
@@ -66,7 +66,7 @@ func TestFormatIncomingCalls(t *testing.T) {
 			{Start: Position{Line: 6, Character: 2}, End: Position{Line: 6, Character: 8}},
 		},
 	}}
-	result := formatIncomingCalls(calls, wd)
+	result := FormatIncomingCalls(calls, wd)
 	if !strings.Contains(result, "1 incoming call") {
 		t.Fatalf("expected '1 incoming call', got: %s", result)
 	}
@@ -78,7 +78,7 @@ func TestFormatIncomingCalls(t *testing.T) {
 	}
 
 	t.Run("empty", func(t *testing.T) {
-		result := formatIncomingCalls(nil, wd)
+		result := FormatIncomingCalls(nil, wd)
 		if !strings.Contains(result, "No incoming calls") {
 			t.Fatalf("expected no incoming calls, got: %s", result)
 		}
@@ -101,7 +101,7 @@ func TestFormatOutgoingCalls(t *testing.T) {
 			{Start: Position{Line: 7, Character: 4}, End: Position{Line: 7, Character: 10}},
 		},
 	}}
-	result := formatOutgoingCalls(calls, wd)
+	result := FormatOutgoingCalls(calls, wd)
 	if !strings.Contains(result, "1 outgoing call") {
 		t.Fatalf("expected '1 outgoing call', got: %s", result)
 	}
@@ -113,7 +113,7 @@ func TestFormatOutgoingCalls(t *testing.T) {
 	}
 
 	t.Run("empty", func(t *testing.T) {
-		result := formatOutgoingCalls(nil, wd)
+		result := FormatOutgoingCalls(nil, wd)
 		if !strings.Contains(result, "No outgoing calls") {
 			t.Fatalf("expected no outgoing calls, got: %s", result)
 		}
@@ -130,7 +130,7 @@ func TestFormatCallHierarchyWithDetail(t *testing.T) {
 		URI:    "file:///test/project/src/work.go",
 		Range:  Range{Start: Position{Line: 0, Character: 0}, End: Position{Line: 0, Character: 0}},
 	}}
-	result := formatPrepareCallHierarchy(items, wd)
+	result := FormatPrepareCallHierarchy(items, wd)
 	if !strings.Contains(result, "[func(string) error]") {
 		t.Fatalf("expected detail in result, got: %s", result)
 	}

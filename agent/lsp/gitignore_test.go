@@ -10,10 +10,10 @@ import (
 
 // TestFilterGitIgnoredEmpty tests that empty/nil locations pass through.
 func TestFilterGitIgnoredEmpty(t *testing.T) {
-	if filterGitIgnored(nil, "/test") != nil {
+	if FilterGitIgnored(nil, "/test") != nil {
 		t.Fatal("expected nil for nil input")
 	}
-	if len(filterGitIgnored([]Location{}, "/test")) != 0 {
+	if len(FilterGitIgnored([]Location{}, "/test")) != 0 {
 		t.Fatal("expected empty for empty input")
 	}
 }

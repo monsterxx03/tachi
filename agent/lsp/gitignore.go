@@ -6,9 +6,9 @@ import (
 	"strings"
 )
 
-// filterGitIgnored filters out locations whose file paths are gitignored.
+// FilterGitIgnored filters out locations whose file paths are gitignored.
 // Uses `git check-ignore` with batched paths for efficiency.
-func filterGitIgnored(locations []Location, cwd string) []Location {
+func FilterGitIgnored(locations []Location, cwd string) []Location {
 	if len(locations) == 0 || cwd == "" {
 		return locations
 	}
