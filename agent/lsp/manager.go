@@ -9,8 +9,6 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
-
-	"github.com/monsterxx03/tachi/agent/systemreminder"
 )
 
 // LSPManager manages multiple LSP servers and routes requests by file extension.
@@ -143,23 +141,6 @@ func (m *LSPManager) IsConfigured() bool { return m.configured }
 // Servers returns the map of all configured servers (name → server).
 func (m *LSPManager) Servers() map[string]*LSPServer {
 	return m.servers
-}
-
-// ServerInfos returns a slice of LSPServerInfo for the systemreminder package.
-// This avoids exposing the concrete LSPServer type across package boundaries.
-func (m *LSPManager) ServerInfos() []systemreminder.LSPServerInfo {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	infos := make([]systemreminder.LSPServerInfo, 0, len(m.servers))
-	for _, srv := range m.servers {
-		infos = append(infos, systemreminder.LSPServerInfo{
-			Name:       srv.Name(),
-			Ready:      srv.IsHealthy(),
-			Extensions: srv.Extensions(),
-		})
-	}
-	return infos
 }
 
 // ServerCount returns the number of configured servers.

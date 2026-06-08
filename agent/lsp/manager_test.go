@@ -58,33 +58,6 @@ func TestLSPManagerRouting(t *testing.T) {
 	}
 }
 
-// TestLSPManagerServerInfos tests the ServerInfos() provider interface method.
-func TestLSPManagerServerInfos(t *testing.T) {
-	cfg := &Config{
-		Servers: []ServerConfig{
-			{Name: "alpha", Command: "echo", Extensions: []string{".a"}},
-			{Name: "beta", Command: "echo", Extensions: []string{".b"}},
-		},
-	}
-	m := NewManager(cfg)
-	infos := m.ServerInfos()
-
-	if len(infos) != 2 {
-		t.Fatalf("expected 2 infos, got %d", len(infos))
-	}
-	// Should be unsorted initially (map iteration order), but reminder sorts by name.
-	names := map[string]bool{}
-	for _, info := range infos {
-		names[info.Name] = true
-		if len(info.Extensions) == 0 {
-			t.Errorf("server %s has no extensions", info.Name)
-		}
-	}
-	if !names["alpha"] || !names["beta"] {
-		t.Fatalf("missing server names in infos: %v", names)
-	}
-}
-
 // TestLSPManagerNotConfigured tests behavior with no servers.
 func TestLSPManagerNotConfigured(t *testing.T) {
 	cfg := &Config{}
@@ -95,9 +68,6 @@ func TestLSPManagerNotConfigured(t *testing.T) {
 	}
 	if m.ServerCount() != 0 {
 		t.Fatalf("expected 0 servers, got %d", m.ServerCount())
-	}
-	if len(m.ServerInfos()) != 0 {
-		t.Fatal("expected empty server infos")
 	}
 
 	srv, err := m.GetServer(context.Background(), "foo.go")

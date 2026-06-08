@@ -14,21 +14,31 @@ import (
 const LSPToolName = "LSP"
 
 // LSPDescription is the tool description shown to the LLM.
-const LSPDescription = `Interact with Language Server Protocol (LSP) servers for code intelligence.
+// Key design: communicate WHY the LLM should use this instead of Grep/ReadFile.
+const LSPDescription = `Language-aware code intelligence tool. More accurate than Grep for code navigation because it understands the language semantics (not just text matching).
+
+When to use this tool:
+- You need to jump to a symbol's definition or implementation
+- You need to find all references/usages of a function, type, or variable
+- You need type information, documentation, or signature details for a symbol
+- You need an overview of all symbols in a file or workspace
+- You need to understand call relationships between functions
 
 Supported operations:
-- goToDefinition: Find where a symbol is defined
-- findReferences: Find all references to a symbol
-- hover: Get hover information (documentation, type info) for a symbol
-- documentSymbol: Get all symbols (functions, classes, variables) in a document
-- workspaceSymbol: Search for symbols across the entire workspace
+- goToDefinition: Find where a symbol is defined (more reliable than Grep for finding the correct definition)
+- findReferences: Find all references to a symbol across the project (avoids Grep false positives from comments/strings)
+- hover: Get documentation, type info, and signature for a symbol at a position
+- documentSymbol: Get all symbols (functions, types, variables) defined in a file
+- workspaceSymbol: Search for symbols by name across the entire workspace (like fuzzy-find for code)
 - goToImplementation: Find implementations of an interface or abstract method
-- prepareCallHierarchy: Get call hierarchy item at a position
-- incomingCalls: Find all functions/methods that call the function at a position
-- outgoingCalls: Find all functions/methods called by the function at a position
+- prepareCallHierarchy / incomingCalls / outgoingCalls: Trace function call relationships
 
-All operations except workspaceSymbol require filePath, line (1-based), and character (1-based).
-workspaceSymbol requires a query string and a filePath (any file in the workspace).`
+Parameters:
+- operation (required): which LSP operation to perform
+- filePath (required): the file containing the symbol
+- line (optional, 1-based): required for goToDefinition/findReferences/hover/goToImplementation/callHierarchy
+- character (optional, 1-based): required for goToDefinition/findReferences/hover/goToImplementation/callHierarchy
+- query (optional): search query — only needed for workspaceSymbol operation`
 
 // LSPTool implements the tools.Tool interface for LSP code intelligence.
 type LSPTool struct {
@@ -70,7 +80,7 @@ func (t *LSPTool) Properties() map[string]PropertySchema {
 }
 
 func (t *LSPTool) Required() []string {
-	return []string{"operation", "filePath", "line", "character"}
+	return []string{"operation", "filePath"}
 }
 
 func (t *LSPTool) Parallel() bool { return true }
@@ -94,6 +104,17 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		absPath = filepath.Join(wd, absPath)
 	}
 	absPath = filepath.Clean(absPath)
+
+	// Operations that do NOT need line/character: workspaceSymbol, documentSymbol.
+	needsPosition := input.Operation != "workspaceSymbol" && input.Operation != "documentSymbol"
+	if needsPosition {
+		if input.Line <= 0 {
+			return lspMarshalError(input.Operation, "line is required (1-based) for this operation"), nil
+		}
+		if input.Character < 0 {
+			return lspMarshalError(input.Operation, "character is required (1-based) for this operation"), nil
+		}
+	}
 
 	// Get or start the LSP server for this file type.
 	server, err := t.manager.GetServer(ctx, absPath)
