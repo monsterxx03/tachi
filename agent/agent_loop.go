@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -446,6 +447,17 @@ func (a *AIAgent) handleToolCallFinish(
 		len(toolMsgs), len(acc.toolCalls))
 	*messages = append(*messages, toolMsgs...)
 	*lengthRetries = 0
+
+	// --- LSP File Sync: sync modified files to LSP servers ---
+	if a.lspManager != nil {
+		for _, tc := range acc.toolCalls {
+			if fp := lsp.ExtractFilePath(tc.Function.Name, tc.Function.Arguments); fp != "" {
+				if syncErr := a.lspManager.SyncFile(ctx, fp); syncErr != nil {
+					a.logger.Log("LSP: file sync error for %s: %v", fp, syncErr)
+				}
+			}
+		}
+	}
 
 	// --- Steer Point: inject pending user input after tool results ---
 	if a.steerRespCh != nil {

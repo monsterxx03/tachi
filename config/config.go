@@ -397,6 +397,33 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 	}
 }
 
+// LSPConfig holds configuration for all LSP servers.
+type LSPConfig struct {
+	Enabled          bool              `yaml:"enabled" default:"true"`
+	MaxRestarts      int               `yaml:"max_restarts" default:"3"`
+	MaxFileSize      int64             `yaml:"max_file_size" default:"10485760"`             // 10 MB
+	MaxResults       int               `yaml:"max_results" default:"50"`                      // per-operation result cap
+	RequestTimeout   Duration          `yaml:"request_timeout" default:"15s"`                 // per-request timeout
+	ConcurrencyLimit int               `yaml:"concurrency_limit" default:"4"`                 // per-server concurrency
+	StartupTimeout   Duration          `yaml:"startup_timeout" default:"10s"`
+	Servers          []LSPServerConfig `yaml:"servers"`
+}
+
+// LSPServerConfig describes a single LSP server to manage.
+type LSPServerConfig struct {
+	Name               string            `yaml:"name"`
+	Command            string            `yaml:"command"`
+	Args               []string          `yaml:"args"`
+	Extensions         []string          `yaml:"extensions"`
+	Languages          []string          `yaml:"languages"`
+	InitializationOpts map[string]any    `yaml:"initialization_options"`
+	Settings           map[string]any    `yaml:"settings"`
+	Env                map[string]string `yaml:"env"`
+	WorkspaceFolder    string            `yaml:"workspace_folder"`
+	StartupTimeout     Duration          `yaml:"startup_timeout"`
+	ConcurrencyLimit   int               `yaml:"concurrency_limit"`
+}
+
 type Config struct {
 	Provider               string               `yaml:"provider"`
 	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`
@@ -423,6 +450,7 @@ type Config struct {
 	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
 	Edit                   EditConfig           `yaml:"edit"`                            // Edit mode configuration
+	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
 }
 
 func DefaultConfig() *Config {

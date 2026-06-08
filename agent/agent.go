@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/tools/hashline"
+	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -126,6 +127,9 @@ type AIAgent struct {
 	// processManager manages background processes started by BashTool.
 	// Tied to the agent lifecycle — Close() kills all tracked processes.
 	processManager *tools.ProcessManager
+
+	// lspManager manages LSP server connections.
+	lspManager *lsp.LSPManager
 
 	// pendingImages holds image content parts to attach to the next user message.
 	// Set via SetPendingImages, consumed (and cleared) by RunConversationStream.
@@ -579,6 +583,9 @@ func (a *AIAgent) GetLastMessages() []llm.Message {
 func (a *AIAgent) Close() {
 	if a.processManager != nil {
 		a.processManager.KillAll()
+	}
+	if a.lspManager != nil {
+		a.lspManager.Shutdown(context.Background())
 	}
 }
 

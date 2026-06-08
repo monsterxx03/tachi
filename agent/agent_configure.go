@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 
+	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/subagent"
@@ -13,6 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
+	"time"
 )
 
 // deferredToolProviderAdapter adapts mcp.DeferredPool to the
@@ -86,7 +88,47 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	}
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
+	// --- LSP servers ---
+	if cfg.LSP.Enabled && len(cfg.LSP.Servers) > 0 {
+		lspCfg := convertLSPConfig(&cfg.LSP)
+		a.lspManager = lsp.NewManager(lspCfg)
+		a.RegisterTool(lsp.NewLSPTool(a.lspManager))
+		a.RegisterTool(lsp.NewLSPDiagnosticsTool(a.lspManager))
+		a.reminderCollector.AddReminder(&systemreminder.LSPStatusReminder{Provider: a.lspManager})
+		a.logger.Log("LSP: initialized with %d server(s)", len(lspCfg.Servers))
+	}
+
 	return mgr, nil
+}
+
+// convertLSPConfig converts from config.LSPConfig to lsp.Config.
+func convertLSPConfig(cfg *config.LSPConfig) *lsp.Config {
+	servers := make([]lsp.ServerConfig, len(cfg.Servers))
+	for i, s := range cfg.Servers {
+		servers[i] = lsp.ServerConfig{
+			Name:               s.Name,
+			Command:            s.Command,
+			Args:               s.Args,
+			Extensions:         s.Extensions,
+			Languages:          s.Languages,
+			InitializationOpts: s.InitializationOpts,
+			Settings:           s.Settings,
+			Env:                s.Env,
+			WorkspaceFolder:    s.WorkspaceFolder,
+			StartupTimeout:     time.Duration(s.StartupTimeout),
+			ConcurrencyLimit:   s.ConcurrencyLimit,
+		}
+	}
+	return &lsp.Config{
+		Enabled:          cfg.Enabled,
+		MaxRestarts:      cfg.MaxRestarts,
+		MaxFileSize:      cfg.MaxFileSize,
+		MaxResults:       cfg.MaxResults,
+		ConcurrencyLimit: cfg.ConcurrencyLimit,
+		RequestTimeout:   time.Duration(cfg.RequestTimeout),
+		StartupTimeout:   time.Duration(cfg.StartupTimeout),
+		Servers:          servers,
+	}
 }
 
 // attachSharedMCPReminder configures DeferredToolReminder for an agent
