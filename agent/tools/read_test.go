@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"strings"
@@ -21,7 +22,7 @@ func TestReadTool(t *testing.T) {
 	defer os.Remove("/tmp/test_read.txt")
 
 	// Test Read
-	result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read.txt"}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read.txt"}`)
 	if err != nil {
 		t.Fatalf("ReadTool.Execute failed: %v", err)
 	}
@@ -32,7 +33,7 @@ func TestReadTool(t *testing.T) {
 
 func TestReadToolNotFound(t *testing.T) {
 	tool := NewReadTool()
-	_, err := tool.ExecuteContext(nil, `{"path": "/nonexistent/file.txt"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path": "/nonexistent/file.txt"}`)
 	if err == nil {
 		t.Error("Expected error for nonexistent file")
 	}
@@ -81,7 +82,7 @@ func TestReadToolWithOffsetAndLimit(t *testing.T) {
 				args = `{"path": "/tmp/test_read_offset.txt"}`
 			}
 
-			result, err := tool.ExecuteContext(nil, args)
+			result, err := tool.ExecuteContext(context.TODO(), args)
 			if err != nil {
 				t.Fatalf("ReadTool.Execute failed: %v", err)
 			}
@@ -103,7 +104,7 @@ func TestReadToolBinary(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_binary.bin")
 
-	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_binary.bin"}`)
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_binary.bin"}`)
 	if err == nil {
 		t.Error("Expected error for binary file")
 	}
@@ -126,7 +127,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	}
 	defer os.Remove("/tmp/test_large.txt")
 
-	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_large.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt"}`)
 	if err == nil {
 		t.Error("Expected error for large file")
 	}
@@ -156,7 +157,7 @@ func TestReadToolAtLimit(t *testing.T) {
 	defer os.Remove("/tmp/test_at_limit.txt")
 
 	// Should not error - exactly at limit
-	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_at_limit.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_at_limit.txt"}`)
 	if err != nil {
 		t.Errorf("Should not error at exactly 256KB, got: %v", err)
 	}
@@ -173,7 +174,7 @@ func TestReadToolCacheHit(t *testing.T) {
 	defer os.Remove("/tmp/test_read_cache.txt")
 
 	// First read — should return full content
-	result1, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_cache.txt"}`)
+	result1, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_cache.txt"}`)
 	if err != nil {
 		t.Fatalf("First read failed: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestReadToolCacheHit(t *testing.T) {
 	}
 
 	// Second read — file unchanged, should return cache hint
-	result2, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_cache.txt"}`)
+	result2, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_cache.txt"}`)
 	if err != nil {
 		t.Fatalf("Second read failed: %v", err)
 	}
@@ -205,7 +206,7 @@ func TestReadToolCacheMissAfterModify(t *testing.T) {
 	defer os.Remove("/tmp/test_read_modify.txt")
 
 	// First read
-	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_read_modify.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_modify.txt"}`)
 	if err != nil {
 		t.Fatalf("First read failed: %v", err)
 	}
@@ -219,7 +220,7 @@ func TestReadToolCacheMissAfterModify(t *testing.T) {
 	}
 
 	// Second read — should return new content (cache miss)
-	result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_modify.txt"}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_modify.txt"}`)
 	if err != nil {
 		t.Fatalf("Second read failed: %v", err)
 	}
@@ -244,13 +245,13 @@ func TestReadToolDifferentOffsetNotCached(t *testing.T) {
 	defer os.Remove("/tmp/test_read_offset_cache.txt")
 
 	// Read full file
-	_, err = tool.ExecuteContext(nil, `{"path": "/tmp/test_read_offset_cache.txt"}`)
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_offset_cache.txt"}`)
 	if err != nil {
 		t.Fatalf("First read failed: %v", err)
 	}
 
 	// Read with offset=5 — different cache key, should NOT hit cache
-	result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_offset_cache.txt", "offset": 5}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_offset_cache.txt", "offset": 5}`)
 	if err != nil {
 		t.Fatalf("Offset read failed: %v", err)
 	}
@@ -273,7 +274,7 @@ func TestReadToolConcurrentCache(t *testing.T) {
 	var wg sync.WaitGroup
 	for range 10 {
 		wg.Go(func() {
-			result, err := tool.ExecuteContext(nil, `{"path": "/tmp/test_read_concurrent.txt"}`)
+			result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_concurrent.txt"}`)
 			if err != nil {
 				t.Errorf("Concurrent read failed: %v", err)
 				return

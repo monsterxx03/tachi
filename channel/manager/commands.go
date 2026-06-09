@@ -703,7 +703,7 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 			return errReply(fmt.Errorf("find session: %w", findErr))
 		}
 		if found == nil {
-			return errReply(fmt.Errorf("no session found for this thread. Send a message first to start a session."))
+			return errReply(fmt.Errorf("no session found for this thread; send a message first to start a session"))
 		}
 		sess = found
 	}
@@ -713,7 +713,7 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 		return errReply(fmt.Errorf("load messages: %w", err))
 	}
 	if len(msgs) == 0 {
-		return errReply(fmt.Errorf("session %q has no messages yet. Run a conversation first.", sess.ID))
+		return errReply(fmt.Errorf("session %q has no messages yet; run a conversation first", sess.ID))
 	}
 
 	data := render.BuildReportDataFromMessages(sess, msgs)

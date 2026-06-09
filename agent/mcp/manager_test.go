@@ -278,9 +278,6 @@ func TestManager_ConnectAll_DisabledServers(t *testing.T) {
 	assert.Empty(t, errs)
 }
 
-//go:fix inline
-func boolPtr(b bool) *bool { return new(b) }
-
 func TestIsWhitelisted(t *testing.T) {
 	tests := []struct {
 		name      string

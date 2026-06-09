@@ -1334,7 +1334,7 @@ func TestSnapshotStoreNoSnapshotError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error for unknown path")
 	}
-	if !strings.Contains(err.Error(), "No snapshot recorded") {
+	if !strings.Contains(err.Error(), "no snapshot recorded") {
 		t.Fatalf("expected snapshot-required error, got: %v", err)
 	}
 }

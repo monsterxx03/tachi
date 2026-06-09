@@ -286,9 +286,6 @@ func (c *fakeChildAgent) Run(ctx context.Context, provider llm.Provider,
 	return ch
 }
 
-//go:fix inline
-func boolPtr(b bool) *bool { return new(b) }
-
 // ---- Verify interface compliance ----
 
 func TestAgentInterface(t *testing.T) {

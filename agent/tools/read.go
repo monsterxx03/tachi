@@ -106,7 +106,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 
 	// Check if file is binary by looking for null bytes
 	if isBinaryFile(content) {
-		return "", fmt.Errorf("This tool cannot read binary files. The file appears to be a binary file. Please use appropriate tools for binary file analysis.")
+		return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
 	}
 
 	lines := strings.Split(string(content), "\n")

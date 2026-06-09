@@ -66,7 +66,7 @@ func TestSetFallbackDir_OnceBehavior(t *testing.T) {
 func TestDir_NilContext(t *testing.T) {
 	resetGlobals()
 	// Nil context without fallback should return "."
-	got := Dir(nil)
+	got := Dir(context.TODO())
 	if got != "." {
 		t.Errorf("Dir(nil) = %q, want %q", got, ".")
 	}
@@ -76,7 +76,7 @@ func TestDir_NilContextWithFallback(t *testing.T) {
 	resetGlobals()
 	SetFallbackDir(func() string { return "/fallback" })
 	// Nil context with fallback should use fallback
-	got := Dir(nil)
+	got := Dir(context.TODO())
 	if got != "/fallback" {
 		t.Errorf("Dir(nil) = %q, want %q", got, "/fallback")
 	}

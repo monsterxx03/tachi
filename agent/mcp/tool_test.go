@@ -1,6 +1,7 @@
 package mcp
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -170,7 +171,7 @@ func TestMCPTool_ExecuteContext_InvalidJSON(t *testing.T) {
 		serverTool: &mcp.Tool{Name: "test"},
 	}
 
-	_, err := tool.ExecuteContext(nil, "not json")
+	_, err := tool.ExecuteContext(context.TODO(), "not json")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid arguments")
 }
@@ -186,7 +187,7 @@ func TestMCPTool_ExecuteContext_EmptyArgs(t *testing.T) {
 		manager:    mgr,
 	}
 
-	_, err := tool.ExecuteContext(nil, "")
+	_, err := tool.ExecuteContext(context.TODO(), "")
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }

@@ -437,15 +437,6 @@ func (a *AIAgent) discoveredSet() *mcp.DiscoveredSet {
 	return a.mcpManager.DiscoveredSet()
 }
 
-// mcpInitDone returns the channel that signals async MCP init completion,
-// or nil if no MCP manager is configured. Internal helper.
-func (a *AIAgent) mcpInitDoneCh() <-chan struct{} {
-	if a.mcpManager == nil {
-		return nil
-	}
-	return a.mcpManager.InitDone()
-}
-
 // AddDeferredMCPTools adds MCP tools to the deferred pool and marks the
 // DeferredToolReminder as dirty so it fires on the next user message.
 // This is used when a user manually enables an MCP server mid-session —

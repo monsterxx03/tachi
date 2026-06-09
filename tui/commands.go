@@ -231,66 +231,6 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 	}
 }
 
-// mcpList shows all configured MCP servers with their status.
-func (m *Model) mcpList() tea.Cmd {
-	if len(m.mcpServers) == 0 {
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: "No MCP servers configured in ~/.tachi/mcp.json or .tachi/mcp.json",
-		})
-		return nil
-	}
-
-	var sb strings.Builder
-	sb.WriteString("**MCP Servers:**\n\n")
-
-	for _, srv := range m.mcpServers {
-		enabled := srv.IsEnabled()
-		connected := false
-		if m.mcpManager != nil {
-			connected = m.mcpManager.IsConnected(srv.Name)
-		}
-
-		status := "○ Disabled"
-		if enabled {
-			if connected {
-				status = "● Connected"
-			} else {
-				status = "● Disconnected"
-			}
-		}
-
-		transport := "?"
-		switch srv.Type {
-		case config.MCPTransportStdio:
-			transport = fmt.Sprintf("stdio `%s`", srv.Command)
-		case config.MCPTransportHTTP:
-			transport = fmt.Sprintf("http `%s`", srv.URL)
-		}
-
-		fmt.Fprintf(&sb, "- **%s** (%s)\n  Transport: %s\n",
-			srv.Name, status, transport)
-		if srv.Profile != "" {
-			fmt.Fprintf(&sb, "  Profile: `%s`\n", srv.Profile)
-		}
-		if srv.HasOAuth() {
-			oauthStatus := "no token"
-			if connected && m.mcpManager != nil {
-				if h := m.mcpManager.GetOAuthHandler(srv.Name); h != nil {
-					oauthStatus = "configured"
-				}
-			}
-			fmt.Fprintf(&sb, "  OAuth: %s\n", oauthStatus)
-		}
-	}
-
-	m.chatview.AddMessage(chatMessage{
-		Role:    "assistant",
-		Content: sb.String(),
-	})
-	return nil
-}
-
 // mcpToggle enables or disables an MCP server by name.
 func (m *Model) mcpToggle(name string) tea.Cmd {
 	if name == "" {

@@ -676,7 +676,7 @@ func transcriptShow(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("load messages: %w", err)
 	}
 	if len(msgs) == 0 {
-		return fmt.Errorf("session %q has no messages yet.\nRun a conversation first.", sess.ID)
+		return fmt.Errorf("session %q has no messages yet; run a conversation first", sess.ID)
 	}
 
 	// Build report data from session messages (transcript is replaced by session).

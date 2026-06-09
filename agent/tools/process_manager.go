@@ -79,11 +79,6 @@ type ManagedProcess struct {
 	stderrBuf *ringbuf.Buffer
 }
 
-// statusString returns the current status as a ProcessStatus value.
-func (mp *ManagedProcess) statusString() ProcessStatus {
-	return psString(mp.status.Load())
-}
-
 // toInfo returns a snapshot of the process for external consumption. Lock-free.
 func (mp *ManagedProcess) toInfo() *ManagedProcessInfo {
 	s := mp.status.Load()

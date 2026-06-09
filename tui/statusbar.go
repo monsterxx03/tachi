@@ -118,7 +118,7 @@ func (s StatusBar) View() string {
 	gap := max(s.width-lipgloss.Width(left)-lipgloss.Width(right), 0)
 	// Use MaxWidth to let lipgloss safely truncate the line to terminal width,
 	// handling ANSI sequences and wide (CJK) characters correctly.
-	return statusBarStyle.Copy().Width(s.width).Render(left + strings.Repeat(" ", gap) + right)
+	return statusBarStyle.Width(s.width).Render(left + strings.Repeat(" ", gap) + right)
 }
 
 // truncateTitle returns the session title truncated to no more than

@@ -184,24 +184,6 @@ func apiGet[Resp any](c *client, path string, timeout time.Duration) (*Resp, err
 	return &result, nil
 }
 
-// rawGet performs a GET request and returns the raw response body.
-func (c *client) rawGet(url string) ([]byte, error) {
-	hc := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	c.addCommonHeaders(req)
-
-	resp, err := hc.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("GET %s: %w", url, err)
-	}
-	defer resp.Body.Close()
-
-	return io.ReadAll(resp.Body)
-}
-
 // cdnUpload posts raw bytes to a CDN URL and returns the response headers.
 func (c *client) cdnUpload(url string, data []byte) (encryptedParam string, err error) {
 	hc := &http.Client{Timeout: 30 * time.Second}

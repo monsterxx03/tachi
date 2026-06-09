@@ -356,9 +356,9 @@ func formatJobDetail(job *cron.Job) string {
 	}
 
 	sb.WriteString(fmt.Sprintf("**%s** [%s]\n", job.Name, job.ID))
-	sb.WriteString(fmt.Sprintf("- Status: %s\n", status))
+	fmt.Fprintf(&sb, "- Status: %s\n", status)
 	if job.Type == cron.JobTypeOneshot {
-		sb.WriteString(fmt.Sprintf("- Type: oneshot (auto-delete after execution)\n"))
+		sb.WriteString("- Type: oneshot (auto-delete after execution)\n")
 	}
 	sb.WriteString(fmt.Sprintf("- Schedule: `%s`\n", job.Schedule))
 

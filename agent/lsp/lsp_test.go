@@ -10,7 +10,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"testing"
 	"time"
 )
@@ -20,7 +19,6 @@ type mockLSPServer struct {
 	cmd    *exec.Cmd
 	stdin  io.WriteCloser
 	stdout io.ReadCloser
-	mu     sync.Mutex
 }
 
 // startMockLSP starts a mock LSP server compiled from testdata/mocklsp/main.go.

@@ -89,22 +89,6 @@ func toolCallSeq(name, id, args string) []llm.StreamEvent {
 	return events
 }
 
-// toolCallSeqWithText is like toolCallSeq but also emits text before the tool call.
-func toolCallSeqWithText(text, name, id, args string) []llm.StreamEvent {
-	var events []llm.StreamEvent
-	for _, r := range text {
-		events = append(events, llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: string(r)})
-	}
-	events = append(events, llm.StreamEvent{
-		Type:      llm.StreamEventToolUseStart,
-		ToolIndex: 0,
-		ToolCall:  &llm.ToolCall{ID: id, Type: "function", Function: llm.ToolCallFunction{Name: name}},
-	})
-	events = append(events, llm.StreamEvent{Type: llm.StreamEventInputJSONDelta, ToolIndex: 0, InputDelta: args})
-	events = append(events, llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "tool_calls", Usage: &llm.Usage{InputTokens: 30, OutputTokens: 15}})
-	return events
-}
-
 // newTestAgent creates an AIAgent preconfigured for agent-loop testing.
 func newTestAgent(provider llm.Provider) *AIAgent {
 	a := NewAIAgent(provider, "test-model", 10)

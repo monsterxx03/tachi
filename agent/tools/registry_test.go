@@ -11,7 +11,7 @@ import (
 func TestWriteTool(t *testing.T) {
 	tool := WriteTool{}
 	content := "Test content"
-	_, err := tool.ExecuteContext(nil,`{"path": "/tmp/test_write.txt", "content": "Test content"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path": "/tmp/test_write.txt", "content": "Test content"}`)
 	if err != nil {
 		t.Fatalf("WriteTool.Execute failed: %v", err)
 	}
@@ -42,7 +42,7 @@ func TestRegistry(t *testing.T) {
 	})
 
 	// Test invoking registered tool
-	tr := reg.Invoke(nil, "test", `{"arg1": "value1"}`)
+	tr := reg.Invoke(context.TODO(), "test", `{"arg1": "value1"}`)
 	if tr.Status != ToolResultSuccess {
 		t.Errorf("Invoke failed: %v", tr.Err)
 	}
@@ -51,13 +51,13 @@ func TestRegistry(t *testing.T) {
 	}
 
 	// Test unknown tool
-	tr = reg.Invoke(nil, "unknown", "{}")
+	tr = reg.Invoke(context.TODO(), "unknown", "{}")
 	if tr.Status != ToolResultError {
 		t.Error("Expected error for unknown tool")
 	}
 
 	// Test missing required argument
-	tr = reg.Invoke(nil, "test", "{}")
+	tr = reg.Invoke(context.TODO(), "test", "{}")
 	if tr.Status != ToolResultError {
 		t.Error("Expected error for missing required argument")
 	}
@@ -66,7 +66,7 @@ func TestRegistry(t *testing.T) {
 	if !reg.Unregister("test") {
 		t.Error("Expected Unregister to return true for registered tool")
 	}
-	tr = reg.Invoke(nil, "test", `{"arg1": "value1"}`)
+	tr = reg.Invoke(context.TODO(), "test", `{"arg1": "value1"}`)
 	if tr.Status != ToolResultError {
 		t.Error("Expected error after unregistering tool")
 	}

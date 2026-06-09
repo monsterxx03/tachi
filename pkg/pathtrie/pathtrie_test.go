@@ -11,10 +11,6 @@ import (
 
 func paths(s ...string) []string { return s }
 
-func m(path string, score int, isDir bool) Match {
-	return Match{Path: path, Score: score, IsDir: isDir}
-}
-
 func sortMatches(ms []Match) []Match {
 	sort.Slice(ms, func(i, j int) bool {
 		if ms[i].Score != ms[j].Score {

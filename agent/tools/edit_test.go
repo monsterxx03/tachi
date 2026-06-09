@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"os"
 	"path/filepath"
 	"strings"
@@ -15,7 +16,7 @@ func TestEditTool_BasicReplace(t *testing.T) {
 	os.WriteFile(path, []byte("hello world\nfoo bar\nbaz qux\n"), 0644)
 
 	tool := EditTool{}
-	result, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"foo bar","new_string":"replaced"}`)
+	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"foo bar","new_string":"replaced"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +38,7 @@ func TestEditTool_ReplaceAll(t *testing.T) {
 	os.WriteFile(path, []byte("aaa bbb aaa ccc aaa\n"), 0644)
 
 	tool := EditTool{}
-	result, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"aaa","new_string":"xxx","replace_all":true}`)
+	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"aaa","new_string":"xxx","replace_all":true}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +59,7 @@ func TestEditTool_OldStringNotFound(t *testing.T) {
 	os.WriteFile(path, []byte("hello world\n"), 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"nonexistent","new_string":"xxx"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"nonexistent","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for missing old_string")
 	}
@@ -66,7 +67,7 @@ func TestEditTool_OldStringNotFound(t *testing.T) {
 
 func TestEditTool_IdenticalStrings(t *testing.T) {
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"/tmp/x","old_string":"same","new_string":"same"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"/tmp/x","old_string":"same","new_string":"same"}`)
 	if err == nil {
 		t.Fatal("expected error when old_string == new_string")
 	}
@@ -78,7 +79,7 @@ func TestEditTool_MultipleMatchesNoReplaceAll(t *testing.T) {
 	os.WriteFile(path, []byte("aaa bbb aaa ccc aaa\n"), 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"aaa","new_string":"xxx"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"aaa","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for multiple matches without replace_all")
 	}
@@ -89,7 +90,7 @@ func TestEditTool_CreateNewFile(t *testing.T) {
 	path := filepath.Join(dir, "new.txt")
 
 	tool := EditTool{}
-	result, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"","new_string":"new content\n"}`)
+	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"","new_string":"new content\n"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +110,7 @@ func TestEditTool_CreateExistingFileError(t *testing.T) {
 	os.WriteFile(path, []byte("existing"), 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"","new_string":"new"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"","new_string":"new"}`)
 	if err == nil {
 		t.Fatal("expected error when creating file that already exists")
 	}
@@ -123,7 +124,7 @@ func TestEditTool_CurlyQuoteNormalization(t *testing.T) {
 
 	tool := EditTool{}
 	// Search with straight quotes (as LLM would produce)
-	result, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"\"Hello\"","new_string":"\"Hi\""}`)
+	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"\"Hello\"","new_string":"\"Hi\""}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +147,7 @@ func TestEditTool_BinaryFile(t *testing.T) {
 	os.WriteFile(path, data, 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"hello","new_string":"xxx"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"hello","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for binary file")
 	}
@@ -154,7 +155,7 @@ func TestEditTool_BinaryFile(t *testing.T) {
 
 func TestEditTool_FileNotFound(t *testing.T) {
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"/tmp/nonexistent_edit_test_file","old_string":"x","new_string":"y"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"/tmp/nonexistent_edit_test_file","old_string":"x","new_string":"y"}`)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -166,7 +167,7 @@ func TestEditTool_PreservesFilePermissions(t *testing.T) {
 	os.WriteFile(path, []byte("old content"), 0755)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(nil,`{"path":"` + path + `","old_string":"old","new_string":"new"}`)
+	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"old","new_string":"new"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -187,7 +188,7 @@ func TestEditTool_GetDiff_Legacy_BasicReplace(t *testing.T) {
 	os.WriteFile(path, []byte("hello world\nfoo bar\nbaz qux\n"), 0644)
 
 	tool := &EditTool{}
-	diff, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"foo bar","new_string":"replaced"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"foo bar","new_string":"replaced"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -206,7 +207,7 @@ func TestEditTool_GetDiff_Legacy_ReplaceAll(t *testing.T) {
 	os.WriteFile(path, []byte("aaa bbb aaa ccc aaa\n"), 0644)
 
 	tool := &EditTool{}
-	diff, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"aaa","new_string":"xxx","replace_all":true}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"aaa","new_string":"xxx","replace_all":true}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -223,7 +224,7 @@ func TestEditTool_GetDiff_Legacy_NewFile(t *testing.T) {
 	path := filepath.Join(dir, "new.txt")
 
 	tool := &EditTool{}
-	diff, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"","new_string":"new content\n"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"","new_string":"new content\n"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -244,7 +245,7 @@ func TestEditTool_GetDiff_Legacy_OldStringNotFound(t *testing.T) {
 	os.WriteFile(path, []byte("hello world\n"), 0644)
 
 	tool := &EditTool{}
-	_, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"nonexistent","new_string":"xxx"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"nonexistent","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for missing old_string")
 	}
@@ -255,7 +256,7 @@ func TestEditTool_GetDiff_Legacy_OldStringNotFound(t *testing.T) {
 
 func TestEditTool_GetDiff_Legacy_FileNotFound(t *testing.T) {
 	tool := &EditTool{}
-	_, err := tool.GetDiff(nil, `{"path":"/tmp/nonexistent_edit_test_file","old_string":"x","new_string":"y"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"path":"/tmp/nonexistent_edit_test_file","old_string":"x","new_string":"y"}`)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -267,7 +268,7 @@ func TestEditTool_GetDiff_Legacy_BinaryFile(t *testing.T) {
 	os.WriteFile(path, []byte("hello\x00world"), 0644)
 
 	tool := &EditTool{}
-	_, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"hello","new_string":"xxx"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"hello","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for binary file")
 	}
@@ -287,7 +288,7 @@ func TestEditTool_GetDiff_Legacy_FileTooLarge(t *testing.T) {
 	os.WriteFile(path, large, 0644)
 
 	tool := &EditTool{}
-	_, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"xxx","new_string":"yyy"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"xxx","new_string":"yyy"}`)
 	if err == nil {
 		t.Fatal("expected error for file too large")
 	}
@@ -301,7 +302,7 @@ func TestEditTool_GetDiff_Legacy_CurlyQuoteNormalization(t *testing.T) {
 
 	tool := &EditTool{}
 	// Search with straight quotes
-	diff, err := tool.GetDiff(nil, `{"path":"`+path+`","old_string":"\"Hello\"","new_string":"\"Hi\""}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"path":"`+path+`","old_string":"\"Hello\"","new_string":"\"Hi\""}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -315,7 +316,7 @@ func TestEditTool_GetDiff_Legacy_CurlyQuoteNormalization(t *testing.T) {
 
 func TestEditTool_GetDiff_Legacy_InvalidArgs(t *testing.T) {
 	tool := &EditTool{}
-	_, err := tool.GetDiff(nil, `not json`)
+	_, err := tool.GetDiff(context.TODO(), `not json`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON args")
 	}
@@ -337,7 +338,7 @@ func TestEditTool_GetDiff_Hashline_Replace(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\nreplace 2..2:\n+modified\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -361,7 +362,7 @@ func TestEditTool_GetDiff_Hashline_Delete(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\ndelete 2..4\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -385,7 +386,7 @@ func TestEditTool_GetDiff_Hashline_InsertBefore(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\ninsert before 2:\n+before\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -409,7 +410,7 @@ func TestEditTool_GetDiff_Hashline_InsertAfter(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\ninsert after 1:\n+inserted\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -433,7 +434,7 @@ func TestEditTool_GetDiff_Hashline_InsertHead(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\ninsert head:\n+header\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -457,7 +458,7 @@ func TestEditTool_GetDiff_Hashline_InsertTail(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\ninsert tail:\n+footer\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -481,7 +482,7 @@ func TestEditTool_GetDiff_Hashline_MultipleOps(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\nreplace 1..1:\n+x\ninsert after 3:\n+y\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -508,7 +509,7 @@ func TestEditTool_GetDiff_Hashline_MultipleSections(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + pathA + "#" + tagA + "\nreplace 2..2:\n+modified\n\n¶" + pathB + "#" + tagB + "\ninsert head:\n+greeting\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -529,7 +530,7 @@ func TestEditTool_GetDiff_Hashline_EmptyInput(t *testing.T) {
 	tool := &EditTool{}
 	tool.SetHashlineMode(true, store, 0)
 
-	_, err := tool.GetDiff(nil, `{"input":""}`)
+	_, err := tool.GetDiff(context.TODO(), `{"input":""}`)
 	if err == nil {
 		t.Fatal("expected error for empty input")
 	}
@@ -542,7 +543,7 @@ func TestEditTool_GetDiff_Hashline_NoSnapshotStore(t *testing.T) {
 	tool := &EditTool{}
 	tool.SetHashlineMode(true, nil, 0)
 
-	_, err := tool.GetDiff(nil, `{"input":"¶test.txt#abcd\nreplace 1..1:\n+x\n"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"input":"¶test.txt#abcd\nreplace 1..1:\n+x\n"}`)
 	if err == nil {
 		t.Fatal("expected error for missing snapshot store")
 	}
@@ -564,7 +565,7 @@ func TestEditTool_GetDiff_Hashline_StaleTag(t *testing.T) {
 
 	// Use a tag that doesn't exist — must be absolute path
 	input := "¶" + path + "#ffff\nreplace 1..1:\n+x\n"
-	_, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err == nil {
 		t.Fatal("expected error for stale tag")
 	}
@@ -582,11 +583,11 @@ func TestEditTool_GetDiff_Hashline_NoSnapshot(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#abcd\nreplace 1..1:\n+x\n"
-	_, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err == nil {
 		t.Fatal("expected error for missing snapshot")
 	}
-	if !strings.Contains(err.Error(), "No snapshot") {
+	if !strings.Contains(err.Error(), "no snapshot") {
 		t.Fatalf("unexpected error: %v", err)
 	}
 }
@@ -597,7 +598,7 @@ func TestEditTool_GetDiff_Hashline_InvalidInput(t *testing.T) {
 	tool := &EditTool{}
 	tool.SetHashlineMode(true, store, 0)
 
-	_, err := tool.GetDiff(nil, `not json`)
+	_, err := tool.GetDiff(context.TODO(), `not json`)
 	if err == nil {
 		t.Fatal("expected error for invalid JSON args")
 	}
@@ -610,7 +611,7 @@ func TestEditTool_GetDiff_Hashline_ParseError(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	// Missing paragraph prefix — must be absolute path for the parse error test
-	_, err := tool.GetDiff(nil, `{"input":"test.txt#abcd\nreplace 1..1:\n+x\n"}`)
+	_, err := tool.GetDiff(context.TODO(), `{"input":"test.txt#abcd\nreplace 1..1:\n+x\n"}`)
 	if err == nil {
 		t.Fatal("expected parse error for invalid hashline")
 	}
@@ -632,7 +633,7 @@ func TestEditTool_GetDiff_Hashline_HeadTailOnlyStaleTag(t *testing.T) {
 
 	// Head/tail-only operations with a stale tag should succeed (with warning)
 	input := "¶" + path + "#ffff\ninsert head:\n+header\n"
-	diff, err := tool.GetDiff(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	diff, err := tool.GetDiff(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("head/tail-only with stale tag should succeed (non-fatal): %v", err)
 	}
@@ -660,7 +661,7 @@ func TestEditTool_ExecuteContext_AutoHashline(t *testing.T) {
 	tool.SetHashlineMode(true, store, 0)
 
 	input := "¶" + path + "#" + tag + "\nreplace 1..1:\n+world\n"
-	result, err := tool.ExecuteContext(nil, `{"input":"`+escapeJSON(input)+`"}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"input":"`+escapeJSON(input)+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -685,7 +686,7 @@ func TestEditTool_ExecuteContext_AutoHashline_RequiresHashlineMode(t *testing.T)
 	// Hashline mode NOT enabled — should fall through to legacy mode
 	// with path/old_string/new_string format
 	tool := &EditTool{}
-	result, err := tool.ExecuteContext(nil, `{"path":"`+path+`","old_string":"hello","new_string":"world"}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"hello","new_string":"world"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

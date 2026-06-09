@@ -127,9 +127,6 @@ var (
 				Background(lipgloss.Color("#363A4F")).
 				Foreground(lipgloss.Color("#CAD3F5"))
 
-	mcpOAuthBadge = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#EED49F")).
-			Background(lipgloss.Color("#5B4A3F"))
 
 	mcpStatusOK = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A6DA95"))

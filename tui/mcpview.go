@@ -108,17 +108,6 @@ func (v *MCPView) SelectedServerItem() *MCPServerItem {
 	return &v.servers[v.selIdx]
 }
 
-// focusedTool returns the tool currently shown in detail, or nil.
-func (v *MCPView) focusedTool() *MCPToolItem {
-	sel := v.SelectedServerItem()
-	if sel == nil || !v.showingToolDetail {
-		return nil
-	}
-	if v.detailToolIdx < 0 || v.detailToolIdx >= len(sel.Tools) {
-		return nil
-	}
-	return &sel.Tools[v.detailToolIdx]
-}
 
 // SetMessage displays a one-shot message at the bottom of the overlay.
 func (v *MCPView) SetMessage(msg string) {
@@ -270,7 +259,7 @@ func (v *MCPView) View() string {
 	}
 
 	// Wrap in border with MaxWidth to prevent CJK text overflow.
-	bordered := mcpOverlayBorder.Copy().MaxWidth(v.width).Render(b.String())
+	bordered := mcpOverlayBorder.MaxWidth(v.width).Render(b.String())
 
 	return lipgloss.Place(v.width, v.height, lipgloss.Center, lipgloss.Center, bordered)
 }

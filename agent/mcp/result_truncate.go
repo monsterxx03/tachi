@@ -63,7 +63,7 @@ func truncateToolOutput(result string, maxChars int, fileDir string, toolName st
 
 // hardTruncate performs a simple truncation at maxChars without file persistence.
 // Used as fallback when file I/O fails.
-func hardTruncate(result string, maxChars int, toolName string) string {
+func hardTruncate(result string, maxChars int, _ string) string {
 	truncated := result[:maxChars]
 	return fmt.Sprintf(
 		"[OUTPUT TRUNCATED at %d chars]\n%s\n...\n[... %d chars truncated. "+

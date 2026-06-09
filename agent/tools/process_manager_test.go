@@ -207,14 +207,14 @@ func TestProcessManager_OutputCapture(t *testing.T) {
 		t.Skip("background output capture test not supported on Windows")
 	}
 
-	info, err := pm.Start(t.Context(), "output-test", "echo hello && echo world >&2 && sleep 1 && echo done")
+	_, err := pm.Start(t.Context(), "output-test", "echo hello && echo world >&2 && sleep 1 && echo done")
 	if err != nil {
 		t.Fatalf("Start failed: %v", err)
 	}
 
 	// Wait for the process to complete — the background goroutine in Start()
 	// will handle cmd.Wait(). Polling is faster and more reliable than fixed sleep.
-	info = waitForProcess(t, pm, "output-test", 5*time.Second)
+	info := waitForProcess(t, pm, "output-test", 5*time.Second)
 
 	if info.Status != ProcessExited {
 		t.Errorf("expected status exited, got %s", info.Status)

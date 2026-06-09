@@ -65,12 +65,6 @@ func (m *mockChannel) Run(ctx context.Context, handler channel.MessageHandler) e
 	return nil
 }
 
-func (m *mockChannel) getHandler() channel.MessageHandler {
-	m.mu.Lock()
-	defer m.mu.Unlock()
-	return m.lastHandler
-}
-
 func (m *mockChannel) isRunning() bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -712,9 +706,6 @@ func TestSlashCommand_StringRepresentation(t *testing.T) {
 	assert.Equal(t, "new", cmd.Name)
 	assert.Equal(t, "thread-1", cmd.ThreadID)
 }
-
-//go:fix inline
-func newInt64Ptr(v int64) *int64 { return new(v) }
 
 func TestBuildUserMessageWithAttachments_NoAttachments(t *testing.T) {
 	msg := channel.IncomingMessage{

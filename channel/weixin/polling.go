@@ -23,7 +23,7 @@ const (
 // messages. It runs until ctx is cancelled or an unrecoverable error occurs.
 func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandler) error {
 	buf := ch.store.loadSyncBuf(ch.accountID)
-	nextTimeout := ch.cli.getUpdatesTimeout
+	var nextTimeout time.Duration
 
 	failures := 0
 

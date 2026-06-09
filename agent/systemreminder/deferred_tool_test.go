@@ -100,7 +100,7 @@ func TestDeferredToolReminder_UndiscoveredTools(t *testing.T) {
 		},
 	}
 	lines := r.Generate(Context{IsFirstMessage: true})
-	if lines == nil || len(lines) == 0 {
+	if len(lines) == 0 {
 		t.Fatal("expected non-nil result with undiscovered tools")
 	}
 
@@ -134,7 +134,7 @@ func TestDeferredToolReminder_AllUndiscovered(t *testing.T) {
 		Tracker: nil, // no tracker = all undiscovered
 	}
 	lines := r.Generate(Context{IsFirstMessage: true})
-	if lines == nil || len(lines) == 0 {
+	if len(lines) == 0 {
 		t.Fatal("expected non-nil result with undiscovered tools")
 	}
 	full := lines[0]
@@ -157,7 +157,7 @@ func TestDeferredToolReminder_DescriptionTruncation(t *testing.T) {
 		},
 	}
 	lines := r.Generate(Context{IsFirstMessage: true})
-	if lines == nil || len(lines) == 0 {
+	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
 	// Description should be truncated to 100 runes + "..."
@@ -178,7 +178,7 @@ func TestDeferredToolReminder_MultilineDescription(t *testing.T) {
 		},
 	}
 	lines := r.Generate(Context{IsFirstMessage: true})
-	if lines == nil || len(lines) == 0 {
+	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
 	if contains(lines[0], "Second line") {
@@ -196,7 +196,7 @@ func TestDeferredToolReminder_FirstLineOnly(t *testing.T) {
 		},
 	}
 	lines := r.Generate(Context{IsFirstMessage: true})
-	if lines == nil || len(lines) == 0 {
+	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
 	if !contains(lines[0], "mcp__x__y — foo") {
