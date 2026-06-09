@@ -481,6 +481,11 @@ func (a *AIAgent) handleToolCallFinish(
 	// --- Loop Reminders: inject iteration/token warnings ---
 	a.estimateAndUpdateTokens(*messages)
 	rctx := a.buildReminderContext(false, true)
+	// Populate tool names so reminders (e.g. LSPDiagnostics) can filter by tool.
+	rctx.ToolNames = make([]string, 0, len(acc.toolCalls))
+	for _, tc := range acc.toolCalls {
+		rctx.ToolNames = append(rctx.ToolNames, tc.Function.Name)
+	}
 	if block := a.reminderCollector.Collect(rctx); block != "" {
 		*messages = append(*messages, llm.Message{Role: "user", Content: block})
 		a.logger.Log("Agent: loop reminder injected, block=%q", truncateForLog(block, 200))

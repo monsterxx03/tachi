@@ -3,11 +3,13 @@ package systemreminder
 import (
 	"crypto/sha256"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/lsp"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // LSPDiagnosticsProvider is the interface that LSPManager satisfies for the
@@ -49,6 +51,11 @@ func (r *LSPDiagnosticsReminder) Generate(ctx Context) []string {
 	}
 	// Only fire at tool-result boundaries in the agent loop.
 	if !ctx.IsToolResult {
+		return nil
+	}
+	// Only fire after EditFile tool execution — that's when source
+	// changes that LSP servers care about actually happen.
+	if !slices.Contains(ctx.ToolNames, tools.ToolNameEdit) {
 		return nil
 	}
 

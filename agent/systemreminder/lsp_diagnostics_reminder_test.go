@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/lsp"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // mockLSPDiagProvider is a test stub for LSPDiagnosticsProvider.
@@ -35,9 +36,26 @@ func TestLSPDiagnosticsReminder_SkipsWhenNotToolResult(t *testing.T) {
 	r := &LSPDiagnosticsReminder{
 		Provider: &mockLSPDiagProvider{configured: true},
 	}
-	lines := r.Generate(Context{IsToolResult: false})
+	lines := r.Generate(Context{IsToolResult: false, ToolNames: []string{tools.ToolNameEdit}})
 	if lines != nil {
 		t.Errorf("expected nil when not tool result, got %v", lines)
+	}
+}
+
+func TestLSPDiagnosticsReminder_SkipsWhenNoEditFile(t *testing.T) {
+	// Should skip even at a tool-result boundary when the tool list
+	// does not include EditFile.
+	r := &LSPDiagnosticsReminder{
+		Provider: &mockLSPDiagProvider{configured: true},
+	}
+	lines := r.Generate(Context{IsToolResult: true, ToolNames: []string{"ReadFile", "Grep"}})
+	if lines != nil {
+		t.Errorf("expected nil when no EditFile in tool names, got %v", lines)
+	}
+	// Also skip when ToolNames is nil.
+	lines = r.Generate(Context{IsToolResult: true})
+	if lines != nil {
+		t.Errorf("expected nil when ToolNames is nil, got %v", lines)
 	}
 }
 
@@ -118,7 +136,7 @@ func TestLSPDiagnosticsReminder_HashDedup(t *testing.T) {
 	// Verify that the same diagnostics hash doesn't re-fire.
 	// Since we can't create real LSPServer instances, we verify the struct
 	// initial state: lastHashes should start nil.
-	r := &LSPDiagnosticsReminder{Provider: &mockLSPDiagProvider{configured: true, servers: map[string]*lsp.LSPServer{}}}
+	r := &LSPDiagnosticsReminder{}
 	if r.lastHashes != nil {
 		t.Error("expected nil lastHashes initially")
 	}

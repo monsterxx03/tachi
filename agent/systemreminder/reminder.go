@@ -55,6 +55,12 @@ type Context struct {
 
 	// SkipRecall prevents memory recall (e.g. "tachi run" non-interactive mode).
 	SkipRecall bool
+
+	// ToolNames lists the names of tools that were executed in the current
+	// turn (in order of execution). Empty when the reminder is not being
+	// injected at a tool-result boundary. Reminders that only apply to
+	// specific tool invocations can inspect this field.
+	ToolNames []string
 }
 
 // Reminder generates one or more reminder lines given the current context.
