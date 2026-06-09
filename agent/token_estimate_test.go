@@ -117,7 +117,7 @@ func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
 			Description: "Edit or create files",
 			Parameters: agenttools.ParametersSchema{
 				Properties: map[string]agenttools.PropertySchema{
-					"file_path":  {Type: "string", Description: "Target file"},
+					"path":       {Type: "string", Description: "Target file"},
 					"content":    {Type: "string", Description: "New content"},
 					"old_string": {Type: "string", Description: "Text to replace"},
 				},
@@ -139,15 +139,15 @@ func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
 
 	// EditFile name "EditFile" = 8 → (8+3)/4 = 2
 	// Desc "Edit or create files" = 19 → (19+3)/4 = 5
-	// prop "file_path" = 9 → (9+3)/4 = 3, desc "Target file" = 11 → (11+3)/4 = 3
+	// prop "path" = 4 → (4+3)/4 = 1, desc "Target file" = 11 → (11+3)/4 = 3
 	// prop "content" = 7 → (7+3)/4 = 2, desc "New content" = 11 → (11+3)/4 = 3
 	// prop "old_string" = 10 → (10+3)/4 = 3, desc "Text to replace" = 16 → (16+3)/4 = 4
 	// 3 props * 8 = 24
-	// EditFile total: 2+5+3+3+2+3+3+4+24 = 49
+	// EditFile total: 2+5+1+3+2+3+3+4+24 = 47
 
 	// tool array overhead: 2*4 = 8
-	// Total: 18+49+8 = 75
-	assert.Equal(t, int64(75), n)
+	// Total: 18+47+8 = 73
+	assert.Equal(t, int64(73), n)
 }
 
 func TestEstimateInputTokens_Full(t *testing.T) {

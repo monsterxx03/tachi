@@ -41,7 +41,7 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 			preview := firstLineOrTruncate(content, 100)
 			b.WriteString(fmt.Sprintf("  %s → %s\n", name, preview))
 		}
-		b.WriteString(fmt.Sprintf("Load with Skill(operation=\"view\", name=%q, file_path=<path>)]\n", sk.Meta.Name))
+		b.WriteString(fmt.Sprintf("Load with Skill(operation=\"view\", name=%q, path=<path>)]\n", sk.Meta.Name))
 	}
 
 	return b.String()

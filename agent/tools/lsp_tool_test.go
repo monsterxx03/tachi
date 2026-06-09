@@ -56,7 +56,7 @@ func TestLSPToolNoServer(t *testing.T) {
 	m := lsp.NewManager(cfg)
 	tool := NewLSPTool(m)
 
-	input := `{"operation": "goToDefinition", "filePath": "/tmp/test.py", "line": 1, "character": 1}`
+	input := `{"operation": "goToDefinition", "path": "/tmp/test.py", "line": 1, "character": 1}`
 	result, err := tool.ExecuteContext(context.Background(), input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

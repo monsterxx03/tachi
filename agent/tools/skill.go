@@ -147,7 +147,7 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 			Type:        "string",
 			Description: "Filter skills by tag (only used with operation=\"list\")",
 		},
-		"file_path": {
+		"path": {
 			Type:        "string",
 			Description: "Optional: path to a supporting file within the skill directory (e.g., \"references/checklist.md\"). Only used with operation=\"view\".",
 		},
@@ -179,7 +179,7 @@ func (t *SkillTool) ExecuteContext(ctx context.Context, args string) (string, er
 		Description string   `json:"description"`
 		Body        string   `json:"body"`
 		Tag         string   `json:"tag"`
-		FilePath    string   `json:"file_path"`
+		FilePath    string   `json:"path"`
 		Tags        []string `json:"tags"`
 		Source      string   `json:"source"`
 		Overwrite   bool     `json:"overwrite"`
@@ -251,7 +251,7 @@ func (t *SkillTool) executeView(name, filePath string) (string, error) {
 		return "", fmt.Errorf("skill %q not found: %w", name, err)
 	}
 
-	// If file_path is specified, return that specific file
+	// If path is specified, return that specific file
 	if filePath != "" {
 		content, ok := sk.Files[filePath]
 		if !ok {

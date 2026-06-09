@@ -37,7 +37,7 @@ Supported operations:
 
 Parameters:
 - operation (required): which LSP operation to perform
-- filePath (required): the file to operate on. For workspaceSymbol, pass any file in the project.
+- path (required): the file to operate on. For workspaceSymbol, pass any file in the project.
 - line (optional): line number (1-based). Required for goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Not needed for documentSymbol or workspaceSymbol.
 - character (optional): character offset (1-based). Required for goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Not needed for documentSymbol or workspaceSymbol.
 - query (optional): search query — only needed for workspaceSymbol operation`
@@ -62,7 +62,7 @@ func (t *LSPTool) Properties() map[string]PropertySchema {
 			Type:        "string",
 			Description: "The LSP operation to perform. Valid values: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls",
 		},
-		"filePath": {
+		"path": {
 			Type:        "string",
 			Description: "The absolute or relative path to the file. For workspaceSymbol, pass any file in the project.",
 		},
@@ -81,7 +81,7 @@ func (t *LSPTool) Properties() map[string]PropertySchema {
 	}
 }
 func (t *LSPTool) Required() []string {
-	return []string{"operation", "filePath"}
+	return []string{"operation", "path"}
 }
 
 func (t *LSPTool) Parallel() bool { return true }
@@ -89,7 +89,7 @@ func (t *LSPTool) Parallel() bool { return true }
 func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var input struct {
 		Operation string `json:"operation"`
-		FilePath  string `json:"filePath"`
+		Path      string `json:"path"`
 		Line      int    `json:"line"`
 		Character int    `json:"character"`
 		Query     string `json:"query,omitempty"`
@@ -100,7 +100,7 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 
 	// Resolve file path relative to working directory.
 	wd := wdctx.Dir(ctx)
-	absPath := input.FilePath
+	absPath := input.Path
 	if !filepath.IsAbs(absPath) {
 		absPath = filepath.Join(wd, absPath)
 	}
@@ -522,20 +522,16 @@ func ExtractFilePath(toolName, inputJSON string) string {
 
 	// Only sync for tools that read or write file content.
 	switch toolName {
-	case "ReadFile", "WriteFile", "EditFile", "SendFile":
+	case ToolNameRead, ToolNameWrite, ToolNameEdit, ToolNameSendFile:
 	default:
 		return ""
 	}
 
 	var parsed struct {
-		Path     string `json:"path"`
-		FilePath string `json:"filePath"`
+		Path string `json:"path"`
 	}
 	if err := json.Unmarshal([]byte(inputJSON), &parsed); err != nil {
 		return ""
-	}
-	if parsed.FilePath != "" {
-		return parsed.FilePath
 	}
 	return parsed.Path
 }

@@ -18,8 +18,8 @@ const ToolNameLSPDiagnostics = "LSPDiagnostics"
 
 const lspDiagnosticsDescription = `Get diagnostic information (errors, warnings, hints) from LSP servers.
 
-If filePath is provided, returns diagnostics for that specific file.
-If filePath is empty, returns a summary of all diagnostics across the workspace.
+If path is provided, returns diagnostics for that specific file.
+If path is empty, returns a summary of all diagnostics across the workspace.
 
 Use this to check for errors after editing code, or to understand what's wrong with a file.`
 
@@ -39,7 +39,7 @@ func (t *LSPDiagnosticsTool) Description() string { return lspDiagnosticsDescrip
 
 func (t *LSPDiagnosticsTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
-		"filePath": {
+		"path": {
 			Type:        "string",
 			Description: "Optional path to a specific file. If empty, returns project-wide diagnostic summary.",
 		},
@@ -52,7 +52,7 @@ func (t *LSPDiagnosticsTool) Parallel() bool { return true }
 
 func (t *LSPDiagnosticsTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var input struct {
-		FilePath string `json:"filePath,omitempty"`
+		Path string `json:"path,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
 		return marshalDiagResult(fmt.Sprintf("invalid arguments: %v", err)), nil
@@ -64,8 +64,8 @@ func (t *LSPDiagnosticsTool) ExecuteContext(ctx context.Context, args string) (s
 
 	wd := wdctx.Dir(ctx)
 
-	if input.FilePath != "" {
-		return t.fileDiagnostics(ctx, input.FilePath, wd)
+	if input.Path != "" {
+		return t.fileDiagnostics(ctx, input.Path, wd)
 	}
 	return t.projectSummary(wd)
 }
