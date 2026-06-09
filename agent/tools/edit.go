@@ -206,14 +206,7 @@ func (t *EditTool) getLegacyDiff(ctx context.Context, args string) (string, erro
 		return "", fmt.Errorf("old_string not found in %s", filePath)
 	}
 
-	var newContent string
-	if a.ReplaceAll {
-		newContent = strings.ReplaceAll(content, actualOld, a.NewString)
-	} else {
-		newContent = strings.Replace(content, actualOld, a.NewString, 1)
-	}
-
-	return generateDiffSnippet(content, newContent, actualOld, a.NewString), nil
+	return generateDiffSnippet(content, actualOld, a.NewString), nil
 }
 
 func (t *EditTool) ExecuteContext(ctx context.Context, args string) (string, error) {
@@ -254,7 +247,7 @@ func (t *EditTool) executeHashline(ctx context.Context, input string) (string, e
 		sb.WriteString(summary)
 		sb.WriteString("\n")
 		for _, w := range r.Warnings {
-			sb.WriteString(fmt.Sprintf("[warning] %s\n", w))
+			fmt.Fprintf(&sb, "[warning] %s\n", w)
 		}
 	}
 	return sb.String(), nil
@@ -423,7 +416,7 @@ func editExistingFile(filePath, oldString, newString string, replaceAll bool) (s
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 
-	snippet := generateDiffSnippet(content, newContent, actualOld, newString)
+	snippet := generateDiffSnippet(content, actualOld, newString)
 	return fmt.Sprintf("Successfully edited %s\n%s", filePath, snippet), nil
 }
 
@@ -489,7 +482,7 @@ func normalizeQuotes(s string) string {
 }
 
 // generateDiffSnippet produces a unified diff with +/- markers for changes
-func generateDiffSnippet(oldContent, newContent, oldStr, newStr string) string {
+func generateDiffSnippet(oldContent, oldStr, newStr string) string {
 	const contextLines = 3
 
 	oldLines := strings.Split(oldContent, "\n")

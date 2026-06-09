@@ -421,7 +421,7 @@ func (a *AIAgent) handleToolCallFinish(
 	acc *streamAccumulator,
 	messages *[]llm.Message,
 	ch chan<- AgentEvent,
-	apiCallCount int,
+	_ int,
 	lengthRetries *int,
 ) bool {
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
@@ -495,7 +495,7 @@ const maxLengthContinueRetries = 3
 // records partial output, appends a continuation prompt, and handles
 // exhaustion after too many retries.
 func (a *AIAgent) handleLengthFinish(
-	ctx context.Context,
+	_ context.Context,
 	acc *streamAccumulator,
 	messages *[]llm.Message,
 	ch chan<- AgentEvent,
@@ -569,7 +569,7 @@ func (a *AIAgent) handleLengthFinish(
 // handleStopFinish processes a normal stop response: records the assistant
 // turn, emits TurnComplete, and stores turn-level memory.
 func (a *AIAgent) handleStopFinish(
-	ctx context.Context,
+	_ context.Context,
 	acc *streamAccumulator,
 	messages *[]llm.Message,
 	ch chan<- AgentEvent,

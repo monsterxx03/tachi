@@ -280,19 +280,19 @@ func (t *SkillTool) executeView(name, filePath string) (string, error) {
 	sort.Strings(result.Files)
 
 	var output strings.Builder
-	output.WriteString(fmt.Sprintf("Skill: %s\n", result.Name))
-	output.WriteString(fmt.Sprintf("Description: %s\n", result.Description))
-	output.WriteString(fmt.Sprintf("Source: %s\n", result.Source))
-	output.WriteString(fmt.Sprintf("Directory: %s\n", result.Dir))
+	fmt.Fprintf(&output, "Skill: %s\n", result.Name)
+	fmt.Fprintf(&output, "Description: %s\n", result.Description)
+	fmt.Fprintf(&output, "Source: %s\n", result.Source)
+	fmt.Fprintf(&output, "Directory: %s\n", result.Dir)
 	if len(result.Files) > 0 {
 		output.WriteString("Supporting files:\n")
 		for _, f := range result.Files {
-			output.WriteString(fmt.Sprintf("  - %s\n", f))
+			fmt.Fprintf(&output, "  - %s\n", f)
 		}
 		output.WriteString("\n")
 	}
 	output.WriteString("\n--- Skill Instructions ---\n\n")
-	output.WriteString(sk.Body)
+	output.WriteString(result.Body)
 
 	return output.String(), nil
 }

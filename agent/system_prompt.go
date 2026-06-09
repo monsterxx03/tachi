@@ -63,7 +63,7 @@ YOU MUST:
 	if language == "" {
 		language = "the user's language"
 	}
-	sb.WriteString(fmt.Sprintf("Reply in %s. ", language))
+	fmt.Fprintf(&sb, "Reply in %s. ", language)
 	sb.WriteString("Match the user's language in your responses.\n\n")
 
 	// ── Environment ────────────────────────────────────────────────────────
@@ -74,7 +74,7 @@ YOU MUST:
 			cwd = wd
 		}
 	}
-	sb.WriteString("- Working directory: " + cwd + "\n")
+	fmt.Fprintf(&sb, "- Working directory: %s\n", cwd)
 
 	isGitRepo := false
 	if cwd != "" {
@@ -87,10 +87,10 @@ YOU MUST:
 	} else {
 		sb.WriteString("- Git repository: no\n")
 	}
-	sb.WriteString("- OS: " + runtime.GOOS + "/" + runtime.GOARCH + "\n")
+	fmt.Fprintf(&sb, "- OS: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 
 	if shell := os.Getenv("SHELL"); shell != "" {
-		sb.WriteString("- Shell: " + shell + "\n")
+		fmt.Fprintf(&sb, "- Shell: %s\n", shell)
 	}
 
 	return sb.String()

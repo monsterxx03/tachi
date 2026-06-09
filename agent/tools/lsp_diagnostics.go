@@ -115,7 +115,7 @@ func (t *LSPDiagnosticsTool) fileDiagnostics(ctx context.Context, filePath, wd s
 	return marshalDiagResult(summary), nil
 }
 
-func (t *LSPDiagnosticsTool) projectSummary(wd string) (string, error) {
+func (t *LSPDiagnosticsTool) projectSummary(_ string) (string, error) {
 	type serverSummary struct {
 		Name   string
 		Errors int

@@ -302,8 +302,17 @@ func TestLSPServerConfig(t *testing.T) {
 	if cfg.Name != "gopls" {
 		t.Fatalf("expected name gopls, got %s", cfg.Name)
 	}
+	if cfg.Command != "gopls" {
+		t.Fatalf("expected command gopls, got %s", cfg.Command)
+	}
+	if len(cfg.Args) != 0 {
+		t.Fatalf("expected empty args, got %v", cfg.Args)
+	}
 	if len(cfg.Extensions) != 1 || cfg.Extensions[0] != ".go" {
 		t.Fatalf("expected [.go], got %v", cfg.Extensions)
+	}
+	if len(cfg.Languages) != 1 || cfg.Languages[0] != "go" {
+		t.Fatalf("expected [go], got %v", cfg.Languages)
 	}
 }
 

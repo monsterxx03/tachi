@@ -246,7 +246,7 @@ func (t *LSPTool) documentSymbol(ctx context.Context, srv *lsp.LSPServer, uri, a
 	return lspMarshalResult("documentSymbol", formatted, absPath, 0, 1), nil
 }
 
-func (t *LSPTool) workspaceSymbol(ctx context.Context, srv *lsp.LSPServer, uri, query, wd string) (string, error) {
+func (t *LSPTool) workspaceSymbol(ctx context.Context, srv *lsp.LSPServer, _, query, wd string) (string, error) {
 	params := map[string]any{
 		"query": query,
 	}
