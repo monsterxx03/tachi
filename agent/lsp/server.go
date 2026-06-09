@@ -45,6 +45,10 @@ type LSPServer struct {
 	mu          sync.Mutex
 	isStopping  bool
 	initialized bool
+	// startCh is closed when Start() completes (success or failure).
+	// Used by GetServer to wait for lazy-start to finish when racing with
+	// another goroutine that initiated Start() first.
+	startCh chan struct{}
 
 	// sem limits concurrent requests to this server (concurrency_limit).
 	sem chan struct{}
@@ -109,6 +113,11 @@ func (s *LSPServer) Start(ctx context.Context) error {
 	if s.State() == StateStarting {
 		return fmt.Errorf("server %s is already starting", s.name)
 	}
+
+	// Create a fresh done channel for this start attempt and ensure it is
+	// always closed so waiters in GetServer are unblocked.
+	s.startCh = make(chan struct{})
+	defer func() { close(s.startCh) }()
 
 	s.state.Store(int32(StateStarting))
 	s.isStopping = false

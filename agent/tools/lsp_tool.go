@@ -31,13 +31,15 @@ Supported operations:
 - documentSymbol: Get all symbols (functions, types, variables) defined in a file
 - workspaceSymbol: Search for symbols by name across the entire workspace (like fuzzy-find for code)
 - goToImplementation: Find implementations of an interface or abstract method
-- prepareCallHierarchy / incomingCalls / outgoingCalls: Trace function call relationships
+- prepareCallHierarchy: Prepare call hierarchy at a position (first step for incomingCalls/outgoingCalls)
+- incomingCalls: Find functions/methods that call the function at a position
+- outgoingCalls: Find functions/methods called by the function at a position
 
 Parameters:
 - operation (required): which LSP operation to perform
-- filePath (required): the file containing the symbol
-- line (optional, 1-based): required for goToDefinition/findReferences/hover/goToImplementation/callHierarchy
-- character (optional, 1-based): required for goToDefinition/findReferences/hover/goToImplementation/callHierarchy
+- filePath (required): the file to operate on. For workspaceSymbol, pass any file in the project.
+- line (optional): line number (1-based). Required for goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Not needed for documentSymbol or workspaceSymbol.
+- character (optional): character offset (1-based). Required for goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Not needed for documentSymbol or workspaceSymbol.
 - query (optional): search query — only needed for workspaceSymbol operation`
 
 // LSPTool implements the tools.Tool interface for LSP code intelligence.
@@ -62,15 +64,15 @@ func (t *LSPTool) Properties() map[string]PropertySchema {
 		},
 		"filePath": {
 			Type:        "string",
-			Description: "The absolute or relative path to the file",
+			Description: "The absolute or relative path to the file. For workspaceSymbol, pass any file in the project.",
 		},
 		"line": {
 			Type:        "integer",
-			Description: "The line number (1-based, as shown in editors)",
+			Description: "The line number (1-based, as shown in editors). Required for goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Not needed for documentSymbol or workspaceSymbol.",
 		},
 		"character": {
 			Type:        "integer",
-			Description: "The character offset (1-based, as shown in editors)",
+			Description: "The character offset (1-based, as shown in editors). Required for goToDefinition, findReferences, hover, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls. Not needed for documentSymbol or workspaceSymbol.",
 		},
 		"query": {
 			Type:        "string",
@@ -78,7 +80,6 @@ func (t *LSPTool) Properties() map[string]PropertySchema {
 		},
 	}
 }
-
 func (t *LSPTool) Required() []string {
 	return []string{"operation", "filePath"}
 }

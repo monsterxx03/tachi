@@ -75,7 +75,18 @@ func (m *LSPManager) GetServer(ctx context.Context, filePath string) (*LSPServer
 
 	// Lazy start.
 	if !server.IsHealthy() {
-		if server.State() != StateStarting {
+		if server.State() == StateStarting {
+			// Another goroutine is starting this server — wait for it.
+			select {
+			case <-server.startCh:
+				// Start() completed; re-check health below.
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+			if !server.IsHealthy() {
+				return nil, fmt.Errorf("LSP server %s failed to start", server.name)
+			}
+		} else {
 			slog.Debug("Lazy-starting LSP server", "name", server.name, "ext", ext)
 			if err := server.Start(ctx); err != nil {
 				return nil, fmt.Errorf("start LSP server %s: %w", server.name, err)
