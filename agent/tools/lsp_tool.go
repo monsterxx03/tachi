@@ -10,8 +10,8 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
-// LSPToolName is the name exposed to the LLM.
-const LSPToolName = "LSP"
+// ToolNameLSP is the name exposed to the LLM.
+const ToolNameLSP = "LSP"
 
 // LSPDescription is the tool description shown to the LLM.
 // Key design: communicate WHY the LLM should use this instead of Grep/ReadFile.
@@ -52,7 +52,7 @@ func NewLSPTool(manager *lsp.LSPManager) *LSPTool {
 	return &LSPTool{manager: manager}
 }
 
-func (t *LSPTool) Name() string { return LSPToolName }
+func (t *LSPTool) Name() string { return ToolNameLSP }
 
 func (t *LSPTool) Description() string { return LSPDescription }
 
@@ -95,7 +95,7 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		Query     string `json:"query,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(args), &input); err != nil {
-		return lspMarshalError("LSP", fmt.Sprintf("invalid arguments: %v", err)), nil
+		return lspMarshalError(ToolNameLSP, fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 
 	// Resolve file path relative to working directory.

@@ -13,8 +13,8 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
-// LSPDiagnosticsToolName is the name exposed to the LLM.
-const LSPDiagnosticsToolName = "LSPDiagnostics"
+// ToolNameLSPDiagnostics is the name exposed to the LLM.
+const ToolNameLSPDiagnostics = "LSPDiagnostics"
 
 const lspDiagnosticsDescription = `Get diagnostic information (errors, warnings, hints) from LSP servers.
 
@@ -33,7 +33,7 @@ func NewLSPDiagnosticsTool(manager *lsp.LSPManager) *LSPDiagnosticsTool {
 	return &LSPDiagnosticsTool{manager: manager}
 }
 
-func (t *LSPDiagnosticsTool) Name() string { return LSPDiagnosticsToolName }
+func (t *LSPDiagnosticsTool) Name() string { return ToolNameLSPDiagnostics }
 
 func (t *LSPDiagnosticsTool) Description() string { return lspDiagnosticsDescription }
 
