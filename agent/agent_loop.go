@@ -456,6 +456,8 @@ func (a *AIAgent) handleToolCallFinish(
 				}
 			}
 		}
+		// Wait briefly for async diagnostics to arrive after file sync.
+		a.lspManager.WaitForDiagnostics(ctx, 2*time.Second)
 	}
 
 	// --- Steer Point: inject pending user input after tool results ---

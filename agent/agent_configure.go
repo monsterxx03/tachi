@@ -94,6 +94,11 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.lspManager = lsp.NewManager(lspCfg)
 		a.RegisterTool(tools.NewLSPTool(a.lspManager))
 		a.RegisterTool(tools.NewLSPDiagnosticsTool(a.lspManager))
+		// Inject LSP diagnostics after tool results so the LLM sees
+		// errors/warnings from recent edits without asking.
+		a.reminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
+			Provider: a.lspManager,
+		})
 		a.logger.Log("LSP: initialized with %d server(s)", len(lspCfg.Servers))
 	}
 

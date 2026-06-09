@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // LSPManager manages multiple LSP servers and routes requests by file extension.
@@ -135,13 +136,24 @@ func (m *LSPManager) SyncFile(ctx context.Context, filePath string) error {
 func (m *LSPManager) Shutdown(ctx context.Context) {
 	var wg sync.WaitGroup
 	for _, server := range m.servers {
-		wg.Add(1)
-		go func(s *LSPServer) {
-			defer wg.Done()
-			if err := s.Stop(ctx); err != nil {
-				slog.Warn("LSP server stop error", "name", s.name, "error", err)
+		wg.Go(func() {
+			if err := server.Stop(ctx); err != nil {
+				slog.Warn("LSP server stop error", "name", server.name, "error", err)
 			}
-		}(server)
+		})
+	}
+	wg.Wait()
+}
+
+// WaitForDiagnostics waits up to timeout for diagnostics to stabilize on
+// all servers. Call this after SyncFile to ensure fresh diagnostics are
+// available before the reminder collector runs.
+func (m *LSPManager) WaitForDiagnostics(ctx context.Context, timeout time.Duration) {
+	var wg sync.WaitGroup
+	for _, server := range m.servers {
+		wg.Go(func() {
+			server.WaitForDiagnostics(ctx, timeout)
+		})
 	}
 	wg.Wait()
 }
