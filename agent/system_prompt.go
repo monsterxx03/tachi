@@ -6,11 +6,13 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // BuildSystemPrompt constructs the Tachi system prompt with agent identity,
 // instruction hierarchy, reply language, and environment info.
-// If cwd is empty, os.Getwd() is used as fallback.
+// If cwd is empty, config.FindProjectRoot() is used as fallback.
 func BuildSystemPrompt(language string, cwd string) string {
 	var sb strings.Builder
 
@@ -70,9 +72,7 @@ YOU MUST:
 	sb.WriteString("## Environment\n\n")
 
 	if cwd == "" {
-		if wd, err := os.Getwd(); err == nil {
-			cwd = wd
-		}
+		cwd = config.FindProjectRoot()
 	}
 	fmt.Fprintf(&sb, "- Working directory: %s\n", cwd)
 

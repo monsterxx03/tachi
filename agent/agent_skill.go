@@ -2,11 +2,11 @@ package agent
 
 import (
 	"fmt"
-	"os"
 
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 )
 
 // SkillStore returns the agent's skill store, or nil if skills are not configured.
@@ -57,8 +57,7 @@ func (a *AIAgent) ReloadSkills() {
 // skill tools. The SkillListReminder is created on the first call and
 // reused thereafter — ReloadSkills calls SetProvider to update it.
 func (a *AIAgent) initSkills() {
-	wd, _ := os.Getwd()
-	a.skillStore = skill.NewStore(wd)
+	a.skillStore = skill.NewStore(config.FindProjectRoot())
 	a.skillStore.SetLogger(a.logger)
 	a.activeSkills = make(map[string]bool)
 	a.registerSkillTools()

@@ -219,10 +219,8 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Load MCP server config from JSON files (project-level overrides global).
-	if cwd, _ := os.Getwd(); cwd != "" {
-		if err := cfg.LoadMCPServers(cwd); err != nil {
-			return fmt.Errorf("failed to load MCP servers: %w", err)
-		}
+	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
+		return fmt.Errorf("failed to load MCP servers: %w", err)
 	}
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
@@ -352,10 +350,8 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Load MCP server config from JSON files.
-	if cwd, _ := os.Getwd(); cwd != "" {
-		if err := cfg.LoadMCPServers(cwd); err != nil {
-			return fmt.Errorf("failed to load MCP servers: %w", err)
-		}
+	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
+		return fmt.Errorf("failed to load MCP servers: %w", err)
 	}
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
@@ -525,10 +521,8 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Load MCP server config from JSON files.
-	if cwd, _ := os.Getwd(); cwd != "" {
-		if err := cfg.LoadMCPServers(cwd); err != nil {
-			return fmt.Errorf("failed to load MCP servers: %w", err)
-		}
+	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
+		return fmt.Errorf("failed to load MCP servers: %w", err)
 	}
 
 	mgr := channelmgr.New(channelmgr.Config{
@@ -595,10 +589,8 @@ func runACPAgent(ctx context.Context) error {
 	}
 
 	// Load MCP server config from JSON files.
-	if cwd, _ := os.Getwd(); cwd != "" {
-		if err := cfg.LoadMCPServers(cwd); err != nil {
-			return fmt.Errorf("failed to load MCP servers: %w", err)
-		}
+	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
+		return fmt.Errorf("failed to load MCP servers: %w", err)
 	}
 
 	fmt.Fprintf(os.Stderr, "tachi: ACP agent started (version %s)\n", Version)

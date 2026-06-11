@@ -3,7 +3,6 @@ package manager
 import (
 	"context"
 	"fmt"
-	"os"
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -198,10 +197,9 @@ type handlerResult struct {
 // New creates a Manager.
 // Channels are interactive — the iteration budget is always unlimited (0).
 func New(mcfg Config) *Manager {
-	wd, _ := os.Getwd()
 	skillStore := mcfg.SkillStore
 	if skillStore == nil {
-		skillStore = skill.NewStore(wd)
+		skillStore = skill.NewStore(config.FindProjectRoot())
 	}
 	return &Manager{
 		cfg:            mcfg.Cfg,
@@ -391,8 +389,7 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 	if sess == nil {
 		// No existing session → create a new one now. The agent will
 		// record the first message.
-		wd, _ := os.Getwd()
-		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, wd); err != nil {
+		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, config.FindProjectRoot()); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {

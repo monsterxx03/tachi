@@ -55,6 +55,31 @@ func BaseDir() string {
 	return filepath.Join(home, configDirName)
 }
 
+// FindProjectRoot walks up from the current working directory to find the
+// nearest git repository root (directory containing .git). If found, returns
+// that directory. Otherwise returns the current working directory as-is.
+// Returns "" if os.Getwd() fails.
+func FindProjectRoot() string {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	dir := cwd
+	for {
+		gitPath := filepath.Join(dir, ".git")
+		if _, err := os.Stat(gitPath); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			// Reached filesystem root — stop
+			break
+		}
+		dir = parent
+	}
+	return cwd
+}
+
 type ProviderConfig struct {
 	Name          string `yaml:"name"`
 	Type          string `yaml:"type"`
