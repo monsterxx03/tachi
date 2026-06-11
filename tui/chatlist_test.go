@@ -141,3 +141,59 @@ func TestScrollList_ScrollBy_DownAtBottomNoOp(t *testing.T) {
 		t.Errorf("scroll down at bottom should not change: before %q after %q", before, after)
 	}
 }
+
+func TestScrollList_BottomOffset_GapOverflow(t *testing.T) {
+	// 回归测试: 当 bottomOffset 计算的 lastLn 越过 item 内容行时，
+	// 最后一行会被 gap 挤掉。
+	// 2 个 item: [3行, 4行], gap=2, viewport=5
+	// 正确底部应完整显示 item1 的全部 4 行。
+	p := listFromLines("a\nb\nc", "d\ne\nf\ng")
+	l := NewScrollList(2)
+	l.SetHeight(5)
+	l.ScrollToBottom(p)
+
+	if !l.AtBottom(p) {
+		t.Error("AtBottom: want true after ScrollToBottom")
+	}
+
+	got := l.Render(p)
+	// 必须能看到 item1 的最后一行 "g"
+	lines := strings.Split(got, "\n")
+	lastNonEmpty := ""
+	for i := len(lines) - 1; i >= 0; i-- {
+		if lines[i] != "" {
+			lastNonEmpty = lines[i]
+			break
+		}
+	}
+	if lastNonEmpty != "g" {
+		t.Errorf("bottom render should show last line 'g', got lines: %q", lines)
+	}
+
+	// 确保 item1 的所有行都可见
+	rendered := got
+	for _, want := range []string{"d", "e", "f", "g"} {
+		if !strings.Contains(rendered, want) {
+			t.Errorf("bottom render missing %q, got: %q", want, got)
+		}
+	}
+}
+
+func TestScrollList_BottomOffset_GapOverflow_ScrollBy(t *testing.T) {
+	// 同样场景，但通过 ScrollBy 到底，确认行为一致。
+	p := listFromLines("a\nb\nc", "d\ne\nf\ng")
+	l := NewScrollList(2)
+	l.SetHeight(5)
+
+	// 向下滚动足够多行
+	l.ScrollBy(p, 100)
+
+	if !l.AtBottom(p) {
+		t.Error("AtBottom: want true after large ScrollBy")
+	}
+
+	got := l.Render(p)
+	if !strings.Contains(got, "g") {
+		t.Errorf("last line 'g' not visible after ScrollBy, got: %q", got)
+	}
+}

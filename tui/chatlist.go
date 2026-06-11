@@ -163,6 +163,14 @@ func (l *ScrollList) bottomOffset(p ListItemProvider) (atBottom bool, lastIdx in
 	lastIdx = max(idx, 0)
 	lastLn = max(totalHeight-l.height, 0)
 
+	// 归一化：lastLn 可能越过 item 内容行（包含了 gap 的部分），
+	// 需要推进到下一个 item，与 ScrollBy 的跨 item 逻辑保持一致。
+	for lastIdx < n-1 && lastLn >= p.ListItemHeight(lastIdx) {
+		lastLn -= p.ListItemHeight(lastIdx)
+		lastLn = max(0, lastLn-l.gap)
+		lastIdx++
+	}
+
 	atBottom = l.scrollOffIdx > lastIdx || (l.scrollOffIdx == lastIdx && l.scrollOffLn >= lastLn)
 	return atBottom, lastIdx, lastLn
 }
