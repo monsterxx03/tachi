@@ -359,8 +359,10 @@ func (a *AIAgent) RegisterTools() {
 
 		// WebFetch — always registered, no API key needed.
 		a.toolRegistry.Register(&tools.WebFetchTool{
-			Timeout: a.cfg.WebFetch.Timeout,
-			Proxy:   a.cfg.WebFetch.Proxy,
+			Timeout:        a.cfg.WebFetch.Timeout,
+			Proxy:          a.cfg.WebFetch.Proxy,
+			ResultBaseDir:  a.cfg.ToolResult.ResultFileDir(),
+			MaxReturnChars: a.cfg.ToolResult.MaxResultChars(),
 		})
 	}
 

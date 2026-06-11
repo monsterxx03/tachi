@@ -6,11 +6,14 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
 	md "github.com/JohannesKaufmann/html-to-markdown/v2"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
@@ -18,7 +21,6 @@ const (
 	webFetchMaxURLLength    = 2000
 	webFetchMaxRedirects    = 10
 	webFetchMaxContentBytes = 10 * 1024 * 1024 // 10MB
-	webFetchMaxReturnChars  = 100_000
 	webFetchCacheTTL        = 15 * time.Minute
 	webFetchMaxCacheSize    = 50 * 1024 * 1024 // 50MB
 	webFetchUserAgent       = "Tachi/1.0"
@@ -42,11 +44,13 @@ type webFetchOutput struct {
 }
 
 // WebFetchTool fetches a URL and returns its content as markdown.
-// HTML pages are automatically converted. It supports optional proxy
-// and caches responses for 15 minutes.
+// HTML pages are automatically converted. It supports optional proxy,
+// caches responses for 15 minutes, and saves oversized results to disk.
 type WebFetchTool struct {
-	Timeout time.Duration // HTTP request timeout (default 60s)
-	Proxy   string        // Optional proxy URL
+	Timeout        time.Duration // HTTP request timeout (default 60s)
+	Proxy          string        // Optional proxy URL
+	ResultBaseDir  string        // Directory for oversized result files (default: ~/.tachi/tool_results)
+	MaxReturnChars int           // Max chars returned to LLM; 0 = no limit
 
 	getClient func() *http.Client // lazily initialized via sync.OnceValue
 }
@@ -161,7 +165,18 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 
 	// Check cache.
 	if e, ok := webFetchCacheGet(u); ok {
-		out := buildWebFetchOutput(u, e, 0)
+		// The cache stores full content — apply truncation on hit too.
+		content := t.truncateWebFetchOutput(e.content, u)
+		if args.Prompt != "" {
+			content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
+		}
+		out := buildWebFetchOutput(u, webFetchCacheEntry{
+			content:     content,
+			contentType: e.contentType,
+			bytes:       e.bytes,
+			code:        e.code,
+			codeText:    e.codeText,
+		}, 0)
 		return marshalResult(out)
 	}
 
@@ -199,17 +214,7 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 		return "", err
 	}
 
-	// Truncate for token budget.
-	if len(content) > webFetchMaxReturnChars {
-		content = content[:webFetchMaxReturnChars] + "\n\n[Content truncated due to length...]"
-	}
-
-	// Prepend prompt if given.
-	if args.Prompt != "" {
-		content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
-	}
-
-	// Populate cache (only for successful or non-redirect responses).
+	// Cache the full markdown content (before prompt / truncation).
 	webFetchCacheSet(u, webFetchCacheEntry{
 		content:     content,
 		contentType: contentType,
@@ -219,6 +224,14 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 		storedAt:    time.Now(),
 		size:        len(content),
 	})
+
+	// Apply file-based truncation if content exceeds the limit.
+	content = t.truncateWebFetchOutput(content, u)
+
+	// Prepend prompt if given.
+	if args.Prompt != "" {
+		content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
+	}
 
 	out := buildWebFetchOutput(u, webFetchCacheEntry{
 		content:     content,
@@ -435,4 +448,99 @@ func crossHostRedirectOutput(originalURL string, resp *http.Response) webFetchOu
 			originalURL, loc, resp.StatusCode, codeText, loc,
 		),
 	}
+}
+
+// ---------------------------------------------------------------------------
+// File-based truncation for oversized WebFetch results
+// ---------------------------------------------------------------------------
+
+// truncateWebFetchOutput checks if the fetched content exceeds
+// MaxReturnChars and, if so, saves the full output to disk and
+// returns a compact message with the file path so the LLM can read more
+// via ReadFile — no preview content is included to avoid context bloat.
+//
+// When MaxReturnChars <= 0, the result is returned unchanged (no limit).
+// When ResultBaseDir is empty, falls back to a simple inline truncation.
+func (t *WebFetchTool) truncateWebFetchOutput(content string, rawURL string) string {
+	maxChars := t.MaxReturnChars
+	if maxChars <= 0 || len(content) <= maxChars {
+		return content
+	}
+
+	// Fall back to simple truncation when no storage directory is configured.
+	if t.ResultBaseDir == "" {
+		return hardTruncateWebFetch(content, maxChars)
+	}
+
+	// Generate a deterministic filename based on URL + timestamp.
+	safeName := sanitizeURLForFilename(rawURL)
+	filename := fmt.Sprintf("webfetch_%s_%d.txt", safeName, time.Now().UnixNano())
+	filepath := filepath.Join(t.ResultBaseDir, filename)
+
+	// Ensure the directory exists.
+	if err := os.MkdirAll(t.ResultBaseDir, 0700); err != nil {
+		debuglog.DefaultLogger.Log("WebFetch: truncateWebFetchOutput: failed to create dir %s: %v", t.ResultBaseDir, err)
+		return hardTruncateWebFetch(content, maxChars)
+	}
+
+	// Write the full result to disk.
+	if err := os.WriteFile(filepath, []byte(content), 0600); err != nil {
+		debuglog.DefaultLogger.Log("WebFetch: truncateWebFetchOutput: failed to write file %s: %v", filepath, err)
+		return hardTruncateWebFetch(content, maxChars)
+	}
+
+	debuglog.DefaultLogger.Log("WebFetch: result too large (%d chars), saved to %s", len(content), filepath)
+
+	var sb strings.Builder
+	sb.WriteString(fmt.Sprintf(
+		"[WEBFETCH OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
+		len(content), maxChars,
+	))
+	sb.WriteString(fmt.Sprintf(
+		"Use ReadFile to read the full output from:\n  %s",
+		filepath,
+	))
+	return sb.String()
+}
+
+// hardTruncateWebFetch performs a simple truncation without file persistence.
+// Used as fallback when ResultBaseDir is empty or file I/O fails.
+func hardTruncateWebFetch(content string, maxChars int) string {
+	truncated := content[:maxChars]
+	return fmt.Sprintf(
+		"[WEBFETCH OUTPUT TRUNCATED at %d chars]\n%s\n...\n[... %d chars truncated. "+
+			"Use a more specific URL or prompt to narrow the response.]",
+		maxChars, truncated, len(content)-maxChars,
+	)
+}
+
+// sanitizeURLForFilename extracts a safe filename component from a URL.
+// Uses the hostname + a simple hash of the path to keep filenames readable.
+func sanitizeURLForFilename(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "unknown"
+	}
+
+	// Use hostname as the readable prefix.
+	host := strings.NewReplacer(
+		".", "_",
+		":", "_",
+		"/", "_",
+		"\\", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+		" ", "_",
+	).Replace(parsed.Hostname())
+
+	// Truncate hostname to avoid overly long filenames.
+	if len(host) > 40 {
+		host = host[:40]
+	}
+
+	return host
 }

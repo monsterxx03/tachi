@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -169,6 +171,188 @@ func TestWebFetchTool_Cache(t *testing.T) {
 	}
 	if callCount != 1 {
 		t.Errorf("expected cache hit (1 server call), got %d", callCount)
+	}
+}
+
+func TestWebFetchTool_Truncation_SmallContent(t *testing.T) {
+	webFetchCacheMu.Lock()
+	webFetchCacheStore = make(map[string]webFetchCacheEntry)
+	webFetchCacheSize = 0
+	webFetchCacheMu.Unlock()
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("short content"))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	tool := &WebFetchTool{ResultBaseDir: tmpDir}
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var out webFetchOutput
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	// Small content should pass through unchanged.
+	if out.Content != "short content" {
+		t.Errorf("expected 'short content', got %q", out.Content)
+	}
+}
+
+func TestWebFetchTool_Truncation_LargeContent_FilePersistence(t *testing.T) {
+	webFetchCacheMu.Lock()
+	webFetchCacheStore = make(map[string]webFetchCacheEntry)
+	webFetchCacheSize = 0
+	webFetchCacheMu.Unlock()
+
+	const testMaxChars = 5000
+	// Generate content that exceeds testMaxChars.
+	largeContent := strings.Repeat("abcdefghij", testMaxChars/10+1) // > 5000 chars
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(largeContent))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	tool := &WebFetchTool{ResultBaseDir: tmpDir, MaxReturnChars: testMaxChars}
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var out webFetchOutput
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	// Should contain the truncation marker and file path — but NOT preview content.
+	if !strings.Contains(out.Content, "[WEBFETCH OUTPUT TOO LARGE]") {
+		t.Error("output should contain [WEBFETCH OUTPUT TOO LARGE] marker")
+	}
+	if !strings.Contains(out.Content, "Use ReadFile") {
+		t.Error("output should contain ReadFile instruction")
+	}
+	if !strings.Contains(out.Content, tmpDir) {
+		t.Error("output should contain the file directory path")
+	}
+
+	// Verify a file was created.
+	files, err := filepath.Glob(filepath.Join(tmpDir, "webfetch_*.txt"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("expected 1 persisted file, got %d", len(files))
+	}
+
+	// Verify file content matches the original.
+	data, err := os.ReadFile(files[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(data) != largeContent {
+		t.Errorf("file content mismatch: got %d chars, want %d", len(data), len(largeContent))
+	}
+}
+
+func TestWebFetchTool_Truncation_FallbackOnEmptyDir(t *testing.T) {
+	webFetchCacheMu.Lock()
+	webFetchCacheStore = make(map[string]webFetchCacheEntry)
+	webFetchCacheSize = 0
+	webFetchCacheMu.Unlock()
+
+	const testMaxChars = 5000
+	largeContent := strings.Repeat("x", testMaxChars+1000)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(largeContent))
+	}))
+	defer srv.Close()
+
+	// Empty ResultBaseDir → should fall back to hard truncation.
+	tool := &WebFetchTool{ResultBaseDir: "", MaxReturnChars: testMaxChars}
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var out webFetchOutput
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if !strings.Contains(out.Content, "[WEBFETCH OUTPUT TRUNCATED") {
+		t.Error("fallback should use [WEBFETCH OUTPUT TRUNCATED] marker")
+	}
+	if len(out.Content) < testMaxChars {
+		t.Errorf("truncated content should be at least %d chars, got %d", testMaxChars, len(out.Content))
+	}
+}
+
+func TestWebFetchTool_CacheWithTruncation(t *testing.T) {
+	webFetchCacheMu.Lock()
+	webFetchCacheStore = make(map[string]webFetchCacheEntry)
+	webFetchCacheSize = 0
+	webFetchCacheMu.Unlock()
+
+	const testMaxChars = 5000
+	largeContent := strings.Repeat("abcdefghij", testMaxChars/10+1)
+
+	callCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		callCount++
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte(largeContent))
+	}))
+	defer srv.Close()
+
+	tmpDir := t.TempDir()
+	tool := &WebFetchTool{ResultBaseDir: tmpDir, MaxReturnChars: testMaxChars}
+
+	// First call — should hit server, save to file, return compact message.
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
+	if err != nil {
+		t.Fatalf("first call: %v", err)
+	}
+	if callCount != 1 {
+		t.Fatalf("expected 1 server call, got %d", callCount)
+	}
+
+	var out webFetchOutput
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if !strings.Contains(out.Content, "[WEBFETCH OUTPUT TOO LARGE]") {
+		t.Error("first call should trigger truncation")
+	}
+
+	// Second call with different prompt — should hit cache, still return compact message with correct prompt.
+	result2, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`", "prompt": "extract key points"}`)
+	if err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+	if callCount != 1 {
+		t.Errorf("expected cache hit (1 server call), got %d", callCount)
+	}
+
+	var out2 webFetchOutput
+	if err := json.Unmarshal([]byte(result2), &out2); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	// Should contain the prompt marker AND the truncation marker.
+	if !strings.Contains(out2.Content, "[WebFetch 提取指令: extract key points]") {
+		t.Error("second call should include the new prompt")
+	}
+	if !strings.Contains(out2.Content, "[WEBFETCH OUTPUT TOO LARGE]") {
+		t.Error("second call should also trigger truncation")
 	}
 }
 
