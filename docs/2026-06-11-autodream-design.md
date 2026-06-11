@@ -1,6 +1,6 @@
 # AutoDream — 会话记忆整合系统
 
-> 版本: 1.0 | 日期: 2026-06-11 | 状态: 设计阶段
+> 版本: 1.1 | 日期: 2026-06-11 | 状态: 设计阶段
 > 关联: [可插拔 Memory Backend](./2026-05-17-memory.md),
 >       [自动压缩设计](./2026-05-30-auto-compact-design.md),
 >       [Native Memory v1](./2026-05-16-native-memory.md),
@@ -9,6 +9,8 @@
 ---
 
 ## 一、动机
+
+> **Changelog**: v1.0 → v1.1（基于 code review 修正了锁机制、权限、集成策略等）
 
 ### 1.1 现有记忆机制的缺口
 
@@ -105,12 +107,30 @@ Anthropic 在 2026 年 3 月的 Claude Code 源码泄漏中暴露了一个名为
 | 谁看到 | 只有在该项目下启动的 session | 所有 session |
 | 隔离方式 | 按 git root 天然隔离 | 全局共享 |
 
-**判断规则**：
+**判断规则**（复用已有的 `config.FindProjectRoot()`，但需改造为接受参数的形式，因为 session 的 WorkingDir 可能与当前目录不同）：
 
 ```go
+// FindGitRoot returns the git repository root for the given directory.
+// Returns empty string if dir is not inside a git repository.
+// TODO: move to config/ package alongside FindProjectRoot().
+func FindGitRoot(dir string) string {
+    if dir == "" {
+        return ""
+    }
+    out, err := exec.Command("git", "-C", dir, "rev-parse", "--show-toplevel").Output()
+    if err != nil {
+        return ""
+    }
+    return strings.TrimSpace(string(out))
+}
+
 // 确定一条新事实应该写入哪个 memory 域
 func resolveMemoryDomain(sessionDir, sessionWorkingDir string) (domain string, memoryRoot string) {
-    projRoot := findGitRoot(sessionWorkingDir)
+    workingDir := sessionWorkingDir
+    if workingDir == "" {
+        workingDir = sessionDir // fallback: 用 session 存储目录
+    }
+    projRoot := FindGitRoot(workingDir)
     if projRoot != "" {
         // 在 git 仓库内 → 项目记忆
         return "project", filepath.Join(projRoot, ".tachi", "memory")
@@ -122,9 +142,12 @@ func resolveMemoryDomain(sessionDir, sessionWorkingDir string) (domain string, m
 // 搜索时同时搜两个域
 func searchAllMemoryDomains(query string, limit int) []string {
     // 1. 搜项目记忆（如果有当前项目）
-    if projRoot := findGitRoot(config.CWD()); projRoot != "" {
-        results := searchTopics(filepath.Join(projRoot, ".tachi", "memory", "topics"), query)
-        // ...
+    cwd, err := os.Getwd()
+    if err == nil {
+        if projRoot := FindGitRoot(cwd); projRoot != "" {
+            results := searchTopics(filepath.Join(projRoot, ".tachi", "memory", "topics"), query)
+            // ...
+        }
     }
     // 2. 搜全局记忆
     results := searchTopics(filepath.Join(config.BaseDir(), "memory", "topics"), query)
@@ -199,7 +222,7 @@ type Session struct {
 }
 ```
 
-Dream 在 Orient 阶段通过读取每个 session 的 `meta.json`，按 `WorkingDir` 分组：
+Dream 在 Orient 阶段通过读取每个 session 的 `meta.json`，按 `WorkingDir` 分组。注意处理 WorkingDir 为空的情况（旧 session 或未设置）：
 
 ```go
 type SessionGroup struct {
@@ -209,11 +232,15 @@ type SessionGroup struct {
     Sessions []Session         // 该组下的 session 列表
 }
 
-func groupSessionsByDomain(sessions []Session) []SessionGroup {
+func groupSessionsByDomain(sessions []Session, sessionDir string) []SessionGroup {
     groups := make(map[string]*SessionGroup)
     
     for _, s := range sessions {
-        projRoot := findGitRoot(s.WorkingDir)
+        workingDir := s.WorkingDir
+        if workingDir == "" {
+            workingDir = sessionDir // fallback: 用 session 存储目录
+        }
+        projRoot := FindGitRoot(workingDir)
         
         var key string
         var group *SessionGroup
@@ -424,33 +451,62 @@ func planDreams(sessions []session.Session, cfg *config.Config) []DreamPlan {
 
 ### 4.3 锁机制
 
+使用 `O_EXCL` 原子创建锁文件，避免 TOCTOU 竞态。同时检查 PID 存活性，加速过期锁回收：
+
 ```go
-func acquireDreamLock() (bool, error) {
+func acquireDreamLock(memoryDir string) (bool, error) {
     lockPath := filepath.Join(memoryDir, "dream.lock")
     
-    // 检查是否已有锁
-    data, err := os.ReadFile(lockPath)
+    // 尝试原子创建锁文件
+    f, err := os.OpenFile(lockPath, os.O_RDWR|os.O_CREATE|os.O_EXCL, 0644)
     if err == nil {
-        // 解析锁信息
-        parts := strings.SplitN(string(data), ":", 2)
-        if len(parts) == 2 {
-            timestamp, _ := time.Parse(time.RFC3339, parts[1])
-            if time.Since(timestamp) < 5*time.Minute {
-                return false, nil // 锁还在有效期内
-            }
-            // 锁已过期，视为上次异常退出
-        }
+        // 成功获取锁
+        defer f.Close()
+        fmt.Fprintf(f, "%d:%s", os.Getpid(), time.Now().Format(time.RFC3339))
+        return true, nil
     }
     
-    // 写入新锁
-    content := fmt.Sprintf("%d:%s", os.Getpid(), time.Now().Format(time.RFC3339))
-    if err := os.WriteFile(lockPath, []byte(content), 0644); err != nil {
-        return false, fmt.Errorf("write dream lock: %w", err)
+    if !errors.Is(err, os.ErrExist) {
+        return false, fmt.Errorf("acquire dream lock: %w", err)
     }
-    return true, nil
+    
+    // 锁文件已存在 — 检查是否过期
+    data, err := os.ReadFile(lockPath)
+    if err != nil {
+        // 文件刚被删了？重试一次
+        return acquireDreamLock(memoryDir)
+    }
+    
+    parts := strings.SplitN(strings.TrimSpace(string(data)), ":", 2)
+    if len(parts) != 2 {
+        // 格式损坏，接管
+        os.Remove(lockPath)
+        return acquireDreamLock(memoryDir)
+    }
+    
+    pid, pidErr := strconv.Atoi(parts[0])
+    timestamp, timeErr := time.Parse(time.RFC3339, parts[1])
+    
+    if pidErr == nil {
+        // PID 存活性检查 — 如果进程还活着，锁有效
+        proc, err := os.FindProcess(pid)
+        if err == nil && proc.Signal(os.Signal(syscall.Signal(0))) == nil {
+            return false, nil // 进程还在运行
+        }
+        // PID 已死，锁过期
+    }
+    
+    if timeErr == nil && time.Since(timestamp) < 5*time.Minute {
+        // 时间戳仍然在有效期内，但 PID 已死 → 视为过期
+        // 双重保障：超时 + PID 检查
+    }
+    
+    // 锁过期，清理后重试
+    os.Remove(lockPath)
+    return acquireDreamLock(memoryDir)
 }
 
-func releaseDreamLock() {
+func releaseDreamLock(memoryDir string) {
     os.Remove(filepath.Join(memoryDir, "dream.lock"))
 }
 ```
@@ -462,10 +518,17 @@ func releaseDreamLock() {
 Dream 的核心执行体是一个 **SubAgent**（复用已有的 SubAgent 机制）。给它限制只允许访问以下工具：
 
 ```
-allowed_tools: [ReadFile, Grep, Glob, Bash, WriteFile]
+allowed_tools: [ReadFile, Grep, Glob, WriteFile]
 ```
 
+> **为什么没有 Bash？** 安全性考虑——即使 working directory 被限制，Bash 仍可通过绝对路径读取系统敏感文件（`/etc/passwd`、`~/.ssh/id_rsa` 等）。Grep + Glob + ReadFile 的组合已经能覆盖 Gather 阶段的所有需求。如果确实需要 `wc -l`、`date` 等元操作，可考虑后续创建受限的 `DreamBash` 工具（白名单命令模式）。
+
 这样 dream subagent 只能读 session 目录和写 memory 目录，不能执行任意命令或修改项目文件。
+
+此外，Dream 在 Consolidate 阶段还应将新发现的事实**同步写入现有的 memory backend**（通过 `Backend.Store` + `DirectContent`），而不仅仅是 topic files。这样：
+- 自动召回（MemoryRecallReminder）能立即看到新知识
+- 显式工具调用（MemoryRecall）能搜到更丰富的 topic file 上下文
+- 两个读取路径都覆盖到了
 
 ### 5.1 Phase 1: Orient（定向）
 
@@ -614,15 +677,19 @@ allowed_tools: [ReadFile, Grep, Glob, Bash, WriteFile]
 步骤：
 1. 检查 index.md 行数是否超过 200 行
 2. 如果超过：
-   a. 合并相似条目
-   b. 删除标记为 superseded 超过 30 天的事实
-   c. 压缩过长的 topic file（摘要化，保留关键信息）
+   a. 删除标记为 superseded 超过 30 天的事实
+   b. 合并少于 3 个事实的"稀疏 topic"到 misc.md
+   c. 合并语义相似的条目（LLM 自行判断）
+   d. 如果单个 topic file 超过 50 个事实，生成一个 10-15 行的摘要
+      放在文件顶部（旧内容归档为 <topic>.backup.md）
+   e. 对长期未被 MemoryRecall 访问过的 topic 降低排序优先级
 3. 更新 index.md：
    a. 反映新增的 topic
-   b. 更新每个 topic 的事实计数
+   b. 更新每个 topic 的事实计数（含 active/superseded 统计）
    c. 保持在 200 行以内
-4. 写入 last_dream.json（更新状态）
-5. 删除 dream.lock
+4. 将新提取的事实同步写入 memory backend（Backend.Store + DirectContent）
+5. 写入 last_dream.json（更新状态）
+6. 删除 dream.lock
 ```
 
 **裁剪策略不是硬删除**：
@@ -644,15 +711,28 @@ allowed_tools: [ReadFile, Grep, Glob, Bash, WriteFile]
                                                      ┌─────────────────┐
                                                      │  Fast Recall     │
                                                      │  (每次用户消息)    │
-                                                     └─────────────────┘
-┌──────────────┐      cron/dream 写入
-│  Dream        │ ──────────────────────────────►  memory/topics/*.md
-│  (每日后台)    │                                      (结构化 Markdown)
-└──────────────┘
+                                                     └────────┬────────┘
+                                                              │
+                                                              ▼
+┌──────────────┐      cron/dream 写入                    ┌─────────────────┐
+│  Dream        │ ──────────────────────►  memory/topics/*.md                │
+│  (每日后台)    │      │                                      (结构化 Markdown)  │
+│               │      │                                     └─────────────────┘
+│               │      │                                              ▲
+│               │      ▼                                              │
+│               │ ──────────────────────►  memory backend              │
+│               │      (Backend.Store + DirectContent)                 │
+└──────────────┘                                                     │
                                                      ┌─────────────────┐
                                                      │  Deep Recall     │
-                                                     │  (MemoryRecall    │
+                                                     │  (MemoryRecall   │
                                                      │   tool 触发)      │
+                                                     └────────┬────────┘
+                                                              │
+                                                              ▼
+                                                     ┌─────────────────┐
+                                                     │  topic files +  │
+                                                     │  backend (合并)  │
                                                      └─────────────────┘
 ```
 
@@ -667,25 +747,43 @@ allowed_tools: [ReadFile, Grep, Glob, Bash, WriteFile]
 | 一致性 | 写时即一致 | 可能有滞后（每日更新） |
 | 使用方式 | 自动 Recall，每次用户消息 | 工具触发 Recall（MemoryRecall tool） |
 
-### 6.2 MemoryRecall tool 的增强（双域搜索）
+### 6.2 MemoryRecall 的增强——自动召回也搜 topic files
 
-现有的 `MemoryRecallTool`（`agent/tools/memory_recall.go`）在 Recall 时需要同时搜索所有相关记忆域：
+现有的 `MemoryRecallReminder`（`agent/systemreminder/memory_reminder.go`）每轮对话自动召回 backend 记忆。增强后，它也应同时 grep topic files：
 
 ```go
-func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-    // 1. 从 backend 搜索（mem9/agentmemory 的语义搜索）
-    backendResults, _ := t.backend.Recall(ctx, query, limit)
+func (r *MemoryRecallReminder) Generate(ctx Context) []string {
+    if r.Backend == nil || ctx.IsToolResult || ctx.SkipRecall {
+        return nil
+    }
+    if ctx.CurrentPrompt == "" {
+        return nil
+    }
     
-    // 2. 从 dream topics 搜索（grep 本地 Markdown）
-    //    同时搜全局 + 当前项目
-    topicResults := searchAllMemoryDomains(query, limit)
+    limit := r.Limit
+    if limit <= 0 { limit = 5 }
+    recallTimeout := r.Timeout
+    if recallTimeout <= 0 { recallTimeout = 3 * time.Second }
     
-    // 3. 合并结果
-    return mergeResults(backendResults, topicResults)
+    // 1. 从 backend 搜索（语义搜索，有超时）
+    recallCtx, cancel := context.WithTimeout(context.Background(), recallTimeout)
+    defer cancel()
+    backendEntries, _ := r.Backend.Recall(recallCtx, ctx.CurrentPrompt, limit)
+    
+    // 2. 从 topic files 搜索（grep，毫秒级，无额外成本）
+    topicResults := searchAllMemoryDomains(ctx.CurrentPrompt, limit)
+    
+    // 3. 合并结果：topic 优先（提炼过的知识），backend 补充
+    entries := mergeResults(backendEntries, topicResults, limit)
+    if len(entries) == 0 {
+        return nil
+    }
+    
+    // ... 格式化为 <relevant-memories> 块
 }
 ```
 
-`searchAllMemoryDomains` 的实现——始终搜全局，有条件地搜项目：
+`searchAllMemoryDomains` 的实现——始终搜全局，有条件地搜项目。增加了错误日志便于调试：
 
 ```go
 func searchAllMemoryDomains(query string, limit int) []string {
@@ -693,14 +791,22 @@ func searchAllMemoryDomains(query string, limit int) []string {
     
     // 1. 始终搜全局记忆
     globalTopics := filepath.Join(config.BaseDir(), "memory", "topics")
-    results = append(results, searchTopics(globalTopics, query)...)
+    r, err := searchTopics(globalTopics, query)
+    if err != nil {
+        debuglog.DefaultLogger.Log("DreamTopics: global search failed: %v", err)
+    } else {
+        results = append(results, r...)
+    }
     
     // 2. 如果有当前项目，也搜项目记忆
     if cwd, err := os.Getwd(); err == nil {
-        if projRoot := findGitRoot(cwd); projRoot != "" {
+        if projRoot := FindGitRoot(cwd); projRoot != "" {
             projTopics := filepath.Join(projRoot, ".tachi", "memory", "topics")
-            if _, err := os.Stat(projTopics); err == nil {
-                results = append(results, searchTopics(projTopics, query)...)
+            r, err := searchTopics(projTopics, query)
+            if err != nil {
+                debuglog.DefaultLogger.Log("DreamTopics: project search failed: %v", err)
+            } else {
+                results = append(results, r...)
             }
         }
     }
@@ -708,31 +814,53 @@ func searchAllMemoryDomains(query string, limit int) []string {
     return results
 }
 
-func searchTopics(topicsDir, query string) []string {
+func searchTopics(topicsDir, query string) ([]string, error) {
+    if _, err := os.Stat(topicsDir); os.IsNotExist(err) {
+        return nil, nil // 目录不存在不是错误
+    }
+    
     cmd := exec.Command("rg", "-l", "-i", query, topicsDir)
-    out, _ := cmd.Output()
+    out, err := cmd.Output()
+    if err != nil {
+        if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+            return nil, nil // rg 返回码 1 = 没有匹配，不是错误
+        }
+        return nil, fmt.Errorf("rg search failed: %w", err)
+    }
+    
     files := strings.Split(strings.TrimSpace(string(out)), "\n")
     if len(files) == 0 || (len(files) == 1 && files[0] == "") {
-        return nil
+        return nil, nil
     }
     
     var results []string
     for _, f := range files {
         cmd = exec.Command("rg", "-C", "3", "-i", query, f)
-        out, _ = cmd.Output()
-        if len(out) > 0 {
+        out, err = cmd.Output()
+        if err == nil && len(out) > 0 {
             results = append(results, string(out))
         }
     }
-    return results
+    return results, nil
 }
 ```
 
-> **为什么搜全局也搜项目？** 全局记忆包含用户偏好（"喜欢用 tabs 而不是 spaces"）——这些信息在任何项目下都有用。项目记忆只在该项目下有用。两个源互补，不重叠。
+**merge 策略**（同时用于 MemoryRecall tool 和 MemoryRecallReminder）：
 
-### 6.3 SystemReminder（可选，双域感知）
+```
+1. backend 搜索得 N 条，topic 搜索得 M 条
+2. 去重：相同 session ID + 相同摘要内容只保留一次（保留 topic 版本，因为更精炼）
+3. 排序：topic 结果优先于 backend 结果
+4. 截断：总共不超过 limit 条
+   - 如果 N+M ≤ limit，全部展示
+   - 如果 N+M > limit，topic 结果全保留，backend 结果按 score 截断
+```
 
-可以在 session 开始时，注入**当前域**的 index.md 前几行作为轻量级"线索"：
+> **为什么自动召回也要搜 topic files？** 虽然 `searchTopics` 额外调用了一次 `rg`，但本地 `rg` 是毫秒级的（即使搜数千行 Markdown）。相比 `Backend.Recall()` 的 HTTP 网络延迟（通常 50-500ms），这个额外成本几乎可以忽略不计。但它带来的收益显著——Dream 提炼的知识在主对话中自动可见，不需要 LLM 主动调用 MemoryRecall tool。
+
+### 6.3 SystemReminder——二级补充（默认关闭）
+
+在自动召回（MemoryRecallReminder）增强为也搜 topic files 后，DreamReminder 的作用降为**二级补充**。它可以在 session 开始时，注入**当前域**的 index.md 前几行作为轻量级"线索"预览：
 
 ```go
 // agent/systemreminder/dream_reminder.go
@@ -782,7 +910,8 @@ func (r *DreamReminder) Generate(ctx Context) []string {
 }
 ```
 
-> **注意**：这个 reminder 是**可选的**。默认关闭。因为：
+> **注意**：这个 reminder 是**可选的**，**默认关闭**。因为：
+> - 自动召回已经能搜到 topic files，DreamReminder 提供的额外价值有限
 > - 注入任何额外内容都会占用上下文 token
 > - 如果项目上下文很复杂，前 10 行 index 可能反而是噪音
 > - Agent 可以在需要时主动调用 MemoryRecall tool，不依赖自动注入
@@ -838,14 +967,18 @@ func setupAutoDream(scheduler *cron.Scheduler, cfg *config.Config) {
 
 Dream subagent 只被授予有限的工具：
 
-```go
-allowed_tools: ["ReadFile", "Grep", "Glob", "Bash", "WriteFile"]
+```
+allowed_tools: ["ReadFile", "Grep", "Glob", "WriteFile"]
 ```
 
 - **无 SubAgent 工具** → 不能递归 fork
 - **无 Cron 工具** → 不能自注册 cron job
 - **无 EditFile 工具** → 不能修改项目文件
-- **Bash 只读限制** → 实际上 dream subagent 的 Bash 执行的 working directory 是 `~/.tachi/`，无法访问项目文件
+- **无 Bash 工具** → 不能通过绝对路径读取系统敏感文件
+
+这样 dream subagent 只能读 session 目录和写 memory 目录，不能执行任意命令或修改项目文件。
+
+Grep + Glob + ReadFile 的组合已足以覆盖 Gather 阶段的所有需求（关键词搜索、文件名匹配、文件内容读取）。如需 `wc -l`、`date` 等元操作，后续可创建白名单式的受限 Bash。
 
 ### 7.2 写入范围限制（双域）
 
@@ -870,7 +1003,12 @@ func validateDreamWritePath(path string, allowedDomains []string) error {
 
 ### 7.3 锁超时
 
-如果 dream 异常退出（SIGKILL、OOM、断电），锁文件不会被清理。重启后的下次 dream 会检测到过期锁（>5min）并接管。
+如果 dream 异常退出（SIGKILL、OOM、断电），锁文件不会被清理。重启后的下次 dream 会检测到过期锁并接管。
+
+检测策略（详见第 4.3 节）：
+1. **PID 存活性检查**：`os.FindProcess(pid)` + `proc.Signal(syscall.Signal(0))`，判断持有锁的进程是否还在运行
+2. **时间戳超时**：>5 分钟视为过期（双重保障，避免 PID 被回收后分配给新进程的极端情况）
+3. 两者任一满足即视为可接管
 
 ---
 
@@ -888,24 +1026,27 @@ func validateDreamWritePath(path string, allowedDomains []string) error {
 | Cron job 注册 | `main.go` | ~15 |
 | **小计** | | **~145** |
 
-### Phase 2：Dream SubAgent（P1）
+### Phase 2：Dream SubAgent + Backend 写入（P1）
 
 | 任务 | 文件 | 预估行数 |
 |------|------|---------|
 | Dream prompt 构建（Orient + Gather 指令） | `cron/auto_dream.go` | ~50 |
 | Pipeline 编排（Orient→Gather→Consolidate→Prune） | `cron/auto_dream.go` | ~60 |
 | WriteFile 路径安全限制 | `agent/tools/write.go` | ~15 |
+| Dream 结果写入 backend（Backend.Store + DirectContent） | `cron/auto_dream.go` | ~20 |
 | 超时处理 + 锁清理 | `cron/auto_dream.go` | ~20 |
-| **小计** | | **~145** |
+| **小计** | | **~165** |
 
 ### Phase 3：集成（P1）
 
 | 任务 | 文件 | 预估行数 |
 |------|------|---------|
-| MemoryRecall tool 增强（同时搜 topic files） | `agent/tools/memory_recall.go` | ~25 |
-| `searchDreamTopics()` 实现 | `agent/memory/topic_search.go` | ~35 |
-| DreamReminder（可选） | `agent/systemreminder/dream_reminder.go` | ~35 |
-| **小计** | | **~95** |
+| MemoryRecallReminder 增强（自动召回也搜 topic files + merge 策略） | `agent/systemreminder/memory_reminder.go` | ~30 |
+| MemoryRecall tool 增强（同样搜 topic files） | `agent/tools/memory_recall.go` | ~15 |
+| `searchDreamTopics()` 实现（含错误处理） | `agent/memory/topic_search.go` | ~45 |
+| `skip_dream` 字段在 meta.json 中的支持 | `session/session.go`, `cron/auto_dream.go` | ~15 |
+| DreamReminder（可选，二级补充） | `agent/systemreminder/dream_reminder.go` | ~35 |
+| **小计** | | **~140** |
 
 ### Phase 4：Idle 触发 + 完善（P2）
 
@@ -918,7 +1059,7 @@ func validateDreamWritePath(path string, allowedDomains []string) error {
 | 测试：lock 竞争测试 | `cron/auto_dream_test.go` | ~30 |
 | **小计** | | **~155** |
 
-### 总计：约 540 行
+### 总计：约 605 行
 
 ---
 
@@ -926,20 +1067,21 @@ func validateDreamWritePath(path string, allowedDomains []string) error {
 
 | 维度 | Claude Code autoDream | Tachi AutoDream（本方案） |
 |------|----------------------|-------------------------|
-| 执行体 | Fork 子 agent（read-only bash） | **SubAgent**（复用已有机制） |
-| 触发 | idle 检测 + session 数 | **Cron Scheduler** + 可选的 idle 触发 |
-| 存储 | `MEMORY.md` + topic files | **Markdown topic files** + 现有 Backend（mem9/agentmemory） |
+| 执行体 | Fork 子 agent（read-only bash） | **SubAgent**（Grep + Glob + ReadFile，安全性更高） |
+| 触发 | idle 检测 + session 数 | **Cron Scheduler** + 可选的 idle 触发 + `tachi dream` CLI |
+| 存储 | `MEMORY.md` + topic files | **Markdown topic files** + **Backend**（同时写入双存储） |
 | 索引 | `MEMORY.md`（纯指针，≤200 行） | `index.md`（纯指针，≤200 行） |
 | 搜索 | Grep on JSONL transcripts | Grep on `session/<id>/messages.jsonl` |
-| 记忆使用 | 写入 `MEMORY.md` 后被主 agent 自动读取 | 通过 **MemoryRecall tool** 按需搜索 |
-| 记忆定位 | 永久在上下文中（hint） | 按需搜索（不在上下文中） |
+| 记忆使用 | 写入 `MEMORY.md` 后被主 agent 自动读取 | **自动召回（MemoryRecallReminder）**搜 backend + topic files + 显式 MemoryRecall 工具 |
+| 记忆定位 | 永久在上下文中（hint） | 自动召回时注入 `<relevant-memories>`，不在上下文中常驻 |
 | 回滚机制 | 无显式回滚 | Superseded 状态保留 30 天 |
-| 锁机制 | 未公开 | `dream.lock` 文件 + 超时检测 |
+| 锁机制 | 未公开 | `O_EXCL` 原子锁 + PID 存活性检查 + 时间戳超时 |
 | 守护进程 | 内置在 Claude Code 中 | **零守护进程**——纯 cron job + SubAgent |
 
-**最大的设计差异**：Claude Code 把 `MEMORY.md` 作为常驻上下文的索引，每次用户请求都能看到。Tachi 的设计更保守——topic files 不占上下文 window，agent 需要主动用 `MemoryRecall` 去搜索。这是刻意为之，因为：
-- Tachi 的上下文 window 已经包含 system prompt、工具描述、活跃项目上下文
-- 对于已经准确的记忆检索，Lazy 加载比主动注入更节省 token
+**最大的设计差异**：Claude Code 把 `MEMORY.md` 作为常驻上下文的索引，每次用户请求都能看到。Tachi 的设计更偏向"按需加载"——Dream 产出的知识通过增强后的 MemoryRecallReminder 在**每轮对话中自动召回**（backend + topic files 双搜索），但只召回到当前 query 相关的部分，而非全部注入。这样：
+- 比常驻上下文更省 token（只召回相关的）
+- 比纯显式调用更主动（不需要 LLM 主动想起去调 MemoryRecall）
+- 是"常驻内存"和"纯按需"之间的折中方案
 
 ---
 
@@ -970,14 +1112,63 @@ func validateDreamWritePath(path string, allowedDomains []string) error {
 Dream 会读取所有 session 的历史对话。如果用户有敏感会话，可能不希望被整合进 memory。
 
 **应对**：
-- 初始版本不做细粒度控制。用户可以通过 `~/.tachi/config.yaml` 完全禁用到 dream
-- 后续可考虑 `session/meta.json` 中增加 `skip_dream: true` 标记
+- 用户可以通过 `~/.tachi/config.yaml` 完全禁用 Dream：`dream.enabled: false`
+- **每个 session 独立控制**（P0 实现）：在 `session/meta.json` 中增加 `skip_dream: true` 标记
+
+```go
+// session/session.go
+type Session struct {
+    // ...
+    SkipDream bool `json:"skip_dream,omitempty"` // 该 session 不参与 Dream 整合
+}
+```
+
+Orchestrator 在分组时过滤掉标记为 `skip_dream` 的 session：
+
+```go
+func filterSkippedSessions(sessions []Session) []Session {
+    var filtered []Session
+    for _, s := range sessions {
+        if s.SkipDream {
+            continue
+        }
+        filtered = append(filtered, s)
+    }
+    return filtered
+}
+```
+
+用户可以在对话中说"这个 session 不要记入记忆"，由 agent 调用配置工具修改 `meta.json`，或者通过 `/dream skip` 命令设置。
 
 ### 10.4 Dream 与 Compact 的交互
 
 如果 session 在 auto-compact 后被分成"原始 session + 压缩后 session"的父子关系（`CompactedParentID` / `CompactedChildID`），dream 应该处理哪个？
 
-**规则**：Dream 只处理**叶子 session**（没有 `CompactedChildID` 的 session）。如果原始 session 已经被 compact，它的内容已经以摘要形式存在于子 session 中，无需重复处理。
+**规则**：Dream 优先处理**叶子 session**（没有 `CompactedChildID` 的 session）。但如果叶子 session 有 `CompactedParentID`（说明它是压缩产物），**同时也读取原始 session 的消息内容**来补充信息密度，避免压缩摘要中的信息损失：
+
+```go
+func collectSessionsForDream(sessionID string, sessionManager *session.Manager) []SessionWithMessages {
+    sess, _ := sessionManager.Get(sessionID)
+    if sess == nil {
+        return nil
+    }
+    
+    // 如果有压缩父 session，同时收集父 session 的消息
+    if sess.CompactedParentID != "" {
+        parentMsgs, _ := sessionManager.LoadMessagesByID(sess.CompactedParentID)
+        if len(parentMsgs) > 0 {
+            return []SessionWithMessages{
+                {Session: *sess, Messages: currentMsgs},
+                {Session: parentSess, Messages: parentMsgs},
+            }
+        }
+    }
+    
+    return []SessionWithMessages{{Session: *sess, Messages: currentMsgs}}
+}
+```
+
+> 规则只读不写——原始 session 的消息只用于 Gather 阶段的信息提取，不会因为被读取而被标记为"已处理"。`last_dream.json` 中记录的仍是叶子 session 的 ID。
 
 ### 10.5 Dream 的并发上限
 
@@ -1032,3 +1223,36 @@ func ensureMemoryDomain(memoryRoot string) error {
 - 没有项目边界，所有非 git 目录的 session 共享同一个记忆空间
 - 例如你在 `/tmp/` 下测试、或在家目录下跑一些零散命令，这些都属于"全局活动"
 - 如果你后来把某个目录变成了 git 仓库，未来在该目录下的 session 会自动分配到该项目域。之前的 session（非 git 时）仍然留在全局记忆中
+
+---
+
+### 10.8 `tachi dream` CLI 子命令
+
+在开发测试和生产运维中，用户可能需要手动触发 Dream，而不是等 cron 在凌晨 3 点自动触发。
+
+**建议**：在 Phase 1 或 Phase 2 中加入 `tachi dream` CLI 子命令：
+
+```
+tachi dream                   # 为当前项目运行 dream
+tachi dream --all             # 为所有项目 + 全局运行 dream
+tachi dream --domain global   # 只跑全局记忆
+tachi dream --dry-run         # 只展示会处理哪些 session，不实际执行
+```
+
+这也有助于 Phase 4 的集成测试——不需要修改系统时间就能验证 Dream 管线是否正常工作。
+
+---
+
+### 10.9 Notify 心跳
+
+当前设计使用 `Notify: "when_relevant"`——如果 Dream 没有发现新事实（全部去重），用户不会收到任何通知。这在减少噪音的同时，也让用户无法确认系统是否在正常工作。
+
+**建议**：改为混合策略：
+- **有实质产出**（新事实 ≥ 1）：`Notify: "always"`，报告新增/更新/淘汰的事实数量
+- **无实质产出**（新事实 = 0）：定期发送简短心跳，例如每 7 天一次：
+
+```
+"AutoDream heartbeat (global): last run 2026-06-11, processed 5 sessions, 0 new facts found. All memories up to date. [project:tachi] last run 2026-06-10, processed 3 sessions, 2 new facts, 1 superseded."
+```
+
+这样用户既能感知系统存活状态，又不会被每日"无事可报"的通知刷屏。
