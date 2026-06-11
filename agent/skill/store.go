@@ -32,6 +32,11 @@ type Store struct {
 // NewStore creates a Store scanning both project-level and global skill dirs.
 // projectRoot is the workspace root (usually os.Getwd()). If empty, only
 // global skills are scanned.
+//
+// Deduplication: when projectRoot equals $HOME (i.e., tachi is run from the
+// home directory), the project-level path and global path resolve to the same
+// directory. To avoid double-scanning and spurious "shadowed" warnings, equal
+// paths are collapsed into a single entry (project priority is kept).
 func NewStore(projectRoot string) *Store {
 	var dirs []string
 	var source []string
@@ -43,8 +48,15 @@ func NewStore(projectRoot string) *Store {
 	}
 
 	// Priority 2: global personal skills
-	dirs = append(dirs, config.GlobalSkillsDir())
-	source = append(source, SourceGlobal)
+	globalDir := config.GlobalSkillsDir()
+
+	// Deduplicate: if the project-level dir equals the global dir (e.g., when
+	// tachi runs from $HOME), skip the duplicate to avoid scanning the same
+	// directory twice.
+	if len(dirs) == 0 || filepath.Clean(dirs[len(dirs)-1]) != filepath.Clean(globalDir) {
+		dirs = append(dirs, globalDir)
+		source = append(source, SourceGlobal)
+	}
 
 	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
 }
