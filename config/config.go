@@ -228,11 +228,14 @@ func (c *CronConfig) IsEnabled() bool {
 // DreamConfig holds configuration for AutoDream — the background memory
 // consolidation system that runs via SystemScheduler in channel mode.
 type DreamConfig struct {
-	Enabled         bool          `yaml:"enabled" default:"false"`
-	Schedule        string        `yaml:"schedule" default:"0 3 * * *"`    // cron expression (default: daily 3 AM)
-	MinInterval     time.Duration `yaml:"min_interval" default:"24h"`      // minimum time between dreams per domain
-	SubagentTimeout time.Duration `yaml:"subagent_timeout" default:"10m"`  // timeout for each dream sub-agent
-	SubagentMaxIter int           `yaml:"subagent_max_iters" default:"30"` // max iterations for dream sub-agent
+	Enabled            bool          `yaml:"enabled" default:"false"`
+	Schedule           string        `yaml:"schedule" default:"0 3 * * *"`       // cron expression (default: daily 3 AM)
+	MinInterval        time.Duration `yaml:"min_interval" default:"24h"`         // minimum time between dreams per domain
+	Provider           string        `yaml:"provider"`                           // provider name (empty → use main provider)
+	Model              string        `yaml:"model"`                              // model name (empty → use provider's default)
+	SubagentTimeout    time.Duration `yaml:"subagent_timeout" default:"10m"`     // timeout for each dream sub-agent
+	SubagentMaxIter    int           `yaml:"subagent_max_iters" default:"30"`    // max iterations for dream sub-agent
+	MaxMessageChars    int           `yaml:"max_message_chars" default:"2000"`   // max chars per message in dream prompt
 }
 
 // EditConfig holds configuration for the edit mode.

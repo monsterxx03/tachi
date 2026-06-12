@@ -2,9 +2,10 @@ package manager
 
 import (
 	"context"
-	"time"
+	"fmt"
 
 	"github.com/monsterxx03/tachi/dream"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // executeDream is the SystemScheduler handler for AutoDream.
@@ -21,23 +22,38 @@ func (m *Manager) executeDream(ctx context.Context) error {
 		Logger:      m.logger,
 	})
 
-	return o.Run(ctx, sessions, m.runDreamSubAgent)
+	return o.Run(ctx, sessions, m.runDreamForPlan)
 }
 
-// runDreamSubAgent executes the dream pipeline for a single domain.
-// TODO: implement full Orient→Gather→Consolidate→Prune sub-agent pipeline.
-func (m *Manager) runDreamSubAgent(ctx context.Context, plan dream.Plan) (dream.State, error) {
-	m.logger.Log("dream [%s:%s]: starting sub-agent (memory_root=%s, active_sessions=%d)",
-		plan.Group.Domain, plan.Group.Root, plan.Group.MemoryRoot, len(plan.ActiveSessions))
-
-	// TODO: Build dream prompt, start sub-agent with PathPolicy sandbox.
-	// For now, return a minimal state marking this run as completed.
-	state := dream.State{
-		LastDreamAt:     time.Now(),
-		SessionsDreamed: len(plan.ActiveSessions),
+// runDreamForPlan executes the dream pipeline for a single domain.
+func (m *Manager) runDreamForPlan(ctx context.Context, plan dream.Plan) (dream.State, error) {
+	provider, resolved := m.getProvider()
+	if resolved == nil {
+		return dream.State{}, errDreamNoProvider
 	}
 
-	m.logger.Log("dream [%s:%s]: completed (placeholder — sub-agent pipeline not yet wired)",
-		plan.Group.Domain, plan.Group.Root)
-	return state, nil
+	return dream.RunDream(ctx, plan, dream.RunConfig{
+		FallbackProvider: provider,
+		FallbackModel:    resolved.Provider.Model,
+		DreamProvider:    m.cfg.Dream.Provider,
+		DreamModel:       m.cfg.Dream.Model,
+		Providers:        m.cfg.Providers,
+		MaxIter:          m.cfg.Dream.SubagentMaxIter,
+		MaxTokens:        m.cfg.MaxTokens,
+		MaxMessageChars:  m.cfg.Dream.MaxMessageChars,
+		Logger:           m.logger,
+	}, m.buildMessageLoader())
 }
+
+// buildMessageLoader returns a function that loads messages for a given session ID.
+func (m *Manager) buildMessageLoader() func(string) ([]session.Message, error) {
+	sm := m.newSessionManager()
+	return func(id string) ([]session.Message, error) {
+		if _, err := sm.Load(id); err != nil {
+			return nil, err
+		}
+		return sm.LoadMessages()
+	}
+}
+
+var errDreamNoProvider = fmt.Errorf("dream: main provider not initialized")

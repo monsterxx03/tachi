@@ -38,6 +38,14 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 		filePath = filepath.Join(wdctx.Dir(ctx), filePath)
 	}
 
+	// Enforce path policy (used by Dream sub-agent sandbox).
+	if policy := GetPathPolicy(ctx); policy != nil {
+		absPath, _ := filepath.Abs(filePath)
+		if err := policy.CheckPath(absPath); err != nil {
+			return "", err
+		}
+	}
+
 	if err := os.WriteFile(filePath, []byte(argsMap.Content), 0644); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
