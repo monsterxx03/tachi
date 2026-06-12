@@ -16,6 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/dream"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -139,6 +140,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 	},
 	"transcript": func(m *Model) tea.Cmd {
 		return m.handleTranscriptCommand()
+	},
+	"dream": func(m *Model) tea.Cmd {
+		return m.handleDreamCommand()
 	},
 }
 
@@ -682,6 +686,132 @@ func (m *Model) handleTranscriptCommand() tea.Cmd {
 		),
 	})
 	return nil
+}
+
+// handleDreamCommand triggers AutoDream memory consolidation synchronously
+// (not via SystemScheduler). It lists all sessions, runs the dream
+// orchestrator with MinInterval=0 to bypass the interval gate, and streams
+// progress/results back to the chat view asynchronously.
+func (m *Model) handleDreamCommand() tea.Cmd {
+	sm := m.agent.SessionManager()
+	if sm == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No session manager available — start a conversation first",
+		})
+		return nil
+	}
+
+	sessions, err := sm.List()
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("Failed to list sessions: %v", err),
+		})
+		return nil
+	}
+
+	if len(sessions) == 0 {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No sessions found — nothing to consolidate yet",
+		})
+		return nil
+	}
+
+	provider := m.agent.Provider()
+	if provider == nil {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "No LLM provider configured — cannot run dream",
+		})
+		return nil
+	}
+
+	m.chatview.AddMessage(chatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("🧠 **AutoDream 已触发** — 正在整合 %d 个 session 的记忆...", len(sessions)),
+	})
+
+	ch := make(chan string, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+
+	go func() {
+		defer cancel()
+		defer close(ch)
+
+		o := dream.NewOrchestrator(dream.Config{
+			MinInterval: 0, // manual trigger bypasses the interval gate
+			Logger:      m.logger,
+		})
+
+		cfg := m.cfg
+		var dreamProvider, dreamModel string
+		maxIter := 30
+		maxMessageChars := 2000
+		if cfg != nil {
+			dreamProvider = cfg.Dream.Provider
+			dreamModel = cfg.Dream.Model
+			if cfg.Dream.SubagentMaxIter > 0 {
+				maxIter = cfg.Dream.SubagentMaxIter
+			}
+			if cfg.Dream.MaxMessageChars > 0 {
+				maxMessageChars = cfg.Dream.MaxMessageChars
+			}
+		}
+
+		var providers []config.ProviderConfig
+		if cfg != nil {
+			providers = cfg.Providers
+		}
+
+		runFn := func(ctx context.Context, plan dream.Plan) (dream.State, error) {
+			// Use a fresh session manager so Load(id) doesn't mutate
+			// the TUI's current-session pointer.
+			dreamSM, smErr := session.NewManager()
+			loadMessages := func(id string) ([]session.Message, error) {
+				if smErr != nil {
+					return nil, smErr
+				}
+				if _, err := dreamSM.Load(id); err != nil {
+					return nil, err
+				}
+				return dreamSM.LoadMessages()
+			}
+
+			return dream.RunDream(ctx, plan, dream.RunConfig{
+				FallbackProvider: provider,
+				FallbackModel:    m.agent.Model(),
+				DreamProvider:    dreamProvider,
+				DreamModel:       dreamModel,
+				Providers:        providers,
+				MaxIter:          maxIter,
+				MaxTokens:        m.chatOpts.MaxTokens,
+				MaxMessageChars:  maxMessageChars,
+				Logger:           m.logger,
+			}, loadMessages)
+		}
+
+		if err := o.Run(ctx, sessions, runFn); err != nil {
+			ch <- fmt.Sprintf("🧠 **Dream 失败**: %v", err)
+		} else {
+			ch <- "🧠 **Dream 完成** — 记忆已整合"
+		}
+	}()
+
+	return readNextDreamStatus(ch)
+}
+
+// readNextDreamStatus reads the next message from the channel and returns a
+// dreamStatusMsg. If the channel is closed, returns nil.
+func readNextDreamStatus(ch <-chan string) tea.Cmd {
+	return func() tea.Msg {
+		content, ok := <-ch
+		if !ok {
+			return nil
+		}
+		return dreamStatusMsg{content: content, nextCh: ch}
+	}
 }
 
 // ------- Agent-driven commands (trigger LLM conversations) -------

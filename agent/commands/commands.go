@@ -40,6 +40,7 @@ var Registry = []Def{
 	{Name: "usage", Description: "Show token usage, cost, and tool call statistics", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "skill", Description: "List or activate skills", InputHint: "list | reload | <name>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "transcript", Description: "Generate session transcript report", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
+	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},
 	{Name: "cron", Description: "List cron jobs", Modes: []Mode{ModeChannel}},
 	{Name: "v", Description: "Toggle verbose tool call output", Modes: []Mode{ModeChannel}},
 	{Name: "stop", Description: "Stop the current LLM turn", Modes: []Mode{ModeChannel}},

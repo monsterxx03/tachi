@@ -25,3 +25,11 @@ type mcpStatusMsg struct {
 	content string
 	nextCh  <-chan string
 }
+
+// dreamStatusMsg carries an async status message from AutoDream execution
+// to be displayed in the chat view from within the TUI update loop.
+// Mirrors mcpStatusMsg — the generic channel→chatview pattern.
+type dreamStatusMsg struct {
+	content string
+	nextCh  <-chan string
+}

@@ -207,6 +207,11 @@ func (a *AIAgent) Model() string {
 	return a.model
 }
 
+// Provider returns the main LLM provider for conversation turns.
+func (a *AIAgent) Provider() llm.Provider {
+	return a.provider
+}
+
 // SetPermissionMode sets how tool confirmation requests are handled.
 func (a *AIAgent) SetPermissionMode(mode PermissionMode) {
 	a.permissionMode = mode

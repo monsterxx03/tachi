@@ -452,6 +452,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, readNextMCPStatus(msg.nextCh)
 		}
 
+	case dreamStatusMsg:
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: msg.content,
+		})
+		if msg.nextCh != nil {
+			return m, readNextDreamStatus(msg.nextCh)
+		}
+
 	case mcpOverlayMsg:
 		if m.state == stateManagingMCP {
 			m.mcpView.SetMessage(msg.content)
