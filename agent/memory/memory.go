@@ -119,6 +119,8 @@ func New(backendType string, cfg Config) (Backend, error) {
 		return NewMem9Backend(cfg)
 	case "agentmemory":
 		return NewAgentMemoryBackend(cfg)
+	case "topic":
+		return NewTopicBackend(cfg)
 	default:
 		return nil, fmt.Errorf("unknown memory backend: %s", backendType)
 	}
