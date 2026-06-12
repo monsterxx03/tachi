@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/dream"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
@@ -102,6 +103,8 @@ type Model struct {
 	notifyOnComplete bool // whether to send terminal notification on turn complete
 
 	mcpReady bool // whether MCP background init has completed
+
+	dreamOrch *dream.Orchestrator // active dream orchestrator (nil when idle)
 
 	logger *debuglog.Logger
 }
@@ -453,6 +456,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 
 	case dreamStatusMsg:
+		// Sentinel: clean up orchestrator reference without displaying.
+		if msg.content == dreamDoneSentinel {
+			m.dreamOrch = nil
+			if msg.nextCh != nil {
+				return m, readNextDreamStatus(msg.nextCh)
+			}
+			return m, nil
+		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
 			Content: msg.content,

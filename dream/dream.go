@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,6 +38,31 @@ type State struct {
 	FactsSuperseded int       `json:"facts_superseded"`
 	FactsPruned     int       `json:"facts_pruned"`
 	Errors          []string  `json:"errors,omitempty"`
+}
+
+// Status provides a snapshot of the orchestrator's current dream execution state.
+type Status struct {
+	Running int            // number of domains currently being dreamed
+	Domains []DomainStatus // state per domain (in progress + completed)
+}
+
+// DomainStatus describes the dream state for a single memory domain.
+type DomainStatus struct {
+	Domain      string    // "project" or "global"
+	Root        string    // git root or ""
+	InProgress  bool      // currently being dreamed
+	StartedAt   time.Time // when current run started (zero if not in progress)
+	ActiveCount int       // number of sessions being processed
+	LastState   State     // last completed dream state (from last_dream.json)
+}
+
+// inFlightInfo tracks a domain that is currently being dreamed.
+type inFlightInfo struct {
+	startedAt   time.Time
+	domain      string
+	root        string
+	memoryRoot  string
+	activeCount int
 }
 
 // SessionGroup groups sessions by their memory domain (project or global).
@@ -72,8 +98,10 @@ type Config struct {
 
 // Orchestrator coordinates dream execution across memory domains.
 type Orchestrator struct {
-	cfg    Config
-	logger *debuglog.Logger
+	cfg        Config
+	logger     *debuglog.Logger
+	mu         sync.RWMutex
+	inProgress map[string]*inFlightInfo
 }
 
 // NewOrchestrator creates a dream Orchestrator.
@@ -83,9 +111,48 @@ func NewOrchestrator(cfg Config) *Orchestrator {
 		logger = debuglog.DefaultLogger
 	}
 	return &Orchestrator{
-		cfg:    cfg,
-		logger: logger.WithSource("dream"),
+		cfg:        cfg,
+		logger:     logger.WithSource("dream"),
+		inProgress: make(map[string]*inFlightInfo),
 	}
+}
+
+// Status returns a snapshot of the orchestrator's current execution state.
+// It includes both in-progress domains and their last completed state from disk.
+// The returned domains are sorted by (domain, root) for deterministic output.
+func (o *Orchestrator) Status() Status {
+	o.mu.RLock()
+	defer o.mu.RUnlock()
+
+	domains := make([]DomainStatus, 0, len(o.inProgress))
+	for _, info := range o.inProgress {
+		domains = append(domains, DomainStatus{
+			Domain:      info.domain,
+			Root:        info.root,
+			InProgress:  true,
+			StartedAt:   info.startedAt,
+			ActiveCount: info.activeCount,
+			LastState:   LoadState(info.memoryRoot),
+		})
+	}
+
+	sort.Slice(domains, func(i, j int) bool {
+		return domains[i].Domain+":"+domains[i].Root <
+			domains[j].Domain+":"+domains[j].Root
+	})
+
+	return Status{
+		Running: len(domains),
+		Domains: domains,
+	}
+}
+
+// domainKey returns a unique key for a SessionGroup used for inProgress tracking.
+func (o *Orchestrator) domainKey(g SessionGroup) string {
+	if g.Domain == "global" {
+		return "global"
+	}
+	return "project:" + g.Root
 }
 
 // Run is the main entry point. It lists sessions, groups by domain, checks
@@ -139,6 +206,20 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 	sem := make(chan struct{}, MaxConcurrentDreams)
 	var wg sync.WaitGroup
 
+	// Register all domains as in-progress before starting any of them.
+	o.mu.Lock()
+	for _, p := range plans {
+		key := o.domainKey(p.Group)
+		o.inProgress[key] = &inFlightInfo{
+			startedAt:   time.Now(),
+			domain:      p.Group.Domain,
+			root:        p.Group.Root,
+			memoryRoot:  p.Group.MemoryRoot,
+			activeCount: len(p.ActiveSessions),
+		}
+	}
+	o.mu.Unlock()
+
 	for _, plan := range plans {
 		sem <- struct{}{}
 		wg.Add(1)
@@ -146,6 +227,11 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 			defer wg.Done()
 			defer func() { <-sem }()
 			defer ReleaseLock(p.Group.MemoryRoot)
+			defer func() {
+				o.mu.Lock()
+				delete(o.inProgress, o.domainKey(p.Group))
+				o.mu.Unlock()
+			}()
 
 			// Ensure memory directory structure exists.
 			if err := EnsureMemoryDir(p.Group.MemoryRoot); err != nil {
