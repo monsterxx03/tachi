@@ -5,7 +5,8 @@ const InitPromptTemplate = `Create (or improve) a .tachi.md file at the repo roo
 
 What to include:
 1. Build, lint, test commands (including how to run a single test).
-2. High-level architecture — the "big picture" that requires reading multiple files to discover. Use compact formats (tables, one-liners, signatures) over prose.
+2. Language version info — extract from project config files (e.g. Go version from go.mod, Node.js version from package.json/engines, Python from .python-version/Pipfile/pyproject.toml, Rust from Cargo.toml). Include as a compact note in the Build & Test section or a dedicated table row.
+3. High-level architecture — the "big picture" that requires reading multiple files to discover. Use compact formats (tables, one-liners, signatures) over prose.
 
 Rules:
 - If .tachi.md exists, read it first and improve it in-place.
