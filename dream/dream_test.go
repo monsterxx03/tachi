@@ -61,6 +61,23 @@ func TestGroupSessionsByDomain(t *testing.T) {
 	}
 }
 
+func TestFilterSkippedSessions(t *testing.T) {
+	sessions := []*session.Session{
+		{ID: "s1", SkipDream: false},
+		{ID: "s2", SkipDream: true},
+		{ID: "s3", SkipDream: false},
+		{ID: "s4", SkipDream: true},
+	}
+
+	filtered := FilterSkippedSessions(sessions)
+	if len(filtered) != 2 {
+		t.Fatalf("expected 2, got %d", len(filtered))
+	}
+	if filtered[0].ID != "s1" || filtered[1].ID != "s3" {
+		t.Errorf("expected [s1, s3], got [%s, %s]", filtered[0].ID, filtered[1].ID)
+	}
+}
+
 func TestActiveSessionsSince(t *testing.T) {
 	now := time.Now()
 	sessions := []*session.Session{

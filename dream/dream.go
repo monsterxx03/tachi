@@ -195,8 +195,13 @@ func ActiveSessionsSince(since time.Time, sessions []*session.Session) []*sessio
 
 // FilterSkippedSessions removes sessions with SkipDream=true.
 func FilterSkippedSessions(sessions []*session.Session) []*session.Session {
-	// TODO: filter by SkipDream field once added to session.Session.
-	return sessions
+	filtered := make([]*session.Session, 0, len(sessions))
+	for _, s := range sessions {
+		if !s.SkipDream {
+			filtered = append(filtered, s)
+		}
+	}
+	return filtered
 }
 
 // --- Session grouping ---

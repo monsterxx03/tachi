@@ -13,6 +13,7 @@ type Session struct {
 	WorkingDir string    `json:"working_dir,omitempty"` // working directory at session creation time
 	CreatedAt  time.Time `json:"created_at"`
 	UpdatedAt  time.Time `json:"updated_at"`
+	SkipDream  bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
 	// Compact-related fields: link to child/parent sessions after /compact.
 	// - CompactedChildID: set on the OLD session after compaction, pointing to the NEW session.
