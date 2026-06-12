@@ -225,6 +225,16 @@ func (c *CronConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
+// DreamConfig holds configuration for AutoDream — the background memory
+// consolidation system that runs via SystemScheduler in channel mode.
+type DreamConfig struct {
+	Enabled         bool          `yaml:"enabled" default:"false"`
+	Schedule        string        `yaml:"schedule" default:"0 3 * * *"`    // cron expression (default: daily 3 AM)
+	MinInterval     time.Duration `yaml:"min_interval" default:"24h"`      // minimum time between dreams per domain
+	SubagentTimeout time.Duration `yaml:"subagent_timeout" default:"10m"`  // timeout for each dream sub-agent
+	SubagentMaxIter int           `yaml:"subagent_max_iters" default:"30"` // max iterations for dream sub-agent
+}
+
 // EditConfig holds configuration for the edit mode.
 type EditConfig struct {
 	Mode           string  `yaml:"mode" default:"replace"`         // replace | hashline
@@ -426,10 +436,10 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 type LSPConfig struct {
 	Enabled          bool              `yaml:"enabled" default:"true"`
 	MaxRestarts      int               `yaml:"max_restarts" default:"3"`
-	MaxFileSize      int64             `yaml:"max_file_size" default:"10485760"`             // 10 MB
-	MaxResults       int               `yaml:"max_results" default:"50"`                      // per-operation result cap
-	RequestTimeout   Duration          `yaml:"request_timeout" default:"15s"`                 // per-request timeout
-	ConcurrencyLimit int               `yaml:"concurrency_limit" default:"4"`                 // per-server concurrency
+	MaxFileSize      int64             `yaml:"max_file_size" default:"10485760"` // 10 MB
+	MaxResults       int               `yaml:"max_results" default:"50"`         // per-operation result cap
+	RequestTimeout   Duration          `yaml:"request_timeout" default:"15s"`    // per-request timeout
+	ConcurrencyLimit int               `yaml:"concurrency_limit" default:"4"`    // per-server concurrency
 	StartupTimeout   Duration          `yaml:"startup_timeout" default:"10s"`
 	Servers          []LSPServerConfig `yaml:"servers"`
 }
@@ -473,6 +483,7 @@ type Config struct {
 	Compact                CompactConfig        `yaml:"compact"`                         // /compact command configuration
 	ToolResult             ToolResultConfig     `yaml:"tool_result"`                     // tool result size limits and file persistence
 	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
+	Dream                  DreamConfig          `yaml:"dream"`                           // AutoDream memory consolidation (channel mode)
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
 	Edit                   EditConfig           `yaml:"edit"`                            // Edit mode configuration
 	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration

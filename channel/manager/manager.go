@@ -132,6 +132,10 @@ type Manager struct {
 	// Cron scheduler (only active in channel mode when enabled).
 	scheduler *cron.Scheduler
 
+	// System-level scheduler for background tasks (AutoDream, etc.).
+	// Completely isolated from the user-facing cron scheduler.
+	systemScheduler *cron.SystemScheduler
+
 	// verboseState tracks per-thread verbose mode toggled by /v command.
 	verboseState map[string]bool
 	verboseMu    sync.RWMutex
@@ -277,6 +281,23 @@ func (m *Manager) Start(ctx context.Context) error {
 	if m.scheduler != nil {
 		if err := m.scheduler.Start(ctx); err != nil {
 			m.logger.Log("channel: cron scheduler start failed: %v", err)
+		}
+	}
+
+	// Start system-level scheduler (AutoDream, etc.) — fully isolated from user cron.
+	if m.cfg != nil && m.cfg.Dream.Enabled {
+		m.systemScheduler = cron.NewSystemScheduler(cron.SystemSchedulerConfig{
+			Logger: m.logger,
+		})
+		if err := m.systemScheduler.Register(
+			"auto-dream",
+			m.cfg.Dream.Schedule,
+			m.cfg.Dream.SubagentTimeout,
+			m.executeDream,
+		); err != nil {
+			m.logger.Log("channel: auto-dream registration failed: %v", err)
+		} else {
+			m.systemScheduler.Start(ctx)
 		}
 	}
 
@@ -451,6 +472,11 @@ func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo stri
 // tracked background processes, evicting cached agents, and tearing down
 // the shared MCP manager. Safe to call multiple times.
 func (m *Manager) Close() {
+	// Stop system scheduler first (may have in-flight jobs).
+	if m.systemScheduler != nil {
+		m.systemScheduler.Stop()
+	}
+
 	m.evictAllAgents()
 
 	m.sharedMCPMu.Lock()

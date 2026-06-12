@@ -1,0 +1,351 @@
+package dream
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+	"time"
+
+	"github.com/monsterxx03/tachi/session"
+)
+
+func TestGroupSessionsByDomain(t *testing.T) {
+	tmpDir := t.TempDir()
+	gitDir := filepath.Join(tmpDir, "myproject")
+	os.MkdirAll(filepath.Join(gitDir, ".git"), 0755)
+
+	sessions := []*session.Session{
+		{ID: "s1", WorkingDir: gitDir},
+		{ID: "s2", WorkingDir: gitDir},
+		{ID: "s3", WorkingDir: "/tmp/no-git"},
+		{ID: "s4", WorkingDir: ""},
+	}
+
+	groups := GroupSessionsByDomain(sessions)
+
+	if len(groups) != 2 {
+		t.Fatalf("expected 2 groups, got %d", len(groups))
+	}
+
+	var projectGroup, globalGroup *SessionGroup
+	for i := range groups {
+		switch groups[i].Domain {
+		case "project":
+			projectGroup = &groups[i]
+		case "global":
+			globalGroup = &groups[i]
+		}
+	}
+
+	if projectGroup == nil {
+		t.Fatal("missing project group")
+	}
+	if globalGroup == nil {
+		t.Fatal("missing global group")
+	}
+
+	if len(projectGroup.Sessions) != 2 {
+		t.Errorf("project sessions: got %d, want 2", len(projectGroup.Sessions))
+	}
+	if len(globalGroup.Sessions) != 2 {
+		t.Errorf("global sessions: got %d, want 2", len(globalGroup.Sessions))
+	}
+
+	if projectGroup.Root != gitDir {
+		t.Errorf("project root: got %q, want %q", projectGroup.Root, gitDir)
+	}
+	expectedMemRoot := filepath.Join(gitDir, ".tachi", "memory")
+	if projectGroup.MemoryRoot != expectedMemRoot {
+		t.Errorf("project memory root: got %q, want %q", projectGroup.MemoryRoot, expectedMemRoot)
+	}
+}
+
+func TestActiveSessionsSince(t *testing.T) {
+	now := time.Now()
+	sessions := []*session.Session{
+		{ID: "s1", UpdatedAt: now.Add(-1 * time.Hour)},  // 1h ago
+		{ID: "s2", UpdatedAt: now.Add(-25 * time.Hour)}, // 25h ago
+		{ID: "s3", UpdatedAt: now.Add(-2 * time.Hour)},  // 2h ago
+		{ID: "s4", UpdatedAt: now.Add(-48 * time.Hour)}, // 48h ago
+	}
+
+	tests := []struct {
+		name  string
+		since time.Time
+		want  int
+	}{
+		{"zero time (first dream) → all", time.Time{}, 4},
+		{"since 3h ago → 2 active", now.Add(-3 * time.Hour), 2},
+		{"since 26h ago → 3 active", now.Add(-26 * time.Hour), 3},
+		{"since 1min ago → 0 active", now.Add(-1 * time.Minute), 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ActiveSessionsSince(tt.since, sessions)
+			if len(got) != tt.want {
+				t.Errorf("ActiveSessionsSince: got %d, want %d", len(got), tt.want)
+			}
+		})
+	}
+}
+
+func TestActiveSessionsSince_LongLivedChannelSession(t *testing.T) {
+	// Simulates a channel-mode scenario: one session created weeks ago,
+	// but updated today. Should be picked up by dream.
+	now := time.Now()
+	sessions := []*session.Session{
+		{
+			ID:        "channel-thread-1",
+			CreatedAt: now.Add(-30 * 24 * time.Hour), // created 30 days ago
+			UpdatedAt: now.Add(-2 * time.Hour),       // last message 2h ago
+		},
+	}
+
+	lastDream := now.Add(-24 * time.Hour) // last dream was 24h ago
+	active := ActiveSessionsSince(lastDream, sessions)
+
+	if len(active) != 1 {
+		t.Errorf("expected 1 active session (long-lived channel thread), got %d", len(active))
+	}
+}
+
+func TestAcquireReleaseLock(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if !AcquireLock(tmpDir) {
+		t.Fatal("first acquire should succeed")
+	}
+
+	if AcquireLock(tmpDir) {
+		t.Fatal("second acquire should fail")
+	}
+
+	ReleaseLock(tmpDir)
+
+	if !AcquireLock(tmpDir) {
+		t.Fatal("acquire after release should succeed")
+	}
+	ReleaseLock(tmpDir)
+}
+
+func TestAcquireLock_StaleLock(t *testing.T) {
+	tmpDir := t.TempDir()
+	lockPath := filepath.Join(tmpDir, "dream.lock")
+
+	staleContent := "999999999:" + time.Now().Add(-10*time.Minute).Format(time.RFC3339)
+	os.WriteFile(lockPath, []byte(staleContent), 0644)
+
+	if !AcquireLock(tmpDir) {
+		t.Fatal("should acquire stale lock")
+	}
+	ReleaseLock(tmpDir)
+}
+
+func TestState_LoadSave(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	state := LoadState(tmpDir)
+	if !state.LastDreamAt.IsZero() {
+		t.Errorf("expected zero LastDreamAt, got %v", state.LastDreamAt)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	state = State{
+		LastDreamAt:     now,
+		SessionsDreamed: 5,
+		FactsAdded:      10,
+	}
+	if err := SaveState(tmpDir, state); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	loaded := LoadState(tmpDir)
+	if !loaded.LastDreamAt.Equal(now) {
+		t.Errorf("LastDreamAt: got %v, want %v", loaded.LastDreamAt, now)
+	}
+	if loaded.SessionsDreamed != 5 {
+		t.Errorf("SessionsDreamed: got %d, want 5", loaded.SessionsDreamed)
+	}
+	if loaded.FactsAdded != 10 {
+		t.Errorf("FactsAdded: got %d, want 10", loaded.FactsAdded)
+	}
+}
+
+func TestFindGitRoot(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+	subDir := filepath.Join(repoDir, "sub", "dir")
+	os.MkdirAll(subDir, 0755)
+
+	tests := []struct {
+		dir  string
+		want string
+	}{
+		{repoDir, repoDir},
+		{subDir, repoDir},
+		{tmpDir, ""},
+		{"", ""},
+	}
+
+	for _, tt := range tests {
+		got := FindGitRoot(tt.dir)
+		if got != tt.want {
+			t.Errorf("FindGitRoot(%q) = %q, want %q", tt.dir, got, tt.want)
+		}
+	}
+}
+
+func TestEnsureMemoryDir(t *testing.T) {
+	tmpDir := t.TempDir()
+	memRoot := filepath.Join(tmpDir, "memory")
+
+	if err := EnsureMemoryDir(memRoot); err != nil {
+		t.Fatalf("EnsureMemoryDir: %v", err)
+	}
+
+	info, err := os.Stat(filepath.Join(memRoot, "topics"))
+	if err != nil {
+		t.Fatalf("topics dir not created: %v", err)
+	}
+	if !info.IsDir() {
+		t.Fatal("topics is not a directory")
+	}
+}
+
+func TestOrchestrator_Run_GatesBlock(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	now := time.Now()
+	sessions := []*session.Session{
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now},
+		{ID: "s2", WorkingDir: repoDir, UpdatedAt: now},
+	}
+
+	// Sessions are recent but MinInterval blocks (last dream < 24h ago would block,
+	// but here there's no prior state so it passes Gate 1... we need a different
+	// approach: set UpdatedAt to before a fake last dream time).
+	// Actually: with only 2 sessions both updated now, and no prior dream state,
+	// gates will pass. Let's test the interval gate instead.
+	memRoot := filepath.Join(repoDir, ".tachi", "memory")
+	os.MkdirAll(memRoot, 0755)
+	// Pretend we dreamed 1 hour ago → Gate 1 blocks (need 24h).
+	SaveState(memRoot, State{LastDreamAt: time.Now().Add(-1 * time.Hour)})
+
+	o := NewOrchestrator(Config{
+		MinInterval: 24 * time.Hour,
+	})
+
+	var called bool
+	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		called = true
+		return State{LastDreamAt: time.Now()}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if called {
+		t.Error("runFn should not have been called (gate 2 not met)")
+	}
+}
+
+func TestOrchestrator_Run_PassesGates(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	now := time.Now()
+	sessions := []*session.Session{
+		{ID: "s5", WorkingDir: repoDir, UpdatedAt: now.Add(-1 * time.Hour)},
+		{ID: "s4", WorkingDir: repoDir, UpdatedAt: now.Add(-2 * time.Hour)},
+		{ID: "s3", WorkingDir: repoDir, UpdatedAt: now.Add(-3 * time.Hour)},
+		{ID: "s2", WorkingDir: repoDir, UpdatedAt: now.Add(-4 * time.Hour)},
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now.Add(-5 * time.Hour)},
+	}
+
+	o := NewOrchestrator(Config{
+		MinInterval: 0, // no interval check
+	})
+
+	var calledDomain string
+	var receivedActive int
+	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		calledDomain = p.Group.Domain
+		receivedActive = len(p.ActiveSessions)
+		return State{
+			LastDreamAt: time.Now(),
+			FactsAdded:  7,
+		}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if calledDomain != "project" {
+		t.Errorf("expected domain 'project', got %q", calledDomain)
+	}
+	// All 5 are active (first dream, LastDreamAt is zero → all sessions qualify).
+	if receivedActive != 5 {
+		t.Errorf("expected 5 active sessions, got %d", receivedActive)
+	}
+
+	// Verify state was persisted.
+	memRoot := filepath.Join(repoDir, ".tachi", "memory")
+	state := LoadState(memRoot)
+	if state.FactsAdded != 7 {
+		t.Errorf("persisted FactsAdded: got %d, want 7", state.FactsAdded)
+	}
+}
+
+func TestOrchestrator_Run_OnlyPicksActiveSessions(t *testing.T) {
+	tmpDir := t.TempDir()
+	repoDir := filepath.Join(tmpDir, "repo")
+	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
+
+	// Simulate: last dream was 25h ago.
+	memRoot := filepath.Join(repoDir, ".tachi", "memory")
+	os.MkdirAll(memRoot, 0755)
+	lastDreamTime := time.Now().Add(-25 * time.Hour)
+	SaveState(memRoot, State{LastDreamAt: lastDreamTime})
+
+	now := time.Now()
+	sessions := []*session.Session{
+		// These 2 have activity after last dream → active
+		{ID: "s3", WorkingDir: repoDir, UpdatedAt: now.Add(-1 * time.Hour)},
+		{ID: "s2", WorkingDir: repoDir, UpdatedAt: now.Add(-10 * time.Hour)},
+		// This one was last updated before the dream → not active
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now.Add(-48 * time.Hour)},
+	}
+
+	o := NewOrchestrator(Config{
+		MinInterval: 24 * time.Hour,
+	})
+
+	var receivedActive int
+	var activeIDs []string
+	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
+		receivedActive = len(p.ActiveSessions)
+		for _, s := range p.ActiveSessions {
+			activeIDs = append(activeIDs, s.ID)
+		}
+		return State{LastDreamAt: time.Now()}, nil
+	})
+
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if receivedActive != 2 {
+		t.Errorf("expected 2 active sessions, got %d", receivedActive)
+	}
+	// s1 (updated 48h ago, before last dream 25h ago) should NOT be included.
+	for _, id := range activeIDs {
+		if id == "s1" {
+			t.Error("s1 should not be in active sessions (updated before last dream)")
+		}
+	}
+}
