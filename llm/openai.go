@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 
@@ -70,8 +71,13 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			ToolCallID: msg.ToolCallID,
 		}
 
-		// Multi-modal content: use MultiContent when ContentParts are present
-		if len(msg.ContentParts) > 0 {
+		// Multi-modal content: use MultiContent when ContentParts are present.
+		// Note: OpenAI "tool" role messages only support string content, not
+		// multi-modal arrays. For tool messages carrying image content parts,
+		// we fall back to a text-only representation with an embedded data URI
+		// reference. The model can at least acknowledge the image was read,
+		// though it cannot visually process it in the tool role.
+		if len(msg.ContentParts) > 0 && role != "tool" {
 			for _, part := range msg.ContentParts {
 				switch part.Type {
 				case ContentPartText:
@@ -93,6 +99,18 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			}
 		} else {
 			m.Content = msg.Content
+		}
+		
+		// Tool messages with image content parts: append image data URI
+		// references to the text content so the model is aware of them.
+		if role == "tool" && len(msg.ContentParts) > 0 {
+			for _, part := range msg.ContentParts {
+				if part.Type == ContentPartImage {
+					ref := fmt.Sprintf("\n[Image data: data:%s;base64,%s...(%d chars)]",
+						part.MediaType, part.Data[:min(len(part.Data), 40)], len(part.Data))
+					m.Content += ref
+				}
+			}
 		}
 
 		for _, tc := range msg.ToolCalls {

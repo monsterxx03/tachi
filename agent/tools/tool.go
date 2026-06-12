@@ -7,6 +7,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // Tool name constants. Use these instead of string literals to avoid typos
@@ -76,6 +78,7 @@ type ToolResult struct {
 	Questions  []Question
 	SubagentID string        // SubAgent shortID, for linking to subagent/<id>.jsonl
 	Duration   time.Duration // Wall-clock duration of tool execution
+	ImageParts []llm.ContentPart // Image content parts (e.g., from ReadFile on image files)
 }
 
 // Schema defines the JSON schema for a tool
@@ -186,6 +189,51 @@ func (r *Registry) GetToolNames() []string {
 	return names
 }
 
+// --- Image Parts Carrier ---
+//
+// Tools that produce image content (e.g. ReadFile on image files) cannot return
+// llm.ContentPart through the ExecuteContext(string, error) signature. Instead,
+// they use a context-based side channel: AddImageParts(ctx, parts) stores image
+// parts on a carrier embedded in the context, and Invoke() retrieves them to
+// populate ToolResult.ImageParts.
+//
+// This is intentionally internal — external tool implementors should not depend
+// on this mechanism.
+
+type imagePartsCtxKey struct{}
+
+type imagePartsCarrier struct {
+	parts []llm.ContentPart
+}
+
+// WithImagePartsCarrier returns a child context with an image parts carrier
+// attached. Call ImagePartsFromCtx on the same context after ExecuteContext
+// returns to retrieve any images that were added.
+func WithImagePartsCarrier(ctx context.Context) context.Context {
+	return context.WithValue(ctx, imagePartsCtxKey{}, &imagePartsCarrier{})
+}
+
+// AddImageParts stores image content parts on the carrier embedded in ctx.
+// No-op if ctx was not created via WithImagePartsCarrier. Safe for tools to
+// call with nil/empty parts (carrier stays empty).
+func AddImageParts(ctx context.Context, parts []llm.ContentPart) {
+	carrier, ok := ctx.Value(imagePartsCtxKey{}).(*imagePartsCarrier)
+	if !ok {
+		return
+	}
+	carrier.parts = parts
+}
+
+// ImagePartsFromCtx retrieves image parts previously stored via AddImageParts.
+// Returns nil if the context has no carrier or no parts were added.
+func ImagePartsFromCtx(ctx context.Context) []llm.ContentPart {
+	carrier, ok := ctx.Value(imagePartsCtxKey{}).(*imagePartsCarrier)
+	if !ok {
+		return nil
+	}
+	return carrier.parts
+}
+
 // Invoke calls a tool with the given arguments and context.
 func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolResult {
 	r.mu.RLock()
@@ -208,7 +256,9 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 	}
 
 	startTime := time.Now()
-	result, err := tool.ExecuteContext(ctx, args)
+	// Enable image parts side channel for tools that may produce image content.
+	imageCtx := WithImagePartsCarrier(ctx)
+	result, err := tool.ExecuteContext(imageCtx, args)
 	resultDuration := time.Since(startTime)
 	if askErr, ok := err.(*AskUserQuestionError); ok {
 		return ToolResult{Status: ToolResultNeedUserInput, Name: askErr.ToolName, Args: askErr.Args, Questions: askErr.Questions, Duration: resultDuration}
@@ -217,7 +267,7 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 		return ToolResult{Status: ToolResultError, Err: err, Duration: resultDuration}
 	}
 
-	tr := ToolResult{Status: ToolResultSuccess, Output: result, Duration: resultDuration}
+	tr := ToolResult{Status: ToolResultSuccess, Output: result, Duration: resultDuration, ImageParts: ImagePartsFromCtx(imageCtx)}
 	if carrier, ok := tool.(SubagentIDCarrier); ok {
 		tr.SubagentID = carrier.LastSubagentID()
 	}

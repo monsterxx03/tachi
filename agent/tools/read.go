@@ -3,9 +3,11 @@ package tools
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -13,6 +15,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/tools/hashline"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 const maxFileSize = 256 * 1024 // 256KB
@@ -49,7 +52,10 @@ func (t *ReadTool) SetHashlineMode(enabled bool, store *hashline.SnapshotStore) 
 }
 
 func (t *ReadTool) Name() string        { return ToolNameRead }
-func (t *ReadTool) Description() string { return "Read the contents of a file" }
+func (t *ReadTool) Description() string {
+	return "Read the contents of a file. For image files (png, jpg, gif, webp), " +
+		"returns a description and makes the image available to vision-capable models."
+}
 func (t *ReadTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":   {Type: "string", Description: "The path to the file to read"},
@@ -59,6 +65,52 @@ func (t *ReadTool) Properties() map[string]PropertySchema {
 }
 func (t *ReadTool) Required() []string { return []string{"path"} }
 func (t *ReadTool) Parallel() bool     { return true }
+
+// imageMimeByExt maps lowercase file extensions (including the leading dot)
+// to MIME types for image formats supported by common LLM providers.
+var imageMimeByExt = map[string]string{
+	".png":  "image/png",
+	".jpg":  "image/jpeg",
+	".jpeg": "image/jpeg",
+	".gif":  "image/gif",
+	".webp": "image/webp",
+}
+
+// imageMagicBytes contains magic byte signatures for image format detection.
+// Checked after extension match to avoid false positives.
+var imageMagicBytes = map[string][]byte{
+	"image/png":  {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
+	"image/jpeg": {0xFF, 0xD8, 0xFF},
+	"image/gif":  {0x47, 0x49, 0x46, 0x38}, // "GIF8"
+	"image/webp": nil, // webp detected by RIFF+WEBP; handled separately
+}
+
+// detectImageMime determines whether a file is a supported image format.
+// Uses file extension first, then validates with magic bytes.
+// Returns the MIME type or empty string if not a supported image.
+func detectImageMime(filePath string, data []byte) string {
+	ext := strings.ToLower(path.Ext(filePath))
+	mime, ok := imageMimeByExt[ext]
+	if !ok {
+		return ""
+	}
+
+	// Validate with magic bytes
+	if expected, ok := imageMagicBytes[mime]; ok && expected != nil {
+		if len(data) < len(expected) || !bytes.Equal(data[:len(expected)], expected) {
+			return ""
+		}
+	}
+
+	// WebP: check RIFF header (first 4 bytes) + WEBP at offset 8
+	if mime == "image/webp" {
+		if len(data) < 12 || string(data[:4]) != "RIFF" || string(data[8:12]) != "WEBP" {
+			return ""
+		}
+	}
+
+	return mime
+}
 
 func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var argsMap struct {
@@ -104,7 +156,23 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("failed to read file: %w", err)
 	}
 
-	// Check if file is binary by looking for null bytes
+	// Check for image files first (by extension + magic bytes), before the
+	// generic binary check. This ensures images are always detected even if
+	// they happen to lack null bytes in the first 8KB (some JPEGs, etc.).
+	if mime := detectImageMime(filePath, content); mime != "" {
+		encoded := base64.StdEncoding.EncodeToString(content)
+		AddImageParts(ctx, []llm.ContentPart{
+			{
+				Type:      llm.ContentPartImage,
+				MediaType: mime,
+				Data:      encoded,
+			},
+		})
+		return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
+			filepath.Base(filePath), mime, len(content), len(encoded)), nil
+	}
+
+	// Not an image — reject other binary files.
 	if isBinaryFile(content) {
 		return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
 	}

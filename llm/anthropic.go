@@ -44,11 +44,46 @@ func collectToolMessages(messages []Message, start int) ([]anthropic.ContentBloc
 	// Consume consecutive tool messages.
 	end := start
 	for ; end < len(messages) && messages[end].Role == "tool"; end++ {
-		blocks = append(blocks, anthropic.NewToolResultBlock(
-			messages[end].ToolCallID,
-			messages[end].Content,
-			messages[end].IsError,
-		))
+		msg := messages[end]
+		// When the tool message carries image content parts, build a
+		// multi-content tool_result block (text + images). Otherwise fall
+		// back to the simple string-only helper.
+		if len(msg.ContentParts) > 0 {
+			content := make([]anthropic.ToolResultBlockParamContentUnion, 0, 1+len(msg.ContentParts))
+			if msg.Content != "" {
+				content = append(content, anthropic.ToolResultBlockParamContentUnion{
+					OfText: &anthropic.TextBlockParam{Text: msg.Content},
+				})
+			}
+			for _, part := range msg.ContentParts {
+				switch part.Type {
+				case ContentPartImage:
+					content = append(content, anthropic.ToolResultBlockParamContentUnion{
+						OfImage: &anthropic.ImageBlockParam{
+							Source: anthropic.ImageBlockParamSourceUnion{
+								OfBase64: &anthropic.Base64ImageSourceParam{
+									Data:      part.Data,
+									MediaType: anthropic.Base64ImageSourceMediaType(part.MediaType),
+								},
+							},
+						},
+					})
+				}
+			}
+			blocks = append(blocks, anthropic.ContentBlockParamUnion{
+				OfToolResult: &anthropic.ToolResultBlockParam{
+					ToolUseID: msg.ToolCallID,
+					Content:   content,
+					IsError:   anthropic.Bool(msg.IsError),
+				},
+			})
+		} else {
+			blocks = append(blocks, anthropic.NewToolResultBlock(
+				msg.ToolCallID,
+				msg.Content,
+				msg.IsError,
+			))
+		}
 	}
 
 	// If the next message is steer or a regular user message, merge it as a

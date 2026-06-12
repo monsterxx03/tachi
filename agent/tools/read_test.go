@@ -8,6 +8,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/monsterxx03/tachi/llm"
 )
 
 func TestReadTool(t *testing.T) {
@@ -285,4 +287,121 @@ func TestReadToolConcurrentCache(t *testing.T) {
 		})
 	}
 	wg.Wait()
+}
+
+// minimalPNG returns the bytes of a valid 1x1 pixel grayscale PNG.
+// This is a hand-crafted minimal PNG to avoid importing image/png.
+func minimalPNG() []byte {
+	// Hex dump of a 1x1 grayscale PNG (68 bytes):
+	png := []byte{
+		0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, // signature
+		0x00, 0x00, 0x00, 0x0D, // IHDR length = 13
+		0x49, 0x48, 0x44, 0x52, // "IHDR"
+		0x00, 0x00, 0x00, 0x01, // width = 1
+		0x00, 0x00, 0x00, 0x01, // height = 1
+		0x08,                         // bit depth = 8
+		0x00,                         // color type = grayscale
+		0x00,                         // compression
+		0x00,                         // filter
+		0x00,                         // interlace
+		0x6C, 0xE0, 0xDE, 0x2D, // IHDR CRC
+		0x00, 0x00, 0x00, 0x0B, // IDAT length = 11
+		0x49, 0x44, 0x41, 0x54, // "IDAT"
+		0x78, 0x9C, 0x63, 0x60, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, // zlib data
+		0x73, 0x75, 0x01, 0x8A, // IDAT CRC
+		0x00, 0x00, 0x00, 0x00, // IEND length = 0
+		0x49, 0x45, 0x4E, 0x44, // "IEND"
+		0xAE, 0x42, 0x60, 0x82, // IEND CRC
+	}
+	return png
+}
+
+func TestReadToolImage(t *testing.T) {
+	tool := NewReadTool()
+
+	pngData := minimalPNG()
+	err := os.WriteFile("/tmp/test_read_image.png", pngData, 0644)
+	if err != nil {
+		t.Fatalf("Failed to create test image: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_image.png")
+
+	// Use context with image carrier — similar to what Registry.Invoke does.
+	ctx := WithImagePartsCarrier(context.TODO())
+	result, err := tool.ExecuteContext(ctx, `{"path": "/tmp/test_read_image.png"}`)
+	if err != nil {
+		t.Fatalf("ReadTool.Execute on image failed: %v", err)
+	}
+
+	// Should return a description, not the raw content
+	if !strings.HasPrefix(result, "[Image:") {
+		t.Errorf("Expected image description prefix, got: %q", result)
+	}
+
+	// Image parts should be in context
+	parts := ImagePartsFromCtx(ctx)
+	if len(parts) != 1 {
+		t.Fatalf("Expected 1 image part, got %d", len(parts))
+	}
+	if parts[0].Type != llm.ContentPartImage {
+		t.Errorf("Expected ContentPartImage, got %v", parts[0].Type)
+	}
+	if parts[0].MediaType != "image/png" {
+		t.Errorf("Expected image/png, got %s", parts[0].MediaType)
+	}
+	if parts[0].Data == "" {
+		t.Error("Expected non-empty base64 data")
+	}
+}
+
+func TestDetectImageMime(t *testing.T) {
+	pngData := minimalPNG()
+
+	tests := []struct {
+		name     string
+		filePath string
+		data     []byte
+		want     string
+	}{
+		{"png", "test.png", pngData, "image/png"},
+		{"PNG uppercase", "test.PNG", pngData, "image/png"},
+		{"jpeg", "photo.jpg", []byte{0xFF, 0xD8, 0xFF, 0x00}, "image/jpeg"},
+		{"jpeg ext", "photo.jpeg", []byte{0xFF, 0xD8, 0xFF, 0x00}, "image/jpeg"},
+		{"gif", "anim.gif", []byte{0x47, 0x49, 0x46, 0x38, 0x39, 0x61}, "image/gif"},
+		{"webp", "img.webp", []byte("RIFF\x00\x00\x00\x00WEBP"), "image/webp"},
+		{"bad magic png", "fake.png", []byte{0x00, 0x00, 0x00, 0x00}, ""},
+		{"unknown ext", "doc.pdf", pngData, ""},
+		{"bad webp", "bad.webp", []byte("RIFF\x00\x00\x00\x00XXXX"), ""},
+		{"too short", "x.png", []byte{0x89}, ""},
+		{"too short webp", "x.webp", []byte("RIFF"), ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectImageMime(tt.filePath, tt.data)
+			if got != tt.want {
+				t.Errorf("detectImageMime(%q) = %q, want %q", tt.filePath, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestReadToolImageUnknownExtBinary(t *testing.T) {
+	tool := NewReadTool()
+
+	// A binary file with an unrecognized extension should still error
+	binaryContent := []byte{0x00, 0x01, 0x02, 'h', 'e', 'l', 'l', 'o'}
+	err := os.WriteFile("/tmp/test_not_image.bin", binaryContent, 0644)
+	if err != nil {
+		t.Fatalf("Failed to create binary test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_not_image.bin")
+
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_not_image.bin"}`)
+	if err == nil {
+		t.Error("Expected error for non-image binary file")
+	}
+	if !strings.Contains(err.Error(), "binary file") {
+		t.Errorf("Expected binary file error, got: %v", err)
+	}
 }

@@ -272,6 +272,9 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 		} else {
 			wrapped := wrapToolOutput(tc.Function.Name, tr.Output)
 			toolMsg.Content = wrapped
+			if len(tr.ImageParts) > 0 {
+				toolMsg.ContentParts = tr.ImageParts
+			}
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: tr.Output,
@@ -447,6 +450,9 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		} else {
 			wrapped := wrapToolOutput(tc.Function.Name, tr.Output)
 			toolMsg.Content = wrapped
+			if len(tr.ImageParts) > 0 {
+				toolMsg.ContentParts = tr.ImageParts
+			}
 			ch <- AgentEvent{
 				Type: AgentEventToolResult, ToolName: tc.Function.Name,
 				ToolID: tc.ID, ToolResult: tr.Output,
