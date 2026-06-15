@@ -11,8 +11,10 @@ import (
 )
 
 const keywordExtractionPrompt = "Extract 3-5 most important search keywords from the user query. " +
-	"Return only the keywords, one per line. Output short phrases (1-3 words each, " +
-	"no full sentences). No numbering, bullets, explanations, or any other text."
+	"Return each keyword TWICE — once in Chinese and once in English — one per line. " +
+	"Output short phrases (1-3 words each, no full sentences). " +
+	"For example: \"数据库连接池\" and \"database connection pool\" should both appear as separate lines. " +
+	"No numbering, bullets, explanations, or any other text."
 
 // LLMKeywordExtractor uses an LLM to extract search keywords from a user query.
 // It is injected into TopicBackend to improve text-based recall quality

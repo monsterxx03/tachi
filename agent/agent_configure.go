@@ -444,9 +444,13 @@ func (a *AIAgent) buildReminderCollector() {
 	all = append(all, core...)
 	all = append(all, a.skillListReminder)
 	if a.memory != nil {
+		limit := a.cfg.Memory.RecallLimit
+		if limit <= 0 {
+			limit = 5
+		}
 		all = append(all, systemreminder.MemoryRecallReminder{
 			Backend: a.memory.Backend,
-			Limit:   5,
+			Limit:   limit,
 			Timeout: a.cfg.Memory.Timeout,
 		})
 	}

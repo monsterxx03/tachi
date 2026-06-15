@@ -389,6 +389,7 @@ type MemoryConfig struct {
 	Type             string               `yaml:"type"`                  // "mem9" or "agentmemory" or "" (disabled)
 	KeywordProvider  string               `yaml:"keyword_provider"`      // optional: provider name for keyword extraction (defaults to main provider)
 	Timeout          time.Duration        `yaml:"timeout" default:"10s"` // context deadline for Store/Recall/Forget
+	RecallLimit      int                  `yaml:"recall_limit" default:"5"` // max memories recalled per turn by automatic MemoryRecallReminder
 	ToolResultMaxLen int                  `yaml:"tool_result_max_len"`   // max chars for tool result in memory (default 8000, 0 = no limit)
 	Mem9             Mem9SubConfig        `yaml:"mem9"`
 	AgentMemory      AgentMemorySubConfig `yaml:"agentmemory"`
