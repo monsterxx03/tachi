@@ -387,6 +387,7 @@ func toBool(v any) bool {
 // Type selects the backend: "" (disabled), "mem9", or "agentmemory".
 type MemoryConfig struct {
 	Type             string               `yaml:"type"`                  // "mem9" or "agentmemory" or "" (disabled)
+	KeywordProvider  string               `yaml:"keyword_provider"`      // optional: provider name for keyword extraction (defaults to main provider)
 	Timeout          time.Duration        `yaml:"timeout" default:"10s"` // context deadline for Store/Recall/Forget
 	ToolResultMaxLen int                  `yaml:"tool_result_max_len"`   // max chars for tool result in memory (default 8000, 0 = no limit)
 	Mem9             Mem9SubConfig        `yaml:"mem9"`

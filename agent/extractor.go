@@ -25,13 +25,16 @@ type LLMKeywordExtractor struct {
 }
 
 // NewLLMKeywordExtractor creates an extractor backed by an LLM provider.
-// timeout defaults to 1.5s — keyword extraction is best-effort and should
-// not significantly delay the conversation flow.
-func NewLLMKeywordExtractor(provider llm.Provider, model string) *LLMKeywordExtractor {
+// timeout defaults to 15s if zero is passed — keyword extraction is best-effort
+// and should not significantly delay the conversation flow.
+func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Duration) *LLMKeywordExtractor {
+	if timeout <= 0 {
+		timeout = 15 * time.Second
+	}
 	return &LLMKeywordExtractor{
 		provider: provider,
 		model:    model,
-		timeout:  15 * time.Second,
+		timeout:  timeout,
 		logger:   debuglog.DefaultLogger.WithSource("memory:keyword-extractor"),
 	}
 }

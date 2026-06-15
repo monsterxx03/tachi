@@ -49,12 +49,30 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 			a.memory = &MemoryState{Backend: backend}
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
 
-			// Wire keyword extractor for topic backend if provider is already set.
-			if a.provider != nil {
-				if tb, ok := backend.(*memory.TopicBackend); ok {
-					tb.SetKeywordExtractor(NewLLMKeywordExtractor(a.provider, a.model))
-					a.logger.Log("Memory: keyword extractor wired for topic backend")
+			// Wire keyword extractor for topic backend.
+			if tb, ok := backend.(*memory.TopicBackend); ok {
+				kwProvider, kwModel := a.provider, a.model
+
+				// Resolve dedicated keyword provider if configured.
+				if kpName := cfg.Memory.KeywordProvider; kpName != "" {
+					if kpCfg := cfg.FindProvider(kpName); kpCfg != nil {
+						resolved, err := config.ResolveProviderConfig(kpCfg)
+						if err == nil {
+							sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+							if err == nil {
+								kwProvider, kwModel = sp, resolved.Model
+								a.logger.Log("Memory: using keyword provider %q (%s/%s)", kpName, resolved.Type, resolved.Model)
+							}
+						}
+					}
+					if kwProvider == a.provider {
+						a.logger.Log("Memory: keyword_provider %q not resolved, falling back to main provider", kpName)
+					}
 				}
+
+				timeout := cfg.Memory.Timeout
+				tb.SetKeywordExtractor(NewLLMKeywordExtractor(kwProvider, kwModel, timeout))
+				a.logger.Log("Memory: keyword extractor wired for topic backend")
 			}
 		}
 	}
