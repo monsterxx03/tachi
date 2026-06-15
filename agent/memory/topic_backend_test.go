@@ -13,6 +13,8 @@ import (
 
 func setupTopicBackend(t *testing.T) (*TopicBackend, string) {
 	t.Helper()
+	requireRipgrep(t)
+
 	tmpDir := t.TempDir()
 
 	backend, err := NewTopicBackend(Config{
@@ -25,6 +27,15 @@ func setupTopicBackend(t *testing.T) (*TopicBackend, string) {
 	backend.projectDir = ""
 
 	return backend, tmpDir
+}
+
+// requireRipgrep skips tests when ripgrep (rg) is not available in PATH.
+// This avoids failures in CI environments that don't have rg installed.
+func requireRipgrep(t *testing.T) {
+	t.Helper()
+	if _, err := exec.LookPath("rg"); err != nil {
+		t.Skip("ripgrep (rg) not found in PATH — skipping test")
+	}
 }
 
 func TestTopicBackend_StoreDirectContent(t *testing.T) {
@@ -248,6 +259,7 @@ func TestTopicBackend_Recall_NoMatch(t *testing.T) {
 }
 
 func TestTopicBackend_Recall_DualDomain(t *testing.T) {
+	requireRipgrep(t)
 	tmpDir := t.TempDir()
 	globalDir := filepath.Join(tmpDir, "global", "memory")
 	projectDir := filepath.Join(tmpDir, "project", "memory")
