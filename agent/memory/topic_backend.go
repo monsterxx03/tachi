@@ -22,11 +22,13 @@ import (
 //   - Store: only handles DirectContent (appends to inbox.md); other scopes are no-op
 //   - Memory is produced offline by the Dream sub-agent, not in real-time
 //   - Searches both global (~/.tachi/memory/) and project (<git-root>/.tachi/memory/) domains
+//   - Optional KeywordExtractor for improved text-search recall
 type TopicBackend struct {
 	globalDir  string // ~/.tachi/memory/
 	projectDir string // <git-root>/.tachi/memory/ (may be empty)
 	rgPath     string // resolved path to rg binary (empty if unavailable)
 	logger     *debuglog.Logger
+	extractor  KeywordExtractor // optional: extracts keywords from query for better recall
 }
 
 // NewTopicBackend creates a TopicBackend.
@@ -63,6 +65,14 @@ func NewTopicBackend(cfg Config) (*TopicBackend, error) {
 	}, nil
 }
 
+// SetKeywordExtractor configures an optional keyword extractor.
+// When set, Recall() will first extract keywords from the user query
+// and search using those keywords instead of the raw query text,
+// improving recall for text-based (rg) search.
+func (t *TopicBackend) SetKeywordExtractor(ext KeywordExtractor) {
+	t.extractor = ext
+}
+
 // Recall searches topic files and inbox for matching content.
 func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]Entry, error) {
 	if query == "" {
@@ -75,19 +85,31 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		limit = 10
 	}
 
+	// Extract keywords for better text-search recall.
+	// Falls back to raw query if extractor is not set or fails.
+	keywords := []string{query}
+	if t.extractor != nil {
+		if kws, err := t.extractor.ExtractKeywords(ctx, query); err == nil && len(kws) > 0 {
+			keywords = kws
+			t.logger.Log("keywords extracted: %v (from %q)", keywords, query)
+		} else if err != nil {
+			t.logger.Log("keyword extraction failed, falling back to raw query: %v", err)
+		}
+	}
+
 	var allResults []Entry
 
 	// 1. Search global topics + inbox
-	results := t.searchDir(ctx, filepath.Join(t.globalDir, "topics"), query)
+	results := t.searchDir(ctx, filepath.Join(t.globalDir, "topics"), keywords)
 	allResults = append(allResults, results...)
-	results = t.searchFile(ctx, filepath.Join(t.globalDir, "inbox.md"), query)
+	results = t.searchFile(ctx, filepath.Join(t.globalDir, "inbox.md"), keywords)
 	allResults = append(allResults, results...)
 
 	// 2. Search project topics + inbox (if available)
 	if t.projectDir != "" {
-		results = t.searchDir(ctx, filepath.Join(t.projectDir, "topics"), query)
+		results = t.searchDir(ctx, filepath.Join(t.projectDir, "topics"), keywords)
 		allResults = append(allResults, results...)
-		results = t.searchFile(ctx, filepath.Join(t.projectDir, "inbox.md"), query)
+		results = t.searchFile(ctx, filepath.Join(t.projectDir, "inbox.md"), keywords)
 		allResults = append(allResults, results...)
 	}
 
@@ -152,13 +174,19 @@ func (t *TopicBackend) Observe(ctx context.Context, opts ObserveOptions) error {
 // --- Search implementation ---
 
 // searchDir searches all .md files in a directory for matching blocks.
-func (t *TopicBackend) searchDir(ctx context.Context, dir, query string) []Entry {
+func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []string) []Entry {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
 		return nil
 	}
 
-	// Use rg to find files containing the query.
-	args := []string{"-l", "-i", "--glob", "*.md", query, dir}
+	// Use rg with -e flags for each keyword (OR logic).
+	// -F enables fixed-string matching to avoid regex metacharacter issues.
+	args := []string{"-F", "-l", "-i", "--glob", "*.md"}
+	for _, kw := range keywords {
+		args = append(args, "-e", kw)
+	}
+	args = append(args, dir)
+	t.logger.Log("rg %s", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, t.rgPath, args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -176,28 +204,34 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir, query string) []Entry
 		if f == "" {
 			continue
 		}
-		entries := t.extractMatchingBlocks(f, query)
+		entries := t.extractMatchingBlocks(f, keywords)
 		results = append(results, entries...)
 	}
 	return results
 }
 
 // searchFile searches a single file for matching blocks.
-func (t *TopicBackend) searchFile(ctx context.Context, path, query string) []Entry {
+func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []string) []Entry {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return nil
 	}
-	// Check if file contains the query at all.
-	cmd := exec.CommandContext(ctx, t.rgPath, "-i", "-q", query, path)
+	// Check if file contains any keyword.
+	args := []string{"-F", "-i", "-q"}
+	for _, kw := range keywords {
+		args = append(args, "-e", kw)
+	}
+	args = append(args, path)
+	t.logger.Log("rg %s", strings.Join(args, " "))
+	cmd := exec.CommandContext(ctx, t.rgPath, args...)
 	if err := cmd.Run(); err != nil {
 		return nil // no match
 	}
-	return t.extractMatchingBlocks(path, query)
+	return t.extractMatchingBlocks(path, keywords)
 }
 
 // extractMatchingBlocks reads a markdown file, splits by "---" separators,
-// and returns blocks that contain the query as Entry values.
-func (t *TopicBackend) extractMatchingBlocks(path, query string) []Entry {
+// and returns blocks that contain any keyword as Entry values.
+func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []Entry {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil
@@ -207,14 +241,19 @@ func (t *TopicBackend) extractMatchingBlocks(path, query string) []Entry {
 	var entries []Entry
 
 	filename := filepath.Base(path)
-	queryLower := strings.ToLower(query)
+
+	// Lowercase all keywords once for case-insensitive matching.
+	keywordLower := make([]string, len(keywords))
+	for i, kw := range keywords {
+		keywordLower[i] = strings.ToLower(kw)
+	}
 
 	for _, block := range blocks {
 		block = strings.TrimSpace(block)
 		if block == "" {
 			continue
 		}
-		if !containsIgnoreCase(block, queryLower) {
+		if !matchesAnyKeyword(block, keywordLower) {
 			continue
 		}
 
@@ -222,7 +261,7 @@ func (t *TopicBackend) extractMatchingBlocks(path, query string) []Entry {
 			ID:      fmt.Sprintf("topic:%s:%d", filename, hashBlock(block)),
 			Summary: extractTitle(block),
 			Content: truncateContent(block, 1000),
-			Score:   computeScore(block, queryLower),
+			Score:   computeScoreMulti(block, keywordLower),
 		}
 
 		// Try to extract timestamp from "来源:" or date in title.
@@ -236,21 +275,39 @@ func (t *TopicBackend) extractMatchingBlocks(path, query string) []Entry {
 	return entries
 }
 
+// matchesAnyKeyword returns true if block contains any of the given
+// (already lowercased) keywords.
+func matchesAnyKeyword(block string, keywords []string) bool {
+	blockLower := strings.ToLower(block)
+	for _, kw := range keywords {
+		if strings.Contains(blockLower, kw) {
+			return true
+		}
+	}
+	return false
+}
+
 // --- Scoring ---
 
-// computeScore calculates a relevance score for a block.
-func computeScore(block, queryLower string) float64 {
+// computeScoreMulti calculates a relevance score for a block against multiple keywords.
+func computeScoreMulti(block string, keywords []string) float64 {
 	score := 0.5
 
 	// Title match bonus.
 	title := strings.ToLower(extractTitle(block))
-	if strings.Contains(title, queryLower) {
-		score += 0.2
+	for _, kw := range keywords {
+		if strings.Contains(title, kw) {
+			score += 0.2
+			break
+		}
 	}
 
 	// Keyword line match bonus.
-	if matchesKeywordLine(block, queryLower) {
-		score += 0.2
+	for _, kw := range keywords {
+		if matchesKeywordLine(block, kw) {
+			score += 0.2
+			break
+		}
 	}
 
 	// Superseded penalty.
@@ -268,6 +325,12 @@ func computeScore(block, queryLower string) float64 {
 	}
 
 	return score
+}
+
+// computeScore calculates a relevance score for a block against a single query.
+// Delegates to computeScoreMulti for consistency.
+func computeScore(block, queryLower string) float64 {
+	return computeScoreMulti(block, []string{queryLower})
 }
 
 // matchesKeywordLine checks if the query matches a "关键词:" or "Keywords:" line.
@@ -359,10 +422,6 @@ func extractTimestamp(block string) int64 {
 }
 
 // --- Utility functions ---
-
-func containsIgnoreCase(s, lowerQuery string) bool {
-	return strings.Contains(strings.ToLower(s), lowerQuery)
-}
 
 func truncateContent(s string, maxLen int) string {
 	// Truncate at rune boundary.

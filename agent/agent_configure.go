@@ -48,6 +48,14 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		} else {
 			a.memory = &MemoryState{Backend: backend}
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
+
+			// Wire keyword extractor for topic backend if provider is already set.
+			if a.provider != nil {
+				if tb, ok := backend.(*memory.TopicBackend); ok {
+					tb.SetKeywordExtractor(NewLLMKeywordExtractor(a.provider, a.model))
+					a.logger.Log("Memory: keyword extractor wired for topic backend")
+				}
+			}
 		}
 	}
 
