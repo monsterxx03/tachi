@@ -3,6 +3,8 @@ package dream
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -104,6 +106,12 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	// Post-dream: scan topic files and update decay states.
 	factStates := ScanTopicFacts(plan.Group.MemoryRoot, plan.LastState.FactStates, logger)
 
+	// Ensure inbox.md was cleared. The dream agent is instructed to integrate
+	// inbox content into topic files and then clear the inbox. If the agent
+	// forgot, force-clear to prevent stale content from accumulating and being
+	// re-processed in the next dream.
+	ensureInboxCleared(plan.Group.MemoryRoot, logger)
+
 	state := State{
 		LastDreamAt:     time.Now(),
 		SessionsDreamed: len(plan.ActiveSessions),
@@ -179,4 +187,28 @@ func buildSessionSummaries(sessions []*session.Session, loadMessages func(string
 	}
 
 	return summaries
+}
+
+// ensureInboxCleared verifies that inbox.md is empty after a dream run.
+// The dream agent is instructed to integrate inbox content into topic files
+// and then clear the inbox. If the agent forgot, we force-clear here to
+// prevent stale content from being re-processed in the next dream.
+func ensureInboxCleared(memoryRoot string, logger *debuglog.Logger) {
+	inboxPath := filepath.Join(memoryRoot, "inbox.md")
+	info, err := os.Stat(inboxPath)
+	if os.IsNotExist(err) {
+		return // already clean
+	}
+	if err != nil {
+		logger.Log("ensureInboxCleared: stat %s: %v", inboxPath, err)
+		return
+	}
+	if info.Size() == 0 {
+		return // already empty
+	}
+
+	logger.Log("inbox.md has %d bytes after dream — force-clearing (agent forgot)", info.Size())
+	if err := os.WriteFile(inboxPath, []byte{}, 0644); err != nil {
+		logger.Log("ensureInboxCleared: failed to truncate %s: %v", inboxPath, err)
+	}
 }
