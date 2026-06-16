@@ -197,10 +197,7 @@ func buildSessionSummaries(sessions []*session.Session, loadMessages func(string
 
 		// Include 2 preceding turns for context, clamped to start of slice.
 		contextWindow := 2
-		startIdx := firstNewIdx - contextWindow
-		if startIdx < 0 {
-			startIdx = 0
-		}
+		startIdx := max(firstNewIdx-contextWindow, 0)
 
 		pairs = pairs[startIdx:]
 

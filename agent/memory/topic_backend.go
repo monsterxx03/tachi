@@ -335,14 +335,14 @@ func (t *TopicBackend) invalidateDecayCache() {
 // dreamStateJSON mirrors dream.State for deserializing last_dream.json
 // without importing the dream package (avoids circular dependency).
 type dreamStateJSON struct {
-	LastDreamAt     time.Time              `json:"last_dream_at"`
-	SessionsDreamed int                    `json:"sessions_dreamed"`
-	TopicsCreated   int                    `json:"topics_created"`
-	FactsAdded      int                    `json:"facts_added"`
-	FactsSuperseded int                    `json:"facts_superseded"`
-	FactsPruned     int                    `json:"facts_pruned"`
-	Errors          []string               `json:"errors,omitempty"`
-	FactStates      map[string]*FactState  `json:"fact_states,omitempty"`
+	LastDreamAt     time.Time             `json:"last_dream_at"`
+	SessionsDreamed int                   `json:"sessions_dreamed"`
+	TopicsCreated   int                   `json:"topics_created"`
+	FactsAdded      int                   `json:"facts_added"`
+	FactsSuperseded int                   `json:"facts_superseded"`
+	FactsPruned     int                   `json:"facts_pruned"`
+	Errors          []string              `json:"errors,omitempty"`
+	FactStates      map[string]*FactState `json:"fact_states,omitempty"`
 }
 
 // loadFactStatesFromFile reads last_dream.json from the given memory dir
@@ -529,7 +529,7 @@ func computeScore(block, queryLower string) float64 {
 
 // matchesKeywordLine checks if the query matches a "关键词:" or "Keywords:" line.
 func matchesKeywordLine(block, queryLower string) bool {
-	for _, line := range strings.Split(block, "\n") {
+	for line := range strings.SplitSeq(block, "\n") {
 		lineLower := strings.ToLower(line)
 		if (strings.HasPrefix(lineLower, "关键词:") || strings.HasPrefix(lineLower, "keywords:")) &&
 			strings.Contains(lineLower, queryLower) {
@@ -571,17 +571,17 @@ func SplitByHR(content string) []string {
 
 // extractTitle returns the first ## or # line from a block.
 func extractTitle(block string) string {
-	for _, line := range strings.Split(block, "\n") {
+	for line := range strings.SplitSeq(block, "\n") {
 		trimmed := strings.TrimSpace(line)
-		if strings.HasPrefix(trimmed, "## ") {
-			return strings.TrimPrefix(trimmed, "## ")
+		if after, ok := strings.CutPrefix(trimmed, "## "); ok {
+			return after
 		}
-		if strings.HasPrefix(trimmed, "# ") {
-			return strings.TrimPrefix(trimmed, "# ")
+		if after, ok := strings.CutPrefix(trimmed, "# "); ok {
+			return after
 		}
 	}
 	// No header found — use first non-empty line truncated.
-	for _, line := range strings.Split(block, "\n") {
+	for line := range strings.SplitSeq(block, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" {
 			if len(trimmed) > 80 {
@@ -595,7 +595,7 @@ func extractTitle(block string) string {
 
 // extractTimestamp tries to find a date in the block (from "来源:" line or ## header).
 func extractTimestamp(block string) int64 {
-	for _, line := range strings.Split(block, "\n") {
+	for line := range strings.SplitSeq(block, "\n") {
 		trimmed := strings.TrimSpace(line)
 		// Try to find an RFC3339 or date-like pattern.
 		if idx := strings.Index(trimmed, "202"); idx >= 0 {

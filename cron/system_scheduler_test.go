@@ -21,8 +21,7 @@ func TestSystemScheduler_RegisterAndFire(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ss.Start(ctx)
 	defer ss.Stop()
@@ -44,8 +43,7 @@ func TestSystemScheduler_RegisterAndFire(t *testing.T) {
 func TestSystemScheduler_RegisterAfterStart(t *testing.T) {
 	ss := NewSystemScheduler(SystemSchedulerConfig{})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	ss.Start(ctx)
 	defer ss.Stop()
