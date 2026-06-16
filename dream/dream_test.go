@@ -356,3 +356,259 @@ func TestOrchestrator_Run_OnlyPicksActiveSessions(t *testing.T) {
 		}
 	}
 }
+
+// --- buildSessionSummaries tests ---
+
+func TestFilterSessionMessages_Timestamps(t *testing.T) {
+	now := time.Now()
+	t1 := now.Add(-3 * time.Hour)
+	t2 := now.Add(-2 * time.Hour)
+	t3 := now.Add(-1 * time.Hour)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "q1", Timestamp: t1},
+		{Type: session.MessageTypeAssistant, Content: "a1", Timestamp: t1.Add(time.Second)},
+		{Type: session.MessageTypeUser, Content: "q2", Timestamp: t2},
+		{Type: session.MessageTypeAssistant, Content: "a2", Timestamp: t2.Add(time.Second)},
+		{Type: session.MessageTypeUser, Content: "q3", Timestamp: t3},
+		{Type: session.MessageTypeAssistant, Content: "a3", Timestamp: t3.Add(time.Second)},
+	}
+
+	pairs := FilterSessionMessages(msgs)
+	if len(pairs) != 3 {
+		t.Fatalf("expected 3 pairs, got %d", len(pairs))
+	}
+
+	if !pairs[0].Timestamp.Equal(t1) {
+		t.Errorf("pair 0 timestamp: got %v, want %v", pairs[0].Timestamp, t1)
+	}
+	if !pairs[1].Timestamp.Equal(t2) {
+		t.Errorf("pair 1 timestamp: got %v, want %v", pairs[1].Timestamp, t2)
+	}
+	if !pairs[2].Timestamp.Equal(t3) {
+		t.Errorf("pair 2 timestamp: got %v, want %v", pairs[2].Timestamp, t3)
+	}
+}
+
+func TestBuildSessionSummaries_FirstDream(t *testing.T) {
+	// First dream: lastDreamAt is zero → all pairs included.
+	now := time.Now()
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "q1", Timestamp: now.Add(-3 * time.Hour)},
+		{Type: session.MessageTypeAssistant, Content: "a1", Timestamp: now.Add(-3 * time.Hour)},
+		{Type: session.MessageTypeUser, Content: "q2", Timestamp: now.Add(-2 * time.Hour)},
+		{Type: session.MessageTypeAssistant, Content: "a2", Timestamp: now.Add(-2 * time.Hour)},
+		{Type: session.MessageTypeUser, Content: "q3", Timestamp: now.Add(-1 * time.Hour)},
+		{Type: session.MessageTypeAssistant, Content: "a3", Timestamp: now.Add(-1 * time.Hour)},
+	}
+
+	sessions := []*session.Session{
+		{ID: "s1", Title: "test session"},
+	}
+
+	loadFn := func(id string) ([]session.Message, error) {
+		return msgs, nil
+	}
+
+	summaries := buildSessionSummaries(sessions, loadFn, time.Time{}, nil)
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if len(summaries[0].Messages) != 3 {
+		t.Errorf("first dream should include all 3 pairs, got %d", len(summaries[0].Messages))
+	}
+}
+
+func TestBuildSessionSummaries_WindowFiltering(t *testing.T) {
+	// lastDreamAt = 1.5h ago. Pairs at 3h, 2.5h, 2h, 1h (new), 30min (new).
+	// Expected: pairs at 2.5h, 2h (2 context), 1h, 30min (2 new) = 4 total.
+	now := time.Now()
+	t3h := now.Add(-3 * time.Hour)
+	t2_5h := now.Add(-150 * time.Minute)
+	t2h := now.Add(-2 * time.Hour)
+	t1h := now.Add(-1 * time.Hour)
+	t30m := now.Add(-30 * time.Minute)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "old1", Timestamp: t3h},
+		{Type: session.MessageTypeAssistant, Content: "old1a", Timestamp: t3h},
+		{Type: session.MessageTypeUser, Content: "ctx2", Timestamp: t2_5h},
+		{Type: session.MessageTypeAssistant, Content: "ctx2a", Timestamp: t2_5h},
+		{Type: session.MessageTypeUser, Content: "ctx1", Timestamp: t2h},
+		{Type: session.MessageTypeAssistant, Content: "ctx1a", Timestamp: t2h},
+		{Type: session.MessageTypeUser, Content: "new1", Timestamp: t1h},
+		{Type: session.MessageTypeAssistant, Content: "new1a", Timestamp: t1h},
+		{Type: session.MessageTypeUser, Content: "new2", Timestamp: t30m},
+		{Type: session.MessageTypeAssistant, Content: "new2a", Timestamp: t30m},
+	}
+
+	sessions := []*session.Session{
+		{ID: "s1"},
+	}
+
+	loadFn := func(id string) ([]session.Message, error) {
+		return msgs, nil
+	}
+
+	lastDreamAt := now.Add(-90 * time.Minute) // 1.5h ago
+
+	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+
+	pairs := summaries[0].Messages
+	if len(pairs) != 4 {
+		t.Fatalf("expected 4 pairs (2 context + 2 new), got %d", len(pairs))
+	}
+
+	// First two should be context pairs.
+	if pairs[0].User != "ctx2" {
+		t.Errorf("pair 0 user: got %q, want ctx2", pairs[0].User)
+	}
+	if pairs[1].User != "ctx1" {
+		t.Errorf("pair 1 user: got %q, want ctx1", pairs[1].User)
+	}
+	// Then the new ones.
+	if pairs[2].User != "new1" {
+		t.Errorf("pair 2 user: got %q, want new1", pairs[2].User)
+	}
+	if pairs[3].User != "new2" {
+		t.Errorf("pair 3 user: got %q, want new2", pairs[3].User)
+	}
+}
+
+func TestBuildSessionSummaries_FewContextPairs(t *testing.T) {
+	// Only 1 pair before the first new one → clamp context to 1 pair.
+	now := time.Now()
+	t3h := now.Add(-3 * time.Hour)
+	t30m := now.Add(-30 * time.Minute)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "ctx1", Timestamp: t3h},
+		{Type: session.MessageTypeAssistant, Content: "ctx1a", Timestamp: t3h},
+		{Type: session.MessageTypeUser, Content: "new1", Timestamp: t30m},
+		{Type: session.MessageTypeAssistant, Content: "new1a", Timestamp: t30m},
+	}
+
+	sessions := []*session.Session{
+		{ID: "s1"},
+	}
+
+	loadFn := func(id string) ([]session.Message, error) {
+		return msgs, nil
+	}
+
+	lastDreamAt := now.Add(-1 * time.Hour) // 1h ago
+
+	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+
+	pairs := summaries[0].Messages
+	if len(pairs) != 2 {
+		t.Fatalf("expected 2 pairs (1 context + 1 new), got %d", len(pairs))
+	}
+	if pairs[0].User != "ctx1" {
+		t.Errorf("pair 0 user: got %q, want ctx1", pairs[0].User)
+	}
+	if pairs[1].User != "new1" {
+		t.Errorf("pair 1 user: got %q, want new1", pairs[1].User)
+	}
+}
+
+func TestBuildSessionSummaries_NoContextPairs(t *testing.T) {
+	// First pair is the first new one → 0 context pairs, start at index 0.
+	now := time.Now()
+	t30m := now.Add(-30 * time.Minute)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "new1", Timestamp: t30m},
+		{Type: session.MessageTypeAssistant, Content: "new1a", Timestamp: t30m},
+		{Type: session.MessageTypeUser, Content: "new2", Timestamp: now.Add(-10 * time.Minute)},
+		{Type: session.MessageTypeAssistant, Content: "new2a", Timestamp: now.Add(-10 * time.Minute)},
+	}
+
+	sessions := []*session.Session{
+		{ID: "s1"},
+	}
+
+	loadFn := func(id string) ([]session.Message, error) {
+		return msgs, nil
+	}
+
+	lastDreamAt := now.Add(-1 * time.Hour) // 1h ago
+
+	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+
+	pairs := summaries[0].Messages
+	if len(pairs) != 2 {
+		t.Fatalf("expected 2 pairs (all new, no context needed), got %d", len(pairs))
+	}
+}
+
+func TestBuildSessionSummaries_AllBeforeLastDream(t *testing.T) {
+	// All pairs are before lastDreamAt → session is skipped.
+	now := time.Now()
+	t3h := now.Add(-3 * time.Hour)
+	t2h := now.Add(-2 * time.Hour)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "old1", Timestamp: t3h},
+		{Type: session.MessageTypeAssistant, Content: "old1a", Timestamp: t3h},
+		{Type: session.MessageTypeUser, Content: "old2", Timestamp: t2h},
+		{Type: session.MessageTypeAssistant, Content: "old2a", Timestamp: t2h},
+	}
+
+	sessions := []*session.Session{
+		{ID: "s1"},
+	}
+
+	loadFn := func(id string) ([]session.Message, error) {
+		return msgs, nil
+	}
+
+	lastDreamAt := now.Add(-1 * time.Hour) // 1h ago
+
+	summaries := buildSessionSummaries(sessions, loadFn, lastDreamAt, nil)
+	if len(summaries) != 0 {
+		t.Errorf("expected 0 summaries (all pairs before lastDreamAt), got %d", len(summaries))
+	}
+}
+
+func TestBuildSessionSummaries_SkipsThinkingAndTools(t *testing.T) {
+	// thinking/tool_call/tool_result messages are skipped; only user+assistant form pairs.
+	now := time.Now()
+	t1 := now.Add(-1 * time.Hour)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "hello", Timestamp: t1},
+		{Type: session.MessageTypeThinking, Content: "hmm...", Timestamp: t1},
+		{Type: session.MessageTypeToolCall, Content: "tool", Timestamp: t1},
+		{Type: session.MessageTypeToolResult, Content: "result", Timestamp: t1},
+		{Type: session.MessageTypeAssistant, Content: "hi!", Timestamp: t1},
+	}
+
+	sessions := []*session.Session{
+		{ID: "s1"},
+	}
+
+	loadFn := func(id string) ([]session.Message, error) {
+		return msgs, nil
+	}
+
+	summaries := buildSessionSummaries(sessions, loadFn, time.Time{}, nil)
+	if len(summaries) != 1 {
+		t.Fatalf("expected 1 summary, got %d", len(summaries))
+	}
+	if len(summaries[0].Messages) != 1 {
+		t.Fatalf("expected 1 pair (only user+assistant), got %d", len(summaries[0].Messages))
+	}
+	if summaries[0].Messages[0].User != "hello" {
+		t.Errorf("user content: got %q, want hello", summaries[0].Messages[0].User)
+	}
+}

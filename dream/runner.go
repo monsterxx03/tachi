@@ -57,7 +57,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	}
 
 	// Build session summaries (pre-filtered to user+assistant only).
-	summaries := buildSessionSummaries(plan.ActiveSessions, loadMessages, logger)
+	summaries := buildSessionSummaries(plan.ActiveSessions, loadMessages, plan.LastState.LastDreamAt, logger)
 
 	// Build prompt.
 	systemPrompt, userPrompt := BuildPrompt(plan, summaries, cfg.MaxMessageChars)
@@ -159,7 +159,10 @@ func resolveProvider(cfg RunConfig) (llm.Provider, string, error) {
 }
 
 // buildSessionSummaries loads and filters messages for each active session.
-func buildSessionSummaries(sessions []*session.Session, loadMessages func(string) ([]session.Message, error), logger *debuglog.Logger) []SessionSummary {
+// For each session, it includes all conversation turns that started after
+// lastDreamAt, plus up to 2 preceding turns for context. If lastDreamAt is
+// zero (first dream), all pairs are included.
+func buildSessionSummaries(sessions []*session.Session, loadMessages func(string) ([]session.Message, error), lastDreamAt time.Time, logger *debuglog.Logger) []SessionSummary {
 	var summaries []SessionSummary
 
 	for _, sess := range sessions {
@@ -174,10 +177,32 @@ func buildSessionSummaries(sessions []*session.Session, loadMessages func(string
 			continue
 		}
 
-		// Limit to last 20 pairs per session to control token usage.
-		if len(pairs) > 20 {
-			pairs = pairs[len(pairs)-20:]
+		// Find the first pair whose user message occurred after lastDreamAt.
+		// If lastDreamAt is zero (first dream), include all pairs from the beginning.
+		firstNewIdx := 0
+		if !lastDreamAt.IsZero() {
+			firstNewIdx = -1
+			for i, p := range pairs {
+				if p.Timestamp.After(lastDreamAt) {
+					firstNewIdx = i
+					break
+				}
+			}
+			if firstNewIdx == -1 {
+				// No new pairs in this session (shouldn't normally happen since
+				// ActiveSessionsSince already filtered by UpdatedAt, but be safe).
+				continue
+			}
 		}
+
+		// Include 2 preceding turns for context, clamped to start of slice.
+		contextWindow := 2
+		startIdx := firstNewIdx - contextWindow
+		if startIdx < 0 {
+			startIdx = 0
+		}
+
+		pairs = pairs[startIdx:]
 
 		summaries = append(summaries, SessionSummary{
 			ID:       sess.ID,

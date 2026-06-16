@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/session"
@@ -29,6 +30,7 @@ type SessionSummary struct {
 type MessagePair struct {
 	User      string
 	Assistant string
+	Timestamp time.Time // user message timestamp (when the conversation turn started)
 }
 
 const dreamSystemPrompt = `You are a memory consolidation agent. Your job is to review recent conversation sessions and distill important knowledge into structured topic files.
@@ -138,16 +140,19 @@ func buildUserPrompt(plan Plan, summaries []SessionSummary, maxMessageChars int)
 func FilterSessionMessages(msgs []session.Message) []MessagePair {
 	var pairs []MessagePair
 	var lastUser string
+	var lastUserTime time.Time
 
 	for _, m := range msgs {
 		switch m.Type {
 		case session.MessageTypeUser:
 			lastUser = m.Content
+			lastUserTime = m.Timestamp
 		case session.MessageTypeAssistant:
 			if lastUser != "" {
 				pairs = append(pairs, MessagePair{
 					User:      lastUser,
 					Assistant: m.Content,
+					Timestamp: lastUserTime,
 				})
 				lastUser = ""
 			}
