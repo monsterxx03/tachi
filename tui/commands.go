@@ -763,8 +763,7 @@ func (m *Model) handleDreamStatusCommand() tea.Cmd {
 
 // handleDreamCommand triggers AutoDream memory consolidation synchronously
 // (not via SystemScheduler). It lists all sessions, runs the dream
-// orchestrator with MinInterval=0 to bypass the interval gate, and streams
-// progress/results back to the chat view asynchronously.
+// orchestrator, and streams progress/results back to the chat view asynchronously.
 func (m *Model) handleDreamCommand() tea.Cmd {
 	sm := m.agent.SessionManager()
 	if sm == nil {
@@ -822,8 +821,7 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 
 	// Store orchestrator reference before goroutine starts so /dream status can query it.
 	m.dreamOrch = dream.NewOrchestrator(dream.Config{
-		MinInterval: 0, // manual trigger bypasses the interval gate
-		Logger:      m.logger,
+		Logger: m.logger,
 	})
 	o := m.dreamOrch // local reference for goroutine
 

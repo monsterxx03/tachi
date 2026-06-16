@@ -232,30 +232,24 @@ func TestEnsureMemoryDir(t *testing.T) {
 	}
 }
 
-func TestOrchestrator_Run_GatesBlock(t *testing.T) {
+func TestOrchestrator_Run_SkipsWhenNoActiveSessions(t *testing.T) {
 	tmpDir := t.TempDir()
 	repoDir := filepath.Join(tmpDir, "repo")
 	os.MkdirAll(filepath.Join(repoDir, ".git"), 0755)
 
 	now := time.Now()
 	sessions := []*session.Session{
-		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now},
-		{ID: "s2", WorkingDir: repoDir, UpdatedAt: now},
+		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now.Add(-3 * time.Hour)},
+		{ID: "s2", WorkingDir: repoDir, UpdatedAt: now.Add(-2 * time.Hour)},
 	}
 
-	// Sessions are recent but MinInterval blocks (last dream < 24h ago would block,
-	// but here there's no prior state so it passes Gate 1... we need a different
-	// approach: set UpdatedAt to before a fake last dream time).
-	// Actually: with only 2 sessions both updated now, and no prior dream state,
-	// gates will pass. Let's test the interval gate instead.
+	// Pretend we dreamed 1 hour ago. Sessions are all updated before that,
+	// so no session has activity since last dream → Gate 1 blocks.
 	memRoot := filepath.Join(repoDir, ".tachi", "memory")
 	os.MkdirAll(memRoot, 0755)
-	// Pretend we dreamed 1 hour ago → Gate 1 blocks (need 24h).
 	SaveState(memRoot, State{LastDreamAt: time.Now().Add(-1 * time.Hour)})
 
-	o := NewOrchestrator(Config{
-		MinInterval: 24 * time.Hour,
-	})
+	o := NewOrchestrator(Config{})
 
 	var called bool
 	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
@@ -267,7 +261,7 @@ func TestOrchestrator_Run_GatesBlock(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 	if called {
-		t.Error("runFn should not have been called (gate 2 not met)")
+		t.Error("runFn should not have been called (no active sessions)")
 	}
 }
 
@@ -285,9 +279,7 @@ func TestOrchestrator_Run_PassesGates(t *testing.T) {
 		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now.Add(-5 * time.Hour)},
 	}
 
-	o := NewOrchestrator(Config{
-		MinInterval: 0, // no interval check
-	})
+	o := NewOrchestrator(Config{})
 
 	var calledDomain string
 	var receivedActive int
@@ -339,9 +331,7 @@ func TestOrchestrator_Run_OnlyPicksActiveSessions(t *testing.T) {
 		{ID: "s1", WorkingDir: repoDir, UpdatedAt: now.Add(-48 * time.Hour)},
 	}
 
-	o := NewOrchestrator(Config{
-		MinInterval: 24 * time.Hour,
-	})
+	o := NewOrchestrator(Config{})
 
 	var receivedActive int
 	var activeIDs []string

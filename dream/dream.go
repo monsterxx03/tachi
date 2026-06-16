@@ -92,8 +92,7 @@ type RunFunc func(ctx context.Context, plan Plan) (State, error)
 
 // Config holds runtime parameters for dream execution.
 type Config struct {
-	MinInterval time.Duration
-	Logger      *debuglog.Logger
+	Logger *debuglog.Logger
 }
 
 // Orchestrator coordinates dream execution across memory domains.
@@ -169,14 +168,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 	for _, g := range groups {
 		lastState := LoadState(g.MemoryRoot)
 
-		// Gate 1: minimum interval since last dream.
-		if !lastState.LastDreamAt.IsZero() && time.Since(lastState.LastDreamAt) < o.cfg.MinInterval {
-			o.logger.Log("[%s:%s] skipped — last dream too recent (%v ago)",
-				g.Domain, g.Root, time.Since(lastState.LastDreamAt).Round(time.Minute))
-			continue
-		}
-
-		// Gate 2: at least one session with activity since last dream.
+		// Gate 1: at least one session with activity since last dream.
 		active := ActiveSessionsSince(lastState.LastDreamAt, g.Sessions)
 		if len(active) == 0 {
 			o.logger.Log("[%s:%s] skipped — no sessions with activity since last dream",

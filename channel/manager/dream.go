@@ -18,8 +18,7 @@ func (m *Manager) executeDream(ctx context.Context) error {
 	}
 
 	o := dream.NewOrchestrator(dream.Config{
-		MinInterval: m.cfg.Dream.MinInterval,
-		Logger:      m.logger,
+		Logger: m.logger,
 	})
 
 	return o.Run(ctx, sessions, m.runDreamForPlan)

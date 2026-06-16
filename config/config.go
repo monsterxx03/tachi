@@ -230,7 +230,6 @@ func (c *CronConfig) IsEnabled() bool {
 type DreamConfig struct {
 	Enabled            bool          `yaml:"enabled" default:"false"`
 	Schedule           string        `yaml:"schedule" default:"0 3 * * *"`       // cron expression (default: daily 3 AM)
-	MinInterval        time.Duration `yaml:"min_interval" default:"24h"`         // minimum time between dreams per domain
 	Provider           string        `yaml:"provider"`                           // provider name (empty → use main provider)
 	Model              string        `yaml:"model"`                              // model name (empty → use provider's default)
 	SubagentTimeout    time.Duration `yaml:"subagent_timeout" default:"10m"`     // timeout for each dream sub-agent
