@@ -63,7 +63,7 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 	// simply won't get memory context on this turn.
 	recallTimeout := r.Timeout
 	if recallTimeout <= 0 {
-		recallTimeout = 3 * time.Second
+		recallTimeout = 10 * time.Second
 	}
 	recallCtx, cancel := context.WithTimeout(context.Background(), recallTimeout)
 	defer cancel()

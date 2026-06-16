@@ -162,9 +162,9 @@ func buildSessionSummaries(sessions []*session.Session, loadMessages func(string
 			continue
 		}
 
-		// Limit to last 50 pairs per session to control token usage.
-		if len(pairs) > 50 {
-			pairs = pairs[len(pairs)-50:]
+		// Limit to last 20 pairs per session to control token usage.
+		if len(pairs) > 20 {
+			pairs = pairs[len(pairs)-20:]
 		}
 
 		summaries = append(summaries, SessionSummary{
