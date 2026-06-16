@@ -21,6 +21,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
@@ -31,13 +32,14 @@ const MaxConcurrentDreams = 3
 
 // State records the last successful dream execution for a memory domain.
 type State struct {
-	LastDreamAt     time.Time `json:"last_dream_at"`
-	SessionsDreamed int       `json:"sessions_dreamed"`
-	TopicsCreated   int       `json:"topics_created"`
-	FactsAdded      int       `json:"facts_added"`
-	FactsSuperseded int       `json:"facts_superseded"`
-	FactsPruned     int       `json:"facts_pruned"`
-	Errors          []string  `json:"errors,omitempty"`
+	LastDreamAt     time.Time                    `json:"last_dream_at"`
+	SessionsDreamed int                          `json:"sessions_dreamed"`
+	TopicsCreated   int                          `json:"topics_created"`
+	FactsAdded      int                          `json:"facts_added"`
+	FactsSuperseded int                          `json:"facts_superseded"`
+	FactsPruned     int                          `json:"facts_pruned"`
+	Errors          []string                     `json:"errors,omitempty"`
+	FactStates      map[string]*memory.FactState `json:"fact_states,omitempty"`
 }
 
 // Status provides a snapshot of the orchestrator's current dream execution state.
@@ -92,7 +94,8 @@ type RunFunc func(ctx context.Context, plan Plan) (State, error)
 
 // Config holds runtime parameters for dream execution.
 type Config struct {
-	Logger *debuglog.Logger
+	Logger         *debuglog.Logger
+	MaxConcurrent  int // max parallel dream sub-agents (0 → use default)
 }
 
 // Orchestrator coordinates dream execution across memory domains.
@@ -195,7 +198,11 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 
 // executePlans runs dream sub-agents for each plan, limited by concurrency.
 func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn RunFunc) error {
-	sem := make(chan struct{}, MaxConcurrentDreams)
+	maxConcurrent := o.cfg.MaxConcurrent
+	if maxConcurrent <= 0 {
+		maxConcurrent = MaxConcurrentDreams
+	}
+	sem := make(chan struct{}, maxConcurrent)
 	var wg sync.WaitGroup
 
 	// Register all domains as in-progress before starting any of them.
@@ -391,7 +398,7 @@ func ReleaseLock(memoryDir string) {
 
 // LoadState reads last_dream.json from the memory directory.
 func LoadState(memoryRoot string) State {
-	data, err := os.ReadFile(filepath.Join(memoryRoot, "last_dream.json"))
+	data, err := os.ReadFile(filepath.Join(memoryRoot, memory.DreamStateFile))
 	if err != nil {
 		return State{} // First run or missing.
 	}
@@ -408,7 +415,7 @@ func SaveState(memoryRoot string, state State) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(memoryRoot, "last_dream.json"), data, 0644)
+	return os.WriteFile(filepath.Join(memoryRoot, memory.DreamStateFile), data, 0644)
 }
 
 // --- Helpers ---

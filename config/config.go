@@ -228,13 +228,14 @@ func (c *CronConfig) IsEnabled() bool {
 // DreamConfig holds configuration for AutoDream — the background memory
 // consolidation system that runs via SystemScheduler in channel mode.
 type DreamConfig struct {
-	Enabled            bool          `yaml:"enabled" default:"false"`
-	Schedule           string        `yaml:"schedule" default:"0 3 * * *"`       // cron expression (default: daily 3 AM)
-	Provider           string        `yaml:"provider"`                           // provider name (empty → use main provider)
-	Model              string        `yaml:"model"`                              // model name (empty → use provider's default)
-	SubagentTimeout    time.Duration `yaml:"subagent_timeout" default:"10m"`     // timeout for each dream sub-agent
-	SubagentMaxIter    int           `yaml:"subagent_max_iters" default:"30"`    // max iterations for dream sub-agent
-	MaxMessageChars    int           `yaml:"max_message_chars" default:"2000"`   // max chars per message in dream prompt
+	Enabled          bool          `yaml:"enabled" default:"false"`
+	Schedule         string        `yaml:"schedule" default:"0 3 * * *"`     // cron expression (default: daily 3 AM)
+	Provider         string        `yaml:"provider"`                         // provider name (empty → use main provider)
+	Model            string        `yaml:"model"`                            // model name (empty → use provider's default)
+	MaxConcurrent    int           `yaml:"max_concurrent" default:"3"`       // max parallel dream sub-agents
+	SubagentTimeout  time.Duration `yaml:"subagent_timeout" default:"10m"`   // timeout for each dream sub-agent
+	SubagentMaxIter  int           `yaml:"subagent_max_iters" default:"30"`  // max iterations for dream sub-agent
+	MaxMessageChars  int           `yaml:"max_message_chars" default:"2000"` // max chars per message in dream prompt
 }
 
 // EditConfig holds configuration for the edit mode.
@@ -385,14 +386,15 @@ func toBool(v any) bool {
 // MemoryConfig holds configuration for the pluggable memory system.
 // Type selects the backend: "" (disabled), "mem9", or "agentmemory".
 type MemoryConfig struct {
-	Type             string               `yaml:"type"`                  // "mem9" or "agentmemory" or "" (disabled)
-	KeywordProvider  string               `yaml:"keyword_provider"`      // optional: provider name for keyword extraction (defaults to main provider)
-	Timeout          time.Duration        `yaml:"timeout" default:"10s"` // context deadline for Store/Recall/Forget
-	RecallLimit      int                  `yaml:"recall_limit" default:"5"` // max memories recalled per turn by automatic MemoryRecallReminder
-	ToolResultMaxLen int                  `yaml:"tool_result_max_len"`   // max chars for tool result in memory (default 8000, 0 = no limit)
-	Mem9             Mem9SubConfig        `yaml:"mem9"`
-	AgentMemory      AgentMemorySubConfig `yaml:"agentmemory"`
-	ExcludeRepos     []string             `yaml:"exclude_repos"` // git repo roots to skip memory writes
+	Type              string               `yaml:"type"`                             // "mem9" or "agentmemory" or "" (disabled)
+	KeywordProvider   string               `yaml:"keyword_provider"`                 // optional: provider name for keyword extraction (defaults to main provider)
+	Timeout           time.Duration        `yaml:"timeout" default:"10s"`            // context deadline for Store/Recall/Forget
+	RecallLimit       int                  `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
+	DecayHalfLifeDays int                  `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
+	ToolResultMaxLen  int                  `yaml:"tool_result_max_len"`              // max chars for tool result in memory (default 8000, 0 = no limit)
+	Mem9              Mem9SubConfig        `yaml:"mem9"`
+	AgentMemory       AgentMemorySubConfig `yaml:"agentmemory"`
+	ExcludeRepos      []string             `yaml:"exclude_repos"` // git repo roots to skip memory writes
 }
 
 // AgentMemorySubConfig holds agentmemory-specific configuration.
@@ -419,10 +421,11 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 	}
 
 	return memory.Config{
-		Type:         mc.Type,
-		BaseDir:      BaseDir(),
-		Timeout:      timeout,
-		ExcludeRepos: mc.ExcludeRepos,
+		Type:              mc.Type,
+		BaseDir:           BaseDir(),
+		Timeout:           timeout,
+		DecayHalfLifeDays: mc.DecayHalfLifeDays,
+		ExcludeRepos:      mc.ExcludeRepos,
 		Mem9: memory.Mem9Config{
 			APIURL:  mc.Mem9.APIURL,
 			APIKey:  mc.Mem9.APIKey,

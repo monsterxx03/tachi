@@ -101,9 +101,13 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		return State{}, lastErr
 	}
 
+	// Post-dream: scan topic files and update decay states.
+	factStates := ScanTopicFacts(plan.Group.MemoryRoot, plan.LastState.FactStates, logger)
+
 	state := State{
 		LastDreamAt:     time.Now(),
 		SessionsDreamed: len(plan.ActiveSessions),
+		FactStates:      factStates,
 	}
 
 	logger.Log("[%s:%s]: completed successfully", plan.Group.Domain, plan.Group.Root)

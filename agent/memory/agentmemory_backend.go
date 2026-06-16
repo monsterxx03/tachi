@@ -151,6 +151,12 @@ func (b *AgentMemoryBackend) Observe(ctx context.Context, opts ObserveOptions) e
 	})
 }
 
+// ReinforceFact is a no-op for the agentmemory backend — decay tracking is only
+// implemented by the TopicBackend.
+func (b *AgentMemoryBackend) ReinforceFact(ctx context.Context, entryID string) error {
+	return nil
+}
+
 // formatMessages formats StoreOptions into a plain-text representation
 // suitable for storing in agentmemory. It strips noise blocks and memory
 // tags from content before formatting.

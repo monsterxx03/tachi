@@ -2,8 +2,10 @@ package dream
 
 import (
 	"fmt"
+	"sort"
 	"strings"
 
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -96,6 +98,11 @@ func buildUserPrompt(plan Plan, summaries []SessionSummary, maxMessageChars int)
 	b.WriteString(fmt.Sprintf("- Memory directory: %s\n", plan.Group.MemoryRoot))
 	b.WriteString(fmt.Sprintf("- Active sessions to process: %d\n\n", len(plan.ActiveSessions)))
 
+	// Inject decay snapshot if available.
+	if len(plan.LastState.FactStates) > 0 {
+		buildDecaySnapshot(&b, plan.LastState.FactStates)
+	}
+
 	b.WriteString("## Instructions\n\n")
 	b.WriteString("1. First, read the existing memory state:\n")
 	b.WriteString(fmt.Sprintf("   - `%s/index.md` (may not exist yet)\n", plan.Group.MemoryRoot))
@@ -155,4 +162,61 @@ func truncate(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+// buildDecaySnapshot injects a summary of fact decay states into the dream
+// prompt, helping the LLM sub-agent make better consolidate/prune decisions.
+// It highlights facts with low decay that may need review, and notes fresh
+// facts that should be preserved.
+func buildDecaySnapshot(b *strings.Builder, states map[string]*memory.FactState) {
+	// Collect and sort facts by decay.
+	type factEntry struct {
+		state *memory.FactState
+		decay float64
+	}
+	var lowDecay, fresh []factEntry
+	for _, fs := range states {
+		if fs.Superseded || fs.Decay < 0.3 {
+			lowDecay = append(lowDecay, factEntry{state: fs, decay: fs.Decay})
+		} else if fs.Decay >= 0.8 {
+			fresh = append(fresh, factEntry{state: fs, decay: fs.Decay})
+		}
+	}
+
+	if len(lowDecay) == 0 && len(fresh) == 0 {
+		return
+	}
+
+	b.WriteString("## Fact Decay Snapshot\n\n")
+	b.WriteString("Facts with low decay or superseded status may need review during prune:\n\n")
+
+	if len(lowDecay) > 0 {
+		sort.Slice(lowDecay, func(i, j int) bool { return lowDecay[i].decay < lowDecay[j].decay })
+		for _, fe := range lowDecay {
+			fs := fe.state
+			status := "superseded"
+			if !fs.Superseded {
+				status = "active"
+			}
+			lastTouched := "never"
+			if !fs.LastReinforced.IsZero() {
+				lastTouched = fs.LastReinforced.Format("2006-01-02")
+			} else if !fs.CreatedAt.IsZero() {
+				lastTouched = fs.CreatedAt.Format("2006-01-02")
+			}
+			b.WriteString(fmt.Sprintf("- %s — decay: %.2f, %s, reinforcements: %d (last touched %s)\n",
+				fs.ID, fs.Decay, status, fs.Reinforcements, lastTouched))
+		}
+		b.WriteString("\n")
+	}
+
+	if len(fresh) > 0 {
+		b.WriteString("These facts are fresh (decay ≥ 0.8) and should be preserved:\n\n")
+		sort.Slice(fresh, func(i, j int) bool { return fresh[i].decay > fresh[j].decay })
+		for _, fe := range fresh {
+			b.WriteString(fmt.Sprintf("- %s — decay: %.2f, reinforcements: %d\n",
+				fe.state.ID, fe.decay, fe.state.Reinforcements))
+		}
+		b.WriteString("\n")
+	}
 }

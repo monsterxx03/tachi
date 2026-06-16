@@ -821,7 +821,8 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 
 	// Store orchestrator reference before goroutine starts so /dream status can query it.
 	m.dreamOrch = dream.NewOrchestrator(dream.Config{
-		Logger: m.logger,
+		Logger:        m.logger,
+		MaxConcurrent: m.cfg.Dream.MaxConcurrent,
 	})
 	o := m.dreamOrch // local reference for goroutine
 

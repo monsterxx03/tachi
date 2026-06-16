@@ -2,17 +2,23 @@ package memory
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
-	"hash/fnv"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
+
+// decayCacheTTL is how long cached decay states remain valid before
+// being re-read from disk. Balances accuracy vs I/O.
+const decayCacheTTL = 30 * time.Second
 
 // TopicBackend implements the Backend interface using local Markdown topic files
 // searched via ripgrep. It is the memory backend for the AutoDream system.
@@ -29,6 +35,19 @@ type TopicBackend struct {
 	rgPath     string // resolved path to rg binary (empty if unavailable)
 	logger     *debuglog.Logger
 	extractor  KeywordExtractor // optional: extracts keywords from query for better recall
+
+	halfLifeDays int // decay half-life in days (default 7)
+
+	// reinforceMu protects concurrent writes to last_dream.json from
+	// simultaneous ReinforceFact calls (e.g. parallel MemoryRecallReminder
+	// and MemoryRecallTool hits).
+	reinforceMu sync.Mutex
+
+	// decayCache caches loaded fact_states to avoid re-reading last_dream.json
+	// on every Recall call. Invalidated on ReinforceFact or after decayCacheTTL.
+	decayCacheMu   sync.RWMutex
+	decayCache     map[string]*FactState
+	decayCacheTime time.Time
 }
 
 // NewTopicBackend creates a TopicBackend.
@@ -57,11 +76,17 @@ func NewTopicBackend(cfg Config) (*TopicBackend, error) {
 		logger.Log("rg not found in PATH — Recall will be unavailable")
 	}
 
+	halfLife := cfg.DecayHalfLifeDays
+	if halfLife <= 0 {
+		halfLife = 7
+	}
+
 	return &TopicBackend{
-		globalDir:  globalDir,
-		projectDir: projectDir,
-		rgPath:     rgPath,
-		logger:     logger,
+		globalDir:    globalDir,
+		projectDir:   projectDir,
+		rgPath:       rgPath,
+		logger:       logger,
+		halfLifeDays: halfLife,
 	}, nil
 }
 
@@ -97,6 +122,9 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		}
 	}
 
+	// Load decay states from last_dream.json in both domains.
+	decayStates := t.loadDecayStates()
+
 	var allResults []Entry
 
 	// 1. Search global topics + inbox
@@ -111,6 +139,14 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		allResults = append(allResults, results...)
 		results = t.searchFile(ctx, filepath.Join(t.projectDir, "inbox.md"), keywords)
 		allResults = append(allResults, results...)
+	}
+
+	// Apply decay multipliers to scores.
+	for i := range allResults {
+		if fs, ok := decayStates[allResults[i].ID]; ok {
+			decayMultiplier := 0.3 + 0.7*fs.Decay
+			allResults[i].Score *= decayMultiplier
+		}
 	}
 
 	// Sort by score descending, truncate to limit.
@@ -229,15 +265,165 @@ func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []s
 	return t.extractMatchingBlocks(path, keywords)
 }
 
-// extractMatchingBlocks reads a markdown file, splits by "---" separators,
-// and returns blocks that contain any keyword as Entry values.
+// --- Decay state helpers ---
+
+// loadDecayStates returns fact_states from last_dream.json (both domains),
+// using an in-memory cache with TTL to avoid repeated disk reads.
+// Decay values are recalculated from LastReinforced at read time for accuracy.
+func (t *TopicBackend) loadDecayStates() map[string]*FactState {
+	// Fast path: check cache under read lock.
+	t.decayCacheMu.RLock()
+	if t.decayCache != nil && time.Since(t.decayCacheTime) < decayCacheTTL {
+		cached := t.decayCache
+		t.decayCacheMu.RUnlock()
+		return cached
+	}
+	t.decayCacheMu.RUnlock()
+
+	// Slow path: reload from disk.
+	result := make(map[string]*FactState)
+	for _, dir := range []string{t.globalDir, t.projectDir} {
+		if dir == "" {
+			continue
+		}
+		states := loadFactStatesFromFile(dir)
+		for k, v := range states {
+			if _, exists := result[k]; !exists {
+				result[k] = v
+			}
+		}
+	}
+
+	// Recalculate decay in real-time from LastReinforced so values stay
+	// accurate between dream runs (stored values may be hours/days stale).
+	halfLife := float64(t.halfLifeDays) * 24 * 3600
+	for _, fs := range result {
+		if !fs.LastReinforced.IsZero() {
+			elapsed := time.Since(fs.LastReinforced).Seconds()
+			fs.Decay = math.Exp(-math.Ln2 * elapsed / halfLife)
+		}
+	}
+
+	// Update cache.
+	t.decayCacheMu.Lock()
+	t.decayCache = result
+	t.decayCacheTime = time.Now()
+	t.decayCacheMu.Unlock()
+
+	return result
+}
+
+// invalidateDecayCache clears the cached decay states, forcing the next
+// loadDecayStates call to re-read from disk. Called after ReinforceFact writes.
+func (t *TopicBackend) invalidateDecayCache() {
+	t.decayCacheMu.Lock()
+	t.decayCache = nil
+	t.decayCacheMu.Unlock()
+}
+
+// dreamStateJSON mirrors dream.State for deserializing last_dream.json
+// without importing the dream package (avoids circular dependency).
+type dreamStateJSON struct {
+	LastDreamAt     time.Time              `json:"last_dream_at"`
+	SessionsDreamed int                    `json:"sessions_dreamed"`
+	TopicsCreated   int                    `json:"topics_created"`
+	FactsAdded      int                    `json:"facts_added"`
+	FactsSuperseded int                    `json:"facts_superseded"`
+	FactsPruned     int                    `json:"facts_pruned"`
+	Errors          []string               `json:"errors,omitempty"`
+	FactStates      map[string]*FactState  `json:"fact_states,omitempty"`
+}
+
+// loadFactStatesFromFile reads last_dream.json from the given memory dir
+// and returns the fact_states map, or nil if the file doesn't exist.
+func loadFactStatesFromFile(memoryDir string) map[string]*FactState {
+	data, err := os.ReadFile(filepath.Join(memoryDir, DreamStateFile))
+	if err != nil {
+		return nil
+	}
+	var state dreamStateJSON
+	if err := json.Unmarshal(data, &state); err != nil {
+		return nil
+	}
+	return state.FactStates
+}
+
+// writeFactStates persists fact_states back to last_dream.json, preserving
+// all existing top-level fields. Uses a temp-file + rename to avoid
+// corruption on crash (atomic write).
+func writeFactStates(memoryDir string, updateFn func(map[string]*FactState)) error {
+	statePath := filepath.Join(memoryDir, DreamStateFile)
+
+	// Read existing state, preserving all fields.
+	data, err := os.ReadFile(statePath)
+	var state dreamStateJSON
+	if err == nil {
+		if uerr := json.Unmarshal(data, &state); uerr != nil {
+			// Corrupt file — start fresh.
+			state = dreamStateJSON{}
+		}
+	}
+	if state.FactStates == nil {
+		state.FactStates = make(map[string]*FactState)
+	}
+
+	updateFn(state.FactStates)
+
+	out, err := json.MarshalIndent(state, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	// Write to temp file first, then rename for atomicity.
+	tmpPath := statePath + ".tmp"
+	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, statePath)
+}
+
+// ReinforceFact strengthens a fact's decay state when recalled.
+// It searches both global and project last_dream.json for the fact,
+// increments its reinforcement counter, resets decay to 1.0,
+// and updates the last_reinforced timestamp.
+func (t *TopicBackend) ReinforceFact(ctx context.Context, entryID string) error {
+	t.reinforceMu.Lock()
+	defer t.reinforceMu.Unlock()
+
+	for _, dir := range []string{t.globalDir, t.projectDir} {
+		if dir == "" {
+			continue
+		}
+		statePath := filepath.Join(dir, DreamStateFile)
+		if _, err := os.Stat(statePath); os.IsNotExist(err) {
+			continue
+		}
+
+		// Check if the fact exists before incurring write I/O.
+		states := loadFactStatesFromFile(dir)
+		if _, ok := states[entryID]; !ok {
+			continue
+		}
+
+		err := writeFactStates(dir, func(states map[string]*FactState) {
+			fs := states[entryID]
+			fs.Reinforcements++
+			fs.LastReinforced = time.Now()
+			fs.Decay = 1.0
+		})
+		if err != nil {
+			t.logger.Log("ReinforceFact: write %s: %v", statePath, err)
+		}
+	}
+	return nil
+}
 func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []Entry {
 	content, err := os.ReadFile(path)
 	if err != nil {
 		return nil
 	}
 
-	blocks := splitByHR(string(content))
+	blocks := SplitByHR(string(content))
 	var entries []Entry
 
 	filename := filepath.Base(path)
@@ -258,7 +444,7 @@ func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []E
 		}
 
 		entry := Entry{
-			ID:      fmt.Sprintf("topic:%s:%d", filename, hashBlock(block)),
+			ID:      FactID(filename, block),
 			Summary: extractTitle(block),
 			Content: truncateContent(block, 1000),
 			Score:   computeScoreMulti(block, keywordLower),
@@ -347,9 +533,9 @@ func matchesKeywordLine(block, queryLower string) bool {
 
 // --- Markdown parsing helpers ---
 
-// splitByHR splits markdown content by horizontal rules (---).
+// SplitByHR splits markdown content by horizontal rules (---).
 // Preserves H1/H2 headers as part of the following block.
-func splitByHR(content string) []string {
+func SplitByHR(content string) []string {
 	lines := strings.Split(content, "\n")
 	var blocks []string
 	var current strings.Builder
@@ -430,12 +616,6 @@ func truncateContent(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
-}
-
-func hashBlock(block string) uint32 {
-	h := fnv.New32a()
-	h.Write([]byte(block))
-	return h.Sum32()
 }
 
 // findGitRoot walks up from dir looking for .git directory.

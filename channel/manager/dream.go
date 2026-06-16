@@ -18,7 +18,8 @@ func (m *Manager) executeDream(ctx context.Context) error {
 	}
 
 	o := dream.NewOrchestrator(dream.Config{
-		Logger: m.logger,
+		Logger:        m.logger,
+		MaxConcurrent: m.cfg.Dream.MaxConcurrent,
 	})
 
 	return o.Run(ctx, sessions, m.runDreamForPlan)

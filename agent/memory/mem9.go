@@ -174,6 +174,12 @@ func (b *Mem9Backend) Observe(ctx context.Context, opts ObserveOptions) error {
 	return nil
 }
 
+// ReinforceFact is a no-op for the mem9 backend — decay tracking is only
+// implemented by the TopicBackend.
+func (b *Mem9Backend) ReinforceFact(ctx context.Context, entryID string) error {
+	return nil
+}
+
 // filterMessages applies content filtering to messages before uploading:
 //   - Discards entire batch if any user message is trivial (hello, 你好, etc.)
 //   - Strips injected <relevant-memories> blocks (prevents memory recursion)

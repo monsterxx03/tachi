@@ -102,6 +102,13 @@ func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (str
 		return string(b), nil
 	}
 
+	// Reinforce each recalled fact to strengthen its decay state.
+	for _, e := range entries {
+		if e.ID != "" {
+			_ = t.backend.ReinforceFact(ctx, e.ID)
+		}
+	}
+
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Found %d relevant memories:\n\n", len(entries)))
 	for i, e := range entries {

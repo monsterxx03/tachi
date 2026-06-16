@@ -80,6 +80,15 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 
 	debuglog.DefaultLogger.Log("MemoryRecall: recall returned %d entries", len(entries))
 
+	// Reinforce each recalled fact to strengthen its decay state.
+	for _, e := range entries {
+		if e.ID != "" {
+			if err := r.Backend.ReinforceFact(recallCtx, e.ID); err != nil {
+				debuglog.DefaultLogger.Log("MemoryRecall: reinforce %s: %v", e.ID, err)
+			}
+		}
+	}
+
 	var lines []string
 
 	// Security notice first — LLM pays higher attention to early content

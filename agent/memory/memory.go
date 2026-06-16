@@ -6,9 +6,13 @@ package memory
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"time"
 )
+
+// DreamStateFile is the filename for dream state persistence in each memory domain.
+const DreamStateFile = "last_dream.json"
 
 // Entry is a memory record exchanged between backends and the agent.
 type Entry struct {
@@ -19,6 +23,26 @@ type Entry struct {
 	Content   string   // detailed content (empty for native, conversation text for mem9)
 	Timestamp int64    // unix timestamp
 	Score     float64  // relevance score from backend recall
+}
+
+// FactState tracks decay information for a single fact in a topic file.
+// Used by both the Dream orchestrator (scanning topics) and TopicBackend
+// (applying decay multipliers during recall + reinforcing on hit).
+type FactState struct {
+	ID              string    `json:"id"`
+	TopicFile       string    `json:"topic_file"`
+	Decay           float64   `json:"decay"`
+	Reinforcements  int       `json:"reinforcements"`
+	LastReinforced  time.Time `json:"last_reinforced"`
+	CreatedAt       time.Time `json:"created_at"`
+	Superseded      bool      `json:"superseded"`
+}
+
+// FactID generates the stable fact identifier used for decay tracking.
+// Format: "topic:<filename>:<sha256_hex8>"
+func FactID(topicFile, content string) string {
+	h := sha256.Sum256([]byte(content))
+	return fmt.Sprintf("topic:%s:%x", topicFile, h[:4])
 }
 
 // StoreScope marks when Store is called, allowing backends to choose
@@ -75,6 +99,15 @@ type Backend interface {
 	// with a hook type indicating the nature of the observation.
 	// The mem9 backend implements this as a no-op.
 	Observe(ctx context.Context, opts ObserveOptions) error
+
+	// ReinforceFact strengthens a fact's decay state when it is recalled.
+	// Called after MemoryRecall returns results — each matched fact gets
+	// its reinforcement counter incremented, last_reinforced timestamp
+	// updated, and decay reset to 1.0.
+	//
+	// For backends that don't track decay (mem9, agentmemory), this is a
+	// no-op. Only TopicBackend implements this.
+	ReinforceFact(ctx context.Context, entryID string) error
 }
 
 // ObserveOptions controls Observe behavior.
@@ -92,12 +125,13 @@ type ObserveOptions struct {
 
 // Config is the common configuration for memory backends.
 type Config struct {
-	Type         string        // backend type (e.g., "mem9", "agentmemory")
-	BaseDir      string        // ~/.tachi/
-	Timeout      time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
-	Mem9         Mem9Config
-	AgentMemory  AgentMemoryConfig // agentmemory-specific config
-	ExcludeRepos []string // git repo roots to skip memory writes
+	Type             string        // backend type (e.g., "mem9", "agentmemory")
+	BaseDir          string        // ~/.tachi/
+	Timeout          time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
+	DecayHalfLifeDays int          // decay half-life in days (default 7); only used by TopicBackend
+	Mem9             Mem9Config
+	AgentMemory      AgentMemoryConfig // agentmemory-specific config
+	ExcludeRepos     []string // git repo roots to skip memory writes
 }
 
 // Mem9Config holds mem9-specific configuration.

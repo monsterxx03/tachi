@@ -2,11 +2,13 @@ package memory
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
@@ -317,7 +319,7 @@ More content.
 
 Final block.`
 
-	blocks := splitByHR(content)
+	blocks := SplitByHR(content)
 	if len(blocks) != 3 {
 		t.Errorf("expected 3 blocks, got %d", len(blocks))
 		for i, b := range blocks {
@@ -354,5 +356,191 @@ func TestComputeScore(t *testing.T) {
 
 	if activeScore <= supersededScore {
 		t.Errorf("active (%f) should score higher than superseded (%f)", activeScore, supersededScore)
+	}
+}
+
+func TestTopicBackend_Recall_DecayWeighting(t *testing.T) {
+	ctx := context.Background()
+
+	// Create topic content that two independent backends can share.
+	topicContent := `# DB
+
+## Database Choice
+
+状态: active
+关键词: database, sqlite
+
+We chose SQLite.
+
+---
+`
+
+	// Compute the fact ID that extractMatchingBlocks will produce.
+	blocks := SplitByHR(topicContent)
+	var factID string
+	for _, block := range blocks {
+		block = strings.TrimSpace(block)
+		if block != "" && strings.Contains(block, "SQLite") {
+			factID = FactID("db.md", block)
+			break
+		}
+	}
+	if factID == "" {
+		t.Fatal("could not find fact ID")
+	}
+
+	// --- Backend A: no decay data (baseline) ---
+	dirA := t.TempDir()
+	topicsA := filepath.Join(dirA, "memory", "topics")
+	os.MkdirAll(topicsA, 0755)
+	os.WriteFile(filepath.Join(topicsA, "db.md"), []byte(topicContent), 0644)
+
+	backendA, err := NewTopicBackend(Config{BaseDir: dirA})
+	if err != nil {
+		t.Fatalf("NewTopicBackend A: %v", err)
+	}
+	backendA.projectDir = ""
+
+	resultsA, err := backendA.Recall(ctx, "database", 10)
+	if err != nil {
+		t.Fatalf("Recall A: %v", err)
+	}
+	if len(resultsA) == 0 {
+		t.Fatal("backend A: expected at least 1 result")
+	}
+	normalScore := resultsA[0].Score
+	t.Logf("score without decay data: %f", normalScore)
+
+	// --- Backend B: with decay data (last_dream.json written BEFORE creation) ---
+	dirB := t.TempDir()
+	memoryB := filepath.Join(dirB, "memory")
+	topicsB := filepath.Join(memoryB, "topics")
+	os.MkdirAll(topicsB, 0755)
+	os.WriteFile(filepath.Join(topicsB, "db.md"), []byte(topicContent), 0644)
+
+	stateJSON := fmt.Sprintf(`{
+  "last_dream_at": "2026-06-01T00:00:00Z",
+  "sessions_dreamed": 1,
+  "fact_states": {
+    "%s": {
+      "id": "%s",
+      "topic_file": "db.md",
+      "decay": 0.1,
+      "reinforcements": 0,
+      "last_reinforced": "2026-05-01T00:00:00Z",
+      "created_at": "2026-05-01T00:00:00Z",
+      "superseded": false
+    }
+  }
+}`, factID, factID)
+	os.WriteFile(filepath.Join(memoryB, DreamStateFile), []byte(stateJSON), 0644)
+
+	backendB, err := NewTopicBackend(Config{BaseDir: dirB})
+	if err != nil {
+		t.Fatalf("NewTopicBackend B: %v", err)
+	}
+	backendB.projectDir = ""
+
+	resultsB, err := backendB.Recall(ctx, "database", 10)
+	if err != nil {
+		t.Fatalf("Recall B: %v", err)
+	}
+	if len(resultsB) == 0 {
+		t.Fatal("backend B: expected at least 1 result with decay data")
+	}
+	decayedScore := resultsB[0].Score
+	t.Logf("score with decay=0.1: %f (vs normal: %f)", decayedScore, normalScore)
+
+	if decayedScore >= normalScore {
+		t.Errorf("decayed score (%f) should be lower than normal score (%f)", decayedScore, normalScore)
+	}
+
+	// Expected decay multiplier: 0.3 + 0.7*0.1 = 0.37
+	expectedRatio := decayedScore / normalScore
+	if expectedRatio < 0.30 || expectedRatio > 0.44 {
+		t.Errorf("decay ratio should be ~0.37, got %f", expectedRatio)
+	}
+}
+
+func TestTopicBackend_ReinforceFact(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalDir := filepath.Join(tmpDir, "memory")
+
+	rgPath, _ := exec.LookPath("rg")
+	backend := &TopicBackend{
+		globalDir:  globalDir,
+		projectDir: "",
+		rgPath:     rgPath,
+		logger:     debuglog.DefaultLogger.WithSource("test"),
+	}
+
+	// Create a last_dream.json with a fact that has low decay.
+	factID := "topic:test.md:abc12345"
+	stateJSON := fmt.Sprintf(`{
+  "last_dream_at": "2026-06-01T00:00:00Z",
+  "sessions_dreamed": 1,
+  "fact_states": {
+    "%s": {
+      "id": "%s",
+      "topic_file": "test.md",
+      "decay": 0.3,
+      "reinforcements": 2,
+      "last_reinforced": "2026-05-30T00:00:00Z",
+      "created_at": "2026-05-01T00:00:00Z",
+      "superseded": false
+    }
+  }
+}`, factID, factID)
+	os.MkdirAll(globalDir, 0755)
+	os.WriteFile(filepath.Join(globalDir, DreamStateFile), []byte(stateJSON), 0644)
+
+	// Reinforce the fact.
+	if err := backend.ReinforceFact(context.Background(), factID); err != nil {
+		t.Fatalf("ReinforceFact: %v", err)
+	}
+
+	// Reload and verify reinforcement.
+	states := loadFactStatesFromFile(globalDir)
+	fs, ok := states[factID]
+	if !ok {
+		t.Fatal("fact not found after reinforcement")
+	}
+	if fs.Reinforcements != 3 {
+		t.Errorf("Reinforcements: expected 3, got %d", fs.Reinforcements)
+	}
+	if fs.Decay != 1.0 {
+		t.Errorf("Decay: expected 1.0 after reinforcement, got %f", fs.Decay)
+	}
+	if fs.LastReinforced.Before(time.Now().Add(-5 * time.Second)) {
+		t.Error("LastReinforced should be recent")
+	}
+
+	// Verify other state fields are preserved.
+	data, _ := os.ReadFile(filepath.Join(globalDir, DreamStateFile))
+	if !strings.Contains(string(data), `"last_dream_at"`) {
+		t.Error("last_dream.json should still have last_dream_at field")
+	}
+	if !strings.Contains(string(data), `"sessions_dreamed": 1`) {
+		t.Error("last_dream.json should preserve sessions_dreamed")
+	}
+}
+
+func TestTopicBackend_ReinforceFact_MissingFact(t *testing.T) {
+	tmpDir := t.TempDir()
+	globalDir := filepath.Join(tmpDir, "memory")
+	os.MkdirAll(globalDir, 0755)
+
+	// No last_dream.json exists.
+	rgPath, _ := exec.LookPath("rg")
+	backend := &TopicBackend{
+		globalDir:  globalDir,
+		projectDir: "",
+		rgPath:     rgPath,
+		logger:     debuglog.DefaultLogger.WithSource("test"),
+	}
+
+	// Should not error on missing fact/file.
+	if err := backend.ReinforceFact(context.Background(), "topic:nonexistent:00000000"); err != nil {
+		t.Errorf("ReinforceFact on missing fact should not error: %v", err)
 	}
 }
