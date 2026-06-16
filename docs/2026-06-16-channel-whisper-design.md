@@ -1,8 +1,7 @@
 # Channel Whisper — IM 群聊选择性回复
 
 > 版本: 1.0 | 日期: 2026-06-16 | 状态: 设计阶段
-> 关联: [Whisper Mode（独立 CLI）](./2026-05-22-whisper-mode-design.md),
->       [Channel 架构](../channel/manager/manager.go),
+> 关联: [Channel 架构](../channel/manager/manager.go),
 >       [Steer 机制](./2026-05-10-steer-mechanism.md),
 >       [Memory 系统](./2026-05-17-memory.md)
 
@@ -35,7 +34,7 @@ IncomingMessage → buildHandler()
 
 ### 1.3 Whisper 哲学在 Channel 中的应用
 
-独立 `tachi whisper` CLI 的核心思想——"listen to everything, speak only when it matters"——在 channel 场景下同样适用，但不需要独立的 signal gate。Channel whisper 的关键洞察是：
+Whisper 的核心思想——"listen to everything, speak only when it matters"——在 channel 场景下同样适用，但不需要独立的 signal gate。Channel whisper 的关键洞察是：
 
 > **Agent 本身就是最好的 gate。它拥有 session 上下文、memory 记忆、skill 知识——比任何独立的打分模型都更懂得什么时候该开口。**
 
@@ -99,7 +98,7 @@ type IncomingMessage struct {
   │
   └── agent turn 空闲
         → 放入 ambient 批处理桶
-        → 启动批处理窗口计时器（如 60s）
+        → 启动批处理窗口计时器（如 30s）
         → 窗口到期后，将累积的消息打包为一条 ambient turn
         → agent 决定是否回复
 ```
@@ -144,7 +143,7 @@ type IncomingMessage struct {
    │ Pending │     │ (按 thread)       │
    │ (steer) │     │                  │
    │         │     │ 启动/重置计时器    │
-   │ 立即返回 │     │ (默认 60s)        │
+   │ 立即返回 │     │ (默认 30s)        │
    │ Steered │     │                  │
    └────┬────┘     └────────┬─────────┘
         │                   │
@@ -188,7 +187,7 @@ Agent 在 system prompt 的指导下自行判断这些消息中是否有值得�
 当没有活跃 turn 时，非定向消息被缓冲。计时器到期后，启动一个轻量 ambient turn：
 
 ```
-user: "以下是最近 60 秒内群聊「{{.ChannelName}}」中的对话：
+user: "以下是最近 30 秒内群聊「{{.ChannelName}}」中的对话：
 
 {{range .Messages}}
 [{{.Time}}] {{.Sender}}: {{.Content}}
@@ -209,21 +208,25 @@ Agent 回复其他内容 → 发送到群聊。
 Channel mode 的 system prompt 需要新增 whisper 指令段：
 
 ```
-## 群聊环境须知
+## Group Chat Etiquette
 
-你处在一个群聊环境中。你会看到两种消息：
-1. 直接发给你的消息（用户会 @你 或以 / 命令开头）——这些你应该正常回复。
-2. 群聊中其他人的对话（标记为 [群聊]）——这些不是直接发给你的。
+You're in a group chat. You'll see two kinds of messages:
+1. Messages **directly addressed to you** (@mention, /command) — reply as normal.
+2. **Other people's conversation** (marked with [群聊]) — these are not directed at you.
 
-对于群聊中的对话：
-- 绝大多数时候保持沉默。不要对每句话都回复。
-- 只在以下情况回复：
-  a. 有人明确讨论了一个你了解且能帮助解决的问题
-  b. 对话中出现了你基于已有上下文（session 历史、memory、skill）
-     能提供独特见解的机会
-  c. 有人分享了数据、代码或结果，而你发现了其中值得注意的问题或模式
-- 回复必须简短（≤3 句话），直接切入重点。
-- 如果你不确定该不该说话——那就别说。
+For group chat messages:
+- Stay silent most of the time. Don't reply to everything.
+- Only speak when:
+  a. Someone is discussing a problem you can help solve.
+  b. A topic comes up where your context (session history, memory, skills)
+     gives you a unique and useful perspective.
+  c. Someone shares data, code, or results, and you spot something worth
+     noting — a bug, a pattern, a concern.
+- If the chat is casual and off-topic (work-unrelated small talk), stay quiet
+  **unless** there's something fun to tease or a joke you can add — it's okay
+  to chime in with a lighthearted remark now and then to liven things up.
+- Keep replies short (≤3 sentences), straight to the point.
+- When in doubt — don't say anything.
 ```
 
 ---
@@ -242,9 +245,9 @@ channel:
     # ... existing fields ...
   whisper:
     enabled: true                    # 是否启用 channel whisper（默认 true）
-    ambient_batch_window: 60s        # 非定向消息批处理窗口（默认 60s）
-    ambient_max_iterations: 3        # ambient turn 最大迭代次数（默认 3）
-    ambient_cooldown: 300s           # 同一 thread 两次 ambient turn 最小间隔（默认 300s）
+    ambient_batch_window: 30s        # 非定向消息批处理窗口（默认 30s）
+    ambient_max_iterations: 50       # ambient turn 最大迭代次数（默认 50）
+    ambient_cooldown: 0              # 同一 thread 两次 ambient turn 最小间隔（默认 0，无冷却）
     silence_marker: "SILENCE"        # agent 表示沉默的回复内容（默认 "SILENCE"）
 ```
 
@@ -254,9 +257,9 @@ channel:
 // ChannelWhisperConfig holds channel-mode whisper settings.
 type ChannelWhisperConfig struct {
     Enabled              bool          `yaml:"enabled" default:"true"`
-    AmbientBatchWindow   time.Duration `yaml:"ambient_batch_window" default:"60s"`
-    AmbientMaxIterations int           `yaml:"ambient_max_iterations" default:"3"`
-    AmbientCooldown      time.Duration `yaml:"ambient_cooldown" default:"300s"`
+    AmbientBatchWindow   time.Duration `yaml:"ambient_batch_window" default:"30s"`
+    AmbientMaxIterations int           `yaml:"ambient_max_iterations" default:"50"`
+    AmbientCooldown      time.Duration `yaml:"ambient_cooldown" default:"0"`
     SilenceMarker        string        `yaml:"silence_marker" default:"SILENCE"`
 }
 ```
@@ -405,7 +408,7 @@ steer check → drain ta.pending (定向, 现有)
 
 ```
 T0: 非定向消息 A 进入 buffer
-T1: 计时器启动（60s 窗口）
+T1: 计时器启动（30s 窗口）
 T2: 定向消息 B（@tachi）到达
 ```
 
@@ -427,7 +430,7 @@ T1: 新非定向消息 C 到达
 ```
 第 1 次 ambient → SILENCE
 第 2 次 ambient → SILENCE  
-第 3 次 ambient → 窗口从 60s 扩展到 300s（不再那么频繁唤醒）
+第 3 次 ambient → 窗口从 30s 扩展到 300s（不再那么频繁唤醒）
 ...以此类推，直到上限（如 600s）
 ```
 
@@ -438,26 +441,11 @@ T1: 新非定向消息 C 到达
 Ambient turn 仍然走正常的 session 记录（JSONL），但消息标记不同：
 
 ```json
-{"role": "user", "content": "以下是最近 60 秒内群聊中的对话...", "ambient": true}
+{"role": "user", "content": "以下是最近 30 秒内群聊中的对话...", "ambient": true}
 {"role": "assistant", "content": "SILENCE", "ambient": true}
 ```
 
 Dream 系统在扫描 session 时可以过滤 `ambient: true` 的消息以减少噪音。
-
----
-
-## 八、与独立 `tachi whisper` CLI 的关系
-
-| | `tachi whisper` (独立 CLI) | Channel Whisper (嵌入 channel) |
-|---|---|---|
-| 事件源 | 文件系统 fsnotify | IM 群聊消息 |
-| gate 方式 | 独立 LLM 调用打分 | agent 自身判断 |
-| 上下文 | 文件内容 + memory | session 历史 + memory + skill |
-| 回复方式 | stderr 打印 + macOS 通知 | IM 消息回复 |
-| 运行态 | 独立进程 | channel 进程内 |
-| 共享 | memory backend (recall) | memory backend (recall + store) |
-
-二者共享设计哲学（"listen to everything, speak only when it matters"），但实现路径不同。彼此独立，互不依赖。
 
 ---
 
