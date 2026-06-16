@@ -75,6 +75,17 @@ func truncateForLog(s string, maxLen int) string {
 	return s[:maxLen] + "..."
 }
 
+// hasBashCall returns true if any tool call in the batch is Bash.
+// Used to trigger LSP file cleanup after destructive filesystem operations.
+func hasBashCall(calls []llm.ToolCall) bool {
+	for _, tc := range calls {
+		if tc.Function.Name == tools.ToolNameBash {
+			return true
+		}
+	}
+	return false
+}
+
 // usageToSession converts an llm.Usage to a session.Usage for persistence.
 func usageToSession(u *llm.Usage) *session.Usage {
 	if u == nil {
@@ -455,6 +466,12 @@ func (a *AIAgent) handleToolCallFinish(
 					a.logger.Log("LSP: file sync error for %s: %v", fp, syncErr)
 				}
 			}
+		}
+		// Close any open files that no longer exist on disk (deleted/renamed/moved
+		// by tool operations like Bash rm/mv). This keeps the LSP server's file
+		// index consistent with the actual filesystem.
+		if hasBashCall(acc.toolCalls) {
+			a.lspManager.CloseMissingFiles(ctx)
 		}
 		// Wait briefly for async diagnostics to arrive after file sync.
 		a.lspManager.WaitForDiagnostics(ctx, 2*time.Second)

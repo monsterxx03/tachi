@@ -158,6 +158,15 @@ func (m *LSPManager) WaitForDiagnostics(ctx context.Context, timeout time.Durati
 	wg.Wait()
 }
 
+// CloseMissingFiles checks all open files across all servers and closes any
+// that no longer exist on disk. Call after tool operations that may delete,
+// rename, or move files (e.g. Bash).
+func (m *LSPManager) CloseMissingFiles(ctx context.Context) {
+	for _, server := range m.servers {
+		server.CloseMissingFiles(ctx)
+	}
+}
+
 // IsConfigured returns true if at least one LSP server is configured.
 func (m *LSPManager) IsConfigured() bool { return m.configured }
 

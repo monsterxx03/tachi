@@ -446,6 +446,27 @@ func (s *LSPServer) IsFileOpen(uri string) bool {
 	return ok
 }
 
+// CloseMissingFiles checks all files currently open on this server and sends
+// textDocument/didClose for any that no longer exist on disk (deleted, renamed,
+// or moved). Call after tool operations that may remove files (e.g. Bash).
+func (s *LSPServer) CloseMissingFiles(ctx context.Context) {
+	s.ofMu.Lock()
+	var missing []string
+	for uri := range s.openFiles {
+		path := URItoPath(uri)
+		if _, err := os.Stat(path); os.IsNotExist(err) {
+			missing = append(missing, uri)
+		}
+	}
+	s.ofMu.Unlock()
+
+	for _, uri := range missing {
+		if err := s.CloseFile(ctx, uri); err != nil {
+			slog.Debug("LSP close missing file", "name", s.name, "uri", uri, "error", err)
+		}
+	}
+}
+
 // GetDiagnostics returns all cached diagnostics for all files on this server.
 func (s *LSPServer) GetDiagnostics() map[string][]Diagnostic {
 	s.diagsMu.RLock()
