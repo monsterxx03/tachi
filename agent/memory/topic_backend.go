@@ -141,11 +141,22 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		allResults = append(allResults, results...)
 	}
 
-	// Apply decay multipliers to scores.
+	// Apply memory lifecycle factors from FactState:
+	// - Decay multiplier: adjusts score based on time since last reinforcement
+	// - Superseded penalty: facts marked superseded by dream are heavily downranked
+	// - Reinforcement bonus: facts that have been frequently recalled are boosted
 	for i := range allResults {
 		if fs, ok := decayStates[allResults[i].ID]; ok {
 			decayMultiplier := 0.3 + 0.7*fs.Decay
 			allResults[i].Score *= decayMultiplier
+
+			if fs.Superseded {
+				allResults[i].Score -= 0.3
+			}
+
+			if fs.Reinforcements >= 3 {
+				allResults[i].Score += 0.1
+			}
 		}
 	}
 
@@ -476,6 +487,9 @@ func matchesAnyKeyword(block string, keywords []string) bool {
 // --- Scoring ---
 
 // computeScoreMulti calculates a relevance score for a block against multiple keywords.
+// It measures text relevance only (keyword matches, title hit, recency).
+// Memory lifecycle factors (decay, superseded status, reinforcement count) are
+// applied separately in Recall() using authoritative FactState data.
 func computeScoreMulti(block string, keywords []string) float64 {
 	score := 0.5
 
@@ -494,12 +508,6 @@ func computeScoreMulti(block string, keywords []string) float64 {
 			score += 0.2
 			break
 		}
-	}
-
-	// Superseded penalty.
-	blockLower := strings.ToLower(block)
-	if strings.Contains(blockLower, "状态: superseded") || strings.Contains(blockLower, "status: superseded") {
-		score -= 0.3
 	}
 
 	// Recency bonus: if timestamp is recent (within 7 days).

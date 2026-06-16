@@ -165,57 +165,87 @@ func truncate(s string, maxLen int) string {
 }
 
 // buildDecaySnapshot injects a summary of fact decay states into the dream
-// prompt, helping the LLM sub-agent make better consolidate/prune decisions.
-// It highlights facts with low decay that may need review, and notes fresh
-// facts that should be preserved.
+// prompt, aggregated by topic file. This helps the LLM sub-agent know which
+// files need pruning without exposing opaque FactID hashes it can't resolve.
 func buildDecaySnapshot(b *strings.Builder, states map[string]*memory.FactState) {
-	// Collect and sort facts by decay.
-	type factEntry struct {
-		state *memory.FactState
-		decay float64
+	type fileStats struct {
+		superseded int
+		lowDecay   int
+		fresh      int
+		minDecay   float64 // for sorting stale files by urgency
+		maxReinf   int     // for sorting fresh files by importance
 	}
-	var lowDecay, fresh []factEntry
+	fileMap := make(map[string]*fileStats)
+
 	for _, fs := range states {
-		if fs.Superseded || fs.Decay < 0.3 {
-			lowDecay = append(lowDecay, factEntry{state: fs, decay: fs.Decay})
+		key := fs.TopicFile
+		if key == "" {
+			continue
+		}
+		s := fileMap[key]
+		if s == nil {
+			s = &fileStats{minDecay: 1.0}
+			fileMap[key] = s
+		}
+		if fs.Superseded {
+			s.superseded++
+		} else if fs.Decay < 0.3 {
+			s.lowDecay++
 		} else if fs.Decay >= 0.8 {
-			fresh = append(fresh, factEntry{state: fs, decay: fs.Decay})
+			s.fresh++
+		}
+		if fs.Decay < s.minDecay {
+			s.minDecay = fs.Decay
+		}
+		if fs.Reinforcements > s.maxReinf {
+			s.maxReinf = fs.Reinforcements
 		}
 	}
 
-	if len(lowDecay) == 0 && len(fresh) == 0 {
+	// Collect files with stale facts and fresh facts.
+	type fileEntry struct {
+		name  string
+		stats *fileStats
+	}
+	var staleFiles, freshFiles []fileEntry
+	for name, s := range fileMap {
+		if s.superseded > 0 || s.lowDecay > 0 {
+			staleFiles = append(staleFiles, fileEntry{name, s})
+		}
+		if s.fresh > 0 {
+			freshFiles = append(freshFiles, fileEntry{name, s})
+		}
+	}
+
+	if len(staleFiles) == 0 && len(freshFiles) == 0 {
 		return
 	}
 
 	b.WriteString("## Fact Decay Snapshot\n\n")
-	b.WriteString("Facts with low decay or superseded status may need review during prune:\n\n")
+	b.WriteString("Per-topic summary for prune decisions. Use ReadFile to inspect the facts.\n\n")
 
-	if len(lowDecay) > 0 {
-		sort.Slice(lowDecay, func(i, j int) bool { return lowDecay[i].decay < lowDecay[j].decay })
-		for _, fe := range lowDecay {
-			fs := fe.state
-			status := "superseded"
-			if !fs.Superseded {
-				status = "active"
+	if len(staleFiles) > 0 {
+		sort.Slice(staleFiles, func(i, j int) bool { return staleFiles[i].stats.minDecay < staleFiles[j].stats.minDecay })
+		b.WriteString("Files with stale facts (may need pruning):\n\n")
+		for _, fe := range staleFiles {
+			var parts []string
+			if fe.stats.superseded > 0 {
+				parts = append(parts, fmt.Sprintf("%d superseded", fe.stats.superseded))
 			}
-			lastTouched := "never"
-			if !fs.LastReinforced.IsZero() {
-				lastTouched = fs.LastReinforced.Format("2006-01-02")
-			} else if !fs.CreatedAt.IsZero() {
-				lastTouched = fs.CreatedAt.Format("2006-01-02")
+			if fe.stats.lowDecay > 0 {
+				parts = append(parts, fmt.Sprintf("%d low-decay (min %.2f)", fe.stats.lowDecay, fe.stats.minDecay))
 			}
-			b.WriteString(fmt.Sprintf("- %s — decay: %.2f, %s, reinforcements: %d (last touched %s)\n",
-				fs.ID, fs.Decay, status, fs.Reinforcements, lastTouched))
+			b.WriteString(fmt.Sprintf("- `%s`: %s\n", fe.name, strings.Join(parts, ", ")))
 		}
 		b.WriteString("\n")
 	}
 
-	if len(fresh) > 0 {
-		b.WriteString("These facts are fresh (decay ≥ 0.8) and should be preserved:\n\n")
-		sort.Slice(fresh, func(i, j int) bool { return fresh[i].decay > fresh[j].decay })
-		for _, fe := range fresh {
-			b.WriteString(fmt.Sprintf("- %s — decay: %.2f, reinforcements: %d\n",
-				fe.state.ID, fe.decay, fe.state.Reinforcements))
+	if len(freshFiles) > 0 {
+		sort.Slice(freshFiles, func(i, j int) bool { return freshFiles[i].stats.maxReinf > freshFiles[j].stats.maxReinf })
+		b.WriteString("Files with fresh facts (preserve these):\n\n")
+		for _, fe := range freshFiles {
+			b.WriteString(fmt.Sprintf("- `%s`: %d fresh (max reinforcements: %d)\n",
+				fe.name, fe.stats.fresh, fe.stats.maxReinf))
 		}
 		b.WriteString("\n")
 	}

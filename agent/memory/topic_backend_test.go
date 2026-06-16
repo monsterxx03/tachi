@@ -172,6 +172,52 @@ This was overridden.
 `
 	os.WriteFile(filepath.Join(topicsDir, "test.md"), []byte(topicContent), 0644)
 
+	// Compute FactIDs and create last_dream.json with superseded state.
+	// The superseded penalty is now applied from authoritative FactState data
+	// (not text matching), so we need to set up the state file.
+	blocks := SplitByHR(topicContent)
+	var activeID, supersededID string
+	for _, b := range blocks {
+		b = strings.TrimSpace(b)
+		if strings.Contains(b, "current decision") {
+			activeID = FactID("test.md", b)
+		}
+		if strings.Contains(b, "overridden") {
+			supersededID = FactID("test.md", b)
+		}
+	}
+	if activeID == "" || supersededID == "" {
+		t.Fatal("could not find fact IDs")
+	}
+
+	memoryDir := filepath.Join(tmpDir, "memory")
+	os.MkdirAll(memoryDir, 0755)
+	stateJSON := fmt.Sprintf(`{
+  "last_dream_at": "2026-06-16T00:00:00Z",
+  "sessions_dreamed": 1,
+  "fact_states": {
+    "%s": {
+      "id": "%s",
+      "topic_file": "test.md",
+      "decay": 1.0,
+      "reinforcements": 0,
+      "last_reinforced": "2026-06-16T00:00:00Z",
+      "created_at": "2026-06-16T00:00:00Z",
+      "superseded": false
+    },
+    "%s": {
+      "id": "%s",
+      "topic_file": "test.md",
+      "decay": 0.5,
+      "reinforcements": 0,
+      "last_reinforced": "2026-06-09T00:00:00Z",
+      "created_at": "2026-06-09T00:00:00Z",
+      "superseded": true
+    }
+  }
+}`, activeID, activeID, supersededID, supersededID)
+	os.WriteFile(filepath.Join(memoryDir, DreamStateFile), []byte(stateJSON), 0644)
+
 	results, err := backend.Recall(ctx, "database", 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
@@ -181,7 +227,8 @@ This was overridden.
 		t.Fatalf("expected 2 results, got %d", len(results))
 	}
 
-	// Active should score higher than superseded.
+	// Active should score higher than superseded
+	// (superseded gets -0.3 penalty + lower decay multiplier).
 	var activeScore, supersededScore float64
 	for _, r := range results {
 		if strings.Contains(r.Content, "current decision") {
@@ -348,14 +395,29 @@ func TestExtractTitle(t *testing.T) {
 }
 
 func TestComputeScore(t *testing.T) {
-	active := "## Database Choice\n\n状态: active\n关键词: database, sqlite\n\nWe chose SQLite."
-	superseded := "## Old Choice\n\n状态: superseded\n关键词: database, postgres\n\nWe used Postgres."
+	// computeScore now measures only text relevance (keyword matches, recency).
+	// Memory lifecycle factors (decay, superseded, reinforcements) are applied
+	// in Recall() from authoritative FactState data.
 
-	activeScore := computeScore(active, "database")
-	supersededScore := computeScore(superseded, "database")
+	// Block with keyword in title should get title bonus (0.5 + 0.2 = 0.7).
+	withTitle := "## Database\n\n关键词: storage\n\nWe chose SQLite."
+	titleScore := computeScore(withTitle, "database")
+	if titleScore < 0.65 || titleScore > 0.75 {
+		t.Errorf("title match score should be ~0.7, got %f", titleScore)
+	}
 
-	if activeScore <= supersededScore {
-		t.Errorf("active (%f) should score higher than superseded (%f)", activeScore, supersededScore)
+	// Block with keyword in 关键词 line should get keyword bonus (0.5 + 0.2 = 0.7).
+	withKeyword := "## Storage\n\n关键词: database\n\nWe chose SQLite."
+	keywordScore := computeScore(withKeyword, "database")
+	if keywordScore < 0.65 || keywordScore > 0.75 {
+		t.Errorf("keyword match score should be ~0.7, got %f", keywordScore)
+	}
+
+	// Block with keyword in body only gets base score (0.5).
+	bodyOnly := "## Storage\n\n关键词: sql\n\nWe used a database."
+	bodyScore := computeScore(bodyOnly, "database")
+	if bodyScore < 0.45 || bodyScore > 0.55 {
+		t.Errorf("body-only match score should be ~0.5, got %f", bodyScore)
 	}
 }
 
