@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -121,6 +122,13 @@ func (c *client) addCommonHeaders(req *http.Request) {
 	}
 }
 
+// isGetUpdatesPath reports whether the given URL or path targets the
+// long-polling getupdates endpoint, which is called very frequently
+// and should not generate log noise.
+func isGetUpdatesPath(s string) bool {
+	return strings.Contains(s, "/ilink/bot/getupdates")
+}
+
 func (c *client) doWithTimeout(method, url string, body []byte, timeout time.Duration) (*http.Response, error) {
 	hc := &http.Client{Timeout: timeout + 5*time.Second} // extra 5s for connection
 	req, err := http.NewRequest(method, url, bytes.NewReader(body))
@@ -129,7 +137,10 @@ func (c *client) doWithTimeout(method, url string, body []byte, timeout time.Dur
 	}
 	c.addCommonHeaders(req)
 
-	c.logger.Log("weixin-client: %s %s", method, url)
+	// getUpdates is long-polling — skip request log to avoid noise.
+	if !isGetUpdatesPath(url) {
+		c.logger.Log("weixin-client: %s %s", method, url)
+	}
 	return hc.Do(req)
 }
 
@@ -152,7 +163,10 @@ func apiPost[Resp any](c *client, path string, reqBody any, timeout time.Duratio
 		return nil, fmt.Errorf("read response for %s: %w", path, err)
 	}
 
-	c.logger.Log("weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+	// getUpdates is long-polling — skip response log to avoid noise.
+	if !isGetUpdatesPath(path) {
+		c.logger.Log("weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+	}
 
 	var result Resp
 	if err := json.Unmarshal(respBytes, &result); err != nil {
