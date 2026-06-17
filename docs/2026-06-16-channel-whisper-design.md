@@ -1,6 +1,6 @@
 # Channel Whisper — IM 群聊选择性回复
 
-> 版本: 1.0 | 日期: 2026-06-16 | 状态: 设计阶段
+> 版本: 1.1 | 日期: 2026-06-17 | 状态: 设计阶段
 > 关联: [Channel 架构](../channel/manager/manager.go),
 >       [Steer 机制](./2026-05-10-steer-mechanism.md),
 >       [Memory 系统](./2026-05-17-memory.md)
@@ -54,35 +54,60 @@ Whisper 的核心思想——"listen to everything, speak only when it matters"�
 
 ### 2.2 消息分类
 
+Whisper 模式不是所有 channel 都支持的。支持 whisper 的 channel 也有单聊和群聊两种模式。因此需要三层判断：
+
 ```
-IncomingMessage
-  │
-  ├── "定向消息" (directed)
-  │    条件: @mention tachi、/command 前缀、或由 channel 实现判定
-  │    行为: 立即启动 agent turn（现有行为，不变）
-  │
-  └── "非定向消息" (undirected / ambient)
-       条件: 群聊中的普通对话，不是发给 tachi 的
-       行为: 进入 ambient pending 缓冲区 → 按批处理窗口注入
+Layer 1: Channel 是否支持 whisper？
+         → channel 实现通过 IncomingMessage 的两个字段表达
+         → 不支持 whisper 的 channel: Directed 和 GroupChat 均保持默认值 (false)
+
+Layer 2: 当前 thread 是单聊还是群聊？
+         → 取决于 channel 实现的平台字段（如 WeChat 的 GroupID）
+         → 首次消息时判定，存入 threadActivation，session 内不变
+
+Layer 3: 当前消息是定向还是非定向？
+         → @mention、/command → 定向
+         → 群聊普通消息 → 非定向（ambient）
+         → 单聊中所有消息都是定向的（即便标记为非定向也不走 ambient 管道）
 ```
 
-Channel 实现通过 `IncomingMessage` 的一个新字段来标记是否为定向消息：
+**`IncomingMessage` 新增两个字段**，均由 channel 实现负责设置：
 
 ```go
-// IncomingMessage 新增字段
 type IncomingMessage struct {
     // ... existing fields ...
 
-    // Directed is set by the channel implementation to indicate this message
-    // is explicitly addressed to the agent (e.g., @mention, /command prefix,
-    // DM channel). When false, the message is treated as ambient — it enters
-    // the whisper pipeline and may or may not trigger a response.
+    // Directed 表示本条消息是否明确指向 agent。
     //
-    // Default (false / zero value) means ambient, which is the safe default
-    // for channels that don't implement directed detection.
+    // 由 channel 实现根据平台语义设置：
+    //   - 单聊 → true（所有消息都是发给你的）
+    //   - 群聊中被 @mention 或以 /command 开头 → true
+    //   - 群聊中普通对话 → false（ambient）
+    //
+    // 默认值 false（ambient）是安全保守的选择——
+    // 不支持定向检测的 channel 走默认 false，manager 层只
+    // 在 GroupChat=true 时才将 !Directed 视为 ambient。
     Directed bool
+
+    // GroupChat 表示当前 thread 是否处于群聊模式。
+    //
+    // 由 channel 实现根据平台字段判断（如 WeChat 的 GroupID）。
+    // 一旦设为 true，该 thread 的整个生命周期都保持群聊模式。
+    //
+    // 不支持群聊概念的 channel 可以忽略此字段（保持默认 false），
+    // manager 层不会对非群聊 thread 启用 whisper 管道。
+    GroupChat bool
 }
 ```
+
+**两个字段是正交的：**
+
+| 场景 | `GroupChat` | `Directed` | 行为 |
+|------|-------------|------------|------|
+| 单聊（所有消息） | `false` | `true` | 现有 agent turn |
+| 群聊 @tachi | `true` | `true` | 现有 agent turn |
+| 群聊普通消息 | `true` | `false` | whisper 管道 |
+| 不支持 whisper 的 channel | `false` | `false` (默认) | 现有 agent turn（`!Directed` 被 guard 过滤）|
 
 ### 2.3 两种注入路径
 
@@ -109,65 +134,94 @@ type IncomingMessage struct {
 
 ```
                               ┌─────────────────────────────────────┐
-                              │        Channel 实现 (weixin/...)      │
+                              │   Channel 实现 (如 weixin/polling.go) │
                               │                                      │
-                              │  IncomingMessage{                    │
-                              │    ThreadID, Content,                │
-                              │    Directed: true/false  ← 新增      │
-                              │  }                                   │
-                              └──────────────┬──────────────────────┘
-                                             │
-                              ┌──────────────▼──────────────────────┐
+                              │   单聊: Directed=true, GroupChat=false│
+                              │   群聊@: Directed=true, GroupChat=true│
+                              │   群聊普通: Directed=false, GroupChat=true│
+                              └──────────────────┬──────────────────┘
+                                                 │
+                              ┌──────────────────▼──────────────────┐
                               │         buildHandler()               │
                               │                                      │
-                              │  if Directed:                        │
-                              │    → 现有流程（立即启动 turn）         │
+                              │  1. /command → 同步 / agent turn     │
                               │                                      │
-                              │  if !Directed:                       │
-                              │    → ambient 管道 ──────────────┐    │
-                              └─────────────────────────────────│───┘
-                                                                │
-                    ┌───────────────────────────────────────────┘
-                    ▼
-          ┌────────────────────┐
-          │  agent turn 活跃?   │
-          └──────┬─────────────┘
-                 │
-        ┌────────┴────────┐
-        ▼                 ▼
-   ┌─────────┐     ┌──────────────────┐
-   │ 活跃     │     │ 空闲              │
-   │         │     │                  │
-   │ 追加到   │     │ 放入              │
-   │ ambient │     │ ambientPending    │
-   │ Pending │     │ (按 thread)       │
-   │ (steer) │     │                  │
-   │         │     │ 启动/重置计时器    │
-   │ 立即返回 │     │ (默认 30s)        │
-   │ Steered │     │                  │
-   └────┬────┘     └────────┬─────────┘
-        │                   │
-        ▼                   │ 计时器到期
-   ┌──────────────┐         ▼
-   │ steer 注入    │   ┌──────────────────────┐
-   │              │   │ 启动 ambient turn      │
-   │ RoleSteer:   │   │                      │
-   │ "[群聊] 张三: │   │ userContent =        │
-   │  那个 CI 又   │   │   ambientPrompt +    │
-   │  挂了..."     │   │   批处理消息列表       │
-   │              │   │                      │
-   │ agent 自行   │   │ maxIter = 3 (少量)    │
-   │ 决定是否提及  │   │                      │
-   └──────────────┘   │ agent 决定是否回复    │
-                      └──────────┬───────────┘
-                                 │
-                    ┌────────────┴────────────┐
-                    ▼                         ▼
-             ┌───────────┐            ┌─────────────┐
-             │ agent 回复了│            │ agent 未回复 │
-             │ → 发送回复  │            │ → 不发送      │
-             │ → 正常结束  │            │ → 正常结束    │
-             └───────────┘            └─────────────┘
+                              │  2. Guard 判断:                      │
+                              │     !Directed && ta.groupChat         │
+                              │     && cfg.Channel.Whisper.Enabled    │
+                              │     → ambient 管道                    │
+                              │                                      │
+                              │  3. 其余（定向消息）→ 现有 agent turn  │
+                              │     (包括单聊、群聊 @mention)          │
+                              └──────────────────┬──────────────────┘
+                                                 │
+                          ┌──────────────────────┘
+                          ▼
+                ┌────────────────────┐
+                │  agent turn 活跃?   │  (仅非定向消息进入此判断)
+                └──────┬─────────────┘
+                       │
+              ┌────────┴────────┐
+              ▼                 ▼
+         ┌─────────┐     ┌──────────────────┐
+         │ 活跃     │     │ 空闲              │
+         │         │     │                  │
+         │ 追加到   │     │ 放入              │
+         │ ambient │     │ ambientPending    │
+         │ Pending │     │ (按 thread)       │
+         │ (steer) │     │                  │
+         │         │     │ 启动/重置计时器    │
+         │ 立即返回 │     │ (默认 30s)        │
+         │ Steered │     │                  │
+         └────┬────┘     └────────┬─────────┘
+              │                   │
+              ▼                   │ 计时器到期
+         ┌──────────────┐         ▼
+         │ steer 注入    │   ┌──────────────────────┐
+         │              │   │ 启动 ambient turn      │
+         │ RoleSteer:   │   │                      │
+         │ "[群聊] 张三: │   │ userContent =        │
+         │  那个 CI 又   │   │   ambientPrompt +    │
+         │  挂了..."     │   │   批处理消息列表       │
+         │              │   │                      │
+         │ agent 自行   │   │ maxIter = 3 (少量)    │
+         │ 决定是否提及  │   │                      │
+         └──────────────┘   │ agent 决定是否回复    │
+                            └──────────┬───────────┘
+                                       │
+                          ┌────────────┴────────────┐
+                          ▼                         ▼
+                   ┌───────────┐            ┌─────────────┐
+                   │ agent 回复了│            │ agent 未回复 │
+                   │ → 发送回复  │            │ → 不发送      │
+                   │ → 正常结束  │            │ → 正常结束    │
+                   └───────────┘            └─────────────┘
+```
+
+### 3.0 WeChat 实现示例
+
+```go
+// channel/weixin/polling.go — processMessage() 中构建 IncomingMessage
+isGroupChat := msg.GroupID != ""
+isMentioned := containsAtTag(text, botName) || strings.HasPrefix(text, "/")
+
+inMsg := channel.IncomingMessage{
+    ThreadID:    threadID,
+    MessageID:   messageID,
+    Content:     text,
+    ChannelID:   msg.GroupID,
+    Attachments: attachments,
+    Directed:    !isGroupChat || isMentioned,  // 单聊永远定向，群聊看 @
+    GroupChat:   isGroupChat,
+}
+```
+
+对于不支持 whisper 的 channel，两个字段保持零值（`false`），guard 条件自然不满足：
+
+```go
+// 不支持 whisper 的 channel: Directed=false, GroupChat=false
+// guard: !false && ta.groupChat(false) → false → 不走 ambient 管道
+// 消息直接走现有 agent turn 路径
 ```
 
 ### 3.1 活跃 turn 中的 steer 注入格式
@@ -205,7 +259,48 @@ Agent 回复其他内容 → 发送到群聊。
 
 ## 四、System Prompt 扩展
 
-Channel mode 的 system prompt 需要新增 whisper 指令段：
+### 4.1 注入时机：session 创建时一次注入
+
+System prompt 是 **session 级别的常量**，不是消息级别的开关。一旦 thread 进入群聊模式（`GroupChat=true`），整个 session 期间都是群聊模式：
+
+```
+Session 生命周期:
+  ┌────────────────────────────────────────────────────┐
+  │  首次消息 → GroupChat=true                          │
+  │           → 标准 prompt + 群聊礼仪指令（注入一次）     │
+  │           → 后续所有 turn 共用同份 prompt            │
+  ├────────────────────────────────────────────────────┤
+  │  Turn 1: @tachi 帮我看看 → 定向消息 + 同份 prompt   │
+  │  Turn 2: [群聊] 闲聊 (steer) → 同份 prompt         │
+  │  Turn 3: @tachi 又挂了 → 定向消息 + 同份 prompt     │
+  │  ...                                              │
+  └────────────────────────────────────────────────────┘
+  → System prompt 不变，LLM prompt 缓存始终命中 ✅
+```
+
+**为什么不能动态修改？** 以 Claude 为例，system prompt 是 prompt 缓存的核心 key：
+
+| 策略 | prompt 缓存 | 每次调用成本 |
+|------|------------|------------|
+| 一次性注入（同一个 system prompt） | ✅ 始终命中 | 低 |
+| 每条消息动态注入不同 system prompt | ❌ 每次 miss | 高（延迟 + 费用）|
+
+群聊 session 可能持续几十上百轮，动态修改的代价完全没必要。
+
+### 4.2 LLM 通过消息格式区分定向/非定向
+
+LLM 不需要通过 system prompt 动态变化来区分消息类型。消息本身的格式就够了：
+
+```
+定向消息: "张三: @tachi 帮我看看这个 CI 报错"
+非定向消息: "[群聊] 张三: 今天 CI 又挂了，谁知道怎么回事？"
+```
+
+LLM 看到 `[群聊]` 前缀自然知道这是 ambient 消息——这不是对 ta 说的。
+
+### 4.3 Whisper 指令段
+
+在群聊模式下一旦注入（首次消息时），内容如下：
 
 ```
 ## Group Chat Etiquette
@@ -227,6 +322,20 @@ For group chat messages:
   to chime in with a lighthearted remark now and then to liven things up.
 - Keep replies short (≤3 sentences), straight to the point.
 - When in doubt — don't say anything.
+```
+
+### 4.4 注入逻辑
+
+```go
+// channel/manager/agent_turn.go — runAgentTurn() 中
+basePrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
+systemPrompt := basePrompt
+if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
+    systemPrompt = basePrompt + "\n" + whisperPromptSuffix
+}
+
+eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent,
+    systemPrompt, llm.ChatOptions{...})
 ```
 
 ---
@@ -274,9 +383,19 @@ type ChannelWhisperConfig struct {
 type IncomingMessage struct {
     // ... existing fields ...
     
-    // Directed indicates this message is explicitly addressed to the agent.
-    // When false (default), the message enters the ambient whisper pipeline.
+    // Directed 表示本条消息是否明确指向 agent。
+    // 由 channel 实现根据平台语义设置。
+    // 默认 false（ambient）——不支持定向检测的 channel 走默认值，
+    // manager 层只在 GroupChat=true 时才会将 !Directed 视为 ambient。
     Directed bool
+
+    // GroupChat 表示当前 thread 是否处于群聊模式。
+    // 由 channel 实现根据平台字段判断（如 WeChat 的 GroupID）。
+    // 设为 true 后，manager 层会：
+    //   1. 首次 turn 时注入 whisper system prompt（一次）
+    //   2. 非定向消息走 ambient 管道
+    // 不支持群聊的 channel 保持默认 false，whisper 不生效。
+    GroupChat bool
 }
 ```
 
@@ -292,30 +411,57 @@ type ambientMsg struct {
 type threadActivation struct {
     // ... existing fields ...
     
-    ambientPending []ambientMsg        // 非定向消息缓冲区（idle 状态批处理）
-    ambientTimer   *time.Timer         // 批处理窗口计时器
-    lastAmbient    time.Time           // 上次 ambient turn 结束时间
+    groupChat       bool              // 该 thread 是否群聊模式（首次消息时记录，不变）
+    
+    // Whisper 管道状态（仅 groupChat=true 时有效）
+    ambientPending  []ambientMsg      // 非定向消息缓冲区（idle 状态批处理）
+    ambientTimer    *time.Timer       // 批处理窗口计时器
+    lastAmbient     time.Time         // 上次 ambient turn 结束时间
+    silenceCount    int               // 连续 SILENCE 计数（递增退避用）
 }
 ```
 
-### 6.3 `channel/manager/agent_turn.go` — buildHandler() 分叉
+### 6.3 `channel/manager/agent_turn.go` — buildHandler() 分叉 + system prompt 注入
 
-`buildHandler()` 中在消息进入现有管线之前加一层判断：
+`buildHandler()` 中在消息进入现有管线之前加一层判断，同时首次消息时记录 `groupChat`：
 
 ```go
 func (m *Manager) buildHandler() channel.MessageHandler {
     return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
         // ... existing /command detection ...
 
-        // ---- Channel Whisper: non-directed messages ----
-        if !msg.Directed && m.cfg.Channel.Whisper.Enabled {
+        // ---- Channel Whisper guard ----
+        // 只有群聊模式下的非定向消息才走 ambient 管道。
+        // 单聊中的消息即使 Directed=false 也不会进入 ambient 路径。
+        if !msg.Directed && msg.GroupChat && m.cfg.Channel.Whisper.Enabled {
             return m.handleAmbientMessage(ctx, msg)
         }
         
         // ---- Existing directed message path (unchanged) ----
         // ...
+        
+        // 首次消息：记录 thread 的群聊模式，用于后续 system prompt 注入
+        ta.mu.Lock()
+        if ta.steerRespCh == nil {
+            ta.groupChat = msg.GroupChat
+        }
+        // ...
     }
 }
+```
+
+`runAgentTurn()` 中根据 `ta.groupChat` 条件注入 whisper system prompt：
+
+```go
+// runAgentTurn() 内，构建 system prompt
+basePrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
+systemPrompt := basePrompt
+if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
+    systemPrompt = basePrompt + "\n\n" + whisperPromptBlock
+}
+
+eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent,
+    systemPrompt, llm.ChatOptions{MaxTokens: resolved.MaxTokens})
 ```
 
 ### 6.4 `channel/manager/ambient.go` — 新增文件
@@ -449,16 +595,19 @@ Dream 系统在扫描 session 时可以过滤 `ambient: true` 的消息以减少
 
 ---
 
-## 九、实现路径
+## 八、实现路径
 
-### Phase 1: 骨架（pkg/channel + manager 扩展）
+### Phase 1: 骨架（pkg/channel + manager + weixin 扩展）
 
-- [ ] `IncomingMessage.Directed` 字段
-- [ ] `ChannelWhisperConfig` + 默认值
-- [ ] `threadActivation` 新增 `ambientPending` / `ambientTimer` / `lastAmbient`
-- [ ] `buildHandler()` 分叉：定向 → 现有路径，非定向 → `handleAmbientMessage()`
+- [ ] `IncomingMessage.Directed` + `GroupChat` 字段
+- [ ] `ChannelWhisperConfig` + 默认值（`config.go`）
+- [ ] `BuildSystemPrompt` 可扩展接口（追加 whisper 指令段）
+- [ ] `threadActivation` 新增 `groupChat` / `ambientPending` / `ambientTimer` / `lastAmbient` / `silenceCount`
+- [ ] `buildHandler()` guard 分叉 + 首次消息记录 `groupChat`
+- [ ] `runAgentTurn()` 条件式 system prompt 注入
+- [ ] WeChat `processMessage()` 设置 `Directed` + `GroupChat`
 - [ ] `ambient.go` 新文件：buffer + timer + flush 逻辑
-- [ ] 单测（mock channel 发非定向消息，验证 buffer/timer/steer 注入）
+- [ ] 单测（mock channel 发定向/非定向消息，验证 buffer/timer/steer 注入/gruop chat prompt）
 
 ### Phase 2: ambient turn 实现
 
