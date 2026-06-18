@@ -8,6 +8,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools/hashline"
 	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -241,6 +242,67 @@ func (a *AIAgent) SetSkipMemoryRecall(skip bool) {
 
 func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	a.sessionManager = sm
+	// Wire session provider into TopicBackend for temporal query fallback.
+	// This enables queries like "我们最近聊过什么" where keyword-based grep
+	// cannot match — the backend falls back to recent session summaries.
+	if a.memory != nil {
+		if tb, ok := a.memory.Backend.(*memory.TopicBackend); ok {
+			tb.SetSessionProvider(&topicSessionProvider{manager: sm})
+			a.logger.Log("Memory: session provider wired for topic backend")
+		}
+	}
+}
+
+// topicSessionProvider adapts *session.Manager to memory.SessionProvider,
+// allowing TopicBackend to fall back to recent session summaries when
+// keyword-based topic search yields no results (temporal queries).
+type topicSessionProvider struct {
+	manager *session.Manager
+}
+
+// recentUserMsgCount is how many recent user messages to include per session
+// in the temporal query fallback. Two messages gives enough context to answer
+// "what did we talk about recently" without being overly verbose.
+const recentUserMsgCount = 2
+
+// maxMsgLength caps individual user messages in session summaries to keep
+// the total recall output bounded (200 chars is enough to convey topic).
+const maxMsgLength = 200
+
+func (p *topicSessionProvider) RecentSessions(ctx context.Context, limit int) ([]memory.RecentSession, error) {
+	sessions, err := p.manager.List()
+	if err != nil {
+		return nil, err
+	}
+	if len(sessions) > limit {
+		sessions = sessions[:limit]
+	}
+	result := make([]memory.RecentSession, len(sessions))
+	for i, s := range sessions {
+		msgs, err := p.manager.LoadSessionMessages(s.ID)
+		recent := []string{}
+		if err == nil {
+			// Collect last N user messages in reverse order (most recent first).
+			for j := len(msgs) - 1; j >= 0 && len(recent) < recentUserMsgCount; j-- {
+				if msgs[j].Type == session.MessageTypeUser {
+					text := msgs[j].Content
+					runes := []rune(text)
+					if len(runes) > maxMsgLength {
+						text = string(runes[:maxMsgLength-1]) + "…"
+					}
+					recent = append(recent, text)
+				}
+			}
+		}
+		result[i] = memory.RecentSession{
+			ID:             s.ID,
+			Title:          s.Title,
+			RecentMessages: recent,
+			CreatedAt:      s.CreatedAt,
+			UpdatedAt:      s.UpdatedAt,
+		}
+	}
+	return result, nil
 }
 
 // SetContextWindow sets the model's context window size for token-warning reminders.

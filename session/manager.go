@@ -277,6 +277,16 @@ func (m *Manager) LoadMessages() ([]Message, error) {
 	return m.store.LoadMessages(m.current.ID)
 }
 
+// LoadSessionMessages loads all messages for a specific session by ID.
+// Unlike LoadMessages(), this does not require the session to be current —
+// it reads directly from the store. Used by TopicBackend's session fallback
+// to retrieve recent user messages for temporal queries.
+func (m *Manager) LoadSessionMessages(sessionID string) ([]Message, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.store.LoadMessages(sessionID)
+}
+
 // LoadSubagentMessages loads all subagent messages for a session.
 // Returns a map of subagentID → messages. Returns empty map if no subagents exist.
 func (m *Manager) LoadSubagentMessages(sessionID string) (map[string][]Message, error) {

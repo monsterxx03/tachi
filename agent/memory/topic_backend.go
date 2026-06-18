@@ -20,6 +20,24 @@ import (
 // being re-read from disk. Balances accuracy vs I/O.
 const decayCacheTTL = 30 * time.Second
 
+// SessionProvider provides access to recent session metadata for temporal
+// query fallback. When the keyword-based topic search returns no results
+// (or very low confidence), TopicBackend falls back to recent session
+// summaries — this handles queries like "what did we talk about recently"
+// that grep-based search can never match.
+type SessionProvider interface {
+	RecentSessions(ctx context.Context, limit int) ([]RecentSession, error)
+}
+
+// RecentSession is a lightweight summary of a session for recall fallback.
+type RecentSession struct {
+	ID             string
+	Title          string
+	RecentMessages []string // last N user message texts for temporal context
+	CreatedAt      time.Time
+	UpdatedAt      time.Time
+}
+
 // TopicBackend implements the Backend interface using local Markdown topic files
 // searched via ripgrep. It is the memory backend for the AutoDream system.
 //
@@ -29,6 +47,7 @@ const decayCacheTTL = 30 * time.Second
 //   - Memory is produced offline by the Dream sub-agent, not in real-time
 //   - Searches both global (~/.tachi/memory/) and project (<git-root>/.tachi/memory/) domains
 //   - Optional KeywordExtractor for improved text-search recall
+//   - Optional SessionProvider for temporal query fallback
 type TopicBackend struct {
 	globalDir  string // ~/.tachi/memory/
 	projectDir string // <git-root>/.tachi/memory/ (may be empty)
@@ -36,7 +55,8 @@ type TopicBackend struct {
 	logger     *debuglog.Logger
 	extractor  KeywordExtractor // optional: extracts keywords from query for better recall
 
-	halfLifeDays int // decay half-life in days (default 7)
+	sessionProvider SessionProvider // optional: for temporal query fallback
+	halfLifeDays    int             // decay half-life in days (default 7)
 
 	// reinforceMu protects concurrent writes to last_dream.json from
 	// simultaneous ReinforceFact calls (e.g. parallel MemoryRecallReminder
@@ -96,6 +116,15 @@ func NewTopicBackend(cfg Config) (*TopicBackend, error) {
 // improving recall for text-based (rg) search.
 func (t *TopicBackend) SetKeywordExtractor(ext KeywordExtractor) {
 	t.extractor = ext
+}
+
+// SetSessionProvider configures an optional SessionProvider for temporal
+// query fallback. When the keyword-based search returns no results (or very
+// low confidence), TopicBackend will supplement results with recent session
+// summaries — handling queries like "what did we talk about recently" that
+// content-based grep cannot match.
+func (t *TopicBackend) SetSessionProvider(sp SessionProvider) {
+	t.sessionProvider = sp
 }
 
 // Recall searches topic files and inbox for matching content.
@@ -168,7 +197,70 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 		allResults = allResults[:limit]
 	}
 
+	// Session fallback: when topic search returns no results or very low
+	// confidence (top score < 0.3), supplement with recent session summaries.
+	// This handles temporal/navigational queries like "什么我们最近聊过什么"
+	// that keyword-based grep cannot match, without hardcoding any trigger words.
+	//
+	// Session entries get a medium confidence score (0.7) so they rank above
+	// weak topic matches (decayed/superseded) but below strong content hits.
+	if (len(allResults) == 0 || allResults[0].Score < 0.3) && t.sessionProvider != nil {
+		sessionEntries, err := t.fetchRecentSessions(ctx, limit)
+		if err != nil {
+			t.logger.Log("session fallback: %v", err)
+		} else if len(sessionEntries) > 0 {
+			allResults = append(sessionEntries, allResults...)
+			sort.Slice(allResults, func(i, j int) bool {
+				return allResults[i].Score > allResults[j].Score
+			})
+			if len(allResults) > limit {
+				allResults = allResults[:limit]
+			}
+			t.logger.Log("session fallback: %d session(s) added to recall results (topic results: %d)",
+				len(sessionEntries), len(allResults)-len(sessionEntries))
+		}
+	}
+
 	return allResults, nil
+}
+
+// fetchRecentSessions retrieves recent session summaries from the SessionProvider
+// and converts them to memory Entry format with a medium confidence score (0.7).
+// These entries serve as a fallback when keyword-based topic search fails,
+// enabling temporal/navigational queries like "what did we talk about recently".
+// Each entry includes the session title and the most recent user messages for
+// meaningful context about what was discussed.
+func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]Entry, error) {
+	sessions, err := t.sessionProvider.RecentSessions(ctx, limit)
+	if err != nil {
+		return nil, err
+	}
+	entries := make([]Entry, 0, len(sessions))
+	for _, s := range sessions {
+		title := s.Title
+		if title == "" {
+			title = "(untitled)"
+		}
+		// Build a rich content string with session metadata + recent user messages.
+		var content strings.Builder
+		content.WriteString(fmt.Sprintf("Session: %s\nDate: %s\n",
+			title, s.CreatedAt.Format("2006-01-02 15:04")))
+		for i, msg := range s.RecentMessages {
+			if i > 0 {
+				content.WriteByte('\n')
+			}
+			content.WriteString(fmt.Sprintf("  User: %s", msg))
+		}
+		entries = append(entries, Entry{
+			ID:        "session:" + s.ID,
+			SessionID: s.ID,
+			Summary:   title,
+			Content:   content.String(),
+			Timestamp: s.CreatedAt.Unix(),
+			Score:     0.7,
+		})
+	}
+	return entries, nil
 }
 
 // Store handles memory writes. For TopicBackend, only DirectContent writes
