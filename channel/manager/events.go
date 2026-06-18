@@ -64,12 +64,22 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 			if ta == nil {
 				continue
 			}
-			// Agent reached a tool boundary — inject any pending steer messages.
+			// Agent reached a tool boundary — inject any pending steer messages
+			// and any buffered ambient (group chat) messages.
 			ta.mu.Lock()
-			joined := ""
+			var parts []string
 			if len(ta.pending) > 0 {
-				joined = strings.Join(ta.pending, "\n\n")
+				parts = append(parts, ta.pending...)
 				ta.pending = nil
+			}
+			// Drain ambient messages as formatted steer context.
+			if len(ta.ambientPending) > 0 {
+				parts = append(parts, formatAmbientForSteer(ta.ambientPending))
+				ta.ambientPending = nil
+			}
+			joined := ""
+			if len(parts) > 0 {
+				joined = strings.Join(parts, "\n\n")
 				m.logger.Log("channel: steer inject thread=%s content=%d chars", "", len(joined))
 			}
 			ta.mu.Unlock()

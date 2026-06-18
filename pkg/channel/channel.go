@@ -106,6 +106,37 @@ type IncomingMessage struct {
 	// The channel implementation is responsible for downloading and decrypting
 	// the attachment data before populating this field.
 	Attachments []Attachment
+
+	// Sender is the display name of the message sender.
+	//
+	// Used for formatting ambient messages in whisper mode (e.g., "[群聊] 张三: ...").
+	// If empty, formatting falls back to "unknown".
+	Sender string
+
+	// Directed indicates whether this message is explicitly addressed to the agent.
+	//
+	// Channel implementations set this based on platform semantics:
+	//   - Direct messages (1:1 chat) → true
+	//   - Group chat with @mention or /command → true
+	//   - Group chat ordinary conversation → false (ambient)
+	//
+	// Default false is the safe conservative choice — channels that don't support
+	// directed detection leave this at the default; the manager layer only treats
+	// !Directed as ambient when GroupChat is also true.
+	Directed bool
+
+	// GroupChat indicates whether the current thread is in group chat mode.
+	//
+	// Channel implementations set this based on platform fields (e.g., chat type).
+	// Once true for a thread, the entire session lifetime stays in group mode.
+	//
+	// When true, the manager layer:
+	//   1. Injects whisper system prompt on session creation (once)
+	//   2. Routes non-directed messages through the ambient pipeline
+	//
+	// Channels that don't support group chat leave this at the default (false),
+	// and whisper is never activated.
+	GroupChat bool
 }
 
 // OutgoingAttachment represents a file or media attachment to be sent
@@ -159,10 +190,15 @@ type OutgoingMessage struct {
 // When Steered is true, the message was injected into an already-running
 // agent turn via the steer mechanism and Reply should be discarded —
 // the channel should only stop its typing indicator without sending a reply.
+//
+// When Buffered is true, the message was accepted into the whisper ambient
+// buffer and will be processed in a future ambient turn. The channel should
+// not send any reply or stop its typing indicator.
 type HandlerResult struct {
-	Reply   OutgoingMessage // The final reply; zero value when Steered.
-	Steered bool            // True if the message was injected as steer input.
-	Err     error           // Non-nil when processing failed.
+	Reply    OutgoingMessage // The final reply; zero value when Steered or Buffered.
+	Steered  bool            // True if the message was injected as steer input.
+	Buffered bool            // True if the message was buffered for ambient processing.
+	Err      error           // Non-nil when processing failed.
 }
 
 // MessageHandler processes an incoming message and returns a response.

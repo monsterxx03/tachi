@@ -336,6 +336,36 @@ type SubagentConfig struct {
 type ChannelConfig struct {
 	Weixin   WeixinConfig              `yaml:"weixin"`
 	Channels map[string]map[string]any `yaml:"channels"`
+	Whisper  ChannelWhisperConfig      `yaml:"whisper"`
+}
+
+// ChannelWhisperConfig holds channel-mode whisper settings for group chat
+// selective reply. When enabled, non-directed messages in group chats are
+// batched and presented to the agent as ambient context rather than
+// triggering individual agent turns.
+type ChannelWhisperConfig struct {
+	// Enabled controls whether the whisper pipeline is active (default: true).
+	Enabled bool `yaml:"enabled" default:"true"`
+
+	// AmbientBatchWindow is the duration to buffer non-directed messages
+	// before triggering an ambient turn (default: 30s).
+	AmbientBatchWindow time.Duration `yaml:"ambient_batch_window" default:"30s"`
+
+	// AmbientMaxIterations is the iteration budget for ambient turns (default: 5).
+	AmbientMaxIterations int `yaml:"ambient_max_iterations" default:"5"`
+
+	// AmbientMaxBuffer is the maximum number of messages buffered per thread.
+	// When exceeded, oldest messages are dropped (FIFO). Default: 50.
+	AmbientMaxBuffer int `yaml:"ambient_max_buffer" default:"50"`
+
+	// AmbientCooldown is the minimum interval between two ambient turns
+	// on the same thread (default: 0, no cooldown).
+	AmbientCooldown time.Duration `yaml:"ambient_cooldown"`
+
+	// SilenceMarker is the string the agent replies with to indicate
+	// it has nothing to say. Matching is lenient (trim + case-insensitive).
+	// Default: "SILENCE".
+	SilenceMarker string `yaml:"silence_marker" default:"SILENCE"`
 }
 
 // ActiveChannels returns the raw configs for every enabled channel,

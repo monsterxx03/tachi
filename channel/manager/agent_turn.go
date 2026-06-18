@@ -72,6 +72,14 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		m.logger.Log("channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
+		// ---- Channel Whisper guard ----
+		// Only non-directed messages in group chat mode with whisper enabled
+		// are routed through the ambient pipeline. Single-chat messages
+		// (even with Directed=false) never enter the ambient path.
+		if !msg.Directed && msg.GroupChat && m.cfg.Channel.Whisper.Enabled {
+			return m.handleAmbientMessage(ctx, msg)
+		}
+
 		// /compact goes through the agent turn (with session context) rather
 		// than the synchronous slash-command path, so the LLM can summarize
 		// using its existing context window without re-sending all history.
@@ -125,6 +133,31 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// Check if an agent is already running for this thread.
 		ta := m.activateThread(msg.ThreadID, ctx)
 		ta.isCompact = isCompactCmd
+
+		// Record group chat mode on first activation (immutable for session lifetime).
+		// Also cancel any pending ambient timer — directed messages take priority.
+		ta.mu.Lock()
+		if !ta.groupChat && msg.GroupChat {
+			ta.groupChat = true
+		}
+		if ta.ambientTimer != nil {
+			ta.ambientTimer.Stop()
+			ta.ambientTimer = nil
+		}
+		// Transfer buffered ambient messages to steer context for the directed turn.
+		var ambientSteer []ambientMsg
+		if len(ta.ambientPending) > 0 {
+			ambientSteer = ta.ambientPending
+			ta.ambientPending = nil
+		}
+		ta.mu.Unlock()
+
+		// If there are ambient messages buffered, prepend them as steer context.
+		if len(ambientSteer) > 0 {
+			ta.mu.Lock()
+			ta.pending = append([]string{formatAmbientForSteer(ambientSteer)}, ta.pending...)
+			ta.mu.Unlock()
+		}
 
 		ta.mu.Lock()
 		if ta.steerRespCh != nil {
@@ -315,7 +348,13 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		aiAgent.SetPendingImages(userImages)
 	}
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, agent.BuildSystemPrompt(m.cfg.Language, ""), llm.ChatOptions{
+	// Build system prompt — append whisper instructions for group chat threads.
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
+	if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
+		systemPrompt += "\n" + whisperPromptSuffix
+	}
+
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 	text, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(msg.ThreadID), sendProgress, ta)

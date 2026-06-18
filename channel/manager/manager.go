@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -189,6 +191,21 @@ type threadActivation struct {
 	cancel      context.CancelFunc // cancels the agent turn
 	cancelled   bool               // true when this turn was cancelled externally
 	isCompact   bool               // true when this turn is a /compact operation
+
+	// --- Whisper ambient state (only active when groupChat=true) ---
+
+	groupChat      bool           // whether this thread is in group chat mode (set once)
+	ambientPending []ambientMsg   // buffered non-directed messages
+	ambientTimer   *time.Timer    // batch window timer (nil when inactive)
+	lastAmbient    time.Time      // when the last ambient turn ended
+	silenceCount   atomic.Int32   // consecutive SILENCE replies (for backoff)
+}
+
+// ambientMsg represents a single non-directed message buffered for whisper processing.
+type ambientMsg struct {
+	content   string
+	sender    string
+	timestamp time.Time
 }
 
 // handlerResult is the internal result type sent from the agent goroutine
