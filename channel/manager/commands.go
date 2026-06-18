@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"os"
 	"slices"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		text, err := m.handleStopCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
 	case "model":
-		text, err := m.handleModelCommand(cmd.Args)
+		text, err := m.handleModelCommand(cmd.ThreadID, cmd.Args)
 		return textHandlerResult(text), err
 	case "skill":
 		text, err := m.handleSkillCommand(cmd.Args)
@@ -147,10 +148,12 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) channel.Handle
 
 // --- /model ---
 
-// handleModelCommand lists available providers/models or switches to a named provider.
-// /model          — list all configured providers with the current one marked
-// /model <name>   — switch to the named provider
-func (m *Manager) handleModelCommand(args string) (string, error) {
+// handleModelCommand lists available providers/models or switches to a named provider
+// for the given thread. /model only affects the current thread; other threads
+// continue using the global default provider.
+// /model          — list all configured providers with current thread's choice marked
+// /model <name>   — switch the current thread to the named provider
+func (m *Manager) handleModelCommand(threadID, args string) (string, error) {
 	if m.cfg == nil || len(m.cfg.Providers) == 0 {
 		return "No providers configured.", nil
 	}
@@ -159,19 +162,19 @@ func (m *Manager) handleModelCommand(args string) (string, error) {
 
 	if args == "" {
 		// List mode: show all providers.
-		return m.handleModelList()
+		return m.handleModelList(threadID)
 	}
 
-	// Switch mode: resolve and activate the named provider.
-	return m.handleModelSwitch(args)
+	// Switch mode: resolve and activate the named provider for this thread.
+	return m.handleModelSwitch(threadID, args)
 }
 
 // handleModelList returns a formatted list of all configured providers,
-// marking the currently active one with a star.
-func (m *Manager) handleModelList() (string, error) {
-	m.providerMu.RLock()
-	currentName := m.currentProviderName
-	m.providerMu.RUnlock()
+// marking the current thread's active provider with a star. Falls back to the
+// global default when the thread has no per-thread override.
+func (m *Manager) handleModelList(threadID string) (string, error) {
+	// Determine which provider is active for this thread.
+	currentName := m.providerNameForThread(threadID)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf("Configured models (%d):\n", len(m.cfg.Providers)))
@@ -185,13 +188,16 @@ func (m *Manager) handleModelList() (string, error) {
 		fmt.Fprintf(&sb, "  Type: %s  Model: %s\n", p.Type, p.Model)
 	}
 
-	sb.WriteString("\nUse /model <name> to switch.")
+	sb.WriteString("\nUse /model <name> to switch (per-thread).")
 
 	return sb.String(), nil
 }
 
-// handleModelSwitch resolves and activates the named provider.
-func (m *Manager) handleModelSwitch(name string) (string, error) {
+// handleModelSwitch resolves and activates the named provider for the
+// current thread by persisting the choice to the session's meta.json.
+// Other threads (sessions) are unaffected. On next message, the provider
+// is resolved from the session's ProviderName field.
+func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	pCfg := m.cfg.FindProvider(name)
 	if pCfg == nil {
 		return fmt.Sprintf("Provider %q not found. Use /model to see available models.", name), nil
@@ -202,34 +208,41 @@ func (m *Manager) handleModelSwitch(name string) (string, error) {
 		return "", fmt.Errorf("resolve provider %q: %w", name, err)
 	}
 
-	provider, err := llm.NewProvider(
-		resolved.Type,
-		resolved.APIKey,
-		resolved.BaseURL,
-		resolved.Model,
-	)
+	// Persist the override to the session's meta.json so it survives restarts.
+	sm := m.newSessionManager()
+	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
-		return "", fmt.Errorf("create provider %q: %w", name, err)
+		m.logger.Log("channel: /model find session for %s: %v", threadID, err)
+	}
+	if sess == nil {
+		// No session yet — create one now to persist the model choice.
+		wd, _ := os.Getwd()
+		newSess, err := sm.New(resolved.Type, resolved.Model, wd)
+		if err != nil {
+			m.logger.Log("channel: /model create session for %s: %v", threadID, err)
+		} else {
+			sm.SetThreadID(threadID)
+			newSess.ProviderName = name
+			newSess.UpdatedAt = time.Now()
+			sm.UpdateMeta(newSess)
+		}
+	} else {
+		sess.Provider = resolved.Type
+		sess.Model = resolved.Model
+		sess.ProviderName = name
+		sess.UpdatedAt = time.Now()
+		if err := sm.UpdateMeta(sess); err != nil {
+			m.logger.Log("channel: /model update session meta for %s: %v", threadID, err)
+		}
 	}
 
-	m.providerMu.Lock()
-	m.provider = provider
-	m.resolvedConfig = &config.ResolvedConfig{
-		Provider:      *resolved,
-		MaxTokens:     m.resolvedConfig.MaxTokens,
-		MaxIterations: m.resolvedConfig.MaxIterations,
-	}
-	m.currentProviderName = name
-	m.providerMu.Unlock()
+	// Evict only the current thread's cached agent so the next message
+	// rebuilds with the new provider. Other threads are unaffected.
+	m.evictAgent(threadID)
 
-	// Drop every cached AIAgent so the next message rebuilds against the
-	// new provider/model. (acquireAgent also detects this via providerName
-	// comparison, but evicting up-front frees resources sooner.)
-	m.evictAllAgents()
+	m.logger.Log("channel: /model switched thread %s to %s (%s/%s)", threadID, name, resolved.Type, resolved.Model)
 
-	m.logger.Log("channel: /model switched to %s (%s/%s)", name, resolved.Type, resolved.Model)
-
-	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nNew conversations will use this model.", name, resolved.Type, resolved.Model), nil
+	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nThis thread will now use this model. Other threads are unchanged.", name, resolved.Type, resolved.Model), nil
 }
 
 // --- /new ---

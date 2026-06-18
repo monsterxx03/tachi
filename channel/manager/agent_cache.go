@@ -8,6 +8,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -105,14 +106,11 @@ func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 //     current entry for threadID — otherwise it was evicted concurrently
 //     and we must retry.
 func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAgent, error) {
-	prov, resolved := m.getProvider()
+	prov, resolved, curName := m.getProviderForThread(threadID)
 	if prov == nil || resolved == nil {
 		return nil, errProviderNotInitialized
 	}
 
-	m.providerMu.RLock()
-	curName := m.currentProviderName
-	m.providerMu.RUnlock()
 	curModel := resolved.Provider.Model
 
 	for {
@@ -154,7 +152,7 @@ func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAge
 		}
 
 		if ca.agent == nil {
-			built, err := m.buildAgent(ctx, threadID)
+			built, err := m.buildAgent(ctx, threadID, prov, resolved)
 			if err != nil {
 				// Roll back: drop the empty slot so the next attempt
 				// starts fresh, and release the long lock.
@@ -184,8 +182,11 @@ func (m *Manager) releaseAgent(ca *cachedAgent) {
 // state, process manager, skill store, and so on. The agent is otherwise
 // empty — the caller (runAgentTurn / OnCronTrigger) is responsible for
 // session loading, steer channel, and per-turn ephemeral tools.
-func (m *Manager) buildAgent(ctx context.Context, threadID string) (*agent.AIAgent, error) {
-	prov, resolved := m.getProvider()
+//
+// prov and resolved are the provider and config to use for this agent.
+// Callers should pass the result of getProviderForThread(threadID) so that
+// per-thread /model overrides are respected.
+func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Provider, resolved *config.ResolvedConfig) (*agent.AIAgent, error) {
 	if prov == nil || resolved == nil {
 		return nil, errProviderNotInitialized
 	}

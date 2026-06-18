@@ -5,15 +5,16 @@ import (
 )
 
 type Session struct {
-	ID         string    `json:"id"`
-	ThreadID   string    `json:"thread_id,omitempty"` // channel ThreadID for session lookup
-	Title      string    `json:"title"`
-	Provider   string    `json:"provider"`
-	Model      string    `json:"model"`
-	WorkingDir string    `json:"working_dir,omitempty"` // working directory at session creation time
-	CreatedAt  time.Time `json:"created_at"`
-	UpdatedAt  time.Time `json:"updated_at"`
-	SkipDream  bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	ID           string    `json:"id"`
+	ThreadID     string    `json:"thread_id,omitempty"`     // channel ThreadID for session lookup
+	Title        string    `json:"title"`
+	Provider     string    `json:"provider"`                // LLM provider type (e.g. "anthropic", "openai")
+	Model        string    `json:"model"`                   // LLM model name (e.g. "claude-sonnet-4-20250514")
+	ProviderName string    `json:"provider_name,omitempty"` // config provider name (e.g. "claude", "gpt-5.2"); set by /model override
+	WorkingDir   string    `json:"working_dir,omitempty"`   // working directory at session creation time
+	CreatedAt    time.Time `json:"created_at"`
+	UpdatedAt    time.Time `json:"updated_at"`
+	SkipDream    bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
 	// Compact-related fields: link to child/parent sessions after /compact.
 	// - CompactedChildID: set on the OLD session after compaction, pointing to the NEW session.

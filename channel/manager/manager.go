@@ -68,11 +68,12 @@ type initProviderResult struct {
 // SendFileTool) are scoped via SaveToolRegistry / RestoreToolRegistry so they
 // don't leak into the next turn.
 //
-// The cached agent is rebuilt or evicted in three cases:
-//   - /new on a thread → that thread's cached agent is dropped so the next
-//     message starts cleanly.
-//   - /model switches the active provider → all cached agents are evicted
-//     because they were built against the old provider/model.
+// The cached agent is rebuilt or evicted in these cases:
+//   - /new on a thread → that thread's cached agent is dropped and its
+//     per-thread provider override (from /model) is cleared, so the next
+//     message starts cleanly with the global default provider.
+//   - /model on a thread → stores a per-thread provider override and evicts
+//     only that thread's cached agent. Other threads are unaffected.
 //   - /compact runs a one-off summarization against a throwaway agent (with
 //     ClearToolRegistry) so the cached agent's tool set isn't disturbed.
 //
@@ -306,13 +307,66 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // --- Provider resolution ---
 
-// getProvider returns the current provider and resolved config under read lock.
-// Use this in agent turn paths to safely read the provider state that may be
-// updated by the /model command.
+// getProvider returns the current global (default) provider and resolved config
+// under read lock. Use getProviderForThread for agent turn paths that should
+// respect per-thread /model overrides.
 func (m *Manager) getProvider() (llm.Provider, *config.ResolvedConfig) {
 	m.providerMu.RLock()
 	defer m.providerMu.RUnlock()
 	return m.provider, m.resolvedConfig
+}
+
+// getProviderForThread returns the provider for the given thread by reading
+// the session's ProviderName override (set by /model) from session meta.
+// Falls back to the global provider when the session has no override or
+// the override cannot be resolved.
+func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.ResolvedConfig, string) {
+	if threadID != "" && m.cfg != nil {
+		// Peek session meta to check for a /model override.
+		sm := m.newSessionManager()
+		sess, err := sm.FindByThreadID(threadID)
+		if err == nil && sess != nil && sess.ProviderName != "" {
+			pCfg := m.cfg.FindProvider(sess.ProviderName)
+			if pCfg != nil {
+				resolved, err := config.ResolveProviderConfig(pCfg)
+				if err == nil {
+					provider, err := llm.NewProvider(
+						resolved.Type,
+						resolved.APIKey,
+						resolved.BaseURL,
+						resolved.Model,
+					)
+					if err == nil {
+						m.logger.Log("channel: thread %s using session override provider=%s model=%s",
+							threadID, sess.ProviderName, resolved.Model)
+						return provider, &config.ResolvedConfig{Provider: *resolved}, sess.ProviderName
+					}
+				}
+			}
+			m.logger.Log("channel: thread %s has ProviderName=%q but could not resolve; falling back to global",
+				threadID, sess.ProviderName)
+		}
+	}
+
+	m.providerMu.RLock()
+	defer m.providerMu.RUnlock()
+	return m.provider, m.resolvedConfig, m.currentProviderName
+}
+
+// providerNameForThread returns the provider config name active for the
+// given thread, preferring a session-level /model override over the global
+// default.
+func (m *Manager) providerNameForThread(threadID string) string {
+	if threadID != "" && m.cfg != nil {
+		sm := m.newSessionManager()
+		sess, err := sm.FindByThreadID(threadID)
+		if err == nil && sess != nil && sess.ProviderName != "" {
+			return sess.ProviderName
+		}
+	}
+	m.providerMu.RLock()
+	defer m.providerMu.RUnlock()
+	return m.currentProviderName
 }
 
 func (m *Manager) initProvider() error {
@@ -385,7 +439,7 @@ func (m *Manager) newSessionManager() *session.Manager {
 // If found, returns the session manager loaded with that session and the
 // converted LLM message history. If not found, creates a new session manager
 // with a fresh session and returns nil history.
-func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Message, error) {
+func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedConfig) (*session.Manager, []llm.Message, error) {
 	var sm *session.Manager
 	if m.sessionStore != nil {
 		sm = session.NewManagerWithStore(m.sessionStore)
@@ -396,8 +450,6 @@ func (m *Manager) loadThreadSession(threadID string) (*session.Manager, []llm.Me
 			return nil, nil, fmt.Errorf("session manager: %w", err)
 		}
 	}
-
-	_, resolved := m.getProvider()
 
 	// Try to find an existing session for this ThreadID.
 	sess, err := sm.FindByThreadID(threadID)

@@ -354,7 +354,7 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 
 	// Unique per invocation to avoid interference from prior test runs.
 	threadID := fmt.Sprintf("new-%s-%d", t.Name(), time.Now().UnixNano())
-	sm, history, err := mgr.loadThreadSession(threadID)
+	sm, history, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
 	require.NoError(t, err)
 	require.NotNil(t, sm)
 	assert.True(t, sm.HasCurrent(), "session should be auto-created")
@@ -387,7 +387,7 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	threadID := fmt.Sprintf("hist-%s-%d", t.Name(), time.Now().UnixNano())
 
 	// First call: creates session + records a user message.
-	sm1, _, err := mgr.loadThreadSession(threadID)
+	sm1, _, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
 	require.NoError(t, err)
 
 	msg := &sesspkg.Message{
@@ -398,7 +398,7 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second call: should find the existing session and return history.
-	sm2, history, err := mgr.loadThreadSession(threadID)
+	sm2, history, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
 	require.NoError(t, err)
 	require.NotNil(t, history, "should return history from existing session")
 	assert.Len(t, history, 1)
@@ -598,7 +598,7 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	assert.Contains(t, resp, "OFF")
 
 	// /usage requires a pre-existing session — load one first.
-	sm, _, err := mgr.loadThreadSession(threadID)
+	sm, _, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
 	require.NoError(t, err)
 	require.NotNil(t, sm)
 	require.True(t, sm.HasCurrent())
@@ -926,6 +926,7 @@ func TestHandleModelCommand_List(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
 	})
 	// Set up the provider manually (simulating what initProvider would do).
 	mgr.provider = &mockProvider{name: "openai"}
@@ -940,7 +941,7 @@ func TestHandleModelCommand_List(t *testing.T) {
 	}
 	mgr.currentProviderName = "gpt-5.2"
 
-	resp, err := mgr.handleModelCommand("")
+	resp, err := mgr.handleModelCommand("thread-1", "")
 	require.NoError(t, err)
 
 	assert.Contains(t, resp, "Configured models (3)")
@@ -963,6 +964,7 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -977,21 +979,26 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 	}
 	mgr.currentProviderName = "gpt-5.2"
 
-	resp, err := mgr.handleModelCommand("claude-haiku")
+	resp, err := mgr.handleModelCommand("thread-1", "claude-haiku")
 	require.NoError(t, err)
 	assert.Contains(t, resp, "Switched to **claude-haiku**")
 	assert.Contains(t, resp, "anthropic")
 	assert.Contains(t, resp, "claude-3-5-haiku-20241022")
+	assert.Contains(t, resp, "This thread will now use this model")
 
-	// Verify internal state was updated.
+	// Verify the override is resolved via getProviderForThread.
+	prov, resolved, name := mgr.getProviderForThread("thread-1")
+	assert.Equal(t, "claude-haiku", name)
+	assert.NotNil(t, prov)
+	assert.NotNil(t, resolved)
+	assert.Equal(t, "anthropic", resolved.Provider.Type)
+	assert.Equal(t, "claude-3-5-haiku-20241022", resolved.Provider.Model)
+
+	// Global state is unchanged.
 	mgr.providerMu.RLock()
 	defer mgr.providerMu.RUnlock()
-
-	assert.Equal(t, "claude-haiku", mgr.currentProviderName)
-	assert.NotNil(t, mgr.provider)
-	assert.NotNil(t, mgr.resolvedConfig)
-	assert.Equal(t, "anthropic", mgr.resolvedConfig.Provider.Type)
-	assert.Equal(t, "claude-3-5-haiku-20241022", mgr.resolvedConfig.Provider.Model)
+	assert.Equal(t, "gpt-5.2", mgr.currentProviderName)
+	assert.Equal(t, "openai", mgr.resolvedConfig.Provider.Type)
 }
 
 // TestHandleModelCommand_Unknown verifies that /model <unknown> returns
@@ -1016,7 +1023,7 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 	}
 	mgr.currentProviderName = "gpt-5.2"
 
-	resp, err := mgr.handleModelCommand("nonexistent")
+	resp, err := mgr.handleModelCommand("thread-1", "nonexistent")
 	require.NoError(t, err)
 	assert.Contains(t, resp, "not found")
 	assert.Contains(t, resp, "/model")
@@ -1029,7 +1036,7 @@ func TestHandleModelCommand_NoProviders(t *testing.T) {
 		Cfg:          cfg,
 	})
 
-	resp, err := mgr.handleModelCommand("")
+	resp, err := mgr.handleModelCommand("thread-1", "")
 	require.NoError(t, err)
 	assert.Contains(t, resp, "No providers configured")
 }
@@ -1045,6 +1052,7 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1060,17 +1068,17 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 	mgr.currentProviderName = "gpt-5.2"
 
 	// Before switch: gpt-5.2 is active.
-	resp, err := mgr.handleModelCommand("")
+	resp, err := mgr.handleModelCommand("thread-1", "")
 	require.NoError(t, err)
 	assert.Contains(t, resp, "* gpt-5.2")
 	assert.Contains(t, resp, " claude-haiku")
 
 	// Switch.
-	_, err = mgr.handleModelCommand("claude-haiku")
+	_, err = mgr.handleModelCommand("thread-1", "claude-haiku")
 	require.NoError(t, err)
 
 	// After switch: claude-haiku is active.
-	resp, err = mgr.handleModelCommand("")
+	resp, err = mgr.handleModelCommand("thread-1", "")
 	require.NoError(t, err)
 	assert.Contains(t, resp, " gpt-5.2")
 	assert.Contains(t, resp, "* claude-haiku")
@@ -1087,6 +1095,7 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1120,9 +1129,9 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	resp = result.Reply.Content
 	assert.Contains(t, resp, "Switched to **claude-haiku**")
 
-	mgr.providerMu.RLock()
-	defer mgr.providerMu.RUnlock()
-	assert.Equal(t, "claude-haiku", mgr.currentProviderName)
+	// Verify the override is resolved via getProviderForThread.
+	_, _, name := mgr.getProviderForThread("thread-1")
+	assert.Equal(t, "claude-haiku", name)
 }
 
 // TestHandleModelCommand_ViaCommandHandler verifies /model via the typed
@@ -1136,6 +1145,7 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	}
 	mgr := New(Config{
 		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -1153,19 +1163,19 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	handler := mgr.buildCommandHandler()
 
 	// /model list via typed command.
-	resp, err := handler(t.Context(), channel.SlashCommand{Name: "model"})
+	resp, err := handler(t.Context(), channel.SlashCommand{Name: "model", ThreadID: "thread-1"})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "Configured models (2)")
 	assert.Contains(t, resp, "* gpt-5.2")
 
 	// /model switch via typed command.
-	resp, err = handler(t.Context(), channel.SlashCommand{Name: "model", Args: "claude-haiku"})
+	resp, err = handler(t.Context(), channel.SlashCommand{Name: "model", Args: "claude-haiku", ThreadID: "thread-1"})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "Switched to **claude-haiku**")
 
-	mgr.providerMu.RLock()
-	assert.Equal(t, "claude-haiku", mgr.currentProviderName)
-	mgr.providerMu.RUnlock()
+	// Verify the override is resolved via getProviderForThread.
+	_, _, name := mgr.getProviderForThread("thread-1")
+	assert.Equal(t, "claude-haiku", name)
 }
 
 // contains is a simple substring check helper.

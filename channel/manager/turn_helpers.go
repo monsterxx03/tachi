@@ -20,7 +20,7 @@ import (
 // Used by every entry point that runs an agent turn on a thread:
 // runAgentTurn (cached + compact) and OnCronTrigger.
 func (m *Manager) prepareThreadSession(threadID string, resolved *config.ResolvedConfig) (*session.Manager, []llm.Message) {
-	sm, priorHistory, err := m.loadThreadSession(threadID)
+	sm, priorHistory, err := m.loadThreadSession(threadID, resolved)
 	if err != nil {
 		m.logger.Log("channel: session setup for thread %s: %v", threadID, err)
 		sm = m.newSessionManager()

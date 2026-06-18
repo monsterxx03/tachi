@@ -274,7 +274,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}()
 
-	_, resolved := m.getProvider()
+	_, resolved, _ := m.getProviderForThread(msg.ThreadID)
 	if resolved == nil {
 		ta.resultCh <- handlerResult{err: fmt.Errorf("channel: provider not initialized")}
 		return
@@ -351,7 +351,8 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 // throwaway agent / releases the cached-agent lock in the right order.
 func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*agent.AIAgent, *cachedAgent, *attachmentSink, func(), error) {
 	if isCompact {
-		aiAgent, err := m.buildAgent(ctx, threadID)
+		prov, resolved, _ := m.getProviderForThread(threadID)
+		aiAgent, err := m.buildAgent(ctx, threadID, prov, resolved)
 		if err != nil {
 			return nil, nil, nil, nil, fmt.Errorf("compact: build agent: %w", err)
 		}
