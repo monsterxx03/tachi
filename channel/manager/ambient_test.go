@@ -140,7 +140,7 @@ func TestAmbientBuffer_Batching(t *testing.T) {
 	handler := mgr.buildHandler()
 
 	// Send 3 non-directed messages
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		result := handler(t.Context(), channel.IncomingMessage{
 			ThreadID:  "wave:group:gc_456",
 			MessageID: "msg-" + string(rune('a'+i)),
@@ -153,9 +153,8 @@ func TestAmbientBuffer_Batching(t *testing.T) {
 	}
 
 	// Verify buffer has all 3 messages
-	mgr.threadActMu.Lock()
-	ta := mgr.threadActivations["wave:group:gc_456"]
-	mgr.threadActMu.Unlock()
+	ta, ok := mgr.threadActivations.Load("wave:group:gc_456")
+	require.True(t, ok)
 	require.NotNil(t, ta)
 
 	ta.mu.Lock()
@@ -176,7 +175,7 @@ func TestAmbientBuffer_Cap(t *testing.T) {
 	handler := mgr.buildHandler()
 
 	// Send 5 messages (exceeds cap of 3)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		handler(t.Context(), channel.IncomingMessage{
 			ThreadID:  "wave:group:gc_cap",
 			MessageID: "msg-" + string(rune('a'+i)),
@@ -187,9 +186,8 @@ func TestAmbientBuffer_Cap(t *testing.T) {
 		})
 	}
 
-	mgr.threadActMu.Lock()
-	ta := mgr.threadActivations["wave:group:gc_cap"]
-	mgr.threadActMu.Unlock()
+	ta, ok := mgr.threadActivations.Load("wave:group:gc_cap")
+	require.True(t, ok)
 	require.NotNil(t, ta)
 
 	ta.mu.Lock()
@@ -216,12 +214,7 @@ func TestAmbientSteer_ActiveTurn(t *testing.T) {
 		groupChat:   true,
 	}
 	ta.ctx, ta.cancel = t.Context(), func() {}
-	mgr.threadActMu.Lock()
-	if mgr.threadActivations == nil {
-		mgr.threadActivations = make(map[string]*threadActivation)
-	}
-	mgr.threadActivations["wave:group:gc_active"] = ta
-	mgr.threadActMu.Unlock()
+	mgr.threadActivations.Store("wave:group:gc_active", ta)
 
 	handler := mgr.buildHandler()
 

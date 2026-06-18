@@ -18,19 +18,10 @@ import (
 // if it doesn't exist. The caller MUST check ta.steerRespCh to determine
 // whether the thread is already active (steer case) or new (start case).
 func (m *Manager) activateThread(threadID string, parentCtx context.Context) *threadActivation {
-	m.threadActMu.Lock()
-	defer m.threadActMu.Unlock()
-
-	if m.threadActivations == nil {
-		m.threadActivations = make(map[string]*threadActivation)
-	}
-
-	ta, ok := m.threadActivations[threadID]
-	if !ok {
+	ta, _ := m.threadActivations.LoadOrCompute(threadID, func() *threadActivation {
 		ctx, cancel := context.WithCancel(parentCtx)
-		ta = &threadActivation{ctx: ctx, cancel: cancel}
-		m.threadActivations[threadID] = ta
-	}
+		return &threadActivation{ctx: ctx, cancel: cancel}
+	})
 	return ta
 }
 
@@ -39,11 +30,7 @@ func (m *Manager) activateThread(threadID string, parentCtx context.Context) *th
 // the caller (pointer equality). This prevents a stale handler
 // goroutine from deleting a new activation created by /new or /stop.
 func (m *Manager) deactivateThread(threadID string, ta *threadActivation) {
-	m.threadActMu.Lock()
-	defer m.threadActMu.Unlock()
-	if cur, ok := m.threadActivations[threadID]; ok && cur == ta {
-		delete(m.threadActivations, threadID)
-	}
+	m.threadActivations.CompareAndDelete(threadID, ta)
 }
 
 // cancelThreadTurn cancels the agent context for the given thread
@@ -51,14 +38,11 @@ func (m *Manager) deactivateThread(threadID string, ta *threadActivation) {
 // turn is active.
 // Called by /stop and /new to terminate a running LLM turn.
 func (m *Manager) cancelThreadTurn(threadID string) {
-	m.threadActMu.Lock()
-	ta, ok := m.threadActivations[threadID]
+	ta, ok := m.threadActivations.LoadAndDelete(threadID)
 	if ok && ta.cancel != nil {
 		ta.cancelled = true
 		ta.cancel()
 	}
-	delete(m.threadActivations, threadID)
-	m.threadActMu.Unlock()
 }
 
 // --- Handler build ---

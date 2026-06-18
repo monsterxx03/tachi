@@ -16,6 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/lockedmap"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -140,15 +141,13 @@ type Manager struct {
 	systemScheduler *cron.SystemScheduler
 
 	// verboseState tracks per-thread verbose mode toggled by /v command.
-	verboseState map[string]bool
-	verboseMu    sync.RWMutex
+	verboseState lockedmap.Map[string, bool]
 
 	// skillStore provides skill listing and activation for /skill command.
 	skillStore *skill.Store
 
 	// Per-thread agent activations for steer support.
-	threadActMu     sync.Mutex
-	threadActivations map[string]*threadActivation
+	threadActivations lockedmap.Map[string, *threadActivation]
 
 	// Shared ProcessManager for background processes across all agent turns.
 	// Per-turn AIAgent instances are ephemeral, but background processes must

@@ -100,9 +100,7 @@ func (m *Manager) enforceBufferCap(ta *threadActivation) {
 // flushAmbientBatch fires when the batch window expires. It starts a
 // lightweight ambient turn with the buffered messages.
 func (m *Manager) flushAmbientBatch(threadID string) {
-	m.threadActMu.Lock()
-	ta, ok := m.threadActivations[threadID]
-	m.threadActMu.Unlock()
+	ta, ok := m.threadActivations.Load(threadID)
 	if !ok {
 		return
 	}
@@ -182,9 +180,7 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	aiAgent.SetSteerChannel(steerCh)
 
 	// Mark the thread as having an active turn.
-	m.threadActMu.Lock()
-	ta, ok := m.threadActivations[threadID]
-	m.threadActMu.Unlock()
+	ta, ok := m.threadActivations.Load(threadID)
 	if !ok {
 		return
 	}

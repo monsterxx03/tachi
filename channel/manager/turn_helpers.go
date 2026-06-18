@@ -43,9 +43,8 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *config.Resolve
 // toggles mid-turn are observed immediately rather than captured once.
 func (m *Manager) isVerboseFor(threadID string) func() bool {
 	return func() bool {
-		m.verboseMu.RLock()
-		defer m.verboseMu.RUnlock()
-		return m.verboseState != nil && m.verboseState[threadID]
+		v, _ := m.verboseState.Load(threadID)
+		return v
 	}
 }
 

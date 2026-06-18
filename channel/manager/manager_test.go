@@ -499,18 +499,18 @@ func TestHandleVerboseCommand(t *testing.T) {
 	require.NoError(t, err)
 	assert.Contains(t, resp, "ON")
 
-	mgr.verboseMu.RLock()
-	assert.True(t, mgr.verboseState[threadID])
-	mgr.verboseMu.RUnlock()
+	v, ok := mgr.verboseState.Load(threadID)
+	assert.True(t, ok)
+	assert.True(t, v)
 
 	// Second toggle: on → off
 	resp, err = mgr.handleVerboseCommand(threadID)
 	require.NoError(t, err)
 	assert.Contains(t, resp, "OFF")
 
-	mgr.verboseMu.RLock()
-	assert.False(t, mgr.verboseState[threadID])
-	mgr.verboseMu.RUnlock()
+	v, ok = mgr.verboseState.Load(threadID)
+	assert.True(t, ok)
+	assert.False(t, v)
 }
 
 // TestHandleVerboseCommand_ResetByNew verifies that /new resets verbose state.
@@ -536,17 +536,16 @@ func TestHandleVerboseCommand_ResetByNew(t *testing.T) {
 	_, err := mgr.handleVerboseCommand(threadID)
 	require.NoError(t, err)
 
-	mgr.verboseMu.RLock()
-	assert.True(t, mgr.verboseState[threadID])
-	mgr.verboseMu.RUnlock()
+	v, ok := mgr.verboseState.Load(threadID)
+	assert.True(t, ok)
+	assert.True(t, v)
 
 	// /new should reset it.
 	_, err = mgr.handleNewCommand(threadID)
 	require.NoError(t, err)
 
-	mgr.verboseMu.RLock()
-	assert.False(t, mgr.verboseState[threadID])
-	mgr.verboseMu.RUnlock()
+	_, ok = mgr.verboseState.Load(threadID)
+	assert.False(t, ok) // key should be deleted
 }
 
 // TestCommandHandler_BuildAndDispatch verifies that buildCommandHandler

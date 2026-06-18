@@ -279,11 +279,7 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	}
 
 	// Reset verbose state for the new session.
-	m.verboseMu.Lock()
-	if m.verboseState != nil {
-		delete(m.verboseState, threadID)
-	}
-	m.verboseMu.Unlock()
+	m.verboseState.Delete(threadID)
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
 }
@@ -539,13 +535,8 @@ func (m *Manager) handleCronCommand() (string, error) {
 // handleVerboseCommand toggles verbose tool call output for the given thread.
 // When on, subsequent replies include a summary of tool calls made by the agent.
 func (m *Manager) handleVerboseCommand(threadID string) (string, error) {
-	m.verboseMu.Lock()
-	if m.verboseState == nil {
-		m.verboseState = make(map[string]bool)
-	}
-	current := m.verboseState[threadID]
-	m.verboseState[threadID] = !current
-	m.verboseMu.Unlock()
+	current, _ := m.verboseState.Load(threadID)
+	m.verboseState.Store(threadID, !current)
 
 	if !current {
 		return "🔍 Verbose mode: ON\n后续回复将显示工具调用过程。", nil
