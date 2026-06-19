@@ -12,3 +12,8 @@ go.work.sum
 # harbor
 __pycache__
 terminal-bench-2-1/
+
+# Chrome extension build
+chrome-extension/dist/
+chrome-extension/*.zip
+

@@ -10,7 +10,6 @@ import (
 
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
-	"gopkg.in/yaml.v3"
 )
 
 func init() {
@@ -22,17 +21,6 @@ func init() {
 			if b, ok := enabled.(bool); ok && !b {
 				return nil, fmt.Errorf("chrome: disabled")
 			}
-		}
-		b, err := yaml.Marshal(rawCfg)
-		if err != nil {
-			return nil, fmt.Errorf("chrome: marshal config: %w", err)
-		}
-		var cfg struct {
-			Enabled     bool   `yaml:"enabled"`
-			ExtensionID string `yaml:"extension_id"`
-		}
-		if err := yaml.Unmarshal(b, &cfg); err != nil {
-			return nil, fmt.Errorf("chrome: unmarshal config: %w", err)
 		}
 		return NewChromeChannel("chrome"), nil
 	})

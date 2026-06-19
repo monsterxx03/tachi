@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "Tachi",
+  "version": "0.1.0",
+  "description": "AI 助手 — 右键选中文本即可提问、搜索、记忆",
+  "permissions": [
+    "contextMenus",
+    "nativeMessaging",
+    "storage",
+    "sidePanel"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [{
+    "matches": ["<all_urls>"],
+    "js": ["content.js"],
+    "css": ["toast.css"]
+  }],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Tachi",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

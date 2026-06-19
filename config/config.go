@@ -316,9 +316,9 @@ type SubagentConfig struct {
 
 // ChannelConfig groups configuration for all IM channel backends.
 //
-// Legacy field: Weixin is the typed config for the built-in weixin channel.
-// For backward compatibility, if the Weixin.Enabled flag is set but no
-// "weixin" entry exists in Channels, weixin is auto-activated.
+// Legacy fields: Weixin and Chrome are typed configs for built-in channels.
+// For backward compatibility, if Weixin.Enabled or Chrome.Enabled is set
+// but no matching entry exists in Channels, it's auto-activated.
 //
 // Generic field: Channels maps channel name to its raw config. Each entry
 // must match the Name() of a registered Channel (via channel.Register).
@@ -335,14 +335,14 @@ type SubagentConfig struct {
 //	      token: "xxx"
 type ChannelConfig struct {
 	Weixin   WeixinConfig              `yaml:"weixin"`
+	Chrome   ChromeConfig              `yaml:"chrome"`
 	Channels map[string]map[string]any `yaml:"channels"`
 	Whisper  ChannelWhisperConfig      `yaml:"whisper"`
 }
 
 // ChromeConfig holds configuration for the Chrome Native Messaging channel.
 type ChromeConfig struct {
-	Enabled     bool   `yaml:"enabled"`
-	ExtensionID string `yaml:"extension_id"` // For Native Messaging manifest installation
+	Enabled bool `yaml:"enabled"`
 }
 
 // ChannelWhisperConfig holds channel-mode whisper settings for group chat
@@ -375,11 +375,12 @@ type ChannelWhisperConfig struct {
 }
 
 // ActiveChannels returns the raw configs for every enabled channel,
-// merging legacy Weixin config into the generic Channels map when needed.
+// merging legacy typed configs (Weixin, Chrome) into the generic Channels
+// map when needed.
 //
-// For backward compatibility: if the legacy weixin.enabled flag is set
-// and there's no "weixin" key in Channels, weixin is included by
-// converting its typed config. If both exist, Channels takes precedence.
+// For backward compatibility: if a legacy typed config has Enabled set
+// and there's no matching key in Channels, it's auto-included.
+// If both exist, the generic Channels entry takes precedence.
 func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
 	result := make(map[string]map[string]any, len(cc.Channels))
 
@@ -398,6 +399,13 @@ func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
 			"state_dir": cc.Weixin.StateDir,
 			"route_tag": cc.Weixin.RouteTag,
 			"greeting":  cc.Weixin.Greeting,
+		}
+	}
+
+	// Legacy chrome: include if enabled and not already present in Channels.
+	if _, inChannels := result["chrome"]; !inChannels && cc.Chrome.Enabled {
+		result["chrome"] = map[string]any{
+			"enabled": true,
 		}
 	}
 

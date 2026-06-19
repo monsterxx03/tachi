@@ -56,6 +56,15 @@ var commonFlags = []cli.Flag{
 func main() {
 	llm.Version = Version
 
+	// Chrome Native Messaging host detection.
+	// Chrome launches the native host with the extension origin as argv[1]:
+	//   tachi chrome-extension://<extension-id>/
+	// We detect this prefix and automatically redirect to channel mode so
+	// the Chrome channel can service Native Messaging requests via stdin/stdout.
+	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "chrome-extension://") {
+		os.Args = []string{os.Args[0], "channel"}
+	}
+
 	app := &cli.Command{
 		Name:    "tachi",
 		Usage:   "AI Agent CLI",
