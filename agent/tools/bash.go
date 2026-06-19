@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
@@ -139,6 +140,16 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 
 	cmd := exec.CommandContext(ctx, "bash", "-c", a.Command)
 	cmd.Dir = wdctx.Dir(ctx)
+
+	// Process group isolation: kill -pgid terminates the entire process tree
+	// (bash + all children like python/wget/curl). Without this, exec.CommandContext
+	// only kills the immediate bash process, leaving orphan children running.
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error {
+		// Negative PID = process group kill. The process group ID equals the
+		// bash process PID because Setpgid assigns the child's PID as its PGID.
+		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+	}
 
 	var stdout, stderr limitedBuffer
 	stdout.maxSize = maxOutputSize + 256
