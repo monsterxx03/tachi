@@ -28,6 +28,8 @@ import (
 	"github.com/monsterxx03/tachi/tui"
 
 	_ "github.com/monsterxx03/tachi/channel/weixin"
+	_ "github.com/monsterxx03/tachi/channel/chrome"
+	"github.com/monsterxx03/tachi/channel/chrome"
 )
 
 // Version is set via ldflags at build time:
@@ -149,6 +151,31 @@ func main() {
 							},
 						},
 						Action: transcriptShow,
+					},
+				},
+			},
+			{
+				Name:  "chrome",
+				Usage: "Manage Chrome Native Messaging integration",
+				Commands: []*cli.Command{
+					{
+						Name:   "install",
+						Usage:  "Install Native Messaging manifest for a Chrome extension",
+						Action: chromeInstall,
+						Flags: []cli.Flag{
+							&cli.StringFlag{
+								Name:    "extension-id",
+								Aliases: []string{"e"},
+								Usage:   "Chrome extension ID (required)",
+							},
+						},
+					},
+					{
+						Name:   "uninstall",
+						Usage:  "Remove Chrome Native Messaging manifest",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							return chrome.Uninstall()
+						},
 					},
 				},
 			},
@@ -695,4 +722,21 @@ func transcriptShow(ctx context.Context, cmd *cli.Command) error {
 	}
 	fmt.Printf("Transcript: %s\nOpened: %s\n", sess.Title, path)
 	return nil
+}
+
+// chromeInstall handles `tachi chrome install --extension-id <id>`.
+// It installs the Native Messaging manifest for the given extension ID.
+func chromeInstall(ctx context.Context, cmd *cli.Command) error {
+	extID := cmd.String("extension-id")
+	if extID == "" {
+		// Try positional arg as fallback.
+		args := cmd.Args().Slice()
+		if len(args) > 0 {
+			extID = args[0]
+		}
+	}
+	if extID == "" {
+		return fmt.Errorf("extension ID is required; use --extension-id or pass as argument")
+	}
+	return chrome.InstallExtensionID(extID)
 }

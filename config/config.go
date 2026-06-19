@@ -339,6 +339,12 @@ type ChannelConfig struct {
 	Whisper  ChannelWhisperConfig      `yaml:"whisper"`
 }
 
+// ChromeConfig holds configuration for the Chrome Native Messaging channel.
+type ChromeConfig struct {
+	Enabled     bool   `yaml:"enabled"`
+	ExtensionID string `yaml:"extension_id"` // For Native Messaging manifest installation
+}
+
 // ChannelWhisperConfig holds channel-mode whisper settings for group chat
 // selective reply. When enabled, non-directed messages in group chats are
 // batched and presented to the agent as ambient context rather than
