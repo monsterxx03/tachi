@@ -89,6 +89,7 @@ function showToast(action, content, isError = false) {
   const toast = document.createElement("div");
   toast.id = "tachi-toast";
   toast.className = "tachi-toast";
+  if (isError) toast.classList.add("tachi-error");
 
   // Sanitize content: render markdown-like formatting safely
   const rendered = renderContent(content);

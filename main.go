@@ -547,7 +547,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 //	      token: "xxx"
 func runChannels(ctx context.Context, cmd *cli.Command) error {
 	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Printf("Warning: failed to init debug log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
 	}
 	defer debuglog.Close()
 
@@ -576,7 +576,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	for name, rawCfg := range active {
 		factory, ok := registered[name]
 		if !ok {
-			fmt.Printf("[channel] WARNING: %q enabled in config but no factory registered (import its package?)\n", name)
+			fmt.Fprintf(os.Stderr, "[channel] WARNING: %q enabled in config but no factory registered (import its package?)\n", name)
 			continue
 		}
 
@@ -587,7 +587,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 
 		mgr.Add(ch)
 		instantiated++
-		fmt.Printf("[channel] %s registered\n", name)
+		fmt.Fprintf(os.Stderr, "[channel] %s registered\n", name)
 	}
 
 	// Verify at least one channel was instantiated.
@@ -603,9 +603,15 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("channel manager start: %w", err)
 	}
 
-	// Block until context is cancelled.
-	<-ctx.Done()
-	fmt.Println("[channel] shutting down...")
+	// Block until context is cancelled OR all channels have exited.
+	// Channels like Chrome Native Messaging exit when stdin is closed;
+	// waiting for ctx.Done() alone would leave zombie processes.
+	select {
+	case <-ctx.Done():
+	case <-mgr.Done():
+	}
+
+	fmt.Fprintln(os.Stderr, "[channel] shutting down...")
 	mgr.Close()
 	return nil
 }

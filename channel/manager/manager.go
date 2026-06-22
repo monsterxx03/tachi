@@ -176,6 +176,18 @@ type Manager struct {
 	sharedMCPMgr  *mcp.Manager
 
 	logger *debuglog.Logger
+
+	// wg tracks running channel goroutines. Done() returns a channel that
+	// closes when all channel goroutines have exited.
+	wg   sync.WaitGroup
+	done chan struct{}
+	once sync.Once
+}
+
+// Done returns a channel that is closed when all registered channel goroutines
+// have exited. Useful for runChannels to know when to stop waiting.
+func (m *Manager) Done() <-chan struct{} {
+	return m.done
 }
 
 // threadActivation holds the state for an active agent turn on a thread.
@@ -230,6 +242,7 @@ func New(mcfg Config) *Manager {
 		skillStore:     skillStore,
 		processManager: tools.NewProcessManager(),
 		logger:         debuglog.DefaultLogger.WithSource("channel:manager"),
+		done:           make(chan struct{}),
 	}
 }
 
@@ -268,7 +281,9 @@ func (m *Manager) Start(ctx context.Context) error {
 	cmdHandler := m.buildCommandHandler()
 
 	for _, ch := range chans {
+		m.wg.Add(1)
 		go func(ch channel.Channel) {
+			defer m.wg.Done()
 			m.logger.Log("channel: %s starting", ch.Name())
 
 			// Inject CommandHandler if this channel supports it.
@@ -293,6 +308,12 @@ func (m *Manager) Start(ctx context.Context) error {
 			}
 		}(ch)
 	}
+
+	// Wait for all channel goroutines to exit and signal Done().
+	go func() {
+		m.wg.Wait()
+		m.once.Do(func() { close(m.done) })
+	}()
 
 	// Start cron scheduler after channels are initialized.
 	if m.scheduler != nil {

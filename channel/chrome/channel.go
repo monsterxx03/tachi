@@ -226,19 +226,40 @@ func (c *ChromeChannel) buildPrompt(req ChromeRequest) string {
 func (c *ChromeChannel) readMessage() (ChromeRequest, error) {
 	var length uint32
 	if err := binary.Read(c.reader, binary.LittleEndian, &length); err != nil {
+		c.logger.Log("chrome: readMessage: binary.Read(length) failed: %v (type: %T)", err, err)
 		return ChromeRequest{}, err
+	}
+
+	if length == 0 {
+		c.logger.Log("chrome: readMessage: zero-length message; sending shutdown")
+		return ChromeRequest{}, io.EOF
 	}
 
 	data := make([]byte, length)
-	if _, err := io.ReadFull(c.reader, data); err != nil {
+	n, err := io.ReadFull(c.reader, data)
+	if err != nil {
+		if n > 0 {
+			c.logger.Log("chrome: readMessage: io.ReadFull body failed after %d/%d bytes: %v (type: %T)", n, length, err, err)
+		} else {
+			c.logger.Log("chrome: readMessage: io.ReadFull body failed (0/%d bytes): %v (type: %T)", length, err, err)
+		}
 		return ChromeRequest{}, err
 	}
+	c.logger.Log("chrome: readMessage: read %d bytes OK", n)
 
 	var req ChromeRequest
 	if err := json.Unmarshal(data, &req); err != nil {
+		c.logger.Log("chrome: readMessage: json.Unmarshal failed: %v (type: %T); raw data (first 512 bytes): %q", err, err, truncateBytes(data, 512))
 		return ChromeRequest{}, fmt.Errorf("unmarshal ChromeRequest: %w", err)
 	}
 	return req, nil
+}
+
+func truncateBytes(b []byte, max int) string {
+	if len(b) <= max {
+		return string(b)
+	}
+	return string(b[:max]) + fmt.Sprintf("... (%d more bytes)", len(b)-max)
 }
 
 // writeMessage writes a ChromeResponse to the writer using the Native

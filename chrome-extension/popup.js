@@ -38,7 +38,15 @@ document.addEventListener("DOMContentLoaded", () => {
   // Open side panel
   document.getElementById("openPanel").addEventListener("click", (e) => {
     e.preventDefault();
-    chrome.runtime.sendMessage({ type: "open_panel" });
+    // Try opening side panel directly from popup context.
+    chrome.windows.getCurrent((win) => {
+      if (win?.id) {
+        chrome.sidePanel.open({ windowId: win.id }).catch(() => {
+          // Fallback: send message to background
+          chrome.runtime.sendMessage({ type: "open_panel" });
+        });
+      }
+    });
     window.close();
   });
 });
@@ -115,10 +123,21 @@ function updateStatus(state, text) {
 }
 
 function showResult(content) {
-  // Could show in a small notification or just log
-  console.log("Tachi result:", content);
+  const area = document.getElementById("resultArea");
+  const contentEl = document.getElementById("resultContent");
+  if (area && contentEl) {
+    contentEl.textContent = content;
+    area.classList.add("visible");
+    // Auto-scroll to show result
+    area.scrollTop = area.scrollHeight;
+  }
 }
 
 function showError(message) {
-  console.error("Tachi error:", message);
+  const area = document.getElementById("resultArea");
+  const contentEl = document.getElementById("resultContent");
+  if (area && contentEl) {
+    contentEl.textContent = `❌ ${message}`;
+    area.classList.add("visible");
+  }
 }

@@ -163,6 +163,6 @@
 
 /* ── Error State ── */
 
-.tachi-toast:has(.tachi-icon:contains("⚠️")) {
+.tachi-toast.tachi-error {
   border-color: #fc8181;
 }

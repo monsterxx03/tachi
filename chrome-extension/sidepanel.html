@@ -118,64 +118,6 @@
     <button id="sendBtn">发送</button>
   </div>
 
-  <script>
-    const container = document.getElementById("chatContainer");
-    const input = document.getElementById("input");
-    const sendBtn = document.getElementById("sendBtn");
-
-    // Auto-resize textarea
-    input.addEventListener("input", () => {
-      input.style.height = "auto";
-      input.style.height = Math.min(input.scrollHeight, 120) + "px";
-    });
-
-    // Send on Enter
-    input.addEventListener("keydown", (e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        send();
-      }
-    });
-
-    sendBtn.addEventListener("click", send);
-
-    function send() {
-      const text = input.value.trim();
-      if (!text) return;
-
-      addMessage("user", text);
-      input.value = "";
-      input.style.height = "auto";
-
-      // Send query to Tachi via native messaging
-      chrome.runtime.sendMessage({
-        type: "sidepanel_query",
-        content: text,
-      }, (response) => {
-        if (response && response.content) {
-          addMessage("assistant", response.content);
-        }
-      });
-    }
-
-    function addMessage(role, content) {
-      // Remove empty state
-      const empty = container.querySelector(".empty-state");
-      if (empty) empty.remove();
-
-      const msg = document.createElement("div");
-      msg.className = `message ${role}`;
-      msg.textContent = content;
-      container.appendChild(msg);
-      msg.scrollIntoView({ behavior: "smooth" });
-    }
-
-    // Listen for results from background
-    chrome.runtime.onMessage.addListener((msg) => {
-      if (msg.type === "show_result" && msg.action === "ask_tachi") {
-        addMessage("assistant", msg.content);
-      }
-    });
-  </script>
+  <script src="sidepanel.js"></script>
 </body>
 </html>

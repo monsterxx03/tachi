@@ -2,7 +2,7 @@
 
 # Tachi Chrome Extension Build
 
-SRC := manifest.json background.js content.js toast.css popup.html popup.js sidepanel.html
+SRC := manifest.json background.js content.js toast.css popup.html popup.js sidepanel.html sidepanel.js
 DIST := dist
 
 build: icons

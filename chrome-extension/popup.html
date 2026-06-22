@@ -148,6 +148,29 @@
     .input-area .btn:hover {
       background: #3182ce;
     }
+
+    .result-area {
+      margin-top: 12px;
+      padding: 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.6;
+      max-height: 300px;
+      overflow-y: auto;
+      display: none;
+      word-break: break-word;
+    }
+    .result-area.visible {
+      display: block;
+    }
+    .result-area .result-label {
+      font-weight: 600;
+      color: var(--accent);
+      font-size: 12px;
+      margin-bottom: 4px;
+    }
   </style>
 </head>
 <body>
@@ -176,6 +199,11 @@
     <div class="input-area">
       <textarea id="queryInput" placeholder="输入问题或命令…"></textarea>
       <button class="btn" id="sendBtn">发送</button>
+    </div>
+
+    <div class="result-area" id="resultArea">
+      <div class="result-label">🤖 Tachi</div>
+      <div id="resultContent"></div>
     </div>
 
     <div class="footer">
