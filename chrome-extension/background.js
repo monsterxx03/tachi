@@ -129,7 +129,16 @@ async function handleSummarizePage(sender, sendResponse) {
     try {
       pageData = await chrome.tabs.sendMessage(tab.id, { type: "get_page_content" });
     } catch (e) {
-      sendResponse({ error: `无法读取页面内容: ${e.message}` });
+      // Common cause: extension was reloaded but this tab still has the old
+      // content script. The user just needs to refresh the page.
+      if (e.message.includes("Receiving end does not exist") ||
+          e.message.includes("Could not establish connection")) {
+        sendResponse({
+          error: "请刷新当前页面后重试（扩展已更新，需要重新加载页面才能读取内容）",
+        });
+      } else {
+        sendResponse({ error: `无法读取页面内容: ${e.message}` });
+      }
       return;
     }
 
