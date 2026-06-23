@@ -180,43 +180,16 @@ func (c *ChromeChannel) toIncoming(req ChromeRequest) channel.IncomingMessage {
 // action requested by the Chrome extension.
 func (c *ChromeChannel) buildPrompt(req ChromeRequest) string {
 	switch req.Action {
-	case "search":
-		return fmt.Sprintf("搜索以下内容并返回结果：%s", req.Selection.Text)
-
-	case "explain":
-		return fmt.Sprintf(
-			"请解释以下概念。先用 100 字以内给出核心定义，再用 2-3 个要点展开。"+
-				"最后给一个生活中的类比。\n\n概念：%s",
-			req.Selection.Text,
-		)
-
-	case "remember":
-		url := req.Selection.URL
-		if url == "" {
-			url = "(未知来源)"
-		}
-		return fmt.Sprintf(
-			"使用 RecordMemory 工具记录以下内容到记忆中。\n\n内容：%s\n来源：%s",
-			req.Selection.Text, url,
-		)
-
-	case "recall":
-		return fmt.Sprintf(
-			"使用 MemoryRecall 工具搜索记忆中是否有与以下内容相关的信息。\n\n查询：%s",
-			req.Selection.Text,
-		)
-
-	case "ask_tachi":
-		title := req.Selection.Title
-		if title == "" {
-			title = req.Selection.URL
-		}
-		return fmt.Sprintf(
-			"用户从浏览器中提问。\n\n当前页面：%s\n选中文本：%s\n\n用户问题：%s",
-			title, req.Selection.Text, req.Content,
-		)
+	case "summarize":
+		// The extension pre-builds a structured summarization prompt
+		// with page content, title, and URL. Pass it through as-is.
+		return req.Content
 
 	default:
+		// Catch-all: return content if present, otherwise selection text.
+		if req.Content != "" {
+			return req.Content
+		}
 		return req.Selection.Text
 	}
 }
