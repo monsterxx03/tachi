@@ -265,6 +265,11 @@ ${pageData.content}`;
 
 connectTachi();
 
+// Ensure the side panel is globally enabled
+chrome.sidePanel.setOptions({ enabled: true }).catch((e) =>
+  console.error("Tachi: sidePanel.setOptions failed:", e.message)
+);
+
 setInterval(() => {
   if (port) {
     try {
