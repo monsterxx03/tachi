@@ -199,6 +199,40 @@ func TestSearch_Keyword_DedupTerms(t *testing.T) {
 	assert.Equal(t, "mcp__pg__query", results[0].Name)
 }
 
+// TestSearch_Keyword_SuffixOnly: user searches the tool name portion without "mcp__server" prefix.
+// "get_mcp_server_detail" tokenizes to ["get", "mcp", "server", "detail"] and matches name parts.
+func TestSearch_Keyword_SuffixOnly(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__iam-admin__get_mcp_server_detail", "iam-admin",
+		"根据 MCP Server 名称查询详情：含 owner、可用范围、敏感标识、默认开关、可用条件规则、时间及更新人"))
+
+	results := p.Search("get_mcp_server_detail", 5)
+	require.Equal(t, 1, len(results))
+	assert.Equal(t, "mcp__iam-admin__get_mcp_server_detail", results[0].Name)
+}
+
+func TestSearch_Keyword_SuffixOnly_CamelCase(t *testing.T) {
+	// CamelCase query: "createPullRequest" should find the matching tool.
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__github__createPullRequest", "github", "Create pull requests"))
+	p.Add(testDeferredTool("mcp__github__listIssues", "github", "List issues"))
+
+	results := p.Search("createPullRequest", 5)
+	require.Equal(t, 1, len(results))
+	assert.Equal(t, "mcp__github__createPullRequest", results[0].Name)
+}
+
+func TestSearch_Keyword_SuffixRequired(t *testing.T) {
+	// +get_mcp_server_detail → all sub-terms required ("+get", "+mcp", "+server", "+detail")
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__iam-admin__get_mcp_server_detail", "iam-admin", "Query MCP server"))
+	p.Add(testDeferredTool("mcp__iam-admin__list_users", "iam-admin", "List users"))
+
+	results := p.Search("+get_mcp_server_detail", 5)
+	require.Equal(t, 1, len(results))
+	assert.Equal(t, "mcp__iam-admin__get_mcp_server_detail", results[0].Name)
+}
+
 // ---------------------------------------------------------------------------
 // Search — maxResults bounds
 // ---------------------------------------------------------------------------
@@ -403,10 +437,18 @@ func TestTokenize(t *testing.T) {
 	}{
 		{"hello world", []string{"hello", "world"}},
 		{"  spaced  out  ", []string{"spaced", "out"}},
-		{"+mustHave optional", []string{"+mustHave", "optional"}},
-		{"++double", []string{"+double"}},                       // multiple + stripped to single
-		{"+++triple", []string{"+triple"}},                      // multiple + stripped to single
-		{"+x", []string{"+x"}},                                  // single char after + preserved with + prefix
+		{"+mustHave optional", []string{"+must", "+have", "optional"}},
+		{"++double", []string{"+double"}},            // multiple + stripped to single
+		{"+++triple", []string{"+triple"}},           // multiple + stripped to single
+		{"+x", []string{"+x"}},                       // single char after + preserved with + prefix
+		// Underscore splitting
+		{"get_mcp_server_detail", []string{"get", "mcp", "server", "detail"}},
+		{"+postgres_query", []string{"+postgres", "+query"}},
+		// CamelCase splitting
+		{"createPullRequest", []string{"create", "pull", "request"}},
+		{"+listTables", []string{"+list", "+tables"}},
+		// Mixed: whitespace + underscore
+		{"iam get_mcp_server", []string{"iam", "get", "mcp", "server"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {

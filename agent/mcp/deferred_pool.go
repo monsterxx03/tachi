@@ -208,8 +208,9 @@ func (p *DeferredPool) toResult(t *DeferredTool) SearchResult {
 // Uses pre-compiled regex patterns and cached lowercase fields to avoid
 // repeated allocations in the inner loop.
 func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxResults int) []SearchResult {
-	query = strings.ToLower(strings.TrimSpace(query))
-	tokens := tokenize(query)
+	query = strings.TrimSpace(query)
+	tokens := tokenize(query) // tokenize first — CamelCase detection needs original case
+	query = strings.ToLower(query) // used below in comparison
 
 	// Build pre-compiled search terms — regex compiled once per term, reused across all tools
 	var allTerms []searchTerm
@@ -327,11 +328,12 @@ func splitOnUnderscoreOrCamel(s string) []string {
 	return segments
 }
 
-// tokenize splits a query string into lowercase terms.
+// tokenize splits a query string into lowercase search terms.
+// Whitespace-separated tokens are further split on underscores and CamelCase
+// (using the same splitOnUnderscoreOrCamel as parseToolName) so that queries
+// like "get_mcp_server_detail" or "+getResult" match the tool's parsed name parts.
 func tokenize(query string) []string {
-	// Split on whitespace
 	fields := strings.Fields(query)
-	// Remove empty and single-char terms (except +prefix)
 	var result []string
 	for _, f := range fields {
 		clean := strings.TrimSpace(f)
@@ -340,11 +342,17 @@ func tokenize(query string) []string {
 		}
 		if strings.HasPrefix(clean, "+") && len(clean) > 1 {
 			term := strings.TrimLeft(clean, "+")
-			if term != "" {
-				result = append(result, "+"+term)
+			for _, sub := range splitOnUnderscoreOrCamel(term) {
+				if sub != "" {
+					result = append(result, "+"+sub)
+				}
 			}
-		} else if len(clean) >= 1 {
-			result = append(result, clean)
+		} else {
+			for _, sub := range splitOnUnderscoreOrCamel(clean) {
+				if sub != "" {
+					result = append(result, sub)
+				}
+			}
 		}
 	}
 	return result
