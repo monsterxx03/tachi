@@ -1,11 +1,12 @@
 {
   "manifest_version": 3,
   "name": "Tachi",
-  "version": "0.2.0",
-  "description": "AI 页面总结 — 一键提取当前页面核心内容",
+  "version": "0.3.0",
+  "description": "AI 页面总结 — 侧边栏一键总结 + 追问",
   "permissions": [
     "nativeMessaging",
-    "storage"
+    "storage",
+    "sidePanel"
   ],
   "background": {
     "service_worker": "background.js"
@@ -14,8 +15,10 @@
     "matches": ["<all_urls>"],
     "js": ["content.js"]
   }],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
   "action": {
-    "default_popup": "popup.html",
     "default_title": "Tachi — 总结页面",
     "default_icon": {
       "16": "icons/icon16.png",

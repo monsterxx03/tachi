@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Tachi</title>
+  <style>
+    :root {
+      --bg: #1a202c;
+      --surface: #2d3748;
+      --border: #4a5568;
+      --text: #e2e8f0;
+      --text-secondary: #a0aec0;
+      --accent: #4299e1;
+      --success: #48bb78;
+      --error: #fc8181;
+    }
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ── Header ─────────────────────────────────────────────────────── */
+
+    .header {
+      flex-shrink: 0;
+      padding: 12px 16px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    .logo {
+      width: 28px;
+      height: 28px;
+      background: var(--accent);
+      border-radius: 6px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .header-info { flex: 1; min-width: 0; }
+    .title { font-weight: 600; font-size: 14px; }
+    .page-url {
+      font-size: 11px;
+      color: var(--text-secondary);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      max-width: 280px;
+      display: block;
+    }
+    .btn-icon {
+      width: 28px;
+      height: 28px;
+      background: none;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font-size: 14px;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: all 0.15s;
+      flex-shrink: 0;
+    }
+    .btn-icon:hover { background: var(--surface); color: var(--text); }
+
+    /* ── Messages ───────────────────────────────────────────────────── */
+
+    .messages {
+      flex: 1;
+      overflow-y: auto;
+      padding: 12px 16px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .messages:empty::after {
+      content: "";
+    }
+
+    .msg {
+      max-width: 90%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      font-size: 13px;
+      line-height: 1.6;
+      word-break: break-word;
+      animation: fadeIn 0.2s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(4px); }
+    }
+
+    .msg.assistant {
+      align-self: flex-start;
+      background: var(--surface);
+      border: 1px solid var(--border);
+    }
+
+    .msg.user {
+      align-self: flex-end;
+      background: var(--accent);
+      color: white;
+    }
+
+    .msg.error {
+      align-self: flex-start;
+      background: rgba(252, 129, 129, 0.1);
+      border: 1px solid var(--error);
+      color: var(--error);
+      font-size: 12px;
+    }
+
+    /* ── Markdown in messages ───────────────────────────────────────── */
+
+    .msg.assistant h1, .msg.assistant h2, .msg.assistant h3, .msg.assistant h4 {
+      margin: 8px 0 4px;
+      line-height: 1.3;
+    }
+    .msg.assistant h1 { font-size: 15px; }
+    .msg.assistant h2 { font-size: 14px; border-bottom: 1px solid var(--border); padding-bottom: 3px; }
+    .msg.assistant h3 { font-size: 13px; }
+    .msg.assistant p { margin: 4px 0; }
+    .msg.assistant ul, .msg.assistant ol { padding-left: 18px; margin: 4px 0; }
+    .msg.assistant li { margin: 2px 0; }
+
+    .msg.assistant code {
+      font-family: "SF Mono", "Fira Code", Menlo, Consolas, monospace;
+      font-size: 11px;
+      background: rgba(74, 85, 104, 0.5);
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .msg.assistant pre {
+      background: rgba(0, 0, 0, 0.3);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      padding: 8px 10px;
+      margin: 6px 0;
+      overflow-x: auto;
+    }
+    .msg.assistant pre code {
+      background: none;
+      padding: 0;
+      font-size: 11px;
+      line-height: 1.5;
+    }
+    .msg.assistant blockquote {
+      border-left: 3px solid var(--accent);
+      padding-left: 10px;
+      margin: 6px 0;
+      color: var(--text-secondary);
+    }
+    .msg.assistant hr {
+      border: none;
+      border-top: 1px solid var(--border);
+      margin: 8px 0;
+    }
+    .msg.assistant strong { font-weight: 600; }
+    .msg.assistant a { color: var(--accent); }
+    .msg.assistant table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 6px 0;
+      font-size: 11px;
+    }
+    .msg.assistant th, .msg.assistant td {
+      border: 1px solid var(--border);
+      padding: 4px 6px;
+      text-align: left;
+    }
+    .msg.assistant th { background: rgba(74, 85, 104, 0.3); }
+
+    /* ── Loading ────────────────────────────────────────────────────── */
+
+    .loading-state {
+      align-self: center;
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--text-secondary);
+    }
+    .loading-state .spinner {
+      display: inline-block;
+      width: 24px;
+      height: 24px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+      margin-bottom: 10px;
+    }
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
+    .typing-indicator {
+      align-self: flex-start;
+      display: flex;
+      gap: 4px;
+      padding: 8px 12px;
+    }
+    .typing-indicator span {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      background: var(--text-secondary);
+      animation: bounce 1.2s infinite;
+    }
+    .typing-indicator span:nth-child(2) { animation-delay: 0.2s; }
+    .typing-indicator span:nth-child(3) { animation-delay: 0.4s; }
+    @keyframes bounce {
+      0%, 60%, 100% { transform: translateY(0); }
+      30% { transform: translateY(-6px); }
+    }
+
+    /* ── Input ──────────────────────────────────────────────────────── */
+
+    .input-row {
+      flex-shrink: 0;
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      gap: 8px;
+      align-items: flex-end;
+    }
+    .input-row textarea {
+      flex: 1;
+      padding: 10px 12px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      font-size: 13px;
+      font-family: inherit;
+      resize: none;
+      outline: none;
+      min-height: 40px;
+      max-height: 120px;
+      line-height: 1.4;
+    }
+    .input-row textarea:focus { border-color: var(--accent); }
+    .input-row textarea:disabled { opacity: 0.4; }
+
+    .input-row button {
+      padding: 10px 16px;
+      background: var(--accent);
+      border: none;
+      border-radius: 8px;
+      color: white;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      flex-shrink: 0;
+      transition: background 0.15s;
+    }
+    .input-row button:hover { background: #3182ce; }
+    .input-row button:disabled { opacity: 0.4; cursor: not-allowed; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <div class="logo">⚡</div>
+    <div class="header-info">
+      <div class="title">Tachi</div>
+      <span class="page-url" id="pageUrl">—</span>
+    </div>
+    <button class="btn-icon" id="btnRefresh" title="重新总结当前页面">🔄</button>
+  </div>
+
+  <div class="messages" id="messages">
+    <div class="loading-state" id="initialLoading">
+      <div class="spinner"></div>
+      <div>正在总结当前页面…</div>
+    </div>
+  </div>
+
+  <div class="input-row">
+    <textarea id="input" placeholder="追问页面内容…" rows="1" disabled></textarea>
+    <button id="sendBtn" disabled>发送</button>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
