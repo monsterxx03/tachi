@@ -2,14 +2,14 @@
 
 # Tachi Chrome Extension Build
 
-SRC := manifest.json background.js popup.html popup.js
+SRC := manifest.json background.js popup.html
 DIST := dist
-BUNDLE_ENTRY := content.js
+BUNDLE_ENTRIES := content.js popup.js
 
 build: deps icons
 	@mkdir -p $(DIST)/icons
-	@echo "📦 Bundling content.js with Readability..."
-	@npx esbuild $(BUNDLE_ENTRY) --bundle --platform=browser --format=iife --outfile=$(DIST)/content.js
+	@echo "📦 Bundling content.js + popup.js..."
+	@npx esbuild $(BUNDLE_ENTRIES) --bundle --platform=browser --format=iife --outdir=$(DIST)/
 	@cp $(SRC) $(DIST)/
 	@cp icons/*.png $(DIST)/icons/
 	@echo "✅ Extension built in $(DIST)/"
