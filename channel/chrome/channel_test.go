@@ -251,74 +251,57 @@ func TestHandlerInvocation(t *testing.T) {
 }
 
 func TestBuildPrompt(t *testing.T) {
-	tests := []struct {
-		name     string
-		action   string
-		text     string
-		url      string
-		title    string
-		content  string
-		keywords []string
-	}{
-		{
-			name:     "search",
-			action:   "search",
-			text:     "go 1.26 release date",
-			keywords: []string{"go 1.26 release date", "搜索"},
-		},
-		{
-			name:     "explain",
-			action:   "explain",
-			text:     "Docker",
-			keywords: []string{"Docker", "解释", "概念"},
-		},
-		{
-			name:     "remember",
-			action:   "remember",
-			text:     "important fact",
-			url:      "https://example.com",
-			keywords: []string{"important fact", "RecordMemory", "https://example.com"},
-		},
-		{
-			name:     "recall",
-			action:   "recall",
-			text:     "machine learning",
-			keywords: []string{"machine learning", "MemoryRecall"},
-		},
-		{
-			name:     "ask_tachi",
-			action:   "ask_tachi",
-			text:     "selected code",
-			title:    "My Page",
-			content:  "explain this code",
-			keywords: []string{"selected code", "My Page", "explain this code"},
-		},
-	}
-
 	ch := NewChromeChannel("chrome")
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			req := ChromeRequest{
-				ID:       "test",
-				Action:   tt.action,
-				ThreadID: "test",
-				Content:  tt.content,
-			}
-			req.Selection.Text = tt.text
-			req.Selection.URL = tt.url
-			req.Selection.Title = tt.title
 
-			prompt := ch.buildPrompt(req)
-			if prompt == "" {
-				t.Fatal("empty prompt")
-			}
-			for _, kw := range tt.keywords {
-				if !contains(prompt, kw) {
-					t.Errorf("prompt missing keyword %q\nPrompt: %s", kw, prompt)
-				}
-			}
-		})
-	}
+	t.Run("summarize returns content", func(t *testing.T) {
+		req := ChromeRequest{
+			Action:  "summarize",
+			Content: "请总结此页面内容...\n\n---\n\n页面正文...",
+		}
+		req.Selection.Title = "Example Page"
+		req.Selection.URL = "https://example.com"
+
+		prompt := ch.buildPrompt(req)
+		if prompt != req.Content {
+			t.Errorf("summarize action should return Content as-is\nGot: %q\nWant: %q", prompt, req.Content)
+		}
+	})
+
+	t.Run("default with content", func(t *testing.T) {
+		req := ChromeRequest{
+			Action:  "unknown_action",
+			Content: "some custom content",
+		}
+		req.Selection.Text = "fallback text"
+
+		prompt := ch.buildPrompt(req)
+		if prompt != "some custom content" {
+			t.Errorf("default with content should return Content\nGot: %q", prompt)
+		}
+	})
+
+	t.Run("default without content returns selection text", func(t *testing.T) {
+		req := ChromeRequest{
+			Action: "unknown_action",
+		}
+		req.Selection.Text = "selected text"
+
+		prompt := ch.buildPrompt(req)
+		if prompt != "selected text" {
+			t.Errorf("default without content should return Selection.Text\nGot: %q", prompt)
+		}
+	})
+
+	t.Run("default with empty content and selection returns empty", func(t *testing.T) {
+		req := ChromeRequest{
+			Action: "unknown_action",
+		}
+
+		prompt := ch.buildPrompt(req)
+		if prompt != "" {
+			t.Errorf("default with everything empty should return empty\nGot: %q", prompt)
+		}
+	})
 }
 
 func TestSend(t *testing.T) {
