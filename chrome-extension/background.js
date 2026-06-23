@@ -105,10 +105,29 @@ function sendToTachi(action, content = "", selection = {}) {
 
 // ── Toolbar Icon: open side panel ───────────────────────────────────────────
 
-chrome.action.onClicked.addListener((tab) => {
-  // Open side panel for the current window
-  if (tab?.windowId) {
-    chrome.sidePanel.open({ windowId: tab.windowId });
+chrome.action.onClicked.addListener(async (tab) => {
+  console.log("Tachi: action.onClicked fired, tab:", tab?.id, "window:", tab?.windowId);
+
+  // Get the current window ID (tab may not be provided in some Chrome versions)
+  let windowId = tab?.windowId;
+  if (!windowId) {
+    try {
+      const win = await chrome.windows.getCurrent();
+      windowId = win.id;
+    } catch (e) {
+      console.error("Tachi: failed to get window ID:", e.message);
+    }
+  }
+
+  if (windowId) {
+    try {
+      await chrome.sidePanel.open({ windowId });
+      console.log("Tachi: sidePanel.open succeeded for window", windowId);
+    } catch (e) {
+      console.error("Tachi: sidePanel.open failed:", e.message);
+    }
+  } else {
+    console.error("Tachi: no windowId available, cannot open side panel");
   }
 
   // If the side panel is already open, tell it to refresh
