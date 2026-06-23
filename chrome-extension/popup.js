@@ -34,21 +34,6 @@ document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("sendBtn").click();
     }
   });
-
-  // Open side panel
-  document.getElementById("openPanel").addEventListener("click", (e) => {
-    e.preventDefault();
-    // Try opening side panel directly from popup context.
-    chrome.windows.getCurrent((win) => {
-      if (win?.id) {
-        chrome.sidePanel.open({ windowId: win.id }).catch(() => {
-          // Fallback: send message to background
-          chrome.runtime.sendMessage({ type: "open_panel" });
-        });
-      }
-    });
-    window.close();
-  });
 });
 
 // ── Native Messaging ──

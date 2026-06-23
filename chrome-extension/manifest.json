@@ -6,8 +6,7 @@
   "permissions": [
     "contextMenus",
     "nativeMessaging",
-    "storage",
-    "sidePanel"
+    "storage"
   ],
   "background": {
     "service_worker": "background.js"
@@ -17,9 +16,6 @@
     "js": ["content.js"],
     "css": ["toast.css"]
   }],
-  "side_panel": {
-    "default_path": "sidepanel.html"
-  },
   "action": {
     "default_popup": "popup.html",
     "default_title": "Tachi",

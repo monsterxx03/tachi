@@ -107,50 +107,8 @@ function sendToTachi(action, selection, content = "") {
 // ── Runtime Message Handler ──────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "open_panel") {
-    // Open side panel for the current window
-    chrome.windows.getCurrent((win) => {
-      if (win?.id) {
-        chrome.sidePanel.open({ windowId: win.id });
-      }
-    });
-    return true;
-  }
-
-  if (msg.type === "sidepanel_query") {
-    // Side panel direct query — forward to Tachi and return reply
-    sendToTachi("ask_tachi", { text: msg.content, url: "", title: "" }, msg.content)
-      .then((result) => {
-        sendResponse({ content: result.content });
-      })
-      .catch((err) => {
-        sendResponse({ content: `❌ ${err.message}` });
-      });
-    return true; // keep channel open for async response
-  }
+  return false;
 });
-
-// ── Long-lived Port Connections (side panel, popup, etc.) ────────────────────
-
-let connectedPorts = [];
-
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name === "tachi-sidepanel") {
-    connectedPorts.push(port);
-    port.onDisconnect.addListener(() => {
-      connectedPorts = connectedPorts.filter(p => p !== port);
-    });
-  }
-});
-
-// Helper: post message to all connected extension pages
-function postToPages(msg) {
-  for (const p of connectedPorts) {
-    try { p.postMessage(msg); } catch (e) { /* port disconnected */ }
-  }
-  // Also try runtime.sendMessage as a secondary path
-  chrome.runtime.sendMessage(msg).catch(() => {});
-}
 
 // ── Context Menus ────────────────────────────────────────────────────────────
 
@@ -175,8 +133,6 @@ function createContextMenus() {
       { id: "tachi-search",   title: "搜索这个 🔍",         contexts: ["selection"] },
       { id: "tachi-remember", title: "记住这个 🧠",         contexts: ["selection"] },
       { id: "tachi-recall",   title: "我读过这个吗？🔎",    contexts: ["selection"] },
-      { id: "separator-1",    type: "separator" },
-      { id: "tachi-open",     title: "打开 Tachi 面板 🚀",  contexts: ["action"] },
     ];
     for (const item of items) {
       chrome.contextMenus.create(item);
@@ -187,14 +143,6 @@ function createContextMenus() {
 // ── Context Menu Click Handler ───────────────────────────────────────────────
 
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  if (info.menuItemId === "tachi-open") {
-    // Open side panel
-    if (tab?.windowId) {
-      chrome.sidePanel.open({ windowId: tab.windowId });
-    }
-    return;
-  }
-
   const actionMap = {
     "tachi-ask":      "ask_tachi",
     "tachi-explain":  "explain",
@@ -252,14 +200,7 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
       }
     }).catch(() => {});
 
-    // 3) Post to all connected extension pages via port + runtime.sendMessage
-    postToPages({
-      type: "show_result",
-      action,
-      content: result.content,
-    });
-
-    // 4) If no toast was shown, log to console as fallback
+    // 3) If no toast was shown, log to console as fallback
     if (!toastShown) {
       console.log("Tachi result:", result.content);
     }
@@ -270,13 +211,6 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     if (tab?.id) {
       chrome.tabs.sendMessage(tab.id, {
         type: "show_error",
-        content: err.message,
-      }).catch(() => {});
-
-      // Also broadcast error to extension pages
-      chrome.runtime.sendMessage({
-        type: "show_error",
-        action: "error",
         content: err.message,
       }).catch(() => {});
     }
