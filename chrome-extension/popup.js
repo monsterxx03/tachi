@@ -1,128 +1,139 @@
 // popup.js — Tachi Popup Panel Logic
+//
+// Single-action popup: "总结当前页面" sends a request to the background
+// service worker, which extracts page content and forwards to Tachi for
+// LLM summarization. Result is displayed inline.
 
-let port = null;
-
-// ── Initialization ──
+// ── Initialization ───────────────────────────────────────────────────────────
 
 document.addEventListener("DOMContentLoaded", () => {
-  updateStatus("connecting", "连接中…");
+  checkConnection();
 
-  // Try connecting to native host
-  connectTachi();
-
-  // Button handlers
-  document.querySelectorAll("[data-action]").forEach((btn) => {
-    btn.addEventListener("click", () => {
-      const action = btn.dataset.action;
-      handleAction(action);
-    });
-  });
-
-  // Send button
-  document.getElementById("sendBtn").addEventListener("click", () => {
-    const text = document.getElementById("queryInput").value.trim();
-    if (text) {
-      handleAction("ask_tachi", text);
-      document.getElementById("queryInput").value = "";
-    }
-  });
-
-  // Enter key in textarea
-  document.getElementById("queryInput").addEventListener("keydown", (e) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      document.getElementById("sendBtn").click();
-    }
-  });
+  document.getElementById("summarizeBtn").addEventListener("click", onSummarize);
 });
 
-// ── Native Messaging ──
-
-function connectTachi() {
+async function checkConnection() {
   try {
-    port = chrome.runtime.connectNative("com.tachi.chrome");
-
-    port.onMessage.addListener((msg) => {
-      // Popup handles responses directly
-      if (msg.type === "result") {
-        updateStatus("connected", "已连接");
-        showResult(msg.content);
-      } else if (msg.type === "error") {
-        updateStatus("connected", "已连接");
-        showError(msg.content);
-      }
-    });
-
-    port.onDisconnect.addListener(() => {
-      port = null;
-      updateStatus("connecting", "连接断开，重试中…");
-      setTimeout(connectTachi, 2000);
-    });
-
-    updateStatus("connected", "已连接");
+    const resp = await chrome.runtime.sendMessage({ type: "connection_status" });
+    if (resp && resp.connected) {
+      updateStatus("connected", "已连接");
+    } else {
+      updateStatus("connecting", "等待连接…");
+    }
   } catch (e) {
-    updateStatus("error", `连接失败: ${e.message}`);
+    updateStatus("connecting", "等待连接…");
   }
 }
 
-// ── Action Handling ──
+// ── Summarize Flow ───────────────────────────────────────────────────────────
 
-function handleAction(action, extraContent = "") {
-  if (!port) {
-    showError("未连接到 Tachi。请确保 Tachi 正在运行。");
-    return;
+async function onSummarize() {
+  const btn = document.getElementById("summarizeBtn");
+  const resultArea = document.getElementById("resultArea");
+  const loadingArea = document.getElementById("loadingArea");
+
+  // Reset UI
+  resultArea.classList.remove("visible");
+  resultArea.innerHTML = `<div class="result-title" id="resultTitle"></div>
+    <div class="result-meta" id="resultMeta"></div>
+    <div id="resultContent"></div>`;
+
+  // Show loading
+  btn.disabled = true;
+  btn.textContent = "⏳ 分析中…";
+  loadingArea.style.display = "block";
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "summarize_page" });
+
+    // Hide loading
+    loadingArea.style.display = "none";
+    btn.disabled = false;
+    btn.textContent = "📄 总结当前页面";
+
+    if (response && response.error) {
+      showError(response.error);
+      return;
+    }
+
+    if (response && response.summary) {
+      showResult(response);
+    } else {
+      showError("Tachi 返回了空结果");
+    }
+  } catch (err) {
+    loadingArea.style.display = "none";
+    btn.disabled = false;
+    btn.textContent = "📄 总结当前页面";
+    showError(err.message || "与 Tachi 通信失败");
   }
-
-  const id = `popup_${Date.now()}`;
-  port.postMessage({
-    id,
-    action,
-    threadID: `popup_${Date.now()}`,
-    selection: {
-      text: extraContent || getSelectionText(),
-      url: "",
-      title: document.title,
-    },
-    content: extraContent || "",
-  });
 }
 
-function getSelectionText() {
-  // Try to get text from the active tab
-  return "（来自弹窗）";
-}
-
-// ── UI Updates ──
+// ── UI Updates ───────────────────────────────────────────────────────────────
 
 function updateStatus(state, text) {
   const dot = document.getElementById("statusDot");
   const textEl = document.getElementById("statusText");
-  const infoEl = document.getElementById("connectionInfo");
 
   dot.className = "status-dot";
   if (state === "connected") dot.classList.add("connected");
   if (state === "connecting") dot.classList.add("connecting");
 
   textEl.textContent = text;
-  infoEl.textContent = text;
 }
 
-function showResult(content) {
+function showResult(data) {
   const area = document.getElementById("resultArea");
+  const titleEl = document.getElementById("resultTitle");
+  const metaEl = document.getElementById("resultMeta");
   const contentEl = document.getElementById("resultContent");
-  if (area && contentEl) {
-    contentEl.textContent = content;
-    area.classList.add("visible");
-    // Auto-scroll to show result
-    area.scrollTop = area.scrollHeight;
-  }
+
+  titleEl.textContent = data.title || "页面总结";
+  metaEl.innerHTML = `<a href="${escapeHtml(data.url || "")}" target="_blank">${escapeHtml(data.url || "")}</a>`;
+  contentEl.innerHTML = renderMarkdown(data.summary || "");
+
+  area.classList.add("visible");
+  area.scrollTop = 0;
 }
 
 function showError(message) {
   const area = document.getElementById("resultArea");
-  const contentEl = document.getElementById("resultContent");
-  if (area && contentEl) {
-    contentEl.textContent = `❌ ${message}`;
-    area.classList.add("visible");
-  }
+  area.innerHTML = `<div style="color:var(--error)">❌ ${escapeHtml(message)}</div>
+    <div style="margin-top:8px;font-size:12px;color:var(--text-secondary)">
+      请确保 Tachi 正在运行：<code style="background:var(--border);padding:1px 4px;border-radius:3px;">tachi channel</code>
+    </div>`;
+  area.classList.add("visible");
+}
+
+// ── Minimal Markdown Rendering ───────────────────────────────────────────────
+
+function renderMarkdown(text) {
+  if (!text) return "";
+
+  let html = escapeHtml(text);
+
+  // Bold
+  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+  // Italic
+  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
+  // Inline code
+  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+  // Bullet lists: lines starting with - or •
+  html = html.replace(/^[-•] (.+)$/gm, "<li>$1</li>");
+  html = html.replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>");
+  // Numbered lists
+  html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
+  // Line breaks
+  html = html.replace(/\n\n/g, "<br><br>");
+  html = html.replace(/\n/g, "<br>");
+
+  return html;
+}
+
+function escapeHtml(text) {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
 }

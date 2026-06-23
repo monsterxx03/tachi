@@ -1,7 +1,7 @@
 // background.js — Tachi Chrome Extension Service Worker
 //
-// Manages Native Messaging connection to Tachi, context menu registration,
-// and message routing between content scripts and the native host.
+// Manages Native Messaging connection to Tachi and routes requests
+// from the popup (and potentially other extension pages) to the native host.
 
 let port = null;
 let connecting = false;
@@ -11,12 +11,9 @@ let requestIdCounter = 0;
 // ── Native Messaging Connection ──────────────────────────────────────────────
 
 function connectTachi() {
-  // Guard: prevent concurrent connection attempts (e.g., from onDisconnect
-  // firing while another connectTachi() is mid-flight).
   if (connecting) return;
   connecting = true;
 
-  // Close existing port if any
   if (port) {
     try { port.disconnect(); } catch (e) { /* ignore */ }
   }
@@ -64,17 +61,16 @@ function connectTachi() {
     }
     pendingRequests.clear();
 
-    // Reconnect after delay
     setTimeout(connectTachi, 2000);
   });
 }
 
 // ── Communication API ────────────────────────────────────────────────────────
 
-function sendToTachi(action, selection, content = "") {
+function sendToTachi(action, content = "", selection = {}) {
   return new Promise((resolve, reject) => {
     if (!port) {
-      reject(new Error("Not connected to Tachi"));
+      reject(new Error("Not connected to Tachi. Make sure Tachi is running with: tachi channel"));
       return;
     }
 
@@ -86,7 +82,6 @@ function sendToTachi(action, selection, content = "") {
 
     pendingRequests.set(id, { resolve, reject, timer });
 
-    // Get the current active tab for thread context
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
       port.postMessage({
@@ -107,119 +102,89 @@ function sendToTachi(action, selection, content = "") {
 // ── Runtime Message Handler ──────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  if (msg.type === "summarize_page") {
+    handleSummarizePage(sender, sendResponse);
+    return true; // keep channel open for async response
+  }
+
+  if (msg.type === "connection_status") {
+    sendResponse({ connected: port !== null });
+    return true;
+  }
+
   return false;
 });
 
-// ── Context Menus ────────────────────────────────────────────────────────────
-
-chrome.runtime.onInstalled.addListener(() => {
-  createContextMenus();
-});
-
-// Connect to Tachi native host on service worker start.
-// Note: connectTachi() is NOT called inside onInstalled to avoid a race
-// condition: the top-level code already calls it, and onInstalled fires
-// shortly after. Calling it twice creates two Native Messaging ports in
-// quick succession — the first gets disconnected, Chrome sends EOF to the
-// first native host process, and it shuts down immediately.
-connectTachi();
-
-function createContextMenus() {
-  // Remove old menus first to avoid duplicates on update
-  chrome.contextMenus.removeAll(() => {
-    const items = [
-      { id: "tachi-ask",      title: "问 Tachi 🤖",         contexts: ["selection"] },
-      { id: "tachi-explain",  title: "解释这个概念 📖",      contexts: ["selection"] },
-      { id: "tachi-search",   title: "搜索这个 🔍",         contexts: ["selection"] },
-      { id: "tachi-remember", title: "记住这个 🧠",         contexts: ["selection"] },
-      { id: "tachi-recall",   title: "我读过这个吗？🔎",    contexts: ["selection"] },
-    ];
-    for (const item of items) {
-      chrome.contextMenus.create(item);
+async function handleSummarizePage(sender, sendResponse) {
+  try {
+    // Get the active tab
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      sendResponse({ error: "无法获取当前标签页" });
+      return;
     }
-  });
+
+    // Request page content from the content script
+    let pageData;
+    try {
+      pageData = await chrome.tabs.sendMessage(tab.id, { type: "get_page_content" });
+    } catch (e) {
+      sendResponse({ error: `无法读取页面内容: ${e.message}` });
+      return;
+    }
+
+    if (!pageData || !pageData.content) {
+      sendResponse({ error: "页面内容为空，可能是不支持的页面（如 chrome:// 或扩展页面）" });
+      return;
+    }
+
+    // Build a summarization prompt with the page content
+    const prompt = buildSummarizePrompt(pageData);
+
+    // Send to Tachi
+    const result = await sendToTachi("summarize", prompt, {
+      text: "",
+      url: pageData.url,
+      title: pageData.title,
+    });
+
+    sendResponse({
+      title: pageData.title,
+      url: pageData.url,
+      summary: result.content,
+    });
+  } catch (err) {
+    console.error("Tachi summarize error:", err);
+    sendResponse({ error: err.message });
+  }
 }
 
-// ── Context Menu Click Handler ───────────────────────────────────────────────
+function buildSummarizePrompt(pageData) {
+  const contentLength = pageData.content.length;
+  const sourceInfo = [];
+  if (pageData.byline) sourceInfo.push(`作者: ${pageData.byline}`);
+  sourceInfo.push(`字符数: ${contentLength}`);
 
-chrome.contextMenus.onClicked.addListener(async (info, tab) => {
-  const actionMap = {
-    "tachi-ask":      "ask_tachi",
-    "tachi-explain":  "explain",
-    "tachi-search":   "search",
-    "tachi-remember": "remember",
-    "tachi-recall":   "recall",
-  };
+  return `请用中文总结以下网页的核心内容。结构要求：
+1. 先给一个一句话概括（不超过50字）
+2. 然后列出 3-5 个要点（每个要点一行，子弹列表格式）
+3. 最后如果有重要的数据/数字/日期，单独列出
 
-  const action = actionMap[info.menuItemId];
-  if (!action) return;
+---
+网页标题: ${pageData.title}
+网页地址: ${pageData.url}
+${sourceInfo.join(" | ")}
+---
 
-  const selection = {
-    text: info.selectionText || "",
-    url: tab?.url || "",
-    title: tab?.title || "",
-  };
-
-  // Show loading state in content script
-  if (tab?.id) {
-    chrome.tabs.sendMessage(tab.id, {
-      type: "show_loading",
-      action,
-    }).catch(() => {
-      // Content script may not be loaded; ignore
-    });
-  }
-
-  try {
-    const result = await sendToTachi(action, selection);
-    console.log("DEBUG: got result from Tachi, sending to tab and extension pages");
-
-    // 1) Try showing result in the page as a toast (content script)
-    let toastShown = false;
-    if (tab?.id) {
-      try {
-        await chrome.tabs.sendMessage(tab.id, {
-          type: "show_result",
-          action,
-          content: result.content,
-        });
-        toastShown = true;
-        console.log("DEBUG: toast shown in tab", tab.id);
-      } catch (e) {
-        console.log("DEBUG: tabs.sendMessage failed:", e.message);
-      }
-    }
-
-    // 2) Store result in storage for extension pages to pick up
-    chrome.storage.local.set({
-      lastResult: {
-        type: "show_result",
-        action,
-        content: result.content,
-        timestamp: Date.now(),
-      }
-    }).catch(() => {});
-
-    // 3) If no toast was shown, log to console as fallback
-    if (!toastShown) {
-      console.log("Tachi result:", result.content);
-    }
-  } catch (err) {
-    console.error("Tachi error:", err);
-
-    // Show error in content script if possible
-    if (tab?.id) {
-      chrome.tabs.sendMessage(tab.id, {
-        type: "show_error",
-        content: err.message,
-      }).catch(() => {});
-    }
-  }
-});
+${pageData.content}`;
+}
 
 // ── Heartbeat ────────────────────────────────────────────────────────────────
 
-// Prevent service worker from being suspended
+// Connect on startup
+connectTachi();
+
+// Keep service worker alive and connection healthy
 setInterval(() => {
   if (port) {
     try {
