@@ -2,13 +2,13 @@
 
 # Tachi Chrome Extension Build
 
-SRC := manifest.json background.js popup.html
+SRC := manifest.json background.js sidepanel.html
 DIST := dist
-BUNDLE_ENTRIES := content.js popup.js
+BUNDLE_ENTRIES := content.js sidepanel.js
 
 build: deps icons
 	@mkdir -p $(DIST)/icons
-	@echo "📦 Bundling content.js + popup.js..."
+	@echo "📦 Bundling content.js + sidepanel.js..."
 	@npx esbuild $(BUNDLE_ENTRIES) --bundle --platform=browser --format=iife --outdir=$(DIST)/
 	@cp $(SRC) $(DIST)/
 	@cp icons/*.png $(DIST)/icons/

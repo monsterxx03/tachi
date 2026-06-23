@@ -1,12 +1,17 @@
 // background.js — Tachi Chrome Extension Service Worker
 //
 // Manages Native Messaging connection to Tachi and routes requests
-// from the popup (and potentially other extension pages) to the native host.
+// from the side panel to the native host. Stores page content per tab
+// for contextual follow-up conversations.
 
 let port = null;
 let connecting = false;
 let pendingRequests = new Map(); // id -> { resolve, reject, timer }
 let requestIdCounter = 0;
+
+// pageContexts stores extracted page content per tab for follow-up context.
+// Key: tab ID, Value: { title, url, content }
+const pageContexts = new Map();
 
 // ── Native Messaging Connection ──────────────────────────────────────────────
 
@@ -54,7 +59,6 @@ function connectTachi() {
     console.log("Tachi native host disconnected:", error?.message || "unknown");
     port = null;
 
-    // Reject all pending requests
     for (const [id, pending] of pendingRequests) {
       clearTimeout(pending.timer);
       pending.reject(new Error("Native host disconnected"));
@@ -99,12 +103,31 @@ function sendToTachi(action, content = "", selection = {}) {
   });
 }
 
-// ── Runtime Message Handler ──────────────────────────────────────────────────
+// ── Toolbar Icon: open side panel ───────────────────────────────────────────
+
+chrome.action.onClicked.addListener((tab) => {
+  // Open side panel for the current window
+  if (tab?.windowId) {
+    chrome.sidePanel.open({ windowId: tab.windowId });
+  }
+
+  // If the side panel is already open, tell it to refresh
+  chrome.runtime.sendMessage({ type: "sidepanel_refresh" }).catch(() => {
+    // Side panel not loaded yet — it'll auto-summarize on its own
+  });
+});
+
+// ── Side Panel Message Router ────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "summarize_page") {
-    handleSummarizePage(sender, sendResponse);
-    return true; // keep channel open for async response
+  if (msg.type === "get_page_summary") {
+    handleGetPageSummary(sender, sendResponse);
+    return true;
+  }
+
+  if (msg.type === "ask_followup") {
+    handleAskFollowup(msg.question, sender, sendResponse);
+    return true;
   }
 
   if (msg.type === "connection_status") {
@@ -115,22 +138,21 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   return false;
 });
 
-async function handleSummarizePage(sender, sendResponse) {
+// ── Page Summary Handler ─────────────────────────────────────────────────────
+
+async function handleGetPageSummary(sender, sendResponse) {
   try {
-    // Get the active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (!tab || !tab.id) {
       sendResponse({ error: "无法获取当前标签页" });
       return;
     }
 
-    // Request page content from the content script
+    // Extract page content via content script
     let pageData;
     try {
       pageData = await chrome.tabs.sendMessage(tab.id, { type: "get_page_content" });
     } catch (e) {
-      // Common cause: extension was reloaded but this tab still has the old
-      // content script. The user just needs to refresh the page.
       if (e.message.includes("Receiving end does not exist") ||
           e.message.includes("Could not establish connection")) {
         sendResponse({
@@ -147,10 +169,15 @@ async function handleSummarizePage(sender, sendResponse) {
       return;
     }
 
-    // Build a summarization prompt with the page content
-    const prompt = buildSummarizePrompt(pageData);
+    // Store context for follow-up conversations
+    pageContexts.set(tab.id, {
+      title: pageData.title,
+      url: pageData.url,
+      content: pageData.content,
+    });
 
-    // Send to Tachi
+    // Summarize via Tachi
+    const prompt = buildSummarizePrompt(pageData);
     const result = await sendToTachi("summarize", prompt, {
       text: "",
       url: pageData.url,
@@ -167,6 +194,33 @@ async function handleSummarizePage(sender, sendResponse) {
     sendResponse({ error: err.message });
   }
 }
+
+// ── Follow-up Handler ────────────────────────────────────────────────────────
+
+async function handleAskFollowup(question, sender, sendResponse) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      sendResponse({ error: "无法获取当前标签页" });
+      return;
+    }
+
+    // Send the question to Tachi. The conversation context (page content
+    // + previous messages) is maintained by tachi via the tab_<id> thread.
+    const result = await sendToTachi("followup", question, {
+      text: "",
+      url: tab.url || "",
+      title: tab.title || "",
+    });
+
+    sendResponse({ content: result.content });
+  } catch (err) {
+    console.error("Tachi followup error:", err);
+    sendResponse({ error: err.message });
+  }
+}
+
+// ── Prompt Builder ───────────────────────────────────────────────────────────
 
 function buildSummarizePrompt(pageData) {
   const contentLength = pageData.content.length;
@@ -190,10 +244,8 @@ ${pageData.content}`;
 
 // ── Heartbeat ────────────────────────────────────────────────────────────────
 
-// Connect on startup
 connectTachi();
 
-// Keep service worker alive and connection healthy
 setInterval(() => {
   if (port) {
     try {
