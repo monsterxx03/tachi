@@ -2,7 +2,9 @@
 //
 // Single-action popup: "总结当前页面" sends a request to the background
 // service worker, which extracts page content and forwards to Tachi for
-// LLM summarization. Result is displayed inline.
+// LLM summarization. Result is rendered as Markdown via marked.
+
+import { marked } from "marked";
 
 // ── Initialization ───────────────────────────────────────────────────────────
 
@@ -90,7 +92,7 @@ function showResult(data) {
 
   titleEl.textContent = data.title || "页面总结";
   metaEl.innerHTML = `<a href="${escapeHtml(data.url || "")}" target="_blank">${escapeHtml(data.url || "")}</a>`;
-  contentEl.innerHTML = renderMarkdown(data.summary || "");
+  contentEl.innerHTML = marked.parse(data.summary || "");
 
   area.classList.add("visible");
   area.scrollTop = 0;
@@ -105,30 +107,7 @@ function showError(message) {
   area.classList.add("visible");
 }
 
-// ── Minimal Markdown Rendering ───────────────────────────────────────────────
-
-function renderMarkdown(text) {
-  if (!text) return "";
-
-  let html = escapeHtml(text);
-
-  // Bold
-  html = html.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  // Italic
-  html = html.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  // Inline code
-  html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
-  // Bullet lists: lines starting with - or •
-  html = html.replace(/^[-•] (.+)$/gm, "<li>$1</li>");
-  html = html.replace(/(<li>.*<\/li>)/s, "<ul>$1</ul>");
-  // Numbered lists
-  html = html.replace(/^\d+\. (.+)$/gm, "<li>$1</li>");
-  // Line breaks
-  html = html.replace(/\n\n/g, "<br><br>");
-  html = html.replace(/\n/g, "<br>");
-
-  return html;
-}
+// ── Utilities ─────────────────────────────────────────────────────────────────
 
 function escapeHtml(text) {
   return text
