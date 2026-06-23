@@ -56,12 +56,12 @@ func (t *MCPSearchToolsTool) Description() string {
 	return "Search for and load MCP tools by name or capability. " +
 		"MCP tools provide access to external services and are not loaded by default — " +
 		"use this tool to find and load them. " +
-		"Query forms: \"select:ToolName1,ToolName2\" for exact names, " +
+		"Query forms: \"select:ToolName1,ToolName2\" for exact names " +
+		"(suffix-only names like \"query\" match \"mcp__server__query\" automatically), " +
 		"\"mcp__serverName\" for all tools of a server, " +
 		"or keywords like \"database query\" for relevance search. " +
 		"Prefix a term with + to require it (e.g. \"+postgres query\"). " +
 		"Once loaded, a tool can be called like any built-in tool."
-
 }
 func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{

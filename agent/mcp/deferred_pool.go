@@ -5,7 +5,6 @@ import (
 	"sort"
 	"strings"
 	"sync"
-	"unicode"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 )
@@ -147,19 +146,44 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 		return p.searchAll(allTools, maxResults)
 	}
 
-	// 1. Direct selection via "select:" prefix
+	// 1. Direct selection via "select:" prefix.
+	// When a name doesn't include the "mcp__server__" prefix (i.e. the user gives just
+	// the tool name like "switch_backend_endpoint"), a suffix fallback matches against
+	// the full "mcp__server__tool" name so the user doesn't need to know which server
+	// hosts each tool.
 	if sel, ok := strings.CutPrefix(query, "select:"); ok {
 		names := strings.Split(sel, ",")
 		var results []SearchResult
+		seen := make(map[string]bool) // dedup across match strategies
 		for _, name := range names {
 			name = strings.TrimSpace(name)
 			if name == "" {
 				continue
 			}
+			// Phase 1: exact full-name match (e.g. "mcp__pg__query")
+			found := false
 			for _, t := range allTools {
 				if strings.EqualFold(t.Name, name) {
-					results = append(results, p.toResult(t))
+					if !seen[t.Name] {
+						results = append(results, p.toResult(t))
+						seen[t.Name] = true
+					}
+					found = true
 					break
+				}
+			}
+			if found {
+				continue
+			}
+			// Phase 2: suffix match — query is just the tool name without server prefix
+			// e.g. "switch_backend_endpoint" matches "mcp__hoyocloud__switch_backend_endpoint"
+			suffix := "__" + name
+			for _, t := range allTools {
+				if strings.HasSuffix(strings.ToLower(t.Name), strings.ToLower(suffix)) {
+					if !seen[t.Name] {
+						results = append(results, p.toResult(t))
+						seen[t.Name] = true
+					}
 				}
 			}
 		}
@@ -304,6 +328,8 @@ func parseToolName(name string) []string {
 }
 
 // splitOnUnderscoreOrCamel splits a string on underscores and CamelCase boundaries.
+// Handles acronyms correctly: "SQL" stays ["sql"], "HTTPServer" → ["http", "server"],
+// "getHTTPResponse" → ["get", "http", "response"], "camelCase" → ["camel", "case"].
 func splitOnUnderscoreOrCamel(s string) []string {
 	// First split on underscores
 	var segments []string
@@ -314,10 +340,23 @@ func splitOnUnderscoreOrCamel(s string) []string {
 		// Then split CamelCase within each part
 		var words []string
 		start := 0
-		for i, r := range part {
-			if i > 0 && unicode.IsUpper(r) {
+		for i := 1; i < len(part); i++ {
+			prev := part[i-1]
+			curr := part[i]
+
+			if isLowerByte(prev) && isUpperByte(curr) {
+				// Standard CamelCase: lowercase→uppercase transition
+				// e.g., "camelCase" → split before 'C'
 				words = append(words, strings.ToLower(part[start:i]))
 				start = i
+			} else if isUpperByte(prev) && isLowerByte(curr) {
+				// End of acronym: the last uppercase belongs to the following lowercase word
+				// e.g., "HTTPServer" at 'S':'e' → split before the last uppercase in the run
+				// i-1 is the index of the last uppercase before the lowercase transition
+				if i-1 > start {
+					words = append(words, strings.ToLower(part[start : i-1]))
+					start = i - 1
+				}
 			}
 		}
 		if start < len(part) {
@@ -327,6 +366,12 @@ func splitOnUnderscoreOrCamel(s string) []string {
 	}
 	return segments
 }
+
+// isUpperByte reports whether b is an ASCII uppercase letter.
+func isUpperByte(b byte) bool { return b >= 'A' && b <= 'Z' }
+
+// isLowerByte reports whether b is an ASCII lowercase letter.
+func isLowerByte(b byte) bool { return b >= 'a' && b <= 'z' }
 
 // tokenize splits a query string into lowercase search terms.
 // Whitespace-separated tokens are further split on underscores and CamelCase

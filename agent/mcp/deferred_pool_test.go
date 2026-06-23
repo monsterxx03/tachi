@@ -120,6 +120,54 @@ func TestSearch_Select_WithBlanks(t *testing.T) {
 	assert.Equal(t, "mcp__a__tool", results[0].Name)
 }
 
+func TestSearch_Select_SuffixOnly(t *testing.T) {
+	// select: with just the tool name (no mcp__server prefix) should match via suffix.
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__alpha__switch_backend_endpoint", "alpha", "Switch backend"))
+	p.Add(testDeferredTool("mcp__beta__SQL_submit_mutation", "beta", "Submit SQL mutation"))
+	p.Add(testDeferredTool("mcp__gamma__list_users", "gamma", "List users"))
+
+	results := p.Search("select:switch_backend_endpoint,SQL_submit_mutation", 5)
+	require.Equal(t, 2, len(results))
+	assert.Equal(t, "mcp__alpha__switch_backend_endpoint", results[0].Name)
+	assert.Equal(t, "mcp__beta__SQL_submit_mutation", results[1].Name)
+}
+
+func TestSearch_Select_SuffixMatchesExactFirst(t *testing.T) {
+	// Full name exact match takes priority over suffix (handled by Phase 1 first).
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__alpha__echo", "alpha", "Echo service"))
+	p.Add(testDeferredTool("mcp__beta__echo", "beta", "Echo service"))
+
+	results := p.Search("select:mcp__alpha__echo", 5)
+	require.Equal(t, 1, len(results))
+	assert.Equal(t, "mcp__alpha__echo", results[0].Name)
+}
+
+func TestSearch_Select_SuffixMultipleServers(t *testing.T) {
+	// Same tool name on different servers → suffix match returns all.
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__alpha__echo", "alpha", "Echo"))
+	p.Add(testDeferredTool("mcp__beta__echo", "beta", "Echo"))
+
+	results := p.Search("select:echo", 5)
+	require.Equal(t, 2, len(results))
+	names := []string{results[0].Name, results[1].Name}
+	assert.ElementsMatch(t, []string{"mcp__alpha__echo", "mcp__beta__echo"}, names)
+}
+
+func TestSearch_Select_Mixed(t *testing.T) {
+	// Mix of full names and suffix-only names in a single select query.
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__pg__query", "pg", "Query"))
+	p.Add(testDeferredTool("mcp__gh__create_pr", "gh", "Create PR"))
+
+	results := p.Search("select:mcp__pg__query,create_pr", 5)
+	require.Equal(t, 2, len(results))
+	names := []string{results[0].Name, results[1].Name}
+	assert.ElementsMatch(t, []string{"mcp__pg__query", "mcp__gh__create_pr"}, names)
+}
+
 func TestSearch_ServerPrefix(t *testing.T) {
 	p := NewDeferredPool()
 	p.Add(testDeferredTool("mcp__pg__query", "pg", ""))
@@ -261,6 +309,116 @@ func TestSearch_MaxResultsRespected(t *testing.T) {
 
 	results := p.Search("mcp__pg", 1)
 	assert.Equal(t, 1, len(results))
+}
+
+// TestSearch_AcronymQuery_Regression verifies that all-uppercase acronyms like "SQL"
+// are not split into individual letters, which previously caused keyword search to
+// produce false matches for common letters like "s", "q", "l" across all tools,
+// drowning out legitimate results.
+func TestSearch_AcronymQuery_Regression(t *testing.T) {
+	// Build a realistic pool with ~100 tools, including the two target tools.
+	// The structure mirrors typical multi-server MCP setups:
+	//   - "alpha" server: general infrastructure tools
+	//   - "beta" server: database / SQL-related tools (triggers the acronym bug)
+	//   - "gamma" server: document management tools
+	p := NewDeferredPool()
+
+	type toolSpec struct{ server, name, desc string }
+	var specs []toolSpec
+
+	// alpha server: ~15 general-purpose tools
+	for i, name := range []string{
+		"ping", "echo", "status", "version", "health_check",
+		"list_users", "get_user", "create_user", "delete_user",
+		"list_roles", "get_role", "assign_role",
+		"get_config", "set_config", "reload_config",
+	} {
+		specs = append(specs, toolSpec{"alpha", name, "Alpha service: " + name + " #" + itoa(i)})
+	}
+
+	// alpha server: tools with "backend" / "endpoint" / "switch" in name — make the
+	// target tool's tokens appear in other tools to ensure the search ranks correctly.
+	for _, name := range []string{
+		"get_backend_info", "list_endpoints", "switch_region",
+		"update_backend_config", "register_endpoint",
+	} {
+		specs = append(specs, toolSpec{"alpha", name, "Alpha infra: " + name})
+	}
+	// Target 1 — the one that was being drowned out before the fix
+	specs = append(specs, toolSpec{"alpha", "switch_backend_endpoint", "Switches to a different backend endpoint"})
+
+	// beta server: ~20 SQL / database tools (the acronym trigger)
+	for _, name := range []string{
+		"SQL_query", "SQL_exec", "SQL_explain", "SQL_list_connections",
+		"SQL_get_table_info", "SQL_list_schemas", "SQL_describe_table",
+		"SQL_profile_query", "SQL_show_indexes", "SQL_analyze",
+		"SQL_vacuum", "SQL_list_functions", "SQL_get_trigger",
+		"SQL_export_csv", "SQL_import_data", "SQL_clone_table",
+		"SQL_rename_column", "SQL_add_constraint",
+	} {
+		specs = append(specs, toolSpec{"beta", name, "Beta DB: " + name})
+	}
+	// Target 2 — the SQL tool with "submit" and "mutation" in the name
+	specs = append(specs, toolSpec{"beta", "SQL_submit_sql_mutation", "Submits a SQL mutation request"})
+
+	// beta server: non-SQL tools mixed in (so "sql" token isn't universal on beta)
+	for _, name := range []string{
+		"cache_flush", "cache_warm", "queue_drain", "queue_peek",
+	} {
+		specs = append(specs, toolSpec{"beta", name, "Beta ops: " + name})
+	}
+
+	// gamma server: ~40 document / table / article tools (bulk of the noise)
+	gammaVerbs := []string{"get", "list", "create", "update", "delete", "search", "publish", "archive", "restore", "export"}
+	gammaNouns := []string{"Document", "Article", "Spreadsheet", "Comment"}
+	for _, noun := range gammaNouns {
+		for _, verb := range gammaVerbs {
+			name := verb + noun
+			specs = append(specs, toolSpec{"gamma", name, "Gamma docs: " + name})
+		}
+	}
+
+	require.GreaterOrEqual(t, len(specs), 80, "pool should have a realistic number of tools")
+
+	for _, s := range specs {
+		dt := NewDeferredToolFromMCPTool(MCPTool{
+			serverName: s.server,
+			serverTool: &mcp.Tool{
+				Name:        s.name,
+				Description: s.desc,
+			},
+		}, "")
+		p.Add(dt)
+	}
+
+	query := "switch_backend_endpoint SQL_submit_sql_mutation"
+	results := p.Search(query, 5)
+
+	foundSwitch := false
+	foundSQL := false
+	for _, r := range results {
+		if strings.Contains(r.Name, "switch_backend_endpoint") {
+			foundSwitch = true
+		}
+		if strings.Contains(r.Name, "SQL_submit_sql_mutation") {
+			foundSQL = true
+		}
+	}
+
+	assert.True(t, foundSwitch, "switch_backend_endpoint should be in search results")
+	assert.True(t, foundSQL, "SQL_submit_sql_mutation should be in search results")
+}
+
+// itoa is a tiny helper to avoid importing fmt in tests.
+func itoa(i int) string {
+	if i == 0 {
+		return "0"
+	}
+	var digits []byte
+	for n := i; n > 0; n /= 10 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+	}
+	return string(digits)
 }
 
 // ---------------------------------------------------------------------------
@@ -417,6 +575,14 @@ func TestSplitOnUnderscoreOrCamel(t *testing.T) {
 		{"CamelCase", []string{"camel", "case"}},
 		{"mixed_case_words", []string{"mixed", "case", "words"}},
 		{"", nil},
+		// Acronym handling
+		{"SQL", []string{"sql"}},
+		{"HTTPServer", []string{"http", "server"}},
+		{"getHTTPResponse", []string{"get", "http", "response"}},
+		{"SQLServer", []string{"sql", "server"}},
+		{"parseXMLFile", []string{"parse", "xml", "file"}},
+		{"AA", []string{"aa"}},
+		{"createPullRequest", []string{"create", "pull", "request"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.input, func(t *testing.T) {
