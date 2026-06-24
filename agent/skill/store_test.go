@@ -353,6 +353,28 @@ func TestBuildActivationMessage(t *testing.T) {
 	}
 }
 
+func TestBuildDirectiveMessage(t *testing.T) {
+	msg := BuildDirectiveMessage("code-review", "auth.go")
+	if !contains(msg, "code-review") {
+		t.Error("should contain skill name")
+	}
+	if !contains(msg, "auth.go") {
+		t.Error("should contain directive")
+	}
+	if contains(msg, "# Code Review") {
+		t.Error("should NOT contain skill body")
+	}
+
+	// Empty directive
+	msg2 := BuildDirectiveMessage("lint", "")
+	if !contains(msg2, "lint") {
+		t.Error("should contain skill name")
+	}
+	if !contains(msg2, "(none)") {
+		t.Error("should indicate no directive")
+	}
+}
+
 func TestXmlEscape(t *testing.T) {
 	tests := []struct {
 		input string

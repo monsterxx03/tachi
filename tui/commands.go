@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
@@ -1127,7 +1128,8 @@ func (m *Model) handleSkillCommand() tea.Cmd {
 	case "reload":
 		// Re-create the store to pick up new/modified skills
 		m.agent.ReloadSkills()
-		metas := store.List()
+		m.refreshSkillCompletions()
+		metas := m.agent.SkillStore().List()
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
 			Content: fmt.Sprintf("Skills reloaded — %d skill(s) found", len(metas)),
@@ -1143,23 +1145,23 @@ func (m *Model) handleSkillCommand() tea.Cmd {
 // sendSkillMessage activates a skill and sends its instructions as a user message.
 // skillName is the skill to activate. extraArgs are additional text from the
 // command line (e.g., "main.go" from "/code-review main.go").
+// If the skill is already active in this session, only a short directive
+// message is injected (the full skill body is already in context).
 func (m *Model) sendSkillMessage(skillName string, extraArgs string) tea.Cmd {
-	// Prevent duplicate activation within the same session.
+	var msg string
 	if m.agent.IsSkillActive(skillName) {
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("Skill **%s** is already active in this session.", skillName),
-		})
-		return nil
-	}
-
-	msg, err := m.agent.ActivateSkill(skillName, extraArgs)
-	if err != nil {
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("Skill **%s** not found. Use `/skill` to see available skills.", skillName),
-		})
-		return nil
+		// Skill body already in conversation context — send directive only.
+		msg = skill.BuildDirectiveMessage(skillName, extraArgs)
+	} else {
+		var err error
+		msg, err = m.agent.ActivateSkill(skillName, extraArgs)
+		if err != nil {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: fmt.Sprintf("Skill **%s** not found. Use `/skill` to see available skills.", skillName),
+			})
+			return nil
+		}
 	}
 
 	// Add the activation message as a system-style user message

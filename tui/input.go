@@ -15,6 +15,10 @@ import (
 
 type InputSubmitMsg string
 
+// maxCompletionDescLen is the maximum rune length for a skill description
+// shown in slash-command completions. Longer descriptions are truncated.
+const maxCompletionDescLen = 60
+
 // InputArea provides the TUI input with slash-command completions and @-file
 // fuzzy-search completions.
 type InputArea struct {
@@ -28,6 +32,10 @@ type InputArea struct {
 	atFileQuery       string
 	atFileMatches     []atFileMatch
 	atFileSelectedIdx int
+
+	// skill completions (populated from agent skill store)
+	skillNames []string
+	skillDescs map[string]string // name → description
 
 	history     []string
 	historyMax  int
@@ -87,6 +95,13 @@ func NewInputArea(historyMax int, historyPath string) InputArea {
 func (i *InputArea) SetWidth(w int) {
 	i.width = w
 	i.textarea.SetWidth(w - 2)
+}
+
+// SetSkills sets the skill names and descriptions used for slash-command
+// completions. Call this after the skill store changes (e.g., after reload).
+func (i *InputArea) SetSkills(names []string, descs map[string]string) {
+	i.skillNames = names
+	i.skillDescs = descs
 }
 
 // SetMaxHeight dynamically caps the total height of the input area (textarea +
@@ -372,14 +387,11 @@ func (i InputArea) Update(msg tea.Msg) (InputArea, tea.Cmd) {
 				return i, nil
 			}
 			if i.completionsOn() {
-				name := i.completions[i.selectedIdx].Name
-				i.expandPasteBuffer()
-				i.pushHistoryLine(name)
-				i.textarea.Reset()
-				i.clearHistoryNav()
+				i.textarea.SetValue(i.completions[i.selectedIdx].Name)
+				i.textarea.CursorEnd()
 				i.completions = nil
 				i.selectedIdx = 0
-				return i, func() tea.Msg { return InputSubmitMsg(name) }
+				return i, nil
 			}
 			i.expandPasteBuffer()
 			text := strings.TrimSpace(i.textarea.Value())
@@ -499,6 +511,22 @@ func (i *InputArea) updateCompletions() {
 	val := i.textarea.Value()
 	if strings.HasPrefix(val, "/") {
 		i.completions = matchCommands(val)
+		// Append matching skill names
+		prefix := strings.TrimPrefix(val, "/")
+		for _, name := range i.skillNames {
+			if strings.HasPrefix(name, prefix) {
+				desc := i.skillDescs[name]
+				if desc == "" {
+					desc = "skill"
+				} else if len([]rune(desc)) > maxCompletionDescLen {
+					desc = string([]rune(desc)[:maxCompletionDescLen]) + "…"
+				}
+				i.completions = append(i.completions, Command{
+					Name:        "/" + name,
+					Description: desc,
+				})
+			}
+		}
 		if i.selectedIdx >= len(i.completions) {
 			i.selectedIdx = 0
 		}

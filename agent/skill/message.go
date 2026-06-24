@@ -47,6 +47,16 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 	return b.String()
 }
 
+// BuildDirectiveMessage constructs a short message for re-invoking an
+// already-active skill with new arguments. Unlike BuildActivationMessage, it
+// does NOT include the skill body — that's already in the conversation context.
+func BuildDirectiveMessage(skillName, directive string) string {
+	if directive == "" {
+		return fmt.Sprintf("[Skill %q directive: (none)]", skillName)
+	}
+	return fmt.Sprintf("[Skill %q directive: %s]", skillName, directive)
+}
+
 // BuildSkillListPrompt constructs the compact skill catalog injected into
 // the system-reminder block for LLM-based routing.
 //
