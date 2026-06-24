@@ -172,6 +172,8 @@ func NewModel(cfg ModelConfig) *Model {
 	}
 	m.waitForMCP()
 
+	m.refreshSkillCompletions()
+
 	return m
 }
 
@@ -299,6 +301,24 @@ func (m *Model) handleMCPReady() {
 	if m.logger != nil {
 		m.logger.Log("TUI: MCP background init completed")
 	}
+}
+
+// refreshSkillCompletions queries the agent's skill store and pushes skill
+// names/descriptions into the input area for slash-command autocompletion.
+func (m *Model) refreshSkillCompletions() {
+	store := m.agent.SkillStore()
+	if store == nil {
+		m.input.SetSkills(nil, nil)
+		return
+	}
+	metas := store.List()
+	names := make([]string, len(metas))
+	descs := make(map[string]string, len(metas))
+	for i, meta := range metas {
+		names[i] = meta.Name
+		descs[meta.Name] = meta.Description
+	}
+	m.input.SetSkills(names, descs)
 }
 
 func (m *Model) Init() tea.Cmd {
