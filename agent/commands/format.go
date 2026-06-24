@@ -133,7 +133,7 @@ func FormatUsageReport(info *UsageReportInfo) string {
 // FormatSkillList produces a markdown-formatted list of available skills.
 func FormatSkillList(metas []skill.SkillMeta) string {
 	if len(metas) == 0 {
-		return "No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/` or `~/.tachi/skills/<name>/`."
+		return "No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/`, `.claude/skills/<name>/`, `.cursor/skills/<name>/`, or `~/.tachi/skills/<name>/`."
 	}
 
 	var sb strings.Builder
@@ -141,8 +141,15 @@ func FormatSkillList(metas []skill.SkillMeta) string {
 
 	for _, meta := range metas {
 		sourceTag := ""
-		if meta.Source == "project" {
+		switch meta.Source {
+		case "project":
 			sourceTag = " 🏠"
+		case "claude":
+			sourceTag = " 🤖"
+		case "cursor":
+			sourceTag = " 🖱️"
+		case "global":
+			sourceTag = " 🌐"
 		}
 		sb.WriteString(fmt.Sprintf("- **%s**%s\n", meta.Name, sourceTag))
 		sb.WriteString(fmt.Sprintf("  %s\n", meta.Description))

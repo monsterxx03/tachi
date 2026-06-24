@@ -22,7 +22,7 @@ type SkillListEntry struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
-	Source      string   `json:"source"` // "project" | "global"
+	Source      string   `json:"source"` // "project" | "claude" | "cursor" | "global"
 }
 
 // SkillLoader loads a skill by name and returns its full content.
@@ -61,7 +61,7 @@ type SkillCreateParams struct {
 	Description string   `json:"description"`
 	Body        string   `json:"body"`
 	Tags        []string `json:"tags"`
-	Source      string   `json:"source"`    // "project" or "global"
+	Source      string   `json:"source"`    // "project" (default) or "global"
 	Overwrite   bool     `json:"overwrite"` // overwrite existing
 }
 
@@ -157,7 +157,7 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 		},
 		"source": {
 			Type:        "string",
-			Description: `Where to operate: "project" (default, .tachi/skills/) or "global" (~/.tachi/skills/). Used with create, update, and delete operations. For delete/update, narrows search scope.`,
+			Description: `Where to operate: "project" (default, .tachi/skills/) or "global" (~/.tachi/skills/). Used with create, update, and delete operations. For delete/update, narrows search scope. Note: listing/viewing also discovers skills from .claude/skills/ and .cursor/skills/ (read-only).`,
 		},
 		"overwrite": {
 			Type:        "boolean",

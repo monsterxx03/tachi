@@ -25,38 +25,49 @@ type frontmatter struct {
 // Store manages skill discovery, loading, and caching.
 type Store struct {
 	dirs   []string // search directories, ordered by priority (highest first)
-	source []string // source label for each dir ("project" or "global")
+	source []string // source label for each dir ("project", "claude", "cursor", "global")
 	logger *debuglog.Logger
 }
 
-// NewStore creates a Store scanning both project-level and global skill dirs.
-// projectRoot is the workspace root (usually os.Getwd()). If empty, only
+// NewStore creates a Store scanning project-level and global skill dirs in
+// priority order (highest first):
+//
+//	<project>/.tachi/skills
+//	<project>/.claude/skills
+//	<project>/.cursor/skills
+//	~/.tachi/skills
+//
+// Skills with the same name are shadowed by the first directory that contains
+// them. projectRoot is the workspace root (usually os.Getwd()). If empty, only
 // global skills are scanned.
 //
-// Deduplication: when projectRoot equals $HOME (i.e., tachi is run from the
-// home directory), the project-level path and global path resolve to the same
-// directory. To avoid double-scanning and spurious "shadowed" warnings, equal
-// paths are collapsed into a single entry (project priority is kept).
+// Deduplication: when a directory resolves to the same path as an
+// already-added directory (e.g., when projectRoot equals $HOME so
+// <project>/.tachi/skills equals ~/.tachi/skills), the duplicate is skipped.
 func NewStore(projectRoot string) *Store {
 	var dirs []string
 	var source []string
 
-	// Priority 1: project-level skills (highest)
+	addDir := func(dir, src string) {
+		clean := filepath.Clean(dir)
+		for _, d := range dirs {
+			if filepath.Clean(d) == clean {
+				return // duplicate
+			}
+		}
+		dirs = append(dirs, dir)
+		source = append(source, src)
+	}
+
+	// Priority 1: project-level .tachi/skills (highest)
 	if projectRoot != "" {
-		dirs = append(dirs, filepath.Join(projectRoot, ".tachi", "skills"))
-		source = append(source, SourceProject)
+		addDir(filepath.Join(projectRoot, ".tachi", "skills"), SourceProject)
+		addDir(filepath.Join(projectRoot, ".claude", "skills"), SourceClaude)
+		addDir(filepath.Join(projectRoot, ".cursor", "skills"), SourceCursor)
 	}
 
-	// Priority 2: global personal skills
-	globalDir := config.GlobalSkillsDir()
-
-	// Deduplicate: if the project-level dir equals the global dir (e.g., when
-	// tachi runs from $HOME), skip the duplicate to avoid scanning the same
-	// directory twice.
-	if len(dirs) == 0 || filepath.Clean(dirs[len(dirs)-1]) != filepath.Clean(globalDir) {
-		dirs = append(dirs, globalDir)
-		source = append(source, SourceGlobal)
-	}
+	// Lowest priority: global personal skills
+	addDir(config.GlobalSkillsDir(), SourceGlobal)
 
 	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
 }
@@ -67,9 +78,10 @@ func newStore(dirs, source []string) *Store {
 }
 
 // NewStoreWithDirs creates a Store scanning the given directories in priority
-// order (highest first). Each entry in sources must be either SourceProject or
-// SourceGlobal and have the same length as dirs. Intended for tests and other
-// callers that need an isolated, hermetic skill scope.
+// order (highest first). Each entry in sources must be a valid source constant
+// (SourceProject, SourceClaude, SourceCursor, or SourceGlobal) and have the
+// same length as dirs. Intended for tests and other callers that need an
+// isolated, hermetic skill scope.
 func NewStoreWithDirs(dirs, sources []string) *Store {
 	return newStore(dirs, sources)
 }
@@ -268,7 +280,8 @@ func (s *Store) ResolveCommand(cmd string) (string, bool) {
 }
 
 // Create writes a new skill to the filesystem at the appropriate location.
-// source must be "project" or "global". Returns the created Skill.
+// source must be "project" (.tachi/skills/) or "global" (~/.tachi/skills/).
+// Returns the created Skill.
 // If overwrite is false and the skill already exists, an error is returned.
 func (s *Store) Create(name, description, body string, tags []string, source string, overwrite bool) (*Skill, error) {
 	if err := ValidateName(name); err != nil {
@@ -277,7 +290,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 	if len(description) > MaxDescriptionLen {
 		return nil, fmt.Errorf("description exceeds %d characters", MaxDescriptionLen)
 	}
-	if source != SourceProject && source != SourceGlobal {
+	if !isWritableSource(source) {
 		return nil, fmt.Errorf("unknown source %q: must be %q or %q", source, SourceProject, SourceGlobal)
 	}
 
@@ -328,7 +341,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 }
 
 // Delete removes a skill from the filesystem. source narrows the search scope
-// ("project" or "global"); empty means search all dirs.
+// ("project" or "global"); empty means search all dirs (respects priority).
 func (s *Store) Delete(name string, source string) error {
 	if err := ValidateName(name); err != nil {
 		return fmt.Errorf("invalid skill name: %w", err)
@@ -350,8 +363,8 @@ func (s *Store) Delete(name string, source string) error {
 // Update modifies an existing skill's description, body, and/or tags.
 // name is required. description, body, and tags are optional — only non-zero
 // values are applied (empty string keeps existing description/body; nil tags
-// keeps existing tags). source narrows the search scope ("project" or
-// "global"); empty means search all dirs (respects priority).
+// keeps existing tags). source narrows the search scope
+// ("project" or "global"); empty means search all dirs (respects priority).
 func (s *Store) Update(name string, description, body string, tags []string, source string) (*Skill, error) {
 	if err := ValidateName(name); err != nil {
 		return nil, fmt.Errorf("invalid skill name: %w", err)
@@ -428,7 +441,7 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 // source narrows search — empty means search all dirs.
 func (s *Store) findSkillDir(name, source string) (string, string, error) {
 	if source != "" {
-		if source != SourceProject && source != SourceGlobal {
+		if !isWritableSource(source) {
 			return "", "", fmt.Errorf("unknown source %q: must be %q or %q", source, SourceProject, SourceGlobal)
 		}
 		idx := slices.Index(s.source, source)

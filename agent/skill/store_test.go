@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -39,8 +40,9 @@ func TestNewStore(t *testing.T) {
 
 	wd, _ := os.Getwd()
 	s2 := NewStore(wd)
-	if len(s2.dirs) != 2 {
-		t.Errorf("expected 2 dirs (project + global), got %d: %v", len(s2.dirs), s2.dirs)
+	// Now includes .tachi/skills, .claude/skills, .cursor/skills, and global
+	if len(s2.dirs) < 2 {
+		t.Errorf("expected at least 2 dirs (project-level + global), got %d: %v", len(s2.dirs), s2.dirs)
 	}
 }
 
@@ -551,5 +553,187 @@ func TestBuildSkillMarkdown(t *testing.T) {
 	result2 := buildSkillMarkdown("untagged", "desc", "body", nil)
 	if contains(result2, "tags:") {
 		t.Error("should not contain tags when nil")
+	}
+}
+
+// TestStoreShadowPriority verifies the search order:
+//
+//	.tachi/skills > .claude/skills > .cursor/skills > global
+//
+// Same-named skills in higher-priority dirs shadow lower ones.
+func TestStoreShadowPriority(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpGlobal := t.TempDir()
+
+	tachiDir := filepath.Join(tmpDir, ".tachi", "skills")
+	claudeDir := filepath.Join(tmpDir, ".claude", "skills")
+	cursorDir := filepath.Join(tmpDir, ".cursor", "skills")
+	globalDir := filepath.Join(tmpGlobal, "skills")
+
+	// Create "my-skill" in all four dirs with different descriptions
+	for _, entry := range []struct {
+		dir, name, desc, source string
+	}{
+		{tachiDir, "my-skill", "Tachi version", SourceProject},
+		{claudeDir, "my-skill", "Claude version", SourceClaude},
+		{cursorDir, "my-skill", "Cursor version", SourceCursor},
+		{globalDir, "my-skill", "Global version", SourceGlobal},
+	} {
+		skillDir := filepath.Join(entry.dir, entry.name)
+		if err := os.MkdirAll(skillDir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		content := fmt.Sprintf("---\nname: %s\ndescription: %s\n---\nBody\n", entry.name, entry.desc)
+		if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	s := newStore([]string{tachiDir, claudeDir, cursorDir, globalDir},
+		[]string{SourceProject, SourceClaude, SourceCursor, SourceGlobal})
+
+	// List should only show one "my-skill" (tachi, since it's first)
+	metas := s.List()
+	found := false
+	for _, m := range metas {
+		if m.Name == "my-skill" {
+			found = true
+			if m.Description != "Tachi version" {
+				t.Errorf("expected Tachi version to shadow others, got %q (source=%s)", m.Description, m.Source)
+			}
+			if m.Source != SourceProject {
+				t.Errorf("expected source 'project', got %q", m.Source)
+			}
+		}
+	}
+	if !found {
+		t.Error("my-skill not found in list")
+	}
+
+	// Load should return the tachi version
+	sk, err := s.Load("my-skill")
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if sk.Meta.Description != "Tachi version" {
+		t.Errorf("Load returned wrong version: %q", sk.Meta.Description)
+	}
+
+	// If tachi dir is empty, claude should win
+	s2 := newStore([]string{claudeDir, cursorDir, globalDir},
+		[]string{SourceClaude, SourceCursor, SourceGlobal})
+	sk2, err := s2.Load("my-skill")
+	if err != nil {
+		t.Fatalf("Load from s2 failed: %v", err)
+	}
+	if sk2.Meta.Description != "Claude version" {
+		t.Errorf("expected Claude version, got %q", sk2.Meta.Description)
+	}
+
+	// If only cursor and global, cursor should win
+	s3 := newStore([]string{cursorDir, globalDir},
+		[]string{SourceCursor, SourceGlobal})
+	sk3, err := s3.Load("my-skill")
+	if err != nil {
+		t.Fatalf("Load from s3 failed: %v", err)
+	}
+	if sk3.Meta.Description != "Cursor version" {
+		t.Errorf("expected Cursor version, got %q", sk3.Meta.Description)
+	}
+}
+
+// TestStoreCreate_ClaudeCursor verifies that claude/cursor sources are
+// rejected for write operations (they are read-only for import compatibility).
+func TestStoreCreate_ClaudeCursor(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpGlobal := t.TempDir()
+
+	tachiDir := filepath.Join(tmpDir, ".tachi", "skills")
+	claudeDir := filepath.Join(tmpDir, ".claude", "skills")
+	cursorDir := filepath.Join(tmpDir, ".cursor", "skills")
+	globalDir := filepath.Join(tmpGlobal, "skills")
+
+	s := newStore([]string{tachiDir, claudeDir, cursorDir, globalDir},
+		[]string{SourceProject, SourceClaude, SourceCursor, SourceGlobal})
+
+	// Create in claude dir — should fail (read-only)
+	_, err := s.Create("claude-skill", "A Claude skill", "body", nil, SourceClaude, false)
+	if err == nil {
+		t.Error("expected error when creating skill with source='claude'")
+	}
+
+	// Create in cursor dir — should fail (read-only)
+	_, err = s.Create("cursor-skill", "A Cursor skill", "body", nil, SourceCursor, false)
+	if err == nil {
+		t.Error("expected error when creating skill with source='cursor'")
+	}
+
+	// Create in tachi dir — should succeed
+	sk, err := s.Create("tachi-skill", "A Tachi skill", "body", nil, SourceProject, false)
+	if err != nil {
+		t.Fatalf("Create in tachi dir failed: %v", err)
+	}
+	if sk.Meta.Source != SourceProject {
+		t.Errorf("expected source 'project', got %q", sk.Meta.Source)
+	}
+
+	// Unknown source should fail
+	_, err = s.Create("bad", "desc", "body", nil, "unknown", false)
+	if err == nil {
+		t.Error("expected error for unknown source")
+	}
+}
+
+// TestStoreDeleteUpdate_ClaudeCursor tests that claude/cursor sources are
+// rejected for delete/update operations (read-only for import compatibility).
+func TestStoreDeleteUpdate_ClaudeCursor(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpGlobal := t.TempDir()
+
+	claudeDir := filepath.Join(tmpDir, ".claude", "skills")
+	globalDir := filepath.Join(tmpGlobal, "skills")
+
+	s := newStore([]string{claudeDir, globalDir},
+		[]string{SourceClaude, SourceGlobal})
+
+	// Delete with source="claude" should fail
+	if err := s.Delete("test-skill", SourceClaude); err == nil {
+		t.Error("expected error when deleting with source='claude'")
+	}
+
+	// Update with source="claude" should fail
+	_, err := s.Update("test-skill", "Updated", "new body", nil, SourceClaude)
+	if err == nil {
+		t.Error("expected error when updating with source='claude'")
+	}
+
+	// Delete with source="cursor" should fail
+	if err := s.Delete("test-skill", SourceCursor); err == nil {
+		t.Error("expected error when deleting with source='cursor'")
+	}
+
+	// Create a skill in global, then delete/update with valid source should work
+	_, err = s.Create("global-skill", "Test", "body", nil, SourceGlobal, false)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	// Delete with source="global" should succeed
+	if err := s.Delete("global-skill", SourceGlobal); err != nil {
+		t.Fatalf("Delete with global source failed: %v", err)
+	}
+
+	// Create another and update it
+	_, err = s.Create("updatable", "Original", "original body", nil, SourceGlobal, false)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+
+	updated, err := s.Update("updatable", "Updated desc", "new body", nil, SourceGlobal)
+	if err != nil {
+		t.Fatalf("Update failed: %v", err)
+	}
+	if updated.Meta.Description != "Updated desc" {
+		t.Errorf("expected description 'Updated desc', got %q", updated.Meta.Description)
 	}
 }

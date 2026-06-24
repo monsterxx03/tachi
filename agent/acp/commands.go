@@ -483,7 +483,7 @@ func handleACPSkillList(ctx context.Context, sess *ACPSession, conn *acp.AgentSi
 	metas := store.List()
 	if len(metas) == 0 {
 		sendTextUpdate(ctx, conn, sessionID,
-			"No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/` or `~/.tachi/skills/<name>/`.")
+			"No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/`, `.claude/skills/<name>/`, `.cursor/skills/<name>/`, or `~/.tachi/skills/<name>/`.")
 		return acp.StopReasonEndTurn, nil
 	}
 
