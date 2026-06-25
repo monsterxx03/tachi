@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 
 	"github.com/sashabaranov/go-openai"
 )
@@ -69,6 +70,19 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 			Role:       role,
 			Name:       msg.Name,
 			ToolCallID: msg.ToolCallID,
+		}
+
+		// Reconstruct reasoning_content from stored thinking blocks for
+		// assistant messages in the history. This preserves the model's
+		// chain-of-thought across multi-turn conversations.
+		if role == "assistant" && len(msg.ThinkingBlocks) > 0 {
+			var sb strings.Builder
+			for _, tb := range msg.ThinkingBlocks {
+				if tb.Type == "thinking" {
+					sb.WriteString(tb.Thinking)
+				}
+			}
+			m.ReasoningContent = sb.String()
 		}
 
 		// Multi-modal content: use MultiContent when ContentParts are present.
@@ -158,6 +172,10 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		Temperature: 0.7,
 	}
 
+	if opts.ThinkingEffort != "" {
+		req.ReasoningEffort = opts.ThinkingEffort
+	}
+
 	if opts.SessionID != "" {
 		ctx = WithSessionID(ctx, opts.SessionID)
 	}
@@ -178,6 +196,11 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 	response := &Response{
 		Content:      choice.Message.Content,
 		FinishReason: string(choice.FinishReason),
+	}
+
+	// Read reasoning_content from the response (o1/o3/o4 and DeepSeek reasoning models)
+	if choice.Message.ReasoningContent != "" {
+		response.Reasoning = choice.Message.ReasoningContent
 	}
 
 	for _, tc := range choice.Message.ToolCalls {
@@ -203,6 +226,10 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 		// Temperature:         0.7,
 		Stream:        true,
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
+	}
+
+	if opts.ThinkingEffort != "" {
+		req.ReasoningEffort = opts.ThinkingEffort
 	}
 
 	if opts.SessionID != "" {
@@ -247,6 +274,12 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 
 			choice := resp.Choices[0]
 			delta := choice.Delta
+
+			// Emit reasoning_content from streaming deltas as thinking events
+			// (o1/o3/o4, DeepSeek reasoning models, etc.)
+			if delta.ReasoningContent != "" {
+				ch <- StreamEvent{Type: StreamEventThinkingDelta, ThinkingDelta: delta.ReasoningContent}
+			}
 
 			if delta.Content != "" {
 				ch <- StreamEvent{Type: StreamEventTextDelta, TextDelta: delta.Content}
