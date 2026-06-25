@@ -93,7 +93,12 @@ type Tool struct {
 }
 
 // NewTool constructs a Tool from its component parts.
+// OpenAI requires "required" to be an array (never null), so we normalize
+// nil slices to an empty slice here at the single construction point.
 func NewTool(name, description string, properties map[string]ToolParameterProperty, required []string) Tool {
+	if required == nil {
+		required = []string{}
+	}
 	return Tool{
 		Name:        name,
 		Description: description,

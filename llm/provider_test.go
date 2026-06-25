@@ -97,8 +97,8 @@ func TestNewTool_NoProperties(t *testing.T) {
 	if tool.Parameters.Properties != nil {
 		t.Error("expected nil properties")
 	}
-	if tool.Parameters.Required != nil {
-		t.Error("expected nil required")
+	if len(tool.Parameters.Required) != 0 {
+		t.Error("expected empty required")
 	}
 }
 
