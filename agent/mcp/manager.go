@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"strings"
 	"sync"
 	"time"
@@ -177,7 +178,7 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		isAutoLoad := !useToolSearch
 		if !isAutoLoad && hasCfg {
 			for _, name := range srvCfg.AlwaysLoadTools {
-				if strings.EqualFold(name, t.ToolName()) {
+				if matchWildcard(name, t.ToolName()) {
 					isAutoLoad = true
 					break
 				}
@@ -206,15 +207,25 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 }
 
 // isWhitelisted checks whether a tool name matches an entry in the whitelist.
-// Matching is case-insensitive, consistent with AlwaysLoadTools.
-// Returns true if the whitelist is empty (no filtering).
+// Matching is case-insensitive and supports wildcards (*, ?, [...]).
+// If a whitelist entry contains no wildcard characters, it behaves as an exact
+// case-insensitive match (backward compatible).
 func isWhitelisted(toolName string, whitelist []string) bool {
 	for _, w := range whitelist {
-		if strings.EqualFold(w, toolName) {
+		if matchWildcard(w, toolName) {
 			return true
 		}
 	}
 	return false
+}
+
+// matchWildcard performs case-insensitive wildcard matching using path.Match.
+// Patterns may contain *, ?, and [...] glob characters. If the pattern has
+// no glob metacharacters it acts as a simple case-insensitive equality check.
+func matchWildcard(pattern, s string) bool {
+	// path.Match is case-sensitive; lowercase both sides for case-insensitive matching.
+	matched, err := path.Match(strings.ToLower(pattern), strings.ToLower(s))
+	return err == nil && matched
 }
 
 // SetLogger overrides the manager's logger. Channel callers use this to inject

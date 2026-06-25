@@ -310,7 +310,61 @@ func TestIsWhitelisted(t *testing.T) {
 			want:      false, // isWhitelisted returns false for empty list; caller checks len>0
 		},
 		{
-			name:      "partial substring is not a match",
+			name:      "wildcard: prefix * matches any suffix",
+			toolName:  "search_users",
+			whitelist: []string{"search_*"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: suffix * matches any prefix",
+			toolName:  "search_users",
+			whitelist: []string{"*_users"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: middle * matches any middle",
+			toolName:  "server_search_users_v2",
+			whitelist: []string{"*search*"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: ? matches exactly one character",
+			toolName:  "get_users",
+			whitelist: []string{"get_?sers"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: ? does not match more than one char",
+			toolName:  "get_uusers",
+			whitelist: []string{"get_?sers"},
+			want:      false,
+		},
+		{
+			name:      "wildcard: case insensitive",
+			toolName:  "Search_Users_Admin",
+			whitelist: []string{"search_*"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: multiple * in one pattern",
+			toolName:  "mcp__server1__tool_name",
+			whitelist: []string{"mcp__*__tool_*"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: character class [abc]",
+			toolName:  "get_file",
+			whitelist: []string{"get_[af]ile"},
+			want:      true,
+		},
+		{
+			name:      "wildcard: character class no match",
+			toolName:  "get_zile",
+			whitelist: []string{"get_[af]ile"},
+			want:      false,
+		},
+		{
+			name:      "no glob chars: exact substring is not a match",
 			toolName:  "search_users_admin",
 			whitelist: []string{"search_users"},
 			want:      false,
@@ -320,6 +374,47 @@ func TestIsWhitelisted(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			got := isWhitelisted(tt.toolName, tt.whitelist)
+			assert.Equal(t, tt.want, got)
+		})
+	}
+}
+
+func TestMatchWildcard(t *testing.T) {
+	tests := []struct {
+		name    string
+		pattern string
+		s       string
+		want    bool
+	}{
+		{
+			name:    "exact match",
+			pattern: "search_users",
+			s:       "search_users",
+			want:    true,
+		},
+		{
+			name:    "case insensitive",
+			pattern: "SEARCH_USERS",
+			s:       "search_users",
+			want:    true,
+		},
+		{
+			name:    "invalid glob pattern returns false",
+			pattern: "[unclosed",
+			s:       "anything",
+			want:    false,
+		},
+		{
+			name:    "star matches empty string",
+			pattern: "prefix_*",
+			s:       "prefix_",
+			want:    true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := matchWildcard(tt.pattern, tt.s)
 			assert.Equal(t, tt.want, got)
 		})
 	}
