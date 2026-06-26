@@ -615,6 +615,8 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
 	}
+	// Populate token breakdown from the agent
+	info.EstBreakdown = m.agent.LastTokenBreakdown()
 
 	m.chatview.AddMessage(chatMessage{
 		Role:    "assistant",

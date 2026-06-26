@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 )
 
 // ---------------------------------------------------------------------------
@@ -35,6 +36,10 @@ type UsageReportInfo struct {
 	// display across TUI, channel, and ACP modes.
 	EstimatedInputTokens int64
 
+	// EstBreakdown is the categorized breakdown of EstimatedInputTokens.
+	// Populated from agent.LastTokenBreakdown() by each caller (TUI/channel/ACP).
+	EstBreakdown tokenbreakdown.Breakdown
+
 	Cost float64
 
 	ToolCalls map[string]*ToolCallStat
@@ -49,6 +54,9 @@ type ToolCallStat struct {
 }
 
 // FormatUsageReport produces a markdown-formatted usage report string.
+// Uses "\n\n" (blank line) between items so glamour renders each as a
+// separate paragraph in the TUI. In plain-text consumers (channel/ACP),
+// the blank lines provide visual separation.
 func FormatUsageReport(info *UsageReportInfo) string {
 	var sb strings.Builder
 
@@ -56,13 +64,13 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	sb.WriteString("📊 **Session Usage**\n\n")
 
 	// Session info
-	sb.WriteString(fmt.Sprintf("**Session:** `%s`\n", info.SessionID))
+	sb.WriteString(fmt.Sprintf("**Session:** `%s`\n\n", info.SessionID))
 	provider := info.Provider
 	if provider == "" {
 		provider = "(unknown)"
 	}
-	sb.WriteString(fmt.Sprintf("**Provider:** %s\n", provider))
-	sb.WriteString(fmt.Sprintf("**Model:** %s\n", info.Model))
+	sb.WriteString(fmt.Sprintf("**Provider:** %s\n\n", provider))
+	sb.WriteString(fmt.Sprintf("**Model:** %s\n\n", info.Model))
 	title := info.Title
 	if title == "" {
 		title = "(untitled)"
@@ -70,16 +78,16 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	sb.WriteString(fmt.Sprintf("**Title:** %s\n\n", title))
 
 	// Token usage
-	sb.WriteString("**Token Usage**\n")
-	sb.WriteString(fmt.Sprintf("  Total input (accumulated): %s\n", FormatTokens(info.InputTokens)))
+	sb.WriteString("**Token Usage**\n\n")
+	sb.WriteString(fmt.Sprintf("Total input (accumulated): %s\n\n", FormatTokens(info.InputTokens)))
 	if info.LastInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  Last input (context):      %s\n", FormatTokens(info.LastInputTokens)))
+		sb.WriteString(fmt.Sprintf("Last input (context):      %s\n\n", FormatTokens(info.LastInputTokens)))
 	}
 	if info.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache read:  %s\n", FormatTokens(info.CacheReadInputTokens)))
+		sb.WriteString(fmt.Sprintf("↳ Cache read:  %s\n\n", FormatTokens(info.CacheReadInputTokens)))
 	}
 	if info.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache created: %s\n", FormatTokens(info.CacheCreationInputTokens)))
+		sb.WriteString(fmt.Sprintf("↳ Cache created: %s\n\n", FormatTokens(info.CacheCreationInputTokens)))
 	}
 	lastInput := info.LastInputTokens
 	if lastInput == 0 {
@@ -87,43 +95,61 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	}
 	cacheMissInput := max(lastInput-info.CacheReadInputTokens, 0)
 	if cacheMissInput != lastInput {
-		sb.WriteString(fmt.Sprintf("  ↳ Cache miss:  %s\n", FormatTokens(cacheMissInput)))
+		sb.WriteString(fmt.Sprintf("↳ Cache miss:  %s\n\n", FormatTokens(cacheMissInput)))
 	}
-	sb.WriteString(fmt.Sprintf("  Output tokens: %s\n", FormatTokens(info.OutputTokens)))
-	sb.WriteString(fmt.Sprintf("  Total tokens:  %s\n", FormatTokens(info.InputTokens+info.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("Output tokens: %s\n\n", FormatTokens(info.OutputTokens)))
+	sb.WriteString(fmt.Sprintf("Total tokens:  %s\n\n", FormatTokens(info.InputTokens+info.OutputTokens)))
 
 	// Context percentage — uses EstimatedInputTokens as the sole numerator.
-	// No fallback: if the heuristic estimate is unavailable (0), the context
-	// fraction is simply not shown.
 	if info.ContextWindow > 0 && info.EstimatedInputTokens > 0 {
 		pct := float64(info.EstimatedInputTokens) / float64(info.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("  Context: %s / %s (%.0f%%)\n",
+		sb.WriteString(fmt.Sprintf("Context: %s / %s (%.0f%%)\n\n",
 			FormatTokens(info.EstimatedInputTokens), FormatTokens(info.ContextWindow), pct))
+		// Compact categorized breakdown
+		parts := make([]string, 0, 5)
+		if info.EstBreakdown.SystemPrompt > 0 {
+			parts = append(parts, fmt.Sprintf("sys:%s", FormatTokens(info.EstBreakdown.SystemPrompt)))
+		}
+		if info.EstBreakdown.InternalTools > 0 {
+			parts = append(parts, fmt.Sprintf("tools:%s", FormatTokens(info.EstBreakdown.InternalTools)))
+		}
+		if info.EstBreakdown.MCPTools > 0 {
+			parts = append(parts, fmt.Sprintf("mcp:%s", FormatTokens(info.EstBreakdown.MCPTools)))
+		}
+		if info.EstBreakdown.UserMessages > 0 {
+			parts = append(parts, fmt.Sprintf("usr:%s", FormatTokens(info.EstBreakdown.UserMessages)))
+		}
+		if info.EstBreakdown.AssistantMessages > 0 {
+			parts = append(parts, fmt.Sprintf("asst:%s", FormatTokens(info.EstBreakdown.AssistantMessages)))
+		}
+		if len(parts) > 0 {
+			sb.WriteString(fmt.Sprintf("↳ %s\n\n", strings.Join(parts, " | ")))
+		}
 	}
 
 	// Cost
-	sb.WriteString("\n**Cost**\n")
+	sb.WriteString("**Cost**\n\n")
 	if info.Cost <= 0 {
-		sb.WriteString("  No pricing data available\n")
+		sb.WriteString("No pricing data available\n\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("  Total cost: **¥%.4f**\n", info.Cost))
+		sb.WriteString(fmt.Sprintf("Total cost: **¥%.4f**\n\n", info.Cost))
 	}
 
 	// Tool calls
-	sb.WriteString("\n**Tool Calls**\n")
+	sb.WriteString("**Tool Calls**\n\n")
 	names := slices.Sorted(maps.Keys(info.ToolCalls))
 	for _, name := range names {
 		st := info.ToolCalls[name]
-		line := fmt.Sprintf("  - **%s**: %d call(s)", name, st.Count)
+		line := fmt.Sprintf("- **%s**: %d call(s)", name, st.Count)
 		if st.ErrCount > 0 {
 			line += fmt.Sprintf(" (%d failed)", st.ErrCount)
 		}
-		sb.WriteString(line + "\n")
+		sb.WriteString(line + "\n\n")
 	}
-	sb.WriteString(fmt.Sprintf("\n  **Total:** %d main + %d subagent = **%d** call(s)\n",
+	sb.WriteString(fmt.Sprintf("**Total:** %d main + %d subagent = **%d** call(s)\n\n",
 		info.MainCount, info.SubCount, info.MainCount+info.SubCount))
 
-	return sb.String()
+	return strings.TrimRight(sb.String(), "\n") + "\n"
 }
 
 // ---------------------------------------------------------------------------

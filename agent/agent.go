@@ -11,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
+	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -80,7 +81,8 @@ type AIAgent struct {
 	sessionManager     *session.Manager
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
-	lastInputTokens    int64 // local token estimate (conservative), set by estimateAndUpdateTokens
+	lastInputTokens     int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
+	lastTokenBreakdown  tokenbreakdown.Breakdown  // categorized breakdown of last estimate, set alongside lastInputTokens
 	lastMessageDate    string       // calendar date (2006-01-02) of last processed user message; empty initially
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active

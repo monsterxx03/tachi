@@ -363,6 +363,8 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
 	}
+	// Populate token breakdown from the session agent
+	info.EstBreakdown = sess.agent.LastTokenBreakdown()
 
 	text := cmds.FormatUsageReport(info)
 	sendTextUpdate(ctx, conn, sessionID, text)
