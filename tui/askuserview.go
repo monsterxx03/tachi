@@ -50,10 +50,8 @@ func (v *AskUserView) Height() int {
 			h++
 		}
 	}
-	// Extra line for "Other" text input prompt when editing
-	if v.otherEditing {
-		h += 1
-	}
+	// "Other" text is now rendered inline on the option row itself,
+	// so no extra line needed for editing.
 	return h
 }
 
@@ -364,7 +362,7 @@ func (v *AskUserView) Render() string {
 		b.WriteString("\n")
 	}
 
-	// "Other" option line
+	// "Other" option line — becomes inline input box when editing
 	{
 		isCursor := v.cursorPos == otherIdx && !v.otherEditing
 		var marker string
@@ -382,21 +380,10 @@ func (v *AskUserView) Render() string {
 			}
 		}
 
-		label := "Tab 自由输入"
-		if text, ok := v.otherTexts[v.curQuestion]; ok && text != "" {
-			label = fmt.Sprintf("Tab: %s", text)
-		}
-
-		line := fmt.Sprintf(" %s0. %s", marker, label)
-		if isCursor {
-			b.WriteString(completionSelectedStyle.Width(w).Render(line))
-		} else {
-			b.WriteString(completionNormalStyle.Width(w).Render(line))
-		}
-		b.WriteString("\n")
-
-		// Show text input prompt when editing
 		if v.otherEditing {
+			// Inline editing: the "Other" row itself becomes the input box.
+			// Cursor is rendered inline with styling so it visually replaces the
+			// static label. No extra line below.
 			text := v.otherTexts[v.curQuestion]
 			cursor := v.otherCursor
 			runes := []rune(text)
@@ -409,9 +396,21 @@ func (v *AskUserView) Render() string {
 			if cursor+1 < len(runes) {
 				after = string(runes[cursor+1:])
 			}
-			inputLine := fmt.Sprintf("   ✎ %s%s%s", before,
+			line := fmt.Sprintf(" %s0. %s%s%s", marker, before,
 				toolCallStyle.Render(at), after)
-			b.WriteString(completionSelectedStyle.Width(w).Render(inputLine) + "\n")
+			b.WriteString(completionSelectedStyle.Width(w).Render(line) + "\n")
+		} else {
+			label := "Tab 自由输入"
+			if text, ok := v.otherTexts[v.curQuestion]; ok && text != "" {
+				label = fmt.Sprintf("Tab: %s", text)
+			}
+			line := fmt.Sprintf(" %s0. %s", marker, label)
+			if isCursor {
+				b.WriteString(completionSelectedStyle.Width(w).Render(line))
+			} else {
+				b.WriteString(completionNormalStyle.Width(w).Render(line))
+			}
+			b.WriteString("\n")
 		}
 	}
 
