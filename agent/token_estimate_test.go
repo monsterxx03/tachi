@@ -47,24 +47,34 @@ func TestApproxTokenCount_Long(t *testing.T) {
 // ---- Tests: estimateInputTokens ----
 
 func TestEstimateInputTokens_Empty(t *testing.T) {
-	n := estimateInputTokens(nil, "", nil)
-	assert.Equal(t, int64(0), n)
+	tb := estimateInputTokens(nil, "", nil)
+	assert.Equal(t, int64(0), tb.Total)
+	assert.Equal(t, int64(0), tb.SystemPrompt)
+	assert.Equal(t, int64(0), tb.InternalTools)
+	assert.Equal(t, int64(0), tb.MCPTools)
+	assert.Equal(t, int64(0), tb.UserMessages)
+	assert.Equal(t, int64(0), tb.AssistantMessages)
 }
 
 func TestEstimateInputTokens_SystemPromptOnly(t *testing.T) {
-	n := estimateInputTokens(nil, "You are a helpful assistant.", nil)
+	tb := estimateInputTokens(nil, "You are a helpful assistant.", nil)
 	// (27+3)/4 = 7
-	assert.Equal(t, int64(7), n)
+	assert.Equal(t, int64(7), tb.Total)
+	assert.Equal(t, int64(7), tb.SystemPrompt)
+	assert.Equal(t, int64(0), tb.InternalTools)
+	assert.Equal(t, int64(0), tb.MCPTools)
 }
 
 func TestEstimateInputTokens_SingleUserMessage(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "user", Content: "Hello, world!"},
 	}
-	n := estimateInputTokens(msgs, "", nil)
+	tb := estimateInputTokens(msgs, "", nil)
 	// role "user" = (4+3)/4 = 1
 	// content "Hello, world!" = (13+3)/4 = 4
-	assert.Equal(t, int64(5), n)
+	assert.Equal(t, int64(5), tb.Total)
+	assert.Equal(t, int64(5), tb.UserMessages)
+	assert.Equal(t, int64(0), tb.AssistantMessages)
 }
 
 func TestEstimateInputTokens_MessagesWithToolCalls(t *testing.T) {
@@ -83,9 +93,10 @@ func TestEstimateInputTokens_MessagesWithToolCalls(t *testing.T) {
 		},
 		{Role: "tool", ToolCallID: "call_123", Content: "file contents here"},
 	}
-	n := estimateInputTokens(msgs, "", nil)
+	tb := estimateInputTokens(msgs, "", nil)
 	// We don't need to assert exact value — just that it's > 0 and stable
-	assert.Greater(t, n, int64(0))
+	assert.Greater(t, tb.Total, int64(0))
+	assert.Greater(t, tb.AssistantMessages, int64(0), "assistant message should be counted")
 }
 
 func TestEstimateInputTokens_ContentParts(t *testing.T) {
@@ -97,8 +108,8 @@ func TestEstimateInputTokens_ContentParts(t *testing.T) {
 			},
 		},
 	}
-	n := estimateInputTokens(msgs, "", nil)
-	assert.Greater(t, n, int64(0))
+	tb := estimateInputTokens(msgs, "", nil)
+	assert.Greater(t, tb.Total, int64(0))
 }
 
 func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
@@ -124,30 +135,20 @@ func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
 			},
 		},
 	}
-	n := estimateInputTokens(nil, "", schemas)
-	assert.Greater(t, n, int64(0))
+	tb := estimateInputTokens(nil, "", schemas)
+	assert.Greater(t, tb.Total, int64(0))
 
 	// tool overhead: 2*4 = 8
-	// Read: name(4/4=1) + desc(11/4=2) + 1 prop*8 = 1+2+8 = 11, so that part is 8+11 = 19 for tools...
-	// Actually let me compute precisely:
-	// Name "Read" = 4 → (4+3)/4 = 1
-	// Description "Read a file" = 11 → (11+3)/4 = 3
-	// prop name "path" = 4 → (4+3)/4 = 1
-	// prop desc "File path to read" = 18 → (18+3)/4 = 5
-	// 1 prop * 8 = 8
-	// Read total: 1+3+1+5+8 = 18
-
-	// EditFile name "EditFile" = 8 → (8+3)/4 = 2
-	// Desc "Edit or create files" = 19 → (19+3)/4 = 5
-	// prop "path" = 4 → (4+3)/4 = 1, desc "Target file" = 11 → (11+3)/4 = 3
-	// prop "content" = 7 → (7+3)/4 = 2, desc "New content" = 11 → (11+3)/4 = 3
-	// prop "old_string" = 10 → (10+3)/4 = 3, desc "Text to replace" = 16 → (16+3)/4 = 4
-	// 3 props * 8 = 24
-	// EditFile total: 2+5+1+3+2+3+3+4+24 = 47
-
+	// Read: name(4/4=1) + desc(11/4=3) + prop name "path"(4/4=1) + prop desc(18/4=5) + 1 prop*8 = 18
+	// EditFile: name(8/4=2) + desc(19/4=5) + "path"(4/4=1+11/4=3) + "content"(7/4=2+11/4=3) + "old_string"(10/4=3+16/4=4) + 3*8 = 47
 	// tool array overhead: 2*4 = 8
 	// Total: 18+47+8 = 73
-	assert.Equal(t, int64(73), n)
+	assert.Equal(t, int64(73), tb.Total)
+	assert.Equal(t, int64(73), tb.InternalTools, "both tools are built-in (no mcp__ prefix)")
+	assert.Equal(t, int64(0), tb.MCPTools)
+	assert.Equal(t, int64(0), tb.SystemPrompt)
+	assert.Equal(t, int64(0), tb.UserMessages)
+	assert.Equal(t, int64(0), tb.AssistantMessages)
 }
 
 func TestEstimateInputTokens_Full(t *testing.T) {
@@ -166,8 +167,10 @@ func TestEstimateInputTokens_Full(t *testing.T) {
 			},
 		},
 	}
-	n := estimateInputTokens(msgs, "", schemas)
-	assert.Greater(t, n, int64(0))
+	tb := estimateInputTokens(msgs, "", schemas)
+	assert.Greater(t, tb.Total, int64(0))
+	assert.Greater(t, tb.UserMessages, int64(0), "user message should be counted")
+	assert.Greater(t, tb.InternalTools, int64(0), "Bash is a built-in tool")
 }
 
 // TestEstimateInputTokens_SystemPromptFromMessages ensures that when a system
@@ -187,7 +190,7 @@ func TestEstimateInputTokens_SystemPromptFromMessages(t *testing.T) {
 	// again in the systemPrompt param, leading to a higher estimate
 	withArg := estimateInputTokens(msgs, "You are a helpful assistant.", nil)
 
-	assert.Greater(t, withArg, noArg,
+	assert.Greater(t, withArg.Total, noArg.Total,
 		"Passing systemPrompt should add to the estimate (not double-count prevention)")
 }
 
@@ -212,34 +215,38 @@ func TestEstimateInputTokens_LargeToolSchema(t *testing.T) {
 			},
 		},
 	}
-	n := estimateInputTokens(nil, "", schemas)
+	tb := estimateInputTokens(nil, "", schemas)
 	// name="BigTool" (7+3)/4=2
 	// desc="A tool with many parameters" (27+3)/4=7
-	// each prop: name(1 byte→0...wait, rune('a')=97 so string(rune('a'))="a"(1 byte), (1+3)/4=1)
-	// Actually for i=0: string(rune('a'+0)) = "a", for i=1: "b", etc. Each is 1 byte.
-	// each prop desc: "property x" = 10 bytes, (10+3)/4=3
+	// each prop: name(1 byte), (1+3)/4=1; desc "property x" (10), (10+3)/4=3
 	// So per prop: 1+3=4, plus 8 overhead = 12
 	// 20 props * 12 = 240
 	// 1 tool overhead * 4 = 4
 	// Total: 2+7+240+4 = 253
-	assert.Equal(t, int64(253), n)
+	assert.Equal(t, int64(253), tb.Total)
+	assert.Equal(t, int64(253), tb.InternalTools, "BigTool is not an MCP tool")
+	assert.Equal(t, int64(0), tb.MCPTools)
 }
 
 func TestEstimateInputTokens_NoToolOverheadWithoutTools(t *testing.T) {
-	n := estimateInputTokens(nil, "prompt", nil)
-	// (5+3)/4 = 2
-	assert.Equal(t, int64(2), n)
+	tb := estimateInputTokens(nil, "prompt", nil)
+	// (6+3)/4 = 2
+	assert.Equal(t, int64(2), tb.Total)
+	assert.Equal(t, int64(2), tb.SystemPrompt)
 }
 
 func TestEstimateInputTokens_ToolCallID(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "tool", ToolCallID: "toolu_abc123def456", Content: "result data"},
 	}
-	n := estimateInputTokens(msgs, "", nil)
+	tb := estimateInputTokens(msgs, "", nil)
 	// role "tool" = 4 → (4+3)/4 = 1
 	// content "result data" = 11 → (11+3)/4 = 3
 	// tool_call_id "toolu_abc123def456" = 18 → (18+3)/4 = 5
-	assert.Equal(t, int64(9), n)
+	assert.Equal(t, int64(9), tb.Total)
+	// Role "tool" is not "user" or "assistant", so it appears only in Total
+	assert.Equal(t, int64(0), tb.UserMessages)
+	assert.Equal(t, int64(0), tb.AssistantMessages)
 }
 
 func TestEstimateInputTokens_ContentPartsWithTextAndImage(t *testing.T) {
@@ -251,17 +258,16 @@ func TestEstimateInputTokens_ContentPartsWithTextAndImage(t *testing.T) {
 			},
 		},
 	}
-	n := estimateInputTokens(msgs, "", nil)
-	assert.Greater(t, n, int64(0))
+	tb := estimateInputTokens(msgs, "", nil)
+	assert.Greater(t, tb.Total, int64(0))
 
 	// Verify both text and image parts are counted
 	// text part: type "text" = 4 → (4+3)/4 = 1; text "What's in this image?" = 21 → (21+3)/4 = 6
-	// image part: type "image" = 5 → (5+3)/4 = 2; but data is also counted...
-	// Actually the code doesn't count MediaType or Data — only Type and Text for ContentParts.
-	// So: text type(1) + text content(6) + image type(2) = 9
+	// image part: type "image" = 5 → (5+3)/4 = 2
 	// role "user" = 4 → (4+3)/4 = 1
-	// Total: 9 + 1 = 10
-	assert.Equal(t, int64(10), n)
+	// Total: 6+1+2+1 = 10
+	assert.Equal(t, int64(10), tb.Total)
+	assert.Equal(t, int64(10), tb.UserMessages)
 }
 
 // TestEstimateAndUpdateTokens verifies that the method calls through correctly
@@ -288,6 +294,11 @@ func TestEstimateAndUpdateTokens(t *testing.T) {
 	agent.estimateAndUpdateTokens(msgs)
 	require.Greater(t, agent.lastInputTokens, int64(0),
 		"estimateAndUpdateTokens should set lastInputTokens to a positive value")
+	tb := agent.LastTokenBreakdown()
+	assert.Equal(t, agent.lastInputTokens, tb.Total,
+		"lastInputTokens should match breakdown Total")
+	assert.Greater(t, tb.UserMessages, int64(0), "user message should be broken down")
+	assert.Greater(t, tb.InternalTools, int64(0), "internal tools should be broken down")
 }
 
 // TestEstimateAndUpdateTokens_SystemPrompt checks that a system message in the
@@ -304,4 +315,71 @@ func TestEstimateAndUpdateTokens_SystemPrompt(t *testing.T) {
 	}
 	agent.estimateAndUpdateTokens(msgs)
 	assert.Greater(t, agent.lastInputTokens, int64(0))
+	tb := agent.LastTokenBreakdown()
+	assert.Greater(t, tb.SystemPrompt, int64(0), "system prompt should be broken down")
+	assert.Equal(t, agent.lastInputTokens, tb.Total)
+}
+
+// TestTokenBreakdown_MCPTools verifies that MCP-prefixed tool schemas are
+// categorized under MCPTools instead of InternalTools.
+func TestTokenBreakdown_MCPTools(t *testing.T) {
+	schemas := []agenttools.Schema{
+		{
+			Name:        "Bash",
+			Description: "Run bash commands",
+			Parameters: agenttools.ParametersSchema{
+				Properties: map[string]agenttools.PropertySchema{
+					"command": {Type: "string", Description: "Command to execute"},
+				},
+			},
+		},
+		{
+			Name:        "mcp__postgres__query",
+			Description: "Query a PostgreSQL database",
+			Parameters: agenttools.ParametersSchema{
+				Properties: map[string]agenttools.PropertySchema{
+					"sql": {Type: "string", Description: "SQL query"},
+				},
+			},
+		},
+	}
+	tb := estimateInputTokens(nil, "", schemas)
+	assert.Greater(t, tb.InternalTools, int64(0), "Bash should be in InternalTools")
+	assert.Greater(t, tb.MCPTools, int64(0), "mcp__postgres__query should be in MCPTools")
+	assert.GreaterOrEqual(t, tb.Total, tb.SystemPrompt+tb.InternalTools+tb.MCPTools+tb.UserMessages+tb.AssistantMessages,
+		"Total should be >= sum of named categories (may include uncategorized messages)")
+}
+
+// TestTokenBreakdown_MixedRoles verifies that user and assistant messages
+// are correctly attributed to their respective categories.
+func TestTokenBreakdown_MixedRoles(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "Hello"},
+		{Role: "assistant", Content: "Hi there!"},
+		{Role: "user", Content: "How are you?"},
+		{Role: "assistant", Content: "I'm doing well, thanks!"},
+	}
+	tb := estimateInputTokens(msgs, "", nil)
+	assert.Greater(t, tb.UserMessages, int64(0), "user messages should be counted")
+	assert.Greater(t, tb.AssistantMessages, int64(0), "assistant messages should be counted")
+	assert.Equal(t, tb.Total, tb.UserMessages+tb.AssistantMessages,
+		"Total should equal sum of user + assistant (no system prompt, no tools)")
+}
+
+// TestTokenBreakdown_ToolResultNotInUserMessages verifies that "tool" role
+// messages don't leak into UserMessages — they contribute only to Total.
+func TestTokenBreakdown_ToolResultNotInUserMessages(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "run a command"},
+		{Role: "assistant", Content: "Running...", ToolCalls: []llm.ToolCall{
+			{ID: "call_1", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"ls"}`}},
+		}},
+		{Role: "tool", ToolCallID: "call_1", Content: "file1.txt\nfile2.txt"},
+	}
+	tb := estimateInputTokens(msgs, "", nil)
+	assert.Greater(t, tb.UserMessages, int64(0))
+	assert.Greater(t, tb.AssistantMessages, int64(0))
+	// Total should be > user + assistant because "tool" role msg is counted in Total only
+	assert.Greater(t, tb.Total, tb.UserMessages+tb.AssistantMessages,
+		"tool result msg should be in Total but not in UserMessages/AssistantMessages")
 }

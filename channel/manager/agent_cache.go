@@ -7,6 +7,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -269,4 +270,16 @@ func (m *Manager) getAgentEstimate(threadID string) int64 {
 		return 0
 	}
 	return ca.agent.LastInputEstimate()
+}
+
+// getAgentBreakdown returns the Breakdown from the cached agent for
+// the given thread, or a zero-value breakdown if no agent exists.
+func (m *Manager) getAgentBreakdown(threadID string) tokenbreakdown.Breakdown {
+	m.agentCacheMu.Lock()
+	defer m.agentCacheMu.Unlock()
+	ca, ok := m.agentCache[threadID]
+	if !ok || ca.agent == nil {
+		return tokenbreakdown.Breakdown{}
+	}
+	return ca.agent.LastTokenBreakdown()
 }

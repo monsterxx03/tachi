@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -27,43 +28,68 @@ func approxTokenCount(s string) int64 {
 // The estimate is deliberately conservative (overestimates) to trigger timely
 // warnings and compaction. Once the API responds, the actual InputTokens from
 // the response replace this estimate.
-func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []tools.Schema) int64 {
-	var total int64
+func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []tools.Schema) tokenbreakdown.Breakdown {
+	var tb tokenbreakdown.Breakdown
 
 	// System prompt
-	total += approxTokenCount(systemPrompt)
+	tb.SystemPrompt = approxTokenCount(systemPrompt)
 
-	// Tool schemas — each tool's name, description, and parameter schemas
+	// Tool schemas — split between internal and MCP
+	var internalCount, mcpCount int64
 	for _, s := range schemas {
-		total += approxTokenCount(s.Name)
-		total += approxTokenCount(s.Description)
+		var toolTokens int64
+		toolTokens += approxTokenCount(s.Name)
+		toolTokens += approxTokenCount(s.Description)
 		for name, prop := range s.Parameters.Properties {
-			total += approxTokenCount(name)
-			total += approxTokenCount(prop.Description)
+			toolTokens += approxTokenCount(name)
+			toolTokens += approxTokenCount(prop.Description)
 		}
 		// Overhead for JSON schema structure (~8 tokens per property)
-		total += int64(len(s.Parameters.Properties)) * 8
-	}
-	// Overhead for tool array (~4 tokens per tool)
-	total += int64(len(schemas)) * 4
+		toolTokens += int64(len(s.Parameters.Properties)) * 8
 
-	// Messages
+		if tools.IsMCPSchema(s.Name) {
+			tb.MCPTools += toolTokens
+			mcpCount++
+		} else {
+			tb.InternalTools += toolTokens
+			internalCount++
+		}
+	}
+	// Tool array overhead (~4 tokens per tool), split proportionally
+	tb.InternalTools += internalCount * 4
+	tb.MCPTools += mcpCount * 4
+
+	// Messages — categorize by role
 	for _, msg := range messages {
-		total += approxTokenCount(string(msg.Role))
-		total += approxTokenCount(msg.Content)
+		var msgTokens int64
+		msgTokens += approxTokenCount(string(msg.Role))
+		msgTokens += approxTokenCount(msg.Content)
 		for _, part := range msg.ContentParts {
-			total += approxTokenCount(string(part.Type))
-			total += approxTokenCount(part.Text)
+			msgTokens += approxTokenCount(string(part.Type))
+			msgTokens += approxTokenCount(part.Text)
 		}
 		for _, tc := range msg.ToolCalls {
-			total += approxTokenCount(tc.ID)
-			total += approxTokenCount(tc.Function.Name)
-			total += approxTokenCount(tc.Function.Arguments)
+			msgTokens += approxTokenCount(tc.ID)
+			msgTokens += approxTokenCount(tc.Function.Name)
+			msgTokens += approxTokenCount(tc.Function.Arguments)
 		}
-		total += approxTokenCount(msg.ToolCallID)
+		msgTokens += approxTokenCount(msg.ToolCallID)
+
+		// All messages contribute to Total
+		tb.Total += msgTokens
+
+		switch msg.Role {
+		case "user":
+			tb.UserMessages += msgTokens
+		case "assistant":
+			tb.AssistantMessages += msgTokens
+		// system/tool/steer messages contribute to Total but not to
+		// the named categories — they're not user or assistant msgs
+		}
 	}
 
-	return total
+	tb.Total += tb.SystemPrompt + tb.InternalTools + tb.MCPTools
+	return tb
 }
 
 // estimateAndUpdateTokens estimates the total input tokens for the current
@@ -76,8 +102,16 @@ func (a *AIAgent) estimateAndUpdateTokens(messages []llm.Message) {
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content
 	}
-	est := estimateInputTokens(messages, systemPrompt, schemas)
-	a.lastInputTokens = est
+	tb := estimateInputTokens(messages, systemPrompt, schemas)
+	a.lastInputTokens = tb.Total
+	a.lastTokenBreakdown = tb
+}
+
+// LastTokenBreakdown returns the most recent token estimate breakdown
+// computed by estimateAndUpdateTokens. Returns a zero-value Breakdown
+// if no estimate has been computed yet.
+func (a *AIAgent) LastTokenBreakdown() tokenbreakdown.Breakdown {
+	return a.lastTokenBreakdown
 }
 
 // shouldAutoCompact checks whether automatic compaction should be triggered.

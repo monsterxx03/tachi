@@ -479,6 +479,8 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
 	}
+	// Populate token breakdown from the cached agent
+	info.EstBreakdown = m.getAgentBreakdown(threadID)
 
 	return cmds.FormatUsageReport(info), nil
 }
