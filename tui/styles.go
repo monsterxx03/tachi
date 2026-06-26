@@ -51,7 +51,6 @@ var (
 			PaddingLeft(1)
 
 	assistantMsgStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#A6DA95")).
 			PaddingLeft(1)
 
 	selectModeStyle = lipgloss.NewStyle().
