@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 )
@@ -13,16 +14,26 @@ type AskUserView struct {
 	questions   []tools.Question
 	selected    map[int]map[int]bool // question index -> set of selected option indices
 	curQuestion int
-	cursorPos   int
+	cursorPos   int // index into options, or len(options) for "Other"
 	width       int
+
+	// "Other" free-text input state (per-question)
+	otherSelected bool              // whether "Other" option is toggled/selected
+	otherTexts    map[int]string    // question index -> custom text
+	otherEditing  bool              // currently typing "Other" text?
+	otherCursor   int               // cursor position within otherText
 }
 
 func NewAskUserView(questions []tools.Question, width int) *AskUserView {
-	return &AskUserView{
-		questions: questions,
-		selected:  make(map[int]map[int]bool),
-		width:     width,
+	v := &AskUserView{
+		questions:  questions,
+		selected:   make(map[int]map[int]bool),
+		otherTexts: make(map[int]string),
+		width:      width,
 	}
+	// Restore per-question "Other" state from previous question data.
+	// (this is a no-op for fresh views but keeps the struct consistent)
+	return v
 }
 
 // Height returns the number of lines this view will render.
@@ -31,18 +42,95 @@ func (v *AskUserView) Height() int {
 		return 0
 	}
 	q := v.questions[v.curQuestion]
-	// hint(1) + progress(1) + blank(1) + question(1) + header(1) + options + blank(1) + summary header(1) + answered questions
-	h := 6 + len(q.Options) + 1
+	// hint(1) + progress(1) + blank(1) + question(1) + header(1) + options + "Other" row +
+	// blank(1) + summary header(1) + answered questions
+	h := 6 + len(q.Options) + 1 + 1 // +1 for "Other" row
 	for i := range v.questions {
-		if len(v.selected[i]) > 0 {
+		if len(v.selected[i]) > 0 || v.otherTexts[i] != "" {
 			h++
 		}
+	}
+	// Extra line for "Other" text input prompt when editing
+	if v.otherEditing {
+		h += 1
 	}
 	return h
 }
 
 func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
+	// ---- "Other" text editing mode ----
+	if v.otherEditing {
+		switch key {
+		case "enter":
+			// Confirm "Other" text
+			v.otherEditing = false
+			q := v.questions[v.curQuestion]
+			if q.MultiSelect {
+				// Stay on current question
+				return false, false
+			}
+			// Single select: advance
+			return v.advance()
+		case "esc":
+			// Cancel editing, revert "Other"
+			v.otherEditing = false
+			v.otherSelected = false
+			delete(v.otherTexts, v.curQuestion)
+			return false, false
+		case "backspace":
+			if v.otherCursor > 0 {
+				text := v.otherTexts[v.curQuestion]
+				runeIdx := v.otherCursor - 1
+				runes := []rune(text)
+				if runeIdx < len(runes) {
+					v.otherTexts[v.curQuestion] = string(runes[:runeIdx]) + string(runes[runeIdx+1:])
+				}
+				v.otherCursor--
+			}
+			return false, false
+		case "left":
+			if v.otherCursor > 0 {
+				v.otherCursor--
+			}
+			return false, false
+		case "right":
+			text := v.otherTexts[v.curQuestion]
+			if v.otherCursor < utf8.RuneCountInString(text) {
+				v.otherCursor++
+			}
+			return false, false
+		case "up", "down", "tab", "home", "end", "pgup", "pgdown":
+			// Ignore navigation keys in text editing mode.
+			return false, false
+		case "space":
+			key = " "
+			fallthrough
+		default:
+			// Accept printable text (including multi-byte UTF-8 like Chinese).
+			// Reject key combos (e.g. "ctrl+c", "shift+enter") which contain "+".
+			if strings.Contains(key, "+") || utf8.RuneCountInString(key) == 0 {
+				return false, false
+			}
+			text := v.otherTexts[v.curQuestion]
+			runes := []rune(text)
+			runeIdx := v.otherCursor
+			if runeIdx > len(runes) {
+				runeIdx = len(runes)
+			}
+			insertRunes := []rune(key)
+			newRunes := make([]rune, 0, len(runes)+len(insertRunes))
+			newRunes = append(newRunes, runes[:runeIdx]...)
+			newRunes = append(newRunes, insertRunes...)
+			newRunes = append(newRunes, runes[runeIdx:]...)
+			v.otherTexts[v.curQuestion] = string(newRunes)
+			v.otherCursor += len(insertRunes)
+			return false, false
+		}
+	}
+
+	// ---- Option selection mode ----
 	q := v.questions[v.curQuestion]
+	otherIdx := len(q.Options) // cursor position of "Other"
 
 	switch key {
 	case "up", "k":
@@ -50,17 +138,30 @@ func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
 			v.cursorPos--
 		}
 	case "down", "j":
-		if v.cursorPos < len(q.Options)-1 {
+		if v.cursorPos < otherIdx {
 			v.cursorPos++
 		}
 	case "left", "backspace", "h":
 		if v.curQuestion > 0 {
 			v.curQuestion--
 			v.cursorPos = 0
+			v.restoreOtherState()
 		}
 	case "space":
-		v.toggleOption(v.cursorPos)
+		if v.cursorPos == otherIdx {
+			v.toggleOther()
+		} else {
+			v.toggleOption(v.cursorPos)
+		}
+	case "tab":
+		// Jump directly to "Other" free-text editing.
+		v.cursorPos = otherIdx
+		return v.selectOther()
 	case "enter":
+		if v.cursorPos == otherIdx {
+			// "Other" is edited via Tab; Enter is a no-op here.
+			return false, false
+		}
 		if q.MultiSelect {
 			if len(v.selected[v.curQuestion]) == 0 {
 				return false, false
@@ -73,16 +174,24 @@ func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
 	case "esc":
 		return false, true
 	default:
-		if n, err := strconv.Atoi(key); err == nil && n >= 1 && n <= 4 {
-			optIdx := n - 1
-			if optIdx < len(q.Options) {
-				if q.MultiSelect {
-					v.toggleOption(optIdx)
-					v.cursorPos = optIdx
-				} else {
-					v.selectSingle(optIdx)
-					v.cursorPos = optIdx
-					return v.advance()
+		// Number shortcuts: 1-4 for options, 0 for "Other"
+		if n, err := strconv.Atoi(key); err == nil {
+			if n == 0 {
+				// "Other" shortcut
+				v.cursorPos = otherIdx
+				return v.selectOther()
+			}
+			if n >= 1 && n <= 4 {
+				optIdx := n - 1
+				if optIdx < len(q.Options) {
+					if q.MultiSelect {
+						v.toggleOption(optIdx)
+						v.cursorPos = optIdx
+					} else {
+						v.selectSingle(optIdx)
+						v.cursorPos = optIdx
+						return v.advance()
+					}
 				}
 			}
 		}
@@ -112,6 +221,41 @@ func (v *AskUserView) selectSingle(idx int) {
 	v.selected[v.curQuestion] = map[int]bool{idx: true}
 }
 
+// toggleOther toggles the "Other" option for multi-select questions.
+func (v *AskUserView) toggleOther() {
+	if v.otherSelected {
+		v.otherSelected = false
+		delete(v.otherTexts, v.curQuestion)
+	} else {
+		v.otherSelected = true
+		v.otherEditing = true
+		v.otherCursor = utf8.RuneCountInString(v.otherTexts[v.curQuestion])
+	}
+}
+
+// selectOther handles selecting "Other" for single-select questions.
+func (v *AskUserView) selectOther() (submit bool, cancelled bool) {
+	q := v.questions[v.curQuestion]
+	if q.MultiSelect {
+		v.toggleOther()
+		return false, false
+	}
+	// Single select: clear previous selections, mark "Other", enter editing
+	v.selected[v.curQuestion] = nil
+	v.otherSelected = true
+	v.otherEditing = true
+	v.otherCursor = utf8.RuneCountInString(v.otherTexts[v.curQuestion])
+	return false, false
+}
+
+// restoreOtherState restores the "Other" selection state when navigating back
+// to a previously answered question.
+func (v *AskUserView) restoreOtherState() {
+	if text, ok := v.otherTexts[v.curQuestion]; ok && text != "" {
+		v.otherSelected = true
+	}
+}
+
 func (v *AskUserView) selectedLabels(qIdx int) []string {
 	q := v.questions[qIdx]
 	sel := v.selected[qIdx]
@@ -128,6 +272,9 @@ func (v *AskUserView) advance() (submit bool, cancelled bool) {
 	if v.curQuestion < len(v.questions)-1 {
 		v.curQuestion++
 		v.cursorPos = 0
+		v.otherSelected = false
+		v.otherEditing = false
+		v.restoreOtherState()
 		return false, false
 	}
 	return true, false
@@ -136,8 +283,15 @@ func (v *AskUserView) advance() (submit bool, cancelled bool) {
 func (v *AskUserView) GetAnswers() map[string]string {
 	answers := make(map[string]string)
 	for i, q := range v.questions {
+		var parts []string
 		if labels := v.selectedLabels(i); len(labels) > 0 {
-			answers[q.Question] = strings.Join(labels, ", ")
+			parts = append(parts, labels...)
+		}
+		if text, ok := v.otherTexts[i]; ok && text != "" {
+			parts = append(parts, text)
+		}
+		if len(parts) > 0 {
+			answers[q.Question] = strings.Join(parts, ", ")
 		}
 	}
 	return answers
@@ -151,18 +305,23 @@ func (v *AskUserView) Render() string {
 	var b strings.Builder
 	q := v.questions[v.curQuestion]
 	w := v.width
+	otherIdx := len(q.Options)
 
 	// Hint line
 	hint := "↑↓ navigate  "
-	if q.MultiSelect {
-		hint += "Space toggle  Enter confirm  "
+	if v.otherEditing {
+		hint = "Type your answer  Enter confirm  Esc cancel"
+	} else if q.MultiSelect {
+		hint += "Space toggle  Enter confirm  Tab free input  "
 	} else {
-		hint += "1-4/Enter select  "
+		hint += "1-4/Enter select  Tab free input  "
 	}
-	if v.curQuestion > 0 {
+	if v.curQuestion > 0 && !v.otherEditing {
 		hint += "← back  "
 	}
-	hint += "Esc cancel"
+	if !v.otherEditing {
+		hint += "Esc cancel"
+	}
 	b.WriteString(dimStyle.Render(hint) + "\n")
 
 	// Progress
@@ -179,7 +338,7 @@ func (v *AskUserView) Render() string {
 	// Options
 	for i, opt := range q.Options {
 		isSelected := v.selected[v.curQuestion][i]
-		isCursor := i == v.cursorPos
+		isCursor := i == v.cursorPos && !v.otherEditing
 
 		var marker string
 		if q.MultiSelect {
@@ -205,19 +364,76 @@ func (v *AskUserView) Render() string {
 		b.WriteString("\n")
 	}
 
+	// "Other" option line
+	{
+		isCursor := v.cursorPos == otherIdx && !v.otherEditing
+		var marker string
+		if q.MultiSelect {
+			if v.otherSelected {
+				marker = "[x] "
+			} else {
+				marker = "[ ] "
+			}
+		} else {
+			if v.otherSelected {
+				marker = " ● "
+			} else {
+				marker = " ○ "
+			}
+		}
+
+		label := "Tab 自由输入"
+		if text, ok := v.otherTexts[v.curQuestion]; ok && text != "" {
+			label = fmt.Sprintf("Tab: %s", text)
+		}
+
+		line := fmt.Sprintf(" %s0. %s", marker, label)
+		if isCursor {
+			b.WriteString(completionSelectedStyle.Width(w).Render(line))
+		} else {
+			b.WriteString(completionNormalStyle.Width(w).Render(line))
+		}
+		b.WriteString("\n")
+
+		// Show text input prompt when editing
+		if v.otherEditing {
+			text := v.otherTexts[v.curQuestion]
+			cursor := v.otherCursor
+			runes := []rune(text)
+			before := string(runes[:cursor])
+			at := "_"
+			if cursor < len(runes) {
+				at = string(runes[cursor])
+			}
+			after := ""
+			if cursor+1 < len(runes) {
+				after = string(runes[cursor+1:])
+			}
+			inputLine := fmt.Sprintf("   ✎ %s%s%s", before,
+				toolCallStyle.Render(at), after)
+			b.WriteString(completionSelectedStyle.Width(w).Render(inputLine) + "\n")
+		}
+	}
+
 	// Summary of answered questions
 	b.WriteString("\n")
 	var hasSummary bool
 	for i := range v.questions {
 		labels := v.selectedLabels(i)
-		if len(labels) == 0 {
+		otherText := v.otherTexts[i]
+		if len(labels) == 0 && otherText == "" {
 			continue
 		}
 		if !hasSummary {
 			b.WriteString(dimStyle.Render("Answers:") + "\n")
 			hasSummary = true
 		}
-		b.WriteString(dimStyle.Render(fmt.Sprintf("  %s → %s", v.questions[i].Header, strings.Join(labels, ", "))) + "\n")
+		var answerParts []string
+		answerParts = append(answerParts, labels...)
+		if otherText != "" {
+			answerParts = append(answerParts, otherText)
+		}
+		b.WriteString(dimStyle.Render(fmt.Sprintf("  %s → %s", v.questions[i].Header, strings.Join(answerParts, ", "))) + "\n")
 	}
 
 	return b.String()
