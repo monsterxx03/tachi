@@ -458,10 +458,10 @@ func (c *ChatView) renderItemCached(m *messageCacheItem) (string, int) {
 func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 	switch msg.Role {
 	case "user":
-		return userMsgStyle.Width(inner).Render(msg.Content)
+		return userMsgStyle.MaxWidth(inner).Render(msg.Content)
 	case "assistant":
 		rendered := c.renderMarkdown(msg.Content)
-		return assistantMsgStyle.Width(inner).Render(rendered)
+		return assistantMsgStyle.MaxWidth(inner).Render(rendered)
 	case "thinking":
 		thinking := truncateThinking(msg.Content, 5)
 		return thinkingStyle.Render("Thinking: " + thinking)
@@ -479,7 +479,6 @@ func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 }
 
 func (c *ChatView) renderStreamBlock() string {
-	inner := max(c.width-2, 1)
 	var b strings.Builder
 	if c.currentThinking.Len() > 0 {
 		thinking := truncateThinking(c.currentThinking.String(), 5)
@@ -489,7 +488,7 @@ func (c *ChatView) renderStreamBlock() string {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(assistantMsgStyle.Width(inner).Render(
+		b.WriteString(assistantMsgStyle.Render(
 			c.renderStreamText(c.currentText.String()),
 		))
 	}
