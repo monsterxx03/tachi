@@ -210,8 +210,14 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 		return nil, err
 	}
 
-	// Channel mode is non-interactive — AskUser is unavailable.
-	a.UnregisterTool(tools.ToolNameAskUser)
+	// Non-interactive channels unregister AskUserQuestion so the LLM
+	// never attempts to use it. Interactive channels (those implementing
+	// InteractiveChannel with Interactive()==true) keep it registered.
+	if !m.isThreadChannelInteractive(threadID) {
+		a.UnregisterTool(tools.ToolNameAskUser)
+	} else {
+		m.logger.Log("channel: thread %s is interactive — AskUserQuestion kept registered", threadID)
+	}
 
 	m.logger.Log("channel: built cached agent for thread %s (provider=%s model=%s)",
 		threadID, resolved.Provider.Type, resolved.Provider.Model)

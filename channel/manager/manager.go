@@ -92,11 +92,15 @@ type initProviderResult struct {
 //
 // # Confirmation Strategy
 //
-// IM channels are non-interactive:
+// Channels are non-interactive by default:
 //   - skip_edit_confirm=true → all EditFile edits auto-approved (no user prompt).
 //   - AskUserQuestion tool is unregistered → LLM never uses it in channel mode.
 //   - If a confirmation or AskUser event somehow fires, drainEvents handles
 //     it gracefully (auto-confirm / auto-reject).
+//
+// Channels that implement the InteractiveChannel interface and return true
+// from Interactive() keep AskUserQuestion registered, enabling interactive
+// forms when the platform supports them.
 //
 // # Concurrency & Steer
 //
@@ -164,6 +168,15 @@ type Manager struct {
 	agentCacheMu sync.Mutex
 	agentCache   map[string]*cachedAgent
 
+	// --- Thread → Channel mapping ---
+	//
+	// Tracks which channel a thread belongs to. Used by buildAgent to
+	// decide whether to unregister AskUserQuestion (non-interactive
+	// channels unregister it; InteractiveChannel implementations keep it).
+	// Populated on first message by the per-channel handler wrapper.
+	threadChannels   map[string]channel.Channel
+	threadChannelMu sync.RWMutex
+
 	// --- Shared MCP backend ---
 	//
 	// All cached agents share a single *mcp.Manager. The manager owns the
@@ -202,6 +215,15 @@ type threadActivation struct {
 	cancel      context.CancelFunc // cancels the agent turn
 	cancelled   bool               // true when this turn was cancelled externally
 	isCompact   bool               // true when this turn is a /compact operation
+
+	// --- AskUser state ---
+	//
+	// When the agent invokes AskUserQuestion, drainEvents creates
+	// askUserRespCh and blocks on it. The handler routes the user's
+	// next reply into this channel instead of the steer queue.
+	askUserRespCh   chan tools.AskUserResult // non-nil when waiting for AskUser answer
+	askUserThreadID string                   // ThreadID for sending questions
+	askUserReplyID  string                   // MessageID for sendToThread replyTo
 
 	// --- Whisper ambient state (only active when groupChat=true) ---
 
@@ -243,6 +265,7 @@ func New(mcfg Config) *Manager {
 		processManager: tools.NewProcessManager(),
 		logger:         debuglog.DefaultLogger.WithSource("channel:manager"),
 		done:           make(chan struct{}),
+		threadChannels: make(map[string]channel.Channel),
 	}
 }
 
@@ -277,10 +300,14 @@ func (m *Manager) Start(ctx context.Context) error {
 	copy(chans, m.channels)
 	m.mu.Unlock()
 
-	handler := m.buildHandler()
 	cmdHandler := m.buildCommandHandler()
+	baseHandler := m.buildHandler()
 
 	for _, ch := range chans {
+		// Wrap the shared handler with per-channel thread tracking so
+		// buildAgent can later check whether the channel is interactive.
+		handler := m.buildHandlerForChannel(ch, baseHandler)
+
 		m.wg.Add(1)
 		go func(ch channel.Channel) {
 			defer m.wg.Done()
@@ -557,6 +584,31 @@ func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo stri
 	m.logger.Log("channel: sendToThread — no channel accepted thread %s", threadID)
 }
 
+// presentQuestionsToChannel delivers structured AskUser questions to the
+// channel that owns the given thread. Interactive channels receive the
+// questions via PresentQuestions; non-interactive channels should never
+// reach this path (AskUser is unregistered for them).
+func (m *Manager) presentQuestionsToChannel(threadID, replyID string, questions []channel.Question) {
+	m.threadChannelMu.RLock()
+	ch, ok := m.threadChannels[threadID]
+	m.threadChannelMu.RUnlock()
+
+	if !ok {
+		m.logger.Log("channel: presentQuestionsToChannel — no channel for thread %s", threadID)
+		return
+	}
+
+	ic, ok := ch.(channel.InteractiveChannel)
+	if !ok {
+		m.logger.Log("channel: presentQuestionsToChannel — channel %s is not interactive, questions dropped", ch.Name())
+		return
+	}
+
+	if err := ic.PresentQuestions(context.Background(), threadID, replyID, questions); err != nil {
+		m.logger.Log("channel: PresentQuestions to %s failed: %v", ch.Name(), err)
+	}
+}
+
 // Close releases all resources held by the Manager, including killing all
 // tracked background processes, evicting cached agents, and tearing down
 // the shared MCP manager. Safe to call multiple times.
@@ -579,4 +631,40 @@ func (m *Manager) Close() {
 	if m.processManager != nil {
 		m.processManager.KillAll()
 	}
+}
+
+// --- Channel-tracking helpers ---
+
+// buildHandlerForChannel wraps the shared base handler with per-channel
+// thread tracking. When an incoming message arrives, the handler records
+// the channel→threadID mapping so buildAgent can later determine whether
+// the channel supports interactive tools.
+func (m *Manager) buildHandlerForChannel(ch channel.Channel, base channel.MessageHandler) channel.MessageHandler {
+	if base == nil {
+		base = m.buildHandler()
+	}
+	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		m.setThreadChannel(msg.ThreadID, ch)
+		return base(ctx, msg)
+	}
+}
+
+// setThreadChannel records the channel that owns a given thread.
+func (m *Manager) setThreadChannel(threadID string, ch channel.Channel) {
+	m.threadChannelMu.Lock()
+	m.threadChannels[threadID] = ch
+	m.threadChannelMu.Unlock()
+}
+
+// isThreadChannelInteractive checks whether the channel for the given
+// thread implements InteractiveChannel and reports itself as interactive.
+func (m *Manager) isThreadChannelInteractive(threadID string) bool {
+	m.threadChannelMu.RLock()
+	ch, ok := m.threadChannels[threadID]
+	m.threadChannelMu.RUnlock()
+	if !ok {
+		return false
+	}
+	ic, ok := ch.(channel.InteractiveChannel)
+	return ok && ic.Interactive()
 }

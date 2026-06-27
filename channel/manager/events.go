@@ -5,12 +5,19 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
 // drainEvents consumes all AgentEvents, returning the final assistant text or
-// an error. Because we control the agent instance, we can respond to any
-// confirmation/AskUser events inline — though with skip_edit_confirm=true
-// and AskUser unregistered, neither should appear.
+// an error.
+//
+// For non-interactive channels AskUser is unregistered so AgentEventAskUser
+// should never fire. For interactive channels (InteractiveChannel interface),
+// drainEvents sends questions to the user via sendToThread, blocks on
+// ta.askUserRespCh waiting for the handler to route the reply, then calls
+// RespondToAskUser to resume the agent turn. When ta is nil (cron, tests) or
+// the thread has no askUserThreadID set, AskUser auto-rejects.
 //
 // verboseFn is called on each tool event to check whether verbose mode is
 // currently active. Using a function (rather than a captured bool) allows
@@ -55,9 +62,37 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 			aiAgent.ConfirmTool(true)
 
 		case agent.AgentEventAskUser:
-			// Should not happen with AskUser unregistered, but handle safely.
-			m.logger.Log("channel: auto-rejecting unexpected AskUser")
-			aiAgent.RespondToAskUser(nil, nil)
+			if ta != nil && ta.askUserThreadID != "" {
+				ta.mu.Lock()
+				ta.askUserRespCh = make(chan tools.AskUserResult, 1)
+				threadID := ta.askUserThreadID
+				replyID := ta.askUserReplyID
+				ta.mu.Unlock()
+
+				m.logger.Log("channel: AskUser — %d question(s) for thread=%s",
+					len(event.Questions), threadID)
+
+				// Deliver structured questions to the channel.
+				m.presentQuestionsToChannel(threadID, replyID, convertQuestions(event.Questions))
+
+				// Block until the handler routes a user reply into askUserRespCh,
+				// or the agent context is cancelled.
+				select {
+				case resp := <-ta.askUserRespCh:
+					m.logger.Log("channel: AskUser — received answer (%d entries)", len(resp.Answers))
+					aiAgent.RespondToAskUser(resp.Answers, resp.Annotations)
+				case <-ta.ctx.Done():
+					m.logger.Log("channel: AskUser — cancelled")
+					aiAgent.RespondToAskUser(nil, nil)
+				}
+
+				ta.mu.Lock()
+				ta.askUserRespCh = nil
+				ta.mu.Unlock()
+			} else {
+				m.logger.Log("channel: auto-rejecting AskUser (non-interactive)")
+				aiAgent.RespondToAskUser(nil, nil)
+			}
 
 		case agent.AgentEventSteerCheck:
 			// Only process steer when ta is non-nil (agent turn path).
@@ -186,4 +221,28 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 		return "", nil
 	}
 	return result, nil
+}
+
+// convertQuestions converts agent-level tools.Question values to the
+// channel-level channel.Question type so they can be passed through
+// OutgoingMessage.AskUserQuestions without creating a dependency from
+// pkg/channel on agent/tools.
+func convertQuestions(qs []tools.Question) []channel.Question {
+	cqs := make([]channel.Question, len(qs))
+	for i, q := range qs {
+		opts := make([]channel.QuestionOption, len(q.Options))
+		for j, o := range q.Options {
+			opts[j] = channel.QuestionOption{
+				Label:       o.Label,
+				Description: o.Description,
+			}
+		}
+		cqs[i] = channel.Question{
+			Question:    q.Question,
+			Header:      q.Header,
+			Options:     opts,
+			MultiSelect: q.MultiSelect,
+		}
+	}
+	return cqs
 }

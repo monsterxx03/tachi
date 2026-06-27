@@ -145,6 +145,28 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 
 		ta.mu.Lock()
 		if ta.steerRespCh != nil {
+			// Agent already running — check if drainEvents is waiting for
+			// an AskUser answer. When askUserRespCh is non-nil and the
+			// message carries structured answers (set by the channel after
+			// receiving a UI callback), route them directly to the agent.
+			// Raw text messages during an AskUser wait are treated as a
+			// fallback answer (user typed directly instead of using UI).
+			if ta.askUserRespCh != nil && !isCompactCmd && !isSkillActivation {
+				answers := msg.AskUserAnswers
+				if answers == nil {
+					// Fallback: treat raw text as answer to the first question.
+					answers = map[string]string{"q0": msg.Content}
+				}
+				ta.mu.Unlock()
+				select {
+				case ta.askUserRespCh <- tools.AskUserResult{Answers: answers}:
+					m.logger.Log("channel: AskUser answer delivered for thread=%s (%d entries)", msg.ThreadID, len(answers))
+				default:
+					m.logger.Log("channel: AskUser answer dropped (channel full) for thread=%s", msg.ThreadID)
+				}
+				return channel.HandlerResult{Steered: true}
+			}
+
 			// /compact and /skill activation require a fresh agent turn with
 			// session context — they cannot be injected as steer text because
 			// the LLM would see the raw command string instead of the
@@ -337,6 +359,13 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
 		systemPrompt += "\n" + whisperPromptSuffix
 	}
+
+	// Store thread context for AskUser support — drainEvents uses these
+	// to send questions to the user and wait for a reply.
+	ta.mu.Lock()
+	ta.askUserThreadID = msg.ThreadID
+	ta.askUserReplyID = msg.MessageID
+	ta.mu.Unlock()
 
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
