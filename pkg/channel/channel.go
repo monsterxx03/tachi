@@ -137,6 +137,13 @@ type IncomingMessage struct {
 	// Channels that don't support group chat leave this at the default (false),
 	// and whisper is never activated.
 	GroupChat bool
+
+	// AskUserAnswers is set by interactive channels when an incoming message
+	// is a reply to a previously-sent AskUserQuestion prompt. The keys are
+	// question indices (e.g. "q0", "q1") and values are the user's answers.
+	// When non-nil, the handler routes this message directly to the waiting
+	// agent rather than queuing it as a new turn or steer input.
+	AskUserAnswers map[string]string
 }
 
 // OutgoingAttachment represents a file or media attachment to be sent
@@ -163,6 +170,22 @@ type OutgoingAttachment struct {
 	// file from this local path at send time instead of keeping it in memory.
 	// This avoids buffering large files during the agent turn.
 	LocalPath string
+}
+
+// Question represents a single structured question from the agent, used by
+// interactive channels to render AskUserQuestion prompts as platform-native
+// UI (cards, buttons, forms) rather than plain text.
+type Question struct {
+	Question    string           `json:"question"`
+	Header      string           `json:"header"`
+	Options     []QuestionOption `json:"options"`
+	MultiSelect bool             `json:"multi_select"`
+}
+
+// QuestionOption is a single choice within a Question.
+type QuestionOption struct {
+	Label       string `json:"label"`
+	Description string `json:"description"`
 }
 
 // OutgoingMessage represents a response to send back to the IM channel.
@@ -310,4 +333,22 @@ type CommandChannel interface {
 	// SetCommandHandler receives the CommandHandler for programmatic
 	// slash command execution. Called by Manager before Run().
 	SetCommandHandler(handler CommandHandler)
+}
+
+// InteractiveChannel is an optional interface for channels that support
+// interactive tool patterns (e.g., AskUserQuestion). Channels that do NOT
+// implement this interface default to non-interactive mode: AskUserQuestion
+// is unregistered and drainEvents auto-rejects any AskUser events.
+type InteractiveChannel interface {
+	Channel
+
+	// Interactive returns true if this channel supports interactive
+	// tool patterns like AskUserQuestion.
+	Interactive() bool
+
+	// PresentQuestions delivers structured questions from the agent to the
+	// channel. The channel decides how to present them to the user
+	// (interactive cards, buttons, forms, etc.). The user's reply arrives
+	// through the normal handler path and is routed to the agent.
+	PresentQuestions(ctx context.Context, threadID, replyID string, questions []Question) error
 }
