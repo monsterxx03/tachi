@@ -298,8 +298,13 @@ func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newToo
 		m.logger.Log("MCP: refresh updated %s (schema changed)", fullName)
 	}
 
-	// 3. Handle additions: add to pool as deferred (not auto-discovered)
+	// 3. Handle additions: add to pool as deferred (not auto-discovered),
+	// but respect whitelist/blacklist filtering from server config.
 	for _, t := range delta.Added {
+		if m.shouldSkipTool(serverName, t.ToolName()) {
+			m.logger.Log("MCP: refresh skipped %s (filtered by whitelist/blacklist)", t.Name())
+			continue
+		}
 		dt := NewDeferredToolFromMCPTool(t, "")
 		m.pool.Add(dt)
 		m.logger.Log("MCP: refresh added %s (new tool, deferred)", t.Name())
@@ -307,4 +312,30 @@ func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newToo
 
 	// Update cache snapshot
 	m.toolCache.Snapshot(serverName, newTools)
+}
+
+// shouldSkipTool checks whether a tool should be excluded from the given
+// server based on the server's whitelist/blacklist configuration.
+//
+// When both are configured, whitelist is applied first (only matching tools
+// are kept), then blacklist filters out any matching tools from that narrowed
+// set. The result is effectively: whitelist ∩ ¬blacklist.
+//
+// When only whitelist is configured, only matching tools are kept.
+// When only blacklist is configured, matching tools are excluded.
+func (m *Manager) shouldSkipTool(serverName string, toolName string) bool {
+	srvCfg, hasCfg := m.serverCfgs[serverName]
+	if !hasCfg {
+		return false
+	}
+	// Whitelist: if configured, exclude everything not in it.
+	if len(srvCfg.Whitelist) > 0 && !isWhitelisted(toolName, srvCfg.Whitelist) {
+		return true
+	}
+	// Blacklist: further exclude any tool that hits the blacklist,
+	// even if it passed the whitelist above.
+	if len(srvCfg.Blacklist) > 0 && isBlacklisted(toolName, srvCfg.Blacklist) {
+		return true
+	}
+	return false
 }

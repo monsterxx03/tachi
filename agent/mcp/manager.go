@@ -64,7 +64,8 @@ type Manager struct {
 	// Tool list refresh — background polling for HTTP MCP servers.
 	refresher   *Refresher
 	toolCache   *toolListCache
-	serverTypes map[string]bool // server name -> is HTTP (true) or stdio (false)
+	serverTypes map[string]bool                   // server name -> is HTTP (true) or stdio (false)
+	serverCfgs  map[string]config.MCPServerConfig // server name -> config (for whitelist/blacklist filtering)
 }
 
 // NewManager creates an empty MCP client manager with the given tool result
@@ -150,20 +151,16 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		return nil, nil, errs
 	}
 
-	// Build server config lookup once.
-	serverCfgs := make(map[string]config.MCPServerConfig, len(cfg.MCPServers))
-	for _, srv := range cfg.MCPServers {
-		serverCfgs[srv.Name] = srv
-	}
-
 	useToolSearch := cfg.MCPToolSearch.IsEnabled() &&
 		len(all) > cfg.MCPToolSearch.MinToolsForSearch
 
 	for _, t := range all {
-		srvCfg, hasCfg := serverCfgs[t.ServerName()]
+		srvCfg, hasCfg := m.serverCfgs[t.ServerName()]
 
-		// Whitelist filtering: if configured, skip tools not in the list.
-		if hasCfg && len(srvCfg.Whitelist) > 0 && !isWhitelisted(t.ToolName(), srvCfg.Whitelist) {
+		// Whitelist / blacklist filtering.
+		// Whitelist is applied first: only matching tools are kept.
+		// Blacklist then filters out matching tools from the narrowed set.
+		if hasCfg && m.shouldSkipTool(t.ServerName(), t.ToolName()) {
 			continue
 		}
 
@@ -219,6 +216,18 @@ func isWhitelisted(toolName string, whitelist []string) bool {
 	return false
 }
 
+// isBlacklisted checks whether a tool name matches an entry in the blacklist.
+// Uses the same matching rules as isWhitelisted (case-insensitive, wildcard
+// support). Returns true if the tool should be excluded.
+func isBlacklisted(toolName string, blacklist []string) bool {
+	for _, b := range blacklist {
+		if matchWildcard(b, toolName) {
+			return true
+		}
+	}
+	return false
+}
+
 // matchWildcard performs case-insensitive wildcard matching using path.Match.
 // Patterns may contain *, ?, and [...] glob characters. If the pattern has
 // no glob metacharacters it acts as a simple case-insensitive equality check.
@@ -240,6 +249,16 @@ func (m *Manager) SetLogger(l *debuglog.Logger) {
 // errors (non-fatal; some servers may succeed while others fail).
 func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConfig) ([]MCPTool, []error) {
 	var wg sync.WaitGroup
+
+	// Store server configs for whitelist/blacklist filtering during refresh.
+	m.mu.Lock()
+	if m.serverCfgs == nil {
+		m.serverCfgs = make(map[string]config.MCPServerConfig, len(servers))
+	}
+	for _, srv := range servers {
+		m.serverCfgs[srv.Name] = srv
+	}
+	m.mu.Unlock()
 
 	// Collected concurrently — protected by a single mutex since both
 	// slices are always accessed together in critical sections.

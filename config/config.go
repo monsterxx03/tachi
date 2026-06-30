@@ -149,8 +149,7 @@ type MCPServerConfig struct {
 	AlwaysLoadTools []string          `json:"always_load_tools,omitempty"` // Tool names to always load (skip ToolSearch)
 	SearchHints     map[string]string `json:"search_hints,omitempty"`      // Override search hints: tool_name -> hint
 	Whitelist       []string          `json:"whitelist,omitempty"`         // If set, only these tools are loaded from the server; all others are ignored
-
-	// Profile is the MCP profile this server originates from.
+	Blacklist       []string          `json:"blacklist,omitempty"`         // Tools to exclude. When both whitelist and blacklist are configured, blacklist filters from the whitelisted set (whitelist ∩ ¬blacklist)
 	// Empty string means it came from a base file (always loaded).
 	// Set internally during config loading; not serialized.
 	Profile string `json:"-"`
