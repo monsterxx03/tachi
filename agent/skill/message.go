@@ -9,8 +9,9 @@ import (
 // BuildActivationMessage constructs the user message injected when a skill
 // is activated (via slash command or LLM routing).
 //
-// If userInstruction is non-empty (e.g. "main.go"), it is prepended as the
-// user's directive alongside the skill activation.
+// If userInstruction is non-empty (e.g. "test-mcp"), it is inserted between
+// the activation header and the skill body as "[Skill <name> additional input: ...]",
+// so the LLM can unambiguously associate it with the skill's instructions.
 func BuildActivationMessage(sk *Skill, userInstruction string) string {
 	var b strings.Builder
 
@@ -19,7 +20,7 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 
 	// User instruction (e.g., "main.go" from "/code-review main.go")
 	if userInstruction != "" {
-		b.WriteString(fmt.Sprintf("[User directive: %s]\n\n", userInstruction))
+		b.WriteString(fmt.Sprintf("[Skill %q additional input: %s]\n\n", sk.Meta.Name, userInstruction))
 	}
 
 	b.WriteString(sk.Body)
