@@ -1139,8 +1139,12 @@ func (m *Model) handleSkillCommand() tea.Cmd {
 		return nil
 
 	default:
-		// /skill <name> — activate a specific skill
-		return m.sendSkillMessage(sub, "")
+		// /skill <name> [args] — activate a specific skill
+		extraArgs := ""
+		if len(parts) > 2 {
+			extraArgs = strings.Join(parts[2:], " ")
+		}
+		return m.sendSkillMessage(sub, extraArgs)
 	}
 }
 
