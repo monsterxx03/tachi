@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -22,6 +23,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	acppkg "github.com/monsterxx03/tachi/agent/acp"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
+	"github.com/monsterxx03/tachi/agent/tools"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -30,9 +32,9 @@ import (
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tui"
 
-	_ "github.com/monsterxx03/tachi/channel/weixin"
-	_ "github.com/monsterxx03/tachi/channel/chrome"
 	"github.com/monsterxx03/tachi/channel/chrome"
+	_ "github.com/monsterxx03/tachi/channel/chrome"
+	_ "github.com/monsterxx03/tachi/channel/weixin"
 )
 
 // Version is set via ldflags at build time:
@@ -141,6 +143,21 @@ func main() {
 				Action: runChannels,
 			},
 			{
+				Name:  "tools",
+				Usage: "List available tools",
+				Flags: append(commonFlags,
+					&cli.BoolFlag{
+						Name:  "mcp",
+						Usage: "Include MCP tools (connects to MCP servers)",
+					},
+					&cli.BoolFlag{
+						Name:  "json",
+						Usage: "Output tool definitions as JSON",
+					},
+				),
+				Action: runToolsCmd,
+			},
+			{
 				Name:  "acp",
 				Usage: "Run as ACP agent (JSON-RPC 2.0 over stdio)",
 				Action: func(ctx context.Context, cmd *cli.Command) error {
@@ -197,8 +214,8 @@ func main() {
 						},
 					},
 					{
-						Name:   "uninstall",
-						Usage:  "Remove Chrome Native Messaging manifest",
+						Name:  "uninstall",
+						Usage: "Remove Chrome Native Messaging manifest",
 						Action: func(ctx context.Context, cmd *cli.Command) error {
 							return chrome.Uninstall()
 						},
@@ -601,18 +618,18 @@ func runOutputText(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent, quiet boo
 
 // streamEvent is a single NDJSON event in json-stream output mode.
 type streamEvent struct {
-	Type         string     `json:"type"`
-	Content      string     `json:"content,omitempty"`
-	ToolName     string     `json:"tool_name,omitempty"`
-	ToolArgs     string     `json:"tool_args,omitempty"`
-	ToolCallID   string     `json:"tool_call_id,omitempty"`
-	ToolResult   string     `json:"tool_result,omitempty"`
-	DurationMS   int64      `json:"duration_ms,omitempty"`
-	IsError      bool       `json:"is_error,omitempty"`
-	ExitReason   string     `json:"exit_reason,omitempty"`
-	Iterations   int        `json:"iterations_used,omitempty"`
-	Usage        *usageJSON `json:"usage,omitempty"`
-	Error        string     `json:"error,omitempty"`
+	Type       string     `json:"type"`
+	Content    string     `json:"content,omitempty"`
+	ToolName   string     `json:"tool_name,omitempty"`
+	ToolArgs   string     `json:"tool_args,omitempty"`
+	ToolCallID string     `json:"tool_call_id,omitempty"`
+	ToolResult string     `json:"tool_result,omitempty"`
+	DurationMS int64      `json:"duration_ms,omitempty"`
+	IsError    bool       `json:"is_error,omitempty"`
+	ExitReason string     `json:"exit_reason,omitempty"`
+	Iterations int        `json:"iterations_used,omitempty"`
+	Usage      *usageJSON `json:"usage,omitempty"`
+	Error      string     `json:"error,omitempty"`
 }
 
 // usageJSON is the serializable representation of token usage.
@@ -814,6 +831,164 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	fmt.Fprintln(os.Stderr, "[channel] shutting down...")
 	mgr.Close()
 	return nil
+}
+
+// ── Tools listing ──────────────────────────────────────────────────────────────
+
+func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
+	if err := debuglog.Init(config.LogsDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	// Create a minimal agent to register and list tools.
+	// No LLM provider needed — we only use the tool registry.
+	aiAgent := agent.NewAIAgent(nil, "", 0)
+	defer aiAgent.Close()
+
+	showMCP := cmd.Bool("mcp")
+
+	// Load MCP config and connect to servers only when --mcp is requested.
+	if showMCP {
+		if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
+			return fmt.Errorf("failed to load MCP servers: %w", err)
+		}
+	}
+
+	mcpMgr, err := aiAgent.Configure(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
+	}
+
+	if showMCP && mcpMgr != nil {
+		waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		if err := aiAgent.WaitForMCP(waitCtx); err != nil {
+			fmt.Fprintf(os.Stderr, "MCP: some servers not ready yet (showing partial results)\n")
+		}
+		cancel()
+	}
+	if mcpMgr != nil {
+		defer mcpMgr.Close()
+	}
+
+	schemas := aiAgent.ToolSchemas()
+	outputJSON := cmd.Bool("json")
+
+	// Extra tools that exist in the codebase but are only registered in
+	// specific modes (e.g. channel mode for Cron / SendFile). We instantiate
+	// them directly rather than hand-writing schemas.
+	extraTools := []tools.Tool{
+		tools.NewCronTool(nil, nil),
+		&tools.SendFileTool{},
+	}
+
+	if outputJSON {
+		// Collect all tool schemas (including deferred MCP tools and extra tools).
+		var allSchemas []tools.Schema
+		seen := make(map[string]bool)
+
+		for _, s := range schemas {
+			if !showMCP && strings.HasPrefix(s.Name, "mcp__") {
+				continue
+			}
+			allSchemas = append(allSchemas, s)
+			seen[s.Name] = true
+		}
+
+		for _, et := range extraTools {
+			if !seen[et.Name()] {
+				allSchemas = append(allSchemas, tools.ToSchema(et))
+				seen[et.Name()] = true
+			}
+		}
+
+		if showMCP {
+			if pool := aiAgent.DeferredPool(); pool != nil {
+				for _, dt := range pool.All() {
+					if !seen[dt.Name] {
+						allSchemas = append(allSchemas, dt.Schema)
+						seen[dt.Name] = true
+					}
+				}
+			}
+		}
+
+		sort.Slice(allSchemas, func(i, j int) bool {
+			return allSchemas[i].Name < allSchemas[j].Name
+		})
+
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		if err := enc.Encode(allSchemas); err != nil {
+			return fmt.Errorf("json encode: %w", err)
+		}
+		return nil
+	}
+
+	if showMCP {
+		fmt.Println("Tools:")
+	} else {
+		fmt.Println("Built-in Tools:")
+	}
+	fmt.Println()
+
+	// Collect all displayed tools as (name, description) pairs.
+	type toolEntry struct {
+		name string
+		desc string
+	}
+	var entries []toolEntry
+
+	// Built-in tools from registry (includes auto-loaded MCP tools).
+	for _, s := range schemas {
+		if !showMCP && strings.HasPrefix(s.Name, "mcp__") {
+			continue
+		}
+		entries = append(entries, toolEntry{s.Name, firstLine(s.Description)})
+	}
+
+	// Extra tools not registered in the current mode.
+	seen := make(map[string]bool)
+	for _, e := range entries {
+		seen[e.name] = true
+	}
+	for _, et := range extraTools {
+		if !seen[et.Name()] {
+			entries = append(entries, toolEntry{et.Name(), firstLine(et.Description())})
+			seen[et.Name()] = true
+		}
+	}
+
+	// Deferred MCP tools from pool — only shown with --mcp.
+	if showMCP {
+		if pool := aiAgent.DeferredPool(); pool != nil {
+			for _, dt := range pool.All() {
+				if !seen[dt.Name] {
+					entries = append(entries, toolEntry{dt.Name, firstLine(dt.Description)})
+					seen[dt.Name] = true
+				}
+			}
+		}
+	}
+
+	for _, e := range entries {
+		fmt.Printf("  %-30s  %s\n", e.name, e.desc)
+	}
+
+	return nil
+}
+
+// firstLine returns the first line of a multi-line string.
+func firstLine(s string) string {
+	if idx := strings.Index(s, "\n"); idx > 0 {
+		return s[:idx]
+	}
+	return s
 }
 
 // ── ACP Agent ────────────────────────────────────────────────────────────────
