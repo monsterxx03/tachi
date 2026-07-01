@@ -105,6 +105,10 @@ type cronArgs struct {
 }
 
 func (t *CronTool) ExecuteContext(ctx context.Context, args string) (string, error) {
+	if t.scheduler == nil {
+		return "", fmt.Errorf("cron: scheduler not configured — this tool is only available in channel mode")
+	}
+
 	var params cronArgs
 	if err := parseArgs(args, &params); err != nil {
 		return "", err

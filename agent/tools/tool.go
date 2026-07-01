@@ -30,9 +30,9 @@ const (
 
 // PropertySchema defines a single property in the schema
 type PropertySchema struct {
-	Type        string
-	Description string
-	Items       any // JSON Schema for array element type
+	Type        string `json:"type"`
+	Description string `json:"description"`
+	Items       any    `json:"items,omitempty"` // JSON Schema for array element type
 }
 
 // Tool is the interface that all tools must implement
@@ -83,16 +83,16 @@ type ToolResult struct {
 
 // Schema defines the JSON schema for a tool
 type Schema struct {
-	Name        string
-	Description string
-	Parameters  ParametersSchema
+	Name        string           `json:"name"`
+	Description string           `json:"description"`
+	Parameters  ParametersSchema `json:"parameters"`
 }
 
 // ParametersSchema defines the JSON schema for tool parameters
 type ParametersSchema struct {
-	Type       string
-	Properties map[string]PropertySchema
-	Required   []string
+	Type       string                     `json:"type"`
+	Properties map[string]PropertySchema  `json:"properties"`
+	Required   []string                   `json:"required,omitempty"`
 }
 
 // ToSchema converts a Tool to its Schema representation
