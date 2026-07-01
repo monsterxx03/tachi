@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"golang.org/x/term"
 
 	"github.com/urfave/cli/v3"
 
@@ -42,11 +45,6 @@ func buildSystemPrompt(language string) string {
 }
 
 var commonFlags = []cli.Flag{
-	&cli.BoolFlag{
-		Name:    "resume",
-		Aliases: []string{"r"},
-		Usage:   "Resume the most recent session",
-	},
 	&cli.StringFlag{
 		Name:  "home",
 		Usage: "Base directory for tachi state (default: ~/.tachi)",
@@ -70,6 +68,11 @@ func main() {
 		Usage:   "AI Agent CLI",
 		Version: Version,
 		Flags: append(commonFlags,
+			&cli.BoolFlag{
+				Name:    "resume",
+				Aliases: []string{"r"},
+				Usage:   "Resume the most recent session",
+			},
 			&cli.BoolFlag{
 				Name:    "edit",
 				Aliases: []string{"e"},
@@ -104,11 +107,25 @@ func main() {
 					&cli.StringFlag{
 						Name:    "prompt",
 						Aliases: []string{"p"},
-						Usage:   "User prompt to send",
+						Usage:   "User prompt to send (if empty, reads stdin)",
+					},
+					&cli.StringFlag{
+						Name:    "output-format",
+						Aliases: []string{"o"},
+						Usage:   "Output format: text (default) | json | json-stream",
 					},
 					&cli.BoolFlag{
-						Name:  "json",
-						Usage: "Output structured JSON instead of human-readable text",
+						Name:    "quiet",
+						Aliases: []string{"q"},
+						Usage:   "Suppress progress output to stderr (auto-enabled when stdout is piped)",
+					},
+					&cli.StringFlag{
+						Name:  "allowed-tools",
+						Usage: "Comma-separated whitelist of tool names the agent may use",
+					},
+					&cli.StringFlag{
+						Name:  "disallowed-tools",
+						Usage: "Comma-separated blacklist of tool names the agent may NOT use",
 					},
 					&cli.DurationFlag{
 						Name:  "timeout",
@@ -324,34 +341,6 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	})
 }
 
-// runJSONResult is the structured JSON output for `tachi run --json`.
-type runJSONResult struct {
-	ExitReason     string     `json:"exit_reason"`
-	IterationsUsed int        `json:"iterations_used"`
-	Usage          *usageJSON `json:"usage"`
-	Response       string     `json:"response"`
-	Error          string     `json:"error,omitempty"`
-}
-
-type usageJSON struct {
-	InputTokens              int64 `json:"input_tokens"`
-	OutputTokens             int64 `json:"output_tokens"`
-	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
-	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
-}
-
-func usageToJSON(u *llm.Usage) *usageJSON {
-	if u == nil {
-		return nil
-	}
-	return &usageJSON{
-		InputTokens:              u.InputTokens,
-		OutputTokens:             u.OutputTokens,
-		CacheCreationInputTokens: u.CacheCreationInputTokens,
-		CacheReadInputTokens:     u.CacheReadInputTokens,
-	}
-}
-
 // exitCodeForReason maps agent exit reasons to Unix exit codes.
 func exitCodeForReason(reason string) int {
 	switch reason {
@@ -369,7 +358,7 @@ func exitCodeForReason(reason string) int {
 func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// Initialize debug logging.
 	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Printf("Warning: failed to init debug log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
 	}
 	defer debuglog.Close()
 
@@ -421,71 +410,233 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// Wait briefly for MCP to connect so the first LLM call has tools available.
 	mcpCtx, mcpCancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := aiAgent.WaitForMCP(mcpCtx); err != nil {
-		// Timeout is not fatal — tools become available on subsequent iterations.
 		fmt.Fprintf(os.Stderr, "MCP: background init still in progress (continuing)...\n")
 	}
 	mcpCancel()
 
-	prompt := cmd.String("prompt")
-	if prompt == "" {
-		// Check if stdin is being piped (not a terminal).
-		stat, err := os.Stdin.Stat()
-		if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-			pipeData, readErr := io.ReadAll(os.Stdin)
-			if readErr == nil && len(pipeData) > 0 {
-				prompt = strings.TrimSpace(string(pipeData))
-			}
-		}
-	}
-	if prompt == "" {
-		prompt = "Write 'Hello, World!' to /tmp/test.txt and then read it back"
+	outputFmt := parseOutputFormat(cmd)
+	quiet := resolveQuiet(cmd)
+
+	prompt, err := resolvePrompt(cmd)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
+		fmt.Fprintf(os.Stderr, "Usage: tachi run --prompt \"<prompt>\" or pipe input via stdin\n")
+		os.Exit(2)
+		return nil
 	}
 
-	jsonOutput := cmd.Bool("json")
-
-	// In JSON mode, progress info goes to stderr so stdout is pure JSON.
-	if !jsonOutput {
-		fmt.Printf("Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
-		fmt.Printf("User: %s\n\n", prompt)
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
 	var history []llm.Message
 
-	if cmd.Bool("resume") {
-		llmMsgs, _, latest, err := aiAgent.ResumeSession(resolved.Provider.Type, buildSystemPrompt(cfg.Language))
-		if err != nil {
-			return fmt.Errorf("resume failed: %w", err)
-		}
-		history = llmMsgs
+	applyToolRestrictions(aiAgent, cmd)
 
-		// Rebuild provider to match the session's original provider/model.
-		if latest.Provider != resolved.Provider.Type || latest.Model != resolved.Provider.Model {
-			sp, spErr := config.ResolveSessionProvider(cfg, latest.Provider, latest.Model)
-			if spErr != nil {
-				fmt.Fprintf(os.Stderr, "Warning: cannot restore session provider %q: %v\n", latest.Provider, spErr)
-			} else {
-				provider, provErr := llm.NewProvider(sp.Type, sp.APIKey, sp.BaseURL, sp.Model)
-				if provErr != nil {
-					fmt.Fprintf(os.Stderr, "Warning: cannot create session provider: %v\n", provErr)
-				} else {
-					aiAgent.SetProvider(provider, sp.Model)
-					resolved.Provider = *sp
-					restoreMsg := fmt.Sprintf("Provider (restored): %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
-					if jsonOutput {
-						fmt.Fprintf(os.Stderr, "%s", restoreMsg)
-					} else {
-						fmt.Printf("%s", restoreMsg)
-					}
-				}
-			}
-		}
-	}
-
-	// Use streaming API to support history
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 
+	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
+	if result == nil {
+		result = &agent.RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
+	}
+
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "\nExit: %s | Iterations: %d\n", result.ExitReason, result.IterationsUsed)
+	}
+	os.Exit(exitCodeForReason(result.ExitReason))
+	return nil
+}
+
+// ── Output Format ──────────────────────────────────────────────────────────
+
+// outputFormat represents the available output formats for `tachi run`.
+type outputFormat int
+
+const (
+	outputText       outputFormat = iota // human-readable text (default)
+	outputJSON                           // single JSON object
+	outputJSONStream                     // NDJSON stream
+)
+
+func (f outputFormat) String() string {
+	switch f {
+	case outputJSON:
+		return "json"
+	case outputJSONStream:
+		return "json-stream"
+	default:
+		return "text"
+	}
+}
+
+// parseOutputFormat resolves the --output-format flag.
+func parseOutputFormat(cmd *cli.Command) outputFormat {
+	switch cmd.String("output-format") {
+	case "json":
+		return outputJSON
+	case "json-stream":
+		return outputJSONStream
+	default:
+		return outputText
+	}
+}
+
+// resolveQuiet determines whether progress output should be suppressed.
+// Automatically quiet when stdout is not a terminal (piped to another command).
+func resolveQuiet(cmd *cli.Command) bool {
+	if cmd.IsSet("quiet") {
+		return cmd.Bool("quiet")
+	}
+	return !term.IsTerminal(int(os.Stdout.Fd()))
+}
+
+// resolvePrompt returns the user prompt from --prompt flag or stdin pipe.
+// Returns an error if neither is provided.
+func resolvePrompt(cmd *cli.Command) (string, error) {
+	if prompt := cmd.String("prompt"); prompt != "" {
+		return prompt, nil
+	}
+	// Check if stdin is being piped (not a terminal).
+	stat, err := os.Stdin.Stat()
+	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
+		pipeData, readErr := io.ReadAll(os.Stdin)
+		if readErr == nil && len(pipeData) > 0 {
+			return strings.TrimSpace(string(pipeData)), nil
+		}
+	}
+	return "", errors.New("no prompt provided")
+}
+
+// applyToolRestrictions parses --allowed-tools and --disallowed-tools flags
+// and delegates to agent.RestrictTools.
+func applyToolRestrictions(aiAgent *agent.AIAgent, cmd *cli.Command) {
+	allowed := strings.TrimSpace(cmd.String("allowed-tools"))
+	disallowed := strings.TrimSpace(cmd.String("disallowed-tools"))
+	if allowed == "" && disallowed == "" {
+		return
+	}
+
+	var allowedList, disallowedList []string
+	if allowed != "" {
+		for _, name := range strings.Split(allowed, ",") {
+			if n := strings.TrimSpace(name); n != "" {
+				allowedList = append(allowedList, n)
+			}
+		}
+	}
+	if disallowed != "" {
+		for _, name := range strings.Split(disallowed, ",") {
+			if n := strings.TrimSpace(name); n != "" {
+				disallowedList = append(disallowedList, n)
+			}
+		}
+	}
+	aiAgent.RestrictTools(allowedList, disallowedList)
+}
+
+// runOutputLoop dispatches to the correct output handler based on format.
+func runOutputLoop(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent, fmt outputFormat, quiet bool) *agent.RunResult {
+	switch fmt {
+	case outputJSON:
+		return runOutputJSON(ch)
+	case outputJSONStream:
+		return runOutputJSONStream(aiAgent, ch)
+	default:
+		return runOutputText(aiAgent, ch, quiet)
+	}
+}
+
+// runOutputText streams text delta events to stdout and progress to stderr.
+func runOutputText(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent, quiet bool) *agent.RunResult {
+	var result *agent.RunResult
+	for event := range ch {
+		switch event.Type {
+		case agent.AgentEventTextDelta:
+			fmt.Fprint(os.Stdout, event.TextDelta)
+			os.Stdout.Sync()
+
+		case agent.AgentEventThinkingDelta:
+			if !quiet {
+				fmt.Fprint(os.Stderr, event.ThinkingDelta)
+			}
+
+		case agent.AgentEventToolCallStart:
+			if !quiet {
+				fmt.Fprintf(os.Stderr, "\n🔧 %s(", event.ToolName)
+			}
+
+		case agent.AgentEventToolCallArgs:
+			if !quiet {
+				trunc := event.ToolArgs
+				if len(trunc) > 60 {
+					trunc = trunc[:60] + "..."
+				}
+				fmt.Fprintf(os.Stderr, "%s)\n", trunc)
+			}
+
+		case agent.AgentEventToolResult:
+			if !quiet {
+				icon := "✅"
+				if event.ToolIsError {
+					icon = "❌"
+				}
+				fmt.Fprintf(os.Stderr, " %s (%v)\n", icon, event.ToolDuration.Round(time.Millisecond))
+			}
+
+		case agent.AgentEventTurnComplete:
+			result = event.Result
+
+		case agent.AgentEventError:
+			result = event.Result
+
+		case agent.AgentEventToolConfirmation:
+			aiAgent.ConfirmTool(true)
+		}
+	}
+	return result
+}
+
+// streamEvent is a single NDJSON event in json-stream output mode.
+type streamEvent struct {
+	Type         string     `json:"type"`
+	Content      string     `json:"content,omitempty"`
+	ToolName     string     `json:"tool_name,omitempty"`
+	ToolArgs     string     `json:"tool_args,omitempty"`
+	ToolCallID   string     `json:"tool_call_id,omitempty"`
+	ToolResult   string     `json:"tool_result,omitempty"`
+	DurationMS   int64      `json:"duration_ms,omitempty"`
+	IsError      bool       `json:"is_error,omitempty"`
+	ExitReason   string     `json:"exit_reason,omitempty"`
+	Iterations   int        `json:"iterations_used,omitempty"`
+	Usage        *usageJSON `json:"usage,omitempty"`
+	Error        string     `json:"error,omitempty"`
+}
+
+// usageJSON is the serializable representation of token usage.
+type usageJSON struct {
+	InputTokens              int64 `json:"input_tokens"`
+	OutputTokens             int64 `json:"output_tokens"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens"`
+}
+
+func usageToJSON(u *llm.Usage) *usageJSON {
+	if u == nil {
+		return nil
+	}
+	return &usageJSON{
+		InputTokens:              u.InputTokens,
+		OutputTokens:             u.OutputTokens,
+		CacheCreationInputTokens: u.CacheCreationInputTokens,
+		CacheReadInputTokens:     u.CacheReadInputTokens,
+	}
+}
+
+// runOutputJSON collects all events and outputs a single JSON object to stdout.
+func runOutputJSON(ch <-chan agent.AgentEvent) *agent.RunResult {
 	var result *agent.RunResult
 	for event := range ch {
 		switch event.Type {
@@ -494,35 +645,84 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		case agent.AgentEventError:
 			result = event.Result
 		case agent.AgentEventToolConfirmation:
+		}
+	}
+
+	if result != nil {
+		out := struct {
+			ExitReason     string     `json:"exit_reason"`
+			IterationsUsed int        `json:"iterations_used"`
+			Response       string     `json:"response"`
+			Usage          *usageJSON `json:"usage,omitempty"`
+			Error          string     `json:"error,omitempty"`
+		}{
+			ExitReason:     result.ExitReason,
+			IterationsUsed: result.IterationsUsed,
+			Response:       result.Response,
+			Usage:          usageToJSON(result.Usage),
+		}
+		if result.Error != nil {
+			out.Error = result.Error.Error()
+		}
+		json.NewEncoder(os.Stdout).Encode(out)
+	}
+	return result
+}
+
+// runOutputJSONStream emits one JSON line per agent event to stdout.
+func runOutputJSONStream(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent) *agent.RunResult {
+	enc := json.NewEncoder(os.Stdout)
+	var result *agent.RunResult
+
+	for event := range ch {
+		switch event.Type {
+		case agent.AgentEventTextDelta:
+			enc.Encode(streamEvent{Type: "text_delta", Content: event.TextDelta})
+
+		case agent.AgentEventThinkingDelta:
+			enc.Encode(streamEvent{Type: "thinking_delta", Content: event.ThinkingDelta})
+
+		case agent.AgentEventToolCallStart:
+			// Wait for args which come in the next event.
+		case agent.AgentEventToolCallArgs:
+			enc.Encode(streamEvent{
+				Type:       "tool_call",
+				ToolName:   event.ToolName,
+				ToolArgs:   event.ToolArgs,
+				ToolCallID: event.ToolID,
+			})
+
+		case agent.AgentEventToolResult:
+			enc.Encode(streamEvent{
+				Type:       "tool_result",
+				ToolName:   event.ToolName,
+				ToolResult: event.ToolResult,
+				DurationMS: event.ToolDuration.Milliseconds(),
+				IsError:    event.ToolIsError,
+			})
+
+		case agent.AgentEventTurnComplete:
+			result = event.Result
+			enc.Encode(streamEvent{
+				Type:       "turn_complete",
+				ExitReason: result.ExitReason,
+				Iterations: result.IterationsUsed,
+				Usage:      usageToJSON(result.Usage),
+			})
+
+		case agent.AgentEventError:
+			result = event.Result
+			errMsg := ""
+			if result.Error != nil {
+				errMsg = result.Error.Error()
+			}
+			enc.Encode(streamEvent{Type: "error", Error: errMsg})
+
+		case agent.AgentEventToolConfirmation:
 			aiAgent.ConfirmTool(true)
 		}
 	}
-	if result == nil {
-		result = &agent.RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
-	}
-
-	if jsonOutput {
-		// Emit structured JSON to stdout.
-		jr := runJSONResult{
-			ExitReason:     result.ExitReason,
-			IterationsUsed: result.IterationsUsed,
-			Usage:          usageToJSON(result.Usage),
-			Response:       result.Response,
-		}
-		if result.Error != nil {
-			jr.Error = result.Error.Error()
-		}
-		out, _ := json.Marshal(jr)
-		fmt.Println(string(out))
-	} else {
-		fmt.Printf("Exit Reason: %s\n", result.ExitReason)
-		fmt.Printf("Iterations Used: %d\n", result.IterationsUsed)
-		fmt.Printf("\nResponse:\n%s\n", result.Response)
-	}
-
-	// Map exit reason to proper exit code.
-	os.Exit(exitCodeForReason(result.ExitReason))
-	return nil
+	return result
 }
 
 // runChannels starts all channels declared in config.
