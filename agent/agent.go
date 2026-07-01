@@ -601,6 +601,40 @@ func (a *AIAgent) ClearToolRegistry() {
 	}
 }
 
+// RestrictTools unregisters tools based on allowed/disallowed lists.
+// When allowed is non-empty, only tools in the whitelist are kept (disallowed ignored).
+// When only disallowed is non-empty, those tools are removed and everything else kept.
+func (a *AIAgent) RestrictTools(allowed, disallowed []string) {
+	if len(allowed) == 0 && len(disallowed) == 0 {
+		return
+	}
+
+	if len(allowed) > 0 {
+		// Whitelist mode: keep only tools in the set.
+		keep := make(map[string]bool)
+		for _, name := range allowed {
+			keep[name] = true
+		}
+		for _, name := range a.ToolNames() {
+			if !keep[name] {
+				a.UnregisterTool(name)
+			}
+		}
+		return
+	}
+
+	// Blacklist mode: remove only tools in the set.
+	remove := make(map[string]bool)
+	for _, name := range disallowed {
+		remove[name] = true
+	}
+	for _, name := range a.ToolNames() {
+		if remove[name] {
+			a.UnregisterTool(name)
+		}
+	}
+}
+
 // SetProcessManager injects a ProcessManager for background process tracking.
 // Used by channel Manager to share a single PM across per-turn AIAgent instances.
 // Has no effect after RegisterTools() has already been called, so call it before
