@@ -74,20 +74,20 @@ func (c *childAdapter) Run(
 	go func() {
 		defer close(out)
 
-		child := NewAIAgent(c.childProvider, c.childModel, c.maxIterations)
-		child.SetSkipEditConfirm(true)
-		child.SetLogger(c.logger)
-		child.SetReminderCollector(nil) // no reminders for sub-agents
+		forked := c.parent.Fork(ForkConfig{
+			Provider:      c.childProvider,
+			Model:         c.childModel,
+			MaxIterations: c.maxIterations,
+			AllowedTools:  c.allowedTools,
+			Logger:        c.logger,
+			SessionID:     c.sessionID,
+		})
+		defer forked.Close()
 
-		// Register filtered tools
-		for _, name := range c.allowedTools {
-			if tool := c.parent.toolRegistry.GetTool(name); tool != nil {
-				child.toolRegistry.Register(tool)
-			}
-		}
+		child := forked.Agent()
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = defaultMaxTokens
+			opts.MaxTokens = DefaultMaxTokens
 		}
 
 		// Run via RunOneOffStream — we consume parent agent events and

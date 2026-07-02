@@ -173,7 +173,7 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = defaultMaxTokens
+			opts.MaxTokens = DefaultMaxTokens
 		}
 
 		// Build fresh messages: system + wrapped user message, no history
@@ -204,7 +204,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		defer func() { a.steerRespCh = nil }()
 
 		if opts.MaxTokens <= 0 {
-			opts.MaxTokens = defaultMaxTokens
+			opts.MaxTokens = DefaultMaxTokens
 		}
 
 		messages := make([]llm.Message, len(history))

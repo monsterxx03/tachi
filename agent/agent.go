@@ -19,7 +19,9 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-const defaultMaxTokens = 4096
+// DefaultMaxTokens is the fallback max_tokens value for LLM API calls
+// when no explicit value is configured.
+const DefaultMaxTokens = 4096
 
 type IterationBudget struct {
 	Remaining int

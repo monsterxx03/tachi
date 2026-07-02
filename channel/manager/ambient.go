@@ -7,9 +7,19 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
+
+// defaultAmbientTools is the default tool whitelist for ambient turns
+// when config.ambient_tools is not set.
+var defaultAmbientTools = []string{
+	tools.ToolNameMemoryRecall,
+	tools.ToolNameRecordMemory,
+	tools.ToolNameWebFetch,
+	tools.ToolNameWebSearch,
+}
 
 // whisperPromptSuffix is appended to the system prompt for group chat sessions.
 // It instructs the agent on when to speak and when to stay silent.
@@ -138,8 +148,9 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 	m.runAmbientTurn(threadID, msgs)
 }
 
-// runAmbientTurn starts a lightweight agent turn with the batched ambient messages.
-// The agent decides whether to reply or stay silent.
+// runAmbientTurn starts a forked ambient turn for the batched ambient messages.
+// The turn runs in an isolated agent (Fork) with restricted tools and no session
+// recording. The agent decides whether to reply or stay silent.
 func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	prov, resolved, _ := m.getProviderForThread(threadID)
 	if prov == nil || resolved == nil {
@@ -147,39 +158,63 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 		return
 	}
 
+	whisperCfg := m.cfg.Channel.Whisper
 	ctx := context.Background()
 
-	aiAgent, ca, sink, cleanup, err := m.acquireForTurn(ctx, threadID, false)
+	maxTokens := whisperCfg.AmbientMaxTokens
+	if maxTokens <= 0 {
+		maxTokens = agent.DefaultMaxTokens
+	}
+
+	allowedTools := whisperCfg.AmbientTools
+	if len(allowedTools) == 0 {
+		allowedTools = defaultAmbientTools
+	}
+
+	// Acquire cached agent — we only need it for shared resources (MCP, PM)
+	// and to load session history. Release immediately after Fork().
+	ca, err := m.acquireAgent(ctx, threadID)
 	if err != nil {
-		m.logger.Log("channel: ambient turn acquire failed thread=%s: %v", threadID, err)
+		m.logger.Log("channel: ambient fork acquire failed thread=%s: %v", threadID, err)
 		return
 	}
-	defer cleanup()
+	parentAgent := ca.agent
 
-	// Session setup.
-	sm, diskHistory := m.prepareThreadSession(threadID, resolved)
-	if sm != nil {
-		aiAgent.SetSessionManager(sm)
-		aiAgent.StartSessionMemory()
+	// Load session history from parent.
+	history, err := parentAgent.LoadSessionHistory()
+	if err != nil {
+		m.logger.Log("channel: ambient fork load history failed thread=%s: %v", threadID, err)
+		m.releaseAgent(ca)
+		return
 	}
 
-	priorHistory := diskHistory
-	if ca != nil && ca.history != nil {
-		priorHistory = ca.history
-	}
+	// Fork a restricted agent — inherits shared MCP + PM from parent.
+	forked := parentAgent.Fork(agent.ForkConfig{
+		Provider:      prov,
+		Model:         resolved.Provider.Model,
+		MaxIterations: whisperCfg.AmbientMaxIterations,
+		AllowedTools:  allowedTools,
+		Logger:        m.logger.WithPrefix("ambient-fork"),
+		SessionID:     "ambient-" + threadID,
+	})
 
-	// Build ambient user prompt.
-	userContent := buildAmbientPrompt(msgs)
+	// Release the cached agent now — the fork holds its own refs to shared resources.
+	m.releaseAgent(ca)
+
+	defer forked.Close()
+	forkAgent := forked.Agent()
+	forkAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Build system prompt with whisper suffix for group chat.
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "") + "\n" + whisperPromptSuffix
 
-	// Create a temporary steer channel for the ambient turn
-	// so new ambient messages arriving during execution can be injected.
+	// Steer channel — new ambient/directed messages arriving during
+	// the fork turn are injected via steer (drainEvents handles this).
 	steerCh := make(chan string)
-	aiAgent.SetSteerChannel(steerCh)
+	forkAgent.SetSteerChannel(steerCh)
 
-	// Mark the thread as having an active turn.
+	// Mark the thread as having an active turn (so handleAmbientMessage
+	// and the directed handler buffer instead of starting new turns).
 	ta, ok := m.threadActivations.Load(threadID)
 	if !ok {
 		return
@@ -189,17 +224,13 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	ta.resultCh = make(chan handlerResult, 1)
 	ta.mu.Unlock()
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
-		MaxTokens: resolved.MaxTokens,
-	})
-	text, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(threadID), nil, ta)
-
-	// Update cached history.
-	if ca != nil {
-		if lastMsgs := aiAgent.GetLastMessages(); len(lastMsgs) > 0 {
-			ca.history = lastMsgs
-		}
-	}
+	// Run — no session recording (no SessionManager), no memory writes
+	// (no memory backend), no auto-compact (no cfg). Uses RunConversationStream
+	// for history + steer support.
+	eventCh := forkAgent.RunConversationStream(ctx, history,
+		buildAmbientPrompt(msgs), systemPrompt,
+		llm.ChatOptions{MaxTokens: maxTokens})
+	text, err := m.drainEvents(eventCh, forkAgent, m.isVerboseFor(threadID), nil, ta)
 
 	// Clean up thread activation state.
 	ta.mu.Lock()
@@ -209,29 +240,21 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	ta.mu.Unlock()
 
 	if err != nil {
-		m.logger.Log("channel: ambient turn error thread=%s: %v", threadID, err)
+		m.logger.Log("channel: ambient fork turn error thread=%s: %v", threadID, err)
 		return
 	}
 
 	// Check if the agent chose silence.
 	if m.isSilence(text) {
 		count := ta.silenceCount.Add(1)
-		m.logger.Log("channel: ambient SILENCE thread=%s (consecutive=%d) text=%q", threadID, count, text)
+		m.logger.Log("channel: ambient fork SILENCE thread=%s (consecutive=%d) text=%q", threadID, count, text)
 		return
 	}
 
 	// Agent has something to say — reset silence counter and send.
 	ta.silenceCount.Store(0)
-
-	m.logger.Log("channel: ambient reply thread=%s len=%d", threadID, len(text))
+	m.logger.Log("channel: ambient fork reply thread=%s len=%d", threadID, len(text))
 	m.sendToThread(ctx, threadID, text, "")
-
-	// Collect any file attachments.
-	if sink != nil {
-		if attachments := sink.snapshot(); len(attachments) > 0 {
-			m.logger.Log("channel: ambient attachments thread=%s count=%d", threadID, len(attachments))
-		}
-	}
 }
 
 // isSilence checks if the reply matches the silence marker.
