@@ -110,8 +110,12 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	// Don't set steer channel — ACP doesn't use mid-turn injection
 
-	// Configure agent (registers tools, connects MCP, sets up memory/skills)
-	mcpMgr, err := aiAgent.Configure(ctx, t.cfg)
+	// Configure agent (registers tools, connects MCP, sets up memory/skills).
+	// Use context.Background() so the background MCP async init goroutine
+	// is not tied to the SDK's request-scoped context (which is cancelled
+	// when NewSession returns).
+	configureCtx := context.Background()
+	mcpMgr, err := aiAgent.Configure(configureCtx, t.cfg)
 	if err != nil {
 		t.logger.Log("ACP: agent configure warning: %v", err)
 	}
@@ -120,7 +124,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	if len(req.McpServers) > 0 && mcpMgr != nil {
 		editorServers := convertMCPServers(req.McpServers, t.cfg.ACP.MCPConflictPolicy, t.cfg.MCPServers)
 		if len(editorServers) > 0 {
-			editorTools, errs := mcpMgr.ConnectAll(ctx, editorServers)
+			editorTools, errs := mcpMgr.ConnectAll(configureCtx, editorServers)
 			for _, e := range errs {
 				t.logger.Log("ACP: editor MCP connect error: %v", e)
 			}
@@ -409,7 +413,10 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
-	mcpMgr, cfgErr := aiAgent.Configure(ctx, t.cfg)
+	// Use context.Background() so MCP async init is not tied to the SDK
+	// request-scoped context (same rationale as NewSession).
+	configureCtx := context.Background()
+	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
 	if cfgErr != nil {
 		t.logger.Log("ACP: resume configure warning: %v", cfgErr)
 	}
@@ -515,8 +522,11 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
-	// Configure agent (registers tools, connects MCP, sets up memory/skills)
-	mcpMgr, cfgErr := aiAgent.Configure(ctx, t.cfg)
+	// Configure agent (registers tools, connects MCP, sets up memory/skills).
+	// Use context.Background() so MCP async init is not tied to the SDK
+	// request-scoped context (same rationale as NewSession).
+	configureCtx := context.Background()
+	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
 	if cfgErr != nil {
 		t.logger.Log("ACP: LoadSession configure warning: %v", cfgErr)
 	}
@@ -525,7 +535,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	if len(req.McpServers) > 0 && mcpMgr != nil {
 		editorServers := convertMCPServers(req.McpServers, t.cfg.ACP.MCPConflictPolicy, t.cfg.MCPServers)
 		if len(editorServers) > 0 {
-			editorTools, errs := mcpMgr.ConnectAll(ctx, editorServers)
+			editorTools, errs := mcpMgr.ConnectAll(configureCtx, editorServers)
 			for _, e := range errs {
 				t.logger.Log("ACP: LoadSession editor MCP connect error: %v", e)
 			}
