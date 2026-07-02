@@ -40,8 +40,10 @@ func (t AskUserTool) Description() string {
 		"3. Get decisions on implementation choices as you work\n" +
 		"4. Offer choices to the user about what direction to take.\n\n" +
 		"Usage notes:\n" +
-		"- Users will always be able to select \"Other\" to provide custom text input\n" +
-		"- Use multiSelect: true to allow multiple answers to be selected for a question\n" +
+		"- When you have specific options in mind, provide them in the options array (2-4 items). " +
+		"Each option has a label and description. Use multiSelect: true to allow multiple selections.\n" +
+		"- When you need open-ended input and cannot enumerate reasonable options, OMIT the options field " +
+		"entirely. The user will be presented with a free-text input box.\n" +
 		"- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label"
 }
 
@@ -49,7 +51,7 @@ func (t AskUserTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"questions": {
 			Type:        "array",
-			Description: "Questions to ask the user (1-4 questions). Each question has: question (the question text), header (short label shown as chip), options (array of 2-4 options with label and description), and multiSelect (boolean to allow multiple selections).",
+			Description: "Questions to ask the user (1-4 questions). When options are provided, each option becomes a selectable choice. When options is empty or omitted, the user gets a free-text input box instead.",
 			Items: map[string]any{
 				"type": "object",
 				"properties": map[string]any{
@@ -58,6 +60,7 @@ func (t AskUserTool) Properties() map[string]PropertySchema {
 					"multiSelect": map[string]any{"type": "boolean", "description": "Whether to allow multiple selections"},
 					"options": map[string]any{
 						"type": "array",
+						"description": "Pre-defined choices (omit this field entirely for a free-text input box instead)",
 						"items": map[string]any{
 							"type": "object",
 							"properties": map[string]any{
@@ -68,7 +71,7 @@ func (t AskUserTool) Properties() map[string]PropertySchema {
 						},
 					},
 				},
-				"required": []string{"question", "header", "options", "multiSelect"},
+				"required": []string{"question", "header", "multiSelect"},
 			},
 		},
 	}
