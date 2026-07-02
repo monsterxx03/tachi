@@ -371,6 +371,14 @@ type ChannelWhisperConfig struct {
 	// it has nothing to say. Matching is lenient (trim + case-insensitive).
 	// Default: "SILENCE".
 	SilenceMarker string `yaml:"silence_marker" default:"SILENCE"`
+
+	// AmbientTools is the tool whitelist for ambient turns.
+	// Empty (default) = [MemoryRecall, RecordMemory, WebFetch, WebSearch].
+	AmbientTools []string `yaml:"ambient_tools"`
+
+	// AmbientMaxTokens is the max_tokens budget for ambient turns.
+	// Default: falls back to agent.DefaultMaxTokens.
+	AmbientMaxTokens int `yaml:"ambient_max_tokens"`
 }
 
 // ActiveChannels returns the raw configs for every enabled channel,

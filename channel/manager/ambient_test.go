@@ -291,6 +291,8 @@ func TestChannelWhisperConfig_Defaults(t *testing.T) {
 	assert.Equal(t, 30*time.Second, cfg.Channel.Whisper.AmbientBatchWindow)
 	assert.Equal(t, 5, cfg.Channel.Whisper.AmbientMaxIterations)
 	assert.Equal(t, 50, cfg.Channel.Whisper.AmbientMaxBuffer)
+	assert.Empty(t, cfg.Channel.Whisper.AmbientTools)
+	assert.Equal(t, 0, cfg.Channel.Whisper.AmbientMaxTokens) // zero; fallback is agent.DefaultMaxTokens in code
 }
 
 func TestChannelWhisperConfig_CustomValues(t *testing.T) {
@@ -300,6 +302,8 @@ func TestChannelWhisperConfig_CustomValues(t *testing.T) {
 		AmbientMaxIterations: 3,
 		AmbientMaxBuffer:     20,
 		SilenceMarker:        "SKIP",
+		AmbientTools:         []string{"MemoryRecall", "MemoryRecord"},
+		AmbientMaxTokens:     2048,
 	}
 
 	assert.False(t, cfg.Enabled)
@@ -307,4 +311,6 @@ func TestChannelWhisperConfig_CustomValues(t *testing.T) {
 	assert.Equal(t, 3, cfg.AmbientMaxIterations)
 	assert.Equal(t, 20, cfg.AmbientMaxBuffer)
 	assert.Equal(t, "SKIP", cfg.SilenceMarker)
+	assert.Equal(t, []string{"MemoryRecall", "MemoryRecord"}, cfg.AmbientTools)
+	assert.Equal(t, 2048, cfg.AmbientMaxTokens)
 }
