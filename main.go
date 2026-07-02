@@ -109,7 +109,7 @@ func main() {
 					&cli.StringFlag{
 						Name:    "prompt",
 						Aliases: []string{"p"},
-						Usage:   "User prompt to send (if empty, reads stdin)",
+						Usage:   "User prompt to send (stdin content appended when piped)",
 					},
 					&cli.StringFlag{
 						Name:    "output-format",
@@ -510,19 +510,30 @@ func resolveQuiet(cmd *cli.Command) bool {
 	return !term.IsTerminal(int(os.Stdout.Fd()))
 }
 
-// resolvePrompt returns the user prompt from --prompt flag or stdin pipe.
+// resolvePrompt returns the user prompt from --prompt flag and/or stdin pipe.
+// When both are provided, stdin content is appended after the --prompt.
 // Returns an error if neither is provided.
 func resolvePrompt(cmd *cli.Command) (string, error) {
-	if prompt := cmd.String("prompt"); prompt != "" {
-		return prompt, nil
-	}
+	flagPrompt := cmd.String("prompt")
+	var pipeData string
+
 	// Check if stdin is being piped (not a terminal).
 	stat, err := os.Stdin.Stat()
 	if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
-		pipeData, readErr := io.ReadAll(os.Stdin)
-		if readErr == nil && len(pipeData) > 0 {
-			return strings.TrimSpace(string(pipeData)), nil
+		data, readErr := io.ReadAll(os.Stdin)
+		if readErr == nil && len(data) > 0 {
+			pipeData = strings.TrimSpace(string(data))
 		}
+	}
+
+	if flagPrompt != "" && pipeData != "" {
+		return flagPrompt + "\n" + pipeData, nil
+	}
+	if flagPrompt != "" {
+		return flagPrompt, nil
+	}
+	if pipeData != "" {
+		return pipeData, nil
 	}
 	return "", errors.New("no prompt provided")
 }
