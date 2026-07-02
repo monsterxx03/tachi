@@ -144,6 +144,12 @@ type IncomingMessage struct {
 	// When non-nil, the handler routes this message directly to the waiting
 	// agent rather than queuing it as a new turn or steer input.
 	AskUserAnswers map[string]string
+
+	// CancelAskUser is set by interactive channels when the user explicitly
+	// cancels an AskUserQuestion prompt (e.g., by clicking a "取消" button).
+	// When true, AskUserAnswers is ignored and nil answers are routed to the
+	// agent, signalling cancellation.
+	CancelAskUser bool
 }
 
 // OutgoingAttachment represents a file or media attachment to be sent
@@ -351,4 +357,16 @@ type InteractiveChannel interface {
 	// (interactive cards, buttons, forms, etc.). The user's reply arrives
 	// through the normal handler path and is routed to the agent.
 	PresentQuestions(ctx context.Context, threadID, replyID string, questions []Question) error
+}
+
+// SystemPromptSuffixer is an optional interface for channels that want to
+// inject additional instructions into the agent's system prompt. The suffix
+// is appended once per turn, after the base system prompt and any
+// manager-level suffixes (e.g., whisper mode).
+//
+// Typical use: a channel with interactive cards (AskUserQuestion) uses this
+// to tell the LLM to proactively ask the user for clarification.
+type SystemPromptSuffixer interface {
+	Channel
+	SystemPromptSuffix() string
 }

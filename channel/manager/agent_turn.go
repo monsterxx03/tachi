@@ -153,7 +153,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			// fallback answer (user typed directly instead of using UI).
 			if ta.askUserRespCh != nil && !isCompactCmd && !isSkillActivation {
 				answers := msg.AskUserAnswers
-				if answers == nil {
+				if msg.CancelAskUser {
+					// Explicit cancellation — route nil answers to signal the agent.
+					answers = nil
+				} else if answers == nil {
 					// Fallback: treat raw text as answer to the first question.
 					answers = map[string]string{"q0": msg.Content}
 				}
@@ -358,6 +361,17 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
 	if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
 		systemPrompt += "\n" + whisperPromptSuffix
+	}
+
+	// Append channel-specific system prompt suffix (e.g., interactive
+	// channels telling the LLM to use AskUserQuestion proactively).
+	m.threadChannelMu.RLock()
+	threadCh := m.threadChannels[msg.ThreadID]
+	m.threadChannelMu.RUnlock()
+	if s, ok := threadCh.(channel.SystemPromptSuffixer); ok {
+		if suffix := s.SystemPromptSuffix(); suffix != "" {
+			systemPrompt += "\n" + suffix
+		}
 	}
 
 	// Store thread context for AskUser support — drainEvents uses these
