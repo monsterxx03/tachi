@@ -31,9 +31,24 @@ func NewAskUserView(questions []tools.Question, width int) *AskUserView {
 		otherTexts: make(map[int]string),
 		width:      width,
 	}
-	// Restore per-question "Other" state from previous question data.
-	// (this is a no-op for fresh views but keeps the struct consistent)
+	// If the first question has no pre-defined options, drop straight into
+	// free-text editing mode.
+	v.autoEnterFreeText()
 	return v
+}
+
+// autoEnterFreeText jumps directly into free-text editing mode when the
+// current question has no pre-defined options.
+func (v *AskUserView) autoEnterFreeText() {
+	if v.curQuestion >= len(v.questions) {
+		return
+	}
+	q := v.questions[v.curQuestion]
+	if len(q.Options) == 0 {
+		v.otherSelected = true
+		v.otherEditing = true
+		v.otherCursor = utf8.RuneCountInString(v.otherTexts[v.curQuestion])
+	}
 }
 
 // Height returns the number of lines this view will render.
@@ -144,6 +159,7 @@ func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
 			v.curQuestion--
 			v.cursorPos = 0
 			v.restoreOtherState()
+			v.autoEnterFreeText()
 		}
 	case "space":
 		if v.cursorPos == otherIdx {
@@ -273,6 +289,7 @@ func (v *AskUserView) advance() (submit bool, cancelled bool) {
 		v.otherSelected = false
 		v.otherEditing = false
 		v.restoreOtherState()
+		v.autoEnterFreeText()
 		return false, false
 	}
 	return true, false
@@ -308,6 +325,8 @@ func (v *AskUserView) Render() string {
 	// Hint line
 	hint := "↑↓ navigate  "
 	if v.otherEditing {
+		hint = "Type your answer  Enter confirm  Esc cancel"
+	} else if len(q.Options) == 0 {
 		hint = "Type your answer  Enter confirm  Esc cancel"
 	} else if q.MultiSelect {
 		hint += "Space toggle  Enter confirm  Tab free input  "
