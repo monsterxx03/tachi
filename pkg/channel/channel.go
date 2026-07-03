@@ -227,6 +227,7 @@ type HandlerResult struct {
 	Reply    OutgoingMessage // The final reply; zero value when Steered or Buffered.
 	Steered  bool            // True if the message was injected as steer input.
 	Buffered bool            // True if the message was buffered for ambient processing.
+	Streamed bool            // True if the reply was sent via streaming card; channel should not sendMessage again.
 	Err      error           // Non-nil when processing failed.
 }
 

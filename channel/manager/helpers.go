@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"encoding/base64"
 	"fmt"
 	"strings"
@@ -131,4 +132,26 @@ func truncateForDisplay(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
+}
+
+// --- Streaming callback context ---
+
+type streamingCtxKey struct{}
+
+// StreamingCallback is called for each text delta during an agent turn.
+// The channel implementation (e.g. wave) uses this to push text deltas
+// to a streaming card in real time.
+type StreamingCallback func(textDelta string) error
+
+// WithStreamingCallback attaches a streaming callback to the context.
+// The callback is extracted in runAgentTurn and passed to drainEvents,
+// which calls it for every AgentEventTextDelta.
+func WithStreamingCallback(ctx context.Context, cb StreamingCallback) context.Context {
+	return context.WithValue(ctx, streamingCtxKey{}, cb)
+}
+
+// streamingCallbackFromCtx extracts the StreamingCallback from context, if any.
+func streamingCallbackFromCtx(ctx context.Context) StreamingCallback {
+	cb, _ := ctx.Value(streamingCtxKey{}).(StreamingCallback)
+	return cb
 }

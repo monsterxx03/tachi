@@ -230,7 +230,7 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	eventCh := forkAgent.RunConversationStream(ctx, history,
 		buildAmbientPrompt(msgs), systemPrompt,
 		llm.ChatOptions{MaxTokens: maxTokens})
-	text, err := m.drainEvents(eventCh, forkAgent, nil, ta)
+	text, err := m.drainEvents(eventCh, forkAgent, nil, ta, nil)
 
 	// Clean up thread activation state.
 	ta.mu.Lock()
