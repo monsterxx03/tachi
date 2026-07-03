@@ -2,7 +2,7 @@
 
 # Tachi Chrome Extension Build
 
-SRC := manifest.json background.js sidepanel.html
+SRC := manifest.json background.js sidepanel.html translate-popup.html translate-popup.js
 DIST := dist
 BUNDLE_ENTRIES := content.js sidepanel.js
 

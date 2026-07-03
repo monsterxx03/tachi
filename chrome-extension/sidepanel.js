@@ -1,8 +1,7 @@
 // sidepanel.js — Tachi Side Panel
 //
-// Chat interface for page summarization and follow-up conversation.
-// On load, auto-triggers page summarization. User can ask follow-up
-// questions with full page context maintained by tachi.
+// Chat interface for page summarization, follow-up conversation,
+// and in-page translation.
 //
 // Communicates with background.js via chrome.runtime.sendMessage.
 
@@ -14,12 +13,17 @@ const messages = document.getElementById("messages");
 const input = document.getElementById("input");
 const sendBtn = document.getElementById("sendBtn");
 const btnRefresh = document.getElementById("btnRefresh");
+const btnTranslate = document.getElementById("btnTranslate");
 const pageUrl = document.getElementById("pageUrl");
 const initialLoading = document.getElementById("initialLoading");
+const translateBar = document.getElementById("translateBar");
+const transCount = document.getElementById("transCount");
+const btnCloseTranslate = document.getElementById("btnCloseTranslate");
 
 // ── State ────────────────────────────────────────────────────────────────────
 
-let isWaiting = false; // true while waiting for a response
+let isWaiting = false;
+let translateMode = null; // null | "original" | "bilingual" | "translated"
 
 // ── Initialization ───────────────────────────────────────────────────────────
 
@@ -52,12 +56,44 @@ function setupListeners() {
     triggerSummary();
   });
 
-  // Listen for refresh signal from background (when icon is clicked
-  // while the side panel is already open)
+  // Translate button
+  btnTranslate.addEventListener("click", () => {
+    triggerTranslation();
+  });
+
+  // Mode toggle buttons in translate bar
+  document.querySelectorAll(".mode-btn[data-mode]").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      const mode = btn.getAttribute("data-mode");
+      setTranslateModeUI(mode);
+      // Tell background to update content script
+      chrome.runtime.sendMessage({
+        type: "set_translate_mode",
+        mode: mode,
+      }).catch((err) => {
+        console.error("Tachi: set translate mode error:", err);
+      });
+    });
+  });
+
+  // Close translation
+  btnCloseTranslate.addEventListener("click", () => {
+    disableTranslation();
+  });
+
+  // Listen for messages from background/content script
   chrome.runtime.onMessage.addListener((msg) => {
-    if (msg.type === "sidepanel_refresh") {
-      clearMessages();
-      triggerSummary();
+    switch (msg.type) {
+      case "sidepanel_refresh":
+        clearMessages();
+        triggerSummary();
+        break;
+      case "translation_mode_changed":
+        // Floating toggle button was clicked in content script
+        if (msg.mode) {
+          setTranslateModeUI(msg.mode);
+        }
+        break;
     }
   });
 }
@@ -68,6 +104,9 @@ async function triggerSummary() {
   showLoading(true);
   setInputEnabled(false);
   pageUrl.textContent = "—";
+
+  // Reset translate bar
+  hideTranslateBar();
 
   try {
     const response = await chrome.runtime.sendMessage({ type: "get_page_summary" });
@@ -94,6 +133,105 @@ async function triggerSummary() {
     addMessage("error", `通信失败: ${err.message}`);
     setInputEnabled(true);
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRANSLATION FLOW
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function triggerTranslation() {
+  if (isWaiting) return;
+  isWaiting = true;
+
+  addMessage("translate-info", "🌐 正在翻译页面，请稍候…");
+  btnTranslate.classList.add("active");
+
+  try {
+    const response = await chrome.runtime.sendMessage({ type: "translate_page" });
+
+    // Remove the "translating" info message
+    const lastMsg = messages.lastElementChild;
+    if (lastMsg && lastMsg.classList.contains("translate-info")) {
+      lastMsg.remove();
+    }
+
+    if (response && response.error) {
+      addMessage("error", `翻译失败: ${response.error}`);
+      btnTranslate.classList.remove("active");
+      return;
+    }
+
+    if (response && response.ok) {
+      showTranslateBar(response.count || 0);
+      setTranslateModeUI("bilingual");
+      addMessage("translate-info", `✅ 已翻译 ${response.count || ""} 段`);
+    } else {
+      addMessage("error", `翻译返回了未知结果: ${JSON.stringify(response)}`);
+      btnTranslate.classList.remove("active");
+    }
+  } catch (err) {
+    const lastMsg = messages.lastElementChild;
+    if (lastMsg && lastMsg.classList.contains("translate-info")) {
+      lastMsg.remove();
+    }
+    addMessage("error", `翻译失败: ${err.message}`);
+    btnTranslate.classList.remove("active");
+  } finally {
+    isWaiting = false;
+    setInputEnabled(true);
+  }
+}
+
+// ── Translate Mode UI ────────────────────────────────────────────────────────
+
+function setTranslateModeUI(mode) {
+  translateMode = mode;
+
+  // Update button states
+  document.querySelectorAll(".mode-btn[data-mode]").forEach((btn) => {
+    const btnMode = btn.getAttribute("data-mode");
+    btn.classList.toggle("active", btnMode === mode);
+  });
+
+  // Update translate button icon in header to reflect current mode
+  const modeIcons = {
+    original: "📖",
+    bilingual: "🌐",
+    translated: "🌍",
+  };
+  btnTranslate.textContent = modeIcons[mode] || "🌐";
+  btnTranslate.classList.add("active");
+}
+
+// ── Show/Hide Translate Bar ─────────────────────────────────────────────────
+
+function showTranslateBar(count) {
+  translateBar.classList.add("visible");
+  if (count) {
+    transCount.textContent = `${count} 段`;
+  }
+}
+
+function hideTranslateBar() {
+  translateBar.classList.remove("visible");
+  transCount.textContent = "";
+  translateMode = null;
+  btnTranslate.classList.remove("active");
+  btnTranslate.textContent = "🌐";
+}
+
+// ── Disable Translation ──────────────────────────────────────────────────────
+
+async function disableTranslation() {
+  hideTranslateBar();
+
+  try {
+    await chrome.runtime.sendMessage({ type: "disable_translation" });
+  } catch (err) {
+    console.error("Tachi: disable translation error:", err);
+  }
+
+  addMessage("translate-info", "已关闭页面翻译");
 }
 
 // ── Send Flow ────────────────────────────────────────────────────────────────
@@ -151,7 +289,6 @@ function addMessage(role, content) {
 }
 
 function clearMessages() {
-  // Remove all message elements, keeping the loading placeholder
   const children = messages.querySelectorAll(".msg, .typing-indicator");
   children.forEach((c) => c.remove());
 }
