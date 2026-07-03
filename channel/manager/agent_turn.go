@@ -384,7 +384,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
-	text, err := m.drainEvents(eventCh, aiAgent, m.isVerboseFor(msg.ThreadID), sendProgress, ta)
+	text, err := m.drainEvents(eventCh, aiAgent, sendProgress, ta)
 
 	// Update the in-memory history cache with the full message slice from
 	// this turn (history + wrapped user msg + assistant + tool results).

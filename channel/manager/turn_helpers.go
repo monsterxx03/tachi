@@ -38,16 +38,6 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *config.Resolve
 	return sm, priorHistory
 }
 
-// isVerboseFor returns a closure that reads the current verbose state for
-// the given thread. The closure is evaluated each time it's called, so /v
-// toggles mid-turn are observed immediately rather than captured once.
-func (m *Manager) isVerboseFor(threadID string) func() bool {
-	return func() bool {
-		v, _ := m.verboseState.Load(threadID)
-		return v
-	}
-}
-
 // attachmentSink collects file attachments produced by the SendFile tool
 // during a single turn. The sink is registered as the tool's callback;
 // once the turn ends the caller calls Snapshot() to get the final list.

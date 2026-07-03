@@ -234,7 +234,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil, nil)
+	result, err := mgr.drainEvents(eventCh, aiAgent, nil, nil)
 	require.NoError(t, err)
 	assert.Equal(t, "Hello, I'm Tachi!", result)
 }
@@ -282,7 +282,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil, nil)
+	result, err := mgr.drainEvents(eventCh, aiAgent, nil, nil)
 	t.Logf("result=%q err=%v", result, err)
 	// Either result is set (tool executed) or err (file not found) — neither
 	// case is a deadlock. The function must return.
@@ -328,7 +328,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return false }, nil, nil)
+	result, err := mgr.drainEvents(eventCh, aiAgent, nil, nil)
 	t.Logf("result=%q err=%v", result, err)
 	// Must not deadlock — either completes with an error or empty response.
 }
@@ -409,145 +409,6 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	assert.Equal(t, sm1.Current().ID, sm2.Current().ID)
 }
 
-// TestDrainEvents_VerboseMode verifies that drainEvents sends intermediate
-// tool call results via sendProgress when verbose is true, and does not
-// bundle them into the final result.
-func TestDrainEvents_VerboseMode(t *testing.T) {
-	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-	})
-
-	// Create a provider that returns a tool_calls response followed by text.
-	mp := &mockProvider{}
-	callCount := 0
-	mp.streamFunc = func(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
-		ch := make(chan llm.StreamEvent, 16)
-		go func() {
-			defer close(ch)
-			callCount++
-			if callCount == 1 {
-				// First turn: tool calls with streaming args.
-				ch <- llm.StreamEvent{
-					Type:      llm.StreamEventToolUseStart,
-					ToolIndex: 0,
-					ToolCall: &llm.ToolCall{
-						ID: "tc-1",
-						Function: llm.ToolCallFunction{
-							Name: "Bash",
-						},
-					},
-				}
-				ch <- llm.StreamEvent{
-					Type:       llm.StreamEventInputJSONDelta,
-					ToolIndex:  0,
-					InputDelta: `{"command":"echo ok"}`,
-				}
-				ch <- llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "tool_calls"}
-			} else {
-				// Second turn: final text
-				for _, r := range "Build ok" {
-					ch <- llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: string(r)}
-				}
-				ch <- llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "stop"}
-			}
-		}()
-		return ch, nil
-	}
-
-	aiAgent := agent.NewAIAgent(mp, "mock-model", 10)
-	aiAgent.SetSkipEditConfirm(true)
-	aiAgent.RegisterTool(agenttools.BashTool{})
-
-	eventCh := aiAgent.RunConversationStream(
-		t.Context(),
-		nil,
-		"build the project",
-		"system prompt",
-		llm.ChatOptions{MaxTokens: 4096},
-	)
-
-	// Capture progress messages sent by drainEvents.
-	var progressMsgs []string
-	sendProgress := func(text string) {
-		progressMsgs = append(progressMsgs, text)
-	}
-
-	result, err := mgr.drainEvents(eventCh, aiAgent, func() bool { return true }, sendProgress, nil)
-	require.NoError(t, err)
-	// Final result should NOT contain the tool call prefix (it's streamed).
-	assert.NotContains(t, result, "🔍 工具调用过程:")
-	assert.Equal(t, "Build ok", result)
-
-	// Tool call progress should have been sent.
-	require.Len(t, progressMsgs, 1)
-	assert.Contains(t, progressMsgs[0], "🔧 Bash(echo ok)")
-	assert.Contains(t, progressMsgs[0], "✅")
-}
-
-// TestHandleVerboseCommand verifies that /v toggles verbose state correctly.
-func TestHandleVerboseCommand(t *testing.T) {
-	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-	})
-
-	threadID := "thread-v-test"
-
-	// First toggle: off → on
-	resp, err := mgr.handleVerboseCommand(threadID)
-	require.NoError(t, err)
-	assert.Contains(t, resp, "ON")
-
-	v, ok := mgr.verboseState.Load(threadID)
-	assert.True(t, ok)
-	assert.True(t, v)
-
-	// Second toggle: on → off
-	resp, err = mgr.handleVerboseCommand(threadID)
-	require.NoError(t, err)
-	assert.Contains(t, resp, "OFF")
-
-	v, ok = mgr.verboseState.Load(threadID)
-	assert.True(t, ok)
-	assert.False(t, v)
-}
-
-// TestHandleVerboseCommand_ResetByNew verifies that /new resets verbose state.
-func TestHandleVerboseCommand_ResetByNew(t *testing.T) {
-	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
-	}
-	mgr.provider = &mockProvider{name: "mock"}
-
-	threadID := fmt.Sprintf("vnew-%s-%d", t.Name(), time.Now().UnixNano())
-
-	// Enable verbose.
-	_, err := mgr.handleVerboseCommand(threadID)
-	require.NoError(t, err)
-
-	v, ok := mgr.verboseState.Load(threadID)
-	assert.True(t, ok)
-	assert.True(t, v)
-
-	// /new should reset it.
-	_, err = mgr.handleNewCommand(threadID)
-	require.NoError(t, err)
-
-	_, ok = mgr.verboseState.Load(threadID)
-	assert.False(t, ok) // key should be deleted
-}
-
 // TestCommandHandler_BuildAndDispatch verifies that buildCommandHandler
 // returns a working CommandHandler that dispatches to slash command methods.
 func TestCommandHandler_BuildAndDispatch(t *testing.T) {
@@ -586,15 +447,6 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	resp, err = handler(t.Context(), channel.SlashCommand{Name: "new", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp, "Started a new conversation")
-
-	// /v toggles (no session needed)
-	resp, err = handler(t.Context(), channel.SlashCommand{Name: "v", ThreadID: threadID})
-	require.NoError(t, err)
-	assert.Contains(t, resp, "ON")
-
-	resp, err = handler(t.Context(), channel.SlashCommand{Name: "v", ThreadID: threadID})
-	require.NoError(t, err)
-	assert.Contains(t, resp, "OFF")
 
 	// /usage requires a pre-existing session — load one first.
 	sm, _, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)

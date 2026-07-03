@@ -64,9 +64,6 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 	case "cron":
 		text, err := m.handleCronCommand()
 		return textHandlerResult(text), err
-	case "v":
-		text, err := m.handleVerboseCommand(cmd.ThreadID)
-		return textHandlerResult(text), err
 	case "stop":
 		text, err := m.handleStopCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
@@ -277,9 +274,6 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 		sm.EndCurrent()
 		m.logger.Log("channel: /new ended session %s for thread %s", sess.ID, threadID)
 	}
-
-	// Reset verbose state for the new session.
-	m.verboseState.Delete(threadID)
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
 }
@@ -530,20 +524,6 @@ func (m *Manager) handleCronCommand() (string, error) {
 	}
 
 	return sb.String(), nil
-}
-
-// --- /v ---
-
-// handleVerboseCommand toggles verbose tool call output for the given thread.
-// When on, subsequent replies include a summary of tool calls made by the agent.
-func (m *Manager) handleVerboseCommand(threadID string) (string, error) {
-	current, _ := m.verboseState.Load(threadID)
-	m.verboseState.Store(threadID, !current)
-
-	if !current {
-		return "🔍 Verbose mode: ON\n后续回复将显示工具调用过程。", nil
-	}
-	return "🔍 Verbose mode: OFF\n后续回复仅显示最终结果。", nil
 }
 
 // --- /skill ---
