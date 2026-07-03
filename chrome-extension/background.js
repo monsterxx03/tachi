@@ -1,50 +1,55 @@
 // background.js — Tachi Chrome Extension Service Worker
 //
-// Manages Native Messaging connection to Tachi and routes requests
-// from the side panel to the native host. Stores page content per tab
-// for contextual follow-up conversations.
+// Manages a WebSocket connection to the local Tachi HTTP server and routes
+// requests from the side panel. Stores page content per tab for contextual
+// follow-up conversations.
+//
+// Tachi must be running in channel mode:
+//   tachi channel
 
-let port = null;
-let connecting = false;
-let pendingRequests = new Map(); // id -> { resolve, reject, timer }
+const TACHI_WS_URL = "ws://127.0.0.1:18520/ws";
+
+let ws = null;
+let reconnectTimer = null;
+let pendingRequests = new Map(); // id -> { resolve, reject }
 let requestIdCounter = 0;
 
 // pageContexts stores extracted page content per tab for follow-up context.
 // Key: tab ID, Value: { title, url, content }
 const pageContexts = new Map();
 
-// ── Native Messaging Connection ──────────────────────────────────────────────
+// ── WebSocket Connection ─────────────────────────────────────────────────────
 
-function connectTachi() {
-  if (connecting) return;
-  connecting = true;
-
-  if (port) {
-    try { port.disconnect(); } catch (e) { /* ignore */ }
+function connect() {
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    return;
   }
+
+  clearTimeout(reconnectTimer);
 
   try {
-    port = chrome.runtime.connectNative("com.tachi.chrome");
+    ws = new WebSocket(TACHI_WS_URL);
   } catch (e) {
-    console.error("Tachi connectNative failed:", e.message);
-    connecting = false;
-    setTimeout(connectTachi, 5000);
+    console.error("Tachi: WebSocket creation failed:", e.message);
+    scheduleReconnect();
     return;
   }
 
-  if (!port) {
-    console.error("Tachi connectNative returned null");
-    connecting = false;
-    setTimeout(connectTachi, 5000);
-    return;
-  }
+  ws.onopen = () => {
+    console.log("Tachi: WebSocket connected to", TACHI_WS_URL);
+  };
 
-  connecting = false;
+  ws.onmessage = (event) => {
+    let msg;
+    try {
+      msg = JSON.parse(event.data);
+    } catch (e) {
+      console.error("Tachi: invalid JSON from server:", e.message);
+      return;
+    }
 
-  port.onMessage.addListener((msg) => {
     const pending = pendingRequests.get(msg.id);
     if (pending) {
-      clearTimeout(pending.timer);
       pendingRequests.delete(msg.id);
       if (msg.type === "error") {
         pending.reject(new Error(msg.content));
@@ -52,43 +57,58 @@ function connectTachi() {
         pending.resolve(msg);
       }
     }
-  });
+    // Proactive messages (no matching pending request) are silently ignored
+    // in the background worker. The side panel doesn't need them.
+  };
 
-  port.onDisconnect.addListener(() => {
-    const error = chrome.runtime.lastError;
-    console.log("Tachi native host disconnected:", error?.message || "unknown");
-    port = null;
+  ws.onclose = (event) => {
+    console.log("Tachi: WebSocket disconnected (code=" + event.code + ")", event.reason);
+    ws = null;
 
+    // Reject all pending requests.
     for (const [id, pending] of pendingRequests) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("Native host disconnected"));
+      pending.reject(new Error("WebSocket disconnected"));
     }
     pendingRequests.clear();
 
-    setTimeout(connectTachi, 2000);
-  });
+    scheduleReconnect();
+  };
+
+  ws.onerror = (event) => {
+    console.error("Tachi: WebSocket error");
+    // onclose will fire after onerror, triggering reconnect.
+  };
+}
+
+function scheduleReconnect() {
+  clearTimeout(reconnectTimer);
+  reconnectTimer = setTimeout(connect, 3000);
 }
 
 // ── Communication API ────────────────────────────────────────────────────────
 
 function sendToTachi(action, content = "", selection = {}) {
   return new Promise((resolve, reject) => {
-    if (!port) {
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
       reject(new Error("Not connected to Tachi. Make sure Tachi is running with: tachi channel"));
       return;
     }
 
     const id = `tachi_${++requestIdCounter}_${Date.now()}`;
-    const timer = setTimeout(() => {
-      pendingRequests.delete(id);
-      reject(new Error("Request timeout (30s)"));
-    }, 30000);
 
-    pendingRequests.set(id, { resolve, reject, timer });
+    pendingRequests.set(id, { resolve, reject });
+
+    // Set a timeout.
+    setTimeout(() => {
+      if (pendingRequests.has(id)) {
+        pendingRequests.delete(id);
+        reject(new Error("Request timeout (30s)"));
+      }
+    }, 30000);
 
     chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
       const tab = tabs[0];
-      port.postMessage({
+      const msg = JSON.stringify({
         id,
         action,
         threadID: tab ? `tab_${tab.id}` : "global",
@@ -99,6 +119,7 @@ function sendToTachi(action, content = "", selection = {}) {
         },
         content: content || "",
       });
+      ws.send(msg);
     });
   });
 }
@@ -108,7 +129,6 @@ function sendToTachi(action, content = "", selection = {}) {
 chrome.action.onClicked.addListener(async (tab) => {
   console.log("Tachi: action.onClicked fired, tab:", tab?.id, "window:", tab?.windowId);
 
-  // Get the current window ID (tab may not be provided in some Chrome versions)
   let windowId = tab?.windowId;
   if (!windowId) {
     try {
@@ -150,7 +170,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   }
 
   if (msg.type === "connection_status") {
-    sendResponse({ connected: port !== null });
+    sendResponse({ connected: ws !== null && ws.readyState === WebSocket.OPEN });
     return true;
   }
 
@@ -224,8 +244,6 @@ async function handleAskFollowup(question, sender, sendResponse) {
       return;
     }
 
-    // Send the question to Tachi. The conversation context (page content
-    // + previous messages) is maintained by tachi via the tab_<id> thread.
     const result = await sendToTachi("followup", question, {
       text: "",
       url: tab.url || "",
@@ -261,24 +279,20 @@ ${sourceInfo.join(" | ")}
 ${pageData.content}`;
 }
 
-// ── Heartbeat ────────────────────────────────────────────────────────────────
+// ── Startup ──────────────────────────────────────────────────────────────────
 
-connectTachi();
+connect();
 
 // Ensure the side panel is globally enabled
 chrome.sidePanel.setOptions({ enabled: true }).catch((e) =>
   console.error("Tachi: sidePanel.setOptions failed:", e.message)
 );
 
+// Heartbeat — keep connection alive and detect stale connections
 setInterval(() => {
-  if (port) {
-    try {
-      port.postMessage({ action: "ping", id: "ping", threadID: "global" });
-    } catch (e) {
-      console.log("Ping failed, reconnecting...");
-      connectTachi();
-    }
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ action: "ping", id: "ping", threadID: "global" }));
   } else {
-    connectTachi();
+    connect();
   }
 }, 25000);
