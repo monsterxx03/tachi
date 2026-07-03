@@ -84,6 +84,54 @@ func (a *AIAgent) CommitProvider() llm.Provider {
 	return a.commitProvider
 }
 
+// ReviewProvider returns the dedicated review provider, or nil if none is configured
+// (caller should fall back to the main provider).
+func (a *AIAgent) ReviewProvider() llm.Provider {
+	return a.reviewProvider
+}
+
+// ReviewModel returns the dedicated review model, or "" if none is configured.
+func (a *AIAgent) ReviewModel() string {
+	return a.reviewModel
+}
+
+// SetupReviewProvider resolves and creates a dedicated LLM provider for /review
+// code review from config. When review.provider is empty or not found, /review
+// falls back to the main conversation provider.
+func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
+	rpName := cfg.Review.Provider
+	if rpName == "" {
+		// Even without a dedicated provider, store model override if set.
+		a.reviewModel = cfg.Review.Model
+		return
+	}
+
+	rpCfg := cfg.FindProvider(rpName)
+	if rpCfg == nil {
+		a.logger.Log("Agent: review.provider %q not found in providers list, falling back to main model", rpName)
+		return
+	}
+
+	resolved, err := config.ResolveProviderConfig(rpCfg)
+	if err != nil {
+		a.logger.Log("Agent: failed to resolve review provider %q: %v, falling back to main model", rpName, err)
+		return
+	}
+
+	rp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		a.logger.Log("Agent: failed to create review provider %q: %v, falling back to main model", rpName, err)
+		return
+	}
+
+	a.reviewProvider = rp
+	a.reviewModel = resolved.Model
+	a.logger.Log("Agent: using review provider %q (%s/%s) for /review code review", rpName, resolved.Type, resolved.Model)
+}
+
 // generateTitle uses the LLM to produce a concise session title from the first
 // user message. Falls back to truncation on any error, empty response, or when
 // title generation is disabled.

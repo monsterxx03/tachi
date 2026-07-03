@@ -216,6 +216,12 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.agent.RestoreToolRegistry(m.savedTools)
 			m.savedTools = nil
 		}
+		// Clean up forked agent (e.g. /review) — must happen after the one-off
+		// event stream has been fully consumed and the agent is idle.
+		if m.forkedAgent != nil {
+			m.forkedAgent.Close()
+			m.forkedAgent = nil
+		}
 		m.chatview.FinishStreaming()
 		m.syncSessionInfo()
 
@@ -293,6 +299,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if m.savedTools != nil {
 			m.agent.RestoreToolRegistry(m.savedTools)
 			m.savedTools = nil
+		}
+		// Clean up forked agent on error (e.g. /review cancelled or failed).
+		if m.forkedAgent != nil {
+			m.forkedAgent.Close()
+			m.forkedAgent = nil
 		}
 		// Clear pending queue on error (Ctrl+C clears it earlier in handleCtrlC,
 		// this handles non-interrupt errors like API failures).

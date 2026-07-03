@@ -284,6 +284,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)
+	aiAgent.SetupReviewProvider(cfg)
 
 	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {
@@ -388,6 +389,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)
+	aiAgent.SetupReviewProvider(cfg)
 
 	_, err = aiAgent.Configure(ctx, cfg)
 	if err != nil {
@@ -504,6 +506,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)
+	aiAgent.SetupReviewProvider(cfg)
 
 	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {

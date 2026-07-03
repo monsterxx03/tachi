@@ -89,6 +89,8 @@ type AIAgent struct {
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
+	reviewProvider     llm.Provider // optional: dedicated provider for /review code review
+	reviewModel        string       // review model override ("" = fallback to main)
 	logger             *debuglog.Logger
 
 	// Skill-related fields

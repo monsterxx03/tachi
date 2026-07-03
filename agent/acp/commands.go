@@ -37,6 +37,7 @@ type ACPSlashCommand struct {
 
 var acpCommandHandlers = map[string]func(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error){
 	"commit":    handleACPCommit,
+	"review":    handleACPReview,
 	"init":      handleACPInit,
 	"compact":   handleACPCompact,
 	"usage":     handleACPUsage,
@@ -227,6 +228,66 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts)
+
+	return streamToACP(ctx, sess, conn, eventCh), nil
+}
+
+// ---------------------------------------------------------------------------
+// /review handler
+// ---------------------------------------------------------------------------
+
+func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
+	debuglog.DefaultLogger.Log("ACP: /review handler start")
+
+	aiAgent := sess.agent
+	cfg := sess.cfg
+
+	// Resolve review provider and model from config (or fall back to main).
+	reviewProvider := aiAgent.Provider()
+	reviewModel := aiAgent.Model()
+	if rp := aiAgent.ReviewProvider(); rp != nil {
+		reviewProvider = rp
+		reviewModel = aiAgent.ReviewModel()
+	}
+	if cfg != nil && cfg.Review.Model != "" {
+		reviewModel = cfg.Review.Model
+	}
+
+	// MaxIterations and Thinking are populated by defaults.Set() from struct tags.
+	maxIter := cmds.DefaultReviewMaxIterations
+	thinking := new(bool)
+	if cfg != nil {
+		maxIter = cfg.Review.MaxIterations
+		thinking = cfg.Review.Thinking
+	}
+
+	// Resolve allowed tools (slice can't use `default` tag, handle in code).
+	var allowedTools []string
+	if cfg != nil && len(cfg.Review.AllowedTools) > 0 {
+		allowedTools = cfg.Review.AllowedTools
+	} else {
+		allowedTools = cmds.DefaultReviewAllowedTools()
+	}
+
+	// Fork a child agent with configurable tools.
+	forked := aiAgent.Fork(agent.ForkConfig{
+		Provider:      reviewProvider,
+		Model:         reviewModel,
+		MaxIterations: maxIter,
+		AllowedTools:  allowedTools,
+		Logger:        aiAgent.Logger(),
+	})
+	defer forked.Close()
+
+	systemPrompt := buildSystemPromptForCwd(cfg.Language, sess.cwd)
+
+	opts := llm.ChatOptions{
+		MaxTokens: config.DefaultMaxTokens,
+		Thinking:  thinking,
+	}
+
+	eventCh := forked.Agent().RunOneOffStream(ctx, reviewProvider,
+		systemPrompt, cmds.ReviewUserPrompt(), opts)
 
 	return streamToACP(ctx, sess, conn, eventCh), nil
 }
