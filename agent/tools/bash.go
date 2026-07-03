@@ -144,10 +144,20 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	// Process group isolation: kill -pgid terminates the entire process tree
 	// (bash + all children like python/wget/curl). Without this, exec.CommandContext
 	// only kills the immediate bash process, leaving orphan children running.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	//
+	// Setsid creates a new session, detaching from the parent's controlling
+	// terminal (/dev/tty). This prevents interactive commands (sudo, pass,
+	// ssh -t, etc.) from hanging by reading the TUI's terminal directly.
+	// Without Setsid, the child inherits the parent's controlling terminal
+	// even when stdin is /dev/null, causing hangs when programs open /dev/tty.
+	//
+	// Setsid alone also makes the child a process group leader (PGID = PID),
+	// so -PID process group kill still works — no separate Setpgid needed.
+	// macOS cannot use both Setsid+Setpgid (setsid() fails if already PG leader).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	cmd.Cancel = func() error {
 		// Negative PID = process group kill. The process group ID equals the
-		// bash process PID because Setpgid assigns the child's PID as its PGID.
+		// bash process PID because Setsid makes the child a process group leader.
 		return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
 	}
 

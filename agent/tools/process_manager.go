@@ -133,7 +133,12 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 	cmd.Dir = wdctx.Dir(ctx)
 
 	// Process group isolation: kill -pgid terminates the entire tree.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	// Setsid detaches from the parent's controlling terminal, preventing
+	// interactive commands from hanging on /dev/tty reads.
+	// Setsid alone also makes the child a process group leader (PGID = PID),
+	// so -PID process group kill works — no separate Setpgid needed.
+	// macOS cannot use Setsid+Setpgid together (setsid() fails if PG leader).
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
 	stdoutBuf := ringbuf.New(recentOutputCap)
 	stderrBuf := ringbuf.New(recentOutputCap)
