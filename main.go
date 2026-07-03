@@ -22,6 +22,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	acppkg "github.com/monsterxx03/tachi/agent/acp"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/agent/tools"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
@@ -80,6 +81,38 @@ func main() {
 				Aliases: []string{"e"},
 				Usage:   "Open config file in editor",
 			},
+			&cli.StringFlag{
+				Name:    "prompt",
+				Aliases: []string{"p"},
+				Usage:   "User prompt — runs in non-interactive mode (stdin content appended when piped)",
+			},
+			&cli.StringFlag{
+				Name:    "output-format",
+				Aliases: []string{"o"},
+				Usage:   "Output format: text (default) | json | json-stream",
+			},
+			&cli.BoolFlag{
+				Name:    "quiet",
+				Aliases: []string{"q"},
+				Usage:   "Suppress progress output to stderr (auto-enabled when stdout is piped)",
+			},
+			&cli.StringFlag{
+				Name:  "allowed-tools",
+				Usage: "Comma-separated whitelist of tool names the agent may use",
+			},
+			&cli.StringFlag{
+				Name:  "disallowed-tools",
+				Usage: "Comma-separated blacklist of tool names the agent may NOT use",
+			},
+			&cli.DurationFlag{
+				Name:  "timeout",
+				Usage: "Maximum execution time (e.g. 5m, 30s, 1h)",
+			},
+			&cli.BoolFlag{
+				Name:    "commit",
+				Aliases: []string{"c"},
+				Usage:   "Generate a git commit and commit changes (like /commit in TUI)",
+			},
 		),
 		Before: func(ctx context.Context, cmd *cli.Command) (context.Context, error) {
 			if cmd.IsSet("home") {
@@ -87,7 +120,23 @@ func main() {
 			}
 			return ctx, nil
 		},
-		Action: runTUI,
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			// Commit mode: --commit / -c flag (like /commit in TUI).
+			if cmd.IsSet("commit") {
+				return runCommit(ctx, cmd)
+			}
+			// Detect whether stdin is being piped (non-terminal).
+			isPiped := false
+			stat, err := os.Stdin.Stat()
+			if err == nil && (stat.Mode()&os.ModeCharDevice) == 0 {
+				isPiped = true
+			}
+			// Non-interactive run mode: --prompt flag set or stdin is piped.
+			if cmd.IsSet("prompt") || isPiped {
+				return runAgent(ctx, cmd)
+			}
+			return runTUI(ctx, cmd)
+		},
 		Commands: []*cli.Command{
 			{
 				Name:  "init",
@@ -101,40 +150,6 @@ func main() {
 					fmt.Println("Edit the file to set your API keys and provider settings.")
 					return nil
 				},
-			},
-			{
-				Name:  "run",
-				Usage: "Run the AI agent (single-turn)",
-				Flags: append(commonFlags,
-					&cli.StringFlag{
-						Name:    "prompt",
-						Aliases: []string{"p"},
-						Usage:   "User prompt to send (stdin content appended when piped)",
-					},
-					&cli.StringFlag{
-						Name:    "output-format",
-						Aliases: []string{"o"},
-						Usage:   "Output format: text (default) | json | json-stream",
-					},
-					&cli.BoolFlag{
-						Name:    "quiet",
-						Aliases: []string{"q"},
-						Usage:   "Suppress progress output to stderr (auto-enabled when stdout is piped)",
-					},
-					&cli.StringFlag{
-						Name:  "allowed-tools",
-						Usage: "Comma-separated whitelist of tool names the agent may use",
-					},
-					&cli.StringFlag{
-						Name:  "disallowed-tools",
-						Usage: "Comma-separated blacklist of tool names the agent may NOT use",
-					},
-					&cli.DurationFlag{
-						Name:  "timeout",
-						Usage: "Maximum execution time (e.g. 5m, 30s, 1h)",
-					},
-				),
-				Action: runAgent,
 			},
 			{
 				Name:   "channel",
@@ -372,6 +387,116 @@ func exitCodeForReason(reason string) int {
 	}
 }
 
+func runCommit(ctx context.Context, cmd *cli.Command) error {
+	// Initialize debug logging.
+	if err := debuglog.Init(config.LogsDir()); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
+	}
+	defer debuglog.Close()
+
+	// Apply optional timeout.
+	if timeout := cmd.Duration("timeout"); timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+
+	cfg, err := config.Load()
+	if err != nil {
+		return fmt.Errorf("failed to load config: %w", err)
+	}
+
+	provider, resolved, err := resolveProviderFromConfig(cfg)
+	if err != nil {
+		return err
+	}
+
+	// Iteration budget for commit.
+	maxIters := resolved.MaxIterations
+	if maxIters <= 0 {
+		maxIters = config.DefaultMaxIterations
+	}
+
+	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, maxIters)
+	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetSkipMemoryRecall(true)
+	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	aiAgent.SetupTitleProvider(cfg)
+	aiAgent.SetupCommitProvider(cfg)
+
+	_, err = aiAgent.Configure(ctx, cfg)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
+	}
+	defer aiAgent.Close()
+
+	// Restrict to only the Bash tool (same as /commit in TUI).
+	for _, name := range aiAgent.ToolNames() {
+		if name != tools.ToolNameBash {
+			aiAgent.UnregisterTool(name)
+		}
+	}
+
+	commitProvider := aiAgent.CommitProvider()
+	model := aiAgent.Model()
+
+	// Build user prompt.
+	userPrompt := cmds.CommitUserPrompt(model)
+
+	// If -p/--prompt is also given, append as extra instructions.
+	if extra := cmd.String("prompt"); extra != "" {
+		userPrompt = userPrompt + "\n\n## Additional instructions\n\n" + extra
+	}
+
+	// If stdin is piped, append its content too.
+	if pipeData := readStdinPipe(); pipeData != "" {
+		userPrompt = userPrompt + "\n\n## Stdin input\n\n" + pipeData
+	}
+
+	// Disable thinking for commit (saves tokens/latency).
+	thinkingDisabled := false
+	opts := llm.ChatOptions{
+		MaxTokens: resolved.MaxTokens,
+		Thinking:  &thinkingDisabled,
+	}
+
+	outputFmt := parseOutputFormat(cmd)
+	quiet := resolveQuiet(cmd)
+
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
+	}
+
+	ch := aiAgent.RunOneOffStream(ctx, commitProvider, buildSystemPrompt(cfg.Language),
+		userPrompt, opts)
+
+	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
+	if result == nil {
+		result = &agent.RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
+	}
+
+	if !quiet {
+		fmt.Fprintf(os.Stderr, "\nExit: %s | Iterations: %d\n", result.ExitReason, result.IterationsUsed)
+	}
+	os.Exit(exitCodeForReason(result.ExitReason))
+	return nil
+}
+
+// readStdinPipe reads data from stdin if it is being piped (not a terminal).
+// Returns empty string if stdin is a terminal or no data is available.
+func readStdinPipe() string {
+	stat, err := os.Stdin.Stat()
+	if err != nil || (stat.Mode()&os.ModeCharDevice) != 0 {
+		return ""
+	}
+	data, err := io.ReadAll(os.Stdin)
+	if err != nil || len(data) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(string(data))
+}
+
 func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// Initialize debug logging.
 	if err := debuglog.Init(config.LogsDir()); err != nil {
@@ -437,7 +562,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	prompt, err := resolvePrompt(cmd)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
-		fmt.Fprintf(os.Stderr, "Usage: tachi run --prompt \"<prompt>\" or pipe input via stdin\n")
+		fmt.Fprintf(os.Stderr, "Usage: tachi -p \"<prompt>\" or pipe input via stdin\n")
 		os.Exit(2)
 		return nil
 	}
