@@ -578,13 +578,41 @@ func (m *Manager) Disconnect(name string) error {
 // Reconnect disconnects an existing server connection (if any) and
 // establishes a fresh connection using the given config. Returns the
 // server's tools on success.
+//
+// Whitelist/blacklist filtering is applied: tools matching the blacklist
+// or not matching the whitelist are excluded from the returned slice.
 func (m *Manager) Reconnect(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
 	// Disconnect existing connection (ignore errors)
 	if _, ok := m.clients[srv.Name]; ok {
 		_ = m.Disconnect(srv.Name)
 	}
 
-	return m.connect(ctx, srv)
+	tools, err := m.connect(ctx, srv)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure server config is cached for shouldSkipTool lookups.
+	// ConnectAll populates this for all servers during init, but
+	// Reconnect may be called independently (e.g. manual toggle).
+	m.mu.Lock()
+	if m.serverCfgs == nil {
+		m.serverCfgs = make(map[string]config.MCPServerConfig)
+	}
+	m.serverCfgs[srv.Name] = *srv
+	m.mu.Unlock()
+
+	// Apply whitelist/blacklist filtering — same logic as
+	// PopulateFromConnect so that enabling a previously-disabled
+	// server mid-session doesn't bypass tool filters.
+	filtered := make([]MCPTool, 0, len(tools))
+	for _, t := range tools {
+		if !m.shouldSkipTool(srv.Name, t.ToolName()) {
+			filtered = append(filtered, t)
+		}
+	}
+
+	return filtered, nil
 }
 func (m *Manager) Close() {
 	m.mu.Lock()
