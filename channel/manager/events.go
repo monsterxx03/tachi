@@ -23,14 +23,22 @@ import (
 // mid-turn user input injection (steer mechanism). When the agent reaches a
 // tool-call boundary and requests steer input, pending messages are drained
 // and delivered to the agent. When ta is nil (cron, tests), steer is skipped.
-func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation) (string, error) {
+//
+// onTextDelta is an optional callback for streaming text output. It is called
+// for each AgentEventTextDelta so channel implementations can push text in
+// real time (e.g. Wave streaming cards). It may be nil.
+func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) (string, error) {
 	var text strings.Builder
 	var lastErr error
+	pushedTools := make(map[string]bool) // tool IDs already streamed to card
 
 	for event := range ch {
 		switch event.Type {
 		case agent.AgentEventTextDelta:
 			text.WriteString(event.TextDelta)
+			if onTextDelta != nil {
+				onTextDelta(event.TextDelta)
+			}
 
 		case agent.AgentEventThinkingDelta:
 			// Thinking is internal to the agent; we don't expose it to IM.
@@ -42,6 +50,10 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 
 		case agent.AgentEventToolCallArgs:
 			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
+			if onTextDelta != nil && !pushedTools[event.ToolID] {
+				pushedTools[event.ToolID] = true
+				onTextDelta("\n\n> <font color=\"comment\">🔧 " + event.ToolName + formatToolArgs(event.ToolName, event.ToolArgs) + "</font>\n\n")
+			}
 
 		case agent.AgentEventToolConfirmation:
 			// Should not happen with skip_edit_confirm=true, but handle safely.
@@ -198,4 +210,110 @@ func convertQuestions(qs []tools.Question) []channel.Question {
 		}
 	}
 	return cqs
+}
+
+// formatToolArgs extracts key parameters from a tool's JSON arguments string
+// for display in a streaming card status line. It knows the argument schemas
+// of common tools and formats them concisely.
+func formatToolArgs(toolName, argsJSON string) string {
+	if argsJSON == "" {
+		return ""
+	}
+	// Extract the most informative field for common tools.
+	switch toolName {
+	case tools.ToolNameBash:
+		if cmd := extractJSONField(argsJSON, "command"); cmd != "" {
+			return " — " + truncateToolArg(cmd, 60)
+		}
+	case tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite:
+		if path := extractJSONField(argsJSON, "path"); path != "" {
+			return " — " + truncateToolArg(path, 50)
+		}
+	case tools.ToolNameGlob:
+		if pat := extractJSONField(argsJSON, "pattern"); pat != "" {
+			return " — " + truncateToolArg(pat, 50)
+		}
+	case tools.ToolNameGrep:
+		if pat := extractJSONField(argsJSON, "pattern"); pat != "" {
+			return " — " + truncateToolArg(pat, 60)
+		}
+	case tools.ToolNameWebSearch:
+		if q := extractJSONField(argsJSON, "query"); q != "" {
+			return " — " + truncateToolArg(q, 60)
+		}
+	case tools.ToolNameWebFetch:
+		if u := extractJSONField(argsJSON, "url"); u != "" {
+			return " — " + truncateToolArg(u, 50)
+		}
+	case tools.ToolNameSubAgent:
+		return "" // sub-agent description is too verbose
+	case tools.ToolNameSkill:
+		if op := extractJSONField(argsJSON, "operation"); op != "" {
+			name := extractJSONField(argsJSON, "name")
+			if name != "" {
+				return " — " + op + " " + name
+			}
+			return " — " + op
+		}
+	case tools.ToolNameLSP:
+		if op := extractJSONField(argsJSON, "operation"); op != "" {
+			return " — " + op
+		}
+	case tools.ToolNameMCPSearchTools:
+		if q := extractJSONField(argsJSON, "query"); q != "" {
+			return " — " + truncateToolArg(q, 50)
+		}
+	}
+	return ""
+}
+
+// extractJSONField extracts a top-level string field from a JSON object.
+// Handles partial/incomplete JSON gracefully — returns empty string on parse error.
+func extractJSONField(jsonStr, field string) string {
+	// Simple approach: look for "field": "value" or "field":"value"
+	// This works for most tool arg formats without importing encoding/json.
+	search := `"` + field + `":`
+	idx := 0
+	for i := 0; i < len(jsonStr)-len(search); i++ {
+		if jsonStr[i:i+len(search)] == search {
+			idx = i + len(search)
+			break
+		}
+	}
+	if idx == 0 {
+		return ""
+	}
+	// Skip whitespace.
+	rest := jsonStr[idx:]
+	rest = trimLeft(rest)
+	if len(rest) == 0 || rest[0] != '"' {
+		return ""
+	}
+	rest = rest[1:] // skip opening quote
+	// Find closing unescaped quote.
+	for i := 0; i < len(rest); i++ {
+		if rest[i] == '\\' {
+			i++ // skip escaped char
+			continue
+		}
+		if rest[i] == '"' {
+			return rest[:i]
+		}
+	}
+	return rest // incomplete JSON — return whatever we have
+}
+
+func trimLeft(s string) string {
+	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n' || s[0] == '\r') {
+		s = s[1:]
+	}
+	return s
+}
+
+// truncateToolArg caps a tool argument for display, appending "..." if truncated.
+func truncateToolArg(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
