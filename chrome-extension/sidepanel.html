@@ -14,6 +14,7 @@
       --accent: #4299e1;
       --success: #48bb78;
       --error: #fc8181;
+      --translate-active: #48bb78;
     }
     * { margin: 0; padding: 0; box-sizing: border-box; }
 
@@ -65,6 +66,13 @@
       max-width: 280px;
       display: block;
     }
+
+    .header-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+
     .btn-icon {
       width: 28px;
       height: 28px;
@@ -81,6 +89,65 @@
       flex-shrink: 0;
     }
     .btn-icon:hover { background: var(--surface); color: var(--text); }
+    .btn-icon.active {
+      background: rgba(72, 187, 120, 0.15);
+      border-color: var(--success);
+      color: var(--success);
+    }
+
+    /* ── Translate Mode Bar ─────────────────────────────────────────── */
+
+    .translate-bar {
+      flex-shrink: 0;
+      padding: 8px 16px;
+      border-bottom: 1px solid var(--border);
+      display: none;
+      align-items: center;
+      gap: 8px;
+      font-size: 12px;
+    }
+    .translate-bar.visible { display: flex; }
+
+    .translate-bar .label {
+      color: var(--text-secondary);
+      font-size: 11px;
+      margin-right: 2px;
+    }
+
+    .mode-btn {
+      padding: 4px 10px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      color: var(--text-secondary);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all 0.15s;
+    }
+    .mode-btn:hover {
+      background: rgba(66, 153, 225, 0.1);
+      border-color: var(--accent);
+    }
+    .mode-btn.active {
+      background: rgba(66, 153, 225, 0.2);
+      border-color: var(--accent);
+      color: var(--accent);
+    }
+    .mode-btn.danger {
+      color: var(--error);
+      border-color: transparent;
+      background: rgba(252, 129, 129, 0.08);
+      margin-left: auto;
+    }
+    .mode-btn.danger:hover {
+      background: rgba(252, 129, 129, 0.15);
+    }
+
+    .translate-bar .count {
+      color: var(--text-secondary);
+      font-size: 10px;
+      margin-left: auto;
+    }
 
     /* ── Messages ───────────────────────────────────────────────────── */
 
@@ -127,6 +194,18 @@
       border: 1px solid var(--error);
       color: var(--error);
       font-size: 12px;
+    }
+
+    .msg.translate-info {
+      align-self: center;
+      background: rgba(72, 187, 120, 0.1);
+      border: 1px solid rgba(72, 187, 120, 0.3);
+      color: var(--success);
+      font-size: 11px;
+      text-align: center;
+      padding: 6px 14px;
+      border-radius: 20px;
+      max-width: 100%;
     }
 
     /* ── Markdown in messages ───────────────────────────────────────── */
@@ -282,7 +361,20 @@
       <div class="title">Tachi</div>
       <span class="page-url" id="pageUrl">—</span>
     </div>
-    <button class="btn-icon" id="btnRefresh" title="重新总结当前页面">🔄</button>
+    <div class="header-actions">
+      <button class="btn-icon" id="btnTranslate" title="翻译当前页面">🌐</button>
+      <button class="btn-icon" id="btnRefresh" title="重新总结当前页面">🔄</button>
+    </div>
+  </div>
+
+  <!-- Translate mode bar (shown after translation) -->
+  <div class="translate-bar" id="translateBar">
+    <span class="label">🌐 翻译</span>
+    <button class="mode-btn" data-mode="original">原文</button>
+    <button class="mode-btn active" data-mode="bilingual">双语</button>
+    <button class="mode-btn" data-mode="translated">译文</button>
+    <span class="count" id="transCount"></span>
+    <button class="mode-btn danger" id="btnCloseTranslate">✕ 关闭</button>
   </div>
 
   <div class="messages" id="messages">

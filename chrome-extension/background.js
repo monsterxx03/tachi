@@ -18,6 +18,12 @@ let requestIdCounter = 0;
 // Key: tab ID, Value: { title, url, content }
 const pageContexts = new Map();
 
+// translateRequest tracks selection translation results by ID for popup delivery.
+// Using a Map instead of a single `latestTranslation` avoids race conditions
+// when the user triggers multiple translations in quick succession.
+let translateReqId = 0;
+const translationResults = new Map(); // reqId -> { original, translation, error }
+
 // ── WebSocket Connection ─────────────────────────────────────────────────────
 
 function connect() {
@@ -57,8 +63,7 @@ function connect() {
         pending.resolve(msg);
       }
     }
-    // Proactive messages (no matching pending request) are silently ignored
-    // in the background worker. The side panel doesn't need them.
+    // Proactive messages (no matching pending request) are silently ignored.
   };
 
   ws.onclose = (event) => {
@@ -156,24 +161,162 @@ chrome.action.onClicked.addListener(async (tab) => {
   });
 });
 
+// ── Context Menus ────────────────────────────────────────────────────────────
+
+function createContextMenus() {
+  chrome.contextMenus.removeAll(() => {
+    chrome.contextMenus.create({
+      id: "translate_page",
+      title: "🌐 翻译当前页面",
+      contexts: ["page"],
+    });
+
+    chrome.contextMenus.create({
+      id: "translate_selection",
+      title: "🌐 翻译选中文字",
+      contexts: ["selection"],
+    });
+  });
+}
+
+// ── Context Menu Click Handler ───────────────────────────────────────────────
+
+chrome.contextMenus.onClicked.addListener(async (info, tab) => {
+  if (info.menuItemId === "translate_page") {
+    // Trigger page translation (same as side panel 🌐 button)
+    if (!tab || !tab.id) return;
+
+    try {
+      chrome.tabs.sendMessage(tab.id, { type: "show_trans_progress" }).catch(() => {});
+
+      const paraData = await chrome.tabs.sendMessage(tab.id, { type: "extract_paragraphs" });
+
+      if (!paraData || !paraData.paragraphs || paraData.paragraphs.length === 0) {
+        chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+        return;
+      }
+
+      const prompt = buildTranslationPrompt(paraData.paragraphs, tab);
+      const result = await sendToTachi("translate", prompt, {
+        text: "", url: tab.url || "", title: tab.title || "",
+      });
+
+      const translations = parseTranslationResult(result.content, paraData.paragraphs.length);
+      if (translations && translations.length > 0) {
+        await chrome.tabs.sendMessage(tab.id, {
+          type: "inject_translations",
+          translations: translations,
+        });
+      }
+
+      chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+    } catch (err) {
+      console.error("Tachi context menu translate page error:", err);
+      chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+    }
+  }
+
+  if (info.menuItemId === "translate_selection") {
+    // Translate selected text and show in popup
+    const selectedText = info.selectionText;
+    if (!selectedText || !selectedText.trim()) return;
+
+    const reqId = ++translateReqId;
+
+    try {
+      const lang = detectPageLanguage([selectedText]);
+      const instruction = (lang === "zh" || lang === "ja" || lang === "ko")
+        ? "Translate the following text to English.\nReturn ONLY the translation, no explanation."
+        : "请将以下文字翻译成中文（简体）。\n只返回翻译结果，不要任何解释。";
+
+      const prompt = `${instruction}\n\n${selectedText}`;
+      const result = await sendToTachi("translate", prompt, {
+        text: selectedText,
+        url: tab?.url || "",
+        title: tab?.title || "",
+      });
+
+      translationResults.set(reqId, {
+        original: selectedText,
+        translation: result.content,
+      });
+
+      // Auto-cleanup after 60s
+      setTimeout(() => translationResults.delete(reqId), 60000);
+
+      chrome.windows.create({
+        url: chrome.runtime.getURL(`translate-popup.html?id=${reqId}`),
+        type: "popup",
+        width: 480,
+        height: 350,
+        focused: true,
+      });
+    } catch (err) {
+      translationResults.set(reqId, {
+        original: selectedText,
+        translation: null,
+        error: err.message,
+      });
+
+      setTimeout(() => translationResults.delete(reqId), 60000);
+
+      chrome.windows.create({
+        url: chrome.runtime.getURL(`translate-popup.html?id=${reqId}`),
+        type: "popup",
+        width: 480,
+        height: 200,
+        focused: true,
+      });
+    }
+  }
+});
+
 // ── Side Panel Message Router ────────────────────────────────────────────────
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
-  if (msg.type === "get_page_summary") {
-    handleGetPageSummary(sender, sendResponse);
-    return true;
-  }
+  switch (msg.type) {
+    case "get_page_summary":
+      handleGetPageSummary(sender, sendResponse);
+      return true;
 
-  if (msg.type === "ask_followup") {
-    handleAskFollowup(msg.question, sender, sendResponse);
-    return true;
-  }
+    case "ask_followup":
+      handleAskFollowup(msg.question, sender, sendResponse);
+      return true;
 
-  if (msg.type === "connection_status") {
-    sendResponse({ connected: ws !== null && ws.readyState === WebSocket.OPEN });
-    return true;
-  }
+    case "translate_page":
+      handleTranslatePage(sender, sendResponse);
+      return true;
 
+    case "set_translate_mode":
+      handleSetTranslateMode(msg.mode, sender, sendResponse);
+      return true;
+
+    case "disable_translation":
+      handleDisableTranslation(sender, sendResponse);
+      return true;
+
+    case "connection_status":
+      sendResponse({ connected: ws !== null && ws.readyState === WebSocket.OPEN });
+      return true;
+
+    case "get_latest_translation":
+      {
+        const reqId = msg.requestId;
+        const result = reqId ? translationResults.get(reqId) : null;
+        if (result) {
+          sendResponse({
+            original: result.original,
+            translation: result.translation,
+            error: result.error || null,
+          });
+          // Cleanup after delivery
+          translationResults.delete(reqId);
+        } else {
+          sendResponse({ error: "没有找到翻译结果" });
+        }
+        return true;
+      }
+  }
   return false;
 });
 
@@ -257,7 +400,230 @@ async function handleAskFollowup(question, sender, sendResponse) {
   }
 }
 
-// ── Prompt Builder ───────────────────────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════════════
+// TRANSLATION HANDLER
+// ═══════════════════════════════════════════════════════════════════════════════
+
+async function handleTranslatePage(sender, sendResponse) {
+  let responded = false;
+  const respond = (data) => { if (!responded) { responded = true; sendResponse(data); } };
+
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      respond({ error: "无法获取当前标签页" });
+      return;
+    }
+
+    // Step 1: Tell content script to show progress
+    chrome.tabs.sendMessage(tab.id, { type: "show_trans_progress" }).catch(() => {});
+
+    // Step 2: Extract paragraphs from the page
+    let paraData;
+    try {
+      paraData = await chrome.tabs.sendMessage(tab.id, { type: "extract_paragraphs" });
+    } catch (e) {
+      chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+      if (e.message.includes("Receiving end does not exist")) {
+        respond({ error: "请刷新当前页面后重试（扩展已更新，需要重新加载页面才能读取内容）" });
+      } else {
+        respond({ error: `无法读取页面段落: ${e.message}` });
+      }
+      return;
+    }
+
+    if (!paraData || !paraData.paragraphs || paraData.paragraphs.length === 0) {
+      chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+      respond({ error: "页面中没有找到可翻译的文本段落" });
+      return;
+    }
+
+    // Step 3: Send paragraphs to Tachi for translation
+    const prompt = buildTranslationPrompt(paraData.paragraphs, tab);
+    const result = await sendToTachi("translate", prompt, {
+      text: "",
+      url: tab.url || "",
+      title: tab.title || "",
+    });
+
+    // Step 4: Parse the translation result (expecting a JSON array)
+    const translations = parseTranslationResult(result.content, paraData.paragraphs.length);
+
+    if (!translations || translations.length === 0) {
+      chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+      respond({ error: "翻译失败：无法解析翻译结果" });
+      return;
+    }
+
+    // Step 5: Send translations back to content script for injection
+    await chrome.tabs.sendMessage(tab.id, {
+      type: "inject_translations",
+      translations: translations,
+    });
+
+    // Hide progress
+    chrome.tabs.sendMessage(tab.id, { type: "hide_trans_progress" }).catch(() => {});
+
+    respond({
+      ok: true,
+      count: translations.length,
+      mode: "bilingual",
+    });
+  } catch (err) {
+    // Hide progress on error
+    chrome.tabs
+      .query({ active: true, currentWindow: true })
+      .then((tabs) => {
+        if (tabs[0]?.id) {
+          chrome.tabs.sendMessage(tabs[0].id, { type: "hide_trans_progress" }).catch(() => {});
+        }
+      })
+      .catch(() => {});
+
+    console.error("Tachi translate error:", err);
+    respond({ error: err.message });
+  }
+}
+
+// ── Translation Prompt Builder ───────────────────────────────────────────────
+
+function buildTranslationPrompt(paragraphs, tab) {
+  const totalLen = paragraphs.reduce((sum, p) => sum + p.length, 0);
+  const lang = detectPageLanguage(paragraphs);
+
+  let instruction = "";
+  if (lang === "zh" || lang === "ja" || lang === "ko") {
+    instruction = "Translate the following paragraphs to English.";
+    instruction += "\nReturn ONLY a valid JSON array of strings where each element is the translation of the corresponding paragraph.\nNo explanation, no markdown formatting, no code block fences. Just pure JSON array.";
+  } else {
+    instruction = "请将以下段落逐段翻译成中文（简体）。";
+    instruction += "\n只返回一个 JSON 数组，每个元素是对应段落的翻译。不要任何解释、Markdown 格式或代码块标记，只返回纯 JSON 数组。";
+  }
+
+  // For very large pages, split context: tell the LLM the page title/URL for context
+  let contextInfo = "";
+  if (tab?.title) {
+    contextInfo = `\n\nPage title: ${tab.title}`;
+  }
+  if (tab?.url) {
+    contextInfo += `\nPage URL: ${tab.url}`;
+  }
+
+  return `${instruction}${contextInfo}
+
+Paragraphs to translate:
+${JSON.stringify(paragraphs)}
+
+Output (pure JSON array):`;
+}
+
+// ── Detect Page Language ─────────────────────────────────────────────────────
+
+function detectPageLanguage(paragraphs) {
+  // Sample more text for reliable detection (first 20 paragraphs or 2000 chars)
+  const sample = paragraphs.slice(0, 20).join(" ").slice(0, 2000);
+  const cjkCount = (sample.match(/[\u4e00-\u9fff\u3400-\u4dbf\uf900-\ufaff]/g) || []).length;
+  const totalChars = sample.replace(/\s/g, "").length;
+  if (totalChars === 0) return "en";
+  // Higher threshold (0.15) to reduce false positives from mixed-language content
+  return cjkCount / totalChars > 0.15 ? "zh" : "en";
+}
+
+// ── Parse Translation Result ─────────────────────────────────────────────────
+
+function parseTranslationResult(content, expectedCount) {
+  if (!content) return null;
+
+  let trimmed = content.trim();
+
+  // Remove markdown code block fences if present
+  trimmed = trimmed.replace(/^```(?:json)?\s*\n?/i, "").replace(/\n?```\s*$/i, "").trim();
+
+  // Try to find a JSON array in the response
+  const arrayMatch = trimmed.match(/\[[\s\S]*\]/);
+  if (arrayMatch) {
+    try {
+      const parsed = JSON.parse(arrayMatch[0]);
+      if (Array.isArray(parsed) && parsed.length > 0) {
+        if (parsed.every((item) => typeof item === "string")) {
+          return parsed;
+        }
+        return parsed.map((item) => String(item));
+      }
+    } catch (e) {
+      // JSON parse failed
+    }
+  }
+
+  // Fallback: try line-by-line parsing (numbered list)
+  // Only use this if we have a reasonable number of lines and they look like list items
+  const lines = trimmed.split("\n").filter((l) => l.trim());
+  if (lines.length >= 2 && lines.length <= expectedCount * 1.5) {
+    const translations = [];
+    for (const line of lines) {
+      const cleaned = line
+        .replace(/^\[\d+\]\s*/, "")
+        .replace(/^\d+[\.\)]\s*/, "")
+        .replace(/^["']|["']$/g, "")
+        .trim();
+      if (cleaned && cleaned.length > 2) {
+        translations.push(cleaned);
+      }
+    }
+    if (translations.length > 0 && translations.length >= expectedCount * 0.5) {
+      return translations;
+    }
+  }
+
+  // If expectedCount is 1, treat the whole response as one translation
+  if (expectedCount === 1 && trimmed.length > 0) {
+    return [trimmed];
+  }
+
+  return null;
+}
+
+// ── Set Translate Mode Handler ───────────────────────────────────────────────
+
+async function handleSetTranslateMode(mode, sender, sendResponse) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      sendResponse({ error: "无法获取当前标签页" });
+      return;
+    }
+
+    const result = await chrome.tabs.sendMessage(tab.id, {
+      type: "set_translate_mode",
+      mode: mode,
+    });
+
+    sendResponse({ ok: true, mode: result?.mode || mode });
+  } catch (err) {
+    console.error("Tachi set translate mode error:", err);
+    sendResponse({ error: err.message });
+  }
+}
+
+// ── Disable Translation Handler ──────────────────────────────────────────────
+
+async function handleDisableTranslation(sender, sendResponse) {
+  try {
+    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    if (!tab || !tab.id) {
+      sendResponse({ error: "无法获取当前标签页" });
+      return;
+    }
+
+    await chrome.tabs.sendMessage(tab.id, { type: "disable_translation" });
+    sendResponse({ ok: true });
+  } catch (err) {
+    console.error("Tachi disable translation error:", err);
+    sendResponse({ error: err.message });
+  }
+}
+
+// ── Prompt Builder (Summary) ─────────────────────────────────────────────────
 
 function buildSummarizePrompt(pageData) {
   const contentLength = pageData.content.length;
@@ -282,6 +648,7 @@ ${pageData.content}`;
 // ── Startup ──────────────────────────────────────────────────────────────────
 
 connect();
+createContextMenus();
 
 // Ensure the side panel is globally enabled
 chrome.sidePanel.setOptions({ enabled: true }).catch((e) =>
