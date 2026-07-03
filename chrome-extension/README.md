@@ -35,14 +35,29 @@ make build
 3. 点击 **加载已解压的扩展**
 4. 选择 `chrome-extension/dist/` 目录
 
-### 3. 安装 Native Messaging Host
+### 3. 配置 host_permissions
 
-Chrome 会给扩展分配一个 ID（在 `chrome://extensions` 中可以看到），用它来安装 Native Messaging host：
+扩展通过 WebSocket 连接本地 Tachi 服务。需要在 `manifest.json` 中声明权限：
 
-```bash
-# 查看扩展 ID 后
-tachi chrome install --extension-id=abcdefghijklmnopabcdefghijklmnop
+```json
+{
+  "host_permissions": [
+    "http://127.0.0.1:18520/*",
+    "ws://127.0.0.1:18520/*"
+  ]
+}
 ```
+
+默认端口 `18520`，可以在 `~/.tachi/config.yaml` 中修改：
+
+```yaml
+channel:
+  chrome:
+    enabled: true
+    port: 18520
+```
+
+> **注意**：不再需要安装 Native Messaging host manifest。只需确保 Tachi 在运行即可。
 
 ### 4. 启动 Tachi 通道模式
 

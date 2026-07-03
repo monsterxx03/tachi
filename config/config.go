@@ -339,9 +339,11 @@ type ChannelConfig struct {
 	Whisper  ChannelWhisperConfig      `yaml:"whisper"`
 }
 
-// ChromeConfig holds configuration for the Chrome Native Messaging channel.
+// ChromeConfig holds configuration for the Chrome channel (WebSocket over
+// localhost). The extension connects to Tachi via ws://127.0.0.1:<port>/ws.
 type ChromeConfig struct {
 	Enabled bool `yaml:"enabled"`
+	Port    int  `yaml:"port" default:"18520"` // WebSocket server port
 }
 
 // ChannelWhisperConfig holds channel-mode whisper settings for group chat
@@ -411,9 +413,13 @@ func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
 
 	// Legacy chrome: include if enabled and not already present in Channels.
 	if _, inChannels := result["chrome"]; !inChannels && cc.Chrome.Enabled {
-		result["chrome"] = map[string]any{
+		chCfg := map[string]any{
 			"enabled": true,
 		}
+		if cc.Chrome.Port > 0 {
+			chCfg["port"] = cc.Chrome.Port
+		}
+		result["chrome"] = chCfg
 	}
 
 	return result

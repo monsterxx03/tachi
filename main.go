@@ -33,7 +33,6 @@ import (
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tui"
 
-	"github.com/monsterxx03/tachi/channel/chrome"
 	_ "github.com/monsterxx03/tachi/channel/chrome"
 	_ "github.com/monsterxx03/tachi/channel/weixin"
 )
@@ -56,15 +55,6 @@ var commonFlags = []cli.Flag{
 
 func main() {
 	llm.Version = Version
-
-	// Chrome Native Messaging host detection.
-	// Chrome launches the native host with the extension origin as argv[1]:
-	//   tachi chrome-extension://<extension-id>/
-	// We detect this prefix and automatically redirect to channel mode so
-	// the Chrome channel can service Native Messaging requests via stdin/stdout.
-	if len(os.Args) > 1 && strings.HasPrefix(os.Args[1], "chrome-extension://") {
-		os.Args = []string{os.Args[0], "channel"}
-	}
 
 	app := &cli.Command{
 		Name:    "tachi",
@@ -209,31 +199,6 @@ func main() {
 							},
 						},
 						Action: transcriptShow,
-					},
-				},
-			},
-			{
-				Name:  "chrome",
-				Usage: "Manage Chrome Native Messaging integration",
-				Commands: []*cli.Command{
-					{
-						Name:   "install",
-						Usage:  "Install Native Messaging manifest for a Chrome extension",
-						Action: chromeInstall,
-						Flags: []cli.Flag{
-							&cli.StringFlag{
-								Name:    "extension-id",
-								Aliases: []string{"e"},
-								Usage:   "Chrome extension ID (required)",
-							},
-						},
-					},
-					{
-						Name:  "uninstall",
-						Usage: "Remove Chrome Native Messaging manifest",
-						Action: func(ctx context.Context, cmd *cli.Command) error {
-							return chrome.Uninstall()
-						},
 					},
 				},
 			},
@@ -957,7 +922,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// Block until context is cancelled OR all channels have exited.
-	// Channels like Chrome Native Messaging exit when stdin is closed;
+	// Channels like WeChat exit when stdin is closed or the connection drops;
 	// waiting for ctx.Done() alone would leave zombie processes.
 	select {
 	case <-ctx.Done():
@@ -1248,21 +1213,4 @@ func transcriptShow(ctx context.Context, cmd *cli.Command) error {
 	}
 	fmt.Printf("Transcript: %s\nOpened: %s\n", sess.Title, path)
 	return nil
-}
-
-// chromeInstall handles `tachi chrome install --extension-id <id>`.
-// It installs the Native Messaging manifest for the given extension ID.
-func chromeInstall(ctx context.Context, cmd *cli.Command) error {
-	extID := cmd.String("extension-id")
-	if extID == "" {
-		// Try positional arg as fallback.
-		args := cmd.Args().Slice()
-		if len(args) > 0 {
-			extID = args[0]
-		}
-	}
-	if extID == "" {
-		return fmt.Errorf("extension ID is required; use --extension-id or pass as argument")
-	}
-	return chrome.InstallExtensionID(extID)
 }

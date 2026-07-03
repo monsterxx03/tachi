@@ -1,190 +1,160 @@
 package chrome
 
 import (
-	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/json"
 	"fmt"
-	"io"
+	"net"
+	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"golang.org/x/net/websocket"
 )
 
-// writeNM writes a ChromeRequest (Native Messaging format) to a writer.
-func writeNM(w io.Writer, req ChromeRequest) error {
+// wsDial connects to the test server's /ws endpoint and returns a WebSocket
+// connection configured for text messages.
+func wsDial(t *testing.T, addr string) *websocket.Conn {
+	t.Helper()
+	origin := "chrome-extension://test-extension-id"
+	url := fmt.Sprintf("ws://%s/ws", addr)
+	conn, err := websocket.Dial(url, "", origin)
+	if err != nil {
+		t.Fatalf("wsDial: %v", err)
+	}
+	return conn
+}
+
+// wsSend marshals a ChromeRequest and sends it over WebSocket.
+func wsSend(t *testing.T, conn *websocket.Conn, req ChromeRequest) {
+	t.Helper()
 	data, err := json.Marshal(req)
 	if err != nil {
-		return err
+		t.Fatalf("wsSend marshal: %v", err)
 	}
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(data)))
-	if _, err := w.Write(header); err != nil {
-		return err
+	if err := websocket.Message.Send(conn, string(data)); err != nil {
+		t.Fatalf("wsSend: %v", err)
 	}
-	_, err = w.Write(data)
-	return err
 }
 
-// readNM reads a ChromeResponse (Native Messaging format) from a reader.
-func readNM(r io.Reader) (ChromeResponse, error) {
-	var length uint32
-	if err := binary.Read(r, binary.LittleEndian, &length); err != nil {
-		return ChromeResponse{}, err
-	}
-	data := make([]byte, length)
-	if _, err := io.ReadFull(r, data); err != nil {
-		return ChromeResponse{}, err
+// wsRecv reads a ChromeResponse from WebSocket.
+func wsRecv(t *testing.T, conn *websocket.Conn) ChromeResponse {
+	t.Helper()
+	var data string
+	if err := websocket.Message.Receive(conn, &data); err != nil {
+		t.Fatalf("wsRecv: %v", err)
 	}
 	var resp ChromeResponse
-	if err := json.Unmarshal(data, &resp); err != nil {
-		return ChromeResponse{}, err
+	if err := json.Unmarshal([]byte(data), &resp); err != nil {
+		t.Fatalf("wsRecv unmarshal: %v", err)
 	}
-	return resp, nil
+	return resp
 }
 
-// encodeNM encodes a ChromeRequest into a byte slice (Native Messaging format).
-func encodeNM(req ChromeRequest) []byte {
-	data, _ := json.Marshal(req)
-	header := make([]byte, 4)
-	binary.LittleEndian.PutUint32(header, uint32(len(data)))
-	return append(header, data...)
-}
+// startTestServer creates a ChromeChannel on a random port and starts it.
+// Returns (channel, addr, cleanupFn).
+func startTestServer(t *testing.T, handler channel.MessageHandler) (*ChromeChannel, string, func()) {
+	t.Helper()
 
-// bufferedPipe is a thread-safe buffered IO pair.
-// Write sends data to a channel; Read receives from it.
-// Multiple writes are queued; reads are served from an internal buffer.
-type bufferedPipe struct {
-	ch   chan []byte
-	mu   sync.Mutex
-	buf  []byte
-}
-
-func newBufferedPipe(capacity int) *bufferedPipe {
-	return &bufferedPipe{
-		ch: make(chan []byte, capacity),
-	}
-}
-
-func (bp *bufferedPipe) Write(p []byte) (int, error) {
-	chunk := make([]byte, len(p))
-	copy(chunk, p)
-	bp.ch <- chunk
-	return len(p), nil
-}
-
-func (bp *bufferedPipe) Read(p []byte) (int, error) {
-	bp.mu.Lock()
-	if len(bp.buf) == 0 {
-		bp.mu.Unlock()
-		chunk, ok := <-bp.ch
-		if !ok {
-			return 0, io.EOF
-		}
-		bp.mu.Lock()
-		bp.buf = chunk
-	}
-	n := copy(p, bp.buf)
-	bp.buf = bp.buf[n:]
-	bp.mu.Unlock()
-	return n, nil
-}
-
-func TestReadWriteMessage(t *testing.T) {
-	var buf bytes.Buffer
-	ch := NewChromeChannelWithIO("chrome", &buf, io.Discard)
-
-	req := ChromeRequest{
-		ID:       "test-1",
-		Action:   "explain",
-		ThreadID: "tab_123",
-		Selection: struct {
-			Text  string `json:"text"`
-			URL   string `json:"url,omitempty"`
-			Title string `json:"title,omitempty"`
-		}{
-			Text:  "ReAct",
-			URL:   "https://example.com",
-			Title: "Example Page",
-		},
-	}
-
-	if err := writeNM(&buf, req); err != nil {
-		t.Fatalf("writeNM: %v", err)
-	}
-
-	got, err := ch.readMessage()
+	// Find a free port.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		t.Fatalf("readMessage: %v", err)
+		t.Fatalf("listen: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	ch := NewChromeChannel("chrome", port)
+	ch.server = NewServer(port)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+
+	go func() {
+		defer close(done)
+		// Start the server in a goroutine.
+		errCh := make(chan error, 1)
+		go func() {
+			errCh <- ch.server.Start(handler)
+		}()
+		<-ctx.Done()
+		ch.server.Close()
+		<-errCh
+	}()
+
+	// Wait for server to be ready.
+	time.Sleep(50 * time.Millisecond)
+
+	addr := fmt.Sprintf("127.0.0.1:%d", port)
+
+	cleanup := func() {
+		cancel()
+		<-done
 	}
 
-	if got.ID != req.ID {
-		t.Errorf("ID = %q, want %q", got.ID, req.ID)
-	}
-	if got.Action != req.Action {
-		t.Errorf("Action = %q, want %q", got.Action, req.Action)
-	}
-	if got.ThreadID != req.ThreadID {
-		t.Errorf("ThreadID = %q, want %q", got.ThreadID, req.ThreadID)
-	}
-	if got.Selection.Text != req.Selection.Text {
-		t.Errorf("Selection.Text = %q, want %q", got.Selection.Text, req.Selection.Text)
-	}
+	return ch, addr, cleanup
 }
+
+// ── Tests ──────────────────────────────────────────────────────────────────
 
 func TestPingPong(t *testing.T) {
-	// Pre-encode the ping request into a bytes.Reader.
-	input := bytes.NewReader(encodeNM(ChromeRequest{
+	handler := func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		t.Errorf("handler should not be called for ping")
+		return channel.HandlerResult{}
+	}
+
+	_, addr, cleanup := startTestServer(t, handler)
+	defer cleanup()
+
+	conn := wsDial(t, addr)
+	defer conn.Close()
+
+	wsSend(t, conn, ChromeRequest{
 		ID:       "ping-1",
 		Action:   "ping",
 		ThreadID: "global",
-	}))
+	})
 
-	tachiToExt := newBufferedPipe(10)
-	ch := NewChromeChannelWithIO("chrome", input, tachiToExt)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ch.Run(ctx, func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-			t.Errorf("handler should not be called for ping")
-			return channel.HandlerResult{
-				Reply: channel.OutgoingMessage{
-					ThreadID: msg.ThreadID,
-					Content:  "unexpected call",
-				},
-			}
-		})
-	}()
-
-	// Read pong response from tachiToExt.
-	resp, err := readNM(tachiToExt)
-	if err != nil {
-		t.Fatalf("read pong: %v", err)
-	}
+	resp := wsRecv(t, conn)
 	if resp.ID != "ping-1" {
 		t.Errorf("resp.ID = %q, want %q", resp.ID, "ping-1")
 	}
 	if resp.Content != "pong" {
 		t.Errorf("resp.Content = %q, want %q", resp.Content, "pong")
 	}
-
-	// Let Run finish (after ping, the input reader has EOF, so Run exits cleanly).
-	runErr := <-errCh
-	if runErr != nil {
-		t.Errorf("Run returned error: %v", runErr)
-	}
 }
 
 func TestHandlerInvocation(t *testing.T) {
-	input := bytes.NewReader(encodeNM(ChromeRequest{
+	handler := func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		if msg.ThreadID != "tab_456" {
+			t.Errorf("ThreadID = %q, want %q", msg.ThreadID, "tab_456")
+		}
+		if msg.MessageID != "req-1" {
+			t.Errorf("MessageID = %q, want %q", msg.MessageID, "req-1")
+		}
+		if !strings.Contains(msg.Content, "ReAct") {
+			t.Errorf("Content should contain 'ReAct', got: %s", msg.Content)
+		}
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  "Here's the explanation of ReAct...",
+			},
+		}
+	}
+
+	_, addr, cleanup := startTestServer(t, handler)
+	defer cleanup()
+
+	conn := wsDial(t, addr)
+	defer conn.Close()
+
+	wsSend(t, conn, ChromeRequest{
 		ID:       "req-1",
-		Action:   "explain",
+		Action:   "ask_tachi",
 		ThreadID: "tab_456",
 		Selection: struct {
 			Text  string `json:"text"`
@@ -195,47 +165,9 @@ func TestHandlerInvocation(t *testing.T) {
 			URL:   "https://react.dev",
 			Title: "ReAct Framework",
 		},
-	}))
+	})
 
-	tachiToExt := newBufferedPipe(10)
-	ch := NewChromeChannelWithIO("chrome", input, tachiToExt)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	handlerCalled := make(chan struct{}, 1)
-	var capturedMsg channel.IncomingMessage
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ch.Run(ctx, func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-			capturedMsg = msg
-			handlerCalled <- struct{}{}
-			return channel.HandlerResult{
-				Reply: channel.OutgoingMessage{
-					ThreadID: msg.ThreadID,
-					Content:  "Here's the explanation of ReAct...",
-				},
-			}
-		})
-	}()
-
-	<-handlerCalled
-
-	if capturedMsg.ThreadID != "tab_456" {
-		t.Errorf("ThreadID = %q, want %q", capturedMsg.ThreadID, "tab_456")
-	}
-	if capturedMsg.MessageID != "req-1" {
-		t.Errorf("MessageID = %q, want %q", capturedMsg.MessageID, "req-1")
-	}
-	if capturedMsg.Content == "" {
-		t.Errorf("Content should not be empty")
-	}
-
-	resp, err := readNM(tachiToExt)
-	if err != nil {
-		t.Fatalf("readNM: %v", err)
-	}
+	resp := wsRecv(t, conn)
 	if resp.ID != "req-1" {
 		t.Errorf("resp.ID = %q, want %q", resp.ID, "req-1")
 	}
@@ -245,69 +177,77 @@ func TestHandlerInvocation(t *testing.T) {
 	if resp.Content != "Here's the explanation of ReAct..." {
 		t.Errorf("resp.Content = %q, want %q", resp.Content, "Here's the explanation of ReAct...")
 	}
-
-	cancel()
-	<-errCh
 }
 
-func TestBuildPrompt(t *testing.T) {
-	ch := NewChromeChannel("chrome")
+func TestToIncoming(t *testing.T) {
+	server := NewServer(DefaultPort)
 
-	t.Run("summarize returns content", func(t *testing.T) {
+	t.Run("content takes priority", func(t *testing.T) {
 		req := ChromeRequest{
 			Action:  "summarize",
-			Content: "请总结此页面内容...\n\n---\n\n页面正文...",
-		}
-		req.Selection.Title = "Example Page"
-		req.Selection.URL = "https://example.com"
-
-		prompt := ch.buildPrompt(req)
-		if prompt != req.Content {
-			t.Errorf("summarize action should return Content as-is\nGot: %q\nWant: %q", prompt, req.Content)
-		}
-	})
-
-	t.Run("default with content", func(t *testing.T) {
-		req := ChromeRequest{
-			Action:  "unknown_action",
-			Content: "some custom content",
+			Content: "请总结此页面",
 		}
 		req.Selection.Text = "fallback text"
 
-		prompt := ch.buildPrompt(req)
-		if prompt != "some custom content" {
-			t.Errorf("default with content should return Content\nGot: %q", prompt)
+		msg := server.toIncoming(req)
+		if msg.Content != "请总结此页面" {
+			t.Errorf("Content = %q, want content to take priority", msg.Content)
 		}
 	})
 
-	t.Run("default without content returns selection text", func(t *testing.T) {
+	t.Run("fallback to selection text", func(t *testing.T) {
 		req := ChromeRequest{
-			Action: "unknown_action",
+			Action: "explain",
 		}
 		req.Selection.Text = "selected text"
 
-		prompt := ch.buildPrompt(req)
-		if prompt != "selected text" {
-			t.Errorf("default without content should return Selection.Text\nGot: %q", prompt)
+		msg := server.toIncoming(req)
+		if msg.Content != "selected text" {
+			t.Errorf("Content = %q, want %q", msg.Content, "selected text")
 		}
 	})
 
-	t.Run("default with empty content and selection returns empty", func(t *testing.T) {
+	t.Run("empty when nothing provided", func(t *testing.T) {
 		req := ChromeRequest{
-			Action: "unknown_action",
+			Action: "explain",
 		}
 
-		prompt := ch.buildPrompt(req)
-		if prompt != "" {
-			t.Errorf("default with everything empty should return empty\nGot: %q", prompt)
+		msg := server.toIncoming(req)
+		if msg.Content != "" {
+			t.Errorf("Content = %q, want empty", msg.Content)
 		}
 	})
 }
 
 func TestSend(t *testing.T) {
-	tachiToExt := newBufferedPipe(10)
-	ch := NewChromeChannelWithIO("chrome", nil, tachiToExt)
+	handler := func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  "reply to: " + msg.Content,
+			},
+		}
+	}
 
+	ch, addr, cleanup := startTestServer(t, handler)
+	defer cleanup()
+
+	// First, establish a WebSocket connection so the server tracks this thread.
+	conn := wsDial(t, addr)
+	defer conn.Close()
+
+	// Send a request to register the threadID -> conn mapping.
+	wsSend(t, conn, ChromeRequest{
+		ID:       "init-1",
+		Action:   "ask_tachi",
+		ThreadID: "tab_123",
+		Content:  "hello",
+	})
+
+	// Drain the response.
+	wsRecv(t, conn)
+
+	// Now use channel.Send() to send a proactive message.
 	if err := ch.Send(context.Background(), channel.OutgoingMessage{
 		ThreadID: "tab_123",
 		Content:  "proactive notification",
@@ -315,10 +255,7 @@ func TestSend(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	resp, err := readNM(tachiToExt)
-	if err != nil {
-		t.Fatalf("readNM: %v", err)
-	}
+	resp := wsRecv(t, conn)
 	if resp.Type != "result" {
 		t.Errorf("resp.Type = %q, want %q", resp.Type, "result")
 	}
@@ -328,101 +265,117 @@ func TestSend(t *testing.T) {
 }
 
 func TestHandlerError(t *testing.T) {
-	input := bytes.NewReader(encodeNM(ChromeRequest{
+	handler := func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		return channel.HandlerResult{
+			Err: fmt.Errorf("something went wrong"),
+		}
+	}
+
+	_, addr, cleanup := startTestServer(t, handler)
+	defer cleanup()
+
+	conn := wsDial(t, addr)
+	defer conn.Close()
+
+	wsSend(t, conn, ChromeRequest{
 		ID:       "err-1",
 		Action:   "explain",
 		ThreadID: "tab_789",
-		Selection: struct {
-			Text  string `json:"text"`
-			URL   string `json:"url,omitempty"`
-			Title string `json:"title,omitempty"`
-		}{Text: "test"},
-	}))
+		Content:  "test",
+	})
 
-	tachiToExt := newBufferedPipe(10)
-	ch := NewChromeChannelWithIO("chrome", input, tachiToExt)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ch.Run(ctx, func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-			return channel.HandlerResult{
-				Err: fmt.Errorf("something went wrong"),
-			}
-		})
-	}()
-
-	resp, err := readNM(tachiToExt)
-	if err != nil {
-		t.Fatalf("readNM: %v", err)
-	}
+	resp := wsRecv(t, conn)
 	if resp.Type != "error" {
 		t.Errorf("resp.Type = %q, want %q", resp.Type, "error")
 	}
 	if resp.ID != "err-1" {
 		t.Errorf("resp.ID = %q, want %q", resp.ID, "err-1")
 	}
-	if !contains(resp.Content, "something went wrong") {
+	if !strings.Contains(resp.Content, "something went wrong") {
 		t.Errorf("resp.Content should contain error, got: %s", resp.Content)
-	}
-
-	cancel()
-	<-errCh
-}
-
-func TestEOF(t *testing.T) {
-	ch := NewChromeChannelWithIO("chrome", new(bytes.Buffer), io.Discard)
-	err := ch.Run(context.Background(), nil)
-	if err != nil {
-		t.Errorf("Run returned error on EOF: %v", err)
 	}
 }
 
 func TestSteeredResult(t *testing.T) {
-	input := bytes.NewReader(encodeNM(ChromeRequest{
+	handler := func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		return channel.HandlerResult{
+			Steered: true,
+		}
+	}
+
+	_, addr, cleanup := startTestServer(t, handler)
+	defer cleanup()
+
+	conn := wsDial(t, addr)
+	defer conn.Close()
+
+	wsSend(t, conn, ChromeRequest{
 		ID:       "steer-1",
 		Action:   "ask_tachi",
 		ThreadID: "tab_999",
-		Selection: struct {
-			Text  string `json:"text"`
-			URL   string `json:"url,omitempty"`
-			Title string `json:"title,omitempty"`
-		}{Text: "follow up"},
-		Content: "also add tests",
-	}))
+		Content:  "follow up",
+	})
 
-	tachiToExt := newBufferedPipe(10)
-	ch := NewChromeChannelWithIO("chrome", input, tachiToExt)
-
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- ch.Run(ctx, func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-			return channel.HandlerResult{
-				Steered: true,
-			}
-		})
-	}()
-
-	// Let Run consume the steered message (no output → loop → EOF from bytes.Reader).
-	time.Sleep(10 * time.Millisecond)
-	cancel()
-	<-errCh
+	// Steered results produce no response — verify by waiting briefly
+	// and checking no data arrives.
+	conn.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	var data string
+	err := websocket.Message.Receive(conn, &data)
+	if err == nil {
+		t.Errorf("expected timeout (no response for steered), got data: %s", data)
+	}
 }
 
-func contains(s, substr string) bool {
-	return len(substr) == 0 || (len(s) >= len(substr) && containsStr(s, substr))
-}
+func TestConcurrentThreads(t *testing.T) {
+	var mu sync.Mutex
+	received := make(map[string]bool)
 
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
+	handler := func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		mu.Lock()
+		received[msg.ThreadID] = true
+		mu.Unlock()
+		time.Sleep(50 * time.Millisecond) // simulate work
+		return channel.HandlerResult{
+			Reply: channel.OutgoingMessage{
+				ThreadID: msg.ThreadID,
+				Content:  "done",
+			},
 		}
 	}
-	return false
+
+	_, addr, cleanup := startTestServer(t, handler)
+	defer cleanup()
+
+	// Two connections, different threads.
+	conn1 := wsDial(t, addr)
+	defer conn1.Close()
+	conn2 := wsDial(t, addr)
+	defer conn2.Close()
+
+	wsSend(t, conn1, ChromeRequest{ID: "a1", Action: "ask_tachi", ThreadID: "tab_1", Content: "msg1"})
+	wsSend(t, conn2, ChromeRequest{ID: "b1", Action: "ask_tachi", ThreadID: "tab_2", Content: "msg2"})
+
+	resp1 := wsRecv(t, conn1)
+	resp2 := wsRecv(t, conn2)
+
+	if resp1.ThreadID != "tab_1" || resp2.ThreadID != "tab_2" {
+		t.Errorf("threads mixed up: got %s and %s", resp1.ThreadID, resp2.ThreadID)
+	}
+}
+
+func TestHealthz(t *testing.T) {
+	_, addr, cleanup := startTestServer(t, func(_ context.Context, msg channel.IncomingMessage) channel.HandlerResult {
+		return channel.HandlerResult{}
+	})
+	defer cleanup()
+
+	resp, err := http.Get(fmt.Sprintf("http://%s/healthz", addr))
+	if err != nil {
+		t.Fatalf("healthz: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("healthz status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
 }
