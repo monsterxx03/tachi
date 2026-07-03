@@ -14,6 +14,7 @@ var expectedACPCmds = []struct {
 	hasInput bool
 }{
 	{name: "commit"},
+	{name: "review"},
 	{name: "init"},
 	{name: "compact"},
 	{name: "usage"},

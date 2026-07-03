@@ -313,6 +313,17 @@ type SubagentConfig struct {
 	WorktreeBranch  string `yaml:"worktree_branch"`  // default branch for worktree checkout (empty = detached HEAD)
 }
 
+// ReviewConfig holds configuration for the /review code review command.
+// When Provider/Model are empty, the main provider/model is used.
+// AllowedTools defaults to [Bash, ReadFile, WriteFile, Glob, Grep] when empty (handled in code).
+type ReviewConfig struct {
+	Provider      string   `yaml:"provider"`        // provider name, empty → use main
+	Model         string   `yaml:"model"`           // model name, empty → use main
+	MaxIterations int      `yaml:"max_iterations" default:"30"`  // iteration budget
+	AllowedTools  []string `yaml:"allowed_tools"`   // default: [Bash, ReadFile, Glob, Grep] (code-level fallback)
+	Thinking      *bool    `yaml:"thinking" default:"false"`     // enable extended thinking
+}
+
 // ChannelConfig groups configuration for all IM channel backends.
 //
 // Legacy fields: Weixin and Chrome are typed configs for built-in channels.
@@ -544,6 +555,7 @@ type Config struct {
 	Memory                 MemoryConfig         `yaml:"memory"`                          // pluggable memory backend
 	Channel                ChannelConfig        `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration
+	Review                 ReviewConfig         `yaml:"review"`                          // /review code review configuration
 	Compact                CompactConfig        `yaml:"compact"`                         // /compact command configuration
 	ToolResult             ToolResultConfig     `yaml:"tool_result"`                     // tool result size limits and file persistence
 	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)

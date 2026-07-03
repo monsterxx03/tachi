@@ -83,6 +83,7 @@ type Model struct {
 	savedHistory []llm.Message         // conversation history saved before a one-off run (e.g. /commit)
 	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
 	isCompacting bool                  // true during compact LLM call (distinct from savedHistory)
+	forkedAgent  *agent.ForkedAgent    // active forked agent (e.g. /review), closed on TurnComplete/error
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events

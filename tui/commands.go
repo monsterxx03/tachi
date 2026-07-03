@@ -136,6 +136,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 	"usage": func(m *Model) tea.Cmd {
 		return m.handleUsageCommand()
 	},
+	"review": func(m *Model) tea.Cmd {
+		return m.sendReviewCommand()
+	},
 	"skill": func(m *Model) tea.Cmd {
 		return m.handleSkillCommand()
 	},
@@ -989,6 +992,107 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 		m.statusbar.Tick(),
 		m.nextEvent(),
 	)
+}
+
+// sendReviewCommand uses Fork() to create an isolated child agent with limited
+// tools (Bash, ReadFile, Glob, Grep), then runs a code review of the current
+// repo changes. The forked agent does NOT inherit conversation history or
+// session context — it gets a clean prompt to review git diff output.
+func (m *Model) sendReviewCommand() tea.Cmd {
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/review"})
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+	m.thinkingMode = false
+
+	// Save conversation history so we can restore it after the one-off
+	// review run completes (the forked agent doesn't touch m.history, but
+	// setting savedHistory marks this as a one-off for TurnComplete handling).
+	m.savedHistory = make([]llm.Message, len(m.history))
+	copy(m.savedHistory, m.history)
+
+	// Resolve review config — fall back to defaults when not configured.
+	rc := m.resolveReviewConfig()
+
+	// Fork a child agent with configurable tools.
+	forked := m.agent.Fork(agent.ForkConfig{
+		Provider:      rc.provider,
+		Model:         rc.model,
+		MaxIterations: rc.maxIterations,
+		AllowedTools:  rc.allowedTools,
+		Logger:        m.agent.Logger(),
+	})
+	m.forkedAgent = forked
+
+	// Apply thinking config: if review config explicitly sets thinking,
+	// override chatOpts; otherwise inherit (default: disabled).
+	reviewOpts := m.chatOpts
+	if rc.thinking != nil {
+		reviewOpts.Thinking = rc.thinking
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+
+	m.streamGen++
+	m.eventCh = forked.Agent().RunOneOffStream(ctx, rc.provider,
+		m.systemPrompt, cmds.ReviewUserPrompt(), reviewOpts)
+
+	return tea.Batch(
+		m.statusbar.Tick(),
+		m.nextEvent(),
+	)
+}
+
+// reviewResolved holds the resolved review configuration after applying
+// config defaults and provider resolution.
+type reviewResolved struct {
+	provider      llm.Provider
+	model         string
+	maxIterations int
+	allowedTools  []string
+	thinking      *bool
+}
+
+// resolveReviewConfig reads the review config from m.cfg and resolves
+// provider/model, falling back to the main provider with sensible defaults.
+func (m *Model) resolveReviewConfig() reviewResolved {
+	// Determine allowed tools (slice can't use `default` tag, handle in code).
+	var allowedTools []string
+	if m.cfg != nil && len(m.cfg.Review.AllowedTools) > 0 {
+		allowedTools = m.cfg.Review.AllowedTools
+	} else {
+		allowedTools = cmds.DefaultReviewAllowedTools()
+	}
+
+	// MaxIterations and Thinking are populated by defaults.Set() from struct tags.
+	maxIter := cmds.DefaultReviewMaxIterations
+	thinking := new(bool)
+	if m.cfg != nil {
+		maxIter = m.cfg.Review.MaxIterations
+		thinking = m.cfg.Review.Thinking
+	}
+
+	// Use pre-resolved review provider from agent (if configured), or fall
+	// back to main provider. The model from the review config is used
+	// regardless of which provider is active.
+	provider := m.agent.Provider()
+	model := m.agent.Model()
+	if rp := m.agent.ReviewProvider(); rp != nil {
+		provider = rp
+		model = m.agent.ReviewModel()
+	}
+	if m.cfg != nil && m.cfg.Review.Model != "" {
+		model = m.cfg.Review.Model
+	}
+
+	return reviewResolved{
+		provider:      provider,
+		model:         model,
+		maxIterations: maxIter,
+		allowedTools:  allowedTools,
+		thinking:      thinking,
+	}
 }
 
 // sendInitCommand sends the init prompt to LLM to generate .tachi.md
