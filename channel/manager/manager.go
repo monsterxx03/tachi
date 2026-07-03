@@ -144,9 +144,6 @@ type Manager struct {
 	// Completely isolated from the user-facing cron scheduler.
 	systemScheduler *cron.SystemScheduler
 
-	// verboseState tracks per-thread verbose mode toggled by /v command.
-	verboseState lockedmap.Map[string, bool]
-
 	// skillStore provides skill listing and activation for /skill command.
 	skillStore *skill.Store
 
@@ -557,8 +554,8 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 }
 
 // sendToThread delivers an intermediate progress message to the channel for
-// the given ThreadID. Used for intermediate progress messages in verbose mode.
-// This is best-effort — failures are logged but not propagated.
+// the given ThreadID. Used for intermediate progress messages like auto-compact
+// notifications. This is best-effort — failures are logged but not propagated.
 func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo string) {
 	m.mu.Lock()
 	chans := make([]channel.Channel, len(m.channels))

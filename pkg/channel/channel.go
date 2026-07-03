@@ -314,7 +314,7 @@ type SlashCommand struct {
 
 // CommandHandler executes a typed SlashCommand and returns the response text.
 // It allows channel implementations to invoke manager-level capabilities
-// directly — creating sessions, toggling verbose mode, listing MCP servers,
+// directly — creating sessions, listing MCP servers,
 // etc. — without routing through the text-based message handler.
 //
 // Channels receive this handler through the CommandChannel interface

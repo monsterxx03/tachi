@@ -2,12 +2,9 @@ package manager
 
 import (
 	"encoding/base64"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
-	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
@@ -115,132 +112,6 @@ func sanitizeFilename(s string) string {
 	return result
 }
 
-// --- Tool call summary helpers (used by drainEvents in verbose mode) ---
-
-// summarizeToolCall produces a one-line summary of a tool invocation.
-func summarizeToolCall(name, args string) string {
-	summary := summarizeToolArgs(name, args)
-	if summary == "" {
-		return name
-	}
-	return name + "(" + summary + ")"
-}
-
-// summarizeToolArgs extracts the most informative fields from tool call JSON.
-func summarizeToolArgs(name, args string) string {
-	switch name {
-	case tools.ToolNameRead:
-		var p struct {
-			Path   string `json:"path"`
-			Offset int    `json:"offset"`
-			Limit  int    `json:"limit"`
-		}
-		_ = json.Unmarshal([]byte(args), &p)
-		if p.Path == "" {
-			return ""
-		}
-		if p.Offset > 0 && p.Limit > 0 {
-			return fmt.Sprintf("%s L%d+%d", p.Path, p.Offset, p.Limit)
-		}
-		if p.Offset > 0 {
-			return fmt.Sprintf("%s L%d", p.Path, p.Offset)
-		}
-		if p.Limit > 0 {
-			return fmt.Sprintf("%s +%d", p.Path, p.Limit)
-		}
-		return p.Path
-
-	case tools.ToolNameBash:
-		var p struct{ Command string `json:"command"` }
-		_ = json.Unmarshal([]byte(args), &p)
-		return truncateForDisplay(p.Command, 60)
-
-	case tools.ToolNameWrite, tools.ToolNameEdit:
-		var p struct{ Path string `json:"path"` }
-		_ = json.Unmarshal([]byte(args), &p)
-		return p.Path
-
-	case tools.ToolNameGrep:
-		var p struct {
-			Path    string `json:"path"`
-			Pattern string `json:"pattern"`
-		}
-		_ = json.Unmarshal([]byte(args), &p)
-		if p.Path != "" && p.Pattern != "" {
-			return p.Path + " " + truncateForDisplay(p.Pattern, 30)
-		}
-		if p.Pattern != "" {
-			return truncateForDisplay(p.Pattern, 40)
-		}
-		return p.Path
-
-	case tools.ToolNameWebSearch:
-		var p struct{ Query string `json:"query"` }
-		_ = json.Unmarshal([]byte(args), &p)
-		return truncateForDisplay(p.Query, 40)
-
-	case tools.ToolNameWebFetch:
-		var p struct{ URL string `json:"url"` }
-		_ = json.Unmarshal([]byte(args), &p)
-		return truncateForDisplay(p.URL, 50)
-
-	case tools.ToolNameGlob:
-		var p struct{ Pattern string `json:"pattern"` }
-		_ = json.Unmarshal([]byte(args), &p)
-		return p.Pattern
-
-	case tools.ToolNameSubAgent:
-		var p struct{ Prompt string `json:"prompt"` }
-		_ = json.Unmarshal([]byte(args), &p)
-		return truncateForDisplay(p.Prompt, 60)
-
-	default:
-		return truncateForDisplay(args, 60)
-	}
-}
-
-// summarizeToolResult produces a one-line summary of a tool execution result.
-func summarizeToolResult(name, result string) string {
-	lineCount := strings.Count(result, "\n") + 1
-	byteLen := len(result)
-
-	switch name {
-	case tools.ToolNameRead:
-		return fmt.Sprintf("读取 %d 行", lineCount)
-	case tools.ToolNameWrite:
-		return "写入完成"
-	case tools.ToolNameEdit:
-		return "编辑完成"
-	case tools.ToolNameBash:
-		if byteLen <= 200 {
-			return result
-		}
-		return fmt.Sprintf("输出 %d 行 (%s)", lineCount, humanSize(byteLen))
-	case tools.ToolNameGrep:
-		return fmt.Sprintf("匹配 %d 行", lineCount)
-	case tools.ToolNameGlob:
-		return fmt.Sprintf("匹配 %d 个文件", lineCount)
-	case tools.ToolNameWebSearch:
-		return "搜索完成"
-	case tools.ToolNameWebFetch:
-		return fmt.Sprintf("抓取完成 (%s)", humanSize(byteLen))
-	default:
-		if byteLen <= 200 {
-			return result
-		}
-		return fmt.Sprintf("%d 行 (%s)", lineCount, humanSize(byteLen))
-	}
-}
-
-// truncateToolResult limits an error string for display (rune-aware).
-func truncateToolResult(s string) string {
-	runes := []rune(s)
-	if len(runes) <= 150 {
-		return s
-	}
-	return string(runes[:150]) + "..."
-}
-
 // humanSize formats a byte count as a human-readable string.
 func humanSize(n int) string {
 	if n < 1024 {
@@ -260,24 +131,4 @@ func truncateForDisplay(s string, maxLen int) string {
 		return s
 	}
 	return string(runes[:maxLen]) + "..."
-}
-
-// formatToolDuration formats a time.Duration as a concise human-readable string
-// for channel display of tool execution results.
-func formatToolDuration(d time.Duration) string {
-	if d < time.Microsecond {
-		return "(<1µs)"
-	}
-	if d < time.Millisecond {
-		return fmt.Sprintf("(%dµs)", d.Microseconds())
-	}
-	if d < time.Second {
-		return fmt.Sprintf("(%.0fms)", float64(d.Microseconds())/1000)
-	}
-	if d < time.Minute {
-		return fmt.Sprintf("(%.1fs)", d.Seconds())
-	}
-	minutes := int(d.Minutes())
-	seconds := d.Seconds() - float64(minutes*60)
-	return fmt.Sprintf("(%dm%.0fs)", minutes, seconds)
 }

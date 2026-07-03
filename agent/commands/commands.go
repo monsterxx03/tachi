@@ -42,7 +42,6 @@ var Registry = []Def{
 	{Name: "transcript", Description: "Generate session transcript report", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},
 	{Name: "cron", Description: "List cron jobs", Modes: []Mode{ModeChannel}},
-	{Name: "v", Description: "Toggle verbose tool call output", Modes: []Mode{ModeChannel}},
 	{Name: "stop", Description: "Stop the current LLM turn", Modes: []Mode{ModeChannel}},
 }
 
