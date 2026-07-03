@@ -49,6 +49,7 @@ func getCachedTrie() (*pathtrie.PathTrie, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	// Step 1: 正常文件列表（尊重 .gitignore）
 	cmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--glob", "!.git")
 	cmd.Dir = cwd
 	output, err := cmd.Output()
@@ -63,6 +64,25 @@ func getCachedTrie() (*pathtrie.PathTrie, error) {
 		line = strings.TrimSpace(line)
 		if line != "" {
 			paths = append(paths, filepath.ToSlash(line))
+		}
+	}
+
+	// Step 2: 强制包含 .tachi 目录下的所有文件（即使被 .gitignore）
+	if info, err := os.Stat(filepath.Join(cwd, ".tachi")); err == nil && info.IsDir() {
+		tachiCmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--no-ignore-vcs", "--glob", "!.git", ".tachi")
+		tachiCmd.Dir = cwd
+		if tachiOutput, err := tachiCmd.Output(); err == nil {
+			seen := make(map[string]bool, len(paths))
+			for _, p := range paths {
+				seen[p] = true
+			}
+			for line := range strings.SplitSeq(strings.TrimSpace(string(tachiOutput)), "\n") {
+				line = strings.TrimSpace(line)
+				if line != "" && !seen[line] {
+					paths = append(paths, filepath.ToSlash(line))
+					seen[line] = true
+				}
+			}
 		}
 	}
 
