@@ -523,7 +523,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 	if sess == nil {
 		// No existing session → create a new one now. The agent will
 		// record the first message.
-		if _, err := sm.New(resolved.Provider.Type, resolved.Provider.Model, config.FindProjectRoot()); err != nil {
+		if _, err := sm.New(resolved.Provider.Name, config.FindProjectRoot()); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {
@@ -542,7 +542,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 		return sm, nil, nil
 	}
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Type)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Name, m.cfg)
 	if err != nil {
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}

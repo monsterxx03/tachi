@@ -31,7 +31,7 @@ func FinalizeCompact(sm *session.Manager, systemPrompt string, summary string) (
 	}
 
 	// 1. Create new session (becomes current)
-	newSess, err := sm.New(oldSess.Provider, oldSess.Model, oldSess.WorkingDir)
+	newSess, err := sm.New(oldSess.ProviderName, oldSess.WorkingDir)
 	if err != nil {
 		return nil, fmt.Errorf("create compact session: %w", err)
 	}

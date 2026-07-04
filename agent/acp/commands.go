@@ -298,7 +298,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType)
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType, sess.cfg)
 			if convErr == nil {
 				history = llmMsgs
 			} else {
@@ -403,8 +403,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 	}
 	info := &cmds.UsageReportInfo{
 		SessionID:                report.Session.ID,
-		Provider:                 report.Session.Provider,
-		Model:                    report.Session.Model,
+		Provider:                 report.Session.ProviderName,
 		Title:                    report.Session.Title,
 		ContextWindow:            report.ContextWindow,
 		InputTokens:              report.Usage.InputTokens,
@@ -570,7 +569,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType)
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType, sess.cfg)
 			if convErr == nil {
 				history = llmMsgs
 			} else {

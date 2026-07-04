@@ -603,8 +603,7 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 
 	info := &cmds.UsageReportInfo{
 		SessionID:                report.Session.ID,
-		Provider:                 report.Session.Provider,
-		Model:                    report.Session.Model,
+		Provider:                 report.Session.ProviderName,
 		Title:                    report.Session.Title,
 		ContextWindow:            report.ContextWindow,
 		InputTokens:              report.Usage.InputTokens,

@@ -273,8 +273,7 @@ func TestBuildReportData(t *testing.T) {
 	s := &session.Session{
 		ID:        "test-session-1",
 		Title:     "Test Session",
-		Provider:  "anthropic",
-		Model:     "claude-sonnet-4-20250514",
+		ProviderName: "anthropic",
 		CreatedAt: time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 5, 21, 11, 0, 0, 0, time.UTC),
 	}
@@ -340,8 +339,7 @@ func TestBuildReportData_SubagentEvents(t *testing.T) {
 	s := &session.Session{
 		ID:        "sub-session",
 		Title:     "Sub Session",
-		Provider:  "anthropic",
-		Model:     "claude",
+		ProviderName: "anthropic",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}
@@ -413,8 +411,7 @@ func TestBuildReportDataFromMessages(t *testing.T) {
 	s := &session.Session{
 		ID:        "msg-session",
 		Title:     "Message Session",
-		Provider:  "openai",
-		Model:     "gpt-4o",
+		ProviderName: "openai",
 		CreatedAt: time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC),
 		UpdatedAt: time.Date(2026, 5, 21, 9, 30, 0, 0, time.UTC),
 	}
@@ -488,8 +485,7 @@ func TestGenerateHTML(t *testing.T) {
 	s := &session.Session{
 		ID:        "html-test",
 		Title:     "HTML Report Test",
-		Provider:  "anthropic",
-		Model:     "claude",
+		ProviderName: "anthropic",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
 	}

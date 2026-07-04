@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -248,9 +249,14 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		// Session management: create session if needed and append user message
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
-			provider := a.provider.Name()
+			providerName := a.provider.Name()
+			if a.cfg != nil {
+				if pn := config.ResolveProviderName(a.cfg); pn != "" {
+					providerName = pn
+				}
+			}
 			wd, _ := os.Getwd()
-			if _, err := a.sessionManager.New(provider, a.provider.Model(), wd); err != nil {
+			if _, err := a.sessionManager.New(providerName, wd); err != nil {
 				a.logger.Log("Agent: failed to create session: %v", err)
 			}
 			// Update logger with session ID for debug log tracking

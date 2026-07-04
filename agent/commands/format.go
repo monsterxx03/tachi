@@ -20,7 +20,6 @@ import (
 type UsageReportInfo struct {
 	SessionID     string
 	Provider      string
-	Model         string
 	Title         string
 	ContextWindow int64
 
@@ -70,7 +69,6 @@ func FormatUsageReport(info *UsageReportInfo) string {
 		provider = "(unknown)"
 	}
 	sb.WriteString(fmt.Sprintf("**Provider:** %s\n\n", provider))
-	sb.WriteString(fmt.Sprintf("**Model:** %s\n\n", info.Model))
 	title := info.Title
 	if title == "" {
 		title = "(untitled)"

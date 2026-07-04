@@ -33,7 +33,6 @@ type SessionView struct {
 	ID        string `json:"id"`
 	Title     string `json:"title"`
 	Provider  string `json:"provider"`
-	Model     string `json:"model"`
 	CreatedAt string `json:"created_at"`
 	UpdatedAt string `json:"updated_at"`
 	Duration  string `json:"duration"`
@@ -117,8 +116,7 @@ func buildSessionView(s *session.Session) *SessionView {
 	return &SessionView{
 		ID:        s.ID,
 		Title:     s.Title,
-		Provider:  s.Provider,
-		Model:     s.Model,
+		Provider:  s.ProviderName,
 		CreatedAt: formatTime(s.CreatedAt),
 		UpdatedAt: formatTime(s.UpdatedAt),
 		Duration:  formatDuration(s.CreatedAt, s.UpdatedAt),

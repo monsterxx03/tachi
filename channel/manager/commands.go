@@ -214,23 +214,17 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	if sess == nil {
 		// No session yet — create one now to persist the model choice.
 		wd, _ := os.Getwd()
-		newSess, err := sm.New(resolved.Type, resolved.Model, wd)
+		newSess, err := sm.New(name, wd)
 		if err != nil {
-			m.logger.Log("channel: /model create session for %s: %v", threadID, err)
-		} else {
-			sm.SetThreadID(threadID)
-			newSess.ProviderName = name
-			newSess.UpdatedAt = time.Now()
-			sm.UpdateMeta(newSess)
+			return "", fmt.Errorf("create session: %w", err)
 		}
-	} else {
-		sess.Provider = resolved.Type
-		sess.Model = resolved.Model
-		sess.ProviderName = name
-		sess.UpdatedAt = time.Now()
-		if err := sm.UpdateMeta(sess); err != nil {
-			m.logger.Log("channel: /model update session meta for %s: %v", threadID, err)
-		}
+		sm.SetThreadID(threadID)
+		sess = newSess
+	}
+	sess.ProviderName = name
+	sess.UpdatedAt = time.Now()
+	if err := sm.UpdateMeta(sess); err != nil {
+		m.logger.Log("channel: /model update session meta for %s: %v", threadID, err)
 	}
 
 	// Evict only the current thread's cached agent so the next message
@@ -458,8 +452,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 
 	info := &cmds.UsageReportInfo{
 		SessionID:                report.Session.ID,
-		Provider:                 report.Session.Provider,
-		Model:                    report.Session.Model,
+		Provider:                 report.Session.ProviderName,
 		Title:                    report.Session.Title,
 		ContextWindow:            report.ContextWindow,
 		InputTokens:              report.Usage.InputTokens,

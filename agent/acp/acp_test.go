@@ -52,7 +52,7 @@ func TestFindLatestSessionByCwd_FindsMatching(t *testing.T) {
 	sm := session.NewManagerWithStore(store)
 
 	// Create a session with matching cwd
-	sess, err := sm.New("openai", "gpt-4", "/my/project")
+	sess, err := sm.New("openai", "/my/project")
 	require.NoError(t, err)
 	require.NotNil(t, sess)
 
@@ -66,7 +66,7 @@ func TestFindLatestSessionByCwd_NoMatch(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	_, err = sm.New("openai", "gpt-4", "/project/a")
+	_, err = sm.New("openai", "/project/a")
 	require.NoError(t, err)
 
 	// Different cwd — should not match
@@ -80,13 +80,13 @@ func TestFindLatestSessionByCwd_ReturnsLatest(t *testing.T) {
 	sm := session.NewManagerWithStore(store)
 
 	// Create sessions with different cwds, last one matching
-	_, err = sm.New("openai", "gpt-4", "/project/other")
+	_, err = sm.New("openai", "/project/other")
 	require.NoError(t, err)
 
-	sess2, err := sm.New("openai", "gpt-4", "/project/target")
+	sess2, err := sm.New("openai", "/project/target")
 	require.NoError(t, err)
 
-	_, err = sm.New("openai", "gpt-4", "/project/another")
+	_, err = sm.New("openai", "/project/another")
 	require.NoError(t, err)
 
 	// The second session matches /project/target.
@@ -101,11 +101,11 @@ func TestFindLatestSessionByCwd_MultipleMatching_ReturnsNewest(t *testing.T) {
 	sm := session.NewManagerWithStore(store)
 
 	// Create multiple sessions with same cwd
-	_, err = sm.New("openai", "gpt-4", "/project/shared")
+	_, err = sm.New("openai", "/project/shared")
 	require.NoError(t, err)
-	_, err = sm.New("openai", "gpt-4", "/project/shared")
+	_, err = sm.New("openai", "/project/shared")
 	require.NoError(t, err)
-	sess3, err := sm.New("openai", "gpt-4", "/project/shared")
+	sess3, err := sm.New("openai", "/project/shared")
 	require.NoError(t, err)
 
 	// Should return the most recent (sess3)
@@ -178,7 +178,7 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 	// Create a session on disk with matching cwd
 	sm, err := session.NewManager()
 	require.NoError(t, err)
-	sess, err := sm.New("openai", "gpt-4o-mini", "/existing/project")
+	sess, err := sm.New("openai", "/existing/project")
 	require.NoError(t, err)
 	sessID := sess.ID
 	sm.EndCurrent()

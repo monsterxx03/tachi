@@ -53,10 +53,9 @@ func TestStore(t *testing.T) {
 
 	// Test CreateSession
 	session := &Session{
-		ID:        GenerateID(),
-		Title:     "Test Session",
-		Provider:  "openai",
-		Model:     "gpt-4",
+		ID:           GenerateID(),
+		Title:        "Test Session",
+		ProviderName: "openai",
 	}
 	if err := store.CreateSession(session); err != nil {
 		t.Fatalf("CreateSession failed: %v", err)

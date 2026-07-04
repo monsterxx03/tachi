@@ -6,23 +6,17 @@ import (
 
 type Session struct {
 	ID           string    `json:"id"`
-	ThreadID     string    `json:"thread_id,omitempty"`     // channel ThreadID for session lookup
+	ThreadID     string    `json:"thread_id,omitempty"`               // channel ThreadID for session lookup
 	Title        string    `json:"title"`
-	Provider     string    `json:"provider"`                // LLM provider type (e.g. "anthropic", "openai")
-	Model        string    `json:"model"`                   // LLM model name (e.g. "claude-sonnet-4-20250514")
-	ProviderName string    `json:"provider_name,omitempty"` // config provider name (e.g. "claude", "gpt-5.2"); set by /model override
-	WorkingDir   string    `json:"working_dir,omitempty"`   // working directory at session creation time
+	ProviderName string    `json:"provider_name,omitempty"`            // config provider name (e.g. "deepseek-v4-flash"); empty = default provider
+	WorkingDir   string    `json:"working_dir,omitempty"`             // working directory at session creation time
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
-	SkipDream    bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	SkipDream    bool      `json:"skip_dream,omitempty"`              // exclude this session from Dream memory consolidation
 
 	// Compact-related fields: link to child/parent sessions after /compact.
-	// - CompactedChildID: set on the OLD session after compaction, pointing to the NEW session.
-	// - CompactedParentID: set on the NEW session, pointing to the OLD session.
-	// - CompactedParentTitle: title of the old session, so the new session doesn't need
-	//   to load the old session's meta to display the relationship.
-	CompactedChildID    string `json:"compacted_child_id,omitempty"`
-	CompactedParentID   string `json:"compacted_parent_id,omitempty"`
+	CompactedChildID     string `json:"compacted_child_id,omitempty"`
+	CompactedParentID    string `json:"compacted_parent_id,omitempty"`
 	CompactedParentTitle string `json:"compacted_parent_title,omitempty"`
 }
 

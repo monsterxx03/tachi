@@ -1,7 +1,7 @@
 package commands
 
 // DefaultReviewMaxIterations is the default iteration budget for /review.
-const DefaultReviewMaxIterations = 30
+const DefaultReviewMaxIterations = 200
 
 // DefaultReviewAllowedTools returns a fresh copy of the default allowed tool
 // list for /review. Callers must not modify the returned slice.
