@@ -1,7 +1,9 @@
 package manager
 
 import (
+	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -246,7 +248,9 @@ func formatToolArgs(toolName, argsJSON string) string {
 			return " — " + truncateToolArg(u, 50)
 		}
 	case tools.ToolNameSubAgent:
-		return "" // sub-agent description is too verbose
+		if p := extractJSONField(argsJSON, "prompt"); p != "" {
+			return " — " + truncateToolArg(p, 60)
+		}
 	case tools.ToolNameSkill:
 		if op := extractJSONField(argsJSON, "operation"); op != "" {
 			name := extractJSONField(argsJSON, "name")
@@ -264,7 +268,8 @@ func formatToolArgs(toolName, argsJSON string) string {
 			return " — " + truncateToolArg(q, 50)
 		}
 	}
-	return ""
+	// Fallback: tools without a predefined template show all arguments.
+	return formatFullArgs(argsJSON)
 }
 
 // extractJSONField extracts a top-level string field from a JSON object.
@@ -316,4 +321,44 @@ func truncateToolArg(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// formatFullArgs formats all top-level arguments from a JSON string for tools
+// that don't have a predefined parameter template. Long values are truncated.
+// Returns a string like " — key1=value1, key2=value2" or empty string on failure.
+func formatFullArgs(argsJSON string) string {
+	var args map[string]interface{}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return ""
+	}
+	if len(args) == 0 {
+		return ""
+	}
+
+	// Collect and sort keys for deterministic output.
+	keys := make([]string, 0, len(args))
+	for k := range args {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+
+	var pairs []string
+	for _, k := range keys {
+		v := args[k]
+		if v == nil {
+			continue
+		}
+		valStr := fmt.Sprintf("%v", v)
+		if valStr == "" {
+			continue
+		}
+		// Truncate long values.
+		valStr = truncateToolArg(valStr, 40)
+		pairs = append(pairs, k+"="+valStr)
+	}
+
+	if len(pairs) == 0 {
+		return ""
+	}
+	return " — " + strings.Join(pairs, ", ")
 }
