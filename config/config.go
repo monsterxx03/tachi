@@ -227,13 +227,13 @@ func (c *CronConfig) IsEnabled() bool {
 // DreamConfig holds configuration for AutoDream — the background memory
 // consolidation system that runs via SystemScheduler in channel mode.
 type DreamConfig struct {
-	Enabled          bool          `yaml:"enabled" default:"false"`
-	Schedule         string        `yaml:"schedule" default:"0 3 * * *"`     // cron expression (default: daily 3 AM)
-	Provider         string        `yaml:"provider"`                         // provider name (empty → use main provider)
-	MaxConcurrent    int           `yaml:"max_concurrent" default:"3"`       // max parallel dream sub-agents
-	SubagentTimeout  time.Duration `yaml:"subagent_timeout" default:"10m"`   // timeout for each dream sub-agent
-	SubagentMaxIter  int           `yaml:"subagent_max_iters" default:"30"`  // max iterations for dream sub-agent
-	MaxMessageChars  int           `yaml:"max_message_chars" default:"2000"` // max chars per message in dream prompt
+	Enabled         bool          `yaml:"enabled" default:"false"`
+	Schedule        string        `yaml:"schedule" default:"0 3 * * *"`     // cron expression (default: daily 3 AM)
+	Provider        string        `yaml:"provider"`                         // provider name (empty → use main provider)
+	MaxConcurrent   int           `yaml:"max_concurrent" default:"3"`       // max parallel dream sub-agents
+	SubagentTimeout time.Duration `yaml:"subagent_timeout" default:"10m"`   // timeout for each dream sub-agent
+	SubagentMaxIter int           `yaml:"subagent_max_iters" default:"30"`  // max iterations for dream sub-agent
+	MaxMessageChars int           `yaml:"max_message_chars" default:"2000"` // max chars per message in dream prompt
 }
 
 // EditConfig holds configuration for the edit mode.
@@ -315,9 +315,9 @@ type SubagentConfig struct {
 // When Provider is empty, the main provider is used.
 // AllowedTools defaults to [Bash, ReadFile, WriteFile, Glob, Grep] when empty (handled in code).
 type ReviewConfig struct {
-	Provider      string   `yaml:"provider"`        // provider name, empty → use main
-	MaxIterations int      `yaml:"max_iterations" default:"30"`  // iteration budget
-	AllowedTools  []string `yaml:"allowed_tools"`   // default: [Bash, ReadFile, Glob, Grep] (code-level fallback)
+	Provider      string   `yaml:"provider"`                     // provider name, empty → use main
+	MaxIterations int      `yaml:"max_iterations" default:"200"` // iteration budget
+	AllowedTools  []string `yaml:"allowed_tools"`                // default: [Bash, ReadFile, Glob, Grep] (code-level fallback)
 	Thinking      *bool    `yaml:"thinking" default:"false"`     // enable extended thinking
 }
 

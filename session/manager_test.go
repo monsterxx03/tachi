@@ -11,7 +11,7 @@ func TestManagerCleanup_BelowLimit(t *testing.T) {
 
 	// Create 3 sessions — should not trigger cleanup
 	for range 3 {
-		_, err := mgr.New("openai", "gpt-4", ".")
+		_, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -33,7 +33,7 @@ func TestManagerCleanup_ExceedsLimit(t *testing.T) {
 
 	// Create 5 sessions — should trigger cleanup, retaining 3
 	for range 5 {
-		_, err := mgr.New("openai", "gpt-4", ".")
+		_, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -55,7 +55,7 @@ func TestManagerCleanup_ZeroMaxKeep(t *testing.T) {
 
 	// Create 5 sessions — should not trigger cleanup
 	for range 5 {
-		_, err := mgr.New("openai", "gpt-4", ".")
+		_, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -78,7 +78,7 @@ func TestManagerCleanup_PreservesNewest(t *testing.T) {
 	// Create 4 sessions
 	var sessionIDs []string
 	for range 4 {
-		sess, err := mgr.New("openai", "gpt-4", ".")
+		sess, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -107,12 +107,12 @@ func TestManagerCleanup_PreservesCurrent(t *testing.T) {
 	mgr.SetMaxKeep(1)
 
 	// Create 3 sessions. The first becomes the current session.
-	sess1, _ := mgr.New("openai", "gpt-4", ".")
+	sess1, _ := mgr.New("openai", ".")
 	mgr.Load(sess1.ID) // make it current
 
 	// Create 2 more — cleanup triggers, should keep sess1 (current)
-	sess2, _ := mgr.New("openai", "gpt-4", ".")
-	sess3, _ := mgr.New("openai", "gpt-4", ".")
+	sess2, _ := mgr.New("openai", ".")
+	sess3, _ := mgr.New("openai", ".")
 	_ = sess2
 	_ = sess3
 
@@ -142,7 +142,7 @@ func TestManagerCleanup_ExplicitNoop(t *testing.T) {
 	mgr.SetMaxKeep(100)
 
 	for range 3 {
-		_, err := mgr.New("openai", "gpt-4", ".")
+		_, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -169,7 +169,7 @@ func TestManagerCleanup_PreservesChannelSessions(t *testing.T) {
 	// active channel threads.
 	var channelIDs []string
 	for i := range 5 {
-		sess, err := mgr.New("openai", "gpt-4", ".")
+		sess, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -219,7 +219,7 @@ func TestManagerCleanup_RemovesClearedThreadSessions(t *testing.T) {
 
 	// Create 3 sessions, all with ThreadID.
 	for range 3 {
-		_, err := mgr.New("openai", "gpt-4", ".")
+		_, err := mgr.New("openai", ".")
 		if err != nil {
 			t.Fatalf("New failed: %v", err)
 		}
@@ -240,7 +240,7 @@ func TestManagerCleanup_RemovesClearedThreadSessions(t *testing.T) {
 	mgr.EndCurrent()
 
 	// Create one more session to trigger cleanup with maxKeep=1.
-	_, err := mgr.New("openai", "gpt-4", ".")
+	_, err := mgr.New("openai", ".")
 	if err != nil {
 		t.Fatalf("New failed: %v", err)
 	}

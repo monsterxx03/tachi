@@ -27,7 +27,7 @@ type ResolvedConfig struct {
 }
 
 func Resolve(cfg *Config) (*ResolvedConfig, error) {
-	providerName := resolveProviderName(cfg)
+	providerName := ResolveProviderName(cfg)
 	if providerName == "" {
 		return nil, fmt.Errorf("no provider configured; create %s", filepath.Join(BaseDir(), "config.yaml"))
 	}
@@ -49,7 +49,7 @@ func Resolve(cfg *Config) (*ResolvedConfig, error) {
 	}, nil
 }
 
-func resolveProviderName(cfg *Config) string {
+func ResolveProviderName(cfg *Config) string {
 	if cfg.Provider != "" {
 		return cfg.Provider
 	}
@@ -113,30 +113,3 @@ func EnvForProviderType(providerType string) string {
 	}
 }
 
-// ResolveSessionProvider finds and resolves a provider config by type and model.
-// It searches the config's providers list for the first match on type, then
-// checks if a more specific type+model match exists. If the model differs from
-// the matched config, the model is overridden. Returns nil if no matching
-// provider type is found in config.
-func ResolveSessionProvider(cfg *Config, providerType, model string) (*ResolvedProvider, error) {
-	// First pass: find a provider with matching type + model
-	for i := range cfg.Providers {
-		p := &cfg.Providers[i]
-		if p.Type == providerType && p.Model == model {
-			return ResolveProviderConfig(p)
-		}
-	}
-
-	// Second pass: find a provider with matching type (any model)
-	// — the model will be overridden below.
-	for i := range cfg.Providers {
-		p := &cfg.Providers[i]
-		if p.Type == providerType {
-			overridden := *p
-			overridden.Model = model
-			return ResolveProviderConfig(&overridden)
-		}
-	}
-
-	return nil, fmt.Errorf("no provider with type %q found in config", providerType)
-}

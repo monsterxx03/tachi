@@ -143,7 +143,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		t.logger.Log("ACP: session manager init warning: %v", smErr)
 	} else {
 		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
-		sm.New(resolved.Provider.Type, resolved.Provider.Model, cwd)
+		sm.New(resolved.Provider.Name, cwd)
 		aiAgent.SetSessionManager(sm)
 	}
 
@@ -237,7 +237,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	} else if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType)
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType, t.cfg)
 			if convErr == nil {
 				history = llmMsgs
 			} else {
@@ -392,11 +392,11 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	// Use session's original provider if available
 	provType := resolved.Provider.Type
 	provModel := resolved.Provider.Model
-	if loaded.Provider != "" {
-		provType = loaded.Provider
-	}
-	if loaded.Model != "" {
-		provModel = loaded.Model
+	if loaded.ProviderName != "" {
+		if pCfg := t.cfg.FindProvider(loaded.ProviderName); pCfg != nil {
+			provType = pCfg.Type
+			provModel = pCfg.Model
+		}
 	}
 
 	provider, err := llm.NewProvider(
@@ -495,15 +495,13 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		return acp.LoadSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
 
-	// Use session's stored provider/model if available (matches ResumeSession behavior)
+	// Use session's stored provider if available (matches ResumeSession behavior)
 	provType := resolved.Provider.Type
 	provModel := resolved.Provider.Model
-	if loaded != nil {
-		if loaded.Provider != "" {
-			provType = loaded.Provider
-		}
-		if loaded.Model != "" {
-			provModel = loaded.Model
+	if loaded != nil && loaded.ProviderName != "" {
+		if pCfg := t.cfg.FindProvider(loaded.ProviderName); pCfg != nil {
+			provType = pCfg.Type
+			provModel = pCfg.Model
 		}
 	}
 
@@ -555,7 +553,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			aiAgent.SetSessionManager(sm)
 		} else {
 			t.logger.Log("ACP: LoadSession no existing session, creating new")
-			sm.New(provType, provModel, cwd)
+			sm.New(resolved.Provider.Name, cwd)
 			aiAgent.SetSessionManager(sm)
 		}
 	}

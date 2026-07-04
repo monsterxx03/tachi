@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -19,7 +20,15 @@ import (
 //
 // For OpenAI (which doesn't support native thinking blocks), thinking content is
 // prepended to the assistant text content so context is preserved.
-func ConvertSessionToLLMMessages(sessionMsgs []session.Message, provider string) ([]llm.Message, error) {
+func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerName string, cfg *config.Config) ([]llm.Message, error) {
+	// Resolve provider type from the provider name so we know how to handle
+	// provider-specific message formats (e.g., thinking blocks for OpenAI).
+	providerType := providerName // fallback: treat as type string directly
+	if cfg != nil {
+		if pCfg := cfg.FindProvider(providerName); pCfg != nil {
+			providerType = pCfg.Type
+		}
+	}
 	var result []llm.Message
 
 	// Buffered state for grouping related messages into a single assistant message.
@@ -40,7 +49,7 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, provider string)
 
 		// OpenAI doesn't support thinking blocks natively — prepend them
 		// to the Content field so the conversation context is preserved.
-		if provider == llm.ProviderTypeOpenAI && len(thinkingBlocks) > 0 {
+		if providerType == llm.ProviderTypeOpenAI && len(thinkingBlocks) > 0 {
 			var parts []string
 			for _, tb := range thinkingBlocks {
 				parts = append(parts, tb.Thinking)

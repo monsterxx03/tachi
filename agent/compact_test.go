@@ -42,7 +42,7 @@ func TestFinalizeCompact_CreatesNewSession(t *testing.T) {
 	sm := session.NewManagerWithStore(store)
 
 	// Create an old session
-	oldSess, err := sm.New("anthropic", "claude-sonnet-4-20250514", "/test/dir")
+	oldSess, err := sm.New("anthropic", "/test/dir")
 	require.NoError(t, err)
 	oldSess.Title = "帮我重构用户模块"
 	require.NoError(t, sm.UpdateMeta(oldSess))
@@ -94,15 +94,14 @@ func TestFinalizeCompact_PreservesProviderModelWorkingDir(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	oldSess, err := sm.New("openai", "gpt-4o", "/my/project")
+	oldSess, err := sm.New("openai", "/my/project")
 	require.NoError(t, err)
 
 	_, err = FinalizeCompact(sm, "prompt", "summary")
 	require.NoError(t, err)
 
 	newSess := sm.Current()
-	assert.Equal(t, oldSess.Provider, newSess.Provider)
-	assert.Equal(t, oldSess.Model, newSess.Model)
+	assert.Equal(t, oldSess.ProviderName, newSess.ProviderName)
 	assert.Equal(t, oldSess.WorkingDir, newSess.WorkingDir)
 }
 

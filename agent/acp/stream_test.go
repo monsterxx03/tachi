@@ -88,7 +88,7 @@ func setupSessionWithMessages(t *testing.T, cwd string, msgs []session.Message) 
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", cwd)
+	sess, err := sm.New("openai", cwd)
 	require.NoError(t, err)
 
 	for i := range msgs {
@@ -123,7 +123,7 @@ func TestReplaySessionHistory_EmptyMessages(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", "/empty")
+	sess, err := sm.New("openai", "/empty")
 	require.NoError(t, err)
 
 	conn, w, ch := mockACPConn(t)
@@ -359,7 +359,7 @@ func TestReplaySessionHistory_CachesHistory(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", "/cache-test")
+	sess, err := sm.New("openai", "/cache-test")
 	require.NoError(t, err)
 
 	require.NoError(t, sm.AppendMessage(&session.Message{
@@ -400,7 +400,7 @@ func TestReplaySessionHistory_CachesHistory_WithTools(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", "/cache-tools")
+	sess, err := sm.New("openai", "/cache-tools")
 	require.NoError(t, err)
 
 	msgs := []session.Message{
@@ -463,7 +463,7 @@ func TestReplaySessionHistory_CachesHistory_ConversionFailure(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", "/cache-fail")
+	sess, err := sm.New("openai", "/cache-fail")
 	require.NoError(t, err)
 
 	// A tool_call without a corresponding tool_result can cause conversion issues
@@ -497,7 +497,7 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", "/concurrent")
+	sess, err := sm.New("openai", "/concurrent")
 	require.NoError(t, err)
 
 	require.NoError(t, sm.AppendMessage(&session.Message{
@@ -534,7 +534,7 @@ func TestReplaySessionHistory_LoadMessagesError(t *testing.T) {
 	sm := session.NewManagerWithStore(store)
 
 	// Create session but then end it (makes current nil)
-	sess, err := sm.New("openai", "gpt-4o-mini", "/load-err")
+	sess, err := sm.New("openai", "/load-err")
 	require.NoError(t, err)
 	require.NoError(t, sm.AppendMessage(&session.Message{
 		Type:    session.MessageTypeUser,
@@ -563,7 +563,7 @@ func TestReplaySessionHistory_DoesNotCacheOnConversionFailure(t *testing.T) {
 	require.NoError(t, err)
 	sm := session.NewManagerWithStore(store)
 
-	sess, err := sm.New("openai", "gpt-4o-mini", "/conv-fail")
+	sess, err := sm.New("openai", "/conv-fail")
 	require.NoError(t, err)
 
 	// A tool_result without preceding tool_call — this is a valid session

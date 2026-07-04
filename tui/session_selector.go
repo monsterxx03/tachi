@@ -97,7 +97,7 @@ func (m *Model) renderSessionSelection() string {
 		if len(titleRunes) > 40 {
 			displayTitle = string(titleRunes[:37]) + "…"
 		}
-		modelInfo := fmt.Sprintf("%s (%s)", s.Provider, s.Model)
+		modelInfo := fmt.Sprintf("%s", s.ProviderName)
 
 		active := " "
 		if s.ID == currentID {
@@ -177,7 +177,7 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	m.rebuildTotalUsage(sessionMsgs)
 	m.refreshSessionCost()
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, s.Provider)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, s.ProviderName, m.cfg)
 	if err != nil {
 		m.exitSessionSelect(fmt.Sprintf("Failed to convert session: %v", err))
 		return m, nil
@@ -194,10 +194,12 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	m.chatview.LoadHistory(sessionMsgs)
 
 	// Rebuild provider to match the session's original provider/model.
-	providerInfo, providerRestored := m.restoreSessionProvider(s.Provider, s.Model)
+	providerInfo, providerRestored := m.restoreSessionProvider(s.ProviderName)
 	m.statusbar.SetProviderInfo(providerInfo)
-	if cw := llm.ModelContextWindow(s.Model); cw > 0 {
-		m.statusbar.SetContextWindow(cw)
+	if providerRestored {
+		if cw := llm.ModelContextWindow(m.agent.Model()); cw > 0 {
+			m.statusbar.SetContextWindow(cw)
+		}
 	}
 
 	title := s.Title
@@ -206,7 +208,7 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	}
 	msg := fmt.Sprintf("Switched to session: **%s**", title)
 	if !providerRestored {
-		msg += fmt.Sprintf("\n⚠ Provider %s (%s) not found in config — using current provider. Messages may not be compatible.", s.Provider, s.Model)
+		msg += fmt.Sprintf("\n⚠ Provider %s not found in config — using current provider. Messages may not be compatible.", s.ProviderName)
 	}
 	m.exitSessionSelect(msg)
 	return m, nil
@@ -239,18 +241,23 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 }
 
 // restoreSessionProvider resolves and switches the agent's provider to match
-// the given session providerType and model. Returns the display string and
-// whether the provider was successfully restored.
-func (m *Model) restoreSessionProvider(providerType, model string) (string, bool) {
-	sp, err := config.ResolveSessionProvider(m.cfg, providerType, model)
-	if err != nil {
+// the given session providerName. Returns the display string and whether the
+// provider was successfully restored.
+func (m *Model) restoreSessionProvider(providerName string) (string, bool) {
+	pCfg := m.cfg.FindProvider(providerName)
+	if pCfg == nil {
 		// Keep current provider, show the session's expected info
-		return fmt.Sprintf("%s (%s) [unmatched]", providerType, model), false
+		return fmt.Sprintf("%s [unmatched]", providerName), false
+	}
+
+	sp, err := config.ResolveProviderConfig(pCfg)
+	if err != nil {
+		return fmt.Sprintf("%s [error]", providerName), false
 	}
 
 	provider, err := llm.NewProvider(sp.Type, sp.APIKey, sp.BaseURL, sp.Model)
 	if err != nil {
-		return fmt.Sprintf("%s (%s) [error]", providerType, model), false
+		return fmt.Sprintf("%s (%s) [error]", sp.Type, sp.Model), false
 	}
 
 	m.agent.SetProvider(provider)
