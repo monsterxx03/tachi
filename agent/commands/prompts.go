@@ -64,7 +64,7 @@ End with a brief overall assessment of the change set.
 After completing the review, save the full report to a file using **WriteFile**:
 
 1. Ensure the directory .tachi/reviews/ exists (use 'mkdir -p .tachi/reviews' via Bash).
-2. Write the report to .tachi/reviews/[date]-[branch-or-shortid]-review.md, where [date] is today's date in YYYY-MM-DD format and [branch-or-shortid] is the current git branch name or a short identifier.
+2. Write the report to .tachi/reviews/[timestamp]-[summary]-review.md, where [timestamp] is obtained by running 'date +%Y-%m-%d-%H%M' via Bash (precise to the minute), and [summary] is a short 2-4 word kebab-case summary of the changes being reviewed (e.g. "fix-input-wrapping", "add-lsp-support"). Do NOT use the git branch name.
 3. The report file should contain the complete review output including all findings and the overall assessment.`
 }
 
