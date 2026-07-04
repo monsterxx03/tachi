@@ -59,6 +59,7 @@ type AgentEvent struct {
 	Title          string // For AgentEventSessionTitle
 	CompactSummary string // For AgentEventAutoCompactDone: LLM-generated summary
 	OldMsgCount    int    // For AgentEventAutoCompactDone: message count before compact
+	IterCount      int    // For AgentEventSubagentDone: sub-agent iteration count
 }
 
 var (

@@ -65,16 +65,17 @@ func (e *Executor) MaxOutputChars() int {
 
 // RunSubagent creates and runs a child agent to execute the given task.
 // It blocks until the child completes or the context is cancelled.
+// Returns the SubagentResult which includes output, statistics, and tool call summary.
 func (e *Executor) RunSubagent(
 	ctx context.Context,
 	args tools.SubagentArgs,
-) (string, string, error) {
+) (string, string, *tools.SubagentResult, error) {
 	// Acquire concurrency semaphore
 	select {
 	case e.sem <- struct{}{}:
 		defer func() { <-e.sem }()
 	case <-ctx.Done():
-		return "", "", ctx.Err()
+		return "", "", nil, ctx.Err()
 	}
 
 	provider := e.agent.SubagentProvider()
@@ -93,15 +94,15 @@ func (e *Executor) RunSubagent(
 
 	// If worktree is enabled, delegate to WorktreeManager
 	if e.worktreeMgr != nil {
-		result, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, error) {
+		result, stats, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 			e.agent.Logger().Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
 			return e.run(worktreeCtx, shortID, args, provider, maxIterations, thinking, branch, wtPath)
 		})
-		return result, shortID, err
+		return result, shortID, stats, err
 	}
 
-	result, err := e.run(ctx, shortID, args, provider, maxIterations, thinking, "", "")
-	return result, shortID, err
+	result, stats, err := e.run(ctx, shortID, args, provider, maxIterations, thinking, "", "")
+	return result, shortID, stats, err
 }
 
 // run is the internal method that creates and runs the child agent.
@@ -114,7 +115,7 @@ func (e *Executor) run(
 	thinking bool,
 	branch string,
 	worktreePath string,
-) (string, error) {
+) (string, *tools.SubagentResult, error) {
 	subagentSessionID := shortID
 	if sm := e.agent.SessionManager(); sm != nil {
 		if cur := sm.Current(); cur != nil {
@@ -171,6 +172,7 @@ func (e *Executor) run(
 	var finalResult string // accumulated text result returned at end
 	startTime := time.Now()
 	iterCount := 0
+	toolCalls := make(tools.ToolCallCount)
 
 	flushThinking := func() {
 		if rec == nil || thinkingBuf.Len() == 0 {
@@ -225,6 +227,7 @@ func (e *Executor) run(
 					ToolCallID: event.ToolID,
 				})
 			}
+			toolCalls.Add(event.ToolName)
 			iterCount++
 
 		case StreamEventTurnComplete:
@@ -248,12 +251,19 @@ func (e *Executor) run(
 			if event.Error != nil {
 				errVal = event.Error
 			}
-			childLogger.Log("completed with error | iters=%d duration=%s output_len=%d err=%v",
-				iterCount, duration, len(finalResult), errVal)
-			if errVal != nil {
-				return finalResult, errVal
+			childLogger.Log("completed with error | iters=%d duration=%s output_len=%d tool_calls=%s err=%v",
+				iterCount, duration, len(finalResult), toolCalls.String(), errVal)
+			stats := &tools.SubagentResult{
+				Output:          finalResult,
+				ShortID:         shortID,
+				IterCount:       iterCount,
+				Duration:        duration,
+				ToolCallSummary: toolCalls,
 			}
-			return finalResult, fmt.Errorf("sub-agent error")
+			if errVal != nil {
+				return finalResult, stats, errVal
+			}
+			return finalResult, stats, fmt.Errorf("sub-agent error")
 		}
 	}
 
@@ -261,10 +271,17 @@ func (e *Executor) run(
 	flushText()
 
 	duration := time.Since(startTime)
-	childLogger.Log("completed | iters=%d duration=%s output_len=%d",
-		iterCount, duration, len(finalResult))
+	stats := &tools.SubagentResult{
+		Output:          finalResult,
+		ShortID:         shortID,
+		IterCount:       iterCount,
+		Duration:        duration,
+		ToolCallSummary: toolCalls,
+	}
+	childLogger.Log("completed | iters=%d duration=%s output_len=%d tool_calls=%s",
+		iterCount, duration, len(finalResult), toolCalls.String())
 
-	return finalResult, nil
+	return finalResult, stats, nil
 }
 
 // buildAllowedTools builds the list of allowed tool names, always excluding

@@ -78,6 +78,7 @@ type ToolResult struct {
 	Questions  []Question
 	SubagentID string        // SubAgent shortID, for linking to subagent/<id>.jsonl
 	Duration   time.Duration // Wall-clock duration of tool execution
+	IterCount  int           // SubAgent iteration count (populated in Invoke, correct per-invocation)
 	ImageParts []llm.ContentPart // Image content parts (e.g., from ReadFile on image files)
 }
 
@@ -270,6 +271,9 @@ func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolRes
 	tr := ToolResult{Status: ToolResultSuccess, Output: result, Duration: resultDuration, ImageParts: ImagePartsFromCtx(imageCtx)}
 	if carrier, ok := tool.(SubagentIDCarrier); ok {
 		tr.SubagentID = carrier.LastSubagentID()
+	}
+	if sc, ok := tool.(SubagentStatsCarrier); ok {
+		tr.IterCount, _ = sc.LastSubagentStats()
 	}
 	return tr
 }

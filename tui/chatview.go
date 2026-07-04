@@ -574,14 +574,12 @@ func (c *ChatView) renderToolCall(tc toolCallDisplay) string {
 				dimStyle.Render(preview))
 			fmt.Fprintf(&b, "  %s", toolResultErrStyle.Render(truncate(tc.Result, 200)))
 		} else {
-			fmt.Fprintf(&b, "%s %s(%s)\n",
+			fmt.Fprintf(&b, "%s %s(%s)%s\n",
 				toolResultOKStyle.Render("v"),
 				toolCallStyle.Render(nameTag),
-				dimStyle.Render(preview))
+				dimStyle.Render(preview),
+				renderToolDuration(tc))
 			summary := dimStyle.Render(truncate(tc.Result, 200))
-			if tc.Duration > 0 {
-				summary += dimStyle.Render(" " + formatDuration(tc.Duration))
-			}
 			fmt.Fprintf(&b, "  %s", summary)
 		}
 	} else {
@@ -589,10 +587,11 @@ func (c *ChatView) renderToolCall(tc toolCallDisplay) string {
 		if tc.IsSubagent {
 			spinnerChar = "⊡" // running subagent indicator
 		}
-		fmt.Fprintf(&b, "%s %s(%s)",
+		fmt.Fprintf(&b, "%s %s(%s)%s",
 			toolCallStyle.Render(spinnerChar),
 			toolCallStyle.Render(nameTag),
-			dimStyle.Render(preview))
+			dimStyle.Render(preview),
+			renderToolDuration(tc))
 	}
 
 	return b.String()
@@ -741,6 +740,18 @@ func renderDiffWithHighlight(content string, width int) string {
 		}
 	}
 	return b.String()
+}
+
+// renderToolDuration renders tool execution duration with sub-agent stats when available.
+// For sub-agents, shows "5 iters, 12.3s". For other tools, shows "(1.2s)".
+func renderToolDuration(tc toolCallDisplay) string {
+	if tc.IsSubagent && tc.IterCount > 0 {
+		return dimStyle.Render(fmt.Sprintf(" %d iters, %s", tc.IterCount, formatDuration(tc.Duration)))
+	}
+	if tc.Duration > 0 {
+		return dimStyle.Render(" " + formatDuration(tc.Duration))
+	}
+	return ""
 }
 
 // formatDuration formats a time.Duration as a concise human-readable string

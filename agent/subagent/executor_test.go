@@ -163,7 +163,7 @@ func TestExecutor_RunSubagent_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
 
-	result, shortID, err := exec.RunSubagent(ctx, tools.SubagentArgs{Prompt: "test"})
+	result, shortID, _, err := exec.RunSubagent(ctx, tools.SubagentArgs{Prompt: "test"})
 	assert.Empty(t, result)
 	assert.Empty(t, shortID)
 	assert.Error(t, err)

@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
@@ -41,7 +42,7 @@ func TestWorktreeManager_Create_DetachedHEAD(t *testing.T) {
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
-	result, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, error) {
+	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		assert.NotEmpty(t, wtPath)
 		assert.DirExists(t, wtPath)
 
@@ -57,7 +58,7 @@ func TestWorktreeManager_Create_DetachedHEAD(t *testing.T) {
 		f.WriteString("hello from worktree\n")
 		f.Close()
 
-		return "task completed", nil
+		return "task completed", nil, nil
 	})
 
 	assert.NoError(t, err)
@@ -85,9 +86,9 @@ func TestWorktreeManager_Create_NoCleanup(t *testing.T) {
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
 	var worktreePath string
-	result, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, error) {
+	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		worktreePath = wtPath
-		return "done", nil
+		return "done", nil, nil
 	})
 
 	assert.NoError(t, err)
@@ -111,13 +112,13 @@ func TestWorktreeManager_Create_CollectsPatchOnChange(t *testing.T) {
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
-	result, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, error) {
+	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		f, err := os.Create(filepath.Join(wtPath, "worktree_modify_test.txt"))
 		require.NoError(t, err)
 		f.WriteString("changed\n")
 		f.Close()
 
-		return "committed change", nil
+		return "committed change", nil, nil
 	})
 
 	assert.NoError(t, err)
@@ -145,14 +146,14 @@ func TestWorktreeManager_Create_WithBranch(t *testing.T) {
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
-	result, err := wm.Create(t.Context(), currentBranch, func(ctx context.Context, wtPath string) (string, error) {
+	result, _, err := wm.Create(t.Context(), currentBranch, func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		// Verify we're on the specified branch
 		cmd := exec.Command("git", "-C", wtPath, "rev-parse", "--abbrev-ref", "HEAD")
 		out, err := cmd.Output()
 		require.NoError(t, err)
 		branchOn := strings.TrimSpace(string(out))
 		assert.Equal(t, currentBranch, branchOn)
-		return "branch verified", nil
+		return "branch verified", nil, nil
 	})
 
 	assert.NoError(t, err)
@@ -169,8 +170,8 @@ func TestWorktreeManager_Create_NonexistentBranch(t *testing.T) {
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
-	_, err := wm.Create(t.Context(), "nonexistent-branch-xyzzy", func(ctx context.Context, wtPath string) (string, error) {
-		return "", nil
+	_, _, err := wm.Create(t.Context(), "nonexistent-branch-xyzzy", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
+		return "", nil, nil
 	})
 
 	assert.Error(t, err)
@@ -187,8 +188,8 @@ func TestWorktreeManager_Create_RemoteTrackingRef(t *testing.T) {
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
-	_, err := wm.Create(t.Context(), "origin/main", func(ctx context.Context, wtPath string) (string, error) {
-		return "", nil
+	_, _, err := wm.Create(t.Context(), "origin/main", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
+		return "", nil, nil
 	})
 
 	assert.Error(t, err)
@@ -206,8 +207,8 @@ func TestWorktreeManager_Create_EmptyResultPatch(t *testing.T) {
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
 	// Don't make any changes → no patch
-	result, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, error) {
-		return "", nil
+	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
+		return "", nil, nil
 	})
 
 	assert.NoError(t, err)
@@ -224,14 +225,14 @@ func TestWorktreeManager_Create_FnErrorStillReturnsPatch(t *testing.T) {
 	}
 	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
 
-	result, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, error) {
+	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		// Create a file then return error
 		f, ferr := os.Create(filepath.Join(wtPath, "before_error.txt"))
 		if ferr == nil {
 			f.WriteString("partial work\n")
 			f.Close()
 		}
-		return "", assert.AnError
+		return "", nil, assert.AnError
 	})
 
 	// Error is propagated
@@ -305,9 +306,9 @@ func TestWorktreeManager_Create_FallbackToSharedDir_NoGitWorktree(t *testing.T) 
 
 	// createWorktree will fail, fallback gives empty path to fn
 	var wtPath string
-	result, err := wm.Create(t.Context(), "", func(ctx context.Context, path string) (string, error) {
+	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, path string) (string, *tools.SubagentResult, error) {
 		wtPath = path
-		return "fallback result", nil
+		return "fallback result", nil, nil
 	})
 
 	assert.NoError(t, err)
