@@ -16,9 +16,9 @@ type mockRunner struct {
 	calledArgs     SubagentArgs
 }
 
-func (m *mockRunner) RunSubagent(_ context.Context, args SubagentArgs) (string, string, error) {
+func (m *mockRunner) RunSubagent(_ context.Context, args SubagentArgs) (string, string, *SubagentResult, error) {
 	m.calledArgs = args
-	return m.result, "", m.err
+	return m.result, "", nil, m.err
 }
 
 func (m *mockRunner) AvailableToolNames() []string { return m.toolNames }
@@ -165,7 +165,7 @@ func TestSubagentTool_TruncateOutput_NoTruncation(t *testing.T) {
 	tool := NewSubagentTool(runner)
 
 	input := "short output"
-	result := tool.truncateOutput(input)
+	result := tool.truncateOutput(input, 0)
 	if result != input {
 		t.Errorf("should not truncate short output, got: %s", result)
 	}
@@ -176,7 +176,7 @@ func TestSubagentTool_TruncateOutput_ExactBoundary(t *testing.T) {
 	tool := NewSubagentTool(runner)
 
 	input := "1234567890" // exactly 10 chars
-	result := tool.truncateOutput(input)
+	result := tool.truncateOutput(input, 0)
 	if result != input {
 		t.Errorf("should not truncate at exact boundary, got: %s", result)
 	}
@@ -187,7 +187,7 @@ func TestSubagentTool_TruncateOutput_Truncates(t *testing.T) {
 	tool := NewSubagentTool(runner)
 
 	input := "12345678901" // 11 chars, exceeds limit
-	result := tool.truncateOutput(input)
+	result := tool.truncateOutput(input, 0)
 	if !strings.HasPrefix(result, "1234567890") {
 		t.Errorf("truncated result should start with first 10 chars, got: %s", result)
 	}
@@ -201,7 +201,7 @@ func TestSubagentTool_TruncateOutput_ZeroMaxChars(t *testing.T) {
 	tool := NewSubagentTool(runner)
 
 	input := strings.Repeat("x", 100000)
-	result := tool.truncateOutput(input)
+	result := tool.truncateOutput(input, 0)
 	if result != input {
 		t.Error("maxOutputChars=0 should mean no truncation")
 	}

@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
 
 // SubagentRunner is the interface SubagentTool uses to delegate execution.
@@ -14,9 +15,8 @@ import (
 // testable and allowing different executor implementations.
 type SubagentRunner interface {
 	// RunSubagent executes a sub-agent task. Returns the output text,
-	// the sub-agent's shortID (for linking to its execution record),
-	// and any error.
-	RunSubagent(ctx context.Context, args SubagentArgs) (string, string, error)
+	// the sub-agent's shortID, execution statistics, and any error.
+	RunSubagent(ctx context.Context, args SubagentArgs) (string, string, *SubagentResult, error)
 	// AvailableToolNames returns the list of tool names available to sub-agents,
 	// used to populate the tool description dynamically so LLM knows valid values
 	// for the allowed_tools parameter.
@@ -56,6 +56,8 @@ type SubagentTool struct {
 	runner         SubagentRunner
 	mu             sync.Mutex
 	lastSubagentID string
+	lastIterCount  int
+	lastDuration   time.Duration
 }
 
 // NewSubagentTool creates a new SubagentTool with the given runner.
@@ -106,14 +108,35 @@ func (t *SubagentTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	result, subagentID, err := t.runner.RunSubagent(ctx, sa)
+	result, subagentID, stats, err := t.runner.RunSubagent(ctx, sa)
 
 	t.mu.Lock()
 	t.lastSubagentID = subagentID
+	if stats != nil {
+		t.lastIterCount = stats.IterCount
+		t.lastDuration = stats.Duration
+	} else {
+		t.lastIterCount = 0
+		t.lastDuration = 0
+	}
 	t.mu.Unlock()
 
-	// Output truncation protection
-	result = t.truncateOutput(result)
+	// Output truncation protection — reserve ~80 chars for stats footer
+	reserveForStats := 120
+	if stats != nil && stats.IterCount > 0 {
+		result = t.truncateOutput(result, reserveForStats)
+	} else {
+		result = t.truncateOutput(result, 0)
+	}
+
+	// Append execution stats to the result for visibility everywhere (TUI, history, LLM).
+	if stats != nil && stats.IterCount > 0 {
+		summary := ""
+		if stats.ToolCallSummary != nil {
+			summary = stats.ToolCallSummary.String()
+		}
+		result += FormatSubagentStats(stats.Duration, stats.IterCount, summary)
+	}
 
 	if err != nil {
 		// Return partial result if available
@@ -133,10 +156,22 @@ func (t *SubagentTool) LastSubagentID() string {
 	return t.lastSubagentID
 }
 
-func (t *SubagentTool) truncateOutput(s string) string {
+// LastSubagentStats returns the iteration count and duration of the most recent
+// sub-agent invocation. Safe for concurrent use.
+// Implements SubagentStatsCarrier.
+func (t *SubagentTool) LastSubagentStats() (int, time.Duration) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastIterCount, t.lastDuration
+}
+
+func (t *SubagentTool) truncateOutput(s string, reserve int) string {
 	maxChars := t.runner.MaxOutputChars()
-	if maxChars > 0 && len(s) > maxChars {
-		return s[:maxChars] + "\n\n⚠️ [Output truncated at " + strconv.Itoa(maxChars) + " chars]"
+	if maxChars > 0 && len(s) > maxChars-reserve {
+		if reserve > maxChars {
+			reserve = 0
+		}
+		return s[:maxChars-reserve] + "\n\n⚠️ [Output truncated at " + strconv.Itoa(maxChars-reserve) + " chars]"
 	}
 	return s
 }

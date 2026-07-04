@@ -98,7 +98,15 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventSubagentDone:
-		// Sub-agent completed — refresh cost to include subagent usage.
+		// Sub-agent completed — update tool call display with stats and refresh cost.
+		if event.IterCount > 0 {
+			for i := range m.chatview.currentTools {
+				if m.chatview.currentTools[i].ID == event.ToolID {
+					m.chatview.currentTools[i].IterCount = event.IterCount
+					break
+				}
+			}
+		}
 		m.refreshSessionCost()
 		return m.nextEvent()
 

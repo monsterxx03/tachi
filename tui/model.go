@@ -32,15 +32,16 @@ const (
 )
 
 type toolCallDisplay struct {
-	Name       string
-	ID         string
-	Args       string
-	Preview    string
-	Result     string
-	IsError    bool
-	IsSubagent bool
-	Done       bool
-	Duration   time.Duration
+	Name        string
+	ID          string
+	Args        string
+	Preview     string
+	Result      string
+	IsError     bool
+	IsSubagent  bool
+	Done        bool
+	Duration    time.Duration
+	IterCount   int // sub-agent iteration count
 }
 
 type pendingConfirm struct {

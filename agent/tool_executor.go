@@ -239,9 +239,10 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 		// Emit SubagentDone for sub-agent calls after execution completes.
 		if tc.Function.Name == tools.ToolNameSubAgent {
 			ch <- AgentEvent{
-				Type:     AgentEventSubagentDone,
-				ToolName: tc.Function.Name,
-				ToolID:   tc.ID,
+				Type:      AgentEventSubagentDone,
+				ToolName:  tc.Function.Name,
+				ToolID:    tc.ID,
+				IterCount: tr.IterCount,
 			}
 		}
 
@@ -346,9 +347,10 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		// Notify TUI that subagent has completed.
 		if tc.Function.Name == tools.ToolNameSubAgent {
 			ch <- AgentEvent{
-				Type:     AgentEventSubagentDone,
-				ToolName: tc.Function.Name,
-				ToolID:   tc.ID,
+				Type:      AgentEventSubagentDone,
+				ToolName:  tc.Function.Name,
+				ToolID:    tc.ID,
+				IterCount: tr.IterCount,
 			}
 		}
 

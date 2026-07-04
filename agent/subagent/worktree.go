@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -47,8 +48,8 @@ func NewWorktreeManager(cfg config.SubagentConfig, logger *debuglog.Logger) *Wor
 func (wm *WorktreeManager) Create(
 	ctx context.Context,
 	branch string,
-	fn func(ctx context.Context, worktreePath string) (string, error),
-) (string, error) {
+	fn func(ctx context.Context, worktreePath string) (string, *tools.SubagentResult, error),
+) (string, *tools.SubagentResult, error) {
 	if branch == "" {
 		branch = wm.defaultBranch
 	}
@@ -56,15 +57,15 @@ func (wm *WorktreeManager) Create(
 	worktreePath, err := wm.createWorktree(ctx, branch)
 	if err != nil {
 		wm.logger.Log("WorktreeManager: failed to create worktree: %v, falling back to shared dir", err)
-		result, fnErr := fn(ctx, "")
+		result, stats, fnErr := fn(ctx, "")
 		if result != "" {
 			result = "[WARNING: worktree unavailable — ran in shared directory. File changes may affect the main working tree.]\n\n" + result
 		}
-		return result, fnErr
+		return result, stats, fnErr
 	}
 
 	wtCtx := wdctx.WithDir(ctx, worktreePath)
-	result, err := fn(wtCtx, worktreePath)
+	result, stats, err := fn(wtCtx, worktreePath)
 
 	// Collect patch before cleanup (use fresh context; original may be cancelled)
 	patch := wm.collectPatch(worktreePath)
@@ -81,7 +82,7 @@ func (wm *WorktreeManager) Create(
 		}
 	}
 
-	return result, err
+	return result, stats, err
 }
 
 func (wm *WorktreeManager) createWorktree(ctx context.Context, branch string) (string, error) {
