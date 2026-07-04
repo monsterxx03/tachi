@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -27,8 +28,10 @@ func (t *tachiTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type OpenAIProvider struct {
-	client *openai.Client
-	model  string
+	client  *openai.Client
+	model   string
+	apiKey  string
+	baseURL string
 }
 
 func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
@@ -50,8 +53,10 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 	}
 	client := openai.NewClientWithConfig(cfg)
 	return &OpenAIProvider{
-		client: client,
-		model:  model,
+		client:  client,
+		model:   model,
+		apiKey:  apiKey,
+		baseURL: cfg.BaseURL,
 	}
 }
 
@@ -118,7 +123,7 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 		} else {
 			m.Content = msg.Content
 		}
-		
+
 		// Tool messages with image content parts: append image data URI
 		// references to the text content so the model is aware of them.
 		if role == "tool" && len(msg.ContentParts) > 0 {
@@ -176,7 +181,16 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		Temperature: 0.7,
 	}
 
-	if opts.ThinkingEffort != "" {
+	if opts.Thinking != nil && !*opts.Thinking {
+		// Thinking explicitly disabled.
+		// For DeepSeek models, use top-level "thinking" field to disable thinking mode.
+		if p.isDeepSeekReasoningModel() {
+			debuglog.Log(ctx, "openai: thinking disabled, using top-level thinking:disabled for DeepSeek model=%s baseURL=%s", p.model, p.baseURL)
+			return p.createChatWithDisabledThinking(ctx, req, opts)
+		}
+		debuglog.Log(ctx, "openai: thinking disabled but isDeepSeekReasoningModel=false model=%s baseURL=%s", p.model, p.baseURL)
+		// For other models, just don't set ReasoningEffort.
+	} else if opts.ThinkingEffort != "" {
 		req.ReasoningEffort = opts.ThinkingEffort
 	}
 
@@ -221,6 +235,97 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 	return response, nil
 }
 
+// isDeepSeekReasoningModel checks whether the provider is a DeepSeek endpoint
+// with a model that supports thinking mode. These models need a top-level
+// "thinking" field to disable thinking.
+func (p *OpenAIProvider) isDeepSeekReasoningModel() bool {
+	// All DeepSeek-prefixed models support thinking mode.
+	return strings.HasPrefix(strings.ToLower(p.model), "deepseek")
+}
+
+// createChatWithDisabledThinking sends a chat completion request with
+// {"thinking": {"type": "disabled"}} at the top level to properly disable
+// thinking mode on DeepSeek models. The Python SDK's extra_body parameter
+// merges keys into the request body top level; we do the same directly.
+func (p *OpenAIProvider) createChatWithDisabledThinking(ctx context.Context, req openai.ChatCompletionRequest, opts ChatOptions) (*Response, error) {
+	// Marshal to JSON, then unmarshal to map to inject thinking at top level.
+	bodyBytes, err := json.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("marshal request: %w", err)
+	}
+	var bodyMap map[string]any
+	if err := json.Unmarshal(bodyBytes, &bodyMap); err != nil {
+		return nil, fmt.Errorf("unmarshal request: %w", err)
+	}
+	// Inject "thinking" at the top level (same as Python SDK extra_body merge).
+	bodyMap["thinking"] = map[string]string{"type": "disabled"}
+
+	finalBytes, err := json.Marshal(bodyMap)
+	if err != nil {
+		return nil, fmt.Errorf("marshal final request: %w", err)
+	}
+
+	// Build the URL.
+	url := strings.TrimRight(p.baseURL, "/") + "/chat/completions"
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(finalBytes)))
+	if err != nil {
+		return nil, fmt.Errorf("create request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
+	httpReq.Header.Set("User-Agent", userAgent())
+	if opts.SessionID != "" {
+		httpReq.Header.Set("x-tachi-session-id", opts.SessionID)
+	}
+
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, fmt.Errorf("send request: %w", err)
+	}
+	defer httpResp.Body.Close()
+
+	if httpResp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(httpResp.Body)
+		return nil, fmt.Errorf("API error (status %d): %s", httpResp.StatusCode, string(respBody))
+	}
+
+	var apiResp openai.ChatCompletionResponse
+	if err := json.NewDecoder(httpResp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("decode response: %w", err)
+	}
+
+	if len(apiResp.Choices) == 0 {
+		return &Response{
+			Content:      "",
+			FinishReason: "stop",
+		}, nil
+	}
+
+	choice := apiResp.Choices[0]
+	response := &Response{
+		Content:      choice.Message.Content,
+		FinishReason: string(choice.FinishReason),
+	}
+
+	if choice.Message.ReasoningContent != "" {
+		response.Reasoning = choice.Message.ReasoningContent
+	}
+
+	for _, tc := range choice.Message.ToolCalls {
+		response.ToolCalls = append(response.ToolCalls, ToolCall{
+			ID:   tc.ID,
+			Type: string(tc.Type),
+			Function: ToolCallFunction{
+				Name:      tc.Function.Name,
+				Arguments: tc.Function.Arguments,
+			},
+		})
+	}
+
+	return response, nil
+}
+
 func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error) {
 	req := openai.ChatCompletionRequest{
 		Model:               p.model,
@@ -232,7 +337,9 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
 
-	if opts.ThinkingEffort != "" {
+	if opts.Thinking != nil && !*opts.Thinking {
+		// Thinking explicitly disabled: don't set ReasoningEffort.
+	} else if opts.ThinkingEffort != "" {
 		req.ReasoningEffort = opts.ThinkingEffort
 	}
 
