@@ -548,8 +548,10 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 
 	applyToolRestrictions(aiAgent, cmd)
 
+	thinkingDisabled := false
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
+		Thinking:  &thinkingDisabled,
 	})
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
