@@ -517,6 +517,10 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer aiAgent.Close()
 
+	// Non-interactive mode: unregister AskUserQuestion so the LLM never
+	// attempts to use it — there's no TUI form available in pipe mode.
+	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+
 	// Wait briefly for MCP to connect so the first LLM call has tools available.
 	mcpCtx, mcpCancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := aiAgent.WaitForMCP(mcpCtx); err != nil {
