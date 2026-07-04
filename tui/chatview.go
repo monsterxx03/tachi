@@ -413,7 +413,8 @@ func (c *ChatView) ListItem(idx int) ListItem {
 	if pendingIdx >= 0 && pendingIdx < len(c.pendingItems) {
 		inner := max(c.width-2, 1)
 		s := pendingMsgStyle.Width(inner).Render("[待发送] " + c.pendingItems[pendingIdx])
-		return ListItem{Content: s, Height: 1}
+		height := strings.Count(s, "\n") + 1
+		return ListItem{Content: s, Height: height}
 	}
 	return ListItem{}
 }
@@ -458,7 +459,7 @@ func (c *ChatView) renderItemCached(m *messageCacheItem) (string, int) {
 func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 	switch msg.Role {
 	case "user":
-		return userMsgStyle.MaxWidth(inner).Render(msg.Content)
+		return userMsgStyle.Width(inner).Render(msg.Content)
 	case "assistant":
 		rendered := c.renderMarkdown(msg.Content)
 		return assistantMsgStyle.MaxWidth(inner).Render(rendered)
