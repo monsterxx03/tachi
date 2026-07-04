@@ -86,7 +86,7 @@ func (m *Model) switchToProvider(idx int) {
 		m.exitModelSelect("Error: " + err.Error())
 		return
 	}
-	m.agent.SetProvider(provider, resolved.Model)
+	m.agent.SetProvider(provider)
 	providerInfo := fmt.Sprintf("%s (%s)", resolved.Type, resolved.Model)
 	m.statusbar.SetProviderInfo(providerInfo)
 	m.statusbar.SetContextWindow(resolved.ContextWindow)

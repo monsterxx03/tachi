@@ -10,7 +10,6 @@ import (
 // ForkConfig controls child agent creation from a parent AIAgent.
 type ForkConfig struct {
 	Provider      llm.Provider     // required — LLM provider
-	Model         string           // required — model name
 	MaxIterations int              // 0 = unlimited
 	MaxTokens     int              // 0 = default (4096)
 	AllowedTools  []string         // empty = copy all parent tools
@@ -53,7 +52,7 @@ func (f *ForkedAgent) Close() {
 // filtered by AllowedTools, and does NOT inherit session manager,
 // memory, LSP manager, or reminder collector.
 func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
-	child := NewAIAgent(cfg.Provider, cfg.Model, cfg.MaxIterations)
+	child := NewAIAgent(cfg.Provider, cfg.MaxIterations)
 
 	if cfg.Logger != nil {
 		child.SetLogger(cfg.Logger)

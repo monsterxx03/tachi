@@ -34,6 +34,10 @@ func (p *AnthropicProvider) Name() string {
 	return ProviderTypeAnthropic
 }
 
+func (p *AnthropicProvider) Model() string {
+	return p.model
+}
+
 // collectToolMessages gathers consecutive tool messages starting at startIdx,
 // and optionally merges a trailing steer message as a text block into the same
 // user message (to avoid violating Anthropic's strict user/assistant alternating

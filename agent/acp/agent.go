@@ -105,7 +105,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	}
 
 	// Create independent AIAgent (no iteration limit for ACP sessions)
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, 0)
+	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	// Don't set steer channel — ACP doesn't use mid-turn injection
@@ -409,7 +409,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		return acp.ResumeSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
 
-	aiAgent := agent.NewAIAgent(provider, provModel, 0)
+	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
@@ -518,7 +518,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	}
 
 	// Create independent AIAgent
-	aiAgent := agent.NewAIAgent(provider, provModel, 0)
+	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 

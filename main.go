@@ -279,7 +279,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, 0)
+	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
@@ -383,7 +383,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		maxIters = config.DefaultMaxIterations
 	}
 
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, maxIters)
+	aiAgent := agent.NewAIAgent(provider, maxIters)
 	aiAgent.SetSkipEditConfirm(true)
 	aiAgent.SetSkipMemoryRecall(true)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -500,7 +500,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		maxIters = config.DefaultMaxIterations
 	}
 
-	aiAgent := agent.NewAIAgent(provider, resolved.Provider.Model, maxIters)
+	aiAgent := agent.NewAIAgent(provider, maxIters)
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetSkipMemoryRecall(true) // "tachi run" is non-interactive — don't pollute prompt with memory recall
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -952,7 +952,7 @@ func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
 
 	// Create a minimal agent to register and list tools.
 	// No LLM provider needed — we only use the tool registry.
-	aiAgent := agent.NewAIAgent(nil, "", 0)
+	aiAgent := agent.NewAIAgent(nil, 0)
 	defer aiAgent.Close()
 
 	showMCP := cmd.Bool("mcp")

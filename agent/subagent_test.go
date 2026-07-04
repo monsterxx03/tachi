@@ -65,25 +65,22 @@ func TestSubagentExecutor_AvailableToolNames(t *testing.T) {
 
 func TestSubagentProvider_FallbackToMain(t *testing.T) {
 	mainProvider := &mockStreamProvider{name: "main-provider"}
-	agent := NewAIAgent(mainProvider, "main-model", 50)
+	agent := NewAIAgent(mainProvider, 50)
 
 	assert.Equal(t, mainProvider, agent.SubagentProvider())
-	assert.Equal(t, "main-model", agent.SubagentModel())
 }
 
 func TestSubagentProvider_Dedicated(t *testing.T) {
 	mainProvider := &mockStreamProvider{name: "main-provider"}
 	subProvider := &mockStreamProvider{name: "sub-provider"}
-	agent := NewAIAgent(mainProvider, "main-model", 50)
+	agent := NewAIAgent(mainProvider, 50)
 	agent.subagentProvider = subProvider
-	agent.subagentModel = "sub-model"
 
 	assert.Equal(t, subProvider, agent.SubagentProvider())
-	assert.Equal(t, "sub-model", agent.SubagentModel())
 }
 
 func TestGetTool(t *testing.T) {
-	agent := NewAIAgent(nil, "test", 50)
+	agent := NewAIAgent(nil, 50)
 	agent.RegisterTools()
 
 	tool := agent.GetTool("ReadFile")
@@ -95,19 +92,19 @@ func TestGetTool(t *testing.T) {
 }
 
 func TestNewChildAgent(t *testing.T) {
-	parent := NewAIAgent(nil, "test-model", 50)
+	parent := NewAIAgent(nil, 50)
 	parent.RegisterTools()
 
 	provider := &mockStreamProvider{name: "child-provider"}
 	allowedTools := []string{"ReadFile", "Grep", "Glob"}
 
-	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, "child-model", 10, allowedTools, "session-123")
+	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, 10, allowedTools, "session-123")
 
 	assert.NotNil(t, child, "NewChildAgent should return a non-nil ChildAgent")
 }
 
 func TestChildAdapter_Run(t *testing.T) {
-	parent := NewAIAgent(nil, "test-model", 50)
+	parent := NewAIAgent(nil, 50)
 	parent.RegisterTools()
 
 	provider := &mockStreamProvider{
@@ -116,7 +113,7 @@ func TestChildAdapter_Run(t *testing.T) {
 	}
 	allowedTools := []string{"ReadFile", "Grep", "Glob"}
 
-	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, "child-model", 10, allowedTools, "session-123")
+	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, 10, allowedTools, "session-123")
 
 	ch := child.Run(t.Context(), provider, "You are a test agent.", "Say hello", llm.ChatOptions{MaxTokens: 100})
 
@@ -143,11 +140,10 @@ type mockAgent struct {
 }
 
 func (m *mockAgent) SubagentProvider() llm.Provider           { return nil }
-func (m *mockAgent) SubagentModel() string                    { return "" }
 func (m *mockAgent) SessionManager() *session.Manager          { return nil }
 func (m *mockAgent) Logger() *debuglog.Logger                 { return debuglog.DefaultLogger }
 func (m *mockAgent) ToolNames() []string                      { return m.toolNames }
 func (m *mockAgent) GetTool(name string) agenttools.Tool      { return nil }
-func (m *mockAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider, model string, maxIterations int, allowedTools []string, subagentSessionID string) subagent.ChildAgent {
+func (m *mockAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) subagent.ChildAgent {
 	return nil
 }

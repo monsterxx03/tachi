@@ -20,11 +20,9 @@ import (
 type RunConfig struct {
 	// FallbackProvider is used when DreamConfig doesn't specify its own provider.
 	FallbackProvider llm.Provider
-	FallbackModel    string
 
-	// DreamProvider/DreamModel from config — if set, dream resolves its own provider.
+	// DreamProvider from config — if set, dream resolves its own provider.
 	DreamProvider string // provider name (empty → use fallback)
-	DreamModel    string // model name (empty → use provider's default)
 
 	// Providers is the full provider list from config, used to resolve DreamProvider.
 	Providers []config.ProviderConfig
@@ -51,7 +49,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		plan.Group.Domain, plan.Group.Root, plan.Group.MemoryRoot, len(plan.ActiveSessions))
 
 	// Resolve provider.
-	provider, model, err := resolveProvider(cfg)
+	provider, err := resolveProvider(cfg)
 	if err != nil {
 		return State{}, err
 	}
@@ -67,7 +65,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	if maxIter <= 0 {
 		maxIter = 30
 	}
-	dreamAgent := agent.NewAIAgent(provider, model, maxIter)
+	dreamAgent := agent.NewAIAgent(provider, maxIter)
 	dreamAgent.SetSkipEditConfirm(true)
 
 	// Register only allowed tools: ReadFile, Grep, Glob, WriteFile.
@@ -123,7 +121,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 }
 
 // resolveProvider picks the provider: DreamProvider config > FallbackProvider.
-func resolveProvider(cfg RunConfig) (llm.Provider, string, error) {
+func resolveProvider(cfg RunConfig) (llm.Provider, error) {
 	if cfg.DreamProvider != "" {
 		// Find provider config by name.
 		var pCfg *config.ProviderConfig
@@ -134,28 +132,20 @@ func resolveProvider(cfg RunConfig) (llm.Provider, string, error) {
 			}
 		}
 		if pCfg == nil {
-			return nil, "", fmt.Errorf("dream: provider %q not found", cfg.DreamProvider)
+			return nil, fmt.Errorf("dream: provider %q not found", cfg.DreamProvider)
 		}
-		model := cfg.DreamModel
-		if model == "" {
-			model = pCfg.Model
-		}
-		p, err := llm.NewProvider(pCfg.Type, pCfg.APIKey, pCfg.BaseURL, model)
+		p, err := llm.NewProvider(pCfg.Type, pCfg.APIKey, pCfg.BaseURL, pCfg.Model)
 		if err != nil {
-			return nil, "", fmt.Errorf("dream: create provider: %w", err)
+			return nil, fmt.Errorf("dream: create provider: %w", err)
 		}
-		return p, model, nil
+		return p, nil
 	}
 
 	// Use fallback.
 	if cfg.FallbackProvider == nil {
-		return nil, "", fmt.Errorf("dream: no provider available")
+		return nil, fmt.Errorf("dream: no provider available")
 	}
-	model := cfg.DreamModel
-	if model == "" {
-		model = cfg.FallbackModel
-	}
-	return cfg.FallbackProvider, model, nil
+	return cfg.FallbackProvider, nil
 }
 
 // buildSessionSummaries loads and filters messages for each active session.

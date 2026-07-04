@@ -70,7 +70,6 @@ const (
 type PermissionHandler func(ctx context.Context, toolName, toolID, diff, args string) (bool, error)
 
 type AIAgent struct {
-	model              string
 	provider           llm.Provider
 	maxIterations      int
 	toolRegistry       *tools.Registry
@@ -90,7 +89,6 @@ type AIAgent struct {
 	titleGenEnabled    bool         // whether LLM-based title generation is active
 	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
 	reviewProvider     llm.Provider // optional: dedicated provider for /review code review
-	reviewModel        string       // review model override ("" = fallback to main)
 	logger             *debuglog.Logger
 
 	// Skill-related fields
@@ -99,7 +97,6 @@ type AIAgent struct {
 
 	// Subagent-related fields (implements subagent.Agent interface)
 	subagentProvider llm.Provider // sub-agent dedicated provider (nil = fallback to main)
-	subagentModel    string       // sub-agent dedicated model ("" = fallback to main)
 
 	// Memory-related fields
 	memory *MemoryState // nil = memory not enabled
@@ -155,9 +152,8 @@ type AIAgent struct {
 	lastCompactTokenEstimate int64
 }
 
-func NewAIAgent(provider llm.Provider, model string, maxIterations int) *AIAgent {
+func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 	return &AIAgent{
-		model:           model,
 		provider:        provider,
 		maxIterations:   maxIterations,
 		titleGenEnabled: true,
@@ -204,14 +200,13 @@ func (a *AIAgent) SetSteerChannel(ch chan string) {
 	a.steerRespCh = ch
 }
 
-func (a *AIAgent) SetProvider(provider llm.Provider, model string) {
+func (a *AIAgent) SetProvider(provider llm.Provider) {
 	a.provider = provider
-	a.model = model
 }
 
 // Model returns the current model name.
 func (a *AIAgent) Model() string {
-	return a.model
+	return a.provider.Model()
 }
 
 // Provider returns the main LLM provider for conversation turns.

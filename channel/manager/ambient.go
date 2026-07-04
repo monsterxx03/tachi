@@ -191,7 +191,6 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	// Fork a restricted agent — inherits shared MCP + PM from parent.
 	forked := parentAgent.Fork(agent.ForkConfig{
 		Provider:      prov,
-		Model:         resolved.Provider.Model,
 		MaxIterations: whisperCfg.AmbientMaxIterations,
 		AllowedTools:  allowedTools,
 		Logger:        m.logger.WithPrefix("ambient-fork"),

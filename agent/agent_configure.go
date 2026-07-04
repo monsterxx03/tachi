@@ -51,7 +51,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 
 			// Wire keyword extractor for topic backend.
 			if tb, ok := backend.(*memory.TopicBackend); ok {
-				kwProvider, kwModel := a.provider, a.model
+				kwProvider, kwModel := a.provider, a.provider.Model()
 
 				// Resolve dedicated keyword provider if configured.
 				if kpName := cfg.Memory.KeywordProvider; kpName != "" {

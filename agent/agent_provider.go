@@ -90,11 +90,6 @@ func (a *AIAgent) ReviewProvider() llm.Provider {
 	return a.reviewProvider
 }
 
-// ReviewModel returns the dedicated review model, or "" if none is configured.
-func (a *AIAgent) ReviewModel() string {
-	return a.reviewModel
-}
-
 // SetupReviewProvider resolves and creates a dedicated LLM provider for /review
 // code review from config. When review.provider is empty or not found, /review
 // falls back to the main conversation provider.
@@ -104,8 +99,6 @@ func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
 	}
 	rpName := cfg.Review.Provider
 	if rpName == "" {
-		// Even without a dedicated provider, store model override if set.
-		a.reviewModel = cfg.Review.Model
 		return
 	}
 
@@ -128,7 +121,6 @@ func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
 	}
 
 	a.reviewProvider = rp
-	a.reviewModel = resolved.Model
 	a.logger.Log("Agent: using review provider %q (%s/%s) for /review code review", rpName, resolved.Type, resolved.Model)
 }
 

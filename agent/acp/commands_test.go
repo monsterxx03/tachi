@@ -24,7 +24,7 @@ var expectedACPCmds = []struct {
 }
 
 func TestBuildACPAvailableCommands_StaticCommands(t *testing.T) {
-	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	aiAgent := agent.NewAIAgent(nil, 0)
 	cmds := buildACPAvailableCommands(aiAgent)
 
 	// Collect all returned command names for duplicate checking
@@ -60,7 +60,7 @@ func TestBuildACPAvailableCommands_StaticCommands(t *testing.T) {
 }
 
 func TestBuildACPAvailableCommands_Count(t *testing.T) {
-	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	aiAgent := agent.NewAIAgent(nil, 0)
 	cmds := buildACPAvailableCommands(aiAgent)
 
 	// Should have exactly len(expectedACPCmds) commands (no skills configured)
@@ -68,7 +68,7 @@ func TestBuildACPAvailableCommands_Count(t *testing.T) {
 }
 
 func TestBuildACPAvailableCommands_NoDuplicates(t *testing.T) {
-	aiAgent := agent.NewAIAgent(nil, "test-model", 0)
+	aiAgent := agent.NewAIAgent(nil, 0)
 	cmds := buildACPAvailableCommands(aiAgent)
 
 	names := make(map[string]int)

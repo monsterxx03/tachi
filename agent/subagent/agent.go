@@ -18,7 +18,6 @@ import (
 type Agent interface {
 	// Subagent provider resolution (with fallback to main)
 	SubagentProvider() llm.Provider
-	SubagentModel()    string
 
 	// Shared services
 	SessionManager() *session.Manager
@@ -29,8 +28,8 @@ type Agent interface {
 	GetTool(name string) tools.Tool
 
 	// NewChildAgent creates a fully configured child agent with the given
-	// logger, provider, model, iteration budget, and allowed tool set.
-	NewChildAgent(logger *debuglog.Logger, provider llm.Provider, model string,
+	// logger, provider, iteration budget, and allowed tool set.
+	NewChildAgent(logger *debuglog.Logger, provider llm.Provider,
 		maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
 }
 

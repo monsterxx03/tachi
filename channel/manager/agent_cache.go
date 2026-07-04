@@ -21,7 +21,6 @@ type cachedAgent struct {
 	mu           sync.Mutex
 	agent        *agent.AIAgent
 	providerName string // currentProviderName when the agent was built
-	model        string // resolved model when the agent was built
 
 	// history caches the full LLM message slice (system prompt + all prior
 	// turns) so each new turn can pass it directly to RunConversationStream
@@ -112,15 +111,13 @@ func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAge
 		return nil, errProviderNotInitialized
 	}
 
-	curModel := resolved.Provider.Model
-
 	for {
 		m.agentCacheMu.Lock()
 		if m.agentCache == nil {
 			m.agentCache = make(map[string]*cachedAgent)
 		}
 		ca, ok := m.agentCache[threadID]
-		if ok && (ca.providerName != curName || ca.model != curModel) {
+		if ok && ca.providerName != curName {
 			// Provider switched — request a rebuild. Note: we cannot
 			// Close() the agent here because it might still be in use
 			// by a turn that hasn't released ca.mu yet. evictAgent
@@ -131,7 +128,6 @@ func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAge
 		if !ok {
 			ca = &cachedAgent{
 				providerName: curName,
-				model:        curModel,
 			}
 			m.agentCache[threadID] = ca
 		}
@@ -192,7 +188,7 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 		return nil, errProviderNotInitialized
 	}
 
-	a := agent.NewAIAgent(prov, resolved.Provider.Model, 0)
+	a := agent.NewAIAgent(prov, 0)
 	a.SetProcessManager(m.processManager) // shared PM survives turns
 	a.SetSkipEditConfirm(true)
 	a.SetContextWindow(resolved.Provider.ContextWindow)

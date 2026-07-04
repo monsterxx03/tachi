@@ -250,7 +250,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
 			provider := a.provider.Name()
 			wd, _ := os.Getwd()
-			if _, err := a.sessionManager.New(provider, a.model, wd); err != nil {
+			if _, err := a.sessionManager.New(provider, a.provider.Model(), wd); err != nil {
 				a.logger.Log("Agent: failed to create session: %v", err)
 			}
 			// Update logger with session ID for debug log tracking
