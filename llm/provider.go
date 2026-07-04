@@ -196,6 +196,7 @@ type StreamEvent struct {
 // Provider defines the interface for LLM providers
 type Provider interface {
 	Name() string
+	Model() string
 	CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error)
 	CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error)
 }

@@ -78,7 +78,6 @@ func (e *Executor) RunSubagent(
 	}
 
 	provider := e.agent.SubagentProvider()
-	model := e.agent.SubagentModel()
 
 	maxIterations := args.MaxIterations
 	if maxIterations <= 0 {
@@ -96,12 +95,12 @@ func (e *Executor) RunSubagent(
 	if e.worktreeMgr != nil {
 		result, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, error) {
 			e.agent.Logger().Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
-			return e.run(worktreeCtx, shortID, args, provider, model, maxIterations, thinking, branch, wtPath)
+			return e.run(worktreeCtx, shortID, args, provider, maxIterations, thinking, branch, wtPath)
 		})
 		return result, shortID, err
 	}
 
-	result, err := e.run(ctx, shortID, args, provider, model, maxIterations, thinking, "", "")
+	result, err := e.run(ctx, shortID, args, provider, maxIterations, thinking, "", "")
 	return result, shortID, err
 }
 
@@ -111,7 +110,6 @@ func (e *Executor) run(
 	shortID string,
 	args tools.SubagentArgs,
 	provider llm.Provider,
-	model string,
 	maxIterations int,
 	thinking bool,
 	branch string,
@@ -129,7 +127,7 @@ func (e *Executor) run(
 	// Build allowed tools list — exclude AskUserQuestion and SubAgent
 	allowedTools := buildAllowedTools(e, args.AllowedTools)
 
-	child := e.agent.NewChildAgent(childLogger, provider, model, maxIterations, allowedTools, subagentSessionID)
+	child := e.agent.NewChildAgent(childLogger, provider, maxIterations, allowedTools, subagentSessionID)
 	childLogger.Log("starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%v session_id=%s",
 		len(args.Prompt), len(allowedTools), maxIterations, thinking, worktreePath != "", subagentSessionID)
 

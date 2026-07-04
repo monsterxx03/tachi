@@ -253,6 +253,6 @@ func (m *Model) restoreSessionProvider(providerType, model string) (string, bool
 		return fmt.Sprintf("%s (%s) [error]", providerType, model), false
 	}
 
-	m.agent.SetProvider(provider, sp.Model)
+	m.agent.SetProvider(provider)
 	return fmt.Sprintf("%s (%s)", sp.Type, sp.Model), true
 }

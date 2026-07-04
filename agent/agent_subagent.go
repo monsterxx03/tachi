@@ -21,20 +21,11 @@ func (a *AIAgent) SubagentProvider() llm.Provider {
 	return a.provider
 }
 
-// SubagentModel returns the sub-agent model or falls back to main.
-func (a *AIAgent) SubagentModel() string {
-	if a.subagentModel != "" {
-		return a.subagentModel
-	}
-	return a.model
-}
-
 // NewChildAgent creates a fully configured child agent backed by RunOneOffStream.
 // Implements the subagent.Agent interface.
 func (a *AIAgent) NewChildAgent(
 	logger *debuglog.Logger,
 	provider llm.Provider,
-	model string,
 	maxIterations int,
 	allowedTools []string,
 	subagentSessionID string,
@@ -42,7 +33,6 @@ func (a *AIAgent) NewChildAgent(
 	return &childAdapter{
 		parent:        a,
 		childProvider: provider,
-		childModel:    model,
 		maxIterations: maxIterations,
 		allowedTools:  allowedTools,
 		sessionID:     subagentSessionID,
@@ -56,7 +46,6 @@ func (a *AIAgent) NewChildAgent(
 type childAdapter struct {
 	parent        *AIAgent
 	childProvider llm.Provider
-	childModel    string
 	maxIterations int
 	allowedTools  []string
 	sessionID     string
@@ -76,7 +65,6 @@ func (c *childAdapter) Run(
 
 		forked := c.parent.Fork(ForkConfig{
 			Provider:      c.childProvider,
-			Model:         c.childModel,
 			MaxIterations: c.maxIterations,
 			AllowedTools:  c.allowedTools,
 			Logger:        c.logger,
@@ -170,13 +158,7 @@ func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
 		return
 	}
 
-	// If subagent has a model override, apply it
-	overridden := *pCfg
-	if sc.Model != "" {
-		overridden.Model = sc.Model
-	}
-
-	resolved, err := config.ResolveProviderConfig(&overridden)
+	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
 		a.logger.Log("Agent: failed to resolve subagent provider %q: %v, falling back to main model", sc.Provider, err)
 		return
@@ -189,6 +171,5 @@ func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
 	}
 
 	a.subagentProvider = sp
-	a.subagentModel = resolved.Model
 	a.logger.Log("Agent: using subagent provider %q (%s/%s)", sc.Provider, resolved.Type, resolved.Model)
 }

@@ -246,21 +246,19 @@ func TestStreamEventTypes(t *testing.T) {
 type fakeAgent struct {
 	toolNames         []string
 	provider          llm.Provider
-	model             string
-	childAgentFactory func(logger *debuglog.Logger, provider llm.Provider, model string, maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
+	childAgentFactory func(logger *debuglog.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
 }
 
 func (a *fakeAgent) SubagentProvider() llm.Provider   { return a.provider }
-func (a *fakeAgent) SubagentModel() string            { return a.model }
 func (a *fakeAgent) SessionManager() *session.Manager { return nil }
 func (a *fakeAgent) Logger() *debuglog.Logger         { return debuglog.DefaultLogger }
 func (a *fakeAgent) ToolNames() []string              { return a.toolNames }
 func (a *fakeAgent) GetTool(name string) tools.Tool   { return nil }
 
-func (a *fakeAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider, model string,
+func (a *fakeAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider,
 	maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent {
 	if a.childAgentFactory != nil {
-		return a.childAgentFactory(logger, provider, model, maxIterations, allowedTools, subagentSessionID)
+		return a.childAgentFactory(logger, provider, maxIterations, allowedTools, subagentSessionID)
 	}
 	return &fakeChildAgent{}
 }

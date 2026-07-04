@@ -836,12 +836,11 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 		defer cancel()
 
 		cfg := m.cfg
-		var dreamProvider, dreamModel string
+		var dreamProvider string
 		maxIter := 30
 		maxMessageChars := 2000
 		if cfg != nil {
 			dreamProvider = cfg.Dream.Provider
-			dreamModel = cfg.Dream.Model
 			if cfg.Dream.SubagentMaxIter > 0 {
 				maxIter = cfg.Dream.SubagentMaxIter
 			}
@@ -871,9 +870,7 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 
 			return dream.RunDream(ctx, plan, dream.RunConfig{
 				FallbackProvider: provider,
-				FallbackModel:    m.agent.Model(),
 				DreamProvider:    dreamProvider,
-				DreamModel:       dreamModel,
 				Providers:        providers,
 				MaxIter:          maxIter,
 				MaxTokens:        m.chatOpts.MaxTokens,
@@ -1017,7 +1014,6 @@ func (m *Model) sendReviewCommand() tea.Cmd {
 	// Fork a child agent with configurable tools.
 	forked := m.agent.Fork(agent.ForkConfig{
 		Provider:      rc.provider,
-		Model:         rc.model,
 		MaxIterations: rc.maxIterations,
 		AllowedTools:  rc.allowedTools,
 		Logger:        m.agent.Logger(),
@@ -1048,14 +1044,13 @@ func (m *Model) sendReviewCommand() tea.Cmd {
 // config defaults and provider resolution.
 type reviewResolved struct {
 	provider      llm.Provider
-	model         string
 	maxIterations int
 	allowedTools  []string
 	thinking      *bool
 }
 
-// resolveReviewConfig reads the review config from m.cfg and resolves
-// provider/model, falling back to the main provider with sensible defaults.
+// resolveReviewConfig reads the review config from m.cfg and resolves the
+// provider, falling back to the main provider with sensible defaults.
 func (m *Model) resolveReviewConfig() reviewResolved {
 	// Determine allowed tools (slice can't use `default` tag, handle in code).
 	var allowedTools []string
@@ -1074,21 +1069,14 @@ func (m *Model) resolveReviewConfig() reviewResolved {
 	}
 
 	// Use pre-resolved review provider from agent (if configured), or fall
-	// back to main provider. The model from the review config is used
-	// regardless of which provider is active.
+	// back to main provider.
 	provider := m.agent.Provider()
-	model := m.agent.Model()
 	if rp := m.agent.ReviewProvider(); rp != nil {
 		provider = rp
-		model = m.agent.ReviewModel()
-	}
-	if m.cfg != nil && m.cfg.Review.Model != "" {
-		model = m.cfg.Review.Model
 	}
 
 	return reviewResolved{
 		provider:      provider,
-		model:         model,
 		maxIterations: maxIter,
 		allowedTools:  allowedTools,
 		thinking:      thinking,

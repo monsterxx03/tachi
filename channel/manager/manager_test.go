@@ -82,6 +82,8 @@ type mockProvider struct {
 
 func (p *mockProvider) Name() string { return p.name }
 
+func (p *mockProvider) Model() string { return "mock-model" }
+
 func (p *mockProvider) CreateChat(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (*llm.Response, error) {
 	return nil, errors.New("not implemented")
 }
@@ -223,7 +225,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 		responses: []string{"Hello, I'm Tachi!"},
 	}
 
-	aiAgent := agent.NewAIAgent(mp, "mock-model", 10)
+	aiAgent := agent.NewAIAgent(mp, 10)
 	aiAgent.SetSkipEditConfirm(true)
 
 	eventCh := aiAgent.RunConversationStream(
@@ -268,7 +270,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 		return ch, nil
 	}
 
-	aiAgent := agent.NewAIAgent(mp, "mock-model", 10)
+	aiAgent := agent.NewAIAgent(mp, 10)
 	aiAgent.SetSkipEditConfirm(true)
 	// Register EditFile so the tool call can be dispatched (it will error on
 	// file read, but the key assertion is: it doesn't deadlock).
@@ -316,7 +318,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 		return ch, nil
 	}
 
-	aiAgent := agent.NewAIAgent(mp, "mock-model", 10)
+	aiAgent := agent.NewAIAgent(mp, 10)
 	aiAgent.SetSkipEditConfirm(true)
 	aiAgent.RegisterTool(agenttools.AskUserTool{})
 

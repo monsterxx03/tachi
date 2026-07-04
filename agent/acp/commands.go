@@ -244,13 +244,8 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	// Resolve review provider and model from config (or fall back to main).
 	reviewProvider := aiAgent.Provider()
-	reviewModel := aiAgent.Model()
 	if rp := aiAgent.ReviewProvider(); rp != nil {
 		reviewProvider = rp
-		reviewModel = aiAgent.ReviewModel()
-	}
-	if cfg != nil && cfg.Review.Model != "" {
-		reviewModel = cfg.Review.Model
 	}
 
 	// MaxIterations and Thinking are populated by defaults.Set() from struct tags.
@@ -272,7 +267,6 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	// Fork a child agent with configurable tools.
 	forked := aiAgent.Fork(agent.ForkConfig{
 		Provider:      reviewProvider,
-		Model:         reviewModel,
 		MaxIterations: maxIter,
 		AllowedTools:  allowedTools,
 		Logger:        aiAgent.Logger(),

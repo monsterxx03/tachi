@@ -59,6 +59,10 @@ func (p *OpenAIProvider) Name() string {
 	return ProviderTypeOpenAI
 }
 
+func (p *OpenAIProvider) Model() string {
+	return p.model
+}
+
 func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatCompletionMessage {
 	out := make([]openai.ChatCompletionMessage, 0, len(messages))
 	for _, msg := range messages {
