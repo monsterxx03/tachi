@@ -98,6 +98,7 @@ type AIAgent struct {
 
 	// Subagent-related fields (implements subagent.Agent interface)
 	subagentProvider llm.Provider // sub-agent dedicated provider (nil = fallback to main)
+	subagentRunner   tools.SubagentRunner
 
 	// Memory-related fields
 	memory *MemoryState // nil = memory not enabled

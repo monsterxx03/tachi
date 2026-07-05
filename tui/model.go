@@ -85,6 +85,7 @@ type Model struct {
 	savedHistory []llm.Message         // conversation history saved before a one-off run (e.g. /commit)
 	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
 	isCompacting bool                  // true during compact LLM call (distinct from savedHistory)
+	isResearching bool                 // true during deep research (blocks user input)
 	forkedAgent  *agent.ForkedAgent    // active forked agent (e.g. /review), closed on TurnComplete/error
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
@@ -395,6 +396,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 
+		// During deep research: block all user input
+		if m.isResearching {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "🔬 深度研究进行中，请等待完成后输入",
+			})
+			return m, nil
+		}
+
 		// During streaming: queue regular messages, allow /new, block other commands.
 		if m.state == stateStreaming {
 			if cmd != nil && cmd.Name == "/new" {
@@ -495,6 +505,19 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, readNextDreamStatus(msg.nextCh)
 		}
 
+	case researchStatusMsg:
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: msg.content,
+		})
+		if msg.nextCh != nil {
+			return m, readNextResearchStatus(msg.nextCh)
+		}
+
+	case researchDoneMsg:
+		m.isResearching = false
+		m.cancelFunc = nil
+
 	case mcpOverlayMsg:
 		if m.state == stateManagingMCP {
 			m.mcpView.SetMessage(msg.content)
@@ -550,6 +573,16 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	}
 	if m.state == stateManagingMCP {
 		m.exitMCPOverlay()
+		return m, nil
+	}
+	if m.isResearching && m.cancelFunc != nil {
+		m.cancelFunc()
+		m.isResearching = false
+		m.cancelFunc = nil
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "⏹️ 深度研究已取消",
+		})
 		return m, nil
 	}
 	if m.state != stateIdle && m.cancelFunc != nil {

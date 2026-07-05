@@ -112,6 +112,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	if cfg.Subagent.Worktree {
 		executor.EnableWorktree(a.logger)
 	}
+	a.subagentRunner = executor
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
 	// --- LSP servers ---
