@@ -588,7 +588,8 @@ type DeepResearchConfig struct {
 	DefaultBreadth int           `yaml:"default_breadth" default:"3"`
 	MaxDepth       int           `yaml:"max_depth" default:"4"`
 	MaxBreadth     int           `yaml:"max_breadth" default:"8"`
-	Timeout        time.Duration `yaml:"timeout" default:"5m"`
+	Timeout        time.Duration `yaml:"timeout" default:"30m"`
+	ReportTimeout  time.Duration `yaml:"report_timeout" default:"10m"`
 	MaxLearnings   int           `yaml:"max_learnings" default:"200"`
 
 	// QueryGeneratorProvider references a provider name from config's providers list.
