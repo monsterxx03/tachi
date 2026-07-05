@@ -349,6 +349,7 @@ func (dr *DeepResearch) generateQueries(
 		"{breadth}", fmt.Sprintf("%d", num),
 		"{query}", query,
 		"{learnings}", learningsText,
+		"{language}", dr.cfg.Language(),
 	).Replace(promptTmpl) + timeContext
 
 	messages := []llm.Message{
@@ -393,6 +394,7 @@ func (dr *DeepResearch) buildResearcherPrompt(query, researchGoal string) string
 	prompt := strings.NewReplacer(
 		"{query}", query,
 		"{researchGoal}", researchGoal,
+		"{language}", dr.cfg.Language(),
 	).Replace(dr.cfg.ResearcherPrompt())
 
 	now := time.Now()
@@ -451,6 +453,7 @@ func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string
 		"{learnings}", learningsText,
 		"{urls}", urlsText,
 		"{output_path}", outputPath,
+		"{language}", dr.cfg.Language(),
 	).Replace(promptTmpl)
 
 	now := time.Now()

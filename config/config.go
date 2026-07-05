@@ -554,6 +554,8 @@ Return your findings as a structured summary with:
 - Key learnings (up to 3, concise and information-dense)
 - Follow-up questions (up to 3, for deeper research)
 - Source URLs visited
+
+Output your findings in {language}.
 `
 
 const defaultReportWriterPrompt = `You are a research report writer. Write a comprehensive, well-structured report as a self-contained HTML document.
@@ -578,7 +580,7 @@ Create a beautiful, readable HTML page with:
 
 The HTML should be a complete, valid HTML5 document with <!DOCTYPE html>, <html>, <head>, and <body> tags.
 Include all CSS inline in a <style> tag within <head>. Do NOT use external CSS or JavaScript.
-Write in the same language as the research query.
+Write the report in {language}.
 
 Use the WriteFile tool to save the HTML report to: {output_path}
 Then return the complete HTML content of the report as your final output.`
@@ -591,6 +593,7 @@ type DeepResearchConfig struct {
 	Timeout        time.Duration `yaml:"timeout" default:"30m"`
 	ReportTimeout  time.Duration `yaml:"report_timeout" default:"10m"`
 	MaxLearnings   int           `yaml:"max_learnings" default:"200"`
+	ReportLanguage string        `yaml:"language" default:"zh"`
 
 	// QueryGeneratorProvider references a provider name from config's providers list.
 	// When empty, the main (default) provider is used.
@@ -602,6 +605,14 @@ type DeepResearchConfig struct {
 
 	// Researcher controls how research sub-agents behave.
 	Researcher *ResearcherConfig `yaml:"researcher,omitempty"`
+}
+
+// Language returns the report language, defaulting to "zh" when not set.
+func (c *DeepResearchConfig) Language() string {
+	if c.ReportLanguage != "" {
+		return c.ReportLanguage
+	}
+	return "zh"
 }
 
 // QueryGeneratorPrompt returns the query generator prompt template, using
