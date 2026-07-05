@@ -29,7 +29,6 @@ type SubagentRunner interface {
 type SubagentArgs struct {
 	Prompt         string   `json:"prompt"`
 	AllowedTools   []string `json:"allowed_tools"`
-	MaxIterations  int      `json:"max_iterations"`
 	WorktreeBranch string   `json:"worktree_branch"` // Optional: git branch for worktree isolation
 }
 
@@ -82,10 +81,6 @@ func (t *SubagentTool) Properties() map[string]PropertySchema {
 			Type:        "array",
 			Description: "Optional list of tool names the sub-agent is allowed to use. When empty, all available tools are inherited. Use this to restrict the sub-agent (e.g. [\"ReadFile\", \"Grep\", \"Glob\"] for read-only tasks).",
 			Items:       map[string]any{"type": "string"},
-		},
-		"max_iterations": {
-			Type:        "number",
-			Description: "Optional override for the sub-agent's iteration budget. Default is 50. Use a lower value for simple tasks.",
 		},
 		"worktree_branch": {
 			Type: "string",

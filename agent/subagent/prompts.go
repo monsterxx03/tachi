@@ -1,7 +1,7 @@
 package subagent
 
 const (
-	DefaultMaxIterations  = 50
+	DefaultMaxIterations  = 200
 	DefaultMaxConcurrency = 4
 	DefaultMaxOutputChars = 16384
 )

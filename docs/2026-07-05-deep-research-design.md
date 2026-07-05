@@ -2,7 +2,7 @@
 
 > 在 Tachi 中内置深度研究（Deep Research）能力的设计方案。
 >
-> **设计哲学**：DeepResearchTool 是轻量协调器，不做具体搜索提取工作。实际的研究任务（搜索→阅读→提取）通过 SubAgent 并行执行，DeepResearchTool 只负责编排流程和管理上下文。
+> **设计哲学**：DeepResearch 是**配置驱动的轻量协调器**，**仅通过 `/research` slash command 启动**，不暴露为 LLM 可见的 Tool。实际的研究任务（搜索→阅读→提取）通过 SubAgent 并行执行，DeepResearch 只负责编排流程和管理上下文。所有可变策略（prompt 模板、模型选择、行为参数）通过 `config.yaml` 配置，不改代码即可调整研究行为。
 
 ---
 
@@ -20,13 +20,14 @@ Tachi 已具备深度研究所需的所有基础能力：
 | LLM Provider | 查询生成、内容分析、报告合成 | ✅ 现有 |
 | Tool Registry | 工具注册与并行执行 | ✅ 现有 |
 
-**缺失的**是一个编排层，把 SubAgent 组织成多轮搜索的研究流程。用户不需要手动一个个调 SubAgent，而是说一句"研究一下 X"就自动完成。
+**缺失的**是一个编排层，把 SubAgent 组织成多轮搜索的研究流程。用户不需要手动一个个调 SubAgent，而是打一句 `/research 研究一下 X` 就自动完成。
 
 ### 目标
 
-- 用户输入研究主题 → 自动完成多层搜索、阅读、分析、报告生成
+- 用户输入 `/research <topic>` → 自动完成多层搜索、阅读、分析、报告生成
 - depth（深度）和 breadth（宽度）参数控制研究范围
-- 实际搜索提取工作交给 SubAgent，DeepResearchTool 只做流程控制
+- 实际搜索提取工作交给 SubAgent，DeepResearch 引擎只做流程控制
+- **不暴露为 Tool**——LLM 不会自主决定调用，始终由用户通过 slash command 触发
 - 不依赖新外部服务
 
 ---
@@ -35,7 +36,13 @@ Tachi 已具备深度研究所需的所有基础能力：
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│                   DeepResearchTool (轻量协调器)                │
+│                   配置层 (config.yaml)                         │
+│  prompts / provider 引用 / default_depth / default_breadth ...   │
+└──────────────────────────────────────────────────────────────┘
+                          │ 读取
+                          ▼
+┌──────────────────────────────────────────────────────────────┐
+│           DeepResearch 引擎 (普通 Go struct，非 Tool)          │
 │                                                              │
 │  ┌──────────────┐    ┌──────────────────┐   ┌────────────┐  │
 │  │ ① 生成搜索   │───→│ ② SubAgent × N  │──→│ ③ 判断    │  │
@@ -54,16 +61,17 @@ Tachi 已具备深度研究所需的所有基础能力：
 └──────────────────────────────────────────────────────────────┘
            │
            ▼
-    LLM / 用户看到报告
+    /research handler → 用户看到报告
 ```
 
 ### 分工
 
 | 层次 | 负责 | 实现 |
 |------|------|------|
-| **DeepResearchTool** | 流程编排：生成查询、启动 SubAgent、判断递归、写报告 | Go Tool，~200 行 |
+| **配置层** | prompt 模板、provider 引用、参数默认值 | `config.yaml`，用户可自由修改 |
+| **DeepResearch 引擎** | 流程编排：生成查询、启动 SubAgent、判断递归、写报告 | 普通 Go struct，~250 行（行为由配置驱动） |
 | **SubAgent** | 实际干活：搜索 → 抓取 → 提取 learnings | 已有 SubAgentTool |
-| **LLM (在 Tool 内)** | 生成搜索查询、提取 learnings 的 prompt | 直接调用 provider |
+| **LLM (在协调器内)** | 生成搜索查询、提取 learnings 的 prompt | 直接调用 provider（使用配置指定的 provider） |
 
 ### 搜索树模型
 
@@ -86,16 +94,13 @@ depth=2, breadth=3
 
 ## 三、数据流设计
 
-### 3.1 输入
+### 3.1 slash command 参数
 
-```go
-type DeepResearchArgs struct {
-    Query   string `json:"query"`             // 研究主题/问题
-    Depth   int    `json:"depth"`             // 递归深度 1-4（默认 2）
-    Breadth int    `json:"breadth"`           // 每层搜索宽度 2-8（默认 3）
-    Format  string `json:"format,omitempty"`  // "report" | "answer"（默认 "report"）
-}
 ```
+/research <topic> [--depth 2] [--breadth 3] [--format report|answer]
+```
+
+由 `/research` handler 解析参数后传给 DeepResearch 引擎。
 
 ### 3.2 输出
 
@@ -111,7 +116,7 @@ type DeepResearchArgs struct {
 - [{Title}]({url})
 ```
 
-以 Markdown 文本返回，LLM 可直接展示给用户。
+以 Markdown 文本返回，直接展示给用户。
 
 ---
 
@@ -119,13 +124,16 @@ type DeepResearchArgs struct {
 
 ### 4.1 主流程
 
-DeepResearchTool 本身不调用 WebSearch/WebFetch，而是把实际工作委托给 SubAgent：
+DeepResearch 引擎本身不调用 WebSearch/WebFetch，而是把实际工作委托给 SubAgent。所有 prompt 模板和模型引用从 `config.yaml` 读取：
 
 ```
 function deepResearch(query, depth, breadth, learnings=[], urls=[]):
     ──────────────────────────────────────────
-    ① 生成搜索查询（Tool 内直接 LLM 调用）
+    ① 生成搜索查询（引擎内直接 LLM 调用）
     ──────────────────────────────────────────
+    // 使用 config.deep_research.query_generator 的:
+    //   - system prompt
+    //   - provider 引用（默认用轻量 provider "fast"）
     serpQueries = LLM.generateQueries(
         query=query,
         learnings=learnings,
@@ -136,15 +144,17 @@ function deepResearch(query, depth, breadth, learnings=[], urls=[]):
     ──────────────────────────────────────────
     ② 并行 SubAgent：搜索 + 提取
     ──────────────────────────────────────────
+    // 使用 config.deep_research.researcher 的:
+    //   - system prompt
+    //   - tools（默认 [WebSearch, WebFetch]）
+    //   - max_iterations（默认 5）
     // 每个 SubAgent 独立运行，有各自的 context window
-    // 工具集: [WebSearch, WebFetch]
-    // prompt: "搜索 '{query}'，阅读结果，提取关键发现"
     subAgents = []
     for each serpQuery in serpQueries:
         agent = SubAgent(
-            prompt = format_research_prompt(serpQuery),
-            allowed_tools = ["WebSearch", "WebFetch"],
-            max_iterations = 5
+            prompt = config.researcher.prompt.format(serpQuery),
+            allowed_tools = config.researcher.tools,
+            max_iterations = config.researcher.max_iterations
         )
         subAgents.append(agent)
     
@@ -167,19 +177,21 @@ function deepResearch(query, depth, breadth, learnings=[], urls=[]):
         )
 
     ──────────────────────────────────────────
-    ④ 写最终报告（SubAgent 或直接 LLM）
+    ④ 写最终报告（策略由 config 控制）
     ──────────────────────────────────────────
-    // 方案 A：SubAgent 写报告（独立 context，适合大量 learnings）
-    // 方案 B：Tool 内直接 LLM 写报告（共享 tool 的 provider）
-    report = LLM.writeReport(query, allLearnings, allUrls)
+    // config.deep_research.report_writer.mode 控制策略:
+    //   "subagent"  → SubAgent 写报告（独立 context，适合大量 learnings）
+    //   "direct_llm" → 引擎内直接 LLM 写报告（节省开销）
+    // 使用 config.deep_research.report_writer 的 prompt 和 provider 引用
+    report = writeReport(query, allLearnings, allUrls)
     return report
 ```
 
-### 4.2 两种 SubAgent Prompt（英文）
+### 4.2 SubAgent Prompt（配置可覆盖）
 
-给 SubAgent 的 prompt 使用英文：
+以下为默认 prompt（英文），用户可通过 `config.yaml` 的 `deep_research.prompts` 覆盖：
 
-#### 搜索+提取 SubAgent
+#### 搜索+提取 SubAgent（`config.deep_research.prompts.researcher`）
 
 ```
 You are a research analyst. Your task:
@@ -198,7 +210,7 @@ Return your findings as a structured summary with:
 Available tools: WebSearch, WebFetch
 ```
 
-#### 写报告 SubAgent
+#### 写报告 SubAgent（`config.deep_research.prompts.report_writer`，仅 `mode: subagent` 时使用）
 
 ```
 You are a research report writer. Write a comprehensive, well-structured
@@ -222,7 +234,7 @@ The report should include:
 Make it detailed but well-organized. Aim for a thorough analysis.
 ```
 
-### 4.3 Tool 内直接 LLM 调用（查询生成用）
+### 4.3 引擎内直接 LLM 调用（查询生成用，`config.deep_research.prompts.query_generator`）
 
 ```
 System: You are a research query generator. Given a research topic and
@@ -259,19 +271,17 @@ what this query aims to discover.
 ### 新增文件
 
 ```
-agent/tools/deepresearch.go       # 主实现：DeepResearchTool（轻量协调器）
-agent/tools/deepresearch_test.go  # 单元测试
+agent/deepresearch/engine.go    # 主实现：DeepResearch 引擎（普通 Go struct）
+agent/deepresearch/engine_test.go  # 单元测试
 ```
 
 ### 修改文件
 
 | 文件 | 修改内容 |
 |------|---------|
-| `agent/tools/tool.go` | 添加 `ToolNameDeepResearch = "DeepResearch"` 常量 |
-| `agent/agent_configure.go` | 注册 `DeepResearchTool`（根据配置启用） |
 | `config/config.go` | 添加 `DeepResearchConfig` 结构体及默认值 |
 | `agent/commands/commands.go` | `Registry` 中添加 `/research` 命令定义 |
-| `tui/commands.go` | 注册 `research` handler + `handleResearchCommand()` |
+| `tui/commands.go` | 注册 `research` handler → 调用 DeepResearch 引擎 |
 | `channel/manager/commands.go` | `executeSlashCommand` 添加 `research` 分支 |
 | `agent/acp/commands.go` | 注册 `handleACPResearch` handler |
 
@@ -279,14 +289,18 @@ agent/tools/deepresearch_test.go  # 单元测试
 
 | 文件 | 原因 |
 |------|------|
+| `agent/tools/tool.go` | DeepResearch 不是 Tool |
+| `agent/agent_configure.go` | DeepResearch 不注册为 Tool |
 | `agent/agent_loop.go` | 工具执行路径不变 |
-| `agent/tools/websearch.go` | SubAgent 内部调用，DeepResearchTool 不直接使用 |
-| `agent/tools/webfetch.go` | SubAgent 内部调用，DeepResearchTool 不直接使用 |
-| `agent/tools/subagent.go` | DeepResearchTool 调用 SubAgent，而非替代它 |
+| `agent/tools/websearch.go` | SubAgent 内部调用，DeepResearch 引擎不直接使用 |
+| `agent/tools/webfetch.go` | SubAgent 内部调用，DeepResearch 引擎不直接使用 |
+| `agent/tools/subagent.go` | DeepResearch 引擎调用 SubAgent，而非替代它 |
 
 ---
 
 ## 六、Config 设计
+
+### 6.1 配置结构
 
 ```go
 // config/config.go 新增
@@ -299,8 +313,58 @@ type DeepResearchConfig struct {
     MaxBreadth     int           `yaml:"max_breadth" default:"8"`
     Timeout        time.Duration `yaml:"timeout" default:"5m"`
     MaxLearnings   int           `yaml:"max_learnings" default:"200"`
+
+    // provider 引用：query_generator 建议用轻量 provider，避免每次查询生成消耗大量 token。
+    // 值引用 config.yaml 中定义的 provider name（如 "fast"、"default"）。
+    // 为空时使用 agent 的主 provider。
+    QueryGeneratorProvider string `yaml:"query_generator_provider" default:"fast"`
+
+    // prompts：所有 prompt 模板均可自定义，不改代码即可调整研究行为。
+    // 为空时使用内置默认值。
+    Prompts *DeepResearchPrompts `yaml:"prompts,omitempty"`
+
+    // ReportWriter 控制最终报告生成策略
+    ReportWriter *ReportWriterConfig `yaml:"report_writer,omitempty"`
+
+    // Researcher 控制搜索研究员 SubAgent 的默认配置
+    Researcher *ResearcherConfig `yaml:"researcher,omitempty"`
+}
+
+type DeepResearchPrompts struct {
+    // QueryGenerator 用于生成搜索查询的 system prompt
+    // 模板变量: {breadth}, {query}, {learnings}
+    QueryGenerator string `yaml:"query_generator,omitempty"`
+
+    // Researcher 用于搜索+提取的 SubAgent system prompt
+    // 模板变量: {query}, {researchGoal}
+    Researcher string `yaml:"researcher,omitempty"`
+
+    // ReportWriter 用于写最终报告的 system prompt（仅 mode=subagent 时使用）
+    // 模板变量: {query}, {learnings}, {urls}
+    ReportWriter string `yaml:"report_writer,omitempty"`
+}
+
+type ReportWriterConfig struct {
+    // Mode 控制报告生成方式:
+    //   "subagent"  → SubAgent 写报告（独立 context window，适合大量 learnings）
+    //   "direct_llm" → 引擎内直接 LLM 调用（节省开销，适合少量 learnings）
+    Mode string `yaml:"mode" default:"subagent"`
+
+    // Provider 引用用于写报告的 provider name
+    // 仅 mode=direct_llm 时有效；mode=subagent 时使用 SubAgent 自身的 provider
+    Provider string `yaml:"provider,omitempty"`
+}
+
+type ResearcherConfig struct {
+    // AllowedTools 研究员 SubAgent 可用的工具列表
+    AllowedTools []string `yaml:"allowed_tools"`
+
+    // MaxIterations 每个研究员 SubAgent 的最大迭代次数
+    MaxIterations int `yaml:"max_iterations" default:"5"`
 }
 ```
+
+### 6.2 默认配置
 
 ```yaml
 # config.yaml 示例
@@ -311,104 +375,148 @@ deep_research:
   max_depth: 4
   max_breadth: 8
   timeout: 5m
+  max_learnings: 200
+
+  # 查询生成用轻量 provider（引用 config 中名为 "fast" 的 provider）
+  query_generator_provider: fast
+
+  # 所有 prompt 均可自定义，留空则使用 Go 代码中的内置默认值
+  prompts:
+    query_generator: |
+      You are a research query generator...
+    researcher: |
+      You are a research analyst...
+    report_writer: |
+      You are a research report writer...
+
+  # 报告生成策略
+  report_writer:
+    mode: subagent              # subagent | direct_llm
+    provider: default              # direct_llm 模式用的 provider
+
+  # 研究员 SubAgent 配置
+  researcher:
+    allowed_tools: [WebSearch, WebFetch]
+    max_iterations: 5
 ```
 
-不再需要 `summarization_model` 和 `report_model`，因为实际提取和报告工作由 SubAgent 完成（SubAgent 使用其自身配置的 provider）。DeepResearchTool 只需要一个轻量模型做查询生成。
+### 6.3 配置驱动的行为
+
+| 场景 | 用户操作 | 效果 |
+|------|---------|------|
+| 想要更深的研究 | 调大 `default_depth` / `max_depth` | 更多递归层数 |
+| 想要更广的覆盖 | 调大 `default_breadth` / `max_breadth` | 每层更多 SubAgent 并行 |
+| 想用中文 prompt | 改 `prompts.*` 为中文 | 研究过程中的 LLM 调用使用中文 |
+| 想换查询生成 provider | 改 `query_generator_provider` | 查询生成用不同 provider |
+| 不想写报告太花钱 | `report_writer.mode: direct_llm` | 省掉一个 SubAgent 的开销 |
+| 研究员想看代码 | 改 `researcher.allowed_tools` 加 `ReadFile`、`Grep` | 研究代码库 |
+
+所有配置变更**无需重新编译**，重启 tachi 即可生效。
+
+### 6.4 默认 Prompt 的内置实现
+
+prompt 默认值在 Go 代码中以内置常量的形式存在（而非硬编码在流程逻辑中），
+只有用户显式在 YAML 中覆盖时才使用配置值：
+
+```go
+const defaultQueryGeneratorPrompt = `You are a research query generator...`
+const defaultResearcherPrompt = `You are a research analyst...`
+const defaultReportWriterPrompt = `You are a research report writer...`
+
+func (cfg *DeepResearchConfig) QueryGeneratorPrompt() string {
+    if cfg.Prompts != nil && cfg.Prompts.QueryGenerator != "" {
+        return cfg.Prompts.QueryGenerator
+    }
+    return defaultQueryGeneratorPrompt
+}
+```
 
 ---
 
-## 七、工具 Description（LLM 看到的界面）
+## 七、Slash Command: `/research`
 
-```
-## DeepResearch
-Performs in-depth research on a given topic through multi-layer search
-and analysis. Returns a structured research report.
+> **设计决策**：DeepResearch 不暴露为 Tool，仅通过 `/research` slash command 触发。
+> LLM 不会自主调用研究功能——研究行为始终由用户主动发起。
 
-How it works:
-1. Analyzes the question and generates multiple search directions
-2. Spawns parallel sub-agents to search, read, and extract findings
-3. Based on findings, decides whether to go deeper
-4. Synthesizes a final report with sources
-
-Parameters:
-- query (required): Research topic or question
-- depth (optional, default 2): Research depth. 1=single pass, 2=follow-up, 3=even deeper
-- breadth (optional, default 3): Search breadth per layer. Higher = wider coverage
-- format (optional, default "report"): "report"=detailed markdown, "answer"=concise answer
-
-Good for:
-- Comprehensive understanding of a complex topic
-- Comparing information from multiple sources
-
-Not suitable for:
-- Simple fact lookups (use WebSearch instead)
-```
-
----
-
-## 八、Slash Command: `/research`
-
-### 8.1 命令注册
+### 7.1 命令注册
 
 ```go
 // agent/commands/commands.go
-{Name: "research", Description: "Deep research on a topic. Usage: /research <topic>",
+{Name: "research", Description: "Deep research on a topic. Usage: /research <topic> [--depth 2] [--breadth 3]",
  InputHint: "<topic>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 ```
 
-### 8.2 三模式 handler
+### 7.2 三模式 handler
 
 | 模式 | 文件 | 行为 |
 |------|------|------|
-| **TUI** | `tui/commands.go` | 解析参数 → 无 topic 报错 → 有 topic 发给 LLM |
-| **Channel** | `channel/manager/commands.go` | 无 topic 返回错误 → 有 topic 发给 agent turn |
-| **ACP** | `agent/acp/commands.go` | 无 topic 报错 → 有 topic 发给 LLM |
+| **TUI** | `tui/commands.go` | 解析参数 → 实例化 DeepResearch 引擎 → 执行研究 → 展示报告 |
+| **Channel** | `channel/manager/commands.go` | 解析参数 → 实例化 DeepResearch 引擎 → 执行研究 → 返回报告 |
+| **ACP** | `agent/acp/commands.go` | 解析参数 → 实例化 DeepResearch 引擎 → 执行研究 → 流式返回报告 |
 
-### 8.3 与 DeepResearchTool 的关系
+### 7.3 参数解析
+
+handler 解析 `/research` 后的参数：
+
+```
+/research <topic> [--depth N] [--breadth N] [--format report|answer]
+```
+
+- `topic`（必需）：研究主题
+- `--depth`（可选，默认 `default_depth`）：研究深度
+- `--breadth`（可选，默认 `default_breadth`）：每层搜索宽度
+- `--format`（可选，默认 `report`）：`report`（详细 Markdown 报告）或 `answer`（简洁回答）
+
+### 7.4 调用流程
 
 ```
 /research <topic>
-  → Handler: "Do deep research on: {topic}"
-  → LLM 调用 DeepResearchTool
-    → DeepResearchTool 生成查询
-    → 启动 SubAgent × N 并行搜索
-    → 判断是否递归
-    → 返回报告
+  → handler 解析参数
+  → 创建 DeepResearch 引擎（传入 config、provider）
+  → 引擎运行：
+       ① LLM 生成搜索查询
+       ② 并行启动 SubAgent × N 搜索+提取
+       ③ 判断是否递归（depth > 0）
+       ④ 写最终报告（SubAgent 或直接 LLM）
+  → handler 展示报告给用户
 ```
 
 ---
 
-## 九、实现路线图
+## 八、实现路线图
 
-### Phase 1：MVP（~200 行）
-
-单层搜索，depth=1，固定配置。
+### Phase 1：MVP（~250 行）
 
 ```
-[√] 查询生成（Tool 内 LLM 调用）
+[√] Config 结构体定义（DeepResearchConfig + 子结构体）
+[√] 默认 prompt 常量（Go 内置 + YAML 覆盖）
+[√] 配置读取逻辑（从 config 读取参数/prompts/provider 引用）
+[√] 查询生成（引擎内 LLM 调用，使用配置的 prompt 和 provider）
 [√] 并行 SubAgent 搜索+提取（复用 SubAgentTool）
-[√] 报告合成（直接 LLM 调用或 SubAgent）
+[√] 报告合成（SubAgent 或直接 LLM 调用，由配置控制）
 [√] 基本错误处理
 ```
 
 ### Phase 2：递归（~+100 行）
 
 ```
-[√] depth/breadth 参数
-[√] 递归深入
+[√] depth/breadth 参数（从 config 读取默认值）
+[√] 递归深入（每层从 config 读取 researcher prompt）
 [√] 终止条件
+[√] 超时控制（从 config 读取 timeout）
 ```
 
 ### Phase 3：优化（~+50 行）
 
 ```
-[√] Config 集成
-[√] 超时控制
+[√] /research 三模式 handler
+[√] 使用体验打磨
+[√] 测试覆盖
 ```
 
 ---
 
-## 十、与现有设计的关系
+## 九、与现有设计的关系
 
 ### 与 SubAgent 的关系
 
@@ -416,66 +524,68 @@ Not suitable for:
 
 | 维度 | 原方案（Goroutine Pool） | 现方案（SubAgent） |
 |------|------------------------|-------------------|
-| 实际搜索提取 | DeepResearchTool 内直接调 WebSearch | **委托给 SubAgent** |
+| 实际搜索提取 | DeepResearch 引擎内直接调 WebSearch | **委托给 SubAgent** |
 | 并行方式 | Goroutine + semaphore | **SubAgent 天然并行** |
 | 上下文管理 | 手动管理 learnings 数组 | **SubAgent 各自独立上下文** |
 | Token 开销 | 共享上下文，累加 learnings 不浪费 | **每个 SubAgent 独立上下文，有重复 cost** |
-| 代码复杂度 | ~300 行（自己实现搜索+提取） | **~200 行（只做编排）** |
-| 测试难度 | 需要 mock WebSearch/WebFetch | **SubAgent 已有测试，Tool 只需测编排** |
+| 代码复杂度 | ~300 行（自己实现搜索+提取） | **~250 行（只做编排，配置驱动）** |
+| 测试难度 | 需要 mock WebSearch/WebFetch | **SubAgent 已有测试，引擎只需测编排** |
 | 错误隔离 | 一个 goroutine 挂影响整体 | **SubAgent 各自运行，互不影响** |
 
 **为什么选择 SubAgent 路线：**
 
-1. **职责清晰** — DeepResearchTool 只回答"往哪搜、搜多深"；SubAgent 回答"怎么搜、找到什么"。
-2. **复用成熟能力** — SubAgent 已经有迭代预算、tool 权限控制、worktree 隔离、结果截断等能力，DeepResearchTool 不需要重新实现。
-3. **实现极简** — 核心代码只需要：生成 query → 启动 SubAgent → 收集结果 → 判断递归。约 200 行 Go 代码。
+1. **职责清晰** — DeepResearch 引擎只回答"往哪搜、搜多深"；SubAgent 回答"怎么搜、找到什么"。
+2. **复用成熟能力** — SubAgent 已经有迭代预算、tool 权限控制、worktree 隔离、结果截断等能力，DeepResearch 引擎不需要重新实现。
+3. **实现极简** — 核心代码只需要：读配置 → 生成 query → 启动 SubAgent → 收集结果 → 判断递归。约 250 行 Go 代码。
 4. **错误隔离** — 某个 SubAgent 超时或失败不影响其他 SubAgent，深搜路径彼此独立。
 
 **代价：** 每个 SubAgent 有独立的 context window，如果 breadth=5，每层相当于 5 个独立的 LLM 会话，token 消耗比共享上下文方案高。但对于研究任务来说，这个代价可以接受——准确性比 token 成本更重要。
 
-### DeepResearchTool 内部流程图
+### 配置驱动 vs 代码硬编码
 
-```
-DeepResearchTool.ExecuteContext()
-  │
-  ├── ① LLM.generateQueries(query, learnings, breadth)
-  │     返回 [{query, researchGoal}, ...]
-  │
-  ├── ② SubAgent.execute(serpQuery)  × breadth 并行
-  │     prompt: "Search for '{query}', extract learnings..."
-  │     tools: [WebSearch, WebFetch]
-  │     ─────────────────────────────
-  │     SubAgent 内部:
-  │       WebSearch(query) → URLs
-  │       WebFetch(url) → content
-  │       LLM.extract(content) → {learnings, followUpQuestions}
-  │     ─────────────────────────────
-  │     返回 learnings + urls
-  │
-  ├── ③ depth > 0? → 递归：用 followUpQuestions 生成下一层查询
-  │   depth = 0? → 继续
-  │
-  └── ④ 写报告
-      方案 A: SubAgent(system="写报告", tools=[]) 独立写
-      方案 B: Tool 内 LLM 直接写
-```
+与设计文档原始方案相比，配置驱动的变化：
 
-### 与工具注册机制的关系
+| 维度 | 纯代码硬编码 | 配置驱动 |
+|------|------------|---------|
+| prompt 模板 | 写在 Go 代码的字符串里 | YAML 可覆盖，内置 Go 常量作为 fallback |
+| provider 选择 | 使用主 provider | 可指定不同环节用不同 provider（如查询生成用轻量 provider） |
+| 行为参数 | 代码内常量 | YAML 可配置 |
+| 研究策略 | 固定 | 可切换（如 report_writer.mode） |
+| 修改成本 | 改代码 → 重新编译 | 改 YAML → 重启即可 |
+| 代码量 | ~200 行 | ~250 行（多了配置读取和 fallback 逻辑） |
 
-DeepResearchTool 遵循标准 `Tool` 接口，在 `agent_configure.go` 中注册：
+### Slash Command Only —— 不暴露为 Tool
 
-```go
-func (t *DeepResearchTool) Name() string        { return ToolNameDeepResearch }
-func (t *DeepResearchTool) Description() string  { return "..." }
-func (t *DeepResearchTool) Properties() map[string]PropertySchema { ... }
-func (t *DeepResearchTool) Required() []string   { return []string{"query"} }
-func (t *DeepResearchTool) Parallel() bool       { return true }
-func (t *DeepResearchTool) ExecuteContext(ctx context.Context, args string) (string, error) { ... }
-```
+这是本设计的关键决策：
+
+| 维度 | 暴露为 Tool | 仅 Slash Command（本方案） |
+|------|------------|--------------------------|
+| 触发方式 | LLM 自主决定调用 | **用户手动触发** |
+| 使用场景 | LLM 认为需要研究时自动使用 | **用户主动发起研究任务** |
+| 可控性 | LLM 可能在不恰当的时候启动耗时研究 | **用户完全控制何时开始研究** |
+| Token 消耗 | LLM 可能反复调用，成本不可控 | **用户每次触发都知情** |
+| 实现复杂度 | 需注册 Tool 接口 + 权限管理 | **普通 Go struct，handler 直接调用** |
+| 与现有架构耦合 | 需要修改 `agent_configure.go`、`tool.go` | **零耦合，不修改 agent 核心路径** |
+| LLM 上下文污染 | Tool description 占用 LLM 上下文窗口 | **LLM 完全不知晓 DeepResearch 存在** |
+
+**选择 Slash Command Only 的理由：**
+
+1. **研究是用户行为，不是 LLM 行为** — 深度研究耗时耗 token，应该由用户主动决定何时进行，而非 LLM 在工具调用中自主触发。
+2. **避免 LLM 误用** — 如果暴露为 Tool，LLM 可能在简单问答场景下也调用 DeepResearch（如"今天天气怎么样"），造成不必要的开销。
+3. **架构简洁** — 不需要注册 Tool 接口、不需要在 agent_configure.go 中处理、不需要在 tool.go 中添加常量。就是一个纯 Go 的引擎 struct，slash command handler 按需调用。
+4. **不污染 LLM 上下文** — Tool description 会占用 LLM 的上下文窗口（即使不被调用也会被读取）。不注册为 Tool 就完全避免了这个问题。
+
+### 引擎内直接 LLM 调用
+
+DeepResearch 引擎在查询生成和报告合成（direct_llm 模式）时需要直接调用 LLM。
+这不同于"引擎只做编排"的纯粹理念，但权衡是合理的：
+
+- 查询生成是一个**轻量 LLM 调用**（输入小、输出结构化），不值得为此启动一个 SubAgent
+- direct_llm 模式省掉一个报告 SubAgent 的开销（对于 learnings 较少的情况）
 
 ---
 
-## 十一、风险与权衡
+## 十、风险与权衡
 
 ### 风险
 
@@ -485,15 +595,20 @@ func (t *DeepResearchTool) ExecuteContext(ctx context.Context, args string) (str
 | SubAgent 超时 | 搜索结果缺失 | 超时的 SubAgent 跳过，不影响整体 |
 | 递归深度失控 | 总耗时长 | 硬限制 depth ≤ 4，全局超时 5min |
 | 搜索质量不稳定 | 报告质量 | 多层收敛，宽泛→聚焦 |
+| 配置错误（如引用了不存在的 provider） | 引擎初始化失败 | 配置校验 + fallback 到主 provider |
+| prompt 模板变量不匹配 | 渲染后 prompt 格式错误 | 变量缺失时保底仍能工作（硬编码占位符替代） |
 
 ### 设计取舍
 
 | 决策 | 选择 | 理由 |
 |------|------|------|
+| 暴露方式 | **仅 Slash Command** | 研究是用户行为，不应由 LLM 自主触发 |
 | 实际搜索提取用 SubAgent 还是直接调 | **SubAgent** | 职责清晰、复用成熟能力、错误隔离 |
-| 报告用 SubAgent 写还是直接 LLM 写 | **SubAgent**（大量 learnings 时） | 独立上下文窗口，避免主 agent 上下文膨胀 |
-| 查询生成用 Tool 内 LLM 调用还是 SubAgent | **Tool 内直接 LLM** | 轻量节点，不需要 SubAgent 的开销 |
-| 轻量模型还是主力模型 | SubAgent 自带 provider 配置 | DeepResearchTool 不需要关心 |
+| 报告用 SubAgent 写还是直接 LLM 写 | **配置可选**（`report_writer.mode`） | 由用户根据场景权衡成本和质量 |
+| 查询生成用引擎内 LLM 调用还是 SubAgent | **引擎内直接 LLM** | 轻量节点，不需要 SubAgent 的开销 |
+| prompt 用代码常量还是 YAML 配置 | **代码常量 + YAML 覆盖** | 开箱即用，同时支持自定义 |
+| provider 用主 provider 还是可配置 | **可配置**（如 `query_generator_provider: fast`） | 不同环节适合不同 provider |
+| 配置校验严格还是宽松 | **宽松（fallback 优先）** | 配置出错时降级而非崩溃 |
 
 ---
 
