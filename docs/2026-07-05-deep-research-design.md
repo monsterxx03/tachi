@@ -56,7 +56,7 @@ Tachi 已具备深度研究所需的所有基础能力：
 │       │                     │               │  → 写报告  │  │
 │       ▼                     ▼               └─────┬─────┘  │
 │  ┌──────────────────────────────────────────────────┐      │
-│  │ ④ 最终报告 (SubAgent 或直接 LLM)                  │      │
+│  │ ④ 最终报告 (SubAgent 写 HTML 并保存到 ~/.tachi/research/)       │      │
 │  └──────────────────────────────────────────────────┘      │
 └──────────────────────────────────────────────────────────────┘
            │
@@ -104,19 +104,8 @@ depth=2, breadth=3
 
 ### 3.2 输出
 
-```markdown
-# Deep Research Report: {Topic}
-## Executive Summary
-...
-## Key Findings
-...
-## Detailed Analysis
-...
-## Sources
-- [{Title}]({url})
-```
-
-以 Markdown 文本返回，直接展示给用户。
+以自包含 HTML5 格式返回报告，同时自动保存到 `~/.tachi/research/` 目录。
+文件名格式：`{日期}_{时间}-{slugified主题}.html`，如 `2026-07-05_2110-ai-application-financial-analysis.html`。
 
 ---
 
@@ -177,13 +166,12 @@ function deepResearch(query, depth, breadth, learnings=[], urls=[]):
         )
 
     ──────────────────────────────────────────
-    ④ 写最终报告（策略由 config 控制）
+    ④ 写最终报告（SubAgent 写出 HTML 文件）
     ──────────────────────────────────────────
-    // config.deep_research.report_writer.mode 控制策略:
-    //   "subagent"  → SubAgent 写报告（独立 context，适合大量 learnings）
-    //   "direct_llm" → 引擎内直接 LLM 写报告（节省开销）
-    // 使用 config.deep_research.report_writer 的 prompt 和 provider 引用
-    report = writeReport(query, allLearnings, allUrls)
+    // 使用一个报告 SubAgent 来写 HTML 报告。
+    // SubAgent 的工具集中包含 WriteFile，可以直接将 HTML 写入 outputPath。
+    // 成功路径返回 HTML 内容；失败时降级为 buildPartialReport 并保存到同一路径。
+    report = writeReportViaSubagent(query, allLearnings, allUrls, outputPath)
     return report
 ```
 
@@ -207,14 +195,14 @@ Return your findings as a structured summary with:
 - Follow-up questions (up to 3, for deeper research)
 - Source URLs visited
 
-Available tools: WebSearch, WebFetch
+Available tools: WebSearch, WebFetch, ReadFile, Grep
 ```
 
-#### 写报告 SubAgent（`config.deep_research.prompts.report_writer`，仅 `mode: subagent` 时使用）
+#### 写报告 SubAgent（`config.deep_research.prompts.report_writer`）
 
 ```
-You are a research report writer. Write a comprehensive, well-structured
-report in Markdown based on the following research findings.
+You are a research report writer. Write a comprehensive, well-structured,
+self-contained HTML5 report based on the following research findings.
 
 Research topic: {query}
 
@@ -223,6 +211,9 @@ Findings:
 
 Source URLs:
 {urls}
+
+Write a self-contained HTML5 document with inline CSS styling.
+Use the WriteFile tool to save it to: {outputPath}
 
 The report should include:
 1. Executive Summary
@@ -322,9 +313,6 @@ type DeepResearchConfig struct {
     // 为空时使用内置默认值。
     Prompts *DeepResearchPrompts `yaml:"prompts,omitempty"`
 
-    // ReportWriter 控制最终报告生成策略
-    ReportWriter *ReportWriterConfig `yaml:"report_writer,omitempty"`
-
     // Researcher 控制搜索研究员 SubAgent 的默认配置
     Researcher *ResearcherConfig `yaml:"researcher,omitempty"`
 }
@@ -338,20 +326,9 @@ type DeepResearchPrompts struct {
     // 模板变量: {query}, {researchGoal}
     Researcher string `yaml:"researcher,omitempty"`
 
-    // ReportWriter 用于写最终报告的 system prompt（仅 mode=subagent 时使用）
-    // 模板变量: {query}, {learnings}, {urls}
+    // ReportWriter 用于写最终报告的 SubAgent system prompt
+    // 模板变量: {query}, {learnings}, {urls}, {outputPath}
     ReportWriter string `yaml:"report_writer,omitempty"`
-}
-
-type ReportWriterConfig struct {
-    // Mode 控制报告生成方式:
-    //   "subagent"  → SubAgent 写报告（独立 context window，适合大量 learnings）
-    //   "direct_llm" → 引擎内直接 LLM 调用（节省开销，适合少量 learnings）
-    Mode string `yaml:"mode" default:"subagent"`
-
-    // Provider 引用用于写报告的 provider name
-    // 仅 mode=direct_llm 时有效；mode=subagent 时使用 SubAgent 自身的 provider
-    Provider string `yaml:"provider,omitempty"`
 }
 
 type ResearcherConfig struct {
@@ -387,14 +364,9 @@ deep_research:
     report_writer: |
       You are a research report writer...
 
-  # 报告生成策略
-  report_writer:
-    mode: subagent              # subagent | direct_llm
-    provider: default              # direct_llm 模式用的 provider
-
   # 研究员 SubAgent 配置
   researcher:
-    allowed_tools: [WebSearch, WebFetch]
+    allowed_tools: [WebSearch, WebFetch, ReadFile, Grep, WriteFile]
     max_iterations: 5
 ```
 
@@ -406,8 +378,8 @@ deep_research:
 | 想要更广的覆盖 | 调大 `default_breadth` / `max_breadth` | 每层更多 SubAgent 并行 |
 | 想用中文 prompt | 改 `prompts.*` 为中文 | 研究过程中的 LLM 调用使用中文 |
 | 想换查询生成 provider | 改 `query_generator_provider` | 查询生成用不同 provider |
-| 不想写报告太花钱 | `report_writer.mode: direct_llm` | 省掉一个 SubAgent 的开销 |
 | 研究员想看代码 | 改 `researcher.allowed_tools` 加 `ReadFile`、`Grep` | 研究代码库 |
+| 输出 HTML 报告 | `report_writer` prompt 模板控制 | 内置默认已生成 HTML5 自包含文档 |
 
 所有配置变更**无需重新编译**，重启 tachi 即可生效。
 
@@ -426,6 +398,15 @@ func (cfg *DeepResearchConfig) QueryGeneratorPrompt() string {
         return cfg.Prompts.QueryGenerator
     }
     return defaultQueryGeneratorPrompt
+}
+
+// report_writer 不再有 mode 切换——始终通过 SubAgent 写 HTML 报告。
+// Prompt 模板变量增加 {outputPath}，SubAgent 通过 WriteFile 写入指定路径。
+func (cfg *DeepResearchConfig) ReportWriterPrompt() string {
+    if cfg.Prompts != nil && cfg.Prompts.ReportWriter != "" {
+        return cfg.Prompts.ReportWriter
+    }
+    return defaultReportWriterPrompt
 }
 ```
 
@@ -490,7 +471,7 @@ handler 解析 `/research` 后的参数：
 [√] 配置读取逻辑（从 config 读取参数/prompts/provider 引用）
 [√] 查询生成（引擎内 LLM 调用，使用配置的 prompt 和 provider）
 [√] 并行 SubAgent 搜索+提取（复用 SubAgentTool）
-[√] 报告合成（SubAgent 或直接 LLM 调用，由配置控制）
+[√] 报告合成（SubAgent 写 HTML 并保存到 ~/.tachi/research/）
 [√] 基本错误处理
 ```
 
@@ -547,7 +528,7 @@ handler 解析 `/research` 后的参数：
 | prompt 模板 | 写在 Go 代码的字符串里 | YAML 可覆盖，内置 Go 常量作为 fallback |
 | provider 选择 | 使用主 provider | 可指定不同环节用不同 provider（如查询生成用轻量 provider） |
 | 行为参数 | 代码内常量 | YAML 可配置 |
-| 研究策略 | 固定 | 可切换（如 report_writer.mode） |
+| 研究策略 | 固定 | YAML 可配置（prompt、depth、breadth、tools 等） |
 | 修改成本 | 改代码 → 重新编译 | 改 YAML → 重启即可 |
 | 代码量 | ~200 行 | ~250 行（多了配置读取和 fallback 逻辑） |
 
@@ -574,11 +555,11 @@ handler 解析 `/research` 后的参数：
 
 ### 引擎内直接 LLM 调用
 
-DeepResearch 引擎在查询生成和报告合成（direct_llm 模式）时需要直接调用 LLM。
+DeepResearch 引擎在查询生成时需要直接调用 LLM。
 这不同于"引擎只做编排"的纯粹理念，但权衡是合理的：
 
 - 查询生成是一个**轻量 LLM 调用**（输入小、输出结构化），不值得为此启动一个 SubAgent
-- direct_llm 模式省掉一个报告 SubAgent 的开销（对于 learnings 较少的情况）
+- 报告生成**始终通过 SubAgent** 完成，确保 context window 足够容纳大量 learnings
 
 ---
 
@@ -601,11 +582,13 @@ DeepResearch 引擎在查询生成和报告合成（direct_llm 模式）时需�
 |------|------|------|
 | 暴露方式 | **仅 Slash Command** | 研究是用户行为，不应由 LLM 自主触发 |
 | 实际搜索提取用 SubAgent 还是直接调 | **SubAgent** | 职责清晰、复用成熟能力、错误隔离 |
-| 报告用 SubAgent 写还是直接 LLM 写 | **配置可选**（`report_writer.mode`） | 由用户根据场景权衡成本和质量 |
+| 报告用 SubAgent 写还是直接 LLM 写 | **SubAgent（唯一路径）** | 简化实现，确保 context 足够容纳完整报告 |
 | 查询生成用引擎内 LLM 调用还是 SubAgent | **引擎内直接 LLM** | 轻量节点，不需要 SubAgent 的开销 |
 | prompt 用代码常量还是 YAML 配置 | **代码常量 + YAML 覆盖** | 开箱即用，同时支持自定义 |
 | provider 用主 provider 还是可配置 | **可配置**（如 `query_generator_provider: fast`） | 不同环节适合不同 provider |
 | 配置校验严格还是宽松 | **宽松（fallback 优先）** | 配置出错时降级而非崩溃 |
+| 报告输出格式 | **HTML5（自包含，内嵌 CSS）** | 可读性更好，可直接在浏览器打开 |
+| 报告持久化 | **自动保存 ~/.tachi/research/** | 用户可随时回溯历史研究报告 |
 
 ---
 

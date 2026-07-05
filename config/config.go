@@ -26,6 +26,7 @@ const (
 	mcpTokensDirName          = "mcp_tokens"
 	skillsDirName             = "skills"
 	weixinStateDirName        = "weixin"
+	researchDirName           = "research"
 	cronStoreFileName         = "crons.json"
 	toolResultsDirName        = "tool_results"
 	defaultToolResultMaxChars = 50000
@@ -556,7 +557,7 @@ Return your findings as a structured summary with:
 
 Available tools: WebSearch, WebFetch`
 
-const defaultReportWriterPrompt = `You are a research report writer. Write a comprehensive, well-structured report in Markdown based on the following research findings.
+const defaultReportWriterPrompt = `You are a research report writer. Write a comprehensive, well-structured report as a self-contained HTML document.
 
 Research topic: {query}
 
@@ -566,14 +567,22 @@ Findings:
 Source URLs:
 {urls}
 
-The report should include:
-1. Executive Summary
-2. Key Findings
-3. Detailed Analysis organized by sub-topic
-4. Conclusion
-5. Sources section with all referenced URLs
+Create a beautiful, readable HTML page with:
+- Modern, clean CSS design (embedded in a <style> tag)
+- Good typography, readable font sizes and line spacing
+- Professional color scheme with proper contrast
+- Well-organized sections with clear heading hierarchy
+- Code blocks with monospace font and subtle background if needed
+- Links to sources properly formatted
+- Responsive design that works on both desktop and mobile
+- A table of contents at the top for navigation
 
-Make it detailed but well-organized. Aim for a thorough analysis.`
+The HTML should be a complete, valid HTML5 document with <!DOCTYPE html>, <html>, <head>, and <body> tags.
+Include all CSS inline in a <style> tag within <head>. Do NOT use external CSS or JavaScript.
+Write in the same language as the research query.
+
+Use the WriteFile tool to save the HTML report to: {output_path}
+Then return the complete HTML content of the report as your final output.`
 
 type DeepResearchConfig struct {
 	DefaultDepth   int           `yaml:"default_depth" default:"2"`
@@ -590,9 +599,6 @@ type DeepResearchConfig struct {
 	// Prompts contains all customizable prompt templates. When nil or empty string,
 	// built-in Go defaults are used.
 	Prompts *DeepResearchPrompts `yaml:"prompts,omitempty"`
-
-	// ReportWriter controls how the final report is generated.
-	ReportWriter *ReportWriterConfig `yaml:"report_writer,omitempty"`
 
 	// Researcher controls how research sub-agents behave.
 	Researcher *ResearcherConfig `yaml:"researcher,omitempty"`
@@ -625,28 +631,12 @@ func (c *DeepResearchConfig) ReportWriterPrompt() string {
 	return defaultReportWriterPrompt
 }
 
-// ReportWriterMode returns the report writer mode ("subagent" or "direct_llm").
-func (c *DeepResearchConfig) ReportWriterMode() string {
-	if c.ReportWriter != nil && c.ReportWriter.Mode != "" {
-		return c.ReportWriter.Mode
-	}
-	return "subagent"
-}
-
-// ReportWriterProvider returns the provider name for direct_llm report writing.
-func (c *DeepResearchConfig) ReportWriterProvider() string {
-	if c.ReportWriter != nil && c.ReportWriter.Provider != "" {
-		return c.ReportWriter.Provider
-	}
-	return ""
-}
-
 // ResearcherTools returns the allowed tools for research sub-agents.
 func (c *DeepResearchConfig) ResearcherTools() []string {
 	if c.Researcher != nil && len(c.Researcher.AllowedTools) > 0 {
 		return c.Researcher.AllowedTools
 	}
-	return []string{"WebSearch", "WebFetch"}
+	return []string{"WebSearch", "WebFetch", "ReadFile", "Grep", "WriteFile"}
 }
 
 // ResearcherMaxIterations returns the max iterations per research sub-agent.
@@ -661,11 +651,6 @@ type DeepResearchPrompts struct {
 	QueryGenerator string `yaml:"query_generator,omitempty"`
 	Researcher     string `yaml:"researcher,omitempty"`
 	ReportWriter   string `yaml:"report_writer,omitempty"`
-}
-
-type ReportWriterConfig struct {
-	Mode     string `yaml:"mode" default:"subagent"` // "subagent" | "direct_llm"
-	Provider string `yaml:"provider,omitempty"`       // Provider name for direct_llm mode
 }
 
 type ResearcherConfig struct {
@@ -749,6 +734,11 @@ func GlobalSkillsDir() string {
 // WeixinStateDir returns the default path to the weixin state directory.
 func WeixinStateDir() string {
 	return filepath.Join(BaseDir(), weixinStateDirName)
+}
+
+// ResearchDir returns the path to the deep research reports directory.
+func ResearchDir() string {
+	return filepath.Join(BaseDir(), researchDirName)
 }
 
 // ToolResultsDir returns the path to the tool results storage directory.

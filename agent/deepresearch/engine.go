@@ -15,9 +15,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -73,9 +76,9 @@ func New(
 	}
 }
 
-// Run executes deep research on the given topic and returns a Markdown report.
-// The caller supplies the initial depth and breadth (which are clamped to
-// the configured max values).
+// Run executes deep research on the given topic and returns the report.
+// The report is saved as an HTML file in ~/.tachi/research/ and the returned
+// string includes the file path.
 func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth int) (string, error) {
 	// Clamp to configured limits
 	if depth > dr.cfg.MaxDepth {
@@ -94,22 +97,31 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 
 	dr.log("DeepResearch: starting topic=%q depth=%d breadth=%d", topic, depth, breadth)
 
+	// Pre-compute output path once so success and error paths share the same filename.
+	outputPath := dr.reportPath(topic)
+
 	allLearnings, allURLs, err := dr.deepResearch(ctx, topic, depth, breadth, nil)
 	if err != nil {
 		if ctx.Err() != nil {
 			dr.log("DeepResearch: timed out or cancelled after %v, generating partial report", dr.cfg.Timeout)
-			return dr.buildPartialReport(topic, allLearnings, allURLs, ctx.Err()), nil
+			report := dr.buildPartialReport(topic, allLearnings, allURLs, ctx.Err())
+			dr.saveReport(outputPath, report)
+			return report, nil
 		}
 		return "", err
 	}
 
 	dr.log("DeepResearch: research complete, writing report (learnings=%d, urls=%d)", len(allLearnings), len(allURLs))
 
-	report, err := dr.writeReport(ctx, topic, allLearnings, allURLs)
+	// The sub-agent writes the HTML file via WriteFile to outputPath.
+	report, err := dr.writeReport(ctx, topic, allLearnings, allURLs, outputPath)
 	if err != nil {
 		dr.log("DeepResearch: report writing failed: %v, returning partial results", err)
-		return dr.buildPartialReport(topic, allLearnings, allURLs, nil), nil
+		report = dr.buildPartialReport(topic, allLearnings, allURLs, nil)
+		dr.saveReport(outputPath, report)
+		return report, nil
 	}
+
 	return report, nil
 }
 
@@ -329,40 +341,32 @@ func (dr *DeepResearch) buildResearcherPrompt(query, researchGoal string) string
 	).Replace(dr.cfg.ResearcherPrompt())
 }
 
-// writeReport generates the final research report.
-//
-// Two modes (controlled by config.ReportWriterMode()):
-//   - "subagent":   Delegates report writing to a SubAgent (uses the runner).
-//   - "direct_llm": Uses a direct LLM call (cheaper, uses the configured or
-//     default provider).
+// writeReport generates the final research report via a sub-agent.
+// The sub-agent uses WriteFile to save the HTML to outputPath.
 func (dr *DeepResearch) writeReport(
 	ctx context.Context,
 	topic string,
 	learnings []string,
 	urls []string,
+	outputPath string,
 ) (string, error) {
 	if len(learnings) == 0 {
 		return dr.buildPartialReport(topic, learnings, urls, nil), nil
 	}
 
-	mode := dr.cfg.ReportWriterMode()
-
-	switch mode {
-	case "direct_llm":
-		return dr.writeReportDirect(ctx, topic, learnings, urls)
-	default:
-		return dr.writeReportViaSubagent(ctx, topic, learnings, urls)
-	}
+	return dr.writeReportViaSubagent(ctx, topic, learnings, urls, outputPath)
 }
 
 // writeReportViaSubagent delegates report writing to a sub-agent.
+// The sub-agent is instructed to use WriteFile to save the HTML to outputPath.
 func (dr *DeepResearch) writeReportViaSubagent(
 	ctx context.Context,
 	topic string,
 	learnings []string,
 	urls []string,
+	outputPath string,
 ) (string, error) {
-	prompt := dr.buildReportWriterPrompt(topic, learnings, urls)
+	prompt := dr.buildReportWriterPrompt(topic, learnings, urls, outputPath)
 
 	dr.log("DeepResearch: writing report via sub-agent")
 	output, err := dr.runner.Run(ctx, prompt, dr.cfg.ResearcherTools())
@@ -372,40 +376,9 @@ func (dr *DeepResearch) writeReportViaSubagent(
 	return output, nil
 }
 
-// writeReportDirect writes the report via a direct LLM call.
-func (dr *DeepResearch) writeReportDirect(
-	ctx context.Context,
-	topic string,
-	learnings []string,
-	urls []string,
-) (string, error) {
-	providerName := dr.cfg.ReportWriterProvider()
-	provider, err := dr.getProvider(providerName)
-	if err != nil {
-		return "", fmt.Errorf("get provider for report writing: %w", err)
-	}
-
-	prompt := dr.buildReportWriterPrompt(topic, learnings, urls)
-
-	messages := []llm.Message{
-		{Role: "system", Content: "You are a research report writer. Write comprehensive Markdown reports."},
-		{Role: "user", Content: prompt},
-	}
-
-	disabled := false
-	resp, err := provider.CreateChat(ctx, messages, nil, llm.ChatOptions{
-		MaxTokens: 8192,
-		Thinking:  &disabled,
-	})
-	if err != nil {
-		return "", fmt.Errorf("LLM report writing failed: %w", err)
-	}
-
-	return resp.Content, nil
-}
-
 // buildReportWriterPrompt builds the prompt for the report writer.
-func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string, urls []string) string {
+// outputPath is the target file path for the HTML report.
+func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string, urls []string, outputPath string) string {
 	learningsText := strings.Join(learnings, "\n\n---\n\n")
 	urlsText := strings.Join(urls, "\n")
 
@@ -414,6 +387,7 @@ func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string
 		"{query}", topic,
 		"{learnings}", learningsText,
 		"{urls}", urlsText,
+		"{output_path}", outputPath,
 	).Replace(promptTmpl)
 }
 
@@ -451,6 +425,49 @@ func (dr *DeepResearch) buildPartialReport(topic string, learnings []string, url
 	}
 
 	return sb.String()
+}
+
+// reportPath generates the output file path for a research report.
+// The file is placed in ~/.tachi/research/ with a date-and-topic filename.
+// Does not create directories or write anything.
+func (dr *DeepResearch) reportPath(topic string) string {
+	slug := slugifyTopic(topic)
+	now := time.Now()
+	filename := fmt.Sprintf("%s-%s.html", now.Format("2006-01-02_1504"), slug)
+	return filepath.Join(config.ResearchDir(), filename)
+}
+
+// saveReport saves the report content to the given file path.
+// Creates the parent directory if it doesn't exist.
+// Returns the file path, or empty string on failure (failures are logged, not fatal).
+func (dr *DeepResearch) saveReport(filePath string, content string) string {
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		dr.log("DeepResearch: failed to create research dir %s: %v", dir, err)
+		return ""
+	}
+
+	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+		dr.log("DeepResearch: failed to save report to %s: %v", filePath, err)
+		return ""
+	}
+
+	return filePath
+}
+
+// slugifyTopic converts a topic string into a filesystem-safe slug.
+func slugifyTopic(topic string) string {
+	slug := strings.TrimSpace(topic)
+	slug = strings.ToLower(slug)
+	// Replace non-alphanumeric characters (except CJK and common punctuation) with hyphens
+	re := regexp.MustCompile(`[^a-z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\-_]+`)
+	slug = re.ReplaceAllString(slug, "-")
+	slug = strings.Trim(slug, "-")
+	runes := []rune(slug)
+	if len(runes) > 80 {
+		slug = string(runes[:80])
+	}
+	return strings.Trim(slug, "-")
 }
 
 // getProvider resolves a provider by name from the providers config list.

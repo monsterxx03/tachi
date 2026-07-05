@@ -54,7 +54,7 @@ func (e *LLMKeywordExtractor) ExtractKeywords(ctx context.Context, query string)
 	}
 
 	resp, err := e.provider.CreateChat(ctx, messages, nil, llm.ChatOptions{
-		MaxTokens: 80,
+		MaxTokens: 4096,
 		Thinking:  new(false),
 	})
 	if err != nil {
