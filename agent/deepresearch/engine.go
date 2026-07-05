@@ -35,6 +35,13 @@ type SubagentRunner interface {
 	Run(ctx context.Context, prompt string, allowedTools []string) (string, error)
 }
 
+// ProgressFunc is an optional callback for reporting research progress.
+// The callback may be called from multiple goroutines concurrently;
+// the caller is responsible for thread-safety (e.g. use a buffered channel
+// or mutex-protected writer).
+// When nil, no progress is reported.
+type ProgressFunc func(format string, args ...any)
+
 // DeepResearch is the config-driven deep research engine.
 // It does NOT implement the Tool interface — it is used by slash command
 // handlers across TUI, Channel, and ACP modes.
@@ -76,10 +83,22 @@ func New(
 	}
 }
 
+// progress is a helper to call the progress callback if non-nil.
+// Thread-safe by design — the callback itself must be thread-safe.
+func (dr *DeepResearch) progress(pfn ProgressFunc, format string, args ...any) {
+	if pfn != nil {
+		pfn(format, args...)
+	}
+}
+
 // Run executes deep research on the given topic and returns the report.
 // The report is saved as an HTML file in ~/.tachi/research/ and the returned
 // string includes the file path.
-func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth int) (string, error) {
+//
+// progress is an optional callback for reporting intermediate progress.
+// It may be called from multiple goroutines; the caller must ensure
+// thread-safety. Pass nil to disable progress reporting.
+func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth int, progress ProgressFunc) (string, error) {
 	// Clamp to configured limits
 	if depth > dr.cfg.MaxDepth {
 		depth = dr.cfg.MaxDepth
@@ -96,14 +115,16 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 	defer cancel()
 
 	dr.log("DeepResearch: starting topic=%q depth=%d breadth=%d", topic, depth, breadth)
+	dr.progress(progress, "🔬 **研究启动**: 主题「%s」| 深度 %d | 广度 %d", topic, depth, breadth)
 
 	// Pre-compute output path once so success and error paths share the same filename.
 	outputPath := dr.reportPath(topic)
 
-	allLearnings, allURLs, err := dr.deepResearch(ctx, topic, depth, breadth, nil)
+	allLearnings, allURLs, err := dr.deepResearch(ctx, topic, depth, breadth, nil, progress)
 	if err != nil {
 		if ctx.Err() != nil {
 			dr.log("DeepResearch: timed out or cancelled after %v, generating partial report", dr.cfg.Timeout)
+			dr.progress(progress, "⚠️ **研究超时或被中断**，正在基于已有发现生成部分报告...")
 			report := dr.buildPartialReport(topic, allLearnings, allURLs, ctx.Err())
 			dr.saveReport(outputPath, report)
 			return report, nil
@@ -112,16 +133,19 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 	}
 
 	dr.log("DeepResearch: research complete, writing report (learnings=%d, urls=%d)", len(allLearnings), len(allURLs))
+	dr.progress(progress, "📄 **正在生成研究报告**（%d 条发现, %d 个来源）...", len(allLearnings), len(allURLs))
 
 	// The sub-agent writes the HTML file via WriteFile to outputPath.
 	report, err := dr.writeReport(ctx, topic, allLearnings, allURLs, outputPath)
 	if err != nil {
 		dr.log("DeepResearch: report writing failed: %v, returning partial results", err)
+		dr.progress(progress, "⚠️ 报告生成失败: %v，返回部分结果", err)
 		report = dr.buildPartialReport(topic, allLearnings, allURLs, nil)
 		dr.saveReport(outputPath, report)
 		return report, nil
 	}
 
+	dr.progress(progress, "✅ **研究报告已保存**: `%s`", outputPath)
 	return report, nil
 }
 
@@ -143,17 +167,22 @@ type searchQuery struct {
 // used as context for generating the next level's search queries.
 // Returns the combined learnings and URLs from this level and all
 // deeper levels.
+//
+// progress is forwarded from Run() for reporting intermediate progress.
 func (dr *DeepResearch) deepResearch(
 	ctx context.Context,
 	query string,
 	depth, breadth int,
 	contextLearnings []string,
+	progress ProgressFunc,
 ) (learnings []string, urls []string, err error) {
 	select {
 	case <-ctx.Done():
 		return nil, nil, ctx.Err()
 	default:
 	}
+
+	dr.progress(progress, "🔍 **正在生成 %d 个搜索查询**...", breadth)
 
 	// 1. Generate search queries via direct LLM call
 	dr.log("DeepResearch: generating %d queries for depth=%d", breadth, depth)
@@ -163,8 +192,11 @@ func (dr *DeepResearch) deepResearch(
 	}
 	if len(queries) == 0 {
 		dr.log("DeepResearch: no queries generated, stopping recursion")
+		dr.progress(progress, "⚠️ 未生成搜索查询，当前分支研究终止")
 		return nil, nil, nil
 	}
+
+	dr.progress(progress, "📝 **已生成 %d 个搜索查询**，正在并行搜索...", len(queries))
 
 	// 2. Launch parallel sub-agents for each query
 	type agentResult struct {
@@ -195,6 +227,7 @@ func (dr *DeepResearch) deepResearch(
 			prompt := dr.buildResearcherPrompt(sq.Query, sq.ResearchGoal)
 
 			dr.log("DeepResearch: launching sub-agent %d/%d: query=%q", idx+1, len(queries), sq.Query)
+			dr.progress(progress, "🔎 **研究员 %d/%d**: 「%s」", idx+1, len(queries), sq.Query)
 
 			output, runErr := dr.runner.Run(ctx, prompt, researcherTools)
 			if runErr != nil {
@@ -202,6 +235,7 @@ func (dr *DeepResearch) deepResearch(
 				results[idx].err = runErr
 				mu.Unlock()
 				dr.log("DeepResearch: sub-agent %d failed: %v", idx+1, runErr)
+				dr.progress(progress, "❌ **研究员 %d/%d** 失败: %v", idx+1, len(queries), runErr)
 				return
 			}
 
@@ -211,6 +245,7 @@ func (dr *DeepResearch) deepResearch(
 			results[idx].urls = urls
 			mu.Unlock()
 			dr.log("DeepResearch: sub-agent %d complete: %d learnings, %d urls", idx+1, len(lrnd), len(urls))
+			dr.progress(progress, "✅ **研究员 %d/%d** 完成: %d 条发现, %d 个来源", idx+1, len(queries), len(lrnd), len(urls))
 		}(i, sq)
 	}
 	wg.Wait()
@@ -230,10 +265,13 @@ func (dr *DeepResearch) deepResearch(
 		allURLs = append(allURLs, r.urls...)
 	}
 
+	dr.progress(progress, "📊 **本轮完成**: 共 %d 条发现, %d 个来源", len(allLearnings), len(allURLs))
+
 	// Check max learnings limit
 	if len(allLearnings) >= dr.cfg.MaxLearnings {
 		allLearnings = allLearnings[:dr.cfg.MaxLearnings]
 		dr.log("DeepResearch: reached max learnings (%d), stopping", dr.cfg.MaxLearnings)
+		dr.progress(progress, "⏹️ 已达最大发现数上限（%d），停止搜索", dr.cfg.MaxLearnings)
 		return allLearnings, allURLs, nil
 	}
 
@@ -244,9 +282,10 @@ func (dr *DeepResearch) deepResearch(
 			nextBreadth = 1
 		}
 		dr.log("DeepResearch: recursing with depth=%d breadth=%d", depth-1, nextBreadth)
+		dr.progress(progress, "⏬ **深入下一层**（剩余深度 %d, 广度 %d）...", depth-1, nextBreadth)
 
 		// Pass accumulated learnings as context for next-level query generation
-		nextLearnings, nextURLs, recurseErr := dr.deepResearch(ctx, query, depth-1, nextBreadth, allLearnings)
+		nextLearnings, nextURLs, recurseErr := dr.deepResearch(ctx, query, depth-1, nextBreadth, allLearnings, progress)
 		if recurseErr != nil {
 			return allLearnings, allURLs, recurseErr
 		}
@@ -261,6 +300,7 @@ func (dr *DeepResearch) deepResearch(
 
 	if depth > 0 && !hasNewLearnings {
 		dr.log("DeepResearch: no new learnings found, stopping recursion")
+		dr.progress(progress, "⏹️ 未发现新信息，停止深入")
 	}
 
 	return allLearnings, allURLs, nil

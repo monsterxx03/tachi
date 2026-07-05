@@ -978,7 +978,7 @@ func (m *Model) handleResearchCommand() tea.Cmd {
 			parsed.Topic, parsed.Depth, parsed.Breadth),
 	})
 
-	ch := make(chan string, 10)
+	ch := make(chan string, 100)
 	researchCtx, researchCancel := context.WithTimeout(context.Background(), cfg.DeepResearch.Timeout+time.Minute)
 
 	m.isResearching = true
@@ -988,9 +988,13 @@ func (m *Model) handleResearchCommand() tea.Cmd {
 		defer researchCancel()
 		defer close(ch)
 
-		ch <- fmt.Sprintf("🔍 **第 1 步**: 生成搜索查询（广度=%d）...", parsed.Breadth)
-
-		report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth)
+		report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth, func(format string, args ...any) {
+			msg := fmt.Sprintf(format, args...)
+			select {
+			case ch <- msg:
+			default:
+			}
+		})
 		if runErr != nil {
 			ch <- fmt.Sprintf("❌ **研究失败**: %v", runErr)
 			return
