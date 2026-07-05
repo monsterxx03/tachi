@@ -7,6 +7,18 @@ import (
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
+// forkTool creates a suitable copy of a tool for a child agent.
+// Most tools can be shared by pointer, but tools with per-instance
+// mutable state (like ReadTool's file cache) need a fresh instance
+// to prevent subagent reads from polluting the parent's cache.
+func forkTool(t tools.Tool) tools.Tool {
+	if rt, ok := t.(*tools.ReadTool); ok {
+		_ = rt // we just need a fresh instance with empty cache
+		return tools.NewReadTool()
+	}
+	return t
+}
+
 // ForkConfig controls child agent creation from a parent AIAgent.
 type ForkConfig struct {
 	Provider      llm.Provider     // required — LLM provider
@@ -65,7 +77,7 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 		// No whitelist — copy all parent tools.
 		for _, name := range a.toolRegistry.GetToolNames() {
 			if tool := a.toolRegistry.GetTool(name); tool != nil {
-				child.toolRegistry.Register(tool)
+				child.toolRegistry.Register(forkTool(tool))
 			}
 		}
 	} else {
@@ -77,7 +89,7 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 		for _, name := range a.toolRegistry.GetToolNames() {
 			if allowSet[name] {
 				if tool := a.toolRegistry.GetTool(name); tool != nil {
-					child.toolRegistry.Register(tool)
+					child.toolRegistry.Register(forkTool(tool))
 				}
 			}
 		}
