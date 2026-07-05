@@ -80,12 +80,9 @@ func (e *Executor) RunSubagent(
 
 	provider := e.agent.SubagentProvider()
 
-	maxIterations := args.MaxIterations
+	maxIterations := e.cfg.MaxIterations
 	if maxIterations <= 0 {
-		maxIterations = e.cfg.MaxIterations
-		if maxIterations <= 0 {
-			maxIterations = DefaultMaxIterations
-		}
+		maxIterations = DefaultMaxIterations
 	}
 
 	shortID := uuid.New().String()[:8]

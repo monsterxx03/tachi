@@ -88,15 +88,12 @@ func TestSubagentTool_ExecuteContext_WithAllowedTools(t *testing.T) {
 	tool := NewSubagentTool(runner)
 
 	_, err := tool.ExecuteContext(t.Context(),
-		`{"prompt":"search code","allowed_tools":["ReadFile","Grep"],"max_iterations":10}`)
+		`{"prompt":"search code","allowed_tools":["ReadFile","Grep"]}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	if len(runner.calledArgs.AllowedTools) != 2 || runner.calledArgs.AllowedTools[0] != "ReadFile" || runner.calledArgs.AllowedTools[1] != "Grep" {
 		t.Errorf("allowed_tools not passed correctly: %v", runner.calledArgs.AllowedTools)
-	}
-	if runner.calledArgs.MaxIterations != 10 {
-		t.Errorf("max_iterations not passed correctly: %d", runner.calledArgs.MaxIterations)
 	}
 }
 
@@ -230,9 +227,6 @@ func TestSubagentTool_Properties(t *testing.T) {
 	if _, ok := props["allowed_tools"]; !ok {
 		t.Error("should have 'allowed_tools' property")
 	}
-	if _, ok := props["max_iterations"]; !ok {
-		t.Error("should have 'max_iterations' property")
-	}
 	if _, ok := props["worktree_branch"]; !ok {
 		t.Error("should have 'worktree_branch' property")
 	}
@@ -245,7 +239,6 @@ func TestSubagentArgs_Serialization(t *testing.T) {
 	args := SubagentArgs{
 		Prompt:         "test task",
 		AllowedTools:   []string{"ReadFile", "Grep"},
-		MaxIterations:  10,
 		WorktreeBranch: "feat/test",
 	}
 
@@ -265,9 +258,6 @@ func TestSubagentArgs_Serialization(t *testing.T) {
 	}
 	if len(parsed.AllowedTools) != 2 {
 		t.Errorf("allowed_tools length mismatch: %d", len(parsed.AllowedTools))
-	}
-	if parsed.MaxIterations != 10 {
-		t.Errorf("max_iterations mismatch: %d", parsed.MaxIterations)
 	}
 	if parsed.WorktreeBranch != "feat/test" {
 		t.Errorf("worktree_branch mismatch: %s", parsed.WorktreeBranch)

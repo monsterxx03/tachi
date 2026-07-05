@@ -30,8 +30,7 @@ func TestSubagentExecutor_MaxIterations(t *testing.T) {
 	a := &mockAgent{}
 	executor := subagent.NewExecutor(a, cfg)
 
-	// RunSubagent uses cfg.MaxIterations as default when args.MaxIterations <= 0
-	// We test this indirectly: MaxConcurrency controls semaphore size
+	// MaxIterations is read from subagent.max_iterations config (not from LLM args)
 	assert.NotNil(t, executor)
 }
 
