@@ -110,9 +110,9 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 		breadth = 1
 	}
 
-	// Apply global timeout
-	ctx, cancel := context.WithTimeout(ctx, dr.cfg.Timeout)
-	defer cancel()
+	// Apply research timeout — report writing gets its own timeout below
+	researchCtx, researchCancel := context.WithTimeout(ctx, dr.cfg.Timeout)
+	defer researchCancel()
 
 	dr.log("DeepResearch: starting topic=%q depth=%d breadth=%d", topic, depth, breadth)
 	dr.progress(progress, "🔬 **研究启动**: 主题「%s」| 深度 %d | 广度 %d", topic, depth, breadth)
@@ -120,12 +120,12 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 	// Pre-compute output path once so success and error paths share the same filename.
 	outputPath := dr.reportPath(topic)
 
-	allLearnings, allURLs, err := dr.deepResearch(ctx, topic, depth, breadth, nil, progress)
+	allLearnings, allURLs, err := dr.deepResearch(researchCtx, topic, depth, breadth, nil, progress)
 	if err != nil {
-		if ctx.Err() != nil {
+		if researchCtx.Err() != nil {
 			dr.log("DeepResearch: timed out or cancelled after %v, generating partial report", dr.cfg.Timeout)
 			dr.progress(progress, "⚠️ **研究超时或被中断**，正在基于已有发现生成部分报告...")
-			report := dr.buildPartialReport(topic, allLearnings, allURLs, ctx.Err())
+			report := dr.buildPartialReport(topic, allLearnings, allURLs, researchCtx.Err())
 			dr.saveReport(outputPath, report)
 			return report, nil
 		}
@@ -135,8 +135,16 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 	dr.log("DeepResearch: research complete, writing report (learnings=%d, urls=%d)", len(allLearnings), len(allURLs))
 	dr.progress(progress, "📄 **正在生成研究报告**（%d 条发现, %d 个来源）...", len(allLearnings), len(allURLs))
 
+	// Report writing uses its own timeout, independent of the research phase.
+	reportCtx := ctx
+	if dr.cfg.ReportTimeout > 0 {
+		var reportCancel context.CancelFunc
+		reportCtx, reportCancel = context.WithTimeout(ctx, dr.cfg.ReportTimeout)
+		defer reportCancel()
+	}
+
 	// The sub-agent writes the HTML file via WriteFile to outputPath.
-	report, err := dr.writeReport(ctx, topic, allLearnings, allURLs, outputPath)
+	report, err := dr.writeReport(reportCtx, topic, allLearnings, allURLs, outputPath)
 	if err != nil {
 		dr.log("DeepResearch: report writing failed: %v, returning partial results", err)
 		dr.progress(progress, "⚠️ 报告生成失败: %v，返回部分结果", err)
