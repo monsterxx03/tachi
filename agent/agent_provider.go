@@ -149,7 +149,7 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 	}
 
 	thinkingDisabled := false
-	chatOpts := llm.ChatOptions{MaxTokens: 500, Thinking: &thinkingDisabled}
+	chatOpts := llm.ChatOptions{MaxTokens: 4096, Thinking: &thinkingDisabled}
 	if a.sessionManager != nil && a.sessionManager.Current() != nil {
 		chatOpts.SessionID = a.sessionManager.Current().ID
 	}
