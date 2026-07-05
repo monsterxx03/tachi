@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools/hashline"
 	"github.com/monsterxx03/tachi/agent/lsp"
@@ -150,6 +151,11 @@ type AIAgent struct {
 	// most recent auto-compact. Used by shouldAutoCompact's cooldown logic:
 	// auto-compact won't retrigger until token estimate grows by >20%.
 	lastCompactTokenEstimate int64
+
+	// turnStart records the wall-clock time when the current turn's agent
+	// loop began. Set at the top of runAgentLoop and used by finish handlers
+	// to compute the turn's total duration for the RunResult.
+	turnStart time.Time
 }
 
 func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {

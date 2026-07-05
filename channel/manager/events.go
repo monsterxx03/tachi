@@ -156,6 +156,12 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 				if event.Result.Response != "" {
 					text.Reset()
 					text.WriteString(event.Result.Response)
+					// Append turn summary for non-trivial turns.
+					if event.Result.IterationsUsed > 0 {
+						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
+							text.WriteString(summary)
+						}
+					}
 				}
 				if event.Result.Error != nil {
 					lastErr = event.Result.Error

@@ -73,6 +73,15 @@ func streamToACP(
 			case agent.AgentEventTurnComplete:
 				if event.Result != nil {
 					stopReason = mapStopReason(event.Result.ExitReason)
+					// Send turn summary (iterations + duration) as a final text update.
+					if event.Result.IterationsUsed > 0 {
+						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
+							_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+								SessionId: sessionID,
+								Update:    acp.UpdateAgentMessageText(summary),
+							})
+						}
+					}
 				}
 				// Cache the full message history so subsequent Prompt calls
 				// can reuse it instead of re-reading messages.jsonl from disk.
