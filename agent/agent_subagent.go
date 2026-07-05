@@ -13,6 +13,11 @@ import (
 
 // --- Subagent configuration accessors (implements subagent.Agent interface) ---
 
+// SubagentRunner returns the tools.SubagentRunner used by the SubAgent tool.
+func (a *AIAgent) SubagentRunner() tools.SubagentRunner {
+	return a.subagentRunner
+}
+
 // SubagentProvider returns the sub-agent provider or falls back to main.
 func (a *AIAgent) SubagentProvider() llm.Provider {
 	if a.subagentProvider != nil {

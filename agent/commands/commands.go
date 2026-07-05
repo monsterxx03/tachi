@@ -6,7 +6,12 @@
 // was previously duplicated three times.
 package commands
 
-import "slices"
+import (
+	"strconv"
+	"strings"
+
+	"slices"
+)
 
 // Mode identifies which frontends support a command.
 type Mode string
@@ -44,6 +49,7 @@ var Registry = []Def{
 	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},
 	{Name: "cron", Description: "List cron jobs", Modes: []Mode{ModeChannel}},
 	{Name: "stop", Description: "Stop the current LLM turn", Modes: []Mode{ModeChannel}},
+	{Name: "research", Description: "Deep research on a topic. Usage: /research <topic> [--depth 2] [--breadth 3]", InputHint: "<topic>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 }
 
 // ForMode returns the subset of commands available in the given mode.
@@ -109,4 +115,47 @@ func MatchPrefixForMode(prefix string, mode Mode) []Def {
 		}
 	}
 	return out
+}
+
+// ResearchArgs holds parsed arguments from a /research command.
+type ResearchArgs struct {
+	Topic   string // The research topic / query
+	Depth   int    // Research depth (default: 2)
+	Breadth int    // Search breadth per level (default: 3)
+}
+
+// ParseResearchArgs parses /research command arguments.
+// Input format: <topic> [--depth N] [--breadth N]
+//
+// Returns parsed args with defaults applied for optional fields.
+// The returned topic is non-empty when parsing succeeds.
+func ParseResearchArgs(input string) ResearchArgs {
+	args := ResearchArgs{}
+
+	parts := strings.Fields(input)
+	if len(parts) == 0 {
+		return args
+	}
+
+	// Extract flags
+	var topicParts []string
+	for i := 0; i < len(parts); i++ {
+		switch {
+		case parts[i] == "--depth" && i+1 < len(parts):
+			if d, err := strconv.Atoi(parts[i+1]); err == nil && d > 0 {
+				args.Depth = d
+			}
+			i++ // skip value
+		case parts[i] == "--breadth" && i+1 < len(parts):
+			if b, err := strconv.Atoi(parts[i+1]); err == nil && b > 0 {
+				args.Breadth = b
+			}
+			i++ // skip value
+		default:
+			topicParts = append(topicParts, parts[i])
+		}
+	}
+
+	args.Topic = strings.Join(topicParts, " ")
+	return args
 }

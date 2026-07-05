@@ -97,7 +97,7 @@ depth=2, breadth=3
 ### 3.1 slash command 参数
 
 ```
-/research <topic> [--depth 2] [--breadth 3] [--format report|answer]
+/research <topic> [--depth 2] [--breadth 3]
 ```
 
 由 `/research` handler 解析参数后传给 DeepResearch 引擎。
@@ -306,7 +306,6 @@ agent/deepresearch/engine_test.go  # 单元测试
 // config/config.go 新增
 
 type DeepResearchConfig struct {
-    Enabled        bool          `yaml:"enabled" default:"true"`
     DefaultDepth   int           `yaml:"default_depth" default:"2"`
     DefaultBreadth int           `yaml:"default_breadth" default:"3"`
     MaxDepth       int           `yaml:"max_depth" default:"4"`
@@ -317,7 +316,7 @@ type DeepResearchConfig struct {
     // provider 引用：query_generator 建议用轻量 provider，避免每次查询生成消耗大量 token。
     // 值引用 config.yaml 中定义的 provider name（如 "fast"、"default"）。
     // 为空时使用 agent 的主 provider。
-    QueryGeneratorProvider string `yaml:"query_generator_provider" default:"fast"`
+    QueryGeneratorProvider string `yaml:"query_generator_provider"`
 
     // prompts：所有 prompt 模板均可自定义，不改代码即可调整研究行为。
     // 为空时使用内置默认值。
@@ -369,7 +368,6 @@ type ResearcherConfig struct {
 ```yaml
 # config.yaml 示例
 deep_research:
-  enabled: true
   default_depth: 2
   default_breadth: 3
   max_depth: 4
@@ -459,13 +457,12 @@ func (cfg *DeepResearchConfig) QueryGeneratorPrompt() string {
 handler 解析 `/research` 后的参数：
 
 ```
-/research <topic> [--depth N] [--breadth N] [--format report|answer]
+/research <topic> [--depth N] [--breadth N]
 ```
 
 - `topic`（必需）：研究主题
 - `--depth`（可选，默认 `default_depth`）：研究深度
 - `--breadth`（可选，默认 `default_breadth`）：每层搜索宽度
-- `--format`（可选，默认 `report`）：`report`（详细 Markdown 报告）或 `answer`（简洁回答）
 
 ### 7.4 调用流程
 

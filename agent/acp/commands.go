@@ -44,6 +44,7 @@ var acpCommandHandlers = map[string]func(ctx context.Context, sess *ACPSession, 
 	"mcp":       handleACPMCP,
 	"skill":     handleACPSkill,
 	"transcript": handleACPTranscript,
+	"research":  handleACPResearch,
 }
 
 // buildACPAvailableCommands builds the ACP AvailableCommand list from the
@@ -628,5 +629,63 @@ func handleACPTranscript(ctx context.Context, sess *ACPSession, conn *acp.AgentS
 
 	sendTextUpdate(ctx, conn, sessionID,
 		fmt.Sprintf("📋 Transcript Report\n\nSession: %s\nSaved to: %s", curr.Title, filename))
+	return acp.StopReasonEndTurn, nil
+}
+
+// ---------------------------------------------------------------------------
+// /research handler
+// ---------------------------------------------------------------------------
+
+func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
+	debuglog.DefaultLogger.Log("ACP: /research handler start args=%q", args)
+
+	sessionID := acp.SessionId(sess.ID)
+
+	parsed := cmds.ParseResearchArgs(args)
+	if parsed.Topic == "" {
+		sendTextUpdate(ctx, conn, sessionID, "Usage: `/research <topic> [--depth N] [--breadth N] [--format report|answer]`")
+		return acp.StopReasonEndTurn, nil
+	}
+
+	cfg := sess.cfg
+	if cfg == nil {
+		sendTextUpdate(ctx, conn, sessionID, "No configuration available.")
+		return acp.StopReasonEndTurn, nil
+	}
+
+	// Apply defaults from config if not specified
+	if parsed.Depth <= 0 {
+		parsed.Depth = cfg.DeepResearch.DefaultDepth
+	}
+	if parsed.Breadth <= 0 {
+		parsed.Breadth = cfg.DeepResearch.DefaultBreadth
+	}
+
+	engine, err := sess.agent.NewDeepResearch(cfg)
+	if err != nil {
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to create research engine: %v", err))
+		return acp.StopReasonEndTurn, nil
+	}
+	if engine == nil {
+		sendTextUpdate(ctx, conn, sessionID, "Deep Research is not available.")
+		return acp.StopReasonEndTurn, nil
+	}
+
+	sendTextUpdate(ctx, conn, sessionID,
+		fmt.Sprintf("🔬 **Deep Research Started**\n\n**Topic**: %s\n**Depth**: %d | **Breadth**: %d\n\nSearching...",
+			parsed.Topic, parsed.Depth, parsed.Breadth))
+
+	// Run with research-specific timeout
+	researchCtx, cancel := context.WithTimeout(ctx, cfg.DeepResearch.Timeout)
+	defer cancel()
+
+	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth)
+	if runErr != nil {
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("❌ Research failed: %v", runErr))
+		return acp.StopReasonEndTurn, nil
+	}
+
+	sendTextUpdate(ctx, conn, sessionID,
+		fmt.Sprintf("✅ **Research Complete**\n\n---\n\n%s", report))
 	return acp.StopReasonEndTurn, nil
 }

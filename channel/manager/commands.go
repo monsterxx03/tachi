@@ -75,6 +75,9 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		return textHandlerResult(text), err
 	case "transcript":
 		return m.handleTranscriptCommand(cmd.ThreadID, cmd.Args), nil
+	case "research":
+		text, err := m.handleResearchCommand(cmd.ThreadID, cmd.Args)
+		return textHandlerResult(text), err
 	default:
 		m.logger.Log("channel: unknown slash command: %s (thread=%s)", cmd.Name, cmd.ThreadID)
 		// Build available commands list from shared registry.
@@ -728,4 +731,66 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 			},
 		},
 	}
+}
+
+// --- /research ---
+
+// handleResearchCommand runs deep research on the given topic.
+// In channel mode, this runs synchronously (the channel goroutine blocks
+// while research is in progress). Progress messages are sent asynchronously
+// via sendToThread.
+//
+// Uses the cached agent for the thread to get the SubagentRunner.
+// The agent lock is held for the duration of research, preventing other
+// messages on the same thread from interfering.
+func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
+	parsed := cmds.ParseResearchArgs(args)
+	if parsed.Topic == "" {
+		return "Usage: `/research <topic> [--depth N] [--breadth N]`", nil
+	}
+
+	if m.cfg == nil {
+		return "", fmt.Errorf("manager config unavailable")
+	}
+
+	if parsed.Depth <= 0 {
+		parsed.Depth = m.cfg.DeepResearch.DefaultDepth
+	}
+	if parsed.Breadth <= 0 {
+		parsed.Breadth = m.cfg.DeepResearch.DefaultBreadth
+	}
+
+	// Acquire the cached agent for this thread. This gives us a fully
+	// configured agent with SubagentRunner available.
+	// Use background context since research may outlive the message context.
+	ca, err := m.acquireAgent(context.Background(), threadID)
+	if err != nil {
+		return "", fmt.Errorf("acquire agent: %w", err)
+	}
+	defer m.releaseAgent(ca)
+
+	engine, err := ca.agent.NewDeepResearch(m.cfg)
+	if err != nil {
+		return "", fmt.Errorf("create research engine: %w", err)
+	}
+	if engine == nil {
+		return "Deep Research is not available (engine creation returned nil).", nil
+	}
+
+	// Send initial progress message
+	m.sendToThread(context.Background(), threadID,
+		fmt.Sprintf("🔬 **深度研究已启动**\n\n**主题**: %s\n**深度**: %d | **广度**: %d\n\n正在搜索中...",
+			parsed.Topic, parsed.Depth, parsed.Breadth), "")
+
+	// Run research synchronously (blocks this goroutine but the agent lock
+	// prevents concurrent access on the same thread).
+	researchCtx, cancel := context.WithTimeout(context.Background(), m.cfg.DeepResearch.Timeout)
+	defer cancel()
+
+	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth)
+	if runErr != nil {
+		return "", fmt.Errorf("research failed: %w", runErr)
+	}
+
+	return report, nil
 }

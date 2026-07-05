@@ -531,6 +531,148 @@ type LSPServerConfig struct {
 	ConcurrencyLimit   int               `yaml:"concurrency_limit"`
 }
 
+// Default prompts for DeepResearch (built-in fallbacks when YAML doesn't specify).
+const defaultQueryGeneratorPrompt = `You are a research query generator. Given a research topic and existing learnings, generate {breadth} specific, non-overlapping search engine queries. Each query should target a distinct aspect of the topic.
+
+Research topic: {query}
+Existing learnings: {learnings}
+
+Generate {breadth} search queries with a "researchGoal" for each explaining what this query aims to discover.
+
+Return your response as a JSON array of objects with "query" and "researchGoal" fields. Only return the JSON array, no other text.`
+
+const defaultResearcherPrompt = `You are a research analyst. Your task:
+1. Search for: "{query}"
+2. Read the search results and linked pages
+3. Extract key learnings (factual, detailed, with specific metrics and entities)
+4. Suggest follow-up questions for deeper research
+
+Research goal: {researchGoal}
+
+Return your findings as a structured summary with:
+- Key learnings (up to 3, concise and information-dense)
+- Follow-up questions (up to 3, for deeper research)
+- Source URLs visited
+
+Available tools: WebSearch, WebFetch`
+
+const defaultReportWriterPrompt = `You are a research report writer. Write a comprehensive, well-structured report in Markdown based on the following research findings.
+
+Research topic: {query}
+
+Findings:
+{learnings}
+
+Source URLs:
+{urls}
+
+The report should include:
+1. Executive Summary
+2. Key Findings
+3. Detailed Analysis organized by sub-topic
+4. Conclusion
+5. Sources section with all referenced URLs
+
+Make it detailed but well-organized. Aim for a thorough analysis.`
+
+type DeepResearchConfig struct {
+	DefaultDepth   int           `yaml:"default_depth" default:"2"`
+	DefaultBreadth int           `yaml:"default_breadth" default:"3"`
+	MaxDepth       int           `yaml:"max_depth" default:"4"`
+	MaxBreadth     int           `yaml:"max_breadth" default:"8"`
+	Timeout        time.Duration `yaml:"timeout" default:"5m"`
+	MaxLearnings   int           `yaml:"max_learnings" default:"200"`
+
+	// QueryGeneratorProvider references a provider name from config's providers list.
+	// When empty, the main (default) provider is used.
+	QueryGeneratorProvider string `yaml:"query_generator_provider"`
+
+	// Prompts contains all customizable prompt templates. When nil or empty string,
+	// built-in Go defaults are used.
+	Prompts *DeepResearchPrompts `yaml:"prompts,omitempty"`
+
+	// ReportWriter controls how the final report is generated.
+	ReportWriter *ReportWriterConfig `yaml:"report_writer,omitempty"`
+
+	// Researcher controls how research sub-agents behave.
+	Researcher *ResearcherConfig `yaml:"researcher,omitempty"`
+}
+
+// QueryGeneratorPrompt returns the query generator prompt template, using
+// the built-in default when config doesn't specify one.
+func (c *DeepResearchConfig) QueryGeneratorPrompt() string {
+	if c.Prompts != nil && c.Prompts.QueryGenerator != "" {
+		return c.Prompts.QueryGenerator
+	}
+	return defaultQueryGeneratorPrompt
+}
+
+// ResearcherPrompt returns the researcher sub-agent prompt template, using
+// the built-in default when config doesn't specify one.
+func (c *DeepResearchConfig) ResearcherPrompt() string {
+	if c.Prompts != nil && c.Prompts.Researcher != "" {
+		return c.Prompts.Researcher
+	}
+	return defaultResearcherPrompt
+}
+
+// ReportWriterPrompt returns the report writer prompt template, using
+// the built-in default when config doesn't specify one.
+func (c *DeepResearchConfig) ReportWriterPrompt() string {
+	if c.Prompts != nil && c.Prompts.ReportWriter != "" {
+		return c.Prompts.ReportWriter
+	}
+	return defaultReportWriterPrompt
+}
+
+// ReportWriterMode returns the report writer mode ("subagent" or "direct_llm").
+func (c *DeepResearchConfig) ReportWriterMode() string {
+	if c.ReportWriter != nil && c.ReportWriter.Mode != "" {
+		return c.ReportWriter.Mode
+	}
+	return "subagent"
+}
+
+// ReportWriterProvider returns the provider name for direct_llm report writing.
+func (c *DeepResearchConfig) ReportWriterProvider() string {
+	if c.ReportWriter != nil && c.ReportWriter.Provider != "" {
+		return c.ReportWriter.Provider
+	}
+	return ""
+}
+
+// ResearcherTools returns the allowed tools for research sub-agents.
+func (c *DeepResearchConfig) ResearcherTools() []string {
+	if c.Researcher != nil && len(c.Researcher.AllowedTools) > 0 {
+		return c.Researcher.AllowedTools
+	}
+	return []string{"WebSearch", "WebFetch"}
+}
+
+// ResearcherMaxIterations returns the max iterations per research sub-agent.
+func (c *DeepResearchConfig) ResearcherMaxIterations() int {
+	if c.Researcher != nil && c.Researcher.MaxIterations > 0 {
+		return c.Researcher.MaxIterations
+	}
+	return 5
+}
+
+type DeepResearchPrompts struct {
+	QueryGenerator string `yaml:"query_generator,omitempty"`
+	Researcher     string `yaml:"researcher,omitempty"`
+	ReportWriter   string `yaml:"report_writer,omitempty"`
+}
+
+type ReportWriterConfig struct {
+	Mode     string `yaml:"mode" default:"subagent"` // "subagent" | "direct_llm"
+	Provider string `yaml:"provider,omitempty"`       // Provider name for direct_llm mode
+}
+
+type ResearcherConfig struct {
+	AllowedTools  []string `yaml:"allowed_tools"`
+	MaxIterations int      `yaml:"max_iterations" default:"5"`
+}
+
 type Config struct {
 	Provider               string               `yaml:"provider"`
 	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`
@@ -560,6 +702,7 @@ type Config struct {
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
 	Edit                   EditConfig           `yaml:"edit"`                            // Edit mode configuration
 	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
+	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
 }
 
 func DefaultConfig() *Config {

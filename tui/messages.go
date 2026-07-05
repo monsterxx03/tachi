@@ -33,3 +33,15 @@ type dreamStatusMsg struct {
 	content string
 	nextCh  <-chan string
 }
+
+// researchStatusMsg carries an async status/progress message from Deep
+// Research execution to be displayed in the chat view. Follows the same
+// generic channel→chatview pattern as dreamStatusMsg.
+type researchStatusMsg struct {
+	content string
+	nextCh  <-chan string
+}
+
+// researchDoneMsg signals that deep research has completed, so the model
+// can reset isResearching and allow user input again.
+type researchDoneMsg struct{}

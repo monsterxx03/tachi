@@ -21,6 +21,7 @@ var expectedACPCmds = []struct {
 	{name: "mcp", hasInput: true},
 	{name: "skill", hasInput: true},
 	{name: "transcript"},
+	{name: "research", hasInput: true},
 }
 
 func TestBuildACPAvailableCommands_StaticCommands(t *testing.T) {
