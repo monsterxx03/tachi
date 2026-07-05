@@ -17,9 +17,39 @@ import (
 type RunResult struct {
 	Response       string
 	IterationsUsed int
+	Duration       time.Duration // total wall-clock duration of the turn (excludes subagent internal iterations)
 	ExitReason     string
 	Error          error
 	Usage          *llm.Usage // optional: token usage from the final turn
+}
+
+// FormatTurnSummary returns a concise human-readable turn summary string
+// suitable for appending to the assistant's response. It includes the number
+// of iterations (API calls) and wall-clock duration, in Chinese locale format.
+// Returns empty string when both values are zero.
+func FormatTurnSummary(iterations int, duration time.Duration) string {
+	if iterations <= 0 && duration <= 0 {
+		return ""
+	}
+	durStr := formatTurnDuration(duration)
+	return fmt.Sprintf("\n\n*(回合: %d 次迭代, %s)*", iterations, durStr)
+}
+
+// formatTurnDuration formats a time.Duration as a concise human-readable string
+// without parentheses (unlike the display-oriented variant in tui/chatview.go).
+func formatTurnDuration(d time.Duration) string {
+	if d < time.Millisecond {
+		return "<1ms"
+	}
+	if d < time.Second {
+		return fmt.Sprintf("%.0fms", float64(d.Microseconds())/1000)
+	}
+	if d < time.Minute {
+		return fmt.Sprintf("%.1fs", d.Seconds())
+	}
+	minutes := int(d.Minutes())
+	seconds := d.Seconds() - float64(minutes*60)
+	return fmt.Sprintf("%dm%.0fs", minutes, seconds)
 }
 
 const (
@@ -312,6 +342,9 @@ func (a *AIAgent) runAgentLoop(
 	opts llm.ChatOptions,
 	ch chan<- AgentEvent,
 ) {
+	// Record the turn start time for Duration tracking in RunResult.
+	a.turnStart = time.Now()
+
 	// Capture the final message slice (including all assistant/tool messages
 	// appended during the loop) so callers can read it via GetLastMessages()
 	// after the event channel is drained. The closure captures messages by
@@ -333,7 +366,7 @@ func (a *AIAgent) runAgentLoop(
 		if !a.iterationBudget.consume() {
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Error: fmt.Errorf("iteration budget exhausted")},
+				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: fmt.Errorf("iteration budget exhausted")},
 			}
 			return
 		}
@@ -342,7 +375,7 @@ func (a *AIAgent) runAgentLoop(
 		case <-ctx.Done():
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Error: ctx.Err()},
+				Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: ctx.Err()},
 			}
 			return
 		default:
@@ -388,7 +421,7 @@ func (a *AIAgent) runAgentLoop(
 		if err != nil {
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Error: fmt.Errorf("API call failed: %w", err)},
+				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: fmt.Errorf("API call failed: %w", err)},
 			}
 			return
 		}
@@ -401,7 +434,7 @@ func (a *AIAgent) runAgentLoop(
 			}
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Error: err},
+				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: err},
 			}
 			return
 		}
@@ -456,7 +489,7 @@ func (a *AIAgent) handleToolCallFinish(
 	if err != nil {
 		ch <- AgentEvent{
 			Type:   AgentEventError,
-			Result: &RunResult{ExitReason: "cancelled", Error: err},
+			Result: &RunResult{ExitReason: "cancelled", Duration: time.Since(a.turnStart), Error: err},
 		}
 		return false
 	}
@@ -561,6 +594,7 @@ func (a *AIAgent) handleLengthFinish(
 			Result: &RunResult{
 				Response:       acc.text.String(),
 				IterationsUsed: apiCallCount,
+				Duration:       time.Since(a.turnStart),
 				ExitReason:     "length_exhausted",
 				Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
 				Usage:          acc.usage,
@@ -614,7 +648,7 @@ func (a *AIAgent) handleStopFinish(
 
 	ch <- AgentEvent{
 		Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, ExitReason: "stop", Usage: acc.usage},
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), ExitReason: "stop", Usage: acc.usage},
 	}
 
 	// Store turn-level memory after a complete response

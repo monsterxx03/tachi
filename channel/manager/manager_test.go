@@ -238,7 +238,10 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 
 	result, err := mgr.drainEvents(eventCh, aiAgent, nil, nil, nil)
 	require.NoError(t, err)
-	assert.Equal(t, "Hello, I'm Tachi!", result)
+	// Response should include the original text followed by turn summary
+	assert.Contains(t, result, "Hello, I'm Tachi!")
+	assert.Contains(t, result, "回合:")
+	assert.Contains(t, result, "次迭代")
 }
 
 // TestDrainEvents_ConfirmationDoesNotDeadlock verifies that if a tool

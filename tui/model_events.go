@@ -230,6 +230,16 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.forkedAgent.Close()
 			m.forkedAgent = nil
 		}
+
+		// Append turn summary (iterations + duration) to the assistant's response
+		// before finalizing the stream display. Skipped for one-off commands
+		// (e.g. /commit, /init) and error-only results with no iterations.
+		if event.Result != nil && event.Result.IterationsUsed > 0 && !isOneOff {
+			if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
+				m.chatview.AppendTextDelta(summary)
+			}
+		}
+
 		m.chatview.FinishStreaming()
 		m.syncSessionInfo()
 
