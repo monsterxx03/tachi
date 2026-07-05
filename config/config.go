@@ -554,8 +554,7 @@ Return your findings as a structured summary with:
 - Key learnings (up to 3, concise and information-dense)
 - Follow-up questions (up to 3, for deeper research)
 - Source URLs visited
-
-Available tools: WebSearch, WebFetch`
+`
 
 const defaultReportWriterPrompt = `You are a research report writer. Write a comprehensive, well-structured report as a self-contained HTML document.
 
