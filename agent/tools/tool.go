@@ -76,9 +76,9 @@ type ToolResult struct {
 	Args       string
 	Diff       string
 	Questions  []Question
-	SubagentID string        // SubAgent shortID, for linking to subagent/<id>.jsonl
-	Duration   time.Duration // Wall-clock duration of tool execution
-	IterCount  int           // SubAgent iteration count (populated in Invoke, correct per-invocation)
+	SubagentID string            // SubAgent shortID, for linking to subagent/<id>.jsonl
+	Duration   time.Duration     // Wall-clock duration of tool execution
+	IterCount  int               // SubAgent iteration count (populated in Invoke, correct per-invocation)
 	ImageParts []llm.ContentPart // Image content parts (e.g., from ReadFile on image files)
 }
 
@@ -91,9 +91,9 @@ type Schema struct {
 
 // ParametersSchema defines the JSON schema for tool parameters
 type ParametersSchema struct {
-	Type       string                     `json:"type"`
-	Properties map[string]PropertySchema  `json:"properties"`
-	Required   []string                   `json:"required,omitempty"`
+	Type       string                    `json:"type"`
+	Properties map[string]PropertySchema `json:"properties"`
+	Required   []string                  `json:"required,omitempty"`
 }
 
 // ToSchema converts a Tool to its Schema representation
@@ -223,6 +223,32 @@ func AddImageParts(ctx context.Context, parts []llm.ContentPart) {
 		return
 	}
 	carrier.parts = parts
+}
+
+// SubagentEventSink allows subagent executor to report internal tool calls
+// upstream to the parent agent's event channel. The parent creates one sink
+// per SubAgent tool invocation and passes it via context.
+type SubagentEventSink interface {
+	// SendToolCallEvent is called when a subagent begins a tool call.
+	SendToolCallEvent(toolName, args string)
+	// SendToolResultEvent is called when a subagent tool completes.
+	SendToolResultEvent(toolName, result string, isError bool)
+}
+
+type subagentEventSinkKey struct{}
+
+// WithSubagentEventSink returns a context with a SubagentEventSink attached.
+func WithSubagentEventSink(ctx context.Context, sink SubagentEventSink) context.Context {
+	return context.WithValue(ctx, subagentEventSinkKey{}, sink)
+}
+
+// GetSubagentEventSink extracts the SubagentEventSink from context, if any.
+func GetSubagentEventSink(ctx context.Context) SubagentEventSink {
+	if ctx == nil {
+		return nil
+	}
+	sink, _ := ctx.Value(subagentEventSinkKey{}).(SubagentEventSink)
+	return sink
 }
 
 // ImagePartsFromCtx retrieves image parts previously stored via AddImageParts.
@@ -385,8 +411,8 @@ func (e *MissingArgError) Error() string {
 
 // AskUserQuestionError indicates a tool is an AskUserQuestion tool that needs user input
 type AskUserQuestionError struct {
-	ToolName string
-	Args     string
+	ToolName  string
+	Args      string
 	Questions []Question
 }
 

@@ -69,27 +69,30 @@ const (
 	AgentEventUsage            = "usage"              // incremental usage update after each API call
 	AgentEventAutoCompactStart = "auto_compact_start" // agent is about to begin auto-compaction
 	AgentEventAutoCompactDone  = "auto_compact_done"  // agent completed auto-compaction
+	AgentEventSubagentToolCall = "subagent_tool_call" // real-time subagent internal tool call
 )
 
 type AgentEvent struct {
-	Type           string
-	TextDelta      string
-	ThinkingDelta  string
-	ToolName       string
-	ToolID         string
-	ToolArgs       string
-	ToolResult     string
-	ToolIsError    bool
-	ToolDiff       string
-	ToolDuration   time.Duration    // Wall-clock duration of tool execution
-	Questions      []tools.Question // For AskUserQuestion tool
-	Result         *RunResult
-	Messages       []llm.Message
-	Usage          *llm.Usage
-	Title          string // For AgentEventSessionTitle
-	CompactSummary string // For AgentEventAutoCompactDone: LLM-generated summary
-	OldMsgCount    int    // For AgentEventAutoCompactDone: message count before compact
-	IterCount      int    // For AgentEventSubagentDone: sub-agent iteration count
+	Type             string
+	TextDelta        string
+	ThinkingDelta    string
+	ToolName         string
+	ToolID           string
+	ToolArgs         string
+	ToolResult       string
+	ToolIsError      bool
+	ToolDiff         string
+	ToolDuration     time.Duration    // Wall-clock duration of tool execution
+	Questions        []tools.Question // For AskUserQuestion tool
+	Result           *RunResult
+	Messages         []llm.Message
+	Usage            *llm.Usage
+	Title            string // For AgentEventSessionTitle
+	CompactSummary   string // For AgentEventAutoCompactDone: LLM-generated summary
+	OldMsgCount      int    // For AgentEventAutoCompactDone: message count before compact
+	IterCount        int    // For AgentEventSubagentDone: sub-agent iteration count
+	SubagentToolName string // For AgentEventSubagentToolCall: internal tool name
+	SubagentToolDone bool   // For AgentEventSubagentToolCall: true if tool completed
 }
 
 var (

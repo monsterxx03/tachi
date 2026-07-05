@@ -32,16 +32,17 @@ const (
 )
 
 type toolCallDisplay struct {
-	Name        string
-	ID          string
-	Args        string
-	Preview     string
-	Result      string
-	IsError     bool
-	IsSubagent  bool
-	Done        bool
-	Duration    time.Duration
-	IterCount   int // sub-agent iteration count
+	Name              string
+	ID                string
+	Args              string
+	Preview           string
+	Result            string
+	IsError           bool
+	IsSubagent        bool
+	Done              bool
+	Duration          time.Duration
+	IterCount         int            // sub-agent iteration count
+	SubagentToolCalls map[string]int // real-time subagent internal tool call counts
 }
 
 type pendingConfirm struct {

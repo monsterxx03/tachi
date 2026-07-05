@@ -174,6 +174,9 @@ func (e *Executor) run(
 	iterCount := 0
 	toolCalls := make(tools.ToolCallCount)
 
+	// Extract event sink for forwarding internal tool calls to parent TUI.
+	eventSink := tools.GetSubagentEventSink(ctx)
+
 	flushThinking := func() {
 		if rec == nil || thinkingBuf.Len() == 0 {
 			return
@@ -218,6 +221,10 @@ func (e *Executor) run(
 			}
 
 		case StreamEventToolResult:
+			// Forward to parent event sink for real-time TUI display.
+			if eventSink != nil {
+				eventSink.SendToolResultEvent(event.ToolName, event.ToolResult, event.ToolIsError)
+			}
 			if rec != nil {
 				rec.record(&session.Message{
 					Type:       session.MessageTypeToolResult,

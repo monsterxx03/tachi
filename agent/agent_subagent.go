@@ -173,3 +173,42 @@ func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
 	a.subagentProvider = sp
 	a.logger.Log("Agent: using subagent provider %q (%s/%s)", sc.Provider, resolved.Type, resolved.Model)
 }
+
+// newSubagentEventSink creates a SubagentEventSink that forwards subagent
+// internal tool call events to the parent agent's event channel, enabling
+// real-time display in the TUI.
+func (a *AIAgent) newSubagentEventSink(ch chan<- AgentEvent, parentToolID string) tools.SubagentEventSink {
+	return &agentSubagentEventSink{ch: ch, parentToolID: parentToolID}
+}
+
+// agentSubagentEventSink implements tools.SubagentEventSink.
+type agentSubagentEventSink struct {
+	ch           chan<- AgentEvent
+	parentToolID string
+}
+
+func (s *agentSubagentEventSink) SendToolCallEvent(toolName, args string) {
+	select {
+	case s.ch <- AgentEvent{
+		Type:             AgentEventSubagentToolCall,
+		ToolID:           s.parentToolID,
+		ToolArgs:         args,
+		SubagentToolName: toolName,
+	}:
+	default:
+	}
+}
+
+func (s *agentSubagentEventSink) SendToolResultEvent(toolName, result string, isError bool) {
+	select {
+	case s.ch <- AgentEvent{
+		Type:             AgentEventSubagentToolCall,
+		ToolID:           s.parentToolID,
+		ToolResult:       result,
+		ToolIsError:      isError,
+		SubagentToolName: toolName,
+		SubagentToolDone: true,
+	}:
+	default:
+	}
+}
