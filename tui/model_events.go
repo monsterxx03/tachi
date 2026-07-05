@@ -110,6 +110,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.refreshSessionCost()
 		return m.nextEvent()
 
+	case agent.AgentEventSubagentToolCall:
+		// Real-time subagent internal tool call — update tool call counters.
+		m.chatview.UpdateSubagentToolCall(event.ToolID, event.SubagentToolName)
+		return m.nextEvent()
+
 	case agent.AgentEventSteerCheck:
 		if len(m.pendingQueue) > 0 {
 			combined := strings.Join(m.pendingQueue, "\n\n")

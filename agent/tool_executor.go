@@ -223,7 +223,15 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 		wg.Go(func() {
 			// Lazy-register MCP tools before parallel invocation
 			_ = a.lazyRegisterMCPTool(tc.Function.Name)
-			results[i] = a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
+
+			// Build event sink for SubAgent tool to forward internal tool calls upstream.
+			subCtx := ctx
+			if tc.Function.Name == tools.ToolNameSubAgent {
+				sink := a.newSubagentEventSink(ch, tc.ID)
+				subCtx = tools.WithSubagentEventSink(ctx, sink)
+			}
+
+			results[i] = a.toolRegistry.Invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
 		})
 	}
 
@@ -342,7 +350,15 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		// first discovering it via MCPSearchTools.
 		_ = a.lazyRegisterMCPTool(tc.Function.Name)
 
-		tr := a.toolRegistry.Invoke(ctx, tc.Function.Name, tc.Function.Arguments)
+		// For SubAgent: build event sink to forward internal tool calls upstream
+		// (real-time display in TUI).
+		subCtx := ctx
+		if tc.Function.Name == tools.ToolNameSubAgent {
+			sink := a.newSubagentEventSink(ch, tc.ID)
+			subCtx = tools.WithSubagentEventSink(ctx, sink)
+		}
+
+		tr := a.toolRegistry.Invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
 
 		// Notify TUI that subagent has completed.
 		if tc.Function.Name == tools.ToolNameSubAgent {

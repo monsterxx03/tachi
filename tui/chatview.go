@@ -3,6 +3,7 @@ package tui
 import (
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -135,6 +136,22 @@ func (c *ChatView) UpdateToolResult(id, result string, isError bool, duration ti
 			c.currentTools[i].IsError = isError
 			c.currentTools[i].Done = true
 			c.currentTools[i].Duration = duration
+			break
+		}
+	}
+	c.refresh()
+}
+
+// UpdateSubagentToolCall increments the tool call counter for a subagent's
+// internal tool. This enables real-time display of what tools the subagent
+// is using.
+func (c *ChatView) UpdateSubagentToolCall(id, toolName string) {
+	for i := range c.currentTools {
+		if c.currentTools[i].ID == id {
+			if c.currentTools[i].SubagentToolCalls == nil {
+				c.currentTools[i].SubagentToolCalls = make(map[string]int)
+			}
+			c.currentTools[i].SubagentToolCalls[toolName]++
 			break
 		}
 	}
@@ -594,6 +611,38 @@ func (c *ChatView) renderToolCall(tc toolCallDisplay) string {
 			renderToolDuration(tc))
 	}
 
+	// Append subagent internal tool call counts (live or final).
+	if tc.IsSubagent && len(tc.SubagentToolCalls) > 0 {
+		toolSummary := formatToolCallSummary(tc.SubagentToolCalls)
+		fmt.Fprintf(&b, "\n  %s", dimStyle.Render("tools: "+toolSummary))
+	}
+
+	return b.String()
+}
+
+// formatToolCallSummary renders a tool call count map as a compact string
+// like "ReadFile(3), Grep(2), Bash(1)". Names are sorted alphabetically.
+func formatToolCallSummary(tc map[string]int) string {
+	if len(tc) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(tc))
+	for name := range tc {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var b strings.Builder
+	for i, name := range names {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		count := tc[name]
+		if count > 1 {
+			fmt.Fprintf(&b, "%s(%d)", name, count)
+		} else {
+			b.WriteString(name)
+		}
+	}
 	return b.String()
 }
 
