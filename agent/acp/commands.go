@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -675,11 +676,18 @@ func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSid
 		fmt.Sprintf("🔬 **Deep Research Started**\n\n**Topic**: %s\n**Depth**: %d | **Breadth**: %d\n\nSearching...",
 			parsed.Topic, parsed.Depth, parsed.Breadth))
 
-	// Run with research-specific timeout
+	// Run with research-specific timeout, streaming progress via SessionUpdate.
+	// Use a mutex to serialise progress callbacks, since the engine may call
+	// them concurrently from multiple goroutines (parallel sub-agents).
 	researchCtx, cancel := context.WithTimeout(ctx, cfg.DeepResearch.Timeout)
 	defer cancel()
 
-	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth)
+	var progressMu sync.Mutex
+	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth, func(format string, args ...any) {
+		progressMu.Lock()
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf(format, args...))
+		progressMu.Unlock()
+	})
 	if runErr != nil {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("❌ Research failed: %v", runErr))
 		return acp.StopReasonEndTurn, nil

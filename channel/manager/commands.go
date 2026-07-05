@@ -783,11 +783,14 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 			parsed.Topic, parsed.Depth, parsed.Breadth), "")
 
 	// Run research synchronously (blocks this goroutine but the agent lock
-	// prevents concurrent access on the same thread).
+	// prevents concurrent access on the same thread). Progress callbacks
+	// stream intermediate updates to the thread.
 	researchCtx, cancel := context.WithTimeout(context.Background(), m.cfg.DeepResearch.Timeout)
 	defer cancel()
 
-	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth)
+	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth, func(format string, args ...any) {
+		m.sendToThread(researchCtx, threadID, fmt.Sprintf(format, args...), "")
+	})
 	if runErr != nil {
 		return "", fmt.Errorf("research failed: %w", runErr)
 	}
