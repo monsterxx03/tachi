@@ -330,11 +330,18 @@ func (dr *DeepResearch) generateQueries(
 		}
 	}
 
+	now := time.Now()
+	timeContext := fmt.Sprintf("\nCurrent date and time: %s (%s, %s)",
+		now.Format("2006-01-02 15:04"),
+		now.Weekday().String(),
+		now.Location().String(),
+	)
+
 	systemPrompt := strings.NewReplacer(
 		"{breadth}", fmt.Sprintf("%d", num),
 		"{query}", query,
 		"{learnings}", learningsText,
-	).Replace(promptTmpl)
+	).Replace(promptTmpl) + timeContext
 
 	messages := []llm.Message{
 		{Role: "system", Content: systemPrompt},
@@ -375,10 +382,18 @@ func (dr *DeepResearch) generateQueries(
 
 // buildResearcherPrompt builds the prompt for a research sub-agent.
 func (dr *DeepResearch) buildResearcherPrompt(query, researchGoal string) string {
-	return strings.NewReplacer(
+	prompt := strings.NewReplacer(
 		"{query}", query,
 		"{researchGoal}", researchGoal,
 	).Replace(dr.cfg.ResearcherPrompt())
+
+	now := time.Now()
+	timeInfo := fmt.Sprintf("\n\nCurrent date and time: %s (%s, %s)",
+		now.Format("2006-01-02 15:04"),
+		now.Weekday().String(),
+		now.Location().String(),
+	)
+	return prompt + timeInfo
 }
 
 // writeReport generates the final research report via a sub-agent.
@@ -423,12 +438,20 @@ func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string
 	urlsText := strings.Join(urls, "\n")
 
 	promptTmpl := dr.cfg.ReportWriterPrompt()
-	return strings.NewReplacer(
+	prompt := strings.NewReplacer(
 		"{query}", topic,
 		"{learnings}", learningsText,
 		"{urls}", urlsText,
 		"{output_path}", outputPath,
 	).Replace(promptTmpl)
+
+	now := time.Now()
+	timeInfo := fmt.Sprintf("\n\nCurrent date and time: %s (%s, %s)",
+		now.Format("2006-01-02 15:04"),
+		now.Weekday().String(),
+		now.Location().String(),
+	)
+	return prompt + timeInfo
 }
 
 // buildPartialReport builds a simple report from whatever learnings were
@@ -495,13 +518,14 @@ func (dr *DeepResearch) saveReport(filePath string, content string) string {
 	return filePath
 }
 
+var reSlugifyTopic = regexp.MustCompile(`[^a-z0-9\x{4e00}-\x{9fff}\x{3040}-\x{309f}\x{30a0}-\x{30ff}\-_]+`)
+
 // slugifyTopic converts a topic string into a filesystem-safe slug.
 func slugifyTopic(topic string) string {
 	slug := strings.TrimSpace(topic)
 	slug = strings.ToLower(slug)
 	// Replace non-alphanumeric characters (except CJK and common punctuation) with hyphens
-	re := regexp.MustCompile(`[^a-z0-9\u4e00-\u9fff\u3040-\u309f\u30a0-\u30ff\-_]+`)
-	slug = re.ReplaceAllString(slug, "-")
+	slug = reSlugifyTopic.ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
 	runes := []rune(slug)
 	if len(runes) > 80 {
