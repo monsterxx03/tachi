@@ -57,6 +57,26 @@ type chatMessage struct {
 	Content string
 }
 
+// pendingSwitchProvider stores provider switch info when switching to a
+// smaller-context model that needs compaction first. The switch is deferred
+// until after compaction completes, so the old (wider-context) provider can
+// be used for the LLM summarization call.
+type pendingSwitchProvider struct {
+	provider      llm.Provider
+	providerInfo string
+	contextWindow int64
+}
+
+// switchProviderMsg is sent by compactForModelSwitch's no-compaction early
+// return path. Since tea.Cmd closures run in a separate goroutine, they
+// MUST NOT mutate Model fields directly — instead they return a message
+// that the Update function handles synchronously.
+type switchProviderMsg struct {
+	provider      llm.Provider
+	providerInfo string
+	contextWindow int64
+}
+
 type Model struct {
 	statusbar StatusBar
 	chatview  ChatView
@@ -90,6 +110,14 @@ type Model struct {
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events
+
+	// pendingSwitchProvider stores provider switch info when switching to a
+	// smaller-context model that needs compaction first. When non-nil, the
+	// switch is deferred until after the compaction completes.
+	pendingSwitchProvider *pendingSwitchProvider
+	// compactForSwitch is true when a compaction was triggered by an
+	// auto-switch-to-smaller-model flow (rather than the /compact command).
+	compactForSwitch bool
 
 	cfg            *config.Config
 	providerItems  []config.ProviderConfig
@@ -517,6 +545,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case researchDoneMsg:
 		m.isResearching = false
 		m.cancelFunc = nil
+
+	case switchProviderMsg:
+		m.pendingSwitchProvider = &pendingSwitchProvider{
+			provider:      msg.provider,
+			providerInfo: msg.providerInfo,
+			contextWindow: msg.contextWindow,
+		}
+		m.applyPendingSwitch()
+		return m, nil
 
 	case mcpOverlayMsg:
 		if m.state == stateManagingMCP {

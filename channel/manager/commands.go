@@ -197,6 +197,10 @@ func (m *Manager) handleModelList(threadID string) (string, error) {
 // current thread by persisting the choice to the session's meta.json.
 // Other threads (sessions) are unaffected. On next message, the provider
 // is resolved from the session's ProviderName field.
+//
+// If the current session's context exceeds the target model's context
+// window, a compaction is triggered first using the current (wide-context)
+// provider — otherwise the next API call would fail with context overflow.
 func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	pCfg := m.cfg.FindProvider(name)
 	if pCfg == nil {
@@ -208,25 +212,70 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 		return "", fmt.Errorf("resolve provider %q: %w", name, err)
 	}
 
-	// Persist the override to the session's meta.json so it survives restarts.
 	sm := m.newSessionManager()
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
 		m.logger.Log("channel: /model find session for %s: %v", threadID, err)
 	}
-	if sess == nil {
-		// No session yet — create one now to persist the model choice.
+
+	compactNote := ""
+
+	// ── Pre-switch compact check ──────────────────────────────────────
+	// If the current session's context exceeds the new model's window,
+	// compact first using the current (wide-context) provider so the next
+	// message doesn't fail with context overflow.
+	if sess != nil && sm.HasCurrent() {
+		sessionMsgs, loadErr := sm.LoadMessages()
+		if loadErr == nil && len(sessionMsgs) > 0 {
+			currentEstimate := agent.EstimateContentTokens(sessionMsgs, sess.ProviderName, m.cfg)
+			threshold := m.cfg.Compact.Threshold
+
+			if currentEstimate > 0 && resolved.ContextWindow > 0 &&
+				float64(currentEstimate) >= float64(resolved.ContextWindow)*threshold {
+
+				m.logger.Log("channel: /model pre-switch compact triggered for thread %s (est=%d, targetCW=%d)",
+					threadID, currentEstimate, resolved.ContextWindow)
+
+				summary, compactErr := m.runCompactForSwitch(threadID, sm, sessionMsgs)
+				if compactErr != nil {
+					m.logger.Log("channel: /model pre-switch compact failed: %v", compactErr)
+					compactNote = "\n\n⚠ 自动压缩失败，切换后如果遇到上下文溢出错误，请运行 /compact。"
+				} else {
+					systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
+					_, finalizeErr := agent.FinalizeCompact(sm, systemPrompt, summary)
+					if finalizeErr != nil {
+						m.logger.Log("channel: /model FinalizeCompact failed: %v", finalizeErr)
+						compactNote = "\n\n⚠ 压缩后创建新 session 失败，请运行 /compact。"
+					} else {
+						// Migrate ThreadID to the new (current) session.
+						if tidErr := sm.SetThreadID(threadID); tidErr != nil {
+							m.logger.Log("channel: /model migrate thread_id after compact: %v", tidErr)
+						}
+						compactNote = "\n\n🔍 当前上下文超过目标模型窗口，已自动压缩完成后切换。"
+						m.logger.Log("channel: /model pre-switch compact completed for thread %s", threadID)
+					}
+				}
+			}
+		}
+	}
+
+	// ── Persist the new provider name ─────────────────────────────────
+	// After a potential compact, sm.Current() is either the new session
+	// (compact succeeded) or the original session (no compact needed).
+	curr := sm.Current()
+	if curr == nil {
+		// No session at all — create one now to persist the model choice.
 		wd, _ := os.Getwd()
 		newSess, err := sm.New(name, wd)
 		if err != nil {
 			return "", fmt.Errorf("create session: %w", err)
 		}
 		sm.SetThreadID(threadID)
-		sess = newSess
+		curr = newSess
 	}
-	sess.ProviderName = name
-	sess.UpdatedAt = time.Now()
-	if err := sm.UpdateMeta(sess); err != nil {
+	curr.ProviderName = name
+	curr.UpdatedAt = time.Now()
+	if err := sm.UpdateMeta(curr); err != nil {
 		m.logger.Log("channel: /model update session meta for %s: %v", threadID, err)
 	}
 
@@ -236,7 +285,59 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 
 	m.logger.Log("channel: /model switched thread %s to %s (%s/%s)", threadID, name, resolved.Type, resolved.Model)
 
-	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nThis thread will now use this model. Other threads are unchanged.", name, resolved.Type, resolved.Model), nil
+	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nThis thread will now use this model. Other threads are unchanged.%s",
+		name, resolved.Type, resolved.Model, compactNote), nil
+}
+
+// runCompactForSwitch runs a compaction LLM call using the thread's CURRENT
+// (wide-context) provider. It's called before switching to a smaller-context
+// model so the summarization call itself doesn't overflow.
+//
+// The caller (handleModelSwitch) is responsible for calling FinalizeCompact
+// to create the new session and migrate the ThreadID.
+func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sessionMsgs []session.Message) (string, error) {
+	// Get the current (old) provider — before switching.
+	oldProvider, _, oldName := m.getProviderForThread(threadID)
+	if oldProvider == nil {
+		return "", fmt.Errorf("no current provider available for compact")
+	}
+
+	// Convert session messages to LLM messages for the provider API.
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldName, m.cfg)
+	if err != nil {
+		return "", fmt.Errorf("convert messages: %w", err)
+	}
+
+	// Build messages: system prompt + history + compact instruction.
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
+	compactMsgs := make([]llm.Message, 0, len(llmMsgs)+2)
+	if systemPrompt != "" {
+		compactMsgs = append(compactMsgs, llm.Message{Role: "system", Content: systemPrompt})
+	}
+	compactMsgs = append(compactMsgs, llmMsgs...)
+	compactMsgs = append(compactMsgs, llm.Message{Role: "user", Content: cmds.BuildCompactInstruction()})
+
+	// Resolve timeout and max tokens from config.
+	compactTimeout := 5 * time.Minute
+	if m.cfg != nil && m.cfg.Compact.Timeout > 0 {
+		compactTimeout = m.cfg.Compact.Timeout
+	}
+	maxTokens := 4096
+	if m.cfg != nil && m.cfg.Compact.MaxTokens > 0 {
+		maxTokens = m.cfg.Compact.MaxTokens
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), compactTimeout)
+	defer cancel()
+
+	resp, err := oldProvider.CreateChat(ctx, compactMsgs, nil, llm.ChatOptions{
+		MaxTokens: maxTokens,
+	})
+	if err != nil {
+		return "", fmt.Errorf("compact LLM call: %w", err)
+	}
+
+	return resp.Content, nil
 }
 
 // --- /new ---

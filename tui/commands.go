@@ -1286,6 +1286,31 @@ func (m *Model) rollbackCompact(errMsg string) {
 	m.eventCh = nil
 }
 
+// abortCompactForSwitch cleans up state after a compact-for-model-switch
+// operation fails. Unlike rollbackCompact, it does NOT restore savedHistory
+// (the current history is kept as-is since the switch was never applied) and
+// it clears the pendingSwitchProvider so the model stays on the original provider.
+func (m *Model) abortCompactForSwitch(errMsg string) {
+	m.compactForSwitch = false
+	m.pendingSwitchProvider = nil
+	m.savedHistory = nil
+
+	if m.savedTools != nil {
+		m.agent.RestoreToolRegistry(m.savedTools)
+		m.savedTools = nil
+	}
+
+	m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
+	m.chatview.FinishStreaming()
+	m.syncSessionInfo()
+	m.setState(stateIdle)
+	m.pendingQueue = nil
+	m.chatview.RemovePendingItems()
+	m.statusbar.SetPendingCount(0)
+	m.cancelFunc = nil
+	m.eventCh = nil
+}
+
 // handleSkillCommand handles the /skill slash command.
 // /skill              → list all available skills
 // /skill <name>       → activate a specific skill

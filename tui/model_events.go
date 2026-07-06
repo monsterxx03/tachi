@@ -151,7 +151,12 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		// Compact handling — before one-off restore
 		if m.isCompacting {
 			m.isCompacting = false
+
 			if event.Result != nil && event.Result.Error != nil {
+				if m.compactForSwitch {
+					m.abortCompactForSwitch("压缩失败，未能切换到目标模型: " + event.Result.Error.Error())
+					return nil
+				}
 				m.rollbackCompact("压缩失败: " + event.Result.Error.Error())
 				return nil
 			}
@@ -168,6 +173,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			oldMsgCount := len(m.savedHistory)
 			newHistory, err := agent.FinalizeCompact(sm, m.systemPrompt, summary)
 			if err != nil {
+				if m.compactForSwitch {
+					m.abortCompactForSwitch("压缩失败，未能切换到目标模型: " + err.Error())
+					return nil
+				}
 				m.rollbackCompact("压缩失败: " + err.Error())
 				return nil
 			}
@@ -192,7 +201,20 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 				m.totalUsage.LastInputTokens = est
 			}
 
-			// Rebuild chatview for the new session
+			if m.compactForSwitch {
+				// Compact-on-switch: show summary, apply pending switch, done.
+				m.chatview.AddMessage(chatMessage{
+					Role:    "assistant",
+					Content: formatCompactSummary(summary, oldMsgCount),
+				})
+				m.applyPendingSwitch()
+				m.pendingQueue = nil
+				m.chatview.RemovePendingItems()
+				m.statusbar.SetPendingCount(0)
+				return nil
+			}
+
+			// Normal /compact: rebuild chatview for the new session.
 			m.chatview.Clear()
 			m.chatview.AddMessage(chatMessage{
 				Role:    "assistant",
@@ -312,6 +334,16 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 	case agent.AgentEventError:
 		m.steerRespCh = nil
+
+		// Clean up pending model switch BEFORE restoring savedHistory.
+		// During a compact-for-switch, savedHistory holds the pre-compact
+		// history — restoring it would incorrectly roll back the conversation.
+		if m.compactForSwitch {
+			m.compactForSwitch = false
+			m.pendingSwitchProvider = nil
+			m.savedHistory = nil
+		}
+
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
