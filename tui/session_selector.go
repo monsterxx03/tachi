@@ -196,11 +196,6 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	// Rebuild provider to match the session's original provider/model.
 	providerInfo, providerRestored := m.restoreSessionProvider(s.ProviderName)
 	m.statusbar.SetProviderInfo(providerInfo)
-	if providerRestored {
-		if cw := llm.ModelContextWindow(m.agent.Model()); cw > 0 {
-			m.statusbar.SetContextWindow(cw)
-		}
-	}
 
 	title := s.Title
 	if title == "" {
@@ -261,5 +256,9 @@ func (m *Model) restoreSessionProvider(providerName string) (string, bool) {
 	}
 
 	m.agent.SetProvider(provider)
+	if cw := llm.ModelContextWindow(m.agent.Model()); cw > 0 {
+		m.agent.SetContextWindow(cw)
+		m.statusbar.SetContextWindow(cw)
+	}
 	return fmt.Sprintf("%s (%s)", sp.Type, sp.Model), true
 }

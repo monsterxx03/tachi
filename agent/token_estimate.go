@@ -3,7 +3,9 @@ package agent
 import (
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // approxTokenCount estimates the number of tokens in a string using the
@@ -15,6 +17,38 @@ import (
 //	(len(s) + 3) / 4 = integer ceil(len/4) in Go
 func approxTokenCount(s string) int64 {
 	return int64((len(s) + 3) / 4)
+}
+
+// EstimateContentTokens converts session messages to llm.Message (via
+// ConvertSessionToLLMMessages) and delegates to estimateInputTokens, ensuring
+// token estimation is consistent with estimateAndUpdateTokens (used in the
+// agent loop). Returns the total estimated token count.
+//
+// providerName and cfg are passed through to ConvertSessionToLLMMessages for
+// correct provider-specific message regrouping. When providerName is empty the
+// conversion falls back to a best-effort mapping, which is sufficient for
+// threshold checks.
+func EstimateContentTokens(msgs []session.Message, providerName string, cfg *config.Config) int64 {
+	llmMsgs, err := ConvertSessionToLLMMessages(msgs, providerName, cfg)
+	if err != nil {
+		// If conversion fails, fall back to a rough chars/4 estimate.
+		// This is acceptable for pre-compaction threshold checks.
+		var total int64
+		for _, msg := range msgs {
+			total += approxTokenCount(msg.Content)
+			total += approxTokenCount(msg.Name)
+			total += approxTokenCount(msg.Result)
+			total += approxTokenCount(msg.ToolCallID)
+			if s, ok := msg.Args.(string); ok {
+				total += approxTokenCount(s)
+			}
+		}
+		return total
+	}
+	// System prompt and tool schemas are excluded since they contribute a
+	// small constant fraction that doesn't affect threshold decisions.
+	breakdown := estimateInputTokens(llmMsgs, "", nil)
+	return breakdown.Total
 }
 
 // estimateInputTokens estimates the total input tokens that will be consumed
