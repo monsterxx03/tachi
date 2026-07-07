@@ -324,6 +324,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		c.Close()
+		debuglog.Log(ctx, "MCP: server %q initialize failed (type=%s, url=%s): %v", srv.Name, srv.Type, srv.URL, err)
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
 
@@ -340,6 +341,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 		if errors.Is(err, transport.ErrOAuthAuthorizationRequired) {
 			return nil, &OAuthRequiredError{ServerName: srv.Name}
 		}
+		debuglog.Log(ctx, "MCP: server %q list tools failed (type=%s): %v", srv.Name, srv.Type, err)
 		return nil, fmt.Errorf("list tools failed: %w", err)
 	}
 
