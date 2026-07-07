@@ -303,7 +303,8 @@ func fetchAuthorizationServers(ctx context.Context, client *http.Client, prmURL 
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		debuglog.Log(ctx, "MCP: PRM %s returned status %d", prmURL, resp.StatusCode)
+		body, _ := io.ReadAll(resp.Body)
+		debuglog.Log(ctx, "MCP: PRM %s returned status %d: %s", prmURL, resp.StatusCode, string(body))
 		return nil
 	}
 
@@ -340,7 +341,8 @@ func findAuthServerMetadataURL(ctx context.Context, client *http.Client, asBase 
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
-			debuglog.Log(ctx, "MCP: AS metadata %s returned status %d", metaURL, resp.StatusCode)
+			body, _ := io.ReadAll(resp.Body)
+			debuglog.Log(ctx, "MCP: AS metadata %s returned status %d: %s", metaURL, resp.StatusCode, string(body))
 			resp.Body.Close()
 			continue
 		}
@@ -836,6 +838,7 @@ func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
+		debuglog.Log(ctx, "MCP: token endpoint returned %d: %s", resp.StatusCode, string(body))
 		return fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, body)
 	}
 
