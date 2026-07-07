@@ -116,13 +116,21 @@ func TestWriteTool_WriteEmptyContent(t *testing.T) {
 func TestWriteTool_WriteNewDirectory(t *testing.T) {
 	tool := WriteTool{}
 	dir := t.TempDir()
-	// File in a subdirectory that doesn't exist yet
+	// File in a subdirectory that doesn't exist yet — should auto-create
 	filePath := filepath.Join(dir, "sub", "nested", "file.txt")
 
 	_, err := tool.ExecuteContext(context.Background(),
 		`{"path": "`+filePath+`", "content": "new dir content"}`)
-	if err == nil {
-		t.Error("expected error when parent directory doesn't exist")
+	if err != nil {
+		t.Fatalf("expected success with auto-created directories, got: %v", err)
+	}
+
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		t.Fatalf("failed to read written file: %v", err)
+	}
+	if string(data) != "new dir content" {
+		t.Errorf("expected %q, got %q", "new dir content", string(data))
 	}
 }
 

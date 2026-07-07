@@ -46,6 +46,12 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 		}
 	}
 
+	// Ensure parent directory exists
+	dir := filepath.Dir(filePath)
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return "", fmt.Errorf("failed to create directory: %w", err)
+	}
+
 	if err := os.WriteFile(filePath, []byte(argsMap.Content), 0644); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
