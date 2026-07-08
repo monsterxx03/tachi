@@ -237,12 +237,6 @@ type DreamConfig struct {
 	MaxMessageChars int           `yaml:"max_message_chars" default:"2000"` // max chars per message in dream prompt
 }
 
-// EditConfig holds configuration for the edit mode.
-type EditConfig struct {
-	Mode           string  `yaml:"mode" default:"replace"`         // replace | hashline
-	FuzzyThreshold float64 `yaml:"fuzzy_threshold" default:"0.95"` // 0.0-1.0, line content fuzzy matching tolerance
-}
-
 // ACPConfig holds configuration for the ACP (Agent Client Protocol) agent mode.
 type ACPConfig struct {
 	// ConnectConfiguredMCP controls whether to connect MCP servers from mcp.json
@@ -696,7 +690,6 @@ type Config struct {
 	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
 	Dream                  DreamConfig          `yaml:"dream"`                           // AutoDream memory consolidation (channel mode)
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
-	Edit                   EditConfig           `yaml:"edit"`                            // Edit mode configuration
 	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
 	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
 }

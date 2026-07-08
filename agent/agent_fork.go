@@ -51,8 +51,6 @@ func (f *ForkedAgent) Close() {
 	if f.agent == nil {
 		return
 	}
-	// Only clear the tool registry — hashline SnapshotStore and
-	// other tool-level state need proper cleanup.
 	f.agent.ClearToolRegistry()
 	f.agent = nil
 }
