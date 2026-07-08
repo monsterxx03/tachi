@@ -134,5 +134,5 @@ func (a *AIAgent) LoadSessionHistory() ([]llm.Message, error) {
 		return nil, nil
 	}
 
-	return ConvertSessionToLLMMessages(msgs, sess.ProviderName, a.cfg)
+	return ConvertSessionToLLMMessages(msgs, a.Provider().Name())
 }

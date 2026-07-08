@@ -408,7 +408,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 		}
 	}
 
-	llmMsgs, err := ConvertSessionToLLMMessages(sessionMsgs, providerType, nil)
+	llmMsgs, err := ConvertSessionToLLMMessages(sessionMsgs, providerType)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("convert session messages: %w", err)
 	}

@@ -14,10 +14,10 @@ func TestACPSessionManager_Lifecycle(t *testing.T) {
 	sm := NewACPSessionManager()
 
 	// Create a session
-	sess := sm.New(context.Background(), "/tmp", "openai", nil, nil, nil, nil)
+	sess := sm.New(context.Background(), "/tmp", nil, nil, nil, nil)
 	assert.NotEmpty(t, sess.ID)
 	assert.Equal(t, "/tmp", sess.cwd)
-	assert.Equal(t, "openai", sess.providerType)
+	assert.Empty(t, sess.ProviderType())
 
 	// Get it back
 	got, ok := sm.Get(sess.ID)
@@ -39,8 +39,8 @@ func TestACPSessionManager_CloseAll(t *testing.T) {
 	sm := NewACPSessionManager()
 
 	// Create multiple sessions
-	sess1 := sm.New(context.Background(), "/tmp/a", "openai", nil, nil, nil, nil)
-	sess2 := sm.New(context.Background(), "/tmp/b", "anthropic", nil, nil, nil, nil)
+	sess1 := sm.New(context.Background(), "/tmp/a", nil, nil, nil, nil)
+	sess2 := sm.New(context.Background(), "/tmp/b", nil, nil, nil, nil)
 	assert.Len(t, sm.List(), 2)
 
 	// Close all
@@ -94,7 +94,7 @@ func TestStubMethods_ReturnEmpty(t *testing.T) {
 
 	t.Run("SetSessionConfigOption", func(t *testing.T) {
 		resp, err := ta.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{})
-		assert.NoError(t, err)
+		assert.Error(t, err)
 		assert.Empty(t, resp)
 	})
 
@@ -110,7 +110,7 @@ func TestCloseAll(t *testing.T) {
 	ta := NewTachiAgent(cfg, "1.0")
 
 	// Add sessions
-	sess := ta.sessions.New(context.Background(), "/tmp", "test", nil, nil, nil, nil)
+	sess := ta.sessions.New(context.Background(), "/tmp", nil, nil, nil, nil)
 	assert.Len(t, ta.sessions.List(), 1)
 
 	ta.CloseAll()
@@ -121,14 +121,14 @@ func TestCloseAll(t *testing.T) {
 func TestACPSession_CloseWithMCPandSessionManager(t *testing.T) {
 	sm := NewACPSessionManager()
 	// No MCP manager, no session manager — just verify Close works
-	sess := sm.New(context.Background(), "/tmp", "test", nil, nil, nil, nil)
+	sess := sm.New(context.Background(), "/tmp", nil, nil, nil, nil)
 	assert.NotPanics(t, func() { sess.Close() })
 	assert.Error(t, sess.ctx.Err())
 }
 
 func TestACPSession_setPromptCancel(t *testing.T) {
 	sm := NewACPSessionManager()
-	sess := sm.New(context.Background(), "/tmp", "test", nil, nil, nil, nil)
+	sess := sm.New(context.Background(), "/tmp", nil, nil, nil, nil)
 
 	// setPromptCancel stores and clears the cancel func
 	cancelCalled := false

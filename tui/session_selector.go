@@ -177,7 +177,13 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	m.rebuildTotalUsage(sessionMsgs)
 	m.refreshSessionCost()
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, s.ProviderName, m.cfg)
+	providerType := m.agent.Provider().Name()
+	if s.ProviderName != "" {
+		if pCfg := m.cfg.FindProvider(s.ProviderName); pCfg != nil {
+			providerType = pCfg.Type
+		}
+	}
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, providerType)
 	if err != nil {
 		m.exitSessionSelect(fmt.Sprintf("Failed to convert session: %v", err))
 		return m, nil

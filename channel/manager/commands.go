@@ -227,7 +227,7 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	if sess != nil && sm.HasCurrent() {
 		sessionMsgs, loadErr := sm.LoadMessages()
 		if loadErr == nil && len(sessionMsgs) > 0 {
-			currentEstimate := agent.EstimateContentTokens(sessionMsgs, sess.ProviderName, m.cfg)
+			currentEstimate := agent.EstimateContentTokens(sessionMsgs, sess.ProviderName)
 			threshold := m.cfg.Compact.Threshold
 
 			if currentEstimate > 0 && resolved.ContextWindow > 0 &&
@@ -297,13 +297,13 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 // to create the new session and migrate the ThreadID.
 func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sessionMsgs []session.Message) (string, error) {
 	// Get the current (old) provider — before switching.
-	oldProvider, _, oldName := m.getProviderForThread(threadID)
+	oldProvider, _, _ := m.getProviderForThread(threadID)
 	if oldProvider == nil {
 		return "", fmt.Errorf("no current provider available for compact")
 	}
 
 	// Convert session messages to LLM messages for the provider API.
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldName, m.cfg)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldProvider.Name())
 	if err != nil {
 		return "", fmt.Errorf("convert messages: %w", err)
 	}
