@@ -9,9 +9,6 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	acp "github.com/coder/acp-go-sdk"
-
-	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
@@ -43,9 +40,9 @@ func (t *EditTool) Properties() map[string]PropertySchema {
 		"replace_all": {Type: "boolean", Description: "Replace all occurrences of old_string (default false)"},
 	}
 }
-func (t *EditTool) Required() []string                         { return []string{"path", "old_string", "new_string"} }
-func (t *EditTool) Parallel() bool                              { return false }
-func (t *EditTool) NeedsConfirmation() bool                     { return true }
+func (t *EditTool) Required() []string      { return []string{"path", "old_string", "new_string"} }
+func (t *EditTool) Parallel() bool          { return false }
+func (t *EditTool) NeedsConfirmation() bool { return true }
 
 func (t *EditTool) GetDiff(ctx context.Context, args string) (string, error) {
 	return t.getLegacyDiff(ctx, args)
@@ -124,18 +121,6 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 }
 
 func createNewFile(ctx context.Context, filePath, content string) (string, error) {
-	// In ACP mode, route through writeTextFile for Zed Review Changes UI.
-	if conn := acpctx.Conn(ctx); conn != nil {
-		_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-			Path:    filePath,
-			Content: content,
-		})
-		if err != nil {
-			return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
-		}
-		return fmt.Sprintf("Created new file %s (%d bytes)", filePath, len(content)), nil
-	}
-
 	if _, err := os.Stat(filePath); err == nil {
 		return "", fmt.Errorf("file already exists: %s (use a non-empty old_string to edit it)", filePath)
 	}
@@ -147,46 +132,6 @@ func createNewFile(ctx context.Context, filePath, content string) (string, error
 }
 
 func editExistingFile(ctx context.Context, filePath, oldString, newString string, replaceAll bool) (string, error) {
-	// In ACP mode, read from client buffer, apply edit in memory, write back via writeTextFile.
-	if conn := acpctx.Conn(ctx); conn != nil {
-		resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{Path: filePath})
-		if err != nil {
-			return "", fmt.Errorf("ACP readTextFile failed: %w", err)
-		}
-		content := resp.Content
-
-		actualOld := findActualString(content, oldString)
-		if actualOld == "" {
-			return "", fmt.Errorf("old_string not found in %s. Make sure it matches the file content exactly, including whitespace and indentation", filePath)
-		}
-
-		if !replaceAll {
-			count := strings.Count(content, actualOld)
-			if count > 1 {
-				return "", fmt.Errorf("old_string matches %d locations in %s. Provide a larger unique substring or set replace_all to true", count, filePath)
-			}
-		}
-
-		var newContent string
-		if replaceAll {
-			newContent = strings.ReplaceAll(content, actualOld, newString)
-		} else {
-			newContent = strings.Replace(content, actualOld, newString, 1)
-		}
-
-		_, err = conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-			Path:    filePath,
-			Content: newContent,
-		})
-		if err != nil {
-			return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
-		}
-
-		snippet := generateDiffSnippet(content, actualOld, newString)
-		return fmt.Sprintf("Successfully edited %s\n%s", filePath, snippet), nil
-	}
-
-	// Standalone mode: direct filesystem access.
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)

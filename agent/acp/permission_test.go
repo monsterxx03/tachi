@@ -58,7 +58,31 @@ func TestBuildPermissionHandler_AllowOnce(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "EditFile", "tool-1", "diff content", "args here")
+	approved, err := handler(context.Background(), "Bash", "tool-1", "diff content", "args here")
+	assert.NoError(t, err)
+	assert.True(t, approved)
+}
+
+func TestBuildPermissionHandler_EditFileAutoApprove(t *testing.T) {
+	// EditFile should auto-approve without going through RequestPermission,
+	// because the actual write is routed through ACP writeTextFile which
+	// provides its own Review Changes confirmation UI on the client side.
+	agentToClientR, agentToClientW := io.Pipe()
+	clientToAgentR, clientToAgentW := io.Pipe()
+
+	conn := acp.NewAgentSideConnection(&mockACPAgent{}, agentToClientW, clientToAgentR)
+	t.Cleanup(func() {
+		agentToClientR.Close()
+		agentToClientW.Close()
+		clientToAgentR.Close()
+		clientToAgentW.Close()
+	})
+
+	aiAgent := agent.NewAIAgent(nil, 0)
+	handler := buildPermissionHandler(conn, "test-session", aiAgent)
+
+	// No goroutine needed — early return should not hit RequestPermission
+	approved, err := handler(context.Background(), "EditFile", "tool-edit", "diff", "args")
 	assert.NoError(t, err)
 	assert.True(t, approved)
 }
@@ -90,7 +114,8 @@ func TestBuildPermissionHandler_Reject(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "EditFile", "tool-1", "diff", "args")
+	// Use "Bash" instead of "EditFile" — EditFile auto-approves in ACP mode.
+	approved, err := handler(context.Background(), "Bash", "tool-1", "diff", "args")
 	assert.NoError(t, err)
 	assert.False(t, approved)
 }
@@ -122,7 +147,7 @@ func TestBuildPermissionHandler_AllowAll(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "EditFile", "tool-2", "diff", "args")
+	approved, err := handler(context.Background(), "Bash", "tool-2", "diff", "args")
 	assert.NoError(t, err)
 	assert.True(t, approved)
 }
@@ -153,7 +178,7 @@ func TestBuildPermissionHandler_Cancelled(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "EditFile", "tool-3", "diff", "args")
+	approved, err := handler(context.Background(), "Bash", "tool-3", "diff", "args")
 	assert.NoError(t, err)
 	assert.False(t, approved)
 }

@@ -7,9 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	acp "github.com/coder/acp-go-sdk"
-
-	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
@@ -49,20 +46,7 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 		}
 	}
 
-	// In ACP mode, route file writes through the ACP client so Zed can
-	// show inline diffs in its Review Changes UI.
-	if conn := acpctx.Conn(ctx); conn != nil {
-		_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-			Path:    filePath,
-			Content: argsMap.Content,
-		})
-		if err != nil {
-			return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
-		}
-		return fmt.Sprintf("Successfully wrote to %s (%d bytes)", argsMap.Path, len(argsMap.Content)), nil
-	}
-
-	// Standalone mode: write directly to filesystem.
+	// Ensure parent directory exists
 	dir := filepath.Dir(filePath)
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create directory: %w", err)
