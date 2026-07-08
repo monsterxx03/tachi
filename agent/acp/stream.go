@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -25,6 +26,7 @@ func streamToACP(
 	sessionID := acp.SessionId(sess.ID)
 	stopReason := acp.StopReasonEndTurn
 	var lastUsage *llm.Usage
+	toolArgs := make(map[string]string) // toolID → accumulated args JSON
 
 	for {
 		select {
@@ -58,6 +60,20 @@ func streamToACP(
 					Update:    update,
 				})
 
+			case agent.AgentEventToolCallArgs:
+				// Accumulate tool args to extract file paths for editor locations.
+				toolArgs[event.ToolID] += event.ToolArgs
+				if path := extractFilePath(toolArgs[event.ToolID]); path != "" {
+					update := acp.UpdateToolCall(
+						acp.ToolCallId(event.ToolID),
+						acp.WithUpdateLocations([]acp.ToolCallLocation{{Path: path}}),
+					)
+					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+						SessionId: sessionID,
+						Update:    update,
+					})
+				}
+
 			case agent.AgentEventToolResult:
 				status := acp.ToolCallStatusCompleted
 				if event.ToolIsError {
@@ -73,6 +89,8 @@ func streamToACP(
 				})
 
 			case agent.AgentEventTurnComplete:
+				// Clear tool args buffer for the next turn.
+				clear(toolArgs)
 				if event.Result != nil {
 					stopReason = mapStopReason(event.Result.ExitReason)
 					lastUsage = event.Result.Usage
@@ -204,6 +222,19 @@ func mapStopReason(exitReason string) acp.StopReason {
 	default:
 		return acp.StopReasonEndTurn
 	}
+}
+
+// extractFilePath attempts to extract a file path from accumulated tool args JSON.
+// Returns the path value if found, empty string otherwise.
+// This enables Zed to show inline diffs and navigate to the edited file.
+func extractFilePath(argsJSON string) string {
+	var args struct {
+		Path string `json:"path"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return ""
+	}
+	return args.Path
 }
 
 // replaySessionHistory replays all stored messages from a loaded session as ACP
