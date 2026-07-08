@@ -8,27 +8,29 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/session"
 )
 
 // streamToACP consumes the AgentEvent channel and converts events into ACP
 // session/update notifications. Blocks until the channel is closed or ctx is cancelled.
-// Returns the final StopReason.
+// Returns the final StopReason and cumulative usage from the last turn.
 func streamToACP(
 	ctx context.Context,
 	sess *ACPSession,
 	conn *acp.AgentSideConnection,
 	events <-chan agent.AgentEvent,
-) acp.StopReason {
+) (acp.StopReason, *llm.Usage) {
 	sessionID := acp.SessionId(sess.ID)
 	stopReason := acp.StopReasonEndTurn
+	var lastUsage *llm.Usage
 
 	for {
 		select {
 		case event, ok := <-events:
 			if !ok {
-				return stopReason
+				return stopReason, lastUsage
 			}
 
 			switch event.Type {
@@ -73,12 +75,32 @@ func streamToACP(
 			case agent.AgentEventTurnComplete:
 				if event.Result != nil {
 					stopReason = mapStopReason(event.Result.ExitReason)
+					lastUsage = event.Result.Usage
 					// Send turn summary (iterations + duration) as a final text update.
 					if event.Result.IterationsUsed > 0 {
 						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
 							_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 								SessionId: sessionID,
 								Update:    acp.UpdateAgentMessageText(summary),
+							})
+						}
+					}
+					// Send token usage update so Zed can show context window usage.
+					// Uses the same values as the TUI statusbar:
+					//   Used = LastInputEstimate() (local chars/4 heuristic)
+					//   Size = ContextWindow() (model's context window size)
+					{
+						cw := sess.agent.ContextWindow()
+						used := sess.agent.LastInputEstimate()
+						if used > 0 && cw > 0 {
+							_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+								SessionId: sessionID,
+								Update: acp.SessionUpdate{
+									UsageUpdate: &acp.SessionUsageUpdate{
+										Size: int(cw),
+										Used: int(used),
+									},
+								},
 							})
 						}
 					}
@@ -149,7 +171,7 @@ func streamToACP(
 			}
 
 		case <-ctx.Done():
-			return acp.StopReasonCancelled
+			return acp.StopReasonCancelled, lastUsage
 		}
 	}
 }
