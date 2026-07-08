@@ -18,6 +18,7 @@ type WriteTool struct{}
 
 func (t WriteTool) Name() string        { return ToolNameWrite }
 func (t WriteTool) Description() string { return "Writes a file to the local filesystem." }
+func (t WriteTool) IsDestructive() bool { return true }
 func (t WriteTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":    {Type: "string", Description: "The path to write to"},

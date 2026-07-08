@@ -40,7 +40,10 @@ func (t *SendFileTool) SetCallback(cb SendFileCallback) {
 }
 
 func (t *SendFileTool) Name() string        { return ToolNameSendFile }
-func (t *SendFileTool) Description() string { return "Send a file to the user via the chat channel. Use this when the user asks for a file (e.g. a report, screenshot, document, or any generated file). The file will be delivered as an attachment through the current conversation channel." }
+func (t *SendFileTool) IsDestructive() bool { return true }
+func (t *SendFileTool) Description() string {
+	return "Send a file to the user via the chat channel. Use this when the user asks for a file (e.g. a report, screenshot, document, or any generated file). The file will be delivered as an attachment through the current conversation channel."
+}
 func (t *SendFileTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path": {

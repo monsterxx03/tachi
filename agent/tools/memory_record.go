@@ -39,6 +39,7 @@ func NewRecordMemoryTool(recorder MemoryRecorder) *RecordMemoryTool {
 
 func (t *RecordMemoryTool) Name() string { return ToolNameRecordMemory }
 
+func (t *RecordMemoryTool) IsDestructive() bool { return true }
 func (t *RecordMemoryTool) Description() string {
 	return "Record important information to persistent memory. Use this when you encounter " +
 		"notable facts, user preferences, project-specific conventions, important decisions, " +

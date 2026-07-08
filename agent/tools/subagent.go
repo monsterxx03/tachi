@@ -66,6 +66,7 @@ func NewSubagentTool(runner SubagentRunner) *SubagentTool {
 
 func (t *SubagentTool) Name() string { return ToolNameSubAgent }
 
+func (t *SubagentTool) IsDestructive() bool { return true }
 func (t *SubagentTool) Description() string {
 	names := t.runner.AvailableToolNames()
 	return subagentBaseDescription + "\n\nAvailable tools for allowed_tools: " + strings.Join(names, ", ")

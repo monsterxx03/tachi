@@ -104,7 +104,7 @@ func TestSetSessionConfigOption(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.Len(t, resp.ConfigOptions, 1)
+	assert.Len(t, resp.ConfigOptions, 2) // model + mode
 	assert.Equal(t, "anthropic", sess.resolveProviderName())
 	assert.Equal(t, "claude-3-5-sonnet", sess.agent.Model())
 }

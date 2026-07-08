@@ -26,8 +26,8 @@ func streamToACP(
 	sessionID := acp.SessionId(sess.ID)
 	stopReason := acp.StopReasonEndTurn
 	var lastUsage *llm.Usage
-	toolArgs := make(map[string]string)              // toolID → accumulated args JSON
-	pendingStarts := make(map[string]string)          // toolID → toolName (buffered start, sent when args arrive)
+	toolArgs := make(map[string]string)      // toolID → accumulated args JSON
+	pendingStarts := make(map[string]string) // toolID → toolName (buffered start, sent when args arrive)
 
 	for {
 		select {
@@ -68,8 +68,11 @@ func streamToACP(
 					if parsed := parseRawInput(toolArgs[event.ToolID]); parsed != nil {
 						opts = append(opts, acp.WithStartRawInput(parsed))
 					}
-					if path := extractFilePath(toolArgs[event.ToolID]); path != "" {
-						opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: path}}))
+					if path, line := extractFileLocation(toolArgs[event.ToolID]); path != "" {
+						opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{
+							Path: path,
+							Line: line,
+						}}))
 					}
 					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 						SessionId: sessionID,
@@ -81,8 +84,11 @@ func streamToACP(
 					if parsed := parseRawInput(toolArgs[event.ToolID]); parsed != nil {
 						updateOpts = append(updateOpts, acp.WithUpdateRawInput(parsed))
 					}
-					if path := extractFilePath(toolArgs[event.ToolID]); path != "" {
-						updateOpts = append(updateOpts, acp.WithUpdateLocations([]acp.ToolCallLocation{{Path: path}}))
+					if path, line := extractFileLocation(toolArgs[event.ToolID]); path != "" {
+						updateOpts = append(updateOpts, acp.WithUpdateLocations([]acp.ToolCallLocation{{
+							Path: path,
+							Line: line,
+						}}))
 					}
 					if len(updateOpts) > 0 {
 						_ = conn.SessionUpdate(ctx, acp.SessionNotification{
@@ -306,17 +312,27 @@ func replayToolTitle(toolName string, args any) string {
 	}
 }
 
-// extractFilePath attempts to extract a file path from accumulated tool args JSON.
-// Returns the path value if found, empty string otherwise.
-// This enables Zed to show inline diffs and navigate to the edited file.
-func extractFilePath(argsJSON string) string {
+// extractFileLocation attempts to extract a file path and optional line number
+// from the tool call arguments. Tools that have a `line` parameter (e.g. LSP)
+// or an `offset` parameter (e.g. ReadFile, 1-indexed) will provide line numbers
+// for precise navigation in the editor UI.
+func extractFileLocation(argsJSON string) (path string, line *int) {
 	var args struct {
-		Path string `json:"path"`
+		Path   string `json:"path"`
+		Line   *int   `json:"line,omitempty"`
+		Offset int    `json:"offset,omitempty"`
 	}
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return ""
+		return "", nil
 	}
-	return args.Path
+	if args.Line != nil {
+		return args.Path, args.Line
+	}
+	if args.Offset > 0 {
+		// ReadFile's offset is 1-indexed, same as ACP's line.
+		return args.Path, &args.Offset
+	}
+	return args.Path, nil
 }
 
 // replaySessionHistory replays all stored messages from a loaded session as ACP

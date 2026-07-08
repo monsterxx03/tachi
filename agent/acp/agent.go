@@ -191,14 +191,24 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 			})
 			// Also advertise the model/config option so clients can switch models.
 			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
+			sendModeConfigOption(t.conn, agent.ModeAuto, sess.ID)
 		}
 	})
 
 	t.logger.Log("ACP: session created id=%s", sess.ID)
 	opt, _ := buildModelConfigOption(t.cfg, resolved.Provider.Name)
+	modeOpt := buildModeConfigOption(agent.ModeAuto)
+	configOpts := []acp.SessionConfigOption{}
+	if opt != nil {
+		configOpts = append(configOpts, *opt)
+	}
+	if modeOpt != nil {
+		configOpts = append(configOpts, *modeOpt)
+	}
 	return acp.NewSessionResponse{
 		SessionId:     acp.SessionId(sess.ID),
-		ConfigOptions: configOptionSlice(opt),
+		ConfigOptions: configOpts,
+		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
 }
 
@@ -465,8 +475,17 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 
 	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
+	modeOpt := buildModeConfigOption(agent.ModeAuto)
+	configOpts := []acp.SessionConfigOption{}
+	if opt != nil {
+		configOpts = append(configOpts, *opt)
+	}
+	if modeOpt != nil {
+		configOpts = append(configOpts, *modeOpt)
+	}
 	return acp.ResumeSessionResponse{
-		ConfigOptions: configOptionSlice(opt),
+		ConfigOptions: configOpts,
+		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
 }
 
@@ -623,13 +642,23 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			})
 			// Also advertise the model/config option so clients can switch models.
 			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
+			sendModeConfigOption(t.conn, agent.ModeAuto, sess.ID)
 		}
 	})
 
 	t.logger.Log("ACP: session loaded id=%s", sess.ID)
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
+	modeOpt := buildModeConfigOption(agent.ModeAuto)
+	configOpts := []acp.SessionConfigOption{}
+	if opt != nil {
+		configOpts = append(configOpts, *opt)
+	}
+	if modeOpt != nil {
+		configOpts = append(configOpts, *modeOpt)
+	}
 	return acp.LoadSessionResponse{
-		ConfigOptions: configOptionSlice(opt),
+		ConfigOptions: configOpts,
+		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
 }
 
@@ -660,15 +689,14 @@ func (t *TachiAgent) Authenticate(_ context.Context, _ acp.AuthenticateRequest) 
 // Currently supports switching the LLM model/provider via the "model" option.
 func (t *TachiAgent) SetSessionConfigOption(_ context.Context, req acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
 	sessionID := ""
-	var providerName string
+	var configID string
+	var configValue string
 
 	switch {
 	case req.ValueId != nil:
 		sessionID = string(req.ValueId.SessionId)
-		if req.ValueId.ConfigId != modelConfigID {
-			return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("unsupported config option: %s", req.ValueId.ConfigId)
-		}
-		providerName = string(req.ValueId.Value)
+		configID = string(req.ValueId.ConfigId)
+		configValue = string(req.ValueId.Value)
 	case req.Boolean != nil:
 		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("boolean config options are not supported")
 	default:
@@ -687,25 +715,78 @@ func (t *TachiAgent) SetSessionConfigOption(_ context.Context, req acp.SetSessio
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
 
-	if err := switchSessionModel(sess, providerName); err != nil {
-		return acp.SetSessionConfigOptionResponse{}, err
+	switch configID {
+	case modelConfigID:
+		if err := switchSessionModel(sess, configValue); err != nil {
+			return acp.SetSessionConfigOptionResponse{}, err
+		}
+	case "mode":
+		if err := sess.agent.SetMode(configValue); err != nil {
+			return acp.SetSessionConfigOptionResponse{}, err
+		}
+		// Notify client about mode change.
+		if t.conn != nil {
+			_ = t.conn.SessionUpdate(context.Background(), acp.SessionNotification{
+				SessionId: acp.SessionId(sess.ID),
+				Update: acp.SessionUpdate{
+					CurrentModeUpdate: &acp.SessionCurrentModeUpdate{
+						CurrentModeId: acp.SessionModeId(sess.agent.Mode()),
+					},
+				},
+			})
+		}
+	default:
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("unsupported config option: %s", configID)
 	}
 
-	// Build the config option once; send as notification and return in response.
+	// Build both config options and return them so the client can update its UI.
 	sessConfigOption, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-	sendModelConfigOption(t.conn, sessConfigOption, sess.ID)
-
+	modeOpt := buildModeConfigOption(sess.agent.Mode())
 	configOptions := []acp.SessionConfigOption{}
 	if sessConfigOption != nil {
 		configOptions = append(configOptions, *sessConfigOption)
 	}
+	if modeOpt != nil {
+		configOptions = append(configOptions, *modeOpt)
+	}
+	sendModelConfigOption(t.conn, sessConfigOption, sess.ID)
+	sendModeConfigOption(t.conn, sess.agent.Mode(), sess.ID)
+
 	return acp.SetSessionConfigOptionResponse{
 		ConfigOptions: configOptions,
 	}, nil
 }
 
-// SetSessionMode is a stub — not yet supported.
-func (t *TachiAgent) SetSessionMode(_ context.Context, _ acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+// SetSessionMode changes the current session mode.
+// Delegates to AIAgent.SetMode which manages tool visibility:
+//   - "auto" (default): full tool access
+//   - "chat": read-only tools only, destructive tools hidden
+func (t *TachiAgent) SetSessionMode(_ context.Context, req acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+	sess, ok := t.sessions.Get(string(req.SessionId))
+	if !ok {
+		return acp.SetSessionModeResponse{}, fmt.Errorf("session not found: %s", req.SessionId)
+	}
+
+	modeID := string(req.ModeId)
+	t.logger.Log("ACP: SetSessionMode called for session %s, mode=%s", sess.ID, modeID)
+
+	// Delegate to the agent — it handles tool save/restore internally.
+	if err := sess.agent.SetMode(modeID); err != nil {
+		return acp.SetSessionModeResponse{}, err
+	}
+
+	// Notify the client about the mode change via a session/update notification.
+	if t.conn != nil {
+		_ = t.conn.SessionUpdate(context.Background(), acp.SessionNotification{
+			SessionId: acp.SessionId(sess.ID),
+			Update: acp.SessionUpdate{
+				CurrentModeUpdate: &acp.SessionCurrentModeUpdate{
+					CurrentModeId: acp.SessionModeId(sess.agent.Mode()),
+				},
+			},
+		})
+	}
+
 	return acp.SetSessionModeResponse{}, nil
 }
 
