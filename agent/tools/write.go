@@ -7,6 +7,8 @@ import (
 	"os"
 	"path/filepath"
 
+	"github.com/coder/acp-go-sdk"
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
@@ -44,6 +46,18 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 		if err := policy.CheckPath(absPath); err != nil {
 			return "", err
 		}
+	}
+
+	// In ACP mode, route through ACP client for Zed inline diff + accept/reject.
+	if conn := acpctx.Conn(ctx); conn != nil {
+		_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
+			Path:    filePath,
+			Content: argsMap.Content,
+		})
+		if err != nil {
+			return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
+		}
+		return fmt.Sprintf("Successfully wrote via ACP to %s (%d bytes)", argsMap.Path, len(argsMap.Content)), nil
 	}
 
 	// Ensure parent directory exists

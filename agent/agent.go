@@ -82,13 +82,13 @@ type AIAgent struct {
 	sessionManager     *session.Manager
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
-	lastInputTokens     int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
-	lastTokenBreakdown  tokenbreakdown.Breakdown  // categorized breakdown of last estimate, set alongside lastInputTokens
-	lastMessageDate    string       // calendar date (2006-01-02) of last processed user message; empty initially
-	titleModelProvider llm.Provider // optional: dedicated provider for title generation
-	titleGenEnabled    bool         // whether LLM-based title generation is active
-	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
-	reviewProvider     llm.Provider // optional: dedicated provider for /review code review
+	lastInputTokens    int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
+	lastTokenBreakdown tokenbreakdown.Breakdown // categorized breakdown of last estimate, set alongside lastInputTokens
+	lastMessageDate    string                   // calendar date (2006-01-02) of last processed user message; empty initially
+	titleModelProvider llm.Provider             // optional: dedicated provider for title generation
+	titleGenEnabled    bool                     // whether LLM-based title generation is active
+	commitProvider     llm.Provider             // optional: dedicated provider for /commit messages
+	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
 	logger             *debuglog.Logger
 
 	// Skill-related fields
@@ -228,6 +228,15 @@ func (a *AIAgent) SetPermissionMode(mode PermissionMode) {
 // SetPermissionHandler sets the external permission handler for PermissionModeExternal.
 func (a *AIAgent) SetPermissionHandler(h PermissionHandler) {
 	a.permissionHandler = h
+}
+
+// SetACPFileMode enables ACP file I/O for the EditFile tool. In ACP mode,
+// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
+// routes through conn.WriteTextFile for inline diffs.
+func (a *AIAgent) SetACPFileMode() {
+	if t, ok := a.toolRegistry.GetTool(tools.ToolNameEdit).(*tools.EditTool); ok {
+		t.SetACPMode(true)
+	}
 }
 
 // SetSkipEditConfirm is a backward-compatible helper that maps to PermissionMode.
@@ -665,5 +674,3 @@ func (a *AIAgent) Close() {
 		a.lspManager.Shutdown(context.Background())
 	}
 }
-
-
