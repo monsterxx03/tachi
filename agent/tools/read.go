@@ -13,6 +13,9 @@ import (
 	"sync"
 	"time"
 
+	acp "github.com/coder/acp-go-sdk"
+
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -141,6 +144,40 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		}
 	}
 	t.mu.RUnlock()
+
+	// In ACP mode, read from Zed's buffer for consistency with writeTextFile edits.
+	if conn := acpctx.Conn(ctx); conn != nil {
+		resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{Path: filePath})
+		if err != nil {
+			return "", fmt.Errorf("ACP readTextFile failed: %w", err)
+		}
+		content := []byte(resp.Content)
+
+		// Update cache
+		t.mu.Lock()
+		t.cache[key] = cachedEntry{
+			mtime: info.ModTime(),
+			size:  info.Size(),
+		}
+		t.mu.Unlock()
+
+		lines := strings.Split(string(content), "\n")
+		start := 0
+		if argsMap.Offset > 0 {
+			start = argsMap.Offset - 1
+		}
+		if start >= len(lines) {
+			return "", nil
+		}
+		end := len(lines)
+		if argsMap.Limit > 0 {
+			end = start + argsMap.Limit
+		}
+		if end > len(lines) {
+			end = len(lines)
+		}
+		return strings.Join(lines[start:end], "\n"), nil
+	}
 
 	content, err := os.ReadFile(filePath)
 	if err != nil {
