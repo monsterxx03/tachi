@@ -12,6 +12,7 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
@@ -107,6 +108,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	// Create independent AIAgent (no iteration limit for ACP sessions)
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
+	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	// Don't set steer channel — ACP doesn't use mid-turn injection
 
@@ -215,6 +217,11 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 
 	// Bind session's working directory to context so tools resolve relative paths correctly
 	promptCtx = wdctx.WithDir(promptCtx, sess.cwd)
+
+	// Attach ACP connection to context so tools can route file I/O through ACP.
+	if t.conn != nil {
+		promptCtx = acpctx.WithConn(promptCtx, t.conn)
+	}
 
 	// Convert ACP content blocks to Tachi message
 	userMsg, userImages := convertContentBlocks(req.Prompt)
@@ -417,6 +424,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
+	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Use context.Background() so MCP async init is not tied to the SDK
@@ -535,6 +543,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	// Create independent AIAgent
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
+	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Configure agent (registers tools, connects MCP, sets up memory/skills).

@@ -9,6 +9,8 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/coder/acp-go-sdk"
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
@@ -20,12 +22,19 @@ const (
 )
 
 // EditTool performs exact string replacements in files.
-type EditTool struct{}
+type EditTool struct {
+	acpMode bool // true = route writes through ACP writeTextFile, skip Tachi confirmation
+}
 
 // NewEditTool creates an EditTool.
 func NewEditTool() *EditTool {
 	return &EditTool{}
 }
+
+// SetACPMode enables ACP mode. In ACP mode, NeedsConfirmation returns false
+// (Zed handles review via its inline accept/reject UI) and ExecuteContext
+// routes file writes through conn.WriteTextFile.
+func (t *EditTool) SetACPMode(v bool) { t.acpMode = v }
 
 func (t *EditTool) Name() string { return ToolNameEdit }
 func (t *EditTool) Description() string {
@@ -42,7 +51,7 @@ func (t *EditTool) Properties() map[string]PropertySchema {
 }
 func (t *EditTool) Required() []string      { return []string{"path", "old_string", "new_string"} }
 func (t *EditTool) Parallel() bool          { return false }
-func (t *EditTool) NeedsConfirmation() bool { return true }
+func (t *EditTool) NeedsConfirmation() bool { return !t.acpMode }
 
 func (t *EditTool) GetDiff(ctx context.Context, args string) (string, error) {
 	return t.getLegacyDiff(ctx, args)
@@ -112,6 +121,48 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 	}
 
 	filePath := resolveEditPath(ctx, a.FilePath)
+
+	// In ACP mode, route through ACP client for Zed inline diff + accept/reject.
+	if t.acpMode {
+		if conn := acpctx.Conn(ctx); conn != nil {
+			if a.OldString == "" {
+				_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
+					Path:    filePath,
+					Content: a.NewString,
+				})
+				if err != nil {
+					return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
+				}
+				return fmt.Sprintf("Created new file via ACP %s (%d bytes)", filePath, len(a.NewString)), nil
+			}
+			resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{Path: filePath})
+			if err != nil {
+				return "", fmt.Errorf("ACP readTextFile failed: %w", err)
+			}
+			actualOld := findActualString(resp.Content, a.OldString)
+			if actualOld == "" {
+				return "", fmt.Errorf("old_string not found in %s", filePath)
+			}
+			if !a.ReplaceAll && strings.Count(resp.Content, actualOld) > 1 {
+				return "", fmt.Errorf("old_string matches multiple locations in %s", filePath)
+			}
+			var newContent string
+			if a.ReplaceAll {
+				newContent = strings.ReplaceAll(resp.Content, actualOld, a.NewString)
+			} else {
+				newContent = strings.Replace(resp.Content, actualOld, a.NewString, 1)
+			}
+			_, err = conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
+				Path:    filePath,
+				Content: newContent,
+			})
+			if err != nil {
+				return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
+			}
+			snippet := generateDiffSnippet(resp.Content, actualOld, a.NewString)
+			return fmt.Sprintf("Successfully edited via ACP %s\n%s", filePath, snippet), nil
+		}
+	}
 
 	if a.OldString == "" {
 		return createNewFile(ctx, filePath, a.NewString)
