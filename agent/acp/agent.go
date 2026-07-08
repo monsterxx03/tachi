@@ -260,10 +260,11 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	})
 
 	// Stream events to ACP client
-	stopReason := streamToACP(promptCtx, sess, t.conn, eventCh)
+	stopReason, usage := streamToACP(promptCtx, sess, t.conn, eventCh)
 
 	return acp.PromptResponse{
 		StopReason: stopReason,
+		Usage:      toACPUsage(usage),
 	}, nil
 }
 

@@ -265,7 +265,8 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts)
 
-	return streamToACP(ctx, sess, conn, eventCh), nil
+	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	return stopReason, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -319,7 +320,8 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	eventCh := forked.Agent().RunOneOffStream(ctx, reviewProvider,
 		systemPrompt, cmds.ReviewUserPrompt(), opts)
 
-	return streamToACP(ctx, sess, conn, eventCh), nil
+	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	return stopReason, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -348,7 +350,8 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
-	return streamToACP(ctx, sess, conn, eventCh), nil
+	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	return stopReason, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -618,7 +621,8 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
-	return streamToACP(ctx, sess, conn, eventCh), nil
+	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	return stopReason, nil
 }
 
 // ---------------------------------------------------------------------------

@@ -84,10 +84,9 @@ func buildModelConfigOption(cfg *config.Config, currentProviderName string) (*ac
 		if p.Name == currentProviderName {
 			currentValue = p.Name
 		}
-		label := fmt.Sprintf("%s (%s)", p.Name, p.Model)
 		options = append(options, acp.SessionConfigSelectOption{
 			Value: acp.SessionConfigValueId(p.Name),
-			Name:  label,
+			Name:  p.Name,
 		})
 	}
 
@@ -139,6 +138,18 @@ func sendModelConfigUpdate(conn *acp.AgentSideConnection, cfg *config.Config, cu
 	}
 	opt, _ := buildModelConfigOption(cfg, currentProviderName)
 	sendModelConfigOption(conn, opt, sessionID)
+}
+
+// toACPUsage converts Tachi's llm.Usage to ACP's PromptResponse usage format.
+func toACPUsage(u *llm.Usage) *acp.Usage {
+	if u == nil {
+		return nil
+	}
+	return &acp.Usage{
+		InputTokens:  int(u.InputTokens),
+		OutputTokens: int(u.OutputTokens),
+		TotalTokens:  int(u.InputTokens + u.OutputTokens),
+	}
 }
 
 // switchSessionModel switches the LLM provider/model for the given ACP session
