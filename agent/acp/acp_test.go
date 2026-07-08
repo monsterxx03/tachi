@@ -156,8 +156,8 @@ func TestLoadSession_CreatesNewSession(t *testing.T) {
 		Cwd: "/tmp/test-project",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, resp.Models)
-	assert.NotEmpty(t, resp.Models.AvailableModels)
+	require.NotNil(t, resp.ConfigOptions)
+	assert.NotEmpty(t, resp.ConfigOptions)
 }
 
 func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
@@ -190,8 +190,8 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 		Cwd: "/existing/project",
 	})
 	require.NoError(t, err)
-	require.NotNil(t, resp.Models)
-	assert.NotEmpty(t, resp.Models.AvailableModels)
+	require.NotNil(t, resp.ConfigOptions)
+	assert.NotEmpty(t, resp.ConfigOptions)
 
 	// Verify the ACP session was created with the same disk session ID
 	acpSess, ok := ta.sessions.Get(sessID)

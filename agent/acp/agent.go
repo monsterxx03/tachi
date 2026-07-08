@@ -52,6 +52,9 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
+			Auth: acp.AgentAuthCapabilities{
+				Logout: &acp.LogoutCapabilities{},
+			},
 			LoadSession: true,
 			SessionCapabilities: acp.SessionCapabilities{
 				List:   &acp.SessionListCapabilities{},
@@ -74,6 +77,13 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 			Version: t.version,
 		},
 	}, nil
+}
+
+// Logout handles the ACP logout request.
+// Tachi doesn't have a persistent authenticated session, so this is a no-op.
+func (t *TachiAgent) Logout(_ context.Context, _ acp.LogoutRequest) (acp.LogoutResponse, error) {
+	t.logger.Log("ACP: Logout called")
+	return acp.LogoutResponse{}, nil
 }
 
 // NewSession creates a new ACP session with an independent AIAgent instance.
@@ -188,7 +198,6 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	opt, _ := buildModelConfigOption(t.cfg, resolved.Provider.Name)
 	return acp.NewSessionResponse{
 		SessionId:     acp.SessionId(sess.ID),
-		Models:        buildModelState(t.cfg, resolved.Provider.Name),
 		ConfigOptions: configOptionSlice(opt),
 	}, nil
 }
@@ -457,7 +466,6 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
 	return acp.ResumeSessionResponse{
-		Models:        buildModelState(t.cfg, sess.resolveProviderName()),
 		ConfigOptions: configOptionSlice(opt),
 	}, nil
 }
@@ -621,7 +629,6 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	t.logger.Log("ACP: session loaded id=%s", sess.ID)
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
 	return acp.LoadSessionResponse{
-		Models:        buildModelState(t.cfg, sess.resolveProviderName()),
 		ConfigOptions: configOptionSlice(opt),
 	}, nil
 }
