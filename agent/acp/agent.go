@@ -183,8 +183,11 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	})
 
 	t.logger.Log("ACP: session created id=%s", sess.ID)
+	opt, _ := buildModelConfigOption(t.cfg, resolved.Provider.Name)
 	return acp.NewSessionResponse{
-		SessionId: acp.SessionId(sess.ID),
+		SessionId:     acp.SessionId(sess.ID),
+		Models:        buildModelState(t.cfg, resolved.Provider.Name),
+		ConfigOptions: configOptionSlice(opt),
 	}, nil
 }
 
@@ -442,7 +445,11 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	})
 
 	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
-	return acp.ResumeSessionResponse{}, nil
+	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
+	return acp.ResumeSessionResponse{
+		Models:        buildModelState(t.cfg, sess.resolveProviderName()),
+		ConfigOptions: configOptionSlice(opt),
+	}, nil
 }
 
 // LoadSession creates a new ACP session, optionally restoring a previous
@@ -601,7 +608,11 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	})
 
 	t.logger.Log("ACP: session loaded id=%s", sess.ID)
-	return acp.LoadSessionResponse{}, nil
+	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
+	return acp.LoadSessionResponse{
+		Models:        buildModelState(t.cfg, sess.resolveProviderName()),
+		ConfigOptions: configOptionSlice(opt),
+	}, nil
 }
 
 // findLatestSessionByCwd scans disk sessions and returns the most recent
