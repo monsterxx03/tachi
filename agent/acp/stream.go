@@ -26,7 +26,8 @@ func streamToACP(
 	sessionID := acp.SessionId(sess.ID)
 	stopReason := acp.StopReasonEndTurn
 	var lastUsage *llm.Usage
-	toolArgs := make(map[string]string) // toolID → accumulated args JSON
+	toolArgs := make(map[string]string)              // toolID → accumulated args JSON
+	pendingStarts := make(map[string]string)          // toolID → toolName (buffered start, sent when args arrive)
 
 	for {
 		select {
@@ -49,29 +50,46 @@ func streamToACP(
 				})
 
 			case agent.AgentEventToolCallStart:
-				update := acp.StartToolCall(
-					acp.ToolCallId(event.ToolID),
-					event.ToolName,
-					acp.WithStartKind(mapToolKind(event.ToolName)),
-					acp.WithStartStatus(acp.ToolCallStatusInProgress),
-				)
-				_ = conn.SessionUpdate(ctx, acp.SessionNotification{
-					SessionId: sessionID,
-					Update:    update,
-				})
+				// Buffer the start — we'll send it with rawInput when args arrive.
+				pendingStarts[event.ToolID] = event.ToolName
 
 			case agent.AgentEventToolCallArgs:
-				// Accumulate tool args to extract file paths for editor locations.
+				// Accumulate tool args for extraction.
 				toolArgs[event.ToolID] += event.ToolArgs
-				if path := extractFilePath(toolArgs[event.ToolID]); path != "" {
-					update := acp.UpdateToolCall(
-						acp.ToolCallId(event.ToolID),
-						acp.WithUpdateLocations([]acp.ToolCallLocation{{Path: path}}),
-					)
+
+				if toolName, pending := pendingStarts[event.ToolID]; pending {
+					// First args arrival: send StartToolCall with rawInput + locations included.
+					delete(pendingStarts, event.ToolID)
+					title := buildToolTitle(toolName, toolArgs[event.ToolID])
+					opts := []acp.ToolCallStartOpt{
+						acp.WithStartKind(mapToolKind(toolName)),
+						acp.WithStartStatus(acp.ToolCallStatusInProgress),
+					}
+					if parsed := parseRawInput(toolArgs[event.ToolID]); parsed != nil {
+						opts = append(opts, acp.WithStartRawInput(parsed))
+					}
+					if path := extractFilePath(toolArgs[event.ToolID]); path != "" {
+						opts = append(opts, acp.WithStartLocations([]acp.ToolCallLocation{{Path: path}}))
+					}
 					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 						SessionId: sessionID,
-						Update:    update,
+						Update:    acp.StartToolCall(acp.ToolCallId(event.ToolID), title, opts...),
 					})
+				} else {
+					// Subsequent args: update rawInput + locations.
+					var updateOpts []acp.ToolCallUpdateOpt
+					if parsed := parseRawInput(toolArgs[event.ToolID]); parsed != nil {
+						updateOpts = append(updateOpts, acp.WithUpdateRawInput(parsed))
+					}
+					if path := extractFilePath(toolArgs[event.ToolID]); path != "" {
+						updateOpts = append(updateOpts, acp.WithUpdateLocations([]acp.ToolCallLocation{{Path: path}}))
+					}
+					if len(updateOpts) > 0 {
+						_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+							SessionId: sessionID,
+							Update:    acp.UpdateToolCall(acp.ToolCallId(event.ToolID), updateOpts...),
+						})
+					}
 				}
 
 			case agent.AgentEventToolResult:
@@ -89,8 +107,9 @@ func streamToACP(
 				})
 
 			case agent.AgentEventTurnComplete:
-				// Clear tool args buffer for the next turn.
+				// Clear buffers for the next turn.
 				clear(toolArgs)
+				clear(pendingStarts)
 				if event.Result != nil {
 					stopReason = mapStopReason(event.Result.ExitReason)
 					lastUsage = event.Result.Usage
@@ -181,7 +200,6 @@ func streamToACP(
 				sess.agent.ConfirmTool(true)
 
 				// Events we intentionally ignore in ACP mode:
-				// AgentEventToolCallArgs — incremental args, ACP doesn't need
 				// AgentEventSteerCheck — ACP doesn't use steer
 				// AgentEventSubagentStart/Done — internal detail
 				// AgentEventUsage — internal stats
@@ -221,6 +239,70 @@ func mapStopReason(exitReason string) acp.StopReason {
 		return acp.StopReasonCancelled
 	default:
 		return acp.StopReasonEndTurn
+	}
+}
+
+// parseRawInput attempts to parse accumulated tool args JSON into a rawInput value.
+// Returns nil if the JSON is invalid (incremental args may not be complete yet).
+func parseRawInput(argsJSON string) any {
+	var args map[string]any
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return nil
+	}
+	if len(args) == 0 {
+		return nil
+	}
+	return args
+}
+
+// buildToolTitle constructs a descriptive title from the tool name and args,
+// using shared arg extraction from tools.ToolArgsTitle.
+func buildToolTitle(toolName, argsJSON string) string {
+	summary := tools.ToolArgsTitle(toolName, argsJSON)
+	if summary == "" || summary == toolName {
+		return toolName
+	}
+	switch toolName {
+	case tools.ToolNameRead:
+		return "Read " + summary
+	case tools.ToolNameWrite:
+		return "Write " + summary
+	case tools.ToolNameEdit:
+		return "Edit " + summary
+	case tools.ToolNameBash:
+		return "Run `" + summary + "`"
+	case tools.ToolNameGlob:
+		return "Find `" + summary + "`"
+	case tools.ToolNameGrep:
+		return "Search `" + summary + "`"
+	case tools.ToolNameWebSearch:
+		return "Search " + summary
+	case tools.ToolNameWebFetch:
+		return "Fetch " + summary
+	case tools.ToolNameLSP:
+		return "LSP " + summary
+	case tools.ToolNameSubAgent:
+		return "SubAgent: " + summary
+	}
+	return toolName
+}
+
+// replayToolTitle builds a title for replay, handling both string and map args.
+func replayToolTitle(toolName string, args any) string {
+	switch a := args.(type) {
+	case string:
+		return buildToolTitle(toolName, a)
+	case map[string]any:
+		if len(a) == 0 {
+			return toolName
+		}
+		b, err := json.Marshal(a)
+		if err != nil {
+			return toolName
+		}
+		return buildToolTitle(toolName, string(b))
+	default:
+		return toolName
 	}
 }
 
@@ -273,11 +355,18 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 			})
 
 		case session.MessageTypeToolCall:
-			update := acp.StartToolCall(
-				acp.ToolCallId(msg.ToolCallID),
-				msg.Name,
+			title := replayToolTitle(msg.Name, msg.Args)
+			opts := []acp.ToolCallStartOpt{
 				acp.WithStartKind(mapToolKind(msg.Name)),
 				acp.WithStartStatus(acp.ToolCallStatusInProgress),
+			}
+			if msg.Args != nil {
+				opts = append(opts, acp.WithStartRawInput(msg.Args))
+			}
+			update := acp.StartToolCall(
+				acp.ToolCallId(msg.ToolCallID),
+				title,
+				opts...,
 			)
 			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 				SessionId: sessionID,
