@@ -12,6 +12,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 const (
@@ -21,7 +22,7 @@ const (
 	rightDoubleCurlyQuote = '\u201D' // "
 )
 
-// EditTool performs exact string replacements in files.
+// EditTool performs exact string replacements in files (replace or hashline mode).
 type EditTool struct {
 	acpMode bool // true = route writes through ACP writeTextFile, skip Tachi confirmation
 }
@@ -106,6 +107,7 @@ func (t *EditTool) ExecuteContext(ctx context.Context, args string) (string, err
 }
 
 func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, error) {
+	debuglog.DefaultLogger.Log("ACP edit: executeLegacy called, acpMode=%v conn=%v", t.acpMode, acpctx.Conn(ctx) != nil)
 	var a struct {
 		FilePath   string `json:"path"`
 		OldString  string `json:"old_string"`

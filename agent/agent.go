@@ -91,6 +91,11 @@ type AIAgent struct {
 	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
 	logger             *debuglog.Logger
 
+	// acpFileMode enables ACP file I/O for EditFile tool. When true,
+	// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
+	// routes writes through conn.WriteTextFile for inline diffs.
+	acpFileMode bool
+
 	// Skill-related fields
 	skillStore   *skill.Store
 	activeSkills map[string]bool // skills activated in current session
@@ -230,13 +235,9 @@ func (a *AIAgent) SetPermissionHandler(h PermissionHandler) {
 	a.permissionHandler = h
 }
 
-// SetACPFileMode enables ACP file I/O for the EditFile tool. In ACP mode,
-// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
-// routes through conn.WriteTextFile for inline diffs.
+// SetACPFileMode enables ACP file I/O for the EditFile tool.
 func (a *AIAgent) SetACPFileMode() {
-	if t, ok := a.toolRegistry.GetTool(tools.ToolNameEdit).(*tools.EditTool); ok {
-		t.SetACPMode(true)
-	}
+	a.acpFileMode = true
 }
 
 // SetSkipEditConfirm is a backward-compatible helper that maps to PermissionMode.
@@ -396,7 +397,11 @@ func (a *AIAgent) recordSession(msg *session.Message) {
 func (a *AIAgent) RegisterTools() {
 	a.toolRegistry.Register(tools.NewReadTool())
 	a.toolRegistry.Register(tools.WriteTool{})
-	a.toolRegistry.Register(tools.NewEditTool())
+	editTool := tools.NewEditTool()
+	if a.acpFileMode {
+		editTool.SetACPMode(true)
+	}
+	a.toolRegistry.Register(editTool)
 
 	a.toolRegistry.Register(tools.GlobTool{})
 	a.toolRegistry.Register(tools.GrepTool{})
