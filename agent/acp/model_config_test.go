@@ -13,63 +13,6 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 )
 
-func TestBuildModelState(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []config.ProviderConfig{
-			{Name: "openai", Type: "openai", Model: "gpt-4o-mini"},
-			{Name: "anthropic", Type: "anthropic", Model: "claude-3-5-sonnet"},
-		},
-	}
-
-	state := buildModelState(cfg, "anthropic")
-	require.NotNil(t, state)
-	assert.Equal(t, acp.ModelId("anthropic/claude-3-5-sonnet"), state.CurrentModelId)
-	require.Len(t, state.AvailableModels, 2)
-	assert.Equal(t, acp.ModelId("openai/gpt-4o-mini"), state.AvailableModels[0].ModelId)
-	assert.Equal(t, "openai (gpt-4o-mini)", state.AvailableModels[0].Name)
-	assert.Equal(t, acp.ModelId("anthropic/claude-3-5-sonnet"), state.AvailableModels[1].ModelId)
-	assert.Equal(t, "anthropic (claude-3-5-sonnet)", state.AvailableModels[1].Name)
-}
-
-func TestBuildModelState_NoProviders(t *testing.T) {
-	state := buildModelState(&config.Config{}, "")
-	assert.Nil(t, state)
-}
-
-func TestBuildModelState_NilConfig(t *testing.T) {
-	state := buildModelState(nil, "")
-	assert.Nil(t, state)
-}
-
-func TestBuildModelState_CurrentNotMatched_FallsBackToFirst(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []config.ProviderConfig{
-			{Name: "openai", Type: "openai", Model: "gpt-4o-mini"},
-			{Name: "anthropic", Type: "anthropic", Model: "claude-3-5-sonnet"},
-		},
-	}
-
-	// Current name doesn't match any provider — should fall back to first.
-	state := buildModelState(cfg, "unknown")
-	require.NotNil(t, state)
-	assert.Equal(t, acp.ModelId("openai/gpt-4o-mini"), state.CurrentModelId)
-}
-
-func TestBuildModelState_SkipsEmptyNameOrModel(t *testing.T) {
-	cfg := &config.Config{
-		Providers: []config.ProviderConfig{
-			{Name: "", Type: "openai", Model: "gpt-4o-mini"},       // skipped — empty name
-			{Name: "empty-model", Type: "openai", Model: ""},       // skipped — empty model
-			{Name: "valid", Type: "openai", Model: "gpt-4o-mini"},  // included
-		},
-	}
-
-	state := buildModelState(cfg, "valid")
-	require.NotNil(t, state)
-	assert.Len(t, state.AvailableModels, 1)
-	assert.Equal(t, "valid (gpt-4o-mini)", state.AvailableModels[0].Name)
-}
-
 func TestBuildModelConfigOption(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{

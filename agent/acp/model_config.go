@@ -20,44 +20,6 @@ const (
 	modelConfigDescription = "The LLM provider/model to use for this session."
 )
 
-// buildModelState builds a SessionModelState exposing the configured providers
-// as selectable models for the Zed model selector.
-func buildModelState(cfg *config.Config, currentProviderName string) *acp.SessionModelState {
-	if cfg == nil || len(cfg.Providers) == 0 {
-		return nil
-	}
-
-	models := make([]acp.ModelInfo, 0, len(cfg.Providers))
-	var currentModelID acp.ModelId
-
-	for _, p := range cfg.Providers {
-		if p.Name == "" || p.Model == "" {
-			continue
-		}
-		modelID := acp.ModelId(p.Name + "/" + p.Model)
-		if p.Name == currentProviderName {
-			currentModelID = modelID
-		}
-		models = append(models, acp.ModelInfo{
-			ModelId: modelID,
-			Name:    fmt.Sprintf("%s (%s)", p.Name, p.Model),
-		})
-	}
-
-	if len(models) == 0 {
-		return nil
-	}
-
-	if currentModelID == "" {
-		currentModelID = models[0].ModelId
-	}
-
-	return &acp.SessionModelState{
-		AvailableModels: models,
-		CurrentModelId:  currentModelID,
-	}
-}
-
 // configOptionSlice returns a non-nil config option slice for inclusion in
 // session responses.
 func configOptionSlice(opt *acp.SessionConfigOption) []acp.SessionConfigOption {

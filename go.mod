@@ -9,7 +9,7 @@ require (
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/anthropics/anthropic-sdk-go v1.37.0
 	github.com/charmbracelet/glamour v1.0.0
-	github.com/coder/acp-go-sdk v0.13.0
+	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creasty/defaults v1.8.0
 	github.com/google/uuid v1.6.0
 	github.com/mark3labs/mcp-go v0.49.0
