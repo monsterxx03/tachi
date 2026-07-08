@@ -7,7 +7,6 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/monsterxx03/tachi/agent"
-	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // editArgs mirrors the EditTool argument struct for parsing diff content from args JSON.
@@ -24,12 +23,6 @@ type editArgs struct {
 // for the remainder of the session.
 func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string, aiAgent *agent.AIAgent) agent.PermissionHandler {
 	return func(ctx context.Context, toolName, toolID, diff, args string) (bool, error) {
-		// EditFile already routes through ACP writeTextFile, which shows
-		// its own Review Changes diff on the client side. Skip the
-		// redundant permission dialog to avoid double confirmation.
-		if toolName == tools.ToolNameEdit {
-			return true, nil
-		}
 
 		// Build content to show in the permission dialog
 		var content []acp.ToolCallContent

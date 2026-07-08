@@ -22,7 +22,7 @@ const (
 	rightDoubleCurlyQuote = '\u201D' // "
 )
 
-// EditTool performs exact string replacements in files (replace or hashline mode).
+// EditTool performs exact string replacements in files.
 type EditTool struct {
 	acpMode bool // true = route writes through ACP writeTextFile, skip Tachi confirmation
 }
@@ -127,17 +127,22 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 	// In ACP mode, route through ACP client for Zed inline diff + accept/reject.
 	if t.acpMode {
 		if conn := acpctx.Conn(ctx); conn != nil {
+			sessionID := acpctx.SessionID(ctx)
 			if a.OldString == "" {
 				_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-					Path:    filePath,
-					Content: a.NewString,
+					SessionId: sessionID,
+					Path:      filePath,
+					Content:   a.NewString,
 				})
 				if err != nil {
 					return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
 				}
 				return fmt.Sprintf("Created new file via ACP %s (%d bytes)", filePath, len(a.NewString)), nil
 			}
-			resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{Path: filePath})
+			resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
+				SessionId: sessionID,
+				Path:      filePath,
+			})
 			if err != nil {
 				return "", fmt.Errorf("ACP readTextFile failed: %w", err)
 			}
@@ -155,8 +160,9 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 				newContent = strings.Replace(resp.Content, actualOld, a.NewString, 1)
 			}
 			_, err = conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-				Path:    filePath,
-				Content: newContent,
+				SessionId: sessionID,
+				Path:      filePath,
+				Content:   newContent,
 			})
 			if err != nil {
 				return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
