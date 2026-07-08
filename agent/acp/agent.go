@@ -221,6 +221,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	// Attach ACP connection to context so tools can route file I/O through ACP.
 	if t.conn != nil {
 		promptCtx = acpctx.WithConn(promptCtx, t.conn)
+		promptCtx = acpctx.WithSessionID(promptCtx, req.SessionId)
 	}
 
 	// Convert ACP content blocks to Tachi message

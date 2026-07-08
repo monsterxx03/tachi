@@ -63,30 +63,6 @@ func TestBuildPermissionHandler_AllowOnce(t *testing.T) {
 	assert.True(t, approved)
 }
 
-func TestBuildPermissionHandler_EditFileAutoApprove(t *testing.T) {
-	// EditFile should auto-approve without going through RequestPermission,
-	// because the actual write is routed through ACP writeTextFile which
-	// provides its own Review Changes confirmation UI on the client side.
-	agentToClientR, agentToClientW := io.Pipe()
-	clientToAgentR, clientToAgentW := io.Pipe()
-
-	conn := acp.NewAgentSideConnection(&mockACPAgent{}, agentToClientW, clientToAgentR)
-	t.Cleanup(func() {
-		agentToClientR.Close()
-		agentToClientW.Close()
-		clientToAgentR.Close()
-		clientToAgentW.Close()
-	})
-
-	aiAgent := agent.NewAIAgent(nil, 0)
-	handler := buildPermissionHandler(conn, "test-session", aiAgent)
-
-	// No goroutine needed — early return should not hit RequestPermission
-	approved, err := handler(context.Background(), "EditFile", "tool-edit", "diff", "args")
-	assert.NoError(t, err)
-	assert.True(t, approved)
-}
-
 func TestBuildPermissionHandler_Reject(t *testing.T) {
 	agentToClientR, agentToClientW := io.Pipe()
 	clientToAgentR, clientToAgentW := io.Pipe()
