@@ -1,9 +1,7 @@
 package manager
 
 import (
-	"encoding/json"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -223,148 +221,26 @@ func convertQuestions(qs []tools.Question) []channel.Question {
 // formatToolArgs extracts key parameters from a tool's JSON arguments string
 // for display in a streaming card status line. It knows the argument schemas
 // of common tools and formats them concisely.
+// formatToolArgs extracts key parameters from a tool's JSON arguments string
+// for display in a streaming card status line. Delegates to the shared
+// tools.ToolArgsSummary and adds truncation + " — " prefix.
 func formatToolArgs(toolName, argsJSON string) string {
 	if argsJSON == "" {
 		return ""
 	}
-	// Extract the most informative field for common tools.
+	summary := tools.ToolArgsSummary(toolName, argsJSON)
+	if summary == "" || summary == argsJSON {
+		return ""
+	}
+	// Truncate long summaries for channel display.
+	maxLen := 60
 	switch toolName {
-	case tools.ToolNameBash:
-		if cmd := extractJSONField(argsJSON, "command"); cmd != "" {
-			return " — " + truncateToolArg(cmd, 60)
-		}
-	case tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite:
-		if path := extractJSONField(argsJSON, "path"); path != "" {
-			return " — " + truncateToolArg(path, 50)
-		}
-	case tools.ToolNameGlob:
-		if pat := extractJSONField(argsJSON, "pattern"); pat != "" {
-			return " — " + truncateToolArg(pat, 50)
-		}
-	case tools.ToolNameGrep:
-		if pat := extractJSONField(argsJSON, "pattern"); pat != "" {
-			return " — " + truncateToolArg(pat, 60)
-		}
-	case tools.ToolNameWebSearch:
-		if q := extractJSONField(argsJSON, "query"); q != "" {
-			return " — " + truncateToolArg(q, 60)
-		}
-	case tools.ToolNameWebFetch:
-		if u := extractJSONField(argsJSON, "url"); u != "" {
-			return " — " + truncateToolArg(u, 50)
-		}
-	case tools.ToolNameSubAgent:
-		if p := extractJSONField(argsJSON, "prompt"); p != "" {
-			return " — " + truncateToolArg(p, 60)
-		}
-	case tools.ToolNameSkill:
-		if op := extractJSONField(argsJSON, "operation"); op != "" {
-			name := extractJSONField(argsJSON, "name")
-			if name != "" {
-				return " — " + op + " " + name
-			}
-			return " — " + op
-		}
-	case tools.ToolNameLSP:
-		if op := extractJSONField(argsJSON, "operation"); op != "" {
-			return " — " + op
-		}
-	case tools.ToolNameMCPSearchTools:
-		if q := extractJSONField(argsJSON, "query"); q != "" {
-			return " — " + truncateToolArg(q, 50)
-		}
+	case tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite,
+		tools.ToolNameGlob, tools.ToolNameWebFetch, tools.ToolNameMCPSearchTools:
+		maxLen = 50
 	}
-	// Fallback: tools without a predefined template show all arguments.
-	return formatFullArgs(argsJSON)
-}
-
-// extractJSONField extracts a top-level string field from a JSON object.
-// Handles partial/incomplete JSON gracefully — returns empty string on parse error.
-func extractJSONField(jsonStr, field string) string {
-	// Simple approach: look for "field": "value" or "field":"value"
-	// This works for most tool arg formats without importing encoding/json.
-	search := `"` + field + `":`
-	idx := 0
-	for i := 0; i < len(jsonStr)-len(search); i++ {
-		if jsonStr[i:i+len(search)] == search {
-			idx = i + len(search)
-			break
-		}
+	if len(summary) > maxLen {
+		summary = summary[:maxLen] + "..."
 	}
-	if idx == 0 {
-		return ""
-	}
-	// Skip whitespace.
-	rest := jsonStr[idx:]
-	rest = trimLeft(rest)
-	if len(rest) == 0 || rest[0] != '"' {
-		return ""
-	}
-	rest = rest[1:] // skip opening quote
-	// Find closing unescaped quote.
-	for i := 0; i < len(rest); i++ {
-		if rest[i] == '\\' {
-			i++ // skip escaped char
-			continue
-		}
-		if rest[i] == '"' {
-			return rest[:i]
-		}
-	}
-	return rest // incomplete JSON — return whatever we have
-}
-
-func trimLeft(s string) string {
-	for len(s) > 0 && (s[0] == ' ' || s[0] == '\t' || s[0] == '\n' || s[0] == '\r') {
-		s = s[1:]
-	}
-	return s
-}
-
-// truncateToolArg caps a tool argument for display, appending "..." if truncated.
-func truncateToolArg(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
-
-// formatFullArgs formats all top-level arguments from a JSON string for tools
-// that don't have a predefined parameter template. Long values are truncated.
-// Returns a string like " — key1=value1, key2=value2" or empty string on failure.
-func formatFullArgs(argsJSON string) string {
-	var args map[string]interface{}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return ""
-	}
-	if len(args) == 0 {
-		return ""
-	}
-
-	// Collect and sort keys for deterministic output.
-	keys := make([]string, 0, len(args))
-	for k := range args {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	var pairs []string
-	for _, k := range keys {
-		v := args[k]
-		if v == nil {
-			continue
-		}
-		valStr := fmt.Sprintf("%v", v)
-		if valStr == "" {
-			continue
-		}
-		// Truncate long values.
-		valStr = truncateToolArg(valStr, 40)
-		pairs = append(pairs, k+"="+valStr)
-	}
-
-	if len(pairs) == 0 {
-		return ""
-	}
-	return " — " + strings.Join(pairs, ", ")
+	return " — " + summary
 }

@@ -44,6 +44,25 @@ func TestMapStopReason(t *testing.T) {
 	assert.Equal(t, acp.StopReasonEndTurn, mapStopReason("budget_exhausted"))
 }
 
+func TestParseRawInput(t *testing.T) {
+	// Valid JSON returns parsed map.
+	result := parseRawInput(`{"pattern": "**/*.go", "path": "/tmp"}`)
+	require.NotNil(t, result)
+	m, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "**/*.go", m["pattern"])
+	assert.Equal(t, "/tmp", m["path"])
+
+	// Invalid JSON returns nil.
+	assert.Nil(t, parseRawInput(`{bad json`))
+
+	// Empty JSON object returns nil (nothing useful to send).
+	assert.Nil(t, parseRawInput(`{}`))
+
+	// Empty string returns nil.
+	assert.Nil(t, parseRawInput(``))
+}
+
 // ── replaySessionHistory tests ──────────────────────────────────────────────
 
 // mockACPConn sets up an acp.AgentSideConnection backed by pipes for
@@ -210,6 +229,65 @@ func TestReplaySessionHistory_ReplaysToolCall(t *testing.T) {
 	assert.Equal(t, string(acp.ToolKindRead), update["kind"])
 	assert.Equal(t, string(acp.ToolCallStatusInProgress), update["status"])
 	assert.Equal(t, tools.ToolNameRead, update["title"])
+}
+
+func TestReplaySessionHistory_ReplaysToolCall_WithArgs(t *testing.T) {
+	_, acpSess := setupSessionWithMessages(t, "/proj", []session.Message{
+		{
+			Type:       session.MessageTypeToolCall,
+			Name:       tools.ToolNameGlob,
+			ToolCallID: "call_args",
+			Args:       map[string]any{"pattern": "**/*.go"},
+		},
+	})
+
+	conn, w, ch := mockACPConn(t)
+	replaySessionHistory(context.Background(), conn, acpSess)
+	notifications := drainNotifications(w, ch)
+
+	require.Len(t, notifications, 1)
+	verifyNotification(t, notifications[0], acpSess.ID, "tool_call")
+
+	update := notifications[0]["params"].(map[string]any)["update"].(map[string]any)
+	assert.Equal(t, "call_args", update["toolCallId"])
+	assert.Equal(t, "Find `**/*.go`", update["title"])
+
+	// Verify rawInput is present with the tool arguments.
+	rawInput, ok := update["rawInput"].(map[string]any)
+	require.True(t, ok, "rawInput should be present")
+	assert.Equal(t, "**/*.go", rawInput["pattern"])
+}
+
+func TestBuildToolTitle(t *testing.T) {
+	tests := []struct {
+		name     string
+		argsJSON string
+		want     string
+	}{
+		{tools.ToolNameRead, `{"path": "/tmp/foo.go"}`, "Read foo.go"},
+		{tools.ToolNameRead, `{"path": "/tmp/foo.go", "offset": 10}`, "Read foo.go"},
+		{tools.ToolNameWrite, `{"path": "/tmp/bar.go"}`, "Write bar.go"},
+		{tools.ToolNameEdit, `{"path": "/tmp/baz.go"}`, "Edit baz.go"},
+		{tools.ToolNameBash, `{"command": "ls -la"}`, "Run `ls -la`"},
+		{tools.ToolNameGlob, `{"pattern": "**/*.go"}`, "Find `**/*.go`"},
+		{tools.ToolNameGrep, `{"pattern": "TODO"}`, "Search `TODO`"},
+		{tools.ToolNameWebSearch, `{"query": "golang generics"}`, "Search golang generics"},
+		{tools.ToolNameWebFetch, `{"url": "https://example.com"}`, "Fetch https://example.com"},
+		{tools.ToolNameLSP, `{"operation": "goToDefinition", "path": "/tmp/x.go"}`, "LSP goToDefinition x.go"},
+		{tools.ToolNameSubAgent, `{"prompt": "analyze this code"}`, "SubAgent: analyze this code"},
+		// No args: returns tool name.
+		{tools.ToolNameBash, ``, tools.ToolNameBash},
+		{tools.ToolNameBash, `{}`, tools.ToolNameBash},
+		{tools.ToolNameBash, `{invalid`, tools.ToolNameBash},
+		// Unknown tool: returns tool name.
+		{"UnknownTool", `{"x": 1}`, "UnknownTool"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name+"_"+tt.argsJSON, func(t *testing.T) {
+			got := buildToolTitle(tt.name, tt.argsJSON)
+			assert.Equal(t, tt.want, got)
+		})
+	}
 }
 
 func TestReplaySessionHistory_ReplaysToolCall_Kinds(t *testing.T) {

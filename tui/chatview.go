@@ -672,96 +672,30 @@ func truncateThinking(s string, maxLines int) string {
 }
 
 func getToolArgsPreview(name, argsJSON string) string {
-	var args map[string]any
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return argsJSON
-	}
+	summary := tools.ToolArgsSummary(name, argsJSON)
+	// Truncate long summaries for TUI preview display.
 	switch name {
-	case tools.ToolNameRead:
-		if p, ok := args["path"].(string); ok {
-			offset, hasOffset := toInt(args["offset"])
-			limit, hasLimit := toInt(args["limit"])
-			if hasOffset && offset > 0 {
-				if hasLimit && limit > 0 {
-					return fmt.Sprintf("%s L%d+%d", p, offset, limit)
-				}
-				return fmt.Sprintf("%s L%d", p, offset)
-			}
-			if hasLimit && limit > 0 {
-				return fmt.Sprintf("%s +%d", p, limit)
-			}
-			return p
-		}
-	case tools.ToolNameWrite:
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-	case tools.ToolNameEdit:
-		if p, ok := args["path"].(string); ok {
-			return p
-		}
-	case tools.ToolNameGlob:
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case tools.ToolNameGrep:
-		if p, ok := args["pattern"].(string); ok {
-			return p
-		}
-	case tools.ToolNameBash:
-		if cmd, ok := args["command"].(string); ok {
-			runes := []rune(cmd)
-			if len(runes) > 60 {
-				return string(runes[:57]) + "…"
-			}
-			return cmd
-		}
-	case tools.ToolNameWebSearch:
-		if q, ok := args["query"].(string); ok {
-			runes := []rune(q)
-			if len(runes) > 60 {
-				return string(runes[:57]) + "…"
-			}
-			return q
-		}
-	case tools.ToolNameWebFetch:
-		if u, ok := args["url"].(string); ok {
-			runes := []rune(u)
-			if len(runes) > 60 {
-				return "WebFetch: " + string(runes[:57]) + "…"
-			}
-			return "WebFetch: " + u
-		}
-	case tools.ToolNameSubAgent:
-		prompt, _ := args["prompt"].(string)
-		branch, _ := args["worktree_branch"].(string)
-		if prompt == "" {
-			return argsJSON
-		}
-		runes := []rune(prompt)
+	case tools.ToolNameBash, tools.ToolNameWebSearch:
+		runes := []rune(summary)
 		if len(runes) > 60 {
-			prompt = string(runes[:57]) + "…"
+			return string(runes[:57]) + "…"
 		}
-		if branch != "" {
-			return fmt.Sprintf("SubAgent [%s]: %s", branch, prompt)
+		return summary
+	case tools.ToolNameWebFetch:
+		runes := []rune(summary)
+		if len(runes) > 60 {
+			return "WebFetch: " + string(runes[:57]) + "…"
 		}
-		return prompt
+		return "WebFetch: " + summary
+	case tools.ToolNameSubAgent:
+		// ToolArgsSummary already returns "[branch] prompt" or just "prompt"
+		runes := []rune(summary)
+		if len(runes) > 60 {
+			return string(runes[:57]) + "…"
+		}
+		return summary
 	}
-	return argsJSON
-}
-
-// toInt converts an any value to int. Accepts float64 (JSON number),
-// int, and int64. Returns 0, false for unsupported types.
-func toInt(v any) (int, bool) {
-	switch n := v.(type) {
-	case float64:
-		return int(n), true
-	case int:
-		return n, true
-	case int64:
-		return int(n), true
-	}
-	return 0, false
+	return summary
 }
 
 // renderDiffWithHighlight renders diff content with syntax highlighting for +/- lines
