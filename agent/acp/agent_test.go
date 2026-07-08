@@ -16,9 +16,9 @@ func TestListSessions_FilterByCwd(t *testing.T) {
 	ta := NewTachiAgent(cfg, "test")
 
 	// Add sessions with different cwds (in-memory only — no disk scan needed)
-	ta.sessions.New(context.Background(), "/home/user/project-a", "openai", nil, nil, nil, nil)
-	ta.sessions.New(context.Background(), "/home/user/project-b", "openai", nil, nil, nil, nil)
-	ta.sessions.New(context.Background(), "/home/user/project-a", "anthropic", nil, nil, nil, nil)
+	ta.sessions.New(context.Background(), "/home/user/project-a", nil, nil, nil, nil)
+	ta.sessions.New(context.Background(), "/home/user/project-b", nil, nil, nil, nil)
+	ta.sessions.New(context.Background(), "/home/user/project-a", nil, nil, nil, nil)
 
 	// Filter by cwd — only checks in-memory sessions first, then disk.
 	// Since we can't control disk sessions in unit tests, just verify in-memory filtering works.

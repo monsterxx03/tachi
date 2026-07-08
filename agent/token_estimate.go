@@ -3,7 +3,6 @@ package agent
 import (
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -28,8 +27,8 @@ func approxTokenCount(s string) int64 {
 // correct provider-specific message regrouping. When providerName is empty the
 // conversion falls back to a best-effort mapping, which is sufficient for
 // threshold checks.
-func EstimateContentTokens(msgs []session.Message, providerName string, cfg *config.Config) int64 {
-	llmMsgs, err := ConvertSessionToLLMMessages(msgs, providerName, cfg)
+func EstimateContentTokens(msgs []session.Message, providerName string) int64 {
+	llmMsgs, err := ConvertSessionToLLMMessages(msgs, providerName)
 	if err != nil {
 		// If conversion fails, fall back to a rough chars/4 estimate.
 		// This is acceptable for pre-compaction threshold checks.

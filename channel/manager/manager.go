@@ -542,7 +542,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 		return sm, nil, nil
 	}
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Name, m.cfg)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Type)
 	if err != nil {
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}

@@ -18,7 +18,7 @@ func TestConvertSessionToLLMMessages_Anthropic_SimpleExchange(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Hi there!"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestConvertSessionToLLMMessages_Anthropic_ToolCall(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Here are the files: output"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -95,7 +95,7 @@ func TestConvertSessionToLLMMessages_OpenAI_PrependsThinking(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Hi there!"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "openai", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "openai")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -124,7 +124,7 @@ func TestConvertSessionToLLMMessages_OpenAI_ToolCall(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Files: output"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "openai", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "openai")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestConvertSessionToLLMMessages_MultipleThinkingBlocks(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Answer"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -192,7 +192,7 @@ func TestConvertSessionToLLMMessages_ContinuationAfterMaxTokens(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "more text"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -235,7 +235,7 @@ func TestConvertSessionToLLMMessages_ParallelToolCalls(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Here's the summary"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -284,7 +284,7 @@ func TestConvertSessionToLLMMessages_SkipsConfirm(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "Hi!"},
 	}
 
-	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic", nil)
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

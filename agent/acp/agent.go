@@ -148,7 +148,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, resolved.Provider.Type, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Wire up permission handler for this session
 	if t.conn != nil {
@@ -177,6 +177,8 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 					},
 				},
 			})
+			// Also advertise the model/config option so clients can switch models.
+			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
 		}
 	})
 
@@ -237,7 +239,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	} else if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType, t.cfg)
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
 			if convErr == nil {
 				history = llmMsgs
 			} else {
@@ -425,12 +427,19 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent.SetSessionManager(diskMgr)
 
 	// Create ACP session with existing disk session manager
-	sess := t.sessions.New(ctx, cwd, provType, t.cfg, aiAgent, mcpMgr, diskMgr)
+	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, diskMgr)
 
 	// Wire up permission handler
 	if t.conn != nil {
 		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
 	}
+
+	// Defer config option notification to avoid race condition on the client side.
+	time.AfterFunc(0, func() {
+		if t.conn != nil {
+			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
+		}
+	})
 
 	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
 	return acp.ResumeSessionResponse{}, nil
@@ -559,7 +568,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, provType, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Wire up permission handler
 	if t.conn != nil {
@@ -586,6 +595,8 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 					},
 				},
 			})
+			// Also advertise the model/config option so clients can switch models.
+			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
 		}
 	})
 
@@ -616,9 +627,52 @@ func (t *TachiAgent) Authenticate(_ context.Context, _ acp.AuthenticateRequest) 
 	return acp.AuthenticateResponse{}, nil
 }
 
-// SetSessionConfigOption is a stub — not yet supported.
-func (t *TachiAgent) SetSessionConfigOption(_ context.Context, _ acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
-	return acp.SetSessionConfigOptionResponse{}, nil
+// SetSessionConfigOption handles ACP session configuration changes.
+// Currently supports switching the LLM model/provider via the "model" option.
+func (t *TachiAgent) SetSessionConfigOption(_ context.Context, req acp.SetSessionConfigOptionRequest) (acp.SetSessionConfigOptionResponse, error) {
+	sessionID := ""
+	var providerName string
+
+	switch {
+	case req.ValueId != nil:
+		sessionID = string(req.ValueId.SessionId)
+		if req.ValueId.ConfigId != modelConfigID {
+			return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("unsupported config option: %s", req.ValueId.ConfigId)
+		}
+		providerName = string(req.ValueId.Value)
+	case req.Boolean != nil:
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("boolean config options are not supported")
+	default:
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("missing config option value")
+	}
+
+	if sessionID == "" {
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("session ID is required")
+	}
+
+	sess, ok := t.sessions.Get(sessionID)
+	if !ok {
+		return acp.SetSessionConfigOptionResponse{}, fmt.Errorf("session not found: %s", sessionID)
+	}
+
+	sess.mu.Lock()
+	defer sess.mu.Unlock()
+
+	if err := switchSessionModel(sess, providerName); err != nil {
+		return acp.SetSessionConfigOptionResponse{}, err
+	}
+
+	// Build the config option once; send as notification and return in response.
+	sessConfigOption, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+	sendModelConfigOption(t.conn, sessConfigOption, sess.ID)
+
+	configOptions := []acp.SessionConfigOption{}
+	if sessConfigOption != nil {
+		configOptions = append(configOptions, *sessConfigOption)
+	}
+	return acp.SetSessionConfigOptionResponse{
+		ConfigOptions: configOptions,
+	}, nil
 }
 
 // SetSessionMode is a stub — not yet supported.

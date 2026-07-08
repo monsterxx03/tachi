@@ -36,7 +36,7 @@ type Def struct {
 var Registry = []Def{
 	{Name: "new", Description: "Start new conversation", Modes: []Mode{ModeTUI, ModeChannel}},
 	{Name: "quit", Description: "Exit tachi", Modes: []Mode{ModeTUI}},
-	{Name: "model", Description: "Switch provider/model", InputHint: "[name]", Modes: []Mode{ModeTUI, ModeChannel}},
+	{Name: "model", Description: "Switch provider/model", InputHint: "[name]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "commit", Description: "Generate commit message and commit via git", Modes: []Mode{ModeTUI, ModeACP}},
 	{Name: "compact", Description: "Compress conversation history into a summary", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "init", Description: "Generate .tachi.md project context file", Modes: []Mode{ModeTUI, ModeACP}},

@@ -37,15 +37,16 @@ type ACPSlashCommand struct {
 // ---------------------------------------------------------------------------
 
 var acpCommandHandlers = map[string]func(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error){
-	"commit":    handleACPCommit,
-	"review":    handleACPReview,
-	"init":      handleACPInit,
-	"compact":   handleACPCompact,
-	"usage":     handleACPUsage,
-	"mcp":       handleACPMCP,
-	"skill":     handleACPSkill,
+	"model":      handleACPModel,
+	"commit":     handleACPCommit,
+	"review":     handleACPReview,
+	"init":       handleACPInit,
+	"compact":    handleACPCompact,
+	"usage":      handleACPUsage,
+	"mcp":        handleACPMCP,
+	"skill":      handleACPSkill,
 	"transcript": handleACPTranscript,
-	"research":  handleACPResearch,
+	"research":   handleACPResearch,
 }
 
 // buildACPAvailableCommands builds the ACP AvailableCommand list from the
@@ -196,6 +197,39 @@ func resolveModelPrice(sess *ACPSession) *llm.ModelPrice {
 }
 
 // ---------------------------------------------------------------------------
+// /model handler
+// ---------------------------------------------------------------------------
+
+func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
+	sessionID := acp.SessionId(sess.ID)
+
+	// List available models if no args
+	if args == "" {
+		cur := sess.resolveProviderName()
+		var sb strings.Builder
+		sb.WriteString("Available models:\n")
+		for _, p := range sess.cfg.Providers {
+			sb.WriteString(fmt.Sprintf("  • %s (%s)", p.Name, p.Model))
+			if p.Name == cur {
+				sb.WriteString(" ← current")
+			}
+			sb.WriteString("\n")
+		}
+		sendTextUpdate(ctx, conn, sessionID, sb.String())
+		return acp.StopReasonEndTurn, nil
+	}
+
+	// Switch to named provider
+	if err := switchSessionModel(sess, args); err != nil {
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to switch model: %v", err))
+		return acp.StopReasonEndTurn, err
+	}
+
+	sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Switched to model: %s", args))
+	return acp.StopReasonEndTurn, nil
+}
+
+// ---------------------------------------------------------------------------
 // /commit handler
 // ---------------------------------------------------------------------------
 
@@ -300,7 +334,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType, sess.cfg)
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
 			if convErr == nil {
 				history = llmMsgs
 			} else {
@@ -571,7 +605,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	if sess.sessMgr != nil {
 		msgs, err := sess.sessMgr.LoadMessages()
 		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.providerType, sess.cfg)
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
 			if convErr == nil {
 				history = llmMsgs
 			} else {

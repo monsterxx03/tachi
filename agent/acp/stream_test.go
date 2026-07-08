@@ -12,8 +12,17 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
+
+// testConfig provides a minimal provider config for stream tests that need
+// ProviderType() to resolve from provider name.
+var testConfig = &config.Config{
+	Providers: []config.ProviderConfig{
+		{Name: "openai", Type: "openai", Model: "gpt-4o-mini"},
+	},
+}
 
 func TestMapToolKind(t *testing.T) {
 	assert.Equal(t, acp.ToolKindRead, mapToolKind("ReadFile"))
@@ -97,10 +106,10 @@ func setupSessionWithMessages(t *testing.T, cwd string, msgs []session.Message) 
 
 	// LoadMessages uses sm.current — already set by New
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          cwd,
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     cwd,
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	return sm, acpSess
@@ -128,10 +137,10 @@ func TestReplaySessionHistory_EmptyMessages(t *testing.T) {
 
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          "/empty",
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     "/empty",
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	replaySessionHistory(context.Background(), conn, acpSess)
@@ -373,10 +382,10 @@ func TestReplaySessionHistory_CachesHistory(t *testing.T) {
 
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          "/cache-test",
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     "/cache-test",
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	assert.Nil(t, acpSess.history, "history should start nil")
@@ -426,10 +435,10 @@ func TestReplaySessionHistory_CachesHistory_WithTools(t *testing.T) {
 
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          "/cache-tools",
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     "/cache-tools",
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	replaySessionHistory(context.Background(), conn, acpSess)
@@ -476,10 +485,10 @@ func TestReplaySessionHistory_CachesHistory_ConversionFailure(t *testing.T) {
 
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          "/cache-fail",
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     "/cache-fail",
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	// Should not panic
@@ -511,10 +520,10 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 			conn, w, ch := mockACPConn(t)
 
 			acpSess := &ACPSession{
-				ID:           sess.ID,
-				cwd:          "/concurrent",
-				providerType: "openai",
-				sessMgr:      sm,
+				ID:      sess.ID,
+				cwd:     "/concurrent",
+				cfg:     testConfig,
+				sessMgr: sm,
 			}
 
 			// Should not panic or race
@@ -544,10 +553,10 @@ func TestReplaySessionHistory_LoadMessagesError(t *testing.T) {
 
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          "/load-err",
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     "/load-err",
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	// Should not panic — LoadMessages will error because current is nil
@@ -580,10 +589,10 @@ func TestReplaySessionHistory_DoesNotCacheOnConversionFailure(t *testing.T) {
 
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
-		ID:           sess.ID,
-		cwd:          "/conv-fail",
-		providerType: "openai",
-		sessMgr:      sm,
+		ID:      sess.ID,
+		cwd:     "/conv-fail",
+		cfg:     testConfig,
+		sessMgr: sm,
 	}
 
 	replaySessionHistory(context.Background(), conn, acpSess)

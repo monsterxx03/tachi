@@ -15,10 +15,9 @@ import (
 
 // ACPSession represents a single ACP session with its own AIAgent instance.
 type ACPSession struct {
-	ID           string
-	cwd          string
-	providerType string
-	cfg          *config.Config // for slash command handler access (provider resolution, language, etc.)
+	ID  string
+	cwd string
+	cfg *config.Config // for slash command handler access (provider resolution, language, etc.)
 
 	agent   *agent.AIAgent
 	mcpMgr  *mcp.Manager
@@ -72,7 +71,6 @@ func NewACPSessionManager() *ACPSessionManager {
 func (sm *ACPSessionManager) New(
 	parentCtx context.Context,
 	cwd string,
-	providerType string,
 	cfg *config.Config,
 	aiAgent *agent.AIAgent,
 	mcpMgr *mcp.Manager,
@@ -91,15 +89,14 @@ func (sm *ACPSessionManager) New(
 	}
 
 	sess := &ACPSession{
-		ID:           id,
-		cwd:          cwd,
-		providerType: providerType,
-		cfg:          cfg,
-		agent:        aiAgent,
-		mcpMgr:       mcpMgr,
-		sessMgr:      sessMgr,
-		ctx:          sessCtx,
-		cancel:       sessCancel,
+		ID:      id,
+		cwd:     cwd,
+		cfg:     cfg,
+		agent:   aiAgent,
+		mcpMgr:  mcpMgr,
+		sessMgr: sessMgr,
+		ctx:     sessCtx,
+		cancel:  sessCancel,
 	}
 
 	sm.mu.Lock()
@@ -107,6 +104,45 @@ func (sm *ACPSessionManager) New(
 	sm.mu.Unlock()
 
 	return sess
+}
+
+// resolveProviderName returns the configured provider name for this session.
+// It prefers the persisted session metadata; if unavailable, it falls back to
+// matching the live agent's type/model against the configured providers.
+func (s *ACPSession) resolveProviderName() string {
+	if s.sessMgr != nil {
+		if cur := s.sessMgr.Current(); cur != nil && cur.ProviderName != "" {
+			return cur.ProviderName
+		}
+	}
+
+	// Fallback: find a provider config matching the live agent type/model.
+	if s.cfg != nil && s.agent != nil && s.agent.Provider() != nil {
+		pType := s.agent.Provider().Name()
+		pModel := s.agent.Model()
+		for _, p := range s.cfg.Providers {
+			if p.Type == pType && p.Model == pModel && p.Name != "" {
+				return p.Name
+			}
+		}
+	}
+
+	return ""
+}
+
+// ProviderType returns the LLM provider type (e.g. "openai", "anthropic")
+// for this session. It prefers the live agent provider; if unavailable, it
+// falls back to looking up the resolved provider name in the config.
+func (s *ACPSession) ProviderType() string {
+	if s.agent != nil && s.agent.Provider() != nil {
+		return s.agent.Provider().Name()
+	}
+	if s.cfg != nil {
+		if p := s.cfg.FindProvider(s.resolveProviderName()); p != nil {
+			return p.Type
+		}
+	}
+	return ""
 }
 
 // Get retrieves a session by ID.
