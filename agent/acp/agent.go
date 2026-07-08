@@ -108,7 +108,6 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	// Create independent AIAgent (no iteration limit for ACP sessions)
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
-	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	// Don't set steer channel — ACP doesn't use mid-turn injection
 
@@ -119,6 +118,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	configureCtx := context.Background()
 	mcpMgr, err := aiAgent.Configure(configureCtx, t.cfg)
 	if err != nil {
+	aiAgent.SetACPFileMode()
 		t.logger.Log("ACP: agent configure warning: %v", err)
 	}
 
@@ -424,7 +424,6 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
-	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Use context.Background() so MCP async init is not tied to the SDK
@@ -432,6 +431,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	configureCtx := context.Background()
 	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
 	if cfgErr != nil {
+	aiAgent.SetACPFileMode()
 		t.logger.Log("ACP: resume configure warning: %v", cfgErr)
 	}
 
@@ -543,7 +543,6 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	// Create independent AIAgent
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
-	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Configure agent (registers tools, connects MCP, sets up memory/skills).
@@ -552,6 +551,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	configureCtx := context.Background()
 	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
 	if cfgErr != nil {
+	aiAgent.SetACPFileMode()
 		t.logger.Log("ACP: LoadSession configure warning: %v", cfgErr)
 	}
 
