@@ -100,7 +100,7 @@ func TestStubMethods_ReturnEmpty(t *testing.T) {
 
 	t.Run("SetSessionMode", func(t *testing.T) {
 		resp, err := ta.SetSessionMode(context.Background(), acp.SetSessionModeRequest{})
-		assert.NoError(t, err)
+		assert.Error(t, err) // no session exists
 		assert.Empty(t, resp)
 	})
 }

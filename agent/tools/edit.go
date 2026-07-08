@@ -42,6 +42,7 @@ func (t *EditTool) Description() string {
 	return "Performs exact string replacements in files. Specify old_string to find and new_string to replace with. " +
 		"Use replace_all to replace all occurrences. To create a new file, use an empty old_string."
 }
+func (t *EditTool) IsDestructive() bool { return true }
 func (t *EditTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":        {Type: "string", Description: "The absolute path to the file to modify"},

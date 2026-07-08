@@ -161,6 +161,12 @@ type AIAgent struct {
 	// loop began. Set at the top of runAgentLoop and used by finish handlers
 	// to compute the turn's total duration for the RunResult.
 	turnStart time.Time
+
+	// Session mode (e.g. "auto", "chat"). Affects tool visibility.
+	mode string
+	// savedTools holds destructive tool instances when in chat mode,
+	// so they can be restored when switching back to auto mode.
+	savedTools map[string]tools.Tool
 }
 
 func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
@@ -173,6 +179,8 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 		confirmRespCh:   make(chan bool, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		logger:          debuglog.DefaultLogger,
+		mode:            ModeAuto,
+		savedTools:      make(map[string]tools.Tool),
 	}
 }
 

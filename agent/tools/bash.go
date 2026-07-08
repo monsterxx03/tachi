@@ -48,7 +48,8 @@ func NewBashTool(pm *ProcessManager) *BashTool {
 	return &BashTool{processManager: pm}
 }
 
-func (t BashTool) Name() string { return ToolNameBash }
+func (t BashTool) Name() string        { return ToolNameBash }
+func (t BashTool) IsDestructive() bool { return true }
 func (t BashTool) Description() string {
 	return "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +

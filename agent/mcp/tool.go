@@ -32,6 +32,23 @@ func (t MCPTool) Description() string {
 	return fmt.Sprintf("[MCP:%s] %s", t.serverName, t.serverTool.Description)
 }
 
+// IsDestructive returns true if the MCP tool may modify system state.
+// It reads the tool's annotations from the MCP protocol:
+//   - If ReadOnlyHint is true → not destructive
+//   - If DestructiveHint is explicitly false → not destructive
+//   - Otherwise → conservative default (assume destructive)
+func (t MCPTool) IsDestructive() bool {
+	a := t.serverTool.Annotations
+	if a.ReadOnlyHint != nil && *a.ReadOnlyHint {
+		return false
+	}
+	if a.DestructiveHint != nil && !*a.DestructiveHint {
+		return false
+	}
+	// No annotations or DestructiveHint=true → assume destructive.
+	return true
+}
+
 // Properties converts the MCP input schema to the Tachi PropertySchema format.
 func (t MCPTool) Properties() map[string]tools.PropertySchema {
 	result := make(map[string]tools.PropertySchema)

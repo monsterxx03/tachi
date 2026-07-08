@@ -6,6 +6,7 @@ import (
 
 	acp "github.com/coder/acp-go-sdk"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/debuglog"
@@ -19,15 +20,6 @@ const (
 	// modelConfigDescription is shown to the user to explain the option.
 	modelConfigDescription = "The LLM provider/model to use for this session."
 )
-
-// configOptionSlice returns a non-nil config option slice for inclusion in
-// session responses.
-func configOptionSlice(opt *acp.SessionConfigOption) []acp.SessionConfigOption {
-	if opt == nil {
-		return nil
-	}
-	return []acp.SessionConfigOption{*opt}
-}
 
 // buildModelConfigOption builds a SessionConfigOption (select) exposing the
 // configured providers as selectable model values.
@@ -72,6 +64,45 @@ func buildModelConfigOption(cfg *config.Config, currentProviderName string) (*ac
 	sessionConfigOption.Select.Description = new(modelConfigDescription)
 
 	return &sessionConfigOption, currentValue
+}
+
+// buildModeConfigOption builds a SessionConfigOption (select) exposing the
+// available session modes (auto, chat) as selectable values.
+// Returns nil if modes aren't configured (shouldn't happen in practice).
+func buildModeConfigOption(currentMode string) *acp.SessionConfigOption {
+	const (
+		modeConfigID          = "mode"
+		modeConfigName        = "Mode"
+		modeConfigDescription = "The operating mode for this session — Auto (full tool access) or Chat (read-only)"
+	)
+
+	category := acp.SessionConfigOptionCategoryMode
+	options := []acp.SessionConfigSelectOption{
+		{Value: acp.SessionConfigValueId(agent.ModeAuto), Name: "Auto"},
+		{Value: acp.SessionConfigValueId(agent.ModeChat), Name: "Chat"},
+	}
+
+	opt := acp.NewSessionConfigOptionSelect(
+		acp.SessionConfigValueId(currentMode),
+		acp.SessionConfigSelectOptions{Ungrouped: (*acp.SessionConfigSelectOptionsUngrouped)(&options)},
+	)
+	opt.Select.Id = acp.SessionConfigId(modeConfigID)
+	opt.Select.Name = modeConfigName
+	opt.Select.Category = &category
+	desc := modeConfigDescription
+	opt.Select.Description = &desc
+
+	return &opt
+}
+
+// sendModeConfigOption sends the mode config option as a SessionUpdate
+// notification to the ACP client.
+func sendModeConfigOption(conn *acp.AgentSideConnection, currentMode string, sessionID string) {
+	if conn == nil {
+		return
+	}
+	opt := buildModeConfigOption(currentMode)
+	sendModelConfigOption(conn, opt, sessionID)
 }
 
 // sendModelConfigOption sends a pre-built session config option as a

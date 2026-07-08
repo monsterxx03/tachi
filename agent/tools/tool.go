@@ -59,6 +59,14 @@ type SubagentIDCarrier interface {
 	LastSubagentID() string
 }
 
+// DestructiveDetector is an optional interface for tools that modify system
+// state (files, processes, external services). In chat/read-only modes,
+// tools implementing this interface and returning true are hidden from the LLM.
+type DestructiveDetector interface {
+	// IsDestructive returns true if this tool can modify system state.
+	IsDestructive() bool
+}
+
 type ToolResultStatus int
 
 const (
