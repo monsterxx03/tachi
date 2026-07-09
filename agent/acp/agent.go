@@ -189,9 +189,10 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 					},
 				},
 			})
-			// Also advertise the model/config option so clients can switch models.
-			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
-			sendModeConfigOption(t.conn, agent.ModeAuto, sess.ID)
+			// Also advertise model and mode config options so clients can switch.
+			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+			modeOpt := buildModeConfigOption(agent.ModeAuto)
+			sendConfigOptionsUpdate(t.conn, sess.ID, modelOpt, modeOpt)
 		}
 	})
 
@@ -469,7 +470,9 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	// Defer config option notification to avoid race condition on the client side.
 	time.AfterFunc(0, func() {
 		if t.conn != nil {
-			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
+			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+			modeOpt := buildModeConfigOption(agent.ModeAuto)
+			sendConfigOptionsUpdate(t.conn, sess.ID, modelOpt, modeOpt)
 		}
 	})
 
@@ -640,9 +643,10 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 					},
 				},
 			})
-			// Also advertise the model/config option so clients can switch models.
-			sendModelConfigUpdate(t.conn, sess.cfg, sess.resolveProviderName(), sess.ID)
-			sendModeConfigOption(t.conn, agent.ModeAuto, sess.ID)
+			// Also advertise model and mode config options so clients can switch.
+			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+			modeOpt := buildModeConfigOption(agent.ModeAuto)
+			sendConfigOptionsUpdate(t.conn, sess.ID, modelOpt, modeOpt)
 		}
 	})
 
@@ -749,8 +753,7 @@ func (t *TachiAgent) SetSessionConfigOption(_ context.Context, req acp.SetSessio
 	if modeOpt != nil {
 		configOptions = append(configOptions, *modeOpt)
 	}
-	sendModelConfigOption(t.conn, sessConfigOption, sess.ID)
-	sendModeConfigOption(t.conn, sess.agent.Mode(), sess.ID)
+	sendConfigOptionsUpdate(t.conn, sess.ID, sessConfigOption, modeOpt)
 
 	return acp.SetSessionConfigOptionResponse{
 		ConfigOptions: configOptions,
