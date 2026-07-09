@@ -102,27 +102,38 @@ func sendModeConfigOption(conn *acp.AgentSideConnection, currentMode string, ses
 		return
 	}
 	opt := buildModeConfigOption(currentMode)
-	sendModelConfigOption(conn, opt, sessionID)
+	sendConfigOptionsUpdate(conn, sessionID, opt)
 }
 
-// sendModelConfigOption sends a pre-built session config option as a
-// SessionUpdate notification to the ACP client.
-func sendModelConfigOption(conn *acp.AgentSideConnection, opt *acp.SessionConfigOption, sessionID string) {
-	if conn == nil || opt == nil {
+// sendModelConfigOption sends one or more pre-built session config options as
+// a SessionUpdate notification to the ACP client. All options are sent in a
+// single update to avoid later updates overwriting earlier ones — the protocol
+// treats ConfigOptionUpdate as a full replacement, not a delta.
+func sendConfigOptionsUpdate(conn *acp.AgentSideConnection, sessionID string, opts ...*acp.SessionConfigOption) {
+	if conn == nil {
+		return
+	}
+	configOpts := make([]acp.SessionConfigOption, 0, len(opts))
+	for _, opt := range opts {
+		if opt != nil {
+			configOpts = append(configOpts, *opt)
+		}
+	}
+	if len(configOpts) == 0 {
 		return
 	}
 	_ = conn.SessionUpdate(context.Background(), acp.SessionNotification{
 		SessionId: acp.SessionId(sessionID),
 		Update: acp.SessionUpdate{
 			ConfigOptionUpdate: &acp.SessionConfigOptionUpdate{
-				ConfigOptions: []acp.SessionConfigOption{*opt},
+				ConfigOptions: configOpts,
 			},
 		},
 	})
 }
 
 // sendModelConfigUpdate builds the model config option and sends it to the
-// ACP client. This is a convenience wrapper around sendModelConfigOption used
+// ACP client. This is a convenience wrapper around sendConfigOptionsUpdate used
 // by NewSession / LoadSession / ResumeSession where the option isn't otherwise
 // needed by the caller.
 func sendModelConfigUpdate(conn *acp.AgentSideConnection, cfg *config.Config, currentProviderName, sessionID string) {
@@ -130,7 +141,7 @@ func sendModelConfigUpdate(conn *acp.AgentSideConnection, cfg *config.Config, cu
 		return
 	}
 	opt, _ := buildModelConfigOption(cfg, currentProviderName)
-	sendModelConfigOption(conn, opt, sessionID)
+	sendConfigOptionsUpdate(conn, sessionID, opt)
 }
 
 // toACPUsage converts Tachi's llm.Usage to ACP's PromptResponse usage format.
