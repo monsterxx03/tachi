@@ -427,9 +427,36 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	return llmMsgs, sessionMsgs, latest, nil
 }
 
+// backgroundTaskProvider adapts *tools.ProcessManager to
+// systemreminder.BackgroundTaskProvider for the BackgroundTaskReminder.
+type backgroundTaskProvider struct {
+	pm *tools.ProcessManager
+}
+
+func (p *backgroundTaskProvider) DrainCompleted() []systemreminder.BackgroundTaskInfo {
+	if p.pm == nil {
+		return nil
+	}
+	completed := p.pm.DrainCompleted()
+	infos := make([]systemreminder.BackgroundTaskInfo, len(completed))
+	for i, c := range completed {
+		infos[i] = systemreminder.BackgroundTaskInfo{
+			Name:         c.Name,
+			Command:      c.Command,
+			ExitCode:     c.ExitCode,
+			Status:       string(c.Status),
+			Error:        c.Error,
+			RecentStdout: c.RecentStdout,
+			RecentStderr: c.RecentStderr,
+		}
+	}
+	return infos
+}
+
 // buildReminderCollector builds the reminder collector with core reminders,
-// the live skill list reminder, and MemoryRecallReminder (if memory is
-// configured). Called once during Configure after sub-systems are initialized.
+// the live skill list reminder, BackgroundTaskReminder, and
+// MemoryRecallReminder (if memory is configured).
+// Called once during Configure after sub-systems are initialized.
 func (a *AIAgent) buildReminderCollector() {
 	core := []systemreminder.Reminder{
 		systemreminder.DateReminder{},
@@ -441,9 +468,12 @@ func (a *AIAgent) buildReminderCollector() {
 		core = append(core, systemreminder.GitReminder{})
 	}
 
-	all := make([]systemreminder.Reminder, 0, len(core)+2)
+	all := make([]systemreminder.Reminder, 0, len(core)+3)
 	all = append(all, core...)
 	all = append(all, a.skillListReminder)
+	all = append(all, &systemreminder.BackgroundTaskReminder{
+		Provider: &backgroundTaskProvider{pm: a.processManager},
+	})
 	if a.memory != nil {
 		limit := a.cfg.Memory.RecallLimit
 		if limit <= 0 {
