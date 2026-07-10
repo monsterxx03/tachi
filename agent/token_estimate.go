@@ -1,21 +1,89 @@
 package agent
 
 import (
+	"unicode/utf8"
+
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
 
-// approxTokenCount estimates the number of tokens in a string using the
-// chars/4 heuristic. This is the same approach used by Pi Agent, Crush
-// (OpenCode Go), and anomalyco/opencode (TypeScript). It deliberately
-// overestimates to provide conservative context window warnings.
+// charsPerToken is the approximate number of ASCII alphanumeric characters
+// per token in BPE tokenizers (cl100k_base, etc.). Anthropic's recommended
+// heuristic is ~3.5, using 4 gives a slight overestimate which is desirable
+// for conservative context window warnings.
+const charsPerToken = 4
+
+// approxTokenCount estimates the number of tokens in a string using
+// character-class-aware heuristics that approximate BPE tokenizer behaviour
+// (cl100k_base / o200k_base). It is more accurate than a naive chars/4
+// approach for mixed CJK/English text and punctuation-heavy content (JSON,
+// code, tool arguments) while remaining conservative for plain English prose.
 //
-//	chars/4 = ~3.5 English chars per token (Anthropic's recommended heuristic)
-//	(len(s) + 3) / 4 = integer ceil(len/4) in Go
+// Rules:
+//   - ASCII letters/digits: chars/4 (words tend to merge into 1 token)
+//   - ASCII punctuation/symbols: 1 token each (punctuation almost always
+//     gets its own token in BPE tokenizers)
+//   - CJK characters (Hanzi, Hiragana, Katakana, Hangul): 1 token each
+//     (CJK characters tokenize roughly 1:1)
+//   - Whitespace: 0 tokens (leading whitespace is merged into the next
+//     token in most tokenizers)
+//   - Other Unicode: byte-length/4 (fallback for emoji, symbols, etc.)
 func approxTokenCount(s string) int64 {
-	return int64((len(s) + 3) / 4)
+	var total int64
+	var asciiWordLen int // consecutive ASCII alphanumeric chars
+
+	flushWord := func() {
+		if asciiWordLen > 0 {
+			total += int64((asciiWordLen + charsPerToken - 1) / charsPerToken)
+			asciiWordLen = 0
+		}
+	}
+
+	for _, r := range s {
+		if r <= 0x7F {
+			if isASCIIAlphaNum(r) {
+				asciiWordLen++
+			} else {
+				flushWord()
+				if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+					// Whitespace: merged into next token, negligible cost
+				} else {
+					// Punctuation/symbol: typically gets its own token
+					total++
+				}
+			}
+		} else {
+			flushWord()
+			if isCJK(r) {
+				total++ // ~1 token per CJK character
+			} else {
+				// Other Unicode: approximate by byte length
+				total += int64((utf8.RuneLen(r) + charsPerToken - 1) / charsPerToken)
+			}
+		}
+	}
+	flushWord()
+
+	return total
+}
+
+// isASCIIAlphaNum reports whether r is an ASCII letter or digit.
+func isASCIIAlphaNum(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
+}
+
+// isCJK reports whether r is a CJK character (Chinese/Japanese/Korean).
+// Covers the most common Unicode blocks: CJK Unified Ideographs, Hiragana,
+// Katakana, and Hangul.
+func isCJK(r rune) bool {
+	return (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified Ideographs
+		(r >= 0x3400 && r <= 0x4DBF) || // CJK Unified Ideographs Extension A
+		(r >= 0x20000 && r <= 0x2A6DF) || // CJK Unified Ideographs Extension B
+		(r >= 0x3040 && r <= 0x309F) || // Hiragana
+		(r >= 0x30A0 && r <= 0x30FF) || // Katakana
+		(r >= 0xAC00 && r <= 0xD7AF) // Hangul Syllables
 }
 
 // EstimateContentTokens converts session messages to llm.Message (via

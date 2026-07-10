@@ -30,17 +30,19 @@ func TestApproxTokenCount_Boundary(t *testing.T) {
 }
 
 func TestApproxTokenCount_CJK(t *testing.T) {
-	// "你好" is 6 bytes (3 bytes each in UTF-8)
-	// (6+3)/4 = 2
+	// "你好" is 2 CJK chars → 2 tokens (1:1 tokenization)
 	assert.Equal(t, int64(2), approxTokenCount("你好"))
-	// "你好世界" is 12 bytes
-	// (12+3)/4 = 3
-	assert.Equal(t, int64(3), approxTokenCount("你好世界"))
+	// "你好世界" is 4 CJK chars → 4 tokens (old chars/4 gave 3, was an underestimate)
+	assert.Equal(t, int64(4), approxTokenCount("你好世界"))
 }
 
 func TestApproxTokenCount_Long(t *testing.T) {
-	// 100 chars → (100+3)/4 = 25
-	s := string(make([]byte, 100))
+	// 100 ASCII alphanumeric chars in one word → (100+3)/4 = 25
+	var buf [100]byte
+	for i := range buf {
+		buf[i] = 'x'
+	}
+	s := string(buf[:])
 	assert.Equal(t, int64(25), approxTokenCount(s))
 }
 
@@ -58,9 +60,10 @@ func TestEstimateInputTokens_Empty(t *testing.T) {
 
 func TestEstimateInputTokens_SystemPromptOnly(t *testing.T) {
 	tb := estimateInputTokens(nil, "You are a helpful assistant.", nil)
-	// (27+3)/4 = 7
-	assert.Equal(t, int64(7), tb.Total)
-	assert.Equal(t, int64(7), tb.SystemPrompt)
+	// "You"=1 + "are"=1 + "a"=1 + "helpful"=2 + "assistant"=3 + "."=1 = 9
+	// (old chars/4 gave 7, underestimated punctuation)
+	assert.Equal(t, int64(9), tb.Total)
+	assert.Equal(t, int64(9), tb.SystemPrompt)
 	assert.Equal(t, int64(0), tb.InternalTools)
 	assert.Equal(t, int64(0), tb.MCPTools)
 }
@@ -70,10 +73,11 @@ func TestEstimateInputTokens_SingleUserMessage(t *testing.T) {
 		{Role: "user", Content: "Hello, world!"},
 	}
 	tb := estimateInputTokens(msgs, "", nil)
-	// role "user" = (4+3)/4 = 1
-	// content "Hello, world!" = (13+3)/4 = 4
-	assert.Equal(t, int64(5), tb.Total)
-	assert.Equal(t, int64(5), tb.UserMessages)
+	// role "user" = 1 (4 alphanumeric chars)
+	// content: "Hello"=2 + ","=1 + "world"=2 + "!"=1 = 6
+	// Total = 1 + 6 = 7 (old chars/4 gave 5, underestimated punctuation)
+	assert.Equal(t, int64(7), tb.Total)
+	assert.Equal(t, int64(7), tb.UserMessages)
 	assert.Equal(t, int64(0), tb.AssistantMessages)
 }
 
@@ -138,13 +142,14 @@ func TestEstimateInputTokens_ToolSchemas(t *testing.T) {
 	tb := estimateInputTokens(nil, "", schemas)
 	assert.Greater(t, tb.Total, int64(0))
 
-	// tool overhead: 2*4 = 8
-	// Read: name(4/4=1) + desc(11/4=3) + prop name "path"(4/4=1) + prop desc(18/4=5) + 1 prop*8 = 18
-	// EditFile: name(8/4=2) + desc(19/4=5) + "path"(4/4=1+11/4=3) + "content"(7/4=2+11/4=3) + "old_string"(10/4=3+16/4=4) + 3*8 = 47
+	// Read: name=1 + desc("Read"=1+"a"=1+"file"=1)=3 + prop("path"=1 + desc("File"=1+"path"=1+"to"=1+"read"=1)=4) + overhead 8 = 17
+	// EditFile: name=2 + desc("Edit"=1+"or"=1+"create"=2+"files"=2)=6
+	//   + "path"(1+desc("Target"=2+"file"=1)=3) + "content"(2+desc("New"=1+"content"=2)=3)
+	//   + "old_string"("old"=1+"_"=1+"string"=2=4 + desc("Text"=1+"to"=1+"replace"=2)=4) + 3*8 overhead = 49
 	// tool array overhead: 2*4 = 8
-	// Total: 18+47+8 = 73
-	assert.Equal(t, int64(73), tb.Total)
-	assert.Equal(t, int64(73), tb.InternalTools, "both tools are built-in (no mcp__ prefix)")
+	// Total: 17+49+8 = 74
+	assert.Equal(t, int64(74), tb.Total)
+	assert.Equal(t, int64(74), tb.InternalTools, "both tools are built-in (no mcp__ prefix)")
 	assert.Equal(t, int64(0), tb.MCPTools)
 	assert.Equal(t, int64(0), tb.SystemPrompt)
 	assert.Equal(t, int64(0), tb.UserMessages)
@@ -240,10 +245,11 @@ func TestEstimateInputTokens_ToolCallID(t *testing.T) {
 		{Role: "tool", ToolCallID: "toolu_abc123def456", Content: "result data"},
 	}
 	tb := estimateInputTokens(msgs, "", nil)
-	// role "tool" = 4 → (4+3)/4 = 1
-	// content "result data" = 11 → (11+3)/4 = 3
-	// tool_call_id "toolu_abc123def456" = 18 → (18+3)/4 = 5
-	assert.Equal(t, int64(9), tb.Total)
+	// role "tool" = 1 (4 alphanumeric chars)
+	// content: "result"=2 + "data"=1 = 3
+	// tool_call_id: "toolu"=2 + "_"=1 + "abc123def456"=3 = 6
+	// Total = 1 + 3 + 6 = 10 (old chars/4 gave 9)
+	assert.Equal(t, int64(10), tb.Total)
 	// Role "tool" is not "user" or "assistant", so it appears only in Total
 	assert.Equal(t, int64(0), tb.UserMessages)
 	assert.Equal(t, int64(0), tb.AssistantMessages)
@@ -261,13 +267,13 @@ func TestEstimateInputTokens_ContentPartsWithTextAndImage(t *testing.T) {
 	tb := estimateInputTokens(msgs, "", nil)
 	assert.Greater(t, tb.Total, int64(0))
 
-	// Verify both text and image parts are counted
-	// text part: type "text" = 4 → (4+3)/4 = 1; text "What's in this image?" = 21 → (21+3)/4 = 6
-	// image part: type "image" = 5 → (5+3)/4 = 2
-	// role "user" = 4 → (4+3)/4 = 1
-	// Total: 6+1+2+1 = 10
-	assert.Equal(t, int64(10), tb.Total)
-	assert.Equal(t, int64(10), tb.UserMessages)
+	// text part: type "text"=1 + text "What's in this image?"
+	//   "What"=1 + "'"=1 + "s"=1 + "in"=1 + "this"=1 + "image"=2 + "?"=1 = 8
+	// image part: type "image"=2 + text ""=0 = 2
+	// role "user" = 1
+	// Total: 1 + 8 + 2 + 1 = 12 (old chars/4 gave 10)
+	assert.Equal(t, int64(12), tb.Total)
+	assert.Equal(t, int64(12), tb.UserMessages)
 }
 
 // TestEstimateAndUpdateTokens verifies that the method calls through correctly
