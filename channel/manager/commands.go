@@ -675,7 +675,31 @@ func (m *Manager) handleSkillReload() (string, error) {
 	m.skillStore = skill.NewStoreWithDirs(m.skillStore.Dirs(), m.skillStore.Sources())
 	metas := m.skillStore.List()
 
+	// Propagate the reload to all cached agents so their SkillListReminder
+	// re-fires and the skill tool uses the updated store.
+	m.reloadAgentSkills()
+
 	return fmt.Sprintf("Skills 已重新加载 — 发现 %d 个 skill(s)", len(metas)), nil
+}
+
+// reloadAgentSkills calls ReloadSkills on every cached AIAgent so the new
+// skill store is picked up, the SkillListReminder is marked dirty, and the
+// skill tool is re-registered with the updated store.
+//
+// Lock ordering: agentCacheMu → ca.mu (consistent with acquireAgent and
+// evictAllAgents). Each ca.mu is acquired and released individually so that
+// agents in use on other threads are naturally serialized.
+func (m *Manager) reloadAgentSkills() {
+	m.agentCacheMu.Lock()
+	defer m.agentCacheMu.Unlock()
+	for _, ca := range m.agentCache {
+		ca.mu.Lock()
+		if ca.agent != nil {
+			ca.agent.ReloadSkills()
+		}
+		ca.mu.Unlock()
+	}
+	m.logger.Log("channel: skill reload propagated to %d cached agent(s)", len(m.agentCache))
 }
 
 // prepareSkillActivation builds the user message content for skill activation.
