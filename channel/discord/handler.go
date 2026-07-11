@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
@@ -91,7 +92,44 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 	stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
 	defer stopTyping()
 
-	// 11. Delegate to the manager handler.
+	// 11. Send a status embed and set up streaming callback for
+	// real-time progress updates (tool calls, response text).
+	var embedMsgID string
+	sess := ch.session
+	if sess != nil {
+		embed := &discordgo.MessageEmbed{
+			Title:       "🤖 Tachi",
+			Description: "⏳ 正在处理...",
+			Color:       0x3498DB,
+		}
+		sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, embed)
+		if err == nil {
+			embedMsgID = sent.ID
+
+			// Wire a streaming callback into the context so drainEvents
+			// pushes tool call progress to the embed in real time.
+			var toolBuf strings.Builder
+			ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
+				if strings.HasPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ") {
+					// Format: "\n\n> <font color=\"comment\">🔧 ToolName args</font>\n\n"
+					cleaned := strings.TrimPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ")
+					if idx := strings.Index(cleaned, "</font>"); idx >= 0 {
+						cleaned = cleaned[:idx]
+					}
+					toolBuf.WriteString("🔧 " + cleaned + "\n")
+
+					_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
+						Title:       "🤖 Tachi",
+						Description: "```\n" + toolBuf.String() + "```",
+						Color:       0x3498DB,
+					})
+				}
+				return nil
+			})
+		}
+	}
+
+	// 11.5 Delegate to the manager handler.
 	result := handler(ctx, incoming)
 
 	// 12. Process the result.
