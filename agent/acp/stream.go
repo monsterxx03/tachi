@@ -199,6 +199,11 @@ func streamToACP(
 				}
 
 			case agent.AgentEventError:
+				// Save partial messages so the next Prompt (e.g. Zed Steer)
+				// can resume from where we left off instead of starting over.
+				if event.Messages != nil {
+					sess.history = stripPendingToolCalls(event.Messages)
+				}
 				stopReason = acp.StopReasonEndTurn
 				if event.Result != nil && event.Result.Error != nil {
 					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
@@ -536,4 +541,43 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 	} else {
 		debuglog.DefaultLogger.Log("ACP: replaySessionHistory ConvertSessionToLLMMessages failed: %v", convErr)
 	}
+}
+
+// stripPendingToolCalls removes dangling ToolCalls from the last assistant
+// message when there are no corresponding tool results. This prevents API
+// errors when a cancelled turn's partial message history is reused as the
+// context for the next Prompt (e.g. Zed Steer).
+//
+// The agent loop accumulates messages incrementally:
+//  1. assistantMessage (with tool_calls) is appended BEFORE tool execution
+//  2. tool results are appended AFTER execution
+//
+// If cancellation happens during step 2, we'd have tool_calls without results
+// which violates the LLM API's alternating role requirement.
+func stripPendingToolCalls(msgs []llm.Message) []llm.Message {
+	if len(msgs) == 0 {
+		return msgs
+	}
+	cleaned := make([]llm.Message, len(msgs))
+	copy(cleaned, msgs)
+
+	// Walk backwards to find the last assistant message with tool_calls.
+	for i := len(cleaned) - 1; i >= 0; i-- {
+		if cleaned[i].Role != llm.RoleAssistant || len(cleaned[i].ToolCalls) == 0 {
+			continue
+		}
+		// Check if any tool result exists AFTER this message.
+		hasResults := false
+		for j := i + 1; j < len(cleaned); j++ {
+			if cleaned[j].Role == llm.RoleTool {
+				hasResults = true
+				break
+			}
+		}
+		if !hasResults {
+			cleaned[i].ToolCalls = nil
+		}
+		break // only the last assistant message matters
+	}
+	return cleaned
 }
