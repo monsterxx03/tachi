@@ -282,8 +282,8 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 		}
 	}
 
-	// Build system prompt (use session cwd for environment info)
-	systemPrompt := buildSystemPromptForCwd(t.cfg.Language, sess.cwd)
+	// Build system prompt (use session cwd and current mode for environment info)
+	systemPrompt := buildSystemPromptForCwd(t.cfg.Language, sess.cwd, sess.agent.Mode())
 
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{
@@ -658,6 +658,11 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	// all message history before considering the session ready.
 	if loaded != nil && t.conn != nil {
 		replaySessionHistory(context.Background(), t.conn, sess)
+		// After replaying history, compute the token estimate so the initial
+		// UsageUpdate (sent in the defer block below) has a non-zero value.
+		if sess.history != nil {
+			aiAgent.EstimateAndUpdateTokens(sess.history)
+		}
 	}
 
 	// Defer available commands notification (see NewSession for rationale)

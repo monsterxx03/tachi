@@ -443,6 +443,9 @@ func (a *AIAgent) RegisterTools() {
 		a.toolRegistry.Register(tools.NewRecordMemoryTool(a))
 		a.toolRegistry.Register(tools.NewMemoryRecallTool(a.memory.Backend))
 	}
+
+	// save_plan — always registered (used in plan mode, optional in auto mode)
+	a.toolRegistry.Register(tools.SavePlanTool{})
 }
 
 func (a *AIAgent) RegisterTool(tool tools.Tool) {

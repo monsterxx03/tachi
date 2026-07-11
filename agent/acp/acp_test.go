@@ -159,7 +159,7 @@ func TestLoadSession_CreatesNewSession(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Modes)
 	assert.Equal(t, acp.SessionModeId(agent.ModeAuto), resp.Modes.CurrentModeId)
-	assert.Len(t, resp.Modes.AvailableModes, 2)
+	assert.Len(t, resp.Modes.AvailableModes, 3)
 }
 
 func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
@@ -194,7 +194,7 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, resp.Modes)
 	assert.Equal(t, acp.SessionModeId(agent.ModeAuto), resp.Modes.CurrentModeId)
-	assert.Len(t, resp.Modes.AvailableModes, 2)
+	assert.Len(t, resp.Modes.AvailableModes, 3)
 
 	// Verify the ACP session was created with the same disk session ID
 	acpSess, ok := ta.sessions.Get(sessID)

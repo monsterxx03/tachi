@@ -315,7 +315,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 		}
 
-		a.estimateAndUpdateTokens(messages)
+		a.EstimateAndUpdateTokens(messages)
 		a.runAgentLoop(ctx, a.provider, messages, opts, ch)
 	}()
 
@@ -539,7 +539,7 @@ func (a *AIAgent) handleToolCallFinish(
 	}
 
 	// --- Loop Reminders: inject iteration/token warnings ---
-	a.estimateAndUpdateTokens(*messages)
+	a.EstimateAndUpdateTokens(*messages)
 	rctx := a.buildReminderContext(false, true)
 	// Populate tool names so reminders (e.g. LSPDiagnostics) can filter by tool.
 	rctx.ToolNames = make([]string, 0, len(acc.toolCalls))

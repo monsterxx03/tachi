@@ -47,7 +47,7 @@
 | Elicitation (交互式提问) | ❌ | AskUser 被注销 |
 | Boolean Config Options | ❌ | 不支持 |
 | 启发式进度更新 | ❌ | 纯文本 |
-| Usage 频率/丰富度 | ⚠️ 基础 | 仅在 TurnComplete 发一次 |
+| Usage 频率/丰富度 | ✅ | 2026-07-11 实现：AgentEventUsage + ToolResult + 初始会话均发送 |
 
 ### 2.2 增强方向一览
 
@@ -61,7 +61,7 @@
 | 6 | Steer 增强 | 中 | ⭐⭐⭐⭐ | Stable | ❌ |
 | 7 | Slash 命令完善 | 低-中 | ⭐⭐⭐ | N/A | ❌ |
 | 8 | Elicitation 准备 | 中 | ⭐⭐⭐（远期） | RFD (Preview) | ❌ |
-| 9 | Usage 增强 | 低 | ⭐⭐ | RFD | ❌ |
+| 9 | Usage 增强 | 低 | ⭐⭐ | RFD | ✅ 已实现 |
 | 10 | Boolean Config Options | 低 | ⭐⭐ | Stable | ❌ |
 
 ---
@@ -612,40 +612,46 @@ func (t *AskUserQuestionTool) ExecuteContext(ctx context.Context, args map[strin
 
 ---
 
-### 3.9 Usage 增强（Tier 3）
+### 3.9 Usage 增强（Tier 3）✅ 已实现（2026-07-11）
 
 **问题**：当前 `UsageUpdate` 只在 `TurnComplete` 时发送一次，包含 `Size`（context window）和 `Used`（last input estimate）。
 
-**改进**：
+**实现**：
 
-1. **发送时机增加**：在长时间运行的工具调用序列中，可以阶段性发送 usage update
-2. **内容增加**：如果 ACP 客户端支持，可以发送更详细的成本信息
+将 `AgentEventUsage`（每轮 API 调用后发射）从忽略名单中移出，现在会触发 UsageUpdate 发送。同时在每个 `AgentEventToolResult` 后也发送一次。并将内联的 UsageUpdate 发送逻辑提取为独立函数 `sendUsageUpdate`，在三个入口（`NewSession`/`ResumeSession`/`LoadSession`）的初始通知中也调用，确保 Zed 恢复会话后立即看到 context window 使用量。
 
 ```go
-// 当前实现
-{
-    "usageUpdate": {
-        "size": 200000,
-        "used": 45231
+// stream.go — 新增 sendUsageUpdate 辅助函数
+func sendUsageUpdate(conn *acp.AgentSideConnection, sessionID acp.SessionId, sess *ACPSession) {
+    cw := sess.agent.ContextWindow()
+    used := sess.agent.LastInputEstimate()
+    if used <= 0 || cw <= 0 {
+        return
     }
-}
-
-// 可扩展
-{
-    "usageUpdate": {
-        "size": 200000,
-        "used": 45231,
-        // 可选字段（需要检查 ACP 协议版本）
-        "cost": 0.0023,
-        "costCurrency": "CNY"
-    }
+    conn.SessionUpdate(ctx, acp.SessionNotification{
+        SessionId: sessionID,
+        Update: acp.SessionUpdate{
+            UsageUpdate: &acp.SessionUsageUpdate{
+                Size: int(cw),
+                Used: int(used),
+            },
+        },
+    })
 }
 ```
 
-**注意**：ACP 协议的 `UsageUpdate` 目前仅定义 `size` 和 `used` 字段。成本信息在 `session_usage` RFD 中讨论。扩展前需确认协议版本支持。
+**发送时机**：
+
+| 时机 | 事件/入口 | 说明 |
+|------|----------|------|
+| 每轮 API 调用后 | `AgentEventUsage` | 跟踪每次 LLM 请求后的累积消耗 |
+| 每个工具执行完后 | `AgentEventToolResult` | 工具执行后刷新使用量 |
+| 整轮对话完成时 | `AgentEventTurnComplete` | 原行为，保持不变 |
+| 创建/恢复/加载会话时 | `NewSession` / `ResumeSession` / `LoadSession` | 初始状态显示 |
 
 **文件变更**：
-- `agent/acp/stream.go` — 在 `AgentEventTurnComplete` 分支中增加更多 usage 信息
+- `agent/acp/stream.go` — 新增 `sendUsageUpdate` 函数，处理 `AgentEventUsage`，ToolResult 后调用，TurnComplete 改为调用函数
+- `agent/acp/agent.go` — 三个入口的初始通知中调用 `sendUsageUpdate`
 
 ---
 
@@ -701,7 +707,7 @@ case "compact_auto", "thinking_visible":
 
 | 文件 | 变更类型 | 对应方向 | 状态 |
 |------|----------|----------|------|
-| `agent/acp/stream.go` | 修改 | Plan, Diff in Result, Usage, Steer | ✅ Diff in Result 已完成 |
+| `agent/acp/stream.go` | 修改 | Plan, Diff in Result, Usage, Steer | ✅ Diff in Result + Usage 增强已完成 |
 | `agent/acp/agent.go` | 修改 | Session Delete, Terminal, Elicitation, Boolean | ✅ Session Delete 已完成 |
 | `agent/acp/commands.go` | 修改 | Slash 完善 | ❌ |
 | `agent/acp/model_config.go` | 修改 | Boolean Config | ❌ |
@@ -761,7 +767,7 @@ case "compact_auto", "thinking_visible":
 **Phase 3 — 前瞻性（可并行于 Phase 1/2）**
 - Elicitation 准备（中等，客户端就绪后自动生效）
 - Boolean Config Options（低，协议对齐）
-- Usage 增强（低，锦上添花）
+- Usage 增强（低，锦上添花）✅ 已完成
 
 ### 5.2 优先级建议
 
@@ -898,5 +904,5 @@ case "compact_auto", "thinking_visible":
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
-| 1.1 | 2026-07-11 | 实现 Session Delete、ReadFile ACP FS、Diff in Result、WriteFile SessionId bugfix；更新状态表 |
+| 1.1 | 2026-07-11 | 实现 Session Delete、ReadFile ACP FS、Diff in Result、Usage 增强、WriteFile SessionId bugfix；更新状态表；去除 Usage cost 内容 |
 | 1.0 | 2026-07-11 | 初始设计 |

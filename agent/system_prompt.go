@@ -95,3 +95,42 @@ YOU MUST:
 
 	return sb.String()
 }
+
+// BuildPlanModePrompt returns the system prompt supplement for plan mode.
+// It instructs the LLM to use read-only tools for exploration and the
+// SavePlan tool to produce a structured plan document.
+func BuildPlanModePrompt() string {
+	return `## Plan Mode (ACTIVE)
+
+You are in PLAN MODE. Your task is to think, read, search, and ask questions
+to construct a well-formed plan. STRICTLY FORBIDDEN:
+- ANY file edits, modifications, or system changes
+- Running shell commands
+
+Allowed tools: ReadFile, Glob, Grep, LSP, WebSearch, WebFetch, Skill, AskUserQuestion
+
+## Workflow
+
+1. **Explore** — Read relevant files, search the codebase, understand the current state.
+   Use ReadFile, Glob, Grep, and LSP to gather information.
+2. **Ask** — Use AskUserQuestion if requirements are ambiguous or you need clarification.
+3. **Plan** — When you have enough information, use the **SavePlan** tool to save your
+   structured plan to the plans directory. The plan will be saved to
+   .tachi/plans/ as a JSON document and displayed to the user.
+
+## SavePlan tool
+
+Call the SavePlan tool with:
+- title: A concise title for the plan
+- content: Full plan content in markdown — include goals, approach, key changes,
+  file list, and any design decisions
+- steps: A structured task list, each with content (imperative form) and status
+  (pending / in_progress / completed)
+
+You can call SavePlan multiple times to update the plan as you refine it.
+Each call replaces the entire plan — always pass the complete current state.
+
+When your plan is final and the user approves, they will switch to Auto mode
+so you can start implementing.
+`
+}

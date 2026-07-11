@@ -260,7 +260,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		Thinking:  &thinkingDisabled,
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
 
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts)
@@ -310,7 +310,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	})
 	defer forked.Close()
 
-	systemPrompt := buildSystemPromptForCwd(cfg.Language, sess.cwd)
+	systemPrompt := buildSystemPromptForCwd(cfg.Language, sess.cwd, agent.ModeAuto)
 
 	opts := llm.ChatOptions{
 		MaxTokens: config.DefaultMaxTokens,
@@ -345,7 +345,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 		}
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
 
 	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
@@ -378,7 +378,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	}()
 
 	// Run compact turn — use DrainCompactEvents approach (simple, reliable)
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
 	eventCh := sess.agent.RunConversationStream(ctx, nil,
 		cmds.BuildCompactInstruction(), systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens},
@@ -617,7 +617,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 		}
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
