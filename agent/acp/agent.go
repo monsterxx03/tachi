@@ -194,6 +194,8 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
 			modeOpt := buildModeConfigOption(agent.ModeAuto)
 			sendConfigOptionsUpdate(t.conn, sess.ID, modelOpt, modeOpt)
+			// Send initial usage so Zed can show context window usage right away.
+			sendUsageUpdate(t.conn, sessID, sess)
 		}
 	})
 
@@ -499,6 +501,8 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
 			modeOpt := buildModeConfigOption(agent.ModeAuto)
 			sendConfigOptionsUpdate(t.conn, sess.ID, modelOpt, modeOpt)
+			// Send initial usage so Zed can show context window usage right away.
+			sendUsageUpdate(t.conn, acp.SessionId(sess.ID), sess)
 		}
 	})
 
@@ -673,6 +677,8 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
 			modeOpt := buildModeConfigOption(agent.ModeAuto)
 			sendConfigOptionsUpdate(t.conn, sess.ID, modelOpt, modeOpt)
+			// Send initial usage so Zed can show context window usage right away.
+			sendUsageUpdate(t.conn, sessID, sess)
 		}
 	})
 
