@@ -26,6 +26,7 @@ const (
 	ToolNameWebFetch  = "WebFetch"
 	ToolNameSkill     = "Skill"
 	ToolNameSendFile  = "SendFile"
+	ToolNameSavePlan  = "SavePlan"
 )
 
 // PropertySchema defines a single property in the schema

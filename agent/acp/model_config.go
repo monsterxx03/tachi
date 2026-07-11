@@ -67,18 +67,19 @@ func buildModelConfigOption(cfg *config.Config, currentProviderName string) (*ac
 }
 
 // buildModeConfigOption builds a SessionConfigOption (select) exposing the
-// available session modes (auto, chat) as selectable values.
+// available session modes (auto, plan, chat) as selectable values.
 // Returns nil if modes aren't configured (shouldn't happen in practice).
 func buildModeConfigOption(currentMode string) *acp.SessionConfigOption {
 	const (
 		modeConfigID          = "mode"
 		modeConfigName        = "Mode"
-		modeConfigDescription = "The operating mode for this session — Auto (full tool access) or Chat (read-only)"
+		modeConfigDescription = "The operating mode for this session — Auto (full tool access), Plan (read-only planning), or Chat (read-only)"
 	)
 
 	category := acp.SessionConfigOptionCategoryMode
 	options := []acp.SessionConfigSelectOption{
 		{Value: acp.SessionConfigValueId(agent.ModeAuto), Name: "Auto"},
+		{Value: acp.SessionConfigValueId(agent.ModePlan), Name: "Plan"},
 		{Value: acp.SessionConfigValueId(agent.ModeChat), Name: "Chat"},
 	}
 

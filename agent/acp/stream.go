@@ -121,6 +121,17 @@ func streamToACP(
 					SessionId: sessionID,
 					Update:    update,
 				})
+				// For SavePlan, also emit an ACP plan session update so the
+				// editor can display a structured plan panel (steps with
+				// pending/in_progress/completed status).
+				if event.ToolName == tools.ToolNameSavePlan && !event.ToolIsError {
+					if planUpdate := buildPlanUpdateFromArgs(toolArgs[event.ToolID]); planUpdate != nil {
+						_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+							SessionId: sessionID,
+							Update:    *planUpdate,
+						})
+					}
+				}
 				// After each tool result, send a UsageUpdate so Zed can show
 				// real-time context window usage in its status bar.
 				sendUsageUpdate(conn, sessionID, sess)
@@ -377,6 +388,59 @@ func buildDiffFromArgs(toolName string, argsJSON string) *acp.ToolCallContent {
 	}
 
 	return nil
+}
+
+// buildPlanUpdateFromArgs parses SavePlan tool args and builds an ACP plan
+// session update with structured entries. Returns nil if args are invalid.
+func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
+	if argsJSON == "" {
+		return nil
+	}
+	var args struct {
+		Title   string `json:"title"`
+		Content string `json:"content"`
+		Steps   []struct {
+			Content string `json:"content"`
+			Status  string `json:"status"`
+		} `json:"steps"`
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+		return nil
+	}
+	if len(args.Steps) == 0 && args.Title == "" {
+		return nil
+	}
+
+	entries := make([]acp.PlanEntry, 0, 1+len(args.Steps))
+
+	// First entry: plan title as a header entry
+	if args.Title != "" {
+		entries = append(entries, acp.PlanEntry{
+			Content:  "📋 " + args.Title,
+			Priority: acp.PlanEntryPriorityHigh,
+			Status:   acp.PlanEntryStatusPending,
+		})
+	}
+
+	for _, s := range args.Steps {
+		var status acp.PlanEntryStatus
+		switch s.Status {
+		case "in_progress":
+			status = acp.PlanEntryStatusInProgress
+		case "completed":
+			status = acp.PlanEntryStatusCompleted
+		default:
+			status = acp.PlanEntryStatusPending
+		}
+		entries = append(entries, acp.PlanEntry{
+			Content:  s.Content,
+			Priority: acp.PlanEntryPriorityMedium,
+			Status:   status,
+		})
+	}
+
+	update := acp.UpdatePlan(entries...)
+	return &update
 }
 
 // sendUsageUpdate sends a UsageUpdate notification to the ACP client with the

@@ -17,12 +17,17 @@ const (
 	// ModeChat is a read-only conversation mode.
 	// Destructive tools (WriteFile, EditFile, Bash, etc.) are hidden from the LLM.
 	ModeChat = "chat"
+
+	// ModePlan is a read-only planning mode.
+	// Destructive tools are hidden; the LLM uses read-only tools to explore
+	// the codebase and the save_plan tool to produce a structured plan document.
+	ModePlan = "plan"
 )
 
 // ValidMode reports whether mode is a known session mode identifier.
 func ValidMode(mode string) bool {
 	switch mode {
-	case ModeAuto, ModeChat:
+	case ModeAuto, ModeChat, ModePlan:
 		return true
 	default:
 		return false
@@ -38,6 +43,7 @@ func (a *AIAgent) Mode() string {
 // tools are visible to the LLM:
 //   - ModeAuto:  full tool access (restores any tools previously hidden)
 //   - ModeChat:  hides destructive tools (WriteFile, EditFile, Bash, etc.)
+//   - ModePlan:  hides destructive tools (same as ModeChat)
 //
 // Returns an error if mode is unknown.
 func (a *AIAgent) SetMode(mode string) error {
@@ -45,12 +51,12 @@ func (a *AIAgent) SetMode(mode string) error {
 		return nil // already in this mode
 	}
 	if !ValidMode(mode) {
-		return fmt.Errorf("unknown mode: %s (supported: %s, %s)", mode, ModeAuto, ModeChat)
+		return fmt.Errorf("unknown mode: %s (supported: %s, %s, %s)", mode, ModeAuto, ModeChat, ModePlan)
 	}
 
 	switch mode {
 	case ModeAuto:
-		// Restore destructive tools that were saved when entering chat mode.
+		// Restore destructive tools that were saved when entering chat/plan mode.
 		for name, tool := range a.savedTools {
 			if a.toolRegistry.GetTool(name) == nil {
 				a.toolRegistry.Register(tool)
@@ -59,7 +65,7 @@ func (a *AIAgent) SetMode(mode string) error {
 		}
 		a.savedTools = make(map[string]tools.Tool)
 
-	case ModeChat:
+	case ModeChat, ModePlan:
 		// Save and remove destructive tools.
 		for _, name := range a.toolRegistry.GetToolNames() {
 			tool := a.toolRegistry.GetTool(name)
@@ -69,7 +75,7 @@ func (a *AIAgent) SetMode(mode string) error {
 			if dd, ok := tool.(tools.DestructiveDetector); ok && dd.IsDestructive() {
 				a.savedTools[name] = tool
 				a.toolRegistry.Unregister(name)
-				a.logger.Log("Agent: removed tool %s for chat mode", name)
+				a.logger.Log("Agent: removed tool %s for %s mode", name, mode)
 			}
 		}
 	}

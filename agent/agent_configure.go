@@ -50,7 +50,8 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
 
 			// Wire keyword extractor for topic backend.
-			if tb, ok := backend.(*memory.TopicBackend); ok {
+			// Requires an LLM provider — skip when nil (e.g. `tachi tools`).
+			if tb, ok := backend.(*memory.TopicBackend); ok && a.provider != nil {
 				kwProvider, kwModel := a.provider, a.provider.Model()
 
 				// Resolve dedicated keyword provider if configured.

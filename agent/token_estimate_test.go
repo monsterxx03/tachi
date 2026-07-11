@@ -297,7 +297,7 @@ func TestEstimateAndUpdateTokens(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "user", Content: "hello"},
 	}
-	agent.estimateAndUpdateTokens(msgs)
+	agent.EstimateAndUpdateTokens(msgs)
 	require.Greater(t, agent.lastInputTokens, int64(0),
 		"estimateAndUpdateTokens should set lastInputTokens to a positive value")
 	tb := agent.LastTokenBreakdown()
@@ -319,7 +319,7 @@ func TestEstimateAndUpdateTokens_SystemPrompt(t *testing.T) {
 		{Role: "system", Content: "You are a test assistant."},
 		{Role: "user", Content: "hi"},
 	}
-	agent.estimateAndUpdateTokens(msgs)
+	agent.EstimateAndUpdateTokens(msgs)
 	assert.Greater(t, agent.lastInputTokens, int64(0))
 	tb := agent.LastTokenBreakdown()
 	assert.Greater(t, tb.SystemPrompt, int64(0), "system prompt should be broken down")
