@@ -563,13 +563,13 @@ func stripPendingToolCalls(msgs []llm.Message) []llm.Message {
 
 	// Walk backwards to find the last assistant message with tool_calls.
 	for i := len(cleaned) - 1; i >= 0; i-- {
-		if cleaned[i].Role != llm.RoleAssistant || len(cleaned[i].ToolCalls) == 0 {
+		if cleaned[i].Role != "assistant" || len(cleaned[i].ToolCalls) == 0 {
 			continue
 		}
 		// Check if any tool result exists AFTER this message.
 		hasResults := false
 		for j := i + 1; j < len(cleaned); j++ {
-			if cleaned[j].Role == llm.RoleTool {
+			if cleaned[j].Role == "tool" {
 				hasResults = true
 				break
 			}
