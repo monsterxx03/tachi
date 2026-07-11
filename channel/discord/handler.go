@@ -5,6 +5,7 @@ import (
 	"context"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/channel/manager"
@@ -100,42 +101,54 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
 		defer stopTyping()
 
-		// 11. Send a status embed and set up streaming callback for
-		// real-time progress updates (tool calls, response text).
-		var embedMsgID string
-		sess := ch.session
-		if sess != nil {
-			embed := &discordgo.MessageEmbed{
-				Title:       "🤖 Tachi",
-				Description: "⏳ 正在处理...",
-				Color:       0x3498DB,
+		// 11. Set up streaming callback for real-time tool call progress.
+		// The status embed is only sent when the first tool call is detected,
+		// skipping the embed entirely for simple text-only replies.
+		var (
+			embedMsgID string
+			toolBuf    strings.Builder
+			mu         sync.Mutex
+		)
+		ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
+			if !strings.HasPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ") {
+				return nil
 			}
-			sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, embed)
-			if err == nil {
-				embedMsgID = sent.ID
+			// Format: "\n\n> <font color=\"comment\">🔧 ToolName args</font>\n\n"
+			cleaned := strings.TrimPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ")
+			if idx := strings.Index(cleaned, "</font>"); idx >= 0 {
+				cleaned = cleaned[:idx]
+			}
 
-				// Wire a streaming callback into the context so drainEvents
-				// pushes tool call progress to the embed in real time.
-				var toolBuf strings.Builder
-				ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
-					if strings.HasPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ") {
-						// Format: "\n\n> <font color=\"comment\">🔧 ToolName args</font>\n\n"
-						cleaned := strings.TrimPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ")
-						if idx := strings.Index(cleaned, "</font>"); idx >= 0 {
-							cleaned = cleaned[:idx]
-						}
-						toolBuf.WriteString("🔧 " + cleaned + "\n")
+			mu.Lock()
+			toolBuf.WriteString("🔧 " + cleaned + "\n")
+			desc := "```\n" + toolBuf.String() + "```"
+			mu.Unlock()
 
-						_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
-							Title:       "🤖 Tachi",
-							Description: "```\n" + toolBuf.String() + "```",
-							Color:       0x3498DB,
-						})
-					}
-					return nil
+			sess := ch.session
+			if sess == nil {
+				return nil
+			}
+
+			if embedMsgID == "" {
+				// First tool call — send the status embed now.
+				sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+					Title:       "🤖 Tachi",
+					Description: desc,
+					Color:       0x3498DB,
+				})
+				if err == nil {
+					embedMsgID = sent.ID
+				}
+			} else {
+				// Subsequent tool call — update the existing embed.
+				_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
+					Title:       "🤖 Tachi",
+					Description: desc,
+					Color:       0x3498DB,
 				})
 			}
-		}
+			return nil
+		})
 	}
 
 	// 11.5 Delegate to the manager handler.
