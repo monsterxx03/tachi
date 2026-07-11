@@ -1,6 +1,6 @@
 # ACP 增强方案：提升 Zed 集成体验
 
-> 版本: 1.0 | 日期: 2026-07-11 | 状态: 设计阶段
+> 版本: 1.1 | 日期: 2026-07-11 | 状态: 部分实施
 
 ## 一、概述
 
@@ -38,11 +38,11 @@
 | Auto-compact 通知 | ✅ | 文本通知 |
 | 文件 diff 显示 (permission 中) | ✅ | ToolDiffContent |
 | Cancel | ✅ | context cancel |
-| Session Delete | ❌ | 未实现 |
+| Session Delete | ✅ | 2026-07-11 实现 |
 | Agent Plan 流 | ❌ | 未实现 |
-| Diff 内嵌到 tool result | ❌ | 仅 permission 中有 diff |
+| Diff 内嵌到 tool result | ✅ | 2026-07-11 实现：EditFile/WriteFile 完成时带 diff content |
 | 终端委派 (ACP terminal) | ❌ | Bash 工具本地执行 |
-| 文件系统委派 (ReadFile via ACP) | ❌ | Write/Edit 已走 ACP, Read 未走 |
+| 文件系统委派 (ReadFile via ACP) | ✅ | 2026-07-11 实现：Write/Edit/Read 全部走 ACP FS |
 | Steer 支持 | ⚠️ 部分 | Cancel 可中断, 但无 steer 通道 |
 | Elicitation (交互式提问) | ❌ | AskUser 被注销 |
 | Boolean Config Options | ❌ | 不支持 |
@@ -51,18 +51,18 @@
 
 ### 2.2 增强方向一览
 
-| # | 方向 | 工作量 | 体验提升 | 协议成熟度 |
-|---|------|--------|----------|-----------|
-| 1 | Agent Plan 流 | 中 | ⭐⭐⭐⭐⭐ | Stable |
-| 2 | Diff 内嵌到 Tool Result | 低 | ⭐⭐⭐⭐ | Stable |
-| 3 | ReadFile 走 ACP FS | 低 | ⭐⭐⭐ | Stable |
-| 4 | Session Delete | 低 | ⭐⭐ | Stable |
-| 5 | 终端委派 | 大 | ⭐⭐⭐⭐⭐ | Stable |
-| 6 | Steer 增强 | 中 | ⭐⭐⭐⭐ | Stable |
-| 7 | Slash 命令完善 | 低-中 | ⭐⭐⭐ | N/A |
-| 8 | Elicitation 准备 | 中 | ⭐⭐⭐（远期） | RFD (Preview) |
-| 9 | Usage 增强 | 低 | ⭐⭐ | RFD |
-| 10 | Boolean Config Options | 低 | ⭐⭐ | Stable |
+| # | 方向 | 工作量 | 体验提升 | 协议成熟度 | 状态 |
+|---|------|--------|----------|-----------|------|
+| 1 | Agent Plan 流 | 中 | ⭐⭐⭐⭐⭐ | Stable | ❌ |
+| 2 | Diff 内嵌到 Tool Result | 低 | ⭐⭐⭐⭐ | Stable | ✅ 已实现 |
+| 3 | ReadFile 走 ACP FS | 低 | ⭐⭐⭐ | Stable | ✅ 已实现 |
+| 4 | Session Delete | 低 | ⭐⭐ | Stable | ✅ 已实现 |
+| 5 | 终端委派 | 大 | ⭐⭐⭐⭐⭐ | Stable | ❌ |
+| 6 | Steer 增强 | 中 | ⭐⭐⭐⭐ | Stable | ❌ |
+| 7 | Slash 命令完善 | 低-中 | ⭐⭐⭐ | N/A | ❌ |
+| 8 | Elicitation 准备 | 中 | ⭐⭐⭐（远期） | RFD (Preview) | ❌ |
+| 9 | Usage 增强 | 低 | ⭐⭐ | RFD | ❌ |
+| 10 | Boolean Config Options | 低 | ⭐⭐ | Stable | ❌ |
 
 ---
 
@@ -148,62 +148,38 @@ func (s *acpStreamState) flushPlan(ctx, conn, sessionID) {
 
 ---
 
-### 3.2 Diff 内嵌到 Tool Result（Tier 1）
+### 3.2 Diff 内嵌到 Tool Result（Tier 1）✅ 已实现（2026-07-11）
 
 **问题**：当 `EditFile` 执行完成时，tool result 以纯文本形式返回。Zed 只把它当作文本展示，无法渲染成漂亮的 diff 视图（绿色新增、红色删除）。
 
 **现状**：`permission.go` 已经在 `RequestPermission` 中发送 `acp.ToolDiffContent`（path + oldText + newText），但 tool result 阶段没有。
 
-**方案**：在 `streamToACP` 的 `AgentEventToolResult` 处理分支中，对 EditFile/WriteFile 工具，解析 tool result 的内容提取 old/new text，附加 diff content block。
+**实现**：在 `streamToACP` 的 `AgentEventToolResult` 分支中，对 EditFile/WriteFile 工具，从已缓冲的工具参数中解析 `path`/`old_string`/`new_string`，附加 diff content block。
 
 ```go
-// stream.go — AgentEventToolResult 处理分支
-
+// stream.go — AgentEventToolResult 分支
 case agent.AgentEventToolResult:
-    // ... 原有 status 更新代码 ...
-
-    // 新增：如果是 EditFile/WriteFile，发送 diff content
-    if toolName == tools.ToolNameEdit || toolName == tools.ToolNameWrite {
-        if diffContent := extractDiffFromResult(event); diffContent != nil {
-            conn.SessionUpdate(ctx, acp.SessionNotification{
-                SessionId: sessionID,
-                Update: acp.SessionUpdate{
-                    ToolCallUpdate: &acp.SessionToolCallUpdate{
-                        ToolCallId: acp.ToolCallId(event.ToolID),
-                        Content:    []acp.ToolCallContent{*diffContent},
-                    },
-                },
-            })
+    updateOpts := []acp.ToolCallUpdateOpt{
+        acp.WithUpdateStatus(status),
+    }
+    // 对 EditFile/WriteFile 附加 diff content
+    if event.ToolName == tools.ToolNameEdit || event.ToolName == tools.ToolNameWrite {
+        if diffContent := buildDiffFromArgs(event.ToolName, toolArgs[event.ToolID]); diffContent != nil {
+            updateOpts = append(updateOpts, acp.WithUpdateContent([]acp.ToolCallContent{*diffContent}))
         }
     }
-```
+    update := acp.UpdateToolCall(acp.ToolCallId(event.ToolID), updateOpts...)
+    conn.SessionUpdate(ctx, ..., update)
+}
 
-**关键点**：需要从 tool result 中提取出 old/new text。EditFile 的 diff 格式可以是：
-1. 从 `toolArgs` 中直接获取 `old_string` 和 `new_string` 参数（已缓冲在 `toolArgs[event.ToolID]` 中）
-2. 从 tool result 的文本内容中解析 unified diff
-
-**推荐方案**：直接使用已缓冲的工具参数 `toolArgs[event.ToolID]`，解析其中的 `path`/`old_string`/`new_string` 字段，构建 `acp.ToolDiffContent`。
-
-```go
-// stream.go — 新增辅助函数
-func extractDiffFromResult(toolName, toolID, argsJSON, resultText string) *acp.ToolCallContent {
-    if toolName != tools.ToolNameEdit && toolName != tools.ToolNameWrite {
-        return nil
+// 新增 helper: buildDiffFromArgs
+func buildDiffFromArgs(toolName string, argsJSON string) *acp.ToolCallContent {
+    switch toolName {
+    case tools.ToolNameEdit:
+        // 提取 path, old_string, new_string → 含旧/新文本的 diff
+    case tools.ToolNameWrite:
+        // 提取 path, content → 仅新文本的 diff（旧文本留空表示新建）
     }
-    var args struct {
-        Path      string `json:"path"`
-        OldString string `json:"old_string"`
-        NewString string `json:"new_string"`
-    }
-    if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-        return nil
-    }
-    if args.Path == "" {
-        return nil
-    }
-    // 使用 ACP 的 diff content 类型
-    c := acp.ToolDiffContent(args.Path, args.NewString, args.OldString)
-    return &c
 }
 ```
 
@@ -212,7 +188,7 @@ func extractDiffFromResult(toolName, toolID, argsJSON, resultText string) *acp.T
 
 ---
 
-### 3.3 ReadFile 走 ACP FS（Tier 1）
+### 3.3 ReadFile 走 ACP FS（Tier 1）✅ 已实现（2026-07-11）
 
 **问题**：ACP 模式下，`WriteFile` 和 `EditFile` 已经可以通过 `conn.WriteTextFile` / `conn.ReadTextFile` 路由到 Zed 的文件系统。但 `ReadFile` 仍然通过本地文件系统读取，Zed 无法获知 Agent 正在读哪个文件。
 
@@ -220,9 +196,9 @@ func extractDiffFromResult(toolName, toolID, argsJSON, resultText string) *acp.T
 - `agent.go` 中 `aiAgent.SetACPFileMode()` 设置了 ACP 文件模式
 - `agent/tools/write.go` 检查 `acpctx.Conn(ctx)` → 有则走 `conn.WriteTextFile`
 - `agent/tools/edit.go` 有 `SetACPMode(bool)` → 路由到 `conn.WriteTextFile`
-- `agent/tools/read.go` **没有** ACP 模式检测 → 总是本地读取
+- `agent/tools/read.go` **之前没有** ACP 模式检测 → 总是本地读取
 
-**方案**：在 `ReadFile` 工具中增加 ACP 模式检测。如果 context 中有 `acpctx.Conn`，优先通过 `conn.ReadTextFile` 读取。
+**实现**：在 `ReadFile` 工具中增加了 ACP 模式检测。如果 context 中有 `acpctx.Conn`，优先通过 `conn.ReadTextFile` 读取。
 
 ```go
 // agent/tools/read.go — 修改 ExecuteContext
@@ -256,43 +232,39 @@ func (t *ReadFileTool) ExecuteContext(ctx context.Context, args map[string]any) 
 
 ---
 
-### 3.4 Session Delete（Tier 1）
+### 3.4 Session Delete（Tier 1）✅ 已实现（2026-07-11）
 
 **问题**：ACP 协议定义了 `session/delete` 方法，但 Tachi 未实现。Zed 用户无法从编辑器侧清理不需要的会话。
 
-**方案**：实现 `acp.Agent` 接口的 `DeleteSession` 方法。
+**实现**：
+1. `Initialize` 响应中声明 `Delete: &acp.SessionDeleteCapabilities{}`
+2. 新增 `UnstableDeleteSession` 方法（SDK 通过 optional interface 发现）
+3. 内存 session 关闭 + 磁盘 JSONL 清理
 
 ```go
-// agent/acp/agent.go — 新增
-func (t *TachiAgent) DeleteSession(_ context.Context, req acp.DeleteSessionRequest) (acp.DeleteSessionResponse, error) {
-    t.logger.Log("ACP: DeleteSession called for session %s", req.SessionId)
+// agent/acp/agent.go — Initialize 中声明能力
+SessionCapabilities: acp.SessionCapabilities{
+    List:   &acp.SessionListCapabilities{},
+    Close:  &acp.SessionCloseCapabilities{},
+    Resume: &acp.SessionResumeCapabilities{},
+    Delete: &acp.SessionDeleteCapabilities{},  // 新增
+},
 
+// agent/acp/agent.go — 新增方法
+func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
     sessionID := string(req.SessionId)
-
-    // 1. 如果在内存中，先关闭
+    // 1. 关闭内存 session
     if sess, ok := t.sessions.Get(sessionID); ok {
         sess.Close()
         t.sessions.Delete(sessionID)
     }
-
-    // 2. 从磁盘删除
+    // 2. 删除磁盘文件
     sm, err := session.NewManager()
-    if err != nil {
-        return acp.DeleteSessionResponse{}, fmt.Errorf("session manager: %w", err)
-    }
-    if err := sm.Delete(sessionID); err != nil {
-        return acp.DeleteSessionResponse{}, fmt.Errorf("delete session %s: %w", sessionID, err)
-    }
-
-    return acp.DeleteSessionResponse{}, nil
+    if err != nil { ... }
+    if err := sm.Delete(sessionID); err != nil { ... }
+    return acp.UnstableDeleteSessionResponse{}, nil
 }
 ```
-
-**前置依赖**：需要确认 `session.Manager` 是否有 `Delete(id)` 方法。如果没有，需要新增或确认 `Remove`/`Archive` 的等效方法。
-
-**文件变更**：
-- `agent/acp/agent.go` — 新增 `DeleteSession` 方法（同时检查 SDK 接口是否包含此方法）
-- `session/manager.go` — 可能需要新增 `Delete(id)` 方法
 
 ---
 
@@ -727,15 +699,16 @@ case "compact_auto", "thinking_visible":
 
 ### 4.1 文件变更汇总
 
-| 文件 | 变更类型 | 对应方向 |
-|------|----------|----------|
-| `agent/acp/stream.go` | 修改 | Plan, Diff in Result, Usage, Steer |
-| `agent/acp/agent.go` | 修改 | Session Delete, Terminal, Elicitation, Boolean |
-| `agent/acp/commands.go` | 修改 | Slash 完善 |
-| `agent/acp/model_config.go` | 修改 | Boolean Config |
-| `agent/tools/read.go` | 修改 | ACP FS delegation |
-| `agent/acp/terminal_tool.go` | 新增 | Terminal delegation |
-| `session/manager.go` | 可能修改 | Session Delete (需确认 Delete 方法) |
+| 文件 | 变更类型 | 对应方向 | 状态 |
+|------|----------|----------|------|
+| `agent/acp/stream.go` | 修改 | Plan, Diff in Result, Usage, Steer | ✅ Diff in Result 已完成 |
+| `agent/acp/agent.go` | 修改 | Session Delete, Terminal, Elicitation, Boolean | ✅ Session Delete 已完成 |
+| `agent/acp/commands.go` | 修改 | Slash 完善 | ❌ |
+| `agent/acp/model_config.go` | 修改 | Boolean Config | ❌ |
+| `agent/tools/read.go` | 修改 | ACP FS delegation | ✅ 已完成 |
+| `agent/tools/write.go` | 修改 | Bugfix: 补充缺失的 SessionId | ✅ 已完成 |
+| `agent/acp/terminal_tool.go` | 新增 | Terminal delegation | ❌ |
+| `session/manager.go` | 可能修改 | Session Delete（已有 `Delete` 方法） | ✅ 无需修改 |
 
 ### 4.2 代码量估算
 
@@ -771,13 +744,14 @@ case "compact_auto", "thinking_visible":
 
 ### 5.1 分阶段实施路线
 
-**Phase 0 — 基础设施（1-2天）**
-- Session Delete（低工作量，补齐协议覆盖）
-- ReadFile ACP FS（低工作量，文件模式对齐）
+**Phase 0 — 基础设施（已完成）**
+- Session Delete（低工作量，补齐协议覆盖）✅
+- ReadFile ACP FS（低工作量，文件模式对齐）✅
+- WriteFile bugfix: 补充缺失的 SessionId 字段 ✅
 
 **Phase 1 — 核心体验提升（3-5天）**
 - Agent Plan 流（中等，最有视觉冲击力的改进）
-- Diff 内嵌到 Tool Result（低，改动小但效果明显）
+- Diff 内嵌到 Tool Result（低，改动小但效果明显）✅ 已完成
 - Slash 命令完善（低-中，/mcp reconnect + /ask 等）
 
 **Phase 2 — 进阶能力（5-8天）**
@@ -924,4 +898,5 @@ case "compact_auto", "thinking_visible":
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.1 | 2026-07-11 | 实现 Session Delete、ReadFile ACP FS、Diff in Result、WriteFile SessionId bugfix；更新状态表 |
 | 1.0 | 2026-07-11 | 初始设计 |

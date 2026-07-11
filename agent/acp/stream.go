@@ -103,9 +103,19 @@ func streamToACP(
 				if event.ToolIsError {
 					status = acp.ToolCallStatusFailed
 				}
+				updateOpts := []acp.ToolCallUpdateOpt{
+					acp.WithUpdateStatus(status),
+				}
+				// For EditFile/WriteFile, attach diff content so Zed can
+				// render a proper diff view (green additions, red deletions).
+				if event.ToolName == tools.ToolNameEdit || event.ToolName == tools.ToolNameWrite {
+					if diffContent := buildDiffFromArgs(event.ToolName, toolArgs[event.ToolID]); diffContent != nil {
+						updateOpts = append(updateOpts, acp.WithUpdateContent([]acp.ToolCallContent{*diffContent}))
+					}
+				}
 				update := acp.UpdateToolCall(
 					acp.ToolCallId(event.ToolID),
-					acp.WithUpdateStatus(status),
+					updateOpts...,
 				)
 				_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 					SessionId: sessionID,
@@ -333,6 +343,50 @@ func extractFileLocation(argsJSON string) (path string, line *int) {
 		return args.Path, &args.Offset
 	}
 	return args.Path, nil
+}
+
+// buildDiffFromArgs attempts to build a diff content block from tool call arguments.
+// For EditFile, it extracts path, old_string, new_string.
+// For WriteFile (new file), it extracts path and content (new) with no old text.
+// Returns nil if args are missing or incomplete.
+func buildDiffFromArgs(toolName string, argsJSON string) *acp.ToolCallContent {
+	if argsJSON == "" {
+		return nil
+	}
+
+	switch toolName {
+	case tools.ToolNameEdit:
+		var args struct {
+			Path      string `json:"path"`
+			OldString string `json:"old_string"`
+			NewString string `json:"new_string"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return nil
+		}
+		if args.Path == "" || (args.OldString == "" && args.NewString == "") {
+			return nil
+		}
+		c := acp.ToolDiffContent(args.Path, args.NewString, args.OldString)
+		return &c
+
+	case tools.ToolNameWrite:
+		var args struct {
+			Path    string `json:"path"`
+			Content string `json:"content"`
+		}
+		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
+			return nil
+		}
+		if args.Path == "" || args.Content == "" {
+			return nil
+		}
+		// WriteFile creates/replaces a file — show new content without old text.
+		c := acp.ToolDiffContent(args.Path, args.Content)
+		return &c
+	}
+
+	return nil
 }
 
 // replaySessionHistory replays all stored messages from a loaded session as ACP
