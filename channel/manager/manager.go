@@ -117,10 +117,10 @@ type initProviderResult struct {
 // to the agent at the next tool-call boundary, allowing the user to refine
 // instructions mid-turn without waiting for the current turn to finish.
 type Manager struct {
-	cfg          *config.Config
-	providerName string
-	modelName    string
-	currentProviderName  string // Tracks which provider is currently active
+	cfg                 *config.Config
+	providerName        string
+	modelName           string
+	currentProviderName string // Tracks which provider is currently active
 
 	// Lazy-initialized via sync.OnceValues.
 	initProviderFn func() (initProviderResult, error)
@@ -171,7 +171,7 @@ type Manager struct {
 	// decide whether to unregister AskUserQuestion (non-interactive
 	// channels unregister it; InteractiveChannel implementations keep it).
 	// Populated on first message by the per-channel handler wrapper.
-	threadChannels   map[string]channel.Channel
+	threadChannels  map[string]channel.Channel
 	threadChannelMu sync.RWMutex
 
 	// --- Shared MCP backend ---
@@ -224,11 +224,11 @@ type threadActivation struct {
 
 	// --- Whisper ambient state (only active when groupChat=true) ---
 
-	groupChat      bool           // whether this thread is in group chat mode (set once)
-	ambientPending []ambientMsg   // buffered non-directed messages
-	ambientTimer   *time.Timer    // batch window timer (nil when inactive)
-	lastAmbient    time.Time      // when the last ambient turn ended
-	silenceCount   atomic.Int32   // consecutive SILENCE replies (for backoff)
+	groupChat      bool         // whether this thread is in group chat mode (set once)
+	ambientPending []ambientMsg // buffered non-directed messages
+	ambientTimer   *time.Timer  // batch window timer (nil when inactive)
+	lastAmbient    time.Time    // when the last ambient turn ended
+	silenceCount   atomic.Int32 // consecutive SILENCE replies (for backoff)
 }
 
 // ambientMsg represents a single non-directed message buffered for whisper processing.
@@ -314,6 +314,22 @@ func (m *Manager) Start(ctx context.Context) error {
 			if cc, ok := ch.(channel.CommandChannel); ok {
 				cc.SetCommandHandler(cmdHandler)
 				m.logger.Log("channel: %s received CommandHandler", ch.Name())
+			}
+
+			// Inject provider names for slash command autocomplete.
+			if ac, ok := ch.(channel.Autocompleter); ok {
+				var names []string
+				if m.cfg != nil {
+					for _, p := range m.cfg.Providers {
+						if p.Name != "" {
+							names = append(names, p.Name)
+						}
+					}
+				}
+				ac.SetProviderNames(names)
+				if len(names) > 0 {
+					m.logger.Log("channel: %s received %d provider names", ch.Name(), len(names))
+				}
 			}
 
 			// Lifecycle: OnStart → Run.

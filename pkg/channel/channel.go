@@ -213,7 +213,6 @@ type OutgoingMessage struct {
 	ReplyTo string
 }
 
-
 // HandlerResult wraps the outcome of a MessageHandler call.
 //
 // When Steered is true, the message was injected into an already-running
@@ -370,4 +369,12 @@ type InteractiveChannel interface {
 type SystemPromptSuffixer interface {
 	Channel
 	SystemPromptSuffix() string
+}
+
+// Autocompleter is an optional interface for channels that want to receive
+// the list of available provider names for slash command autocomplete.
+// The Manager calls SetProviderNames before Run().
+type Autocompleter interface {
+	Channel
+	SetProviderNames(names []string)
 }

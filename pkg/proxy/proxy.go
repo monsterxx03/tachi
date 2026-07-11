@@ -1,11 +1,12 @@
-// Package proxy provides a helper to create HTTP clients with optional
-// SOCKS5 / HTTP / HTTPS proxy support. Both the web_search tool and the
-// MCP HTTP transport use this so that proxy configuration is handled in
-// a single place.
+// Package proxy provides helpers for HTTP clients and network dialers with
+// optional SOCKS5 / HTTP / HTTPS proxy support.
 package proxy
 
 import (
+	"bufio"
+	"crypto/tls"
 	"fmt"
+	"net"
 	"net/http"
 	"net/url"
 	"time"
@@ -45,8 +46,6 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 		if err != nil {
 			return nil, fmt.Errorf("socks5 proxy %q: %w", proxyURL, err)
 		}
-		// Wrap the SOCKS5 dialer in a transport that uses it for both
-		// plain TCP and TLS connections.
 		transport = &http.Transport{
 			Dial: dialer.Dial,
 		}
@@ -62,4 +61,91 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 		Transport: transport,
 		Timeout:   timeout,
 	}, nil
+}
+
+// NewDialer returns a function suitable for use as a websocket.Dialer.NetDial
+// or net.Dialer that routes TCP connections through the given proxy.
+//
+// Supported schemes:
+//
+//	http://host:port    – HTTP CONNECT proxy
+//	https://host:port   – HTTPS CONNECT proxy (CONNECT over TLS to proxy)
+//	socks5://host:port  – SOCKS5 proxy
+//
+// Returns a no-op forward dialer when proxyURL is empty.
+func NewDialer(proxyURL string) (func(network, addr string) (net.Conn, error), error) {
+	if proxyURL == "" {
+		return net.Dial, nil
+	}
+
+	u, err := url.Parse(proxyURL)
+	if err != nil {
+		return nil, fmt.Errorf("invalid proxy URL %q: %w", proxyURL, err)
+	}
+
+	switch u.Scheme {
+	case "http":
+		return httpConnectDialer(u.Host, false), nil
+	case "https":
+		return httpConnectDialer(u.Host, true), nil
+	case "socks5":
+		d, err := proxy.SOCKS5("tcp", u.Host, nil, proxy.Direct)
+		if err != nil {
+			return nil, fmt.Errorf("socks5 proxy %q: %w", proxyURL, err)
+		}
+		return d.Dial, nil
+	default:
+		return nil, fmt.Errorf(
+			"unsupported proxy scheme %q for dialer (supported: http, https, socks5)",
+			u.Scheme,
+		)
+	}
+}
+
+// httpConnectDialer returns a dial function that establishes a TCP connection
+// through an HTTP CONNECT proxy.
+func httpConnectDialer(proxyHost string, useTLS bool) func(network, addr string) (net.Conn, error) {
+	return func(network, addr string) (net.Conn, error) {
+		var conn net.Conn
+		var err error
+
+		// Connect to the proxy server.
+		if useTLS {
+			// HTTPS CONNECT proxy: establish TLS session with the proxy first,
+			// then send CONNECT request over the encrypted connection.
+			d := &net.Dialer{Timeout: 30 * time.Second}
+			conn, err = tls.DialWithDialer(d, "tcp", proxyHost, &tls.Config{})
+		} else {
+			conn, err = net.DialTimeout("tcp", proxyHost, 30*time.Second)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("connect to proxy %s: %w", proxyHost, err)
+		}
+
+		// Send CONNECT request.
+		reqStr := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\n", addr, addr)
+		if _, err := conn.Write([]byte(reqStr)); err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("proxy CONNECT write: %w", err)
+		}
+
+		// Read HTTP response with a 30-second deadline.
+		conn.SetReadDeadline(time.Now().Add(30 * time.Second))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+
+		// Clear the deadline after reading.
+		conn.SetReadDeadline(time.Time{})
+		if err != nil {
+			conn.Close()
+			return nil, fmt.Errorf("proxy CONNECT response: %w", err)
+		}
+		resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			conn.Close()
+			return nil, fmt.Errorf("proxy CONNECT returned %s", resp.Status)
+		}
+
+		return conn, nil
+	}
 }
