@@ -6,13 +6,17 @@ import (
 
 type Session struct {
 	ID           string    `json:"id"`
-	ThreadID     string    `json:"thread_id,omitempty"`               // channel ThreadID for session lookup
+	ThreadID     string    `json:"thread_id,omitempty"` // channel ThreadID for session lookup
 	Title        string    `json:"title"`
-	ProviderName string    `json:"provider_name,omitempty"`            // config provider name (e.g. "deepseek-v4-flash"); empty = default provider
-	WorkingDir   string    `json:"working_dir,omitempty"`             // working directory at session creation time
+	ProviderName string    `json:"provider_name,omitempty"` // config provider name (e.g. "deepseek-v4-flash"); empty = default provider
+	WorkingDir   string    `json:"working_dir,omitempty"`   // working directory at session creation time
 	CreatedAt    time.Time `json:"created_at"`
 	UpdatedAt    time.Time `json:"updated_at"`
-	SkipDream    bool      `json:"skip_dream,omitempty"`              // exclude this session from Dream memory consolidation
+	SkipDream    bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+
+	// Session mode: "auto" (default), "chat", or "plan".
+	// Controls tool visibility: auto = full access, chat/plan = read-only.
+	Mode string `json:"mode,omitempty"`
 
 	// Compact-related fields: link to child/parent sessions after /compact.
 	CompactedChildID     string `json:"compacted_child_id,omitempty"`
@@ -26,18 +30,18 @@ const (
 	MessageTypeUser       MessageType = "user"
 	MessageTypeAssistant  MessageType = "assistant"
 	MessageTypeThinking   MessageType = "thinking"
-	MessageTypeToolCall    MessageType = "tool_call"
-	MessageTypeToolResult  MessageType = "tool_result"
-	MessageTypeConfirm     MessageType = "confirm"
+	MessageTypeToolCall   MessageType = "tool_call"
+	MessageTypeToolResult MessageType = "tool_result"
+	MessageTypeConfirm    MessageType = "confirm"
 )
 
 // Usage records token usage from a single LLM API response.
 type Usage struct {
-	InputTokens              int64  `json:"input_tokens,omitempty"`
-	OutputTokens             int64  `json:"output_tokens,omitempty"`
-	CacheCreationInputTokens int64  `json:"cache_creation_input_tokens,omitempty"`
-	CacheReadInputTokens     int64  `json:"cache_read_input_tokens,omitempty"`
-	EstimatedInputTokens     int64  `json:"estimated_input_tokens,omitempty"` // chars/4 local estimate — matches what statusbar showed during conversation
+	InputTokens              int64 `json:"input_tokens,omitempty"`
+	OutputTokens             int64 `json:"output_tokens,omitempty"`
+	CacheCreationInputTokens int64 `json:"cache_creation_input_tokens,omitempty"`
+	CacheReadInputTokens     int64 `json:"cache_read_input_tokens,omitempty"`
+	EstimatedInputTokens     int64 `json:"estimated_input_tokens,omitempty"` // chars/4 local estimate — matches what statusbar showed during conversation
 }
 
 type Message struct {

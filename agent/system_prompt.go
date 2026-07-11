@@ -122,8 +122,6 @@ Allowed tools: ReadFile, Glob, Grep, LSP, WebSearch, WebFetch, Skill, AskUserQue
 
 Call the SavePlan tool with:
 - title: A concise title for the plan
-- content: Full plan content in markdown — include goals, approach, key changes,
-  file list, and any design decisions
 - steps: A structured task list, each with content (imperative form) and status
   (pending / in_progress / completed)
 

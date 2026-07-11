@@ -164,6 +164,14 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 		}
 	}
 
+	// Restore session mode from metadata.
+	if s.Mode != "" && agent.ValidMode(s.Mode) {
+		if err := m.agent.SetMode(s.Mode); err == nil {
+			m.rebuildSystemPrompt()
+			m.statusbar.SetMode(s.Mode)
+		}
+	}
+
 	m.syncSessionInfo()
 
 	// Load messages and convert to LLM format

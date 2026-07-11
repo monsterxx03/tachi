@@ -397,9 +397,8 @@ func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
 		return nil
 	}
 	var args struct {
-		Title   string `json:"title"`
-		Content string `json:"content"`
-		Steps   []struct {
+		Title string `json:"title"`
+		Steps []struct {
 			Content string `json:"content"`
 			Status  string `json:"status"`
 		} `json:"steps"`
@@ -407,20 +406,11 @@ func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
 	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
 		return nil
 	}
-	if len(args.Steps) == 0 && args.Title == "" {
+	if len(args.Steps) == 0 {
 		return nil
 	}
 
-	entries := make([]acp.PlanEntry, 0, 1+len(args.Steps))
-
-	// First entry: plan title as a header entry
-	if args.Title != "" {
-		entries = append(entries, acp.PlanEntry{
-			Content:  "📋 " + args.Title,
-			Priority: acp.PlanEntryPriorityHigh,
-			Status:   acp.PlanEntryStatusPending,
-		})
-	}
+	entries := make([]acp.PlanEntry, 0, len(args.Steps))
 
 	for _, s := range args.Steps {
 		var status acp.PlanEntryStatus

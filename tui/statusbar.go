@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 
+	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -24,9 +25,10 @@ type StatusBar struct {
 	sessionTitle  string
 	sessionID     string
 	pendingCount  int
-	mcpReady      bool // true when MCP async init completes
-	mcpEnabled    bool // true when MCP servers are configured
-	compacting    bool // true when auto-compaction is in progress
+	mcpReady      bool   // true when MCP async init completes
+	mcpEnabled    bool   // true when MCP servers are configured
+	compacting    bool   // true when auto-compaction is in progress
+	modeBadge     string // current mode badge text (e.g. "[auto]")
 }
 
 const (
@@ -52,6 +54,7 @@ func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
 func (s *StatusBar) SetMCPReady(v bool)    { s.mcpReady = v }
 func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
 func (s *StatusBar) SetCompacting(v bool)  { s.compacting = v }
+func (s *StatusBar) SetMode(mode string)   { s.modeBadge = modeBadgeFor(mode) }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -95,6 +98,9 @@ func (s StatusBar) View() string {
 	}
 
 	left += " | " + s.providerInfo
+	if s.modeBadge != "" {
+		left += " " + modeBadgeStyleFor(s.modeBadge).Render(s.modeBadge)
+	}
 	if s.mcpEnabled && !s.mcpReady {
 		left += " | " + mcpConnectingStyle.Render("MCP: connecting...")
 	} else if s.mcpEnabled && s.mcpReady {
@@ -189,4 +195,30 @@ func formatCostCNY(cost float64) string {
 		return "<¥0.001"
 	}
 	return fmt.Sprintf("¥%.3f", cost)
+}
+
+// modeBadgeFor returns the display text for a session mode badge.
+func modeBadgeFor(mode string) string {
+	switch mode {
+	case agent.ModeAuto:
+		return "[auto]"
+	case agent.ModePlan:
+		return "[plan]"
+	case agent.ModeChat:
+		return "[chat]"
+	default:
+		return ""
+	}
+}
+
+// modeBadgeStyleFor returns the lipgloss style for a mode badge.
+func modeBadgeStyleFor(badge string) lipgloss.Style {
+	switch badge {
+	case "[plan]":
+		return modePlanStyle
+	case "[chat]":
+		return modeChatStyle
+	default:
+		return modeAutoStyle
+	}
 }
