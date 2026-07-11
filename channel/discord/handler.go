@@ -49,6 +49,13 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		directed = true
 	}
 
+	// When require_mention is false, every message that passes the
+	// filter below is intended to get a direct reply — treat it
+	// as directed rather than ambient/whisper.
+	if !dm && !ch.cfg.RequireMention {
+		directed = true
+	}
+
 	// 6. Check mention strategy in guild channels.
 	if !dm {
 		if ch.cfg.RequireMention && !directed && !ch.isFreeResponseChannel(m.ChannelID) {
@@ -84,48 +91,50 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 	// 9. Construct the IncomingMessage.
 	incoming := ch.buildIncomingMessage(m, threadID, dm, directed)
 
-	// 10. Start typing indicator with a cancellable context so that
-	// the typing loop responds to external cancellation signals.
+	// 10. Start typing indicator and status embed only for directed
+	// messages (ambient/whisper messages skip visible feedback).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
-	defer stopTyping()
+	if directed {
+		stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
+		defer stopTyping()
 
-	// 11. Send a status embed and set up streaming callback for
-	// real-time progress updates (tool calls, response text).
-	var embedMsgID string
-	sess := ch.session
-	if sess != nil {
-		embed := &discordgo.MessageEmbed{
-			Title:       "🤖 Tachi",
-			Description: "⏳ 正在处理...",
-			Color:       0x3498DB,
-		}
-		sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, embed)
-		if err == nil {
-			embedMsgID = sent.ID
+		// 11. Send a status embed and set up streaming callback for
+		// real-time progress updates (tool calls, response text).
+		var embedMsgID string
+		sess := ch.session
+		if sess != nil {
+			embed := &discordgo.MessageEmbed{
+				Title:       "🤖 Tachi",
+				Description: "⏳ 正在处理...",
+				Color:       0x3498DB,
+			}
+			sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, embed)
+			if err == nil {
+				embedMsgID = sent.ID
 
-			// Wire a streaming callback into the context so drainEvents
-			// pushes tool call progress to the embed in real time.
-			var toolBuf strings.Builder
-			ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
-				if strings.HasPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ") {
-					// Format: "\n\n> <font color=\"comment\">🔧 ToolName args</font>\n\n"
-					cleaned := strings.TrimPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ")
-					if idx := strings.Index(cleaned, "</font>"); idx >= 0 {
-						cleaned = cleaned[:idx]
+				// Wire a streaming callback into the context so drainEvents
+				// pushes tool call progress to the embed in real time.
+				var toolBuf strings.Builder
+				ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
+					if strings.HasPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ") {
+						// Format: "\n\n> <font color=\"comment\">🔧 ToolName args</font>\n\n"
+						cleaned := strings.TrimPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ")
+						if idx := strings.Index(cleaned, "</font>"); idx >= 0 {
+							cleaned = cleaned[:idx]
+						}
+						toolBuf.WriteString("🔧 " + cleaned + "\n")
+
+						_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
+							Title:       "🤖 Tachi",
+							Description: "```\n" + toolBuf.String() + "```",
+							Color:       0x3498DB,
+						})
 					}
-					toolBuf.WriteString("🔧 " + cleaned + "\n")
-
-					_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
-						Title:       "🤖 Tachi",
-						Description: "```\n" + toolBuf.String() + "```",
-						Color:       0x3498DB,
-					})
-				}
-				return nil
-			})
+					return nil
+				})
+			}
 		}
 	}
 
