@@ -383,7 +383,7 @@ func (a *AIAgent) runAgentLoop(
 		case <-ctx.Done():
 			ch <- AgentEvent{
 				Type:     AgentEventError,
-				Messages: *messages,
+				Messages: messages,
 				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: ctx.Err()},
 			}
 			return
