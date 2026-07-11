@@ -242,12 +242,11 @@ func (m *Model) rebuildSystemPrompt() {
 	m.systemPrompt = m.effectiveSystemPrompt()
 }
 
-// modeCycle returns the next mode in the rotation: auto → plan → chat → auto.
+// modeCycle returns the next mode in the rotation: auto → chat → auto.
+// Plan mode is excluded from the TUI cycle — it's only available via ACP.
 func modeCycle(current string) string {
 	switch current {
 	case agent.ModeAuto:
-		return agent.ModePlan
-	case agent.ModePlan:
 		return agent.ModeChat
 	case agent.ModeChat:
 		return agent.ModeAuto

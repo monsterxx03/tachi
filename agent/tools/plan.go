@@ -99,10 +99,11 @@ func (t SavePlanTool) ExecuteContext(ctx context.Context, args string) (string, 
 		return "", fmt.Errorf("create plans dir: %w", err)
 	}
 
-	// Generate filename from title + timestamp
+	// Generate filename: {sessionID}-{timestamp}-{slug}.json
 	slug := planSlug(params.Title)
+	sessionID := SessionIDFromCtx(ctx)
 	timestamp := time.Now().Format("2006-01-02-150405")
-	filename := fmt.Sprintf("%s-%s.json", timestamp, slug)
+	filename := fmt.Sprintf("%s-%s-%s.json", timestamp, slug, sessionID)
 	filePath := filepath.Join(planDir, filename)
 
 	// Save raw structured data as JSON — preserves the original format from
