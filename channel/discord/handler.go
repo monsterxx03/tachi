@@ -1,0 +1,273 @@
+package discord
+
+import (
+	"bytes"
+	"context"
+	"os"
+	"strings"
+
+	"github.com/bwmarrin/discordgo"
+	"github.com/monsterxx03/tachi/pkg/channel"
+)
+
+// handleMessageCreate processes a single MESSAGE_CREATE event through
+// the full pipeline: dedup, filter, construct, delegate, respond.
+func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate, handler channel.MessageHandler) {
+	// 0. Wait until bot is ready (botUserID known).
+	ch.mu.RLock()
+	botUserID := ch.botUserID
+	ch.mu.RUnlock()
+	if botUserID == "" {
+		return
+	}
+
+	// 1. Ignore messages from the bot itself.
+	if m.Author == nil || m.Author.ID == botUserID || m.Author.Bot {
+		return
+	}
+
+	// 2. Message deduplication.
+	if ch.deduper.seen(m.ID) {
+		ch.logger.Log("discord: duplicate message %s skipped", m.ID)
+		return
+	}
+
+	// 3. Channel-level filtering.
+	if !ch.isAllowedChannel(m.ChannelID) {
+		return
+	}
+
+	// 4. Determine if this is a DM.
+	dm := isDM(m.GuildID)
+
+	// 5. Determine directed status.
+	directed := dm || isMentioned(m.Content, botUserID)
+
+	// Free-response channels: all messages are treated as directed.
+	if !dm && ch.isFreeResponseChannel(m.ChannelID) {
+		directed = true
+	}
+
+	// 6. Check mention strategy in guild channels.
+	if !dm {
+		if ch.cfg.RequireMention && !directed && !ch.isFreeResponseChannel(m.ChannelID) {
+			// Non-directed message in a guild that requires @mention and is
+			// not a free-response channel — ignore (whisper/ambient handled
+			// by the manager layer via GroupChat flag).
+			return
+		}
+
+		// If IgnoreOtherMentions is true and bot isn't mentioned but others are, ignore.
+		if ch.cfg.IgnoreOtherMentions && !directed && containsMention(m.Content, botUserID) {
+			// Someone else was @mentioned but not bot → ignore.
+			return
+		}
+	}
+
+	// 7. Access control.
+	roles := ch.resolveMemberRoles(m.GuildID, m.Author.ID)
+	if !ch.isAuthorized(m.Author.ID, roles, dm) {
+		ch.logger.Log("discord: unauthorized user %s (%s) in channel %s",
+			m.Author.ID, m.Author.Username, m.ChannelID)
+		return
+	}
+
+	// 8. Build the ThreadID.
+	var threadID string
+	if dm {
+		threadID = threadIDForDM(m.Author.ID)
+	} else {
+		threadID = threadIDForGuild(m.GuildID, m.ChannelID)
+	}
+
+	// 9. Construct the IncomingMessage.
+	incoming := ch.buildIncomingMessage(m, threadID, dm, directed)
+
+	// 10. Start typing indicator with a cancellable context so that
+	// the typing loop responds to external cancellation signals.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
+	defer stopTyping()
+
+	// 11. Delegate to the manager handler.
+	result := handler(ctx, incoming)
+
+	// 12. Process the result.
+	ch.processHandlerResult(m, result, threadID)
+}
+
+// buildIncomingMessage constructs a channel.IncomingMessage from a Discord
+// MessageCreate event.
+func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threadID string, dm, directed bool) channel.IncomingMessage {
+	content := cleanContentForLLM(m.Content)
+
+	// TODO: Channel prompts should be injected into the system prompt via
+	// SystemPromptSuffixer, not prepended to user messages. However, the
+	// current SystemPromptSuffix() interface has no way to know which
+	// Discord channel the current message belongs to. Once the interface
+	// is extended to carry context (e.g., a context.Context parameter),
+	// wire ch.cfg.ChannelPrompts into SystemPromptSuffix() using
+	// channelIDFromThreadID(threadID) to look up the prompt.
+
+	senderName := resolveSenderName(m.Author)
+
+	// In shared guild sessions, prepend sender name so LLM knows who said what.
+	if !dm && senderName != "" && senderName != "unknown" {
+		content = "[" + senderName + "]: " + content
+	}
+
+	msg := channel.IncomingMessage{
+		ThreadID:  threadID,
+		MessageID: m.ID,
+		Content:   content,
+		ChannelID: m.ChannelID,
+		Sender:    senderName,
+		Directed:  directed,
+		GroupChat: !dm,
+	}
+
+	// Handle attachments.
+	if len(m.Attachments) > 0 {
+		for _, att := range m.Attachments {
+			downloaded, err := ch.downloadAttachment(att.URL)
+			if err != nil {
+				ch.logger.Log("discord: download attachment %s: %v", att.Filename, err)
+				msg.Attachments = append(msg.Attachments, channel.Attachment{
+					FileName: att.Filename,
+					Error:    err.Error(),
+				})
+				continue
+			}
+
+			// Save to cache.
+			savedPath := ""
+			if path, err := ch.saveAttachment(downloaded); err == nil {
+				savedPath = path
+			}
+
+			channelAtt := channel.Attachment{
+				Type:      resolveAttachmentType(downloaded.MimeType),
+				FileName:  downloaded.FileName,
+				MimeType:  downloaded.MimeType,
+				Content:   downloaded.Data,
+				Size:      downloaded.Size,
+				SavedPath: savedPath,
+			}
+
+			// For text files, extract text content if within size limits.
+			if isTextContent(downloaded.MimeType) && isWithinTextInjectionLimit(downloaded.Size) {
+				channelAtt.TextContent = string(downloaded.Data)
+			}
+
+			msg.Attachments = append(msg.Attachments, channelAtt)
+		}
+	}
+
+	return msg
+}
+
+// processHandlerResult handles the result of a manager handler call.
+func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, result channel.HandlerResult, threadID string) {
+	channelID := m.ChannelID
+
+	if result.Steered {
+		return
+	}
+
+	if result.Buffered {
+		return
+	}
+
+	if result.Streamed {
+		return
+	}
+
+	if result.Err != nil {
+		ch.logger.Log("discord: handler error: %v", result.Err)
+		return
+	}
+
+	// Send the reply.
+	reply := result.Reply
+	if reply.Content == "" {
+		return
+	}
+
+	// 1. Check for EMBED prefix.
+	if cleaned, embed, ok := parseEmbedContent(reply.Content); ok {
+		if err := ch.sendEmbed(channelID, embed); err != nil {
+			ch.logger.Log("discord: send embed error: %v", err)
+		}
+		// Send remaining text after embed, with MEDIA parsing.
+		if cleaned != "" {
+			if _, err := ch.sendTextWithMedia(channelID, cleaned); err != nil {
+				ch.logger.Log("discord: send embed text error: %v", err)
+			}
+		}
+	} else {
+		// 2. Normal text with MEDIA tag support.
+		if _, err := ch.sendTextWithMedia(channelID, reply.Content); err != nil {
+			ch.logger.Log("discord: send reply error: %v", err)
+		}
+	}
+
+	// 3. Send any explicit attachments from the reply (besides MEDIA ones).
+	for _, att := range reply.Attachments {
+		var err error
+		if att.Data != nil {
+			_, err = ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(att.Data))
+		} else if att.LocalPath != "" {
+			data, readErr := osReadFile(att.LocalPath)
+			if readErr != nil {
+				ch.logger.Log("discord: send attachment read %s: %v", att.FileName, readErr)
+				continue
+			}
+			_, err = ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data))
+		}
+		if err != nil {
+			ch.logger.Log("discord: send attachment %s error: %v", att.FileName, err)
+		}
+	}
+}
+
+// resolveSenderName returns the best display name for a user.
+// Prefers the global username; falls back to ID if both are empty.
+func resolveSenderName(user *discordgo.User) string {
+	if user == nil {
+		return "unknown"
+	}
+	if user.GlobalName != "" {
+		return user.GlobalName
+	}
+	if user.Username != "" {
+		return user.Username
+	}
+	return user.ID
+}
+
+// resolveAttachmentType maps MIME types to channel.AttachmentType.
+func resolveAttachmentType(mimeType string) channel.AttachmentType {
+	if strings.HasPrefix(mimeType, "text/") {
+		return channel.AttachmentTypeText
+	}
+	if strings.HasPrefix(mimeType, "image/") {
+		return channel.AttachmentTypeImage
+	}
+	return channel.AttachmentTypeFile
+}
+
+// containsMention checks whether the message contains any @mention
+// (including mentions of other users), as opposed to isMentioned which
+// specifically checks for the bot user.
+func containsMention(content, botUserID string) bool {
+	return strings.Contains(content, "<@") && !isMentioned(content, botUserID)
+}
+
+// osReadFile is a wrapper around os.ReadFile for testability.
+var osReadFile = osReadFileFunc
+
+func osReadFileFunc(path string) ([]byte, error) {
+	return os.ReadFile(path)
+}

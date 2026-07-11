@@ -23,8 +23,8 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	acppkg "github.com/monsterxx03/tachi/agent/acp"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
-	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/transcript/render"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -34,6 +34,7 @@ import (
 	"github.com/monsterxx03/tachi/tui"
 
 	_ "github.com/monsterxx03/tachi/channel/chrome"
+	_ "github.com/monsterxx03/tachi/channel/discord"
 	_ "github.com/monsterxx03/tachi/channel/weixin"
 )
 
