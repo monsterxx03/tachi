@@ -40,8 +40,8 @@ var (
 				Foreground(lipgloss.Color("#F5A97F"))
 
 	completionSelectedStyle = lipgloss.NewStyle().
-					Background(lipgloss.Color("#363A4F")).
-					Foreground(lipgloss.Color("#CAD3F5"))
+				Background(lipgloss.Color("#363A4F")).
+				Foreground(lipgloss.Color("#CAD3F5"))
 
 	completionNormalStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#6E738D"))
@@ -51,7 +51,7 @@ var (
 			PaddingLeft(1)
 
 	assistantMsgStyle = lipgloss.NewStyle().
-			PaddingLeft(1)
+				PaddingLeft(1)
 
 	selectModeStyle = lipgloss.NewStyle().
 			Bold(true).
@@ -74,7 +74,7 @@ var (
 			Foreground(lipgloss.Color("#A6DA95")) // Green for added
 
 	diffContextStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#6E738D")) // Dim for context
+				Foreground(lipgloss.Color("#6E738D")) // Dim for context
 
 	diffHeaderStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#F5A97F")).
@@ -84,7 +84,7 @@ var (
 				Foreground(lipgloss.Color("#A6DA95"))
 
 	usageWarnStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#EED49F"))
+			Foreground(lipgloss.Color("#EED49F"))
 
 	usageHighStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#ED8796"))
@@ -124,7 +124,6 @@ var (
 				Background(lipgloss.Color("#363A4F")).
 				Foreground(lipgloss.Color("#CAD3F5"))
 
-
 	mcpStatusOK = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A6DA95"))
 
@@ -146,8 +145,8 @@ var (
 				Foreground(lipgloss.Color("#8087A2"))
 
 	pendingMsgStyle = lipgloss.NewStyle().
-				Foreground(lipgloss.Color("#6E738D")).
-				Italic(true)
+			Foreground(lipgloss.Color("#6E738D")).
+			Italic(true)
 
 	pendingCountStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#EED49F"))
@@ -166,4 +165,13 @@ var (
 				Foreground(lipgloss.Color("#8BD5CA")).
 				Italic(true).
 				PaddingLeft(1)
+
+	modeAutoStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6DA95")) // green
+
+	modePlanStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#EED49F")) // yellow/warn
+
+	modeChatStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#7DC4E4")) // cyan/blue
 )

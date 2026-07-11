@@ -63,7 +63,7 @@ type chatMessage struct {
 // be used for the LLM summarization call.
 type pendingSwitchProvider struct {
 	provider      llm.Provider
-	providerInfo string
+	providerInfo  string
 	contextWindow int64
 }
 
@@ -73,7 +73,7 @@ type pendingSwitchProvider struct {
 // that the Update function handles synchronously.
 type switchProviderMsg struct {
 	provider      llm.Provider
-	providerInfo string
+	providerInfo  string
 	contextWindow int64
 }
 
@@ -86,9 +86,11 @@ type Model struct {
 	height int
 
 	agent        *agent.AIAgent
-	systemPrompt string
+	systemPrompt string // effective system prompt (base + mode supplement)
 	chatOpts     llm.ChatOptions
 	history      []llm.Message
+
+	baseSystemPrompt string // base prompt without mode supplement, used to rebuild systemPrompt
 
 	state          state
 	thinkingMode   bool
@@ -102,11 +104,11 @@ type Model struct {
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
 
-	savedHistory []llm.Message         // conversation history saved before a one-off run (e.g. /commit)
-	savedTools   map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
-	isCompacting bool                  // true during compact LLM call (distinct from savedHistory)
-	isResearching bool                 // true during deep research (blocks user input)
-	forkedAgent  *agent.ForkedAgent    // active forked agent (e.g. /review), closed on TurnComplete/error
+	savedHistory  []llm.Message         // conversation history saved before a one-off run (e.g. /commit)
+	savedTools    map[string]tools.Tool // tool registry saved before a one-off run (e.g. /commit)
+	isCompacting  bool                  // true during compact LLM call (distinct from savedHistory)
+	isResearching bool                  // true during deep research (blocks user input)
+	forkedAgent   *agent.ForkedAgent    // active forked agent (e.g. /review), closed on TurnComplete/error
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events
@@ -165,6 +167,7 @@ func NewModel(cfg ModelConfig) *Model {
 		input:            NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
 		agent:            cfg.Agent,
 		systemPrompt:     cfg.SystemPrompt,
+		baseSystemPrompt: cfg.SystemPrompt,
 		chatOpts:         cfg.ChatOpts,
 		state:            stateIdle,
 		cfg:              cfg.Config,
@@ -206,6 +209,9 @@ func NewModel(cfg ModelConfig) *Model {
 
 	m.refreshSkillCompletions()
 
+	// Sync initial mode to statusbar.
+	m.statusbar.SetMode(m.agent.Mode())
+
 	return m
 }
 
@@ -218,6 +224,99 @@ func (m *Model) syncSessionInfo() {
 		m.statusbar.SetSessionInfo(curr.Title, curr.ID)
 	} else {
 		m.statusbar.SetSessionInfo("", "")
+	}
+}
+
+// effectiveSystemPrompt returns the system prompt including mode-specific
+// supplements. In plan mode, the plan mode instructions are appended.
+func (m *Model) effectiveSystemPrompt() string {
+	if m.agent.Mode() == agent.ModePlan && m.baseSystemPrompt != "" {
+		return m.baseSystemPrompt + "\n\n" + agent.BuildPlanModePrompt()
+	}
+	return m.baseSystemPrompt
+}
+
+// rebuildSystemPrompt refreshes m.systemPrompt to reflect the current mode.
+// Called after switching modes so subsequent turns use the correct prompt.
+func (m *Model) rebuildSystemPrompt() {
+	m.systemPrompt = m.effectiveSystemPrompt()
+}
+
+// modeCycle returns the next mode in the rotation: auto → plan → chat → auto.
+func modeCycle(current string) string {
+	switch current {
+	case agent.ModeAuto:
+		return agent.ModePlan
+	case agent.ModePlan:
+		return agent.ModeChat
+	case agent.ModeChat:
+		return agent.ModeAuto
+	default:
+		return agent.ModeAuto
+	}
+}
+
+// modeDisplayName returns a human-readable name for a mode.
+func modeDisplayName(mode string) string {
+	switch mode {
+	case agent.ModeAuto:
+		return "Auto"
+	case agent.ModePlan:
+		return "Plan"
+	case agent.ModeChat:
+		return "Chat"
+	default:
+		return mode
+	}
+}
+
+// cycleMode switches to the next session mode in the rotation and updates
+// the UI: statusbar badge, system prompt, and session metadata.
+func (m *Model) cycleMode() {
+	current := m.agent.Mode()
+	next := modeCycle(current)
+	if next == current {
+		return // shouldn't happen, but guard
+	}
+
+	// The agent handles tool save/restore internally.
+	if err := m.agent.SetMode(next); err != nil {
+		m.logger.Log("TUI: failed to switch mode to %s: %v", next, err)
+		return
+	}
+
+	// Update UI.
+	m.rebuildSystemPrompt()
+	m.statusbar.SetMode(next)
+}
+
+// modeDescription returns a short description for a mode.
+func modeDescription(mode string) string {
+	switch mode {
+	case agent.ModeAuto:
+		return "完整工具权限：可编辑文件、运行命令、浏览网页等"
+	case agent.ModePlan:
+		return "只读规划模式：仅允许探索代码和保存计划"
+	case agent.ModeChat:
+		return "只读对话模式：仅允许搜索、浏览和提问"
+	default:
+		return ""
+	}
+}
+
+// persistMode writes the current session mode to the session's metadata on disk.
+func (m *Model) persistMode(mode string) {
+	sm := m.agent.SessionManager()
+	if sm == nil {
+		return
+	}
+	curr := sm.Current()
+	if curr == nil {
+		return
+	}
+	curr.Mode = mode
+	if err := sm.UpdateMeta(curr); err != nil {
+		m.logger.Log("TUI: failed to persist mode %s: %v", mode, err)
 	}
 }
 
@@ -549,7 +648,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case switchProviderMsg:
 		m.pendingSwitchProvider = &pendingSwitchProvider{
 			provider:      msg.provider,
-			providerInfo: msg.providerInfo,
+			providerInfo:  msg.providerInfo,
 			contextWindow: msg.contextWindow,
 		}
 		m.applyPendingSwitch()
@@ -687,6 +786,11 @@ func (m *Model) handleKeyIdle(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "ctrl+m":
 		return m, m.enterMCPOverlay()
+	case "shift+tab":
+		if m.state == stateIdle {
+			m.cycleMode()
+		}
+		return m, nil
 	case "esc":
 		if m.copyMode {
 			m.copyMode = false

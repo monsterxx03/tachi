@@ -697,8 +697,9 @@ func (m *Model) handleTranscriptCommand() tea.Cmd {
 }
 
 // handleDreamCommandDispatch parses /dream subcommands and dispatches.
-//   /dream or /dream run  → trigger AutoDream
-//   /dream status         → show current orchestrator status
+//
+//	/dream or /dream run  → trigger AutoDream
+//	/dream status         → show current orchestrator status
 func (m *Model) handleDreamCommandDispatch() tea.Cmd {
 	parts := strings.Fields(m.subcommandInput)
 	sub := ""
@@ -973,7 +974,7 @@ func (m *Model) handleResearchCommand() tea.Cmd {
 		Content: fmt.Sprintf("/research %s", parsed.Topic),
 	})
 	m.chatview.AddMessage(chatMessage{
-		Role:    "assistant",
+		Role: "assistant",
 		Content: fmt.Sprintf("🔬 **深度研究已启动**\n\n**主题**: %s\n**深度**: %d | **广度**: %d\n\n正在生成搜索查询、并行搜索、提取信息... 这可能需要几分钟，请稍候。\n\n进度消息会实时显示在此处。",
 			parsed.Topic, parsed.Depth, parsed.Breadth),
 	})
@@ -1033,7 +1034,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	}
 
 	m.streamGen++
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.systemPrompt, m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.effectiveSystemPrompt(), m.chatOpts)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

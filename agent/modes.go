@@ -81,5 +81,16 @@ func (a *AIAgent) SetMode(mode string) error {
 	}
 
 	a.mode = mode
+
+	// Best-effort persist mode to session metadata.
+	if a.sessionManager != nil {
+		if curr := a.sessionManager.Current(); curr != nil {
+			curr.Mode = mode
+			if err := a.sessionManager.UpdateMeta(curr); err != nil {
+				a.logger.Log("Agent: failed to persist mode %s: %v", mode, err)
+			}
+		}
+	}
+
 	return nil
 }
