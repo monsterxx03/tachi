@@ -459,33 +459,39 @@ func (p *backgroundTaskProvider) DrainCompleted() []systemreminder.BackgroundTas
 // MemoryRecallReminder (if memory is configured).
 // Called once during Configure after sub-systems are initialized.
 func (a *AIAgent) buildReminderCollector() {
-	core := []systemreminder.Reminder{
+	var reminders []systemreminder.Reminder
+
+	// Always-on reminders.
+	reminders = append(reminders,
 		systemreminder.DateReminder{},
 		systemreminder.ProjectContextReminder{},
 		systemreminder.IterationWarningReminder{Threshold: a.cfg.SystemReminder.IterationWarningThreshold},
 		systemreminder.TokenWarningReminder{ThresholdPct: a.cfg.SystemReminder.TokenWarningThresholdPct},
-	}
+		a.skillListReminder,
+		&systemreminder.BackgroundTaskReminder{
+			Provider: &backgroundTaskProvider{pm: a.processManager},
+		},
+		systemreminder.PlanTrackingReminder{},
+	)
+
+	// Git reminder (configurable).
 	if a.cfg.SystemReminder.GitReminder == nil || *a.cfg.SystemReminder.GitReminder {
-		core = append(core, systemreminder.GitReminder{})
+		reminders = append(reminders, systemreminder.GitReminder{})
 	}
 
-	all := make([]systemreminder.Reminder, 0, len(core)+3)
-	all = append(all, core...)
-	all = append(all, a.skillListReminder)
-	all = append(all, &systemreminder.BackgroundTaskReminder{
-		Provider: &backgroundTaskProvider{pm: a.processManager},
-	})
+	// Memory recall reminder (only when memory backend is enabled).
 	if a.memory != nil {
 		limit := a.cfg.Memory.RecallLimit
 		if limit <= 0 {
 			limit = 5
 		}
-		all = append(all, systemreminder.MemoryRecallReminder{
+		reminders = append(reminders, systemreminder.MemoryRecallReminder{
 			Backend: a.memory.Backend,
 			Limit:   limit,
 			Timeout: a.cfg.Memory.Timeout,
 		})
 	}
-	a.reminderCollector = systemreminder.NewCollector(all...)
+
+	a.reminderCollector = systemreminder.NewCollector(reminders...)
 	a.reminderCollector.SetLogger(a.logger)
 }

@@ -270,6 +270,22 @@ func ImagePartsFromCtx(ctx context.Context) []llm.ContentPart {
 	return carrier.parts
 }
 
+type sessionIDCtxKey struct{}
+
+// WithSessionID returns a context with a session ID attached.
+func WithSessionID(ctx context.Context, sessionID string) context.Context {
+	return context.WithValue(ctx, sessionIDCtxKey{}, sessionID)
+}
+
+// SessionIDFromCtx extracts the session ID from context, if any.
+func SessionIDFromCtx(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(sessionIDCtxKey{}).(string)
+	return id
+}
+
 // Invoke calls a tool with the given arguments and context.
 func (r *Registry) Invoke(ctx context.Context, name string, args string) ToolResult {
 	r.mu.RLock()

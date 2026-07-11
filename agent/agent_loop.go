@@ -359,6 +359,11 @@ func (a *AIAgent) runAgentLoop(
 	if a.sessionManager != nil && a.sessionManager.Current() != nil {
 		opts.SessionID = a.sessionManager.Current().ID
 	}
+	// Also inject session ID into context for tool execution (so SavePlan
+	// and other tools can associate their output with the current session).
+	if a.sessionManager != nil && a.sessionManager.Current() != nil {
+		ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
+	}
 
 	apiCallCount := 0
 	lengthContinueRetries := 0
@@ -750,5 +755,14 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		LastMessageDate: a.lastMessageDate,
 		IsToolResult:    isToolResult,
 		SkipRecall:      a.memory != nil && a.memory.SkipRecall,
+		SessionID:       a.sessionID(),
 	}
+}
+
+// sessionID returns the current session's ID, or empty string if no session.
+func (a *AIAgent) sessionID() string {
+	if a.sessionManager != nil && a.sessionManager.Current() != nil {
+		return a.sessionManager.Current().ID
+	}
+	return ""
 }

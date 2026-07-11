@@ -61,6 +61,10 @@ type Context struct {
 	// injected at a tool-result boundary. Reminders that only apply to
 	// specific tool invocations can inspect this field.
 	ToolNames []string
+
+	// SessionID is the current session's ID. Used by PlanTrackingReminder
+	// to filter plan files belonging to the current session.
+	SessionID string
 }
 
 // Reminder generates one or more reminder lines given the current context.
