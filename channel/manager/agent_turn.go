@@ -388,9 +388,9 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 
 	// Update the in-memory history cache with the full message slice from
 	// this turn (history + wrapped user msg + assistant + tool results).
-	// We always update even on error/cancel so the cached state stays
-	// consistent with what was sent to the LLM and recorded in the session.
-	if ca != nil {
+	// On cancel (/stop, /new) we skip the update so the agent doesn't
+	// resume partial work from a cancelled turn on the next message.
+	if ca != nil && !ta.cancelled {
 		if msgs := aiAgent.GetLastMessages(); len(msgs) > 0 {
 			ca.history = msgs
 			m.logger.Log("channel: thread=%s updated cached history (%d msgs)", msg.ThreadID, len(msgs))
