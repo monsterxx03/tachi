@@ -54,8 +54,9 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 	// In ACP mode, route through ACP client for Zed inline diff + accept/reject.
 	if conn := acpctx.Conn(ctx); conn != nil {
 		_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-			Path:    filePath,
-			Content: argsMap.Content,
+			SessionId: acpctx.SessionID(ctx),
+			Path:      filePath,
+			Content:   argsMap.Content,
 		})
 		if err != nil {
 			return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
