@@ -60,6 +60,7 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 				List:   &acp.SessionListCapabilities{},
 				Close:  &acp.SessionCloseCapabilities{},
 				Resume: &acp.SessionResumeCapabilities{},
+				Delete: &acp.SessionDeleteCapabilities{},
 			},
 			McpCapabilities: acp.McpCapabilities{
 				Http: true,
@@ -326,6 +327,31 @@ func (t *TachiAgent) CloseSession(_ context.Context, req acp.CloseSessionRequest
 	sess.Close()
 	t.sessions.Delete(sess.ID)
 	return acp.CloseSessionResponse{}, nil
+}
+
+// UnstableDeleteSession deletes a session by ID from both memory and disk.
+// This is an unstable ACP method — subject to change in future protocol versions.
+func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
+	sessionID := string(req.SessionId)
+	t.logger.Log("ACP: DeleteSession called for session %s", sessionID)
+
+	// Close and remove from memory if active.
+	if sess, ok := t.sessions.Get(sessionID); ok {
+		sess.Close()
+		t.sessions.Delete(sessionID)
+	}
+
+	// Delete from disk.
+	sm, err := session.NewManager()
+	if err != nil {
+		return acp.UnstableDeleteSessionResponse{}, fmt.Errorf("session manager: %w", err)
+	}
+	if err := sm.Delete(sessionID); err != nil {
+		return acp.UnstableDeleteSessionResponse{}, fmt.Errorf("delete session %s: %w", sessionID, err)
+	}
+
+	t.logger.Log("ACP: session %s deleted", sessionID)
+	return acp.UnstableDeleteSessionResponse{}, nil
 }
 
 // ListSessions lists active in-memory sessions, optionally filtered by cwd.

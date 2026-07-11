@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/coder/acp-go-sdk"
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -42,7 +44,7 @@ func NewReadTool() *ReadTool {
 	}
 }
 
-func (t *ReadTool) Name() string        { return ToolNameRead }
+func (t *ReadTool) Name() string { return ToolNameRead }
 func (t *ReadTool) Description() string {
 	return "Read the contents of a file. For image files (png, jpg, gif, webp), " +
 		"returns a description and makes the image available to vision-capable models."
@@ -73,7 +75,7 @@ var imageMagicBytes = map[string][]byte{
 	"image/png":  {0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A},
 	"image/jpeg": {0xFF, 0xD8, 0xFF},
 	"image/gif":  {0x47, 0x49, 0x46, 0x38}, // "GIF8"
-	"image/webp": nil, // webp detected by RIFF+WEBP; handled separately
+	"image/webp": nil,                      // webp detected by RIFF+WEBP; handled separately
 }
 
 // detectImageMime determines whether a file is a supported image format.
@@ -120,6 +122,57 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 
 	if isBlockedDevicePath(filePath) {
 		return "", fmt.Errorf("cannot read from blocked device path: %s", argsMap.Path)
+	}
+
+	// In ACP mode, route through ACP client so Zed shows which file is being read.
+	if conn := acpctx.Conn(ctx); conn != nil {
+		resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
+			SessionId: acpctx.SessionID(ctx),
+			Path:      filePath,
+		})
+		if err != nil {
+			return "", fmt.Errorf("ACP readTextFile failed: %w", err)
+		}
+
+		// Check for image files (by extension + magic bytes)
+		content := []byte(resp.Content)
+		if mime := detectImageMime(filePath, content); mime != "" {
+			encoded := base64.StdEncoding.EncodeToString(content)
+			AddImageParts(ctx, []llm.ContentPart{
+				{
+					Type:      llm.ContentPartImage,
+					MediaType: mime,
+					Data:      encoded,
+				},
+			})
+			return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
+				filepath.Base(filePath), mime, len(content), len(encoded)), nil
+		}
+
+		// Reject other binary files.
+		if isBinaryFile(content) {
+			return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
+		}
+
+		lines := strings.Split(resp.Content, "\n")
+
+		start := 0
+		if argsMap.Offset > 0 {
+			start = argsMap.Offset - 1
+		}
+		if start >= len(lines) {
+			return "", nil
+		}
+
+		end := len(lines)
+		if argsMap.Limit > 0 {
+			end = start + argsMap.Limit
+		}
+		if end > len(lines) {
+			end = len(lines)
+		}
+
+		return strings.Join(lines[start:end], "\n"), nil
 	}
 
 	// Check file size before reading
