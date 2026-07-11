@@ -382,8 +382,9 @@ func (a *AIAgent) runAgentLoop(
 		select {
 		case <-ctx.Done():
 			ch <- AgentEvent{
-				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: ctx.Err()},
+				Type:     AgentEventError,
+				Messages: messages,
+				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: ctx.Err()},
 			}
 			return
 		default:
@@ -496,8 +497,9 @@ func (a *AIAgent) handleToolCallFinish(
 	toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
 	if err != nil {
 		ch <- AgentEvent{
-			Type:   AgentEventError,
-			Result: &RunResult{ExitReason: "cancelled", Duration: time.Since(a.turnStart), Error: err},
+			Type:     AgentEventError,
+			Messages: *messages,
+			Result:   &RunResult{ExitReason: "cancelled", Duration: time.Since(a.turnStart), Error: err},
 		}
 		return false
 	}
