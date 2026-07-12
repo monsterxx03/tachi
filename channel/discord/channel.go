@@ -251,6 +251,14 @@ var commandOptions = map[string][]*discordgo.ApplicationCommandOption{
 			Required:    false,
 		},
 	},
+	"cd": {
+		{
+			Type:        discordgo.ApplicationCommandOptionString,
+			Name:        "directory",
+			Description: "Directory path to switch to",
+			Required:    true,
+		},
+	},
 }
 
 // registerSlashCommands registers Discord Application Commands from the
