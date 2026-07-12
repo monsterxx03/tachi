@@ -295,7 +295,7 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 	// 4. Update channel topic with working directory and git branch.
 	// Only for guild channels (DM channels don't have a meaningful topic).
 	if !isDM(m.GuildID) {
-		ch.updateChannelTopic(channelID)
+		ch.updateChannelTopic(channelID, result.WorkDir)
 	}
 }
 
@@ -342,40 +342,60 @@ func osReadFileFunc(path string) ([]byte, error) {
 // updateChannelTopic retrieves the current working directory and git branch,
 // then updates the given channel's topic if anything has changed since the
 // last update. Skips if the channel is a DM.
-func (ch *DiscordChannel) updateChannelTopic(channelID string) {
-	dir, err := os.Getwd()
-	if err != nil {
-		return
+// workDir is the per-thread working directory passed from the manager.
+func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
+	dir := workDir
+	if dir == "" {
+		// Fallback: use the process CWD if no per-thread workDir is known.
+		var err error
+		dir, err = os.Getwd()
+		if err != nil {
+			return
+		}
 	}
 
 	branch := ""
-	if b, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+	if b, err := func() ([]byte, error) {
+		cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
+		cmd.Dir = dir // run git in the thread's working directory
+		return cmd.Output()
+	}(); err == nil {
 		branch = strings.TrimSpace(string(b))
 	}
 
-	// Check if anything changed vs cached status.
-	ch.topicStatusMu.Lock()
-	last, seen := ch.topicStatus[channelID]
-	if seen && last.dir == dir && last.branch == branch {
-		ch.topicStatusMu.Unlock()
-		return
-	}
-	ch.topicStatus[channelID] = topicEntry{dir: dir, branch: branch}
-	ch.topicStatusMu.Unlock()
-
-	// Build the new topic text.
-	topic := "`" + dir + "`"
+	// Build the new topic text (Discord channel topic does not support
+	// markdown formatting, so plain text only).
+	topic := dir
 	if branch != "" {
-		topic += " · `" + branch + "`"
+		topic += " [" + branch + "]"
 	}
 
 	sess := ch.session
 	if sess == nil {
 		return
 	}
+
+	// Check if anything changed vs cached status — only AFTER confirming
+	// the API session is available, but BEFORE the API call, so we skip
+	// when nothing has changed (common case).
+	ch.topicStatusMu.Lock()
+	last, seen := ch.topicStatus[channelID]
+	if seen && last.dir == dir && last.branch == branch {
+		ch.topicStatusMu.Unlock()
+		return
+	}
+	ch.topicStatusMu.Unlock()
+
 	if _, err := sess.ChannelEdit(channelID, &discordgo.ChannelEdit{
 		Topic: topic,
 	}); err != nil {
 		ch.logger.Log("discord: update channel topic for %s: %v", channelID, err)
+		return
 	}
+
+	// Only cache the new status once the API call succeeded, so a transient
+	// failure (rate limit, permission) doesn't permanently block updates.
+	ch.topicStatusMu.Lock()
+	ch.topicStatus[channelID] = topicEntry{dir: dir, branch: branch}
+	ch.topicStatusMu.Unlock()
 }

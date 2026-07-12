@@ -464,7 +464,7 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 	}
 
 	// Execute the command via the Manager's CommandHandler.
-	result, err := cmdHandler(context.Background(), channel.SlashCommand{
+	reply, workDir, err := cmdHandler(context.Background(), channel.SlashCommand{
 		Name:     data.Name,
 		ThreadID: threadID,
 		Args:     args,
@@ -473,10 +473,15 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 		ch.respondInteraction(s, i, "❌ "+err.Error())
 		return
 	}
-	if result == "" {
-		result = "✅ Done"
+	if reply == "" {
+		reply = "✅ Done"
 	}
-	ch.respondInteraction(s, i, result)
+	ch.respondInteraction(s, i, reply)
+
+	// Update channel topic with the thread's current working directory.
+	if workDir != "" && !isDM(i.GuildID) {
+		ch.updateChannelTopic(i.ChannelID, workDir)
+	}
 }
 
 // handleAutocomplete processes an AUTOCOMPLETE interaction.

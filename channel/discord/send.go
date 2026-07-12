@@ -11,8 +11,8 @@ import (
 
 const (
 	// discordMessageLimit is the maximum length of a single Discord message.
-	// Discord raised this from 2000 to 4000 for bots in 2022.
-	discordMessageLimit = 4000
+	// discordgo v0.29.0 uses API v9, which enforces a 2000-character limit.
+	discordMessageLimit = 2000
 )
 
 // splitMessage splits a long message into chunks that fit within Discord's
