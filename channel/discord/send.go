@@ -2,12 +2,17 @@ package discord
 
 import (
 	"bytes"
+	"os"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
+
+// osReadFile is a package-level variable for testability.
+// Tests replace it to simulate file read failures.
+var osReadFile = os.ReadFile
 
 const (
 	// discordMessageLimit is the maximum length of a single Discord message.
@@ -371,18 +376,12 @@ func (ch *DiscordChannel) sendTextWithMedia(channelID string, content string) (i
 	// Upload each attachment.
 	sent := 0
 	for _, att := range attachments {
-		var err error
-		if att.Data != nil {
-			_, err = ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(att.Data))
-		} else if att.LocalPath != "" {
-			data, readErr := osReadFile(att.LocalPath)
-			if readErr != nil {
-				ch.logger.Log("discord: send media %s: %v", att.FileName, readErr)
-				continue
-			}
-			_, err = ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data))
-		}
+		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
+			ch.logger.Log("discord: send media resolve %s: %v", att.FileName, err)
+			continue
+		}
+		if _, err := ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data)); err != nil {
 			ch.logger.Log("discord: send media %s error: %v", att.FileName, err)
 			continue
 		}

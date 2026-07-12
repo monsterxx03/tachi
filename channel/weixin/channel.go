@@ -107,7 +107,7 @@ func (ch *Channel) Send(ctx context.Context, msg channel.OutgoingMessage) error 
 	// Supports both inline Data and deferred LocalPath (read from disk at send time).
 	for _, att := range msg.Attachments {
 		mediaType := channelAttachmentToILinkMediaType(att.Type)
-		data, err := ch.resolveAttachmentData(att)
+		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
 			ch.logger.Log("weixin: Send resolve attachment %s: %v", att.FileName, err)
 			continue

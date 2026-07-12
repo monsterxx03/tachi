@@ -215,7 +215,12 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		}
 
 		// Run agent in a goroutine; handler blocks on the result channel.
-		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta)
+		// Extract streaming callback from context before activating the thread.
+		// Channel implementations (e.g., Discord) set this for real-time tool call
+		// progress display. Passed directly to runAgentTurn rather than going
+		// through context indirection.
+		onTextDelta := streamingCallbackFromCtx(ctx)
+		go m.runAgentTurn(ta.ctx, msg, sendProgress, ta, onTextDelta)
 
 		select {
 		case result := <-ta.resultCh:
@@ -313,7 +318,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 // The two modes share session loading, steer wiring, image attachment, and
 // drainEvents — only the agent-acquisition and tool-registration steps
 // differ, so they're isolated in acquireForTurn.
-func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation) {
+func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) {
 	defer func() {
 		// Unblock the handler on panic.
 		if r := recover(); r != nil {
@@ -415,7 +420,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
-	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, streamingCallbackFromCtx(ctx))
+	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, onTextDelta)
 
 	// Update the in-memory history cache with the full message slice from
 	// this turn (history + wrapped user msg + assistant + tool results).
