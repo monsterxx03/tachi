@@ -6,19 +6,91 @@ import "strings"
 // each table block in a code block (```...```) so they render consistently
 // across all Discord clients (desktop, web, mobile).
 //
-// It skips content that already contains code block fences to avoid
-// double-wrapping, and only converts tables that have a valid separator
-// line (|---|---|---|) followed by data rows.
+// It only converts tables in non-code-block sections — content already inside
+// ``` fences is left untouched to avoid double-wrapping.
 func convertTablesToCodeBlock(content string) string {
 	if content == "" {
 		return content
 	}
 
-	// Skip if already inside code blocks (avoid double-wrapping).
-	if strings.Contains(content, "```") {
-		return content
+	// Split into code-block and non-code-block sections.
+	// Sections alternate: [text] [code-block] [text] [code-block] ...
+	// Odd indices are code-block content (between ``` fences).
+	sections := splitCodeBlockSections(content)
+	if len(sections) <= 1 {
+		// No code blocks at all — convert the whole thing.
+		return convertPipeTables(content)
 	}
 
+	var result strings.Builder
+	for i, sec := range sections {
+		if i%2 == 0 {
+			// Outside code block — convert tables.
+			result.WriteString(convertPipeTables(sec))
+		} else {
+			// Inside code block — leave as-is.
+			result.WriteString(sec)
+		}
+	}
+	return result.String()
+}
+
+// splitCodeBlockSections splits content into alternating sections split by
+// ``` fences. Odd-indexed sections are inside code blocks and should be
+// preserved verbatim. Even-indexed sections are outside.
+func splitCodeBlockSections(content string) []string {
+	const fence = "```"
+	var sections []string
+	remaining := content
+
+	for {
+		idx := strings.Index(remaining, fence)
+		if idx < 0 {
+			sections = append(sections, remaining)
+			break
+		}
+
+		// Text before this fence.
+		if idx > 0 {
+			sections = append(sections, remaining[:idx])
+		} else {
+			sections = append(sections, "")
+		}
+		remaining = remaining[idx:]
+
+		// Find closing fence.
+		closeIdx := -1
+		searchFrom := len(fence) // skip the opening fence itself
+		for {
+			ci := strings.Index(remaining[searchFrom:], fence)
+			if ci < 0 {
+				break
+			}
+			closeIdx = searchFrom + ci
+			// Make sure this isn't a fence with trailing content (e.g. ```go is fine,
+			// the closing fence is just ``` at the start of a line).
+			// We accept the first ``` after the opening one.
+			break
+		}
+
+		if closeIdx >= 0 {
+			// The code block content (between ``` and ```, including the opening fence line).
+			sections = append(sections, remaining[:closeIdx+len(fence)])
+			remaining = remaining[closeIdx+len(fence):]
+		} else {
+			// Unclosed fence — treat rest as code block.
+			sections = append(sections, remaining)
+			remaining = ""
+			break
+		}
+	}
+
+	return sections
+}
+
+// convertPipeTables detects pipe tables in the given text and wraps each
+// in a code block. The input should not contain ``` fences.
+func convertPipeTables(content string) string {
 	lines := strings.Split(content, "\n")
 	if len(lines) < 3 {
 		// A table needs at least: header, separator, data row.
@@ -68,7 +140,7 @@ func convertTablesToCodeBlock(content string) string {
 }
 
 // isPipeTableRow checks if a trimmed line looks like a pipe table row:
-// starts with | and ends with | (or is just |---| separator).
+// starts with | and ends with |.
 func isPipeTableRow(line string) bool {
 	if line == "" {
 		return false
