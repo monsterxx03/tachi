@@ -225,8 +225,12 @@ func parseMediaTags(content string) (string, []channel.OutgoingAttachment) {
 
 // --- Embed ---
 
-// parseEmbedContent checks if the content starts with "EMBED:" and parses
-// it into a Discord MessageEmbed with optional fields. Format:
+// parseEmbedContent checks if the content contains "EMBED:" and parses
+// it into a Discord MessageEmbed with optional fields. The EMBED block
+// can appear at any position — text before and after the embed is returned
+// as remaining content to be sent as a normal message.
+//
+// Format:
 //
 //	EMBED:title|description|color
 //	field:Name|Value|inline(可选)
@@ -234,20 +238,26 @@ func parseMediaTags(content string) (string, []channel.OutgoingAttachment) {
 //
 // Only title is required on the EMBED line. field: lines after it define
 // embed fields (inline=true/false, default false).
-// Returns the remaining text (non-field lines) and the embed.
+// Returns the remaining text (non-field lines + text before/after embed) and the embed.
 func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
-	if !strings.HasPrefix(content, "EMBED:") {
+	// Find the first EMBED: marker anywhere in content.
+	embedIdx := strings.Index(content, "EMBED:")
+	if embedIdx < 0 {
 		return content, nil, false
 	}
 
-	// Split the first line from the rest.
+	// Split: text before EMBED, the EMBED block, and text after.
+	textBefore := content[:embedIdx]
+	embedAndAfter := content[embedIdx:]
+
+	// Split the first line of the embed block from the rest.
 	var embedLine string
 	rest := ""
-	if before, after, ok := strings.Cut(content, "\n"); ok {
+	if before, after, ok := strings.Cut(embedAndAfter, "\n"); ok {
 		embedLine = before
 		rest = after
 	} else {
-		embedLine = content
+		embedLine = embedAndAfter
 	}
 
 	// Parse EMBED:title|description|color
@@ -275,7 +285,7 @@ func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
 		}
 	}
 
-	// Parse field: lines from the rest.
+	// Parse field: lines from the rest. Non-field lines are remaining text.
 	var textLines []string
 	for line := range strings.SplitSeq(rest, "\n") {
 		trimmed := strings.TrimSpace(line)
@@ -302,7 +312,17 @@ func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
 		}
 	}
 
-	return strings.TrimLeft(strings.Join(textLines, "\n"), "\n"), embed, true
+	// Reconstruct remaining text: textBefore + non-field lines after embed.
+	remaining := strings.TrimLeft(strings.Join(textLines, "\n"), "\n")
+	if textBefore != "" {
+		if remaining != "" {
+			remaining = textBefore + "\n" + remaining
+		} else {
+			remaining = textBefore
+		}
+	}
+
+	return remaining, embed, true
 }
 
 // parseEmbedColor converts a color string to an int.

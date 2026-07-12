@@ -273,6 +273,9 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 		return
 	}
 
+	// Convert 2-column pipe tables to EMBED format for better display.
+	reply.Content = convertTablesToEmbeds(reply.Content)
+
 	// 1. Check for EMBED prefix.
 	if cleaned, embed, ok := parseEmbedContent(reply.Content); ok {
 		if err := ch.sendEmbed(channelID, embed); err != nil {
