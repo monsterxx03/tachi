@@ -5,8 +5,10 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/channel/manager"
@@ -105,9 +107,12 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		// 11. Set up streaming callback for real-time tool call progress.
 		// The status embed is only sent when the first tool call is detected,
 		// skipping the embed entirely for simple text-only replies.
+		const maxEmbedDescRunes = 3800 // Discord limit is 4096, leave room
+
 		var (
 			embedMsgID string
 			toolBuf    strings.Builder
+			toolCount  int
 			mu         sync.Mutex
 		)
 		ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
@@ -121,8 +126,20 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 			}
 
 			mu.Lock()
+			toolCount++
 			toolBuf.WriteString("🔧 " + cleaned + "\n")
 			desc := "```\n" + toolBuf.String() + "```"
+
+			// Discord embed descriptions have a 4096 character limit.
+			// Truncate at rune boundaries to avoid cutting Chinese/multi-byte chars.
+			if utf8.RuneCountInString(desc) > maxEmbedDescRunes {
+				pos := 0
+				for i := 0; i < maxEmbedDescRunes && pos < len(desc); i++ {
+					_, size := utf8.DecodeRuneInString(desc[pos:])
+					pos += size
+				}
+				desc = desc[:pos] + "\n… 还有 " + strconv.Itoa(toolCount-len(strings.Split(desc[:pos], "\n"))) + " 个调用"
+			}
 			mu.Unlock()
 
 			sess := ch.session
