@@ -224,6 +224,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				// Turn was cancelled by /stop or /new.
 				return channel.HandlerResult{Steered: true}
 			}
+			// Capture the thread's working directory for the channel to use
+			// (e.g., updating Discord channel topic). Read before eviction
+			// in the compact path below.
+			workDir := m.getThreadWorkDir(msg.ThreadID)
 			if result.err != nil {
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
@@ -232,7 +236,8 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						ReplyTo:     msg.MessageID,
 						Attachments: result.attachments,
 					},
-					Err: result.err,
+					Err:     result.err,
+					WorkDir: workDir,
 				}
 			}
 
@@ -248,7 +253,8 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 							Content:  fmt.Sprintf("❌ 压缩失败: %v", err),
 							ReplyTo:  msg.MessageID,
 						},
-						Err: err,
+						Err:     err,
+						WorkDir: workDir,
 					}
 				}
 				// Evict the cached agent so the next turn reloads history from
@@ -260,6 +266,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						Content:  reply,
 						ReplyTo:  msg.MessageID,
 					},
+					WorkDir: workDir,
 				}
 			}
 
@@ -270,6 +277,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 					ReplyTo:     msg.MessageID,
 					Attachments: result.attachments,
 				},
+				WorkDir: workDir,
 			}
 		case <-ta.ctx.Done():
 			m.deactivateThread(msg.ThreadID, ta)
@@ -348,6 +356,19 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		aiAgent.SetSessionManager(sm)
 		// Notify memory backend when a new session was created
 		aiAgent.StartSessionMemory()
+
+		// Restore persisted working directory from session metadata.
+		// When a thread's session has a WorkingDir (set by a previous /cd
+		// that was persisted via persistThreadWorkDir), use it to override
+		// the default initialWorkDir() so changes survive restarts.
+		if ca != nil {
+			sess := sm.Current()
+			if sess != nil && sess.WorkingDir != "" && sess.WorkingDir != ca.workDir {
+				ca.workDir = sess.WorkingDir
+				workDir = sess.WorkingDir
+				ctx = wdctx.WithDir(ctx, sess.WorkingDir)
+			}
+		}
 	}
 
 	// Use the in-memory cached history when available (normal turns).

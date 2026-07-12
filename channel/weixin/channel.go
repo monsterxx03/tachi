@@ -190,13 +190,8 @@ func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) erro
 // When no saved account is available (first-time setup), the greeting
 // is deferred to Run() and sent after the QR-code login succeeds.
 func (ch *Channel) OnStart(ctx context.Context) error {
-	// Resolve greeting message.
-	msg := ch.cfg.Greeting
-	if msg == "" {
-		// Default greeting in Chinese (the primary language of WeChat users).
-		msg = "👋 你好！Tachi 已启动，随时可以开始工作～"
-	}
-	ch.greeting = msg
+	// Resolve greeting message. Empty = no greeting.
+	ch.greeting = ch.cfg.Greeting
 
 	// If a saved account exists, we already know the admin user's ID and
 	// can send the startup greeting right away, before entering Run().
@@ -219,9 +214,11 @@ func (ch *Channel) OnStart(ctx context.Context) error {
 	ch.cli.SetBotToken(ch.botToken)
 	ch.cli.SetRouteTag(ch.cfg.RouteTag)
 
-	ch.logger.Log("weixin: sending startup greeting to %s", ch.userID)
-	if err := ch.sendTextReply(ch.userID, "", ch.greeting); err != nil {
-		ch.logger.Log("weixin: greeting send error: %v", err)
+	if ch.greeting != "" {
+		ch.logger.Log("weixin: sending startup greeting to %s", ch.userID)
+		if err := ch.sendTextReply(ch.userID, "", ch.greeting); err != nil {
+			ch.logger.Log("weixin: greeting send error: %v", err)
+		}
 	}
 	ch.greetingSent = true
 	return nil

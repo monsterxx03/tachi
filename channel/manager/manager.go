@@ -597,6 +597,26 @@ func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo stri
 	m.logger.Log("channel: sendToThread — no channel accepted thread %s", threadID)
 }
 
+// persistThreadWorkDir persists the thread's working directory to its session
+// metadata so it survives restarts. Errors are logged but not returned since
+// the in-memory cache has already been updated — persistence is best-effort.
+func (m *Manager) persistThreadWorkDir(threadID, workDir string) {
+	sm := m.newSessionManager()
+	if sm == nil {
+		return
+	}
+	sess, err := sm.FindByThreadID(threadID)
+	if err != nil || sess == nil {
+		return
+	}
+	sm.SetCurrent(sess)
+	sess.WorkingDir = workDir
+	sess.UpdatedAt = time.Now()
+	if err := sm.UpdateMeta(sess); err != nil {
+		m.logger.Log("channel: persist workDir for thread %s: %v", threadID, err)
+	}
+}
+
 // presentQuestionsToChannel delivers structured AskUser questions to the
 // channel that owns the given thread. Interactive channels receive the
 // questions via PresentQuestions; non-interactive channels should never

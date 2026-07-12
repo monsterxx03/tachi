@@ -303,3 +303,14 @@ func initialWorkDir() string {
 	}
 	return wd
 }
+
+// getThreadWorkDir returns the cached working directory for a thread, or ""
+// if no cached agent exists for the thread.
+func (m *Manager) getThreadWorkDir(threadID string) string {
+	m.agentCacheMu.Lock()
+	defer m.agentCacheMu.Unlock()
+	if ca, ok := m.agentCache[threadID]; ok {
+		return ca.workDir
+	}
+	return ""
+}

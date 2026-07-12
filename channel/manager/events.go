@@ -3,12 +3,10 @@ package manager
 import (
 	"context"
 	"fmt"
-	"os/exec"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
@@ -162,17 +160,6 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
 							text.WriteString(summary)
 						}
-					}
-					// Append working directory and git branch footer.
-					dir := wdctx.Dir(ctx)
-					if dir != "" {
-						footer := "\n`" + dir + "`"
-						if branch, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
-							if b := strings.TrimSpace(string(branch)); b != "" {
-								footer += " · `" + b + "`"
-							}
-						}
-						text.WriteString(footer)
 					}
 				}
 				if event.Result.Error != nil {
