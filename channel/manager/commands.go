@@ -390,6 +390,19 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 		return "Usage: /cd <directory>", nil
 	}
 
+	// Expand ~ to home directory.
+	if strings.HasPrefix(dir, "~") {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return "", fmt.Errorf("cannot expand ~: %w", err)
+		}
+		if dir == "~" {
+			dir = home
+		} else {
+			dir = filepath.Join(home, dir[1:])
+		}
+	}
+
 	// Quick read to get current workDir for relative path resolution.
 	m.agentCacheMu.Lock()
 	ca, ok := m.agentCache[threadID]
