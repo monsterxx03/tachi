@@ -179,27 +179,27 @@ func (ch *DiscordChannel) SetProviderNames(names []string) {
 // Appends Discord-specific instructions to the agent's system prompt
 // so the LLM knows about platform limitations and the Embed format.
 func (ch *DiscordChannel) SystemPromptSuffix() string {
-	return `## Discord 平台限制
+	return `## Discord Platform Limitations
 
-Discord 消息正文的 markdown 支持有限：
-- ❌ 不支持表格（| col1 | col2 |）
-- ❌ 不支持 HTML
-- ❌ 不支持分隔线 ---
+Discord message content has limited markdown support:
+- ❌ No tables (| col1 | col2 |)
+- ❌ No HTML
+- ❌ No horizontal rules ---
 
-展示结构化/表格数据时，请使用 [EMBED] 格式（支持字段）：
-EMBED:标题|描述|颜色
-field:字段名|字段值|true(可选inline)
+For structured/tabular data, use the [EMBED] format with fields:
+EMBED:title|description|color
+field:Name|Value|true(optional, inline)
 
-示例：
-EMBED:📊 项目概览|这是描述|#3498DB
-field:名称|Tachi|true
-field:语言|Go|true
-field:状态|活跃中
+Example:
+EMBED:📊 Overview|Project stats|#3498DB
+field:Name|Tachi|true
+field:Language|Go|true
+field:Status|Active
 
-注意：
-- EMBED: 必须是消息的第一行
-- field: 行跟在 EMBED: 行之后，不限数量
-- inline=true 让字段并排显示（默认 false）`
+Notes:
+- EMBED: must be the first line of the message
+- field: lines follow the EMBED: line, unlimited
+- inline=true makes fields display side by side (default false)`
 }
 
 // Send implements channel.MessageSender for proactive message delivery
