@@ -30,7 +30,6 @@ type DiscordConfig struct {
 	// Channel routing
 	IgnoredChannels []string `yaml:"ignored_channels"` // Never reply in these channels
 	AllowedChannels []string `yaml:"allowed_channels"` // Only reply in these channels (empty = all allowed)
-	HomeChannel     string   `yaml:"home_channel"`     // Channel for proactive messages (cron/notifications)
 
 	// Thread
 	AutoThread       bool     `yaml:"auto_thread"`        // Auto-create thread on @mention (default: false)

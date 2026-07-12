@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"os"
+	"os/exec"
 	"strings"
 	"sync"
 
@@ -290,6 +291,12 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 			ch.logger.Log("discord: send attachment %s error: %v", att.FileName, err)
 		}
 	}
+
+	// 4. Update channel topic with working directory and git branch.
+	// Only for guild channels (DM channels don't have a meaningful topic).
+	if !isDM(m.GuildID) {
+		ch.updateChannelTopic(channelID)
+	}
 }
 
 // resolveSenderName returns the best display name for a user.
@@ -330,4 +337,45 @@ var osReadFile = osReadFileFunc
 
 func osReadFileFunc(path string) ([]byte, error) {
 	return os.ReadFile(path)
+}
+
+// updateChannelTopic retrieves the current working directory and git branch,
+// then updates the given channel's topic if anything has changed since the
+// last update. Skips if the channel is a DM.
+func (ch *DiscordChannel) updateChannelTopic(channelID string) {
+	dir, err := os.Getwd()
+	if err != nil {
+		return
+	}
+
+	branch := ""
+	if b, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+		branch = strings.TrimSpace(string(b))
+	}
+
+	// Check if anything changed vs cached status.
+	ch.topicStatusMu.Lock()
+	last, seen := ch.topicStatus[channelID]
+	if seen && last.dir == dir && last.branch == branch {
+		ch.topicStatusMu.Unlock()
+		return
+	}
+	ch.topicStatus[channelID] = topicEntry{dir: dir, branch: branch}
+	ch.topicStatusMu.Unlock()
+
+	// Build the new topic text.
+	topic := "`" + dir + "`"
+	if branch != "" {
+		topic += " · `" + branch + "`"
+	}
+
+	sess := ch.session
+	if sess == nil {
+		return
+	}
+	if _, err := sess.ChannelEdit(channelID, &discordgo.ChannelEdit{
+		Topic: topic,
+	}); err != nil {
+		ch.logger.Log("discord: update channel topic for %s: %v", channelID, err)
+	}
 }
