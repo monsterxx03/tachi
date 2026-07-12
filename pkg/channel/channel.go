@@ -228,6 +228,12 @@ type HandlerResult struct {
 	Buffered bool            // True if the message was buffered for ambient processing.
 	Streamed bool            // True if the reply was sent via streaming card; channel should not sendMessage again.
 	Err      error           // Non-nil when processing failed.
+
+	// WorkDir is the resolved working directory for the thread after processing
+	// the message. Set by the manager; channel implementations can use this to
+	// display context (e.g., updating the Discord channel topic). Empty if
+	// the handler hasn't started an agent turn (steer/buffer/slash-command).
+	WorkDir string
 }
 
 // MessageHandler processes an incoming message and returns a response.
@@ -312,15 +318,10 @@ type SlashCommand struct {
 	Args string
 }
 
-// CommandHandler executes a typed SlashCommand and returns the response text.
-// It allows channel implementations to invoke manager-level capabilities
-// directly — creating sessions, listing MCP servers,
-// etc. — without routing through the text-based message handler.
-//
-// Channels receive this handler through the CommandChannel interface
-// before Run() is called. Channels that do not implement CommandChannel
-// continue to work exactly as before (backward compatible).
-type CommandHandler func(ctx context.Context, cmd SlashCommand) (string, error)
+// CommandHandler executes a typed SlashCommand and returns the response text,
+// the thread's current working directory (for channel topic updates, etc.),
+// and an error (if any).
+type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply string, workDir string, err error)
 
 // CommandChannel is an optional interface for channels that need
 // programmatic access to manager-level slash commands.

@@ -28,12 +28,17 @@ import (
 // This allows channels to invoke manager operations programmatically
 // without routing through the text-based message handler path.
 func (m *Manager) buildCommandHandler() channel.CommandHandler {
-	return func(ctx context.Context, cmd channel.SlashCommand) (string, error) {
+	return func(ctx context.Context, cmd channel.SlashCommand) (string, string, error) {
 		result, err := m.executeSlashCommand(cmd)
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		return result.Reply.Content, result.Err
+		// Read the current workDir from cache for channel topic updates.
+		workDir := result.WorkDir
+		if workDir == "" {
+			workDir = m.getThreadWorkDir(cmd.ThreadID)
+		}
+		return result.Reply.Content, workDir, result.Err
 	}
 }
 
@@ -147,6 +152,14 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) channel.Handle
 	if result.Reply.ReplyTo == "" {
 		result.Reply.ReplyTo = msg.MessageID
 	}
+
+	// Propagate the thread's current working directory so channel implementations
+	// can update platform-specific UI (e.g., Discord channel topic). Commands
+	// like /cd have just updated this in the cache.
+	if result.WorkDir == "" {
+		result.WorkDir = m.getThreadWorkDir(msg.ThreadID)
+	}
+
 	return result
 }
 
@@ -438,6 +451,11 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 		ca.workDir = target
 	}
 	m.agentCacheMu.Unlock()
+
+	// Persist the new working directory to the thread's session metadata
+	// so it survives restarts. This is best-effort; the in-memory cache has
+	// already been updated.
+	m.persistThreadWorkDir(threadID, target)
 
 	return fmt.Sprintf("✅ Working directory changed to `%s`", target), nil
 }

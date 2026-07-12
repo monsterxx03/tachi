@@ -114,6 +114,17 @@ type DiscordChannel struct {
 
 	// Attachment cache directory
 	cacheDir string
+
+	// Per-channel topic status tracking — avoids unnecessary API calls
+	// when directory and git branch haven't changed.
+	topicStatus   map[string]topicEntry // channelID → last topic info
+	topicStatusMu sync.Mutex
+}
+
+// topicEntry holds the last known directory and git branch for a channel topic.
+type topicEntry struct {
+	dir    string
+	branch string
 }
 
 // componentHandler is a callback for interactive component interactions (Phase 2+).
@@ -145,6 +156,7 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 		componentHandlers: make(map[string]componentHandler),
 		memberCache:       newMemberCache(),
 		deduper:           newMessageDeduper(),
+		topicStatus:       make(map[string]topicEntry),
 	}, nil
 }
 
@@ -452,7 +464,7 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 	}
 
 	// Execute the command via the Manager's CommandHandler.
-	result, err := cmdHandler(context.Background(), channel.SlashCommand{
+	reply, workDir, err := cmdHandler(context.Background(), channel.SlashCommand{
 		Name:     data.Name,
 		ThreadID: threadID,
 		Args:     args,
@@ -461,10 +473,15 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 		ch.respondInteraction(s, i, "❌ "+err.Error())
 		return
 	}
-	if result == "" {
-		result = "✅ Done"
+	if reply == "" {
+		reply = "✅ Done"
 	}
-	ch.respondInteraction(s, i, result)
+	ch.respondInteraction(s, i, reply)
+
+	// Update channel topic with the thread's current working directory.
+	if workDir != "" && !isDM(i.GuildID) {
+		ch.updateChannelTopic(i.ChannelID, workDir)
+	}
 }
 
 // handleAutocomplete processes an AUTOCOMPLETE interaction.
@@ -531,20 +548,26 @@ func (ch *DiscordChannel) respondInteraction(s *discordgo.Session, i *discordgo.
 	}
 }
 
-// sendGreeting sends the startup greeting to the home channel, if configured.
+// sendGreeting sends the startup greeting as a DM to the first allowed user.
 func (ch *DiscordChannel) sendGreeting() {
 	if ch.cfg.Greeting == "" {
 		return
 	}
-	if ch.cfg.HomeChannel == "" {
-		ch.logger.Log("discord: greeting configured but no home_channel set")
+	if len(ch.cfg.AllowedUsers) == 0 {
+		ch.logger.Log("discord: greeting configured but no allowed_users to send to")
 		return
 	}
 	sess := ch.session
 	if sess == nil {
 		return
 	}
-	if _, err := sess.ChannelMessageSend(ch.cfg.HomeChannel, ch.cfg.Greeting); err != nil {
+	// Create/open a DM channel with the first allowed user.
+	dmChannel, err := sess.UserChannelCreate(ch.cfg.AllowedUsers[0])
+	if err != nil {
+		ch.logger.Log("discord: create DM channel for greeting: %v", err)
+		return
+	}
+	if _, err := sess.ChannelMessageSend(dmChannel.ID, ch.cfg.Greeting); err != nil {
 		ch.logger.Log("discord: send greeting error: %v", err)
 	}
 }

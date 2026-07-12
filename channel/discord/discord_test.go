@@ -173,8 +173,8 @@ func TestSplitMessage(t *testing.T) {
 		{"short message", "hello", 1},
 		{"exactly at limit", strings.Repeat("a", discordMessageLimit), 1},
 		{"just over limit", strings.Repeat("a", discordMessageLimit+1), 2},
-		{"paragraph break", strings.Repeat("a", 3000) + "\n\n" + strings.Repeat("b", 3000), 2},
-		{"newline break", strings.Repeat("a", 3000) + "\n" + strings.Repeat("b", 3000), 2},
+		{"paragraph break", strings.Repeat("a", discordMessageLimit/2) + "\n\n" + strings.Repeat("b", discordMessageLimit/2), 2},
+		{"newline break", strings.Repeat("a", discordMessageLimit/2) + "\n" + strings.Repeat("b", discordMessageLimit/2), 2},
 		{"empty", "", 0},
 		{"exactly double", strings.Repeat("a", discordMessageLimit*2), 2},
 	}
