@@ -220,21 +220,12 @@ func (ch *DiscordChannel) Send(ctx context.Context, msg channel.OutgoingMessage)
 
 	// Send each attachment.
 	for _, att := range msg.Attachments {
-		var data []byte
-		if att.Data != nil {
-			data = att.Data
-		} else if att.LocalPath != "" {
-			var err error
-			data, err = os.ReadFile(att.LocalPath)
-			if err != nil {
-				ch.logger.Log("discord: Send read attachment %s: %v", att.FileName, err)
-				continue
-			}
-		} else {
+		data, err := channel.ResolveAttachmentData(att)
+		if err != nil {
+			ch.logger.Log("discord: Send resolve attachment %s: %v", att.FileName, err)
 			continue
 		}
-		_, err := sess.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data))
-		if err != nil {
+		if _, err := sess.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data)); err != nil {
 			ch.logger.Log("discord: Send attachment %s error: %v (continuing)", att.FileName, err)
 		}
 	}

@@ -293,18 +293,12 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 
 	// 3. Send any explicit attachments from the reply (besides MEDIA ones).
 	for _, att := range reply.Attachments {
-		var err error
-		if att.Data != nil {
-			_, err = ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(att.Data))
-		} else if att.LocalPath != "" {
-			data, readErr := osReadFile(att.LocalPath)
-			if readErr != nil {
-				ch.logger.Log("discord: send attachment read %s: %v", att.FileName, readErr)
-				continue
-			}
-			_, err = ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data))
-		}
+		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
+			ch.logger.Log("discord: send attachment resolve %s: %v", att.FileName, err)
+			continue
+		}
+		if _, err := ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data)); err != nil {
 			ch.logger.Log("discord: send attachment %s error: %v", att.FileName, err)
 		}
 	}
@@ -349,13 +343,6 @@ func containsMention(content, botUserID string) bool {
 	return strings.Contains(content, "<@") && !isMentioned(content, botUserID)
 }
 
-// osReadFile is a wrapper around os.ReadFile for testability.
-var osReadFile = osReadFileFunc
-
-func osReadFileFunc(path string) ([]byte, error) {
-	return os.ReadFile(path)
-}
-
 // updateChannelTopic retrieves the current working directory and git branch,
 // then updates the given channel's topic if anything has changed since the
 // last update. Skips if the channel is a DM.
@@ -369,6 +356,17 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 		if err != nil {
 			return
 		}
+	}
+
+	// Fast path: if the directory hasn't changed since the last update,
+	// skip entirely — the topic content is effectively the same.
+	// The git branch is secondary info; changes via external checkout are
+	// rare and this avoids an unnecessary shell out on every reply.
+	ch.topicStatusMu.Lock()
+	last, seen := ch.topicStatus[channelID]
+	ch.topicStatusMu.Unlock()
+	if seen && last.dir == dir {
+		return
 	}
 
 	branch := ""
@@ -392,11 +390,10 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 		return
 	}
 
-	// Check if anything changed vs cached status — only AFTER confirming
-	// the API session is available, but BEFORE the API call, so we skip
-	// when nothing has changed (common case).
+	// Full cache check with branch — only call the API when something
+	// actually changed (avoids rate limit issues on repeated replies).
 	ch.topicStatusMu.Lock()
-	last, seen := ch.topicStatus[channelID]
+	last, seen = ch.topicStatus[channelID]
 	if seen && last.dir == dir && last.branch == branch {
 		ch.topicStatusMu.Unlock()
 		return
