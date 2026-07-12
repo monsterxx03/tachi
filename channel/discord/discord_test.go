@@ -862,16 +862,23 @@ func TestParseEmbedContent(t *testing.T) {
 		wantOK      bool
 		wantTitle   string
 		wantDesc    string
+		wantColor   int
+		wantFields  int
 		wantCleaned string
 	}{
-		{"no embed prefix", "hello world", false, "", "", "hello world"},
-		{"embed only", "EMBED:My Title", true, "My Title", "", ""},
-		{"embed with desc", "EMBED:Title|Description", true, "Title", "Description", ""},
-		{"embed with color", "EMBED:Title|Desc|green", true, "Title", "Desc", ""},
-		{"empty title", "EMBED:", false, "", "", "EMBED:"},
-		{"embed with text after", "EMBED:Title|Desc|blue\nSome more text", true, "Title", "Desc", "Some more text"},
-		{"embed with multi-line after", "EMBED:Alert|注意|red\n\n这是第一行\n这是第二行", true, "Alert", "注意", "这是第一行\n这是第二行"},
-		{"embed only, no desc", "EMBED:OnlyTitle||red", true, "OnlyTitle", "", ""},
+		{"no embed prefix", "hello world", false, "", "", 0, 0, "hello world"},
+		{"embed only", "EMBED:My Title", true, "My Title", "", 0, 0, ""},
+		{"embed with desc", "EMBED:Title|Description", true, "Title", "Description", 0, 0, ""},
+		{"embed with color", "EMBED:Title|Desc|green", true, "Title", "Desc", 0x2ECC71, 0, ""},
+		{"empty title", "EMBED:", false, "", "", 0, 0, "EMBED:"},
+		{"embed with text after", "EMBED:Title|Desc|blue\nSome more text", true, "Title", "Desc", 0x3498DB, 0, "Some more text"},
+		{"embed with multi-line after", "EMBED:Alert|注意|red\n\n这是第一行\n这是第二行", true, "Alert", "注意", 0xE74C3C, 0, "这是第一行\n这是第二行"},
+		{"embed only, no desc", "EMBED:OnlyTitle||red", true, "OnlyTitle", "", 0xE74C3C, 0, ""},
+		// field: parsing
+		{"single field", "EMBED:Stats\nfield:用户数|100", true, "Stats", "", 0, 1, ""},
+		{"multiple fields with inline", "EMBED:Stats|数据|#3498DB\nfield:用户数|100|true\nfield:请求数|50|true\nfield:状态|正常", true, "Stats", "数据", 0x3498DB, 3, ""},
+		{"field with text after", "EMBED:Alert|通知|orange\nfield:项目|Tachi\nfield:状态|已部署\n\n详细说明：已更新到最新版本。", true, "Alert", "通知", 0xE67E22, 2, "详细说明：已更新到最新版本。"},
+		{"empty field name skipped", "EMBED:Test\nfield:|val\nfield:Name|Value", true, "Test", "", 0, 1, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -885,6 +892,12 @@ func TestParseEmbedContent(t *testing.T) {
 				}
 				if embed.Description != tt.wantDesc {
 					t.Errorf("Description = %q, want %q", embed.Description, tt.wantDesc)
+				}
+				if tt.wantColor != 0 && embed.Color != tt.wantColor {
+					t.Errorf("Color = %d, want %d", embed.Color, tt.wantColor)
+				}
+				if len(embed.Fields) != tt.wantFields {
+					t.Errorf("Fields count = %d, want %d", len(embed.Fields), tt.wantFields)
 				}
 			}
 			if cleaned != tt.wantCleaned {

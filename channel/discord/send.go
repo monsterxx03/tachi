@@ -216,28 +216,31 @@ func parseMediaTags(content string) (string, []channel.OutgoingAttachment) {
 // --- Embed ---
 
 // parseEmbedContent checks if the content starts with "EMBED:" and parses
-// the first line into a Discord MessageEmbed. Format (single line):
+// it into a Discord MessageEmbed with optional fields. Format:
 //
 //	EMBED:title|description|color
+//	field:Name|Value|inline(可选)
+//	field:Name2|Value2
 //
-// All fields except title are optional. Returns the cleaned content (with
-// the EMBED line removed) and the embed, or false if no embed prefix is found.
+// Only title is required on the EMBED line. field: lines after it define
+// embed fields (inline=true/false, default false).
+// Returns the remaining text (non-field lines) and the embed.
 func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
 	if !strings.HasPrefix(content, "EMBED:") {
 		return content, nil, false
 	}
 
-	// Split the first line from the rest — EMBED only uses the first line.
+	// Split the first line from the rest.
 	var embedLine string
 	rest := ""
 	if idx := strings.IndexByte(content, '\n'); idx >= 0 {
 		embedLine = content[:idx]
-		rest = strings.TrimLeft(content[idx+1:], "\n")
+		rest = content[idx+1:]
 	} else {
 		embedLine = content
 	}
 
-	// Parse EMBED format: EMBED:title|description|color
+	// Parse EMBED:title|description|color
 	raw := embedLine[6:]
 	parts := strings.SplitN(raw, "|", 3)
 
@@ -251,21 +254,45 @@ func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
 	}
 
 	if len(parts) >= 2 {
-		desc := strings.TrimSpace(parts[1])
-		if desc != "" {
+		if desc := strings.TrimSpace(parts[1]); desc != "" {
 			embed.Description = desc
 		}
 	}
 
 	if len(parts) >= 3 {
-		colorStr := strings.TrimSpace(parts[2])
-		if colorStr != "" {
+		if colorStr := strings.TrimSpace(parts[2]); colorStr != "" {
 			embed.Color = parseEmbedColor(colorStr)
 		}
 	}
 
-	// Return remaining text after the EMBED line.
-	return rest, embed, true
+	// Parse field: lines from the rest.
+	var textLines []string
+	for _, line := range strings.Split(rest, "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "field:") {
+			fieldContent := trimmed[6:]
+			fieldParts := strings.SplitN(fieldContent, "|", 3)
+			if len(fieldParts) >= 2 {
+				name := strings.TrimSpace(fieldParts[0])
+				value := strings.TrimSpace(fieldParts[1])
+				if name != "" {
+					inline := false
+					if len(fieldParts) >= 3 {
+						inline = strings.TrimSpace(fieldParts[2]) == "true"
+					}
+					embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+						Name:   name,
+						Value:  value,
+						Inline: inline,
+					})
+				}
+			}
+		} else {
+			textLines = append(textLines, line)
+		}
+	}
+
+	return strings.TrimLeft(strings.Join(textLines, "\n"), "\n"), embed, true
 }
 
 // parseEmbedColor converts a color string to an int.
