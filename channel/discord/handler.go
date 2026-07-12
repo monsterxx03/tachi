@@ -273,11 +273,21 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 		return
 	}
 
-	// Convert 2-column pipe tables to EMBED format for better display.
-	reply.Content = convertTablesToEmbeds(reply.Content)
-
-	// 1. Check for EMBED prefix.
-	if cleaned, embed, ok := parseEmbedContent(reply.Content); ok {
+	// Parse with goldmark: 2-column tables → Discord embed (via API directly)
+	// Multi-column tables → code block. This is more accurate than heuristic
+	// line matching and handles | inside cells etc. correctly.
+	res := parseContent(reply.Content)
+	if res.embed != nil && !strings.Contains(reply.Content, "EMBED:") {
+		// Auto-converted embed — send text + embed in one message.
+		// Text content still goes through MEDIA tag processing for safety.
+		if _, err := ch.session.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+			Content: res.textContent,
+			Embed:   res.embed,
+		}); err != nil {
+			ch.logger.Log("discord: send embed error: %v", err)
+		}
+	} else if cleaned, embed, ok := parseEmbedContent(reply.Content); ok {
+		// 1. LLM-generated EMBED prefix.
 		if err := ch.sendEmbed(channelID, embed); err != nil {
 			ch.logger.Log("discord: send embed error: %v", err)
 		}

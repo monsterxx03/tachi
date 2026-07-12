@@ -1,186 +1,309 @@
 package discord
 
-import "strings"
+import (
+	"bytes"
+	"fmt"
+	"strings"
 
-// convertTablesToCodeBlock detects markdown pipe tables in content and wraps
-// each table block in a code block (```...```) so they render consistently
-// across all Discord clients (desktop, web, mobile).
-//
-// It only converts tables in non-code-block sections — content already inside
-// ``` fences is left untouched to avoid double-wrapping.
+	"github.com/bwmarrin/discordgo"
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/ast"
+	"github.com/yuin/goldmark/extension"
+	gest "github.com/yuin/goldmark/extension/ast"
+	"github.com/yuin/goldmark/text"
+)
+
+var gm = goldmark.New(
+	goldmark.WithExtensions(extension.Table),
+)
+
+// goldmarkResult holds the result of parsing content with goldmark.
+type goldmarkResult struct {
+	textContent string                   // non-table text + reconstructed multi-col tables in code blocks
+	embed       *discordgo.MessageEmbed  // embed for first 2-col table
+}
+
+// parseContent parses markdown with goldmark AST and:
+// - Converts the first 2-column pipe table to a Discord embed
+// - Wraps multi-column tables in code blocks
+// - Preserves non-table content verbatim
+func parseContent(source string) *goldmarkResult {
+	if source == "" {
+		return &goldmarkResult{textContent: source}
+	}
+	src := []byte(source)
+	doc := gm.Parser().Parse(text.NewReader(src))
+
+	// Walk document children to find tables and non-table blocks
+	type blockSection struct {
+		text    string // original source for non-table, reconstructed for table
+		isTable bool
+		isEmbed bool // first 2-col table → converted to embed
+	}
+
+	var (
+		sections []blockSection
+		embed    *discordgo.MessageEmbed
+		embedIdx = -1
+	)
+
+	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
+		if child.Kind() != gest.KindTable {
+			// Non-table: use original source
+			segs := child.Lines()
+			if segs.Len() > 0 {
+				var b bytes.Buffer
+				for i := 0; i < segs.Len(); i++ {
+					s := segs.At(i)
+					b.Write(src[s.Start:s.Stop])
+				}
+				sections = append(sections, blockSection{text: b.String()})
+			}
+			continue
+		}
+
+		// Table node
+		tb := child.(*gest.Table)
+		var headers []string
+		var rows [][]string
+
+		for rowNode := tb.FirstChild(); rowNode != nil; rowNode = rowNode.NextSibling() {
+			var row []string
+			for cell := rowNode.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				if cell.Kind() != gest.KindTableCell {
+					continue
+				}
+				row = append(row, cellText(cell, src))
+			}
+			switch rowNode.Kind() {
+			case gest.KindTableHeader:
+				headers = row
+			case gest.KindTableRow:
+				if len(row) > 0 && (len(row) > 1 || row[0] != "") {
+					rows = append(rows, row)
+				}
+			}
+		}
+
+		colCount := len(headers)
+		for _, r := range rows {
+			if len(r) > colCount {
+				colCount = len(r)
+			}
+		}
+		if colCount < 2 || len(rows) == 0 {
+			// Not a valid table — add as-is
+			segs := child.Lines()
+			if segs.Len() > 0 {
+				var b bytes.Buffer
+				for i := 0; i < segs.Len(); i++ {
+					s := segs.At(i)
+					b.Write(src[s.Start:s.Stop])
+				}
+				sections = append(sections, blockSection{text: b.String()})
+			}
+			continue
+		}
+
+		if colCount == 2 && embed == nil {
+			// First 2-col table → embed
+			embed = buildEmbed(headers, rows)
+			sections = append(sections, blockSection{isTable: true, isEmbed: true})
+			embedIdx = len(sections) - 1
+		} else {
+			// Multi-col or second table → code block
+			tblText := renderTable(headers, rows, colCount)
+			sections = append(sections, blockSection{text: tblText, isTable: true})
+		}
+	}
+
+	// Build text content (excluding embed's table)
+	var buf bytes.Buffer
+	for i, sec := range sections {
+		if i == embedIdx {
+			// Skip table that's now an embed
+			continue
+		}
+		if buf.Len() > 0 && !strings.HasPrefix(sec.text, "\n") {
+			buf.WriteByte('\n')
+		}
+		if sec.isTable {
+			buf.WriteString("```\n")
+			buf.WriteString(sec.text)
+			buf.WriteString("\n```")
+		} else {
+			buf.WriteString(sec.text)
+		}
+	}
+
+	return &goldmarkResult{
+		textContent: buf.String(),
+		embed:       embed,
+	}
+}
+
+// convertTablesToCodeBlock finds tables via goldmark AST and wraps each
+// in a code block. Uses reconstructed tables from cell data.
 func convertTablesToCodeBlock(content string) string {
 	if content == "" {
 		return content
 	}
+	src := []byte(content)
+	doc := gm.Parser().Parse(text.NewReader(src))
 
-	sections := splitCodeBlockSections(content)
-	if len(sections) <= 1 {
-		return convertPipeTablesToCodeBlock(content)
+	type blockSection struct {
+		text    string
+		isTable bool
 	}
 
-	var result strings.Builder
-	for i, sec := range sections {
-		if i%2 == 0 {
-			result.WriteString(convertPipeTablesToCodeBlock(sec))
+	var sections []blockSection
+
+	for child := doc.FirstChild(); child != nil; child = child.NextSibling() {
+		if child.Kind() != gest.KindTable {
+			// Non-table: original source
+			segs := child.Lines()
+			if segs.Len() > 0 {
+				var b bytes.Buffer
+				for i := 0; i < segs.Len(); i++ {
+					s := segs.At(i)
+					b.Write(src[s.Start:s.Stop])
+				}
+				sections = append(sections, blockSection{text: b.String()})
+			}
+			continue
+		}
+
+		tb := child.(*gest.Table)
+		var headers []string
+		var rows [][]string
+
+		for rowNode := tb.FirstChild(); rowNode != nil; rowNode = rowNode.NextSibling() {
+			var row []string
+			for cell := rowNode.FirstChild(); cell != nil; cell = cell.NextSibling() {
+				if cell.Kind() != gest.KindTableCell {
+					continue
+				}
+				row = append(row, cellText(cell, src))
+			}
+			switch rowNode.Kind() {
+			case gest.KindTableHeader:
+				headers = row
+			case gest.KindTableRow:
+				if len(row) > 0 && (len(row) > 1 || row[0] != "") {
+					rows = append(rows, row)
+				}
+			}
+		}
+
+		colCount := len(headers)
+		for _, r := range rows {
+			if len(r) > colCount {
+				colCount = len(r)
+			}
+		}
+		if colCount < 2 || len(rows) == 0 {
+			// Invalid table, keep original
+			segs := child.Lines()
+			if segs.Len() > 0 {
+				var b bytes.Buffer
+				for i := 0; i < segs.Len(); i++ {
+					s := segs.At(i)
+					b.Write(src[s.Start:s.Stop])
+				}
+				sections = append(sections, blockSection{text: b.String()})
+			}
+			continue
+		}
+
+		sections = append(sections, blockSection{
+			text:    renderTable(headers, rows, colCount),
+			isTable: true,
+		})
+	}
+
+	var buf bytes.Buffer
+	for _, sec := range sections {
+		if buf.Len() > 0 && !strings.HasPrefix(sec.text, "\n") {
+			buf.WriteByte('\n')
+		}
+		if sec.isTable {
+			buf.WriteString("```\n")
+			buf.WriteString(sec.text)
+			buf.WriteString("\n```")
 		} else {
-			result.WriteString(sec)
+			buf.WriteString(sec.text)
 		}
 	}
-	return result.String()
+	return buf.String()
 }
 
-// convertTablesToEmbeds scans content for pipe tables and converts those
-// suitable for embed display to EMBED: format. Currently converts:
-//   - 2-column tables → EMBED with inline fields (each row = one field)
-//   - Multi-column tables → left unchanged (handled by convertTablesToCodeBlock)
-//
-// Only converts tables in non-code-block sections. Returns the modified content.
-func convertTablesToEmbeds(content string) string {
-	if content == "" {
-		return content
-	}
+// --- helpers ----------------------------------------------------------------
 
-	sections := splitCodeBlockSections(content)
-	if len(sections) <= 1 {
-		return convertPipeTablesToEmbeds(content)
-	}
-
-	var result strings.Builder
-	for i, sec := range sections {
-		if i%2 == 0 {
-			result.WriteString(convertPipeTablesToEmbeds(sec))
-		} else {
-			result.WriteString(sec)
+// cellText recursively extracts text from a table cell's AST subtree.
+func cellText(n ast.Node, src []byte) string {
+	var parts []string
+	for child := n.FirstChild(); child != nil; child = child.NextSibling() {
+		switch child.Kind() {
+		case ast.KindText:
+			parts = append(parts, string(child.(*ast.Text).Value(src)))
+		case ast.KindString:
+			parts = append(parts, string(child.(*ast.String).Value))
+		case ast.KindCodeSpan:
+			var code []byte
+			for c := child.FirstChild(); c != nil; c = c.NextSibling() {
+				if c.Kind() == ast.KindText {
+					code = append(code, c.(*ast.Text).Value(src)...)
+				}
+			}
+			parts = append(parts, "`"+string(code)+"`")
+		default:
+			parts = append(parts, cellText(child, src))
 		}
 	}
-	return result.String()
+	return strings.TrimSpace(strings.Join(parts, ""))
 }
 
-// ---------------------------------------------------------------------------
-// Pipe table parser — parses a markdown pipe table into rows of cells.
-// ---------------------------------------------------------------------------
-
-// parsedTable holds the parsed structure of a pipe table.
-type parsedTable struct {
-	headers   []string   // first row (header), may be empty if row is all dashes
-	separator int        // line index of separator row within rawLines
-	rows      [][]string // data rows (content after separator)
-	rawLines  []string   // original lines (for fallback)
-	colCount  int
+// renderTable reconstructs a pipe table from cell data for code block display.
+func renderTable(headers []string, rows [][]string, colCount int) string {
+	var buf bytes.Buffer
+	buf.WriteByte('|')
+	for _, h := range headers {
+		buf.WriteString(" " + h + " |")
+	}
+	buf.WriteByte('\n')
+	buf.WriteByte('|')
+	for i := 0; i < colCount; i++ {
+		buf.WriteString(" --- |")
+	}
+	buf.WriteByte('\n')
+	for _, row := range rows {
+		buf.WriteByte('|')
+		for _, cell := range row {
+			buf.WriteString(" " + cell + " |")
+		}
+		buf.WriteByte('\n')
+	}
+	return buf.String()
 }
 
-// parsePipeTable attempts to parse a pipe table starting at lineIdx in lines.
-// Returns the parsed table and the index after the last table line.
-// Returns nil table if no valid table is found.
-func parsePipeTable(lines []string, startIdx int) (*parsedTable, int) {
-	if startIdx >= len(lines) || !isPipeTableRow(strings.TrimSpace(lines[startIdx])) {
-		return nil, startIdx
-	}
-
-	// Collect consecutive pipe rows.
-	var pipeLines []string
-	idx := startIdx
-	for idx < len(lines) && isPipeTableRow(strings.TrimSpace(lines[idx])) {
-		pipeLines = append(pipeLines, strings.TrimSpace(lines[idx]))
-		idx++
-	}
-
-	if len(pipeLines) < 3 {
-		return nil, startIdx // need at least header + separator + 1 data row
-	}
-
-	// Find the separator row.
-	sepIdx := -1
-	for i, line := range pipeLines {
-		if looksLikeTableSeparator(line) {
-			sepIdx = i
-			break
-		}
-	}
-	if sepIdx < 0 || sepIdx == len(pipeLines)-1 {
-		return nil, startIdx // no separator, or separator is the last row
-	}
-
-	// Parse cells from a pipe row.
-	parseRow := func(line string) []string {
-		s := line
-		if strings.HasPrefix(s, "|") {
-			s = s[1:]
-		}
-		if strings.HasSuffix(s, "|") {
-			s = s[:len(s)-1]
-		}
-		parts := strings.Split(s, "|")
-		cells := make([]string, len(parts))
-		for i, p := range parts {
-			cells[i] = strings.TrimSpace(p)
-		}
-		return cells
-	}
-
-	headers := parseRow(pipeLines[sepIdx-1]) // line before separator
-	dataRows := make([][]string, 0, len(pipeLines)-sepIdx-1)
-	for i := sepIdx + 1; i < len(pipeLines); i++ {
-		row := parseRow(pipeLines[i])
-		if len(row) > 0 && (len(row) > 1 || row[0] != "") {
-			dataRows = append(dataRows, row)
-		}
-	}
-
-	if len(dataRows) == 0 {
-		return nil, startIdx
-	}
-
-	// Determine column count (max of header and data rows).
-	colCount := len(headers)
-	for _, row := range dataRows {
-		if len(row) > colCount {
-			colCount = len(row)
-		}
-	}
-	if colCount < 2 {
-		return nil, startIdx
-	}
-
-	return &parsedTable{
-		headers:  headers,
-		separator: sepIdx,
-		rows:     dataRows,
-		rawLines: pipeLines,
-		colCount: colCount,
-	}, idx
-}
-
-// ---------------------------------------------------------------------------
-// EMBED conversion — 2-column tables become Discord embed inline fields.
-// ---------------------------------------------------------------------------
-
-// tableToEmbed converts a 2-column parsedTable to EMBED: format string.
-// Returns empty string if the table is not suitable for embed conversion.
-func tableToEmbed(t *parsedTable) string {
-	if t.colCount != 2 {
-		return ""
-	}
-
-	// Derive title: use first header cell if available and non-empty.
+// buildEmbed creates a Discord embed from 2-column table rows.
+func buildEmbed(headers []string, rows [][]string) *discordgo.MessageEmbed {
 	title := ""
-	if len(t.headers) > 0 && t.headers[0] != "" {
-		title = t.headers[0]
+	if len(headers) >= 1 && headers[0] != "" {
+		title = headers[0]
+	} else if len(rows) > 0 && len(rows[0]) >= 1 && rows[0][0] != "" {
+		title = rows[0][0]
 	}
-
-	var b strings.Builder
-	b.WriteString("EMBED:" + title + "|")
-
-	// Count actual data to decide description.
-	dataCount := len(t.rows)
 	desc := ""
-	if dataCount > 0 {
-		desc = "共 " + itoa(dataCount) + " 项"
+	if len(rows) > 0 {
+		desc = fmt.Sprintf("共 %d 项", len(rows))
 	}
-	color := "green" // default
-	b.WriteString(desc + "|" + color + "\n")
-
-	for _, row := range t.rows {
+	embed := &discordgo.MessageEmbed{
+		Title:       title,
+		Description: desc,
+		Color:       0x2ECC71,
+	}
+	for _, row := range rows {
 		name := ""
 		value := ""
 		if len(row) >= 1 {
@@ -189,217 +312,14 @@ func tableToEmbed(t *parsedTable) string {
 		if len(row) >= 2 {
 			value = row[1]
 		}
-		b.WriteString("field:" + name + "|" + value + "|true\n")
-	}
-
-	return b.String()
-}
-
-// convertPipeTablesToEmbeds scans text for pipe tables and replaces
-// 2-column tables with EMBED: format. Multi-column tables are left unchanged.
-// The input should not contain ``` fences.
-func convertPipeTablesToEmbeds(content string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) < 3 {
-		return content
-	}
-
-	var result []string
-	i := 0
-	for i < len(lines) {
-		t, end := parsePipeTable(lines, i)
-		if t != nil && t.colCount == 2 {
-			embedStr := tableToEmbed(t)
-			if embedStr != "" {
-				result = append(result, embedStr)
-				i = end
-				continue
-			}
-		}
-		if t != nil {
-			// Valid table but not suitable for embed — keep raw (code block will handle it).
-			for j := i; j < end; j++ {
-				result = append(result, lines[j])
-			}
-			i = end
+		if name == "" && value == "" {
 			continue
 		}
-		result = append(result, lines[i])
-		i++
+		embed.Fields = append(embed.Fields, &discordgo.MessageEmbedField{
+			Name:   name,
+			Value:  value,
+			Inline: true,
+		})
 	}
-
-	return strings.Join(result, "\n")
-}
-
-// convertPipeTablesToCodeBlock detects pipe tables in the given text and wraps each
-// in a code block. The input should not contain ``` fences.
-func convertPipeTablesToCodeBlock(content string) string {
-	lines := strings.Split(content, "\n")
-	if len(lines) < 3 {
-		return content
-	}
-
-	var result []string
-	var tableLines []string
-	inTable := false
-
-	flushTable := func() {
-		if len(tableLines) == 0 {
-			return
-		}
-		if hasTableSeparator(tableLines) {
-			result = append(result, "```")
-			result = append(result, tableLines...)
-			result = append(result, "```")
-		} else {
-			result = append(result, tableLines...)
-		}
-		tableLines = nil
-	}
-
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		isPipeRow := isPipeTableRow(trimmed)
-
-		if isPipeRow {
-			tableLines = append(tableLines, line)
-			inTable = true
-		} else {
-			if inTable {
-				flushTable()
-				inTable = false
-			}
-			result = append(result, line)
-		}
-	}
-
-	if inTable {
-		flushTable()
-	}
-
-	return strings.Join(result, "\n")
-}
-
-// ---------------------------------------------------------------------------
-// Code block section splitter
-// ---------------------------------------------------------------------------
-
-// splitCodeBlockSections splits content into alternating sections split by
-// ``` fences. Odd-indexed sections are inside code blocks and should be
-// preserved verbatim. Even-indexed sections are outside.
-func splitCodeBlockSections(content string) []string {
-	const fence = "```"
-	var sections []string
-	remaining := content
-
-	for {
-		idx := strings.Index(remaining, fence)
-		if idx < 0 {
-			sections = append(sections, remaining)
-			break
-		}
-
-		if idx > 0 {
-			sections = append(sections, remaining[:idx])
-		} else {
-			sections = append(sections, "")
-		}
-		remaining = remaining[idx:]
-
-		// Find closing fence.
-		searchFrom := len(fence)
-		ci := strings.Index(remaining[searchFrom:], fence)
-		if ci >= 0 {
-			closeIdx := searchFrom + ci
-			sections = append(sections, remaining[:closeIdx+len(fence)])
-			remaining = remaining[closeIdx+len(fence):]
-		} else {
-			sections = append(sections, remaining)
-			remaining = ""
-			break
-		}
-	}
-
-	return sections
-}
-
-// ---------------------------------------------------------------------------
-// Pipe row detection helpers
-// ---------------------------------------------------------------------------
-
-// isPipeTableRow checks if a trimmed line looks like a pipe table row:
-// starts with | and ends with |.
-func isPipeTableRow(line string) bool {
-	if line == "" {
-		return false
-	}
-	return strings.HasPrefix(line, "|") && strings.HasSuffix(line, "|")
-}
-
-// hasTableSeparator checks if the accumulated pipe rows contain a valid
-// markdown table separator line (e.g. |---|---| or |:---|---:|).
-func hasTableSeparator(lines []string) bool {
-	if len(lines) < 2 {
-		return false
-	}
-	for _, line := range lines {
-		trimmed := strings.TrimSpace(line)
-		if looksLikeTableSeparator(trimmed) {
-			return true
-		}
-	}
-	return false
-}
-
-// looksLikeTableSeparator checks if a line is a markdown table separator.
-func looksLikeTableSeparator(line string) bool {
-	if !strings.HasPrefix(line, "|") || !strings.HasSuffix(line, "|") {
-		return false
-	}
-	inner := line[1 : len(line)-1]
-	cells := strings.Split(inner, "|")
-	if len(cells) < 2 {
-		return false
-	}
-	for _, cell := range cells {
-		trimmed := strings.TrimSpace(cell)
-		if trimmed == "" {
-			return false
-		}
-		for _, ch := range trimmed {
-			if ch != '-' && ch != ':' && ch != ' ' {
-				return false
-			}
-		}
-	}
-	return true
-}
-
-// itoa converts an int to string without importing strconv.
-func itoa(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	neg := false
-	if n < 0 {
-		neg = true
-		n = -n
-	}
-	var buf [20]byte
-	pos := len(buf)
-	for n > 0 {
-		pos--
-		buf[pos] = byte('0' + n%10)
-		n /= 10
-	}
-	if neg {
-		pos--
-		buf[pos] = '-'
-	}
-	return string(buf[pos:])
-}
-
-// trimPipeCell trims whitespace from a pipe table cell, handling edge cases.
-func trimPipeCell(cell string) string {
-	return strings.TrimSpace(cell)
+	return embed
 }
