@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -63,6 +64,9 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		return textHandlerResult(text), err
 	case "cron":
 		text, err := m.handleCronCommand(cmd.ThreadID)
+		return textHandlerResult(text), err
+	case "cd":
+		text, err := m.handleCDCommand(cmd.ThreadID, cmd.Args)
 		return textHandlerResult(text), err
 	case "stop":
 		text, err := m.handleStopCommand(cmd.ThreadID)
@@ -374,6 +378,55 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	}
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
+}
+
+// --- /cd ---
+
+// handleCDCommand changes the working directory for the current thread.
+// The new directory takes effect on the next agent turn; all tools (Bash,
+// Read, Write, Edit, Glob, etc.) resolve relative paths against it.
+func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
+	if dir == "" {
+		return "Usage: /cd <directory>", nil
+	}
+
+	// Quick read to get current workDir for relative path resolution.
+	m.agentCacheMu.Lock()
+	ca, ok := m.agentCache[threadID]
+	curDir := ""
+	if ok {
+		curDir = ca.workDir
+	}
+	m.agentCacheMu.Unlock()
+
+	if !ok {
+		return "No active session for this thread. Send a message first.", nil
+	}
+
+	// Resolve path relative to current workDir.
+	target := dir
+	if !filepath.IsAbs(dir) {
+		target = filepath.Join(curDir, dir)
+	}
+
+	// Clean and verify.
+	target = filepath.Clean(target)
+	info, err := os.Stat(target)
+	if err != nil {
+		return fmt.Sprintf("❌ Directory %q does not exist", target), nil
+	}
+	if !info.IsDir() {
+		return fmt.Sprintf("❌ %q is not a directory", target), nil
+	}
+
+	// Update the cached agent's workDir under lock.
+	m.agentCacheMu.Lock()
+	if ca, ok := m.agentCache[threadID]; ok {
+		ca.workDir = target
+	}
+	m.agentCacheMu.Unlock()
+
+	return fmt.Sprintf("✅ Working directory changed to `%s`", target), nil
 }
 
 // --- /stop ---

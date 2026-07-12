@@ -7,6 +7,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -79,7 +80,12 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		priorHistory = ca.history
 	}
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ""), llm.ChatOptions{
+	// Bind the thread's working directory, matching runAgentTurn behavior.
+	if ca.workDir != "" {
+		ctx = wdctx.WithDir(ctx, ca.workDir)
+	}
+
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 
