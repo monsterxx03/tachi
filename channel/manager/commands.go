@@ -62,7 +62,7 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		text, err := m.handleUsageCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
 	case "cron":
-		text, err := m.handleCronCommand()
+		text, err := m.handleCronCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
 	case "stop":
 		text, err := m.handleStopCommand(cmd.ThreadID)
@@ -578,19 +578,31 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 
 // --- /cron ---
 
-// handleCronCommand handles the /cron slash command, listing all cron jobs.
-func (m *Manager) handleCronCommand() (string, error) {
+// handleCronCommand handles the /cron slash command, listing cron jobs
+// scoped to the current thread. Pass an empty threadID to list all jobs.
+func (m *Manager) handleCronCommand(threadID string) (string, error) {
 	if m.scheduler == nil {
 		return "Cron scheduler is not enabled. Set cron.enabled: true in config.yaml.", nil
 	}
 
-	jobs, err := m.scheduler.List()
+	allJobs, err := m.scheduler.List()
 	if err != nil {
 		return "", fmt.Errorf("cron: list: %w", err)
 	}
 
+	// Filter by current thread, matching CronTool.handleList() behavior.
+	var jobs []*cron.Job
+	for _, job := range allJobs {
+		if threadID == "" || job.TargetThreadID == threadID {
+			jobs = append(jobs, job)
+		}
+	}
+
 	if len(jobs) == 0 {
-		return "No cron jobs configured.\n\nYou can ask me to create one! Example:\n\"帮我设置一个每天早上9点的日报提醒\"", nil
+		if threadID == "" {
+			return "No cron jobs configured.\n\nYou can ask me to create one! Example:\n\"帮我设置一个每天早上9点的日报提醒\"", nil
+		}
+		return "No cron jobs configured for this thread.", nil
 	}
 
 	slices.SortFunc(jobs, func(a, b *cron.Job) int {
