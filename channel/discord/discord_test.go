@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -177,6 +178,12 @@ func TestSplitMessage(t *testing.T) {
 		{"newline break", strings.Repeat("a", discordMessageLimit/2) + "\n" + strings.Repeat("b", discordMessageLimit/2), 2},
 		{"empty", "", 0},
 		{"exactly double", strings.Repeat("a", discordMessageLimit*2), 2},
+		// Chinese text: 3 bytes per character, but counted as 1 rune each.
+		// 2000 Chinese chars = 6000 bytes, but still within Discord's 2000-char limit.
+		{"chinese at limit", strings.Repeat("中", discordMessageLimit), 1},
+		{"chinese just over limit", strings.Repeat("中", discordMessageLimit+1), 2},
+		{"mixed ascii and chinese", strings.Repeat("a", 500) + strings.Repeat("中", 1500), 1},
+		{"chinese with newline", strings.Repeat("中", 1000) + "\n" + strings.Repeat("文", 1000), 2},
 	}
 
 	for _, tt := range tests {
@@ -186,10 +193,10 @@ func TestSplitMessage(t *testing.T) {
 				t.Errorf("splitMessage returned %d chunks, want %d", len(chunks), tt.wantLen)
 				return
 			}
-			// Verify no chunk exceeds the limit.
+			// Verify no chunk exceeds the limit in characters (runes).
 			for i, chunk := range chunks {
-				if len(chunk) > discordMessageLimit {
-					t.Errorf("chunk %d exceeds limit: %d > %d", i, len(chunk), discordMessageLimit)
+				if utf8.RuneCountInString(chunk) > discordMessageLimit {
+					t.Errorf("chunk %d exceeds %d rune limit: %d runes", i, discordMessageLimit, utf8.RuneCountInString(chunk))
 				}
 			}
 			// Verify concatenation equals original.

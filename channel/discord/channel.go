@@ -220,8 +220,7 @@ func (ch *DiscordChannel) Send(ctx context.Context, msg channel.OutgoingMessage)
 	// Send text content if present.
 	if msg.Content != "" {
 		content := convertTablesToCodeBlock(msg.Content)
-		_, err := sess.ChannelMessageSend(channelID, content)
-		if err != nil {
+		if err := ch.sendText(channelID, content); err != nil {
 			return fmt.Errorf("discord: Send text: %w", err)
 		}
 	}
