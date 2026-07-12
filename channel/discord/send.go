@@ -346,6 +346,7 @@ func (ch *DiscordChannel) sendEmbed(channelID string, embed *discordgo.MessageEm
 // sendTextWithMedia sends text content, parsing MEDIA tags and uploading files.
 // Returns the number of attachments sent.
 func (ch *DiscordChannel) sendTextWithMedia(channelID string, content string) (int, error) {
+	content = convertTablesToCodeBlock(content)
 	cleanContent, attachments := parseMediaTags(content)
 
 	// Send the cleaned text.
