@@ -182,11 +182,11 @@ func (ch *DiscordChannel) SystemPromptSuffix() string {
 	return `## Discord Platform Limitations
 
 Discord message content has limited markdown support:
-- ❌ No tables (| col1 | col2 |)
 - ❌ No HTML
 - ❌ No horizontal rules ---
 
 For structured/tabular data, use the [EMBED] format with fields:
+
 EMBED:title|description|color
 field:Name|Value|true(optional, inline)
 
@@ -219,7 +219,8 @@ func (ch *DiscordChannel) Send(ctx context.Context, msg channel.OutgoingMessage)
 
 	// Send text content if present.
 	if msg.Content != "" {
-		_, err := sess.ChannelMessageSend(channelID, msg.Content)
+		content := convertTablesToCodeBlock(msg.Content)
+		_, err := sess.ChannelMessageSend(channelID, content)
 		if err != nil {
 			return fmt.Errorf("discord: Send text: %w", err)
 		}
