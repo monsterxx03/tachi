@@ -16,11 +16,12 @@ const (
 )
 
 // splitMessage splits a long message into chunks that fit within Discord's
-// message length limit. It prefers clean break points:
+// message length limit (2000 characters, counted as Unicode code points).
+// It prefers clean break points:
 //  1. Paragraph boundaries ("\n\n" or "\n\r\n")
 //  2. Newline boundaries
 //  3. Word boundaries (space)
-//  4. Hard split at the character limit (last resort)
+//  4. Hard split at the character limit — rune-safe
 //
 // Returns at least one chunk (the original or first N chars if content is
 // shorter than the limit).
@@ -28,7 +29,7 @@ func splitMessage(content string) []string {
 	if content == "" {
 		return nil
 	}
-	if len(content) <= discordMessageLimit {
+	if utf8.RuneCountInString(content) <= discordMessageLimit {
 		return []string{content}
 	}
 
@@ -36,13 +37,14 @@ func splitMessage(content string) []string {
 	remaining := content
 
 	for len(remaining) > 0 {
-		if len(remaining) <= discordMessageLimit {
+		if utf8.RuneCountInString(remaining) <= discordMessageLimit {
 			chunks = append(chunks, remaining)
 			break
 		}
 
-		// Find the best split point within the limit.
-		cut := findSplitPoint(remaining[:discordMessageLimit+1])
+		// Find byte offset of the discordMessageLimit-th rune.
+		byteLimit := runeCountToByteOffset(remaining, discordMessageLimit)
+		cut := findSplitPoint(remaining, byteLimit)
 		chunks = append(chunks, remaining[:cut])
 		remaining = remaining[cut:]
 	}
@@ -50,10 +52,21 @@ func splitMessage(content string) []string {
 	return chunks
 }
 
-// findSplitPoint finds the best position to split text within [0, limit).
-// Priority: paragraph break > newline > space > hard cut.
-func findSplitPoint(s string) int {
-	limit := min(len(s), discordMessageLimit)
+// runeCountToByteOffset returns the byte offset of the nth rune in s.
+// If n exceeds the rune count, returns len(s).
+func runeCountToByteOffset(s string, n int) int {
+	pos := 0
+	for i := 0; i < n && pos < len(s); i++ {
+		_, size := utf8.DecodeRuneInString(s[pos:])
+		pos += size
+	}
+	return pos
+}
+
+// findSplitPoint finds the best position to split text within [0, byteLimit).
+// Priority: paragraph break > newline > space > rune-safe hard cut.
+func findSplitPoint(s string, byteLimit int) int {
+	limit := min(len(s), byteLimit)
 
 	// 1. Try paragraph break (double newline).
 	if idx := lastIndexAny(s[:limit], "\n\n", "\n\r\n"); idx >= 0 {
@@ -75,7 +88,7 @@ func findSplitPoint(s string) int {
 		limit--
 	}
 	if limit == 0 {
-		limit = discordMessageLimit // safety fallback, shouldn't happen
+		limit = byteLimit // safety fallback, shouldn't happen
 	}
 	return limit
 }
