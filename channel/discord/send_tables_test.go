@@ -108,6 +108,29 @@ func TestConvertTablesToCodeBlock_TableInMiddleOfText(t *testing.T) {
 	}
 }
 
+func TestConvertTablesToCodeBlock_MixedCodeBlockAndTable(t *testing.T) {
+	input := "Here's a table:\n| A | B |\n|---|---|\n| 1 | 2 |\n\nAnd some code:\n```go\nfunc main() {}\n```"
+	// Table should be wrapped, code block preserved.
+	got := convertTablesToCodeBlock(input)
+	if !stringsContains(got, "```\n| A | B |") {
+		t.Errorf("table should be wrapped in code block, got:\n%s", got)
+	}
+	if !stringsContains(got, "```go\nfunc main() {}\n```") {
+		t.Errorf("code block should be preserved, got:\n%s", got)
+	}
+}
+
+func TestConvertTablesToCodeBlock_TableBeforeCodeBlock(t *testing.T) {
+	input := "| X | Y |\n|---|---|\n| 1 | 2 |\n\n```\nraw code\n```"
+	got := convertTablesToCodeBlock(input)
+	if !stringsContains(got, "```\n| X | Y |\n|---|---|\n| 1 | 2 |\n```") {
+		t.Errorf("table should be wrapped, got:\n%s", got)
+	}
+	if !stringsContains(got, "```\nraw code\n```") {
+		t.Errorf("code block should be preserved, got:\n%s", got)
+	}
+}
+
 // stringsContains is a simple helper.
 func stringsContains(s, substr string) bool {
 	return len(s) >= len(substr) && containsString(s, substr)
