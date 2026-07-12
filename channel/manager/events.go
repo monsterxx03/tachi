@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -233,7 +234,7 @@ func formatToolArgs(toolName, argsJSON string) string {
 	if summary == "" || summary == argsJSON {
 		return ""
 	}
-	// Truncate long summaries for channel display.
+	// Truncate long summaries for channel display, respecting rune boundaries.
 	maxLen := 60
 	switch toolName {
 	case tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite,
@@ -241,7 +242,13 @@ func formatToolArgs(toolName, argsJSON string) string {
 		maxLen = 50
 	}
 	if len(summary) > maxLen {
-		summary = summary[:maxLen] + "..."
+		// Rune-safe truncation: backtrack to avoid splitting a multi-byte char.
+		for maxLen > 0 && !utf8.RuneStart(summary[maxLen]) {
+			maxLen--
+		}
+		if maxLen > 0 {
+			summary = summary[:maxLen] + "…"
+		}
 	}
 	return " — " + summary
 }
