@@ -8,6 +8,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
@@ -330,6 +331,15 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	}
 	defer cleanup()
 
+	// Bind the thread's working directory to the context so all tools
+	// (Bash, Read, Write, Edit, Glob, etc.) resolve relative paths
+	// against it. Falls back to the process CWD on first turn.
+	workDir := "."
+	if ca != nil && ca.workDir != "" {
+		workDir = ca.workDir
+		ctx = wdctx.WithDir(ctx, ca.workDir)
+	}
+
 	// Per-thread session — always needed for session recording (JSONL).
 	// For compact turns, we also need the history from disk since there's
 	// no in-memory cache (throwaway agent).
@@ -358,7 +368,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	}
 
 	// Build system prompt — append whisper instructions for group chat threads.
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir)
 	if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
 		systemPrompt += "\n" + whisperPromptSuffix
 	}
