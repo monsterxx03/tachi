@@ -2,12 +2,29 @@ package manager
 
 import (
 	"fmt"
+	"os"
+	"os/exec"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
+
+// workDirAndBranch returns the current working directory and git branch.
+// Called on every turn completion so the footer reflects the actual state
+// (the agent may cd or git checkout during execution).
+func workDirAndBranch() (dir, branch string) {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "", ""
+	}
+	b, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
+	if err != nil {
+		return wd, ""
+	}
+	return wd, strings.TrimSpace(string(b))
+}
 
 // drainEvents consumes all AgentEvents, returning the final assistant text or
 // an error.
@@ -159,6 +176,14 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
 							text.WriteString(summary)
 						}
+					}
+					// Append working directory and git branch footer.
+					if dir, branch := workDirAndBranch(); dir != "" {
+						footer := "\n`" + dir + "`"
+						if branch != "" {
+							footer += " · `" + branch + "`"
+						}
+						text.WriteString(footer)
 					}
 				}
 				if event.Result.Error != nil {
