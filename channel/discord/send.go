@@ -53,10 +53,7 @@ func splitMessage(content string) []string {
 // findSplitPoint finds the best position to split text within [0, limit).
 // Priority: paragraph break > newline > space > hard cut.
 func findSplitPoint(s string) int {
-	limit := len(s)
-	if limit > discordMessageLimit {
-		limit = discordMessageLimit
-	}
+	limit := min(len(s), discordMessageLimit)
 
 	// 1. Try paragraph break (double newline).
 	if idx := lastIndexAny(s[:limit], "\n\n", "\n\r\n"); idx >= 0 {
@@ -233,9 +230,9 @@ func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
 	// Split the first line from the rest.
 	var embedLine string
 	rest := ""
-	if idx := strings.IndexByte(content, '\n'); idx >= 0 {
-		embedLine = content[:idx]
-		rest = content[idx+1:]
+	if before, after, ok := strings.Cut(content, "\n"); ok {
+		embedLine = before
+		rest = after
 	} else {
 		embedLine = content
 	}
@@ -267,7 +264,7 @@ func parseEmbedContent(content string) (string, *discordgo.MessageEmbed, bool) {
 
 	// Parse field: lines from the rest.
 	var textLines []string
-	for _, line := range strings.Split(rest, "\n") {
+	for line := range strings.SplitSeq(rest, "\n") {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "field:") {
 			fieldContent := trimmed[6:]

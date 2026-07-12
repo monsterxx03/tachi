@@ -1,5 +1,7 @@
 package discord
 
+import "slices"
+
 // isAuthorized checks whether a user is allowed to interact with the bot.
 //
 // Guild channels: checked against allowed_users, allowed_roles, and allow_all_users.
@@ -15,12 +17,7 @@ func (ch *DiscordChannel) isAuthorized(userID string, memberRoles []string, isDM
 			// No allowlist = no one allowed in DMs.
 			return false
 		}
-		for _, id := range cfg.AllowedUsers {
-			if id == userID {
-				return true
-			}
-		}
-		return false
+		return slices.Contains(cfg.AllowedUsers, userID)
 	}
 
 	// Guild channel: global override.
@@ -29,19 +26,15 @@ func (ch *DiscordChannel) isAuthorized(userID string, memberRoles []string, isDM
 	}
 
 	// Check user allowlist.
-	for _, id := range cfg.AllowedUsers {
-		if id == userID {
-			return true
-		}
+	if slices.Contains(cfg.AllowedUsers, userID) {
+		return true
 	}
 
 	// Check role allowlist.
 	if len(cfg.AllowedRoles) > 0 && memberRoles != nil {
 		for _, role := range memberRoles {
-			for _, allowedRole := range cfg.AllowedRoles {
-				if role == allowedRole {
-					return true
-				}
+			if slices.Contains(cfg.AllowedRoles, role) {
+				return true
 			}
 		}
 	}
@@ -63,32 +56,20 @@ func (ch *DiscordChannel) isAllowedChannel(channelID string) bool {
 	cfg := ch.cfg
 
 	// Check ignored channels (deny list takes precedence).
-	for _, id := range cfg.IgnoredChannels {
-		if id == channelID {
-			return false
-		}
+	if slices.Contains(cfg.IgnoredChannels, channelID) {
+		return false
 	}
 
 	// Check allowed channels (empty = all allowed).
 	if len(cfg.AllowedChannels) == 0 {
 		return true
 	}
-	for _, id := range cfg.AllowedChannels {
-		if id == channelID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(cfg.AllowedChannels, channelID)
 }
 
 // isFreeResponseChannel returns true if the channel doesn't require @mention.
 func (ch *DiscordChannel) isFreeResponseChannel(channelID string) bool {
-	for _, id := range ch.cfg.FreeResponseChannels {
-		if id == channelID {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(ch.cfg.FreeResponseChannels, channelID)
 }
 
 // resolveMemberRoles retrieves the member's roles, using the cache if possible.

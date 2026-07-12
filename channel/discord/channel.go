@@ -412,7 +412,7 @@ func (ch *DiscordChannel) Run(ctx context.Context, handler channel.MessageHandle
 
 // onReady returns a handler for the READY event, capturing the bot's user ID
 // and registering slash commands.
-func (ch *DiscordChannel) onReady() interface{} {
+func (ch *DiscordChannel) onReady() any {
 	return func(s *discordgo.Session, r *discordgo.Ready) {
 		ch.mu.Lock()
 		ch.botUserID = r.User.ID
@@ -428,7 +428,7 @@ func (ch *DiscordChannel) onReady() interface{} {
 
 // onGuildCreate returns a handler for GUILD_CREATE events.
 // Used for member cache warmup on first connect.
-func (ch *DiscordChannel) onGuildCreate() interface{} {
+func (ch *DiscordChannel) onGuildCreate() any {
 	return func(s *discordgo.Session, g *discordgo.GuildCreate) {
 		ch.memberCache.warmupFromGuildCreate(s, g)
 	}
@@ -436,7 +436,7 @@ func (ch *DiscordChannel) onGuildCreate() interface{} {
 
 // onGuildMemberUpdate returns a handler for GUILD_MEMBER_UPDATE events.
 // Used for incremental member cache updates.
-func (ch *DiscordChannel) onGuildMemberUpdate() interface{} {
+func (ch *DiscordChannel) onGuildMemberUpdate() any {
 	return func(s *discordgo.Session, m *discordgo.GuildMemberUpdate) {
 		ch.memberCache.handleGuildMemberUpdate(s, m)
 	}
@@ -444,7 +444,7 @@ func (ch *DiscordChannel) onGuildMemberUpdate() interface{} {
 
 // onMessageCreate returns a handler for MESSAGE_CREATE events.
 // Delegates to handler.go's handleMessageCreate for the full processing pipeline.
-func (ch *DiscordChannel) onMessageCreate(handler channel.MessageHandler) interface{} {
+func (ch *DiscordChannel) onMessageCreate(handler channel.MessageHandler) any {
 	return func(s *discordgo.Session, m *discordgo.MessageCreate) {
 		ch.handleMessageCreate(s, m, handler)
 	}
@@ -452,7 +452,7 @@ func (ch *DiscordChannel) onMessageCreate(handler channel.MessageHandler) interf
 
 // onInteractionCreate returns a handler for INTERACTION_CREATE events.
 // Handles APPLICATION_COMMAND (slash commands) and AUTOCOMPLETE interactions.
-func (ch *DiscordChannel) onInteractionCreate(handler channel.MessageHandler) interface{} {
+func (ch *DiscordChannel) onInteractionCreate(handler channel.MessageHandler) any {
 	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		switch i.Type {
 		case discordgo.InteractionApplicationCommand:

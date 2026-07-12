@@ -136,8 +136,8 @@ func isAllowedFileType(filename string, data []byte) bool {
 func extractFilename(url string, resp *http.Response) string {
 	// Try Content-Disposition header first.
 	if cd := resp.Header.Get("Content-Disposition"); cd != "" {
-		if idx := strings.Index(cd, "filename="); idx >= 0 {
-			f := cd[idx+9:]
+		if _, after, ok := strings.Cut(cd, "filename="); ok {
+			f := after
 			f = strings.Trim(f, `" `)
 			if f != "" {
 				return f
@@ -164,10 +164,7 @@ func extractFilename(url string, resp *http.Response) string {
 // Falls back to extension-based detection if content sniffing is inconclusive.
 func detectMIMEType(data []byte, filename string) string {
 	// Use at most 512 bytes for MIME detection (http.DetectContentType limit).
-	sniffLen := len(data)
-	if sniffLen > 512 {
-		sniffLen = 512
-	}
+	sniffLen := min(len(data), 512)
 
 	mime := http.DetectContentType(data[:sniffLen])
 
