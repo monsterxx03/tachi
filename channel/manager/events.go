@@ -1,30 +1,16 @@
 package manager
 
 import (
+	"context"
 	"fmt"
-	"os"
 	"os/exec"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
-
-// workDirAndBranch returns the current working directory and git branch.
-// Called on every turn completion so the footer reflects the actual state
-// (the agent may cd or git checkout during execution).
-func workDirAndBranch() (dir, branch string) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return "", ""
-	}
-	b, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err != nil {
-		return wd, ""
-	}
-	return wd, strings.TrimSpace(string(b))
-}
 
 // drainEvents consumes all AgentEvents, returning the final assistant text or
 // an error.
@@ -44,7 +30,7 @@ func workDirAndBranch() (dir, branch string) {
 // onTextDelta is an optional callback for streaming text output. It is called
 // for each AgentEventTextDelta so channel implementations can push text in
 // real time (e.g. Wave streaming cards). It may be nil.
-func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) (string, error) {
+func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) (string, error) {
 	var text strings.Builder
 	var lastErr error
 	pushedTools := make(map[string]bool) // tool IDs already streamed to card
@@ -178,10 +164,13 @@ func (m *Manager) drainEvents(ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent
 						}
 					}
 					// Append working directory and git branch footer.
-					if dir, branch := workDirAndBranch(); dir != "" {
+					dir := wdctx.Dir(ctx)
+					if dir != "" {
 						footer := "\n`" + dir + "`"
-						if branch != "" {
-							footer += " · `" + branch + "`"
+						if branch, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output(); err == nil {
+							if b := strings.TrimSpace(string(branch)); b != "" {
+								footer += " · `" + b + "`"
+							}
 						}
 						text.WriteString(footer)
 					}
