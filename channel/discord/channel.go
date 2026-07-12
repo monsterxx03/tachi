@@ -185,16 +185,10 @@ Discord message content has limited markdown support:
 - ❌ No HTML
 - ❌ No horizontal rules ---
 
-For structured/tabular data, use the [EMBED] format with fields:
+For rich card layouts, use the [EMBED] format:
 
 EMBED:title|description|color
 field:Name|Value|true(optional, inline)
-
-Example:
-EMBED:📊 Overview|Project stats|#3498DB
-field:Name|Tachi|true
-field:Language|Go|true
-field:Status|Active
 
 Notes:
 - EMBED: must be the first line of the message
@@ -219,8 +213,7 @@ func (ch *DiscordChannel) Send(ctx context.Context, msg channel.OutgoingMessage)
 
 	// Send text content if present.
 	if msg.Content != "" {
-		content := convertTablesToCodeBlock(msg.Content)
-		if err := ch.sendText(channelID, content); err != nil {
+		if err := ch.sendText(channelID, msg.Content); err != nil {
 			return fmt.Errorf("discord: Send text: %w", err)
 		}
 	}
