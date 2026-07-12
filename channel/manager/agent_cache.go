@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"os"
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent"
@@ -21,6 +22,11 @@ type cachedAgent struct {
 	mu           sync.Mutex
 	agent        *agent.AIAgent
 	providerName string // currentProviderName when the agent was built
+
+	// workDir is the working directory for this thread. All tools (Bash,
+	// Read, Write, Edit, Glob, etc.) resolve relative paths against it.
+	// Initialized to os.Getwd() on first agent creation; updated by /cd.
+	workDir string
 
 	// history caches the full LLM message slice (system prompt + all prior
 	// turns) so each new turn can pass it directly to RunConversationStream
@@ -128,6 +134,7 @@ func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAge
 		if !ok {
 			ca = &cachedAgent{
 				providerName: curName,
+				workDir:      initialWorkDir(),
 			}
 			m.agentCache[threadID] = ca
 		}
@@ -285,4 +292,14 @@ func (m *Manager) getAgentBreakdown(threadID string) tokenbreakdown.Breakdown {
 		return tokenbreakdown.Breakdown{}
 	}
 	return ca.agent.LastTokenBreakdown()
+}
+
+// initialWorkDir returns the default working directory for a new cachedAgent.
+// Matches the initial value used by prepareThreadSession when creating a session.
+func initialWorkDir() string {
+	wd, err := os.Getwd()
+	if err != nil {
+		return "."
+	}
+	return wd
 }
