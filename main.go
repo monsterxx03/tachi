@@ -649,14 +649,14 @@ func applyToolRestrictions(aiAgent *agent.AIAgent, cmd *cli.Command) {
 
 	var allowedList, disallowedList []string
 	if allowed != "" {
-		for _, name := range strings.Split(allowed, ",") {
+		for name := range strings.SplitSeq(allowed, ",") {
 			if n := strings.TrimSpace(name); n != "" {
 				allowedList = append(allowedList, n)
 			}
 		}
 	}
 	if disallowed != "" {
-		for _, name := range strings.Split(disallowed, ",") {
+		for name := range strings.SplitSeq(disallowed, ",") {
 			if n := strings.TrimSpace(name); n != "" {
 				disallowedList = append(disallowedList, n)
 			}

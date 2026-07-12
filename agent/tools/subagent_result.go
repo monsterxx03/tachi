@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -35,17 +36,17 @@ func (t ToolCallCount) String() string {
 		names = append(names, name)
 	}
 	sort.Strings(names)
-	var result string
+	var result strings.Builder
 	for i, name := range names {
 		if i > 0 {
-			result += ", "
+			result.WriteString(", ")
 		}
-		result += name
+		result.WriteString(name)
 		if count := t[name]; count > 1 {
-			result += "(" + strconv.Itoa(count) + ")"
+			result.WriteString("(" + strconv.Itoa(count) + ")")
 		}
 	}
-	return result
+	return result.String()
 }
 
 // FormatSubagentStats formats subagent execution stats for display.

@@ -18,10 +18,10 @@ type AskUserView struct {
 	width       int
 
 	// "Other" free-text input state (per-question)
-	otherSelected bool              // whether "Other" option is toggled/selected
-	otherTexts    map[int]string    // question index -> custom text
-	otherEditing  bool              // currently typing "Other" text?
-	otherCursor   int               // cursor position within otherText
+	otherSelected bool           // whether "Other" option is toggled/selected
+	otherTexts    map[int]string // question index -> custom text
+	otherEditing  bool           // currently typing "Other" text?
+	otherCursor   int            // cursor position within otherText
 }
 
 func NewAskUserView(questions []tools.Question, width int) *AskUserView {
@@ -126,10 +126,7 @@ func (v *AskUserView) HandleKey(key string) (submit bool, cancelled bool) {
 			}
 			text := v.otherTexts[v.curQuestion]
 			runes := []rune(text)
-			runeIdx := v.otherCursor
-			if runeIdx > len(runes) {
-				runeIdx = len(runes)
-			}
+			runeIdx := min(v.otherCursor, len(runes))
 			insertRunes := []rune(key)
 			newRunes := make([]rune, 0, len(runes)+len(insertRunes))
 			newRunes = append(newRunes, runes[:runeIdx]...)

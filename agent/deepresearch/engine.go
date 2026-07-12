@@ -285,10 +285,7 @@ func (dr *DeepResearch) deepResearch(
 
 	// 4. Recurse if depth > 0 and we have new learnings
 	if depth > 0 && hasNewLearnings {
-		nextBreadth := breadth / 2
-		if nextBreadth < 1 {
-			nextBreadth = 1
-		}
+		nextBreadth := max(breadth/2, 1)
 		dr.log("DeepResearch: recursing with depth=%d breadth=%d", depth-1, nextBreadth)
 		dr.progress(progress, "⏬ **深入下一层**（剩余深度 %d, 广度 %d）...", depth-1, nextBreadth)
 
@@ -627,14 +624,14 @@ func extractJSONArray(input string) string {
 	input = strings.TrimSpace(input)
 
 	// Try to find a JSON array inside markdown code blocks
-	if idx := strings.Index(input, "```"); idx >= 0 {
-		rest := input[idx+3:]
+	if _, after, ok := strings.Cut(input, "```"); ok {
+		rest := after
 		// Skip optional "json" language marker
 		rest = strings.TrimPrefix(rest, "json")
 		rest = strings.TrimSpace(rest)
 
-		if endIdx := strings.Index(rest, "```"); endIdx >= 0 {
-			content := strings.TrimSpace(rest[:endIdx])
+		if before, _, ok := strings.Cut(rest, "```"); ok {
+			content := strings.TrimSpace(before)
 			if strings.HasPrefix(content, "[") {
 				return content
 			}
