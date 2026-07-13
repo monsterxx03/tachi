@@ -5,10 +5,8 @@ import (
 	"context"
 	"os"
 	"os/exec"
-	"strconv"
 	"strings"
 	"sync"
-	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/channel/manager"
@@ -112,58 +110,47 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		var (
 			embedMsgID string
 			toolBuf    strings.Builder
+			textBuf    strings.Builder // accumulated LLM text between tool calls
 			toolCount  int
 			mu         sync.Mutex
 		)
-		ctx = manager.WithStreamingCallback(ctx, func(textDelta string) error {
-			if !strings.HasPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ") {
-				return nil
-			}
-			// Format: "\n\n> <font color=\"comment\">🔧 ToolName args</font>\n\n"
-			cleaned := strings.TrimPrefix(textDelta, "\n\n> <font color=\"comment\">🔧 ")
-			if idx := strings.Index(cleaned, "</font>"); idx >= 0 {
-				cleaned = cleaned[:idx]
-			}
+		ctx = manager.WithStreamingCallback(ctx, func(event manager.StreamEvent) error {
+			switch event.Type {
+			case manager.StreamEventToolCall:
+				mu.Lock()
+				toolCount++
+				toolBuf.WriteString("🔧 " + event.ToolName + formatToolArgsForEmbed(event.ToolName, event.ToolArgs) + "\n")
+				// Build embed description: accumulated text (if any) + tool calls.
+				desc := buildStreamingDesc(textBuf.String(), toolBuf.String(), toolCount, maxEmbedDescRunes)
+				mu.Unlock()
 
-			mu.Lock()
-			toolCount++
-			toolBuf.WriteString("🔧 " + cleaned + "\n")
-			desc := "```\n" + toolBuf.String() + "```"
-
-			// Discord embed descriptions have a 4096 character limit.
-			// Truncate at rune boundaries to avoid cutting Chinese/multi-byte chars.
-			if utf8.RuneCountInString(desc) > maxEmbedDescRunes {
-				pos := 0
-				for i := 0; i < maxEmbedDescRunes && pos < len(desc); i++ {
-					_, size := utf8.DecodeRuneInString(desc[pos:])
-					pos += size
+				sess := ch.session
+				if sess == nil {
+					return nil
 				}
-				desc = desc[:pos] + "\n… 还有 " + strconv.Itoa(toolCount-len(strings.Split(desc[:pos], "\n"))) + " 个调用"
-			}
-			mu.Unlock()
 
-			sess := ch.session
-			if sess == nil {
-				return nil
-			}
-
-			if embedMsgID == "" {
-				// First tool call — send the status embed now.
-				sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
-					Title:       "🤖 Tachi",
-					Description: desc,
-					Color:       0x3498DB,
-				})
-				if err == nil {
-					embedMsgID = sent.ID
+				if embedMsgID == "" {
+					sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
+						Title:       "🤖 Tachi",
+						Description: desc,
+						Color:       0x3498DB,
+					})
+					if err == nil {
+						embedMsgID = sent.ID
+					}
+				} else {
+					_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
+						Title:       "🤖 Tachi",
+						Description: desc,
+						Color:       0x3498DB,
+					})
 				}
-			} else {
-				// Subsequent tool call — update the existing embed.
-				_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
-					Title:       "🤖 Tachi",
-					Description: desc,
-					Color:       0x3498DB,
-				})
+
+			case manager.StreamEventTextDelta:
+				// Regular LLM text — accumulate for next embed update.
+				mu.Lock()
+				textBuf.WriteString(event.Text)
+				mu.Unlock()
 			}
 			return nil
 		})
