@@ -138,14 +138,34 @@ func truncateForDisplay(s string, maxLen int) string {
 
 type streamingCtxKey struct{}
 
-// StreamingCallback is called for each text delta during an agent turn.
-// The channel implementation (e.g. wave) uses this to push text deltas
-// to a streaming card in real time.
-type StreamingCallback func(textDelta string) error
+// StreamEventType distinguishes text deltas from tool call info in a
+// streaming callback, so channel implementations don't need to parse
+// ad-hoc formatting to identify tool calls.
+type StreamEventType int
+
+const (
+	StreamEventTextDelta StreamEventType = iota // LLM text output
+	StreamEventToolCall                         // tool call with name + args
+)
+
+// StreamEvent carries structured data from drainEvents to the channel's
+// streaming callback, replacing the old approach of encoding tool calls
+// as formatted strings with HTML markers.
+type StreamEvent struct {
+	Type     StreamEventType
+	Text     string // for TextDelta
+	ToolName string // for ToolCall
+	ToolArgs string // for ToolCall
+}
+
+// StreamingCallback is called for each text delta or tool call during an
+// agent turn. The channel implementation uses this to push real-time
+// progress to the user (e.g. Discord embed with text + tool calls).
+type StreamingCallback func(event StreamEvent) error
 
 // WithStreamingCallback attaches a streaming callback to the context.
 // The callback is extracted in runAgentTurn and passed to drainEvents,
-// which calls it for every AgentEventTextDelta.
+// which calls it for every AgentEventTextDelta and AgentEventToolCallArgs.
 func WithStreamingCallback(ctx context.Context, cb StreamingCallback) context.Context {
 	return context.WithValue(ctx, streamingCtxKey{}, cb)
 }
