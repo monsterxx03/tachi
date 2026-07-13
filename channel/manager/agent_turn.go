@@ -366,12 +366,26 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		// When a thread's session has a WorkingDir (set by a previous /cd
 		// that was persisted via persistThreadWorkDir), use it to override
 		// the default initialWorkDir() so changes survive restarts.
+		// Otherwise, if the cached agent has a workDir set by a recent /cd
+		// (before the first message), persist it to the session.
 		if ca != nil {
 			sess := sm.Current()
-			if sess != nil && sess.WorkingDir != "" && sess.WorkingDir != ca.workDir {
-				ca.workDir = sess.WorkingDir
-				workDir = sess.WorkingDir
-				ctx = wdctx.WithDir(ctx, sess.WorkingDir)
+			if sess != nil {
+				if sess.WorkingDir != "" && sess.WorkingDir != ca.workDir {
+					// Session has a persisted workDir from a prior /cd
+					// (e.g. after restart when the cache was lost).
+					ca.workDir = sess.WorkingDir
+					workDir = sess.WorkingDir
+					ctx = wdctx.WithDir(ctx, sess.WorkingDir)
+				} else if sess.WorkingDir == "" && ca.workDir != "" && ca.workDir != "." {
+					// First message after /cd on a fresh thread: persist
+					// the cached agent's workDir to the session so it
+					// survives restarts.
+					sess.WorkingDir = ca.workDir
+					if err := sm.UpdateMeta(sess); err != nil {
+						m.logger.Log("channel: persist workDir for thread %s: %v", msg.ThreadID, err)
+					}
+				}
 			}
 		}
 	}

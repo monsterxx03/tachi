@@ -416,18 +416,28 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 		}
 	}
 
-	// Quick read to get current workDir for relative path resolution.
+	// Read or create the cached agent — on a new thread before the first
+	// message, no cache entry exists yet. We create a lightweight placeholder
+	// (agent == nil) to track the workDir; the AIAgent is lazily built by
+	// acquireAgent on the first message.
 	m.agentCacheMu.Lock()
 	ca, ok := m.agentCache[threadID]
-	curDir := ""
-	if ok {
-		curDir = ca.workDir
-	}
-	m.agentCacheMu.Unlock()
-
 	if !ok {
-		return "No active session for this thread. Send a message first.", nil
+		// Fetch provider name outside the lock to avoid lock ordering
+		// issues with providerMu (getProviderForThread acquires RLock).
+		m.agentCacheMu.Unlock()
+		_, _, curName := m.getProviderForThread(threadID)
+		m.agentCacheMu.Lock()
+		if ca, ok = m.agentCache[threadID]; !ok {
+			ca = &cachedAgent{
+				providerName: curName,
+				workDir:      initialWorkDir(),
+			}
+			m.agentCache[threadID] = ca
+		}
 	}
+	curDir := ca.workDir
+	m.agentCacheMu.Unlock()
 
 	// Resolve path relative to current workDir.
 	target := dir

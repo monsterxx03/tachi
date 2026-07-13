@@ -1,7 +1,6 @@
 package manager
 
 import (
-	"os"
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -28,8 +27,7 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *config.Resolve
 	}
 
 	if sm != nil && !sm.HasCurrent() {
-		wd, _ := os.Getwd()
-		if _, err := sm.New(resolved.Provider.Name, wd); err != nil {
+		if _, err := sm.New(resolved.Provider.Name, ""); err != nil {
 			m.logger.Log("channel: create fallback session for %s: %v", threadID, err)
 		} else {
 			sm.SetThreadID(threadID)
