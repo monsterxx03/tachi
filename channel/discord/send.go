@@ -3,10 +3,12 @@ package discord
 import (
 	"bytes"
 	"os"
+	"strconv"
 	"strings"
 	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
@@ -389,4 +391,120 @@ func (ch *DiscordChannel) sendTextWithMedia(channelID string, content string) (i
 	}
 
 	return sent, nil
+}
+
+// buildStreamingDesc builds the embed description for the streaming status card.
+// Combines accumulated LLM text with tool call lines, truncating at Discord's
+// embed description limit (4096 runes) with preference to keep tool calls.
+func buildStreamingDesc(text, tools string, toolCount int, maxRunes int) string {
+	// Fast path: no text, just tool calls in a code block.
+	if text == "" {
+		desc := "```\n" + tools + "```"
+		if utf8.RuneCountInString(desc) <= maxRunes {
+			return desc
+		}
+		// Truncate tool calls only.
+		return truncateStreamingTools(tools, toolCount, maxRunes)
+	}
+
+	// Build combined description: text + tool calls.
+	combined := text
+	if tools != "" {
+		combined += "\n```\n" + tools + "```"
+	}
+
+	if utf8.RuneCountInString(combined) <= maxRunes {
+		return combined
+	}
+
+	// Over the limit — truncate text first, then tools if still over.
+	// Calculate how much room is left after reserving space for tool calls.
+	reserved := 7 // "```\n" and "```"
+	if tools != "" {
+		reserved += utf8.RuneCountInString(tools) + 7
+	}
+	textBudget := maxRunes - reserved
+
+	if textBudget < 10 {
+		// Too many tool calls, very little room for text — truncate tools too.
+		// Show at most 3 tool calls inline without code block.
+		shortTools := truncateStreamingToolsShort(tools)
+		combined = shortTools
+		if text != "" {
+			combined = text + "\n" + combined
+		}
+		if utf8.RuneCountInString(combined) > maxRunes {
+			combined = truncateRunes(text, maxRunes-20) + "\n…"
+		}
+		return combined
+	}
+
+	// Truncate text to fit within textBudget.
+	truncated := truncateRunes(text, textBudget)
+	if truncated != text {
+		truncated += "…"
+	}
+
+	combined = truncated
+	if tools != "" {
+		combined += "\n```\n" + tools + "```"
+	}
+
+	// Final check — if still over, hard truncate at maxRunes.
+	if utf8.RuneCountInString(combined) > maxRunes {
+		combined = truncateRunes(combined, maxRunes-5) + "\n…"
+	}
+
+	return combined
+}
+
+// truncateStreamingTools truncates the tool calls block at maxRunes runes
+// and appends a "… 还有 N 个调用" counter for the remaining calls.
+func truncateStreamingTools(tools string, toolCount int, maxRunes int) string {
+	visible := strings.Count(tools, "\n")
+	pos := 0
+	for i := 0; i < maxRunes-20 && pos < len(tools); i++ {
+		_, size := utf8.DecodeRuneInString(tools[pos:])
+		pos += size
+	}
+	return tools[:pos] + "\n… 还有 " + strconv.Itoa(toolCount-visible) + " 个调用"
+}
+
+// truncateStreamingToolsShort returns a compact inline summary of tool calls.
+func truncateStreamingToolsShort(tools string) string {
+	lines := strings.Split(strings.TrimRight(tools, "\n"), "\n")
+	if len(lines) > 3 {
+		lines = lines[:3]
+	}
+	return strings.Join(lines, "\n") + "\n…"
+}
+
+// truncateRunes truncates s to at most n runes, respecting UTF-8 boundaries.
+func truncateRunes(s string, n int) string {
+	if n <= 0 {
+		return ""
+	}
+	if utf8.RuneCountInString(s) <= n {
+		return s
+	}
+	pos := 0
+	for i := 0; i < n && pos < len(s); i++ {
+		_, size := utf8.DecodeRuneInString(s[pos:])
+		pos += size
+	}
+	return s[:pos]
+}
+
+// formatToolArgsForEmbed formats tool call arguments for display in a Discord
+// embed status line. Delegates to tools.ToolArgsSummary and adds a " — "
+// prefix when the summary differs from the raw JSON.
+func formatToolArgsForEmbed(toolName, argsJSON string) string {
+	if argsJSON == "" {
+		return ""
+	}
+	summary := tools.ToolArgsSummary(toolName, argsJSON)
+	if summary == "" || summary == argsJSON {
+		return ""
+	}
+	return " — " + summary
 }
