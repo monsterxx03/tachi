@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -39,7 +38,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 		case agent.AgentEventTextDelta:
 			text.WriteString(event.TextDelta)
 			if onTextDelta != nil {
-				onTextDelta(event.TextDelta)
+				onTextDelta(StreamEvent{Type: StreamEventTextDelta, Text: event.TextDelta})
 			}
 
 		case agent.AgentEventThinkingDelta:
@@ -54,7 +53,11 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			m.logger.Log("channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
 			if onTextDelta != nil && !pushedTools[event.ToolID] {
 				pushedTools[event.ToolID] = true
-				onTextDelta("\n\n> <font color=\"comment\">🔧 " + event.ToolName + formatToolArgs(event.ToolName, event.ToolArgs) + "</font>\n\n")
+				onTextDelta(StreamEvent{
+					Type:     StreamEventToolCall,
+					ToolName: event.ToolName,
+					ToolArgs: event.ToolArgs,
+				})
 			}
 
 		case agent.AgentEventToolConfirmation:
@@ -154,6 +157,10 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 		case agent.AgentEventTurnComplete:
 			if event.Result != nil {
 				if event.Result.Response != "" {
+					// Use the final response directly. Intermediate text
+					// that accompanied tool calls is shown in the channel's
+					// streaming embed during processing and would be
+					// redundant in the final message.
 					text.Reset()
 					text.WriteString(event.Result.Response)
 					// Append turn summary for non-trivial turns.
@@ -218,37 +225,4 @@ func convertQuestions(qs []tools.Question) []channel.Question {
 		}
 	}
 	return cqs
-}
-
-// formatToolArgs extracts key parameters from a tool's JSON arguments string
-// for display in a streaming card status line. It knows the argument schemas
-// of common tools and formats them concisely.
-// formatToolArgs extracts key parameters from a tool's JSON arguments string
-// for display in a streaming card status line. Delegates to the shared
-// tools.ToolArgsSummary and adds truncation + " — " prefix.
-func formatToolArgs(toolName, argsJSON string) string {
-	if argsJSON == "" {
-		return ""
-	}
-	summary := tools.ToolArgsSummary(toolName, argsJSON)
-	if summary == "" || summary == argsJSON {
-		return ""
-	}
-	// Truncate long summaries for channel display, respecting rune boundaries.
-	maxLen := 60
-	switch toolName {
-	case tools.ToolNameRead, tools.ToolNameEdit, tools.ToolNameWrite,
-		tools.ToolNameGlob, tools.ToolNameWebFetch, tools.ToolNameMCPSearchTools:
-		maxLen = 50
-	}
-	if len(summary) > maxLen {
-		// Rune-safe truncation: backtrack to avoid splitting a multi-byte char.
-		for maxLen > 0 && !utf8.RuneStart(summary[maxLen]) {
-			maxLen--
-		}
-		if maxLen > 0 {
-			summary = summary[:maxLen] + "…"
-		}
-	}
-	return " — " + summary
 }
