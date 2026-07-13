@@ -259,6 +259,7 @@ func New(mcfg Config) *Manager {
 		modelName:      mcfg.ModelName,
 		sessionStore:   mcfg.SessionStore,
 		skillStore:     skillStore,
+		agentCache:     make(map[string]*cachedAgent),
 		processManager: tools.NewProcessManager(),
 		logger:         debuglog.DefaultLogger.WithSource("channel:manager"),
 		done:           make(chan struct{}),
@@ -539,7 +540,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 	if sess == nil {
 		// No existing session → create a new one now. The agent will
 		// record the first message.
-		if _, err := sm.New(resolved.Provider.Name, config.FindProjectRoot()); err != nil {
+		if _, err := sm.New(resolved.Provider.Name, ""); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {

@@ -421,6 +421,9 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 	// (agent == nil) to track the workDir; the AIAgent is lazily built by
 	// acquireAgent on the first message.
 	m.agentCacheMu.Lock()
+	if m.agentCache == nil {
+		m.agentCache = make(map[string]*cachedAgent)
+	}
 	ca, ok := m.agentCache[threadID]
 	if !ok {
 		// Fetch provider name outside the lock to avoid lock ordering
