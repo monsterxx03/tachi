@@ -188,11 +188,14 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 		return
 	}
 
-	// Fork a restricted agent — inherits shared MCP + PM from parent.
+	// Fork a restricted agent — inherits PM from parent but not MCP.
+	// Ambient turns should only use the whitelisted tools (MemoryRecall,
+	// RecordMemory, WebFetch, WebSearch) without MCP tool access.
 	forked := parentAgent.Fork(agent.ForkConfig{
 		Provider:      prov,
 		MaxIterations: whisperCfg.AmbientMaxIterations,
 		AllowedTools:  allowedTools,
+		NoMCP:         true,
 		Logger:        m.logger.WithPrefix("ambient-fork"),
 		SessionID:     "ambient-" + threadID,
 	})
