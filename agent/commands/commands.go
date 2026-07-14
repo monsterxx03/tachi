@@ -51,6 +51,7 @@ var Registry = []Def{
 	{Name: "cd", Description: "Change working directory for this thread", InputHint: "<directory>", Modes: []Mode{ModeChannel}},
 	{Name: "stop", Description: "Stop the current LLM turn", Modes: []Mode{ModeChannel}},
 	{Name: "research", Description: "Deep research on a topic. Usage: /research <topic> [--depth 2] [--breadth 3]", InputHint: "<topic>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
+	{Name: "restart", Description: "Restart Tachi via systemctl (requires systemd)", Modes: []Mode{ModeChannel}},
 }
 
 // ForMode returns the subset of commands available in the given mode.
