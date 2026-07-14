@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -86,6 +87,9 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		return m.handleTranscriptCommand(cmd.ThreadID, cmd.Args), nil
 	case "research":
 		text, err := m.handleResearchCommand(cmd.ThreadID, cmd.Args)
+		return textHandlerResult(text), err
+	case "restart":
+		text, err := m.handleRestartCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
 	default:
 		m.logger.Log("channel: unknown slash command: %s (thread=%s)", cmd.Name, cmd.ThreadID)
@@ -1030,4 +1034,48 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 	}
 
 	return report, nil
+}
+
+// --- /restart ---
+
+// handleRestartCommand checks if Tachi is running under systemd and restarts
+// the service via systemctl. Returns an error if not running under systemd.
+// It sends a proactive "restarting" message before executing the restart.
+func (m *Manager) handleRestartCommand(threadID string) (string, error) {
+	// Check if running under systemd by looking for the INVOCATION_ID
+	// environment variable, which systemd sets for all services.
+	if os.Getenv("INVOCATION_ID") == "" {
+		return "", fmt.Errorf("Tachi 不是由 systemd 启动的，无法通过 systemctl 重启")
+	}
+
+	// Determine if this is a user service or system service.
+	// User services have XDG_RUNTIME_DIR set.
+	_, isUser := os.LookupEnv("XDG_RUNTIME_DIR")
+
+	// Build the systemctl command.
+	args := []string{}
+	if isUser {
+		args = append(args, "--user")
+	}
+	args = append(args, "restart", "tachi")
+
+	// Send a proactive reply BEFORE executing the restart, so the user
+	// actually sees the message before systemd kills this process.
+	m.sendToThread(context.Background(), threadID,
+		"🔄 正在重启 Tachi...\n\n```\nsystemctl "+strings.Join(args, " ")+"\n```", "")
+
+	// Execute asynchronously — we don't wait for the process to exit
+	// because the systemd stop signal will kill us first.
+	cmd := exec.Command("systemctl", args...)
+	cmd.Stdout = nil
+	cmd.Stderr = nil
+
+	if err := cmd.Start(); err != nil {
+		return "", fmt.Errorf("启动 systemctl 失败: %w", err)
+	}
+
+	// Return an empty message — the real reply was already sent via
+	// sendToThread above. Returning empty tells the caller not to send
+	// a duplicate.
+	return "", nil
 }
