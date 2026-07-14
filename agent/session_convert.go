@@ -138,6 +138,31 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 	flushAssistant()
 	flushToolResults()
 
+	// Strip orphaned tool calls from all assistant messages.
+	// LLM APIs (DeepSeek, Anthropic) require every tool_use block to have
+	// a corresponding tool_result in the next message. When a session is
+	// restored mid-turn (e.g., after a crash or interruption), an assistant
+	// message may contain tool calls whose results were never saved — e.g.
+	// a tool_call followed by user messages (user continued in a different
+	// channel) without a matching tool_result. Stripping them prevents API
+	// protocol errors.
+	for i := len(result) - 1; i >= 0; i-- {
+		if result[i].Role != "assistant" || len(result[i].ToolCalls) == 0 {
+			continue
+		}
+		// Check if any tool result exists AFTER this message.
+		hasResults := false
+		for j := i + 1; j < len(result); j++ {
+			if result[j].Role == "tool" {
+				hasResults = true
+				break
+			}
+		}
+		if !hasResults {
+			result[i].ToolCalls = nil
+		}
+	}
+
 	return result, nil
 }
 
