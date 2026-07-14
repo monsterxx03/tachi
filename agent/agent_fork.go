@@ -25,6 +25,7 @@ type ForkConfig struct {
 	MaxIterations int              // 0 = unlimited
 	MaxTokens     int              // 0 = default (4096)
 	AllowedTools  []string         // empty = copy all parent tools
+	NoMCP         bool             // true = don't inherit shared MCP Manager
 	Logger        *debuglog.Logger // nil = use parent logger
 	SessionID     string           // logging hint
 }
@@ -97,8 +98,10 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	child.SetReminderCollector(nil)
 
 	// Share heavy resources with parent — Close won't tear them down.
+	// Skip MCP sharing when NoMCP is set (e.g. ambient turns that
+	// should only use the whitelisted tools without MCP).
 	child.SetProcessManager(a.processManager)
-	if a.mcpManager != nil {
+	if a.mcpManager != nil && !cfg.NoMCP {
 		child.SetSharedMCP(a.mcpManager)
 	}
 
