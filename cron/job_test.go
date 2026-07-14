@@ -42,7 +42,7 @@ func TestShouldSuppressResult(t *testing.T) {
 		{"when_relevant + empty", NotifyWhenRelevant, "", true},
 		{"when_relevant + whitespace only", NotifyWhenRelevant, "   \n  ", true},
 		{"when_relevant + content", NotifyWhenRelevant, "Blog has a new post: ...", false},
-		{"when_relevant + content with SILENT inside", NotifyWhenRelevant, "Result: [SILENT] not really", false},
+		{"when_relevant + content with SILENT inside", NotifyWhenRelevant, "Result: [SILENT] not really", true},
 
 		// empty notify (defaults to always): never suppress
 		{"default + silent marker", "", "[SILENT]", false},

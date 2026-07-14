@@ -124,5 +124,5 @@ func (j *Job) ShouldSuppressResult(result string) bool {
 		return false
 	}
 	trimmed := strings.TrimSpace(result)
-	return trimmed == "" || trimmed == SilentMarker
+	return trimmed == "" || strings.Contains(trimmed, SilentMarker)
 }
