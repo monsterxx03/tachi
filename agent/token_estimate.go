@@ -180,12 +180,15 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []
 		tb.Total += msgTokens
 
 		switch msg.Role {
-		case "user":
+		case "user", llm.RoleSteer:
 			tb.UserMessages += msgTokens
 		case "assistant":
 			tb.AssistantMessages += msgTokens
-			// system/tool/steer messages contribute to Total but not to
-			// the named categories — they're not user or assistant msgs
+		case "tool":
+			tb.ToolResults += msgTokens
+		default:
+			// "system" (non-prompt) and any other roles
+			tb.Other += msgTokens
 		}
 	}
 

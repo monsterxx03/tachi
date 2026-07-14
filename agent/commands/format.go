@@ -104,7 +104,7 @@ func FormatUsageReport(info *UsageReportInfo) string {
 		sb.WriteString(fmt.Sprintf("Context: %s / %s (%.0f%%)\n\n",
 			FormatTokens(info.EstimatedInputTokens), FormatTokens(info.ContextWindow), pct))
 		// Compact categorized breakdown
-		parts := make([]string, 0, 5)
+		parts := make([]string, 0, 7)
 		if info.EstBreakdown.SystemPrompt > 0 {
 			parts = append(parts, fmt.Sprintf("sys:%s", FormatTokens(info.EstBreakdown.SystemPrompt)))
 		}
@@ -119,6 +119,12 @@ func FormatUsageReport(info *UsageReportInfo) string {
 		}
 		if info.EstBreakdown.AssistantMessages > 0 {
 			parts = append(parts, fmt.Sprintf("asst:%s", FormatTokens(info.EstBreakdown.AssistantMessages)))
+		}
+		if info.EstBreakdown.ToolResults > 0 {
+			parts = append(parts, fmt.Sprintf("tool_result:%s", FormatTokens(info.EstBreakdown.ToolResults)))
+		}
+		if info.EstBreakdown.Other > 0 {
+			parts = append(parts, fmt.Sprintf("other:%s", FormatTokens(info.EstBreakdown.Other)))
 		}
 		if len(parts) > 0 {
 			sb.WriteString(fmt.Sprintf("↳ %s\n\n", strings.Join(parts, " | ")))

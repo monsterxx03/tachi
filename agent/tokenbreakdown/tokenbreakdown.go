@@ -14,5 +14,7 @@ type Breakdown struct {
 	MCPTools          int64 // MCP tool schemas (name + description + parameters + overhead)
 	UserMessages      int64 // messages with Role "user" (content + content parts + tool_call_id)
 	AssistantMessages int64 // messages with Role "assistant" (content + content parts + tool calls + tool_call_id)
-	Total             int64 // sum of all categories + uncategorized messages (tool/system/steer)
+	ToolResults       int64 // messages with Role "tool" (tool execution outputs)
+	Other             int64 // messages with Role "steer" or additional "system" messages
+	Total             int64 // sum of all categories
 }
