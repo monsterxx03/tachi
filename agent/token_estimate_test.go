@@ -372,9 +372,9 @@ func TestTokenBreakdown_MixedRoles(t *testing.T) {
 		"Total should equal sum of user + assistant (no system prompt, no tools)")
 }
 
-// TestTokenBreakdown_ToolResultNotInUserMessages verifies that "tool" role
-// messages don't leak into UserMessages — they contribute only to Total.
-func TestTokenBreakdown_ToolResultNotInUserMessages(t *testing.T) {
+// TestTokenBreakdown_ToolResultCategory verifies that "tool" role messages
+// are captured in the ToolResults category.
+func TestTokenBreakdown_ToolResultCategory(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "user", Content: "run a command"},
 		{Role: "assistant", Content: "Running...", ToolCalls: []llm.ToolCall{
@@ -385,7 +385,36 @@ func TestTokenBreakdown_ToolResultNotInUserMessages(t *testing.T) {
 	tb := estimateInputTokens(msgs, "", nil)
 	assert.Greater(t, tb.UserMessages, int64(0))
 	assert.Greater(t, tb.AssistantMessages, int64(0))
-	// Total should be > user + assistant because "tool" role msg is counted in Total only
-	assert.Greater(t, tb.Total, tb.UserMessages+tb.AssistantMessages,
-		"tool result msg should be in Total but not in UserMessages/AssistantMessages")
+	assert.Greater(t, tb.ToolResults, int64(0), "tool result msg should be in ToolResults category")
+	assert.Equal(t, tb.Total, tb.UserMessages+tb.AssistantMessages+tb.ToolResults,
+		"Total should equal user + assistant + tool results (no system prompt, no tools)")
+}
+
+// TestTokenBreakdown_OtherCategory verifies that non-prompt "system"
+// messages are captured in the Other category, while "steer" is treated
+// as user input (counted in UserMessages).
+func TestTokenBreakdown_OtherCategory(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "hello"},
+		{Role: "system", Content: "additional context"},
+	}
+	tb := estimateInputTokens(msgs, "", nil)
+	assert.Greater(t, tb.UserMessages, int64(0))
+	assert.Greater(t, tb.Other, int64(0), "system msgs should be in Other category")
+	assert.Equal(t, tb.Total, tb.UserMessages+tb.Other,
+		"Total should equal user + other (no system prompt, no tools)")
+}
+
+// TestTokenBreakdown_SteerIsUser verifies that "steer" messages are
+// counted as user input alongside regular "user" messages.
+func TestTokenBreakdown_SteerIsUser(t *testing.T) {
+	msgs := []llm.Message{
+		{Role: "user", Content: "hello"},
+		{Role: llm.RoleSteer, Content: "please use Go"},
+	}
+	tb := estimateInputTokens(msgs, "", nil)
+	assert.Greater(t, tb.UserMessages, int64(0))
+	assert.Equal(t, int64(0), tb.Other, "steer msgs should not be in Other")
+	assert.Equal(t, tb.Total, tb.UserMessages,
+		"Total should equal user (steer merged into UserMessages)")
 }
