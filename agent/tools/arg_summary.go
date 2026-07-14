@@ -185,8 +185,9 @@ func formatFullArgs(args map[string]any) string {
 	var parts []string
 	for k, v := range args {
 		s := fmt.Sprint(v)
-		if len(s) > 40 {
-			s = s[:37] + "..."
+		runes := []rune(s)
+		if len(runes) > 40 {
+			s = string(runes[:37]) + "..."
 		}
 		parts = append(parts, k+"="+s)
 	}
