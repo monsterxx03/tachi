@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // IterationWarningReminder warns when the agent loop is running low on
@@ -28,7 +27,7 @@ func (r IterationWarningReminder) Generate(ctx context.Context, rctx Context) []
 		"Iteration budget: %d of %d iterations remaining. Complete your work as efficiently as possible.",
 		rctx.IterationsLeft, rctx.MaxIterations,
 	)
-	logger.FromContext(ctx).Info(ctx, "systemreminder: IterationWarningReminder firing", "threshold", r.Threshold, "message", line)
+	rctx.Info(ctx, "systemreminder: IterationWarningReminder firing", "threshold", r.Threshold, "message", line)
 	return []string{line}
 }
 
@@ -54,6 +53,6 @@ func (r TokenWarningReminder) Generate(ctx context.Context, rctx Context) []stri
 		"Context window usage: %.0f%% (%d / %d input tokens). Be concise and minimize unnecessary output.",
 		pct, rctx.InputTokens, rctx.ContextWindow,
 	)
-	logger.FromContext(ctx).Info(ctx, "systemreminder: TokenWarningReminder firing", "threshold_pct", r.ThresholdPct, "message", line)
+	rctx.Info(ctx, "systemreminder: TokenWarningReminder firing", "threshold_pct", r.ThresholdPct, "message", line)
 	return []string{line}
 }

@@ -787,6 +787,7 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		IsToolResult:    isToolResult,
 		SkipRecall:      a.memory != nil && a.memory.SkipRecall,
 		SessionID:       a.sessionID(),
+		Logger:          a.logger,
 	}
 }
 

@@ -66,6 +66,10 @@ type Context struct {
 	// SessionID is the current session's ID. Used by PlanTrackingReminder
 	// to filter plan files belonging to the current session.
 	SessionID string
+
+	// Logger is the logger for this reminder generation cycle.
+	// When nil, uses logger.Default().
+	Logger *logger.Logger
 }
 
 // Reminder generates one or more reminder lines given the current context.
@@ -159,7 +163,7 @@ func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 
 	var sb strings.Builder
 	if len(defaultG.lines) > 0 {
-		logger.FromContext(ctx).Info(ctx, "systemreminder: firing reminder(s)", "names", defaultG.firedName)
+		rctx.Info(ctx, "systemreminder: firing reminder(s)", "names", defaultG.firedName)
 		sb.WriteString("<system-reminder>\n")
 		for _, line := range defaultG.lines {
 			sb.WriteString(line)
@@ -168,7 +172,7 @@ func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 		sb.WriteString("</system-reminder>\n")
 	}
 	for tag, g := range taggedG {
-		logger.FromContext(ctx).Info(ctx, "systemreminder: firing tagged reminder(s)", "names", g.firedName)
+		rctx.Info(ctx, "systemreminder: firing tagged reminder(s)", "names", g.firedName)
 		sb.WriteString("<" + tag + ">\n")
 		for _, line := range g.lines {
 			sb.WriteString(line)
@@ -194,4 +198,31 @@ func (c *Collector) WrapUserMessage(ctx context.Context, userMessage string, rct
 		return userMessage
 	}
 	return block + userMessage
+}
+
+// Info logs at INFO level through the context's logger, falling back to Default().
+func (c Context) Info(ctx context.Context, msg string, attrs ...any) {
+	l := c.Logger
+	if l == nil {
+		l = logger.Default()
+	}
+	l.Info(ctx, msg, attrs...)
+}
+
+// Error logs at ERROR level through the context's logger, falling back to Default().
+func (c Context) Error(ctx context.Context, msg string, err error, attrs ...any) {
+	l := c.Logger
+	if l == nil {
+		l = logger.Default()
+	}
+	l.Error(ctx, msg, err, attrs...)
+}
+
+// Warn logs at WARN level through the context's logger, falling back to Default().
+func (c Context) Warn(ctx context.Context, msg string, attrs ...any) {
+	l := c.Logger
+	if l == nil {
+		l = logger.Default()
+	}
+	l.Warn(ctx, msg, attrs...)
 }

@@ -7,7 +7,6 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
-	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // MemoryRecallReminder injects relevant memories from the memory backend
@@ -70,21 +69,21 @@ func (r MemoryRecallReminder) Generate(ctx context.Context, rctx Context) []stri
 
 	entries, err := r.Backend.Recall(recallCtx, rctx.CurrentPrompt, limit)
 	if err != nil {
-		logger.FromContext(ctx).Error(ctx, "MemoryRecall: recall failed", err)
+		rctx.Error(ctx, "MemoryRecall: recall failed", err)
 		return nil
 	}
 	if len(entries) == 0 {
-		logger.FromContext(ctx).Info(ctx, "MemoryRecall: no recall results")
+		rctx.Info(ctx, "MemoryRecall: no recall results")
 		return nil
 	}
 
-	logger.FromContext(ctx).Info(ctx, "MemoryRecall: recall returned entries", "count", len(entries))
+	rctx.Info(ctx, "MemoryRecall: recall returned entries", "count", len(entries))
 
 	// Reinforce each recalled fact to strengthen its decay state.
 	for _, e := range entries {
 		if e.ID != "" {
 			if err := r.Backend.ReinforceFact(recallCtx, e.ID); err != nil {
-				logger.FromContext(ctx).Error(ctx, "MemoryRecall: reinforce failed", err, "memory_id", e.ID)
+				rctx.Error(ctx, "MemoryRecall: reinforce failed", err, "memory_id", e.ID)
 			}
 		}
 	}
@@ -119,6 +118,6 @@ func (r MemoryRecallReminder) Generate(ctx context.Context, rctx Context) []stri
 		"using the Grep tool on ~/.tachi/session/.",
 	)
 
-	logger.FromContext(ctx).Info(ctx, "MemoryRecall: injecting lines", "line_count", len(lines), "entry_count", len(entries))
+	rctx.Info(ctx, "MemoryRecall: injecting lines", "line_count", len(lines), "entry_count", len(entries))
 	return lines
 }

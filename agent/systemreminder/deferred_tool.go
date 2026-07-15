@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // DeferredToolProvider provides MCP tool metadata for the reminder.
@@ -103,7 +102,7 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 	}
 	lines = append(lines, "", "  "+totalHint)
 
-	logger.FromContext(ctx).Info(ctx,
+	rctx.Info(ctx,
 		"systemreminder: DeferredToolReminder fired",
 		"undiscovered_count", len(undiscovered),
 		"total_count", len(all))
