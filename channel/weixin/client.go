@@ -140,7 +140,7 @@ func (c *client) doWithTimeout(method, url string, body []byte, timeout time.Dur
 
 	// getUpdates is long-polling — skip request log to avoid noise.
 	if !isGetUpdatesPath(url) {
-		c.logger.Logf(context.Background(), "weixin-client: %s %s", method, url)
+		c.logger.Info(context.Background(), "weixin-client: request", "method", method, "addr", url)
 	}
 	return hc.Do(req)
 }
@@ -166,7 +166,7 @@ func apiPost[Resp any](c *client, path string, reqBody any, timeout time.Duratio
 
 	// getUpdates is long-polling — skip response log to avoid noise.
 	if !isGetUpdatesPath(path) {
-		c.logger.Logf(context.Background(), "weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+		c.logger.Info(context.Background(), "weixin-client: POST response", "path", path, "status", resp.StatusCode, "body", string(respBytes[:min(len(respBytes), 500)]))
 	}
 
 	var result Resp
@@ -190,7 +190,7 @@ func apiGet[Resp any](c *client, path string, timeout time.Duration) (*Resp, err
 		return nil, fmt.Errorf("read response for %s: %w", path, err)
 	}
 
-	c.logger.Logf(context.Background(), "weixin-client: GET %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+	c.logger.Info(context.Background(), "weixin-client: GET response", "path", path, "status", resp.StatusCode, "body", string(respBytes[:min(len(respBytes), 500)]))
 
 	var result Resp
 	if err := json.Unmarshal(respBytes, &result); err != nil {
@@ -208,7 +208,7 @@ func (c *client) cdnUpload(url string, data []byte) (encryptedParam string, err 
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 
-	c.logger.Logf(context.Background(), "weixin-client: CDN POST %s (%d bytes)", url, len(data))
+	c.logger.Info(context.Background(), "weixin-client: CDN POST", "addr", url, "bytes", len(data))
 	resp, err := hc.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("CDN upload: %w", err)
@@ -232,7 +232,7 @@ func (c *client) cdnDownload(url string) ([]byte, error) {
 		return nil, fmt.Errorf("create CDN download request: %w", err)
 	}
 
-	c.logger.Logf(context.Background(), "weixin-client: CDN GET %s", url)
+	c.logger.Info(context.Background(), "weixin-client: CDN GET", "addr", url)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("CDN download: %w", err)

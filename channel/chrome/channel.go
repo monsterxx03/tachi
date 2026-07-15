@@ -69,14 +69,14 @@ func (c *ChromeChannel) Name() string { return c.name }
 // OnStart implements channel.Channel. Creates the WebSocket server.
 func (c *ChromeChannel) OnStart(ctx context.Context) error {
 	c.server = NewServer(c.port)
-	c.logger.Logf(ctx, "chrome: channel ready (port=%d pid=%d)", c.port, os.Getpid())
+	c.logger.Info(ctx, "chrome: channel ready", "port", c.port, "pid", os.Getpid())
 	return nil
 }
 
 // Run implements channel.Channel. Starts the WebSocket server and blocks
 // until ctx is cancelled or the server fails.
 func (c *ChromeChannel) Run(ctx context.Context, handler channel.MessageHandler) error {
-	c.logger.Logf(ctx, "chrome: starting WebSocket server on 127.0.0.1:%d", c.port)
+	c.logger.Info(ctx, "chrome: starting WebSocket server", "port", c.port)
 
 	if c.server == nil {
 		c.server = NewServer(c.port)
@@ -89,7 +89,7 @@ func (c *ChromeChannel) Run(ctx context.Context, handler channel.MessageHandler)
 
 	select {
 	case <-ctx.Done():
-		c.logger.Logf(ctx, "chrome: context cancelled, shutting down")
+		c.logger.Info(ctx, "chrome: context cancelled, shutting down")
 		_ = c.server.Close()
 		return nil
 	case err := <-errCh:
@@ -105,7 +105,7 @@ func (c *ChromeChannel) Send(_ context.Context, msg channel.OutgoingMessage) err
 	if c.server == nil {
 		return fmt.Errorf("chrome: server not started")
 	}
-	c.logger.Logf(context.Background(), "chrome: proactive send thread=%s", msg.ThreadID)
+	c.logger.Info(context.Background(), "chrome: proactive send", "thread", msg.ThreadID)
 	return c.server.Send(msg.ThreadID, msg.Content)
 }
 

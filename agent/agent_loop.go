@@ -312,7 +312,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 			wd, _ := os.Getwd()
 			if _, err := a.sessionManager.New(providerName, wd); err != nil {
-				a.logger.Logf(ctx, "Agent: failed to create session: %v", err)
+				a.logger.Error(ctx, "Agent: failed to create session", err)
 			}
 			// Update logger with session ID for debug log tracking
 			if cur := a.sessionManager.Current(); cur != nil {
@@ -428,7 +428,7 @@ func (a *AIAgent) runAgentLoop(
 			ch <- AgentEvent{Type: AgentEventAutoCompactStart}
 			summary, newHistory, err := a.doCompact(ctx, messages)
 			if err != nil {
-				a.logger.Logf(ctx, "Auto compact failed: %v", err)
+				a.logger.Error(ctx, "Auto compact failed", err)
 				ch <- AgentEvent{Type: AgentEventAutoCompactDone, Result: &RunResult{Error: err}}
 				// Non-fatal: continue with the existing (over-large)
 				// history. The next iteration will try again — eventual
@@ -437,7 +437,7 @@ func (a *AIAgent) runAgentLoop(
 				oldMsgCount := len(messages)
 				messages = newHistory
 				a.setCompactCooldown()
-				a.logger.Logf(ctx, "Auto compact completed, new history has %d messages", len(messages))
+				a.logger.Info(ctx, "Auto compact completed", "msgCount", len(messages))
 				ch <- AgentEvent{
 					Type:           AgentEventAutoCompactDone,
 					CompactSummary: summary,
@@ -532,8 +532,7 @@ func (a *AIAgent) handleToolCallFinish(
 		}
 		return false
 	}
-	a.logger.Logf(ctx, "Agent: executeToolCalls returned %d tool messages for %d tool calls",
-		len(toolMsgs), len(acc.toolCalls))
+	a.logger.Info(ctx, "Agent: executeToolCalls returned", "toolMsgCount", len(toolMsgs), "toolCallCount", len(acc.toolCalls))
 	*messages = append(*messages, toolMsgs...)
 	*lengthRetries = 0
 
@@ -542,7 +541,7 @@ func (a *AIAgent) handleToolCallFinish(
 		for _, tc := range acc.toolCalls {
 			if fp := tools.ExtractFilePath(tc.Function.Name, tc.Function.Arguments); fp != "" {
 				if syncErr := a.lspManager.SyncFile(ctx, fp); syncErr != nil {
-					a.logger.Logf(ctx, "LSP: file sync error for %s: %v", fp, syncErr)
+					a.logger.Error(ctx, "LSP: file sync error", syncErr, "file", fp)
 				}
 			}
 		}
@@ -563,7 +562,7 @@ func (a *AIAgent) handleToolCallFinish(
 		case steerText := <-a.steerRespCh:
 			if steerText != "" {
 				*messages = append(*messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
-				a.logger.Logf(ctx, "Agent: steer: injected RoleSteer msg, steerText=%q", truncateForLog(steerText, 80))
+				a.logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", truncateForLog(steerText, 80))
 				a.recordSession(&session.Message{
 					Type:    session.MessageTypeUser,
 					Content: steerText,
@@ -584,7 +583,7 @@ func (a *AIAgent) handleToolCallFinish(
 	}
 	if block := a.reminderCollector.Collect(ctx, rctx); block != "" {
 		*messages = append(*messages, llm.Message{Role: "user", Content: block})
-		a.logger.Logf(ctx, "Agent: loop reminder injected, block=%q", truncateForLog(block, 200))
+		a.logger.Info(ctx, "Agent: loop reminder injected", "block", truncateForLog(block, 200))
 	}
 
 	return true
@@ -604,7 +603,7 @@ func (a *AIAgent) handleLengthFinish(
 	lengthRetries *int,
 ) bool {
 	*lengthRetries++
-	a.logger.Logf(context.Background(), "Agent: text=%s, finish_reason=%s, continuation retry %d/%d", acc.text.String(), acc.finishReason, *lengthRetries, maxLengthContinueRetries)
+	a.logger.Info(context.Background(), "Agent: continuation", "text", acc.text.String(), "finishReason", acc.finishReason, "retry", *lengthRetries, "maxRetries", maxLengthContinueRetries)
 
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
@@ -621,7 +620,7 @@ func (a *AIAgent) handleLengthFinish(
 	*messages = append(*messages, msg)
 
 	if *lengthRetries >= maxLengthContinueRetries {
-		a.logger.Logf(context.Background(), "Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
+		a.logger.Info(context.Background(), "Agent: length continuation exhausted", "maxRetries", maxLengthContinueRetries)
 		// Return the partial output as a normal turn completion instead
 		// of an error — the user already saw the text streaming, and
 		// discarding it (or showing a red error) is worse than delivering

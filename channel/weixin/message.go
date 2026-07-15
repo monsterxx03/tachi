@@ -147,16 +147,16 @@ func (ch *Channel) sendTextReply(toUserID, contextToken, text string) error {
 
 	resp, err := ch.cli.sendMessage(req)
 	if err != nil {
-		ch.logger.Logf(context.Background(), "weixin: sendMessage error to %s: %v", toUserID, err)
+		ch.logger.Error(context.Background(), "weixin: sendMessage error", err, "user", toUserID)
 		return err
 	}
 
 	if resp.ErrCode != 0 {
-		ch.logger.Logf(context.Background(), "weixin: sendMessage to %s: errcode=%d errmsg=%s", toUserID, resp.ErrCode, resp.ErrMsg)
+		ch.logger.Info(context.Background(), "weixin: sendMessage error response", "user", toUserID, "errcode", resp.ErrCode, "errmsg", resp.ErrMsg)
 		return fmt.Errorf("sendMessage errcode=%d %s", resp.ErrCode, resp.ErrMsg)
 	}
 
-	ch.logger.Logf(context.Background(), "weixin: sent text reply to %s (%d chars)", toUserID, len(text))
+	ch.logger.Info(context.Background(), "weixin: sent text reply", "user", toUserID, "chars", len(text))
 	return nil
 }
 
@@ -219,7 +219,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 				return err // 4xx, don't retry.
 			}
 			if i < 2 {
-				ch.logger.Logf(context.Background(), "weixin: CDN upload retry %d: %v", i+1, err)
+				ch.logger.Error(context.Background(), "weixin: CDN upload retry", err, "attempt", i+1)
 				time.Sleep(time.Duration(i+1) * time.Second)
 			}
 		} else {
@@ -300,7 +300,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 		return fmt.Errorf("sendMessage media errcode=%d %s", sendResp.ErrCode, sendResp.ErrMsg)
 	}
 
-	ch.logger.Logf(context.Background(), "weixin: sent media reply to %s (%s, %d bytes)", toUserID, fileName, rawSize)
+	ch.logger.Info(context.Background(), "weixin: sent media reply", "user", toUserID, "file", fileName, "bytes", rawSize)
 	return nil
 }
 

@@ -92,7 +92,7 @@ func (s *FileTokenStore) GetToken(ctx context.Context) (*transport.Token, error)
 	var token transport.Token
 	if err := json.Unmarshal(data, &token); err != nil {
 		// Corrupt file — treat as no token, the user will re-authenticate
-		logger.FromContext(ctx).Logf(ctx,  "MCP: failed to parse token file %q: %v", s.tokenPath, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to parse token file", err)
 		return nil, transport.ErrNoToken
 	}
 
@@ -119,7 +119,7 @@ func (s *FileTokenStore) SaveToken(ctx context.Context, token *transport.Token) 
 		return fmt.Errorf("write token file %q: %w", s.tokenPath, err)
 	}
 
-	logger.FromContext(ctx).Logf(ctx,  "MCP: saved token for server %q to %s", s.storageKey, s.tokenPath)
+	logger.FromContext(ctx).Info(ctx, "MCP: saved token for server", "server", s.storageKey, "path", s.tokenPath)
 	return nil
 }
 
@@ -140,7 +140,7 @@ func (s *FileTokenStore) GetDCRInfo(ctx context.Context) (*DCRInfo, error) {
 
 	var info DCRInfo
 	if err := json.Unmarshal(data, &info); err != nil {
-		logger.FromContext(ctx).Logf(ctx,  "MCP: failed to parse DCR file %q: %v", s.dcrPath, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to parse DCR file", err, "path", s.dcrPath)
 		return nil, transport.ErrNoToken
 	}
 
@@ -167,7 +167,7 @@ func (s *FileTokenStore) SaveDCRInfo(ctx context.Context, info *DCRInfo) error {
 		return fmt.Errorf("write DCR file %q: %w", s.dcrPath, err)
 	}
 
-	logger.FromContext(ctx).Logf(ctx,  "MCP: saved DCR info for %q", s.storageKey)
+	logger.FromContext(ctx).Info(ctx, "MCP: saved DCR info", "server", s.storageKey)
 	return nil
 }
 
@@ -198,7 +198,7 @@ func (s *FileTokenStore) SavePendingState(ctx context.Context, state *OAuthPendi
 		return fmt.Errorf("write pending state %q: %w", s.pendingPath, err)
 	}
 
-	logger.FromContext(ctx).Logf(ctx,  "MCP: saved pending OAuth state for %q", s.storageKey)
+	logger.FromContext(ctx).Info(ctx, "MCP: saved pending OAuth state", "server", s.storageKey)
 	return nil
 }
 
@@ -220,14 +220,14 @@ func (s *FileTokenStore) GetPendingState(ctx context.Context) (*OAuthPendingStat
 
 	var state OAuthPendingState
 	if err := json.Unmarshal(data, &state); err != nil {
-		logger.FromContext(ctx).Logf(ctx,  "MCP: failed to parse pending state %q: %v", s.pendingPath, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to parse pending state", err, "path", s.pendingPath)
 		return nil, transport.ErrNoToken
 	}
 
 	// Consume the pending state — don't allow replay
 	if err := os.Remove(s.pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
-		logger.FromContext(ctx).Logf(ctx,  "MCP: failed to remove pending state %q: %v", s.pendingPath, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to remove pending state", err, "path", s.pendingPath)
 	}
-	logger.FromContext(ctx).Logf(ctx,  "MCP: loaded and consumed pending OAuth state for %q", s.storageKey)
+	logger.FromContext(ctx).Info(ctx, "MCP: loaded and consumed pending OAuth state", "server", s.storageKey)
 	return &state, nil
 }

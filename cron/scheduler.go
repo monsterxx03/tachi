@@ -97,7 +97,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		j := job
 		entryID, addErr := s.addCronEntry(j)
 		if addErr != nil {
-			s.logger.Logf(context.Background(), "cron: failed to add entry for job %s (%s): %v", j.ID, j.Name, addErr)
+			s.logger.Error(context.Background(), "cron: failed to add entry", addErr, "id", j.ID, "name", j.Name)
 			continue
 		}
 		s.entryMap[j.ID] = entryID
@@ -105,7 +105,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}
 
 	s.cron.Start()
-	s.logger.Logf(context.Background(), "cron: scheduler started with %d active jobs", activeCount)
+	s.logger.Info(context.Background(), "cron: scheduler started", "count", activeCount)
 	return nil
 }
 
@@ -117,7 +117,7 @@ func (s *Scheduler) Stop() {
 	}
 	s.mu.Unlock()
 	<-s.cron.Stop().Done()
-	s.logger.Logf(context.Background(), "cron: scheduler stopped")
+	s.logger.Info(context.Background(), "cron: scheduler stopped")
 }
 
 // List returns a copy of all cron jobs.
@@ -195,7 +195,7 @@ func (s *Scheduler) Create(job *Job) (*Job, error) {
 		}
 	}
 
-	s.logger.Logf(context.Background(), "cron: created job %s (%s) schedule=%s", job.ID, job.Name, job.Schedule)
+	s.logger.Info(context.Background(), "cron: created job", "id", job.ID, "name", job.Name, "schedule", job.Schedule)
 	return s.copyJob(job), nil
 }
 
@@ -255,13 +255,13 @@ func (s *Scheduler) Update(id string, opts UpdateOpts) (*Job, error) {
 	if scheduleChanged && job.Status == JobStatusActive {
 		s.stopJobTimer(job.ID)
 		if err := s.startJobTimer(job); err != nil {
-			s.logger.Logf(context.Background(), "cron: failed to reschedule job %s: %v", job.ID, err)
+			s.logger.Error(context.Background(), "cron: failed to reschedule job", err, "id", job.ID)
 			job.Status = JobStatusPaused
 			s.store.Update(job)
 		}
 	}
 
-	s.logger.Logf(context.Background(), "cron: updated job %s (%s)", job.ID, job.Name)
+	s.logger.Info(context.Background(), "cron: updated job", "id", job.ID, "name", job.Name)
 	return s.copyJob(job), nil
 }
 
@@ -278,7 +278,7 @@ func (s *Scheduler) Delete(id string) error {
 		return fmt.Errorf("cron: delete job: %w", err)
 	}
 
-	s.logger.Logf(context.Background(), "cron: deleted job %s", id)
+	s.logger.Info(context.Background(), "cron: deleted job", "id", id)
 	return nil
 }
 
@@ -303,7 +303,7 @@ func (s *Scheduler) Pause(id string) (*Job, error) {
 
 	s.stopJobTimer(id)
 
-	s.logger.Logf(context.Background(), "cron: paused job %s (%s)", job.ID, job.Name)
+	s.logger.Info(context.Background(), "cron: paused job", "id", job.ID, "name", job.Name)
 	return s.copyJob(job), nil
 }
 
@@ -327,13 +327,13 @@ func (s *Scheduler) Resume(id string) (*Job, error) {
 	}
 
 	if err := s.startJobTimer(job); err != nil {
-		s.logger.Logf(context.Background(), "cron: failed to resume job %s: %v", job.ID, err)
+		s.logger.Error(context.Background(), "cron: failed to resume job", err, "id", job.ID)
 		job.Status = JobStatusPaused
 		s.store.Update(job)
 		return nil, fmt.Errorf("cron: failed to schedule job: %w", err)
 	}
 
-	s.logger.Logf(context.Background(), "cron: resumed job %s (%s)", job.ID, job.Name)
+	s.logger.Info(context.Background(), "cron: resumed job", "id", job.ID, "name", job.Name)
 	return s.copyJob(job), nil
 }
 
@@ -391,11 +391,11 @@ func (s *Scheduler) fire(job *Job) {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	default:
-		s.logger.Logf(context.Background(), "cron: skipping job %s (%s): max concurrent reached", job.ID, job.Name)
+		s.logger.Info(context.Background(), "cron: skipping job: max concurrent reached", "id", job.ID, "name", job.Name)
 		return
 	}
 
-	s.logger.Logf(context.Background(), "cron: triggering job %s (%s)", job.ID, job.Name)
+	s.logger.Info(context.Background(), "cron: triggering job", "id", job.ID, "name", job.Name)
 
 	ctx, cancel := context.WithTimeout(s.ctx, s.executionTimeout)
 	defer cancel()
@@ -416,15 +416,15 @@ func (s *Scheduler) fire(job *Job) {
 	if err != nil {
 		latest.LastRunStatus = "error"
 		latest.LastRunError = err.Error()
-		s.logger.Logf(context.Background(), "cron: job %s (%s) failed after %v: %v", job.ID, job.Name, elapsed, err)
+		s.logger.Error(context.Background(), "cron: job failed", err, "id", job.ID, "name", job.Name, "duration", elapsed)
 	} else {
 		latest.LastRunStatus = "success"
 		latest.LastRunError = ""
-		s.logger.Logf(context.Background(), "cron: job %s (%s) succeeded after %v", job.ID, job.Name, elapsed)
+		s.logger.Info(context.Background(), "cron: job succeeded", "id", job.ID, "name", job.Name, "duration", elapsed)
 	}
 
 	if updateErr := s.store.Update(latest); updateErr != nil {
-		s.logger.Logf(context.Background(), "cron: failed to update last_run for job %s: %v", job.ID, updateErr)
+		s.logger.Error(context.Background(), "cron: failed to update last_run", updateErr, "id", job.ID)
 	}
 
 	isOneshot := latest.Type == JobTypeOneshot
@@ -434,9 +434,9 @@ func (s *Scheduler) fire(job *Job) {
 	// (Delete also acquires s.mu).
 	if isOneshot {
 		if delErr := s.Delete(job.ID); delErr != nil {
-			s.logger.Logf(context.Background(), "cron: failed to clean up oneshot job %s: %v", job.ID, delErr)
+			s.logger.Error(context.Background(), "cron: failed to clean up oneshot job", delErr, "id", job.ID)
 		} else {
-			s.logger.Logf(context.Background(), "cron: oneshot job %s (%s) completed and removed", job.ID, job.Name)
+			s.logger.Info(context.Background(), "cron: oneshot job completed and removed", "id", job.ID, "name", job.Name)
 		}
 	}
 }

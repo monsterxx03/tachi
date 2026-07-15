@@ -539,7 +539,7 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 	if llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType()); convErr == nil {
 		sess.history = llmMsgs
 	} else {
-		logger.FromContext(ctx).Logf(ctx, "ACP: replaySessionHistory ConvertSessionToLLMMessages failed: %v", convErr)
+		logger.FromContext(ctx).Error(ctx, "ACP: replaySessionHistory ConvertSessionToLLMMessages failed", convErr)
 	}
 }
 

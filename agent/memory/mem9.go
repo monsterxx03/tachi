@@ -271,7 +271,7 @@ func (b *Mem9Backend) doRequest(ctx context.Context, method, path string, body, 
 		return fmt.Errorf("mem9: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	logger.FromContext(ctx).Logf(ctx, "mem9: %s %s -> %d", method, path, resp.StatusCode)
+	logger.FromContext(ctx).Debug(ctx, fmt.Sprintf("mem9: %s %s -> %d", method, path, resp.StatusCode))
 
 	if result != nil {
 		return json.NewDecoder(resp.Body).Decode(result)

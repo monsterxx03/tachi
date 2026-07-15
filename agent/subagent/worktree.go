@@ -56,7 +56,7 @@ func (wm *WorktreeManager) Create(
 
 	worktreePath, err := wm.createWorktree(ctx, branch)
 	if err != nil {
-		wm.logger.Logf(ctx, "WorktreeManager: failed to create worktree: %v, falling back to shared dir", err)
+		wm.logger.Error(ctx, "WorktreeManager: failed to create worktree, falling back to shared dir", err)
 		result, stats, fnErr := fn(ctx, "")
 		if result != "" {
 			result = "[WARNING: worktree unavailable — ran in shared directory. File changes may affect the main working tree.]\n\n" + result
@@ -101,7 +101,7 @@ func (wm *WorktreeManager) createWorktree(ctx context.Context, branch string) (s
 
 	if branch != "" {
 		if !branchExists(branch) {
-			wm.logger.Logf(ctx, "WorktreeManager: branch %q not found locally, fetching from origin", branch)
+			wm.logger.Info(ctx, "WorktreeManager: branch not found locally, fetching", "branch", branch)
 			if err := fetchBranch(ctx, branch); err != nil {
 				return "", fmt.Errorf("failed to fetch branch %q: %w", branch, err)
 			}
@@ -130,7 +130,7 @@ func (wm *WorktreeManager) removeWorktree(path string) {
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
-		wm.logger.Logf(context.Background(), "WorktreeManager: failed to remove worktree %s: %v (stderr: %s)", path, err, stderr.String())
+		wm.logger.Error(context.Background(), "WorktreeManager: failed to remove worktree", err, "path", path, "stderr", strings.TrimSpace(stderr.String()))
 	}
 }
 
@@ -146,7 +146,7 @@ func (wm *WorktreeManager) collectPatch(worktreePath string) string {
 
 	cmd := exec.CommandContext(bgCtx, "git", "-C", worktreePath, "add", "-A")
 	if err := cmd.Run(); err != nil {
-		wm.logger.Logf(context.Background(), "WorktreeManager: git add -A failed: %v", err)
+		wm.logger.Error(context.Background(), "WorktreeManager: git add -A failed", err)
 		return ""
 	}
 
@@ -159,7 +159,7 @@ func (wm *WorktreeManager) collectPatch(worktreePath string) string {
 	cmd = exec.CommandContext(bgCtx, "git", "-C", worktreePath, "diff", "--cached")
 	diffOut, err := cmd.Output()
 	if err != nil {
-		wm.logger.Logf(context.Background(), "WorktreeManager: git diff failed: %v", err)
+		wm.logger.Error(context.Background(), "WorktreeManager: git diff failed", err)
 		return ""
 	}
 

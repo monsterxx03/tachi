@@ -181,7 +181,7 @@ func (i *InputArea) handlePaste(text string) (InputArea, tea.Cmd) {
 	// File drag-and-drop detection: if the pasted text looks like file
 	// path(s) and they exist on disk, wrap them as @-references.
 	if wrapped, ok := i.wrapDroppedFiles(text); ok {
-		i.logger.Logf(context.Background(), "input: detected dragged file(s): %q → %q", text, wrapped)
+		i.logger.Info(context.Background(), "input: detected dragged file(s)", "text", text, "path", wrapped)
 		i.textarea.InsertString(wrapped)
 		return *i, nil
 	}
@@ -496,7 +496,7 @@ func (i *InputArea) pushHistoryLine(line string) {
 	}
 	if i.historyPath != "" {
 		if err := i.saveInputHistoryFile(i.historyPath, i.history); err != nil {
-			i.logger.Logf(context.Background(), "input history: save: %v", err)
+			i.logger.Error(context.Background(), "input history: save", err)
 		}
 	}
 }

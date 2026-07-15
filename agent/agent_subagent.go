@@ -159,24 +159,24 @@ func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
 
 	pCfg := cfg.FindProvider(sc.Provider)
 	if pCfg == nil {
-		a.logger.Logf(context.Background(), "Agent: subagent.provider %q not found in providers list, falling back to main model", sc.Provider)
+		a.logger.Info(context.Background(), "Agent: subagent provider not found, falling back to main model", "provider", sc.Provider)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
-		a.logger.Logf(context.Background(), "Agent: failed to resolve subagent provider %q: %v, falling back to main model", sc.Provider, err)
+		a.logger.Error(context.Background(), "Agent: failed to resolve subagent provider, falling back to main model", err, "provider", sc.Provider)
 		return
 	}
 
 	sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Logf(context.Background(), "Agent: failed to create subagent provider %q: %v, falling back to main model", sc.Provider, err)
+		a.logger.Error(context.Background(), "Agent: failed to create subagent provider, falling back to main model", err, "provider", sc.Provider)
 		return
 	}
 
 	a.subagentProvider = sp
-	a.logger.Logf(context.Background(), "Agent: using subagent provider %q (%s/%s)", sc.Provider, resolved.Type, resolved.Model)
+	a.logger.Info(context.Background(), "Agent: using subagent provider", "provider", sc.Provider, "type", resolved.Type, "model", resolved.Model)
 }
 
 // newSubagentEventSink creates a SubagentEventSink that forwards subagent

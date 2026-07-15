@@ -171,14 +171,14 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 		// Gate 1: at least one session with activity since last dream.
 		active := ActiveSessionsSince(lastState.LastDreamAt, g.Sessions)
 		if len(active) == 0 {
-			o.logger.Logf(ctx, "[%s:%s] skipped — no sessions with activity since last dream",
-				g.Domain, g.Root)
+			o.logger.Info(ctx, "skipped — no sessions with activity since last dream",
+				"domain", g.Domain, "root", g.Root)
 			continue
 		}
 
 		// Gate 3: acquire domain lock (no concurrent dream on same domain).
 		if !AcquireLock(g.MemoryRoot) {
-			o.logger.Logf(ctx, "[%s:%s] skipped — lock held by another process", g.Domain, g.Root)
+			o.logger.Info(ctx, "skipped — lock held by another process", "domain", g.Domain, "root", g.Root)
 			continue
 		}
 
@@ -186,7 +186,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 	}
 
 	if len(plans) == 0 {
-		o.logger.Logf(ctx, "no domains passed gates")
+		o.logger.Info(ctx, "no domains passed gates")
 		return nil
 	}
 
@@ -231,20 +231,20 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 
 			// Ensure memory directory structure exists.
 			if err := EnsureMemoryDir(p.Group.MemoryRoot); err != nil {
-				o.logger.Logf(ctx, "[%s:%s] failed to create memory dir: %v", p.Group.Domain, p.Group.Root, err)
+				o.logger.Error(ctx, "failed to create memory dir", err, "domain", p.Group.Domain, "root", p.Group.Root)
 				return
 			}
 
 			state, err := runFn(ctx, p)
 			if err != nil {
-				o.logger.Logf(ctx, "[%s:%s] failed: %v", p.Group.Domain, p.Group.Root, err)
+				o.logger.Error(ctx, "failed", err, "domain", p.Group.Domain, "root", p.Group.Root)
 				return
 			}
 
 			if err := SaveState(p.Group.MemoryRoot, state); err != nil {
-				o.logger.Logf(ctx, "[%s:%s] failed to save state: %v", p.Group.Domain, p.Group.Root, err)
+				o.logger.Error(ctx, "failed to save state", err, "domain", p.Group.Domain, "root", p.Group.Root)
 			} else {
-				o.logger.Logf(ctx, "[%s:%s] completed", p.Group.Domain, p.Group.Root)
+				o.logger.Info(ctx, "completed", "domain", p.Group.Domain, "root", p.Group.Root)
 			}
 		}(plan)
 	}

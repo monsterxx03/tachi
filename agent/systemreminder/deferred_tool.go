@@ -103,9 +103,10 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 	}
 	lines = append(lines, "", "  "+totalHint)
 
-	logger.FromContext(ctx).Logf(ctx,
-		"systemreminder: DeferredToolReminder: %d undiscovered of %d total (fired once)",
-		len(undiscovered), len(all))
+	logger.FromContext(ctx).Info(ctx,
+		"systemreminder: DeferredToolReminder fired",
+		"undiscovered_count", len(undiscovered),
+		"total_count", len(all))
 
 	return []string{strings.Join(lines, "\n")}
 }

@@ -31,19 +31,19 @@ func (m *Manager) truncateToolOutput(ctx context.Context, result string, maxChar
 
 	// Ensure the directory exists.
 	if err := os.MkdirAll(fileDir, 0700); err != nil {
-		m.logger.Logf(ctx, "MCP: truncateToolOutput: failed to create dir %s: %v", fileDir, err)
+		m.logger.Error(ctx, "MCP: truncateToolOutput: failed to create dir", err, "dir", fileDir)
 		// Fall back to simple truncation without file persistence.
 		return hardTruncate(result, maxChars, toolName)
 	}
 
 	// Write the full result to disk.
 	if err := os.WriteFile(filepath, []byte(result), 0600); err != nil {
-		m.logger.Logf(ctx, "MCP: truncateToolOutput: failed to write file %s: %v", filepath, err)
+		m.logger.Error(ctx, "MCP: truncateToolOutput: failed to write file", err, "path", filepath)
 		// Fall back to simple truncation.
 		return hardTruncate(result, maxChars, toolName)
 	}
 
-	m.logger.Logf(ctx, "MCP: tool %s result too large (%d chars), saved to %s", toolName, len(result), filepath)
+	m.logger.Info(ctx, "MCP: tool result too large, saved to file", "tool", toolName, "char_count", len(result), "path", filepath)
 
 	// Best-effort background cleanup of old files.
 	go m.cleanupOldToolResults(ctx, fileDir, defaultToolResultMaxAge)
@@ -95,7 +95,7 @@ func (m *Manager) cleanupOldToolResults(ctx context.Context, fileDir string, max
 	entries, err := os.ReadDir(fileDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			m.logger.Logf(ctx, "MCP: cleanupOldToolResults: read dir %s: %v", fileDir, err)
+			m.logger.Error(ctx, "MCP: cleanupOldToolResults: read dir", err, "dir", fileDir)
 		}
 		return
 	}
@@ -114,7 +114,7 @@ func (m *Manager) cleanupOldToolResults(ctx context.Context, fileDir string, max
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(fileDir, entry.Name())
 			if err := os.Remove(path); err != nil {
-				m.logger.Logf(ctx, "MCP: cleanupOldToolResults: remove %s: %v", path, err)
+				m.logger.Error(ctx, "MCP: cleanupOldToolResults: remove", err, "path", path)
 			} else {
 				removed++
 			}
@@ -122,6 +122,6 @@ func (m *Manager) cleanupOldToolResults(ctx context.Context, fileDir string, max
 	}
 
 	if removed > 0 {
-		m.logger.Logf(ctx, "MCP: cleanupOldToolResults: removed %d old files from %s (maxAge=%s)", removed, fileDir, maxAge)
+		m.logger.Info(ctx, "MCP: cleanupOldToolResults: removed old files", "count", removed, "dir", fileDir, "max_age", maxAge)
 	}
 }

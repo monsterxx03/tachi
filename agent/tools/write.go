@@ -29,7 +29,7 @@ func (t WriteTool) Required() []string { return []string{"path", "content"} }
 func (t WriteTool) Parallel() bool     { return false }
 
 func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	logger.FromContext(ctx).Logf(ctx, "ACP write: ExecuteContext called, conn=%v", acpctx.Conn(ctx) != nil)
+	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP write: ExecuteContext called, conn=%v", acpctx.Conn(ctx) != nil))
 	var argsMap struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`

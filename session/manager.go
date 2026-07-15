@@ -64,7 +64,7 @@ func (m *Manager) cleanupLocked() int {
 
 	sessions, err := m.store.ListSessions()
 	if err != nil {
-		m.logger.Logf(context.Background(), "session cleanup: list sessions error: %v", err)
+		m.logger.Error(context.Background(), "session cleanup: list sessions error", err)
 		return 0
 	}
 
@@ -100,17 +100,17 @@ func (m *Manager) cleanupLocked() int {
 		}
 		if err := m.store.DeleteSession(s.ID); err != nil {
 			// Log but continue — best-effort cleanup
-			m.logger.Logf(context.Background(), "session cleanup: failed to delete %s: %v", s.ID, err)
+			m.logger.Error(context.Background(), "session cleanup: failed to delete", err, "id", s.ID)
 			continue
 		}
 		removed++
 	}
 
 	if skippedThread > 0 {
-		m.logger.Logf(context.Background(), "session cleanup: skipped %d session(s) with active ThreadID: %v", skippedThread, skipped)
+		m.logger.Info(context.Background(), "session cleanup: skipped sessions with active ThreadID", "skipped", skippedThread, "ids", skipped)
 	}
 	if removed > 0 {
-		m.logger.Logf(context.Background(), "session cleanup: removed %d old sessions (maxKeep=%d)", removed, m.maxKeep)
+		m.logger.Info(context.Background(), "session cleanup: removed old sessions", "removed", removed, "maxKeep", m.maxKeep)
 	}
 
 	return removed

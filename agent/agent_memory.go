@@ -47,10 +47,10 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 		DirectContent: content,
 	})
 	if err != nil {
-		a.logger.Logf(ctx, "RecordMemory: store failed: %v", err)
+		a.logger.Error(ctx, "RecordMemory: store failed", err)
 		return err
 	}
-	a.logger.Logf(ctx, "RecordMemory: stored content=%q tags=%v", truncateForLog(content, 60), tags)
+	a.logger.Info(ctx, "RecordMemory: stored", "content", truncateForLog(content, 60), "tags", fmt.Sprintf("%v", tags))
 	return nil
 }
 
@@ -74,7 +74,7 @@ func (a *AIAgent) StartSessionMemory() {
 			SessionID: sess.ID,
 			Tags:      withRepoTag(nil),
 		}); err != nil {
-			a.logger.Logf(context.Background(), "Memory(start): start session failed: %v", err)
+			a.logger.Error(context.Background(), "Memory(start): start session failed", err)
 		}
 	}()
 }
@@ -197,7 +197,7 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 			Tags:         withRepoTag(nil),
 			TurnMessages: turnMsgs,
 		}); err != nil {
-			a.logger.Logf(context.Background(), "Memory(turn): store failed: %v", err)
+			a.logger.Error(context.Background(), "Memory(turn): store failed", err)
 		}
 	}()
 }
@@ -219,7 +219,7 @@ func (a *AIAgent) StoreCompactMemory() {
 
 	msgs, err := a.sessionManager.LoadMessages()
 	if err != nil {
-		a.logger.Logf(context.Background(), "Memory(compact): load messages failed: %v", err)
+		a.logger.Error(context.Background(), "Memory(compact): load messages failed", err)
 		return
 	}
 
@@ -234,7 +234,7 @@ func (a *AIAgent) StoreCompactMemory() {
 			Tags:            withRepoTag(nil),
 			SessionMessages: memMsgs,
 		}); err != nil {
-			a.logger.Logf(context.Background(), "Memory(compact): store failed: %v", err)
+			a.logger.Error(context.Background(), "Memory(compact): store failed", err)
 		}
 	}()
 }
@@ -257,7 +257,7 @@ func (a *AIAgent) StoreSessionMemory() {
 
 	msgs, err := a.sessionManager.LoadMessages()
 	if err != nil {
-		a.logger.Logf(context.Background(), "Memory(session): load messages failed: %v", err)
+		a.logger.Error(context.Background(), "Memory(session): load messages failed", err)
 		// Still try to write with just the title
 	}
 
@@ -272,7 +272,7 @@ func (a *AIAgent) StoreSessionMemory() {
 		Tags:            withRepoTag(nil),
 		SessionMessages: memMsgs,
 	}); err != nil {
-		a.logger.Logf(context.Background(), "Memory(session): store failed: %v", err)
+		a.logger.Error(context.Background(), "Memory(session): store failed", err)
 	}
 }
 

@@ -88,7 +88,7 @@ func (i *InputArea) getCachedTrie() (*pathtrie.PathTrie, error) {
 	t := pathtrie.New(paths)
 	atFileTrie = t
 	atFileTrieTTL = time.Now()
-	i.logger.Logf(context.Background(), "at_file: built trie with %d files", t.FileCount())
+	i.logger.Info(context.Background(), "at_file: built trie", "files", t.FileCount())
 	return t, nil
 }
 
@@ -272,7 +272,7 @@ func (m *Model) ExpandAtReferences(message string) ExpandResult {
 	}
 
 	if expanded {
-		m.logger.Logf(context.Background(), "at_file: expanded @ references in message (images=%d)", len(images))
+		m.logger.Info(context.Background(), "at_file: expanded @ references in message", "images", len(images))
 	}
 
 	return ExpandResult{

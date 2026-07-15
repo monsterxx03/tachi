@@ -164,7 +164,7 @@ func (p *AnthropicProvider) buildRequest(ctx context.Context, messages []Message
 				if err := json.Unmarshal([]byte(tc.Function.Arguments), &input); err != nil {
 					// Arguments may be incomplete (e.g. truncated stream);
 					// degrade gracefully so the error doesn't abort the entire request.
-					logger.FromContext(ctx).Logf(ctx, "anthropic: failed to unmarshal tool call %s arguments: %v (args: %s)", tc.ID, err, tc.Function.Arguments)
+					logger.FromContext(ctx).Error(ctx, "anthropic: failed to unmarshal tool call arguments", err, "toolID", tc.ID, "args", tc.Function.Arguments)
 					input = map[string]any{}
 				}
 				contentBlocks = append(contentBlocks, anthropic.NewToolUseBlock(tc.ID, input, tc.Function.Name))

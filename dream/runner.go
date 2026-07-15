@@ -42,8 +42,8 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	l := cfg.Logger
 	l = l.With("source", "dream:run")
 
-	l.Logf(ctx, "[%s:%s]: starting (memory_root=%s, active_sessions=%d)",
-		plan.Group.Domain, plan.Group.Root, plan.Group.MemoryRoot, len(plan.ActiveSessions))
+	l.Info(ctx, "starting",
+		"domain", plan.Group.Domain, "root", plan.Group.Root, "memory_root", plan.Group.MemoryRoot, "active_sessions", len(plan.ActiveSessions))
 
 	// Resolve provider.
 	provider, err := resolveProvider(cfg)
@@ -90,7 +90,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	for ev := range eventCh {
 		if ev.Type == agent.AgentEventError && ev.Result != nil && ev.Result.Error != nil {
 			lastErr = ev.Result.Error
-			l.Logf(ctx, "[%s:%s]: error: %v", plan.Group.Domain, plan.Group.Root, lastErr)
+			l.Error(ctx, "dream agent error", lastErr, "domain", plan.Group.Domain, "root", plan.Group.Root)
 		}
 	}
 
@@ -113,7 +113,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		FactStates:      factStates,
 	}
 
-	l.Logf(ctx, "[%s:%s]: completed successfully", plan.Group.Domain, plan.Group.Root)
+	l.Info(ctx, "completed successfully", "domain", plan.Group.Domain, "root", plan.Group.Root)
 	return state, nil
 }
 
@@ -155,7 +155,7 @@ func buildSessionSummaries(sessions []*session.Session, loadMessages func(string
 	for _, sess := range sessions {
 		msgs, err := loadMessages(sess.ID)
 		if err != nil {
-			logger.Logf(context.Background(), "failed to load messages for %s: %v", sess.ID, err)
+			logger.Error(context.Background(), "failed to load messages", err, "id", sess.ID)
 			continue
 		}
 
@@ -209,15 +209,15 @@ func ensureInboxCleared(memoryRoot string, logger *logger.Logger) {
 		return // already clean
 	}
 	if err != nil {
-		logger.Logf(context.Background(), "ensureInboxCleared: stat %s: %v", inboxPath, err)
+		logger.Error(context.Background(), "ensureInboxCleared: stat failed", err, "path", inboxPath)
 		return
 	}
 	if info.Size() == 0 {
 		return // already empty
 	}
 
-	logger.Logf(context.Background(), "inbox.md has %d bytes after dream — force-clearing (agent forgot)", info.Size())
+	logger.Info(context.Background(), "inbox.md has content after dream — force-clearing", "bytes", info.Size())
 	if err := os.WriteFile(inboxPath, []byte{}, 0644); err != nil {
-		logger.Logf(context.Background(), "ensureInboxCleared: failed to truncate %s: %v", inboxPath, err)
+		logger.Error(context.Background(), "ensureInboxCleared: failed to truncate", err, "path", inboxPath)
 	}
 }

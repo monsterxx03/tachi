@@ -146,7 +146,7 @@ func (s *Store) List() []SkillMeta {
 			fm, _, err := parseFrontmatter(string(data))
 			if err != nil {
 				// YAML parse error — use directory name as fallback
-				s.logger.Logf(context.Background(), "skill: List: %s/%s SKILL.md parse error: %v", dir, entry.Name(), err)
+				s.logger.Error(context.Background(), "skill: List: SKILL.md parse error", err, "dir", dir, "name", entry.Name())
 				name := entry.Name()
 				if validateErr := ValidateName(name); validateErr != nil {
 					continue
@@ -168,11 +168,11 @@ func (s *Store) List() []SkillMeta {
 				name = entry.Name()
 			}
 			if validateErr := ValidateName(name); validateErr != nil {
-				s.logger.Logf(context.Background(), "skill: List: invalid skill name %q in %s: %v", name, dir, validateErr)
+				s.logger.Info(context.Background(), "skill: List: invalid skill name", "name", name, "dir", dir, "error", validateErr)
 				continue
 			}
 			if seen[name] {
-				s.logger.Logf(context.Background(), "skill: List: skill %q from %s shadowed by higher-priority source", name, dir)
+				s.logger.Info(context.Background(), "skill: List: skill shadowed by higher-priority source", "skill", name, "dir", dir)
 				continue // shadowed by higher-priority skill
 			}
 			seen[name] = true
@@ -218,7 +218,7 @@ func (s *Store) Load(name string) (*Skill, error) {
 		fm, body, err := parseFrontmatter(rawContent)
 		if err != nil {
 			// YAML parse error — still return the skill with directory name
-			s.logger.Logf(context.Background(), "skill: Load: %s/%s SKILL.md parse error: %v", dir, name, err)
+			s.logger.Error(context.Background(), "skill: Load: SKILL.md parse error", err, "dir", dir, "name", name)
 			body = rawContent
 		}
 
@@ -310,7 +310,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 		if !overwrite {
 			return nil, fmt.Errorf("skill %q already exists at %s (use overwrite=true to replace)", name, skillFile)
 		}
-		s.logger.Logf(context.Background(), "skill: Create: overwriting existing skill %q at %s", name, skillFile)
+		s.logger.Info(context.Background(), "skill: Create: overwriting existing skill", "skill", name, "path", skillFile)
 	}
 
 	// Create directory
@@ -325,7 +325,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
 	}
 
-	s.logger.Logf(context.Background(), "skill: Create: created skill %q at %s", name, skillFile)
+	s.logger.Info(context.Background(), "skill: Create: created skill", "skill", name, "path", skillFile)
 
 	return &Skill{
 		Meta: SkillMeta{
@@ -357,7 +357,7 @@ func (s *Store) Delete(name string, source string) error {
 		return fmt.Errorf("failed to delete skill directory %q: %w", skillDir, err)
 	}
 
-	s.logger.Logf(context.Background(), "skill: Delete: removed skill %q at %s", name, skillDir)
+	s.logger.Info(context.Background(), "skill: Delete: removed skill", "skill", name, "path", skillDir)
 	return nil
 }
 
@@ -422,7 +422,7 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
 	}
 
-	s.logger.Logf(context.Background(), "skill: Update: updated skill %q at %s", name, skillFile)
+	s.logger.Info(context.Background(), "skill: Update: updated skill", "skill", name, "path", skillFile)
 
 	return &Skill{
 		Meta: SkillMeta{

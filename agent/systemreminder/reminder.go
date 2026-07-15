@@ -159,7 +159,7 @@ func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 
 	var sb strings.Builder
 	if len(defaultG.lines) > 0 {
-		logger.FromContext(ctx).Logf(ctx, "systemreminder: firing reminder(s): %s", defaultG.firedName)
+		logger.FromContext(ctx).Info(ctx, "systemreminder: firing reminder(s)", "names", defaultG.firedName)
 		sb.WriteString("<system-reminder>\n")
 		for _, line := range defaultG.lines {
 			sb.WriteString(line)
@@ -168,7 +168,7 @@ func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 		sb.WriteString("</system-reminder>\n")
 	}
 	for tag, g := range taggedG {
-		logger.FromContext(ctx).Logf(ctx, "systemreminder: firing tagged reminder(s): %s", g.firedName)
+		logger.FromContext(ctx).Info(ctx, "systemreminder: firing tagged reminder(s)", "names", g.firedName)
 		sb.WriteString("<" + tag + ">\n")
 		for _, line := range g.lines {
 			sb.WriteString(line)

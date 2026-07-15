@@ -92,7 +92,7 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		text, err := m.handleRestartCommand(cmd.ThreadID)
 		return textHandlerResult(text), err
 	default:
-		m.logger.Logf(context.Background(), "channel: unknown slash command: %s (thread=%s)", cmd.Name, cmd.ThreadID)
+		m.logger.Info(context.Background(), "channel: unknown slash command", "action", cmd.Name, "thread", cmd.ThreadID)
 		// Build available commands list from shared registry.
 		var help strings.Builder
 		help.WriteString(fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n", cmd.Name))
@@ -236,7 +236,7 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	sm := m.newSessionManager()
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
-		m.logger.Logf(context.Background(), "channel: /model find session for %s: %v", threadID, err)
+		m.logger.Error(context.Background(), "channel: /model find session failed", err, "thread", threadID)
 	}
 
 	compactNote := ""
@@ -254,26 +254,25 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 			if currentEstimate > 0 && resolved.ContextWindow > 0 &&
 				float64(currentEstimate) >= float64(resolved.ContextWindow)*threshold {
 
-				m.logger.Logf(context.Background(), "channel: /model pre-switch compact triggered for thread %s (est=%d, targetCW=%d)",
-					threadID, currentEstimate, resolved.ContextWindow)
+				m.logger.Info(context.Background(), "channel: /model pre-switch compact triggered", "thread", threadID, "estimate", currentEstimate, "targetCW", resolved.ContextWindow)
 
 				summary, compactErr := m.runCompactForSwitch(threadID, sm, sessionMsgs)
 				if compactErr != nil {
-					m.logger.Logf(context.Background(), "channel: /model pre-switch compact failed: %v", compactErr)
+					m.logger.Error(context.Background(), "channel: /model pre-switch compact failed", compactErr)
 					compactNote = "\n\n⚠ 自动压缩失败，切换后如果遇到上下文溢出错误，请运行 /compact。"
 				} else {
 					systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "")
 					_, finalizeErr := agent.FinalizeCompact(sm, systemPrompt, summary)
 					if finalizeErr != nil {
-						m.logger.Logf(context.Background(), "channel: /model FinalizeCompact failed: %v", finalizeErr)
+						m.logger.Error(context.Background(), "channel: /model FinalizeCompact failed", finalizeErr)
 						compactNote = "\n\n⚠ 压缩后创建新 session 失败，请运行 /compact。"
 					} else {
 						// Migrate ThreadID to the new (current) session.
 						if tidErr := sm.SetThreadID(threadID); tidErr != nil {
-							m.logger.Logf(context.Background(), "channel: /model migrate thread_id after compact: %v", tidErr)
+							m.logger.Error(context.Background(), "channel: /model migrate thread_id after compact failed", tidErr)
 						}
 						compactNote = "\n\n🔍 当前上下文超过目标模型窗口，已自动压缩完成后切换。"
-						m.logger.Logf(context.Background(), "channel: /model pre-switch compact completed for thread %s", threadID)
+						m.logger.Info(context.Background(), "channel: /model pre-switch compact completed", "thread", threadID)
 					}
 				}
 			}
@@ -297,14 +296,14 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	curr.ProviderName = name
 	curr.UpdatedAt = time.Now()
 	if err := sm.UpdateMeta(curr); err != nil {
-		m.logger.Logf(context.Background(), "channel: /model update session meta for %s: %v", threadID, err)
+		m.logger.Error(context.Background(), "channel: /model update session meta failed", err, "thread", threadID)
 	}
 
 	// Evict only the current thread's cached agent so the next message
 	// rebuilds with the new provider. Other threads are unaffected.
 	m.evictAgent(threadID)
 
-	m.logger.Logf(context.Background(), "channel: /model switched thread %s to %s (%s/%s)", threadID, name, resolved.Type, resolved.Model)
+	m.logger.Info(context.Background(), "channel: /model switched provider", "thread", threadID, "name", name, "type", resolved.Type, "model", resolved.Model)
 
 	return fmt.Sprintf("✅ Switched to **%s** (%s, %s).\nThis thread will now use this model. Other threads are unchanged.%s",
 		name, resolved.Type, resolved.Model, compactNote), nil
@@ -381,17 +380,17 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
-		m.logger.Logf(context.Background(), "channel: /new find session for %s: %v", threadID, err)
+		m.logger.Error(context.Background(), "channel: /new find session failed", err, "thread", threadID)
 	}
 
 	if sess != nil {
 		// Clear the ThreadID on the old session so FindByThreadID won't
 		// match it on the next message, then end the current session.
 		if err := sm.SetThreadID(""); err != nil {
-			m.logger.Logf(context.Background(), "channel: /new clear thread_id for %s: %v", threadID, err)
+			m.logger.Error(context.Background(), "channel: /new clear thread_id failed", err, "thread", threadID)
 		}
 		sm.EndCurrent()
-		m.logger.Logf(context.Background(), "channel: /new ended session %s for thread %s", sess.ID, threadID)
+		m.logger.Info(context.Background(), "channel: /new ended session", "id", sess.ID, "thread", threadID)
 	}
 
 	return "✅ Started a new conversation. Previous session has been ended.", nil
@@ -518,7 +517,7 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string) (string
 
 	// Migrate ThreadID to new session (sm.Current now points to the new session).
 	if err := sm.SetThreadID(threadID); err != nil {
-		m.logger.Logf(context.Background(), "channel: /compact set thread_id: %v", err)
+		m.logger.Error(context.Background(), "channel: /compact set thread_id failed", err)
 	}
 
 	return fmt.Sprintf(
@@ -579,13 +578,13 @@ func (m *Manager) handleMCPAuth(threadID, serverName string) (string, error) {
 		}
 
 		if err := mcp.RunManualOAuthFlow(ctx, srv, statusFn); err != nil {
-			m.logger.Logf(context.Background(), "channel: /mcp auth flow for %q failed: %v", serverName, err)
+			m.logger.Error(context.Background(), "channel: /mcp auth flow failed", err, "name", serverName)
 			m.sendToThread(context.Background(), threadID,
 				fmt.Sprintf("❌ OAuth failed for **%s**: %v", serverName, err), "")
 			return
 		}
 
-		m.logger.Logf(context.Background(), "channel: /mcp auth flow for %q succeeded", serverName)
+		m.logger.Info(context.Background(), "channel: /mcp auth flow succeeded", "name", serverName)
 		m.sendToThread(context.Background(), threadID,
 			fmt.Sprintf("✅ OAuth authorization successful for **%s**!\n\nSend a message to start using the server's tools.", serverName), "")
 	}()
@@ -621,7 +620,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 
 	_, err := sm.FindByThreadID(threadID)
 	if err != nil {
-		m.logger.Logf(context.Background(), "channel: /usage find session for %s: %v", threadID, err)
+		m.logger.Error(context.Background(), "channel: /usage find session failed", err, "thread", threadID)
 		return "Failed to find session.", nil
 	}
 	if !sm.HasCurrent() {
@@ -812,7 +811,7 @@ func (m *Manager) reloadAgentSkills() {
 		}
 		ca.mu.Unlock()
 	}
-	m.logger.Logf(context.Background(), "channel: skill reload propagated to %d cached agent(s)", len(m.agentCache))
+	m.logger.Info(context.Background(), "channel: skill reload propagated", "count", len(m.agentCache))
 }
 
 // prepareSkillActivation builds the user message content for skill activation.
@@ -949,7 +948,7 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 	}
 	htmlFileName := fmt.Sprintf("%s-%s.html", fileName, sess.ID[:8])
 
-	m.logger.Logf(context.Background(), "channel: transcript generated for session %s (%d bytes)", sess.ID, len(html))
+	m.logger.Info(context.Background(), "channel: transcript generated", "id", sess.ID, "bytes", len(html))
 
 	contentText := fmt.Sprintf("📊 Transcript: %s\n\nSession: %s\nTurns: %d · Tools: %d · Size: %s",
 		sess.Title, sess.ID[:8],

@@ -80,7 +80,7 @@ func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn fun
 	if err := tryBrowserCallback(ctx, srv, runErrFn); err == nil {
 		return nil
 	} else {
-		logger.FromContext(ctx).Logf(ctx, "MCP: browser callback failed for %q: %v", srv.Name, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: browser callback failed", err, "server", srv.Name)
 	}
 
 	// 2) Manual fallback
@@ -183,7 +183,7 @@ func ensureClientID(ctx context.Context, srv *config.MCPServerConfig, store *Fil
 		if dcr.AuthServerMetadataURL != "" {
 			srv.OAuth.AuthServerMetadataURL = dcr.AuthServerMetadataURL
 		}
-		logger.FromContext(ctx).Logf(ctx, "MCP: restored DCR client_id for %q", srv.Name)
+		logger.FromContext(ctx).Info(ctx, "MCP: restored DCR client_id", "server", srv.Name)
 		return nil
 	}
 
@@ -226,10 +226,10 @@ func ensureClientID(ctx context.Context, srv *config.MCPServerConfig, store *Fil
 		AuthServerMetadataURL: asMetaURL,
 	}
 	if err := store.SaveDCRInfo(ctx, dcrInfo); err != nil {
-		logger.FromContext(ctx).Logf(ctx, "MCP: failed to persist DCR info for %q: %v", srv.Name, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to persist DCR info", err, "server", srv.Name)
 	}
 
-	logger.FromContext(ctx).Logf(ctx, "MCP: DCR succeeded for %q — client_id=%s", srv.Name, clientID)
+	logger.FromContext(ctx).Info(ctx, "MCP: DCR succeeded", "server", srv.Name, "client_id", clientID)
 	return nil
 }
 
@@ -240,19 +240,19 @@ func ensureClientID(ctx context.Context, srv *config.MCPServerConfig, store *Fil
 func discoverAuthServerMetadataURL(ctx context.Context, srv *config.MCPServerConfig) (string, error) {
 	baseURL := stripQueryFragment(srv.URL)
 	client := &http.Client{Timeout: 30 * time.Second}
-	logger.FromContext(ctx).Logf(ctx, "MCP: discovering auth server metadata for %q (baseURL=%s)", srv.Name, baseURL)
+	logger.FromContext(ctx).Info(ctx, "MCP: discovering auth server metadata", "server", srv.Name, "base_url", baseURL)
 
 	// 1) Get PRM URL(s)
 	var prmURLs []string
 	if url := probe401ResourceMetadata(ctx, client, baseURL); url != "" {
 		prmURLs = []string{url}
-		logger.FromContext(ctx).Logf(ctx, "MCP: got PRM URL from 401 WWW-Authenticate: %s", url)
+		logger.FromContext(ctx).Info(ctx, "MCP: got PRM URL from 401 WWW-Authenticate", "url", url)
 	} else {
-		logger.FromContext(ctx).Logf(ctx, "MCP: no resource_metadata in 401 response, constructing PRM URLs from base URL")
+		logger.FromContext(ctx).Info(ctx, "MCP: no resource_metadata in 401 response, constructing PRM URLs from base URL")
 	}
 	if len(prmURLs) == 0 {
 		prmURLs = buildWellKnownURLs(baseURL, "oauth-protected-resource")
-		logger.FromContext(ctx).Logf(ctx, "MCP: constructed %d PRM URL(s): %v", len(prmURLs), prmURLs)
+		logger.FromContext(ctx).Info(ctx, "MCP: constructed PRM URLs", "count", len(prmURLs), "urls", prmURLs)
 	}
 
 	// 2) From each PRM, extract authorization_servers
@@ -261,27 +261,27 @@ func discoverAuthServerMetadataURL(ctx context.Context, srv *config.MCPServerCon
 		as := fetchAuthorizationServers(ctx, client, prmURL)
 		if len(as) > 0 {
 			authServers = as
-			logger.FromContext(ctx).Logf(ctx, "MCP: PRM %s returned %d authorization server(s): %v", prmURL, len(as), as)
+			logger.FromContext(ctx).Info(ctx, "MCP: PRM returned authorization servers", "prm_url", prmURL, "count", len(as), "servers", as)
 			break
 		}
-		logger.FromContext(ctx).Logf(ctx, "MCP: PRM %s returned no authorization_servers", prmURL)
+		logger.FromContext(ctx).Info(ctx, "MCP: PRM returned no authorization_servers", "prm_url", prmURL)
 	}
 	if len(authServers) == 0 {
-		logger.FromContext(ctx).Logf(ctx, "MCP: no authorization_servers from PRM, falling back to base URL %s", baseURL)
+		logger.FromContext(ctx).Info(ctx, "MCP: no authorization_servers from PRM, falling back to base URL", "base_url", baseURL)
 		authServers = []string{baseURL}
 	}
 
 	// 3) Try AS metadata URLs from each authorization server
 	for _, asBase := range authServers {
-		logger.FromContext(ctx).Logf(ctx, "MCP: trying AS metadata from %s", asBase)
+		logger.FromContext(ctx).Info(ctx, "MCP: trying AS metadata", "as_base", asBase)
 		if url := findAuthServerMetadataURL(ctx, client, asBase); url != "" {
-			logger.FromContext(ctx).Logf(ctx, "MCP: found AS metadata with registration_endpoint: %s", url)
+			logger.FromContext(ctx).Info(ctx, "MCP: found AS metadata with registration_endpoint", "url", url)
 			return url, nil
 		}
-		logger.FromContext(ctx).Logf(ctx, "MCP: no AS metadata with registration_endpoint at %s", asBase)
+		logger.FromContext(ctx).Info(ctx, "MCP: no AS metadata with registration_endpoint", "as_base", asBase)
 	}
 
-	logger.FromContext(ctx).Logf(ctx, "MCP: exhausted all authorization servers, no registration_endpoint found")
+	logger.FromContext(ctx).Info(ctx, "MCP: exhausted all authorization servers, no registration_endpoint found")
 	return "", fmt.Errorf("no authorization server with registration_endpoint found")
 }
 
@@ -290,7 +290,7 @@ func discoverAuthServerMetadataURL(ctx context.Context, srv *config.MCPServerCon
 func fetchAuthorizationServers(ctx context.Context, client *http.Client, prmURL string) []string {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, prmURL, nil)
 	if err != nil {
-		logger.FromContext(ctx).Logf(ctx, "MCP: PRM request creation failed for %s: %v", prmURL, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: PRM request creation failed", err, "prm_url", prmURL)
 		return nil
 	}
 	req.Header.Set("Accept", "application/json")
@@ -298,14 +298,14 @@ func fetchAuthorizationServers(ctx context.Context, client *http.Client, prmURL 
 
 	resp, err := client.Do(req)
 	if err != nil {
-		logger.FromContext(ctx).Logf(ctx, "MCP: PRM request %s failed: %v", prmURL, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: PRM request failed", err, "prm_url", prmURL)
 		return nil
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		logger.FromContext(ctx).Logf(ctx, "MCP: PRM %s returned status %d: %s", prmURL, resp.StatusCode, string(body))
+		logger.FromContext(ctx).Error(ctx, "MCP: PRM returned non-OK status", nil, "prm_url", prmURL, "status_code", resp.StatusCode, "body", string(body))
 		return nil
 	}
 
@@ -313,7 +313,7 @@ func fetchAuthorizationServers(ctx context.Context, client *http.Client, prmURL 
 		AuthorizationServers []string `json:"authorization_servers"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&prm); err != nil {
-		logger.FromContext(ctx).Logf(ctx, "MCP: failed to decode PRM from %s: %v", prmURL, err)
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to decode PRM", err, "prm_url", prmURL)
 		return nil
 	}
 	return prm.AuthorizationServers
@@ -330,7 +330,7 @@ func findAuthServerMetadataURL(ctx context.Context, client *http.Client, asBase 
 	for _, metaURL := range candidates {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
 		if err != nil {
-			logger.FromContext(ctx).Logf(ctx, "MCP: AS metadata request creation failed for %s: %v", metaURL, err)
+			logger.FromContext(ctx).Error(ctx, "MCP: AS metadata request creation failed", err, "url", metaURL)
 			continue
 		}
 		req.Header.Set("Accept", "application/json")
@@ -338,12 +338,12 @@ func findAuthServerMetadataURL(ctx context.Context, client *http.Client, asBase 
 
 		resp, err := client.Do(req)
 		if err != nil {
-			logger.FromContext(ctx).Logf(ctx, "MCP: AS metadata request %s failed: %v", metaURL, err)
+			logger.FromContext(ctx).Error(ctx, "MCP: AS metadata request failed", err, "url", metaURL)
 			continue
 		}
 		if resp.StatusCode != http.StatusOK {
 			body, _ := io.ReadAll(resp.Body)
-			logger.FromContext(ctx).Logf(ctx, "MCP: AS metadata %s returned status %d: %s", metaURL, resp.StatusCode, string(body))
+			logger.FromContext(ctx).Error(ctx, "MCP: AS metadata returned non-OK status", nil, "url", metaURL, "status_code", resp.StatusCode, "body", string(body))
 			resp.Body.Close()
 			continue
 		}
@@ -355,14 +355,14 @@ func findAuthServerMetadataURL(ctx context.Context, client *http.Client, asBase 
 		resp.Body.Close()
 
 		if decodeErr != nil {
-			logger.FromContext(ctx).Logf(ctx, "MCP: failed to decode AS metadata from %s: %v", metaURL, decodeErr)
+			logger.FromContext(ctx).Error(ctx, "MCP: failed to decode AS metadata", decodeErr, "url", metaURL)
 			continue
 		}
 		if meta.RegistrationEndpoint != "" {
-			logger.FromContext(ctx).Logf(ctx, "MCP: found registration_endpoint=%s via %s", meta.RegistrationEndpoint, metaURL)
+			logger.FromContext(ctx).Info(ctx, "MCP: found registration_endpoint", "registration_endpoint", meta.RegistrationEndpoint, "via_url", metaURL)
 			return metaURL
 		}
-		logger.FromContext(ctx).Logf(ctx, "MCP: AS metadata %s has no registration_endpoint", metaURL)
+		logger.FromContext(ctx).Info(ctx, "MCP: AS metadata has no registration_endpoint", "url", metaURL)
 	}
 	return ""
 }
@@ -615,7 +615,7 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, status
 		if err := handler.ProcessAuthorizationResponse(ctx, gotCode, state, codeVerifier); err != nil {
 			return fmt.Errorf("token exchange: %w", err)
 		}
-		logger.FromContext(ctx).Logf(ctx, "MCP: browser OAuth succeeded for %q", srv.Name)
+		logger.FromContext(ctx).Info(ctx, "MCP: browser OAuth succeeded", "server", srv.Name)
 		return nil
 
 	case <-ctx.Done():
@@ -676,7 +676,7 @@ func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn 
 	})
 
 	authURL, _ := handler.GetAuthorizationURL(ctx, state, codeChallenge)
-	logger.FromContext(ctx).Logf(ctx, "MCP: manual OAuth authorize URL for %q: %s", srv.Name, authURL)
+	logger.FromContext(ctx).Info(ctx, "MCP: manual OAuth authorize URL", "server", srv.Name, "auth_url", authURL)
 
 	mux := http.NewServeMux()
 	var (
@@ -744,7 +744,7 @@ func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn 
 		if err := handler.ProcessAuthorizationResponse(ctx, gotCode, state, codeVerifier); err != nil {
 			return fmt.Errorf("token exchange: %w", err)
 		}
-		logger.FromContext(ctx).Logf(ctx, "MCP: manual callback OAuth succeeded for %q", srv.Name)
+		logger.FromContext(ctx).Info(ctx, "MCP: manual callback OAuth succeeded", "server", srv.Name)
 		return nil
 
 	case <-ctx.Done():
@@ -783,7 +783,7 @@ func buildManualAuthURL(ctx context.Context, srv *config.MCPServerConfig, store 
 	})
 
 	authURL, _ := handler.GetAuthorizationURL(ctx, state, codeChallenge)
-	logger.FromContext(ctx).Logf(ctx, "MCP: no-listener OAuth authorize URL for %q: %s", srv.Name, authURL)
+	logger.FromContext(ctx).Info(ctx, "MCP: no-listener OAuth authorize URL", "server", srv.Name, "auth_url", authURL)
 	return authURL
 }
 
@@ -839,7 +839,7 @@ func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		logger.FromContext(ctx).Logf(ctx, "MCP: token endpoint returned %d: %s", resp.StatusCode, string(body))
+		logger.FromContext(ctx).Error(ctx, "MCP: token endpoint returned non-OK status", nil, "status_code", resp.StatusCode, "body", string(body))
 		return fmt.Errorf("token endpoint returned %d: %s", resp.StatusCode, body)
 	}
 
@@ -856,7 +856,7 @@ func exchangeCode(ctx context.Context, cfg transport.OAuthConfig, baseURL string
 		return fmt.Errorf("save token: %w", err)
 	}
 
-	logger.FromContext(ctx).Logf(ctx, "MCP: manual OAuth succeeded")
+	logger.FromContext(ctx).Info(ctx, "MCP: manual OAuth succeeded")
 	return nil
 }
 

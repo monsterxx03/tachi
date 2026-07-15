@@ -109,11 +109,11 @@ func (ch *Channel) Send(ctx context.Context, msg channel.OutgoingMessage) error 
 		mediaType := channelAttachmentToILinkMediaType(att.Type)
 		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
-			ch.logger.Logf(ctx, "weixin: Send resolve attachment %s: %v", att.FileName, err)
+			ch.logger.Error(ctx, "weixin: Send resolve attachment", err, "file", att.FileName)
 			continue
 		}
 		if err := ch.sendMediaReply(userID, contextToken, data, att.FileName, mediaType); err != nil {
-			ch.logger.Logf(ctx, "weixin: Send attachment %s error: %v (continuing)", att.FileName, err)
+			ch.logger.Error(ctx, "weixin: Send attachment error", err, "file", att.FileName)
 		}
 	}
 
@@ -146,7 +146,7 @@ func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) erro
 
 	ch.cli.SetBotToken(ch.botToken)
 
-	ch.logger.Logf(ctx, "weixin: logged in as %s (bot=%s, user=%s)", ch.accountID, ch.botToken[:8]+"...", ch.userID)
+	ch.logger.Info(ctx, "weixin: logged in", "account", ch.accountID, "bot_token_prefix", ch.botToken[:8]+"...", "user", ch.userID)
 	fmt.Printf("[weixin] logged in as %s\n", ch.accountID)
 
 	// Send startup greeting if it wasn't already sent in OnStart.
@@ -154,28 +154,28 @@ func (ch *Channel) Run(ctx context.Context, handler channel.MessageHandler) erro
 	// existed at OnStart time — the greeting goes out right after
 	// the QR-code login completes.
 	if !ch.greetingSent && ch.greeting != "" && ch.userID != "" {
-		ch.logger.Logf(ctx, "weixin: sending startup greeting to %s", ch.userID)
+		ch.logger.Info(ctx, "weixin: sending startup greeting", "user", ch.userID)
 		if err := ch.sendTextReply(ch.userID, "", ch.greeting); err != nil {
 			// Non-fatal: log and continue.
-			ch.logger.Logf(ctx, "weixin: greeting send error: %v", err)
+			ch.logger.Error(ctx, "weixin: greeting send error", err)
 		}
 	}
 
 	// Notify server that this channel client is starting (v2.1.10+).
-	ch.logger.Logf(ctx, "weixin: sending notifyStart...")
+	ch.logger.Info(ctx, "weixin: sending notifyStart")
 	if resp, err := ch.cli.notifyStart(); err != nil {
-		ch.logger.Logf(ctx, "weixin: notifyStart error (ignored): %v", err)
+		ch.logger.Warn(ctx, "weixin: notifyStart error (ignored)", "error", err)
 	} else if resp.Ret != 0 {
-		ch.logger.Logf(ctx, "weixin: notifyStart ret=%d errmsg=%s", resp.Ret, resp.ErrMsg)
+		ch.logger.Warn(ctx, "weixin: notifyStart", "ret", resp.Ret, "errmsg", resp.ErrMsg)
 	}
 
 	// Ensure notifyStop is sent when Run exits for any reason.
 	defer func() {
-		ch.logger.Logf(ctx, "weixin: sending notifyStop...")
+		ch.logger.Info(ctx, "weixin: sending notifyStop")
 		if resp, err := ch.cli.notifyStop(); err != nil {
-			ch.logger.Logf(ctx, "weixin: notifyStop error (ignored): %v", err)
+			ch.logger.Warn(ctx, "weixin: notifyStop error (ignored)", "error", err)
 		} else if resp.Ret != 0 {
-			ch.logger.Logf(ctx, "weixin: notifyStop ret=%d errmsg=%s", resp.Ret, resp.ErrMsg)
+			ch.logger.Warn(ctx, "weixin: notifyStop", "ret", resp.Ret, "errmsg", resp.ErrMsg)
 		}
 	}()
 
@@ -202,7 +202,7 @@ func (ch *Channel) OnStart(ctx context.Context) error {
 
 	data, err := ch.store.loadAccount(accounts[0])
 	if err != nil {
-		ch.logger.Logf(ctx, "weixin: OnStart: load account: %v", err)
+		ch.logger.Error(ctx, "weixin: OnStart: load account", err)
 		return nil // non-fatal
 	}
 
@@ -215,9 +215,9 @@ func (ch *Channel) OnStart(ctx context.Context) error {
 	ch.cli.SetRouteTag(ch.cfg.RouteTag)
 
 	if ch.greeting != "" {
-		ch.logger.Logf(ctx, "weixin: sending startup greeting to %s", ch.userID)
+		ch.logger.Info(ctx, "weixin: sending startup greeting", "user", ch.userID)
 		if err := ch.sendTextReply(ch.userID, "", ch.greeting); err != nil {
-			ch.logger.Logf(ctx, "weixin: greeting send error: %v", err)
+			ch.logger.Error(ctx, "weixin: greeting send error", err)
 		}
 	}
 	ch.greetingSent = true
@@ -246,7 +246,7 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 		// Ensure the configured user is in the allowlist (may be missing from
 		// accounts created before this fix was applied).
 		if !ch.store.isUserAllowed(ch.accountID, ch.userID) {
-			ch.logger.Logf(ctx, "weixin: auto-adding user %s to allowlist", ch.userID)
+			ch.logger.Info(ctx, "weixin: auto-adding user to allowlist", "user", ch.userID)
 			allowFrom := &AllowFromData{
 				Version:   1,
 				AllowFrom: []string{ch.userID},
@@ -254,7 +254,7 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 			ch.store.saveAllowFrom(ch.accountID, allowFrom)
 		}
 
-		ch.logger.Logf(ctx, "weixin: loaded stored account %s", accounts[0])
+		ch.logger.Info(ctx, "weixin: loaded stored account", "account", accounts[0])
 		return nil
 	}
 
@@ -329,7 +329,7 @@ func (ch *Channel) qrLogin(ctx context.Context) error {
 				AllowFrom: []string{ch.userID},
 			}
 			if err := ch.store.saveAllowFrom(ch.accountID, allowFrom); err != nil {
-				ch.logger.Logf(ctx, "weixin: warning: failed to save allowFrom: %v", err)
+				ch.logger.Warn(ctx, "weixin: warning: failed to save allowFrom", "error", err)
 			}
 
 			// Clean up duplicate accounts for the same userId.
@@ -444,7 +444,7 @@ func (ch *Channel) loadExistingAccount(_ context.Context) error {
 	ch.userID = data.UserID
 	ch.botToken = data.Token
 	ch.cli.SetBaseURL(data.BaseURL)
-	ch.logger.Logf(context.Background(), "weixin: loaded existing account %s after binded_redirect", accounts[0])
+	ch.logger.Info(context.Background(), "weixin: loaded existing account after binded_redirect", "account", accounts[0])
 	return nil
 }
 
@@ -464,7 +464,7 @@ func (ch *Channel) deduplicateAccounts() {
 			continue
 		}
 		if data.UserID == ch.userID {
-			ch.logger.Logf(context.Background(), "weixin: removing duplicate account %s (same user %s)", aid, ch.userID)
+			ch.logger.Info(context.Background(), "weixin: removing duplicate account", "account", aid, "same_user", ch.userID)
 			ch.store.deleteAccount(aid)
 		}
 	}

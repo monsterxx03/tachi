@@ -47,10 +47,10 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			// preservation on resume.
 
 		case agent.AgentEventToolCallStart:
-			m.logger.Logf(ctx, "channel: tool call start: %s", event.ToolName)
+			m.logger.Info(ctx, "channel: tool call start", "tool", event.ToolName)
 
 		case agent.AgentEventToolCallArgs:
-			m.logger.Logf(ctx, "channel: tool call args for %s: %s", event.ToolName, event.ToolArgs)
+			m.logger.Info(ctx, "channel: tool call args", "tool", event.ToolName, "args", event.ToolArgs)
 			if onTextDelta != nil && !pushedTools[event.ToolID] {
 				pushedTools[event.ToolID] = true
 				onTextDelta(StreamEvent{
@@ -62,7 +62,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 
 		case agent.AgentEventToolConfirmation:
 			// Should not happen with skip_edit_confirm=true, but handle safely.
-			m.logger.Logf(ctx, "channel: auto-approving unexpected confirmation: %s", event.ToolName)
+			m.logger.Warn(ctx, "channel: auto-approving unexpected confirmation", "tool", event.ToolName)
 			aiAgent.ConfirmTool(true)
 
 		case agent.AgentEventAskUser:
@@ -73,8 +73,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				replyID := ta.askUserReplyID
 				ta.mu.Unlock()
 
-				m.logger.Logf(ctx, "channel: AskUser — %d question(s) for thread=%s",
-					len(event.Questions), threadID)
+				m.logger.Info(ctx, "channel: AskUser — questions", "thread", threadID, "count", len(event.Questions))
 
 				// Deliver structured questions to the channel.
 				m.presentQuestionsToChannel(threadID, replyID, convertQuestions(event.Questions))
@@ -83,10 +82,10 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				// or the agent context is cancelled.
 				select {
 				case resp := <-ta.askUserRespCh:
-					m.logger.Logf(ctx, "channel: AskUser — received answer (%d entries)", len(resp.Answers))
+					m.logger.Info(ctx, "channel: AskUser — received answer", "entries", len(resp.Answers))
 					aiAgent.RespondToAskUser(resp.Answers, resp.Annotations)
 				case <-ta.ctx.Done():
-					m.logger.Logf(ctx, "channel: AskUser — cancelled")
+					m.logger.Info(ctx, "channel: AskUser — cancelled")
 					aiAgent.RespondToAskUser(nil, nil)
 				}
 
@@ -94,7 +93,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				ta.askUserRespCh = nil
 				ta.mu.Unlock()
 			} else {
-				m.logger.Logf(ctx, "channel: auto-rejecting AskUser (non-interactive)")
+				m.logger.Warn(ctx, "channel: auto-rejecting AskUser (non-interactive)")
 				aiAgent.RespondToAskUser(nil, nil)
 			}
 
@@ -119,7 +118,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			joined := ""
 			if len(parts) > 0 {
 				joined = strings.Join(parts, "\n\n")
-				m.logger.Logf(ctx, "channel: steer inject thread=%s content=%d chars", "", len(joined))
+				m.logger.Info(ctx, "channel: steer inject", "content_len", len(joined))
 			}
 			ta.mu.Unlock()
 
@@ -133,9 +132,9 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 
 		case agent.AgentEventToolResult:
 			if event.ToolIsError {
-				m.logger.Logf(ctx, "channel: tool %s error: %s", event.ToolName, event.ToolResult)
+				m.logger.Error(ctx, "channel: tool error", fmt.Errorf("%s", event.ToolResult), "tool", event.ToolName)
 			} else {
-				m.logger.Logf(ctx, "channel: tool %s ok (%d bytes)", event.ToolName, len(event.ToolResult))
+				m.logger.Info(ctx, "channel: tool ok", "tool", event.ToolName, "bytes", len(event.ToolResult))
 			}
 
 		case agent.AgentEventAutoCompactStart:

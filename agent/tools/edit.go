@@ -108,7 +108,7 @@ func (t *EditTool) ExecuteContext(ctx context.Context, args string) (string, err
 }
 
 func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, error) {
-	logger.FromContext(ctx).Logf(ctx, "ACP edit: executeLegacy called, acpMode=%v conn=%v", t.acpMode, acpctx.Conn(ctx) != nil)
+	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP edit: executeLegacy called, acpMode=%v conn=%v", t.acpMode, acpctx.Conn(ctx) != nil))
 	var a struct {
 		FilePath   string `json:"path"`
 		OldString  string `json:"old_string"`

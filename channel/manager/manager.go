@@ -288,7 +288,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Initialize cron scheduler if enabled.
 	if m.cfg != nil && m.cfg.Cron.IsEnabled() {
 		if err := m.initCron(ctx); err != nil {
-			m.logger.Logf(ctx, "channel: cron init failed: %v", err)
+			m.logger.Error(ctx, "channel: cron init failed", err)
 			// Non-fatal: channels can still work without cron.
 		}
 	}
@@ -309,12 +309,12 @@ func (m *Manager) Start(ctx context.Context) error {
 		m.wg.Add(1)
 		go func(ch channel.Channel) {
 			defer m.wg.Done()
-			m.logger.Logf(ctx, "channel: %s starting", ch.Name())
+			m.logger.Info(ctx, "channel: starting", "name", ch.Name())
 
 			// Inject CommandHandler if this channel supports it.
 			if cc, ok := ch.(channel.CommandChannel); ok {
 				cc.SetCommandHandler(cmdHandler)
-				m.logger.Logf(ctx, "channel: %s received CommandHandler", ch.Name())
+				m.logger.Info(ctx, "channel: received CommandHandler", "name", ch.Name())
 			}
 
 			// Inject provider names for slash command autocomplete.
@@ -329,7 +329,7 @@ func (m *Manager) Start(ctx context.Context) error {
 				}
 				ac.SetProviderNames(names)
 				if len(names) > 0 {
-					m.logger.Logf(ctx, "channel: %s received %d provider names", ch.Name(), len(names))
+					m.logger.Info(ctx, "channel: received provider names", "name", ch.Name(), "count", len(names))
 				}
 			}
 
@@ -338,14 +338,14 @@ func (m *Manager) Start(ctx context.Context) error {
 			// entering its message loop. If it fails, the channel is
 			// skipped entirely.
 			if err := ch.OnStart(ctx); err != nil {
-				m.logger.Logf(ctx, "channel: %s OnStart error: %v", ch.Name(), err)
+				m.logger.Error(ctx, "channel: OnStart error", err, "name", ch.Name())
 				return
 			}
 
 			if err := ch.Run(ctx, handler); err != nil {
-				m.logger.Logf(ctx, "channel: %s exited: %v", ch.Name(), err)
+				m.logger.Error(ctx, "channel: exited with error", err, "name", ch.Name())
 			} else {
-				m.logger.Logf(ctx, "channel: %s exited cleanly", ch.Name())
+				m.logger.Info(ctx, "channel: exited cleanly", "name", ch.Name())
 			}
 		}(ch)
 	}
@@ -359,7 +359,7 @@ func (m *Manager) Start(ctx context.Context) error {
 	// Start cron scheduler after channels are initialized.
 	if m.scheduler != nil {
 		if err := m.scheduler.Start(ctx); err != nil {
-			m.logger.Logf(ctx, "channel: cron scheduler start failed: %v", err)
+			m.logger.Error(ctx, "channel: cron scheduler start failed", err)
 		}
 	}
 
@@ -374,7 +374,7 @@ func (m *Manager) Start(ctx context.Context) error {
 			m.cfg.Dream.SubagentTimeout,
 			m.executeDream,
 		); err != nil {
-			m.logger.Logf(ctx, "channel: auto-dream registration failed: %v", err)
+			m.logger.Error(ctx, "channel: auto-dream registration failed", err)
 		} else {
 			m.systemScheduler.Start(ctx)
 		}
@@ -415,14 +415,13 @@ func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.R
 						resolved.Model,
 					)
 					if err == nil {
-						m.logger.Logf(context.Background(), "channel: thread %s using session override provider=%s model=%s",
-							threadID, sess.ProviderName, resolved.Model)
+						m.logger.Info(context.Background(), "channel: thread using session override provider", "thread", threadID, "provider", sess.ProviderName, "model", resolved.Model)
 						return provider, &config.ResolvedConfig{Provider: *resolved}, sess.ProviderName
 					}
 				}
 			}
-			m.logger.Logf(context.Background(), "channel: thread %s has ProviderName=%q but could not resolve; falling back to global",
-				threadID, sess.ProviderName)
+			m.logger.Warn(context.Background(), "channel: thread has ProviderName but could not resolve; falling back to global",
+				"thread", threadID, "provider_name", sess.ProviderName)
 		}
 	}
 
@@ -501,7 +500,7 @@ func (m *Manager) newSessionManager() *session.Manager {
 		var err error
 		sm, err = session.NewManager(m.logger)
 		if err != nil {
-			m.logger.Logf(context.Background(), "channel: session manager fallback failed: %v", err)
+			m.logger.Error(context.Background(), "channel: session manager fallback failed", err)
 			return sm
 		}
 	}
@@ -533,7 +532,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 	sess, err := sm.FindByThreadID(threadID)
 	if err != nil {
 		// Non-fatal — we'll start a fresh session.
-		m.logger.Logf(context.Background(), "channel: find session for %s: %v", threadID, err)
+		m.logger.Warn(context.Background(), "channel: find session", "thread", threadID, "error", err)
 		return sm, nil, nil
 	}
 
@@ -544,7 +543,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		if err := sm.SetThreadID(threadID); err != nil {
-			m.logger.Logf(context.Background(), "channel: set thread_id for %s: %v", threadID, err)
+			m.logger.Warn(context.Background(), "channel: set thread_id", "thread", threadID, "error", err)
 		}
 		return sm, nil, nil
 	}
@@ -564,8 +563,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}
 
-	m.logger.Logf(context.Background(), "channel: session %s thread=%s: %d session msgs → %d llm msgs",
-		sess.ID, threadID, len(sessionMsgs), len(llmMsgs))
+	m.logger.Info(context.Background(), "channel: session loaded", "session", sess.ID, "thread", threadID, "session_msgs", len(sessionMsgs), "llm_msgs", len(llmMsgs))
 
 	return sm, llmMsgs, nil
 }
@@ -589,13 +587,13 @@ func (m *Manager) sendToThread(ctx context.Context, threadID, text, replyTo stri
 			Content:  text,
 			ReplyTo:  replyTo,
 		}); err != nil {
-			m.logger.Logf(ctx, "channel: sendToThread to %s failed: %v", ch.Name(), err)
+			m.logger.Error(ctx, "channel: sendToThread failed", err, "name", ch.Name())
 			return
 		}
-		m.logger.Logf(ctx, "channel: progress sent to %s (thread=%s)", ch.Name(), threadID)
+		m.logger.Info(ctx, "channel: progress sent", "name", ch.Name(), "thread", threadID)
 		return
 	}
-	m.logger.Logf(ctx, "channel: sendToThread — no channel accepted thread %s", threadID)
+	m.logger.Warn(ctx, "channel: sendToThread — no channel accepted thread", "thread", threadID)
 }
 
 // persistThreadWorkDir persists the thread's working directory to its session
@@ -614,7 +612,7 @@ func (m *Manager) persistThreadWorkDir(threadID, workDir string) {
 	sess.WorkingDir = workDir
 	sess.UpdatedAt = time.Now()
 	if err := sm.UpdateMeta(sess); err != nil {
-		m.logger.Logf(context.Background(), "channel: persist workDir for thread %s: %v", threadID, err)
+		m.logger.Error(context.Background(), "channel: persist workDir", err, "thread", threadID)
 	}
 }
 
@@ -628,18 +626,18 @@ func (m *Manager) presentQuestionsToChannel(threadID, replyID string, questions 
 	m.threadChannelMu.RUnlock()
 
 	if !ok {
-		m.logger.Logf(context.Background(), "channel: presentQuestionsToChannel — no channel for thread %s", threadID)
+		m.logger.Warn(context.Background(), "channel: presentQuestionsToChannel — no channel for thread", "thread", threadID)
 		return
 	}
 
 	ic, ok := ch.(channel.InteractiveChannel)
 	if !ok {
-		m.logger.Logf(context.Background(), "channel: presentQuestionsToChannel — channel %s is not interactive, questions dropped", ch.Name())
+		m.logger.Warn(context.Background(), "channel: presentQuestionsToChannel — channel is not interactive, questions dropped", "name", ch.Name())
 		return
 	}
 
 	if err := ic.PresentQuestions(context.Background(), threadID, replyID, questions); err != nil {
-		m.logger.Logf(context.Background(), "channel: PresentQuestions to %s failed: %v", ch.Name(), err)
+		m.logger.Error(context.Background(), "channel: PresentQuestions failed", err, "name", ch.Name())
 	}
 }
 

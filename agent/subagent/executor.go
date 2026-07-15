@@ -92,7 +92,7 @@ func (e *Executor) RunSubagent(
 	// If worktree is enabled, delegate to WorktreeManager
 	if e.worktreeMgr != nil {
 		result, stats, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
-			e.agent.Logger().Logf(worktreeCtx, "[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
+			e.agent.Logger().Info(worktreeCtx, "[subagent] worktree created", "id", shortID, "path", wtPath, "branch", fallbackIfEmpty(branch, "detached"))
 			return e.run(worktreeCtx, shortID, args, provider, maxIterations, thinking, branch, wtPath)
 		})
 		return result, shortID, stats, err
@@ -126,8 +126,7 @@ func (e *Executor) run(
 	allowedTools := buildAllowedTools(e, args.AllowedTools)
 
 	child := e.agent.NewChildAgent(childLogger, provider, maxIterations, allowedTools, subagentSessionID)
-	childLogger.Logf(ctx, "starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%v session_id=%s",
-		len(args.Prompt), len(allowedTools), maxIterations, thinking, worktreePath != "", subagentSessionID)
+	childLogger.Info(ctx, "starting", "promptLen", len(args.Prompt), "tools", len(allowedTools), "maxIters", maxIterations, "thinking", thinking, "worktree", worktreePath != "", "sessionID", subagentSessionID)
 
 	// Build system prompt
 	systemPrompt := SystemPrompt
@@ -146,7 +145,7 @@ func (e *Executor) run(
 			var recErr error
 			rec, recErr = newRecorder(cur.ID, shortID, childLogger)
 			if recErr != nil {
-				childLogger.Logf(ctx, "failed to create recorder: %v", recErr)
+				childLogger.Error(ctx, "failed to create recorder", recErr)
 			} else {
 				defer rec.close()
 				rec.record(&session.Message{
@@ -255,8 +254,7 @@ func (e *Executor) run(
 			if event.Error != nil {
 				errVal = event.Error
 			}
-			childLogger.Logf(ctx, "completed with error | iters=%d duration=%s output_len=%d tool_calls=%s err=%v",
-				iterCount, duration, len(finalResult), toolCalls.String(), errVal)
+			childLogger.Info(ctx, "completed with error", "iters", iterCount, "duration", duration, "outputLen", len(finalResult), "toolCalls", toolCalls.String(), "err", errVal)
 			stats := &tools.SubagentResult{
 				Output:          finalResult,
 				ShortID:         shortID,
@@ -282,8 +280,7 @@ func (e *Executor) run(
 		Duration:        duration,
 		ToolCallSummary: toolCalls,
 	}
-	childLogger.Logf(ctx, "completed | iters=%d duration=%s output_len=%d tool_calls=%s",
-		iterCount, duration, len(finalResult), toolCalls.String())
+	childLogger.Info(ctx, "completed", "iters", iterCount, "duration", duration, "outputLen", len(finalResult), "toolCalls", toolCalls.String())
 
 	return finalResult, stats, nil
 }

@@ -88,11 +88,10 @@ func NewTopicBackend(cfg Config, l *logger.Logger) (*TopicBackend, error) {
 		}
 	}
 
-
 	// Check if rg (ripgrep) is available.
 	rgPath, err := exec.LookPath("rg")
 	if err != nil {
-		l.Logf(context.Background(), "rg not found in PATH — Recall will be unavailable")
+		l.Info(context.Background(), "rg not found in PATH — Recall will be unavailable")
 	}
 
 	halfLife := cfg.DecayHalfLifeDays
@@ -144,9 +143,9 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 	if t.extractor != nil {
 		if kws, err := t.extractor.ExtractKeywords(ctx, query); err == nil && len(kws) > 0 {
 			keywords = kws
-			t.logger.Logf(ctx, "keywords extracted: %v (from %q)", keywords, query)
+			t.logger.Info(ctx, "keywords extracted", "keywords", keywords, "query", query)
 		} else if err != nil {
-			t.logger.Logf(ctx, "keyword extraction failed, falling back to raw query: %v", err)
+			t.logger.Error(ctx, "keyword extraction failed, falling back to raw query", err)
 		}
 	}
 
@@ -206,7 +205,7 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 	if (len(allResults) == 0 || allResults[0].Score < 0.3) && t.sessionProvider != nil {
 		sessionEntries, err := t.fetchRecentSessions(ctx, limit)
 		if err != nil {
-			t.logger.Logf(ctx, "session fallback: %v", err)
+			t.logger.Error(ctx, "session fallback", err)
 		} else if len(sessionEntries) > 0 {
 			allResults = append(sessionEntries, allResults...)
 			sort.Slice(allResults, func(i, j int) bool {
@@ -215,8 +214,7 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 			if len(allResults) > limit {
 				allResults = allResults[:limit]
 			}
-			t.logger.Logf(ctx, "session fallback: %d session(s) added to recall results (topic results: %d)",
-				len(sessionEntries), len(allResults)-len(sessionEntries))
+			t.logger.Info(ctx, "session fallback: sessions added to recall results", "sessions", len(sessionEntries), "topicResults", len(allResults)-len(sessionEntries))
 		}
 	}
 
@@ -293,7 +291,7 @@ func (t *TopicBackend) Store(ctx context.Context, opts StoreOptions) error {
 		return fmt.Errorf("topic: write inbox: %w", err)
 	}
 
-	t.logger.Logf(ctx, "wrote to inbox: %s (%d bytes)", inboxPath, len(entry))
+	t.logger.Info(ctx, "wrote to inbox", "path", inboxPath, "bytes", len(entry))
 	return nil
 }
 
@@ -324,7 +322,7 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 		args = append(args, "-e", kw)
 	}
 	args = append(args, dir)
-	t.logger.Logf(ctx, "rg %s", strings.Join(args, " "))
+	t.logger.Info(ctx, "rg", "args", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, t.rgPath, args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -332,7 +330,7 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
 			return nil
 		}
-		t.logger.Logf(ctx, "rg search failed in %s: %v", dir, err)
+		t.logger.Error(ctx, "rg search failed", err, "dir", dir)
 		return nil
 	}
 
@@ -359,7 +357,7 @@ func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []s
 		args = append(args, "-e", kw)
 	}
 	args = append(args, path)
-	t.logger.Logf(ctx, "rg %s", strings.Join(args, " "))
+	t.logger.Info(ctx, "rg", "args", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, t.rgPath, args...)
 	if err := cmd.Run(); err != nil {
 		return nil // no match
@@ -514,7 +512,7 @@ func (t *TopicBackend) ReinforceFact(ctx context.Context, entryID string) error 
 			fs.Decay = 1.0
 		})
 		if err != nil {
-			t.logger.Logf(ctx, "ReinforceFact: write %s: %v", statePath, err)
+			t.logger.Error(ctx, "ReinforceFact: write", err, "path", statePath)
 		}
 	}
 	return nil

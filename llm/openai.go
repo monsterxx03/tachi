@@ -185,10 +185,10 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		// Thinking explicitly disabled.
 		// For DeepSeek models, use top-level "thinking" field to disable thinking mode.
 		if p.isDeepSeekReasoningModel() {
-			logger.FromContext(ctx).Logf(ctx, "openai: thinking disabled, using top-level thinking:disabled for DeepSeek model=%s baseURL=%s", p.model, p.baseURL)
+			logger.FromContext(ctx).Info(ctx, "openai: thinking disabled, using top-level thinking:disabled for DeepSeek", "model", p.model, "baseURL", p.baseURL)
 			return p.createChatWithDisabledThinking(ctx, req, opts)
 		}
-		logger.FromContext(ctx).Logf(ctx, "openai: thinking disabled but isDeepSeekReasoningModel=false model=%s baseURL=%s", p.model, p.baseURL)
+		logger.FromContext(ctx).Info(ctx, "openai: thinking disabled but isDeepSeekReasoningModel=false", "model", p.model, "baseURL", p.baseURL)
 		// For other models, just don't set ReasoningEffort.
 	} else if opts.ThinkingEffort != "" {
 		req.ReasoningEffort = opts.ThinkingEffort

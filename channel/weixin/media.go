@@ -50,7 +50,7 @@ func (ch *Channel) saveFile(userID string, filename string, data []byte) (string
 		return "", fmt.Errorf("close file: %w", err)
 	}
 
-	ch.logger.Logf(context.Background(), "weixin: saved file %s (%s) -> %s", filename, humanSize(len(data)), path)
+	ch.logger.Info(context.Background(), "weixin: saved file", "file", filename, "size", humanSize(len(data)), "path", path)
 	return path, nil
 }
 
@@ -180,7 +180,7 @@ func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attach
 	for _, ref := range refs {
 		data, err := ch.downloadMedia(&ref)
 		if err != nil {
-			ch.logger.Logf(context.Background(), "weixin: processMedia failed for %s: %v", ref.FileName, err)
+			ch.logger.Error(context.Background(), "weixin: processMedia failed", err, "file", ref.FileName)
 			attachments = append(attachments, channel.Attachment{
 				Type:     attachmentTypeFromMedia(ref.Type),
 				FileName: ref.FileName,
@@ -193,7 +193,7 @@ func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attach
 		// Save the decrypted file to disk so the LLM can access it via Bash.
 		filePath, saveErr := ch.saveFile(userID, ref.FileName, data)
 		if saveErr != nil {
-			ch.logger.Logf(context.Background(), "weixin: save file %s: %v", ref.FileName, saveErr)
+			ch.logger.Error(context.Background(), "weixin: save file failed", saveErr, "file", ref.FileName)
 			// Non-fatal: still build the attachment without SavedPath.
 		}
 

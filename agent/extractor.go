@@ -61,7 +61,7 @@ func (e *LLMKeywordExtractor) ExtractKeywords(ctx context.Context, query string)
 		return nil, fmt.Errorf("keyword extraction LLM call: %w", err)
 	}
 
-	e.logger.Logf(ctx, "LLM raw response: %q", resp.Content)
+	e.logger.Debug(ctx, fmt.Sprintf("LLM raw response: %q", resp.Content))
 
 	keywords := parseKeywordResponse(resp.Content)
 	if len(keywords) == 0 {

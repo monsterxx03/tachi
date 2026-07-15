@@ -191,7 +191,7 @@ func switchSessionModel(sess *ACPSession, providerName string, l *logger.Logger)
 			cur.ProviderName = resolved.Name
 			// UpdateMeta is best-effort; don't fail the switch if persistence fails.
 			if err := sess.sessMgr.UpdateMeta(cur); err != nil {
-				l.Logf(context.Background(), "ACP: failed to persist provider switch to session meta: %v", err)
+				l.Error(context.Background(), "ACP: failed to persist provider switch to session meta", err)
 			}
 		}
 	}

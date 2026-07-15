@@ -17,12 +17,12 @@ func (i *InputArea) loadInputHistoryFile(path string, limit int) []string {
 		if errors.Is(err, os.ErrNotExist) {
 			return make([]string, 0)
 		}
-		i.logger.Logf(context.Background(), "input history: read %s: %v", path, err)
+		i.logger.Error(context.Background(), "input history: read", err, "path", path)
 		return make([]string, 0)
 	}
 	var entries []string
 	if err := json.Unmarshal(data, &entries); err != nil {
-		i.logger.Logf(context.Background(), "input history: parse %s: %v", path, err)
+		i.logger.Error(context.Background(), "input history: parse", err, "path", path)
 		return make([]string, 0)
 	}
 	if len(entries) > limit {

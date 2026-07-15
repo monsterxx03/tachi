@@ -70,13 +70,13 @@ func (s *SystemScheduler) Register(name, schedule string, timeout time.Duration,
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
 
-		s.logger.Logf(context.Background(), "[%s] triggered", name)
+		s.logger.Info(context.Background(), "triggered", "name", name)
 		start := time.Now()
 
 		if err := fn(ctx); err != nil {
-			s.logger.Logf(context.Background(), "[%s] failed after %v: %v", name, time.Since(start), err)
+			s.logger.Error(context.Background(), "failed", err, "name", name, "duration", time.Since(start))
 		} else {
-			s.logger.Logf(context.Background(), "[%s] completed in %v", name, time.Since(start))
+			s.logger.Info(context.Background(), "completed", "name", name, "duration", time.Since(start))
 		}
 	})
 	if err != nil {
@@ -84,7 +84,7 @@ func (s *SystemScheduler) Register(name, schedule string, timeout time.Duration,
 	}
 
 	s.entries[name] = entryID
-	s.logger.Logf(context.Background(), "registered [%s] schedule=%s timeout=%v", name, schedule, timeout)
+	s.logger.Info(context.Background(), "registered", "name", name, "schedule", schedule, "timeout", timeout)
 	return nil
 }
 
@@ -96,7 +96,7 @@ func (s *SystemScheduler) Start(ctx context.Context) {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.started = true
 	s.engine.Start()
-	s.logger.Logf(context.Background(), "started with %d jobs", len(s.entries))
+	s.logger.Info(context.Background(), "started", "count", len(s.entries))
 }
 
 // Stop halts the scheduler and waits for any in-flight job to finish.
@@ -108,7 +108,7 @@ func (s *SystemScheduler) Stop() {
 	s.mu.Unlock()
 
 	<-s.engine.Stop().Done()
-	s.logger.Logf(context.Background(), "stopped")
+	s.logger.Info(context.Background(), "stopped")
 }
 
 // ErrAlreadyStarted is returned when Register is called after Start.

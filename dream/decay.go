@@ -47,7 +47,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 	entries, err := os.ReadDir(topicsDir)
 	if err != nil {
 		if logger != nil {
-			logger.Logf(context.Background(), "ScanTopicFacts: read topics dir: %v", err)
+			logger.Error(context.Background(), "ScanTopicFacts: read topics dir failed", err)
 		}
 		return result
 	}
@@ -64,7 +64,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 		content, err := os.ReadFile(path)
 		if err != nil {
 			if logger != nil {
-				logger.Logf(context.Background(), "ScanTopicFacts: read %s: %v", path, err)
+				logger.Error(context.Background(), "ScanTopicFacts: read file failed", err, "path", path)
 			}
 			continue
 		}
@@ -119,8 +119,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 				removedCount++
 			}
 		}
-		logger.Logf(context.Background(), "ScanTopicFacts: %d total, %d new, %d removed, %d existing",
-			len(result), newCount, removedCount, len(result)-newCount)
+		logger.Info(context.Background(), "ScanTopicFacts: scan complete", "total", len(result), "new", newCount, "removed", removedCount, "existing", len(result)-newCount)
 	}
 
 	return result

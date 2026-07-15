@@ -479,17 +479,17 @@ func (t *WebFetchTool) truncateWebFetchOutput(ctx context.Context, content strin
 
 	// Ensure the directory exists.
 	if err := os.MkdirAll(t.ResultBaseDir, 0700); err != nil {
-		logger.FromContext(ctx).Logf(ctx, "WebFetch: truncateWebFetchOutput: failed to create dir %s: %v", t.ResultBaseDir, err)
+		logger.FromContext(ctx).Error(ctx, "WebFetch: truncateWebFetchOutput: failed to create dir", err, "dir", t.ResultBaseDir)
 		return hardTruncateWebFetch(content, maxChars)
 	}
 
 	// Write the full result to disk.
 	if err := os.WriteFile(filepath, []byte(content), 0600); err != nil {
-		logger.FromContext(ctx).Logf(ctx, "WebFetch: truncateWebFetchOutput: failed to write file %s: %v", filepath, err)
+		logger.FromContext(ctx).Error(ctx, "WebFetch: truncateWebFetchOutput: failed to write file", err, "path", filepath)
 		return hardTruncateWebFetch(content, maxChars)
 	}
 
-	logger.FromContext(ctx).Logf(ctx, "WebFetch: result too large (%d chars), saved to %s", len(content), filepath)
+	logger.FromContext(ctx).Info(ctx, "WebFetch: result too large, saved to file", "char_count", len(content), "path", filepath)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(

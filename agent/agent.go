@@ -282,7 +282,7 @@ func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	if a.memory != nil {
 		if tb, ok := a.memory.Backend.(*memory.TopicBackend); ok {
 			tb.SetSessionProvider(&topicSessionProvider{manager: sm})
-			a.logger.Logf(context.Background(), "Memory: session provider wired for topic backend")
+			a.logger.Info(context.Background(), "Memory: session provider wired for topic backend")
 		}
 	}
 }
@@ -405,7 +405,7 @@ func (a *AIAgent) recordSession(msg *session.Message) {
 		return
 	}
 	if err := a.sessionManager.AppendMessage(msg); err != nil {
-		a.logger.Logf(context.Background(), "Agent: failed to record session message: %v", err)
+		a.logger.Error(context.Background(), "Agent: failed to record session message", err)
 	}
 }
 
@@ -478,7 +478,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	for _, name := range a.toolRegistry.GetToolNames() {
 		if strings.HasPrefix(name, prefix) {
 			a.toolRegistry.Unregister(name)
-			a.logger.Logf(context.Background(), "MCP: unregistered tool %s from registry", name)
+			a.logger.Info(context.Background(), "MCP: unregistered tool from registry", "tool", name)
 		}
 	}
 
@@ -489,7 +489,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	if pool != nil {
 		removed := pool.RemoveByServer(serverName)
 		if removed > 0 {
-			a.logger.Logf(context.Background(), "MCP: removed %d tools from deferred pool for server %s", removed, serverName)
+			a.logger.Info(context.Background(), "MCP: removed tools from deferred pool for server", "count", removed, "server", serverName)
 		}
 	}
 
@@ -499,7 +499,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 		for _, name := range set.List() {
 			if strings.HasPrefix(name, prefix) {
 				set.Remove(name)
-				a.logger.Logf(context.Background(), "MCP: removed tool %s from discovered set", name)
+				a.logger.Info(context.Background(), "MCP: removed tool from discovered set", "tool", name)
 			}
 		}
 	}
@@ -539,10 +539,10 @@ func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
 		dt := mcp.NewDeferredToolFromMCPTool(t, "")
 		pool.Add(dt)
 		count++
-		a.logger.Logf(context.Background(), "MCP: deferred tool %s (user toggle)", t.Name())
+		a.logger.Info(context.Background(), "MCP: deferred tool (user toggle)", "tool", t.Name())
 	}
 	a.NotifyDeferredToolsAdded()
-	a.logger.Logf(context.Background(), "MCP: added %d tools to deferred pool from toggle", count)
+	a.logger.Info(context.Background(), "MCP: added tools to deferred pool from toggle", "count", count)
 	return count
 }
 
@@ -570,7 +570,7 @@ func (a *AIAgent) NotifyDeferredToolsAdded() {
 	// Ensure it's registered in the reminder collector
 	a.reminderCollector.AddReminder(a.deferredToolReminder)
 
-	a.logger.Logf(context.Background(), "MCP: DeferredToolReminder marked dirty")
+	a.logger.Info(context.Background(), "MCP: DeferredToolReminder marked dirty")
 }
 
 // ToolSchemas returns all tool schemas currently registered with the agent.

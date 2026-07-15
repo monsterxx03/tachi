@@ -584,7 +584,7 @@ func (dr *DeepResearch) getProvider(name string) (llm.Provider, error) {
 // log writes a debug log message if the logger is configured.
 func (dr *DeepResearch) log(format string, args ...any) {
 	if dr.logger != nil {
-		dr.logger.Logf(context.Background(), format, args...)
+		dr.logger.Info(context.Background(), fmt.Sprintf(format, args...))
 	}
 }
 

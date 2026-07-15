@@ -60,7 +60,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventToolConfirmation:
-		m.logger.Logf(context.Background(), "TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
+		m.logger.Info(context.Background(), "TUI: Received AgentEventToolConfirmation", "diffLen", len(event.ToolDiff))
 		m.pendingConfirm = &pendingConfirm{
 			toolName: event.ToolName,
 			toolID:   event.ToolID,
@@ -76,14 +76,14 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if len(event.ToolDiff) > 100 {
 			runes := []rune(event.ToolDiff)
 			preview := string(runes[:100])
-			m.logger.Logf(context.Background(), "TUI: diff preview: %s...", preview)
+			m.logger.Info(context.Background(), "TUI: diff preview", "text", preview+"...")
 		} else {
-			m.logger.Logf(context.Background(), "TUI: diff: %s", event.ToolDiff)
+			m.logger.Info(context.Background(), "TUI: diff", "text", event.ToolDiff)
 		}
 		return nil
 
 	case agent.AgentEventAskUser:
-		m.logger.Logf(context.Background(), "TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
+		m.logger.Info(context.Background(), "TUI: Received AgentEventAskUser", "questions", len(event.Questions))
 		m.askUserView = NewAskUserView(event.Questions, m.width)
 		m.setState(stateAskUserQuestion)
 		m.layout()

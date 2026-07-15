@@ -44,10 +44,10 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		memCfg := cfg.Memory.ToMemoryConfig()
 		backend, err := memory.New(cfg.Memory.Type, memCfg, a.logger)
 		if err != nil {
-			a.logger.Logf(ctx, "Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
+			a.logger.Error(ctx, "Memory: failed to init backend", err, "type", cfg.Memory.Type)
 		} else {
 			a.memory = &MemoryState{Backend: backend}
-			a.logger.Logf(ctx, "Memory: using %s backend", cfg.Memory.Type)
+			a.logger.Info(ctx, "Memory: using backend", "type", cfg.Memory.Type)
 
 			// Wire keyword extractor for topic backend.
 			// Requires an LLM provider — skip when nil (e.g. `tachi tools`).
@@ -62,18 +62,18 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 							sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 							if err == nil {
 								kwProvider, kwModel = sp, resolved.Model
-								a.logger.Logf(ctx, "Memory: using keyword provider %q (%s/%s)", kpName, resolved.Type, resolved.Model)
+								a.logger.Info(ctx, "Memory: using keyword provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)
 							}
 						}
 					}
 					if kwProvider == a.provider {
-						a.logger.Logf(ctx, "Memory: keyword_provider %q not resolved, falling back to main provider", kpName)
+						a.logger.Info(ctx, "Memory: keyword_provider not resolved, falling back to main provider", "provider", kpName)
 					}
 				}
 
 				timeout := cfg.Memory.Timeout
 				tb.SetKeywordExtractor(NewLLMKeywordExtractor(kwProvider, kwModel, timeout))
-				a.logger.Logf(ctx, "Memory: keyword extractor wired for topic backend")
+				a.logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
 			}
 		}
 	}
@@ -103,7 +103,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		var err error
 		mgr, err = a.InitMCPAsync(ctx, cfg)
 		if err != nil {
-			a.logger.Logf(ctx, "MCP: failed to start async init: %v", err)
+			a.logger.Error(ctx, "MCP: failed to start async init", err)
 		}
 	}
 
@@ -127,7 +127,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.reminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
 			Provider: a.lspManager,
 		})
-		a.logger.Logf(ctx, "LSP: initialized with %d server(s)", len(lspCfg.Servers))
+		a.logger.Info(ctx, "LSP: initialized", "servers", len(lspCfg.Servers))
 	}
 
 	return mgr, nil
@@ -194,7 +194,7 @@ func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config)
 
 	interval := cfg.MCPToolRefresh.RefreshInterval()
 	if interval <= 0 {
-		a.logger.Logf(ctx, "MCP: tool list refresh disabled")
+		a.logger.Info(ctx, "MCP: tool list refresh disabled")
 		return
 	}
 
@@ -207,7 +207,7 @@ func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config)
 		}
 	}
 	if !hasHTTPServer {
-		a.logger.Logf(ctx, "MCP: no HTTP servers, skipping tool list refresher")
+		a.logger.Info(ctx, "MCP: no HTTP servers, skipping tool list refresher")
 		return
 	}
 
@@ -227,7 +227,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 		fullName := prefix + name
 		if a.toolRegistry.GetTool(fullName) != nil {
 			a.toolRegistry.Unregister(fullName)
-			a.logger.Logf(context.Background(), "MCP: refresh unregistered %s from tool registry", fullName)
+			a.logger.Info(context.Background(), "MCP: refresh unregistered from tool registry", "tool", fullName)
 		}
 	}
 
@@ -240,7 +240,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 			// Re-register with the updated tool instance
 			a.toolRegistry.Unregister(fullName)
 			a.RegisterTool(t)
-			a.logger.Logf(context.Background(), "MCP: refresh re-registered %s with updated schema", fullName)
+			a.logger.Info(context.Background(), "MCP: refresh re-registered with updated schema", "tool", fullName)
 		}
 	}
 
@@ -252,9 +252,9 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 	// 4. Log summary
 	totalChanges := len(delta.Added) + len(delta.Removed) + len(delta.Modified)
 	if totalChanges > 0 {
-		a.logger.Logf(context.Background(), "MCP: refresh applied %d changes on %q (+%d -%d ~%d)",
-			totalChanges, delta.ServerName,
-			len(delta.Added), len(delta.Removed), len(delta.Modified))
+		a.logger.Info(context.Background(), "MCP: refresh applied changes",
+			"total", totalChanges, "server", delta.ServerName,
+			"added", len(delta.Added), "removed", len(delta.Removed), "modified", len(delta.Modified))
 	}
 }
 
@@ -277,8 +277,7 @@ func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Ma
 	// nothing until MCP servers finish connecting.
 	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr.DiscoveredSet())
 	a.RegisterTool(searchTool)
-	a.logger.Logf(ctx, "MCP: registered MCPSearchTools tool (async init, %d servers)",
-		len(cfg.MCPServers))
+	a.logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(cfg.MCPServers))
 
 	// Connect and discover tools in the background
 	go a.connectMCPBackground(ctx, cfg)
@@ -291,15 +290,15 @@ func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Ma
 // Runs in a background goroutine started by InitMCPAsync.
 func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) {
 	defer a.mcpManager.MarkInitDone()
-	defer a.logger.Logf(ctx, "MCP: async init completed")
+	defer func() { a.logger.Info(ctx, "MCP: async init completed") }()
 
 	autoLoad, all, errs := a.mcpManager.PopulateFromConnect(ctx, cfg)
 	for _, err := range errs {
-		a.logger.Logf(ctx, "MCP: load error: %v", err)
+		a.logger.Error(ctx, "MCP: load error", err)
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
 	if len(all) == 0 {
-		a.logger.Logf(ctx, "MCP: no tools discovered from any server")
+		a.logger.Info(ctx, "MCP: no tools discovered from any server")
 		return
 	}
 
@@ -311,7 +310,7 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 		a.RegisterTool(t)
 	}
 	if len(autoLoad) > 0 {
-		a.logger.Logf(ctx, "MCP: %d tools auto-registered async", len(autoLoad))
+		a.logger.Info(ctx, "MCP: tools auto-registered async", "count", len(autoLoad))
 	}
 
 	pool := a.mcpManager.Pool()
@@ -328,8 +327,7 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 	// Register DeferredToolReminder only if there are undiscovered tools
 	if discovered < total {
 		a.reminderCollector.AddReminder(a.deferredToolReminder)
-		a.logger.Logf(ctx, "MCP: DeferredToolReminder added (%d undiscovered of %d)",
-			total-discovered, total)
+		a.logger.Info(ctx, "MCP: DeferredToolReminder added", "undiscovered", total-discovered, "total", total)
 	}
 
 	// Start background tool list refresher for HTTP MCP servers
@@ -383,7 +381,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	// Restore working directory if recorded
 	if latest.WorkingDir != "" {
 		if err := os.Chdir(latest.WorkingDir); err != nil {
-			a.logger.Logf(context.Background(), "Agent: failed to chdir to %s: %v", latest.WorkingDir, err)
+			a.logger.Error(context.Background(), "Agent: failed to chdir", err, "dir", latest.WorkingDir)
 		}
 	}
 
@@ -403,7 +401,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 			} else {
 				a.lastInputTokens = sessionMsgs[i].Usage.InputTokens
 			}
-			a.logger.Logf(context.Background(), "Agent: restored lastInputTokens=%d from session message", a.lastInputTokens)
+			a.logger.Info(context.Background(), "Agent: restored lastInputTokens from session message", "lastInputTokens", a.lastInputTokens)
 			break
 		}
 	}

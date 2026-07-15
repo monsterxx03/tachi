@@ -215,15 +215,14 @@ func (r *Refresher) refreshAll(ctx context.Context) {
 
 		delta, err := r.manager.RefreshNow(ctx, name)
 		if err != nil {
-			r.manager.logger.Logf(ctx, "MCP: refresh failed for %q: %v", name, err)
+			r.manager.logger.Error(ctx, "MCP: refresh failed", err, "server", name)
 			continue
 		}
 		if delta == nil || !delta.HasChanges() {
 			continue
 		}
 
-		r.manager.logger.Logf(ctx, "MCP: refresh detected changes on %q: +%d -%d ~%d",
-			name, len(delta.Added), len(delta.Removed), len(delta.Modified))
+		r.manager.logger.Info(ctx, "MCP: refresh detected changes", "server", name, "added", len(delta.Added), "removed", len(delta.Removed), "modified", len(delta.Modified))
 
 		r.mu.Lock()
 		cb := r.callback
@@ -287,7 +286,7 @@ func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newToo
 		fullName := prefix + name
 		m.pool.Remove(fullName)
 		m.set.Remove(fullName)
-		m.logger.Logf(context.Background(), "MCP: refresh removed %s (tool no longer on server)", fullName)
+		m.logger.Info(context.Background(), "MCP: refresh removed", "tool", fullName)
 	}
 
 	// 2. Handle modifications: update pool entries
@@ -295,19 +294,19 @@ func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newToo
 		fullName := t.Name()
 		dt := NewDeferredToolFromMCPTool(t, "")
 		m.pool.Add(dt) // overwrite existing
-		m.logger.Logf(context.Background(), "MCP: refresh updated %s (schema changed)", fullName)
+		m.logger.Info(context.Background(), "MCP: refresh updated", "tool", fullName)
 	}
 
 	// 3. Handle additions: add to pool as deferred (not auto-discovered),
 	// but respect whitelist/blacklist filtering from server config.
 	for _, t := range delta.Added {
 		if m.shouldSkipTool(serverName, t.ToolName()) {
-			m.logger.Logf(context.Background(), "MCP: refresh skipped %s (filtered by whitelist/blacklist)", t.Name())
+			m.logger.Info(context.Background(), "MCP: refresh skipped (filtered)", "tool", t.Name())
 			continue
 		}
 		dt := NewDeferredToolFromMCPTool(t, "")
 		m.pool.Add(dt)
-		m.logger.Logf(context.Background(), "MCP: refresh added %s (new tool, deferred)", t.Name())
+		m.logger.Info(context.Background(), "MCP: refresh added (deferred)", "tool", t.Name())
 	}
 
 	// Update cache snapshot
