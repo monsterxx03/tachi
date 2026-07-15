@@ -16,7 +16,7 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
@@ -47,7 +47,7 @@ type MCPClient interface {
 // population is finished.
 type Manager struct {
 	clients map[string]MCPClient // server name -> client
-	logger  *debuglog.Logger
+	logger  *logger.Logger
 	mu      sync.RWMutex
 
 	pool     *DeferredPool
@@ -71,13 +71,10 @@ type Manager struct {
 // NewManager creates an empty MCP client manager with the given tool result
 // truncation config. maxChars <= 0 means no limit. Old tool result files in
 // fileDir are cleaned up on construction (best-effort, errors are logged).
-func NewManager(maxChars int, fileDir string) *Manager {
-	if fileDir != "" {
-		cleanupOldToolResults(fileDir, defaultToolResultMaxAge)
-	}
-	return &Manager{
+func NewManager(ctx context.Context, maxChars int, fileDir string, l *logger.Logger) *Manager {
+	m := &Manager{
 		clients:        make(map[string]MCPClient),
-		logger:         debuglog.DefaultLogger,
+		logger:         l,
 		pool:           NewDeferredPool(),
 		set:            NewDiscoveredSet(),
 		initDone:       make(chan struct{}),
@@ -86,6 +83,10 @@ func NewManager(maxChars int, fileDir string) *Manager {
 		toolCache:      newToolListCache(),
 		serverTypes:    make(map[string]bool),
 	}
+	if fileDir != "" {
+		m.cleanupOldToolResults(ctx, fileDir, defaultToolResultMaxAge)
+	}
+	return m
 }
 
 // Pool returns the deferred-tool pool owned by this manager. Always non-nil.
@@ -198,7 +199,7 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		m.toolCache.Snapshot(serverName, tools)
 	}
 
-	m.logger.Log("MCP: populated %d tools (%d auto-load, ToolSearch=%v, threshold=%d)",
+	m.logger.Logf(ctx, "MCP: populated %d tools (%d auto-load, ToolSearch=%v, threshold=%d)",
 		m.pool.Len(), len(autoLoad), useToolSearch, cfg.MCPToolSearch.MinToolsForSearch)
 	return autoLoad, all, errs
 }
@@ -237,12 +238,6 @@ func matchWildcard(pattern, s string) bool {
 	return err == nil && matched
 }
 
-// SetLogger overrides the manager's logger. Channel callers use this to inject
-// a channel-specific logger so debug output is tagged with the correct source.
-func (m *Manager) SetLogger(l *debuglog.Logger) {
-	m.logger = l
-}
-
 // ConnectAll connects to all configured MCP servers concurrently. Each server
 // connection runs in its own goroutine so a slow or failing server does not
 // block others. Returns all discovered MCPTool wrappers and any per-server
@@ -271,7 +266,7 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 	for i := range servers {
 		srv := &servers[i]
 		if !srv.IsEnabled() {
-			debuglog.Log(ctx, "MCP: server %q is disabled, skipping", srv.Name)
+			logger.FromContext(ctx).Logf(ctx, "MCP: server %q is disabled, skipping", srv.Name)
 			continue
 		}
 
@@ -305,7 +300,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	case config.MCPTransportStdio:
 		c, err = m.connectStdio(srv)
 	case config.MCPTransportHTTP:
-		c, err = m.connectHTTP(srv, timeout)
+		c, err = m.connectHTTP(ctx, srv, timeout)
 	default:
 		return nil, fmt.Errorf("unsupported MCP transport type: %s", srv.Type)
 	}
@@ -324,11 +319,11 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		c.Close()
-		debuglog.Log(ctx, "MCP: server %q initialize failed (type=%s, url=%s): %v", srv.Name, srv.Type, srv.URL, err)
+		logger.FromContext(ctx).Logf(ctx, "MCP: server %q initialize failed (type=%s, url=%s): %v", srv.Name, srv.Type, srv.URL, err)
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
 
-	debuglog.Log(ctx, "MCP: connected to server %q (%s)",
+	logger.FromContext(ctx).Logf(ctx, "MCP: connected to server %q (%s)",
 		srv.Name, srv.Type)
 
 	// Discover tools
@@ -341,7 +336,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 		if errors.Is(err, transport.ErrOAuthAuthorizationRequired) {
 			return nil, &OAuthRequiredError{ServerName: srv.Name}
 		}
-		debuglog.Log(ctx, "MCP: server %q list tools failed (type=%s): %v", srv.Name, srv.Type, err)
+		logger.FromContext(ctx).Logf(ctx, "MCP: server %q list tools failed (type=%s): %v", srv.Name, srv.Type, err)
 		return nil, fmt.Errorf("list tools failed: %w", err)
 	}
 
@@ -350,7 +345,7 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	m.serverTypes[srv.Name] = srv.Type == config.MCPTransportHTTP
 	m.mu.Unlock()
 
-	debuglog.Log(ctx, "MCP: server %q has %d tools", srv.Name, len(toolsResult.Tools))
+	logger.FromContext(ctx).Logf(ctx, "MCP: server %q has %d tools", srv.Name, len(toolsResult.Tools))
 
 	// Wrap tools
 	mcpTools := make([]MCPTool, 0, len(toolsResult.Tools))
@@ -379,7 +374,7 @@ func (m *Manager) connectStdio(srv *config.MCPServerConfig) (MCPClient, error) {
 	return client.NewStdioMCPClient(command, env, srv.Args...)
 }
 
-func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration) (MCPClient, error) {
+func (m *Manager) connectHTTP(ctx context.Context, srv *config.MCPServerConfig, timeout time.Duration) (MCPClient, error) {
 	if srv.URL == "" {
 		return nil, fmt.Errorf("url is required for http transport")
 	}
@@ -393,10 +388,10 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 	if srv.Proxy != "" {
 		httpClient, err := proxy.NewHTTPClient(srv.Proxy, timeout)
 		if err != nil {
-			m.logger.Log("MCP: invalid proxy %q for server %q: %v", srv.Proxy, srv.Name, err)
+			m.logger.Logf(ctx, "MCP: invalid proxy %q for server %q: %v", srv.Proxy, srv.Name, err)
 		} else {
 			opts = append(opts, transport.WithHTTPBasicClient(httpClient))
-			m.logger.Log("MCP: using proxy %q for server %q", srv.Proxy, srv.Name)
+			m.logger.Logf(ctx, "MCP: using proxy %q for server %q", srv.Proxy, srv.Name)
 		}
 	}
 	// If OAuth isn't explicitly configured, check for persisted token / DCR
@@ -405,7 +400,7 @@ func (m *Manager) connectHTTP(srv *config.MCPServerConfig, timeout time.Duration
 		srv.OAuth = &config.MCPOAuthConfig{}
 	}
 	if srv.HasOAuth() {
-		opts = append(opts, m.oauthOption(srv))
+		opts = append(opts, m.oauthOption(ctx, srv))
 	}
 	return client.NewStreamableHttpClient(srv.URL, opts...)
 }
@@ -432,11 +427,11 @@ func hasPersistedAuth(storageKey string) bool {
 // oauthOption builds the WithHTTPOAuth transport option from the server config.
 // If ClientID is empty but persisted DCR info exists, it is loaded from disk
 // so that token refresh works across process restarts.
-func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableHTTPCOption {
+func (m *Manager) oauthOption(ctx context.Context, srv *config.MCPServerConfig) transport.StreamableHTTPCOption {
 	oauthCfg := srv.OAuth
 	tokenStore, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
-		m.logger.Log("MCP: failed to create token store for %q: %v", srv.TokenStorageName(), err)
+		m.logger.Logf(ctx, "MCP: failed to create token store for %q: %v", srv.TokenStorageName(), err)
 		tokenStore = nil
 	}
 
@@ -445,10 +440,10 @@ func (m *Manager) oauthOption(srv *config.MCPServerConfig) transport.StreamableH
 
 	// DCR: if config has no client_id, try persisted DCR info for refresh support
 	if clientID == "" && tokenStore != nil {
-		if dcr, err := tokenStore.GetDCRInfo(context.Background()); err == nil {
+		if dcr, err := tokenStore.GetDCRInfo(ctx); err == nil {
 			clientID = dcr.ClientID
 			clientSecret = dcr.ClientSecret
-			m.logger.Log("MCP: loaded DCR client_id for %q from disk", srv.Name)
+			m.logger.Logf(ctx, "MCP: loaded DCR client_id for %q from disk", srv.Name)
 		}
 	}
 
@@ -528,7 +523,7 @@ func (m *Manager) StartRefresher(ctx context.Context, interval time.Duration, cb
 	m.refresher = NewRefresher(m, interval)
 	m.refresher.OnRefresh(cb)
 	m.refresher.Start(ctx)
-	m.logger.Log("MCP: tool list refresher started (interval=%v)", interval)
+	m.logger.Logf(ctx, "MCP: tool list refresher started (interval=%v)", interval)
 }
 
 // StopRefresher stops the background tool list polling, if running.
@@ -536,7 +531,7 @@ func (m *Manager) StopRefresher() {
 	if m.refresher != nil {
 		m.refresher.Stop()
 		m.refresher = nil
-		m.logger.Log("MCP: tool list refresher stopped")
+		m.logger.Logf(context.Background(), "MCP: tool list refresher stopped")
 	}
 }
 
@@ -570,10 +565,10 @@ func (m *Manager) Disconnect(name string) error {
 	}
 	delete(m.clients, name)
 	if err := c.Close(); err != nil {
-		m.logger.Log("MCP: error disconnecting %q: %v", name, err)
+		m.logger.Logf(context.Background(), "MCP: error disconnecting %q: %v", name, err)
 		return fmt.Errorf("disconnect %q: %w", name, err)
 	}
-	m.logger.Log("MCP: disconnected %q", name)
+	m.logger.Logf(context.Background(), "MCP: disconnected %q", name)
 	return nil
 }
 
@@ -622,7 +617,7 @@ func (m *Manager) Close() {
 
 	for name, c := range m.clients {
 		if err := c.Close(); err != nil {
-			m.logger.Log("MCP: error closing client %q: %v", name, err)
+			m.logger.Logf(context.Background(), "MCP: error closing client %q: %v", name, err)
 		}
 	}
 	m.clients = make(map[string]MCPClient)

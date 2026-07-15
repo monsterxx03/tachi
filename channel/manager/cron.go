@@ -15,7 +15,7 @@ import (
 
 // initCron creates the cron store and scheduler with the manager as the
 // trigger handler. Must be called before Start() fires channels.
-func (m *Manager) initCron(_ context.Context) error {
+func (m *Manager) initCron(ctx context.Context) error {
 	storePath := m.cfg.Cron.StorePath
 	if storePath == "" {
 		storePath = cron.DefaultStorePath()
@@ -31,7 +31,7 @@ func (m *Manager) initCron(_ context.Context) error {
 	})
 
 	m.scheduler = scheduler
-	m.logger.Log("channel: cron initialized (path=%s, max_concurrent=%d, timeout=%v)",
+	m.logger.Logf(ctx, "channel: cron initialized (path=%s, max_concurrent=%d, timeout=%v)",
 		storePath, m.cfg.Cron.MaxConcurrent, m.cfg.Cron.ExecutionTimeout)
 	return nil
 }
@@ -42,7 +42,7 @@ func (m *Manager) initCron(_ context.Context) error {
 // stay consistent with regular messages on the same thread), and delivers
 // the response to the target thread's channel.
 func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
-	m.logger.Log("channel: cron trigger job=%s (%s) thread=%s", job.ID, job.Name, job.TargetThreadID)
+	m.logger.Logf(ctx, "channel: cron trigger job=%s (%s) thread=%s", job.ID, job.Name, job.TargetThreadID)
 
 	_, resolved, _ := m.getProviderForThread(job.TargetThreadID)
 	if resolved == nil {
@@ -102,14 +102,14 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	}
 
 	if err != nil {
-		m.logger.Log("channel: cron job %s drain error: %v", job.ID, err)
+		m.logger.Logf(ctx, "channel: cron job %s drain error: %v", job.ID, err)
 		return err
 	}
 
 	// Check suppress policy: if the job uses when_relevant and the agent
 	// determined there's nothing actionable, skip delivery.
 	if job.ShouldSuppressResult(result) {
-		m.logger.Log("channel: cron job %s suppressed (notify=when_relevant, agent replied SILENT)", job.ID)
+		m.logger.Logf(ctx, "channel: cron job %s suppressed (notify=when_relevant, agent replied SILENT)", job.ID)
 		return nil
 	}
 
@@ -140,14 +140,14 @@ func (m *Manager) deliverCronResponse(ctx context.Context, msg channel.OutgoingM
 			continue
 		}
 		if err := sender.Send(ctx, msg); err != nil {
-			m.logger.Log("channel: cron send to %s failed: %v", ch.Name(), err)
+			m.logger.Logf(ctx, "channel: cron send to %s failed: %v", ch.Name(), err)
 		} else {
-			m.logger.Log("channel: cron response delivered to %s (thread=%s)", ch.Name(), msg.ThreadID)
+			m.logger.Logf(ctx, "channel: cron response delivered to %s (thread=%s)", ch.Name(), msg.ThreadID)
 			return
 		}
 	}
 
-	m.logger.Log("channel: cron response not delivered — no channel accepted thread %s", msg.ThreadID)
+	m.logger.Logf(ctx, "channel: cron response not delivered — no channel accepted thread %s", msg.ThreadID)
 }
 
 // buildCronPrompt constructs the effective prompt for a cron job execution.

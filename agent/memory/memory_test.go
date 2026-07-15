@@ -11,7 +11,7 @@ func TestNew_ValidMem9(t *testing.T) {
 			APIKey: "test-key",
 		},
 	}
-	b, err := New("mem9", cfg)
+	b, err := New("mem9", cfg, nil)
 	if err != nil {
 		t.Fatalf("New(mem9): unexpected error: %v", err)
 	}
@@ -21,14 +21,14 @@ func TestNew_ValidMem9(t *testing.T) {
 }
 
 func TestNew_Unknown(t *testing.T) {
-	_, err := New("unknown_backend", Config{})
+	_, err := New("unknown_backend", Config{}, nil)
 	if err == nil {
 		t.Fatal("New(unknown): expected error, got nil")
 	}
 }
 
 func TestNew_Empty(t *testing.T) {
-	_, err := New("", Config{})
+	_, err := New("", Config{}, nil)
 	if err == nil {
 		t.Fatal("New(''): expected error, got nil")
 	}
@@ -41,7 +41,7 @@ func TestNew_DefaultTimeouts(t *testing.T) {
 		},
 	}
 	// Timeout is 0, should get default 10s.
-	b, err := New("mem9", cfg)
+	b, err := New("mem9", cfg, nil)
 	if err != nil {
 		t.Fatalf("New(mem9): unexpected error: %v", err)
 	}
@@ -61,7 +61,7 @@ func TestNew_CustomTimeouts(t *testing.T) {
 			APIKey: "test-key",
 		},
 	}
-	b, err := New("mem9", cfg)
+	b, err := New("mem9", cfg, nil)
 	if err != nil {
 		t.Fatalf("New(mem9): unexpected error: %v", err)
 	}
@@ -80,7 +80,7 @@ func TestNew_DefaultBaseURL(t *testing.T) {
 			APIKey: "test-key",
 		},
 	}
-	b, err := New("mem9", cfg)
+	b, err := New("mem9", cfg, nil)
 	if err != nil {
 		t.Fatalf("New(mem9): unexpected error: %v", err)
 	}
@@ -105,7 +105,7 @@ func TestNew_CustomBaseURL(t *testing.T) {
 			Mode:    "raw",
 		},
 	}
-	b, err := New("mem9", cfg)
+	b, err := New("mem9", cfg, nil)
 	if err != nil {
 		t.Fatalf("New(mem9): unexpected error: %v", err)
 	}

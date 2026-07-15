@@ -449,7 +449,7 @@ func (m *Model) startInteractiveOAuth(srv *config.MCPServerConfig) tea.Cmd {
 		defer cancel()
 
 		if err := mcp.RunOAuthFlow(ctx, srv, errFn); err != nil {
-			m.logger.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
+			m.logger.Logf(context.Background(), "MCP: OAuth flow failed for %q: %v", srv.Name, err)
 			// When the browser flow fails and we fall back to manual flow,
 			// errFn has already delivered the instructions. An OAuthRequiredError
 			// here would just repeat the same info — skip it.
@@ -500,7 +500,7 @@ func (m *Model) completeManualOAuth(srv *config.MCPServerConfig, redirectURL str
 		defer cancel()
 
 		if err := mcp.CompleteManualAuth(ctx, srv, redirectURL); err != nil {
-			m.logger.Log("MCP: manual OAuth failed for %q: %v", srv.Name, err)
+			m.logger.Logf(context.Background(), "MCP: manual OAuth failed for %q: %v", srv.Name, err)
 			msgs = append(msgs, fmt.Sprintf("OAuth authorization failed for **%s**: %v", srv.Name, err))
 			return
 		}
@@ -548,7 +548,7 @@ func (m *Model) connectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- str
 
 	mcpTools, err := m.mcpManager.Reconnect(ctx, srv)
 	if err != nil {
-		m.logger.Log("MCP: failed to connect %q: %v", srv.Name, err)
+		m.logger.Logf(context.Background(), "MCP: failed to connect %q: %v", srv.Name, err)
 		ch <- fmt.Sprintf("Failed to connect to **%s**: %v", srv.Name, err)
 		return
 	}
@@ -860,7 +860,7 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 		runFn := func(ctx context.Context, plan dream.Plan) (dream.State, error) {
 			// Use a fresh session manager so Load(id) doesn't mutate
 			// the TUI's current-session pointer.
-			dreamSM, smErr := session.NewManager()
+			dreamSM, smErr := session.NewManager(nil)
 			loadMessages := func(id string) ([]session.Message, error) {
 				if smErr != nil {
 					return nil, smErr
@@ -1019,7 +1019,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	// Expand @path references: inject file/directory contents into the
 	// message sent to the LLM, but keep the TUI display unexpanded.
 	// Images are extracted as structured ContentParts for multi-modal input.
-	expanded := ExpandAtReferences(text)
+	expanded := m.ExpandAtReferences(text)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	m.cancelFunc = cancel

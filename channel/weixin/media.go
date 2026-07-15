@@ -1,13 +1,14 @@
 package weixin
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
 // Max file sizes for CDN download.
@@ -49,7 +50,7 @@ func (ch *Channel) saveFile(userID string, filename string, data []byte) (string
 		return "", fmt.Errorf("close file: %w", err)
 	}
 
-	ch.logger.Log("weixin: saved file %s (%s) -> %s", filename, humanSize(len(data)), path)
+	ch.logger.Logf(context.Background(), "weixin: saved file %s (%s) -> %s", filename, humanSize(len(data)), path)
 	return path, nil
 }
 
@@ -179,7 +180,7 @@ func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attach
 	for _, ref := range refs {
 		data, err := ch.downloadMedia(&ref)
 		if err != nil {
-			ch.logger.Log("weixin: processMedia failed for %s: %v", ref.FileName, err)
+			ch.logger.Logf(context.Background(), "weixin: processMedia failed for %s: %v", ref.FileName, err)
 			attachments = append(attachments, channel.Attachment{
 				Type:     attachmentTypeFromMedia(ref.Type),
 				FileName: ref.FileName,
@@ -192,7 +193,7 @@ func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attach
 		// Save the decrypted file to disk so the LLM can access it via Bash.
 		filePath, saveErr := ch.saveFile(userID, ref.FileName, data)
 		if saveErr != nil {
-			ch.logger.Log("weixin: save file %s: %v", ref.FileName, saveErr)
+			ch.logger.Logf(context.Background(), "weixin: save file %s: %v", ref.FileName, saveErr)
 			// Non-fatal: still build the attachment without SavedPath.
 		}
 
@@ -260,4 +261,3 @@ func humanSize(n int) string {
 	}
 	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
 }
-

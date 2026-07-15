@@ -45,12 +45,11 @@ type cachedAgent struct {
 func (m *Manager) initSharedMCP() *mcp.Manager {
 	m.sharedMCPOnce.Do(func() {
 		if m.cfg == nil || !m.cfg.MCPEnabled() {
-			m.logger.Log("channel: shared MCP skipped (not enabled)")
+			m.logger.Logf(context.Background(), "channel: shared MCP skipped (not enabled)")
 			return
 		}
 
-		mgr := mcp.NewManager(m.cfg.ToolResult.MaxResultChars(), m.cfg.ToolResult.ResultFileDir())
-		mgr.SetLogger(m.logger)
+		mgr := mcp.NewManager(context.Background(), m.cfg.ToolResult.MaxResultChars(), m.cfg.ToolResult.ResultFileDir(), m.logger)
 
 		m.sharedMCPMu.Lock()
 		m.sharedMCPMgr = mgr
@@ -61,7 +60,7 @@ func (m *Manager) initSharedMCP() *mcp.Manager {
 		// and is torn down explicitly by Manager.Close().
 		go m.populateSharedMCP(context.Background(), mgr)
 
-		m.logger.Log("channel: shared MCP initialized (%d servers)",
+		m.logger.Logf(context.Background(), "channel: shared MCP initialized (%d servers)",
 			len(m.cfg.MCPServers))
 	})
 
@@ -81,7 +80,7 @@ func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 
 	_, _, errs := mgr.PopulateFromConnect(ctx, m.cfg)
 	for _, err := range errs {
-		m.logger.Log("channel: shared MCP load error: %v", err)
+		m.logger.Logf(ctx, "channel: shared MCP load error: %v", err)
 	}
 
 	// Start background refresher for HTTP MCP servers in channel mode.
@@ -91,7 +90,7 @@ func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	interval := m.cfg.MCPToolRefresh.RefreshInterval()
 	if interval > 0 {
 		mgr.StartRefresher(ctx, interval, func(delta *mcp.ToolListDelta) {
-			m.logger.Log("channel: MCP refresh detected changes on %q: +%d -%d ~%d",
+			m.logger.Logf(ctx, "channel: MCP refresh detected changes on %q: +%d -%d ~%d",
 				delta.ServerName, len(delta.Added), len(delta.Removed), len(delta.Modified))
 		})
 	}
@@ -196,6 +195,7 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 	}
 
 	a := agent.NewAIAgent(prov, 0)
+	a.SetLogger(m.logger)
 	a.SetProcessManager(m.processManager) // shared PM survives turns
 	a.SetSkipEditConfirm(true)
 	a.SetContextWindow(resolved.Provider.ContextWindow)
@@ -220,10 +220,10 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 	if !m.isThreadChannelInteractive(threadID) {
 		a.UnregisterTool(tools.ToolNameAskUser)
 	} else {
-		m.logger.Log("channel: thread %s is interactive — AskUserQuestion kept registered", threadID)
+		m.logger.Logf(ctx, "channel: thread %s is interactive — AskUserQuestion kept registered", threadID)
 	}
 
-	m.logger.Log("channel: built cached agent for thread %s (provider=%s model=%s)",
+	m.logger.Logf(ctx, "channel: built cached agent for thread %s (provider=%s model=%s)",
 		threadID, resolved.Provider.Type, resolved.Provider.Model)
 	return a, nil
 }
@@ -244,7 +244,7 @@ func (m *Manager) evictAgent(threadID string) {
 		}
 		ca.mu.Unlock()
 		delete(m.agentCache, threadID)
-		m.logger.Log("channel: evicted cached agent for thread %s", threadID)
+		m.logger.Logf(context.Background(), "channel: evicted cached agent for thread %s", threadID)
 	}
 }
 
@@ -261,7 +261,7 @@ func (m *Manager) evictAllAgents() {
 		ca.mu.Unlock()
 		delete(m.agentCache, threadID)
 	}
-	m.logger.Log("channel: evicted all cached agents (provider switch)")
+	m.logger.Logf(context.Background(), "channel: evicted all cached agents (provider switch)")
 }
 
 // errProviderNotInitialized is returned when acquireAgent runs before

@@ -29,7 +29,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/monsterxx03/tachi/tui"
 
@@ -259,14 +259,12 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Printf("Warning: failed to init debug log: %v\n", err)
-	}
-	defer debuglog.Close()
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 
 	// Load MCP server config from JSON files (project-level overrides global).
@@ -281,6 +279,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
 	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent.SetLogger(logger.New("tui"))
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
@@ -301,7 +300,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	var initialSessionList []*session.Session
 
 	if cmd.Bool("resume") {
-		sm, err := session.NewManager()
+		sm, err := session.NewManager(nil)
 		if err != nil {
 			return fmt.Errorf("session manager: %w", err)
 		}
@@ -315,7 +314,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		}
 		initialSessionList = sessions
 	} else {
-		sm, err := session.NewManager()
+		sm, err := session.NewManager(nil)
 		if err != nil {
 			fmt.Printf("Warning: failed to init session manager: %v\n", err)
 		} else {
@@ -355,12 +354,6 @@ func exitCodeForReason(reason string) int {
 }
 
 func runCommit(ctx context.Context, cmd *cli.Command) error {
-	// Initialize debug logging.
-	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
-	}
-	defer debuglog.Close()
-
 	// Apply optional timeout.
 	if timeout := cmd.Duration("timeout"); timeout > 0 {
 		var cancel context.CancelFunc
@@ -371,6 +364,9 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
@@ -385,6 +381,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	aiAgent := agent.NewAIAgent(provider, maxIters)
+	aiAgent.SetLogger(logger.New("run"))
 	aiAgent.SetSkipEditConfirm(true)
 	aiAgent.SetSkipMemoryRecall(true)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -466,12 +463,6 @@ func readStdinPipe() string {
 }
 
 func runAgent(ctx context.Context, cmd *cli.Command) error {
-	// Initialize debug logging.
-	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
-	}
-	defer debuglog.Close()
-
 	// Apply optional timeout.
 	if timeout := cmd.Duration("timeout"); timeout > 0 {
 		var cancel context.CancelFunc
@@ -482,6 +473,9 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 
 	// Load MCP server config from JSON files.
@@ -502,6 +496,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	aiAgent := agent.NewAIAgent(provider, maxIters)
+	aiAgent.SetLogger(logger.New("run"))
 	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetSkipMemoryRecall(true) // "tachi run" is non-interactive — don't pollute prompt with memory recall
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -874,14 +869,12 @@ func runOutputJSONStream(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent) *ag
 //	      enabled: true
 //	      token: "xxx"
 func runChannels(ctx context.Context, cmd *cli.Command) error {
-	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
-	}
-	defer debuglog.Close()
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 
 	// Load MCP server config from JSON files.
@@ -947,14 +940,12 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 // ── Tools listing ──────────────────────────────────────────────────────────────
 
 func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
-	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init debug log: %v\n", err)
-	}
-	defer debuglog.Close()
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
 
 	// Create a minimal agent to register and list tools.
@@ -1105,15 +1096,12 @@ func firstLine(s string) string {
 // ── ACP Agent ────────────────────────────────────────────────────────────────
 
 func runACPAgent(ctx context.Context) error {
-	// Initialize debug logging (stdout is reserved for JSON-RPC, use file logging).
-	if err := debuglog.Init(config.LogsDir()); err != nil {
-		fmt.Fprintf(os.Stderr, "tachi: warning: failed to init debug log: %v\n", err)
-	}
-	defer debuglog.Close()
-
 	cfg, err := config.Load()
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
+	}
+	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
+		fmt.Fprintf(os.Stderr, "tachi: warning: failed to init logger: %v\n", err)
 	}
 
 	// Load MCP server config from JSON files.
@@ -1140,7 +1128,7 @@ func runACPAgent(ctx context.Context) error {
 // ── Transcript visualization commands ────────────────────────────────────────
 
 func transcriptList(ctx context.Context, cmd *cli.Command) error {
-	mgr, err := session.NewManager()
+	mgr, err := session.NewManager(nil)
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}
@@ -1162,7 +1150,7 @@ func transcriptList(ctx context.Context, cmd *cli.Command) error {
 }
 
 func transcriptShow(ctx context.Context, cmd *cli.Command) error {
-	mgr, err := session.NewManager()
+	mgr, err := session.NewManager(nil)
 	if err != nil {
 		return fmt.Errorf("session manager: %w", err)
 	}

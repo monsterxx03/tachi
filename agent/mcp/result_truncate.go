@@ -1,13 +1,12 @@
 package mcp
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"time"
-
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 const (
@@ -20,7 +19,7 @@ const (
 // to avoid context bloat.
 //
 // When maxChars <= 0, the result is returned unchanged (no limit).
-func truncateToolOutput(result string, maxChars int, fileDir string, toolName string) string {
+func (m *Manager) truncateToolOutput(ctx context.Context, result string, maxChars int, fileDir string, toolName string) string {
 	if maxChars <= 0 || len(result) <= maxChars {
 		return result
 	}
@@ -32,22 +31,22 @@ func truncateToolOutput(result string, maxChars int, fileDir string, toolName st
 
 	// Ensure the directory exists.
 	if err := os.MkdirAll(fileDir, 0700); err != nil {
-		debuglog.DefaultLogger.Log("MCP: truncateToolOutput: failed to create dir %s: %v", fileDir, err)
+		m.logger.Logf(ctx, "MCP: truncateToolOutput: failed to create dir %s: %v", fileDir, err)
 		// Fall back to simple truncation without file persistence.
 		return hardTruncate(result, maxChars, toolName)
 	}
 
 	// Write the full result to disk.
 	if err := os.WriteFile(filepath, []byte(result), 0600); err != nil {
-		debuglog.DefaultLogger.Log("MCP: truncateToolOutput: failed to write file %s: %v", filepath, err)
+		m.logger.Logf(ctx, "MCP: truncateToolOutput: failed to write file %s: %v", filepath, err)
 		// Fall back to simple truncation.
 		return hardTruncate(result, maxChars, toolName)
 	}
 
-	debuglog.DefaultLogger.Log("MCP: tool %s result too large (%d chars), saved to %s", toolName, len(result), filepath)
+	m.logger.Logf(ctx, "MCP: tool %s result too large (%d chars), saved to %s", toolName, len(result), filepath)
 
 	// Best-effort background cleanup of old files.
-	go cleanupOldToolResults(fileDir, defaultToolResultMaxAge)
+	go m.cleanupOldToolResults(ctx, fileDir, defaultToolResultMaxAge)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(
@@ -92,11 +91,11 @@ func sanitizeForFilename(name string) string {
 
 // cleanupOldToolResults removes tool result files older than maxAge from fileDir.
 // Errors are logged but not returned — cleanup is best-effort.
-func cleanupOldToolResults(fileDir string, maxAge time.Duration) {
+func (m *Manager) cleanupOldToolResults(ctx context.Context, fileDir string, maxAge time.Duration) {
 	entries, err := os.ReadDir(fileDir)
 	if err != nil {
 		if !os.IsNotExist(err) {
-			debuglog.DefaultLogger.Log("MCP: cleanupOldToolResults: read dir %s: %v", fileDir, err)
+			m.logger.Logf(ctx, "MCP: cleanupOldToolResults: read dir %s: %v", fileDir, err)
 		}
 		return
 	}
@@ -115,7 +114,7 @@ func cleanupOldToolResults(fileDir string, maxAge time.Duration) {
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(fileDir, entry.Name())
 			if err := os.Remove(path); err != nil {
-				debuglog.DefaultLogger.Log("MCP: cleanupOldToolResults: remove %s: %v", path, err)
+				m.logger.Logf(ctx, "MCP: cleanupOldToolResults: remove %s: %v", path, err)
 			} else {
 				removed++
 			}
@@ -123,6 +122,6 @@ func cleanupOldToolResults(fileDir string, maxAge time.Duration) {
 	}
 
 	if removed > 0 {
-		debuglog.DefaultLogger.Log("MCP: cleanupOldToolResults: removed %d old files from %s (maxAge=%s)", removed, fileDir, maxAge)
+		m.logger.Logf(ctx, "MCP: cleanupOldToolResults: removed %d old files from %s (maxAge=%s)", removed, fileDir, maxAge)
 	}
 }

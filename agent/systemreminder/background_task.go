@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -32,9 +33,9 @@ type BackgroundTaskReminder struct {
 	Provider BackgroundTaskProvider
 }
 
-func (r *BackgroundTaskReminder) Generate(ctx Context) []string {
+func (r *BackgroundTaskReminder) Generate(ctx context.Context, rctx Context) []string {
 	// No background tasks can exist before any message, so skip.
-	if ctx.IsFirstMessage {
+	if rctx.IsFirstMessage {
 		return nil
 	}
 	if r.Provider == nil {

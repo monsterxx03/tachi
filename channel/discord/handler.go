@@ -31,7 +31,7 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 
 	// 2. Message deduplication.
 	if ch.deduper.seen(m.ID) {
-		ch.logger.Log("discord: duplicate message %s skipped", m.ID)
+		ch.logger.Logf(context.Background(), "discord: duplicate message %s skipped", m.ID)
 		return
 	}
 
@@ -77,7 +77,7 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 	// 7. Access control.
 	roles := ch.resolveMemberRoles(m.GuildID, m.Author.ID)
 	if !ch.isAuthorized(m.Author.ID, roles, dm) {
-		ch.logger.Log("discord: unauthorized user %s (%s) in channel %s",
+		ch.logger.Logf(context.Background(), "discord: unauthorized user %s (%s) in channel %s",
 			m.Author.ID, m.Author.Username, m.ChannelID)
 		return
 	}
@@ -198,7 +198,7 @@ func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threa
 		for _, att := range m.Attachments {
 			downloaded, err := ch.downloadAttachment(att.URL)
 			if err != nil {
-				ch.logger.Log("discord: download attachment %s: %v", att.Filename, err)
+				ch.logger.Logf(context.Background(), "discord: download attachment %s: %v", att.Filename, err)
 				msg.Attachments = append(msg.Attachments, channel.Attachment{
 					FileName: att.Filename,
 					Error:    err.Error(),
@@ -250,7 +250,7 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 	}
 
 	if result.Err != nil {
-		ch.logger.Log("discord: handler error: %v", result.Err)
+		ch.logger.Logf(context.Background(), "discord: handler error: %v", result.Err)
 		return
 	}
 
@@ -263,18 +263,18 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 	// 1. Check for EMBED prefix.
 	if cleaned, embed, ok := parseEmbedContent(reply.Content); ok {
 		if err := ch.sendEmbed(channelID, embed); err != nil {
-			ch.logger.Log("discord: send embed error: %v", err)
+			ch.logger.Logf(context.Background(), "discord: send embed error: %v", err)
 		}
 		// Send remaining text after embed, with MEDIA parsing.
 		if cleaned != "" {
 			if _, err := ch.sendTextWithMedia(channelID, cleaned); err != nil {
-				ch.logger.Log("discord: send embed text error: %v", err)
+				ch.logger.Logf(context.Background(), "discord: send embed text error: %v", err)
 			}
 		}
 	} else {
 		// 2. Normal text with MEDIA tag support.
 		if _, err := ch.sendTextWithMedia(channelID, reply.Content); err != nil {
-			ch.logger.Log("discord: send reply error: %v", err)
+			ch.logger.Logf(context.Background(), "discord: send reply error: %v", err)
 		}
 	}
 
@@ -282,11 +282,11 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 	for _, att := range reply.Attachments {
 		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
-			ch.logger.Log("discord: send attachment resolve %s: %v", att.FileName, err)
+			ch.logger.Logf(context.Background(), "discord: send attachment resolve %s: %v", att.FileName, err)
 			continue
 		}
 		if _, err := ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data)); err != nil {
-			ch.logger.Log("discord: send attachment %s error: %v", att.FileName, err)
+			ch.logger.Logf(context.Background(), "discord: send attachment %s error: %v", att.FileName, err)
 		}
 	}
 
@@ -390,7 +390,7 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 	if _, err := sess.ChannelEdit(channelID, &discordgo.ChannelEdit{
 		Topic: topic,
 	}); err != nil {
-		ch.logger.Log("discord: update channel topic for %s: %v", channelID, err)
+		ch.logger.Logf(context.Background(), "discord: update channel topic for %s: %v", channelID, err)
 		return
 	}
 

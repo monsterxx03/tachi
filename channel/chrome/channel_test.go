@@ -70,7 +70,7 @@ func startTestServer(t *testing.T, handler channel.MessageHandler) (*ChromeChann
 	ch := NewChromeChannel("chrome", port)
 	ch.server = NewServer(port)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 
 	go func() {
@@ -248,7 +248,7 @@ func TestSend(t *testing.T) {
 	wsRecv(t, conn)
 
 	// Now use channel.Send() to send a proactive message.
-	if err := ch.Send(context.Background(), channel.OutgoingMessage{
+	if err := ch.Send(t.Context(), channel.OutgoingMessage{
 		ThreadID: "tab_123",
 		Content:  "proactive notification",
 	}); err != nil {

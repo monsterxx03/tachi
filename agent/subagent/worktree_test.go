@@ -13,7 +13,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // gitWorktreeAvailable returns true if git supports the worktree subcommand.
@@ -40,7 +40,7 @@ func TestWorktreeManager_Create_DetachedHEAD(t *testing.T) {
 		WorktreeDir:     tmpDir,
 		WorktreeCleanup: new(true),
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		assert.NotEmpty(t, wtPath)
@@ -83,7 +83,7 @@ func TestWorktreeManager_Create_NoCleanup(t *testing.T) {
 		WorktreeDir:     tmpDir,
 		WorktreeCleanup: new(false),
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	var worktreePath string
 	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
@@ -110,7 +110,7 @@ func TestWorktreeManager_Create_CollectsPatchOnChange(t *testing.T) {
 		Worktree:    true,
 		WorktreeDir: tmpDir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		f, err := os.Create(filepath.Join(wtPath, "worktree_modify_test.txt"))
@@ -144,7 +144,7 @@ func TestWorktreeManager_Create_WithBranch(t *testing.T) {
 		Worktree:    true,
 		WorktreeDir: tmpDir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	result, _, err := wm.Create(t.Context(), currentBranch, func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		// Verify we're on the specified branch
@@ -168,7 +168,7 @@ func TestWorktreeManager_Create_NonexistentBranch(t *testing.T) {
 		Worktree:    true,
 		WorktreeDir: tmpDir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	_, _, err := wm.Create(t.Context(), "nonexistent-branch-xyzzy", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		return "", nil, nil
@@ -186,7 +186,7 @@ func TestWorktreeManager_Create_RemoteTrackingRef(t *testing.T) {
 		Worktree:    true,
 		WorktreeDir: tmpDir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	_, _, err := wm.Create(t.Context(), "origin/main", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		return "", nil, nil
@@ -204,7 +204,7 @@ func TestWorktreeManager_Create_EmptyResultPatch(t *testing.T) {
 		Worktree:    true,
 		WorktreeDir: tmpDir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	// Don't make any changes → no patch
 	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
@@ -223,7 +223,7 @@ func TestWorktreeManager_Create_FnErrorStillReturnsPatch(t *testing.T) {
 		Worktree:    true,
 		WorktreeDir: tmpDir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	result, _, err := wm.Create(t.Context(), "", func(ctx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
 		// Create a file then return error
@@ -253,7 +253,7 @@ func TestWorktreeManager_createWorktree_remoteTrackingRef(t *testing.T) {
 func TestWorktreeManager_createWorktree_emptyBranch(t *testing.T) {
 	requireWorktreeSupport(t)
 
-	wm := &WorktreeManager{worktreeDir: t.TempDir(), logger: debuglog.DefaultLogger}
+	wm := &WorktreeManager{worktreeDir: t.TempDir(), logger: logger.Default()}
 
 	path, err := wm.createWorktree(t.Context(), "")
 	require.NoError(t, err)
@@ -271,7 +271,7 @@ func TestWorktreeManager_createWorktree_emptyBranch(t *testing.T) {
 func TestWorktreeManager_removeWorktree(t *testing.T) {
 	requireWorktreeSupport(t)
 
-	wm := &WorktreeManager{worktreeDir: t.TempDir(), logger: debuglog.DefaultLogger}
+	wm := &WorktreeManager{worktreeDir: t.TempDir(), logger: logger.Default()}
 
 	path, err := wm.createWorktree(t.Context(), "")
 	require.NoError(t, err)
@@ -282,7 +282,7 @@ func TestWorktreeManager_removeWorktree(t *testing.T) {
 }
 
 func TestWorktreeManager_removeWorktree_nonexistent(t *testing.T) {
-	wm := &WorktreeManager{logger: debuglog.DefaultLogger}
+	wm := &WorktreeManager{logger: logger.Default()}
 	// Should not panic on nonexistent path
 	wm.removeWorktree("/tmp/tachi-nonexistent-worktree-xyz")
 }
@@ -302,7 +302,7 @@ func TestWorktreeManager_Create_FallbackToSharedDir_NoGitWorktree(t *testing.T) 
 		Worktree:    true,
 		WorktreeDir: notADir,
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 
 	// createWorktree will fail, fallback gives empty path to fn
 	var wtPath string

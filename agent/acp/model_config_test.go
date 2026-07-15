@@ -1,7 +1,6 @@
 package acp
 
 import (
-	"context"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -56,7 +55,7 @@ func TestSwitchSessionModel(t *testing.T) {
 		agent: aiAgent,
 	}
 
-	err = switchSessionModel(sess, "anthropic")
+	err = switchSessionModel(sess, "anthropic", nil)
 	require.NoError(t, err)
 
 	assert.Equal(t, "anthropic", sess.resolveProviderName())
@@ -76,7 +75,7 @@ func TestSwitchSessionModel_UnknownProvider(t *testing.T) {
 	aiAgent := agent.NewAIAgent(provider, 0)
 	sess := &ACPSession{cfg: cfg, agent: aiAgent}
 
-	err = switchSessionModel(sess, "unknown")
+	err = switchSessionModel(sess, "unknown", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not found")
 }
@@ -94,9 +93,9 @@ func TestSetSessionConfigOption(t *testing.T) {
 	aiAgent := agent.NewAIAgent(provider, 0)
 
 	ta := NewTachiAgent(cfg, "test")
-	sess := ta.sessions.New(context.Background(), "/tmp", cfg, aiAgent, nil, nil)
+	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
 
-	resp, err := ta.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{
+	resp, err := ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{
 		ValueId: &acp.SetSessionConfigOptionValueId{
 			SessionId: acp.SessionId(sess.ID),
 			ConfigId:  acp.SessionConfigId(modelConfigID),
@@ -121,9 +120,9 @@ func TestSetSessionConfigOption_UnsupportedConfig(t *testing.T) {
 	aiAgent := agent.NewAIAgent(provider, 0)
 
 	ta := NewTachiAgent(cfg, "test")
-	sess := ta.sessions.New(context.Background(), "/tmp", cfg, aiAgent, nil, nil)
+	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
 
-	resp, err := ta.SetSessionConfigOption(context.Background(), acp.SetSessionConfigOptionRequest{
+	resp, err := ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{
 		ValueId: &acp.SetSessionConfigOptionValueId{
 			SessionId: acp.SessionId(sess.ID),
 			ConfigId:  acp.SessionConfigId("unsupported"),

@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
@@ -271,7 +271,7 @@ func (b *Mem9Backend) doRequest(ctx context.Context, method, path string, body, 
 		return fmt.Errorf("mem9: HTTP %d: %s", resp.StatusCode, string(respBody))
 	}
 
-	debuglog.Log(ctx, "mem9: %s %s -> %d", method, path, resp.StatusCode)
+	logger.FromContext(ctx).Logf(ctx, "mem9: %s %s -> %d", method, path, resp.StatusCode)
 
 	if result != nil {
 		return json.NewDecoder(resp.Body).Decode(result)

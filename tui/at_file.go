@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 	"github.com/monsterxx03/tachi/pkg/pathtrie"
 )
 
@@ -33,7 +32,7 @@ const (
 
 // getCachedTrie returns the path trie for the current working directory,
 // cached for 30 seconds.
-func getCachedTrie() (*pathtrie.PathTrie, error) {
+func (i *InputArea) getCachedTrie() (*pathtrie.PathTrie, error) {
 	atFileTrieMu.Lock()
 	defer atFileTrieMu.Unlock()
 
@@ -89,7 +88,7 @@ func getCachedTrie() (*pathtrie.PathTrie, error) {
 	t := pathtrie.New(paths)
 	atFileTrie = t
 	atFileTrieTTL = time.Now()
-	debuglog.DefaultLogger.Log("at_file: built trie with %d files", t.FileCount())
+	i.logger.Logf(context.Background(), "at_file: built trie with %d files", t.FileCount())
 	return t, nil
 }
 
@@ -104,7 +103,7 @@ type atFileMatch struct {
 // searchAtFiles searches files matching the query using the cached path trie.
 // When query is empty (just typed "@"), lists immediate files and directories
 // in the current working directory.
-func searchAtFiles(query string) ([]atFileMatch, error) {
+func (i *InputArea) searchAtFiles(query string) ([]atFileMatch, error) {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return nil, err
@@ -114,7 +113,7 @@ func searchAtFiles(query string) ([]atFileMatch, error) {
 		return listCwdImmediate(cwd)
 	}
 
-	t, err := getCachedTrie()
+	t, err := i.getCachedTrie()
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +196,7 @@ type ExpandResult struct {
 //   - Other binary files (PDF, Excel, etc.): annotate as [@file: path]
 //     and let the LLM use Bash/ReadFile tools to parse them.
 //   - Errors / not found: leave @path as-is.
-func ExpandAtReferences(message string) ExpandResult {
+func (m *Model) ExpandAtReferences(message string) ExpandResult {
 	var result strings.Builder
 	var images []llm.ContentPart
 	expanded := false
@@ -273,7 +272,7 @@ func ExpandAtReferences(message string) ExpandResult {
 	}
 
 	if expanded {
-		debuglog.DefaultLogger.Log("at_file: expanded @ references in message (images=%d)", len(images))
+		m.logger.Logf(context.Background(), "at_file: expanded @ references in message (images=%d)", len(images))
 	}
 
 	return ExpandResult{

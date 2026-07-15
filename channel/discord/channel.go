@@ -16,7 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/channel"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	tachiproxy "github.com/monsterxx03/tachi/pkg/proxy"
 	"gopkg.in/yaml.v3"
 )
@@ -90,7 +90,7 @@ func (d *messageDeduper) seen(id string) bool {
 type DiscordChannel struct {
 	cfg     DiscordConfig
 	session *discordgo.Session
-	logger  *debuglog.Logger
+	logger  *logger.Logger
 
 	// httpClient is used for CDN downloads and other HTTP requests.
 	// Configured with proxy support when cfg.Proxy is set.
@@ -150,7 +150,7 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 
 	return &DiscordChannel{
 		cfg:               dc,
-		logger:            debuglog.DefaultLogger.WithSource("channel:discord"),
+		logger:            logger.New("channel.discord"),
 		httpClient:        httpClient,
 		cacheDir:          cacheDir,
 		componentHandlers: make(map[string]componentHandler),
@@ -222,11 +222,11 @@ func (ch *DiscordChannel) Send(ctx context.Context, msg channel.OutgoingMessage)
 	for _, att := range msg.Attachments {
 		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
-			ch.logger.Log("discord: Send resolve attachment %s: %v", att.FileName, err)
+			ch.logger.Logf(ctx, "discord: Send resolve attachment %s: %v", att.FileName, err)
 			continue
 		}
 		if _, err := sess.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data)); err != nil {
-			ch.logger.Log("discord: Send attachment %s error: %v (continuing)", att.FileName, err)
+			ch.logger.Logf(ctx, "discord: Send attachment %s error: %v (continuing)", att.FileName, err)
 		}
 	}
 
@@ -241,7 +241,7 @@ func (ch *DiscordChannel) OnStart(ctx context.Context) error {
 		return fmt.Errorf("discord: create cache dir: %w", err)
 	}
 
-	ch.logger.Log("discord: cache dir ready at %s", ch.cacheDir)
+	ch.logger.Logf(ctx, "discord: cache dir ready at %s", ch.cacheDir)
 	return nil
 }
 
@@ -328,7 +328,7 @@ func (ch *DiscordChannel) registerSlashCommands(sess *discordgo.Session) error {
 	if guildID != "" {
 		loc = "guild:" + guildID
 	}
-	ch.logger.Log("discord: registered %d slash commands (%s)", len(registered), loc)
+	ch.logger.Logf(context.Background(), "discord: registered %d slash commands (%s)", len(registered), loc)
 	return nil
 }
 
@@ -375,14 +375,14 @@ func (ch *DiscordChannel) Run(ctx context.Context, handler channel.MessageHandle
 	}
 	defer sess.Close()
 
-	ch.logger.Log("discord: connected to gateway")
+	ch.logger.Logf(ctx, "discord: connected to gateway")
 
 	// Send greeting if configured.
 	ch.sendGreeting()
 
 	// Wait for context cancellation.
 	<-ctx.Done()
-	ch.logger.Log("discord: context cancelled, shutting down")
+	ch.logger.Logf(ctx, "discord: context cancelled, shutting down")
 
 	// Remove handlers to prevent re-registration on future Run() calls.
 	removeReady()
@@ -401,11 +401,11 @@ func (ch *DiscordChannel) onReady() any {
 		ch.mu.Lock()
 		ch.botUserID = r.User.ID
 		ch.mu.Unlock()
-		ch.logger.Log("discord: ready — bot user ID: %s", r.User.ID)
+		ch.logger.Logf(context.Background(), "discord: ready — bot user ID: %s", r.User.ID)
 
 		// Register slash commands now that the ApplicationID is known.
 		if err := ch.registerSlashCommands(s); err != nil {
-			ch.logger.Log("discord: register slash commands (non-fatal): %v", err)
+			ch.logger.Logf(context.Background(), "discord: register slash commands (non-fatal): %v", err)
 		}
 	}
 }
@@ -454,7 +454,7 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 		return
 	}
 
-	ch.logger.Log("discord: slash cmd=%q options=%d", data.Name, len(data.Options))
+	ch.logger.Logf(context.Background(), "discord: slash cmd=%q options=%d", data.Name, len(data.Options))
 
 	cmdHandler := ch.cmdHandler
 	if cmdHandler == nil {
@@ -464,7 +464,7 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 
 	// Build args from command options.
 	args := buildSlashArgs(data.Options)
-	ch.logger.Log("discord: slash cmd=%q args=%q", data.Name, args)
+	ch.logger.Logf(context.Background(), "discord: slash cmd=%q args=%q", data.Name, args)
 
 	// Determine thread ID from the interaction context.
 	threadID := ""
@@ -555,7 +555,7 @@ func (ch *DiscordChannel) respondInteraction(s *discordgo.Session, i *discordgo.
 			Flags:   1 << 6, // ephemeral
 		},
 	}); err != nil {
-		ch.logger.Log("discord: interaction respond error: %v", err)
+		ch.logger.Logf(context.Background(), "discord: interaction respond error: %v", err)
 	}
 }
 
@@ -565,7 +565,7 @@ func (ch *DiscordChannel) sendGreeting() {
 		return
 	}
 	if len(ch.cfg.AllowedUsers) == 0 {
-		ch.logger.Log("discord: greeting configured but no allowed_users to send to")
+		ch.logger.Logf(context.Background(), "discord: greeting configured but no allowed_users to send to")
 		return
 	}
 	sess := ch.session
@@ -575,11 +575,11 @@ func (ch *DiscordChannel) sendGreeting() {
 	// Create/open a DM channel with the first allowed user.
 	dmChannel, err := sess.UserChannelCreate(ch.cfg.AllowedUsers[0])
 	if err != nil {
-		ch.logger.Log("discord: create DM channel for greeting: %v", err)
+		ch.logger.Logf(context.Background(), "discord: create DM channel for greeting: %v", err)
 		return
 	}
 	if _, err := sess.ChannelMessageSend(dmChannel.ID, ch.cfg.Greeting); err != nil {
-		ch.logger.Log("discord: send greeting error: %v", err)
+		ch.logger.Logf(context.Background(), "discord: send greeting error: %v", err)
 	}
 }
 
@@ -612,6 +612,6 @@ func (ch *DiscordChannel) applyProxy(sess *discordgo.Session) error {
 	}
 	sess.Dialer.NetDial = proxyDialer
 
-	ch.logger.Log("discord: configured proxy %s", proxyURL)
+	ch.logger.Logf(context.Background(), "discord: configured proxy %s", proxyURL)
 	return nil
 }

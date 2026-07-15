@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -20,11 +20,11 @@ func newTestScheduler(t *testing.T, handler TriggerHandler) (*Scheduler, *Store)
 	path := filepath.Join(dir, "crons.json")
 	store := NewStore(path)
 
-	_ = debuglog.Init(os.TempDir())
+	_ = logger.Init(os.TempDir(), *logger.DefaultConfig())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
-		Logger:           debuglog.DefaultLogger,
+		Logger:           logger.Default(),
 		MaxConcurrent:    3,
 		ExecutionTimeout: 5 * time.Minute,
 	})
@@ -232,11 +232,11 @@ func TestScheduler_StartupRecovery(t *testing.T) {
 		return nil
 	}
 
-	_ = debuglog.Init(os.TempDir())
+	_ = logger.Init(os.TempDir(), *logger.DefaultConfig())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
-		Logger:           debuglog.DefaultLogger,
+		Logger:           logger.Default(),
 		MaxConcurrent:    3,
 		ExecutionTimeout: 5 * time.Minute,
 	})
@@ -257,7 +257,7 @@ func TestScheduler_SemaphoreSkip(t *testing.T) {
 	// Test that when max concurrent is reached, new triggers are skipped.
 	// We test this by directly driving the semaphore.
 
-	_ = debuglog.Init(os.TempDir())
+	_ = logger.Init(os.TempDir(), *logger.DefaultConfig())
 
 	dir := t.TempDir()
 	store := NewStore(filepath.Join(dir, "crons.json"))
@@ -277,7 +277,7 @@ func TestScheduler_SemaphoreSkip(t *testing.T) {
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
-		Logger:           debuglog.DefaultLogger,
+		Logger:           logger.Default(),
 		MaxConcurrent:    1,
 		ExecutionTimeout: 5 * time.Second,
 	})
@@ -333,11 +333,11 @@ func TestScheduler_OneshotAutoDelete(t *testing.T) {
 		return nil
 	}
 
-	_ = debuglog.Init(os.TempDir())
+	_ = logger.Init(os.TempDir(), *logger.DefaultConfig())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
-		Logger:           debuglog.DefaultLogger,
+		Logger:           logger.Default(),
 		MaxConcurrent:    3,
 		ExecutionTimeout: 5 * time.Second,
 	})
@@ -407,11 +407,11 @@ func TestScheduler_OneshotDefaultIsOneshot(t *testing.T) {
 		return nil
 	}
 
-	_ = debuglog.Init(os.TempDir())
+	_ = logger.Init(os.TempDir(), *logger.DefaultConfig())
 	scheduler := NewScheduler(SchedulerConfig{
 		Store:            store,
 		Handler:          handler,
-		Logger:           debuglog.DefaultLogger,
+		Logger:           logger.Default(),
 		MaxConcurrent:    3,
 		ExecutionTimeout: 5 * time.Second,
 	})

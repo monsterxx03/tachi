@@ -6,7 +6,7 @@ import (
 
 func TestManagerCleanup_BelowLimit(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(5)
 
 	// Create 3 sessions — should not trigger cleanup
@@ -28,7 +28,7 @@ func TestManagerCleanup_BelowLimit(t *testing.T) {
 
 func TestManagerCleanup_ExceedsLimit(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(3)
 
 	// Create 5 sessions — should trigger cleanup, retaining 3
@@ -50,7 +50,7 @@ func TestManagerCleanup_ExceedsLimit(t *testing.T) {
 
 func TestManagerCleanup_ZeroMaxKeep(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(0) // no cleanup
 
 	// Create 5 sessions — should not trigger cleanup
@@ -72,7 +72,7 @@ func TestManagerCleanup_ZeroMaxKeep(t *testing.T) {
 
 func TestManagerCleanup_PreservesNewest(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(2)
 
 	// Create 4 sessions
@@ -103,7 +103,7 @@ func TestManagerCleanup_PreservesNewest(t *testing.T) {
 
 func TestManagerCleanup_PreservesCurrent(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(1)
 
 	// Create 3 sessions. The first becomes the current session.
@@ -138,7 +138,7 @@ func TestManagerCleanup_PreservesCurrent(t *testing.T) {
 
 func TestManagerCleanup_ExplicitNoop(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(100)
 
 	for range 3 {
@@ -162,7 +162,7 @@ func TestManagerCleanup_ExplicitNoop(t *testing.T) {
 // preserved during cleanup, even if they're among the oldest.
 func TestManagerCleanup_PreservesChannelSessions(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(2)
 
 	// Create 5 sessions. Mark some with ThreadID to simulate
@@ -214,7 +214,7 @@ func TestManagerCleanup_PreservesChannelSessions(t *testing.T) {
 // whose ThreadID was cleared (via /new) are still eligible for cleanup.
 func TestManagerCleanup_RemovesClearedThreadSessions(t *testing.T) {
 	store := newTempStore(t)
-	mgr := NewManagerWithStore(store)
+	mgr := NewManagerWithStore(store, nil)
 	mgr.SetMaxKeep(1)
 
 	// Create 3 sessions, all with ThreadID.

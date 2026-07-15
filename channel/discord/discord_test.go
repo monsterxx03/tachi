@@ -11,7 +11,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/pkg/channel"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // ---------------------------------------------------------------------------
@@ -267,8 +267,8 @@ func testChannel(cfg DiscordConfig) *DiscordChannel {
 	}
 }
 
-func testLogger() *debuglog.Logger {
-	return debuglog.DefaultLogger.WithSource("discord:test")
+func testLogger() *logger.Logger {
+	return logger.Default().With("source", "discord:test")
 }
 
 func TestIsAuthorized_DM(t *testing.T) {
@@ -846,7 +846,7 @@ func TestIntegrationGateway(t *testing.T) {
 		t.Fatalf("NewChannel error: %v", err)
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
 	defer cancel()
 
 	// Run should connect to gateway, then get cancelled.

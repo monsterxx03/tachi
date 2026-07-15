@@ -1,6 +1,7 @@
 package weixin
 
 import (
+	"context"
 	"crypto/md5"
 	"encoding/base64"
 	"encoding/hex"
@@ -65,13 +66,13 @@ func extractRefText(ref *RefMessage) string {
 
 // MediaRef holds the extracted metadata for a media item in an incoming message.
 type MediaRef struct {
-	Type     int        // MessageItemTypeImage, MessageItemTypeFile, MessageItemTypeVideo
-	FileName string     // Original filename (may be empty for images)
-	Media    MediaData  // CDN media info
-	AESKey   string     // hex-encoded AES key (for images)
-	FileItem *FileItem  // non-nil for file type
+	Type      int        // MessageItemTypeImage, MessageItemTypeFile, MessageItemTypeVideo
+	FileName  string     // Original filename (may be empty for images)
+	Media     MediaData  // CDN media info
+	AESKey    string     // hex-encoded AES key (for images)
+	FileItem  *FileItem  // non-nil for file type
 	ImageItem *MediaItem // non-nil for image type
-	RawSize  int        // plaintext size
+	RawSize   int        // plaintext size
 }
 
 // extractMediaItems extracts media references from message items.
@@ -146,16 +147,16 @@ func (ch *Channel) sendTextReply(toUserID, contextToken, text string) error {
 
 	resp, err := ch.cli.sendMessage(req)
 	if err != nil {
-		ch.logger.Log("weixin: sendMessage error to %s: %v", toUserID, err)
+		ch.logger.Logf(context.Background(), "weixin: sendMessage error to %s: %v", toUserID, err)
 		return err
 	}
 
 	if resp.ErrCode != 0 {
-		ch.logger.Log("weixin: sendMessage to %s: errcode=%d errmsg=%s", toUserID, resp.ErrCode, resp.ErrMsg)
+		ch.logger.Logf(context.Background(), "weixin: sendMessage to %s: errcode=%d errmsg=%s", toUserID, resp.ErrCode, resp.ErrMsg)
 		return fmt.Errorf("sendMessage errcode=%d %s", resp.ErrCode, resp.ErrMsg)
 	}
 
-	ch.logger.Log("weixin: sent text reply to %s (%d chars)", toUserID, len(text))
+	ch.logger.Logf(context.Background(), "weixin: sent text reply to %s (%d chars)", toUserID, len(text))
 	return nil
 }
 
@@ -218,7 +219,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 				return err // 4xx, don't retry.
 			}
 			if i < 2 {
-				ch.logger.Log("weixin: CDN upload retry %d: %v", i+1, err)
+				ch.logger.Logf(context.Background(), "weixin: CDN upload retry %d: %v", i+1, err)
 				time.Sleep(time.Duration(i+1) * time.Second)
 			}
 		} else {
@@ -299,7 +300,7 @@ func (ch *Channel) sendMediaReply(toUserID, contextToken string, data []byte, fi
 		return fmt.Errorf("sendMessage media errcode=%d %s", sendResp.ErrCode, sendResp.ErrMsg)
 	}
 
-	ch.logger.Log("weixin: sent media reply to %s (%s, %d bytes)", toUserID, fileName, rawSize)
+	ch.logger.Logf(context.Background(), "weixin: sent media reply to %s (%s, %d bytes)", toUserID, fileName, rawSize)
 	return nil
 }
 

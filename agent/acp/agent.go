@@ -17,7 +17,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -28,7 +28,7 @@ type TachiAgent struct {
 	version  string
 	sessions *ACPSessionManager
 	conn     *acp.AgentSideConnection
-	logger   *debuglog.Logger
+	logger   *logger.Logger
 }
 
 // NewTachiAgent creates a new ACP agent backed by the given config.
@@ -36,8 +36,8 @@ func NewTachiAgent(cfg *config.Config, version string) *TachiAgent {
 	return &TachiAgent{
 		cfg:      cfg,
 		version:  version,
+		logger:   logger.New("acp"),
 		sessions: NewACPSessionManager(),
-		logger:   debuglog.DefaultLogger,
 	}
 }
 
@@ -48,7 +48,7 @@ func (t *TachiAgent) SetConnection(conn *acp.AgentSideConnection) {
 
 // Initialize handles the ACP initialize handshake, advertising Tachi's capabilities.
 func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
-	t.logger.Log("ACP: Initialize called")
+	t.logger.Logf(context.Background(), "ACP: Initialize called")
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
@@ -83,13 +83,13 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 // Logout handles the ACP logout request.
 // Tachi doesn't have a persistent authenticated session, so this is a no-op.
 func (t *TachiAgent) Logout(_ context.Context, _ acp.LogoutRequest) (acp.LogoutResponse, error) {
-	t.logger.Log("ACP: Logout called")
+	t.logger.Logf(context.Background(), "ACP: Logout called")
 	return acp.LogoutResponse{}, nil
 }
 
 // NewSession creates a new ACP session with an independent AIAgent instance.
 func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) (acp.NewSessionResponse, error) {
-	t.logger.Log("ACP: NewSession called, cwd=%s", req.Cwd)
+	t.logger.Logf(ctx, "ACP: NewSession called, cwd=%s", req.Cwd)
 
 	cwd := req.Cwd
 	if cwd == "" {
@@ -118,6 +118,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 
 	// Create independent AIAgent (no iteration limit for ACP sessions)
 	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent.SetLogger(t.logger)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -130,7 +131,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	configureCtx := context.Background()
 	mcpMgr, err := aiAgent.Configure(configureCtx, t.cfg)
 	if err != nil {
-		t.logger.Log("ACP: agent configure warning: %v", err)
+		t.logger.Logf(ctx, "ACP: agent configure warning: %v", err)
 	}
 
 	// Connect editor-provided MCP servers (if any)
@@ -139,7 +140,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		if len(editorServers) > 0 {
 			editorTools, errs := mcpMgr.ConnectAll(configureCtx, editorServers)
 			for _, e := range errs {
-				t.logger.Log("ACP: editor MCP connect error: %v", e)
+				t.logger.Logf(ctx, "ACP: editor MCP connect error: %v", e)
 			}
 			for _, tool := range editorTools {
 				aiAgent.RegisterTool(tool)
@@ -151,9 +152,9 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	aiAgent.UnregisterTool(tools.ToolNameAskUser)
 
 	// Set up session manager for persistence
-	sm, smErr := session.NewManager()
+	sm, smErr := session.NewManager(t.logger)
 	if smErr != nil {
-		t.logger.Log("ACP: session manager init warning: %v", smErr)
+		t.logger.Logf(ctx, "ACP: session manager init warning: %v", smErr)
 	} else {
 		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
 		sm.New(resolved.Provider.Name, cwd)
@@ -199,7 +200,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		}
 	})
 
-	t.logger.Log("ACP: session created id=%s", sess.ID)
+	t.logger.Logf(ctx, "ACP: session created id=%s", sess.ID)
 	opt, _ := buildModelConfigOption(t.cfg, resolved.Provider.Name)
 	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	configOpts := []acp.SessionConfigOption{}
@@ -224,7 +225,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 		return acp.PromptResponse{}, fmt.Errorf("session not found: %s", req.SessionId)
 	}
 
-	t.logger.Log("ACP: Prompt called for session %s", sess.ID)
+	t.logger.Logf(ctx, "ACP: Prompt called for session %s", sess.ID)
 
 	// Serialize prompts within a session (defensive — ACP protocol guarantees sequential)
 	sess.mu.Lock()
@@ -252,7 +253,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 
 	// ---- Slash command interception ----
 	if cmd, args := parseSlashCommand(userMsg, sess.agent); cmd != nil {
-		t.logger.Log("ACP: slash command detected: %s (args=%q)", cmd.Name, args)
+		t.logger.Logf(ctx, "ACP: slash command detected: %s (args=%q)", cmd.Name, args)
 		stopReason, err := cmd.Handler(promptCtx, sess, t.conn, args)
 		if err != nil {
 			return acp.PromptResponse{}, err
@@ -277,7 +278,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 			if convErr == nil {
 				history = llmMsgs
 			} else {
-				t.logger.Log("ACP: Prompt ConvertSessionToLLMMessages failed: %v", convErr)
+				t.logger.Logf(ctx, "ACP: Prompt ConvertSessionToLLMMessages failed: %v", convErr)
 			}
 		}
 	}
@@ -306,7 +307,7 @@ func (t *TachiAgent) Cancel(_ context.Context, req acp.CancelNotification) error
 		return nil // session not found, silently ignore
 	}
 
-	t.logger.Log("ACP: Cancel called for session %s", sess.ID)
+	t.logger.Logf(context.Background(), "ACP: Cancel called for session %s", sess.ID)
 
 	sess.mu.Lock()
 	cancel := sess.promptCancel
@@ -325,7 +326,7 @@ func (t *TachiAgent) CloseSession(_ context.Context, req acp.CloseSessionRequest
 		return acp.CloseSessionResponse{}, nil
 	}
 
-	t.logger.Log("ACP: CloseSession called for session %s", sess.ID)
+	t.logger.Logf(context.Background(), "ACP: CloseSession called for session %s", sess.ID)
 	sess.Close()
 	t.sessions.Delete(sess.ID)
 	return acp.CloseSessionResponse{}, nil
@@ -335,7 +336,7 @@ func (t *TachiAgent) CloseSession(_ context.Context, req acp.CloseSessionRequest
 // This is an unstable ACP method — subject to change in future protocol versions.
 func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
 	sessionID := string(req.SessionId)
-	t.logger.Log("ACP: DeleteSession called for session %s", sessionID)
+	t.logger.Logf(context.Background(), "ACP: DeleteSession called for session %s", sessionID)
 
 	// Close and remove from memory if active.
 	if sess, ok := t.sessions.Get(sessionID); ok {
@@ -344,7 +345,7 @@ func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDe
 	}
 
 	// Delete from disk.
-	sm, err := session.NewManager()
+	sm, err := session.NewManager(t.logger)
 	if err != nil {
 		return acp.UnstableDeleteSessionResponse{}, fmt.Errorf("session manager: %w", err)
 	}
@@ -352,14 +353,14 @@ func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDe
 		return acp.UnstableDeleteSessionResponse{}, fmt.Errorf("delete session %s: %w", sessionID, err)
 	}
 
-	t.logger.Log("ACP: session %s deleted", sessionID)
+	t.logger.Logf(context.Background(), "ACP: session %s deleted", sessionID)
 	return acp.UnstableDeleteSessionResponse{}, nil
 }
 
 // ListSessions lists active in-memory sessions, optionally filtered by cwd.
 // Also includes recent sessions from disk that match the filter.
 func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	t.logger.Log("ACP: ListSessions called")
+	t.logger.Logf(context.Background(), "ACP: ListSessions called")
 
 	// Start with in-memory sessions
 	sessions := t.sessions.List()
@@ -388,7 +389,7 @@ func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest
 	}
 
 	// Also scan disk for recent sessions not currently in-memory
-	diskMgr, err := session.NewManager()
+	diskMgr, err := session.NewManager(t.logger)
 	if err == nil {
 		diskSessions, listErr := diskMgr.List()
 		if listErr == nil {
@@ -421,7 +422,7 @@ func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest
 // ResumeSession resumes an existing session. If the session is still in-memory,
 // it's simply acknowledged. If not, we attempt to reload from disk.
 func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
-	t.logger.Log("ACP: ResumeSession called for session %s", req.SessionId)
+	t.logger.Logf(ctx, "ACP: ResumeSession called for session %s", req.SessionId)
 
 	// Check if already in memory
 	if _, ok := t.sessions.Get(string(req.SessionId)); ok {
@@ -429,7 +430,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	}
 
 	// Try to load from disk
-	diskMgr, err := session.NewManager()
+	diskMgr, err := session.NewManager(t.logger)
 	if err != nil {
 		return acp.ResumeSessionResponse{}, fmt.Errorf("session manager: %w", err)
 	}
@@ -472,6 +473,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	}
 
 	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent.SetLogger(t.logger)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -481,7 +483,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	configureCtx := context.Background()
 	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
 	if cfgErr != nil {
-		t.logger.Log("ACP: resume configure warning: %v", cfgErr)
+		t.logger.Logf(ctx, "ACP: resume configure warning: %v", cfgErr)
 	}
 
 	aiAgent.UnregisterTool(tools.ToolNameAskUser)
@@ -506,7 +508,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		}
 	})
 
-	t.logger.Log("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
+	t.logger.Logf(ctx, "ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID)
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
 	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	configOpts := []acp.SessionConfigOption{}
@@ -532,7 +534,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 //
 // If no matching session exists, a fresh session is created (same as NewSession).
 func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest) (acp.LoadSessionResponse, error) {
-	t.logger.Log("ACP: LoadSession called, sessionId=%s, cwd=%s", req.SessionId, req.Cwd)
+	t.logger.Logf(ctx, "ACP: LoadSession called, sessionId=%s, cwd=%s", req.SessionId, req.Cwd)
 
 	cwd := req.Cwd
 	if cwd == "" {
@@ -545,7 +547,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 
 	// Try to load an existing session from disk first (before creating provider,
 	// so we can use the session's stored provider/model if available).
-	sm, smErr := session.NewManager()
+	sm, smErr := session.NewManager(t.logger)
 	var loaded *session.Session
 	if smErr == nil {
 		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
@@ -558,17 +560,17 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			// ID, so we should not silently create a different one.
 			s, loadErr := sm.Load(string(req.SessionId))
 			if loadErr != nil {
-				t.logger.Log("ACP: LoadSession cannot load sessionId=%s: %v", req.SessionId, loadErr)
+				t.logger.Logf(ctx, "ACP: LoadSession cannot load sessionId=%s: %v", req.SessionId, loadErr)
 				return acp.LoadSessionResponse{}, fmt.Errorf("session not found on disk: %s", req.SessionId)
 			}
 			loaded = s
-			t.logger.Log("ACP: LoadSession loaded by sessionId=%s", req.SessionId)
+			t.logger.Logf(ctx, "ACP: LoadSession loaded by sessionId=%s", req.SessionId)
 		} else {
 			// Fallback: scan disk by cwd (editors that don't track session IDs)
 			loaded = findLatestSessionByCwd(sm, cwd)
 		}
 	} else {
-		t.logger.Log("ACP: LoadSession session manager init warning: %v", smErr)
+		t.logger.Logf(ctx, "ACP: LoadSession session manager init warning: %v", smErr)
 		// If session manager failed AND a specific session was requested, we can't proceed.
 		if req.SessionId != "" {
 			return acp.LoadSessionResponse{}, fmt.Errorf("session manager unavailable, cannot load session: %s", req.SessionId)
@@ -603,6 +605,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 
 	// Create independent AIAgent
 	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent.SetLogger(t.logger)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetACPFileMode()
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
@@ -613,7 +616,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	configureCtx := context.Background()
 	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
 	if cfgErr != nil {
-		t.logger.Log("ACP: LoadSession configure warning: %v", cfgErr)
+		t.logger.Logf(ctx, "ACP: LoadSession configure warning: %v", cfgErr)
 	}
 
 	// Connect editor-provided MCP servers
@@ -622,7 +625,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		if len(editorServers) > 0 {
 			editorTools, errs := mcpMgr.ConnectAll(configureCtx, editorServers)
 			for _, e := range errs {
-				t.logger.Log("ACP: LoadSession editor MCP connect error: %v", e)
+				t.logger.Logf(ctx, "ACP: LoadSession editor MCP connect error: %v", e)
 			}
 			for _, tool := range editorTools {
 				aiAgent.RegisterTool(tool)
@@ -639,7 +642,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			// Session already loaded as current — AIAgent will resume from its history
 			aiAgent.SetSessionManager(sm)
 		} else {
-			t.logger.Log("ACP: LoadSession no existing session, creating new")
+			t.logger.Logf(ctx, "ACP: LoadSession no existing session, creating new")
 			sm.New(resolved.Provider.Name, cwd)
 			aiAgent.SetSessionManager(sm)
 		}
@@ -687,7 +690,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	})
 
-	t.logger.Log("ACP: session loaded id=%s", sess.ID)
+	t.logger.Logf(ctx, "ACP: session loaded id=%s", sess.ID)
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
 	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	configOpts := []acp.SessionConfigOption{}
@@ -758,7 +761,7 @@ func (t *TachiAgent) SetSessionConfigOption(_ context.Context, req acp.SetSessio
 
 	switch configID {
 	case modelConfigID:
-		if err := switchSessionModel(sess, configValue); err != nil {
+		if err := switchSessionModel(sess, configValue, t.logger); err != nil {
 			return acp.SetSessionConfigOptionResponse{}, err
 		}
 	case "mode":
@@ -808,7 +811,7 @@ func (t *TachiAgent) SetSessionMode(_ context.Context, req acp.SetSessionModeReq
 	}
 
 	modeID := string(req.ModeId)
-	t.logger.Log("ACP: SetSessionMode called for session %s, mode=%s", sess.ID, modeID)
+	t.logger.Logf(context.Background(), "ACP: SetSessionMode called for session %s, mode=%s", sess.ID, modeID)
 
 	// Delegate to the agent — it handles tool save/restore internally.
 	if err := sess.agent.SetMode(modeID); err != nil {

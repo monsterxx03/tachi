@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 const keywordExtractionPrompt = "Extract 3-5 most important search keywords from the user query. " +
@@ -23,7 +23,7 @@ type LLMKeywordExtractor struct {
 	provider llm.Provider
 	model    string
 	timeout  time.Duration
-	logger   *debuglog.Logger
+	logger   *logger.Logger
 }
 
 // NewLLMKeywordExtractor creates an extractor backed by an LLM provider.
@@ -37,7 +37,7 @@ func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Du
 		provider: provider,
 		model:    model,
 		timeout:  timeout,
-		logger:   debuglog.DefaultLogger.WithSource("memory:keyword-extractor"),
+		logger:   logger.New("memory:keyword-extractor"),
 	}
 }
 
@@ -61,7 +61,7 @@ func (e *LLMKeywordExtractor) ExtractKeywords(ctx context.Context, query string)
 		return nil, fmt.Errorf("keyword extraction LLM call: %w", err)
 	}
 
-	e.logger.Log("LLM raw response: %q", resp.Content)
+	e.logger.Logf(ctx, "LLM raw response: %q", resp.Content)
 
 	keywords := parseKeywordResponse(resp.Content)
 	if len(keywords) == 0 {

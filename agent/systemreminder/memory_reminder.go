@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // MemoryRecallReminder injects relevant memories from the memory backend
@@ -35,21 +35,21 @@ func (r MemoryRecallReminder) WrapperTag() string {
 // Generate implements the Reminder interface. Fires only on real user messages
 // (not tool-result injections). Returns nil if memory is not configured or
 // there's nothing to report.
-func (r MemoryRecallReminder) Generate(ctx Context) []string {
+func (r MemoryRecallReminder) Generate(ctx context.Context, rctx Context) []string {
 	if r.Backend == nil {
 		return nil
 	}
 	// Only fire on real user messages, not at tool-result boundaries
-	if ctx.IsToolResult {
+	if rctx.IsToolResult {
 		return nil
 	}
 	// Skip when caller explicitly suppresses recall (e.g. "tachi run" mode)
-	if ctx.SkipRecall {
+	if rctx.SkipRecall {
 		return nil
 	}
 
 	// Recall — use the user's current prompt as query for vector semantic search
-	if ctx.CurrentPrompt == "" {
+	if rctx.CurrentPrompt == "" {
 		return nil
 	}
 
@@ -68,23 +68,23 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 	recallCtx, cancel := context.WithTimeout(context.Background(), recallTimeout)
 	defer cancel()
 
-	entries, err := r.Backend.Recall(recallCtx, ctx.CurrentPrompt, limit)
+	entries, err := r.Backend.Recall(recallCtx, rctx.CurrentPrompt, limit)
 	if err != nil {
-		debuglog.DefaultLogger.Log("MemoryRecall: recall failed: %v", err)
+		logger.FromContext(ctx).Logf(ctx, "MemoryRecall: recall failed: %v", err)
 		return nil
 	}
 	if len(entries) == 0 {
-		debuglog.DefaultLogger.Log("MemoryRecall: no recall results")
+		logger.FromContext(ctx).Logf(ctx, "MemoryRecall: no recall results")
 		return nil
 	}
 
-	debuglog.DefaultLogger.Log("MemoryRecall: recall returned %d entries", len(entries))
+	logger.FromContext(ctx).Logf(ctx, "MemoryRecall: recall returned %d entries", len(entries))
 
 	// Reinforce each recalled fact to strengthen its decay state.
 	for _, e := range entries {
 		if e.ID != "" {
 			if err := r.Backend.ReinforceFact(recallCtx, e.ID); err != nil {
-				debuglog.DefaultLogger.Log("MemoryRecall: reinforce %s: %v", e.ID, err)
+				logger.FromContext(ctx).Logf(ctx, "MemoryRecall: reinforce %s: %v", e.ID, err)
 			}
 		}
 	}
@@ -119,6 +119,6 @@ func (r MemoryRecallReminder) Generate(ctx Context) []string {
 		"using the Grep tool on ~/.tachi/session/.",
 	)
 
-	debuglog.DefaultLogger.Log("MemoryRecall: injecting %d lines, %d entries", len(lines), len(entries))
+	logger.FromContext(ctx).Logf(ctx, "MemoryRecall: injecting %d lines, %d entries", len(lines), len(entries))
 	return lines
 }

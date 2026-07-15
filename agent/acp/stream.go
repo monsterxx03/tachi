@@ -10,7 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -145,7 +145,7 @@ func streamToACP(
 					lastUsage = event.Result.Usage
 					// Send turn summary (iterations + duration) as a final text update.
 					if event.Result.IterationsUsed > 0 {
-						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
+						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
 							_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 								SessionId: sessionID,
 								Update:    acp.UpdateAgentMessageText(summary),
@@ -539,7 +539,7 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 	if llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType()); convErr == nil {
 		sess.history = llmMsgs
 	} else {
-		debuglog.DefaultLogger.Log("ACP: replaySessionHistory ConvertSessionToLLMMessages failed: %v", convErr)
+		logger.FromContext(ctx).Logf(ctx, "ACP: replaySessionHistory ConvertSessionToLLMMessages failed: %v", convErr)
 	}
 }
 

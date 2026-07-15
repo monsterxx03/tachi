@@ -11,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -21,18 +22,31 @@ type RunResult struct {
 	ExitReason     string
 	Error          error
 	Usage          *llm.Usage // optional: token usage from the final turn
+	TraceID        string     // trace ID for this turn, for log correlation
 }
 
 // FormatTurnSummary returns a concise human-readable turn summary string
 // suitable for appending to the assistant's response. It includes the number
-// of iterations (API calls) and wall-clock duration, in Chinese locale format.
-// Returns empty string when both values are zero.
-func FormatTurnSummary(iterations int, duration time.Duration) string {
-	if iterations <= 0 && duration <= 0 {
+// of iterations (API calls), wall-clock duration, and optionally the trace ID.
+// Returns empty string when all values are zero/empty.
+func FormatTurnSummary(iterations int, duration time.Duration, traceID string) string {
+	if iterations <= 0 && duration <= 0 && traceID == "" {
 		return ""
 	}
-	durStr := formatTurnDuration(duration)
-	return fmt.Sprintf("\n\n*(回合: %d 次迭代, %s)*", iterations, durStr)
+	var parts []string
+	if iterations > 0 {
+		parts = append(parts, fmt.Sprintf("%d 次迭代", iterations))
+	}
+	if duration > 0 {
+		parts = append(parts, formatTurnDuration(duration))
+	}
+	if traceID != "" {
+		parts = append(parts, fmt.Sprintf("trace: %s", traceID))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\n\n*(回合: %s)*", strings.Join(parts, ", "))
 }
 
 // formatTurnDuration formats a time.Duration as a concise human-readable string
@@ -225,7 +239,7 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		rctx := a.buildReminderContext(true, false)
-		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
+		wrappedUser := a.reminderCollector.WrapUserMessage(ctx, userMessage, rctx)
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
@@ -266,7 +280,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		reminderIsFirst := isFirstMessage || (len(history) > 0 && !historyHasReminder(history))
 
 		rctx := a.buildReminderContext(reminderIsFirst, false)
-		wrappedUser := a.reminderCollector.WrapUserMessage(userMessage, rctx)
+		wrappedUser := a.reminderCollector.WrapUserMessage(ctx, userMessage, rctx)
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 
 		userMsg := llm.Message{Role: "user", Content: wrappedUser}
@@ -298,11 +312,11 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 			wd, _ := os.Getwd()
 			if _, err := a.sessionManager.New(providerName, wd); err != nil {
-				a.logger.Log("Agent: failed to create session: %v", err)
+				a.logger.Logf(ctx, "Agent: failed to create session: %v", err)
 			}
 			// Update logger with session ID for debug log tracking
 			if cur := a.sessionManager.Current(); cur != nil {
-				a.logger = a.logger.WithSessionID(cur.ID)
+				a.logger = a.logger.With("session_id", cur.ID)
 			}
 			// Notify memory backend that a new session has started
 			a.StartSessionMemory()
@@ -355,6 +369,14 @@ func (a *AIAgent) runAgentLoop(
 	// Record the turn start time for Duration tracking in RunResult.
 	a.turnStart = time.Now()
 
+	// Generate a trace ID for this turn and inject it into the context.
+	// The logger's textHandler extracts trace_id from ctx automatically,
+	// so all log calls within this turn will carry it — no need to mutate a.logger.
+	traceID := logger.NewTraceID()
+	a.turnTraceID = traceID
+	ctx = logger.WithTraceID(ctx, traceID)
+	ctx = logger.WithLogger(ctx, a.logger)
+
 	// Capture the final message slice (including all assistant/tool messages
 	// appended during the loop) so callers can read it via GetLastMessages()
 	// after the event channel is drained. The closure captures messages by
@@ -406,7 +428,7 @@ func (a *AIAgent) runAgentLoop(
 			ch <- AgentEvent{Type: AgentEventAutoCompactStart}
 			summary, newHistory, err := a.doCompact(ctx, messages)
 			if err != nil {
-				a.logger.Log("Auto compact failed: %v", err)
+				a.logger.Logf(ctx, "Auto compact failed: %v", err)
 				ch <- AgentEvent{Type: AgentEventAutoCompactDone, Result: &RunResult{Error: err}}
 				// Non-fatal: continue with the existing (over-large)
 				// history. The next iteration will try again — eventual
@@ -415,7 +437,7 @@ func (a *AIAgent) runAgentLoop(
 				oldMsgCount := len(messages)
 				messages = newHistory
 				a.setCompactCooldown()
-				a.logger.Log("Auto compact completed, new history has %d messages", len(messages))
+				a.logger.Logf(ctx, "Auto compact completed, new history has %d messages", len(messages))
 				ch <- AgentEvent{
 					Type:           AgentEventAutoCompactDone,
 					CompactSummary: summary,
@@ -510,7 +532,7 @@ func (a *AIAgent) handleToolCallFinish(
 		}
 		return false
 	}
-	a.logger.Log("Agent: executeToolCalls returned %d tool messages for %d tool calls",
+	a.logger.Logf(ctx, "Agent: executeToolCalls returned %d tool messages for %d tool calls",
 		len(toolMsgs), len(acc.toolCalls))
 	*messages = append(*messages, toolMsgs...)
 	*lengthRetries = 0
@@ -520,7 +542,7 @@ func (a *AIAgent) handleToolCallFinish(
 		for _, tc := range acc.toolCalls {
 			if fp := tools.ExtractFilePath(tc.Function.Name, tc.Function.Arguments); fp != "" {
 				if syncErr := a.lspManager.SyncFile(ctx, fp); syncErr != nil {
-					a.logger.Log("LSP: file sync error for %s: %v", fp, syncErr)
+					a.logger.Logf(ctx, "LSP: file sync error for %s: %v", fp, syncErr)
 				}
 			}
 		}
@@ -541,7 +563,7 @@ func (a *AIAgent) handleToolCallFinish(
 		case steerText := <-a.steerRespCh:
 			if steerText != "" {
 				*messages = append(*messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
-				a.logger.Log("Agent: steer: injected RoleSteer msg, steerText=%q", truncateForLog(steerText, 80))
+				a.logger.Logf(ctx, "Agent: steer: injected RoleSteer msg, steerText=%q", truncateForLog(steerText, 80))
 				a.recordSession(&session.Message{
 					Type:    session.MessageTypeUser,
 					Content: steerText,
@@ -560,9 +582,9 @@ func (a *AIAgent) handleToolCallFinish(
 	for _, tc := range acc.toolCalls {
 		rctx.ToolNames = append(rctx.ToolNames, tc.Function.Name)
 	}
-	if block := a.reminderCollector.Collect(rctx); block != "" {
+	if block := a.reminderCollector.Collect(ctx, rctx); block != "" {
 		*messages = append(*messages, llm.Message{Role: "user", Content: block})
-		a.logger.Log("Agent: loop reminder injected, block=%q", truncateForLog(block, 200))
+		a.logger.Logf(ctx, "Agent: loop reminder injected, block=%q", truncateForLog(block, 200))
 	}
 
 	return true
@@ -574,7 +596,7 @@ const maxLengthContinueRetries = 3
 // records partial output, appends a continuation prompt, and handles
 // exhaustion after too many retries.
 func (a *AIAgent) handleLengthFinish(
-	_ context.Context,
+	ctx context.Context,
 	acc *streamAccumulator,
 	messages *[]llm.Message,
 	ch chan<- AgentEvent,
@@ -582,7 +604,7 @@ func (a *AIAgent) handleLengthFinish(
 	lengthRetries *int,
 ) bool {
 	*lengthRetries++
-	a.logger.Log("Agent: text=%s, finish_reason=%s, continuation retry %d/%d", acc.text.String(), acc.finishReason, *lengthRetries, maxLengthContinueRetries)
+	a.logger.Logf(context.Background(), "Agent: text=%s, finish_reason=%s, continuation retry %d/%d", acc.text.String(), acc.finishReason, *lengthRetries, maxLengthContinueRetries)
 
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
@@ -599,7 +621,7 @@ func (a *AIAgent) handleLengthFinish(
 	*messages = append(*messages, msg)
 
 	if *lengthRetries >= maxLengthContinueRetries {
-		a.logger.Log("Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
+		a.logger.Logf(context.Background(), "Agent: length continuation exhausted after %d retries", maxLengthContinueRetries)
 		// Return the partial output as a normal turn completion instead
 		// of an error — the user already saw the text streaming, and
 		// discarding it (or showing a red error) is worse than delivering
@@ -615,6 +637,7 @@ func (a *AIAgent) handleLengthFinish(
 				ExitReason:     "length_exhausted",
 				Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
 				Usage:          acc.usage,
+				TraceID:        a.turnTraceID,
 			},
 		}
 
@@ -640,7 +663,7 @@ func (a *AIAgent) handleLengthFinish(
 
 	// Wrap the continuation message with reminders
 	rctx := a.buildReminderContext(false, false)
-	wrappedContinuation := a.reminderCollector.WrapUserMessage(continuationText, rctx)
+	wrappedContinuation := a.reminderCollector.WrapUserMessage(ctx, continuationText, rctx)
 
 	*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
 	return true
@@ -665,7 +688,7 @@ func (a *AIAgent) handleStopFinish(
 
 	ch <- AgentEvent{
 		Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), ExitReason: "stop", Usage: acc.usage},
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), ExitReason: "stop", Usage: acc.usage, TraceID: a.turnTraceID},
 	}
 
 	// Store turn-level memory after a complete response

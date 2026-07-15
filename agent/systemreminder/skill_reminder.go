@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 )
@@ -54,14 +55,14 @@ func (r *SkillListReminder) SetProvider(provider SkillMetaProvider) {
 	r.dirty = true
 }
 
-func (r *SkillListReminder) Generate(ctx Context) []string {
+func (r *SkillListReminder) Generate(ctx context.Context, rctx Context) []string {
 	if r.provider == nil {
 		return nil
 	}
 	// Don't inject skill list at tool-result boundaries — it's not transient
 	// contextual information and the LLM already knows what skills are available
 	// from the previous injection.
-	if ctx.IsToolResult {
+	if rctx.IsToolResult {
 		return nil
 	}
 	// Only fire when the skill list has changed (or on the very first call,

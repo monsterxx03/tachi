@@ -29,17 +29,17 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 	for {
 		select {
 		case <-ctx.Done():
-			ch.logger.Log("weixin: polling loop exiting (ctx cancelled)")
+			ch.logger.Logf(ctx, "weixin: polling loop exiting (ctx cancelled)")
 			return nil
 		default:
 		}
 
 		resp, err := ch.cli.getUpdates(buf)
 		if err != nil {
-			ch.logger.Log("weixin: getUpdates error: %v", err)
+			ch.logger.Logf(ctx, "weixin: getUpdates error: %v", err)
 			failures++
 			if failures >= maxConsecutiveFailures {
-				ch.logger.Log("weixin: %d consecutive failures, backing off for %v", failures, longBackoff)
+				ch.logger.Logf(ctx, "weixin: %d consecutive failures, backing off for %v", failures, longBackoff)
 				select {
 				case <-ctx.Done():
 					return nil
@@ -64,7 +64,7 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 
 		// Handle session expiry.
 		if resp.ErrCode == ErrCodeSessionExpired {
-			ch.logger.Log("weixin: session expired, pausing for %v", sessionExpiredPause)
+			ch.logger.Logf(ctx, "weixin: session expired, pausing for %v", sessionExpiredPause)
 			select {
 			case <-ctx.Done():
 				return nil
@@ -75,10 +75,10 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 		}
 
 		if resp.Ret != 0 {
-			ch.logger.Log("weixin: getUpdates ret=%d, errcode=%d", resp.Ret, resp.ErrCode)
+			ch.logger.Logf(ctx, "weixin: getUpdates ret=%d, errcode=%d", resp.Ret, resp.ErrCode)
 			failures++
 			if failures >= maxConsecutiveFailures {
-				ch.logger.Log("weixin: %d consecutive non-zero ret, backing off for %v", failures, longBackoff)
+				ch.logger.Logf(ctx, "weixin: %d consecutive non-zero ret, backing off for %v", failures, longBackoff)
 				select {
 				case <-ctx.Done():
 					return nil
@@ -123,7 +123,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	var attachments []channel.Attachment
 	if len(mediaRefs) > 0 {
 		attachments = ch.processMedia(mediaRefs, msg.FromUserID)
-		ch.logger.Log("weixin: processed %d media items for msg %d -> %d attachments",
+		ch.logger.Logf(ctx, "weixin: processed %d media items for msg %d -> %d attachments",
 			len(mediaRefs), msg.MessageID, len(attachments))
 	}
 
@@ -134,7 +134,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 
 	// Check allowlist.
 	if !ch.store.isUserAllowed(ch.accountID, msg.FromUserID) {
-		ch.logger.Log("weixin: user %s not in allowlist, ignoring", msg.FromUserID)
+		ch.logger.Logf(ctx, "weixin: user %s not in allowlist, ignoring", msg.FromUserID)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		Attachments: attachments,
 	}
 
-	ch.logger.Log("weixin: dispatching msg from %s (thread=%s): %s", msg.FromUserID, threadID, truncate(text, 100))
+	ch.logger.Logf(ctx, "weixin: dispatching msg from %s (thread=%s): %s", msg.FromUserID, threadID, truncate(text, 100))
 
 	// Start typing indicator while LLM processes.
 	typingDone := make(chan struct{})
@@ -169,12 +169,12 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		// Message was injected into an already-running agent turn via steer.
 		// The original conversation will produce the final reply — nothing to
 		// send here.
-		ch.logger.Log("weixin: msg steered for thread=%s", threadID)
+		ch.logger.Logf(ctx, "weixin: msg steered for thread=%s", threadID)
 		return
 	}
 
 	if result.Err != nil {
-		ch.logger.Log("weixin: handler error for %s: %v", threadID, result.Err)
+		ch.logger.Logf(ctx, "weixin: handler error for %s: %v", threadID, result.Err)
 		// Send error message back to user.
 		errorText := fmt.Sprintf("❌ %v", result.Err)
 		ch.sendTextReply(msg.FromUserID, msg.ContextToken, errorText)
@@ -184,7 +184,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 	// Send text reply if there's content.
 	if result.Reply.Content != "" {
 		if err := ch.sendTextReply(msg.FromUserID, msg.ContextToken, result.Reply.Content); err != nil {
-			ch.logger.Log("weixin: sendTextReply error: %v", err)
+			ch.logger.Logf(ctx, "weixin: sendTextReply error: %v", err)
 		}
 	}
 
@@ -194,11 +194,11 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		mediaType := channelAttachmentToILinkMediaType(att.Type)
 		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
-			ch.logger.Log("weixin: resolve attachment %s: %v", att.FileName, err)
+			ch.logger.Logf(ctx, "weixin: resolve attachment %s: %v", att.FileName, err)
 			continue
 		}
 		if err := ch.sendMediaReply(msg.FromUserID, msg.ContextToken, data, att.FileName, mediaType); err != nil {
-			ch.logger.Log("weixin: sendMediaReply error for %s: %v", att.FileName, err)
+			ch.logger.Logf(ctx, "weixin: sendMediaReply error for %s: %v", att.FileName, err)
 		}
 	}
 }
@@ -210,7 +210,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 func (ch *Channel) runTyping(ctx context.Context, userID string, done <-chan struct{}) {
 	ticket, err := ch.typingTickets.get(userID, "")
 	if err != nil {
-		ch.logger.Log("weixin: typing ticket fetch failed for %s: %v", userID, err)
+		ch.logger.Logf(ctx, "weixin: typing ticket fetch failed for %s: %v", userID, err)
 		return
 	}
 
@@ -242,7 +242,7 @@ func (ch *Channel) sendTyping(userID, ticket string, status int) {
 		BaseInfo:     BaseInfo{ChannelVersion: defaultChannelVersion},
 	}
 	if err := ch.cli.sendTyping(req); err != nil {
-		ch.logger.Log("weixin: sendTyping error: %v", err)
+		ch.logger.Logf(context.Background(), "weixin: sendTyping error: %v", err)
 	}
 }
 

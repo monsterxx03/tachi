@@ -1,6 +1,7 @@
 package discord
 
 import (
+	"context"
 	"bytes"
 	"os"
 	"strconv"
@@ -380,11 +381,11 @@ func (ch *DiscordChannel) sendTextWithMedia(channelID string, content string) (i
 	for _, att := range attachments {
 		data, err := channel.ResolveAttachmentData(att)
 		if err != nil {
-			ch.logger.Log("discord: send media resolve %s: %v", att.FileName, err)
+			ch.logger.Logf(context.Background(), "discord: send media resolve %s: %v", att.FileName, err)
 			continue
 		}
 		if _, err := ch.session.ChannelFileSend(channelID, att.FileName, bytes.NewReader(data)); err != nil {
-			ch.logger.Log("discord: send media %s error: %v", att.FileName, err)
+			ch.logger.Logf(context.Background(), "discord: send media %s error: %v", att.FileName, err)
 			continue
 		}
 		sent++

@@ -54,7 +54,7 @@ func (m *Manager) cancelThreadTurn(threadID string) {
 // and return immediately with Steered=true.
 func (m *Manager) buildHandler() channel.MessageHandler {
 	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-		m.logger.Log("channel: recv thread=%s id=%s len=%d",
+		m.logger.Logf(context.Background(), "channel: recv thread=%s id=%s len=%d",
 			msg.ThreadID, msg.MessageID, len(msg.Content))
 
 		// ---- Channel Whisper guard ----
@@ -164,9 +164,9 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				ta.mu.Unlock()
 				select {
 				case ta.askUserRespCh <- tools.AskUserResult{Answers: answers}:
-					m.logger.Log("channel: AskUser answer delivered for thread=%s (%d entries)", msg.ThreadID, len(answers))
+					m.logger.Logf(context.Background(), "channel: AskUser answer delivered for thread=%s (%d entries)", msg.ThreadID, len(answers))
 				default:
-					m.logger.Log("channel: AskUser answer dropped (channel full) for thread=%s", msg.ThreadID)
+					m.logger.Logf(context.Background(), "channel: AskUser answer dropped (channel full) for thread=%s", msg.ThreadID)
 				}
 				return channel.HandlerResult{Steered: true}
 			}
@@ -178,7 +178,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			if isCompactCmd || isSkillActivation {
 				ta.mu.Unlock()
 				m.cancelThreadTurn(msg.ThreadID)
-				m.logger.Log("channel: cancelled running turn for %s, restarting with compact/skill", msg.ThreadID)
+				m.logger.Logf(context.Background(), "channel: cancelled running turn for %s, restarting with compact/skill", msg.ThreadID)
 				// Activate a fresh thread for the new turn.
 				ta = m.activateThread(msg.ThreadID, ctx)
 				ta.isCompact = isCompactCmd
@@ -187,7 +187,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				ta.pending = append(ta.pending, msg.Content)
 				pendingLen := len(ta.pending)
 				ta.mu.Unlock()
-				m.logger.Log("channel: steer queued thread=%s pending=%d", msg.ThreadID, pendingLen)
+				m.logger.Logf(context.Background(), "channel: steer queued thread=%s pending=%d", msg.ThreadID, pendingLen)
 				return channel.HandlerResult{Steered: true}
 			}
 		} else {
@@ -251,7 +251,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			if isCompactCmd {
 				reply, err := m.finalizeCompactResult(msg.ThreadID, result.text)
 				if err != nil {
-					m.logger.Log("channel: finalizeCompactResult thread=%s err=%v", msg.ThreadID, err)
+					m.logger.Logf(context.Background(), "channel: finalizeCompactResult thread=%s err=%v", msg.ThreadID, err)
 					return channel.HandlerResult{
 						Reply: channel.OutgoingMessage{
 							ThreadID: msg.ThreadID,
@@ -322,7 +322,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	defer func() {
 		// Unblock the handler on panic.
 		if r := recover(); r != nil {
-			m.logger.Log("channel: agent panic for thread=%s: %v", msg.ThreadID, r)
+			m.logger.Logf(ctx, "channel: agent panic for thread=%s: %v", msg.ThreadID, r)
 			select {
 			case ta.resultCh <- handlerResult{err: fmt.Errorf("agent panic: %v", r)}:
 			default:
@@ -383,7 +383,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 					// survives restarts.
 					sess.WorkingDir = ca.workDir
 					if err := sm.UpdateMeta(sess); err != nil {
-						m.logger.Log("channel: persist workDir for thread %s: %v", msg.ThreadID, err)
+						m.logger.Logf(ctx, "channel: persist workDir for thread %s: %v", msg.ThreadID, err)
 					}
 				}
 			}
@@ -397,7 +397,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	priorHistory := diskHistory
 	if ca != nil && ca.history != nil {
 		priorHistory = ca.history
-		m.logger.Log("channel: thread=%s using cached history (%d msgs)", msg.ThreadID, len(ca.history))
+		m.logger.Logf(ctx, "channel: thread=%s using cached history (%d msgs)", msg.ThreadID, len(ca.history))
 	}
 
 	// Steer channel + user content (text + images).
@@ -443,7 +443,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	if ca != nil && !ta.cancelled {
 		if msgs := aiAgent.GetLastMessages(); len(msgs) > 0 {
 			ca.history = msgs
-			m.logger.Log("channel: thread=%s updated cached history (%d msgs)", msg.ThreadID, len(msgs))
+			m.logger.Logf(ctx, "channel: thread=%s updated cached history (%d msgs)", msg.ThreadID, len(msgs))
 		}
 	}
 

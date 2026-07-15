@@ -111,7 +111,7 @@ func TestJSONRPCConn(t *testing.T) {
 
 	var result json.RawMessage
 	params := map[string]string{"hello": "world"}
-	if err := conn.Call(context.Background(), "test/echo", params, &result); err != nil {
+	if err := conn.Call(t.Context(), "test/echo", params, &result); err != nil {
 		t.Fatalf("Call failed: %v", err)
 	}
 
@@ -148,7 +148,7 @@ func TestLSPServerLifecycle(t *testing.T) {
 
 	// Test goToDefinition
 	var locations []Location
-	err := server.Call(context.Background(), "textDocument/definition", map[string]any{
+	err := server.Call(t.Context(), "textDocument/definition", map[string]any{
 		"textDocument": map[string]any{"uri": "file:///test/foo.go"},
 		"position":     map[string]any{"line": 5, "character": 3},
 	}, &locations)
@@ -167,7 +167,7 @@ func TestLSPServerLifecycle(t *testing.T) {
 
 	// Test hover
 	var hover Hover
-	err = server.Call(context.Background(), "textDocument/hover", map[string]any{
+	err = server.Call(t.Context(), "textDocument/hover", map[string]any{
 		"textDocument": map[string]any{"uri": "file:///test/foo.go"},
 		"position":     map[string]any{"line": 5, "character": 3},
 	}, &hover)
@@ -180,7 +180,7 @@ func TestLSPServerLifecycle(t *testing.T) {
 
 	// Test findReferences (empty result)
 	var refs []Location
-	err = server.Call(context.Background(), "textDocument/references", map[string]any{
+	err = server.Call(t.Context(), "textDocument/references", map[string]any{
 		"textDocument": map[string]any{"uri": "file:///test/foo.go"},
 		"position":     map[string]any{"line": 5, "character": 3},
 		"context":      map[string]any{"includeDeclaration": true},

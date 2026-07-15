@@ -4,7 +4,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // forkTool creates a suitable copy of a tool for a child agent.
@@ -21,13 +21,13 @@ func forkTool(t tools.Tool) tools.Tool {
 
 // ForkConfig controls child agent creation from a parent AIAgent.
 type ForkConfig struct {
-	Provider      llm.Provider     // required — LLM provider
-	MaxIterations int              // 0 = unlimited
-	MaxTokens     int              // 0 = default (4096)
-	AllowedTools  []string         // empty = copy all parent tools
-	NoMCP         bool             // true = don't inherit shared MCP Manager
-	Logger        *debuglog.Logger // nil = use parent logger
-	SessionID     string           // logging hint
+	Provider      llm.Provider   // required — LLM provider
+	MaxIterations int            // 0 = unlimited
+	MaxTokens     int            // 0 = default (4096)
+	AllowedTools  []string       // empty = copy all parent tools
+	NoMCP         bool           // true = don't inherit shared MCP Manager
+	Logger        *logger.Logger // nil = use parent logger
+	SessionID     string         // logging hint
 }
 
 // ForkedAgent wraps a restricted child AIAgent created by Fork().

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -60,7 +61,7 @@ func (a *AIAgent) SetMode(mode string) error {
 		for name, tool := range a.savedTools {
 			if a.toolRegistry.GetTool(name) == nil {
 				a.toolRegistry.Register(tool)
-				a.logger.Log("Agent: restored tool %s for auto mode", name)
+				a.logger.Logf(context.Background(), "Agent: restored tool %s for auto mode", name)
 			}
 		}
 		a.savedTools = make(map[string]tools.Tool)
@@ -75,7 +76,7 @@ func (a *AIAgent) SetMode(mode string) error {
 			if dd, ok := tool.(tools.DestructiveDetector); ok && dd.IsDestructive() {
 				a.savedTools[name] = tool
 				a.toolRegistry.Unregister(name)
-				a.logger.Log("Agent: removed tool %s for %s mode", name, mode)
+				a.logger.Logf(context.Background(), "Agent: removed tool %s for %s mode", name, mode)
 			}
 		}
 	}
@@ -87,7 +88,7 @@ func (a *AIAgent) SetMode(mode string) error {
 		if curr := a.sessionManager.Current(); curr != nil {
 			curr.Mode = mode
 			if err := a.sessionManager.UpdateMeta(curr); err != nil {
-				a.logger.Log("Agent: failed to persist mode %s: %v", mode, err)
+				a.logger.Logf(context.Background(), "Agent: failed to persist mode %s: %v", mode, err)
 			}
 		}
 	}

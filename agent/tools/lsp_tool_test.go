@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -18,7 +17,7 @@ func TestLSPToolInvalidArgs(t *testing.T) {
 	tool := NewLSPTool(nil)
 
 	// JSON parse error.
-	result, err := tool.ExecuteContext(context.Background(), `{bad json`)
+	result, err := tool.ExecuteContext(t.Context(), `{bad json`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -57,7 +56,7 @@ func TestLSPToolNoServer(t *testing.T) {
 	tool := NewLSPTool(m)
 
 	input := `{"operation": "goToDefinition", "path": "/tmp/test.py", "line": 1, "character": 1}`
-	result, err := tool.ExecuteContext(context.Background(), input)
+	result, err := tool.ExecuteContext(t.Context(), input)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

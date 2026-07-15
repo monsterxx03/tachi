@@ -3,7 +3,6 @@
 package lsp
 
 import (
-	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -53,7 +52,7 @@ func Add(a, b int) int {
 	}
 
 	server := NewLSPServer("gopls", cfg, rootURI)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 
 	// Start gopls.
@@ -61,7 +60,7 @@ func Add(a, b int) int {
 	if err := server.Start(ctx); err != nil {
 		t.Fatalf("start gopls: %v", err)
 	}
-	defer server.Stop(context.Background())
+	defer server.Stop(t.Context())
 
 	if !server.IsHealthy() {
 		t.Fatal("gopls not healthy after start")

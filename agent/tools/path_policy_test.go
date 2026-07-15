@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 )
@@ -44,7 +43,7 @@ func TestPathPolicy_Nil(t *testing.T) {
 }
 
 func TestPathPolicy_Context(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// No policy in context.
 	if p := GetPathPolicy(ctx); p != nil {

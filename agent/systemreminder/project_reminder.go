@@ -1,14 +1,17 @@
 package systemreminder
 
-import "os"
+import (
+	"context"
+	"os"
+)
 
 // ProjectContextReminder injects the contents of .tachi.md (if present) on the
 // first message of a brand-new conversation. This gives the model awareness of
 // the project context without bloating the static system prompt.
 type ProjectContextReminder struct{}
 
-func (ProjectContextReminder) Generate(ctx Context) []string {
-	if !ctx.IsFirstMessage {
+func (ProjectContextReminder) Generate(ctx context.Context, rctx Context) []string {
+	if !rctx.IsFirstMessage {
 		return nil
 	}
 

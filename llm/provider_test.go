@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"context"
 	"testing"
 )
 
@@ -28,7 +27,7 @@ func TestUserAgent_VersionSet(t *testing.T) {
 }
 
 func TestWithSessionID_StoresAndRetrieves(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	id := "session-12345"
 
 	ctx = WithSessionID(ctx, id)
@@ -42,7 +41,7 @@ func TestWithSessionID_StoresAndRetrieves(t *testing.T) {
 }
 
 func TestSessionIDFromCtx_NotFound(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 	_, ok := SessionIDFromCtx(ctx)
 	if ok {
 		t.Error("SessionIDFromCtx() on bare context = true, want false")
@@ -50,7 +49,7 @@ func TestSessionIDFromCtx_NotFound(t *testing.T) {
 }
 
 func TestSessionIDFromCtx_EmptyString(t *testing.T) {
-	ctx := WithSessionID(context.Background(), "")
+	ctx := WithSessionID(t.Context(), "")
 	got, ok := SessionIDFromCtx(ctx)
 	if !ok {
 		t.Error("SessionIDFromCtx() = false, want true (empty string is a valid value)")

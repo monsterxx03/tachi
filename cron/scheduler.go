@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/robfig/cron/v3"
 )
 
@@ -23,7 +23,7 @@ const MaxJobs = 50
 type Scheduler struct {
 	store   *Store
 	handler TriggerHandler
-	logger  *debuglog.Logger
+	logger  *logger.Logger
 
 	// Underlying cron engine.
 	cron *cron.Cron
@@ -44,7 +44,7 @@ type Scheduler struct {
 type SchedulerConfig struct {
 	Store            *Store
 	Handler          TriggerHandler
-	Logger           *debuglog.Logger
+	Logger           *logger.Logger
 	MaxConcurrent    int           // default: 3
 	ExecutionTimeout time.Duration // default: 5m
 }
@@ -59,15 +59,12 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 	if timeout <= 0 {
 		timeout = 5 * time.Minute
 	}
-	logger := cfg.Logger
-	if logger == nil {
-		logger = debuglog.DefaultLogger
-	}
+	l := cfg.Logger
 
 	return &Scheduler{
 		store:            cfg.Store,
 		handler:          cfg.Handler,
-		logger:           logger.WithSource("cron"),
+		logger:           l.With("source", "cron"),
 		sem:              make(chan struct{}, maxConc),
 		executionTimeout: timeout,
 		cron: cron.New(
@@ -75,7 +72,7 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 				cron.Minute|cron.Hour|cron.Dom|cron.Month|cron.Dow|cron.Descriptor,
 			)),
 			cron.WithLocation(time.Local),
-			cron.WithLogger(cron.VerbosePrintfLogger(loggerWriter{logger})),
+			cron.WithLogger(cron.VerbosePrintfLogger(loggerWriter{l})),
 		),
 		entryMap: make(map[string]cron.EntryID),
 	}
@@ -100,7 +97,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 		j := job
 		entryID, addErr := s.addCronEntry(j)
 		if addErr != nil {
-			s.logger.Log("cron: failed to add entry for job %s (%s): %v", j.ID, j.Name, addErr)
+			s.logger.Logf(context.Background(), "cron: failed to add entry for job %s (%s): %v", j.ID, j.Name, addErr)
 			continue
 		}
 		s.entryMap[j.ID] = entryID
@@ -108,7 +105,7 @@ func (s *Scheduler) Start(ctx context.Context) error {
 	}
 
 	s.cron.Start()
-	s.logger.Log("cron: scheduler started with %d active jobs", activeCount)
+	s.logger.Logf(context.Background(), "cron: scheduler started with %d active jobs", activeCount)
 	return nil
 }
 
@@ -120,7 +117,7 @@ func (s *Scheduler) Stop() {
 	}
 	s.mu.Unlock()
 	<-s.cron.Stop().Done()
-	s.logger.Log("cron: scheduler stopped")
+	s.logger.Logf(context.Background(), "cron: scheduler stopped")
 }
 
 // List returns a copy of all cron jobs.
@@ -198,7 +195,7 @@ func (s *Scheduler) Create(job *Job) (*Job, error) {
 		}
 	}
 
-	s.logger.Log("cron: created job %s (%s) schedule=%s", job.ID, job.Name, job.Schedule)
+	s.logger.Logf(context.Background(), "cron: created job %s (%s) schedule=%s", job.ID, job.Name, job.Schedule)
 	return s.copyJob(job), nil
 }
 
@@ -258,13 +255,13 @@ func (s *Scheduler) Update(id string, opts UpdateOpts) (*Job, error) {
 	if scheduleChanged && job.Status == JobStatusActive {
 		s.stopJobTimer(job.ID)
 		if err := s.startJobTimer(job); err != nil {
-			s.logger.Log("cron: failed to reschedule job %s: %v", job.ID, err)
+			s.logger.Logf(context.Background(), "cron: failed to reschedule job %s: %v", job.ID, err)
 			job.Status = JobStatusPaused
 			s.store.Update(job)
 		}
 	}
 
-	s.logger.Log("cron: updated job %s (%s)", job.ID, job.Name)
+	s.logger.Logf(context.Background(), "cron: updated job %s (%s)", job.ID, job.Name)
 	return s.copyJob(job), nil
 }
 
@@ -281,7 +278,7 @@ func (s *Scheduler) Delete(id string) error {
 		return fmt.Errorf("cron: delete job: %w", err)
 	}
 
-	s.logger.Log("cron: deleted job %s", id)
+	s.logger.Logf(context.Background(), "cron: deleted job %s", id)
 	return nil
 }
 
@@ -306,7 +303,7 @@ func (s *Scheduler) Pause(id string) (*Job, error) {
 
 	s.stopJobTimer(id)
 
-	s.logger.Log("cron: paused job %s (%s)", job.ID, job.Name)
+	s.logger.Logf(context.Background(), "cron: paused job %s (%s)", job.ID, job.Name)
 	return s.copyJob(job), nil
 }
 
@@ -330,13 +327,13 @@ func (s *Scheduler) Resume(id string) (*Job, error) {
 	}
 
 	if err := s.startJobTimer(job); err != nil {
-		s.logger.Log("cron: failed to resume job %s: %v", job.ID, err)
+		s.logger.Logf(context.Background(), "cron: failed to resume job %s: %v", job.ID, err)
 		job.Status = JobStatusPaused
 		s.store.Update(job)
 		return nil, fmt.Errorf("cron: failed to schedule job: %w", err)
 	}
 
-	s.logger.Log("cron: resumed job %s (%s)", job.ID, job.Name)
+	s.logger.Logf(context.Background(), "cron: resumed job %s (%s)", job.ID, job.Name)
 	return s.copyJob(job), nil
 }
 
@@ -394,11 +391,11 @@ func (s *Scheduler) fire(job *Job) {
 	case s.sem <- struct{}{}:
 		defer func() { <-s.sem }()
 	default:
-		s.logger.Log("cron: skipping job %s (%s): max concurrent reached", job.ID, job.Name)
+		s.logger.Logf(context.Background(), "cron: skipping job %s (%s): max concurrent reached", job.ID, job.Name)
 		return
 	}
 
-	s.logger.Log("cron: triggering job %s (%s)", job.ID, job.Name)
+	s.logger.Logf(context.Background(), "cron: triggering job %s (%s)", job.ID, job.Name)
 
 	ctx, cancel := context.WithTimeout(s.ctx, s.executionTimeout)
 	defer cancel()
@@ -419,15 +416,15 @@ func (s *Scheduler) fire(job *Job) {
 	if err != nil {
 		latest.LastRunStatus = "error"
 		latest.LastRunError = err.Error()
-		s.logger.Log("cron: job %s (%s) failed after %v: %v", job.ID, job.Name, elapsed, err)
+		s.logger.Logf(context.Background(), "cron: job %s (%s) failed after %v: %v", job.ID, job.Name, elapsed, err)
 	} else {
 		latest.LastRunStatus = "success"
 		latest.LastRunError = ""
-		s.logger.Log("cron: job %s (%s) succeeded after %v", job.ID, job.Name, elapsed)
+		s.logger.Logf(context.Background(), "cron: job %s (%s) succeeded after %v", job.ID, job.Name, elapsed)
 	}
 
 	if updateErr := s.store.Update(latest); updateErr != nil {
-		s.logger.Log("cron: failed to update last_run for job %s: %v", job.ID, updateErr)
+		s.logger.Logf(context.Background(), "cron: failed to update last_run for job %s: %v", job.ID, updateErr)
 	}
 
 	isOneshot := latest.Type == JobTypeOneshot
@@ -437,9 +434,9 @@ func (s *Scheduler) fire(job *Job) {
 	// (Delete also acquires s.mu).
 	if isOneshot {
 		if delErr := s.Delete(job.ID); delErr != nil {
-			s.logger.Log("cron: failed to clean up oneshot job %s: %v", job.ID, delErr)
+			s.logger.Logf(context.Background(), "cron: failed to clean up oneshot job %s: %v", job.ID, delErr)
 		} else {
-			s.logger.Log("cron: oneshot job %s (%s) completed and removed", job.ID, job.Name)
+			s.logger.Logf(context.Background(), "cron: oneshot job %s (%s) completed and removed", job.ID, job.Name)
 		}
 	}
 }
@@ -450,16 +447,16 @@ func (s *Scheduler) copyJob(job *Job) *Job {
 	return &cp
 }
 
-// loggerWriter adapts debuglog.Logger to io.Writer for robfig/cron.
+// loggerWriter adapts logger.Logger to io.Writer for robfig/cron.
 type loggerWriter struct {
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
 func (w loggerWriter) Write(p []byte) (n int, err error) {
-	w.logger.Log("cron: %s", string(p))
+	w.logger.Logf(context.Background(), "cron: %s", string(p))
 	return len(p), nil
 }
 
 func (w loggerWriter) Printf(format string, args ...any) {
-	w.logger.Log("cron: "+format, args...)
+	w.logger.Logf(context.Background(), "cron: "+format, args...)
 }

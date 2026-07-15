@@ -1,9 +1,10 @@
 package systemreminder
 
 import (
+	"context"
 	"fmt"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // IterationWarningReminder warns when the agent loop is running low on
@@ -13,21 +14,21 @@ type IterationWarningReminder struct {
 	Threshold int
 }
 
-func (r IterationWarningReminder) Generate(ctx Context) []string {
-	if ctx.MaxIterations <= 0 || ctx.IterationsLeft <= 0 {
+func (r IterationWarningReminder) Generate(ctx context.Context, rctx Context) []string {
+	if rctx.MaxIterations <= 0 || rctx.IterationsLeft <= 0 {
 		return nil
 	}
 	if r.Threshold <= 0 {
 		return nil
 	}
-	if ctx.IterationsLeft > r.Threshold {
+	if rctx.IterationsLeft > r.Threshold {
 		return nil
 	}
 	line := fmt.Sprintf(
 		"Iteration budget: %d of %d iterations remaining. Complete your work as efficiently as possible.",
-		ctx.IterationsLeft, ctx.MaxIterations,
+		rctx.IterationsLeft, rctx.MaxIterations,
 	)
-	debuglog.DefaultLogger.Log("systemreminder: IterationWarningReminder firing (threshold=%d): %q", r.Threshold, line)
+	logger.FromContext(ctx).Logf(ctx, "systemreminder: IterationWarningReminder firing (threshold=%d): %q", r.Threshold, line)
 	return []string{line}
 }
 
@@ -38,21 +39,21 @@ type TokenWarningReminder struct {
 	ThresholdPct int
 }
 
-func (r TokenWarningReminder) Generate(ctx Context) []string {
-	if ctx.ContextWindow <= 0 || ctx.InputTokens <= 0 {
+func (r TokenWarningReminder) Generate(ctx context.Context, rctx Context) []string {
+	if rctx.ContextWindow <= 0 || rctx.InputTokens <= 0 {
 		return nil
 	}
 	if r.ThresholdPct <= 0 {
 		return nil
 	}
-	pct := float64(ctx.InputTokens) / float64(ctx.ContextWindow) * 100
+	pct := float64(rctx.InputTokens) / float64(rctx.ContextWindow) * 100
 	if pct < float64(r.ThresholdPct) {
 		return nil
 	}
 	line := fmt.Sprintf(
 		"Context window usage: %.0f%% (%d / %d input tokens). Be concise and minimize unnecessary output.",
-		pct, ctx.InputTokens, ctx.ContextWindow,
+		pct, rctx.InputTokens, rctx.ContextWindow,
 	)
-	debuglog.DefaultLogger.Log("systemreminder: TokenWarningReminder firing (threshold=%d%%): %q", r.ThresholdPct, line)
+	logger.FromContext(ctx).Logf(ctx, "systemreminder: TokenWarningReminder firing (threshold=%d%%): %q", r.ThresholdPct, line)
 	return []string{line}
 }

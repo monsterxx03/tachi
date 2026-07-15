@@ -71,7 +71,7 @@ func TestSystemScheduler_ContextCancellation(t *testing.T) {
 		t.Fatalf("Register: %v", err)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	ss.Start(ctx)
 
 	// Let the job fire.

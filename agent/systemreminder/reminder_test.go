@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"context"
 	"strings"
 	"testing"
 	"time"
@@ -8,7 +9,7 @@ import (
 
 func TestDateReminder_Fires(t *testing.T) {
 	r := DateReminder{}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
 	})
@@ -26,7 +27,7 @@ func TestDateReminder_Fires(t *testing.T) {
 func TestDateReminder_AlwaysFires(t *testing.T) {
 	r := DateReminder{}
 	// DateReminder fires on every real user message, regardless of IsFirstMessage or LastMessageDate.
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line (always fires), got %d", len(lines))
 	}
@@ -34,7 +35,7 @@ func TestDateReminder_AlwaysFires(t *testing.T) {
 
 func TestDateReminder_SkipsOnToolResult(t *testing.T) {
 	r := DateReminder{}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IsFirstMessage: false,
 		Now:            time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
 		IsToolResult:   true,
@@ -46,7 +47,7 @@ func TestDateReminder_SkipsOnToolResult(t *testing.T) {
 
 func TestDateReminder_AlwaysFiresWithDateChanged(t *testing.T) {
 	r := DateReminder{}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IsFirstMessage:  false,
 		LastMessageDate: "2025-07-14",
 		Now:             time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
@@ -61,7 +62,7 @@ func TestDateReminder_AlwaysFiresWithDateChanged(t *testing.T) {
 
 func TestIterationWarningReminder_Fires(t *testing.T) {
 	r := IterationWarningReminder{Threshold: 5}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IterationsLeft: 5,
 		MaxIterations:  10,
 	})
@@ -75,7 +76,7 @@ func TestIterationWarningReminder_Fires(t *testing.T) {
 
 func TestIterationWarningReminder_AboveThreshold(t *testing.T) {
 	r := IterationWarningReminder{Threshold: 5}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IterationsLeft: 6,
 		MaxIterations:  10,
 	})
@@ -86,7 +87,7 @@ func TestIterationWarningReminder_AboveThreshold(t *testing.T) {
 
 func TestIterationWarningReminder_ZeroLeft(t *testing.T) {
 	r := IterationWarningReminder{Threshold: 5}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IterationsLeft: 0,
 		MaxIterations:  10,
 	})
@@ -97,7 +98,7 @@ func TestIterationWarningReminder_ZeroLeft(t *testing.T) {
 
 func TestIterationWarningReminder_ZeroThreshold(t *testing.T) {
 	r := IterationWarningReminder{Threshold: 0}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IterationsLeft: 1,
 		MaxIterations:  10,
 	})
@@ -108,7 +109,7 @@ func TestIterationWarningReminder_ZeroThreshold(t *testing.T) {
 
 func TestTokenWarningReminder_Fires(t *testing.T) {
 	r := TokenWarningReminder{ThresholdPct: 80}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		InputTokens:   110000,
 		ContextWindow: 128000,
 	})
@@ -122,7 +123,7 @@ func TestTokenWarningReminder_Fires(t *testing.T) {
 
 func TestTokenWarningReminder_BelowThreshold(t *testing.T) {
 	r := TokenWarningReminder{ThresholdPct: 80}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		InputTokens:   100000,
 		ContextWindow: 128000,
 	})
@@ -133,7 +134,7 @@ func TestTokenWarningReminder_BelowThreshold(t *testing.T) {
 
 func TestTokenWarningReminder_ZeroThreshold(t *testing.T) {
 	r := TokenWarningReminder{ThresholdPct: 0}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		InputTokens:   110000,
 		ContextWindow: 128000,
 	})
@@ -147,12 +148,12 @@ func TestCollector_Empty(t *testing.T) {
 		IterationWarningReminder{Threshold: 5},
 		TokenWarningReminder{ThresholdPct: 80},
 	)
-	result := c.Collect(Context{
-		IsFirstMessage:  false,
-		IterationsLeft:  10,
-		MaxIterations:   10,
-		InputTokens:     1000,
-		ContextWindow:   128000,
+	result := c.Collect(t.Context(), Context{
+		IsFirstMessage: false,
+		IterationsLeft: 10,
+		MaxIterations:  10,
+		InputTokens:    1000,
+		ContextWindow:  128000,
 	})
 	if result != "" {
 		t.Errorf("expected empty, got: %s", result)
@@ -161,7 +162,7 @@ func TestCollector_Empty(t *testing.T) {
 
 func TestCollector_FirstMessage(t *testing.T) {
 	c := NewCollector(DateReminder{})
-	result := c.Collect(Context{
+	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
@@ -181,11 +182,11 @@ func TestCollector_MultipleReminders(t *testing.T) {
 		DateReminder{},
 		IterationWarningReminder{Threshold: 5},
 	)
-	result := c.Collect(Context{
-		IsFirstMessage:  true,
-		IterationsLeft:  5,
-		MaxIterations:   10,
-		Now:              time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+	result := c.Collect(t.Context(), Context{
+		IsFirstMessage: true,
+		IterationsLeft: 5,
+		MaxIterations:  10,
+		Now:            time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if !strings.Contains(result, "Sunday, June 1, 2025") {
 		t.Errorf("expected date, got: %s", result)
@@ -200,7 +201,7 @@ func TestCollector_MultipleReminders(t *testing.T) {
 
 func TestWrapUserMessage_NoReminders(t *testing.T) {
 	c := NewCollector()
-	result := c.WrapUserMessage("hello", Context{})
+	result := c.WrapUserMessage(t.Context(), "hello", Context{})
 	if result != "hello" {
 		t.Errorf("expected unchanged message, got: %s", result)
 	}
@@ -208,7 +209,7 @@ func TestWrapUserMessage_NoReminders(t *testing.T) {
 
 func TestWrapUserMessage_WithReminders(t *testing.T) {
 	c := NewCollector(DateReminder{})
-	result := c.WrapUserMessage("hello", Context{
+	result := c.WrapUserMessage(t.Context(), "hello", Context{
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
@@ -222,7 +223,7 @@ func TestWrapUserMessage_WithReminders(t *testing.T) {
 
 func TestGitReminder_FirstMessage(t *testing.T) {
 	r := GitReminder{}
-	lines := r.Generate(Context{
+	lines := r.Generate(t.Context(), Context{
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 7, 15, 0, 0, 0, 0, time.UTC),
 	})
@@ -251,7 +252,7 @@ func TestGitReminder_FirstMessage(t *testing.T) {
 
 func TestGitReminder_NotFirstMessage(t *testing.T) {
 	r := GitReminder{}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if lines != nil {
 		t.Errorf("expected nil when not first message, got: %v", lines)
 	}
@@ -259,7 +260,7 @@ func TestGitReminder_NotFirstMessage(t *testing.T) {
 
 func TestCollector_WithGitReminder(t *testing.T) {
 	c := NewCollector(DateReminder{}, GitReminder{})
-	result := c.Collect(Context{
+	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 	})
@@ -293,7 +294,7 @@ func TestSkillListReminder_FiresOnFirstMessage(t *testing.T) {
 	r := NewSkillListReminder(&mockSkillMetaProvider{
 		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
 	})
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line on first message, got %d", len(lines))
 	}
@@ -310,12 +311,12 @@ func TestSkillListReminder_SkipsOnNonFirstWhenClean(t *testing.T) {
 		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
 	})
 	// First call: fires, clears dirty
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) != 1 {
 		t.Fatalf("first call should fire, got %d", len(lines))
 	}
 	// Second call: should skip
-	lines = r.Generate(Context{IsFirstMessage: false})
+	lines = r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 0 {
 		t.Errorf("expected no output when not first message and clean, got %d lines", len(lines))
 	}
@@ -325,7 +326,7 @@ func TestSkillListReminder_SkipsOnToolResult(t *testing.T) {
 	r := NewSkillListReminder(&mockSkillMetaProvider{
 		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
 	})
-	lines := r.Generate(Context{IsFirstMessage: false, IsToolResult: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false, IsToolResult: true})
 	if len(lines) != 0 {
 		t.Errorf("expected no output on tool result, got %d lines", len(lines))
 	}
@@ -336,12 +337,12 @@ func TestSkillListReminder_FiresWhenDirty(t *testing.T) {
 		metas: []SkillMetaRecord{{Name: "test", Description: "a test skill"}},
 	})
 	// First call clears dirty
-	r.Generate(Context{IsFirstMessage: true})
+	r.Generate(t.Context(), Context{IsFirstMessage: true})
 
 	// Simulate skill_create: make dirty again
 	r.dirty = true
 
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected to fire when dirty, got %d lines", len(lines))
 	}
@@ -355,7 +356,7 @@ func TestSkillListReminder_FiresWhenDirty(t *testing.T) {
 
 func TestSkillListReminder_NilProvider(t *testing.T) {
 	r := NewSkillListReminder(nil)
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if lines != nil {
 		t.Errorf("expected nil from nil provider, got %v", lines)
 	}
@@ -363,7 +364,7 @@ func TestSkillListReminder_NilProvider(t *testing.T) {
 
 func TestSkillListReminder_EmptySkills(t *testing.T) {
 	r := NewSkillListReminder(&mockSkillMetaProvider{})
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if lines != nil {
 		t.Errorf("expected nil from empty skills, got %v", lines)
 	}
@@ -377,14 +378,14 @@ type mockTaggedReminder struct {
 	content []string
 }
 
-func (m *mockTaggedReminder) Generate(_ Context) []string { return m.content }
-func (m *mockTaggedReminder) WrapperTag() string          { return m.tag }
+func (m *mockTaggedReminder) Generate(_ context.Context, _ Context) []string { return m.content }
+func (m *mockTaggedReminder) WrapperTag() string                             { return m.tag }
 
 func TestTaggedReminder_WrappedInOwnTag(t *testing.T) {
 	c := NewCollector(
 		&mockTaggedReminder{tag: "relevant-memories", content: []string{"memory 1", "memory 2"}},
 	)
-	result := c.Collect(Context{IsFirstMessage: true})
+	result := c.Collect(t.Context(), Context{IsFirstMessage: true})
 	if !strings.Contains(result, "<relevant-memories>") {
 		t.Errorf("expected <relevant-memories> tag, got: %s", result)
 	}
@@ -404,9 +405,9 @@ func TestTaggedReminder_MixedWithDefault(t *testing.T) {
 		DateReminder{},
 		&mockTaggedReminder{tag: "relevant-memories", content: []string{"memory 1"}},
 	)
-	result := c.Collect(Context{
-		IsFirstMessage:  true,
-		Now:              time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
+	result := c.Collect(t.Context(), Context{
+		IsFirstMessage: true,
+		Now:            time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 	})
 	// Should have both blocks
 	if !strings.Contains(result, "<system-reminder>") {
@@ -433,7 +434,7 @@ func TestTaggedReminder_EmptyGenerate_NoBlock(t *testing.T) {
 	c := NewCollector(
 		&mockTaggedReminder{tag: "relevant-memories", content: nil},
 	)
-	result := c.Collect(Context{IsFirstMessage: true})
+	result := c.Collect(t.Context(), Context{IsFirstMessage: true})
 	if result != "" {
 		t.Errorf("expected empty when no reminders fire, got: %s", result)
 	}

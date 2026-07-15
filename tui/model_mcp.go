@@ -303,7 +303,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 		}
 
 		if err := mcp.RunOAuthFlow(ctx, srv, statusFn); err != nil {
-			m.logger.Log("MCP: OAuth flow failed for %q: %v", srv.Name, err)
+			m.logger.Logf(context.Background(), "MCP: OAuth flow failed for %q: %v", srv.Name, err)
 			if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); !ok {
 				ch <- fmt.Sprintf("OAuth failed: %v", err)
 			}
@@ -343,7 +343,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 			sibTools, sibErr := m.mcpManager.Reconnect(sibCtx, sib)
 			sibCancel()
 			if sibErr != nil {
-				m.logger.Log("MCP: sibling reconnect %q failed: %v", sib.Name, sibErr)
+				m.logger.Logf(context.Background(), "MCP: sibling reconnect %q failed: %v", sib.Name, sibErr)
 				continue
 			}
 			sibCount := m.agent.AddDeferredMCPTools(sibTools)

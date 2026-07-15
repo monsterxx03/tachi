@@ -42,12 +42,12 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	// --- Memory backend (before skills — buildReminderCollector reads a.memory) ---
 	if cfg.Memory.Type != "" {
 		memCfg := cfg.Memory.ToMemoryConfig()
-		backend, err := memory.New(cfg.Memory.Type, memCfg)
+		backend, err := memory.New(cfg.Memory.Type, memCfg, a.logger)
 		if err != nil {
-			a.logger.Log("Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
+			a.logger.Logf(ctx, "Memory: failed to init %s backend: %v", cfg.Memory.Type, err)
 		} else {
 			a.memory = &MemoryState{Backend: backend}
-			a.logger.Log("Memory: using %s backend", cfg.Memory.Type)
+			a.logger.Logf(ctx, "Memory: using %s backend", cfg.Memory.Type)
 
 			// Wire keyword extractor for topic backend.
 			// Requires an LLM provider — skip when nil (e.g. `tachi tools`).
@@ -62,18 +62,18 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 							sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 							if err == nil {
 								kwProvider, kwModel = sp, resolved.Model
-								a.logger.Log("Memory: using keyword provider %q (%s/%s)", kpName, resolved.Type, resolved.Model)
+								a.logger.Logf(ctx, "Memory: using keyword provider %q (%s/%s)", kpName, resolved.Type, resolved.Model)
 							}
 						}
 					}
 					if kwProvider == a.provider {
-						a.logger.Log("Memory: keyword_provider %q not resolved, falling back to main provider", kpName)
+						a.logger.Logf(ctx, "Memory: keyword_provider %q not resolved, falling back to main provider", kpName)
 					}
 				}
 
 				timeout := cfg.Memory.Timeout
 				tb.SetKeywordExtractor(NewLLMKeywordExtractor(kwProvider, kwModel, timeout))
-				a.logger.Log("Memory: keyword extractor wired for topic backend")
+				a.logger.Logf(ctx, "Memory: keyword extractor wired for topic backend")
 			}
 		}
 	}
@@ -103,7 +103,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		var err error
 		mgr, err = a.InitMCPAsync(ctx, cfg)
 		if err != nil {
-			a.logger.Log("MCP: failed to start async init: %v", err)
+			a.logger.Logf(ctx, "MCP: failed to start async init: %v", err)
 		}
 	}
 
@@ -127,7 +127,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.reminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
 			Provider: a.lspManager,
 		})
-		a.logger.Log("LSP: initialized with %d server(s)", len(lspCfg.Servers))
+		a.logger.Logf(ctx, "LSP: initialized with %d server(s)", len(lspCfg.Servers))
 	}
 
 	return mgr, nil
@@ -194,7 +194,7 @@ func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config)
 
 	interval := cfg.MCPToolRefresh.RefreshInterval()
 	if interval <= 0 {
-		a.logger.Log("MCP: tool list refresh disabled")
+		a.logger.Logf(ctx, "MCP: tool list refresh disabled")
 		return
 	}
 
@@ -207,7 +207,7 @@ func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config)
 		}
 	}
 	if !hasHTTPServer {
-		a.logger.Log("MCP: no HTTP servers, skipping tool list refresher")
+		a.logger.Logf(ctx, "MCP: no HTTP servers, skipping tool list refresher")
 		return
 	}
 
@@ -227,7 +227,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 		fullName := prefix + name
 		if a.toolRegistry.GetTool(fullName) != nil {
 			a.toolRegistry.Unregister(fullName)
-			a.logger.Log("MCP: refresh unregistered %s from tool registry", fullName)
+			a.logger.Logf(context.Background(), "MCP: refresh unregistered %s from tool registry", fullName)
 		}
 	}
 
@@ -240,7 +240,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 			// Re-register with the updated tool instance
 			a.toolRegistry.Unregister(fullName)
 			a.RegisterTool(t)
-			a.logger.Log("MCP: refresh re-registered %s with updated schema", fullName)
+			a.logger.Logf(context.Background(), "MCP: refresh re-registered %s with updated schema", fullName)
 		}
 	}
 
@@ -252,7 +252,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 	// 4. Log summary
 	totalChanges := len(delta.Added) + len(delta.Removed) + len(delta.Modified)
 	if totalChanges > 0 {
-		a.logger.Log("MCP: refresh applied %d changes on %q (+%d -%d ~%d)",
+		a.logger.Logf(context.Background(), "MCP: refresh applied %d changes on %q (+%d -%d ~%d)",
 			totalChanges, delta.ServerName,
 			len(delta.Added), len(delta.Removed), len(delta.Modified))
 	}
@@ -269,8 +269,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 // Thread-safe: tools are registered via the (now thread-safe) Registry,
 // and the deferred pool has its own mutex.
 func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
-	mgr := mcp.NewManager(cfg.ToolResult.MaxResultChars(), cfg.ToolResult.ResultFileDir())
-	mgr.SetLogger(a.logger)
+	mgr := mcp.NewManager(ctx, cfg.ToolResult.MaxResultChars(), cfg.ToolResult.ResultFileDir(), a.logger)
 	a.mcpManager = mgr
 
 	// Register MCPSearchTools immediately so the LLM can discover tools
@@ -278,7 +277,7 @@ func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Ma
 	// nothing until MCP servers finish connecting.
 	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr.DiscoveredSet())
 	a.RegisterTool(searchTool)
-	a.logger.Log("MCP: registered MCPSearchTools tool (async init, %d servers)",
+	a.logger.Logf(ctx, "MCP: registered MCPSearchTools tool (async init, %d servers)",
 		len(cfg.MCPServers))
 
 	// Connect and discover tools in the background
@@ -292,15 +291,15 @@ func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Ma
 // Runs in a background goroutine started by InitMCPAsync.
 func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) {
 	defer a.mcpManager.MarkInitDone()
-	defer a.logger.Log("MCP: async init completed")
+	defer a.logger.Logf(ctx, "MCP: async init completed")
 
 	autoLoad, all, errs := a.mcpManager.PopulateFromConnect(ctx, cfg)
 	for _, err := range errs {
-		a.logger.Log("MCP: load error: %v", err)
+		a.logger.Logf(ctx, "MCP: load error: %v", err)
 		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
 	if len(all) == 0 {
-		a.logger.Log("MCP: no tools discovered from any server")
+		a.logger.Logf(ctx, "MCP: no tools discovered from any server")
 		return
 	}
 
@@ -312,7 +311,7 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 		a.RegisterTool(t)
 	}
 	if len(autoLoad) > 0 {
-		a.logger.Log("MCP: %d tools auto-registered async", len(autoLoad))
+		a.logger.Logf(ctx, "MCP: %d tools auto-registered async", len(autoLoad))
 	}
 
 	pool := a.mcpManager.Pool()
@@ -329,7 +328,7 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 	// Register DeferredToolReminder only if there are undiscovered tools
 	if discovered < total {
 		a.reminderCollector.AddReminder(a.deferredToolReminder)
-		a.logger.Log("MCP: DeferredToolReminder added (%d undiscovered of %d)",
+		a.logger.Logf(ctx, "MCP: DeferredToolReminder added (%d undiscovered of %d)",
 			total-discovered, total)
 	}
 
@@ -363,7 +362,7 @@ func (a *AIAgent) MCPReady() <-chan struct{} {
 // Returns the loaded session metadata alongside the messages so callers can
 // rebuild the provider to match the session's original provider/model.
 func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Message, []session.Message, *session.Session, error) {
-	sm, err := session.NewManager()
+	sm, err := session.NewManager(a.logger)
 	if err != nil {
 		return nil, nil, nil, fmt.Errorf("session manager: %w", err)
 	}
@@ -384,7 +383,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	// Restore working directory if recorded
 	if latest.WorkingDir != "" {
 		if err := os.Chdir(latest.WorkingDir); err != nil {
-			a.logger.Log("Agent: failed to chdir to %s: %v", latest.WorkingDir, err)
+			a.logger.Logf(context.Background(), "Agent: failed to chdir to %s: %v", latest.WorkingDir, err)
 		}
 	}
 
@@ -404,7 +403,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 			} else {
 				a.lastInputTokens = sessionMsgs[i].Usage.InputTokens
 			}
-			a.logger.Log("Agent: restored lastInputTokens=%d from session message", a.lastInputTokens)
+			a.logger.Logf(context.Background(), "Agent: restored lastInputTokens=%d from session message", a.lastInputTokens)
 			break
 		}
 	}
@@ -421,7 +420,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	a.sessionManager = sm
 	// Update logger with session ID for debug log tracking
 	if cur := a.sessionManager.Current(); cur != nil {
-		a.logger = a.logger.WithSessionID(cur.ID)
+		a.logger = a.logger.With("session_id", cur.ID)
 	}
 	// Notify memory backend that the resumed session is active
 	a.StartSessionMemory()
@@ -493,5 +492,4 @@ func (a *AIAgent) buildReminderCollector() {
 	}
 
 	a.reminderCollector = systemreminder.NewCollector(reminders...)
-	a.reminderCollector.SetLogger(a.logger)
 }

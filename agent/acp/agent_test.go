@@ -1,7 +1,6 @@
 package acp
 
 import (
-	"context"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -16,14 +15,14 @@ func TestListSessions_FilterByCwd(t *testing.T) {
 	ta := NewTachiAgent(cfg, "test")
 
 	// Add sessions with different cwds (in-memory only — no disk scan needed)
-	ta.sessions.New(context.Background(), "/home/user/project-a", nil, nil, nil, nil)
-	ta.sessions.New(context.Background(), "/home/user/project-b", nil, nil, nil, nil)
-	ta.sessions.New(context.Background(), "/home/user/project-a", nil, nil, nil, nil)
+	ta.sessions.New(t.Context(), "/home/user/project-a", nil, nil, nil, nil)
+	ta.sessions.New(t.Context(), "/home/user/project-b", nil, nil, nil, nil)
+	ta.sessions.New(t.Context(), "/home/user/project-a", nil, nil, nil, nil)
 
 	// Filter by cwd — only checks in-memory sessions first, then disk.
 	// Since we can't control disk sessions in unit tests, just verify in-memory filtering works.
 	cwd := "/home/user/project-a"
-	resp, err := ta.ListSessions(context.Background(), acp.ListSessionsRequest{Cwd: &cwd})
+	resp, err := ta.ListSessions(t.Context(), acp.ListSessionsRequest{Cwd: &cwd})
 	require.NoError(t, err)
 	// Should have at least 2 from in-memory
 	found := 0

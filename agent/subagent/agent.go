@@ -9,7 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -21,7 +21,7 @@ type Agent interface {
 
 	// Shared services
 	SessionManager() *session.Manager
-	Logger()         *debuglog.Logger
+	Logger() *logger.Logger
 
 	// Tool registry — used to copy tools from parent to child agents
 	ToolNames() []string
@@ -29,7 +29,7 @@ type Agent interface {
 
 	// NewChildAgent creates a fully configured child agent with the given
 	// logger, provider, iteration budget, and allowed tool set.
-	NewChildAgent(logger *debuglog.Logger, provider llm.Provider,
+	NewChildAgent(logger *logger.Logger, provider llm.Provider,
 		maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
 }
 

@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -18,16 +19,16 @@ import (
 // step not yet marked "completed").
 type PlanTrackingReminder struct{}
 
-func (r PlanTrackingReminder) Generate(ctx Context) []string {
+func (r PlanTrackingReminder) Generate(ctx context.Context, rctx Context) []string {
 	// Don't fire on the first message of a new conversation — there's no plan yet.
-	if ctx.IsFirstMessage {
+	if rctx.IsFirstMessage {
 		return nil
 	}
-	if ctx.SessionID == "" {
+	if rctx.SessionID == "" {
 		return nil
 	}
 
-	plan := findActivePlan(ctx.SessionID)
+	plan := findActivePlan(rctx.SessionID)
 	if plan == nil {
 		return nil
 	}

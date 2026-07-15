@@ -627,7 +627,7 @@ func TestAgentLoop_SessionRecording(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 	a.SetSessionManager(sm)
 
 	ch := a.RunConversationStream(t.Context(), nil, "my message", "", llm.ChatOptions{MaxTokens: 4096})

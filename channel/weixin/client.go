@@ -2,6 +2,7 @@ package weixin
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/binary"
@@ -13,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // API base URLs.
@@ -35,13 +36,13 @@ type client struct {
 
 	// Default timeouts per endpoint, in seconds.
 	getUpdatesTimeout   time.Duration
-	sendMessageTimeout   time.Duration
-	getUploadURLTimeout  time.Duration
-	getConfigTimeout     time.Duration
-	sendTypingTimeout    time.Duration
-	qrStatusTimeout      time.Duration
+	sendMessageTimeout  time.Duration
+	getUploadURLTimeout time.Duration
+	getConfigTimeout    time.Duration
+	sendTypingTimeout   time.Duration
+	qrStatusTimeout     time.Duration
 
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
 func newClient() *client {
@@ -49,13 +50,13 @@ func newClient() *client {
 		http:                &http.Client{Timeout: 60 * time.Second},
 		baseURL:             defaultAPIBaseURL,
 		getUpdatesTimeout:   35 * time.Second,
-		sendMessageTimeout:   15 * time.Second,
-		getUploadURLTimeout:  15 * time.Second,
-		getConfigTimeout:     10 * time.Second,
-		sendTypingTimeout:    10 * time.Second,
-		qrStatusTimeout:      35 * time.Second,
-		botAgent:             defaultBotAgent,
-		logger:              debuglog.DefaultLogger.WithSource("channel:weixin-client"),
+		sendMessageTimeout:  15 * time.Second,
+		getUploadURLTimeout: 15 * time.Second,
+		getConfigTimeout:    10 * time.Second,
+		sendTypingTimeout:   10 * time.Second,
+		qrStatusTimeout:     35 * time.Second,
+		botAgent:            defaultBotAgent,
+		logger:              logger.New("channel.weixin"),
 	}
 }
 
@@ -139,7 +140,7 @@ func (c *client) doWithTimeout(method, url string, body []byte, timeout time.Dur
 
 	// getUpdates is long-polling — skip request log to avoid noise.
 	if !isGetUpdatesPath(url) {
-		c.logger.Log("weixin-client: %s %s", method, url)
+		c.logger.Logf(context.Background(), "weixin-client: %s %s", method, url)
 	}
 	return hc.Do(req)
 }
@@ -165,7 +166,7 @@ func apiPost[Resp any](c *client, path string, reqBody any, timeout time.Duratio
 
 	// getUpdates is long-polling — skip response log to avoid noise.
 	if !isGetUpdatesPath(path) {
-		c.logger.Log("weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+		c.logger.Logf(context.Background(), "weixin-client: POST %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
 	}
 
 	var result Resp
@@ -189,7 +190,7 @@ func apiGet[Resp any](c *client, path string, timeout time.Duration) (*Resp, err
 		return nil, fmt.Errorf("read response for %s: %w", path, err)
 	}
 
-	c.logger.Log("weixin-client: GET %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
+	c.logger.Logf(context.Background(), "weixin-client: GET %s → %d %s", path, resp.StatusCode, string(respBytes[:min(len(respBytes), 500)]))
 
 	var result Resp
 	if err := json.Unmarshal(respBytes, &result); err != nil {
@@ -207,7 +208,7 @@ func (c *client) cdnUpload(url string, data []byte) (encryptedParam string, err 
 	}
 	req.Header.Set("Content-Type", "application/octet-stream")
 
-	c.logger.Log("weixin-client: CDN POST %s (%d bytes)", url, len(data))
+	c.logger.Logf(context.Background(), "weixin-client: CDN POST %s (%d bytes)", url, len(data))
 	resp, err := hc.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("CDN upload: %w", err)
@@ -231,7 +232,7 @@ func (c *client) cdnDownload(url string) ([]byte, error) {
 		return nil, fmt.Errorf("create CDN download request: %w", err)
 	}
 
-	c.logger.Log("weixin-client: CDN GET %s", url)
+	c.logger.Logf(context.Background(), "weixin-client: CDN GET %s", url)
 	resp, err := hc.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("CDN download: %w", err)

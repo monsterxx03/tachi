@@ -8,7 +8,7 @@ import (
 	"testing"
 
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 func TestIsTextExtension(t *testing.T) {
@@ -115,7 +115,7 @@ func TestSaveFileAndFilesDir(t *testing.T) {
 	ch := &Channel{
 		accountID: "test-bot@im.bot",
 		cli:       newClient(),
-		logger:    debuglog.DefaultLogger.WithSource("channel:weixin-test"),
+		logger:    logger.Default().With("source", "channel:weixin-test"),
 	}
 
 	// Verify filesDir path structure: <tmp>/weixin/files/test-bot-im-bot
@@ -169,7 +169,7 @@ func TestFilesDirUsesWeixinStateDir(t *testing.T) {
 	ch := &Channel{
 		accountID: "my-bot",
 		cli:       newClient(),
-		logger:    debuglog.DefaultLogger.WithSource("channel:weixin-test"),
+		logger:    logger.Default().With("source", "channel:weixin-test"),
 	}
 
 	dir := ch.filesDir()

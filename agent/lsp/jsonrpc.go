@@ -14,10 +14,10 @@ import (
 // wire format (Content-Length header framing). It handles concurrent
 // Call/Notify and dispatches server-initiated requests/notifications.
 type jsonrpcConn struct {
-	reader   *bufio.Reader
-	writer   io.WriteCloser
-	closed   atomic.Bool
-	writeMu  sync.Mutex
+	reader  *bufio.Reader
+	writer  io.WriteCloser
+	closed  atomic.Bool
+	writeMu sync.Mutex
 
 	// pending responses: request ID → response channel
 	pending   map[string]chan<- jsonrpcMessage

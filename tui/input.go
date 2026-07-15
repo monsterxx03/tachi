@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,8 +10,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
-
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 type InputSubmitMsg string
@@ -49,10 +49,10 @@ type InputArea struct {
 	pasteBuffer    string
 	pasteThreshold int
 
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
-func NewInputArea(historyMax int, historyPath string) InputArea {
+func NewInputArea(historyMax int, historyPath string, l *logger.Logger) InputArea {
 	ta := textarea.New()
 	ta.Placeholder = "Send a message... (Enter to send, Shift+Enter for newline; Ctrl+P/N history)"
 	// Only show the "> " prompt on the first visual line. Wrapped continuation
@@ -76,20 +76,20 @@ func NewInputArea(historyMax int, historyPath string) InputArea {
 	ta.SetStyles(styles)
 	ta.Focus()
 
-	history := make([]string, 0)
-	if historyMax > 0 && historyPath != "" {
-		history = loadInputHistoryFile(historyPath, historyMax)
-	}
-	return InputArea{
+	ia := InputArea{
 		textarea:       ta,
 		enabled:        true,
-		history:        history,
+		history:        make([]string, 0),
 		historyMax:     historyMax,
 		histIdx:        -1,
 		historyPath:    historyPath,
 		pasteThreshold: 5,
-		logger:         debuglog.DefaultLogger,
+		logger:         l,
 	}
+	if historyMax > 0 && historyPath != "" {
+		ia.history = ia.loadInputHistoryFile(historyPath, historyMax)
+	}
+	return ia
 }
 
 func (i *InputArea) SetWidth(w int) {
@@ -181,7 +181,7 @@ func (i *InputArea) handlePaste(text string) (InputArea, tea.Cmd) {
 	// File drag-and-drop detection: if the pasted text looks like file
 	// path(s) and they exist on disk, wrap them as @-references.
 	if wrapped, ok := i.wrapDroppedFiles(text); ok {
-		i.logger.Log("input: detected dragged file(s): %q → %q", text, wrapped)
+		i.logger.Logf(context.Background(), "input: detected dragged file(s): %q → %q", text, wrapped)
 		i.textarea.InsertString(wrapped)
 		return *i, nil
 	}
@@ -495,8 +495,8 @@ func (i *InputArea) pushHistoryLine(line string) {
 		i.history = i.history[1:]
 	}
 	if i.historyPath != "" {
-		if err := saveInputHistoryFile(i.historyPath, i.history); err != nil {
-			i.logger.Log("input history: save: %v", err)
+		if err := i.saveInputHistoryFile(i.historyPath, i.history); err != nil {
+			i.logger.Logf(context.Background(), "input history: save: %v", err)
 		}
 	}
 }
@@ -556,7 +556,7 @@ func (i *InputArea) updateAtFileCompletions(val string) {
 		return // No change, skip search
 	}
 
-	matches, err := searchAtFiles(query)
+	matches, err := i.searchAtFiles(query)
 	if err != nil || len(matches) == 0 {
 		i.clearAtFileCompletions()
 		return

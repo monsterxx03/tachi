@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
@@ -59,7 +60,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventToolConfirmation:
-		m.logger.Log("TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
+		m.logger.Logf(context.Background(), "TUI: Received AgentEventToolConfirmation, diff length: %d", len(event.ToolDiff))
 		m.pendingConfirm = &pendingConfirm{
 			toolName: event.ToolName,
 			toolID:   event.ToolID,
@@ -75,14 +76,14 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if len(event.ToolDiff) > 100 {
 			runes := []rune(event.ToolDiff)
 			preview := string(runes[:100])
-			m.logger.Log("TUI: diff preview: %s...", preview)
+			m.logger.Logf(context.Background(), "TUI: diff preview: %s...", preview)
 		} else {
-			m.logger.Log("TUI: diff: %s", event.ToolDiff)
+			m.logger.Logf(context.Background(), "TUI: diff: %s", event.ToolDiff)
 		}
 		return nil
 
 	case agent.AgentEventAskUser:
-		m.logger.Log("TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
+		m.logger.Logf(context.Background(), "TUI: Received AgentEventAskUser, %d questions", len(event.Questions))
 		m.askUserView = NewAskUserView(event.Questions, m.width)
 		m.setState(stateAskUserQuestion)
 		m.layout()
@@ -122,7 +123,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.chatview.RemovePendingItems()
 			m.statusbar.SetPendingCount(0)
 			// Expand @-file references before sending to the LLM.
-			expandResult := ExpandAtReferences(combined)
+			expandResult := m.ExpandAtReferences(combined)
 			// Add as a normal user message in chatview for visual continuity.
 			m.chatview.AddMessage(chatMessage{Role: "user", Content: combined})
 			// Attach images from steer expansion (if any).
@@ -262,7 +263,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		// before finalizing the stream display. Skipped for one-off commands
 		// (e.g. /commit, /init) and error-only results with no iterations.
 		if event.Result != nil && event.Result.IterationsUsed > 0 && !isOneOff {
-			if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration); summary != "" {
+			if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
 				m.chatview.AppendTextDelta(summary)
 			}
 		}

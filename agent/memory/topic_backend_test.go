@@ -1,7 +1,6 @@
 package memory
 
 import (
-	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -10,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 func setupTopicBackend(t *testing.T) (*TopicBackend, string) {
@@ -21,7 +20,7 @@ func setupTopicBackend(t *testing.T) (*TopicBackend, string) {
 
 	backend, err := NewTopicBackend(Config{
 		BaseDir: tmpDir,
-	})
+	}, nil)
 	if err != nil {
 		t.Fatalf("NewTopicBackend: %v", err)
 	}
@@ -42,7 +41,7 @@ func requireRipgrep(t *testing.T) {
 
 func TestTopicBackend_StoreDirectContent(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	err := backend.Store(ctx, StoreOptions{
 		DirectContent: "用户偏好：代码注释用英文",
@@ -68,7 +67,7 @@ func TestTopicBackend_StoreDirectContent(t *testing.T) {
 
 func TestTopicBackend_StoreNonDirect_NoOp(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Non-direct store should be no-op.
 	err := backend.Store(ctx, StoreOptions{
@@ -88,7 +87,7 @@ func TestTopicBackend_StoreNonDirect_NoOp(t *testing.T) {
 
 func TestTopicBackend_Recall_TopicFiles(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create a topic file with content.
 	topicsDir := filepath.Join(tmpDir, "memory", "topics")
@@ -145,7 +144,7 @@ func TestTopicBackend_Recall_TopicFiles(t *testing.T) {
 
 func TestTopicBackend_Recall_SupersededPenalty(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	topicsDir := filepath.Join(tmpDir, "memory", "topics")
 	os.MkdirAll(topicsDir, 0755)
@@ -246,7 +245,7 @@ This was overridden.
 
 func TestTopicBackend_Recall_Inbox(t *testing.T) {
 	backend, _ := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Write directly to inbox.
 	err := backend.Store(ctx, StoreOptions{
@@ -279,7 +278,7 @@ func TestTopicBackend_Recall_Inbox(t *testing.T) {
 
 func TestTopicBackend_Recall_EmptyQuery(t *testing.T) {
 	backend, _ := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	results, err := backend.Recall(ctx, "", 10)
 	if err != nil {
@@ -292,7 +291,7 @@ func TestTopicBackend_Recall_EmptyQuery(t *testing.T) {
 
 func TestTopicBackend_Recall_NoMatch(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
-	ctx := context.Background()
+	ctx := t.Context()
 
 	topicsDir := filepath.Join(tmpDir, "memory", "topics")
 	os.MkdirAll(topicsDir, 0755)
@@ -333,10 +332,10 @@ func TestTopicBackend_Recall_DualDomain(t *testing.T) {
 		globalDir:  globalDir,
 		projectDir: projectDir,
 		rgPath:     rgPath,
-		logger:     debuglog.DefaultLogger.WithSource("test"),
+		logger:     logger.Default().With("source", "test"),
 	}
 
-	results, err := backend.Recall(context.Background(), "vim", 10)
+	results, err := backend.Recall(t.Context(), "vim", 10)
 	if err != nil {
 		t.Fatalf("Recall: %v", err)
 	}
@@ -422,7 +421,7 @@ func TestComputeScore(t *testing.T) {
 }
 
 func TestTopicBackend_Recall_DecayWeighting(t *testing.T) {
-	ctx := context.Background()
+	ctx := t.Context()
 
 	// Create topic content that two independent backends can share.
 	topicContent := `# DB
@@ -457,7 +456,7 @@ We chose SQLite.
 	os.MkdirAll(topicsA, 0755)
 	os.WriteFile(filepath.Join(topicsA, "db.md"), []byte(topicContent), 0644)
 
-	backendA, err := NewTopicBackend(Config{BaseDir: dirA})
+	backendA, err := NewTopicBackend(Config{BaseDir: dirA}, nil)
 	if err != nil {
 		t.Fatalf("NewTopicBackend A: %v", err)
 	}
@@ -497,7 +496,7 @@ We chose SQLite.
 }`, factID, factID)
 	os.WriteFile(filepath.Join(memoryB, DreamStateFile), []byte(stateJSON), 0644)
 
-	backendB, err := NewTopicBackend(Config{BaseDir: dirB})
+	backendB, err := NewTopicBackend(Config{BaseDir: dirB}, nil)
 	if err != nil {
 		t.Fatalf("NewTopicBackend B: %v", err)
 	}
@@ -533,7 +532,7 @@ func TestTopicBackend_ReinforceFact(t *testing.T) {
 		globalDir:  globalDir,
 		projectDir: "",
 		rgPath:     rgPath,
-		logger:     debuglog.DefaultLogger.WithSource("test"),
+		logger:     logger.Default().With("source", "test"),
 	}
 
 	// Create a last_dream.json with a fact that has low decay.
@@ -557,7 +556,7 @@ func TestTopicBackend_ReinforceFact(t *testing.T) {
 	os.WriteFile(filepath.Join(globalDir, DreamStateFile), []byte(stateJSON), 0644)
 
 	// Reinforce the fact.
-	if err := backend.ReinforceFact(context.Background(), factID); err != nil {
+	if err := backend.ReinforceFact(t.Context(), factID); err != nil {
 		t.Fatalf("ReinforceFact: %v", err)
 	}
 
@@ -598,11 +597,11 @@ func TestTopicBackend_ReinforceFact_MissingFact(t *testing.T) {
 		globalDir:  globalDir,
 		projectDir: "",
 		rgPath:     rgPath,
-		logger:     debuglog.DefaultLogger.WithSource("test"),
+		logger:     logger.Default().With("source", "test"),
 	}
 
 	// Should not error on missing fact/file.
-	if err := backend.ReinforceFact(context.Background(), "topic:nonexistent:00000000"); err != nil {
+	if err := backend.ReinforceFact(t.Context(), "topic:nonexistent:00000000"); err != nil {
 		t.Errorf("ReinforceFact on missing fact should not error: %v", err)
 	}
 }

@@ -14,8 +14,8 @@ type mockLSPDiagProvider struct {
 	servers    map[string]*lsp.LSPServer
 }
 
-func (m *mockLSPDiagProvider) IsConfigured() bool                    { return m.configured }
-func (m *mockLSPDiagProvider) Servers() map[string]*lsp.LSPServer    { return m.servers }
+func (m *mockLSPDiagProvider) IsConfigured() bool                 { return m.configured }
+func (m *mockLSPDiagProvider) Servers() map[string]*lsp.LSPServer { return m.servers }
 
 // We can't create real LSPServer instances without an LSP process, so
 // LSPDiagnosticsReminder tests focus on the guard-rails and skip the
@@ -26,7 +26,7 @@ func TestLSPDiagnosticsReminder_SkipsWhenNotConfigured(t *testing.T) {
 	r := &LSPDiagnosticsReminder{
 		Provider: &mockLSPDiagProvider{configured: false},
 	}
-	lines := r.Generate(Context{IsToolResult: true})
+	lines := r.Generate(t.Context(), Context{IsToolResult: true})
 	if lines != nil {
 		t.Errorf("expected nil when not configured, got %v", lines)
 	}
@@ -36,7 +36,7 @@ func TestLSPDiagnosticsReminder_SkipsWhenNotToolResult(t *testing.T) {
 	r := &LSPDiagnosticsReminder{
 		Provider: &mockLSPDiagProvider{configured: true},
 	}
-	lines := r.Generate(Context{IsToolResult: false, ToolNames: []string{tools.ToolNameEdit}})
+	lines := r.Generate(t.Context(), Context{IsToolResult: false, ToolNames: []string{tools.ToolNameEdit}})
 	if lines != nil {
 		t.Errorf("expected nil when not tool result, got %v", lines)
 	}
@@ -48,12 +48,12 @@ func TestLSPDiagnosticsReminder_SkipsWhenNoEditFile(t *testing.T) {
 	r := &LSPDiagnosticsReminder{
 		Provider: &mockLSPDiagProvider{configured: true},
 	}
-	lines := r.Generate(Context{IsToolResult: true, ToolNames: []string{"ReadFile", "Grep"}})
+	lines := r.Generate(t.Context(), Context{IsToolResult: true, ToolNames: []string{"ReadFile", "Grep"}})
 	if lines != nil {
 		t.Errorf("expected nil when no EditFile in tool names, got %v", lines)
 	}
 	// Also skip when ToolNames is nil.
-	lines = r.Generate(Context{IsToolResult: true})
+	lines = r.Generate(t.Context(), Context{IsToolResult: true})
 	if lines != nil {
 		t.Errorf("expected nil when ToolNames is nil, got %v", lines)
 	}
@@ -61,7 +61,7 @@ func TestLSPDiagnosticsReminder_SkipsWhenNoEditFile(t *testing.T) {
 
 func TestLSPDiagnosticsReminder_SkipsWhenNilProvider(t *testing.T) {
 	r := &LSPDiagnosticsReminder{Provider: nil}
-	lines := r.Generate(Context{IsToolResult: true})
+	lines := r.Generate(t.Context(), Context{IsToolResult: true})
 	if lines != nil {
 		t.Errorf("expected nil when provider is nil, got %v", lines)
 	}
@@ -71,7 +71,7 @@ func TestLSPDiagnosticsReminder_SkipsWhenNoServers(t *testing.T) {
 	r := &LSPDiagnosticsReminder{
 		Provider: &mockLSPDiagProvider{configured: true, servers: map[string]*lsp.LSPServer{}},
 	}
-	lines := r.Generate(Context{IsToolResult: true})
+	lines := r.Generate(t.Context(), Context{IsToolResult: true})
 	if lines != nil {
 		t.Errorf("expected nil when no servers, got %v", lines)
 	}
@@ -90,7 +90,7 @@ func TestLSPDiagnosticsReminder_CollectorIntegration(t *testing.T) {
 		DateReminder{},
 		&LSPDiagnosticsReminder{Provider: &mockLSPDiagProvider{configured: false}},
 	)
-	result := c.Collect(Context{
+	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: false,
 		IsToolResult:   true,
 	})
@@ -154,7 +154,7 @@ func TestLSPDiagnosticsReminder_CollectorTaggedOutput(t *testing.T) {
 	c := NewCollector(
 		&mockTaggedReminder{tag: "lsp-diagnostics", content: []string{"gopls: 1 diagnostics (1 errors)"}},
 	)
-	result := c.Collect(Context{IsToolResult: true})
+	result := c.Collect(t.Context(), Context{IsToolResult: true})
 	if !strings.Contains(result, "<lsp-diagnostics>") {
 		t.Errorf("expected <lsp-diagnostics> tag, got: %s", result)
 	}

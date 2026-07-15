@@ -23,7 +23,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -94,27 +94,24 @@ type RunFunc func(ctx context.Context, plan Plan) (State, error)
 
 // Config holds runtime parameters for dream execution.
 type Config struct {
-	Logger         *debuglog.Logger
-	MaxConcurrent  int // max parallel dream sub-agents (0 → use default)
+	Logger        *logger.Logger
+	MaxConcurrent int // max parallel dream sub-agents (0 → use default)
 }
 
 // Orchestrator coordinates dream execution across memory domains.
 type Orchestrator struct {
 	cfg        Config
-	logger     *debuglog.Logger
+	logger     *logger.Logger
 	mu         sync.RWMutex
 	inProgress map[string]*inFlightInfo
 }
 
 // NewOrchestrator creates a dream Orchestrator.
 func NewOrchestrator(cfg Config) *Orchestrator {
-	logger := cfg.Logger
-	if logger == nil {
-		logger = debuglog.DefaultLogger
-	}
+	l := cfg.Logger
 	return &Orchestrator{
 		cfg:        cfg,
-		logger:     logger.WithSource("dream"),
+		logger:     l.With("source", "dream"),
 		inProgress: make(map[string]*inFlightInfo),
 	}
 }
@@ -174,14 +171,14 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 		// Gate 1: at least one session with activity since last dream.
 		active := ActiveSessionsSince(lastState.LastDreamAt, g.Sessions)
 		if len(active) == 0 {
-			o.logger.Log("[%s:%s] skipped — no sessions with activity since last dream",
+			o.logger.Logf(ctx, "[%s:%s] skipped — no sessions with activity since last dream",
 				g.Domain, g.Root)
 			continue
 		}
 
 		// Gate 3: acquire domain lock (no concurrent dream on same domain).
 		if !AcquireLock(g.MemoryRoot) {
-			o.logger.Log("[%s:%s] skipped — lock held by another process", g.Domain, g.Root)
+			o.logger.Logf(ctx, "[%s:%s] skipped — lock held by another process", g.Domain, g.Root)
 			continue
 		}
 
@@ -189,7 +186,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 	}
 
 	if len(plans) == 0 {
-		o.logger.Log("no domains passed gates")
+		o.logger.Logf(ctx, "no domains passed gates")
 		return nil
 	}
 
@@ -234,20 +231,20 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 
 			// Ensure memory directory structure exists.
 			if err := EnsureMemoryDir(p.Group.MemoryRoot); err != nil {
-				o.logger.Log("[%s:%s] failed to create memory dir: %v", p.Group.Domain, p.Group.Root, err)
+				o.logger.Logf(ctx, "[%s:%s] failed to create memory dir: %v", p.Group.Domain, p.Group.Root, err)
 				return
 			}
 
 			state, err := runFn(ctx, p)
 			if err != nil {
-				o.logger.Log("[%s:%s] failed: %v", p.Group.Domain, p.Group.Root, err)
+				o.logger.Logf(ctx, "[%s:%s] failed: %v", p.Group.Domain, p.Group.Root, err)
 				return
 			}
 
 			if err := SaveState(p.Group.MemoryRoot, state); err != nil {
-				o.logger.Log("[%s:%s] failed to save state: %v", p.Group.Domain, p.Group.Root, err)
+				o.logger.Logf(ctx, "[%s:%s] failed to save state: %v", p.Group.Domain, p.Group.Root, err)
 			} else {
-				o.logger.Log("[%s:%s] completed", p.Group.Domain, p.Group.Root)
+				o.logger.Logf(ctx, "[%s:%s] completed", p.Group.Domain, p.Group.Root)
 			}
 		}(plan)
 	}

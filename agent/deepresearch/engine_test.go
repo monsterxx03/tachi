@@ -8,7 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // ---- mockSubagentRunner implements SubagentRunner for testing ----
@@ -32,11 +32,11 @@ type mockProvider struct {
 	responses map[string]string // prompt prefix → response
 }
 
-func (m *mockProvider) Name() string              { return "mock" }
-func (m *mockProvider) Model() string              { return "mock-model" }
-func (m *mockProvider) Close()                     {}
-func (m *mockProvider) SetAPIKey(_ string)        {}
-func (m *mockProvider) ContextWindow() int64       { return 128000 }
+func (m *mockProvider) Name() string         { return "mock" }
+func (m *mockProvider) Model() string        { return "mock-model" }
+func (m *mockProvider) Close()               {}
+func (m *mockProvider) SetAPIKey(_ string)   {}
+func (m *mockProvider) ContextWindow() int64 { return 128000 }
 
 func (m *mockProvider) CreateChat(_ context.Context, messages []llm.Message, _ []llm.Tool, _ llm.ChatOptions) (*llm.Response, error) {
 	// Extract the last user message content
@@ -82,7 +82,7 @@ func TestNewEngine(t *testing.T) {
 	cfg := testConfig()
 	mockProv := &mockProvider{}
 	runner := &mockSubagentRunner{}
-	logger := debuglog.DefaultLogger
+	logger := logger.Default()
 
 	engine := New(&cfg.DeepResearch, cfg.Providers, mockProv, runner, logger)
 	if engine == nil {

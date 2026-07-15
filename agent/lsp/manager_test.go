@@ -1,7 +1,6 @@
 package lsp
 
 import (
-	"context"
 	"testing"
 )
 
@@ -40,7 +39,7 @@ func TestLSPManagerRouting(t *testing.T) {
 		{"foo.py", "", true}, // no server
 	}
 	for _, tt := range tests {
-		srv, err := m.GetServer(context.Background(), tt.path)
+		srv, err := m.GetServer(t.Context(), tt.path)
 		if err != nil {
 			// Lazy start will fail because command doesn't exist — that's fine for this test.
 			// We just need to verify the routing resolved to the right server.
@@ -70,7 +69,7 @@ func TestLSPManagerNotConfigured(t *testing.T) {
 		t.Fatalf("expected 0 servers, got %d", m.ServerCount())
 	}
 
-	srv, err := m.GetServer(context.Background(), "foo.go")
+	srv, err := m.GetServer(t.Context(), "foo.go")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

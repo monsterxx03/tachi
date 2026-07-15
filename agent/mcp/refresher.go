@@ -215,14 +215,14 @@ func (r *Refresher) refreshAll(ctx context.Context) {
 
 		delta, err := r.manager.RefreshNow(ctx, name)
 		if err != nil {
-			r.manager.logger.Log("MCP: refresh failed for %q: %v", name, err)
+			r.manager.logger.Logf(ctx, "MCP: refresh failed for %q: %v", name, err)
 			continue
 		}
 		if delta == nil || !delta.HasChanges() {
 			continue
 		}
 
-		r.manager.logger.Log("MCP: refresh detected changes on %q: +%d -%d ~%d",
+		r.manager.logger.Logf(ctx, "MCP: refresh detected changes on %q: +%d -%d ~%d",
 			name, len(delta.Added), len(delta.Removed), len(delta.Modified))
 
 		r.mu.Lock()
@@ -287,7 +287,7 @@ func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newToo
 		fullName := prefix + name
 		m.pool.Remove(fullName)
 		m.set.Remove(fullName)
-		m.logger.Log("MCP: refresh removed %s (tool no longer on server)", fullName)
+		m.logger.Logf(context.Background(), "MCP: refresh removed %s (tool no longer on server)", fullName)
 	}
 
 	// 2. Handle modifications: update pool entries
@@ -295,19 +295,19 @@ func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newToo
 		fullName := t.Name()
 		dt := NewDeferredToolFromMCPTool(t, "")
 		m.pool.Add(dt) // overwrite existing
-		m.logger.Log("MCP: refresh updated %s (schema changed)", fullName)
+		m.logger.Logf(context.Background(), "MCP: refresh updated %s (schema changed)", fullName)
 	}
 
 	// 3. Handle additions: add to pool as deferred (not auto-discovered),
 	// but respect whitelist/blacklist filtering from server config.
 	for _, t := range delta.Added {
 		if m.shouldSkipTool(serverName, t.ToolName()) {
-			m.logger.Log("MCP: refresh skipped %s (filtered by whitelist/blacklist)", t.Name())
+			m.logger.Logf(context.Background(), "MCP: refresh skipped %s (filtered by whitelist/blacklist)", t.Name())
 			continue
 		}
 		dt := NewDeferredToolFromMCPTool(t, "")
 		m.pool.Add(dt)
-		m.logger.Log("MCP: refresh added %s (new tool, deferred)", t.Name())
+		m.logger.Logf(context.Background(), "MCP: refresh added %s (new tool, deferred)", t.Name())
 	}
 
 	// Update cache snapshot

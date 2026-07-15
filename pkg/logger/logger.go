@@ -40,7 +40,9 @@ func Init(dir string, cfg Config) error {
 	if sz := parseSize(cfg.MaxSize); sz > 0 {
 		cfgMaxSize = sz
 	}
-	cfgLevel = parseLevel(cfg.Level).slogLevel()
+	if cfg.Level != "" {
+		cfgLevel = parseLevel(cfg.Level).slogLevel()
+	}
 
 	return os.MkdirAll(dir, 0755)
 }
@@ -94,34 +96,28 @@ func (l *Logger) With(attrs ...any) *Logger {
 	}
 }
 
-// WithTrace returns a Logger copy with the trace_id attribute set.
-func (l *Logger) WithTrace(traceID string) *Logger {
-	if l == nil {
-		return l
-	}
-	return l.With(slog.String(FieldTraceID, traceID))
-}
-
 // Debug logs at DEBUG level.
-func (l *Logger) Debug(msg string, attrs ...any) {
-	l.log(slog.LevelDebug, msg, attrs...)
+func (l *Logger) Debug(ctx context.Context, msg string, attrs ...any) {
+	l.log(ctx, slog.LevelDebug, msg, attrs...)
 }
 
 // Info logs at INFO level.
-func (l *Logger) Info(msg string, attrs ...any) {
-	l.log(slog.LevelInfo, msg, attrs...)
+func (l *Logger) Info(ctx context.Context, msg string, attrs ...any) {
+	l.log(ctx, slog.LevelInfo, msg, attrs...)
 }
 
 // Warn logs at WARN level.
-func (l *Logger) Warn(msg string, attrs ...any) {
-	l.log(slog.LevelWarn, msg, attrs...)
+func (l *Logger) Warn(ctx context.Context, msg string, attrs ...any) {
+	l.log(ctx, slog.LevelWarn, msg, attrs...)
 }
 
 // Error logs at ERROR level. The err parameter is automatically added as
 // the "err" attribute.
-func (l *Logger) Error(msg string, err error, attrs ...any) {
+func (l *Logger) Error(ctx context.Context, msg string, err error, attrs ...any) {
 	if l == nil || l.slog == nil {
-		defaultL.Error(msg, err, attrs...)
+		if defaultL != nil {
+			defaultL.Error(ctx, msg, err, attrs...)
+		}
 		return
 	}
 	all := make([]any, 0, len(attrs)+2)
@@ -129,15 +125,30 @@ func (l *Logger) Error(msg string, err error, attrs ...any) {
 		all = append(all, "err", err.Error())
 	}
 	all = append(all, attrs...)
-	l.log(slog.LevelError, msg, all...)
+	l.log(ctx, slog.LevelError, msg, all...)
 }
 
-func (l *Logger) log(level slog.Level, msg string, attrs ...any) {
+// Logf is a migration bridge that logs a printf-formatted message at INFO level.
+// It exists to ease the transition from debuglog's Log(format, args...) pattern.
+// Prefer structured logging (Info, Debug, etc.) in new code.
+func (l *Logger) Logf(ctx context.Context, format string, args ...any) {
 	if l == nil || l.slog == nil {
-		defaultL.log(level, msg, attrs...)
+		if defaultL != nil {
+			defaultL.Logf(ctx, format, args...)
+		}
 		return
 	}
-	l.slog.LogAttrs(context.Background(), level, msg, toAttrs(attrs)...)
+	l.slog.LogAttrs(ctx, slog.LevelInfo, fmt.Sprintf(format, args...))
+}
+
+func (l *Logger) log(ctx context.Context, level slog.Level, msg string, attrs ...any) {
+	if l == nil || l.slog == nil {
+		if defaultL != nil {
+			defaultL.log(ctx, level, msg, attrs...)
+		}
+		return
+	}
+	l.slog.LogAttrs(ctx, level, msg, toAttrs(attrs)...)
 }
 
 // toAttrs converts key-value pairs (where keys must be strings) to slog.Attr slice.
@@ -160,14 +171,10 @@ func toAttrs(args []any) []slog.Attr {
 
 // ── Default / Context ─────────────────────────────────────────────────────
 
-// Default returns a fallback Logger writing to debug.log.
-// Use only in code that hasn't been migrated to the new logger yet.
+// Default returns a fallback Logger. When Init has not been called,
+// writes are silently discarded.
 func Default() *Logger {
 	onceDef.Do(func() {
-		if logDir == "" {
-			// Best-effort: use a temp dir or current dir
-			logDir = os.TempDir()
-		}
 		defaultL = newLogger("debug", nil)
 	})
 	return defaultL
@@ -192,17 +199,23 @@ func FromContext(ctx context.Context) *Logger {
 
 // newLogger creates a Logger writing to the file determined by name.
 // If parentWriter is non-nil, it shares that writer (used by NewSub).
+// If logDir is empty (Init not called), writes are silently discarded.
 func newLogger(name string, parentWriter *rotatingWriter) *Logger {
 	var rw *rotatingWriter
+	var w io.Writer
 	if parentWriter != nil {
 		rw = parentWriter
+		w = rw
+	} else if logDir != "" {
+		rw = getOrCreateWriter(logFilePath(logDir, name))
+		w = rw
 	} else {
-		path := logFilePath(logDir, name)
-		rw = getOrCreateWriter(path)
+		// Init not called (e.g. in tests) — discard silently.
+		w = io.Discard
 	}
 
 	h := &textHandler{
-		w:        rw,
+		w:        w,
 		name:     name,
 		minLevel: cfgLevel,
 	}
@@ -277,9 +290,14 @@ func (h *textHandler) Enabled(_ context.Context, level slog.Level) bool {
 	return level >= h.minLevel
 }
 
-func (h *textHandler) Handle(_ context.Context, r slog.Record) error {
+func (h *textHandler) Handle(ctx context.Context, r slog.Record) error {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+
+	// Inject trace_id from context if present.
+	if traceID := TraceIDFromContext(ctx); traceID != "" {
+		r.AddAttrs(slog.String(FieldTraceID, traceID))
+	}
 
 	// Build combined attribute list: handler attrs + record attrs.
 	allAttrs := make([]slog.Attr, 0, len(h.attrs)+r.NumAttrs())

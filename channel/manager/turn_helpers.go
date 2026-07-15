@@ -1,6 +1,7 @@
 package manager
 
 import (
+	"context"
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -21,14 +22,14 @@ import (
 func (m *Manager) prepareThreadSession(threadID string, resolved *config.ResolvedConfig) (*session.Manager, []llm.Message) {
 	sm, priorHistory, err := m.loadThreadSession(threadID, resolved)
 	if err != nil {
-		m.logger.Log("channel: session setup for thread %s: %v", threadID, err)
+		m.logger.Logf(context.Background(), "channel: session setup for thread %s: %v", threadID, err)
 		sm = m.newSessionManager()
 		priorHistory = nil
 	}
 
 	if sm != nil && !sm.HasCurrent() {
 		if _, err := sm.New(resolved.Provider.Name, ""); err != nil {
-			m.logger.Log("channel: create fallback session for %s: %v", threadID, err)
+			m.logger.Logf(context.Background(), "channel: create fallback session for %s: %v", threadID, err)
 		} else {
 			sm.SetThreadID(threadID)
 		}

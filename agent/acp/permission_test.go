@@ -58,7 +58,7 @@ func TestBuildPermissionHandler_AllowOnce(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "Bash", "tool-1", "diff content", "args here")
+	approved, err := handler(t.Context(), "Bash", "tool-1", "diff content", "args here")
 	assert.NoError(t, err)
 	assert.True(t, approved)
 }
@@ -91,7 +91,7 @@ func TestBuildPermissionHandler_Reject(t *testing.T) {
 	}()
 
 	// Use "Bash" instead of "EditFile" — EditFile auto-approves in ACP mode.
-	approved, err := handler(context.Background(), "Bash", "tool-1", "diff", "args")
+	approved, err := handler(t.Context(), "Bash", "tool-1", "diff", "args")
 	assert.NoError(t, err)
 	assert.False(t, approved)
 }
@@ -123,7 +123,7 @@ func TestBuildPermissionHandler_AllowAll(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "Bash", "tool-2", "diff", "args")
+	approved, err := handler(t.Context(), "Bash", "tool-2", "diff", "args")
 	assert.NoError(t, err)
 	assert.True(t, approved)
 }
@@ -154,7 +154,7 @@ func TestBuildPermissionHandler_Cancelled(t *testing.T) {
 		json.NewEncoder(clientToAgentW).Encode(response)
 	}()
 
-	approved, err := handler(context.Background(), "Bash", "tool-3", "diff", "args")
+	approved, err := handler(t.Context(), "Bash", "tool-3", "diff", "args")
 	assert.NoError(t, err)
 	assert.False(t, approved)
 }

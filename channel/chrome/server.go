@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/channel"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"golang.org/x/net/websocket"
 )
 
@@ -43,7 +43,7 @@ type Server struct {
 	clients map[string]*websocket.Conn
 	mu      sync.RWMutex
 
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
 // NewServer creates a Server.
@@ -51,7 +51,7 @@ func NewServer(port int) *Server {
 	return &Server{
 		port:    port,
 		clients: make(map[string]*websocket.Conn),
-		logger:  debuglog.DefaultLogger.WithSource("chrome:http"),
+		logger:  logger.New("channel.chrome"),
 	}
 }
 
@@ -77,7 +77,7 @@ func (s *Server) Start(handler channel.MessageHandler) error {
 		return fmt.Errorf("chrome: cannot listen on %s: %w", addr, err)
 	}
 
-	s.logger.Log("chrome: HTTP+WebSocket server listening on %s", addr)
+	s.logger.Logf(context.Background(), "chrome: HTTP+WebSocket server listening on %s", addr)
 
 	if err := s.server.Serve(listener); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("chrome: serve error: %w", err)
@@ -158,14 +158,14 @@ func (s *Server) Send(threadID string, content string) error {
 // handleWS handles an incoming WebSocket connection from the extension.
 func (s *Server) handleWS(conn *websocket.Conn) {
 	addr := conn.RemoteAddr()
-	s.logger.Log("chrome: WebSocket connected from %s", addr)
+	s.logger.Logf(context.Background(), "chrome: WebSocket connected from %s", addr)
 
 	// Read loop: one goroutine per connection.
 	for {
 		// Read a ChromeRequest message.
 		var data []byte
 		if err := websocket.Message.Receive(conn, &data); err != nil {
-			s.logger.Log("chrome: WebSocket read error from %s: %v", addr, err)
+			s.logger.Logf(context.Background(), "chrome: WebSocket read error from %s: %v", addr, err)
 			s.removeClient(conn)
 			return
 		}
@@ -177,7 +177,7 @@ func (s *Server) handleWS(conn *websocket.Conn) {
 		// Parse the request.
 		var req ChromeRequest
 		if err := json.Unmarshal(data, &req); err != nil {
-			s.logger.Log("chrome: invalid JSON from %s: %v", addr, err)
+			s.logger.Logf(context.Background(), "chrome: invalid JSON from %s: %v", addr, err)
 			s.writeError(conn, req.ID, req.ThreadID, fmt.Sprintf("invalid JSON: %v", err))
 			continue
 		}
@@ -193,7 +193,7 @@ func (s *Server) handleWS(conn *websocket.Conn) {
 			continue
 		}
 
-		s.logger.Log("chrome: recv action=%s thread=%s id=%s", req.Action, req.ThreadID, req.ID)
+		s.logger.Logf(context.Background(), "chrome: recv action=%s thread=%s id=%s", req.Action, req.ThreadID, req.ID)
 
 		// Track the connection by threadID so Send() can find it.
 		if req.ThreadID != "" {
@@ -216,13 +216,13 @@ func (s *Server) handleMessage(conn *websocket.Conn, reqID, threadID string, inc
 	result := s.handler(context.Background(), incoming)
 
 	if result.Err != nil {
-		s.logger.Log("chrome: handler error for %s: %v", threadID, result.Err)
+		s.logger.Logf(context.Background(), "chrome: handler error for %s: %v", threadID, result.Err)
 		s.writeError(conn, reqID, threadID, fmt.Sprintf("❌ %v", result.Err))
 		return
 	}
 
 	if result.Steered {
-		s.logger.Log("chrome: message steered (thread %s already active)", threadID)
+		s.logger.Logf(context.Background(), "chrome: message steered (thread %s already active)", threadID)
 		return
 	}
 
@@ -252,12 +252,12 @@ func (s *Server) toIncoming(req ChromeRequest) channel.IncomingMessage {
 func (s *Server) writeJSON(conn *websocket.Conn, resp ChromeResponse) {
 	data, err := json.Marshal(resp)
 	if err != nil {
-		s.logger.Log("chrome: marshal response: %v", err)
+		s.logger.Logf(context.Background(), "chrome: marshal response: %v", err)
 		return
 	}
 	conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 	if err := websocket.Message.Send(conn, string(data)); err != nil {
-		s.logger.Log("chrome: write error: %v", err)
+		s.logger.Logf(context.Background(), "chrome: write error: %v", err)
 	}
 }
 
@@ -293,7 +293,7 @@ func (s *Server) removeClient(conn *websocket.Conn) {
 	for tid, c := range s.clients {
 		if c == conn {
 			delete(s.clients, tid)
-			s.logger.Log("chrome: removed client for thread %s", tid)
+			s.logger.Logf(context.Background(), "chrome: removed client for thread %s", tid)
 		}
 	}
 }

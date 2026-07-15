@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -264,7 +263,7 @@ func TestProbe401ResourceMetadata_WithWWWAuth(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := probe401ResourceMetadata(context.Background(), srv.Client(), srv.URL)
+	url := probe401ResourceMetadata(t.Context(), srv.Client(), srv.URL)
 	assert.Equal(t, "https://rs.example.com/prm", url)
 }
 
@@ -274,7 +273,7 @@ func TestProbe401ResourceMetadata_NoAuthHeader(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := probe401ResourceMetadata(context.Background(), srv.Client(), srv.URL)
+	url := probe401ResourceMetadata(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, url)
 }
 
@@ -284,13 +283,13 @@ func TestProbe401ResourceMetadata_Not401(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := probe401ResourceMetadata(context.Background(), srv.Client(), srv.URL)
+	url := probe401ResourceMetadata(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, url)
 }
 
 func TestProbe401ResourceMetadata_ConnectionError(t *testing.T) {
 	// No server running — connection refused
-	url := probe401ResourceMetadata(context.Background(), http.DefaultClient, "http://127.0.0.1:1")
+	url := probe401ResourceMetadata(t.Context(), http.DefaultClient, "http://127.0.0.1:1")
 	assert.Empty(t, url)
 }
 
@@ -306,7 +305,7 @@ func TestFetchAuthorizationServers_Success(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	servers := fetchAuthorizationServers(context.Background(), srv.Client(), srv.URL)
+	servers := fetchAuthorizationServers(t.Context(), srv.Client(), srv.URL)
 	assert.Equal(t, []string{"https://auth1.example.com", "https://auth2.example.com"}, servers)
 }
 
@@ -318,7 +317,7 @@ func TestFetchAuthorizationServers_Empty(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	servers := fetchAuthorizationServers(context.Background(), srv.Client(), srv.URL)
+	servers := fetchAuthorizationServers(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, servers)
 }
 
@@ -328,7 +327,7 @@ func TestFetchAuthorizationServers_NonOKStatus(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	servers := fetchAuthorizationServers(context.Background(), srv.Client(), srv.URL)
+	servers := fetchAuthorizationServers(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, servers)
 }
 
@@ -340,7 +339,7 @@ func TestFetchAuthorizationServers_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	servers := fetchAuthorizationServers(context.Background(), srv.Client(), srv.URL)
+	servers := fetchAuthorizationServers(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, servers)
 }
 
@@ -357,7 +356,7 @@ func TestFindAuthServerMetadataURL_Found(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := findAuthServerMetadataURL(context.Background(), srv.Client(), srv.URL)
+	url := findAuthServerMetadataURL(t.Context(), srv.Client(), srv.URL)
 	assert.Equal(t, srv.URL, url)
 }
 
@@ -369,7 +368,7 @@ func TestFindAuthServerMetadataURL_NoRegistrationEndpoint(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := findAuthServerMetadataURL(context.Background(), srv.Client(), srv.URL)
+	url := findAuthServerMetadataURL(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, url)
 }
 
@@ -379,7 +378,7 @@ func TestFindAuthServerMetadataURL_NonOK(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := findAuthServerMetadataURL(context.Background(), srv.Client(), srv.URL)
+	url := findAuthServerMetadataURL(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, url)
 }
 
@@ -391,7 +390,7 @@ func TestFindAuthServerMetadataURL_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	url := findAuthServerMetadataURL(context.Background(), srv.Client(), srv.URL)
+	url := findAuthServerMetadataURL(t.Context(), srv.Client(), srv.URL)
 	assert.Empty(t, url)
 }
 

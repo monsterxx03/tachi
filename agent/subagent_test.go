@@ -7,7 +7,7 @@ import (
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 )
@@ -97,7 +97,7 @@ func TestNewChildAgent(t *testing.T) {
 	provider := &mockStreamProvider{name: "child-provider"}
 	allowedTools := []string{"ReadFile", "Grep", "Glob"}
 
-	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, 10, allowedTools, "session-123")
+	child := parent.NewChildAgent(logger.Default(), provider, 10, allowedTools, "session-123")
 
 	assert.NotNil(t, child, "NewChildAgent should return a non-nil ChildAgent")
 }
@@ -112,7 +112,7 @@ func TestChildAdapter_Run(t *testing.T) {
 	}
 	allowedTools := []string{"ReadFile", "Grep", "Glob"}
 
-	child := parent.NewChildAgent(debuglog.DefaultLogger, provider, 10, allowedTools, "session-123")
+	child := parent.NewChildAgent(logger.Default(), provider, 10, allowedTools, "session-123")
 
 	ch := child.Run(t.Context(), provider, "You are a test agent.", "Say hello", llm.ChatOptions{MaxTokens: 100})
 
@@ -138,11 +138,11 @@ type mockAgent struct {
 	toolNames []string
 }
 
-func (m *mockAgent) SubagentProvider() llm.Provider           { return nil }
-func (m *mockAgent) SessionManager() *session.Manager          { return nil }
-func (m *mockAgent) Logger() *debuglog.Logger                 { return debuglog.DefaultLogger }
-func (m *mockAgent) ToolNames() []string                      { return m.toolNames }
-func (m *mockAgent) GetTool(name string) agenttools.Tool      { return nil }
-func (m *mockAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) subagent.ChildAgent {
+func (m *mockAgent) SubagentProvider() llm.Provider      { return nil }
+func (m *mockAgent) SessionManager() *session.Manager    { return nil }
+func (m *mockAgent) Logger() *logger.Logger              { return logger.Default() }
+func (m *mockAgent) ToolNames() []string                 { return m.toolNames }
+func (m *mockAgent) GetTool(name string) agenttools.Tool { return nil }
+func (m *mockAgent) NewChildAgent(logger *logger.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) subagent.ChildAgent {
 	return nil
 }

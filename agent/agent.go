@@ -15,7 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -89,7 +89,7 @@ type AIAgent struct {
 	titleGenEnabled    bool                     // whether LLM-based title generation is active
 	commitProvider     llm.Provider             // optional: dedicated provider for /commit messages
 	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
-	logger             *debuglog.Logger
+	logger             *logger.Logger
 
 	// acpFileMode enables ACP file I/O for EditFile tool. When true,
 	// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
@@ -162,6 +162,10 @@ type AIAgent struct {
 	// to compute the turn's total duration for the RunResult.
 	turnStart time.Time
 
+	// turnTraceID is the trace ID for the current turn.
+	// Set at the top of runAgentLoop and used for log correlation.
+	turnTraceID string
+
 	// skipSessionWrites suppresses session persistence (recordSession is a no-op).
 	// Set by RunOneOffStream for one-off tasks (/commit, /review, sub-agents, dreams)
 	// whose messages should not pollute the main conversation history.
@@ -183,7 +187,7 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 		processManager:  tools.NewProcessManager(),
 		confirmRespCh:   make(chan bool, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
-		logger:          debuglog.DefaultLogger,
+		logger:          nil,
 		mode:            ModeAuto,
 		savedTools:      make(map[string]tools.Tool),
 	}
@@ -191,12 +195,12 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 
 // SetLogger overrides the agent's logger. Channel callers use this to inject
 // a channel-specific logger so debug output is tagged with the correct source.
-func (a *AIAgent) SetLogger(l *debuglog.Logger) {
+func (a *AIAgent) SetLogger(l *logger.Logger) {
 	a.logger = l
 }
 
 // Logger returns the agent's debug logger.
-func (a *AIAgent) Logger() *debuglog.Logger {
+func (a *AIAgent) Logger() *logger.Logger {
 	return a.logger
 }
 
@@ -278,7 +282,7 @@ func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	if a.memory != nil {
 		if tb, ok := a.memory.Backend.(*memory.TopicBackend); ok {
 			tb.SetSessionProvider(&topicSessionProvider{manager: sm})
-			a.logger.Log("Memory: session provider wired for topic backend")
+			a.logger.Logf(context.Background(), "Memory: session provider wired for topic backend")
 		}
 	}
 }
@@ -401,7 +405,7 @@ func (a *AIAgent) recordSession(msg *session.Message) {
 		return
 	}
 	if err := a.sessionManager.AppendMessage(msg); err != nil {
-		a.logger.Log("Agent: failed to record session message: %v", err)
+		a.logger.Logf(context.Background(), "Agent: failed to record session message: %v", err)
 	}
 }
 
@@ -474,7 +478,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	for _, name := range a.toolRegistry.GetToolNames() {
 		if strings.HasPrefix(name, prefix) {
 			a.toolRegistry.Unregister(name)
-			a.logger.Log("MCP: unregistered tool %s from registry", name)
+			a.logger.Logf(context.Background(), "MCP: unregistered tool %s from registry", name)
 		}
 	}
 
@@ -485,7 +489,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	if pool != nil {
 		removed := pool.RemoveByServer(serverName)
 		if removed > 0 {
-			a.logger.Log("MCP: removed %d tools from deferred pool for server %s", removed, serverName)
+			a.logger.Logf(context.Background(), "MCP: removed %d tools from deferred pool for server %s", removed, serverName)
 		}
 	}
 
@@ -495,7 +499,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 		for _, name := range set.List() {
 			if strings.HasPrefix(name, prefix) {
 				set.Remove(name)
-				a.logger.Log("MCP: removed tool %s from discovered set", name)
+				a.logger.Logf(context.Background(), "MCP: removed tool %s from discovered set", name)
 			}
 		}
 	}
@@ -535,10 +539,10 @@ func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
 		dt := mcp.NewDeferredToolFromMCPTool(t, "")
 		pool.Add(dt)
 		count++
-		a.logger.Log("MCP: deferred tool %s (user toggle)", t.Name())
+		a.logger.Logf(context.Background(), "MCP: deferred tool %s (user toggle)", t.Name())
 	}
 	a.NotifyDeferredToolsAdded()
-	a.logger.Log("MCP: added %d tools to deferred pool from toggle", count)
+	a.logger.Logf(context.Background(), "MCP: added %d tools to deferred pool from toggle", count)
 	return count
 }
 
@@ -566,7 +570,7 @@ func (a *AIAgent) NotifyDeferredToolsAdded() {
 	// Ensure it's registered in the reminder collector
 	a.reminderCollector.AddReminder(a.deferredToolReminder)
 
-	a.logger.Log("MCP: DeferredToolReminder marked dirty")
+	a.logger.Logf(context.Background(), "MCP: DeferredToolReminder marked dirty")
 }
 
 // ToolSchemas returns all tool schemas currently registered with the agent.

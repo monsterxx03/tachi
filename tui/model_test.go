@@ -18,7 +18,7 @@ func testModel() *Model {
 	m := &Model{
 		statusbar: NewStatusBar("test/model", 128_000),
 		chatview:  NewChatView(),
-		input:     NewInputArea(10, ""),
+		input:     NewInputArea(10, "", nil),
 		state:     stateIdle,
 		width:     100,
 		height:    40,

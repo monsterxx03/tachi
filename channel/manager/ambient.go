@@ -76,7 +76,7 @@ func (m *Manager) handleAmbientMessage(ctx context.Context, msg channel.Incoming
 	if ta.steerRespCh != nil {
 		ta.ambientPending = append(ta.ambientPending, am)
 		m.enforceBufferCap(ta)
-		m.logger.Log("channel: ambient steer-buffered thread=%s pending=%d", msg.ThreadID, len(ta.ambientPending))
+		m.logger.Logf(ctx, "channel: ambient steer-buffered thread=%s pending=%d", msg.ThreadID, len(ta.ambientPending))
 		return channel.HandlerResult{Steered: true}
 	}
 
@@ -93,7 +93,7 @@ func (m *Manager) handleAmbientMessage(ctx context.Context, msg channel.Incoming
 		m.flushAmbientBatch(msg.ThreadID)
 	})
 
-	m.logger.Log("channel: ambient buffered thread=%s pending=%d window=%s", msg.ThreadID, len(ta.ambientPending), window)
+	m.logger.Logf(ctx, "channel: ambient buffered thread=%s pending=%d window=%s", msg.ThreadID, len(ta.ambientPending), window)
 	return channel.HandlerResult{Buffered: true}
 }
 
@@ -123,7 +123,7 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 	if cooldown > 0 && !ta.lastAmbient.IsZero() && time.Since(ta.lastAmbient) < cooldown {
 		ta.ambientPending = nil
 		ta.mu.Unlock()
-		m.logger.Log("channel: ambient cooldown active thread=%s, discarding", threadID)
+		m.logger.Logf(context.Background(), "channel: ambient cooldown active thread=%s, discarding", threadID)
 		return
 	}
 
@@ -135,7 +135,7 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 	// If an agent turn became active while the timer was firing, defer to steer.
 	if ta.steerRespCh != nil {
 		ta.mu.Unlock()
-		m.logger.Log("channel: ambient flush skipped (turn active) thread=%s", threadID)
+		m.logger.Logf(context.Background(), "channel: ambient flush skipped (turn active) thread=%s", threadID)
 		return
 	}
 
@@ -144,7 +144,7 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 	ta.ambientPending = nil
 	ta.mu.Unlock()
 
-	m.logger.Log("channel: ambient flush thread=%s msgs=%d", threadID, len(msgs))
+	m.logger.Logf(context.Background(), "channel: ambient flush thread=%s msgs=%d", threadID, len(msgs))
 	m.runAmbientTurn(threadID, msgs)
 }
 
@@ -154,7 +154,7 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	prov, resolved, _ := m.getProviderForThread(threadID)
 	if prov == nil || resolved == nil {
-		m.logger.Log("channel: ambient turn skipped (no provider) thread=%s", threadID)
+		m.logger.Logf(context.Background(), "channel: ambient turn skipped (no provider) thread=%s", threadID)
 		return
 	}
 
@@ -175,7 +175,7 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	// and to load session history. Release immediately after Fork().
 	ca, err := m.acquireAgent(ctx, threadID)
 	if err != nil {
-		m.logger.Log("channel: ambient fork acquire failed thread=%s: %v", threadID, err)
+		m.logger.Logf(context.Background(), "channel: ambient fork acquire failed thread=%s: %v", threadID, err)
 		return
 	}
 	parentAgent := ca.agent
@@ -183,7 +183,7 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	// Load session history from parent.
 	history, err := parentAgent.LoadSessionHistory()
 	if err != nil {
-		m.logger.Log("channel: ambient fork load history failed thread=%s: %v", threadID, err)
+		m.logger.Logf(context.Background(), "channel: ambient fork load history failed thread=%s: %v", threadID, err)
 		m.releaseAgent(ca)
 		return
 	}
@@ -196,7 +196,7 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 		MaxIterations: whisperCfg.AmbientMaxIterations,
 		AllowedTools:  allowedTools,
 		NoMCP:         true,
-		Logger:        m.logger.WithPrefix("ambient-fork"),
+		Logger:        m.logger.With("prefix", "ambient-fork"),
 		SessionID:     "ambient-" + threadID,
 	})
 
@@ -242,20 +242,20 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	ta.mu.Unlock()
 
 	if err != nil {
-		m.logger.Log("channel: ambient fork turn error thread=%s: %v", threadID, err)
+		m.logger.Logf(context.Background(), "channel: ambient fork turn error thread=%s: %v", threadID, err)
 		return
 	}
 
 	// Check if the agent chose silence.
 	if m.isSilence(text) {
 		count := ta.silenceCount.Add(1)
-		m.logger.Log("channel: ambient fork SILENCE thread=%s (consecutive=%d) text=%q", threadID, count, text)
+		m.logger.Logf(context.Background(), "channel: ambient fork SILENCE thread=%s (consecutive=%d) text=%q", threadID, count, text)
 		return
 	}
 
 	// Agent has something to say — reset silence counter and send.
 	ta.silenceCount.Store(0)
-	m.logger.Log("channel: ambient fork reply thread=%s len=%d", threadID, len(text))
+	m.logger.Logf(context.Background(), "channel: ambient fork reply thread=%s len=%d", threadID, len(text))
 	m.sendToThread(ctx, threadID, text, "")
 }
 

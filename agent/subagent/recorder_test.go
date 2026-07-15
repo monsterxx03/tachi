@@ -20,7 +20,7 @@ func TestRecorder_NewRecorder_CreatesFile(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-abc", "sub-001")
+	rec, err := newRecorder("sess-abc", "sub-001", nil)
 	require.NoError(t, err)
 	require.NotNil(t, rec)
 	defer rec.close()
@@ -35,7 +35,7 @@ func TestRecorder_Record_WritesJSONL(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-def", "sub-002")
+	rec, err := newRecorder("sess-def", "sub-002", nil)
 	require.NoError(t, err)
 	defer rec.close()
 
@@ -63,7 +63,7 @@ func TestRecorder_MultipleRecords(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-ghi", "sub-003")
+	rec, err := newRecorder("sess-ghi", "sub-003", nil)
 	require.NoError(t, err)
 	defer rec.close()
 
@@ -103,7 +103,7 @@ func TestRecorder_RecordMessageTypes(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-jkl", "sub-004")
+	rec, err := newRecorder("sess-jkl", "sub-004", nil)
 	require.NoError(t, err)
 	defer rec.close()
 
@@ -149,7 +149,7 @@ func TestRecorder_ErrorResult(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-mno", "sub-005")
+	rec, err := newRecorder("sess-mno", "sub-005", nil)
 	require.NoError(t, err)
 	defer rec.close()
 
@@ -177,7 +177,7 @@ func TestRecorder_CloseClosesFile(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-pqr", "sub-006")
+	rec, err := newRecorder("sess-pqr", "sub-006", nil)
 	require.NoError(t, err)
 
 	// Write something
@@ -197,7 +197,7 @@ func TestRecorder_TimestampIsSet(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-stu", "sub-007")
+	rec, err := newRecorder("sess-stu", "sub-007", nil)
 	require.NoError(t, err)
 	defer rec.close()
 
@@ -221,7 +221,7 @@ func TestRecorder_UsageMessage(t *testing.T) {
 	sessionDirFn = func() (string, error) { return tmpDir, nil }
 	defer func() { sessionDirFn = origSessionDirFn }()
 
-	rec, err := newRecorder("sess-usage", "sub-usage")
+	rec, err := newRecorder("sess-usage", "sub-usage", nil)
 	require.NoError(t, err)
 	defer rec.close()
 
@@ -253,13 +253,13 @@ func TestRecorder_AppendsToExistingFile(t *testing.T) {
 	defer func() { sessionDirFn = origSessionDirFn }()
 
 	// Create first recorder, write and close
-	rec1, err := newRecorder("sess-vwx", "sub-append")
+	rec1, err := newRecorder("sess-vwx", "sub-append", nil)
 	require.NoError(t, err)
 	rec1.record(&session.Message{Type: session.MessageTypeUser, Content: "msg1"})
 	rec1.close()
 
 	// Create second recorder, append and close
-	rec2, err := newRecorder("sess-vwx", "sub-append")
+	rec2, err := newRecorder("sess-vwx", "sub-append", nil)
 	require.NoError(t, err)
 	rec2.record(&session.Message{Type: session.MessageTypeAssistant, Content: "msg2"})
 	rec2.close()

@@ -10,7 +10,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // WriteTool writes content to a file
@@ -29,7 +29,7 @@ func (t WriteTool) Required() []string { return []string{"path", "content"} }
 func (t WriteTool) Parallel() bool     { return false }
 
 func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	debuglog.DefaultLogger.Log("ACP write: ExecuteContext called, conn=%v", acpctx.Conn(ctx) != nil)
+	logger.FromContext(ctx).Logf(ctx, "ACP write: ExecuteContext called, conn=%v", acpctx.Conn(ctx) != nil)
 	var argsMap struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`

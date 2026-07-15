@@ -19,10 +19,10 @@ func TestTokenStore_SaveAndGetToken(t *testing.T) {
 		AccessToken: "test-access-token",
 		TokenType:   "bearer",
 	}
-	err := store.SaveToken(context.Background(), token)
+	err := store.SaveToken(t.Context(), token)
 	require.NoError(t, err)
 
-	got, err := store.GetToken(context.Background())
+	got, err := store.GetToken(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, token.AccessToken, got.AccessToken)
 	assert.Equal(t, token.TokenType, got.TokenType)
@@ -31,7 +31,7 @@ func TestTokenStore_SaveAndGetToken(t *testing.T) {
 func TestTokenStore_GetToken_NotExist(t *testing.T) {
 	store := newTestTokenStore(t)
 
-	_, err := store.GetToken(context.Background())
+	_, err := store.GetToken(t.Context())
 	assert.ErrorIs(t, err, transport.ErrNoToken)
 }
 
@@ -44,7 +44,7 @@ func TestTokenStore_GetToken_CorruptFile(t *testing.T) {
 	err = os.WriteFile(store.tokenPath, []byte("not json{"), 0600)
 	require.NoError(t, err)
 
-	_, err = store.GetToken(context.Background())
+	_, err = store.GetToken(t.Context())
 	assert.ErrorIs(t, err, transport.ErrNoToken)
 }
 
@@ -56,10 +56,10 @@ func TestTokenStore_SaveAndGetDCRInfo(t *testing.T) {
 		ClientSecret:          "dcr-secret",
 		AuthServerMetadataURL: "https://example.com/.well-known/oauth-authorization-server",
 	}
-	err := store.SaveDCRInfo(context.Background(), info)
+	err := store.SaveDCRInfo(t.Context(), info)
 	require.NoError(t, err)
 
-	got, err := store.GetDCRInfo(context.Background())
+	got, err := store.GetDCRInfo(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, info.ClientID, got.ClientID)
 	assert.Equal(t, info.ClientSecret, got.ClientSecret)
@@ -69,7 +69,7 @@ func TestTokenStore_SaveAndGetDCRInfo(t *testing.T) {
 func TestTokenStore_GetDCRInfo_NotExist(t *testing.T) {
 	store := newTestTokenStore(t)
 
-	_, err := store.GetDCRInfo(context.Background())
+	_, err := store.GetDCRInfo(t.Context())
 	assert.ErrorIs(t, err, transport.ErrNoToken)
 }
 
@@ -80,14 +80,14 @@ func TestTokenStore_SaveAndGetPendingState(t *testing.T) {
 		State:        "csrf-state",
 		CodeVerifier: "pkce-verifier",
 	}
-	err := store.SavePendingState(context.Background(), state)
+	err := store.SavePendingState(t.Context(), state)
 	require.NoError(t, err)
 
 	// Verify file exists on disk
 	_, err = os.Stat(store.pendingPath)
 	require.NoError(t, err, "pending file should exist after SavePendingState")
 
-	got, err := store.GetPendingState(context.Background())
+	got, err := store.GetPendingState(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, state.State, got.State)
 	assert.Equal(t, state.CodeVerifier, got.CodeVerifier)
@@ -100,7 +100,7 @@ func TestTokenStore_SaveAndGetPendingState(t *testing.T) {
 func TestTokenStore_GetPendingState_NotExist(t *testing.T) {
 	store := newTestTokenStore(t)
 
-	_, err := store.GetPendingState(context.Background())
+	_, err := store.GetPendingState(t.Context())
 	assert.ErrorIs(t, err, transport.ErrNoToken)
 }
 
@@ -112,14 +112,14 @@ func TestTokenStore_GetPendingState_Corrupt(t *testing.T) {
 	err = os.WriteFile(store.pendingPath, []byte("not json"), 0600)
 	require.NoError(t, err)
 
-	_, err = store.GetPendingState(context.Background())
+	_, err = store.GetPendingState(t.Context())
 	assert.ErrorIs(t, err, transport.ErrNoToken)
 }
 
 func TestTokenStore_ContextCancellation(t *testing.T) {
 	store := newTestTokenStore(t)
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // immediately cancelled
 
 	_, err := store.GetToken(ctx)
@@ -139,10 +139,10 @@ func TestTokenStore_TokenExpiry(t *testing.T) {
 	token := &transport.Token{
 		AccessToken: "no-expiry-token",
 	}
-	err := store.SaveToken(context.Background(), token)
+	err := store.SaveToken(t.Context(), token)
 	require.NoError(t, err)
 
-	got, err := store.GetToken(context.Background())
+	got, err := store.GetToken(t.Context())
 	require.NoError(t, err)
 	assert.Equal(t, "no-expiry-token", got.AccessToken)
 }
@@ -157,14 +157,14 @@ func TestTokenStore_MultipleServers(t *testing.T) {
 	store2, err := NewFileTokenStore("server-b")
 	require.NoError(t, err)
 
-	err = store1.SaveToken(context.Background(), &transport.Token{AccessToken: "token-a"})
+	err = store1.SaveToken(t.Context(), &transport.Token{AccessToken: "token-a"})
 	require.NoError(t, err)
-	err = store2.SaveToken(context.Background(), &transport.Token{AccessToken: "token-b"})
+	err = store2.SaveToken(t.Context(), &transport.Token{AccessToken: "token-b"})
 	require.NoError(t, err)
 
-	got1, _ := store1.GetToken(context.Background())
+	got1, _ := store1.GetToken(t.Context())
 	assert.Equal(t, "token-a", got1.AccessToken)
-	got2, _ := store2.GetToken(context.Background())
+	got2, _ := store2.GetToken(t.Context())
 	assert.Equal(t, "token-b", got2.AccessToken)
 }
 

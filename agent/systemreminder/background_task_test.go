@@ -7,7 +7,7 @@ import (
 
 func TestBackgroundTaskReminder_SkipsOnFirstMessage(t *testing.T) {
 	r := &BackgroundTaskReminder{Provider: &mockBgProvider{nil}}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) != 0 {
 		t.Errorf("expected empty output on first message, got %d lines", len(lines))
 	}
@@ -15,7 +15,7 @@ func TestBackgroundTaskReminder_SkipsOnFirstMessage(t *testing.T) {
 
 func TestBackgroundTaskReminder_NilProvider(t *testing.T) {
 	r := &BackgroundTaskReminder{Provider: nil}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 0 {
 		t.Errorf("expected empty output with nil provider, got %d lines", len(lines))
 	}
@@ -23,7 +23,7 @@ func TestBackgroundTaskReminder_NilProvider(t *testing.T) {
 
 func TestBackgroundTaskReminder_NoCompletedTasks(t *testing.T) {
 	r := &BackgroundTaskReminder{Provider: &mockBgProvider{nil}}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 0 {
 		t.Errorf("expected empty output when no tasks complete, got %d lines", len(lines))
 	}
@@ -35,7 +35,7 @@ func TestBackgroundTaskReminder_SuccessfulTask(t *testing.T) {
 			{Name: "build", Command: "make build", ExitCode: 0, Status: "exited"},
 		},
 	}}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
@@ -57,7 +57,7 @@ func TestBackgroundTaskReminder_SuccessfulTaskWithOutput(t *testing.T) {
 				RecentStdout: "compiled successfully\nbinary: ./tachi"},
 		},
 	}}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
@@ -76,7 +76,7 @@ func TestBackgroundTaskReminder_FailedTask(t *testing.T) {
 				RecentStderr: "TestFoo failed\npanic: oops"},
 		},
 	}}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
@@ -101,7 +101,7 @@ func TestBackgroundTaskReminder_MultipleTasks(t *testing.T) {
 			{Name: "test", Command: "go test ./...", ExitCode: 1, Status: "exited"},
 		},
 	}}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 2 {
 		t.Fatalf("expected 2 lines, got %d", len(lines))
 	}
@@ -119,7 +119,7 @@ func TestBackgroundTaskReminder_FiresOnToolResult(t *testing.T) {
 			{Name: "build", Command: "make", ExitCode: 0, Status: "exited"},
 		},
 	}}
-	lines := r.Generate(Context{IsFirstMessage: false, IsToolResult: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false, IsToolResult: true})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line on tool result, got %d", len(lines))
 	}
@@ -134,7 +134,7 @@ func TestBackgroundTaskReminder_TailTruncation(t *testing.T) {
 				RecentStdout: big},
 		},
 	}}
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}

@@ -12,7 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -30,7 +30,7 @@ type RunConfig struct {
 	MaxIter         int
 	MaxTokens       int
 	MaxMessageChars int // max chars per message in prompt (default 2000)
-	Logger          *debuglog.Logger
+	Logger          *logger.Logger
 }
 
 // RunDream executes the full dream pipeline for one domain plan.
@@ -39,13 +39,10 @@ type RunConfig struct {
 //
 // Provider resolution: DreamProvider (from config) > FallbackProvider (main).
 func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(id string) ([]session.Message, error)) (State, error) {
-	logger := cfg.Logger
-	if logger == nil {
-		logger = debuglog.DefaultLogger
-	}
-	logger = logger.WithSource("dream:run")
+	l := cfg.Logger
+	l = l.With("source", "dream:run")
 
-	logger.Log("[%s:%s]: starting (memory_root=%s, active_sessions=%d)",
+	l.Logf(ctx, "[%s:%s]: starting (memory_root=%s, active_sessions=%d)",
 		plan.Group.Domain, plan.Group.Root, plan.Group.MemoryRoot, len(plan.ActiveSessions))
 
 	// Resolve provider.
@@ -55,7 +52,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	}
 
 	// Build session summaries (pre-filtered to user+assistant only).
-	summaries := buildSessionSummaries(plan.ActiveSessions, loadMessages, plan.LastState.LastDreamAt, logger)
+	summaries := buildSessionSummaries(plan.ActiveSessions, loadMessages, plan.LastState.LastDreamAt, l)
 
 	// Build prompt.
 	systemPrompt, userPrompt := BuildPrompt(plan, summaries, cfg.MaxMessageChars)
@@ -93,7 +90,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	for ev := range eventCh {
 		if ev.Type == agent.AgentEventError && ev.Result != nil && ev.Result.Error != nil {
 			lastErr = ev.Result.Error
-			logger.Log("[%s:%s]: error: %v", plan.Group.Domain, plan.Group.Root, lastErr)
+			l.Logf(ctx, "[%s:%s]: error: %v", plan.Group.Domain, plan.Group.Root, lastErr)
 		}
 	}
 
@@ -102,13 +99,13 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	}
 
 	// Post-dream: scan topic files and update decay states.
-	factStates := ScanTopicFacts(plan.Group.MemoryRoot, plan.LastState.FactStates, logger)
+	factStates := ScanTopicFacts(plan.Group.MemoryRoot, plan.LastState.FactStates, l)
 
 	// Ensure inbox.md was cleared. The dream agent is instructed to integrate
 	// inbox content into topic files and then clear the inbox. If the agent
 	// forgot, force-clear to prevent stale content from accumulating and being
 	// re-processed in the next dream.
-	ensureInboxCleared(plan.Group.MemoryRoot, logger)
+	ensureInboxCleared(plan.Group.MemoryRoot, l)
 
 	state := State{
 		LastDreamAt:     time.Now(),
@@ -116,7 +113,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		FactStates:      factStates,
 	}
 
-	logger.Log("[%s:%s]: completed successfully", plan.Group.Domain, plan.Group.Root)
+	l.Logf(ctx, "[%s:%s]: completed successfully", plan.Group.Domain, plan.Group.Root)
 	return state, nil
 }
 
@@ -152,13 +149,13 @@ func resolveProvider(cfg RunConfig) (llm.Provider, error) {
 // For each session, it includes all conversation turns that started after
 // lastDreamAt, plus up to 2 preceding turns for context. If lastDreamAt is
 // zero (first dream), all pairs are included.
-func buildSessionSummaries(sessions []*session.Session, loadMessages func(string) ([]session.Message, error), lastDreamAt time.Time, logger *debuglog.Logger) []SessionSummary {
+func buildSessionSummaries(sessions []*session.Session, loadMessages func(string) ([]session.Message, error), lastDreamAt time.Time, logger *logger.Logger) []SessionSummary {
 	var summaries []SessionSummary
 
 	for _, sess := range sessions {
 		msgs, err := loadMessages(sess.ID)
 		if err != nil {
-			logger.Log("failed to load messages for %s: %v", sess.ID, err)
+			logger.Logf(context.Background(), "failed to load messages for %s: %v", sess.ID, err)
 			continue
 		}
 
@@ -205,22 +202,22 @@ func buildSessionSummaries(sessions []*session.Session, loadMessages func(string
 // The dream agent is instructed to integrate inbox content into topic files
 // and then clear the inbox. If the agent forgot, we force-clear here to
 // prevent stale content from being re-processed in the next dream.
-func ensureInboxCleared(memoryRoot string, logger *debuglog.Logger) {
+func ensureInboxCleared(memoryRoot string, logger *logger.Logger) {
 	inboxPath := filepath.Join(memoryRoot, "inbox.md")
 	info, err := os.Stat(inboxPath)
 	if os.IsNotExist(err) {
 		return // already clean
 	}
 	if err != nil {
-		logger.Log("ensureInboxCleared: stat %s: %v", inboxPath, err)
+		logger.Logf(context.Background(), "ensureInboxCleared: stat %s: %v", inboxPath, err)
 		return
 	}
 	if info.Size() == 0 {
 		return // already empty
 	}
 
-	logger.Log("inbox.md has %d bytes after dream — force-clearing (agent forgot)", info.Size())
+	logger.Logf(context.Background(), "inbox.md has %d bytes after dream — force-clearing (agent forgot)", info.Size())
 	if err := os.WriteFile(inboxPath, []byte{}, 0644); err != nil {
-		logger.Log("ensureInboxCleared: failed to truncate %s: %v", inboxPath, err)
+		logger.Logf(context.Background(), "ensureInboxCleared: failed to truncate %s: %v", inboxPath, err)
 	}
 }

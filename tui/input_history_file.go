@@ -1,15 +1,14 @@
 package tui
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
-
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
-func loadInputHistoryFile(path string, limit int) []string {
+func (i *InputArea) loadInputHistoryFile(path string, limit int) []string {
 	if path == "" || limit <= 0 {
 		return make([]string, 0)
 	}
@@ -18,12 +17,12 @@ func loadInputHistoryFile(path string, limit int) []string {
 		if errors.Is(err, os.ErrNotExist) {
 			return make([]string, 0)
 		}
-		debuglog.DefaultLogger.Log("input history: read %s: %v", path, err)
+		i.logger.Logf(context.Background(), "input history: read %s: %v", path, err)
 		return make([]string, 0)
 	}
 	var entries []string
 	if err := json.Unmarshal(data, &entries); err != nil {
-		debuglog.DefaultLogger.Log("input history: parse %s: %v", path, err)
+		i.logger.Logf(context.Background(), "input history: parse %s: %v", path, err)
 		return make([]string, 0)
 	}
 	if len(entries) > limit {
@@ -32,7 +31,7 @@ func loadInputHistoryFile(path string, limit int) []string {
 	return entries
 }
 
-func saveInputHistoryFile(path string, entries []string) error {
+func (i *InputArea) saveInputHistoryFile(path string, entries []string) error {
 	if path == "" {
 		return nil
 	}

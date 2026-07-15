@@ -5,7 +5,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/robfig/cron/v3"
 )
 
@@ -21,26 +21,23 @@ import (
 // Currently used for: AutoDream memory consolidation.
 type SystemScheduler struct {
 	engine *cron.Cron
-	logger *debuglog.Logger
+	logger *logger.Logger
 
-	mu       sync.Mutex
-	entries  map[string]cron.EntryID // name → entry ID
-	ctx      context.Context
-	cancel   context.CancelFunc
-	started  bool
+	mu      sync.Mutex
+	entries map[string]cron.EntryID // name → entry ID
+	ctx     context.Context
+	cancel  context.CancelFunc
+	started bool
 }
 
 // SystemSchedulerConfig holds configuration for creating a SystemScheduler.
 type SystemSchedulerConfig struct {
-	Logger *debuglog.Logger
+	Logger *logger.Logger
 }
 
 // NewSystemScheduler creates a SystemScheduler. Call Start() to begin scheduling.
 func NewSystemScheduler(cfg SystemSchedulerConfig) *SystemScheduler {
-	logger := cfg.Logger
-	if logger == nil {
-		logger = debuglog.DefaultLogger
-	}
+	l := cfg.Logger
 
 	return &SystemScheduler{
 		engine: cron.New(
@@ -49,7 +46,7 @@ func NewSystemScheduler(cfg SystemSchedulerConfig) *SystemScheduler {
 			)),
 			cron.WithLocation(time.Local),
 		),
-		logger:  logger.WithSource("system-cron"),
+		logger:  l.With("source", "system-cron"),
 		entries: make(map[string]cron.EntryID),
 	}
 }
@@ -73,13 +70,13 @@ func (s *SystemScheduler) Register(name, schedule string, timeout time.Duration,
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
 
-		s.logger.Log("[%s] triggered", name)
+		s.logger.Logf(context.Background(), "[%s] triggered", name)
 		start := time.Now()
 
 		if err := fn(ctx); err != nil {
-			s.logger.Log("[%s] failed after %v: %v", name, time.Since(start), err)
+			s.logger.Logf(context.Background(), "[%s] failed after %v: %v", name, time.Since(start), err)
 		} else {
-			s.logger.Log("[%s] completed in %v", name, time.Since(start))
+			s.logger.Logf(context.Background(), "[%s] completed in %v", name, time.Since(start))
 		}
 	})
 	if err != nil {
@@ -87,7 +84,7 @@ func (s *SystemScheduler) Register(name, schedule string, timeout time.Duration,
 	}
 
 	s.entries[name] = entryID
-	s.logger.Log("registered [%s] schedule=%s timeout=%v", name, schedule, timeout)
+	s.logger.Logf(context.Background(), "registered [%s] schedule=%s timeout=%v", name, schedule, timeout)
 	return nil
 }
 
@@ -99,7 +96,7 @@ func (s *SystemScheduler) Start(ctx context.Context) {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.started = true
 	s.engine.Start()
-	s.logger.Log("started with %d jobs", len(s.entries))
+	s.logger.Logf(context.Background(), "started with %d jobs", len(s.entries))
 }
 
 // Stop halts the scheduler and waits for any in-flight job to finish.
@@ -111,7 +108,7 @@ func (s *SystemScheduler) Stop() {
 	s.mu.Unlock()
 
 	<-s.engine.Stop().Done()
-	s.logger.Log("stopped")
+	s.logger.Logf(context.Background(), "stopped")
 }
 
 // ErrAlreadyStarted is returned when Register is called after Start.

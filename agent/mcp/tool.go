@@ -114,7 +114,7 @@ func (t MCPTool) ExecuteContext(ctx context.Context, args string) (string, error
 	}
 
 	// Apply result size limit: save oversized results to disk and return preview.
-	output = truncateToolOutput(output, t.manager.ToolResultMaxChars(), t.manager.ToolResultFileDir(), t.Name())
+	output = t.manager.truncateToolOutput(ctx, output, t.manager.ToolResultMaxChars(), t.manager.ToolResultFileDir(), t.Name())
 
 	return output, nil
 }

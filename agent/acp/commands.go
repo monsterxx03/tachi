@@ -18,7 +18,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // ACPSlashCommand represents a slash command available in ACP mode.
@@ -220,7 +220,7 @@ func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 	}
 
 	// Switch to named provider
-	if err := switchSessionModel(sess, args); err != nil {
+	if err := switchSessionModel(sess, args, nil); err != nil {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to switch model: %v", err))
 		return acp.StopReasonEndTurn, err
 	}
@@ -234,7 +234,7 @@ func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 // ---------------------------------------------------------------------------
 
 func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /commit handler start")
+	logger.FromContext(ctx).Logf(ctx, "ACP: /commit handler start")
 
 	aiAgent := sess.agent
 
@@ -280,7 +280,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 // ---------------------------------------------------------------------------
 
 func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /review handler start")
+	logger.FromContext(ctx).Logf(ctx, "ACP: /review handler start")
 
 	aiAgent := sess.agent
 	cfg := sess.cfg
@@ -341,7 +341,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 // ---------------------------------------------------------------------------
 
 func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /init handler start")
+	logger.FromContext(ctx).Logf(ctx, "ACP: /init handler start")
 
 	// Build history from session
 	var history []llm.Message
@@ -352,7 +352,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 			if convErr == nil {
 				history = llmMsgs
 			} else {
-				debuglog.DefaultLogger.Log("ACP: ConvertSessionToLLMMessages failed: %v", convErr)
+				logger.FromContext(ctx).Logf(ctx, "ACP: ConvertSessionToLLMMessages failed: %v", convErr)
 			}
 		}
 	}
@@ -371,7 +371,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 // ---------------------------------------------------------------------------
 
 func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /compact handler start")
+	logger.FromContext(ctx).Logf(ctx, "ACP: /compact handler start")
 
 	sessionID := acp.SessionId(sess.ID)
 	sm := sess.sessMgr
@@ -423,7 +423,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 // ---------------------------------------------------------------------------
 
 func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /usage handler start")
+	logger.FromContext(ctx).Logf(ctx, "ACP: /usage handler start")
 
 	sessionID := acp.SessionId(sess.ID)
 
@@ -481,7 +481,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 // ---------------------------------------------------------------------------
 
 func handleACPMCP(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /mcp handler start args=%q", args)
+	logger.FromContext(ctx).Logf(ctx, "ACP: /mcp handler start args=%q", args)
 
 	sessionID := acp.SessionId(sess.ID)
 
@@ -559,7 +559,7 @@ func handleACPMCPReconnect(ctx context.Context, sess *ACPSession, conn *acp.Agen
 // ---------------------------------------------------------------------------
 
 func handleACPSkill(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /skill handler start args=%q", args)
+	logger.FromContext(ctx).Logf(ctx, "ACP: /skill handler start args=%q", args)
 
 	sessionID := acp.SessionId(sess.ID)
 
@@ -624,7 +624,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 			if convErr == nil {
 				history = llmMsgs
 			} else {
-				debuglog.DefaultLogger.Log("ACP: ConvertSessionToLLMMessages failed: %v", convErr)
+				logger.FromContext(ctx).Logf(ctx, "ACP: ConvertSessionToLLMMessages failed: %v", convErr)
 			}
 		}
 	}
@@ -642,7 +642,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 // ---------------------------------------------------------------------------
 
 func handleACPTranscript(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /transcript handler start")
+	logger.FromContext(ctx).Logf(ctx, "ACP: /transcript handler start")
 
 	sessionID := acp.SessionId(sess.ID)
 
@@ -688,7 +688,7 @@ func handleACPTranscript(ctx context.Context, sess *ACPSession, conn *acp.AgentS
 // ---------------------------------------------------------------------------
 
 func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
-	debuglog.DefaultLogger.Log("ACP: /research handler start args=%q", args)
+	logger.FromContext(ctx).Logf(ctx, "ACP: /research handler start args=%q", args)
 
 	sessionID := acp.SessionId(sess.ID)
 

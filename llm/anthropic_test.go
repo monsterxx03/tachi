@@ -1,7 +1,6 @@
 package llm
 
 import (
-	"context"
 	"testing"
 
 	"github.com/anthropics/anthropic-sdk-go"
@@ -14,7 +13,7 @@ func TestBuildRequest_SystemPrompt(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -41,7 +40,7 @@ func TestBuildRequest_BasicUserAssistant(t *testing.T) {
 		{Role: "user", Content: "Tell me a joke"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -70,7 +69,7 @@ func TestBuildRequest_UserWithSystem_SystemInSystemField(t *testing.T) {
 		{Role: "user", Content: "Follow-up"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -94,7 +93,7 @@ func TestBuildRequest_ToolMessagesOnly_NoSteer(t *testing.T) {
 		{Role: "tool", ToolCallID: "tc1", Content: "file1.txt\nfile2.txt"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -126,7 +125,7 @@ func TestBuildRequest_MultipleToolMessages_MergedIntoOneUserMessage(t *testing.T
 		{Role: "tool", ToolCallID: "tc2", Content: "result2"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -157,7 +156,7 @@ func TestBuildRequest_ToolMessagesFollowedBySteer_MergedIntoSameUserMessage(t *t
 		{Role: "assistant", Content: "Next response"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -191,7 +190,7 @@ func TestBuildRequest_MultipleToolsWithSteer(t *testing.T) {
 		{Role: "assistant", Content: "I see an error."},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -223,7 +222,7 @@ func TestBuildRequest_ToolMessagesNoSteer_ThenUserFollowUp(t *testing.T) {
 		{Role: "user", Content: "Now do something else"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -253,7 +252,7 @@ func TestBuildRequest_AssistantWithThinkingBlocks(t *testing.T) {
 		}},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -282,7 +281,7 @@ func TestBuildRequest_AssistantWithToolCalls(t *testing.T) {
 		}},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +304,7 @@ func TestBuildRequest_AssistantWithInvalidToolArgsJSON(t *testing.T) {
 		}},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +323,7 @@ func TestBuildRequest_ThinkingDisabled(t *testing.T) {
 	}
 
 	disabled := false
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{
 		MaxTokens: 100,
 		Thinking:  &disabled,
 	})
@@ -344,7 +343,7 @@ func TestBuildRequest_ThinkingDefaultAdaptive(t *testing.T) {
 	}
 
 	// No Thinking option → should be adaptive
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,7 +365,7 @@ func TestBuildRequest_Tools(t *testing.T) {
 		}, []string{"cmd"}),
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, tools, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, tools, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -391,7 +390,7 @@ func TestBuildRequest_SystemPromptWithCacheControl(t *testing.T) {
 		{Role: "user", Content: "Query"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -411,7 +410,7 @@ func TestBuildRequest_NoSystemPrompt_NoSystemField(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -427,7 +426,7 @@ func TestBuildRequest_BaseURL(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -443,7 +442,7 @@ func TestBuildRequest_MaxTokens(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 4096})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 4096})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -461,7 +460,7 @@ func TestBuildRequest_ToolMessagesAtStart_NoCrash(t *testing.T) {
 		{Role: "user", Content: "Hello"},
 	}
 
-	req, err := p.buildRequest(context.Background(), msgs, nil, ChatOptions{MaxTokens: 100})
+	req, err := p.buildRequest(t.Context(), msgs, nil, ChatOptions{MaxTokens: 100})
 	if err != nil {
 		t.Fatal(err)
 	}

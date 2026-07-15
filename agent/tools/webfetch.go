@@ -13,7 +13,7 @@ import (
 	"time"
 
 	md "github.com/JohannesKaufmann/html-to-markdown/v2"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
@@ -55,7 +55,7 @@ type WebFetchTool struct {
 	getClient func() *http.Client // lazily initialized via sync.OnceValue
 }
 
-func (t *WebFetchTool) Name() string  { return ToolNameWebFetch }
+func (t *WebFetchTool) Name() string   { return ToolNameWebFetch }
 func (t *WebFetchTool) Parallel() bool { return true }
 
 func (t *WebFetchTool) Description() string {
@@ -166,7 +166,7 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 	// Check cache.
 	if e, ok := webFetchCacheGet(u); ok {
 		// The cache stores full content — apply truncation on hit too.
-		content := t.truncateWebFetchOutput(e.content, u)
+		content := t.truncateWebFetchOutput(ctx, e.content, u)
 		if args.Prompt != "" {
 			content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
 		}
@@ -226,7 +226,7 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 	})
 
 	// Apply file-based truncation if content exceeds the limit.
-	content = t.truncateWebFetchOutput(content, u)
+	content = t.truncateWebFetchOutput(ctx, content, u)
 
 	// Prepend prompt if given.
 	if args.Prompt != "" {
@@ -436,10 +436,10 @@ func crossHostRedirectOutput(originalURL string, resp *http.Response) webFetchOu
 		codeText = resp.Status
 	}
 	return webFetchOutput{
-		URL:      originalURL,
-		Bytes:    0,
-		Code:     resp.StatusCode,
-		CodeText: codeText,
+		URL:         originalURL,
+		Bytes:       0,
+		Code:        resp.StatusCode,
+		CodeText:    codeText,
 		ContentType: "text/plain",
 		Content: fmt.Sprintf(
 			"REDIRECT DETECTED: The URL redirects to a different host.\n\n"+
@@ -461,7 +461,7 @@ func crossHostRedirectOutput(originalURL string, resp *http.Response) webFetchOu
 //
 // When MaxReturnChars <= 0, the result is returned unchanged (no limit).
 // When ResultBaseDir is empty, falls back to a simple inline truncation.
-func (t *WebFetchTool) truncateWebFetchOutput(content string, rawURL string) string {
+func (t *WebFetchTool) truncateWebFetchOutput(ctx context.Context, content string, rawURL string) string {
 	maxChars := t.MaxReturnChars
 	if maxChars <= 0 || len(content) <= maxChars {
 		return content
@@ -479,17 +479,17 @@ func (t *WebFetchTool) truncateWebFetchOutput(content string, rawURL string) str
 
 	// Ensure the directory exists.
 	if err := os.MkdirAll(t.ResultBaseDir, 0700); err != nil {
-		debuglog.DefaultLogger.Log("WebFetch: truncateWebFetchOutput: failed to create dir %s: %v", t.ResultBaseDir, err)
+		logger.FromContext(ctx).Logf(ctx, "WebFetch: truncateWebFetchOutput: failed to create dir %s: %v", t.ResultBaseDir, err)
 		return hardTruncateWebFetch(content, maxChars)
 	}
 
 	// Write the full result to disk.
 	if err := os.WriteFile(filepath, []byte(content), 0600); err != nil {
-		debuglog.DefaultLogger.Log("WebFetch: truncateWebFetchOutput: failed to write file %s: %v", filepath, err)
+		logger.FromContext(ctx).Logf(ctx, "WebFetch: truncateWebFetchOutput: failed to write file %s: %v", filepath, err)
 		return hardTruncateWebFetch(content, maxChars)
 	}
 
-	debuglog.DefaultLogger.Log("WebFetch: result too large (%d chars), saved to %s", len(content), filepath)
+	logger.FromContext(ctx).Logf(ctx, "WebFetch: result too large (%d chars), saved to %s", len(content), filepath)
 
 	var sb strings.Builder
 	sb.WriteString(fmt.Sprintf(

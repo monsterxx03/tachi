@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"context"
 	"fmt"
 	"os/exec"
 	"strings"
@@ -12,8 +13,8 @@ import (
 // in the system prompt.
 type GitReminder struct{}
 
-func (GitReminder) Generate(ctx Context) []string {
-	if !ctx.IsFirstMessage {
+func (GitReminder) Generate(ctx context.Context, rctx Context) []string {
+	if !rctx.IsFirstMessage {
 		return nil
 	}
 	// Only fire if we're inside a git repository.

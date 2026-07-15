@@ -10,7 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -37,7 +37,7 @@ func NewExecutor(a Agent, cfg config.SubagentConfig) *Executor {
 }
 
 // EnableWorktree creates and attaches a WorktreeManager from config.
-func (e *Executor) EnableWorktree(logger *debuglog.Logger) {
+func (e *Executor) EnableWorktree(logger *logger.Logger) {
 	e.worktreeMgr = NewWorktreeManager(e.cfg, logger)
 }
 
@@ -92,7 +92,7 @@ func (e *Executor) RunSubagent(
 	// If worktree is enabled, delegate to WorktreeManager
 	if e.worktreeMgr != nil {
 		result, stats, err := e.worktreeMgr.Create(ctx, branch, func(worktreeCtx context.Context, wtPath string) (string, *tools.SubagentResult, error) {
-			e.agent.Logger().Log("[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
+			e.agent.Logger().Logf(worktreeCtx, "[subagent:%s] worktree created at %s (branch=%s)", shortID, wtPath, fallbackIfEmpty(branch, "detached"))
 			return e.run(worktreeCtx, shortID, args, provider, maxIterations, thinking, branch, wtPath)
 		})
 		return result, shortID, stats, err
@@ -120,13 +120,13 @@ func (e *Executor) run(
 		}
 	}
 
-	childLogger := e.agent.Logger().WithSessionID(subagentSessionID).WithPrefix(fmt.Sprintf("[subagent:%s]", shortID))
+	childLogger := e.agent.Logger().With("session_id", subagentSessionID).With("prefix", fmt.Sprintf("[subagent:%s]", shortID))
 
 	// Build allowed tools list — exclude AskUserQuestion and SubAgent
 	allowedTools := buildAllowedTools(e, args.AllowedTools)
 
 	child := e.agent.NewChildAgent(childLogger, provider, maxIterations, allowedTools, subagentSessionID)
-	childLogger.Log("starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%v session_id=%s",
+	childLogger.Logf(ctx, "starting | prompt_len=%d tools=%d max_iters=%d thinking=%v worktree=%v session_id=%s",
 		len(args.Prompt), len(allowedTools), maxIterations, thinking, worktreePath != "", subagentSessionID)
 
 	// Build system prompt
@@ -144,9 +144,9 @@ func (e *Executor) run(
 	if sm := e.agent.SessionManager(); sm != nil {
 		if cur := sm.Current(); cur != nil {
 			var recErr error
-			rec, recErr = newRecorder(cur.ID, shortID)
+			rec, recErr = newRecorder(cur.ID, shortID, childLogger)
 			if recErr != nil {
-				childLogger.Log("failed to create recorder: %v", recErr)
+				childLogger.Logf(ctx, "failed to create recorder: %v", recErr)
 			} else {
 				defer rec.close()
 				rec.record(&session.Message{
@@ -255,7 +255,7 @@ func (e *Executor) run(
 			if event.Error != nil {
 				errVal = event.Error
 			}
-			childLogger.Log("completed with error | iters=%d duration=%s output_len=%d tool_calls=%s err=%v",
+			childLogger.Logf(ctx, "completed with error | iters=%d duration=%s output_len=%d tool_calls=%s err=%v",
 				iterCount, duration, len(finalResult), toolCalls.String(), errVal)
 			stats := &tools.SubagentResult{
 				Output:          finalResult,
@@ -282,7 +282,7 @@ func (e *Executor) run(
 		Duration:        duration,
 		ToolCallSummary: toolCalls,
 	}
-	childLogger.Log("completed | iters=%d duration=%s output_len=%d tool_calls=%s",
+	childLogger.Logf(ctx, "completed | iters=%d duration=%s output_len=%d tool_calls=%s",
 		iterCount, duration, len(finalResult), toolCalls.String())
 
 	return finalResult, stats, nil

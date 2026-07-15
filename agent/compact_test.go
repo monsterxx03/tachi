@@ -29,7 +29,7 @@ func TestBuildCompactHistory_Structure(t *testing.T) {
 func TestFinalizeCompact_NoActiveSession(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	_, err = FinalizeCompact(sm, "system prompt", "summary")
 	assert.Error(t, err)
@@ -39,7 +39,7 @@ func TestFinalizeCompact_NoActiveSession(t *testing.T) {
 func TestFinalizeCompact_CreatesNewSession(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	// Create an old session
 	oldSess, err := sm.New("anthropic", "/test/dir")
@@ -92,7 +92,7 @@ func TestFinalizeCompact_CreatesNewSession(t *testing.T) {
 func TestFinalizeCompact_PreservesProviderModelWorkingDir(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	oldSess, err := sm.New("openai", "/my/project")
 	require.NoError(t, err)

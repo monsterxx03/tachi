@@ -5,11 +5,12 @@
 package systemreminder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // Context carries the dynamic state available when generating reminders.
@@ -70,7 +71,7 @@ type Context struct {
 // Reminder generates one or more reminder lines given the current context.
 // It returns nil or an empty slice when no reminder is needed.
 type Reminder interface {
-	Generate(ctx Context) []string
+	Generate(ctx context.Context, rctx Context) []string
 }
 
 // TaggedReminder is an optional interface that Reminders can implement
@@ -83,16 +84,15 @@ type TaggedReminder interface {
 }
 
 // Collector aggregates a set of Reminders and formats active ones into a
-// single <system-reminder>...< /system-reminder> block.
+// single <system-reminder>...</system-reminder> block.
 type Collector struct {
 	reminders []Reminder
-	logger    *debuglog.Logger
 }
 
 // NewCollector creates a Collector that consults the given reminders.
 // When called with no arguments the collector always produces empty output.
 func NewCollector(reminders ...Reminder) *Collector {
-	return &Collector{reminders: reminders, logger: debuglog.DefaultLogger}
+	return &Collector{reminders: reminders}
 }
 
 // AddReminder appends a reminder to the collector without rebuilding.
@@ -100,107 +100,98 @@ func (c *Collector) AddReminder(r Reminder) {
 	c.reminders = append(c.reminders, r)
 }
 
-// SetLogger overrides the collector's logger. Channel callers use this to inject
-// a channel-specific logger so debug output is tagged with the correct source.
-func (c *Collector) SetLogger(l *debuglog.Logger) {
-	c.logger = l
-}
-
 // reminderGroup holds accumulated output parts and a human-readable name
 // of the reminders that fired, for logging.
 type reminderGroup struct {
-	parts     []string
+	lines     []string
 	firedName string
 }
 
 // collectGroups iterates all registered reminders and groups their output
 // by wrapper tag. Returns the default (untagged) group and a tag→group map.
-func (c *Collector) collectGroups(ctx Context) (*reminderGroup, map[string]*reminderGroup) {
+func (c *Collector) collectGroups(ctx context.Context, rctx Context) (*reminderGroup, map[string]*reminderGroup) {
 	defaultG := &reminderGroup{}
 	taggedG := make(map[string]*reminderGroup)
 
 	for _, r := range c.reminders {
-		generated := r.Generate(ctx)
+		generated := r.Generate(ctx, rctx)
 		if len(generated) == 0 {
 			continue
 		}
 
-		// Extract the short type name for logging.
-		typeName := fmt.Sprintf("%T", r)
-		if idx := strings.LastIndex(typeName, "."); idx >= 0 {
-			typeName = typeName[idx+1:]
-		}
-
+		name := fmt.Sprintf("%T", r)
 		if tr, ok := r.(TaggedReminder); ok {
 			tag := tr.WrapperTag()
-			g := taggedG[tag]
-			if g == nil {
-				g = &reminderGroup{firedName: tag}
+			g, ok := taggedG[tag]
+			if !ok {
+				g = &reminderGroup{}
 				taggedG[tag] = g
+			}
+			g.lines = append(g.lines, generated...)
+			if g.firedName == "" {
+				g.firedName = name
 			} else {
-				g.firedName += "+" + typeName
+				g.firedName += ", " + name
 			}
-			g.parts = append(g.parts, generated...)
 		} else {
-			if defaultG.firedName != "" {
-				defaultG.firedName += ", "
+			defaultG.lines = append(defaultG.lines, generated...)
+			if defaultG.firedName == "" {
+				defaultG.firedName = name
+			} else {
+				defaultG.firedName += ", " + name
 			}
-			defaultG.firedName += typeName
-			defaultG.parts = append(defaultG.parts, generated...)
 		}
 	}
 
 	return defaultG, taggedG
 }
 
-// buildBlock wraps reminder output parts in a <tag>...</tag> block.
-func buildBlock(tag string, parts []string) string {
-	return "<" + tag + ">\n" + strings.Join(parts, "\n") + "\n</" + tag + ">"
-}
-
 // Collect queries every registered reminder and groups output by wrapper tag.
 // Reminders that implement TaggedReminder get their own <tag>...</tag> block;
 // all others are combined into the default <system-reminder> block.
 // Returns an empty string when no reminders are active or c is nil.
-func (c *Collector) Collect(ctx Context) string {
+func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 	if c == nil {
 		return ""
 	}
 
-	defaultG, taggedG := c.collectGroups(ctx)
+	defaultG, taggedG := c.collectGroups(ctx, rctx)
 
-	var blocks []string
-
-	// Build <system-reminder> block from default-group reminders.
-	if len(defaultG.parts) > 0 {
-		blocks = append(blocks, buildBlock("system-reminder", defaultG.parts))
-		c.logger.Log("systemreminder: firing reminder(s): %s", defaultG.firedName)
+	var sb strings.Builder
+	if len(defaultG.lines) > 0 {
+		logger.FromContext(ctx).Logf(ctx, "systemreminder: firing reminder(s): %s", defaultG.firedName)
+		sb.WriteString("<system-reminder>\n")
+		for _, line := range defaultG.lines {
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("</system-reminder>\n")
 	}
-
-	// Build tagged blocks (e.g. <relevant-memories>).
 	for tag, g := range taggedG {
-		blocks = append(blocks, buildBlock(tag, g.parts))
-		c.logger.Log("systemreminder: firing tagged reminder(s): %s", g.firedName)
+		logger.FromContext(ctx).Logf(ctx, "systemreminder: firing tagged reminder(s): %s", g.firedName)
+		sb.WriteString("<" + tag + ">\n")
+		for _, line := range g.lines {
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+		sb.WriteString("</" + tag + ">\n")
 	}
 
-	if len(blocks) == 0 {
-		return ""
-	}
-	return strings.Join(blocks, "\n")
+	return sb.String()
 }
 
 // WrapUserMessage prepends the <system-reminder> block (if any) to the
 // given user message content. This is a convenience helper so callers
 // don't need to manually check emptiness. Safe to call on a nil Collector.
-func (c *Collector) WrapUserMessage(userMessage string, ctx Context) string {
+func (c *Collector) WrapUserMessage(ctx context.Context, userMessage string, rctx Context) string {
 	if c == nil {
 		return userMessage
 	}
 	// Inject current prompt so MemoryRecallReminder can use it as search query
-	ctx.CurrentPrompt = userMessage
-	block := c.Collect(ctx)
+	rctx.CurrentPrompt = userMessage
+	block := c.Collect(ctx, rctx)
 	if block == "" {
 		return userMessage
 	}
-	return block + "\n" + userMessage
+	return block + userMessage
 }

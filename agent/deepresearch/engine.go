@@ -24,7 +24,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // ---- Public types ----
@@ -50,7 +50,7 @@ type DeepResearch struct {
 	providersCfg    []config.ProviderConfig
 	defaultProvider llm.Provider
 	runner          SubagentRunner
-	logger          *debuglog.Logger
+	logger          *logger.Logger
 
 	// providerCache caches named providers to avoid re-creating them on each
 	// call to getProvider. The default provider is NOT cached here since it
@@ -71,7 +71,7 @@ func New(
 	providersCfg []config.ProviderConfig,
 	defaultProvider llm.Provider,
 	runner SubagentRunner,
-	logger *debuglog.Logger,
+	logger *logger.Logger,
 ) *DeepResearch {
 	return &DeepResearch{
 		cfg:             cfg,
@@ -584,7 +584,7 @@ func (dr *DeepResearch) getProvider(name string) (llm.Provider, error) {
 // log writes a debug log message if the logger is configured.
 func (dr *DeepResearch) log(format string, args ...any) {
 	if dr.logger != nil {
-		dr.logger.Log(format, args...)
+		dr.logger.Logf(context.Background(), format, args...)
 	}
 }
 

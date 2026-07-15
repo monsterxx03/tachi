@@ -7,7 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -20,11 +20,11 @@ var sessionDirFn = config.SessionDir
 
 type recorder struct {
 	file   *os.File
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
 // newRecorder creates a new recorder for the given session and sub-agent.
-func newRecorder(sessionID, shortID string) (*recorder, error) {
+func newRecorder(sessionID, shortID string, l *logger.Logger) (*recorder, error) {
 	sessionDir, err := sessionDirFn()
 	if err != nil {
 		return nil, err
@@ -41,7 +41,7 @@ func newRecorder(sessionID, shortID string) (*recorder, error) {
 		return nil, err
 	}
 
-	return &recorder{file: f, logger: debuglog.DefaultLogger}, nil
+	return &recorder{file: f, logger: l}, nil
 }
 
 // record appends a session.Message as a JSON line to the sub-agent's file.

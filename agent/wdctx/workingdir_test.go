@@ -9,7 +9,7 @@ import (
 func TestDir_NoFallbackNoContextDir(t *testing.T) {
 	resetGlobals()
 	// No fallback set, no context dir — should return "."
-	got := Dir(context.Background())
+	got := Dir(t.Context())
 	if got != "." {
 		t.Errorf("Dir() = %q, want %q", got, ".")
 	}
@@ -17,7 +17,7 @@ func TestDir_NoFallbackNoContextDir(t *testing.T) {
 
 func TestDir_WithContextDir(t *testing.T) {
 	resetGlobals()
-	ctx := WithDir(context.Background(), "/tmp/worktree")
+	ctx := WithDir(t.Context(), "/tmp/worktree")
 	got := Dir(ctx)
 	if got != "/tmp/worktree" {
 		t.Errorf("Dir() = %q, want %q", got, "/tmp/worktree")
@@ -28,7 +28,7 @@ func TestDir_FallbackDir(t *testing.T) {
 	resetGlobals()
 	SetFallbackDir(func() string { return "/fallback/path" })
 	// No context dir, should use fallback
-	got := Dir(context.Background())
+	got := Dir(t.Context())
 	if got != "/fallback/path" {
 		t.Errorf("Dir() = %q, want %q", got, "/fallback/path")
 	}
@@ -37,7 +37,7 @@ func TestDir_FallbackDir(t *testing.T) {
 func TestDir_ContextDirTakesPriorityOverFallback(t *testing.T) {
 	resetGlobals()
 	SetFallbackDir(func() string { return "/fallback/path" })
-	ctx := WithDir(context.Background(), "/ctx/path")
+	ctx := WithDir(t.Context(), "/ctx/path")
 	got := Dir(ctx)
 	if got != "/ctx/path" {
 		t.Errorf("Dir() = %q, want %q", got, "/ctx/path")
@@ -53,7 +53,7 @@ func TestSetFallbackDir_OnceBehavior(t *testing.T) {
 	SetFallbackDir(func() string { callCount++; return "/third" })
 
 	// Should use the first registered function
-	got := Dir(context.Background())
+	got := Dir(t.Context())
 	if got != "/first" {
 		t.Errorf("Dir() = %q, want %q", got, "/first")
 	}
@@ -84,7 +84,7 @@ func TestDir_NilContextWithFallback(t *testing.T) {
 
 func TestWithDir_DoesNotModifyParent(t *testing.T) {
 	resetGlobals()
-	parent := context.Background()
+	parent := t.Context()
 	child := WithDir(parent, "/child/path")
 
 	// Parent should not have the dir
@@ -104,7 +104,7 @@ func TestDir_EmptyStringInContextFallsBack(t *testing.T) {
 	resetGlobals()
 	SetFallbackDir(func() string { return "/fallback" })
 	// Setting empty string should be treated as "not set" and fall through
-	ctx := WithDir(context.Background(), "")
+	ctx := WithDir(t.Context(), "")
 	got := Dir(ctx)
 	if got != "/fallback" {
 		t.Errorf("Dir() = %q, want %q", got, "/fallback")

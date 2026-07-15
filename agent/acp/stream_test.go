@@ -1,7 +1,6 @@
 package acp
 
 import (
-	"context"
 	"encoding/json"
 	"io"
 	"sync"
@@ -114,7 +113,7 @@ func setupSessionWithMessages(t *testing.T, cwd string, msgs []session.Message) 
 
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", cwd)
 	require.NoError(t, err)
@@ -136,12 +135,12 @@ func setupSessionWithMessages(t *testing.T, cwd string, msgs []session.Message) 
 
 func TestReplaySessionHistory_NilConn(t *testing.T) {
 	// Must not panic
-	replaySessionHistory(context.Background(), nil, &ACPSession{})
+	replaySessionHistory(t.Context(), nil, &ACPSession{})
 }
 
 func TestReplaySessionHistory_NilSessMgr(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, &ACPSession{sessMgr: nil})
+	replaySessionHistory(t.Context(), conn, &ACPSession{sessMgr: nil})
 	notifications := drainNotifications(w, ch)
 	assert.Empty(t, notifications, "no notifications when sessMgr is nil")
 }
@@ -149,7 +148,7 @@ func TestReplaySessionHistory_NilSessMgr(t *testing.T) {
 func TestReplaySessionHistory_EmptyMessages(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", "/empty")
 	require.NoError(t, err)
@@ -162,7 +161,7 @@ func TestReplaySessionHistory_EmptyMessages(t *testing.T) {
 		sessMgr: sm,
 	}
 
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 	assert.Empty(t, notifications, "no messages → no notifications")
 }
@@ -173,7 +172,7 @@ func TestReplaySessionHistory_ReplaysUserMessage(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -186,7 +185,7 @@ func TestReplaySessionHistory_ReplaysAssistantMessage(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -200,7 +199,7 @@ func TestReplaySessionHistory_ReplaysThinkingMessage(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -218,7 +217,7 @@ func TestReplaySessionHistory_ReplaysToolCall(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -242,7 +241,7 @@ func TestReplaySessionHistory_ReplaysToolCall_WithArgs(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -317,7 +316,7 @@ func TestReplaySessionHistory_ReplaysToolCall_Kinds(t *testing.T) {
 			})
 
 			conn, w, ch := mockACPConn(t)
-			replaySessionHistory(context.Background(), conn, acpSess)
+			replaySessionHistory(t.Context(), conn, acpSess)
 			notifications := drainNotifications(w, ch)
 
 			require.Len(t, notifications, 1)
@@ -343,7 +342,7 @@ func TestReplaySessionHistory_ReplaysToolResult_Success(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -365,7 +364,7 @@ func TestReplaySessionHistory_ReplaysToolResult_Error(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 1)
@@ -384,7 +383,7 @@ func TestReplaySessionHistory_SkipsConfirm(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	// Should have 2 notifications (user + assistant), confirm is skipped
@@ -412,7 +411,7 @@ func TestReplaySessionHistory_FullSequence(t *testing.T) {
 	})
 
 	conn, w, ch := mockACPConn(t)
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 
 	require.Len(t, notifications, 5,
@@ -444,7 +443,7 @@ func TestReplaySessionHistory_CachesHistory(t *testing.T) {
 	// Replaying should populate acpSess.history with converted LLM messages
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", "/cache-test")
 	require.NoError(t, err)
@@ -468,7 +467,7 @@ func TestReplaySessionHistory_CachesHistory(t *testing.T) {
 
 	assert.Nil(t, acpSess.history, "history should start nil")
 
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	drainNotifications(w, ch)
 
 	require.NotNil(t, acpSess.history, "history should be populated after replay")
@@ -485,7 +484,7 @@ func TestReplaySessionHistory_CachesHistory_WithTools(t *testing.T) {
 	// Verify history is cached for sequences with tool calls
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", "/cache-tools")
 	require.NoError(t, err)
@@ -519,7 +518,7 @@ func TestReplaySessionHistory_CachesHistory_WithTools(t *testing.T) {
 		sessMgr: sm,
 	}
 
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	drainNotifications(w, ch)
 
 	require.NotNil(t, acpSess.history, "history should be cached")
@@ -548,7 +547,7 @@ func TestReplaySessionHistory_CachesHistory_ConversionFailure(t *testing.T) {
 	// and history should remain nil
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", "/cache-fail")
 	require.NoError(t, err)
@@ -570,7 +569,7 @@ func TestReplaySessionHistory_CachesHistory_ConversionFailure(t *testing.T) {
 	}
 
 	// Should not panic
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	drainNotifications(w, ch)
 
 	// History should be populated (simple case succeeds)
@@ -582,7 +581,7 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 	// This is a stress test for the SessionUpdate notification path.
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", "/concurrent")
 	require.NoError(t, err)
@@ -605,7 +604,7 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 			}
 
 			// Should not panic or race
-			replaySessionHistory(context.Background(), conn, acpSess)
+			replaySessionHistory(t.Context(), conn, acpSess)
 			notifications := drainNotifications(w, ch)
 			assert.Len(t, notifications, 1)
 		})
@@ -618,7 +617,7 @@ func TestReplaySessionHistory_LoadMessagesError(t *testing.T) {
 	// replaySessionHistory should handle this gracefully.
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	// Create session but then end it (makes current nil)
 	sess, err := sm.New("openai", "/load-err")
@@ -638,7 +637,7 @@ func TestReplaySessionHistory_LoadMessagesError(t *testing.T) {
 	}
 
 	// Should not panic — LoadMessages will error because current is nil
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	notifications := drainNotifications(w, ch)
 	assert.Empty(t, notifications, "no notifications when LoadMessages fails")
 }
@@ -648,7 +647,7 @@ func TestReplaySessionHistory_DoesNotCacheOnConversionFailure(t *testing.T) {
 	// This can happen with malformed message sequences.
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	sess, err := sm.New("openai", "/conv-fail")
 	require.NoError(t, err)
@@ -673,7 +672,7 @@ func TestReplaySessionHistory_DoesNotCacheOnConversionFailure(t *testing.T) {
 		sessMgr: sm,
 	}
 
-	replaySessionHistory(context.Background(), conn, acpSess)
+	replaySessionHistory(t.Context(), conn, acpSess)
 	drainNotifications(w, ch)
 
 	assert.NotNil(t, acpSess.history, "simple sequence should cache successfully")

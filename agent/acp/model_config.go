@@ -9,7 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 const (
@@ -96,16 +96,6 @@ func buildModeConfigOption(currentMode string) *acp.SessionConfigOption {
 	return &opt
 }
 
-// sendModeConfigOption sends the mode config option as a SessionUpdate
-// notification to the ACP client.
-func sendModeConfigOption(conn *acp.AgentSideConnection, currentMode string, sessionID string) {
-	if conn == nil {
-		return
-	}
-	opt := buildModeConfigOption(currentMode)
-	sendConfigOptionsUpdate(conn, sessionID, opt)
-}
-
 // sendModelConfigOption sends one or more pre-built session config options as
 // a SessionUpdate notification to the ACP client. All options are sent in a
 // single update to avoid later updates overwriting earlier ones — the protocol
@@ -163,7 +153,7 @@ func toACPUsage(u *llm.Usage) *acp.Usage {
 // session manager.
 //
 // The caller must hold sess.mu.
-func switchSessionModel(sess *ACPSession, providerName string) error {
+func switchSessionModel(sess *ACPSession, providerName string, l *logger.Logger) error {
 	if sess == nil || sess.cfg == nil {
 		return fmt.Errorf("session not initialized")
 	}
@@ -201,7 +191,7 @@ func switchSessionModel(sess *ACPSession, providerName string) error {
 			cur.ProviderName = resolved.Name
 			// UpdateMeta is best-effort; don't fail the switch if persistence fails.
 			if err := sess.sessMgr.UpdateMeta(cur); err != nil {
-				debuglog.DefaultLogger.Log("ACP: failed to persist provider switch to session meta: %v", err)
+				l.Logf(context.Background(), "ACP: failed to persist provider switch to session meta: %v", err)
 			}
 		}
 	}

@@ -14,7 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/dream"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -140,7 +140,7 @@ type Model struct {
 
 	dreamOrch *dream.Orchestrator // active dream orchestrator (nil when idle)
 
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
 // MCPReadyMsg is sent to the TUI when MCP background initialization completes.
@@ -164,7 +164,7 @@ func NewModel(cfg ModelConfig) *Model {
 	m := &Model{
 		statusbar:        NewStatusBar(cfg.ProviderInfo, cfg.ContextWindow),
 		chatview:         NewChatView(),
-		input:            NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath()),
+		input:            NewInputArea(inputHistoryMax(cfg.Config), inputHistoryFilePath(), cfg.Agent.Logger()),
 		agent:            cfg.Agent,
 		systemPrompt:     cfg.SystemPrompt,
 		baseSystemPrompt: cfg.SystemPrompt,
@@ -280,7 +280,7 @@ func (m *Model) cycleMode() {
 
 	// The agent handles tool save/restore internally.
 	if err := m.agent.SetMode(next); err != nil {
-		m.logger.Log("TUI: failed to switch mode to %s: %v", next, err)
+		m.logger.Logf(context.Background(), "TUI: failed to switch mode to %s: %v", next, err)
 		return
 	}
 
@@ -315,7 +315,7 @@ func (m *Model) persistMode(mode string) {
 	}
 	curr.Mode = mode
 	if err := sm.UpdateMeta(curr); err != nil {
-		m.logger.Log("TUI: failed to persist mode %s: %v", mode, err)
+		m.logger.Logf(context.Background(), "TUI: failed to persist mode %s: %v", mode, err)
 	}
 }
 
@@ -429,7 +429,7 @@ func (m *Model) handleMCPReady() {
 	m.mcpReady = true
 	m.statusbar.SetMCPReady(true)
 	if m.logger != nil {
-		m.logger.Log("TUI: MCP background init completed")
+		m.logger.Logf(context.Background(), "TUI: MCP background init completed")
 	}
 }
 

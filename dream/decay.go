@@ -1,6 +1,7 @@
 package dream
 
 import (
+	"context"
 	"math"
 	"os"
 	"path/filepath"
@@ -8,7 +9,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // HalfLifeDays is the decay half-life in days. Facts decay to 0.5 after this
@@ -33,12 +34,12 @@ func CalculateDecay(lastReinforced time.Time) float64 {
 // ScanTopicFacts scans all .md files in memoryRoot/topics/, extracts fact
 // blocks (separated by ---), and merges their state with existingStates.
 //
-// - New facts (not in existingStates) are initialized with decay=1.0.
-// - Existing facts retain their reinforcement count but have superseded
-//   status updated from the block content and decay recalculated.
-// - Facts in existingStates not found in topic files are excluded
-//   (they were removed/consolidated by the dream agent).
-func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactState, logger *debuglog.Logger) map[string]*memory.FactState {
+//   - New facts (not in existingStates) are initialized with decay=1.0.
+//   - Existing facts retain their reinforcement count but have superseded
+//     status updated from the block content and decay recalculated.
+//   - Facts in existingStates not found in topic files are excluded
+//     (they were removed/consolidated by the dream agent).
+func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactState, logger *logger.Logger) map[string]*memory.FactState {
 	result := make(map[string]*memory.FactState)
 	now := time.Now()
 
@@ -46,7 +47,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 	entries, err := os.ReadDir(topicsDir)
 	if err != nil {
 		if logger != nil {
-			logger.Log("ScanTopicFacts: read topics dir: %v", err)
+			logger.Logf(context.Background(), "ScanTopicFacts: read topics dir: %v", err)
 		}
 		return result
 	}
@@ -63,7 +64,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 		content, err := os.ReadFile(path)
 		if err != nil {
 			if logger != nil {
-				logger.Log("ScanTopicFacts: read %s: %v", path, err)
+				logger.Logf(context.Background(), "ScanTopicFacts: read %s: %v", path, err)
 			}
 			continue
 		}
@@ -92,13 +93,13 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 			} else {
 				// New fact: initialize with full strength.
 				result[id] = &memory.FactState{
-					ID:              id,
-					TopicFile:       topicFile,
-					Decay:           1.0,
-					Reinforcements:  0,
-					LastReinforced:  time.Time{}, // zero → not yet reinforced
-					CreatedAt:       now,
-					Superseded:      superseded,
+					ID:             id,
+					TopicFile:      topicFile,
+					Decay:          1.0,
+					Reinforcements: 0,
+					LastReinforced: time.Time{}, // zero → not yet reinforced
+					CreatedAt:      now,
+					Superseded:     superseded,
 				}
 			}
 		}
@@ -118,7 +119,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 				removedCount++
 			}
 		}
-		logger.Log("ScanTopicFacts: %d total, %d new, %d removed, %d existing",
+		logger.Logf(context.Background(), "ScanTopicFacts: %d total, %d new, %d removed, %d existing",
 			len(result), newCount, removedCount, len(result)-newCount)
 	}
 

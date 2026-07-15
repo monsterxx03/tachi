@@ -21,10 +21,10 @@ func TestNewLogger(t *testing.T) {
 		t.Errorf("name = %q, want %q", l.name, "tui")
 	}
 
-	l.Info("TUI started", "version", "1.0")
-	l.Debug("debug message", "key", "value")
-	l.Warn("warning", "code", 42)
-	l.Error("something failed", os.ErrNotExist, "file", "/tmp/x")
+	l.Info(t.Context(), "TUI started", "version", "1.0")
+	l.Debug(t.Context(), "debug message", "key", "value")
+	l.Warn(t.Context(), "warning", "code", 42)
+	l.Error(t.Context(), "something failed", os.ErrNotExist, "file", "/tmp/x")
 }
 
 func TestNewSub(t *testing.T) {
@@ -45,7 +45,7 @@ func TestNewSub(t *testing.T) {
 		t.Error("child should share parent's writer")
 	}
 
-	child.Info("connected", "guilds", 12)
+	child.Info(t.Context(), "connected", "guilds", 12)
 }
 
 func TestWithTrace(t *testing.T) {
@@ -55,8 +55,8 @@ func TestWithTrace(t *testing.T) {
 	}
 
 	l := New("tui")
-	tl := l.WithTrace("turn_abc12345")
-	tl.Info("turn started")
+	ctx := WithTraceID(t.Context(), "turn_abc12345")
+	l.Info(ctx, "turn started")
 }
 
 func TestDefault(t *testing.T) {
@@ -69,7 +69,7 @@ func TestDefault(t *testing.T) {
 	if l == nil {
 		t.Fatal("Default returned nil")
 	}
-	l.Info("default log message")
+	l.Info(t.Context(), "default log message")
 }
 
 func TestLogFilePath(t *testing.T) {

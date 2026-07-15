@@ -24,7 +24,7 @@ func (s *stubDeferredTracker) Contains(name string) bool {
 
 func TestDeferredToolReminder_NoProvider(t *testing.T) {
 	r := DeferredToolReminder{Provider: nil}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if lines != nil {
 		t.Errorf("expected nil when no provider, got %v", lines)
 	}
@@ -34,7 +34,7 @@ func TestDeferredToolReminder_EmptyPool(t *testing.T) {
 	r := DeferredToolReminder{
 		Provider: &stubDeferredProvider{},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if lines != nil {
 		t.Errorf("expected nil when pool is empty, got %v", lines)
 	}
@@ -50,7 +50,7 @@ func TestDeferredToolReminder_NotFirstMessage(t *testing.T) {
 	}
 	// With async MCP init, the reminder should fire on ANY non-tool-result
 	// message where undiscovered tools exist, not just the first message.
-	lines := r.Generate(Context{IsFirstMessage: false})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: false})
 	if lines == nil {
 		t.Error("expected non-nil with undiscovered tools even if not first message")
 	}
@@ -64,7 +64,7 @@ func TestDeferredToolReminder_ToolResultBoundary(t *testing.T) {
 			},
 		},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true, IsToolResult: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true, IsToolResult: true})
 	if lines != nil {
 		t.Errorf("expected nil at tool-result boundary, got %v", lines)
 	}
@@ -81,7 +81,7 @@ func TestDeferredToolReminder_AllDiscovered(t *testing.T) {
 			discovered: map[string]bool{"mcp__pg__query": true},
 		},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if lines != nil {
 		t.Errorf("expected nil when all tools discovered, got %v", lines)
 	}
@@ -99,7 +99,7 @@ func TestDeferredToolReminder_UndiscoveredTools(t *testing.T) {
 			discovered: map[string]bool{"mcp__gh__pr": true},
 		},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result with undiscovered tools")
 	}
@@ -133,7 +133,7 @@ func TestDeferredToolReminder_AllUndiscovered(t *testing.T) {
 		},
 		Tracker: nil, // no tracker = all undiscovered
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result with undiscovered tools")
 	}
@@ -156,7 +156,7 @@ func TestDeferredToolReminder_DescriptionTruncation(t *testing.T) {
 			},
 		},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
@@ -177,7 +177,7 @@ func TestDeferredToolReminder_MultilineDescription(t *testing.T) {
 			},
 		},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
@@ -195,7 +195,7 @@ func TestDeferredToolReminder_FirstLineOnly(t *testing.T) {
 			},
 		},
 	}
-	lines := r.Generate(Context{IsFirstMessage: true})
+	lines := r.Generate(t.Context(), Context{IsFirstMessage: true})
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
@@ -213,12 +213,12 @@ func TestDeferredToolReminder_FiresOnlyOnce(t *testing.T) {
 		},
 	}
 	// First call should fire
-	lines1 := r.Generate(Context{})
+	lines1 := r.Generate(t.Context(), Context{})
 	if lines1 == nil {
 		t.Fatal("expected output on first call")
 	}
 	// Second call should NOT fire (HasFired = true)
-	lines2 := r.Generate(Context{})
+	lines2 := r.Generate(t.Context(), Context{})
 	if lines2 != nil {
 		t.Error("expected nil on second call (HasFired guard)")
 	}

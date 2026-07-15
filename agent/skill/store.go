@@ -1,6 +1,7 @@
 package skill
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,7 +10,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -26,7 +27,7 @@ type frontmatter struct {
 type Store struct {
 	dirs   []string // search directories, ordered by priority (highest first)
 	source []string // source label for each dir ("project", "claude", "cursor", "global")
-	logger *debuglog.Logger
+	logger *logger.Logger
 }
 
 // NewStore creates a Store scanning project-level and global skill dirs in
@@ -69,12 +70,12 @@ func NewStore(projectRoot string) *Store {
 	// Lowest priority: global personal skills
 	addDir(config.GlobalSkillsDir(), SourceGlobal)
 
-	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
+	return &Store{dirs: dirs, source: source, logger: nil}
 }
 
 // newStore creates a Store with explicitly provided dirs and sources (for testing).
 func newStore(dirs, source []string) *Store {
-	return &Store{dirs: dirs, source: source, logger: debuglog.DefaultLogger}
+	return &Store{dirs: dirs, source: source, logger: nil}
 }
 
 // NewStoreWithDirs creates a Store scanning the given directories in priority
@@ -111,7 +112,7 @@ func (s *Store) Sources() []string {
 }
 
 // SetLogger sets the debug logger for this store.
-func (s *Store) SetLogger(l *debuglog.Logger) {
+func (s *Store) SetLogger(l *logger.Logger) {
 	s.logger = l
 }
 
@@ -145,7 +146,7 @@ func (s *Store) List() []SkillMeta {
 			fm, _, err := parseFrontmatter(string(data))
 			if err != nil {
 				// YAML parse error — use directory name as fallback
-				s.logger.Log("skill: List: %s/%s SKILL.md parse error: %v", dir, entry.Name(), err)
+				s.logger.Logf(context.Background(), "skill: List: %s/%s SKILL.md parse error: %v", dir, entry.Name(), err)
 				name := entry.Name()
 				if validateErr := ValidateName(name); validateErr != nil {
 					continue
@@ -167,11 +168,11 @@ func (s *Store) List() []SkillMeta {
 				name = entry.Name()
 			}
 			if validateErr := ValidateName(name); validateErr != nil {
-				s.logger.Log("skill: List: invalid skill name %q in %s: %v", name, dir, validateErr)
+				s.logger.Logf(context.Background(), "skill: List: invalid skill name %q in %s: %v", name, dir, validateErr)
 				continue
 			}
 			if seen[name] {
-				s.logger.Log("skill: List: skill %q from %s shadowed by higher-priority source", name, dir)
+				s.logger.Logf(context.Background(), "skill: List: skill %q from %s shadowed by higher-priority source", name, dir)
 				continue // shadowed by higher-priority skill
 			}
 			seen[name] = true
@@ -217,7 +218,7 @@ func (s *Store) Load(name string) (*Skill, error) {
 		fm, body, err := parseFrontmatter(rawContent)
 		if err != nil {
 			// YAML parse error — still return the skill with directory name
-			s.logger.Log("skill: Load: %s/%s SKILL.md parse error: %v", dir, name, err)
+			s.logger.Logf(context.Background(), "skill: Load: %s/%s SKILL.md parse error: %v", dir, name, err)
 			body = rawContent
 		}
 
@@ -309,7 +310,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 		if !overwrite {
 			return nil, fmt.Errorf("skill %q already exists at %s (use overwrite=true to replace)", name, skillFile)
 		}
-		s.logger.Log("skill: Create: overwriting existing skill %q at %s", name, skillFile)
+		s.logger.Logf(context.Background(), "skill: Create: overwriting existing skill %q at %s", name, skillFile)
 	}
 
 	// Create directory
@@ -324,7 +325,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
 	}
 
-	s.logger.Log("skill: Create: created skill %q at %s", name, skillFile)
+	s.logger.Logf(context.Background(), "skill: Create: created skill %q at %s", name, skillFile)
 
 	return &Skill{
 		Meta: SkillMeta{
@@ -356,7 +357,7 @@ func (s *Store) Delete(name string, source string) error {
 		return fmt.Errorf("failed to delete skill directory %q: %w", skillDir, err)
 	}
 
-	s.logger.Log("skill: Delete: removed skill %q at %s", name, skillDir)
+	s.logger.Logf(context.Background(), "skill: Delete: removed skill %q at %s", name, skillDir)
 	return nil
 }
 
@@ -421,7 +422,7 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
 	}
 
-	s.logger.Log("skill: Update: updated skill %q at %s", name, skillFile)
+	s.logger.Logf(context.Background(), "skill: Update: updated skill %q at %s", name, skillFile)
 
 	return &Skill{
 		Meta: SkillMeta{

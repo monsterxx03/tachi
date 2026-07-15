@@ -252,7 +252,7 @@ func TestOrchestrator_Run_SkipsWhenNoActiveSessions(t *testing.T) {
 	o := NewOrchestrator(Config{})
 
 	var called bool
-	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
+	err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
 		called = true
 		return State{LastDreamAt: time.Now()}, nil
 	})
@@ -283,7 +283,7 @@ func TestOrchestrator_Run_PassesGates(t *testing.T) {
 
 	var calledDomain string
 	var receivedActive int
-	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
+	err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
 		calledDomain = p.Group.Domain
 		receivedActive = len(p.ActiveSessions)
 		return State{
@@ -335,7 +335,7 @@ func TestOrchestrator_Run_OnlyPicksActiveSessions(t *testing.T) {
 
 	var receivedActive int
 	var activeIDs []string
-	err := o.Run(context.Background(), sessions, func(ctx context.Context, p Plan) (State, error) {
+	err := o.Run(t.Context(), sessions, func(ctx context.Context, p Plan) (State, error) {
 		receivedActive = len(p.ActiveSessions)
 		for _, s := range p.ActiveSessions {
 			activeIDs = append(activeIDs, s.ID)

@@ -9,6 +9,8 @@ import (
 	"crypto/sha256"
 	"fmt"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // DreamStateFile is the filename for dream state persistence in each memory domain.
@@ -29,13 +31,13 @@ type Entry struct {
 // Used by both the Dream orchestrator (scanning topics) and TopicBackend
 // (applying decay multipliers during recall + reinforcing on hit).
 type FactState struct {
-	ID              string    `json:"id"`
-	TopicFile       string    `json:"topic_file"`
-	Decay           float64   `json:"decay"`
-	Reinforcements  int       `json:"reinforcements"`
-	LastReinforced  time.Time `json:"last_reinforced"`
-	CreatedAt       time.Time `json:"created_at"`
-	Superseded      bool      `json:"superseded"`
+	ID             string    `json:"id"`
+	TopicFile      string    `json:"topic_file"`
+	Decay          float64   `json:"decay"`
+	Reinforcements int       `json:"reinforcements"`
+	LastReinforced time.Time `json:"last_reinforced"`
+	CreatedAt      time.Time `json:"created_at"`
+	Superseded     bool      `json:"superseded"`
 }
 
 // FactID generates the stable fact identifier used for decay tracking.
@@ -112,26 +114,26 @@ type Backend interface {
 
 // ObserveOptions controls Observe behavior.
 type ObserveOptions struct {
-	HookType    string // e.g. "post_tool_use", "post_tool_failure"
-	SessionID   string // session identifier
-	Project     string // project name (git repo root basename)
-	CWD         string // current working directory
-	ToolName    string // tool that was executed
-	ToolInput   string // tool invocation arguments
-	ToolOutput  string // tool result or error message
-	IsError     bool   // whether the tool execution failed
-	Timestamp   string // ISO 8601 timestamp
+	HookType   string // e.g. "post_tool_use", "post_tool_failure"
+	SessionID  string // session identifier
+	Project    string // project name (git repo root basename)
+	CWD        string // current working directory
+	ToolName   string // tool that was executed
+	ToolInput  string // tool invocation arguments
+	ToolOutput string // tool result or error message
+	IsError    bool   // whether the tool execution failed
+	Timestamp  string // ISO 8601 timestamp
 }
 
 // Config is the common configuration for memory backends.
 type Config struct {
-	Type             string        // backend type (e.g., "mem9", "agentmemory")
-	BaseDir          string        // ~/.tachi/
-	Timeout          time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
-	DecayHalfLifeDays int          // decay half-life in days (default 7); only used by TopicBackend
-	Mem9             Mem9Config
-	AgentMemory      AgentMemoryConfig // agentmemory-specific config
-	ExcludeRepos     []string // git repo roots to skip memory writes
+	Type              string        // backend type (e.g., "mem9", "agentmemory")
+	BaseDir           string        // ~/.tachi/
+	Timeout           time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
+	DecayHalfLifeDays int           // decay half-life in days (default 7); only used by TopicBackend
+	Mem9              Mem9Config
+	AgentMemory       AgentMemoryConfig // agentmemory-specific config
+	ExcludeRepos      []string          // git repo roots to skip memory writes
 }
 
 // Mem9Config holds mem9-specific configuration.
@@ -144,7 +146,7 @@ type Mem9Config struct {
 }
 
 // New creates a backend by type.
-func New(backendType string, cfg Config) (Backend, error) {
+func New(backendType string, cfg Config, logger *logger.Logger) (Backend, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}
@@ -154,7 +156,7 @@ func New(backendType string, cfg Config) (Backend, error) {
 	case "agentmemory":
 		return NewAgentMemoryBackend(cfg)
 	case "topic":
-		return NewTopicBackend(cfg)
+		return NewTopicBackend(cfg, logger)
 	default:
 		return nil, fmt.Errorf("unknown memory backend: %s", backendType)
 	}

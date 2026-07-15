@@ -1,10 +1,11 @@
 package systemreminder
 
 import (
+	"context"
 	"fmt"
 	"strings"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // DeferredToolProvider provides MCP tool metadata for the reminder.
@@ -36,10 +37,10 @@ type DeferredToolTracker interface {
 // Implements TaggedReminder so output gets its own <available-deferred-tools>
 // block independent of <system-reminder>.
 type DeferredToolReminder struct {
-	Provider  DeferredToolProvider
-	Tracker   DeferredToolTracker
-	HasFired  bool // set to true after generating output; prevents repeats
-	Dirty     bool // when true, re-fires even if HasFired (for mid-session toggle)
+	Provider DeferredToolProvider
+	Tracker  DeferredToolTracker
+	HasFired bool // set to true after generating output; prevents repeats
+	Dirty    bool // when true, re-fires even if HasFired (for mid-session toggle)
 }
 
 // WrapperTag implements the TaggedReminder interface.
@@ -47,7 +48,7 @@ func (r *DeferredToolReminder) WrapperTag() string {
 	return "available-deferred-tools"
 }
 
-func (r *DeferredToolReminder) Generate(ctx Context) []string {
+func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []string {
 	if r.Provider == nil {
 		return nil
 	}
@@ -56,7 +57,7 @@ func (r *DeferredToolReminder) Generate(ctx Context) []string {
 		return nil
 	}
 	// Don't inject at tool-result boundaries — not meaningful there.
-	if ctx.IsToolResult {
+	if rctx.IsToolResult {
 		return nil
 	}
 
@@ -102,7 +103,7 @@ func (r *DeferredToolReminder) Generate(ctx Context) []string {
 	}
 	lines = append(lines, "", "  "+totalHint)
 
-	debuglog.DefaultLogger.Log(
+	logger.FromContext(ctx).Logf(ctx,
 		"systemreminder: DeferredToolReminder: %d undiscovered of %d total (fired once)",
 		len(undiscovered), len(all))
 

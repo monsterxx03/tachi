@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"encoding/json"
 	"testing"
 )
@@ -85,7 +84,7 @@ func TestMCPSearchToolsTool_Execute_Success(t *testing.T) {
 		&stubTracker{},
 	)
 
-	output, err := tool.ExecuteContext(context.Background(), `{"query": "select:mcp__pg__query,mcp__pg__list_tables", "max_results": 5}`)
+	output, err := tool.ExecuteContext(t.Context(), `{"query": "select:mcp__pg__query,mcp__pg__list_tables", "max_results": 5}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -127,7 +126,7 @@ func TestMCPSearchToolsTool_Execute_TrackerCalled(t *testing.T) {
 		tracker,
 	)
 
-	_, err := tool.ExecuteContext(context.Background(), `{"query": "select:mcp__pg__query"}`)
+	_, err := tool.ExecuteContext(t.Context(), `{"query": "select:mcp__pg__query"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -143,7 +142,7 @@ func TestMCPSearchToolsTool_Execute_EmptyResults(t *testing.T) {
 		&stubTracker{},
 	)
 
-	output, err := tool.ExecuteContext(context.Background(), `{"query": "nonexistent"}`)
+	output, err := tool.ExecuteContext(t.Context(), `{"query": "nonexistent"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -166,7 +165,7 @@ func TestMCPSearchToolsTool_Execute_EmptyResults(t *testing.T) {
 
 func TestMCPSearchToolsTool_Execute_InvalidJSON(t *testing.T) {
 	tool := NewMCPSearchToolsTool(nil, nil)
-	_, err := tool.ExecuteContext(context.Background(), `not json`)
+	_, err := tool.ExecuteContext(t.Context(), `not json`)
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -174,7 +173,7 @@ func TestMCPSearchToolsTool_Execute_InvalidJSON(t *testing.T) {
 
 func TestMCPSearchToolsTool_Execute_MissingQuery(t *testing.T) {
 	tool := NewMCPSearchToolsTool(nil, nil)
-	_, err := tool.ExecuteContext(context.Background(), `{}`)
+	_, err := tool.ExecuteContext(t.Context(), `{}`)
 	if err == nil {
 		t.Error("expected error for missing query")
 	}
@@ -182,7 +181,7 @@ func TestMCPSearchToolsTool_Execute_MissingQuery(t *testing.T) {
 
 func TestMCPSearchToolsTool_Execute_EmptyQuery(t *testing.T) {
 	tool := NewMCPSearchToolsTool(nil, nil)
-	_, err := tool.ExecuteContext(context.Background(), `{"query": ""}`)
+	_, err := tool.ExecuteContext(t.Context(), `{"query": ""}`)
 	if err == nil {
 		t.Error("expected error for empty query")
 	}
@@ -195,7 +194,7 @@ func TestMCPSearchToolsTool_Execute_DefaultMaxResults(t *testing.T) {
 		&stubTracker{},
 	)
 
-	output, err := tool.ExecuteContext(context.Background(), `{"query": "something"}`)
+	output, err := tool.ExecuteContext(t.Context(), `{"query": "something"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

@@ -13,7 +13,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // decayCacheTTL is how long cached decay states remain valid before
@@ -52,7 +52,7 @@ type TopicBackend struct {
 	globalDir  string // ~/.tachi/memory/
 	projectDir string // <git-root>/.tachi/memory/ (may be empty)
 	rgPath     string // resolved path to rg binary (empty if unavailable)
-	logger     *debuglog.Logger
+	logger     *logger.Logger
 	extractor  KeywordExtractor // optional: extracts keywords from query for better recall
 
 	sessionProvider SessionProvider // optional: for temporal query fallback
@@ -73,7 +73,7 @@ type TopicBackend struct {
 // NewTopicBackend creates a TopicBackend.
 // globalDir is required (typically ~/.tachi/memory/).
 // projectDir may be empty if not in a git repository.
-func NewTopicBackend(cfg Config) (*TopicBackend, error) {
+func NewTopicBackend(cfg Config, l *logger.Logger) (*TopicBackend, error) {
 	globalDir := filepath.Join(cfg.BaseDir, "memory")
 	if err := os.MkdirAll(filepath.Join(globalDir, "topics"), 0700); err != nil {
 		return nil, fmt.Errorf("topic: create global memory dir: %w", err)
@@ -88,12 +88,11 @@ func NewTopicBackend(cfg Config) (*TopicBackend, error) {
 		}
 	}
 
-	logger := debuglog.DefaultLogger.WithSource("memory:topic")
 
 	// Check if rg (ripgrep) is available.
 	rgPath, err := exec.LookPath("rg")
 	if err != nil {
-		logger.Log("rg not found in PATH — Recall will be unavailable")
+		l.Logf(context.Background(), "rg not found in PATH — Recall will be unavailable")
 	}
 
 	halfLife := cfg.DecayHalfLifeDays
@@ -105,7 +104,7 @@ func NewTopicBackend(cfg Config) (*TopicBackend, error) {
 		globalDir:    globalDir,
 		projectDir:   projectDir,
 		rgPath:       rgPath,
-		logger:       logger,
+		logger:       l,
 		halfLifeDays: halfLife,
 	}, nil
 }
@@ -145,9 +144,9 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 	if t.extractor != nil {
 		if kws, err := t.extractor.ExtractKeywords(ctx, query); err == nil && len(kws) > 0 {
 			keywords = kws
-			t.logger.Log("keywords extracted: %v (from %q)", keywords, query)
+			t.logger.Logf(ctx, "keywords extracted: %v (from %q)", keywords, query)
 		} else if err != nil {
-			t.logger.Log("keyword extraction failed, falling back to raw query: %v", err)
+			t.logger.Logf(ctx, "keyword extraction failed, falling back to raw query: %v", err)
 		}
 	}
 
@@ -207,7 +206,7 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 	if (len(allResults) == 0 || allResults[0].Score < 0.3) && t.sessionProvider != nil {
 		sessionEntries, err := t.fetchRecentSessions(ctx, limit)
 		if err != nil {
-			t.logger.Log("session fallback: %v", err)
+			t.logger.Logf(ctx, "session fallback: %v", err)
 		} else if len(sessionEntries) > 0 {
 			allResults = append(sessionEntries, allResults...)
 			sort.Slice(allResults, func(i, j int) bool {
@@ -216,7 +215,7 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 			if len(allResults) > limit {
 				allResults = allResults[:limit]
 			}
-			t.logger.Log("session fallback: %d session(s) added to recall results (topic results: %d)",
+			t.logger.Logf(ctx, "session fallback: %d session(s) added to recall results (topic results: %d)",
 				len(sessionEntries), len(allResults)-len(sessionEntries))
 		}
 	}
@@ -294,7 +293,7 @@ func (t *TopicBackend) Store(ctx context.Context, opts StoreOptions) error {
 		return fmt.Errorf("topic: write inbox: %w", err)
 	}
 
-	t.logger.Log("wrote to inbox: %s (%d bytes)", inboxPath, len(entry))
+	t.logger.Logf(ctx, "wrote to inbox: %s (%d bytes)", inboxPath, len(entry))
 	return nil
 }
 
@@ -325,7 +324,7 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 		args = append(args, "-e", kw)
 	}
 	args = append(args, dir)
-	t.logger.Log("rg %s", strings.Join(args, " "))
+	t.logger.Logf(ctx, "rg %s", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, t.rgPath, args...)
 	out, err := cmd.Output()
 	if err != nil {
@@ -333,7 +332,7 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 		if cmd.ProcessState != nil && cmd.ProcessState.ExitCode() == 1 {
 			return nil
 		}
-		t.logger.Log("rg search failed in %s: %v", dir, err)
+		t.logger.Logf(ctx, "rg search failed in %s: %v", dir, err)
 		return nil
 	}
 
@@ -360,7 +359,7 @@ func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []s
 		args = append(args, "-e", kw)
 	}
 	args = append(args, path)
-	t.logger.Log("rg %s", strings.Join(args, " "))
+	t.logger.Logf(ctx, "rg %s", strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, t.rgPath, args...)
 	if err := cmd.Run(); err != nil {
 		return nil // no match
@@ -515,7 +514,7 @@ func (t *TopicBackend) ReinforceFact(ctx context.Context, entryID string) error 
 			fs.Decay = 1.0
 		})
 		if err != nil {
-			t.logger.Log("ReinforceFact: write %s: %v", statePath, err)
+			t.logger.Logf(ctx, "ReinforceFact: write %s: %v", statePath, err)
 		}
 	}
 	return nil

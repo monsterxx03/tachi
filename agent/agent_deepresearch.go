@@ -7,7 +7,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
 )
 
 // deepResearchRunnerAdapter adapts tools.SubagentRunner to deepresearch.SubagentRunner.
@@ -39,17 +38,14 @@ func (a *deepResearchRunnerAdapter) Run(ctx context.Context, prompt string, allo
 func (a *AIAgent) NewDeepResearch(cfg *config.Config) (*deepresearch.DeepResearch, error) {
 	runner := &deepResearchRunnerAdapter{runner: a.subagentRunner}
 
-	logger := a.logger
-	if logger == nil {
-		logger = debuglog.DefaultLogger
-	}
+	lg := a.logger
 
 	return deepresearch.New(
 		&cfg.DeepResearch,
 		cfg.Providers,
 		a.provider,
 		runner,
-		logger,
+		lg,
 	), nil
 }
 
@@ -62,16 +58,13 @@ func (a *AIAgent) NewDeepResearchWithProvider(
 ) (*deepresearch.DeepResearch, error) {
 	runner := &deepResearchRunnerAdapter{runner: a.subagentRunner}
 
-	logger := a.logger
-	if logger == nil {
-		logger = debuglog.DefaultLogger
-	}
+	lg := a.logger
 
 	return deepresearch.New(
 		&cfg.DeepResearch,
 		cfg.Providers,
 		provider,
 		runner,
-		logger,
+		lg,
 	), nil
 }

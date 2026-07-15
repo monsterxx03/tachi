@@ -139,7 +139,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 			IsError:    isError,
 			Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
-			a.logger.Log("Memory(tool): observe failed for %s: %v", toolName, err)
+			a.logger.Logf(context.Background(), "Memory(tool): observe failed for %s: %v", toolName, err)
 		}
 	}()
 }
@@ -242,7 +242,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	for i, tc := range toolCalls {
 		tr := results[i]
 
-		a.logger.Log("Tool: %s (parallel) dur=%v err=%v", tc.Function.Name, tr.Duration, tr.Err)
+		a.logger.Logf(ctx, "Tool: %s (parallel) dur=%v err=%v", tc.Function.Name, tr.Duration, tr.Err)
 
 		// Emit SubagentDone for sub-agent calls after execution completes.
 		if tc.Function.Name == tools.ToolNameSubAgent {
@@ -379,7 +379,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		if tr.Status == tools.ToolResultPendingConfirm {
 			switch a.permissionMode {
 			case PermissionModeSkip:
-				a.logger.Log("Agent: tool %s skipping confirmation (permission_mode=skip)", tc.Function.Name)
+				a.logger.Logf(ctx, "Agent: tool %s skipping confirmation (permission_mode=skip)", tc.Function.Name)
 				confirmStart := time.Now()
 				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
 				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
@@ -388,7 +388,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				}
 
 			case PermissionModeExternal:
-				a.logger.Log("Agent: tool %s requesting external permission, diff length: %d", tc.Function.Name, len(tr.Diff))
+				a.logger.Logf(ctx, "Agent: tool %s requesting external permission, diff length: %d", tc.Function.Name, len(tr.Diff))
 				approved, permErr := a.permissionHandler(ctx, tc.Function.Name, tc.ID, tr.Diff, tr.Args)
 				if permErr != nil {
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: permErr}
@@ -404,7 +404,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				}
 
 			default: // PermissionModeTUI
-				a.logger.Log("Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
+				a.logger.Logf(ctx, "Agent: tool %s requires confirmation, diff length: %d", tc.Function.Name, len(tr.Diff))
 				ch <- AgentEvent{
 					Type:     AgentEventToolConfirmation,
 					ToolName: tc.Function.Name,
@@ -432,7 +432,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		}
 
 		if tr.Status == tools.ToolResultNeedUserInput {
-			a.logger.Log("Agent: AskUserQuestion tool requires user input, %d questions", len(tr.Questions))
+			a.logger.Logf(ctx, "Agent: AskUserQuestion tool requires user input, %d questions", len(tr.Questions))
 			ch <- AgentEvent{
 				Type:      AgentEventAskUser,
 				ToolName:  tr.Name,
@@ -454,7 +454,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			}
 		}
 
-		a.logger.Log("Tool: %s (sequential) dur=%v err=%v", tc.Function.Name, tr.Duration, tr.Err)
+		a.logger.Logf(ctx, "Tool: %s (sequential) dur=%v err=%v", tc.Function.Name, tr.Duration, tr.Err)
 
 		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
 		if tr.Status == tools.ToolResultError {

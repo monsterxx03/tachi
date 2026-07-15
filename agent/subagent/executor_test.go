@@ -7,7 +7,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 )
@@ -124,7 +124,7 @@ func TestExecutor_NewExecutorDefaultConcurrency(t *testing.T) {
 func TestExecutor_EnableWorktree(t *testing.T) {
 	exec := NewExecutor(&fakeAgent{}, config.SubagentConfig{Worktree: true})
 	assert.Nil(t, exec.worktreeMgr)
-	exec.EnableWorktree(debuglog.DefaultLogger)
+	exec.EnableWorktree(logger.Default())
 	assert.NotNil(t, exec.worktreeMgr)
 }
 
@@ -182,7 +182,7 @@ func TestExecutor_MaxIterations_FromArgs(t *testing.T) {
 func TestWorktreeManager_Create_FallbackOnFailure(t *testing.T) {
 	// When git is unavailable (should not happen in this repo), Create degrades.
 	// We verify the WorktreeManager is instantiatable.
-	wm := NewWorktreeManager(config.SubagentConfig{Worktree: true}, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(config.SubagentConfig{Worktree: true}, logger.Default())
 	assert.NotNil(t, wm)
 	assert.NotEmpty(t, wm.worktreeDir)
 	assert.True(t, wm.cleanup)
@@ -195,7 +195,7 @@ func TestNewWorktreeManager_Defaults(t *testing.T) {
 		WorktreeBranch:  "main",
 		WorktreeDir:     "/tmp/test-worktrees",
 	}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 	assert.Equal(t, "/tmp/test-worktrees", wm.worktreeDir)
 	assert.Equal(t, "main", wm.defaultBranch)
 	assert.False(t, wm.cleanup)
@@ -203,7 +203,7 @@ func TestNewWorktreeManager_Defaults(t *testing.T) {
 
 func TestNewWorktreeManager_NoWorktreeCleanup(t *testing.T) {
 	cfg := config.SubagentConfig{Worktree: true}
-	wm := NewWorktreeManager(cfg, debuglog.DefaultLogger)
+	wm := NewWorktreeManager(cfg, logger.Default())
 	assert.True(t, wm.cleanup) // default
 	assert.NotEmpty(t, wm.worktreeDir)
 }
@@ -246,16 +246,16 @@ func TestStreamEventTypes(t *testing.T) {
 type fakeAgent struct {
 	toolNames         []string
 	provider          llm.Provider
-	childAgentFactory func(logger *debuglog.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
+	childAgentFactory func(logger *logger.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
 }
 
 func (a *fakeAgent) SubagentProvider() llm.Provider   { return a.provider }
 func (a *fakeAgent) SessionManager() *session.Manager { return nil }
-func (a *fakeAgent) Logger() *debuglog.Logger         { return debuglog.DefaultLogger }
+func (a *fakeAgent) Logger() *logger.Logger           { return logger.Default() }
 func (a *fakeAgent) ToolNames() []string              { return a.toolNames }
 func (a *fakeAgent) GetTool(name string) tools.Tool   { return nil }
 
-func (a *fakeAgent) NewChildAgent(logger *debuglog.Logger, provider llm.Provider,
+func (a *fakeAgent) NewChildAgent(logger *logger.Logger, provider llm.Provider,
 	maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent {
 	if a.childAgentFactory != nil {
 		return a.childAgentFactory(logger, provider, maxIterations, allowedTools, subagentSessionID)

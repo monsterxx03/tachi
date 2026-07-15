@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"context"
 	"crypto/sha256"
 	"fmt"
 	"slices"
@@ -45,17 +46,17 @@ func (r *LSPDiagnosticsReminder) WrapperTag() string {
 	return "lsp-diagnostics"
 }
 
-func (r *LSPDiagnosticsReminder) Generate(ctx Context) []string {
+func (r *LSPDiagnosticsReminder) Generate(ctx context.Context, rctx Context) []string {
 	if r.Provider == nil || !r.Provider.IsConfigured() {
 		return nil
 	}
 	// Only fire at tool-result boundaries in the agent loop.
-	if !ctx.IsToolResult {
+	if !rctx.IsToolResult {
 		return nil
 	}
 	// Only fire after EditFile tool execution — that's when source
 	// changes that LSP servers care about actually happen.
-	if !slices.Contains(ctx.ToolNames, tools.ToolNameEdit) {
+	if !slices.Contains(rctx.ToolNames, tools.ToolNameEdit) {
 		return nil
 	}
 

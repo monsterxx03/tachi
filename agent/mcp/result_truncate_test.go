@@ -12,26 +12,29 @@ import (
 )
 
 func TestTruncateToolOutput_UnderLimit(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	result := strings.Repeat("hello", 100) // 500 chars
-	output := truncateToolOutput(result, 1000, "", "mcp__test__echo")
+	output := mgr.truncateToolOutput(t.Context(), result, 1000, "", "mcp__test__echo")
 	if output != result {
 		t.Errorf("expected unmodified result, got %d chars (input %d)", len(output), len(result))
 	}
 }
 
 func TestTruncateToolOutput_ZeroLimit(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	result := strings.Repeat("hello", 1000) // 5000 chars
-	output := truncateToolOutput(result, 0, "", "mcp__test__echo")
+	output := mgr.truncateToolOutput(t.Context(), result, 0, "", "mcp__test__echo")
 	if output != result {
 		t.Error("zero limit should return result unchanged")
 	}
 }
 
 func TestTruncateToolOutput_OverLimit_FilePersistence(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	result := strings.Repeat("abcdefghij", 1000) // 10000 chars
 	tmpDir := t.TempDir()
 
-	output := truncateToolOutput(result, 5000, tmpDir, "mcp__server__tool")
+	output := mgr.truncateToolOutput(t.Context(), result, 5000, tmpDir, "mcp__server__tool")
 
 	// Should be shorter than original.
 	if len(output) >= len(result) {
@@ -72,6 +75,7 @@ func TestTruncateToolOutput_OverLimit_FilePersistence(t *testing.T) {
 }
 
 func TestTruncateToolOutput_FallbackOnBadDir(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	result := strings.Repeat("x", 10000)
 	// Use a path that can't be created (file where dir should be).
 	badDir := filepath.Join(t.TempDir(), "notadir")
@@ -80,7 +84,7 @@ func TestTruncateToolOutput_FallbackOnBadDir(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	output := truncateToolOutput(result, 5000, badDir, "mcp__test__x")
+	output := mgr.truncateToolOutput(t.Context(), result, 5000, badDir, "mcp__test__x")
 
 	// Should fall back to hard truncation.
 	if !strings.Contains(output, "[OUTPUT TRUNCATED") {
@@ -125,11 +129,10 @@ func TestSanitizeForFilename(t *testing.T) {
 	}
 }
 
-
 func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 	// Build an MCPTool backed by a Manager with a stub client that returns
 	// a large result.
-	mgr := NewManager(5000, t.TempDir())
+	mgr := NewManager(t.Context(), 5000, t.TempDir(), nil)
 
 	largeContent := strings.Repeat("abcdefghij", 1000) // 10000 chars
 	addTestClient(mgr, "test-server", &stubMCPClient{
@@ -148,7 +151,7 @@ func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 		manager:    mgr,
 	}
 
-	output, err := tool.ExecuteContext(context.Background(), "{}")
+	output, err := tool.ExecuteContext(t.Context(), "{}")
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -170,6 +173,7 @@ func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 }
 
 func TestCleanupOldToolResults(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	tmpDir := t.TempDir()
 
 	// Create a fresh file (should survive cleanup).
@@ -199,7 +203,7 @@ func TestCleanupOldToolResults(t *testing.T) {
 	}
 
 	// Cleanup with 24h max age.
-	cleanupOldToolResults(tmpDir, 24*time.Hour)
+	mgr.cleanupOldToolResults(t.Context(), tmpDir, 24*time.Hour)
 
 	// Fresh file should survive.
 	if _, err := os.Stat(freshFile); os.IsNotExist(err) {
@@ -216,13 +220,14 @@ func TestCleanupOldToolResults(t *testing.T) {
 }
 
 func TestCleanupOldToolResults_EmptyDir(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	tmpDir := t.TempDir()
 	// Should not panic or error on empty dir.
-	cleanupOldToolResults(tmpDir, 24*time.Hour)
+	mgr.cleanupOldToolResults(t.Context(), tmpDir, 24*time.Hour)
 }
 
 func TestCleanupOldToolResults_NonExistentDir(t *testing.T) {
+	mgr := NewManager(t.Context(), 0, "", nil)
 	// Should not panic on non-existent dir.
-	cleanupOldToolResults("/nonexistent/path/tool_results", 24*time.Hour)
+	mgr.cleanupOldToolResults(t.Context(), "/nonexistent/path/tool_results", 24*time.Hour)
 }
-

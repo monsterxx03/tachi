@@ -8,7 +8,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // --- Subagent configuration accessors (implements subagent.Agent interface) ---
@@ -29,7 +29,7 @@ func (a *AIAgent) SubagentProvider() llm.Provider {
 // NewChildAgent creates a fully configured child agent backed by RunOneOffStream.
 // Implements the subagent.Agent interface.
 func (a *AIAgent) NewChildAgent(
-	logger *debuglog.Logger,
+	logger *logger.Logger,
 	provider llm.Provider,
 	maxIterations int,
 	allowedTools []string,
@@ -54,7 +54,7 @@ type childAdapter struct {
 	maxIterations int
 	allowedTools  []string
 	sessionID     string
-	logger        *debuglog.Logger
+	logger        *logger.Logger
 }
 
 func (c *childAdapter) Run(
@@ -159,24 +159,24 @@ func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
 
 	pCfg := cfg.FindProvider(sc.Provider)
 	if pCfg == nil {
-		a.logger.Log("Agent: subagent.provider %q not found in providers list, falling back to main model", sc.Provider)
+		a.logger.Logf(context.Background(), "Agent: subagent.provider %q not found in providers list, falling back to main model", sc.Provider)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
-		a.logger.Log("Agent: failed to resolve subagent provider %q: %v, falling back to main model", sc.Provider, err)
+		a.logger.Logf(context.Background(), "Agent: failed to resolve subagent provider %q: %v, falling back to main model", sc.Provider, err)
 		return
 	}
 
 	sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Log("Agent: failed to create subagent provider %q: %v, falling back to main model", sc.Provider, err)
+		a.logger.Logf(context.Background(), "Agent: failed to create subagent provider %q: %v, falling back to main model", sc.Provider, err)
 		return
 	}
 
 	a.subagentProvider = sp
-	a.logger.Log("Agent: using subagent provider %q (%s/%s)", sc.Provider, resolved.Type, resolved.Model)
+	a.logger.Logf(context.Background(), "Agent: using subagent provider %q (%s/%s)", sc.Provider, resolved.Type, resolved.Model)
 }
 
 // newSubagentEventSink creates a SubagentEventSink that forwards subagent

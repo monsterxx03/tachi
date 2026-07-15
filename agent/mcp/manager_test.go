@@ -8,7 +8,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/debuglog"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -66,13 +66,13 @@ func addTestClient(m *Manager, name string, client MCPClient) {
 }
 
 func TestNewManager(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	assert.NotNil(t, m)
 	assert.Empty(t, m.ConnectedServers())
 }
 
 func TestManager_IsConnected(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	assert.False(t, m.IsConnected("nonexistent"))
 
 	addTestClient(m, "test-server", &stubMCPClient{})
@@ -80,7 +80,7 @@ func TestManager_IsConnected(t *testing.T) {
 }
 
 func TestManager_ConnectedServers(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	addTestClient(m, "server-a", &stubMCPClient{})
 	addTestClient(m, "server-b", &stubMCPClient{})
 
@@ -89,13 +89,13 @@ func TestManager_ConnectedServers(t *testing.T) {
 }
 
 func TestManager_Disconnect_NotConnected(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	err := m.Disconnect("nonexistent")
 	assert.NoError(t, err)
 }
 
 func TestManager_Disconnect_Success(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	closed := false
 	addTestClient(m, "test-server", &stubMCPClient{
@@ -112,7 +112,7 @@ func TestManager_Disconnect_Success(t *testing.T) {
 }
 
 func TestManager_Close(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	var mu sync.Mutex
 	closeCount := 0
@@ -139,14 +139,14 @@ func TestManager_Close(t *testing.T) {
 }
 
 func TestManager_CallTool_NotConnected(t *testing.T) {
-	m := NewManager(0, "")
-	_, err := m.CallTool(context.Background(), "nonexistent", "tool", nil)
+	m := NewManager(t.Context(), 0, "", nil)
+	_, err := m.CallTool(t.Context(), "nonexistent", "tool", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "not connected")
 }
 
 func TestManager_CallTool_Success(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	addTestClient(m, "test-server", &stubMCPClient{
 		callTool: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -159,13 +159,13 @@ func TestManager_CallTool_Success(t *testing.T) {
 		},
 	})
 
-	result, err := m.CallTool(context.Background(), "test-server", "my_tool", nil)
+	result, err := m.CallTool(t.Context(), "test-server", "my_tool", nil)
 	require.NoError(t, err)
 	assert.False(t, result.IsError)
 }
 
 func TestManager_CallTool_Error(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	addTestClient(m, "test-server", &stubMCPClient{
 		callTool: func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -173,47 +173,44 @@ func TestManager_CallTool_Error(t *testing.T) {
 		},
 	})
 
-	_, err := m.CallTool(context.Background(), "test-server", "failing_tool", nil)
+	_, err := m.CallTool(t.Context(), "test-server", "failing_tool", nil)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), "tool execution failed")
 }
 
 func TestManager_GetOAuthHandler_NotConnected(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	h := m.GetOAuthHandler("nonexistent")
 	assert.Nil(t, h)
 }
 
 func TestManager_GetOAuthHandler_StubClient(t *testing.T) {
 	// Stub clients (not *client.Client) should return nil OAuth handler
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	addTestClient(m, "test-server", &stubMCPClient{})
 	h := m.GetOAuthHandler("test-server")
 	assert.Nil(t, h)
 }
 
-func TestManager_SetLogger(t *testing.T) {
-	m := NewManager(0, "")
-	// SetLogger just stores the logger reference; no return to check.
-	// Verify it doesn't panic.
-	m.SetLogger(debuglog.DefaultLogger)
+func TestManager_Constructor(t *testing.T) {
+	m := NewManager(t.Context(), 0, "", logger.Default())
 	assert.NotNil(t, m)
 }
 
 func TestManager_Reconnect_ServerNotConnected(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	// ConnectAll to an empty config — should succeed with no tools
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir("") })
 
-	tools, errs := m.ConnectAll(context.Background(), nil)
+	tools, errs := m.ConnectAll(t.Context(), nil)
 	assert.Empty(t, tools)
 	assert.Empty(t, errs)
 }
 
 func TestManager_Concurrency(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	var wg sync.WaitGroup
 	for range 10 {
@@ -232,7 +229,7 @@ func TestManager_Concurrency(t *testing.T) {
 }
 
 func TestManager_Disconnect_CloseError(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	addTestClient(m, "failing-server", &stubMCPClient{
 		closeFn: func() error {
@@ -248,7 +245,7 @@ func TestManager_Disconnect_CloseError(t *testing.T) {
 }
 
 func TestManager_Close_SomeErrors(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 
 	addTestClient(m, "good-server", &stubMCPClient{
 		closeFn: func() error { return nil },
@@ -263,7 +260,7 @@ func TestManager_Close_SomeErrors(t *testing.T) {
 }
 
 func TestManager_ConnectAll_DisabledServers(t *testing.T) {
-	m := NewManager(0, "")
+	m := NewManager(t.Context(), 0, "", nil)
 	baseDir := t.TempDir()
 	config.SetBaseDir(baseDir)
 	t.Cleanup(func() { config.SetBaseDir("") })
@@ -273,7 +270,7 @@ func TestManager_ConnectAll_DisabledServers(t *testing.T) {
 		{Name: "disabled-server", Enabled: new(false)},
 	}
 
-	tools, errs := m.ConnectAll(context.Background(), servers)
+	tools, errs := m.ConnectAll(t.Context(), servers)
 	assert.Empty(t, tools)
 	assert.Empty(t, errs)
 }

@@ -1,7 +1,6 @@
 package acp
 
 import (
-	"context"
 	"testing"
 
 	acp "github.com/coder/acp-go-sdk"
@@ -19,7 +18,7 @@ func TestInitialize(t *testing.T) {
 	cfg := config.DefaultConfig()
 	ta := NewTachiAgent(cfg, "test-version")
 
-	resp, err := ta.Initialize(context.Background(), acp.InitializeRequest{
+	resp, err := ta.Initialize(t.Context(), acp.InitializeRequest{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 	})
 
@@ -41,7 +40,7 @@ func TestInitialize(t *testing.T) {
 func TestFindLatestSessionByCwd_NoSessions(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	result := findLatestSessionByCwd(sm, "/some/path")
 	assert.Nil(t, result, "expected nil when no sessions exist")
@@ -50,7 +49,7 @@ func TestFindLatestSessionByCwd_NoSessions(t *testing.T) {
 func TestFindLatestSessionByCwd_FindsMatching(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	// Create a session with matching cwd
 	sess, err := sm.New("openai", "/my/project")
@@ -65,7 +64,7 @@ func TestFindLatestSessionByCwd_FindsMatching(t *testing.T) {
 func TestFindLatestSessionByCwd_NoMatch(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	_, err = sm.New("openai", "/project/a")
 	require.NoError(t, err)
@@ -78,7 +77,7 @@ func TestFindLatestSessionByCwd_NoMatch(t *testing.T) {
 func TestFindLatestSessionByCwd_ReturnsLatest(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	// Create sessions with different cwds, last one matching
 	_, err = sm.New("openai", "/project/other")
@@ -99,7 +98,7 @@ func TestFindLatestSessionByCwd_ReturnsLatest(t *testing.T) {
 func TestFindLatestSessionByCwd_MultipleMatching_ReturnsNewest(t *testing.T) {
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
-	sm := session.NewManagerWithStore(store)
+	sm := session.NewManagerWithStore(store, nil)
 
 	// Create multiple sessions with same cwd
 	_, err = sm.New("openai", "/project/shared")
@@ -127,7 +126,7 @@ func TestLoadSession_NoProvider(t *testing.T) {
 	cfg := config.DefaultConfig()
 	ta := NewTachiAgent(cfg, "test")
 
-	_, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+	_, err := ta.LoadSession(t.Context(), acp.LoadSessionRequest{
 		Cwd: "/tmp/test-project",
 	})
 	assert.Error(t, err)
@@ -153,7 +152,7 @@ func TestLoadSession_CreatesNewSession(t *testing.T) {
 
 	ta := NewTachiAgent(cfg, "test")
 
-	resp, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+	resp, err := ta.LoadSession(t.Context(), acp.LoadSessionRequest{
 		Cwd: "/tmp/test-project",
 	})
 	require.NoError(t, err)
@@ -179,7 +178,7 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 	cfg.Provider = "test-provider"
 
 	// Create a session on disk with matching cwd
-	sm, err := session.NewManager()
+	sm, err := session.NewManager(nil)
 	require.NoError(t, err)
 	sess, err := sm.New("openai", "/existing/project")
 	require.NoError(t, err)
@@ -188,7 +187,7 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 
 	// Now load it via ACP
 	ta := NewTachiAgent(cfg, "test")
-	resp, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+	resp, err := ta.LoadSession(t.Context(), acp.LoadSessionRequest{
 		Cwd: "/existing/project",
 	})
 	require.NoError(t, err)
@@ -223,7 +222,7 @@ func TestLoadSession_WithSessionId_NotFound_ReturnsError(t *testing.T) {
 	ta := NewTachiAgent(cfg, "test")
 
 	// Try to load a non-existent session by explicit ID
-	_, err := ta.LoadSession(context.Background(), acp.LoadSessionRequest{
+	_, err := ta.LoadSession(t.Context(), acp.LoadSessionRequest{
 		SessionId:  "non-existent-session-id",
 		Cwd:        "/tmp/test-project",
 		McpServers: []acp.McpServer{},

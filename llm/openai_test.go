@@ -4,7 +4,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"context"
 )
 
 func TestOpenAIConvertMessages_BasicRoles(t *testing.T) {
@@ -215,7 +214,7 @@ func TestTachiTransport_SessionID(t *testing.T) {
 	}))
 	defer server.Close()
 
-	ctx := WithSessionID(context.Background(), "test-session")
+	ctx := WithSessionID(t.Context(), "test-session")
 	req, _ := http.NewRequestWithContext(ctx, "GET", server.URL, nil)
 	client := &http.Client{
 		Transport: &tachiTransport{base: http.DefaultTransport},

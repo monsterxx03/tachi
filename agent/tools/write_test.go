@@ -1,7 +1,6 @@
 package tools
 
 import (
-	"context"
 	"os"
 	"path/filepath"
 	"testing"
@@ -51,7 +50,7 @@ func TestWriteTool_WriteAbsolutePath(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "test.txt")
 
-	output, err := tool.ExecuteContext(context.Background(),
+	output, err := tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": "hello world"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -78,7 +77,7 @@ func TestWriteTool_WriteUnicode(t *testing.T) {
 	filePath := filepath.Join(dir, "unicode.txt")
 
 	content := "你好，世界！🍣"
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": "`+content+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -98,7 +97,7 @@ func TestWriteTool_WriteEmptyContent(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "empty.txt")
 
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": ""}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -119,7 +118,7 @@ func TestWriteTool_WriteNewDirectory(t *testing.T) {
 	// File in a subdirectory that doesn't exist yet — should auto-create
 	filePath := filepath.Join(dir, "sub", "nested", "file.txt")
 
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": "new dir content"}`)
 	if err != nil {
 		t.Fatalf("expected success with auto-created directories, got: %v", err)
@@ -140,14 +139,14 @@ func TestWriteTool_WriteOverwrite(t *testing.T) {
 	filePath := filepath.Join(dir, "overwrite.txt")
 
 	// Write first file
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": "first"}`)
 	if err != nil {
 		t.Fatalf("first write failed: %v", err)
 	}
 
 	// Overwrite with different content
-	_, err = tool.ExecuteContext(context.Background(),
+	_, err = tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": "second"}`)
 	if err != nil {
 		t.Fatalf("overwrite failed: %v", err)
@@ -164,7 +163,7 @@ func TestWriteTool_WriteOverwrite(t *testing.T) {
 
 func TestWriteTool_InvalidJSON(t *testing.T) {
 	tool := WriteTool{}
-	_, err := tool.ExecuteContext(context.Background(), "not json")
+	_, err := tool.ExecuteContext(t.Context(), "not json")
 	if err == nil {
 		t.Error("expected error for invalid JSON")
 	}
@@ -175,7 +174,7 @@ func TestWriteTool_FilePermissions(t *testing.T) {
 	dir := t.TempDir()
 	filePath := filepath.Join(dir, "perm.txt")
 
-	_, err := tool.ExecuteContext(context.Background(),
+	_, err := tool.ExecuteContext(t.Context(),
 		`{"path": "`+filePath+`", "content": "test"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
