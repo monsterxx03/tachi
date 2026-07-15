@@ -266,6 +266,12 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		cmds.CommitUserPrompt(model), opts)
 
 	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+
+	// /commit is a one-off task — its messages should not persist in the
+	// session history cache. Clear it so the next Prompt reloads from disk
+	// and gets the correct conversation history without the commit turn.
+	sess.history = nil
+
 	return stopReason, nil
 }
 
@@ -321,6 +327,12 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		systemPrompt, cmds.ReviewUserPrompt(), opts)
 
 	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+
+	// /review is a one-off task — its messages should not persist in the
+	// session history cache. Clear it so the next Prompt reloads from disk
+	// and gets the correct conversation history without the review turn.
+	sess.history = nil
+
 	return stopReason, nil
 }
 
