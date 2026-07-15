@@ -162,6 +162,11 @@ type AIAgent struct {
 	// to compute the turn's total duration for the RunResult.
 	turnStart time.Time
 
+	// skipSessionWrites suppresses session persistence (recordSession is a no-op).
+	// Set by RunOneOffStream for one-off tasks (/commit, /review, sub-agents, dreams)
+	// whose messages should not pollute the main conversation history.
+	skipSessionWrites bool
+
 	// Session mode (e.g. "auto", "chat"). Affects tool visibility.
 	mode string
 	// savedTools holds destructive tool instances when in chat mode,
@@ -392,7 +397,7 @@ func (a *AIAgent) GetTool(name string) tools.Tool {
 }
 
 func (a *AIAgent) recordSession(msg *session.Message) {
-	if a.sessionManager == nil {
+	if a.sessionManager == nil || a.skipSessionWrites {
 		return
 	}
 	if err := a.sessionManager.AppendMessage(msg); err != nil {

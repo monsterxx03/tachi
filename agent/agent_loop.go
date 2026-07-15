@@ -203,6 +203,13 @@ func (a *AIAgent) RunOneOffStream(
 			a.memory.SkipWrites = true // suppress memory writes for one-off runs (e.g. /commit, /init)
 		}
 
+		// Suppress session persistence for one-off runs.
+		// One-off tasks (/commit, /review, sub-agents, dreams) produce
+		// messages that are internal tooling artifacts — they must not
+		// persist into the main conversation history.
+		a.skipSessionWrites = true
+		defer func() { a.skipSessionWrites = false }()
+
 		if provider == nil {
 			provider = a.provider
 		}
