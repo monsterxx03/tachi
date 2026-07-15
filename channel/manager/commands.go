@@ -1042,9 +1042,10 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 // the service via systemctl. Returns an error if not running under systemd.
 // It sends a proactive "restarting" message before executing the restart.
 func (m *Manager) handleRestartCommand(threadID string) (string, error) {
-	// Check if running under systemd by looking for the INVOCATION_ID
-	// environment variable, which systemd sets for all services.
-	if os.Getenv("INVOCATION_ID") == "" {
+	// Check if running under systemd by verifying PPID == 1 and
+	// /proc/1/comm is "systemd". This works on all systemd versions,
+	// unlike INVOCATION_ID which requires systemd >= 232 (CentOS 7 has v219).
+	if !isRunningUnderSystemd() {
 		return "", fmt.Errorf("Tachi 不是由 systemd 启动的，无法通过 systemctl 重启")
 	}
 
@@ -1078,4 +1079,15 @@ func (m *Manager) handleRestartCommand(threadID string) (string, error) {
 	// sendToThread above. Returning empty tells the caller not to send
 	// a duplicate.
 	return "", nil
+}
+
+// isRunningUnderSystemd checks if the current process is managed by systemd.
+// It verifies that the parent process (PPID 1) is systemd, which works on all
+// systemd versions including older ones like systemd 219 on CentOS 7.
+func isRunningUnderSystemd() bool {
+	data, err := os.ReadFile("/proc/1/comm")
+	if err != nil {
+		return false
+	}
+	return string(data) == "systemd\n"
 }
