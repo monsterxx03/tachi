@@ -24,7 +24,7 @@
 
 日志系统位于 `pkg/debuglog/`，基于 Go 标准库 `log/slog`：
 
-- 单文件 `~/.tachi/logs/debug.log`，10MB 轮转，保留 10 份
+- 单文件 `$BASEDIR/logs/debug.log`，10MB 轮转，保留 10 份
 - 唯一结构化字段是 `source`（如 `source=tui`）
 - 全部使用 `slog.Info` 级别，无分级
 - 无 Trace ID，无法关联同一请求的日志
@@ -127,10 +127,10 @@ func (l *Logger) Error(msg string, err error, attrs ...any)
 
 ### 文件组织
 
-每个入口对应独立日志文件，**各自独立轮转**：
+每个入口对应独立日志文件，**各自独立轮转**。日志目录始终位于 `$BASEDIR/logs/`，其中 `$BASEDIR` 由 `--home` 命令行参数或默认的 `~/.tachi` 决定，**不在配置文件中指定**：
 
 ```
-~/.tachi/logs/
+$BASEDIR/logs/
 ├── debug.log{.1,.2,...}   ← 默认日志（未指定入口的日志落这里）
 ├── tui.log{.1,.2,...}     ← TUI 模式
 ├── run.log{.1,.2,...}     ← CLI Run 模式（-p / 管道）
@@ -180,15 +180,21 @@ type RotatingFileHandler struct {
 
 ### 配置
 
+日志目录**不可配置**，始终为 `config.BaseDir() + "/logs/"`（由 `--home` 决定）。其他参数可通过 `config.yaml` 调整：
+
 ```yaml
 # config.yaml（可选，不配置则所有日志合并到 debug.log）
 logs:
-  dir: ~/.tachi/logs          # 日志目录（默认）
   level: info                  # 默认最低级别
   max_size: 10mb               # 单个文件最大
   max_files: 10                # 保留文件数
   per_entry: true              # 是否按入口分文件（默认 false，兼容旧行为）
 ```
+
+> **为什么 `dir` 不在配置文件中？**  
+> Tachi 所有持久化数据（session、skills、MCP tokens、cron、日志等）统一存放在 `$BASEDIR` 下。  
+> `--home` 是唯一的基础路径入口，日志目录不应独立于它存在。如果允许 `config.yaml` 指定  
+> 另一个目录，会导致 `--home /custom/path` 时日志和其余数据分离，排查问题更困难。
 
 默认 `per_entry: false` 时，所有日志仍写入 `debug.log`，保持向后兼容。
 
