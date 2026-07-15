@@ -29,7 +29,7 @@ type LLMKeywordExtractor struct {
 // NewLLMKeywordExtractor creates an extractor backed by an LLM provider.
 // timeout defaults to 15s if zero is passed — keyword extraction is best-effort
 // and should not significantly delay the conversation flow.
-func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Duration) *LLMKeywordExtractor {
+func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Duration, l *logger.Logger) *LLMKeywordExtractor {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
@@ -37,7 +37,7 @@ func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Du
 		provider: provider,
 		model:    model,
 		timeout:  timeout,
-		logger:   logger.New("memory:keyword-extractor"),
+		logger:   l,
 	}
 }
 
@@ -61,7 +61,7 @@ func (e *LLMKeywordExtractor) ExtractKeywords(ctx context.Context, query string)
 		return nil, fmt.Errorf("keyword extraction LLM call: %w", err)
 	}
 
-	e.logger.Debug(ctx, fmt.Sprintf("LLM raw response: %q", resp.Content))
+	e.logger.Debug(ctx, "LLM raw response", "content", resp.Content)
 
 	keywords := parseKeywordResponse(resp.Content)
 	if len(keywords) == 0 {

@@ -72,7 +72,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 				}
 
 				timeout := cfg.Memory.Timeout
-				tb.SetKeywordExtractor(NewLLMKeywordExtractor(kwProvider, kwModel, timeout))
+				tb.SetKeywordExtractor(NewLLMKeywordExtractor(kwProvider, kwModel, timeout, a.logger))
 				a.logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
 			}
 		}
