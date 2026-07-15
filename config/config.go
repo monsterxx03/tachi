@@ -12,6 +12,7 @@ import (
 	"github.com/creasty/defaults"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
 
@@ -663,6 +664,10 @@ type ResearcherConfig struct {
 	MaxIterations int      `yaml:"max_iterations" default:"5"`
 }
 
+// LogsConfig is a type alias for logger.Config, so that YAML tags and defaults
+// are defined in one place (pkg/logger) and shared by the config package.
+type LogsConfig = logger.Config
+
 type Config struct {
 	Provider               string               `yaml:"provider"`
 	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`
@@ -692,6 +697,7 @@ type Config struct {
 	ACP                    ACPConfig            `yaml:"acp"`                             // ACP agent configuration
 	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
 	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
+	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration
 }
 
 func DefaultConfig() *Config {
