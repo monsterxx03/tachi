@@ -100,6 +100,10 @@ func findActivePlan(sessionID string) *planInfo {
 		if err != nil {
 			continue
 		}
+		// Skip plans older than 24 hours — they've likely been abandoned.
+		if time.Since(info.ModTime()) > 24*time.Hour {
+			continue
+		}
 		candidates = append(candidates, planInfo{
 			Path:    path,
 			Title:   pf.Title,
