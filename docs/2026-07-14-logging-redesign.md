@@ -188,7 +188,7 @@ logs:
   level: info                  # 默认最低级别
   max_size: 10mb               # 单个文件最大
   max_files: 10                # 保留文件数
-  per_entry: true              # 是否按入口分文件（默认 false，兼容旧行为）
+  per_entry: true              # 是否按入口分文件（默认 true）
 ```
 
 > **为什么 `dir` 不在配置文件中？**  
@@ -196,7 +196,7 @@ logs:
 > `--home` 是唯一的基础路径入口，日志目录不应独立于它存在。如果允许 `config.yaml` 指定  
 > 另一个目录，会导致 `--home /custom/path` 时日志和其余数据分离，排查问题更困难。
 
-默认 `per_entry: false` 时，所有日志仍写入 `debug.log`，保持向后兼容。
+默认 `per_entry: true` 时，所有日志按入口分文件写入。设为 `false` 时，所有日志仍写入 `debug.log`，保持向后兼容。
 
 ---
 
