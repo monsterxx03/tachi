@@ -226,7 +226,7 @@ func logFilePath(dir, name string) string {
 	parts := strings.SplitN(name, ".", 3)
 	switch parts[0] {
 	case "channel":
-		if len(parts) >= 2 && isKnownChannel(parts[1]) {
+		if len(parts) >= 2 {
 			return filepath.Join(dir, "channel", parts[1]+".log")
 		}
 		return filepath.Join(dir, "channel", "all.log")
@@ -234,16 +234,6 @@ func logFilePath(dir, name string) string {
 		return filepath.Join(dir, "debug.log")
 	default:
 		return filepath.Join(dir, parts[0]+".log")
-	}
-}
-
-// isKnownChannel returns true for sub-channel names that get dedicated log files.
-func isKnownChannel(s string) bool {
-	switch s {
-	case "discord", "weixin", "chrome":
-		return true
-	default:
-		return false
 	}
 }
 

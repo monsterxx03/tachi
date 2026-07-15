@@ -84,8 +84,8 @@ func TestLogFilePath(t *testing.T) {
 		{"channel.discord", filepath.Join("channel", "discord.log")},
 		{"channel.weixin", filepath.Join("channel", "weixin.log")},
 		{"channel.chrome", filepath.Join("channel", "chrome.log")},
-		{"channel.unknown", filepath.Join("channel", "all.log")},
-		{"channel.manager.agent", filepath.Join("channel", "all.log")},
+		{"channel.unknown", filepath.Join("channel", "unknown.log")},
+		{"channel.manager.agent", filepath.Join("channel", "manager.log")},
 		{"debug", "debug.log"},
 	}
 
