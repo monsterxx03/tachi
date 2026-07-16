@@ -49,14 +49,10 @@ func (m *Manager) truncateToolOutput(ctx context.Context, result string, maxChar
 	go m.cleanupOldToolResults(ctx, fileDir, defaultToolResultMaxAge)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(
-		"[OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
-		len(result), maxChars,
-	))
-	sb.WriteString(fmt.Sprintf(
-		"Use ReadFile to read the full output from:\n  %s",
-		filepath,
-	))
+	fmt.Fprintf(&sb, "[OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
+		len(result), maxChars)
+	fmt.Fprintf(&sb, "Use ReadFile to read the full output from:\n  %s",
+		filepath)
 	return sb.String()
 }
 

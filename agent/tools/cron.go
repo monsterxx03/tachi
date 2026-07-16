@@ -162,7 +162,7 @@ func (t *CronTool) handleList() (string, error) {
 	})
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📋 Cron Jobs (%d total)\n\n", len(jobs)))
+	fmt.Fprintf(&sb, "📋 Cron Jobs (%d total)\n\n", len(jobs))
 
 	for _, job := range jobs {
 		sb.WriteString(formatJobSummary(job))
@@ -296,10 +296,10 @@ func (t *CronTool) handleResume(params cronArgs) (string, error) {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("▶️ Job %q (%s) resumed.\n", job.ID, job.Name))
-	sb.WriteString(fmt.Sprintf("Schedule: %s\n", job.Schedule))
+	fmt.Fprintf(&sb, "▶️ Job %q (%s) resumed.\n", job.ID, job.Name)
+	fmt.Fprintf(&sb, "Schedule: %s\n", job.Schedule)
 	if nextRun := computeNextRun(job.Schedule); nextRun != nil {
-		sb.WriteString(fmt.Sprintf("Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST")))
+		fmt.Fprintf(&sb, "Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
 	}
 	return sb.String(), nil
 }
@@ -318,7 +318,7 @@ func formatJobSummary(job *cron.Job) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("%s **%s** [%s] `%s`%s\n", status, job.Name, job.ID, job.Schedule, typeTag))
+	fmt.Fprintf(&sb, "%s **%s** [%s] `%s`%s\n", status, job.Name, job.ID, job.Schedule, typeTag)
 
 	// Prompts can be long; show a snippet.
 	promptPreview := job.Prompt
@@ -326,11 +326,11 @@ func formatJobSummary(job *cron.Job) string {
 	if len(runes) > 80 {
 		promptPreview = string(runes[:80]) + "..."
 	}
-	sb.WriteString(fmt.Sprintf("  Prompt: %s\n", promptPreview))
+	fmt.Fprintf(&sb, "  Prompt: %s\n", promptPreview)
 
 	nextRun := computeNextRun(job.Schedule)
 	if nextRun != nil && job.Status == cron.JobStatusActive {
-		sb.WriteString(fmt.Sprintf("  Next: %s\n", nextRun.Format("2006-01-02 15:04:05 MST")))
+		fmt.Fprintf(&sb, "  Next: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
 	}
 
 	if !job.LastRunAt.IsZero() {
@@ -342,9 +342,9 @@ func formatJobSummary(job *cron.Job) string {
 		if lastStatus == "error" {
 			icon = "❌"
 		}
-		sb.WriteString(fmt.Sprintf("  Last: %s %s", icon, job.LastRunAt.Format("2006-01-02 15:04:05 MST")))
+		fmt.Fprintf(&sb, "  Last: %s %s", icon, job.LastRunAt.Format("2006-01-02 15:04:05 MST"))
 		if job.LastRunError != "" {
-			sb.WriteString(fmt.Sprintf(" (%s)", job.LastRunError))
+			fmt.Fprintf(&sb, " (%s)", job.LastRunError)
 		}
 	}
 
@@ -359,33 +359,33 @@ func formatJobDetail(job *cron.Job) string {
 		status = "Paused"
 	}
 
-	sb.WriteString(fmt.Sprintf("**%s** [%s]\n", job.Name, job.ID))
+	fmt.Fprintf(&sb, "**%s** [%s]\n", job.Name, job.ID)
 	fmt.Fprintf(&sb, "- Status: %s\n", status)
 	if job.Type == cron.JobTypeOneshot {
 		sb.WriteString("- Type: oneshot (auto-delete after execution)\n")
 	}
-	sb.WriteString(fmt.Sprintf("- Schedule: `%s`\n", job.Schedule))
+	fmt.Fprintf(&sb, "- Schedule: `%s`\n", job.Schedule)
 
 	nextRun := computeNextRun(job.Schedule)
 	if nextRun != nil && job.Status == cron.JobStatusActive {
-		sb.WriteString(fmt.Sprintf("- Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST")))
+		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
 	}
 
-	sb.WriteString(fmt.Sprintf("- Prompt: %s\n", job.Prompt))
-	sb.WriteString(fmt.Sprintf("- Target: channel thread %s\n", job.TargetThreadID))
+	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
+	fmt.Fprintf(&sb, "- Target: channel thread %s\n", job.TargetThreadID)
 	if job.Notify == cron.NotifyWhenRelevant {
 		sb.WriteString("- Notify: when_relevant (suppresses if nothing new)\n")
 	}
 	if job.Timezone != "" {
-		sb.WriteString(fmt.Sprintf("- Timezone: %s\n", job.Timezone))
+		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)
 	}
 
-	sb.WriteString(fmt.Sprintf("- Created: %s\n", job.CreatedAt.Format("2006-01-02 15:04:05 MST")))
+	fmt.Fprintf(&sb, "- Created: %s\n", job.CreatedAt.Format("2006-01-02 15:04:05 MST"))
 
 	if !job.LastRunAt.IsZero() {
-		sb.WriteString(fmt.Sprintf("- Last run: %s (status: %s)", job.LastRunAt.Format("2006-01-02 15:04:05 MST"), job.LastRunStatus))
+		fmt.Fprintf(&sb, "- Last run: %s (status: %s)", job.LastRunAt.Format("2006-01-02 15:04:05 MST"), job.LastRunStatus)
 		if job.LastRunError != "" {
-			sb.WriteString(fmt.Sprintf(" — %s", job.LastRunError))
+			fmt.Fprintf(&sb, " — %s", job.LastRunError)
 		}
 		sb.WriteString("\n")
 	}
@@ -399,19 +399,19 @@ func formatJobCreated(job *cron.Job) string {
 	if job.Type == cron.JobTypeOneshot {
 		typeLabel = "oneshot job (will auto-delete after execution)"
 	}
-	sb.WriteString(fmt.Sprintf("✅ Created %s: **%s** (ID: `%s`)\n\n", typeLabel, job.Name, job.ID))
-	sb.WriteString(fmt.Sprintf("- Schedule: `%s`\n", job.Schedule))
+	fmt.Fprintf(&sb, "✅ Created %s: **%s** (ID: `%s`)\n\n", typeLabel, job.Name, job.ID)
+	fmt.Fprintf(&sb, "- Schedule: `%s`\n", job.Schedule)
 
 	nextRun := computeNextRun(job.Schedule)
 	if nextRun != nil {
-		sb.WriteString(fmt.Sprintf("- Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST")))
+		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
 	}
 
-	sb.WriteString(fmt.Sprintf("- Prompt: %s\n", job.Prompt))
-	sb.WriteString(fmt.Sprintf("- Target: current thread (%s)\n", job.TargetThreadID))
+	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
+	fmt.Fprintf(&sb, "- Target: current thread (%s)\n", job.TargetThreadID)
 
 	if job.Timezone != "" {
-		sb.WriteString(fmt.Sprintf("- Timezone: %s\n", job.Timezone))
+		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)
 	}
 
 	return sb.String()

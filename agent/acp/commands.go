@@ -209,7 +209,7 @@ func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		var sb strings.Builder
 		sb.WriteString("Available models:\n")
 		for _, p := range sess.cfg.Providers {
-			sb.WriteString(fmt.Sprintf("  • %s (%s)", p.Name, p.Model))
+			fmt.Fprintf(&sb, "  • %s (%s)", p.Name, p.Model)
 			if p.Name == cur {
 				sb.WriteString(" ← current")
 			}
@@ -234,7 +234,7 @@ func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 // ---------------------------------------------------------------------------
 
 func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP: /commit handler start"))
+	logger.FromContext(ctx).Info(ctx, "ACP: /commit handler start")
 
 	aiAgent := sess.agent
 
@@ -280,7 +280,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 // ---------------------------------------------------------------------------
 
 func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP: /review handler start"))
+	logger.FromContext(ctx).Info(ctx, "ACP: /review handler start")
 
 	aiAgent := sess.agent
 	cfg := sess.cfg
@@ -341,7 +341,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 // ---------------------------------------------------------------------------
 
 func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP: /init handler start"))
+	logger.FromContext(ctx).Info(ctx, "ACP: /init handler start")
 
 	// Build history from session
 	var history []llm.Message
@@ -371,7 +371,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 // ---------------------------------------------------------------------------
 
 func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP: /compact handler start"))
+	logger.FromContext(ctx).Info(ctx, "ACP: /compact handler start")
 
 	sessionID := acp.SessionId(sess.ID)
 	sm := sess.sessMgr
@@ -423,7 +423,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 // ---------------------------------------------------------------------------
 
 func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP: /usage handler start"))
+	logger.FromContext(ctx).Info(ctx, "ACP: /usage handler start")
 
 	sessionID := acp.SessionId(sess.ID)
 
@@ -642,7 +642,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 // ---------------------------------------------------------------------------
 
 func handleACPTranscript(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP: /transcript handler start"))
+	logger.FromContext(ctx).Info(ctx, "ACP: /transcript handler start")
 
 	sessionID := acp.SessionId(sess.ID)
 

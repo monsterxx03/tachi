@@ -114,11 +114,11 @@ func (mc *memberCache) handleGuildMemberUpdate(s *discordgo.Session, m *discordg
 	if m.Member == nil {
 		return
 	}
-	roles := m.Member.Roles
+	roles := m.Roles
 	if roles == nil {
 		roles = []string{}
 	}
-	mc.set(m.GuildID, m.Member.User.ID, roles)
+	mc.set(m.GuildID, m.User.ID, roles)
 }
 
 // warmupFromGuildCreate populates the cache from a GUILD_CREATE event,
@@ -137,6 +137,6 @@ func (mc *memberCache) warmupFromGuildCreate(s *discordgo.Session, g *discordgo.
 		if roles == nil {
 			roles = []string{}
 		}
-		mc.set(g.Guild.ID, member.User.ID, roles)
+		mc.set(g.ID, member.User.ID, roles)
 	}
 }

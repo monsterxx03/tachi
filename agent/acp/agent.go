@@ -48,7 +48,7 @@ func (t *TachiAgent) SetConnection(conn *acp.AgentSideConnection) {
 
 // Initialize handles the ACP initialize handshake, advertising Tachi's capabilities.
 func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: Initialize called"))
+	t.logger.Info(context.Background(), "ACP: Initialize called")
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
@@ -83,7 +83,7 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 // Logout handles the ACP logout request.
 // Tachi doesn't have a persistent authenticated session, so this is a no-op.
 func (t *TachiAgent) Logout(_ context.Context, _ acp.LogoutRequest) (acp.LogoutResponse, error) {
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: Logout called"))
+	t.logger.Info(context.Background(), "ACP: Logout called")
 	return acp.LogoutResponse{}, nil
 }
 
@@ -360,7 +360,7 @@ func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDe
 // ListSessions lists active in-memory sessions, optionally filtered by cwd.
 // Also includes recent sessions from disk that match the filter.
 func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: ListSessions called"))
+	t.logger.Info(context.Background(), "ACP: ListSessions called")
 
 	// Start with in-memory sessions
 	sessions := t.sessions.List()
@@ -642,7 +642,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			// Session already loaded as current — AIAgent will resume from its history
 			aiAgent.SetSessionManager(sm)
 		} else {
-			t.logger.Info(ctx, fmt.Sprintf("ACP: LoadSession no existing session, creating new"))
+			t.logger.Info(ctx, "ACP: LoadSession no existing session, creating new")
 			sm.New(resolved.Provider.Name, cwd)
 			aiAgent.SetSessionManager(sm)
 		}

@@ -98,7 +98,7 @@ func buildSkillListPrompt(metas []SkillMetaRecord) string {
 		if len(m.Tags) > 0 {
 			tagsStr = fmt.Sprintf(" tags=%q", strings.Join(m.Tags, ","))
 		}
-		b.WriteString(fmt.Sprintf("  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr))
+		fmt.Fprintf(&b, "  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr)
 	}
 
 	b.WriteString("\nTo use a skill, call Skill(operation=\"view\", name=...) or the user can type /skill-name.")

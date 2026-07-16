@@ -881,13 +881,14 @@ func (m *Model) View() tea.View {
 	}
 
 	inputSection := m.input.View()
-	if m.state == stateSelectingModel {
+	switch m.state {
+	case stateSelectingModel:
 		inputSection = m.renderProviderSelection()
-	} else if m.state == stateSelectingSession {
+	case stateSelectingSession:
 		inputSection = m.renderSessionSelection()
-	} else if m.state == stateAwaitingConfirmation {
+	case stateAwaitingConfirmation:
 		inputSection = m.renderConfirmPrompt()
-	} else if m.state == stateAskUserQuestion {
+	case stateAskUserQuestion:
 		inputSection = m.renderAskUserPrompt()
 	}
 

@@ -466,10 +466,10 @@ func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string
 // collected, even if the research was interrupted.
 func (dr *DeepResearch) buildPartialReport(topic string, learnings []string, urls []string, err error) string {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("# Deep Research Report: %s\n\n", topic))
+	fmt.Fprintf(&sb, "# Deep Research Report: %s\n\n", topic)
 
 	if err != nil {
-		sb.WriteString(fmt.Sprintf("> ⚠️ Research was interrupted: %v\n\n", err))
+		fmt.Fprintf(&sb, "> ⚠️ Research was interrupted: %v\n\n", err)
 	}
 
 	if len(learnings) == 0 {
@@ -479,7 +479,7 @@ func (dr *DeepResearch) buildPartialReport(topic string, learnings []string, url
 
 	sb.WriteString("## Findings\n\n")
 	for i, l := range learnings {
-		sb.WriteString(fmt.Sprintf("### Finding %d\n\n%s\n\n", i+1, l))
+		fmt.Fprintf(&sb, "### Finding %d\n\n%s\n\n", i+1, l)
 	}
 
 	if len(urls) > 0 {
@@ -491,7 +491,7 @@ func (dr *DeepResearch) buildPartialReport(topic string, learnings []string, url
 				continue
 			}
 			seen[u] = true
-			sb.WriteString(fmt.Sprintf("- %s\n", u))
+			fmt.Fprintf(&sb, "- %s\n", u)
 		}
 	}
 

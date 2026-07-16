@@ -63,29 +63,29 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	sb.WriteString("📊 **Session Usage**\n\n")
 
 	// Session info
-	sb.WriteString(fmt.Sprintf("**Session:** `%s`\n\n", info.SessionID))
+	fmt.Fprintf(&sb, "**Session:** `%s`\n\n", info.SessionID)
 	provider := info.Provider
 	if provider == "" {
 		provider = "(unknown)"
 	}
-	sb.WriteString(fmt.Sprintf("**Provider:** %s\n\n", provider))
+	fmt.Fprintf(&sb, "**Provider:** %s\n\n", provider)
 	title := info.Title
 	if title == "" {
 		title = "(untitled)"
 	}
-	sb.WriteString(fmt.Sprintf("**Title:** %s\n\n", title))
+	fmt.Fprintf(&sb, "**Title:** %s\n\n", title)
 
 	// Token usage
 	sb.WriteString("**Token Usage**\n\n")
-	sb.WriteString(fmt.Sprintf("Total input (accumulated): %s\n\n", FormatTokens(info.InputTokens)))
+	fmt.Fprintf(&sb, "Total input (accumulated): %s\n\n", FormatTokens(info.InputTokens))
 	if info.LastInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("Last input (context):      %s\n\n", FormatTokens(info.LastInputTokens)))
+		fmt.Fprintf(&sb, "Last input (context):      %s\n\n", FormatTokens(info.LastInputTokens))
 	}
 	if info.CacheReadInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("↳ Cache read:  %s\n\n", FormatTokens(info.CacheReadInputTokens)))
+		fmt.Fprintf(&sb, "↳ Cache read:  %s\n\n", FormatTokens(info.CacheReadInputTokens))
 	}
 	if info.CacheCreationInputTokens > 0 {
-		sb.WriteString(fmt.Sprintf("↳ Cache created: %s\n\n", FormatTokens(info.CacheCreationInputTokens)))
+		fmt.Fprintf(&sb, "↳ Cache created: %s\n\n", FormatTokens(info.CacheCreationInputTokens))
 	}
 	lastInput := info.LastInputTokens
 	if lastInput == 0 {
@@ -93,16 +93,16 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	}
 	cacheMissInput := max(lastInput-info.CacheReadInputTokens, 0)
 	if cacheMissInput != lastInput {
-		sb.WriteString(fmt.Sprintf("↳ Cache miss:  %s\n\n", FormatTokens(cacheMissInput)))
+		fmt.Fprintf(&sb, "↳ Cache miss:  %s\n\n", FormatTokens(cacheMissInput))
 	}
-	sb.WriteString(fmt.Sprintf("Output tokens: %s\n\n", FormatTokens(info.OutputTokens)))
-	sb.WriteString(fmt.Sprintf("Total tokens:  %s\n\n", FormatTokens(info.InputTokens+info.OutputTokens)))
+	fmt.Fprintf(&sb, "Output tokens: %s\n\n", FormatTokens(info.OutputTokens))
+	fmt.Fprintf(&sb, "Total tokens:  %s\n\n", FormatTokens(info.InputTokens+info.OutputTokens))
 
 	// Context percentage — uses EstimatedInputTokens as the sole numerator.
 	if info.ContextWindow > 0 && info.EstimatedInputTokens > 0 {
 		pct := float64(info.EstimatedInputTokens) / float64(info.ContextWindow) * 100
-		sb.WriteString(fmt.Sprintf("Context: %s / %s (%.0f%%)\n\n",
-			FormatTokens(info.EstimatedInputTokens), FormatTokens(info.ContextWindow), pct))
+		fmt.Fprintf(&sb, "Context: %s / %s (%.0f%%)\n\n",
+			FormatTokens(info.EstimatedInputTokens), FormatTokens(info.ContextWindow), pct)
 		// Compact categorized breakdown
 		parts := make([]string, 0, 7)
 		if info.EstBreakdown.SystemPrompt > 0 {
@@ -127,7 +127,7 @@ func FormatUsageReport(info *UsageReportInfo) string {
 			parts = append(parts, fmt.Sprintf("other:%s", FormatTokens(info.EstBreakdown.Other)))
 		}
 		if len(parts) > 0 {
-			sb.WriteString(fmt.Sprintf("↳ %s\n\n", strings.Join(parts, " | ")))
+			fmt.Fprintf(&sb, "↳ %s\n\n", strings.Join(parts, " | "))
 		}
 	}
 
@@ -136,7 +136,7 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	if info.Cost <= 0 {
 		sb.WriteString("No pricing data available\n\n")
 	} else {
-		sb.WriteString(fmt.Sprintf("Total cost: **¥%.4f**\n\n", info.Cost))
+		fmt.Fprintf(&sb, "Total cost: **¥%.4f**\n\n", info.Cost)
 	}
 
 	// Tool calls
@@ -150,8 +150,8 @@ func FormatUsageReport(info *UsageReportInfo) string {
 		}
 		sb.WriteString(line + "\n\n")
 	}
-	sb.WriteString(fmt.Sprintf("**Total:** %d main + %d subagent = **%d** call(s)\n\n",
-		info.MainCount, info.SubCount, info.MainCount+info.SubCount))
+	fmt.Fprintf(&sb, "**Total:** %d main + %d subagent = **%d** call(s)\n\n",
+		info.MainCount, info.SubCount, info.MainCount+info.SubCount)
 
 	return strings.TrimRight(sb.String(), "\n") + "\n"
 }
@@ -181,14 +181,14 @@ func FormatSkillList(metas []skill.SkillMeta) string {
 		case "global":
 			sourceTag = " 🌐"
 		}
-		sb.WriteString(fmt.Sprintf("- **%s**%s\n", meta.Name, sourceTag))
-		sb.WriteString(fmt.Sprintf("  %s\n", meta.Description))
+		fmt.Fprintf(&sb, "- **%s**%s\n", meta.Name, sourceTag)
+		fmt.Fprintf(&sb, "  %s\n", meta.Description)
 		if len(meta.Tags) > 0 {
-			sb.WriteString(fmt.Sprintf("  Tags: %s\n", strings.Join(meta.Tags, ", ")))
+			fmt.Fprintf(&sb, "  Tags: %s\n", strings.Join(meta.Tags, ", "))
 		}
-		sb.WriteString(fmt.Sprintf("  Use `/%s` to activate\n\n", meta.Name))
+		fmt.Fprintf(&sb, "  Use `/%s` to activate\n\n", meta.Name)
 	}
-	sb.WriteString(fmt.Sprintf("%d skill(s) total", len(metas)))
+	fmt.Fprintf(&sb, "%d skill(s) total", len(metas))
 
 	return sb.String()
 }
@@ -222,13 +222,13 @@ func FormatMCPList(servers []MCPServerInfo) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("**MCP Servers** (%d)\n\n", len(servers)))
+	fmt.Fprintf(&sb, "**MCP Servers** (%d)\n\n", len(servers))
 
 	for i, srv := range servers {
-		sb.WriteString(fmt.Sprintf("**%s** [%s]\n%s\n", srv.Name, srv.Status, srv.Transport))
+		fmt.Fprintf(&sb, "**%s** [%s]\n%s\n", srv.Name, srv.Status, srv.Transport)
 
 		if srv.OAuth != "" {
-			sb.WriteString(fmt.Sprintf("OAuth: %s\n", srv.OAuth))
+			fmt.Fprintf(&sb, "OAuth: %s\n", srv.OAuth)
 		}
 
 		if len(srv.Tools) > 0 {
@@ -238,13 +238,13 @@ func FormatMCPList(servers []MCPServerInfo) string {
 					discoveredCount++
 				}
 			}
-			sb.WriteString(fmt.Sprintf("**%d** tools (%d loaded)\n", len(srv.Tools), discoveredCount))
+			fmt.Fprintf(&sb, "**%d** tools (%d loaded)\n", len(srv.Tools), discoveredCount)
 			for _, t := range srv.Tools {
 				marker := "○"
 				if t.Discovered {
 					marker = "✓"
 				}
-				sb.WriteString(fmt.Sprintf("- %s `%s`\n", marker, t.Name))
+				fmt.Fprintf(&sb, "- %s `%s`\n", marker, t.Name)
 			}
 		} else if srv.ToolsPending {
 			sb.WriteString("_tools pending discovery_\n")

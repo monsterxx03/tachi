@@ -21,9 +21,9 @@ func BuildPrompt(plan Plan, sessionSummaries []SessionSummary, maxMessageChars i
 
 // SessionSummary is a pre-filtered session ready for dream consumption.
 type SessionSummary struct {
-	ID        string
-	Title     string
-	Messages  []MessagePair // pre-filtered user+assistant pairs
+	ID       string
+	Title    string
+	Messages []MessagePair // pre-filtered user+assistant pairs
 }
 
 // MessagePair is a user+assistant exchange.

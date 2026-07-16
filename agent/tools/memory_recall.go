@@ -110,11 +110,11 @@ func (t *MemoryRecallTool) ExecuteContext(ctx context.Context, args string) (str
 	}
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Found %d relevant memories:\n\n", len(entries)))
+	fmt.Fprintf(&sb, "Found %d relevant memories:\n\n", len(entries))
 	for i, e := range entries {
-		sb.WriteString(fmt.Sprintf("--- Memory %d (relevance: %.2f) ---\n", i+1, e.Score))
+		fmt.Fprintf(&sb, "--- Memory %d (relevance: %.2f) ---\n", i+1, e.Score)
 		if e.SessionID != "" {
-			sb.WriteString(fmt.Sprintf("Session: %s\n", e.SessionID))
+			fmt.Fprintf(&sb, "Session: %s\n", e.SessionID)
 		}
 		sb.WriteString(e.Content)
 		sb.WriteString("\n")

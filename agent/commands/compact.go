@@ -60,19 +60,19 @@ func BuildCompactPrompt(history []llm.Message) string {
 
 		switch msg.Role {
 		case "user":
-			sb.WriteString(fmt.Sprintf("User: %s\n", truncateContent(msg.Content, 1000)))
+			fmt.Fprintf(&sb, "User: %s\n", truncateContent(msg.Content, 1000))
 		case "assistant":
 			content := msg.Content
 			if content != "" {
-				sb.WriteString(fmt.Sprintf("Assistant: %s\n", truncateContent(content, 2000)))
+				fmt.Fprintf(&sb, "Assistant: %s\n", truncateContent(content, 2000))
 			}
 			if len(msg.ThinkingBlocks) > 0 {
 				for _, tb := range msg.ThinkingBlocks {
-					sb.WriteString(fmt.Sprintf("[Thinking: %s]\n", truncateContent(tb.Thinking, 500)))
+					fmt.Fprintf(&sb, "[Thinking: %s]\n", truncateContent(tb.Thinking, 500))
 				}
 			}
 			for _, tc := range msg.ToolCalls {
-				sb.WriteString(fmt.Sprintf("[Tool Call: %s(%s)]\n", tc.Function.Name, truncateContent(tc.Function.Arguments, 200)))
+				fmt.Fprintf(&sb, "[Tool Call: %s(%s)]\n", tc.Function.Name, truncateContent(tc.Function.Arguments, 200))
 			}
 		case "tool":
 			content := msg.Content
@@ -80,14 +80,14 @@ func BuildCompactPrompt(history []llm.Message) string {
 			if len(runes) > maxToolResultLen {
 				content = string(runes[:maxToolResultLen]) + "..."
 			}
-			sb.WriteString(fmt.Sprintf("[Tool Result: %s]\n", content))
+			fmt.Fprintf(&sb, "[Tool Result: %s]\n", content)
 		default:
 			content := msg.Content
 			runes := []rune(content)
 			if len(runes) > 500 {
 				content = string(runes[:500]) + "..."
 			}
-			sb.WriteString(fmt.Sprintf("[%s]: %s\n", msg.Role, content))
+			fmt.Fprintf(&sb, "[%s]: %s\n", msg.Role, content)
 		}
 	}
 

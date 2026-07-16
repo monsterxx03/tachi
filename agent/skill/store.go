@@ -473,13 +473,13 @@ func buildSkillMarkdown(name, description, body string, tags []string) string {
 	var b strings.Builder
 
 	b.WriteString("---\n")
-	b.WriteString(fmt.Sprintf("name: %s\n", name))
-	b.WriteString(fmt.Sprintf("description: %s\n", description))
+	fmt.Fprintf(&b, "name: %s\n", name)
+	fmt.Fprintf(&b, "description: %s\n", description)
 	if len(tags) > 0 {
 		// Manually format YAML array to avoid dependency on yaml.Marshal for this simple case
 		b.WriteString("tags:\n")
 		for _, t := range tags {
-			b.WriteString(fmt.Sprintf("  - %s\n", t))
+			fmt.Fprintf(&b, "  - %s\n", t)
 		}
 	}
 	b.WriteString("---\n\n")

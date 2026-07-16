@@ -736,28 +736,28 @@ func (m *Model) handleDreamStatusCommand() tea.Cmd {
 	}
 
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("🧠 **AutoDream 状态** — %d 个 domain 正在处理：\n\n", status.Running))
+	fmt.Fprintf(&b, "🧠 **AutoDream 状态** — %d 个 domain 正在处理：\n\n", status.Running)
 
 	for i, d := range status.Domains {
 		if i > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(fmt.Sprintf("**%s**", d.Domain))
+		fmt.Fprintf(&b, "**%s**", d.Domain)
 		if d.Root != "" {
-			b.WriteString(fmt.Sprintf(" — `%s`", d.Root))
+			fmt.Fprintf(&b, " — `%s`", d.Root)
 		}
 		b.WriteString("\n")
 
 		runningSince := time.Since(d.StartedAt).Round(time.Second)
-		b.WriteString(fmt.Sprintf("- 状态：运行中（已进行 %v）\n", runningSince))
-		b.WriteString(fmt.Sprintf("- 处理中：%d 个 session\n", d.ActiveCount))
+		fmt.Fprintf(&b, "- 状态：运行中（已进行 %v）\n", runningSince)
+		fmt.Fprintf(&b, "- 处理中：%d 个 session\n", d.ActiveCount)
 
 		last := d.LastState
 		if !last.LastDreamAt.IsZero() {
 			lastDreamAgo := time.Since(last.LastDreamAt).Round(time.Minute)
-			b.WriteString(fmt.Sprintf("- 上次完成：%v 前\n", lastDreamAgo))
-			b.WriteString(fmt.Sprintf("- 上次结果：%d sessions, %d facts, %d superseded, %d pruned\n",
-				last.SessionsDreamed, last.FactsAdded, last.FactsSuperseded, last.FactsPruned))
+			fmt.Fprintf(&b, "- 上次完成：%v 前\n", lastDreamAgo)
+			fmt.Fprintf(&b, "- 上次结果：%d sessions, %d facts, %d superseded, %d pruned\n",
+				last.SessionsDreamed, last.FactsAdded, last.FactsSuperseded, last.FactsPruned)
 		} else {
 			b.WriteString("- 上次完成：首次运行\n")
 		}
@@ -1263,7 +1263,7 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 func formatCompactSummary(summary string, oldMsgCount int) string {
 	var sb strings.Builder
 	sb.WriteString("🔍 **对话已压缩**\n\n")
-	sb.WriteString(fmt.Sprintf("旧消息数: %d 条\n", oldMsgCount))
+	fmt.Fprintf(&sb, "旧消息数: %d 条\n", oldMsgCount)
 	sb.WriteString("\n---\n\n")
 	sb.WriteString(summary)
 	sb.WriteString("\n\n---\n")

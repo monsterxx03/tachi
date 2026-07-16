@@ -97,7 +97,7 @@ func (m *Model) renderSessionSelection() string {
 		if len(titleRunes) > 40 {
 			displayTitle = string(titleRunes[:37]) + "…"
 		}
-		modelInfo := fmt.Sprintf("%s", s.ProviderName)
+		modelInfo := s.ProviderName
 
 		active := " "
 		if s.ID == currentID {

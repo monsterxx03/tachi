@@ -43,7 +43,7 @@ func convertContentBlocks(blocks []acp.ContentBlock) (string, []llm.ContentPart)
 			}
 		case block.ResourceLink != nil:
 			// Resource links — just note the reference for the LLM to fetch if needed
-			sb.WriteString(fmt.Sprintf("[@file: %s]\n", block.ResourceLink.Uri))
+			fmt.Fprintf(&sb, "[@file: %s]\n", block.ResourceLink.Uri)
 		}
 	}
 	return sb.String(), images

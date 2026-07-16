@@ -240,13 +240,13 @@ func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]En
 		}
 		// Build a rich content string with session metadata + recent user messages.
 		var content strings.Builder
-		content.WriteString(fmt.Sprintf("Session: %s\nDate: %s\n",
-			title, s.CreatedAt.Format("2006-01-02 15:04")))
+		fmt.Fprintf(&content, "Session: %s\nDate: %s\n",
+			title, s.CreatedAt.Format("2006-01-02 15:04"))
 		for i, msg := range s.RecentMessages {
 			if i > 0 {
 				content.WriteByte('\n')
 			}
-			content.WriteString(fmt.Sprintf("  User: %s", msg))
+			fmt.Fprintf(&content, "  User: %s", msg)
 		}
 		entries = append(entries, Entry{
 			ID:        "session:" + s.ID,

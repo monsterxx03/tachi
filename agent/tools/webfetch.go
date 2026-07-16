@@ -492,14 +492,10 @@ func (t *WebFetchTool) truncateWebFetchOutput(ctx context.Context, content strin
 	logger.FromContext(ctx).Info(ctx, "WebFetch: result too large, saved to file", "char_count", len(content), "path", filepath)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf(
-		"[WEBFETCH OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
-		len(content), maxChars,
-	))
-	sb.WriteString(fmt.Sprintf(
-		"Use ReadFile to read the full output from:\n  %s",
-		filepath,
-	))
+	fmt.Fprintf(&sb, "[WEBFETCH OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
+		len(content), maxChars)
+	fmt.Fprintf(&sb, "Use ReadFile to read the full output from:\n  %s",
+		filepath)
 	return sb.String()
 }
 

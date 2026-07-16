@@ -287,12 +287,12 @@ func TestAgentLoop_ParallelToolCalls(t *testing.T) {
 	// Should have received 3 ToolCallStart, 3 ToolCallArgs, 3 ToolResult events
 	var starts, args, results int
 	for _, e := range events {
-		switch {
-		case e.Type == AgentEventToolCallStart:
+		switch e.Type {
+		case AgentEventToolCallStart:
 			starts++
-		case e.Type == AgentEventToolCallArgs:
+		case AgentEventToolCallArgs:
 			args++
-		case e.Type == AgentEventToolResult:
+		case AgentEventToolResult:
 			results++
 		}
 	}

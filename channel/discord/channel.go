@@ -343,7 +343,7 @@ func (ch *DiscordChannel) Run(ctx context.Context, handler channel.MessageHandle
 	ch.session = sess
 
 	// Apply proxy configuration if set.
-	if err := ch.applyProxy(sess); err != nil {
+	if err := ch.applyProxy(ctx, sess); err != nil {
 		return fmt.Errorf("discord: proxy config: %w", err)
 	}
 
@@ -586,7 +586,7 @@ func (ch *DiscordChannel) sendGreeting() {
 // applyProxy configures the discordgo session to use a proxy for both
 // REST API calls (sess.Client) and Gateway WebSocket connection (sess.Dialer).
 // It is a no-op when cfg.Proxy is empty.
-func (ch *DiscordChannel) applyProxy(sess *discordgo.Session) error {
+func (ch *DiscordChannel) applyProxy(ctx context.Context, sess *discordgo.Session) error {
 	proxyURL := ch.cfg.Proxy
 	if proxyURL == "" {
 		return nil
@@ -612,6 +612,6 @@ func (ch *DiscordChannel) applyProxy(sess *discordgo.Session) error {
 	}
 	sess.Dialer.NetDial = proxyDialer
 
-	ch.logger.Info(context.Background(), "discord: configured proxy", "proxy", proxyURL)
+	ch.logger.Info(ctx, "discord: configured proxy", "proxy", proxyURL)
 	return nil
 }

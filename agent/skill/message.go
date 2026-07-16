@@ -15,19 +15,19 @@ import (
 func BuildActivationMessage(sk *Skill, userInstruction string) string {
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("[The user has activated the %q skill. ", sk.Meta.Name))
+	fmt.Fprintf(&b, "[The user has activated the %q skill. ", sk.Meta.Name)
 	b.WriteString("Follow its instructions below.]\n\n")
 
 	// User instruction (e.g., "main.go" from "/code-review main.go")
 	if userInstruction != "" {
-		b.WriteString(fmt.Sprintf("[Skill %q additional input: %s]\n\n", sk.Meta.Name, userInstruction))
+		fmt.Fprintf(&b, "[Skill %q additional input: %s]\n\n", sk.Meta.Name, userInstruction)
 	}
 
 	b.WriteString(sk.Body)
 
 	// Supporting files reference
 	if len(sk.Files) > 0 {
-		b.WriteString(fmt.Sprintf("\n\n[Skill directory: %s]\n", sk.Dir))
+		fmt.Fprintf(&b, "\n\n[Skill directory: %s]\n", sk.Dir)
 		b.WriteString("[Supporting files:\n")
 
 		// Sort for deterministic output
@@ -40,9 +40,9 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 		for _, name := range names {
 			content := sk.Files[name]
 			preview := firstLineOrTruncate(content, 100)
-			b.WriteString(fmt.Sprintf("  %s → %s\n", name, preview))
+			fmt.Fprintf(&b, "  %s → %s\n", name, preview)
 		}
-		b.WriteString(fmt.Sprintf("Load with Skill(operation=\"view\", name=%q, path=<path>)]\n", sk.Meta.Name))
+		fmt.Fprintf(&b, "Load with Skill(operation=\"view\", name=%q, path=<path>)]\n", sk.Meta.Name)
 	}
 
 	return b.String()
@@ -85,7 +85,7 @@ func BuildSkillListPrompt(metas []SkillMeta) string {
 		if len(m.Tags) > 0 {
 			tagsStr = fmt.Sprintf(" tags=%q", strings.Join(m.Tags, ","))
 		}
-		b.WriteString(fmt.Sprintf("  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr))
+		fmt.Fprintf(&b, "  <skill name=%q description=%q%s/>\n", m.Name, desc, tagsStr)
 	}
 
 	b.WriteString("</available_skills>\n")

@@ -1,4 +1,4 @@
-.PHONY: build build-linux test test-cover test-cover-html
+.PHONY: build build-linux test test-cover test-cover-html lint lint-fix
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -30,3 +30,11 @@ test-cover-html:
 	go test -coverprofile=coverage.out ./... && \
 	go tool cover -html=coverage.out && \
 	rm -f coverage.out
+
+lint:
+	@echo "=== Running golangci-lint ==="
+	golangci-lint run ./...
+
+lint-fix:
+	@echo "=== Running golangci-lint (with --fix) ==="
+	golangci-lint run --fix ./...

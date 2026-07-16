@@ -95,14 +95,14 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 		m.logger.Info(context.Background(), "channel: unknown slash command", "action", cmd.Name, "thread", cmd.ThreadID)
 		// Build available commands list from shared registry.
 		var help strings.Builder
-		help.WriteString(fmt.Sprintf("Unknown command: /%s\n\nAvailable commands in channel mode:\n", cmd.Name))
+		fmt.Fprintf(&help, "Unknown command: /%s\n\nAvailable commands in channel mode:\n", cmd.Name)
 		for _, def := range cmds.ForMode(cmds.ModeChannel) {
 			switch def.Name {
 			case "mcp":
-				help.WriteString(fmt.Sprintf("  /%-12s — %s\n", def.Name, def.Description))
+				fmt.Fprintf(&help, "  /%-12s — %s\n", def.Name, def.Description)
 				help.WriteString("  /mcp auth <server> — Start OAuth authorization for an MCP server\n")
 			default:
-				help.WriteString(fmt.Sprintf("  /%-12s — %s\n", def.Name, def.Description))
+				fmt.Fprintf(&help, "  /%-12s — %s\n", def.Name, def.Description)
 			}
 		}
 		return textHandlerResult(help.String()), nil
@@ -198,7 +198,7 @@ func (m *Manager) handleModelList(threadID string) (string, error) {
 	currentName := m.providerNameForThread(threadID)
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("Configured models (%d):\n", len(m.cfg.Providers)))
+	fmt.Fprintf(&sb, "Configured models (%d):\n", len(m.cfg.Providers))
 
 	for _, p := range m.cfg.Providers {
 		marker := " "
@@ -710,7 +710,7 @@ func (m *Manager) handleCronCommand(threadID string) (string, error) {
 	})
 
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("📋 Cron Jobs (%d)\n", len(jobs)))
+	fmt.Fprintf(&sb, "📋 Cron Jobs (%d)\n", len(jobs))
 
 	for _, job := range jobs {
 		status := "🟢 Active"
@@ -720,15 +720,15 @@ func (m *Manager) handleCronCommand(threadID string) (string, error) {
 		if job.Type == cron.JobTypeOneshot {
 			status += " · Oneshot"
 		}
-		sb.WriteString(fmt.Sprintf("\n%s **%s** [%s]\n", status, job.Name, job.ID))
-		sb.WriteString(fmt.Sprintf("  Schedule: `%s`\n", job.Schedule))
-		sb.WriteString(fmt.Sprintf("  Prompt: %s\n", truncateForDisplay(job.Prompt, 60)))
+		fmt.Fprintf(&sb, "\n%s **%s** [%s]\n", status, job.Name, job.ID)
+		fmt.Fprintf(&sb, "  Schedule: `%s`\n", job.Schedule)
+		fmt.Fprintf(&sb, "  Prompt: %s\n", truncateForDisplay(job.Prompt, 60))
 		if !job.LastRunAt.IsZero() {
 			icon := "✅"
 			if job.LastRunStatus == "error" {
 				icon = "❌"
 			}
-			sb.WriteString(fmt.Sprintf("  Last run: %s %s\n", icon, job.LastRunAt.Format("01-02 15:04")))
+			fmt.Fprintf(&sb, "  Last run: %s %s\n", icon, job.LastRunAt.Format("01-02 15:04"))
 		}
 	}
 
