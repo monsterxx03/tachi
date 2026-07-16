@@ -123,18 +123,6 @@ func sendConfigOptionsUpdate(conn *acp.AgentSideConnection, sessionID string, op
 	})
 }
 
-// sendModelConfigUpdate builds the model config option and sends it to the
-// ACP client. This is a convenience wrapper around sendConfigOptionsUpdate used
-// by NewSession / LoadSession / ResumeSession where the option isn't otherwise
-// needed by the caller.
-func sendModelConfigUpdate(conn *acp.AgentSideConnection, cfg *config.Config, currentProviderName, sessionID string) {
-	if conn == nil || cfg == nil {
-		return
-	}
-	opt, _ := buildModelConfigOption(cfg, currentProviderName)
-	sendConfigOptionsUpdate(conn, sessionID, opt)
-}
-
 // toACPUsage converts Tachi's llm.Usage to ACP's PromptResponse usage format.
 func toACPUsage(u *llm.Usage) *acp.Usage {
 	if u == nil {

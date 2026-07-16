@@ -129,16 +129,6 @@ func (ch *DiscordChannel) sendText(channelID, content string) error {
 	return nil
 }
 
-// sendTextReply sends a text reply to a Discord channel at the given
-// thread/channel. The replyTo parameter is the original message ID
-// for thread reference (not used in basic send, but available for
-// channel reply threading).
-func (ch *DiscordChannel) sendTextReply(channelID, replyTo, content string) error {
-	// For Phase 1, we send as a regular message.
-	// Phase 2 can add threaded replies via ChannelMessageSendReply.
-	return ch.sendText(channelID, content)
-}
-
 // buildThreadID constructs a ThreadID from guild and channel context.
 func buildThreadID(guildID, channelID string) string {
 	if guildID == "" {

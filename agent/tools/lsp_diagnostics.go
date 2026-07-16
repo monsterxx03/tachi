@@ -79,9 +79,7 @@ func (t *LSPDiagnosticsTool) fileDiagnostics(ctx context.Context, filePath, wd s
 	uri := lsp.PathToURI(absPath)
 
 	// Ensure file is opened on the server.
-	if err := t.manager.SyncFile(ctx, absPath); err != nil {
-		// Non-fatal — we might still have cached diagnostics.
-	}
+	_ = t.manager.SyncFile(ctx, absPath)
 
 	server, err := t.manager.GetServer(ctx, absPath)
 	if err != nil || server == nil {

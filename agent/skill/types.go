@@ -29,12 +29,6 @@ const (
 	SourceGlobal  = "global"
 )
 
-// isValidSource checks whether a source string is one of the known values.
-// Used for read operations (List/Load) that scan all directories.
-func isValidSource(s string) bool {
-	return s == SourceProject || s == SourceClaude || s == SourceCursor || s == SourceGlobal
-}
-
 // isWritableSource checks whether a source string is valid for write
 // operations (Create/Update/Delete). Only "project" (.tachi/skills/) and
 // "global" (~/.tachi/skills/) are writable; claude/cursor dirs are

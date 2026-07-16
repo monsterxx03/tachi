@@ -10,30 +10,6 @@ import (
 	"strings"
 )
 
-// allowedExtensions is the Phase 1 whitelist of file extensions for attachment
-// content injection. Files with extensions not in this list are still downloaded
-// and cached, but their content is not injected into the LLM prompt.
-var allowedExtensions = map[string]bool{
-	".txt":  true,
-	".md":   true,
-	".pdf":  true,
-	".png":  true,
-	".jpg":  true,
-	".jpeg": true,
-	".gif":  true,
-	".csv":  true,
-	".json": true,
-	".yaml": true,
-	".yml":  true,
-	".xml":  true,
-	".log":  true,
-	".go":   true,
-	".py":   true,
-	".js":   true,
-	".ts":   true,
-	".rs":   true,
-}
-
 // attachment represents a downloaded file attachment with metadata.
 type attachment struct {
 	FileName  string
@@ -106,30 +82,6 @@ func (ch *DiscordChannel) saveAttachment(att *attachment) (string, error) {
 	}
 
 	return destPath, nil
-}
-
-// isAllowedFileType checks whether a file is safe to process.
-// Uses double verification: file extension whitelist + MIME type sniffing.
-func isAllowedFileType(filename string, data []byte) bool {
-	ext := strings.ToLower(filepath.Ext(filename))
-	if !allowedExtensions[ext] {
-		return false
-	}
-
-	// MIME type sniffing for extra safety.
-	mime := detectMIMEType(data, filename)
-	if strings.HasPrefix(mime, "text/") ||
-		strings.HasPrefix(mime, "image/") ||
-		mime == "application/pdf" ||
-		mime == "application/json" ||
-		mime == "application/xml" ||
-		mime == "application/x-yaml" ||
-		mime == "text/csv" {
-		return true
-	}
-	// If MIME detection fails or returns unrecognized type, fall back
-	// to the extension whitelist result (lenient for Phase 1).
-	return true
 }
 
 // extractFilename extracts a filename from the HTTP response or URL.

@@ -1,0 +1,17 @@
+version: "2"
+
+linters:
+  default: none
+  enable:
+    - govet          # Go 官方静态分析器，捕获真正的 bug，零噪音
+    - staticcheck    # 综合性质量检查（v2 已合并 gosimple + stylecheck）
+    - errcheck       # 检查未处理的 error 返回值
+    - ineffassign    # 检测无效赋值（逻辑错误）
+    - unused         # 保持代码库整洁，无死代码
+
+  exclusions:
+    rules:
+      # 单测中经常需要 defer close、忽略返回值等，跳过 errcheck
+      - path: '(.+)_test\.go'
+        linters:
+          - errcheck

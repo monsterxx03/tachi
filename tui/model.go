@@ -255,20 +255,6 @@ func modeCycle(current string) string {
 	}
 }
 
-// modeDisplayName returns a human-readable name for a mode.
-func modeDisplayName(mode string) string {
-	switch mode {
-	case agent.ModeAuto:
-		return "Auto"
-	case agent.ModePlan:
-		return "Plan"
-	case agent.ModeChat:
-		return "Chat"
-	default:
-		return mode
-	}
-}
-
 // cycleMode switches to the next session mode in the rotation and updates
 // the UI: statusbar badge, system prompt, and session metadata.
 func (m *Model) cycleMode() {
@@ -287,36 +273,6 @@ func (m *Model) cycleMode() {
 	// Update UI.
 	m.rebuildSystemPrompt()
 	m.statusbar.SetMode(next)
-}
-
-// modeDescription returns a short description for a mode.
-func modeDescription(mode string) string {
-	switch mode {
-	case agent.ModeAuto:
-		return "完整工具权限：可编辑文件、运行命令、浏览网页等"
-	case agent.ModePlan:
-		return "只读规划模式：仅允许探索代码和保存计划"
-	case agent.ModeChat:
-		return "只读对话模式：仅允许搜索、浏览和提问"
-	default:
-		return ""
-	}
-}
-
-// persistMode writes the current session mode to the session's metadata on disk.
-func (m *Model) persistMode(mode string) {
-	sm := m.agent.SessionManager()
-	if sm == nil {
-		return
-	}
-	curr := sm.Current()
-	if curr == nil {
-		return
-	}
-	curr.Mode = mode
-	if err := sm.UpdateMeta(curr); err != nil {
-		m.logger.Error(context.Background(), "TUI: failed to persist mode", err, "model", mode)
-	}
 }
 
 // resolveModelPrice resolves the effective pricing for the current model.

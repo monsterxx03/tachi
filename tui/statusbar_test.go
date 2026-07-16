@@ -573,10 +573,8 @@ func TestStatusBar_View_VeryNarrowTerminal(t *testing.T) {
 		withUsage(10_000, 500),
 	)
 	view := s.View()
-	// Should not panic, even if things get truncated
-	if view != "" {
-		// OK — lipgloss handles truncation
-	}
+	// Should not panic, even if things get truncated.
+	_ = view
 }
 
 func TestStatusBar_View_MillionTokens(t *testing.T) {

@@ -428,11 +428,6 @@ func parseSize(s string) int64 {
 	return n * multiplier
 }
 
-const (
-	defaultMaxSize  = 10 * 1024 * 1024 // 10MB
-	defaultMaxFiles = 10
-)
-
 // rotatingWriter implements io.Writer with size-based log rotation.
 type rotatingWriter struct {
 	dir      string

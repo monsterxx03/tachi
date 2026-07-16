@@ -92,13 +92,13 @@ func buildUserPrompt(plan Plan, summaries []SessionSummary, maxMessageChars int)
 	}
 	var b strings.Builder
 
-	b.WriteString(fmt.Sprintf("## Memory Domain\n\n"))
-	b.WriteString(fmt.Sprintf("- Domain: %s\n", plan.Group.Domain))
+	b.WriteString("## Memory Domain\n\n")
+	fmt.Fprintf(&b, "- Domain: %s\n", plan.Group.Domain)
 	if plan.Group.Root != "" {
-		b.WriteString(fmt.Sprintf("- Project: %s\n", plan.Group.Root))
+		fmt.Fprintf(&b, "- Project: %s\n", plan.Group.Root)
 	}
-	b.WriteString(fmt.Sprintf("- Memory directory: %s\n", plan.Group.MemoryRoot))
-	b.WriteString(fmt.Sprintf("- Active sessions to process: %d\n\n", len(plan.ActiveSessions)))
+	fmt.Fprintf(&b, "- Memory directory: %s\n", plan.Group.MemoryRoot)
+	fmt.Fprintf(&b, "- Active sessions to process: %d\n\n", len(plan.ActiveSessions))
 
 	// Inject decay snapshot if available.
 	if len(plan.LastState.FactStates) > 0 {
@@ -107,9 +107,9 @@ func buildUserPrompt(plan Plan, summaries []SessionSummary, maxMessageChars int)
 
 	b.WriteString("## Instructions\n\n")
 	b.WriteString("1. First, read the existing memory state:\n")
-	b.WriteString(fmt.Sprintf("   - `%s/index.md` (may not exist yet)\n", plan.Group.MemoryRoot))
-	b.WriteString(fmt.Sprintf("   - `%s/inbox.md` (may not exist yet)\n", plan.Group.MemoryRoot))
-	b.WriteString(fmt.Sprintf("   - Files in `%s/topics/`\n\n", plan.Group.MemoryRoot))
+	fmt.Fprintf(&b, "   - `%s/index.md` (may not exist yet)\n", plan.Group.MemoryRoot)
+	fmt.Fprintf(&b, "   - `%s/inbox.md` (may not exist yet)\n", plan.Group.MemoryRoot)
+	fmt.Fprintf(&b, "   - Files in `%s/topics/`\n\n", plan.Group.MemoryRoot)
 	b.WriteString("2. Then review the session summaries below and extract important facts.\n")
 	b.WriteString("3. Write consolidated facts into topic files.\n")
 	b.WriteString("4. Update index.md and clear inbox.md if you integrated its content.\n\n")
@@ -121,13 +121,13 @@ func buildUserPrompt(plan Plan, summaries []SessionSummary, maxMessageChars int)
 	}
 
 	for _, s := range summaries {
-		b.WriteString(fmt.Sprintf("### Session: %s\n", s.ID))
+		fmt.Fprintf(&b, "### Session: %s\n", s.ID)
 		if s.Title != "" {
-			b.WriteString(fmt.Sprintf("Title: %s\n\n", s.Title))
+			fmt.Fprintf(&b, "Title: %s\n\n", s.Title)
 		}
 		for _, m := range s.Messages {
-			b.WriteString(fmt.Sprintf("**User**: %s\n\n", truncate(m.User, maxMessageChars)))
-			b.WriteString(fmt.Sprintf("**Assistant**: %s\n\n", truncate(m.Assistant, maxMessageChars)))
+			fmt.Fprintf(&b, "**User**: %s\n\n", truncate(m.User, maxMessageChars))
+			fmt.Fprintf(&b, "**Assistant**: %s\n\n", truncate(m.Assistant, maxMessageChars))
 		}
 		b.WriteString("---\n\n")
 	}
@@ -240,7 +240,7 @@ func buildDecaySnapshot(b *strings.Builder, states map[string]*memory.FactState)
 			if fe.stats.lowDecay > 0 {
 				parts = append(parts, fmt.Sprintf("%d low-decay (min %.2f)", fe.stats.lowDecay, fe.stats.minDecay))
 			}
-			b.WriteString(fmt.Sprintf("- `%s`: %s\n", fe.name, strings.Join(parts, ", ")))
+			fmt.Fprintf(b, "- `%s`: %s\n", fe.name, strings.Join(parts, ", "))
 		}
 		b.WriteString("\n")
 	}
@@ -249,8 +249,8 @@ func buildDecaySnapshot(b *strings.Builder, states map[string]*memory.FactState)
 		sort.Slice(freshFiles, func(i, j int) bool { return freshFiles[i].stats.maxReinf > freshFiles[j].stats.maxReinf })
 		b.WriteString("Files with fresh facts (preserve these):\n\n")
 		for _, fe := range freshFiles {
-			b.WriteString(fmt.Sprintf("- `%s`: %d fresh (max reinforcements: %d)\n",
-				fe.name, fe.stats.fresh, fe.stats.maxReinf))
+			fmt.Fprintf(b, "- `%s`: %d fresh (max reinforcements: %d)\n",
+				fe.name, fe.stats.fresh, fe.stats.maxReinf)
 		}
 		b.WriteString("\n")
 	}

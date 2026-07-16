@@ -37,7 +37,6 @@ type Server struct {
 	server   *http.Server
 	port     int
 	handler  channel.MessageHandler
-	upgrader websocket.Server
 
 	// clients maps threadID → WebSocket connection for proactive Send().
 	clients map[string]*websocket.Conn

@@ -224,10 +224,8 @@ func TestEsc_NonCopyMode_NoOp(t *testing.T) {
 	m := testModel()
 	m.copyMode = false
 	_, cmd := m.Update(tea.KeyPressMsg{Code: tea.KeyEscape})
-	// Should pass through to input
-	if cmd == nil {
-		// OK — input may or may not return a command
-	}
+	// Should pass through to input — cmd may or may not be nil.
+	_ = cmd
 }
 
 // ---- Agent event: text delta ----

@@ -413,14 +413,6 @@ func (t *TopicBackend) loadDecayStates() map[string]*FactState {
 	return result
 }
 
-// invalidateDecayCache clears the cached decay states, forcing the next
-// loadDecayStates call to re-read from disk. Called after ReinforceFact writes.
-func (t *TopicBackend) invalidateDecayCache() {
-	t.decayCacheMu.Lock()
-	t.decayCache = nil
-	t.decayCacheMu.Unlock()
-}
-
 // dreamStateJSON mirrors dream.State for deserializing last_dream.json
 // without importing the dream package (avoids circular dependency).
 type dreamStateJSON struct {
