@@ -542,9 +542,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 		if _, err := sm.New(resolved.Provider.Name, ""); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
-		if err := sm.SetThreadID(threadID); err != nil {
-			m.logger.Warn(context.Background(), "channel: set thread_id", "thread", threadID, "error", err)
-		}
+		sm.SetThreadID(threadID)
 		return sm, nil, nil
 	}
 

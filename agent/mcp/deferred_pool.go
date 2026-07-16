@@ -234,7 +234,6 @@ func (p *DeferredPool) toResult(t *DeferredTool) SearchResult {
 func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxResults int) []SearchResult {
 	query = strings.TrimSpace(query)
 	tokens := tokenize(query) // tokenize first — CamelCase detection needs original case
-	query = strings.ToLower(query) // used below in comparison
 
 	// Build pre-compiled search terms — regex compiled once per term, reused across all tools
 	var allTerms []searchTerm

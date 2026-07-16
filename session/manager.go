@@ -194,34 +194,40 @@ func (m *Manager) AppendMessage(msg *Message) error {
 	return nil
 }
 
-// SetTitle updates the session title (typically called after first user message)
-func (m *Manager) SetTitle(title string) error {
+// SetTitle updates the session title (typically called after first user message).
+// Errors are logged internally — this is a best-effort metadata write.
+func (m *Manager) SetTitle(title string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.current == nil {
-		return fmt.Errorf("no active session")
+		return
 	}
 
 	m.current.Title = ExtractTitle(title)
 	m.current.UpdatedAt = time.Now()
 
-	return m.store.UpdateMeta(m.current)
+	if err := m.store.UpdateMeta(m.current); err != nil {
+		m.logger.Error(context.Background(), "session: failed to persist title", err)
+	}
 }
 
 // SetThreadID records the channel ThreadID on the session for later lookup.
-func (m *Manager) SetThreadID(threadID string) error {
+// Errors are logged internally — this is a best-effort metadata write.
+func (m *Manager) SetThreadID(threadID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	if m.current == nil {
-		return fmt.Errorf("no active session")
+		return
 	}
 
 	m.current.ThreadID = threadID
 	m.current.UpdatedAt = time.Now()
 
-	return m.store.UpdateMeta(m.current)
+	if err := m.store.UpdateMeta(m.current); err != nil {
+		m.logger.Error(context.Background(), "session: failed to persist thread ID", err)
+	}
 }
 
 // FindByThreadID looks up a session by its ThreadID field, loads it,

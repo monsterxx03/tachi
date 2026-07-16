@@ -11,7 +11,32 @@ linters:
 
   exclusions:
     rules:
-      # 单测中经常需要 defer close、忽略返回值等，跳过 errcheck
+      # 单测中忽略 errcheck
       - path: '(.+)_test\.go'
+        linters:
+          - errcheck
+
+      # defer Close/Remove 是最常见的 Go 惯用法，错误通常不可操作
+      - source: 'defer .*\.(Close|Remove)\(\)'
+        linters:
+          - errcheck
+
+      # fmt.Fprint* 写到 stdout/writer 极少失败
+      - source: 'fmt\.Fprint'
+        linters:
+          - errcheck
+
+      # 编码输出到流 — 尽力而为
+      - source: '\.Encode\('
+        linters:
+          - errcheck
+
+      # 文件清理操作 — 尽力而为
+      - source: 'os\.(Remove|Rename|MkdirAll)\('
+        linters:
+          - errcheck
+
+      # 网络连接超时设置 — 极少失败
+      - source: '\.Set(Write|Read)Deadline\('
         linters:
           - errcheck

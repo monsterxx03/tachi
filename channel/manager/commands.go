@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -268,9 +269,7 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 						compactNote = "\n\n⚠ 压缩后创建新 session 失败，请运行 /compact。"
 					} else {
 						// Migrate ThreadID to the new (current) session.
-						if tidErr := sm.SetThreadID(threadID); tidErr != nil {
-							m.logger.Error(context.Background(), "channel: /model migrate thread_id after compact failed", tidErr)
-						}
+						sm.SetThreadID(threadID)
 						compactNote = "\n\n🔍 当前上下文超过目标模型窗口，已自动压缩完成后切换。"
 						m.logger.Info(context.Background(), "channel: /model pre-switch compact completed", "thread", threadID)
 					}
@@ -386,9 +385,7 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	if sess != nil {
 		// Clear the ThreadID on the old session so FindByThreadID won't
 		// match it on the next message, then end the current session.
-		if err := sm.SetThreadID(""); err != nil {
-			m.logger.Error(context.Background(), "channel: /new clear thread_id failed", err, "thread", threadID)
-		}
+		sm.SetThreadID("")
 		sm.EndCurrent()
 		m.logger.Info(context.Background(), "channel: /new ended session", "id", sess.ID, "thread", threadID)
 	}
@@ -516,9 +513,7 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string) (string
 	}
 
 	// Migrate ThreadID to new session (sm.Current now points to the new session).
-	if err := sm.SetThreadID(threadID); err != nil {
-		m.logger.Error(context.Background(), "channel: /compact set thread_id failed", err)
-	}
+	sm.SetThreadID(threadID)
 
 	return fmt.Sprintf(
 		"🔍 对话已压缩\n\n原会话: %s (%s)\n消息数: %d\n\n摘要:\n%s",
@@ -1045,7 +1040,7 @@ func (m *Manager) handleRestartCommand(threadID string) (string, error) {
 	// /proc/1/comm is "systemd". This works on all systemd versions,
 	// unlike INVOCATION_ID which requires systemd >= 232 (CentOS 7 has v219).
 	if !isRunningUnderSystemd() {
-		return "", fmt.Errorf("Tachi 不是由 systemd 启动的，无法通过 systemctl 重启")
+		return "", errors.New("tachi 不是由 systemd 启动的，无法通过 systemctl 重启")
 	}
 
 	// Determine if this is a user service or system service.

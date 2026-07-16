@@ -243,7 +243,6 @@ func (c *jsonrpcConn) readMsg() (jsonrpcMessage, error) {
 		line = trimCRLF(line)
 
 		if line == "" {
-			headersDone = true
 			break
 		}
 		if len(line) > 16 && line[:16] == "Content-Length: " {

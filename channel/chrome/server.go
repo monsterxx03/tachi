@@ -107,7 +107,7 @@ func (s *Server) Close() error {
 // the connection is dead.
 func (s *Server) Send(threadID string, content string) error {
 	s.mu.RLock()
-	conn, ok := s.clients[threadID]
+	_, ok := s.clients[threadID]
 	s.mu.RUnlock()
 
 	if !ok {
@@ -123,7 +123,7 @@ func (s *Server) Send(threadID string, content string) error {
 
 	s.mu.RLock()
 	// Double-check under read lock.
-	conn, ok = s.clients[threadID]
+	_, ok = s.clients[threadID]
 	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("chrome: client disconnected for thread %s", threadID)
@@ -137,7 +137,7 @@ func (s *Server) Send(threadID string, content string) error {
 	s.mu.RLock()
 	// Acquire write lock to send, preventing concurrent writes.
 	// We re-check conn under the lock.
-	conn, ok = s.clients[threadID]
+	conn, ok := s.clients[threadID]
 	s.mu.RUnlock()
 	if !ok {
 		return fmt.Errorf("chrome: client disconnected for thread %s", threadID)
