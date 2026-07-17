@@ -225,7 +225,7 @@ func (a *AIAgent) LastTokenBreakdown() tokenbreakdown.Breakdown {
 //   - estimated input tokens >= contextWindow * threshold
 //   - not in cooldown (token estimate hasn't grown 20% since last compact)
 func (a *AIAgent) shouldAutoCompact() bool {
-	if a.cfg == nil || !a.cfg.Compact.Auto {
+	if a.cfg == nil || (a.cfg.Compact.Auto != nil && !*a.cfg.Compact.Auto) {
 		return false
 	}
 	if a.contextWindow <= 0 {

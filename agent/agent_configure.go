@@ -117,7 +117,7 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
 	// --- LSP servers ---
-	if cfg.LSP.Enabled && len(cfg.LSP.Servers) > 0 {
+	if (cfg.LSP.Enabled == nil || *cfg.LSP.Enabled) && len(cfg.LSP.Servers) > 0 {
 		lspCfg := convertLSPConfig(&cfg.LSP)
 		a.lspManager = lsp.NewManager(lspCfg)
 		a.RegisterTool(tools.NewLSPTool(a.lspManager))
@@ -152,7 +152,7 @@ func convertLSPConfig(cfg *config.LSPConfig) *lsp.Config {
 		}
 	}
 	return &lsp.Config{
-		Enabled:          cfg.Enabled,
+		Enabled:          cfg.Enabled == nil || *cfg.Enabled,
 		MaxRestarts:      cfg.MaxRestarts,
 		MaxFileSize:      cfg.MaxFileSize,
 		MaxResults:       cfg.MaxResults,
