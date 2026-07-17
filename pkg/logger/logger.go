@@ -32,7 +32,9 @@ var (
 // cfg.Level is one of "debug", "info", "warn", "error".
 func Init(dir string, cfg Config) error {
 	logDir = dir
-	cfgPerEntry = cfg.PerEntry
+	if cfg.PerEntry != nil {
+		cfgPerEntry = *cfg.PerEntry
+	}
 
 	if cfg.MaxFiles > 0 {
 		cfgMaxFiles = cfg.MaxFiles
