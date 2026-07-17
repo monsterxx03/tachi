@@ -60,7 +60,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// Only non-directed messages in group chat mode with whisper enabled
 		// are routed through the ambient pipeline. Single-chat messages
 		// (even with Directed=false) never enter the ambient path.
-		if !msg.Directed && msg.GroupChat && m.cfg.Channel.Whisper.Enabled {
+		if !msg.Directed && msg.GroupChat && m.cfg.Channel.Whisper.WhisperEnabled() {
 			return m.handleAmbientMessage(ctx, msg)
 		}
 
@@ -408,7 +408,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 
 	// Build system prompt — append whisper instructions for group chat threads.
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir)
-	if ta.groupChat && m.cfg.Channel.Whisper.Enabled {
+	if ta.groupChat && m.cfg.Channel.Whisper.WhisperEnabled() {
 		systemPrompt += "\n" + whisperPromptSuffix
 	}
 

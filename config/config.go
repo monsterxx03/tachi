@@ -356,7 +356,8 @@ type ChromeConfig struct {
 // triggering individual agent turns.
 type ChannelWhisperConfig struct {
 	// Enabled controls whether the whisper pipeline is active (default: true).
-	Enabled bool `yaml:"enabled" default:"true"`
+	// Use pointer so false (explicit disable) can be distinguished from unset.
+	Enabled *bool `yaml:"enabled"`
 
 	// AmbientBatchWindow is the duration to buffer non-directed messages
 	// before triggering an ambient turn (default: 30s).
@@ -375,8 +376,8 @@ type ChannelWhisperConfig struct {
 
 	// SilenceMarker is the string the agent replies with to indicate
 	// it has nothing to say. Matching is lenient (trim + case-insensitive).
-	// Default: "SILENT".
-	SilenceMarker string `yaml:"silence_marker" default:"SILENT"`
+	// Default: "SILENCE".
+	SilenceMarker string `yaml:"silence_marker" default:"SILENCE"`
 
 	// AmbientTools is the tool whitelist for ambient turns.
 	// Empty (default) = [MemoryRecall, RecordMemory, WebFetch, WebSearch].
@@ -385,6 +386,14 @@ type ChannelWhisperConfig struct {
 	// AmbientMaxTokens is the max_tokens budget for ambient turns.
 	// Default: falls back to agent.DefaultMaxTokens.
 	AmbientMaxTokens int `yaml:"ambient_max_tokens"`
+}
+
+// WhisperEnabled returns whether whisper is enabled, defaulting to true if unset.
+func (c *ChannelWhisperConfig) WhisperEnabled() bool {
+	if c.Enabled == nil {
+		return true
+	}
+	return *c.Enabled
 }
 
 // ActiveChannels returns the raw configs for every enabled channel,

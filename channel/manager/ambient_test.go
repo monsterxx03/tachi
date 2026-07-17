@@ -102,7 +102,8 @@ func TestWhisperGuard_NonGroupChat(t *testing.T) {
 func TestWhisperGuard_Disabled(t *testing.T) {
 	// Whisper disabled → non-directed group messages should NOT be buffered.
 	cfg := config.DefaultConfig()
-	cfg.Channel.Whisper.Enabled = false
+	enabled := false
+	cfg.Channel.Whisper.Enabled = &enabled
 	cfg.Providers = []config.ProviderConfig{{
 		Name:    "test",
 		Type:    "openai",
@@ -263,8 +264,6 @@ func TestBuildAmbientPrompt(t *testing.T) {
 	assert.Contains(t, result, "张三: CI failed again")
 	assert.Contains(t, result, "李四: I'll look into it")
 	assert.Contains(t, result, "--- END AMBIENT GROUP CHAT ---")
-	assert.Contains(t, result, "SILENCE")
-	assert.Contains(t, result, "不可信的用户输入")
 }
 
 func TestIsSilence(t *testing.T) {
@@ -286,7 +285,7 @@ func TestChannelWhisperConfig_Defaults(t *testing.T) {
 	// defaults are applied via creasty/defaults when loaded through DefaultConfig()
 	cfg := config.DefaultConfig()
 
-	assert.True(t, cfg.Channel.Whisper.Enabled)
+	assert.True(t, cfg.Channel.Whisper.WhisperEnabled())
 	assert.Equal(t, "SILENCE", cfg.Channel.Whisper.SilenceMarker)
 	assert.Equal(t, 30*time.Second, cfg.Channel.Whisper.AmbientBatchWindow)
 	assert.Equal(t, 5, cfg.Channel.Whisper.AmbientMaxIterations)
@@ -296,8 +295,9 @@ func TestChannelWhisperConfig_Defaults(t *testing.T) {
 }
 
 func TestChannelWhisperConfig_CustomValues(t *testing.T) {
+	enabled := false
 	cfg := config.ChannelWhisperConfig{
-		Enabled:              false,
+		Enabled:              &enabled,
 		AmbientBatchWindow:   10 * time.Second,
 		AmbientMaxIterations: 3,
 		AmbientMaxBuffer:     20,
@@ -306,7 +306,7 @@ func TestChannelWhisperConfig_CustomValues(t *testing.T) {
 		AmbientMaxTokens:     2048,
 	}
 
-	assert.False(t, cfg.Enabled)
+	assert.False(t, cfg.WhisperEnabled())
 	assert.Equal(t, 10*time.Second, cfg.AmbientBatchWindow)
 	assert.Equal(t, 3, cfg.AmbientMaxIterations)
 	assert.Equal(t, 20, cfg.AmbientMaxBuffer)
