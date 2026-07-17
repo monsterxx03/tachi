@@ -228,7 +228,7 @@ type threadActivation struct {
 	ambientPending []ambientMsg // buffered non-directed messages
 	ambientTimer   *time.Timer  // batch window timer (nil when inactive)
 	lastAmbient    time.Time    // when the last ambient turn ended
-	silenceCount   atomic.Int32 // consecutive SILENCE replies (for backoff)
+	silenceCount   atomic.Int32 // consecutive [SILENT] replies (for backoff)
 }
 
 // ambientMsg represents a single non-directed message buffered for whisper processing.

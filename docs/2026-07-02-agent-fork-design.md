@@ -271,7 +271,7 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
     ta.lastAmbient = time.Now()
     ta.mu.Unlock()
 
-    // 8. SILENCE 检查 → sendToThread
+    // 8. [SILENT] 检查 → sendToThread
     if m.isSilence(text) { ... return }
     m.sendToThread(ctx, threadID, text, "")
 }
@@ -298,7 +298,7 @@ type ChannelWhisperConfig struct {
     AmbientMaxIterations int           `yaml:"ambient_max_iterations" default:"5"`
     AmbientMaxBuffer     int           `yaml:"ambient_max_buffer" default:"50"`
     AmbientCooldown      time.Duration `yaml:"ambient_cooldown" default:"0"`
-    SilenceMarker        string        `yaml:"silence_marker" default:"SILENCE"`
+    SilenceMarker        string        `yaml:"silence_marker" default:"[SILENT]"`
 
     // --- 新增 ---
     AmbientTools     []string `yaml:"ambient_tools"`
