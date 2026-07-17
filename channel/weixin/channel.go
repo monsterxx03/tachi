@@ -486,3 +486,28 @@ func readStdinLine(prompt string) (string, error) {
 	}
 	return input, nil
 }
+
+// SystemPromptSuffix implements channel.SystemPromptSuffixer.
+// Tells the agent it's currently operating as a personal WeChat bot
+// connected via the iLink protocol, with platform-specific markdown limitations.
+func (ch *Channel) SystemPromptSuffix() string {
+	return `## Current Channel: WeChat (微信)
+
+You are currently operating as a personal WeChat bot, connected via the iLink
+protocol. Your responses are delivered through the WeChat messaging platform.
+
+Platform characteristics:
+- Limited markdown support: bold (**), italic (*), inline code (` + "`), code" + `
+  fences (` + "```), tables, lists (-/*/1.), blockquotes (>), headings H1-H4, " + `
+  horizontal rules (---, ***, ___)
+- No HTML
+- No images in markdown (![alt](url) is stripped)
+- Headings H5/H6 are demoted to plain text
+- Media files (images, documents, voice, video) are sent as separate
+  attachments, not inline
+- Synchronous request-reply model: one user message → one agent response
+  per turn
+- Keep responses concise and well-structured for mobile reading`
+}
+
+var _ channel.SystemPromptSuffixer = (*Channel)(nil)

@@ -112,3 +112,22 @@ func (c *ChromeChannel) Send(_ context.Context, msg channel.OutgoingMessage) err
 // compile-time interface checks
 var _ channel.Channel = (*ChromeChannel)(nil)
 var _ channel.MessageSender = (*ChromeChannel)(nil)
+var _ channel.SystemPromptSuffixer = (*ChromeChannel)(nil)
+
+// SystemPromptSuffix implements channel.SystemPromptSuffixer.
+// Tells the agent it's currently operating as a Chrome Extension companion
+// in the browser.
+func (c *ChromeChannel) SystemPromptSuffix() string {
+	return `## Current Channel: Chrome Extension
+
+You are currently operating as a Chrome Extension companion. The user is
+interacting with you through a browser sidepanel or popup.
+
+Platform characteristics:
+- Full markdown rendering is supported in the extension UI
+- The user is in a browser — they may be looking at web pages and can
+  share page content with you
+- WebSocket connection over localhost — low latency, real-time responses
+- You have access to all standard tools including ReadFile, Bash, and
+  web operations`
+}

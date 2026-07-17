@@ -176,24 +176,18 @@ func (ch *DiscordChannel) SetProviderNames(names []string) {
 }
 
 // SystemPromptSuffix implements channel.SystemPromptSuffixer.
-// Appends Discord-specific instructions to the agent's system prompt
-// so the LLM knows about platform limitations and the Embed format.
+// Tells the agent it's currently operating as a Discord bot.
 func (ch *DiscordChannel) SystemPromptSuffix() string {
-	return `## Discord Platform Limitations
+	return `## Current Channel: Discord
 
-Discord message content has limited markdown support:
-- ❌ No HTML
-- ❌ No horizontal rules ---
+You are currently operating as a Discord bot. Your responses are delivered
+through Discord guild channels and direct messages.
 
-For rich card layouts, use the [EMBED] format:
-
-EMBED:title|description|color
-field:Name|Value|true(optional, inline)
-
-Notes:
-- EMBED: must be the first line of the message
-- field: lines follow the EMBED: line, unlimited
-- inline=true makes fields display side by side (default false)`
+Platform characteristics:
+- Full Discord-flavored markdown is supported
+- Messages are limited to 2000 characters; longer responses are
+  automatically split into multiple messages
+- Media attachments (images, files) are supported as separate uploads`
 }
 
 // Send implements channel.MessageSender for proactive message delivery
