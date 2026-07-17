@@ -375,8 +375,8 @@ type ChannelWhisperConfig struct {
 
 	// SilenceMarker is the string the agent replies with to indicate
 	// it has nothing to say. Matching is lenient (trim + case-insensitive).
-	// Default: "SILENCE".
-	SilenceMarker string `yaml:"silence_marker" default:"SILENCE"`
+	// Default: "SILENT".
+	SilenceMarker string `yaml:"silence_marker" default:"SILENT"`
 
 	// AmbientTools is the tool whitelist for ambient turns.
 	// Empty (default) = [MemoryRecall, RecordMemory, WebFetch, WebSearch].
