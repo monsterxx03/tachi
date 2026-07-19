@@ -115,14 +115,34 @@ func lastIndexAny(s string, substrs ...string) int {
 // sendText sends a text message to a Discord channel.
 // Long messages are automatically split into multiple messages.
 func (ch *DiscordChannel) sendText(channelID, content string) error {
+	return ch.sendTextWithReference(channelID, content, nil)
+}
+
+// sendTextReply sends a text message as a reply to a specific message.
+// Long messages are automatically split into multiple messages.
+func (ch *DiscordChannel) sendTextReply(channelID, content string, reference *discordgo.MessageReference) error {
+	return ch.sendTextWithReference(channelID, content, reference)
+}
+
+// sendTextWithReference is the shared implementation for sendText and sendTextReply.
+// When reference is non-nil, messages are sent as Discord replies.
+func (ch *DiscordChannel) sendTextWithReference(channelID, content string, reference *discordgo.MessageReference) error {
 	sess := ch.session
 	if sess == nil {
 		return nil // silently ignore if not connected
 	}
 
 	chunks := splitMessage(content)
-	for _, chunk := range chunks {
-		if _, err := sess.ChannelMessageSend(channelID, chunk); err != nil {
+	for i, chunk := range chunks {
+		var err error
+		if reference != nil && i == 0 {
+			// Only the first chunk gets the reply reference; subsequent
+			// chunks are sent as regular messages to avoid confusing nesting.
+			_, err = sess.ChannelMessageSendReply(channelID, chunk, reference)
+		} else {
+			_, err = sess.ChannelMessageSend(channelID, chunk)
+		}
+		if err != nil {
 			return err
 		}
 	}
@@ -357,11 +377,24 @@ func (ch *DiscordChannel) sendEmbed(channelID string, embed *discordgo.MessageEm
 // sendTextWithMedia sends text content, parsing MEDIA tags and uploading files.
 // Returns the number of attachments sent.
 func (ch *DiscordChannel) sendTextWithMedia(channelID string, content string) (int, error) {
+	return ch.sendTextWithMediaRef(channelID, content, nil)
+}
+
+// sendTextWithMediaReply sends text content as a reply, parsing MEDIA tags and uploading files.
+// Returns the number of attachments sent.
+func (ch *DiscordChannel) sendTextWithMediaReply(channelID string, content string, reference *discordgo.MessageReference) (int, error) {
+	return ch.sendTextWithMediaRef(channelID, content, reference)
+}
+
+// sendTextWithMediaRef is the shared implementation for sendTextWithMedia and
+// sendTextWithMediaReply. When reference is non-nil, the text part is sent as
+// a Discord reply.
+func (ch *DiscordChannel) sendTextWithMediaRef(channelID string, content string, reference *discordgo.MessageReference) (int, error) {
 	cleanContent, attachments := parseMediaTags(content)
 
-	// Send the cleaned text.
+	// Send the cleaned text — first chunk as reply if reference is provided.
 	if cleanContent != "" {
-		if err := ch.sendText(channelID, cleanContent); err != nil {
+		if err := ch.sendTextWithReference(channelID, cleanContent, reference); err != nil {
 			return 0, err
 		}
 	}

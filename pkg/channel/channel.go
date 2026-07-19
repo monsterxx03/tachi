@@ -145,6 +145,11 @@ type IncomingMessage struct {
 	// agent rather than queuing it as a new turn or steer input.
 	AskUserAnswers map[string]string
 
+	// ReferencedMessageID is the ID of the message this message is replying to,
+	// if the IM platform supports threaded replies (e.g., Discord reply).
+	// Empty when the message is not a reply.
+	ReferencedMessageID string
+
 	// CancelAskUser is set by interactive channels when the user explicitly
 	// cancels an AskUserQuestion prompt (e.g., by clicking a "取消" button).
 	// When true, AskUserAnswers is ignored and nil answers are routed to the
