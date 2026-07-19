@@ -182,14 +182,34 @@ func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threa
 		content = "[" + senderName + "]: " + content
 	}
 
+	// Detect Discord reply (message_reference) and inject context.
+	var referencedMessageID string
+	if m.MessageReference != nil && m.MessageReference.MessageID != "" {
+		referencedMessageID = m.MessageReference.MessageID
+		if m.ReferencedMessage != nil {
+			// Discord provides the referenced message content when available.
+			refAuthor := resolveSenderName(m.ReferencedMessage.Author)
+			refContent := cleanContentForLLM(m.ReferencedMessage.Content)
+			if refAuthor != "" && refAuthor != "unknown" {
+				content = "[回复 @" + refAuthor + ": " + refContent + "]\n" + content
+			} else {
+				content = "[回复消息: " + refContent + "]\n" + content
+			}
+		} else {
+			// ReferencedMessage not provided (uncached or deleted) — just note the fact.
+			content = "[回复了一条消息]\n" + content
+		}
+	}
+
 	msg := channel.IncomingMessage{
-		ThreadID:  threadID,
-		MessageID: m.ID,
-		Content:   content,
-		ChannelID: m.ChannelID,
-		Sender:    senderName,
-		Directed:  directed,
-		GroupChat: !dm,
+		ThreadID:            threadID,
+		MessageID:           m.ID,
+		Content:             content,
+		ChannelID:           m.ChannelID,
+		Sender:              senderName,
+		Directed:            directed,
+		GroupChat:           !dm,
+		ReferencedMessageID: referencedMessageID,
 	}
 
 	// Handle attachments.
@@ -259,6 +279,18 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 		return
 	}
 
+	// Build a MessageReference so the response shows as a Discord reply
+	// to the user's message (unless the incoming message has no ID or is
+	// a DM — DMs don't benefit from reply decoration).
+	var ref *discordgo.MessageReference
+	if m.ID != "" && !isDM(m.GuildID) {
+		ref = &discordgo.MessageReference{
+			MessageID: m.ID,
+			ChannelID: channelID,
+			GuildID:   m.GuildID,
+		}
+	}
+
 	// 1. Check for EMBED prefix.
 	if cleaned, embed, ok := parseEmbedContent(reply.Content); ok {
 		if err := ch.sendEmbed(channelID, embed); err != nil {
@@ -266,13 +298,13 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 		}
 		// Send remaining text after embed, with MEDIA parsing.
 		if cleaned != "" {
-			if _, err := ch.sendTextWithMedia(channelID, cleaned); err != nil {
+			if _, err := ch.sendTextWithMediaRef(channelID, cleaned, ref); err != nil {
 				ch.logger.Error(context.Background(), "discord: send embed text error", err)
 			}
 		}
 	} else {
 		// 2. Normal text with MEDIA tag support.
-		if _, err := ch.sendTextWithMedia(channelID, reply.Content); err != nil {
+		if _, err := ch.sendTextWithMediaRef(channelID, reply.Content, ref); err != nil {
 			ch.logger.Error(context.Background(), "discord: send reply error", err)
 		}
 	}
