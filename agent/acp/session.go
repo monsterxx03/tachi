@@ -160,6 +160,23 @@ func (sm *ACPSessionManager) Delete(id string) {
 	delete(sm.sessions, id)
 }
 
+// Rekey changes the ID under which a session is registered and updates the
+// session's ID field accordingly. Used when the on-disk session differs from
+// the client-requested ACP session ID — e.g. LoadSession followed a compact
+// chain to a newer tachi session, but the client keeps using the ID it knows.
+// No-op when from doesn't exist.
+func (sm *ACPSessionManager) Rekey(from, to string) {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+	sess, ok := sm.sessions[from]
+	if !ok {
+		return
+	}
+	delete(sm.sessions, from)
+	sess.ID = to
+	sm.sessions[to] = sess
+}
+
 // List returns all active sessions.
 func (sm *ACPSessionManager) List() []*ACPSession {
 	sm.mu.RLock()

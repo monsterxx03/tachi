@@ -383,6 +383,34 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		return acp.StopReasonEndTurn, nil
 	}
 
+	// Build the conversation history to compact: prefer the in-memory cache,
+	// fall back to loading the current session from disk. Passing nil history
+	// would ask the LLM to summarize a conversation it cannot see.
+	history := sess.history
+	if len(history) == 0 {
+		if msgs, err := sm.LoadMessages(); err == nil && len(msgs) > 0 {
+			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
+			if convErr == nil {
+				history = llmMsgs
+			} else {
+				logger.FromContext(ctx).Error(ctx, "ACP: /compact convert history failed", convErr)
+			}
+		}
+	}
+	if len(history) == 0 {
+		sendTextUpdate(ctx, conn, sessionID, "Nothing to compact yet.")
+		return acp.StopReasonEndTurn, nil
+	}
+
+	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
+
+	// Disk-loaded history has no system message; prepend it so the compact
+	// LLM call sees the same environment context as the live conversation
+	// (the compact instruction asks for working directory, branch, etc.).
+	if history[0].Role != "system" {
+		history = append([]llm.Message{{Role: "system", Content: systemPrompt}}, history...)
+	}
+
 	// Save and clear tools: compact shouldn't call any tools
 	savedTools := sess.agent.SaveToolRegistry()
 	sess.agent.ClearToolRegistry()
@@ -393,8 +421,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	}()
 
 	// Run compact turn — use DrainCompactEvents approach (simple, reliable)
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
-	eventCh := sess.agent.RunConversationStream(ctx, nil,
+	eventCh := sess.agent.RunConversationStream(ctx, history,
 		cmds.BuildCompactInstruction(), systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens},
 	)
@@ -415,6 +442,11 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		sendTextUpdate(ctx, conn, sessionID, "Compact failed: "+err.Error())
 		return acp.StopReasonEndTurn, nil
 	}
+
+	// Invalidate the cached history — it still holds the pre-compact messages.
+	// The next Prompt reloads from disk, picking up the new compact session
+	// (same pattern as /commit and /review).
+	sess.history = nil
 
 	sendTextUpdate(ctx, conn, sessionID,
 		"Conversation compacted. New session created with summary of previous context.")

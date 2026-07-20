@@ -442,6 +442,14 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		return acp.ResumeSessionResponse{}, fmt.Errorf("load session %s: %w", sessionID, err)
 	}
 
+	// If the session was compacted, resume from its newest continuation
+	// (summary + subsequent messages) instead of the truncated pre-compact
+	// session.
+	if newest := followCompactedChain(diskMgr, loaded); newest.ID != loaded.ID {
+		t.logger.Info(ctx, fmt.Sprintf("ACP: ResumeSession followed compact chain %s -> %s", loaded.ID, newest.ID))
+		loaded = newest
+	}
+
 	cwd := req.Cwd
 	if cwd == "" {
 		cwd = loaded.WorkingDir
@@ -493,6 +501,13 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 
 	// Create ACP session with existing disk session manager
 	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, diskMgr)
+
+	// Keep the ACP session addressable by the client-requested ID (see
+	// LoadSession for rationale — compact chain may have switched the
+	// on-disk session).
+	if sess.ID != sessionID {
+		t.sessions.Rekey(sess.ID, sessionID)
+	}
 
 	// Wire up permission handler
 	if t.conn != nil {
@@ -579,6 +594,18 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	}
 
+	// A compacted session's continuation lives in a NEW session (compact
+	// creates one and links it via compacted_child_id). If the requested
+	// session was compacted, follow the chain to the newest descendant so
+	// the client resumes the full continuation (summary + subsequent
+	// messages) instead of the truncated pre-compact session.
+	if loaded != nil {
+		if newest := followCompactedChain(sm, loaded); newest.ID != loaded.ID {
+			t.logger.Info(ctx, fmt.Sprintf("ACP: LoadSession followed compact chain %s -> %s", loaded.ID, newest.ID))
+			loaded = newest
+		}
+	}
+
 	// Resolve provider from config
 	resolved, err := config.Resolve(t.cfg)
 	if err != nil {
@@ -654,6 +681,14 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	// Create ACP session
 	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, sm)
 
+	// Keep the ACP session addressable by the client-requested ID. If the
+	// compact-chain follow above loaded a different on-disk session, the
+	// client doesn't know its ID and will keep sending the one it requested
+	// (session/load has no session ID in its response).
+	if reqID := string(req.SessionId); reqID != "" && sess.ID != reqID {
+		t.sessions.Rekey(sess.ID, reqID)
+	}
+
 	// Wire up permission handler
 	if t.conn != nil {
 		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
@@ -725,6 +760,27 @@ func findLatestSessionByCwd(sm *session.Manager, cwd string) *session.Session {
 		}
 	}
 	return nil
+}
+
+// followCompactedChain walks the compacted_child_id links starting from s,
+// loading each child until the newest descendant. The final session becomes
+// the manager's current session. Returns s unchanged when it has no child or
+// a child fails to load (best-effort). Cycle-safe.
+func followCompactedChain(sm *session.Manager, s *session.Session) *session.Session {
+	seen := map[string]bool{s.ID: true}
+	cur := s
+	for cur.CompactedChildID != "" {
+		if seen[cur.CompactedChildID] {
+			break
+		}
+		child, err := sm.Load(cur.CompactedChildID)
+		if err != nil {
+			break
+		}
+		seen[child.ID] = true
+		cur = child
+	}
+	return cur
 }
 
 // Authenticate is not supported — returns empty response.

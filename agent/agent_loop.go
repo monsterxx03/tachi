@@ -437,6 +437,13 @@ func (a *AIAgent) runAgentLoop(
 				oldMsgCount := len(messages)
 				messages = newHistory
 				a.setCompactCooldown()
+				// Compact swapped the current session — refresh session-scoped
+				// values captured before the loop so subsequent LLM calls and
+				// tool executions are associated with the NEW session.
+				if a.sessionManager != nil && a.sessionManager.Current() != nil {
+					opts.SessionID = a.sessionManager.Current().ID
+					ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
+				}
 				a.logger.Info(ctx, "Auto compact completed", "msgCount", len(messages))
 				ch <- AgentEvent{
 					Type:           AgentEventAutoCompactDone,
