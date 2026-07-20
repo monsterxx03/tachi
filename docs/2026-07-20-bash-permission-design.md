@@ -114,7 +114,10 @@ checkBashPermission            ← 新增（agent/agent_permission.go）
 
 **项目级** `<git-root>/.tachi/permissions.yaml`（可入 git 共享），结构镜像全局配置的 `permissions:` 段。
 
-合并语义：两级规则 **union 合并**，段级优先级不变（deny > allow > ask）。因此项目文件只能**收紧**（加 deny/ask）或**豁免**（加 allow），无法放松全局的 deny/ask——克隆的仓库附带的 permissions.yaml 不能削弱用户全局配置。
+合并语义：deny/ask 两级 **union 合并**，项目永远只能收紧。两条例外守卫供应链安全：
+
+- **项目级 allow 被忽略**（`NewPolicy` 只取全局 allow）——否则克隆的仓库可用 `allow: ["*"]` 静默中和用户全局 ask 哨兵；豁免权只属于用户全局配置（全局 allow 可豁免项目 ask，信任方向：用户 > 项目）
+- **项目级 `disable_builtin_deny` 被忽略**——内置危险规则只能由全局配置关闭
 
 ## 8. 确认响应三态化
 

@@ -102,14 +102,15 @@ type Policy struct {
 }
 
 // NewPolicy merges global and project-level rules into a Policy.
-// Both sources are unioned: project rules can only tighten (add deny/ask) or
-// exempt (add allow); precedence per segment is deny > allow > ask, so a
-// project allow can never override a global ask/deny.
+// deny/ask are unioned from both sources — a project can always tighten.
+// allow is taken from the GLOBAL source only: project-level allow is dropped
+// so a cloned repository can never loosen the user's ask tripwires
+// (deny stays absolute; ask can only be added, never exempted, by projects).
 func NewPolicy(global, project Rules) *Policy {
 	p := &Policy{sessionExact: make(map[string]struct{})}
 	p.deny = append(append([]string{}, global.Deny...), project.Deny...)
 	p.ask = append(append([]string{}, global.Ask...), project.Ask...)
-	p.allow = append(append([]string{}, global.Allow...), project.Allow...)
+	p.allow = append([]string{}, global.Allow...) // project allow intentionally dropped
 	return p
 }
 

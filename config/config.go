@@ -982,10 +982,11 @@ const projectPermissionsFileName = "permissions.yaml"
 //	  bash:
 //	    deny: ["git push --force*"]
 //	    ask:  ["rm *"]
-//	    allow: ["git status*"]
 //
-// Project rules are unioned with global rules (deny > allow > ask), so a
-// project can only tighten or exempt — never loosen a global deny/ask.
+// Project rules are merged with global rules such that a project can only
+// tighten: deny/ask are unioned, but project-level allow is IGNORED at
+// policy construction time (allow is a user-global privilege), and
+// disable_builtin_deny has no effect here either.
 // A missing file returns zero-value rules and nil error.
 func LoadProjectPermissions(projectRoot string) (PermissionsConfig, error) {
 	var out struct {

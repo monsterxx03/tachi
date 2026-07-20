@@ -152,18 +152,25 @@ func TestCheckBash_SessionExact(t *testing.T) {
 }
 
 func TestCheckBash_ProjectUnion(t *testing.T) {
-	global := Rules{Ask: []string{"git *"}}
-	project := Rules{Deny: []string{"git push*"}, Allow: []string{"git status*"}}
+	global := Rules{Ask: []string{"git *"}, Allow: []string{"git diff*"}}
+	project := Rules{Deny: []string{"git push*"}, Ask: []string{"npm *"}, Allow: []string{"git status*"}}
 	p := NewPolicy(global, project)
 
 	if d, _ := p.CheckBash("git push origin main"); d != DecisionDeny {
 		t.Error("project deny should be effective")
 	}
-	if d, _ := p.CheckBash("git status"); d != DecisionAllow {
-		t.Error("project allow should exempt from global ask")
-	}
 	if d, _ := p.CheckBash("git commit -m x"); d != DecisionAsk {
 		t.Error("global ask should still apply")
+	}
+	if d, _ := p.CheckBash("npm install"); d != DecisionAsk {
+		t.Error("project ask should tighten (union)")
+	}
+	if d, _ := p.CheckBash("git diff HEAD~1"); d != DecisionAllow {
+		t.Error("global allow should exempt from global ask")
+	}
+	// Project-level allow is dropped: it must NOT exempt the global ask rule.
+	if d, _ := p.CheckBash("git status"); d != DecisionAsk {
+		t.Error("project allow must be ignored — git status should still hit global ask")
 	}
 }
 

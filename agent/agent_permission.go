@@ -17,7 +17,8 @@ import (
 // config permissions plus project-level rules (.tachi/permissions.yaml under
 // projectRoot). Built-in absolutely-dangerous deny rules are always included
 // unless disabled via permissions.bash.disable_builtin_deny in the GLOBAL
-// config (the project file cannot disable them).
+// config (the project file cannot disable them). Project-level allow rules
+// are ignored — projects can only tighten, never exempt (see NewPolicy).
 // Returns nil only when no rules exist at all AND builtins are disabled.
 func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoot string, lg *logger.Logger) *permission.Policy {
 	if cfg == nil {
@@ -40,10 +41,14 @@ func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoot string, lg *l
 			lg.Warn(context.Background(), "agent: ignoring invalid project permissions file", "error", err)
 		}
 	} else {
+		if len(pp.Bash.Allow) > 0 && lg != nil {
+			lg.Warn(context.Background(), "agent: ignoring project-level allow rules (allow is global-only)",
+				"count", len(pp.Bash.Allow))
+		}
 		project = permission.Rules{
-			Deny:  pp.Bash.Deny,
-			Ask:   pp.Bash.Ask,
-			Allow: pp.Bash.Allow,
+			Deny: pp.Bash.Deny,
+			Ask:  pp.Bash.Ask,
+			// Allow intentionally omitted — dropped by NewPolicy anyway.
 		}
 	}
 	pol := permission.NewPolicy(global, project)

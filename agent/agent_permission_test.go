@@ -3,6 +3,8 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -282,4 +284,36 @@ func TestNewPermissionPolicyFromConfig(t *testing.T) {
 	require.NotNil(t, p2)
 	d, _ = p2.CheckBash("rm -rf /")
 	assert.Equal(t, permission.DecisionAllow, d, "builtins disabled → root deletion allowed")
+}
+
+func TestNewPermissionPolicyFromConfig_ProjectAllowIgnored(t *testing.T) {
+	// Project file adds an ask rule AND an allow rule that would exempt a
+	// global ask — the allow must be ignored (projects can only tighten).
+	root := t.TempDir()
+	dir := filepath.Join(root, ".tachi")
+	require.NoError(t, os.MkdirAll(dir, 0755))
+	content := `permissions:
+  bash:
+    ask: ["npm *"]
+    allow: ["git status*", "npm test*"]
+`
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "permissions.yaml"), []byte(content), 0644))
+
+	cfg := config.DefaultConfig()
+	cfg.Permissions.Bash.Ask = []string{"git *"}
+	p := NewPermissionPolicyFromConfig(cfg, root, nil)
+	require.NotNil(t, p)
+
+	// Project ask is honored (tightening works).
+	if d, _ := p.CheckBash("npm install"); d != permission.DecisionAsk {
+		t.Error("project ask should be honored")
+	}
+	// Project allow must NOT exempt the global ask rule.
+	if d, _ := p.CheckBash("git status"); d != permission.DecisionAsk {
+		t.Error("project allow must be ignored — git status should still hit global ask")
+	}
+	// Project allow must NOT exempt its own project ask either.
+	if d, _ := p.CheckBash("npm test"); d != permission.DecisionAsk {
+		t.Error("project allow must be ignored — npm test should still hit project ask")
+	}
 }
