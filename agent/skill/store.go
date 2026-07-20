@@ -21,6 +21,13 @@ type frontmatter struct {
 	Tags        []string `yaml:"tags"`
 	Version     string   `yaml:"version"`
 	Author      string   `yaml:"author"`
+	Enabled     *bool    `yaml:"enabled"` // nil = enabled (default); explicit false disables the skill
+}
+
+// enabledOrDefault resolves the optional frontmatter enabled flag.
+// A nil flag (field absent) means the skill is enabled.
+func enabledOrDefault(e *bool) bool {
+	return e == nil || *e
 }
 
 // Store manages skill discovery, loading, and caching.
@@ -116,9 +123,13 @@ func (s *Store) SetLogger(l *logger.Logger) {
 	s.logger = l
 }
 
-// List returns {name, description, tags, source} for all discovered skills.
-// Only scans first-level subdirectories containing SKILL.md.
+// List returns {name, description, tags, source, enabled} for all discovered
+// skills. Only scans first-level subdirectories containing SKILL.md.
 // Higher-priority directories shadow lower-priority ones for same-named skills.
+// Disabled skills (enabled: false in frontmatter) are included but flagged
+// with Enabled=false — and they still shadow lower-priority same-named
+// skills, so a project can suppress a global skill by disabling it locally.
+// Callers exposing skills to the LLM should skip entries with !Enabled.
 func (s *Store) List() []SkillMeta {
 	seen := make(map[string]bool)
 	var result []SkillMeta
@@ -159,6 +170,7 @@ func (s *Store) List() []SkillMeta {
 					Name:        name,
 					Description: truncateDescription(string(data), MaxDescriptionLen),
 					Source:      source,
+					Enabled:     true,
 				})
 				continue
 			}
@@ -189,6 +201,7 @@ func (s *Store) List() []SkillMeta {
 				Description: desc,
 				Tags:        fm.Tags,
 				Source:      source,
+				Enabled:     enabledOrDefault(fm.Enabled),
 			})
 		}
 	}
@@ -203,76 +216,99 @@ func (s *Store) List() []SkillMeta {
 
 // Load reads and parses a skill's SKILL.md, returns full content + metadata.
 // Respects priority: project skills shadow global ones.
+// Returns an error for disabled skills (enabled: false in frontmatter) —
+// a disabled skill is not loadable until re-enabled on disk.
 func (s *Store) Load(name string) (*Skill, error) {
 	for i, dir := range s.dirs {
 		source := s.source[i]
 
-		skillDir := filepath.Join(dir, name)
-		skillFile := filepath.Join(skillDir, "SKILL.md")
-		data, err := os.ReadFile(skillFile)
+		sk, err := s.loadFromDir(dir, source, name)
 		if err != nil {
 			continue
 		}
-
-		rawContent := string(data)
-		fm, body, err := parseFrontmatter(rawContent)
-		if err != nil {
-			// YAML parse error — still return the skill with directory name
-			s.logger.Error(context.Background(), "skill: Load: SKILL.md parse error", err, "dir", dir, "name", name)
-			body = rawContent
+		if !sk.Meta.Enabled {
+			return nil, fmt.Errorf("skill %q is disabled (remove enabled: false in %s to re-enable)", name, filepath.Join(sk.Dir, "SKILL.md"))
 		}
-
-		skillName := name
-		if fm != nil && fm.Name != "" {
-			skillName = fm.Name
-		}
-
-		desc := ""
-		tags := []string{}
-		if fm != nil {
-			desc = fm.Description
-			tags = fm.Tags
-		}
-
-		if desc == "" {
-			desc = truncateDescription(body, MaxDescriptionLen)
-		} else if len(desc) > MaxDescriptionLen {
-			desc = truncateDescription(desc, MaxDescriptionLen)
-		}
-
-		// Load supporting files (references/, templates/, scripts/)
-		files, err := loadSupportingFiles(skillDir)
-		if err != nil {
-			// Non-fatal: still return skill without supporting files
-			files = nil
-		}
-
-		return &Skill{
-			Meta: SkillMeta{
-				Name:        skillName,
-				Description: desc,
-				Tags:        tags,
-				Source:      source,
-			},
-			Body:       body,
-			RawContent: rawContent,
-			Dir:        skillDir,
-			Files:      files,
-		}, nil
+		return sk, nil
 	}
 
 	return nil, fmt.Errorf("skill %q not found", name)
 }
 
+// loadFromDir reads and parses a skill from a specific directory, returning
+// an error if the skill does not exist there. Unlike Load, it does NOT
+// reject disabled skills — callers like Update need access to them.
+func (s *Store) loadFromDir(dir, source, name string) (*Skill, error) {
+	skillDir := filepath.Join(dir, name)
+	skillFile := filepath.Join(skillDir, "SKILL.md")
+	data, err := os.ReadFile(skillFile)
+	if err != nil {
+		return nil, err
+	}
+
+	rawContent := string(data)
+	fm, body, err := parseFrontmatter(rawContent)
+	if err != nil {
+		// YAML parse error — still return the skill with directory name
+		s.logger.Error(context.Background(), "skill: Load: SKILL.md parse error", err, "dir", dir, "name", name)
+		body = rawContent
+	}
+
+	skillName := name
+	if fm != nil && fm.Name != "" {
+		skillName = fm.Name
+	}
+
+	desc := ""
+	tags := []string{}
+	enabled := true
+	if fm != nil {
+		desc = fm.Description
+		tags = fm.Tags
+		enabled = enabledOrDefault(fm.Enabled)
+	}
+
+	if desc == "" {
+		desc = truncateDescription(body, MaxDescriptionLen)
+	} else if len(desc) > MaxDescriptionLen {
+		desc = truncateDescription(desc, MaxDescriptionLen)
+	}
+
+	// Load supporting files (references/, templates/, scripts/)
+	files, err := loadSupportingFiles(skillDir)
+	if err != nil {
+		// Non-fatal: still return skill without supporting files
+		files = nil
+	}
+
+	return &Skill{
+		Meta: SkillMeta{
+			Name:        skillName,
+			Description: desc,
+			Tags:        tags,
+			Source:      source,
+			Enabled:     enabled,
+		},
+		Body:       body,
+		RawContent: rawContent,
+		Dir:        skillDir,
+		Files:      files,
+	}, nil
+}
+
 // ResolveCommand maps a slash-command name (e.g. "/code-review") to the
 // canonical skill name. Returns the skill name and whether it was found.
 // The input may or may not include a leading "/".
+// Disabled skills (enabled: false) do not resolve — they cannot be activated.
 func (s *Store) ResolveCommand(cmd string) (string, bool) {
 	name := strings.TrimPrefix(cmd, "/")
 	name = strings.ToLower(name)
 
 	metas := s.List()
 	for _, m := range metas {
+		if !m.Enabled {
+			continue
+		}
 		if strings.EqualFold(m.Name, name) {
 			return m.Name, true
 		}
@@ -319,7 +355,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 	}
 
 	// Build SKILL.md content
-	content := buildSkillMarkdown(name, description, body, tags)
+	content := buildSkillMarkdown(name, description, body, tags, true)
 
 	if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
@@ -333,6 +369,7 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 			Description: description,
 			Tags:        tags,
 			Source:      source,
+			Enabled:     true,
 		},
 		Body:       body,
 		RawContent: content,
@@ -382,9 +419,12 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 
 	skillFile := filepath.Join(skillDir, "SKILL.md")
 
-	// If no fields are being updated, just re-read and return
+	// If no fields are being updated, just re-read and return. Use loadFromDir
+	// directly (not Load) so disabled skills remain updatable — Load rejects
+	// them, which would make a disabled skill impossible to re-enable via
+	// a content update.
 	if description == "" && body == "" && tags == nil {
-		return s.Load(name)
+		return s.loadFromDir(filepath.Dir(skillDir), effectiveSource, name)
 	}
 
 	// Parse existing file to merge updates
@@ -414,9 +454,11 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 	if tags == nil {
 		tags = fm.Tags
 	}
+	// The enabled flag is not updatable via Update — preserve the on-disk value.
+	enabled := enabledOrDefault(fm.Enabled)
 
 	// Build new SKILL.md
-	content := buildSkillMarkdown(name, description, body, tags)
+	content := buildSkillMarkdown(name, description, body, tags, enabled)
 
 	if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
@@ -430,6 +472,7 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 			Description: description,
 			Tags:        tags,
 			Source:      effectiveSource,
+			Enabled:     enabled,
 		},
 		Body:       body,
 		RawContent: content,
@@ -469,7 +512,9 @@ func (s *Store) findSkillDir(name, source string) (string, string, error) {
 }
 
 // buildSkillMarkdown constructs the full SKILL.md content from fields.
-func buildSkillMarkdown(name, description, body string, tags []string) string {
+// The enabled flag is only written when false — skills are enabled by
+// default, so the common case keeps frontmatter minimal.
+func buildSkillMarkdown(name, description, body string, tags []string, enabled bool) string {
 	var b strings.Builder
 
 	b.WriteString("---\n")
@@ -481,6 +526,9 @@ func buildSkillMarkdown(name, description, body string, tags []string) string {
 		for _, t := range tags {
 			fmt.Fprintf(&b, "  - %s\n", t)
 		}
+	}
+	if !enabled {
+		b.WriteString("enabled: false\n")
 	}
 	b.WriteString("---\n\n")
 	b.WriteString(body)

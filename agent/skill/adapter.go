@@ -12,17 +12,21 @@ import (
 
 // compile-time interface checks
 var (
-	_ tools.SkillManager              = (*Store)(nil)
+	_ tools.SkillManager               = (*Store)(nil)
 	_ systemreminder.SkillMetaProvider = (*Store)(nil)
 )
 
 // ---- tools.SkillLister ----
 
 // ListSkills implements tools.SkillLister.
+// Disabled skills (Enabled=false) are hidden from the LLM.
 func (s *Store) ListSkills() []tools.SkillListEntry {
 	metas := s.List()
 	entries := make([]tools.SkillListEntry, 0, len(metas))
 	for _, m := range metas {
+		if !m.Enabled {
+			continue
+		}
 		entries = append(entries, tools.SkillListEntry{
 			Name:        m.Name,
 			Description: m.Description,
@@ -54,10 +58,14 @@ func (s *Store) LoadSkill(name string) (*tools.SkillData, error) {
 // ---- systemreminder.SkillMetaProvider ----
 
 // ListSkillMetas implements systemreminder.SkillMetaProvider.
+// Disabled skills (Enabled=false) are hidden from the LLM.
 func (s *Store) ListSkillMetas() []systemreminder.SkillMetaRecord {
 	metas := s.List()
 	records := make([]systemreminder.SkillMetaRecord, 0, len(metas))
 	for _, m := range metas {
+		if !m.Enabled {
+			continue
+		}
 		records = append(records, systemreminder.SkillMetaRecord{
 			Name:        m.Name,
 			Description: m.Description,

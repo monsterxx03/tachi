@@ -223,13 +223,13 @@ Body
 
 func TestParseFrontmatter(t *testing.T) {
 	tests := []struct {
-		name        string
-		content     string
-		wantName    string
-		wantDesc    string
-		wantTags    []string
-		wantBody    string
-		wantErr     bool
+		name     string
+		content  string
+		wantName string
+		wantDesc string
+		wantTags []string
+		wantBody string
+		wantErr  bool
 	}{
 		{
 			name:     "valid",
@@ -550,7 +550,7 @@ func TestStoreCreate_NoProjectDir(t *testing.T) {
 }
 
 func TestBuildSkillMarkdown(t *testing.T) {
-	result := buildSkillMarkdown("my-skill", "A skill", "# Body\n\nText", []string{"tag1", "tag2"})
+	result := buildSkillMarkdown("my-skill", "A skill", "# Body\n\nText", []string{"tag1", "tag2"}, true)
 
 	if !contains(result, "name: my-skill") {
 		t.Error("frontmatter should contain name")
@@ -564,6 +564,9 @@ func TestBuildSkillMarkdown(t *testing.T) {
 	if !contains(result, "  - tag1") {
 		t.Error("frontmatter should list tags")
 	}
+	if contains(result, "enabled:") {
+		t.Error("frontmatter should NOT contain enabled when true (default)")
+	}
 	if !contains(result, "# Body") {
 		t.Error("should contain body")
 	}
@@ -572,9 +575,23 @@ func TestBuildSkillMarkdown(t *testing.T) {
 	}
 
 	// No tags
-	result2 := buildSkillMarkdown("untagged", "desc", "body", nil)
+	result2 := buildSkillMarkdown("untagged", "desc", "body", nil, true)
 	if contains(result2, "tags:") {
 		t.Error("should not contain tags when nil")
+	}
+
+	// Disabled skill — enabled: false is written explicitly
+	result3 := buildSkillMarkdown("disabled-skill", "desc", "body", nil, false)
+	if !contains(result3, "enabled: false") {
+		t.Error("frontmatter should contain 'enabled: false' when disabled")
+	}
+	// Round-trip: the generated file must parse back as disabled
+	fm, _, err := parseFrontmatter(result3)
+	if err != nil {
+		t.Fatalf("generated SKILL.md failed to parse: %v", err)
+	}
+	if enabledOrDefault(fm.Enabled) {
+		t.Error("round-trip should preserve disabled state")
 	}
 }
 
@@ -757,5 +774,153 @@ func TestStoreDeleteUpdate_ClaudeCursor(t *testing.T) {
 	}
 	if updated.Meta.Description != "Updated desc" {
 		t.Errorf("expected description 'Updated desc', got %q", updated.Meta.Description)
+	}
+}
+
+// TestStoreEnabled covers the enabled field end-to-end:
+//   - List flags disabled skills but still returns them (default = enabled)
+//   - Load rejects disabled skills
+//   - ResolveCommand skips disabled skills
+//   - Update preserves the enabled flag and works on disabled skills
+//   - a disabled project skill shadows a same-named enabled global skill
+//   - LLM-facing adapters (ListSkills/ListSkillMetas) hide disabled skills
+func TestStoreEnabled(t *testing.T) {
+	tmpDir := t.TempDir()
+	tmpGlobal := t.TempDir()
+	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")
+	globalSkillDir := filepath.Join(tmpGlobal, "skills")
+
+	writeSkill := func(root, name, frontmatterExtra string) {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0755); err != nil {
+			t.Fatal(err)
+		}
+		content := fmt.Sprintf("---\nname: %s\ndescription: desc of %s\n%s---\nBody of %s\n", name, name, frontmatterExtra, name)
+		if err := os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(content), 0644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	writeSkill(projectSkillDir, "plain-skill", "")                   // no enabled field → enabled
+	writeSkill(projectSkillDir, "explicit-skill", "enabled: true\n") // explicit true → enabled
+	writeSkill(projectSkillDir, "disabled-skill", "enabled: false\n")
+
+	// Global skill with the same name as a disabled project skill — shadowed.
+	writeSkill(globalSkillDir, "disabled-skill", "")
+	// Global-only disabled skill.
+	writeSkill(globalSkillDir, "global-disabled", "enabled: false\n")
+
+	s := newStore([]string{projectSkillDir, globalSkillDir}, []string{SourceProject, SourceGlobal})
+
+	// ---- List ----
+	metas := s.List()
+	byName := make(map[string]SkillMeta, len(metas))
+	for _, m := range metas {
+		byName[m.Name] = m
+	}
+	if len(metas) != 4 {
+		t.Fatalf("expected 4 skills in List, got %d: %v", len(metas), metas)
+	}
+	if !byName["plain-skill"].Enabled {
+		t.Error("plain-skill should be enabled by default")
+	}
+	if !byName["explicit-skill"].Enabled {
+		t.Error("explicit-skill (enabled: true) should be enabled")
+	}
+	if byName["disabled-skill"].Enabled {
+		t.Error("disabled-skill should be flagged Enabled=false")
+	}
+	if byName["global-disabled"].Enabled {
+		t.Error("global-disabled should be flagged Enabled=false")
+	}
+	// Shadowing: disabled project skill hides the enabled global same-name one.
+	if byName["disabled-skill"].Source != SourceProject {
+		t.Errorf("disabled-skill should come from project source, got %q", byName["disabled-skill"].Source)
+	}
+
+	// ---- Load ----
+	if _, err := s.Load("plain-skill"); err != nil {
+		t.Errorf("Load(plain-skill) should succeed, got %v", err)
+	}
+	if _, err := s.Load("explicit-skill"); err != nil {
+		t.Errorf("Load(explicit-skill) should succeed, got %v", err)
+	}
+	if _, err := s.Load("disabled-skill"); err == nil {
+		t.Error("Load(disabled-skill) should fail")
+	} else if !contains(err.Error(), "disabled") {
+		t.Errorf("Load(disabled-skill) error should mention 'disabled', got %q", err.Error())
+	}
+	if _, err := s.Load("global-disabled"); err == nil {
+		t.Error("Load(global-disabled) should fail")
+	}
+
+	// ---- ResolveCommand ----
+	if _, ok := s.ResolveCommand("plain-skill"); !ok {
+		t.Error("ResolveCommand(plain-skill) should resolve")
+	}
+	if _, ok := s.ResolveCommand("disabled-skill"); ok {
+		t.Error("ResolveCommand(disabled-skill) should NOT resolve")
+	}
+	if _, ok := s.ResolveCommand("/global-disabled"); ok {
+		t.Error("ResolveCommand(/global-disabled) should NOT resolve")
+	}
+
+	// ---- LLM-facing adapters hide disabled skills ----
+	for _, e := range s.ListSkills() {
+		if e.Name == "disabled-skill" || e.Name == "global-disabled" {
+			t.Errorf("ListSkills should hide disabled skill %q", e.Name)
+		}
+	}
+	for _, r := range s.ListSkillMetas() {
+		if r.Name == "disabled-skill" || r.Name == "global-disabled" {
+			t.Errorf("ListSkillMetas should hide disabled skill %q", r.Name)
+		}
+	}
+
+	// ---- Update preserves the disabled flag ----
+	updated, err := s.Update("disabled-skill", "new desc", "", nil, SourceProject)
+	if err != nil {
+		t.Fatalf("Update on disabled skill should succeed, got %v", err)
+	}
+	if updated.Meta.Enabled {
+		t.Error("Update should preserve Enabled=false in returned meta")
+	}
+	data, err := os.ReadFile(filepath.Join(projectSkillDir, "disabled-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !contains(string(data), "enabled: false") {
+		t.Error("rewritten SKILL.md should keep 'enabled: false'")
+	}
+	if !contains(string(data), "new desc") {
+		t.Error("rewritten SKILL.md should contain updated description")
+	}
+	// Still not loadable after the update.
+	if _, err := s.Load("disabled-skill"); err == nil {
+		t.Error("Load(disabled-skill) should still fail after Update")
+	}
+
+	// ---- No-op Update works on disabled skills (returns current state) ----
+	sk, err := s.Update("disabled-skill", "", "", nil, SourceProject)
+	if err != nil {
+		t.Fatalf("no-op Update on disabled skill should succeed, got %v", err)
+	}
+	if sk.Meta.Enabled {
+		t.Error("no-op Update should report Enabled=false")
+	}
+	if sk.Meta.Description != "new desc" {
+		t.Errorf("no-op Update should return on-disk description, got %q", sk.Meta.Description)
+	}
+
+	// ---- Update keeps enabled skills enabled ----
+	if _, err := s.Update("plain-skill", "newer desc", "", nil, SourceProject); err != nil {
+		t.Fatalf("Update(plain-skill) failed: %v", err)
+	}
+	data, err = os.ReadFile(filepath.Join(projectSkillDir, "plain-skill", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if contains(string(data), "enabled:") {
+		t.Error("rewriting an enabled skill should NOT add an enabled field")
 	}
 }

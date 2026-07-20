@@ -10,13 +10,14 @@ type SkillMeta struct {
 	Name        string   `json:"name"`
 	Description string   `json:"description"`
 	Tags        []string `json:"tags"`
-	Source      string   `json:"source"` // "project" | "claude" | "cursor" | "global"
+	Source      string   `json:"source"`  // "project" | "claude" | "cursor" | "global"
+	Enabled     bool     `json:"enabled"` // false (enabled: false in frontmatter) → not loaded/activatable
 }
 
 // Skill is the full parsed skill, returned by Load().
 type Skill struct {
 	Meta       SkillMeta         `json:"meta"`
-	Body       string            `json:"body"`       // SKILL.md body (minus frontmatter)
+	Body       string            `json:"body"`        // SKILL.md body (minus frontmatter)
 	RawContent string            `json:"raw_content"` // complete SKILL.md text
 	Dir        string            `json:"dir"`         // absolute path to skill directory
 	Files      map[string]string `json:"files"`       // supporting files, relative path → content

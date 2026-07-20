@@ -181,12 +181,19 @@ func FormatSkillList(metas []skill.SkillMeta) string {
 		case "global":
 			sourceTag = " 🌐"
 		}
-		fmt.Fprintf(&sb, "- **%s**%s\n", meta.Name, sourceTag)
+		disabledTag := ""
+		if !meta.Enabled {
+			disabledTag = " ⏸️ _(disabled)_"
+		}
+		fmt.Fprintf(&sb, "- **%s**%s%s\n", meta.Name, sourceTag, disabledTag)
 		fmt.Fprintf(&sb, "  %s\n", meta.Description)
 		if len(meta.Tags) > 0 {
 			fmt.Fprintf(&sb, "  Tags: %s\n", strings.Join(meta.Tags, ", "))
 		}
-		fmt.Fprintf(&sb, "  Use `/%s` to activate\n\n", meta.Name)
+		if meta.Enabled {
+			fmt.Fprintf(&sb, "  Use `/%s` to activate\n", meta.Name)
+		}
+		sb.WriteString("\n")
 	}
 	fmt.Fprintf(&sb, "%d skill(s) total", len(metas))
 

@@ -398,10 +398,13 @@ func (m *Model) refreshSkillCompletions() {
 		return
 	}
 	metas := store.List()
-	names := make([]string, len(metas))
+	names := make([]string, 0, len(metas))
 	descs := make(map[string]string, len(metas))
-	for i, meta := range metas {
-		names[i] = meta.Name
+	for _, meta := range metas {
+		if !meta.Enabled {
+			continue // disabled skills are not activatable — no completion
+		}
+		names = append(names, meta.Name)
 		descs[meta.Name] = meta.Description
 	}
 	m.input.SetSkills(names, descs)

@@ -75,6 +75,9 @@ func buildACPAvailableCommands(aiAgent *agent.AIAgent) []acp.AvailableCommand {
 	if aiAgent != nil {
 		if store := aiAgent.SkillStore(); store != nil {
 			for _, meta := range store.List() {
+				if !meta.Enabled {
+					continue // disabled skills are not activatable
+				}
 				ac := acp.AvailableCommand{
 					Name:        meta.Name,
 					Description: meta.Description,
