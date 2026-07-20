@@ -125,7 +125,11 @@ func (ch *DiscordChannel) sendTextReply(channelID, content string, reference *di
 }
 
 // sendTextWithReference is the shared implementation for sendText and sendTextReply.
-// When reference is non-nil, messages are sent as Discord replies.
+// When reference is non-nil, the first chunk is sent as a Discord reply to it.
+// Subsequent chunks form a reply chain — each replies to the previous chunk —
+// so a long multi-part answer stays visually connected even when other
+// messages interleave. Chunks 2+ reference the bot's own messages, so they
+// never generate extra pings (only chunk 1 pings the original user).
 func (ch *DiscordChannel) sendTextWithReference(channelID, content string, reference *discordgo.MessageReference) error {
 	sess := ch.session
 	if sess == nil {
@@ -133,17 +137,23 @@ func (ch *DiscordChannel) sendTextWithReference(channelID, content string, refer
 	}
 
 	chunks := splitMessage(content)
-	for i, chunk := range chunks {
-		var err error
-		if reference != nil && i == 0 {
-			// Only the first chunk gets the reply reference; subsequent
-			// chunks are sent as regular messages to avoid confusing nesting.
-			_, err = sess.ChannelMessageSendReply(channelID, chunk, reference)
+	ref := reference
+	for _, chunk := range chunks {
+		var (
+			sent *discordgo.Message
+			err  error
+		)
+		if ref != nil {
+			sent, err = sess.ChannelMessageSendReply(channelID, chunk, ref)
 		} else {
-			_, err = sess.ChannelMessageSend(channelID, chunk)
+			sent, err = sess.ChannelMessageSend(channelID, chunk)
 		}
 		if err != nil {
 			return err
+		}
+		// Chain the next chunk to this one.
+		if sent != nil {
+			ref = sent.Reference()
 		}
 	}
 	return nil
