@@ -830,7 +830,7 @@ func (m *Model) renderConfirmPrompt() string {
 	if m.pendingConfirm != nil && m.pendingConfirm.toolName == tools.ToolNameBash {
 		b.WriteString(confirmStyle.Render("Run this command? [y]once [a]lways(session) [n]deny: "))
 	} else {
-		b.WriteString(confirmStyle.Render("Apply this edit? [y/n]: "))
+		b.WriteString(confirmStyle.Render("Apply this edit? [y]es [a]lways(session) [n]o: "))
 	}
 	return b.String()
 }

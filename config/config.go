@@ -189,6 +189,7 @@ func (srv *MCPServerConfig) IsEnabled() bool {
 // TUIConfig 控制终端界面行为。
 type TUIConfig struct {
 	InputHistoryLimit int   `yaml:"input_history_limit" default:"10"`
+	AutoApproveEdits  bool  `yaml:"auto_approve_edits"`                // true = EditFile 编辑不再弹确认（仅 TUI；不影响 Bash 权限规则的 ask 弹窗）
 	NotifyOnComplete  *bool `yaml:"notify_on_complete" default:"true"` // 是否在 LLM 回合结束后发送终端通知
 }
 

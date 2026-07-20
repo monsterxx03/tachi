@@ -99,17 +99,22 @@ type AIAgent struct {
 	// decisions instead of denying them. Set only when a user explicitly
 	// chose "allow all" (ACP); channel/subagent/one-off runs leave it false.
 	autoApprovePolicyAsks bool
-	sessionManager        *session.Manager
-	reminderCollector     *systemreminder.Collector
-	contextWindow         int64
-	lastInputTokens       int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
-	lastTokenBreakdown    tokenbreakdown.Breakdown // categorized breakdown of last estimate, set alongside lastInputTokens
-	lastMessageDate       string                   // calendar date (2006-01-02) of last processed user message; empty initially
-	titleModelProvider    llm.Provider             // optional: dedicated provider for title generation
-	titleGenEnabled       bool                     // whether LLM-based title generation is active
-	commitProvider        llm.Provider             // optional: dedicated provider for /commit messages
-	reviewProvider        llm.Provider             // optional: dedicated provider for /review code review
-	logger                *logger.Logger
+	// autoApproveEdits skips EditFile confirmation prompts. Set from config
+	// tui.auto_approve_edits, or at runtime when the user picks "always" on
+	// an edit confirmation (session-scoped). Affects only EditFile — unlike
+	// PermissionModeSkip, bash policy asks still prompt.
+	autoApproveEdits   bool
+	sessionManager     *session.Manager
+	reminderCollector  *systemreminder.Collector
+	contextWindow      int64
+	lastInputTokens    int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
+	lastTokenBreakdown tokenbreakdown.Breakdown // categorized breakdown of last estimate, set alongside lastInputTokens
+	lastMessageDate    string                   // calendar date (2006-01-02) of last processed user message; empty initially
+	titleModelProvider llm.Provider             // optional: dedicated provider for title generation
+	titleGenEnabled    bool                     // whether LLM-based title generation is active
+	commitProvider     llm.Provider             // optional: dedicated provider for /commit messages
+	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
+	logger             *logger.Logger
 
 	// acpFileMode enables ACP file I/O for EditFile tool. When true,
 	// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
@@ -294,6 +299,13 @@ func (a *AIAgent) PermissionPolicy() *permission.Policy {
 // choice, e.g. ACP); false (default) = deny with an explanatory error.
 func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
 	a.autoApprovePolicyAsks = v
+}
+
+// SetAutoApproveEdits skips EditFile confirmation prompts (TUI-oriented).
+// Unlike PermissionModeSkip, it affects only EditFile — bash policy asks
+// and any other confirmations still prompt.
+func (a *AIAgent) SetAutoApproveEdits(v bool) {
+	a.autoApproveEdits = v
 }
 
 // SetACPFileMode enables ACP file I/O for the EditFile tool.

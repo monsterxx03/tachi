@@ -387,6 +387,19 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			a.skillListReminder.MarkDirty()
 		}
 
+		// Edit auto-approve (config tui.auto_approve_edits, or session-scoped
+		// "always" from a previous edit confirmation): skip the EditFile
+		// prompt. Affects only EditFile — bash policy asks and other
+		// confirmations still dispatch normally.
+		if tr.Status == tools.ToolResultPendingConfirm && a.autoApproveEdits && tc.Function.Name == tools.ToolNameEdit {
+			confirmStart := time.Now()
+			output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+			tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
+			if err != nil {
+				tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
+			}
+		}
+
 		if tr.Status == tools.ToolResultPendingConfirm {
 			switch a.permissionMode {
 			case PermissionModeSkip:
@@ -427,6 +440,9 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				select {
 				case resp := <-a.confirmRespCh:
 					if resp != ConfirmDeny {
+						if resp == ConfirmAllowAlways && tc.Function.Name == tools.ToolNameEdit {
+							a.autoApproveEdits = true // session-scoped: stop prompting for edits
+						}
 						confirmStart := time.Now()
 						output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
 						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
