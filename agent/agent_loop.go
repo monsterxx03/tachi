@@ -181,7 +181,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 		case AgentEventError:
 			result = event.Result
 		case AgentEventToolConfirmation:
-			a.ConfirmTool(true)
+			a.ConfirmTool(ConfirmAllowOnce)
 		}
 	}
 	if result == nil {

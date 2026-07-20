@@ -358,7 +358,18 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			subCtx = tools.WithSubagentEventSink(ctx, sink)
 		}
 
-		tr := a.toolRegistry.Invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
+		// Bash permission policy check (allow/ask/deny rules). Runs before the
+		// normal Invoke: deny produces an error result fed back to the LLM;
+		// ask is resolved per permission mode (TUI prompt / external handler /
+		// non-interactive denial). A user denial at the TUI prompt aborts the
+		// turn with errCancelled, consistent with EditFile confirmation.
+		tr, policyHandled, policyErr := a.checkBashPermission(subCtx, tc, ch)
+		if policyErr != nil {
+			return nil, policyErr
+		}
+		if !policyHandled {
+			tr = a.toolRegistry.Invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
+		}
 
 		// Notify TUI that subagent has completed.
 		if tc.Function.Name == tools.ToolNameSubAgent {
@@ -414,8 +425,8 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				}
 
 				select {
-				case confirmed := <-a.confirmRespCh:
-					if confirmed {
+				case resp := <-a.confirmRespCh:
+					if resp != ConfirmDeny {
 						confirmStart := time.Now()
 						output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
 						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}

@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
+	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
@@ -69,27 +70,46 @@ const (
 // Returns (approved, error).
 type PermissionHandler func(ctx context.Context, toolName, toolID, diff, args string) (bool, error)
 
+// ConfirmResponse is the user's answer to a tool confirmation request.
+type ConfirmResponse int
+
+const (
+	// ConfirmDeny rejects the pending tool call.
+	ConfirmDeny ConfirmResponse = iota
+	// ConfirmAllowOnce approves this call only.
+	ConfirmAllowOnce
+	// ConfirmAllowAlways approves this call and remembers the exact command
+	// for the rest of the session (only meaningful for Bash policy asks;
+	// other tools treat it as AllowOnce).
+	ConfirmAllowAlways
+)
+
 type AIAgent struct {
-	provider           llm.Provider
-	maxIterations      int
-	toolRegistry       *tools.Registry
-	iterationBudget    *IterationBudget
-	confirmRespCh      chan bool
-	askUserRespCh      chan tools.AskUserResult
-	steerRespCh        chan string // TUI → agent: pending input to inject at steer point
-	permissionMode     PermissionMode
-	permissionHandler  PermissionHandler
-	sessionManager     *session.Manager
-	reminderCollector  *systemreminder.Collector
-	contextWindow      int64
-	lastInputTokens    int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
-	lastTokenBreakdown tokenbreakdown.Breakdown // categorized breakdown of last estimate, set alongside lastInputTokens
-	lastMessageDate    string                   // calendar date (2006-01-02) of last processed user message; empty initially
-	titleModelProvider llm.Provider             // optional: dedicated provider for title generation
-	titleGenEnabled    bool                     // whether LLM-based title generation is active
-	commitProvider     llm.Provider             // optional: dedicated provider for /commit messages
-	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
-	logger             *logger.Logger
+	provider          llm.Provider
+	maxIterations     int
+	toolRegistry      *tools.Registry
+	iterationBudget   *IterationBudget
+	confirmRespCh     chan ConfirmResponse
+	askUserRespCh     chan tools.AskUserResult
+	steerRespCh       chan string // TUI → agent: pending input to inject at steer point
+	permissionMode    PermissionMode
+	permissionHandler PermissionHandler
+	permissionPolicy  *permission.Policy // bash allow/ask/deny rules; nil = no policy
+	// autoApprovePolicyAsks makes PermissionModeSkip approve policy "ask"
+	// decisions instead of denying them. Set only when a user explicitly
+	// chose "allow all" (ACP); channel/subagent/one-off runs leave it false.
+	autoApprovePolicyAsks bool
+	sessionManager        *session.Manager
+	reminderCollector     *systemreminder.Collector
+	contextWindow         int64
+	lastInputTokens       int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
+	lastTokenBreakdown    tokenbreakdown.Breakdown // categorized breakdown of last estimate, set alongside lastInputTokens
+	lastMessageDate       string                   // calendar date (2006-01-02) of last processed user message; empty initially
+	titleModelProvider    llm.Provider             // optional: dedicated provider for title generation
+	titleGenEnabled       bool                     // whether LLM-based title generation is active
+	commitProvider        llm.Provider             // optional: dedicated provider for /commit messages
+	reviewProvider        llm.Provider             // optional: dedicated provider for /review code review
+	logger                *logger.Logger
 
 	// acpFileMode enables ACP file I/O for EditFile tool. When true,
 	// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
@@ -185,7 +205,7 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 		titleGenEnabled: true,
 		toolRegistry:    tools.NewRegistry(),
 		processManager:  tools.NewProcessManager(),
-		confirmRespCh:   make(chan bool, 1),
+		confirmRespCh:   make(chan ConfirmResponse, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		logger:          nil,
 		mode:            ModeAuto,
@@ -214,9 +234,9 @@ func (a *AIAgent) RespondToAskUser(answers map[string]string, annotations map[st
 }
 
 // ConfirmTool is called by TUI to respond to a confirmation request
-func (a *AIAgent) ConfirmTool(confirmed bool) {
+func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 	select {
-	case a.confirmRespCh <- confirmed:
+	case a.confirmRespCh <- resp:
 	default:
 		// Channel already has a value or is not waiting
 	}
@@ -252,19 +272,27 @@ func (a *AIAgent) SetPermissionHandler(h PermissionHandler) {
 	a.permissionHandler = h
 }
 
+// SetPermissionPolicy installs the bash permission policy (allow/ask/deny
+// rules). nil disables policy checks (everything allowed, pre-feature behavior).
+func (a *AIAgent) SetPermissionPolicy(p *permission.Policy) {
+	a.permissionPolicy = p
+}
+
+// PermissionPolicy returns the installed policy, or nil.
+func (a *AIAgent) PermissionPolicy() *permission.Policy {
+	return a.permissionPolicy
+}
+
+// SetAutoApprovePolicyAsks controls how PermissionModeSkip handles policy
+// "ask" decisions: true = execute anyway (used after an explicit "allow all"
+// choice, e.g. ACP); false (default) = deny with an explanatory error.
+func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
+	a.autoApprovePolicyAsks = v
+}
+
 // SetACPFileMode enables ACP file I/O for the EditFile tool.
 func (a *AIAgent) SetACPFileMode() {
 	a.acpFileMode = true
-}
-
-// SetSkipEditConfirm is a backward-compatible helper that maps to PermissionMode.
-// Deprecated: Use SetPermissionMode instead.
-func (a *AIAgent) SetSkipEditConfirm(skip bool) {
-	if skip {
-		a.permissionMode = PermissionModeSkip
-	} else {
-		a.permissionMode = PermissionModeTUI
-	}
 }
 
 // SetSkipMemoryRecall suppresses memory recall for non-interactive modes like "tachi run".

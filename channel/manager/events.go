@@ -61,9 +61,9 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			}
 
 		case agent.AgentEventToolConfirmation:
-			// Should not happen with skip_edit_confirm=true, but handle safely.
+			// Should not happen in PermissionModeSkip, but handle safely.
 			m.logger.Warn(ctx, "channel: auto-approving unexpected confirmation", "tool", event.ToolName)
-			aiAgent.ConfirmTool(true)
+			aiAgent.ConfirmTool(agent.ConfirmAllowOnce)
 
 		case agent.AgentEventAskUser:
 			if ta != nil && ta.askUserThreadID != "" {

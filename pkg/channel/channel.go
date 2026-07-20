@@ -18,8 +18,8 @@
 //
 // # Confirmation Strategy
 //
-// IM channels use auto-confirm mode:
-//   - EditFile confirmations: auto-approved (skip_edit_confirm=true)
+// IM channels use auto-confirm mode (PermissionModeSkip):
+//   - EditFile confirmations: auto-approved
 //   - AskUserQuestion: auto-cancelled (returns error to LLM so it can adapt)
 //
 // This keeps the interaction model simple — one message in, one response out.

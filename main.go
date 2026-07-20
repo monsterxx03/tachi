@@ -280,7 +280,6 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
 	aiAgent := agent.NewAIAgent(provider, 0)
 	aiAgent.SetLogger(logger.New("tui"))
-	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)
@@ -382,7 +381,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 
 	aiAgent := agent.NewAIAgent(provider, maxIters)
 	aiAgent.SetLogger(logger.New("run"))
-	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetPermissionMode(agent.PermissionModeSkip) // non-interactive
 	aiAgent.SetSkipMemoryRecall(true)
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
@@ -497,8 +496,8 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 
 	aiAgent := agent.NewAIAgent(provider, maxIters)
 	aiAgent.SetLogger(logger.New("run"))
-	aiAgent.SetSkipEditConfirm(cfg.TUI.SkipEditConfirm)
-	aiAgent.SetSkipMemoryRecall(true) // "tachi run" is non-interactive — don't pollute prompt with memory recall
+	aiAgent.SetPermissionMode(agent.PermissionModeSkip) // non-interactive
+	aiAgent.SetSkipMemoryRecall(true)                   // "tachi run" is non-interactive — don't pollute prompt with memory recall
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)
@@ -716,7 +715,7 @@ func runOutputText(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent, quiet boo
 			result = event.Result
 
 		case agent.AgentEventToolConfirmation:
-			aiAgent.ConfirmTool(true)
+			aiAgent.ConfirmTool(agent.ConfirmAllowOnce)
 		}
 	}
 	return result
@@ -842,7 +841,7 @@ func runOutputJSONStream(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent) *ag
 			enc.Encode(streamEvent{Type: "error", Error: errMsg})
 
 		case agent.AgentEventToolConfirmation:
-			aiAgent.ConfirmTool(true)
+			aiAgent.ConfirmTool(agent.ConfirmAllowOnce)
 		}
 	}
 	return result

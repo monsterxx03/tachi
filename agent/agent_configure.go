@@ -82,6 +82,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.cfg = cfg
 	a.initSkills()
 
+	// --- Bash permission policy (global config + project .tachi/permissions.yaml) ---
+	a.SetPermissionPolicy(NewPermissionPolicyFromConfig(cfg, config.FindProjectRoot(), a.logger))
+
 	// --- Reminder collector (after memory + skills, before MCP) ---
 	a.buildReminderCollector()
 

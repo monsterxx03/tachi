@@ -92,8 +92,8 @@ type initProviderResult struct {
 //
 // # Confirmation Strategy
 //
-// Channels are non-interactive by default:
-//   - skip_edit_confirm=true → all EditFile edits auto-approved (no user prompt).
+// Channels are non-interactive by default (PermissionModeSkip):
+//   - all EditFile edits auto-approved (no user prompt).
 //   - AskUserQuestion tool is unregistered → LLM never uses it in channel mode.
 //   - If a confirmation or AskUser event somehow fires, drainEvents handles
 //     it gracefully (auto-confirm / auto-reject).

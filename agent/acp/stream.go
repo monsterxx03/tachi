@@ -215,7 +215,7 @@ func streamToACP(
 			case agent.AgentEventToolConfirmation:
 				// In ACP mode with PermissionModeExternal, this should not fire.
 				// If it does (defensive), auto-approve via the agent's confirm channel.
-				sess.agent.ConfirmTool(true)
+				sess.agent.ConfirmTool(agent.ConfirmAllowOnce)
 
 			case agent.AgentEventUsage:
 				// After each API round, send a UsageUpdate so Zed can display

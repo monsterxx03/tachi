@@ -24,7 +24,7 @@ type mockStreamProvider struct {
 	callIdx   int
 }
 
-func (p *mockStreamProvider) Name() string { return p.name }
+func (p *mockStreamProvider) Name() string  { return p.name }
 func (p *mockStreamProvider) Model() string { return "mock-model" }
 
 func (p *mockStreamProvider) CreateChat(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (*llm.Response, error) {
@@ -57,7 +57,7 @@ type failingStreamProvider struct {
 	name string
 }
 
-func (p *failingStreamProvider) Name() string { return p.name }
+func (p *failingStreamProvider) Name() string  { return p.name }
 func (p *failingStreamProvider) Model() string { return "mock-model" }
 func (p *failingStreamProvider) CreateChat(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (*llm.Response, error) {
 	return nil, fmt.Errorf("not implemented")
@@ -94,7 +94,7 @@ func toolCallSeq(name, id, args string) []llm.StreamEvent {
 // newTestAgent creates an AIAgent preconfigured for agent-loop testing.
 func newTestAgent(provider llm.Provider) *AIAgent {
 	a := NewAIAgent(provider, 10)
-	a.SetSkipEditConfirm(true)
+	a.SetPermissionMode(PermissionModeSkip)
 	a.SetReminderCollector(systemreminder.NewCollector()) // no reminders — clean
 	a.SetContextWindow(128_000)
 	return a
@@ -568,7 +568,7 @@ func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.SetSkipEditConfirm(false) // require confirmation
+	a.SetPermissionMode(PermissionModeTUI) // require confirmation
 	a.RegisterTool(confirmStub())
 
 	ch := a.RunConversationStream(t.Context(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
@@ -577,7 +577,7 @@ func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
 	var result *RunResult
 	for e := range ch {
 		if e.Type == AgentEventToolConfirmation {
-			a.ConfirmTool(true)
+			a.ConfirmTool(ConfirmAllowOnce)
 		}
 		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
 			result = e.Result
@@ -596,7 +596,7 @@ func TestAgentLoop_ConfirmationToolDenied(t *testing.T) {
 	}
 
 	a := newTestAgent(mp)
-	a.SetSkipEditConfirm(false)
+	a.SetPermissionMode(PermissionModeTUI)
 	a.RegisterTool(confirmStub())
 
 	ch := a.RunConversationStream(t.Context(), nil, "edit file", "", llm.ChatOptions{MaxTokens: 4096})
@@ -604,7 +604,7 @@ func TestAgentLoop_ConfirmationToolDenied(t *testing.T) {
 	var result *RunResult
 	for e := range ch {
 		if e.Type == AgentEventToolConfirmation {
-			a.ConfirmTool(false)
+			a.ConfirmTool(ConfirmDeny)
 		}
 		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
 			result = e.Result

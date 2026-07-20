@@ -63,7 +63,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		maxIter = 30
 	}
 	dreamAgent := agent.NewAIAgent(provider, maxIter)
-	dreamAgent.SetSkipEditConfirm(true)
+	dreamAgent.SetPermissionMode(agent.PermissionModeSkip)
 
 	// Register only allowed tools: ReadFile, Grep, Glob, WriteFile.
 	dreamAgent.RegisterTool(tools.NewReadTool())

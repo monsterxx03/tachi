@@ -94,7 +94,7 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 		}
 	}
 
-	child.SetSkipEditConfirm(true)
+	child.SetPermissionMode(PermissionModeSkip) // sub-agents are non-interactive
 	child.SetReminderCollector(nil)
 
 	// Share heavy resources with parent — Close won't tear them down.
@@ -104,6 +104,10 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	if a.mcpManager != nil && !cfg.NoMCP {
 		child.SetSharedMCP(a.mcpManager)
 	}
+
+	// Share the bash permission policy (rules are read-only; session-scoped
+	// "always allow" approvals propagate back to the parent's policy).
+	child.SetPermissionPolicy(a.permissionPolicy)
 
 	return &ForkedAgent{
 		agent:     child,

@@ -189,7 +189,6 @@ func (srv *MCPServerConfig) IsEnabled() bool {
 // TUIConfig 控制终端界面行为。
 type TUIConfig struct {
 	InputHistoryLimit int   `yaml:"input_history_limit" default:"10"`
-	SkipEditConfirm   bool  `yaml:"skip_edit_confirm"`
 	NotifyOnComplete  *bool `yaml:"notify_on_complete" default:"true"` // 是否在 LLM 回合结束后发送终端通知
 }
 
@@ -707,6 +706,26 @@ type Config struct {
 	LSP                    LSPConfig            `yaml:"lsp"`                             // LSP server configuration
 	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
 	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration
+	Permissions            PermissionsConfig    `yaml:"permissions"`                     // Tool permission rules (bash allow/ask/deny)
+}
+
+// BashPermissions holds glob rules classifying bash commands.
+// Only the '*' wildcard is supported. Per-command-segment precedence:
+// deny > allow > ask > default(allow).
+type BashPermissions struct {
+	Deny  []string `yaml:"deny"`  // blocked outright; error returned to the LLM
+	Ask   []string `yaml:"ask"`   // requires interactive approval (denied in non-interactive modes)
+	Allow []string `yaml:"allow"` // exempts matching segments from ask rules
+	// DisableBuiltinDeny turns off the built-in absolutely-dangerous deny
+	// rules (permission.BuiltinDenyRules). Only honored from the GLOBAL
+	// config — the same key in a project .tachi/permissions.yaml is ignored,
+	// so a cloned repo cannot weaken the user's safety defaults.
+	DisableBuiltinDeny bool `yaml:"disable_builtin_deny"`
+}
+
+// PermissionsConfig groups tool permission rule sets.
+type PermissionsConfig struct {
+	Bash BashPermissions `yaml:"bash"`
 }
 
 func DefaultConfig() *Config {
@@ -949,4 +968,42 @@ func (c *Config) GetMaxIterations() int {
 		return DefaultMaxIterations
 	}
 	return *c.MaxIterations
+}
+
+// projectPermissionsFileName is the project-level permissions file, looked up
+// under <project-root>/.tachi/.
+const projectPermissionsFileName = "permissions.yaml"
+
+// LoadProjectPermissions reads permission rules from
+// <projectRoot>/.tachi/permissions.yaml. The file mirrors the global
+// config.yaml "permissions:" section:
+//
+//	permissions:
+//	  bash:
+//	    deny: ["git push --force*"]
+//	    ask:  ["rm *"]
+//	    allow: ["git status*"]
+//
+// Project rules are unioned with global rules (deny > allow > ask), so a
+// project can only tighten or exempt — never loosen a global deny/ask.
+// A missing file returns zero-value rules and nil error.
+func LoadProjectPermissions(projectRoot string) (PermissionsConfig, error) {
+	var out struct {
+		Permissions PermissionsConfig `yaml:"permissions"`
+	}
+	if projectRoot == "" {
+		return out.Permissions, nil
+	}
+	path := filepath.Join(projectRoot, ".tachi", projectPermissionsFileName)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return out.Permissions, nil
+		}
+		return out.Permissions, fmt.Errorf("read project permissions: %w", err)
+	}
+	if err := yaml.Unmarshal(data, &out); err != nil {
+		return out.Permissions, fmt.Errorf("parse %s: %w", path, err)
+	}
+	return out.Permissions, nil
 }

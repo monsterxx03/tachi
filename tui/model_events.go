@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 func (m *Model) nextEvent() tea.Cmd {
@@ -69,9 +70,13 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		}
 		m.setState(stateAwaitingConfirmation)
 		// Show diff as a message in chatview
+		confirmTitle := "Edit File Confirmation"
+		if event.ToolName == tools.ToolNameBash {
+			confirmTitle = "Bash Command Confirmation"
+		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "tool_confirmation",
-			Content: "Edit File Confirmation\n" + event.ToolDiff,
+			Content: confirmTitle + "\n" + event.ToolDiff,
 		})
 		if len(event.ToolDiff) > 100 {
 			runes := []rune(event.ToolDiff)

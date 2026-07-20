@@ -38,6 +38,8 @@ func ModelContextWindow(model string) int64 {
 		return 200_000
 	case strings.Contains(model, "minimax"):
 		return 204_800
+	case strings.Contains(model, "kimi-k3"):
+		return 1000_000
 	case strings.Contains(model, "kimi"):
 		return 256_000
 	case strings.Contains(model, "deepseek"):

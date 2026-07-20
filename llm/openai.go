@@ -178,7 +178,7 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		Messages:    p.convertMessages(messages),
 		Tools:       p.convertTools(tools),
 		MaxTokens:   opts.MaxTokens,
-		Temperature: 0.7,
+		Temperature: 1,
 	}
 
 	if opts.Thinking != nil && !*opts.Thinking {

@@ -697,9 +697,13 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 func (m *Model) handleKeyConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "y", "Y", "enter":
-		m.agent.ConfirmTool(true)
+		m.agent.ConfirmTool(agent.ConfirmAllowOnce)
+	case "a", "A":
+		// Always allow: for Bash policy asks, remembers the exact command
+		// for this session; for other tools behaves as allow-once.
+		m.agent.ConfirmTool(agent.ConfirmAllowAlways)
 	case "n", "N", "esc":
-		m.agent.ConfirmTool(false)
+		m.agent.ConfirmTool(agent.ConfirmDeny)
 	default:
 		return m, nil
 	}
@@ -823,7 +827,11 @@ func (m *Model) setState(st state) {
 
 func (m *Model) renderConfirmPrompt() string {
 	var b strings.Builder
-	b.WriteString(confirmStyle.Render("Apply this edit? [y/n]: "))
+	if m.pendingConfirm != nil && m.pendingConfirm.toolName == tools.ToolNameBash {
+		b.WriteString(confirmStyle.Render("Run this command? [y]once [a]lways(session) [n]deny: "))
+	} else {
+		b.WriteString(confirmStyle.Render("Apply this edit? [y/n]: "))
+	}
 	return b.String()
 }
 

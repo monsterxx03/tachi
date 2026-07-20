@@ -141,7 +141,7 @@ func TestNewManager(t *testing.T) {
 	cfg := config.DefaultConfig()
 
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	require.NotNil(t, mgr)
@@ -151,7 +151,7 @@ func TestNewManagerDefaults(t *testing.T) {
 	cfg := config.DefaultConfig()
 
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	require.NotNil(t, mgr)
@@ -159,7 +159,7 @@ func TestNewManagerDefaults(t *testing.T) {
 
 func TestManagerAddChannel(t *testing.T) {
 	mgr := New(Config{
-		Cfg:          config.DefaultConfig(),
+		Cfg: config.DefaultConfig(),
 	})
 
 	mgr.Add(&mockChannel{name: "chan-a"})
@@ -189,7 +189,7 @@ func TestChannelStopsOnContextCancel(t *testing.T) {
 
 func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
 	mgr := New(Config{
-		Cfg:          config.DefaultConfig(),
+		Cfg: config.DefaultConfig(),
 	})
 
 	handler := mgr.buildHandler()
@@ -217,7 +217,7 @@ func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
 func TestDrainEvents_BasicResponse(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	mp := &mockProvider{
@@ -226,7 +226,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 	}
 
 	aiAgent := agent.NewAIAgent(mp, 10)
-	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetPermissionMode(agent.PermissionModeSkip)
 
 	eventCh := aiAgent.RunConversationStream(
 		t.Context(),
@@ -245,12 +245,12 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 }
 
 // TestDrainEvents_ConfirmationDoesNotDeadlock verifies that if a tool
-// confirmation event fires (should not happen with skip_edit_confirm, but
+// confirmation event fires (should not happen in PermissionModeSkip, but
 // we handle it), drainEvents auto-approves and continues.
 func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	mp := &mockProvider{}
@@ -274,7 +274,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	}
 
 	aiAgent := agent.NewAIAgent(mp, 10)
-	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetPermissionMode(agent.PermissionModeSkip)
 	// Register EditFile so the tool call can be dispatched (it will error on
 	// file read, but the key assertion is: it doesn't deadlock).
 	aiAgent.RegisterTool(agenttools.NewEditTool())
@@ -298,7 +298,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	mp := &mockProvider{}
@@ -322,7 +322,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 	}
 
 	aiAgent := agent.NewAIAgent(mp, 10)
-	aiAgent.SetSkipEditConfirm(true)
+	aiAgent.SetPermissionMode(agent.PermissionModeSkip)
 	aiAgent.RegisterTool(agenttools.AskUserTool{})
 
 	eventCh := aiAgent.RunConversationStream(
@@ -866,7 +866,7 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 		},
 	}
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 	mgr.provider = &mockProvider{name: "openai"}
 	mgr.resolvedConfig = &config.ResolvedConfig{
@@ -889,7 +889,7 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 func TestHandleModelCommand_NoProviders(t *testing.T) {
 	cfg := &config.Config{}
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	resp, err := mgr.handleModelCommand("thread-1", "")
@@ -1055,8 +1055,8 @@ func containsStr(s, substr string) bool {
 func TestHandleSkillList_Empty(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillList()
@@ -1068,8 +1068,8 @@ func TestHandleSkillList_Empty(t *testing.T) {
 func TestHandleSkillReload(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillReload()
@@ -1082,8 +1082,8 @@ func TestHandleSkillReload(t *testing.T) {
 func TestHandleSkillCommand_List(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
 	// /skill (empty args)
@@ -1101,8 +1101,8 @@ func TestHandleSkillCommand_List(t *testing.T) {
 func TestHandleSkillCommand_Reload(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillCommand("reload")
@@ -1114,8 +1114,8 @@ func TestHandleSkillCommand_Reload(t *testing.T) {
 func TestHandleSkillCommand_UnknownSub(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
 	resp, err := mgr.handleSkillCommand("unknown-skill")
@@ -1127,8 +1127,8 @@ func TestHandleSkillCommand_UnknownSub(t *testing.T) {
 func TestSkillViaTextSlash_List(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
 	result := mgr.handleSlashCommand(channel.IncomingMessage{
@@ -1160,8 +1160,8 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 func TestSkillViaCommandHandler(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
-		SkillStore:   skill.NewStoreWithDirs(nil, nil),
+		Cfg:        cfg,
+		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 	handler := mgr.buildCommandHandler()
 
@@ -1186,7 +1186,7 @@ func TestSkillViaCommandHandler(t *testing.T) {
 func TestIsSkillActivation_NoSkill(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	_, _, ok := mgr.isSkillActivation("/help")
@@ -1201,7 +1201,7 @@ func TestIsSkillActivation_NoSkill(t *testing.T) {
 func TestIsSkillActivation_ListNotActivation(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	_, _, ok := mgr.isSkillActivation("/skill list")
@@ -1215,7 +1215,7 @@ func TestIsSkillActivation_ListNotActivation(t *testing.T) {
 func TestPrepareSkillActivation_NotFound(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := New(Config{
-		Cfg:          cfg,
+		Cfg: cfg,
 	})
 
 	_, errMsg, err := mgr.prepareSkillActivation("nonexistent-skill", "")

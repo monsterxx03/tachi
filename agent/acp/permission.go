@@ -83,6 +83,7 @@ func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string, aiA
 		// "allow_all" → switch to PermissionModeSkip for the rest of this session
 		if optionID == "allow_all" {
 			aiAgent.SetPermissionMode(agent.PermissionModeSkip)
+			aiAgent.SetAutoApprovePolicyAsks(true) // bash policy asks: user chose allow-all
 			return true, nil
 		}
 

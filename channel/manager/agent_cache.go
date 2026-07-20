@@ -194,8 +194,8 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 
 	a := agent.NewAIAgent(prov, 0)
 	a.SetLogger(m.logger)
-	a.SetProcessManager(m.processManager) // shared PM survives turns
-	a.SetSkipEditConfirm(true)
+	a.SetProcessManager(m.processManager)         // shared PM survives turns
+	a.SetPermissionMode(agent.PermissionModeSkip) // channel turns are non-interactive
 	a.SetContextWindow(resolved.Provider.ContextWindow)
 	a.SetupTitleProvider(m.cfg)
 	a.SetupCommitProvider(m.cfg)
