@@ -471,8 +471,13 @@ func (a *AIAgent) buildReminderCollector() {
 		&systemreminder.BackgroundTaskReminder{
 			Provider: &backgroundTaskProvider{pm: a.processManager},
 		},
-		systemreminder.PlanTrackingReminder{},
 	)
+
+	// Plan tracking reminder — only meaningful where SavePlan is available
+	// (ACP sessions with a plan card UI).
+	if a.planToolEnabled {
+		reminders = append(reminders, systemreminder.PlanTrackingReminder{})
+	}
 
 	// Git reminder (configurable).
 	if a.cfg.SystemReminder.GitReminder == nil || *a.cfg.SystemReminder.GitReminder {

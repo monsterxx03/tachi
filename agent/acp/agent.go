@@ -121,6 +121,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	aiAgent.SetLogger(t.logger)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetACPFileMode()
+	aiAgent.EnablePlanTool() // ACP clients render the plan card UI
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 	// Don't set steer channel — ACP doesn't use mid-turn injection
 
@@ -476,6 +477,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent.SetLogger(t.logger)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetACPFileMode()
+	aiAgent.EnablePlanTool() // ACP clients render the plan card UI
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Use context.Background() so MCP async init is not tied to the SDK
@@ -608,6 +610,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	aiAgent.SetLogger(t.logger)
 	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
 	aiAgent.SetACPFileMode()
+	aiAgent.EnablePlanTool() // ACP clients render the plan card UI
 	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Configure agent (registers tools, connects MCP, sets up memory/skills).

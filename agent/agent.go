@@ -116,6 +116,12 @@ type AIAgent struct {
 	// routes writes through conn.WriteTextFile for inline diffs.
 	acpFileMode bool
 
+	// planToolEnabled gates registration of the SavePlan tool. Only ACP
+	// sessions enable it — ACP clients (e.g. Zed) render a structured plan
+	// card from SavePlan calls, while the TUI and channel frontends have no
+	// corresponding plan card UI.
+	planToolEnabled bool
+
 	// Skill-related fields
 	skillStore   *skill.Store
 	activeSkills map[string]bool // skills activated in current session
@@ -293,6 +299,13 @@ func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
 // SetACPFileMode enables ACP file I/O for the EditFile tool.
 func (a *AIAgent) SetACPFileMode() {
 	a.acpFileMode = true
+}
+
+// EnablePlanTool enables registration of the SavePlan tool. Must be called
+// before Configure()/RegisterTools(). Currently only ACP sessions enable it,
+// since only ACP clients render the structured plan card UI.
+func (a *AIAgent) EnablePlanTool() {
+	a.planToolEnabled = true
 }
 
 // SetSkipMemoryRecall suppresses memory recall for non-interactive modes like "tachi run".
@@ -481,8 +494,12 @@ func (a *AIAgent) RegisterTools() {
 		a.toolRegistry.Register(tools.NewMemoryRecallTool(a.memory.Backend))
 	}
 
-	// save_plan — always registered (used in plan mode, optional in auto mode)
-	a.toolRegistry.Register(tools.SavePlanTool{})
+	// SavePlan — only registered for frontends with a plan card UI (ACP).
+	// TUI/channel have no way to render the structured plan, so the tool
+	// would just produce unseen JSON files.
+	if a.planToolEnabled {
+		a.toolRegistry.Register(tools.SavePlanTool{})
+	}
 }
 
 func (a *AIAgent) RegisterTool(tool tools.Tool) {

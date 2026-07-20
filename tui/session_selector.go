@@ -166,9 +166,16 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 
 	// Restore session mode from metadata.
 	if s.Mode != "" && agent.ValidMode(s.Mode) {
-		if err := m.agent.SetMode(s.Mode); err == nil {
+		mode := s.Mode
+		if mode == agent.ModePlan {
+			// Plan mode is ACP-only (SavePlan isn't registered in the TUI —
+			// there's no plan card UI). Fall back to chat so the read-only
+			// constraint is preserved without a dangling plan prompt.
+			mode = agent.ModeChat
+		}
+		if err := m.agent.SetMode(mode); err == nil {
 			m.rebuildSystemPrompt()
-			m.statusbar.SetMode(s.Mode)
+			m.statusbar.SetMode(mode)
 		}
 	}
 
