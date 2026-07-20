@@ -259,6 +259,9 @@ func LoadSubagentMessages(sessionID string) (map[string][]Message, error) {
 			msgs = append(msgs, msg)
 		}
 		f.Close()
+		if err := scanner.Err(); err != nil {
+			continue // skip files with read errors (e.g. oversized lines)
+		}
 
 		if len(msgs) > 0 {
 			result[subID] = msgs
