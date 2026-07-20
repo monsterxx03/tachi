@@ -10,20 +10,13 @@ type Config struct {
 
 	// MaxFiles is the number of rotated files to keep. Default: 10.
 	MaxFiles int `yaml:"max_files" default:"10"`
-
-	// PerEntry controls whether logs are split by entry point into separate files.
-	// Use pointer so false (explicit) can be distinguished from unset.
-	// Default: true.
-	PerEntry *bool `yaml:"per_entry"`
 }
 
 // DefaultConfig returns a Config with default values applied.
 func DefaultConfig() *Config {
-	perEntry := true
 	return &Config{
 		Level:    "info",
 		MaxSize:  "10mb",
 		MaxFiles: 10,
-		PerEntry: &perEntry,
 	}
 }

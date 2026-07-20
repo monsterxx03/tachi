@@ -127,30 +127,21 @@ func (l *Logger) Error(msg string, err error, attrs ...any)
 
 ### 文件组织
 
-每个入口对应独立日志文件，**各自独立轮转**。日志目录始终位于 `$BASEDIR/logs/`，其中 `$BASEDIR` 由 `--home` 命令行参数或默认的 `~/.tachi` 决定，**不在配置文件中指定**：
+所有 `pkg/logger` 日志统一写入单个 `debug.log` 文件（已移除 `per_entry` 选项），日志目录始终位于 `$BASEDIR/logs/`，其中 `$BASEDIR` 由 `--home` 命令行参数或默认的 `~/.tachi` 决定，**不在配置文件中指定**：
 
 ```
 $BASEDIR/logs/
-├── debug.log{.1,.2,...}   ← 默认日志（未指定入口的日志落这里）
-├── tui.log{.1,.2,...}     ← TUI 模式
-├── run.log{.1,.2,...}     ← CLI Run 模式（-p / 管道）
-├── acp.log{.1,.2,...}     ← ACP 模式（JSON-RPC）
-└── channel/
-    ├── all.log{.1,.2,...} ← channel 全局日志
-    ├── discord.log{...}   ← Discord 渠道
-    ├── weixin.log{...}    ← 微信渠道
-    └── chrome.log{...}    ← Chrome 扩展渠道
+└── debug.log{.1,.2,...}   ← 全部日志（10MB 轮转，保留 10 份）
 ```
 
-每个文件 10MB 轮转，保留 10 份，互不影响。WeChat 日志写满 10MB 轮转时不影响 Discord 日志。
+设计简洁，不需要在多个日志文件之间跳转，`grep` 即可完成所有日志检索。
 
-### 为什么分开文件
+### 为什么走回单文件
 
-- `tui.log` — 用户交互日志，高频但量小
-- `run.log` — 单次执行，每次启动都是新 session
-- `acp.log` — JSON-RPC 协议日志，结构化为主
-- `channel/*.log` — 渠道日志分开，Discord/WeChat/Chrome 各看各的
-  - **Troubleshooting 时**：WeChat 出问题了只看 `channel/weixin.log`，无需从单文件 grep
+- **运维简化**：排查问题时只需看一个文件，`tail -f ~/.tachi/logs/debug.log` 即可实时跟踪所有日志
+- **source 字段保留**：日志行中仍有 `source=tui` / `source=channel.discord` 等标签，`grep source=channel.discord` 一样能筛选
+- **减少轮转复杂度**：多文件轮转互相独立时，磁盘碎片增加、总数难以预估。单文件轮转确定性更高
+- **Trace ID 作为查询入口**：`grep trace_id=turn_a1b2 debug.log` 一次搜索即可跨 source 复现完整交互链路
 
 ### 轮转策略
 
@@ -178,17 +169,16 @@ type RotatingFileHandler struct {
 }
 ```
 
-### 配置
+### 配置（已简化）
 
 日志目录**不可配置**，始终为 `config.BaseDir() + "/logs/"`（由 `--home` 决定）。其他参数可通过 `config.yaml` 调整：
 
 ```yaml
-# config.yaml（可选，不配置则所有日志合并到 debug.log）
+# config.yaml
 logs:
   level: info                  # 默认最低级别
   max_size: 10mb               # 单个文件最大
   max_files: 10                # 保留文件数
-  per_entry: true              # 是否按入口分文件（默认 true）
 ```
 
 > **为什么 `dir` 不在配置文件中？**  
@@ -196,7 +186,9 @@ logs:
 > `--home` 是唯一的基础路径入口，日志目录不应独立于它存在。如果允许 `config.yaml` 指定  
 > 另一个目录，会导致 `--home /custom/path` 时日志和其余数据分离，排查问题更困难。
 
-默认 `per_entry: true` 时，所有日志按入口分文件写入。设为 `false` 时，所有日志仍写入 `debug.log`，保持向后兼容。
+### 单文件
+
+所有 `pkg/logger` 日志统一写入 `debug.log`（已移除 `per_entry` 选项），简化运维排查。
 
 ---
 

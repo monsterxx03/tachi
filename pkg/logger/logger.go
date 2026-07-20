@@ -19,7 +19,6 @@ var (
 	cfgMaxSize  int64    = 10 * 1024 * 1024 // 10MB default
 	cfgMaxFiles int      = 10
 	cfgLevel             = slog.LevelInfo
-	cfgPerEntry          = true
 	writers     sync.Map // map[string]*rotatingWriter — keyed by file path
 	onceDef     sync.Once
 	defaultL    *Logger
@@ -32,9 +31,6 @@ var (
 // cfg.Level is one of "debug", "info", "warn", "error".
 func Init(dir string, cfg Config) error {
 	logDir = dir
-	if cfg.PerEntry != nil {
-		cfgPerEntry = *cfg.PerEntry
-	}
 
 	if cfg.MaxFiles > 0 {
 		cfgMaxFiles = cfg.MaxFiles
@@ -209,7 +205,7 @@ func newLogger(name string, parentWriter *rotatingWriter) *Logger {
 		rw = parentWriter
 		w = rw
 	} else if logDir != "" {
-		rw = getOrCreateWriter(logFilePath(logDir, name))
+		rw = getOrCreateWriter(filepath.Join(logDir, "debug.log"))
 		w = rw
 	} else {
 		// Init not called (e.g. in tests) — discard silently.
@@ -229,26 +225,6 @@ func newLogger(name string, parentWriter *rotatingWriter) *Logger {
 		slog:   sl,
 		name:   name,
 		writer: rw,
-	}
-}
-
-// logFilePath maps a logger name to a log file path.
-// When per_entry is false, all names route to debug.log.
-func logFilePath(dir, name string) string {
-	if !cfgPerEntry {
-		return filepath.Join(dir, "debug.log")
-	}
-	parts := strings.SplitN(name, ".", 3)
-	switch parts[0] {
-	case "channel":
-		if len(parts) >= 2 {
-			return filepath.Join(dir, "channel", parts[1]+".log")
-		}
-		return filepath.Join(dir, "channel", "all.log")
-	case "debug":
-		return filepath.Join(dir, "debug.log")
-	default:
-		return filepath.Join(dir, parts[0]+".log")
 	}
 }
 

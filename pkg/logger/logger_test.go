@@ -2,7 +2,6 @@ package logger
 
 import (
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -73,30 +72,17 @@ func TestDefault(t *testing.T) {
 }
 
 func TestLogFilePath(t *testing.T) {
-	tests := []struct {
-		name     string
-		expected string
-	}{
-		{"tui", "tui.log"},
-		{"run", "run.log"},
-		{"acp", "acp.log"},
-		{"channel", filepath.Join("channel", "all.log")},
-		{"channel.discord", filepath.Join("channel", "discord.log")},
-		{"channel.weixin", filepath.Join("channel", "weixin.log")},
-		{"channel.chrome", filepath.Join("channel", "chrome.log")},
-		{"channel.unknown", filepath.Join("channel", "unknown.log")},
-		{"channel.manager.agent", filepath.Join("channel", "manager.log")},
-		{"debug", "debug.log"},
-	}
+	// After removing per_entry, all names route to the same debug.log.
+	// Verify by checking getOrCreateWriter uses the same file for all loggers.
+	dir := t.TempDir()
+	_ = Init(dir, *DefaultConfig())
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := logFilePath("/logs", tt.name)
-			expected := filepath.Join("/logs", tt.expected)
-			if got != expected {
-				t.Errorf("logFilePath(%q) = %q, want %q", tt.name, got, expected)
-			}
-		})
+	l1 := New("tui")
+	l2 := New("channel.discord")
+	l3 := New("run")
+
+	if l1.writer != l2.writer || l2.writer != l3.writer {
+		t.Error("all loggers should share the same writer when per_entry is removed")
 	}
 }
 
