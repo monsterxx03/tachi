@@ -210,6 +210,57 @@ func TestSplitMessage(t *testing.T) {
 	}
 }
 
+// TestSplitMessageFencedCodeBlock verifies that a long code block split across
+// chunks gets its fence closed at the end of chunk 1 and re-opened (with the
+// language tag) at the start of chunk 2, so both render as valid code blocks.
+func TestSplitMessageFencedCodeBlock(t *testing.T) {
+	var sb strings.Builder
+	sb.WriteString("```go\n")
+	for i := 0; i < 1200; i++ {
+		sb.WriteString("ab\n") // 3600 runes of code
+	}
+	sb.WriteString("```")
+	content := sb.String()
+
+	chunks := splitMessage(content)
+	if len(chunks) != 2 {
+		t.Fatalf("splitMessage returned %d chunks, want 2", len(chunks))
+	}
+
+	if !strings.HasSuffix(chunks[0], "\n```") {
+		t.Errorf("chunk 0 should end with a closing fence, got tail %q", chunks[0][max(0, len(chunks[0])-20):])
+	}
+	if !strings.HasPrefix(chunks[1], "```go\n") {
+		t.Errorf("chunk 1 should re-open the fence with language tag, got head %q", chunks[1][:min(20, len(chunks[1]))])
+	}
+	for i, chunk := range chunks {
+		if utf8.RuneCountInString(chunk) > discordMessageLimit {
+			t.Errorf("chunk %d exceeds %d rune limit: %d runes", i, discordMessageLimit, utf8.RuneCountInString(chunk))
+		}
+		if strings.Count(chunk, "```")%2 != 0 {
+			t.Errorf("chunk %d has unbalanced fences", i)
+		}
+	}
+}
+
+// TestSplitMessageClosedFenceNotPatched verifies that when the cut point is
+// NOT inside a code block (fence already closed earlier), no fence patching
+// happens and chunks concatenate back to the exact original.
+func TestSplitMessageClosedFenceNotPatched(t *testing.T) {
+	content := "```\nhi\n```\n" + strings.Repeat("bb\n", 800) // 2411 runes
+
+	chunks := splitMessage(content)
+	if len(chunks) != 2 {
+		t.Fatalf("splitMessage returned %d chunks, want 2", len(chunks))
+	}
+	if strings.HasPrefix(chunks[1], "```") {
+		t.Error("chunk 1 should not have a re-opened fence (cut was outside the code block)")
+	}
+	if joined := strings.Join(chunks, ""); joined != content {
+		t.Errorf("split-then-join mismatch: got %d chars, want %d chars", len(joined), len(content))
+	}
+}
+
 func TestBuildThreadID(t *testing.T) {
 	tests := []struct {
 		guildID   string

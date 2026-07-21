@@ -53,11 +53,54 @@ func splitMessage(content string) []string {
 		// Find byte offset of the discordMessageLimit-th rune.
 		byteLimit := runeCountToByteOffset(remaining, discordMessageLimit)
 		cut := findSplitPoint(remaining, byteLimit)
-		chunks = append(chunks, remaining[:cut])
-		remaining = remaining[cut:]
+		chunk := remaining[:cut]
+
+		// If the cut falls inside an unclosed fenced code block, close the
+		// fence at the end of this chunk and re-open it (with its language
+		// tag) at the start of the next one, so both chunks render as proper
+		// code blocks. Reserve room for the closing fence by re-cutting 5
+		// runes earlier ("\n```" plus margin).
+		if lang, open := openFenceInfo(chunk); open {
+			cut = findSplitPoint(remaining, runeCountToByteOffset(remaining, discordMessageLimit-5))
+			chunk = remaining[:cut]
+			// The shorter cut may exclude the opening fence line entirely;
+			// re-check before patching.
+			if lang, open = openFenceInfo(chunk); open {
+				if strings.HasSuffix(chunk, "\n") {
+					chunk += "```"
+				} else {
+					chunk += "\n```"
+				}
+				remaining = "```" + lang + "\n" + remaining[cut:]
+			} else {
+				remaining = remaining[cut:]
+			}
+		} else {
+			remaining = remaining[cut:]
+		}
+		chunks = append(chunks, chunk)
 	}
 
 	return chunks
+}
+
+// openFenceInfo scans s line by line and reports whether it ends inside an
+// unclosed fenced code block, returning the fence's info string (language).
+// Only "```" fences are tracked.
+func openFenceInfo(s string) (lang string, open bool) {
+	for line := range strings.Lines(s) {
+		t := strings.TrimSpace(line)
+		if strings.HasPrefix(t, "```") {
+			if open {
+				open = false
+				lang = ""
+			} else {
+				open = true
+				lang = strings.TrimSpace(strings.TrimPrefix(t, "```"))
+			}
+		}
+	}
+	return lang, open
 }
 
 // runeCountToByteOffset returns the byte offset of the nth rune in s.
@@ -145,6 +188,9 @@ func (ch *DiscordChannel) sendTextWithReference(channelID, content string, refer
 		flags |= discordgo.MessageFlagsSuppressEmbeds
 	}
 
+	// Discord clients don't render markdown tables — rewrite them as
+	// monospace code blocks before splitting.
+	content = convertTablesToCodeBlocks(content)
 	chunks := splitMessage(content)
 	ref := reference
 	for _, chunk := range chunks {

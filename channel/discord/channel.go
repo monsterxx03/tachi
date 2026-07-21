@@ -184,7 +184,11 @@ You are currently operating as a Discord bot. Your responses are delivered
 through Discord guild channels and direct messages.
 
 Platform characteristics:
-- Full Discord-flavored markdown is supported
+- Discord markdown is supported (bold, italic, lists, headers, quotes,
+  inline code and code blocks), but NOT tables — Discord clients never
+  render markdown tables. Any table you output is automatically converted
+  to an aligned monospace code block, so keep tables narrow (2-4 columns);
+  prefer bullet lists for wide or long data
 - Messages are limited to 2000 characters; longer responses are
   automatically split into multiple messages
 - Media attachments (images, files) are supported as separate uploads`
