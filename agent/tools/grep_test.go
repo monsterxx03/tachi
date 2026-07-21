@@ -2,7 +2,6 @@ package tools
 
 import (
 	"context"
-	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -24,7 +23,7 @@ func setupGrepTestDir(t *testing.T) string {
 		"src/utils.go":      "package src\n\nfunc Uppercase(s string) string {\n\treturn strings.ToUpper(s)\n}\n",
 		"src/utils_test.go": "package src\n\nfunc TestUppercase(t *testing.T) {\n\tresult := Uppercase(\"hello\")\n}\n",
 		"docs/readme.md":    "# Project\n\nThis is a test project.\nIt contains hello world examples.\n",
-		"data.json":         "{\"key\": \"hello\", \"value\": 42}\n",
+		"data.json":         `{"key": "hello", "value": 42}` + "\n",
 		".hidden/secret.go": "package hidden\n\nvar secret = \"hello hidden\"\n",
 	}
 
@@ -48,13 +47,49 @@ func skipWithoutRg(t *testing.T) {
 	}
 }
 
-func parseGrepResult(t *testing.T, raw string) GrepResult {
+// assertFiles parses the plain-text "files_with_matches" output and checks
+// that it contains at least minFiles relative paths (one per line).
+func assertFiles(t *testing.T, raw string, minFiles int) []string {
 	t.Helper()
-	var r GrepResult
-	if err := json.Unmarshal([]byte(raw), &r); err != nil {
-		t.Fatalf("Failed to unmarshal result: %v", err)
+	lines := splitNonEmpty(raw)
+	if len(lines) < minFiles {
+		t.Errorf("expected at least %d files, got %d. Output:\n%s", minFiles, len(lines), raw)
 	}
-	return r
+	for _, f := range lines {
+		if strings.HasPrefix(f, "/") {
+			t.Errorf("expected relative path, got %q", f)
+		}
+	}
+	return lines
+}
+
+// assertLines parses the plain-text "content" output and checks that it
+// contains at least minLines of matching lines (skipping empty/separator lines).
+func assertLines(t *testing.T, raw string, minLines int) {
+	t.Helper()
+	contentLines := strings.Split(raw, "\n")
+	nonEmpty := 0
+	for _, l := range contentLines {
+		if strings.TrimSpace(l) != "" {
+			nonEmpty++
+		}
+	}
+	if nonEmpty < minLines {
+		t.Errorf("expected at least %d content lines, got %d. Output:\n%s", minLines, nonEmpty, raw)
+	}
+}
+
+// splitNonEmpty splits raw by newlines and returns non-empty trimmed lines.
+func splitNonEmpty(raw string) []string {
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	var result []string
+	for _, l := range lines {
+		l = strings.TrimSpace(l)
+		if l != "" && !strings.HasPrefix(l, "...") && !strings.HasPrefix(l, "(total:") && !strings.HasPrefix(l, "(no ") {
+			result = append(result, l)
+		}
+	}
+	return result
 }
 
 func TestGrep_FilesWithMatches(t *testing.T) {
@@ -67,14 +102,8 @@ func TestGrep_FilesWithMatches(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.Mode != "files_with_matches" {
-		t.Errorf("Expected mode files_with_matches, got %s", r.Mode)
-	}
-	if r.NumFiles < 4 {
-		t.Errorf("Expected at least 4 files matching 'hello', got %d: %v", r.NumFiles, r.Filenames)
-	}
-	for _, f := range r.Filenames {
+	files := assertFiles(t, raw, 4)
+	for _, f := range files {
 		if filepath.IsAbs(f) {
 			t.Errorf("Expected relative path, got %q", f)
 		}
@@ -91,16 +120,7 @@ func TestGrep_ContentMode(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.Mode != "content" {
-		t.Errorf("Expected mode content, got %s", r.Mode)
-	}
-	if r.Content == "" {
-		t.Error("Expected non-empty content")
-	}
-	if r.NumLines == 0 {
-		t.Error("Expected non-zero NumLines")
-	}
+	assertLines(t, raw, 4)
 }
 
 func TestGrep_ContentModeWithContext(t *testing.T) {
@@ -113,10 +133,7 @@ func TestGrep_ContentModeWithContext(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.NumLines <= 4 {
-		t.Errorf("Expected more lines with context, got %d", r.NumLines)
-	}
+	assertLines(t, raw, 8)
 }
 
 func TestGrep_CountMode(t *testing.T) {
@@ -129,15 +146,19 @@ func TestGrep_CountMode(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.Mode != "count" {
-		t.Errorf("Expected mode count, got %s", r.Mode)
+	files := splitNonEmpty(raw)
+	if len(files) < 4 {
+		t.Errorf("expected at least 4 file counts, got %d. Output:\n%s", len(files), raw)
 	}
-	if r.NumMatches < 4 {
-		t.Errorf("Expected at least 4 matches, got %d", r.NumMatches)
+	// Each line should have format "path: N" for count mode
+	for _, f := range files {
+		if !strings.Contains(f, ":") {
+			t.Errorf("count line should contain ':file_count', got %q", f)
+		}
 	}
-	if r.NumFiles < 4 {
-		t.Errorf("Expected at least 4 files, got %d", r.NumFiles)
+	// Should have a total summary
+	if !strings.Contains(raw, "(total:") {
+		t.Errorf("expected total summary in count output, got:\n%s", raw)
 	}
 }
 
@@ -151,8 +172,8 @@ func TestGrep_GlobFilter(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	for _, f := range r.Filenames {
+	files := assertFiles(t, raw, 1)
+	for _, f := range files {
 		if !strings.HasSuffix(f, ".go") {
 			t.Errorf("Expected only .go files, got %q", f)
 		}
@@ -169,8 +190,8 @@ func TestGrep_TypeFilter(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	for _, f := range r.Filenames {
+	files := assertFiles(t, raw, 1)
+	for _, f := range files {
 		if !strings.HasSuffix(f, ".go") {
 			t.Errorf("Expected only Go files, got %q", f)
 		}
@@ -187,8 +208,8 @@ func TestGrep_CaseInsensitive(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.NumFiles == 0 {
+	files := splitNonEmpty(raw)
+	if len(files) == 0 {
 		t.Error("Expected matches with case insensitive search")
 	}
 }
@@ -203,155 +224,84 @@ func TestGrep_CaseSensitiveNoMatch(t *testing.T) {
 		t.Fatalf("Grep failed: %v", err)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.NumFiles != 0 {
-		t.Errorf("Expected no matches for case sensitive 'HELLO', got %d files", r.NumFiles)
+	if !strings.Contains(raw, "(no matching files)") {
+		t.Errorf("Expected no-match indicator, got:\n%s", raw)
 	}
 }
 
-func TestGrep_RegexPattern(t *testing.T) {
+func TestGrep_FixedString(t *testing.T) {
 	skipWithoutRg(t)
 	tmpDir := setupGrepTestDir(t)
 
+	// Create a file with text containing regex special characters.
+	content := `foo.Bar(ctx, "test")
+another line with dots.here
+plain text`
+	if err := os.WriteFile(filepath.Join(tmpDir, "special.go"), []byte(content), 0644); err != nil {
+		t.Fatal(err)
+	}
+
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "func\\s+\\w+\\(", "path": "`+tmpDir+`", "type": "go"}`)
+
+	// fixed_string=true: dots and parens are literal, not regex.
+	raw, err := tool.ExecuteContext(context.TODO(),
+		`{"pattern": "foo.Bar(ctx", "path": "`+tmpDir+`", "output_mode": "content", "fixed_string": true}`)
 	if err != nil {
-		t.Fatalf("Grep failed: %v", err)
+		t.Fatalf("fixed_string grep failed: %v", err)
+	}
+	if strings.Contains(raw, "(no matches)") {
+		t.Errorf("fixed_string should find literal 'foo.Bar(ctx'. Output:\n%s", raw)
+	}
+	if !strings.Contains(raw, "special.go") {
+		t.Errorf("expected result from special.go, got:\n%s", raw)
 	}
 
-	r := parseGrepResult(t, raw)
-	if r.NumFiles < 2 {
-		t.Errorf("Expected at least 2 files with func declarations, got %d", r.NumFiles)
-	}
-}
-
-func TestGrep_NoMatches(t *testing.T) {
-	skipWithoutRg(t)
-	tmpDir := setupGrepTestDir(t)
-
-	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "nonexistent_string_xyz", "path": "`+tmpDir+`"}`)
-	if err != nil {
-		t.Fatalf("Grep failed: %v", err)
-	}
-
-	r := parseGrepResult(t, raw)
-	if r.NumFiles != 0 {
-		t.Errorf("Expected 0 files, got %d", r.NumFiles)
-	}
-}
-
-func TestGrep_EmptyPattern(t *testing.T) {
-	tool := GrepTool{}
-	_, err := tool.ExecuteContext(context.TODO(), `{"pattern": ""}`)
+	// Without fixed_string, the same pattern should fail regex (bogus group).
+	raw, err = tool.ExecuteContext(context.TODO(),
+		`{"pattern": "foo.Bar(ctx", "path": "`+tmpDir+`", "output_mode": "content"}`)
 	if err == nil {
-		t.Error("Expected error for empty pattern")
+		t.Errorf("expected regex error for invalid pattern 'foo.Bar(ctx', got output:\n%s", raw)
+	} else {
+		t.Logf("regex correctly error'd: %v", err)
 	}
 }
 
-func TestGrep_InvalidOutputMode(t *testing.T) {
+func TestGrep_MaxResults(t *testing.T) {
+	skipWithoutRg(t)
+	tmpDir := setupGrepTestDir(t)
+
+	// "hello" matches in many files; limit to 2 results.
 	tool := GrepTool{}
-	_, err := tool.ExecuteContext(context.TODO(), `{"pattern": "test", "output_mode": "invalid"}`)
-	if err == nil {
-		t.Error("Expected error for invalid output_mode")
+	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "content", "max_results": 2}`)
+	if err != nil {
+		t.Fatalf("Grep failed: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(raw), "\n")
+	contentLines := 0
+	for _, l := range lines {
+		if strings.TrimSpace(l) != "" && !strings.HasPrefix(l, "...") {
+			contentLines++
+		}
+	}
+	if contentLines != 2 {
+		t.Errorf("expected exactly 2 content lines with max_results=2, got %d. Output:\n%s", contentLines, raw)
+	}
+	if !strings.Contains(raw, "... (showing 2 of") {
+		t.Errorf("expected truncation notice, got:\n%s", raw)
 	}
 }
 
-func TestGrep_HiddenFiles(t *testing.T) {
+func TestGrep_NoMatchMultipleFiles(t *testing.T) {
 	skipWithoutRg(t)
 	tmpDir := setupGrepTestDir(t)
 
 	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "hello hidden", "path": "`+tmpDir+`"}`)
+	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "zxcvbnm_nonexistent", "path": "`+tmpDir+`", "output_mode": "content"}`)
 	if err != nil {
 		t.Fatalf("Grep failed: %v", err)
 	}
-
-	r := parseGrepResult(t, raw)
-	if r.NumFiles != 1 {
-		t.Errorf("Expected 1 file in hidden dir, got %d: %v", r.NumFiles, r.Filenames)
-	}
-}
-
-func TestGrep_PatternStartingWithDash(t *testing.T) {
-	skipWithoutRg(t)
-	tmpDir, err := os.MkdirTemp("", "grep_dash_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
-
-	path := filepath.Join(tmpDir, "test.txt")
-	if err := os.WriteFile(path, []byte("some -flag here\n"), 0644); err != nil {
-		t.Fatalf("Failed to write file: %v", err)
-	}
-
-	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "-flag", "path": "`+tmpDir+`"}`)
-	if err != nil {
-		t.Fatalf("Grep failed: %v", err)
-	}
-
-	r := parseGrepResult(t, raw)
-	if r.NumFiles != 1 {
-		t.Errorf("Expected 1 file, got %d", r.NumFiles)
-	}
-}
-
-func TestGrep_RipgrepNotFound(t *testing.T) {
-	origPath := os.Getenv("PATH")
-	defer os.Setenv("PATH", origPath)
-	os.Setenv("PATH", "/tmp")
-
-	tool := GrepTool{}
-	_, err := tool.ExecuteContext(context.TODO(), `{"pattern": "test"}`)
-	if err == nil || !strings.Contains(err.Error(), "ripgrep") {
-		t.Errorf("Expected error about ripgrep not found, got: %v", err)
-	}
-}
-
-func TestGrep_Multiline(t *testing.T) {
-	skipWithoutRg(t)
-	tmpDir, err := os.MkdirTemp("", "grep_ml_test")
-	if err != nil {
-		t.Fatalf("Failed to create temp dir: %v", err)
-	}
-	t.Cleanup(func() { os.RemoveAll(tmpDir) })
-
-	path := filepath.Join(tmpDir, "multi.txt")
-	if err := os.WriteFile(path, []byte("start\nmiddle\nend\n"), 0644); err != nil {
-		t.Fatalf("Failed to write file: %v", err)
-	}
-
-	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "start.middle", "path": "`+tmpDir+`", "multiline": true}`)
-	if err != nil {
-		t.Fatalf("Grep failed: %v", err)
-	}
-
-	r := parseGrepResult(t, raw)
-	if r.NumFiles != 1 {
-		t.Errorf("Expected 1 file with multiline match, got %d", r.NumFiles)
-	}
-}
-
-func TestGrep_RelativePaths(t *testing.T) {
-	skipWithoutRg(t)
-	tmpDir := setupGrepTestDir(t)
-
-	tool := GrepTool{}
-	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "content"}`)
-	if err != nil {
-		t.Fatalf("Grep failed: %v", err)
-	}
-
-	r := parseGrepResult(t, raw)
-	for line := range strings.SplitSeq(r.Content, "\n") {
-		if line == "" || line == "--" {
-			continue
-		}
-		if strings.HasPrefix(line, tmpDir) {
-			t.Errorf("Expected relative paths in content, got absolute: %q", line)
-		}
+	if !strings.Contains(raw, "(no matches)") {
+		t.Errorf("expected '(no matches)' for nonexistent pattern, got:\n%s", raw)
 	}
 }

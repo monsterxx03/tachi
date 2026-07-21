@@ -15,6 +15,7 @@ const (
 	outputModeCount   = "count"
 )
 
+// GrepResult holds structured grep output for internal formatting.
 type GrepResult struct {
 	DurationMs int64    `json:"durationMs"`
 	NumFiles   int      `json:"numFiles"`
@@ -33,6 +34,7 @@ type grepArgs struct {
 	Type            string `json:"type"`
 	OutputMode      string `json:"output_mode"`
 	CaseInsensitive bool   `json:"case_insensitive"`
+	FixedString     bool   `json:"fixed_string"`
 	Multiline       bool   `json:"multiline"`
 	ContextLines    *int   `json:"context_lines"`
 	MaxResults      *int   `json:"max_results"`
@@ -43,20 +45,22 @@ type GrepTool struct{}
 func (t GrepTool) Name() string { return ToolNameGrep }
 func (t GrepTool) Description() string {
 	return "Search file contents using ripgrep. " +
-		"Supports regex patterns, file type filtering, and glob filtering. " +
-		"Returns matching file paths by default, or matching lines with context in content mode."
+		"Supports regex or fixed-string patterns, file type filtering, and glob filtering. " +
+		"Returns matching file paths by default, or matching lines with context in content mode. " +
+		"Use fixed_string=true when searching for literal text containing regex special characters."
 }
 func (t GrepTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
-		"pattern":          {Type: "string", Description: "Regular expression pattern to search for"},
+		"pattern":          {Type: "string", Description: "Pattern to search for (regex by default; literal when fixed_string=true)"},
 		"path":             {Type: "string", Description: "File or directory to search in (defaults to current directory)"},
 		"glob":             {Type: "string", Description: "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")"},
 		"type":             {Type: "string", Description: "File type filter using ripgrep's --type (e.g. \"go\", \"py\", \"js\")"},
 		"output_mode":      {Type: "string", Description: "Output mode: \"files_with_matches\" (default), \"content\", or \"count\""},
 		"case_insensitive": {Type: "boolean", Description: "Case insensitive search"},
+		"fixed_string":     {Type: "boolean", Description: "Treat pattern as a literal string, not regex (use when the pattern contains . * [ ( etc.)"},
 		"multiline":        {Type: "boolean", Description: "Enable multiline mode where . matches newlines"},
 		"context_lines":    {Type: "integer", Description: "Number of context lines to show before and after each match (content mode only)"},
-		"max_results":      {Type: "integer", Description: "Maximum number of results to return (default 200)"},
+		"max_results":      {Type: "integer", Description: "Maximum number of results to return (content lines or files; default 200)"},
 	}
 }
 func (t GrepTool) Required() []string { return []string{"pattern"} }
@@ -111,11 +115,11 @@ func (t GrepTool) ExecuteContext(parentCtx context.Context, args string) (string
 	start := time.Now()
 	cmd := exec.CommandContext(ctx, "rg", rgArgs...)
 	output, err := cmd.Output()
-	duration := time.Since(start).Milliseconds()
+	_ = time.Since(start).Milliseconds() // duration kept for potential future use
 
 	if err != nil {
 		if isRgNoMatch(err) {
-			return emptyGrepResult(duration, a.OutputMode)
+			return noMatchResult(a.OutputMode), nil
 		}
 		if msg, ok := rgErrorMessage(err); ok {
 			return "", fmt.Errorf("ripgrep error: %s", msg)
@@ -125,30 +129,34 @@ func (t GrepTool) ExecuteContext(parentCtx context.Context, args string) (string
 
 	raw := strings.TrimSpace(string(output))
 	if raw == "" {
-		return emptyGrepResult(duration, a.OutputMode)
+		return noMatchResult(a.OutputMode), nil
 	}
 
-	var result GrepResult
 	switch a.OutputMode {
 	case outputModeFiles:
-		result = buildFilesResult(raw, absPath, maxResults, duration)
+		return formatFilesOutput(raw, absPath, maxResults)
 	case outputModeContent:
-		result = buildContentResult(raw, absPath, maxResults, duration)
+		return formatContentOutput(raw, absPath, maxResults)
 	case outputModeCount:
-		result = buildCountResult(raw, absPath, maxResults, duration)
+		return formatCountOutput(raw, absPath, maxResults)
 	}
 
-	return marshalResult(result)
+	return "", nil
 }
 
-func emptyGrepResult(duration int64, mode string) (string, error) {
-	return marshalResult(GrepResult{
-		DurationMs: duration,
-		Filenames:  []string{},
-		Mode:       mode,
-	})
+// noMatchResult returns a short string indicating no matches were found.
+func noMatchResult(mode string) string {
+	switch mode {
+	case outputModeFiles:
+		return "(no matching files)"
+	case outputModeCount:
+		return "(0 matches)"
+	default:
+		return "(no matches)"
+	}
 }
 
+// buildRgArgs constructs the ripgrep command-line arguments.
 func buildRgArgs(a *grepArgs) []string {
 	args := []string{
 		"--hidden",
@@ -173,6 +181,9 @@ func buildRgArgs(a *grepArgs) []string {
 	if a.CaseInsensitive {
 		args = append(args, "-i")
 	}
+	if a.FixedString {
+		args = append(args, "-F")
+	}
 	if a.Multiline {
 		args = append(args, "-U", "--multiline-dotall")
 	}
@@ -188,116 +199,101 @@ func buildRgArgs(a *grepArgs) []string {
 	return args
 }
 
-func buildFilesResult(raw, basePath string, maxResults int, duration int64) GrepResult {
+// --- Plain text output formatters ---
+
+// formatFilesOutput formats "files_with_matches" results as one relative path per line.
+func formatFilesOutput(raw, basePath string, maxResults int) (string, error) {
 	lines := strings.Split(raw, "\n")
-	filenames := make([]string, 0, min(len(lines), maxResults))
+	var b strings.Builder
+	count := 0
+
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		filenames = append(filenames, toRelativePath(line, basePath))
+		if count >= maxResults {
+			fmt.Fprintf(&b, "... (showing %d of %d+ matching files)\n", maxResults, count)
+			break
+		}
+		b.WriteString(toRelativePath(line, basePath))
+		b.WriteByte('\n')
+		count++
 	}
 
-	truncated := len(filenames) > maxResults
-	if truncated {
-		filenames = filenames[:maxResults]
-	}
-
-	return GrepResult{
-		DurationMs: duration,
-		NumFiles:   len(filenames),
-		Filenames:  filenames,
-		Mode:       outputModeFiles,
-		Truncated:  truncated,
-	}
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func buildContentResult(raw, basePath string, maxResults int, duration int64) GrepResult {
+// formatContentOutput formats "content" results as:
+//
+//	relative/path:line:content
+//	relative/path:line:more
+//	...
+//	(truncated note if applicable)
+func formatContentOutput(raw, basePath string, maxResults int) (string, error) {
 	lines := strings.Split(raw, "\n")
+	var b strings.Builder
+	count := 0
 
-	converted := make([]string, 0, min(len(lines), maxResults))
-	truncated := false
 	for _, line := range lines {
-		if len(converted) >= maxResults {
-			truncated = true
+		if count >= maxResults {
+			fmt.Fprintf(&b, "... (showing %d of %d+ matching lines)\n", maxResults, count)
 			break
 		}
 		if line == "" {
-			converted = append(converted, line)
+			b.WriteByte('\n')
+			count++
 			continue
 		}
-		converted = append(converted, convertPathInLine(line, basePath))
+		b.WriteString(convertPathInLine(line, basePath))
+		b.WriteByte('\n')
+		count++
 	}
 
-	fileSet := make(map[string]struct{})
-	for _, line := range converted {
-		if line == "" || line == "--" {
-			continue
-		}
-		if parts := strings.SplitN(line, ":", 2); len(parts) > 1 {
-			fileSet[parts[0]] = struct{}{}
-		}
-	}
-
-	filenames := make([]string, 0, len(fileSet))
-	for f := range fileSet {
-		filenames = append(filenames, f)
-	}
-
-	return GrepResult{
-		DurationMs: duration,
-		NumFiles:   len(fileSet),
-		NumLines:   len(converted),
-		Filenames:  filenames,
-		Content:    strings.Join(converted, "\n"),
-		Mode:       outputModeContent,
-		Truncated:  truncated,
-	}
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
-func buildCountResult(raw, basePath string, maxResults int, duration int64) GrepResult {
+// formatCountOutput formats "count" results as:
+//
+//	relative/path: N
+//	relative/path: M
+//	(total: N+M matches across 2 files)
+func formatCountOutput(raw, basePath string, maxResults int) (string, error) {
 	lines := strings.Split(raw, "\n")
+	var b strings.Builder
 	totalMatches := 0
-	var content strings.Builder
-	filenames := make([]string, 0, min(len(lines), maxResults))
-	truncated := false
+	count := 0
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
 		if line == "" {
 			continue
 		}
-		if len(filenames) >= maxResults {
-			truncated = true
+		if count >= maxResults {
+			fmt.Fprintf(&b, "... (showing %d of %d+ files)\n", maxResults, count)
 			break
 		}
-
 		rel := convertPathInLine(line, basePath)
-		if content.Len() > 0 {
-			content.WriteByte('\n')
-		}
-		content.WriteString(rel)
+		b.WriteString(rel)
+		b.WriteByte('\n')
 
 		if parts := strings.SplitN(rel, ":", 2); len(parts) == 2 {
-			filenames = append(filenames, parts[0])
 			if n, err := strconv.Atoi(strings.TrimSpace(parts[1])); err == nil {
 				totalMatches += n
 			}
 		}
+		count++
 	}
 
-	return GrepResult{
-		DurationMs: duration,
-		NumFiles:   len(filenames),
-		NumMatches: totalMatches,
-		Filenames:  filenames,
-		Content:    content.String(),
-		Mode:       outputModeCount,
-		Truncated:  truncated,
+	if totalMatches > 0 {
+		fmt.Fprintf(&b, "(total: %d matches across %d files)\n", totalMatches, count)
 	}
+
+	return strings.TrimRight(b.String(), "\n"), nil
 }
 
+// convertPathInLine transforms an absolute path prefix in a ripgrep output line
+// to a relative path, preserving the ":line:" suffix.
 func convertPathInLine(line, basePath string) string {
 	if !strings.HasPrefix(line, basePath) {
 		return line
