@@ -130,23 +130,38 @@ func (ch *DiscordChannel) sendTextReply(channelID, content string, reference *di
 // so a long multi-part answer stays visually connected even when other
 // messages interleave. Chunks 2+ reference the bot's own messages, so they
 // never generate extra pings (only chunk 1 pings the original user).
+//
+// When ch.cfg.SuppressEmbeds is true, all messages are sent with the
+// SuppressEmbeds flag to prevent link previews from appearing.
 func (ch *DiscordChannel) sendTextWithReference(channelID, content string, reference *discordgo.MessageReference) error {
 	sess := ch.session
 	if sess == nil {
 		return nil // silently ignore if not connected
 	}
 
+	// Build the base MessageSend with optional SuppressEmbeds flag.
+	flags := discordgo.MessageFlags(0)
+	if ch.cfg.SuppressEmbeds {
+		flags |= discordgo.MessageFlagsSuppressEmbeds
+	}
+
 	chunks := splitMessage(content)
 	ref := reference
 	for _, chunk := range chunks {
-		var (
-			sent *discordgo.Message
-			err  error
-		)
+		var sent *discordgo.Message
+		var err error
+
 		if ref != nil {
-			sent, err = sess.ChannelMessageSendReply(channelID, chunk, ref)
+			sent, err = sess.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+				Content:   chunk,
+				Reference: ref,
+				Flags:     flags,
+			})
 		} else {
-			sent, err = sess.ChannelMessageSend(channelID, chunk)
+			sent, err = sess.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
+				Content: chunk,
+				Flags:   flags,
+			})
 		}
 		if err != nil {
 			return err

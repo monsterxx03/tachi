@@ -8,10 +8,12 @@ require (
 	charm.land/lipgloss/v2 v2.0.3
 	github.com/JohannesKaufmann/html-to-markdown/v2 v2.5.0
 	github.com/anthropics/anthropic-sdk-go v1.37.0
+	github.com/bwmarrin/discordgo v0.29.0
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creasty/defaults v1.8.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.4.2
 	github.com/mark3labs/mcp-go v0.55.1
 	github.com/mattn/go-runewidth v0.0.23
 	github.com/robfig/cron/v3 v3.0.1
@@ -29,7 +31,6 @@ require (
 	github.com/atotto/clipboard v0.1.4 // indirect
 	github.com/aymanbagabas/go-osc52/v2 v2.0.1 // indirect
 	github.com/aymerick/douceur v0.2.0 // indirect
-	github.com/bwmarrin/discordgo v0.29.0 // indirect
 	github.com/charmbracelet/colorprofile v0.4.3 // indirect
 	github.com/charmbracelet/lipgloss v1.1.1-0.20250404203927-76690c660834 // indirect
 	github.com/charmbracelet/ultraviolet v0.0.0-20260422141423-a0f1f21775f7 // indirect
@@ -45,7 +46,6 @@ require (
 	github.com/dlclark/regexp2 v1.12.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
-	github.com/gorilla/websocket v1.4.2 // indirect
 	github.com/lucasb-eyer/go-colorful v1.4.0 // indirect
 	github.com/mattn/go-isatty v0.0.21 // indirect
 	github.com/microcosm-cc/bluemonday v1.0.27 // indirect

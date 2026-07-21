@@ -59,6 +59,11 @@ type DiscordConfig struct {
 	// Slash commands
 	DevGuildID string `yaml:"dev_guild_id"` // Dev guild ID for instant guild-level commands (Phase 3)
 
+	// SuppressEmbeds disables link previews (embeds) for all messages sent
+	// by the bot. When true (default), Discord will not fetch or display
+	// link previews for URLs in the bot's messages.
+	SuppressEmbeds bool `yaml:"suppress_embeds"`
+
 	// Embed
 	EmbedEnabled bool `yaml:"embed_enabled"` // Enable Embed message sending (Phase 2+, default: false)
 
@@ -110,6 +115,7 @@ func newDefaultConfig() DiscordConfig {
 		GroupSessionsPerUser: false,
 		HistoryBackfill:      true,
 		HistoryBackfillLimit: 50,
+		SuppressEmbeds:       true,
 		ReconnectBackoff:     1 * time.Second,
 		ReconnectMaxBackoff:  30 * time.Second,
 	}
