@@ -17,16 +17,26 @@ import (
 const HalfLifeDays = 7
 
 // CalculateDecay computes the decay factor based on time elapsed since the
-// last reinforcement. Uses exponential decay with HalfLifeDays half-life:
+// last reinforcement, falling back to the fact's creation time when it has
+// never been reinforced. The fallback matters: without it, facts that were
+// never recalled would stay at full strength forever — the decay system
+// would only apply to facts recalled at least once.
 //
 //	decay = exp(-ln(2) × elapsed / halfLife)
 //
-// Returns 1.0 if lastReinforced is zero (brand new, not yet decayed).
-func CalculateDecay(lastReinforced time.Time) float64 {
-	if lastReinforced.IsZero() {
+// Returns 1.0 if both timestamps are zero (brand new, not yet decayed).
+func CalculateDecay(lastReinforced, createdAt time.Time) float64 {
+	ref := lastReinforced
+	if ref.IsZero() {
+		ref = createdAt
+	}
+	if ref.IsZero() {
 		return 1.0
 	}
-	elapsed := time.Since(lastReinforced)
+	elapsed := time.Since(ref)
+	if elapsed < 0 {
+		return 1.0 // clock skew — treat as brand new
+	}
 	halfLife := time.Duration(HalfLifeDays) * 24 * time.Hour
 	return math.Exp(-math.Ln2 * elapsed.Seconds() / halfLife.Seconds())
 }
@@ -86,9 +96,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 				// Clone to avoid mutating the caller's map.
 				cloned := *existing
 				cloned.Superseded = superseded
-				if !cloned.LastReinforced.IsZero() {
-					cloned.Decay = CalculateDecay(cloned.LastReinforced)
-				}
+				cloned.Decay = CalculateDecay(cloned.LastReinforced, cloned.CreatedAt)
 				result[id] = &cloned
 			} else {
 				// New fact: initialize with full strength.

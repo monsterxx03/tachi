@@ -176,7 +176,7 @@ func (o *Orchestrator) Run(ctx context.Context, sessions []*session.Session, run
 			continue
 		}
 
-		// Gate 3: acquire domain lock (no concurrent dream on same domain).
+		// Gate 2: acquire domain lock (no concurrent dream on same domain).
 		if !AcquireLock(g.MemoryRoot) {
 			o.logger.Info(ctx, "skipped — lock held by another process", "domain", g.Domain, "root", g.Root)
 			continue
@@ -407,12 +407,19 @@ func LoadState(memoryRoot string) State {
 }
 
 // SaveState writes last_dream.json to the memory directory.
+// Uses a temp-file + rename to avoid corruption on crash (atomic write) —
+// a torn file would silently reset LastDreamAt and trigger a full re-dream.
 func SaveState(memoryRoot string, state State) error {
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(memoryRoot, memory.DreamStateFile), data, 0644)
+	statePath := filepath.Join(memoryRoot, memory.DreamStateFile)
+	tmpPath := statePath + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	return os.Rename(tmpPath, statePath)
 }
 
 // --- Helpers ---

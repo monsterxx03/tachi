@@ -51,6 +51,13 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		return State{}, err
 	}
 
+	// Capture the watermark BEFORE building summaries: messages arriving
+	// after this point are not included in the prompt, so they must remain
+	// eligible for the next dream. Using the completion time as LastDreamAt
+	// would silently skip them (their session's UpdatedAt would be older
+	// than the watermark).
+	snapshotAt := time.Now()
+
 	// Build session summaries (pre-filtered to user+assistant only).
 	summaries := buildSessionSummaries(plan.ActiveSessions, loadMessages, plan.LastState.LastDreamAt, l)
 
@@ -98,8 +105,13 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		return State{}, lastErr
 	}
 
-	// Post-dream: scan topic files and update decay states.
-	factStates := ScanTopicFacts(plan.Group.MemoryRoot, plan.LastState.FactStates, l)
+	// Post-dream: scan topic files and update decay states. Reload the
+	// latest on-disk state first so reinforcements recorded by TopicBackend
+	// while this dream was running are preserved — ScanTopicFacts merges
+	// them into the fresh scan (plan.LastState.FactStates is stale by the
+	// duration of the dream).
+	latestState := LoadState(plan.Group.MemoryRoot)
+	factStates := ScanTopicFacts(plan.Group.MemoryRoot, latestState.FactStates, l)
 
 	// Ensure inbox.md was cleared. The dream agent is instructed to integrate
 	// inbox content into topic files and then clear the inbox. If the agent
@@ -108,7 +120,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	ensureInboxCleared(plan.Group.MemoryRoot, l)
 
 	state := State{
-		LastDreamAt:     time.Now(),
+		LastDreamAt:     snapshotAt,
 		SessionsDreamed: len(plan.ActiveSessions),
 		FactStates:      factStates,
 	}

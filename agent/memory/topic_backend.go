@@ -139,9 +139,14 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 
 	// Extract keywords for better text-search recall.
 	// Falls back to raw query if extractor is not set or fails.
+	// Short queries skip the LLM extraction round-trip entirely — they are
+	// already keyword-like, and extraction adds latency to every user
+	// message without improving recall for them.
 	keywords := []string{query}
 	if t.extractor != nil {
-		if kws, err := t.extractor.ExtractKeywords(ctx, query); err == nil && len(kws) > 0 {
+		if shouldSkipExtraction(query) {
+			t.logger.Info(ctx, "short query — skipping keyword extraction", "query", query)
+		} else if kws, err := t.extractor.ExtractKeywords(ctx, query); err == nil && len(kws) > 0 {
 			keywords = kws
 			t.logger.Info(ctx, "keywords extracted", "keywords", keywords, "query", query)
 		} else if err != nil {
@@ -309,6 +314,27 @@ func (t *TopicBackend) Observe(ctx context.Context, opts ObserveOptions) error {
 
 // --- Search implementation ---
 
+// shouldSkipExtraction reports whether a query is short enough to be used
+// directly as the search keyword, skipping the LLM keyword-extraction
+// round-trip. Queries of a few words are already keyword-like; extraction
+// mostly rephrases them while adding latency to every user message.
+func shouldSkipExtraction(query string) bool {
+	trimmed := strings.TrimSpace(query)
+	if trimmed == "" {
+		return true
+	}
+	words := strings.Fields(trimmed)
+	if len(words) > 3 {
+		return false
+	}
+	// A single long CJK sentence contains no spaces and is not keyword-like —
+	// let the LLM break it down.
+	if len(words) == 1 && len([]rune(trimmed)) > 12 {
+		return false
+	}
+	return true
+}
+
 // searchDir searches all .md files in a directory for matching blocks.
 func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []string) []Entry {
 	if _, err := os.Stat(dir); os.IsNotExist(err) {
@@ -394,14 +420,24 @@ func (t *TopicBackend) loadDecayStates() map[string]*FactState {
 		}
 	}
 
-	// Recalculate decay in real-time from LastReinforced so values stay
-	// accurate between dream runs (stored values may be hours/days stale).
+	// Recalculate decay in real-time so values stay accurate between dream
+	// runs (stored values may be hours/days stale). Facts that were never
+	// reinforced decay from their creation time — otherwise they would
+	// stay at full strength forever.
 	halfLife := float64(t.halfLifeDays) * 24 * 3600
 	for _, fs := range result {
-		if !fs.LastReinforced.IsZero() {
-			elapsed := time.Since(fs.LastReinforced).Seconds()
-			fs.Decay = math.Exp(-math.Ln2 * elapsed / halfLife)
+		ref := fs.LastReinforced
+		if ref.IsZero() {
+			ref = fs.CreatedAt
 		}
+		if ref.IsZero() {
+			continue
+		}
+		elapsed := time.Since(ref).Seconds()
+		if elapsed < 0 {
+			continue // clock skew — keep stored value
+		}
+		fs.Decay = math.Exp(-math.Ln2 * elapsed / halfLife)
 	}
 
 	// Update cache.

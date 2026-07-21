@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -187,6 +188,24 @@ func TestState_LoadSave(t *testing.T) {
 	}
 	if loaded.FactsAdded != 10 {
 		t.Errorf("FactsAdded: got %d, want 10", loaded.FactsAdded)
+	}
+}
+
+func TestSaveState_AtomicWrite(t *testing.T) {
+	tmpDir := t.TempDir()
+
+	if err := SaveState(tmpDir, State{LastDreamAt: time.Now(), SessionsDreamed: 3}); err != nil {
+		t.Fatalf("SaveState: %v", err)
+	}
+
+	// The temp file must not linger after a successful atomic rename.
+	if _, err := os.Stat(filepath.Join(tmpDir, memory.DreamStateFile+".tmp")); !os.IsNotExist(err) {
+		t.Error("temp file should not linger after SaveState")
+	}
+
+	loaded := LoadState(tmpDir)
+	if loaded.SessionsDreamed != 3 {
+		t.Errorf("SessionsDreamed: got %d, want 3", loaded.SessionsDreamed)
 	}
 }
 

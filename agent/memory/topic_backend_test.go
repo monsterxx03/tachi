@@ -1,6 +1,7 @@
 package memory
 
 import (
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -603,5 +604,92 @@ func TestTopicBackend_ReinforceFact_MissingFact(t *testing.T) {
 	// Should not error on missing fact/file.
 	if err := backend.ReinforceFact(t.Context(), "topic:nonexistent:00000000"); err != nil {
 		t.Errorf("ReinforceFact on missing fact should not error: %v", err)
+	}
+}
+
+// --- Keyword extraction skip ---
+
+// countingExtractor counts ExtractKeywords calls and returns fixed keywords.
+type countingExtractor struct {
+	calls int
+	kws   []string
+}
+
+func (e *countingExtractor) ExtractKeywords(ctx context.Context, query string) ([]string, error) {
+	e.calls++
+	return e.kws, nil
+}
+
+func TestShouldSkipExtraction(t *testing.T) {
+	skip := []string{
+		"",
+		"   ",
+		"database",
+		"dark theme",
+		"db connection pool",
+		"sqlite 配置",
+		"连接池",
+		"数据库连接池配置", // 8 runes — still keyword-like
+	}
+	for _, q := range skip {
+		if !shouldSkipExtraction(q) {
+			t.Errorf("expected skip for %q", q)
+		}
+	}
+
+	useLLM := []string{
+		"what database did we choose for the project", // more than 3 words
+		"我们之前讨论过的数据库连接池配置是什么",                         // long CJK sentence, no spaces
+	}
+	for _, q := range useLLM {
+		if shouldSkipExtraction(q) {
+			t.Errorf("expected LLM extraction for %q", q)
+		}
+	}
+}
+
+func TestTopicBackend_Recall_ShortQuerySkipsExtractor(t *testing.T) {
+	backend, tmpDir := setupTopicBackend(t)
+	ctx := t.Context()
+
+	topicsDir := filepath.Join(tmpDir, "memory", "topics")
+	os.MkdirAll(topicsDir, 0755)
+	os.WriteFile(filepath.Join(topicsDir, "db.md"), []byte(`## Database
+
+关键词: sqlite, database
+
+We chose SQLite.
+
+---
+`), 0644)
+
+	// Extractor returns keywords that match nothing — if a search is driven
+	// by these keywords, results must be empty.
+	ext := &countingExtractor{kws: []string{"unrelated"}}
+	backend.SetKeywordExtractor(ext)
+
+	// Short query: extractor must not be called; the raw query drives search.
+	results, err := backend.Recall(ctx, "sqlite", 5)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if ext.calls != 0 {
+		t.Errorf("extractor should not be called for short query, got %d calls", ext.calls)
+	}
+	if len(results) == 0 {
+		t.Error("expected results from raw-query search")
+	}
+
+	// Long query: extractor is called and its (non-matching) keywords drive
+	// the search — proving the raw query was replaced.
+	results, err = backend.Recall(ctx, "what database technology did we choose for this project", 5)
+	if err != nil {
+		t.Fatalf("Recall: %v", err)
+	}
+	if ext.calls != 1 {
+		t.Errorf("extractor should be called once for long query, got %d", ext.calls)
+	}
+	if len(results) != 0 {
+		t.Errorf("expected no results with extractor keywords, got %d", len(results))
 	}
 }
