@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"time"
 	"unicode"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
@@ -99,11 +98,14 @@ func (t SavePlanTool) ExecuteContext(ctx context.Context, args string) (string, 
 		return "", fmt.Errorf("create plans dir: %w", err)
 	}
 
-	// Generate filename: {sessionID}-{timestamp}-{slug}.json
+	// Generate filename: {slug}-{sessionID}.json. One file per plan per
+	// session — repeated saves overwrite the same file, giving true
+	// "update" semantics. (A per-call timestamp would leave stale
+	// duplicates behind, and the plan-tracking reminder would keep
+	// pointing at older incomplete versions.)
 	slug := planSlug(params.Title)
 	sessionID := SessionIDFromCtx(ctx)
-	timestamp := time.Now().Format("2006-01-02-150405")
-	filename := fmt.Sprintf("%s-%s-%s.json", timestamp, slug, sessionID)
+	filename := fmt.Sprintf("%s-%s.json", slug, sessionID)
 	filePath := filepath.Join(planDir, filename)
 
 	// Save raw structured data as JSON — preserves the original format from

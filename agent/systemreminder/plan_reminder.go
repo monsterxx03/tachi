@@ -76,7 +76,7 @@ func findActivePlan(sessionID string) *planInfo {
 	var candidates []planInfo
 
 	for _, path := range matches {
-		// Filter by session ID: filename format is {timestamp}-{slug}-{sessionID}.json.
+		// Filter by session ID: filename format is {slug}-{sessionID}.json.
 		// Extract session ID by stripping .json and taking the last dash-delimited segment.
 		if !belongsToSession(path, sessionID) {
 			continue
@@ -123,7 +123,7 @@ func findActivePlan(sessionID string) *planInfo {
 }
 
 // belongsToSession checks if a plan filename belongs to the given session ID.
-// Filename format: {timestamp}-{slug}-{sessionID}.json
+// Filename format: {slug}-{sessionID}.json
 func belongsToSession(path, sessionID string) bool {
 	return strings.HasSuffix(path, "-"+sessionID+".json")
 }
