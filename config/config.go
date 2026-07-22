@@ -695,6 +695,7 @@ type Config struct {
 	TitleGeneration        *bool                `yaml:"title_generation" default:"true"` // set false to use truncation
 	TitleProvider          string               `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
 	CommitProvider         string               `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
+	RunProvider            string               `yaml:"run_provider"`                    // optional: provider name for tachi -p run mode (defaults to main provider)
 	Memory                 MemoryConfig         `yaml:"memory"`                          // pluggable memory backend
 	Channel                ChannelConfig        `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration

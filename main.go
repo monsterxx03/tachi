@@ -503,6 +503,23 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.SetupTitleProvider(cfg)
 	aiAgent.SetupCommitProvider(cfg)
 	aiAgent.SetupReviewProvider(cfg)
+	aiAgent.SetupRunProvider(cfg)
+
+	// If a run provider is configured, switch to it for tachi -p mode.
+	if rp := aiAgent.RunProvider(); rp != nil {
+		aiAgent.SetProvider(rp)
+		provider = rp
+		// Update display info to reflect the run provider.
+		resolved.Provider.Type = rp.Name()
+		resolved.Provider.Model = rp.Model()
+		// Re-resolve run provider config to get the correct context window.
+		if rpCfg := cfg.FindProvider(cfg.RunProvider); rpCfg != nil {
+			if rpResolved, err := config.ResolveProviderConfig(rpCfg); err == nil {
+				aiAgent.SetContextWindow(rpResolved.ContextWindow)
+				resolved.Provider.ContextWindow = rpResolved.ContextWindow
+			}
+		}
+	}
 
 	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {

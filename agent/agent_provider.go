@@ -124,6 +124,43 @@ func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
 	a.logger.Info(context.Background(), "Agent: using review provider for /review code review", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
 }
 
+// RunProvider returns the dedicated run provider, or nil if none is configured
+// (caller should fall back to the main provider).
+func (a *AIAgent) RunProvider() llm.Provider {
+	return a.runProvider
+}
+
+// SetupRunProvider resolves and creates a dedicated LLM provider for tachi -p
+// run mode from config. When run_provider is empty or not found, run mode
+// falls back to the main conversation provider.
+func (a *AIAgent) SetupRunProvider(cfg *config.Config) {
+	rpName := cfg.RunProvider
+	if rpName == "" {
+		return
+	}
+
+	rpCfg := cfg.FindProvider(rpName)
+	if rpCfg == nil {
+		a.logger.Info(context.Background(), "Agent: run provider not found, falling back to main model", "provider", rpName)
+		return
+	}
+
+	resolved, err := config.ResolveProviderConfig(rpCfg)
+	if err != nil {
+		a.logger.Error(context.Background(), "Agent: failed to resolve run provider, falling back to main model", err, "provider", rpName)
+		return
+	}
+
+	rp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		a.logger.Error(context.Background(), "Agent: failed to create run provider, falling back to main model", err, "provider", rpName)
+		return
+	}
+
+	a.runProvider = rp
+	a.logger.Info(context.Background(), "Agent: using run provider for tachi -p mode", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
+}
+
 // generateTitle uses the LLM to produce a concise session title from the first
 // user message. Falls back to truncation on any error, empty response, or when
 // title generation is disabled.

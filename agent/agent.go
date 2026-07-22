@@ -114,6 +114,7 @@ type AIAgent struct {
 	titleGenEnabled    bool                     // whether LLM-based title generation is active
 	commitProvider     llm.Provider             // optional: dedicated provider for /commit messages
 	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
+	runProvider        llm.Provider             // optional: dedicated provider for tachi -p run mode
 	logger             *logger.Logger
 
 	// acpFileMode enables ACP file I/O for EditFile tool. When true,
