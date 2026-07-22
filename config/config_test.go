@@ -149,6 +149,81 @@ func TestFindProvider(t *testing.T) {
 	assert.Nil(t, cfg.FindProvider("gamma"))
 }
 
+func TestFindProvider_Alias(t *testing.T) {
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "gpt-4o-mini", Type: "openai", Model: "gpt-4o-mini"},
+			{Name: "claude-sonnet", Type: "anthropic", Model: "claude-sonnet-4-20250514"},
+		},
+		ProviderAliases: map[string]string{
+			"fast": "gpt-4o-mini",
+			"main": "claude-sonnet",
+		},
+	}
+
+	// Alias resolves to actual provider.
+	p := cfg.FindProvider("fast")
+	require.NotNil(t, p)
+	assert.Equal(t, "openai", p.Type)
+	assert.Equal(t, "gpt-4o-mini", p.Model)
+
+	p = cfg.FindProvider("main")
+	require.NotNil(t, p)
+	assert.Equal(t, "anthropic", p.Type)
+	assert.Equal(t, "claude-sonnet-4-20250514", p.Model)
+
+	// Direct provider name still works.
+	p = cfg.FindProvider("gpt-4o-mini")
+	require.NotNil(t, p)
+	assert.Equal(t, "openai", p.Type)
+
+	// Alias wins when both alias and provider name match.
+	// The alias target must exist in the providers list.
+	cfg2 := &Config{
+		Providers: []ProviderConfig{
+			{Name: "fast", Type: "anthropic", Model: "claude-sonnet"},
+			{Name: "gpt-4o-mini", Type: "openai", Model: "gpt-4o-mini"},
+		},
+		ProviderAliases: map[string]string{
+			"fast": "gpt-4o-mini",
+		},
+	}
+	p = cfg2.FindProvider("fast")
+	require.NotNil(t, p)
+	assert.Equal(t, "openai", p.Type) // alias resolved to gpt-4o-mini
+
+	// Unknown alias returns nil.
+	assert.Nil(t, cfg.FindProvider("nonexistent"))
+
+	// Nil alias map still works.
+	cfg3 := &Config{
+		Providers: []ProviderConfig{
+			{Name: "alpha", Type: "openai"},
+		},
+	}
+	p = cfg3.FindProvider("alpha")
+	require.NotNil(t, p)
+	assert.Equal(t, "openai", p.Type)
+	assert.Nil(t, cfg3.FindProvider("beta"))
+}
+
+func TestFindProvider_Alias_Chain(t *testing.T) {
+	// Chained aliases are not supported: a → b → actual
+	// Only one level of alias resolution is performed.
+	cfg := &Config{
+		Providers: []ProviderConfig{
+			{Name: "actual", Type: "openai", Model: "gpt-4o"},
+		},
+		ProviderAliases: map[string]string{
+			"a": "b",
+			"b": "c",
+			"c": "actual",
+		},
+	}
+	// "a" resolves to "b", but "b" is not a provider name — returns nil.
+	assert.Nil(t, cfg.FindProvider("a"))
+}
+
 func TestResolve_FullConfig(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	cfg := &Config{
@@ -575,7 +650,6 @@ func writeMCPJSON(t *testing.T, path string, servers []MCPServerConfig) {
 	require.NoError(t, err)
 	require.NoError(t, os.WriteFile(path, data, 0600))
 }
-
 
 func TestTokenStorageName(t *testing.T) {
 	// Stdio server: uses server name

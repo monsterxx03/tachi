@@ -696,6 +696,7 @@ type Config struct {
 	TitleProvider          string               `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
 	CommitProvider         string               `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)
 	RunProvider            string               `yaml:"run_provider"`                    // optional: provider name for tachi -p run mode (defaults to main provider)
+	ProviderAliases        map[string]string    `yaml:"provider_aliases"`                // alias name → actual provider name
 	Memory                 MemoryConfig         `yaml:"memory"`                          // pluggable memory backend
 	Channel                ChannelConfig        `yaml:"channel"`                         // IM channel backends
 	Subagent               SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration
@@ -893,9 +894,17 @@ func Init() (string, error) {
 }
 
 func (c *Config) FindProvider(name string) *ProviderConfig {
-	for i := range c.Providers {
-		if c.Providers[i].Name == name {
-			return &c.Providers[i]
+	// Resolve alias first: if name is an alias, use the target provider name.
+	target := name
+	if c.ProviderAliases != nil {
+		if t, ok := c.ProviderAliases[name]; ok {
+			target = t
+		}
+	}
+	// Look up the (possibly resolved) name in providers.
+	for j := range c.Providers {
+		if c.Providers[j].Name == target {
+			return &c.Providers[j]
 		}
 	}
 	return nil
