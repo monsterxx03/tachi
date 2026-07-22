@@ -68,7 +68,7 @@ YOU MUST:
 	fmt.Fprintf(&sb, "Reply in %s. ", language)
 
 	// ── Environment ────────────────────────────────────────────────────────
-	sb.WriteString("## Environment\n\n")
+	sb.WriteString("\n\n## Environment\n\n")
 
 	if cwd == "" {
 		cwd = config.FindProjectRoot()
