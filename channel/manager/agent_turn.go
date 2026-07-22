@@ -423,6 +423,10 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}
 
+	// Append channel-awareness prompt (active roles + cross-session awareness).
+	// This is specific to channel mode — TUI / CLI mode doesn't get it.
+	systemPrompt += "\n" + agent.BuildChannelAwarenessPrompt()
+
 	// Store thread context for AskUser support — drainEvents uses these
 	// to send questions to the user and wait for a reply.
 	ta.mu.Lock()
