@@ -239,8 +239,7 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 // with a model that supports thinking mode. These models need a top-level
 // "thinking" field to disable thinking.
 func (p *OpenAIProvider) isDeepSeekReasoningModel() bool {
-	// All DeepSeek-prefixed models support thinking mode.
-	return strings.HasPrefix(strings.ToLower(p.model), "deepseek")
+	return strings.Contains(strings.ToLower(p.model), "deepseek")
 }
 
 // createChatWithDisabledThinking sends a chat completion request with
