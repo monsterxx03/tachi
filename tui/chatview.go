@@ -310,6 +310,8 @@ func (c *ChatView) LoadHistory(sessionMsgs []session.Message) {
 			}})
 		case session.MessageTypeToolResult, session.MessageTypeConfirm:
 			// Tool results are rendered inline with their tool call; confirm is UI-only
+		case session.MessageTypeReminder:
+			// Reminders are not displayed in the chat view
 		}
 	}
 

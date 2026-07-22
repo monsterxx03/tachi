@@ -239,7 +239,12 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		rctx := a.buildReminderContext(true, false)
-		wrappedUser := a.reminderCollector.WrapUserMessage(ctx, userMessage, rctx)
+		rctx.CurrentPrompt = userMessage
+		reminderBlock := a.reminderCollector.Collect(ctx, rctx)
+		wrappedUser := userMessage
+		if reminderBlock != "" {
+			wrappedUser = reminderBlock + userMessage
+		}
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
@@ -280,7 +285,12 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		reminderIsFirst := isFirstMessage || (len(history) > 0 && !historyHasReminder(history))
 
 		rctx := a.buildReminderContext(reminderIsFirst, false)
-		wrappedUser := a.reminderCollector.WrapUserMessage(ctx, userMessage, rctx)
+		rctx.CurrentPrompt = userMessage
+		reminderBlock := a.reminderCollector.Collect(ctx, rctx)
+		wrappedUser := userMessage
+		if reminderBlock != "" {
+			wrappedUser = reminderBlock + userMessage
+		}
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 
 		userMsg := llm.Message{Role: "user", Content: wrappedUser}
@@ -322,6 +332,15 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			a.StartSessionMemory()
 		}
 		if a.sessionManager != nil {
+			// Record the system reminder block before the user message so the
+			// session file order matches what the LLM sees (reminder prepended
+			// to user message).
+			if reminderBlock != "" {
+				a.recordSession(&session.Message{
+					Type:    session.MessageTypeReminder,
+					Content: reminderBlock,
+				})
+			}
 			// Record the original user message (without system-reminder wrappers)
 			a.recordSession(&session.Message{
 				Type:    session.MessageTypeUser,
@@ -591,6 +610,10 @@ func (a *AIAgent) handleToolCallFinish(
 	if block := a.reminderCollector.Collect(ctx, rctx); block != "" {
 		*messages = append(*messages, llm.Message{Role: "user", Content: block})
 		a.logger.Info(ctx, "Agent: loop reminder injected", "block", truncateForLog(block, 200))
+		a.recordSession(&session.Message{
+			Type:    session.MessageTypeReminder,
+			Content: block,
+		})
 	}
 
 	return true
@@ -662,14 +685,27 @@ func (a *AIAgent) handleLengthFinish(
 	} else {
 		continuationText = "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
 	}
+
+	// Wrap the continuation message with reminders
+	rctx := a.buildReminderContext(false, false)
+	rctx.CurrentPrompt = continuationText
+	reminderBlock := a.reminderCollector.Collect(ctx, rctx)
+	// Record reminder before user message so session file order matches LLM input
+	if reminderBlock != "" {
+		a.recordSession(&session.Message{
+			Type:    session.MessageTypeReminder,
+			Content: reminderBlock,
+		})
+	}
 	a.recordSession(&session.Message{
 		Type:    session.MessageTypeUser,
 		Content: continuationText,
 	})
 
-	// Wrap the continuation message with reminders
-	rctx := a.buildReminderContext(false, false)
-	wrappedContinuation := a.reminderCollector.WrapUserMessage(ctx, continuationText, rctx)
+	wrappedContinuation := continuationText
+	if reminderBlock != "" {
+		wrappedContinuation = reminderBlock + continuationText
+	}
 
 	*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
 	return true

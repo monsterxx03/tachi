@@ -531,6 +531,9 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 			})
 
 			// MessageTypeConfirm is internal — skip in replay
+
+		case session.MessageTypeReminder:
+			// Reminders are not replayed via ACP
 		}
 	}
 

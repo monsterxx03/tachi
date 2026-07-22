@@ -102,6 +102,7 @@
   .ev-error .ev-body{border-left-color:var(--red)}
   .ev-user .ev-body{border-left-color:var(--blue)}
   .ev-subagent .ev-body{border-left-color:var(--purple)}
+  .ev-reminder .ev-body{border-left-color:var(--yellow)}
   .ev-content{font-size:14px;color:var(--text);white-space:pre-wrap;word-break:break-word;overflow-wrap:break-word;line-height:1.65}
   .ev-content.mono{font-family:var(--mono);font-size:12px;line-height:1.55}
   .ev-thinking .ev-content{color:var(--text-dim);font-style:italic}
@@ -150,6 +151,7 @@
         <span class="chip on" data-type="text" onclick="toggleChip(this)">💬 回复</span>
         <span class="chip on" data-type="tool_call" onclick="toggleChip(this)">🔧 工具</span>
         <span class="chip on" data-type="tool_result" onclick="toggleChip(this)">📋 结果</span>
+        <span class="chip on" data-type="reminder" onclick="toggleChip(this)">ℹ️ 提醒</span>
       </div>
       <button class="btn" onclick="expandAll()">展开全部</button>
       <button class="btn" onclick="collapseAll()">折叠全部</button>
@@ -250,6 +252,15 @@
   <div class="ev-body collapsed">
     <div class="ev-content mono">{{.Content}}</div>
   </div>
+  {{else if eq .Type "reminder"}}
+  <div class="ev-header clickable" onclick="toggleReminder(this)">
+    <span class="ev-icon">{{.Icon}}</span>
+    <span class="ev-toggle" data-toggle-type="reminder">▶ 系统提醒</span>
+    <span class="ev-meta">{{.Timestamp}}</span>
+  </div>
+  <div class="ev-body collapsed">
+    <div class="ev-content mono" style="font-size:12px;color:var(--text-dim)">{{.Content}}</div>
+  </div>
   {{end}}
 </div>
 {{end}}
@@ -317,6 +328,15 @@
     }
   }
 
+  function toggleReminder(hdr) {
+    var body = hdr.nextElementSibling;
+    var tgl = hdr.querySelector('.ev-toggle');
+    var collapsed = body.classList.toggle('collapsed');
+    if (tgl) {
+      tgl.textContent = collapsed ? '▶ 系统提醒' : '▼ 系统提醒';
+    }
+  }
+
   function toggleChildren(toggle) {
     var ev = toggle.closest('.ev');
     var children = ev.querySelector('.ev-children');
@@ -339,6 +359,12 @@
     document.querySelectorAll('.ev-toggle[data-toggle-type="result"]').forEach(function(t) {
       t.textContent = '▼ 结果';
     });
+    document.querySelectorAll('.ev-reminder .ev-body.collapsed').forEach(function(b) {
+      b.classList.remove('collapsed');
+    });
+    document.querySelectorAll('.ev-toggle[data-toggle-type="reminder"]').forEach(function(t) {
+      t.textContent = '▼ 系统提醒';
+    });
     document.querySelectorAll('.ev-children.collapsed').forEach(function(c) {
       c.classList.remove('collapsed');
     });
@@ -359,6 +385,12 @@
     });
     document.querySelectorAll('.ev-toggle[data-toggle-type="result"]').forEach(function(t) {
       t.textContent = '▶ 结果';
+    });
+    document.querySelectorAll('.ev-reminder .ev-body').forEach(function(b) {
+      b.classList.add('collapsed');
+    });
+    document.querySelectorAll('.ev-toggle[data-toggle-type="reminder"]').forEach(function(t) {
+      t.textContent = '▶ 系统提醒';
     });
     document.querySelectorAll('.ev-children').forEach(function(c) {
       c.classList.add('collapsed');

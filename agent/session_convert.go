@@ -131,6 +131,11 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 		case session.MessageTypeConfirm:
 			// Confirm messages are UI-only — skip them.
 			continue
+		case session.MessageTypeReminder:
+			// Reminder blocks are recorded separately for audit/debug but
+			// are already embedded in the user message content (or will be
+			// regenerated on resume). Skip them to avoid duplication.
+			continue
 		}
 	}
 

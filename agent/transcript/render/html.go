@@ -283,9 +283,18 @@ func buildTranscriptViewFromMessages(msgs []session.Message) *TranscriptView {
 	// Group messages into turns: each user message starts a new turn.
 	turnID := 1
 	var currentEvents []EventView
+	var pendingReminder *EventView // buffered until next user message
 
 	for _, msg := range msgs {
 		ev := sessionMessageToEventView(msg)
+
+		// Buffer reminder to include with the next user message's turn,
+		// rather than creating a broken standalone turn.
+		if msg.Type == session.MessageTypeReminder {
+			e := ev
+			pendingReminder = &e
+			continue
+		}
 
 		// User messages mark new turn boundaries
 		if msg.Type == session.MessageTypeUser && len(currentEvents) > 0 {
@@ -293,10 +302,20 @@ func buildTranscriptViewFromMessages(msgs []session.Message) *TranscriptView {
 			turnID++
 			currentEvents = nil
 		}
+
+		// Insert buffered reminder before the current event
+		if pendingReminder != nil {
+			currentEvents = append(currentEvents, *pendingReminder)
+			pendingReminder = nil
+		}
+
 		currentEvents = append(currentEvents, ev)
 	}
 
-	// Flush final turn
+	// Flush final turn (including any remaining buffered reminder)
+	if pendingReminder != nil {
+		currentEvents = append(currentEvents, *pendingReminder)
+	}
 	if len(currentEvents) > 0 {
 		tv.Turns = append(tv.Turns, TurnView{ID: turnID, Events: currentEvents})
 	}
@@ -334,6 +353,8 @@ func sessionMessageToEventView(msg session.Message) EventView {
 		ev.Content = msg.Result
 	case session.MessageTypeConfirm:
 		ev.Type = "confirm"
+	case session.MessageTypeReminder:
+		ev.Type = "reminder"
 	default:
 		ev.Type = string(msg.Type)
 	}
@@ -361,6 +382,8 @@ func sessionIconAndClass(msg session.Message) (icon, cssClass string) {
 			return "❌", "event-tool-result event-error"
 		}
 		return "📋", "event-tool-result"
+	case session.MessageTypeReminder:
+		return "ℹ️", "event-reminder"
 	default:
 		return "•", ""
 	}

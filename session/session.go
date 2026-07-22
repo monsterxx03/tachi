@@ -33,6 +33,7 @@ const (
 	MessageTypeToolCall   MessageType = "tool_call"
 	MessageTypeToolResult MessageType = "tool_result"
 	MessageTypeConfirm    MessageType = "confirm"
+	MessageTypeReminder   MessageType = "reminder"
 )
 
 // Usage records token usage from a single LLM API response.
