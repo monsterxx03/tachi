@@ -41,13 +41,10 @@ func (t *RecordMemoryTool) Name() string { return ToolNameRecordMemory }
 
 func (t *RecordMemoryTool) IsDestructive() bool { return true }
 func (t *RecordMemoryTool) Description() string {
-	return "Record important information to persistent memory. Use this when you encounter " +
-		"notable facts, user preferences, project-specific conventions, important decisions, " +
-		"or configuration details that should be remembered across conversations. " +
-		"Think carefully about what's worth recording — focus on information with lasting " +
-		"significance. Routine conversation details do not need to be recorded. " +
-		"Recorded memories will be automatically recalled via semantic search in future " +
-		"conversations when relevant."
+	return "Record important information to persistent memory. " +
+		"Use when you encounter notable facts, user preferences, project conventions, " +
+		"important decisions, or configuration details worth remembering across conversations. " +
+		"Focus on lasting significance — routine details do not need to be recorded."
 }
 
 func (t *RecordMemoryTool) Properties() map[string]PropertySchema {

@@ -59,10 +59,8 @@ func (t *WebFetchTool) Name() string   { return ToolNameWebFetch }
 func (t *WebFetchTool) Parallel() bool { return true }
 
 func (t *WebFetchTool) Description() string {
-	return "Fetches content from a specified URL and converts HTML to markdown. " +
+	return "Fetches content from a URL and converts HTML to markdown. " +
 		"Takes a URL and an optional prompt describing what to extract. " +
-		"Returns the page content as markdown text. " +
-		"HTTP URLs are automatically upgraded to HTTPS. " +
 		"Results are cached for 15 minutes."
 }
 

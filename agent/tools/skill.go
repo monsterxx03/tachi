@@ -6,8 +6,6 @@ import (
 	"fmt"
 	"sort"
 	"strings"
-
-	"github.com/monsterxx03/tachi/config"
 )
 
 // ---- Interfaces ----
@@ -116,13 +114,9 @@ func NewSkillTool(mgr SkillManager) *SkillTool {
 func (t *SkillTool) Name() string { return ToolNameSkill }
 
 func (t *SkillTool) Description() string {
-	return "Manage skills: list available skills, view skill content, create new skills, update existing skills, or delete skills. " +
-		"Use operation=\"list\" to browse available skills. " +
-		"Use operation=\"view\" (with name) to load a skill's full instructions. " +
-		"Use operation=\"create\" (with name, description, body) to create a new skill. " +
-		"Use operation=\"update\" (with name) to modify an existing skill. " +
-		"Use operation=\"delete\" (with name) to delete a skill. " +
-		fmt.Sprintf("Defaults to project-level (.tachi/skills/); set source=\"global\" for %s/.", config.GlobalSkillsDir())
+	return "Manage skills: list, view, create, update, or delete skills. " +
+		"Use operation=\"list\" to browse, \"view\" to load instructions, " +
+		"\"create\" to add a new skill, \"update\" to modify, \"delete\" to remove."
 }
 
 func (t *SkillTool) Properties() map[string]PropertySchema {

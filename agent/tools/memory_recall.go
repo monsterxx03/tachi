@@ -34,13 +34,8 @@ func (t *MemoryRecallTool) Name() string { return ToolNameMemoryRecall }
 
 func (t *MemoryRecallTool) Description() string {
 	return "Search persistent memory for relevant past information. " +
-		"Use this when you need to recall specific information from past " +
-		"sessions: user preferences, project-specific conventions, previous " +
-		"decisions, configuration details, or any other notable facts. " +
-		"Memories are automatically recalled when relevant — use this tool " +
-		"for explicit deeper searches when the automatic recall doesn't " +
-		"surface enough context. " +
-		"Think about what exact query would find the memory you need."
+		"Use for explicit deeper searches when automatic recall doesn't " +
+		"surface enough context. Think about what exact query would find the memory you need."
 }
 
 func (t *MemoryRecallTool) Properties() map[string]PropertySchema {

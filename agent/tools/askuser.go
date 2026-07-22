@@ -33,18 +33,11 @@ type AskUserTool struct{}
 func (t AskUserTool) Name() string { return ToolNameAskUser }
 
 func (t AskUserTool) Description() string {
-	return "Use this tool when you need to ask the user questions during execution. " +
-		"This allows you to:\n" +
-		"1. Gather user preferences or requirements\n" +
-		"2. Clarify ambiguous instructions\n" +
-		"3. Get decisions on implementation choices as you work\n" +
-		"4. Offer choices to the user about what direction to take.\n\n" +
-		"Usage notes:\n" +
-		"- When you have specific options in mind, provide them in the options array (2-4 items). " +
-		"Each option has a label and description. Use multiSelect: true to allow multiple selections.\n" +
-		"- When you need open-ended input and cannot enumerate reasonable options, OMIT the options field " +
-		"entirely. The user will be presented with a free-text input box.\n" +
-		"- If you recommend a specific option, make that the first option in the list and add \"(Recommended)\" at the end of the label"
+	return "Ask the user questions during execution. " +
+		"Use to gather preferences, clarify ambiguous instructions, " +
+		"or get decisions on implementation choices. " +
+		"When you have specific options, provide them in the options array (2-4 items). " +
+		"For open-ended input, omit the options field for a free-text box."
 }
 
 func (t AskUserTool) Properties() map[string]PropertySchema {
@@ -59,7 +52,7 @@ func (t AskUserTool) Properties() map[string]PropertySchema {
 					"header":      map[string]any{"type": "string", "description": "Short label displayed as a chip/tag"},
 					"multiSelect": map[string]any{"type": "boolean", "description": "Whether to allow multiple selections"},
 					"options": map[string]any{
-						"type": "array",
+						"type":        "array",
 						"description": "Pre-defined choices (omit this field entirely for a free-text input box instead)",
 						"items": map[string]any{
 							"type": "object",
