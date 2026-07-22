@@ -390,9 +390,9 @@ func TestTokenBreakdown_ToolResultCategory(t *testing.T) {
 		"Total should equal user + assistant + tool results (no system prompt, no tools)")
 }
 
-// TestTokenBreakdown_OtherCategory verifies that non-prompt "system"
-// messages are captured in the Other category, while "steer" is treated
-// as user input (counted in UserMessages).
+// TestTokenBreakdown_OtherCategory verifies that "system" role messages
+// are NOT counted in Other (they're tracked via SystemPrompt), and that
+// Other only captures genuinely unrecognized roles.
 func TestTokenBreakdown_OtherCategory(t *testing.T) {
 	msgs := []llm.Message{
 		{Role: "user", Content: "hello"},
@@ -400,9 +400,11 @@ func TestTokenBreakdown_OtherCategory(t *testing.T) {
 	}
 	tb := estimateInputTokens(msgs, "", nil)
 	assert.Greater(t, tb.UserMessages, int64(0))
-	assert.Greater(t, tb.Other, int64(0), "system msgs should be in Other category")
-	assert.Equal(t, tb.Total, tb.UserMessages+tb.Other,
-		"Total should equal user + other (no system prompt, no tools)")
+	assert.Equal(t, int64(0), tb.Other, "system msgs should NOT be in Other (counted in SystemPrompt)")
+	assert.Greater(t, tb.Total, tb.UserMessages,
+		"Total should include system msg tokens even though they're not in Other")
+	assert.Equal(t, int64(0), tb.SystemPrompt,
+		"SystemPrompt should be 0 since systemPrompt param is empty")
 }
 
 // TestTokenBreakdown_SteerIsUser verifies that "steer" messages are

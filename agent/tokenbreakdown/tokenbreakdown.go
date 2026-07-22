@@ -15,6 +15,6 @@ type Breakdown struct {
 	UserMessages      int64 // messages with Role "user" (content + content parts + tool_call_id)
 	AssistantMessages int64 // messages with Role "assistant" (content + content parts + tool calls + tool_call_id)
 	ToolResults       int64 // messages with Role "tool" (tool execution outputs)
-	Other             int64 // messages with Role "steer" or additional "system" messages
+	Other             int64 // messages with unrecognized roles (not "user"/"steer"/"assistant"/"tool"/"system")
 	Total             int64 // sum of all categories
 }

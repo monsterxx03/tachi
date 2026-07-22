@@ -186,8 +186,11 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []
 			tb.AssistantMessages += msgTokens
 		case "tool":
 			tb.ToolResults += msgTokens
+		case "system":
+			// System prompt is already counted in tb.SystemPrompt above.
+			// Skip to avoid double-counting in Other.
 		default:
-			// "system" (non-prompt) and any other roles
+			// Any other unrecognized roles
 			tb.Other += msgTokens
 		}
 	}
