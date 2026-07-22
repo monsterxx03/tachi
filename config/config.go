@@ -910,6 +910,20 @@ func (c *Config) FindProvider(name string) *ProviderConfig {
 	return nil
 }
 
+// ResolveAlias resolves an alias to the actual provider name.
+// If the name is not an alias, it returns the name unchanged.
+// This is used when storing provider names in session metadata,
+// so that the stored value reflects the real provider config name
+// rather than a potentially transient alias.
+func (c *Config) ResolveAlias(name string) string {
+	if c.ProviderAliases != nil {
+		if t, ok := c.ProviderAliases[name]; ok {
+			return t
+		}
+	}
+	return name
+}
+
 // MCPEnabled returns true if at least one MCP server is configured.
 func (c *Config) MCPEnabled() bool {
 	return len(c.MCPServers) > 0

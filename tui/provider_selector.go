@@ -99,7 +99,8 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	if m.shouldCompactBeforeSwitch(currentEstimate, targetCW) {
 		m.pendingSwitchProvider = &pendingSwitchProvider{
 			provider:      provider,
-			providerInfo: providerInfo,
+			providerName:  pCfg.Name,
+			providerInfo:  providerInfo,
 			contextWindow: targetCW,
 		}
 
@@ -130,6 +131,17 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	m.statusbar.SetProviderInfo(providerInfo)
 	m.statusbar.SetContextWindow(targetCW)
 	m.refreshSessionCost()
+
+	// Persist the new provider name to the session metadata.
+	if sm := m.agent.SessionManager(); sm != nil {
+		if curr := sm.Current(); curr != nil {
+			if curr.ProviderName != pCfg.Name {
+				curr.ProviderName = pCfg.Name
+				_ = sm.UpdateMeta(curr) // best-effort
+			}
+		}
+	}
+
 	m.exitModelSelect(fmt.Sprintf("Switched to %s", providerInfo))
 	return nil
 }
@@ -160,7 +172,8 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 			return func() tea.Msg {
 				return switchProviderMsg{
 					provider:      ps.provider,
-					providerInfo: ps.providerInfo,
+					providerName:  ps.providerName,
+					providerInfo:  ps.providerInfo,
 					contextWindow: ps.contextWindow,
 				}
 			}
@@ -213,6 +226,18 @@ func (m *Model) applyPendingSwitch() {
 	m.statusbar.SetProviderInfo(ps.providerInfo)
 	m.statusbar.SetContextWindow(ps.contextWindow)
 	m.refreshSessionCost()
+
+	// Persist the new provider name to the session metadata.
+	if ps.providerName != "" {
+		if sm := m.agent.SessionManager(); sm != nil {
+			if curr := sm.Current(); curr != nil {
+				if curr.ProviderName != ps.providerName {
+					curr.ProviderName = ps.providerName
+					_ = sm.UpdateMeta(curr) // best-effort
+				}
+			}
+		}
+	}
 
 	m.chatview.AddMessage(chatMessage{
 		Role:    "assistant",

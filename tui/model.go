@@ -63,6 +63,7 @@ type chatMessage struct {
 // be used for the LLM summarization call.
 type pendingSwitchProvider struct {
 	provider      llm.Provider
+	providerName  string // config provider name for session metadata
 	providerInfo  string
 	contextWindow int64
 }
@@ -73,6 +74,7 @@ type pendingSwitchProvider struct {
 // that the Update function handles synchronously.
 type switchProviderMsg struct {
 	provider      llm.Provider
+	providerName  string // config provider name for session metadata
 	providerInfo  string
 	contextWindow int64
 }
@@ -606,6 +608,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case switchProviderMsg:
 		m.pendingSwitchProvider = &pendingSwitchProvider{
 			provider:      msg.provider,
+			providerName:  msg.providerName,
 			providerInfo:  msg.providerInfo,
 			contextWindow: msg.contextWindow,
 		}

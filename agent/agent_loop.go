@@ -317,7 +317,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			providerName := a.provider.Name()
 			if a.cfg != nil {
 				if pn := config.ResolveProviderName(a.cfg); pn != "" {
-					providerName = pn
+					// Resolve alias to the actual provider name for session storage,
+					// so that session metadata and /usage show the real provider name.
+					providerName = a.cfg.ResolveAlias(pn)
 				}
 			}
 			wd, _ := os.Getwd()

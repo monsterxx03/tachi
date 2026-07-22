@@ -285,14 +285,14 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	if curr == nil {
 		// No session at all — create one now to persist the model choice.
 		wd, _ := os.Getwd()
-		newSess, err := sm.New(name, wd)
+		newSess, err := sm.New(m.cfg.ResolveAlias(name), wd)
 		if err != nil {
 			return "", fmt.Errorf("create session: %w", err)
 		}
 		sm.SetThreadID(threadID)
 		curr = newSess
 	}
-	curr.ProviderName = name
+	curr.ProviderName = m.cfg.ResolveAlias(name)
 	curr.UpdatedAt = time.Now()
 	if err := sm.UpdateMeta(curr); err != nil {
 		m.logger.Error(context.Background(), "channel: /model update session meta failed", err, "thread", threadID)
