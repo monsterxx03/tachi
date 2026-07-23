@@ -1,0 +1,340 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GitHub Channel — 交互流程</title>
+<style>
+  :root {
+    --bg: #0d1117;
+    --card: #161b22;
+    --border: #30363d;
+    --text: #e6edf3;
+    --muted: #8b949e;
+    --accent: #58a6ff;
+    --green: #3fb950;
+    --orange: #d29922;
+    --red: #f85149;
+    --purple: #bc8cff;
+    --pink: #f778ba;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Segoe UI', Helvetica, Arial, sans-serif; background: var(--bg); color: var(--text); line-height: 1.6; padding: 40px 20px; }
+  .container { max-width: 1200px; margin: 0 auto; }
+  
+  h1 { font-size: 28px; font-weight: 600; margin-bottom: 8px; display: flex; align-items: center; gap: 12px; }
+  h1 span { background: var(--green); color: #0d1117; font-size: 14px; padding: 2px 10px; border-radius: 20px; font-weight: 500; }
+  .subtitle { color: var(--muted); font-size: 15px; margin-bottom: 40px; border-left: 3px solid var(--accent); padding-left: 16px; }
+
+  /* Layout */
+  .flow-row { display: flex; gap: 16px; margin-bottom: 16px; align-items: stretch; }
+  .flow-row.center { justify-content: center; }
+  
+  /* Cards */
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; flex: 1; position: relative; }
+  .card-title { font-size: 13px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--muted); margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .card-title .icon { font-size: 18px; }
+  .card-body { font-size: 14px; color: var(--text); }
+  .card-body ul { list-style: none; padding: 0; }
+  .card-body li { padding: 4px 0; padding-left: 16px; position: relative; }
+  .card-body li::before { content: '›'; position: absolute; left: 0; color: var(--accent); font-weight: bold; }
+
+  /* State Box */
+  .state-box { display: inline-flex; align-items: center; gap: 6px; background: rgba(88,166,255,0.1); border: 1px solid rgba(88,166,255,0.3); border-radius: 6px; padding: 3px 10px; font-size: 12px; font-weight: 500; font-family: 'SF Mono', 'Fira Code', monospace; color: var(--accent); }
+
+  /* Arrows */
+  .arrow-down { text-align: center; padding: 8px 0; color: var(--muted); font-size: 22px; }
+  .arrow-right { display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 22px; padding: 0 8px; min-width: 40px; }
+
+  /* Timeline / state machine */
+  .state-machine { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 24px; margin-top: 24px; }
+  .state-machine h3 { font-size: 15px; font-weight: 600; margin-bottom: 16px; color: var(--text); }
+  .state-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; }
+  .state-node { background: rgba(88,166,255,0.05); border: 1px solid rgba(88,166,255,0.2); border-radius: 8px; padding: 10px 12px; text-align: center; }
+  .state-node .name { font-weight: 600; font-size: 13px; font-family: 'SF Mono', 'Fira Code', monospace; }
+  .state-node .desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+  .state-node.terminal { border-color: rgba(248,81,73,0.3); background: rgba(248,81,73,0.05); }
+  .state-node.terminal .name { color: var(--red); }
+  .state-node.active { border-color: rgba(63,185,80,0.5); background: rgba(63,185,80,0.08); }
+  .state-node.active .name { color: var(--green); }
+
+  .transition-labels { margin-top: 12px; display: flex; flex-wrap: wrap; gap: 8px; justify-content: center; }
+  .transition-tag { background: var(--border); color: var(--muted); font-size: 11px; padding: 2px 8px; border-radius: 4px; font-family: 'SF Mono', 'Fira Code', monospace; }
+
+  /* Security layers */
+  .security-strip { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 24px; }
+  .security-layer { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 16px; text-align: center; }
+  .security-layer .num { font-size: 24px; font-weight: 700; color: var(--accent); }
+  .security-layer .label { font-size: 13px; font-weight: 600; margin: 4px 0; }
+  .security-layer .desc { font-size: 12px; color: var(--muted); }
+
+  /* Config block */
+  .config-block { background: #1c2128; border: 1px solid var(--border); border-radius: 8px; padding: 16px; font-family: 'SF Mono', 'Fira Code', monospace; font-size: 13px; line-height: 1.5; overflow-x: auto; margin-top: 24px; }
+  .config-block .comment { color: var(--muted); }
+  .config-block .key { color: var(--accent); }
+  .config-block .val { color: var(--green); }
+  .config-block .bool { color: var(--purple); }
+
+  /* Phase cards */
+  .phase-card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 20px; flex: 1; }
+  .phase-card h3 { font-size: 15px; font-weight: 600; margin-bottom: 12px; display: flex; align-items: center; gap: 8px; }
+  .phase-card .tools { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+  .phase-card .tool-tag { background: rgba(188,140,255,0.12); color: var(--purple); font-size: 11px; padding: 2px 8px; border-radius: 4px; font-family: 'SF Mono', monospace; }
+
+  .badge { display: inline-block; font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 500; }
+  .badge.ro { background: rgba(63,185,80,0.15); color: var(--green); }
+  .badge.rw { background: rgba(210,153,34,0.15); color: var(--orange); }
+
+  @media (max-width: 700px) {
+    .flow-row { flex-direction: column; }
+    .arrow-right { transform: rotate(90deg); padding: 4px 0; }
+    .security-strip { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>🤖 GitHub Channel <span>v1</span></h1>
+<div class="subtitle">定时轮询 GitHub Issue → LLM 讨论 → 自动生成 Pull Request</div>
+
+<!-- ===== Phase 1: Poll ===== -->
+<div class="flow-row">
+  <div class="phase-card" style="flex:0.7">
+    <h3>⏱️ Poller</h3>
+    <div class="card-body">
+      <ul>
+        <li>每 <strong>5 分钟</strong> 调用 GitHub Issues API</li>
+        <li>获取 <code>updated_since</code> 的 open issue</li>
+        <li>跳过 PR、bot 评论、已处理的 issue</li>
+        <li>检测新 comment → 入队 worker</li>
+      </ul>
+      <div style="margin-top:10px;font-size:12px;color:var(--muted);">
+        in-flight 跟踪防止重复处理 · 零 comment 重入防护 · 种子标记跳过存量 issue
+      </div>
+    </div>
+  </div>
+  <div class="arrow-right">⤵</div>
+  <div class="phase-card" style="flex:0.5">
+    <h3>📦 Work Queue</h3>
+    <div class="card-body">
+      <div style="font-size:36px;text-align:center;padding:8px 0;">📋</div>
+      <div style="text-align:center;color:var(--muted);font-size:13px;">
+        缓冲 500 个 WorkItem<br>
+        2 个 worker goroutine 消费
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="arrow-down">⤵</div>
+
+<!-- ===== Phase 2: Worker Dispatch ===== -->
+<div class="flow-row center">
+  <div class="phase-card" style="max-width:400px;">
+    <h3>⚙️ Worker — processWorkItem</h3>
+    <div class="card-body" style="text-align:center;">
+      <div style="display:flex;justify-content:center;gap:10px;margin:8px 0;">
+        <span class="state-box">new</span>
+        <span style="color:var(--muted);font-size:18px;">→</span>
+        <span class="state-box">discussing</span>
+        <span style="color:var(--muted);font-size:18px;">→</span>
+        <span class="state-box">waiting_author</span>
+      </div>
+      <div style="display:flex;justify-content:center;gap:10px;margin:8px 0;">
+        <span class="state-box" style="border-color:rgba(210,153,34,0.4);color:var(--orange);">ready_for_pr</span>
+        <span style="color:var(--muted);font-size:18px;">→</span>
+        <span class="state-box" style="border-color:rgba(63,185,80,0.4);color:var(--green);">implementing</span>
+        <span style="color:var(--muted);font-size:18px;">→</span>
+        <span class="state-box" style="border-color:rgba(63,185,80,0.4);color:var(--green);">pr_created</span>
+      </div>
+      <div style="margin-top:8px;">
+        <span class="state-box" style="border-color:rgba(248,81,73,0.3);color:var(--red);">skipped</span>
+        <span style="color:var(--muted);margin:0 4px;">(terminal)</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="flow-row" style="margin-top:24px;">
+  <!-- Discussion Phase -->
+  <div class="phase-card">
+    <h3>💬 讨论 Agent <span class="badge ro">READ ONLY</span></h3>
+    <div class="card-body">
+      <ul>
+        <li><code>NewAIAgent</code> + 只读工具白名单</li>
+        <li>Issue body + comments 包裹 <code>--- BEGIN UNTRUSTED ---</code></li>
+        <li>英文系统提示词：注入防护 + 输出协议</li>
+        <li>解析回复：<code>[NO_REPLY]</code> → 等待 · <code>[READY_FOR_PR]</code> → 准备实现</li>
+        <li>通过 GitHub API 发布 comment</li>
+      </ul>
+      <div class="tools">
+        <span class="tool-tag">ReadFile</span>
+        <span class="tool-tag">Grep</span>
+        <span class="tool-tag">Glob</span>
+        <span class="tool-tag">WebSearch</span>
+        <span class="tool-tag">WebFetch</span>
+      </div>
+      <div style="margin-top:10px;font-size:12px;color:var(--muted);">
+        无 Memory · 无 Skill · 无 Bash · 无 WriteFile · 最多 10 轮迭代
+      </div>
+    </div>
+  </div>
+  <div class="arrow-right" style="min-width:30px;">⤵</div>
+  <!-- PR Generation Phase -->
+  <div class="phase-card">
+    <h3>🔧 PR 生成 Agent <span class="badge rw">READ-WRITE</span></h3>
+    <div class="card-body">
+      <ul>
+        <li>PR 门控：<code>author_association</code> + label 白名单</li>
+        <li><code>git worktree add -b tachi/issue-N-UUID</code></li>
+        <li>Bash 真白名单：allow + <code>*</code> ask 兜底 (fail-closed)</li>
+        <li><code>WriteFile</code> 限定 worktree 内 (PathPolicy)</li>
+        <li><code>git push</code> via extraheader (不落盘) → API 创建 Draft PR</li>
+      </ul>
+      <div class="tools">
+        <span class="tool-tag">ReadFile</span>
+        <span class="tool-tag">WriteFile</span>
+        <span class="tool-tag">EditFile</span>
+        <span class="tool-tag">Bash</span>
+        <span class="tool-tag">Glob</span>
+        <span class="tool-tag">Grep</span>
+      </div>
+      <div style="margin-top:10px;font-size:12px;color:var(--muted);">
+        worktree 用完即删 · 分支名含 UUID 防重试冲突 · 最多 50 轮迭代 · 3 次重试上限
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== State Machine ===== -->
+<div class="state-machine">
+  <h3>📊 状态机</h3>
+  <div class="state-grid">
+    <div class="state-node"><div class="name">new</div><div class="desc">新 issue 待处理</div></div>
+    <div class="state-node active"><div class="name">discussing</div><div class="desc">讨论中</div></div>
+    <div class="state-node"><div class="name">ready_for_pr</div><div class="desc">方案清晰，待实现</div></div>
+    <div class="state-node"><div class="name">implementing</div><div class="desc">正在生成代码</div></div>
+    <div class="state-node"><div class="name">waiting_author</div><div class="desc">等待作者回复</div></div>
+    <div class="state-node active"><div class="name">pr_created</div><div class="desc">PR 已提交 ✅</div></div>
+    <div class="state-node terminal"><div class="name">skipped</div><div class="desc">已跳过</div></div>
+  </div>
+  <div class="transition-labels">
+    <span class="transition-tag">discuss</span>
+    <span class="transition-tag">skip</span>
+    <span class="transition-tag">wait_author</span>
+    <span class="transition-tag">ready_for_pr</span>
+    <span class="transition-tag">implement</span>
+    <span class="transition-tag">retry</span>
+    <span class="transition-tag">pr_created</span>
+  </div>
+  <div style="margin-top:12px;font-size:12px;color:var(--muted);text-align:center;">
+    运行时校验 — 非法转换记录 WARNING 日志
+  </div>
+</div>
+
+<!-- ===== Security Layers ===== -->
+<div style="margin-top:24px;">
+  <h2 style="font-size:18px;font-weight:600;margin-bottom:12px;">🛡️ 安全四层</h2>
+  <div class="security-strip">
+    <div class="security-layer">
+      <div class="num">L1</div>
+      <div class="label">输入检测</div>
+      <div class="desc">高置信模式 WARN · 低置信 INFO<br>不修改内容，不暴露规则</div>
+    </div>
+    <div class="security-layer">
+      <div class="num">L2</div>
+      <div class="label">系统提示词</div>
+      <div class="desc">UNTRUSTED 标记包裹<br>禁止泄露/执行/信任</div>
+    </div>
+    <div class="security-layer">
+      <div class="num">L3</div>
+      <div class="label">工具隔离</div>
+      <div class="desc">讨论只读 · 实现 worktree<br>PathPolicy · Bash 白名单</div>
+    </div>
+    <div class="security-layer">
+      <div class="num">L4</div>
+      <div class="label">门控+预算</div>
+      <div class="desc">PR 门控 · 迭代上限<br>超时跳过 · crash 恢复</div>
+    </div>
+  </div>
+</div>
+
+<!-- ===== Config Example ===== -->
+<div style="margin-top:24px;">
+  <h2 style="font-size:18px;font-weight:600;margin-bottom:12px;">⚙️ 配置示例</h2>
+  <div class="config-block">
+    <span class="comment"># 认证方式二选一：</span><br>
+    <span class="key">token_env</span>: <span class="val">"GITHUB_TOKEN"</span><br>
+    <span class="comment"># github_app:</span><br>
+    <span class="comment">#   app_id: 123456</span><br>
+    <span class="comment">#   private_key_path: "/path/to/key.pem"</span><br>
+    <span class="comment">#   installation_id: 789012</span><br><br>
+    <span class="key">repos</span>:<br>
+    &nbsp;&nbsp;- <span class="key">name</span>: <span class="val">"owner/my-repo"</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">local_path</span>: <span class="val">"/home/user/code/my-repo"</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">default_branch</span>: <span class="val">"main"</span><br><br>
+    <span class="key">poll_interval</span>: <span class="val">"5m"</span><br><br>
+    <span class="key">behavior</span>:<br>
+    &nbsp;&nbsp;<span class="key">pr_as_draft</span>: <span class="bool">true</span><br>
+    &nbsp;&nbsp;<span class="key">max_discussion_turns</span>: <span class="val">10</span><br>
+    &nbsp;&nbsp;<span class="key">max_implementation_turns</span>: <span class="val">50</span><br><br>
+    <span class="key">security</span>:<br>
+    &nbsp;&nbsp;<span class="key">pr_gate</span>:<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;<span class="key">allowed_associations</span>: [<span class="val">"OWNER"</span>, <span class="val">"MEMBER"</span>, <span class="val">"COLLABORATOR"</span>]<br>
+    &nbsp;&nbsp;<span class="key">bash_allow</span>:<br>
+    &nbsp;&nbsp;&nbsp;&nbsp;- <span class="val">"git *"</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;- <span class="val">"rg *"</span><br>
+    &nbsp;&nbsp;&nbsp;&nbsp;- <span class="val">"go *"</span>
+  </div>
+</div>
+
+<!-- ===== Auth ===== -->
+<div style="margin-top:24px;display:flex;gap:16px;flex-wrap:wrap;">
+  <div class="card" style="flex:1;">
+    <div class="card-title"><span class="icon">🔑</span> PAT 认证</div>
+    <div class="card-body">
+      <ul>
+        <li><code>token</code> 或 <code>token_env</code> 直配</li>
+        <li>简单直接，适合个人试用</li>
+        <li>issue 评论显示为 PAT 持有者</li>
+      </ul>
+    </div>
+  </div>
+  <div class="card" style="flex:1;">
+    <div class="card-title"><span class="icon">🔐</span> GitHub App 认证</div>
+    <div class="card-body">
+      <ul>
+        <li><code>app_id</code> + <code>private_key</code> + <code>installation_id</code></li>
+        <li>JWT → installation token (1h 过期)</li>
+        <li>真正的 bot 身份，权限最小化</li>
+        <li>PKCS1 和 PKCS8 密钥均支持</li>
+      </ul>
+    </div>
+  </div>
+</div>
+
+<!-- ======== File Structure ======== -->
+<div style="margin-top:24px;">
+  <h2 style="font-size:18px;font-weight:600;margin-bottom:12px;">📁 文件结构</h2>
+  <div class="config-block" style="font-size:13px;">
+    channel/github/<br>
+    ├── <span style="color:var(--green);">channel.go</span>     <span class="comment">// Channel 接口 + 轮询 + worker + 讨论/PR 接入</span><br>
+    ├── <span style="color:var(--green);">config.go</span>      <span class="comment">// 配置 (PAT + GitHub App 双认证)</span><br>
+    ├── <span style="color:var(--green);">discussion.go</span>  <span class="comment">// 讨论 Agent (只读工具 + 英文提示词 + 回复协议)</span><br>
+    ├── <span style="color:var(--green);">github.go</span>       <span class="comment">// GitHub API 客户端 (PAT + App token source)</span><br>
+    ├── <span style="color:var(--green);">models.go</span>       <span class="comment">// 状态机 (7 状态, 7 事件) + 数据结构</span><br>
+    ├── <span style="color:var(--green);">pr_agent.go</span>     <span class="comment">// PR 生成 Agent (worktree + Bash 白名单 + git push)</span><br>
+    ├── <span style="color:var(--green);">prompt.go</span>       <span class="comment">// 英文系统提示词模板 + UNTRUSTED 上下文构建</span><br>
+    ├── <span style="color:var(--green);">security.go</span>     <span class="comment">// 注入检测 (高/低置信) + 控制标记解析</span><br>
+    └── <span style="color:var(--green);">state.go</span>        <span class="comment">// 状态持久化 (原子写 tmp+rename) + 状态机校验</span>
+  </div>
+</div>
+
+<div style="margin-top:32px;padding:16px 0;border-top:1px solid var(--border);text-align:center;color:var(--muted);font-size:13px;">
+  Tachi — GitHub Issue-Driven Development Bot · 2026-07-23
+</div>
+
+</div>
+</body>
+</html>

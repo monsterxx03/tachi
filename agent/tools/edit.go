@@ -181,6 +181,14 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 }
 
 func createNewFile(ctx context.Context, filePath, content string) (string, error) {
+	// Enforce path policy (used by worktree sandbox).
+	if policy := GetPathPolicy(ctx); policy != nil {
+		absPath, _ := filepath.Abs(filePath)
+		if err := policy.CheckPath(absPath); err != nil {
+			return "", err
+		}
+	}
+
 	if _, err := os.Stat(filePath); err == nil {
 		return "", fmt.Errorf("file already exists: %s (use a non-empty old_string to edit it)", filePath)
 	}
@@ -192,6 +200,14 @@ func createNewFile(ctx context.Context, filePath, content string) (string, error
 }
 
 func editExistingFile(ctx context.Context, filePath, oldString, newString string, replaceAll bool) (string, error) {
+	// Enforce path policy (used by worktree sandbox).
+	if policy := GetPathPolicy(ctx); policy != nil {
+		absPath, _ := filepath.Abs(filePath)
+		if err := policy.CheckPath(absPath); err != nil {
+			return "", err
+		}
+	}
+
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)

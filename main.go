@@ -35,6 +35,7 @@ import (
 
 	_ "github.com/monsterxx03/tachi/channel/chrome"
 	_ "github.com/monsterxx03/tachi/channel/discord"
+	_ "github.com/monsterxx03/tachi/channel/github"
 	_ "github.com/monsterxx03/tachi/channel/weixin"
 )
 
