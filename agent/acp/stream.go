@@ -225,7 +225,8 @@ func streamToACP(
 				// Events we intentionally ignore in ACP mode:
 				// AgentEventSteerCheck — ACP doesn't use steer
 				// AgentEventSubagentStart/Done — internal detail
-				// AgentEventAskUser — AskUser tool is unregistered
+				// AgentEventAskUser — handled by the tool itself via ACP elicitation
+				//   (when client supports it; falls back to TUI mode otherwise)
 			}
 
 		case <-ctx.Done():

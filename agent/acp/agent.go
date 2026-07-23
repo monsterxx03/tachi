@@ -24,11 +24,12 @@ import (
 // TachiAgent implements the acp.Agent interface, bridging ACP protocol
 // calls to Tachi's AIAgent instances.
 type TachiAgent struct {
-	cfg      *config.Config
-	version  string
-	sessions *ACPSessionManager
-	conn     *acp.AgentSideConnection
-	logger   *logger.Logger
+	cfg                *config.Config
+	version            string
+	sessions           *ACPSessionManager
+	conn               *acp.AgentSideConnection
+	logger             *logger.Logger
+	clientCapabilities *acp.ClientCapabilities // stored from InitializeRequest
 }
 
 // NewTachiAgent creates a new ACP agent backed by the given config.
@@ -47,8 +48,12 @@ func (t *TachiAgent) SetConnection(conn *acp.AgentSideConnection) {
 }
 
 // Initialize handles the ACP initialize handshake, advertising Tachi's capabilities.
-func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp.InitializeResponse, error) {
-	t.logger.Info(context.Background(), "ACP: Initialize called")
+func (t *TachiAgent) Initialize(ctx context.Context, req acp.InitializeRequest) (acp.InitializeResponse, error) {
+	t.logger.Info(ctx, "ACP: Initialize called")
+
+	// Store client capabilities for later use (e.g., elicitation support check).
+	t.clientCapabilities = &req.ClientCapabilities
+
 	return acp.InitializeResponse{
 		ProtocolVersion: acp.ProtocolVersionNumber,
 		AgentCapabilities: acp.AgentCapabilities{
@@ -82,8 +87,8 @@ func (t *TachiAgent) Initialize(_ context.Context, _ acp.InitializeRequest) (acp
 
 // Logout handles the ACP logout request.
 // Tachi doesn't have a persistent authenticated session, so this is a no-op.
-func (t *TachiAgent) Logout(_ context.Context, _ acp.LogoutRequest) (acp.LogoutResponse, error) {
-	t.logger.Info(context.Background(), "ACP: Logout called")
+func (t *TachiAgent) Logout(ctx context.Context, _ acp.LogoutRequest) (acp.LogoutResponse, error) {
+	t.logger.Info(ctx, "ACP: Logout called")
 	return acp.LogoutResponse{}, nil
 }
 
@@ -152,8 +157,12 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		}
 	}
 
-	// Remove AskUser tool — ACP has no interactive question flow
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	// Remove AskUser tool if client doesn't support elicitation.
+	// Zed (v0.183+) supports ACP elicitations, enabling interactive
+	// question forms via the AskUserQuestion tool.
+	if !t.supportsElicitation() {
+		aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	}
 
 	// Set up session manager for persistence
 	sm, smErr := session.NewManager(t.logger)
@@ -305,13 +314,13 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 }
 
 // Cancel cancels an ongoing prompt for the given session.
-func (t *TachiAgent) Cancel(_ context.Context, req acp.CancelNotification) error {
+func (t *TachiAgent) Cancel(ctx context.Context, req acp.CancelNotification) error {
 	sess, ok := t.sessions.Get(string(req.SessionId))
 	if !ok {
 		return nil // session not found, silently ignore
 	}
 
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: Cancel called for session %s", sess.ID))
+	t.logger.Info(ctx, fmt.Sprintf("ACP: Cancel called for session %s", sess.ID))
 
 	sess.mu.Lock()
 	cancel := sess.promptCancel
@@ -324,13 +333,13 @@ func (t *TachiAgent) Cancel(_ context.Context, req acp.CancelNotification) error
 }
 
 // CloseSession closes an active session and frees resources.
-func (t *TachiAgent) CloseSession(_ context.Context, req acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
+func (t *TachiAgent) CloseSession(ctx context.Context, req acp.CloseSessionRequest) (acp.CloseSessionResponse, error) {
 	sess, ok := t.sessions.Get(string(req.SessionId))
 	if !ok {
 		return acp.CloseSessionResponse{}, nil
 	}
 
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: CloseSession called for session %s", sess.ID))
+	t.logger.Info(ctx, fmt.Sprintf("ACP: CloseSession called for session %s", sess.ID))
 	sess.Close()
 	t.sessions.Delete(sess.ID)
 	return acp.CloseSessionResponse{}, nil
@@ -338,9 +347,9 @@ func (t *TachiAgent) CloseSession(_ context.Context, req acp.CloseSessionRequest
 
 // UnstableDeleteSession deletes a session by ID from both memory and disk.
 // This is an unstable ACP method — subject to change in future protocol versions.
-func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
+func (t *TachiAgent) UnstableDeleteSession(ctx context.Context, req acp.UnstableDeleteSessionRequest) (acp.UnstableDeleteSessionResponse, error) {
 	sessionID := string(req.SessionId)
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: DeleteSession called for session %s", sessionID))
+	t.logger.Info(ctx, fmt.Sprintf("ACP: DeleteSession called for session %s", sessionID))
 
 	// Close and remove from memory if active.
 	if sess, ok := t.sessions.Get(sessionID); ok {
@@ -357,14 +366,14 @@ func (t *TachiAgent) UnstableDeleteSession(_ context.Context, req acp.UnstableDe
 		return acp.UnstableDeleteSessionResponse{}, fmt.Errorf("delete session %s: %w", sessionID, err)
 	}
 
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: session %s deleted", sessionID))
+	t.logger.Info(ctx, fmt.Sprintf("ACP: session %s deleted", sessionID))
 	return acp.UnstableDeleteSessionResponse{}, nil
 }
 
 // ListSessions lists active in-memory sessions, optionally filtered by cwd.
 // Also includes recent sessions from disk that match the filter.
-func (t *TachiAgent) ListSessions(_ context.Context, req acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
-	t.logger.Info(context.Background(), "ACP: ListSessions called")
+func (t *TachiAgent) ListSessions(ctx context.Context, req acp.ListSessionsRequest) (acp.ListSessionsResponse, error) {
+	t.logger.Info(ctx, "ACP: ListSessions called")
 
 	// Start with in-memory sessions
 	sessions := t.sessions.List()
@@ -502,7 +511,9 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: resume configure warning: %v", cfgErr))
 	}
 
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	if !t.supportsElicitation() {
+		aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	}
 	aiAgent.SetSessionManager(diskMgr)
 
 	// Create ACP session with existing disk session manager
@@ -672,8 +683,10 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	}
 
-	// Remove AskUser tool
-	aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	// Remove AskUser tool if client doesn't support elicitation.
+	if !t.supportsElicitation() {
+		aiAgent.UnregisterTool(tools.ToolNameAskUser)
+	}
 
 	// Set session manager on AIAgent
 	if sm != nil {
@@ -707,7 +720,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	// Must happen synchronously BEFORE the response so the client receives
 	// all message history before considering the session ready.
 	if loaded != nil && t.conn != nil {
-		replaySessionHistory(context.Background(), t.conn, sess)
+		replaySessionHistory(ctx, t.conn, sess)
 		// After replaying history, compute the token estimate so the initial
 		// UsageUpdate (sent in the defer block below) has a non-zero value.
 		if sess.history != nil {
@@ -872,14 +885,14 @@ func (t *TachiAgent) SetSessionConfigOption(_ context.Context, req acp.SetSessio
 // Delegates to AIAgent.SetMode which manages tool visibility:
 //   - "auto" (default): full tool access
 //   - "chat": read-only tools only, destructive tools hidden
-func (t *TachiAgent) SetSessionMode(_ context.Context, req acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
+func (t *TachiAgent) SetSessionMode(ctx context.Context, req acp.SetSessionModeRequest) (acp.SetSessionModeResponse, error) {
 	sess, ok := t.sessions.Get(string(req.SessionId))
 	if !ok {
 		return acp.SetSessionModeResponse{}, fmt.Errorf("session not found: %s", req.SessionId)
 	}
 
 	modeID := string(req.ModeId)
-	t.logger.Info(context.Background(), fmt.Sprintf("ACP: SetSessionMode called for session %s, mode=%s", sess.ID, modeID))
+	t.logger.Info(ctx, fmt.Sprintf("ACP: SetSessionMode called for session %s, mode=%s", sess.ID, modeID))
 
 	// Delegate to the agent — it handles tool save/restore internally.
 	if err := sess.agent.SetMode(modeID); err != nil {
@@ -904,4 +917,13 @@ func (t *TachiAgent) SetSessionMode(_ context.Context, req acp.SetSessionModeReq
 // CloseAll closes all sessions. Called on process exit.
 func (t *TachiAgent) CloseAll() {
 	t.sessions.CloseAll()
+}
+
+// supportsElicitation returns true if the connected client (e.g., Zed)
+// advertises form-based elicitation in its capabilities, meaning it can
+// render interactive forms for the AskUserQuestion tool.
+func (t *TachiAgent) supportsElicitation() bool {
+	return t.clientCapabilities != nil &&
+		t.clientCapabilities.Elicitation != nil &&
+		t.clientCapabilities.Elicitation.Form != nil
 }

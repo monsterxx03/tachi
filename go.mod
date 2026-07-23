@@ -74,3 +74,5 @@ require (
 	golang.org/x/text v0.36.0 // indirect
 	mvdan.cc/sh/v3 v3.13.1 // indirect
 )
+
+replace github.com/coder/acp-go-sdk => github.com/monsterxx03/acp-go-sdk v0.13.6-0.20260723091451-d43b1a01110e

@@ -1,6 +1,6 @@
 # ACP 增强方案：提升 Zed 集成体验
 
-> 版本: 1.1 | 日期: 2026-07-11 | 状态: 部分实施
+> 版本: 1.2 | 日期: 2026-07-23 | 状态: 部分实施
 
 ## 一、概述
 
@@ -44,7 +44,7 @@
 | 终端委派 (ACP terminal) | ❌ | Bash 工具本地执行 |
 | 文件系统委派 (ReadFile via ACP) | ✅ | 2026-07-11 实现：Write/Edit/Read 全部走 ACP FS |
 | Steer 支持 | ⚠️ 部分 | Cancel 可中断, 但无 steer 通道 |
-| Elicitation (交互式提问) | ❌ | AskUser 被注销 |
+| Elicitation (交互式提问) | ✅ | 2026-07-23 实现：AskUser 通过 ACP elicitation 实现 form 交互 |
 | Boolean Config Options | ❌ | 不支持 |
 | 启发式进度更新 | ❌ | 纯文本 |
 | Usage 频率/丰富度 | ✅ | 2026-07-11 实现：AgentEventUsage + ToolResult + 初始会话均发送 |
@@ -60,7 +60,7 @@
 | 5 | 终端委派 | 大 | ⭐⭐⭐⭐⭐ | Stable | ❌ |
 | 6 | Steer 增强 | 中 | ⭐⭐⭐⭐ | Stable | ❌ |
 | 7 | Slash 命令完善 | 低-中 | ⭐⭐⭐ | N/A | ❌ |
-| 8 | Elicitation 准备 | 中 | ⭐⭐⭐（远期） | RFD (Preview) | ❌ |
+| 8 | Elicitation（交互式提问） | 中 | ⭐⭐⭐ | RFD (Preview) | ✅ 已实现 |
 | 9 | Usage 增强 | 低 | ⭐⭐ | RFD | ✅ 已实现 |
 | 10 | Boolean Config Options | 低 | ⭐⭐ | Stable | ❌ |
 
@@ -533,9 +533,9 @@ conn.SessionUpdate(ctx, acp.SessionNotification{
 }
 ```
 
-#### 3.7.4 新增 `/ask` 命令（临时替代 Elicitation）
+#### 3.7.4 新增 `/ask` 命令（补充 Elicitation）
 
-**现状**：`AskUserQuestion` 被注销，Agent 无法向用户提问。
+**现状**：`AskUserQuestion` 已在支持 elicitation 的客户端上可用（见 3.8 节）。`/ask` 命令作为补充，让用户可以主动提问题给 Agent。
 
 **改进**：新增 `/ask` slash 命令，让用户可以主动提问题给 Agent。这不是交互式提问的替代品，但提供了一种单向通道让用户表达疑问：
 
@@ -556,59 +556,15 @@ conn.SessionUpdate(ctx, acp.SessionNotification{
 
 ---
 
-### 3.8 Elicitation 准备（Tier 3）
+### 3.8 Elicitation（已实现）
 
-**问题**：ACP 协议的 `elicitation/create` RFD 在 2026-07-09 进入 Preview，定义了 Agent 以结构化方式向用户提问的标准机制。Zed 的交互式输入支持还在开发中（[讨论 #59828](https://github.com/zed-industries/zed/discussions/59828)），但这是协议的核心发展方向。
+**状态**：✅ 2026-07-23 已实现。
 
-**现状**：`AskUserQuestion` 工具在 ACP 模式中被显式注销。工具本身是一个 `ConfirmationTool`（需要确认/输入），在 TUI 模式下会弹表单。
+**实现**：当客户端（如 Zed v0.183+）在 `ClientCapabilities` 中声明 `elicitation.form` 支持时，`AskUserQuestion` 工具不再被注销。在 `ExecuteContext` 中检测 ACP 连接（通过 `acpctx.Conn(ctx)`），将 Tachi 的 Question 格式转换为 ACP 的 JSON Schema 格式，通过 `conn.UnstableCreateElicitation` 发送 form 模式的 elicitation 请求。客户端渲染表单，用户提交后，工具将响应映射回 `AskUserResult` 格式。
 
-**方案**：分两阶段实现：
+**详见**：`agent/tools/askuser.go` 中的 `executeACP` 和 `buildElicitationSchema` 方法。
 
-**Phase 1（独立于客户端支持）**：
-1. 在 `Initialize` 响应中声明 `Elicitation` 能力（检测客户端是否支持）
-2. 将 `AskUserQuestion` 工具内部实现改为：检测 ACP 模式且客户端支持 elicitation 时，通过 `conn.ElicitationCreate` 发送 form 模式的请求
-3. 处理 `accept`/`decline`/`cancel` 响应
-
-**Phase 2（当 Zed 支持后）**：
-1. 自动生效，无需修改 Tachi 代码
-2. Agent 可以在对话中间向用户提问（"你希望用哪种重构策略？"）
-
-```go
-// AskUserQuestion 工具的 ACP 分支（伪代码）
-func (t *AskUserQuestionTool) ExecuteContext(ctx context.Context, args map[string]any) (tools.ToolResult, error) {
-    question := args["question"].(string)
-    schema := extractSchema(args)  // JSON Schema from args
-
-    if conn := acpctx.Conn(ctx); conn != nil {
-        // ACP 模式：使用 elicitation
-        resp, err := conn.ElicitationCreate(ctx, acp.ElicitationRequest{
-            Mode: "form",
-            Message: question,
-            RequestedSchema: schema,
-        })
-        if err != nil {
-            return tools.ToolResult{Err: err}, nil
-        }
-        switch resp.Action {
-        case "accept":
-            return tools.ToolResult{Output: formatResponse(resp.Content)}, nil
-        case "decline":
-            return tools.ToolResult{Output: "User declined to answer."}, nil
-        case "cancel":
-            return tools.ToolResult{Output: "User dismissed the question."}, nil
-        }
-    }
-
-    // TUI 模式：原有逻辑（ConfirmationTool）
-    return t.handleTUIQuestion(ctx, args)
-}
-```
-
-**文件变更**：
-- `agent/acp/agent.go` — `Initialize` 声明 elicitation 能力（如果 SDK 支持）
-- `agent/acp/agent.go` — `NewSession` 按需注册 AskUserQuestion 工具
-- `agent/tools/ask_user.go` — 增加 ACP 模式分支
-- 依赖：需要 `acp-go-sdk` 支持 `ElicitationCreate` 方法
+**已知限制**：Go SDK 的 `UnstableCreateElicitationRequest` 缺少 `sessionId` 字段，等待 SDK 更新。
 
 ---
 
@@ -708,10 +664,11 @@ case "compact_auto", "thinking_visible":
 | 文件 | 变更类型 | 对应方向 | 状态 |
 |------|----------|----------|------|
 | `agent/acp/stream.go` | 修改 | Plan, Diff in Result, Usage, Steer | ✅ Diff in Result + Usage 增强已完成 |
-| `agent/acp/agent.go` | 修改 | Session Delete, Terminal, Elicitation, Boolean | ✅ Session Delete 已完成 |
+| `agent/acp/agent.go` | 修改 | Session Delete, Terminal, Elicitation, Boolean | ✅ Session Delete + Elicitation 已完成 |
 | `agent/acp/commands.go` | 修改 | Slash 完善 | ❌ |
 | `agent/acp/model_config.go` | 修改 | Boolean Config | ❌ |
 | `agent/tools/read.go` | 修改 | ACP FS delegation | ✅ 已完成 |
+| `agent/tools/askuser.go` | 修改 | Elicitation (AskUser ACP 分支) | ✅ 已实现 |
 | `agent/tools/write.go` | 修改 | Bugfix: 补充缺失的 SessionId | ✅ 已完成 |
 | `agent/acp/terminal_tool.go` | 新增 | Terminal delegation | ❌ |
 | `session/manager.go` | 可能修改 | Session Delete（已有 `Delete` 方法） | ✅ 无需修改 |
@@ -727,7 +684,7 @@ case "compact_auto", "thinking_visible":
 | Terminal delegation | ~200 行 | ~50 行 | 大 |
 | Steer 增强 | ~30 行 | ~20 行 | 中 |
 | Slash 完善 | ~60 行 | ~40 行 | 低-中 |
-| Elicitation 准备 | ~100 行 | ~40 行 | 中 |
+| Elicitation | ~100 行 | ~40 行 | 中 | ✅ 已实现 |
 | Usage 增强 | ~20 行 | ~15 行 | 低 |
 | Boolean Config | ~60 行 | ~30 行 | 低 |
 
@@ -765,7 +722,7 @@ case "compact_auto", "thinking_visible":
 - Steer 增强（中，中断时保留下文）
 
 **Phase 3 — 前瞻性（可并行于 Phase 1/2）**
-- Elicitation 准备（中等，客户端就绪后自动生效）
+- Elicitation（交互式提问）✅ 已实现
 - Boolean Config Options（低，协议对齐）
 - Usage 增强（低，锦上添花）✅ 已完成
 
@@ -781,7 +738,7 @@ case "compact_auto", "thinking_visible":
 
 - [ ] `session.Manager` 是否有 `Delete(id)` 方法？
 - [ ] `mcp.Manager` 是否有 `Disconnect(name)` 和 `Connect(ctx, config)` 方法？
-- [ ] `acp-go-sdk` 是否支持 `ElicitationCreate`？
+- [x] `acp-go-sdk` 是否支持 `ElicitationCreate`？ — ✅ 支持 `UnstableCreateElicitation`
 - [ ] `acp-go-sdk` 的 `SessionUpdate` 是否已有 `PlanUpdate` 字段？
 - [ ] `acp-go-sdk` 是否支持 `clientCapabilities` 读取？
 - [ ] `acp-go-sdk` 的 `ToolCallContent` 是否已有 `ToolDiffContent` 构造器？
@@ -904,5 +861,6 @@ case "compact_auto", "thinking_visible":
 
 | 版本 | 日期 | 变更 |
 |------|------|------|
+| 1.2 | 2026-07-23 | 实现 Elicitation（AskUser 通过 ACP elicitation 实现 form 交互） |
 | 1.1 | 2026-07-11 | 实现 Session Delete、ReadFile ACP FS、Diff in Result、Usage 增强、WriteFile SessionId bugfix；更新状态表；去除 Usage cost 内容 |
 | 1.0 | 2026-07-11 | 初始设计 |
