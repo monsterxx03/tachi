@@ -227,10 +227,15 @@ type OutgoingMessage struct {
 // When Buffered is true, the message was accepted into the whisper ambient
 // buffer and will be processed in a future ambient turn. The channel should
 // not send any reply or stop its typing indicator.
+//
+// When Dropped is true, the message was silently discarded (e.g. whisper
+// disabled and the message was a non-directed group chat message). The
+// channel should not send any reply.
 type HandlerResult struct {
-	Reply    OutgoingMessage // The final reply; zero value when Steered or Buffered.
+	Reply    OutgoingMessage // The final reply; zero value when Steered, Buffered, or Dropped.
 	Steered  bool            // True if the message was injected as steer input.
 	Buffered bool            // True if the message was buffered for ambient processing.
+	Dropped  bool            // True if the message was silently discarded (no reply needed).
 	Streamed bool            // True if the reply was sent via streaming card; channel should not sendMessage again.
 	Err      error           // Non-nil when processing failed.
 

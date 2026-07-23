@@ -128,7 +128,9 @@ func TestWhisperGuard_Disabled(t *testing.T) {
 		GroupChat: true,
 	})
 
+	assert.True(t, result.Dropped, "whisper disabled: non-directed group message should be dropped")
 	assert.False(t, result.Buffered, "whisper disabled: should not buffer")
+	assert.False(t, result.Steered)
 }
 
 func TestAmbientBuffer_Batching(t *testing.T) {
@@ -312,7 +314,7 @@ func TestChannelWhisperConfig_Defaults(t *testing.T) {
 	assert.Equal(t, "[SILENT]", cfg.Channel.Whisper.SilenceMarker)
 	assert.Equal(t, 30*time.Second, cfg.Channel.Whisper.AmbientBatchWindow)
 	assert.Equal(t, 5, cfg.Channel.Whisper.AmbientMaxIterations)
-	assert.Equal(t, 50, cfg.Channel.Whisper.AmbientMaxBuffer)
+	assert.Equal(t, 10, cfg.Channel.Whisper.AmbientMaxBuffer)
 	assert.Empty(t, cfg.Channel.Whisper.AmbientTools)
 	assert.Equal(t, 0, cfg.Channel.Whisper.AmbientMaxTokens) // zero; fallback is agent.DefaultMaxTokens in code
 }

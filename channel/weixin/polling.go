@@ -172,6 +172,11 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		return
 	}
 
+	if result.Dropped {
+		ch.logger.Info(ctx, "weixin: msg dropped (whisper disabled)", "thread", threadID)
+		return
+	}
+
 	if result.Err != nil {
 		ch.logger.Error(ctx, "weixin: handler error", result.Err, "thread", threadID)
 		// Send error message back to user.

@@ -64,6 +64,14 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			return m.handleAmbientMessage(ctx, msg)
 		}
 
+		// ---- Whisper disabled: silently drop non-directed group messages ----
+		// When whisper is off, non-directed messages in group chats are ignored
+		// entirely — they don't trigger any agent turn or reply.
+		if !msg.Directed && msg.GroupChat && !m.cfg.Channel.Whisper.WhisperEnabled() {
+			m.logger.Info(context.Background(), "channel: drop (whisper disabled)", "thread", msg.ThreadID)
+			return channel.HandlerResult{Dropped: true}
+		}
+
 		// /compact goes through the agent turn (with session context) rather
 		// than the synchronous slash-command path, so the LLM can summarize
 		// using its existing context window without re-sending all history.

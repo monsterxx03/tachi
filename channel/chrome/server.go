@@ -34,9 +34,9 @@ const DefaultPort = 18520
 // so proactive messages (cron, notifications) can be pushed to the
 // correct browser tab.
 type Server struct {
-	server   *http.Server
-	port     int
-	handler  channel.MessageHandler
+	server  *http.Server
+	port    int
+	handler channel.MessageHandler
 
 	// clients maps threadID → WebSocket connection for proactive Send().
 	clients map[string]*websocket.Conn
@@ -222,6 +222,11 @@ func (s *Server) handleMessage(conn *websocket.Conn, reqID, threadID string, inc
 
 	if result.Steered {
 		s.logger.Info(context.Background(), "chrome: message steered", "thread", threadID)
+		return
+	}
+
+	if result.Dropped {
+		s.logger.Info(context.Background(), "chrome: message dropped (whisper disabled)", "thread", threadID)
 		return
 	}
 

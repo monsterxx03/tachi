@@ -260,6 +260,10 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 		return
 	}
 
+	if result.Dropped {
+		return
+	}
+
 	if result.Buffered {
 		return
 	}
