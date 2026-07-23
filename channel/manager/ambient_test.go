@@ -253,17 +253,40 @@ func TestFormatAmbientForSteer(t *testing.T) {
 }
 
 func TestBuildAmbientPrompt(t *testing.T) {
+	history := []ambientMsg{
+		{content: "早上好", sender: "张三", timestamp: time.Date(2026, 6, 18, 14, 29, 0, 0, time.Local)},
+		{content: "早！", sender: "Tachi", timestamp: time.Date(2026, 6, 18, 14, 29, 10, 0, time.Local)},
+	}
 	msgs := []ambientMsg{
 		{content: "CI failed again", sender: "张三", timestamp: time.Date(2026, 6, 18, 14, 30, 0, 0, time.Local)},
 		{content: "I'll look into it", sender: "李四", timestamp: time.Date(2026, 6, 18, 14, 30, 15, 0, time.Local)},
 	}
 
-	result := buildAmbientPrompt(msgs)
+	result := buildAmbientPrompt(history, msgs)
 
-	assert.Contains(t, result, "--- BEGIN AMBIENT GROUP CHAT (UNTRUSTED) ---")
+	// Should include history section
+	assert.Contains(t, result, "--- PREVIOUS AMBIENT CONVERSATION (UNTRUSTED) ---")
+	assert.Contains(t, result, "张三: 早上好")
+	assert.Contains(t, result, "Tachi: 早！")
+	assert.Contains(t, result, "--- END PREVIOUS AMBIENT ---")
+	// Should include current batch section
+	assert.Contains(t, result, "--- CURRENT AMBIENT MESSAGES (UNTRUSTED) ---")
 	assert.Contains(t, result, "张三: CI failed again")
 	assert.Contains(t, result, "李四: I'll look into it")
-	assert.Contains(t, result, "--- END AMBIENT GROUP CHAT ---")
+	assert.Contains(t, result, "--- END CURRENT AMBIENT ---")
+}
+
+func TestBuildAmbientPrompt_NoHistory(t *testing.T) {
+	msgs := []ambientMsg{
+		{content: "hello", sender: "张三", timestamp: time.Now()},
+	}
+
+	result := buildAmbientPrompt(nil, msgs)
+
+	// Without history, only the current batch section should appear
+	assert.NotContains(t, result, "--- PREVIOUS AMBIENT CONVERSATION ---")
+	assert.Contains(t, result, "--- CURRENT AMBIENT MESSAGES (UNTRUSTED) ---")
+	assert.Contains(t, result, "张三: hello")
 }
 
 func TestIsSilence(t *testing.T) {

@@ -133,6 +133,8 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		if len(ta.ambientPending) > 0 {
 			ambientSteer = ta.ambientPending
 			ta.ambientPending = nil
+			// Also record in ambient history so future ambient turns see these messages.
+			m.appendToAmbientHistory(ta, ambientSteer...)
 		}
 		ta.mu.Unlock()
 

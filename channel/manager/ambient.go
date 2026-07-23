@@ -103,6 +103,21 @@ func (m *Manager) enforceBufferCap(ta *threadActivation) {
 	ta.ambientPending = ta.ambientPending[len(ta.ambientPending)-max:]
 }
 
+// appendToAmbientHistory appends entries to the ambient history ring buffer,
+// dropping the oldest entries (FIFO) when the configured cap is exceeded.
+// Must be called with ta.mu held.
+func (m *Manager) appendToAmbientHistory(ta *threadActivation, entries ...ambientMsg) {
+	max := m.cfg.Channel.Whisper.AmbientMaxHistory
+	if max <= 0 {
+		max = 50 // fallback default
+	}
+	ta.ambientHistory = append(ta.ambientHistory, entries...)
+	if len(ta.ambientHistory) > max {
+		overflow := len(ta.ambientHistory) - max
+		ta.ambientHistory = ta.ambientHistory[overflow:]
+	}
+}
+
 // flushAmbientBatch fires when the batch window expires. It starts a
 // lightweight ambient turn with the buffered messages.
 func (m *Manager) flushAmbientBatch(threadID string) {
@@ -220,13 +235,16 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	ta.mu.Lock()
 	ta.steerRespCh = steerCh
 	ta.resultCh = make(chan handlerResult, 1)
+	// Read ambient history for this turn (in-memory only, never persisted to session).
+	ambientHistory := make([]ambientMsg, len(ta.ambientHistory))
+	copy(ambientHistory, ta.ambientHistory)
 	ta.mu.Unlock()
 
 	// Run — no session recording (no SessionManager), no memory writes
 	// (no memory backend), no auto-compact (no cfg). Uses RunConversationStream
 	// for history + steer support.
 	eventCh := forkAgent.RunConversationStream(ctx, history,
-		buildAmbientPrompt(msgs), systemPrompt,
+		buildAmbientPrompt(ambientHistory, msgs), systemPrompt,
 		llm.ChatOptions{MaxTokens: maxTokens})
 	text, err := m.drainEvents(ctx, eventCh, forkAgent, nil, ta, nil)
 
@@ -249,7 +267,18 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 		return
 	}
 
-	// Agent has something to say — reset silence counter and send.
+	// Agent has something to say — save to ambient history before sending.
+	// This ensures future ambient turns see this exchange as context.
+	ta.mu.Lock()
+	m.appendToAmbientHistory(ta, msgs...)
+	m.appendToAmbientHistory(ta, ambientMsg{
+		content:   text,
+		sender:    "Tachi",
+		timestamp: time.Now(),
+	})
+	ta.mu.Unlock()
+
+	// Reset silence counter and send.
 	ta.silenceCount.Store(0)
 	m.logger.Info(context.Background(), "channel: ambient fork reply", "thread", threadID, "len", len(text))
 	m.sendToThread(ctx, threadID, text, "")
@@ -263,15 +292,29 @@ func (m *Manager) isSilence(reply string) bool {
 }
 
 // buildAmbientPrompt formats batched ambient messages into a user prompt
-// for the ambient turn.
-func buildAmbientPrompt(msgs []ambientMsg) string {
+// for the ambient turn. If history is provided, it is included as a
+// "previous ambient conversation" section before the current batch.
+// Both history and msgs are UNTRUSTED — neither is persisted to the session.
+func buildAmbientPrompt(history, msgs []ambientMsg) string {
 	var b strings.Builder
-	b.WriteString("--- BEGIN AMBIENT GROUP CHAT (UNTRUSTED) ---\n")
+
+	// Previous ambient conversation (if any)
+	if len(history) > 0 {
+		b.WriteString("--- PREVIOUS AMBIENT CONVERSATION (UNTRUSTED) ---\n")
+		for _, m := range history {
+			ts := m.timestamp.Format("15:04:05")
+			fmt.Fprintf(&b, "[%s] %s: %s\n", ts, m.sender, m.content)
+		}
+		b.WriteString("--- END PREVIOUS AMBIENT ---\n\n")
+	}
+
+	// Current batch of ambient messages
+	b.WriteString("--- CURRENT AMBIENT MESSAGES (UNTRUSTED) ---\n")
 	for _, m := range msgs {
 		ts := m.timestamp.Format("15:04:05")
 		fmt.Fprintf(&b, "[%s] %s: %s\n", ts, m.sender, m.content)
 	}
-	b.WriteString("--- END AMBIENT GROUP CHAT ---\n\n")
+	b.WriteString("--- END CURRENT AMBIENT ---\n\n")
 	return b.String()
 }
 

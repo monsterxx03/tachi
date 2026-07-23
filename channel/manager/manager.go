@@ -226,6 +226,7 @@ type threadActivation struct {
 
 	groupChat      bool         // whether this thread is in group chat mode (set once)
 	ambientPending []ambientMsg // buffered non-directed messages
+	ambientHistory []ambientMsg // in-memory history of previous ambient messages + LLM replies (never persisted to session)
 	ambientTimer   *time.Timer  // batch window timer (nil when inactive)
 	lastAmbient    time.Time    // when the last ambient turn ended
 	silenceCount   atomic.Int32 // consecutive [SILENT] replies (for backoff)

@@ -370,6 +370,11 @@ type ChannelWhisperConfig struct {
 	// When exceeded, oldest messages are dropped (FIFO). Default: 50.
 	AmbientMaxBuffer int `yaml:"ambient_max_buffer" default:"50"`
 
+	// AmbientMaxHistory is the maximum number of ambient conversation entries
+	// retained in memory for cross-turn context. Oldest entries are dropped
+	// (FIFO) when exceeded. Default: 50.
+	AmbientMaxHistory int `yaml:"ambient_max_history" default:"50"`
+
 	// AmbientCooldown is the minimum interval between two ambient turns
 	// on the same thread (default: 0, no cooldown).
 	AmbientCooldown time.Duration `yaml:"ambient_cooldown"`
