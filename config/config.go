@@ -368,7 +368,7 @@ type ChannelWhisperConfig struct {
 
 	// AmbientMaxBuffer is the maximum number of messages buffered per thread.
 	// When exceeded, oldest messages are dropped (FIFO). Default: 50.
-	AmbientMaxBuffer int `yaml:"ambient_max_buffer" default:"50"`
+	AmbientMaxBuffer int `yaml:"ambient_max_buffer" default:"10"`
 
 	// AmbientMaxHistory is the maximum number of ambient conversation entries
 	// retained in memory for cross-turn context. Oldest entries are dropped
