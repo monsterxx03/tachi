@@ -50,7 +50,7 @@ type Usage struct {
 	InputTokens int64
 	// LastInputTokens is the input token count from the most recent API call.
 	// This is the "current context size" — used for context-window percentage display.
-	LastInputTokens int64
+	LastInputTokens          int64
 	OutputTokens             int64
 	CacheCreationInputTokens int64
 	CacheReadInputTokens     int64
@@ -113,7 +113,7 @@ func NewTool(name, description string, properties map[string]ToolParameterProper
 // Message role constants.
 const (
 	RoleSteer = "steer" // Internal role: steer input injected at tool-call boundaries.
-	                     // Provider converters handle this differently based on API protocol.
+	// Provider converters handle this differently based on API protocol.
 )
 
 // ContentPartType identifies the type of a content part.
@@ -136,13 +136,13 @@ type ContentPart struct {
 
 // Message represents a chat message
 type Message struct {
-	Role           string         `json:"role"`
-	Content        string         `json:"content"`
-	ContentParts   []ContentPart  `json:"content_parts,omitempty"` // multi-modal content; when set, providers prefer this over Content
-	ToolCalls      []ToolCall     `json:"tool_calls,omitempty"`
-	ToolCallID     string         `json:"tool_call_id,omitempty"`
-	Name           string         `json:"name,omitempty"`
-	IsError        bool           `json:"is_error,omitempty"`
+	Role           string          `json:"role"`
+	Content        string          `json:"content"`
+	ContentParts   []ContentPart   `json:"content_parts,omitempty"` // multi-modal content; when set, providers prefer this over Content
+	ToolCalls      []ToolCall      `json:"tool_calls,omitempty"`
+	ToolCallID     string          `json:"tool_call_id,omitempty"`
+	Name           string          `json:"name,omitempty"`
+	IsError        bool            `json:"is_error,omitempty"`
 	ThinkingBlocks []ThinkingBlock `json:"thinking_blocks,omitempty"`
 }
 
@@ -204,8 +204,16 @@ type Provider interface {
 func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) {
 	switch providerType {
 	case ProviderTypeOpenAI:
-		return NewOpenAIProvider(apiKey, baseURL, model), nil
+		// go-openai has no built-in retry; wrap with RetryProvider so
+		// transient failures (connection reset, 429/5xx) don't abort
+		// the whole turn.
+		return NewRetryProvider(
+			NewOpenAIProvider(apiKey, baseURL, model),
+			RetryConfig{MaxRetries: 2},
+		), nil
 	case ProviderTypeAnthropic:
+		// anthropic-sdk-go already retries internally (default MaxRetries=2),
+		// so no extra wrapping is needed here.
 		return NewAnthropicProvider(apiKey, baseURL, model), nil
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
