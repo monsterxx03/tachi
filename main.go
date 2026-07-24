@@ -1205,8 +1205,11 @@ func transcriptShow(ctx context.Context, cmd *cli.Command) error {
 		return fmt.Errorf("session %q has no messages yet; run a conversation first", sess.ID)
 	}
 
+	// Sub-agent sidecar messages are optional — a load failure is non-fatal.
+	subagents, _ := mgr.LoadSubagentMessages(sess.ID)
+
 	// Build report data from session messages (transcript is replaced by session).
-	data := render.BuildReportDataFromMessages(sess, msgs)
+	data := render.BuildReportDataFromMessages(sess, msgs, subagents)
 	html, err := render.GenerateHTML(data)
 	if err != nil {
 		return fmt.Errorf("generate HTML: %w", err)

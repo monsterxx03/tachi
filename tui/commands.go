@@ -662,8 +662,11 @@ func (m *Model) handleTranscriptCommand() tea.Cmd {
 
 	curr := sm.Current()
 
+	// Sub-agent sidecar messages are optional — a load failure is non-fatal.
+	subagents, _ := sm.LoadSubagentMessages(curr.ID)
+
 	// Build report data from session messages
-	data := render.BuildReportDataFromMessages(curr, msgs)
+	data := render.BuildReportDataFromMessages(curr, msgs, subagents)
 	html, err := render.GenerateHTML(data)
 	if err != nil {
 		m.chatview.AddMessage(chatMessage{

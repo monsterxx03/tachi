@@ -99,11 +99,12 @@ func BuildReportData(s *session.Session, tr *transcript.Transcript) *ReportData 
 }
 
 // BuildReportDataFromMessages builds report data from session messages
-// (replaces the transcript-based approach).
-func BuildReportDataFromMessages(s *session.Session, msgs []session.Message) *ReportData {
+// (replaces the transcript-based approach). subagents maps a sub-agent
+// shortID to its sidecar messages (subagent/<shortID>.jsonl); it may be nil.
+func BuildReportDataFromMessages(s *session.Session, msgs []session.Message, subagents map[string][]session.Message) *ReportData {
 	sv := buildSessionView(s)
-	tv := buildTranscriptViewFromMessages(msgs)
-	stats := buildStatsFromMessages(msgs, s.CreatedAt, s.UpdatedAt)
+	tv := buildTranscriptViewFromMessages(msgs, subagents)
+	stats := buildStatsFromMessages(msgs, subagents, s.CreatedAt, s.UpdatedAt)
 
 	return &ReportData{
 		Session:    sv,
@@ -274,10 +275,20 @@ func sortFreq(freq map[string]int) []KV {
 }
 
 // buildTranscriptViewFromMessages builds a turn view from flat session messages.
-func buildTranscriptViewFromMessages(msgs []session.Message) *TranscriptView {
+// SubAgent tool calls get their sidecar messages attached as children.
+func buildTranscriptViewFromMessages(msgs []session.Message, subagents map[string][]session.Message) *TranscriptView {
 	tv := &TranscriptView{}
 	if len(msgs) == 0 {
 		return tv
+	}
+
+	// Index SubAgent tool results: toolCallID → subagent shortID. The tool_call
+	// precedes its result in the message stream, so this needs a first pass.
+	subByCall := make(map[string]string)
+	for _, msg := range msgs {
+		if msg.Type == session.MessageTypeToolResult && msg.SubagentID != "" {
+			subByCall[msg.ToolCallID] = msg.SubagentID
+		}
 	}
 
 	// Group messages into turns: each user message starts a new turn.
@@ -287,6 +298,14 @@ func buildTranscriptViewFromMessages(msgs []session.Message) *TranscriptView {
 
 	for _, msg := range msgs {
 		ev := sessionMessageToEventView(msg)
+
+		// Attach sub-agent execution details to its SubAgent tool call.
+		if msg.Type == session.MessageTypeToolCall && msg.Name == "SubAgent" {
+			if subID, ok := subByCall[msg.ToolCallID]; ok && len(subagents[subID]) > 0 {
+				ev.HasChildren = true
+				ev.Children = buildSubagentEventViews(subagents[subID])
+			}
+		}
 
 		// Buffer reminder to include with the next user message's turn,
 		// rather than creating a broken standalone turn.
@@ -321,6 +340,17 @@ func buildTranscriptViewFromMessages(msgs []session.Message) *TranscriptView {
 	}
 
 	return tv
+}
+
+// buildSubagentEventViews converts a sub-agent's sidecar messages into child
+// event views. Sub-agents cannot spawn their own SubAgent, so no recursion
+// is needed here.
+func buildSubagentEventViews(msgs []session.Message) []EventView {
+	views := make([]EventView, 0, len(msgs))
+	for _, msg := range msgs {
+		views = append(views, sessionMessageToEventView(msg))
+	}
+	return views
 }
 
 // sessionMessageToEventView converts a session.Message to an EventView.
@@ -406,14 +436,16 @@ func convertArgsToString(args any) string {
 	}
 }
 
-// buildStatsFromMessages builds statistics from session messages.
-func buildStatsFromMessages(msgs []session.Message, created, updated time.Time) StatsView {
+// buildStatsFromMessages builds statistics from session messages. Sub-agent
+// sidecar messages are folded into the counts, except their synthetic user
+// prompt, which is not a real user turn.
+func buildStatsFromMessages(msgs []session.Message, subagents map[string][]session.Message, created, updated time.Time) StatsView {
 	stats := StatsView{
 		TotalDuration: formatDuration(created, updated),
 	}
 	freq := map[string]int{}
 
-	for _, msg := range msgs {
+	countMsg := func(msg session.Message) {
 		switch msg.Type {
 		case session.MessageTypeUser:
 			stats.UserMsgCount++
@@ -431,6 +463,18 @@ func buildStatsFromMessages(msgs []session.Message, created, updated time.Time) 
 			if msg.IsError {
 				stats.ToolErrorCount++
 			}
+		}
+	}
+
+	for _, msg := range msgs {
+		countMsg(msg)
+	}
+	for _, subMsgs := range subagents {
+		for _, msg := range subMsgs {
+			if msg.Type == session.MessageTypeUser {
+				continue // sub-agent task prompt, not a real user message
+			}
+			countMsg(msg)
 		}
 	}
 

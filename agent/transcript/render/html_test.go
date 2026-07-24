@@ -59,9 +59,9 @@ func TestFormatDuration(t *testing.T) {
 		start, end time.Time
 		want       string
 	}{
-		{time.Time{}, time.Now(), ""},                                          // zero start
-		{time.Now(), time.Time{}, ""},                                          // zero end
-		{time.Now(), time.Now().Add(-1 * time.Hour), ""},                       // end before start
+		{time.Time{}, time.Now(), ""},                    // zero start
+		{time.Now(), time.Time{}, ""},                    // zero end
+		{time.Now(), time.Now().Add(-1 * time.Hour), ""}, // end before start
 		{time.Date(2026, 5, 21, 13, 0, 0, 0, time.UTC),
 			time.Date(2026, 5, 21, 13, 0, 30, 0, time.UTC), "30s"},
 		{time.Date(2026, 5, 21, 13, 0, 0, 0, time.UTC),
@@ -132,11 +132,11 @@ func TestSortFreq_Empty(t *testing.T) {
 
 func TestEventIconAndClass(t *testing.T) {
 	tests := []struct {
-		et          transcript.EventType
-		name        string
-		isError     bool
-		wantIcon    string
-		wantClass   string
+		et        transcript.EventType
+		name      string
+		isError   bool
+		wantIcon  string
+		wantClass string
 	}{
 		{transcript.EventUser, "", false, "👤", "event-user"},
 		{transcript.EventThinking, "", false, "💭", "event-thinking"},
@@ -163,9 +163,9 @@ func TestEventIconAndClass(t *testing.T) {
 
 func TestSessionIconAndClass(t *testing.T) {
 	tests := []struct {
-		msg         session.Message
-		wantIcon    string
-		wantClass   string
+		msg       session.Message
+		wantIcon  string
+		wantClass string
 	}{
 		{session.Message{Type: session.MessageTypeUser}, "👤", "event-user"},
 		{session.Message{Type: session.MessageTypeAssistant}, "💬", "event-text"},
@@ -226,7 +226,7 @@ func TestBuildStatsFromMessages(t *testing.T) {
 		{Type: session.MessageTypeAssistant},
 	}
 
-	stats := buildStatsFromMessages(msgs, start, end)
+	stats := buildStatsFromMessages(msgs, nil, start, end)
 
 	if stats.UserMsgCount != 2 {
 		t.Errorf("UserMsgCount = %d, want 2", stats.UserMsgCount)
@@ -271,11 +271,11 @@ func TestBuildStatsFromMessages(t *testing.T) {
 
 func TestBuildReportData(t *testing.T) {
 	s := &session.Session{
-		ID:        "test-session-1",
-		Title:     "Test Session",
+		ID:           "test-session-1",
+		Title:        "Test Session",
 		ProviderName: "anthropic",
-		CreatedAt: time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, 5, 21, 11, 0, 0, 0, time.UTC),
+		CreatedAt:    time.Date(2026, 5, 21, 10, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 5, 21, 11, 0, 0, 0, time.UTC),
 	}
 
 	tr := &transcript.Transcript{
@@ -337,11 +337,11 @@ func TestBuildReportData(t *testing.T) {
 
 func TestBuildReportData_SubagentEvents(t *testing.T) {
 	s := &session.Session{
-		ID:        "sub-session",
-		Title:     "Sub Session",
+		ID:           "sub-session",
+		Title:        "Sub Session",
 		ProviderName: "anthropic",
-		CreatedAt: time.Now(),
-		UpdatedAt: time.Now(),
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	tr := &transcript.Transcript{
@@ -409,11 +409,11 @@ func TestBuildReportData_SubagentEvents(t *testing.T) {
 
 func TestBuildReportDataFromMessages(t *testing.T) {
 	s := &session.Session{
-		ID:        "msg-session",
-		Title:     "Message Session",
+		ID:           "msg-session",
+		Title:        "Message Session",
 		ProviderName: "openai",
-		CreatedAt: time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC),
-		UpdatedAt: time.Date(2026, 5, 21, 9, 30, 0, 0, time.UTC),
+		CreatedAt:    time.Date(2026, 5, 21, 9, 0, 0, 0, time.UTC),
+		UpdatedAt:    time.Date(2026, 5, 21, 9, 30, 0, 0, time.UTC),
 	}
 
 	msgs := []session.Message{
@@ -429,7 +429,7 @@ func TestBuildReportDataFromMessages(t *testing.T) {
 		},
 	}
 
-	data := BuildReportDataFromMessages(s, msgs)
+	data := BuildReportDataFromMessages(s, msgs, nil)
 
 	if data.Session.ID != "msg-session" {
 		t.Errorf("Session.ID = %q", data.Session.ID)
@@ -468,7 +468,7 @@ func TestBuildReportDataFromMessages_MultipleTurns(t *testing.T) {
 		{Type: session.MessageTypeAssistant, Content: "A2", Timestamp: time.Now()},
 	}
 
-	data := BuildReportDataFromMessages(s, msgs)
+	data := BuildReportDataFromMessages(s, msgs, nil)
 
 	if len(data.Transcript.Turns) != 2 {
 		t.Errorf("len(Turns) = %d, want 2", len(data.Transcript.Turns))
@@ -481,13 +481,139 @@ func TestBuildReportDataFromMessages_MultipleTurns(t *testing.T) {
 	}
 }
 
-func TestGenerateHTML(t *testing.T) {
+func TestBuildReportDataFromMessages_SubagentChildren(t *testing.T) {
 	s := &session.Session{
-		ID:        "html-test",
-		Title:     "HTML Report Test",
-		ProviderName: "anthropic",
+		ID:        "msg-sub",
 		CreatedAt: time.Now(),
 		UpdatedAt: time.Now(),
+	}
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "research this", Timestamp: time.Now()},
+		{
+			Type:       session.MessageTypeToolCall,
+			Name:       "SubAgent",
+			Args:       `{"prompt":"search for files"}`,
+			ToolCallID: "call-1",
+			Timestamp:  time.Now(),
+		},
+		{
+			Type:       session.MessageTypeToolResult,
+			Name:       "SubAgent",
+			Result:     "final answer",
+			ToolCallID: "call-1",
+			SubagentID: "sub-abc",
+			Timestamp:  time.Now(),
+		},
+		// A SubAgent call whose sidecar file is missing must not break anything.
+		{
+			Type:       session.MessageTypeToolCall,
+			Name:       "SubAgent",
+			Args:       `{"prompt":"lost"}`,
+			ToolCallID: "call-2",
+			Timestamp:  time.Now(),
+		},
+		{
+			Type:       session.MessageTypeToolResult,
+			Name:       "SubAgent",
+			Result:     "gone",
+			ToolCallID: "call-2",
+			SubagentID: "sub-missing",
+			Timestamp:  time.Now(),
+		},
+		{Type: session.MessageTypeAssistant, Content: "done", Timestamp: time.Now()},
+	}
+
+	subagents := map[string][]session.Message{
+		"sub-abc": {
+			{Type: session.MessageTypeUser, Content: "search for files", Timestamp: time.Now()},
+			{Type: session.MessageTypeThinking, Content: "child thinking", Timestamp: time.Now()},
+			{Type: session.MessageTypeToolCall, Name: "Bash", Args: `{"command":"ls"}`, ToolCallID: "sub-call-1", Timestamp: time.Now()},
+			{Type: session.MessageTypeToolResult, Name: "Bash", Result: "file.go", ToolCallID: "sub-call-1", Timestamp: time.Now()},
+			{Type: session.MessageTypeAssistant, Content: "final answer", Timestamp: time.Now()},
+		},
+	}
+
+	data := BuildReportDataFromMessages(s, msgs, subagents)
+
+	if len(data.Transcript.Turns) != 1 {
+		t.Fatalf("len(Turns) = %d, want 1", len(data.Transcript.Turns))
+	}
+	events := data.Transcript.Turns[0].Events
+
+	// events: user, SubAgent call (children), SubAgent result, SubAgent call (no children), SubAgent result, text
+	var withKids, withoutKids *EventView
+	for i := range events {
+		ev := &events[i]
+		if ev.Type == "tool_call" && ev.Name == "SubAgent" {
+			if ev.HasChildren {
+				withKids = ev
+			} else {
+				withoutKids = ev
+			}
+		}
+	}
+
+	if withKids == nil {
+		t.Fatal("SubAgent call with sidecar messages should have children")
+	}
+	if withKids.Icon != "🔀" || withKids.CSSClass != "event-subagent" {
+		t.Errorf("subagent parent icon/class = %q/%q", withKids.Icon, withKids.CSSClass)
+	}
+	if len(withKids.Children) != 5 {
+		t.Fatalf("len(Children) = %d, want 5", len(withKids.Children))
+	}
+	wantIcons := []string{"👤", "💭", "🔧", "📋", "💬"}
+	for i, want := range wantIcons {
+		if withKids.Children[i].Icon != want {
+			t.Errorf("child %d icon = %q, want %q", i, withKids.Children[i].Icon, want)
+		}
+	}
+	if withKids.Children[0].Content != "search for files" {
+		t.Errorf("child prompt = %q", withKids.Children[0].Content)
+	}
+
+	if withoutKids == nil {
+		t.Fatal("SubAgent call without sidecar messages should still render")
+	}
+	if len(withoutKids.Children) != 0 {
+		t.Errorf("orphan SubAgent call should have no children, got %d", len(withoutKids.Children))
+	}
+
+	// Stats: sub-agent messages fold in, but its user prompt is not counted.
+	if data.Stats.SubAgentCount != 2 {
+		t.Errorf("SubAgentCount = %d, want 2", data.Stats.SubAgentCount)
+	}
+	if data.Stats.UserMsgCount != 1 {
+		t.Errorf("UserMsgCount = %d, want 1 (sub prompt excluded)", data.Stats.UserMsgCount)
+	}
+	if data.Stats.ToolCallCount != 3 {
+		t.Errorf("ToolCallCount = %d, want 3 (2 SubAgent + 1 Bash)", data.Stats.ToolCallCount)
+	}
+	if data.Stats.ThinkingCount != 1 {
+		t.Errorf("ThinkingCount = %d, want 1", data.Stats.ThinkingCount)
+	}
+	if data.Stats.TextCount != 2 {
+		t.Errorf("TextCount = %d, want 2", data.Stats.TextCount)
+	}
+	var bashFreq int
+	for _, kv := range data.Stats.ToolFreq {
+		if kv.Key == "Bash" {
+			bashFreq = kv.Value
+		}
+	}
+	if bashFreq != 1 {
+		t.Errorf("Bash freq = %d, want 1", bashFreq)
+	}
+}
+
+func TestGenerateHTML(t *testing.T) {
+	s := &session.Session{
+		ID:           "html-test",
+		Title:        "HTML Report Test",
+		ProviderName: "anthropic",
+		CreatedAt:    time.Now(),
+		UpdatedAt:    time.Now(),
 	}
 
 	tr := &transcript.Transcript{
