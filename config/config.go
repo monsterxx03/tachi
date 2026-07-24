@@ -527,6 +527,11 @@ type LSPConfig struct {
 	Servers          []LSPServerConfig `yaml:"servers"`
 }
 
+// IsEnabled returns whether LSP integration is enabled. Defaults to true.
+func (c *LSPConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
 // LSPServerConfig describes a single LSP server to manage.
 type LSPServerConfig struct {
 	Name               string            `yaml:"name"`

@@ -4,8 +4,9 @@ import "time"
 
 // Config is the runtime LSP configuration for the agent/lsp package.
 // Converted from config.LSPConfig during agent initialization.
+// The manager is only constructed when LSP is enabled, so Config carries
+// no Enabled flag of its own.
 type Config struct {
-	Enabled          bool
 	MaxRestarts      int
 	MaxFileSize      int64
 	MaxResults       int
