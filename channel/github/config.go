@@ -42,6 +42,15 @@ type Config struct {
 	// Behavior controls how the bot interacts with issues.
 	Behavior BehaviorConfig `yaml:"behavior"`
 
+	// Proxy is an optional proxy URL for GitHub API HTTP requests.
+	// Supported schemes: http, https, socks5.
+	// Examples:
+	//   http://127.0.0.1:8080
+	//   https://proxy.example.com:8443
+	//   socks5://127.0.0.1:1080
+	// When empty, direct connections are used (no proxy).
+	Proxy string `yaml:"proxy"`
+
 	// Security controls access and tool restrictions.
 	Security SecurityConfig `yaml:"security"`
 }

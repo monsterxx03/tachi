@@ -81,13 +81,13 @@ func (ch *GitHubChannel) OnStart(ctx context.Context) error {
 
 	if ch.cfg.HasGitHubApp() {
 		app := ch.cfg.GitHubApp
-		client, err = NewGitHubClientFromApp(ctx, app.AppID, app.PrivateKeyPath, app.InstallationID, ch.logger)
+		client, err = NewGitHubClientFromApp(ctx, app.AppID, app.PrivateKeyPath, app.InstallationID, ch.cfg.Proxy, ch.logger)
 	} else {
 		token, tokErr := ch.cfg.ResolveToken()
 		if tokErr != nil {
 			return fmt.Errorf("github: %w", tokErr)
 		}
-		client, err = NewGitHubClient(ctx, token, ch.logger)
+		client, err = NewGitHubClient(ctx, token, ch.cfg.Proxy, ch.logger)
 	}
 	if err != nil {
 		return fmt.Errorf("github: %w", err)

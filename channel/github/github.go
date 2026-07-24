@@ -16,6 +16,7 @@ import (
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v69/github"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/proxy"
 	"golang.org/x/oauth2"
 )
 
@@ -27,11 +28,13 @@ type GitHubClient struct {
 }
 
 // NewGitHubClient creates a new GitHub API client using a PAT.
-func NewGitHubClient(ctx context.Context, token string, log *logger.Logger) (*GitHubClient, error) {
+// If proxyURL is non-empty, all HTTP requests are routed through that proxy.
+// Supported proxy schemes: http, https, socks5.
+func NewGitHubClient(ctx context.Context, token string, proxyURL string, log *logger.Logger) (*GitHubClient, error) {
 	ts := oauth2.StaticTokenSource(
 		&oauth2.Token{AccessToken: token},
 	)
-	tc := oauth2.NewClient(ctx, ts)
+	tc := newOAuthClient(ctx, ts, proxyURL)
 	client := github.NewClient(tc)
 
 	return newClientFromHTTP(ctx, client, log)
@@ -41,10 +44,23 @@ func NewGitHubClient(ctx context.Context, token string, log *logger.Logger) (*Gi
 // It generates a JWT, exchanges it for an installation access token, and uses that
 // token for API calls. The token is valid for 1 hour; a new one is obtained on each call
 // (the oauth2.TokenSource handles caching).
-func NewGitHubClientFromApp(ctx context.Context, appID int64, privateKeyPath string, installationID int64, log *logger.Logger) (*GitHubClient, error) {
+// If proxyURL is non-empty, all HTTP requests (including installation token exchange)
+// are routed through that proxy. Supported proxy schemes: http, https, socks5.
+func NewGitHubClientFromApp(ctx context.Context, appID int64, privateKeyPath string, installationID int64, proxyURL string, log *logger.Logger) (*GitHubClient, error) {
 	key, err := parsePrivateKey(privateKeyPath)
 	if err != nil {
 		return nil, err
+	}
+
+	// Build a proxy-enabled HTTP client for installation token requests.
+	var httpClient *http.Client
+	if proxyURL != "" {
+		httpClient, err = proxy.NewHTTPClient(proxyURL, 30*time.Second)
+		if err != nil {
+			return nil, fmt.Errorf("github: create proxy client: %w", err)
+		}
+	} else {
+		httpClient = &http.Client{Timeout: 30 * time.Second}
 	}
 
 	// Create a token source that generates a fresh installation token when needed.
@@ -52,9 +68,10 @@ func NewGitHubClientFromApp(ctx context.Context, appID int64, privateKeyPath str
 		appID:          appID,
 		key:            key,
 		installationID: installationID,
+		httpClient:     httpClient,
 	}
 
-	tc := oauth2.NewClient(ctx, ts)
+	tc := newOAuthClient(ctx, ts, proxyURL)
 	client := github.NewClient(tc)
 
 	return newClientFromHTTP(ctx, client, log)
@@ -65,6 +82,7 @@ type appTokenSource struct {
 	appID          int64
 	key            *rsa.PrivateKey
 	installationID int64
+	httpClient     *http.Client // HTTP client with optional proxy support
 }
 
 // Token returns a valid installation access token.
@@ -83,7 +101,7 @@ func (s *appTokenSource) Token() (*oauth2.Token, error) {
 		return nil, fmt.Errorf("github: sign JWT: %w", err)
 	}
 
-	result, err := requestInstallationToken(context.Background(), s.installationID, jwtStr)
+	result, err := requestInstallationToken(context.Background(), s.installationID, jwtStr, s.httpClient)
 	if err != nil {
 		return nil, err
 	}
@@ -98,6 +116,29 @@ func (s *appTokenSource) Token() (*oauth2.Token, error) {
 type installationTokenResponse struct {
 	Token     string    `json:"token"`
 	ExpiresAt time.Time `json:"expires_at"`
+}
+
+// newOAuthClient creates an *http.Client that adds OAuth2 tokens to requests
+// and optionally routes through a proxy.
+//
+// When proxyURL is non-empty, all HTTP requests go through that proxy.
+// Supported proxy schemes: http, https, socks5 (see pkg/proxy).
+func newOAuthClient(ctx context.Context, ts oauth2.TokenSource, proxyURL string) *http.Client {
+	baseTransport := http.DefaultTransport
+
+	if proxyURL != "" {
+		proxyClient, err := proxy.NewHTTPClient(proxyURL, 30*time.Second)
+		if err == nil && proxyClient.Transport != nil {
+			baseTransport = proxyClient.Transport
+		}
+	}
+
+	return &http.Client{
+		Transport: &oauth2.Transport{
+			Source: ts,
+			Base:   baseTransport,
+		},
+	}
 }
 
 // newClientFromHTTP creates a GitHubClient from an existing http.Client.
@@ -256,7 +297,7 @@ func ParseRepo(name string) (owner, repo string, err error) {
 // This is a simpler path than the full oauth2 token source for git commands.
 // requestInstallationToken exchanges a JWT for a GitHub App installation access token.
 // Shared by appTokenSource.Token() and ResolveInstallationToken().
-func requestInstallationToken(ctx context.Context, installationID int64, jwtToken string) (*installationTokenResponse, error) {
+func requestInstallationToken(ctx context.Context, installationID int64, jwtToken string, httpClient *http.Client) (*installationTokenResponse, error) {
 	url := fmt.Sprintf("https://api.github.com/app/installations/%d/access_tokens", installationID)
 	req, err := http.NewRequestWithContext(ctx, "POST", url, nil)
 	if err != nil {
@@ -265,7 +306,11 @@ func requestInstallationToken(ctx context.Context, installationID int64, jwtToke
 	req.Header.Set("Authorization", "Bearer "+jwtToken)
 	req.Header.Set("Accept", "application/vnd.github.v3+json")
 
-	resp, err := http.DefaultClient.Do(req)
+	client := httpClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("github: request installation token: %w", err)
 	}
@@ -352,7 +397,16 @@ func (c *Config) ResolveInstallationToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	result, err := requestInstallationToken(ctx, app.InstallationID, jwtStr)
+	// Build a proxy-enabled HTTP client if configured.
+	var httpClient *http.Client
+	if c.Proxy != "" {
+		httpClient, err = proxy.NewHTTPClient(c.Proxy, 30*time.Second)
+		if err != nil {
+			return "", fmt.Errorf("github: create proxy client: %w", err)
+		}
+	}
+
+	result, err := requestInstallationToken(ctx, app.InstallationID, jwtStr, httpClient)
 	if err != nil {
 		return "", err
 	}

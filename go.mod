@@ -12,6 +12,8 @@ require (
 	github.com/charmbracelet/glamour v1.0.0
 	github.com/coder/acp-go-sdk v0.13.5
 	github.com/creasty/defaults v1.8.0
+	github.com/golang-jwt/jwt/v5 v5.2.1
+	github.com/google/go-github/v69 v69.2.0
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.4.2
 	github.com/mark3labs/mcp-go v0.55.1
@@ -21,8 +23,10 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.8.0
 	golang.org/x/net v0.53.0
+	golang.org/x/oauth2 v0.30.0
 	golang.org/x/term v0.42.0
 	gopkg.in/yaml.v3 v3.0.1
+	mvdan.cc/sh/v3 v3.13.1
 )
 
 require (
@@ -44,8 +48,6 @@ require (
 	github.com/clipperhouse/uax29/v2 v2.7.0 // indirect
 	github.com/davecgh/go-spew v1.1.1 // indirect
 	github.com/dlclark/regexp2 v1.12.0 // indirect
-	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
-	github.com/google/go-github/v69 v69.2.0 // indirect
 	github.com/google/go-querystring v1.1.0 // indirect
 	github.com/google/jsonschema-go v0.4.2 // indirect
 	github.com/gorilla/css v1.0.1 // indirect
@@ -68,11 +70,9 @@ require (
 	github.com/yuin/goldmark v1.8.2 // indirect
 	github.com/yuin/goldmark-emoji v1.0.6 // indirect
 	golang.org/x/crypto v0.50.0 // indirect
-	golang.org/x/oauth2 v0.30.0 // indirect
 	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.43.0 // indirect
 	golang.org/x/text v0.36.0 // indirect
-	mvdan.cc/sh/v3 v3.13.1 // indirect
 )
 
 replace github.com/coder/acp-go-sdk => github.com/monsterxx03/acp-go-sdk v0.13.6-0.20260723091451-d43b1a01110e
