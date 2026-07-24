@@ -224,12 +224,13 @@ type threadActivation struct {
 
 	// --- Whisper ambient state (only active when groupChat=true) ---
 
-	groupChat      bool         // whether this thread is in group chat mode (set once)
-	ambientPending []ambientMsg // buffered non-directed messages
-	ambientHistory []ambientMsg // in-memory history of previous ambient messages + LLM replies (never persisted to session)
-	ambientTimer   *time.Timer  // batch window timer (nil when inactive)
-	lastAmbient    time.Time    // when the last ambient turn ended
-	silenceCount   atomic.Int32 // consecutive [SILENT] replies (for backoff)
+	groupChat      bool               // whether this thread is in group chat mode (set once)
+	ambientPending []ambientMsg       // buffered non-directed messages
+	ambientHistory []ambientMsg       // in-memory history of previous ambient messages + LLM replies (never persisted to session)
+	ambientTimer   *time.Timer        // batch window timer (nil when inactive)
+	ambientCancel  context.CancelFunc // cancels the running ambient turn (nil when no ambient turn is active)
+	lastAmbient    time.Time          // when the last ambient turn ended
+	silenceCount   atomic.Int32       // consecutive [SILENT] replies (drives batch-window backoff)
 }
 
 // ambientMsg represents a single non-directed message buffered for whisper processing.

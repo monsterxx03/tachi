@@ -7,7 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
@@ -301,7 +303,10 @@ func TestIsSilence(t *testing.T) {
 	assert.True(t, mgr.isSilence("  [SILENT]  "))
 	assert.True(t, mgr.isSilence("  [silent]\n"))
 	assert.True(t, mgr.isSilence("[SILENT] nothing to add"))
-	assert.True(t, mgr.isSilence("没什么要说的，[SILENT]"))
+	// Prefix match: a reply merely mentioning the marker mid-sentence is
+	// a real reply and must not be swallowed.
+	assert.False(t, mgr.isSilence("没什么要说的，[SILENT]"))
+	assert.False(t, mgr.isSilence("The fix is [SILENT] mode, fyi"))
 	assert.False(t, mgr.isSilence("I think we should help"))
 	assert.False(t, mgr.isSilence(""))
 }
@@ -338,4 +343,167 @@ func TestChannelWhisperConfig_CustomValues(t *testing.T) {
 	assert.Equal(t, "SKIP", cfg.SilenceMarker)
 	assert.Equal(t, []string{"MemoryRecall", "MemoryRecord"}, cfg.AmbientTools)
 	assert.Equal(t, 2048, cfg.AmbientMaxTokens)
+}
+
+func TestDefaultAmbientTools_ReadOnly(t *testing.T) {
+	// Memory writes must not be in the default whitelist — ambient messages
+	// are UNTRUSTED and could otherwise poison long-term memory.
+	assert.NotContains(t, defaultAmbientTools, tools.ToolNameRecordMemory)
+	assert.Contains(t, defaultAmbientTools, tools.ToolNameMemoryRecall)
+}
+
+func TestAppendToAmbientHistory_Cap(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Channel.Whisper.AmbientMaxHistory = 3
+	mgr := New(Config{Cfg: cfg})
+	ta := &threadActivation{}
+
+	ta.mu.Lock()
+	for i := range 5 {
+		mgr.appendToAmbientHistory(ta, ambientMsg{
+			content:   "message " + string(rune('0'+i)),
+			sender:    "user",
+			timestamp: time.Now(),
+		})
+	}
+	ta.mu.Unlock()
+
+	// FIFO: only the most recent 3 entries survive.
+	require.Len(t, ta.ambientHistory, 3)
+	assert.Equal(t, "message 2", ta.ambientHistory[0].content)
+	assert.Equal(t, "message 3", ta.ambientHistory[1].content)
+	assert.Equal(t, "message 4", ta.ambientHistory[2].content)
+}
+
+func TestAmbientBatchWindow_Backoff(t *testing.T) {
+	cfg := config.DefaultConfig() // AmbientBatchWindow = 30s
+	mgr := New(Config{Cfg: cfg})
+	ta := &threadActivation{}
+
+	// No silences → base window.
+	assert.Equal(t, 30*time.Second, mgr.ambientBatchWindow(ta))
+
+	// Each consecutive [SILENT] doubles the window.
+	ta.silenceCount.Store(1)
+	assert.Equal(t, 60*time.Second, mgr.ambientBatchWindow(ta))
+	ta.silenceCount.Store(2)
+	assert.Equal(t, 120*time.Second, mgr.ambientBatchWindow(ta))
+
+	// Capped at maxAmbientBatchWindow.
+	ta.silenceCount.Store(10)
+	assert.Equal(t, maxAmbientBatchWindow, mgr.ambientBatchWindow(ta))
+}
+
+func TestTrimAmbientHistory(t *testing.T) {
+	mk := func(roles ...string) []llm.Message {
+		msgs := make([]llm.Message, len(roles))
+		for i, r := range roles {
+			msgs[i] = llm.Message{Role: r, Content: "x"}
+		}
+		return msgs
+	}
+
+	// Under the limit — returned unchanged.
+	short := mk("user", "assistant")
+	assert.Equal(t, short, trimAmbientHistory(short))
+
+	// Over the limit — tail must start at a user boundary (no orphan
+	// tool_result / assistant messages from a cut pair).
+	roles := make([]string, 0, 15)
+	for i := range 15 {
+		if i%2 == 0 {
+			roles = append(roles, "user")
+		} else {
+			roles = append(roles, "assistant")
+		}
+	}
+	trimmed := trimAmbientHistory(mk(roles...))
+	require.NotEmpty(t, trimmed)
+	assert.Equal(t, "user", trimmed[0].Role)
+	assert.LessOrEqual(t, len(trimmed), ambientSessionHistoryLimit)
+
+	// No user message in the tail → empty is safer than a broken pairing.
+	allAssistant := make([]string, 12)
+	for i := range allAssistant {
+		allAssistant[i] = "assistant"
+	}
+	assert.Empty(t, trimAmbientHistory(mk(allAssistant...)))
+}
+
+func TestFlushAmbientBatch_RecordsHistoryAndCleanup(t *testing.T) {
+	cfg := config.DefaultConfig() // no providers → turn exits early
+	mgr := New(Config{
+		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
+	})
+
+	ta := mgr.activateThread("wave:group:gc_flush", t.Context())
+	ta.mu.Lock()
+	ta.groupChat = true
+	ta.ambientPending = []ambientMsg{
+		{content: "hello", sender: "张三", timestamp: time.Now()},
+		{content: "world", sender: "李四", timestamp: time.Now()},
+	}
+	ta.mu.Unlock()
+
+	mgr.flushAmbientBatch("wave:group:gc_flush")
+
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	// "Seen means recorded": the batch lands in history even though the
+	// turn never ran (no provider configured).
+	require.Len(t, ta.ambientHistory, 2)
+	assert.Equal(t, "hello", ta.ambientHistory[0].content)
+	assert.Equal(t, "world", ta.ambientHistory[1].content)
+	// Turn-active marker is released on the early-exit path — the thread
+	// must not get stuck "active".
+	assert.Nil(t, ta.steerRespCh)
+	assert.Nil(t, ta.ambientCancel)
+	assert.False(t, ta.lastAmbient.IsZero())
+	assert.Empty(t, ta.ambientPending)
+}
+
+func TestAmbientPreempt_DirectedMessage(t *testing.T) {
+	cfg := config.DefaultConfig()
+	mgr := New(Config{
+		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
+	})
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "test-model",
+			ContextWindow: 128_000,
+		},
+		MaxTokens: 4096,
+	}
+	mgr.provider = &mockProvider{name: "mock", responses: []string{"收到"}}
+
+	// Simulate a running ambient turn.
+	preempted := false
+	ta := &threadActivation{
+		steerRespCh:   make(chan string),
+		groupChat:     true,
+		ambientCancel: func() { preempted = true },
+	}
+	ta.ctx, ta.cancel = t.Context(), func() {}
+	mgr.threadActivations.Store("wave:group:gc_preempt", ta)
+
+	handler := mgr.buildHandler()
+	result := handler(t.Context(), channel.IncomingMessage{
+		ThreadID:  "wave:group:gc_preempt",
+		MessageID: "msg-1",
+		Content:   "@bot help me",
+		Sender:    "张三",
+		Directed:  true,
+		GroupChat: true,
+	})
+
+	// The ambient turn must be cancelled and the directed message must NOT
+	// be absorbed as steer — it gets its own turn and a real reply.
+	assert.True(t, preempted, "directed message should preempt the ambient turn")
+	assert.False(t, result.Steered)
+	assert.NoError(t, result.Err)
+	assert.Contains(t, result.Reply.Content, "收到")
+	assert.Nil(t, ta.ambientCancel)
 }

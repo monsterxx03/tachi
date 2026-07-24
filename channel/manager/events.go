@@ -110,11 +110,17 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				parts = append(parts, ta.pending...)
 				ta.pending = nil
 			}
-			// Drain ambient messages as formatted steer context.
+			// Drain ambient messages as formatted steer context, and record
+			// them into ambient history — "seen means recorded" — so future
+			// ambient turns see what was steered into this turn.
 			if len(ta.ambientPending) > 0 {
 				parts = append(parts, formatAmbientForSteer(ta.ambientPending))
+				m.appendToAmbientHistory(ta, ta.ambientPending...)
 				ta.ambientPending = nil
 			}
+			// Capture the steer channel under lock: a directed message may
+			// preempt an ambient turn and swap ta.steerRespCh concurrently.
+			steerCh := ta.steerRespCh
 			joined := ""
 			if len(parts) > 0 {
 				joined = strings.Join(parts, "\n\n")
@@ -122,10 +128,13 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			}
 			ta.mu.Unlock()
 
-			// Write to steerRespCh; agent is blocking on this read.
-			// Use select with ctx fallback to avoid deadlock on cancellation.
+			// Write to steerCh; agent is blocking on this read.
+			// Select on both the turn ctx (ambient preemption) and the thread
+			// ctx (/stop) to avoid leaking this goroutine on cancellation.
 			select {
-			case ta.steerRespCh <- joined:
+			case steerCh <- joined:
+			case <-ctx.Done():
+				return text.String(), ctx.Err()
 			case <-ta.ctx.Done():
 				return text.String(), ta.ctx.Err()
 			}

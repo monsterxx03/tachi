@@ -14,12 +14,23 @@ import (
 
 // defaultAmbientTools is the default tool whitelist for ambient turns
 // when config.ambient_tools is not set.
+//
+// Deliberately read-only: ambient messages are UNTRUSTED group chat input,
+// so memory writes (RecordMemory) are excluded by default — a crafted group
+// message could otherwise poison long-term memory. Opt in via ambient_tools.
 var defaultAmbientTools = []string{
 	tools.ToolNameMemoryRecall,
-	tools.ToolNameRecordMemory,
 	tools.ToolNameWebFetch,
 	tools.ToolNameWebSearch,
 }
+
+// ambientSessionHistoryLimit caps how many session-history messages an
+// ambient turn carries. Full history is expensive and mostly irrelevant for
+// deciding whether to chime in; ambient context comes from ambientHistory.
+const ambientSessionHistoryLimit = 10
+
+// maxAmbientBatchWindow caps the silence-backoff batch window.
+const maxAmbientBatchWindow = 10 * time.Minute
 
 // whisperPromptSuffix is appended to the system prompt for group chat sessions.
 // It instructs the agent on when to speak and when to stay silent.
@@ -84,7 +95,7 @@ func (m *Manager) handleAmbientMessage(ctx context.Context, msg channel.Incoming
 		ta.ambientTimer.Stop()
 	}
 
-	window := m.cfg.Channel.Whisper.AmbientBatchWindow
+	window := m.ambientBatchWindow(ta)
 	ta.ambientTimer = time.AfterFunc(window, func() {
 		m.flushAmbientBatch(msg.ThreadID)
 	})
@@ -118,8 +129,30 @@ func (m *Manager) appendToAmbientHistory(ta *threadActivation, entries ...ambien
 	}
 }
 
+// ambientBatchWindow returns the effective batch window, applying exponential
+// backoff when consecutive ambient turns ended in [SILENT] (design doc §7.3):
+// each silent turn doubles the window, capped at maxAmbientBatchWindow.
+// The counter resets when the agent replies or a directed message arrives.
+func (m *Manager) ambientBatchWindow(ta *threadActivation) time.Duration {
+	window := m.cfg.Channel.Whisper.AmbientBatchWindow
+	if window <= 0 {
+		window = 30 * time.Second
+	}
+	if n := ta.silenceCount.Load(); n > 0 {
+		window = window << uint(min(n, 5))
+		if window > maxAmbientBatchWindow {
+			window = maxAmbientBatchWindow
+		}
+	}
+	return window
+}
+
 // flushAmbientBatch fires when the batch window expires. It starts a
 // lightweight ambient turn with the buffered messages.
+//
+// All state transitions happen under ta.mu before the turn starts, so the
+// thread is marked active atomically — no window in which a concurrent
+// directed or ambient turn could start.
 func (m *Manager) flushAmbientBatch(threadID string) {
 	ta, ok := m.threadActivations.Load(threadID)
 	if !ok {
@@ -129,9 +162,11 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 	ta.mu.Lock()
 	ta.ambientTimer = nil
 
-	// Cooldown check.
+	// Cooldown check. Discarded messages are still recorded into ambient
+	// history so future turns know they existed.
 	cooldown := m.cfg.Channel.Whisper.AmbientCooldown
 	if cooldown > 0 && !ta.lastAmbient.IsZero() && time.Since(ta.lastAmbient) < cooldown {
+		m.appendToAmbientHistory(ta, ta.ambientPending...)
 		ta.ambientPending = nil
 		ta.mu.Unlock()
 		m.logger.Info(context.Background(), "channel: ambient cooldown active, discarding", "thread", threadID)
@@ -150,27 +185,71 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 		return
 	}
 
-	// Build ambient prompt and drain buffer.
+	// Drain buffer.
 	msgs := ta.ambientPending
 	ta.ambientPending = nil
+
+	// Snapshot history BEFORE recording the current batch, so the batch
+	// appears only in the CURRENT section of the prompt, not duplicated
+	// in the PREVIOUS section.
+	history := make([]ambientMsg, len(ta.ambientHistory))
+	copy(history, ta.ambientHistory)
+
+	// Record the batch immediately — "seen means recorded". It stays in
+	// history whether the agent replies, stays silent, or the turn gets
+	// preempted by a directed message.
+	m.appendToAmbientHistory(ta, msgs...)
+
+	// Mark the thread active and make the turn cancellable BEFORE releasing
+	// the lock. steerRespCh doubles as the "turn active" marker for both
+	// handleAmbientMessage (Case A) and the directed handler (preemption).
+	steerCh := make(chan string)
+	ta.steerRespCh = steerCh
+	ambientCtx, ambientCancel := context.WithCancel(ta.ctx)
+	ta.ambientCancel = ambientCancel
 	ta.mu.Unlock()
 
 	m.logger.Info(context.Background(), "channel: ambient flush", "thread", threadID, "msgs", len(msgs))
-	m.runAmbientTurn(threadID, msgs)
+	m.runAmbientTurn(ambientCtx, threadID, msgs, history, steerCh)
+}
+
+// endAmbientTurn releases the turn-active marker installed by flushAmbientBatch.
+// If a directed turn preempted the ambient turn and installed its own
+// steerRespCh in the meantime, that marker is left untouched.
+func (m *Manager) endAmbientTurn(ta *threadActivation, steerCh chan string) {
+	ta.mu.Lock()
+	defer ta.mu.Unlock()
+	if ta.steerRespCh == steerCh {
+		ta.steerRespCh = nil
+	}
+	ta.ambientCancel = nil
+	ta.lastAmbient = time.Now()
 }
 
 // runAmbientTurn starts a forked ambient turn for the batched ambient messages.
 // The turn runs in an isolated agent (Fork) with restricted tools and no session
 // recording. The agent decides whether to reply or stay silent.
-func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
+//
+// The turn is cancellable via ctx (derived from ta.ctx by flushAmbientBatch):
+// /stop cancels the whole thread activation, and a directed message preempts
+// the ambient turn via ta.ambientCancel. The turn-active marker (steerRespCh)
+// is always released on exit, unless a directed turn already replaced it.
+func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []ambientMsg, history []ambientMsg, steerCh chan string) {
+	ta, ok := m.threadActivations.Load(threadID)
+	if !ok {
+		return
+	}
+	// Release the turn-active marker on ALL exit paths (setup failures
+	// included), so the thread can never get stuck "active".
+	defer m.endAmbientTurn(ta, steerCh)
+
 	prov, resolved, _ := m.getProviderForThread(threadID)
 	if prov == nil || resolved == nil {
-		m.logger.Warn(context.Background(), "channel: ambient turn skipped (no provider)", "thread", threadID)
+		m.logger.Warn(ctx, "channel: ambient turn skipped (no provider)", "thread", threadID)
 		return
 	}
 
 	whisperCfg := m.cfg.Channel.Whisper
-	ctx := context.Background()
 
 	maxTokens := whisperCfg.AmbientMaxTokens
 	if maxTokens <= 0 {
@@ -186,22 +265,22 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	// and to load session history. Release immediately after Fork().
 	ca, err := m.acquireAgent(ctx, threadID)
 	if err != nil {
-		m.logger.Error(context.Background(), "channel: ambient fork acquire failed", err, "thread", threadID)
+		m.logger.Error(ctx, "channel: ambient fork acquire failed", err, "thread", threadID)
 		return
 	}
 	parentAgent := ca.agent
 
 	// Load session history from parent.
-	history, err := parentAgent.LoadSessionHistory()
+	sessionHistory, err := parentAgent.LoadSessionHistory()
 	if err != nil {
-		m.logger.Error(context.Background(), "channel: ambient fork load history failed", err, "thread", threadID)
+		m.logger.Error(ctx, "channel: ambient fork load history failed", err, "thread", threadID)
 		m.releaseAgent(ca)
 		return
 	}
 
 	// Fork a restricted agent — inherits PM from parent but not MCP.
 	// Ambient turns should only use the whitelisted tools (MemoryRecall,
-	// RecordMemory, WebFetch, WebSearch) without MCP tool access.
+	// WebFetch, WebSearch by default) without MCP tool access.
 	forked := parentAgent.Fork(agent.ForkConfig{
 		Provider:      prov,
 		MaxIterations: whisperCfg.AmbientMaxIterations,
@@ -221,56 +300,48 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	// Build system prompt with whisper suffix for group chat.
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "") + "\n" + whisperPromptSuffix
 
-	// Steer channel — new ambient/directed messages arriving during
-	// the fork turn are injected via steer (drainEvents handles this).
-	steerCh := make(chan string)
+	// Steer channel — new ambient messages arriving during the fork turn
+	// are injected via steer (drainEvents handles this). Created by
+	// flushAmbientBatch when marking the thread active.
 	forkAgent.SetSteerChannel(steerCh)
 
-	// Mark the thread as having an active turn (so handleAmbientMessage
-	// and the directed handler buffer instead of starting new turns).
-	ta, ok := m.threadActivations.Load(threadID)
-	if !ok {
+	// A directed message may have preempted us during the (slow) setup
+	// above — bail before spending an LLM call.
+	if ctx.Err() != nil {
+		m.logger.Info(ctx, "channel: ambient turn cancelled before run", "thread", threadID)
 		return
 	}
-	ta.mu.Lock()
-	ta.steerRespCh = steerCh
-	ta.resultCh = make(chan handlerResult, 1)
-	// Read ambient history for this turn (in-memory only, never persisted to session).
-	ambientHistory := make([]ambientMsg, len(ta.ambientHistory))
-	copy(ambientHistory, ta.ambientHistory)
-	ta.mu.Unlock()
 
 	// Run — no session recording (no SessionManager), no memory writes
 	// (no memory backend), no auto-compact (no cfg). Uses RunConversationStream
-	// for history + steer support.
-	eventCh := forkAgent.RunConversationStream(ctx, history,
-		buildAmbientPrompt(ambientHistory, msgs), systemPrompt,
+	// for history + steer support. Session history is trimmed — ambient
+	// context comes from the ambient history in the prompt.
+	eventCh := forkAgent.RunConversationStream(ctx, trimAmbientHistory(sessionHistory),
+		buildAmbientPrompt(history, msgs), systemPrompt,
 		llm.ChatOptions{MaxTokens: maxTokens})
 	text, err := m.drainEvents(ctx, eventCh, forkAgent, nil, ta, nil)
 
-	// Clean up thread activation state.
-	ta.mu.Lock()
-	ta.steerRespCh = nil
-	ta.resultCh = nil
-	ta.lastAmbient = time.Now()
-	ta.mu.Unlock()
-
 	if err != nil {
-		m.logger.Error(context.Background(), "channel: ambient fork turn error", err, "thread", threadID)
+		if ctx.Err() != nil {
+			// Preempted by a directed message or /stop — not an error.
+			m.logger.Info(ctx, "channel: ambient turn cancelled", "thread", threadID)
+		} else {
+			m.logger.Error(ctx, "channel: ambient fork turn error", err, "thread", threadID)
+		}
 		return
 	}
 
-	// Check if the agent chose silence.
+	// Check if the agent chose silence. The batch was already recorded
+	// into ambient history at flush time; silent turns add no reply entry.
 	if m.isSilence(text) {
 		count := ta.silenceCount.Add(1)
-		m.logger.Info(context.Background(), "channel: ambient fork [SILENT]", "thread", threadID, "consecutive", count, "text", text)
+		m.logger.Info(ctx, "channel: ambient fork [SILENT]", "thread", threadID, "consecutive", count, "text", text)
 		return
 	}
 
-	// Agent has something to say — save to ambient history before sending.
-	// This ensures future ambient turns see this exchange as context.
+	// Agent has something to say — record the reply so future ambient
+	// turns see the full exchange (the batch is already in history).
 	ta.mu.Lock()
-	m.appendToAmbientHistory(ta, msgs...)
 	m.appendToAmbientHistory(ta, ambientMsg{
 		content:   text,
 		sender:    "Tachi",
@@ -278,17 +349,34 @@ func (m *Manager) runAmbientTurn(threadID string, msgs []ambientMsg) {
 	})
 	ta.mu.Unlock()
 
-	// Reset silence counter and send.
+	// Reset silence counter (backoff) and send.
 	ta.silenceCount.Store(0)
-	m.logger.Info(context.Background(), "channel: ambient fork reply", "thread", threadID, "len", len(text))
+	m.logger.Info(ctx, "channel: ambient fork reply", "thread", threadID, "len", len(text))
 	m.sendToThread(ctx, threadID, text, "")
 }
 
+// trimAmbientHistory caps session history for an ambient turn to the most
+// recent ambientSessionHistoryLimit messages, aligned to a user-message
+// boundary so the tail never starts with an orphan tool_result (which
+// would violate provider API pairing constraints).
+func trimAmbientHistory(history []llm.Message) []llm.Message {
+	if len(history) <= ambientSessionHistoryLimit {
+		return history
+	}
+	tail := history[len(history)-ambientSessionHistoryLimit:]
+	for len(tail) > 0 && tail[0].Role != "user" {
+		tail = tail[1:]
+	}
+	return tail
+}
+
 // isSilence checks if the reply matches the silence marker.
-// Matching is lenient: trim whitespace + case-insensitive contains.
+// Matching is lenient: trim whitespace + case-insensitive prefix match —
+// "[SILENT] ..." is silence, but a reply merely mentioning the marker
+// mid-sentence is not swallowed.
 func (m *Manager) isSilence(reply string) bool {
 	marker := m.cfg.Channel.Whisper.SilenceMarker
-	return strings.Contains(strings.ToLower(strings.TrimSpace(reply)), strings.ToLower(marker))
+	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(reply)), strings.ToLower(marker))
 }
 
 // buildAmbientPrompt formats batched ambient messages into a user prompt
@@ -302,7 +390,7 @@ func buildAmbientPrompt(history, msgs []ambientMsg) string {
 	if len(history) > 0 {
 		b.WriteString("--- PREVIOUS AMBIENT CONVERSATION (UNTRUSTED) ---\n")
 		for _, m := range history {
-			ts := m.timestamp.Format("15:04:05")
+			ts := m.timestamp.Format("01-02 15:04:05")
 			fmt.Fprintf(&b, "[%s] %s: %s\n", ts, m.sender, m.content)
 		}
 		b.WriteString("--- END PREVIOUS AMBIENT ---\n\n")
@@ -311,7 +399,7 @@ func buildAmbientPrompt(history, msgs []ambientMsg) string {
 	// Current batch of ambient messages
 	b.WriteString("--- CURRENT AMBIENT MESSAGES (UNTRUSTED) ---\n")
 	for _, m := range msgs {
-		ts := m.timestamp.Format("15:04:05")
+		ts := m.timestamp.Format("01-02 15:04:05")
 		fmt.Fprintf(&b, "[%s] %s: %s\n", ts, m.sender, m.content)
 	}
 	b.WriteString("--- END CURRENT AMBIENT ---\n\n")

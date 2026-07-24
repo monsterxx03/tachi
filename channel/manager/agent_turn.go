@@ -125,6 +125,8 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// Check if an agent is already running for this thread.
 		ta := m.activateThread(msg.ThreadID, ctx)
 		ta.isCompact = isCompactCmd
+		// A directed message resets the ambient silence backoff (design doc §7.3).
+		ta.silenceCount.Store(0)
 
 		// Record group chat mode on first activation (immutable for session lifetime).
 		// Also cancel any pending ambient timer — directed messages take priority.
@@ -154,6 +156,17 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		}
 
 		ta.mu.Lock()
+		// A directed message preempts a running ambient turn: directed
+		// messages must always get a reply, while an ambient turn is
+		// best-effort and disposable. Cancelling unwinds the fork via ctx;
+		// its cleanup (endAmbientTurn) sees steerRespCh replaced/nil and
+		// leaves the new directed turn's state untouched.
+		if ta.ambientCancel != nil {
+			ta.ambientCancel()
+			ta.ambientCancel = nil
+			ta.steerRespCh = nil
+			m.logger.Info(context.Background(), "channel: preempted ambient turn for directed message", "thread", msg.ThreadID)
+		}
 		if ta.steerRespCh != nil {
 			// Agent already running — check if drainEvents is waiting for
 			// an AskUser answer. When askUserRespCh is non-nil and the
