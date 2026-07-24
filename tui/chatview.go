@@ -58,6 +58,12 @@ type ChatView struct {
 	// trigger a re-render.
 	streamMDRendered    string
 	streamMDCompleteLen int
+
+	// streamMDStyled caches assistantMsgStyle.Render(streamMDRendered) so
+	// that we avoid re-processing the entire ANSI content through lipgloss
+	// on every non-newline text delta. Only invalidated when glamour
+	// re-renders (i.e. when new complete lines arrive).
+	streamMDStyled string
 }
 
 func NewChatView() ChatView {
@@ -237,6 +243,7 @@ func (c *ChatView) ResetStreaming() {
 	c.currentTools = nil
 	c.streamMDRendered = ""
 	c.streamMDCompleteLen = 0
+	c.streamMDStyled = ""
 }
 
 func (c *ChatView) Clear() {
@@ -512,9 +519,10 @@ func (c *ChatView) renderStreamBlock() string {
 		if b.Len() > 0 {
 			b.WriteString("\n")
 		}
-		b.WriteString(assistantMsgStyle.Render(
-			c.renderStreamText(c.currentText.String()),
-		))
+		// renderStreamText already returns styled content (via streamMDStyled
+		// cache for complete lines, or direct assistantMsgStyle.Render for
+		// partial single-line text). No outer wrapper needed.
+		b.WriteString(c.renderStreamText(c.currentText.String()))
 	}
 	for _, tc := range c.currentTools {
 		if b.Len() > 0 {
@@ -526,12 +534,16 @@ func (c *ChatView) renderStreamBlock() string {
 }
 
 // renderStreamText renders streaming text efficiently: complete lines are
-// markdown-rendered and cached; the trailing in-progress line is shown as
-// plain text to avoid flickering on partial markdown syntax.
+// markdown-rendered and styled, with both results cached so that glamour
+// and lipgloss are only re-run when new complete lines arrive (not on every
+// character delta). The trailing in-progress line is shown as plain text to
+// avoid flickering on partial markdown syntax.
 func (c *ChatView) renderStreamText(text string) string {
 	lastNL := strings.LastIndex(text, "\n")
 	if lastNL < 0 {
-		return text
+		// No complete lines yet: apply styling directly. The text is short
+		// (single partial line), so lipgloss cost is negligible.
+		return assistantMsgStyle.Render(text)
 	}
 
 	completeLines := text[:lastNL+1]
@@ -544,12 +556,16 @@ func (c *ChatView) renderStreamText(text string) string {
 		}
 		c.streamMDRendered = rendered
 		c.streamMDCompleteLen = len(completeLines)
+		// Cache the styled version of complete lines so that between
+		// newline deltas we skip assistantMsgStyle.Render on the full
+		// ANSI content — the dominant per-delta cost for long output.
+		c.streamMDStyled = assistantMsgStyle.Render(rendered)
 	}
 
 	if inProgress == "" {
-		return c.streamMDRendered
+		return c.streamMDStyled
 	}
-	return c.streamMDRendered + inProgress
+	return c.streamMDStyled + inProgress
 }
 
 func (c *ChatView) invalidateAllCaches() {
@@ -560,6 +576,7 @@ func (c *ChatView) invalidateAllCaches() {
 	}
 	c.streamMDRendered = ""
 	c.streamMDCompleteLen = 0
+	c.streamMDStyled = ""
 }
 
 func (c *ChatView) refresh() {
