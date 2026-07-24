@@ -226,6 +226,19 @@ func (m *Manager) endAmbientTurn(ta *threadActivation, steerCh chan string) {
 	ta.lastAmbient = time.Now()
 }
 
+// threadSessionID returns the session bound to the thread ("" if none) —
+// used to anchor ambient one-off transcripts under the session directory.
+func (m *Manager) threadSessionID(threadID string) string {
+	if threadID == "" {
+		return ""
+	}
+	sess, err := m.newSessionManager().FindByThreadID(threadID)
+	if err != nil || sess == nil {
+		return ""
+	}
+	return sess.ID
+}
+
 // runAmbientTurn starts a forked ambient turn for the batched ambient messages.
 // The turn runs in an isolated agent (Fork) with restricted tools and no session
 // recording. The agent decides whether to reply or stay silent.
@@ -299,6 +312,18 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 
 	// Build system prompt with whisper suffix for group chat.
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "") + "\n" + whisperPromptSuffix
+
+	// Attach a one-off transcript recorder — ambient turns don't touch the
+	// session history, but their full execution is kept as a sidecar JSONL
+	// (anchored to the thread's session when one exists) so unexpected
+	// interjections / silence can be traced. See docs/2026-07-24-oneoff-transcript-design.md.
+	forkAgent.AttachOneOffRecorder(ctx, agent.OneOffMeta{
+		Kind:         "ambient",
+		SessionID:    m.threadSessionID(threadID),
+		SystemPrompt: systemPrompt,
+		Extra:        map[string]string{"thread": threadID},
+	})
+	defer forkAgent.DetachOneOffRecorder(ctx)
 
 	// Steer channel — new ambient messages arriving during the fork turn
 	// are injected via steer (drainEvents handles this). Created by

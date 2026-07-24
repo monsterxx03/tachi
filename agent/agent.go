@@ -203,6 +203,16 @@ type AIAgent struct {
 	// whose messages should not pollute the main conversation history.
 	skipSessionWrites bool
 
+	// oneoffRec, when non-nil, redirects recordSession output to a sidecar
+	// one-off transcript file instead of dropping it. Set by RunOneOffStream
+	// (via startOneoffRecorder) or AttachOneOffRecorder (channel ambient).
+	// See docs/2026-07-24-oneoff-transcript-design.md.
+	oneoffRec *oneoffRecorder
+
+	// lastOneoffPath is the file path of the most recently closed one-off
+	// transcript. Surfaced via LastOneoffTranscriptPath() for the TUI hint.
+	lastOneoffPath string
+
 	// Session mode (e.g. "auto", "chat"). Affects tool visibility.
 	mode string
 	// savedTools holds destructive tool instances when in chat mode,
@@ -456,6 +466,11 @@ func (a *AIAgent) GetTool(name string) tools.Tool {
 
 func (a *AIAgent) recordSession(msg *session.Message) {
 	if a.sessionManager == nil || a.skipSessionWrites {
+		// Side-channel execution: keep it out of the main session history,
+		// but leave a trail in the one-off transcript if one is attached.
+		if a.oneoffRec != nil {
+			a.oneoffRec.record(msg)
+		}
 		return
 	}
 	if err := a.sessionManager.AppendMessage(msg); err != nil {

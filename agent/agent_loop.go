@@ -194,12 +194,18 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 // history (no inherited messages) using the given provider. No session
 // recording is performed — this is for one-off tasks like /commit or /init.
 // If provider is nil, falls back to a.provider.
+//
+// meta controls the one-off transcript sidecar (empty Kind = no recording):
+// the run's full execution is written to a sidecar JSONL file, keeping it
+// out of the main session history while leaving a trail for troubleshooting.
+// See docs/2026-07-24-oneoff-transcript-design.md.
 func (a *AIAgent) RunOneOffStream(
 	ctx context.Context,
 	provider llm.Provider,
 	systemPrompt string,
 	userMessage string,
 	opts llm.ChatOptions,
+	meta OneOffMeta,
 ) <-chan AgentEvent {
 	ch := make(chan AgentEvent, 64)
 
@@ -228,6 +234,12 @@ func (a *AIAgent) RunOneOffStream(
 			provider = a.provider
 		}
 
+		// Attach the sidecar recorder (nil when disabled) — recordSession
+		// output is redirected to it instead of being dropped.
+		meta.SystemPrompt = systemPrompt
+		a.startOneoffRecorder(ctx, meta, provider)
+		defer a.stopOneoffRecorder(ctx)
+
 		if opts.MaxTokens <= 0 {
 			opts.MaxTokens = DefaultMaxTokens
 		}
@@ -247,6 +259,20 @@ func (a *AIAgent) RunOneOffStream(
 		}
 		a.lastMessageDate = rctx.Now.Format("2006-01-02")
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
+
+		// Record the user turn to the sidecar (no-op without a recorder —
+		// skipSessionWrites is always true here, so this never touches the
+		// main session history).
+		if reminderBlock != "" {
+			a.recordSession(&session.Message{
+				Type:    session.MessageTypeReminder,
+				Content: reminderBlock,
+			})
+		}
+		a.recordSession(&session.Message{
+			Type:    session.MessageTypeUser,
+			Content: userMessage,
+		})
 
 		a.runAgentLoop(ctx, provider, messages, opts, ch)
 	}()

@@ -63,9 +63,13 @@ func RunDiscussionTurn(
 	// Build prompts.
 	systemPrompt, userMessage := BuildDiscussionPrompt(issue, comments, botLogin, repoName)
 
-	// Run the agent (one-off, no session recording).
+	// Run the agent (one-off, no session recording; sidecar transcript kept
+	// in the global oneoff dir for troubleshooting).
 	eventCh := discussionAgent.RunOneOffStream(ctx, provider, systemPrompt, userMessage, llm.ChatOptions{
 		MaxTokens: agent.DefaultMaxTokens,
+	}, agent.OneOffMeta{
+		Kind:  "github-discussion",
+		Extra: map[string]string{"repo": repoName},
 	})
 
 	// Drain events.

@@ -1042,6 +1042,17 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	)
 }
 
+// currentSessionID returns the active tachi session ID ("" if none), used to
+// anchor one-off transcripts (/commit, /review) under the session directory.
+func (m *Model) currentSessionID() string {
+	if sm := m.agent.SessionManager(); sm != nil {
+		if cur := sm.Current(); cur != nil {
+			return cur.ID
+		}
+	}
+	return ""
+}
+
 // sendCommitCommand 使用干净的对话上下文（不继承历史）把任务说明发给 LLM，
 // 由模型用 Bash 工具自行执行 git 并提交（不在此处 exec 任何命令）。
 // 如果配置了 commit_provider，使用专用 provider；否则回退到主 provider。
@@ -1080,7 +1091,8 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 
 	m.streamGen++
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
-		cmds.CommitUserPrompt(commitModel), commitOpts)
+		cmds.CommitUserPrompt(commitModel), commitOpts,
+		agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()})
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -1129,7 +1141,8 @@ func (m *Model) sendReviewCommand() tea.Cmd {
 
 	m.streamGen++
 	m.eventCh = forked.Agent().RunOneOffStream(ctx, rc.provider,
-		m.systemPrompt, cmds.ReviewUserPrompt(), reviewOpts)
+		m.systemPrompt, cmds.ReviewUserPrompt(), reviewOpts,
+		agent.OneOffMeta{Kind: "review", SessionID: m.currentSessionID()})
 
 	return tea.Batch(
 		m.statusbar.Tick(),

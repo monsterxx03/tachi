@@ -236,6 +236,17 @@ func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 // /commit handler
 // ---------------------------------------------------------------------------
 
+// acpOneoffSessionID returns the tachi session ID anchoring one-off
+// transcripts (/commit, /review) to this ACP session's directory.
+func acpOneoffSessionID(sess *ACPSession) string {
+	if sess.sessMgr != nil {
+		if cur := sess.sessMgr.Current(); cur != nil {
+			return cur.ID
+		}
+	}
+	return ""
+}
+
 func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
 	logger.FromContext(ctx).Info(ctx, "ACP: /commit handler start")
 
@@ -266,7 +277,8 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto)
 
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
-		cmds.CommitUserPrompt(model), opts)
+		cmds.CommitUserPrompt(model), opts,
+		agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)})
 
 	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
 
@@ -327,7 +339,8 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	}
 
 	eventCh := forked.Agent().RunOneOffStream(ctx, reviewProvider,
-		systemPrompt, cmds.ReviewUserPrompt(), opts)
+		systemPrompt, cmds.ReviewUserPrompt(), opts,
+		agent.OneOffMeta{Kind: "review", SessionID: acpOneoffSessionID(sess)})
 
 	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
 

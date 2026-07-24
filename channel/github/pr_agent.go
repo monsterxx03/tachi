@@ -191,6 +191,13 @@ func RunPRGeneration(ctx context.Context, cfg *PRGenerationConfig) *PRResult {
 	// --- Run the agent ---
 	eventCh := implAgent.RunOneOffStream(ctx, cfg.Provider, systemPrompt, userMessage, llm.ChatOptions{
 		MaxTokens: agent.DefaultMaxTokens,
+	}, agent.OneOffMeta{
+		Kind: "github-pr",
+		Extra: map[string]string{
+			"repo":   cfg.RepoName,
+			"issue":  fmt.Sprintf("%d", cfg.Issue.GetNumber()),
+			"branch": branch,
+		},
 	})
 
 	var result *agent.RunResult

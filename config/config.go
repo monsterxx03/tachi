@@ -30,6 +30,7 @@ const (
 	researchDirName           = "research"
 	cronStoreFileName         = "crons.json"
 	toolResultsDirName        = "tool_results"
+	oneoffDirName             = "oneoff"
 	defaultToolResultMaxChars = 50000
 )
 
@@ -715,6 +716,21 @@ type Config struct {
 	DeepResearch           DeepResearchConfig   `yaml:"deep_research"`                   // Deep Research engine configuration
 	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration
 	Permissions            PermissionsConfig    `yaml:"permissions"`                     // Tool permission rules (bash allow/ask/deny)
+	Oneoff                 OneoffConfig         `yaml:"oneoff"`                          // One-off transcript recording (/commit, /review, ambient, dream...)
+}
+
+// OneoffConfig controls one-off transcript recording: sidecar JSONL files
+// capturing the full execution of side-channel LLM runs (/commit, /review,
+// channel ambient, dream, github bot) without touching the main session
+// history. See docs/2026-07-24-oneoff-transcript-design.md.
+type OneoffConfig struct {
+	Enabled       *bool `yaml:"enabled" default:"true"`      // master switch; false = restore old behavior (no recording)
+	RetentionDays int   `yaml:"retention_days" default:"30"` // days to keep files under the global <home>/oneoff/ dir
+}
+
+// IsEnabled reports whether one-off transcript recording is on (default true).
+func (c *OneoffConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // BashPermissions holds glob rules classifying bash commands.
@@ -760,6 +776,13 @@ func InputHistoryPath() (string, error) {
 // SessionDir 返回会话存储目录路径
 func SessionDir() (string, error) {
 	return filepath.Join(configDir(), sessionDirName), nil
+}
+
+// OneoffDir 返回旁路执行记录（one-off transcript）的全局存储目录。
+// 仅用于无会话上下文的旁路执行（tachi -c、github bot、dream）；
+// 有会话上下文的记录在 <SessionDir>/<id>/oneoff/ 下。
+func OneoffDir() string {
+	return filepath.Join(configDir(), oneoffDirName)
 }
 
 // LogsDir returns the path to the debug logs directory.

@@ -493,6 +493,10 @@ func (c *ChatView) renderMessageContent(msg chatMessage, inner int) string {
 		return toolConfirmStyle.Width(inner).Render(renderDiffWithHighlight(msg.Content, inner))
 	case "compact_done":
 		return compactDoneStyle.Width(inner).Render(msg.Content)
+	case "oneoff_note":
+		// Quiet hint line: path to the sidecar transcript of a just-finished
+		// one-off command (/commit, /review).
+		return dimStyle.Width(inner).Render(msg.Content)
 	default:
 		return msg.Content
 	}

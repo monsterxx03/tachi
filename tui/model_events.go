@@ -242,6 +242,16 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.history = m.savedHistory
 			m.savedHistory = nil
 		}
+		// Capture the one-off transcript path (/commit on m.agent, /review on
+		// the fork) BEFORE the fork is closed below.
+		oneoffPath := ""
+		if isOneOff {
+			if m.forkedAgent != nil {
+				oneoffPath = m.forkedAgent.Agent().LastOneoffTranscriptPath()
+			} else {
+				oneoffPath = m.agent.LastOneoffTranscriptPath()
+			}
+		}
 		if event.Usage != nil {
 			m.accumulateUsage(event.Usage)
 			// For one-off commands (e.g. /commit), only accumulate tokens and cost;
@@ -275,6 +285,14 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 		m.chatview.FinishStreaming()
 		m.syncSessionInfo()
+
+		// Point the user at the full side-channel execution record.
+		if oneoffPath != "" {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "oneoff_note",
+				Content: "📄 旁路记录: " + oneoffPath,
+			})
+		}
 
 		// Send terminal notification when a turn completes (not for one-offs like /commit).
 		if m.notifyOnComplete && !isOneOff {
