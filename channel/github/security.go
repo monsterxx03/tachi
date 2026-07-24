@@ -5,33 +5,6 @@ import (
 	"strings"
 )
 
-// injectionPatterns are regex patterns that indicate potential prompt injection attempts.
-// Matches are logged for review but content is NOT modified — altering content would
-// break legitimate issue text and tip off attackers about filtering rules.
-//
-// Patterns are split into two confidence levels:
-//   - High confidence: specific patterns that strongly indicate an attack.
-//     Logged at WARN level.
-//   - Low confidence: broader patterns that may match legitimate content.
-//     Logged at INFO level to avoid alert fatigue.
-var (
-	highConfidencePatterns = map[string]*regexp.Regexp{
-		"ignore_instructions": regexp.MustCompile(`(?i)ignore (all )?(previous|prior|above) instructions`),
-		"role_impersonation":  regexp.MustCompile(`(?i)you are (now |an? )?(system |assistant |GPT |Claude |Tachi)`),
-		"forget_instructions": regexp.MustCompile(`(?i)forget (everything|all|your instructions|yourself)`),
-		"system_reminder":     regexp.MustCompile(`<system-reminder>`),
-		"available_skills":    regexp.MustCompile(`<available-skills>`),
-		"untrusted_marker":    regexp.MustCompile(`--- (BEGIN|END) (UNTRUSTED|SYSTEM|SECRET)`),
-		"control_marker":      regexp.MustCompile(`\[(READY_FOR_PR|NO_REPLY|IMPLEMENT|SKIP)\]`),
-	}
-
-	// Low-confidence patterns may match legitimate content like "installation instructions:".
-	// They are logged at INFO level for awareness without triggering alert fatigue.
-	lowConfidencePatterns = map[string]*regexp.Regexp{
-		"new_instructions": regexp.MustCompile(`(?i)(new |updated )?instructions?[:\n]`),
-	}
-)
-
 // WrapAsUntrusted wraps the given content in UNTRUSTED markers, making it clear
 // to the LLM that the wrapped content is user input that should not be trusted.
 func WrapAsUntrusted(content string) string {

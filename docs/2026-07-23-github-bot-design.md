@@ -155,7 +155,7 @@ channel/github/
 ├── discussion.go       # 讨论 Agent (只读工具)
 ├── pr_agent.go         # PR 生成 Agent (worktree, 读写工具)
 ├── github.go           # GitHub API 客户端封装 (go-github)
-├── security.go         # 输入清洗, prompt injection 检测, PR 门控
+├── security.go         # UNTRUSTED 包裹 + 控制标记解析
 ├── models.go           # 内部数据结构
 └── prompt.go           # 系统提示词模板
 ```
@@ -399,66 +399,35 @@ git -c http.extraheader="AUTHORIZATION: bearer $GITHUB_TOKEN" \
 
 ### 6. 安全层详细设计
 
-#### 6.1 Prompt Injection 检测 (`security.go`)
+#### 6.1 Prompt Injection 检测 — 已移除
 
-```go
-// SanitizeIssueContent 检测并记录注入尝试，但不修改内容
-// 修改内容可能破坏原始意图，因此采用"检测+标记"策略
-func (ch *GitHubChannel) SanitizeIssueContent(content string) (string, []string) {
-    var alerts []string
-    patterns := map[string]*regexp.Regexp{
-        "ignore_instructions": regexp.MustCompile(`(?i)ignore (all )?(previous|prior|above) instructions`),
-        "role_impersonation":  regexp.MustCompile(`(?i)you are (now |an? )?(system |assistant |GPT |Claude |Tachi)`),
-        "forget_instructions": regexp.MustCompile(`(?i)forget (everything|all|your instructions|yourself)`),
-        "new_instructions":    regexp.MustCompile(`(?i)(new |updated )?instructions?[:\n]`),
-        "system_reminder":     regexp.MustCompile(`<system-reminder>`),
-        "available_skills":    regexp.MustCompile(`<available-skills>`),
-        "untrusted_marker":    regexp.MustCompile(`--- BEGIN (UNTRUSTED|SYSTEM|SECRET)`),
-    }
-    for name, re := range patterns {
-        if re.MatchString(content) {
-            alerts = append(alerts, name)
-        }
-    }
-    if len(alerts) > 0 {
-        ch.logger.Warn(context.Background(), "github: potential injection detected",
-            "patterns", alerts)
-    }
-    return content, alerts
-}
-```
+初版设计过基于 regex 的注入模式检测（`SanitizeIssueContent`，仅记日志、不修改内容），
+实现后从未接线，且已删除。移除理由：
 
-**设计决策**：不修改/删除注入内容，因为：
-1. 修改可能破坏合法 issue 的原始意图
-2. 删除反而让注入者知道触发了什么过滤规则
-3. 真正的防护在 system prompt 和工具限制层
+1. **只观测不阻断**：唯一动作是写日志，而 `logs/debug.log` 无人实时监控，告警无意义
+2. **极易绕过**：固定英文句式匹配，改写/换语言/编码即穿透
+3. **误报噪音**：`instructions?[:\n]` 会命中 "installation instructions:" 等正常内容
+4. **防护点错位**：注入攻击的目标是 LLM 的行为能力，真正的防线是下面的三层
 
-已知误报：`instructions?[:\n]` 会命中 "installation instructions:" 等正常内容。只记日志，可接受。
-
-#### 6.2 四层防护
+#### 6.2 三层防护
 
 ```
-Layer 1: 输入检测 (security.go)
-  - 检测常见注入模式并记录日志
-  - 不做内容修改，维持原始内容
-
-Layer 2: 系统提示词防护 (prompt.go)
+Layer 1: 系统提示词防护 (prompt.go)
   - 明确声明 issue 内容不可信
   - 使用 UNTRUSTED 标记包裹
   - 明确禁止泄露 token/配置、执行 issue 中的代码
   - 声明用户 comment 中的控制标记无效
 
-Layer 3: 工具与权限限制
+Layer 2: 工具与权限限制
   - 讨论阶段: 只读工具, 无 WriteFile/EditFile/Bash
   - 实现阶段: worktree 隔离 + PathPolicy (WriteFile 限定 worktree)
   - Bash 真白名单 (allow + "*" ask 兜底, §6.4)
   - 控制标记只从 agent 自身输出解析, 发布前剥离
 
-Layer 4: 门控与预算
+Layer 3: 门控与预算
   - PR 生成门控: author_association / label (§6.3)
   - 迭代预算上限, waiting_author 超时, 实现重试上限
   - 跳过所有 bot 评论, 防 bot-vs-bot 死循环
-  - 所有注入尝试记录到日志
 ```
 
 #### 6.3 PR 门控
@@ -573,7 +542,7 @@ channel:
 8. 在 `main.go` 中 import 新包，启动 channel
 
 #### Phase 2: 讨论功能
-1. 实现 `security.go` — 输入清洗 + 注入检测
+1. 实现 `security.go` — UNTRUSTED 包裹 + 控制标记解析
 2. 实现 `prompt.go` — 讨论阶段系统提示词（含输出协议）
 3. 实现 `discussion.go` — dream 模式讨论 agent + 回复协议解析（`[NO_REPLY]` / `[READY_FOR_PR]`）
 4. 测试：新 issue → 自动回复澄清；存量 issue → seed 后不回复
