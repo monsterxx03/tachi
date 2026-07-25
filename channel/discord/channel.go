@@ -103,6 +103,10 @@ type DiscordChannel struct {
 	memberCache *memberCache // Guild member info cache
 	deduper     *messageDeduper
 
+	// Store the message handler for use by thread creation and other
+	// secondary event handlers that need to simulate message processing.
+	messageHandler channel.MessageHandler
+
 	// Component callback registry (Phase 2+)
 	componentHandlers map[string]componentHandler
 
@@ -119,6 +123,17 @@ type DiscordChannel struct {
 	// when directory and git branch haven't changed.
 	topicStatus   map[string]topicEntry // channelID → last topic info
 	topicStatusMu sync.Mutex
+
+	// Thread starter message cache — maps thread channel ID to the
+	// starter message content. Fetched once per thread, then cached
+	// for the lifetime of the bot session.
+	threadStarterCache   map[string]string // threadID → starter text
+	threadStarterCacheMu sync.Mutex
+
+	// Tracks which threads have already had their starter message injected
+	// into the session context, to avoid repeating it on every message.
+	threadStarterInjected   map[string]bool // threadID → injected
+	threadStarterInjectedMu sync.Mutex
 }
 
 // topicEntry holds the last known directory and git branch for a channel topic.
@@ -157,6 +172,8 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 		memberCache:       newMemberCache(),
 		deduper:           newMessageDeduper(),
 		topicStatus:       make(map[string]topicEntry),
+		threadStarterCache:    make(map[string]string),
+		threadStarterInjected: make(map[string]bool),
 	}, nil
 }
 
@@ -181,7 +198,7 @@ func (ch *DiscordChannel) SystemPromptSuffix() string {
 	return `## Current Channel: Discord
 
 You are currently operating as a Discord bot. Your responses are delivered
-through Discord guild channels and direct messages.
+through Discord guild channels, direct messages, and threads.
 
 Platform characteristics:
 - Discord markdown is supported (bold, italic, lists, headers, quotes,
@@ -191,7 +208,10 @@ Platform characteristics:
   prefer bullet lists for wide or long data
 - Messages are limited to 2000 characters; longer responses are
   automatically split into multiple messages
-- Media attachments (images, files) are supported as separate uploads`
+- Media attachments (images, files) are supported as separate uploads
+- Threads are fully supported: the bot can receive and reply inside
+  Discord threads without @mention by default (configurable via
+  thread_require_mention)`
 }
 
 // Send implements channel.MessageSender for proactive message delivery
@@ -339,6 +359,7 @@ func (ch *DiscordChannel) Run(ctx context.Context, handler channel.MessageHandle
 		return fmt.Errorf("discord: create session: %w", err)
 	}
 	ch.session = sess
+	ch.messageHandler = handler
 
 	// Apply proxy configuration if set.
 	if err := ch.applyProxy(ctx, sess); err != nil {
@@ -353,17 +374,23 @@ func (ch *DiscordChannel) Run(ctx context.Context, handler channel.MessageHandle
 	removeMessage := sess.AddHandler(ch.onMessageCreate(handler))
 	removeInteraction := sess.AddHandler(ch.onInteractionCreate(handler))
 
-	// Also register GUILD_CREATE for member cache warmup and
-	// GUILD_MEMBER_UPDATE for incremental cache updates.
+	// Also register GUILD_CREATE for member cache warmup,
+	// GUILD_MEMBER_UPDATE for incremental cache updates, and
+	// THREAD_CREATE to capture the initial message when a thread
+	// is created with a message (Discord doesn't send MESSAGE_CREATE
+	// for the initial message typed in the thread creation dialog).
 	removeGuildCreate := sess.AddHandler(ch.onGuildCreate())
 	removeGuildMemberUpdate := sess.AddHandler(ch.onGuildMemberUpdate())
+	removeThreadCreate := sess.AddHandler(ch.onThreadCreate())
 
 	// Configure Intents.
-	// IntentsGuilds: needed for GUILD_CREATE member cache warmup.
+	// IntentsGuilds: needed for GUILD_CREATE member cache warmup,
+	// and THREAD_CREATE to capture initial thread messages.
 	// IntentsGuildMessages: receive guild channel messages.
 	// IntentsDirectMessages: receive DMs.
 	// IntentsMessageContent: privileged intent — read message content.
-	sess.Identify.Intents = discordgo.IntentsGuildMessages |
+	sess.Identify.Intents = discordgo.IntentsGuilds |
+		discordgo.IntentsGuildMessages |
 		discordgo.IntentsDirectMessages |
 		discordgo.IntentsMessageContent
 
@@ -388,6 +415,7 @@ func (ch *DiscordChannel) Run(ctx context.Context, handler channel.MessageHandle
 	removeInteraction()
 	removeGuildCreate()
 	removeGuildMemberUpdate()
+	removeThreadCreate()
 
 	return nil
 }
@@ -421,6 +449,79 @@ func (ch *DiscordChannel) onGuildCreate() any {
 func (ch *DiscordChannel) onGuildMemberUpdate() any {
 	return func(s *discordgo.Session, m *discordgo.GuildMemberUpdate) {
 		ch.memberCache.handleGuildMemberUpdate(s, m)
+	}
+}
+
+// onThreadCreate returns a handler for THREAD_CREATE events.
+// When a thread is newly created WITH a message (user typed in the
+// creation dialog), Discord does NOT send a MESSAGE_CREATE for that
+// initial message. We use the thread's LastMessageID to fetch and
+// process it directly.
+func (ch *DiscordChannel) onThreadCreate() any {
+	return func(s *discordgo.Session, t *discordgo.ThreadCreate) {
+		if !t.NewlyCreated || t.Channel == nil {
+			return
+		}
+		if !t.IsThread() {
+			return
+		}
+
+		handler := ch.messageHandler
+		if handler == nil {
+			return
+		}
+
+		// If the thread has no last message, try fetching via
+		// ChannelMessages as a fallback (Discord may send
+		// THREAD_CREATE before the initial message is persisted).
+		if t.LastMessageID == "" {
+			msgs, err := s.ChannelMessages(t.ID, 5, "", "", "")
+			if err != nil || len(msgs) == 0 {
+				return
+			}
+			// Messages are newest-first; iterate backwards to find the
+			// oldest user message (the initial typed message).
+			for i := len(msgs) - 1; i >= 0; i-- {
+				msg := msgs[i]
+				if msg.Type != discordgo.MessageTypeDefault {
+					continue
+				}
+				if msg.Author == nil || msg.Author.Bot {
+					continue
+				}
+				synthetic := &discordgo.MessageCreate{Message: msg}
+				ch.handleMessageCreate(s, synthetic, handler)
+				return
+			}
+			return
+		}
+
+		// Fetch the (most recent) message in the thread using its
+		// LastMessageID. For a newly created thread with a typed
+		// message, this is the user's initial message (type 0).
+		// For a thread created without typing, it's the starter
+		// (type 21) and we skip it.
+		msg, err := s.ChannelMessage(t.ID, t.LastMessageID)
+		if err != nil || msg == nil {
+			return
+		}
+
+		// Skip starter messages (type 21) and bot/system messages.
+		if msg.Type != discordgo.MessageTypeDefault {
+			return
+		}
+		if msg.Author == nil || msg.Author.Bot {
+			return
+		}
+
+		// Construct a synthetic MessageCreate and process it
+		// through the normal pipeline. The deduper inside
+		// handleMessageCreate handles MESSAGE_CREATE dedup.
+		synthetic := &discordgo.MessageCreate{
+			Message: msg,
+		}
+
+		ch.handleMessageCreate(s, synthetic, handler)
 	}
 }
 
@@ -487,9 +588,13 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 	}
 	ch.respondInteraction(s, i, reply)
 
-	// Update channel topic with the thread's current working directory.
+	// Update channel topic with the current working directory.
+	// Skip for threads (they don't have a topic field) and DMs.
 	if workDir != "" && !isDM(i.GuildID) {
-		ch.updateChannelTopic(i.ChannelID, workDir)
+		_, isThread := resolveThreadParent(s, i.ChannelID)
+		if !isThread {
+			ch.updateChannelTopic(i.ChannelID, workDir)
+		}
 	}
 }
 

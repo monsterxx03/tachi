@@ -106,24 +106,6 @@ func TestStripMentions(t *testing.T) {
 // dm.go
 // ---------------------------------------------------------------------------
 
-func TestIsDM(t *testing.T) {
-	tests := []struct {
-		guildID string
-		want    bool
-	}{
-		{"", true},
-		{"12345", false},
-		{"0", false},
-	}
-	for _, tt := range tests {
-		t.Run("guildID="+tt.guildID, func(t *testing.T) {
-			if got := isDM(tt.guildID); got != tt.want {
-				t.Errorf("isDM(%q) = %v, want %v", tt.guildID, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestThreadIDForDM(t *testing.T) {
 	got := threadIDForDM("user123")
 	want := "dm:user123"
@@ -161,9 +143,39 @@ func TestChannelIDFromThreadID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// send.go
-// ---------------------------------------------------------------------------
+// TestResolveThreadParent tests the thread detection and parent resolution.
+// Since resolveThreadParent needs a real *discordgo.Session, we can only
+// test its logic indirectly. This test verifies the happy-path assumption
+// that a non-thread channel won't resolve as a thread.
+func TestResolveThreadParent_HappyPath(t *testing.T) {
+	// With a nil session, it should return false/false gracefully.
+	parentID, isThread := resolveThreadParent(nil, "channel123")
+	if isThread {
+		t.Error("resolveThreadParent(nil, ...) should return isThread=false")
+	}
+	if parentID != "" {
+		t.Errorf("resolveThreadParent(nil, ...) should return empty parentID, got %q", parentID)
+	}
+}
+
+// TestIsDM tests the isDM function.
+func TestIsDM(t *testing.T) {
+	tests := []struct {
+		guildID string
+		want    bool
+	}{
+		{"", true},
+		{"12345", false},
+		{"0", false},
+	}
+	for _, tt := range tests {
+		t.Run("guildID="+tt.guildID, func(t *testing.T) {
+			if got := isDM(tt.guildID); got != tt.want {
+				t.Errorf("isDM(%q) = %v, want %v", tt.guildID, got, tt.want)
+			}
+		})
+	}
+}
 
 func TestSplitMessage(t *testing.T) {
 	tests := []struct {
