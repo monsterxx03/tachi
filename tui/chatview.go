@@ -23,12 +23,28 @@ type messageCacheItem struct {
 	cached       string
 	cachedHeight int
 	innerW       int
+	lineOffsets  []int // 每行在 cached 中的字节起始偏移；用于 Render 快速跳跃到可见行
 }
 
 func (m *messageCacheItem) clearCache() {
 	m.cached = ""
 	m.cachedHeight = 0
 	m.innerW = 0
+	m.lineOffsets = nil
+}
+
+// buildLineOffsets 扫描字符串中所有 '\n' 的位置，返回每行的起始字节偏移。
+// 结果可用于跳过非可见行的逐字节扫描。
+func buildLineOffsets(s string) []int {
+	n := strings.Count(s, "\n") + 1
+	offsets := make([]int, 0, n)
+	offsets = append(offsets, 0)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\n' {
+			offsets = append(offsets, i+1)
+		}
+	}
+	return offsets
 }
 
 type ChatView struct {
@@ -64,6 +80,14 @@ type ChatView struct {
 	// on every non-newline text delta. Only invalidated when glamour
 	// re-renders (i.e. when new complete lines arrive).
 	streamMDStyled string
+
+	// refreshThrottle caps the rate of refresh() calls during streaming.
+	// Non-newline text deltas are batched up to this interval to reduce
+	// glamour re-parsing, ScrollList scanning, and Bubble Tea's ANSI
+	// re-rendering. Newline deltas always trigger an immediate refresh
+	// so the user sees line-by-line output in real time.
+	lastRefreshAt   time.Time
+	refreshThrottle time.Duration
 }
 
 func NewChatView() ChatView {
@@ -72,8 +96,9 @@ func NewChatView() ChatView {
 		glamour.WithWordWrap(80),
 	)
 	return ChatView{
-		mdRenderer: md,
-		list:       NewScrollList(1),
+		mdRenderer:      md,
+		list:            NewScrollList(1),
+		refreshThrottle: 16 * time.Millisecond, // ~60fps cap
 	}
 }
 
@@ -104,18 +129,47 @@ func (c *ChatView) AddMessage(msg chatMessage) {
 }
 
 func (c *ChatView) AppendTextDelta(s string) {
-	if c.hasCompletedTools() {
+	needsFlush := c.hasCompletedTools()
+	if needsFlush {
 		c.flushTurn()
 	}
 	c.currentText.WriteString(s)
-	c.refresh()
+	if needsFlush {
+		// flushTurn 把完整段落移入 items，立即刷新让用户看到分段
+		c.ForceRefresh()
+	} else {
+		c.throttledRefresh(strings.Contains(s, "\n"))
+	}
 }
 
 func (c *ChatView) AppendThinkingDelta(s string) {
-	if c.hasCompletedTools() {
+	needsFlush := c.hasCompletedTools()
+	if needsFlush {
 		c.flushTurn()
 	}
 	c.currentThinking.WriteString(s)
+	if needsFlush {
+		c.ForceRefresh()
+	} else {
+		c.throttledRefresh(strings.Contains(s, "\n"))
+	}
+}
+
+// throttledRefresh calls refresh() immediately if the delta contains a newline
+// (so the user sees new lines in real time), otherwise caps the refresh rate
+// to refreshThrottle (~60fps). Non-newline character deltas during fast LLM
+// streaming are batched, dramatically reducing glamour + printString overhead.
+func (c *ChatView) throttledRefresh(hasNewline bool) {
+	if hasNewline || time.Since(c.lastRefreshAt) >= c.refreshThrottle {
+		c.lastRefreshAt = time.Now()
+		c.refresh()
+	}
+}
+
+// ForceRefresh bypasses the throttle and refreshes immediately. Used when
+// the visual state needs to be updated without delay (e.g. after flushTurn).
+func (c *ChatView) ForceRefresh() {
+	c.lastRefreshAt = time.Now()
 	c.refresh()
 }
 
@@ -420,7 +474,7 @@ func (c *ChatView) ListItem(idx int) ListItem {
 	// Normal cached items
 	if idx < len(c.items) {
 		s, h := c.renderItemCached(c.items[idx])
-		return ListItem{Content: s, Height: h}
+		return ListItem{Content: s, Height: h, LineOffsets: c.items[idx].lineOffsets}
 	}
 	// Stream block (dynamic, not cached)
 	streamIdx := len(c.items)
@@ -479,6 +533,7 @@ func (c *ChatView) renderItemCached(m *messageCacheItem) (string, int) {
 	m.cached = s
 	m.cachedHeight = h
 	m.innerW = inner
+	m.lineOffsets = buildLineOffsets(s)
 	return s, h
 }
 

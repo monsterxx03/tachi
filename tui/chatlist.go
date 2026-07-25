@@ -6,8 +6,9 @@ import (
 
 // ListItem 是一条已渲染的可见条目（无尾部换行）。
 type ListItem struct {
-	Content string
-	Height  int
+	Content     string
+	Height      int
+	LineOffsets []int // 每行在 Content 中的字节起始偏移；用于 Render 快速跳跃到可见行
 }
 
 // ListItemProvider 由外部实现，向 ScrollList 提供条目数量与内容。
@@ -100,6 +101,8 @@ func (l *ScrollList) Reset() {
 }
 
 // Render 返回当前可见区域的文本（恰好 height 行，用 \n 连接）。
+// 如果 item 提供了 LineOffsets，可直接跳跃到 `currentOffset` 位置，
+// 避免逐字节扫描 item 的全部内容（对长 markdown 内容很关键）。
 func (l *ScrollList) Render(p ListItemProvider) string {
 	n := p.ListLen()
 	if n == 0 {
@@ -114,9 +117,19 @@ func (l *ScrollList) Render(p ListItemProvider) string {
 	for linesWritten < l.height && currentIdx < n {
 		item := p.ListItem(currentIdx)
 		content := item.Content
+
 		lineStart := 0
 		lineNo := 0
-		for i := 0; i <= len(content); i++ {
+		i := 0
+
+		// 利用 LineOffsets 跳过已滚过的行
+		if off := item.LineOffsets; len(off) > currentOffset && currentOffset > 0 {
+			i = off[currentOffset]
+			lineNo = currentOffset
+			lineStart = off[currentOffset]
+		}
+
+		for ; i <= len(content); i++ {
 			if i == len(content) || content[i] == '\n' {
 				if lineNo >= currentOffset && linesWritten < l.height {
 					if linesWritten > 0 {
