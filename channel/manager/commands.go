@@ -30,17 +30,22 @@ import (
 // This allows channels to invoke manager operations programmatically
 // without routing through the text-based message handler path.
 func (m *Manager) buildCommandHandler() channel.CommandHandler {
-	return func(ctx context.Context, cmd channel.SlashCommand) (string, string, error) {
+	return func(ctx context.Context, cmd channel.SlashCommand) (string, string, string, error) {
 		result, err := m.executeSlashCommand(cmd)
 		if err != nil {
-			return "", "", err
+			return "", "", "", err
 		}
 		// Read the current workDir from cache for channel topic updates.
 		workDir := result.WorkDir
 		if workDir == "" {
 			workDir = m.getThreadWorkDir(cmd.ThreadID)
 		}
-		return result.Reply.Content, workDir, result.Err
+		// Resolve the current model name for channel topic display.
+		model := ""
+		if _, resolved, _ := m.getProviderForThread(cmd.ThreadID); resolved != nil {
+			model = resolved.Provider.Model
+		}
+		return result.Reply.Content, workDir, model, result.Err
 	}
 }
 

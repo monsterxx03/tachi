@@ -244,6 +244,12 @@ type HandlerResult struct {
 	// display context (e.g., updating the Discord channel topic). Empty if
 	// the handler hasn't started an agent turn (steer/buffer/slash-command).
 	WorkDir string
+
+	// Model is the resolved model name (e.g. "gpt-4o", "claude-sonnet")
+	// for the thread after processing the message. Set by the manager;
+	// channel implementations can display this alongside working directory
+	// and git branch info (e.g., updating the Discord channel topic).
+	Model string
 }
 
 // MessageHandler processes an incoming message and returns a response.
@@ -330,8 +336,8 @@ type SlashCommand struct {
 
 // CommandHandler executes a typed SlashCommand and returns the response text,
 // the thread's current working directory (for channel topic updates, etc.),
-// and an error (if any).
-type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply string, workDir string, err error)
+// the resolved model name, and an error (if any).
+type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply string, workDir string, model string, err error)
 
 // CommandChannel is an optional interface for channels that need
 // programmatic access to manager-level slash commands.

@@ -251,10 +251,14 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				// Turn was cancelled by /stop or /new.
 				return channel.HandlerResult{Steered: true}
 			}
-			// Capture the thread's working directory for the channel to use
-			// (e.g., updating Discord channel topic). Read before eviction
-			// in the compact path below.
+			// Capture the thread's working directory and model for the channel
+			// to use (e.g., updating Discord channel topic). Read before
+			// eviction in the compact path below.
 			workDir := m.getThreadWorkDir(msg.ThreadID)
+			model := ""
+			if _, resolved, _ := m.getProviderForThread(msg.ThreadID); resolved != nil {
+				model = resolved.Provider.Model
+			}
 			if result.err != nil {
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
@@ -265,6 +269,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 					},
 					Err:     result.err,
 					WorkDir: workDir,
+					Model:   model,
 				}
 			}
 
@@ -282,6 +287,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						},
 						Err:     err,
 						WorkDir: workDir,
+						Model:   model,
 					}
 				}
 				// Evict the cached agent so the next turn reloads history from
@@ -294,6 +300,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						ReplyTo:  msg.MessageID,
 					},
 					WorkDir: workDir,
+					Model:   model,
 				}
 			}
 
@@ -305,6 +312,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 					Attachments: result.attachments,
 				},
 				WorkDir: workDir,
+				Model:   model,
 			}
 		case <-ta.ctx.Done():
 			m.deactivateThread(msg.ThreadID, ta)

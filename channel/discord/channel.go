@@ -136,10 +136,11 @@ type DiscordChannel struct {
 	threadStarterInjectedMu sync.Mutex
 }
 
-// topicEntry holds the last known directory and git branch for a channel topic.
+// topicEntry holds the last known directory, git branch, and model for a channel topic.
 type topicEntry struct {
 	dir    string
 	branch string
+	model  string
 }
 
 // componentHandler is a callback for interactive component interactions (Phase 2+).
@@ -164,14 +165,14 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 	}
 
 	return &DiscordChannel{
-		cfg:               dc,
-		logger:            logger.New("channel.discord"),
-		httpClient:        httpClient,
-		cacheDir:          cacheDir,
-		componentHandlers: make(map[string]componentHandler),
-		memberCache:       newMemberCache(),
-		deduper:           newMessageDeduper(),
-		topicStatus:       make(map[string]topicEntry),
+		cfg:                   dc,
+		logger:                logger.New("channel.discord"),
+		httpClient:            httpClient,
+		cacheDir:              cacheDir,
+		componentHandlers:     make(map[string]componentHandler),
+		memberCache:           newMemberCache(),
+		deduper:               newMessageDeduper(),
+		topicStatus:           make(map[string]topicEntry),
 		threadStarterCache:    make(map[string]string),
 		threadStarterInjected: make(map[string]bool),
 	}, nil
@@ -574,7 +575,7 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 	}
 
 	// Execute the command via the Manager's CommandHandler.
-	reply, workDir, err := cmdHandler(context.Background(), channel.SlashCommand{
+	reply, workDir, model, err := cmdHandler(context.Background(), channel.SlashCommand{
 		Name:     data.Name,
 		ThreadID: threadID,
 		Args:     args,
@@ -588,12 +589,12 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 	}
 	ch.respondInteraction(s, i, reply)
 
-	// Update channel topic with the current working directory.
+	// Update channel topic with the current working directory and model.
 	// Skip for threads (they don't have a topic field) and DMs.
 	if workDir != "" && !isDM(i.GuildID) {
 		_, isThread := resolveThreadParent(s, i.ChannelID)
 		if !isThread {
-			ch.updateChannelTopic(i.ChannelID, workDir)
+			ch.updateChannelTopic(i.ChannelID, workDir, model)
 		}
 	}
 }

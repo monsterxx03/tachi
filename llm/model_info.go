@@ -44,6 +44,8 @@ func ModelContextWindow(model string) int64 {
 		return 256_000
 	case strings.Contains(model, "deepseek"):
 		return 1000_000
+	case strings.Contains(model, "mimo-2.5"):
+		return 1000_000
 	}
 
 	// Unknown model: return 0 to signal "use configured or hardcoded default"

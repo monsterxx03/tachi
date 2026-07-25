@@ -197,6 +197,7 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 	a.SetProcessManager(m.processManager)         // shared PM survives turns
 	a.SetPermissionMode(agent.PermissionModeSkip) // channel turns are non-interactive
 	a.SetContextWindow(resolved.Provider.ContextWindow)
+	a.SetTitleGenEnabled(false) // channel mode has no title UI; skip the extra LLM call
 	a.SetupTitleProvider(m.cfg)
 	a.SetupCommitProvider(m.cfg)
 	a.SetupReviewProvider(m.cfg)

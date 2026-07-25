@@ -399,7 +399,7 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 	// Only for guild channels (DM channels don't have a meaningful topic).
 	// Threads don't have a topic field, so skip them too.
 	if !isDM(m.GuildID) && !isThread {
-		ch.updateChannelTopic(channelID, result.WorkDir)
+		ch.updateChannelTopic(channelID, result.WorkDir, result.Model)
 	}
 }
 
@@ -436,11 +436,11 @@ func containsMention(content, botUserID string) bool {
 	return strings.Contains(content, "<@") && !isMentioned(content, botUserID)
 }
 
-// updateChannelTopic retrieves the current working directory and git branch,
-// then updates the given channel's topic if anything has changed since the
-// last update. Skips if the channel is a DM.
+// updateChannelTopic retrieves the current working directory, git branch,
+// and model name, then updates the given channel's topic if anything has
+// changed since the last update. Skips if the channel is a DM.
 // workDir is the per-thread working directory passed from the manager.
-func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
+func (ch *DiscordChannel) updateChannelTopic(channelID, workDir, model string) {
 	dir := workDir
 	if dir == "" {
 		// Fallback: use the process CWD if no per-thread workDir is known.
@@ -451,14 +451,14 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 		}
 	}
 
-	// Fast path: if the directory hasn't changed since the last update,
-	// skip entirely — the topic content is effectively the same.
+	// Fast path: if the directory and model haven't changed since the last
+	// update, skip entirely — the topic content is effectively the same.
 	// The git branch is secondary info; changes via external checkout are
 	// rare and this avoids an unnecessary shell out on every reply.
 	ch.topicStatusMu.Lock()
 	last, seen := ch.topicStatus[channelID]
 	ch.topicStatusMu.Unlock()
-	if seen && last.dir == dir {
+	if seen && last.dir == dir && last.model == model {
 		return
 	}
 
@@ -477,17 +477,20 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 	if branch != "" {
 		topic += " [" + branch + "]"
 	}
+	if model != "" {
+		topic += " | " + model
+	}
 
 	sess := ch.session
 	if sess == nil {
 		return
 	}
 
-	// Full cache check with branch — only call the API when something
-	// actually changed (avoids rate limit issues on repeated replies).
+	// Full cache check with branch and model — only call the API when
+	// something actually changed (avoids rate limit issues on repeated replies).
 	ch.topicStatusMu.Lock()
 	last, seen = ch.topicStatus[channelID]
-	if seen && last.dir == dir && last.branch == branch {
+	if seen && last.dir == dir && last.branch == branch && last.model == model {
 		ch.topicStatusMu.Unlock()
 		return
 	}
@@ -503,7 +506,7 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 	// Only cache the new status once the API call succeeded, so a transient
 	// failure (rate limit, permission) doesn't permanently block updates.
 	ch.topicStatusMu.Lock()
-	ch.topicStatus[channelID] = topicEntry{dir: dir, branch: branch}
+	ch.topicStatus[channelID] = topicEntry{dir: dir, branch: branch, model: model}
 	ch.topicStatusMu.Unlock()
 }
 
