@@ -299,8 +299,18 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		isFirstMessage := len(messages) == 0
 
-		if len(messages) == 0 && systemPrompt != "" {
-			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+		if systemPrompt != "" {
+			if len(messages) == 0 {
+				messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+			} else if messages[0].Role != "system" {
+				// History loaded from disk (e.g. after channel mode agent eviction via /model)
+				// doesn't include the ephemeral system prompt. Prepend it so the LLM receives
+				// full context. When history already starts with a system message (cached agent
+				// path), keep the existing one — it will be updated on next GetLastMessages.
+				withSystem := make([]llm.Message, 1, 1+len(messages))
+				withSystem[0] = llm.Message{Role: "system", Content: systemPrompt}
+				messages = append(withSystem, messages...)
+			}
 		}
 
 		// When resuming a session, date/project-context/git reminders were
