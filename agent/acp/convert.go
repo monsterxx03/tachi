@@ -59,8 +59,8 @@ func extractPathFromURI(uri string) string {
 
 // buildSystemPromptForCwd constructs the system prompt for ACP mode with a specific
 // working directory and session mode. In plan mode, the plan mode prompt is appended.
-func buildSystemPromptForCwd(language string, cwd string, mode string) string {
-	prompt := agent.BuildSystemPrompt(language, cwd)
+func buildSystemPromptForCwd(language string, cwd string, mode string, sessionID string) string {
+	prompt := agent.BuildSystemPrompt(language, cwd, sessionID)
 	if mode == agent.ModePlan {
 		prompt += "\n\n" + agent.BuildPlanModePrompt()
 	}

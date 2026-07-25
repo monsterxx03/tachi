@@ -84,7 +84,13 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		ctx = wdctx.WithDir(ctx, ca.workDir)
 	}
 
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir), llm.ChatOptions{
+	sid := ""
+	if cur := aiAgent.SessionManager(); cur != nil {
+		if s := cur.Current(); s != nil {
+			sid = s.ID
+		}
+	}
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir, sid), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 

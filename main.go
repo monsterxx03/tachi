@@ -45,7 +45,7 @@ import (
 var Version = "dev"
 
 func buildSystemPrompt(language string) string {
-	return agent.BuildSystemPrompt(language, "")
+	return agent.BuildSystemPrompt(language, "", "")
 }
 
 var commonFlags = []cli.Flag{
