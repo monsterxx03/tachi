@@ -584,10 +584,27 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 		ch.respondInteraction(s, i, "❌ "+err.Error())
 		return
 	}
-	if reply == "" {
-		reply = "✅ Done"
+
+	// Send text reply as ephemeral interaction response.
+	textContent := reply.Content
+	if textContent == "" {
+		textContent = "✅ Done"
 	}
-	ch.respondInteraction(s, i, reply)
+	ch.respondInteraction(s, i, textContent)
+
+	// Send file attachments (e.g., /transcript HTML) to the channel.
+	// Interaction responses cannot include files, so we send them as
+	// a followup message after the initial acknowledgement.
+	for _, att := range reply.Attachments {
+		data, attErr := channel.ResolveAttachmentData(att)
+		if attErr != nil {
+			ch.logger.Error(context.Background(), "discord: slash command resolve attachment", attErr, "file", att.FileName)
+			continue
+		}
+		if _, sendErr := s.ChannelFileSend(i.ChannelID, att.FileName, bytes.NewReader(data)); sendErr != nil {
+			ch.logger.Error(context.Background(), "discord: slash command send attachment", sendErr, "file", att.FileName)
+		}
+	}
 
 	// Update channel topic with the current working directory and model.
 	// Skip for threads (they don't have a topic field) and DMs.

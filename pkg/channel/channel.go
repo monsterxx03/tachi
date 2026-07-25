@@ -334,10 +334,11 @@ type SlashCommand struct {
 	Args string
 }
 
-// CommandHandler executes a typed SlashCommand and returns the response text,
-// the thread's current working directory (for channel topic updates, etc.),
-// the resolved model name, and an error (if any).
-type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply string, workDir string, model string, err error)
+// CommandHandler executes a typed SlashCommand and returns the response
+// message (text + optional file attachments), the thread's current working
+// directory (for channel topic updates, etc.), the resolved model name,
+// and an error (if any).
+type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply OutgoingMessage, workDir string, model string, err error)
 
 // CommandChannel is an optional interface for channels that need
 // programmatic access to manager-level slash commands.
