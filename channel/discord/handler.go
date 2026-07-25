@@ -29,38 +29,73 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		return
 	}
 
+	// 1.5 Ignore system messages (e.g. thread created notifications,
+	// pinned messages, etc.). Only process regular user messages.
+	if m.Type != discordgo.MessageTypeDefault {
+		return
+	}
+
 	// 2. Message deduplication.
 	if ch.deduper.seen(m.ID) {
 		ch.logger.Info(context.Background(), "discord: duplicate message skipped", "id", m.ID)
 		return
 	}
 
-	// 3. Channel-level filtering.
-	if !ch.isAllowedChannel(m.ChannelID) {
+	// 3. Determine if this is a DM.
+	dm := isDM(m.GuildID)
+
+	// 4. Detect thread: resolve the parent channel for auth/filtering.
+	// Threads have their own ChannelID, but allow/ignore/free-response
+	// lists reference the parent channel.
+	var isThread bool
+	var parentChannelID string
+	if !dm {
+		parentChannelID, isThread = resolveThreadParent(s, m.ChannelID)
+	}
+
+	// 5. Channel-level filtering.
+	// For threads, check against the parent channel; for regular
+	// channels, use ChannelID directly.
+	authChannelID := m.ChannelID
+	if isThread && parentChannelID != "" {
+		authChannelID = parentChannelID
+	}
+	if !ch.isAllowedChannel(authChannelID) {
 		return
 	}
 
-	// 4. Determine if this is a DM.
-	dm := isDM(m.GuildID)
-
-	// 5. Determine directed status.
+	// 6. Determine directed status.
 	directed := dm || isMentioned(m.Content, botUserID)
 
 	// Free-response channels: all messages are treated as directed.
-	if !dm && ch.isFreeResponseChannel(m.ChannelID) {
+	// For threads, check the parent channel's free-response status.
+	if !dm && ch.isFreeResponseChannel(authChannelID) {
 		directed = true
 	}
 
 	// When require_mention is false, every message that passes the
 	// filter below is intended to get a direct reply — treat it
 	// as directed rather than ambient/whisper.
-	if !dm && !ch.cfg.RequireMention {
-		directed = true
+	if !dm {
+		if isThread {
+			// ThreadRequireMention controls mention requirement in threads.
+			if !ch.cfg.ThreadRequireMention {
+				directed = true
+			}
+		} else if !ch.cfg.RequireMention {
+			directed = true
+		}
 	}
 
-	// 6. Check mention strategy in guild channels.
+	// 7. Check mention strategy in guild channels.
 	if !dm {
-		if ch.cfg.RequireMention && !directed && !ch.isFreeResponseChannel(m.ChannelID) {
+		// Determine which mention mode applies.
+		mentionRequired := ch.cfg.RequireMention
+		if isThread {
+			mentionRequired = ch.cfg.ThreadRequireMention
+		}
+
+		if mentionRequired && !directed && !ch.isFreeResponseChannel(authChannelID) {
 			// Non-directed message in a guild that requires @mention and is
 			// not a free-response channel — ignore (whisper/ambient handled
 			// by the manager layer via GroupChat flag).
@@ -74,14 +109,14 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		}
 	}
 
-	// 7. Access control.
+	// 8. Access control.
 	roles := ch.resolveMemberRoles(m.GuildID, m.Author.ID)
 	if !ch.isAuthorized(m.Author.ID, roles, dm) {
 		ch.logger.Info(context.Background(), "discord: unauthorized user", "user", m.Author.ID, "name", m.Author.Username, "channel", m.ChannelID)
 		return
 	}
 
-	// 8. Build the ThreadID.
+	// 9. Build the ThreadID.
 	var threadID string
 	if dm {
 		threadID = threadIDForDM(m.Author.ID)
@@ -89,10 +124,10 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		threadID = threadIDForGuild(m.GuildID, m.ChannelID)
 	}
 
-	// 9. Construct the IncomingMessage.
-	incoming := ch.buildIncomingMessage(m, threadID, dm, directed)
+	// 10. Construct the IncomingMessage.
+	incoming := ch.buildIncomingMessage(m, threadID, dm, directed, isThread)
 
-	// 10. Start typing indicator and status embed only for directed
+	// 11. Start typing indicator and status embed only for directed
 	// messages (ambient/whisper messages skip visible feedback).
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -101,7 +136,7 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
 		defer stopTyping()
 
-		// 11. Set up streaming callback for real-time tool call progress.
+		// 12. Set up streaming callback for real-time tool call progress.
 		// The status embed is only sent when the first tool call is detected,
 		// skipping the embed entirely for simple text-only replies.
 		const maxEmbedDescRunes = 3800 // Discord limit is 4096, leave room
@@ -155,16 +190,16 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		})
 	}
 
-	// 11.5 Delegate to the manager handler.
+	// 12.5 Delegate to the manager handler.
 	result := handler(ctx, incoming)
 
-	// 12. Process the result.
-	ch.processHandlerResult(m, result, threadID)
+	// 13. Process the result.
+	ch.processHandlerResult(m, result, threadID, isThread)
 }
 
 // buildIncomingMessage constructs a channel.IncomingMessage from a Discord
 // MessageCreate event.
-func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threadID string, dm, directed bool) channel.IncomingMessage {
+func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threadID string, dm, directed, isThread bool) channel.IncomingMessage {
 	content := cleanContentForLLM(m.Content)
 
 	// TODO: Channel prompts should be injected into the system prompt via
@@ -198,6 +233,27 @@ func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threa
 		} else {
 			// ReferencedMessage not provided (uncached or deleted) — just note the fact.
 			content = "[回复了一条消息]\n" + content
+		}
+	}
+
+	// If the message is in a thread, inject the thread context as
+	// context so the LLM knows what the thread is about. This includes
+	// the starter message (the original message the thread was created
+	// from) plus any initial messages sent during thread creation.
+	// Only injected on the first message in a thread session.
+	if isThread {
+		ch.threadStarterInjectedMu.Lock()
+		alreadyInjected := ch.threadStarterInjected[m.ChannelID]
+		ch.threadStarterInjectedMu.Unlock()
+
+		if !alreadyInjected {
+			if ctx := ch.getThreadContext(m.ChannelID, m.ID); ctx != "" {
+				content = "[子区上下文]\n" + ctx + "\n[/子区上下文]\n" + content
+
+				ch.threadStarterInjectedMu.Lock()
+				ch.threadStarterInjected[m.ChannelID] = true
+				ch.threadStarterInjectedMu.Unlock()
+			}
 		}
 	}
 
@@ -253,7 +309,7 @@ func (ch *DiscordChannel) buildIncomingMessage(m *discordgo.MessageCreate, threa
 }
 
 // processHandlerResult handles the result of a manager handler call.
-func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, result channel.HandlerResult, threadID string) {
+func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, result channel.HandlerResult, threadID string, isThread bool) {
 	channelID := m.ChannelID
 
 	if result.Steered {
@@ -303,13 +359,27 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 		// Send remaining text after embed, with MEDIA parsing.
 		if cleaned != "" {
 			if _, err := ch.sendTextWithMediaRef(channelID, cleaned, ref); err != nil {
-				ch.logger.Error(context.Background(), "discord: send embed text error", err)
+				// If Discord rejects the reply (e.g. system message),
+				// retry without MessageReference.
+				if isSystemMessageReplyError(err) {
+					ch.logger.Info(context.Background(), "discord: retrying embed text without reply reference")
+					_, _ = ch.sendTextWithMediaRef(channelID, cleaned, nil)
+				} else {
+					ch.logger.Error(context.Background(), "discord: send embed text error", err)
+				}
 			}
 		}
 	} else {
 		// 2. Normal text with MEDIA tag support.
 		if _, err := ch.sendTextWithMediaRef(channelID, reply.Content, ref); err != nil {
-			ch.logger.Error(context.Background(), "discord: send reply error", err)
+			// If Discord rejects the reply (e.g. system message),
+			// retry without MessageReference.
+			if isSystemMessageReplyError(err) {
+				ch.logger.Info(context.Background(), "discord: retrying reply without reference")
+				_, _ = ch.sendTextWithMediaRef(channelID, reply.Content, nil)
+			} else {
+				ch.logger.Error(context.Background(), "discord: send reply error", err)
+			}
 		}
 	}
 
@@ -327,7 +397,8 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 
 	// 4. Update channel topic with working directory and git branch.
 	// Only for guild channels (DM channels don't have a meaningful topic).
-	if !isDM(m.GuildID) {
+	// Threads don't have a topic field, so skip them too.
+	if !isDM(m.GuildID) && !isThread {
 		ch.updateChannelTopic(channelID, result.WorkDir)
 	}
 }
@@ -434,4 +505,14 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir string) {
 	ch.topicStatusMu.Lock()
 	ch.topicStatus[channelID] = topicEntry{dir: dir, branch: branch}
 	ch.topicStatusMu.Unlock()
+}
+
+// isSystemMessageReplyError checks if a Discord API error is the
+// "Cannot reply to a system message" error, which means we should
+// retry without a MessageReference.
+func isSystemMessageReplyError(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(err.Error(), "REPLIES_CANNOT_REPLY_TO_SYSTEM_MESSAGE")
 }
