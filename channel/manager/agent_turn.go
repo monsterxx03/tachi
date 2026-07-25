@@ -430,7 +430,11 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	}
 
 	// Build system prompt — append whisper instructions for group chat threads.
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir)
+	sessionID := ""
+	if sm != nil && sm.Current() != nil {
+		sessionID = sm.Current().ID
+	}
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID)
 	if ta.groupChat && m.cfg.Channel.Whisper.WhisperEnabled() {
 		systemPrompt += "\n" + whisperPromptSuffix
 	}

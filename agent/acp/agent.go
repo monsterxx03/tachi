@@ -297,7 +297,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	}
 
 	// Build system prompt (use session cwd and current mode for environment info)
-	systemPrompt := buildSystemPromptForCwd(t.cfg.Language, sess.cwd, sess.agent.Mode())
+	systemPrompt := buildSystemPromptForCwd(t.cfg.Language, sess.cwd, sess.agent.Mode(), sess.ID)
 
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{

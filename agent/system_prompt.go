@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 
@@ -13,7 +14,8 @@ import (
 // BuildSystemPrompt constructs the Tachi system prompt with agent identity,
 // instruction hierarchy, reply language, and environment info.
 // If cwd is empty, config.FindProjectRoot() is used as fallback.
-func BuildSystemPrompt(language string, cwd string) string {
+// sessionID can be empty (no current session).
+func BuildSystemPrompt(language string, cwd string, sessionID string) string {
 	var sb strings.Builder
 
 	// ── Identity + Core traits ──────────────────────────────────────────────
@@ -90,6 +92,18 @@ YOU MUST:
 
 	if shell := os.Getenv("SHELL"); shell != "" {
 		fmt.Fprintf(&sb, "- Shell: %s\n", shell)
+	}
+
+	// Logs — useful when troubleshooting Tachi itself.
+	logFile := filepath.Join(config.LogsDir(), "debug.log")
+	fmt.Fprintf(&sb, "- Logs: %s (trace_id at the end of each turn message — grep in log files to correlate the full interaction chain)\n", logFile)
+
+	// Session — where conversation transcripts are stored on disk.
+	if sessionDir, err := config.SessionDir(); err == nil {
+		fmt.Fprintf(&sb, "- Session dir: %s\n", sessionDir)
+	}
+	if sessionID != "" {
+		fmt.Fprintf(&sb, "- Session ID: %s\n", sessionID)
 	}
 
 	return sb.String()
