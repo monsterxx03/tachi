@@ -295,7 +295,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		}
 
 		// Send terminal notification when a turn completes (not for one-offs like /commit).
-		if m.notifyOnComplete && !isOneOff {
+		// Skip when Herdr integration is active — Herdr provides its own visual indicators.
+		if m.notifyOnComplete && !isOneOff && !herdrNotifications(m.cfg) {
 			notifyTerminal("tachi", "Reply ready")
 		}
 
@@ -398,7 +399,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			}
 			m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
 			// Notify on error (but not for user-initiated interruptions).
-			if m.notifyOnComplete {
+			// Skip when Herdr integration is active — Herdr provides its own visual indicators.
+			if m.notifyOnComplete && !herdrNotifications(m.cfg) {
 				notifyTerminal("tachi", "Error — "+errMsg)
 			}
 		}

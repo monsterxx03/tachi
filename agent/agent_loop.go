@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -274,6 +275,11 @@ func (a *AIAgent) RunOneOffStream(
 			Content: userMessage,
 		})
 
+		// Fire turn_start hook (paired with turn_complete/turn_truncated in runAgentLoop)
+		a.dispatchEvent(ctx, "turn_start", hooks.Payload{
+			UserMessage: userMessage,
+		})
+
 		a.runAgentLoop(ctx, provider, messages, opts, ch)
 	}()
 
@@ -368,6 +374,11 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			}
 			// Notify memory backend that a new session has started
 			a.StartSessionMemory()
+
+			// Fire session_start hook
+			a.dispatchEvent(ctx, "session_start", hooks.Payload{
+				Provider: providerName,
+			})
 		}
 		if a.sessionManager != nil {
 			// Record the system reminder block before the user message so the
@@ -392,6 +403,11 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				ch <- AgentEvent{Type: AgentEventSessionTitle, Title: title}
 			}
 		}
+
+		// Fire turn_start hook before entering agent loop
+		a.dispatchEvent(ctx, "turn_start", hooks.Payload{
+			UserMessage: userMessage,
+		})
 
 		a.EstimateAndUpdateTokens(messages)
 		a.runAgentLoop(ctx, a.provider, messages, opts, ch)
@@ -458,6 +474,9 @@ func (a *AIAgent) runAgentLoop(
 
 	for {
 		if !a.iterationBudget.consume() {
+			a.dispatchEvent(ctx, "error", hooks.Payload{
+				ErrorMessage: "iteration budget exhausted",
+			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
 				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: fmt.Errorf("iteration budget exhausted")},
@@ -467,6 +486,9 @@ func (a *AIAgent) runAgentLoop(
 
 		select {
 		case <-ctx.Done():
+			a.dispatchEvent(ctx, "error", hooks.Payload{
+				ErrorMessage: ctx.Err().Error(),
+			})
 			ch <- AgentEvent{
 				Type:     AgentEventError,
 				Messages: messages,
@@ -521,6 +543,9 @@ func (a *AIAgent) runAgentLoop(
 
 		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
 		if err != nil {
+			a.dispatchEvent(ctx, "error", hooks.Payload{
+				ErrorMessage: fmt.Sprintf("API call failed: %v", err),
+			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
 				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: fmt.Errorf("API call failed: %w", err)},
@@ -534,6 +559,9 @@ func (a *AIAgent) runAgentLoop(
 			if ctx.Err() != nil {
 				exitReason = "interrupted"
 			}
+			a.dispatchEvent(ctx, "error", hooks.Payload{
+				ErrorMessage: err.Error(),
+			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
 				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: err},
@@ -711,6 +739,14 @@ func (a *AIAgent) handleLengthFinish(
 		// Store turn-level memory after a truncated response
 		a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
 
+		// Fire turn_complete hook with error info so external integrations
+		// know the turn ended (even if truncated). Without this, the hook
+		// system may be stuck in "working" state.
+		a.dispatchEvent(ctx, "turn_complete", hooks.Payload{
+			TurnCount:    apiCallCount,
+			ErrorMessage: fmt.Sprintf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+		})
+
 		return false
 	}
 
@@ -746,13 +782,20 @@ func (a *AIAgent) handleLengthFinish(
 	}
 
 	*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
+
+	// Fire turn_truncated hook to indicate the turn is continuing
+	a.dispatchEvent(ctx, "turn_truncated", hooks.Payload{
+		TurnCount:  *lengthRetries,
+		UserMessage: continuationText,
+	})
+
 	return true
 }
 
 // handleStopFinish processes a normal stop response: records the assistant
 // turn, emits TurnComplete, and stores turn-level memory.
 func (a *AIAgent) handleStopFinish(
-	_ context.Context,
+	ctx context.Context,
 	acc *streamAccumulator,
 	messages *[]llm.Message,
 	ch chan<- AgentEvent,
@@ -770,6 +813,11 @@ func (a *AIAgent) handleStopFinish(
 		Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
 		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), ExitReason: "stop", Usage: acc.usage, TraceID: a.turnTraceID},
 	}
+
+	// Fire turn_complete hook
+	a.dispatchEvent(ctx, "turn_complete", hooks.Payload{
+		TurnCount: apiCallCount,
+	})
 
 	// Store turn-level memory after a complete response
 	a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))

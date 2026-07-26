@@ -3,9 +3,11 @@ package agent
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -202,6 +204,10 @@ type AIAgent struct {
 	// Set by RunOneOffStream for one-off tasks (/commit, /review, sub-agents, dreams)
 	// whose messages should not pollute the main conversation history.
 	skipSessionWrites bool
+
+	// hookDispatcher manages event hooks (Go callbacks + external commands).
+	// Initialised by Configure(); nil when hook system is disabled.
+	hookDispatcher *hooks.Dispatcher
 
 	// oneoffRec, when non-nil, redirects recordSession output to a sidecar
 	// one-off transcript file instead of dropping it. Set by RunOneOffStream
@@ -762,9 +768,31 @@ func (a *AIAgent) GetLastMessages() []llm.Message {
 	return a.lastMessages
 }
 
+// dispatchEvent sends an event to the hook dispatcher, if initialised.
+// It is a no-op when the hook system is disabled or has no handlers for
+// the given event. The payload is populated with the current session ID
+// and any extra fields passed via opts.
+func (a *AIAgent) dispatchEvent(ctx context.Context, event string, opts hooks.Payload) {
+	if a.hookDispatcher == nil {
+		return
+	}
+	if a.sessionManager != nil && a.sessionManager.Current() != nil {
+		opts.SessionID = a.sessionManager.Current().ID
+	}
+	if wd, err := os.Getwd(); err == nil && opts.WorkspaceDir == "" {
+		opts.WorkspaceDir = wd
+	}
+	opts.Event = event
+	a.hookDispatcher.Dispatch(ctx, event, opts)
+}
+
 // Close releases resources held by the agent, including killing all tracked
 // background processes. Safe to call on a nil agent.
 func (a *AIAgent) Close() {
+	// Fire session_end hook before tearing down, so integrations (e.g. Herdr)
+	// can mark the agent as idle before the process exits.
+	a.dispatchEvent(context.Background(), "session_end", hooks.Payload{})
+
 	if a.processManager != nil {
 		a.processManager.KillAll()
 	}

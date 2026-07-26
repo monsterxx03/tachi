@@ -6,6 +6,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -119,6 +120,9 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	a.subagentRunner = executor
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
+	// --- Hook system (after tools, so user command hooks can reference them) ---
+	a.initHookSystem(ctx, cfg)
+
 	// --- LSP servers ---
 	if cfg.LSP.IsEnabled() && len(cfg.LSP.Servers) > 0 {
 		lspCfg := convertLSPConfig(&cfg.LSP)
@@ -134,6 +138,62 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	}
 
 	return mgr, nil
+}
+
+// initHookSystem initialises the event hook dispatcher and registers handlers:
+//  1. User-defined command hooks from config.yaml
+//  2. Herdr integration (auto-detected from HERDR_ENV)
+func (a *AIAgent) initHookSystem(ctx context.Context, cfg *config.Config) {
+	if !cfg.Hooks.IsEnabled() {
+		return
+	}
+
+	d := hooks.NewDispatcher(a.logger)
+
+	// Load user-defined command hooks from config
+	for event, cmds := range cfg.Hooks.Events {
+		for _, cmd := range cmds {
+			if cmd.Command == "" {
+				continue
+			}
+			timeout := 5 * time.Second
+			if cmd.Timeout != "" {
+				if d, err := time.ParseDuration(cmd.Timeout); err == nil {
+					timeout = d
+				} else {
+					a.logger.Warn(ctx, "Hooks: invalid command timeout, using default 5s", "timeout", cmd.Timeout, "error", err)
+				}
+			}
+			async := true
+			if cmd.Async != nil {
+				async = *cmd.Async
+			}
+			d.RegisterCommand(event, hooks.Handler{
+				Name:    cmd.Command,
+				Command: cmd.Command,
+				Timeout: timeout,
+				Async:   async,
+				Env:     cmd.Env,
+			})
+		}
+	}
+
+	// Auto-detect Herdr integration
+	if cfg.Herdr.IsEnabled() && hooks.DetectHerdr() {
+		handler := hooks.NewHerdrHandler()
+		for event := range hooks.EventActions {
+			evt := event
+			d.RegisterCallback(evt, "herdr", func(ctx context.Context, e string, p []byte) {
+				handler.Handle(ctx, e, p)
+			})
+		}
+		a.logger.Info(ctx, "Hooks: Herdr integration enabled (auto-detected from HERDR_ENV)")
+	}
+
+	if len(d.Events()) > 0 {
+		a.hookDispatcher = d
+		a.logger.Info(ctx, "Hooks: dispatcher initialized", "events", len(d.Events()))
+	}
 }
 
 // convertLSPConfig converts from config.LSPConfig to lsp.Config.

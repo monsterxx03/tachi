@@ -722,6 +722,8 @@ type Config struct {
 	Logs                   LogsConfig           `yaml:"logs"`                            // Logger configuration
 	Permissions            PermissionsConfig    `yaml:"permissions"`                     // Tool permission rules (bash allow/ask/deny)
 	Oneoff                 OneoffConfig         `yaml:"oneoff"`                          // One-off transcript recording (/commit, /review, ambient, dream...)
+	Hooks                  HooksConfig          `yaml:"hooks"`                           // Event hook system (user-defined commands)
+	Herdr                  HerdrConfig          `yaml:"herdr"`                           // Herdr terminal multiplexer integration
 }
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files
@@ -735,6 +737,42 @@ type OneoffConfig struct {
 
 // IsEnabled reports whether one-off transcript recording is on (default true).
 func (c *OneoffConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// HooksConfig controls the event hook system. Events fire during the agent
+// loop and can trigger external commands (user-defined scripts) or built-in
+// Go callbacks (e.g. Herdr integration).
+type HooksConfig struct {
+	Enabled *bool                    `yaml:"enabled" default:"true"`
+	Events  map[string][]HookCommand `yaml:"events"` // event name → commands
+}
+
+// IsEnabled reports whether the hook system is active (default true).
+func (c *HooksConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
+}
+
+// HookCommand defines an external command to run when an event fires.
+// The command receives the event payload as JSON on stdin.
+type HookCommand struct {
+	Command string            `yaml:"command"`           // e.g. "bash {{HOOKS_DIR}}/notify.sh"
+	Timeout string            `yaml:"timeout,omitempty"` // e.g. "5s", "3s"; default "5s"
+	Async   *bool             `yaml:"async,omitempty"`   // default true; false = wait for completion
+	Env     map[string]string `yaml:"env,omitempty"`     // extra env vars
+}
+
+// HerdrConfig controls the Herdr terminal multiplexer integration.
+// When enabled and HERDR_ENV=1 is detected, Tachi automatically reports
+// session identity and lifecycle state to the local Herdr server.
+// Socket path and pane ID are always read from environment variables
+// (HERDR_SOCKET_PATH, HERDR_PANE_ID).
+type HerdrConfig struct {
+	Enabled *bool `yaml:"enabled" default:"true"` // auto-detect from HERDR_ENV
+}
+
+// IsEnabled reports whether Herdr integration is allowed (default true).
+func (c *HerdrConfig) IsEnabled() bool {
 	return c.Enabled == nil || *c.Enabled
 }
 
