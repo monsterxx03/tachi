@@ -140,7 +140,7 @@ func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) 
 			IsError:    isError,
 			Timestamp:  time.Now().UTC().Format(time.RFC3339),
 		}); err != nil {
-			a.logger.Error(context.Background(), "Memory(tool): observe failed", err, "tool", toolName)
+			a.logger.Error(ctx, "Memory(tool): observe failed", err, "tool", toolName)
 		}
 	}()
 }

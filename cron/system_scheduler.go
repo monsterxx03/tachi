@@ -70,13 +70,13 @@ func (s *SystemScheduler) Register(name, schedule string, timeout time.Duration,
 		ctx, cancel := context.WithTimeout(s.ctx, timeout)
 		defer cancel()
 
-		s.logger.Info(context.Background(), "triggered", "name", name)
+		s.logger.Info(s.ctx, "triggered", "name", name)
 		start := time.Now()
 
 		if err := fn(ctx); err != nil {
-			s.logger.Error(context.Background(), "failed", err, "name", name, "duration", time.Since(start))
+			s.logger.Error(s.ctx, "failed", err, "name", name, "duration", time.Since(start))
 		} else {
-			s.logger.Info(context.Background(), "completed", "name", name, "duration", time.Since(start))
+			s.logger.Info(s.ctx, "completed", "name", name, "duration", time.Since(start))
 		}
 	})
 	if err != nil {
@@ -96,7 +96,7 @@ func (s *SystemScheduler) Start(ctx context.Context) {
 	s.ctx, s.cancel = context.WithCancel(ctx)
 	s.started = true
 	s.engine.Start()
-	s.logger.Info(context.Background(), "started", "count", len(s.entries))
+	s.logger.Info(s.ctx, "started", "count", len(s.entries))
 }
 
 // Stop halts the scheduler and waits for any in-flight job to finish.
@@ -108,7 +108,7 @@ func (s *SystemScheduler) Stop() {
 	s.mu.Unlock()
 
 	<-s.engine.Stop().Done()
-	s.logger.Info(context.Background(), "stopped")
+	s.logger.Info(s.ctx, "stopped")
 }
 
 // ErrAlreadyStarted is returned when Register is called after Start.

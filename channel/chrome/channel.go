@@ -101,11 +101,11 @@ func (c *ChromeChannel) Run(ctx context.Context, handler channel.MessageHandler)
 }
 
 // Send implements channel.MessageSender for proactive message delivery.
-func (c *ChromeChannel) Send(_ context.Context, msg channel.OutgoingMessage) error {
+func (c *ChromeChannel) Send(ctx context.Context, msg channel.OutgoingMessage) error {
 	if c.server == nil {
 		return fmt.Errorf("chrome: server not started")
 	}
-	c.logger.Info(context.Background(), "chrome: proactive send", "thread", msg.ThreadID)
+	c.logger.Info(ctx, "chrome: proactive send", "thread", msg.ThreadID)
 	return c.server.Send(msg.ThreadID, msg.Content)
 }
 

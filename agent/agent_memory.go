@@ -74,7 +74,7 @@ func (a *AIAgent) StartSessionMemory() {
 			SessionID: sess.ID,
 			Tags:      withRepoTag(nil),
 		}); err != nil {
-			a.logger.Error(context.Background(), "Memory(start): start session failed", err)
+			a.logger.Error(ctx, "Memory(start): start session failed", err)
 		}
 	}()
 }
@@ -197,7 +197,7 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 			Tags:         withRepoTag(nil),
 			TurnMessages: turnMsgs,
 		}); err != nil {
-			a.logger.Error(context.Background(), "Memory(turn): store failed", err)
+			a.logger.Error(ctx, "Memory(turn): store failed", err)
 		}
 	}()
 }
@@ -234,7 +234,7 @@ func (a *AIAgent) StoreCompactMemory() {
 			Tags:            withRepoTag(nil),
 			SessionMessages: memMsgs,
 		}); err != nil {
-			a.logger.Error(context.Background(), "Memory(compact): store failed", err)
+			a.logger.Error(ctx, "Memory(compact): store failed", err)
 		}
 	}()
 }
@@ -272,7 +272,7 @@ func (a *AIAgent) StoreSessionMemory() {
 		Tags:            withRepoTag(nil),
 		SessionMessages: memMsgs,
 	}); err != nil {
-		a.logger.Error(context.Background(), "Memory(session): store failed", err)
+		a.logger.Error(ctx, "Memory(session): store failed", err)
 	}
 }
 

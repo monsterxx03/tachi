@@ -54,7 +54,7 @@ func (m *Manager) cancelThreadTurn(threadID string) {
 // and return immediately with Steered=true.
 func (m *Manager) buildHandler() channel.MessageHandler {
 	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
-		m.logger.Info(context.Background(), "channel: recv", "thread", msg.ThreadID, "id", msg.MessageID, "len", len(msg.Content))
+		m.logger.Info(ctx, "channel: recv", "thread", msg.ThreadID, "id", msg.MessageID, "len", len(msg.Content))
 
 		// ---- Channel Whisper guard ----
 		// Only non-directed messages in group chat mode with whisper enabled
@@ -68,7 +68,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// When whisper is off, non-directed messages in group chats are ignored
 		// entirely — they don't trigger any agent turn or reply.
 		if !msg.Directed && msg.GroupChat && !m.cfg.Channel.Whisper.WhisperEnabled() {
-			m.logger.Info(context.Background(), "channel: drop (whisper disabled)", "thread", msg.ThreadID)
+			m.logger.Info(ctx, "channel: drop (whisper disabled)", "thread", msg.ThreadID)
 			return channel.HandlerResult{Dropped: true}
 		}
 
@@ -165,7 +165,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			ta.ambientCancel()
 			ta.ambientCancel = nil
 			ta.steerRespCh = nil
-			m.logger.Info(context.Background(), "channel: preempted ambient turn for directed message", "thread", msg.ThreadID)
+			m.logger.Info(ctx, "channel: preempted ambient turn for directed message", "thread", msg.ThreadID)
 		}
 		if ta.steerRespCh != nil {
 			// Agent already running — check if drainEvents is waiting for
@@ -186,9 +186,9 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				ta.mu.Unlock()
 				select {
 				case ta.askUserRespCh <- tools.AskUserResult{Answers: answers}:
-					m.logger.Info(context.Background(), "channel: AskUser answer delivered", "thread", msg.ThreadID, "entries", len(answers))
+					m.logger.Info(ctx, "channel: AskUser answer delivered", "thread", msg.ThreadID, "entries", len(answers))
 				default:
-					m.logger.Warn(context.Background(), "channel: AskUser answer dropped (channel full)", "thread", msg.ThreadID)
+					m.logger.Warn(ctx, "channel: AskUser answer dropped (channel full)", "thread", msg.ThreadID)
 				}
 				return channel.HandlerResult{Steered: true}
 			}
@@ -200,7 +200,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			if isCompactCmd || isSkillActivation {
 				ta.mu.Unlock()
 				m.cancelThreadTurn(msg.ThreadID)
-				m.logger.Info(context.Background(), "channel: cancelled running turn, restarting with compact/skill", "thread", msg.ThreadID)
+				m.logger.Info(ctx, "channel: cancelled running turn, restarting with compact/skill", "thread", msg.ThreadID)
 				// Activate a fresh thread for the new turn.
 				ta = m.activateThread(msg.ThreadID, ctx)
 				ta.isCompact = isCompactCmd
@@ -209,7 +209,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				ta.pending = append(ta.pending, msg.Content)
 				pendingLen := len(ta.pending)
 				ta.mu.Unlock()
-				m.logger.Info(context.Background(), "channel: steer queued", "thread", msg.ThreadID, "pending", pendingLen)
+				m.logger.Info(ctx, "channel: steer queued", "thread", msg.ThreadID, "pending", pendingLen)
 				return channel.HandlerResult{Steered: true}
 			}
 		} else {
@@ -278,7 +278,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			if isCompactCmd {
 				reply, err := m.finalizeCompactResult(msg.ThreadID, result.text)
 				if err != nil {
-					m.logger.Error(context.Background(), "channel: finalizeCompactResult", err, "thread", msg.ThreadID)
+					m.logger.Error(ctx, "channel: finalizeCompactResult", err, "thread", msg.ThreadID)
 					return channel.HandlerResult{
 						Reply: channel.OutgoingMessage{
 							ThreadID: msg.ThreadID,
