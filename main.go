@@ -445,6 +445,10 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	if !quiet {
 		fmt.Fprintf(os.Stderr, "\nExit: %s | Iterations: %d\n", result.ExitReason, result.IterationsUsed)
 	}
+	// Explicitly close the agent before os.Exit — deferred functions do not run
+	// after os.Exit, so this ensures session_end is dispatched (e.g. Herdr
+	// release_agent).
+	aiAgent.Close()
 	os.Exit(exitCodeForReason(result.ExitReason))
 	return nil
 }
@@ -526,10 +530,6 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
 	}
-	if mcpMgr != nil {
-		defer mcpMgr.Close()
-	}
-	defer aiAgent.Close()
 
 	// Non-interactive mode: unregister AskUserQuestion so the LLM never
 	// attempts to use it — there's no TUI form available in pipe mode.
@@ -576,6 +576,11 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if !quiet {
 		fmt.Fprintf(os.Stderr, "\nExit: %s | Iterations: %d\n", result.ExitReason, result.IterationsUsed)
 	}
+	// Explicit cleanup before os.Exit (defers won't run after os.Exit).
+	if mcpMgr != nil {
+		mcpMgr.Close()
+	}
+	aiAgent.Close()
 	os.Exit(exitCodeForReason(result.ExitReason))
 	return nil
 }
