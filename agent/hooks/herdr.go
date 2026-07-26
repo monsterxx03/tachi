@@ -40,12 +40,14 @@ func NewHerdrHandler() *HerdrHandler {
 	}
 }
 
-// herdrAction distinguishes between session identity and lifecycle state reports.
+// herdrAction distinguishes between session identity, lifecycle state reports,
+// and agent release.
 type herdrAction string
 
 const (
-	actionSession = herdrAction("session") // → pane.report_agent_session
-	actionState   = herdrAction("state")   // → pane.report_agent
+	actionSession = herdrAction("session")  // → pane.report_agent_session
+	actionState   = herdrAction("state")    // → pane.report_agent
+	actionRelease = herdrAction("release")  // → pane.release_agent
 )
 
 // eventAction maps a Tachi hook event to a Herdr socket API call.
@@ -58,7 +60,7 @@ type eventAction struct {
 // iterate over them when registering handlers.
 var EventActions = map[string]eventAction{
 	"session_start":      {action: actionSession},
-	"session_end":        {action: actionState, state: "idle"},
+	"session_end":        {action: actionRelease},
 	"turn_complete":      {action: actionState, state: "idle"},
 	"turn_truncated":     {action: actionState, state: "working"},
 	"tool_call":          {action: actionState, state: "working"},
@@ -112,6 +114,8 @@ func (h *HerdrHandler) buildRequest(ea eventAction, sessionID string) map[string
 		method = "pane.report_agent_session"
 		params["agent_session_id"] = sessionID
 		params["session_start_source"] = "startup"
+	case actionRelease:
+		method = "pane.release_agent"
 	case actionState:
 		method = "pane.report_agent"
 		params["state"] = ea.state
