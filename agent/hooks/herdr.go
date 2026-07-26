@@ -84,7 +84,15 @@ func (h *HerdrHandler) Handle(ctx context.Context, event string, payload []byte)
 	_ = json.Unmarshal(payload, &data)
 
 	req := h.buildRequest(ea, data.SessionID)
-	go h.send(req) // fire-and-forget
+
+	// session_end is dispatched synchronously so the process doesn't exit
+	// before the Herdr socket write completes. All other events are
+	// fire-and-forget (best-effort, no ordering guarantees).
+	if event == "session_end" {
+		h.send(req)
+	} else {
+		go h.send(req)
+	}
 }
 
 func (h *HerdrHandler) buildRequest(ea eventAction, sessionID string) map[string]interface{} {
