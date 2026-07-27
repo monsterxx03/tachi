@@ -355,15 +355,15 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 // modes, dispatched on ta.isCompact:
 //
 //   - Normal turn (ta.isCompact == false): grabs the per-thread cached
-//     AIAgent, scopes ephemeral tools (CronTool, SendFileTool) via
-//     SaveToolRegistry/Restore, and collects file attachments.
+//     AIAgent, attaches ephemeral tools (CronTool, SendFileTool) to the run
+//     via a per-run tool view, and collects file attachments.
 //   - Compact turn (ta.isCompact == true): builds a one-off throwaway agent
-//     with ClearToolRegistry so /compact summarizes from session context
-//     only, without polluting the cached agent's tool set.
+//     and runs it under a no-tools view, so /compact summarizes from session
+//     context only, without polluting the cached agent's tool set.
 //
 // The two modes share session loading, steer wiring, image attachment, and
-// drainEvents — only the agent-acquisition and tool-registration steps
-// differ, so they're isolated in acquireForTurn.
+// drainEvents — only agent acquisition and the run's tool view differ, so
+// they're isolated in acquireForTurn.
 func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) {
 	defer func() {
 		// Unblock the handler on panic.
@@ -383,12 +383,13 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	}
 
 	// Mode-specific prologue: cached agent vs throwaway compact agent.
-	aiAgent, ca, sink, cleanup, err := m.acquireForTurn(ctx, msg.ThreadID, ta.isCompact)
+	scope, err := m.acquireForTurn(ctx, msg.ThreadID, ta.isCompact)
 	if err != nil {
 		ta.resultCh <- handlerResult{err: err}
 		return
 	}
-	defer cleanup()
+	defer scope.cleanup()
+	aiAgent, ca, sink := scope.agent, scope.ca, scope.sink
 
 	// Bind the thread's working directory to the context so all tools
 	// (Bash, Read, Write, Edit, Glob, etc.) resolve relative paths
@@ -483,7 +484,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
-	})
+	}, scope.ropts...)
 	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, onTextDelta)
 
 	// Update the in-memory history cache with the full message slice from
@@ -504,53 +505,66 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	ta.resultCh <- handlerResult{text: text, err: err, attachments: attachments}
 }
 
+// turnScope bundles everything acquireForTurn hands back for one turn. It
+// replaces a 5-value positional return that was getting hard to read, and
+// keeps the per-turn sink off the long-lived cachedAgent — parking per-turn
+// state on a cached object is the lifetime mismatch this refactor removes.
+type turnScope struct {
+	agent *agent.AIAgent
+	// ca is the cachedAgent for normal turns, nil for /compact throwaways.
+	// Callers read ca.history for prior history and write it back after.
+	ca *cachedAgent
+	// sink accumulates SendFile attachments; nil on the /compact path.
+	sink *attachmentSink
+	// ropts must be forwarded to RunConversationStream — it carries the run's
+	// tool view (ephemeral tools normally, no tools at all for /compact).
+	ropts []agent.RunOption
+	// cleanup MUST be called via defer: it closes the throwaway agent or
+	// releases the cached-agent lock.
+	cleanup func()
+}
+
 // acquireForTurn handles the mode-specific prologue: choose between cached
-// agent (normal turn) and throwaway agent (/compact), apply the registry
-// scope, and register per-turn tools.
-//
-// Returns (agent, ca, sink, cleanup, err).
-// ca is the cachedAgent for normal turns (nil for /compact throwaway agents).
-// Callers use ca.history as the prior-history input to RunConversationStream
-// and update ca.history via agent.GetLastMessages() after the turn.
-// sink is non-nil only on the normal path and accumulates SendFile attachments.
-// cleanup MUST be called via defer; it restores the registry / closes the
-// throwaway agent / releases the cached-agent lock in the right order.
-func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*agent.AIAgent, *cachedAgent, *attachmentSink, func(), error) {
+// agent (normal turn) and throwaway agent (/compact), and build the per-run
+// tool view.
+func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*turnScope, error) {
 	if isCompact {
 		prov, resolved, _ := m.getProviderForThread(threadID)
 		aiAgent, err := m.buildAgent(ctx, threadID, prov, resolved)
 		if err != nil {
-			return nil, nil, nil, nil, fmt.Errorf("compact: build agent: %w", err)
+			return nil, fmt.Errorf("compact: build agent: %w", err)
 		}
 		// /compact: no tool calls — only summarize from session context.
-		aiAgent.ClearToolRegistry()
-		cleanup := func() { aiAgent.Close() }
-		return aiAgent, nil, nil, cleanup, nil
+		return &turnScope{
+			agent:   aiAgent,
+			ropts:   []agent.RunOption{agent.WithNoTools()},
+			cleanup: func() { aiAgent.Close() },
+		}, nil
 	}
 
 	ca, err := m.acquireAgent(ctx, threadID)
 	if err != nil {
-		return nil, nil, nil, nil, fmt.Errorf("acquire agent: %w", err)
+		return nil, fmt.Errorf("acquire agent: %w", err)
 	}
-	aiAgent := ca.agent
 
-	// Snapshot the registry so per-turn ephemeral tools (CronTool,
-	// SendFileTool) don't leak into the next turn on this cached agent.
-	snap := aiAgent.SaveToolRegistry()
-
-	// CronTool — only present when scheduler is wired.
+	// Ephemeral per-turn tools are attached to the run rather than registered
+	// on the cached agent. Both are genuinely per-turn — the SendFileTool's
+	// callback closes over a fresh attachment sink, and the CronTool's over
+	// this thread's ID — so run scope is what they actually mean. The cached
+	// agent's registry is never touched, so a concurrent turn on another
+	// thread can't observe them and there is no unregister step to forget.
+	var extra []tools.Tool
 	if m.scheduler != nil {
-		aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string { return threadID }))
+		extra = append(extra, tools.NewCronTool(m.scheduler, func() string { return threadID }))
 	}
-
-	// SendFileTool — its callback closure captures a fresh sink, so it
-	// MUST be re-registered each turn.
 	sendFileTool, sink := newSendFileTool()
-	aiAgent.RegisterTool(sendFileTool)
+	extra = append(extra, sendFileTool)
 
-	cleanup := func() {
-		aiAgent.RestoreToolRegistry(snap)
-		m.releaseAgent(ca)
-	}
-	return aiAgent, ca, sink, cleanup, nil
+	return &turnScope{
+		agent:   ca.agent,
+		ca:      ca,
+		sink:    sink,
+		ropts:   []agent.RunOption{agent.WithExtraTools(extra...)},
+		cleanup: func() { m.releaseAgent(ca) },
+	}, nil
 }

@@ -55,15 +55,12 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	defer m.releaseAgent(ca)
 	aiAgent := ca.agent
 
-	// Snapshot the registry so the cron-scoped tools we register below
-	// (CronTool) don't leak into the next regular message turn.
-	snap := aiAgent.SaveToolRegistry()
-	defer aiAgent.RestoreToolRegistry(snap)
-
-	// Register CronTool so cron jobs can manage themselves.
-	aiAgent.RegisterTool(tools.NewCronTool(m.scheduler, func() string {
+	// The CronTool is scoped to this run rather than registered on the cached
+	// agent, so it can't leak into the next regular message turn on this
+	// thread (its closure is bound to this job's target thread anyway).
+	cronTool := tools.NewCronTool(m.scheduler, func() string {
 		return job.TargetThreadID
-	}))
+	})
 
 	// Per-thread session.
 	sm, diskHistory := m.prepareThreadSession(job.TargetThreadID, resolved)
@@ -92,7 +89,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	}
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir, sid, m.cfg.Debug.PPROF), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
-	})
+	}, agent.WithExtraTools(cronTool))
 
 	// sendProgress for cron: deliver intermediate tool results inline.
 	sendProgress := func(text string) {

@@ -68,8 +68,9 @@ type initProviderResult struct {
 // that is meaningful to accumulate across turns — MCP discoveredSet, skill
 // activations, lastInputTokens for token-warning reminders, etc. — survives
 // without being reset on every message. Per-turn ephemeral tools (CronTool,
-// SendFileTool) are scoped via SaveToolRegistry / RestoreToolRegistry so they
-// don't leak into the next turn.
+// SendFileTool) are attached to the individual run via a per-run tool view
+// (agent.WithExtraTools), so they never enter the cached agent's registry and
+// cannot leak into the next turn.
 //
 // The cached agent is rebuilt or evicted in these cases:
 //   - /new on a thread → that thread's cached agent is dropped and its
@@ -77,8 +78,8 @@ type initProviderResult struct {
 //     message starts cleanly with the global default provider.
 //   - /model on a thread → stores a per-thread provider override and evicts
 //     only that thread's cached agent. Other threads are unaffected.
-//   - /compact runs a one-off summarization against a throwaway agent (with
-//     ClearToolRegistry) so the cached agent's tool set isn't disturbed.
+//   - /compact runs a one-off summarization against a throwaway agent (under a
+//     no-tools run view) so the cached agent's tool set isn't disturbed.
 //
 // All cached agents share a single *mcp.Manager + DeferredPool + DiscoveredSet
 // (see initSharedMCP). MCP servers connect once at first use and are torn down
