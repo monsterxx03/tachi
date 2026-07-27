@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net/http"
+	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,8 +46,23 @@ import (
 //	go build -ldflags="-X main.Version=$(git describe --tags --always --dirty)" .
 var Version = "dev"
 
-func buildSystemPrompt(language string) string {
-	return agent.BuildSystemPrompt(language, "", "")
+func buildSystemPrompt(language string, pprofCfg config.PprofConfig) string {
+	return agent.BuildSystemPrompt(language, "", "", pprofCfg)
+}
+
+// startPprof starts a pprof HTTP server on 127.0.0.1:<port> if enabled in config.
+// It runs in a background goroutine and logs startup / errors to stderr.
+func startPprof(cfg config.PprofConfig) {
+	if !cfg.Enabled {
+		return
+	}
+	go func() {
+		addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
+		fmt.Fprintf(os.Stderr, "[pprof] listening on http://%s/debug/pprof/\n", addr)
+		if err := http.ListenAndServe(addr, nil); err != nil {
+			fmt.Fprintf(os.Stderr, "[pprof] error: %v\n", err)
+		}
+	}()
 }
 
 var commonFlags = []cli.Flag{
@@ -264,6 +281,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
@@ -327,7 +345,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
-		SystemPrompt: buildSystemPrompt(cfg.Language),
+		SystemPrompt: buildSystemPrompt(cfg.Language, cfg.Debug.PPROF),
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: resolved.MaxTokens,
 		},
@@ -366,6 +384,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
@@ -434,7 +453,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
-	ch := aiAgent.RunOneOffStream(ctx, commitProvider, buildSystemPrompt(cfg.Language),
+	ch := aiAgent.RunOneOffStream(ctx, commitProvider, buildSystemPrompt(cfg.Language, cfg.Debug.PPROF),
 		userPrompt, opts, agent.OneOffMeta{Kind: "commit"})
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
@@ -479,6 +498,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
@@ -563,7 +583,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	applyToolRestrictions(aiAgent, cmd)
 
 	thinkingDisabled := false
-	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language), llm.ChatOptions{
+	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language, cfg.Debug.PPROF), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 		Thinking:  &thinkingDisabled,
 	})
@@ -896,6 +916,7 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
@@ -967,6 +988,7 @@ func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
@@ -1123,6 +1145,7 @@ func runACPAgent(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
+	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "tachi: warning: failed to init logger: %v\n", err)
 	}

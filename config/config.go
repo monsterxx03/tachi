@@ -688,6 +688,40 @@ type ResearcherConfig struct {
 // are defined in one place (pkg/logger) and shared by the config package.
 type LogsConfig = logger.Config
 
+// DebugConfig holds debug/observability settings (pprof, etc.).
+type DebugConfig struct {
+	PPROF PprofConfig `yaml:"pprof"`
+}
+
+// PprofConfig controls the Go pprof HTTP server for live profiling.
+// When enabled, pprof endpoints are served on 127.0.0.1:<port>:
+//
+//	/debug/pprof/          — index
+//	/debug/pprof/profile   — CPU profile
+//	/debug/pprof/heap      — heap profile
+//	/debug/pprof/goroutine — goroutine dump
+//	...and more
+type PprofConfig struct {
+	Enabled bool `yaml:"enabled" default:"false"`
+	Port    int  `yaml:"port" default:"6060"`
+}
+
+// SystemPromptHint returns a system prompt snippet explaining how to use
+// pprof for debugging Tachi itself. Returns empty string when pprof is
+// not enabled or the port is 0.
+func (c PprofConfig) SystemPromptHint() string {
+	if !c.Enabled || c.Port == 0 {
+		return ""
+	}
+	addr := fmt.Sprintf("127.0.0.1:%d", c.Port)
+	return fmt.Sprintf(`- Pprof debug server: http://%s/debug/pprof/ — if the user asks you to debug
+  Tachi's own performance issues (CPU, memory, goroutines), you can use Bash
+  to run: go tool pprof http://%s/debug/pprof/profile?seconds=30 (CPU),
+  go tool pprof http://%s/debug/pprof/heap (memory), or
+  curl http://%s/debug/pprof/goroutine?debug=2 (goroutine dump)
+`, addr, addr, addr, addr)
+}
+
 type Config struct {
 	Provider               string               `yaml:"provider"`
 	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`
@@ -724,6 +758,7 @@ type Config struct {
 	Oneoff                 OneoffConfig         `yaml:"oneoff"`                          // One-off transcript recording (/commit, /review, ambient, dream...)
 	Hooks                  HooksConfig          `yaml:"hooks"`                           // Event hook system (user-defined commands)
 	Herdr                  HerdrConfig          `yaml:"herdr"`                           // Herdr terminal multiplexer integration
+	Debug                  DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
 }
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files

@@ -277,7 +277,7 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 					if cur := sm.Current(); cur != nil {
 						sid = cur.ID
 					}
-					systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid)
+					systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid, m.cfg.Debug.PPROF)
 					_, finalizeErr := agent.FinalizeCompact(sm, systemPrompt, summary)
 					if finalizeErr != nil {
 						m.logger.Error(context.Background(), "channel: /model FinalizeCompact failed", finalizeErr)
@@ -347,7 +347,7 @@ func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sess
 	if cur := sm.Current(); cur != nil {
 		sid = cur.ID
 	}
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid, m.cfg.Debug.PPROF)
 	compactMsgs := make([]llm.Message, 0, len(llmMsgs)+2)
 	if systemPrompt != "" {
 		compactMsgs = append(compactMsgs, llm.Message{Role: "system", Content: systemPrompt})
@@ -530,7 +530,7 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string) (string
 	if cur := sm.Current(); cur != nil {
 		sid = cur.ID
 	}
-	_, err = agent.FinalizeCompact(sm, agent.BuildSystemPrompt(m.cfg.Language, "", sid), summary)
+	_, err = agent.FinalizeCompact(sm, agent.BuildSystemPrompt(m.cfg.Language, "", sid, m.cfg.Debug.PPROF), summary)
 	if err != nil {
 		return "", fmt.Errorf("创建压缩会话失败: %w", err)
 	}

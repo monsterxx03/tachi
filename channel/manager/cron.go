@@ -90,7 +90,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 			sid = s.ID
 		}
 	}
-	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir, sid), llm.ChatOptions{
+	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, m.buildCronPrompt(job), agent.BuildSystemPrompt(m.cfg.Language, ca.workDir, sid, m.cfg.Debug.PPROF), llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	})
 

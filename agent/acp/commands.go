@@ -274,7 +274,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		Thinking:  &thinkingDisabled,
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts,
@@ -331,7 +331,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	})
 	defer forked.Close()
 
-	systemPrompt := buildSystemPromptForCwd(cfg.Language, sess.cwd, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
 	opts := llm.ChatOptions{
 		MaxTokens: config.DefaultMaxTokens,
@@ -373,7 +373,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 		}
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
 	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
@@ -415,7 +415,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		return acp.StopReasonEndTurn, nil
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
 	// Disk-loaded history has no system message; prepend it so the compact
 	// LLM call sees the same environment context as the live conversation
@@ -677,7 +677,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 		}
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg.Language, sess.cwd, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
