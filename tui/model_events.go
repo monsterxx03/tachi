@@ -195,12 +195,6 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.history = newHistory
 			m.savedHistory = nil
 
-			// Restore tools (cleared before compact)
-			if m.savedTools != nil {
-				m.agent.RestoreToolRegistry(m.savedTools)
-				m.savedTools = nil
-			}
-
 			// Update usage (compact LLM call's tokens count toward the session)
 			m.accumulateUsage(event.Usage)
 			if est := m.agent.LastInputEstimate(); est > 0 {
@@ -262,10 +256,6 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 					m.totalUsage.LastInputTokens = est
 				}
 			}
-		}
-		if m.savedTools != nil {
-			m.agent.RestoreToolRegistry(m.savedTools)
-			m.savedTools = nil
 		}
 		// Clean up forked agent (e.g. /review) — must happen after the one-off
 		// event stream has been fully consumed and the agent is idle.
@@ -375,10 +365,6 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if m.savedHistory != nil {
 			m.history = m.savedHistory
 			m.savedHistory = nil
-		}
-		if m.savedTools != nil {
-			m.agent.RestoreToolRegistry(m.savedTools)
-			m.savedTools = nil
 		}
 		// Clean up forked agent on error (e.g. /review cancelled or failed).
 		if m.forkedAgent != nil {

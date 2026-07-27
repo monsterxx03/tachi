@@ -277,19 +277,6 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	aiAgent := sess.agent
 
-	// Save tool registry, leave only Bash
-	savedTools := aiAgent.SaveToolRegistry()
-	for _, name := range aiAgent.ToolNames() {
-		if name != tools.ToolNameBash {
-			aiAgent.UnregisterTool(name)
-		}
-	}
-	defer func() {
-		if savedTools != nil {
-			aiAgent.RestoreToolRegistry(savedTools)
-		}
-	}()
-
 	commitProvider := aiAgent.CommitProvider()
 	model := aiAgent.Model()
 
@@ -301,9 +288,12 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
+	// /commit only needs Bash — the tool view hides everything else for the
+	// duration of this run without touching the registry.
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts,
-		agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)})
+		agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)},
+		agent.WithToolSet(tools.ToolNameBash))
 
 	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
 
@@ -431,19 +421,13 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		history = append([]llm.Message{{Role: "system", Content: systemPrompt}}, history...)
 	}
 
-	// Save and clear tools: compact shouldn't call any tools
-	savedTools := sess.agent.SaveToolRegistry()
-	sess.agent.ClearToolRegistry()
-	defer func() {
-		if savedTools != nil {
-			sess.agent.RestoreToolRegistry(savedTools)
-		}
-	}()
-
-	// Run compact turn — use DrainCompactEvents approach (simple, reliable)
+	// Run compact turn — use DrainCompactEvents approach (simple, reliable).
+	// WithNoTools hides every tool for this run; the registry is untouched, so
+	// there is nothing to restore on any exit path (see agent/toolview.go).
 	eventCh := sess.agent.RunConversationStream(ctx, history,
 		cmds.BuildCompactInstruction(), systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens},
+		agent.WithNoTools(),
 	)
 
 	summary, err := agent.DrainCompactEvents(eventCh)

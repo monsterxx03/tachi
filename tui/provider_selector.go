@@ -6,6 +6,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -194,14 +195,13 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 	// Memory is written at finalize time by agent.CompleteCompact
 	// (see model_events.go), so nothing to do here.
 
-	m.savedTools = m.agent.SaveToolRegistry()
-	m.agent.ClearToolRegistry()
-
 	instruction := cmds.BuildCompactInstruction()
 
 	ctx := m.startTurn()
 
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts)
+	// WithNoTools: the compact run must not call tools (see handleCompactCommand).
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts,
+		agent.WithNoTools())
 
 	return tea.Batch(
 		m.statusbar.Tick(),

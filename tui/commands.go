@@ -1070,15 +1070,6 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	m.savedHistory = make([]llm.Message, len(m.history))
 	copy(m.savedHistory, m.history)
 
-	// Save tool registry: /commit should only use the Bash tool.
-	// Save all tools, then unregister everything except Bash.
-	m.savedTools = m.agent.SaveToolRegistry()
-	for _, name := range m.agent.ToolNames() {
-		if name != tools.ToolNameBash {
-			m.agent.UnregisterTool(name)
-		}
-	}
-
 	ctx := m.startTurn()
 
 	commitProvider := m.agent.CommitProvider()
@@ -1090,9 +1081,12 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	thinkingDisabled := false
 	commitOpts.Thinking = &thinkingDisabled
 
+	// /commit only needs Bash — the tool view hides everything else for the
+	// duration of this run without touching the registry.
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
 		cmds.CommitUserPrompt(commitModel), commitOpts,
-		agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()})
+		agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()},
+		agent.WithToolSet(tools.ToolNameBash))
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -1246,19 +1240,17 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	// The pre-compaction memory write happens at finalize time via
 	// agent.CompleteCompact, so a failed compact leaves memory untouched.
 
-	// 4. Clear tools so the LLM doesn't call tools during compact.
-	// Prompt also instructs "不要调用任何工具" as a double safeguard.
-	m.savedTools = m.agent.SaveToolRegistry()
-	m.agent.ClearToolRegistry()
-
-	// 5. Build compact instruction (no history — LLM sees history as context)
+	// 4. Build compact instruction (no history — LLM sees history as context)
 	instruction := cmds.BuildCompactInstruction()
 
 	ctx := m.startTurn()
 
 	// Use RunConversationStream so the LLM sees the current session as
 	// structured history (role alternation, tool calls, etc.).
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts)
+	// WithNoTools hides every tool for this run — the prompt also says
+	// "不要调用任何工具" as a double safeguard.
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts,
+		agent.WithNoTools())
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -1277,16 +1269,13 @@ func formatCompactSummary(summary string, oldMsgCount int) string {
 	return sb.String()
 }
 
-// rollbackCompact restores the pre-compact state (history + tools) and displays
-// an error in the chatview. Used when the compact LLM call fails or
-// FinalizeCompact returns an error.
+// rollbackCompact restores the pre-compact history and displays an error in
+// the chatview. Used when the compact LLM call fails or FinalizeCompact
+// returns an error. The tool set needs no rollback — /compact runs under a
+// per-run tool view that expires with the run (see agent/toolview.go).
 func (m *Model) rollbackCompact(errMsg string) {
 	m.history = m.savedHistory
 	m.savedHistory = nil
-	if m.savedTools != nil {
-		m.agent.RestoreToolRegistry(m.savedTools)
-		m.savedTools = nil
-	}
 	m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
 	m.chatview.FinishStreaming()
 	m.setState(stateIdle)
@@ -1302,11 +1291,6 @@ func (m *Model) abortCompactForSwitch(errMsg string) {
 	m.compactForSwitch = false
 	m.pendingSwitchProvider = nil
 	m.savedHistory = nil
-
-	if m.savedTools != nil {
-		m.agent.RestoreToolRegistry(m.savedTools)
-		m.savedTools = nil
-	}
 
 	m.chatview.AddMessage(chatMessage{Role: "error", Content: errMsg})
 	m.chatview.FinishStreaming()
