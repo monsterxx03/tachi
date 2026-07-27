@@ -194,6 +194,30 @@ func sendTextUpdate(ctx context.Context, conn *acp.AgentSideConnection, sessID a
 	})
 }
 
+// loadSessionHistory loads the session's messages and converts them to LLM
+// format, delegating to agent.LoadSessionHistory.
+//
+// The ACP session's sessMgr is the same *session.Manager instance that was
+// handed to the agent via SetSessionManager (see agent.go newSession /
+// LoadSession / resume paths), and ACPSession.ProviderType prefers
+// agent.Provider().Name() — so the agent-side helper sees identical inputs.
+//
+// Errors are logged and treated as "no history": callers use the result as
+// optional context for a one-off turn, where a failed load should degrade
+// rather than abort. This preserves the behaviour of the three hand-rolled
+// copies this replaces.
+func loadSessionHistory(ctx context.Context, sess *ACPSession) []llm.Message {
+	if sess == nil || sess.agent == nil {
+		return nil
+	}
+	history, err := sess.agent.LoadSessionHistory()
+	if err != nil {
+		logger.FromContext(ctx).Error(ctx, "ACP: load session history failed", err)
+		return nil
+	}
+	return history
+}
+
 // resolveModelPrice resolves the effective price for the current provider+model.
 func resolveModelPrice(sess *ACPSession) *llm.ModelPrice {
 	return llm.ResolveModelPrice(sess.agent.Model(), nil, nil, nil, nil)
@@ -360,18 +384,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	logger.FromContext(ctx).Info(ctx, "ACP: /init handler start")
 
 	// Build history from session
-	var history []llm.Message
-	if sess.sessMgr != nil {
-		msgs, err := sess.sessMgr.LoadMessages()
-		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
-			if convErr == nil {
-				history = llmMsgs
-			} else {
-				logger.FromContext(ctx).Error(ctx, "ACP: ConvertSessionToLLMMessages failed", convErr)
-			}
-		}
-	}
+	history := loadSessionHistory(ctx, sess)
 
 	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
@@ -401,14 +414,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	// would ask the LLM to summarize a conversation it cannot see.
 	history := sess.history
 	if len(history) == 0 {
-		if msgs, err := sm.LoadMessages(); err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
-			if convErr == nil {
-				history = llmMsgs
-			} else {
-				logger.FromContext(ctx).Error(ctx, "ACP: /compact convert history failed", convErr)
-			}
-		}
+		history = loadSessionHistory(ctx, sess)
 	}
 	if len(history) == 0 {
 		sendTextUpdate(ctx, conn, sessionID, "Nothing to compact yet.")
@@ -665,18 +671,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	}
 
 	// Run as normal conversation turn with skill activation message
-	var history []llm.Message
-	if sess.sessMgr != nil {
-		msgs, err := sess.sessMgr.LoadMessages()
-		if err == nil && len(msgs) > 0 {
-			llmMsgs, convErr := agent.ConvertSessionToLLMMessages(msgs, sess.ProviderType())
-			if convErr == nil {
-				history = llmMsgs
-			} else {
-				logger.FromContext(ctx).Error(ctx, "ACP: ConvertSessionToLLMMessages failed", convErr)
-			}
-		}
-	}
+	history := loadSessionHistory(ctx, sess)
 
 	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
