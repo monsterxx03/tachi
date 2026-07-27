@@ -271,15 +271,15 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
-	aiAgent := agent.NewAIAgent(provider, 0)
-	aiAgent.SetLogger(logger.New("tui"))
-	aiAgent.SetAutoApproveEdits(cfg.TUI.AutoApproveEdits)
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(cfg)
-	aiAgent.SetupCommitProvider(cfg)
-	aiAgent.SetupReviewProvider(cfg)
-
-	mcpMgr, err := aiAgent.Configure(ctx, cfg)
+	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Provider:         provider,
+		ContextWindow:    resolved.Provider.ContextWindow,
+		Logger:           logger.New("tui"),
+		PermissionMode:   agent.PermissionModeTUI,
+		AutoApproveEdits: cfg.TUI.AutoApproveEdits,
+		FullConfig:       cfg,
+		SystemConfig:     agent.SystemConfigFromConfig(cfg),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
 	}
@@ -371,16 +371,16 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		maxIters = config.DefaultMaxIterations
 	}
 
-	aiAgent := agent.NewAIAgent(provider, maxIters)
-	aiAgent.SetLogger(logger.New("run"))
-	aiAgent.SetPermissionMode(agent.PermissionModeSkip) // non-interactive
-	aiAgent.SetSkipMemoryRecall(true)
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(cfg)
-	aiAgent.SetupCommitProvider(cfg)
-	aiAgent.SetupReviewProvider(cfg)
-
-	_, err = aiAgent.Configure(ctx, cfg)
+	aiAgent, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Provider:         provider,
+		ContextWindow:    resolved.Provider.ContextWindow,
+		MaxIterations:    maxIters,
+		Logger:           logger.New("run"),
+		PermissionMode:   agent.PermissionModeSkip,
+		SkipMemoryRecall: true,
+		FullConfig:       cfg,
+		SystemConfig:     agent.SystemConfigFromConfig(cfg),
+	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
 	}
@@ -483,15 +483,19 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		maxIters = config.DefaultMaxIterations
 	}
 
-	aiAgent := agent.NewAIAgent(provider, maxIters)
-	aiAgent.SetLogger(logger.New("run"))
-	aiAgent.SetPermissionMode(agent.PermissionModeSkip) // non-interactive
-	aiAgent.SetSkipMemoryRecall(true)                   // "tachi run" is non-interactive — don't pollute prompt with memory recall
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(cfg)
-	aiAgent.SetupCommitProvider(cfg)
-	aiAgent.SetupReviewProvider(cfg)
-	aiAgent.SetupRunProvider(cfg)
+	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Provider:         provider,
+		ContextWindow:    resolved.Provider.ContextWindow,
+		MaxIterations:    maxIters,
+		Logger:           logger.New("run"),
+		PermissionMode:   agent.PermissionModeSkip,
+		SkipMemoryRecall: true,
+		FullConfig:       cfg,
+		SystemConfig:     agent.SystemConfigFromConfig(cfg),
+	})
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
+	}
 
 	// If a run provider is configured, switch to it for tachi -p mode.
 	if rp := aiAgent.RunProvider(); rp != nil {
@@ -507,11 +511,6 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 				resolved.Provider.ContextWindow = rpResolved.ContextWindow
 			}
 		}
-	}
-
-	mcpMgr, err := aiAgent.Configure(ctx, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
 	}
 
 	// Non-interactive mode: unregister AskUserQuestion so the LLM never

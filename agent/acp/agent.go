@@ -121,24 +121,17 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		return acp.NewSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
 
-	// Create independent AIAgent (no iteration limit for ACP sessions)
-	aiAgent := agent.NewAIAgent(provider, 0)
-	aiAgent.SetLogger(t.logger)
-	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
-	aiAgent.SetACPFileMode()
-	aiAgent.EnablePlanTool() // ACP clients render the plan card UI
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	// Don't set steer channel — ACP doesn't use mid-turn injection
-	aiAgent.SetupTitleProvider(t.cfg)
-	aiAgent.SetupCommitProvider(t.cfg)
-	aiAgent.SetupReviewProvider(t.cfg)
-
-	// Configure agent (registers tools, connects MCP, sets up memory/skills).
-	// Use context.Background() so the background MCP async init goroutine
-	// is not tied to the SDK's request-scoped context (which is cancelled
-	// when NewSession returns).
 	configureCtx := context.Background()
-	mcpMgr, err := aiAgent.Configure(configureCtx, t.cfg)
+	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
+		Provider:        provider,
+		ContextWindow:   resolved.Provider.ContextWindow,
+		Logger:          t.logger,
+		PermissionMode:  agent.PermissionModeExternal,
+		ACPFileMode:     true,
+		PlanToolEnabled: true,
+		FullConfig:      t.cfg,
+		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
+	})
 	if err != nil {
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: agent configure warning: %v", err))
 	}
@@ -493,22 +486,19 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		return acp.ResumeSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
 
-	aiAgent := agent.NewAIAgent(provider, 0)
-	aiAgent.SetLogger(t.logger)
-	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
-	aiAgent.SetACPFileMode()
-	aiAgent.EnablePlanTool() // ACP clients render the plan card UI
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(t.cfg)
-	aiAgent.SetupCommitProvider(t.cfg)
-	aiAgent.SetupReviewProvider(t.cfg)
-
-	// Use context.Background() so MCP async init is not tied to the SDK
-	// request-scoped context (same rationale as NewSession).
 	configureCtx := context.Background()
-	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
-	if cfgErr != nil {
-		t.logger.Warn(ctx, fmt.Sprintf("ACP: resume configure warning: %v", cfgErr))
+	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
+		Provider:        provider,
+		ContextWindow:   resolved.Provider.ContextWindow,
+		Logger:          t.logger,
+		PermissionMode:  agent.PermissionModeExternal,
+		ACPFileMode:     true,
+		PlanToolEnabled: true,
+		FullConfig:      t.cfg,
+		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
+	})
+	if err != nil {
+		t.logger.Warn(ctx, fmt.Sprintf("ACP: resume configure warning: %v", err))
 	}
 
 	if !t.supportsElicitation() {
@@ -650,23 +640,19 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	}
 
 	// Create independent AIAgent
-	aiAgent := agent.NewAIAgent(provider, 0)
-	aiAgent.SetLogger(t.logger)
-	aiAgent.SetPermissionMode(agent.PermissionModeExternal)
-	aiAgent.SetACPFileMode()
-	aiAgent.EnablePlanTool() // ACP clients render the plan card UI
-	aiAgent.SetContextWindow(resolved.Provider.ContextWindow)
-	aiAgent.SetupTitleProvider(t.cfg)
-	aiAgent.SetupCommitProvider(t.cfg)
-	aiAgent.SetupReviewProvider(t.cfg)
-
-	// Configure agent (registers tools, connects MCP, sets up memory/skills).
-	// Use context.Background() so MCP async init is not tied to the SDK
-	// request-scoped context (same rationale as NewSession).
 	configureCtx := context.Background()
-	mcpMgr, cfgErr := aiAgent.Configure(configureCtx, t.cfg)
-	if cfgErr != nil {
-		t.logger.Warn(ctx, fmt.Sprintf("ACP: LoadSession configure warning: %v", cfgErr))
+	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
+		Provider:        provider,
+		ContextWindow:   resolved.Provider.ContextWindow,
+		Logger:          t.logger,
+		PermissionMode:  agent.PermissionModeExternal,
+		ACPFileMode:     true,
+		PlanToolEnabled: true,
+		FullConfig:      t.cfg,
+		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
+	})
+	if err != nil {
+		t.logger.Warn(ctx, fmt.Sprintf("ACP: LoadSession configure warning: %v", err))
 	}
 
 	// Connect editor-provided MCP servers

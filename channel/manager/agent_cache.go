@@ -192,24 +192,26 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 		return nil, errProviderNotInitialized
 	}
 
-	a := agent.NewAIAgent(prov, 0)
-	a.SetLogger(m.logger)
-	a.SetProcessManager(m.processManager)         // shared PM survives turns
-	a.SetPermissionMode(agent.PermissionModeSkip) // channel turns are non-interactive
-	a.SetContextWindow(resolved.Provider.ContextWindow)
-	a.SetTitleGenEnabled(false) // channel mode has no title UI; skip the extra LLM call
-	a.SetupTitleProvider(m.cfg)
-	a.SetupCommitProvider(m.cfg)
-	a.SetupReviewProvider(m.cfg)
+	titleGen := false // channel mode has no title UI; skip the extra LLM call
 
-	// Inject shared MCP — Configure() will skip InitMCPAsync.
+	// Inject shared MCP — Configure() will skip MCP init.
+	var sharedMCP *mcp.Manager
 	if m.cfg != nil && m.cfg.MCPEnabled() {
-		if mgr := m.initSharedMCP(); mgr != nil {
-			a.SetSharedMCP(mgr)
-		}
+		sharedMCP = m.initSharedMCP()
 	}
 
-	if _, err := a.Configure(ctx, m.cfg); err != nil {
+	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Provider:         prov,
+		ContextWindow:    resolved.Provider.ContextWindow,
+		Logger:           m.logger,
+		PermissionMode:   agent.PermissionModeSkip,
+		TitleGenEnabled:  &titleGen,
+		ProcessManager:   m.processManager,
+		SharedMCP:        sharedMCP,
+		FullConfig:       m.cfg,
+		SystemConfig:     agent.SystemConfigFromConfig(m.cfg),
+	})
+	if err != nil {
 		return nil, err
 	}
 

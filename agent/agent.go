@@ -218,6 +218,106 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 	}
 }
 
+// NewAIAgentWithConfig creates an AIAgent from a structured config.
+// This is the recommended constructor — it replaces the pattern of
+// NewAIAgent + multiple Set*/Setup* calls.
+//
+// The returned *mcp.Manager should be closed when the agent is done
+// (defer mcpMgr.Close()), unless the agent uses a shared MCP manager
+// (AgentConfig.SharedMCP), in which case the manager is owned elsewhere.
+func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.Manager, error) {
+	a := NewAIAgent(cfg.Provider, cfg.MaxIterations)
+
+	if cfg.Logger != nil {
+		a.SetLogger(cfg.Logger)
+	}
+	if cfg.ProcessManager != nil {
+		a.SetProcessManager(cfg.ProcessManager)
+	}
+	if cfg.SharedMCP != nil {
+		a.SetSharedMCP(cfg.SharedMCP)
+	}
+
+	a.SetContextWindow(cfg.ContextWindow)
+	a.SetPermissionMode(cfg.PermissionMode)
+	if cfg.ACPFileMode {
+		a.SetACPFileMode()
+	}
+	if cfg.PlanToolEnabled {
+		a.EnablePlanTool()
+	}
+	if cfg.TitleGenEnabled != nil {
+		a.SetTitleGenEnabled(*cfg.TitleGenEnabled)
+	}
+	a.SetAutoApproveEdits(cfg.AutoApproveEdits)
+	a.SetAutoApprovePolicyAsks(cfg.AutoApprovePolicyAsks)
+
+	// Dedicated providers (resolution is the caller's responsibility).
+	// When a dedicated provider is nil but FullConfig is available, fall back
+	// to the config-based Setup*Provider methods which resolve from provider names.
+	hasCfg := cfg.FullConfig != nil
+
+	if cfg.TitleProvider != nil {
+		a.titleModelProvider = cfg.TitleProvider
+	} else if hasCfg {
+		a.SetupTitleProvider(cfg.FullConfig)
+	}
+	if cfg.CommitProvider != nil {
+		a.commitProvider = cfg.CommitProvider
+	} else if hasCfg {
+		a.SetupCommitProvider(cfg.FullConfig)
+	}
+	if cfg.ReviewProvider != nil {
+		a.reviewProvider = cfg.ReviewProvider
+	} else if hasCfg {
+		a.SetupReviewProvider(cfg.FullConfig)
+	}
+	if cfg.RunProvider != nil {
+		a.runProvider = cfg.RunProvider
+	} else if hasCfg {
+		a.SetupRunProvider(cfg.FullConfig)
+	}
+	if cfg.SubagentProvider != nil {
+		a.subagentProvider = cfg.SubagentProvider
+	} else if hasCfg {
+		a.SetupSubagentProvider(cfg.FullConfig)
+	}
+
+	// Store full config reference for subsystems that need it
+	if cfg.FullConfig != nil {
+		a.cfg = cfg.FullConfig
+	}
+
+	// Configure with the extracted system config
+	mcpMgr, err := a.configure(ctx, cfg.SystemConfig)
+	if err != nil {
+		a.Close()
+		return nil, nil, err
+	}
+
+	// Resolve dedicated keyword provider (must be after configure, which creates a.memory)
+	if cfg.FullConfig != nil {
+		a.resolveKeywordProvider(cfg.FullConfig)
+	}
+
+	// Post-configure: SkipMemoryRecall must be set after configure
+	// because configure initializes a.memory
+	if cfg.SkipMemoryRecall {
+		a.SetSkipMemoryRecall(true)
+	}
+
+	// Unregister AskUser when not interactive (channel/-p mode default)
+	// Interactive modes (TUI, ACP with elicitation) keep it registered
+	if cfg.PermissionMode != PermissionModeTUI {
+		// PermissionModeTUI has a UI for AskUser; others don't
+		if cfg.PermissionMode == PermissionModeSkip || !cfg.ACPFileMode {
+			a.UnregisterTool(tools.ToolNameAskUser)
+		}
+	}
+
+	return a, mcpMgr, nil
+}
+
 // SetLogger overrides the agent's logger. Channel callers use this to inject
 // a channel-specific logger so debug output is tagged with the correct source.
 func (a *AIAgent) SetLogger(l *logger.Logger) {
@@ -712,7 +812,7 @@ func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
 
 // SetSharedMCP injects a pre-built MCP manager to be shared across multiple
 // AIAgent instances (e.g. per-thread cached agents in channel mode). When
-// called BEFORE Configure(), the InitMCPAsync step is skipped — the agent
+// called BEFORE Configure(), the MCP init step is skipped — the agent
 // reuses the provided manager (which carries pool, discovered set, and
 // initDone channel) instead of creating its own.
 //

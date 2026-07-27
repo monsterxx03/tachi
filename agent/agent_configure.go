@@ -40,54 +40,58 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 // tools, web search, and MCP server connections. Returns the MCP manager for
 // later cleanup (may be nil).
 func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
+	a.cfg = cfg
+	sysCfg := SystemConfigFromConfig(cfg)
+	mcpMgr, err := a.configure(ctx, sysCfg)
+	a.resolveKeywordProvider(cfg)
+	return mcpMgr, err
+}
+
+// configure wires up all agent sub-systems from the extracted system config.
+// This is the internal implementation shared by Configure (the deprecated
+// wrapper) and NewAIAgentWithConfig (the recommended path).
+func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
 	// --- Memory backend (before skills — buildReminderCollector reads a.memory) ---
-	if cfg.Memory.Type != "" {
-		memCfg := cfg.Memory.ToMemoryConfig()
-		backend, err := memory.New(cfg.Memory.Type, memCfg, a.logger)
+	if sysCfg.Memory.Type != "" {
+		memCfg := sysCfg.Memory.ToMemoryConfig()
+		backend, err := memory.New(sysCfg.Memory.Type, memCfg, a.logger)
 		if err != nil {
-			a.logger.Error(ctx, "Memory: failed to init backend", err, "type", cfg.Memory.Type)
+			a.logger.Error(ctx, "Memory: failed to init backend", err, "type", sysCfg.Memory.Type)
 		} else {
 			a.memory = &MemoryState{Backend: backend}
-			a.logger.Info(ctx, "Memory: using backend", "type", cfg.Memory.Type)
+			a.logger.Info(ctx, "Memory: using backend", "type", sysCfg.Memory.Type)
 
 			// Wire keyword extractor for topic backend.
 			// Requires an LLM provider — skip when nil (e.g. `tachi tools`).
+			// Keyword provider resolution (from config provider name) is the
+			// caller's responsibility — pass a pre-resolved provider in
+			// AgentConfig.KeywordProvider, or let configure fall back to the
+			// main provider.
 			if tb, ok := backend.(*memory.TopicBackend); ok && a.provider != nil {
-				kwProvider, kwModel := a.provider, a.provider.Model()
-
-				// Resolve dedicated keyword provider if configured.
-				if kpName := cfg.Memory.KeywordProvider; kpName != "" {
-					if kpCfg := cfg.FindProvider(kpName); kpCfg != nil {
-						resolved, err := config.ResolveProviderConfig(kpCfg)
-						if err == nil {
-							sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-							if err == nil {
-								kwProvider, kwModel = sp, resolved.Model
-								a.logger.Info(ctx, "Memory: using keyword provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)
-							}
-						}
-					}
-					if kwProvider == a.provider {
-						a.logger.Info(ctx, "Memory: keyword_provider not resolved, falling back to main provider", "provider", kpName)
-					}
-				}
-
-				timeout := cfg.Memory.Timeout
-				tb.SetKeywordExtractor(NewLLMKeywordExtractor(kwProvider, kwModel, timeout, a.logger))
+				tb.SetKeywordExtractor(NewLLMKeywordExtractor(a.provider, a.provider.Model(), sysCfg.Memory.Timeout, a.logger))
 				a.logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
 			}
 		}
 	}
 
-	// --- Skill system (needs a.cfg for memory config) ---
-	a.cfg = cfg
+	// --- Skill system ---
 	a.initSkills()
 
 	// --- Bash permission policy (global config + project .tachi/permissions.yaml) ---
-	a.SetPermissionPolicy(NewPermissionPolicyFromConfig(cfg, config.FindProjectRoot(), a.logger))
+	// Caller should set permission policy via AgentConfig or SetPermissionPolicy before Configure.
+	// The old Configure() path sets it from the full config; the new path expects it pre-set.
+	if a.permissionPolicy == nil && a.cfg != nil {
+		a.SetPermissionPolicy(NewPermissionPolicyFromConfig(a.cfg, config.FindProjectRoot(), a.logger))
+	}
 
 	// --- Reminder collector (after memory + skills, before MCP) ---
-	a.buildReminderCollector()
+	a.buildReminderCollectorFrom(SystemReminderConfig{
+		IterationWarningThreshold: sysCfg.SystemReminder.IterationWarningThreshold,
+		TokenWarningThresholdPct:  sysCfg.SystemReminder.TokenWarningThresholdPct,
+		GitReminder:               sysCfg.SystemReminder.GitReminder,
+		MemoryRecallLimit:         sysCfg.Memory.RecallLimit,
+		MemoryRecallTimeout:       sysCfg.Memory.Timeout,
+	})
 
 	// --- built-in tools + web search ---
 	a.RegisterTools()
@@ -103,34 +107,32 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 		a.attachSharedMCPReminder()
 		searchTool := tools.NewMCPSearchToolsTool(a.DeferredPool(), a.discoveredSet())
 		a.RegisterTool(searchTool)
-	} else if cfg.MCPEnabled() {
+	} else if len(sysCfg.MCPServers) > 0 {
 		var err error
-		mgr, err = a.InitMCPAsync(ctx, cfg)
+		mgr, err = a.initMCPAsync(ctx, sysCfg)
 		if err != nil {
 			a.logger.Error(ctx, "MCP: failed to start async init", err)
 		}
 	}
 
 	// --- SubAgent tool ---
-	a.SetupSubagentProvider(cfg)
-	executor := subagent.NewExecutor(a, cfg.Subagent)
-	if cfg.Subagent.Worktree {
+	a.SetupSubagentProvider(a.cfg)
+	executor := subagent.NewExecutor(a, sysCfg.Subagent)
+	if sysCfg.Subagent.Worktree {
 		executor.EnableWorktree(a.logger)
 	}
 	a.subagentRunner = executor
 	a.RegisterTool(tools.NewSubagentTool(executor))
 
 	// --- Hook system (after tools, so user command hooks can reference them) ---
-	a.initHookSystem(ctx, cfg)
+	a.initHookSystemFrom(&sysCfg)
 
 	// --- LSP servers ---
-	if cfg.LSP.IsEnabled() && len(cfg.LSP.Servers) > 0 {
-		lspCfg := convertLSPConfig(&cfg.LSP)
+	if sysCfg.LSP.IsEnabled() && len(sysCfg.LSP.Servers) > 0 {
+		lspCfg := convertLSPConfig(&sysCfg.LSP)
 		a.lspManager = lsp.NewManager(lspCfg)
 		a.RegisterTool(tools.NewLSPTool(a.lspManager))
 		a.RegisterTool(tools.NewLSPDiagnosticsTool(a.lspManager))
-		// Inject LSP diagnostics after tool results so the LLM sees
-		// errors/warnings from recent edits without asking.
 		a.reminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
 			Provider: a.lspManager,
 		})
@@ -140,18 +142,18 @@ func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manag
 	return mgr, nil
 }
 
-// initHookSystem initialises the event hook dispatcher and registers handlers:
-//  1. User-defined command hooks from config.yaml
-//  2. Herdr integration (auto-detected from HERDR_ENV)
-func (a *AIAgent) initHookSystem(ctx context.Context, cfg *config.Config) {
-	if !cfg.Hooks.IsEnabled() {
+// initHookSystemFrom initialises the event hook dispatcher from an AgentSystemConfig.
+func (a *AIAgent) initHookSystemFrom(sysCfg *AgentSystemConfig) {
+	ctx := context.Background()
+
+	if !sysCfg.Hooks.IsEnabled() {
 		return
 	}
 
 	d := hooks.NewDispatcher(a.logger)
 
 	// Load user-defined command hooks from config
-	for event, cmds := range cfg.Hooks.Events {
+	for event, cmds := range sysCfg.Hooks.Events {
 		for _, cmd := range cmds {
 			if cmd.Command == "" {
 				continue
@@ -179,7 +181,7 @@ func (a *AIAgent) initHookSystem(ctx context.Context, cfg *config.Config) {
 	}
 
 	// Auto-detect Herdr integration
-	if cfg.Herdr.IsEnabled() && hooks.DetectHerdr() {
+	if sysCfg.Herdr.IsEnabled() && hooks.DetectHerdr() {
 		handler := hooks.NewHerdrHandler()
 		for event := range hooks.EventActions {
 			evt := event
@@ -320,18 +322,9 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 	}
 }
 
-// InitMCPAsync starts MCP server connections in a background goroutine
-// and returns immediately. The manager (which owns the deferred pool,
-// discovered set, and init-done channel) is set up synchronously; actual
-// tool discovery happens asynchronously.
-//
-// Use MCPReady() to get a channel that closes when init completes,
-// or WaitForMCP(ctx) to block with a context deadline.
-//
-// Thread-safe: tools are registered via the (now thread-safe) Registry,
-// and the deferred pool has its own mutex.
-func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
-	mgr := mcp.NewManager(ctx, cfg.ToolResult.MaxResultChars(), cfg.ToolResult.ResultFileDir(), a.logger)
+// initMCPAsync is the internal variant that takes AgentSystemConfig.
+func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
+	mgr := mcp.NewManager(ctx, sysCfg.ToolResult.MaxResultChars(), sysCfg.ToolResult.ResultFileDir(), a.logger)
 	a.mcpManager = mgr
 
 	// Register MCPSearchTools immediately so the LLM can discover tools
@@ -339,17 +332,19 @@ func (a *AIAgent) InitMCPAsync(ctx context.Context, cfg *config.Config) (*mcp.Ma
 	// nothing until MCP servers finish connecting.
 	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr.DiscoveredSet())
 	a.RegisterTool(searchTool)
-	a.logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(cfg.MCPServers))
+	a.logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(sysCfg.MCPServers))
 
-	// Connect and discover tools in the background
-	go a.connectMCPBackground(ctx, cfg)
+	// Connect and discover tools in the background.
+	// Pass the full config (a.cfg) for downstream methods that still need it.
+	// When called from NewAIAgentWithConfig, a.cfg was set from AgentConfig.FullConfig.
+	go a.connectMCPBackground(ctx, a.cfg)
 
 	return mgr, nil
 }
 
 // connectMCPBackground populates the manager's deferred pool, registers
 // auto-load tools into the agent's registry, and attaches DeferredToolReminder.
-// Runs in a background goroutine started by InitMCPAsync.
+// Runs in a background goroutine started by InitMCPAsync / initMCPAsync.
 func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) {
 	defer a.mcpManager.MarkInitDone()
 	defer func() { a.logger.Info(ctx, "MCP: async init completed") }()
@@ -513,19 +508,17 @@ func (p *backgroundTaskProvider) DrainCompleted() []systemreminder.BackgroundTas
 	return infos
 }
 
-// buildReminderCollector builds the reminder collector with core reminders,
-// the live skill list reminder, BackgroundTaskReminder, and
-// MemoryRecallReminder (if memory is configured).
-// Called once during Configure after sub-systems are initialized.
-func (a *AIAgent) buildReminderCollector() {
+// buildReminderCollectorFrom builds the reminder collector with core reminders,
+// using an explicit config instead of reading from a.cfg.
+func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 	var reminders []systemreminder.Reminder
 
 	// Always-on reminders.
 	reminders = append(reminders,
 		systemreminder.DateReminder{},
 		systemreminder.ProjectContextReminder{},
-		systemreminder.IterationWarningReminder{Threshold: a.cfg.SystemReminder.IterationWarningThreshold},
-		systemreminder.TokenWarningReminder{ThresholdPct: a.cfg.SystemReminder.TokenWarningThresholdPct},
+		systemreminder.IterationWarningReminder{Threshold: sysCfg.IterationWarningThreshold},
+		systemreminder.TokenWarningReminder{ThresholdPct: sysCfg.TokenWarningThresholdPct},
 		a.skillListReminder,
 		&systemreminder.BackgroundTaskReminder{
 			Provider: &backgroundTaskProvider{pm: a.processManager},
@@ -539,22 +532,64 @@ func (a *AIAgent) buildReminderCollector() {
 	}
 
 	// Git reminder (configurable).
-	if a.cfg.SystemReminder.GitReminder == nil || *a.cfg.SystemReminder.GitReminder {
+	if sysCfg.GitReminder == nil || *sysCfg.GitReminder {
 		reminders = append(reminders, systemreminder.GitReminder{})
 	}
 
 	// Memory recall reminder (only when memory backend is enabled).
 	if a.memory != nil {
-		limit := a.cfg.Memory.RecallLimit
+		limit := sysCfg.MemoryRecallLimit
 		if limit <= 0 {
 			limit = 5
 		}
 		reminders = append(reminders, systemreminder.MemoryRecallReminder{
 			Backend: a.memory.Backend,
 			Limit:   limit,
-			Timeout: a.cfg.Memory.Timeout,
+			Timeout: sysCfg.MemoryRecallTimeout,
 		})
 	}
 
 	a.reminderCollector = systemreminder.NewCollector(reminders...)
+}
+
+// resolveKeywordProvider resolves the configured KeywordProvider from config
+// and wires it into the TopicBackend's keyword extractor. This must be called
+// AFTER configure() creates the memory backend.
+//
+// It is safe to call when memory is not configured or when no topic backend
+// is in use — it checks a.memory before doing anything.
+func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
+	if a.memory == nil || a.provider == nil {
+		return
+	}
+	tb, ok := a.memory.Backend.(*memory.TopicBackend)
+	if !ok {
+		return
+	}
+
+	kpName := cfg.Memory.KeywordProvider
+	if kpName == "" {
+		return // no dedicated keyword provider configured; main provider is already set
+	}
+
+	kpCfg := cfg.FindProvider(kpName)
+	if kpCfg == nil {
+		a.logger.Info(context.Background(), "Memory: keyword_provider not found, falling back to main provider", "provider", kpName)
+		return
+	}
+
+	resolved, err := config.ResolveProviderConfig(kpCfg)
+	if err != nil {
+		a.logger.Error(context.Background(), "Memory: failed to resolve keyword provider, falling back to main provider", err, "provider", kpName)
+		return
+	}
+
+	sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		a.logger.Error(context.Background(), "Memory: failed to create keyword provider, falling back to main provider", err, "provider", kpName)
+		return
+	}
+
+	tb.SetKeywordExtractor(NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.logger))
+	a.logger.Info(context.Background(), "Memory: keyword extractor re-wired with dedicated provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)
 }
