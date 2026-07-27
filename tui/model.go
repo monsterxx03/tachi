@@ -9,6 +9,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -277,26 +278,44 @@ func (m *Model) cycleMode() {
 	m.statusbar.SetMode(next)
 }
 
+// startTurn prepares the Model for a new agent stream and returns the context
+// that stream must run under.
+//
+// Every path that assigns m.eventCh has to call this first. It does two things
+// that are easy to get wrong separately:
+//
+//  1. Cancels any in-flight turn. Without this the previous agent goroutine can
+//     sit at a steer point waiting on the steer channel that the TUI has already
+//     stopped reading, while the TUI waits on the replaced eventCh — a deadlock
+//     with no error and no output.
+//
+//  2. Bumps streamGen, so late events from the cancelled stream are recognised
+//     as stale and dropped (see the msg.gen checks in Update).
+//
+// These were previously open-coded at seven call sites; the cancel half was
+// missing from all of them until it caused exactly the hang described above.
+//
+// Note /research is deliberately not a caller: it owns a WithTimeout context,
+// streams progress over its own channel rather than eventCh, and is guarded by
+// isResearching instead of streamGen.
+func (m *Model) startTurn() context.Context {
+	if m.cancelFunc != nil {
+		m.cancelFunc()
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	m.cancelFunc = cancel
+	m.streamGen++
+	return ctx
+}
+
 // resolveModelPrice resolves the effective pricing for the current model.
 // Checks provider config overrides first, then falls back to built-in pricing.
 func (m *Model) resolveModelPrice() *llm.ModelPrice {
-	model := m.agent.Model()
-
-	// Check for provider-level price overrides
-	if m.cfg != nil && m.cfg.Provider != "" {
-		pCfg := m.cfg.FindProvider(m.cfg.Provider)
-		if pCfg != nil {
-			return llm.ResolveModelPrice(
-				model,
-				pCfg.InputPrice,
-				pCfg.OutputPrice,
-				pCfg.CacheReadInputPrice,
-				pCfg.CacheCreationInputPrice,
-			)
-		}
+	providerName := ""
+	if m.cfg != nil {
+		providerName = m.cfg.Provider
 	}
-
-	return llm.ResolveModelPrice(model, nil, nil, nil, nil)
+	return cmds.ResolveModelPrice(m.cfg, providerName, m.agent.Model())
 }
 
 // accumulateUsage merges an llm.Usage into totalUsage and refreshes the

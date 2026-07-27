@@ -1,7 +1,6 @@
 package tui
 
 import (
-	"context"
 	"fmt"
 	"strings"
 
@@ -192,17 +191,16 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 	m.isCompacting = true
 	m.compactForSwitch = true
 
-	m.agent.StoreCompactMemory()
+	// Memory is written at finalize time by agent.CompleteCompact
+	// (see model_events.go), so nothing to do here.
 
 	m.savedTools = m.agent.SaveToolRegistry()
 	m.agent.ClearToolRegistry()
 
 	instruction := cmds.BuildCompactInstruction()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
-	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(

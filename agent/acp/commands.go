@@ -218,9 +218,10 @@ func loadSessionHistory(ctx context.Context, sess *ACPSession) []llm.Message {
 	return history
 }
 
-// resolveModelPrice resolves the effective price for the current provider+model.
+// resolveModelPrice resolves the effective price for the current provider+model,
+// including any per-provider overrides configured for this session's provider.
 func resolveModelPrice(sess *ACPSession) *llm.ModelPrice {
-	return llm.ResolveModelPrice(sess.agent.Model(), nil, nil, nil, nil)
+	return cmds.ResolveModelPrice(sess.cfg, sess.resolveProviderName(), sess.agent.Model())
 }
 
 // ---------------------------------------------------------------------------
@@ -456,7 +457,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 	}
 
 	// Create new session from summary
-	_, err = agent.FinalizeCompact(sm, systemPrompt, summary)
+	_, err = sess.agent.CompleteCompact(sm, systemPrompt, summary)
 	if err != nil {
 		sendTextUpdate(ctx, conn, sessionID, "Compact failed: "+err.Error())
 		return acp.StopReasonEndTurn, nil

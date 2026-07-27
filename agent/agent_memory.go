@@ -204,20 +204,29 @@ func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
 
 // StoreCompactMemory writes the current session's messages to the memory
 // backend before context compaction (StoreScopeCompact).
-// Exported so the TUI can call it before starting the compact LLM stream.
+//
+// Prefer CompleteCompact, which sequences this with FinalizeCompact correctly;
+// this remains exported for callers that only need the memory write.
 func (a *AIAgent) StoreCompactMemory() {
-	if a.memory == nil || a.sessionManager == nil {
+	a.storeCompactMemoryFor(a.sessionManager)
+}
+
+// storeCompactMemoryFor writes the given session manager's current session to
+// the memory backend. sm is explicit because channel mode compacts through a
+// session.Manager it built from the thread ID rather than the agent's own.
+func (a *AIAgent) storeCompactMemoryFor(sm *session.Manager) {
+	if a.memory == nil || sm == nil {
 		return
 	}
 	if a.isRepoExcluded() {
 		return
 	}
-	sess := a.sessionManager.Current()
+	sess := sm.Current()
 	if sess == nil {
 		return
 	}
 
-	msgs, err := a.sessionManager.LoadMessages()
+	msgs, err := sm.LoadMessages()
 	if err != nil {
 		a.logger.Error(context.Background(), "Memory(compact): load messages failed", err)
 		return

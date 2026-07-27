@@ -58,26 +58,16 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 
 	summary = resp.Content
 
-	// 5. Persist the old session to memory before compaction.
-	a.StoreCompactMemory()
-
-	// 6. Create the new session with the compacted summary.
+	// 5. Persist the old session to memory, create the new compacted session,
+	// and notify memory that a new session started.
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content
 	}
-	newHistory, err = FinalizeCompact(a.sessionManager, systemPrompt, summary)
+	newHistory, err = a.CompleteCompact(a.sessionManager, systemPrompt, summary)
 	if err != nil {
-		// FinalizeCompact may have created a new session (sm.New succeeded)
-		// before failing. Try to clean up the orphan.
-		if cur := a.sessionManager.Current(); cur != nil && cur.CompactedParentID != "" {
-			_ = a.sessionManager.Delete(cur.ID) // best-effort
-		}
 		return "", nil, fmt.Errorf("finalize compact: %w", err)
 	}
-
-	// 7. Notify the memory backend that a new session has started.
-	a.StartSessionMemory()
 
 	return summary, newHistory, nil
 }

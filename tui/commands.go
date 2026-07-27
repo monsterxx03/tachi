@@ -1025,8 +1025,7 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	// Images are extracted as structured ContentParts for multi-modal input.
 	expanded := m.ExpandAtReferences(text)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
 	// Set up steer channel so pending input can be injected at tool-call boundaries.
 	m.steerRespCh = make(chan string)
@@ -1037,7 +1036,6 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 		m.agent.SetPendingImages(expanded.Images)
 	}
 
-	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.effectiveSystemPrompt(), m.chatOpts)
 
 	return tea.Batch(
@@ -1081,8 +1079,7 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 		}
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
 	commitProvider := m.agent.CommitProvider()
 	commitModel := m.agent.Model()
@@ -1093,7 +1090,6 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	thinkingDisabled := false
 	commitOpts.Thinking = &thinkingDisabled
 
-	m.streamGen++
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
 		cmds.CommitUserPrompt(commitModel), commitOpts,
 		agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()})
@@ -1140,10 +1136,8 @@ func (m *Model) sendReviewCommand() tea.Cmd {
 		reviewOpts.Thinking = rc.thinking
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
-	m.streamGen++
 	m.eventCh = forked.Agent().RunOneOffStream(ctx, rc.provider,
 		m.systemPrompt, cmds.ReviewUserPrompt(), reviewOpts,
 		agent.OneOffMeta{Kind: "review", SessionID: m.currentSessionID()})
@@ -1205,10 +1199,8 @@ func (m *Model) sendInitCommand() tea.Cmd {
 	m.thinkingView.Reset()
 	m.thinkingMode = false
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
-	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, cmds.InitPromptTemplate, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(
@@ -1251,8 +1243,8 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	copy(m.savedHistory, m.history)
 	m.isCompacting = true
 
-	// 3.5 Store current session memory before compaction
-	m.agent.StoreCompactMemory()
+	// The pre-compaction memory write happens at finalize time via
+	// agent.CompleteCompact, so a failed compact leaves memory untouched.
 
 	// 4. Clear tools so the LLM doesn't call tools during compact.
 	// Prompt also instructs "不要调用任何工具" as a double safeguard.
@@ -1262,10 +1254,8 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	// 5. Build compact instruction (no history — LLM sees history as context)
 	instruction := cmds.BuildCompactInstruction()
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
-	m.streamGen++
 	// Use RunConversationStream so the LLM sees the current session as
 	// structured history (role alternation, tool calls, etc.).
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, instruction, m.systemPrompt, m.chatOpts)
@@ -1412,10 +1402,8 @@ func (m *Model) sendSkillMessage(skillName string, extraArgs string) tea.Cmd {
 	m.thinkingView.Reset()
 	m.thinkingMode = false
 
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancelFunc = cancel
+	ctx := m.startTurn()
 
-	m.streamGen++
 	m.eventCh = m.agent.RunConversationStream(ctx, m.history, msg, m.systemPrompt, m.chatOpts)
 
 	return tea.Batch(

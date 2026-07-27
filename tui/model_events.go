@@ -177,7 +177,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			}
 
 			oldMsgCount := len(m.savedHistory)
-			newHistory, err := agent.FinalizeCompact(sm, m.systemPrompt, summary)
+			newHistory, err := m.agent.CompleteCompact(sm, m.systemPrompt, summary)
 			if err != nil {
 				if m.compactForSwitch {
 					m.abortCompactForSwitch("压缩失败，未能切换到目标模型: " + err.Error())

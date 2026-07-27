@@ -276,7 +276,23 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			// If this was a /compact turn, finalize the compact by creating
 			// a new session with the summary and migrating the ThreadID.
 			if isCompactCmd {
-				reply, err := m.finalizeCompactResult(msg.ThreadID, result.text)
+				// The compact turn ran on a throwaway agent that is already
+				// closed, so borrow the thread's cached agent to supply the
+				// memory backend for the pre-compaction write.
+				//
+				// The lock is released explicitly rather than by defer: the
+				// evictAgent call below takes ca.mu, so holding it until this
+				// function returns would deadlock.
+				reply, err := func() (string, error) {
+					var memAgent *agent.AIAgent
+					if ca, acqErr := m.acquireAgent(ctx, msg.ThreadID); acqErr == nil {
+						memAgent = ca.agent
+						defer m.releaseAgent(ca)
+					} else {
+						m.logger.Error(ctx, "channel: /compact acquire agent for memory write", acqErr, "thread", msg.ThreadID)
+					}
+					return m.finalizeCompactResult(msg.ThreadID, result.text, memAgent)
+				}()
 				if err != nil {
 					m.logger.Error(ctx, "channel: finalizeCompactResult", err, "thread", msg.ThreadID)
 					return channel.HandlerResult{
