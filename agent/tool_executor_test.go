@@ -82,7 +82,7 @@ func TestGroupToolCalls_AllParallel(t *testing.T) {
 		{ID: "c3", Type: "function", Function: llm.ToolCallFunction{Name: "Glob", Arguments: `{"pattern":"*.go"}`}},
 	}
 
-	groups := a.groupToolCalls(toolCalls)
+	groups := a.groupToolCalls(context.Background(), toolCalls)
 	require.Len(t, groups, 1)
 	assert.True(t, groups[0].parallel)
 	assert.Len(t, groups[0].calls, 3)
@@ -98,7 +98,7 @@ func TestGroupToolCalls_AllSequential(t *testing.T) {
 		{ID: "c2", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: "{}"}},
 	}
 
-	groups := a.groupToolCalls(toolCalls)
+	groups := a.groupToolCalls(context.Background(), toolCalls)
 	require.Len(t, groups, 2)
 	assert.False(t, groups[0].parallel)
 	assert.Len(t, groups[0].calls, 1)
@@ -120,7 +120,7 @@ func TestGroupToolCalls_Mixed(t *testing.T) {
 		{ID: "c4", Type: "function", Function: llm.ToolCallFunction{Name: "Glob", Arguments: "{}"}},
 	}
 
-	groups := a.groupToolCalls(toolCalls)
+	groups := a.groupToolCalls(context.Background(), toolCalls)
 	require.Len(t, groups, 3)
 
 	// Group 1: Read + Grep (parallel)
@@ -142,10 +142,10 @@ func TestGroupToolCalls_Mixed(t *testing.T) {
 
 func TestGroupToolCalls_Empty(t *testing.T) {
 	a := newTestAgent(nil)
-	groups := a.groupToolCalls(nil)
+	groups := a.groupToolCalls(context.Background(), nil)
 	assert.Nil(t, groups)
 
-	groups = a.groupToolCalls([]llm.ToolCall{})
+	groups = a.groupToolCalls(context.Background(), []llm.ToolCall{})
 	assert.Nil(t, groups)
 }
 
@@ -157,7 +157,7 @@ func TestGroupToolCalls_SingleParallel(t *testing.T) {
 		{ID: "c1", Type: "function", Function: llm.ToolCallFunction{Name: "Read", Arguments: "{}"}},
 	}
 
-	groups := a.groupToolCalls(toolCalls)
+	groups := a.groupToolCalls(context.Background(), toolCalls)
 	require.Len(t, groups, 1)
 	assert.True(t, groups[0].parallel)
 	assert.Len(t, groups[0].calls, 1)

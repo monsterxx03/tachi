@@ -200,6 +200,8 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 // the run's full execution is written to a sidecar JSONL file, keeping it
 // out of the main session history while leaving a trail for troubleshooting.
 // See docs/2026-07-24-oneoff-transcript-design.md.
+// ropts optionally restrict the tool set for this run (e.g. WithToolSet for
+// /commit). The registry itself is untouched; see agent/toolview.go.
 func (a *AIAgent) RunOneOffStream(
 	ctx context.Context,
 	provider llm.Provider,
@@ -207,6 +209,7 @@ func (a *AIAgent) RunOneOffStream(
 	userMessage string,
 	opts llm.ChatOptions,
 	meta OneOffMeta,
+	ropts ...RunOption,
 ) <-chan AgentEvent {
 	ch := make(chan AgentEvent, 64)
 
@@ -280,7 +283,7 @@ func (a *AIAgent) RunOneOffStream(
 			UserMessage: userMessage,
 		})
 
-		a.runAgentLoop(ctx, provider, messages, opts, ch)
+		a.runAgentLoop(ctx, provider, messages, opts, ch, ropts...)
 	}()
 
 	return ch
@@ -289,7 +292,10 @@ func (a *AIAgent) RunOneOffStream(
 // RunConversationStream runs a streaming agent conversation loop.
 // It accepts existing message history for multi-turn support.
 // Returns a channel of AgentEvents that the TUI consumes.
-func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Message, userMessage string, systemPrompt string, opts llm.ChatOptions) <-chan AgentEvent {
+//
+// ropts optionally restrict the tool set for this run (e.g. WithNoTools for
+// /compact). The registry itself is untouched; see agent/toolview.go.
+func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Message, userMessage string, systemPrompt string, opts llm.ChatOptions, ropts ...RunOption) <-chan AgentEvent {
 	ch := make(chan AgentEvent, 64)
 
 	go func() {
@@ -409,7 +415,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		})
 
 		a.EstimateAndUpdateTokens(messages)
-		a.runAgentLoop(ctx, a.provider, messages, opts, ch)
+		a.runAgentLoop(ctx, a.provider, messages, opts, ch, ropts...)
 	}()
 
 	return ch
@@ -437,7 +443,13 @@ func (a *AIAgent) runAgentLoop(
 	messages []llm.Message,
 	opts llm.ChatOptions,
 	ch chan<- AgentEvent,
+	ropts ...RunOption,
 ) {
+	// Apply the per-run tool view (if any) before anything reads the tool set.
+	// Carrying it on the context rather than on the agent keeps it immutable
+	// and scoped to this goroutine — nothing to restore, nothing to race on.
+	ctx = withToolView(ctx, buildToolView(ropts))
+
 	// Generate a trace ID for this turn and inject it into the context.
 	// The logger's textHandler extracts trace_id from ctx automatically,
 	// so all log calls within this turn will carry it — no need to mutate a.logger.
@@ -536,8 +548,9 @@ func (a *AIAgent) runAgentLoop(
 		// Rebuild tool schemas each iteration. When ToolSearch is active,
 		// newly discovered MCP tools are added to the list, enabling the LLM
 		// to call them. The tool list is monotonic (only grows), minimizing
-		// prompt cache invalidations.
-		llmTools := buildLLMTools(a.filterActiveSchemas(a.toolRegistry.GetSchemas()))
+		// prompt cache invalidations. A per-run tool view (if set) narrows
+		// this to the run's allowed subset.
+		llmTools := buildLLMTools(a.filterActiveSchemas(a.resolve(ctx).schemas()))
 
 		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
 		if err != nil {

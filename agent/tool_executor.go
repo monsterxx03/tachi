@@ -60,16 +60,21 @@ type toolGroup struct {
 // groupToolCalls partitions a slice of tool calls into sequential groups.
 // Adjacent tool calls that support parallel execution are merged into one group.
 // Tool calls that do not support parallel execution each form their own group.
-func (a *AIAgent) groupToolCalls(toolCalls []llm.ToolCall) []toolGroup {
+//
+// ctx carries the per-run tool view: tools hidden by the view are treated as
+// non-parallel, since they will be refused at invoke time anyway.
+func (a *AIAgent) groupToolCalls(ctx context.Context, toolCalls []llm.ToolCall) []toolGroup {
 	if len(toolCalls) == 0 {
 		return nil
 	}
+
+	res := a.resolve(ctx)
 
 	var groups []toolGroup
 	var currentParallel []llm.ToolCall
 
 	for _, tc := range toolCalls {
-		if a.toolRegistry.IsParallel(tc.Function.Name) {
+		if res.isParallel(tc.Function.Name) {
 			currentParallel = append(currentParallel, tc)
 		} else {
 			// Flush any accumulated parallel calls first
@@ -162,7 +167,7 @@ func truncateString(s string, maxRunes int) string {
 // executeToolCalls is the main entry point for tool execution. It groups
 // tool calls by their parallel capability and executes each group accordingly.
 func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
-	groups := a.groupToolCalls(toolCalls)
+	groups := a.groupToolCalls(ctx, toolCalls)
 
 	var allMsgs []llm.Message
 	for _, group := range groups {
@@ -239,7 +244,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 				ToolArgs: tc.Function.Arguments,
 			})
 
-			results[i] = a.toolRegistry.Invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
+			results[i] = a.resolve(ctx).invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
 		})
 	}
 
@@ -391,7 +396,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				ToolID:   tc.ID,
 				ToolArgs: tc.Function.Arguments,
 			})
-			tr = a.toolRegistry.Invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
+			tr = a.resolve(ctx).invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
 		}
 
 		// Notify TUI that subagent has completed.
@@ -416,7 +421,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		// confirmations still dispatch normally.
 		if tr.Status == tools.ToolResultPendingConfirm && a.autoApproveEdits && tc.Function.Name == tools.ToolNameEdit {
 			confirmStart := time.Now()
-			output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+			output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 			tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 			if err != nil {
 				tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
@@ -428,7 +433,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			case PermissionModeSkip:
 				a.logger.Info(ctx, "Agent: tool skipping confirmation", "tool", tc.Function.Name)
 				confirmStart := time.Now()
-				output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+				output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 				if err != nil {
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
@@ -458,7 +463,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 						Approved: true,
 					})
 					confirmStart := time.Now()
-					output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+					output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 					tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 					if err != nil {
 						tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
@@ -492,7 +497,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 							Approved: true,
 						})
 						confirmStart := time.Now()
-						output, err := a.toolRegistry.ExecuteConfirmed(ctx, tc.Function.Name, tr.Args)
+						output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
 						if err != nil {
 							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
