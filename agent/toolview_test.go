@@ -250,6 +250,219 @@ func TestResolverPreservesRegistryOrderUnderView(t *testing.T) {
 	}
 }
 
+// --- WithExtraTools ---
+
+func TestWithExtraToolsIsPurelyAdditive(t *testing.T) {
+	v := buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFile"})})
+	if v == nil {
+		t.Fatal("view is nil")
+	}
+	if v.restrict {
+		t.Error("WithExtraTools alone must not restrict the registry")
+	}
+	if v.extra == nil || v.extra.GetTool("SendFile") == nil {
+		t.Fatal("SendFile not attached")
+	}
+}
+
+func TestExtraToolsVisibleAlongsideFullRegistry(t *testing.T) {
+	a := newResolverAgent("Bash", "ReadFile")
+	ctx := withToolView(context.Background(),
+		buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFile"})}))
+	res := a.resolve(ctx)
+
+	got := schemaNames(res.schemas())
+	want := []string{"Bash", "ReadFile", "SendFile"}
+	if !equalStrings(got, want) {
+		t.Fatalf("schemas = %v, want %v", got, want)
+	}
+	if !res.visible("Bash") || !res.visible("SendFile") {
+		t.Error("additive view hid a tool it should expose")
+	}
+
+	// The registry must not have gained the extra tool.
+	if a.toolRegistry.GetTool("SendFile") != nil {
+		t.Fatal("extra tool leaked into the agent's registry")
+	}
+}
+
+// TestExtraToolsExemptFromToolSet documents the composition rule: attaching a
+// tool is itself the statement that the run may use it, so extras don't also
+// need to be named in WithToolSet.
+func TestExtraToolsExemptFromToolSet(t *testing.T) {
+	a := newResolverAgent("Bash", "ReadFile", "WriteFile")
+	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+		WithToolSet("Bash"),
+		WithExtraTools(&viewStubTool{name: "SendFile"}),
+	}))
+	res := a.resolve(ctx)
+
+	got := schemaNames(res.schemas())
+	want := []string{"Bash", "SendFile"}
+	if !equalStrings(got, want) {
+		t.Fatalf("schemas = %v, want %v", got, want)
+	}
+	if res.visible("WriteFile") {
+		t.Error("WriteFile should stay hidden")
+	}
+}
+
+func TestExtraToolsSurviveWithNoTools(t *testing.T) {
+	a := newResolverAgent("Bash", "ReadFile")
+	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+		WithNoTools(),
+		WithExtraTools(&viewStubTool{name: "SendFile"}),
+	}))
+
+	got := schemaNames(a.resolve(ctx).schemas())
+	if !equalStrings(got, []string{"SendFile"}) {
+		t.Fatalf("schemas = %v, want [SendFile]", got)
+	}
+}
+
+func TestExtraToolIsInvocable(t *testing.T) {
+	executed := false
+	a := newResolverAgent("Bash")
+	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+		WithExtraTools(&viewStubTool{name: "SendFile", onExecute: func() { executed = true }}),
+	}))
+
+	tr := a.resolve(ctx).invoke(ctx, "SendFile", "{}")
+	if tr.Status != tools.ToolResultSuccess {
+		t.Fatalf("status = %v, err = %v; want success", tr.Status, tr.Err)
+	}
+	if !executed {
+		t.Fatal("extra tool was not executed")
+	}
+}
+
+// TestExtraToolShadowsRegistryEntry pins precedence: the run-scoped instance
+// wins, and the shadowed registry entry must not also appear in the schemas
+// (a duplicate tool name is a protocol error with some providers).
+func TestExtraToolShadowsRegistryEntry(t *testing.T) {
+	registryRan, extraRan := false, false
+	reg := tools.NewRegistry()
+	reg.Register(&viewStubTool{name: "SendFile", onExecute: func() { registryRan = true }})
+	a := &AIAgent{toolRegistry: reg}
+
+	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+		WithExtraTools(&viewStubTool{name: "SendFile", onExecute: func() { extraRan = true }}),
+	}))
+	res := a.resolve(ctx)
+
+	if got := schemaNames(res.schemas()); !equalStrings(got, []string{"SendFile"}) {
+		t.Fatalf("schemas = %v, want exactly one SendFile", got)
+	}
+	res.invoke(ctx, "SendFile", "{}")
+	if !extraRan || registryRan {
+		t.Fatalf("extraRan=%v registryRan=%v; the run-scoped tool must win", extraRan, registryRan)
+	}
+}
+
+// TestExtraToolsAreInvisibleToConcurrentRuns is the property that makes this
+// safe for channel mode, where one cached agent serves many threads: run A's
+// ephemeral tools must not be reachable from run B. The old approach registered
+// them on the shared agent, so an overlapping turn on another thread could see
+// (and invoke) a tool bound to the first thread's attachment sink.
+func TestExtraToolsAreInvisibleToConcurrentRuns(t *testing.T) {
+	a := newResolverAgent("Bash")
+
+	ctxA := withToolView(context.Background(),
+		buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFileA"})}))
+	ctxB := withToolView(context.Background(),
+		buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFileB"})}))
+
+	resA, resB := a.resolve(ctxA), a.resolve(ctxB)
+
+	if !resA.visible("SendFileA") || resA.visible("SendFileB") {
+		t.Error("run A sees the wrong extras")
+	}
+	if !resB.visible("SendFileB") || resB.visible("SendFileA") {
+		t.Error("run B sees the wrong extras")
+	}
+	if tr := resB.invoke(ctxB, "SendFileA", "{}"); tr.Status != tools.ToolResultError {
+		t.Error("run B was able to invoke run A's ephemeral tool")
+	}
+
+	// And a plain run (no view) sees neither.
+	plain := a.resolve(context.Background())
+	if plain.visible("SendFileA") || plain.visible("SendFileB") {
+		t.Error("an unrestricted run must not see any run-scoped extras")
+	}
+	if got := schemaNames(plain.schemas()); !equalStrings(got, []string{"Bash"}) {
+		t.Fatalf("plain schemas = %v, want [Bash]", got)
+	}
+}
+
+// TestExtraToolsAppendAfterRegistry keeps extras at the tail so that attaching
+// one doesn't shift the registry tools ahead of it, preserving the cacheable
+// prompt prefix.
+func TestExtraToolsAppendAfterRegistry(t *testing.T) {
+	a := newResolverAgent("Bash", "ReadFile", "mcp__srv__a", "mcp__srv__b")
+	view := buildToolView([]RunOption{WithExtraTools(
+		&viewStubTool{name: "AAASendFile"}, // sorts first alphabetically
+	)})
+
+	want := []string{"Bash", "ReadFile", "mcp__srv__a", "mcp__srv__b", "AAASendFile"}
+	for round := 0; round < 10; round++ {
+		got := schemaNames(a.resolve(withToolView(context.Background(), view)).schemas())
+		if !equalStrings(got, want) {
+			t.Fatalf("round %d: schemas = %v, want %v", round, got, want)
+		}
+	}
+}
+
+func TestExtraToolParallelismComesFromTheExtra(t *testing.T) {
+	a := newResolverAgent("Bash")
+	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+		WithExtraTools(
+			&viewStubTool{name: "ParTool", parallel: true},
+			&viewStubTool{name: "SeqTool"},
+		),
+	}))
+	res := a.resolve(ctx)
+
+	if !res.isParallel("ParTool") {
+		t.Error("parallel extra reported non-parallel")
+	}
+	if res.isParallel("SeqTool") {
+		t.Error("non-parallel extra reported parallel")
+	}
+}
+
+func TestWithExtraToolsIgnoresNil(t *testing.T) {
+	v := buildToolView([]RunOption{WithExtraTools(nil, &viewStubTool{name: "SendFile"}, nil)})
+	if v.extra == nil || v.extra.GetTool("SendFile") == nil {
+		t.Fatal("SendFile not attached")
+	}
+	// A nil-only call must not fabricate an empty extra registry.
+	if v2 := buildToolView([]RunOption{WithExtraTools(nil)}); v2.extra != nil {
+		t.Error("nil-only WithExtraTools created an extra registry")
+	}
+}
+
+// --- helpers ---
+
+func schemaNames(ss []tools.Schema) []string {
+	out := make([]string, 0, len(ss))
+	for _, s := range ss {
+		out = append(out, s.Name)
+	}
+	return out
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
 // --- test stub ---
 
 type viewStubTool struct {
