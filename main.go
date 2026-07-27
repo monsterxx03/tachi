@@ -7,9 +7,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
-	"net/http"
-	_ "net/http/pprof"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -48,34 +45,6 @@ var Version = "dev"
 
 func buildSystemPrompt(language string, pprofCfg config.PprofConfig) string {
 	return agent.BuildSystemPrompt(language, "", "", pprofCfg)
-}
-
-// startPprof starts a pprof HTTP server on 127.0.0.1:<port> if enabled in config.
-// It tries cfg.Port first; if the port is taken (e.g., another Tachi instance),
-// it auto-increments up to cfg.Port+100. Returns the actual port bound,
-// or 0 if disabled or no port could be bound.
-// The server runs in a background goroutine.
-func startPprof(cfg config.PprofConfig) int {
-	if !cfg.Enabled {
-		return 0
-	}
-	log := logger.New("pprof")
-	for port := cfg.Port; port <= cfg.Port+100; port++ {
-		addr := fmt.Sprintf("127.0.0.1:%d", port)
-		ln, err := net.Listen("tcp", addr)
-		if err == nil {
-			go func() {
-				log.Info(context.Background(), "pprof server started", "addr", addr)
-				if err := http.Serve(ln, nil); err != nil {
-					log.Error(context.Background(), "pprof server error", err)
-				}
-			}()
-			return port
-		}
-	}
-	log.Warn(context.Background(), "pprof failed to bind any port",
-		"start", cfg.Port, "end", cfg.Port+100)
-	return 0
 }
 
 var commonFlags = []cli.Flag{
@@ -290,19 +259,11 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		return nil
 	}
 
-	cfg, err := config.Load()
+	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
-	}
-	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
-
-	// Load MCP server config from JSON files (project-level overrides global).
-	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
-		return fmt.Errorf("failed to load MCP servers: %w", err)
-	}
+	cfg := boot.Config
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
 	if err != nil {
@@ -393,14 +354,11 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		defer cancel()
 	}
 
-	cfg, err := config.Load()
+	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
-	}
-	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
+	cfg := boot.Config
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
 	if err != nil {
@@ -507,19 +465,11 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		defer cancel()
 	}
 
-	cfg, err := config.Load()
+	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
-	}
-	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
-
-	// Load MCP server config from JSON files.
-	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
-		return fmt.Errorf("failed to load MCP servers: %w", err)
-	}
+	cfg := boot.Config
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
 	if err != nil {
@@ -925,19 +875,11 @@ func runOutputJSONStream(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent) *ag
 //	      enabled: true
 //	      token: "xxx"
 func runChannels(ctx context.Context, cmd *cli.Command) error {
-	cfg, err := config.Load()
+	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
-	}
-	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
-
-	// Load MCP server config from JSON files.
-	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
-		return fmt.Errorf("failed to load MCP servers: %w", err)
-	}
+	cfg := boot.Config
 
 	mgr := channelmgr.New(channelmgr.Config{
 		Cfg: cfg,
@@ -997,14 +939,11 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 // ── Tools listing ──────────────────────────────────────────────────────────────
 
 func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
-	cfg, err := config.Load()
+	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
-	}
-	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
+	cfg := boot.Config
 
 	// Create a minimal agent to register and list tools.
 	// No LLM provider needed — we only use the tool registry.
@@ -1012,13 +951,6 @@ func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
 	defer aiAgent.Close()
 
 	showMCP := cmd.Bool("mcp")
-
-	// Load MCP config and connect to servers only when --mcp is requested.
-	if showMCP {
-		if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
-			return fmt.Errorf("failed to load MCP servers: %w", err)
-		}
-	}
 
 	mcpMgr, err := aiAgent.Configure(ctx, cfg)
 	if err != nil {
@@ -1154,19 +1086,11 @@ func firstLine(s string) string {
 // ── ACP Agent ────────────────────────────────────────────────────────────────
 
 func runACPAgent(ctx context.Context) error {
-	cfg, err := config.Load()
+	boot, err := agent.Bootstrap(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to load config: %w", err)
+		return err
 	}
-	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
-	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
-		fmt.Fprintf(os.Stderr, "tachi: warning: failed to init logger: %v\n", err)
-	}
-
-	// Load MCP server config from JSON files.
-	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
-		return fmt.Errorf("failed to load MCP servers: %w", err)
-	}
+	cfg := boot.Config
 
 	fmt.Fprintf(os.Stderr, "tachi: ACP agent started (version %s)\n", Version)
 
