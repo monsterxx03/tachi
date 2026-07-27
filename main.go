@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -51,18 +52,31 @@ func buildSystemPrompt(language string, pprofCfg config.PprofConfig) string {
 }
 
 // startPprof starts a pprof HTTP server on 127.0.0.1:<port> if enabled in config.
-// It runs in a background goroutine and logs startup / errors to stderr.
-func startPprof(cfg config.PprofConfig) {
+// It tries cfg.Port first; if the port is taken (e.g., another Tachi instance),
+// it auto-increments up to cfg.Port+100. Returns the actual port bound,
+// or 0 if disabled or no port could be bound.
+// The server runs in a background goroutine.
+func startPprof(cfg config.PprofConfig) int {
 	if !cfg.Enabled {
-		return
+		return 0
 	}
-	go func() {
-		addr := fmt.Sprintf("127.0.0.1:%d", cfg.Port)
-		fmt.Fprintf(os.Stderr, "[pprof] listening on http://%s/debug/pprof/\n", addr)
-		if err := http.ListenAndServe(addr, nil); err != nil {
-			fmt.Fprintf(os.Stderr, "[pprof] error: %v\n", err)
+	log := logger.New("pprof")
+	for port := cfg.Port; port <= cfg.Port+100; port++ {
+		addr := fmt.Sprintf("127.0.0.1:%d", port)
+		ln, err := net.Listen("tcp", addr)
+		if err == nil {
+			go func() {
+				log.Info(context.Background(), "pprof server started", "addr", addr)
+				if err := http.Serve(ln, nil); err != nil {
+					log.Error(context.Background(), "pprof server error", err)
+				}
+			}()
+			return port
 		}
-	}()
+	}
+	log.Warn(context.Background(), "pprof failed to bind any port",
+		"start", cfg.Port, "end", cfg.Port+100)
+	return 0
 }
 
 var commonFlags = []cli.Flag{
@@ -281,10 +295,10 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
+	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
 
 	// Load MCP server config from JSON files (project-level overrides global).
 	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
@@ -384,10 +398,10 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
+	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
 
 	provider, resolved, err := resolveProviderFromConfig(cfg)
 	if err != nil {
@@ -498,10 +512,10 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
+	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
 
 	// Load MCP server config from JSON files.
 	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
@@ -916,10 +930,10 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
+	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
 
 	// Load MCP server config from JSON files.
 	if err := cfg.LoadMCPServers(config.FindProjectRoot()); err != nil {
@@ -988,10 +1002,10 @@ func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: failed to init logger: %v\n", err)
 	}
+	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
 
 	// Create a minimal agent to register and list tools.
 	// No LLM provider needed — we only use the tool registry.
@@ -1145,7 +1159,7 @@ func runACPAgent(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("failed to load config: %w", err)
 	}
-	startPprof(cfg.Debug.PPROF)
+	cfg.Debug.PPROF.Port = startPprof(cfg.Debug.PPROF)
 	if err := logger.Init(config.LogsDir(), cfg.Logs); err != nil {
 		fmt.Fprintf(os.Stderr, "tachi: warning: failed to init logger: %v\n", err)
 	}
