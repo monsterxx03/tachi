@@ -666,6 +666,10 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		return fmt.Sprintf("Failed to compute usage: %v", err), nil
 	}
 
+	// Read the estimate and its breakdown together: a turn may be running on
+	// this thread, and two separate reads could mix values from two estimates.
+	estTokens, estBreakdown := m.getAgentEstimateWithBreakdown(threadID)
+
 	// Convert tool call stats to shared type
 	toolCalls := make(map[string]*cmds.ToolCallStat, len(report.ToolCalls))
 	for name, st := range report.ToolCalls {
@@ -682,15 +686,14 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
 		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
 		OutputTokens:             report.Usage.OutputTokens,
-		EstimatedInputTokens:     m.getAgentEstimate(threadID),
+		EstimatedInputTokens:     estTokens,
 		Cost:                     report.Cost,
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
 		PprofAddr:                m.cfg.Debug.PPROF.Addr(),
 	}
-	// Populate token breakdown from the cached agent
-	info.EstBreakdown = m.getAgentBreakdown(threadID)
+	info.EstBreakdown = estBreakdown
 
 	return cmds.FormatUsageReport(info), nil
 }

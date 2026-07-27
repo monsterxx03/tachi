@@ -200,9 +200,10 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []
 }
 
 // EstimateAndUpdateTokens estimates the total input tokens for the current
-// messages and updates a.lastInputTokens so that buildReminderContext and
-// TokenWarningReminder see the current (not previous-turn) context size.
-// Also updates a.lastInputEstimate for the TUI statusbar context fraction.
+// messages and records them in the turn state, so that buildReminderContext
+// and TokenWarningReminder see the current (not previous-turn) context size.
+// The categorised breakdown is stored alongside for the TUI statusbar and
+// /usage report.
 func (a *AIAgent) EstimateAndUpdateTokens(messages []llm.Message) {
 	schemas := a.filterActiveSchemas(a.toolRegistry.GetSchemas())
 	systemPrompt := ""
@@ -210,15 +211,24 @@ func (a *AIAgent) EstimateAndUpdateTokens(messages []llm.Message) {
 		systemPrompt = messages[0].Content
 	}
 	tb := estimateInputTokens(messages, systemPrompt, schemas)
-	a.lastInputTokens = tb.Total
-	a.lastTokenBreakdown = tb
+	a.turn.setEstimate(tb.Total, tb)
 }
 
 // LastTokenBreakdown returns the most recent token estimate breakdown
-// computed by estimateAndUpdateTokens. Returns a zero-value Breakdown
+// computed by EstimateAndUpdateTokens. Returns a zero-value Breakdown
 // if no estimate has been computed yet.
+//
+// To report the breakdown alongside its total, prefer LastInputEstimateWithBreakdown:
+// calling LastInputEstimate and LastTokenBreakdown separately can straddle a
+// concurrent turn's update and mix values from two different estimates.
 func (a *AIAgent) LastTokenBreakdown() tokenbreakdown.Breakdown {
-	return a.lastTokenBreakdown
+	return a.turn.snapshotBreakdown()
+}
+
+// LastInputEstimateWithBreakdown returns the most recent token estimate and its
+// breakdown, read atomically so the two always describe the same estimate.
+func (a *AIAgent) LastInputEstimateWithBreakdown() (int64, tokenbreakdown.Breakdown) {
+	return a.turn.estimateSnapshot()
 }
 
 // shouldAutoCompact checks whether automatic compaction should be triggered.
@@ -237,6 +247,6 @@ func (a *AIAgent) shouldAutoCompact() bool {
 	if a.isCompactCooldown() {
 		return false
 	}
-	pct := float64(a.lastInputTokens) / float64(a.contextWindow)
+	pct := float64(a.turn.tokens()) / float64(a.contextWindow)
 	return pct >= a.cfg.Compact.Threshold
 }

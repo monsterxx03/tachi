@@ -266,30 +266,21 @@ func (m *Manager) evictAllAgents() {
 // initProvider has populated the manager's provider state.
 var errProviderNotInitialized = errors.New("channel: provider not initialized; call Start() first")
 
-// getAgentEstimate returns the LastInputEstimate from the cached agent for
-// the given thread, or 0 if no agent exists. Uses a short lock on
-// agentCacheMu — does NOT acquire ca.mu — so this is safe for quick reads
-// (e.g. /usage). A stale or zero value is acceptable for display purposes.
-func (m *Manager) getAgentEstimate(threadID string) int64 {
+// getAgentEstimateWithBreakdown returns the token estimate and its breakdown
+// from the cached agent for the given thread, read atomically so the two
+// always describe the same estimate. Returns zero values when no agent exists.
+//
+// The cachedAgent lock is deliberately not taken: /usage may run while a turn
+// is in flight on this thread. The agent's turn state carries its own lock, so
+// this observes a consistent snapshot without blocking the turn.
+func (m *Manager) getAgentEstimateWithBreakdown(threadID string) (int64, tokenbreakdown.Breakdown) {
 	m.agentCacheMu.Lock()
 	defer m.agentCacheMu.Unlock()
 	ca, ok := m.agentCache[threadID]
 	if !ok || ca.agent == nil {
-		return 0
+		return 0, tokenbreakdown.Breakdown{}
 	}
-	return ca.agent.LastInputEstimate()
-}
-
-// getAgentBreakdown returns the Breakdown from the cached agent for
-// the given thread, or a zero-value breakdown if no agent exists.
-func (m *Manager) getAgentBreakdown(threadID string) tokenbreakdown.Breakdown {
-	m.agentCacheMu.Lock()
-	defer m.agentCacheMu.Unlock()
-	ca, ok := m.agentCache[threadID]
-	if !ok || ca.agent == nil {
-		return tokenbreakdown.Breakdown{}
-	}
-	return ca.agent.LastTokenBreakdown()
+	return ca.agent.LastInputEstimateWithBreakdown()
 }
 
 // initialWorkDir returns the default working directory for a new cachedAgent.

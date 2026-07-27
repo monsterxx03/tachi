@@ -162,7 +162,7 @@ func (a *AIAgent) recordAssistantTurn(text string, usage *llm.Usage, thinkBlocks
 	if text != "" || usage != nil {
 		su := usageToSession(usage)
 		if su != nil {
-			su.EstimatedInputTokens = a.lastInputTokens
+			su.EstimatedInputTokens = a.turn.tokens()
 		}
 		a.recordSession(&session.Message{
 			Type:    session.MessageTypeAssistant,
@@ -213,11 +213,11 @@ func (a *AIAgent) RunOneOffStream(
 	go func() {
 		defer close(ch)
 
-		// Save and restore lastInputTokens so one-off calls don't
+		// Save and restore the token estimate so one-off calls don't
 		// pollute the main conversation's context estimate (used by
 		// TokenWarningReminder and the TUI statusbar context fraction).
-		savedTokens := a.lastInputTokens
-		defer func() { a.lastInputTokens = savedTokens }()
+		savedTokens := a.turn.tokens()
+		defer func() { a.turn.setTokens(savedTokens) }()
 
 		if a.memory != nil {
 			defer func() { a.memory.SkipWrites = false }()
@@ -258,7 +258,7 @@ func (a *AIAgent) RunOneOffStream(
 		if reminderBlock != "" {
 			wrappedUser = reminderBlock + userMessage
 		}
-		a.lastMessageDate = rctx.Now.Format("2006-01-02")
+		a.turn.setMessageDate(rctx.Now.Format("2006-01-02"))
 		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 
 		// Record the user turn to the sidecar (no-op without a recorder —
@@ -333,7 +333,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		if reminderBlock != "" {
 			wrappedUser = reminderBlock + userMessage
 		}
-		a.lastMessageDate = rctx.Now.Format("2006-01-02")
+		a.turn.setMessageDate(rctx.Now.Format("2006-01-02"))
 
 		userMsg := llm.Message{Role: "user", Content: wrappedUser}
 
@@ -341,15 +341,14 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// When images are present, build ContentParts with text + images so
 		// providers can format them correctly (e.g. Anthropic image blocks,
 		// OpenAI multi-content arrays).
-		if len(a.pendingImages) > 0 {
-			parts := make([]llm.ContentPart, 0, 1+len(a.pendingImages))
+		if imgs := a.turn.takePendingImages(); len(imgs) > 0 {
+			parts := make([]llm.ContentPart, 0, 1+len(imgs))
 			parts = append(parts, llm.ContentPart{
 				Type: llm.ContentPartText,
 				Text: wrappedUser,
 			})
-			parts = append(parts, a.pendingImages...)
+			parts = append(parts, imgs...)
 			userMsg.ContentParts = parts
-			a.pendingImages = nil // consumed
 		}
 
 		messages = append(messages, userMsg)
@@ -439,14 +438,13 @@ func (a *AIAgent) runAgentLoop(
 	opts llm.ChatOptions,
 	ch chan<- AgentEvent,
 ) {
-	// Record the turn start time for Duration tracking in RunResult.
-	a.turnStart = time.Now()
-
 	// Generate a trace ID for this turn and inject it into the context.
 	// The logger's textHandler extracts trace_id from ctx automatically,
 	// so all log calls within this turn will carry it — no need to mutate a.logger.
 	traceID := logger.NewTraceID()
-	a.turnTraceID = traceID
+
+	// Record the turn start time (for RunResult.Duration) and trace ID together.
+	a.turn.begin(traceID)
 	ctx = logger.WithTraceID(ctx, traceID)
 	ctx = logger.WithLogger(ctx, a.logger)
 
@@ -454,7 +452,7 @@ func (a *AIAgent) runAgentLoop(
 	// appended during the loop) so callers can read it via GetLastMessages()
 	// after the event channel is drained. The closure captures messages by
 	// reference, so it sees the value at the time runAgentLoop returns.
-	defer func() { a.lastMessages = messages }()
+	defer func() { a.turn.setMessages(messages) }()
 
 	// Inject the current session ID so it can be forwarded as the
 	// x-tachi-session-id header on outgoing LLM API requests.
@@ -479,7 +477,7 @@ func (a *AIAgent) runAgentLoop(
 			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: fmt.Errorf("iteration budget exhausted")},
+				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: fmt.Errorf("iteration budget exhausted")},
 			}
 			return
 		}
@@ -492,7 +490,7 @@ func (a *AIAgent) runAgentLoop(
 			ch <- AgentEvent{
 				Type:     AgentEventError,
 				Messages: messages,
-				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: ctx.Err()},
+				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: ctx.Err()},
 			}
 			return
 		default:
@@ -548,7 +546,7 @@ func (a *AIAgent) runAgentLoop(
 			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: fmt.Errorf("API call failed: %w", err)},
+				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: fmt.Errorf("API call failed: %w", err)},
 			}
 			return
 		}
@@ -564,7 +562,7 @@ func (a *AIAgent) runAgentLoop(
 			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), Error: err},
+				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: err},
 			}
 			return
 		}
@@ -620,7 +618,7 @@ func (a *AIAgent) handleToolCallFinish(
 		ch <- AgentEvent{
 			Type:     AgentEventError,
 			Messages: *messages,
-			Result:   &RunResult{ExitReason: "cancelled", Duration: time.Since(a.turnStart), Error: err},
+			Result:   &RunResult{ExitReason: "cancelled", Duration: a.turn.elapsed(), Error: err},
 		}
 		return false
 	}
@@ -728,11 +726,11 @@ func (a *AIAgent) handleLengthFinish(
 			Result: &RunResult{
 				Response:       acc.text.String(),
 				IterationsUsed: apiCallCount,
-				Duration:       time.Since(a.turnStart),
+				Duration:       a.turn.elapsed(),
 				ExitReason:     "length_exhausted",
 				Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
 				Usage:          acc.usage,
-				TraceID:        a.turnTraceID,
+				TraceID:        a.turn.trace(),
 			},
 		}
 
@@ -785,7 +783,7 @@ func (a *AIAgent) handleLengthFinish(
 
 	// Fire turn_truncated hook to indicate the turn is continuing
 	a.dispatchEvent(ctx, "turn_truncated", hooks.Payload{
-		TurnCount:  *lengthRetries,
+		TurnCount:   *lengthRetries,
 		UserMessage: continuationText,
 	})
 
@@ -811,7 +809,7 @@ func (a *AIAgent) handleStopFinish(
 
 	ch <- AgentEvent{
 		Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: time.Since(a.turnStart), ExitReason: "stop", Usage: acc.usage, TraceID: a.turnTraceID},
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), ExitReason: "stop", Usage: acc.usage, TraceID: a.turn.trace()},
 	}
 
 	// Fire turn_complete hook
@@ -909,10 +907,10 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		IsFirstMessage:  isFirstMessage,
 		IterationsLeft:  iterLeft,
 		MaxIterations:   a.maxIterations,
-		InputTokens:     a.lastInputTokens,
+		InputTokens:     a.turn.tokens(),
 		ContextWindow:   a.contextWindow,
 		Now:             time.Now(),
-		LastMessageDate: a.lastMessageDate,
+		LastMessageDate: a.turn.messageDate(),
 		IsToolResult:    isToolResult,
 		SkipRecall:      a.memory != nil && a.memory.SkipRecall,
 		SessionID:       a.sessionID(),

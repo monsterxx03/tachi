@@ -292,17 +292,18 @@ func TestEstimateAndUpdateTokens(t *testing.T) {
 
 	agent := &AIAgent{
 		toolRegistry: reg,
+		turn:         newTurnState(),
 	}
 
 	msgs := []llm.Message{
 		{Role: "user", Content: "hello"},
 	}
 	agent.EstimateAndUpdateTokens(msgs)
-	require.Greater(t, agent.lastInputTokens, int64(0),
-		"estimateAndUpdateTokens should set lastInputTokens to a positive value")
+	require.Greater(t, agent.LastInputEstimate(), int64(0),
+		"EstimateAndUpdateTokens should set a positive token estimate")
 	tb := agent.LastTokenBreakdown()
-	assert.Equal(t, agent.lastInputTokens, tb.Total,
-		"lastInputTokens should match breakdown Total")
+	assert.Equal(t, agent.LastInputEstimate(), tb.Total,
+		"token estimate should match breakdown Total")
 	assert.Greater(t, tb.UserMessages, int64(0), "user message should be broken down")
 	assert.Greater(t, tb.InternalTools, int64(0), "internal tools should be broken down")
 }
@@ -313,6 +314,7 @@ func TestEstimateAndUpdateTokens_SystemPrompt(t *testing.T) {
 	reg := agenttools.NewRegistry()
 	agent := &AIAgent{
 		toolRegistry: reg,
+		turn:         newTurnState(),
 	}
 
 	msgs := []llm.Message{
@@ -320,10 +322,10 @@ func TestEstimateAndUpdateTokens_SystemPrompt(t *testing.T) {
 		{Role: "user", Content: "hi"},
 	}
 	agent.EstimateAndUpdateTokens(msgs)
-	assert.Greater(t, agent.lastInputTokens, int64(0))
+	assert.Greater(t, agent.LastInputEstimate(), int64(0))
 	tb := agent.LastTokenBreakdown()
 	assert.Greater(t, tb.SystemPrompt, int64(0), "system prompt should be broken down")
-	assert.Equal(t, agent.lastInputTokens, tb.Total)
+	assert.Equal(t, agent.LastInputEstimate(), tb.Total)
 }
 
 // TestTokenBreakdown_MCPTools verifies that MCP-prefixed tool schemas are

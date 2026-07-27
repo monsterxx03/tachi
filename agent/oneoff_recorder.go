@@ -236,7 +236,7 @@ func (a *AIAgent) stopOneoffRecorder(ctx context.Context) {
 	path, size, dur := rec.close()
 	a.lastOneoffPath = path
 	a.logInfo(ctx, "oneoff transcript written",
-		"kind", rec.kind, "path", path, "trace_id", a.turnTraceID,
+		"kind", rec.kind, "path", path, "trace_id", a.turn.trace(),
 		"duration", dur.Round(time.Millisecond).String(), "size", size)
 }
 

@@ -452,18 +452,18 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 		return nil, nil, nil, fmt.Errorf("load messages: %w", err)
 	}
 
-	// Restore lastInputTokens from the most recent assistant message with usage
-	// so that TokenWarningReminder works correctly in the resumed session.
+	// Restore the token estimate from the most recent assistant message with
+	// usage so that TokenWarningReminder works correctly in the resumed session.
 	// Prefer the local estimate (EstimatedInputTokens) to match what was shown
 	// during the active conversation; fall back to API-returned InputTokens.
 	for i := len(sessionMsgs) - 1; i >= 0; i-- {
 		if sessionMsgs[i].Type == session.MessageTypeAssistant && sessionMsgs[i].Usage != nil {
-			if sessionMsgs[i].Usage.EstimatedInputTokens > 0 {
-				a.lastInputTokens = sessionMsgs[i].Usage.EstimatedInputTokens
-			} else {
-				a.lastInputTokens = sessionMsgs[i].Usage.InputTokens
+			restored := sessionMsgs[i].Usage.EstimatedInputTokens
+			if restored <= 0 {
+				restored = sessionMsgs[i].Usage.InputTokens
 			}
-			a.logger.Info(context.Background(), "Agent: restored lastInputTokens from session message", "lastInputTokens", a.lastInputTokens)
+			a.turn.setTokens(restored)
+			a.logger.Info(context.Background(), "Agent: restored token estimate from session message", "lastInputTokens", restored)
 			break
 		}
 	}

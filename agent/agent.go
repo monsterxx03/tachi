@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/lsp"
@@ -14,7 +13,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
-	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -109,14 +107,11 @@ type AIAgent struct {
 	sessionManager     *session.Manager
 	reminderCollector  *systemreminder.Collector
 	contextWindow      int64
-	lastInputTokens    int64                    // local token estimate (conservative), set by estimateAndUpdateTokens
-	lastTokenBreakdown tokenbreakdown.Breakdown // categorized breakdown of last estimate, set alongside lastInputTokens
-	lastMessageDate    string                   // calendar date (2006-01-02) of last processed user message; empty initially
-	titleModelProvider llm.Provider             // optional: dedicated provider for title generation
-	titleGenEnabled    bool                     // whether LLM-based title generation is active
-	commitProvider     llm.Provider             // optional: dedicated provider for /commit messages
-	reviewProvider     llm.Provider             // optional: dedicated provider for /review code review
-	runProvider        llm.Provider             // optional: dedicated provider for tachi -p run mode
+	titleModelProvider llm.Provider // optional: dedicated provider for title generation
+	titleGenEnabled    bool         // whether LLM-based title generation is active
+	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
+	reviewProvider     llm.Provider // optional: dedicated provider for /review code review
+	runProvider        llm.Provider // optional: dedicated provider for tachi -p run mode
 	logger             *logger.Logger
 
 	// acpFileMode enables ACP file I/O for EditFile tool. When true,
@@ -175,30 +170,11 @@ type AIAgent struct {
 	// lspManager manages LSP server connections.
 	lspManager *lsp.LSPManager
 
-	// pendingImages holds image content parts to attach to the next user message.
-	// Set via SetPendingImages, consumed (and cleared) by RunConversationStream.
-	pendingImages []llm.ContentPart
-
-	// lastMessages is the final LLM message slice after a RunConversationStream
-	// or RunOneOffStream call completes. It includes all messages sent to the
-	// LLM during that turn (history + current user + assistant + tool results).
-	// Channel mode reads this via GetLastMessages() to maintain an in-memory
-	// history cache on the cachedAgent, avoiding repeated disk reloads.
-	lastMessages []llm.Message
-
-	// lastCompactTokenEstimate tracks the token estimate at the time of the
-	// most recent auto-compact. Used by shouldAutoCompact's cooldown logic:
-	// auto-compact won't retrigger until token estimate grows by >20%.
-	lastCompactTokenEstimate int64
-
-	// turnStart records the wall-clock time when the current turn's agent
-	// loop began. Set at the top of runAgentLoop and used by finish handlers
-	// to compute the turn's total duration for the RunResult.
-	turnStart time.Time
-
-	// turnTraceID is the trace ID for the current turn.
-	// Set at the top of runAgentLoop and used for log correlation.
-	turnTraceID string
+	// turn holds all per-turn mutable state (token estimates, final message
+	// slice, turn start/trace, pending images, compact cooldown). It carries
+	// its own mutex because channel mode shares one cached agent between the
+	// turn goroutine and slash-command readers. See turn_state.go.
+	turn *turnState
 
 	// skipSessionWrites suppresses session persistence (recordSession is a no-op).
 	// Set by RunOneOffStream for one-off tasks (/commit, /review, sub-agents, dreams)
@@ -233,6 +209,7 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 		titleGenEnabled: true,
 		toolRegistry:    tools.NewRegistry(),
 		processManager:  tools.NewProcessManager(),
+		turn:            newTurnState(),
 		confirmRespCh:   make(chan ConfirmResponse, 1),
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		logger:          nil,
@@ -419,24 +396,20 @@ func (a *AIAgent) SetContextWindow(window int64) {
 // deliberately conservative (overestimates) and is used for both
 // token-warning reminders and the TUI statusbar context fraction.
 func (a *AIAgent) LastInputEstimate() int64 {
-	return a.lastInputTokens
+	return a.turn.tokens()
 }
 
 // isCompactCooldown returns true if the token estimate has not grown
 // significantly (>= 20%) since the last auto-compact. This prevents
 // repeated compaction on the same session within a single conversation.
 func (a *AIAgent) isCompactCooldown() bool {
-	if a.lastCompactTokenEstimate == 0 {
-		return false // never compacted
-	}
-	growth := float64(a.lastInputTokens) / float64(a.lastCompactTokenEstimate)
-	return growth < 1.2
+	return a.turn.compactCooldown()
 }
 
 // setCompactCooldown records the current token estimate so that
 // isCompactCooldown can prevent immediate re-compaction.
 func (a *AIAgent) setCompactCooldown() {
-	a.lastCompactTokenEstimate = a.lastInputTokens
+	a.turn.setCompactEstimate(a.turn.tokens())
 }
 
 // ContextWindow returns the model's context window size.
@@ -754,7 +727,7 @@ func (a *AIAgent) SetSharedMCP(mgr *mcp.Manager) {
 // sent via RunConversationStream. The images are consumed (cleared) after use.
 // Call this before RunConversationStream when the user message includes images.
 func (a *AIAgent) SetPendingImages(images []llm.ContentPart) {
-	a.pendingImages = images
+	a.turn.setPendingImages(images)
 }
 
 // GetLastMessages returns the final LLM message slice from the most recent
@@ -765,7 +738,7 @@ func (a *AIAgent) SetPendingImages(images []llm.ContentPart) {
 // RunConversationStream has been fully drained (channel closed).
 // Returns nil if no turn has completed yet.
 func (a *AIAgent) GetLastMessages() []llm.Message {
-	return a.lastMessages
+	return a.turn.snapshotMessages()
 }
 
 // dispatchEvent sends an event to the hook dispatcher, if initialised.
