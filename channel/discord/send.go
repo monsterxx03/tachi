@@ -168,11 +168,12 @@ func (ch *DiscordChannel) sendTextReply(channelID, content string, reference *di
 }
 
 // sendTextWithReference is the shared implementation for sendText and sendTextReply.
-// When reference is non-nil, the first chunk is sent as a Discord reply to it.
-// Subsequent chunks form a reply chain — each replies to the previous chunk —
-// so a long multi-part answer stays visually connected even when other
-// messages interleave. Chunks 2+ reference the bot's own messages, so they
-// never generate extra pings (only chunk 1 pings the original user).
+// When reference is non-nil, all chunks are sent as a Discord reply to the
+// same referenced message. This ensures every chunk gets the reply visual
+// treatment (yellow highlight on the referenced message).
+//
+// To avoid spamming the user with pings, chunks 2+ set RepliedUser: false
+// in AllowedMentions — only the first chunk generates a notification.
 //
 // When ch.cfg.SuppressEmbeds is true, all messages are sent with the
 // SuppressEmbeds flag to prevent link previews from appearing.
@@ -192,29 +193,30 @@ func (ch *DiscordChannel) sendTextWithReference(channelID, content string, refer
 	// monospace code blocks before splitting.
 	content = convertTablesToCodeBlocks(content)
 	chunks := splitMessage(content)
-	ref := reference
-	for _, chunk := range chunks {
-		var sent *discordgo.Message
-		var err error
 
-		if ref != nil {
-			sent, err = sess.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-				Content:   chunk,
-				Reference: ref,
-				Flags:     flags,
-			})
-		} else {
-			sent, err = sess.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
-				Content: chunk,
-				Flags:   flags,
-			})
+	// noPingMentions suppresses all mention pings including the replied-to user.
+	// Empty Parse slice (non-nil) means no mention types are parsed.
+	noPingMentions := &discordgo.MessageAllowedMentions{
+		Parse:       []discordgo.AllowedMentionType{},
+		RepliedUser: false,
+	}
+
+	for i, chunk := range chunks {
+		msg := &discordgo.MessageSend{
+			Content: chunk,
+			Flags:   flags,
 		}
-		if err != nil {
+
+		if reference != nil {
+			msg.Reference = reference
+			// Chunks 2+ reply to the same message but suppress pings.
+			if i > 0 {
+				msg.AllowedMentions = noPingMentions
+			}
+		}
+
+		if _, err := sess.ChannelMessageSendComplex(channelID, msg); err != nil {
 			return err
-		}
-		// Chain the next chunk to this one.
-		if sent != nil {
-			ref = sent.Reference()
 		}
 	}
 	return nil
