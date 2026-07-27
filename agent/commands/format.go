@@ -44,6 +44,10 @@ type UsageReportInfo struct {
 	ToolCalls map[string]*ToolCallStat
 	MainCount int
 	SubCount  int
+
+	// PprofAddr is the pprof debug server address (e.g. "127.0.0.1:6060").
+	// Empty when pprof is not enabled.
+	PprofAddr string
 }
 
 // ToolCallStat records per-tool call counts and error counts.
@@ -152,6 +156,15 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	}
 	fmt.Fprintf(&sb, "**Total:** %d main + %d subagent = **%d** call(s)\n\n",
 		info.MainCount, info.SubCount, info.MainCount+info.SubCount)
+
+	// Pprof debug server info
+	if info.PprofAddr != "" {
+		sb.WriteString("**Debug**\n\n")
+		fmt.Fprintf(&sb, "Pprof: `http://%s/debug/pprof/`\n", info.PprofAddr)
+		fmt.Fprintf(&sb, "Profile: `go tool pprof http://%s/debug/pprof/profile?seconds=30`\n", info.PprofAddr)
+		fmt.Fprintf(&sb, "Heap: `go tool pprof http://%s/debug/pprof/heap`\n", info.PprofAddr)
+		sb.WriteString("\n")
+	}
 
 	return strings.TrimRight(sb.String(), "\n") + "\n"
 }

@@ -687,6 +687,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
+		PprofAddr:                m.cfg.Debug.PPROF.Addr(),
 	}
 	// Populate token breakdown from the cached agent
 	info.EstBreakdown = m.getAgentBreakdown(threadID)

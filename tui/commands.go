@@ -619,6 +619,7 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
+		PprofAddr:                m.cfg.Debug.PPROF.Addr(),
 	}
 	// Populate token breakdown from the agent
 	info.EstBreakdown = m.agent.LastTokenBreakdown()

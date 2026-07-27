@@ -722,6 +722,15 @@ func (c PprofConfig) SystemPromptHint() string {
 `, addr, addr, addr, addr)
 }
 
+// Addr returns the listen address ("127.0.0.1:<port>") if pprof is enabled,
+// or empty string otherwise.
+func (c PprofConfig) Addr() string {
+	if !c.Enabled || c.Port == 0 {
+		return ""
+	}
+	return fmt.Sprintf("127.0.0.1:%d", c.Port)
+}
+
 type Config struct {
 	Provider               string               `yaml:"provider"`
 	MaxTokens              int                  `yaml:"max_tokens" default:"128000"`

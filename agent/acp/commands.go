@@ -515,6 +515,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,
+		PprofAddr:                sess.cfg.Debug.PPROF.Addr(),
 	}
 	// Populate token breakdown from the session agent
 	info.EstBreakdown = sess.agent.LastTokenBreakdown()
