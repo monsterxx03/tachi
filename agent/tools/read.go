@@ -175,12 +175,15 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return strings.Join(lines[start:end], "\n"), nil
 	}
 
-	// Check file size before reading
+	// Check file size before reading.
+	// When limit is specified, the output is bounded, so we skip the size check.
+	// Without limit (full file or offset-to-EOF), enforce maxFileSize to prevent
+	// blowing up the context window.
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
-	if info.Size() > maxFileSize {
+	if argsMap.Limit <= 0 && info.Size() > maxFileSize {
 		return "", ErrFileTooLarge(info.Size(), maxFileSize)
 	}
 

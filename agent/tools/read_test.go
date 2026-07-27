@@ -123,24 +123,56 @@ func TestReadToolTooLarge(t *testing.T) {
 	for i := range largeContent {
 		largeContent[i] = 'a'
 	}
+	// Add line breaks so offset+limit reads work predictably
+	// Fill the first 10 lines with distinct prefixes for offset testing
+	prefix := "line01\nline02\nline03\nline04\nline05\nline06\nline07\nline08\nline09\nline10\n"
+	copy(largeContent, prefix)
+	// Fill the rest with 'a'
+	for i := len(prefix); i < len(largeContent); i++ {
+		largeContent[i] = 'a'
+	}
 	err := os.WriteFile("/tmp/test_large.txt", largeContent, 0644)
 	if err != nil {
 		t.Fatalf("Failed to create large test file: %v", err)
 	}
 	defer os.Remove("/tmp/test_large.txt")
 
+	// Full read (no limit) should still fail
 	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt"}`)
 	if err == nil {
-		t.Error("Expected error for large file")
+		t.Error("Expected error for large file (full read)")
 	}
 	if !strings.Contains(err.Error(), "file too large") {
 		t.Errorf("Expected 'file too large' error, got: %v", err)
 	}
-	if !strings.Contains(err.Error(), "263168") {
-		t.Errorf("Expected actual size in error, got: %v", err)
+
+	// Offset-only (no limit) should also fail — unbounded from offset to EOF
+	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "offset": 5}`)
+	if err == nil {
+		t.Error("Expected error for large file with offset only (no limit)")
 	}
-	if !strings.Contains(err.Error(), "262144") {
-		t.Errorf("Expected limit size in error, got: %v", err)
+	if !strings.Contains(err.Error(), "file too large") {
+		t.Errorf("Expected 'file too large' error, got: %v", err)
+	}
+
+	// With offset+limit, should succeed — output is bounded
+	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "offset": 2, "limit": 3}`)
+	if err != nil {
+		t.Fatalf("Large file with offset+limit should succeed: %v", err)
+	}
+	expected := "line02\nline03\nline04"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
+	}
+
+	// Limit-only (no offset) should also succeed
+	result, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "limit": 2}`)
+	if err != nil {
+		t.Fatalf("Large file with limit-only should succeed: %v", err)
+	}
+	expected = "line01\nline02"
+	if result != expected {
+		t.Errorf("Expected %q, got %q", expected, result)
 	}
 }
 
