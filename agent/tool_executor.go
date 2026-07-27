@@ -5,13 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
-	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -93,75 +91,6 @@ func (a *AIAgent) groupToolCalls(ctx context.Context, toolCalls []llm.ToolCall) 
 	}
 
 	return groups
-}
-
-// storeToolMemory asynchronously records a tool execution result to the memory
-// backend via the Observe API. No-ops when memory is not configured or no
-// session is active.
-//
-// On success, hookType is set to "post_tool_use".
-// On failure, hookType is set to "post_tool_failure".
-//
-// input and output are truncated to MemoryState.ToolResultMaxLen (in runes, default 8000)
-// before storing, to keep memory entries at a reasonable size. UTF-8 safe —
-// multi-byte characters (e.g. Chinese) are never split.
-func (a *AIAgent) storeToolMemory(toolName, input, output string, isError bool) {
-	if a.memory == nil || a.sessionManager == nil {
-		return
-	}
-	if a.memory.SkipWrites || a.isRepoExcluded() {
-		return
-	}
-	sess := a.sessionManager.Current()
-	if sess == nil {
-		return
-	}
-
-	// Truncate input and output to keep memory entries reasonable.
-	maxLen := a.cfg.Memory.ToolResultMaxLen
-	if maxLen <= 0 {
-		maxLen = 8000 // default
-	}
-	input = truncateString(input, maxLen)
-	output = truncateString(output, maxLen)
-
-	hookType := "post_tool_use"
-	if isError {
-		hookType = "post_tool_failure"
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
-		defer cancel()
-		cwd, _ := os.Getwd()
-		if err := a.memory.Backend.Observe(ctx, memory.ObserveOptions{
-			HookType:   hookType,
-			SessionID:  sess.ID,
-			Project:    getRepoName(),
-			CWD:        cwd,
-			ToolName:   toolName,
-			ToolInput:  input,
-			ToolOutput: output,
-			IsError:    isError,
-			Timestamp:  time.Now().UTC().Format(time.RFC3339),
-		}); err != nil {
-			a.logger.Error(ctx, "Memory(tool): observe failed", err, "tool", toolName)
-		}
-	}()
-}
-
-// truncateString truncates a string to at most maxRunes runes (Unicode code points).
-// UTF-8 safe — multi-byte characters like Chinese (each 3 bytes) are never split.
-// Returns the original string unchanged when maxRunes <= 0 or len(runes) <= maxRunes.
-func truncateString(s string, maxRunes int) string {
-	if maxRunes <= 0 {
-		return s
-	}
-	runes := []rune(s)
-	if len(runes) <= maxRunes {
-		return s
-	}
-	return string(runes[:maxRunes])
 }
 
 // executeToolCalls is the main entry point for tool execution. It groups
@@ -313,13 +242,6 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
 		})
-
-		// Store tool execution in memory for semantic search (parallel path)
-		toolOutput := tr.Output
-		if tr.Err != nil {
-			toolOutput = tr.Err.Error()
-		}
-		a.storeToolMemory(tc.Function.Name, tc.Function.Arguments, toolOutput, toolMsg.IsError)
 
 		// Fire tool_result hook
 		a.dispatchEvent(ctx, "tool_result", hooks.Payload{
@@ -580,13 +502,6 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
 		})
-
-		// Store tool execution in memory for semantic search (sequential path)
-		toolOutput := tr.Output
-		if tr.Err != nil {
-			toolOutput = tr.Err.Error()
-		}
-		a.storeToolMemory(tc.Function.Name, tc.Function.Arguments, toolOutput, toolMsg.IsError)
 
 		// Fire tool_result hook only if tool_call was dispatched, so every
 		// tool_result is paired with a preceding tool_call.

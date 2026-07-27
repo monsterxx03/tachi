@@ -36,20 +36,8 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 	return records
 }
 
-// Configure wires up all agent sub-systems from config: reminders, built-in
-// tools, web search, and MCP server connections. Returns the MCP manager for
-// later cleanup (may be nil).
-func (a *AIAgent) Configure(ctx context.Context, cfg *config.Config) (*mcp.Manager, error) {
-	a.cfg = cfg
-	sysCfg := SystemConfigFromConfig(cfg)
-	mcpMgr, err := a.configure(ctx, sysCfg)
-	a.resolveKeywordProvider(cfg)
-	return mcpMgr, err
-}
-
 // configure wires up all agent sub-systems from the extracted system config.
-// This is the internal implementation shared by Configure (the deprecated
-// wrapper) and NewAIAgentWithConfig (the recommended path).
+// This is the internal implementation called by NewAIAgentWithConfig.
 func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
 	// --- Memory backend (before skills — buildReminderCollector reads a.memory) ---
 	if sysCfg.Memory.Type != "" {

@@ -1,7 +1,6 @@
-// Package memory provides a pluggable session memory system for Tachi.
-// Backends implement the Backend interface with Store/Recall/Forget operations,
-// allowing memory storage to be switched (mem9, etc.) without
-// affecting the agent loop.
+// Package memory provides a session memory system for Tachi.
+// The TopicBackend uses local Markdown topic files searched via ripgrep,
+// produced offline by the AutoDream system.
 package memory
 
 import (
@@ -22,7 +21,7 @@ type Entry struct {
 	SessionID string   // source session ID
 	Summary   string   // one-line summary
 	Tags      []string // keyword tags
-	Content   string   // detailed content (empty for native, conversation text for mem9)
+	Content   string   // detailed content
 	Timestamp int64    // unix timestamp
 	Score     float64  // relevance score from backend recall
 }
@@ -70,7 +69,6 @@ type StoreOptions struct {
 	// DirectContent is a plain-text content string for direct memory writes
 	// (not ingest-based). When set, it takes priority over TurnMessages and
 	// the backend stores the content directly — no message filtering is applied.
-	// Currently only supported by the mem9 backend.
 	DirectContent string
 }
 
@@ -93,68 +91,30 @@ type Backend interface {
 	// limit controls max returned entries.
 	Recall(ctx context.Context, query string, limit int) ([]Entry, error)
 
-	// Forget deletes a memory by ID. Used by /forget command.
-	Forget(ctx context.Context, id string) error
-
-	// Observe records a contextual observation to the memory backend.
-	// Used by the agent to log tool execution results as structured events
-	// with a hook type indicating the nature of the observation.
-	// The mem9 backend implements this as a no-op.
-	Observe(ctx context.Context, opts ObserveOptions) error
-
 	// ReinforceFact strengthens a fact's decay state when it is recalled.
 	// Called after MemoryRecall returns results — each matched fact gets
 	// its reinforcement counter incremented, last_reinforced timestamp
 	// updated, and decay reset to 1.0.
 	//
-	// For backends that don't track decay (mem9, agentmemory), this is a
-	// no-op. Only TopicBackend implements this.
+	// Only TopicBackend implements this.
 	ReinforceFact(ctx context.Context, entryID string) error
 }
 
-// ObserveOptions controls Observe behavior.
-type ObserveOptions struct {
-	HookType   string // e.g. "post_tool_use", "post_tool_failure"
-	SessionID  string // session identifier
-	Project    string // project name (git repo root basename)
-	CWD        string // current working directory
-	ToolName   string // tool that was executed
-	ToolInput  string // tool invocation arguments
-	ToolOutput string // tool result or error message
-	IsError    bool   // whether the tool execution failed
-	Timestamp  string // ISO 8601 timestamp
-}
-
-// Config is the common configuration for memory backends.
+// Config is the configuration for the TopicBackend.
 type Config struct {
-	Type              string        // backend type (e.g., "mem9", "agentmemory")
-	BaseDir           string        // ~/.tachi/
+	Type              string   // backend type (only "topic")
+	BaseDir           string   // ~/.tachi/
 	Timeout           time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
-	DecayHalfLifeDays int           // decay half-life in days (default 7); only used by TopicBackend
-	Mem9              Mem9Config
-	AgentMemory       AgentMemoryConfig // agentmemory-specific config
-	ExcludeRepos      []string          // git repo roots to skip memory writes
+	DecayHalfLifeDays int      // decay half-life in days (default 7); only used by TopicBackend
+	ExcludeRepos      []string // git repo roots to skip memory writes
 }
 
-// Mem9Config holds mem9-specific configuration.
-type Mem9Config struct {
-	APIURL  string // default: https://api.mem9.ai
-	APIKey  string
-	AgentID string // default: "tachi"
-	Mode    string // "smart" or "raw"
-	Proxy   string // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
-}
-
-// New creates a backend by type.
+// New creates a backend by type. Only "topic" is supported.
 func New(backendType string, cfg Config, logger *logger.Logger) (Backend, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}
 	switch backendType {
-	case "mem9":
-		return NewMem9Backend(cfg)
-	case "agentmemory":
-		return NewAgentMemoryBackend(cfg)
 	case "topic":
 		return NewTopicBackend(cfg, logger)
 	default:

@@ -440,32 +440,15 @@ func toBool(v any) bool {
 	}
 }
 
-// MemoryConfig holds configuration for the pluggable memory system.
-// Type selects the backend: "" (disabled), "mem9", or "agentmemory".
+// MemoryConfig holds configuration for the memory system.
+// Type selects the backend: "" (disabled) or "topic".
 type MemoryConfig struct {
-	Type              string               `yaml:"type"`                             // "mem9" or "agentmemory" or "" (disabled)
-	KeywordProvider   string               `yaml:"keyword_provider"`                 // optional: provider name for keyword extraction (defaults to main provider)
-	Timeout           time.Duration        `yaml:"timeout" default:"10s"`            // context deadline for Store/Recall/Forget
-	RecallLimit       int                  `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
-	DecayHalfLifeDays int                  `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
-	ToolResultMaxLen  int                  `yaml:"tool_result_max_len"`              // max chars for tool result in memory (default 8000, 0 = no limit)
-	Mem9              Mem9SubConfig        `yaml:"mem9"`
-	AgentMemory       AgentMemorySubConfig `yaml:"agentmemory"`
-	ExcludeRepos      []string             `yaml:"exclude_repos"` // git repo roots to skip memory writes
-}
-
-// AgentMemorySubConfig holds agentmemory-specific configuration.
-type AgentMemorySubConfig struct {
-	APIURL string `yaml:"api_url"` // agentmemory server URL (default: http://localhost:3111)
-}
-
-// Mem9SubConfig holds mem9-specific memory configuration.
-type Mem9SubConfig struct {
-	APIURL  string `yaml:"api_url"` // default: https://api.mem9.ai
-	APIKey  string `yaml:"api_key"`
-	AgentID string `yaml:"agent_id"` // default: "tachi"
-	Mode    string `yaml:"mode"`     // default: "smart"
-	Proxy   string `yaml:"proxy"`    // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+	Type              string   `yaml:"type"`                             // "topic" or "" (disabled)
+	KeywordProvider   string   `yaml:"keyword_provider"`                 // optional: provider name for keyword extraction (defaults to main provider)
+	Timeout           time.Duration `yaml:"timeout" default:"10s"`       // context deadline for Store/Recall/Forget
+	RecallLimit       int      `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
+	DecayHalfLifeDays int      `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
+	ExcludeRepos      []string `yaml:"exclude_repos"`                    // git repo roots to skip memory writes
 }
 
 // ToMemoryConfig converts the YAML-level MemoryConfig to the runtime
@@ -483,16 +466,6 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 		Timeout:           timeout,
 		DecayHalfLifeDays: mc.DecayHalfLifeDays,
 		ExcludeRepos:      mc.ExcludeRepos,
-		Mem9: memory.Mem9Config{
-			APIURL:  mc.Mem9.APIURL,
-			APIKey:  mc.Mem9.APIKey,
-			AgentID: mc.Mem9.AgentID,
-			Mode:    mc.Mem9.Mode,
-			Proxy:   mc.Mem9.Proxy,
-		},
-		AgentMemory: memory.AgentMemoryConfig{
-			APIURL: mc.AgentMemory.APIURL,
-		},
 	}
 }
 

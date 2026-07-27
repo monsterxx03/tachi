@@ -10,7 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -147,21 +146,6 @@ func main() {
 				Usage:  "Start all enabled channels from config (e.g., weixin)",
 				Flags:  commonFlags,
 				Action: runChannels,
-			},
-			{
-				Name:  "tools",
-				Usage: "List available tools",
-				Flags: append(commonFlags,
-					&cli.BoolFlag{
-						Name:  "mcp",
-						Usage: "Include MCP tools (connects to MCP servers)",
-					},
-					&cli.BoolFlag{
-						Name:  "json",
-						Usage: "Output tool definitions as JSON",
-					},
-				),
-				Action: runToolsCmd,
 			},
 			{
 				Name:  "acp",
@@ -933,153 +917,6 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	fmt.Fprintln(os.Stderr, "[channel] shutting down...")
 	mgr.Close()
 	return nil
-}
-
-// ── Tools listing ──────────────────────────────────────────────────────────────
-
-func runToolsCmd(ctx context.Context, cmd *cli.Command) error {
-	boot, err := agent.Bootstrap(ctx)
-	if err != nil {
-		return err
-	}
-	cfg := boot.Config
-
-	// Create a minimal agent to register and list tools.
-	// No LLM provider needed — we only use the tool registry.
-	aiAgent := agent.NewAIAgent(nil, 0)
-	defer aiAgent.Close()
-
-	showMCP := cmd.Bool("mcp")
-
-	mcpMgr, err := aiAgent.Configure(ctx, cfg)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
-	}
-
-	if showMCP && mcpMgr != nil {
-		waitCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
-		if err := aiAgent.WaitForMCP(waitCtx); err != nil {
-			fmt.Fprintf(os.Stderr, "MCP: some servers not ready yet (showing partial results)\n")
-		}
-		cancel()
-	}
-	if mcpMgr != nil {
-		defer mcpMgr.Close()
-	}
-
-	schemas := aiAgent.ToolSchemas()
-	outputJSON := cmd.Bool("json")
-
-	// Extra tools that exist in the codebase but are only registered in
-	// specific modes (e.g. channel mode for Cron / SendFile). We instantiate
-	// them directly rather than hand-writing schemas.
-	extraTools := []tools.Tool{
-		tools.NewCronTool(nil, nil),
-		&tools.SendFileTool{},
-	}
-
-	if outputJSON {
-		// Collect all tool schemas (including deferred MCP tools and extra tools).
-		var allSchemas []tools.Schema
-		seen := make(map[string]bool)
-
-		for _, s := range schemas {
-			if !showMCP && strings.HasPrefix(s.Name, "mcp__") {
-				continue
-			}
-			allSchemas = append(allSchemas, s)
-			seen[s.Name] = true
-		}
-
-		for _, et := range extraTools {
-			if !seen[et.Name()] {
-				allSchemas = append(allSchemas, tools.ToSchema(et))
-				seen[et.Name()] = true
-			}
-		}
-
-		if showMCP {
-			if pool := aiAgent.DeferredPool(); pool != nil {
-				for _, dt := range pool.All() {
-					if !seen[dt.Name] {
-						allSchemas = append(allSchemas, dt.Schema)
-						seen[dt.Name] = true
-					}
-				}
-			}
-		}
-
-		sort.Slice(allSchemas, func(i, j int) bool {
-			return allSchemas[i].Name < allSchemas[j].Name
-		})
-
-		enc := json.NewEncoder(os.Stdout)
-		enc.SetIndent("", "  ")
-		if err := enc.Encode(allSchemas); err != nil {
-			return fmt.Errorf("json encode: %w", err)
-		}
-		return nil
-	}
-
-	if showMCP {
-		fmt.Println("Tools:")
-	} else {
-		fmt.Println("Built-in Tools:")
-	}
-	fmt.Println()
-
-	// Collect all displayed tools as (name, description) pairs.
-	type toolEntry struct {
-		name string
-		desc string
-	}
-	var entries []toolEntry
-
-	// Built-in tools from registry (includes auto-loaded MCP tools).
-	for _, s := range schemas {
-		if !showMCP && strings.HasPrefix(s.Name, "mcp__") {
-			continue
-		}
-		entries = append(entries, toolEntry{s.Name, firstLine(s.Description)})
-	}
-
-	// Extra tools not registered in the current mode.
-	seen := make(map[string]bool)
-	for _, e := range entries {
-		seen[e.name] = true
-	}
-	for _, et := range extraTools {
-		if !seen[et.Name()] {
-			entries = append(entries, toolEntry{et.Name(), firstLine(et.Description())})
-			seen[et.Name()] = true
-		}
-	}
-
-	// Deferred MCP tools from pool — only shown with --mcp.
-	if showMCP {
-		if pool := aiAgent.DeferredPool(); pool != nil {
-			for _, dt := range pool.All() {
-				if !seen[dt.Name] {
-					entries = append(entries, toolEntry{dt.Name, firstLine(dt.Description)})
-					seen[dt.Name] = true
-				}
-			}
-		}
-	}
-
-	for _, e := range entries {
-		fmt.Printf("  %-30s  %s\n", e.name, e.desc)
-	}
-
-	return nil
-}
-
-// firstLine returns the first line of a multi-line string.
-func firstLine(s string) string {
-	if idx := strings.Index(s, "\n"); idx > 0 {
-		return s[:idx]
-	}
-	return s
 }
 
 // ── ACP Agent ────────────────────────────────────────────────────────────────

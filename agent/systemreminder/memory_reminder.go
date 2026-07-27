@@ -13,7 +13,6 @@ import (
 // on every user message. It uses the user's current prompt as a search query
 // and wraps results in <relevant-memories> blocks.
 //
-// Calls Backend.Recall() which performs vector semantic search for mem9.
 // Implements TaggedReminder so output is wrapped in <relevant-memories>
 // rather than mixed into <system-reminder>.
 //

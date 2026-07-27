@@ -300,18 +300,6 @@ func (t *TopicBackend) Store(ctx context.Context, opts StoreOptions) error {
 	return nil
 }
 
-// Forget removes a memory entry by ID. For topic backend, this would
-// require finding and removing a specific block from a topic file.
-func (t *TopicBackend) Forget(ctx context.Context, id string) error {
-	// TODO: implement block removal by searching for the ID across topic files.
-	return nil
-}
-
-// Observe is a no-op for TopicBackend (no real-time observation needed).
-func (t *TopicBackend) Observe(ctx context.Context, opts ObserveOptions) error {
-	return nil
-}
-
 // --- Search implementation ---
 
 // shouldSkipExtraction reports whether a query is short enough to be used

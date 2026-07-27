@@ -20,7 +20,7 @@ type MemoryRecorder interface {
 }
 
 // RecordMemoryTool allows the LLM to explicitly record important information
-// to the memory backend (e.g. mem9). It is only registered when a memory
+// to the memory backend. It is only registered when a memory
 // backend is configured.
 //
 // The LLM should use this tool when it encounters information worth
