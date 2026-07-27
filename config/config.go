@@ -320,8 +320,8 @@ type ReviewConfig struct {
 
 // ChannelConfig groups configuration for all IM channel backends.
 //
-// Legacy fields: Weixin and Chrome are typed configs for built-in channels.
-// For backward compatibility, if Weixin.Enabled or Chrome.Enabled is set
+// Legacy field: Weixin is a typed config for a built-in channel.
+// For backward compatibility, if Weixin.Enabled is set
 // but no matching entry exists in Channels, it's auto-activated.
 //
 // Generic field: Channels maps channel name to its raw config. Each entry
@@ -339,16 +339,8 @@ type ReviewConfig struct {
 //	      token: "xxx"
 type ChannelConfig struct {
 	Weixin   WeixinConfig              `yaml:"weixin"`
-	Chrome   ChromeConfig              `yaml:"chrome"`
 	Channels map[string]map[string]any `yaml:"channels"`
 	Whisper  ChannelWhisperConfig      `yaml:"whisper"`
-}
-
-// ChromeConfig holds configuration for the Chrome channel (WebSocket over
-// localhost). The extension connects to Tachi via ws://127.0.0.1:<port>/ws.
-type ChromeConfig struct {
-	Enabled bool `yaml:"enabled"`
-	Port    int  `yaml:"port" default:"18520"` // WebSocket server port
 }
 
 // ChannelWhisperConfig holds channel-mode whisper settings for group chat
@@ -403,11 +395,11 @@ func (c *ChannelWhisperConfig) WhisperEnabled() bool {
 }
 
 // ActiveChannels returns the raw configs for every enabled channel,
-// merging legacy typed configs (Weixin, Chrome) into the generic Channels
+// merging the legacy typed Weixin config into the generic Channels
 // map when needed.
 //
-// For backward compatibility: if a legacy typed config has Enabled set
-// and there's no matching key in Channels, it's auto-included.
+// For backward compatibility: if the legacy Weixin typed config has
+// Enabled set and there's no matching key in Channels, it's auto-included.
 // If both exist, the generic Channels entry takes precedence.
 func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
 	result := make(map[string]map[string]any, len(cc.Channels))
@@ -428,17 +420,6 @@ func (cc *ChannelConfig) ActiveChannels() map[string]map[string]any {
 			"route_tag": cc.Weixin.RouteTag,
 			"greeting":  cc.Weixin.Greeting,
 		}
-	}
-
-	// Legacy chrome: include if enabled and not already present in Channels.
-	if _, inChannels := result["chrome"]; !inChannels && cc.Chrome.Enabled {
-		chCfg := map[string]any{
-			"enabled": true,
-		}
-		if cc.Chrome.Port > 0 {
-			chCfg["port"] = cc.Chrome.Port
-		}
-		result["chrome"] = chCfg
 	}
 
 	return result

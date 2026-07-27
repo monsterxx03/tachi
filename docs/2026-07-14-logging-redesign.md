@@ -45,7 +45,7 @@
 | 目标 | 说明 |
 |------|------|
 | **入口分离** | 按 TUI / Channel / ACP / Run 分文件或加固定标签 |
-| **Channel 子分类** | channel 下按 discord / weixin / chrome 细分 |
+| **Channel 子分类** | channel 下按 discord / weixin 细分 |
 | **分级日志** | DEBUG / INFO / WARN / ERROR，可配置最低显示级别 |
 | **Trace ID** | 每个 agent turn 生成 trace_id，通过 context 传递 |
 | **结构化字段** | slog 原生属性，组件统一添加关键字段 |
