@@ -3,15 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"slices"
-	"strings"
 
 	"github.com/monsterxx03/tachi/agent/memory"
-	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/session"
 )
 
 // MemoryBackend returns the configured memory backend, or nil if memory is disabled.
@@ -23,8 +16,11 @@ func (a *AIAgent) MemoryBackend() memory.Backend {
 }
 
 // RecordMemory implements tools.MemoryRecorder. It persists an explicit
-// LLM-initiated memory to the memory backend, associated with the current
-// session. Returns an error if memory is not configured or no session is active.
+// LLM-initiated memory to the backend's inbox (the only live write path —
+// bulk memory production is the Dream pipeline's job, writing topic files
+// offline). Tags are accepted for tool-API compatibility and logged; the
+// TopicBackend stores content only.
+// Returns an error if memory is not configured or no session is active.
 func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []string) error {
 	if a.memory == nil {
 		return fmt.Errorf("memory backend not configured")
@@ -40,267 +36,10 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 	storeCtx, cancel := context.WithTimeout(ctx, a.cfg.Memory.Timeout)
 	defer cancel()
 
-	err := a.memory.Backend.Store(storeCtx, memory.StoreOptions{
-		Scope:         memory.StoreScopeTurn,
-		SessionID:     sess.ID,
-		Tags:          withRepoTag(tags),
-		DirectContent: content,
-	})
-	if err != nil {
+	if err := a.memory.Backend.Store(storeCtx, content); err != nil {
 		a.logger.Error(ctx, "RecordMemory: store failed", err)
 		return err
 	}
 	a.logger.Info(ctx, "RecordMemory: stored", "content", truncateForLog(content, 60), "tags", fmt.Sprintf("%v", tags))
 	return nil
-}
-
-// StartSessionMemory notifies the memory backend that a new session has begun.
-// Called after session creation in RunConversationStream and ResumeSession.
-// No-ops when memory is not configured.
-func (a *AIAgent) StartSessionMemory() {
-	if a.memory == nil || a.sessionManager == nil {
-		return
-	}
-	sess := a.sessionManager.Current()
-	if sess == nil {
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
-		defer cancel()
-		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
-			Scope:     memory.StoreScopeStart,
-			SessionID: sess.ID,
-			Tags:      withRepoTag(nil),
-		}); err != nil {
-			a.logger.Error(ctx, "Memory(start): start session failed", err)
-		}
-	}()
-}
-
-// collectTurnMessages extracts the last user message from the conversation
-// history and pairs it with the current assistant response text.
-func collectTurnMessages(messages *[]llm.Message, assistantText string) []memory.Message {
-	for i := len(*messages) - 1; i >= 0; i-- {
-		if (*messages)[i].Role == "user" {
-			return []memory.Message{
-				{Role: "user", Content: (*messages)[i].Content},
-				{Role: "assistant", Content: assistantText},
-			}
-		}
-	}
-	return nil
-}
-
-// withRepoTag appends a "project:<name>" tag to the given tag slice when
-// the current working directory is inside a git repository. Returns the
-// original slice unchanged otherwise.
-func withRepoTag(tags []string) []string {
-	if tag := repoTag(); tag != "" {
-		return append(tags, tag)
-	}
-	return tags
-}
-
-// isRepoExcluded checks whether the current git repo root is in the
-// memory.exclude_repos config list. Returns false when not in a git repo
-// or when the list is empty.
-func (a *AIAgent) isRepoExcluded() bool {
-	if a.cfg == nil || len(a.cfg.Memory.ExcludeRepos) == 0 {
-		return false
-	}
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return false
-	}
-	repoRoot := strings.TrimSpace(string(out))
-	normalized := normalizeRepoPaths(a.cfg.Memory.ExcludeRepos)
-	return slices.ContainsFunc(normalized, func(excluded string) bool {
-		return filepath.Clean(repoRoot) == filepath.Clean(excluded)
-	})
-}
-
-// normalizeRepoPaths expands ~ to the home directory and cleans each path.
-// This way users can write ~/repos/tachi in config and it will match
-// the absolute path returned by git rev-parse --show-toplevel.
-func normalizeRepoPaths(paths []string) []string {
-	if len(paths) == 0 {
-		return paths
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return paths
-	}
-	normalized := make([]string, 0, len(paths))
-	for _, p := range paths {
-		s := strings.TrimSpace(p)
-		if s == "" {
-			continue
-		}
-		if strings.HasPrefix(s, "~/") {
-			s = filepath.Join(home, s[2:])
-		} else if s == "~" {
-			s = home
-		}
-		normalized = append(normalized, filepath.Clean(s))
-	}
-	return normalized
-}
-
-// getRepoName returns the name of the current git repository (the basename
-// of the repo root, e.g. "tachi"). Returns empty string if not in a git repo.
-func getRepoName() string {
-	out, err := exec.Command("git", "rev-parse", "--show-toplevel").Output()
-	if err != nil {
-		return ""
-	}
-	return filepath.Base(strings.TrimSpace(string(out)))
-}
-
-// repoTag returns a tag in the form "project:<name>" when inside a git repo,
-// or empty string otherwise.
-func repoTag() string {
-	if name := getRepoName(); name != "" {
-		return "project:" + name
-	}
-	return ""
-}
-
-// storeTurnMemory writes the current turn's conversation to the memory backend.
-// Called after each assistant response completes (StoreScopeTurn).
-// No-ops when memory.SkipWrites is true (e.g. /commit, /init, sub-agents).
-func (a *AIAgent) storeTurnMemory(turnMsgs []memory.Message) {
-	if len(turnMsgs) == 0 {
-		return
-	}
-	if a.memory == nil || a.sessionManager == nil {
-		return
-	}
-	if a.memory.SkipWrites {
-		return
-	}
-	if a.isRepoExcluded() {
-		return
-	}
-	sess := a.sessionManager.Current()
-	if sess == nil {
-		return
-	}
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
-		defer cancel()
-		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
-			Scope:        memory.StoreScopeTurn,
-			SessionID:    sess.ID,
-			Tags:         withRepoTag(nil),
-			TurnMessages: turnMsgs,
-		}); err != nil {
-			a.logger.Error(ctx, "Memory(turn): store failed", err)
-		}
-	}()
-}
-
-// StoreCompactMemory writes the current session's messages to the memory
-// backend before context compaction (StoreScopeCompact).
-//
-// Prefer CompleteCompact, which sequences this with FinalizeCompact correctly;
-// this remains exported for callers that only need the memory write.
-func (a *AIAgent) StoreCompactMemory() {
-	a.storeCompactMemoryFor(a.sessionManager)
-}
-
-// storeCompactMemoryFor writes the given session manager's current session to
-// the memory backend. sm is explicit because channel mode compacts through a
-// session.Manager it built from the thread ID rather than the agent's own.
-func (a *AIAgent) storeCompactMemoryFor(sm *session.Manager) {
-	if a.memory == nil || sm == nil {
-		return
-	}
-	if a.isRepoExcluded() {
-		return
-	}
-	sess := sm.Current()
-	if sess == nil {
-		return
-	}
-
-	msgs, err := sm.LoadMessages()
-	if err != nil {
-		a.logger.Error(context.Background(), "Memory(compact): load messages failed", err)
-		return
-	}
-
-	memMsgs := sessionMessagesToMemory(msgs)
-
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
-		defer cancel()
-		if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
-			Scope:           memory.StoreScopeCompact,
-			SessionID:       sess.ID,
-			Tags:            withRepoTag(nil),
-			SessionMessages: memMsgs,
-		}); err != nil {
-			a.logger.Error(ctx, "Memory(compact): store failed", err)
-		}
-	}()
-}
-
-// StoreSessionMemory writes a session summary to the memory backend.
-// Called at session end or shutdown (StoreScopeSession).
-// Exported so the TUI can call it before ending/quitting.
-// Uses a unified interface — each backend handles its own format internally.
-func (a *AIAgent) StoreSessionMemory() {
-	if a.memory == nil || a.sessionManager == nil {
-		return
-	}
-	if a.isRepoExcluded() {
-		return
-	}
-	sess := a.sessionManager.Current()
-	if sess == nil || sess.Title == "" {
-		return
-	}
-
-	msgs, err := a.sessionManager.LoadMessages()
-	if err != nil {
-		a.logger.Error(context.Background(), "Memory(session): load messages failed", err)
-		// Still try to write with just the title
-	}
-
-	memMsgs := sessionMessagesToMemory(msgs)
-
-	ctx, cancel := context.WithTimeout(context.Background(), a.cfg.Memory.Timeout)
-	defer cancel()
-	if err := a.memory.Backend.Store(ctx, memory.StoreOptions{
-		Scope:           memory.StoreScopeSession,
-		SessionID:       sess.ID,
-		SessionTitle:    sess.Title,
-		Tags:            withRepoTag(nil),
-		SessionMessages: memMsgs,
-	}); err != nil {
-		a.logger.Error(ctx, "Memory(session): store failed", err)
-	}
-}
-
-// sessionMessagesToMemory converts session.Message slice to memory.Message slice.
-func sessionMessagesToMemory(msgs []session.Message) []memory.Message {
-	result := make([]memory.Message, 0, len(msgs))
-	for _, m := range msgs {
-		// Only include user and assistant messages
-		if m.Type != session.MessageTypeUser && m.Type != session.MessageTypeAssistant {
-			continue
-		}
-		role := "user"
-		if m.Type == session.MessageTypeAssistant {
-			role = "assistant"
-		}
-		result = append(result, memory.Message{
-			Role:    role,
-			Content: m.Content,
-		})
-	}
-	return result
 }

@@ -44,9 +44,7 @@ func TestTopicBackend_StoreDirectContent(t *testing.T) {
 	backend, tmpDir := setupTopicBackend(t)
 	ctx := t.Context()
 
-	err := backend.Store(ctx, StoreOptions{
-		DirectContent: "用户偏好：代码注释用英文",
-	})
+	err := backend.Store(ctx, "用户偏好：代码注释用英文")
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}
@@ -63,26 +61,6 @@ func TestTopicBackend_StoreDirectContent(t *testing.T) {
 	}
 	if !strings.Contains(string(content), "---") {
 		t.Error("inbox entry should end with HR separator")
-	}
-}
-
-func TestTopicBackend_StoreNonDirect_NoOp(t *testing.T) {
-	backend, tmpDir := setupTopicBackend(t)
-	ctx := t.Context()
-
-	// Non-direct store should be no-op.
-	err := backend.Store(ctx, StoreOptions{
-		Scope:        StoreScopeTurn,
-		TurnMessages: []Message{{Role: "user", Content: "hello"}},
-	})
-	if err != nil {
-		t.Fatalf("Store: %v", err)
-	}
-
-	// inbox.md should NOT exist.
-	inboxPath := filepath.Join(tmpDir, "memory", "inbox.md")
-	if _, err := os.Stat(inboxPath); err == nil {
-		t.Error("inbox.md should not be created for non-direct stores")
 	}
 }
 
@@ -249,9 +227,7 @@ func TestTopicBackend_Recall_Inbox(t *testing.T) {
 	ctx := t.Context()
 
 	// Write directly to inbox.
-	err := backend.Store(ctx, StoreOptions{
-		DirectContent: "记住：部署用 make deploy",
-	})
+	err := backend.Store(ctx, "记住：部署用 make deploy")
 	if err != nil {
 		t.Fatalf("Store: %v", err)
 	}

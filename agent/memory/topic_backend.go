@@ -265,15 +265,10 @@ func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]En
 	return entries, nil
 }
 
-// Store handles memory writes. For TopicBackend, only DirectContent writes
-// (from MemoryRecord tool) are processed — they're appended to inbox.md.
-// All other scopes (turn/compact/session) are no-ops because memory is
-// produced asynchronously by the Dream sub-agent.
-func (t *TopicBackend) Store(ctx context.Context, opts StoreOptions) error {
-	if opts.DirectContent == "" {
-		return nil // no-op for non-direct writes
-	}
-
+// Store appends a direct memory write (from the MemoryRecord tool) to the
+// domain's inbox.md. Memory produced asynchronously by the Dream sub-agent
+// does not pass through Store.
+func (t *TopicBackend) Store(ctx context.Context, content string) error {
 	// Determine target domain: project if available, else global.
 	targetDir := t.globalDir
 	if t.projectDir != "" {
@@ -284,7 +279,7 @@ func (t *TopicBackend) Store(ctx context.Context, opts StoreOptions) error {
 
 	inboxPath := filepath.Join(targetDir, "inbox.md")
 	entry := fmt.Sprintf("\n## %s\n\n%s\n\n---\n",
-		time.Now().Format(time.RFC3339), opts.DirectContent)
+		time.Now().Format(time.RFC3339), content)
 
 	f, err := os.OpenFile(inboxPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
 	if err != nil {

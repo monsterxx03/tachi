@@ -9,18 +9,12 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// CompleteCompact persists the old session to the memory backend, creates the
-// new compacted session, and notifies memory that a new session started.
-//
-// It exists because those three steps form an ordered invariant that every
-// frontend needs but each used to open-code — and two of them forgot the memory
-// parts entirely. StoreCompactMemory must run *before* FinalizeCompact, since
-// FinalizeCompact calls sm.New() and moves the manager's current session.
+// CompleteCompact finalizes a compaction: creates the new compacted session
+// and returns the new conversation history ready for RunConversationStream.
 //
 // sm is a parameter rather than a.sessionManager because channel mode finalizes
-// through its own session.Manager built from the thread ID; memory writes still
-// go through the agent, which owns the backend. When sm is nil the agent's own
-// session manager is used.
+// through its own session.Manager built from the thread ID. When sm is nil the
+// agent's own session manager is used.
 //
 // On failure it best-effort deletes the orphaned child session, mirroring the
 // cleanup that the auto-compact path performed inline.
@@ -32,9 +26,6 @@ func (a *AIAgent) CompleteCompact(sm *session.Manager, systemPrompt, summary str
 		return nil, fmt.Errorf("no session manager available to finalize compact")
 	}
 
-	// Persist the pre-compaction session to memory while it is still current.
-	a.storeCompactMemoryFor(sm)
-
 	newHistory, err := FinalizeCompact(sm, systemPrompt, summary)
 	if err != nil {
 		// FinalizeCompact may have created a new session (sm.New succeeded)
@@ -44,9 +35,6 @@ func (a *AIAgent) CompleteCompact(sm *session.Manager, systemPrompt, summary str
 		}
 		return nil, err
 	}
-
-	// Notify the memory backend that a new session has started.
-	a.StartSessionMemory()
 
 	return newHistory, nil
 }
@@ -58,8 +46,8 @@ func (a *AIAgent) CompleteCompact(sm *session.Manager, systemPrompt, summary str
 // The old session's meta is updated with compacted_child_id.
 // ThreadID migration is handled by the caller if needed.
 //
-// Prefer AIAgent.CompleteCompact, which also performs the memory writes that
-// must accompany compaction; call this directly only when there is no agent.
+// Prefer AIAgent.CompleteCompact, which additionally cleans up orphaned
+// sessions on failure; call this directly only when there is no agent.
 //
 // Parameters:
 //   - sm: session manager with the OLD session loaded as current

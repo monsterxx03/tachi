@@ -46,46 +46,17 @@ func FactID(topicFile, content string) string {
 	return fmt.Sprintf("topic:%s:%x", topicFile, h[:4])
 }
 
-// StoreScope marks when Store is called, allowing backends to choose
-// different upload strategies per timing.
-type StoreScope string
-
-const (
-	StoreScopeTurn    StoreScope = "turn"    // after each conversation turn completes
-	StoreScopeCompact StoreScope = "compact" // before context compaction
-	StoreScopeSession StoreScope = "session" // at session end
-	StoreScopeStart   StoreScope = "start"   // at session creation (notify backend)
-)
-
-// StoreOptions controls Store behavior.
-type StoreOptions struct {
-	Scope           StoreScope // call timing
-	SessionID       string     // session ID (used for deduplication)
-	SessionTitle    string     // session title
-	Tags            []string   // keyword tags
-	TurnMessages    []Message  // current turn messages (user + assistant)
-	SessionMessages []Message  // all session messages (compact/session scopes)
-
-	// DirectContent is a plain-text content string for direct memory writes
-	// (not ingest-based). When set, it takes priority over TurnMessages and
-	// the backend stores the content directly — no message filtering is applied.
-	DirectContent string
-}
-
-// Message represents a single conversation message sent to memory backends.
-type Message struct {
-	Role    string `json:"role"`    // "user" or "assistant"
-	Content string `json:"content"` // message body
-}
-
 // Backend is the abstract interface for memory storage.
-// All backends must implement three operations: Store, Recall, Forget.
+//
+// Memory has two paths: recall (MemoryRecall tool + system reminders) and
+// direct writes (MemoryRecord tool). Turn/compact/session-scoped ingestion
+// used to go through Store as well, but with TopicBackend the production of
+// memory is asynchronous (the Dream pipeline writes topic files offline),
+// so Store now carries direct writes only.
 type Backend interface {
-	// Store writes memory. Depending on scope, backend chooses granularity:
-	//   - turn:    write current turn (last user+assistant pair)
-	//   - compact: write larger window (recent turns)
-	//   - session: write full session summary
-	Store(ctx context.Context, opts StoreOptions) error
+	// Store appends a direct memory entry (from the MemoryRecord tool) to
+	// the backend's inbox.
+	Store(ctx context.Context, content string) error
 
 	// Recall searches relevant memories by query. Called on every user message.
 	// limit controls max returned entries.
@@ -102,11 +73,10 @@ type Backend interface {
 
 // Config is the configuration for the TopicBackend.
 type Config struct {
-	Type              string   // backend type (only "topic")
-	BaseDir           string   // ~/.tachi/
+	Type              string        // backend type (only "topic")
+	BaseDir           string        // ~/.tachi/
 	Timeout           time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
-	DecayHalfLifeDays int      // decay half-life in days (default 7); only used by TopicBackend
-	ExcludeRepos      []string // git repo roots to skip memory writes
+	DecayHalfLifeDays int           // decay half-life in days (default 7); only used by TopicBackend
 }
 
 // New creates a backend by type. Only "topic" is supported.

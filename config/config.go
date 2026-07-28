@@ -441,12 +441,11 @@ func toBool(v any) bool {
 // MemoryConfig holds configuration for the memory system.
 // Type selects the backend: "" (disabled) or "topic".
 type MemoryConfig struct {
-	Type              string   `yaml:"type"`                             // "topic" or "" (disabled)
-	KeywordProvider   string   `yaml:"keyword_provider"`                 // optional: provider name for keyword extraction (defaults to main provider)
-	Timeout           time.Duration `yaml:"timeout" default:"10s"`       // context deadline for Store/Recall/Forget
-	RecallLimit       int      `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
-	DecayHalfLifeDays int      `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
-	ExcludeRepos      []string `yaml:"exclude_repos"`                    // git repo roots to skip memory writes
+	Type              string        `yaml:"type"`                             // "topic" or "" (disabled)
+	KeywordProvider   string        `yaml:"keyword_provider"`                 // optional: provider name for keyword extraction (defaults to main provider)
+	Timeout           time.Duration `yaml:"timeout" default:"10s"`            // context deadline for Store/Recall/Forget
+	RecallLimit       int           `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
+	DecayHalfLifeDays int           `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
 }
 
 // ToMemoryConfig converts the YAML-level MemoryConfig to the runtime
@@ -463,7 +462,6 @@ func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
 		BaseDir:           BaseDir(),
 		Timeout:           timeout,
 		DecayHalfLifeDays: mc.DecayHalfLifeDays,
-		ExcludeRepos:      mc.ExcludeRepos,
 	}
 }
 

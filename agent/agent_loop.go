@@ -244,11 +244,6 @@ func (a *AIAgent) RunOneOffStream(
 		savedTokens := a.turn.tokens()
 		defer func() { a.turn.setTokens(savedTokens) }()
 
-		if a.memory != nil {
-			defer func() { a.memory.SkipWrites = false }()
-			a.memory.SkipWrites = true // suppress memory writes for one-off runs (e.g. /commit, /init)
-		}
-
 		// Suppress session persistence for one-off runs.
 		// One-off tasks (/commit, /review, sub-agents, dreams) produce
 		// messages that are internal tooling artifacts — they must not
@@ -446,8 +441,6 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 		if cur := a.sessionManager.Current(); cur != nil {
 			a.logger = a.logger.With("session_id", cur.ID)
 		}
-		// Notify memory backend that a new session has started
-		a.StartSessionMemory()
 
 		// Fire session_start hook
 		a.dispatchEvent(ctx, hooks.EventSessionStart, hooks.Payload{
@@ -863,9 +856,6 @@ func (a *AIAgent) lengthExhausted(
 		},
 	}
 
-	// Store turn-level memory after a truncated response
-	a.storeTurnMemory(collectTurnMessages(&ls.messages, acc.text.String()))
-
 	// Fire turn_complete hook with error info so external integrations
 	// know the turn ended (even if truncated). Without this, the hook
 	// system may be stuck in "working" state.
@@ -952,9 +942,6 @@ func (a *AIAgent) handleStopFinish(
 	a.dispatchEvent(ctx, hooks.EventTurnComplete, hooks.Payload{
 		TurnCount: ls.apiCalls,
 	})
-
-	// Store turn-level memory after a complete response
-	a.storeTurnMemory(collectTurnMessages(&ls.messages, acc.text.String()))
 
 	return outcomeStop
 }

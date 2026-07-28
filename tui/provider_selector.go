@@ -192,9 +192,6 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 	m.isCompacting = true
 	m.compactForSwitch = true
 
-	// Memory is written at finalize time by agent.CompleteCompact
-	// (see model_events.go), so nothing to do here.
-
 	instruction := cmds.BuildCompactInstruction()
 
 	ctx := m.startTurn()

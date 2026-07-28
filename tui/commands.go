@@ -37,7 +37,6 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		m.pendingQueue = nil
 		m.chatview.RemovePendingItems()
 		m.statusbar.SetPendingCount(0)
-		m.agent.StoreSessionMemory()
 		m.history = nil
 		m.chatview.Clear()
 		m.agent.ClearSession()
@@ -50,7 +49,6 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		return nil
 	},
 	"quit": func(m *Model) tea.Cmd {
-		m.agent.StoreSessionMemory()
 		return tea.Quit
 	},
 	"model": func(m *Model) tea.Cmd {
@@ -1236,9 +1234,6 @@ func (m *Model) handleCompactCommand() tea.Cmd {
 	m.savedHistory = make([]llm.Message, len(m.history))
 	copy(m.savedHistory, m.history)
 	m.isCompacting = true
-
-	// The pre-compaction memory write happens at finalize time via
-	// agent.CompleteCompact, so a failed compact leaves memory untouched.
 
 	// 4. Build compact instruction (no history — LLM sees history as context)
 	instruction := cmds.BuildCompactInstruction()

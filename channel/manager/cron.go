@@ -66,8 +66,6 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	sm, diskHistory := m.prepareThreadSession(job.TargetThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
-		// Notify memory backend when a new session was created
-		aiAgent.StartSessionMemory()
 	}
 
 	// Use cached in-memory history when available; fall back to disk on first run.

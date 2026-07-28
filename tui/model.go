@@ -709,9 +709,6 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.chatview.MarkPendingToolsInterrupted()
 		return m, nil
 	}
-	if m.agent != nil {
-		m.agent.StoreSessionMemory()
-	}
 	return m, tea.Quit
 }
 

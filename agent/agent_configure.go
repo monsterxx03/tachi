@@ -15,7 +15,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/session"
 )
 
 // deferredToolProviderAdapter adapts mcp.DeferredPool to the
@@ -74,9 +73,9 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 
 	// --- Reminder collector (after memory + skills, before MCP) ---
 	a.buildReminderCollectorFrom(SystemReminderConfig{
-		GitReminder:               sysCfg.SystemReminder.GitReminder,
-		MemoryRecallLimit:         sysCfg.Memory.RecallLimit,
-		MemoryRecallTimeout:       sysCfg.Memory.Timeout,
+		GitReminder:         sysCfg.SystemReminder.GitReminder,
+		MemoryRecallLimit:   sysCfg.Memory.RecallLimit,
+		MemoryRecallTimeout: sysCfg.Memory.Timeout,
 	})
 
 	// --- built-in tools + web search ---
@@ -395,77 +394,6 @@ func (a *AIAgent) MCPReady() <-chan struct{} {
 		return closed
 	}
 	return a.mcpManager.InitDone()
-}
-
-// ResumeSession loads the most recent session from disk, converts it to LLM
-// message format, prepends the given system prompt (if non-empty), and attaches
-// the session manager to the agent for ongoing session recording.
-// Returns the loaded session metadata alongside the messages so callers can
-// rebuild the provider to match the session's original provider/model.
-func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Message, []session.Message, *session.Session, error) {
-	sm, err := session.NewManager(a.logger)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("session manager: %w", err)
-	}
-
-	sessions, err := sm.List()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("list sessions: %w", err)
-	}
-	if len(sessions) == 0 {
-		return nil, nil, nil, fmt.Errorf("no sessions to resume")
-	}
-
-	latest := sessions[0]
-	if _, err := sm.Load(latest.ID); err != nil {
-		return nil, nil, nil, fmt.Errorf("load session %s: %w", latest.ID, err)
-	}
-
-	// Restore working directory if recorded
-	if latest.WorkingDir != "" {
-		if err := os.Chdir(latest.WorkingDir); err != nil {
-			a.logger.Error(context.Background(), "Agent: failed to chdir", err, "dir", latest.WorkingDir)
-		}
-	}
-
-	sessionMsgs, err := sm.LoadMessages()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("load messages: %w", err)
-	}
-
-	// Restore the token estimate from the most recent assistant message with
-	// usage so the resumed session shows the correct context fraction.
-	// Prefer the local estimate (EstimatedInputTokens) to match what was shown
-	// during the active conversation; fall back to API-returned InputTokens.
-	for i := len(sessionMsgs) - 1; i >= 0; i-- {
-		if sessionMsgs[i].Type == session.MessageTypeAssistant && sessionMsgs[i].Usage != nil {
-			restored := sessionMsgs[i].Usage.EstimatedInputTokens
-			if restored <= 0 {
-				restored = sessionMsgs[i].Usage.InputTokens
-			}
-			a.turn.setTokens(restored)
-			a.logger.Info(context.Background(), "Agent: restored token estimate from session message", "lastInputTokens", restored)
-			break
-		}
-	}
-
-	llmMsgs, err := ConvertSessionToLLMMessages(sessionMsgs, providerType)
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("convert session messages: %w", err)
-	}
-
-	if systemPrompt != "" {
-		llmMsgs = append([]llm.Message{{Role: "system", Content: systemPrompt}}, llmMsgs...)
-	}
-
-	a.sessionManager = sm
-	// Update logger with session ID for debug log tracking
-	if cur := a.sessionManager.Current(); cur != nil {
-		a.logger = a.logger.With("session_id", cur.ID)
-	}
-	// Notify memory backend that the resumed session is active
-	a.StartSessionMemory()
-	return llmMsgs, sessionMsgs, latest, nil
 }
 
 // backgroundTaskProvider adapts *tools.ProcessManager to

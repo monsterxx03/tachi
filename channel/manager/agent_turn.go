@@ -406,8 +406,6 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	sm, diskHistory := m.prepareThreadSession(msg.ThreadID, resolved)
 	if sm != nil {
 		aiAgent.SetSessionManager(sm)
-		// Notify memory backend when a new session was created
-		aiAgent.StartSessionMemory()
 
 		// Restore persisted working directory from session metadata.
 		// When a thread's session has a WorkingDir (set by a previous /cd
