@@ -64,10 +64,6 @@ func TestCollector_Empty(t *testing.T) {
 	c := NewCollector()
 	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: false,
-		IterationsLeft: 10,
-		MaxIterations:  10,
-		InputTokens:    1000,
-		ContextWindow:  128000,
 	})
 	if result != "" {
 		t.Errorf("expected empty, got: %s", result)

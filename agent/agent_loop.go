@@ -434,6 +434,20 @@ func historyHasReminder(history []llm.Message) bool {
 	return false
 }
 
+// loopState holds the mutable state owned by a single runAgentLoop
+// goroutine. Unlike turnState (shared across goroutines, mutex-guarded),
+// loopState is only accessed from the loop goroutine and needs no sync.
+type loopState struct {
+	messages      []llm.Message    // in-flight message slice (history + current turn)
+	apiCalls      int              // number of LLM API calls made so far
+	lengthRetries int              // consecutive length-continuation retries
+	budget        *IterationBudget // iteration budget for this loop
+}
+
+func (ls *loopState) append(msgs ...llm.Message) {
+	ls.messages = append(ls.messages, msgs...)
+}
+
 // runAgentLoop is the shared event loop used by both RunConversationStream
 // and RunOneOffStream. It handles iteration budgets, streaming, tool
 // execution, length continuation, and system-reminder injection.
@@ -460,11 +474,15 @@ func (a *AIAgent) runAgentLoop(
 	ctx = logger.WithTraceID(ctx, traceID)
 	ctx = logger.WithLogger(ctx, a.logger)
 
+	ls := &loopState{
+		messages: messages,
+		budget:   NewIterationBudget(a.maxIterations),
+	}
+
 	// Capture the final message slice (including all assistant/tool messages
 	// appended during the loop) so callers can read it via GetLastMessages()
-	// after the event channel is drained. The closure captures messages by
-	// reference, so it sees the value at the time runAgentLoop returns.
-	defer func() { a.turn.setMessages(messages) }()
+	// after the event channel is drained.
+	defer func() { a.turn.setMessages(ls.messages) }()
 
 	// Inject the current session ID so it can be forwarded as the
 	// x-tachi-session-id header on outgoing LLM API requests.
@@ -477,19 +495,14 @@ func (a *AIAgent) runAgentLoop(
 		ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
 	}
 
-	apiCallCount := 0
-	lengthContinueRetries := 0
-
-	a.iterationBudget = NewIterationBudget(a.maxIterations)
-
 	for {
-		if !a.iterationBudget.consume() {
+		if !ls.budget.consume() {
 			a.dispatchEvent(ctx, "error", hooks.Payload{
 				ErrorMessage: "iteration budget exhausted",
 			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: fmt.Errorf("iteration budget exhausted")},
+				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: fmt.Errorf("iteration budget exhausted")},
 			}
 			return
 		}
@@ -501,8 +514,8 @@ func (a *AIAgent) runAgentLoop(
 			})
 			ch <- AgentEvent{
 				Type:     AgentEventError,
-				Messages: messages,
-				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: ctx.Err()},
+				Messages: ls.messages,
+				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: ctx.Err()},
 			}
 			return
 		default:
@@ -515,7 +528,7 @@ func (a *AIAgent) runAgentLoop(
 		// next iteration continues normally with the new context.
 		if a.shouldAutoCompact() {
 			ch <- AgentEvent{Type: AgentEventAutoCompactStart}
-			summary, newHistory, err := a.doCompact(ctx, messages)
+			summary, newHistory, err := a.doCompact(ctx, ls.messages)
 			if err != nil {
 				a.logger.Error(ctx, "Auto compact failed", err)
 				ch <- AgentEvent{Type: AgentEventAutoCompactDone, Result: &RunResult{Error: err}}
@@ -523,8 +536,8 @@ func (a *AIAgent) runAgentLoop(
 				// history. The next iteration will try again — eventual
 				// success if the LLM responds before hitting the limit.
 			} else {
-				oldMsgCount := len(messages)
-				messages = newHistory
+				oldMsgCount := len(ls.messages)
+				ls.messages = newHistory
 				a.setCompactCooldown()
 				// Compact swapped the current session — refresh session-scoped
 				// values captured before the loop so subsequent LLM calls and
@@ -543,7 +556,7 @@ func (a *AIAgent) runAgentLoop(
 			continue // next iteration with new (or original) history
 		}
 
-		apiCallCount++
+		ls.apiCalls++
 
 		// Rebuild tool schemas each iteration. When ToolSearch is active,
 		// newly discovered MCP tools are added to the list, enabling the LLM
@@ -552,19 +565,19 @@ func (a *AIAgent) runAgentLoop(
 		// this to the run's allowed subset.
 		llmTools := buildLLMTools(a.filterActiveSchemas(a.resolve(ctx).schemas()))
 
-		streamCh, err := provider.CreateChatStream(ctx, messages, llmTools, opts)
+		streamCh, err := provider.CreateChatStream(ctx, ls.messages, llmTools, opts)
 		if err != nil {
 			a.dispatchEvent(ctx, "error", hooks.Payload{
 				ErrorMessage: fmt.Sprintf("API call failed: %v", err),
 			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "error", IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: fmt.Errorf("API call failed: %w", err)},
+				Result: &RunResult{ExitReason: "error", IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: fmt.Errorf("API call failed: %w", err)},
 			}
 			return
 		}
 
-		acc, err := consumeStream(streamCh, ch, apiCallCount)
+		acc, err := consumeStream(streamCh, ch, ls.apiCalls)
 		if err != nil {
 			exitReason := "error"
 			if ctx.Err() != nil {
@@ -575,109 +588,157 @@ func (a *AIAgent) runAgentLoop(
 			})
 			ch <- AgentEvent{
 				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: exitReason, IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), Error: err},
+				Result: &RunResult{ExitReason: exitReason, IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: err},
 			}
 			return
 		}
 
-		if !a.handleFinishReason(ctx, acc, &messages, ch, apiCallCount, &lengthContinueRetries) {
+		if a.handleFinishReason(ctx, acc, ls, ch) == outcomeStop {
 			return
 		}
 	}
 }
 
-// handleFinishReason processes the LLM's finish reason and updates messages accordingly.
-// Returns true if the agent loop should continue, false if it should stop.
+// loopOutcome tells runAgentLoop whether to continue iterating or stop.
+// Handlers emit their own terminal events before returning outcomeStop, so
+// the loop needs no error-vs-success distinction.
+type loopOutcome int
+
+const (
+	outcomeContinue loopOutcome = iota // proceed to the next iteration
+	outcomeStop                        // exit the loop (terminal event already emitted)
+)
+
+// handleFinishReason processes the LLM's finish reason and updates loop state
+// accordingly.
 func (a *AIAgent) handleFinishReason(
 	ctx context.Context,
 	acc *streamAccumulator,
-	messages *[]llm.Message,
+	ls *loopState,
 	ch chan<- AgentEvent,
-	apiCallCount int,
-	lengthRetries *int,
-) bool {
+) loopOutcome {
 	switch acc.finishReason {
 	case "tool_calls", "tool_use":
-		return a.handleToolCallFinish(ctx, acc, messages, ch, apiCallCount, lengthRetries)
+		return a.handleToolCallFinish(ctx, acc, ls, ch)
 	case "max_tokens", "length":
-		return a.handleLengthFinish(ctx, acc, messages, ch, apiCallCount, lengthRetries)
+		return a.handleLengthFinish(ctx, acc, ls, ch)
 	default:
-		return a.handleStopFinish(ctx, acc, messages, ch, apiCallCount, lengthRetries)
+		return a.handleStopFinish(ctx, acc, ls, ch)
 	}
 }
 
-// handleToolCallFinish processes a tool-call response: records the assistant
-// turn, executes tools, handles steer input, and injects loop reminders.
+// handleToolCallFinish orchestrates a tool-call response through its phases:
+// record the turn, execute tools, sync LSP, apply steer input, inject loop
+// reminders. Each phase is a named method below.
 func (a *AIAgent) handleToolCallFinish(
 	ctx context.Context,
 	acc *streamAccumulator,
-	messages *[]llm.Message,
+	ls *loopState,
 	ch chan<- AgentEvent,
-	_ int,
-	lengthRetries *int,
-) bool {
+) loopOutcome {
+	a.recordToolCallTurn(acc, ls, ch)
+
+	if outcome := a.executeAndAppendTools(ctx, acc, ls, ch); outcome == outcomeStop {
+		return outcomeStop
+	}
+
+	a.syncLSPAfterTools(ctx, acc)
+
+	if outcome := a.applySteer(ctx, ls, ch); outcome == outcomeStop {
+		return outcomeStop
+	}
+
+	a.injectLoopReminders(ctx, acc, ls)
+	return outcomeContinue
+}
+
+// recordToolCallTurn persists the assistant turn (text, usage, thinking) and
+// appends the assistant message carrying the tool calls to the loop state.
+// Also emits the incremental usage event so the TUI can update totalUsage
+// and the status bar in real time.
+func (a *AIAgent) recordToolCallTurn(acc *streamAccumulator, ls *loopState, ch chan<- AgentEvent) {
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
-	*messages = append(*messages, acc.assistantMessage())
+	ls.append(acc.assistantMessage())
 
-	// Emit incremental usage update after each tool-call API round
-	// so the TUI can update totalUsage and status bar in real time.
 	if acc.usage != nil {
 		ch <- AgentEvent{Type: AgentEventUsage, Usage: acc.usage}
 	}
+}
 
+// executeAndAppendTools runs the requested tool calls and appends their
+// result messages. Returns outcomeStop when execution is cancelled — the
+// error event is emitted before returning.
+func (a *AIAgent) executeAndAppendTools(
+	ctx context.Context,
+	acc *streamAccumulator,
+	ls *loopState,
+	ch chan<- AgentEvent,
+) loopOutcome {
 	toolMsgs, err := a.executeToolCalls(ctx, acc.toolCalls, ch)
 	if err != nil {
 		ch <- AgentEvent{
 			Type:     AgentEventError,
-			Messages: *messages,
+			Messages: ls.messages,
 			Result:   &RunResult{ExitReason: "cancelled", Duration: a.turn.elapsed(), Error: err},
 		}
-		return false
+		return outcomeStop
 	}
 	a.logger.Info(ctx, "Agent: executeToolCalls returned", "toolMsgCount", len(toolMsgs), "toolCallCount", len(acc.toolCalls))
-	*messages = append(*messages, toolMsgs...)
-	*lengthRetries = 0
+	ls.append(toolMsgs...)
+	ls.lengthRetries = 0
+	return outcomeContinue
+}
 
-	// --- LSP File Sync: sync modified files to LSP servers ---
-	if a.lspManager != nil {
-		for _, tc := range acc.toolCalls {
-			if fp := tools.ExtractFilePath(tc.Function.Name, tc.Function.Arguments); fp != "" {
-				if syncErr := a.lspManager.SyncFile(ctx, fp); syncErr != nil {
-					a.logger.Error(ctx, "LSP: file sync error", syncErr, "file", fp)
-				}
+// syncLSPAfterTools syncs files touched by tool calls to LSP servers and
+// closes files that no longer exist on disk (deleted/renamed/moved by Bash),
+// keeping the LSP file index consistent with the actual filesystem.
+func (a *AIAgent) syncLSPAfterTools(ctx context.Context, acc *streamAccumulator) {
+	if a.lspManager == nil {
+		return
+	}
+	for _, tc := range acc.toolCalls {
+		if fp := tools.ExtractFilePath(tc.Function.Name, tc.Function.Arguments); fp != "" {
+			if syncErr := a.lspManager.SyncFile(ctx, fp); syncErr != nil {
+				a.logger.Error(ctx, "LSP: file sync error", syncErr, "file", fp)
 			}
 		}
-		// Close any open files that no longer exist on disk (deleted/renamed/moved
-		// by tool operations like Bash rm/mv). This keeps the LSP server's file
-		// index consistent with the actual filesystem.
-		if hasBashCall(acc.toolCalls) {
-			a.lspManager.CloseMissingFiles(ctx)
-		}
-		// Wait briefly for async diagnostics to arrive after file sync.
-		a.lspManager.WaitForDiagnostics(ctx, 2*time.Second)
 	}
-
-	// --- Steer Point: inject pending user input after tool results ---
-	if a.steerRespCh != nil {
-		ch <- AgentEvent{Type: AgentEventSteerCheck}
-		select {
-		case steerText := <-a.steerRespCh:
-			if steerText != "" {
-				*messages = append(*messages, llm.Message{Role: llm.RoleSteer, Content: steerText})
-				a.logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", truncateForLog(steerText, 80))
-				a.recordSession(&session.Message{
-					Type:    session.MessageTypeUser,
-					Content: steerText,
-				})
-			}
-		case <-ctx.Done():
-			return false
-		}
+	if hasBashCall(acc.toolCalls) {
+		a.lspManager.CloseMissingFiles(ctx)
 	}
+	// Wait briefly for async diagnostics to arrive after file sync.
+	a.lspManager.WaitForDiagnostics(ctx, 2*time.Second)
+}
 
-	// --- Loop Reminders: inject iteration/token warnings ---
-	a.EstimateAndUpdateTokens(*messages)
+// applySteer injects pending user input after tool results. Returns
+// outcomeStop when the context is cancelled while waiting for the TUI's
+// steer response.
+func (a *AIAgent) applySteer(ctx context.Context, ls *loopState, ch chan<- AgentEvent) loopOutcome {
+	if a.steerRespCh == nil {
+		return outcomeContinue
+	}
+	ch <- AgentEvent{Type: AgentEventSteerCheck}
+	select {
+	case steerText := <-a.steerRespCh:
+		if steerText != "" {
+			ls.append(llm.Message{Role: llm.RoleSteer, Content: steerText})
+			a.logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", truncateForLog(steerText, 80))
+			a.recordSession(&session.Message{
+				Type:    session.MessageTypeUser,
+				Content: steerText,
+			})
+		}
+		return outcomeContinue
+	case <-ctx.Done():
+		return outcomeStop
+	}
+}
+
+// injectLoopReminders refreshes the token estimate and appends any active
+// system reminders as a user message, so the next LLM call sees them.
+func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulator, ls *loopState) {
+	a.EstimateAndUpdateTokens(ls.messages)
 	rctx := a.buildReminderContext(false, true)
 	// Populate tool names so reminders (e.g. LSPDiagnostics) can filter by tool.
 	rctx.ToolNames = make([]string, 0, len(acc.toolCalls))
@@ -685,15 +746,13 @@ func (a *AIAgent) handleToolCallFinish(
 		rctx.ToolNames = append(rctx.ToolNames, tc.Function.Name)
 	}
 	if block := a.reminderCollector.Collect(ctx, rctx); block != "" {
-		*messages = append(*messages, llm.Message{Role: "user", Content: block})
+		ls.append(llm.Message{Role: "user", Content: block})
 		a.logger.Info(ctx, "Agent: loop reminder injected", "block", truncateForLog(block, 200))
 		a.recordSession(&session.Message{
 			Type:    session.MessageTypeReminder,
 			Content: block,
 		})
 	}
-
-	return true
 }
 
 const maxLengthContinueRetries = 3
@@ -704,13 +763,11 @@ const maxLengthContinueRetries = 3
 func (a *AIAgent) handleLengthFinish(
 	ctx context.Context,
 	acc *streamAccumulator,
-	messages *[]llm.Message,
+	ls *loopState,
 	ch chan<- AgentEvent,
-	apiCallCount int,
-	lengthRetries *int,
-) bool {
-	*lengthRetries++
-	a.logger.Info(context.Background(), "Agent: continuation", "text", acc.text.String(), "finishReason", acc.finishReason, "retry", *lengthRetries, "maxRetries", maxLengthContinueRetries)
+) loopOutcome {
+	ls.lengthRetries++
+	a.logger.Info(context.Background(), "Agent: continuation", "text", acc.text.String(), "finishReason", acc.finishReason, "retry", ls.lengthRetries, "maxRetries", maxLengthContinueRetries)
 
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
@@ -724,9 +781,9 @@ func (a *AIAgent) handleLengthFinish(
 	if len(msg.ToolCalls) > 0 {
 		msg.ToolCalls = nil
 	}
-	*messages = append(*messages, msg)
+	ls.append(msg)
 
-	if *lengthRetries >= maxLengthContinueRetries {
+	if ls.lengthRetries >= maxLengthContinueRetries {
 		a.logger.Info(context.Background(), "Agent: length continuation exhausted", "maxRetries", maxLengthContinueRetries)
 		// Return the partial output as a normal turn completion instead
 		// of an error — the user already saw the text streaming, and
@@ -734,11 +791,11 @@ func (a *AIAgent) handleLengthFinish(
 		// what we have with a note that it was truncated.
 		ch <- AgentEvent{
 			Type:     AgentEventTurnComplete,
-			Messages: *messages,
+			Messages: ls.messages,
 			Usage:    acc.usage,
 			Result: &RunResult{
 				Response:       acc.text.String(),
-				IterationsUsed: apiCallCount,
+				IterationsUsed: ls.apiCalls,
 				Duration:       a.turn.elapsed(),
 				ExitReason:     "length_exhausted",
 				Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
@@ -748,17 +805,17 @@ func (a *AIAgent) handleLengthFinish(
 		}
 
 		// Store turn-level memory after a truncated response
-		a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
+		a.storeTurnMemory(collectTurnMessages(&ls.messages, acc.text.String()))
 
 		// Fire turn_complete hook with error info so external integrations
 		// know the turn ended (even if truncated). Without this, the hook
 		// system may be stuck in "working" state.
 		a.dispatchEvent(ctx, "turn_complete", hooks.Payload{
-			TurnCount:    apiCallCount,
+			TurnCount:    ls.apiCalls,
 			ErrorMessage: fmt.Sprintf("response truncated after %d continuation attempts", maxLengthContinueRetries),
 		})
 
-		return false
+		return outcomeStop
 	}
 
 	// Record continuation prompt (original, unwrapped)
@@ -792,15 +849,15 @@ func (a *AIAgent) handleLengthFinish(
 		wrappedContinuation = reminderBlock + continuationText
 	}
 
-	*messages = append(*messages, llm.Message{Role: "user", Content: wrappedContinuation})
+	ls.append(llm.Message{Role: "user", Content: wrappedContinuation})
 
 	// Fire turn_truncated hook to indicate the turn is continuing
 	a.dispatchEvent(ctx, "turn_truncated", hooks.Payload{
-		TurnCount:   *lengthRetries,
+		TurnCount:   ls.lengthRetries,
 		UserMessage: continuationText,
 	})
 
-	return true
+	return outcomeContinue
 }
 
 // handleStopFinish processes a normal stop response: records the assistant
@@ -808,32 +865,30 @@ func (a *AIAgent) handleLengthFinish(
 func (a *AIAgent) handleStopFinish(
 	ctx context.Context,
 	acc *streamAccumulator,
-	messages *[]llm.Message,
+	ls *loopState,
 	ch chan<- AgentEvent,
-	apiCallCount int,
-	lengthRetries *int,
-) bool {
-	*lengthRetries = 0
+) loopOutcome {
+	ls.lengthRetries = 0
 	msg := acc.assistantMessage()
 	msg.ToolCalls = nil
-	*messages = append(*messages, msg)
+	ls.append(msg)
 
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
 	ch <- AgentEvent{
-		Type: AgentEventTurnComplete, Messages: *messages, Usage: acc.usage,
-		Result: &RunResult{Response: acc.text.String(), IterationsUsed: apiCallCount, Duration: a.turn.elapsed(), ExitReason: "stop", Usage: acc.usage, TraceID: a.turn.trace()},
+		Type: AgentEventTurnComplete, Messages: ls.messages, Usage: acc.usage,
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), ExitReason: "stop", Usage: acc.usage, TraceID: a.turn.trace()},
 	}
 
 	// Fire turn_complete hook
 	a.dispatchEvent(ctx, "turn_complete", hooks.Payload{
-		TurnCount: apiCallCount,
+		TurnCount: ls.apiCalls,
 	})
 
 	// Store turn-level memory after a complete response
-	a.storeTurnMemory(collectTurnMessages(messages, acc.text.String()))
+	a.storeTurnMemory(collectTurnMessages(&ls.messages, acc.text.String()))
 
-	return false
+	return outcomeStop
 }
 
 // filterActiveSchemas filters tool schemas for the LLM API call.
@@ -912,16 +967,8 @@ func buildLLMTools(toolSchemas []tools.Schema) []llm.Tool {
 // buildReminderContext constructs the systemreminder.Context used when
 // generating reminders for a user message (or loop injection).
 func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) systemreminder.Context {
-	iterLeft := 0
-	if a.iterationBudget != nil {
-		iterLeft = a.iterationBudget.Remaining
-	}
 	return systemreminder.Context{
 		IsFirstMessage:  isFirstMessage,
-		IterationsLeft:  iterLeft,
-		MaxIterations:   a.maxIterations,
-		InputTokens:     a.turn.tokens(),
-		ContextWindow:   a.contextWindow,
 		Now:             time.Now(),
 		LastMessageDate: a.turn.messageDate(),
 		IsToolResult:    isToolResult,

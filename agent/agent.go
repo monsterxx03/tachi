@@ -88,7 +88,6 @@ type AIAgent struct {
 	provider          llm.Provider
 	maxIterations     int
 	toolRegistry      *tools.Registry
-	iterationBudget   *IterationBudget
 	confirmRespCh     chan ConfirmResponse
 	askUserRespCh     chan tools.AskUserResult
 	steerRespCh       chan string // TUI → agent: pending input to inject at steer point

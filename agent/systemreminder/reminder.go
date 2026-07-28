@@ -21,20 +21,6 @@ type Context struct {
 	// brand-new conversation (no prior messages except the system prompt).
 	IsFirstMessage bool
 
-	// IterationsLeft is the number of agent-loop iterations remaining.
-	// Zero means the budget is exactly exhausted.
-	IterationsLeft int
-
-	// MaxIterations is the configured iteration budget ceiling.
-	MaxIterations int
-
-	// InputTokens is the cumulative input token count from the most recent
-	// API response (includes all prior messages in the context window).
-	InputTokens int64
-
-	// ContextWindow is the model's maximum context window size.
-	ContextWindow int64
-
 	// Now is the current time, provided by the caller so tests can
 	// inject a deterministic clock.
 	Now time.Time
