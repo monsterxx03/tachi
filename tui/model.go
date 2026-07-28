@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -407,6 +408,29 @@ func (m *Model) handleMCPReady() {
 	if m.logger != nil {
 		m.logger.Info(context.Background(), "TUI: MCP background init completed")
 	}
+
+	// Read MCP connection errors and display in status bar.
+	if m.agent != nil {
+		if errs := m.agent.MCPInitErrors(); len(errs) > 0 {
+			msg := formatMCPInitErrors(errs)
+			m.statusbar.SetMCPError(msg)
+		}
+	}
+}
+
+// formatMCPInitErrors formats MCP connection errors into a compact string
+// suitable for the status bar. Single errors show a short summary; multiple
+// errors show a count with the first server name.
+func formatMCPInitErrors(errs []error) string {
+	if len(errs) == 1 {
+		msg := errs[0].Error()
+		// Truncate to keep status bar compact
+		if len(msg) > 40 {
+			msg = msg[:37] + "..."
+		}
+		return msg
+	}
+	return fmt.Sprintf("%d servers failed", len(errs))
 }
 
 // refreshSkillCompletions queries the agent's skill store and pushes skill

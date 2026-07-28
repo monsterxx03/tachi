@@ -2,8 +2,6 @@ package agent
 
 import (
 	"context"
-	"fmt"
-	"os"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
@@ -337,8 +335,8 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 	autoLoad, all, errs := a.mcpManager.PopulateFromConnect(ctx, cfg)
 	for _, err := range errs {
 		a.logger.Error(ctx, "MCP: load error", err)
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
 	}
+	a.SetMCPInitErrors(errs)
 	if len(all) == 0 {
 		a.logger.Info(ctx, "MCP: no tools discovered from any server")
 		return

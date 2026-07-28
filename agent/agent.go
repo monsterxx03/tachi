@@ -162,6 +162,11 @@ type AIAgent struct {
 	// across many cached AIAgent instances.
 	sharedMCP bool
 
+	// mcpInitErrors holds per-server MCP connection errors from async init.
+	// Set by connectMCPBackground; read by TUI after MCPReadyMsg to display
+	// error status in the status bar.
+	mcpInitErrors []error
+
 	// processManager manages background processes started by BashTool.
 	// Tied to the agent lifecycle — Close() kills all tracked processes.
 	processManager *tools.ProcessManager
@@ -663,6 +668,18 @@ func (a *AIAgent) DeferredPool() *mcp.DeferredPool {
 		return nil
 	}
 	return a.mcpManager.Pool()
+}
+
+// SetMCPInitErrors stores per-server MCP connection errors from async init.
+// Called by connectMCPBackground; read by the TUI after MCPReadyMsg.
+func (a *AIAgent) SetMCPInitErrors(errs []error) {
+	a.mcpInitErrors = errs
+}
+
+// MCPInitErrors returns per-server MCP connection errors, or nil if all
+// servers connected successfully.
+func (a *AIAgent) MCPInitErrors() []error {
+	return a.mcpInitErrors
 }
 
 // discoveredSet returns the MCP discovered set owned by the agent's

@@ -161,6 +161,10 @@ var (
 	mcpReadyStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#A6DA95"))
 
+	mcpErrorStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ED8796")).
+			Italic(true)
+
 	compactDoneStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#8BD5CA")).
 				Italic(true).

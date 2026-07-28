@@ -27,6 +27,7 @@ type StatusBar struct {
 	pendingCount  int
 	mcpReady      bool   // true when MCP async init completes
 	mcpEnabled    bool   // true when MCP servers are configured
+	mcpError      string // non-empty when MCP async init had errors
 	compacting    bool   // true when auto-compaction is in progress
 	modeBadge     string // current mode badge text (e.g. "[auto]")
 }
@@ -53,6 +54,7 @@ func (s *StatusBar) ProviderInfo() string            { return s.providerInfo }
 func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
 func (s *StatusBar) SetMCPReady(v bool)    { s.mcpReady = v }
 func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
+func (s *StatusBar) SetMCPError(v string)  { s.mcpError = v }
 func (s *StatusBar) SetCompacting(v bool)  { s.compacting = v }
 func (s *StatusBar) SetMode(mode string)   { s.modeBadge = modeBadgeFor(mode) }
 
@@ -103,6 +105,8 @@ func (s StatusBar) View() string {
 	}
 	if s.mcpEnabled && !s.mcpReady {
 		left += " | " + mcpConnectingStyle.Render("MCP: connecting...")
+	} else if s.mcpEnabled && s.mcpReady && s.mcpError != "" {
+		left += " | " + mcpErrorStyle.Render("MCP: "+s.mcpError)
 	} else if s.mcpEnabled && s.mcpReady {
 		left += " | " + mcpReadyStyle.Render("MCP: ready")
 	}
