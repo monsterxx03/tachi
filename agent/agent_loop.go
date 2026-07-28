@@ -498,10 +498,6 @@ func (a *AIAgent) runAgentLoop(
 	// x-tachi-session-id header on outgoing LLM API requests.
 	if a.sessionManager != nil && a.sessionManager.Current() != nil {
 		opts.SessionID = a.sessionManager.Current().ID
-	}
-	// Also inject session ID into context for tool execution (so SavePlan
-	// and other tools can associate their output with the current session).
-	if a.sessionManager != nil && a.sessionManager.Current() != nil {
 		ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
 	}
 
@@ -556,7 +552,7 @@ func (a *AIAgent) runAgentLoop(
 					opts.SessionID = a.sessionManager.Current().ID
 					ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
 				}
-				a.logger.Info(ctx, "Auto compact completed", "msgCount", len(messages))
+				a.logger.Info(ctx, "Auto compact completed", "msgCount", len(ls.messages))
 				ch <- AgentEvent{
 					Type:           AgentEventAutoCompactDone,
 					CompactSummary: summary,
