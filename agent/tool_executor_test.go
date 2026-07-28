@@ -282,7 +282,7 @@ func TestAgentLoop_ParallelToolCalls(t *testing.T) {
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, "All done", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 
 	// Should have received 3 ToolCallStart, 3 ToolCallArgs, 3 ToolResult events
 	var starts, args, results int
@@ -327,7 +327,7 @@ func TestAgentLoop_MixedToolGroup(t *testing.T) {
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, "Done", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 }
 
 func TestAgentLoop_ParallelToolError(t *testing.T) {

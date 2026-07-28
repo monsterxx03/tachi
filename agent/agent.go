@@ -863,7 +863,7 @@ func (a *AIAgent) dispatchEvent(ctx context.Context, event string, opts hooks.Pa
 func (a *AIAgent) Close() {
 	// Fire session_end hook before tearing down, so integrations (e.g. Herdr)
 	// can mark the agent as idle before the process exits.
-	a.dispatchEvent(context.Background(), "session_end", hooks.Payload{})
+	a.dispatchEvent(context.Background(), hooks.EventSessionEnd, hooks.Payload{})
 
 	if a.processManager != nil {
 		a.processManager.KillAll()

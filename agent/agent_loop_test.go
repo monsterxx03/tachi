@@ -186,7 +186,7 @@ func TestAgentLoop_SimpleTextResponse(t *testing.T) {
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, "Hello World", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 	assert.Equal(t, 1, result.IterationsUsed)
 	assert.Nil(t, result.Error)
 	assert.NotEmpty(t, events)
@@ -210,7 +210,7 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 	result, events := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, "Command executed successfully", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 
 	// Verify tool result event was emitted
 	var toolResults []AgentEvent
@@ -241,7 +241,7 @@ func TestAgentLoop_MultipleTurns(t *testing.T) {
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
 	assert.Equal(t, "All done", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 }
 
 // ---- Tests: IterationBudget ----
@@ -299,7 +299,7 @@ func TestAgentLoop_IterationBudgetExhausted(t *testing.T) {
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
-	assert.Equal(t, "budget_exhausted", result.ExitReason)
+	assert.Equal(t, ExitReasonBudgetExhausted, result.ExitReason)
 	assert.Contains(t, result.Error.Error(), "iteration budget exhausted")
 }
 
@@ -319,7 +319,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
-	assert.Equal(t, "interrupted", result.ExitReason)
+	assert.Equal(t, ExitReasonInterrupted, result.ExitReason)
 }
 
 func TestAgentLoop_APICallFailed(t *testing.T) {
@@ -332,7 +332,7 @@ func TestAgentLoop_APICallFailed(t *testing.T) {
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
-	assert.Equal(t, "error", result.ExitReason)
+	assert.Equal(t, ExitReasonError, result.ExitReason)
 	assert.Contains(t, result.Error.Error(), "API call failed")
 	assert.Contains(t, result.Error.Error(), "connection refused")
 }
@@ -422,7 +422,7 @@ func TestRunConversation(t *testing.T) {
 
 	require.NotNil(t, result)
 	assert.Equal(t, "Response", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 }
 
 func TestRunConversation_AutoConfirmsTool(t *testing.T) {
@@ -527,7 +527,7 @@ func TestAgentLoop_MaxTokensContinueAndStop(t *testing.T) {
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
-	assert.Equal(t, "length_exhausted", result.ExitReason)
+	assert.Equal(t, ExitReasonLengthExhausted, result.ExitReason)
 	assert.Contains(t, result.Error.Error(), "truncated after 3 continuation")
 	// Partial response should be preserved — the last iteration's text
 	// should be delivered to the caller rather than lost.
@@ -552,7 +552,7 @@ func TestAgentLoop_MaxTokensThenStop(t *testing.T) {
 
 	result, _ := drainAgentEvents(ch)
 	require.NotNil(t, result)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 	// The final text should be from the stop turn
 	assert.Equal(t, "two", result.Response)
 }
@@ -673,7 +673,7 @@ func TestHandleLengthFinish_Exhausted(t *testing.T) {
 		}
 	}
 	require.NotNil(t, result)
-	assert.Equal(t, "length_exhausted", result.ExitReason)
+	assert.Equal(t, ExitReasonLengthExhausted, result.ExitReason)
 	assert.Equal(t, "final chunk", result.Response)
 }
 
@@ -732,7 +732,7 @@ func TestAgentLoop_ConfirmationToolDenied(t *testing.T) {
 		}
 	}
 	require.NotNil(t, result)
-	assert.Equal(t, "cancelled", result.ExitReason)
+	assert.Equal(t, ExitReasonCancelled, result.ExitReason)
 	assert.ErrorIs(t, result.Error, errCancelled)
 }
 
@@ -800,7 +800,7 @@ func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {
 	}
 	require.NotNil(t, result)
 	assert.Equal(t, "Got your answer", result.Response)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 }
 
 // ---- Tests: EditFile auto-approve (tui.auto_approve_edits / session "always") ----

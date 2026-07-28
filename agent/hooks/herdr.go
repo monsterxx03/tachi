@@ -45,9 +45,9 @@ func NewHerdrHandler() *HerdrHandler {
 type herdrAction string
 
 const (
-	actionSession = herdrAction("session")  // → pane.report_agent_session
-	actionState   = herdrAction("state")    // → pane.report_agent
-	actionRelease = herdrAction("release")  // → pane.release_agent
+	actionSession = herdrAction("session") // → pane.report_agent_session
+	actionState   = herdrAction("state")   // → pane.report_agent
+	actionRelease = herdrAction("release") // → pane.release_agent
 )
 
 // eventAction maps a Tachi hook event to a Herdr socket API call.
@@ -59,14 +59,14 @@ type eventAction struct {
 // EventActions maps Tachi events to Herdr actions. Exported so the agent can
 // iterate over them when registering handlers.
 var EventActions = map[string]eventAction{
-	"session_start":      {action: actionSession},
-	"session_end":        {action: actionRelease},
-	"turn_complete":      {action: actionState, state: "idle"},
-	"turn_truncated":     {action: actionState, state: "working"},
-	"tool_call":          {action: actionState, state: "working"},
-	"permission_request": {action: actionState, state: "blocked"},
-	"ask_user_question":  {action: actionState, state: "blocked"},
-	"error":              {action: actionState, state: "idle"},
+	EventSessionStart:      {action: actionSession},
+	EventSessionEnd:        {action: actionRelease},
+	EventTurnComplete:      {action: actionState, state: "idle"},
+	EventTurnTruncated:     {action: actionState, state: "working"},
+	EventToolCall:          {action: actionState, state: "working"},
+	EventPermissionRequest: {action: actionState, state: "blocked"},
+	EventAskUserQuestion:   {action: actionState, state: "blocked"},
+	EventError:             {action: actionState, state: "idle"},
 }
 
 // Handle implements the callback signature for hooks.Dispatcher.
@@ -90,7 +90,7 @@ func (h *HerdrHandler) Handle(ctx context.Context, event string, payload []byte)
 	// session_end is dispatched synchronously so the process doesn't exit
 	// before the Herdr socket write completes. All other events are
 	// fire-and-forget (best-effort, no ordering guarantees).
-	if event == "session_end" {
+	if event == EventSessionEnd {
 		h.send(req)
 	} else {
 		go h.send(req)

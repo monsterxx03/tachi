@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -110,6 +111,27 @@ type AgentEvent struct {
 	SubagentToolDone bool   // For AgentEventSubagentToolCall: true if tool completed
 }
 
+// Exit reasons for RunResult.ExitReason — the terminal-outcome protocol
+// shared with frontends (TUI, ACP, CLI exit codes). Compare against these
+// constants rather than literals.
+const (
+	ExitReasonStop            = "stop"
+	ExitReasonError           = "error"
+	ExitReasonInterrupted     = "interrupted"
+	ExitReasonCancelled       = "cancelled"
+	ExitReasonBudgetExhausted = "budget_exhausted"
+	ExitReasonLengthExhausted = "length_exhausted"
+)
+
+// Finish reasons reported by providers on stream completion, as normalized
+// per provider (OpenAI / Anthropic variants listed together).
+const (
+	finishReasonToolCalls = "tool_calls" // OpenAI
+	finishReasonToolUse   = "tool_use"   // Anthropic
+	finishReasonMaxTokens = "max_tokens" // Anthropic
+	finishReasonLength    = "length"     // OpenAI
+)
+
 var (
 	errCancelled                  = fmt.Errorf("edit cancelled by user")
 	errParallelConfirmUnsupported = fmt.Errorf("tool requiring confirmation cannot run in parallel group")
@@ -186,7 +208,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 		}
 	}
 	if result == nil {
-		result = &RunResult{ExitReason: "error", Error: fmt.Errorf("no result received")}
+		result = &RunResult{ExitReason: ExitReasonError, Error: fmt.Errorf("no result received")}
 	}
 	return result
 }
@@ -257,7 +279,7 @@ func (a *AIAgent) RunOneOffStream(
 		a.recordUserTurn(userMessage, reminderBlock)
 
 		// Fire turn_start hook (paired with turn_complete/turn_truncated in runAgentLoop)
-		a.dispatchEvent(ctx, "turn_start", hooks.Payload{
+		a.dispatchEvent(ctx, hooks.EventTurnStart, hooks.Payload{
 			UserMessage: userMessage,
 		})
 
@@ -303,7 +325,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		a.ensureSessionAndRecordUser(ctx, userMessage, reminderBlock, ch)
 
 		// Fire turn_start hook before entering agent loop
-		a.dispatchEvent(ctx, "turn_start", hooks.Payload{
+		a.dispatchEvent(ctx, hooks.EventTurnStart, hooks.Payload{
 			UserMessage: userMessage,
 		})
 
@@ -428,7 +450,7 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 		a.StartSessionMemory()
 
 		// Fire session_start hook
-		a.dispatchEvent(ctx, "session_start", hooks.Payload{
+		a.dispatchEvent(ctx, hooks.EventSessionStart, hooks.Payload{
 			Provider: providerName,
 		})
 	}
@@ -461,6 +483,11 @@ func (ls *loopState) append(msgs ...llm.Message) {
 // runAgentLoop is the shared event loop used by both RunConversationStream
 // and RunOneOffStream. It handles iteration budgets, streaming, tool
 // execution, length continuation, and system-reminder injection.
+//
+// State lives at three levels: loopState (this goroutine only, no sync),
+// a.turn (per-turn, mutex-guarded, shared with slash-command readers), and
+// long-lived AIAgent fields. Handlers emit their own terminal events; the
+// loop itself only routes control flow via loopOutcome.
 func (a *AIAgent) runAgentLoop(
 	ctx context.Context,
 	provider llm.Provider,
@@ -503,63 +530,28 @@ func (a *AIAgent) runAgentLoop(
 
 	for {
 		if !ls.budget.consume() {
-			a.dispatchEvent(ctx, "error", hooks.Payload{
-				ErrorMessage: "iteration budget exhausted",
-			})
-			ch <- AgentEvent{
-				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "budget_exhausted", IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: fmt.Errorf("iteration budget exhausted")},
-			}
+			err := errors.New("iteration budget exhausted")
+			ch <- a.terminalError(ctx, ls, ExitReasonBudgetExhausted, err, nil)
 			return
 		}
 
 		select {
 		case <-ctx.Done():
-			a.dispatchEvent(ctx, "error", hooks.Payload{
-				ErrorMessage: ctx.Err().Error(),
-			})
-			ch <- AgentEvent{
-				Type:     AgentEventError,
-				Messages: ls.messages,
-				Result:   &RunResult{ExitReason: "interrupted", IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: ctx.Err()},
-			}
+			ch <- a.terminalError(ctx, ls, ExitReasonInterrupted, ctx.Err(), ls.messages)
 			return
 		default:
 		}
 
 		// ── Auto-compact check (before LLM call) ──
-		// Check happens at the loop top so it fires regardless of the
-		// previous iteration's finish reason (tool_calls, stop, length).
-		// Compaction replaces messages with a shorter history, and the
-		// next iteration continues normally with the new context.
-		if a.shouldAutoCompact() {
-			ch <- AgentEvent{Type: AgentEventAutoCompactStart}
-			summary, newHistory, err := a.doCompact(ctx, ls.messages)
-			if err != nil {
-				a.logger.Error(ctx, "Auto compact failed", err)
-				ch <- AgentEvent{Type: AgentEventAutoCompactDone, Result: &RunResult{Error: err}}
-				// Non-fatal: continue with the existing (over-large)
-				// history. The next iteration will try again — eventual
-				// success if the LLM responds before hitting the limit.
-			} else {
-				oldMsgCount := len(ls.messages)
-				ls.messages = newHistory
-				a.setCompactCooldown()
-				// Compact swapped the current session — refresh session-scoped
-				// values captured before the loop so subsequent LLM calls and
-				// tool executions are associated with the NEW session.
-				if a.sessionManager != nil && a.sessionManager.Current() != nil {
-					opts.SessionID = a.sessionManager.Current().ID
-					ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
-				}
-				a.logger.Info(ctx, "Auto compact completed", "msgCount", len(ls.messages))
-				ch <- AgentEvent{
-					Type:           AgentEventAutoCompactDone,
-					CompactSummary: summary,
-					OldMsgCount:    oldMsgCount,
-				}
-			}
-			continue // next iteration with new (or original) history
+		// Checked at the loop top so it fires regardless of the previous
+		// iteration's finish reason (tool_calls, stop, length). When a
+		// compaction was attempted (success or failure), skip straight to
+		// the next iteration with the new (or original) history.
+		if newCtx, compacted := a.maybeAutoCompact(ctx, ls, &opts, ch); compacted {
+			// Compaction swaps the current session; carry the refreshed
+			// context (new session ID) forward into subsequent iterations.
+			ctx = newCtx
+			continue
 		}
 
 		ls.apiCalls++
@@ -573,29 +565,17 @@ func (a *AIAgent) runAgentLoop(
 
 		streamCh, err := provider.CreateChatStream(ctx, ls.messages, llmTools, opts)
 		if err != nil {
-			a.dispatchEvent(ctx, "error", hooks.Payload{
-				ErrorMessage: fmt.Sprintf("API call failed: %v", err),
-			})
-			ch <- AgentEvent{
-				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: "error", IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: fmt.Errorf("API call failed: %w", err)},
-			}
+			ch <- a.terminalError(ctx, ls, ExitReasonError, fmt.Errorf("API call failed: %w", err), nil)
 			return
 		}
 
 		acc, err := consumeStream(streamCh, ch, ls.apiCalls)
 		if err != nil {
-			exitReason := "error"
+			exitReason := ExitReasonError
 			if ctx.Err() != nil {
-				exitReason = "interrupted"
+				exitReason = ExitReasonInterrupted
 			}
-			a.dispatchEvent(ctx, "error", hooks.Payload{
-				ErrorMessage: err.Error(),
-			})
-			ch <- AgentEvent{
-				Type:   AgentEventError,
-				Result: &RunResult{ExitReason: exitReason, IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: err},
-			}
+			ch <- a.terminalError(ctx, ls, exitReason, err, nil)
 			return
 		}
 
@@ -603,6 +583,64 @@ func (a *AIAgent) runAgentLoop(
 			return
 		}
 	}
+}
+
+// terminalError fires the "error" hook and returns the terminal
+// AgentEventError for the loop, unifying the four error-exit sites. msgs is
+// attached to the event only on resume-oriented exits (interrupted), so
+// frontends can continue the partial turn; hard failures pass nil to leave
+// the frontend's history untouched.
+func (a *AIAgent) terminalError(ctx context.Context, ls *loopState, exitReason string, err error, msgs []llm.Message) AgentEvent {
+	a.dispatchEvent(ctx, hooks.EventError, hooks.Payload{
+		ErrorMessage: err.Error(),
+	})
+	return AgentEvent{
+		Type:     AgentEventError,
+		Messages: msgs,
+		Result:   &RunResult{ExitReason: exitReason, IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), Error: err},
+	}
+}
+
+// maybeAutoCompact compacts the in-flight history when the token estimate
+// crosses the configured threshold. It reports whether a compaction was
+// attempted (success or failure) — in both cases the loop should continue
+// to the next iteration rather than proceeding to an LLM call.
+//
+// On success ls.messages is replaced with the shorter history and the
+// returned context carries the NEW session's ID (compaction swaps the
+// current session); on failure the original history and ctx are kept and
+// the next iteration retries — eventual success if the LLM responds before
+// hitting the limit.
+func (a *AIAgent) maybeAutoCompact(ctx context.Context, ls *loopState, opts *llm.ChatOptions, ch chan<- AgentEvent) (context.Context, bool) {
+	if !a.shouldAutoCompact() {
+		return ctx, false
+	}
+
+	ch <- AgentEvent{Type: AgentEventAutoCompactStart}
+	summary, newHistory, err := a.doCompact(ctx, ls.messages)
+	if err != nil {
+		a.logger.Error(ctx, "Auto compact failed", err)
+		ch <- AgentEvent{Type: AgentEventAutoCompactDone, Result: &RunResult{Error: err}}
+		return ctx, true
+	}
+
+	oldMsgCount := len(ls.messages)
+	ls.messages = newHistory
+	a.setCompactCooldown()
+	// Compact swapped the current session — refresh session-scoped values
+	// captured before the loop so subsequent LLM calls and tool executions
+	// are associated with the NEW session.
+	if a.sessionManager != nil && a.sessionManager.Current() != nil {
+		opts.SessionID = a.sessionManager.Current().ID
+		ctx = tools.WithSessionID(ctx, a.sessionManager.Current().ID)
+	}
+	a.logger.Info(ctx, "Auto compact completed", "msgCount", len(ls.messages))
+	ch <- AgentEvent{
+		Type:           AgentEventAutoCompactDone,
+		CompactSummary: summary,
+		OldMsgCount:    oldMsgCount,
+	}
+	return ctx, true
 }
 
 // loopOutcome tells runAgentLoop whether to continue iterating or stop.
@@ -624,9 +662,9 @@ func (a *AIAgent) handleFinishReason(
 	ch chan<- AgentEvent,
 ) loopOutcome {
 	switch acc.finishReason {
-	case "tool_calls", "tool_use":
+	case finishReasonToolCalls, finishReasonToolUse:
 		return a.handleToolCallFinish(ctx, acc, ls, ch)
-	case "max_tokens", "length":
+	case finishReasonMaxTokens, finishReasonLength:
 		return a.handleLengthFinish(ctx, acc, ls, ch)
 	default:
 		return a.handleStopFinish(ctx, acc, ls, ch)
@@ -686,7 +724,7 @@ func (a *AIAgent) executeAndAppendTools(
 		ch <- AgentEvent{
 			Type:     AgentEventError,
 			Messages: ls.messages,
-			Result:   &RunResult{ExitReason: "cancelled", Duration: a.turn.elapsed(), Error: err},
+			Result:   &RunResult{ExitReason: ExitReasonCancelled, Duration: a.turn.elapsed(), Error: err},
 		}
 		return outcomeStop
 	}
@@ -764,8 +802,8 @@ func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulato
 const maxLengthContinueRetries = 3
 
 // handleLengthFinish processes a truncated (length/max_tokens) response:
-// records partial output, appends a continuation prompt, and handles
-// exhaustion after too many retries.
+// it records the partial output, then either stops (retries exhausted) or
+// appends a continuation prompt for the next iteration.
 func (a *AIAgent) handleLengthFinish(
 	ctx context.Context,
 	acc *streamAccumulator,
@@ -773,7 +811,7 @@ func (a *AIAgent) handleLengthFinish(
 	ch chan<- AgentEvent,
 ) loopOutcome {
 	ls.lengthRetries++
-	a.logger.Info(context.Background(), "Agent: continuation", "text", acc.text.String(), "finishReason", acc.finishReason, "retry", ls.lengthRetries, "maxRetries", maxLengthContinueRetries)
+	a.logger.Info(ctx, "Agent: continuation", "text", acc.text.String(), "finishReason", acc.finishReason, "retry", ls.lengthRetries, "maxRetries", maxLengthContinueRetries)
 
 	a.recordAssistantTurn(acc.text.String(), acc.usage, acc.thinkBlocks)
 
@@ -790,49 +828,59 @@ func (a *AIAgent) handleLengthFinish(
 	ls.append(msg)
 
 	if ls.lengthRetries >= maxLengthContinueRetries {
-		a.logger.Info(context.Background(), "Agent: length continuation exhausted", "maxRetries", maxLengthContinueRetries)
-		// Return the partial output as a normal turn completion instead
-		// of an error — the user already saw the text streaming, and
-		// discarding it (or showing a red error) is worse than delivering
-		// what we have with a note that it was truncated.
-		ch <- AgentEvent{
-			Type:     AgentEventTurnComplete,
-			Messages: ls.messages,
-			Usage:    acc.usage,
-			Result: &RunResult{
-				Response:       acc.text.String(),
-				IterationsUsed: ls.apiCalls,
-				Duration:       a.turn.elapsed(),
-				ExitReason:     "length_exhausted",
-				Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
-				Usage:          acc.usage,
-				TraceID:        a.turn.trace(),
-			},
-		}
+		return a.lengthExhausted(ctx, acc, ls, ch)
+	}
+	a.appendLengthContinuation(ctx, acc, ls)
+	return outcomeContinue
+}
 
-		// Store turn-level memory after a truncated response
-		a.storeTurnMemory(collectTurnMessages(&ls.messages, acc.text.String()))
+// lengthExhausted stops the loop after maxLengthContinueRetries truncated
+// responses, delivering the partial output as a normal turn completion.
+func (a *AIAgent) lengthExhausted(
+	ctx context.Context,
+	acc *streamAccumulator,
+	ls *loopState,
+	ch chan<- AgentEvent,
+) loopOutcome {
+	a.logger.Info(ctx, "Agent: length continuation exhausted", "maxRetries", maxLengthContinueRetries)
 
-		// Fire turn_complete hook with error info so external integrations
-		// know the turn ended (even if truncated). Without this, the hook
-		// system may be stuck in "working" state.
-		a.dispatchEvent(ctx, "turn_complete", hooks.Payload{
-			TurnCount:    ls.apiCalls,
-			ErrorMessage: fmt.Sprintf("response truncated after %d continuation attempts", maxLengthContinueRetries),
-		})
-
-		return outcomeStop
+	// Return the partial output as a normal turn completion instead
+	// of an error — the user already saw the text streaming, and
+	// discarding it (or showing a red error) is worse than delivering
+	// what we have with a note that it was truncated.
+	ch <- AgentEvent{
+		Type:     AgentEventTurnComplete,
+		Messages: ls.messages,
+		Usage:    acc.usage,
+		Result: &RunResult{
+			Response:       acc.text.String(),
+			IterationsUsed: ls.apiCalls,
+			Duration:       a.turn.elapsed(),
+			ExitReason:     ExitReasonLengthExhausted,
+			Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+			Usage:          acc.usage,
+			TraceID:        a.turn.trace(),
+		},
 	}
 
-	// Record continuation prompt (original, unwrapped)
-	var continuationText string
-	if len(acc.toolCalls) > 0 {
-		continuationText = "Your previous tool call was interrupted by the output token limit. Please retry the tool call."
-	} else if len(acc.thinkBlocks) > 0 && acc.text.Len() == 0 {
-		continuationText = "Please continue with your response. Break your output into smaller chunks to avoid hitting the output token limit."
-	} else {
-		continuationText = "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
-	}
+	// Store turn-level memory after a truncated response
+	a.storeTurnMemory(collectTurnMessages(&ls.messages, acc.text.String()))
+
+	// Fire turn_complete hook with error info so external integrations
+	// know the turn ended (even if truncated). Without this, the hook
+	// system may be stuck in "working" state.
+	a.dispatchEvent(ctx, hooks.EventTurnComplete, hooks.Payload{
+		TurnCount:    ls.apiCalls,
+		ErrorMessage: fmt.Sprintf("response truncated after %d continuation attempts", maxLengthContinueRetries),
+	})
+
+	return outcomeStop
+}
+
+// appendLengthContinuation records a context-aware continuation prompt and
+// appends it (reminder-wrapped) so the next iteration resumes the response.
+func (a *AIAgent) appendLengthContinuation(ctx context.Context, acc *streamAccumulator, ls *loopState) {
+	continuationText := continuationPrompt(acc)
 
 	// Wrap the continuation message with reminders
 	rctx := a.buildReminderContext(false, false)
@@ -858,12 +906,23 @@ func (a *AIAgent) handleLengthFinish(
 	ls.append(llm.Message{Role: "user", Content: wrappedContinuation})
 
 	// Fire turn_truncated hook to indicate the turn is continuing
-	a.dispatchEvent(ctx, "turn_truncated", hooks.Payload{
+	a.dispatchEvent(ctx, hooks.EventTurnTruncated, hooks.Payload{
 		TurnCount:   ls.lengthRetries,
 		UserMessage: continuationText,
 	})
+}
 
-	return outcomeContinue
+// continuationPrompt picks the continuation instruction matching what was
+// truncated, so the model knows how to recover. Pure decision, no effects.
+func continuationPrompt(acc *streamAccumulator) string {
+	switch {
+	case len(acc.toolCalls) > 0:
+		return "Your previous tool call was interrupted by the output token limit. Please retry the tool call."
+	case len(acc.thinkBlocks) > 0 && acc.text.Len() == 0:
+		return "Please continue with your response. Break your output into smaller chunks to avoid hitting the output token limit."
+	default:
+		return "Please continue where you left off. Break your output into smaller chunks to avoid hitting the output token limit."
+	}
 }
 
 // handleStopFinish processes a normal stop response: records the assistant
@@ -876,6 +935,9 @@ func (a *AIAgent) handleStopFinish(
 ) loopOutcome {
 	ls.lengthRetries = 0
 	msg := acc.assistantMessage()
+	// A stop response carries no executable tool calls; drop stragglers so
+	// the recorded history never holds unpaired tool_use blocks (the same
+	// protocol constraint as the length-continuation path above).
 	msg.ToolCalls = nil
 	ls.append(msg)
 
@@ -883,11 +945,11 @@ func (a *AIAgent) handleStopFinish(
 
 	ch <- AgentEvent{
 		Type: AgentEventTurnComplete, Messages: ls.messages, Usage: acc.usage,
-		Result: &RunResult{Response: acc.text.String(), IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), ExitReason: "stop", Usage: acc.usage, TraceID: a.turn.trace()},
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: ls.apiCalls, Duration: a.turn.elapsed(), ExitReason: ExitReasonStop, Usage: acc.usage, TraceID: a.turn.trace()},
 	}
 
 	// Fire turn_complete hook
-	a.dispatchEvent(ctx, "turn_complete", hooks.Payload{
+	a.dispatchEvent(ctx, hooks.EventTurnComplete, hooks.Payload{
 		TurnCount: ls.apiCalls,
 	})
 

@@ -319,13 +319,13 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 // exitCodeForReason maps agent exit reasons to Unix exit codes.
 func exitCodeForReason(reason string) int {
 	switch reason {
-	case "stop":
+	case agent.ExitReasonStop:
 		return 0
-	case "budget_exhausted", "length_exhausted":
+	case agent.ExitReasonBudgetExhausted, agent.ExitReasonLengthExhausted:
 		return 2
-	case "interrupted":
+	case agent.ExitReasonInterrupted:
 		return 130 // standard SIGINT exit code
-	default: // "error", "cancelled", etc.
+	default: // ExitReasonError, ExitReasonCancelled, etc.
 		return 1
 	}
 }

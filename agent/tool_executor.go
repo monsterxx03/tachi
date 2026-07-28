@@ -167,7 +167,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			}
 
 			// Fire tool_call hook before parallel invocation
-			a.dispatchEvent(ctx, "tool_call", hooks.Payload{
+			a.dispatchEvent(ctx, hooks.EventToolCall, hooks.Payload{
 				ToolName: tc.Function.Name,
 				ToolID:   tc.ID,
 				ToolArgs: tc.Function.Arguments,
@@ -244,7 +244,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 		})
 
 		// Fire tool_result hook
-		a.dispatchEvent(ctx, "tool_result", hooks.Payload{
+		a.dispatchEvent(ctx, hooks.EventToolResult, hooks.Payload{
 			ToolName:   tc.Function.Name,
 			ToolID:     tc.ID,
 			IsError:    toolMsg.IsError,
@@ -313,7 +313,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		if !policyHandled {
 			// Fire tool_call hook after permission check but before execution,
 			// so every tool_call is paired with a tool_result.
-			a.dispatchEvent(ctx, "tool_call", hooks.Payload{
+			a.dispatchEvent(ctx, hooks.EventToolCall, hooks.Payload{
 				ToolName: tc.Function.Name,
 				ToolID:   tc.ID,
 				ToolArgs: tc.Function.Arguments,
@@ -365,21 +365,21 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				a.logger.Info(ctx, "Agent: tool requesting external permission", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
 				approved, permErr := a.permissionHandler(ctx, tc.Function.Name, tc.ID, tr.Diff, tr.Args)
 				if permErr != nil {
-					a.dispatchEvent(ctx, "permission_result", hooks.Payload{
+					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 						ToolName: tc.Function.Name,
 						ToolID:   tc.ID,
 						Approved: false,
 					})
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: permErr}
 				} else if !approved {
-					a.dispatchEvent(ctx, "permission_result", hooks.Payload{
+					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 						ToolName: tc.Function.Name,
 						ToolID:   tc.ID,
 						Approved: false,
 					})
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: errors.New("permission denied by client")}
 				} else {
-					a.dispatchEvent(ctx, "permission_result", hooks.Payload{
+					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 						ToolName: tc.Function.Name,
 						ToolID:   tc.ID,
 						Approved: true,
@@ -394,7 +394,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 
 			default: // PermissionModeTUI
 				a.logger.Info(ctx, "Agent: tool requires confirmation", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
-				a.dispatchEvent(ctx, "permission_request", hooks.Payload{
+				a.dispatchEvent(ctx, hooks.EventPermissionRequest, hooks.Payload{
 					ToolName: tc.Function.Name,
 					ToolID:   tc.ID,
 					ToolArgs: tr.Args,
@@ -413,7 +413,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 						if resp == ConfirmAllowAlways && tc.Function.Name == tools.ToolNameEdit {
 							a.autoApproveEdits = true // session-scoped: stop prompting for edits
 						}
-						a.dispatchEvent(ctx, "permission_result", hooks.Payload{
+						a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 							ToolName: tc.Function.Name,
 							ToolID:   tc.ID,
 							Approved: true,
@@ -425,7 +425,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
 						}
 					} else {
-						a.dispatchEvent(ctx, "permission_result", hooks.Payload{
+						a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 							ToolName: tc.Function.Name,
 							ToolID:   tc.ID,
 							Approved: false,
@@ -440,7 +440,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 
 		if tr.Status == tools.ToolResultNeedUserInput {
 			a.logger.Info(ctx, "Agent: AskUserQuestion tool requires user input", "questions", len(tr.Questions))
-			a.dispatchEvent(ctx, "ask_user_question", hooks.Payload{
+			a.dispatchEvent(ctx, hooks.EventAskUserQuestion, hooks.Payload{
 				ToolName: tc.Function.Name,
 				ToolID:   tc.ID,
 			})
@@ -454,7 +454,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 
 			select {
 			case resp := <-a.askUserRespCh:
-				a.dispatchEvent(ctx, "ask_user_response", hooks.Payload{
+				a.dispatchEvent(ctx, hooks.EventAskUserResponse, hooks.Payload{
 					ToolName: tc.Function.Name,
 					ToolID:   tc.ID,
 				})
@@ -506,7 +506,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		// Fire tool_result hook only if tool_call was dispatched, so every
 		// tool_result is paired with a preceding tool_call.
 		if !policyHandled {
-			a.dispatchEvent(ctx, "tool_result", hooks.Payload{
+			a.dispatchEvent(ctx, hooks.EventToolResult, hooks.Payload{
 				ToolName:   tc.Function.Name,
 				ToolID:     tc.ID,
 				IsError:    toolMsg.IsError,

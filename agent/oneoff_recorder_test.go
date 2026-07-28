@@ -214,7 +214,7 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 1024}, OneOffMeta{Kind: "review"}))
 
 	require.NotNil(t, result)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 
 	// Sidecar file under the session's oneoff/ dir, path surfaced via accessor.
 	path := a.LastOneoffTranscriptPath()
@@ -294,7 +294,7 @@ func TestRunOneOffStream_RecorderFailureStillRuns(t *testing.T) {
 
 	// Recording failure is a Warn, never fatal — the run completes normally.
 	require.NotNil(t, result)
-	assert.Equal(t, "stop", result.ExitReason)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
 	assert.Empty(t, a.LastOneoffTranscriptPath())
 }
 

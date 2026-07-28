@@ -226,7 +226,7 @@ func TestAgentLoop_BashPolicyAsk_TUIDenyCancelsTurn(t *testing.T) {
 	}
 
 	require.NotNil(t, result)
-	assert.Equal(t, "cancelled", result.ExitReason)
+	assert.Equal(t, ExitReasonCancelled, result.ExitReason)
 }
 
 func TestAgentLoop_BashPolicyNoRules_Unaffected(t *testing.T) {

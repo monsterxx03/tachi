@@ -376,7 +376,7 @@ func TestAgentEvent_Error_ResetsState(t *testing.T) {
 			Type: agent.AgentEventError,
 			Result: &agent.RunResult{
 				Error:      nil,
-				ExitReason: "interrupted",
+				ExitReason: agent.ExitReasonInterrupted,
 			},
 		},
 		gen: 1,
@@ -401,7 +401,7 @@ func TestAgentEvent_Error_WithAPIError(t *testing.T) {
 			Type: agent.AgentEventError,
 			Result: &agent.RunResult{
 				Error:      errors.New("rate limit exceeded"),
-				ExitReason: "error",
+				ExitReason: agent.ExitReasonError,
 			},
 		},
 		gen: 1,

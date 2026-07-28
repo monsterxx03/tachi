@@ -376,7 +376,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.pendingQueue = nil
 		m.chatview.RemovePendingItems()
 		m.statusbar.SetPendingCount(0)
-		if event.Result != nil && event.Result.ExitReason == "interrupted" {
+		if event.Result != nil && event.Result.ExitReason == agent.ExitReasonInterrupted {
 			m.chatview.FinishStreaming()
 		} else {
 			errMsg := "Unknown error"

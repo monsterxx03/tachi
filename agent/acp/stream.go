@@ -256,9 +256,9 @@ func mapToolKind(toolName string) acp.ToolKind {
 // mapStopReason maps Tachi's ExitReason to ACP StopReason.
 func mapStopReason(exitReason string) acp.StopReason {
 	switch exitReason {
-	case "stop":
+	case agent.ExitReasonStop:
 		return acp.StopReasonEndTurn
-	case "cancelled", "interrupted":
+	case agent.ExitReasonCancelled, agent.ExitReasonInterrupted:
 		return acp.StopReasonCancelled
 	default:
 		return acp.StopReasonEndTurn
