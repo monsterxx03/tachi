@@ -248,35 +248,13 @@ func (a *AIAgent) RunOneOffStream(
 			opts.MaxTokens = DefaultMaxTokens
 		}
 
-		// Build fresh messages: system + wrapped user message, no history
-		messages := make([]llm.Message, 0, 2)
-		if systemPrompt != "" {
-			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
-		}
-
-		rctx := a.buildReminderContext(true, false)
-		rctx.CurrentPrompt = userMessage
-		reminderBlock := a.reminderCollector.Collect(ctx, rctx)
-		wrappedUser := userMessage
-		if reminderBlock != "" {
-			wrappedUser = reminderBlock + userMessage
-		}
-		a.turn.setMessageDate(rctx.Now.Format("2006-01-02"))
-		messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
+		// Fresh history (nil) — one-off runs never inherit messages.
+		messages, reminderBlock := a.prepareTurnMessages(ctx, nil, userMessage, systemPrompt)
 
 		// Record the user turn to the sidecar (no-op without a recorder —
 		// skipSessionWrites is always true here, so this never touches the
 		// main session history).
-		if reminderBlock != "" {
-			a.recordSession(&session.Message{
-				Type:    session.MessageTypeReminder,
-				Content: reminderBlock,
-			})
-		}
-		a.recordSession(&session.Message{
-			Type:    session.MessageTypeUser,
-			Content: userMessage,
-		})
+		a.recordUserTurn(userMessage, reminderBlock)
 
 		// Fire turn_start hook (paired with turn_complete/turn_truncated in runAgentLoop)
 		a.dispatchEvent(ctx, "turn_start", hooks.Payload{
@@ -306,108 +284,23 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			opts.MaxTokens = DefaultMaxTokens
 		}
 
-		messages := make([]llm.Message, len(history))
-		copy(messages, history)
+		messages, reminderBlock := a.prepareTurnMessages(ctx, history, userMessage, systemPrompt)
 
-		isFirstMessage := len(messages) == 0
-
-		if systemPrompt != "" {
-			if len(messages) == 0 {
-				messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
-			} else if messages[0].Role != "system" {
-				// History loaded from disk (e.g. after channel mode agent eviction via /model)
-				// doesn't include the ephemeral system prompt. Prepend it so the LLM receives
-				// full context. When history already starts with a system message (cached agent
-				// path), keep the existing one — it will be updated on next GetLastMessages.
-				withSystem := make([]llm.Message, 1, 1+len(messages))
-				withSystem[0] = llm.Message{Role: "system", Content: systemPrompt}
-				messages = append(withSystem, messages...)
-			}
-		}
-
-		// When resuming a session, date/project-context/git reminders were
-		// not stored — they're ephemeral by design. Re-inject them into the
-		// wrapped user message (not as a separate message, which would
-		// violate the user/assistant alternation requirement of LLM APIs).
-		// historyHasReminder prevents duplication on subsequent turns.
-		reminderIsFirst := isFirstMessage || (len(history) > 0 && !historyHasReminder(history))
-
-		rctx := a.buildReminderContext(reminderIsFirst, false)
-		rctx.CurrentPrompt = userMessage
-		reminderBlock := a.reminderCollector.Collect(ctx, rctx)
-		wrappedUser := userMessage
-		if reminderBlock != "" {
-			wrappedUser = reminderBlock + userMessage
-		}
-		a.turn.setMessageDate(rctx.Now.Format("2006-01-02"))
-
-		userMsg := llm.Message{Role: "user", Content: wrappedUser}
-
-		// Attach pending images as multi-modal content parts.
-		// When images are present, build ContentParts with text + images so
-		// providers can format them correctly (e.g. Anthropic image blocks,
-		// OpenAI multi-content arrays).
+		// Attach pending images as multi-modal content parts on the trailing
+		// user message, so providers can format them correctly (e.g.
+		// Anthropic image blocks, OpenAI multi-content arrays).
 		if imgs := a.turn.takePendingImages(); len(imgs) > 0 {
+			userMsg := &messages[len(messages)-1]
 			parts := make([]llm.ContentPart, 0, 1+len(imgs))
 			parts = append(parts, llm.ContentPart{
 				Type: llm.ContentPartText,
-				Text: wrappedUser,
+				Text: userMsg.Content,
 			})
 			parts = append(parts, imgs...)
 			userMsg.ContentParts = parts
 		}
 
-		messages = append(messages, userMsg)
-
-		// Session management: create session if needed and append user message
-		if a.sessionManager != nil && !a.sessionManager.HasCurrent() {
-			providerName := a.provider.Name()
-			if a.cfg != nil {
-				if pn := config.ResolveProviderName(a.cfg); pn != "" {
-					// Resolve alias to the actual provider name for session storage,
-					// so that session metadata and /usage show the real provider name.
-					providerName = a.cfg.ResolveAlias(pn)
-				}
-			}
-			wd, _ := os.Getwd()
-			if _, err := a.sessionManager.New(providerName, wd); err != nil {
-				a.logger.Error(ctx, "Agent: failed to create session", err)
-			}
-			// Update logger with session ID for debug log tracking
-			if cur := a.sessionManager.Current(); cur != nil {
-				a.logger = a.logger.With("session_id", cur.ID)
-			}
-			// Notify memory backend that a new session has started
-			a.StartSessionMemory()
-
-			// Fire session_start hook
-			a.dispatchEvent(ctx, "session_start", hooks.Payload{
-				Provider: providerName,
-			})
-		}
-		if a.sessionManager != nil {
-			// Record the system reminder block before the user message so the
-			// session file order matches what the LLM sees (reminder prepended
-			// to user message).
-			if reminderBlock != "" {
-				a.recordSession(&session.Message{
-					Type:    session.MessageTypeReminder,
-					Content: reminderBlock,
-				})
-			}
-			// Record the original user message (without system-reminder wrappers)
-			a.recordSession(&session.Message{
-				Type:    session.MessageTypeUser,
-				Content: userMessage,
-			})
-			// Set title from first user message (LLM-generated or truncated)
-			if curr := a.sessionManager.Current(); curr != nil && curr.Title == "" {
-				title := a.generateTitle(ctx, userMessage)
-				a.sessionManager.SetTitle(title)
-				// Notify TUI immediately so statusbar can refresh before LLM finishes
-				ch <- AgentEvent{Type: AgentEventSessionTitle, Title: title}
-			}
-		}
+		a.ensureSessionAndRecordUser(ctx, userMessage, reminderBlock, ch)
 
 		// Fire turn_start hook before entering agent loop
 		a.dispatchEvent(ctx, "turn_start", hooks.Payload{
@@ -432,6 +325,123 @@ func historyHasReminder(history []llm.Message) bool {
 		}
 	}
 	return false
+}
+
+// prepareTurnMessages builds the initial message slice for a turn: copies
+// history, ensures the system prompt is present, collects the system-reminder
+// block, and appends the reminder-wrapped user message. Returns the messages
+// and the raw reminder block (for session recording, which stores the block
+// separately from the user text).
+func (a *AIAgent) prepareTurnMessages(
+	ctx context.Context,
+	history []llm.Message,
+	userMessage string,
+	systemPrompt string,
+) (msgs []llm.Message, reminderBlock string) {
+	messages := make([]llm.Message, len(history))
+	copy(messages, history)
+
+	isFirstMessage := len(messages) == 0
+
+	if systemPrompt != "" {
+		if len(messages) == 0 {
+			messages = append(messages, llm.Message{Role: "system", Content: systemPrompt})
+		} else if messages[0].Role != "system" {
+			// History loaded from disk (e.g. after channel mode agent eviction via /model)
+			// doesn't include the ephemeral system prompt. Prepend it so the LLM receives
+			// full context. When history already starts with a system message (cached agent
+			// path), keep the existing one — it will be updated on next GetLastMessages.
+			withSystem := make([]llm.Message, 1, 1+len(messages))
+			withSystem[0] = llm.Message{Role: "system", Content: systemPrompt}
+			messages = append(withSystem, messages...)
+		}
+	}
+
+	// When resuming a session, date/project-context/git reminders were
+	// not stored — they're ephemeral by design. Re-inject them into the
+	// wrapped user message (not as a separate message, which would
+	// violate the user/assistant alternation requirement of LLM APIs).
+	// historyHasReminder prevents duplication on subsequent turns.
+	reminderIsFirst := isFirstMessage || (len(history) > 0 && !historyHasReminder(history))
+
+	rctx := a.buildReminderContext(reminderIsFirst, false)
+	rctx.CurrentPrompt = userMessage
+	reminderBlock = a.reminderCollector.Collect(ctx, rctx)
+	wrappedUser := userMessage
+	if reminderBlock != "" {
+		wrappedUser = reminderBlock + userMessage
+	}
+	a.turn.setMessageDate(rctx.Now.Format("2006-01-02"))
+
+	messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
+	return messages, reminderBlock
+}
+
+// recordUserTurn persists the reminder block (if any) and the original user
+// message to the session, in the same order the LLM sees them (reminder
+// prepended to the user message). The original user text is stored without
+// the system-reminder wrapper.
+func (a *AIAgent) recordUserTurn(userMessage, reminderBlock string) {
+	if reminderBlock != "" {
+		a.recordSession(&session.Message{
+			Type:    session.MessageTypeReminder,
+			Content: reminderBlock,
+		})
+	}
+	a.recordSession(&session.Message{
+		Type:    session.MessageTypeUser,
+		Content: userMessage,
+	})
+}
+
+// ensureSessionAndRecordUser creates the session on first use (with
+// session_start hook), records the user turn, and generates a title for
+// brand-new sessions. No-op when no session manager is configured.
+func (a *AIAgent) ensureSessionAndRecordUser(
+	ctx context.Context,
+	userMessage string,
+	reminderBlock string,
+	ch chan<- AgentEvent,
+) {
+	if a.sessionManager == nil {
+		return
+	}
+
+	if !a.sessionManager.HasCurrent() {
+		providerName := a.provider.Name()
+		if a.cfg != nil {
+			if pn := config.ResolveProviderName(a.cfg); pn != "" {
+				// Resolve alias to the actual provider name for session storage,
+				// so that session metadata and /usage show the real provider name.
+				providerName = a.cfg.ResolveAlias(pn)
+			}
+		}
+		wd, _ := os.Getwd()
+		if _, err := a.sessionManager.New(providerName, wd); err != nil {
+			a.logger.Error(ctx, "Agent: failed to create session", err)
+		}
+		// Update logger with session ID for debug log tracking
+		if cur := a.sessionManager.Current(); cur != nil {
+			a.logger = a.logger.With("session_id", cur.ID)
+		}
+		// Notify memory backend that a new session has started
+		a.StartSessionMemory()
+
+		// Fire session_start hook
+		a.dispatchEvent(ctx, "session_start", hooks.Payload{
+			Provider: providerName,
+		})
+	}
+
+	a.recordUserTurn(userMessage, reminderBlock)
+
+	// Set title from first user message (LLM-generated or truncated)
+	if curr := a.sessionManager.Current(); curr != nil && curr.Title == "" {
+		title := a.generateTitle(ctx, userMessage)
+		a.sessionManager.SetTitle(title)
+		// Notify TUI immediately so statusbar can refresh before LLM finishes
+		ch <- AgentEvent{Type: AgentEventSessionTitle, Title: title}
+	}
 }
 
 // loopState holds the mutable state owned by a single runAgentLoop

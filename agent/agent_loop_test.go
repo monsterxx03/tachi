@@ -557,6 +557,126 @@ func TestAgentLoop_MaxTokensThenStop(t *testing.T) {
 	assert.Equal(t, "two", result.Response)
 }
 
+// ---- Tests: handleLengthFinish continuation prompts ----
+
+// TestHandleLengthFinish_ContinuationPrompt covers the three continuation
+// prompt branches: interrupted tool call, thinking-only output, and plain
+// text. The prompt must match what was truncated so the model knows how to
+// recover.
+func TestHandleLengthFinish_ContinuationPrompt(t *testing.T) {
+	cases := []struct {
+		name         string
+		buildAcc     func() *streamAccumulator
+		wantContains string
+	}{
+		{
+			name: "interrupted tool call asks for retry",
+			buildAcc: func() *streamAccumulator {
+				acc := &streamAccumulator{finishReason: "max_tokens"}
+				acc.toolCalls = []llm.ToolCall{
+					{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"ls"}`}},
+				}
+				return acc
+			},
+			wantContains: "retry the tool call",
+		},
+		{
+			name: "thinking-only output asks to continue response",
+			buildAcc: func() *streamAccumulator {
+				acc := &streamAccumulator{finishReason: "max_tokens"}
+				acc.thinkBlocks = []llm.ThinkingBlock{{Type: "thinking", Thinking: "deep thought"}}
+				return acc
+			},
+			wantContains: "Please continue with your response",
+		},
+		{
+			name: "plain text asks to continue where left off",
+			buildAcc: func() *streamAccumulator {
+				acc := &streamAccumulator{finishReason: "max_tokens"}
+				acc.text.WriteString("partial answer")
+				return acc
+			},
+			wantContains: "Please continue where you left off",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			a := newTestAgent(nil)
+			ls := &loopState{budget: NewIterationBudget(0)}
+			ch := make(chan AgentEvent, 8)
+			defer close(ch)
+
+			acc := tc.buildAcc()
+			outcome := a.handleLengthFinish(t.Context(), acc, ls, ch)
+
+			assert.Equal(t, outcomeContinue, outcome)
+			assert.Equal(t, 1, ls.lengthRetries)
+
+			// Last message must be the continuation prompt.
+			require.NotEmpty(t, ls.messages)
+			last := ls.messages[len(ls.messages)-1]
+			assert.Equal(t, "user", last.Role)
+			assert.Contains(t, last.Content, tc.wantContains)
+		})
+	}
+}
+
+// TestHandleLengthFinish_DropsTruncatedToolCalls verifies that tool calls
+// truncated by the output limit are stripped from the assistant message —
+// the API protocol requires every tool_use to pair with a tool_result,
+// which un-executed calls cannot satisfy.
+func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
+	a := newTestAgent(nil)
+	ls := &loopState{budget: NewIterationBudget(0)}
+	ch := make(chan AgentEvent, 8)
+	defer close(ch)
+
+	acc := &streamAccumulator{finishReason: "max_tokens"}
+	acc.toolCalls = []llm.ToolCall{
+		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"ls"}`}},
+	}
+
+	outcome := a.handleLengthFinish(t.Context(), acc, ls, ch)
+	assert.Equal(t, outcomeContinue, outcome)
+
+	// First appended message is the assistant turn — tool calls stripped.
+	require.GreaterOrEqual(t, len(ls.messages), 2)
+	assistantMsg := ls.messages[0]
+	assert.Equal(t, "assistant", assistantMsg.Role)
+	assert.Nil(t, assistantMsg.ToolCalls)
+}
+
+// TestHandleLengthFinish_Exhausted verifies the loop stops after
+// maxLengthContinueRetries and delivers the partial output.
+func TestHandleLengthFinish_Exhausted(t *testing.T) {
+	a := newTestAgent(nil)
+	ls := &loopState{
+		budget:        NewIterationBudget(0),
+		lengthRetries: maxLengthContinueRetries - 1, // next one exhausts
+	}
+	ch := make(chan AgentEvent, 8)
+	defer close(ch)
+
+	acc := &streamAccumulator{finishReason: "max_tokens"}
+	acc.text.WriteString("final chunk")
+
+	outcome := a.handleLengthFinish(t.Context(), acc, ls, ch)
+	assert.Equal(t, outcomeStop, outcome)
+
+	// A TurnComplete event with length_exhausted must have been emitted.
+	var result *RunResult
+	for len(ch) > 0 {
+		e := <-ch
+		if e.Type == AgentEventTurnComplete {
+			result = e.Result
+		}
+	}
+	require.NotNil(t, result)
+	assert.Equal(t, "length_exhausted", result.ExitReason)
+	assert.Equal(t, "final chunk", result.Response)
+}
+
 // ---- Tests: ConfirmationTool integration via agent loop ----
 
 func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
