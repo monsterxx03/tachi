@@ -19,6 +19,13 @@ import (
 //
 // For OpenAI (which doesn't support native thinking blocks), thinking content is
 // prepended to the assistant text content so context is preserved.
+//
+// Reminder blocks are NOT stripped: they were stored as separate MessageTypeReminder
+// entries ahead of their MessageTypeUser, and are prepended to the user message
+// content during conversion. This preserves the <system-reminder> prefix in the
+// loaded history, which agent_loop.go's historyHasReminder() relies on to avoid
+// re-injecting first-message-only reminders (project context, git status) on
+// subsequent turns after the history was reloaded from disk (e.g. after /commit).
 func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType string) ([]llm.Message, error) {
 	var result []llm.Message
 
@@ -30,6 +37,11 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 	// Tool results are buffered so they appear after the assistant message
 	// that contains their tool_calls — which is what the LLM API expects.
 	var pendingToolResults []llm.Message
+
+	// pendingReminder buffers the most recent MessageTypeReminder content so it
+	// can be prepended to the subsequent MessageTypeUser. This preserves the
+	// <system-reminder> prefix that historyHasReminder() checks for.
+	var pendingReminder string
 
 	flushAssistant := func() {
 		if len(thinkingBlocks) == 0 && assistantText == "" && len(toolCalls) == 0 {
@@ -76,9 +88,14 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 		case session.MessageTypeUser:
 			flushAssistant()
 			flushToolResults()
+			content := msg.Content
+			if pendingReminder != "" {
+				content = pendingReminder + "\n" + content
+				pendingReminder = ""
+			}
 			result = append(result, llm.Message{
 				Role:    "user",
-				Content: msg.Content,
+				Content: content,
 			})
 
 		case session.MessageTypeThinking:
@@ -131,11 +148,16 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 		case session.MessageTypeConfirm:
 			// Confirm messages are UI-only — skip them.
 			continue
+
 		case session.MessageTypeReminder:
-			// Reminder blocks are recorded separately for audit/debug but
-			// are already embedded in the user message content (or will be
-			// regenerated on resume). Skip them to avoid duplication.
-			continue
+			// Buffer the reminder content and prepend it to the subsequent
+			// user message when it arrives. This preserves the original
+			// <system-reminder> prefix so that agent_loop.go's
+			// historyHasReminder() can detect that reminders were already
+			// injected, preventing first-message-only reminders (project
+			// context, git status) from being regenerated on every resume
+			// or continuation after a one-off command like /commit.
+			pendingReminder = msg.Content
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
@@ -909,4 +910,110 @@ func TestAgentLoop_EditAutoApproveDoesNotAffectBashAsk(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "done", result.Response)
 	assert.Equal(t, 1, confirms, "bash ask must still prompt despite edit auto-approve")
+}
+
+// ---- Tests: Context cancellation at various agent-loop phases ----
+
+// cancelAfterStreamProvider sends a stream event immediately, then blocks
+// until context cancellation where it sends a StreamEventError. This lets
+// the test verify that the AgentEventError from consumeStream's error path
+// carries the accumulated ls.messages.
+type cancelAfterStreamProvider struct {
+	name string
+}
+
+func (p *cancelAfterStreamProvider) Name() string  { return p.name }
+func (p *cancelAfterStreamProvider) Model() string { return "mock-model" }
+func (p *cancelAfterStreamProvider) CreateChat(ctx context.Context, _ []llm.Message, _ []llm.Tool, _ llm.ChatOptions) (*llm.Response, error) {
+	return nil, fmt.Errorf("not implemented")
+}
+func (p *cancelAfterStreamProvider) CreateChatStream(ctx context.Context, _ []llm.Message, _ []llm.Tool, _ llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+	ch := make(chan llm.StreamEvent, 3)
+	go func() {
+		defer close(ch)
+		// Send an initial text event so the agent starts consuming.
+		ch <- llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: "partial "}
+		// Block until context cancellation, then signal stream error.
+		<-ctx.Done()
+		ch <- llm.StreamEvent{Type: llm.StreamEventError, Error: ctx.Err()}
+	}()
+	return ch, nil
+}
+
+func TestAgentLoop_StreamCancelledDuringConsume_MessagesPreserved(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+
+	a := newTestAgent(&cancelAfterStreamProvider{name: "slow"})
+
+	// Cancel context after the agent has started consuming the stream.
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	ch := a.RunConversationStream(ctx, nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
+	result, events := drainAgentEvents(ch)
+
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonInterrupted, result.ExitReason)
+	assert.ErrorIs(t, result.Error, context.Canceled)
+
+	// Verify the AgentEventError carries the conversation history (system + user).
+	var found bool
+	for _, e := range events {
+		if e.Type == AgentEventError {
+			found = true
+			assert.NotEmpty(t, e.Messages, "AgentEventError from consumeStream cancel must carry ls.messages")
+			assert.GreaterOrEqual(t, len(e.Messages), 1, "should have at least the user message")
+			break
+		}
+	}
+	assert.True(t, found, "AgentEventError must be emitted")
+}
+
+func TestAgentLoop_SteerCancelled_MessagesPreserved(t *testing.T) {
+	// Provider returns a single tool call so the agent reaches the steer point.
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"echo hi"}`),
+		},
+	}
+
+	ctx, cancel := context.WithCancel(t.Context())
+
+	a := newTestAgent(mp)
+	a.RegisterTool(echoStub())
+	// Enable steer by setting the channel.
+	steerCh := make(chan string)
+	a.SetSteerChannel(steerCh)
+
+	// Cancel context after the agent reaches the steer point (tool executes
+	// synchronously, so this happens almost immediately after the API call).
+	go func() {
+		time.Sleep(10 * time.Millisecond)
+		cancel()
+	}()
+
+	ch := a.RunConversationStream(ctx, nil, "run command", "", llm.ChatOptions{MaxTokens: 4096})
+	result, events := drainAgentEvents(ch)
+
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonInterrupted, result.ExitReason)
+
+	// Verify an AgentEventError was emitted with Messages (our fix for the
+	// applySteer ctx.Done() path — previously the agent exited silently
+	// without emitting any terminal event).
+	var found bool
+	for _, e := range events {
+		if e.Type == AgentEventError {
+			found = true
+			assert.NotEmpty(t, e.Messages, "AgentEventError from steer cancel must carry ls.messages")
+			// At minimum: user + assistant (tool call) + tool result.
+			assert.GreaterOrEqual(t, len(e.Messages), 3,
+				"should have user + assistant message (with tool call) + tool result")
+			break
+		}
+	}
+	assert.True(t, found, "AgentEventError must be emitted at steer point cancel (not silent exit)")
 }
