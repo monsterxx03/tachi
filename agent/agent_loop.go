@@ -568,7 +568,7 @@ func (a *AIAgent) runAgentLoop(
 			if ctx.Err() != nil {
 				exitReason = ExitReasonInterrupted
 			}
-			ch <- a.terminalError(ctx, ls, exitReason, err, nil)
+			ch <- a.terminalError(ctx, ls, exitReason, err, ls.messages)
 			return
 		}
 
@@ -768,6 +768,11 @@ func (a *AIAgent) applySteer(ctx context.Context, ls *loopState, ch chan<- Agent
 		}
 		return outcomeContinue
 	case <-ctx.Done():
+		ch <- AgentEvent{
+			Type:     AgentEventError,
+			Messages: ls.messages,
+			Result:   &RunResult{ExitReason: ExitReasonInterrupted, Duration: a.turn.elapsed(), Error: ctx.Err()},
+		}
 		return outcomeStop
 	}
 }
