@@ -74,8 +74,6 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 
 	// --- Reminder collector (after memory + skills, before MCP) ---
 	a.buildReminderCollectorFrom(SystemReminderConfig{
-		IterationWarningThreshold: sysCfg.SystemReminder.IterationWarningThreshold,
-		TokenWarningThresholdPct:  sysCfg.SystemReminder.TokenWarningThresholdPct,
 		GitReminder:               sysCfg.SystemReminder.GitReminder,
 		MemoryRecallLimit:         sysCfg.Memory.RecallLimit,
 		MemoryRecallTimeout:       sysCfg.Memory.Timeout,
@@ -436,7 +434,7 @@ func (a *AIAgent) ResumeSession(providerType, systemPrompt string) ([]llm.Messag
 	}
 
 	// Restore the token estimate from the most recent assistant message with
-	// usage so that TokenWarningReminder works correctly in the resumed session.
+	// usage so the resumed session shows the correct context fraction.
 	// Prefer the local estimate (EstimatedInputTokens) to match what was shown
 	// during the active conversation; fall back to API-returned InputTokens.
 	for i := len(sessionMsgs) - 1; i >= 0; i-- {
@@ -505,8 +503,6 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 	reminders = append(reminders,
 		systemreminder.DateReminder{},
 		systemreminder.ProjectContextReminder{},
-		systemreminder.IterationWarningReminder{Threshold: sysCfg.IterationWarningThreshold},
-		systemreminder.TokenWarningReminder{ThresholdPct: sysCfg.TokenWarningThresholdPct},
 		a.skillListReminder,
 		&systemreminder.BackgroundTaskReminder{
 			Provider: &backgroundTaskProvider{pm: a.processManager},

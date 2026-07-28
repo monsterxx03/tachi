@@ -201,7 +201,7 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []
 
 // EstimateAndUpdateTokens estimates the total input tokens for the current
 // messages and records them in the turn state, so that buildReminderContext
-// and TokenWarningReminder see the current (not previous-turn) context size.
+// sees the current (not previous-turn) context size.
 // The categorised breakdown is stored alongside for the TUI statusbar and
 // /usage report.
 func (a *AIAgent) EstimateAndUpdateTokens(messages []llm.Message) {

@@ -48,11 +48,9 @@ func SystemConfigFromConfig(cfg *config.Config) AgentSystemConfig {
 // buildReminderCollectorFrom. Extracted from AgentSystemConfig to avoid
 // passing the full struct through the agent's internal interfaces.
 type SystemReminderConfig struct {
-	IterationWarningThreshold int
-	TokenWarningThresholdPct  int
-	GitReminder               *bool
-	MemoryRecallLimit         int
-	MemoryRecallTimeout       time.Duration
+	GitReminder         *bool
+	MemoryRecallLimit   int
+	MemoryRecallTimeout time.Duration
 }
 
 // AgentConfig 封装构造 AIAgent 所需的所有参数。

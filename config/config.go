@@ -200,9 +200,7 @@ func (t *TUIConfig) NotifyEnabled() bool {
 }
 
 type SystemReminderConfig struct {
-	IterationWarningThreshold int   `yaml:"iteration_warning_threshold" default:"5"`
-	TokenWarningThresholdPct  int   `yaml:"token_warning_threshold_pct" default:"80"`
-	GitReminder               *bool `yaml:"git_reminder" default:"true"` // set false to disable
+	GitReminder *bool `yaml:"git_reminder" default:"true"` // set false to disable
 }
 
 // WeixinConfig holds iLink Bot channel configuration.

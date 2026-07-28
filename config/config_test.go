@@ -347,30 +347,6 @@ func TestResolve_MissingType(t *testing.T) {
 	assert.Contains(t, err.Error(), "no type set")
 }
 
-func TestIterationWarningThreshold(t *testing.T) {
-	// Default via defaults.Set
-	assert.Equal(t, 5, DefaultConfig().SystemReminder.IterationWarningThreshold)
-
-	// Explicitly set
-	assert.Equal(t, 3, (&Config{SystemReminder: SystemReminderConfig{IterationWarningThreshold: 3}}).SystemReminder.IterationWarningThreshold)
-
-	// Zero struct (no defaults applied)
-	var c Config
-	assert.Equal(t, 0, c.SystemReminder.IterationWarningThreshold)
-}
-
-func TestTokenWarningThresholdPct(t *testing.T) {
-	// Default via defaults.Set
-	assert.Equal(t, 80, DefaultConfig().SystemReminder.TokenWarningThresholdPct)
-
-	// Explicitly set
-	assert.Equal(t, 90, (&Config{SystemReminder: SystemReminderConfig{TokenWarningThresholdPct: 90}}).SystemReminder.TokenWarningThresholdPct)
-
-	// Zero struct (no defaults applied)
-	var c Config
-	assert.Equal(t, 0, c.SystemReminder.TokenWarningThresholdPct)
-}
-
 func TestEffectiveLanguage(t *testing.T) {
 	// Default via defaults.Set
 	assert.Equal(t, "English", DefaultConfig().Language)

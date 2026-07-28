@@ -60,94 +60,8 @@ func TestDateReminder_AlwaysFiresWithDateChanged(t *testing.T) {
 	}
 }
 
-func TestIterationWarningReminder_Fires(t *testing.T) {
-	r := IterationWarningReminder{Threshold: 5}
-	lines := r.Generate(t.Context(), Context{
-		IterationsLeft: 5,
-		MaxIterations:  10,
-	})
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(lines))
-	}
-	if !strings.Contains(lines[0], "5 of 10") {
-		t.Errorf("expected budget info, got: %s", lines[0])
-	}
-}
-
-func TestIterationWarningReminder_AboveThreshold(t *testing.T) {
-	r := IterationWarningReminder{Threshold: 5}
-	lines := r.Generate(t.Context(), Context{
-		IterationsLeft: 6,
-		MaxIterations:  10,
-	})
-	if len(lines) != 0 {
-		t.Errorf("expected no warning when above threshold, got: %v", lines)
-	}
-}
-
-func TestIterationWarningReminder_ZeroLeft(t *testing.T) {
-	r := IterationWarningReminder{Threshold: 5}
-	lines := r.Generate(t.Context(), Context{
-		IterationsLeft: 0,
-		MaxIterations:  10,
-	})
-	if len(lines) != 0 {
-		t.Errorf("expected no warning when 0 left, got: %v", lines)
-	}
-}
-
-func TestIterationWarningReminder_ZeroThreshold(t *testing.T) {
-	r := IterationWarningReminder{Threshold: 0}
-	lines := r.Generate(t.Context(), Context{
-		IterationsLeft: 1,
-		MaxIterations:  10,
-	})
-	if len(lines) != 0 {
-		t.Errorf("expected no warning when threshold is 0, got: %v", lines)
-	}
-}
-
-func TestTokenWarningReminder_Fires(t *testing.T) {
-	r := TokenWarningReminder{ThresholdPct: 80}
-	lines := r.Generate(t.Context(), Context{
-		InputTokens:   110000,
-		ContextWindow: 128000,
-	})
-	if len(lines) != 1 {
-		t.Fatalf("expected 1 line, got %d", len(lines))
-	}
-	if !strings.Contains(lines[0], "86%") || !strings.Contains(lines[0], "110000") {
-		t.Errorf("unexpected output: %s", lines[0])
-	}
-}
-
-func TestTokenWarningReminder_BelowThreshold(t *testing.T) {
-	r := TokenWarningReminder{ThresholdPct: 80}
-	lines := r.Generate(t.Context(), Context{
-		InputTokens:   100000,
-		ContextWindow: 128000,
-	})
-	if len(lines) != 0 {
-		t.Errorf("expected no warning under threshold, got: %v", lines)
-	}
-}
-
-func TestTokenWarningReminder_ZeroThreshold(t *testing.T) {
-	r := TokenWarningReminder{ThresholdPct: 0}
-	lines := r.Generate(t.Context(), Context{
-		InputTokens:   110000,
-		ContextWindow: 128000,
-	})
-	if len(lines) != 0 {
-		t.Errorf("expected no warning when threshold is 0, got: %v", lines)
-	}
-}
-
 func TestCollector_Empty(t *testing.T) {
-	c := NewCollector(
-		IterationWarningReminder{Threshold: 5},
-		TokenWarningReminder{ThresholdPct: 80},
-	)
+	c := NewCollector()
 	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: false,
 		IterationsLeft: 10,
@@ -180,19 +94,17 @@ func TestCollector_FirstMessage(t *testing.T) {
 func TestCollector_MultipleReminders(t *testing.T) {
 	c := NewCollector(
 		DateReminder{},
-		IterationWarningReminder{Threshold: 5},
+		GitReminder{},
 	)
 	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: true,
-		IterationsLeft: 5,
-		MaxIterations:  10,
 		Now:            time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 	})
 	if !strings.Contains(result, "Sunday, June 1, 2025") {
 		t.Errorf("expected date, got: %s", result)
 	}
-	if !strings.Contains(result, "5 of 10") {
-		t.Errorf("expected iteration warning, got: %s", result)
+	if !strings.Contains(result, "Git") {
+		t.Errorf("expected git info, got: %s", result)
 	}
 	if strings.Count(result, "<system-reminder>") != 1 {
 		t.Errorf("expected one opening tag, got: %s", result)

@@ -218,7 +218,7 @@ func (a *AIAgent) RunOneOffStream(
 
 		// Save and restore the token estimate so one-off calls don't
 		// pollute the main conversation's context estimate (used by
-		// TokenWarningReminder and the TUI statusbar context fraction).
+		// the TUI statusbar context fraction).
 		savedTokens := a.turn.tokens()
 		defer func() { a.turn.setTokens(savedTokens) }()
 
