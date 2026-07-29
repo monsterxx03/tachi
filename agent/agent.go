@@ -103,8 +103,8 @@ type AIAgent struct {
 	// an edit confirmation (session-scoped). Affects only EditFile — unlike
 	// PermissionModeSkip, bash policy asks still prompt.
 	autoApproveEdits   bool
-	sessionManager     *session.Manager
-	reminderCollector  *systemreminder.Collector
+	sessionManager     SessionManager
+	reminderCollector  ReminderCollector
 	contextWindow      int64
 	titleModelProvider llm.Provider // optional: dedicated provider for title generation
 	titleGenEnabled    bool         // whether LLM-based title generation is active
@@ -201,9 +201,10 @@ type AIAgent struct {
 
 	// Session mode (e.g. "auto", "chat"). Affects tool visibility.
 	mode string
-	// savedTools holds destructive tool instances when in chat mode,
-	// so they can be restored when switching back to auto mode.
-	savedTools map[string]tools.Tool
+
+	// compactStrategy generates summaries for auto-compaction. Defaults to
+	// llmCompactStrategy (calls the LLM provider); tests inject a fake.
+	compactStrategy CompactStrategy
 }
 
 func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
@@ -218,7 +219,7 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 		askUserRespCh:   make(chan tools.AskUserResult, 1),
 		logger:          nil,
 		mode:            ModeAuto,
-		savedTools:      make(map[string]tools.Tool),
+		compactStrategy: &llmCompactStrategy{provider: provider},
 	}
 }
 
@@ -425,7 +426,7 @@ func (a *AIAgent) SetSkipMemoryRecall(skip bool) {
 	}
 }
 
-func (a *AIAgent) SetSessionManager(sm *session.Manager) {
+func (a *AIAgent) SetSessionManager(sm SessionManager) {
 	a.sessionManager = sm
 	// Wire session provider into TopicBackend for temporal query fallback.
 	// This enables queries like "我们最近聊过什么" where keyword-based grep
@@ -438,11 +439,11 @@ func (a *AIAgent) SetSessionManager(sm *session.Manager) {
 	}
 }
 
-// topicSessionProvider adapts *session.Manager to memory.SessionProvider,
+// topicSessionProvider adapts SessionManager to memory.SessionProvider,
 // allowing TopicBackend to fall back to recent session summaries when
 // keyword-based topic search yields no results (temporal queries).
 type topicSessionProvider struct {
-	manager *session.Manager
+	manager SessionManager
 }
 
 // recentUserMsgCount is how many recent user messages to include per session
@@ -523,12 +524,12 @@ func (a *AIAgent) ContextWindow() int64 {
 
 // SetReminderCollector replaces the default reminder collector. Useful for
 // tests or when callers want full control over which reminders fire.
-func (a *AIAgent) SetReminderCollector(c *systemreminder.Collector) {
+func (a *AIAgent) SetReminderCollector(c ReminderCollector) {
 	a.reminderCollector = c
 }
 
 // SessionManager returns the session manager, or nil if none is set.
-func (a *AIAgent) SessionManager() *session.Manager {
+func (a *AIAgent) SessionManager() SessionManager {
 	return a.sessionManager
 }
 

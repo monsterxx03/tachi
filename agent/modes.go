@@ -3,8 +3,6 @@ package agent
 import (
 	"context"
 	"fmt"
-
-	"github.com/monsterxx03/tachi/agent/tools"
 )
 
 // Session mode identifiers.
@@ -42,9 +40,14 @@ func (a *AIAgent) Mode() string {
 
 // SetMode changes the agent's session mode. Switching modes affects which
 // tools are visible to the LLM:
-//   - ModeAuto:  full tool access (restores any tools previously hidden)
-//   - ModeChat:  hides destructive tools (WriteFile, EditFile, Bash, etc.)
+//   - ModeAuto:  full tool access
+//   - ModeChat:  hides destructive tools at the schema filter level
 //   - ModePlan:  hides destructive tools (same as ModeChat)
+//
+// Unlike the old savedTools approach, this does NOT mutate the tool registry.
+// Mode filtering is applied every iteration in filterActiveSchemas, so no
+// save/restore dance is needed — the registry stays intact and mode only
+// affects what schemas the LLM sees.
 //
 // Returns an error if mode is unknown.
 func (a *AIAgent) SetMode(mode string) error {
@@ -53,32 +56,6 @@ func (a *AIAgent) SetMode(mode string) error {
 	}
 	if !ValidMode(mode) {
 		return fmt.Errorf("unknown mode: %s (supported: %s, %s, %s)", mode, ModeAuto, ModeChat, ModePlan)
-	}
-
-	switch mode {
-	case ModeAuto:
-		// Restore destructive tools that were saved when entering chat/plan mode.
-		for name, tool := range a.savedTools {
-			if a.toolRegistry.GetTool(name) == nil {
-				a.toolRegistry.Register(tool)
-				a.logger.Info(context.Background(), "Agent: restored tool for auto mode", "tool", name)
-			}
-		}
-		a.savedTools = make(map[string]tools.Tool)
-
-	case ModeChat, ModePlan:
-		// Save and remove destructive tools.
-		for _, name := range a.toolRegistry.GetToolNames() {
-			tool := a.toolRegistry.GetTool(name)
-			if tool == nil {
-				continue
-			}
-			if dd, ok := tool.(tools.DestructiveDetector); ok && dd.IsDestructive() {
-				a.savedTools[name] = tool
-				a.toolRegistry.Unregister(name)
-				a.logger.Info(context.Background(), "Agent: removed tool for mode", "tool", name, "mode", mode)
-			}
-		}
 	}
 
 	a.mode = mode

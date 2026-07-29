@@ -35,7 +35,7 @@ type SessionUsageReport struct {
 //
 // price may be nil — in that case Cost is left at 0.
 // contextWindow is optional (0 = not shown).
-func ComputeSessionUsage(sm *session.Manager, price *llm.ModelPrice, contextWindow int64) (*SessionUsageReport, error) {
+func ComputeSessionUsage(sm SessionManager, price *llm.ModelPrice, contextWindow int64) (*SessionUsageReport, error) {
 	if sm == nil || !sm.HasCurrent() {
 		return nil, fmt.Errorf("no active session")
 	}

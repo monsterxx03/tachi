@@ -383,7 +383,7 @@ func (a *AIAgent) prepareTurnMessages(
 
 	rctx := a.buildReminderContext(reminderIsFirst, false)
 	rctx.CurrentPrompt = userMessage
-	reminderBlock = a.reminderCollector.Collect(ctx, rctx)
+	reminderBlock = a.collectReminders(ctx, rctx)
 	wrappedUser := userMessage
 	if reminderBlock != "" {
 		wrappedUser = reminderBlock + userMessage
@@ -787,7 +787,7 @@ func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulato
 	for _, tc := range acc.toolCalls {
 		rctx.ToolNames = append(rctx.ToolNames, tc.Function.Name)
 	}
-	if block := a.reminderCollector.Collect(ctx, rctx); block != "" {
+	if block := a.collectReminders(ctx, rctx); block != "" {
 		ls.append(llm.Message{Role: "user", Content: block})
 		a.logger.Info(ctx, "Agent: loop reminder injected", "block", truncateForLog(block, 200))
 		a.recordSession(&session.Message{
@@ -880,7 +880,7 @@ func (a *AIAgent) appendLengthContinuation(ctx context.Context, acc *streamAccum
 	// Wrap the continuation message with reminders
 	rctx := a.buildReminderContext(false, false)
 	rctx.CurrentPrompt = continuationText
-	reminderBlock := a.reminderCollector.Collect(ctx, rctx)
+	reminderBlock := a.collectReminders(ctx, rctx)
 	// Record reminder before user message so session file order matches LLM input
 	if reminderBlock != "" {
 		a.recordSession(&session.Message{
@@ -952,18 +952,31 @@ func (a *AIAgent) handleStopFinish(
 }
 
 // filterActiveSchemas filters tool schemas for the LLM API call.
-// When ToolSearch is active (deferred pool non-empty):
-//   - Built-in tools are always included
-//   - The MCPSearchTools tool is always included
-//   - MCP tools are only included if they've been discovered by the LLM
+// Two layers of filtering are applied:
+//
+//  1. Mode-based: in chat/plan mode, destructive tools are excluded so the
+//     LLM cannot see or call them. This replaces the old savedTools approach
+//     that mutated the registry at mode-change time — instead the registry
+//     is never touched, and the filter runs every iteration.
+//
+//  2. MCP ToolSearch: when the deferred MCP pool is non-empty, only
+//     discovered MCP tools (plus all built-ins) are included.
 //
 // When ToolSearch is not active (no MCP manager, e.g. no MCP servers):
-//   - All tools are included (unchanged behavior)
+//   - Only mode filtering applies
 func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
+	// Layer 1: mode-based destructive tool filtering
+	if a.mode != ModeAuto {
+		schemas = filterDestructiveSchemas(schemas, a.toolRegistry)
+		if len(schemas) == 0 {
+			return nil
+		}
+	}
+
+	// Layer 2: MCP ToolSearch filtering (existing logic)
 	pool := a.DeferredPool()
 	set := a.discoveredSet()
 	if pool == nil || pool.Len() == 0 {
-		// ToolSearch not active — include all schemas as-is
 		return schemas
 	}
 
@@ -974,26 +987,18 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 		name := s.Name
 		switch {
 		case !tools.IsMCPSchema(name):
-			// Built-in tools are always included
 			active = append(active, s)
 			seen[name] = true
 		case tools.IsMCPSearchTool(name):
-			// The search tool itself is always included
 			active = append(active, s)
 			seen[name] = true
 		case set != nil && set.Contains(name):
-			// Discovered MCP tools are included
 			active = append(active, s)
 			seen[name] = true
 		default:
-			// Undiscovered MCP tools — excluded from LLM API call
 		}
 	}
 
-	// Merge discovered tools that are in deferred pool but not yet registered.
-	// This handles the gap between MCPSearchTools discovery and the next
-	// filterActiveSchemas call: the tool may be in discoveredSet but not yet
-	// in the Registry (lazy registration happens at Invoke time).
 	if set != nil {
 		for _, name := range set.List() {
 			if seen[name] {
@@ -1008,6 +1013,27 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 	}
 
 	return active
+}
+
+// filterDestructiveSchemas removes schemas for tools that implement
+// DestructiveDetector and return true. Non-destructive tools and tools
+// that don't implement DestructiveDetector are kept.
+func filterDestructiveSchemas(schemas []tools.Schema, reg *tools.Registry) []tools.Schema {
+	filtered := make([]tools.Schema, 0, len(schemas))
+	for _, s := range schemas {
+		tool := reg.GetTool(s.Name)
+		if tool == nil {
+			// Unknown tools (e.g. MCP tools not yet registered) are kept
+			// so the user can still discover them via MCPSearchTools.
+			filtered = append(filtered, s)
+			continue
+		}
+		if dd, ok := tool.(tools.DestructiveDetector); ok && dd.IsDestructive() {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+	return filtered
 }
 
 // buildLLMTools converts tool schemas from the agent's registry into the
@@ -1036,6 +1062,21 @@ func (a *AIAgent) buildReminderContext(isFirstMessage bool, isToolResult bool) s
 		SessionID:       a.sessionID(),
 		Logger:          a.logger,
 	}
+}
+
+// ParentSessionID returns the current session's ID, or empty string if
+// no session is active. This satisfies the subagent.Agent interface.
+func (a *AIAgent) ParentSessionID() string {
+	return a.sessionID()
+}
+
+// collectReminders calls Collect on the reminder collector. Returns empty
+// string when the collector is nil (safer than panicking on nil interface).
+func (a *AIAgent) collectReminders(ctx context.Context, rctx systemreminder.Context) string {
+	if a.reminderCollector == nil {
+		return ""
+	}
+	return a.reminderCollector.Collect(ctx, rctx)
 }
 
 // sessionID returns the current session's ID, or empty string if no session.

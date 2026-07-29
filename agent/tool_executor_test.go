@@ -71,7 +71,7 @@ func seqStub(name string) *stubTool {
 // ---- groupToolCalls Tests ----
 
 func TestGroupToolCalls_AllParallel(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(slowStub("Read"))
 	a.RegisterTool(slowStub("Grep"))
 	a.RegisterTool(slowStub("Glob"))
@@ -89,7 +89,7 @@ func TestGroupToolCalls_AllParallel(t *testing.T) {
 }
 
 func TestGroupToolCalls_AllSequential(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(seqStub("EditFile"))
 	a.RegisterTool(seqStub("Bash"))
 
@@ -107,7 +107,7 @@ func TestGroupToolCalls_AllSequential(t *testing.T) {
 }
 
 func TestGroupToolCalls_Mixed(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(slowStub("Read"))
 	a.RegisterTool(slowStub("Grep"))
 	a.RegisterTool(seqStub("EditFile"))
@@ -141,7 +141,7 @@ func TestGroupToolCalls_Mixed(t *testing.T) {
 }
 
 func TestGroupToolCalls_Empty(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	groups := a.groupToolCalls(context.Background(), nil)
 	assert.Nil(t, groups)
 
@@ -150,7 +150,7 @@ func TestGroupToolCalls_Empty(t *testing.T) {
 }
 
 func TestGroupToolCalls_SingleParallel(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(slowStub("Read"))
 
 	toolCalls := []llm.ToolCall{
@@ -166,7 +166,7 @@ func TestGroupToolCalls_SingleParallel(t *testing.T) {
 // ---- executeToolCalls Parallel Tests ----
 
 func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(slowStub("Read"))
 	a.RegisterTool(slowStub("Grep"))
 	a.RegisterTool(slowStub("Glob"))
@@ -207,7 +207,7 @@ func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
 }
 
 func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(slowStub("Read"))
 	a.RegisterTool(seqStub("EditFile"))
 	a.RegisterTool(slowStub("Glob"))
@@ -235,7 +235,7 @@ func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
 
 func TestExecuteToolCalls_ResultOrderPreserved(t *testing.T) {
 	// Even though tools run concurrently, results must be in call order.
-	a := newTestAgent(nil)
+	a := newTestAgent(t,nil)
 	a.RegisterTool(slowStub("ToolA"))
 	a.RegisterTool(slowStub("ToolB"))
 	a.RegisterTool(slowStub("ToolC"))
@@ -272,7 +272,7 @@ func TestAgentLoop_ParallelToolCalls(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(mp)
+	a := newTestAgent(t,mp)
 	a.RegisterTool(slowStub("ToolA"))
 	a.RegisterTool(slowStub("ToolB"))
 	a.RegisterTool(slowStub("ToolC"))
@@ -316,7 +316,7 @@ func TestAgentLoop_MixedToolGroup(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(mp)
+	a := newTestAgent(t,mp)
 	a.RegisterTool(slowStub("Read"))
 	a.RegisterTool(slowStub("Grep"))
 	a.RegisterTool(seqStub("EditFile"))
@@ -344,7 +344,7 @@ func TestAgentLoop_ParallelToolError(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(mp)
+	a := newTestAgent(t,mp)
 	a.RegisterTool(slowStub("ToolA"))
 	a.RegisterTool(errorStub())
 	a.RegisterTool(slowStub("ToolC"))
@@ -380,7 +380,7 @@ func TestAgentLoop_SingleParallelTool(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(mp)
+	a := newTestAgent(t,mp)
 	a.RegisterTool(slowStub("ToolA"))
 
 	ch := a.RunConversationStream(t.Context(), nil, "single tool", "", llm.ChatOptions{MaxTokens: 4096})

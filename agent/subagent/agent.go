@@ -10,7 +10,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/session"
 )
 
 // Agent is the interface SubagentExecutor needs from its parent agent.
@@ -20,7 +19,7 @@ type Agent interface {
 	SubagentProvider() llm.Provider
 
 	// Shared services
-	SessionManager() *session.Manager
+	ParentSessionID() string
 	Logger() *logger.Logger
 
 	// Tool registry — used to copy tools from parent to child agents

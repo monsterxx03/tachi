@@ -8,7 +8,6 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -249,9 +248,9 @@ type fakeAgent struct {
 	childAgentFactory func(logger *logger.Logger, provider llm.Provider, maxIterations int, allowedTools []string, subagentSessionID string) ChildAgent
 }
 
-func (a *fakeAgent) SubagentProvider() llm.Provider   { return a.provider }
-func (a *fakeAgent) SessionManager() *session.Manager { return nil }
-func (a *fakeAgent) Logger() *logger.Logger           { return logger.Default() }
+func (a *fakeAgent) SubagentProvider() llm.Provider    { return a.provider }
+func (a *fakeAgent) ParentSessionID() string           { return "" }
+func (a *fakeAgent) Logger() *logger.Logger            { return logger.Default() }
 func (a *fakeAgent) ToolNames() []string              { return a.toolNames }
 func (a *fakeAgent) GetTool(name string) tools.Tool   { return nil }
 

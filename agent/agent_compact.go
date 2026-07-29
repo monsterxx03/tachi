@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 
-	"github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -40,25 +39,13 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 		}
 	}()
 
-	// 2. Build the compact prompt.
-	compactPrompt := commands.BuildCompactInstruction()
-
-	// 3. Append the compact instruction as a user message.
-	compactMsgs := make([]llm.Message, len(messages))
-	copy(compactMsgs, messages)
-	compactMsgs = append(compactMsgs, llm.Message{Role: "user", Content: compactPrompt})
-
-	// 4. Call the provider directly (non-streaming, no tools).
-	resp, err := a.provider.CreateChat(compactCtx, compactMsgs, nil, llm.ChatOptions{
-		MaxTokens: a.cfg.Compact.MaxTokens,
-	})
+	// 2. Generate summary via the compact strategy.
+	summary, err = a.compactStrategy.Compact(compactCtx, messages, a.cfg.Compact.MaxTokens)
 	if err != nil {
 		return "", nil, fmt.Errorf("compact LLM call: %w", err)
 	}
 
-	summary = resp.Content
-
-	// 5. Persist the old session to memory, create the new compacted session,
+	// 3. Persist the old session to memory, create the new compacted session,
 	// and notify memory that a new session started.
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
@@ -70,4 +57,11 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 	}
 
 	return summary, newHistory, nil
+}
+
+// SetCompactStrategy replaces the strategy used for auto-compact summary
+// generation. Tests use this to inject a fake that returns a fixed summary
+// without needing a real LLM provider.
+func (a *AIAgent) SetCompactStrategy(s CompactStrategy) {
+	a.compactStrategy = s
 }

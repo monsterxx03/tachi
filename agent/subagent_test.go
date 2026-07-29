@@ -8,7 +8,6 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -139,7 +138,7 @@ type mockAgent struct {
 }
 
 func (m *mockAgent) SubagentProvider() llm.Provider      { return nil }
-func (m *mockAgent) SessionManager() *session.Manager    { return nil }
+func (m *mockAgent) ParentSessionID() string             { return "" }
 func (m *mockAgent) Logger() *logger.Logger              { return logger.Default() }
 func (m *mockAgent) ToolNames() []string                 { return m.toolNames }
 func (m *mockAgent) GetTool(name string) agenttools.Tool { return nil }

@@ -114,10 +114,8 @@ func (e *Executor) run(
 	worktreePath string,
 ) (string, *tools.SubagentResult, error) {
 	subagentSessionID := shortID
-	if sm := e.agent.SessionManager(); sm != nil {
-		if cur := sm.Current(); cur != nil {
-			subagentSessionID = cur.ID + ":" + shortID
-		}
+	if parentID := e.agent.ParentSessionID(); parentID != "" {
+		subagentSessionID = parentID + ":" + shortID
 	}
 
 	childLogger := e.agent.Logger().With("session_id", subagentSessionID).With("prefix", fmt.Sprintf("[subagent:%s]", shortID))
@@ -140,19 +138,17 @@ func (e *Executor) run(
 
 	// Set up recorder for persisting execution details
 	var rec *recorder
-	if sm := e.agent.SessionManager(); sm != nil {
-		if cur := sm.Current(); cur != nil {
-			var recErr error
-			rec, recErr = newRecorder(cur.ID, shortID, childLogger)
-			if recErr != nil {
-				childLogger.Error(ctx, "failed to create recorder", recErr)
-			} else {
-				defer rec.close()
-				rec.record(&session.Message{
-					Type:    session.MessageTypeUser,
-					Content: args.Prompt,
-				})
-			}
+	if parentID := e.agent.ParentSessionID(); parentID != "" {
+		var recErr error
+		rec, recErr = newRecorder(parentID, shortID, childLogger)
+		if recErr != nil {
+			childLogger.Error(ctx, "failed to create recorder", recErr)
+		} else {
+			defer rec.close()
+			rec.record(&session.Message{
+				Type:    session.MessageTypeUser,
+				Content: args.Prompt,
+			})
 		}
 	}
 

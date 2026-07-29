@@ -18,7 +18,7 @@ import (
 //
 // On failure it best-effort deletes the orphaned child session, mirroring the
 // cleanup that the auto-compact path performed inline.
-func (a *AIAgent) CompleteCompact(sm *session.Manager, systemPrompt, summary string) ([]llm.Message, error) {
+func (a *AIAgent) CompleteCompact(sm SessionManager, systemPrompt, summary string) ([]llm.Message, error) {
 	if sm == nil {
 		sm = a.sessionManager
 	}
@@ -57,7 +57,7 @@ func (a *AIAgent) CompleteCompact(sm *session.Manager, systemPrompt, summary str
 // Returns:
 //   - newHistory: []llm.Message ready for RunConversationStream
 //   - err: any error during session creation or persistence
-func FinalizeCompact(sm *session.Manager, systemPrompt string, summary string) ([]llm.Message, error) {
+func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]llm.Message, error) {
 	oldSess := sm.Current()
 	if oldSess == nil {
 		return nil, fmt.Errorf("no active session to compact")
