@@ -1,8 +1,14 @@
 # Agent Loop 状态管理重构
 
-日期：2026-07-29
+日期：2026-07-29（2026-07-30 定稿；同日 review 修订：补 one-off RunState 语义、
+recorder RunOption 化、Step 5.5 runParams 改造、Step 5/6 调用点清单补全；
+2026-07-30 review-2 修订：sharedMCP 派生值 + fork 迁移、oneoffRec 过渡策略、
+mode 锁迁移、manager turn-active 标记、race 测试、budget 两入口）
 状态：方案确认
 关联：`2026-07-28-agent-loop-refactor.md`（循环体可读性重构）
+
+本文档是实施规格：按「迁移步骤」顺序执行，每步保持 `go test ./agent/...` 绿色，
+验收标准见文末。
 
 ## 背景
 
@@ -22,7 +28,7 @@ AIAgent (42 fields)
   ├── 回调/引用 (subagentRunner, deferredToolReminder, ...)
   └── turn (*turnState)
 
-turnState (10 fields, sync.RWMutex)
+turnState (9 fields, sync.RWMutex)
   ├── messages, inputTokens, breakdown
   ├── start, traceID, pendingImages
   ├── compactEstimate, lastMessageDate
@@ -33,13 +39,13 @@ loopState (4 fields, 无锁)
   ├── apiCalls, lengthRetries, budget
 ```
 
-`messages` 在两处存在。注释自述 "State lives at three levels"、"grab-bag"、"No claim that every field belongs here"。
+`messages` 在两处存在（`agent_loop.go` 中 `defer func() { a.turn.setMessages(ls.messages) }()`）。
 
 ---
 
 ## 完整字段清单
 
-当前 `AIAgent` 的 42 个字段逐一列出：
+当前 `AIAgent` 的 42 个字段（按 struct 声明顺序分组）：
 
 ```go
 // 1-5: 核心配置
@@ -50,16 +56,16 @@ permissionMode        PermissionMode            // 权限模式
 permissionPolicy      *permission.Policy        // bash 权限策略 (allow/ask/deny)
 
 // 6-8: 通信通道
-confirmRespCh         chan ConfirmResponse      // TUI/ACP → agent: 确认响应
-askUserRespCh         chan tools.AskUserResult  // TUI → agent: 用户输入响应
-steerRespCh           chan string               // TUI → agent: steer 输入
+confirmRespCh         chan ConfirmResponse      // TUI/ACP → agent: 确认响应（构造一次）
+askUserRespCh         chan tools.AskUserResult  // TUI → agent: 用户输入响应（构造一次）
+steerRespCh           chan string               // TUI → agent: steer 输入（每轮重建，loop 退出时置 nil）
 
 // 9-11: 权限运行时
 permissionHandler     PermissionHandler         // 外部权限处理器 (PermissionModeExternal)
 autoApprovePolicyAsks bool                      // 用户点了"全部允许"后设 true
 autoApproveEdits      bool                      // 用户点了"编辑全部允许"后设 true
 
-// 12-18: 管理器
+// 12-17: 管理器
 sessionManager        SessionManager            // 会话持久化
 reminderCollector     ReminderCollector          // 系统提醒收集器
 contextWindow         int64                     // 上下文窗口 token 上限
@@ -67,7 +73,7 @@ mcpManager            *mcp.Manager              // MCP 连接池 + ToolSearch
 processManager        *tools.ProcessManager     // 后台进程管理 (Bash 启动的进程)
 lspManager            *lsp.LSPManager           // LSP 诊断
 
-// 19-23: 专用模型
+// 18-23: 专用模型
 titleModelProvider    llm.Provider              // 标题生成专用模型 (nil = 用主模型)
 titleGenEnabled       bool                      // LLM 标题生成开关
 commitProvider        llm.Provider              // /commit 专用模型 (nil = 用主模型)
@@ -90,29 +96,29 @@ memory                *MemoryState              // 记忆子系统 (nil = 禁用
 deferredToolReminder  *systemreminder.DeferredToolReminder
 skillListReminder     *systemreminder.SkillListReminder
 
-// 33: 技能
+// 33-34: 技能
+skillStore            *skill.Store              // 技能存储
 activeSkills          map[string]bool           // 当前 session 激活的技能 (运行时可变)
 
-// 34: MCP 异步初始化输出
+// 35: MCP 异步初始化输出
 mcpInitErrors         []error                   // MCP 异步连接错误 (TUI 状态栏用)
 
-// 35-36: One-off 转录
-oneoffRec       *oneoffRecorder   // 一次性运行的实时记录器（每个 RunOneOffStream 设一次）
+// 36-37: One-off 转录
+oneoffRec       *oneoffRecorder   // 一次性运行的实时记录器（运行中被 recordSession 读取）
 lastOneoffPath  string            // 最近关闭的一次性转录文件路径（TUI 读取）
 
-// 37: 钩子系统
+// 38: 钩子系统
 hookDispatcher  *hooks.Dispatcher // 事件钩子分发器，由 Configure() 初始化
 
-// 38: 会话模式
+// 39: 会话模式
 mode            string            // "auto" / "chat" / "plan"，控制工具可见性
 
-// 39: 压缩策略
+// 40: 压缩策略
 compactStrategy CompactStrategy   // 自动压缩摘要生成器（测试时可 mock）
 
-// 40-42: ⬇ 已有
+// 41-42: 运行状态
 turn            *turnState        // 每轮状态 (带 mutex)
-skipSessionWrites bool            // 跳过 session 持久化（一次性任务）
-activeSkills    map[string]bool   // 当前 session 激活的技能
+skipSessionWrites bool            // 跳过 session 持久化（一次性任务，RunOneOffStream 设置/恢复）
 ```
 
 ---
@@ -131,22 +137,22 @@ activeSkills    map[string]bool   // 当前 session 激活的技能
 | `Provider`、`ContextWindow`、`MaxIterations`、`Logger`                                 | ✅ 已有                                      |
 | `PermissionMode`                                                                       | ✅ 已有                                      |
 | `TitleProvider`、`CommitProvider`、`ReviewProvider`、`RunProvider`、`SubagentProvider` | ✅ 已有（构造输入，见下方说明）             |
-| `ACPFileMode`、`PlanToolEnabled`                                                       | ✅ 已有（它们应拆到 FrontendConfig，见下节） |
-| `AutoApproveEdits`、`AutoApprovePolicyAsks`                                            | ✅ 已有（应拆到 PermissionState）            |
+| `ACPFileMode`、`PlanToolEnabled`                                                       | ✅ 已有（构造输入，派生 FrontendConfig）     |
+| `AutoApproveEdits`、`AutoApprovePolicyAsks`                                            | ✅ 已有（构造输入，初始化 PermState）        |
 | `ProcessManager`                                                                       | ✅ 已有                                      |
-| `SharedMCP`（`*mcp.Manager`）                                                          | ✅ 已有                                      |
-| `TitleGenEnabled`                                                                      | ✅ 已有（构造输入）                          |
+| `SharedMCP`（`*mcp.Manager`）                                                          | ✅ 已有（更名为 `MCPManager`，见下）         |
+| `TitleGenEnabled`（`*bool`）                                                           | ✅ 已有（构造输入）                          |
+| `SkipMemoryRecall`                                                                     | ✅ 已有（保留）                              |
 | `SystemConfig`（含 FullConfig）                                                        | ✅ 已有                                      |
 
-**关于专用 Provider 字段**：`TitleProvider`、`CommitProvider`、`ReviewProvider`、
-`RunProvider`、`SubagentProvider`、`TitleGenEnabled` 在 Config 中作为**可选构造输入**
-存在——调用方可以在 `NewAIAgentWithConfig` 时传入 override。如果为 nil，
-`SetupTitleProvider()` 等函数会在构造过程中从 `FullConfig` 解析出实际值，
-写入 AIAgent 的运行时字段（`titleModelProvider` 等）。
-
-因此，Config 中的这些字段是**输入**而非"运行时只读配置"。
-字段映射表中对应的 AIAgent 运行时字段（`titleModelProvider`、`titleGenEnabled` 等）
-**不映射到 Config**，而是保留在 AIAgent 上作为构造结果。详见字段映射表。
+**"构造输入"字段的语义**：`TitleProvider`、`CommitProvider`、`ReviewProvider`、
+`RunProvider`、`SubagentProvider`、`TitleGenEnabled`、`AutoApproveEdits`、
+`AutoApprovePolicyAsks`、`ACPFileMode`、`PlanToolEnabled` 在 Config 中作为
+**可选构造输入**存在——调用方在 `NewAIAgentWithConfig` 时传入，构造过程中被消费：
+专用 Provider 为 nil 时由 `SetupTitleProvider()` 等从 `FullConfig` 解析出实际值，
+写入 AIAgent 的运行时字段（`titleModelProvider` 等）；auto-approve 用于初始化
+`PermState`；ACP/PlanTool 用于派生 `FrontendConfig`。
+这些字段是**输入**而非运行时只读配置，构造完成后不再读取。
 
 **缺少的字段（需从 AIAgent 搬入）：**
 
@@ -164,19 +170,24 @@ activeSkills    map[string]bool   // 当前 session 激活的技能
     SkillStore       *skill.Store
 
     // 钩子系统
-    HookDispatcher   *hooks.Dispatcher     // 由 Configure() 初始化
+    HookDispatcher   *hooks.Dispatcher     // 由 Configure() 初始化（构造期回填）
 
-    // 压缩策略（测试时可注入 mock）
+    // 压缩策略（测试时可注入 mock；nil = 默认 llmCompactStrategy）
     CompactStrategy  CompactStrategy
 ```
 
-**需要搬出的字段（从 AgentConfig 移至更合适的位置）：**
+**SharedMCP 的处理**：现有 `SharedMCP *mcp.Manager` 字段更名为 `MCPManager`，
+语义不变（构造输入；nil = 由 Configure 创建并回填）。"Close 时是否销毁 manager"
+不需要独立的 bool 字段——由**构造时 `MCPManager` 是否为 nil** 推导：
+`NewAIAgentWithConfig` 在 Configure 前记录 `mcpOwned = (cfg.MCPManager == nil)`
+（unexported 派生值，供 `Close()` 判断；见「AIAgent 最终结构」）。
+AIAgent 上的 `sharedMCP bool` 字段删除。
 
-| 字段                                        | 目标                                               |
-| :------------------------------------------ | :------------------------------------------------- |
-| `ACPFileMode`、`PlanToolEnabled`            | `FrontendConfig`                                   |
-| `AutoApproveEdits`、`AutoApprovePolicyAsks` | `PermissionState`                                  |
-| `SharedMCP`                                 | 嵌入 `AgentConfig.MCPManager` 中，作为一个内部字段 |
+**Fork 路径对齐**：`ForkConfig`（`agent_fork.go`）当前持有 `sharedMCP *mcp.Manager`
+字段，fork 时透传父 agent 的 `mcpManager` 给子（`agent_fork.go:115`）。删除
+`AIAgent.sharedMCP` 后，fork 创建的子 agent 同样不拥有 manager——`ForkConfig`
+改设 `mcpOwned = false`（manager 由父持有，子 agent `Close()` 不销毁）。
+`ForkConfig` 的 `sharedMCP` 字段更名/语义调整在 Step 1 一并处理。
 
 调整后的 `AgentConfig`：
 
@@ -194,6 +205,13 @@ type AgentConfig struct {
     SubagentProvider llm.Provider
     TitleGenEnabled  *bool
 
+    // 功能开关（构造输入 / 只读配置）
+    ACPFileMode           bool   // 构造输入 → 派生 FrontendConfig
+    PlanToolEnabled       bool   // 构造输入 → 派生 FrontendConfig
+    AutoApproveEdits      bool   // 构造输入 → 初始化 PermState
+    AutoApprovePolicyAsks bool   // 构造输入 → 初始化 PermState
+    SkipMemoryRecall      bool   // 只读配置
+
     // 权限策略
     PermissionMode   PermissionMode
     PermissionPolicy *permission.Policy  // 新增
@@ -202,7 +220,7 @@ type AgentConfig struct {
     ToolRegistry     *tools.Registry       // 新增
     SessionManager   SessionManager        // 新增
     ReminderCollector ReminderCollector     // 新增
-    MCPManager       *mcp.Manager          // 替换 SharedMCP
+    MCPManager       *mcp.Manager          // 由 SharedMCP 更名；Configure 回填
     ProcessManager   *tools.ProcessManager
     LSPManager       *lsp.LSPManager       // 新增
     SubagentRunner   tools.SubagentRunner  // 新增
@@ -214,24 +232,19 @@ type AgentConfig struct {
     SystemConfig AgentSystemConfig
     FullConfig   *config.Config
 
-    // 钩子系统（由 Configure 初始化）
+    // 钩子系统（由 Configure 初始化，构造期回填）
     HookDispatcher *hooks.Dispatcher
 
     // 压缩策略（测试可 mock）
     CompactStrategy CompactStrategy
-
-    // 不再包含（已搬出）：
-    //   ACPFileMode, PlanToolEnabled       → FrontendConfig
-    //   AutoApproveEdits, AutoApprovePolicyAsks → PermissionState
 }
 ```
 
-**注意**：`DeferredToolReminder` 和 `SkillListReminder` 不在 Config 中出现。
-它们是 `ReminderCollector` 内部提醒实例的指针，当前直接暴露给 AIAgent 是为了
-绕过 ReminderCollector 的 Getter 方法。这属于封装破损，修复方式是给
-ReminderCollector 加访问方法，而不是把内部指针列为顶级配置。
+**注意**：`DeferredToolReminder` 和 `SkillListReminder` 不进 Config。
+它们是 `ReminderCollector` 内部提醒实例的指针，暂留 AIAgent（见 §6）；
+后续由 ReminderCollector 提供访问方法后再移除。
 
-### 3. `FrontendConfig` — 前端模式配置（纯只读）
+### 2. `FrontendConfig` — 前端模式配置（纯只读）
 
 与 `AgentConfig` 同级，按前端类型（TUI / ACP / channel）在构造时设一次。
 全部字段构造后不变。
@@ -240,43 +253,33 @@ ReminderCollector 加访问方法，而不是把内部指针列为顶级配置�
 type FrontendConfig struct {
     ACPFileMode     bool    // ← a.acpFileMode
     PlanToolEnabled bool    // ← a.planToolEnabled
-    SharedMCP       bool    // ← a.sharedMCP
 }
 ```
 
-**不包含** `Mode`——它在运行时通过 `SetMode()` 改变，放在 `FrontendConfig`
-会破坏（大部分）只读的契约。直接留在 AIAgent 上作为一级字段：
+- 不含 `Mode`：运行时经 `SetMode()` 改变，留在 AIAgent 一级字段（见 §6）。
+- 不含 `SharedMCP`：它是生命周期所有权标志，由构造时 `MCPManager` 是否注入推导（见 §1）。
 
-```go
-type AIAgent struct {
-    // ...
-    mode string  // "auto" / "chat" / "plan"，运行时可变
-}
-```
-
-### 4. `RuntimeChannels` — 通信通道
-
-loop 与外部（TUI / ACP）通信的 channel。未使用的 channel 传 nil
-（steer 禁用时 steerResp = nil）。
+### 3. `RuntimeChannels` — 通信通道（agent 生命周期，只读）
 
 ```go
 type RuntimeChannels struct {
-    ConfirmResp chan ConfirmResponse      // ← a.confirmRespCh
-    AskUserResp chan tools.AskUserResult  // ← a.askUserRespCh
-    SteerResp   chan string               // ← a.steerRespCh; nil = steer 禁用
+    ConfirmResp chan ConfirmResponse      // ← a.confirmRespCh（NewAIAgent 创建，缓冲 1）
+    AskUserResp chan tools.AskUserResult  // ← a.askUserRespCh（NewAIAgent 创建，缓冲 1）
 }
 ```
 
-`AIAgent` 和 `runLoop` 持有同一份引用（`*RuntimeChannels`）：
+只收**随 agent 生命周期**的 channel：这两个在 `NewAIAgent` 一次性创建、永不重建。
+`ConfirmTool()`、`RespondToAskUser()` 保留为 AIAgent 方法（封装写入逻辑），
+内部操作 `a.Channels.XXX`。
 
-- TUI 通过 `agent.Channels.ConfirmResp <- AllowOnce` 写入
-- loop 通过参数传入的同一份 channel 读取
+steer channel 不在其中：它是 per-run 状态（TUI/channel 每轮重建，
+loop 退出时置 nil），通过 `RunOption` 传入（见 §5）。
 
-`ConfirmTool()` 等方法保留为 AIAgent 的方法（封装写入逻辑），内部操作 `a.Channels.ConfirmResp`。
+### 4. `PermissionState` — 运行时可变权限
 
-### 5. `PermissionState` — 运行时可变权限
-
-这三个字段在 session 中途可能被用户操作改变，不能放 `AgentConfig`。
+这三个字段在 session 中途被用户操作改变，且工具执行路径会**写**
+（`tool_executor.go` 在 ConfirmAllowAlways 时置 `autoApproveEdits = true`），
+因此独立于只读的 `AgentConfig`：
 
 ```go
 type PermissionState struct {
@@ -286,73 +289,115 @@ type PermissionState struct {
 }
 ```
 
-`AIAgent` 保持现有的 Setter 方法（`SetPermissionHandler`、`SetAutoApproveEdits` 等），
-内部改为操作 `a.PermState.XXX`。这样既能从组织结构上明确"这些是可变权限"，
-又保留 Setter 的扩展点（日后加日志、校验、事件通知不用改调用方）。
+`AIAgent` 保持现有 Setter 方法（`SetPermissionHandler`、`SetAutoApproveEdits` 等），
+内部改为操作 `a.PermState.XXX`，保留 Setter 扩展点（日志、校验、事件通知）。
+初始值由 `AgentConfig.AutoApprove*` 构造输入在 `NewAIAgentWithConfig` 时注入。
 
-### 6. `RunState` — 实时运行状态（取代 loopState + turnState，带并发读）
+### 5. `RunState` — 实时运行状态（取代 loopState + turnState）
 
-`turnState` 的 `sync.RWMutex` **不是设计缺陷**——它是必需的，因为 TUI 在 loop 运行中
-会并发读取 token 估算、trace ID、耗时等信息（状态栏、日志）。
-
-`RunState` 继承这个职责：loop 写、TUI 通过 Getter 并发读、结束时通过 channel 回传同一份引用。
+`turnState` 的 `sync.RWMutex` 是必需的：channel 模式下同一 agent 被 turn
+goroutine 写入、slash-command handler（如 `/usage`）在 **turn 之间**并发读取
+token 估算与 breakdown（该路径曾发生真实 data race，见 `turn_state.go` 注释）；
+TUI 状态栏也在 loop 运行中并发读取。`RunState` 继承这个职责：
+loop 写、外部通过 Getter 并发读。
 
 ```go
 type RunState struct {
-    mu               sync.RWMutex    // TUI 并发读取保护
+    mu               sync.RWMutex    // 并发读保护（见下文字段分类）
 
+    // ── 并发读写（loop 写，slash-command/TUI 读）──
     Messages        []llm.Message    // 完整消息历史（loop 追加，结束时可读）
-    APICalls        int              // ← loopState.apiCalls
-    LengthRetries   int              // ← loopState.lengthRetries
-    Budget          *IterationBudget // ← loopState.budget
-
     InputTokens     int64                    // ← turnState.inputTokens
     TokenBreakdown  tokenbreakdown.Breakdown // ← turnState.breakdown
     StartTime       time.Time                // ← turnState.start
     TraceID         string                   // ← turnState.traceID
     CompactEstimate int64                    // ← turnState.compactEstimate
     LastMessageDate string                   // ← turnState.lastMessageDate
-    SkipSessionWrites bool                   // ← a.skipSessionWrites
+
+    // ── 仅 loop goroutine 访问（无需锁，归属此处仅为聚合）──
+    APICalls        int              // ← loopState.apiCalls
+    LengthRetries   int              // ← loopState.lengthRetries
+    Budget          *IterationBudget // ← loopState.budget
+
+    // ── per-run 标志与资源 ──
+    SkipSessionWrites bool             // ← a.skipSessionWrites
+    OneoffRec         *oneoffRecorder // ← a.oneoffRec
 }
 ```
 
-**不包含** `PendingImages`：它是 `runLoop` 的输入，不是运行状态。
-通过已有的 `RunOption` 模式传入，不破坏 `RunConversationStream` 签名：
+**字段处理说明**：
 
-```go
-// agent/agent.go
-func WithPendingImages(imgs []llm.ContentPart) RunOption {
-    return func(p *runParams) { p.pendingImages = imgs }
-}
-```
+- **`pendingImages` 字段删除**。它有两个写入路径：run 开始前（TUI/ACP/channel
+  三处，紧邻 `RunConversationStream` 调用）和 run 进行中（TUI steer 带图，
+  `tui/model_events.go`）。后者目前无人消费——`takePendingImages` 唯一调用点
+  在 run 开始时，`applySteer` 构造纯文本 `RoleSteer` 消息，steer 带的图会被
+  静默挂到下一轮首条消息或丢弃。本次重构修复此问题：
+  - run 开始时的图片 → `WithPendingImages` RunOption：
 
-TUI 调用时：
+    ```go
+    func WithPendingImages(imgs []llm.ContentPart) RunOption {
+        return func(p *runParams) { p.pendingImages = imgs }
+    }
+    ```
 
-```go
-agent.RunConversationStream(ctx, history, text, sysPrompt, opts,
-    agent.WithPendingImages(images))
-```
+  - steer 带图 → steer 通道类型升级为结构体：
 
-`runLoop` 内部通过 `runParams` 读取。
+    ```go
+    type SteerInput struct {
+        Text   string
+        Images []llm.ContentPart
+    }
 
-Getter 方法保留（`LastInputEstimate()`, `GetLastMessages()`, `trace()`, `elapsed()`），
-内部操作 `RunState` 的 mutex。外部调用方不变。
+    func WithSteerChannel(ch chan SteerInput) RunOption {
+        return func(p *runParams) { p.steerCh = ch }
+    }
+    ```
 
-**Channel 契约**：
+    `applySteer` 改为从 `runParams.steerCh` 读取，把 `Images` 附到 steer 消息的
+    `ContentParts` 上。steer channel 生命周期完全交还前端（每轮新建、
+    TurnComplete 后弃用），loop 不再置 nil，`a.steerRespCh` 字段删除。
+  - `SetPendingImages` / `SetSteerChannel` 公开 API 删除，TUI/ACP/channel
+    四个调用点迁移（见迁移步骤 Step 6）。
 
-- `<-chan *RunState` **恰好发送一次后 close**
-- 正常结束：发送最终的 `*RunState`
-- context 提前取消：发送当前的 `*RunState`（含已累积消息），然后 close
-- TUI 用 `<-resultCh` 接收一次即可
+- **`OneoffRec` 归属 RunState**：`recordSession` 在 run 进行中读取 recorder
+  （`agent.go`），channel ambient 目前通过 `AttachOneOffRecorder` 在
+  `RunOneOffStream` 之外从外部挂载（`channel/manager/ambient.go`）——
+  它是 per-run 资源。重构后 recorder 生命周期完全并入 run：外部挂载改为
+  `WithOneOffRecorder` RunOption，recorder 在 rs 初始化时创建、loop 结束时
+  关闭，`AttachOneOffRecorder` / `DetachOneOffRecorder` 公开 API 删除
+  （机制详见下方「one-off 运行的 RunState 语义」，迁移见 Step 6）。
 
-**currentRun 生命周期**：
+- **`SkipSessionWrites` 归属 RunState**：当前 `RunOneOffStream` 直接改 agent
+  字段再 defer 恢复（共享可变状态）；per-run 化后该问题消除。one-off 的
+  rs 不发布到 `currentRun`，规则见下方「one-off 运行的 RunState 语义」。
+
+**`recordSession` 等 helper 的 rs 获取**：`recordSession`、`ensureSessionAndRecordUser`、
+`applySteer`、`injectLoopReminders` 等 loop 内部 helper 全部改为**显式接收
+`*RunState` 参数**（调用点均在 run 内，rs 可达），不经 `currentRun` 中转。
+注意 `recordSession` 要读 `rs.OneoffRec` / `rs.SkipSessionWrites`，其 12 个
+调用点中 4 个在 `tool_executor.go`（`executeToolCalls` / `Parallel` /
+`Sequential`，当前签名不含 loopState）——rs 需穿透这三层（见 Step 5）。
+
+Getter 方法保留（`LastInputEstimate()`、`LastInputEstimateWithBreakdown()`、
+`GetLastMessages()`、`trace()`、`elapsed()`），内部改为：在 `a.mu` 下读
+`currentRun`（nil 时返回零值），再在 `rs.mu` 下读字段。外部调用方不变。
+
+**完成信号契约**：
+
+- `runLoop` 只返回 `<-chan AgentEvent`
+- loop 结束时 close eventCh；**rs 的所有写入 happen-before eventCh 关闭**，
+  消费方 drain eventCh 后即可安全读 rs（与现有 `GetLastMessages` 契约一致）
+
+**currentRun 生命周期**（与现有 turnState 语义对齐）：
 
 ```
 状态         AIAgent.currentRun    含义
-空闲         nil                   没有运行中的 loop
-运行中       *RunState             loop 写，TUI 并发读
-结束         *RunState             指针保留，直到下一次 RunConversationStream 覆盖
+空闲(首次)   nil                   尚无 run；Getter 返回零值
+运行中       *RunState             loop 写，TUI/channel 并发读
+结束后       *RunState             指针保留，直到下一次 run 覆盖
 ```
+
+结束后不要置 nil——channel 模式 turn 间的 `/usage` 读取依赖保留语义。
 
 `AIAgent` 中管理 `currentRun`：
 
@@ -367,35 +412,62 @@ func (a *AIAgent) RunConversationStream(...) <-chan AgentEvent {
     a.currentRun = rs
     a.mu.Unlock()
 
-    eventCh, resultCh := runLoop(ctx, a.Config, a, &a.Channels, rs,
-        messages, opts, ropts...)
-
-    go func() {
-        <-resultCh
-        a.mu.Lock()
-        a.currentRun = nil
-        a.mu.Unlock()
-    }()
-    return eventCh
+    in := &runInput{Messages: messages, Opts: opts, Params: applyRunOptions(ropts)}
+    return a.runLoop(ctx, rs, in)
 }
 ```
 
-### 7. 已归类但留在 AIAgent 的字段
+注：`Budget` 构造移到调用方。`IterationBudget.Parent` 目前全库无人赋值
+（dormant 机制），当下无碍；若未来启用子代理预算共享，需改为从
+ctx/RunOption 取 parent 再构造。
 
-下列字段当前留在 AIAgent 上，原因是迁移成本高或涉及封装修复：
+#### one-off 运行的 RunState 语义（不发布 currentRun）
 
-| 字段                   | 原因                       | 目标                                                    |
-| :--------------------- | :------------------------- | :------------------------------------------------------ |
-| `activeSkills`         | session 级技能状态         | ⏳ 移入 SessionManager                                  |
-| `skillStore`           | 技能存储                   | ⏳ 移入 SessionManager                                  |
-| `deferredToolReminder` | ReminderCollector 内部指针 | ⏳ ReminderCollector 加 Getter                          |
-| `skillListReminder`    | ReminderCollector 内部指针 | ⏳ ReminderCollector 加 Getter                          |
-| `oneoffRec`            | 每 run 生命周期            | ✅ 在 `RunOneOffStream` 中作为局部变量，不从 AIAgent 读 |
-| `lastOneoffPath`       | TUI 查询用                 | ⏳ 暂留，未来可走事件或 Store                           |
-| `mcpInitErrors`        | 时序原因（MCP 异步初始化） | ⏳ 暂留                                                 |
-| `mode`                 | AIAgent 直接留用           | 可变                                                    |
-| `hookDispatcher`       | 由 Configure() 初始化      | ⏳ 移入 AgentConfig                                     |
-| `compactStrategy`      | 测试可 mock                | ✅ 移入 AgentConfig                                     |
+**规则：`currentRun` 只代表主会话运行；one-off 的 rs 是局部变量，跑完即弃。**
+
+- `RunConversationStream`：创建 rs → 发布 `a.currentRun = rs` → `runLoop`
+- `RunOneOffStream`：创建 rs（`SkipSessionWrites: true`）→ **不发布** → `runLoop`
+
+配套变化：
+
+- **删除 `savedTokens` 保存/恢复**（`agent_loop.go` 中 RunOneOffStream 的
+  `savedTokens := a.turn.tokens()` + defer 恢复）——one-off 不再碰主会话
+  状态，这道防线失去意义。
+- **行为变化（修复而非回归）**：现状下 one-off 会覆盖 `turn.messages` 与
+  token 估算（`defer setMessages` 在共享的 `runAgentLoop` 里，savedTokens
+  只救了 tokens 没救 messages）；新设计下 `GetLastMessages` /
+  `LastInputEstimate` 对 one-off 完全免疫。
+- `turn.begin/trace/elapsed` 全部变为 rs 字段，helper 经显式 rs 参数访问。
+
+**one-off 转录（recorder）生命周期并入 run**：
+
+- **创建**：run goroutine 内、rs 初始化时（首次 `recordSession` 之前），
+  若 meta 非空则走现有 `startOneoffRecorder` 逻辑创建 recorder 填
+  `rs.OneoffRec`（`resolveOneoffSessionID` 改读 `a.Config.SessionManager`）。
+  `RunOneOffStream` 已显式收 `meta OneOffMeta` 参数，直接填入；
+  `RunConversationStream` 路径（channel ambient）经 `WithOneOffRecorder`
+  RunOption 传入（runParams 定义见「runLoop 方法签名」，迁移见 Step 6）。
+- **关闭**：loop goroutine 内 defer，close recorder → 写 `a.lastOneoffPath`
+  → 日志改用 `rs.TraceID`（替代 `a.turn.trace()`）。关闭 happen-before
+  eventCh close，TUI 在 TurnComplete 后读 `LastOneoffTranscriptPath()`
+  的时序契约不变。
+- 删除 `AttachOneOffRecorder` / `DetachOneOffRecorder` 公开 API。
+- 顺带收益：ambient 目前在 attach 时即创建转录文件，若随后在 ctx 检查处
+  bail 需靠 defer detach 清理空 recorder；recorder 随 run 创建后，
+  不 run 就不存在，该清理路径消失。
+
+### 6. 留在 AIAgent 的字段
+
+| 字段                   | 原因                                          | 目标                                    |
+| :--------------------- | :-------------------------------------------- | :-------------------------------------- |
+| `mode`                 | 运行时经 `SetMode()` 可变                     | AIAgent 一级字段（`a.mu` 保护）         |
+| `titleModelProvider`   | 构造结果（Setup 解析后只读）                  | AIAgent 一级字段                        |
+| `titleGenEnabled`      | 构造结果（同上）                              | AIAgent 一级字段                        |
+| `activeSkills`         | session 级运行时状态                          | 暂留；**不**移入 SessionManager（持久化接口不应承载运行时状态） |
+| `deferredToolReminder` | ReminderCollector 内部指针                    | ⏳ ReminderCollector 加 Getter 后移除   |
+| `skillListReminder`    | 同上                                          | ⏳ 同上                                 |
+| `lastOneoffPath`       | TUI 查询用（run 结束后读取最近转录路径）      | 暂留，未来可走事件                      |
+| `mcpInitErrors`        | 时序原因：MCP 异步初始化，manager 未就绪时已需可读 | 暂留；未来若 MCP 初始化同步化，可评估 `MCPManager.InitErrors()` Getter |
 
 ---
 
@@ -403,170 +475,180 @@ func (a *AIAgent) RunConversationStream(...) <-chan AgentEvent {
 
 ```go
 type AIAgent struct {
-    Config       AgentConfig         // 只读配置（含基础设施句柄）
+    Config       AgentConfig         // 只读配置（含基础设施句柄；Configure 期回填）
     Frontend     FrontendConfig      // 前端模式（纯只读）
-    Channels     RuntimeChannels     // 通信通道（只读，可 nil）
+    Channels     RuntimeChannels     // 通信通道（agent 生命周期，只读）
     PermState    *PermissionState    // 可变权限（session 级）
 
     // 运行时可变字段（直接在 AIAgent 上）
     mode string                     // "auto" / "chat" / "plan"
 
-    // ⏳ 待迁移 / 暂留（见 §7）
+    // 构造结果（Setup 解析后只读）
+    titleModelProvider    llm.Provider
+    titleGenEnabled       bool
+
+    // ⏳ 暂留（见 §6）
     activeSkills          map[string]bool
-    skillStore            *skill.Store
     deferredToolReminder  *systemreminder.DeferredToolReminder
     skillListReminder     *systemreminder.SkillListReminder
     lastOneoffPath        string
-    mcpInitErrors         []error        // 暂留（时序原因）
-    titleModelProvider    llm.Provider   // 构造结果
-    titleGenEnabled       bool           // 构造结果
+    mcpInitErrors         []error
+    mcpOwned              bool      // Configure 前由 cfg.MCPManager==nil 设定；Close 据此决定是否销毁
 
-    currentRun  *RunState           // 当前运行的实时状态（loop 写，TUI 读）
+    currentRun  *RunState           // 当前运行的实时状态（loop 写，外部并发读）
     mu          sync.RWMutex        // 保护 currentRun + mode
 }
 ```
 
-字段从 42 个平铺 → **4 个子结构 + 1 个可变字段 + 8 个暂留/结果 + 1 个运行状态**：
+字段从 42 个平铺 → **4 个子结构 + 运行时可变字段 + 暂留/构造结果 + 1 个运行状态**：
 
 | 分组                     | 字段数 | 生命周期              |
 | :----------------------- | :----: | :-------------------- |
-| `AgentConfig`            |  ~22   | 只读（部分构造输入）  |
-| `FrontendConfig`         |   3    | 纯只读                |
-| `RuntimeChannels`        |   3    | 只读（可 nil）        |
+| `AgentConfig`            |  ~30   | 只读（部分构造输入/回填）|
+| `FrontendConfig`         |   2    | 纯只读                |
+| `RuntimeChannels`        |   2    | 只读                  |
 | `PermissionState`        |   3    | 可变                  |
-| `mode`（AIAgent 直接）   |   1    | 可变                  |
-| `RunState`               |  ~10   | 实时运行（mutex 保护）|
-| 暂留 / 构造结果          |   8    | 逐步迁移              |
-
-**注**：`mcpInitErrors` 保留在 AIAgent 上，不移入 MCPManager。
-原因是时序问题——MCP 异步初始化，`mcpInitErrors` 可能在 MCPManager 尚未就绪时
-就需要被查询。作为一个简单的 `[]error` 字段，留在 AIAgent 上是最安全的做法。
-未来如果 MCP 初始化改为同步，可以重新评估。
-应由 `Config.MCPManager` 以 Getter 方法（如 `InitErrors() []error`）提供。
-TUI 通过 `agent.Config.MCPManager.InitErrors()` 读取，不再经过 AIAgent。
+| `mode` + 构造结果        |   3    | 可变 / 构造后只读     |
+| `RunState`               |  ~13   | 实时运行（mutex 保护）|
+| 暂留                     |   5    | 逐步迁移              |
 
 ### 字段映射总表
 
-| 原字段                  | 新位置                            |         生命周期         |
-| :---------------------- | :-------------------------------- | :----------------------: |
-| `provider`              | `Config.Provider`                 |           只读           |
-| `maxIterations`         | `Config.MaxIterations`            |           只读           |
-| `toolRegistry`          | `Config.ToolRegistry`             |           只读           |
-| `permissionMode`        | `Config.PermissionMode`           |           只读           |
-| `permissionPolicy`      | `Config.PermissionPolicy`         |           只读           |
-| `sessionManager`        | `Config.SessionManager`           |           只读           |
-| `reminderCollector`     | `Config.ReminderCollector`        |           只读           |
-| `contextWindow`         | `Config.ContextWindow`            |           只读           |
-| `titleModelProvider`   | AIAgent 暂留（构造结果） | 构造后只读     |
-| `titleGenEnabled`      | AIAgent 暂留（构造结果） | 构造后只读     |
-| `commitProvider`        | `Config.CommitProvider`           |           只读           |
-| `reviewProvider`        | `Config.ReviewProvider`           |           只读           |
-| `runProvider`           | `Config.RunProvider`              |           只读           |
-| `subagentProvider`      | `Config.SubagentProvider`         |           只读           |
-| `logger`                | `Config.Logger`                   |           只读           |
-| `cfg`                   | `Config.FullConfig`               |           只读           |
-| `skillStore`            | `Config.SkillStore`               |           只读           |
-| `memory`                | `Config.Memory`                   |           只读           |
-| `acpFileMode`           | `Frontend.ACPFileMode`            |           只读           |
-| `planToolEnabled`       | `Frontend.PlanToolEnabled`        |           只读           |
-| `sharedMCP`             | `Frontend.SharedMCP`              |           只读           |
-| `mcpManager`            | `Config.MCPManager`               |           只读           |
-| `processManager`        | `Config.ProcessManager`           |           只读           |
-| `lspManager`            | `Config.LSPManager`               |           只读           |
-| `subagentRunner`        | `Config.SubagentRunner`           |           只读           |
-| `deferredToolReminder`  | AIAgent 暂留 ⏳                   | 待移入 ReminderCollector |
-| `skillListReminder`     | AIAgent 暂留 ⏳                   | 待移入 ReminderCollector |
-| `confirmRespCh`         | `Channels.ConfirmResp`            |           只读           |
-| `askUserRespCh`         | `Channels.AskUserResp`            |           只读           |
-| `steerRespCh`           | `Channels.SteerResp`              |           只读           |
-| `permissionHandler`     | `PermState.PermissionHandler`     |           可变           |
-| `autoApprovePolicyAsks` | `PermState.AutoApprovePolicyAsks` |           可变           |
-| `autoApproveEdits`      | `PermState.AutoApproveEdits`      |           可变           |
-| `mcpInitErrors`         | AIAgent 暂留（时序原因）          |         异步填充         |
-| `turn`                  | **删除** → 被 `RunState` 替代     |            —             |
-| `skipSessionWrites`     | `RunState.SkipSessionWrites`      |          每 run          |
-| `activeSkills`          | AIAgent 暂留 ⏳                   |          待迁移          |
-| `skillStore`            | `Config.SkillStore`               |           只读           |
-| `oneoffRec`             | `RunOneOffStream` 局部变量        |          每 run          |
-| `lastOneoffPath`        | AIAgent 暂留 ⏳                   |          待迁移          |
-| `mode`                  | `Frontend.Mode`（可运行时变更）   |           可变           |
-| `hookDispatcher`        | ⏳ 移入 `Config.HookDispatcher`   |           只读           |
-| `compactStrategy`       | ✅ 移入 `Config.CompactStrategy`  |           只读           |
+| 原字段                  | 新位置                                       |    生命周期    |
+| :---------------------- | :------------------------------------------- | :------------: |
+| `provider`              | `Config.Provider`                            |      只读      |
+| `maxIterations`         | `Config.MaxIterations`                       |      只读      |
+| `toolRegistry`          | `Config.ToolRegistry`                        |      只读      |
+| `permissionMode`        | `Config.PermissionMode`                      |      只读      |
+| `permissionPolicy`      | `Config.PermissionPolicy`                    |      只读      |
+| `confirmRespCh`         | `Channels.ConfirmResp`                       |      只读      |
+| `askUserRespCh`         | `Channels.AskUserResp`                       |      只读      |
+| `steerRespCh`           | **删除** → `WithSteerChannel` RunOption      |    每 run      |
+| `permissionHandler`     | `PermState.PermissionHandler`                |      可变      |
+| `autoApprovePolicyAsks` | `PermState.AutoApprovePolicyAsks`（Config 同名构造输入） | 可变 |
+| `autoApproveEdits`      | `PermState.AutoApproveEdits`（Config 同名构造输入）      | 可变 |
+| `sessionManager`        | `Config.SessionManager`                      |      只读      |
+| `reminderCollector`     | `Config.ReminderCollector`                   |      只读      |
+| `contextWindow`         | `Config.ContextWindow`                       |      只读      |
+| `titleModelProvider`    | AIAgent 一级字段（构造结果）                 |   构造后只读   |
+| `titleGenEnabled`       | AIAgent 一级字段（构造结果）                 |   构造后只读   |
+| `commitProvider`        | `Config.CommitProvider`                      |      只读      |
+| `reviewProvider`        | `Config.ReviewProvider`                      |      只读      |
+| `runProvider`           | `Config.RunProvider`                         |      只读      |
+| `subagentProvider`      | `Config.SubagentProvider`                    |      只读      |
+| `logger`                | `Config.Logger`                              |      只读      |
+| `acpFileMode`           | `Frontend.ACPFileMode`（Config 同名构造输入）|      只读      |
+| `planToolEnabled`       | `Frontend.PlanToolEnabled`（Config 同名构造输入） |   只读      |
+| `sharedMCP`             | **删除** → `mcpOwned bool`（由构造时 `Config.MCPManager==nil` 推导） | 只读（构造期） |
+| `skillStore`            | `Config.SkillStore`                          |      只读      |
+| `activeSkills`          | AIAgent 暂留                                 |  session 级可变 |
+| `subagentRunner`        | `Config.SubagentRunner`                      |      只读      |
+| `memory`                | `Config.Memory`                              |      只读      |
+| `cfg`                   | `Config.FullConfig`                          |      只读      |
+| `deferredToolReminder`  | AIAgent 暂留 ⏳                              | 待移入 ReminderCollector |
+| `skillListReminder`     | AIAgent 暂留 ⏳                              | 待移入 ReminderCollector |
+| `mcpManager`            | `Config.MCPManager`                          |      只读      |
+| `mcpInitErrors`         | AIAgent 暂留（时序原因）                     |    异步填充    |
+| `processManager`        | `Config.ProcessManager`                      |      只读      |
+| `lspManager`            | `Config.LSPManager`                          |      只读      |
+| `turn`                  | **删除** → 被 `RunState` 替代                |       —        |
+| `skipSessionWrites`     | `RunState.SkipSessionWrites`                 |     每 run     |
+| `hookDispatcher`        | `Config.HookDispatcher`（Configure 回填）    |      只读      |
+| `oneoffRec`             | `RunState.OneoffRec`                         |     每 run     |
+| `lastOneoffPath`        | AIAgent 暂留                                 |     待迁移     |
+| `mode`                  | AIAgent 一级字段                             |      可变      |
+| `compactStrategy`       | `Config.CompactStrategy`                     |      只读      |
 
-### runLoop 函数签名
+（42 个原字段；`SkipMemoryRecall` 本就在 AgentConfig 上，不涉及迁移。）
+
+### runLoop 方法签名
+
+`runLoop` 保留为 `AIAgent` 的方法，不抽自由函数——循环体的静态依赖
+（`Config`/`PermState`/`Channels`/schema 过滤）若全部列为参数，签名会退化成
+"AIAgent 减去可变字段"的复制。静态依赖经 receiver 访问，
+签名只携带 per-run 的状态与输入：
+
+**`runParams` 与 `RunOption` 类型改造**：现有 `RunOption` 定义为
+`func(*toolView)`（`toolview.go`），需改为以 `runParams` 为目标
+（`toolView` 内嵌），承载新增的 per-run 输入：
+
+```go
+// runParams 是一次运行已解析的 RunOption 集合。
+type runParams struct {
+    toolView                          // 工具可见性（现有 WithToolSet/WithNoTools/WithExtraTools）
+    pendingImages []llm.ContentPart   // run 开始时附到首条用户消息的图片
+    steerCh       chan SteerInput     // steer 输入（nil = 前端不支持 steer）
+    oneoffMeta    *OneOffMeta         // one-off 转录（nil = 不录制）
+}
+
+type RunOption func(*runParams)
+
+func applyRunOptions(ropts []RunOption) *runParams { ... }
+```
+
+得益于 embedding，`WithToolSet`/`WithNoTools`/`WithExtraTools` 的闭包
+签名从 `func(v *toolView)` 改为 `func(p *runParams)` 后函数体不变；
+两个入口的对外签名 `...RunOption` 不变，调用方零改动；内部唯一应用点
+`buildToolView(ropts)` 改为 `applyRunOptions`，toolView 部分经
+`params.toolView` 传给 `withToolView`。
+
+```go
+// runInput 是一次运行的输入：消息、调用选项、已解析的 RunOption。
+type runInput struct {
+    Messages []llm.Message
+    Opts     llm.ChatOptions
+    Params   *runParams  // 已解析的 RunOption（toolView、pendingImages、steerCh、oneoffMeta）
+}
+
+func (a *AIAgent) runLoop(
+    ctx context.Context,
+    rs *RunState,   // 运行状态（含 SkipSessionWrites、OneoffRec、Budget）
+    in *runInput,
+) <-chan AgentEvent
+```
 
 `runLoop` 不再创建 `RunState`，由调用方传入已初始化的 `*RunState`。
-引入 `ToolFilter` 接口来封装 schema 过滤逻辑，避免 `runLoop` 直接依赖
-`AgentConfig` 和 `FrontendConfig` 的跨结构耦合：
+完成信号：loop 结束即 close 返回的 eventCh；rs 的所有写入 happen-before close。
 
-```go
-type ToolFilter interface {
-    FilterActiveSchemas(schemas []tools.Schema) []tools.Schema
-}
-```
-
-`AIAgent` 实现它（搬移现有 `filterActiveSchemas` 方法体），
-`runLoop` 只依赖接口：
-
-```go
-func runLoop(
-    ctx context.Context,
-    cfg AgentConfig,              // 模型、预算、session 管理器等
-    filter ToolFilter,            // schema 过滤（由 AIAgent 实现）
-    chans *RuntimeChannels,
-    rs *RunState,
-    messages []llm.Message,
-    opts llm.ChatOptions,
-    ropts ...RunOption,           // 含 WithPendingImages 等
-) (<-chan AgentEvent, <-chan *RunState)
-```
-
-**好处**：
-- `runLoop` 不关心 Mode、ToolRegistry、MCPManager 在哪个子结构里
-- 测试可传 mock ToolFilter，无需构造 AgentConfig
-- filter 逻辑本身可单独测试
-
-`RunConversationStream` 调用时传入 `a`（自身就是 ToolFilter）：
-
-```go
-eventCh, resultCh := runLoop(ctx, a.Config, a, &a.Channels, rs,
-    messages, opts, ropts...)
-```
+**分层约定**：runLoop 及其 helper 只经 `a.Config` / `a.PermState` /
+`a.Channels` / `a.Frontend` 访问静态依赖，不直接读写 `activeSkills`、
+`mcpInitErrors` 等暂留字段。schema 过滤仍由 `a.filterActiveSchemas` 方法承担。
 
 ---
 
-## 可测试性
+## 测试模式
 
-### 重构后：测 steer
+重构后的测试经 `newTestAgent` 构造最小 agent（与现有 `agent_loop_test.go`
+的做法一致），通过公开 API 驱动：
+
+### 测 steer
 
 ```go
 func TestSteerInjection(t *testing.T) {
-    steerCh := make(chan string, 1)
+    a := newTestAgent(t, &mockStreamProvider{...}) // 第一次返回 tool_call，第二次返回 stop
+    steerCh := make(chan SteerInput, 1)
 
-    eventCh, resultCh := runLoop(ctx,
-        AgentConfig{
-            Provider:     mockProvider,
-            ToolRegistry: reg,
-            Logger:       logger.NewNop(),
-        },
-        &RuntimeChannels{SteerResp: steerCh},
-        initialMessages, opts, nil,
-    )
+    ch := a.RunConversationStream(ctx, history, "hi", "sys",
+        llm.ChatOptions{}, WithSteerChannel(steerCh))
 
-    steerCh <- "继续写代码"
+    steerCh <- SteerInput{Text: "继续写代码"}
+    for range ch { // drain 至 close
+    }
 
-    result := <-resultCh
-    assert.Equal(t, llm.RoleSteer, result.Messages[len(result.Messages)-1].Role)
+    // steer 注入发生在 tool-call 边界、之后 loop 继续，
+    // 断言"历史中存在 RoleSteer 消息"而非"最后一条是 steer"
+    msgs := a.GetLastMessages()
+    assert.True(t, slices.ContainsFunc(msgs,
+        func(m llm.Message) bool { return m.Role == llm.RoleSteer }))
 }
 ```
 
-不涉及：sessionManager、PermissionState、FrontendConfig、Memory、技能系统。
-
-### 重构后：测 auto-approve
+### 测 auto-approve
 
 ```go
 func TestAutoApproveEdits(t *testing.T) {
-    a := NewAIAgent(AgentConfig{...})
+    a, _, err := NewAIAgentWithConfig(ctx, AgentConfig{...})
+    require.NoError(t, err)
     a.SetAutoApproveEdits(true)  // Setter 保留，内部操作 a.PermState
 
     ch := a.RunConversationStream(ctx, history, msg, sysPrompt, opts)
@@ -574,7 +656,30 @@ func TestAutoApproveEdits(t *testing.T) {
 }
 ```
 
-Setter 保留不意味着测试必须 mock 整个 AIAgent——测试仍然只需要配置关心的字段。
+### 测并发读（race）
+
+`RunState.mu` 存在的全部理由是 channel 模式下 turn goroutine 写、
+slash-command 读曾发生真实 data race（见 `turn_state.go` 顶部注释）。
+重构后需在 `go test -race` 下验证：
+
+```go
+func TestRunStateConcurrentRead(t *testing.T) {
+    a := newTestAgent(t, &mockStreamProvider{...}) // tool_call → stop
+
+    ch := a.RunConversationStream(ctx, history, "hi", "sys", llm.ChatOptions{})
+
+    // loop 运行中从另一 goroutine 并发读（模拟 channel 模式 /usage）
+    var wg sync.WaitGroup
+    wg.Add(1)
+    go func() {
+        defer wg.Done()
+        _ = a.LastInputEstimate()
+        _ = a.GetLastMessages()
+    }()
+    for range ch {}
+    wg.Wait()
+}
+```
 
 ---
 
@@ -582,72 +687,177 @@ Setter 保留不意味着测试必须 mock 整个 AIAgent——测试仍然只�
 
 所有步骤保持 `go test ./agent/...` 绿色。
 
-### Step 1: 提取 `AgentConfig`
+### Step 1: 补全 `AgentConfig`
 
-- 在 `agent/config.go` 定义 `AgentConfig`
-- `AIAgent` 持有 `Config AgentConfig`
-- 构造函数写入
-- 现有引用 `a.provider` → `a.Config.Provider`
+- 在现有 `agent/agent_config.go` 的 `AgentConfig` 上补字段：
+  `PermissionPolicy`、`ToolRegistry`、`SessionManager`、`ReminderCollector`、
+  `LSPManager`、`SubagentRunner`、`SkillStore`、`Memory`、`HookDispatcher`、
+  `CompactStrategy`；`SharedMCP` 更名为 `MCPManager`
+- `SkipMemoryRecall` 保留不动
+- `AutoApprove*`、`ACPFileMode`、`PlanToolEnabled` 标注为构造输入
+- shared 推导：`NewAIAgentWithConfig` 在 Configure 前记录 `MCPManager != nil`
+- `AIAgent` 持有 `Config AgentConfig`，现有引用 `a.provider` → `a.Config.Provider`
 - **纯搬字段，机械替换**
 
 ### Step 2: 提取 `FrontendConfig`（与 Config 同级）
 
-- 在 `agent/frontend.go` 定义 `FrontendConfig`
-- `AIAgent` 持有 `Frontend FrontendConfig`（与 `Config` 同级）
+- 在 `agent/frontend.go` 定义 `FrontendConfig`（`ACPFileMode`、`PlanToolEnabled`）
+- `AIAgent` 持有 `Frontend FrontendConfig`，由构造输入派生
 - `a.acpFileMode` → `a.Frontend.ACPFileMode`
-- 由前端（ACP/TUI/channel）在构造后按需设置
 
 ### Step 3: 提取 `RuntimeChannels`
 
-- 在 `agent/channels.go` 定义 `RuntimeChannels`
-- `AIAgent` 持有 `Channels RuntimeChannels`
+- 在 `agent/channels.go` 定义 `RuntimeChannels`（仅 `ConfirmResp`、`AskUserResp`）
+- `AIAgent` 持有 `Channels RuntimeChannels`，`NewAIAgent` 中创建（缓冲 1）
+- `ConfirmTool()`、`RespondToAskUser()` 内部改为操作 `a.Channels.XXX`
+- steerRespCh 暂留原处，Step 6 处理
 
 ### Step 4: 提取 `PermissionState`
 
 - 在 `agent/permission.go` 定义 `PermissionState`
-- `AIAgent` 持有 `PermState *PermissionState`
+- `AIAgent` 持有 `PermState *PermissionState`，初始值来自 Config 构造输入
 - 现有 Setter 方法保留，内部改为 `a.PermState.XXX = v`
+- `tool_executor.go` 等读取点改为 `a.PermState.XXX`
 
 ### Step 5: 合并 `RunState`（取代 loopState + turnState）
 
 - 在 `agent/run_state.go` 定义 `RunState`
-- 包含 `loopState` + `turnState` 全部字段（保留 `mu sync.RWMutex`）
-- 加上 `skipSessionWrites`
-- `turnState` 的 Getter 方法（`tokens()`, `snapshotMessages()`, `traceID()`, `elapsed()` 等）
-  移至 `RunState`，内部操作 `mu`
+- 包含 `loopState` + `turnState` 字段（保留 `mu sync.RWMutex`），
+  **`SkipSessionWrites`、`OneoffRec` 暂不纳入**（推迟到 Step 6，见下方过渡策略）；
+  不含 `pendingImages`（Step 6 删除）
+- `turnState` 的 Getter 方法移至 `RunState`
+- `recordSession`、`ensureSessionAndRecordUser`、`applySteer`、
+  `injectLoopReminders` 等 helper 改为显式接收 `*RunState`
+- **`recordSession` 的 rs 穿透**：12 个调用点中 4 个在 `tool_executor.go`
+  （`executeToolCalls` / `Parallel` / `Sequential`，当前签名不含
+  loopState）——rs 需穿透这三层，调用方（runLoop）一并改。
+  本步 `recordSession` 内部继续读 `a.oneoffRec` / `a.skipSessionWrites`
+  （Step 6 切换到 `rs.OneoffRec` / `rs.SkipSessionWrites`）
+- **one-off 的 `currentRun` 语义**（规则见 §5「one-off 运行的 RunState
+  语义」）：`RunConversationStream` 创建并发布 rs；`RunOneOffStream`
+  的 rs 仅作局部变量。`SkipSessionWrites`、recorder 的迁移推迟到 Step 6
+  （本步 `RunOneOffStream` 继续用 `a.skipSessionWrites` /
+  `a.oneoffRec`，`savedTokens` 保存/恢复暂保留）
+- AIAgent Getter（`LastInputEstimate` 等）改经 `currentRun`，nil 返回零值
 - 删除 `turnState` 和 `loopState`
-- `turnState.pendingImages` → `runLoop` 参数 `pendingImages`
 
-**不再需要 defer 同步 messages**——`loopState.messages` 和 `turnState.messages` 是
-同一份 `RunState.Messages` 的引用，loop 直接追加，TUI 通过 Getter 加锁读取。
+不再需要 defer 同步 messages——`loopState.messages` 和 `turnState.messages`
+统一为 `RunState.Messages`，loop 直接追加，外部通过 Getter 加锁读取。
 
-### Step 6: 提取 `runLoop` 纯函数
+> **过渡策略（review-2）**：`SkipSessionWrites` 与 `OneoffRec` 的 RunState
+> 迁移整体推迟到 Step 6（与 recorder RunOption 化一起搬），避免本步出现
+> 「`recordSession` 改读 `rs.OneoffRec` 但 ambient 仍经 `AttachOneOffRecorder`
+> 写 `a.oneoffRec`」的无人消费窗口。Step 5 期间 `recordSession` 继续读
+> `a.oneoffRec` / `a.skipSessionWrites`，Step 6 一次性切换到 `rs.*` 并删除旧字段。
 
-- `agent/loop.go` 写新函数
-- 从 `runAgentLoop` 拷贝循环体
-- 把 `a.xxx` 逐一改为 `cfg.xxx` / `chans.xxx` / `rs.xxx`
-- 返回 `RunState` channel
-- `AIAgent.runAgentLoop` 委托给 `runLoop`
+### Step 5.5: `runParams` 类型改造（RunOption 换目标类型）
 
-### Step 7: 清理旧代码
+- 定义 `runParams`（内嵌 `toolView`，字段见「runLoop 方法签名」），
+  `RunOption` 改为 `func(*runParams)`，新增 `applyRunOptions`
+- `WithToolSet`/`WithNoTools`/`WithExtraTools` 闭包签名机械替换
+  （`func(v *toolView)` → `func(p *runParams)`，函数体不变）
+- `runAgentLoop` 内 `buildToolView(ropts)` 调用点改为 `applyRunOptions`，
+  toolView 部分经 `params.toolView` 传给 `withToolView`
+- 对外 `...RunOption` 签名不变，调用方零改动；本步是纯机械重构，
+  为 Step 6 的 `WithSteerChannel`/`WithPendingImages`/`WithOneOffRecorder`
+  打地基
 
-- 删除 `turnState`、`loopState` 旧代码
+### Step 6: steer 通道、图片输入与 recorder 的 RunOption 化
+
+- 定义 `SteerInput{Text, Images}` 与 `WithSteerChannel` / `WithPendingImages` /
+  `WithOneOffRecorder` RunOption
+- `applySteer` 改从 `runParams.steerCh` 读取，图片附到 steer 消息 `ContentParts`
+  （同时修复 steer 带图无人消费的问题）
+- run 开始图片改从 `runParams.pendingImages` 消费
+- ambient 迁移：`AttachOneOffRecorder` + `SetSteerChannel` 两个 setup 调用
+  改为 `RunConversationStream(..., WithOneOffRecorder(meta), WithSteerChannel(steerCh))`，
+  删除 `defer DetachOneOffRecorder`（recorder 由 loop 关闭）；
+  删除 `AttachOneOffRecorder` / `DetachOneOffRecorder` 公开 API
+- 删除 `SetSteerChannel` / `SetPendingImages` / `a.steerRespCh` /
+  `turnState.pendingImages` 及 loop 退出时的置 nil defer
+- 调用点迁移（`chan string` → `chan SteerInput` 类型联动）：
+  `tui/commands.go`、`tui/model_events.go`（steer 带图改发 `SteerInput`）、
+  `tui/model.go`（steerRespCh 字段类型）、`agent/acp/agent.go`、
+  `channel/manager/agent_turn.go`、`channel/manager/ambient.go`、
+  `channel/manager/manager.go`（turnAgent.steerRespCh 字段类型）、
+  `channel/manager/events.go`（drainEvents 读 + 发送 steer）
+- 注意：channel 模式把 `ta.steerRespCh != nil` 当 turn-active 标记
+  （`agent_turn.go` 注释明确要求调用方检查）——标记保留在 manager 侧，
+  不随 `a.steerRespCh` 删除
+- **manager turn-active 标记落地**（review-2）：manager 侧新增显式标记字段
+  （如 `turnActive bool`，或复用 `ambientCancel` 非 nil），替换所有
+  `ta.steerRespCh != nil` 比较点（`ambient.go:83/182/207/222`、
+  `agent_turn.go:170/222/449`、`events.go:122`）
+- **SkipSessionWrites / OneoffRec 迁入 RunState**（从 Step 5 推迟）：
+  `RunOneOffStream` 的 rs 构造时设 `SkipSessionWrites: true`，不再改
+  `a.skipSessionWrites`；删除 `savedTokens` 保存/恢复（one-off 不再碰
+  主会话状态）；recorder 创建/关闭并入 run（`RunOneOffStream` 用 meta
+  参数在 rs 初始化时创建、loop defer 关闭，写 `a.lastOneoffPath`，日志用
+  `rs.TraceID`）；ambient 路径经 `WithOneOffRecorder` RunOption 传入；
+  `recordSession` 等 helper 改读 `rs.OneoffRec` / `rs.SkipSessionWrites`；
+  删除 `a.oneoffRec` / `a.skipSessionWrites` 字段
+- **`mode` 加锁**（review-2）：`modes.go` 的 `Mode()` / `SetMode()` 改经
+  `a.mu` 读写（与 `currentRun` 共用），`filterActiveSchemas`
+  （`agent_loop.go:967`）加 RLock。当前 `mode` 无任何锁，ACP `SetMode`
+  与 loop `filterActiveSchemas` 可能并发
+- **Budget 两入口**（review-2）：`IterationBudget` 构造移到调用方后，
+  `RunConversationStream` 与 `RunOneOffStream` 两处均需
+  `Budget: NewIterationBudget(a.Config.MaxIterations)`；
+  `Budget.Parent` 当前全库无人赋值（dormant），未来启用子代理预算共享时
+  需改从 ctx/RunOption 取 parent
+
+### Step 7: `runLoop` 方法化改造
+
+- `agent/loop.go`：`runAgentLoop` 改造为 `runLoop(ctx, rs, in)`（仍是 AIAgent 方法）
+- `messages` / `opts` / ropts 解析收敛为 `runInput`
+- 循环体内 `ls.xxx` → `rs.xxx`（Step 5 已完成 turnState 侧），
+  `a.skipSessionWrites` / `a.oneoffRec` → `rs.xxx`
+- 只返回 eventCh，close 即完成信号
+- `runAgentLoop` 删除，`RunConversationStream` / `RunOneOffStream` 直接调 `runLoop`
+
+### Step 8: 清理旧代码
+
+- 删除 `turnState`、`loopState`、`steerRespCh`、`sharedMCP` 旧代码
 - 删除 `AIAgent` 上已搬走的字段
 - 重写旧测试用例
 
 ---
 
-## 实施预算
+## 实施范围
 
-| Step     | 内容                                        | 文件改动 |    预估     |
-| :------- | :------------------------------------------ | :------: | :---------: |
-| 1        | AgentConfig 提取（合并 Dependencies）       |    ~3    |   0.5 天    |
-| 2        | FrontendConfig 提取                         |    ~2    |   0.2 天    |
-| 3        | RuntimeChannels 提取                        |    ~3    |   0.3 天    |
-| 4        | PermissionState 提取                        |    ~3    |   0.3 天    |
-| 5        | RunState 合并（替换 loopState + turnState） |    ~6    |    1 天     |
-| 6        | runLoop 纯函数化                            |    ~3    |   1.5 天    |
-| 7        | 清理旧代码 + 测试                           |    ~5    |   0.5 天    |
-| **合计** |                                             |          | **~4.3 天** |
+各 Step 的大致改动面（文件数仅供相对规模参考）：
+
+| Step | 内容                                             | 文件改动 |
+| :--- | :----------------------------------------------- | :------: |
+| 1    | AgentConfig 补全                                 |    ~3    |
+| 2    | FrontendConfig 提取                              |    ~2    |
+| 3    | RuntimeChannels 提取                             |    ~3    |
+| 4    | PermissionState 提取                             |    ~3    |
+| 5    | RunState 合并（含 one-off 语义、executor 穿透）  |    ~9    |
+| 5.5  | runParams 类型改造（机械）                       |    ~2    |
+| 6    | steer/图片/recorder RunOption 化（3 个前端联动） |    ~9    |
+| 7    | runLoop 方法化改造                               |    ~3    |
+| 8    | 清理旧代码 + 测试                                |    ~5    |
 
 每步 `go test ./agent/...` 保持绿色。
+
+---
+
+## 验收标准
+
+- `make build && make test && make lint` 全绿
+- `go test -race ./agent/...` 通过（验证 `RunState.mu` 并发读保护）
+- `AIAgent` 字段与「AIAgent 最终结构」一致；`turnState`、`loopState`、
+  `steerRespCh`、`sharedMCP`、`pendingImages` 不复存在；
+  `SetSteerChannel` / `SetPendingImages` / `AttachOneOffRecorder` /
+  `DetachOneOffRecorder` 公开 API 删除
+- 三端行为验证：
+  - TUI：steer 文本注入正常；steer 带图正确附到 steer 消息（Anthropic +
+    OpenAI 各实测一次，确认图片到达 LLM）；状态栏 token 估算正常；
+    一次 run 结束后、下一次开始前状态栏读数保持（currentRun 保留语义）
+  - channel：turn 间 `/usage` 可读；ambient one-off 运行不写主 session、
+    sidecar 转录正常生成；ambient 在 ctx 取消处提前 bail 时不残留空转录文件
+  - ACP：确认/AskUser 交互正常；带图消息正常
+- one-off 运行（`/commit`、`/review`、dream）不产生主 session 写入
+- **one-off 不发布 `currentRun` 的回归测试**：`/commit` 跑完后主会话的
+  `GetLastMessages()` 与 `LastInputEstimate()` 保持运行前的值
