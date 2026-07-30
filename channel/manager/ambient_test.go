@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -214,7 +215,7 @@ func TestAmbientSteer_ActiveTurn(t *testing.T) {
 
 	// Manually set up a thread with an active turn.
 	ta := &threadActivation{
-		steerRespCh: make(chan string, 1),
+		steerRespCh: make(chan agent.SteerInput, 1),
 		resultCh:    make(chan handlerResult, 1),
 		groupChat:   true,
 	}
@@ -482,7 +483,7 @@ func TestAmbientPreempt_DirectedMessage(t *testing.T) {
 	// Simulate a running ambient turn.
 	preempted := false
 	ta := &threadActivation{
-		steerRespCh:   make(chan string),
+		steerRespCh:   make(chan agent.SteerInput),
 		groupChat:     true,
 		ambientCancel: func() { preempted = true },
 	}

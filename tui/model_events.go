@@ -131,25 +131,20 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			expandResult := m.ExpandAtReferences(combined)
 			// Add as a normal user message in chatview for visual continuity.
 			m.chatview.AddMessage(chatMessage{Role: "user", Content: combined})
-			// Attach images from steer expansion (if any).
-			if len(expandResult.Images) > 0 {
-				m.agent.SetPendingImages(expandResult.Images)
-			}
 			// Send expanded steer text to agent (non-blocking with select).
 			select {
-			case m.steerRespCh <- expandResult.Text:
+			case m.steerCh <- agent.SteerInput{Text: expandResult.Text, Images: expandResult.Images}:
 			default:
 			}
 		} else {
 			select {
-			case m.steerRespCh <- "":
+			case m.steerCh <- agent.SteerInput{Text: ""}:
 			default:
 			}
 		}
 		return m.nextEvent()
 
 	case agent.AgentEventTurnComplete:
-		m.steerRespCh = nil
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
@@ -348,7 +343,6 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventError:
-		m.steerRespCh = nil
 
 		// Clean up pending model switch BEFORE restoring savedHistory.
 		// During a compact-for-switch, savedHistory holds the pre-compact

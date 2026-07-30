@@ -181,13 +181,13 @@ func sweepOneoffDir(dir string, retentionDays int) {
 
 // oneoffEnabled reports whether one-off recording is on (config default true).
 func (a *AIAgent) oneoffEnabled() bool {
-	return a.cfg == nil || a.cfg.Oneoff.IsEnabled()
+	return a.Config.FullConfig == nil || a.Config.FullConfig.Oneoff.IsEnabled()
 }
 
 // oneoffRetentionDays returns the configured global-dir retention (default 30).
 func (a *AIAgent) oneoffRetentionDays() int {
-	if a.cfg != nil && a.cfg.Oneoff.RetentionDays > 0 {
-		return a.cfg.Oneoff.RetentionDays
+	if a.Config.FullConfig != nil && a.Config.FullConfig.Oneoff.RetentionDays > 0 {
+		return a.Config.FullConfig.Oneoff.RetentionDays
 	}
 	return 30
 }
@@ -198,15 +198,16 @@ func (a *AIAgent) resolveOneoffSessionID(meta OneOffMeta) string {
 	if meta.SessionID != "" {
 		return meta.SessionID
 	}
-	if a.sessionManager != nil {
-		if cur := a.sessionManager.Current(); cur != nil {
+	if a.Config.SessionManager != nil {
+		if cur := a.Config.SessionManager.Current(); cur != nil {
 			return cur.ID
 		}
 	}
 	return ""
 }
 
-// startOneoffRecorder creates and attaches a recorder for this run.
+// startOneoffRecorder creates a recorder for a run. The caller assigns the
+// result to rs.OneoffRec; the loop closes it via stopOneoffRecorder.
 // Returns nil (recording disabled or failed — logged, never fatal).
 func (a *AIAgent) startOneoffRecorder(ctx context.Context, meta OneOffMeta, provider llm.Provider) *oneoffRecorder {
 	if meta.Kind == "" || !a.oneoffEnabled() {
@@ -218,25 +219,25 @@ func (a *AIAgent) startOneoffRecorder(ctx context.Context, meta OneOffMeta, prov
 		a.logWarn(ctx, "oneoff: failed to create recorder", err, "kind", meta.Kind)
 		return nil
 	}
-	a.oneoffRec = rec
 	a.logInfo(ctx, "oneoff transcript opened", "kind", meta.Kind, "path", rec.path, "session_id", sessionID)
 	return rec
 }
 
-// stopOneoffRecorder detaches and closes the recorder, writing the debug.log
-// index line (kind + path + trace_id + duration + size) for discoverability.
-// The path is kept on lastOneoffPath so frontends (TUI) can surface it after
-// the run completes.
-func (a *AIAgent) stopOneoffRecorder(ctx context.Context) {
-	rec := a.oneoffRec
+// stopOneoffRecorder closes the run's recorder (nil-safe), writing the
+// debug.log index line (kind + path + trace_id + duration + size) for
+// discoverability. The path is kept on lastOneoffPath so frontends (TUI)
+// can surface it after the run completes.
+func (a *AIAgent) stopOneoffRecorder(ctx context.Context, rs *RunState) {
+	rec := rs.OneoffRec
 	if rec == nil {
 		return
 	}
-	a.oneoffRec = nil
+	rs.OneoffRec = nil
+	traceID := rs.trace()
 	path, size, dur := rec.close()
 	a.lastOneoffPath = path
 	a.logInfo(ctx, "oneoff transcript written",
-		"kind", rec.kind, "path", path, "trace_id", a.turn.trace(),
+		"kind", rec.kind, "path", path, "trace_id", traceID,
 		"duration", dur.Round(time.Millisecond).String(), "size", size)
 }
 
@@ -247,28 +248,15 @@ func (a *AIAgent) LastOneoffTranscriptPath() string {
 	return a.lastOneoffPath
 }
 
-// AttachOneOffRecorder lets RunConversationStream-based side paths (channel
-// ambient) attach a recorder explicitly. Call before the run; the caller must
-// detach via stopOneoffRecorder when the run finishes.
-func (a *AIAgent) AttachOneOffRecorder(ctx context.Context, meta OneOffMeta) {
-	a.startOneoffRecorder(ctx, meta, a.provider)
-}
-
-// DetachOneOffRecorder is the exported counterpart of stopOneoffRecorder for
-// external callers (channel ambient manager).
-func (a *AIAgent) DetachOneOffRecorder(ctx context.Context) {
-	a.stopOneoffRecorder(ctx)
-}
-
 func (a *AIAgent) logInfo(ctx context.Context, msg string, attrs ...any) {
-	if a.logger != nil {
-		a.logger.Info(ctx, msg, attrs...)
+	if a.Config.Logger != nil {
+		a.Config.Logger.Info(ctx, msg, attrs...)
 	}
 }
 
 func (a *AIAgent) logWarn(ctx context.Context, msg string, err error, attrs ...any) {
-	if a.logger != nil {
-		a.logger.Warn(ctx, msg, append(attrs, "error", err)...)
+	if a.Config.Logger != nil {
+		a.Config.Logger.Warn(ctx, msg, append(attrs, "error", err)...)
 	}
 }
 

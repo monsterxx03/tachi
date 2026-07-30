@@ -35,6 +35,8 @@ func ValidMode(mode string) bool {
 
 // Mode returns the agent's current session mode.
 func (a *AIAgent) Mode() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
 	return a.mode
 }
 
@@ -51,21 +53,25 @@ func (a *AIAgent) Mode() string {
 //
 // Returns an error if mode is unknown.
 func (a *AIAgent) SetMode(mode string) error {
-	if mode == a.mode {
-		return nil // already in this mode
-	}
 	if !ValidMode(mode) {
 		return fmt.Errorf("unknown mode: %s (supported: %s, %s, %s)", mode, ModeAuto, ModeChat, ModePlan)
 	}
 
+	a.mu.Lock()
+	if mode == a.mode {
+		a.mu.Unlock()
+		return nil // already in this mode
+	}
 	a.mode = mode
+	a.mu.Unlock()
 
-	// Best-effort persist mode to session metadata.
-	if a.sessionManager != nil {
-		if curr := a.sessionManager.Current(); curr != nil {
+	// Best-effort persist mode to session metadata (outside the lock —
+	// UpdateMeta does file I/O).
+	if a.Config.SessionManager != nil {
+		if curr := a.Config.SessionManager.Current(); curr != nil {
 			curr.Mode = mode
-			if err := a.sessionManager.UpdateMeta(curr); err != nil {
-				a.logger.Error(context.Background(), "Agent: failed to persist mode", err, "mode", mode)
+			if err := a.Config.SessionManager.UpdateMeta(curr); err != nil {
+				a.Config.Logger.Error(context.Background(), "Agent: failed to persist mode", err, "mode", mode)
 			}
 		}
 	}

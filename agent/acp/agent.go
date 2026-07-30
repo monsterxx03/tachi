@@ -269,8 +269,9 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	// ---- END ----
 
 	// Attach images (if any) for multi-modal LLM input.
+	var ropts []agent.RunOption
 	if len(userImages) > 0 {
-		sess.agent.SetPendingImages(userImages)
+		ropts = append(ropts, agent.WithPendingImages(userImages))
 	}
 
 	// Build history from cache (populated on previous turns) or disk (first turn)
@@ -295,7 +296,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{
 		MaxTokens: config.DefaultMaxTokens,
-	})
+	}, ropts...)
 
 	// Stream events to ACP client
 	stopReason, usage := streamToACP(promptCtx, sess, t.conn, eventCh)
@@ -709,8 +710,10 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		replaySessionHistory(ctx, t.conn, sess)
 		// After replaying history, compute the token estimate so the initial
 		// UsageUpdate (sent in the defer block below) has a non-zero value.
+		// Nil RunState — no run is active yet; the estimate lives in the
+		// agent's conversation state until the first turn refreshes it.
 		if sess.history != nil {
-			aiAgent.EstimateAndUpdateTokens(sess.history)
+			aiAgent.EstimateAndUpdateTokens(nil, sess.history)
 		}
 	}
 

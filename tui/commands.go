@@ -1026,15 +1026,14 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	ctx := m.startTurn()
 
 	// Set up steer channel so pending input can be injected at tool-call boundaries.
-	m.steerRespCh = make(chan string)
-	m.agent.SetSteerChannel(m.steerRespCh)
-
-	// Attach images (if any) for the next RunConversationStream call.
+	m.steerCh = make(chan agent.SteerInput)
+	var ropts []agent.RunOption
+	ropts = append(ropts, agent.WithSteerChannel(m.steerCh))
 	if len(expanded.Images) > 0 {
-		m.agent.SetPendingImages(expanded.Images)
+		ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 	}
 
-	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.effectiveSystemPrompt(), m.chatOpts)
+	m.eventCh = m.agent.RunConversationStream(ctx, m.history, expanded.Text, m.effectiveSystemPrompt(), m.chatOpts, ropts...)
 
 	return tea.Batch(
 		m.statusbar.Tick(),

@@ -36,14 +36,14 @@ func (a *deepResearchRunnerAdapter) Run(ctx context.Context, prompt string, allo
 //
 // Safe to call after Configure(). The engine is reusable across calls.
 func (a *AIAgent) NewDeepResearch(cfg *config.Config) (*deepresearch.DeepResearch, error) {
-	runner := &deepResearchRunnerAdapter{runner: a.subagentRunner}
+	runner := &deepResearchRunnerAdapter{runner: a.Config.SubagentRunner}
 
-	lg := a.logger
+	lg := a.Config.Logger
 
 	return deepresearch.New(
 		&cfg.DeepResearch,
 		cfg.Providers,
-		a.provider,
+		a.Config.Provider,
 		runner,
 		lg,
 	), nil
@@ -56,9 +56,9 @@ func (a *AIAgent) NewDeepResearchWithProvider(
 	cfg *config.Config,
 	provider llm.Provider,
 ) (*deepresearch.DeepResearch, error) {
-	runner := &deepResearchRunnerAdapter{runner: a.subagentRunner}
+	runner := &deepResearchRunnerAdapter{runner: a.Config.SubagentRunner}
 
-	lg := a.logger
+	lg := a.Config.Logger
 
 	return deepresearch.New(
 		&cfg.DeepResearch,

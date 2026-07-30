@@ -5,7 +5,7 @@ import (
 )
 
 // MemoryState bundles runtime memory state for an AIAgent.
-// Static config values (timeout) are read directly from a.cfg.Memory
+// Static config values (timeout) are read directly from a.Config.FullConfig.Memory
 // rather than duplicated here.
 // A nil *MemoryState means memory is not configured.
 type MemoryState struct {

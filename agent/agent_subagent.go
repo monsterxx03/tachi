@@ -15,15 +15,15 @@ import (
 
 // SubagentRunner returns the tools.SubagentRunner used by the SubAgent tool.
 func (a *AIAgent) SubagentRunner() tools.SubagentRunner {
-	return a.subagentRunner
+	return a.Config.SubagentRunner
 }
 
 // SubagentProvider returns the sub-agent provider or falls back to main.
 func (a *AIAgent) SubagentProvider() llm.Provider {
-	if a.subagentProvider != nil {
-		return a.subagentProvider
+	if a.Config.SubagentProvider != nil {
+		return a.Config.SubagentProvider
 	}
-	return a.provider
+	return a.Config.Provider
 }
 
 // NewChildAgent creates a fully configured child agent backed by RunOneOffStream.
@@ -138,14 +138,14 @@ func (a *AIAgent) lazyRegisterMCPTool(name string) error {
 		return nil
 	}
 	// Already registered
-	if a.toolRegistry.GetTool(name) != nil {
+	if a.Config.ToolRegistry.GetTool(name) != nil {
 		return nil
 	}
 	deferredTool := pool.Get(name)
 	if deferredTool == nil || deferredTool.Tool == nil {
 		return fmt.Errorf("deferred MCP tool %q not found", name)
 	}
-	a.toolRegistry.Register(deferredTool.Tool)
+	a.Config.ToolRegistry.Register(deferredTool.Tool)
 	return nil
 }
 
@@ -161,24 +161,24 @@ func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
 
 	pCfg := cfg.FindProvider(sc.Provider)
 	if pCfg == nil {
-		a.logger.Info(context.Background(), "Agent: subagent provider not found, falling back to main model", "provider", sc.Provider)
+		a.Config.Logger.Info(context.Background(), "Agent: subagent provider not found, falling back to main model", "provider", sc.Provider)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to resolve subagent provider, falling back to main model", err, "provider", sc.Provider)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve subagent provider, falling back to main model", err, "provider", sc.Provider)
 		return
 	}
 
 	sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to create subagent provider, falling back to main model", err, "provider", sc.Provider)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to create subagent provider, falling back to main model", err, "provider", sc.Provider)
 		return
 	}
 
-	a.subagentProvider = sp
-	a.logger.Info(context.Background(), "Agent: using subagent provider", "provider", sc.Provider, "type", resolved.Type, "model", resolved.Model)
+	a.Config.SubagentProvider = sp
+	a.Config.Logger.Info(context.Background(), "Agent: using subagent provider", "provider", sc.Provider, "type", resolved.Type, "model", resolved.Model)
 }
 
 // newSubagentEventSink creates a SubagentEventSink that forwards subagent

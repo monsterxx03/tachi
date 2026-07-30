@@ -95,12 +95,13 @@ func (a *AIAgent) groupToolCalls(ctx context.Context, toolCalls []llm.ToolCall) 
 
 // executeToolCalls is the main entry point for tool execution. It groups
 // tool calls by their parallel capability and executes each group accordingly.
-func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
+// rs is the owning run's state, threaded through for session recording.
+func (a *AIAgent) executeToolCalls(ctx context.Context, rs *RunState, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
 	groups := a.groupToolCalls(ctx, toolCalls)
 
 	var allMsgs []llm.Message
 	for _, group := range groups {
-		msgs, err := a.executeToolGroup(ctx, group, ch)
+		msgs, err := a.executeToolGroup(ctx, rs, group, ch)
 		if err != nil {
 			return nil, err
 		}
@@ -110,17 +111,17 @@ func (a *AIAgent) executeToolCalls(ctx context.Context, toolCalls []llm.ToolCall
 }
 
 // executeToolGroup executes all tool calls in a group, either in parallel or sequentially.
-func (a *AIAgent) executeToolGroup(ctx context.Context, group toolGroup, ch chan<- AgentEvent) ([]llm.Message, error) {
+func (a *AIAgent) executeToolGroup(ctx context.Context, rs *RunState, group toolGroup, ch chan<- AgentEvent) ([]llm.Message, error) {
 	if !group.parallel || len(group.calls) == 1 {
-		return a.executeToolCallsSequential(ctx, group.calls, ch)
+		return a.executeToolCallsSequential(ctx, rs, group.calls, ch)
 	}
-	return a.executeToolCallsParallel(ctx, group.calls, ch)
+	return a.executeToolCallsParallel(ctx, rs, group.calls, ch)
 }
 
 // executeToolCallsParallel runs multiple tool calls concurrently.
 // It emits all ToolCallArgs events first (so TUI shows spinners), then executes
 // in parallel, and finally emits ToolResult events in order.
-func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
+func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
 	// Phase 1: Emit all ToolCallArgs events upfront so TUI can show spinners
 	for _, tc := range toolCalls {
 		ch <- AgentEvent{
@@ -130,7 +131,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 			ToolArgs: tc.Function.Arguments,
 		}
 		// Record tool call in session
-		a.recordSession(&session.Message{
+		a.recordSession(rs, &session.Message{
 			Type:       session.MessageTypeToolCall,
 			Name:       tc.Function.Name,
 			Args:       tc.Function.Arguments,
@@ -184,7 +185,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 	for i, tc := range toolCalls {
 		tr := results[i]
 
-		a.logger.Info(ctx, "Tool: executed (parallel)", "tool", tc.Function.Name, "duration", tr.Duration, "err", tr.Err)
+		a.Config.Logger.Info(ctx, "Tool: executed (parallel)", "tool", tc.Function.Name, "duration", tr.Duration, "err", tr.Err)
 
 		// Emit SubagentDone for sub-agent calls after execution completes.
 		if tc.Function.Name == tools.ToolNameSubAgent {
@@ -234,7 +235,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 		}
 
 		// Record tool result in session
-		a.recordSession(&session.Message{
+		a.recordSession(rs, &session.Message{
 			Type:       session.MessageTypeToolResult,
 			Name:       tc.Function.Name,
 			Result:     toolMsg.Content,
@@ -259,7 +260,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, toolCalls []llm.
 
 // executeToolCallsSequential runs tool calls one by one, handling confirmation
 // and AskUser flows. This is the original logic extracted from executeToolCalls.
-func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
+func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, toolCalls []llm.ToolCall, ch chan<- AgentEvent) ([]llm.Message, error) {
 	var toolMsgs []llm.Message
 
 	for _, tc := range toolCalls {
@@ -271,7 +272,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		}
 
 		// Record tool call in session
-		a.recordSession(&session.Message{
+		a.recordSession(rs, &session.Message{
 			Type:       session.MessageTypeToolCall,
 			Name:       tc.Function.Name,
 			Args:       tc.Function.Arguments,
@@ -341,7 +342,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		// "always" from a previous edit confirmation): skip the EditFile
 		// prompt. Affects only EditFile — bash policy asks and other
 		// confirmations still dispatch normally.
-		if tr.Status == tools.ToolResultPendingConfirm && a.autoApproveEdits && tc.Function.Name == tools.ToolNameEdit {
+		if tr.Status == tools.ToolResultPendingConfirm && a.PermState.AutoApproveEdits && tc.Function.Name == tools.ToolNameEdit {
 			confirmStart := time.Now()
 			output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 			tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
@@ -351,9 +352,9 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		}
 
 		if tr.Status == tools.ToolResultPendingConfirm {
-			switch a.permissionMode {
+			switch a.Config.PermissionMode {
 			case PermissionModeSkip:
-				a.logger.Info(ctx, "Agent: tool skipping confirmation", "tool", tc.Function.Name)
+				a.Config.Logger.Info(ctx, "Agent: tool skipping confirmation", "tool", tc.Function.Name)
 				confirmStart := time.Now()
 				output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 				tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
@@ -362,8 +363,8 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				}
 
 			case PermissionModeExternal:
-				a.logger.Info(ctx, "Agent: tool requesting external permission", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
-				approved, permErr := a.permissionHandler(ctx, tc.Function.Name, tc.ID, tr.Diff, tr.Args)
+				a.Config.Logger.Info(ctx, "Agent: tool requesting external permission", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
+				approved, permErr := a.PermState.PermissionHandler(ctx, tc.Function.Name, tc.ID, tr.Diff, tr.Args)
 				if permErr != nil {
 					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 						ToolName: tc.Function.Name,
@@ -393,7 +394,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				}
 
 			default: // PermissionModeTUI
-				a.logger.Info(ctx, "Agent: tool requires confirmation", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
+				a.Config.Logger.Info(ctx, "Agent: tool requires confirmation", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
 				a.dispatchEvent(ctx, hooks.EventPermissionRequest, hooks.Payload{
 					ToolName: tc.Function.Name,
 					ToolID:   tc.ID,
@@ -408,10 +409,10 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 				}
 
 				select {
-				case resp := <-a.confirmRespCh:
+				case resp := <-a.Channels.ConfirmResp:
 					if resp != ConfirmDeny {
 						if resp == ConfirmAllowAlways && tc.Function.Name == tools.ToolNameEdit {
-							a.autoApproveEdits = true // session-scoped: stop prompting for edits
+							a.PermState.AutoApproveEdits = true // session-scoped: stop prompting for edits
 						}
 						a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
 							ToolName: tc.Function.Name,
@@ -439,7 +440,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		}
 
 		if tr.Status == tools.ToolResultNeedUserInput {
-			a.logger.Info(ctx, "Agent: AskUserQuestion tool requires user input", "questions", len(tr.Questions))
+			a.Config.Logger.Info(ctx, "Agent: AskUserQuestion tool requires user input", "questions", len(tr.Questions))
 			a.dispatchEvent(ctx, hooks.EventAskUserQuestion, hooks.Payload{
 				ToolName: tc.Function.Name,
 				ToolID:   tc.ID,
@@ -453,7 +454,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			}
 
 			select {
-			case resp := <-a.askUserRespCh:
+			case resp := <-a.Channels.AskUserResp:
 				a.dispatchEvent(ctx, hooks.EventAskUserResponse, hooks.Payload{
 					ToolName: tc.Function.Name,
 					ToolID:   tc.ID,
@@ -469,7 +470,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 			}
 		}
 
-		a.logger.Info(ctx, "Tool: executed (sequential)", "tool", tc.Function.Name, "duration", tr.Duration, "err", tr.Err)
+		a.Config.Logger.Info(ctx, "Tool: executed (sequential)", "tool", tc.Function.Name, "duration", tr.Duration, "err", tr.Err)
 
 		toolMsg := llm.Message{Role: "tool", ToolCallID: tc.ID}
 		if tr.Status == tools.ToolResultError {
@@ -494,7 +495,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, toolCalls []ll
 		}
 
 		// Record tool result in session
-		a.recordSession(&session.Message{
+		a.recordSession(rs, &session.Message{
 			Type:       session.MessageTypeToolResult,
 			Name:       tc.Function.Name,
 			Result:     toolMsg.Content,

@@ -35,7 +35,7 @@ func TestGetAgentEstimateWithBreakdown_ConcurrentTurn(t *testing.T) {
 	go func() { // stands in for the turn goroutine
 		defer wg.Done()
 		for i := 0; i < iterations; i++ {
-			ai.EstimateAndUpdateTokens(msgs)
+			ai.EstimateAndUpdateTokens(nil, msgs)
 		}
 	}()
 

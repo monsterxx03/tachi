@@ -132,7 +132,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			// Select on both the turn ctx (ambient preemption) and the thread
 			// ctx (/stop) to avoid leaking this goroutine on cancellation.
 			select {
-			case steerCh <- joined:
+			case steerCh <- agent.SteerInput{Text: joined}:
 			case <-ctx.Done():
 				return text.String(), ctx.Err()
 			case <-ta.ctx.Done():

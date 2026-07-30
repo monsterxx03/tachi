@@ -14,7 +14,7 @@ type testAgentOpt func(*AIAgent)
 
 // withMaxIterations sets the iteration budget for the test agent.
 func withMaxIterations(n int) testAgentOpt {
-	return func(a *AIAgent) { a.maxIterations = n }
+	return func(a *AIAgent) { a.Config.MaxIterations = n }
 }
 
 // withPermissionMode sets how tool confirmation requests are handled.

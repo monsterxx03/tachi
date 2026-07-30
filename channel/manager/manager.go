@@ -206,7 +206,7 @@ func (m *Manager) Done() <-chan struct{} {
 // the message is queued in pending and injected via steer.
 type threadActivation struct {
 	mu          sync.Mutex
-	steerRespCh chan string        // agent reads steer input from this
+	steerRespCh chan agent.SteerInput // agent reads steer input from this
 	resultCh    chan handlerResult // agent sends final result here
 	pending     []string           // queued steer messages
 	ctx         context.Context    // agent context for cancellation

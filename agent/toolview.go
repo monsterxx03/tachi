@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // ---------------------------------------------------------------------------
@@ -40,13 +41,6 @@ import (
 //
 // A nil *toolView means "no restriction, no extras" — the full registry is
 // used. This is the common case (regular conversation turns) and costs nothing.
-//
-// The restrict flag, rather than "allow == nil", is what distinguishes
-// unrestricted from restricted-to-nothing. WithNoTools sets restrict with an
-// empty allow set; inferring restriction from a nil map would make it
-// impossible to express "full registry plus these extras", and worse, a bug
-// that dropped the map would silently grant full tool access to a run that
-// asked to be restricted.
 type toolView struct {
 	// restrict limits the visible registry tools to allow. When false, the
 	// whole registry is visible (extras still apply).
@@ -56,89 +50,125 @@ type toolView struct {
 	// extra holds run-scoped tools that are not in the agent's registry, e.g.
 	// channel mode's per-turn SendFileTool, whose callback closure captures a
 	// fresh attachment sink and so cannot be shared across turns.
-	//
-	// It is a Registry rather than a plain map so that invocation reuses the
-	// registry's argument validation, confirmation protocol, image side
-	// channel and subagent carriers. Reimplementing those here would be a
-	// second, subtly different execution path.
 	extra *tools.Registry
 }
 
+// runParams is the parsed RunOption set for a single run.
+// It embeds toolView for tool visibility control and adds fields
+// for additional per-run configuration (pending images, steer channel,
+// one-off recording).
+type runParams struct {
+	toolView
+	pendingImages []llm.ContentPart   // run 开始时附到首条用户消息的图片
+	steerCh       chan SteerInput     // steer 输入（nil = 前端不支持 steer）
+	oneoffMeta    *OneOffMeta         // one-off 转录（nil = 不录制）
+}
+
+// SteerInput represents pending user input to inject at the steer point,
+// optionally with images.
+type SteerInput struct {
+	Text   string
+	Images []llm.ContentPart
+}
+
 // RunOption customises a single RunConversationStream / RunOneOffStream call.
-type RunOption func(*toolView)
+type RunOption func(*runParams)
 
-// WithToolSet restricts the run to the named tools. Tools outside the set stay
-// in the registry but are hidden from the LLM and refused by the executor.
-//
-// Example: /commit only needs Bash.
-//
-//	agent.RunOneOffStream(ctx, p, sys, msg, opts, meta, agent.WithToolSet(tools.ToolNameBash))
-func WithToolSet(names ...string) RunOption {
-	return func(v *toolView) {
-		v.restrict = true
-		if v.allow == nil {
-			v.allow = make(map[string]bool, len(names))
-		}
-		for _, n := range names {
-			v.allow[n] = true
-		}
-	}
-}
-
-// WithNoTools hides every tool for the duration of the run. Used by /compact,
-// where the LLM should only summarise the conversation. The compact prompt
-// also asks it not to call tools; this makes that guarantee structural.
-func WithNoTools() RunOption {
-	return func(v *toolView) {
-		v.restrict = true
-		if v.allow == nil {
-			v.allow = make(map[string]bool)
-		}
-	}
-}
-
-// WithExtraTools attaches run-scoped tools that are not in the agent's
-// registry. They are visible to the LLM and invocable for this run only.
-//
-// Use this for tools whose instance is meaningful for exactly one run — e.g. a
-// tool whose callback closes over per-turn state. The agent's registry is never
-// touched, so concurrent runs on other threads are unaffected and there is no
-// unregister step to forget.
-//
-// Extras shadow same-named registry tools, and are exempt from WithToolSet
-// filtering: attaching a tool is itself the statement that this run may use it.
-func WithExtraTools(ts ...tools.Tool) RunOption {
-	return func(v *toolView) {
-		for _, t := range ts {
-			if t == nil {
-				continue
-			}
-			if v.extra == nil {
-				v.extra = tools.NewRegistry()
-			}
-			v.extra.Register(t)
-		}
-	}
-}
-
-// buildToolView folds RunOptions into a view. Returns nil when no options were
-// given, so the unrestricted path stays allocation-free.
-func buildToolView(opts []RunOption) *toolView {
+// applyRunOptions folds RunOptions into a runParams. Returns nil when no
+// options were given, so the unrestricted path stays allocation-free.
+func applyRunOptions(opts []RunOption) *runParams {
 	if len(opts) == 0 {
 		return nil
 	}
-	v := &toolView{}
+	p := &runParams{}
 	for _, opt := range opts {
 		if opt != nil {
-			opt(v)
+			opt(p)
 		}
 	}
 	// A restricted view must carry a non-nil allow set so lookups don't panic;
 	// an empty set correctly means "no registry tools".
-	if v.restrict && v.allow == nil {
-		v.allow = make(map[string]bool)
+	if p.restrict && p.allow == nil {
+		p.allow = make(map[string]bool)
 	}
-	return v
+	return p
+}
+
+// WithToolSet restricts the run to the named tools. Tools outside the set stay
+// in the registry but are hidden from the LLM and refused by the executor.
+func WithToolSet(names ...string) RunOption {
+	return func(p *runParams) {
+		p.restrict = true
+		if p.allow == nil {
+			p.allow = make(map[string]bool, len(names))
+		}
+		for _, n := range names {
+			p.allow[n] = true
+		}
+	}
+}
+
+// WithNoTools hides every tool for the duration of the run.
+func WithNoTools() RunOption {
+	return func(p *runParams) {
+		p.restrict = true
+		if p.allow == nil {
+			p.allow = make(map[string]bool)
+		}
+	}
+}
+
+// WithExtraTools attaches run-scoped tools that are not in the agent's registry.
+func WithExtraTools(ts ...tools.Tool) RunOption {
+	return func(p *runParams) {
+		for _, t := range ts {
+			if t == nil {
+				continue
+			}
+			if p.extra == nil {
+				p.extra = tools.NewRegistry()
+			}
+			p.extra.Register(t)
+		}
+	}
+}
+
+// WithPendingImages attaches image content parts to the initial user message
+// for this run.
+func WithPendingImages(imgs []llm.ContentPart) RunOption {
+	return func(p *runParams) {
+		p.pendingImages = imgs
+	}
+}
+
+// WithSteerChannel sets the channel for steer input injection during this run.
+// The frontend (TUI/ACP/channel) writes SteerInput values to this channel at
+// steer points. Pass nil to disable steer for this run.
+func WithSteerChannel(ch chan SteerInput) RunOption {
+	return func(p *runParams) {
+		p.steerCh = ch
+	}
+}
+
+// WithOneOffMeta attaches one-off transcription metadata to this run. When
+// non-nil, the run's execution is recorded to a sidecar JSONL file. Pass nil
+// (the default) to disable recording.
+func WithOneOffMeta(meta *OneOffMeta) RunOption {
+	return func(p *runParams) {
+		p.oneoffMeta = meta
+	}
+}
+
+// buildToolView extracts the toolView from runParams. Returns nil when params
+// is nil or the toolView is empty (no restriction, no extras).
+func buildToolView(p *runParams) *toolView {
+	if p == nil {
+		return nil
+	}
+	if !p.restrict && p.extra == nil {
+		return nil
+	}
+	return &p.toolView
 }
 
 type toolViewKey struct{}
@@ -173,10 +203,10 @@ type toolResolver struct {
 }
 
 // resolve returns the tool resolver for the current run. Always prefer this
-// over touching a.toolRegistry directly on execution paths, so that per-run
+// over touching a.Config.ToolRegistry directly on execution paths, so that per-run
 // tool restrictions are honoured.
 func (a *AIAgent) resolve(ctx context.Context) toolResolver {
-	return toolResolver{reg: a.toolRegistry, view: toolViewFrom(ctx)}
+	return toolResolver{reg: a.Config.ToolRegistry, view: toolViewFrom(ctx)}
 }
 
 // hasExtra reports whether the named tool is attached for this run only.

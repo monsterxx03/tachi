@@ -219,7 +219,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// First message for this thread (or fresh activation after cancel) —
 		// start the agent.
 		ta.mu.Lock()
-		ta.steerRespCh = make(chan string)
+		ta.steerRespCh = make(chan agent.SteerInput)
 		ta.resultCh = make(chan handlerResult, 1)
 		ta.mu.Unlock()
 
@@ -446,10 +446,10 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	}
 
 	// Steer channel + user content (text + images).
-	aiAgent.SetSteerChannel(ta.steerRespCh)
 	userContent, userImages := buildUserMessageWithAttachments(msg)
+	scope.ropts = append(scope.ropts, agent.WithSteerChannel(ta.steerRespCh))
 	if len(userImages) > 0 {
-		aiAgent.SetPendingImages(userImages)
+		scope.ropts = append(scope.ropts, agent.WithPendingImages(userImages))
 	}
 
 	// Build system prompt — append whisper instructions for group chat threads.

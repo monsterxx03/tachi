@@ -203,7 +203,7 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 	// Mark the thread active and make the turn cancellable BEFORE releasing
 	// the lock. steerRespCh doubles as the "turn active" marker for both
 	// handleAmbientMessage (Case A) and the directed handler (preemption).
-	steerCh := make(chan string)
+	steerCh := make(chan agent.SteerInput)
 	ta.steerRespCh = steerCh
 	ambientCtx, ambientCancel := context.WithCancel(ta.ctx)
 	ta.ambientCancel = ambientCancel
@@ -216,7 +216,7 @@ func (m *Manager) flushAmbientBatch(threadID string) {
 // endAmbientTurn releases the turn-active marker installed by flushAmbientBatch.
 // If a directed turn preempted the ambient turn and installed its own
 // steerRespCh in the meantime, that marker is left untouched.
-func (m *Manager) endAmbientTurn(ta *threadActivation, steerCh chan string) {
+func (m *Manager) endAmbientTurn(ta *threadActivation, steerCh chan agent.SteerInput) {
 	ta.mu.Lock()
 	defer ta.mu.Unlock()
 	if ta.steerRespCh == steerCh {
@@ -247,7 +247,7 @@ func (m *Manager) threadSessionID(threadID string) string {
 // /stop cancels the whole thread activation, and a directed message preempts
 // the ambient turn via ta.ambientCancel. The turn-active marker (steerRespCh)
 // is always released on exit, unless a directed turn already replaced it.
-func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []ambientMsg, history []ambientMsg, steerCh chan string) {
+func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []ambientMsg, history []ambientMsg, steerCh chan agent.SteerInput) {
 	ta, ok := m.threadActivations.Load(threadID)
 	if !ok {
 		return
@@ -313,22 +313,23 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	// Build system prompt with whisper suffix for group chat.
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", "", m.cfg.Debug.PPROF) + "\n" + whisperPromptSuffix
 
-	// Attach a one-off transcript recorder — ambient turns don't touch the
-	// session history, but their full execution is kept as a sidecar JSONL
-	// (anchored to the thread's session when one exists) so unexpected
-	// interjections / silence can be traced. See docs/2026-07-24-oneoff-transcript-design.md.
-	forkAgent.AttachOneOffRecorder(ctx, agent.OneOffMeta{
+	// Build run options for the ambient turn: one-off recorder + steer channel.
+	// One-off recorder captures the full execution as a sidecar JSONL (anchored
+	// to the thread's session when one exists) so unexpected interjections /
+	// silence can be traced. See docs/2026-07-24-oneoff-transcript-design.md.
+	// Steer channel allows new ambient messages arriving during the fork turn
+	// to be injected via steer (drainEvents handles this). Created by
+	// flushAmbientBatch when marking the thread active.
+	oneoffMeta := &agent.OneOffMeta{
 		Kind:         "ambient",
 		SessionID:    m.threadSessionID(threadID),
 		SystemPrompt: systemPrompt,
 		Extra:        map[string]string{"thread": threadID},
-	})
-	defer forkAgent.DetachOneOffRecorder(ctx)
-
-	// Steer channel — new ambient messages arriving during the fork turn
-	// are injected via steer (drainEvents handles this). Created by
-	// flushAmbientBatch when marking the thread active.
-	forkAgent.SetSteerChannel(steerCh)
+	}
+	ambientRopts := []agent.RunOption{
+		agent.WithOneOffMeta(oneoffMeta),
+		agent.WithSteerChannel(steerCh),
+	}
 
 	// A directed message may have preempted us during the (slow) setup
 	// above — bail before spending an LLM call.
@@ -343,7 +344,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	// context comes from the ambient history in the prompt.
 	eventCh := forkAgent.RunConversationStream(ctx, trimAmbientHistory(sessionHistory),
 		buildAmbientPrompt(history, msgs), systemPrompt,
-		llm.ChatOptions{MaxTokens: maxTokens})
+		llm.ChatOptions{MaxTokens: maxTokens}, ambientRopts...)
 	text, err := m.drainEvents(ctx, eventCh, forkAgent, nil, ta, nil)
 
 	if err != nil {

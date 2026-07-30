@@ -20,7 +20,7 @@ import (
 // cleanup that the auto-compact path performed inline.
 func (a *AIAgent) CompleteCompact(sm SessionManager, systemPrompt, summary string) ([]llm.Message, error) {
 	if sm == nil {
-		sm = a.sessionManager
+		sm = a.Config.SessionManager
 	}
 	if sm == nil {
 		return nil, fmt.Errorf("no session manager available to finalize compact")

@@ -168,10 +168,9 @@ func TestRecordSession_RedirectsToSidecar(t *testing.T) {
 
 	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "sess-x", nil, "", 30)
 	require.NoError(t, err)
-	a.oneoffRec = rec
-	a.skipSessionWrites = true // one-off mode
+	rs := &RunState{SkipSessionWrites: true, OneoffRec: rec} // one-off mode
 
-	a.recordSession(&session.Message{Type: session.MessageTypeUser, Content: "hi"})
+	a.recordSession(rs, &session.Message{Type: session.MessageTypeUser, Content: "hi"})
 	path, _, _ := rec.close()
 
 	lines := readJSONLLines(t, path)
@@ -183,9 +182,9 @@ func TestRecordSession_RedirectsToSidecar(t *testing.T) {
 
 func TestRecordSession_NoRecorderNoPanic(t *testing.T) {
 	a := newTestAgent(t,&mockStreamProvider{name: "mock"})
-	a.skipSessionWrites = true
+	rs := &RunState{SkipSessionWrites: true}
 	// No session manager, no recorder — must be a silent no-op.
-	a.recordSession(&session.Message{Type: session.MessageTypeUser, Content: "hi"})
+	a.recordSession(rs, &session.Message{Type: session.MessageTypeUser, Content: "hi"})
 }
 
 // ---- RunOneOffStream end-to-end ----
@@ -264,7 +263,7 @@ func TestRunOneOffStream_DisabledByConfig(t *testing.T) {
 	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{textSeq("ok")}}
 	a := newTestAgent(t,prov)
 	disabled := false
-	a.cfg = &config.Config{Oneoff: config.OneoffConfig{Enabled: &disabled}}
+	a.Config.FullConfig = &config.Config{Oneoff: config.OneoffConfig{Enabled: &disabled}}
 
 	result, _ := drainAgentEvents(a.RunOneOffStream(
 		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024},

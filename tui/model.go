@@ -102,7 +102,10 @@ type Model struct {
 	copyMode       bool
 	cancelFunc     context.CancelFunc
 	eventCh        <-chan agent.AgentEvent
-	steerRespCh    chan string // agent → TUI: steer check requests use this to get pending input
+	steerCh        chan agent.SteerInput // agent → TUI: steer check requests read pending input from here
+	// steerCh 无需在 TurnComplete/Error 时置 nil：事件顺序处理，旧 turn 的
+	// loop 退出后不会再有 SteerCheck；steer 发送是 select+default 非阻塞，
+	// 新 turn 会在 sendMessage 里重建 channel。
 	totalUsage     llm.Usage
 	sessionCost    float64
 	pendingConfirm *pendingConfirm

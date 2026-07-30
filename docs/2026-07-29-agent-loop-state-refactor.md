@@ -4,8 +4,47 @@
 recorder RunOption 化、Step 5.5 runParams 改造、Step 5/6 调用点清单补全；
 2026-07-30 review-2 修订：sharedMCP 派生值 + fork 迁移、oneoffRec 过渡策略、
 mode 锁迁移、manager turn-active 标记、race 测试、budget 两入口）
-状态：方案确认
+状态：已实施（2026-07-30；含实施期偏差，见下方「实施偏差记录」）
 关联：`2026-07-28-agent-loop-refactor.md`（循环体可读性重构）
+
+## 实施偏差记录（2026-07-30）
+
+实施与评审中发现本文档两处设计错误，最终以代码为准做了修正：
+
+1. **`convState` 取代 RunState 承载会话级滚动状态**。文档 §5 把
+   `InputTokens`/`TokenBreakdown`/`CompactEstimate`/`LastMessageDate` 放进
+   per-run 的 `RunState`——但前两者需要在 run 之外读写（ACP session/load
+   在首个 run 之前预估算；channel turn 间 `/usage`），后两者是**跨 turn**
+   语义（compact 冷却防止同会话重复压缩；日期 reminder 比较相邻 turn 的
+   日期）。这四者现归属 agent 级的 `convState`（定义于 `agent/agent_config.go`，
+   自带 RWMutex）。`RunState` 只保留真正的 per-run 字段：Messages、
+   StartTime、TraceID、APICalls、LengthRetries、Budget、SkipSessionWrites、
+   OneoffRec。Getter（`LastInputEstimate` 等）直读 conv，无 currentRun
+   回退链。
+2. **`recordSession` 显式 rs 穿透彻底完成，无 agent 级 fallback**。
+   Step 5/6 的过渡策略（`a.skipSessionWrites`/`a.oneoffRec` 暂留）没有
+   落地为终态——`recordSession(rs, msg)` 经 `tool_executor.go` 三层显式
+   穿透，两个入口均不再写 agent 级共享状态，turnState 与 fallback 字段
+   全部删除。
+3. **`maybeAutoCompact` 增加 `rs.SkipSessionWrites` 守卫**（实施期发现的
+   存量隐患）：one-off 运行期间估算反映的是主会话，一旦越阈，
+   `doCompact` 会把主 session 从侧路 run 下换掉。
+4. **`runLoop(ctx, rs, in *runInput, ch)`**：`runInput` 聚合
+   `{Provider, Messages, Opts, Params}`；eventCh 仍由入口创建并显式传参
+   （入口 goroutine 内还有 prep 工作，未改成 runLoop 返回 channel）。
+5. **channel manager turn-active 标记保持 `ta.steerRespCh` 双用途**，
+   未引入独立 `turnActive` 字段——steer channel 现在本就是 per-turn
+   创建，"channel 非 nil ⟺ turn active"语义自洽。
+6. **`RunConversationStream` 中 recorder 创建移到 `ensureSessionAndRecordUser`
+   之前**：否则 ambient turn 的用户消息在 recorder 挂载前就被 recordSession
+   丢弃，不会落入 sidecar。
+7. **`recordAssistantTurn` 对 one-off 的 `EstimatedInputTokens` 置 0**：
+   侧路转录不应携带主会话的估算值。
+8. **`NewAIAgentWithConfig` 采纳非 nil 的 `cfg.ToolRegistry`**（文档 §1
+   把 ToolRegistry 列为可注入句柄，初版实现静默丢弃了该输入）。
+9. **文件归并**：`AgentConfig`/`FrontendConfig`/`RuntimeChannels`/
+   `PermissionState`/`RunState`/`convState` 六个状态结构最终统一收敛在
+   `agent/agent_config.go`（Step 2/5 原计划的独立文件不再存在）。
 
 本文档是实施规格：按「迁移步骤」顺序执行，每步保持 `go test ./agent/...` 绿色，
 验收标准见文末。

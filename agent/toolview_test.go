@@ -14,14 +14,14 @@ import (
 // (e.g. /compact), which is precisely the failure mode the tool view exists
 // to eliminate.
 func TestBuildToolViewNilVsEmpty(t *testing.T) {
-	if v := buildToolView(nil); v != nil {
+	if v := buildToolView(applyRunOptions(nil)); v != nil {
 		t.Fatalf("buildToolView(nil) = %+v, want nil (unrestricted)", v)
 	}
-	if v := buildToolView([]RunOption{}); v != nil {
+	if v := buildToolView(applyRunOptions([]RunOption{})); v != nil {
 		t.Fatalf("buildToolView(empty) = %+v, want nil (unrestricted)", v)
 	}
 
-	v := buildToolView([]RunOption{WithNoTools()})
+	v := buildToolView(applyRunOptions([]RunOption{WithNoTools()}))
 	if v == nil {
 		t.Fatal("WithNoTools produced a nil view — the run would be unrestricted")
 	}
@@ -36,7 +36,7 @@ func TestBuildToolViewNilVsEmpty(t *testing.T) {
 // TestBuildToolViewSkipsNilOptions ensures a nil RunOption in the variadic
 // slice can't panic the agent loop.
 func TestBuildToolViewSkipsNilOptions(t *testing.T) {
-	v := buildToolView([]RunOption{nil, WithToolSet("Bash"), nil})
+	v := buildToolView(applyRunOptions([]RunOption{nil, WithToolSet("Bash"), nil}))
 	if v == nil || !v.allow["Bash"] {
 		t.Fatalf("view = %+v, want Bash allowed", v)
 	}
@@ -48,7 +48,7 @@ func TestBuildToolViewSkipsNilOptions(t *testing.T) {
 // TestWithToolSetAccumulates verifies multiple WithToolSet options union
 // rather than overwrite, so callers can compose restrictions.
 func TestWithToolSetAccumulates(t *testing.T) {
-	v := buildToolView([]RunOption{WithToolSet("Bash"), WithToolSet("ReadFile", "Grep")})
+	v := buildToolView(applyRunOptions([]RunOption{WithToolSet("Bash"), WithToolSet("ReadFile", "Grep")}))
 	for _, name := range []string{"Bash", "ReadFile", "Grep"} {
 		if !v.allow[name] {
 			t.Errorf("allow[%q] = false, want true", name)
@@ -71,7 +71,7 @@ func TestToolViewContextRoundTrip(t *testing.T) {
 		t.Fatalf("withToolView(ctx, nil) yielded %+v, want nil", got)
 	}
 
-	v := buildToolView([]RunOption{WithToolSet("Bash")})
+	v := buildToolView(applyRunOptions([]RunOption{WithToolSet("Bash")}))
 	if got := toolViewFrom(withToolView(ctx, v)); got != v {
 		t.Fatalf("round trip returned %+v, want %+v", got, v)
 	}
@@ -84,7 +84,7 @@ func newResolverAgent(names ...string) *AIAgent {
 	for _, n := range names {
 		reg.Register(&viewStubTool{name: n})
 	}
-	return &AIAgent{toolRegistry: reg}
+	return &AIAgent{Config: AgentConfig{ToolRegistry: reg}}
 }
 
 func TestResolverUnrestrictedPassesThrough(t *testing.T) {
@@ -101,7 +101,7 @@ func TestResolverUnrestrictedPassesThrough(t *testing.T) {
 
 func TestResolverWithToolSetHidesOthers(t *testing.T) {
 	a := newResolverAgent("Bash", "ReadFile", "WriteFile")
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{WithToolSet("Bash")}))
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{WithToolSet("Bash")})))
 	res := a.resolve(ctx)
 
 	schemas := res.schemas()
@@ -117,14 +117,14 @@ func TestResolverWithToolSetHidesOthers(t *testing.T) {
 
 	// The registry itself must be untouched — this is the whole point of the
 	// design: no save/restore, so nothing can leak or be forgotten.
-	if len(a.toolRegistry.GetToolNames()) != 3 {
-		t.Fatalf("registry mutated: %v", a.toolRegistry.GetToolNames())
+	if len(a.Config.ToolRegistry.GetToolNames()) != 3 {
+		t.Fatalf("registry mutated: %v", a.Config.ToolRegistry.GetToolNames())
 	}
 }
 
 func TestResolverWithNoToolsHidesEverything(t *testing.T) {
 	a := newResolverAgent("Bash", "ReadFile")
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{WithNoTools()}))
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{WithNoTools()})))
 	res := a.resolve(ctx)
 
 	if s := res.schemas(); len(s) != 0 {
@@ -142,9 +142,9 @@ func TestResolverRefusesHiddenToolInvocation(t *testing.T) {
 	executed := false
 	reg := tools.NewRegistry()
 	reg.Register(&viewStubTool{name: "WriteFile", onExecute: func() { executed = true }})
-	a := &AIAgent{toolRegistry: reg}
+	a := &AIAgent{Config: AgentConfig{ToolRegistry: reg}}
 
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{WithToolSet("Bash")}))
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{WithToolSet("Bash")})))
 	tr := a.resolve(ctx).invoke(ctx, "WriteFile", "{}")
 
 	if tr.Status != tools.ToolResultError {
@@ -169,13 +169,13 @@ func TestResolverHiddenToolIsNotParallel(t *testing.T) {
 	reg := tools.NewRegistry()
 	reg.Register(&viewStubTool{name: "Grep", parallel: true})
 	reg.Register(&viewStubTool{name: "Glob", parallel: true})
-	a := &AIAgent{toolRegistry: reg}
+	a := &AIAgent{Config: AgentConfig{ToolRegistry: reg}}
 
 	if !a.resolve(context.Background()).isParallel("Grep") {
 		t.Fatal("unrestricted: Grep should be parallel")
 	}
 
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{WithToolSet("Grep")}))
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{WithToolSet("Grep")})))
 	res := a.resolve(ctx)
 	if !res.isParallel("Grep") {
 		t.Error("visible parallel tool reported non-parallel")
@@ -204,7 +204,7 @@ func TestResolverSchemaOrderIsStable(t *testing.T) {
 	// the full ordering intact for the next unrestricted turn.
 	for round := 0; round < 20; round++ {
 		restricted := withToolView(context.Background(),
-			buildToolView([]RunOption{WithToolSet("Bash")}))
+			buildToolView(applyRunOptions([]RunOption{WithToolSet("Bash")})))
 		if s := a.resolve(restricted).schemas(); len(s) != 1 {
 			t.Fatalf("round %d: restricted schemas = %d, want 1", round, len(s))
 		}
@@ -228,9 +228,9 @@ func TestResolverPreservesRegistryOrderUnderView(t *testing.T) {
 	a := newResolverAgent("Bash", "Glob", "Grep", "ReadFile",
 		"mcp__srv__a", "mcp__srv__b", "mcp__srv__c")
 
-	view := buildToolView([]RunOption{
+	view := buildToolView(applyRunOptions([]RunOption{
 		WithToolSet("ReadFile", "mcp__srv__c", "Bash", "mcp__srv__a"),
-	})
+	}))
 	want := []string{"Bash", "ReadFile", "mcp__srv__a", "mcp__srv__c"}
 
 	for round := 0; round < 20; round++ {
@@ -253,7 +253,7 @@ func TestResolverPreservesRegistryOrderUnderView(t *testing.T) {
 // --- WithExtraTools ---
 
 func TestWithExtraToolsIsPurelyAdditive(t *testing.T) {
-	v := buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFile"})})
+	v := buildToolView(applyRunOptions([]RunOption{WithExtraTools(&viewStubTool{name: "SendFile"})}))
 	if v == nil {
 		t.Fatal("view is nil")
 	}
@@ -268,7 +268,7 @@ func TestWithExtraToolsIsPurelyAdditive(t *testing.T) {
 func TestExtraToolsVisibleAlongsideFullRegistry(t *testing.T) {
 	a := newResolverAgent("Bash", "ReadFile")
 	ctx := withToolView(context.Background(),
-		buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFile"})}))
+		buildToolView(applyRunOptions([]RunOption{WithExtraTools(&viewStubTool{name: "SendFile"})})))
 	res := a.resolve(ctx)
 
 	got := schemaNames(res.schemas())
@@ -281,7 +281,7 @@ func TestExtraToolsVisibleAlongsideFullRegistry(t *testing.T) {
 	}
 
 	// The registry must not have gained the extra tool.
-	if a.toolRegistry.GetTool("SendFile") != nil {
+	if a.Config.ToolRegistry.GetTool("SendFile") != nil {
 		t.Fatal("extra tool leaked into the agent's registry")
 	}
 }
@@ -291,10 +291,10 @@ func TestExtraToolsVisibleAlongsideFullRegistry(t *testing.T) {
 // need to be named in WithToolSet.
 func TestExtraToolsExemptFromToolSet(t *testing.T) {
 	a := newResolverAgent("Bash", "ReadFile", "WriteFile")
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{
 		WithToolSet("Bash"),
 		WithExtraTools(&viewStubTool{name: "SendFile"}),
-	}))
+	})))
 	res := a.resolve(ctx)
 
 	got := schemaNames(res.schemas())
@@ -309,10 +309,10 @@ func TestExtraToolsExemptFromToolSet(t *testing.T) {
 
 func TestExtraToolsSurviveWithNoTools(t *testing.T) {
 	a := newResolverAgent("Bash", "ReadFile")
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{
 		WithNoTools(),
 		WithExtraTools(&viewStubTool{name: "SendFile"}),
-	}))
+	})))
 
 	got := schemaNames(a.resolve(ctx).schemas())
 	if !equalStrings(got, []string{"SendFile"}) {
@@ -323,9 +323,9 @@ func TestExtraToolsSurviveWithNoTools(t *testing.T) {
 func TestExtraToolIsInvocable(t *testing.T) {
 	executed := false
 	a := newResolverAgent("Bash")
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{
 		WithExtraTools(&viewStubTool{name: "SendFile", onExecute: func() { executed = true }}),
-	}))
+	})))
 
 	tr := a.resolve(ctx).invoke(ctx, "SendFile", "{}")
 	if tr.Status != tools.ToolResultSuccess {
@@ -343,11 +343,11 @@ func TestExtraToolShadowsRegistryEntry(t *testing.T) {
 	registryRan, extraRan := false, false
 	reg := tools.NewRegistry()
 	reg.Register(&viewStubTool{name: "SendFile", onExecute: func() { registryRan = true }})
-	a := &AIAgent{toolRegistry: reg}
+	a := &AIAgent{Config: AgentConfig{ToolRegistry: reg}}
 
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{
 		WithExtraTools(&viewStubTool{name: "SendFile", onExecute: func() { extraRan = true }}),
-	}))
+	})))
 	res := a.resolve(ctx)
 
 	if got := schemaNames(res.schemas()); !equalStrings(got, []string{"SendFile"}) {
@@ -368,9 +368,9 @@ func TestExtraToolsAreInvisibleToConcurrentRuns(t *testing.T) {
 	a := newResolverAgent("Bash")
 
 	ctxA := withToolView(context.Background(),
-		buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFileA"})}))
+		buildToolView(applyRunOptions([]RunOption{WithExtraTools(&viewStubTool{name: "SendFileA"})})))
 	ctxB := withToolView(context.Background(),
-		buildToolView([]RunOption{WithExtraTools(&viewStubTool{name: "SendFileB"})}))
+		buildToolView(applyRunOptions([]RunOption{WithExtraTools(&viewStubTool{name: "SendFileB"})})))
 
 	resA, resB := a.resolve(ctxA), a.resolve(ctxB)
 
@@ -399,9 +399,9 @@ func TestExtraToolsAreInvisibleToConcurrentRuns(t *testing.T) {
 // prompt prefix.
 func TestExtraToolsAppendAfterRegistry(t *testing.T) {
 	a := newResolverAgent("Bash", "ReadFile", "mcp__srv__a", "mcp__srv__b")
-	view := buildToolView([]RunOption{WithExtraTools(
+	view := buildToolView(applyRunOptions([]RunOption{WithExtraTools(
 		&viewStubTool{name: "AAASendFile"}, // sorts first alphabetically
-	)})
+	)}))
 
 	want := []string{"Bash", "ReadFile", "mcp__srv__a", "mcp__srv__b", "AAASendFile"}
 	for round := 0; round < 10; round++ {
@@ -414,12 +414,12 @@ func TestExtraToolsAppendAfterRegistry(t *testing.T) {
 
 func TestExtraToolParallelismComesFromTheExtra(t *testing.T) {
 	a := newResolverAgent("Bash")
-	ctx := withToolView(context.Background(), buildToolView([]RunOption{
+	ctx := withToolView(context.Background(), buildToolView(applyRunOptions([]RunOption{
 		WithExtraTools(
 			&viewStubTool{name: "ParTool", parallel: true},
 			&viewStubTool{name: "SeqTool"},
 		),
-	}))
+	})))
 	res := a.resolve(ctx)
 
 	if !res.isParallel("ParTool") {
@@ -431,13 +431,13 @@ func TestExtraToolParallelismComesFromTheExtra(t *testing.T) {
 }
 
 func TestWithExtraToolsIgnoresNil(t *testing.T) {
-	v := buildToolView([]RunOption{WithExtraTools(nil, &viewStubTool{name: "SendFile"}, nil)})
+	v := buildToolView(applyRunOptions([]RunOption{WithExtraTools(nil, &viewStubTool{name: "SendFile"}, nil)}))
 	if v.extra == nil || v.extra.GetTool("SendFile") == nil {
 		t.Fatal("SendFile not attached")
 	}
-	// A nil-only call must not fabricate an empty extra registry.
-	if v2 := buildToolView([]RunOption{WithExtraTools(nil)}); v2.extra != nil {
-		t.Error("nil-only WithExtraTools created an extra registry")
+	// A nil-only call returns nil view (no restrictions, no extras).
+	if v2 := buildToolView(applyRunOptions([]RunOption{WithExtraTools(nil)})); v2 != nil {
+		t.Error("nil-only WithExtraTools should return nil view, got", v2)
 	}
 }
 

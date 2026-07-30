@@ -207,7 +207,7 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 		PermissionMode:   agent.PermissionModeSkip,
 		TitleGenEnabled:  &titleGen,
 		ProcessManager:   m.processManager,
-		SharedMCP:        sharedMCP,
+		MCPManager:       sharedMCP,
 		FullConfig:       m.cfg,
 		SystemConfig:     agent.SystemConfigFromConfig(m.cfg),
 	})

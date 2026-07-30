@@ -200,18 +200,27 @@ func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []
 }
 
 // EstimateAndUpdateTokens estimates the total input tokens for the current
-// messages and records them in the turn state, so that buildReminderContext
-// sees the current (not previous-turn) context size.
+// messages and records them in the conversation state (a.conv), so that
+// buildReminderContext sees the current (not previous-turn) context size.
 // The categorised breakdown is stored alongside for the TUI statusbar and
 // /usage report.
-func (a *AIAgent) EstimateAndUpdateTokens(messages []llm.Message) {
-	schemas := a.filterActiveSchemas(a.toolRegistry.GetSchemas())
+//
+// rs is the owning run's state, or nil when called outside a run (e.g. ACP
+// session/load priming the estimate before the first turn). One-off runs
+// (rs.SkipSessionWrites) are skipped — they must not pollute the main
+// conversation's estimate or side-effect auto-compact decisions.
+func (a *AIAgent) EstimateAndUpdateTokens(rs *RunState, messages []llm.Message) {
+	if rs != nil && rs.SkipSessionWrites {
+		return
+	}
+
+	schemas := a.filterActiveSchemas(a.Config.ToolRegistry.GetSchemas())
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content
 	}
 	tb := estimateInputTokens(messages, systemPrompt, schemas)
-	a.turn.setEstimate(tb.Total, tb)
+	a.conv.setEstimate(tb.Total, tb)
 }
 
 // LastTokenBreakdown returns the most recent token estimate breakdown
@@ -222,13 +231,13 @@ func (a *AIAgent) EstimateAndUpdateTokens(messages []llm.Message) {
 // calling LastInputEstimate and LastTokenBreakdown separately can straddle a
 // concurrent turn's update and mix values from two different estimates.
 func (a *AIAgent) LastTokenBreakdown() tokenbreakdown.Breakdown {
-	return a.turn.snapshotBreakdown()
+	return a.conv.snapshotBreakdown()
 }
 
 // LastInputEstimateWithBreakdown returns the most recent token estimate and its
 // breakdown, read atomically so the two always describe the same estimate.
 func (a *AIAgent) LastInputEstimateWithBreakdown() (int64, tokenbreakdown.Breakdown) {
-	return a.turn.estimateSnapshot()
+	return a.conv.estimateSnapshot()
 }
 
 // shouldAutoCompact checks whether automatic compaction should be triggered.
@@ -238,15 +247,15 @@ func (a *AIAgent) LastInputEstimateWithBreakdown() (int64, tokenbreakdown.Breakd
 //   - estimated input tokens >= contextWindow * threshold
 //   - not in cooldown (token estimate hasn't grown 20% since last compact)
 func (a *AIAgent) shouldAutoCompact() bool {
-	if a.cfg == nil || (a.cfg.Compact.Auto != nil && !*a.cfg.Compact.Auto) {
+	if a.Config.FullConfig == nil || (a.Config.FullConfig.Compact.Auto != nil && !*a.Config.FullConfig.Compact.Auto) {
 		return false
 	}
-	if a.contextWindow <= 0 {
+	if a.Config.ContextWindow <= 0 {
 		return false
 	}
 	if a.isCompactCooldown() {
 		return false
 	}
-	pct := float64(a.turn.tokens()) / float64(a.contextWindow)
-	return pct >= a.cfg.Compact.Threshold
+	pct := float64(a.conv.tokens()) / float64(a.Config.ContextWindow)
+	return pct >= a.Config.FullConfig.Compact.Threshold
 }

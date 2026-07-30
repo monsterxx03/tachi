@@ -68,15 +68,15 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	if cfg.Logger != nil {
 		child.SetLogger(cfg.Logger)
 	} else {
-		child.SetLogger(a.logger)
+		child.SetLogger(a.Config.Logger)
 	}
 
 	// Register allowed tools from parent.
 	if len(cfg.AllowedTools) == 0 {
 		// No whitelist — copy all parent tools.
-		for _, name := range a.toolRegistry.GetToolNames() {
-			if tool := a.toolRegistry.GetTool(name); tool != nil {
-				child.toolRegistry.Register(forkTool(tool))
+		for _, name := range a.Config.ToolRegistry.GetToolNames() {
+			if tool := a.Config.ToolRegistry.GetTool(name); tool != nil {
+				child.Config.ToolRegistry.Register(forkTool(tool))
 			}
 		}
 	} else {
@@ -85,10 +85,10 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 		for _, name := range cfg.AllowedTools {
 			allowSet[name] = true
 		}
-		for _, name := range a.toolRegistry.GetToolNames() {
+		for _, name := range a.Config.ToolRegistry.GetToolNames() {
 			if allowSet[name] {
-				if tool := a.toolRegistry.GetTool(name); tool != nil {
-					child.toolRegistry.Register(forkTool(tool))
+				if tool := a.Config.ToolRegistry.GetTool(name); tool != nil {
+					child.Config.ToolRegistry.Register(forkTool(tool))
 				}
 			}
 		}
@@ -100,19 +100,19 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	// Share heavy resources with parent — Close won't tear them down.
 	// Skip MCP sharing when NoMCP is set (e.g. ambient turns that
 	// should only use the whitelisted tools without MCP).
-	child.SetProcessManager(a.processManager)
-	if a.mcpManager != nil && !cfg.NoMCP {
-		child.SetSharedMCP(a.mcpManager)
+	child.SetProcessManager(a.Config.ProcessManager)
+	if a.Config.MCPManager != nil && !cfg.NoMCP {
+		child.SetSharedMCP(a.Config.MCPManager)
 	}
 
 	// Share the bash permission policy (rules are read-only; session-scoped
 	// "always allow" approvals propagate back to the parent's policy).
-	child.SetPermissionPolicy(a.permissionPolicy)
+	child.SetPermissionPolicy(a.Config.PermissionPolicy)
 
 	return &ForkedAgent{
 		agent:     child,
-		sharedPM:  a.processManager,
-		sharedMCP: a.mcpManager,
+		sharedPM:  a.Config.ProcessManager,
+		sharedMCP: a.Config.MCPManager,
 	}
 }
 

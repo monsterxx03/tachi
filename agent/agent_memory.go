@@ -9,10 +9,10 @@ import (
 
 // MemoryBackend returns the configured memory backend, or nil if memory is disabled.
 func (a *AIAgent) MemoryBackend() memory.Backend {
-	if a.memory == nil {
+	if a.Config.Memory == nil {
 		return nil
 	}
-	return a.memory.Backend
+	return a.Config.Memory.Backend
 }
 
 // RecordMemory implements tools.MemoryRecorder. It persists an explicit
@@ -22,24 +22,24 @@ func (a *AIAgent) MemoryBackend() memory.Backend {
 // TopicBackend stores content only.
 // Returns an error if memory is not configured or no session is active.
 func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []string) error {
-	if a.memory == nil {
+	if a.Config.Memory == nil {
 		return fmt.Errorf("memory backend not configured")
 	}
-	if a.sessionManager == nil {
+	if a.Config.SessionManager == nil {
 		return fmt.Errorf("session manager not configured")
 	}
-	sess := a.sessionManager.Current()
+	sess := a.Config.SessionManager.Current()
 	if sess == nil {
 		return fmt.Errorf("no active session")
 	}
 
-	storeCtx, cancel := context.WithTimeout(ctx, a.cfg.Memory.Timeout)
+	storeCtx, cancel := context.WithTimeout(ctx, a.Config.FullConfig.Memory.Timeout)
 	defer cancel()
 
-	if err := a.memory.Backend.Store(storeCtx, content); err != nil {
-		a.logger.Error(ctx, "RecordMemory: store failed", err)
+	if err := a.Config.Memory.Backend.Store(storeCtx, content); err != nil {
+		a.Config.Logger.Error(ctx, "RecordMemory: store failed", err)
 		return err
 	}
-	a.logger.Info(ctx, "RecordMemory: stored", "content", truncateForLog(content, 60), "tags", fmt.Sprintf("%v", tags))
+	a.Config.Logger.Info(ctx, "RecordMemory: stored", "content", truncateForLog(content, 60), "tags", fmt.Sprintf("%v", tags))
 	return nil
 }

@@ -27,24 +27,24 @@ func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
 
 	tpCfg := cfg.FindProvider(tpName)
 	if tpCfg == nil {
-		a.logger.Info(context.Background(), "Agent: title provider not found, falling back to main model", "provider", tpName)
+		a.Config.Logger.Info(context.Background(), "Agent: title provider not found, falling back to main model", "provider", tpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(tpCfg)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to resolve title provider, falling back to main model", err, "provider", tpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve title provider, falling back to main model", err, "provider", tpName)
 		return
 	}
 
 	tp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to create title provider, falling back to main model", err, "provider", tpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to create title provider, falling back to main model", err, "provider", tpName)
 		return
 	}
 
 	a.titleModelProvider = tp
-	a.logger.Info(context.Background(), "Agent: using title provider for session title generation", "provider", tpName, "type", resolved.Type, "model", resolved.Model)
+	a.Config.Logger.Info(context.Background(), "Agent: using title provider for session title generation", "provider", tpName, "type", resolved.Type, "model", resolved.Model)
 }
 
 // SetupCommitProvider resolves and creates a dedicated LLM provider for /commit
@@ -58,36 +58,36 @@ func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
 
 	cpCfg := cfg.FindProvider(cpName)
 	if cpCfg == nil {
-		a.logger.Info(context.Background(), "Agent: commit provider not found, falling back to main model", "provider", cpName)
+		a.Config.Logger.Info(context.Background(), "Agent: commit provider not found, falling back to main model", "provider", cpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(cpCfg)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to resolve commit provider, falling back to main model", err, "provider", cpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve commit provider, falling back to main model", err, "provider", cpName)
 		return
 	}
 
 	cp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to create commit provider, falling back to main model", err, "provider", cpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to create commit provider, falling back to main model", err, "provider", cpName)
 		return
 	}
 
-	a.commitProvider = cp
-	a.logger.Info(context.Background(), "Agent: using commit provider for /commit message generation", "provider", cpName, "type", resolved.Type, "model", resolved.Model)
+	a.Config.CommitProvider = cp
+	a.Config.Logger.Info(context.Background(), "Agent: using commit provider for /commit message generation", "provider", cpName, "type", resolved.Type, "model", resolved.Model)
 }
 
 // CommitProvider returns the dedicated commit provider, or nil if none is configured
 // (caller should fall back to the main provider).
 func (a *AIAgent) CommitProvider() llm.Provider {
-	return a.commitProvider
+	return a.Config.CommitProvider
 }
 
 // ReviewProvider returns the dedicated review provider, or nil if none is configured
 // (caller should fall back to the main provider).
 func (a *AIAgent) ReviewProvider() llm.Provider {
-	return a.reviewProvider
+	return a.Config.ReviewProvider
 }
 
 // SetupReviewProvider resolves and creates a dedicated LLM provider for /review
@@ -104,30 +104,30 @@ func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
 
 	rpCfg := cfg.FindProvider(rpName)
 	if rpCfg == nil {
-		a.logger.Info(context.Background(), "Agent: review provider not found, falling back to main model", "provider", rpName)
+		a.Config.Logger.Info(context.Background(), "Agent: review provider not found, falling back to main model", "provider", rpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(rpCfg)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to resolve review provider, falling back to main model", err, "provider", rpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve review provider, falling back to main model", err, "provider", rpName)
 		return
 	}
 
 	rp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to create review provider, falling back to main model", err, "provider", rpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to create review provider, falling back to main model", err, "provider", rpName)
 		return
 	}
 
-	a.reviewProvider = rp
-	a.logger.Info(context.Background(), "Agent: using review provider for /review code review", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
+	a.Config.ReviewProvider = rp
+	a.Config.Logger.Info(context.Background(), "Agent: using review provider for /review code review", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
 }
 
 // RunProvider returns the dedicated run provider, or nil if none is configured
 // (caller should fall back to the main provider).
 func (a *AIAgent) RunProvider() llm.Provider {
-	return a.runProvider
+	return a.Config.RunProvider
 }
 
 // SetupRunProvider resolves and creates a dedicated LLM provider for tachi -p
@@ -141,24 +141,24 @@ func (a *AIAgent) SetupRunProvider(cfg *config.Config) {
 
 	rpCfg := cfg.FindProvider(rpName)
 	if rpCfg == nil {
-		a.logger.Info(context.Background(), "Agent: run provider not found, falling back to main model", "provider", rpName)
+		a.Config.Logger.Info(context.Background(), "Agent: run provider not found, falling back to main model", "provider", rpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(rpCfg)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to resolve run provider, falling back to main model", err, "provider", rpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve run provider, falling back to main model", err, "provider", rpName)
 		return
 	}
 
 	rp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to create run provider, falling back to main model", err, "provider", rpName)
+		a.Config.Logger.Error(context.Background(), "Agent: failed to create run provider, falling back to main model", err, "provider", rpName)
 		return
 	}
 
-	a.runProvider = rp
-	a.logger.Info(context.Background(), "Agent: using run provider for tachi -p mode", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
+	a.Config.RunProvider = rp
+	a.Config.Logger.Info(context.Background(), "Agent: using run provider for tachi -p mode", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
 }
 
 // generateTitle uses the LLM to produce a concise session title from the first
@@ -171,7 +171,7 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 
 	p := a.titleModelProvider
 	if p == nil {
-		p = a.provider
+		p = a.Config.Provider
 	}
 
 	messages := []llm.Message{
@@ -187,22 +187,22 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 
 	thinkingDisabled := false
 	chatOpts := llm.ChatOptions{MaxTokens: 4096, Thinking: &thinkingDisabled}
-	if a.sessionManager != nil && a.sessionManager.Current() != nil {
-		chatOpts.SessionID = a.sessionManager.Current().ID
+	if a.Config.SessionManager != nil && a.Config.SessionManager.Current() != nil {
+		chatOpts.SessionID = a.Config.SessionManager.Current().ID
 	}
 	resp, err := p.CreateChat(ctx, messages, nil, chatOpts)
 	if err != nil {
-		a.logger.Error(ctx, "Agent: failed to generate title, falling back to truncation", err)
+		a.Config.Logger.Error(ctx, "Agent: failed to generate title, falling back to truncation", err)
 		return session.ExtractTitle(firstMessage)
 	}
 
 	title := strings.TrimSpace(resp.Content)
 	if title == "" {
-		a.logger.Info(ctx, "Agent: LLM returned empty title, falling back to truncation")
+		a.Config.Logger.Info(ctx, "Agent: LLM returned empty title, falling back to truncation")
 		return session.ExtractTitle(firstMessage)
 	}
 
-	a.logger.Info(ctx, "Agent: LLM generated title", "title", title)
+	a.Config.Logger.Info(ctx, "Agent: LLM generated title", "title", title)
 
 	// Enforce max length via existing ExtractTitle
 	return session.ExtractTitle(title)

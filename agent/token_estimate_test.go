@@ -291,14 +291,14 @@ func TestEstimateAndUpdateTokens(t *testing.T) {
 	})
 
 	agent := &AIAgent{
-		toolRegistry: reg,
-		turn:         newTurnState(),
+		Config: AgentConfig{ToolRegistry: reg},
+		conv:   newConvState(),
 	}
 
 	msgs := []llm.Message{
 		{Role: "user", Content: "hello"},
 	}
-	agent.EstimateAndUpdateTokens(msgs)
+	agent.EstimateAndUpdateTokens(nil, msgs)
 	require.Greater(t, agent.LastInputEstimate(), int64(0),
 		"EstimateAndUpdateTokens should set a positive token estimate")
 	tb := agent.LastTokenBreakdown()
@@ -313,15 +313,15 @@ func TestEstimateAndUpdateTokens(t *testing.T) {
 func TestEstimateAndUpdateTokens_SystemPrompt(t *testing.T) {
 	reg := agenttools.NewRegistry()
 	agent := &AIAgent{
-		toolRegistry: reg,
-		turn:         newTurnState(),
+		Config: AgentConfig{ToolRegistry: reg},
+		conv:   newConvState(),
 	}
 
 	msgs := []llm.Message{
 		{Role: "system", Content: "You are a test assistant."},
 		{Role: "user", Content: "hi"},
 	}
-	agent.EstimateAndUpdateTokens(msgs)
+	agent.EstimateAndUpdateTokens(nil, msgs)
 	assert.Greater(t, agent.LastInputEstimate(), int64(0))
 	tb := agent.LastTokenBreakdown()
 	assert.Greater(t, tb.SystemPrompt, int64(0), "system prompt should be broken down")

@@ -178,7 +178,7 @@ func TestExecuteToolCalls_ParallelGroup(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 32)
-	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), &RunState{}, toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -219,7 +219,7 @@ func TestExecuteToolCalls_MixedSequentialAndParallel(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 32)
-	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), &RunState{}, toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 
@@ -247,7 +247,7 @@ func TestExecuteToolCalls_ResultOrderPreserved(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 32)
-	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), &RunState{}, toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 3)
 

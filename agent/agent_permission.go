@@ -83,7 +83,7 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 	if tc.Function.Name != tools.ToolNameBash {
 		return tools.ToolResult{}, false, nil
 	}
-	p := a.permissionPolicy
+	p := a.Config.PermissionPolicy
 	if p == nil || p.Empty() {
 		return tools.ToolResult{}, false, nil
 	}
@@ -98,7 +98,7 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 		return tools.ToolResult{}, false, nil
 
 	case permission.DecisionDeny:
-		a.logger.Info(ctx, "Agent: bash blocked by permission rule", "rule", rule, "command", cmd)
+		a.Config.Logger.Info(ctx, "Agent: bash blocked by permission rule", "rule", rule, "command", cmd)
 		return tools.ToolResult{
 			Status: tools.ToolResultError,
 			Err: fmt.Errorf("blocked by permission rule %q (deny) — the command was NOT executed. "+
@@ -116,14 +116,14 @@ func (a *AIAgent) checkBashPermission(ctx context.Context, tc llm.ToolCall, ch c
 func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule string, ch chan<- AgentEvent) (tools.ToolResult, bool, error) {
 	preview := bashAskPreview(cmd, rule)
 
-	switch a.permissionMode {
+	switch a.Config.PermissionMode {
 	case PermissionModeSkip:
 		// Channel, subagent, one-off runs: no human at the console.
-		if a.autoApprovePolicyAsks {
-			a.logger.Info(ctx, "Agent: bash ask auto-approved (allow-all session)", "rule", rule)
+		if a.PermState.AutoApprovePolicyAsks {
+			a.Config.Logger.Info(ctx, "Agent: bash ask auto-approved (allow-all session)", "rule", rule)
 			return tools.ToolResult{}, false, nil
 		}
-		a.logger.Info(ctx, "Agent: bash ask denied in non-interactive mode", "rule", rule, "command", cmd)
+		a.Config.Logger.Info(ctx, "Agent: bash ask denied in non-interactive mode", "rule", rule, "command", cmd)
 		return tools.ToolResult{
 			Status: tools.ToolResultError,
 			Err: fmt.Errorf("command requires interactive approval (matched ask rule %q), which is unavailable "+
@@ -132,8 +132,8 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 		}, true, nil
 
 	case PermissionModeExternal:
-		a.logger.Info(ctx, "Agent: bash ask requesting external permission", "rule", rule)
-		approved, err := a.permissionHandler(ctx, tc.Function.Name, tc.ID, preview, tc.Function.Arguments)
+		a.Config.Logger.Info(ctx, "Agent: bash ask requesting external permission", "rule", rule)
+		approved, err := a.PermState.PermissionHandler(ctx, tc.Function.Name, tc.ID, preview, tc.Function.Arguments)
 		if err != nil {
 			return tools.ToolResult{Status: tools.ToolResultError, Err: err}, true, nil
 		}
@@ -143,7 +143,7 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 		return tools.ToolResult{}, false, nil
 
 	default: // PermissionModeTUI
-		a.logger.Info(ctx, "Agent: bash ask requesting user confirmation", "rule", rule)
+		a.Config.Logger.Info(ctx, "Agent: bash ask requesting user confirmation", "rule", rule)
 		ch <- AgentEvent{
 			Type:     AgentEventToolConfirmation,
 			ToolName: tc.Function.Name,
@@ -153,10 +153,10 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 		}
 
 		select {
-		case resp := <-a.confirmRespCh:
+		case resp := <-a.Channels.ConfirmResp:
 			switch resp {
 			case ConfirmAllowAlways:
-				a.permissionPolicy.AllowExactSession(cmd)
+				a.Config.PermissionPolicy.AllowExactSession(cmd)
 				return tools.ToolResult{}, false, nil
 			case ConfirmAllowOnce:
 				return tools.ToolResult{}, false, nil

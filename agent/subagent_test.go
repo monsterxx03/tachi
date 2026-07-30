@@ -72,7 +72,7 @@ func TestSubagentProvider_Dedicated(t *testing.T) {
 	mainProvider := &mockStreamProvider{name: "main-provider"}
 	subProvider := &mockStreamProvider{name: "sub-provider"}
 	agent := NewAIAgent(mainProvider, 50)
-	agent.subagentProvider = subProvider
+	agent.Config.SubagentProvider = subProvider
 
 	assert.Equal(t, subProvider, agent.SubagentProvider())
 }

@@ -27,7 +27,7 @@ import (
 func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summary string, newHistory []llm.Message, err error) {
 	// 1. Independent timeout: use Background() so conversation cancellation
 	//    doesn't leave orphan sessions behind.
-	compactCtx, cancel := context.WithTimeout(context.Background(), a.cfg.Compact.Timeout)
+	compactCtx, cancel := context.WithTimeout(context.Background(), a.Config.FullConfig.Compact.Timeout)
 	defer cancel()
 
 	// Forward conversation cancellation — user Ctrl+C still aborts compact.
@@ -40,7 +40,7 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 	}()
 
 	// 2. Generate summary via the compact strategy.
-	summary, err = a.compactStrategy.Compact(compactCtx, messages, a.cfg.Compact.MaxTokens)
+	summary, err = a.Config.CompactStrategy.Compact(compactCtx, messages, a.Config.FullConfig.Compact.MaxTokens)
 	if err != nil {
 		return "", nil, fmt.Errorf("compact LLM call: %w", err)
 	}
@@ -51,7 +51,7 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content
 	}
-	newHistory, err = a.CompleteCompact(a.sessionManager, systemPrompt, summary)
+	newHistory, err = a.CompleteCompact(a.Config.SessionManager, systemPrompt, summary)
 	if err != nil {
 		return "", nil, fmt.Errorf("finalize compact: %w", err)
 	}
@@ -63,5 +63,5 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 // generation. Tests use this to inject a fake that returns a fixed summary
 // without needing a real LLM provider.
 func (a *AIAgent) SetCompactStrategy(s CompactStrategy) {
-	a.compactStrategy = s
+	a.Config.CompactStrategy = s
 }

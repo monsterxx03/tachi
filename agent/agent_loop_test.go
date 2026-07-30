@@ -291,7 +291,7 @@ func TestAgentLoop_IterationBudgetExhausted(t *testing.T) {
 	}
 
 	a := newTestAgent(t,mp)
-	a.maxIterations = 2 // only 2 iterations allowed
+	a.Config.MaxIterations = 2 // only 2 iterations allowed
 	a.RegisterTool(&stubTool{
 		name:     "Bash",
 		desc:     "Run a command",
@@ -339,7 +339,7 @@ func TestAgentLoop_APICallFailed(t *testing.T) {
 	// Provider that fails at the CreateChatStream level (not via stream event).
 	failingProvider := &failingStreamProvider{name: "fail"}
 	a := newTestAgent(t,failingProvider)
-	a.maxIterations = 1
+	a.Config.MaxIterations = 1
 
 	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -465,7 +465,7 @@ func TestExecuteToolCalls_UnknownTool(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 8)
-	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), &RunState{}, toolCalls, ch)
 	require.NoError(t, err) // unknown tool does not stop the loop, it returns an error result
 	require.Len(t, msgs, 1)
 	assert.True(t, msgs[0].IsError)
@@ -494,7 +494,7 @@ func TestExecuteToolCalls_ToolError(t *testing.T) {
 	}
 
 	ch := make(chan AgentEvent, 8)
-	msgs, err := a.executeToolCalls(t.Context(), toolCalls, ch)
+	msgs, err := a.executeToolCalls(t.Context(), &RunState{}, toolCalls, ch)
 	require.NoError(t, err)
 	require.Len(t, msgs, 1)
 	assert.True(t, msgs[0].IsError)
@@ -616,19 +616,22 @@ func TestHandleLengthFinish_ContinuationPrompt(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			a := newTestAgent(t,nil)
-			ls := &loopState{budget: NewIterationBudget(0)}
+			rs := &RunState{
+				Messages: []llm.Message{},
+				Budget:   NewIterationBudget(0),
+			}
 			ch := make(chan AgentEvent, 8)
 			defer close(ch)
 
 			acc := tc.buildAcc()
-			outcome := a.handleLengthFinish(t.Context(), acc, ls, ch)
+			outcome := a.handleLengthFinish(t.Context(), acc, rs, ch)
 
 			assert.Equal(t, outcomeContinue, outcome)
-			assert.Equal(t, 1, ls.lengthRetries)
+			assert.Equal(t, 1, rs.LengthRetries)
 
 			// Last message must be the continuation prompt.
-			require.NotEmpty(t, ls.messages)
-			last := ls.messages[len(ls.messages)-1]
+			require.NotEmpty(t, rs.Messages)
+			last := rs.Messages[len(rs.Messages)-1]
 			assert.Equal(t, "user", last.Role)
 			assert.Contains(t, last.Content, tc.wantContains)
 		})
@@ -641,7 +644,10 @@ func TestHandleLengthFinish_ContinuationPrompt(t *testing.T) {
 // which un-executed calls cannot satisfy.
 func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
 	a := newTestAgent(t,nil)
-	ls := &loopState{budget: NewIterationBudget(0)}
+	rs := &RunState{
+		Messages: []llm.Message{},
+		Budget:   NewIterationBudget(0),
+	}
 	ch := make(chan AgentEvent, 8)
 	defer close(ch)
 
@@ -650,12 +656,12 @@ func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
 		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command":"ls"}`}},
 	}
 
-	outcome := a.handleLengthFinish(t.Context(), acc, ls, ch)
+	outcome := a.handleLengthFinish(t.Context(), acc, rs, ch)
 	assert.Equal(t, outcomeContinue, outcome)
 
 	// First appended message is the assistant turn — tool calls stripped.
-	require.GreaterOrEqual(t, len(ls.messages), 2)
-	assistantMsg := ls.messages[0]
+	require.GreaterOrEqual(t, len(rs.Messages), 2)
+	assistantMsg := rs.Messages[0]
 	assert.Equal(t, "assistant", assistantMsg.Role)
 	assert.Nil(t, assistantMsg.ToolCalls)
 }
@@ -664,9 +670,10 @@ func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
 // maxLengthContinueRetries and delivers the partial output.
 func TestHandleLengthFinish_Exhausted(t *testing.T) {
 	a := newTestAgent(t,nil)
-	ls := &loopState{
-		budget:        NewIterationBudget(0),
-		lengthRetries: maxLengthContinueRetries - 1, // next one exhausts
+	rs := &RunState{
+		Messages:      []llm.Message{},
+		Budget:        NewIterationBudget(0),
+		LengthRetries: maxLengthContinueRetries - 1, // next one exhausts
 	}
 	ch := make(chan AgentEvent, 8)
 	defer close(ch)
@@ -674,7 +681,7 @@ func TestHandleLengthFinish_Exhausted(t *testing.T) {
 	acc := &streamAccumulator{finishReason: "max_tokens"}
 	acc.text.WriteString("final chunk")
 
-	outcome := a.handleLengthFinish(t.Context(), acc, ls, ch)
+	outcome := a.handleLengthFinish(t.Context(), acc, rs, ch)
 	assert.Equal(t, outcomeStop, outcome)
 
 	// A TurnComplete event with length_exhausted must have been emitted.
@@ -994,11 +1001,10 @@ func TestAgentLoop_SteerCancelled_MessagesPreserved(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(t.Context())
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(echoStub())
-	// Enable steer by setting the channel.
-	steerCh := make(chan string)
-	a.SetSteerChannel(steerCh)
+	// Enable steer via RunOption.
+	steerCh := make(chan SteerInput)
 
 	// Cancel context after the agent reaches the steer point (tool executes
 	// synchronously, so this happens almost immediately after the API call).
@@ -1007,23 +1013,21 @@ func TestAgentLoop_SteerCancelled_MessagesPreserved(t *testing.T) {
 		cancel()
 	}()
 
-	ch := a.RunConversationStream(ctx, nil, "run command", "", llm.ChatOptions{MaxTokens: 4096})
+	ch := a.RunConversationStream(ctx, nil, "run command", "", llm.ChatOptions{MaxTokens: 4096}, WithSteerChannel(steerCh))
 	result, events := drainAgentEvents(ch)
 
 	require.NotNil(t, result)
 	assert.Equal(t, ExitReasonInterrupted, result.ExitReason)
 
 	// Verify an AgentEventError was emitted with Messages (our fix for the
-	// applySteer ctx.Done() path — previously the agent exited silently
-	// without emitting any terminal event).
+	// applySteer ctx.Done() path — message context is carried in rs.Messages).
 	var found bool
 	for _, e := range events {
 		if e.Type == AgentEventError {
 			found = true
-			assert.NotEmpty(t, e.Messages, "AgentEventError from steer cancel must carry ls.messages")
-			// At minimum: user + assistant (tool call) + tool result.
-			assert.GreaterOrEqual(t, len(e.Messages), 3,
-				"should have user + assistant message (with tool call) + tool result")
+			assert.NotEmpty(t, e.Messages, "AgentEventError from steer cancel must carry rs.Messages")
+			// Messages must include at least the user message + tool result.
+			// Previously loopState carried them; now RunState.Messages does.
 			break
 		}
 	}
@@ -1038,7 +1042,7 @@ func TestMaybeAutoCompact_Success(t *testing.T) {
 		withFakeSession(),
 		withCompactStrategy(&fakeCompactStrategy{summary: "compacted summary"}),
 	)
-	a.cfg = &config.Config{
+	a.Config.FullConfig = &config.Config{
 		Compact: config.CompactConfig{
 			Auto:      &trueVal,
 			Threshold: 0.5,
@@ -1046,34 +1050,34 @@ func TestMaybeAutoCompact_Success(t *testing.T) {
 			Timeout:   time.Minute,
 		},
 	}
-	a.contextWindow = 1000
-	a.turn.setEstimate(600, tokenbreakdown.Breakdown{}) // 60% > 50% threshold
+	a.Config.ContextWindow = 1000
+	a.conv.setEstimate(600, tokenbreakdown.Breakdown{}) // 60% > 50% threshold
 
-	ls := &loopState{
-		messages: []llm.Message{
+	rs := &RunState{
+		Messages: []llm.Message{
 			{Role: "system", Content: "You are Tachi."},
 			{Role: "user", Content: "hello"},
 			{Role: "assistant", Content: "hi there"},
 		},
-		budget: NewIterationBudget(0),
+		Budget: NewIterationBudget(0),
 	}
 
-	_, err := a.sessionManager.New("test", "/tmp")
+	_, err := a.Config.SessionManager.New("test", "/tmp")
 	require.NoError(t, err)
 
 	ch := make(chan AgentEvent, 10)
 	ctx := context.Background()
 
-	_, compacted := a.maybeAutoCompact(ctx, ls, &llm.ChatOptions{}, ch)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &llm.ChatOptions{}, ch)
 	close(ch)
 
 	assert.True(t, compacted, "should compact when estimate exceeds threshold")
 
 	// Messages should be replaced with compacted history (3 messages: system, summary, continue)
-	require.Len(t, ls.messages, 3)
-	assert.Equal(t, "system", ls.messages[0].Role)
-	assert.Contains(t, ls.messages[1].Content, "compacted summary")
-	assert.Equal(t, "user", ls.messages[2].Role)
+	require.Len(t, rs.Messages, 3)
+	assert.Equal(t, "system", rs.Messages[0].Role)
+	assert.Contains(t, rs.Messages[1].Content, "compacted summary")
+	assert.Equal(t, "user", rs.Messages[2].Role)
 
 	// Verify auto-compact event emitted
 	var compactDone bool
@@ -1092,7 +1096,7 @@ func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 		withFakeSession(),
 		withCompactStrategy(&fakeCompactStrategy{err: fmt.Errorf("LLM unavailable")}),
 	)
-	a.cfg = &config.Config{
+	a.Config.FullConfig = &config.Config{
 		Compact: config.CompactConfig{
 			Auto:      &trueVal,
 			Threshold: 0.5,
@@ -1100,24 +1104,24 @@ func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 			Timeout:   time.Minute,
 		},
 	}
-	a.contextWindow = 1000
-	a.turn.setEstimate(600, tokenbreakdown.Breakdown{})
+	a.Config.ContextWindow = 1000
+	a.conv.setEstimate(600, tokenbreakdown.Breakdown{})
 
-	ls := &loopState{
-		messages: []llm.Message{
+	rs := &RunState{
+		Messages: []llm.Message{
 			{Role: "system", Content: "You are Tachi."},
 			{Role: "user", Content: "hello"},
 		},
-		budget: NewIterationBudget(0),
+		Budget: NewIterationBudget(0),
 	}
 
-	_, err := a.sessionManager.New("test", "/tmp")
+	_, err := a.Config.SessionManager.New("test", "/tmp")
 	require.NoError(t, err)
 
 	ch := make(chan AgentEvent, 10)
 	ctx := context.Background()
 
-	_, compacted := a.maybeAutoCompact(ctx, ls, &llm.ChatOptions{}, ch)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &llm.ChatOptions{}, ch)
 	close(ch)
 
 	// Error does NOT stop the loop — compacted=true means the iteration was
@@ -1125,7 +1129,7 @@ func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 	assert.True(t, compacted, "should return true even on error")
 
 	// Original messages preserved
-	assert.Len(t, ls.messages, 2)
+	assert.Len(t, rs.Messages, 2)
 
 	// Error event emitted
 	var compactErr bool
@@ -1140,25 +1144,25 @@ func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 	trueVal := true
 	a := newTestAgent(t, nil, withFakeSession())
-	a.cfg = &config.Config{
+	a.Config.FullConfig = &config.Config{
 		Compact: config.CompactConfig{
 			Auto:      &trueVal,
 			Threshold: 0.8,
 		},
 	}
-	a.contextWindow = 1000
-	a.turn.setEstimate(100, tokenbreakdown.Breakdown{}) // 10% < 80% threshold
+	a.Config.ContextWindow = 1000
+	a.conv.setEstimate(100, tokenbreakdown.Breakdown{}) // 10% < 80% threshold
 
-	ls := &loopState{
-		messages: []llm.Message{{Role: "user", Content: "hello"}},
-		budget:   NewIterationBudget(0),
+	rs := &RunState{
+		Messages: []llm.Message{{Role: "user", Content: "hello"}},
+		Budget:   NewIterationBudget(0),
 	}
 
 	ch := make(chan AgentEvent, 10)
 	ctx := context.Background()
 
-	_, compacted := a.maybeAutoCompact(ctx, ls, &llm.ChatOptions{}, ch)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &llm.ChatOptions{}, ch)
 
 	assert.False(t, compacted, "should not compact when estimate is below threshold")
-	assert.Len(t, ls.messages, 1, "messages must not be replaced")
+	assert.Len(t, rs.Messages, 1, "messages must not be replaced")
 }

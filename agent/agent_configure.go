@@ -36,15 +36,15 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 // configure wires up all agent sub-systems from the extracted system config.
 // This is the internal implementation called by NewAIAgentWithConfig.
 func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
-	// --- Memory backend (before skills — buildReminderCollector reads a.memory) ---
+	// --- Memory backend (before skills — buildReminderCollector reads a.Config.Memory) ---
 	if sysCfg.Memory.Type != "" {
 		memCfg := sysCfg.Memory.ToMemoryConfig()
-		backend, err := memory.New(sysCfg.Memory.Type, memCfg, a.logger)
+		backend, err := memory.New(sysCfg.Memory.Type, memCfg, a.Config.Logger)
 		if err != nil {
-			a.logger.Error(ctx, "Memory: failed to init backend", err, "type", sysCfg.Memory.Type)
+			a.Config.Logger.Error(ctx, "Memory: failed to init backend", err, "type", sysCfg.Memory.Type)
 		} else {
-			a.memory = &MemoryState{Backend: backend}
-			a.logger.Info(ctx, "Memory: using backend", "type", sysCfg.Memory.Type)
+			a.Config.Memory = &MemoryState{Backend: backend}
+			a.Config.Logger.Info(ctx, "Memory: using backend", "type", sysCfg.Memory.Type)
 
 			// Wire keyword extractor for topic backend.
 			// Requires an LLM provider — skip when nil (e.g. `tachi tools`).
@@ -52,9 +52,9 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 			// caller's responsibility — pass a pre-resolved provider in
 			// AgentConfig.KeywordProvider, or let configure fall back to the
 			// main provider.
-			if tb, ok := backend.(*memory.TopicBackend); ok && a.provider != nil {
-				tb.SetKeywordExtractor(NewLLMKeywordExtractor(a.provider, a.provider.Model(), sysCfg.Memory.Timeout, a.logger))
-				a.logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
+			if tb, ok := backend.(*memory.TopicBackend); ok && a.Config.Provider != nil {
+				tb.SetKeywordExtractor(NewLLMKeywordExtractor(a.Config.Provider, a.Config.Provider.Model(), sysCfg.Memory.Timeout, a.Config.Logger))
+				a.Config.Logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
 			}
 		}
 	}
@@ -64,9 +64,8 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 
 	// --- Bash permission policy (global config + project .tachi/permissions.yaml) ---
 	// Caller should set permission policy via AgentConfig or SetPermissionPolicy before Configure.
-	// The old Configure() path sets it from the full config; the new path expects it pre-set.
-	if a.permissionPolicy == nil && a.cfg != nil {
-		a.SetPermissionPolicy(NewPermissionPolicyFromConfig(a.cfg, config.FindProjectRoot(), a.logger))
+	if a.Config.PermissionPolicy == nil && a.Config.FullConfig != nil {
+		a.SetPermissionPolicy(NewPermissionPolicyFromConfig(a.Config.FullConfig, config.FindProjectRoot(), a.Config.Logger))
 	}
 
 	// --- Reminder collector (after memory + skills, before MCP) ---
@@ -81,7 +80,7 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 
 	// --- MCP servers (async) ---
 	var mgr *mcp.Manager
-	if a.sharedMCP {
+	if !a.mcpOwned {
 		// Shared MCP was injected via SetSharedMCP — reuse it. The owner
 		// (e.g. channel.Manager) is responsible for ConnectAll/Close, so we
 		// return nil here to keep the caller's `defer mgr.Close()` a no-op.
@@ -94,32 +93,43 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		var err error
 		mgr, err = a.initMCPAsync(ctx, sysCfg)
 		if err != nil {
-			a.logger.Error(ctx, "MCP: failed to start async init", err)
+			a.Config.Logger.Error(ctx, "MCP: failed to start async init", err)
 		}
 	}
 
 	// --- SubAgent tool ---
-	a.SetupSubagentProvider(a.cfg)
-	executor := subagent.NewExecutor(a, sysCfg.Subagent)
-	if sysCfg.Subagent.Worktree {
-		executor.EnableWorktree(a.logger)
+	if a.Config.SubagentRunner == nil {
+		if a.Config.FullConfig != nil {
+			a.SetupSubagentProvider(a.Config.FullConfig)
+		}
+		executor := subagent.NewExecutor(a, sysCfg.Subagent)
+		if sysCfg.Subagent.Worktree {
+			executor.EnableWorktree(a.Config.Logger)
+		}
+		a.Config.SubagentRunner = executor
+		a.RegisterTool(tools.NewSubagentTool(executor))
+	} else {
+		// Custom SubagentRunner provided via AgentConfig — register the tool anyway
+		a.RegisterTool(tools.NewSubagentTool(a.Config.SubagentRunner))
 	}
-	a.subagentRunner = executor
-	a.RegisterTool(tools.NewSubagentTool(executor))
 
-	// --- Hook system (after tools, so user command hooks can reference them) ---
-	a.initHookSystemFrom(&sysCfg)
+	// Hook system (after tools, so user command hooks can reference them).
+	// An externally injected dispatcher (AgentConfig.HookDispatcher) wins —
+	// skip parsing config hooks entirely in that case.
+	if a.Config.HookDispatcher == nil {
+		a.initHookSystemFrom(&sysCfg)
+	}
 
 	// --- LSP servers ---
 	if sysCfg.LSP.IsEnabled() && len(sysCfg.LSP.Servers) > 0 {
 		lspCfg := convertLSPConfig(&sysCfg.LSP)
-		a.lspManager = lsp.NewManager(lspCfg)
-		a.RegisterTool(tools.NewLSPTool(a.lspManager))
-		a.RegisterTool(tools.NewLSPDiagnosticsTool(a.lspManager))
-		a.reminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
-			Provider: a.lspManager,
+		a.Config.LSPManager = lsp.NewManager(lspCfg)
+		a.RegisterTool(tools.NewLSPTool(a.Config.LSPManager))
+		a.RegisterTool(tools.NewLSPDiagnosticsTool(a.Config.LSPManager))
+		a.Config.ReminderCollector.AddReminder(&systemreminder.LSPDiagnosticsReminder{
+			Provider: a.Config.LSPManager,
 		})
-		a.logger.Info(ctx, "LSP: initialized", "servers", len(lspCfg.Servers))
+		a.Config.Logger.Info(ctx, "LSP: initialized", "servers", len(lspCfg.Servers))
 	}
 
 	return mgr, nil
@@ -133,7 +143,7 @@ func (a *AIAgent) initHookSystemFrom(sysCfg *AgentSystemConfig) {
 		return
 	}
 
-	d := hooks.NewDispatcher(a.logger)
+	d := hooks.NewDispatcher(a.Config.Logger)
 
 	// Load user-defined command hooks from config
 	for event, cmds := range sysCfg.Hooks.Events {
@@ -146,7 +156,7 @@ func (a *AIAgent) initHookSystemFrom(sysCfg *AgentSystemConfig) {
 				if d, err := time.ParseDuration(cmd.Timeout); err == nil {
 					timeout = d
 				} else {
-					a.logger.Warn(ctx, "Hooks: invalid command timeout, using default 5s", "timeout", cmd.Timeout, "error", err)
+					a.Config.Logger.Warn(ctx, "Hooks: invalid command timeout, using default 5s", "timeout", cmd.Timeout, "error", err)
 				}
 			}
 			async := true
@@ -172,12 +182,12 @@ func (a *AIAgent) initHookSystemFrom(sysCfg *AgentSystemConfig) {
 				handler.Handle(ctx, e, p)
 			})
 		}
-		a.logger.Info(ctx, "Hooks: Herdr integration enabled (auto-detected from HERDR_ENV)")
+		a.Config.Logger.Info(ctx, "Hooks: Herdr integration enabled (auto-detected from HERDR_ENV)")
 	}
 
 	if len(d.Events()) > 0 {
-		a.hookDispatcher = d
-		a.logger.Info(ctx, "Hooks: dispatcher initialized", "events", len(d.Events()))
+		a.Config.HookDispatcher = d
+		a.Config.Logger.Info(ctx, "Hooks: dispatcher initialized", "events", len(d.Events()))
 	}
 }
 
@@ -227,7 +237,7 @@ func (a *AIAgent) attachSharedMCPReminder() {
 	total := pool.Len()
 	discovered := len(set.List())
 	if discovered < total {
-		a.reminderCollector.AddReminder(a.deferredToolReminder)
+		a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
 	}
 }
 
@@ -235,13 +245,13 @@ func (a *AIAgent) attachSharedMCPReminder() {
 // servers if enabled in config. The callback handles registry updates and
 // system-reminder notification when tool changes are detected.
 func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config) {
-	if a.mcpManager == nil {
+	if a.Config.MCPManager == nil {
 		return
 	}
 
 	interval := cfg.MCPToolRefresh.RefreshInterval()
 	if interval <= 0 {
-		a.logger.Info(ctx, "MCP: tool list refresh disabled")
+		a.Config.Logger.Info(ctx, "MCP: tool list refresh disabled")
 		return
 	}
 
@@ -254,11 +264,11 @@ func (a *AIAgent) startMCPToolRefresher(ctx context.Context, cfg *config.Config)
 		}
 	}
 	if !hasHTTPServer {
-		a.logger.Info(ctx, "MCP: no HTTP servers, skipping tool list refresher")
+		a.Config.Logger.Info(ctx, "MCP: no HTTP servers, skipping tool list refresher")
 		return
 	}
 
-	a.mcpManager.StartRefresher(ctx, interval, func(delta *mcp.ToolListDelta) {
+	a.Config.MCPManager.StartRefresher(ctx, interval, func(delta *mcp.ToolListDelta) {
 		a.onMCPToolsRefreshed(delta)
 	})
 }
@@ -272,22 +282,19 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 	// 1. Remove tools from the active registry if they were eagerly registered
 	for _, name := range delta.Removed {
 		fullName := prefix + name
-		if a.toolRegistry.GetTool(fullName) != nil {
-			a.toolRegistry.Unregister(fullName)
-			a.logger.Info(context.Background(), "MCP: refresh unregistered from tool registry", "tool", fullName)
+		if a.Config.ToolRegistry.GetTool(fullName) != nil {
+			a.Config.ToolRegistry.Unregister(fullName)
+			a.Config.Logger.Info(context.Background(), "MCP: refresh unregistered from tool registry", "tool", fullName)
 		}
 	}
 
 	// 2. For modified tools that were eagerly registered, re-register with new schema.
-	//    The pool has already been updated by Manager.applyToolDelta — we just need
-	//    to update the registry if the tool was auto-loaded.
 	for _, t := range delta.Modified {
 		fullName := t.Name()
-		if a.toolRegistry.GetTool(fullName) != nil {
-			// Re-register with the updated tool instance
-			a.toolRegistry.Unregister(fullName)
+		if a.Config.ToolRegistry.GetTool(fullName) != nil {
+			a.Config.ToolRegistry.Unregister(fullName)
 			a.RegisterTool(t)
-			a.logger.Info(context.Background(), "MCP: refresh re-registered with updated schema", "tool", fullName)
+			a.Config.Logger.Info(context.Background(), "MCP: refresh re-registered with updated schema", "tool", fullName)
 		}
 	}
 
@@ -299,7 +306,7 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 	// 4. Log summary
 	totalChanges := len(delta.Added) + len(delta.Removed) + len(delta.Modified)
 	if totalChanges > 0 {
-		a.logger.Info(context.Background(), "MCP: refresh applied changes",
+		a.Config.Logger.Info(context.Background(), "MCP: refresh applied changes",
 			"total", totalChanges, "server", delta.ServerName,
 			"added", len(delta.Added), "removed", len(delta.Removed), "modified", len(delta.Modified))
 	}
@@ -307,20 +314,18 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 
 // initMCPAsync is the internal variant that takes AgentSystemConfig.
 func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
-	mgr := mcp.NewManager(ctx, sysCfg.ToolResult.MaxResultChars(), sysCfg.ToolResult.ResultFileDir(), a.logger)
-	a.mcpManager = mgr
+	mgr := mcp.NewManager(ctx, sysCfg.ToolResult.MaxResultChars(), sysCfg.ToolResult.ResultFileDir(), a.Config.Logger)
+	a.Config.MCPManager = mgr
 
 	// Register MCPSearchTools immediately so the LLM can discover tools
 	// as they come in. The pool is empty initially, so search returns
 	// nothing until MCP servers finish connecting.
 	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr.DiscoveredSet())
 	a.RegisterTool(searchTool)
-	a.logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(sysCfg.MCPServers))
+	a.Config.Logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(sysCfg.MCPServers))
 
 	// Connect and discover tools in the background.
-	// Pass the full config (a.cfg) for downstream methods that still need it.
-	// When called from NewAIAgentWithConfig, a.cfg was set from AgentConfig.FullConfig.
-	go a.connectMCPBackground(ctx, a.cfg)
+	go a.connectMCPBackground(ctx, a.Config.FullConfig)
 
 	return mgr, nil
 }
@@ -329,16 +334,16 @@ func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*
 // auto-load tools into the agent's registry, and attaches DeferredToolReminder.
 // Runs in a background goroutine started by InitMCPAsync / initMCPAsync.
 func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) {
-	defer a.mcpManager.MarkInitDone()
-	defer func() { a.logger.Info(ctx, "MCP: async init completed") }()
+	defer a.Config.MCPManager.MarkInitDone()
+	defer func() { a.Config.Logger.Info(ctx, "MCP: async init completed") }()
 
-	autoLoad, all, errs := a.mcpManager.PopulateFromConnect(ctx, cfg)
+	autoLoad, all, errs := a.Config.MCPManager.PopulateFromConnect(ctx, cfg)
 	for _, err := range errs {
-		a.logger.Error(ctx, "MCP: load error", err)
+		a.Config.Logger.Error(ctx, "MCP: load error", err)
 	}
 	a.SetMCPInitErrors(errs)
 	if len(all) == 0 {
-		a.logger.Info(ctx, "MCP: no tools discovered from any server")
+		a.Config.Logger.Info(ctx, "MCP: no tools discovered from any server")
 		return
 	}
 
@@ -350,11 +355,11 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 		a.RegisterTool(t)
 	}
 	if len(autoLoad) > 0 {
-		a.logger.Info(ctx, "MCP: tools auto-registered async", "count", len(autoLoad))
+		a.Config.Logger.Info(ctx, "MCP: tools auto-registered async", "count", len(autoLoad))
 	}
 
-	pool := a.mcpManager.Pool()
-	set := a.mcpManager.DiscoveredSet()
+	pool := a.Config.MCPManager.Pool()
+	set := a.Config.MCPManager.DiscoveredSet()
 	total := pool.Len()
 	discovered := len(set.List())
 
@@ -366,8 +371,8 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 
 	// Register DeferredToolReminder only if there are undiscovered tools
 	if discovered < total {
-		a.reminderCollector.AddReminder(a.deferredToolReminder)
-		a.logger.Info(ctx, "MCP: DeferredToolReminder added", "undiscovered", total-discovered, "total", total)
+		a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
+		a.Config.Logger.Info(ctx, "MCP: DeferredToolReminder added", "undiscovered", total-discovered, "total", total)
 	}
 
 	// Start background tool list refresher for HTTP MCP servers
@@ -377,21 +382,21 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 // WaitForMCP blocks until the background MCP initialization completes,
 // or the context is cancelled / times out. Returns nil on success.
 func (a *AIAgent) WaitForMCP(ctx context.Context) error {
-	if a.mcpManager == nil {
+	if a.Config.MCPManager == nil {
 		return nil // MCP not configured
 	}
-	return a.mcpManager.WaitInit(ctx)
+	return a.Config.MCPManager.WaitInit(ctx)
 }
 
 // MCPReady returns a channel that's closed when MCP background init completes.
 // If MCP is not configured, returns a pre-closed channel.
 func (a *AIAgent) MCPReady() <-chan struct{} {
-	if a.mcpManager == nil {
+	if a.Config.MCPManager == nil {
 		closed := make(chan struct{})
 		close(closed)
 		return closed
 	}
-	return a.mcpManager.InitDone()
+	return a.Config.MCPManager.InitDone()
 }
 
 // backgroundTaskProvider adapts *tools.ProcessManager to
@@ -421,7 +426,7 @@ func (p *backgroundTaskProvider) DrainCompleted() []systemreminder.BackgroundTas
 }
 
 // buildReminderCollectorFrom builds the reminder collector with core reminders,
-// using an explicit config instead of reading from a.cfg.
+// using an explicit config instead of reading from a.Config.FullConfig.
 func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 	var reminders []systemreminder.Reminder
 
@@ -431,13 +436,13 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 		systemreminder.ProjectContextReminder{},
 		a.skillListReminder,
 		&systemreminder.BackgroundTaskReminder{
-			Provider: &backgroundTaskProvider{pm: a.processManager},
+			Provider: &backgroundTaskProvider{pm: a.Config.ProcessManager},
 		},
 	)
 
 	// Plan tracking reminder — only meaningful where SavePlan is available
 	// (ACP sessions with a plan card UI).
-	if a.planToolEnabled {
+	if a.Frontend.PlanToolEnabled {
 		reminders = append(reminders, systemreminder.PlanTrackingReminder{})
 	}
 
@@ -447,19 +452,19 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 	}
 
 	// Memory recall reminder (only when memory backend is enabled).
-	if a.memory != nil {
+	if a.Config.Memory != nil {
 		limit := sysCfg.MemoryRecallLimit
 		if limit <= 0 {
 			limit = 5
 		}
 		reminders = append(reminders, systemreminder.MemoryRecallReminder{
-			Backend: a.memory.Backend,
+			Backend: a.Config.Memory.Backend,
 			Limit:   limit,
 			Timeout: sysCfg.MemoryRecallTimeout,
 		})
 	}
 
-	a.reminderCollector = systemreminder.NewCollector(reminders...)
+	a.Config.ReminderCollector = systemreminder.NewCollector(reminders...)
 }
 
 // resolveKeywordProvider resolves the configured KeywordProvider from config
@@ -467,12 +472,12 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 // AFTER configure() creates the memory backend.
 //
 // It is safe to call when memory is not configured or when no topic backend
-// is in use — it checks a.memory before doing anything.
+// is in use — it checks a.Config.Memory before doing anything.
 func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
-	if a.memory == nil || a.provider == nil {
+	if a.Config.Memory == nil || a.Config.Provider == nil {
 		return
 	}
-	tb, ok := a.memory.Backend.(*memory.TopicBackend)
+	tb, ok := a.Config.Memory.Backend.(*memory.TopicBackend)
 	if !ok {
 		return
 	}
@@ -484,22 +489,22 @@ func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
 
 	kpCfg := cfg.FindProvider(kpName)
 	if kpCfg == nil {
-		a.logger.Info(context.Background(), "Memory: keyword_provider not found, falling back to main provider", "provider", kpName)
+		a.Config.Logger.Info(context.Background(), "Memory: keyword_provider not found, falling back to main provider", "provider", kpName)
 		return
 	}
 
 	resolved, err := config.ResolveProviderConfig(kpCfg)
 	if err != nil {
-		a.logger.Error(context.Background(), "Memory: failed to resolve keyword provider, falling back to main provider", err, "provider", kpName)
+		a.Config.Logger.Error(context.Background(), "Memory: failed to resolve keyword provider, falling back to main provider", err, "provider", kpName)
 		return
 	}
 
 	sp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
 	if err != nil {
-		a.logger.Error(context.Background(), "Memory: failed to create keyword provider, falling back to main provider", err, "provider", kpName)
+		a.Config.Logger.Error(context.Background(), "Memory: failed to create keyword provider, falling back to main provider", err, "provider", kpName)
 		return
 	}
 
-	tb.SetKeywordExtractor(NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.logger))
-	a.logger.Info(context.Background(), "Memory: keyword extractor re-wired with dedicated provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)
+	tb.SetKeywordExtractor(NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.Config.Logger))
+	a.Config.Logger.Info(context.Background(), "Memory: keyword extractor re-wired with dedicated provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)
 }

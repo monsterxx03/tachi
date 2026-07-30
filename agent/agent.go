@@ -5,16 +5,14 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
-	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/permission"
-	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
@@ -85,177 +83,80 @@ const (
 )
 
 type AIAgent struct {
-	provider          llm.Provider
-	maxIterations     int
-	toolRegistry      *tools.Registry
-	confirmRespCh     chan ConfirmResponse
-	askUserRespCh     chan tools.AskUserResult
-	steerRespCh       chan string // TUI → agent: pending input to inject at steer point
-	permissionMode    PermissionMode
-	permissionHandler PermissionHandler
-	permissionPolicy  *permission.Policy // bash allow/ask/deny rules; nil = no policy
-	// autoApprovePolicyAsks makes PermissionModeSkip approve policy "ask"
-	// decisions instead of denying them. Set only when a user explicitly
-	// chose "allow all" (ACP); channel/subagent/one-off runs leave it false.
-	autoApprovePolicyAsks bool
-	// autoApproveEdits skips EditFile confirmation prompts. Set from config
-	// tui.auto_approve_edits, or at runtime when the user picks "always" on
-	// an edit confirmation (session-scoped). Affects only EditFile — unlike
-	// PermissionModeSkip, bash policy asks still prompt.
-	autoApproveEdits   bool
-	sessionManager     SessionManager
-	reminderCollector  ReminderCollector
-	contextWindow      int64
-	titleModelProvider llm.Provider // optional: dedicated provider for title generation
-	titleGenEnabled    bool         // whether LLM-based title generation is active
-	commitProvider     llm.Provider // optional: dedicated provider for /commit messages
-	reviewProvider     llm.Provider // optional: dedicated provider for /review code review
-	runProvider        llm.Provider // optional: dedicated provider for tachi -p run mode
-	logger             *logger.Logger
+	// Config 是构造期/Configure 期初始化的配置聚合。多数字段只读；
+	// 少数经对应 Setter 运行时修改（Logger、PermissionMode、PermissionPolicy、
+	// SessionManager、ReminderCollector、ProcessManager、MCPManager、
+	// CompactStrategy）。标注"构造输入"的字段（TitleGenEnabled、AutoApprove*、
+	// ACPFileMode、PlanToolEnabled）在构造期被消费，运行时值分别存于
+	// titleGenEnabled / PermState / Frontend——改 Config 里的这些字段无效。
+	Config       AgentConfig
+	Frontend     FrontendConfig  // 前端模式（纯只读）
+	Channels     RuntimeChannels // 通信通道（agent 生命周期，只读）
+	PermState    *PermissionState // 可变权限（session 级）
 
-	// acpFileMode enables ACP file I/O for EditFile tool. When true,
-	// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
-	// routes writes through conn.WriteTextFile for inline diffs.
-	acpFileMode bool
+	// 运行时可变字段
+	mode string // "auto" / "chat" / "plan"
 
-	// planToolEnabled gates registration of the SavePlan tool. Only ACP
-	// sessions enable it — ACP clients (e.g. Zed) render a structured plan
-	// card from SavePlan calls, while the TUI and channel frontends have no
-	// corresponding plan card UI.
-	planToolEnabled bool
+	// 构造结果（Setup 解析后只读）
+	titleModelProvider llm.Provider
+	titleGenEnabled    bool
 
-	// Skill-related fields
-	skillStore   *skill.Store
-	activeSkills map[string]bool // skills activated in current session
-
-	// Subagent-related fields (implements subagent.Agent interface)
-	subagentProvider llm.Provider // sub-agent dedicated provider (nil = fallback to main)
-	subagentRunner   tools.SubagentRunner
-
-	// Memory-related fields
-	memory *MemoryState // nil = memory not enabled
-
-	// Config reference (set by Configure — used by RegisterTools and sub-systems)
-	cfg *config.Config
-
-	// MCP ToolSearch fields are owned by mcpManager. The agent reads them via
-	// mcpManager.Pool() / mcpManager.DiscoveredSet() rather than holding its
-	// own references — there is one source of truth for ToolSearch state per
-	// manager, which can be shared across agents (e.g. channel mode).
-
-	// DeferredToolReminder reference — allows mid-session reset when user
-	// manually enables an MCP server (tools go into the manager's pool, reminder
-	// fires again to hint LLM about them).
+	// ⏳ 暂留（待后续步骤迁移）
+	activeSkills         map[string]bool
 	deferredToolReminder *systemreminder.DeferredToolReminder
+	skillListReminder    *systemreminder.SkillListReminder
+	lastOneoffPath       string
+	mcpInitErrors        []error
+	mcpOwned             bool // Configure 前由 Config.MCPManager==nil 设定；Close 据此决定是否销毁
 
-	// skillListReminder is the live SkillListReminder in the reminderCollector.
-	// Stored so we can mutate it (MarkDirty / SetProvider) without rebuilding
-	// the entire collector.
-	skillListReminder *systemreminder.SkillListReminder
-
-	// MCP async init
-	mcpManager *mcp.Manager // MCP connection manager (also owns pool/set/initDone)
-
-	// sharedMCP is true when mcpManager was injected via SetSharedMCP and
-	// should not be re-created or torn down by Configure/Close. Used by
-	// channel.Manager to share one MCP backend
-	// across many cached AIAgent instances.
-	sharedMCP bool
-
-	// mcpInitErrors holds per-server MCP connection errors from async init.
-	// Set by connectMCPBackground; read by TUI after MCPReadyMsg to display
-	// error status in the status bar.
-	mcpInitErrors []error
-
-	// processManager manages background processes started by BashTool.
-	// Tied to the agent lifecycle — Close() kills all tracked processes.
-	processManager *tools.ProcessManager
-
-	// lspManager manages LSP server connections.
-	lspManager *lsp.LSPManager
-
-	// turn holds all per-turn mutable state (token estimates, final message
-	// slice, turn start/trace, pending images, compact cooldown). It carries
-	// its own mutex because channel mode shares one cached agent between the
-	// turn goroutine and slash-command readers. See turn_state.go.
-	turn *turnState
-
-	// skipSessionWrites suppresses session persistence (recordSession is a no-op).
-	// Set by RunOneOffStream for one-off tasks (/commit, /review, sub-agents, dreams)
-	// whose messages should not pollute the main conversation history.
-	skipSessionWrites bool
-
-	// hookDispatcher manages event hooks (Go callbacks + external commands).
-	// Initialised by Configure(); nil when hook system is disabled.
-	hookDispatcher *hooks.Dispatcher
-
-	// oneoffRec, when non-nil, redirects recordSession output to a sidecar
-	// one-off transcript file instead of dropping it. Set by RunOneOffStream
-	// (via startOneoffRecorder) or AttachOneOffRecorder (channel ambient).
-	// See docs/2026-07-24-oneoff-transcript-design.md.
-	oneoffRec *oneoffRecorder
-
-	// lastOneoffPath is the file path of the most recently closed one-off
-	// transcript. Surfaced via LastOneoffTranscriptPath() for the TUI hint.
-	lastOneoffPath string
-
-	// Session mode (e.g. "auto", "chat"). Affects tool visibility.
-	mode string
-
-	// compactStrategy generates summaries for auto-compaction. Defaults to
-	// llmCompactStrategy (calls the LLM provider); tests inject a fake.
-	compactStrategy CompactStrategy
+	conv       *convState     // 会话级滚动状态（token 估算、compact 冷却、消息日期）
+	currentRun *RunState      // 当前运行的实时状态（loop 写，外部并发读）
+	mu         sync.RWMutex   // 保护 currentRun + mode
 }
 
 func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 	return &AIAgent{
-		provider:        provider,
-		maxIterations:   maxIterations,
+		Config: AgentConfig{
+			Provider:      provider,
+			MaxIterations: maxIterations,
+			ToolRegistry:  tools.NewRegistry(),
+			ProcessManager: tools.NewProcessManager(),
+			CompactStrategy: &llmCompactStrategy{provider: provider},
+		},
+		Channels: RuntimeChannels{
+			ConfirmResp: make(chan ConfirmResponse, 1),
+			AskUserResp: make(chan tools.AskUserResult, 1),
+		},
+		PermState:       &PermissionState{},
+		conv:            newConvState(),
 		titleGenEnabled: true,
-		toolRegistry:    tools.NewRegistry(),
-		processManager:  tools.NewProcessManager(),
-		turn:            newTurnState(),
-		confirmRespCh:   make(chan ConfirmResponse, 1),
-		askUserRespCh:   make(chan tools.AskUserResult, 1),
-		logger:          nil,
 		mode:            ModeAuto,
-		compactStrategy: &llmCompactStrategy{provider: provider},
 	}
 }
 
 // NewAIAgentWithConfig creates an AIAgent from a structured config.
 // This is the recommended constructor — it replaces the pattern of
 // NewAIAgent + multiple Set*/Setup* calls.
-//
-// The returned *mcp.Manager should be closed when the agent is done
-// (defer mcpMgr.Close()), unless the agent uses a shared MCP manager
-// (AgentConfig.SharedMCP), in which case the manager is owned elsewhere.
 func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.Manager, error) {
 	a := NewAIAgent(cfg.Provider, cfg.MaxIterations)
 
-	if cfg.Logger != nil {
-		a.SetLogger(cfg.Logger)
+	// Adopt the caller's config wholesale, then restore NewAIAgent defaults
+	// for fields the caller left nil. Wholesale assignment keeps this
+	// maintenance-free: newly added AgentConfig fields need no copy here.
+	a.Config = cfg
+	if a.Config.ToolRegistry == nil {
+		a.Config.ToolRegistry = tools.NewRegistry()
 	}
-	if cfg.ProcessManager != nil {
-		a.SetProcessManager(cfg.ProcessManager)
+	if a.Config.ProcessManager == nil {
+		a.Config.ProcessManager = tools.NewProcessManager()
 	}
-	if cfg.SharedMCP != nil {
-		a.SetSharedMCP(cfg.SharedMCP)
+	if a.Config.CompactStrategy == nil {
+		a.Config.CompactStrategy = &llmCompactStrategy{provider: cfg.Provider}
 	}
 
-	a.SetContextWindow(cfg.ContextWindow)
-	a.SetPermissionMode(cfg.PermissionMode)
-	if cfg.ACPFileMode {
-		a.SetACPFileMode()
-	}
-	if cfg.PlanToolEnabled {
-		a.EnablePlanTool()
-	}
-	if cfg.TitleGenEnabled != nil {
-		a.SetTitleGenEnabled(*cfg.TitleGenEnabled)
-	}
-	a.SetAutoApproveEdits(cfg.AutoApproveEdits)
-	a.SetAutoApprovePolicyAsks(cfg.AutoApprovePolicyAsks)
+	// MCP ownership — an injected manager is owned elsewhere (e.g.
+	// channel.Manager) and must not be torn down by Close.
+	a.mcpOwned = cfg.MCPManager == nil
 
 	// Dedicated providers (resolution is the caller's responsibility).
 	// When a dedicated provider is nil but FullConfig is available, fall back
@@ -268,29 +169,49 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 		a.SetupTitleProvider(cfg.FullConfig)
 	}
 	if cfg.CommitProvider != nil {
-		a.commitProvider = cfg.CommitProvider
+		a.Config.CommitProvider = cfg.CommitProvider
 	} else if hasCfg {
 		a.SetupCommitProvider(cfg.FullConfig)
 	}
 	if cfg.ReviewProvider != nil {
-		a.reviewProvider = cfg.ReviewProvider
+		a.Config.ReviewProvider = cfg.ReviewProvider
 	} else if hasCfg {
 		a.SetupReviewProvider(cfg.FullConfig)
 	}
 	if cfg.RunProvider != nil {
-		a.runProvider = cfg.RunProvider
+		a.Config.RunProvider = cfg.RunProvider
 	} else if hasCfg {
 		a.SetupRunProvider(cfg.FullConfig)
 	}
 	if cfg.SubagentProvider != nil {
-		a.subagentProvider = cfg.SubagentProvider
+		a.Config.SubagentProvider = cfg.SubagentProvider
 	} else if hasCfg {
 		a.SetupSubagentProvider(cfg.FullConfig)
 	}
 
+	// TitleGenEnabled override: apply to a.titleGenEnabled (the field
+	// generateTitle() actually checks). SetupTitleProvider may have already
+	// set it from FullConfig; this takes final precedence when cfg provides
+	// an explicit value.
+	if cfg.TitleGenEnabled != nil {
+		a.titleGenEnabled = *cfg.TitleGenEnabled
+	}
+
+	// PermState initialization
+	a.PermState = &PermissionState{
+		AutoApproveEdits:      cfg.AutoApproveEdits,
+		AutoApprovePolicyAsks: cfg.AutoApprovePolicyAsks,
+	}
+
+	// Frontend config
+	a.Frontend = FrontendConfig{
+		ACPFileMode:     cfg.ACPFileMode,
+		PlanToolEnabled: cfg.PlanToolEnabled,
+	}
+
 	// Store full config reference for subsystems that need it
 	if cfg.FullConfig != nil {
-		a.cfg = cfg.FullConfig
+		a.Config.FullConfig = cfg.FullConfig
 	}
 
 	// Configure with the extracted system config
@@ -300,13 +221,13 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 		return nil, nil, err
 	}
 
-	// Resolve dedicated keyword provider (must be after configure, which creates a.memory)
+	// Resolve dedicated keyword provider (must be after configure, which creates a.Config.Memory)
 	if cfg.FullConfig != nil {
 		a.resolveKeywordProvider(cfg.FullConfig)
 	}
 
 	// Post-configure: SkipMemoryRecall must be set after configure
-	// because configure initializes a.memory
+	// because configure initializes a.Config.Memory
 	if cfg.SkipMemoryRecall {
 		a.SetSkipMemoryRecall(true)
 	}
@@ -314,30 +235,33 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	// Unregister AskUser when not interactive (channel/-p mode default)
 	// Interactive modes (TUI, ACP with elicitation) keep it registered
 	if cfg.PermissionMode != PermissionModeTUI {
-		// PermissionModeTUI has a UI for AskUser; others don't
 		if cfg.PermissionMode == PermissionModeSkip || !cfg.ACPFileMode {
 			a.UnregisterTool(tools.ToolNameAskUser)
 		}
 	}
 
-	return a, mcpMgr, nil
+	// Return mcpMgr only when we own it (caller should Close it)
+	if a.mcpOwned {
+		return a, mcpMgr, nil
+	}
+	return a, nil, nil
 }
 
 // SetLogger overrides the agent's logger. Channel callers use this to inject
 // a channel-specific logger so debug output is tagged with the correct source.
 func (a *AIAgent) SetLogger(l *logger.Logger) {
-	a.logger = l
+	a.Config.Logger = l
 }
 
 // Logger returns the agent's debug logger.
 func (a *AIAgent) Logger() *logger.Logger {
-	return a.logger
+	return a.Config.Logger
 }
 
 // RespondToAskUser is called by TUI to respond to an AskUserQuestion request
 func (a *AIAgent) RespondToAskUser(answers map[string]string, annotations map[string]string) {
 	select {
-	case a.askUserRespCh <- tools.AskUserResult{Answers: answers, Annotations: annotations}:
+	case a.Channels.AskUserResp <- tools.AskUserResult{Answers: answers, Annotations: annotations}:
 	default:
 		// Channel already has a value or is not waiting
 	}
@@ -346,95 +270,89 @@ func (a *AIAgent) RespondToAskUser(answers map[string]string, annotations map[st
 // ConfirmTool is called by TUI to respond to a confirmation request
 func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 	select {
-	case a.confirmRespCh <- resp:
+	case a.Channels.ConfirmResp <- resp:
 	default:
 		// Channel already has a value or is not waiting
 	}
 }
 
-// SetSteerChannel sets the channel used for steer input injection.
-// The TUI writes pending user input to this channel at steer points.
-func (a *AIAgent) SetSteerChannel(ch chan string) {
-	a.steerRespCh = ch
-}
-
 func (a *AIAgent) SetProvider(provider llm.Provider) {
-	a.provider = provider
+	a.Config.Provider = provider
 }
 
 // Model returns the current model name.
 func (a *AIAgent) Model() string {
-	return a.provider.Model()
+	return a.Config.Provider.Model()
 }
 
 // Provider returns the main LLM provider for conversation turns.
 func (a *AIAgent) Provider() llm.Provider {
-	return a.provider
+	return a.Config.Provider
 }
 
 // SetPermissionMode sets how tool confirmation requests are handled.
 func (a *AIAgent) SetPermissionMode(mode PermissionMode) {
-	a.permissionMode = mode
+	a.Config.PermissionMode = mode
 }
 
 // SetPermissionHandler sets the external permission handler for PermissionModeExternal.
 func (a *AIAgent) SetPermissionHandler(h PermissionHandler) {
-	a.permissionHandler = h
+	a.PermState.PermissionHandler = h
 }
 
 // SetPermissionPolicy installs the bash permission policy (allow/ask/deny
 // rules). nil disables policy checks (everything allowed, pre-feature behavior).
 func (a *AIAgent) SetPermissionPolicy(p *permission.Policy) {
-	a.permissionPolicy = p
+	a.Config.PermissionPolicy = p
 }
 
 // PermissionPolicy returns the installed policy, or nil.
 func (a *AIAgent) PermissionPolicy() *permission.Policy {
-	return a.permissionPolicy
+	return a.Config.PermissionPolicy
 }
 
 // SetAutoApprovePolicyAsks controls how PermissionModeSkip handles policy
 // "ask" decisions: true = execute anyway (used after an explicit "allow all"
 // choice, e.g. ACP); false (default) = deny with an explanatory error.
 func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
-	a.autoApprovePolicyAsks = v
+	a.PermState.AutoApprovePolicyAsks = v
 }
 
 // SetAutoApproveEdits skips EditFile confirmation prompts (TUI-oriented).
 // Unlike PermissionModeSkip, it affects only EditFile — bash policy asks
 // and any other confirmations still prompt.
 func (a *AIAgent) SetAutoApproveEdits(v bool) {
-	a.autoApproveEdits = v
+	a.PermState.AutoApproveEdits = v
 }
 
 // SetACPFileMode enables ACP file I/O for the EditFile tool.
 func (a *AIAgent) SetACPFileMode() {
-	a.acpFileMode = true
+	a.Frontend.ACPFileMode = true
 }
 
 // EnablePlanTool enables registration of the SavePlan tool. Must be called
 // before Configure()/RegisterTools(). Currently only ACP sessions enable it,
 // since only ACP clients render the structured plan card UI.
 func (a *AIAgent) EnablePlanTool() {
-	a.planToolEnabled = true
+	a.Frontend.PlanToolEnabled = true
 }
 
 // SetSkipMemoryRecall suppresses memory recall for non-interactive modes like "tachi run".
 func (a *AIAgent) SetSkipMemoryRecall(skip bool) {
-	if a.memory != nil {
-		a.memory.SkipRecall = skip
+	if a.Config.Memory != nil {
+		a.Config.Memory.SkipRecall = skip
 	}
 }
 
 func (a *AIAgent) SetSessionManager(sm SessionManager) {
-	a.sessionManager = sm
+	a.Config.SessionManager = sm
 	// Wire session provider into TopicBackend for temporal query fallback.
 	// This enables queries like "我们最近聊过什么" where keyword-based grep
 	// cannot match — the backend falls back to recent session summaries.
-	if a.memory != nil {
-		if tb, ok := a.memory.Backend.(*memory.TopicBackend); ok {
+	if a.Config.Memory != nil {
+		if tb, ok := a.Config.Memory.Backend.(*memory.TopicBackend); ok {
 			tb.SetSessionProvider(&topicSessionProvider{manager: sm})
-			a.logger.Info(context.Background(), "Memory: session provider wired for topic backend")
+			a.Config.Logger.Info(context.Background(), "Memory: session provider wired for topic backend")
 		}
 	}
 }
@@ -493,7 +411,7 @@ func (p *topicSessionProvider) RecentSessions(ctx context.Context, limit int) ([
 
 // SetContextWindow sets the model's context window size for token-warning reminders.
 func (a *AIAgent) SetContextWindow(window int64) {
-	a.contextWindow = window
+	a.Config.ContextWindow = window
 }
 
 // LastInputEstimate returns the local token estimate for the most recent
@@ -501,43 +419,43 @@ func (a *AIAgent) SetContextWindow(window int64) {
 // deliberately conservative (overestimates) and is used for both
 // token-warning reminders and the TUI statusbar context fraction.
 func (a *AIAgent) LastInputEstimate() int64 {
-	return a.turn.tokens()
+	return a.conv.tokens()
 }
 
 // isCompactCooldown returns true if the token estimate has not grown
 // significantly (>= 20%) since the last auto-compact. This prevents
 // repeated compaction on the same session within a single conversation.
 func (a *AIAgent) isCompactCooldown() bool {
-	return a.turn.compactCooldown()
+	return a.conv.compactCooldown()
 }
 
 // setCompactCooldown records the current token estimate so that
 // isCompactCooldown can prevent immediate re-compaction.
 func (a *AIAgent) setCompactCooldown() {
-	a.turn.setCompactEstimate(a.turn.tokens())
+	a.conv.setCompactEstimate(a.conv.tokens())
 }
 
 // ContextWindow returns the model's context window size.
 func (a *AIAgent) ContextWindow() int64 {
-	return a.contextWindow
+	return a.Config.ContextWindow
 }
 
 // SetReminderCollector replaces the default reminder collector. Useful for
 // tests or when callers want full control over which reminders fire.
 func (a *AIAgent) SetReminderCollector(c ReminderCollector) {
-	a.reminderCollector = c
+	a.Config.ReminderCollector = c
 }
 
 // SessionManager returns the session manager, or nil if none is set.
 func (a *AIAgent) SessionManager() SessionManager {
-	return a.sessionManager
+	return a.Config.SessionManager
 }
 
 // ClearSession ends the current session so a new one will be created on the next message.
 // Used by /new command to start a fresh session.
 func (a *AIAgent) ClearSession() {
-	if a.sessionManager != nil {
-		a.sessionManager.EndCurrent()
+	if a.Config.SessionManager != nil {
+		a.Config.SessionManager.EndCurrent()
 	}
 	// Clear skill activation state so the same skills can be re-activated.
 	a.activeSkills = nil
@@ -545,82 +463,86 @@ func (a *AIAgent) ClearSession() {
 
 // GetTool retrieves a tool from the agent's registry by name.
 func (a *AIAgent) GetTool(name string) tools.Tool {
-	return a.toolRegistry.GetTool(name)
+	return a.Config.ToolRegistry.GetTool(name)
 }
 
-func (a *AIAgent) recordSession(msg *session.Message) {
-	if a.sessionManager == nil || a.skipSessionWrites {
+// recordSession persists a message to the session store. rs is the owning
+// run's state: runs flagged SkipSessionWrites (one-off tasks like /commit,
+// /review, ambient, dream) keep their messages out of the main session
+// history, leaving a trail in the run's one-off transcript instead.
+func (a *AIAgent) recordSession(rs *RunState, msg *session.Message) {
+	if a.Config.SessionManager == nil || rs.SkipSessionWrites {
 		// Side-channel execution: keep it out of the main session history,
 		// but leave a trail in the one-off transcript if one is attached.
-		if a.oneoffRec != nil {
-			a.oneoffRec.record(msg)
+		if rs.OneoffRec != nil {
+			rs.OneoffRec.record(msg)
 		}
 		return
 	}
-	if err := a.sessionManager.AppendMessage(msg); err != nil {
-		a.logger.Error(context.Background(), "Agent: failed to record session message", err)
+	if err := a.Config.SessionManager.AppendMessage(msg); err != nil {
+		a.Config.Logger.Error(context.Background(), "Agent: failed to record session message", err)
 	}
 }
 
 // --- Tool Registry ---
 
 func (a *AIAgent) RegisterTools() {
-	a.toolRegistry.Register(tools.NewReadTool())
-	a.toolRegistry.Register(tools.WriteTool{})
+	a.Config.ToolRegistry.Register(tools.NewReadTool())
+	a.Config.ToolRegistry.Register(tools.WriteTool{})
 	editTool := tools.NewEditTool()
-	if a.acpFileMode {
+	if a.Frontend.ACPFileMode {
 		editTool.SetACPMode(true)
 	}
-	a.toolRegistry.Register(editTool)
+	a.Config.ToolRegistry.Register(editTool)
 
-	a.toolRegistry.Register(tools.GlobTool{})
-	a.toolRegistry.Register(tools.GrepTool{})
-	a.toolRegistry.Register(tools.NewBashTool(a.processManager))
-	a.toolRegistry.Register(tools.AskUserTool{})
+	a.Config.ToolRegistry.Register(tools.GlobTool{})
+	a.Config.ToolRegistry.Register(tools.GrepTool{})
+	a.Config.ToolRegistry.Register(tools.NewBashTool(a.Config.ProcessManager))
+	a.Config.ToolRegistry.Register(tools.AskUserTool{})
 
 	// WebSearch — only register if provider + key are configured
-	if a.cfg != nil {
+	if a.Config.FullConfig != nil {
 		ws := tools.WebSearchTool{
-			ProviderType: a.cfg.WebSearch.Type,
-			APIKey:       a.cfg.WebSearch.Key,
-			Timeout:      a.cfg.WebSearch.Timeout,
-			MaxResults:   a.cfg.WebSearch.MaxResults,
-			Proxy:        a.cfg.WebSearch.Proxy,
+			ProviderType: a.Config.FullConfig.WebSearch.Type,
+			APIKey:       a.Config.FullConfig.WebSearch.Key,
+			Timeout:      a.Config.FullConfig.WebSearch.Timeout,
+			MaxResults:   a.Config.FullConfig.WebSearch.MaxResults,
+			Proxy:        a.Config.FullConfig.WebSearch.Proxy,
 		}
 		if _, key := ws.ResolveProvider(); key != "" {
-			a.toolRegistry.Register(&ws)
+			a.Config.ToolRegistry.Register(&ws)
 		}
 
 		// WebFetch — always registered, no API key needed.
-		a.toolRegistry.Register(&tools.WebFetchTool{
-			Timeout:        a.cfg.WebFetch.Timeout,
-			Proxy:          a.cfg.WebFetch.Proxy,
-			ResultBaseDir:  a.cfg.ToolResult.ResultFileDir(),
-			MaxReturnChars: a.cfg.ToolResult.MaxResultChars(),
+		a.Config.ToolRegistry.Register(&tools.WebFetchTool{
+			Timeout:        a.Config.FullConfig.WebFetch.Timeout,
+			Proxy:          a.Config.FullConfig.WebFetch.Proxy,
+			ResultBaseDir:  a.Config.FullConfig.ToolResult.ResultFileDir(),
+			MaxReturnChars: a.Config.FullConfig.ToolResult.MaxResultChars(),
 		})
 	}
 
 	// RecordMemory / MemoryRecall — only when memory backend is configured
-	if a.memory != nil {
-		a.toolRegistry.Register(tools.NewRecordMemoryTool(a))
-		a.toolRegistry.Register(tools.NewMemoryRecallTool(a.memory.Backend))
+	if a.Config.Memory != nil {
+		a.Config.ToolRegistry.Register(tools.NewRecordMemoryTool(a))
+		a.Config.ToolRegistry.Register(tools.NewMemoryRecallTool(a.Config.Memory.Backend))
 	}
 
 	// SavePlan — only registered for frontends with a plan card UI (ACP).
 	// TUI/channel have no way to render the structured plan, so the tool
 	// would just produce unseen JSON files.
-	if a.planToolEnabled {
-		a.toolRegistry.Register(tools.SavePlanTool{})
+	if a.Frontend.PlanToolEnabled {
+		a.Config.ToolRegistry.Register(tools.SavePlanTool{})
 	}
 }
 
 func (a *AIAgent) RegisterTool(tool tools.Tool) {
-	a.toolRegistry.Register(tool)
+	a.Config.ToolRegistry.Register(tool)
 }
 
 // UnregisterTool removes a tool from the agent's registry by name.
 func (a *AIAgent) UnregisterTool(name string) {
-	a.toolRegistry.Unregister(name)
+	a.Config.ToolRegistry.Unregister(name)
 }
 
 // UnregisterMCPServer removes all tools belonging to an MCP server from
@@ -632,10 +554,10 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	prefix := fmt.Sprintf("mcp__%s__", serverName)
 
 	// 1. Unregister from active tool registry
-	for _, name := range a.toolRegistry.GetToolNames() {
+	for _, name := range a.Config.ToolRegistry.GetToolNames() {
 		if strings.HasPrefix(name, prefix) {
-			a.toolRegistry.Unregister(name)
-			a.logger.Info(context.Background(), "MCP: unregistered tool from registry", "tool", name)
+			a.Config.ToolRegistry.Unregister(name)
+			a.Config.Logger.Info(context.Background(), "MCP: unregistered tool from registry", "tool", name)
 		}
 	}
 
@@ -646,7 +568,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	if pool != nil {
 		removed := pool.RemoveByServer(serverName)
 		if removed > 0 {
-			a.logger.Info(context.Background(), "MCP: removed tools from deferred pool for server", "count", removed, "server", serverName)
+			a.Config.Logger.Info(context.Background(), "MCP: removed tools from deferred pool for server", "count", removed, "server", serverName)
 		}
 	}
 
@@ -656,7 +578,7 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 		for _, name := range set.List() {
 			if strings.HasPrefix(name, prefix) {
 				set.Remove(name)
-				a.logger.Info(context.Background(), "MCP: removed tool from discovered set", "tool", name)
+				a.Config.Logger.Info(context.Background(), "MCP: removed tool from discovered set", "tool", name)
 			}
 		}
 	}
@@ -665,10 +587,10 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 // DeferredPool returns the MCP deferred pool owned by the agent's
 // MCP manager, or nil if no manager is configured (i.e. MCP disabled).
 func (a *AIAgent) DeferredPool() *mcp.DeferredPool {
-	if a.mcpManager == nil {
+	if a.Config.MCPManager == nil {
 		return nil
 	}
-	return a.mcpManager.Pool()
+	return a.Config.MCPManager.Pool()
 }
 
 // SetMCPInitErrors stores per-server MCP connection errors from async init.
@@ -686,10 +608,10 @@ func (a *AIAgent) MCPInitErrors() []error {
 // discoveredSet returns the MCP discovered set owned by the agent's
 // MCP manager, or nil if no manager is configured. Internal helper.
 func (a *AIAgent) discoveredSet() *mcp.DiscoveredSet {
-	if a.mcpManager == nil {
+	if a.Config.MCPManager == nil {
 		return nil
 	}
-	return a.mcpManager.DiscoveredSet()
+	return a.Config.MCPManager.DiscoveredSet()
 }
 
 // AddDeferredMCPTools adds MCP tools to the deferred pool and marks the
@@ -708,10 +630,10 @@ func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
 		dt := mcp.NewDeferredToolFromMCPTool(t, "")
 		pool.Add(dt)
 		count++
-		a.logger.Info(context.Background(), "MCP: deferred tool (user toggle)", "tool", t.Name())
+		a.Config.Logger.Info(context.Background(), "MCP: deferred tool (user toggle)", "tool", t.Name())
 	}
 	a.NotifyDeferredToolsAdded()
-	a.logger.Info(context.Background(), "MCP: added tools to deferred pool from toggle", "count", count)
+	a.Config.Logger.Info(context.Background(), "MCP: added tools to deferred pool from toggle", "count", count)
 	return count
 }
 
@@ -737,27 +659,27 @@ func (a *AIAgent) NotifyDeferredToolsAdded() {
 	}
 
 	// Ensure it's registered in the reminder collector
-	a.reminderCollector.AddReminder(a.deferredToolReminder)
+	a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
 
-	a.logger.Info(context.Background(), "MCP: DeferredToolReminder marked dirty")
+	a.Config.Logger.Info(context.Background(), "MCP: DeferredToolReminder marked dirty")
 }
 
 // ToolSchemas returns all tool schemas currently registered with the agent.
 func (a *AIAgent) ToolSchemas() []tools.Schema {
-	return a.toolRegistry.GetSchemas()
+	return a.Config.ToolRegistry.GetSchemas()
 }
 
 // ToolNames returns registered tool names without triggering Description() calls.
 func (a *AIAgent) ToolNames() []string {
-	return a.toolRegistry.GetToolNames()
+	return a.Config.ToolRegistry.GetToolNames()
 }
 
 // SaveToolRegistry returns a snapshot of all currently registered tools.
 // Use RestoreToolRegistry to restore them later.
 func (a *AIAgent) SaveToolRegistry() map[string]tools.Tool {
 	saved := make(map[string]tools.Tool)
-	for _, name := range a.toolRegistry.GetToolNames() {
-		if tool := a.toolRegistry.GetTool(name); tool != nil {
+	for _, name := range a.Config.ToolRegistry.GetToolNames() {
+		if tool := a.Config.ToolRegistry.GetTool(name); tool != nil {
 			saved[name] = tool
 		}
 	}
@@ -768,20 +690,20 @@ func (a *AIAgent) SaveToolRegistry() map[string]tools.Tool {
 // the tools from the given snapshot (typically obtained from SaveToolRegistry).
 func (a *AIAgent) RestoreToolRegistry(saved map[string]tools.Tool) {
 	// Remove all currently registered tools
-	for _, name := range a.toolRegistry.GetToolNames() {
-		a.toolRegistry.Unregister(name)
+	for _, name := range a.Config.ToolRegistry.GetToolNames() {
+		a.Config.ToolRegistry.Unregister(name)
 	}
 	// Re-register from saved snapshot
 	for _, tool := range saved {
-		a.toolRegistry.Register(tool)
+		a.Config.ToolRegistry.Register(tool)
 	}
 }
 
 // ClearToolRegistry removes all registered tools. Use when the LLM should
 // produce a response without invoking any tools (e.g. /compact summarization).
 func (a *AIAgent) ClearToolRegistry() {
-	for _, name := range a.toolRegistry.GetToolNames() {
-		a.toolRegistry.Unregister(name)
+	for _, name := range a.Config.ToolRegistry.GetToolNames() {
+		a.Config.ToolRegistry.Unregister(name)
 	}
 }
 
@@ -824,7 +746,7 @@ func (a *AIAgent) RestrictTools(allowed, disallowed []string) {
 // Has no effect after RegisterTools() has already been called, so call it before
 // Configure().
 func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
-	a.processManager = pm
+	a.Config.ProcessManager = pm
 }
 
 // SetSharedMCP injects a pre-built MCP manager to be shared across multiple
@@ -836,15 +758,8 @@ func (a *AIAgent) SetProcessManager(pm *tools.ProcessManager) {
 // Close() will not tear down shared MCP — the owner (channel.Manager) is
 // responsible for closing the manager when the process exits.
 func (a *AIAgent) SetSharedMCP(mgr *mcp.Manager) {
-	a.mcpManager = mgr
-	a.sharedMCP = true
-}
-
-// SetPendingImages sets image content parts to attach to the next user message
-// sent via RunConversationStream. The images are consumed (cleared) after use.
-// Call this before RunConversationStream when the user message includes images.
-func (a *AIAgent) SetPendingImages(images []llm.ContentPart) {
-	a.turn.setPendingImages(images)
+	a.Config.MCPManager = mgr
+	a.mcpOwned = false
 }
 
 // GetLastMessages returns the final LLM message slice from the most recent
@@ -853,9 +768,18 @@ func (a *AIAgent) SetPendingImages(images []llm.ContentPart) {
 // assistant + tool-call + tool-result messages produced by the agent loop.
 // It is safe to read only after the event channel returned by
 // RunConversationStream has been fully drained (channel closed).
-// Returns nil if no turn has completed yet.
+//
+// RunOneOffStream does NOT publish its RunState to currentRun — messages
+// from one-off runs (/commit, /review, ambient, dream) are NOT accessible
+// via this method. Returns nil if no RunConversationStream has completed.
 func (a *AIAgent) GetLastMessages() []llm.Message {
-	return a.turn.snapshotMessages()
+	a.mu.RLock()
+	rs := a.currentRun
+	a.mu.RUnlock()
+	if rs != nil {
+		return rs.snapshotMessages()
+	}
+	return nil
 }
 
 // dispatchEvent sends an event to the hook dispatcher, if initialised.
@@ -863,17 +787,17 @@ func (a *AIAgent) GetLastMessages() []llm.Message {
 // the given event. The payload is populated with the current session ID
 // and any extra fields passed via opts.
 func (a *AIAgent) dispatchEvent(ctx context.Context, event string, opts hooks.Payload) {
-	if a.hookDispatcher == nil {
+	if a.Config.HookDispatcher == nil {
 		return
 	}
-	if a.sessionManager != nil && a.sessionManager.Current() != nil {
-		opts.SessionID = a.sessionManager.Current().ID
+	if a.Config.SessionManager != nil && a.Config.SessionManager.Current() != nil {
+		opts.SessionID = a.Config.SessionManager.Current().ID
 	}
 	if wd, err := os.Getwd(); err == nil && opts.WorkspaceDir == "" {
 		opts.WorkspaceDir = wd
 	}
 	opts.Event = event
-	a.hookDispatcher.Dispatch(ctx, event, opts)
+	a.Config.HookDispatcher.Dispatch(ctx, event, opts)
 }
 
 // Close releases resources held by the agent, including killing all tracked
@@ -883,10 +807,10 @@ func (a *AIAgent) Close() {
 	// can mark the agent as idle before the process exits.
 	a.dispatchEvent(context.Background(), hooks.EventSessionEnd, hooks.Payload{})
 
-	if a.processManager != nil {
-		a.processManager.KillAll()
+	if a.Config.ProcessManager != nil {
+		a.Config.ProcessManager.KillAll()
 	}
-	if a.lspManager != nil {
-		a.lspManager.Shutdown(context.Background())
+	if a.Config.LSPManager != nil {
+		a.Config.LSPManager.Shutdown(context.Background())
 	}
 }
