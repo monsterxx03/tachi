@@ -164,18 +164,12 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 
 		case agent.AgentEventTurnComplete:
 			if event.Result != nil {
-				if event.Result.Response != "" {
-					// Use the final response directly. Intermediate text
-					// that accompanied tool calls is shown in the channel's
-					// streaming embed during processing and would be
-					// redundant in the final message.
-					text.Reset()
-					text.WriteString(event.Result.Response)
-					// Append turn summary for non-trivial turns.
-					if event.Result.IterationsUsed > 0 {
-						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
-							text.WriteString(summary)
-						}
+				// text already accumulated all AgentEventTextDelta across
+				// iterations — keep it. event.Result.Response only carries
+				// the last iteration's text and would discard earlier output.
+				if event.Result.IterationsUsed > 0 {
+					if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
+						text.WriteString(summary)
 					}
 				}
 				if event.Result.Error != nil {
@@ -185,11 +179,8 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 
 		case agent.AgentEventError:
 			if event.Result != nil {
-				// Preserve partial response if available (e.g., interrupted).
-				if event.Result.Response != "" {
-					text.Reset()
-					text.WriteString(event.Result.Response)
-				}
+				// Preserve accumulated text across all iterations
+				// instead of resetting to the last partial response.
 				if event.Result.Error != nil {
 					lastErr = event.Result.Error
 				}
