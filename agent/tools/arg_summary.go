@@ -45,6 +45,12 @@ func ToolArgsSummary(name, argsJSON string) string {
 		}
 	case ToolNameBash:
 		if cmd, ok := args["command"].(string); ok {
+			if bg, ok := args["background"].(bool); ok && bg {
+				if name, ok := args["bg_name"].(string); ok && name != "" {
+					return fmt.Sprintf("[bg:%s] %s", name, cmd)
+				}
+				return "[bg] " + cmd
+			}
 			return cmd
 		}
 	case ToolNameWebSearch:
@@ -108,6 +114,12 @@ func ToolArgsTitle(name, argsJSON string) string {
 		}
 	case ToolNameBash:
 		if cmd, ok := args["command"].(string); ok {
+			if bg, ok := args["background"].(bool); ok && bg {
+				if name, ok := args["bg_name"].(string); ok && name != "" {
+					return TruncateForTitle(fmt.Sprintf("[bg:%s] %s", name, cmd), 60)
+				}
+				return TruncateForTitle("[bg] "+cmd, 60)
+			}
 			return TruncateForTitle(cmd, 60)
 		}
 	case ToolNameWebSearch:
