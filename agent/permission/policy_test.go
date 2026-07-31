@@ -39,13 +39,24 @@ func TestWildcardMatch(t *testing.T) {
 }
 
 func TestCheckBash_DefaultAllow(t *testing.T) {
-	p := NewPolicy(Rules{}, Rules{})
+	// With built-ins disabled and no user rules, everything is allowed.
+	p := NewPolicyNoBuiltins(Rules{}, Rules{})
 	d, _ := p.CheckBash("rm -rf /")
 	if d != DecisionAllow {
-		t.Errorf("no rules should default to allow, got %v", d)
+		t.Errorf("no rules (builtins off) should default to allow, got %v", d)
 	}
 	if !p.Empty() {
 		t.Error("policy without rules should report Empty()")
+	}
+
+	// A default NewPolicy is never Empty — the built-in rm guard always applies.
+	pb := NewPolicy(Rules{}, Rules{})
+	if pb.Empty() {
+		t.Error("policy with built-in guard enabled should not report Empty()")
+	}
+	d, _ = pb.CheckBash("rm -rf /")
+	if d != DecisionDeny {
+		t.Errorf("built-in guard should deny rm -rf / even with no user rules, got %v", d)
 	}
 }
 
@@ -200,6 +211,11 @@ func TestBuiltinDenyRules(t *testing.T) {
 		"rm -rf $HOME",
 		"rm -rf ${HOME}/docs",
 		"sudo rm -rf /", // hmm: sudo prefix — see below
+		"rm -rf /etc",   // root-level directory (single component below /)
+		"rm -rf /tmp",   // root-level directory itself is guarded
+		"rm -rf \"/tmp\"", // quoting does not bypass the guard
+		"rm -rf /tmp/../etc", // traversal normalizes to /etc
+		"rm -rf ~/docs",      // home direct child
 		"dd if=/dev/zero of=/dev/sda bs=1M",
 		"dd of=/dev/nvme0n1",
 		"mkfs.ext4 /dev/sda1",
@@ -223,8 +239,12 @@ func TestBuiltinDenyRules(t *testing.T) {
 		"git status",
 		"rm -rf ./build", // relative cleanup is a user-policy decision
 		"rm -rf node_modules",
-		"git push --force",     // deliberately not builtin
-		"dd if=x of=/dev/null", // /dev/null must not be blocked
+		"rm -rf /tmp/xxx/*", // deeper absolute paths are user-policy decisions
+		"rm -rf /var/log/*",
+		"rm -rf /tmp/x",
+		"rm -rf ~/.cache/session", // deeper than ~/X — not builtin-guarded
+		"git push --force",        // deliberately not builtin
+		"dd if=x of=/dev/null",    // /dev/null must not be blocked
 		"echo x > /dev/null",
 		"ls /dev/sda", // reading is fine
 	}
@@ -232,5 +252,91 @@ func TestBuiltinDenyRules(t *testing.T) {
 		if d, _ := p.CheckBash(cmd); d != DecisionAllow {
 			t.Errorf("CheckBash(%q) = %v, want Allow", cmd, d)
 		}
+	}
+}
+
+// TestBuiltinRmGuard_Precision verifies the built-in rm guard's exact
+// boundary: root / root-level directories / home are denied, but deeper
+// paths (the classic "rm -rf /tmp/xxx/*" cleanup) fall through to user
+// policy. This is the regression test for the old glob "rm -rf /*" that
+// matched every absolute-path rm -rf because '*' spans '/' in wildcardMatch.
+func TestBuiltinRmGuard_Precision(t *testing.T) {
+	p := NewPolicy(Rules{}, Rules{}) // no user rules — guard alone decides
+
+	denied := []string{
+		"rm -rf /",
+		"rm -rf /*",
+		"rm -rf / *",
+		"rm -fr /",
+		"rm -rf /etc",
+		"rm -rf /tmp",
+		"rm -rf /home",
+		"rm -rf /./etc",     // normalized to /etc
+		"rm -rf /tmp/../etc", // normalized to /etc
+		"rm -rf ~",
+		"rm -rf ~/*",
+		"rm -rf ~/docs",
+		"rm -rf $HOME",
+		"rm -rf $HOME/*",
+		"rm -rf ${HOME}",
+		"rm -rf ${HOME}/docs",
+		"rm -rf \"$HOME\"",
+		"sudo rm -rf /etc",
+		"git status && rm -rf /usr", // compound: still caught
+	}
+	for _, cmd := range denied {
+		if d, _ := p.CheckBash(cmd); d != DecisionDeny {
+			t.Errorf("CheckBash(%q) = %v, want Deny", cmd, d)
+		}
+	}
+
+	allowed := []string{
+		"rm -rf /tmp/xxx/*", // the original false positive — now allowed
+		"rm -rf /var/log/*",
+		"rm -rf /tmp/x",
+		"rm -rf /tmp/x/y",
+		"rm -rf /data/project/build",
+		"rm -rf ~/.cache/session",
+		"rm -rf ~/docs/cache",
+		"rm -rf ./build",
+		"rm -rf node_modules",
+		"rm -rf foo",
+		"rm /etc/hosts", // file under a root-level dir is fine
+		"rm -rf -- /tmp/cache",
+	}
+	for _, cmd := range allowed {
+		if d, _ := p.CheckBash(cmd); d != DecisionAllow {
+			t.Errorf("CheckBash(%q) = %v, want Allow", cmd, d)
+		}
+	}
+}
+
+// TestBuiltinRmGuard_Disabled verifies NewPolicyNoBuiltins disables the
+// structured rm guard (the disable_builtin_deny path).
+func TestBuiltinRmGuard_Disabled(t *testing.T) {
+	p := NewPolicyNoBuiltins(Rules{}, Rules{})
+	for _, cmd := range []string{"rm -rf /", "rm -rf /etc", "rm -rf ~"} {
+		if d, _ := p.CheckBash(cmd); d != DecisionAllow {
+			t.Errorf("CheckBash(%q) with builtins off = %v, want Allow", cmd, d)
+		}
+	}
+}
+
+// TestBuiltinRmGuard_UserRulePriority verifies a user deny rule is reported
+// ahead of the built-in guard when both match (deny rules run first).
+func TestBuiltinRmGuard_UserRulePriority(t *testing.T) {
+	p := NewPolicy(Rules{Deny: []string{"rm -rf /etc"}}, Rules{})
+	d, rule := p.CheckBash("rm -rf /etc")
+	if d != DecisionDeny {
+		t.Fatalf("CheckBash = %v, want Deny", d)
+	}
+	if rule != "rm -rf /etc" {
+		t.Errorf("matched rule = %q, want user rule %q", rule, "rm -rf /etc")
+	}
+
+	// Guard still catches targets the user did not list.
+	d, rule = p.CheckBash("rm -rf /usr")
+	if d != DecisionDeny || rule != "rm -rf /usr (builtin)" {
+		t.Errorf("guard fallback: got (%v, %q), want (Deny, %q)", d, rule, "rm -rf /usr (builtin)")
 	}
 }

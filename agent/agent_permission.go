@@ -51,6 +51,15 @@ func NewPermissionPolicyFromConfig(cfg *config.Config, projectRoot string, lg *l
 			// Allow intentionally omitted — dropped by NewPolicy anyway.
 		}
 	}
+	if cfg.Permissions.Bash.DisableBuiltinDeny {
+		// User opted out of ALL built-in protection: neither the disk/shutdown
+		// glob rules (BuiltinDenyRules) nor the structured rm guard apply.
+		pol := permission.NewPolicyNoBuiltins(global, project)
+		if pol.Empty() {
+			return nil
+		}
+		return pol
+	}
 	pol := permission.NewPolicy(global, project)
 	if pol.Empty() {
 		return nil

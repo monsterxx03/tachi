@@ -8,6 +8,7 @@
 package permission
 
 import (
+	"path/filepath"
 	"strings"
 	"sync"
 
@@ -49,25 +50,24 @@ type Rules struct {
 }
 
 // BuiltinDenyRules are deny rules for absolutely dangerous commands — things
-// an agent should never run: root/home deletion, raw disk overwrite, and
-// system shutdown. They are prepended to the user's global deny rules by
+// an agent should never run: raw disk overwrite, and system shutdown. They
+// are prepended to the user's global deny rules by
 // NewPermissionPolicyFromConfig and can be turned off only via
 // permissions.bash.disable_builtin_deny in the GLOBAL config (a project-level
 // permissions.yaml cannot weaken them).
+//
+// Root/home deletion (`rm -rf /`, `rm -rf /etc`, `rm -rf ~`, `rm -rf $HOME`,
+// ...) is NOT in this glob list: it is enforced by a structured argument
+// check (checkBuiltinRmDangerous) that only targets the root directory
+// itself, its direct children, and the home directory — while letting common
+// cleanup of deeper paths (e.g. `rm -rf /tmp/xxx/*`, `rm -rf /var/log/*`)
+// through to user policy. A plain glob like "rm -rf /*" would also match
+// those deeper deletions because '*' spans '/' in wildcardMatch.
 //
 // Deliberately NOT included: git push --force (legitimate on feature
 // branches), rm -rf of relative paths (common cleanup), curl|sh install
 // patterns — those are user-policy decisions, add them to your own rules.
 var BuiltinDenyRules = []string{
-	// Root/home deletion — both -rf/-fr flag orders, the classic
-	// "rm -rf / *" typo form, tilde and $HOME variants.
-	"rm -rf /", "rm -rf /*", "rm -rf / *",
-	"rm -fr /", "rm -fr /*", "rm -fr / *",
-	"rm -rf ~", "rm -rf ~/*", "rm -rf ~ *",
-	"rm -fr ~", "rm -fr ~/*", "rm -fr ~ *",
-	"rm -rf $HOME", "rm -rf $HOME/*",
-	"rm -rf ${HOME}", "rm -rf ${HOME}/*",
-
 	// Raw disk overwrite (device-prefixed to keep /dev/null legit).
 	"dd *of=/dev/sd*", "dd *of=/dev/hd*", "dd *of=/dev/vd*",
 	"dd *of=/dev/xvd*", "dd *of=/dev/nvme*", "dd *of=/dev/mmcblk*",
@@ -89,13 +89,18 @@ var BuiltinDenyRules = []string{
 	"init 0", "init 6", "sudo init 0", "sudo init 6",
 }
 
-// Policy evaluates Bash commands against allow/ask/deny rules, plus
-// session-scoped exact-command approvals ("always allow" in the TUI).
-// Safe for concurrent use.
+// Policy evaluates Bash commands against allow/ask/deny rules, plus the
+// built-in structured rm guard and session-scoped exact-command approvals
+// ("always allow" in the TUI). Safe for concurrent use.
 type Policy struct {
 	deny  []string
 	ask   []string
 	allow []string
+
+	// builtinRm enables the structured root/home deletion guard for `rm`
+	// invocations (see checkBuiltinRmDangerous). Default on; disabled via
+	// NewPolicyNoBuiltins (permissions.bash.disable_builtin_deny).
+	builtinRm bool
 
 	mu           sync.Mutex
 	sessionExact map[string]struct{}
@@ -106,18 +111,34 @@ type Policy struct {
 // allow is taken from the GLOBAL source only: project-level allow is dropped
 // so a cloned repository can never loosen the user's ask tripwires
 // (deny stays absolute; ask can only be added, never exempted, by projects).
+// The built-in structured rm guard (root/home deletion) is enabled.
 func NewPolicy(global, project Rules) *Policy {
-	p := &Policy{sessionExact: make(map[string]struct{})}
+	return newPolicy(global, project, true)
+}
+
+// NewPolicyNoBuiltins is NewPolicy with the built-in structured rm guard
+// disabled. Use it only when the user opted out of ALL built-in protection
+// via permissions.bash.disable_builtin_deny in the GLOBAL config — note that
+// BuiltinDenyRules (disk/shutdown globs) are prepended by the caller, so this
+// only disables the rm argument check.
+func NewPolicyNoBuiltins(global, project Rules) *Policy {
+	return newPolicy(global, project, false)
+}
+
+func newPolicy(global, project Rules, builtinRm bool) *Policy {
+	p := &Policy{sessionExact: make(map[string]struct{}), builtinRm: builtinRm}
 	p.deny = append(append([]string{}, global.Deny...), project.Deny...)
 	p.ask = append(append([]string{}, global.Ask...), project.Ask...)
 	p.allow = append([]string{}, global.Allow...) // project allow intentionally dropped
 	return p
 }
 
-// Empty reports whether the policy has no rules at all. Callers can use this
-// as a fast path to skip policy checks entirely (default behavior: allow).
+// Empty reports whether the policy has no rules at all — including the
+// built-in rm guard. Callers can use this as a fast path to skip policy
+// checks entirely (default behavior: allow). A policy built with NewPolicy
+// (built-in guard enabled) is never Empty.
 func (p *Policy) Empty() bool {
-	return len(p.deny) == 0 && len(p.ask) == 0 && len(p.allow) == 0
+	return len(p.deny) == 0 && len(p.ask) == 0 && len(p.allow) == 0 && !p.builtinRm
 }
 
 // AllowExactSession records an exact command string as approved for the rest
@@ -164,8 +185,17 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 
 	askRule := ""
 	for _, seg := range segments {
+		// User deny rules first — they may be broader or more specific than
+		// the built-in guard, and the matched rule name is shown to the user.
 		if rule := matchSegment(p.deny, seg); rule != "" {
 			return DecisionDeny, rule
+		}
+		// Built-in structured rm guard: a fallback that catches root/home
+		// deletion even when no user rule covers it.
+		if p.builtinRm {
+			if rule, hit := checkBuiltinRmDangerous(seg); hit {
+				return DecisionDeny, rule
+			}
 		}
 		if matchSegment(p.allow, seg) != "" {
 			continue // explicitly exempted from ask rules
@@ -280,4 +310,147 @@ func wildcardMatch(pattern, s string) bool {
 		px++
 	}
 	return px == len(pattern)
+}
+
+// checkBuiltinRmDangerous inspects an `rm` command segment (already split by
+// splitShellCommands) for absolutely dangerous deletion targets: the root
+// directory itself, its direct children, and the home directory (~ and
+// $HOME/${HOME} forms, including their direct children). It returns the
+// offending target for display and true when the segment must be denied.
+//
+// This is the structured replacement for a glob like "rm -rf /*", which —
+// because '*' in wildcardMatch spans '/' — would also blanket-deny harmless
+// cleanup of deeper paths such as "rm -rf /tmp/xxx/*" or "rm -rf /var/log/*".
+// Deeper paths are deliberately left to user policy (global/project rules).
+//
+// Quoting is handled via the mvdan/sh syntax tree, so `rm -rf "/tmp"` is
+// still caught, and `$HOME` / `${HOME}` / `~/docs` resolve to the home
+// guard rather than being treated as opaque words. A leading "sudo " prefix
+// is ignored (mirroring matchSegment).
+func checkBuiltinRmDangerous(seg string) (string, bool) {
+	if rest, ok := strings.CutPrefix(seg, "sudo "); ok {
+		seg = rest
+	}
+
+	prog, err := syntax.NewParser().Parse(strings.NewReader(seg), "")
+	if err != nil {
+		return "", false // unparseable segments are handled conservatively upstream
+	}
+
+	var call *syntax.CallExpr
+	syntax.Walk(prog, func(n syntax.Node) bool {
+		if c, ok := n.(*syntax.CallExpr); ok && call == nil {
+			call = c
+			return false
+		}
+		return true
+	})
+	if call == nil || len(call.Args) == 0 {
+		return "", false
+	}
+	if wordLiteral(call.Args[0]) != "rm" {
+		return "", false
+	}
+
+	for _, arg := range call.Args[1:] {
+		if target := shellWordString(arg); dangerousRmTarget(target) {
+			return "rm -rf " + target + " (builtin)", true
+		}
+	}
+	return "", false
+}
+
+// dangerousRmTarget reports whether a single `rm` argument targets the root
+// directory, a root-level directory (direct child of /), or the home
+// directory (~, $HOME/${HOME}) — including their direct children. Paths
+// deeper than one component (e.g. /tmp/xxx, /var/log/*, ~/.cache/foo) are
+// not considered absolutely dangerous and fall through to user policy.
+//
+// Path components are compared after filepath.Clean, so traversal forms
+// like /tmp/../etc or /./etc are normalized to /etc and still denied.
+func dangerousRmTarget(p string) bool {
+	// Home directory forms.
+	switch {
+	case p == "~", p == "$HOME", p == "${HOME}":
+		return true // home itself
+	case strings.HasPrefix(p, "~/"):
+		return isSingleComponent(strings.TrimPrefix(p, "~/"))
+	case strings.HasPrefix(p, "$HOME/"):
+		return isSingleComponent(strings.TrimPrefix(p, "$HOME/"))
+	case strings.HasPrefix(p, "${HOME}/"):
+		return isSingleComponent(strings.TrimPrefix(p, "${HOME}/"))
+	}
+
+	// Absolute paths: normalize, then require exactly one component below /.
+	clean := filepath.Clean(p)
+	if clean == "/" {
+		return true // the root directory itself
+	}
+	if rest, ok := strings.CutPrefix(clean, "/"); ok {
+		return isSingleComponent(rest)
+	}
+	return false
+}
+
+// isSingleComponent reports whether s is a non-empty path component that
+// contains no further '/'.
+func isSingleComponent(s string) bool {
+	return s != "" && !strings.Contains(s, "/")
+}
+
+// shellWordString renders a shell word to a best-effort literal string:
+// plain literals (including '~', quoted strings) are concatenated, simple
+// parameter expansions render as $NAME / ${NAME}, and anything dynamic
+// (command substitutions, arithmetic) is dropped. Callers treat the result
+// as opaque; ambiguous words simply fail the dangerous-target check.
+func shellWordString(w *syntax.Word) string {
+	var sb strings.Builder
+	for _, part := range w.Parts {
+		switch p := part.(type) {
+		case *syntax.Lit:
+			sb.WriteString(p.Value)
+		case *syntax.SglQuoted:
+			sb.WriteString(p.Value)
+		case *syntax.DblQuoted:
+			for _, inner := range p.Parts {
+				switch ip := inner.(type) {
+				case *syntax.Lit:
+					sb.WriteString(ip.Value)
+				case *syntax.ParamExp:
+					sb.WriteString(paramExpString(ip))
+				}
+			}
+		case *syntax.ParamExp:
+			sb.WriteString(paramExpString(p))
+		}
+	}
+	return sb.String()
+}
+
+// paramExpString renders a simple $NAME / ${NAME} expansion literally.
+// Complex expansions (${a:-b}, ${#a}, ...) render as "" and are ignored.
+func paramExpString(p *syntax.ParamExp) string {
+	simple := p.Param != nil && p.Flags == nil &&
+		!p.Excl && !p.Length && !p.Width && !p.IsSet &&
+		p.NestedParam == nil && p.Index == nil &&
+		len(p.Modifiers) == 0 && p.Slice == nil &&
+		p.Repl == nil && p.Names == 0 && p.Exp == nil
+	if !simple {
+		return ""
+	}
+	if p.Short {
+		return "$" + p.Param.Value
+	}
+	return "${" + p.Param.Value + "}"
+}
+
+// wordLiteral returns the word's value only when it is a single plain
+// literal (the common case for a command name), otherwise "".
+func wordLiteral(w *syntax.Word) string {
+	if len(w.Parts) == 1 {
+		if l, ok := w.Parts[0].(*syntax.Lit); ok {
+			return l.Value
+		}
+	}
+	return ""
 }

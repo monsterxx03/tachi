@@ -262,16 +262,23 @@ func TestNewPermissionPolicyFromConfig(t *testing.T) {
 	d, _ = p.CheckBash("git status")
 	assert.Equal(t, permission.DecisionAllow, d, "built-in rules should not affect normal commands")
 
-	// User rules stack on top of built-ins (builtins match first on overlap).
+	// User rules stack on top of built-ins.
 	cfg.Permissions.Bash.Deny = []string{"git clone *"}
 	p = NewPermissionPolicyFromConfig(cfg, "", nil)
 	require.NotNil(t, p)
 	d, rule := p.CheckBash("git clone https://example.com/r.git")
 	assert.Equal(t, permission.DecisionDeny, d)
 	assert.Equal(t, "git clone *", rule)
-	d, rule = p.CheckBash("rm -rf /tmp/x")
+	// Root deletion is still caught by the built-in structured guard (with
+	// no user rule for it, the guard reports itself).
+	d, rule = p.CheckBash("rm -rf /")
 	assert.Equal(t, permission.DecisionDeny, d)
-	assert.Equal(t, "rm -rf /*", rule, "overlapping command hits the builtin rule first")
+	assert.Equal(t, "rm -rf / (builtin)", rule)
+	// Deeper absolute-path deletion (e.g. /tmp/x) is NOT builtin-guarded —
+	// it falls through to user policy (Allow here, no matching user rule).
+	d, rule = p.CheckBash("rm -rf /tmp/x")
+	assert.Equal(t, permission.DecisionAllow, d, "deeper absolute-path deletion is user policy now")
+	assert.Equal(t, "", rule)
 
 	// disable_builtin_deny (global) → no built-ins; nil policy when no user rules.
 	cfg2 := config.DefaultConfig()
