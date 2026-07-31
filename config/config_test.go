@@ -631,8 +631,6 @@ func TestTokenStorageName(t *testing.T) {
 	// Stdio server: uses server name
 	srv := &MCPServerConfig{Name: "test-mcp", Type: MCPTransportStdio}
 	assert.Equal(t, "test-mcp", srv.TokenStorageName())
-
-	// HTTP server without URL: falls back to server name
 	srv2 := &MCPServerConfig{Name: "no-url-http", Type: MCPTransportHTTP}
 	assert.Equal(t, "no-url-http", srv2.TokenStorageName())
 
@@ -800,4 +798,57 @@ func TestToBool(t *testing.T) {
 	assert.False(t, toBool(0.0))
 	assert.False(t, toBool("yes")) // not a bool-like string
 	assert.False(t, toBool(nil))
+}
+
+// --- review.adversarial config behavior (docs/2026-07-30, §3) ---
+
+// TestReviewAdversarial_UnconfiguredNil pins the creasty/defaults behavior
+// the design doc calls out: Adversarial is a pointer WITHOUT a default tag,
+// so defaults.Set() does not allocate it when YAML omits the key. Callers
+// (SetupAdversarialProviders, CheckAdversarialProviders) must check the
+// pointer for nil before touching Models/JudgeModel.
+func TestReviewAdversarial_UnconfiguredNil(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("providers:\n  - name: p\n    type: openai\n    model: m\n    api_key: k\n"), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	assert.Nil(t, cfg.Review.Adversarial, "unconfigured adversarial: must stay nil (defaults does not allocate default-less pointers)")
+}
+
+// TestReviewAdversarial_ExplicitKeyAllocates verifies that once the
+// `adversarial:` key IS present, the pointer is allocated (even with only
+// removed legacy keys like `enabled:`/`rounds:`) — models/judge_model stay
+// empty and the config loads fine (yaml.Unmarshal is non-strict).
+func TestReviewAdversarial_ExplicitKeyAllocates(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte("review:\n  adversarial:\n    enabled: true\n    rounds: 5\n"), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Review.Adversarial)
+	assert.Empty(t, cfg.Review.Adversarial.Models)
+	assert.Empty(t, cfg.Review.Adversarial.JudgeModel)
+}
+
+// TestReviewAdversarial_FullConfigLoad verifies models/judge_model round-trip.
+func TestReviewAdversarial_FullConfigLoad(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	yaml := `review:
+  adversarial:
+    models:
+      - claude-sonnet
+      - gpt-4o
+    judge_model: claude-opus
+`
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.NotNil(t, cfg.Review.Adversarial)
+	assert.Equal(t, []string{"claude-sonnet", "gpt-4o"}, cfg.Review.Adversarial.Models)
+	assert.Equal(t, "claude-opus", cfg.Review.Adversarial.JudgeModel)
 }

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -295,7 +296,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)},
 		agent.WithToolSet(tools.ToolNameBash))
 
-	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	stopReason, _, _ := streamToACP(ctx, sess, conn, eventCh)
 
 	// /commit is a one-off task — its messages should not persist in the
 	// session history cache. Clear it so the next Prompt reloads from disk
@@ -309,7 +310,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 // /review handler
 // ---------------------------------------------------------------------------
 
-func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, _ string) (acp.StopReason, error) {
+func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
 	logger.FromContext(ctx).Info(ctx, "ACP: /review handler start")
 
 	aiAgent := sess.agent
@@ -321,50 +322,77 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		reviewProvider = rp
 	}
 
-	// MaxIterations and Thinking are populated by defaults.Set() from struct tags.
-	maxIter := cmds.DefaultReviewMaxIterations
-	thinking := new(bool)
-	if cfg != nil {
-		maxIter = cfg.Review.MaxIterations
-		thinking = cfg.Review.Thinking
-	}
-
-	// Resolve allowed tools (slice can't use `default` tag, handle in code).
-	var allowedTools []string
-	if cfg != nil && len(cfg.Review.AllowedTools) > 0 {
-		allowedTools = cfg.Review.AllowedTools
-	} else {
-		allowedTools = cmds.DefaultReviewAllowedTools()
-	}
-
-	// Fork a child agent with configurable tools.
-	forked := aiAgent.Fork(agent.ForkConfig{
-		Provider:      reviewProvider,
-		MaxIterations: maxIter,
-		AllowedTools:  allowedTools,
-		Logger:        aiAgent.Logger(),
-	})
-	defer forked.Close()
+	// Parameter defaults/overrides come from the shared resolver (same as the
+	// TUI side); only the provider lookup is agent-specific.
+	ropts := cmds.ResolveReviewOptions(cfg)
 
 	systemPrompt := buildSystemPromptForCwd(cfg, sess.cwd, agent.ModeAuto, sess.ID)
+	opts := llm.ChatOptions{MaxTokens: config.DefaultMaxTokens, Thinking: ropts.Thinking}
 
-	opts := llm.ChatOptions{
-		MaxTokens: config.DefaultMaxTokens,
-		Thinking:  thinking,
+	// The shared orchestrator resolves rounds, assigns per-round providers
+	// (fail-fast on unresolvable adversarial models) and creates the report
+	// directory. Single-round reviews flow through the same path — this
+	// frontend never branches on round count. The report dir is anchored at
+	// sess.cwd (the session working directory the round's Bash/WriteFile
+	// tools resolve against) — NOT the process CWD, which ACP clients are
+	// not required to align with (Zed starts the agent from the editor
+	// binary's directory).
+	orch, err := cmds.NewReviewOrchestratorFromCommand("/review "+args, ropts,
+		func(rounds int) ([]llm.Provider, error) {
+			if rounds == 1 {
+				return []llm.Provider{reviewProvider}, nil
+			}
+			return aiAgent.ResolveAdversarialRoundModels(sess.cfg, reviewProvider, rounds)
+		}, sess.cwd)
+	if err != nil {
+		sendTextUpdate(ctx, conn, acp.SessionId(sess.ID), err.Error())
+		return acp.StopReasonEndTurn, err
 	}
 
-	eventCh := forked.Agent().RunOneOffStream(ctx, reviewProvider,
-		systemPrompt, cmds.ReviewUserPrompt(), opts,
-		agent.OneOffMeta{Kind: "review", SessionID: acpOneoffSessionID(sess)})
+	// Synchronous round loop driven by the shared orchestrator: each round
+	// gets a fresh isolated fork → stream to the client. defer Close keeps
+	// the fork alive until the closure returns (streamToACP blocks until the
+	// channel closes), so only one fork exists at a time — and a panic
+	// mid-round can't leak the fork.
+	stopReason := acp.StopReasonEndTurn
+	runErr := orch.Run(func(spec cmds.RoundSpec) error {
+		forked := aiAgent.Fork(agent.ForkConfig{
+			Provider:      spec.Provider,
+			MaxIterations: ropts.MaxIterations,
+			AllowedTools:  ropts.AllowedTools,
+			Logger:        aiAgent.Logger(),
+		})
+		defer forked.Close()
 
-	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+		eventCh := forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt, spec.Prompt, opts,
+			agent.OneOffMeta{Kind: spec.Kind, SessionID: acpOneoffSessionID(sess)})
+		var err error
+		stopReason, _, err = streamToACP(ctx, sess, conn, eventCh)
+		// A broken round (API error / budget exhaustion) must terminate the
+		// chain — streamToACP carries the failure back as an error while
+		// keeping the legacy EndTurn stop reason for single-round callers.
+		if err != nil {
+			return err
+		}
+		// Client-initiated stop (disconnect/cancel) also terminates the chain.
+		if stopReason != acp.StopReasonEndTurn {
+			return cmds.ErrStopReview
+		}
+		return nil
+	})
 
 	// /review is a one-off task — its messages should not persist in the
-	// session history cache. Clear it so the next Prompt reloads from disk
-	// and gets the correct conversation history without the review turn.
+	// session history cache (also on early termination). Clear it so the
+	// next Prompt reloads from disk.
 	sess.history = nil
 
-	return stopReason, nil
+	if runErr != nil {
+		if errors.Is(runErr, cmds.ErrStopReview) {
+			return stopReason, nil
+		}
+		return acp.StopReasonEndTurn, runErr
+	}
+	return acp.StopReasonEndTurn, nil
 }
 
 // ---------------------------------------------------------------------------
@@ -382,7 +410,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
-	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	stopReason, _, _ := streamToACP(ctx, sess, conn, eventCh)
 	return stopReason, nil
 }
 
@@ -662,7 +690,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 
-	stopReason, _ := streamToACP(ctx, sess, conn, eventCh)
+	stopReason, _, _ := streamToACP(ctx, sess, conn, eventCh)
 	return stopReason, nil
 }
 

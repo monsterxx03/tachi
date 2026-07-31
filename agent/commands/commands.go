@@ -43,7 +43,7 @@ var Registry = []Def{
 	{Name: "mcp", Description: "Manage MCP servers (list, toggle, reconnect, auth)", InputHint: "list | toggle | reconnect | auth <name>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "sessions", Description: "Browse and reload previous sessions", Modes: []Mode{ModeTUI}},
 	{Name: "usage", Description: "Show token usage, cost, and tool call statistics", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
-	{Name: "review", Description: "Code review current repo changes via agent fork (correctness, quality, efficiency)", Modes: []Mode{ModeTUI, ModeACP}},
+	{Name: "review", Description: "Code review current repo changes via agent fork (correctness, quality, efficiency)", InputHint: "[rounds]", Modes: []Mode{ModeTUI, ModeACP}},
 	{Name: "skill", Description: "List or activate skills", InputHint: "list | reload | <name>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "transcript", Description: "Generate session transcript report", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},
@@ -161,3 +161,8 @@ func ParseResearchArgs(input string) ResearchArgs {
 	args.Topic = strings.Join(topicParts, " ")
 	return args
 }
+
+// ---------------------------------------------------------------------------
+// Adversarial review shared logic (round resolution, model assignment,
+// fail-fast check, prompt/path building) lives in review.go.
+// ---------------------------------------------------------------------------

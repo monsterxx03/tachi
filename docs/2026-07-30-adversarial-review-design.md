@@ -1,6 +1,8 @@
 # 对抗式代码审查 (Adversarial Review) 设计文档
 
 > 日期: 2026-07-30 | 状态: 设计定稿，可直接实现
+>
+> **2026-07-31 修订**：去掉 `adversarial.enabled` / `adversarial.rounds` 配置项。多轮对抗不再由配置开关触发——**无参 `/review` 恒为单轮**（普通审查），**`/review N`（N ≥ 2）才进入 N 轮对抗**。`adversarial.models` / `adversarial.judge_model` 保留（多轮模式下的逐轮模型分配）。老配置里的 `enabled:` / `rounds:` 键会被非严格 yaml 解析静默忽略，不影响加载。
 
 ## 一、概述
 
@@ -19,7 +21,7 @@
 1. **串行编排** — Go handler 负责任务调度，不依赖 LLM 自我编排
 2. **完全隔离** — 每个 agent 独立 fork，不共享上下文，只通过磁盘文件交换信息
 3. **配置驱动** — 轮次、模型、角色等参数皆可配置，不改代码
-4. **向后兼容** — `adversarial.enabled: false` 时退化为现有单轮行为
+4. **向后兼容** — 无参 `/review` 保持现有单轮行为，多轮需显式 `/review N` 才进入
 5. **简单优先** — 首版不做 cycle-aware prompt 差异化，只告诉 LLM 当前轮次和角色
 
 ---
@@ -29,7 +31,7 @@
 ```
 用户输入 /review [N]
     │
-    ├─ N 可选：覆盖配置中的 rounds（N≥2 时同时覆盖 enabled: false）
+    ├─ N ≥ 2：进入 N 轮对抗模式（无参或 N ≤ 1 → 单轮，走现有路径）
     │
     ├─ 编排器创建报告目录 .tachi/reviews/<YYYYMMDD-HHmm>/（os.MkdirAll）
     │
@@ -108,10 +110,9 @@ review:
     - Grep
   thinking: false
 
-  # --- 对抗式审查配置 ---
+  # --- 对抗式审查配置（可选；只控制多轮模式下的逐轮模型分配）---
+  # 多轮模式由命令参数触发：/review N（N ≥ 2），无参 /review 恒为单轮。
   adversarial:
-    enabled: false                  # false = 无参 /review 保持单轮（显式 /review N 仍可开启）
-    rounds: 3                       # 对抗轮次（默认 3，有效范围 1-10，代码内 clamp）
     models:                         # 各轮 model 分配（可选）
       - claude-sonnet               # 按索引分配各轮
       - gpt-4o
@@ -128,12 +129,12 @@ review:
 
 ```go
 type AdversarialReviewConfig struct {
-    Enabled    bool     `yaml:"enabled"`            // 开关，默认 false
-    Rounds     int      `yaml:"rounds" default:"3"` // 对抗轮次（代码内 clamp 到 [1, 10]）
-    Models     []string `yaml:"models"`             // 各轮 model 名（可选）
-    JudgeModel string   `yaml:"judge_model"`        // 最终轮固定 model 名（可选，空 = 取模）
+    Models     []string `yaml:"models"`      // 各轮 model 名（可选）
+    JudgeModel string   `yaml:"judge_model"` // 最终轮固定 model 名（可选，空 = 取模）
 }
 ```
+
+> 轮次**不在配置里**——多轮只能通过 `/review N` 显式进入（见第四节）。config 层不再表达"默认轮数"或"开关"，少一个状态源，语义更直接。
 
 嵌入到 `ReviewConfig`：
 
@@ -149,9 +150,9 @@ type ReviewConfig struct {
 
 > ⚠️ **creasty/defaults 行为（实现代码必须遵守）**：
 >
-> - `defaults.Set()` **不会**自动分配 nil 指针字段：`shouldInitializeField`（defaults.go）对 **nil 指针且无 default tag** 的字段返回 false，直接跳过。因此未配置 `adversarial:` 时 `ReviewConfig.Adversarial` **恒为 nil**——判断是否启用对抗模式**必须同时检查 nil 与 `Enabled`**（`adv != nil && adv.Enabled`），只查 `Enabled` 会 nil pointer panic（实测 creasty/defaults v1.8.0）。
-> - 显式配置 `adversarial:`（哪怕只有 `enabled: false`）时指针非 nil，其内部字段会递归应用 default tag；此时 `rounds: 0` 是 zero value，会被 `default:"3"` **覆盖成 3**。config 层无法表达 "0 = 单轮"；要单轮请用 `enabled: false` 或 `/review 1`。
-> - `rounds` 负数不会被 default 修正，需在代码中 clamp（见第四节），否则 `make([]llm.Provider, rounds)` 会 panic。
+> - `defaults.Set()` **不会**自动分配 nil 指针字段：`shouldInitializeField`（defaults.go）对 **nil 指针且无 default tag** 的字段返回 false，直接跳过。因此未配置 `adversarial:` 时 `ReviewConfig.Adversarial` **恒为 nil**——访问 `Models`/`JudgeModel` 前**必须判空**（`SetupAdversarialProviders`、`CheckAdversarialProviders` 都以 `adv != nil` 为门）。
+> - 显式配置 `adversarial:` 时指针非 nil，但 **不再有任何 default tag**——内部字段全部走 zero value（空切片 / 空串），语义就是"未指定"。
+> - 老配置若残留已删除的 `enabled:` / `rounds:` 键：`yaml.Unmarshal` 非严格，**静默忽略**，配置正常加载。
 
 ---
 
@@ -159,12 +160,11 @@ type ReviewConfig struct {
 
 ### `/review [rounds]`
 
-轮次来源优先级：
+轮次来源只有命令参数（config 不参与）：
 
-1. `/review N`（N ≥ 2）→ N 轮，**覆盖 `enabled: false`**（显式参数视为用户明确要对抗模式）
-2. `/review 0`、`/review 1`、非数字参数 → 单轮
-3. `/review`（无参数）→ 配置值：`adversarial.enabled: true` 时用 `rounds`（default tag 保证默认 3），否则单轮
-4. 所有来源统一 clamp 到 `[1, 10]`
+1. `/review N`（N ≥ 2）→ N 轮（clamp 到 `[2, 10]`）
+2. `/review 0`、`/review 1`、负数或非数字参数 → 单轮（拼写错误不升级为 N 倍成本）
+3. `/review`（无参数）→ **单轮**（普通审查；多轮必须显式给轮数）
 
 解析逻辑（放 **`agent/commands`** 共享包并**导出**，TUI 与 ACP 两端复用——`ResolveReviewRounds`/`ResolveRoundModels` 都是纯函数，**不能放 `tui/`**，否则 `agent/acp` 导入会构成循环依赖）：
 
@@ -172,27 +172,19 @@ type ReviewConfig struct {
 const maxReviewRounds = 10
 
 // ResolveReviewRounds 决定本次 /review 的轮数。input 为完整输入（如 "/review 6"）。
-func ResolveReviewRounds(input string, cfg *config.Config) int {
-    cfgRounds := 1
-    if cfg != nil {
-        // 注意：未配置 adversarial 时指针为 nil（defaults 不分配），
-        // 显式配置后非 nil —— 必须同时判 nil 与 Enabled，只判其一都会出错。
-        if adv := cfg.Review.Adversarial; adv != nil && adv.Enabled {
-            cfgRounds = adv.Rounds
-        }
+func ResolveReviewRounds(input string) int {
+    parts := strings.Fields(input)
+    if len(parts) < 2 {
+        return 1 // 无参数 → 单轮（普通审查）
     }
-    if parts := strings.Fields(input); len(parts) >= 2 {
-        n, err := strconv.Atoi(parts[1])
-        if err != nil {
-            return 1 // 非数字参数（如 "/review foo"）→ 单轮；不静默回落配置轮次，拼写错误不升级为 N 倍成本
-        }
-        if n <= 0 {
-            return 1 // /review 0 或负数 → 单轮
-        }
-        return min(n, maxReviewRounds) // 显式参数覆盖 enabled
+    n, err := strconv.Atoi(parts[1])
+    if err != nil {
+        return 1 // 非数字参数（如 "/review foo"）→ 单轮；拼写错误不升级为 N 倍成本
     }
-    // cfgRounds 可能为负数（defaults 不修正负数），min+max 双 clamp 不可省
-    return max(1, min(cfgRounds, maxReviewRounds))
+    if n < 2 {
+        return 1 // /review 0、/review 1、负数 → 单轮
+    }
+    return min(n, maxReviewRounds)
 }
 ```
 
@@ -238,8 +230,7 @@ func roleFileSuffix(r ReviewRole) string {
 }
 
 // ReportPathFor 返回某轮报告的确切路径，格式 round-<N>-<role>-<model>.md。
-// startReviewRound（写指令）与 recordReviewReport（落盘校验）必须共用它，
-// 保证两处引用的是同一个文件。
+// 编排器（Next 写进 prompt、Complete 落盘校验）两端共用它，保证引用同一个文件。
 func ReportPathFor(dir string, round int, role ReviewRole, model string) string {
     return fmt.Sprintf("%s/round-%d-%s-%s.md", dir, round, roleFileSuffix(role), sanitizeFileName(model))
 }
@@ -333,335 +324,125 @@ if isFinalRound {
 
 ---
 
-## 六、编排逻辑
+## 六、编排逻辑（共享编排器）
 
-### TUI 端调度
+> **2026-07-31 修订**：多轮编排状态从 TUI/ACP 两端收敛到共享的
+> `cmds.ReviewOrchestrator`（`agent/commands/review.go`）。两端不再各自维护
+> round/providers/reports 状态机，只做三件事：**构造编排器 → 驱动轮次 →
+> 渲染结果**。channel 端接入时同理，零复制。
 
-核心改动在 `tui/commands.go`、`tui/model_events.go` 和 `tui/model.go`。
+### `ReviewOrchestrator` 职责
 
-```
-Model 新增字段:
+编排器持有全部编排状态（轮次、provider 列表、报告目录、轮次计数、报告落盘
+记录），并提供纯驱动接口——**单轮与多轮走同一条路径**，前端不分支：
 
-type reviewState struct {
-    totalRounds  int              // 总轮数
-    currentRound int              // 当前轮 (1-based)
-    roundModels  []llm.Provider   // 各轮 model（长度 = totalRounds）
-    reportDir    string           // .tachi/reviews/<YYYYMMDD-HHmm>（编排器创建）
-    reports      []roundReport    // 各轮报告状态（有序，含未落盘标记）
-    config       reviewResolved   // 共享配置（allowedTools, maxIterations, thinking）
+| 方法 | 职责 |
+|------|------|
+| `NewReviewOrchestratorFromCommand(input, opts, resolve)` | 轮次解析（`ResolveReviewRounds`）+ provider 分配（前端注入的 `resolve` 闭包，多轮含 fail-fast）+ 报告目录创建（仅多轮）；失败在第 1 轮前中止 |
+| `NewReviewOrchestrator(rounds, providers, reportDir, opts)` | 低层构造（测试/复用用），校验 `len(providers) == rounds` |
+| `Next() (RoundSpec, bool)` | 推进到下一轮：单轮返回标准 review prompt（`Kind:"review"`）；多轮返回 role/prompt/确定性 outPath（`Kind:"review-round-N"`） |
+| `Complete() (done bool, report RoundReport)` | 本轮落盘校验（`os.Stat`，编排器不信任 LLM 自觉）+ 记录 reports；最后一轮返回 `done=true` |
+| `Run(runRound func(RoundSpec) error) error` | 同步驱动整个链（ACP/channel 用）；`runRound` 返回错误（含 `ErrStopReview` 哨兵）立即终止 |
+| `IsMultiRound()` / `TotalRounds()` / `CurrentRound()` / `Options()` / `Reports()` | 前端渲染与 fork 参数查询 |
+
+```go
+type RoundSpec struct {
+    Round    int
+    Role     ReviewRole
+    Provider llm.Provider
+    OutPath  string // 多轮：编排器拥有的报告路径（写进 prompt）；单轮：空（LLM 自拟）
+    Prompt   string
+    Kind     string // OneOffMeta.Kind: "review" / "review-round-N"
 }
-
-Model 新增:
-- reviewState *reviewState       // nil = 不在对抗审查中
-- isReviewing bool               // 对抗审查进行中（用于阻塞用户输入）
 ```
 
-> 💰 **成本提示**：N 轮 = N 次独立 fork + N 次完整 LLM 调用，每轮都要重新跑 git diff（现有 `ReviewUserPrompt` 的上下文收集逻辑），总成本约为单轮审查的 **N 倍**。`rounds` 上限 10 意味着 10 倍成本——usage 已逐轮累积进 `/usage`，建议在 UI 启动横幅中顺带提示总轮数，避免用户误配大轮次。首版不做跨轮 diff 缓存（每轮独立 fork、上下文隔离是设计约束）。
+### 前端契约
 
-**贯穿全节的两条状态机纪律：**
-
-1. **`savedHistory` 是 one-off 的唯一标记**（`isOneOff := m.savedHistory != nil`，model_events.go）。多轮期间它必须**一直保持非 nil**，直到最终轮的 `TurnComplete` 由正常分支恢复——中间任何提前恢复都会让后续事件的 `m.history = event.Messages` 用审查轮消息污染主历史。
-2. **取消/失败产生的是 `AgentEventError` 而非 `TurnComplete`**（agent_loop.go 的 ctx.Done 分支）。多轮调度必须同时挂在两个事件分支上，缺一不可。
-
-#### 1. `sendReviewCommand()` 修改
+**事件驱动前端（TUI）**：`Next()` 启动一轮 → 轮次流结束（`TurnComplete`）时
+`Complete()` → `done=false` 链式启动下一轮，`done=true` 走正常 one-off 收尾。
 
 ```go
 func (m *Model) sendReviewCommand() tea.Cmd {
-    rounds := cmds.ResolveReviewRounds(m.subcommandInput, m.cfg)
-
-    m.savedHistory = make([]llm.Message, len(m.history))
-    copy(m.savedHistory, m.history)
-
-    if rounds == 1 {
-        // 现有单轮逻辑，完全不变
-        ...
-    }
-
-    rc := m.resolveReviewConfig()
-
-    // 名字 → provider 解析，fail fast：任一配置了但无法解析的名字
-    // → 报错并中止，不开始第 1 轮（静默回退会让"多模型对抗"名存实亡）。
-    // 解析出来的 []llm.Provider 交给共享的 ResolveRoundModels 做轮次分配；
-    // 注意该函数是纯分配不报错，"配置了但解析失败"的检查在此完成
-    // （resolvedModels 里出现 nil provider → 视为解析失败，报错中止）。
-    resolvedModels, resolvedJudge, fallbackProvider, err := m.resolveAdversarialProviders(rc)
-    if err != nil {
-        m.savedHistory = nil
-        m.chatview.AddMessage(chatMessage{Role: "error", Content: err.Error()})
-        m.setState(stateIdle)
-        return nil
-    }
-    roundModels := cmds.ResolveRoundModels(resolvedModels, resolvedJudge, fallbackProvider, rounds)
-
-    // 编排器拥有报告目录：启动前创建，路径对 LLM 可见且确定。
-    // 注意：精度必须到秒（20060102-150405）——分钟级会导致同一分钟内
-    // 连续两次 /review 共用一个目录，round-N 报告互相覆盖（MkdirAll 幂等不报错）。
-    reportDir := fmt.Sprintf(".tachi/reviews/%s", time.Now().Format("20060102-150405"))
-    if err := os.MkdirAll(reportDir, 0o755); err != nil {
-        m.savedHistory = nil
-        m.chatview.AddMessage(chatMessage{Role: "error", Content: "创建报告目录失败: " + err.Error()})
-        m.setState(stateIdle)
-        return nil
-    }
-
-    m.reviewState = &reviewState{
-        totalRounds: rounds,
-        roundModels: roundModels,
-        reportDir:   reportDir,
-        config:      rc,
-    }
+    // ... 显示 /review、savedHistory ...
+    orch, err := cmds.NewReviewOrchestratorFromCommand(m.subcommandInput,
+        cmds.ResolveReviewOptions(m.cfg), m.resolveReviewProviders) // 单轮 [p] / 多轮对抗分配
+    if err != nil { /* 报错回 idle，不发第 1 轮 */ }
+    m.reviewOrch = orch
     m.isReviewing = true
-    return m.startReviewRound() // 启动第 1 轮（内部含 statusbar.Tick + nextEvent）
+    return m.startReviewRound()
 }
-```
 
-#### 2. `startReviewRound()` 新增
-
-```go
 func (m *Model) startReviewRound() tea.Cmd {
-    rs := m.reviewState
-    rs.currentRound++
-    round := rs.currentRound
-    role := resolveRole(round, rs.totalRounds)
-
-    provider := rs.roundModels[round-1]
-
-    // 本轮的确切输出路径（编排器分配，prompt 中无占位符；文件名含模型名）
-    outPath := cmds.ReportPathFor(rs.reportDir, round, role, provider.Model())
-    userPrompt := cmds.BuildReviewPrompt(role, round, rs.totalRounds, outPath, rs.reports)
-
-    forked := m.agent.Fork(agent.ForkConfig{
-        Provider:      provider,
-        MaxIterations: rs.config.maxIterations,
-        AllowedTools:  rs.config.allowedTools,
-        Logger:        m.agent.Logger(),
-    })
-    m.forkedAgent = forked
-
-    // 每轮重置流式状态（上一轮的气泡已在 TurnComplete 分支 FinishStreaming 封口；
-    // 第 1 轮由 sendReviewCommand 做过一次，幂等）
-    m.setState(stateWaiting)
-    m.chatview.ResetStreaming()
-    m.thinkingView.Reset()
-
-    // 显示轮次标题
-    roleName := []string{"审查者", "挑战者", "裁决者"}[role]
-    m.chatview.AppendTextDelta(
-        fmt.Sprintf("\n══════════ Round %d/%d — %s (%s) ══════════\n",
-            round, rs.totalRounds, roleName, provider.Model()))
-
-    // reviewOpts 同现有单轮逻辑（chatOpts + thinking 覆盖），在 sendReviewCommand 构造一次复用
-    ctx := m.startTurn() // 每轮新 ctx + streamGen++（上一轮迟到的事件自动失效）
-    m.eventCh = forked.Agent().RunOneOffStream(ctx, provider,
-        m.systemPrompt, userPrompt, reviewOpts,
-        agent.OneOffMeta{Kind: fmt.Sprintf("review-round-%d", round), SessionID: m.currentSessionID()})
+    spec, _ := m.reviewOrch.Next()
+    forked := m.agent.Fork(agent.ForkConfig{Provider: spec.Provider, ...})
+    if m.reviewOrch.IsMultiRound() { /* Round N/M banner */ }
+    m.eventCh = forked.Agent().RunOneOffStream(ctx, spec.Provider,
+        m.systemPrompt, spec.Prompt, reviewOpts,
+        agent.OneOffMeta{Kind: spec.Kind, ...})
     return tea.Batch(m.statusbar.Tick(), m.nextEvent())
 }
 ```
 
-#### 3. `TurnComplete` 事件处理修改
-
-插入位置：`case agent.AgentEventTurnComplete:` 的**最顶部**（在 `m.history = event.Messages` 和 compact 处理之前）——中间轮全程不碰 `m.history`，`savedHistory` 保持非 nil。
+`TurnComplete` 分支（最顶部，中间轮不碰 `m.history`）：
 
 ```go
-case agent.AgentEventTurnComplete:
-    if m.reviewState != nil {
-        rs := m.reviewState
-
-        if rs.currentRound < rs.totalRounds {
-            // ===== 中间轮：完整收尾后链式启动下一轮 =====
-            m.finishReviewRound(event)         // 收尾动作抽成 helper（见下），与错误分支共用
-            return m.startReviewRound()        // 不恢复历史，不进正常分支
-        }
-
-        // ===== 最终轮：清状态，fall through 走正常 one-off 收尾 =====
-        // 保留 m.forkedAgent —— 正常分支会在 Close 前读取旁路记录路径
-        // （若在这里提前 Close，正常分支会退化为读 m.agent 的陈旧路径，
-        //   末尾的"📄 旁路记录"将指向错误文件）。
-        // usage 累积、FinishStreaming、savedHistory 恢复也都由正常分支完成。
-        m.recordReviewReport(rs)
-        m.isReviewing = false
-        m.reviewState = nil
-        m.chatview.AppendTextDelta(fmt.Sprintf(
-            "\n✅ 对抗式审查完成 (%d/%d rounds)\n", rs.totalRounds, rs.totalRounds))
-        // 多轮耗时长，完成时主动通知（正常分支对 one-off 不通知）
-        if m.notifyOnComplete && !herdrNotifications(m.cfg) {
-            notifyTerminal("tachi", "对抗式审查完成")
-        }
-        // fall through
+if m.reviewOrch != nil {
+    done, report := m.reviewOrch.Complete()
+    if !done { // 中间轮：封口气泡、累积 usage、关 fork、链下一轮
+        return m.startReviewRound()
     }
-
-    // 原有 TurnComplete 逻辑...
-```
-
-落盘校验（编排器自行 `os.Stat`，不依赖 LLM 自觉）：
-
-```go
-// finishReviewRound 执行一轮结束时的收尾动作，中间轮与 AgentEventError
-// 分支共用，避免"正常分支的收尾动作一个都不能省"在多处复制后漂移。
-func (m *Model) finishReviewRound(event agent.AgentEvent) {
-    rs := m.reviewState
-    m.chatview.FinishStreaming()       // 封口上一轮流式气泡
-    if event.Usage != nil {
-        m.accumulateUsage(event.Usage) // 每轮成本都计入 /usage（N 倍成本更要可见）
-    }
-    m.recordReviewReport(rs)           // 校验报告落盘 + UI 提示（见下）
-    if m.forkedAgent != nil {
-        m.forkedAgent.Close()
-        m.forkedAgent = nil
-    }
-}
-
-// recordReviewReport 校验本轮报告是否落盘，更新 rs.reports 并在 UI 提示。
-func (m *Model) recordReviewReport(rs *reviewState) {
-    role := resolveRole(rs.currentRound, rs.totalRounds)
-    model := rs.roundModels[rs.currentRound-1].Model()
-    path := cmds.ReportPathFor(rs.reportDir, rs.currentRound, role, model)
-    _, err := os.Stat(path)
-    saved := err == nil
-    rs.reports = append(rs.reports, roundReport{Round: rs.currentRound, Path: path, Saved: saved})
-    if saved {
-        m.chatview.AddMessage(chatMessage{Role: "oneoff_note", Content: "💾 报告已保存: " + path})
-    } else {
-        // 策略：继续链，下一轮 prompt 会标注该轮缺失（BuildReviewPrompt 的 prev 参数）
-        m.chatview.AddMessage(chatMessage{Role: "error",
-            Content: fmt.Sprintf("⚠️ 第 %d 轮未成功保存报告，后续轮次将跳过它", rs.currentRound)})
-    }
+    // 最终轮：清 reviewOrch，fall through 走正常 one-off 收尾
+    //（savedHistory 恢复、usage、FinishStreaming、fork Close 全在正常分支）
 }
 ```
 
-#### 4. `AgentEventError` 分支修改
+`AgentEventError` 分支同理在最顶部清理 `m.reviewOrch` / `isReviewing`（取消与
+失败都产生 `AgentEventError` 而非 `TurnComplete`，两个分支缺一不可）。
 
-任何一轮中途 API 失败/超时/取消时，agent loop 发的是 `AgentEventError` 而非 `TurnComplete`。现有 error 分支（model_events.go:345）会恢复 `savedHistory`、关 fork、清队列、`setState(stateIdle)`，但不知道 `reviewState`——不清理的话 `isReviewing` 永远为 true，用户输入被永久阻塞，`reviewState` 还会泄漏到下一次 `/review`。
-
-```go
-case agent.AgentEventError:
-    // 对抗式审查中断清理（放在现有逻辑之前）
-    wasReviewing := m.reviewState != nil
-    if wasReviewing {
-        m.reviewState = nil
-        m.isReviewing = false
-    }
-
-    // ... 现有逻辑（compactForSwitch 检查、savedHistory 恢复、fork 关闭、清 pendingQueue）...
-
-    if event.Result != nil && event.Result.ExitReason == agent.ExitReasonInterrupted {
-        m.chatview.FinishStreaming()
-        if wasReviewing {
-            m.chatview.AddMessage(chatMessage{Role: "assistant", Content: "⏹️ 对抗式审查已取消"})
-        }
-    } else {
-        // 现有错误提示——审查轮失败时链自然终止（reviewState 已在上面清理），无需额外处理
-        ...
-    }
-```
-
-#### 5. 用户输入阻塞
+**同步前端（ACP/channel）**：`orch.Run(...)` 一行驱动：
 
 ```go
-// model.go Update() 输入处理中，stateStreaming 分支**之前**
-// （与 isResearching 阻塞同位置，参照 model.go:532）：
-if m.isReviewing {
-    m.chatview.AddMessage(chatMessage{
-        Role:    "assistant",
-        Content: "⚔️ 对抗式审查进行中，请等待完成",
-    })
-    return m, nil
-}
+orch, err := cmds.NewReviewOrchestratorFromCommand("/review "+args, ropts,
+    func(rounds int) ([]llm.Provider, error) { /* 单轮 [reviewProvider] / 多轮对抗分配 */ })
+if err != nil { sendTextUpdate(...); return EndTurn, err }
+
+stopReason := acp.StopReasonEndTurn
+err = orch.Run(func(spec cmds.RoundSpec) error {
+    forked := aiAgent.Fork(agent.ForkConfig{Provider: spec.Provider, ...})
+    defer forked.Close()
+    stopReason, _, err = streamToACP(ctx, sess, conn,
+        forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt,
+            spec.Prompt, opts, agent.OneOffMeta{Kind: spec.Kind, ...}))
+    if err != nil { return err }
+    if stopReason != acp.StopReasonEndTurn { return cmds.ErrStopReview } // 客户端断开等
+    return nil
+})
+sess.history = nil // one-off 不入会话缓存
+if errors.Is(err, cmds.ErrStopReview) { return stopReason, nil }
+if err != nil { return acp.StopReasonEndTurn, err }
+return acp.StopReasonEndTurn, nil
 ```
 
-**为什么必须在 `stateStreaming` 分支之前**：流式期间的用户输入会进入 `pendingQueue`（model.go:565），而 agent 在工具边界发起 steer 检查时，队列内容会被 join 后经 `steerCh` **注入正在运行的审查 fork**（model_events.go 的 steer 分支）——破坏轮次隔离、污染审查结论，还会被记进该轮的 transcript。拦截在入队之前，steer drain 发出的就是空串，审查轮不受干扰。
+> 💰 **成本提示**：N 轮 = N 次独立 fork + N 次完整 LLM 调用，每轮都要重新跑
+> git diff，总成本约为单轮审查的 **N 倍**。`/review N` 上限 10；usage 已逐轮
+> 累积进 `/usage`。首版不做跨轮 diff 缓存（每轮独立 fork、上下文隔离是设计约束）。
 
-#### 6. Ctrl+C 中断
+**贯穿全节的两条状态机纪律（前端实现必须遵守）：**
 
-```go
-// handleCtrlC() 中，通用 streaming 取消分支之前插入：
-if m.isReviewing && m.cancelFunc != nil {
-    m.cancelFunc()
-    // 关键：不立即恢复 savedHistory、不 setState(idle)、不清 reviewState。
-    // 取消的流会尾随一个 AgentEventError(ExitReasonInterrupted)，由 error
-    // 分支统一完成：savedHistory 恢复、fork 关闭、reviewState 清理、
-    // setState(idle)（见第 4 点）。
-    // 若在这里提前恢复 savedHistory，尾随事件的 m.history = event.Messages
-    // 会把被取消轮次的 fork 消息（git diff、工具调用）写进主历史——污染。
-    m.pendingQueue = nil
-    m.chatview.RemovePendingItems()
-    m.statusbar.SetPendingCount(0)
-    m.chatview.MarkPendingToolsInterrupted()
-    // 与通用 streaming 取消分支保持一致（tui/model.go 已实现）：
-    // 0) 清理模态 —— review fork 的工具集含 Bash，可能触发权限确认模态；
-    //    不清的话 pendingConfirm/askUserView 悬挂到错误事件落地之后（error
-    //    分支不负责清模态），下次 ToolConfirmation 会覆盖但 UI 状态已脏。
-    m.pendingConfirm = nil
-    m.askUserView = nil
-    // 1) 杀掉后台进程 —— review fork 共享父的 ProcessManager（agent_fork.go），
-    //    fork 内 background=true 启动的进程同样要随 Ctrl+C 终止；
-    // 2) 继续读 eventCh —— 尾随的 AgentEventError 需要被 nextEvent 接住才能
-    //    触发 error 分支的清理（review 轮无确认模态、旧 cmd 链通常存活，
-    //    但显式排队更稳健，与通用分支同源）。
-    if m.agent != nil {
-        m.agent.KillBackgroundProcesses()
-    }
-    if m.eventCh != nil {
-        return m, m.nextEvent()
-    }
-    return m, nil
-}
-```
+1. **`savedHistory` 是 one-off 的唯一标记**（TUI：`isOneOff := m.savedHistory != nil`）。
+   多轮期间它必须**一直保持非 nil**，直到最终轮 `TurnComplete` 由正常分支恢复——
+   中间任何提前恢复都会让后续事件的 `m.history = event.Messages` 用审查轮消息
+   污染主历史。
+2. **取消/失败产生的是 `AgentEventError` 而非 `TurnComplete`**（agent_loop.go 的
+   ctx.Done 分支）。多轮调度必须同时挂在两个事件分支上，缺一不可。
 
-### ACP 端
-
-ACP 端无 TUI 状态机，直接串行循环，但同样的纪律适用（编排器拥有路径、落盘校验、终止条件完整）。多模型分配同样复用共享的 `cmds.ResolveRoundModels()`（见第四节——纯函数在 `agent/commands`，两端行为一致）：
-
-```go
-func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
-    rounds := cmds.ResolveReviewRounds("/review "+args, sess.cfg)
-    if rounds == 1 {
-        // 现有单轮逻辑，完全不变
-        ...
-    }
-
-    // 名字 → provider 解析（fail fast：无法解析则返回错误，不开始第 1 轮）
-    // 与 TUI 端相同的三来源：adversarial.models（取模）→ judge_model（最终轮固定）
-    // → review.provider / 主 provider（fallback）。解析失败 → 直接返回错误。
-    // 注意 ResolveRoundModels 本身是纯分配不报错；"配置了但解析失败"的检查
-    // 必须在调用前完成（models 列表里出现 nil provider → 视为解析失败）。
-    roundModels := cmds.ResolveRoundModels(resolvedModels, resolvedJudge, fallbackProvider, rounds)
-
-    // reportDir 用秒级精度（20060102-150405），避免同分钟多次 /review 撞目录
-    // os.MkdirAll(reportDir)
-    ...
-
-    var reports []roundReport
-    for round := 1; round <= rounds; round++ {
-        role := resolveRole(round, rounds)
-        provider := roundModels[round-1]
-        outPath := cmds.ReportPathFor(reportDir, round, role, provider.Model())
-        prompt := cmds.BuildReviewPrompt(role, round, rounds, outPath, reports)
-
-        forked := aiAgent.Fork(...)
-        stopReason, err := streamToACP(ctx, sess, conn,
-            forked.Agent().RunOneOffStream(ctx, provider, systemPrompt, prompt, opts,
-                agent.OneOffMeta{Kind: fmt.Sprintf("review-round-%d", round), SessionID: acpOneoffSessionID(sess)}))
-        forked.Close()
-
-        // 落盘校验，更新 reports（缺失轮次在后续 prompt 中标注）
-        _, statErr := os.Stat(outPath)
-        reports = append(reports, roundReport{Round: round, Path: outPath, Saved: statErr == nil})
-
-        // 任何非自然完成都终止链：MaxTurns / Cancelled / Refusal / 传输错误
-        if err != nil || stopReason != acp.StopReasonEndTurn {
-            sess.history = nil
-            return stopReason, err
-        }
-    }
-
-    sess.history = nil
-    return acp.StopReasonEndTurn, nil
-}
-```
-
----
+**TUI 特有 UI 职责**（不属编排逻辑，留在前端）：
+- 轮次 banner（`Round N/M — 角色 (model)`）与完成横幅、系统通知；
+- 报告落盘提示（💾 已保存 / ⚠️ 未保存，后续轮跳过）——校验本身在 `Complete()`；
+- 审查期间阻塞用户输入（`isReviewing`，在 `stateStreaming` 分支**之前**——流式期间
+  的输入会进 `pendingQueue`，steer 检查时被注入运行中的审查 fork，破坏轮次隔离）；
+- Ctrl+C：取消 + 排队读尾随的 `AgentEventError`，由 error 分支统一清理
+  （不提前恢复 `savedHistory`）。
 
 ## 七、Model 分配
 
@@ -692,50 +473,43 @@ func ResolveRoundModels(models []llm.Provider, judge, fallback llm.Provider, rou
 
 ### 配置示例与对应分配
 
-**例 1：单一模型，6 轮**
+> 以下示例中轮数来自命令参数 `/review N`（N 即所示 rounds），配置只控制模型分配。
+
+**例 1：单一模型，6 轮（`/review 6`）**
 
 ```yaml
 review:
   provider: claude-sonnet
-  adversarial:
-    enabled: true
-    rounds: 6
-    # models 未设置
+  # models 未设置
 ```
 
 → 所有 6 轮使用 `claude-sonnet`
 
-**例 2：3 个模型，6 轮**
+**例 2：3 个模型，6 轮（`/review 6`）**
 
 ```yaml
 review:
   adversarial:
-    enabled: true
-    rounds: 6
     models: [claude-sonnet, gpt-4o, claude-opus]
 ```
 
 → R1=sonnet, R2=4o, R3=opus, R4=sonnet, R5=4o, **R6=opus**（最后一轮是 opus 作为最终 Judge）
 
-**例 3：2 个模型，5 轮**
+**例 3：2 个模型，5 轮（`/review 5`）**
 
 ```yaml
 review:
   adversarial:
-    enabled: true
-    rounds: 5
     models: [claude-sonnet, gpt-4o]
 ```
 
 → R1=sonnet, R2=4o, R3=sonnet, R4=4o, **R5=sonnet**（最后一轮取模为 sonnet）
 
-**例 4：judge_model 固定最终轮**
+**例 4：judge_model 固定最终轮（`/review 5`）**
 
 ```yaml
 review:
   adversarial:
-    enabled: true
-    rounds: 5
     models: [claude-sonnet, gpt-4o]
     judge_model: claude-opus
 ```
@@ -787,22 +561,23 @@ review:
 
 | 文件 | 改动量 | 说明 |
 |------|--------|------|
-| `config/config.go` | ~15 行 | `ReviewConfig` 新增 `Adversarial *AdversarialReviewConfig`（含 `JudgeModel`） |
-| `agent/commands/commands.go` | ~32 行 | 新增共享纯函数 `ResolveReviewRounds()` + `ResolveRoundModels()`（TUI 与 ACP 复用；**不能放 `tui/`**，见第四节）+ `/review` Def 描述补充 `[rounds]` 参数提示 |
+| `config/config.go` | ~15 行 | `ReviewConfig` 新增 `Adversarial *AdversarialReviewConfig`（仅 `Models`/`JudgeModel`） |
+| `agent/commands/commands.go` | ~10 行 | `/review` Def 描述补充 `[rounds]` 参数提示 |
+| `agent/commands/review.go` | ~230 行 | 共享编排层：`ReviewOrchestrator`（构造/Next/Complete/Run）+ `ResolveReviewRounds()` + `ResolveRoundModels()` + `CheckAdversarialProviders()` + `ReviewOptions` + `RoundSpec`/`ErrStopReview`（**不能放 `tui/`**，见第四节） |
 | `agent/commands/prompts.go` | ~150 行 | 新增 `BuildReviewPrompt()`、`ReviewRole`/`roundReport` 类型、`resolveRole()`、`roleFileSuffix()`、`ReportPathFor()`、`sanitizeFileName()` |
 | `agent/agent_provider.go` | ~40 行 | `adversarial.models`/`judge_model` 的名字→provider 解析（Configure 阶段，配合 fail fast） |
-| `tui/commands.go` | ~110 行 | `sendReviewCommand()` 改造 + `startReviewRound()` + `finishReviewRound()` + `recordReviewReport()` + `resolveAdversarialProviders()`（三来源解析 + fail fast 检查，调共享 `ResolveRoundModels`） |
-| `tui/model_events.go` | ~60 行 | `TurnComplete` 顶部多轮调度分支 + `AgentEventError` 的 reviewState 清理 |
-| `tui/model.go` | ~35 行 | `reviewState`/`isReviewing` 字段 + 输入阻塞（stateStreaming 分支前）+ `handleCtrlC` 分支（杀后台进程 + 排 nextEvent） |
-| `agent/acp/commands.go` | ~75 行 | `handleACPReview` 串行多轮 + 完整终止条件（复用共享 `ResolveReviewRounds`/`ResolveRoundModels`） |
+| `tui/commands.go` | ~60 行 | `sendReviewCommand()` 改为构造编排器 + `startReviewRound()` 从 `Next()` 取 spec（无轮次分支） |
+| `tui/model_events.go` | ~45 行 | `TurnComplete` 顶部 `Complete()` 调度分支 + `AgentEventError` 的 reviewOrch 清理 |
+| `tui/model.go` | ~15 行 | `reviewOrch *cmds.ReviewOrchestrator` + `isReviewing`（删除 `reviewState`）+ 输入阻塞 + `handleCtrlC` 分支 |
+| `agent/acp/commands.go` | ~60 行 | `handleACPReview` 构造编排器 + `orch.Run()` 同步驱动（含 `ErrStopReview` 终止语义）；删除 `runAdversarialReviewRounds` |
 
 **测试计划：**
 
 | 文件 | 说明 |
 |------|------|
-| `agent/commands/review_test.go` | 纯函数单测：`ResolveReviewRounds`（enabled 开关/nil 与 Enabled 双判/CLI 覆盖/0/负数/非数字参数/超上限 clamp）、`ResolveRoundModels`（空/单/多/取模/judge 固定）、`resolveRole`（周期 + 最终轮固定 Judge） |
-| `tui/model_test.go` | 多轮链式调度（仿 `start_turn_test.go` 的事件注入）：中间轮不恢复 history、usage 逐轮累积、报告缺失标记、Ctrl+C 后由 error 分支完成清理、API 失败不残留 `isReviewing` |
-| `agent/acp/commands_test.go` | `handleACPReview` 多轮循环：轮次链完整、任一轮非自然完成即终止、`sess.history` 清空、fork 每轮 Close、报告缺失时后续 prompt 携带标记 |
+| `agent/commands/review_test.go` | 编排器单测（单轮 spec/多轮角色周期/FromCommand 解析/fail-fast 传播/Run 终止契约/构造校验）+ 纯函数单测（`ResolveReviewRounds`、`ResolveRoundModels`、`resolveRole`） |
+| `tui/review_test.go` | 多轮链式调度（事件注入）：中间轮不恢复 history、usage 逐轮累积、报告缺失标记、Ctrl+C 后由 error 分支完成清理、API 失败不残留 `isReviewing` |
+| `agent/acp/commands_test.go` | `handleACPReview` 多轮：轮次链完整、任一轮非自然完成即终止（`ErrStopReview` → 原 stop reason）、`sess.history` 清空、fork 每轮 Close、报告缺失时后续 prompt 携带标记 |
 
 **不需要改动：**
 - `agent/agent_fork.go` — 完全复用
@@ -815,13 +590,11 @@ review:
 
 | 场景 | 行为 |
 |------|------|
-| `adversarial` 未配置或 `enabled: false`（默认），无参 `/review` | 现有单轮，完全不变（注意：defaults 库对 nil 指针且无 default tag 的字段不分配，`Adversarial` 指针**恒为 nil**，必须同时判 `adv != nil && adv.Enabled`，只查 `Enabled` 会 nil pointer panic——见第三节） |
-| `enabled: false` + `/review 5` | **5 轮**——显式参数覆盖 `enabled` |
-| `enabled: true`，未设 `rounds` | 3 轮（default tag） |
-| `enabled: true`，`rounds: 0` | 3 轮（zero value 被 default 覆盖；config 层表达不了"0=单轮"，要单轮用 `enabled: false` 或 `/review 1`） |
-| `enabled: true`，`rounds: 1` | 单轮 |
-| `/review 0` / `/review 1` / 非数字参数 | 单轮（无论配置如何） |
-| 任意来源 rounds > 10 | clamp 到 10 |
+| 无参 `/review` | **单轮**，现有行为完全不变（多轮只由显式参数触发；`Adversarial` 指针未配置时恒为 nil，访问 `Models`/`JudgeModel` 前必须判空——见第三节） |
+| `/review N`（N ≥ 2） | **N 轮**对抗审查 |
+| `/review 0` / `/review 1` / 负数 / 非数字参数 | 单轮 |
+| `/review N` 且 N > 10 | clamp 到 10 |
+| 配置残留旧 `enabled:` / `rounds:` 键 | 非严格 yaml 静默忽略，加载正常 |
 | `judge_model` 已配置 | 最终轮固定使用，其余轮按 models 取模 |
 | 任一 models 条目无法解析为 provider | 第 1 轮启动前报错中止（fail fast） |
 | 某轮未成功保存报告 | 链继续，后续轮次 prompt 标注该轮缺失 |

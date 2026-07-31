@@ -306,14 +306,33 @@ type SubagentConfig struct {
 	WorktreeBranch  string `yaml:"worktree_branch"`  // default branch for worktree checkout (empty = detached HEAD)
 }
 
+// AdversarialReviewConfig holds the per-round model configuration for the
+// adversarial (multi-round) /review mode. Rounds are NOT configured here —
+// multi-round review is entered explicitly via "/review N" (N ≥ 2); no
+// argument means the single-round path. See
+// docs/2026-07-30-adversarial-review-design.md.
+//
+// NOTE (creasty/defaults behavior): Adversarial is a *pointer* without a
+// default tag, so defaults.Set() does NOT allocate it when the YAML omits the
+// `adversarial:` key — callers must check `adv != nil` before touching
+// Models/JudgeModel (SetupAdversarialProviders and CheckAdversarialProviders
+// both gate on it). Old configs that still carry the removed `enabled:` /
+// `rounds:` keys load fine: yaml.Unmarshal is non-strict and ignores unknown
+// keys.
+type AdversarialReviewConfig struct {
+	Models     []string `yaml:"models"`      // per-round model names (empty → all rounds use review.provider)
+	JudgeModel string   `yaml:"judge_model"` // fixed model for the final round (empty → modulo assignment)
+}
+
 // ReviewConfig holds configuration for the /review code review command.
 // When Provider is empty, the main provider is used.
 // AllowedTools defaults to [Bash, ReadFile, WriteFile, Glob, Grep] when empty (handled in code).
 type ReviewConfig struct {
-	Provider      string   `yaml:"provider"`                     // provider name, empty → use main
-	MaxIterations int      `yaml:"max_iterations" default:"200"` // iteration budget
-	AllowedTools  []string `yaml:"allowed_tools"`                // default: [Bash, ReadFile, Glob, Grep] (code-level fallback)
-	Thinking      *bool    `yaml:"thinking" default:"false"`     // enable extended thinking
+	Provider      string                   `yaml:"provider"`                     // provider name, empty → use main
+	MaxIterations int                      `yaml:"max_iterations" default:"200"` // iteration budget
+	AllowedTools  []string                 `yaml:"allowed_tools"`                // default: [Bash, ReadFile, Glob, Grep] (code-level fallback)
+	Thinking      *bool                    `yaml:"thinking" default:"false"`     // enable extended thinking
+	Adversarial   *AdversarialReviewConfig `yaml:"adversarial"`                  // multi-round mode (nil when unconfigured, see note above)
 }
 
 // ChannelConfig groups configuration for all IM channel backends.

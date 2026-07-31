@@ -1095,8 +1095,22 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 // tools (Bash, ReadFile, Glob, Grep), then runs a code review of the current
 // repo changes. The forked agent does NOT inherit conversation history or
 // session context — it gets a clean prompt to review git diff output.
+//
+// With "/review N" (N ≥ 2), the command runs N sequential rounds in isolated
+// forks: Reviewer → Challenger → Judge (role cycle, final round fixed as
+// Judge). Without a round count, /review stays the single-round code review.
+// See docs/2026-07-30-adversarial-review-design.md.
+//
+// The shared cmds.ReviewOrchestrator owns all orchestration state (round
+// resolution, provider assignment with fail-fast, report directory, round
+// bookkeeping); this frontend only constructs it and drives Next()/Complete()
+// via startReviewRound / the TurnComplete branch.
 func (m *Model) sendReviewCommand() tea.Cmd {
-	m.chatview.AddMessage(chatMessage{Role: "user", Content: "/review"})
+	display := m.subcommandInput
+	if display == "" {
+		display = "/review"
+	}
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
 	m.setState(stateWaiting)
 	m.chatview.ResetStreaming()
 	m.thinkingView.Reset()
@@ -1108,77 +1122,103 @@ func (m *Model) sendReviewCommand() tea.Cmd {
 	m.savedHistory = make([]llm.Message, len(m.history))
 	copy(m.savedHistory, m.history)
 
-	// Resolve review config — fall back to defaults when not configured.
-	rc := m.resolveReviewConfig()
-
-	// Fork a child agent with configurable tools.
-	forked := m.agent.Fork(agent.ForkConfig{
-		Provider:      rc.provider,
-		MaxIterations: rc.maxIterations,
-		AllowedTools:  rc.allowedTools,
-		Logger:        m.agent.Logger(),
-	})
-	m.forkedAgent = forked
-
-	// Apply thinking config: if review config explicitly sets thinking,
-	// override chatOpts; otherwise inherit (default: disabled).
-	reviewOpts := m.chatOpts
-	if rc.thinking != nil {
-		reviewOpts.Thinking = rc.thinking
+	// Round resolution, provider assignment (fail-fast on unresolvable
+	// adversarial models) and report-dir creation all live in the shared
+	// orchestrator; any failure aborts before round 1.
+	orch, err := cmds.NewReviewOrchestratorFromCommand(m.subcommandInput,
+		cmds.ResolveReviewOptions(m.cfg), m.resolveReviewProviders, "")
+	if err != nil {
+		m.savedHistory = nil
+		m.chatview.AddMessage(chatMessage{Role: "error", Content: err.Error()})
+		m.setState(stateIdle)
+		// Defensive: normally already nil at this point, but never leave a
+		// stale cancel/event channel behind on a re-entrant path.
+		m.cancelFunc = nil
+		m.eventCh = nil
+		return nil
 	}
 
-	ctx := m.startTurn()
-
-	m.eventCh = forked.Agent().RunOneOffStream(ctx, rc.provider,
-		m.systemPrompt, cmds.ReviewUserPrompt(), reviewOpts,
-		agent.OneOffMeta{Kind: "review", SessionID: m.currentSessionID()})
-
-	return tea.Batch(
-		m.statusbar.Tick(),
-		m.nextEvent(),
-	)
+	m.reviewOrch = orch
+	m.isReviewing = true
+	return m.startReviewRound() // starts round 1 (contains statusbar.Tick + nextEvent)
 }
 
-// reviewResolved holds the resolved review configuration after applying
-// config defaults and provider resolution.
-type reviewResolved struct {
-	provider      llm.Provider
-	maxIterations int
-	allowedTools  []string
-	thinking      *bool
-}
-
-// resolveReviewConfig reads the review config from m.cfg and resolves the
-// provider, falling back to the main provider with sensible defaults.
-func (m *Model) resolveReviewConfig() reviewResolved {
-	// Determine allowed tools (slice can't use `default` tag, handle in code).
-	var allowedTools []string
-	if m.cfg != nil && len(m.cfg.Review.AllowedTools) > 0 {
-		allowedTools = m.cfg.Review.AllowedTools
-	} else {
-		allowedTools = cmds.DefaultReviewAllowedTools()
-	}
-
-	// MaxIterations and Thinking are populated by defaults.Set() from struct tags.
-	maxIter := cmds.DefaultReviewMaxIterations
-	thinking := new(bool)
-	if m.cfg != nil {
-		maxIter = m.cfg.Review.MaxIterations
-		thinking = m.cfg.Review.Thinking
-	}
-
-	// Use pre-resolved review provider from agent (if configured), or fall
-	// back to main provider.
+// resolveReviewProviders resolves per-round providers: single-round reviews
+// use review.provider (or the main provider); multi-round goes through the
+// adversarial model assignment (models modulo-cycled, judge fixed on the
+// final round) with the fail-fast check — any configured but unresolvable
+// name aborts before round 1 (silently falling back to the main model would
+// make "multi-model adversarial review" a lie).
+func (m *Model) resolveReviewProviders(rounds int) ([]llm.Provider, error) {
 	provider := m.agent.Provider()
 	if rp := m.agent.ReviewProvider(); rp != nil {
 		provider = rp
 	}
+	if rounds == 1 {
+		return []llm.Provider{provider}, nil
+	}
+	return m.agent.ResolveAdversarialRoundModels(m.cfg, provider, rounds)
+}
 
-	return reviewResolved{
-		provider:      provider,
-		maxIterations: maxIter,
-		allowedTools:  allowedTools,
-		thinking:      thinking,
+// startReviewRound asks the shared orchestrator for the next round's spec,
+// forks a fresh isolated agent for it, and starts its one-off stream. Every
+// round gets a new ctx and a streamGen bump so late events from the previous
+// round expire.
+func (m *Model) startReviewRound() tea.Cmd {
+	spec, ok := m.reviewOrch.Next()
+	if !ok {
+		return nil // defensive — Complete returns done on the final round
+	}
+	orch := m.reviewOrch
+
+	forked := m.agent.Fork(agent.ForkConfig{
+		Provider:      spec.Provider,
+		MaxIterations: orch.Options().MaxIterations,
+		AllowedTools:  orch.Options().AllowedTools,
+		Logger:        m.agent.Logger(),
+	})
+	m.forkedAgent = forked
+
+	// Reset per-round streaming state (the previous round's bubble was sealed
+	// by FinishStreaming in the TurnComplete branch; round 1 was already
+	// reset in sendReviewCommand — idempotent).
+	m.setState(stateWaiting)
+	m.chatview.ResetStreaming()
+	m.thinkingView.Reset()
+
+	if orch.IsMultiRound() {
+		roleName := []string{"审查者", "挑战者", "裁决者"}[spec.Role]
+		m.chatview.AppendTextDelta(fmt.Sprintf(
+			"\n══════════ Round %d/%d — %s (%s) ══════════\n",
+			spec.Round, orch.TotalRounds(), roleName, spec.Provider.Model()))
+	}
+
+	// Apply thinking config: if review config explicitly sets thinking,
+	// override chatOpts; otherwise inherit (default: disabled).
+	reviewOpts := m.chatOpts
+	if orch.Options().Thinking != nil {
+		reviewOpts.Thinking = orch.Options().Thinking
+	}
+
+	ctx := m.startTurn()
+	m.eventCh = forked.Agent().RunOneOffStream(ctx, spec.Provider,
+		m.systemPrompt, spec.Prompt, reviewOpts,
+		agent.OneOffMeta{Kind: spec.Kind, SessionID: m.currentSessionID()})
+	return tea.Batch(m.statusbar.Tick(), m.nextEvent())
+}
+
+// showReviewReportHint renders the per-round on-disk verification hint (the
+// verification itself is done by the shared orchestrator's Complete).
+// Single-round reviews have no orchestrator-owned path and show nothing.
+func (m *Model) showReviewReportHint(report cmds.RoundReport) {
+	if report.Path == "" {
+		return
+	}
+	if report.Saved {
+		m.chatview.AddMessage(chatMessage{Role: "oneoff_note", Content: "💾 报告已保存: " + report.Path})
+	} else {
+		m.chatview.AddMessage(chatMessage{Role: "error",
+			Content: fmt.Sprintf("⚠️ 第 %d 轮未成功保存报告，后续轮次将跳过它", report.Round)})
 	}
 }
 

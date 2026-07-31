@@ -178,6 +178,17 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	} else if hasCfg {
 		a.SetupReviewProvider(cfg.FullConfig)
 	}
+	// Adversarial review providers: models + judge are one Setup unit — the
+	// caller either pre-resolves BOTH (config-based resolution is skipped,
+	// matching the sibling providers' precedence) or neither (names are
+	// resolved from FullConfig here). SetupAdversarialProviders resets first,
+	// so an explicit re-setup can never accumulate duplicate entries.
+	if cfg.AdversarialModels != nil {
+		a.Config.AdversarialModels = cfg.AdversarialModels
+		a.Config.AdversarialJudge = cfg.AdversarialJudge
+	} else if hasCfg {
+		a.SetupAdversarialProviders(cfg.FullConfig)
+	}
 	if cfg.RunProvider != nil {
 		a.Config.RunProvider = cfg.RunProvider
 	} else if hasCfg {

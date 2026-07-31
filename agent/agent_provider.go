@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -12,6 +13,36 @@ import (
 // SetTitleGenEnabled enables or disables LLM-based title generation.
 func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
 	a.titleGenEnabled = enabled
+}
+
+// resolveProviderByName resolves a configured provider name to an llm.Provider
+// (alias-aware lookup via cfg.FindProvider). Returns nil on any failure with a
+// warn/error log naming the provider — callers decide between silent fallback
+// (dedicated providers) and fail-fast (adversarial review, checked later at
+// /review start). Shared by every Setup*Provider method so the four-step
+// resolve dance (FindProvider → ResolveProviderConfig → NewProvider → log)
+// lives in exactly one place.
+func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string) llm.Provider {
+	pCfg := cfg.FindProvider(name)
+	if pCfg == nil {
+		a.Config.Logger.Info(context.Background(), "Agent: "+purpose+" provider not found, falling back to main model", "provider", name)
+		return nil
+	}
+
+	resolved, err := config.ResolveProviderConfig(pCfg)
+	if err != nil {
+		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve "+purpose+" provider, falling back to main model", err, "provider", name)
+		return nil
+	}
+
+	p, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	if err != nil {
+		a.Config.Logger.Error(context.Background(), "Agent: failed to create "+purpose+" provider, falling back to main model", err, "provider", name)
+		return nil
+	}
+
+	a.Config.Logger.Info(context.Background(), "Agent: using "+purpose+" provider", "provider", name, "type", resolved.Type, "model", resolved.Model)
+	return p
 }
 
 // SetupTitleProvider resolves and creates a dedicated LLM provider for title
@@ -25,26 +56,11 @@ func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
 		return
 	}
 
-	tpCfg := cfg.FindProvider(tpName)
-	if tpCfg == nil {
-		a.Config.Logger.Info(context.Background(), "Agent: title provider not found, falling back to main model", "provider", tpName)
+	tp := a.resolveProviderByName(cfg, "title", tpName)
+	if tp == nil {
 		return
 	}
-
-	resolved, err := config.ResolveProviderConfig(tpCfg)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve title provider, falling back to main model", err, "provider", tpName)
-		return
-	}
-
-	tp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to create title provider, falling back to main model", err, "provider", tpName)
-		return
-	}
-
 	a.titleModelProvider = tp
-	a.Config.Logger.Info(context.Background(), "Agent: using title provider for session title generation", "provider", tpName, "type", resolved.Type, "model", resolved.Model)
 }
 
 // SetupCommitProvider resolves and creates a dedicated LLM provider for /commit
@@ -56,26 +72,7 @@ func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
 		return
 	}
 
-	cpCfg := cfg.FindProvider(cpName)
-	if cpCfg == nil {
-		a.Config.Logger.Info(context.Background(), "Agent: commit provider not found, falling back to main model", "provider", cpName)
-		return
-	}
-
-	resolved, err := config.ResolveProviderConfig(cpCfg)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve commit provider, falling back to main model", err, "provider", cpName)
-		return
-	}
-
-	cp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to create commit provider, falling back to main model", err, "provider", cpName)
-		return
-	}
-
-	a.Config.CommitProvider = cp
-	a.Config.Logger.Info(context.Background(), "Agent: using commit provider for /commit message generation", "provider", cpName, "type", resolved.Type, "model", resolved.Model)
+	a.Config.CommitProvider = a.resolveProviderByName(cfg, "commit", cpName)
 }
 
 // CommitProvider returns the dedicated commit provider, or nil if none is configured
@@ -102,26 +99,54 @@ func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
 		return
 	}
 
-	rpCfg := cfg.FindProvider(rpName)
-	if rpCfg == nil {
-		a.Config.Logger.Info(context.Background(), "Agent: review provider not found, falling back to main model", "provider", rpName)
+	a.Config.ReviewProvider = a.resolveProviderByName(cfg, "review", rpName)
+}
+
+// ResolveAdversarialRoundModels validates the configured adversarial review
+// providers and assigns a provider to every round, in one call — the single
+// entry point both frontends (TUI / ACP) use. It combines the fail-fast
+// check (cmds.CheckAdversarialProviders: configured-but-unresolvable model
+// names abort before round 1) with the round assignment
+// (cmds.ResolveRoundModels: models modulo-cycled, judge fixed on the final
+// round, fallback used when no models are configured).
+//
+// cfg distinguishes "configured" from "not configured" (the Adversarial
+// pointer is nil when unconfigured). rounds comes from
+// cmds.ResolveReviewRounds.
+func (a *AIAgent) ResolveAdversarialRoundModels(cfg *config.Config, fallback llm.Provider, rounds int) ([]llm.Provider, error) {
+	models := a.Config.AdversarialModels
+	judge := a.Config.AdversarialJudge
+	if err := cmds.CheckAdversarialProviders(cfg, models, judge); err != nil {
+		return nil, err
+	}
+	return cmds.ResolveRoundModels(models, judge, fallback, rounds), nil
+}
+
+// SetupAdversarialProviders resolves review.adversarial.models / judge_model
+// names into llm.Provider at Configure time, mirroring SetupReviewProvider.
+// Unresolvable names are recorded as nil with a warn log — the fail-fast
+// check ("configured but failed to resolve → abort before round 1") happens
+// in the /review handlers (sendReviewCommand / handleACPReview), which have
+// access to the config to distinguish "configured" from "not configured".
+//
+// Idempotent: resets Config.AdversarialModels/Judge before populating, so
+// repeated calls (Configure + an explicit re-setup) never accumulate
+// entries — appending would silently grow the slice and trip
+// cmds.CheckAdversarialProviders' length comparison (misreporting a
+// configured-but-unresolved fail-fast on an otherwise healthy setup).
+func (a *AIAgent) SetupAdversarialProviders(cfg *config.Config) {
+	if cfg == nil || cfg.Review.Adversarial == nil {
 		return
 	}
-
-	resolved, err := config.ResolveProviderConfig(rpCfg)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve review provider, falling back to main model", err, "provider", rpName)
-		return
+	a.Config.AdversarialModels = nil
+	a.Config.AdversarialJudge = nil
+	adv := cfg.Review.Adversarial
+	for _, name := range adv.Models {
+		a.Config.AdversarialModels = append(a.Config.AdversarialModels, a.resolveProviderByName(cfg, "adversarial review", name))
 	}
-
-	rp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to create review provider, falling back to main model", err, "provider", rpName)
-		return
+	if adv.JudgeModel != "" {
+		a.Config.AdversarialJudge = a.resolveProviderByName(cfg, "adversarial review", adv.JudgeModel)
 	}
-
-	a.Config.ReviewProvider = rp
-	a.Config.Logger.Info(context.Background(), "Agent: using review provider for /review code review", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
 }
 
 // RunProvider returns the dedicated run provider, or nil if none is configured
@@ -139,26 +164,7 @@ func (a *AIAgent) SetupRunProvider(cfg *config.Config) {
 		return
 	}
 
-	rpCfg := cfg.FindProvider(rpName)
-	if rpCfg == nil {
-		a.Config.Logger.Info(context.Background(), "Agent: run provider not found, falling back to main model", "provider", rpName)
-		return
-	}
-
-	resolved, err := config.ResolveProviderConfig(rpCfg)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve run provider, falling back to main model", err, "provider", rpName)
-		return
-	}
-
-	rp, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to create run provider, falling back to main model", err, "provider", rpName)
-		return
-	}
-
-	a.Config.RunProvider = rp
-	a.Config.Logger.Info(context.Background(), "Agent: using run provider for tachi -p mode", "provider", rpName, "type", resolved.Type, "model", resolved.Model)
+	a.Config.RunProvider = a.resolveProviderByName(cfg, "run", rpName)
 }
 
 // generateTitle uses the LLM to produce a concise session title from the first

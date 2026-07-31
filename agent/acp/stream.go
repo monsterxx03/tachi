@@ -16,16 +16,27 @@ import (
 
 // streamToACP consumes the AgentEvent channel and converts events into ACP
 // session/update notifications. Blocks until the channel is closed or ctx is cancelled.
-// Returns the final StopReason and cumulative usage from the last turn.
+// Returns the final StopReason, cumulative usage from the last turn, and — when the
+// run ended in a genuine failure (API error, budget exhaustion) — the underlying
+// error. User-initiated cancellation is NOT a failure: it arrives either as a
+// cancelled ctx or as an AgentEventError with ExitReason Interrupted/Cancelled (the
+// agent loop attaches ctx.Err() to both — see agent_loop.go terminalError), and maps
+// to StopReasonCancelled with a nil error. The error lets callers distinguish "the
+// turn failed" from a natural stop: the adversarial review chain terminates on a
+// non-nil error, while single-round handlers (which surface failures as text updates)
+// may ignore it. Note the StopReason alone is NOT a reliable failure signal — it
+// deliberately keeps the legacy behavior of mapping non-cancelled errors to EndTurn
+// (pinned by tests).
 func streamToACP(
 	ctx context.Context,
 	sess *ACPSession,
 	conn *acp.AgentSideConnection,
 	events <-chan agent.AgentEvent,
-) (acp.StopReason, *llm.Usage) {
+) (acp.StopReason, *llm.Usage, error) {
 	sessionID := acp.SessionId(sess.ID)
 	stopReason := acp.StopReasonEndTurn
 	var lastUsage *llm.Usage
+	var runErr error
 	toolArgs := make(map[string]string)      // toolID → accumulated args JSON
 	pendingStarts := make(map[string]string) // toolID → toolName (buffered start, sent when args arrive)
 
@@ -33,7 +44,7 @@ func streamToACP(
 		select {
 		case event, ok := <-events:
 			if !ok {
-				return stopReason, lastUsage
+				return stopReason, lastUsage, runErr
 			}
 
 			switch event.Type {
@@ -204,12 +215,32 @@ func streamToACP(
 				if event.Messages != nil {
 					sess.history = stripPendingToolCalls(event.Messages)
 				}
-				stopReason = acp.StopReasonEndTurn
-				if event.Result != nil && event.Result.Error != nil {
-					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
-						SessionId: sessionID,
-						Update:    acp.UpdateAgentMessageText("Error: " + event.Result.Error.Error()),
-					})
+				// A user-initiated cancellation also arrives as an
+				// AgentEventError — the agent loop attaches ctx.Err() to
+				// Interrupted/Cancelled exits (agent_loop.go terminalError).
+				// That is NOT a failure: map it to StopReasonCancelled
+				// (matching mapStopReason) and keep runErr nil, so the
+				// adversarial chain's cancel path stays a clean stop instead
+				// of a request-level error (previously the buffered-event
+				// race decided between the two at random).
+				if event.Result != nil &&
+					(event.Result.ExitReason == agent.ExitReasonInterrupted ||
+						event.Result.ExitReason == agent.ExitReasonCancelled) {
+					stopReason = acp.StopReasonCancelled
+				} else {
+					stopReason = acp.StopReasonEndTurn
+					if event.Result != nil && event.Result.Error != nil {
+						// Surface the failure as a text update AND carry it back
+						// as an error: single-round handlers keep their current
+						// behavior (EndTurn + text), while the adversarial review
+						// chain uses the error to stop before wasting the next
+						// round on a broken model.
+						runErr = event.Result.Error
+						_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+							SessionId: sessionID,
+							Update:    acp.UpdateAgentMessageText("Error: " + event.Result.Error.Error()),
+						})
+					}
 				}
 
 			case agent.AgentEventToolConfirmation:
@@ -230,7 +261,7 @@ func streamToACP(
 			}
 
 		case <-ctx.Done():
-			return acp.StopReasonCancelled, lastUsage
+			return acp.StopReasonCancelled, lastUsage, nil
 		}
 	}
 }

@@ -70,6 +70,14 @@ type pendingSwitchProvider struct {
 	contextWindow int64
 }
 
+// reviewOrch tracks an in-flight /review run (single or multi-round).
+// Non-nil reviewOrch + isReviewing=true means the orchestrator is between
+// round 1 and the final round's TurnComplete. The orchestrator owns the
+// report directory, every round's exact output path (written into the prompt
+// before the round starts, verified with os.Stat after it ends) and the
+// round/providers/reports bookkeeping — the TUI only drives Next()/Complete()
+// and renders. See agent/commands/review.go.
+
 // switchProviderMsg is sent by compactForModelSwitch's no-compaction early
 // return path. Since tea.Cmd closures run in a separate goroutine, they
 // MUST NOT mutate Model fields directly — instead they return a message
@@ -114,6 +122,8 @@ type Model struct {
 	savedHistory  []llm.Message      // conversation history saved before a one-off run (e.g. /commit)
 	isCompacting  bool               // true during compact LLM call (distinct from savedHistory)
 	isResearching bool               // true during deep research (blocks user input)
+	isReviewing   bool               // true during a review run (single or multi-round; blocks user input)
+	reviewOrch    *cmds.ReviewOrchestrator // non-nil while a review is running (see reviewOrch doc above)
 	forkedAgent   *agent.ForkedAgent // active forked agent (e.g. /review), closed on TurnComplete/error
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
@@ -497,6 +507,22 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case InputSubmitMsg:
 		text := string(msg)
+
+		// During adversarial review: block ALL input BEFORE command/skill
+		// resolution. Must be the first gate — streaming-time input would
+		// otherwise enter pendingQueue and get injected into the running
+		// review fork at the next steer check (breaking round isolation),
+		// and /skill-style inputs would slip through while state ==
+		// stateWaiting (round transitions), cancelling the round via
+		// startTurn in sendSkillMessage.
+		if m.isReviewing {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "⚔️ 对抗式审查进行中，请等待完成",
+			})
+			return m, nil
+		}
+
 		cmd := findCommand(text)
 		if cmd == nil {
 			cmd = findCommandByPrefix(text)
@@ -728,6 +754,39 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 			Role:    "assistant",
 			Content: "⏹️ 深度研究已取消",
 		})
+		return m, nil
+	}
+	if m.isReviewing && m.cancelFunc != nil {
+		m.cancelFunc()
+		// Key: do NOT restore savedHistory, do NOT setState(idle), do NOT clear
+		// reviewOrch here. The cancelled stream tails an
+		// AgentEventError(ExitReasonInterrupted); the error branch does the
+		// full cleanup (savedHistory restore, fork close, reviewOrch clear,
+		// setState(idle)). Restoring savedHistory early would let the trailing
+		// event's m.history = event.Messages write the cancelled fork's
+		// messages (git diff, tool calls) into the main history.
+		m.pendingQueue = nil
+		m.chatview.RemovePendingItems()
+		m.statusbar.SetPendingCount(0)
+		// Immediate visual feedback: mark in-progress tool calls as interrupted.
+		m.chatview.MarkPendingToolsInterrupted()
+		// Clear modals — the review fork's toolset includes Bash, which can
+		// trigger a permission confirmation modal; the error branch does not
+		// clear modals, so leaving them would leave the UI dirty until the
+		// next ToolConfirmation.
+		m.pendingConfirm = nil
+		m.askUserView = nil
+		// Kill background processes — the review fork shares the parent's
+		// ProcessManager, so background=true processes started inside a round
+		// must be terminated too.
+		if m.agent != nil {
+			m.agent.KillBackgroundProcesses()
+		}
+		// Keep reading the event channel: the trailing AgentEventError needs
+		// to be picked up by nextEvent to trigger the error branch cleanup.
+		if m.eventCh != nil {
+			return m, m.nextEvent()
+		}
 		return m, nil
 	}
 	if m.state != stateIdle && m.cancelFunc != nil {

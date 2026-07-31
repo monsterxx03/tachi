@@ -96,6 +96,11 @@ type AgentConfig struct {
 	RunProvider      llm.Provider
 	SubagentProvider llm.Provider
 
+	// --- 对抗式审查 Provider（由 SetupAdversarialProviders 在构造期回填；
+	//     空切片 = 未配置；nil 条目 = 配置了但解析失败，/review 启动前 fail fast）---
+	AdversarialModels []llm.Provider // review.adversarial.models 的解析结果（按配置顺序）
+	AdversarialJudge  llm.Provider   // review.adversarial.judge_model 的解析结果（nil = 未配置或失败）
+
 	// --- 权限策略 ---
 	PermissionPolicy *permission.Policy
 

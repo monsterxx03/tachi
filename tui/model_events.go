@@ -145,6 +145,51 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		return m.nextEvent()
 
 	case agent.AgentEventTurnComplete:
+		// ---- review dispatch (BEFORE anything else: intermediate rounds
+		//      must never touch m.history, and savedHistory must stay non-nil
+		//      until the final round's TurnComplete restores it in the normal
+		//      one-off branch) ----
+		if m.reviewOrch != nil {
+			done, report := m.reviewOrch.Complete()
+
+			if !done {
+				// ===== intermediate round: seal bubble, accumulate usage,
+				// close fork, chain the next round =====
+				m.chatview.FinishStreaming()
+				if event.Usage != nil {
+					m.accumulateUsage(event.Usage) // every round's cost shows in /usage
+				}
+				m.showReviewReportHint(report)
+				if m.forkedAgent != nil {
+					m.forkedAgent.Close()
+					m.forkedAgent = nil
+				}
+				return m.startReviewRound() // no history restore, no normal branch
+			}
+
+			// ===== final round: clear state, fall through to normal one-off handling =====
+			// Keep m.forkedAgent alive — the normal branch reads the one-off
+			// transcript path from it before closing (closing here would make
+			// the normal branch fall back to m.agent's stale path and the
+			// trailing "📄 旁路记录" would point at the wrong file).
+			// usage accumulation, FinishStreaming and savedHistory restore are
+			// all done by the normal branch.
+			m.showReviewReportHint(report)
+			total := m.reviewOrch.TotalRounds()
+			m.isReviewing = false
+			m.reviewOrch = nil
+			if total > 1 {
+				m.chatview.AppendTextDelta(fmt.Sprintf(
+					"\n✅ 对抗式审查完成 (%d/%d rounds)\n", total, total))
+				// Multi-round runs take a long time — notify proactively (the
+				// normal branch does not notify for one-offs).
+				if m.notifyOnComplete && !herdrNotifications(m.cfg) {
+					notifyTerminal("tachi", "对抗式审查完成")
+				}
+			}
+			// fall through
+		}
+
 		if event.Messages != nil {
 			m.history = event.Messages
 		}
@@ -344,6 +389,16 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 
 	case agent.AgentEventError:
 
+		// Review interruption cleanup — must run before the existing logic
+		// below (it knows nothing about reviewOrch; without this, isReviewing
+		// would stay true forever, blocking user input, and reviewOrch would
+		// leak into the next /review).
+		wasReviewing := m.reviewOrch != nil
+		if wasReviewing {
+			m.reviewOrch = nil
+			m.isReviewing = false
+		}
+
 		// Clean up pending model switch BEFORE restoring savedHistory.
 		// During a compact-for-switch, savedHistory holds the pre-compact
 		// history — restoring it would incorrectly roll back the conversation.
@@ -372,6 +427,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		m.statusbar.SetPendingCount(0)
 		if event.Result != nil && event.Result.ExitReason == agent.ExitReasonInterrupted {
 			m.chatview.FinishStreaming()
+			if wasReviewing {
+				m.chatview.AddMessage(chatMessage{Role: "assistant", Content: "⏹️ 对抗式审查已取消"})
+			}
 		} else {
 			errMsg := "Unknown error"
 			if event.Result != nil && event.Result.Error != nil {

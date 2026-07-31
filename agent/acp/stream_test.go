@@ -1,8 +1,11 @@
 package acp
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"io"
+	"strings"
 	"sync"
 	"testing"
 
@@ -10,6 +13,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
@@ -715,4 +719,86 @@ func extractUpdateContent(msg map[string]any, keys ...string) string {
 func assertString(v any) string {
 	s, _ := v.(string)
 	return s
+}
+
+// TestStreamToACP_ReturnsRunError pins the failure-signal contract: an
+// AgentEventError (API error / budget exhaustion) is returned as an error so
+// callers like the adversarial review chain can terminate, while the StopReason
+// keeps the legacy EndTurn mapping (pinned by TestMapStopReason) — the two
+// signals are intentionally independent.
+func TestStreamToACP_ReturnsRunError(t *testing.T) {
+	sess, conn := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+
+	ch := make(chan agent.AgentEvent, 2)
+	ch <- agent.AgentEvent{
+		Type: agent.AgentEventError,
+		Result: &agent.RunResult{
+			Error:      errors.New("rate limit exceeded"),
+			ExitReason: agent.ExitReasonError,
+		},
+	}
+	close(ch)
+
+	stopReason, _, err := streamToACP(context.Background(), sess, conn, ch)
+	if err == nil {
+		t.Fatal("AgentEventError with a payload error must be returned as an error")
+	}
+	if !strings.Contains(err.Error(), "rate limit exceeded") {
+		t.Errorf("err = %v, want the underlying error", err)
+	}
+	// Legacy stop-reason mapping preserved — the error is the failure signal.
+	if stopReason != acp.StopReasonEndTurn {
+		t.Errorf("stopReason = %v, want EndTurn (legacy mapping)", stopReason)
+	}
+}
+
+// TestStreamToACP_InterruptedHasNoError verifies user cancellation does NOT
+// surface as an error — only genuine failures do (so the chain's cancellation
+// path stays a clean stop, distinguishable from a broken round).
+func TestStreamToACP_InterruptedHasNoError(t *testing.T) {
+	sess, conn := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+
+	ch := make(chan agent.AgentEvent, 2)
+	ch <- agent.AgentEvent{
+		Type: agent.AgentEventError,
+		Result: &agent.RunResult{
+			ExitReason: agent.ExitReasonInterrupted,
+		},
+	}
+	close(ch)
+
+	stopReason, _, err := streamToACP(context.Background(), sess, conn, ch)
+	if err != nil {
+		t.Errorf("interruption must not surface as an error, got %v", err)
+	}
+	if stopReason != acp.StopReasonCancelled {
+		t.Errorf("stopReason = %v, want Cancelled (matches mapStopReason)", stopReason)
+	}
+}
+
+// TestStreamToACP_InterruptedWithCtxErr pins the REAL event shape the agent
+// loop produces: terminalError attaches ctx.Err() to an Interrupted exit
+// (agent_loop.go), so the event carries a non-nil Error. It must still map to
+// a clean cancellation — not to a request-level error (the legacy behavior
+// let the buffered-event race decide between clean cancel and hard error).
+func TestStreamToACP_InterruptedWithCtxErr(t *testing.T) {
+	sess, conn := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+
+	ch := make(chan agent.AgentEvent, 2)
+	ch <- agent.AgentEvent{
+		Type: agent.AgentEventError,
+		Result: &agent.RunResult{
+			Error:      context.Canceled, // what terminalError attaches on Interrupted
+			ExitReason: agent.ExitReasonInterrupted,
+		},
+	}
+	close(ch)
+
+	stopReason, _, err := streamToACP(context.Background(), sess, conn, ch)
+	if err != nil {
+		t.Errorf("interruption with ctx.Err() must not surface as an error, got %v", err)
+	}
+	if stopReason != acp.StopReasonCancelled {
+		t.Errorf("stopReason = %v, want Cancelled", stopReason)
+	}
 }
