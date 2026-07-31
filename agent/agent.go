@@ -800,6 +800,18 @@ func (a *AIAgent) dispatchEvent(ctx context.Context, event string, opts hooks.Pa
 	a.Config.HookDispatcher.Dispatch(ctx, event, opts)
 }
 
+// KillBackgroundProcesses terminates all tracked background processes
+// (ProcessManager). Called when the user interrupts a turn with Ctrl+C so
+// that long-running background tasks started during the turn (e.g. an http
+// server launched with background=true) do not outlive the cancellation.
+// Safe to call on a nil agent.
+func (a *AIAgent) KillBackgroundProcesses() {
+	if a == nil || a.Config.ProcessManager == nil {
+		return
+	}
+	a.Config.ProcessManager.KillAll()
+}
+
 // Close releases resources held by the agent, including killing all tracked
 // background processes. Safe to call on a nil agent.
 func (a *AIAgent) Close() {

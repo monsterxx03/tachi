@@ -721,6 +721,9 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 		m.cancelFunc()
 		m.isResearching = false
 		m.cancelFunc = nil
+		if m.agent != nil {
+			m.agent.KillBackgroundProcesses()
+		}
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
 			Content: "⏹️ 深度研究已取消",
@@ -729,11 +732,33 @@ func (m *Model) handleCtrlC() (tea.Model, tea.Cmd) {
 	}
 	if m.state != stateIdle && m.cancelFunc != nil {
 		m.cancelFunc()
+		// Long-running commands are often started as background processes
+		// (background=true → ProcessManager, which deliberately uses
+		// context.Background so it survives the tool call). Ctrl+C is the
+		// user's "stop everything" signal: kill them too, otherwise the
+		// http server / watcher keeps running after the turn is cancelled.
+		if m.agent != nil {
+			m.agent.KillBackgroundProcesses()
+		}
 		m.pendingQueue = nil
 		m.chatview.RemovePendingItems()
 		m.statusbar.SetPendingCount(0)
 		// Immediate visual feedback: mark in-progress tool calls as interrupted.
 		m.chatview.MarkPendingToolsInterrupted()
+		// Dismiss any modal waiting on the agent (confirmation prompt,
+		// AskUserQuestion form) — the turn is being cancelled and the
+		// agent is about to emit AgentEventError.
+		m.pendingConfirm = nil
+		m.askUserView = nil
+		// Keep reading the event channel: after cancellation the agent
+		// emits AgentEventError (or closes the channel), and we need that
+		// to reach handleAgentEvent so the UI returns to stateIdle.
+		// Returning nil here leaves the UI stuck in a modal (or in
+		// stateStreaming) because no nextEvent cmd is queued to receive
+		// the terminal event.
+		if m.eventCh != nil {
+			return m, m.nextEvent()
+		}
 		return m, nil
 	}
 	return m, tea.Quit

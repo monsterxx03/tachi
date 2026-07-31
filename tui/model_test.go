@@ -2,12 +2,20 @@ package tui
 
 import (
 	"errors"
+	"syscall"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
 )
+
+// processAlive reports whether a process with the given PID exists.
+func processAlive(pid int) bool {
+	err := syscall.Kill(pid, 0)
+	return err == nil || err == syscall.EPERM
+}
 
 // ---- helpers ----
 
@@ -132,6 +140,87 @@ func TestCtrlC_Streaming_Cancels(t *testing.T) {
 	if m.statusbar.pendingCount != 0 {
 		t.Error("pending count should be cleared after Ctrl+C")
 	}
+}
+
+// TestCtrlC_Modal_CancelsAndDrainsEventChannel guards the regression where
+// Ctrl+C during a modal state (confirmation prompt / AskUserQuestion form)
+// cancelled the turn but returned a nil cmd, so the AgentEventError the
+// agent emits on cancellation was never read: the UI stayed stuck in the
+// modal forever (input appeared dead, "Ctrl+C can't interrupt").
+//
+// The fix: handleCtrlC queues nextEvent() after cancelling, so the terminal
+// event reaches handleAgentEvent and the UI returns to stateIdle.
+func TestCtrlC_Modal_CancelsAndDrainsEventChannel(t *testing.T) {
+	for _, st := range []state{stateAwaitingConfirmation, stateAskUserQuestion} {
+		m := testModel()
+		m.setState(st)
+		m.cancelFunc = func() {}
+		m.streamGen = 1
+
+		ch := make(chan agent.AgentEvent, 1)
+		ch <- agent.AgentEvent{
+			Type: agent.AgentEventError,
+			Result: &agent.RunResult{
+				ExitReason: agent.ExitReasonInterrupted,
+			},
+		}
+		close(ch)
+		m.eventCh = ch
+
+		_, cmd := m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+		if cmd == nil {
+			t.Fatalf("state %v: Ctrl+C should queue nextEvent to drain the terminal event", st)
+		}
+		if m.pendingConfirm != nil || m.askUserView != nil {
+			t.Fatalf("state %v: modal state should be cleared on Ctrl+C", st)
+		}
+
+		// Run the queued cmd: it reads AgentEventError from the event channel.
+		msg := cmd()
+		if _, ok := msg.(agentEventMsg); !ok {
+			t.Fatalf("state %v: queued cmd returned %T, want agentEventMsg", st, msg)
+		}
+
+		// Feed it back through Update: must transition to idle.
+		m.Update(msg)
+		assertState(t, m, stateIdle)
+		if m.cancelFunc != nil {
+			t.Errorf("state %v: cancelFunc should be cleared after terminal error", st)
+		}
+		if m.eventCh != nil {
+			t.Errorf("state %v: eventCh should be cleared after terminal error", st)
+		}
+	}
+}
+
+// TestCtrlC_Cancels_KillsBackgroundProcesses guards the regression where
+// Ctrl+C cancelled the turn but left background processes (started with
+// background=true, e.g. an http server) running: the ProcessManager uses
+// context.Background() by design, so only the turn-cancel path can stop them.
+func TestCtrlC_Cancels_KillsBackgroundProcesses(t *testing.T) {
+	m := testModelStreaming()
+	m.cancelFunc = func() {}
+
+	a := agent.NewAIAgent(nil, 10)
+	defer a.Close()
+	m.agent = a
+
+	info, err := a.Config.ProcessManager.Start(t.Context(), "bg-http", "sleep 30")
+	if err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+	pid := info.PID
+
+	_, _ = m.Update(tea.KeyPressMsg{Code: 'c', Mod: tea.ModCtrl})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		if !processAlive(pid) {
+			return // background process killed with the turn
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatalf("background process %d still alive after Ctrl+C", pid)
 }
 
 func TestCtrlC_SelectingModel_ExitsSelection(t *testing.T) {
