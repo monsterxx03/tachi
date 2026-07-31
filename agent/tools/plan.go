@@ -10,6 +10,7 @@ import (
 	"unicode"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/config"
 )
 
 // SavePlanTool saves a structured plan document to .tachi/plans/.
@@ -82,18 +83,17 @@ func (t SavePlanTool) ExecuteContext(ctx context.Context, args string) (string, 
 		}
 	}
 
-	// Determine plan directory: .tachi/plans/ under the project root.
-	// Uses wdctx.Dir(ctx) if available (set by ACP/agent loop), falls back
-	// to ~/.tachi/plans/.
-	baseDir := wdctx.Dir(ctx)
-	if baseDir == "" {
-		home, err := os.UserHomeDir()
-		if err != nil {
-			return "", fmt.Errorf("home dir: %w", err)
-		}
-		baseDir = home
+	// Determine plan directory:
+	//   - With a working-dir context (ACP/agent loop): <projectRoot>/.tachi/plans/
+	//   - Without one (defensive; wdctx.Dir currently falls back to cwd or
+	//     ".", so this branch is normally unreachable): <baseDir>/plans —
+	//     config.BaseDir() respects --home instead of ~/.tachi/plans.
+	var planDir string
+	if baseDir := wdctx.Dir(ctx); baseDir != "" && baseDir != "." {
+		planDir = filepath.Join(baseDir, ".tachi", "plans")
+	} else {
+		planDir = filepath.Join(config.BaseDir(), "plans")
 	}
-	planDir := filepath.Join(baseDir, ".tachi", "plans")
 	if err := os.MkdirAll(planDir, 0755); err != nil {
 		return "", fmt.Errorf("create plans dir: %w", err)
 	}

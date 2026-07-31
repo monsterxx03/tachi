@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -35,8 +36,10 @@ func readNextMCPOverlayMsg(ch <-chan string) tea.Cmd {
 func (m *Model) enterMCPOverlay() tea.Cmd {
 	if len(m.mcpServers) == 0 {
 		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: "No MCP servers configured in ~/.tachi/mcp.json or .tachi/mcp.json",
+			Role: "assistant",
+			Content: fmt.Sprintf("No MCP servers configured in %s or %s",
+				filepath.Join(config.BaseDir(), "mcp.json"),
+				filepath.Join(config.FindProjectRoot(), ".tachi", "mcp.json")),
 		})
 		return nil
 	}

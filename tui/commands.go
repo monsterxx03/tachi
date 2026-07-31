@@ -56,9 +56,10 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		if cfg == nil {
 			freshCfg, err := config.Load()
 			if err != nil {
+				cfgPath, _ := config.ConfigPath()
 				m.chatview.AddMessage(chatMessage{
 					Role:    "assistant",
-					Content: "No providers configured in ~/.tachi/config.yaml",
+					Content: fmt.Sprintf("No providers configured in %s", cfgPath),
 				})
 				return nil
 			}
@@ -66,9 +67,10 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 			m.cfg = cfg
 		}
 		if len(cfg.Providers) == 0 {
+			cfgPath, _ := config.ConfigPath()
 			m.chatview.AddMessage(chatMessage{
 				Role:    "assistant",
-				Content: "No providers configured in ~/.tachi/config.yaml",
+				Content: fmt.Sprintf("No providers configured in %s", cfgPath),
 			})
 			return nil
 		}

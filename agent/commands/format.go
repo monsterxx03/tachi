@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
+	"github.com/monsterxx03/tachi/config"
 )
 
 // ---------------------------------------------------------------------------
@@ -176,7 +177,7 @@ func FormatUsageReport(info *UsageReportInfo) string {
 // FormatSkillList produces a markdown-formatted list of available skills.
 func FormatSkillList(metas []skill.SkillMeta) string {
 	if len(metas) == 0 {
-		return "No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/`, `.claude/skills/<name>/`, `.cursor/skills/<name>/`, or `~/.tachi/skills/<name>/`."
+		return fmt.Sprintf("No skills found. Create a skill by adding a `SKILL.md` file in `.tachi/skills/<name>/`, `.claude/skills/<name>/`, `.cursor/skills/<name>/`, or `%s/<name>/`.", config.GlobalSkillsDir())
 	}
 
 	var sb strings.Builder

@@ -1,16 +1,17 @@
 package hooks
 
 import (
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // expandVars replaces template variables in a hook command string.
 // Supported variables (defined in docs/2026-07-26-hook-system-and-herdr-integration.md §3.3):
 //
-//	{{HOOKS_DIR}}     — the hooks directory (~/.tachi/hooks/)
+//	{{HOOKS_DIR}}     — the hooks directory (<baseDir>/hooks, default ~/.tachi/hooks)
 //	{{SESSION_ID}}    — current session ID
 //	{{WORKSPACE_DIR}} — current workspace directory
 //	{{TIMESTAMP}}     — current ISO 8601 timestamp
@@ -24,13 +25,9 @@ func expandVars(cmd string, sessionID, workspaceDir string) string {
 	return cmd
 }
 
-// hooksDir returns the default hooks directory (~/.tachi/hooks/), falling
-// back to "~/.tachi/hooks" (literal) when the home directory cannot be
-// determined.
+// hooksDir returns the hooks directory under the tachi base directory
+// (config.BaseDir()/hooks). Going through BaseDir keeps hooks consistent
+// with --home isolation instead of always pointing at ~/.tachi/hooks.
 func hooksDir() string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "~/.tachi/hooks"
-	}
-	return filepath.Join(home, ".tachi", "hooks")
+	return filepath.Join(config.BaseDir(), "hooks")
 }

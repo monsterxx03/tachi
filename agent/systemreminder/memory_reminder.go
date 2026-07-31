@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
+	"github.com/monsterxx03/tachi/config"
 )
 
 // MemoryRecallReminder injects relevant memories from the memory backend
@@ -112,10 +113,11 @@ func (r MemoryRecallReminder) Generate(ctx context.Context, rctx Context) []stri
 	}
 	lines = append(lines, "")
 
-	lines = append(lines,
-		"You can search past session transcripts for more details",
-		"using the Grep tool on ~/.tachi/session/.",
-	)
+	sessionDir, _ := config.SessionDir()
+	lines = append(lines, fmt.Sprintf(
+		"You can search past session transcripts for more details using the Grep tool on %s.",
+		sessionDir,
+	))
 
 	rctx.Info(ctx, "MemoryRecall: injecting lines", "line_count", len(lines), "entry_count", len(entries))
 	return lines
