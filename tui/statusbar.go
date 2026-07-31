@@ -30,11 +30,17 @@ type StatusBar struct {
 	mcpError      string // non-empty when MCP async init had errors
 	compacting    bool   // true when auto-compaction is in progress
 	modeBadge     string // current mode badge text (e.g. "[auto]")
+	reviewBadge   string // multi-round /review indicator (e.g. "⚔️ 挑战者 2/5"); empty when not reviewing
 }
 
 const (
 	maxSessionTitleLen = 30
 )
+
+// statusbarTruncStyle performs true truncation (lipgloss MaxWidth) as opposed
+// to statusBarStyle's Width(), which word-wraps. Used to keep the statusbar
+// on a single line when the left+right halves overflow the terminal width.
+var statusbarTruncStyle = lipgloss.NewStyle()
 
 func NewStatusBar(providerInfo string, contextWindow int64) StatusBar {
 	sp := spinner.New(spinner.WithSpinner(spinner.Dot))
@@ -57,6 +63,10 @@ func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
 func (s *StatusBar) SetMCPError(v string)  { s.mcpError = v }
 func (s *StatusBar) SetCompacting(v bool)  { s.compacting = v }
 func (s *StatusBar) SetMode(mode string)   { s.modeBadge = modeBadgeFor(mode) }
+func (s *StatusBar) SetReviewBadge(b string) {
+	s.reviewBadge = b
+}
+func (s *StatusBar) ClearReviewBadge() { s.reviewBadge = "" }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -113,6 +123,9 @@ func (s StatusBar) View() string {
 	if s.pendingCount > 0 {
 		left += " | " + pendingCountStyle.Render(fmt.Sprintf("⏳ %d pending", s.pendingCount))
 	}
+	if s.reviewBadge != "" {
+		left += " | " + reviewBadgeStyle.Render(s.reviewBadge)
+	}
 	if s.compacting {
 		left += " | " + mcpConnectingStyle.Render("compacting...")
 	}
@@ -126,8 +139,14 @@ func (s StatusBar) View() string {
 	}
 
 	gap := max(s.width-lipgloss.Width(left)-lipgloss.Width(right), 0)
-	// Use MaxWidth to let lipgloss safely truncate the line to terminal width,
-	// handling ANSI sequences and wide (CJK) characters correctly.
+	// The gap math above keeps the line within the terminal width whenever
+	// left+right fit. When they overflow (long title/provider/badge), lipgloss
+	// .Width() would word-WRAP the line into two rows — it does not truncate —
+	// so truncate the LEFT side instead (MaxWidth) to keep the right side's
+	// usage/cost info visible on a single line.
+	if avail := max(s.width-lipgloss.Width(right), 0); lipgloss.Width(left) > avail {
+		left = statusbarTruncStyle.MaxWidth(avail).Render(left)
+	}
 	return statusBarStyle.Width(s.width).Render(left + strings.Repeat(" ", gap) + right)
 }
 

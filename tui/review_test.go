@@ -108,6 +108,10 @@ func TestAdversarialReview_ChainsRoundsAndRestoresHistory(t *testing.T) {
 	if m.reviewOrch.CurrentRound() != 1 {
 		t.Fatalf("currentRound = %d, want 1", m.reviewOrch.CurrentRound())
 	}
+	// Statusbar badge reflects the current role and round position.
+	if m.statusbar.reviewBadge != "⚔️ 审查者 1/2" {
+		t.Errorf("badge after round 1 = %q, want %q", m.statusbar.reviewBadge, "⚔️ 审查者 1/2")
+	}
 	ev1 := drainTurnComplete(t, m.eventCh)
 	ev1.Usage = &llm.Usage{InputTokens: 100, OutputTokens: 50}
 	_, cmd := m.Update(agentEventMsg{event: ev1, gen: m.streamGen})
@@ -133,6 +137,10 @@ func TestAdversarialReview_ChainsRoundsAndRestoresHistory(t *testing.T) {
 	if !m.isReviewing {
 		t.Error("isReviewing must stay true through intermediate rounds")
 	}
+	// Badge advances with the chain: round 2 is the final Judge.
+	if m.statusbar.reviewBadge != "⚔️ 裁决者 2/2" {
+		t.Errorf("badge after round 2 start = %q, want %q", m.statusbar.reviewBadge, "⚔️ 裁决者 2/2")
+	}
 	if len(m.reviewOrch.Reports()) != 1 {
 		t.Fatalf("reports = %d entries, want 1", len(m.reviewOrch.Reports()))
 	}
@@ -154,6 +162,9 @@ func TestAdversarialReview_ChainsRoundsAndRestoresHistory(t *testing.T) {
 	}
 	if m.isReviewing {
 		t.Error("isReviewing must be false after the final round")
+	}
+	if m.statusbar.reviewBadge != "" {
+		t.Errorf("badge must be cleared after the final round, got %q", m.statusbar.reviewBadge)
 	}
 	if m.savedHistory != nil {
 		t.Error("savedHistory must be restored (nil) after the final round")
@@ -218,6 +229,9 @@ func TestAdversarialReview_ErrorBranch_FullCleanup(t *testing.T) {
 	}
 	if m.isReviewing {
 		t.Error("isReviewing must be cleared on error (input would be blocked forever)")
+	}
+	if m.statusbar.reviewBadge != "" {
+		t.Errorf("badge must be cleared on error, got %q", m.statusbar.reviewBadge)
 	}
 	if m.savedHistory != nil {
 		t.Error("savedHistory must be restored on error")

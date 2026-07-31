@@ -122,6 +122,39 @@ func ResolveRole(round, totalRounds int) ReviewRole {
 	return ReviewRole((round - 1) % 3)
 }
 
+// RoleName returns the Chinese display name for a review role (used in the
+// multi-round banner and the TUI statusbar). Switch form with an unknown
+// fallback — a future ReviewRole value must not panic on a slice index.
+func RoleName(r ReviewRole) string {
+	switch r {
+	case RoleReviewer:
+		return "审查者"
+	case RoleChallenger:
+		return "挑战者"
+	case RoleJudge:
+		return "裁决者"
+	default:
+		return "审查者"
+	}
+}
+
+// RoleEnName returns the English display name for a review role (used in the
+// prompt header, e.g. "Round 1/3 — Reviewer"). Switch form with an unknown
+// fallback, mirroring RoleName — a future ReviewRole value must not panic on
+// a slice index.
+func RoleEnName(r ReviewRole) string {
+	switch r {
+	case RoleReviewer:
+		return "Reviewer"
+	case RoleChallenger:
+		return "Challenger"
+	case RoleJudge:
+		return "Judge"
+	default:
+		return "Reviewer"
+	}
+}
+
 // roleFileSuffix returns the report filename role suffix.
 func roleFileSuffix(r ReviewRole) string {
 	switch r {
@@ -164,12 +197,9 @@ func sanitizeFileName(s string) string {
 // must not invent its own filename); prev carries the status of prior rounds'
 // reports (Saved=false entries are flagged as missing and skipped).
 func BuildReviewPrompt(role ReviewRole, round, totalRounds int, outPath string, prev []RoundReport) string {
-	roleNames := []string{"审查者", "挑战者", "裁决者"}
-	roleEn := []string{"Reviewer", "Challenger", "Judge"}
-
 	var b strings.Builder
 	fmt.Fprintf(&b, "你是代码审查的第 %d 轮%s (Round %d/%d — %s)。\n\n",
-		round, roleNames[role], round, totalRounds, roleEn[role])
+		round, RoleName(role), round, totalRounds, RoleEnName(role))
 
 	// Context gathering — identical to the single-round review prompt. Every
 	// round re-runs it: rounds run in isolated forks with no shared context,

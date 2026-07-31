@@ -1115,6 +1115,9 @@ func (m *Model) sendReviewCommand() tea.Cmd {
 	m.chatview.ResetStreaming()
 	m.thinkingView.Reset()
 	m.thinkingMode = false
+	// Defensive: clear any stale badge from an abnormal exit before the new
+	// run starts (startReviewRound re-sets it for multi-round runs).
+	m.statusbar.ClearReviewBadge()
 
 	// Save conversation history so we can restore it after the one-off
 	// review run completes (the forked agent doesn't touch m.history, but
@@ -1187,10 +1190,13 @@ func (m *Model) startReviewRound() tea.Cmd {
 	m.thinkingView.Reset()
 
 	if orch.IsMultiRound() {
-		roleName := []string{"审查者", "挑战者", "裁决者"}[spec.Role]
+		roleName := cmds.RoleName(spec.Role)
 		m.chatview.AppendTextDelta(fmt.Sprintf(
 			"\n══════════ Round %d/%d — %s (%s) ══════════\n",
 			spec.Round, orch.TotalRounds(), roleName, spec.Provider.Model()))
+		// Statusbar indicator: current role + round position (n/m).
+		m.statusbar.SetReviewBadge(fmt.Sprintf("⚔️ %s %d/%d",
+			roleName, spec.Round, orch.TotalRounds()))
 	}
 
 	// Apply thinking config: if review config explicitly sets thinking,

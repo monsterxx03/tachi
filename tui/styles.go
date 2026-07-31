@@ -151,6 +151,11 @@ var (
 	pendingCountStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#EED49F"))
 
+	// Multi-round adversarial review indicator in the statusbar.
+	reviewBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#C6A0F6")).
+				Bold(true)
+
 	costStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#8BD5CA"))
 

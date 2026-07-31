@@ -448,6 +448,61 @@ func TestStatusBar_View_NoPending(t *testing.T) {
 	}
 }
 
+// ---- Review badge (multi-round /review indicator) ----
+
+func TestStatusBar_View_ReviewBadge(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateStreaming))
+	s.SetReviewBadge("⚔️ 挑战者 2/5")
+	view := s.View()
+	if !strings.Contains(view, "⚔️") || !strings.Contains(view, "挑战者 2/5") {
+		t.Errorf("View should show the review badge: got %q", view)
+	}
+}
+
+func TestStatusBar_View_NoReviewBadge(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateStreaming))
+	view := s.View()
+	if strings.Contains(view, "⚔️") {
+		t.Error("View should NOT show a review badge when not reviewing")
+	}
+}
+
+func TestStatusBar_ReviewBadge_Clear(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateStreaming))
+	s.SetReviewBadge("⚔️ 审查者 1/3")
+	s.ClearReviewBadge()
+	view := s.View()
+	if strings.Contains(view, "⚔️") {
+		t.Error("ClearReviewBadge must remove the badge from the view")
+	}
+}
+
+// TestStatusBar_View_OverflowNeverWraps guards A1 from the review: lipgloss
+// .Width() word-wraps overflow (it does NOT truncate), so when left+right
+// exceed the terminal width the statusbar must truncate the LEFT side instead
+// of wrapping into a second row — the right side's usage/cost stays visible.
+func TestStatusBar_View_OverflowNeverWraps(t *testing.T) {
+	s := makeStatusBar(
+		withWidth(40),
+		withState(stateIdle),
+		withSession("A very long session title that exceeds the width", "2026-05-09-143052-abcdef12"),
+		withProvider("anthropic/claude-sonnet-4-20250514-very-long-name"),
+		withUsage(100_000, 500),
+		withContextWindow(128_000),
+	)
+	s.SetReviewBadge("⚔️ 挑战者 2/5")
+	view := s.View()
+
+	// Must render as a single line — never wrap into two rows.
+	if strings.Contains(view, "\n") {
+		t.Errorf("statusbar must not wrap on overflow, got %q", view)
+	}
+	// The right side's usage info must survive truncation.
+	if !strings.Contains(view, "ctx:") || !strings.Contains(view, "128.0k") {
+		t.Errorf("right-side usage must stay visible on overflow, got %q", view)
+	}
+}
+
 // ---- Provider info ----
 
 func TestStatusBar_View_ProviderInfo(t *testing.T) {

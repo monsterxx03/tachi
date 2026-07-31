@@ -178,6 +178,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			total := m.reviewOrch.TotalRounds()
 			m.isReviewing = false
 			m.reviewOrch = nil
+			m.statusbar.ClearReviewBadge()
 			if total > 1 {
 				m.chatview.AppendTextDelta(fmt.Sprintf(
 					"\n✅ 对抗式审查完成 (%d/%d rounds)\n", total, total))
@@ -397,6 +398,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		if wasReviewing {
 			m.reviewOrch = nil
 			m.isReviewing = false
+			m.statusbar.ClearReviewBadge()
 		}
 
 		// Clean up pending model switch BEFORE restoring savedHistory.

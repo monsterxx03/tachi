@@ -224,6 +224,28 @@ func TestRoleFileSuffix_UnknownRoleDoesNotPanic(t *testing.T) {
 	}
 }
 
+// TestRoleEnName_UnknownRoleDoesNotPanic mirrors the roleFileSuffix guard for
+// the English mapping — BuildReviewPrompt previously indexed a raw slice
+// ([]string{"Reviewer","Challenger","Judge"}[role]); a future ReviewRole value
+// must not panic.
+func TestRoleEnName_UnknownRoleDoesNotPanic(t *testing.T) {
+	for _, r := range []ReviewRole{RoleReviewer, RoleChallenger, RoleJudge, ReviewRole(99)} {
+		name := RoleEnName(r)
+		if name == "" {
+			t.Errorf("RoleEnName(%d) returned empty", r)
+		}
+	}
+	for r, want := range map[ReviewRole]string{
+		RoleReviewer:   "Reviewer",
+		RoleChallenger: "Challenger",
+		RoleJudge:      "Judge",
+	} {
+		if got := RoleEnName(r); got != want {
+			t.Errorf("RoleEnName(%v) = %q, want %q", r, got, want)
+		}
+	}
+}
+
 // ---- CheckAdversarialProviders (fail-fast gate shared by TUI + ACP) ----
 
 func TestCheckAdversarialProviders_PassesWhenUnconfigured(t *testing.T) {
@@ -686,5 +708,21 @@ func TestBuildReviewPrompt_JudgeRound1NeverSaysPriorZero(t *testing.T) {
 	}
 	if !strings.Contains(p, "Confirmed") {
 		t.Error("judge prompt must still ask for verdicts")
+	}
+}
+
+// TestBuildReviewPrompt_UnknownRoleDoesNotPanic guards the whole prompt
+// builder against a future ReviewRole value — the header naming must fall
+// back instead of panicking on a slice index.
+func TestBuildReviewPrompt_UnknownRoleDoesNotPanic(t *testing.T) {
+	p := BuildReviewPrompt(ReviewRole(99), 1, 3, "/reviews/round-1-review-m.md", nil)
+	if p == "" {
+		t.Error("prompt must not be empty")
+	}
+	// The unknown role degrades to the Reviewer fallback in both zh and en.
+	for _, want := range []string{"第 1 轮审查者", "Round 1/3 — Reviewer"} {
+		if !strings.Contains(p, want) {
+			t.Errorf("unknown role prompt missing fallback naming %q", want)
+		}
 	}
 }
