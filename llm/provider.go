@@ -33,8 +33,9 @@ func SessionIDFromCtx(ctx context.Context) (string, bool) {
 
 // Provider type constants.
 const (
-	ProviderTypeOpenAI    = "openai"
-	ProviderTypeAnthropic = "anthropic"
+	ProviderTypeOpenAI          = "openai"
+	ProviderTypeOpenAIResponses = "openai-res"
+	ProviderTypeAnthropic       = "anthropic"
 )
 
 type ThinkingBlock struct {
@@ -214,6 +215,13 @@ func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) 
 			NewOpenAIProvider(apiKey, baseURL, model),
 			RetryConfig{MaxRetries: 2},
 		), nil
+	case ProviderTypeOpenAIResponses:
+		// No retry wrapping needed: the official openai-go SDK retries
+		// 408/409/429/5xx and connection errors internally (default
+		// MaxRetries=2, honoring Retry-After headers). The RetryProvider
+		// cannot classify its errors anyway (apierror is an internal
+		// package), so wrapping here would only add duplicate retries.
+		return NewOpenAIResponsesProvider(apiKey, baseURL, model), nil
 	case ProviderTypeAnthropic:
 		// anthropic-sdk-go already retries internally (default MaxRetries=2),
 		// so no extra wrapping is needed here.

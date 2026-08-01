@@ -141,6 +141,8 @@ func EnvForProviderType(providerType string) string {
 	switch providerType {
 	case llm.ProviderTypeOpenAI:
 		return "OPENAI_API_KEY"
+	case llm.ProviderTypeOpenAIResponses:
+		return "OPENAI_API_KEY"
 	case llm.ProviderTypeAnthropic:
 		return "ANTHROPIC_API_KEY"
 	default:
