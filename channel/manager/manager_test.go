@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -1431,6 +1432,13 @@ func TestOneoffCommandsRegisteredForChannel(t *testing.T) {
 // Returns the manager and the thread's working directory.
 func newOneoffTestManager(t *testing.T, responses []string, threadID string) (*Manager, string) {
 	t.Helper()
+	return newOneoffTestManagerWithProvider(t, &mockProvider{name: "openai", responses: responses}, threadID)
+}
+
+// newOneoffTestManagerWithProvider is newOneoffTestManager with an injected
+// provider, for tests that need to simulate failures or custom streams.
+func newOneoffTestManagerWithProvider(t *testing.T, prov llm.Provider, threadID string) (*Manager, string) {
+	t.Helper()
 	disabled := false
 	cfg := config.DefaultConfig()
 	cfg.Oneoff = config.OneoffConfig{Enabled: &disabled}
@@ -1442,7 +1450,7 @@ func newOneoffTestManager(t *testing.T, responses []string, threadID string) (*M
 		Cfg:          cfg,
 		SessionStore: newTempSessionStore(t),
 	})
-	mgr.provider = &mockProvider{name: "openai", responses: responses}
+	mgr.provider = prov
 	mgr.resolvedConfig = &config.ResolvedConfig{
 		Provider: config.ResolvedProvider{
 			Type:          "openai",
@@ -1555,9 +1563,10 @@ func TestReviewCommand_SingleRound(t *testing.T) {
 }
 
 // TestReviewCommand_MultiRound verifies "/review N" (N ≥ 2) runs N
-// adversarial rounds: the reply carries per-round banners, the orchestrator
-// created the report directory under the thread's working directory, and the
-// final line points at it.
+// adversarial rounds. The final reply carries the completion status + report
+// directory (per-round text is pushed via sendToThread as it completes, not
+// duplicated in the reply), and the orchestrator created the report
+// directory under the thread's working directory.
 func TestReviewCommand_MultiRound(t *testing.T) {
 	threadID := "review-multi-thread"
 	mgr, workDir := newOneoffTestManager(t, []string{
@@ -1566,11 +1575,11 @@ func TestReviewCommand_MultiRound(t *testing.T) {
 
 	resp, err := mgr.handleReviewCommand(context.Background(), threadID, "3")
 	require.NoError(t, err)
-	assert.Contains(t, resp, "第 1 轮")
-	assert.Contains(t, resp, "第 3 轮")
-	assert.Contains(t, resp, "round1: initial review")
-	assert.Contains(t, resp, "round3: verdict")
 	assert.Contains(t, resp, "✅ 审查完成（3 轮）")
+	assert.Contains(t, resp, "报告目录")
+	// Multi-round text is pushed per round via sendToThread — the final
+	// reply must NOT re-send it (duplication).
+	assert.NotContains(t, resp, "round1: initial review")
 
 	// The orchestrator-owned report directory must exist under workDir.
 	reviewsRoot := filepath.Join(workDir, ".tachi", "reviews")
@@ -1596,7 +1605,8 @@ func TestReviewCommand_RoundsClamped(t *testing.T) {
 }
 
 // TestReviewCommand_ViaTextSlash verifies "/review 2" text command routes
-// through handleSlashCommand and carries the round count.
+// through handleSlashCommand and carries the round count (status reply; the
+// round text itself is pushed via sendToThread).
 func TestReviewCommand_ViaTextSlash(t *testing.T) {
 	threadID := "review-text-thread"
 	mgr, _ := newOneoffTestManager(t, []string{"r1 review", "r2 judge"}, threadID)
@@ -1607,8 +1617,77 @@ func TestReviewCommand_ViaTextSlash(t *testing.T) {
 		MessageID: "msg-review",
 	})
 	require.NoError(t, result.Err)
-	assert.Contains(t, result.Reply.Content, "第 2 轮")
 	assert.Contains(t, result.Reply.Content, "✅ 审查完成（2 轮）")
+	assert.NotContains(t, result.Reply.Content, "r1 review")
+}
+
+// TestReviewCommand_MultiRoundFailure verifies the multi-round failure reply:
+// it carries the status (failed round + completed count + report dir) but
+// NOT the error detail — the caller appends "❌ <err>" exactly once, so
+// embedding it here would duplicate the error in the user-visible reply.
+func TestReviewCommand_MultiRoundFailure(t *testing.T) {
+	threadID := "review-fail-thread"
+	var mu sync.Mutex
+	call := 0
+	prov := &mockProvider{name: "openai", streamFunc: func(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+		mu.Lock()
+		call++
+		this := call
+		mu.Unlock()
+		if this == 1 {
+			// Round 1 succeeds.
+			ch := make(chan llm.StreamEvent, 4)
+			ch <- llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: "round1 ok"}
+			ch <- llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "stop"}
+			close(ch)
+			return ch, nil
+		}
+		// Round 2 fails at the API level.
+		return nil, errors.New("provider exploded")
+	}}
+	mgr, _ := newOneoffTestManagerWithProvider(t, prov, threadID)
+
+	resp, err := mgr.handleReviewCommand(context.Background(), threadID, "2")
+	require.Error(t, err)
+	assert.Contains(t, resp, "第 2 轮失败")
+	assert.Contains(t, resp, "已完成 1 轮")
+	assert.Contains(t, resp, "报告目录")
+	// The error detail must NOT be embedded — the caller appends it once.
+	assert.NotContains(t, resp, "provider exploded")
+}
+
+// TestReviewCommand_MultiRoundFailureViaSlash verifies the caller path
+// (handleSlashCommand) appends the error detail exactly once, keeping the
+// handler's status summary.
+func TestReviewCommand_MultiRoundFailureViaSlash(t *testing.T) {
+	threadID := "review-fail-slash-thread"
+	var mu sync.Mutex
+	call := 0
+	prov := &mockProvider{name: "openai", streamFunc: func(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+		mu.Lock()
+		call++
+		this := call
+		mu.Unlock()
+		if this == 1 {
+			ch := make(chan llm.StreamEvent, 4)
+			ch <- llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: "round1 ok"}
+			ch <- llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "stop"}
+			close(ch)
+			return ch, nil
+		}
+		return nil, errors.New("provider exploded")
+	}}
+	mgr, _ := newOneoffTestManagerWithProvider(t, prov, threadID)
+
+	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
+		Content:   "/review 2",
+		ThreadID:  threadID,
+		MessageID: "msg-review-fail",
+	})
+	require.Error(t, result.Err)
+	assert.Equal(t, 1, strings.Count(result.Reply.Content, "provider exploded"))
+	assert.Contains(t, result.Reply.Content, "已完成 1 轮")
+	assert.Contains(t, result.Reply.Content, "报告目录")
 }
 
 // TestStopCommand_NoActiveTask verifies /stop with nothing running returns a

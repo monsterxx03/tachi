@@ -651,8 +651,10 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 
 	// Wire the streaming callback so long-running commands (/commit,
 	// /review) show live tool-call progress in a status embed — same UX as
-	// the text-message path.
-	cmdCtx := manager.WithStreamingCallback(context.Background(), ch.newStatusEmbedCallback(i.ChannelID))
+	// the text-message path. The embed collapses to a completion marker when
+	// the command returns, so it never duplicates the final reply.
+	se := ch.newStatusEmbed(i.ChannelID)
+	cmdCtx := manager.WithStreamingCallback(context.Background(), se.cb)
 
 	// Execute the command via the Manager's CommandHandler.
 	reply, workDir, model, err := cmdHandler(cmdCtx, channel.SlashCommand{
@@ -660,13 +662,20 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 		ThreadID: threadID,
 		Args:     args,
 	})
+	se.finish(err == nil)
 	if err != nil {
-		// Keep partial output (e.g. a multi-round review that failed on a
-		// later round) and append the error, so completed work is not lost.
+		// reply.Content holds the handler's status output (single-round
+		// review text, or multi-round status + report dir — per-round text
+		// was already pushed to the thread as it completed). Keep it and
+		// append the error exactly once.
 		content := "❌ " + err.Error()
 		if errors.Is(err, context.Canceled) {
 			// User-initiated /stop — the stop reply already acknowledged it.
+			// Keep the status summary (report dir etc.) if any.
 			content = "⏹️ 已取消。"
+			if reply.Content != "" {
+				content = reply.Content + "\n\n" + content
+			}
 		} else if reply.Content != "" {
 			content = reply.Content + "\n\n❌ " + err.Error()
 		}

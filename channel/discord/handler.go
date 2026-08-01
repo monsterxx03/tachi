@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/channel/manager"
@@ -132,6 +133,7 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	var se *statusEmbedView
 	if directed {
 		stopTyping := ch.startTypingLoop(ctx, m.ChannelID)
 		defer stopTyping()
@@ -139,77 +141,141 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		// 12. Set up streaming callback for real-time tool call progress.
 		// The status embed is only sent when the first tool call is detected,
 		// skipping the embed entirely for simple text-only replies.
-		ctx = manager.WithStreamingCallback(ctx, ch.newStatusEmbedCallback(m.ChannelID))
+		se = ch.newStatusEmbed(m.ChannelID)
+		ctx = manager.WithStreamingCallback(ctx, se.cb)
 	}
 
 	// 12.5 Delegate to the manager handler.
 	result := handler(ctx, incoming)
 
+	// Collapse the status embed to a completion marker once the turn is
+	// truly done (steer/buffered returns mean the turn is still running).
+	if se != nil && !result.Steered && !result.Buffered && !result.Dropped {
+		se.finish(result.Err == nil)
+	}
+
 	// 13. Process the result.
 	ch.processHandlerResult(m, result, threadID, isThread)
 }
 
-// newStatusEmbedCallback returns a StreamingCallback that renders tool-call
-// progress into a status embed in the given channel, creating the embed on
-// the first tool call and editing it in place afterwards. LLM text deltas
-// are accumulated into the embed description alongside the tool calls, so
-// the user sees live progress during long runs.
+// newStatusEmbed returns a status embed view that renders tool-call progress
+// during a turn, with a short trailing text preview (NOT the accumulated
+// full text — the final reply message is the single text delivery, so the
+// embed must not duplicate it).
+//
+// cb is the StreamingCallback to attach to the turn context; finish collapses
+// the embed to a completion marker once the turn ends (or aborts), so the
+// embed never lingers showing the same content as the final reply.
+//
+// Concurrency: the callback and finish are invoked strictly sequentially on
+// the same goroutine (the handler stack — finish runs after handler returns),
+// so embedMsgID needs no locking between them. The lock inside only guards
+// the preview buffers against nothing in practice; it is kept for safety if
+// a future path moves the callback to another goroutine.
 //
 // Shared by the text-message path (handleMessageCreate) and the typed
 // interaction path (handleSlashCommand) — the latter previously had no
 // streaming at all, so /commit and /review issued via UI buttons showed no
 // progress.
-func (ch *DiscordChannel) newStatusEmbedCallback(channelID string) manager.StreamingCallback {
+func (ch *DiscordChannel) newStatusEmbed(channelID string) *statusEmbedView {
 	const maxEmbedDescRunes = 3800 // Discord limit is 4096, leave room
+	const textTailCap = 400        // tail window of LLM text shown in the preview
 
 	var (
 		embedMsgID string
 		toolBuf    strings.Builder
-		textBuf    strings.Builder // accumulated LLM text between tool calls
+		textTail   []rune // capped tail window of accumulated LLM text
 		toolCount  int
 		mu         sync.Mutex
 	)
 
-	return func(event manager.StreamEvent) error {
-		switch event.Type {
-		case manager.StreamEventToolCall:
-			mu.Lock()
-			toolCount++
-			toolBuf.WriteString("🔧 " + event.ToolName + formatToolArgsForEmbed(event.ToolName, event.ToolArgs) + "\n")
-			// Build embed description: accumulated text (if any) + tool calls.
-			desc := buildStreamingDesc(textBuf.String(), toolBuf.String(), toolCount, maxEmbedDescRunes)
-			mu.Unlock()
+	update := func(title, desc string, color int) {
+		sess := ch.session
+		if sess == nil {
+			return
+		}
+		if embedMsgID == "" {
+			sent, err := sess.ChannelMessageSendEmbed(channelID, &discordgo.MessageEmbed{
+				Title: title, Description: desc, Color: color,
+			})
+			if err == nil {
+				embedMsgID = sent.ID
+			}
+		} else {
+			_, _ = sess.ChannelMessageEditEmbed(channelID, embedMsgID, &discordgo.MessageEmbed{
+				Title: title, Description: desc, Color: color,
+			})
+		}
+	}
 
+	return &statusEmbedView{
+		cb: func(event manager.StreamEvent) error {
+			switch event.Type {
+			case manager.StreamEventToolCall:
+				mu.Lock()
+				toolCount++
+				toolBuf.WriteString("🔧 " + event.ToolName + formatToolArgsForEmbed(event.ToolName, event.ToolArgs) + "\n")
+				// Short trailing preview only — full text arrives as the
+				// final reply message.
+				desc := buildStreamingDesc(string(textTail), toolBuf.String(), toolCount, maxEmbedDescRunes)
+				mu.Unlock()
+				update("🤖 Tachi", desc, 0x3498DB)
+			case manager.StreamEventTextDelta:
+				// Accumulate a capped tail window for the preview (full text
+				// is delivered by the final reply; keeping the whole stream
+				// would be wasted memory on long runs).
+				mu.Lock()
+				textTail = append(textTail, []rune(event.Text)...)
+				if len(textTail) > textTailCap {
+					textTail = textTail[len(textTail)-textTailCap:]
+				}
+				mu.Unlock()
+			}
+			return nil
+		},
+		finish: func(success bool) {
+			mu.Lock()
+			defer mu.Unlock()
+			if embedMsgID == "" {
+				return
+			}
 			sess := ch.session
 			if sess == nil {
-				return nil
+				return
 			}
-
-			if embedMsgID == "" {
-				sent, err := sess.ChannelMessageSendEmbed(channelID, &discordgo.MessageEmbed{
-					Title:       "🤖 Tachi",
-					Description: desc,
-					Color:       0x3498DB,
-				})
-				if err == nil {
-					embedMsgID = sent.ID
+			title := "✅ Tachi — 已完成"
+			color := 0x2ECC71
+			if !success {
+				title = "❌ Tachi — 已中止"
+				color = 0xE74C3C
+			}
+			// Collapse to a completion marker + tool-call record. The text is
+			// deliberately dropped — the final reply carries it. The tool
+			// block is truncated to the embed limit so a long run's record
+			// can never silently exceed Discord's 4096-char description cap
+			// (which would fail the edit and leave the embed stuck mid-run).
+			desc := ""
+			if toolBuf.Len() > 0 {
+				tools := toolBuf.String()
+				if utf8.RuneCountInString(tools) > maxEmbedDescRunes-7 {
+					tools = truncateStreamingTools(tools, toolCount, maxEmbedDescRunes-7)
 				}
-			} else {
-				_, _ = sess.ChannelMessageEditEmbed(channelID, embedMsgID, &discordgo.MessageEmbed{
-					Title:       "🤖 Tachi",
-					Description: desc,
-					Color:       0x3498DB,
-				})
+				desc = "```\n" + tools + "```"
 			}
-
-		case manager.StreamEventTextDelta:
-			// Regular LLM text — accumulate for next embed update.
-			mu.Lock()
-			textBuf.WriteString(event.Text)
-			mu.Unlock()
-		}
-		return nil
+			if _, err := sess.ChannelMessageEditEmbed(channelID, embedMsgID, &discordgo.MessageEmbed{
+				Title: title, Description: desc, Color: color,
+			}); err != nil {
+				ch.logger.Error(context.Background(), "discord: status embed finish edit failed", err)
+			}
+		},
 	}
+}
+
+// statusEmbedView bundles the streaming callback and the completion hook for
+// a status embed (see newStatusEmbed).
+type statusEmbedView struct {
+	cb     manager.StreamingCallback
+	finish func(success bool)
 }
 
 // buildIncomingMessage constructs a channel.IncomingMessage from a Discord

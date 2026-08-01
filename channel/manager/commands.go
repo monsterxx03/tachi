@@ -171,13 +171,18 @@ func (m *Manager) handleSlashCommand(ctx context.Context, msg channel.IncomingMe
 	})
 	if err != nil {
 		// Errors from handlers: wrap in a reply with ThreadID/ReplyTo.
-		// If the handler already produced partial output (e.g. a multi-round
-		// /review that failed on round 3), keep it so completed work is never
-		// silently discarded (B7) — just append the error.
+		// The handler's partial output (single-round review text, or the
+		// multi-round status message) is kept when non-empty — completed
+		// work must not be silently discarded (B7) — and the error is
+		// appended exactly once (handlers deliberately don't embed it).
 		content := fmt.Sprintf("❌ %v", err)
 		if errors.Is(err, context.Canceled) {
 			// User-initiated /stop — the stop reply already acknowledged it.
+			// Keep the handler's status summary (e.g. report dir) if any.
 			content = "⏹️ 已取消。"
+			if result.Reply.Content != "" {
+				content = result.Reply.Content + "\n\n" + content
+			}
 		} else if result.Reply.Content != "" {
 			content = result.Reply.Content + "\n\n❌ " + err.Error()
 		}
@@ -867,8 +872,17 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 	// Streaming callback for channel implementations that show real-time
 	// tool-call progress (e.g. Discord status embeds). The callback rides on
 	// ctx from the message/interaction handler — drainOneOffEvents forwards it.
+	//
+	// Multi-round delivery model (avoids duplicating text the user already
+	// saw): each round's full text is pushed via sendToThread as it completes,
+	// and the final reply only carries the status + report directory. Single-
+	// round has no intermediate push — the LLM text IS the reply, and the
+	// reply must carry it in full: the text slash-command path and the Discord
+	// interaction path both deliver reply.Content verbatim, with no separate
+	// streaming/embed on non-Discord channels (WeChat etc.), so trimming it
+	// would silently drop the review output there.
 
-	var out strings.Builder
+	var out strings.Builder // single-round text only
 	incompleteRounds := 0
 	runErr := orch.Run(func(spec cmds.RoundSpec) error {
 		// Per-round banner + report path hint (multi-round only).
@@ -895,44 +909,62 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 		if incomplete {
 			incompleteRounds++
 		}
-		// Single-round: the LLM text IS the review output. Multi-round:
-		// collect banners + round text so the reply carries the full chain
-		// (reports are also on disk under the report dir).
-		if orch.IsMultiRound() {
-			out.WriteString(banner + "\n")
+		if text == "" {
+			return nil
 		}
-		if text != "" {
+		if orch.IsMultiRound() {
+			// Push the round's full text as it completes (real-time delivery;
+			// also means a later failure never loses rounds the user has
+			// already seen — B7). The final reply only summarises.
+			m.sendToThread(ctx, threadID, banner+"\n"+text, "")
+		} else {
+			// Single-round: the LLM text IS the review output.
 			out.WriteString(text + "\n\n")
-			// Push the round's full text as it completes, so a later failure
-			// never loses rounds the user has already seen (B7).
-			if orch.IsMultiRound() {
-				m.sendToThread(ctx, threadID, banner+"\n"+text, "")
-			}
 		}
 		return nil
 	})
 
-	result := strings.TrimSpace(out.String())
+	if runErr != nil {
+		// Multi-round: completed rounds were already pushed in full; the
+		// error reply adds status (current round + report dir), not text.
+		//
+		// The error DETAIL is deliberately NOT embedded here — the callers
+		// (handleSlashCommand / Discord interaction path) append "❌ <err>"
+		// once. Embedding it would duplicate the error in the reply.
+		if orch.IsMultiRound() {
+			dir := orch.ReportDir()
+			// Next() increments current before running a round, so on
+			// failure CurrentRound() is the failed round and done =
+			// current-1 is the number of completed rounds (0 when the
+			// first round fails; guarded below).
+			done := orch.CurrentRound() - 1
+			if done < 0 {
+				done = 0
+			}
+			return fmt.Sprintf("审查在第 %d 轮失败（已完成 %d 轮）\n报告目录: `%s`",
+				orch.CurrentRound(), done, dir), runErr
+		}
+		return strings.TrimSpace(out.String()), runErr
+	}
 
 	// Success line. Multi-round: status reflects any incomplete rounds and
-	// points at the report directory. Single-round: add a short completion
-	// marker so an empty/plain reply still signals the review happened.
-	if runErr == nil {
-		if orch.IsMultiRound() {
-			dir, _ := filepath.Rel(workDir, orch.ReportDir())
-			if dir == "" || strings.HasPrefix(dir, "..") {
-				dir = orch.ReportDir()
-			}
-			status := fmt.Sprintf("✅ 审查完成（%d 轮）", orch.TotalRounds())
-			if incompleteRounds > 0 {
-				status = fmt.Sprintf("⚠️ 审查完成（%d 轮，其中 %d 轮未完整完成）", orch.TotalRounds(), incompleteRounds)
-			}
-			result = result + "\n\n" + status + "。报告目录: `" + dir + "`"
-		} else {
-			result = result + "\n\n✅ 审查完成（1 轮）"
+	// points at the report directory (text already pushed per round).
+	if orch.IsMultiRound() {
+		dir, _ := filepath.Rel(workDir, orch.ReportDir())
+		if dir == "" || strings.HasPrefix(dir, "..") {
+			dir = orch.ReportDir()
 		}
+		status := fmt.Sprintf("✅ 审查完成（%d 轮）", orch.TotalRounds())
+		if incompleteRounds > 0 {
+			status = fmt.Sprintf("⚠️ 审查完成（%d 轮，其中 %d 轮未完整完成）", orch.TotalRounds(), incompleteRounds)
+		}
+		return status + "。报告目录: `" + dir + "`", nil
 	}
-	return result, runErr
+
+	// Single-round: append a short completion marker so an empty/plain reply
+	// still signals the review happened.
+	result := strings.TrimSpace(out.String())
+	return result + "\n\n✅ 审查完成（1 轮）", nil
 }
 
 // --- helpers for one-off LLM commands (/commit, /review) ---

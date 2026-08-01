@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -1065,5 +1066,47 @@ func TestBuildSlashArgs(t *testing.T) {
 				t.Errorf("buildSlashArgs() = %q, want %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// TestBuildStreamingDesc_PreservesNewlines guards the embed status card
+// against newline loss: the description must keep the LLM text's line
+// structure (Discord renders "\n" as line breaks in embed descriptions).
+func TestBuildStreamingDesc_PreservesNewlines(t *testing.T) {
+	text := "第一行\n第二行\n\n第三段"
+	tools := "🔧 Bash git status\n🔧 Bash git diff\n"
+	desc := buildStreamingDesc(text, tools, 2, 3800)
+
+	if !strings.Contains(desc, "第一行\n第二行") {
+		t.Errorf("embed description lost newlines in text: %q", desc)
+	}
+	if !strings.Contains(desc, "\n```") {
+		t.Errorf("embed description missing separator before tool block: %q", desc)
+	}
+}
+
+// TestStatusEmbedFinishDescTruncated verifies the finish-collapse description
+// truncates the tool-call record so it can never exceed Discord's 4096-char
+// embed description cap (an over-limit edit fails silently, leaving the
+// embed stuck in its mid-run state).
+func TestStatusEmbedFinishDescTruncated(t *testing.T) {
+	// The finish() description is "```\n" + tools + "```" with tools
+	// truncated to maxEmbedDescRunes-7 via truncateStreamingTools. Simulate
+	// a long run with thousands of tool calls and assert the result stays
+	// within the limit.
+	toolCount := 5000
+	tools := strings.Builder{}
+	for i := 0; i < toolCount; i++ {
+		tools.WriteString("🔧 Bash tool " + strconv.Itoa(i) + "\n")
+	}
+	const maxRunes = 3800
+	truncated := truncateStreamingTools(tools.String(), toolCount, maxRunes-7)
+	desc := "```\n" + truncated + "```"
+
+	if n := utf8.RuneCountInString(desc); n > maxRunes {
+		t.Errorf("finish description %d runes exceeds embed limit %d", n, maxRunes)
+	}
+	if !strings.Contains(truncated, "还有") {
+		t.Errorf("truncated tool record should carry a remaining-count marker: %q", truncated)
 	}
 }
