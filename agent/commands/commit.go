@@ -54,6 +54,12 @@ From the information above, create a **single** git commit. Use the **Bash** too
 
 If there is nothing to commit, say so and do not create an empty commit.
 
+### Commit message style
+
+- Keep the subject line short — aim for under 72 characters (ideally 50-60) so it reads well in the terminal.
+- Write a high-level summary of what changed and why. Do NOT include implementation details such as function names, variable names, or line-level changes.
+- Prefer a single concise subject line; only add a body via an extra -m flag if the change genuinely needs more context.
+
 ### Co-author trailer
 
 You MUST append a Co-authored-by trailer to every commit message using the multi-line %s-m technique:
