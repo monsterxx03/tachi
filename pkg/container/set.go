@@ -1,13 +1,11 @@
-// Package set provides a small generic set implementation used across tachi
-// for dedup, allowlists, and membership checks.
-package set
+package container
 
 // Set is a generic set of comparable values, implemented as a map with empty
 // struct values (zero memory per element).
 type Set[T comparable] map[T]struct{}
 
-// New returns a set containing the given items (may be empty).
-func New[T comparable](items ...T) Set[T] {
+// NewSet returns a set containing the given items (may be empty).
+func NewSet[T comparable](items ...T) Set[T] {
 	s := make(Set[T], len(items))
 	s.Add(items...)
 	return s

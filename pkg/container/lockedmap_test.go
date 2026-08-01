@@ -1,4 +1,4 @@
-package lockedmap
+package container
 
 import (
 	"sync"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestMap_StoreLoad(t *testing.T) {
-	var m Map[string, int]
+	var m LockedMap[string, int]
 
 	// Load from empty map.
 	v, ok := m.Load("a")
@@ -29,7 +29,7 @@ func TestMap_StoreLoad(t *testing.T) {
 }
 
 func TestMap_Delete(t *testing.T) {
-	var m Map[string, int]
+	var m LockedMap[string, int]
 
 	// Delete on empty map (should not panic).
 	m.Delete("nonexistent")
@@ -48,7 +48,7 @@ func TestMap_Delete(t *testing.T) {
 }
 
 func TestMap_LoadOrCompute(t *testing.T) {
-	var m Map[string, int]
+	var m LockedMap[string, int]
 
 	// Compute on empty map.
 	v, existed := m.LoadOrCompute("a", func() int { return 10 })
@@ -75,7 +75,7 @@ func TestMap_LoadOrCompute(t *testing.T) {
 }
 
 func TestMap_LoadAndDelete(t *testing.T) {
-	var m Map[string, int]
+	var m LockedMap[string, int]
 
 	// From empty.
 	v, ok := m.LoadAndDelete("a")
@@ -97,7 +97,7 @@ func TestMap_LoadAndDelete(t *testing.T) {
 }
 
 func TestMap_CompareAndDelete(t *testing.T) {
-	var m Map[string, int]
+	var m LockedMap[string, int]
 
 	// On empty map.
 	if m.CompareAndDelete("a", 1) {
@@ -128,7 +128,7 @@ func TestMap_CompareAndDelete(t *testing.T) {
 func TestMap_CompareAndDelete_Pointer(t *testing.T) {
 	// Verify pointer identity comparison (used by threadActivations).
 	type obj struct{ n int }
-	var m Map[string, *obj]
+	var m LockedMap[string, *obj]
 
 	a := &obj{n: 1}
 	b := &obj{n: 1} // same value, different pointer
@@ -154,7 +154,7 @@ func TestMap_CompareAndDelete_Pointer(t *testing.T) {
 
 func TestMap_ZeroValueUsable(t *testing.T) {
 	// The zero value of Map must be usable without explicit initialization.
-	var m Map[string, bool]
+	var m LockedMap[string, bool]
 
 	// Store (lazy init).
 	m.Store("a", true)
@@ -163,7 +163,7 @@ func TestMap_ZeroValueUsable(t *testing.T) {
 		t.Fatalf("zero value Store+Load: got (%v, %v)", v, ok)
 	}
 
-	var m2 Map[int, string]
+	var m2 LockedMap[int, string]
 	m2.Store(1, "hello")
 	s, ok := m2.Load(1)
 	if !ok || s != "hello" {
@@ -173,7 +173,7 @@ func TestMap_ZeroValueUsable(t *testing.T) {
 
 func TestMap_Concurrent(t *testing.T) {
 	// Basic race test: N goroutines Store + Load + Delete concurrently.
-	var m Map[int, int]
+	var m LockedMap[int, int]
 	const (
 		numGoroutines = 20
 		opsPerRoutine = 200
@@ -210,7 +210,7 @@ func TestMap_Concurrent(t *testing.T) {
 func TestMap_LoadOrCompute_ConcurrentRace(t *testing.T) {
 	// Verify that concurrent LoadOrCompute calls for the same key produce
 	// exactly one value from compute, and all callers get the same result.
-	var m Map[int, int]
+	var m LockedMap[int, int]
 	const numGoroutines = 50
 
 	var wg sync.WaitGroup

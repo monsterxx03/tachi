@@ -1,4 +1,4 @@
-package pathtrie
+package container
 
 import (
 	"fmt"
@@ -22,7 +22,7 @@ func sortMatches(ms []Match) []Match {
 }
 
 func TestNewEmpty(t *testing.T) {
-	tr := New(nil)
+	tr := NewPathTrie(nil)
 	if tr.FileCount() != 0 {
 		t.Errorf("expected 0 files, got %d", tr.FileCount())
 	}
@@ -32,14 +32,14 @@ func TestNewEmpty(t *testing.T) {
 }
 
 func TestNewBasic(t *testing.T) {
-	tr := New(paths("a/b.go", "a/c.go", "README.md"))
+	tr := NewPathTrie(paths("a/b.go", "a/c.go", "README.md"))
 	if tr.FileCount() != 3 {
 		t.Errorf("expected 3 files, got %d", tr.FileCount())
 	}
 }
 
 func TestSearchExact(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"foo/bar.go",
 		"foo/baz.go",
 		"foo/qux/zzz.go",
@@ -79,7 +79,7 @@ func TestSearchExact(t *testing.T) {
 }
 
 func TestSearchFuzzy(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"tui/input.go",
 		"tui/model.go",
 		"tui/at_file.go",
@@ -190,7 +190,7 @@ func TestSearchFuzzy(t *testing.T) {
 }
 
 func TestSearchPrefixScoped(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"tui/input.go",
 		"tui/model.go",
 		"tui/at_file.go",
@@ -216,7 +216,7 @@ func TestSearchTopN(t *testing.T) {
 	for i := range 100 {
 		ps = append(ps, fmt.Sprintf("dir/file_%03d.txt", i))
 	}
-	tr := New(ps)
+	tr := NewPathTrie(ps)
 
 	got := tr.Search("file", 5)
 	if len(got) != 5 {
@@ -231,7 +231,7 @@ func TestSearchTopN(t *testing.T) {
 }
 
 func TestSearchDirectoryMatch(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"src/cmd/main.go",
 		"src/lib/util.go",
 		"src/lib/helper.go",
@@ -263,7 +263,7 @@ func TestSearchDirectoryMatch(t *testing.T) {
 }
 
 func TestCaseInsensitive(t *testing.T) {
-	tr := New(paths("FOO/BAR.go", "foo/bar.go", "FoO/BaR.GO"))
+	tr := NewPathTrie(paths("FOO/BAR.go", "foo/bar.go", "FoO/BaR.GO"))
 	got := tr.Search("foo", 10)
 	if len(got) < 1 {
 		t.Errorf("expected at least 1 match, got %d", len(got))
@@ -271,7 +271,7 @@ func TestCaseInsensitive(t *testing.T) {
 }
 
 func TestEmptyQuery(t *testing.T) {
-	tr := New(paths("a/b.go"))
+	tr := NewPathTrie(paths("a/b.go"))
 	if got := tr.Search("", 10); len(got) != 0 {
 		t.Errorf("expected empty result for empty query")
 	}
@@ -281,7 +281,7 @@ func TestEmptyQuery(t *testing.T) {
 }
 
 func TestScoreOrdering(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"abc.go",    // depth 5: 22 - 5 = 17
 		"axbxc.go",  // depth 7: 16 - 7 = 9
 		"abx.go",    // depth 5: 16 - 5 = 11
@@ -303,7 +303,7 @@ func TestScoreOrdering(t *testing.T) {
 }
 
 func TestWalkPrefixExactCase(t *testing.T) {
-	tr := New(paths("Src/Main.go", "src/main_test.go"))
+	tr := NewPathTrie(paths("Src/Main.go", "src/main_test.go"))
 	if got := tr.Search("src/", 10); len(got) < 1 {
 		t.Errorf("expected results for src/: %v", got)
 	}
@@ -318,7 +318,7 @@ func contains(ss []string, s string) bool {
 
 func TestPathTrieSiblings(t *testing.T) {
 	// Verify no overlap between prefix path slices across siblings
-	tr := New(paths("ab/c.go", "ab/d.go"))
+	tr := NewPathTrie(paths("ab/c.go", "ab/d.go"))
 
 	got := sortMatches(tr.Search("ab", 10))
 	for _, m := range got {
@@ -332,7 +332,7 @@ func TestPathTrieSiblings(t *testing.T) {
 }
 
 func TestDeepPaths(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"a/b/c/d/e.go",
 		"a/b/x/y/z/f.go",
 		"a/b/c/g/h/i.go",
@@ -373,7 +373,7 @@ func TestMatchByte(t *testing.T) {
 
 func TestNewDedup(t *testing.T) {
 	// Duplicate paths count once (they merge in the trie)
-	tr := New(paths("a/b.go", "a/b.go", "a/b.go"))
+	tr := NewPathTrie(paths("a/b.go", "a/b.go", "a/b.go"))
 	if tr.FileCount() != 1 {
 		t.Errorf("expected 1 file, got %d", tr.FileCount())
 	}
@@ -386,7 +386,7 @@ func TestSearchResultCount(t *testing.T) {
 	for i := range 50 {
 		ps = append(ps, fmt.Sprintf("x/file_%d.go", i))
 	}
-	tr := New(ps)
+	tr := NewPathTrie(ps)
 
 	got := tr.Search("x/file", 100)
 	// All 50 files + 1 dir should be found
@@ -396,7 +396,7 @@ func TestSearchResultCount(t *testing.T) {
 }
 
 func TestSearchWithWeirdChars(t *testing.T) {
-	tr := New(paths(
+	tr := NewPathTrie(paths(
 		"foo/bar-baz.go",
 		"foo/bar_baz.go",
 		"foo/.hidden",
@@ -420,7 +420,7 @@ func TestSearchWithWeirdChars(t *testing.T) {
 }
 
 func TestInsert_EmptyPathsIgnored(t *testing.T) {
-	tr := New(paths("", "a/b.go", ""))
+	tr := NewPathTrie(paths("", "a/b.go", ""))
 	if tr.FileCount() != 1 {
 		t.Errorf("expected 1 file, got %d", tr.FileCount())
 	}
@@ -435,7 +435,7 @@ func BenchmarkBuild(b *testing.B) {
 	}
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		New(ps)
+		NewPathTrie(ps)
 	}
 }
 
@@ -444,7 +444,7 @@ func BenchmarkSearch(b *testing.B) {
 	for i := range 5000 {
 		ps = append(ps, fmt.Sprintf("src/module/sub/pkg/file_%04d.go", i))
 	}
-	tr := New(ps)
+	tr := NewPathTrie(ps)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		tr.Search("file_", 20)
@@ -456,7 +456,7 @@ func BenchmarkSearchPrefixScoped(b *testing.B) {
 	for i := range 5000 {
 		ps = append(ps, fmt.Sprintf("src/module/sub/pkg/file_%04d.go", i))
 	}
-	tr := New(ps)
+	tr := NewPathTrie(ps)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		tr.Search("src/module/sub/pkg/file_", 20)
@@ -473,7 +473,7 @@ func BenchmarkSearchWeirdChars(b *testing.B) {
 	for i := range 500 {
 		ps = append(ps, fmt.Sprintf("src/file_%04d.go", i))
 	}
-	tr := New(ps)
+	tr := NewPathTrie(ps)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		tr.Search("@sp", 20)

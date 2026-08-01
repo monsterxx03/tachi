@@ -16,7 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
-	"github.com/monsterxx03/tachi/pkg/lockedmap"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/monsterxx03/tachi/session"
@@ -151,7 +151,7 @@ type Manager struct {
 	skillStore *skill.Store
 
 	// Per-thread agent activations for steer support.
-	threadActivations lockedmap.Map[string, *threadActivation]
+	threadActivations container.LockedMap[string, *threadActivation]
 
 	// Running one-off commands (/commit, /review) per thread, so /stop and
 	// /new can cancel them (they don't create threadActivations).

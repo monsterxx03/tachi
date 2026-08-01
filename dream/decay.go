@@ -10,7 +10,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/pkg/set"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 // HalfLifeDays is the decay half-life in days. Facts decay to 0.5 after this
@@ -63,7 +63,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 		return result
 	}
 
-	seen := set.New[string]()
+	seen := container.NewSet[string]()
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {

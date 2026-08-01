@@ -14,15 +14,14 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
-	"github.com/monsterxx03/tachi/pkg/pathtrie"
-	"github.com/monsterxx03/tachi/pkg/set"
 )
 
 // --- Cached trie ---
 
 var (
-	atFileTrie    *pathtrie.PathTrie
+	atFileTrie    *container.PathTrie
 	atFileTrieTTL time.Time
 	atFileTrieMu  sync.Mutex
 )
@@ -34,7 +33,7 @@ const (
 
 // getCachedTrie returns the path trie for the current working directory,
 // cached for 30 seconds.
-func (i *InputArea) getCachedTrie() (*pathtrie.PathTrie, error) {
+func (i *InputArea) getCachedTrie() (*container.PathTrie, error) {
 	atFileTrieMu.Lock()
 	defer atFileTrieMu.Unlock()
 
@@ -73,7 +72,7 @@ func (i *InputArea) getCachedTrie() (*pathtrie.PathTrie, error) {
 		tachiCmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--no-ignore-vcs", "--glob", "!.git", ".tachi")
 		tachiCmd.Dir = cwd
 		if tachiOutput, err := tachiCmd.Output(); err == nil {
-			seen := set.New(paths...)
+			seen := container.NewSet(paths...)
 			for line := range strings.SplitSeq(strings.TrimSpace(string(tachiOutput)), "\n") {
 				line = strings.TrimSpace(line)
 				if line != "" && !seen.Has(line) {
@@ -84,7 +83,7 @@ func (i *InputArea) getCachedTrie() (*pathtrie.PathTrie, error) {
 		}
 	}
 
-	t := pathtrie.New(paths)
+	t := container.NewPathTrie(paths)
 	atFileTrie = t
 	atFileTrieTTL = time.Now()
 	i.logger.Info(context.Background(), "at_file: built trie", "files", t.FileCount())

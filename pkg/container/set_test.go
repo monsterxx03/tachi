@@ -1,4 +1,4 @@
-package set
+package container
 
 import (
 	"sort"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewAndHas(t *testing.T) {
-	s := New("a", "b", "c")
+	s := NewSet("a", "b", "c")
 	if s.Len() != 3 {
 		t.Fatalf("Len = %d, want 3", s.Len())
 	}
@@ -21,7 +21,7 @@ func TestNewAndHas(t *testing.T) {
 }
 
 func TestAddRemove(t *testing.T) {
-	s := New[int]()
+	s := NewSet[int]()
 	s.Add(1, 2, 3)
 	if !s.Has(2) {
 		t.Error("Add failed")
@@ -37,7 +37,7 @@ func TestAddRemove(t *testing.T) {
 }
 
 func TestSliceAndRange(t *testing.T) {
-	s := New("x", "y", "z")
+	s := NewSet("x", "y", "z")
 	got := s.Slice()
 	if len(got) != 3 {
 		t.Fatalf("Slice len = %d, want 3", len(got))
@@ -55,11 +55,11 @@ func TestSliceAndRange(t *testing.T) {
 }
 
 func TestGenericTypes(t *testing.T) {
-	ints := New(1, 2, 3)
+	ints := NewSet(1, 2, 3)
 	if !ints.Has(2) || ints.Has(4) {
 		t.Error("int set mismatch")
 	}
-	runes := New('a', 'b')
+	runes := NewSet('a', 'b')
 	if !runes.Has('a') {
 		t.Error("rune set mismatch")
 	}

@@ -16,7 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/pkg/set"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -242,7 +242,7 @@ func RunPRGeneration(ctx context.Context, cfg *PRGenerationConfig) *PRResult {
 func checkPRGate(issue *github.Issue, labels []*github.Label, allowedAssociations []string, gateLabel string) (bool, string) {
 	// Check author association.
 	assoc := issue.GetAuthorAssociation()
-	if set.New(allowedAssociations...).Has(assoc) {
+	if container.NewSet(allowedAssociations...).Has(assoc) {
 		return true, ""
 	}
 

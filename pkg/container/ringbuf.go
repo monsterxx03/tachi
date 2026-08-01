@@ -1,31 +1,31 @@
-// Package ringbuf provides a fixed-size thread-safe circular byte buffer
-// for capturing recent output of a running process.
-package ringbuf
+// RingBuf is a fixed-size thread-safe circular byte buffer for capturing
+// recent output of a running process.
+package container
 
 import (
 	"bytes"
 	"sync"
 )
 
-// Buffer is a fixed-size circular byte buffer. Writes beyond capacity
+// RingBuf is a fixed-size circular byte buffer. Writes beyond capacity
 // overwrite the oldest data. It is safe for concurrent use.
-type Buffer struct {
+type RingBuf struct {
 	buf    []byte
 	pos    int
 	filled int // number of times pos wrapped (0 = not yet wrapped)
 	mu     sync.Mutex
 }
 
-// New creates a Buffer with the given capacity in bytes.
-func New(cap int) *Buffer {
-	return &Buffer{
+// New creates a RingBuf with the given capacity in bytes.
+func NewRingBuf(cap int) *RingBuf {
+	return &RingBuf{
 		buf: make([]byte, cap),
 	}
 }
 
 // Write appends p to the buffer. If the buffer is full, oldest data is
 // overwritten. Returns len(p), nil — never returns an error.
-func (rb *Buffer) Write(p []byte) (n int, err error) {
+func (rb *RingBuf) Write(p []byte) (n int, err error) {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 
@@ -42,7 +42,7 @@ func (rb *Buffer) Write(p []byte) (n int, err error) {
 
 // String returns the buffer contents in order (oldest first).
 // Unwritten trailing slots are trimmed.
-func (rb *Buffer) String() string {
+func (rb *RingBuf) String() string {
 	rb.mu.Lock()
 	defer rb.mu.Unlock()
 

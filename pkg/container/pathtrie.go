@@ -1,4 +1,4 @@
-package pathtrie
+package container
 
 import (
 	"container/heap"
@@ -23,7 +23,7 @@ type PathTrie struct {
 }
 
 // New builds a PathTrie from a list of slash-separated relative paths.
-func New(paths []string) *PathTrie {
+func NewPathTrie(paths []string) *PathTrie {
 	t := &PathTrie{
 		root: &trieNode{
 			children: make(map[byte]*trieNode),

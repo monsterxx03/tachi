@@ -1,12 +1,12 @@
-package ringbuf
+package container
 
 import (
 	"strings"
 	"testing"
 )
 
-func TestBuffer_Basic(t *testing.T) {
-	b := New(64)
+func TestRingBuf_Basic(t *testing.T) {
+	b := NewRingBuf(64)
 	b.Write([]byte("hello"))
 
 	s := b.String()
@@ -15,8 +15,8 @@ func TestBuffer_Basic(t *testing.T) {
 	}
 }
 
-func TestBuffer_Wrap(t *testing.T) {
-	b := New(5) // small buffer to force wrapping
+func TestRingBuf_Wrap(t *testing.T) {
+	b := NewRingBuf(5) // small buffer to force wrapping
 	b.Write([]byte("abcde"))
 	b.Write([]byte("fgh"))
 
@@ -30,8 +30,8 @@ func TestBuffer_Wrap(t *testing.T) {
 	}
 }
 
-func TestBuffer_MultiWrap(t *testing.T) {
-	b := New(4)
+func TestRingBuf_MultiWrap(t *testing.T) {
+	b := NewRingBuf(4)
 	b.Write([]byte("1234567890")) // 10 bytes into 4-byte buffer
 	s := b.String()
 	// Only last 4 bytes survive: "7890"
@@ -47,15 +47,15 @@ func TestBuffer_MultiWrap(t *testing.T) {
 	}
 }
 
-func TestBuffer_Empty(t *testing.T) {
-	b := New(64)
+func TestRingBuf_Empty(t *testing.T) {
+	b := NewRingBuf(64)
 	if s := b.String(); s != "" {
 		t.Errorf("expected empty, got %q", s)
 	}
 }
 
-func TestBuffer_LargeWrite(t *testing.T) {
-	b := New(10)
+func TestRingBuf_LargeWrite(t *testing.T) {
+	b := NewRingBuf(10)
 	data := strings.Repeat("x", 100)
 	b.Write([]byte(data))
 
@@ -68,8 +68,8 @@ func TestBuffer_LargeWrite(t *testing.T) {
 	}
 }
 
-func TestBuffer_Concurrent(t *testing.T) {
-	b := New(1024)
+func TestRingBuf_Concurrent(t *testing.T) {
+	b := NewRingBuf(1024)
 	done := make(chan struct{})
 	for range 4 {
 		go func() {
@@ -86,8 +86,8 @@ func TestBuffer_Concurrent(t *testing.T) {
 	_ = b.String()
 }
 
-func TestBuffer_WriteReturns(t *testing.T) {
-	b := New(10)
+func TestRingBuf_WriteReturns(t *testing.T) {
+	b := NewRingBuf(10)
 	n, err := b.Write([]byte("hello"))
 	if n != 5 {
 		t.Errorf("expected n=5, got %d", n)
@@ -97,8 +97,8 @@ func TestBuffer_WriteReturns(t *testing.T) {
 	}
 }
 
-func TestBuffer_ResetBehavior(t *testing.T) {
-	b := New(8)
+func TestRingBuf_ResetBehavior(t *testing.T) {
+	b := NewRingBuf(8)
 	b.Write([]byte("abcdefgh")) // exactly fills buffer
 	s := b.String()
 	if s != "abcdefgh" {

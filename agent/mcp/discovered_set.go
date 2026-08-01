@@ -3,7 +3,7 @@ package mcp
 import (
 	"sync"
 
-	"github.com/monsterxx03/tachi/pkg/set"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 // DiscoveredSet tracks which MCP tools have been discovered by the LLM
@@ -11,13 +11,13 @@ import (
 // so that List() returns tools in the order they were discovered.
 type DiscoveredSet struct {
 	mu    sync.RWMutex
-	names set.Set[string]
+	names container.Set[string]
 	order []string // insertion order
 }
 
 // NewDiscoveredSet creates an empty discovered set.
 func NewDiscoveredSet() *DiscoveredSet {
-	return &DiscoveredSet{names: set.New[string]()}
+	return &DiscoveredSet{names: container.NewSet[string]()}
 }
 
 // Add marks a tool as discovered. Idempotent.

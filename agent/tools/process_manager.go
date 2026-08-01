@@ -10,7 +10,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
-	"github.com/monsterxx03/tachi/pkg/ringbuf"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 // ProcessStatus represents the current state of a managed background process.
@@ -75,8 +75,8 @@ type ManagedProcess struct {
 	status   atomic.Int32 // _psRunning / _psExited / _psKilled / _psError
 	exitCode atomic.Int32
 
-	stdoutBuf *ringbuf.Buffer
-	stderrBuf *ringbuf.Buffer
+	stdoutBuf *container.RingBuf
+	stderrBuf *container.RingBuf
 }
 
 // toInfo returns a snapshot of the process for external consumption. Lock-free.
@@ -140,8 +140,8 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 	// macOS cannot use Setsid+Setpgid together (setsid() fails if PG leader).
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 
-	stdoutBuf := ringbuf.New(recentOutputCap)
-	stderrBuf := ringbuf.New(recentOutputCap)
+	stdoutBuf := container.NewRingBuf(recentOutputCap)
+	stderrBuf := container.NewRingBuf(recentOutputCap)
 	cmd.Stdout = stdoutBuf
 	cmd.Stderr = stderrBuf
 
