@@ -246,6 +246,11 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	commitProvider := aiAgent.CommitProvider()
 	model := aiAgent.Model()
+	if commitProvider != nil {
+		// The commit prompt's co-author trailer must reflect the model that
+		// actually runs, not the main provider's.
+		model = commitProvider.Model()
+	}
 
 	thinkingDisabled := false
 	opts := llm.ChatOptions{

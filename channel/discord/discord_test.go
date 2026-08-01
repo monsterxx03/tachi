@@ -1017,3 +1017,53 @@ func TestParseMediaTags(t *testing.T) {
 		})
 	}
 }
+
+// TestBuildSlashArgs verifies option conversion, including integer options
+// (e.g. /review rounds) which must be rendered as decimal text.
+func TestBuildSlashArgs(t *testing.T) {
+	intOpt := func(v int64) *discordgo.ApplicationCommandInteractionDataOption {
+		// discordgo stores option values as float64 (Discord API numbers).
+		return &discordgo.ApplicationCommandInteractionDataOption{
+			Name:  "rounds",
+			Type:  discordgo.ApplicationCommandOptionInteger,
+			Value: float64(v),
+		}
+	}
+	strOpt := func(name, v string) *discordgo.ApplicationCommandInteractionDataOption {
+		return &discordgo.ApplicationCommandInteractionDataOption{
+			Name:  name,
+			Type:  discordgo.ApplicationCommandOptionString,
+			Value: v,
+		}
+	}
+
+	tests := []struct {
+		name    string
+		options []*discordgo.ApplicationCommandInteractionDataOption
+		want    string
+	}{
+		{"nil options", nil, ""},
+		{"string option", []*discordgo.ApplicationCommandInteractionDataOption{strOpt("provider", "claude")}, "claude"},
+		{"integer option", []*discordgo.ApplicationCommandInteractionDataOption{intOpt(5)}, "5"},
+		{"integer plus string", []*discordgo.ApplicationCommandInteractionDataOption{intOpt(3), strOpt("extra", "x")}, "3 x"},
+		{"empty string skipped", []*discordgo.ApplicationCommandInteractionDataOption{strOpt("action", "")}, ""},
+		{"number option", []*discordgo.ApplicationCommandInteractionDataOption{{
+			Name:  "ratio",
+			Type:  discordgo.ApplicationCommandOptionNumber,
+			Value: 0.75,
+		}}, "0.75"},
+		{"boolean option", []*discordgo.ApplicationCommandInteractionDataOption{{
+			Name:  "verbose",
+			Type:  discordgo.ApplicationCommandOptionBoolean,
+			Value: true,
+		}}, "true"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := buildSlashArgs(tt.options); got != tt.want {
+				t.Errorf("buildSlashArgs() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}

@@ -15,7 +15,9 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
@@ -31,9 +33,15 @@ import (
 // without routing through the text-based message handler path.
 func (m *Manager) buildCommandHandler() channel.CommandHandler {
 	return func(ctx context.Context, cmd channel.SlashCommand) (channel.OutgoingMessage, string, string, error) {
-		result, err := m.executeSlashCommand(cmd)
+		result, err := m.executeSlashCommand(ctx, cmd)
 		if err != nil {
-			return channel.OutgoingMessage{}, "", "", err
+			// Carry partial output (e.g. a /review that failed mid-chain) so
+			// the channel can show completed work alongside the error (B7).
+			reply := result.Reply
+			if reply.ThreadID == "" {
+				reply.ThreadID = cmd.ThreadID
+			}
+			return reply, "", "", err
 		}
 		// Read the current workDir from cache for channel topic updates.
 		workDir := result.WorkDir
@@ -58,10 +66,19 @@ func (m *Manager) buildCommandHandler() channel.CommandHandler {
 // executeSlashCommand dispatches a SlashCommand to the appropriate handler.
 // Returns a HandlerResult so commands that need file attachments (e.g. /transcript)
 // can include them. Text-only commands return HandlerResult with just Content set.
-func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.HandlerResult, error) {
+//
+// ctx carries the channel's streaming callback (Discord status embeds) for
+// long-running LLM commands like /commit and /review, plus cancellation.
+func (m *Manager) executeSlashCommand(ctx context.Context, cmd channel.SlashCommand) (channel.HandlerResult, error) {
 	switch cmd.Name {
 	case "new":
 		text, err := m.handleNewCommand(cmd.ThreadID)
+		return textHandlerResult(text), err
+	case "commit":
+		text, err := m.handleCommitCommand(ctx, cmd.ThreadID)
+		return textHandlerResult(text), err
+	case "review":
+		text, err := m.handleReviewCommand(ctx, cmd.ThreadID, cmd.Args)
 		return textHandlerResult(text), err
 	case "mcp":
 		if cmd.Args != "" {
@@ -137,7 +154,7 @@ func textHandlerResult(text string) channel.HandlerResult {
 // handleSlashCommand parses a text-based slash command from an IncomingMessage
 // into a typed SlashCommand, then delegates to executeSlashCommand.
 // Returns a fully populated HandlerResult with ThreadID and ReplyTo set.
-func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) channel.HandlerResult {
+func (m *Manager) handleSlashCommand(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
 	parts := strings.Fields(msg.Content)
 	if len(parts) == 0 {
 		return channel.HandlerResult{}
@@ -147,17 +164,27 @@ func (m *Manager) handleSlashCommand(msg channel.IncomingMessage) channel.Handle
 	if len(parts) > 1 {
 		args = strings.Join(parts[1:], " ")
 	}
-	result, err := m.executeSlashCommand(channel.SlashCommand{
+	result, err := m.executeSlashCommand(ctx, channel.SlashCommand{
 		Name:     name,
 		ThreadID: msg.ThreadID,
 		Args:     args,
 	})
 	if err != nil {
-		// Errors from text-only handlers: wrap in a reply with ThreadID/ReplyTo.
+		// Errors from handlers: wrap in a reply with ThreadID/ReplyTo.
+		// If the handler already produced partial output (e.g. a multi-round
+		// /review that failed on round 3), keep it so completed work is never
+		// silently discarded (B7) — just append the error.
+		content := fmt.Sprintf("❌ %v", err)
+		if errors.Is(err, context.Canceled) {
+			// User-initiated /stop — the stop reply already acknowledged it.
+			content = "⏹️ 已取消。"
+		} else if result.Reply.Content != "" {
+			content = result.Reply.Content + "\n\n❌ " + err.Error()
+		}
 		result = channel.HandlerResult{
 			Reply: channel.OutgoingMessage{
 				ThreadID: msg.ThreadID,
-				Content:  fmt.Sprintf("❌ %v", err),
+				Content:  content,
 				ReplyTo:  msg.MessageID,
 			},
 			Err: err,
@@ -487,8 +514,11 @@ func (m *Manager) applyThinkingToCachedAgent(threadID string, sess *session.Sess
 func (m *Manager) handleNewCommand(threadID string) (string, error) {
 	// Cancel any running agent turn first, so the next message
 	// starts a fresh conversation rather than being steered
-	// into the old turn.
+	// into the old turn. Also cancel any running one-off command
+	// (/commit, /review) — /new is the user's "reset everything" escape
+	// hatch after a mis-issued /review 10.
 	m.cancelThreadTurn(threadID)
+	m.cancelOneoff(threadID)
 
 	// Drop the cached AIAgent for this thread so any state that
 	// accumulated during the previous session (skill activation,
@@ -598,11 +628,15 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 
 // --- /stop ---
 
-// handleStopCommand stops the currently-running LLM turn for the given thread.
-// If no turn is active, returns a message indicating that.
+// handleStopCommand stops the currently-running LLM turn for the given
+// thread — both agent turns (threadActivation) and one-off commands
+// (/commit, /review registered via registerOneoff). If nothing is running,
+// returns a message indicating that (instead of a misleading "stopped").
 func (m *Manager) handleStopCommand(threadID string) (string, error) {
-	m.cancelThreadTurn(threadID)
-	return "⏹️ 已停止当前对话。", nil
+	if m.cancelThreadTurn(threadID) || m.cancelOneoff(threadID) {
+		return "⏹️ 已停止当前任务。", nil
+	}
+	return "当前没有运行中的任务。", nil
 }
 
 // --- /compact ---
@@ -654,6 +688,317 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string, aiAgent
 		"🔍 对话已压缩\n\n原会话: %s (%s)\n消息数: %d\n\n摘要:\n%s",
 		sess.Title, sess.ID[:8], len(sessionMsgs), summary,
 	), nil
+}
+
+// --- /commit ---
+
+// handleCommitCommand runs a one-off LLM turn that drafts a commit message
+// and commits the current repo changes via the Bash tool (no direct exec
+// here — the model drives git itself). It runs in a clean context without
+// conversation history, using the dedicated commit provider when configured
+// (commit_provider), otherwise the thread's main provider.
+//
+// Thinking is disabled for /commit: the commit task is simple and avoiding
+// thinking saves tokens/latency (same as TUI/ACP).
+//
+// The one-off run holds the thread's cached-agent lock for its duration
+// (same as /research), so a concurrent message on this thread waits for the
+// commit to finish before starting its own turn.
+func (m *Manager) handleCommitCommand(ctx context.Context, threadID string) (string, error) {
+	if m.cfg == nil {
+		return "", fmt.Errorf("manager config unavailable")
+	}
+
+	// Global one-off concurrency cap: reject with a hint instead of silently
+	// queueing behind the cached-agent lock.
+	select {
+	case m.oneoffSem <- struct{}{}:
+		defer func() { <-m.oneoffSem }()
+	default:
+		return "", fmt.Errorf("已有 %d 个长任务（/commit、/review）在运行，请稍后再试", len(m.oneoffSem))
+	}
+
+	// Register so /stop and /new can cancel this run mid-flight.
+	ctx, done := m.registerOneoff(threadID, ctx)
+	defer done()
+
+	ca, err := m.acquireAgent(ctx, threadID)
+	if err != nil {
+		return "", fmt.Errorf("acquire agent: %w", err)
+	}
+	defer m.releaseAgent(ca)
+
+	workDir := m.effectiveThreadWorkDir(ca, threadID)
+	// Bind the thread's working directory so the run's Bash tool resolves
+	// relative paths against it (same as runAgentTurn).
+	ctx = wdctx.WithDir(ctx, workDir)
+
+	aiAgent := ca.agent
+	commitProvider := aiAgent.CommitProvider()
+	model := aiAgent.Model()
+	if commitProvider != nil {
+		// The commit prompt's co-author trailer must reflect the model that
+		// actually runs, not the main provider's.
+		model = commitProvider.Model()
+	}
+
+	thinkingDisabled := false
+	opts := llm.ChatOptions{
+		MaxTokens: config.DefaultMaxTokens,
+		Thinking:  &thinkingDisabled,
+	}
+
+	sessionID := m.threadSessionID(threadID)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID, m.cfg.Debug.PPROF)
+
+	// /commit only needs Bash — the tool view hides everything else for the
+	// duration of this run without touching the registry.
+	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
+		cmds.CommitUserPrompt(model), opts,
+		agent.OneOffMeta{Kind: "commit", SessionID: sessionID},
+		agent.WithToolSet(tools.ToolNameBash))
+
+	text, err, incomplete := m.drainOneOffEvents(ctx, eventCh, aiAgent)
+	if err != nil {
+		return text, err
+	}
+	if incomplete {
+		text += "\n\n⚠️ 提交过程未完整完成（部分输出可能缺失）。请检查 git 状态确认提交是否成功。"
+	}
+	return text, nil
+}
+
+// --- /review ---
+
+// handleReviewCommand runs a code review of the current repo changes in an
+// isolated fork with limited tools (Bash, ReadFile, WriteFile, Glob, Grep).
+// The forked agent does NOT inherit conversation history — it gets a clean
+// prompt to review git diff output.
+//
+// "/review N" (N ≥ 2) runs N sequential adversarial rounds in isolated forks:
+// Reviewer → Challenger → Judge (role cycle, final round fixed as Judge).
+// Without a round count, /review stays the single-round code review.
+// See docs/2026-07-30-adversarial-review-design.md.
+//
+// The shared cmds.ReviewOrchestrator owns all orchestration state (round
+// resolution, provider assignment with fail-fast, report directory, round
+// bookkeeping) — this handler only drives the synchronous round loop, the
+// same pattern as ACP (agent/acp/commands.go handleACPReview).
+func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string) (string, error) {
+	if m.cfg == nil {
+		return "", fmt.Errorf("manager config unavailable")
+	}
+
+	// Global one-off concurrency cap: reject with a hint instead of silently
+	// queueing behind the cached-agent lock.
+	select {
+	case m.oneoffSem <- struct{}{}:
+		defer func() { <-m.oneoffSem }()
+	default:
+		return "", fmt.Errorf("已有 %d 个长任务（/commit、/review）在运行，请稍后再试", len(m.oneoffSem))
+	}
+
+	// Register so /stop and /new can cancel this run mid-flight.
+	ctx, done := m.registerOneoff(threadID, ctx)
+	defer done()
+
+	ca, err := m.acquireAgent(ctx, threadID)
+	if err != nil {
+		return "", fmt.Errorf("acquire agent: %w", err)
+	}
+	defer m.releaseAgent(ca)
+
+	workDir := m.effectiveThreadWorkDir(ca, threadID)
+	// Bind the thread's working directory so each round's Bash/WriteFile
+	// tools resolve relative paths against it — this MUST match the baseDir
+	// passed to NewReviewOrchestratorFromCommand below, otherwise the
+	// orchestrator's on-disk verification and the LLM's WriteFile would
+	// disagree about where reports land.
+	ctx = wdctx.WithDir(ctx, workDir)
+
+	aiAgent := ca.agent
+
+	// Resolve review provider and model from config (or fall back to main).
+	reviewProvider := aiAgent.Provider()
+	if rp := aiAgent.ReviewProvider(); rp != nil {
+		reviewProvider = rp
+	}
+
+	// Parameter defaults/overrides come from the shared resolver (same as
+	// the TUI/ACP side); only the provider lookup is agent-specific.
+	ropts := cmds.ResolveReviewOptions(m.cfg)
+	thinking, effort := cmds.ResolveReviewThinking(ropts,
+		aiAgent.Config.Thinking, aiAgent.Config.ThinkingEffort)
+
+	sessionID := m.threadSessionID(threadID)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID, m.cfg.Debug.PPROF)
+	opts := llm.ChatOptions{
+		MaxTokens:      config.DefaultMaxTokens,
+		Thinking:       thinking,
+		ThinkingEffort: effort,
+	}
+
+	// The shared orchestrator resolves rounds, assigns per-round providers
+	// (fail-fast on unresolvable adversarial models) and creates the report
+	// directory. Single-round reviews flow through the same path — this
+	// frontend never branches on round count. The report dir is anchored at
+	// the thread's working directory (the base the round's Bash/WriteFile
+	// tools resolve against) — NOT the process CWD.
+	orch, err := cmds.NewReviewOrchestratorFromCommand("/review "+args, ropts,
+		func(rounds int) ([]llm.Provider, error) {
+			if rounds == 1 {
+				return []llm.Provider{reviewProvider}, nil
+			}
+			return aiAgent.ResolveAdversarialRoundModels(m.cfg, reviewProvider, rounds)
+		}, workDir)
+	if err != nil {
+		return "", err
+	}
+
+	// Proactive progress so the user knows the review is running (a
+	// multi-round review can take minutes).
+	if orch.IsMultiRound() {
+		m.sendToThread(ctx, threadID,
+			fmt.Sprintf("🔍 开始代码审查 — **%d 轮对抗式审查**（Reviewer → Challenger → Judge）...", orch.TotalRounds()), "")
+	} else {
+		m.sendToThread(ctx, threadID, "🔍 开始代码审查...", "")
+	}
+
+	// Streaming callback for channel implementations that show real-time
+	// tool-call progress (e.g. Discord status embeds). The callback rides on
+	// ctx from the message/interaction handler — drainOneOffEvents forwards it.
+
+	var out strings.Builder
+	incompleteRounds := 0
+	runErr := orch.Run(func(spec cmds.RoundSpec) error {
+		// Per-round banner + report path hint (multi-round only).
+		banner := fmt.Sprintf("── 第 %d 轮（%d/%d）— %s ──", spec.Round, spec.Round, orch.TotalRounds(), cmds.RoleName(spec.Role))
+		if orch.IsMultiRound() && spec.OutPath != "" {
+			m.sendToThread(ctx, threadID, banner+"\n报告输出: "+spec.OutPath, "")
+		}
+
+		forked := aiAgent.Fork(agent.ForkConfig{
+			Provider:      spec.Provider,
+			MaxIterations: ropts.MaxIterations,
+			AllowedTools:  ropts.AllowedTools,
+			Logger:        aiAgent.Logger(),
+		})
+		defer forked.Close()
+
+		eventCh := forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt, spec.Prompt, opts,
+			agent.OneOffMeta{Kind: spec.Kind, SessionID: sessionID})
+
+		text, err, incomplete := m.drainOneOffEvents(ctx, eventCh, forked.Agent())
+		if err != nil {
+			return err
+		}
+		if incomplete {
+			incompleteRounds++
+		}
+		// Single-round: the LLM text IS the review output. Multi-round:
+		// collect banners + round text so the reply carries the full chain
+		// (reports are also on disk under the report dir).
+		if orch.IsMultiRound() {
+			out.WriteString(banner + "\n")
+		}
+		if text != "" {
+			out.WriteString(text + "\n\n")
+			// Push the round's full text as it completes, so a later failure
+			// never loses rounds the user has already seen (B7).
+			if orch.IsMultiRound() {
+				m.sendToThread(ctx, threadID, banner+"\n"+text, "")
+			}
+		}
+		return nil
+	})
+
+	result := strings.TrimSpace(out.String())
+
+	// Success line. Multi-round: status reflects any incomplete rounds and
+	// points at the report directory. Single-round: add a short completion
+	// marker so an empty/plain reply still signals the review happened.
+	if runErr == nil {
+		if orch.IsMultiRound() {
+			dir, _ := filepath.Rel(workDir, orch.ReportDir())
+			if dir == "" || strings.HasPrefix(dir, "..") {
+				dir = orch.ReportDir()
+			}
+			status := fmt.Sprintf("✅ 审查完成（%d 轮）", orch.TotalRounds())
+			if incompleteRounds > 0 {
+				status = fmt.Sprintf("⚠️ 审查完成（%d 轮，其中 %d 轮未完整完成）", orch.TotalRounds(), incompleteRounds)
+			}
+			result = result + "\n\n" + status + "。报告目录: `" + dir + "`"
+		} else {
+			result = result + "\n\n✅ 审查完成（1 轮）"
+		}
+	}
+	return result, runErr
+}
+
+// --- helpers for one-off LLM commands (/commit, /review) ---
+
+// effectiveThreadWorkDir returns the working directory a one-off command
+// should run in: the session's persisted WorkingDir wins (it survives
+// restarts, e.g. after /cd + restart), falling back to the cached agent's
+// workDir and finally ".".
+func (m *Manager) effectiveThreadWorkDir(ca *cachedAgent, threadID string) string {
+	if threadID != "" {
+		sm := m.newSessionManager()
+		if sm != nil {
+			if sess, err := sm.FindByThreadID(threadID); err == nil && sess != nil && sess.WorkingDir != "" {
+				return sess.WorkingDir
+			}
+		}
+	}
+	if ca != nil && ca.workDir != "" {
+		return ca.workDir
+	}
+	return "."
+}
+
+// threadSessionID is shared with the ambient pipeline (ambient.go) — one-off
+// transcripts (/commit, /review, ambient) all anchor under the session
+// directory via this helper.
+
+// drainOneOffEvents consumes an agent event stream for a one-off LLM run
+// (/commit, /review round). Unlike runAgentTurn's drainEvents call, one-off
+// runs have no thread activation: steer, AskUser waiting and attachment
+// collection are all skipped (ta == nil). The channel's streaming callback
+// (if the handler ctx carried one) is forwarded so Discord can show live
+// tool-call progress embeds.
+//
+// The third return value (incomplete) reports whether the run ended
+// abnormally — an error event occurred but drainEvents still returned nil
+// because partial text was produced (its result normalization is tuned for
+// regular conversation, where partial output beats a hard failure). One-off
+// callers use it to mark the round/commit as incomplete instead of claiming
+// success ("✅ 审查完成" when a round died midway is a lie).
+func (m *Manager) drainOneOffEvents(ctx context.Context, ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent) (string, error, bool) {
+	onTextDelta := streamingCallbackFromCtx(ctx)
+
+	// Tee the event stream to spot error events that drainEvents swallows.
+	// The goroutine only exits when ch closes (one-off runs have no
+	// AskUser/Steer early-return paths), so the channel close establishes a
+	// happens-before edge: by the time drainEvents returns, incomplete is final.
+	tee := make(chan agent.AgentEvent, 8)
+	var incomplete bool
+	go func() {
+		defer close(tee)
+		for e := range ch {
+			switch e.Type {
+			case agent.AgentEventError:
+				incomplete = true
+			case agent.AgentEventTurnComplete:
+				if e.Result != nil && e.Result.Error != nil {
+					incomplete = true
+				}
+			}
+			tee <- e
+		}
+	}()
+
+	text, err := m.drainEvents(ctx, tee, aiAgent, nil, nil, onTextDelta)
+	return text, err, incomplete
 }
 
 // --- /mcp ---

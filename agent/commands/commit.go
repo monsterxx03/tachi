@@ -41,7 +41,7 @@ func CommitUserPrompt(modelName string) string {
 	backtick := "`"
 	return fmt.Sprintf(`## Context to gather (use the Bash tool — do not assume output without running commands)
 
-Run these in the current working directory (Bash's cwd is the process cwd) and use the output as context:
+Run these in the current working directory (the Bash tool's cwd) and use the output as context:
 
 - Current git status: "git status"
 - Staged and unstaged changes vs HEAD: "git diff HEAD" (if that fails, e.g. no commits yet, use "git diff" and "git status")

@@ -232,7 +232,11 @@ func (m *Manager) threadSessionID(threadID string) string {
 	if threadID == "" {
 		return ""
 	}
-	sess, err := m.newSessionManager().FindByThreadID(threadID)
+	sm := m.newSessionManager()
+	if sm == nil {
+		return ""
+	}
+	sess, err := sm.FindByThreadID(threadID)
 	if err != nil || sess == nil {
 		return ""
 	}
