@@ -50,18 +50,13 @@ type ModelPricing struct {
 | ------------- | -------- | -------------- |
 | 空            | nil（模型默认） | ""（模型默认） |
 | `none`        | `false`（显式关闭） | "" |
-| 其他          | nil | `llm.NormalizeThinkingEffort(model, level)` 归一化后的值 |
+| 其他          | nil | 原样透传（`low`/`medium`/`high`/`xhigh`/`max`） |
 
-### 2.3 DeepSeek 内置表（llm/model_info.go）
+**不做客户端归一化**：DeepSeek 官方 [thinking_mode 文档](https://api-docs.deepseek.com/zh-cn/guides/thinking_mode) 的 effort 映射表显示，两个 v4 模型都**接受**全部五个级别作为请求输入，由服务端映射到实际推理 effort（如 flash 的 `medium`→`high`、`xhigh`→`high`、`max`→`max`；pro 的 `xhigh`→`max`）。客户端硬编码映射表既与服务器语义重复，又会随服务端调整（文档注 3：pro 的映射 2026-08 月初更新）而失真 —— 比如把用户请求的 `max` 降级为 `high` 反而浪费了模型能力。因此 effort 一律透传，映射责任完全交给 API。
 
-```go
-ThinkingEffortLevels(model)  // deepseek-v4-flash: [low, high]; deepseek-v4-pro: [low, high, max]; 其他 nil（不限制）
-NormalizeThinkingEffort(model, effort) // 降级到不高于请求的最高支持级别（flash+max → high，pro+medium → low）
-```
+（曾短暂实现过 `llm.NormalizeThinkingEffort` 客户端降级，基于错误的"flash 不支持 max"理解，已删除。）
 
-来源：<https://api-docs.deepseek.com/zh-cn/guides/thinking_mode> 的 effort 映射表。
-
-### 2.4 Provider 层传输
+### 2.3 Provider 层传输
 
 **OpenAI provider（`deepseek-v4-*` 走 OpenAI 端点时）**：
 - 依赖 fork 版 go-openai（`monsterxx03/go-openai` tag `v1.41.2-extrabody`，go.mod `replace`）：`ChatCompletionRequest.ExtraBody map[string]any` 在客户端内部 merge 到请求体根节点（等价 Python SDK 的 `extra_body`）。非流式 `CreateChatCompletion` 与流式 `CreateChatCompletionStream` 都支持。
@@ -102,7 +97,7 @@ providers:
     api_key: sk-xxx
     spec:
       context_window: 1000000
-      thinking_level: high   # none=关闭; low/high/max 按模型归一化（flash 的 max → high）
+      thinking_level: high   # none=关闭; low/medium/high/xhigh/max 原样透传，服务端映射
       pricing:
         input_price: 1.0
         output_price: 2.0
@@ -119,6 +114,6 @@ providers:
 
 ## 四、测试覆盖
 
-- `config/config_test.go`：`TestModelSpec_YAMLNested`（嵌套 YAML 解析 + 旧平铺字段不再解析 + round-trip）、`TestResolveProviderConfig_ThinkingLevel`（none/high/max + deepseek 归一化）
-- `llm/model_info_test.go`：`ThinkingEffortLevels` / `NormalizeThinkingEffort` 表驱动
+- `config/config_test.go`：`TestModelSpec_YAMLNested`（嵌套 YAML 解析 + 旧平铺字段不再解析 + round-trip）、`TestResolveProviderConfig_ThinkingLevel`（none/high/max 原样透传）
+- `agent/commands/thinking_test.go`：`ThinkingOverrideFromLevel` / `EffectiveThinking`（none 关闭、其余 effort 透传）
 - `llm/openai_test.go`：httptest 验证非流式/流式请求体的顶层 `thinking` 字段 + `reasoning_effort`；非 deepseek 模型不注入顶层字段

@@ -156,6 +156,12 @@ var (
 				Foreground(lipgloss.Color("#C6A0F6")).
 				Bold(true)
 
+	// Thinking-level indicator in the statusbar (e.g. "think:high").
+	// Named distinctly from thinkingStyle (the thinking-view style).
+	thinkingBadgeStyle = lipgloss.NewStyle().
+				Foreground(lipgloss.Color("#B7BDF8")).
+				Italic(true)
+
 	mcpConnectingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#EED49F")).
 				Italic(true)

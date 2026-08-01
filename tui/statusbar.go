@@ -29,6 +29,7 @@ type StatusBar struct {
 	compacting    bool   // true when auto-compaction is in progress
 	modeBadge     string // current mode badge text (e.g. "[auto]")
 	reviewBadge   string // multi-round /review indicator (e.g. "⚔️ 挑战者 2/5"); empty when not reviewing
+	thinkingLevel string // current thinking level ("none"/"low"/.../"max"/"default"); empty = not shown
 }
 
 const (
@@ -64,6 +65,10 @@ func (s *StatusBar) SetReviewBadge(b string) {
 	s.reviewBadge = b
 }
 func (s *StatusBar) ClearReviewBadge() { s.reviewBadge = "" }
+
+// SetThinkingLevel sets the thinking-level indicator text (e.g. "high",
+// "none", "default"). Empty hides the indicator.
+func (s *StatusBar) SetThinkingLevel(level string) { s.thinkingLevel = level }
 
 func (s *StatusBar) Tick() tea.Cmd { return s.spinner.Tick }
 
@@ -109,6 +114,9 @@ func (s StatusBar) View() string {
 	left += " | " + s.providerInfo
 	if s.modeBadge != "" {
 		left += " " + modeBadgeStyleFor(s.modeBadge).Render(s.modeBadge)
+	}
+	if s.thinkingLevel != "" {
+		left += " " + thinkingBadgeStyle.Render("think:"+s.thinkingLevel)
 	}
 	if s.mcpEnabled && !s.mcpReady {
 		left += " | " + mcpConnectingStyle.Render("MCP: connecting...")

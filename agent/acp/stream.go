@@ -145,7 +145,7 @@ func streamToACP(
 				}
 				// After each tool result, send a UsageUpdate so Zed can show
 				// real-time context window usage in its status bar.
-				sendUsageUpdate(conn, sessionID, sess)
+				sendUsageUpdate(ctx, conn, sessionID, sess)
 
 			case agent.AgentEventTurnComplete:
 				// Clear buffers for the next turn.
@@ -164,7 +164,7 @@ func streamToACP(
 						}
 					}
 					// Send token usage update so Zed can show context window usage.
-					sendUsageUpdate(conn, sessionID, sess)
+					sendUsageUpdate(ctx, conn, sessionID, sess)
 				}
 				// Cache the full message history so subsequent Prompt calls
 				// can reuse it instead of re-reading messages.jsonl from disk.
@@ -251,7 +251,7 @@ func streamToACP(
 			case agent.AgentEventUsage:
 				// After each API round, send a UsageUpdate so Zed can display
 				// real-time context window consumption in its status bar.
-				sendUsageUpdate(conn, sessionID, sess)
+				sendUsageUpdate(ctx, conn, sessionID, sess)
 
 				// Events we intentionally ignore in ACP mode:
 				// AgentEventSteerCheck — ACP doesn't use steer
@@ -474,7 +474,11 @@ func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
 // current context window usage estimate, matching the values shown in the TUI
 // statusbar (LastInputEstimate / ContextWindow). Skips sending if either value
 // is zero (agent not fully initialized).
-func sendUsageUpdate(conn *acp.AgentSideConnection, sessionID acp.SessionId, sess *ACPSession) {
+//
+// ctx governs the notification write. Streaming paths pass the stream ctx;
+// deferred goroutines (time.AfterFunc after the request returned) pass
+// context.Background().
+func sendUsageUpdate(ctx context.Context, conn *acp.AgentSideConnection, sessionID acp.SessionId, sess *ACPSession) {
 	if conn == nil || sess == nil || sess.agent == nil {
 		return
 	}
@@ -483,7 +487,7 @@ func sendUsageUpdate(conn *acp.AgentSideConnection, sessionID acp.SessionId, ses
 	if used <= 0 || cw <= 0 {
 		return
 	}
-	_ = conn.SessionUpdate(context.Background(), acp.SessionNotification{
+	_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: sessionID,
 		Update: acp.SessionUpdate{
 			UsageUpdate: &acp.SessionUsageUpdate{

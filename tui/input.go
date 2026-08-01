@@ -10,6 +10,7 @@ import (
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -511,6 +512,8 @@ func (i *InputArea) updateCompletions() {
 	val := i.textarea.Value()
 	if strings.HasPrefix(val, "/") {
 		i.completions = matchCommands(val)
+		// Append /thinking level options when the command is (partially) typed.
+		i.appendThinkingCompletions(val)
 		// Append matching skill names
 		prefix := strings.TrimPrefix(val, "/")
 		for _, name := range i.skillNames {
@@ -535,6 +538,31 @@ func (i *InputArea) updateCompletions() {
 		i.completions = nil
 		i.selectedIdx = 0
 		i.updateAtFileCompletions(val)
+	}
+}
+
+// appendThinkingCompletions adds /thinking level options to the completion
+// list when the input is the /thinking command followed by (or containing) a
+// partial level argument. E.g. "/thinking h" suggests "high".
+func (i *InputArea) appendThinkingCompletions(val string) {
+	rest, ok := strings.CutPrefix(val, "/thinking")
+	if !ok {
+		return
+	}
+	// Only suggest levels once the command name is fully typed: either the
+	// input is exactly "/thinking" or "/thinking <partial level>".
+	if rest != "" && !strings.HasPrefix(rest, " ") {
+		return
+	}
+	partial := strings.TrimSpace(rest)
+	for _, level := range cmds.ThinkingLevels {
+		if !strings.HasPrefix(level, partial) {
+			continue
+		}
+		i.completions = append(i.completions, Command{
+			Name:        "/thinking " + level,
+			Description: cmds.ThinkingLevelDescriptions[level],
+		})
 	}
 }
 

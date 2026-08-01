@@ -10,7 +10,9 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // processAlive reports whether a process with the given PID exists.
@@ -708,5 +710,71 @@ func TestStatusBar_LiveContextFraction(t *testing.T) {
 	// Percentage-only display: no n/m token breakdown.
 	if strings.Contains(view, "/128") {
 		t.Errorf("statusbar should NOT show the n/m token breakdown: %q", view)
+	}
+}
+
+// ---- thinking-level statusbar indicator ----
+
+// TestSyncThinkingBadge verifies the statusbar thinking indicator shows the
+// USER-SELECTED level (raw, not model-normalized): session override wins,
+// then the provider's configured thinking_level, else "default".
+func TestSyncThinkingBadge(t *testing.T) {
+	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	a := agent.NewAIAgent(provider, 0)
+	m := testModel()
+	m.agent = a
+
+	// No session, no config → "default".
+	m.syncThinkingBadge()
+	if got := m.statusbar.thinkingLevel; got != "default" {
+		t.Errorf("thinkingLevel = %q, want %q", got, "default")
+	}
+
+	// Provider configured thinking_level=max (raw — even though the model
+	// only supports low/high, the statusbar reflects the config).
+	cfg := &config.Config{
+		Provider: "deepseek",
+		Providers: []config.ProviderConfig{
+			{Name: "deepseek", Type: "openai", Model: "deepseek-v4-flash", Spec: config.ModelSpec{ThinkingLevel: "max"}},
+		},
+	}
+	m.cfg = cfg
+	m.syncThinkingBadge()
+	if got := m.statusbar.thinkingLevel; got != "max" {
+		t.Errorf("thinkingLevel = %q, want %q (provider config)", got, "max")
+	}
+
+	// Session override (set via /thinking) wins over provider config and is
+	// shown raw (medium — not normalized down to low).
+	store, err := session.NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("session store: %v", err)
+	}
+	sm := session.NewManagerWithStore(store, nil)
+	if _, err := sm.New("deepseek", "/tmp"); err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	a.SetSessionManager(sm)
+	cur := sm.Current()
+	cur.ThinkingLevel = "medium"
+	if err := sm.UpdateMeta(cur); err != nil {
+		t.Fatalf("update meta: %v", err)
+	}
+	m.syncThinkingBadge()
+	if got := m.statusbar.thinkingLevel; got != "medium" {
+		t.Errorf("thinkingLevel = %q, want %q (session override)", got, "medium")
+	}
+
+	// Clearing the override falls back to the provider config again.
+	cur.ThinkingLevel = ""
+	if err := sm.UpdateMeta(cur); err != nil {
+		t.Fatalf("update meta: %v", err)
+	}
+	m.syncThinkingBadge()
+	if got := m.statusbar.thinkingLevel; got != "max" {
+		t.Errorf("thinkingLevel = %q, want %q (fallback to provider)", got, "max")
 	}
 }

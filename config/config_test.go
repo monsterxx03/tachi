@@ -947,7 +947,8 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "high", resolved.ThinkingEffort)
 
-	// 不支持的级别 → 归一化降级（v4-flash 不支持 max → high）
+	// 级别原样透传 — DeepSeek API 自己映射 effort（v4-flash 支持 max，
+	// medium/xhigh 也有服务端映射），客户端不做归一化。
 	pMaxFlash := &ProviderConfig{
 		Name:   "deepseek-flash",
 		Type:   "openai",
@@ -958,7 +959,7 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 	resolved, err = ResolveProviderConfig(pMaxFlash)
 	require.NoError(t, err)
 	assert.Nil(t, resolved.Thinking)
-	assert.Equal(t, "high", resolved.ThinkingEffort)
+	assert.Equal(t, "max", resolved.ThinkingEffort)
 
 	// 空 → 两者都不设置（provider/模型默认）
 	pEmpty := &ProviderConfig{
@@ -972,7 +973,7 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "", resolved.ThinkingEffort)
 
-	// 非 DeepSeek 模型：级别原样透传（不归一化）
+	// 其他模型：级别同样原样透传
 	pClaude := &ProviderConfig{
 		Name:   "claude",
 		Type:   "anthropic",

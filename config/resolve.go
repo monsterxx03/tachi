@@ -24,7 +24,7 @@ type ResolvedProvider struct {
 	// Thinking 思考模式显式开关（nil = 使用 provider/模型默认）。
 	// 由 ProviderConfig.ThinkingLevel 解析而来："none" → false，其余 → nil。
 	Thinking *bool
-	// ThinkingEffort 思考强度（已按模型归一化到支持范围；空 = 模型默认）。
+	// ThinkingEffort 思考强度（原样透传；空 = 模型默认）。
 	ThinkingEffort string
 }
 
@@ -101,9 +101,11 @@ func ResolveProviderConfig(pCfg *ProviderConfig) (*ResolvedProvider, error) {
 	}
 
 	// Resolve thinking level: "none" disables thinking mode; any other
-	// non-empty level sets the effort (normalized to the model's supported
-	// range — e.g. deepseek-v4-flash degrades "max" to "high"). Empty leaves
-	// both nil/empty, meaning "use the provider/model default".
+	// non-empty level sets the effort. Levels are passed through to the API
+	// unchanged — providers that accept a subset map the effort server-side
+	// (e.g. DeepSeek's thinking_mode docs), so client-side normalization
+	// would only distort the user's intent. Empty leaves both nil/empty,
+	// meaning "use the provider/model default".
 	var thinking *bool
 	var thinkingEffort string
 	switch pCfg.Spec.ThinkingLevel {
@@ -120,7 +122,7 @@ func ResolveProviderConfig(pCfg *ProviderConfig) (*ResolvedProvider, error) {
 				"model", pCfg.Model)
 		}
 	default:
-		thinkingEffort = llm.NormalizeThinkingEffort(pCfg.Model, pCfg.Spec.ThinkingLevel)
+		thinkingEffort = pCfg.Spec.ThinkingLevel
 	}
 
 	return &ResolvedProvider{

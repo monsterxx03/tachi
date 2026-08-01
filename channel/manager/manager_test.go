@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/skill"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -1221,4 +1222,183 @@ func TestPrepareSkillActivation_NotFound(t *testing.T) {
 	_, errMsg, err := mgr.prepareSkillActivation("nonexistent-skill", "")
 	assert.Error(t, err)
 	assert.Contains(t, errMsg, "未找到")
+}
+
+// ---- /thinking tests ----
+
+// newThinkingTestManager builds a Manager configured with a temp session
+// store and a resolved global provider, mirroring TestHandleModelCommand_*.
+func newThinkingTestManager(t *testing.T) *Manager {
+	t.Helper()
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{
+			{Name: "deepseek", Type: "openai", Model: "deepseek-v4-flash", BaseURL: "https://api.deepseek.com/v1"},
+		},
+	}
+	mgr := New(Config{
+		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
+	})
+	mgr.provider = &mockProvider{name: "openai"}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:           "openai",
+			Model:          "deepseek-v4-flash",
+			Name:           "deepseek",
+			ThinkingEffort: "high", // provider config default: high
+			ContextWindow:  128_000,
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "deepseek"
+	return mgr
+}
+
+// seedThinkingSession creates a session bound to thread-1.
+func seedThinkingSession(t *testing.T, mgr *Manager) *sesspkg.Session {
+	t.Helper()
+	sm := mgr.newSessionManager()
+	sess, err := sm.New("deepseek", "/tmp")
+	require.NoError(t, err)
+	sm.SetThreadID("thread-1")
+	return sess
+}
+
+func TestHandleThinkingCommand_ShowDefault(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+
+	resp, err := mgr.handleThinkingCommand("thread-1", "")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "**default**")
+	assert.Contains(t, resp, "仅当前会话生效")
+	for _, lvl := range cmds.ThinkingLevels {
+		assert.Contains(t, resp, lvl)
+	}
+}
+
+func TestHandleThinkingCommand_SetLevel(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+	seedThinkingSession(t, mgr)
+
+	resp, err := mgr.handleThinkingCommand("thread-1", "high")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "**high**")
+	assert.Contains(t, resp, "其他会话不受影响")
+
+	// Persisted to session meta.
+	sm := mgr.newSessionManager()
+	sess, err := sm.FindByThreadID("thread-1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "high", sess.ThinkingLevel)
+
+	// getProviderForThread applies the override on top of the provider config.
+	_, resolved, _ := mgr.getProviderForThread("thread-1")
+	require.NotNil(t, resolved)
+	assert.Equal(t, "high", resolved.Provider.ThinkingEffort)
+
+	// The global resolvedConfig must NOT be mutated (copy-on-write).
+	mgr.providerMu.RLock()
+	global := mgr.resolvedConfig.Provider.ThinkingEffort
+	mgr.providerMu.RUnlock()
+	assert.Equal(t, "high", global) // provider default is also high — use none below to prove isolation
+}
+
+func TestHandleThinkingCommand_NoneOverridesAndIsolatesGlobal(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+	seedThinkingSession(t, mgr)
+
+	_, err := mgr.handleThinkingCommand("thread-1", "none")
+	require.NoError(t, err)
+
+	_, resolved, _ := mgr.getProviderForThread("thread-1")
+	require.NotNil(t, resolved)
+	require.NotNil(t, resolved.Provider.Thinking)
+	assert.False(t, *resolved.Provider.Thinking)
+	assert.Equal(t, "", resolved.Provider.ThinkingEffort)
+
+	// Global provider config untouched.
+	mgr.providerMu.RLock()
+	assert.Nil(t, mgr.resolvedConfig.Provider.Thinking)
+	mgr.providerMu.RUnlock()
+}
+
+func TestHandleThinkingCommand_DefaultClearsOverride(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+	seedThinkingSession(t, mgr)
+
+	_, err := mgr.handleThinkingCommand("thread-1", "max")
+	require.NoError(t, err)
+
+	// max passes through unchanged (API maps it server-side).
+	_, resolved, _ := mgr.getProviderForThread("thread-1")
+	require.NotNil(t, resolved)
+	assert.Equal(t, "max", resolved.Provider.ThinkingEffort)
+
+	// Reset to provider default.
+	_, err = mgr.handleThinkingCommand("thread-1", "default")
+	require.NoError(t, err)
+
+	sm := mgr.newSessionManager()
+	sess, err := sm.FindByThreadID("thread-1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "", sess.ThinkingLevel)
+
+	// Falls back to the provider config default (high).
+	_, resolved, _ = mgr.getProviderForThread("thread-1")
+	assert.Equal(t, "high", resolved.Provider.ThinkingEffort)
+}
+
+func TestHandleThinkingCommand_InvalidLevel(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+
+	resp, err := mgr.handleThinkingCommand("thread-1", "turbo")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "无效的 thinking level")
+	assert.Contains(t, resp, "可选级别")
+}
+
+func TestHandleThinkingCommand_NoSessionCreatesOne(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+
+	resp, err := mgr.handleThinkingCommand("thread-1", "high")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "**high**")
+
+	// A session was created and bound to the thread so the override persists.
+	sm := mgr.newSessionManager()
+	sess, err := sm.FindByThreadID("thread-1")
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	assert.Equal(t, "high", sess.ThinkingLevel)
+	assert.Equal(t, "deepseek", sess.ProviderName)
+}
+
+func TestHandleThinkingCommand_AppliesToCachedAgent(t *testing.T) {
+	mgr := newThinkingTestManager(t)
+	seedThinkingSession(t, mgr)
+
+	// Build a cached agent for the thread (release immediately — the handler
+	// must NOT be called while ca.mu is held, or it deadlocks itself).
+	ca, err := mgr.acquireAgent(context.Background(), "thread-1")
+	require.NoError(t, err)
+	require.NotNil(t, ca.agent)
+	assert.Equal(t, "high", ca.agent.Config.ThinkingEffort) // provider default
+	mgr.releaseAgent(ca)
+
+	// Set thinking to none via /thinking.
+	_, err = mgr.handleThinkingCommand("thread-1", "none")
+	require.NoError(t, err)
+
+	// The cached agent must be updated immediately (same instance is
+	// returned on re-acquire since the provider name didn't change).
+	ca, err = mgr.acquireAgent(context.Background(), "thread-1")
+	require.NoError(t, err)
+	defer mgr.releaseAgent(ca)
+	require.NotNil(t, ca.agent)
+	require.NotNil(t, ca.agent.Config.Thinking)
+	assert.False(t, *ca.agent.Config.Thinking)
+	assert.Equal(t, "", ca.agent.Config.ThinkingEffort)
 }

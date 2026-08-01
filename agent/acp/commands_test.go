@@ -24,7 +24,6 @@ var expectedACPCmds = []struct {
 	name     string
 	hasInput bool
 }{
-	{name: "model", hasInput: true},
 	{name: "commit"},
 	{name: "review", hasInput: true}, // InputHint "[rounds]" — adversarial review takes an optional round count
 	{name: "init"},

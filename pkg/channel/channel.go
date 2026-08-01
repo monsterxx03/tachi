@@ -390,9 +390,12 @@ type SystemPromptSuffixer interface {
 }
 
 // Autocompleter is an optional interface for channels that want to receive
-// the list of available provider names for slash command autocomplete.
-// The Manager calls SetProviderNames before Run().
+// the list of available option values for slash command autocomplete.
+// The Manager calls SetProviderNames and SetThinkingLevels before Run().
 type Autocompleter interface {
 	Channel
 	SetProviderNames(names []string)
+	// SetThinkingLevels receives the valid /thinking level values
+	// (none/low/medium/high/xhigh/max/default) for autocomplete.
+	SetThinkingLevels(levels []string)
 }

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tools"
@@ -207,12 +208,12 @@ func (m *Manager) Done() <-chan struct{} {
 type threadActivation struct {
 	mu          sync.Mutex
 	steerRespCh chan agent.SteerInput // agent reads steer input from this
-	resultCh    chan handlerResult // agent sends final result here
-	pending     []string           // queued steer messages
-	ctx         context.Context    // agent context for cancellation
-	cancel      context.CancelFunc // cancels the agent turn
-	cancelled   bool               // true when this turn was cancelled externally
-	isCompact   bool               // true when this turn is a /compact operation
+	resultCh    chan handlerResult    // agent sends final result here
+	pending     []string              // queued steer messages
+	ctx         context.Context       // agent context for cancellation
+	cancel      context.CancelFunc    // cancels the agent turn
+	cancelled   bool                  // true when this turn was cancelled externally
+	isCompact   bool                  // true when this turn is a /compact operation
 
 	// --- AskUser state ---
 	//
@@ -331,6 +332,7 @@ func (m *Manager) Start(ctx context.Context) error {
 					}
 				}
 				ac.SetProviderNames(names)
+				ac.SetThinkingLevels(cmds.ThinkingLevels)
 				if len(names) > 0 {
 					m.logger.Info(ctx, "channel: received provider names", "name", ch.Name(), "count", len(names))
 				}
@@ -401,36 +403,57 @@ func (m *Manager) getProvider() (llm.Provider, *config.ResolvedConfig) {
 // the session's ProviderName override (set by /model) from session meta.
 // Falls back to the global provider when the session has no override or
 // the override cannot be resolved.
+//
+// The session's per-session thinking override (set by /thinking) is applied
+// on top of whichever provider wins, so future agent builds for this thread
+// inherit it. The returned resolved config is a fresh copy — the global
+// resolvedConfig is never mutated.
 func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.ResolvedConfig, string) {
+	var sess *session.Session
 	if threadID != "" && m.cfg != nil {
-		// Peek session meta to check for a /model override.
 		sm := m.newSessionManager()
-		sess, err := sm.FindByThreadID(threadID)
-		if err == nil && sess != nil && sess.ProviderName != "" {
-			pCfg := m.cfg.FindProvider(sess.ProviderName)
-			if pCfg != nil {
-				resolved, err := config.ResolveProviderConfig(pCfg)
+		s, err := sm.FindByThreadID(threadID)
+		if err == nil {
+			sess = s
+		}
+	}
+
+	var prov llm.Provider
+	var resolved *config.ResolvedConfig
+	var name string
+
+	// Session-level /model override wins over the global provider.
+	if sess != nil && sess.ProviderName != "" {
+		pCfg := m.cfg.FindProvider(sess.ProviderName)
+		if pCfg != nil {
+			rp, err := config.ResolveProviderConfig(pCfg)
+			if err == nil {
+				p, err := llm.NewProvider(rp.Type, rp.APIKey, rp.BaseURL, rp.Model)
 				if err == nil {
-					provider, err := llm.NewProvider(
-						resolved.Type,
-						resolved.APIKey,
-						resolved.BaseURL,
-						resolved.Model,
-					)
-					if err == nil {
-						m.logger.Info(context.Background(), "channel: thread using session override provider", "thread", threadID, "provider", sess.ProviderName, "model", resolved.Model)
-						return provider, &config.ResolvedConfig{Provider: *resolved}, sess.ProviderName
-					}
+					prov, resolved, name = p, &config.ResolvedConfig{Provider: *rp}, sess.ProviderName
 				}
 			}
+		}
+		if prov == nil {
 			m.logger.Warn(context.Background(), "channel: thread has ProviderName but could not resolve; falling back to global",
 				"thread", threadID, "provider_name", sess.ProviderName)
 		}
 	}
+	if prov == nil {
+		m.providerMu.RLock()
+		prov, resolved, name = m.provider, m.resolvedConfig, m.currentProviderName
+		m.providerMu.RUnlock()
+	}
 
-	m.providerMu.RLock()
-	defer m.providerMu.RUnlock()
-	return m.provider, m.resolvedConfig, m.currentProviderName
+	// Per-session thinking override wins over the provider config default.
+	// Copy before mutating: the global resolvedConfig is shared state.
+	if sess != nil && sess.ThinkingLevel != "" {
+		cp := *resolved
+		cp.Provider.Thinking, cp.Provider.ThinkingEffort = cmds.EffectiveThinking(sess.ThinkingLevel, cp.Provider)
+		resolved = &cp
+	}
+
+	return prov, resolved, name
 }
 
 // providerNameForThread returns the provider config name active for the

@@ -218,6 +218,10 @@ func NewModel(cfg ModelConfig) *Model {
 	// Sync session info to the statusbar if there's already a current session.
 	m.syncSessionInfo()
 
+	// Show the initial thinking level (provider config default until /thinking
+	// or /model changes it).
+	m.syncThinkingBadge()
+
 	// Start watching for MCP background init completion (async connect).
 	// This returns immediately; the actual wait happens in the background.
 	if len(m.mcpServers) > 0 || m.agent.MCPReady() != nil {
@@ -243,6 +247,53 @@ func (m *Model) syncSessionInfo() {
 	} else {
 		m.statusbar.SetSessionInfo("", "")
 	}
+}
+
+// syncThinkingBadge refreshes the statusbar's thinking-level indicator.
+// It shows the USER-SELECTED level (raw, not model-normalized): the per-session
+// override set via /thinking, else the provider's configured thinking_level,
+// else "default". The agent's Config.Thinking/ThinkingEffort hold the
+// normalized effective values (e.g. "max" degrades to "high" on models that
+// don't support it) — those are what's actually sent to the API, but the
+// statusbar reflects what the user configured.
+func (m *Model) syncThinkingBadge() {
+	m.statusbar.SetThinkingLevel(m.currentThinkingLevel())
+}
+
+// currentThinkingLevel resolves the user-facing thinking level for the current
+// session: the per-session override (session.ThinkingLevel, set via /thinking)
+// wins; otherwise the active provider's configured thinking_level is shown;
+// "default" when neither is set.
+//
+// Reading the RAW spec value (pCfg.Spec.ThinkingLevel) is deliberate and
+// differs from the ACP side (currentThinkingValue reads the agent's resolved
+// config): the statusbar reflects what the USER configured, not the resolved
+// runtime value. Since client-side normalization was removed, the two agree
+// for concrete levels ("max" stays "max"); they only differ for "none"/""
+// which the raw field expresses directly.
+func (m *Model) currentThinkingLevel() string {
+	sm := m.agent.SessionManager()
+	if sm != nil {
+		if curr := sm.Current(); curr != nil && curr.ThinkingLevel != "" {
+			return curr.ThinkingLevel
+		}
+	}
+	// Fall back to the active provider's configured thinking_level (raw).
+	if m.cfg != nil {
+		providerName := ""
+		if sm != nil {
+			if curr := sm.Current(); curr != nil && curr.ProviderName != "" {
+				providerName = curr.ProviderName
+			}
+		}
+		if providerName == "" {
+			providerName = config.ResolveProviderName(m.cfg)
+		}
+		if pCfg := m.cfg.FindProvider(providerName); pCfg != nil && pCfg.Spec.ThinkingLevel != "" {
+			return pCfg.Spec.ThinkingLevel
+		}
+	}
+	return "default"
 }
 
 // effectiveSystemPrompt returns the system prompt including mode-specific

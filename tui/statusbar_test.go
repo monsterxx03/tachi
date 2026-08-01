@@ -29,6 +29,10 @@ func withUsage(input, output int64) func(*StatusBar) {
 	}
 }
 
+func withThinkingLevel(level string) func(*StatusBar) {
+	return func(s *StatusBar) { s.thinkingLevel = level }
+}
+
 func withSession(title, id string) func(*StatusBar) {
 	return func(s *StatusBar) { s.sessionTitle = title; s.sessionID = id }
 }
@@ -67,6 +71,38 @@ func TestStatusBar_View_Empty(t *testing.T) {
 	}
 	if !strings.Contains(view, "openai/gpt-4o") {
 		t.Error("View should contain provider info")
+	}
+}
+
+func TestStatusBar_View_ThinkingLevel(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withThinkingLevel("high"))
+	view := s.View()
+	if !strings.Contains(view, "think:high") {
+		t.Errorf("View should show the thinking level, got: %q", view)
+	}
+}
+
+func TestStatusBar_View_ThinkingLevelNone(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withThinkingLevel("none"))
+	view := s.View()
+	if !strings.Contains(view, "think:none") {
+		t.Errorf("View should show disabled thinking, got: %q", view)
+	}
+}
+
+func TestStatusBar_View_ThinkingLevelHiddenByDefault(t *testing.T) {
+	s := makeStatusBar(withWidth(120))
+	view := s.View()
+	if strings.Contains(view, "think:") {
+		t.Errorf("View should not show a thinking indicator when unset, got: %q", view)
+	}
+}
+
+func TestStatusBar_SetThinkingLevel(t *testing.T) {
+	s := sb()
+	s.SetThinkingLevel("max")
+	if s.thinkingLevel != "max" {
+		t.Errorf("SetThinkingLevel = %q, want %q", s.thinkingLevel, "max")
 	}
 }
 

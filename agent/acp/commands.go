@@ -38,7 +38,6 @@ type ACPSlashCommand struct {
 // ---------------------------------------------------------------------------
 
 var acpCommandHandlers = map[string]func(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error){
-	"model":      handleACPModel,
 	"commit":     handleACPCommit,
 	"review":     handleACPReview,
 	"init":       handleACPInit,
@@ -223,39 +222,6 @@ func loadSessionHistory(ctx context.Context, sess *ACPSession) []llm.Message {
 // including any per-provider overrides configured for this session's provider.
 func resolveModelPrice(sess *ACPSession) *llm.ModelPrice {
 	return cmds.ResolveModelPrice(sess.cfg, sess.resolveProviderName(), sess.agent.Model())
-}
-
-// ---------------------------------------------------------------------------
-// /model handler
-// ---------------------------------------------------------------------------
-
-func handleACPModel(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, args string) (acp.StopReason, error) {
-	sessionID := acp.SessionId(sess.ID)
-
-	// List available models if no args
-	if args == "" {
-		cur := sess.resolveProviderName()
-		var sb strings.Builder
-		sb.WriteString("Available models:\n")
-		for _, p := range sess.cfg.Providers {
-			fmt.Fprintf(&sb, "  • %s (%s)", p.Name, p.Model)
-			if p.Name == cur {
-				sb.WriteString(" ← current")
-			}
-			sb.WriteString("\n")
-		}
-		sendTextUpdate(ctx, conn, sessionID, sb.String())
-		return acp.StopReasonEndTurn, nil
-	}
-
-	// Switch to named provider
-	if err := switchSessionModel(sess, args, nil); err != nil {
-		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to switch model: %v", err))
-		return acp.StopReasonEndTurn, err
-	}
-
-	sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Switched to model: %s", args))
-	return acp.StopReasonEndTurn, nil
 }
 
 // ---------------------------------------------------------------------------

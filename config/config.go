@@ -102,8 +102,8 @@ type ModelSpec struct {
 	//   - "none"             关闭思考模式
 	//   - "low"/"medium"/"high"/"xhigh"/"max"  设置思考强度
 	// 空 = 使用模型内置默认（DeepSeek: 思考开启、effort high；Anthropic: adaptive）。
-	// 请求的级别会在解析时被 llm.NormalizeThinkingEffort 归一化到
-	// 模型实际支持的范围（如 deepseek-v4-flash 的 max 会降级为 high）。
+	// 请求的级别会原样透传给 API，由服务端映射到模型实际的推理强度
+	// （如 DeepSeek thinking_mode 文档的 effort 映射表）。
 	ThinkingLevel string `yaml:"thinking_level,omitempty"`
 
 	// Pricing 定价覆盖（可选，覆盖内置价格表）。

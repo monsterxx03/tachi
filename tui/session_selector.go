@@ -8,6 +8,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -214,7 +215,7 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 	m.chatview.LoadHistory(sessionMsgs)
 
 	// Rebuild provider to match the session's original provider/model.
-	providerInfo, providerRestored := m.restoreSessionProvider(s.ProviderName)
+	providerInfo, providerRestored := m.restoreSessionProvider(s)
 	m.statusbar.SetProviderInfo(providerInfo)
 
 	title := s.Title
@@ -256,18 +257,19 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 }
 
 // restoreSessionProvider resolves and switches the agent's provider to match
-// the given session providerName. Returns the display string and whether the
-// provider was successfully restored.
-func (m *Model) restoreSessionProvider(providerName string) (string, bool) {
-	pCfg := m.cfg.FindProvider(providerName)
+// the given session, then applies the session's per-session thinking override
+// (set via /thinking). Returns the display string and whether the provider was
+// successfully restored.
+func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
+	pCfg := m.cfg.FindProvider(s.ProviderName)
 	if pCfg == nil {
 		// Keep current provider, show the session's expected info
-		return fmt.Sprintf("%s [unmatched]", providerName), false
+		return fmt.Sprintf("%s [unmatched]", s.ProviderName), false
 	}
 
 	sp, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
-		return fmt.Sprintf("%s [error]", providerName), false
+		return fmt.Sprintf("%s [error]", s.ProviderName), false
 	}
 
 	provider, err := llm.NewProvider(sp.Type, sp.APIKey, sp.BaseURL, sp.Model)
@@ -276,7 +278,10 @@ func (m *Model) restoreSessionProvider(providerName string) (string, bool) {
 	}
 
 	m.agent.SetProvider(provider)
-	m.agent.SetThinking(sp.Thinking, sp.ThinkingEffort)
+	// Session-level thinking override wins over the provider config default.
+	thinking, effort := cmds.EffectiveThinking(s.ThinkingLevel, *sp)
+	m.agent.SetThinking(thinking, effort)
+	m.syncThinkingBadge()
 	if cw := llm.ModelContextWindow(m.agent.Model()); cw > 0 {
 		m.agent.SetContextWindow(cw)
 		m.statusbar.SetContextWindow(cw)

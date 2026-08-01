@@ -116,6 +116,9 @@ type DiscordChannel struct {
 	// Provider names for slash command autocomplete (injected by Manager)
 	providerNames []string
 
+	// /thinking level values for slash command autocomplete (injected by Manager)
+	thinkingLevels []string
+
 	// Attachment cache directory
 	cacheDir string
 
@@ -191,6 +194,13 @@ func (ch *DiscordChannel) SetCommandHandler(handler channel.CommandHandler) {
 // Called by Manager before Run() to inject available provider names for autocomplete.
 func (ch *DiscordChannel) SetProviderNames(names []string) {
 	ch.providerNames = names
+}
+
+// SetThinkingLevels implements channel.Autocompleter.
+// Called by Manager before Run() to inject the valid /thinking level values
+// for autocomplete.
+func (ch *DiscordChannel) SetThinkingLevels(levels []string) {
+	ch.thinkingLevels = levels
 }
 
 // SystemPromptSuffix implements channel.SystemPromptSuffixer.
@@ -273,6 +283,15 @@ var commandOptions = map[string][]*discordgo.ApplicationCommandOption{
 			Type:         discordgo.ApplicationCommandOptionString,
 			Name:         "provider",
 			Description:  "Provider name to switch to (leave empty to list available models)",
+			Required:     false,
+			Autocomplete: true,
+		},
+	},
+	"thinking": {
+		{
+			Type:         discordgo.ApplicationCommandOptionString,
+			Name:         "level",
+			Description:  "Thinking level: none | low | medium | high | xhigh | max | default",
 			Required:     false,
 			Autocomplete: true,
 		},
@@ -617,33 +636,46 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 }
 
 // handleAutocomplete processes an AUTOCOMPLETE interaction.
-// Returns provider name suggestions for the /model command.
+// Returns suggestions for the /model provider option or the /thinking
+// level option, depending on the command being typed.
 func (ch *DiscordChannel) handleAutocomplete(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
-	if data.Name != "model" || len(data.Options) == 0 {
-		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-			Type: discordgo.InteractionApplicationCommandAutocompleteResult,
-			Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
-		})
+	if len(data.Options) == 0 {
+		ch.respondAutocompleteEmpty(s, i)
 		return
 	}
 
 	// Get user's current input for prefix filtering (empty = show all).
 	prefix := strings.ToLower(data.Options[0].StringValue())
 
-	// Build choices from configured provider names, filtered by prefix.
-	choices := make([]*discordgo.ApplicationCommandOptionChoice, 0, len(ch.providerNames))
-	for _, name := range ch.providerNames {
-		if name == "" {
-			continue
+	var choices []*discordgo.ApplicationCommandOptionChoice
+	switch data.Name {
+	case "model":
+		for _, name := range ch.providerNames {
+			if name == "" {
+				continue
+			}
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(name), prefix) {
+				continue
+			}
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  name,
+				Value: name,
+			})
 		}
-		if prefix != "" && !strings.HasPrefix(strings.ToLower(name), prefix) {
-			continue
+	case "thinking":
+		for _, level := range ch.thinkingLevels {
+			if level == "" {
+				continue
+			}
+			if prefix != "" && !strings.HasPrefix(strings.ToLower(level), prefix) {
+				continue
+			}
+			choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
+				Name:  level,
+				Value: level,
+			})
 		}
-		choices = append(choices, &discordgo.ApplicationCommandOptionChoice{
-			Name:  name,
-			Value: name,
-		})
 	}
 	if choices == nil {
 		choices = []*discordgo.ApplicationCommandOptionChoice{}
@@ -652,6 +684,15 @@ func (ch *DiscordChannel) handleAutocomplete(s *discordgo.Session, i *discordgo.
 	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
 		Data: &discordgo.InteractionResponseData{Choices: choices},
+	})
+}
+
+// respondAutocompleteEmpty replies to an autocomplete interaction with no
+// choices (e.g. the command has no options populated).
+func (ch *DiscordChannel) respondAutocompleteEmpty(s *discordgo.Session, i *discordgo.InteractionCreate) {
+	_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionApplicationCommandAutocompleteResult,
+		Data: &discordgo.InteractionResponseData{Choices: []*discordgo.ApplicationCommandOptionChoice{}},
 	})
 }
 

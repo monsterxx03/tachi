@@ -130,6 +130,7 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	// Normal switch — context fits in the target model's window.
 	m.agent.SetProvider(provider)
 	m.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
+	m.reapplySessionThinking() // keep the per-session /thinking override, if any
 	m.agent.SetContextWindow(targetCW)
 	m.statusbar.SetProviderInfo(providerInfo)
 	m.statusbar.SetContextWindow(targetCW)
@@ -222,6 +223,7 @@ func (m *Model) applyPendingSwitch() {
 
 	m.agent.SetProvider(ps.provider)
 	m.agent.SetThinking(ps.thinking, ps.thinkingEffort)
+	m.reapplySessionThinking() // keep the per-session /thinking override, if any
 	m.agent.SetContextWindow(ps.contextWindow)
 	m.statusbar.SetProviderInfo(ps.providerInfo)
 	m.statusbar.SetContextWindow(ps.contextWindow)

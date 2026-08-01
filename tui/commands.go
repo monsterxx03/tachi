@@ -78,6 +78,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		m.layout()
 		return nil
 	},
+	"thinking": func(m *Model) tea.Cmd {
+		return m.handleThinkingCommand()
+	},
 	"commit": func(m *Model) tea.Cmd {
 		return m.sendCommitCommand()
 	},
@@ -574,6 +577,177 @@ func (m *Model) reconnectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- s
 	count := m.agent.AddDeferredMCPTools(mcpTools)
 
 	ch <- fmt.Sprintf("MCP server **%s** reconnected with %d tool(s) — 使用 MCPSearchTools 搜索并加载", srv.Name, count)
+}
+
+// handleThinkingCommand handles /thinking: shows the current session's
+// thinking level, or sets a new one. The setting is per-session — it is
+// persisted to the session's meta.json and only affects the current session.
+//
+//	/thinking              → show current level + valid options
+//	/thinking <level>      → set level: none | low | medium | high | xhigh | max | default
+func (m *Model) handleThinkingCommand() tea.Cmd {
+	display := m.subcommandInput
+	if display == "" {
+		display = "/thinking"
+	}
+	parts := strings.Fields(m.subcommandInput)
+	level := ""
+	if len(parts) > 1 {
+		level = parts[1]
+	}
+	if len(parts) > 2 {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("多余参数: `%s`。用法: `/thinking <level>`", strings.Join(parts[2:], " ")),
+		})
+		return nil
+	}
+
+	sm := m.agent.SessionManager()
+	if sm == nil || !sm.HasCurrent() {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "没有活跃的 session。先发送一条消息开始对话，再使用 `/thinking`。",
+		})
+		return nil
+	}
+
+	curr := sm.Current()
+
+	// No argument — show the current level and valid options.
+	if level == "" {
+		current := curr.ThinkingLevel
+		if current == "" {
+			current = "default"
+		}
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: cmds.FormatThinkingStatus(current),
+		})
+		return nil
+	}
+
+	if !cmds.IsValidThinkingLevel(level) {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s", level, cmds.FormatThinkingOptions()),
+		})
+		return nil
+	}
+
+	// Resolve the session's provider config so the effective thinking can be
+	// computed (model-specific normalization + "default" fallback).
+	providerName := curr.ProviderName
+	if providerName == "" {
+		if m.cfg == nil {
+			m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "无法解析默认 provider（配置缺失）。",
+			})
+			return nil
+		}
+		providerName = config.ResolveProviderName(m.cfg)
+	}
+	if m.cfg == nil || m.cfg.FindProvider(providerName) == nil {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("无法解析 provider **%s** 的配置，无法设置 thinking level。", providerName),
+		})
+		return nil
+	}
+	pCfg := m.cfg.FindProvider(providerName)
+	sp, err := config.ResolveProviderConfig(pCfg)
+	if err != nil {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("解析 provider 配置失败: %v", err),
+		})
+		return nil
+	}
+
+	// Persist the per-session override ("" = default, no override).
+	if level == "default" {
+		curr.ThinkingLevel = ""
+	} else {
+		curr.ThinkingLevel = level
+	}
+	curr.UpdatedAt = time.Now()
+	if err := sm.UpdateMeta(curr); err != nil {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("保存 session 失败: %v", err),
+		})
+		return nil
+	}
+
+	// Apply to the live agent immediately — the next turn uses it.
+	thinking, effort := cmds.EffectiveThinking(curr.ThinkingLevel, *sp)
+	m.agent.SetThinking(thinking, effort)
+	m.syncThinkingBadge()
+
+	shown := curr.ThinkingLevel
+	if shown == "" {
+		shown = "default"
+	}
+	m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+	m.chatview.AddMessage(chatMessage{
+		Role: "assistant",
+		Content: fmt.Sprintf("🧠 当前会话 thinking level 已设为 **%s**（%s）。\n其他会话不受影响。",
+			shown, cmds.ThinkingLevelDescriptions[shown]),
+	})
+	return nil
+}
+
+// reapplySessionThinking re-applies the current session's per-session
+// thinking override (set via /thinking) to the agent. Called after the
+// provider/model changes (e.g. /model switch) so the override survives the
+// switch; without an override it does nothing and the new provider's
+// config default stays in effect.
+func (m *Model) reapplySessionThinking() {
+	sm := m.agent.SessionManager()
+	if sm == nil || !sm.HasCurrent() {
+		m.syncThinkingBadge()
+		return
+	}
+	curr := sm.Current()
+	if curr.ThinkingLevel == "" {
+		// No per-session override — the provider config default set by
+		// /model stays in effect. Still refresh the badge so the new
+		// provider's default shows.
+		m.syncThinkingBadge()
+		return
+	}
+	if m.cfg == nil {
+		// Defensive: never reachable in production (NewModel always sets
+		// cfg), but keep the same nil guard as handleThinkingCommand.
+		m.syncThinkingBadge()
+		return
+	}
+	providerName := curr.ProviderName
+	if providerName == "" {
+		providerName = config.ResolveProviderName(m.cfg)
+	}
+	pCfg := m.cfg.FindProvider(providerName)
+	if pCfg == nil {
+		m.syncThinkingBadge()
+		return
+	}
+	sp, err := config.ResolveProviderConfig(pCfg)
+	if err != nil {
+		m.syncThinkingBadge()
+		return
+	}
+	thinking, effort := cmds.EffectiveThinking(curr.ThinkingLevel, *sp)
+	m.agent.SetThinking(thinking, effort)
+	m.syncThinkingBadge()
 }
 
 // handleUsageCommand builds a usage report and displays it in the chat view.

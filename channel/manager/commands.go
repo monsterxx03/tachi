@@ -92,6 +92,9 @@ func (m *Manager) executeSlashCommand(cmd channel.SlashCommand) (channel.Handler
 	case "model":
 		text, err := m.handleModelCommand(cmd.ThreadID, cmd.Args)
 		return textHandlerResult(text), err
+	case "thinking":
+		text, err := m.handleThinkingCommand(cmd.ThreadID, cmd.Args)
+		return textHandlerResult(text), err
 	case "skill":
 		text, err := m.handleSkillCommand(cmd.Args)
 		return textHandlerResult(text), err
@@ -376,6 +379,107 @@ func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sess
 	}
 
 	return resp.Content, nil
+}
+
+// --- /thinking ---
+
+// handleThinkingCommand shows or sets the per-session thinking level for the
+// given thread. The setting is persisted to the session's meta.json and only
+// affects this session — other threads/sessions are unchanged.
+//
+//	/thinking           → show current level + valid options
+//	/thinking <level>   → set level: none | low | medium | high | xhigh | max | default
+func (m *Manager) handleThinkingCommand(threadID, args string) (string, error) {
+	args = strings.TrimSpace(args)
+
+	sm := m.newSessionManager()
+	sess, err := sm.FindByThreadID(threadID)
+	if err != nil {
+		m.logger.Error(context.Background(), "channel: /thinking find session failed", err, "thread", threadID)
+		return "", fmt.Errorf("find session: %w", err)
+	}
+
+	// No argument — show the current level and valid options.
+	if args == "" {
+		current := "default"
+		if sess != nil && sess.ThinkingLevel != "" {
+			current = sess.ThinkingLevel
+		}
+		return cmds.FormatThinkingStatus(current), nil
+	}
+
+	if !cmds.IsValidThinkingLevel(args) {
+		return fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s",
+			args, cmds.FormatThinkingOptions()), nil
+	}
+
+	// Ensure a provider is available before persisting. The per-session
+	// override is applied to the cached agent below via a single
+	// getProviderForThread (session meta already updated); a thread-level
+	// override that fails to resolve falls back to the global provider, so
+	// checking the global state here is sufficient.
+	if _, resolved := m.getProvider(); resolved == nil {
+		return "无法解析当前 provider 配置，无法设置 thinking level。", nil
+	}
+
+	if sess == nil {
+		// No session yet — create one bound to this thread so the override
+		// persists across turns (same pattern as /model).
+		wd, _ := os.Getwd()
+		newSess, err := sm.New(m.currentProviderName, wd)
+		if err != nil {
+			return "", fmt.Errorf("create session: %w", err)
+		}
+		sm.SetThreadID(threadID)
+		sess = newSess
+	}
+
+	// Persist the per-session override ("" = default, no override).
+	if args == "default" {
+		sess.ThinkingLevel = ""
+	} else {
+		sess.ThinkingLevel = args
+	}
+	sess.UpdatedAt = time.Now()
+	if err := sm.UpdateMeta(sess); err != nil {
+		m.logger.Error(context.Background(), "channel: /thinking update session meta failed", err, "thread", threadID)
+		return "", fmt.Errorf("update session meta: %w", err)
+	}
+
+	// Apply to the cached agent immediately so the next turn uses it.
+	// Future agent rebuilds pick the override up via getProviderForThread.
+	m.applyThinkingToCachedAgent(threadID, sess)
+
+	shown := sess.ThinkingLevel
+	if shown == "" {
+		shown = "default"
+	}
+	return fmt.Sprintf("✅ 当前会话 thinking level 已设为 **%s**（%s）。\n其他会话不受影响。",
+		shown, cmds.ThinkingLevelDescriptions[shown]), nil
+}
+
+// applyThinkingToCachedAgent updates the cached agent for a thread with the
+// session's effective thinking config. If no agent is cached yet, the next
+// turn's build picks the override up via getProviderForThread — no-op here.
+func (m *Manager) applyThinkingToCachedAgent(threadID string, sess *session.Session) {
+	_, resolved, _ := m.getProviderForThread(threadID)
+	if resolved == nil {
+		return
+	}
+	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, resolved.Provider)
+
+	m.agentCacheMu.Lock()
+	ca, ok := m.agentCache[threadID]
+	m.agentCacheMu.Unlock()
+	if !ok {
+		return
+	}
+
+	ca.mu.Lock()
+	defer ca.mu.Unlock()
+	if ca.agent != nil {
+		ca.agent.SetThinking(thinking, effort)
+	}
 }
 
 // --- /new ---

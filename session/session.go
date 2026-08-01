@@ -18,6 +18,12 @@ type Session struct {
 	// Controls tool visibility: auto = full access, chat/plan = read-only.
 	Mode string `json:"mode,omitempty"`
 
+	// ThinkingLevel is the per-session thinking override, set via /thinking.
+	// One of "", "none", "low", "medium", "high", "xhigh", "max".
+	// Empty = use the provider/model default from config. Only affects
+	// this session — other sessions keep their own setting (or the default).
+	ThinkingLevel string `json:"thinking_level,omitempty"`
+
 	// Compact-related fields: link to child/parent sessions after /compact.
 	CompactedChildID     string `json:"compacted_child_id,omitempty"`
 	CompactedParentID    string `json:"compacted_parent_id,omitempty"`
