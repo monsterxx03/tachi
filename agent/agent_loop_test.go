@@ -794,6 +794,57 @@ func TestAgentLoop_SessionRecording(t *testing.T) {
 	assert.Equal(t, "my message", msgs[0].Content)
 }
 
+func TestAgentLoop_PendingSessionThinkingInherited(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	mp := &mockStreamProvider{
+		name:      "mock",
+		sequences: [][]llm.StreamEvent{textSeq("Hello!")},
+	}
+
+	a := newTestAgent(t, mp)
+	sm := session.NewManagerWithStore(store, nil)
+	a.SetSessionManager(sm)
+
+	// Record a pending per-session thinking override before any session
+	// exists — the state a TUI /thinking sets right after startup.
+	a.SetPendingSessionThinking("high")
+
+	ch := a.RunConversationStream(t.Context(), nil, "first message", "", llm.ChatOptions{MaxTokens: 4096})
+	result, _ := drainAgentEvents(ch)
+	require.NotNil(t, result)
+
+	// The auto-created session inherits the override and clears the pending.
+	require.True(t, sm.HasCurrent())
+	sess := sm.Current()
+	require.NotNil(t, sess)
+	assert.Equal(t, "high", sess.ThinkingLevel)
+	assert.Equal(t, "", a.PendingSessionThinking())
+}
+
+func TestAgentLoop_NoPendingLeavesSessionDefault(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+
+	mp := &mockStreamProvider{
+		name:      "mock",
+		sequences: [][]llm.StreamEvent{textSeq("Hello!")},
+	}
+
+	a := newTestAgent(t, mp)
+	sm := session.NewManagerWithStore(store, nil)
+	a.SetSessionManager(sm)
+
+	// No pending override set.
+	ch := a.RunConversationStream(t.Context(), nil, "first message", "", llm.ChatOptions{MaxTokens: 4096})
+	result, _ := drainAgentEvents(ch)
+	require.NotNil(t, result)
+
+	require.True(t, sm.HasCurrent())
+	assert.Equal(t, "", sm.Current().ThinkingLevel)
+}
+
 // ---- Tests: AskUserQuestion via agent loop ----
 
 func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {

@@ -278,6 +278,11 @@ func (m *Model) currentThinkingLevel() string {
 			return curr.ThinkingLevel
 		}
 	}
+	// No active session — reflect a pending override set via /thinking at
+	// startup (before the first message creates a session).
+	if m.agent.PendingSessionThinking() != "" {
+		return m.agent.PendingSessionThinking()
+	}
 	// Fall back to the active provider's configured thinking_level (raw).
 	if m.cfg != nil {
 		providerName := ""

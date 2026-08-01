@@ -104,6 +104,11 @@ type AgentConfig struct {
 	Thinking       *bool  // 默认思考开关（nil = provider 默认；false = 关闭）
 	ThinkingEffort string // 默认思考强度（已按模型归一化；空 = 模型默认）
 
+	// PendingSessionThinking 是无活跃 session 时由前端（TUI /thinking）设置的
+	// 待定 per-session thinking override。ensureSessionAndRecordUser 在首次
+	// 创建 session 时写入新 session 的 ThinkingLevel 并清空。空 = 无待定 override。
+	PendingSessionThinking string
+
 	// --- 对抗式审查 Provider（由 SetupAdversarialProviders 在构造期回填；
 	//     空切片 = 未配置；nil 条目 = 配置了但解析失败，/review 启动前 fail fast）---
 	AdversarialModels []llm.Provider // review.adversarial.models 的解析结果（按配置顺序）

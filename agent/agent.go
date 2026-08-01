@@ -300,6 +300,21 @@ func (a *AIAgent) SetThinking(thinking *bool, effort string) {
 	a.Config.ThinkingEffort = effort
 }
 
+// SetPendingSessionThinking records a per-session thinking override to apply
+// to the session that will be created on the next turn (used by /thinking
+// when no session is active yet, e.g. right after startup). Empty clears it.
+// The override is written into the new session's meta on first use (see
+// ensureSessionAndRecordUser) and only affects that session.
+func (a *AIAgent) SetPendingSessionThinking(level string) {
+	a.Config.PendingSessionThinking = level
+}
+
+// PendingSessionThinking returns the pending per-session thinking override,
+// or "" when none is set.
+func (a *AIAgent) PendingSessionThinking() string {
+	return a.Config.PendingSessionThinking
+}
+
 // Model returns the current model name.
 func (a *AIAgent) Model() string {
 	return a.Config.Provider.Model()

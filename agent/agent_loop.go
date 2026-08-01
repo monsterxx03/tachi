@@ -498,6 +498,18 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 		// Update logger with session ID for debug log tracking
 		if cur := a.Config.SessionManager.Current(); cur != nil {
 			a.Config.Logger = a.Config.Logger.With("session_id", cur.ID)
+
+			// Inherit a pending per-session thinking override set via /thinking
+			// before a session existed (e.g. right after startup): write it into
+			// the new session's meta so the first turn uses it, then clear it.
+			if p := a.Config.PendingSessionThinking; p != "" {
+				cur.ThinkingLevel = p
+				cur.UpdatedAt = time.Now()
+				if err := a.Config.SessionManager.UpdateMeta(cur); err != nil {
+					a.Config.Logger.Error(ctx, "Agent: failed to persist pending thinking override", err)
+				}
+				a.Config.PendingSessionThinking = ""
+			}
 		}
 
 		// Fire session_start hook

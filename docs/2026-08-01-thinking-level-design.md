@@ -86,6 +86,17 @@ if opts.ThinkingEffort == "" { opts.ThinkingEffort = a.Config.ThinkingEffort }
 
 非流式 `CreateChat` 对 o1/o3/o4/gpt-5 模型用 `MaxTokens` 会触发 go-openai `ReasoningValidator` 报错（这些模型必须用 `max_completion_tokens`）。新增 `isReasoningModelPrefix` 按模型族选择字段。此前因无配置入口（无人设置 effort）未暴露，属潜在 bug。
 
+### 2.7 启动期 /thinking（无活跃 session）
+
+TUI 刚启动时没有 session，此前 `/thinking` 会直接拒绝。现在引入 **pending per-session override**：
+
+- `AgentConfig.PendingSessionThinking`（`agent/agent_config.go`）+ `SetPendingSessionThinking` / `PendingSessionThinking`（`agent/agent.go`）记录启动期待定 override。
+- `handleThinkingCommand`（`tui/commands.go`）无 session 时不再拒绝：校验级别后用当前 provider 解析，`SetPendingSessionThinking` + `SetThinking`（立即生效），并提示"将在创建首个会话时生效"。
+- `ensureSessionAndRecordUser`（`agent/agent_loop.go`）首次创建 session 时，把 pending override 写入新 session 的 `ThinkingLevel` 并持久化到 meta.json，然后清空 pending。
+- `currentThinkingLevel`（`tui/model.go`）无 session 时优先反映 pending，让状态栏 badge 正确显示。
+
+语义：pending 只作用于**即将创建的首个 session**（与 `/thinking` 的 per-session 定位一致）；`/new` 或重启后的新会话不继承，`/thinking default` 可清除 pending。
+
 ## 三、配置示例
 
 ```yaml

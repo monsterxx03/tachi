@@ -605,43 +605,20 @@ func (m *Model) handleThinkingCommand() tea.Cmd {
 	}
 
 	sm := m.agent.SessionManager()
-	if sm == nil || !sm.HasCurrent() {
-		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: "没有活跃的 session。先发送一条消息开始对话，再使用 `/thinking`。",
-		})
-		return nil
+	hasSession := sm != nil && sm.HasCurrent()
+	var curr *session.Session
+	if hasSession {
+		curr = sm.Current()
 	}
 
-	curr := sm.Current()
-
-	// No argument — show the current level and valid options.
-	if level == "" {
-		current := curr.ThinkingLevel
-		if current == "" {
-			current = "default"
-		}
-		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: cmds.FormatThinkingStatus(current),
-		})
-		return nil
+	// Resolve the provider config so the effective thinking can be computed
+	// (model-specific normalization + "default" fallback). Use the current
+	// session's provider, or the active default provider when there's no
+	// session yet.
+	providerName := ""
+	if hasSession {
+		providerName = curr.ProviderName
 	}
-
-	if !cmds.IsValidThinkingLevel(level) {
-		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s", level, cmds.FormatThinkingOptions()),
-		})
-		return nil
-	}
-
-	// Resolve the session's provider config so the effective thinking can be
-	// computed (model-specific normalization + "default" fallback).
-	providerName := curr.ProviderName
 	if providerName == "" {
 		if m.cfg == nil {
 			m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
@@ -672,37 +649,76 @@ func (m *Model) handleThinkingCommand() tea.Cmd {
 		return nil
 	}
 
-	// Persist the per-session override ("" = default, no override).
-	if level == "default" {
-		curr.ThinkingLevel = ""
-	} else {
-		curr.ThinkingLevel = level
-	}
-	curr.UpdatedAt = time.Now()
-	if err := sm.UpdateMeta(curr); err != nil {
+	// No argument — show the current level and valid options. Without a
+	// session this reflects a pending override (set at startup) or the
+	// provider default.
+	if level == "" {
+		current := ""
+		if hasSession {
+			current = curr.ThinkingLevel
+		} else {
+			current = m.agent.PendingSessionThinking()
+		}
+		if current == "" {
+			current = "default"
+		}
 		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
-			Content: fmt.Sprintf("保存 session 失败: %v", err),
+			Content: cmds.FormatThinkingStatus(current),
 		})
 		return nil
 	}
 
+	if !cmds.IsValidThinkingLevel(level) {
+		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("无效的 thinking level: **%s**\n\n可选级别:\n%s", level, cmds.FormatThinkingOptions()),
+		})
+		return nil
+	}
+
+	// Normalize the per-session override ("" = default, no override).
+	store := level
+	if level == "default" {
+		store = ""
+	}
+
+	if hasSession {
+		// Persist the per-session override to the active session's meta.
+		curr.ThinkingLevel = store
+		curr.UpdatedAt = time.Now()
+		if err := sm.UpdateMeta(curr); err != nil {
+			m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: fmt.Sprintf("保存 session 失败: %v", err),
+			})
+			return nil
+		}
+	} else {
+		// No session yet — record a pending override that the next turn's
+		// auto-created session will inherit (see ensureSessionAndRecordUser).
+		m.agent.SetPendingSessionThinking(store)
+	}
+
 	// Apply to the live agent immediately — the next turn uses it.
-	thinking, effort := cmds.EffectiveThinking(curr.ThinkingLevel, *sp)
+	thinking, effort := cmds.EffectiveThinking(store, *sp)
 	m.agent.SetThinking(thinking, effort)
 	m.syncThinkingBadge()
 
-	shown := curr.ThinkingLevel
+	shown := store
 	if shown == "" {
 		shown = "default"
 	}
+	desc := cmds.ThinkingLevelDescriptions[shown]
+	msg := fmt.Sprintf("🧠 当前会话 thinking level 已设为 **%s**（%s）。\n其他会话不受影响。", shown, desc)
+	if !hasSession {
+		msg = fmt.Sprintf("🧠 thinking level 已设为 **%s**（%s），将在创建首个会话时生效。", shown, desc)
+	}
 	m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
-	m.chatview.AddMessage(chatMessage{
-		Role: "assistant",
-		Content: fmt.Sprintf("🧠 当前会话 thinking level 已设为 **%s**（%s）。\n其他会话不受影响。",
-			shown, cmds.ThinkingLevelDescriptions[shown]),
-	})
+	m.chatview.AddMessage(chatMessage{Role: "assistant", Content: msg})
 	return nil
 }
 

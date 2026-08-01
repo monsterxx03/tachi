@@ -778,3 +778,74 @@ func TestSyncThinkingBadge(t *testing.T) {
 		t.Errorf("thinkingLevel = %q, want %q (fallback to provider)", got, "max")
 	}
 }
+
+// TestHandleThinkingCommand_NoSession verifies /thinking works without an
+// active session (right after startup): it records a pending per-session
+// override that the next auto-created session inherits, updates the agent
+// immediately, and reflects the state in the statusbar badge.
+func TestHandleThinkingCommand_NoSession(t *testing.T) {
+	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
+	if err != nil {
+		t.Fatalf("create provider: %v", err)
+	}
+	a := agent.NewAIAgent(provider, 0)
+	m := testModel()
+	m.agent = a
+	m.cfg = &config.Config{
+		Provider: "deepseek",
+		Providers: []config.ProviderConfig{
+			{Name: "deepseek", Type: "openai", Model: "deepseek-v4-flash", APIKey: "sk-test", Spec: config.ModelSpec{ThinkingLevel: "max"}},
+		},
+	}
+	lastMsg := func() string {
+		if n := len(m.chatview.items); n > 0 {
+			return m.chatview.items[n-1].msg.Content
+		}
+		return ""
+	}
+
+	// Show level without a session → no pending override → "default".
+	m.subcommandInput = "/thinking"
+	m.handleThinkingCommand()
+	if got := lastMsg(); !strings.Contains(got, "**default**") {
+		t.Errorf("show output = %q, want it to mention default", got)
+	}
+	// The badge reflects the provider's configured level (not the override).
+	if got := m.currentThinkingLevel(); got != "max" {
+		t.Errorf("currentThinkingLevel = %q, want %q (provider default)", got, "max")
+	}
+
+	// Set a level without a session → pending override recorded, agent
+	// updated immediately, badge reflects it.
+	m.subcommandInput = "/thinking high"
+	m.handleThinkingCommand()
+	if got := a.PendingSessionThinking(); got != "high" {
+		t.Errorf("PendingSessionThinking = %q, want %q", got, "high")
+	}
+	if got := a.Config.ThinkingEffort; got != "high" {
+		t.Errorf("Config.ThinkingEffort = %q, want %q (applied immediately)", got, "high")
+	}
+	if got := m.statusbar.thinkingLevel; got != "high" {
+		t.Errorf("thinkingLevel = %q, want %q (pending override)", got, "high")
+	}
+	if got := lastMsg(); !strings.Contains(got, "将在创建首个会话时生效") {
+		t.Errorf("set output = %q, want it to mention first-session effect", got)
+	}
+
+	// Show level again → reflects the pending override.
+	m.subcommandInput = "/thinking"
+	m.handleThinkingCommand()
+	if got := lastMsg(); !strings.Contains(got, "**high**") {
+		t.Errorf("show output = %q, want it to mention high", got)
+	}
+
+	// Reset via "default" → pending cleared, badge back to provider default.
+	m.subcommandInput = "/thinking default"
+	m.handleThinkingCommand()
+	if got := a.PendingSessionThinking(); got != "" {
+		t.Errorf("PendingSessionThinking = %q, want %q after /thinking default", got, "")
+	}
+	if got := m.statusbar.thinkingLevel; got != "max" {
+		t.Errorf("thinkingLevel = %q, want %q (provider default)", got, "max")
+	}
+}
