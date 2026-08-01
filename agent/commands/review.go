@@ -3,6 +3,7 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"math/rand"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -201,9 +202,10 @@ func ResolveReviewThinking(opts ReviewOptions, sessionThinking *bool, sessionEff
 
 // NewReviewReportDir creates the orchestrator-owned report directory
 // "<baseDir>/.tachi/reviews/<YYYYMMDD-HHmmss>" and returns its path. Seconds
-// precision (20060102-150405) — minute precision would share a directory
-// between two /review runs in the same minute and round reports would
-// overwrite each other (MkdirAll is idempotent, no error).
+// precision (20060102-150405) plus collision-safe creation (os.Mkdir with a
+// numeric-suffix retry) — minute precision would share a directory between
+// two /review runs in the same minute, and concurrent runs in the same
+// second get distinct directories instead of silently sharing one.
 //
 // baseDir anchors the report directory: "" → the process CWD (the TUI
 // frontend's convention — the LLM writes reports relative to the process
@@ -212,15 +214,31 @@ func ResolveReviewThinking(opts ReviewOptions, sessionThinking *bool, sessionEff
 // SAME absolute path even when sess.cwd != process CWD. Callers MUST pass
 // the same base the round's tools resolve relative paths against.
 func NewReviewReportDir(baseDir string) (string, error) {
-	rel := fmt.Sprintf(".tachi/reviews/%s", time.Now().Format("20060102-150405"))
-	dir := rel
+	root := ".tachi/reviews"
 	if baseDir != "" {
-		dir = filepath.Join(baseDir, rel)
+		root = filepath.Join(baseDir, root)
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	// os.Mkdir (not MkdirAll) on the final component: second-precision names
+	// can collide when two reviews share the same workDir concurrently
+	// (MkdirAll is idempotent and would silently share the directory,
+	// letting round reports overwrite each other). On collision, retry with
+	// a numeric suffix.
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return "", err
 	}
-	return dir, nil
+	for attempt := 0; attempt < 5; attempt++ {
+		name := time.Now().Format("20060102-150405")
+		if attempt > 0 {
+			name = fmt.Sprintf("%s-%d", name, rand.Intn(1000))
+		}
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o755); err == nil {
+			return dir, nil
+		} else if !os.IsExist(err) {
+			return "", err
+		}
+	}
+	return "", fmt.Errorf("无法创建审查报告目录: %s 秒级目录连续碰撞", root)
 }
 
 // BuildRoundPrompt computes everything a review round needs from its position
@@ -338,6 +356,10 @@ func NewReviewOrchestratorFromCommand(input string, opts ReviewOptions, resolve 
 // IsMultiRound reports whether this run is the multi-round adversarial
 // review (frontends use it to skip single-round-only UI like banners).
 func (o *ReviewOrchestrator) IsMultiRound() bool { return o.rounds > 1 }
+
+// ReportDir returns the orchestrator-owned report directory ("" for
+// single-round runs — the LLM names its own report there).
+func (o *ReviewOrchestrator) ReportDir() string { return o.reportDir }
 
 // TotalRounds returns the total round count (1 for single-round reviews).
 func (o *ReviewOrchestrator) TotalRounds() int { return o.rounds }

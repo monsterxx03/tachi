@@ -36,14 +36,52 @@ func (m *Manager) deactivateThread(threadID string, ta *threadActivation) {
 
 // cancelThreadTurn cancels the agent context for the given thread
 // and removes the activation from the map. Safe to call when no
-// turn is active.
+// turn is active. Returns true if a turn was actually cancelled.
 // Called by /stop and /new to terminate a running LLM turn.
-func (m *Manager) cancelThreadTurn(threadID string) {
+func (m *Manager) cancelThreadTurn(threadID string) bool {
 	ta, ok := m.threadActivations.LoadAndDelete(threadID)
 	if ok && ta.cancel != nil {
 		ta.cancelled = true
 		ta.cancel()
+		return true
 	}
+	return false
+}
+
+// maxOneoffConcurrency caps how many /commit and /review runs can execute
+// in parallel across all threads. Each review round is a full agent fork,
+// so an unbounded burst could saturate provider quotas and memory.
+const maxOneoffConcurrency = 3
+
+// registerOneoff tracks a running one-off command (/commit, /review) for the
+// thread so /stop and /new can cancel it (one-off runs don't create
+// threadActivations). Returns a child ctx that cancels with the run, plus a
+// done func that cancels AND deregisters — the same pattern as
+// context.WithCancel's cancel func.
+func (m *Manager) registerOneoff(threadID string, parent context.Context) (context.Context, context.CancelFunc) {
+	ctx, cancel := context.WithCancel(parent)
+	m.oneoffMu.Lock()
+	m.oneoffCancels[threadID] = cancel
+	m.oneoffMu.Unlock()
+	return ctx, func() {
+		cancel()
+		m.oneoffMu.Lock()
+		delete(m.oneoffCancels, threadID)
+		m.oneoffMu.Unlock()
+	}
+}
+
+// cancelOneoff cancels a running one-off command (/commit, /review) for the
+// thread, if any. Returns true if there was one.
+func (m *Manager) cancelOneoff(threadID string) bool {
+	m.oneoffMu.Lock()
+	cancel, ok := m.oneoffCancels[threadID]
+	m.oneoffMu.Unlock()
+	if ok && cancel != nil {
+		cancel()
+		return true
+	}
+	return false
 }
 
 // --- Handler build ---
@@ -99,10 +137,14 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			}
 		}
 
-		// Other slash commands are handled synchronously (no LLM invocation),
-		// EXCEPT compact (agent turn) and skill activation (agent turn).
+		// Other slash commands are handled synchronously. Most are lightweight
+		// (no LLM invocation) — EXCEPT /commit and /review, which run one-off
+		// LLM turns that can take minutes. They still block here deliberately:
+		// the one-off path holds the cached-agent lock, so running them in a
+		// background goroutine would serialize on acquireAgent anyway. They
+		// register with registerOneoff so /stop and /new can cancel them.
 		if !isCompactCmd && !isSkillActivation && strings.HasPrefix(msg.Content, "/") {
-			return m.handleSlashCommand(msg)
+			return m.handleSlashCommand(ctx, msg)
 		}
 
 		prov, resolved := m.getProvider()

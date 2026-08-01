@@ -210,6 +210,36 @@ func TestSanitizeFileName(t *testing.T) {
 	}
 }
 
+// TestNewReviewReportDir_CollisionSafe verifies two report dirs created in
+// the same second don't share a directory (S4): the second call must fall
+// back to a numeric-suffix name instead of silently reusing the first
+// (MkdirAll was idempotent, so reports would have overwritten each other).
+func TestNewReviewReportDir_CollisionSafe(t *testing.T) {
+	base := t.TempDir()
+
+	d1, err := NewReviewReportDir(base)
+	if err != nil {
+		t.Fatalf("NewReviewReportDir #1: %v", err)
+	}
+	d2, err := NewReviewReportDir(base)
+	if err != nil {
+		t.Fatalf("NewReviewReportDir #2: %v", err)
+	}
+
+	if d1 == d2 {
+		t.Errorf("same-second report dirs must not collide, got %q twice", d1)
+	}
+	if info, err := os.Stat(d1); err != nil || !info.IsDir() {
+		t.Errorf("report dir %q missing or not a dir: %v", d1, err)
+	}
+	if info, err := os.Stat(d2); err != nil || !info.IsDir() {
+		t.Errorf("report dir %q missing or not a dir: %v", d2, err)
+	}
+	if filepath.Dir(d1) != filepath.Dir(d2) {
+		t.Errorf("report dirs should share the reviews root: %q vs %q", filepath.Dir(d1), filepath.Dir(d2))
+	}
+}
+
 // TestRoleFileSuffix_UnknownRoleDoesNotPanic guards the defensive fallback —
 // a future ReviewRole value must not index out of range.
 func TestRoleFileSuffix_UnknownRoleDoesNotPanic(t *testing.T) {

@@ -139,55 +139,7 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 		// 12. Set up streaming callback for real-time tool call progress.
 		// The status embed is only sent when the first tool call is detected,
 		// skipping the embed entirely for simple text-only replies.
-		const maxEmbedDescRunes = 3800 // Discord limit is 4096, leave room
-
-		var (
-			embedMsgID string
-			toolBuf    strings.Builder
-			textBuf    strings.Builder // accumulated LLM text between tool calls
-			toolCount  int
-			mu         sync.Mutex
-		)
-		ctx = manager.WithStreamingCallback(ctx, func(event manager.StreamEvent) error {
-			switch event.Type {
-			case manager.StreamEventToolCall:
-				mu.Lock()
-				toolCount++
-				toolBuf.WriteString("🔧 " + event.ToolName + formatToolArgsForEmbed(event.ToolName, event.ToolArgs) + "\n")
-				// Build embed description: accumulated text (if any) + tool calls.
-				desc := buildStreamingDesc(textBuf.String(), toolBuf.String(), toolCount, maxEmbedDescRunes)
-				mu.Unlock()
-
-				sess := ch.session
-				if sess == nil {
-					return nil
-				}
-
-				if embedMsgID == "" {
-					sent, err := sess.ChannelMessageSendEmbed(m.ChannelID, &discordgo.MessageEmbed{
-						Title:       "🤖 Tachi",
-						Description: desc,
-						Color:       0x3498DB,
-					})
-					if err == nil {
-						embedMsgID = sent.ID
-					}
-				} else {
-					_, _ = sess.ChannelMessageEditEmbed(m.ChannelID, embedMsgID, &discordgo.MessageEmbed{
-						Title:       "🤖 Tachi",
-						Description: desc,
-						Color:       0x3498DB,
-					})
-				}
-
-			case manager.StreamEventTextDelta:
-				// Regular LLM text — accumulate for next embed update.
-				mu.Lock()
-				textBuf.WriteString(event.Text)
-				mu.Unlock()
-			}
-			return nil
-		})
+		ctx = manager.WithStreamingCallback(ctx, ch.newStatusEmbedCallback(m.ChannelID))
 	}
 
 	// 12.5 Delegate to the manager handler.
@@ -195,6 +147,69 @@ func (ch *DiscordChannel) handleMessageCreate(s *discordgo.Session, m *discordgo
 
 	// 13. Process the result.
 	ch.processHandlerResult(m, result, threadID, isThread)
+}
+
+// newStatusEmbedCallback returns a StreamingCallback that renders tool-call
+// progress into a status embed in the given channel, creating the embed on
+// the first tool call and editing it in place afterwards. LLM text deltas
+// are accumulated into the embed description alongside the tool calls, so
+// the user sees live progress during long runs.
+//
+// Shared by the text-message path (handleMessageCreate) and the typed
+// interaction path (handleSlashCommand) — the latter previously had no
+// streaming at all, so /commit and /review issued via UI buttons showed no
+// progress.
+func (ch *DiscordChannel) newStatusEmbedCallback(channelID string) manager.StreamingCallback {
+	const maxEmbedDescRunes = 3800 // Discord limit is 4096, leave room
+
+	var (
+		embedMsgID string
+		toolBuf    strings.Builder
+		textBuf    strings.Builder // accumulated LLM text between tool calls
+		toolCount  int
+		mu         sync.Mutex
+	)
+
+	return func(event manager.StreamEvent) error {
+		switch event.Type {
+		case manager.StreamEventToolCall:
+			mu.Lock()
+			toolCount++
+			toolBuf.WriteString("🔧 " + event.ToolName + formatToolArgsForEmbed(event.ToolName, event.ToolArgs) + "\n")
+			// Build embed description: accumulated text (if any) + tool calls.
+			desc := buildStreamingDesc(textBuf.String(), toolBuf.String(), toolCount, maxEmbedDescRunes)
+			mu.Unlock()
+
+			sess := ch.session
+			if sess == nil {
+				return nil
+			}
+
+			if embedMsgID == "" {
+				sent, err := sess.ChannelMessageSendEmbed(channelID, &discordgo.MessageEmbed{
+					Title:       "🤖 Tachi",
+					Description: desc,
+					Color:       0x3498DB,
+				})
+				if err == nil {
+					embedMsgID = sent.ID
+				}
+			} else {
+				_, _ = sess.ChannelMessageEditEmbed(channelID, embedMsgID, &discordgo.MessageEmbed{
+					Title:       "🤖 Tachi",
+					Description: desc,
+					Color:       0x3498DB,
+				})
+			}
+
+		case manager.StreamEventTextDelta:
+			// Regular LLM text — accumulate for next embed update.
+			mu.Lock()
+			textBuf.WriteString(event.Text)
+			mu.Unlock()
+		}
+		return nil
+	}
 }
 
 // buildIncomingMessage constructs a channel.IncomingMessage from a Discord

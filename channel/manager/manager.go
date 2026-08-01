@@ -152,6 +152,17 @@ type Manager struct {
 	// Per-thread agent activations for steer support.
 	threadActivations lockedmap.Map[string, *threadActivation]
 
+	// Running one-off commands (/commit, /review) per thread, so /stop and
+	// /new can cancel them (they don't create threadActivations).
+	oneoffMu      sync.Mutex
+	oneoffCancels map[string]context.CancelFunc
+
+	// Global concurrency cap for one-off LLM commands. A sudden burst of
+	// /review N runs could otherwise saturate provider quotas (each round
+	// is a full fork × up to 200 iterations). Full → commands reject with a
+	// hint instead of silently queueing behind ca.mu.
+	oneoffSem chan struct{}
+
 	// Shared ProcessManager for background processes across all agent turns.
 	// Per-turn AIAgent instances are ephemeral, but background processes must
 	// survive across turns. The Manager owns and cleans up this shared PM.
@@ -268,6 +279,8 @@ func New(mcfg Config) *Manager {
 		logger:         logger.New("channel"),
 		done:           make(chan struct{}),
 		threadChannels: make(map[string]channel.Channel),
+		oneoffCancels:  make(map[string]context.CancelFunc),
+		oneoffSem:      make(chan struct{}, maxOneoffConcurrency),
 	}
 }
 

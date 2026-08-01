@@ -3,10 +3,12 @@ package discord
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -14,6 +16,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/gorilla/websocket"
 	"github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -320,7 +323,20 @@ var commandOptions = map[string][]*discordgo.ApplicationCommandOption{
 			Required:    true,
 		},
 	},
+	"review": {
+		{
+			Type:        discordgo.ApplicationCommandOptionInteger,
+			Name:        "rounds",
+			Description: "Adversarial review rounds (2-10); omit for single-round review",
+			Required:    false,
+			MinValue:    float64Ptr(2),
+			MaxValue:    10,
+		},
+	},
 }
+
+// float64Ptr returns a pointer to v (discordgo option MinValue is *float64).
+func float64Ptr(v float64) *float64 { return &v }
 
 // registerSlashCommands registers Discord Application Commands from the
 // commands registry. Uses DevGuildID for instant registration when set.
@@ -547,16 +563,38 @@ func (ch *DiscordChannel) onThreadCreate() any {
 
 // onMessageCreate returns a handler for MESSAGE_CREATE events.
 // Delegates to handler.go's handleMessageCreate for the full processing pipeline.
+// The recover guard is essential: discordgo spawns event handlers in bare
+// goroutines (SyncEvents=false), so an unrecovered panic would kill the bot.
 func (ch *DiscordChannel) onMessageCreate(handler channel.MessageHandler) any {
 	return func(s *discordgo.Session, m *discordgo.MessageCreate) {
+		defer func() {
+			if r := recover(); r != nil {
+				ch.logger.Error(context.Background(), "discord: panic in message handler", fmt.Errorf("%v", r))
+			}
+		}()
 		ch.handleMessageCreate(s, m, handler)
 	}
 }
 
 // onInteractionCreate returns a handler for INTERACTION_CREATE events.
 // Handles APPLICATION_COMMAND (slash commands) and AUTOCOMPLETE interactions.
+// See onMessageCreate for why the recover guard is required.
 func (ch *DiscordChannel) onInteractionCreate(handler channel.MessageHandler) any {
 	return func(s *discordgo.Session, i *discordgo.InteractionCreate) {
+		defer func() {
+			if r := recover(); r != nil {
+				ch.logger.Error(context.Background(), "discord: panic in interaction handler", fmt.Errorf("%v", r))
+				// Best-effort fallback reply — may fail if the interaction
+				// was already acknowledged.
+				_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+					Type: discordgo.InteractionResponseChannelMessageWithSource,
+					Data: &discordgo.InteractionResponseData{
+						Content: "❌ 内部错误，请重试。",
+						Flags:   discordgo.MessageFlagsEphemeral,
+					},
+				})
+			}
+		}()
 		switch i.Type {
 		case discordgo.InteractionApplicationCommand:
 			ch.handleSlashCommand(s, i)
@@ -567,6 +605,11 @@ func (ch *DiscordChannel) onInteractionCreate(handler channel.MessageHandler) an
 }
 
 // handleSlashCommand processes an APPLICATION_COMMAND interaction.
+//
+// The interaction is acknowledged immediately with a deferred response —
+// commands can take far longer than Discord's 3s interaction window (e.g.
+// /review N with multiple adversarial rounds, /commit running git, deep
+// research). The final result is delivered afterwards via followup.
 func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	data := i.ApplicationCommandData()
 	if data.Name == "" {
@@ -577,7 +620,14 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 
 	cmdHandler := ch.cmdHandler
 	if cmdHandler == nil {
-		ch.respondInteraction(s, i, "❌ Slash command handler not initialized")
+		// No deferred ack sent yet — respond directly.
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ Slash command handler not initialized",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 		return
 	}
 
@@ -593,18 +643,41 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 		threadID = threadIDForDM(i.User.ID)
 	}
 
+	// Acknowledge the interaction immediately so long-running commands
+	// don't time out. Failures here are non-fatal — the followup below will
+	// fail loudly if Discord rejects it.
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredChannelMessageWithSource,
+	}); err != nil {
+		ch.logger.Error(context.Background(), "discord: defer slash command response", err)
+	}
+
+	// Wire the streaming callback so long-running commands (/commit,
+	// /review) show live tool-call progress in a status embed — same UX as
+	// the text-message path.
+	cmdCtx := manager.WithStreamingCallback(context.Background(), ch.newStatusEmbedCallback(i.ChannelID))
+
 	// Execute the command via the Manager's CommandHandler.
-	reply, workDir, model, err := cmdHandler(context.Background(), channel.SlashCommand{
+	reply, workDir, model, err := cmdHandler(cmdCtx, channel.SlashCommand{
 		Name:     data.Name,
 		ThreadID: threadID,
 		Args:     args,
 	})
 	if err != nil {
-		ch.respondInteraction(s, i, "❌ "+err.Error())
+		// Keep partial output (e.g. a multi-round review that failed on a
+		// later round) and append the error, so completed work is not lost.
+		content := "❌ " + err.Error()
+		if errors.Is(err, context.Canceled) {
+			// User-initiated /stop — the stop reply already acknowledged it.
+			content = "⏹️ 已取消。"
+		} else if reply.Content != "" {
+			content = reply.Content + "\n\n❌ " + err.Error()
+		}
+		ch.respondInteraction(s, i, content)
 		return
 	}
 
-	// Send text reply as ephemeral interaction response.
+	// Send text reply as ephemeral interaction followup.
 	textContent := reply.Content
 	if textContent == "" {
 		textContent = "✅ Done"
@@ -697,27 +770,54 @@ func (ch *DiscordChannel) respondAutocompleteEmpty(s *discordgo.Session, i *disc
 }
 
 // buildSlashArgs converts discordgo ApplicationCommandInteractionDataOption
-// into a space-separated argument string.
+// into a space-separated argument string. Integer options (e.g. /review
+// rounds) are rendered as their decimal value; number and boolean options
+// likewise; string options as-is.
 func buildSlashArgs(options []*discordgo.ApplicationCommandInteractionDataOption) string {
 	var parts []string
 	for _, opt := range options {
-		if opt.StringValue() != "" {
-			parts = append(parts, opt.StringValue())
+		switch opt.Type {
+		case discordgo.ApplicationCommandOptionInteger:
+			parts = append(parts, strconv.FormatInt(opt.IntValue(), 10))
+		case discordgo.ApplicationCommandOptionNumber:
+			parts = append(parts, strconv.FormatFloat(opt.FloatValue(), 'f', -1, 64))
+		case discordgo.ApplicationCommandOptionBoolean:
+			parts = append(parts, strconv.FormatBool(opt.BoolValue()))
+		default:
+			if opt.StringValue() != "" {
+				parts = append(parts, opt.StringValue())
+			}
 		}
 	}
 	return strings.Join(parts, " ")
 }
 
-// respondInteraction sends an ephemeral response to a Discord interaction.
+// respondInteraction delivers the final result of a slash command as an
+// ephemeral followup (the initial deferred acknowledgment was already sent
+// in handleSlashCommand). Long content is split into ≤2000-char chunks —
+// Discord rejects messages over that limit regardless of channel type.
+//
+// Followup failure degrades to a regular channel message: the interaction
+// token expires ~15 minutes after the initial ack, and long commands
+// (/review N, /commit) can exceed that. Without the fallback the final
+// result would be silently lost (the user only ever sees progress messages).
 func (ch *DiscordChannel) respondInteraction(s *discordgo.Session, i *discordgo.InteractionCreate, content string) {
-	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
-		Type: discordgo.InteractionResponseChannelMessageWithSource,
-		Data: &discordgo.InteractionResponseData{
-			Content: content,
-			Flags:   1 << 6, // ephemeral
-		},
-	}); err != nil {
-		ch.logger.Error(context.Background(), "discord: interaction respond error", err)
+	content = strings.TrimSpace(content)
+	if content == "" {
+		return
+	}
+	chunks := splitMessage(content)
+	for idx, chunk := range chunks {
+		if _, err := s.FollowupMessageCreate(i.Interaction, true, &discordgo.WebhookParams{
+			Content: chunk,
+			Flags:   discordgo.MessageFlagsEphemeral,
+		}); err != nil {
+			ch.logger.Error(context.Background(), "discord: slash command followup failed, degrading to channel message", err, "content_len", len(chunk))
+			// Send the remaining chunks (including this one) as a regular
+			// channel message — no interaction time limit applies.
+			ch.sendText(i.ChannelID, strings.Join(chunks[idx:], ""))
+			return
+		}
 	}
 }
 

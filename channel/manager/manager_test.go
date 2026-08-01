@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -968,7 +970,7 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	mgr.currentProviderName = "gpt-5.2"
 
 	// /model (list)
-	result := mgr.handleSlashCommand(channel.IncomingMessage{
+	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
 		Content:   "/model",
 		ThreadID:  "thread-1",
 		MessageID: "msg-1",
@@ -978,7 +980,7 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	assert.Contains(t, resp, "* gpt-5.2")
 
 	// /model claude-haiku (switch)
-	result = mgr.handleSlashCommand(channel.IncomingMessage{
+	result = mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
 		Content:   "/model claude-haiku",
 		ThreadID:  "thread-1",
 		MessageID: "msg-2",
@@ -1132,7 +1134,7 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 		SkillStore: skill.NewStoreWithDirs(nil, nil),
 	})
 
-	result := mgr.handleSlashCommand(channel.IncomingMessage{
+	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
 		Content:   "/skill",
 		ThreadID:  "thread-1",
 		MessageID: "msg-1",
@@ -1140,7 +1142,7 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 	resp := result.Reply.Content
 	assert.Contains(t, resp, "No skills found")
 
-	result = mgr.handleSlashCommand(channel.IncomingMessage{
+	result = mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
 		Content:   "/skill list",
 		ThreadID:  "thread-1",
 		MessageID: "msg-2",
@@ -1148,7 +1150,7 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 	resp = result.Reply.Content
 	assert.Contains(t, resp, "No skills found")
 
-	result = mgr.handleSlashCommand(channel.IncomingMessage{
+	result = mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
 		Content:   "/skill reload",
 		ThreadID:  "thread-1",
 		MessageID: "msg-3",
@@ -1401,4 +1403,257 @@ func TestHandleThinkingCommand_AppliesToCachedAgent(t *testing.T) {
 	require.NotNil(t, ca.agent.Config.Thinking)
 	assert.False(t, *ca.agent.Config.Thinking)
 	assert.Equal(t, "", ca.agent.Config.ThinkingEffort)
+}
+
+// ---- /commit and /review tests ----
+
+// TestOneoffCommandsRegisteredForChannel verifies /commit and /review are
+// registered for channel mode — this is what makes them appear in the
+// unknown-command help AND get registered as Discord slash commands.
+func TestOneoffCommandsRegisteredForChannel(t *testing.T) {
+	names := map[string]bool{}
+	for _, def := range cmds.ForMode(cmds.ModeChannel) {
+		names[def.Name] = true
+	}
+	assert.True(t, names["commit"], "/commit must be registered for channel mode")
+	assert.True(t, names["review"], "/review must be registered for channel mode")
+}
+
+// newOneoffTestManager builds a Manager for one-off command tests (/commit,
+// /review) with:
+//   - one-off transcript recording disabled — recording writes to the
+//     real ~/.tachi unless the config toggle is off
+//   - a mock provider that returns the given responses, one per stream call
+//   - the config base dir redirected to a temp dir as a second guard
+//   - a session bound to threadID whose WorkingDir is a temp dir, keeping
+//     /review report dirs out of the process CWD
+//
+// Returns the manager and the thread's working directory.
+func newOneoffTestManager(t *testing.T, responses []string, threadID string) (*Manager, string) {
+	t.Helper()
+	disabled := false
+	cfg := config.DefaultConfig()
+	cfg.Oneoff = config.OneoffConfig{Enabled: &disabled}
+	cfg.Providers = []config.ProviderConfig{
+		{Name: "openai", Type: "openai", Model: "test-model"},
+	}
+
+	mgr := New(Config{
+		Cfg:          cfg,
+		SessionStore: newTempSessionStore(t),
+	})
+	mgr.provider = &mockProvider{name: "openai", responses: responses}
+	mgr.resolvedConfig = &config.ResolvedConfig{
+		Provider: config.ResolvedProvider{
+			Type:          "openai",
+			Model:         "test-model",
+			Name:          "openai",
+			ContextWindow: 128_000,
+		},
+		MaxTokens:     4096,
+		MaxIterations: 50,
+	}
+	mgr.currentProviderName = "openai"
+
+	// Redirect the config base dir so transcripts can't leak into the real
+	// ~/.tachi even if the toggle above is missed (SetBaseDir("") restores
+	// the default). NOTE: config.SetBaseDir is package-global state — tests
+	// using this helper MUST NOT call t.Parallel().
+	config.SetBaseDir(t.TempDir())
+	t.Cleanup(func() { config.SetBaseDir("") })
+
+	// Seed a session bound to threadID with a temp working directory.
+	workDir := t.TempDir()
+	sm := mgr.newSessionManager()
+	sess, err := sm.New("openai", workDir)
+	require.NoError(t, err)
+	sess.WorkingDir = workDir
+	require.NoError(t, sm.UpdateMeta(sess))
+	sm.SetThreadID(threadID)
+
+	return mgr, workDir
+}
+
+// TestCommitCommand_RunsOneOffTurn verifies /commit runs a one-off LLM turn
+// (clean context, no session writes) and returns the model's commit message.
+func TestCommitCommand_RunsOneOffTurn(t *testing.T) {
+	threadID := "commit-thread"
+	mgr, workDir := newOneoffTestManager(t, []string{"feat: add /commit support to channel mode"}, threadID)
+
+	resp, err := mgr.handleCommitCommand(context.Background(), threadID)
+	require.NoError(t, err)
+	assert.Contains(t, resp, "feat: add /commit support")
+
+	// The one-off run must NOT touch the thread session's message history.
+	sm := mgr.newSessionManager()
+	sess, err := sm.FindByThreadID(threadID)
+	require.NoError(t, err)
+	require.NotNil(t, sess)
+	msgs, err := sm.LoadMessages()
+	require.NoError(t, err)
+	assert.Empty(t, msgs, "one-off /commit must not write to session history")
+
+	// The thread's working directory is respected (anchors the one-off
+	// transcript + Bash relative paths).
+	assert.NotEmpty(t, workDir)
+}
+
+// TestCommitCommand_StreamsToCallback verifies the handler forwards text
+// deltas to the streaming callback attached to the context (the mechanism
+// Discord uses for live status embeds during a run).
+func TestCommitCommand_StreamsToCallback(t *testing.T) {
+	threadID := "commit-stream-thread"
+	mgr, _ := newOneoffTestManager(t, []string{"streamed commit message"}, threadID)
+
+	var mu sync.Mutex
+	streamed := ""
+	ctx := WithStreamingCallback(context.Background(), func(event StreamEvent) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if event.Type == StreamEventTextDelta {
+			streamed += event.Text
+		}
+		return nil
+	})
+
+	resp, err := mgr.handleCommitCommand(ctx, threadID)
+	require.NoError(t, err)
+	assert.Contains(t, resp, "streamed commit message")
+
+	mu.Lock()
+	defer mu.Unlock()
+	assert.Equal(t, "streamed commit message", streamed)
+}
+
+// TestCommitCommand_ViaTextSlash verifies the "/commit" text command routes
+// through handleSlashCommand into the commit handler.
+func TestCommitCommand_ViaTextSlash(t *testing.T) {
+	threadID := "commit-text-thread"
+	mgr, _ := newOneoffTestManager(t, []string{"feat: commit via text slash"}, threadID)
+
+	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
+		Content:   "/commit",
+		ThreadID:  threadID,
+		MessageID: "msg-commit",
+	})
+	require.NoError(t, result.Err)
+	assert.Contains(t, result.Reply.Content, "feat: commit via text slash")
+	assert.Equal(t, threadID, result.Reply.ThreadID)
+}
+
+// TestReviewCommand_SingleRound verifies the plain "/review" (no round count)
+// runs a single-round code review and returns the review text plus a short
+// completion marker (S3).
+func TestReviewCommand_SingleRound(t *testing.T) {
+	threadID := "review-thread"
+	mgr, _ := newOneoffTestManager(t, []string{"## Review Findings\n\nLooks good."}, threadID)
+
+	resp, err := mgr.handleReviewCommand(context.Background(), threadID, "")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "## Review Findings")
+	assert.Contains(t, resp, "✅ 审查完成（1 轮）")
+}
+
+// TestReviewCommand_MultiRound verifies "/review N" (N ≥ 2) runs N
+// adversarial rounds: the reply carries per-round banners, the orchestrator
+// created the report directory under the thread's working directory, and the
+// final line points at it.
+func TestReviewCommand_MultiRound(t *testing.T) {
+	threadID := "review-multi-thread"
+	mgr, workDir := newOneoffTestManager(t, []string{
+		"round1: initial review", "round2: challenge", "round3: verdict",
+	}, threadID)
+
+	resp, err := mgr.handleReviewCommand(context.Background(), threadID, "3")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "第 1 轮")
+	assert.Contains(t, resp, "第 3 轮")
+	assert.Contains(t, resp, "round1: initial review")
+	assert.Contains(t, resp, "round3: verdict")
+	assert.Contains(t, resp, "✅ 审查完成（3 轮）")
+
+	// The orchestrator-owned report directory must exist under workDir.
+	reviewsRoot := filepath.Join(workDir, ".tachi", "reviews")
+	entries, err := os.ReadDir(reviewsRoot)
+	require.NoError(t, err)
+	require.Len(t, entries, 1)
+	assert.True(t, entries[0].IsDir())
+}
+
+// TestReviewCommand_RoundsClamped verifies the round count is clamped to the
+// max (10) — "/review 999" must not spin up 999 forks.
+func TestReviewCommand_RoundsClamped(t *testing.T) {
+	threadID := "review-clamp-thread"
+	responses := make([]string, 10)
+	for i := range responses {
+		responses[i] = fmt.Sprintf("round-%d", i+1)
+	}
+	mgr, _ := newOneoffTestManager(t, responses, threadID)
+
+	resp, err := mgr.handleReviewCommand(context.Background(), threadID, "999")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "✅ 审查完成（10 轮）")
+}
+
+// TestReviewCommand_ViaTextSlash verifies "/review 2" text command routes
+// through handleSlashCommand and carries the round count.
+func TestReviewCommand_ViaTextSlash(t *testing.T) {
+	threadID := "review-text-thread"
+	mgr, _ := newOneoffTestManager(t, []string{"r1 review", "r2 judge"}, threadID)
+
+	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
+		Content:   "/review 2",
+		ThreadID:  threadID,
+		MessageID: "msg-review",
+	})
+	require.NoError(t, result.Err)
+	assert.Contains(t, result.Reply.Content, "第 2 轮")
+	assert.Contains(t, result.Reply.Content, "✅ 审查完成（2 轮）")
+}
+
+// TestStopCommand_NoActiveTask verifies /stop with nothing running returns a
+// truthful message instead of a misleading "stopped" (B2).
+func TestStopCommand_NoActiveTask(t *testing.T) {
+	mgr, _ := newOneoffTestManager(t, nil, "stop-thread")
+
+	resp, err := mgr.handleStopCommand("stop-thread")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "没有运行中的任务")
+}
+
+// TestStopCommand_CancelsOneoff verifies /stop cancels a registered one-off
+// run (/commit, /review) — the run's ctx must be cancelled so the agent loop
+// aborts (B2).
+func TestStopCommand_CancelsOneoff(t *testing.T) {
+	mgr, _ := newOneoffTestManager(t, nil, "stop-thread")
+
+	ctx, done := mgr.registerOneoff("stop-thread", context.Background())
+	defer done()
+
+	resp, err := mgr.handleStopCommand("stop-thread")
+	require.NoError(t, err)
+	assert.Contains(t, resp, "已停止")
+
+	select {
+	case <-ctx.Done():
+		// cancelled — good
+	default:
+		t.Fatal("/stop must cancel a running one-off command's context")
+	}
+}
+
+// TestOneoffConcurrencyCap verifies the global one-off semaphore rejects new
+// runs when the cap is reached, instead of silently queueing (B3).
+func TestOneoffConcurrencyCap(t *testing.T) {
+	mgr, _ := newOneoffTestManager(t, []string{"msg"}, "cap-thread")
+
+	// Fill the semaphore to capacity.
+	for i := 0; i < maxOneoffConcurrency; i++ {
+		mgr.oneoffSem <- struct{}{}
+	}
+
+	resp, err := mgr.handleCommitCommand(context.Background(), "cap-thread")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "请稍后再试")
+	assert.Empty(t, resp)
 }
