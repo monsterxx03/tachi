@@ -3,6 +3,7 @@ package systemreminder
 import (
 	"context"
 	"fmt"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"strings"
 )
 
@@ -84,11 +85,7 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 
 	var lines []string
 	for _, t := range undiscovered {
-		desc := strings.SplitN(t.Description, "\n", 2)[0] // first line only
-		runes := []rune(desc)
-		if len(runes) > 100 {
-			desc = string(runes[:100]) + "..."
-		}
+		desc := strutil.FirstLineOrTruncate(t.Description, 100)
 		lines = append(lines, fmt.Sprintf("  %s — %s", t.Name, desc))
 	}
 

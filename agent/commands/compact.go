@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // BuildCompactInstruction builds the instruction portion of the compact prompt.
@@ -60,47 +61,29 @@ func BuildCompactPrompt(history []llm.Message) string {
 
 		switch msg.Role {
 		case "user":
-			fmt.Fprintf(&sb, "User: %s\n", truncateContent(msg.Content, 1000))
+			fmt.Fprintf(&sb, "User: %s\n", strutil.Truncate(msg.Content, 1000))
 		case "assistant":
 			content := msg.Content
 			if content != "" {
-				fmt.Fprintf(&sb, "Assistant: %s\n", truncateContent(content, 2000))
+				fmt.Fprintf(&sb, "Assistant: %s\n", strutil.Truncate(content, 2000))
 			}
 			if len(msg.ThinkingBlocks) > 0 {
 				for _, tb := range msg.ThinkingBlocks {
-					fmt.Fprintf(&sb, "[Thinking: %s]\n", truncateContent(tb.Thinking, 500))
+					fmt.Fprintf(&sb, "[Thinking: %s]\n", strutil.Truncate(tb.Thinking, 500))
 				}
 			}
 			for _, tc := range msg.ToolCalls {
-				fmt.Fprintf(&sb, "[Tool Call: %s(%s)]\n", tc.Function.Name, truncateContent(tc.Function.Arguments, 200))
+				fmt.Fprintf(&sb, "[Tool Call: %s(%s)]\n", tc.Function.Name, strutil.Truncate(tc.Function.Arguments, 200))
 			}
 		case "tool":
-			content := msg.Content
-			runes := []rune(content)
-			if len(runes) > maxToolResultLen {
-				content = string(runes[:maxToolResultLen]) + "..."
-			}
+			content := strutil.Truncate(msg.Content, maxToolResultLen)
 			fmt.Fprintf(&sb, "[Tool Result: %s]\n", content)
 		default:
-			content := msg.Content
-			runes := []rune(content)
-			if len(runes) > 500 {
-				content = string(runes[:500]) + "..."
-			}
+			content := strutil.Truncate(msg.Content, 500)
 			fmt.Fprintf(&sb, "[%s]: %s\n", msg.Role, content)
 		}
 	}
 
 	sb.WriteString("\n---\nOutput the compressed summary:")
 	return sb.String()
-}
-
-// truncateContent truncates s to at most maxLen characters (runes).
-// A "..." suffix is appended when truncation occurs.
-func truncateContent(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
 }

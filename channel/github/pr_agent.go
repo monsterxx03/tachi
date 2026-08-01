@@ -17,6 +17,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // PRResult describes the outcome of a PR generation agent turn.
@@ -46,11 +47,7 @@ func generateBranchName(issueNum int, title string) string {
 	sanitized = strings.Trim(sanitized, "-")
 
 	// Use rune-aware truncation to avoid splitting multi-byte UTF-8 (CJK, emoji).
-	runes := []rune(sanitized)
-	if len(runes) > 40 {
-		runes = runes[:40]
-	}
-	sanitized = string(runes)
+	sanitized = strutil.TruncatePlain(sanitized, 40)
 	sanitized = strings.TrimRight(sanitized, "-")
 	if sanitized == "" {
 		sanitized = "fix"

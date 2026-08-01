@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // ---- mockSubagentRunner implements SubagentRunner for testing ----
@@ -193,9 +194,9 @@ func TestTruncateText(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := truncateText(tt.input, tt.maxLen)
+			got := strutil.Truncate(tt.input, tt.maxLen)
 			if got != tt.want {
-				t.Errorf("truncateText() = %q, want %q", got, tt.want)
+				t.Errorf("strutil.Truncate() = %q, want %q", got, tt.want)
 			}
 		})
 	}

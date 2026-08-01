@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // MemoryRecallReminder injects relevant memories from the memory backend
@@ -99,11 +100,7 @@ func (r MemoryRecallReminder) Generate(ctx context.Context, rctx Context) []stri
 	// Format recall results inline
 	lines = append(lines, "Relevant memories from past sessions:")
 	for i, e := range entries {
-		content := e.Content
-		runes := []rune(content)
-		if len(runes) > 1000 {
-			content = string(runes[:1000]) + "..."
-		}
+		content := strutil.Truncate(e.Content, 1000)
 		var tags string
 		if len(e.Tags) > 0 {
 			tags = "[" + strings.Join(e.Tags, ", ") + "] "

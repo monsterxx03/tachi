@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // --- Polling Loop ---
@@ -156,7 +157,7 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		Attachments: attachments,
 	}
 
-	ch.logger.Info(ctx, "weixin: dispatching msg", "user", msg.FromUserID, "thread", threadID, "text", truncate(text, 100))
+	ch.logger.Info(ctx, "weixin: dispatching msg", "user", msg.FromUserID, "thread", threadID, "text", strutil.Truncate(text, 100))
 
 	// Start typing indicator while LLM processes.
 	typingDone := make(chan struct{})

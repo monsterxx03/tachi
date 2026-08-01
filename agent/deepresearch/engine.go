@@ -25,6 +25,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // ---- Public types ----
@@ -371,7 +372,7 @@ func (dr *DeepResearch) generateQueries(
 
 	var queries []searchQuery
 	if err := json.Unmarshal([]byte(jsonStr), &queries); err != nil {
-		return nil, fmt.Errorf("parse queries JSON: %w\nRaw: %s", err, truncateText(jsonStr, 200))
+		return nil, fmt.Errorf("parse queries JSON: %w\nRaw: %s", err, strutil.Truncate(jsonStr, 200))
 	}
 
 	if len(queries) == 0 {
@@ -535,10 +536,7 @@ func slugifyTopic(topic string) string {
 	// Replace non-alphanumeric characters (except CJK and common punctuation) with hyphens
 	slug = reSlugifyTopic.ReplaceAllString(slug, "-")
 	slug = strings.Trim(slug, "-")
-	runes := []rune(slug)
-	if len(runes) > 80 {
-		slug = string(runes[:80])
-	}
+	slug = strutil.TruncatePlain(slug, 80)
 	return strings.Trim(slug, "-")
 }
 
@@ -656,12 +654,4 @@ func extractJSONArray(input string) string {
 	}
 
 	return ""
-}
-
-// truncateText truncates a string to the given length with an ellipsis.
-func truncateText(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
 }

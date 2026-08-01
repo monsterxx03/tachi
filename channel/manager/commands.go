@@ -22,6 +22,7 @@ import (
 	"github.com/monsterxx03/tachi/cron"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -1226,7 +1227,7 @@ func (m *Manager) handleCronCommand(threadID string) (string, error) {
 		}
 		fmt.Fprintf(&sb, "\n%s **%s** [%s]\n", status, job.Name, job.ID)
 		fmt.Fprintf(&sb, "  Schedule: `%s`\n", job.Schedule)
-		fmt.Fprintf(&sb, "  Prompt: %s\n", truncateForDisplay(job.Prompt, 60))
+		fmt.Fprintf(&sb, "  Prompt: %s\n", strutil.Truncate(job.Prompt, 60))
 		if !job.LastRunAt.IsZero() {
 			icon := "✅"
 			if job.LastRunStatus == "error" {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // buildUserMessageWithAttachments constructs the user message text sent to
@@ -106,11 +107,7 @@ func sanitizeFilename(s string) string {
 	)
 	result := replacer.Replace(s)
 	// Trim to reasonable length (rune-aware).
-	runes := []rune(result)
-	if len(runes) > 60 {
-		result = string(runes[:60])
-	}
-	return result
+	return strutil.TruncatePlain(result, 60)
 }
 
 // humanSize formats a byte count as a human-readable string.
@@ -122,16 +119,6 @@ func humanSize(n int) string {
 		return fmt.Sprintf("%.1fKB", float64(n)/1024)
 	}
 	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
-}
-
-// truncateForDisplay limits a string for display in channel messages.
-// Uses rune-aware truncation to handle multi-byte characters (e.g. Chinese).
-func truncateForDisplay(s string, maxLen int) string {
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
 }
 
 // --- Streaming callback context ---

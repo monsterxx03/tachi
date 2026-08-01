@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/transcript"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -518,13 +519,7 @@ func GenerateHTML(data *ReportData) (string, error) {
 			b, _ := json.Marshal(v)
 			return template.JS(b)
 		},
-		"truncate": func(s string, max int) string {
-			runes := []rune(s)
-			if len(runes) <= max {
-				return s
-			}
-			return string(runes[:max-1]) + "…"
-		},
+		"truncate": strutil.TruncateFitted,
 	}).Parse(reportTemplate)
 	if err != nil {
 		return "", fmt.Errorf("parse template: %w", err)

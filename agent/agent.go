@@ -16,6 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -425,11 +426,7 @@ func (p *topicSessionProvider) RecentSessions(ctx context.Context, limit int) ([
 			// Collect last N user messages in reverse order (most recent first).
 			for j := len(msgs) - 1; j >= 0 && len(recent) < recentUserMsgCount; j-- {
 				if msgs[j].Type == session.MessageTypeUser {
-					text := msgs[j].Content
-					runes := []rune(text)
-					if len(runes) > maxMsgLength {
-						text = string(runes[:maxMsgLength-1]) + "…"
-					}
+					text := strutil.TruncateFitted(msgs[j].Content, maxMsgLength)
 					recent = append(recent, text)
 				}
 			}

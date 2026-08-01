@@ -11,6 +11,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -168,7 +169,7 @@ func (s *Store) List() []SkillMeta {
 				seen[name] = true
 				result = append(result, SkillMeta{
 					Name:        name,
-					Description: truncateDescription(string(data), MaxDescriptionLen),
+					Description: strutil.TruncatePlain(string(data), MaxDescriptionLen),
 					Source:      source,
 					Enabled:     true,
 				})
@@ -191,9 +192,9 @@ func (s *Store) List() []SkillMeta {
 
 			desc := fm.Description
 			if desc == "" {
-				desc = truncateDescription(string(data), MaxDescriptionLen)
+				desc = strutil.TruncatePlain(string(data), MaxDescriptionLen)
 			} else if len(desc) > MaxDescriptionLen {
-				desc = truncateDescription(desc, MaxDescriptionLen)
+				desc = strutil.TruncatePlain(desc, MaxDescriptionLen)
 			}
 
 			result = append(result, SkillMeta{
@@ -269,9 +270,9 @@ func (s *Store) loadFromDir(dir, source, name string) (*Skill, error) {
 	}
 
 	if desc == "" {
-		desc = truncateDescription(body, MaxDescriptionLen)
+		desc = strutil.TruncatePlain(body, MaxDescriptionLen)
 	} else if len(desc) > MaxDescriptionLen {
-		desc = truncateDescription(desc, MaxDescriptionLen)
+		desc = strutil.TruncatePlain(desc, MaxDescriptionLen)
 	}
 
 	// Load supporting files (references/, templates/, scripts/)
@@ -445,7 +446,7 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 		if fm.Description != "" {
 			description = fm.Description
 		} else {
-			description = truncateDescription(existingBody, MaxDescriptionLen)
+			description = strutil.TruncatePlain(existingBody, MaxDescriptionLen)
 		}
 	}
 	if body == "" {
@@ -633,14 +634,4 @@ func loadSupportingFilesSafe(dir string) map[string]string {
 func isBinary(data []byte) bool {
 	checkLen := min(len(data), 8192)
 	return slices.Contains(data[:checkLen], 0)
-}
-
-// truncateDescription truncates text to maxLen characters for use as
-// a fallback description when no frontmatter description is provided.
-func truncateDescription(text string, maxLen int) string {
-	runes := []rune(text)
-	if len(runes) <= maxLen {
-		return text
-	}
-	return string(runes[:maxLen])
 }

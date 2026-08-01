@@ -18,6 +18,7 @@ import (
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/netutil"
 	"github.com/monsterxx03/tachi/pkg/proxy"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 const (
@@ -405,7 +406,7 @@ func (t *WebFetchTool) fetchWithFirecrawl(ctx context.Context, u string) (webFet
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return webFetchFetchResult{}, fmt.Errorf("firecrawl API returned %s%s: %s",
-			resp.Status, firecrawlErrorHint(resp.StatusCode), truncateString(string(respBody), 500))
+			resp.Status, firecrawlErrorHint(resp.StatusCode), strutil.Truncate(string(respBody), 500))
 	}
 
 	var parsed firecrawlScrapeResponse
@@ -438,14 +439,6 @@ func firecrawlErrorHint(code int) string {
 		return " (rate limited — retry later)"
 	}
 	return ""
-}
-
-// truncateString truncates s to at most max runes/bytes with an ellipsis.
-func truncateString(s string, max int) string {
-	if len(s) <= max {
-		return s
-	}
-	return s[:max] + "..."
 }
 
 // ---------------------------------------------------------------------------

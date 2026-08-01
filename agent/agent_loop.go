@@ -14,6 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -137,15 +138,6 @@ var (
 	errParallelConfirmUnsupported = fmt.Errorf("tool requiring confirmation cannot run in parallel group")
 	errParallelAskUserUnsupported = fmt.Errorf("tool requiring user input cannot run in parallel group")
 )
-
-// truncateForLog caps s at maxLen characters for use in debug log messages.
-// A "..." suffix is appended when truncation occurs.
-func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
 
 // hasBashCall returns true if any tool call in the batch is Bash.
 // Used to trigger LSP file cleanup after destructive filesystem operations.
@@ -855,7 +847,7 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 			msg.ContentParts = append(msg.ContentParts, steerInput.Images...)
 		}
 		rs.append(msg)
-		a.Config.Logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", truncateForLog(steerInput.Text, 80))
+		a.Config.Logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", strutil.Truncate(steerInput.Text, 80))
 		if steerInput.Text != "" {
 			a.recordSession(rs, &session.Message{
 				Type:    session.MessageTypeUser,
@@ -885,7 +877,7 @@ func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulato
 	}
 	if block := a.collectReminders(ctx, rctx); block != "" {
 		rs.append(llm.Message{Role: "user", Content: block})
-		a.Config.Logger.Info(ctx, "Agent: loop reminder injected", "block", truncateForLog(block, 200))
+		a.Config.Logger.Info(ctx, "Agent: loop reminder injected", "block", strutil.Truncate(block, 200))
 		a.recordSession(rs, &session.Message{
 			Type:    session.MessageTypeReminder,
 			Content: block,

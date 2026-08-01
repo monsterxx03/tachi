@@ -328,12 +328,3 @@ func randomBytes(n int) []byte {
 	readRandom(b)
 	return b
 }
-
-// truncate limits a string to n characters (runes).
-func truncate(s string, n int) string {
-	runes := []rune(s)
-	if len(runes) <= n {
-		return s
-	}
-	return string(runes[:n]) + "..."
-}

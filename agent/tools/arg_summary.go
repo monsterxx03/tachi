@@ -3,6 +3,7 @@ package tools
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"path"
 	"sort"
 	"strings"
@@ -164,14 +165,7 @@ func ToolArgsTitle(name, argsJSON string) string {
 // TruncateForTitle truncates s to maxLen runes, taking only the first line
 // and appending "…" if truncated.
 func TruncateForTitle(s string, maxLen int) string {
-	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-		s = s[:idx]
-	}
-	runes := []rune(s)
-	if len(runes) > maxLen {
-		return string(runes[:maxLen-1]) + "…"
-	}
-	return s
+	return strutil.TruncateFitted(strutil.FirstLine(s), maxLen)
 }
 
 // toInt converts an any value to int. Accepts float64 (JSON number),
@@ -196,11 +190,7 @@ func formatFullArgs(args map[string]any) string {
 	}
 	var parts []string
 	for k, v := range args {
-		s := fmt.Sprint(v)
-		runes := []rune(s)
-		if len(runes) > 40 {
-			s = string(runes[:37]) + "..."
-		}
+		s := strutil.TruncateFitted(fmt.Sprint(v), 40)
 		parts = append(parts, k+"="+s)
 	}
 	// Sort for deterministic output.

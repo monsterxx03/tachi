@@ -11,6 +11,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/lsp"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // LSPDiagnosticsProvider is the interface that LSPManager satisfies for the
@@ -201,10 +202,7 @@ func (r *LSPDiagnosticsReminder) Generate(ctx context.Context, rctx Context) []s
 				line := d.Range.Start.Line + 1
 				col := d.Range.Start.Character + 1
 				// Truncate the message to one line.
-				msg := d.Message
-				if nl := strings.IndexByte(msg, '\n'); nl >= 0 {
-					msg = msg[:nl]
-				}
+				msg := strutil.FirstLine(d.Message)
 				// Use a shorter URI representation.
 				shortURI := shortURI(fd.uri)
 

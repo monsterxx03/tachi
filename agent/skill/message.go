@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // BuildActivationMessage constructs the user message injected when a skill
@@ -39,7 +41,7 @@ func BuildActivationMessage(sk *Skill, userInstruction string) string {
 
 		for _, name := range names {
 			content := sk.Files[name]
-			preview := firstLineOrTruncate(content, 100)
+			preview := strutil.FirstLineOrTruncate(content, 100)
 			fmt.Fprintf(&b, "  %s → %s\n", name, preview)
 		}
 		fmt.Fprintf(&b, "Load with Skill(operation=\"view\", name=%q, path=<path>)]\n", sk.Meta.Name)
@@ -101,17 +103,5 @@ func xmlEscape(s string) string {
 	s = strings.ReplaceAll(s, "'", "&apos;")
 	s = strings.ReplaceAll(s, "<", "&lt;")
 	s = strings.ReplaceAll(s, ">", "&gt;")
-	return s
-}
-
-// firstLineOrTruncate returns the first line or first maxLen characters (runes).
-func firstLineOrTruncate(s string, maxLen int) string {
-	if idx := strings.IndexByte(s, '\n'); idx >= 0 {
-		s = s[:idx]
-	}
-	runes := []rune(s)
-	if len(runes) > maxLen {
-		s = string(runes[:maxLen]) + "..."
-	}
 	return s
 }

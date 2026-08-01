@@ -14,6 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/proxy"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // SearchResult is a single web search hit.
@@ -71,15 +72,6 @@ type searchErr struct {
 }
 
 func (e *searchErr) Error() string { return e.message }
-
-// truncateForLog caps s at maxLen bytes for use in debug log messages.
-// A "..." suffix is appended when truncation occurs.
-func truncateForLog(s string, maxLen int) string {
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen] + "..."
-}
 
 // nextBillingCycle returns 00:00 local time on the 1st of next month — the
 // start of the provider's next billing cycle. Quota-paused providers resume
@@ -280,7 +272,7 @@ func (t *WebSearchTool) searchWithProviders(ctx context.Context, query string, n
 			// keep the log line readable).
 			logger.FromContext(ctx).Info(ctx, "WebSearch: provider served search",
 				"provider", p.Type(),
-				"query", truncateForLog(query, 120),
+				"query", strutil.Truncate(query, 120),
 				"num", len(results),
 				"duration_ms", duration)
 			return marshalResult(&WebSearchResult{

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // decayCacheTTL is how long cached decay states remain valid before
@@ -557,7 +558,7 @@ func (t *TopicBackend) extractMatchingBlocks(path string, keywords []string) []E
 		entry := Entry{
 			ID:      FactID(filename, block),
 			Summary: extractTitle(block),
-			Content: truncateContent(block, 1000),
+			Content: strutil.Truncate(block, 1000),
 			Score:   computeScoreMulti(block, keywordLower),
 		}
 
@@ -716,15 +717,6 @@ func extractTimestamp(block string) int64 {
 }
 
 // --- Utility functions ---
-
-func truncateContent(s string, maxLen int) string {
-	// Truncate at rune boundary.
-	runes := []rune(s)
-	if len(runes) <= maxLen {
-		return s
-	}
-	return string(runes[:maxLen]) + "..."
-}
 
 // findGitRoot walks up from dir looking for .git directory.
 func findGitRoot(dir string) string {

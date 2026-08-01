@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/monsterxx03/tachi/agent/memory"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // MemoryBackend returns the configured memory backend, or nil if memory is disabled.
@@ -40,6 +41,6 @@ func (a *AIAgent) RecordMemory(ctx context.Context, content string, tags []strin
 		a.Config.Logger.Error(ctx, "RecordMemory: store failed", err)
 		return err
 	}
-	a.Config.Logger.Info(ctx, "RecordMemory: stored", "content", truncateForLog(content, 60), "tags", fmt.Sprintf("%v", tags))
+	a.Config.Logger.Info(ctx, "RecordMemory: stored", "content", strutil.Truncate(content, 60), "tags", fmt.Sprintf("%v", tags))
 	return nil
 }

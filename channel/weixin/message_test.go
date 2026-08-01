@@ -250,25 +250,6 @@ func TestRandomBytes(t *testing.T) {
 	}
 }
 
-func TestTruncate(t *testing.T) {
-	tests := []struct {
-		input string
-		n     int
-		want  string
-	}{
-		{"hello", 10, "hello"},
-		{"hello world", 8, "hello wo..."},
-		{"hello", 5, "hello"},
-	}
-
-	for _, tt := range tests {
-		got := truncate(tt.input, tt.n)
-		if got != tt.want {
-			t.Errorf("truncate(%q, %d) = %q, want %q", tt.input, tt.n, got, tt.want)
-		}
-	}
-}
-
 func TestNormalizeID(t *testing.T) {
 	tests := []struct {
 		input    string

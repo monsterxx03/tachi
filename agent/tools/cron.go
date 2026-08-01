@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/cron"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	robfigcron "github.com/robfig/cron/v3"
 )
 
@@ -321,11 +322,7 @@ func formatJobSummary(job *cron.Job) string {
 	fmt.Fprintf(&sb, "%s **%s** [%s] `%s`%s\n", status, job.Name, job.ID, job.Schedule, typeTag)
 
 	// Prompts can be long; show a snippet.
-	promptPreview := job.Prompt
-	runes := []rune(promptPreview)
-	if len(runes) > 80 {
-		promptPreview = string(runes[:80]) + "..."
-	}
+	promptPreview := strutil.Truncate(job.Prompt, 80)
 	fmt.Fprintf(&sb, "  Prompt: %s\n", promptPreview)
 
 	nextRun := computeNextRun(job.Schedule)

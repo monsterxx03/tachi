@@ -188,19 +188,6 @@ func TestMonthlyQuotaExhausted(t *testing.T) {
 
 // ── billing cycle ────────────────────────────────────────────────────────
 
-func TestTruncateForLog(t *testing.T) {
-	if got := truncateForLog("short", 120); got != "short" {
-		t.Errorf("expected passthrough, got %q", got)
-	}
-	long := "abcdefghij"
-	if got := truncateForLog(long, 5); got != "abcde..." {
-		t.Errorf("expected truncated with ellipsis, got %q", got)
-	}
-	if got := truncateForLog(long, 10); got != "abcdefghij" {
-		t.Errorf("expected exact-length passthrough, got %q", got)
-	}
-}
-
 func TestNextBillingCycle(t *testing.T) {
 	loc := time.FixedZone("CST", 8*3600)
 	cases := []struct {
