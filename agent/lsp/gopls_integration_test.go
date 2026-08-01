@@ -51,7 +51,7 @@ func Add(a, b int) int {
 		WorkspaceFolder: dir,
 	}
 
-	server := NewLSPServer("gopls", cfg, rootURI)
+	server := NewLSPServer("gopls", cfg, rootURI, nil)
 	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 	defer cancel()
 

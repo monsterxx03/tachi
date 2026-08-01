@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log/slog"
 	"maps"
 	"os"
 	"os/exec"
@@ -14,6 +13,8 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // ServerState represents the current state of an LSP server instance.
@@ -30,6 +31,7 @@ const (
 type LSPServer struct {
 	name    string
 	cfg     ServerConfig
+	log     *logger.Logger
 	rootURI string
 
 	state     atomic.Int32
@@ -72,14 +74,20 @@ type LSPServer struct {
 }
 
 // NewLSPServer creates a new LSP server instance. It does not start the process.
-func NewLSPServer(name string, cfg ServerConfig, rootURI string) *LSPServer {
+// l is the parent logger; a sub-logger named "lsp.<name>" is derived from it
+// (falls back to a standalone logger when l is nil).
+func NewLSPServer(name string, cfg ServerConfig, rootURI string, l *logger.Logger) *LSPServer {
 	concurrencyLimit := cfg.ConcurrencyLimit
 	if concurrencyLimit <= 0 {
 		concurrencyLimit = 4
 	}
+	if l == nil {
+		l = logger.New("lsp." + name)
+	}
 	return &LSPServer{
 		name:      name,
 		cfg:       cfg,
+		log:       l.NewSub(name),
 		rootURI:   rootURI,
 		sem:       make(chan struct{}, concurrencyLimit),
 		openFiles: make(map[string]struct{}),
@@ -176,7 +184,7 @@ func (s *LSPServer) Start(ctx context.Context) error {
 				return
 			}
 			if n > 0 {
-				slog.Debug("[LSP "+s.name+"]", "stderr", string(buf[:n]))
+				s.log.Debug(context.Background(), "[LSP "+s.name+"]", "stderr", string(buf[:n]))
 			}
 		}
 	}()
@@ -270,13 +278,13 @@ func (s *LSPServer) Start(ctx context.Context) error {
 	s.initialized = true
 	s.state.Store(int32(StateRunning))
 	s.startTime = time.Now()
-	slog.Debug("LSP server started", "name", s.name, "pid", cmd.Process.Pid)
+	s.log.Debug(ctx, "LSP server started", "name", s.name, "pid", cmd.Process.Pid)
 
 	// Background goroutine to detect unexpected exit (crash).
 	go func() {
 		if err := cmd.Wait(); err != nil {
 			if !s.isStopping {
-				slog.Warn("LSP server crashed", "name", s.name, "error", err)
+				s.log.Warn(context.Background(), "LSP server crashed", "name", s.name, "error", err)
 				s.state.Store(int32(StateError))
 				s.lastError = err
 				s.crashCnt++
@@ -462,7 +470,7 @@ func (s *LSPServer) CloseMissingFiles(ctx context.Context) {
 
 	for _, uri := range missing {
 		if err := s.CloseFile(ctx, uri); err != nil {
-			slog.Debug("LSP close missing file", "name", s.name, "uri", uri, "error", err)
+			s.log.Debug(ctx, "LSP close missing file", "name", s.name, "uri", uri, "error", err)
 		}
 	}
 }

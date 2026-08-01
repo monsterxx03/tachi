@@ -135,7 +135,7 @@ func TestLSPServerLifecycle(t *testing.T) {
 		Args:       []string{},
 		Extensions: []string{".go"},
 	}
-	server := NewLSPServer("mock-test", cfg, rootURI)
+	server := NewLSPServer("mock-test", cfg, rootURI, nil)
 
 	// Directly inject the connection connected to the mock process.
 	conn := newRPCConn(mock.stdout, mock.stdin)

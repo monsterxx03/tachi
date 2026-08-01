@@ -16,7 +16,7 @@ func TestLSPManagerRouting(t *testing.T) {
 			{Name: "tsserver", Command: "ts-ls", Extensions: []string{".ts", ".tsx", ".js"}, Languages: []string{"typescript"}},
 		},
 	}
-	m := NewManager(cfg)
+	m := NewManager(cfg, nil)
 
 	if !m.IsConfigured() {
 		t.Fatal("expected configured")
@@ -60,7 +60,7 @@ func TestLSPManagerRouting(t *testing.T) {
 // TestLSPManagerNotConfigured tests behavior with no servers.
 func TestLSPManagerNotConfigured(t *testing.T) {
 	cfg := &Config{}
-	m := NewManager(cfg)
+	m := NewManager(cfg, nil)
 
 	if m.IsConfigured() {
 		t.Fatal("expected not configured")

@@ -3,13 +3,14 @@ package lsp
 import (
 	"context"
 	"fmt"
-	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // LSPManager manages multiple LSP servers and routes requests by file extension.
@@ -18,17 +19,24 @@ type LSPManager struct {
 	cfg     *Config
 	servers map[string]*LSPServer // name → server
 	extIdx  map[string]*LSPServer // ".go" → server (lowercase extension)
+	log     *logger.Logger
 
 	configured bool
 	mu         sync.Mutex
 }
 
-// NewManager creates an LSPManager from configuration. It does not start any servers.
-func NewManager(cfg *Config) *LSPManager {
+// NewManager creates an LSPManager from configuration. It does not start any
+// servers. l is the parent logger (falls back to a standalone "lsp" logger
+// when nil); per-server sub-loggers are derived from it.
+func NewManager(cfg *Config, l *logger.Logger) *LSPManager {
+	if l == nil {
+		l = logger.New("lsp")
+	}
 	m := &LSPManager{
 		cfg:     cfg,
 		servers: make(map[string]*LSPServer),
 		extIdx:  make(map[string]*LSPServer),
+		log:     l,
 	}
 
 	// Build index.
@@ -40,7 +48,7 @@ func NewManager(cfg *Config) *LSPManager {
 			rootURI = PathToURI(cwd)
 		}
 
-		server := NewLSPServer(srvCfg.Name, srvCfg, rootURI)
+		server := NewLSPServer(srvCfg.Name, srvCfg, rootURI, m.log)
 		m.servers[srvCfg.Name] = server
 
 		for _, ext := range srvCfg.Extensions {
@@ -88,7 +96,7 @@ func (m *LSPManager) GetServer(ctx context.Context, filePath string) (*LSPServer
 				return nil, fmt.Errorf("LSP server %s failed to start", server.name)
 			}
 		} else {
-			slog.Debug("Lazy-starting LSP server", "name", server.name, "ext", ext)
+			m.log.Debug(ctx, "Lazy-starting LSP server", "name", server.name, "ext", ext)
 			if err := server.Start(ctx); err != nil {
 				return nil, fmt.Errorf("start LSP server %s: %w", server.name, err)
 			}
@@ -138,7 +146,7 @@ func (m *LSPManager) Shutdown(ctx context.Context) {
 	for _, server := range m.servers {
 		wg.Go(func() {
 			if err := server.Stop(ctx); err != nil {
-				slog.Warn("LSP server stop error", "name", server.name, "error", err)
+				m.log.Warn(ctx, "LSP server stop error", "name", server.name, "error", err)
 			}
 		})
 	}

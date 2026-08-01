@@ -52,7 +52,7 @@ func TestLSPToolNoServer(t *testing.T) {
 			{Name: "gopls", Command: "gopls", Extensions: []string{".go"}},
 		},
 	}
-	m := lsp.NewManager(cfg)
+	m := lsp.NewManager(cfg, nil)
 	tool := NewLSPTool(m)
 
 	input := `{"operation": "goToDefinition", "path": "/tmp/test.py", "line": 1, "character": 1}`
