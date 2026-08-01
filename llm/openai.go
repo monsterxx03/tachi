@@ -177,19 +177,39 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 		Model:       p.model,
 		Messages:    p.convertMessages(messages),
 		Tools:       p.convertTools(tools),
-		MaxTokens:   opts.MaxTokens,
 		Temperature: 1,
 	}
 
-	if opts.Thinking != nil && !*opts.Thinking {
-		// Thinking explicitly disabled.
-		// For DeepSeek models, use top-level "thinking" field to disable thinking mode.
-		if p.isDeepSeekReasoningModel() {
-			logger.FromContext(ctx).Info(ctx, "openai: thinking disabled, using top-level thinking:disabled for DeepSeek", "model", p.model, "baseURL", p.baseURL)
-			return p.createChatWithDisabledThinking(ctx, req, opts)
+	// Reasoning families (o1/o3/o4/gpt-5) reject max_tokens — the go-openai
+	// client validates this before sending. Non-reasoning models
+	// (gpt-4o, DeepSeek, ...) expect max_tokens.
+	if isReasoningModelPrefix(p.model) {
+		req.MaxCompletionTokens = opts.MaxTokens
+	} else {
+		req.MaxTokens = opts.MaxTokens
+	}
+
+	if p.isDeepSeek() {
+		// DeepSeek thinking mode is controlled via the top-level "thinking"
+		// field (enabled/disabled) plus "reasoning_effort" for strength,
+		// injected via ExtraBody (the fork merges it into the body root).
+		//
+		// Default (nil thinking / empty effort): send NO thinking field so
+		// the server-side default applies (DeepSeek: thinking on, effort
+		// high). Only explicit configuration sends the field.
+		switch {
+		case opts.Thinking != nil && !*opts.Thinking:
+			req.ExtraBody = map[string]any{"thinking": map[string]string{"type": "disabled"}}
+		case opts.Thinking != nil && *opts.Thinking:
+			req.ExtraBody = map[string]any{"thinking": map[string]string{"type": "enabled"}}
+		case opts.ThinkingEffort != "":
+			req.ExtraBody = map[string]any{"thinking": map[string]string{"type": "enabled"}}
+			req.ReasoningEffort = opts.ThinkingEffort
 		}
-		logger.FromContext(ctx).Info(ctx, "openai: thinking disabled but isDeepSeekReasoningModel=false", "model", p.model, "baseURL", p.baseURL)
-		// For other models, just don't set ReasoningEffort.
+	} else if opts.Thinking != nil && !*opts.Thinking {
+		// Thinking explicitly disabled: don't set ReasoningEffort — other
+		// models (o1/o3/o4, etc.) pick their default non-reasoning behavior.
+		logger.FromContext(ctx).Info(ctx, "openai: thinking disabled", "model", p.model, "baseURL", p.baseURL)
 	} else if opts.ThinkingEffort != "" {
 		req.ReasoningEffort = opts.ThinkingEffort
 	}
@@ -235,94 +255,11 @@ func (p *OpenAIProvider) CreateChat(ctx context.Context, messages []Message, too
 	return response, nil
 }
 
-// isDeepSeekReasoningModel checks whether the provider is a DeepSeek endpoint
-// with a model that supports thinking mode. These models need a top-level
-// "thinking" field to disable thinking.
-func (p *OpenAIProvider) isDeepSeekReasoningModel() bool {
-	return strings.Contains(strings.ToLower(p.model), "deepseek")
-}
-
-// createChatWithDisabledThinking sends a chat completion request with
-// {"thinking": {"type": "disabled"}} at the top level to properly disable
-// thinking mode on DeepSeek models. The Python SDK's extra_body parameter
-// merges keys into the request body top level; we do the same directly.
-func (p *OpenAIProvider) createChatWithDisabledThinking(ctx context.Context, req openai.ChatCompletionRequest, opts ChatOptions) (*Response, error) {
-	// Marshal to JSON, then unmarshal to map to inject thinking at top level.
-	bodyBytes, err := json.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("marshal request: %w", err)
-	}
-	var bodyMap map[string]any
-	if err := json.Unmarshal(bodyBytes, &bodyMap); err != nil {
-		return nil, fmt.Errorf("unmarshal request: %w", err)
-	}
-	// Inject "thinking" at the top level (same as Python SDK extra_body merge).
-	bodyMap["thinking"] = map[string]string{"type": "disabled"}
-
-	finalBytes, err := json.Marshal(bodyMap)
-	if err != nil {
-		return nil, fmt.Errorf("marshal final request: %w", err)
-	}
-
-	// Build the URL.
-	url := strings.TrimRight(p.baseURL, "/") + "/chat/completions"
-
-	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(string(finalBytes)))
-	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
-	}
-	httpReq.Header.Set("Content-Type", "application/json")
-	httpReq.Header.Set("Authorization", "Bearer "+p.apiKey)
-	httpReq.Header.Set("User-Agent", userAgent())
-	if opts.SessionID != "" {
-		httpReq.Header.Set("x-tachi-session-id", opts.SessionID)
-	}
-
-	httpResp, err := http.DefaultClient.Do(httpReq)
-	if err != nil {
-		return nil, fmt.Errorf("send request: %w", err)
-	}
-	defer httpResp.Body.Close()
-
-	if httpResp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(httpResp.Body)
-		return nil, fmt.Errorf("API error (status %d): %s", httpResp.StatusCode, string(respBody))
-	}
-
-	var apiResp openai.ChatCompletionResponse
-	if err := json.NewDecoder(httpResp.Body).Decode(&apiResp); err != nil {
-		return nil, fmt.Errorf("decode response: %w", err)
-	}
-
-	if len(apiResp.Choices) == 0 {
-		return &Response{
-			Content:      "",
-			FinishReason: "stop",
-		}, nil
-	}
-
-	choice := apiResp.Choices[0]
-	response := &Response{
-		Content:      choice.Message.Content,
-		FinishReason: string(choice.FinishReason),
-	}
-
-	if choice.Message.ReasoningContent != "" {
-		response.Reasoning = choice.Message.ReasoningContent
-	}
-
-	for _, tc := range choice.Message.ToolCalls {
-		response.ToolCalls = append(response.ToolCalls, ToolCall{
-			ID:   tc.ID,
-			Type: string(tc.Type),
-			Function: ToolCallFunction{
-				Name:      tc.Function.Name,
-				Arguments: tc.Function.Arguments,
-			},
-		})
-	}
-
-	return response, nil
+// isDeepSeek reports whether the provider model belongs to the DeepSeek
+// family. DeepSeek models need a top-level "thinking" field to enable/disable
+// thinking mode.
+func (p *OpenAIProvider) isDeepSeek() bool {
+	return isDeepSeek(p.model)
 }
 
 func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error) {
@@ -336,7 +273,20 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 		StreamOptions: &openai.StreamOptions{IncludeUsage: true},
 	}
 
-	if opts.Thinking != nil && !*opts.Thinking {
+	if p.isDeepSeek() {
+		// Same top-level "thinking" injection as CreateChat — ExtraBody is
+		// merged into the stream request body root by the forked go-openai.
+		// Default (nil/empty) sends nothing; the server-side default applies.
+		switch {
+		case opts.Thinking != nil && !*opts.Thinking:
+			req.ExtraBody = map[string]any{"thinking": map[string]string{"type": "disabled"}}
+		case opts.Thinking != nil && *opts.Thinking:
+			req.ExtraBody = map[string]any{"thinking": map[string]string{"type": "enabled"}}
+		case opts.ThinkingEffort != "":
+			req.ExtraBody = map[string]any{"thinking": map[string]string{"type": "enabled"}}
+			req.ReasoningEffort = opts.ThinkingEffort
+		}
+	} else if opts.Thinking != nil && !*opts.Thinking {
 		// Thinking explicitly disabled: don't set ReasoningEffort.
 	} else if opts.ThinkingEffort != "" {
 		req.ReasoningEffort = opts.ThinkingEffort
@@ -370,63 +320,69 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 				return
 			}
 
-			// Capture usage from the last chunk (when stream_options.include_usage is set)
-			if resp.Usage != nil {
-				lastUsage = &Usage{
-					InputTokens:  int64(resp.Usage.PromptTokens),
-					OutputTokens: int64(resp.Usage.CompletionTokens),
-				}
-			}
-
-			if len(resp.Choices) == 0 {
-				continue
-			}
-
-			choice := resp.Choices[0]
-			delta := choice.Delta
-
-			// Emit reasoning_content from streaming deltas as thinking events
-			// (o1/o3/o4, DeepSeek reasoning models, etc.)
-			if delta.ReasoningContent != "" {
-				ch <- StreamEvent{Type: StreamEventThinkingDelta, ThinkingDelta: delta.ReasoningContent}
-			}
-
-			if delta.Content != "" {
-				ch <- StreamEvent{Type: StreamEventTextDelta, TextDelta: delta.Content}
-			}
-
-			for _, tc := range delta.ToolCalls {
-				idx := 0
-				if tc.Index != nil {
-					idx = *tc.Index
-				}
-				if tc.ID != "" {
-					ch <- StreamEvent{
-						Type:      StreamEventToolUseStart,
-						ToolIndex: idx,
-						ToolCall: &ToolCall{
-							ID:   tc.ID,
-							Type: "function",
-							Function: ToolCallFunction{
-								Name: tc.Function.Name,
-							},
-						},
-					}
-				}
-				if tc.Function.Arguments != "" {
-					ch <- StreamEvent{Type: StreamEventInputJSONDelta, ToolIndex: idx, InputDelta: tc.Function.Arguments}
-				}
-			}
-
-			if choice.FinishReason != "" {
-				lastFinishReason = string(choice.FinishReason)
-				ch <- StreamEvent{
-					Type:         StreamEventMessageDelta,
-					FinishReason: lastFinishReason,
-				}
-			}
+			emitOpenAIStreamChunk(resp, &lastFinishReason, &lastUsage, ch)
 		}
 	}()
 
 	return ch, nil
+}
+
+// emitOpenAIStreamChunk converts a single streamed chunk into StreamEvents,
+// tracking the rolling finish reason and usage.
+func emitOpenAIStreamChunk(resp openai.ChatCompletionStreamResponse, lastFinishReason *string, lastUsage **Usage, ch chan<- StreamEvent) {
+	// Capture usage from the last chunk (when stream_options.include_usage is set)
+	if resp.Usage != nil {
+		*lastUsage = &Usage{
+			InputTokens:  int64(resp.Usage.PromptTokens),
+			OutputTokens: int64(resp.Usage.CompletionTokens),
+		}
+	}
+
+	if len(resp.Choices) == 0 {
+		return
+	}
+
+	choice := resp.Choices[0]
+	delta := choice.Delta
+
+	// Emit reasoning_content from streaming deltas as thinking events
+	// (o1/o3/o4, DeepSeek reasoning models, etc.)
+	if delta.ReasoningContent != "" {
+		ch <- StreamEvent{Type: StreamEventThinkingDelta, ThinkingDelta: delta.ReasoningContent}
+	}
+
+	if delta.Content != "" {
+		ch <- StreamEvent{Type: StreamEventTextDelta, TextDelta: delta.Content}
+	}
+
+	for _, tc := range delta.ToolCalls {
+		idx := 0
+		if tc.Index != nil {
+			idx = *tc.Index
+		}
+		if tc.ID != "" {
+			ch <- StreamEvent{
+				Type:      StreamEventToolUseStart,
+				ToolIndex: idx,
+				ToolCall: &ToolCall{
+					ID:   tc.ID,
+					Type: "function",
+					Function: ToolCallFunction{
+						Name: tc.Function.Name,
+					},
+				},
+			}
+		}
+		if tc.Function.Arguments != "" {
+			ch <- StreamEvent{Type: StreamEventInputJSONDelta, ToolIndex: idx, InputDelta: tc.Function.Arguments}
+		}
+	}
+
+	if choice.FinishReason != "" {
+		*lastFinishReason = string(choice.FinishReason)
+		ch <- StreamEvent{
+			Type:         StreamEventMessageDelta,
+			FinishReason: *lastFinishReason,
+		}
+	}
 }

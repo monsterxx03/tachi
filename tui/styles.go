@@ -156,9 +156,6 @@ var (
 				Foreground(lipgloss.Color("#C6A0F6")).
 				Bold(true)
 
-	costStyle = lipgloss.NewStyle().
-			Foreground(lipgloss.Color("#8BD5CA"))
-
 	mcpConnectingStyle = lipgloss.NewStyle().
 				Foreground(lipgloss.Color("#EED49F")).
 				Italic(true)

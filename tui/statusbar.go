@@ -9,7 +9,6 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"github.com/monsterxx03/tachi/agent"
-	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -18,7 +17,6 @@ type StatusBar struct {
 	providerInfo  string
 	state         state
 	totalUsage    *llm.Usage
-	sessionCost   float64
 	contextWindow int64
 	copyMode      bool
 	spinner       spinner.Model
@@ -51,7 +49,6 @@ func (s *StatusBar) SetWidth(w int)                  { s.width = w }
 func (s *StatusBar) SetState(st state)               { s.state = st }
 func (s *StatusBar) SetUsage(u *llm.Usage)           { s.totalUsage = u }
 func (s *StatusBar) SetCopyMode(b bool)              { s.copyMode = b }
-func (s *StatusBar) SetCost(cost float64)            { s.sessionCost = cost }
 func (s *StatusBar) SetProviderInfo(info string)     { s.providerInfo = info }
 func (s *StatusBar) SetContextWindow(cw int64)       { s.contextWindow = cw }
 func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s.sessionID = id }
@@ -134,7 +131,7 @@ func (s StatusBar) View() string {
 	}
 
 	var right string
-	if (s.totalUsage != nil && s.totalUsage.InputTokens > 0) || s.sessionCost > 0 {
+	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 {
 		right = s.buildUsageRight()
 	}
 
@@ -164,24 +161,15 @@ func (s StatusBar) truncateTitle(title string) string {
 func (s StatusBar) buildUsageRight() string {
 	var parts []string
 
-	// Cost display
-	if s.sessionCost > 0 {
-		costStr := formatCostCNY(s.sessionCost)
-		parts = append(parts, costStyle.Render(costStr))
-	}
-
-	// Context usage: show the most recent per-call input token estimate
-	// as a fraction of the context window. Unlike InputTokens (which
-	// accumulates across all API calls in the session and grows
-	// monotonically), LastInputTokens reflects the true per-call context
+	// Context usage: show the most recent per-call input token estimate as a
+	// percentage of the context window only (no n/m breakdown). Unlike
+	// InputTokens (which accumulates across all API calls in the session and
+	// grows monotonically), LastInputTokens reflects the true per-call context
 	// size — the number of tokens sent in the most recent API request,
 	// estimated locally before the call.
 	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 && s.contextWindow > 0 {
 		pct := float64(s.totalUsage.LastInputTokens) / float64(s.contextWindow) * 100
-		ctxStr := fmt.Sprintf("ctx: %s/%s %s",
-			cmds.FormatTokens(s.totalUsage.LastInputTokens),
-			cmds.FormatTokens(s.contextWindow),
-			formatPercent(pct))
+		ctxStr := fmt.Sprintf("ctx: %s", formatPercent(pct))
 		parts = append(parts, usageColorStyle(pct).Render(ctxStr))
 	}
 
@@ -207,17 +195,6 @@ func formatPercent(pct float64) string {
 		return "~100%"
 	}
 	return fmt.Sprintf("%.0f%%", pct)
-}
-
-// formatCostCNY formats a cost value in CNY for display in the statusbar.
-func formatCostCNY(cost float64) string {
-	if cost <= 0 {
-		return ""
-	}
-	if cost < 0.001 {
-		return "<¥0.001"
-	}
-	return fmt.Sprintf("¥%.3f", cost)
 }
 
 // modeBadgeFor returns the display text for a session mode badge.

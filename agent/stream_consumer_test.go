@@ -18,7 +18,7 @@ func TestStreamAccumulator_TextOnly(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	acc, err := consumeStream(streamCh, eventCh, 1)
+	acc, err := consumeStream(streamCh, eventCh, 1, nil)
 	close(eventCh)
 	require.NoError(t, err)
 
@@ -49,7 +49,7 @@ func TestStreamAccumulator_ThinkingBlocks(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	acc, err := consumeStream(streamCh, eventCh, 1)
+	acc, err := consumeStream(streamCh, eventCh, 1, nil)
 	close(eventCh)
 	require.NoError(t, err)
 
@@ -80,7 +80,7 @@ func TestStreamAccumulator_SingleToolCall(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	acc, err := consumeStream(streamCh, eventCh, 1)
+	acc, err := consumeStream(streamCh, eventCh, 1, nil)
 	close(eventCh)
 	require.NoError(t, err)
 
@@ -116,7 +116,7 @@ func TestStreamAccumulator_MultipleToolCalls(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	acc, err := consumeStream(streamCh, eventCh, 1)
+	acc, err := consumeStream(streamCh, eventCh, 1, nil)
 	close(eventCh)
 	require.NoError(t, err)
 
@@ -139,7 +139,7 @@ func TestStreamAccumulator_StreamError(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	_, err := consumeStream(streamCh, eventCh, 3)
+	_, err := consumeStream(streamCh, eventCh, 3, nil)
 	close(eventCh)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "iteration 3")
@@ -163,7 +163,7 @@ func TestStreamAccumulator_InputJSONFallback(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	acc, err := consumeStream(streamCh, eventCh, 1)
+	acc, err := consumeStream(streamCh, eventCh, 1, nil)
 	close(eventCh)
 	require.NoError(t, err)
 
@@ -182,7 +182,7 @@ func TestStreamAccumulator_ThinkingOnly(t *testing.T) {
 	}()
 
 	eventCh := make(chan AgentEvent, 16)
-	acc, err := consumeStream(streamCh, eventCh, 1)
+	acc, err := consumeStream(streamCh, eventCh, 1, nil)
 	close(eventCh)
 	require.NoError(t, err)
 
@@ -193,4 +193,40 @@ func TestStreamAccumulator_ThinkingOnly(t *testing.T) {
 	msg := acc.assistantMessage()
 	assert.Equal(t, "", msg.Content)
 	assert.Len(t, msg.ThinkingBlocks, 1)
+}
+
+func TestConsumeStream_OnFirstOutputFiresOnce(t *testing.T) {
+	// onFirstOutput must fire exactly once, on the first output delta of any
+	// kind (thinking, text, or tool-use), and not at all for an empty stream.
+	streamCh := make(chan llm.StreamEvent, 16)
+	go func() {
+		defer close(streamCh)
+		// Thinking first — the typical "thinking before tools" case the
+		// stream_start hook targets.
+		streamCh <- llm.StreamEvent{Type: llm.StreamEventThinkingDelta, ThinkingDelta: "think..."}
+		streamCh <- llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: "answer"}
+		streamCh <- llm.StreamEvent{Type: llm.StreamEventToolUseStart, ToolIndex: 0, ToolCall: &llm.ToolCall{ID: "call-1"}}
+		streamCh <- llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "stop"}
+	}()
+
+	eventCh := make(chan AgentEvent, 16)
+	calls := 0
+	_, err := consumeStream(streamCh, eventCh, 1, func() { calls++ })
+	close(eventCh)
+	require.NoError(t, err)
+	assert.Equal(t, 1, calls, "onFirstOutput should fire exactly once")
+}
+
+func TestConsumeStream_OnFirstOutputEmptyStream(t *testing.T) {
+	// An empty stream (e.g. immediate error or no deltas) must not fire the
+	// callback — the agent stays idle until real output begins.
+	streamCh := make(chan llm.StreamEvent, 16)
+	close(streamCh)
+
+	eventCh := make(chan AgentEvent, 16)
+	calls := 0
+	_, err := consumeStream(streamCh, eventCh, 1, func() { calls++ })
+	close(eventCh)
+	require.NoError(t, err)
+	assert.Equal(t, 0, calls)
 }

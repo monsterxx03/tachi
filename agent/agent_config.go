@@ -96,6 +96,14 @@ type AgentConfig struct {
 	RunProvider      llm.Provider
 	SubagentProvider llm.Provider
 
+	// --- 思考模式默认值（构造输入；nil/空 = provider/模型默认）---
+	// 由配置 ProviderConfig.ThinkingLevel 解析而来（resolved.Provider.Thinking /
+	// ThinkingEffort）。runLoop 在 ChatOptions 未显式指定时填充这两个值，
+	// 因此所有前端（TUI / channel / ACP / one-off）自动继承模型级思考配置，
+	// 而 /commit 等显式覆盖的调用不受影响。
+	Thinking       *bool  // 默认思考开关（nil = provider 默认；false = 关闭）
+	ThinkingEffort string // 默认思考强度（已按模型归一化；空 = 模型默认）
+
 	// --- 对抗式审查 Provider（由 SetupAdversarialProviders 在构造期回填；
 	//     空切片 = 未配置；nil 条目 = 配置了但解析失败，/review 启动前 fail fast）---
 	AdversarialModels []llm.Provider // review.adversarial.models 的解析结果（按配置顺序）

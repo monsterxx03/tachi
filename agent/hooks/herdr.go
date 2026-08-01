@@ -61,12 +61,17 @@ type eventAction struct {
 var EventActions = map[string]eventAction{
 	EventSessionStart:      {action: actionSession},
 	EventSessionEnd:        {action: actionRelease},
+	EventStreamStart:       {action: actionState, state: "working"},
 	EventTurnComplete:      {action: actionState, state: "idle"},
 	EventTurnTruncated:     {action: actionState, state: "working"},
 	EventToolCall:          {action: actionState, state: "working"},
 	EventPermissionRequest: {action: actionState, state: "blocked"},
-	EventAskUserQuestion:   {action: actionState, state: "blocked"},
-	EventError:             {action: actionState, state: "idle"},
+	// Permission approval returns to "working" so the tool execution phase
+	// (which doesn't re-fire tool_call because the bash ask was handled by
+	// the policy path) doesn't leave Herdr stuck in "blocked".
+	EventPermissionResult: {action: actionState, state: "working"},
+	EventAskUserQuestion:  {action: actionState, state: "blocked"},
+	EventError:            {action: actionState, state: "idle"},
 }
 
 // Handle implements the callback signature for hooks.Dispatcher.

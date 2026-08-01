@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -9,6 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // processAlive reports whether a process with the given PID exists.
@@ -665,5 +667,46 @@ func TestView_MouseMode_CopyMode(t *testing.T) {
 	// In copy mode, mouse mode is off so terminal can handle selection natively
 	if v.MouseMode != tea.MouseModeNone {
 		t.Error("copy mode should have mouse mode None")
+	}
+}
+
+// TestStatusBar_LiveContextFraction guards the implicit dependency where the
+// statusbar's ctx: NN% (percentage-only) display is fed by the LIVE event
+// path: handleAgentEvent fills totalUsage.LastInputTokens from the agent's
+// local estimate on AgentEventUsage. If a future refactor removes that
+// assignment, the statusbar would silently stop showing context usage in a
+// fresh session (no persisted session to restore it from).
+func TestStatusBar_LiveContextFraction(t *testing.T) {
+	a := agent.NewAIAgent(nil, 10)
+	defer a.Close()
+	// Seed the agent's local token estimate (~16k tokens for 64k chars).
+	a.EstimateAndUpdateTokens(&agent.RunState{}, []llm.Message{
+		{Role: "system", Content: "sys"},
+		{Role: "user", Content: strings.Repeat("x", 64_000)},
+	})
+
+	m := testModel()
+	m.agent = a
+	m.statusbar.SetContextWindow(128_000)
+
+	// Simulate a live usage update arriving mid-turn (fresh session, no
+	// persisted history). handleAgentEvent must populate LastInputTokens
+	// from the estimate and render the statusbar.
+	m.handleAgentEvent(agent.AgentEvent{
+		Type:  agent.AgentEventUsage,
+		Usage: &llm.Usage{InputTokens: 64_000},
+	})
+
+	view := m.statusbar.View()
+	if !strings.Contains(view, "ctx:") {
+		t.Fatalf("statusbar should show ctx%% after a live usage event: %q", view)
+	}
+	// 16_000 / 128_000 = 12.5% → "12%" (round-half-to-even) or "13%".
+	if !strings.Contains(view, "12%") && !strings.Contains(view, "13%") {
+		t.Errorf("ctx percentage should be ~12%%: got %q", view)
+	}
+	// Percentage-only display: no n/m token breakdown.
+	if strings.Contains(view, "/128") {
+		t.Errorf("statusbar should NOT show the n/m token breakdown: %q", view)
 	}
 }

@@ -64,10 +64,12 @@ type chatMessage struct {
 // until after compaction completes, so the old (wider-context) provider can
 // be used for the LLM summarization call.
 type pendingSwitchProvider struct {
-	provider      llm.Provider
-	providerName  string // config provider name for session metadata
-	providerInfo  string
-	contextWindow int64
+	provider       llm.Provider
+	providerName   string // config provider name for session metadata
+	providerInfo   string
+	contextWindow  int64
+	thinking       *bool  // target provider's thinking switch (nil = default)
+	thinkingEffort string // target provider's thinking effort (normalized)
 }
 
 // reviewOrch tracks an in-flight /review run (single or multi-round).
@@ -83,10 +85,12 @@ type pendingSwitchProvider struct {
 // MUST NOT mutate Model fields directly — instead they return a message
 // that the Update function handles synchronously.
 type switchProviderMsg struct {
-	provider      llm.Provider
-	providerName  string // config provider name for session metadata
-	providerInfo  string
-	contextWindow int64
+	provider       llm.Provider
+	providerName   string // config provider name for session metadata
+	providerInfo   string
+	contextWindow  int64
+	thinking       *bool  // target provider's thinking switch (nil = default)
+	thinkingEffort string // target provider's thinking effort (normalized)
 }
 
 type Model struct {
@@ -104,27 +108,26 @@ type Model struct {
 
 	baseSystemPrompt string // base prompt without mode supplement, used to rebuild systemPrompt
 
-	state          state
-	thinkingMode   bool
-	thinkingView   ThinkingView
-	copyMode       bool
-	cancelFunc     context.CancelFunc
-	eventCh        <-chan agent.AgentEvent
-	steerCh        chan agent.SteerInput // agent → TUI: steer check requests read pending input from here
+	state        state
+	thinkingMode bool
+	thinkingView ThinkingView
+	copyMode     bool
+	cancelFunc   context.CancelFunc
+	eventCh      <-chan agent.AgentEvent
+	steerCh      chan agent.SteerInput // agent → TUI: steer check requests read pending input from here
 	// steerCh 无需在 TurnComplete/Error 时置 nil：事件顺序处理，旧 turn 的
 	// loop 退出后不会再有 SteerCheck；steer 发送是 select+default 非阻塞，
 	// 新 turn 会在 sendMessage 里重建 channel。
 	totalUsage     llm.Usage
-	sessionCost    float64
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
 
-	savedHistory  []llm.Message      // conversation history saved before a one-off run (e.g. /commit)
-	isCompacting  bool               // true during compact LLM call (distinct from savedHistory)
-	isResearching bool               // true during deep research (blocks user input)
-	isReviewing   bool               // true during a review run (single or multi-round; blocks user input)
+	savedHistory  []llm.Message            // conversation history saved before a one-off run (e.g. /commit)
+	isCompacting  bool                     // true during compact LLM call (distinct from savedHistory)
+	isResearching bool                     // true during deep research (blocks user input)
+	isReviewing   bool                     // true during a review run (single or multi-round; blocks user input)
 	reviewOrch    *cmds.ReviewOrchestrator // non-nil while a review is running (see reviewOrch doc above)
-	forkedAgent   *agent.ForkedAgent // active forked agent (e.g. /review), closed on TurnComplete/error
+	forkedAgent   *agent.ForkedAgent       // active forked agent (e.g. /review), closed on TurnComplete/error
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events
@@ -197,7 +200,6 @@ func NewModel(cfg ModelConfig) *Model {
 		m.history = cfg.InitialHistory
 		m.chatview.LoadHistory(cfg.InitialSessionMsgs)
 		m.rebuildTotalUsage(cfg.InitialSessionMsgs)
-		m.refreshSessionCost()
 	}
 
 	if len(cfg.InitialSessionList) > 0 {
@@ -343,48 +345,6 @@ func (m *Model) accumulateUsage(u *llm.Usage) {
 	m.totalUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
 	m.totalUsage.CacheReadInputTokens += u.CacheReadInputTokens
 	m.statusbar.SetUsage(&m.totalUsage)
-	m.refreshSessionCost()
-}
-
-// refreshSessionCost recalculates the total session cost from stored messages
-// (including subagent messages) and updates the statusbar.
-func (m *Model) refreshSessionCost() {
-	sm := m.agent.SessionManager()
-	if sm == nil {
-		return
-	}
-	price := m.resolveModelPrice()
-	if price == nil {
-		m.sessionCost = 0
-		m.statusbar.SetCost(0)
-		return
-	}
-
-	// Recalculate from cumulative main conversation usage (tracked in totalUsage)
-	cost := llm.CalculateCost(&m.totalUsage, price)
-
-	// Add subagent costs by scanning subagent JSONL files
-	if curr := sm.Current(); curr != nil {
-		subMsgs, err := sm.LoadSubagentMessages(curr.ID)
-		if err == nil {
-			for _, msgs := range subMsgs {
-				for _, msg := range msgs {
-					if msg.Usage != nil {
-						usage := &llm.Usage{
-							InputTokens:              msg.Usage.InputTokens,
-							OutputTokens:             msg.Usage.OutputTokens,
-							CacheReadInputTokens:     msg.Usage.CacheReadInputTokens,
-							CacheCreationInputTokens: msg.Usage.CacheCreationInputTokens,
-						}
-						cost += llm.CalculateCost(usage, price)
-					}
-				}
-			}
-		}
-	}
-
-	m.sessionCost = cost
-	m.statusbar.SetCost(cost)
 }
 
 // waitForMCP starts a background goroutine that waits for MCP async init
@@ -678,10 +638,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case switchProviderMsg:
 		m.pendingSwitchProvider = &pendingSwitchProvider{
-			provider:      msg.provider,
-			providerName:  msg.providerName,
-			providerInfo:  msg.providerInfo,
-			contextWindow: msg.contextWindow,
+			provider:       msg.provider,
+			providerName:   msg.providerName,
+			providerInfo:   msg.providerInfo,
+			contextWindow:  msg.contextWindow,
+			thinking:       msg.thinking,
+			thinkingEffort: msg.thinkingEffort,
 		}
 		m.applyPendingSwitch()
 		return m, nil

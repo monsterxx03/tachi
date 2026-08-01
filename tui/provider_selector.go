@@ -98,10 +98,12 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	targetCW := resolved.ContextWindow
 	if m.shouldCompactBeforeSwitch(currentEstimate, targetCW) {
 		m.pendingSwitchProvider = &pendingSwitchProvider{
-			provider:      provider,
-			providerName:  pCfg.Name,
-			providerInfo:  providerInfo,
-			contextWindow: targetCW,
+			provider:       provider,
+			providerName:   pCfg.Name,
+			providerInfo:   providerInfo,
+			contextWindow:  targetCW,
+			thinking:       resolved.Thinking,
+			thinkingEffort: resolved.ThinkingEffort,
 		}
 
 		// Exit model selection overlay and show status messages.
@@ -127,10 +129,10 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 
 	// Normal switch — context fits in the target model's window.
 	m.agent.SetProvider(provider)
+	m.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
 	m.agent.SetContextWindow(targetCW)
 	m.statusbar.SetProviderInfo(providerInfo)
 	m.statusbar.SetContextWindow(targetCW)
-	m.refreshSessionCost()
 
 	// Persist the new provider name to the session metadata.
 	if sm := m.agent.SessionManager(); sm != nil {
@@ -171,10 +173,12 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 			m.compactForSwitch = false
 			return func() tea.Msg {
 				return switchProviderMsg{
-					provider:      ps.provider,
-					providerName:  ps.providerName,
-					providerInfo:  ps.providerInfo,
-					contextWindow: ps.contextWindow,
+					provider:       ps.provider,
+					providerName:   ps.providerName,
+					providerInfo:   ps.providerInfo,
+					contextWindow:  ps.contextWindow,
+					thinking:       ps.thinking,
+					thinkingEffort: ps.thinkingEffort,
 				}
 			}
 		}
@@ -217,10 +221,10 @@ func (m *Model) applyPendingSwitch() {
 	m.compactForSwitch = false
 
 	m.agent.SetProvider(ps.provider)
+	m.agent.SetThinking(ps.thinking, ps.thinkingEffort)
 	m.agent.SetContextWindow(ps.contextWindow)
 	m.statusbar.SetProviderInfo(ps.providerInfo)
 	m.statusbar.SetContextWindow(ps.contextWindow)
-	m.refreshSessionCost()
 
 	// Persist the new provider name to the session metadata.
 	if ps.providerName != "" {

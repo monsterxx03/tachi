@@ -24,13 +24,13 @@ import (
 func ResolveModelPrice(cfg *config.Config, providerName, model string) *llm.ModelPrice {
 	if cfg != nil && providerName != "" {
 		if pCfg := cfg.FindProvider(providerName); pCfg != nil {
-			return llm.ResolveModelPrice(
-				model,
-				pCfg.InputPrice,
-				pCfg.OutputPrice,
-				pCfg.CacheReadInputPrice,
-				pCfg.CacheCreationInputPrice,
-			)
+			// Spec.Pricing is optional (pointer); nil means "no overrides".
+			var input, output, cacheRead, cacheCreate *float64
+			if p := pCfg.Spec.Pricing; p != nil {
+				input, output, cacheRead, cacheCreate =
+					p.InputPrice, p.OutputPrice, p.CacheReadInputPrice, p.CacheCreationInputPrice
+			}
+			return llm.ResolveModelPrice(model, input, output, cacheRead, cacheCreate)
 		}
 	}
 	return llm.ResolveModelPrice(model, nil, nil, nil, nil)

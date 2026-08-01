@@ -291,6 +291,15 @@ func (a *AIAgent) SetProvider(provider llm.Provider) {
 	a.Config.Provider = provider
 }
 
+// SetThinking updates the agent-level default thinking config (switch +
+// effort). Used when switching models at runtime (/model): the target
+// provider's thinking_level may differ from the current one, and without
+// this the runLoop would keep applying the old model's defaults.
+func (a *AIAgent) SetThinking(thinking *bool, effort string) {
+	a.Config.Thinking = thinking
+	a.Config.ThinkingEffort = effort
+}
+
 // Model returns the current model name.
 func (a *AIAgent) Model() string {
 	return a.Config.Provider.Model()
@@ -809,6 +818,18 @@ func (a *AIAgent) dispatchEvent(ctx context.Context, event string, opts hooks.Pa
 	}
 	opts.Event = event
 	a.Config.HookDispatcher.Dispatch(ctx, event, opts)
+}
+
+// dispatchPermissionResult reports a permission decision to the hook system.
+// The only varying field is Approved, so the boilerplate lives here. Shared by
+// the bash ask flow (agent_permission.go) and the ConfirmationTool flow
+// (tool_executor.go).
+func (a *AIAgent) dispatchPermissionResult(ctx context.Context, tc llm.ToolCall, approved bool) {
+	a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
+		ToolName: tc.Function.Name,
+		ToolID:   tc.ID,
+		Approved: approved,
+	})
 }
 
 // KillBackgroundProcesses terminates all tracked background processes

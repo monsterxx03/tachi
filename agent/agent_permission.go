@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -143,16 +144,23 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 	case PermissionModeExternal:
 		a.Config.Logger.Info(ctx, "Agent: bash ask requesting external permission", "rule", rule)
 		approved, err := a.PermState.PermissionHandler(ctx, tc.Function.Name, tc.ID, preview, tc.Function.Arguments)
-		if err != nil {
-			return tools.ToolResult{Status: tools.ToolResultError, Err: err}, true, nil
-		}
-		if !approved {
+		if err != nil || !approved {
+			a.dispatchPermissionResult(ctx, tc, false)
+			if err != nil {
+				return tools.ToolResult{Status: tools.ToolResultError, Err: err}, true, nil
+			}
 			return tools.ToolResult{Status: tools.ToolResultError, Err: errors.New("permission denied by client")}, true, nil
 		}
+		a.dispatchPermissionResult(ctx, tc, true)
 		return tools.ToolResult{}, false, nil
 
 	default: // PermissionModeTUI
 		a.Config.Logger.Info(ctx, "Agent: bash ask requesting user confirmation", "rule", rule)
+		a.dispatchEvent(ctx, hooks.EventPermissionRequest, hooks.Payload{
+			ToolName: tc.Function.Name,
+			ToolID:   tc.ID,
+			ToolArgs: tc.Function.Arguments,
+		})
 		ch <- AgentEvent{
 			Type:     AgentEventToolConfirmation,
 			ToolName: tc.Function.Name,
@@ -164,12 +172,14 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 		select {
 		case resp := <-a.Channels.ConfirmResp:
 			switch resp {
-			case ConfirmAllowAlways:
-				a.Config.PermissionPolicy.AllowExactSession(cmd)
-				return tools.ToolResult{}, false, nil
-			case ConfirmAllowOnce:
+			case ConfirmAllowAlways, ConfirmAllowOnce:
+				if resp == ConfirmAllowAlways {
+					a.Config.PermissionPolicy.AllowExactSession(cmd)
+				}
+				a.dispatchPermissionResult(ctx, tc, true)
 				return tools.ToolResult{}, false, nil
 			default: // ConfirmDeny
+				a.dispatchPermissionResult(ctx, tc, false)
 				return tools.ToolResult{}, true, errCancelled
 			}
 		case <-ctx.Done():

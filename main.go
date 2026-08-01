@@ -261,6 +261,8 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		Logger:           logger.New("tui"),
 		PermissionMode:   agent.PermissionModeTUI,
 		AutoApproveEdits: cfg.TUI.AutoApproveEdits,
+		Thinking:         resolved.Provider.Thinking,
+		ThinkingEffort:   resolved.Provider.ThinkingEffort,
 		FullConfig:       cfg,
 		SystemConfig:     agent.SystemConfigFromConfig(cfg),
 	})
@@ -474,6 +476,8 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		Logger:           logger.New("run"),
 		PermissionMode:   agent.PermissionModeSkip,
 		SkipMemoryRecall: true,
+		Thinking:         resolved.Provider.Thinking,
+		ThinkingEffort:   resolved.Provider.ThinkingEffort,
 		FullConfig:       cfg,
 		SystemConfig:     agent.SystemConfigFromConfig(cfg),
 	})
@@ -488,11 +492,13 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		// Update display info to reflect the run provider.
 		resolved.Provider.Type = rp.Name()
 		resolved.Provider.Model = rp.Model()
-		// Re-resolve run provider config to get the correct context window.
+		// Re-resolve run provider config to get the correct context window
+		// and thinking defaults.
 		if rpCfg := cfg.FindProvider(cfg.RunProvider); rpCfg != nil {
 			if rpResolved, err := config.ResolveProviderConfig(rpCfg); err == nil {
 				aiAgent.SetContextWindow(rpResolved.ContextWindow)
 				resolved.Provider.ContextWindow = rpResolved.ContextWindow
+				aiAgent.SetThinking(rpResolved.Thinking, rpResolved.ThinkingEffort)
 			}
 		}
 	}

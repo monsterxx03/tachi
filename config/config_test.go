@@ -852,3 +852,136 @@ func TestReviewAdversarial_FullConfigLoad(t *testing.T) {
 	assert.Equal(t, []string{"claude-sonnet", "gpt-4o"}, cfg.Review.Adversarial.Models)
 	assert.Equal(t, "claude-opus", cfg.Review.Adversarial.JudgeModel)
 }
+
+func TestModelSpec_YAMLNested(t *testing.T) {
+	// 新结构：模型级属性聚合在 provider 的 spec: 子结构下。
+	yamlData := []byte(`
+provider: deepseek
+providers:
+  - name: deepseek-v4-flash
+    type: openai
+    model: deepseek-v4-flash
+    base_url: https://api.deepseek.com/v1
+    api_key: sk-test
+    spec:
+      context_window: 262144
+      thinking_level: high
+      pricing:
+        input_price: 2.5
+        output_price: 8.0
+        cache_read_input_price: 0.1
+        cache_creation_input_price: 1.0
+`)
+	cfg := &Config{}
+	require.NoError(t, yaml.Unmarshal(yamlData, cfg))
+	require.Len(t, cfg.Providers, 1)
+
+	p := cfg.Providers[0]
+	require.NotNil(t, p.Spec.ContextWindow)
+	assert.Equal(t, int64(262144), *p.Spec.ContextWindow)
+	require.NotNil(t, p.Spec.Pricing)
+	require.NotNil(t, p.Spec.Pricing.InputPrice)
+	assert.Equal(t, 2.5, *p.Spec.Pricing.InputPrice)
+	require.NotNil(t, p.Spec.Pricing.OutputPrice)
+	assert.Equal(t, 8.0, *p.Spec.Pricing.OutputPrice)
+	require.NotNil(t, p.Spec.Pricing.CacheReadInputPrice)
+	assert.Equal(t, 0.1, *p.Spec.Pricing.CacheReadInputPrice)
+	require.NotNil(t, p.Spec.Pricing.CacheCreationInputPrice)
+	assert.Equal(t, 1.0, *p.Spec.Pricing.CacheCreationInputPrice)
+	assert.Equal(t, "high", p.Spec.ThinkingLevel)
+
+	// 旧版平铺字段（context_window / input_price 直接挂 provider 下）不再解析。
+	oldYAML := []byte(`
+providers:
+  - name: legacy
+    type: openai
+    model: gpt-4o
+    api_key: sk-test
+    context_window: 262144
+    input_price: 2.5
+    thinking_level: high
+`)
+	cfgOld := &Config{}
+	require.NoError(t, yaml.Unmarshal(oldYAML, cfgOld))
+	require.Len(t, cfgOld.Providers, 1)
+	assert.Nil(t, cfgOld.Providers[0].Spec.ContextWindow, "旧版平铺 context_window 不应再被解析")
+	assert.Nil(t, cfgOld.Providers[0].Spec.Pricing, "旧版平铺 pricing 不应再被解析")
+	assert.Equal(t, "", cfgOld.Providers[0].Spec.ThinkingLevel, "旧版平铺 thinking_level 不应再被解析")
+
+	// Round-trip：嵌套 ModelSpec 序列化后能原样解析回来。
+	out, err := yaml.Marshal(cfg)
+	require.NoError(t, err)
+	cfg2 := &Config{}
+	require.NoError(t, yaml.Unmarshal(out, cfg2))
+	require.Len(t, cfg2.Providers, 1)
+	assert.Equal(t, p, cfg2.Providers[0])
+}
+
+func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
+	apiKey := "sk-test"
+
+	// "none" → Thinking=false（显式关闭思考）
+	pNone := &ProviderConfig{
+		Name:   "deepseek-flash",
+		Type:   "openai",
+		Model:  "deepseek-v4-flash",
+		APIKey: apiKey,
+		Spec:   ModelSpec{ThinkingLevel: "none"},
+	}
+	resolved, err := ResolveProviderConfig(pNone)
+	require.NoError(t, err)
+	require.NotNil(t, resolved.Thinking)
+	assert.False(t, *resolved.Thinking)
+	assert.Equal(t, "", resolved.ThinkingEffort)
+
+	// 支持的级别 → 原样保留
+	pHigh := &ProviderConfig{
+		Name:   "deepseek-pro",
+		Type:   "openai",
+		Model:  "deepseek-v4-pro",
+		APIKey: apiKey,
+		Spec:   ModelSpec{ThinkingLevel: "high"},
+	}
+	resolved, err = ResolveProviderConfig(pHigh)
+	require.NoError(t, err)
+	assert.Nil(t, resolved.Thinking)
+	assert.Equal(t, "high", resolved.ThinkingEffort)
+
+	// 不支持的级别 → 归一化降级（v4-flash 不支持 max → high）
+	pMaxFlash := &ProviderConfig{
+		Name:   "deepseek-flash",
+		Type:   "openai",
+		Model:  "deepseek-v4-flash",
+		APIKey: apiKey,
+		Spec:   ModelSpec{ThinkingLevel: "max"},
+	}
+	resolved, err = ResolveProviderConfig(pMaxFlash)
+	require.NoError(t, err)
+	assert.Nil(t, resolved.Thinking)
+	assert.Equal(t, "high", resolved.ThinkingEffort)
+
+	// 空 → 两者都不设置（provider/模型默认）
+	pEmpty := &ProviderConfig{
+		Name:   "deepseek-pro",
+		Type:   "openai",
+		Model:  "deepseek-v4-pro",
+		APIKey: apiKey,
+	}
+	resolved, err = ResolveProviderConfig(pEmpty)
+	require.NoError(t, err)
+	assert.Nil(t, resolved.Thinking)
+	assert.Equal(t, "", resolved.ThinkingEffort)
+
+	// 非 DeepSeek 模型：级别原样透传（不归一化）
+	pClaude := &ProviderConfig{
+		Name:   "claude",
+		Type:   "anthropic",
+		Model:  "claude-sonnet-4-6",
+		APIKey: apiKey,
+		Spec:   ModelSpec{ThinkingLevel: "max"},
+	}
+	resolved, err = ResolveProviderConfig(pClaude)
+	require.NoError(t, err)
+	assert.Nil(t, resolved.Thinking)
+	assert.Equal(t, "max", resolved.ThinkingEffort)
+}

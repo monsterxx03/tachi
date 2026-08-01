@@ -201,15 +201,17 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 	}
 
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:         prov,
-		ContextWindow:    resolved.Provider.ContextWindow,
-		Logger:           m.logger,
-		PermissionMode:   agent.PermissionModeSkip,
-		TitleGenEnabled:  &titleGen,
-		ProcessManager:   m.processManager,
-		MCPManager:       sharedMCP,
-		FullConfig:       m.cfg,
-		SystemConfig:     agent.SystemConfigFromConfig(m.cfg),
+		Provider:        prov,
+		ContextWindow:   resolved.Provider.ContextWindow,
+		Logger:          m.logger,
+		PermissionMode:  agent.PermissionModeSkip,
+		TitleGenEnabled: &titleGen,
+		ProcessManager:  m.processManager,
+		MCPManager:      sharedMCP,
+		Thinking:        resolved.Provider.Thinking,
+		ThinkingEffort:  resolved.Provider.ThinkingEffort,
+		FullConfig:      m.cfg,
+		SystemConfig:    agent.SystemConfigFromConfig(m.cfg),
 	})
 	if err != nil {
 		return nil, err

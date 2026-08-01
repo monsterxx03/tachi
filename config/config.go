@@ -83,20 +83,41 @@ func FindProjectRoot() string {
 	return cwd
 }
 
-type ProviderConfig struct {
-	Name          string `yaml:"name"`
-	Type          string `yaml:"type"`
-	Model         string `yaml:"model"`
-	BaseURL       string `yaml:"base_url"`
-	APIKey        string `yaml:"api_key"`
-	ContextWindow *int64 `yaml:"context_window"` // Manual override for model context window (tokens)
+// ModelPricing 定价覆盖（CNY / 1M tokens）。
+// 设置后覆盖内置价格表；设为 0 禁用该项成本计算；留空（nil）时使用内置价格表。
+type ModelPricing struct {
+	InputPrice              *float64 `yaml:"input_price,omitempty"`
+	OutputPrice             *float64 `yaml:"output_price,omitempty"`
+	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price,omitempty"`
+	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price,omitempty"`
+}
 
-	// Pricing overrides (CNY per 1M tokens). When set, override built-in pricing.
-	// Leave nil to use built-in prices (if available). Set 0 to disable cost calculation.
-	InputPrice              *float64 `yaml:"input_price"`
-	OutputPrice             *float64 `yaml:"output_price"`
-	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price"`
-	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price"`
+// ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别。
+// 通过 ProviderConfig.Spec 嵌套配置（不向前兼容旧版平铺字段）。
+type ModelSpec struct {
+	// ContextWindow 手动覆盖模型上下文窗口（tokens）。
+	ContextWindow *int64 `yaml:"context_window,omitempty"`
+
+	// ThinkingLevel 控制思考模式强度。不同模型支持不同级别：
+	//   - "none"             关闭思考模式
+	//   - "low"/"medium"/"high"/"xhigh"/"max"  设置思考强度
+	// 空 = 使用模型内置默认（DeepSeek: 思考开启、effort high；Anthropic: adaptive）。
+	// 请求的级别会在解析时被 llm.NormalizeThinkingEffort 归一化到
+	// 模型实际支持的范围（如 deepseek-v4-flash 的 max 会降级为 high）。
+	ThinkingLevel string `yaml:"thinking_level,omitempty"`
+
+	// Pricing 定价覆盖（可选，覆盖内置价格表）。
+	Pricing *ModelPricing `yaml:"pricing,omitempty"`
+}
+
+type ProviderConfig struct {
+	Name    string `yaml:"name"`
+	Type    string `yaml:"type"`
+	Model   string `yaml:"model"`
+	BaseURL string `yaml:"base_url"`
+	APIKey  string `yaml:"api_key"`
+
+	Spec ModelSpec `yaml:"spec"`
 }
 
 type WebSearchConfig struct {

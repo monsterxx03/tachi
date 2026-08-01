@@ -20,6 +20,11 @@ const (
 	// EventTurnStart fires when a user message is received, before the
 	// agent loop begins.
 	EventTurnStart = "turn_start"
+	// EventStreamStart fires when the LLM stream emits its first output
+	// (thinking, text, or tool-use delta) — the moment the frontend starts
+	// rendering. Integrations (e.g. Herdr) use it to flip to "working"
+	// before any tool executes.
+	EventStreamStart = "stream_start"
 	// EventTurnComplete fires when a turn ends — either a normal stop or
 	// a length-exhausted truncation (ErrorMessage is set in the latter).
 	EventTurnComplete = "turn_complete"

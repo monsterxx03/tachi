@@ -171,6 +171,7 @@ func switchSessionModel(sess *ACPSession, providerName string, l *logger.Logger)
 
 	// Update the agent provider and context window atomically.
 	sess.agent.SetProvider(provider)
+	sess.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
 	sess.agent.SetContextWindow(resolved.ContextWindow)
 
 	// Persist provider name to the on-disk session metadata.

@@ -548,6 +548,18 @@ func (a *AIAgent) runLoop(
 
 	opts := in.Opts
 
+	// Apply the agent-level default thinking config when the caller didn't
+	// specify one explicitly. This makes the model's thinking_level config
+	// (resolved into AgentConfig.Thinking/ThinkingEffort) effective across
+	// all frontends without touching every call site — while explicit
+	// overrides (/commit disables thinking, /review opts) keep priority.
+	if opts.Thinking == nil {
+		opts.Thinking = a.Config.Thinking
+	}
+	if opts.ThinkingEffort == "" {
+		opts.ThinkingEffort = a.Config.ThinkingEffort
+	}
+
 	// Inject the current session ID so it can be forwarded as the
 	// x-tachi-session-id header on outgoing LLM API requests.
 	if a.Config.SessionManager != nil && a.Config.SessionManager.Current() != nil {
@@ -604,7 +616,16 @@ func (a *AIAgent) runLoop(
 			return
 		}
 
-		acc, err := consumeStream(streamCh, ch, rs.APICalls)
+		// stream_start: fires when the LLM emits its first output delta
+		// (thinking/text/tool-use), so integrations flip to "working" as soon
+		// as generation begins — before any tool executes.
+		//
+		// Kept synchronous to preserve ordering (stream_start must precede
+		// tool_call); hook commands default to Async: true, so the hot path
+		// is not blocked unless a user explicitly configures async: false.
+		acc, err := consumeStream(streamCh, ch, rs.APICalls, func() {
+			a.dispatchEvent(ctx, hooks.EventStreamStart, hooks.Payload{})
+		})
 		if err != nil {
 			exitReason := ExitReasonError
 			if ctx.Err() != nil {

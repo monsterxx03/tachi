@@ -40,11 +40,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		m.history = nil
 		m.chatview.Clear()
 		m.agent.ClearSession()
-		// Reset cost and usage so statusbar shows clean state.
+		// Reset usage so statusbar shows clean state.
 		m.totalUsage = llm.Usage{}
-		m.sessionCost = 0
 		m.statusbar.SetUsage(nil)
-		m.statusbar.SetCost(0)
 		m.statusbar.SetSessionInfo("", "")
 		return nil
 	},

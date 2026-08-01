@@ -1,10 +1,20 @@
 package llm
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
+
+func boolPtr(v bool) *bool { return &v }
+
+func requireNoError(t *testing.T, err error) {
+	t.Helper()
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
 
 func TestOpenAIConvertMessages_BasicRoles(t *testing.T) {
 	p := NewOpenAIProvider("key", "", "gpt-4o")
@@ -249,5 +259,187 @@ func TestTachiTransport_BaseTransportFallback(t *testing.T) {
 	p := NewOpenAIProvider("key", "https://api.example.com/v1", "gpt-4o")
 	if p.client == nil {
 		t.Error("expected non-nil client")
+	}
+}
+
+// decodeRequestBody reads and JSON-decodes the request body sent to the test
+// server, returning it as a generic map for assertions on top-level fields.
+func decodeRequestBody(t *testing.T, r *http.Request) map[string]any {
+	t.Helper()
+	var body map[string]any
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatalf("decode request body: %v", err)
+	}
+	return body
+}
+
+func TestDeepSeekThinking_NonStream(t *testing.T) {
+	tests := []struct {
+		name         string
+		opts         ChatOptions
+		wantThinking string // "enabled" | "disabled" | "" (不注入 thinking 字段)
+		wantEffort   string // expected reasoning_effort ("" = absent)
+	}{
+		{
+			name:         "disabled",
+			opts:         ChatOptions{MaxTokens: 100, Thinking: boolPtr(false)},
+			wantThinking: "disabled",
+		},
+		{
+			name:         "explicit enabled",
+			opts:         ChatOptions{MaxTokens: 100, Thinking: boolPtr(true)},
+			wantThinking: "enabled",
+		},
+		{
+			name:         "enabled with effort",
+			opts:         ChatOptions{MaxTokens: 100, ThinkingEffort: "high"},
+			wantThinking: "enabled",
+			wantEffort:   "high",
+		},
+		{
+			// 未知的 effort 值不会被本地过滤——原样透传给 API，由服务端校验枚举。
+			name:         "unknown effort passthrough",
+			opts:         ChatOptions{MaxTokens: 100, ThinkingEffort: "turbo"},
+			wantThinking: "enabled",
+			wantEffort:   "turbo",
+		},
+		{
+			// 默认（nil thinking / 空 effort）不注入 thinking 字段——
+			// 交给服务端默认（DeepSeek: thinking 开启, effort high）。
+			name:         "default sends no thinking field",
+			opts:         ChatOptions{MaxTokens: 100},
+			wantThinking: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody = decodeRequestBody(t, r)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+			}))
+			defer server.Close()
+
+			p := NewOpenAIProvider("key", server.URL, "deepseek-v4-pro")
+			_, err := p.CreateChat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, tt.opts)
+			requireNoError(t, err)
+
+			gotEffort, _ := gotBody["reasoning_effort"].(string)
+			if gotEffort != tt.wantEffort {
+				t.Errorf("reasoning_effort = %q, want %q", gotEffort, tt.wantEffort)
+			}
+
+			thinking, ok := gotBody["thinking"].(map[string]any)
+			if tt.wantThinking == "" {
+				if ok {
+					t.Errorf("request body should NOT contain thinking field: %v", gotBody)
+				}
+				return
+			}
+			if !ok {
+				t.Fatalf("request body missing top-level thinking field: %v", gotBody)
+			}
+			if thinking["type"] != tt.wantThinking {
+				t.Errorf("thinking.type = %v, want %q", thinking["type"], tt.wantThinking)
+			}
+		})
+	}
+}
+
+func TestDeepSeekThinking_NonDeepSeekModel_UsesStandardPath(t *testing.T) {
+	// 非 DeepSeek 模型不注入顶层 thinking 字段，走标准 go-openai 路径；
+	// reasoning_effort 原样透传（含未知值，由服务端校验）。
+	tests := []struct {
+		name       string
+		effort     string
+		wantEffort string // "" = absent
+	}{
+		{"known effort", "high", "high"},
+		{"unknown effort passthrough", "turbo", "turbo"},
+		{"no effort", "", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var gotBody map[string]any
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotBody = decodeRequestBody(t, r)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"choices":[{"message":{"role":"assistant","content":"ok"},"finish_reason":"stop"}]}`))
+			}))
+			defer server.Close()
+
+			p := NewOpenAIProvider("key", server.URL, "gpt-5.4")
+			_, err := p.CreateChat(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, ChatOptions{
+				MaxTokens:      100,
+				ThinkingEffort: tt.effort,
+			})
+			requireNoError(t, err)
+
+			if _, ok := gotBody["thinking"]; ok {
+				t.Errorf("non-DeepSeek request must not carry a top-level thinking field: %v", gotBody)
+			}
+			gotEffort, _ := gotBody["reasoning_effort"].(string)
+			if gotEffort != tt.wantEffort {
+				t.Errorf("reasoning_effort = %q, want %q", gotEffort, tt.wantEffort)
+			}
+		})
+	}
+}
+
+func TestDeepSeekThinking_Stream(t *testing.T) {
+	var gotBody map[string]any
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotBody = decodeRequestBody(t, r)
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		// 模拟 DeepSeek 流式响应：reasoning_content + content + [DONE]
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"thinking...\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" +
+				"data: {\"choices\":[{\"delta\":{\"content\":\" world\"},\"finish_reason\":\"stop\"}]}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProvider("key", server.URL, "deepseek-v4-pro")
+	disabled := false
+	ch, err := p.CreateChatStream(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, ChatOptions{
+		MaxTokens: 100,
+		Thinking:  &disabled,
+	})
+	requireNoError(t, err)
+
+	thinking, ok := gotBody["thinking"].(map[string]any)
+	if !ok || thinking["type"] != "disabled" {
+		t.Fatalf("stream request body missing thinking:disabled: %v", gotBody)
+	}
+
+	var texts []string
+	var thinkings []string
+	var done bool
+	for ev := range ch {
+		switch ev.Type {
+		case StreamEventThinkingDelta:
+			thinkings = append(thinkings, ev.ThinkingDelta)
+		case StreamEventTextDelta:
+			texts = append(texts, ev.TextDelta)
+		case StreamEventDone:
+			done = true
+		case StreamEventError:
+			t.Fatalf("stream error: %v", ev.Error)
+		}
+	}
+	if !done {
+		t.Error("expected StreamEventDone")
+	}
+	if len(thinkings) != 1 || thinkings[0] != "thinking..." {
+		t.Errorf("thinking deltas = %v, want [thinking...]", thinkings)
+	}
+	if len(texts) != 2 || texts[0] != "hello" || texts[1] != " world" {
+		t.Errorf("text deltas = %v, want [hello  world]", texts)
 	}
 }

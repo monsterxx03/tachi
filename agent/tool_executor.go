@@ -366,25 +366,13 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 				a.Config.Logger.Info(ctx, "Agent: tool requesting external permission", "tool", tc.Function.Name, "diffLen", len(tr.Diff))
 				approved, permErr := a.PermState.PermissionHandler(ctx, tc.Function.Name, tc.ID, tr.Diff, tr.Args)
 				if permErr != nil {
-					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
-						ToolName: tc.Function.Name,
-						ToolID:   tc.ID,
-						Approved: false,
-					})
+					a.dispatchPermissionResult(ctx, tc, false)
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: permErr}
 				} else if !approved {
-					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
-						ToolName: tc.Function.Name,
-						ToolID:   tc.ID,
-						Approved: false,
-					})
+					a.dispatchPermissionResult(ctx, tc, false)
 					tr = tools.ToolResult{Status: tools.ToolResultError, Err: errors.New("permission denied by client")}
 				} else {
-					a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
-						ToolName: tc.Function.Name,
-						ToolID:   tc.ID,
-						Approved: true,
-					})
+					a.dispatchPermissionResult(ctx, tc, true)
 					confirmStart := time.Now()
 					output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 					tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
@@ -414,11 +402,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 						if resp == ConfirmAllowAlways && tc.Function.Name == tools.ToolNameEdit {
 							a.PermState.AutoApproveEdits = true // session-scoped: stop prompting for edits
 						}
-						a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
-							ToolName: tc.Function.Name,
-							ToolID:   tc.ID,
-							Approved: true,
-						})
+						a.dispatchPermissionResult(ctx, tc, true)
 						confirmStart := time.Now()
 						output, err := a.resolve(ctx).executeConfirmed(ctx, tc.Function.Name, tr.Args)
 						tr = tools.ToolResult{Status: tools.ToolResultSuccess, Output: output, Duration: time.Since(confirmStart)}
@@ -426,11 +410,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 							tr = tools.ToolResult{Status: tools.ToolResultError, Err: err, Duration: time.Since(confirmStart)}
 						}
 					} else {
-						a.dispatchEvent(ctx, hooks.EventPermissionResult, hooks.Payload{
-							ToolName: tc.Function.Name,
-							ToolID:   tc.ID,
-							Approved: false,
-						})
+						a.dispatchPermissionResult(ctx, tc, false)
 						return nil, errCancelled
 					}
 				case <-ctx.Done():

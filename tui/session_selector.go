@@ -188,9 +188,8 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 
-	// Rebuild usage and cost from stored messages
+	// Rebuild usage from stored messages
 	m.rebuildTotalUsage(sessionMsgs)
-	m.refreshSessionCost()
 
 	providerType := m.agent.Provider().Name()
 	if s.ProviderName != "" {
@@ -277,6 +276,7 @@ func (m *Model) restoreSessionProvider(providerName string) (string, bool) {
 	}
 
 	m.agent.SetProvider(provider)
+	m.agent.SetThinking(sp.Thinking, sp.ThinkingEffort)
 	if cw := llm.ModelContextWindow(m.agent.Model()); cw > 0 {
 		m.agent.SetContextWindow(cw)
 		m.statusbar.SetContextWindow(cw)

@@ -129,6 +129,8 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		PermissionMode:  agent.PermissionModeExternal,
 		ACPFileMode:     true,
 		PlanToolEnabled: true,
+		Thinking:        resolved.Provider.Thinking,
+		ThinkingEffort:  resolved.Provider.ThinkingEffort,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
 	})
@@ -495,6 +497,8 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		PermissionMode:  agent.PermissionModeExternal,
 		ACPFileMode:     true,
 		PlanToolEnabled: true,
+		Thinking:        resolved.Provider.Thinking,
+		ThinkingEffort:  resolved.Provider.ThinkingEffort,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
 	})
@@ -649,6 +653,8 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		PermissionMode:  agent.PermissionModeExternal,
 		ACPFileMode:     true,
 		PlanToolEnabled: true,
+		Thinking:        resolved.Provider.Thinking,
+		ThinkingEffort:  resolved.Provider.ThinkingEffort,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
 	})

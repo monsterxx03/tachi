@@ -3,11 +3,14 @@ package agent
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -227,6 +230,104 @@ func TestAgentLoop_BashPolicyAsk_TUIDenyCancelsTurn(t *testing.T) {
 
 	require.NotNil(t, result)
 	assert.Equal(t, ExitReasonCancelled, result.ExitReason)
+}
+
+// captureHookEvents installs a hook dispatcher that records permission
+// request/result events as compact strings, so tests can assert that the
+// Herdr-style "blocked" notification fires around a bash ask prompt.
+func captureHookEvents(a *AIAgent) *[]string {
+	var mu sync.Mutex
+	got := make([]string, 0, 4)
+	d := hooks.NewDispatcher(nil)
+	d.RegisterCallback(hooks.EventPermissionRequest, "test", func(_ context.Context, _ string, payload []byte) {
+		var p hooks.Payload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return
+		}
+		mu.Lock()
+		got = append(got, fmt.Sprintf("request tool=%s args=%s", p.ToolName, p.ToolArgs))
+		mu.Unlock()
+	})
+	d.RegisterCallback(hooks.EventPermissionResult, "test", func(_ context.Context, _ string, payload []byte) {
+		var p hooks.Payload
+		if err := json.Unmarshal(payload, &p); err != nil {
+			return
+		}
+		mu.Lock()
+		got = append(got, fmt.Sprintf("result tool=%s approved=%v", p.ToolName, p.Approved))
+		mu.Unlock()
+	})
+	a.Config.HookDispatcher = d
+	return &got
+}
+
+func TestAgentLoop_BashPolicyAsk_TUIHooksDispatch(t *testing.T) {
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"git push origin main"}`),
+			textSeq("pushed"),
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	a.SetPermissionMode(PermissionModeTUI)
+	a.RegisterTool(bashStub())
+	a.SetPermissionPolicy(permission.NewPolicy(
+		permission.Rules{Ask: []string{"git push*"}}, permission.Rules{}))
+	got := captureHookEvents(a)
+
+	ch := a.RunConversationStream(t.Context(), nil, "push it", "", llm.ChatOptions{MaxTokens: 4096})
+	var result *RunResult
+	for e := range ch {
+		if e.Type == AgentEventToolConfirmation {
+			a.ConfirmTool(ConfirmAllowOnce)
+		}
+		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
+			result = e.Result
+		}
+	}
+
+	require.NotNil(t, result)
+	assert.Equal(t, "pushed", result.Response)
+	assert.Equal(t, []string{
+		"request tool=Bash args={\"command\":\"git push origin main\"}",
+		"result tool=Bash approved=true",
+	}, *got, "permission hooks should fire around the bash ask prompt")
+}
+
+func TestAgentLoop_BashPolicyAsk_TUIDenyDispatchesDeniedResult(t *testing.T) {
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"git push origin main"}`),
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	a.SetPermissionMode(PermissionModeTUI)
+	a.RegisterTool(bashStub())
+	a.SetPermissionPolicy(permission.NewPolicy(
+		permission.Rules{Ask: []string{"git push*"}}, permission.Rules{}))
+	got := captureHookEvents(a)
+
+	ch := a.RunConversationStream(t.Context(), nil, "push it", "", llm.ChatOptions{MaxTokens: 4096})
+	var result *RunResult
+	for e := range ch {
+		if e.Type == AgentEventToolConfirmation {
+			a.ConfirmTool(ConfirmDeny)
+		}
+		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
+			result = e.Result
+		}
+	}
+
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonCancelled, result.ExitReason)
+	assert.Equal(t, []string{
+		"request tool=Bash args={\"command\":\"git push origin main\"}",
+		"result tool=Bash approved=false",
+	}, *got, "denied bash ask should still report permission_request + denied result")
 }
 
 func TestAgentLoop_BashPolicyNoRules_Unaffected(t *testing.T) {

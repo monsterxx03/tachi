@@ -3,6 +3,7 @@ package agent
 import (
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -48,18 +49,37 @@ func (acc *streamAccumulator) assistantMessage() llm.Message {
 
 // consumeStream reads all events from the LLM stream, forwards deltas to the
 // event channel, and returns the accumulated result.
-func consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCallCount int) (*streamAccumulator, error) {
+//
+// onFirstOutput, when non-nil, is invoked exactly once when the stream emits
+// its first output delta (thinking, text, or tool-use) — before that delta is
+// forwarded to ch. Callers use it to signal "the LLM has started producing
+// output" (e.g. the stream_start hook) without coupling the consumer to the
+// hook system.
+func consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCallCount int, onFirstOutput func()) (*streamAccumulator, error) {
 	acc := &streamAccumulator{
 		toolIndexMap: make(map[int]int),
+	}
+
+	// Exactly-once guard: fires on the first output delta (thinking, text,
+	// or tool-use), no matter which kind arrives first.
+	var firstOnce sync.Once
+	firstOutput := func() {
+		firstOnce.Do(func() {
+			if onFirstOutput != nil {
+				onFirstOutput()
+			}
+		})
 	}
 
 	for event := range streamCh {
 		switch event.Type {
 		case llm.StreamEventTextDelta:
+			firstOutput()
 			acc.text.WriteString(event.TextDelta)
 			ch <- AgentEvent{Type: AgentEventTextDelta, TextDelta: event.TextDelta}
 
 		case llm.StreamEventThinkingDelta:
+			firstOutput()
 			acc.thinking.WriteString(event.ThinkingDelta)
 			ch <- AgentEvent{Type: AgentEventThinkingDelta, ThinkingDelta: event.ThinkingDelta}
 
@@ -67,6 +87,7 @@ func consumeStream(streamCh <-chan llm.StreamEvent, ch chan<- AgentEvent, apiCal
 			acc.signature.WriteString(event.SignatureDelta)
 
 		case llm.StreamEventToolUseStart:
+			firstOutput()
 			if event.ToolCall != nil {
 				sliceIdx := len(acc.toolCalls)
 				acc.toolIndexMap[event.ToolIndex] = sliceIdx

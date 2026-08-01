@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
@@ -1165,4 +1167,78 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 
 	assert.False(t, compacted, "should not compact when estimate is below threshold")
 	assert.Len(t, rs.Messages, 1, "messages must not be replaced")
+}
+
+// captureStreamHooks installs a hook dispatcher recording stream_start and
+// tool_call in arrival order, mirroring how Herdr consumes the events.
+func captureStreamHooks(a *AIAgent) *[]string {
+	var mu sync.Mutex
+	got := make([]string, 0, 8)
+	d := hooks.NewDispatcher(nil)
+	d.RegisterCallback(hooks.EventStreamStart, "test", func(_ context.Context, _ string, _ []byte) {
+		mu.Lock()
+		got = append(got, "stream_start")
+		mu.Unlock()
+	})
+	d.RegisterCallback(hooks.EventToolCall, "test", func(_ context.Context, _ string, _ []byte) {
+		mu.Lock()
+		got = append(got, "tool_call")
+		mu.Unlock()
+	})
+	a.Config.HookDispatcher = d
+	return &got
+}
+
+func TestAgentLoop_StreamStartFiresOnThinking(t *testing.T) {
+	// The exact complaint: herdr stays idle while thinking streams, only
+	// flipping to working on the later tool_call. stream_start must fire as
+	// soon as the thinking delta arrives.
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			{
+				{Type: llm.StreamEventThinkingDelta, ThinkingDelta: "let me think"},
+				{Type: llm.StreamEventTextDelta, TextDelta: "hello"},
+				{Type: llm.StreamEventDone, FinishReason: "stop"},
+			},
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	got := captureStreamHooks(a)
+
+	_, events := drainAgentEvents(
+		a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096}))
+
+	require.NotEmpty(t, events, "turn should complete normally")
+	assert.Equal(t, []string{"stream_start"}, *got,
+		"stream_start should fire exactly once, on the first thinking delta")
+}
+
+func TestAgentLoop_StreamStartPrecedesToolCall(t *testing.T) {
+	// Thinking → tool_call → final text: the working state must be reported
+	// during thinking, before the tool executes.
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			{
+				{Type: llm.StreamEventThinkingDelta, ThinkingDelta: "hmm"},
+				{Type: llm.StreamEventToolUseStart, ToolIndex: 0, ToolCall: &llm.ToolCall{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash"}}},
+				{Type: llm.StreamEventInputJSONDelta, ToolIndex: 0, InputDelta: `{"command":"echo hi"}`},
+				{Type: llm.StreamEventDone, FinishReason: "tool_calls"},
+			},
+			textSeq("done"),
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	a.RegisterTool(bashStub())
+	got := captureStreamHooks(a)
+
+	_, events := drainAgentEvents(
+		a.RunConversationStream(t.Context(), nil, "run it", "", llm.ChatOptions{MaxTokens: 4096}))
+
+	require.NotEmpty(t, events)
+	assert.Equal(t, []string{"stream_start", "tool_call", "stream_start"}, *got,
+		"stream_start fires during thinking (before tool_call), and again on the second API call")
 }

@@ -265,11 +265,12 @@ func TestStatusBar_View_UsageNormal(t *testing.T) {
 	if !strings.Contains(view, "ctx:") {
 		t.Error("View should show context usage when input tokens > 0")
 	}
-	if !strings.Contains(view, "10.0k") {
-		t.Error("View should format 10_000 as '10.0k'")
+	// 10_000 / 128_000 = 7.8% → "8%"（只显示百分比，无 n/m）
+	if !strings.Contains(view, "8%") {
+		t.Errorf("View should show 8%%: got %q", view)
 	}
-	if !strings.Contains(view, "128.0k") {
-		t.Error("View should format 128_000 as '128.0k'")
+	if strings.Contains(view, "/128") {
+		t.Error("View should NOT show n/m token breakdown")
 	}
 }
 
@@ -277,9 +278,6 @@ func TestStatusBar_View_UsageWarning(t *testing.T) {
 	// 50% exactly should be warning
 	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(64_000, 500))
 	view := s.View()
-	if !strings.Contains(view, "64.0k") {
-		t.Error("View should show 64.0k input tokens")
-	}
 	// 50% should use warning (yellow) style, not normal (green)
 	if !strings.Contains(view, "50%") {
 		t.Error("View should show 50%")
@@ -289,9 +287,6 @@ func TestStatusBar_View_UsageWarning(t *testing.T) {
 func TestStatusBar_View_UsageHigh(t *testing.T) {
 	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(110_000, 500))
 	view := s.View()
-	if !strings.Contains(view, "110.0k") {
-		t.Error("View should show 110.0k input tokens")
-	}
 	// 86% should use high (red) style
 	if !strings.Contains(view, "86%") {
 		t.Error("View should show 86%")
@@ -498,7 +493,8 @@ func TestStatusBar_View_OverflowNeverWraps(t *testing.T) {
 		t.Errorf("statusbar must not wrap on overflow, got %q", view)
 	}
 	// The right side's usage info must survive truncation.
-	if !strings.Contains(view, "ctx:") || !strings.Contains(view, "128.0k") {
+	// 100_000 / 128_000 = 78.1% → "78%"
+	if !strings.Contains(view, "ctx:") || !strings.Contains(view, "78%") {
 		t.Errorf("right-side usage must stay visible on overflow, got %q", view)
 	}
 }
@@ -590,8 +586,11 @@ func TestStatusBar_View_FullRichState(t *testing.T) {
 	if !strings.Contains(view, "abc12345") {
 		t.Error("should show session ID suffix")
 	}
-	if !strings.Contains(view, "60.0k") {
-		t.Error("should show input tokens")
+	if !strings.Contains(view, "47%") {
+		t.Errorf("should show context percentage (60_000/128_000): got %q", view)
+	}
+	if strings.Contains(view, "60.0k") {
+		t.Error("should NOT show token breakdown")
 	}
 	if !strings.Contains(view, "⏳ 2 pending") {
 		t.Error("should show pending count")
@@ -640,71 +639,11 @@ func TestStatusBar_View_MillionTokens(t *testing.T) {
 		withContextWindow(5_000_000),
 	)
 	view := s.View()
-	if !strings.Contains(view, "2.5M") {
-		t.Errorf("should format 2.5M input tokens: got %q", view)
+	// 2_500_000 / 5_000_000 = 50% — 只显示百分比
+	if !strings.Contains(view, "50%") {
+		t.Errorf("should show 50%%: got %q", view)
 	}
-	if !strings.Contains(view, "5.0M") {
-		t.Errorf("should format 5.0M context window: got %q", view)
-	}
-}
-
-// ---- Cost display ----
-
-func withCost(cost float64) func(*StatusBar) {
-	return func(s *StatusBar) { s.sessionCost = cost }
-}
-
-func TestStatusBar_SetCost(t *testing.T) {
-	s := makeStatusBar()
-	s.SetCost(0.123)
-	if s.sessionCost != 0.123 {
-		t.Errorf("SetCost: want 0.123, got %v", s.sessionCost)
-	}
-}
-
-func TestStatusBar_View_CostDisplay(t *testing.T) {
-	s := makeStatusBar(
-		withWidth(120),
-		withState(stateIdle),
-		withCost(0.123),
-	)
-	view := s.View()
-	if !strings.Contains(view, "¥0.123") {
-		t.Errorf("should show cost: got %q", view)
-	}
-}
-
-func TestStatusBar_View_NoCostWhenZero(t *testing.T) {
-	s := makeStatusBar(
-		withWidth(120),
-		withState(stateIdle),
-		withCost(0),
-	)
-	view := s.View()
-	if strings.Contains(view, "¥") {
-		t.Errorf("should NOT show cost when 0: got %q", view)
-	}
-}
-
-func TestFormatCostCNY(t *testing.T) {
-	tests := []struct {
-		cost float64
-		want string
-	}{
-		{0, ""},
-		{0.0001, "<¥0.001"},
-		{0.001, "¥0.001"},
-		{0.123, "¥0.123"},
-		{1.0, "¥1.000"},
-		{10.5, "¥10.500"},
-		{100.0, "¥100.000"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.want, func(t *testing.T) {
-			got := formatCostCNY(tt.cost)
-			if got != tt.want {
-				t.Errorf("formatCostCNY(%v) = %q, want %q", tt.cost, got, tt.want)
-			}
-		})
+	if strings.Contains(view, "2.5M") || strings.Contains(view, "5.0M") {
+		t.Errorf("should NOT show token breakdown: got %q", view)
 	}
 }

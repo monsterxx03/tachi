@@ -76,3 +76,5 @@ require (
 )
 
 replace github.com/coder/acp-go-sdk => github.com/monsterxx03/acp-go-sdk v0.13.6-0.20260723091451-d43b1a01110e
+
+replace github.com/sashabaranov/go-openai => github.com/monsterxx03/go-openai v1.41.2-extrabody

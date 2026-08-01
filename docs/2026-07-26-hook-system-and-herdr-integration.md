@@ -26,7 +26,8 @@ Tachi 目前没有任何生命周期事件暴露机制，无法与外部系统�
 |---|---|---|---|
 | `session_start` | 新 session 创建时 | session_id, workspace_dir, provider | — |
 | `session_end` | Session 关闭/清理时 | session_id | idle |
-| `turn_start` | 用户消息提交，进入 agent loop | session_id, user_message, turn_count | working |
+| `turn_start` | 用户消息提交，进入 agent loop | session_id, user_message, turn_count | — |
+| `stream_start` | LLM 流吐出第一个输出 delta（thinking/text/tool-use） | session_id | working |
 | `turn_complete` | LLM 回复完成（stop） | session_id, response_text, usage, turn_count | idle |
 | `turn_truncated` | LLM 回复被截断（length） | session_id, partial_text, usage, retry_count | working |
 | `tool_call` | LLM 发起工具调用 | session_id, tool_name, tool_args, tool_id | working |
@@ -518,14 +519,18 @@ if hooks.DetectHerdr() {
 | Tachi 事件 | Herdr 方法 | state | 说明 |
 |---|---|---|---|
 | `session_start` | `pane.report_agent_session` | — | 上报 session ID，Herdr 可做 session resume |
-| `tool_call` | `pane.report_agent` | `working` | LLM 开始执行工具时标记 working |
+| `stream_start` | `pane.report_agent` | `working` | LLM 流吐出第一个输出 delta 时标记 working（含 thinking 阶段） |
+| `tool_call` | `pane.report_agent` | `working` | LLM 开始执行工具时标记 working（重复上报幂等） |
 | `permission_request` | `pane.report_agent` | `blocked` | 等待用户确认时标记 blocked |
 | `ask_user_question` | `pane.report_agent` | `blocked` | LLM 向用户提问时标记 blocked |
 | `turn_complete` | `pane.report_agent` | `idle` | turn 完成回到 idle |
 | `turn_truncated` | `pane.report_agent` | `working` | 截断续写时标记 working |
 | `error` | `pane.report_agent` | `idle` | 错误后回到 idle |
 
-不在 `turn_start` 上报 `working`——因为 turn_start 时 LLM 还没开始真正做事（正在等待第一个 token），屏幕检测可能还在 idle。由实际 `tool_call` 触发 working 更准确。
+由 `stream_start`（首个 thinking/text/tool-use delta）触发 `working`，而不是 `turn_start`：
+`turn_start` 时 LLM 还在等待第一个 token，此时标记 working 可能过早（API 慢或失败会短暂误报）；
+而 `stream_start` 恰好是 TUI 从 `stateWaiting` 切到 `stateStreaming`、开始渲染 thinking 的时刻——
+thinking 阶段（可能持续较久，如 DeepSeek）期间 herdr 即显示 working，无需等到工具执行。
 
 ### 5.5 Herdr config 配置
 

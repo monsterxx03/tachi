@@ -11,11 +11,15 @@ func f64(v float64) *float64 { return &v }
 func TestResolveModelPrice_UsesProviderOverrides(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{{
-			Name:        "custom",
-			Type:        "anthropic",
-			Model:       "claude-sonnet-4-5",
-			InputPrice:  f64(1.5),
-			OutputPrice: f64(7.5),
+			Name:  "custom",
+			Type:  "anthropic",
+			Model: "claude-sonnet-4-5",
+			Spec: config.ModelSpec{
+				Pricing: &config.ModelPricing{
+					InputPrice:  f64(1.5),
+					OutputPrice: f64(7.5),
+				},
+			},
 		}},
 	}
 
@@ -36,9 +40,13 @@ func TestResolveModelPrice_UsesProviderOverrides(t *testing.T) {
 func TestResolveModelPrice_CacheOverrides(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{{
-			Name:                    "custom",
-			CacheReadInputPrice:     f64(0.3),
-			CacheCreationInputPrice: f64(3.75),
+			Name: "custom",
+			Spec: config.ModelSpec{
+				Pricing: &config.ModelPricing{
+					CacheReadInputPrice:     f64(0.3),
+					CacheCreationInputPrice: f64(3.75),
+				},
+			},
 		}},
 	}
 
@@ -76,7 +84,10 @@ func TestResolveModelPrice_FallsBackToBuiltin(t *testing.T) {
 
 func TestResolveModelPrice_UnknownProviderName(t *testing.T) {
 	cfg := &config.Config{
-		Providers: []config.ProviderConfig{{Name: "known", InputPrice: f64(99)}},
+		Providers: []config.ProviderConfig{{
+			Name: "known",
+			Spec: config.ModelSpec{Pricing: &config.ModelPricing{InputPrice: f64(99)}},
+		}},
 	}
 
 	price := ResolveModelPrice(cfg, "missing", "deepseek-chat")
