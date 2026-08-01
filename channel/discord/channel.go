@@ -329,14 +329,11 @@ var commandOptions = map[string][]*discordgo.ApplicationCommandOption{
 			Name:        "rounds",
 			Description: "Adversarial review rounds (2-10); omit for single-round review",
 			Required:    false,
-			MinValue:    float64Ptr(2),
+			MinValue:    new(2.0),
 			MaxValue:    10,
 		},
 	},
 }
-
-// float64Ptr returns a pointer to v (discordgo option MinValue is *float64).
-func float64Ptr(v float64) *float64 { return &v }
 
 // registerSlashCommands registers Discord Application Commands from the
 // commands registry. Uses DevGuildID for instant registration when set.
