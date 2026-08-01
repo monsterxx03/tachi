@@ -1,17 +1,22 @@
-.PHONY: build build-linux test test-cover test-cover-html lint lint-fix
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
-LDFLAGS := -X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)
+# Release build: -s -w strips symbol table + DWARF (~30% smaller binary),
+# -trimpath keeps build reproducible. For Delve debugging use `make build-debug`.
+LDFLAGS := -s -w -X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)
 
 build:
-	go build -ldflags="$(LDFLAGS)" -o tachi .
+	go build -trimpath -ldflags="$(LDFLAGS)" -o tachi .
+
+build-debug:
+	go build -ldflags="-X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)" -o tachi .
 
 build-linux:
-	GOOS=linux GOARCH=amd64 go build -ldflags="$(LDFLAGS)" -o tachi-linux-amd64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-amd64 .
 
 build-linux-arm64:
-	GOOS=linux GOARCH=arm64 go build -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
 
 test:
 	go test ./...
