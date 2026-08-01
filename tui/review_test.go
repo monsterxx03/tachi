@@ -23,6 +23,9 @@ import (
 type reviewMockProvider struct {
 	name  string
 	model string
+	// lastOpts records the ChatOptions of the most recent stream request,
+	// letting tests assert what the review round was actually launched with.
+	lastOpts llm.ChatOptions
 }
 
 func (p *reviewMockProvider) Name() string  { return p.name }
@@ -30,7 +33,8 @@ func (p *reviewMockProvider) Model() string { return p.model }
 func (p *reviewMockProvider) CreateChat(context.Context, []llm.Message, []llm.Tool, llm.ChatOptions) (*llm.Response, error) {
 	return nil, errors.New("not implemented")
 }
-func (p *reviewMockProvider) CreateChatStream(context.Context, []llm.Message, []llm.Tool, llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+func (p *reviewMockProvider) CreateChatStream(_ context.Context, _ []llm.Message, _ []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+	p.lastOpts = opts
 	ch := make(chan llm.StreamEvent, 2)
 	ch <- llm.StreamEvent{Type: llm.StreamEventTextDelta, TextDelta: "round output"}
 	ch <- llm.StreamEvent{Type: llm.StreamEventDone, FinishReason: "stop"}
@@ -57,14 +61,13 @@ func reviewTestModel(t *testing.T, providers ...llm.Provider) *Model {
 
 // startReview seeds the model's reviewOrch for a multi-round run without
 // going through sendReviewCommand (which needs a full configured agent).
+// The opts come from ResolveReviewOptions(m.cfg) — exactly what production
+// /review uses — so thinking/thinking_level config flows through end to end.
 // The orchestrator preallocates its reports slice with cap == totalRounds so
 // appends during the whole run share one backing array (tests snapshot it
 // mid-run via Reports()).
 func startReview(m *Model, dir string, totalRounds int, providers ...llm.Provider) {
-	orch, err := cmds.NewReviewOrchestrator(totalRounds, providers, dir, cmds.ReviewOptions{
-		MaxIterations: 10,
-		AllowedTools:  []string{"ReadFile"},
-	})
+	orch, err := cmds.NewReviewOrchestrator(totalRounds, providers, dir, cmds.ResolveReviewOptions(m.cfg))
 	if err != nil {
 		panic(err) // test fixtures are valid by construction
 	}
@@ -319,9 +322,82 @@ func TestAdversarialReview_CtrlC_DefersCleanupToErrorBranch(t *testing.T) {
 	}
 }
 
-// TestAdversarialReview_InputBlocked verifies user input is rejected (not
-// queued) while an adversarial review is running — streaming-time input would
-// otherwise be injected into the running fork at the next steer check.
+// TestAdversarialReview_ThinkingFollowsSession verifies the follow-the-session
+// contract end to end: with no review.thinking / review.thinking_level
+// configured, the round's stream is launched with the agent's live thinking
+// config (the /thinking per-session override the main conversation runs with).
+func TestAdversarialReview_ThinkingFollowsSession(t *testing.T) {
+	p1 := &reviewMockProvider{name: "prov-a", model: "model-a"}
+	m := reviewTestModel(t, p1)
+	dir := t.TempDir()
+
+	// Simulate a session thinking state (e.g. /thinking high + provider-level
+	// switch): the round must inherit both the switch and the effort.
+	m.agent.Config.Thinking = new(true)
+	m.agent.Config.ThinkingEffort = "max"
+
+	startReview(m, dir, 2, p1, p1)
+	m.startReviewRound()
+	drainTurnComplete(t, m.eventCh)
+	if p1.lastOpts.Thinking == nil || !*p1.lastOpts.Thinking {
+		t.Errorf("round thinking = %v, want session value true", p1.lastOpts.Thinking)
+	}
+	if p1.lastOpts.ThinkingEffort != "max" {
+		t.Errorf("round effort = %q, want session effort max", p1.lastOpts.ThinkingEffort)
+	}
+	if m.forkedAgent != nil {
+		m.forkedAgent.Close()
+		m.forkedAgent = nil
+	}
+}
+
+// TestAdversarialReview_ThinkingConfigPins verifies the explicit
+// review.thinking override wins over the session (single-round path).
+func TestAdversarialReview_ThinkingConfigPins(t *testing.T) {
+	p1 := &reviewMockProvider{name: "prov-a", model: "model-a"}
+	m := reviewTestModel(t, p1)
+	dir := t.TempDir()
+
+	// Session says thinking on / max; config pins it off.
+	m.agent.Config.Thinking = new(true)
+	m.agent.Config.ThinkingEffort = "max"
+	m.cfg.Review.Thinking = new(false)
+
+	startReview(m, dir, 1, p1)
+	m.startReviewRound()
+	drainTurnComplete(t, m.eventCh)
+	if p1.lastOpts.Thinking == nil || *p1.lastOpts.Thinking {
+		t.Errorf("round thinking = %v, want false (config wins)", p1.lastOpts.Thinking)
+	}
+	if m.forkedAgent != nil {
+		m.forkedAgent.Close()
+		m.forkedAgent = nil
+	}
+}
+
+// TestAdversarialReview_ThinkingLevelPinsEffort verifies review.thinking_level
+// pins the effort while the switch follows the session.
+func TestAdversarialReview_ThinkingLevelPinsEffort(t *testing.T) {
+	p1 := &reviewMockProvider{name: "prov-a", model: "model-a"}
+	m := reviewTestModel(t, p1)
+	dir := t.TempDir()
+
+	m.agent.Config.Thinking = nil
+	m.agent.Config.ThinkingEffort = "low"
+	m.cfg.Review.ThinkingLevel = "high"
+
+	startReview(m, dir, 1, p1)
+	m.startReviewRound()
+	drainTurnComplete(t, m.eventCh)
+	if p1.lastOpts.ThinkingEffort != "high" {
+		t.Errorf("round effort = %q, want configured high", p1.lastOpts.ThinkingEffort)
+	}
+	if m.forkedAgent != nil {
+		m.forkedAgent.Close()
+		m.forkedAgent = nil
+	}
+}
+
 func TestAdversarialReview_InputBlocked(t *testing.T) {
 	p1 := &reviewMockProvider{name: "prov-a", model: "model-a"}
 	m := reviewTestModel(t, p1)

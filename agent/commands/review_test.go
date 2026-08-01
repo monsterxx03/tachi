@@ -315,14 +315,20 @@ func TestResolveReviewOptions_Defaults(t *testing.T) {
 	if len(opts.AllowedTools) != 5 || opts.AllowedTools[0] != "Bash" {
 		t.Errorf("AllowedTools = %v, want default 5-tool list", opts.AllowedTools)
 	}
-	if opts.Thinking == nil || *opts.Thinking {
-		t.Error("Thinking must default to false (non-nil pointer)")
+	if opts.Thinking != nil {
+		t.Error("Thinking must default to nil (follow the current session)")
+	}
+	if opts.ThinkingLevel != "" {
+		t.Errorf("ThinkingLevel = %q, want empty (follow the current session)", opts.ThinkingLevel)
 	}
 
 	cfg := config.DefaultConfig()
 	opts = ResolveReviewOptions(cfg)
 	if opts.MaxIterations != DefaultReviewMaxIterations {
 		t.Errorf("default config MaxIterations = %d, want %d", opts.MaxIterations, DefaultReviewMaxIterations)
+	}
+	if opts.Thinking != nil {
+		t.Error("default config must not pin Thinking (nil = follow the current session)")
 	}
 }
 
@@ -332,6 +338,7 @@ func TestResolveReviewOptions_ConfigOverrides(t *testing.T) {
 	cfg.Review.AllowedTools = []string{"Bash", "ReadFile"}
 	thinking := true
 	cfg.Review.Thinking = &thinking
+	cfg.Review.ThinkingLevel = "high"
 
 	opts := ResolveReviewOptions(cfg)
 	if opts.MaxIterations != 42 {
@@ -342,6 +349,88 @@ func TestResolveReviewOptions_ConfigOverrides(t *testing.T) {
 	}
 	if opts.Thinking == nil || !*opts.Thinking {
 		t.Error("Thinking must reflect the configured value")
+	}
+	if opts.ThinkingLevel != "high" {
+		t.Errorf("ThinkingLevel = %q, want high", opts.ThinkingLevel)
+	}
+}
+
+// ---- ResolveReviewThinking (review thinking: config wins, session follows) ----
+
+func TestResolveReviewThinking_FollowsSession(t *testing.T) {
+	// Nothing configured → both dimensions follow the session.
+	sessT, sessE := new(true), "max"
+	gotT, gotE := ResolveReviewThinking(ReviewOptions{}, sessT, sessE)
+	if gotT == nil || !*gotT {
+		t.Errorf("thinking = %v, want session value true", gotT)
+	}
+	if gotE != "max" {
+		t.Errorf("effort = %q, want session effort max", gotE)
+	}
+
+	// Session with no override (nil/"") stays nil/"" — the fork's
+	// runAgentLoop fallback resolves the provider/model default.
+	gotT, gotE = ResolveReviewThinking(ReviewOptions{}, nil, "")
+	if gotT != nil || gotE != "" {
+		t.Errorf("unset session must pass through as nil/empty, got %v/%q", gotT, gotE)
+	}
+}
+
+func TestResolveReviewThinking_ConfigPins(t *testing.T) {
+	// thinking pins the switch only; effort follows the session.
+	gotT, gotE := ResolveReviewThinking(ReviewOptions{Thinking: new(true)}, new(false), "low")
+	if gotT == nil || !*gotT {
+		t.Errorf("thinking = %v, want true (config wins)", gotT)
+	}
+	if gotE != "low" {
+		t.Errorf("effort = %q, want session effort low (unpinned)", gotE)
+	}
+
+	// thinking=false overrides the session's true.
+	gotT, gotE = ResolveReviewThinking(ReviewOptions{Thinking: new(false)}, new(true), "max")
+	if gotT == nil || *gotT {
+		t.Errorf("thinking = %v, want false (config wins)", gotT)
+	}
+	if gotE != "max" {
+		t.Errorf("effort = %q, want session effort max (unpinned)", gotE)
+	}
+
+	// thinking_level pins the effort; switch follows the session.
+	gotT, gotE = ResolveReviewThinking(ReviewOptions{ThinkingLevel: "high"}, new(false), "")
+	if gotT == nil || *gotT {
+		t.Errorf("thinking = %v, want session true (unpinned)", gotT)
+	}
+	if gotE != "high" {
+		t.Errorf("effort = %q, want configured high", gotE)
+	}
+
+	// thinking + thinking_level both set: switch from thinking, effort from level.
+	gotT, gotE = ResolveReviewThinking(ReviewOptions{Thinking: new(true), ThinkingLevel: "max"}, nil, "")
+	if gotT == nil || !*gotT {
+		t.Errorf("thinking = %v, want true", gotT)
+	}
+	if gotE != "max" {
+		t.Errorf("effort = %q, want configured max", gotE)
+	}
+}
+
+func TestResolveReviewThinking_LevelSpecialCases(t *testing.T) {
+	// "none" forces the switch off and clears the effort.
+	gotT, gotE := ResolveReviewThinking(ReviewOptions{ThinkingLevel: "none"}, new(true), "max")
+	if gotT == nil || *gotT {
+		t.Errorf("thinking = %v, want false (none forces off)", gotT)
+	}
+	if gotE != "" {
+		t.Errorf("effort = %q, want empty for none", gotE)
+	}
+
+	// "default" clears the effort to the provider/model default.
+	gotT, gotE = ResolveReviewThinking(ReviewOptions{ThinkingLevel: "default"}, new(true), "max")
+	if gotT == nil || !*gotT {
+		t.Errorf("thinking = %v, want session true (unpinned)", gotT)
+	}
+	if gotE != "" {
+		t.Errorf("effort = %q, want empty (provider default) for default level", gotE)
 	}
 }
 

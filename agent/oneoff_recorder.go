@@ -235,7 +235,7 @@ func (a *AIAgent) stopOneoffRecorder(ctx context.Context, rs *RunState) {
 	rs.OneoffRec = nil
 	traceID := rs.trace()
 	path, size, dur := rec.close()
-	a.lastOneoffPath = path
+	a.lastOneoffPath.Store(&path)
 	a.logInfo(ctx, "oneoff transcript written",
 		"kind", rec.kind, "path", path, "trace_id", traceID,
 		"duration", dur.Round(time.Millisecond).String(), "size", size)
@@ -245,7 +245,10 @@ func (a *AIAgent) stopOneoffRecorder(ctx context.Context, rs *RunState) {
 // one-off run ("" if none or recording disabled). Frontends use it to point
 // users at the full execution record after /commit or /review.
 func (a *AIAgent) LastOneoffTranscriptPath() string {
-	return a.lastOneoffPath
+	if p := a.lastOneoffPath.Load(); p != nil {
+		return *p
+	}
+	return ""
 }
 
 func (a *AIAgent) logInfo(ctx context.Context, msg string, attrs ...any) {

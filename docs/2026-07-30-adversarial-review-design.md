@@ -109,6 +109,12 @@ review:
     - Glob
     - Grep
   thinking: false
+  thinking_level: high
+
+  # thinking / thinking_level 默认"跟随当前会话"（nil/空 = 继承当前会话的
+  # 思考开关与 effort，会话无覆盖时再回退到 provider/模型默认）。配置任一
+  # 字段即钉住该维度：thinking 只影响开关，thinking_level 只影响 effort
+  # （"none" 强制关开关，"default" 回到 provider 默认）。
 
   # --- 对抗式审查配置（可选；只控制多轮模式下的逐轮模型分配）---
   # 多轮模式由命令参数触发：/review N（N ≥ 2），无参 /review 恒为单轮。
@@ -143,8 +149,9 @@ type ReviewConfig struct {
     Provider      string                    `yaml:"provider"`
     MaxIterations int                       `yaml:"max_iterations" default:"200"`
     AllowedTools  []string                  `yaml:"allowed_tools"`
-    Thinking      *bool                     `yaml:"thinking" default:"false"`
-    Adversarial   *AdversarialReviewConfig  `yaml:"adversarial"`  // 新增
+    Thinking      *bool                     `yaml:"thinking"`        // nil = 跟随当前会话
+    ThinkingLevel string                    `yaml:"thinking_level"`  // "" = 跟随当前会话
+    Adversarial   *AdversarialReviewConfig  `yaml:"adversarial"`     // 新增
 }
 ```
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -105,7 +106,7 @@ type AIAgent struct {
 	activeSkills         map[string]bool
 	deferredToolReminder *systemreminder.DeferredToolReminder
 	skillListReminder    *systemreminder.SkillListReminder
-	lastOneoffPath       string
+	lastOneoffPath       atomic.Pointer[string] // 由 run goroutine 写、前端并发读（oneoff 侧车路径）
 	mcpInitErrors        []error
 	mcpOwned             bool // Configure 前由 Config.MCPManager==nil 设定；Close 据此决定是否销毁
 

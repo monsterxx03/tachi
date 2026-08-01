@@ -1389,12 +1389,16 @@ func (m *Model) startReviewRound() tea.Cmd {
 			roleName, spec.Round, orch.TotalRounds()))
 	}
 
-	// Apply thinking config: if review config explicitly sets thinking,
-	// override chatOpts; otherwise inherit (default: disabled).
+	// Apply thinking config: review.thinking / review.thinking_level pin
+	// their dimension when configured; unconfigured dimensions follow the
+	// current session's thinking (which itself falls back to the
+	// provider/model default — runAgentLoop applies that when we pass nil/
+	// empty through to the fork).
+	thinking, effort := cmds.ResolveReviewThinking(orch.Options(),
+		m.agent.Config.Thinking, m.agent.Config.ThinkingEffort)
 	reviewOpts := m.chatOpts
-	if orch.Options().Thinking != nil {
-		reviewOpts.Thinking = orch.Options().Thinking
-	}
+	reviewOpts.Thinking = thinking
+	reviewOpts.ThinkingEffort = effort
 
 	ctx := m.startTurn()
 	m.eventCh = forked.Agent().RunOneOffStream(ctx, spec.Provider,

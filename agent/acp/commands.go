@@ -289,11 +289,18 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	}
 
 	// Parameter defaults/overrides come from the shared resolver (same as the
-	// TUI side); only the provider lookup is agent-specific.
+	// TUI side); only the provider lookup is agent-specific. Unconfigured
+	// thinking dimensions follow the session's live config.
 	ropts := cmds.ResolveReviewOptions(cfg)
+	thinking, effort := cmds.ResolveReviewThinking(ropts,
+		aiAgent.Config.Thinking, aiAgent.Config.ThinkingEffort)
 
 	systemPrompt := buildSystemPromptForCwd(cfg, sess.cwd, agent.ModeAuto, sess.ID)
-	opts := llm.ChatOptions{MaxTokens: config.DefaultMaxTokens, Thinking: ropts.Thinking}
+	opts := llm.ChatOptions{
+		MaxTokens:      config.DefaultMaxTokens,
+		Thinking:       thinking,
+		ThinkingEffort: effort,
+	}
 
 	// The shared orchestrator resolves rounds, assigns per-round providers
 	// (fail-fast on unresolvable adversarial models) and creates the report

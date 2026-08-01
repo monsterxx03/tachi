@@ -348,11 +348,17 @@ type AdversarialReviewConfig struct {
 // ReviewConfig holds configuration for the /review code review command.
 // When Provider is empty, the main provider is used.
 // AllowedTools defaults to [Bash, ReadFile, WriteFile, Glob, Grep] when empty (handled in code).
+//
+// Thinking / ThinkingLevel both default to "follow the current session":
+// nil / empty mean the review rounds inherit the session's thinking switch
+// and effort (which in turn falls back to the provider/model default when
+// the session has no override). Setting either field pins that dimension.
 type ReviewConfig struct {
 	Provider      string                   `yaml:"provider"`                     // provider name, empty → use main
 	MaxIterations int                      `yaml:"max_iterations" default:"200"` // iteration budget
 	AllowedTools  []string                 `yaml:"allowed_tools"`                // default: [Bash, ReadFile, Glob, Grep] (code-level fallback)
-	Thinking      *bool                    `yaml:"thinking" default:"false"`     // enable extended thinking
+	Thinking      *bool                    `yaml:"thinking"`                     // thinking switch override (nil = follow current session)
+	ThinkingLevel string                   `yaml:"thinking_level"`               // thinking effort override, /thinking level values ("" = follow current session)
 	Adversarial   *AdversarialReviewConfig `yaml:"adversarial"`                  // multi-round mode (nil when unconfigured, see note above)
 }
 

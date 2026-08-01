@@ -122,19 +122,23 @@ func CheckAdversarialProviders(cfg *config.Config, models []llm.Provider, judge 
 type ReviewOptions struct {
 	MaxIterations int
 	AllowedTools  []string
-	Thinking      *bool
+	// Thinking pins the thinking switch (nil = follow the current session).
+	Thinking *bool
+	// ThinkingLevel pins the thinking effort (/thinking level values; "" =
+	// follow the current session).
+	ThinkingLevel string
 }
 
 // ResolveReviewOptions applies the config defaults for /review parameters:
 // max_iterations (default 200), allowed_tools (default
-// [Bash, ReadFile, WriteFile, Glob, Grep]), thinking (default false).
+// [Bash, ReadFile, WriteFile, Glob, Grep]). Thinking/ThinkingLevel default
+// to "follow the current session" (nil/"" when the config doesn't pin them) —
+// frontends resolve the actual values via ResolveReviewThinking.
 func ResolveReviewOptions(cfg *config.Config) ReviewOptions {
-	// MaxIterations and Thinking are populated by defaults.Set() from struct tags.
+	// MaxIterations is populated by defaults.Set() from struct tags.
 	maxIter := DefaultReviewMaxIterations
-	thinking := new(bool)
 	if cfg != nil {
 		maxIter = cfg.Review.MaxIterations
-		thinking = cfg.Review.Thinking
 	}
 
 	// AllowedTools is a slice and can't use the `default` tag — handle in code.
@@ -143,11 +147,56 @@ func ResolveReviewOptions(cfg *config.Config) ReviewOptions {
 		allowedTools = cfg.Review.AllowedTools
 	}
 
+	var thinking *bool
+	var thinkingLevel string
+	if cfg != nil {
+		thinking = cfg.Review.Thinking
+		thinkingLevel = cfg.Review.ThinkingLevel
+	}
+
 	return ReviewOptions{
 		MaxIterations: maxIter,
 		AllowedTools:  allowedTools,
 		Thinking:      thinking,
+		ThinkingLevel: thinkingLevel,
 	}
+}
+
+// ResolveReviewThinking maps the /review thinking config to the concrete
+// (thinking, effort) values for one round, resolving unconfigured fields
+// against the current session's thinking state. Each dimension resolves
+// independently — config wins, session follows:
+//
+//   - review.thinking_level set  → effort = level ("none" also forces the
+//     switch off; "default" → provider/model default effort)
+//   - review.thinking set        → switch = value
+//   - unset dimension            → inherits the session's value (which in
+//     turn falls back to the provider/model default when the session has no
+//     override — runAgentLoop applies that fallback)
+//
+// sessionThinking/sessionEffort are the live agent's thinking config — the
+// values the main conversation is currently running with (per-session
+// /thinking override, or the provider's resolved thinking_level default).
+func ResolveReviewThinking(opts ReviewOptions, sessionThinking *bool, sessionEffort string) (thinking *bool, effort string) {
+	if opts.ThinkingLevel != "" {
+		switch opts.ThinkingLevel {
+		case "none":
+			v := false
+			return &v, ""
+		case "default":
+			effort = "" // provider/model default
+		default:
+			effort = opts.ThinkingLevel
+		}
+	} else {
+		effort = sessionEffort
+	}
+
+	thinking = sessionThinking
+	if opts.Thinking != nil {
+		thinking = opts.Thinking
+	}
+	return thinking, effort
 }
 
 // NewReviewReportDir creates the orchestrator-owned report directory
