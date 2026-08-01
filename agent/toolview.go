@@ -59,9 +59,9 @@ type toolView struct {
 // one-off recording).
 type runParams struct {
 	toolView
-	pendingImages []llm.ContentPart   // run 开始时附到首条用户消息的图片
-	steerCh       chan SteerInput     // steer 输入（nil = 前端不支持 steer）
-	oneoffMeta    *OneOffMeta         // one-off 转录（nil = 不录制）
+	pendingImages []llm.ContentPart // run 开始时附到首条用户消息的图片
+	steerCh       chan SteerInput   // steer 输入（nil = 前端不支持 steer）
+	oneoffMeta    *OneOffMeta       // one-off 转录（nil = 不录制）
 }
 
 // SteerInput represents pending user input to inject at the steer point,

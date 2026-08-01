@@ -251,7 +251,9 @@ func (ch *Channel) loadOrLogin(ctx context.Context) error {
 				Version:   1,
 				AllowFrom: []string{ch.userID},
 			}
-			ch.store.saveAllowFrom(ch.accountID, allowFrom)
+			if err := ch.store.saveAllowFrom(ch.accountID, allowFrom); err != nil {
+				ch.logger.Error(ctx, "weixin: failed to save allowlist", err)
+			}
 		}
 
 		ch.logger.Info(ctx, "weixin: loaded stored account", "account", accounts[0])
@@ -465,7 +467,9 @@ func (ch *Channel) deduplicateAccounts() {
 		}
 		if data.UserID == ch.userID {
 			ch.logger.Info(context.Background(), "weixin: removing duplicate account", "account", aid, "same_user", ch.userID)
-			ch.store.deleteAccount(aid)
+			if err := ch.store.deleteAccount(aid); err != nil {
+				ch.logger.Error(context.Background(), "weixin: failed to delete duplicate account", err)
+			}
 		}
 	}
 }

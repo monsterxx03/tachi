@@ -43,11 +43,11 @@ func Add(a, b int) int {
 
 	rootURI := PathToURI(dir)
 	cfg := ServerConfig{
-		Name:       "gopls",
-		Command:    "gopls",
-		Args:       []string{},
-		Extensions: []string{".go"},
-		Languages:  []string{"go"},
+		Name:            "gopls",
+		Command:         "gopls",
+		Args:            []string{},
+		Extensions:      []string{".go"},
+		Languages:       []string{"go"},
 		WorkspaceFolder: dir,
 	}
 

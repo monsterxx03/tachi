@@ -28,9 +28,9 @@ const (
 type Event struct {
 	Type      EventType `json:"type"`
 	Timestamp time.Time `json:"ts"`
-	Name      string    `json:"name,omitempty"`   // tool name (for tool_call / tool_result)
-	Content   string    `json:"content,omitempty"` // thinking text / text delta / tool result
-	Args      string    `json:"args,omitempty"`    // tool_call JSON arguments
+	Name      string    `json:"name,omitempty"`     // tool name (for tool_call / tool_result)
+	Content   string    `json:"content,omitempty"`  // thinking text / text delta / tool result
+	Args      string    `json:"args,omitempty"`     // tool_call JSON arguments
 	IsError   bool      `json:"is_error,omitempty"` // tool_result error flag
 	Children  []Event   `json:"children,omitempty"` // SubAgent sub-transcript (recursive)
 }

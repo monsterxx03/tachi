@@ -162,14 +162,14 @@ type MediaData struct {
 type MediaItem struct {
 	Media      MediaData `json:"media"`
 	ThumbMedia MediaData `json:"thumb_media"`
-	AESKey     string    `json:"aeskey"`      // hex, preferred over media.aes_key for decryption
+	AESKey     string    `json:"aeskey"` // hex, preferred over media.aes_key for decryption
 	URL        string    `json:"url"`
-	MidSize    int       `json:"mid_size"`    // image ciphertext size
+	MidSize    int       `json:"mid_size"` // image ciphertext size
 	ThumbSize  int       `json:"thumb_size"`
 	ThumbH     int       `json:"thumb_height"`
 	ThumbW     int       `json:"thumb_width"`
 	HDSize     int       `json:"hd_size"`
-	VideoSize  int       `json:"video_size"`  // video ciphertext size
+	VideoSize  int       `json:"video_size"` // video ciphertext size
 	PlayLength int       `json:"play_length"`
 	VideoMD5   string    `json:"video_md5"`
 }

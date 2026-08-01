@@ -144,11 +144,17 @@ func (e *Executor) run(
 		if recErr != nil {
 			childLogger.Error(ctx, "failed to create recorder", recErr)
 		} else {
-			defer rec.close()
-			rec.record(&session.Message{
+			defer func() {
+				if err := rec.close(); err != nil {
+					childLogger.Error(ctx, "subagent: failed to close recorder", err)
+				}
+			}()
+			if err := rec.record(&session.Message{
 				Type:    session.MessageTypeUser,
 				Content: args.Prompt,
-			})
+			}); err != nil {
+				childLogger.Error(ctx, "subagent: failed to record user prompt", err)
+			}
 		}
 	}
 
@@ -173,10 +179,12 @@ func (e *Executor) run(
 		if rec == nil || thinkingBuf.Len() == 0 {
 			return
 		}
-		rec.record(&session.Message{
+		if err := rec.record(&session.Message{
 			Type:    session.MessageTypeThinking,
 			Content: thinkingBuf.String(),
-		})
+		}); err != nil {
+			childLogger.Error(ctx, "subagent: failed to record thinking", err)
+		}
 		thinkingBuf.Reset()
 	}
 
@@ -184,10 +192,12 @@ func (e *Executor) run(
 		if rec == nil || sb.Len() == 0 {
 			return
 		}
-		rec.record(&session.Message{
+		if err := rec.record(&session.Message{
 			Type:    session.MessageTypeAssistant,
 			Content: sb.String(),
-		})
+		}); err != nil {
+			childLogger.Error(ctx, "subagent: failed to record assistant text", err)
+		}
 	}
 
 	for event := range ch {
@@ -204,12 +214,14 @@ func (e *Executor) run(
 			flushText()
 			sb.Reset()
 			if rec != nil {
-				rec.record(&session.Message{
+				if err := rec.record(&session.Message{
 					Type:       session.MessageTypeToolCall,
 					Name:       event.ToolName,
 					Args:       event.ToolArgs,
 					ToolCallID: event.ToolID,
-				})
+				}); err != nil {
+					childLogger.Error(ctx, "subagent: failed to record tool call", err)
+				}
 			}
 
 		case StreamEventToolResult:
@@ -218,13 +230,15 @@ func (e *Executor) run(
 				eventSink.SendToolResultEvent(event.ToolName, event.ToolResult, event.ToolIsError)
 			}
 			if rec != nil {
-				rec.record(&session.Message{
+				if err := rec.record(&session.Message{
 					Type:       session.MessageTypeToolResult,
 					Name:       event.ToolName,
 					Result:     event.ToolResult,
 					IsError:    event.ToolIsError,
 					ToolCallID: event.ToolID,
-				})
+				}); err != nil {
+					childLogger.Error(ctx, "subagent: failed to record tool result", err)
+				}
 			}
 			toolCalls.Add(event.ToolName)
 			iterCount++
@@ -232,11 +246,13 @@ func (e *Executor) run(
 		case StreamEventTurnComplete:
 			flushThinking()
 			if rec != nil && (sb.Len() > 0 || event.Usage != nil) {
-				rec.record(&session.Message{
+				if err := rec.record(&session.Message{
 					Type:    session.MessageTypeAssistant,
 					Content: sb.String(),
 					Usage:   usageToSession(event.Usage),
-				})
+				}); err != nil {
+					childLogger.Error(ctx, "subagent: failed to record final assistant text", err)
+				}
 			}
 			finalResult = sb.String()
 			sb.Reset()

@@ -318,7 +318,7 @@ func (p *AnthropicProvider) CreateChatStream(ctx context.Context, messages []Mes
 		acc := anthropic.Message{}
 		for stream.Next() {
 			event := stream.Current()
-			acc.Accumulate(event)
+			_ = acc.Accumulate(event)
 
 			switch ev := event.AsAny().(type) {
 			case anthropic.ContentBlockStartEvent:

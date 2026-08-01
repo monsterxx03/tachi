@@ -202,7 +202,9 @@ func (c *jsonrpcConn) readLoop() {
 					_ = c.writeMsg(c.makeResponse(msg.ID, resp, err))
 				} else {
 					// Notification — fire-and-forget handler.
-					go handler(context.Background(), msg.Method, msg.Params)
+					go func() {
+						_, _ = handler(context.Background(), msg.Method, msg.Params)
+					}()
 				}
 			}
 		}

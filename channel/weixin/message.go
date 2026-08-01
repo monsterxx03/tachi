@@ -84,7 +84,7 @@ func extractMediaItems(items []MessageItem) []MediaRef {
 			if item.FileItem != nil {
 				rawSize := 0
 				if item.FileItem.Len != "" {
-					fmt.Sscanf(item.FileItem.Len, "%d", &rawSize)
+					_, _ = fmt.Sscanf(item.FileItem.Len, "%d", &rawSize)
 				}
 				refs = append(refs, MediaRef{
 					Type:     MessageItemTypeFile,

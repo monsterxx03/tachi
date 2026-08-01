@@ -49,10 +49,13 @@ func (m *Manager) SetMaxKeep(maxKeep int) {
 // maxKeep. Sessions are sorted by CreatedAt descending (newest first), so the
 // oldest sessions are at the end of the list. The current session is never
 // deleted. Returns the number of sessions removed.
-func (m *Manager) CleanupOldSessions() (int, error) {
+//
+// Storage errors (e.g. listing sessions) are logged internally and reported as
+// zero removals, so callers don't need to handle an error return.
+func (m *Manager) CleanupOldSessions() int {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.cleanupLocked(), nil
+	return m.cleanupLocked()
 }
 
 // cleanupLocked is the lock-holding variant of CleanupOldSessions.

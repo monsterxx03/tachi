@@ -89,10 +89,10 @@ type AIAgent struct {
 	// CompactStrategy）。标注"构造输入"的字段（TitleGenEnabled、AutoApprove*、
 	// ACPFileMode、PlanToolEnabled）在构造期被消费，运行时值分别存于
 	// titleGenEnabled / PermState / Frontend——改 Config 里的这些字段无效。
-	Config       AgentConfig
-	Frontend     FrontendConfig  // 前端模式（纯只读）
-	Channels     RuntimeChannels // 通信通道（agent 生命周期，只读）
-	PermState    *PermissionState // 可变权限（session 级）
+	Config    AgentConfig
+	Frontend  FrontendConfig   // 前端模式（纯只读）
+	Channels  RuntimeChannels  // 通信通道（agent 生命周期，只读）
+	PermState *PermissionState // 可变权限（session 级）
 
 	// 运行时可变字段
 	mode string // "auto" / "chat" / "plan"
@@ -109,18 +109,18 @@ type AIAgent struct {
 	mcpInitErrors        []error
 	mcpOwned             bool // Configure 前由 Config.MCPManager==nil 设定；Close 据此决定是否销毁
 
-	conv       *convState     // 会话级滚动状态（token 估算、compact 冷却、消息日期）
-	currentRun *RunState      // 当前运行的实时状态（loop 写，外部并发读）
-	mu         sync.RWMutex   // 保护 currentRun + mode
+	conv       *convState   // 会话级滚动状态（token 估算、compact 冷却、消息日期）
+	currentRun *RunState    // 当前运行的实时状态（loop 写，外部并发读）
+	mu         sync.RWMutex // 保护 currentRun + mode
 }
 
 func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 	return &AIAgent{
 		Config: AgentConfig{
-			Provider:      provider,
-			MaxIterations: maxIterations,
-			ToolRegistry:  tools.NewRegistry(),
-			ProcessManager: tools.NewProcessManager(),
+			Provider:        provider,
+			MaxIterations:   maxIterations,
+			ToolRegistry:    tools.NewRegistry(),
+			ProcessManager:  tools.NewProcessManager(),
 			CompactStrategy: &llmCompactStrategy{provider: provider},
 		},
 		Channels: RuntimeChannels{

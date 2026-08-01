@@ -331,11 +331,11 @@ func minimalPNG() []byte {
 		0x49, 0x48, 0x44, 0x52, // "IHDR"
 		0x00, 0x00, 0x00, 0x01, // width = 1
 		0x00, 0x00, 0x00, 0x01, // height = 1
-		0x08,                         // bit depth = 8
-		0x00,                         // color type = grayscale
-		0x00,                         // compression
-		0x00,                         // filter
-		0x00,                         // interlace
+		0x08,                   // bit depth = 8
+		0x00,                   // color type = grayscale
+		0x00,                   // compression
+		0x00,                   // filter
+		0x00,                   // interlace
 		0x6C, 0xE0, 0xDE, 0x2D, // IHDR CRC
 		0x00, 0x00, 0x00, 0x0B, // IDAT length = 11
 		0x49, 0x44, 0x41, 0x54, // "IDAT"

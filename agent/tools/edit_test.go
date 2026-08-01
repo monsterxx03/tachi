@@ -6,7 +6,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-
 )
 
 func TestEditTool_BasicReplace(t *testing.T) {
@@ -15,7 +14,7 @@ func TestEditTool_BasicReplace(t *testing.T) {
 	os.WriteFile(path, []byte("hello world\nfoo bar\nbaz qux\n"), 0644)
 
 	tool := EditTool{}
-	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"foo bar","new_string":"replaced"}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"foo bar","new_string":"replaced"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -37,7 +36,7 @@ func TestEditTool_ReplaceAll(t *testing.T) {
 	os.WriteFile(path, []byte("aaa bbb aaa ccc aaa\n"), 0644)
 
 	tool := EditTool{}
-	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"aaa","new_string":"xxx","replace_all":true}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"aaa","new_string":"xxx","replace_all":true}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -58,7 +57,7 @@ func TestEditTool_OldStringNotFound(t *testing.T) {
 	os.WriteFile(path, []byte("hello world\n"), 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"nonexistent","new_string":"xxx"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"nonexistent","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for missing old_string")
 	}
@@ -66,7 +65,7 @@ func TestEditTool_OldStringNotFound(t *testing.T) {
 
 func TestEditTool_IdenticalStrings(t *testing.T) {
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"/tmp/x","old_string":"same","new_string":"same"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"/tmp/x","old_string":"same","new_string":"same"}`)
 	if err == nil {
 		t.Fatal("expected error when old_string == new_string")
 	}
@@ -78,7 +77,7 @@ func TestEditTool_MultipleMatchesNoReplaceAll(t *testing.T) {
 	os.WriteFile(path, []byte("aaa bbb aaa ccc aaa\n"), 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"aaa","new_string":"xxx"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"aaa","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for multiple matches without replace_all")
 	}
@@ -89,7 +88,7 @@ func TestEditTool_CreateNewFile(t *testing.T) {
 	path := filepath.Join(dir, "new.txt")
 
 	tool := EditTool{}
-	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"","new_string":"new content\n"}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"","new_string":"new content\n"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -109,7 +108,7 @@ func TestEditTool_CreateExistingFileError(t *testing.T) {
 	os.WriteFile(path, []byte("existing"), 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"","new_string":"new"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"","new_string":"new"}`)
 	if err == nil {
 		t.Fatal("expected error when creating file that already exists")
 	}
@@ -123,7 +122,7 @@ func TestEditTool_CurlyQuoteNormalization(t *testing.T) {
 
 	tool := EditTool{}
 	// Search with straight quotes (as LLM would produce)
-	result, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"\"Hello\"","new_string":"\"Hi\""}`)
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"\"Hello\"","new_string":"\"Hi\""}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -146,7 +145,7 @@ func TestEditTool_BinaryFile(t *testing.T) {
 	os.WriteFile(path, data, 0644)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"hello","new_string":"xxx"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"hello","new_string":"xxx"}`)
 	if err == nil {
 		t.Fatal("expected error for binary file")
 	}
@@ -154,7 +153,7 @@ func TestEditTool_BinaryFile(t *testing.T) {
 
 func TestEditTool_FileNotFound(t *testing.T) {
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"/tmp/nonexistent_edit_test_file","old_string":"x","new_string":"y"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"/tmp/nonexistent_edit_test_file","old_string":"x","new_string":"y"}`)
 	if err == nil {
 		t.Fatal("expected error for missing file")
 	}
@@ -166,7 +165,7 @@ func TestEditTool_PreservesFilePermissions(t *testing.T) {
 	os.WriteFile(path, []byte("old content"), 0755)
 
 	tool := EditTool{}
-	_, err := tool.ExecuteContext(context.TODO(),`{"path":"` + path + `","old_string":"old","new_string":"new"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"old","new_string":"new"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}

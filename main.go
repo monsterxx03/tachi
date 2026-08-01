@@ -488,7 +488,6 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	// If a run provider is configured, switch to it for tachi -p mode.
 	if rp := aiAgent.RunProvider(); rp != nil {
 		aiAgent.SetProvider(rp)
-		provider = rp
 		// Update display info to reflect the run provider.
 		resolved.Provider.Type = rp.Name()
 		resolved.Provider.Model = rp.Model()
@@ -674,7 +673,7 @@ func runOutputText(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent, quiet boo
 		switch event.Type {
 		case agent.AgentEventTextDelta:
 			fmt.Fprint(os.Stdout, event.TextDelta)
-			os.Stdout.Sync()
+			_ = os.Stdout.Sync()
 
 		case agent.AgentEventThinkingDelta:
 			if !quiet {

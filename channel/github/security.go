@@ -18,7 +18,6 @@ func WrapCommentAsUntrusted(author, body string) string {
 
 var (
 	controlMarkerRe = regexp.MustCompile(`\s*\[(READY_FOR_PR|NO_REPLY|IMPLEMENT)\]\s*$`)
-	noReplyRe       = regexp.MustCompile(`\s*\[NO_REPLY\]\s*$`)
 )
 
 // StripControlMarkers removes protocol control markers ([NO_REPLY], [READY_FOR_PR])

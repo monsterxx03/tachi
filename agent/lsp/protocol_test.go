@@ -42,11 +42,11 @@ func TestProtocolRoundTrip(t *testing.T) {
 
 	t.Run("call_hierarchy_item", func(t *testing.T) {
 		item := CallHierarchyItem{
-			Name:        "handleRequest",
-			Kind:        SKFunction,
-			Detail:      "func(string) error",
-			URI:         "file:///test/main.go",
-			Range:       Range{Start: Position{Line: 10, Character: 0}, End: Position{Line: 20, Character: 1}},
+			Name:           "handleRequest",
+			Kind:           SKFunction,
+			Detail:         "func(string) error",
+			URI:            "file:///test/main.go",
+			Range:          Range{Start: Position{Line: 10, Character: 0}, End: Position{Line: 20, Character: 1}},
 			SelectionRange: Range{Start: Position{Line: 10, Character: 5}, End: Position{Line: 10, Character: 18}},
 		}
 		data, _ := json.Marshal(item)

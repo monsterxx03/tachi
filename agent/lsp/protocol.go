@@ -38,7 +38,7 @@ type Hover struct {
 
 // MarkupContent represents a markup content (markdown or plaintext).
 type MarkupContent struct {
-	Kind  string `json:"kind"`  // "plaintext" | "markdown"
+	Kind  string `json:"kind"` // "plaintext" | "markdown"
 	Value string `json:"value"`
 }
 
@@ -50,22 +50,22 @@ type MarkedString struct {
 
 // DocumentSymbol represents a symbol in a document with hierarchical children.
 type DocumentSymbol struct {
-	Name           string            `json:"name"`
-	Detail         string            `json:"detail,omitempty"`
-	Kind           SymbolKind        `json:"kind"`
-	Tags           []SymbolTag       `json:"tags,omitempty"`
-	Range          Range             `json:"range"`
-	SelectionRange Range             `json:"selectionRange"`
-	Children       []DocumentSymbol  `json:"children,omitempty"`
+	Name           string           `json:"name"`
+	Detail         string           `json:"detail,omitempty"`
+	Kind           SymbolKind       `json:"kind"`
+	Tags           []SymbolTag      `json:"tags,omitempty"`
+	Range          Range            `json:"range"`
+	SelectionRange Range            `json:"selectionRange"`
+	Children       []DocumentSymbol `json:"children,omitempty"`
 }
 
 // SymbolInformation represents a symbol in the workspace (flat structure).
 type SymbolInformation struct {
-	Name          string     `json:"name"`
-	Kind          SymbolKind `json:"kind"`
+	Name          string      `json:"name"`
+	Kind          SymbolKind  `json:"kind"`
 	Tags          []SymbolTag `json:"tags,omitempty"`
-	Location      Location   `json:"location"`
-	ContainerName string     `json:"containerName,omitempty"`
+	Location      Location    `json:"location"`
+	ContainerName string      `json:"containerName,omitempty"`
 }
 
 // SymbolKind is the kind of a symbol.
@@ -104,19 +104,19 @@ const (
 type SymbolTag uint32
 
 const (
-	SymbolTagDeprecated    SymbolTag = 1
-	SymbolTagUnnecessary   SymbolTag = 2
+	SymbolTagDeprecated  SymbolTag = 1
+	SymbolTagUnnecessary SymbolTag = 2
 )
 
 // CallHierarchyItem represents a call hierarchy entry.
 type CallHierarchyItem struct {
-	Name           string     `json:"name"`
-	Kind           SymbolKind `json:"kind"`
+	Name           string      `json:"name"`
+	Kind           SymbolKind  `json:"kind"`
 	Tags           []SymbolTag `json:"tags,omitempty"`
-	Detail         string     `json:"detail,omitempty"`
-	URI            string     `json:"uri"`
-	Range          Range      `json:"range"`
-	SelectionRange Range      `json:"selectionRange"`
+	Detail         string      `json:"detail,omitempty"`
+	URI            string      `json:"uri"`
+	Range          Range       `json:"range"`
+	SelectionRange Range       `json:"selectionRange"`
 }
 
 // CallHierarchyIncomingCall represents a call to the target.
@@ -133,12 +133,12 @@ type CallHierarchyOutgoingCall struct {
 
 // Diagnostic represents a diagnostic (e.g. error, warning) from an LSP server.
 type Diagnostic struct {
-	Range    Range             `json:"range"`
+	Range    Range              `json:"range"`
 	Severity DiagnosticSeverity `json:"severity,omitempty"`
-	Code     any               `json:"code,omitempty"`
-	Source   string            `json:"source,omitempty"`
-	Message  string            `json:"message"`
-	Tags     []DiagnosticTag   `json:"tags,omitempty"`
+	Code     any                `json:"code,omitempty"`
+	Source   string             `json:"source,omitempty"`
+	Message  string             `json:"message"`
+	Tags     []DiagnosticTag    `json:"tags,omitempty"`
 }
 
 // DiagnosticSeverity defines the severity levels for diagnostics.
@@ -167,25 +167,25 @@ type PublishDiagnosticsParams struct {
 
 // ServerCapabilities represents capabilities the server supports.
 type ServerCapabilities struct {
-	TextDocumentSync   any              `json:"textDocumentSync,omitempty"`
-	HoverProvider      any              `json:"hoverProvider,omitempty"`
-	DefinitionProvider any              `json:"definitionProvider,omitempty"`
-	ReferencesProvider any              `json:"referencesProvider,omitempty"`
-	DocumentSymbolProvider any          `json:"documentSymbolProvider,omitempty"`
-	WorkspaceSymbolProvider any         `json:"workspaceSymbolProvider,omitempty"`
-	ImplementationProvider any          `json:"implementationProvider,omitempty"`
-	CallHierarchyProvider any           `json:"callHierarchyProvider,omitempty"`
+	TextDocumentSync        any `json:"textDocumentSync,omitempty"`
+	HoverProvider           any `json:"hoverProvider,omitempty"`
+	DefinitionProvider      any `json:"definitionProvider,omitempty"`
+	ReferencesProvider      any `json:"referencesProvider,omitempty"`
+	DocumentSymbolProvider  any `json:"documentSymbolProvider,omitempty"`
+	WorkspaceSymbolProvider any `json:"workspaceSymbolProvider,omitempty"`
+	ImplementationProvider  any `json:"implementationProvider,omitempty"`
+	CallHierarchyProvider   any `json:"callHierarchyProvider,omitempty"`
 }
 
 // InitializeParams sent from client to server during initialization.
 type InitializeParams struct {
-	ProcessID             int                    `json:"processId"`
-	ClientInfo            *ClientInfo            `json:"clientInfo,omitempty"`
-	RootURI               string                 `json:"rootUri"`
-	Capabilities          map[string]any         `json:"capabilities"`
-	InitializationOptions map[string]any         `json:"initializationOptions,omitempty"`
-	Trace                 string                 `json:"trace,omitempty"`
-	WorkspaceFolders      []WorkspaceFolder      `json:"workspaceFolders,omitempty"`
+	ProcessID             int               `json:"processId"`
+	ClientInfo            *ClientInfo       `json:"clientInfo,omitempty"`
+	RootURI               string            `json:"rootUri"`
+	Capabilities          map[string]any    `json:"capabilities"`
+	InitializationOptions map[string]any    `json:"initializationOptions,omitempty"`
+	Trace                 string            `json:"trace,omitempty"`
+	WorkspaceFolders      []WorkspaceFolder `json:"workspaceFolders,omitempty"`
 }
 
 // ClientInfo identifies the client.

@@ -93,7 +93,9 @@ func (ch *Channel) pollingLoop(ctx context.Context, handler channel.MessageHandl
 
 		// Persist sync buf.
 		if resp.GetUpdatesBuf != "" {
-			ch.store.saveSyncBuf(ch.accountID, resp.GetUpdatesBuf)
+			if err := ch.store.saveSyncBuf(ch.accountID, resp.GetUpdatesBuf); err != nil {
+				ch.logger.Error(context.Background(), "weixin: failed to persist sync buf", err)
+			}
 			buf = resp.GetUpdatesBuf
 		}
 
@@ -128,7 +130,9 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 
 	// If we have a context_token, store it.
 	if msg.ContextToken != "" && msg.FromUserID != "" {
-		ch.store.saveContextToken(ch.accountID, msg.FromUserID, msg.ContextToken)
+		if err := ch.store.saveContextToken(ch.accountID, msg.FromUserID, msg.ContextToken); err != nil {
+			ch.logger.Error(ctx, "weixin: failed to save context token", err)
+		}
 	}
 
 	// Check allowlist.
@@ -181,7 +185,9 @@ func (ch *Channel) processMessage(ctx context.Context, msg WeixinMessage, handle
 		ch.logger.Error(ctx, "weixin: handler error", result.Err, "thread", threadID)
 		// Send error message back to user.
 		errorText := fmt.Sprintf("❌ %v", result.Err)
-		ch.sendTextReply(msg.FromUserID, msg.ContextToken, errorText)
+		if err := ch.sendTextReply(msg.FromUserID, msg.ContextToken, errorText); err != nil {
+			ch.logger.Error(ctx, "weixin: failed to send error reply", err)
+		}
 		return
 	}
 

@@ -164,7 +164,7 @@ func TestOneoffRecorder_GlobalCreationSweeps(t *testing.T) {
 
 func TestRecordSession_RedirectsToSidecar(t *testing.T) {
 	sessionDir, _ := overrideOneoffDirs(t)
-	a := newTestAgent(t,&mockStreamProvider{name: "mock"})
+	a := newTestAgent(t, &mockStreamProvider{name: "mock"})
 
 	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "sess-x", nil, "", 30)
 	require.NoError(t, err)
@@ -181,7 +181,7 @@ func TestRecordSession_RedirectsToSidecar(t *testing.T) {
 }
 
 func TestRecordSession_NoRecorderNoPanic(t *testing.T) {
-	a := newTestAgent(t,&mockStreamProvider{name: "mock"})
+	a := newTestAgent(t, &mockStreamProvider{name: "mock"})
 	rs := &RunState{SkipSessionWrites: true}
 	// No session manager, no recorder — must be a silent no-op.
 	a.recordSession(rs, &session.Message{Type: session.MessageTypeUser, Content: "hi"})
@@ -197,7 +197,7 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 		toolCallSeq("Bash", "call_1", `{"command":"git status"}`),
 		textSeq("review done"),
 	}}
-	a := newTestAgent(t,prov)
+	a := newTestAgent(t, prov)
 	a.RegisterTool(echoStub())
 
 	store, err := session.NewFileStore(sessionDir)
@@ -242,7 +242,7 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 func TestRunOneOffStream_EmptyKindNoRecording(t *testing.T) {
 	sessionDir, homeDir := overrideOneoffDirs(t)
 	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{textSeq("ok")}}
-	a := newTestAgent(t,prov)
+	a := newTestAgent(t, prov)
 
 	result, _ := drainAgentEvents(a.RunOneOffStream(
 		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024}, OneOffMeta{}))
@@ -261,7 +261,7 @@ func TestRunOneOffStream_EmptyKindNoRecording(t *testing.T) {
 func TestRunOneOffStream_DisabledByConfig(t *testing.T) {
 	sessionDir, homeDir := overrideOneoffDirs(t)
 	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{textSeq("ok")}}
-	a := newTestAgent(t,prov)
+	a := newTestAgent(t, prov)
 	disabled := false
 	a.Config.FullConfig = &config.Config{Oneoff: config.OneoffConfig{Enabled: &disabled}}
 
@@ -285,7 +285,7 @@ func TestRunOneOffStream_RecorderFailureStillRuns(t *testing.T) {
 	t.Cleanup(func() { oneoffHomeDirFn = origH })
 
 	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{textSeq("still works")}}
-	a := newTestAgent(t,prov)
+	a := newTestAgent(t, prov)
 
 	result, _ := drainAgentEvents(a.RunOneOffStream(
 		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024},

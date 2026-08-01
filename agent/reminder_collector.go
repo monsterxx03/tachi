@@ -18,8 +18,5 @@ type ReminderCollector interface {
 	Collect(ctx context.Context, rctx systemreminder.Context) string
 
 	// AddReminder appends a reminder to the collector.
-	// The fake implementation (fakeReminderCollector) is a no-op, which is
-	// safe because tests inject pre-configured collectors that produce the
-	// exact output they want to test.
 	AddReminder(r systemreminder.Reminder)
 }

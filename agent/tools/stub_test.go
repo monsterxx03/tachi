@@ -21,11 +21,11 @@ type stubTool struct {
 	diffFn       func(ctx context.Context, args string) (string, error)
 }
 
-func (s *stubTool) Name() string                           { return s.name }
-func (s *stubTool) Description() string                    { return s.desc }
-func (s *stubTool) Properties() map[string]PropertySchema  { return s.props }
-func (s *stubTool) Required() []string                     { return s.required }
-func (s *stubTool) Parallel() bool                         { return s.parallel }
+func (s *stubTool) Name() string                          { return s.name }
+func (s *stubTool) Description() string                   { return s.desc }
+func (s *stubTool) Properties() map[string]PropertySchema { return s.props }
+func (s *stubTool) Required() []string                    { return s.required }
+func (s *stubTool) Parallel() bool                        { return s.parallel }
 func (s *stubTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	if s.executeFn != nil {
 		return s.executeFn(ctx, args)

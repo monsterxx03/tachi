@@ -317,7 +317,7 @@ Issue: #` + fmt.Sprintf("%d", issue.GetNumber()) + ` — ` + issue.GetTitle()
 			if c.User != nil && c.User.GetType() == "Bot" {
 				continue
 			}
-			b.WriteString(fmt.Sprintf("**%s**: %s\n\n", c.User.GetLogin(), c.GetBody()))
+			fmt.Fprintf(&b, "**%s**: %s\n\n", c.User.GetLogin(), c.GetBody())
 			count++
 		}
 	}
@@ -349,7 +349,7 @@ func buildPRTitle(issue *github.Issue) string {
 // buildPRBody creates a PR body from the issue and implementation notes.
 func buildPRBody(issue *github.Issue, implNotes string) string {
 	var b strings.Builder
-	b.WriteString(fmt.Sprintf("Closes #%d\n\n", issue.GetNumber()))
+	fmt.Fprintf(&b, "Closes #%d\n\n", issue.GetNumber())
 	b.WriteString("## Summary\n\n")
 	b.WriteString(issue.GetBody())
 	b.WriteString("\n\n")

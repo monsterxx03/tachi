@@ -38,7 +38,9 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 		case agent.AgentEventTextDelta:
 			text.WriteString(event.TextDelta)
 			if onTextDelta != nil {
-				onTextDelta(StreamEvent{Type: StreamEventTextDelta, Text: event.TextDelta})
+				if err := onTextDelta(StreamEvent{Type: StreamEventTextDelta, Text: event.TextDelta}); err != nil {
+					m.logger.Warn(ctx, "channel: streaming text callback error", "error", err)
+				}
 			}
 
 		case agent.AgentEventThinkingDelta:
@@ -53,11 +55,13 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			m.logger.Info(ctx, "channel: tool call args", "tool", event.ToolName, "args", event.ToolArgs)
 			if onTextDelta != nil && !pushedTools[event.ToolID] {
 				pushedTools[event.ToolID] = true
-				onTextDelta(StreamEvent{
+				if err := onTextDelta(StreamEvent{
 					Type:     StreamEventToolCall,
 					ToolName: event.ToolName,
 					ToolArgs: event.ToolArgs,
-				})
+				}); err != nil {
+					m.logger.Warn(ctx, "channel: streaming tool-call callback error", "error", err)
+				}
 			}
 
 		case agent.AgentEventToolConfirmation:

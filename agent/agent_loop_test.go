@@ -11,8 +11,8 @@ import (
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
-	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
+	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -195,7 +195,7 @@ func TestAgentLoop_SimpleTextResponse(t *testing.T) {
 		sequences: [][]llm.StreamEvent{textSeq("Hello World")},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, events := drainAgentEvents(ch)
@@ -216,7 +216,7 @@ func TestAgentLoop_ToolCallThenText(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	// Register a simple Bash-like tool that returns fixed output
 	a.RegisterTool(echoStub())
 
@@ -248,7 +248,7 @@ func TestAgentLoop_MultipleTurns(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(echoStub())
 
 	ch := a.RunConversationStream(t.Context(), nil, "do work", "", llm.ChatOptions{MaxTokens: 4096})
@@ -292,7 +292,7 @@ func TestAgentLoop_IterationBudgetExhausted(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.Config.MaxIterations = 2 // only 2 iterations allowed
 	a.RegisterTool(&stubTool{
 		name:     "Bash",
@@ -326,7 +326,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel() // cancel immediately
 
@@ -340,7 +340,7 @@ func TestAgentLoop_ContextCancellation(t *testing.T) {
 func TestAgentLoop_APICallFailed(t *testing.T) {
 	// Provider that fails at the CreateChatStream level (not via stream event).
 	failingProvider := &failingStreamProvider{name: "fail"}
-	a := newTestAgent(t,failingProvider)
+	a := newTestAgent(t, failingProvider)
 	a.Config.MaxIterations = 1
 
 	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
@@ -363,7 +363,7 @@ func TestAgentLoop_StreamErrorMidway(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 
 	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -432,7 +432,7 @@ func TestRunConversation(t *testing.T) {
 		sequences: [][]llm.StreamEvent{textSeq("Response")},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	result := a.RunConversation(t.Context(), "hello", "", llm.ChatOptions{MaxTokens: 4096})
 
 	require.NotNil(t, result)
@@ -449,7 +449,7 @@ func TestRunConversation_AutoConfirmsTool(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(echoStub())
 	result := a.RunConversation(t.Context(), "run a command", "", llm.ChatOptions{MaxTokens: 4096})
 
@@ -460,7 +460,7 @@ func TestRunConversation_AutoConfirmsTool(t *testing.T) {
 // ---- Tests: executeToolCalls integration ----
 
 func TestExecuteToolCalls_UnknownTool(t *testing.T) {
-	a := newTestAgent(t,nil)
+	a := newTestAgent(t, nil)
 
 	toolCalls := []llm.ToolCall{
 		{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "NonExistent", Arguments: "{}"}},
@@ -476,7 +476,7 @@ func TestExecuteToolCalls_UnknownTool(t *testing.T) {
 }
 
 func TestExecuteToolCalls_ToolError(t *testing.T) {
-	a := newTestAgent(t,nil)
+	a := newTestAgent(t, nil)
 	a.RegisterTool(&stubTool{
 		name:     "ErrorTool",
 		desc:     "Always errors",
@@ -537,7 +537,7 @@ func TestAgentLoop_MaxTokensContinueAndStop(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	ch := a.RunConversationStream(t.Context(), nil, "long response", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
@@ -562,7 +562,7 @@ func TestAgentLoop_MaxTokensThenStop(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	ch := a.RunConversationStream(t.Context(), nil, "long", "", llm.ChatOptions{MaxTokens: 4096})
 
 	result, _ := drainAgentEvents(ch)
@@ -617,7 +617,7 @@ func TestHandleLengthFinish_ContinuationPrompt(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			a := newTestAgent(t,nil)
+			a := newTestAgent(t, nil)
 			rs := &RunState{
 				Messages: []llm.Message{},
 				Budget:   NewIterationBudget(0),
@@ -645,7 +645,7 @@ func TestHandleLengthFinish_ContinuationPrompt(t *testing.T) {
 // the API protocol requires every tool_use to pair with a tool_result,
 // which un-executed calls cannot satisfy.
 func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
-	a := newTestAgent(t,nil)
+	a := newTestAgent(t, nil)
 	rs := &RunState{
 		Messages: []llm.Message{},
 		Budget:   NewIterationBudget(0),
@@ -671,7 +671,7 @@ func TestHandleLengthFinish_DropsTruncatedToolCalls(t *testing.T) {
 // TestHandleLengthFinish_Exhausted verifies the loop stops after
 // maxLengthContinueRetries and delivers the partial output.
 func TestHandleLengthFinish_Exhausted(t *testing.T) {
-	a := newTestAgent(t,nil)
+	a := newTestAgent(t, nil)
 	rs := &RunState{
 		Messages:      []llm.Message{},
 		Budget:        NewIterationBudget(0),
@@ -710,7 +710,7 @@ func TestAgentLoop_ConfirmationToolApproved(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI) // require confirmation
 	a.RegisterTool(confirmStub())
 
@@ -738,7 +738,7 @@ func TestAgentLoop_ConfirmationToolDenied(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
 	a.RegisterTool(confirmStub())
 
@@ -769,7 +769,7 @@ func TestAgentLoop_SessionRecording(t *testing.T) {
 		sequences: [][]llm.StreamEvent{textSeq("Hello!")},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	sm := session.NewManagerWithStore(store, nil)
 	a.SetSessionManager(sm)
 
@@ -856,7 +856,7 @@ func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(askUserStub())
 
 	ch := a.RunConversationStream(t.Context(), nil, "ask me", "", llm.ChatOptions{MaxTokens: 4096})
@@ -888,7 +888,7 @@ func TestAgentLoop_EditAutoApproveAlwaysKey(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
 	a.RegisterTool(confirmStub())
 
@@ -925,7 +925,7 @@ func TestAgentLoop_EditAutoApproveFlagSet(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
 	a.SetAutoApproveEdits(true) // config tui.auto_approve_edits
 	a.RegisterTool(confirmStub())
@@ -959,7 +959,7 @@ func TestAgentLoop_EditAutoApproveDoesNotAffectBashAsk(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
 	a.SetAutoApproveEdits(true)
 	a.RegisterTool(bashStub())
@@ -1015,7 +1015,7 @@ func (p *cancelAfterStreamProvider) CreateChatStream(ctx context.Context, _ []ll
 func TestAgentLoop_StreamCancelledDuringConsume_MessagesPreserved(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 
-	a := newTestAgent(t,&cancelAfterStreamProvider{name: "slow"})
+	a := newTestAgent(t, &cancelAfterStreamProvider{name: "slow"})
 
 	// Cancel context after the agent has started consuming the stream.
 	go func() {

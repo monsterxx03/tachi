@@ -119,10 +119,7 @@ func TestManagerCleanup_PreservesCurrent(t *testing.T) {
 	// Load sess1 again so it's current when cleanupLocked runs
 	mgr.Load(sess1.ID)
 
-	removed, err := mgr.CleanupOldSessions()
-	if err != nil {
-		t.Fatalf("CleanupOldSessions failed: %v", err)
-	}
+	removed := mgr.CleanupOldSessions()
 	if removed == 0 {
 		t.Log("cleanup may have already run during New(); explicit cleanup may remove 0")
 	}
@@ -148,10 +145,7 @@ func TestManagerCleanup_ExplicitNoop(t *testing.T) {
 		}
 	}
 
-	removed, err := mgr.CleanupOldSessions()
-	if err != nil {
-		t.Fatalf("CleanupOldSessions failed: %v", err)
-	}
+	removed := mgr.CleanupOldSessions()
 	if removed != 0 {
 		t.Errorf("expected 0 removed, got %d", removed)
 	}

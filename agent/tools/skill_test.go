@@ -16,11 +16,11 @@ type stubSkillManager struct {
 	createErr    error
 	createResult *SkillCreateResult
 
-	deleted     []struct{ name, source string }
-	deleteErr   error
+	deleted   []struct{ name, source string }
+	deleteErr error
 
-	updated     []SkillUpdateParams
-	updateErr   error
+	updated      []SkillUpdateParams
+	updateErr    error
 	updateResult *SkillUpdateResult
 }
 

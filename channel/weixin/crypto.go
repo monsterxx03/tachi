@@ -83,8 +83,8 @@ func decryptAesEcb(ciphertext, key []byte) ([]byte, error) {
 // --- aes_key decoding ---
 
 // decodeAESKey decodes the aes_key field which can be in two formats:
-//   1. base64(16-byte-key) → decode → 16 bytes
-//   2. base64(hex(16-byte-key)) → decode → 32 bytes ASCII hex → hex decode → 16 bytes
+//  1. base64(16-byte-key) → decode → 16 bytes
+//  2. base64(hex(16-byte-key)) → decode → 32 bytes ASCII hex → hex decode → 16 bytes
 func decodeAESKey(encoded string) ([]byte, error) {
 	decoded, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {

@@ -108,7 +108,6 @@ func (v *MCPView) SelectedServerItem() *MCPServerItem {
 	return &v.servers[v.selIdx]
 }
 
-
 // SetMessage displays a one-shot message at the bottom of the overlay.
 func (v *MCPView) SetMessage(msg string) {
 	v.message = msg

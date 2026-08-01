@@ -11,7 +11,7 @@ import (
 func TestWriteTool(t *testing.T) {
 	tool := WriteTool{}
 	content := "Test content"
-	_, err := tool.ExecuteContext(context.TODO(),`{"path": "/tmp/test_write.txt", "content": "Test content"}`)
+	_, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_write.txt", "content": "Test content"}`)
 	if err != nil {
 		t.Fatalf("WriteTool.Execute failed: %v", err)
 	}
@@ -30,7 +30,7 @@ func TestWriteTool(t *testing.T) {
 func TestRegistry(t *testing.T) {
 	reg := NewRegistry()
 	reg.Register(&stubTool{
-		name:        "test",
+		name: "test",
 		desc: "A test tool",
 		props: map[string]PropertySchema{
 			"arg1": {Type: "string", Description: "First argument"},

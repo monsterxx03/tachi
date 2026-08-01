@@ -165,7 +165,9 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: session manager init warning: %v", smErr))
 	} else {
 		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
-		sm.New(resolved.Provider.Name, cwd)
+		if _, err := sm.New(resolved.Provider.Name, cwd); err != nil {
+			t.logger.Warn(ctx, fmt.Sprintf("ACP: failed to create session: %v", err))
+		}
 		aiAgent.SetSessionManager(sm)
 	}
 
@@ -708,7 +710,9 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			aiAgent.SetSessionManager(sm)
 		} else {
 			t.logger.Info(ctx, "ACP: LoadSession no existing session, creating new")
-			sm.New(resolved.Provider.Name, cwd)
+			if _, err := sm.New(resolved.Provider.Name, cwd); err != nil {
+				t.logger.Warn(ctx, fmt.Sprintf("ACP: failed to create session: %v", err))
+			}
 			aiAgent.SetSessionManager(sm)
 		}
 	}

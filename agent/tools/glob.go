@@ -20,7 +20,7 @@ type GlobResult struct {
 // GlobTool finds files matching a glob pattern using ripgrep
 type GlobTool struct{}
 
-func (t GlobTool) Name() string        { return ToolNameGlob }
+func (t GlobTool) Name() string { return ToolNameGlob }
 func (t GlobTool) Description() string {
 	return "Find files matching a glob pattern using ripgrep. " +
 		"Supports glob patterns like \"**/*.js\" or \"src/**/*.ts\". " +
@@ -33,8 +33,8 @@ func (t GlobTool) Properties() map[string]PropertySchema {
 		"path":    {Type: "string", Description: "The directory to search in (defaults to current directory)"},
 	}
 }
-func (t GlobTool) Required() []string    { return []string{"pattern"} }
-func (t GlobTool) Parallel() bool       { return true }
+func (t GlobTool) Required() []string { return []string{"pattern"} }
+func (t GlobTool) Parallel() bool     { return true }
 
 func (t GlobTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	if err := checkRipgrep(); err != nil {
@@ -176,4 +176,3 @@ func extractGlobBaseDirectory(pattern string) (baseDir string, relativePattern s
 
 	return baseDir, relativePattern
 }
-

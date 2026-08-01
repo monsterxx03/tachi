@@ -21,6 +21,11 @@ linters:
         linters:
           - errcheck
 
+      # 非 defer 的 Close()（HTTP body、文件、连接、日志）同样是尽力而为的清理，错误极少可操作
+      - source: '\.Close\(\)'
+        linters:
+          - errcheck
+
       # fmt.Fprint* 写到 stdout/writer 极少失败
       - source: 'fmt\.Fprint'
         linters:

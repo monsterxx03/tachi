@@ -26,7 +26,7 @@ type LSPManager struct {
 // NewManager creates an LSPManager from configuration. It does not start any servers.
 func NewManager(cfg *Config) *LSPManager {
 	m := &LSPManager{
-		cfg:    cfg,
+		cfg:     cfg,
 		servers: make(map[string]*LSPServer),
 		extIdx:  make(map[string]*LSPServer),
 	}

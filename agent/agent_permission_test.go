@@ -67,7 +67,7 @@ func TestAgentLoop_BashPolicyDeny(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(bashStub())
 	a.SetPermissionPolicy(permission.NewPolicy(
 		permission.Rules{Deny: []string{"rm -rf *"}}, permission.Rules{}))
@@ -90,7 +90,7 @@ func TestAgentLoop_BashPolicyAsk_NonInteractiveDenied(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(bashStub())
 	a.SetPermissionMode(PermissionModeSkip) // channel / subagent / tachi -p
 	a.SetPermissionPolicy(permission.NewPolicy(
@@ -115,7 +115,7 @@ func TestAgentLoop_BashPolicyAsk_NonInteractiveAutoApprove(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(bashStub())
 	a.SetPermissionMode(PermissionModeSkip)
 	a.SetAutoApprovePolicyAsks(true) // ACP "allow all" path
@@ -140,7 +140,7 @@ func TestAgentLoop_BashPolicyAsk_TUIAllowOnce(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI) // newTestAgent defaults to Skip mode
 	a.RegisterTool(bashStub())
 	a.SetPermissionPolicy(permission.NewPolicy(
@@ -178,7 +178,7 @@ func TestAgentLoop_BashPolicyAsk_TUIAllowAlwaysRemembersExact(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
 	a.RegisterTool(bashStub())
 	a.SetPermissionPolicy(permission.NewPolicy(
@@ -211,7 +211,7 @@ func TestAgentLoop_BashPolicyAsk_TUIDenyCancelsTurn(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
 	a.RegisterTool(bashStub())
 	a.SetPermissionPolicy(permission.NewPolicy(
@@ -339,7 +339,7 @@ func TestAgentLoop_BashPolicyNoRules_Unaffected(t *testing.T) {
 		},
 	}
 
-	a := newTestAgent(t,mp)
+	a := newTestAgent(t, mp)
 	a.RegisterTool(bashStub())
 	// No policy at all (nil) — pre-feature behavior: everything executes.
 	result, events := drainAgentEvents(

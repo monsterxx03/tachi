@@ -55,7 +55,7 @@ type Handler struct {
 type Dispatcher struct {
 	mu       sync.RWMutex
 	handlers map[string][]Handler // event name → handlers
-	logger   *logger.Logger      // optional; nil = no logging
+	logger   *logger.Logger       // optional; nil = no logging
 }
 
 // NewDispatcher creates an empty Dispatcher. The logger is optional (nil

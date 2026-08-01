@@ -353,7 +353,7 @@ func splitOnUnderscoreOrCamel(s string) []string {
 				// e.g., "HTTPServer" at 'S':'e' → split before the last uppercase in the run
 				// i-1 is the index of the last uppercase before the lowercase transition
 				if i-1 > start {
-					words = append(words, strings.ToLower(part[start : i-1]))
+					words = append(words, strings.ToLower(part[start:i-1]))
 					start = i - 1
 				}
 			}

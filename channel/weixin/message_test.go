@@ -176,7 +176,7 @@ func TestExtractMediaItems_Mixed(t *testing.T) {
 			TextItem: &TextItem{Text: "hello"},
 		},
 		{
-			Type:      MessageItemTypeFile,
+			Type: MessageItemTypeFile,
 			FileItem: &FileItem{
 				FileName: "data.csv",
 				Media:    MediaData{AESKey: "a2V5MTIzNDU2Nzg5MDEyMzQ1Ng=="},

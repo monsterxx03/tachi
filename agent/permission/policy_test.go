@@ -210,10 +210,10 @@ func TestBuiltinDenyRules(t *testing.T) {
 		"rm -fr ~",
 		"rm -rf $HOME",
 		"rm -rf ${HOME}/docs",
-		"sudo rm -rf /", // hmm: sudo prefix — see below
-		"rm -rf /etc",   // root-level directory (single component below /)
-		"rm -rf /tmp",   // root-level directory itself is guarded
-		"rm -rf \"/tmp\"", // quoting does not bypass the guard
+		"sudo rm -rf /",      // hmm: sudo prefix — see below
+		"rm -rf /etc",        // root-level directory (single component below /)
+		"rm -rf /tmp",        // root-level directory itself is guarded
+		"rm -rf \"/tmp\"",    // quoting does not bypass the guard
 		"rm -rf /tmp/../etc", // traversal normalizes to /etc
 		"rm -rf ~/docs",      // home direct child
 		"dd if=/dev/zero of=/dev/sda bs=1M",
@@ -271,7 +271,7 @@ func TestBuiltinRmGuard_Precision(t *testing.T) {
 		"rm -rf /etc",
 		"rm -rf /tmp",
 		"rm -rf /home",
-		"rm -rf /./etc",     // normalized to /etc
+		"rm -rf /./etc",      // normalized to /etc
 		"rm -rf /tmp/../etc", // normalized to /etc
 		"rm -rf ~",
 		"rm -rf ~/*",

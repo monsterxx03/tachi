@@ -250,13 +250,13 @@ func TestConvertSessionToLLMMessages_ParallelToolCalls(t *testing.T) {
 			},
 			ToolCalls: []llm.ToolCall{
 				{
-					ID:   "call_1",
-					Type: "function",
+					ID:       "call_1",
+					Type:     "function",
 					Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command": "git status"}`},
 				},
 				{
-					ID:   "call_2",
-					Type: "function",
+					ID:       "call_2",
+					Type:     "function",
 					Function: llm.ToolCallFunction{Name: "Bash", Arguments: `{"command": "git diff"}`},
 				},
 			},

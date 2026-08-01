@@ -13,10 +13,10 @@ import (
 // instance, while the parent builder's RecordToolResult only runs after
 // the sub-agent completes.
 type Builder struct {
-	mu     sync.Mutex
-	turns  []Turn
+	mu      sync.Mutex
+	turns   []Turn
 	curTurn *Turn
-	nextID int
+	nextID  int
 }
 
 // NewBuilder creates a new transcript builder.
@@ -189,10 +189,10 @@ func (b *Builder) FinalizeTurn() {
 // For SubAgent invocations, use SubBuilder() to obtain a child Builder for
 // the sub-agent's nested transcript.
 type ToolCallRecorder struct {
-	builder   *Builder
-	evPtr     *Event
+	builder    *Builder
+	evPtr      *Event
 	subBuilder *Builder // non-nil only for SubAgent calls
-	done      bool
+	done       bool
 }
 
 // SubBuilder returns a child Builder for the sub-agent to write into.

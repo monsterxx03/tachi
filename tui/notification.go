@@ -84,4 +84,3 @@ func notifyTerminal(title, body string) {
 		_ = os.WriteFile("/dev/tty", []byte(osc9), 0o666)
 	}()
 }
-

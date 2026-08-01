@@ -190,7 +190,9 @@ func (s *Scheduler) Create(job *Job) (*Job, error) {
 	if job.Status == JobStatusActive {
 		if err := s.startJobTimer(job); err != nil {
 			// Clean up: remove from store since the schedule is invalid.
-			s.store.Delete(job.ID)
+			if delErr := s.store.Delete(job.ID); delErr != nil {
+				s.logger.Error(s.ctx, "cron: failed to delete invalid job", delErr, "id", job.ID)
+			}
 			return nil, fmt.Errorf("cron: invalid schedule %q: %w", job.Schedule, err)
 		}
 	}
@@ -257,7 +259,9 @@ func (s *Scheduler) Update(id string, opts UpdateOpts) (*Job, error) {
 		if err := s.startJobTimer(job); err != nil {
 			s.logger.Error(s.ctx, "cron: failed to reschedule job", err, "id", job.ID)
 			job.Status = JobStatusPaused
-			s.store.Update(job)
+			if upErr := s.store.Update(job); upErr != nil {
+				s.logger.Error(s.ctx, "cron: failed to persist paused job", upErr, "id", job.ID)
+			}
 		}
 	}
 
@@ -329,7 +333,9 @@ func (s *Scheduler) Resume(id string) (*Job, error) {
 	if err := s.startJobTimer(job); err != nil {
 		s.logger.Error(s.ctx, "cron: failed to resume job", err, "id", job.ID)
 		job.Status = JobStatusPaused
-		s.store.Update(job)
+		if upErr := s.store.Update(job); upErr != nil {
+			s.logger.Error(s.ctx, "cron: failed to persist paused job", upErr, "id", job.ID)
+		}
 		return nil, fmt.Errorf("cron: failed to schedule job: %w", err)
 	}
 

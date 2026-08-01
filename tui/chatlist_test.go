@@ -10,8 +10,8 @@ type testListProvider struct {
 	items []ListItem
 }
 
-func (p *testListProvider) ListLen() int { return len(p.items) }
-func (p *testListProvider) ListItem(i int) ListItem { return p.items[i] }
+func (p *testListProvider) ListLen() int             { return len(p.items) }
+func (p *testListProvider) ListItem(i int) ListItem  { return p.items[i] }
 func (p *testListProvider) ListItemHeight(i int) int { return p.items[i].Height }
 
 func listFromLines(items ...string) *testListProvider {

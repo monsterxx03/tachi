@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"strings"
-
 )
 
 // DeferredToolProvider provides MCP tool metadata for the reminder.

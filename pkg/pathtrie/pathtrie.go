@@ -106,11 +106,17 @@ type matchHeap struct {
 	items []Match
 }
 
-func (h matchHeap) Len() int            { return len(h.items) }
-func (h matchHeap) Less(i, j int) bool  { return h.items[i].Score < h.items[j].Score } // min-heap
-func (h matchHeap) Swap(i, j int)       { h.items[i], h.items[j] = h.items[j], h.items[i] }
-func (h *matchHeap) Push(x any)         { h.items = append(h.items, x.(Match)) }
-func (h *matchHeap) Pop() any           { old := h.items; n := len(old); x := old[n-1]; h.items = old[:n-1]; return x }
+func (h matchHeap) Len() int           { return len(h.items) }
+func (h matchHeap) Less(i, j int) bool { return h.items[i].Score < h.items[j].Score } // min-heap
+func (h matchHeap) Swap(i, j int)      { h.items[i], h.items[j] = h.items[j], h.items[i] }
+func (h *matchHeap) Push(x any)        { h.items = append(h.items, x.(Match)) }
+func (h *matchHeap) Pop() any {
+	old := h.items
+	n := len(old)
+	x := old[n-1]
+	h.items = old[:n-1]
+	return x
+}
 
 // searchDFS recursively walks the trie looking for fuzzy matches of query.
 func (t *PathTrie) searchDFS(

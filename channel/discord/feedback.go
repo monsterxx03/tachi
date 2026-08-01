@@ -50,5 +50,3 @@ func (ch *DiscordChannel) startTypingLoop(ctx context.Context, channelID string)
 
 	return cancel
 }
-
-

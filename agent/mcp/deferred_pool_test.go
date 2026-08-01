@@ -604,9 +604,9 @@ func TestTokenize(t *testing.T) {
 		{"hello world", []string{"hello", "world"}},
 		{"  spaced  out  ", []string{"spaced", "out"}},
 		{"+mustHave optional", []string{"+must", "+have", "optional"}},
-		{"++double", []string{"+double"}},            // multiple + stripped to single
-		{"+++triple", []string{"+triple"}},           // multiple + stripped to single
-		{"+x", []string{"+x"}},                       // single char after + preserved with + prefix
+		{"++double", []string{"+double"}},  // multiple + stripped to single
+		{"+++triple", []string{"+triple"}}, // multiple + stripped to single
+		{"+x", []string{"+x"}},             // single char after + preserved with + prefix
 		// Underscore splitting
 		{"get_mcp_server_detail", []string{"get", "mcp", "server", "detail"}},
 		{"+postgres_query", []string{"+postgres", "+query"}},

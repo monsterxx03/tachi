@@ -11,7 +11,7 @@ func TestBashTool_Execute(t *testing.T) {
 	tool := BashTool{}
 
 	t.Run("simple echo", func(t *testing.T) {
-		result, err := tool.ExecuteContext(context.TODO(),`{"command": "echo hello"}`)
+		result, err := tool.ExecuteContext(context.TODO(), `{"command": "echo hello"}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -28,7 +28,7 @@ func TestBashTool_Execute(t *testing.T) {
 	})
 
 	t.Run("command with stderr", func(t *testing.T) {
-		result, err := tool.ExecuteContext(context.TODO(),`{"command": "echo err >&2"}`)
+		result, err := tool.ExecuteContext(context.TODO(), `{"command": "echo err >&2"}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -40,7 +40,7 @@ func TestBashTool_Execute(t *testing.T) {
 	})
 
 	t.Run("non-zero exit code", func(t *testing.T) {
-		result, err := tool.ExecuteContext(context.TODO(),`{"command": "exit 42"}`)
+		result, err := tool.ExecuteContext(context.TODO(), `{"command": "exit 42"}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -52,7 +52,7 @@ func TestBashTool_Execute(t *testing.T) {
 	})
 
 	t.Run("timeout", func(t *testing.T) {
-		result, err := tool.ExecuteContext(context.TODO(),`{"command": "sleep 10", "timeout": 500}`)
+		result, err := tool.ExecuteContext(context.TODO(), `{"command": "sleep 10", "timeout": 500}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -67,14 +67,14 @@ func TestBashTool_Execute(t *testing.T) {
 	})
 
 	t.Run("empty command", func(t *testing.T) {
-		_, err := tool.ExecuteContext(context.TODO(),`{"command": ""}`)
+		_, err := tool.ExecuteContext(context.TODO(), `{"command": ""}`)
 		if err == nil {
 			t.Error("expected error for empty command")
 		}
 	})
 
 	t.Run("multiline output", func(t *testing.T) {
-		result, err := tool.ExecuteContext(context.TODO(),`{"command": "printf 'a\nb\nc'"}`)
+		result, err := tool.ExecuteContext(context.TODO(), `{"command": "printf 'a\nb\nc'"}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -87,7 +87,7 @@ func TestBashTool_Execute(t *testing.T) {
 	})
 
 	t.Run("working directory", func(t *testing.T) {
-		result, err := tool.ExecuteContext(context.TODO(),`{"command": "pwd"}`)
+		result, err := tool.ExecuteContext(context.TODO(), `{"command": "pwd"}`)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
