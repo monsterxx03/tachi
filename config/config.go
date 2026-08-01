@@ -129,6 +129,9 @@ type WebSearchConfig struct {
 }
 
 type WebFetchConfig struct {
+	Type    string        `yaml:"type" default:"native"` // Fetch backend: "native" (default) | "firecrawl" (extensible for future providers)
+	Key     string        `yaml:"key"`                   // Firecrawl API key (required when type=firecrawl)
+	BaseURL string        `yaml:"base_url"`              // Firecrawl API base URL (default: https://api.firecrawl.dev)
 	Timeout time.Duration `yaml:"timeout" default:"60s"` // HTTP request timeout
 	Proxy   string        `yaml:"proxy"`                 // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
 }

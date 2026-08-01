@@ -2,12 +2,17 @@ package tools
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/pkg/netutil"
 )
 
 func TestWebFetchTool_Name(t *testing.T) {
@@ -353,6 +358,169 @@ func TestWebFetchTool_CacheWithTruncation(t *testing.T) {
 	}
 	if !strings.Contains(out2.Content, "[WEBFETCH OUTPUT TOO LARGE]") {
 		t.Error("second call should also trigger truncation")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Firecrawl backend & reserved-address fallback
+// ---------------------------------------------------------------------------
+
+func TestWebFetchTool_SelectBackend(t *testing.T) {
+	orig := netutil.LookupIP
+	t.Cleanup(func() { netutil.LookupIP = orig })
+
+	pub := func(host string) ([]net.IP, error) { return []net.IP{net.ParseIP("8.8.8.8")}, nil }
+	priv := func(host string) ([]net.IP, error) { return []net.IP{net.ParseIP("10.0.0.1")}, nil }
+	fail := func(host string) ([]net.IP, error) { return nil, errors.New("dns fail") }
+
+	tests := []struct {
+		name   string
+		tool   WebFetchTool
+		url    string
+		lookup func(string) ([]net.IP, error)
+		want   string
+	}{
+		{"zero value defaults to native", WebFetchTool{}, "https://example.com", pub, "native"},
+		{"explicit native type", WebFetchTool{Type: "native", Key: "k"}, "https://example.com", pub, "native"},
+		{"firecrawl without key", WebFetchTool{Type: "firecrawl"}, "https://example.com", pub, "native"},
+		{"firecrawl public target", WebFetchTool{Type: "firecrawl", Key: "k"}, "https://example.com", pub, "firecrawl"},
+		{"firecrawl reserved target", WebFetchTool{Type: "firecrawl", Key: "k"}, "https://example.com", priv, "native"},
+		{"firecrawl dns failure", WebFetchTool{Type: "firecrawl", Key: "k"}, "https://example.com", fail, "native"},
+		{"firecrawl private ip literal", WebFetchTool{Type: "firecrawl", Key: "k"}, "http://10.0.0.5/x", pub, "native"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			netutil.LookupIP = tt.lookup
+			if got := tt.tool.selectBackend(tt.url); got != tt.want {
+				t.Errorf("selectBackend(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestWebFetchTool_Firecrawl_ReservedFallbackToNative(t *testing.T) {
+	webFetchCacheMu.Lock()
+	webFetchCacheStore = make(map[string]webFetchCacheEntry)
+	webFetchCacheSize = 0
+	webFetchCacheMu.Unlock()
+
+	firecrawlCalled := false
+	fcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firecrawlCalled = true
+	}))
+	defer fcSrv.Close()
+
+	// The target is a loopback address — even with type=firecrawl configured
+	// the request must go through the native fetcher and reach this server.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/plain")
+		w.Write([]byte("internal content"))
+	}))
+	defer srv.Close()
+
+	tool := &WebFetchTool{Type: "firecrawl", Key: "fc-test-key", BaseURL: fcSrv.URL}
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	var out webFetchOutput
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+
+	if firecrawlCalled {
+		t.Error("firecrawl backend must not be called for a reserved address")
+	}
+	if out.Code != 200 {
+		t.Errorf("expected code 200, got %d", out.Code)
+	}
+	if !strings.Contains(out.Content, "internal content") {
+		t.Errorf("expected native-fetched content, got: %s", out.Content)
+	}
+}
+
+func TestWebFetchTool_Firecrawl_UsesFirecrawlBackend(t *testing.T) {
+	orig := netutil.LookupIP
+	t.Cleanup(func() { netutil.LookupIP = orig })
+	netutil.LookupIP = func(host string) ([]net.IP, error) {
+		return []net.IP{net.ParseIP("8.8.8.8")}, nil
+	}
+
+	webFetchCacheMu.Lock()
+	webFetchCacheStore = make(map[string]webFetchCacheEntry)
+	webFetchCacheSize = 0
+	webFetchCacheMu.Unlock()
+
+	var gotBody firecrawlScrapeRequest
+	fcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			t.Errorf("expected POST, got %s", r.Method)
+		}
+		if got := r.Header.Get("Authorization"); got != "Bearer fc-test-key" {
+			t.Errorf("expected 'Bearer fc-test-key' auth, got %q", got)
+		}
+		if got := r.URL.Path; got != "/v2/scrape" {
+			t.Errorf("expected path /v2/scrape, got %q", got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(body, &gotBody)
+		w.Header().Set("Content-Type", "application/json")
+		w.Write([]byte(`{"success":true,"data":{"markdown":"# Rendered by firecrawl\n\nJS content"}}`))
+	}))
+	defer fcSrv.Close()
+
+	tool := &WebFetchTool{Type: "firecrawl", Key: "fc-test-key", BaseURL: fcSrv.URL}
+	result, err := tool.ExecuteContext(t.Context(), `{"url": "https://example.com/page"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if gotBody.URL != "https://example.com/page" {
+		t.Errorf("expected URL in request body, got %q", gotBody.URL)
+	}
+	if !gotBody.OnlyMainContent {
+		t.Error("expected onlyMainContent=true in request body")
+	}
+	found := false
+	for _, f := range gotBody.Formats {
+		if f == "markdown" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected 'markdown' in formats, got %v", gotBody.Formats)
+	}
+
+	var out webFetchOutput
+	if err := json.Unmarshal([]byte(result), &out); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if !strings.Contains(out.Content, "Rendered by firecrawl") {
+		t.Errorf("expected firecrawl markdown content, got: %s", out.Content)
+	}
+	if out.ContentType != "text/markdown" {
+		t.Errorf("expected content type 'text/markdown', got %q", out.ContentType)
+	}
+	if out.Code != 200 {
+		t.Errorf("expected code 200, got %d", out.Code)
+	}
+}
+
+func TestWebFetchTool_Firecrawl_ErrorHint(t *testing.T) {
+	tests := []struct {
+		code int
+		want string
+	}{
+		{http.StatusUnauthorized, "API key"},
+		{http.StatusPaymentRequired, "credits"},
+		{http.StatusTooManyRequests, "rate limited"},
+		{http.StatusOK, ""},
+	}
+	for _, tt := range tests {
+		if got := firecrawlErrorHint(tt.code); !strings.Contains(got, tt.want) {
+			t.Errorf("firecrawlErrorHint(%d) = %q, want it to contain %q", tt.code, got, tt.want)
+		}
 	}
 }
 

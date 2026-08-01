@@ -1,7 +1,9 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 
 	md "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/netutil"
 	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
@@ -24,6 +27,10 @@ const (
 	webFetchCacheTTL        = 15 * time.Minute
 	webFetchMaxCacheSize    = 50 * 1024 * 1024 // 50MB
 	webFetchUserAgent       = "Tachi/1.0"
+
+	// firecrawlDefaultBaseURL is the hosted Firecrawl API endpoint, used
+	// when WebFetchConfig.BaseURL is empty (e.g. self-hosted instances).
+	firecrawlDefaultBaseURL = "https://api.firecrawl.dev"
 )
 
 // webFetchArgs defines the expected JSON arguments for WebFetch.
@@ -43,14 +50,35 @@ type webFetchOutput struct {
 	DurationMs  int64  `json:"durationMs"`
 }
 
+// webFetchFetchResult is a backend-agnostic fetch outcome. Both the native
+// fetcher and the Firecrawl backend produce one, so caching, truncation and
+// output shaping stay identical regardless of backend.
+type webFetchFetchResult struct {
+	content     string
+	contentType string
+	bytes       int
+	code        int
+	codeText    string
+}
+
 // WebFetchTool fetches a URL and returns its content as markdown.
 // HTML pages are automatically converted. It supports optional proxy,
 // caches responses for 15 minutes, and saves oversized results to disk.
+//
+// Two backends are available (see Type):
+//   - "native" (default): direct local HTTP fetch, no API key needed.
+//   - "firecrawl": hosted scraping via the Firecrawl API (JS rendering,
+//     anti-bot, content cleaning). Targets that resolve to a reserved
+//     address (private IPs, loopback, link-local, ...) always fall back
+//     to the native backend, even when type=firecrawl is configured.
 type WebFetchTool struct {
 	Timeout        time.Duration // HTTP request timeout (default 60s)
 	Proxy          string        // Optional proxy URL
 	ResultBaseDir  string        // Directory for oversized result files (default: ~/.tachi/tool_results)
 	MaxReturnChars int           // Max chars returned to LLM; 0 = no limit
+	Type           string        // Backend: "native" (default) | "firecrawl"; empty = native
+	Key            string        // Firecrawl API key (required for type=firecrawl)
+	BaseURL        string        // Firecrawl API base URL (default: https://api.firecrawl.dev)
 
 	getClient func() *http.Client // lazily initialized via sync.OnceValue
 }
@@ -161,8 +189,24 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 		return "", err
 	}
 
-	// Check cache.
-	if e, ok := webFetchCacheGet(u); ok {
+	// Select the backend. Firecrawl is used only for targets that resolve
+	// to non-reserved addresses; reserved targets always fall back to the
+	// native fetcher (even when type=firecrawl is configured).
+	backend := t.selectBackend(u)
+	switch backend {
+	case "firecrawl":
+		logger.FromContext(ctx).Info(ctx, "WebFetch: using firecrawl backend", "url", u)
+	case "native":
+		if t.Type == "firecrawl" && t.Key != "" {
+			logger.FromContext(ctx).Info(ctx, "WebFetch: firecrawl configured but falling back to native", "url", u)
+		}
+	}
+	cacheKey := backend + ":" + u
+
+	// Check cache. The key includes the backend because Firecrawl returns
+	// JS-rendered content, which differs from the raw-HTML markdown of the
+	// native fetcher — the two must never share entries.
+	if e, ok := webFetchCacheGet(cacheKey); ok {
 		// The cache stores full content — apply truncation on hit too.
 		content := t.truncateWebFetchOutput(ctx, e.content, u)
 		if args.Prompt != "" {
@@ -180,24 +224,106 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 
 	start := time.Now()
 
+	// Fetch via the selected backend.
+	var res webFetchFetchResult
+	if backend == "firecrawl" {
+		res, err = t.fetchWithFirecrawl(ctx, u)
+	} else {
+		res, err = t.fetchNative(ctx, u)
+	}
+	if err != nil {
+		return "", err
+	}
+
+	// Cache the full markdown content (before prompt / truncation).
+	webFetchCacheSet(cacheKey, webFetchCacheEntry{
+		content:     res.content,
+		contentType: res.contentType,
+		bytes:       res.bytes,
+		code:        res.code,
+		codeText:    res.codeText,
+		storedAt:    time.Now(),
+		size:        len(res.content),
+	})
+
+	// Apply file-based truncation if content exceeds the limit.
+	content := t.truncateWebFetchOutput(ctx, res.content, u)
+
+	// Prepend prompt if given.
+	if args.Prompt != "" {
+		content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
+	}
+
+	out := buildWebFetchOutput(u, webFetchCacheEntry{
+		content:     content,
+		contentType: res.contentType,
+		bytes:       res.bytes,
+		code:        res.code,
+		codeText:    res.codeText,
+	}, time.Since(start).Milliseconds())
+
+	return marshalResult(out)
+}
+
+// ---------------------------------------------------------------------------
+// Backend selection & fallback
+// ---------------------------------------------------------------------------
+
+// selectBackend chooses the fetch backend for a URL. The firecrawl backend
+// is used only when configured (Type == "firecrawl") AND the target resolves
+// to a non-reserved address. Reserved targets — private IPs, loopback,
+// link-local, cloud metadata, documentation ranges, ... — always fall back
+// to native: such addresses must never be sent to an external service.
+func (t *WebFetchTool) selectBackend(rawURL string) string {
+	if t.Type != "firecrawl" || t.Key == "" {
+		return "native"
+	}
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return "native"
+	}
+	reserved, err := netutil.HostIsReserved(parsed.Hostname())
+	if err != nil {
+		// Resolution failed — conservative fallback keeps behavior
+		// identical to the pre-firecrawl world (native reports the error).
+		return "native"
+	}
+	if reserved {
+		return "native"
+	}
+	return "firecrawl"
+}
+
+// ---------------------------------------------------------------------------
+// Native backend
+// ---------------------------------------------------------------------------
+
+// fetchNative performs the original local HTTP fetch: same-host redirect
+// following, HTML→markdown conversion, and cross-host redirect hints.
+func (t *WebFetchTool) fetchNative(ctx context.Context, u string) (webFetchFetchResult, error) {
 	// Fetch with custom redirect handling.
 	resp, err := t.fetchWithRedirects(ctx, u, 0)
 	if err != nil {
-		return "", fmt.Errorf("fetch failed: %w", err)
+		return webFetchFetchResult{}, fmt.Errorf("fetch failed: %w", err)
 	}
 	defer resp.Body.Close()
 
 	// Cross-host redirect → return a hint for the LLM to re-fetch.
 	if isRedirect(resp.StatusCode) {
 		out := crossHostRedirectOutput(u, resp)
-		out.DurationMs = time.Since(start).Milliseconds()
-		return marshalResult(out)
+		return webFetchFetchResult{
+			content:     out.Content,
+			contentType: out.ContentType,
+			bytes:       out.Bytes,
+			code:        out.Code,
+			codeText:    out.CodeText,
+		}, nil
 	}
 
 	// Read body with size limit.
 	body, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxContentBytes))
 	if err != nil {
-		return "", fmt.Errorf("read body: %w", err)
+		return webFetchFetchResult{}, fmt.Errorf("read body: %w", err)
 	}
 	bodyLen := len(body)
 
@@ -209,37 +335,117 @@ func (t *WebFetchTool) ExecuteContext(ctx context.Context, rawArgs string) (stri
 	// Convert to markdown.
 	content, err := convertToMarkdown(body, contentType)
 	if err != nil {
-		return "", err
+		return webFetchFetchResult{}, err
 	}
 
-	// Cache the full markdown content (before prompt / truncation).
-	webFetchCacheSet(u, webFetchCacheEntry{
+	return webFetchFetchResult{
 		content:     content,
 		contentType: contentType,
 		bytes:       bodyLen,
 		code:        resp.StatusCode,
 		codeText:    resp.Status,
-		storedAt:    time.Now(),
-		size:        len(content),
+	}, nil
+}
+
+// ---------------------------------------------------------------------------
+// Firecrawl backend
+// ---------------------------------------------------------------------------
+
+// firecrawlScrapeRequest is the request body for Firecrawl POST /v2/scrape.
+type firecrawlScrapeRequest struct {
+	URL             string   `json:"url"`
+	Formats         []string `json:"formats"`
+	OnlyMainContent bool     `json:"onlyMainContent"`
+}
+
+// firecrawlScrapeResponse is the response body for Firecrawl POST /v2/scrape.
+type firecrawlScrapeResponse struct {
+	Success bool `json:"success"`
+	Data    struct {
+		Markdown string `json:"markdown"`
+	} `json:"data"`
+	Error string `json:"error,omitempty"`
+}
+
+// fetchWithFirecrawl fetches a URL through the Firecrawl scrape API and
+// returns the cleaned markdown. The caller (selectBackend) has already
+// validated the target as a non-reserved public address.
+func (t *WebFetchTool) fetchWithFirecrawl(ctx context.Context, u string) (webFetchFetchResult, error) {
+	base := strings.TrimSuffix(t.BaseURL, "/")
+	if base == "" {
+		base = firecrawlDefaultBaseURL
+	}
+
+	payload, err := json.Marshal(firecrawlScrapeRequest{
+		URL:             u,
+		Formats:         []string{"markdown"},
+		OnlyMainContent: true,
 	})
-
-	// Apply file-based truncation if content exceeds the limit.
-	content = t.truncateWebFetchOutput(ctx, content, u)
-
-	// Prepend prompt if given.
-	if args.Prompt != "" {
-		content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
+	if err != nil {
+		return webFetchFetchResult{}, fmt.Errorf("marshal firecrawl request: %w", err)
 	}
 
-	out := buildWebFetchOutput(u, webFetchCacheEntry{
-		content:     content,
-		contentType: contentType,
-		bytes:       bodyLen,
+	httpReq, err := http.NewRequestWithContext(ctx, "POST", base+"/v2/scrape", bytes.NewReader(payload))
+	if err != nil {
+		return webFetchFetchResult{}, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+t.Key)
+	httpReq.Header.Set("Content-Type", "application/json")
+
+	resp, err := t.getHTTPClient().Do(httpReq)
+	if err != nil {
+		return webFetchFetchResult{}, err
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxContentBytes))
+	if err != nil {
+		return webFetchFetchResult{}, fmt.Errorf("read firecrawl response: %w", err)
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return webFetchFetchResult{}, fmt.Errorf("firecrawl API returned %s%s: %s",
+			resp.Status, firecrawlErrorHint(resp.StatusCode), truncateString(string(respBody), 500))
+	}
+
+	var parsed firecrawlScrapeResponse
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
+		return webFetchFetchResult{}, fmt.Errorf("parse firecrawl response: %w", err)
+	}
+
+	if parsed.Data.Markdown == "" {
+		return webFetchFetchResult{}, fmt.Errorf("firecrawl returned no markdown content (success=%v, error=%q)", parsed.Success, parsed.Error)
+	}
+
+	return webFetchFetchResult{
+		content:     parsed.Data.Markdown,
+		contentType: "text/markdown",
+		bytes:       len(parsed.Data.Markdown),
 		code:        resp.StatusCode,
 		codeText:    resp.Status,
-	}, time.Since(start).Milliseconds())
+	}, nil
+}
 
-	return marshalResult(out)
+// firecrawlErrorHint appends a human-readable hint for common Firecrawl
+// HTTP status codes so the LLM can act on the failure.
+func firecrawlErrorHint(code int) string {
+	switch code {
+	case http.StatusUnauthorized:
+		return " (API key invalid — check web_fetch.key)"
+	case http.StatusPaymentRequired:
+		return " (insufficient Firecrawl credits)"
+	case http.StatusTooManyRequests:
+		return " (rate limited — retry later)"
+	}
+	return ""
+}
+
+// truncateString truncates s to at most max runes/bytes with an ellipsis.
+func truncateString(s string, max int) string {
+	if len(s) <= max {
+		return s
+	}
+	return s[:max] + "..."
 }
 
 // ---------------------------------------------------------------------------
