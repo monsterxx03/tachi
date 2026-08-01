@@ -11,6 +11,7 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -93,11 +94,7 @@ func (m *Model) renderSessionSelection() string {
 			title = "(untitled)"
 		}
 		// Truncate title for display alignment (rune-aware)
-		displayTitle := title
-		titleRunes := []rune(displayTitle)
-		if len(titleRunes) > 40 {
-			displayTitle = string(titleRunes[:37]) + "…"
-		}
+		displayTitle := strutil.TruncateFitted(title, 38)
 		modelInfo := s.ProviderName
 
 		active := " "

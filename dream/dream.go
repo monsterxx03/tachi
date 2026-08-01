@@ -23,7 +23,9 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -199,7 +201,7 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 	if maxConcurrent <= 0 {
 		maxConcurrent = MaxConcurrentDreams
 	}
-	sem := make(chan struct{}, maxConcurrent)
+	sem := syncx.NewSemaphore(maxConcurrent)
 	var wg sync.WaitGroup
 
 	// Register all domains as in-progress before starting any of them.
@@ -217,11 +219,16 @@ func (o *Orchestrator) executePlans(ctx context.Context, plans []Plan, runFn Run
 	o.mu.Unlock()
 
 	for _, plan := range plans {
-		sem <- struct{}{}
+		if err := sem.Acquire(ctx); err != nil {
+			// Context canceled while waiting for a slot — let the running
+			// sub-agents finish before returning.
+			wg.Wait()
+			return err
+		}
 		wg.Add(1)
 		go func(p Plan) {
 			defer wg.Done()
-			defer func() { <-sem }()
+			defer sem.Release()
 			defer ReleaseLock(p.Group.MemoryRoot)
 			defer func() {
 				o.mu.Lock()
@@ -410,16 +417,8 @@ func LoadState(memoryRoot string) State {
 // Uses a temp-file + rename to avoid corruption on crash (atomic write) —
 // a torn file would silently reset LastDreamAt and trigger a full re-dream.
 func SaveState(memoryRoot string, state State) error {
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
 	statePath := filepath.Join(memoryRoot, memory.DreamStateFile)
-	tmpPath := statePath + ".tmp"
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, statePath)
+	return fileutil.AtomicWriteJSONShared(statePath, &state)
 }
 
 // --- Helpers ---
@@ -435,7 +434,7 @@ func FindGitRoot(dir string) string {
 		return ""
 	}
 	for {
-		if _, err := os.Stat(filepath.Join(dir, ".git")); err == nil {
+		if fileutil.Exists(filepath.Join(dir, ".git")) {
 			return dir
 		}
 		parent := filepath.Dir(dir)

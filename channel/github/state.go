@@ -2,7 +2,6 @@ package github
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -10,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -20,7 +20,6 @@ type StateManager struct {
 	state     *GlobalState
 	stateDir  string
 	statePath string
-	tmpPath   string
 	logger    *logger.Logger
 }
 
@@ -28,7 +27,6 @@ type StateManager struct {
 func NewStateManager(log *logger.Logger) (*StateManager, error) {
 	stateDir := filepath.Join(config.BaseDir(), "github")
 	statePath := filepath.Join(stateDir, "state.json")
-	tmpPath := statePath + ".tmp"
 
 	if err := os.MkdirAll(stateDir, 0755); err != nil {
 		return nil, fmt.Errorf("github: create state dir: %w", err)
@@ -38,7 +36,6 @@ func NewStateManager(log *logger.Logger) (*StateManager, error) {
 		state:     &GlobalState{Repos: make(map[string]*RepoState)},
 		stateDir:  stateDir,
 		statePath: statePath,
-		tmpPath:   tmpPath,
 		logger:    log,
 	}
 
@@ -52,13 +49,9 @@ func NewStateManager(log *logger.Logger) (*StateManager, error) {
 
 // load reads state from disk. Returns nil if file doesn't exist.
 func (sm *StateManager) load() error {
-	data, err := os.ReadFile(sm.statePath)
-	if err != nil {
-		return err
-	}
 	var state GlobalState
-	if err := json.Unmarshal(data, &state); err != nil {
-		return fmt.Errorf("github: parse state: %w", err)
+	if err := fileutil.ReadJSON(sm.statePath, &state); err != nil {
+		return fmt.Errorf("github: load state: %w", err)
 	}
 	if state.Repos == nil {
 		state.Repos = make(map[string]*RepoState)
@@ -71,16 +64,8 @@ func (sm *StateManager) load() error {
 func (sm *StateManager) SaveAtomic() error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
-	data, err := json.MarshalIndent(sm.state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("github: marshal state: %w", err)
-	}
-
-	if err := os.WriteFile(sm.tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("github: write tmp state: %w", err)
-	}
-	if err := os.Rename(sm.tmpPath, sm.statePath); err != nil {
-		return fmt.Errorf("github: rename state: %w", err)
+	if err := fileutil.AtomicWriteJSONShared(sm.statePath, sm.state); err != nil {
+		return fmt.Errorf("github: save state: %w", err)
 	}
 	return nil
 }

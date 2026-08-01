@@ -2,6 +2,8 @@ package weixin
 
 import (
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // filterMarkdown strips unsupported markdown syntax from text for WeChat compatibility.
@@ -192,20 +194,11 @@ func processSingleDelim(result *strings.Builder, line string, start int, delim b
 // containsCJK reports whether text contains any CJK characters.
 func containsCJK(text string) bool {
 	for _, r := range text {
-		if isCJK(r) {
+		if strutil.IsCJK(r) {
 			return true
 		}
 	}
 	return false
-}
-
-// isCJK checks if a rune is a CJK character.
-// Covers: CJK Radicals Supplement .. CJK Unified Ideographs,
-// Hangul Syllables, and CJK Compatibility Ideographs.
-func isCJK(r rune) bool {
-	return (r >= 0x2E80 && r <= 0x9FFF) || // CJK Radicals Supplement .. CJK Unified Ideographs
-		(r >= 0xAC00 && r <= 0xD7AF) || // Hangul Syllables
-		(r >= 0xF900 && r <= 0xFAFF) // CJK Compatibility Ideographs
 }
 
 // removeImages removes ![alt](url) patterns.

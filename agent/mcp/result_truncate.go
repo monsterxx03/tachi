@@ -7,6 +7,9 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 const (
@@ -29,15 +32,8 @@ func (m *Manager) truncateToolOutput(ctx context.Context, result string, maxChar
 	filename := fmt.Sprintf("%s_%d.txt", safeName, time.Now().UnixNano())
 	filepath := filepath.Join(fileDir, filename)
 
-	// Ensure the directory exists.
-	if err := os.MkdirAll(fileDir, 0700); err != nil {
-		m.logger.Error(ctx, "MCP: truncateToolOutput: failed to create dir", err, "dir", fileDir)
-		// Fall back to simple truncation without file persistence.
-		return hardTruncate(result, maxChars, toolName)
-	}
-
 	// Write the full result to disk.
-	if err := os.WriteFile(filepath, []byte(result), 0600); err != nil {
+	if err := fileutil.WriteFilePrivate(filepath, []byte(result)); err != nil {
 		m.logger.Error(ctx, "MCP: truncateToolOutput: failed to write file", err, "path", filepath)
 		// Fall back to simple truncation.
 		return hardTruncate(result, maxChars, toolName)
@@ -69,20 +65,7 @@ func hardTruncate(result string, maxChars int, _ string) string {
 
 // sanitizeForFilename replaces characters that are problematic in filenames.
 func sanitizeForFilename(name string) string {
-	// Replace MCP prefix separator and other special chars.
-	r := strings.NewReplacer(
-		"/", "_",
-		"\\", "_",
-		":", "_",
-		"*", "_",
-		"?", "_",
-		"\"", "_",
-		"<", "_",
-		">", "_",
-		"|", "_",
-		" ", "_",
-	)
-	return r.Replace(name)
+	return strutil.SanitizeFilename(name, 0)
 }
 
 // cleanupOldToolResults removes tool result files older than maxAge from fileDir.

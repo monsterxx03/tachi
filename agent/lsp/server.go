@@ -14,7 +14,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/retry"
+	"github.com/monsterxx03/tachi/pkg/syncx"
 )
 
 // ServerState represents the current state of an LSP server instance.
@@ -53,7 +56,7 @@ type LSPServer struct {
 	startCh chan struct{}
 
 	// sem limits concurrent requests to this server (concurrency_limit).
-	sem chan struct{}
+	sem *syncx.Semaphore
 
 	// capabilities from the server's InitializeResult, used for capability
 	// pre-checks before sending operations.
@@ -89,7 +92,7 @@ func NewLSPServer(name string, cfg ServerConfig, rootURI string, l *logger.Logge
 		cfg:       cfg,
 		log:       l.NewSub(name),
 		rootURI:   rootURI,
-		sem:       make(chan struct{}, concurrencyLimit),
+		sem:       syncx.NewSemaphore(concurrencyLimit),
 		openFiles: make(map[string]struct{}),
 		diags:     make(map[string][]Diagnostic),
 		settings:  cfg.Settings,
@@ -336,27 +339,23 @@ func (s *LSPServer) Call(ctx context.Context, method string, params, result any)
 	}
 
 	// Acquire semaphore slot (concurrency control).
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	case <-ctx.Done():
-		return ctx.Err()
+	if err := s.sem.Acquire(ctx); err != nil {
+		return err
 	}
+	defer s.sem.Release()
 
 	// ContentModified exponential backoff (error code -32801).
+	backoff := retry.Backoff{BaseDelay: 500 * time.Millisecond, MaxDelay: 2 * time.Second}
 	for attempt := range 4 {
 		err := s.conn.Call(ctx, method, params, result)
 		if err == nil {
 			return nil
 		}
 		if isContentModified(err) && attempt < 3 {
-			delay := time.Duration(500*(1<<attempt)) * time.Millisecond
-			select {
-			case <-time.After(delay):
-				continue
-			case <-ctx.Done():
-				return ctx.Err()
+			if err := retry.Sleep(ctx, backoff.Delay(attempt+1)); err != nil {
+				return err
 			}
+			continue
 		}
 		return err
 	}
@@ -371,12 +370,10 @@ func (s *LSPServer) Notify(ctx context.Context, method string, params any) error
 
 	// Acquire semaphore slot for notification too, to prevent excessive
 	// concurrent writes to the server's stdin.
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	case <-ctx.Done():
-		return ctx.Err()
+	if err := s.sem.Acquire(ctx); err != nil {
+		return err
 	}
+	defer s.sem.Release()
 
 	return s.conn.Notify(ctx, method, params)
 }
@@ -462,7 +459,7 @@ func (s *LSPServer) CloseMissingFiles(ctx context.Context) {
 	var missing []string
 	for uri := range s.openFiles {
 		path := URItoPath(uri)
-		if _, err := os.Stat(path); os.IsNotExist(err) {
+		if !fileutil.Exists(path) {
 			missing = append(missing, uri)
 		}
 	}

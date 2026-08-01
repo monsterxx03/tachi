@@ -1,13 +1,14 @@
 package weixin
 
 import (
-	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // stateStore manages persistent state on disk for the Weixin channel.
@@ -63,25 +64,13 @@ func (s *stateStore) allowFromPath(accountID string) string {
 func (s *stateStore) loadJSON(path string, v any) error {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return err
-	}
-	return json.Unmarshal(data, v)
+	return fileutil.ReadJSON(path, v)
 }
 
 func (s *stateStore) saveJSON(path string, v any) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return err
-	}
-	data, err := json.MarshalIndent(v, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(path, data, 0600)
+	return fileutil.WriteJSONPrivate(path, v)
 }
 
 // --- Accounts ---

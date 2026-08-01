@@ -5,10 +5,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -16,9 +14,10 @@ import (
 
 	md "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/netutil"
-	"github.com/monsterxx03/tachi/pkg/proxy"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -129,11 +128,7 @@ func (t *WebFetchTool) init() {
 		if t.pause == nil {
 			t.pause = &pauseStore{path: config.WebFetchPausePath()}
 		}
-		c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
-		if err != nil {
-			c = &http.Client{Timeout: t.Timeout}
-		}
-		t.client = c
+		t.client = httpx.NewClient(t.Timeout, t.Proxy)
 	})
 }
 
@@ -444,7 +439,7 @@ func (b *nativeBackend) Fetch(ctx context.Context, client *http.Client, u string
 	}
 
 	// Read body with size limit.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxContentBytes))
+	body, _, err := httpx.ReadAllLimitedLenient(resp.Body, webFetchMaxContentBytes)
 	if err != nil {
 		return webFetchFetchResult{}, &searchErr{kind: errOther, message: fmt.Sprintf("read body: %v", err)}
 	}
@@ -528,7 +523,7 @@ func (b *firecrawlBackend) Fetch(ctx context.Context, client *http.Client, u str
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(io.LimitReader(resp.Body, webFetchMaxContentBytes))
+	respBody, _, err := httpx.ReadAllLimitedLenient(resp.Body, webFetchMaxContentBytes)
 	if err != nil {
 		return webFetchFetchResult{}, &searchErr{kind: errOther, message: fmt.Sprintf("read firecrawl response: %v", err)}
 	}
@@ -804,14 +799,8 @@ func (t *WebFetchTool) truncateWebFetchOutput(ctx context.Context, content strin
 	filename := fmt.Sprintf("webfetch_%s_%d.txt", safeName, time.Now().UnixNano())
 	filepath := filepath.Join(t.ResultBaseDir, filename)
 
-	// Ensure the directory exists.
-	if err := os.MkdirAll(t.ResultBaseDir, 0700); err != nil {
-		logger.FromContext(ctx).Error(ctx, "WebFetch: truncateWebFetchOutput: failed to create dir", err, "dir", t.ResultBaseDir)
-		return hardTruncateWebFetch(content, maxChars)
-	}
-
 	// Write the full result to disk.
-	if err := os.WriteFile(filepath, []byte(content), 0600); err != nil {
+	if err := fileutil.WriteFilePrivate(filepath, []byte(content)); err != nil {
 		logger.FromContext(ctx).Error(ctx, "WebFetch: truncateWebFetchOutput: failed to write file", err, "path", filepath)
 		return hardTruncateWebFetch(content, maxChars)
 	}

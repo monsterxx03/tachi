@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // Max file sizes for CDN download.
@@ -50,7 +51,7 @@ func (ch *Channel) saveFile(userID string, filename string, data []byte) (string
 		return "", fmt.Errorf("close file: %w", err)
 	}
 
-	ch.logger.Info(context.Background(), "weixin: saved file", "file", filename, "size", humanSize(len(data)), "path", path)
+	ch.logger.Info(context.Background(), "weixin: saved file", "file", filename, "size", strutil.HumanBytes(int64(len(data))), "path", path)
 	return path, nil
 }
 
@@ -212,7 +213,7 @@ func (ch *Channel) processMedia(refs []MediaRef, userID string) []channel.Attach
 					att.TextContent = string(data)
 				} else {
 					att.TextContent = string(data[:maxTextContentChars]) +
-						"\n... [文件过大，已截断，共 " + humanSize(len(data)) + "]"
+						"\n... [文件过大，已截断，共 " + strutil.HumanBytes(int64(len(data))) + "]"
 				}
 			} else {
 				att.MimeType = guessMimeType(ref.FileName)
@@ -249,15 +250,4 @@ func attachmentTypeFromMedia(mediaType int) channel.AttachmentType {
 	default:
 		return channel.AttachmentTypeFile
 	}
-}
-
-// humanSize formats a byte count as a human-readable string.
-func humanSize(n int) string {
-	if n < 1024 {
-		return fmt.Sprintf("%dB", n)
-	}
-	if n < 1024*1024 {
-		return fmt.Sprintf("%.1fKB", float64(n)/1024)
-	}
-	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
 }

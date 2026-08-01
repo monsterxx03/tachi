@@ -6,11 +6,12 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
+	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -19,7 +20,7 @@ import (
 type Executor struct {
 	agent       Agent
 	cfg         config.SubagentConfig
-	sem         chan struct{} // concurrency semaphore
+	sem         *syncx.Semaphore // concurrency semaphore
 	worktreeMgr *WorktreeManager
 }
 
@@ -32,7 +33,7 @@ func NewExecutor(a Agent, cfg config.SubagentConfig) *Executor {
 	return &Executor{
 		agent: a,
 		cfg:   cfg,
-		sem:   make(chan struct{}, maxConc),
+		sem:   syncx.NewSemaphore(maxConc),
 	}
 }
 
@@ -71,12 +72,10 @@ func (e *Executor) RunSubagent(
 	args tools.SubagentArgs,
 ) (string, string, *tools.SubagentResult, error) {
 	// Acquire concurrency semaphore
-	select {
-	case e.sem <- struct{}{}:
-		defer func() { <-e.sem }()
-	case <-ctx.Done():
-		return "", "", nil, ctx.Err()
+	if err := e.sem.Acquire(ctx); err != nil {
+		return "", "", nil, err
 	}
+	defer e.sem.Release()
 
 	provider := e.agent.SubagentProvider()
 
@@ -85,7 +84,7 @@ func (e *Executor) RunSubagent(
 		maxIterations = DefaultMaxIterations
 	}
 
-	shortID := uuid.New().String()[:8]
+	shortID := strutil.ShortUUID(8)
 	thinking := e.cfg.Thinking
 	branch := args.WorktreeBranch
 

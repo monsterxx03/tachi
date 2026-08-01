@@ -12,6 +12,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -725,15 +726,7 @@ func formatToolCallSummary(tc map[string]int) string {
 }
 
 func truncate(s string, maxLen int) string {
-	lines := strings.Split(s, "\n")
-	if len(lines) > 1 {
-		s = lines[0]
-	}
-	runes := []rune(s)
-	if len(runes) > maxLen {
-		return string(runes[:maxLen]) + "..."
-	}
-	return s
+	return strutil.FirstLineOrTruncate(s, maxLen)
 }
 
 // truncateThinking collapses a thinking block to show only the last N lines,
@@ -754,24 +747,12 @@ func getToolArgsPreview(name, argsJSON string) string {
 	// Truncate long summaries for TUI preview display.
 	switch name {
 	case tools.ToolNameBash, tools.ToolNameWebSearch:
-		runes := []rune(summary)
-		if len(runes) > 60 {
-			return string(runes[:57]) + "…"
-		}
-		return summary
+		return strutil.TruncateFitted(summary, 60)
 	case tools.ToolNameWebFetch:
-		runes := []rune(summary)
-		if len(runes) > 60 {
-			return "WebFetch: " + string(runes[:57]) + "…"
-		}
-		return "WebFetch: " + summary
+		return "WebFetch: " + strutil.TruncateFitted(summary, 60)
 	case tools.ToolNameSubAgent:
 		// ToolArgsSummary already returns "[branch] prompt" or just "prompt"
-		runes := []rune(summary)
-		if len(runes) > 60 {
-			return string(runes[:57]) + "…"
-		}
-		return summary
+		return strutil.TruncateFitted(summary, 60)
 	}
 	return summary
 }

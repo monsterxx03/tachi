@@ -15,8 +15,8 @@ import (
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/go-github/v69/github"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/pkg/proxy"
 	"golang.org/x/oauth2"
 )
 
@@ -53,15 +53,9 @@ func NewGitHubClientFromApp(ctx context.Context, appID int64, privateKeyPath str
 	}
 
 	// Build a proxy-enabled HTTP client for installation token requests.
-	var httpClient *http.Client
-	if proxyURL != "" {
-		httpClient, err = proxy.NewHTTPClient(proxyURL, 30*time.Second)
-		if err != nil {
-			return nil, fmt.Errorf("github: create proxy client: %w", err)
-		}
-	} else {
-		httpClient = &http.Client{Timeout: 30 * time.Second}
-	}
+	// An invalid proxy config falls back to a plain client (with a warning
+	// logged by httpx.NewClient).
+	httpClient := httpx.NewClient(30*time.Second, proxyURL)
 
 	// Create a token source that generates a fresh installation token when needed.
 	ts := &appTokenSource{
@@ -122,13 +116,15 @@ type installationTokenResponse struct {
 // and optionally routes through a proxy.
 //
 // When proxyURL is non-empty, all HTTP requests go through that proxy.
-// Supported proxy schemes: http, https, socks5 (see pkg/proxy).
+// Supported proxy schemes: http, https, socks5 (see pkg/httpx).
 func newOAuthClient(ctx context.Context, ts oauth2.TokenSource, proxyURL string) *http.Client {
 	baseTransport := http.DefaultTransport
 
 	if proxyURL != "" {
-		proxyClient, err := proxy.NewHTTPClient(proxyURL, 30*time.Second)
-		if err == nil && proxyClient.Transport != nil {
+		// httpx.NewClient falls back to a plain client when the proxy config
+		// is invalid; its Transport is nil then, so the DefaultTransport
+		// stays in effect (same behavior as the previous explicit check).
+		if proxyClient := httpx.NewClient(30*time.Second, proxyURL); proxyClient.Transport != nil {
 			baseTransport = proxyClient.Transport
 		}
 	}
@@ -397,13 +393,12 @@ func (c *Config) ResolveInstallationToken(ctx context.Context) (string, error) {
 		return "", err
 	}
 
-	// Build a proxy-enabled HTTP client if configured.
+	// Build a proxy-enabled HTTP client if configured. An invalid proxy
+	// config falls back to a plain client (with a warning logged by
+	// httpx.NewClient).
 	var httpClient *http.Client
 	if c.Proxy != "" {
-		httpClient, err = proxy.NewHTTPClient(c.Proxy, 30*time.Second)
-		if err != nil {
-			return "", fmt.Errorf("github: create proxy client: %w", err)
-		}
+		httpClient = httpx.NewClient(30*time.Second, c.Proxy)
 	}
 
 	result, err := requestInstallationToken(ctx, app.InstallationID, jwtStr, httpClient)

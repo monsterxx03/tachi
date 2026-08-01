@@ -12,6 +12,7 @@ import (
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -189,11 +190,11 @@ func createNewFile(ctx context.Context, filePath, content string) (string, error
 		}
 	}
 
-	if _, err := os.Stat(filePath); err == nil {
+	if fileutil.Exists(filePath) {
 		return "", fmt.Errorf("file already exists: %s (use a non-empty old_string to edit it)", filePath)
 	}
 
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+	if err := fileutil.WriteFileShared(filePath, []byte(content)); err != nil {
 		return "", fmt.Errorf("failed to create file: %w", err)
 	}
 	return fmt.Sprintf("Created new file %s (%d bytes)", filePath, len(content)), nil
@@ -246,7 +247,7 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 		newContent = strings.Replace(content, actualOld, newString, 1)
 	}
 
-	if err := os.WriteFile(filePath, []byte(newContent), info.Mode().Perm()); err != nil {
+	if err := fileutil.WriteFile(filePath, []byte(newContent), 0o755, info.Mode().Perm()); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

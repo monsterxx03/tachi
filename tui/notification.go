@@ -8,6 +8,7 @@ import (
 	"sync"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 const maxNotifyBodyLen = 200
@@ -55,8 +56,7 @@ func notifyTerminal(title, body string) {
 	// Truncate body to a reasonable character (rune) count to avoid
 	// splitting multi-byte UTF-8 characters.
 	if len([]rune(body)) > maxNotifyBodyLen {
-		runes := []rune(body)
-		body = string(runes[:maxNotifyBodyRunes]) + "..."
+		body = strutil.Truncate(body, maxNotifyBodyRunes)
 	}
 
 	go func() {

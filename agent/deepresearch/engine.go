@@ -15,7 +15,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -24,6 +23,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -513,13 +513,7 @@ func (dr *DeepResearch) reportPath(topic string) string {
 // Creates the parent directory if it doesn't exist.
 // Returns the file path, or empty string on failure (failures are logged, not fatal).
 func (dr *DeepResearch) saveReport(filePath string, content string) string {
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		dr.log("DeepResearch: failed to create research dir %s: %v", dir, err)
-		return ""
-	}
-
-	if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
+	if err := fileutil.WriteFileShared(filePath, []byte(content)); err != nil {
 		dr.log("DeepResearch: failed to save report to %s: %v", filePath, err)
 		return ""
 	}

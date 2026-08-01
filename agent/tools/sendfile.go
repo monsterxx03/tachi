@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // SendFileCallback is set by the channel manager when registering the
@@ -97,7 +98,7 @@ func (t *SendFileTool) ExecuteContext(ctx context.Context, args string) (string,
 		t.callback(fileName, mimeType, filePath)
 	}
 
-	return fmt.Sprintf("✅ 文件 **%s** (%s) 已加入发送队列", fileName, humanFileSize(int(info.Size()))), nil
+	return fmt.Sprintf("✅ 文件 **%s** (%s) 已加入发送队列", fileName, strutil.HumanBytes(info.Size())), nil
 }
 
 // inferMimeType returns a best-effort MIME type for the given filename.
@@ -144,19 +145,5 @@ func inferMimeType(name string) string {
 		return "text/typescript"
 	default:
 		return "application/octet-stream"
-	}
-}
-
-// humanFileSize formats bytes as a human-readable string.
-func humanFileSize(n int) string {
-	switch {
-	case n < 1024:
-		return fmt.Sprintf("%d B", n)
-	case n < 1024*1024:
-		return fmt.Sprintf("%.1f KB", float64(n)/1024)
-	case n < 1024*1024*1024:
-		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
-	default:
-		return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
 	}
 }

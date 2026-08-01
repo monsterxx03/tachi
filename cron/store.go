@@ -4,9 +4,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // Store handles cron job persistence to a JSON file.
@@ -161,28 +162,8 @@ func (s *Store) saveLocked(data *storeData) error {
 		data.Jobs = []*Job{}
 	}
 
-	serialized, err := json.MarshalIndent(data, "", "  ")
-	if err != nil {
-		return fmt.Errorf("cron store marshal: %w", err)
+	if err := fileutil.AtomicWriteJSONPrivate(s.path, data); err != nil {
+		return fmt.Errorf("cron store save: %w", err)
 	}
-
-	// Ensure directory exists.
-	dir := filepath.Dir(s.path)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("cron store mkdir: %w", err)
-	}
-
-	// Atomic write: write to tmp file, then rename.
-	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, serialized, 0600); err != nil {
-		return fmt.Errorf("cron store write tmp: %w", err)
-	}
-
-	if err := os.Rename(tmpPath, s.path); err != nil {
-		// Clean up tmp file on failure.
-		os.Remove(tmpPath)
-		return fmt.Errorf("cron store rename: %w", err)
-	}
-
 	return nil
 }

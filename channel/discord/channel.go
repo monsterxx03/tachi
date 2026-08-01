@@ -19,8 +19,8 @@ import (
 	"github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	tachiproxy "github.com/monsterxx03/tachi/pkg/proxy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -165,10 +165,7 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 	cacheDir := filepath.Join(config.BaseDir(), "discord", "cache")
 
 	// Initialize HTTP client with optional proxy.
-	httpClient, err := tachiproxy.NewHTTPClient(dc.Proxy, 30*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("discord: create HTTP client: %w", err)
-	}
+	httpClient := httpx.NewClient(30*time.Second, dc.Proxy)
 
 	return &DiscordChannel{
 		cfg:                   dc,
@@ -864,14 +861,12 @@ func (ch *DiscordChannel) applyProxy(ctx context.Context, sess *discordgo.Sessio
 	}
 
 	// --- REST API: set HTTP client with proxy transport ---
-	httpClient, err := tachiproxy.NewHTTPClient(proxyURL, 30*time.Second)
-	if err != nil {
-		return fmt.Errorf("create proxy HTTP client: %w", err)
-	}
-	sess.Client = httpClient
+	// An invalid proxy config falls back to a plain client (warned by
+	// httpx.NewClient); the WebSocket dialer below still reports errors.
+	sess.Client = httpx.NewClient(30*time.Second, proxyURL)
 
 	// --- Gateway WebSocket: set proxy dialer ---
-	proxyDialer, err := tachiproxy.NewDialer(proxyURL)
+	proxyDialer, err := httpx.NewDialer(proxyURL)
 	if err != nil {
 		return fmt.Errorf("create proxy dialer: %w", err)
 	}

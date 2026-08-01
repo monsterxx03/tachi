@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // EventType enumerates the kinds of atomic events in an agent execution trace.
@@ -99,7 +100,7 @@ func Subevents(ev *Event) []Event {
 // MarshalJSON serializes a Transcript to JSON with indentation.
 func (t *Transcript) MarshalJSON() ([]byte, error) {
 	type alias Transcript
-	return json.MarshalIndent((*alias)(t), "", "  ")
+	return fileutil.MarshalJSON((*alias)(t))
 }
 
 // UnmarshalJSON deserializes JSON into a Transcript.

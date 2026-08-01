@@ -6,6 +6,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -56,7 +57,7 @@ func approxTokenCount(s string) int64 {
 			}
 		} else {
 			flushWord()
-			if isCJK(r) {
+			if strutil.IsCJK(r) {
 				total++ // ~1 token per CJK character
 			} else {
 				// Other Unicode: approximate by byte length
@@ -72,18 +73,6 @@ func approxTokenCount(s string) int64 {
 // isASCIIAlphaNum reports whether r is an ASCII letter or digit.
 func isASCIIAlphaNum(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
-}
-
-// isCJK reports whether r is a CJK character (Chinese/Japanese/Korean).
-// Covers the most common Unicode blocks: CJK Unified Ideographs, Hiragana,
-// Katakana, and Hangul.
-func isCJK(r rune) bool {
-	return (r >= 0x4E00 && r <= 0x9FFF) || // CJK Unified Ideographs
-		(r >= 0x3400 && r <= 0x4DBF) || // CJK Unified Ideographs Extension A
-		(r >= 0x20000 && r <= 0x2A6DF) || // CJK Unified Ideographs Extension B
-		(r >= 0x3040 && r <= 0x309F) || // Hiragana
-		(r >= 0x30A0 && r <= 0x30FF) || // Katakana
-		(r >= 0xAC00 && r <= 0xD7AF) // Hangul Syllables
 }
 
 // EstimateContentTokens converts session messages to llm.Message (via

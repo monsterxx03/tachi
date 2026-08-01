@@ -4,12 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -64,13 +64,7 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return fmt.Sprintf("Successfully wrote via ACP to %s (%d bytes)", argsMap.Path, len(argsMap.Content)), nil
 	}
 
-	// Ensure parent directory exists
-	dir := filepath.Dir(filePath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return "", fmt.Errorf("failed to create directory: %w", err)
-	}
-
-	if err := os.WriteFile(filePath, []byte(argsMap.Content), 0644); err != nil {
+	if err := fileutil.WriteFileShared(filePath, []byte(argsMap.Content)); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

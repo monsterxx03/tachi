@@ -12,8 +12,8 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/pkg/proxy"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -129,11 +129,7 @@ func (t *WebSearchTool) init() {
 		if t.pause == nil {
 			t.pause = &pauseStore{path: config.WebSearchPausePath()}
 		}
-		c, err := proxy.NewHTTPClient(t.Proxy, t.Timeout)
-		if err != nil {
-			c = &http.Client{Timeout: t.Timeout}
-		}
-		t.client = c
+		t.client = httpx.NewClient(t.Timeout, t.Proxy)
 	})
 }
 

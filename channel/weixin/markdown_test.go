@@ -3,6 +3,8 @@ package weixin
 import (
 	"strings"
 	"testing"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // =============================================================================
@@ -514,9 +516,9 @@ func TestIsCJK(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(string(tt.r), func(t *testing.T) {
-			got := isCJK(tt.r)
+			got := strutil.IsCJK(tt.r)
 			if got != tt.want {
-				t.Errorf("isCJK(%q) = %v, want %v", tt.r, got, tt.want)
+				t.Errorf("IsCJK(%q) = %v, want %v", tt.r, got, tt.want)
 			}
 		})
 	}

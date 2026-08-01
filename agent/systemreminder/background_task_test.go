@@ -138,7 +138,7 @@ func TestBackgroundTaskReminder_TailTruncation(t *testing.T) {
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 line, got %d", len(lines))
 	}
-	if !strings.Contains(lines[0], "(truncated, showing tail 10KB)") {
+	if !strings.Contains(lines[0], "(truncated, showing tail 10.0 KB)") {
 		t.Errorf("expected truncation notice, got: %s", lines[0])
 	}
 	// Should end with the last lines of output
@@ -158,7 +158,7 @@ func TestTailSnippet_NoTruncation(t *testing.T) {
 func TestTailSnippet_Truncation(t *testing.T) {
 	s := "a\n" + strings.Repeat("x", 100) + "\nend"
 	result := tailSnippet(s, 20)
-	if !strings.Contains(result, "(truncated, showing tail 20B)") {
+	if !strings.Contains(result, "(truncated, showing tail 20 B)") {
 		t.Errorf("expected truncation notice, got: %s", result)
 	}
 	if !strings.HasSuffix(result, "end") {

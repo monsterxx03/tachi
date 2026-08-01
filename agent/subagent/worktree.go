@@ -10,11 +10,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 const maxPatchSize = 32 * 1024 // 32KB max patch output
@@ -94,7 +94,7 @@ func (wm *WorktreeManager) createWorktree(ctx context.Context, branch string) (s
 		return "", fmt.Errorf("branch name %q looks like a remote tracking ref; use %q instead", branch, trimmed)
 	}
 
-	worktreeName := "tachi-subagent-" + uuid.New().String()[:8]
+	worktreeName := "tachi-subagent-" + strutil.ShortUUID(8)
 	worktreePath := filepath.Join(wm.worktreeDir, worktreeName)
 
 	args := []string{"worktree", "add", "--detach", worktreePath}

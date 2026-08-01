@@ -10,13 +10,13 @@ import (
 	"strings"
 
 	"github.com/google/go-github/v69/github"
-	"github.com/google/uuid"
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/set"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -54,7 +54,7 @@ func generateBranchName(issueNum int, title string) string {
 	}
 
 	// Append short UUID to prevent collisions on retry.
-	suffix := uuid.New().String()[:8]
+	suffix := strutil.ShortUUID(8)
 	return fmt.Sprintf("tachi/issue-%d-%s-%s", issueNum, sanitized, suffix)
 }
 
@@ -87,7 +87,7 @@ type prWorktree struct {
 
 // createWorktree creates a git worktree from the local clone.
 func (wt *prWorktree) create(ctx context.Context, branch, baseBranch string) error {
-	wtName := "tachi-pr-" + uuid.New().String()[:8]
+	wtName := "tachi-pr-" + strutil.ShortUUID(8)
 	wt.wtPath = filepath.Join(os.TempDir(), wtName)
 	wt.name = wtName
 
@@ -242,11 +242,7 @@ func RunPRGeneration(ctx context.Context, cfg *PRGenerationConfig) *PRResult {
 func checkPRGate(issue *github.Issue, labels []*github.Label, allowedAssociations []string, gateLabel string) (bool, string) {
 	// Check author association.
 	assoc := issue.GetAuthorAssociation()
-	allowed := make(map[string]bool, len(allowedAssociations))
-	for _, a := range allowedAssociations {
-		allowed[a] = true
-	}
-	if allowed[assoc] {
+	if set.New(allowedAssociations...).Has(assoc) {
 		return true, ""
 	}
 

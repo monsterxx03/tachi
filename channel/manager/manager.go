@@ -18,6 +18,7 @@ import (
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/lockedmap"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -161,7 +162,7 @@ type Manager struct {
 	// /review N runs could otherwise saturate provider quotas (each round
 	// is a full fork × up to 200 iterations). Full → commands reject with a
 	// hint instead of silently queueing behind ca.mu.
-	oneoffSem chan struct{}
+	oneoffSem *syncx.Semaphore
 
 	// Shared ProcessManager for background processes across all agent turns.
 	// Per-turn AIAgent instances are ephemeral, but background processes must
@@ -200,17 +201,15 @@ type Manager struct {
 
 	logger *logger.Logger
 
-	// wg tracks running channel goroutines. Done() returns a channel that
+	// group tracks running channel goroutines. Done() returns a channel that
 	// closes when all channel goroutines have exited.
-	wg   sync.WaitGroup
-	done chan struct{}
-	once sync.Once
+	group *syncx.Group
 }
 
 // Done returns a channel that is closed when all registered channel goroutines
 // have exited. Useful for runChannels to know when to stop waiting.
 func (m *Manager) Done() <-chan struct{} {
-	return m.done
+	return m.group.Done()
 }
 
 // threadActivation holds the state for an active agent turn on a thread.
@@ -277,10 +276,10 @@ func New(mcfg Config) *Manager {
 		agentCache:     make(map[string]*cachedAgent),
 		processManager: tools.NewProcessManager(),
 		logger:         logger.New("channel"),
-		done:           make(chan struct{}),
+		group:          syncx.NewGroup(),
 		threadChannels: make(map[string]channel.Channel),
 		oneoffCancels:  make(map[string]context.CancelFunc),
-		oneoffSem:      make(chan struct{}, maxOneoffConcurrency),
+		oneoffSem:      syncx.NewSemaphore(maxOneoffConcurrency),
 	}
 }
 
@@ -323,9 +322,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		// buildAgent can later check whether the channel is interactive.
 		handler := m.buildHandlerForChannel(ch, baseHandler)
 
-		m.wg.Add(1)
-		go func(ch channel.Channel) {
-			defer m.wg.Done()
+		m.group.Go(func() {
 			m.logger.Info(ctx, "channel: starting", "name", ch.Name())
 
 			// Inject CommandHandler if this channel supports it.
@@ -365,14 +362,11 @@ func (m *Manager) Start(ctx context.Context) error {
 			} else {
 				m.logger.Info(ctx, "channel: exited cleanly", "name", ch.Name())
 			}
-		}(ch)
+		})
 	}
 
 	// Wait for all channel goroutines to exit and signal Done().
-	go func() {
-		m.wg.Wait()
-		m.once.Do(func() { close(m.done) })
-	}()
+	go m.group.Wait()
 
 	// Start cron scheduler after channels are initialized.
 	if m.scheduler != nil {

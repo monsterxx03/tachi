@@ -5,7 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 func (i *InputArea) loadInputHistoryFile(path string, limit int) []string {
@@ -35,17 +36,9 @@ func (i *InputArea) saveInputHistoryFile(path string, entries []string) error {
 	if path == "" {
 		return nil
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o700); err != nil {
-		return err
-	}
 	data, err := json.Marshal(entries)
 	if err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return fileutil.AtomicWriteFilePrivate(path, data)
 }

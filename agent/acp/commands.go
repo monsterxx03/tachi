@@ -19,6 +19,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -710,7 +711,7 @@ func handleACPTranscript(ctx context.Context, sess *ACPSession, conn *acp.AgentS
 	// Save to a temp file and return the path (no browser opening in ACP mode)
 	tmpDir := os.TempDir()
 	filename := filepath.Join(tmpDir, fmt.Sprintf("tachi-transcript-%s.html", curr.ID[:8]))
-	if err := os.WriteFile(filename, []byte(html), 0644); err != nil {
+	if err := fileutil.WriteFileShared(filename, []byte(html)); err != nil {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to save transcript: %v", err))
 		return acp.StopReasonEndTurn, nil
 	}

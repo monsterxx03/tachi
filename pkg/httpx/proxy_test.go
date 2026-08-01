@@ -1,4 +1,4 @@
-package proxy
+package httpx
 
 import (
 	"testing"
@@ -6,7 +6,7 @@ import (
 )
 
 func TestNewHTTPClient_EmptyURL(t *testing.T) {
-	client, err := NewHTTPClient("", 10*time.Second)
+	client, err := newHTTPClient("", 10*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -19,7 +19,7 @@ func TestNewHTTPClient_EmptyURL(t *testing.T) {
 }
 
 func TestNewHTTPClient_HTTPScheme(t *testing.T) {
-	client, err := NewHTTPClient("http://127.0.0.1:8080", 5*time.Second)
+	client, err := newHTTPClient("http://127.0.0.1:8080", 5*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -32,7 +32,7 @@ func TestNewHTTPClient_HTTPScheme(t *testing.T) {
 }
 
 func TestNewHTTPClient_SOCKS5Scheme(t *testing.T) {
-	client, err := NewHTTPClient("socks5://127.0.0.1:1080", 3*time.Second)
+	client, err := newHTTPClient("socks5://127.0.0.1:1080", 3*time.Second)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -45,15 +45,38 @@ func TestNewHTTPClient_SOCKS5Scheme(t *testing.T) {
 }
 
 func TestNewHTTPClient_InvalidURL(t *testing.T) {
-	_, err := NewHTTPClient(" ://bad", 1*time.Second)
+	_, err := newHTTPClient(" ://bad", 1*time.Second)
 	if err == nil {
 		t.Fatal("expected error for invalid URL")
 	}
 }
 
 func TestNewHTTPClient_UnsupportedScheme(t *testing.T) {
-	_, err := NewHTTPClient("ftp://127.0.0.1:21", 1*time.Second)
+	_, err := newHTTPClient("ftp://127.0.0.1:21", 1*time.Second)
 	if err == nil {
 		t.Fatal("expected error for unsupported scheme")
+	}
+}
+
+func TestNewDialer(t *testing.T) {
+	// Empty URL returns the standard net.Dial.
+	dial, err := NewDialer("")
+	if err != nil {
+		t.Fatalf("NewDialer empty: %v", err)
+	}
+	if dial == nil {
+		t.Fatal("NewDialer empty returned nil")
+	}
+
+	// Supported schemes.
+	for _, u := range []string{"http://127.0.0.1:8080", "https://127.0.0.1:8080", "socks5://127.0.0.1:1080"} {
+		if _, err := NewDialer(u); err != nil {
+			t.Errorf("NewDialer(%q): %v", u, err)
+		}
+	}
+
+	// Unsupported scheme.
+	if _, err := NewDialer("ftp://127.0.0.1:21"); err == nil {
+		t.Error("expected error for unsupported scheme")
 	}
 }

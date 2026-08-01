@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 )
 
 // ── Brave ────────────────────────────────────────────────────────────────
@@ -38,7 +39,7 @@ func (p *braveProvider) Search(ctx context.Context, client *http.Client, query s
 	params.Set("offset", "0")
 	params.Set("mkt", "en-US")
 
-	reqURL := fmt.Sprintf("%s/res/v1/web/search?%s", strings.TrimSuffix(base, "/"), params.Encode())
+	reqURL := httpx.JoinURL(base, "res/v1/web/search") + "?" + params.Encode()
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
 	if err != nil {
 		return nil, &searchErr{kind: errOther, message: fmt.Sprintf("failed to create request: %v", err)}
@@ -108,7 +109,7 @@ func (p *exaProvider) Search(ctx context.Context, client *http.Client, query str
 	if base == "" {
 		base = exaDefaultBaseURL
 	}
-	reqURL := strings.TrimSuffix(base, "/") + "/search"
+	reqURL := httpx.JoinURL(base, "search")
 
 	payload := map[string]any{
 		"query":      query,
@@ -186,31 +187,20 @@ func (p *exaProvider) Search(ctx context.Context, client *http.Client, query str
 //   - Everything else → errOther.
 func classifyError(status int, body string, headers http.Header) *searchErr {
 	msg := fmt.Sprintf("API error (status %d): %s", status, body)
-	switch {
-	case status == http.StatusPaymentRequired:
+	kind := httpx.ClassifyError(status, body)
+	// Brave reports monthly quota exhaustion via the X-RateLimit-Remaining
+	// header (a bare 429 body alone is ambiguous) — upgrade to quota.
+	if kind == httpx.KindRateLimit && monthlyQuotaExhausted(headers) {
+		kind = httpx.KindQuota
+	}
+	switch kind {
+	case httpx.KindQuota:
 		return &searchErr{kind: errQuota, message: msg}
-	case status == http.StatusTooManyRequests:
-		if monthlyQuotaExhausted(headers) || quotaExhaustedBody(body) {
-			return &searchErr{kind: errQuota, message: msg}
-		}
+	case httpx.KindRateLimit:
 		return &searchErr{kind: errRateLimit, message: msg}
-	case quotaExhaustedBody(body):
-		return &searchErr{kind: errQuota, message: msg}
 	default:
 		return &searchErr{kind: errOther, message: msg}
 	}
-}
-
-// quotaExhaustedBody detects explicit credit/budget exhaustion wording in an
-// API error body. Deliberately narrow — a bare "rate limit" or "quota" word
-// is NOT enough (e.g. Brave's 429 body embeds quota_limit/quota_current
-// metadata even when only the per-second limit was hit).
-func quotaExhaustedBody(body string) bool {
-	lower := strings.ToLower(body)
-	return strings.Contains(lower, "no more credits") ||
-		strings.Contains(lower, "credits exhausted") ||
-		strings.Contains(lower, "insufficient credits") ||
-		strings.Contains(lower, "budget exceeded")
 }
 
 // monthlyQuotaExhausted reports whether the monthly quota window is empty,

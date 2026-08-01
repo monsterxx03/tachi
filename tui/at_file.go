@@ -14,7 +14,9 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/pathtrie"
+	"github.com/monsterxx03/tachi/pkg/set"
 )
 
 // --- Cached trie ---
@@ -67,19 +69,16 @@ func (i *InputArea) getCachedTrie() (*pathtrie.PathTrie, error) {
 	}
 
 	// Step 2: 强制包含 .tachi 目录下的所有文件（即使被 .gitignore）
-	if info, err := os.Stat(filepath.Join(cwd, ".tachi")); err == nil && info.IsDir() {
+	if fileutil.IsDir(filepath.Join(cwd, ".tachi")) {
 		tachiCmd := exec.CommandContext(ctx, "rg", "--files", "--hidden", "--no-ignore-vcs", "--glob", "!.git", ".tachi")
 		tachiCmd.Dir = cwd
 		if tachiOutput, err := tachiCmd.Output(); err == nil {
-			seen := make(map[string]bool, len(paths))
-			for _, p := range paths {
-				seen[p] = true
-			}
+			seen := set.New(paths...)
 			for line := range strings.SplitSeq(strings.TrimSpace(string(tachiOutput)), "\n") {
 				line = strings.TrimSpace(line)
-				if line != "" && !seen[line] {
+				if line != "" && !seen.Has(line) {
 					paths = append(paths, filepath.ToSlash(line))
-					seen[line] = true
+					seen.Add(line)
 				}
 			}
 		}

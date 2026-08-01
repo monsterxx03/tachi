@@ -12,6 +12,7 @@ import (
 	"github.com/creasty/defaults"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"gopkg.in/yaml.v3"
 )
@@ -70,7 +71,7 @@ func FindProjectRoot() string {
 	dir := cwd
 	for {
 		gitPath := filepath.Join(dir, ".git")
-		if _, err := os.Stat(gitPath); err == nil {
+		if fileutil.Exists(gitPath) {
 			return dir
 		}
 		parent := filepath.Dir(dir)
@@ -1005,7 +1006,7 @@ func Save(cfg *Config) error {
 	}
 
 	path := filepath.Join(dir, configFileName)
-	return os.WriteFile(path, data, 0600)
+	return fileutil.WriteFilePrivate(path, data)
 }
 
 func Init() (string, error) {

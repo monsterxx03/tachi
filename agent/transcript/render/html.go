@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/transcript"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -504,7 +505,7 @@ func formatArgsJSON(raw string) string {
 	if err := json.Unmarshal([]byte(raw), &v); err != nil {
 		return raw // Not valid JSON, return as-is.
 	}
-	pretty, err := json.MarshalIndent(v, "", "  ")
+	pretty, err := fileutil.MarshalJSON(v)
 	if err != nil {
 		return raw
 	}
@@ -538,7 +539,7 @@ func OpenInBrowser(html string, sessionID string) (string, error) {
 	dir := os.TempDir()
 	filename := filepath.Join(dir, fmt.Sprintf("tachi-transcript-%s.html", sessionID[:8]))
 
-	if err := os.WriteFile(filename, []byte(html), 0644); err != nil {
+	if err := fileutil.WriteFileShared(filename, []byte(html)); err != nil {
 		return "", fmt.Errorf("write temp file: %w", err)
 	}
 

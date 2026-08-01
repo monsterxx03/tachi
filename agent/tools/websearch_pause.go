@@ -4,10 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"os"
-	"path/filepath"
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -106,16 +106,9 @@ func (s *pauseStore) save(data *websearchPauseData) error {
 	if data.Providers == nil {
 		data.Providers = map[string]websearchPauseRecord{}
 	}
-	serialized, err := json.MarshalIndent(data, "", "  ")
+	serialized, err := fileutil.MarshalJSON(data)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-		return err
-	}
-	tmpPath := s.path + ".tmp"
-	if err := os.WriteFile(tmpPath, serialized, 0600); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, s.path)
+	return fileutil.AtomicWriteFilePrivate(s.path, serialized)
 }

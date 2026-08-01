@@ -10,6 +10,7 @@ import (
 
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -105,17 +106,7 @@ func (s *FileTokenStore) SaveToken(ctx context.Context, token *transport.Token) 
 		return err
 	}
 
-	dir := filepath.Dir(s.tokenPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create token dir %q: %w", dir, err)
-	}
-
-	data, err := json.MarshalIndent(token, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal token: %w", err)
-	}
-
-	if err := os.WriteFile(s.tokenPath, data, 0600); err != nil {
+	if err := fileutil.AtomicWriteJSONPrivate(s.tokenPath, token); err != nil {
 		return fmt.Errorf("write token file %q: %w", s.tokenPath, err)
 	}
 
@@ -153,17 +144,7 @@ func (s *FileTokenStore) SaveDCRInfo(ctx context.Context, info *DCRInfo) error {
 		return err
 	}
 
-	dir := filepath.Dir(s.dcrPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create token dir %q: %w", dir, err)
-	}
-
-	data, err := json.MarshalIndent(info, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal DCR info: %w", err)
-	}
-
-	if err := os.WriteFile(s.dcrPath, data, 0600); err != nil {
+	if err := fileutil.AtomicWriteJSONPrivate(s.dcrPath, info); err != nil {
 		return fmt.Errorf("write DCR file %q: %w", s.dcrPath, err)
 	}
 
@@ -184,17 +165,7 @@ func (s *FileTokenStore) SavePendingState(ctx context.Context, state *OAuthPendi
 		return err
 	}
 
-	dir := filepath.Dir(s.pendingPath)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create token dir %q: %w", dir, err)
-	}
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return fmt.Errorf("marshal pending state: %w", err)
-	}
-
-	if err := os.WriteFile(s.pendingPath, data, 0600); err != nil {
+	if err := fileutil.AtomicWriteJSONPrivate(s.pendingPath, state); err != nil {
 		return fmt.Errorf("write pending state %q: %w", s.pendingPath, err)
 	}
 

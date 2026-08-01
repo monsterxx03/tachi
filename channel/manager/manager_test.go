@@ -616,7 +616,7 @@ func TestBuildUserMessageWithAttachments_Image(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "[图片: image.jpg (64.0KB)]") {
+	if !contains(result, "[图片: image.jpg (64.0 KB)]") {
 		t.Errorf("expected image summary, got %q", result)
 	}
 	if !contains(result, "这是什么图片？") {
@@ -683,7 +683,7 @@ func TestBuildUserMessageWithAttachments_BinaryFile(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "archive.zip") || !contains(result, "1.0MB") {
+	if !contains(result, "archive.zip") || !contains(result, "1.0 MB") {
 		t.Errorf("expected binary file info, got %q", result)
 	}
 	if !contains(result, "解压这个文件") {
@@ -1728,7 +1728,7 @@ func TestOneoffConcurrencyCap(t *testing.T) {
 
 	// Fill the semaphore to capacity.
 	for i := 0; i < maxOneoffConcurrency; i++ {
-		mgr.oneoffSem <- struct{}{}
+		mgr.oneoffSem.TryAcquire()
 	}
 
 	resp, err := mgr.handleCommitCommand(context.Background(), "cap-thread")

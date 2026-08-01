@@ -6,7 +6,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"path"
 	"strings"
 	"sync"
@@ -16,8 +15,9 @@ import (
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
-	"github.com/monsterxx03/tachi/pkg/proxy"
 )
 
 // MCPClient is the interface for MCP client operations used by Manager.
@@ -382,15 +382,13 @@ func (m *Manager) connectHTTP(ctx context.Context, srv *config.MCPServerConfig, 
 	if len(srv.Headers) > 0 {
 		opts = append(opts, transport.WithHTTPHeaders(srv.Headers))
 	}
-	// Proxy support for HTTP MCP servers.
+	// Proxy support for HTTP MCP servers. An invalid proxy config silently
+	// falls back to a plain client (same degradation policy as WebFetch /
+	// WebSearch tools).
 	if srv.Proxy != "" {
-		httpClient, err := proxy.NewHTTPClient(srv.Proxy, timeout)
-		if err != nil {
-			m.logger.Error(ctx, "MCP: invalid proxy", err, "proxy", srv.Proxy, "server", srv.Name)
-		} else {
-			opts = append(opts, transport.WithHTTPBasicClient(httpClient))
-			m.logger.Info(ctx, "MCP: using proxy", "proxy", srv.Proxy, "server", srv.Name)
-		}
+		httpClient := httpx.NewClient(timeout, srv.Proxy)
+		opts = append(opts, transport.WithHTTPBasicClient(httpClient))
+		m.logger.Info(ctx, "MCP: using proxy", "proxy", srv.Proxy, "server", srv.Name)
 	}
 	// If OAuth isn't explicitly configured, check for persisted token / DCR
 	// info on disk — a previous DCR-based auth may have left valid tokens.
@@ -411,15 +409,14 @@ func hasPersistedAuth(storageKey string) bool {
 	if err != nil {
 		return false
 	}
-	if _, err := os.Stat(tokenPath); err == nil {
+	if fileutil.Exists(tokenPath) {
 		return true
 	}
 	dcrPath, err := dcrTokenPath(storageKey)
 	if err != nil {
 		return false
 	}
-	_, err = os.Stat(dcrPath)
-	return err == nil
+	return fileutil.Exists(dcrPath)
 }
 
 // oauthOption builds the WithHTTPOAuth transport option from the server config.

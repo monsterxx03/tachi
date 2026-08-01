@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // Tool name constant for the MCP search tool.
@@ -144,7 +146,7 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 		ToolDefs: toolDefs,
 	}
 
-	b, err := json.MarshalIndent(output, "", "  ")
+	b, err := fileutil.MarshalJSON(output)
 	if err != nil {
 		return "", fmt.Errorf("failed to marshal result: %w", err)
 	}

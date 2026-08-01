@@ -104,19 +104,13 @@ func TestExecutor_NewExecutorDefaultConcurrency(t *testing.T) {
 
 	// Verify semaphore capacity equals default by trying to fill it
 	for i := range DefaultMaxConcurrency {
-		select {
-		case exec.sem <- struct{}{}:
-			// good
-		default:
+		if !exec.sem.TryAcquire() {
 			t.Fatalf("expected semaphore capacity %d, but couldn't acquire at %d", DefaultMaxConcurrency, i+1)
 		}
 	}
 	// Next acquire should block
-	select {
-	case exec.sem <- struct{}{}:
+	if exec.sem.TryAcquire() {
 		t.Error("semaphore should be full")
-	default:
-		// expected
 	}
 }
 
@@ -157,7 +151,7 @@ func TestExecutor_AvailableToolNames(t *testing.T) {
 func TestExecutor_RunSubagent_ContextCancelled(t *testing.T) {
 	exec := NewExecutor(&fakeAgent{}, config.SubagentConfig{MaxConcurrency: 1})
 	// Fill the semaphore
-	exec.sem <- struct{}{}
+	exec.sem.TryAcquire()
 
 	ctx, cancel := context.WithCancel(t.Context())
 	cancel()

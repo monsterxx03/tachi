@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -321,7 +322,7 @@ func shouldSkipExtraction(query string) bool {
 
 // searchDir searches all .md files in a directory for matching blocks.
 func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []string) []Entry {
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
+	if !fileutil.Exists(dir) {
 		return nil
 	}
 
@@ -358,7 +359,7 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 
 // searchFile searches a single file for matching blocks.
 func (t *TopicBackend) searchFile(ctx context.Context, path string, keywords []string) []Entry {
-	if _, err := os.Stat(path); os.IsNotExist(err) {
+	if !fileutil.Exists(path) {
 		return nil
 	}
 	// Check if file contains any keyword.
@@ -481,17 +482,8 @@ func writeFactStates(memoryDir string, updateFn func(map[string]*FactState)) err
 
 	updateFn(state.FactStates)
 
-	out, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-
 	// Write to temp file first, then rename for atomicity.
-	tmpPath := statePath + ".tmp"
-	if err := os.WriteFile(tmpPath, out, 0644); err != nil {
-		return err
-	}
-	return os.Rename(tmpPath, statePath)
+	return fileutil.AtomicWriteJSONShared(statePath, &state)
 }
 
 // ReinforceFact strengthens a fact's decay state when recalled.
@@ -686,7 +678,7 @@ func extractTitle(block string) string {
 		trimmed := strings.TrimSpace(line)
 		if trimmed != "" {
 			if len(trimmed) > 80 {
-				return trimmed[:80] + "..."
+				return strutil.Truncate(trimmed, 80)
 			}
 			return trimmed
 		}

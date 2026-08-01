@@ -17,6 +17,7 @@ import (
 	"github.com/monsterxx03/tachi/dream"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -455,7 +456,7 @@ func formatMCPInitErrors(errs []error) string {
 		msg := errs[0].Error()
 		// Truncate to keep status bar compact
 		if len(msg) > 40 {
-			msg = msg[:37] + "..."
+			msg = strutil.Truncate(msg, 37)
 		}
 		return msg
 	}

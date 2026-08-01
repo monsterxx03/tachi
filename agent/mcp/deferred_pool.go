@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/set"
 )
 
 // DeferredTool holds metadata about an MCP tool for search purposes
@@ -154,7 +155,7 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 	if sel, ok := strings.CutPrefix(query, "select:"); ok {
 		names := strings.Split(sel, ",")
 		var results []SearchResult
-		seen := make(map[string]bool) // dedup across match strategies
+		seen := set.New[string]() // dedup across match strategies
 		for _, name := range names {
 			name = strings.TrimSpace(name)
 			if name == "" {
@@ -164,9 +165,9 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 			found := false
 			for _, t := range allTools {
 				if strings.EqualFold(t.Name, name) {
-					if !seen[t.Name] {
+					if !seen.Has(t.Name) {
 						results = append(results, p.toResult(t))
-						seen[t.Name] = true
+						seen.Add(t.Name)
 					}
 					found = true
 					break
@@ -180,9 +181,9 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 			suffix := "__" + name
 			for _, t := range allTools {
 				if strings.HasSuffix(strings.ToLower(t.Name), strings.ToLower(suffix)) {
-					if !seen[t.Name] {
+					if !seen.Has(t.Name) {
 						results = append(results, p.toResult(t))
-						seen[t.Name] = true
+						seen.Add(t.Name)
 					}
 				}
 			}

@@ -2,12 +2,14 @@ package discord
 
 import (
 	"crypto/sha256"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
-	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 )
 
 // attachment represents a downloaded file attachment with metadata.
@@ -39,14 +41,12 @@ func (ch *DiscordChannel) downloadAttachment(url string) (*attachment, error) {
 	}
 
 	// Read body, respecting the size limit.
-	body, err := io.ReadAll(io.LimitReader(resp.Body, ch.cfg.MaxAttachmentBytes+1))
+	body, err := httpx.ReadAllLimited(resp.Body, ch.cfg.MaxAttachmentBytes)
 	if err != nil {
+		if errors.Is(err, httpx.ErrTooLarge) {
+			return nil, fmt.Errorf("discord: attachment exceeds max size (%d bytes)", ch.cfg.MaxAttachmentBytes)
+		}
 		return nil, fmt.Errorf("discord: read attachment: %w", err)
-	}
-
-	if int64(len(body)) > ch.cfg.MaxAttachmentBytes {
-		return nil, fmt.Errorf("discord: attachment exceeds max size (%d > %d bytes)",
-			len(body), ch.cfg.MaxAttachmentBytes)
 	}
 
 	// Extract filename from Content-Disposition or URL.
@@ -67,17 +67,13 @@ func (ch *DiscordChannel) downloadAttachment(url string) (*attachment, error) {
 // the local path. The filename is suffixed with a short content hash to
 // avoid collisions.
 func (ch *DiscordChannel) saveAttachment(att *attachment) (string, error) {
-	if err := os.MkdirAll(ch.cacheDir, 0755); err != nil {
-		return "", fmt.Errorf("discord: create cache dir: %w", err)
-	}
-
 	// Generate a unique filename with a content hash prefix.
 	hash := sha256.Sum256(att.Data)
 	shortHash := fmt.Sprintf("%x", hash[:8])
 	safeName := fmt.Sprintf("%s_%s", shortHash, sanitizeFilename(att.FileName))
 	destPath := filepath.Join(ch.cacheDir, safeName)
 
-	if err := os.WriteFile(destPath, att.Data, 0644); err != nil {
+	if err := fileutil.WriteFileShared(destPath, att.Data); err != nil {
 		return "", fmt.Errorf("discord: write attachment cache: %w", err)
 	}
 

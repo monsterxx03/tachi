@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -233,7 +234,7 @@ func ensureInboxCleared(memoryRoot string, logger *logger.Logger) {
 	}
 
 	logger.Info(context.Background(), "inbox.md has content after dream — force-clearing", "bytes", info.Size())
-	if err := os.WriteFile(inboxPath, []byte{}, 0644); err != nil {
+	if err := fileutil.WriteFileShared(inboxPath, []byte{}); err != nil {
 		logger.Error(context.Background(), "ensureInboxCleared: failed to truncate", err, "path", inboxPath)
 	}
 }

@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 func TestIsTextExtension(t *testing.T) {
@@ -68,19 +69,19 @@ func TestHumanSize(t *testing.T) {
 		n    int
 		want string
 	}{
-		{0, "0B"},
-		{100, "100B"},
-		{1023, "1023B"},
-		{1024, "1.0KB"},
-		{1536, "1.5KB"},
-		{1048576, "1.0MB"},
-		{1572864, "1.5MB"},
+		{0, "0 B"},
+		{100, "100 B"},
+		{1023, "1023 B"},
+		{1024, "1.0 KB"},
+		{1536, "1.5 KB"},
+		{1048576, "1.0 MB"},
+		{1572864, "1.5 MB"},
 	}
 
 	for _, tt := range tests {
-		got := humanSize(tt.n)
+		got := strutil.HumanBytes(int64(tt.n))
 		if got != tt.want {
-			t.Errorf("humanSize(%d) = %q, want %q", tt.n, got, tt.want)
+			t.Errorf("HumanBytes(%d) = %q, want %q", tt.n, got, tt.want)
 		}
 	}
 }

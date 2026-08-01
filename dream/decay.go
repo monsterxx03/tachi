@@ -10,6 +10,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/set"
 )
 
 // HalfLifeDays is the decay half-life in days. Facts decay to 0.5 after this
@@ -62,7 +63,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 		return result
 	}
 
-	seen := make(map[string]bool)
+	seen := set.New[string]()
 
 	for _, entry := range entries {
 		if entry.IsDir() || !strings.HasSuffix(entry.Name(), ".md") {
@@ -87,7 +88,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 			}
 
 			id := memory.FactID(topicFile, block)
-			seen[id] = true
+			seen.Add(id)
 
 			superseded := strings.Contains(strings.ToLower(block), "状态: superseded") ||
 				strings.Contains(strings.ToLower(block), "status: superseded")
@@ -123,7 +124,7 @@ func ScanTopicFacts(memoryRoot string, existingStates map[string]*memory.FactSta
 			}
 		}
 		for id := range existingStates {
-			if !seen[id] {
+			if !seen.Has(id) {
 				removedCount++
 			}
 		}

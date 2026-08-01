@@ -5,11 +5,12 @@ import (
 	"errors"
 	"io"
 	"net"
-	"net/http"
 	"time"
 
 	"github.com/anthropics/anthropic-sdk-go"
+	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/retry"
 	"github.com/sashabaranov/go-openai"
 )
 
@@ -58,7 +59,7 @@ func (r *RetryProvider) CreateChat(ctx context.Context, messages []Message, tool
 		if attempt > 0 {
 			logger.FromContext(ctx).Info(ctx, "llm: retrying CreateChat after transient error",
 				"attempt", attempt, "maxRetries", r.cfg.MaxRetries, "error", lastErr)
-			if err := sleepCtx(ctx, r.backoff(attempt)); err != nil {
+			if err := retry.Sleep(ctx, r.backoff(attempt)); err != nil {
 				return nil, err
 			}
 		}
@@ -80,7 +81,7 @@ func (r *RetryProvider) CreateChatStream(ctx context.Context, messages []Message
 		if attempt > 0 {
 			logger.FromContext(ctx).Info(ctx, "llm: retrying CreateChatStream after transient error",
 				"attempt", attempt, "maxRetries", r.cfg.MaxRetries, "error", lastErr)
-			if err := sleepCtx(ctx, r.backoff(attempt)); err != nil {
+			if err := retry.Sleep(ctx, r.backoff(attempt)); err != nil {
 				return nil, err
 			}
 		}
@@ -99,23 +100,7 @@ func (r *RetryProvider) CreateChatStream(ctx context.Context, messages []Message
 // backoff returns the delay before the given retry attempt (1-based),
 // doubling BaseDelay each time and capping at MaxDelay.
 func (r *RetryProvider) backoff(attempt int) time.Duration {
-	d := r.cfg.BaseDelay << (attempt - 1)
-	if d < 0 || d > r.cfg.MaxDelay {
-		d = r.cfg.MaxDelay
-	}
-	return d
-}
-
-// sleepCtx sleeps for d, returning early with ctx.Err() if ctx is canceled.
-func sleepCtx(ctx context.Context, d time.Duration) error {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return ctx.Err()
-	case <-t.C:
-		return nil
-	}
+	return retry.Backoff{BaseDelay: r.cfg.BaseDelay, MaxDelay: r.cfg.MaxDelay}.Delay(attempt)
 }
 
 // isRetryable reports whether err is a transient failure worth retrying:
@@ -132,8 +117,7 @@ func isRetryable(err error) bool {
 	// Network errors: connection reset/refused, timeouts, DNS failures.
 	// *net.OpError (e.g. "read tcp ...: read: connection reset by peer")
 	// implements net.Error, so this covers the common mid-flight failures.
-	var netErr net.Error
-	if errors.As(err, &netErr) {
+	if _, ok := errors.AsType[net.Error](err); ok {
 		return true
 	}
 	// Server closed the connection before/while responding.
@@ -141,28 +125,16 @@ func isRetryable(err error) bool {
 		return true
 	}
 	// OpenAI SDK errors: classify by HTTP status code.
-	var apiErr *openai.APIError
-	if errors.As(err, &apiErr) {
-		return retryableStatus(apiErr.HTTPStatusCode)
+	if apiErr, ok := errors.AsType[*openai.APIError](err); ok {
+		return httpx.IsRetryableStatus(apiErr.HTTPStatusCode)
 	}
-	var reqErr *openai.RequestError
-	if errors.As(err, &reqErr) {
-		return retryableStatus(reqErr.HTTPStatusCode)
+	if reqErr, ok := errors.AsType[*openai.RequestError](err); ok {
+		return httpx.IsRetryableStatus(reqErr.HTTPStatusCode)
 	}
 	// Anthropic SDK errors. The SDK retries internally by default, but keep
 	// the classification correct in case a RetryProvider ever wraps it.
-	var anthErr *anthropic.Error
-	if errors.As(err, &anthErr) {
-		return retryableStatus(anthErr.StatusCode)
+	if anthErr, ok := errors.AsType[*anthropic.Error](err); ok {
+		return httpx.IsRetryableStatus(anthErr.StatusCode)
 	}
 	return false
-}
-
-// retryableStatus mirrors the anthropic-sdk-go retry policy: 408 (request
-// timeout), 409 (conflict), 429 (rate limit) and all 5xx are retryable.
-func retryableStatus(code int) bool {
-	return code == http.StatusRequestTimeout ||
-		code == http.StatusConflict ||
-		code == http.StatusTooManyRequests ||
-		code >= http.StatusInternalServerError
 }

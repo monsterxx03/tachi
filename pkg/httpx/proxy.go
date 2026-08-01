@@ -1,6 +1,4 @@
-// Package proxy provides helpers for HTTP clients and network dialers with
-// optional SOCKS5 / HTTP / HTTPS proxy support.
-package proxy
+package httpx
 
 import (
 	"bufio"
@@ -11,10 +9,10 @@ import (
 	"net/url"
 	"time"
 
-	"golang.org/x/net/proxy"
+	goproxy "golang.org/x/net/proxy"
 )
 
-// NewHTTPClient creates an *http.Client with the given timeout. When
+// newHTTPClient creates an *http.Client with the given timeout. When
 // proxyURL is non-empty it is parsed and used to configure the transport
 // accordingly:
 //
@@ -22,8 +20,10 @@ import (
 //	https://host:port   – HTTPS proxy (CONNECT tunnel)
 //	socks5://host:port  – SOCKS5 proxy
 //
-// An empty proxyURL returns a plain client (no proxy).
-func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
+// An empty proxyURL returns a plain client (no proxy). This is the internal
+// implementation behind NewClient; callers that want graceful degradation on
+// proxy errors should use NewClient instead.
+func newHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error) {
 	if proxyURL == "" {
 		return &http.Client{Timeout: timeout}, nil
 	}
@@ -42,7 +42,7 @@ func NewHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 		}
 
 	case "socks5":
-		dialer, err := proxy.SOCKS5("tcp", u.Host, nil, proxy.Direct)
+		dialer, err := goproxy.SOCKS5("tcp", u.Host, nil, goproxy.Direct)
 		if err != nil {
 			return nil, fmt.Errorf("socks5 proxy %q: %w", proxyURL, err)
 		}
@@ -89,7 +89,7 @@ func NewDialer(proxyURL string) (func(network, addr string) (net.Conn, error), e
 	case "https":
 		return httpConnectDialer(u.Host, true), nil
 	case "socks5":
-		d, err := proxy.SOCKS5("tcp", u.Host, nil, proxy.Direct)
+		d, err := goproxy.SOCKS5("tcp", u.Host, nil, goproxy.Direct)
 		if err != nil {
 			return nil, fmt.Errorf("socks5 proxy %q: %w", proxyURL, err)
 		}

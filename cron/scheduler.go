@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/syncx"
 	"github.com/robfig/cron/v3"
 )
 
@@ -29,7 +30,7 @@ type Scheduler struct {
 	cron *cron.Cron
 
 	// Semaphore to limit concurrent job executions.
-	sem chan struct{}
+	sem *syncx.Semaphore
 
 	// Execution timeout for each job trigger.
 	executionTimeout time.Duration
@@ -65,7 +66,7 @@ func NewScheduler(cfg SchedulerConfig) *Scheduler {
 		store:            cfg.Store,
 		handler:          cfg.Handler,
 		logger:           l.With("source", "cron"),
-		sem:              make(chan struct{}, maxConc),
+		sem:              syncx.NewSemaphore(maxConc),
 		executionTimeout: timeout,
 		cron: cron.New(
 			cron.WithParser(cron.NewParser(
@@ -393,13 +394,11 @@ func (s *Scheduler) addCronEntry(job *Job) (cron.EntryID, error) {
 // updates LastRun status, and cleans up oneshot jobs.
 func (s *Scheduler) fire(job *Job) {
 	// Try to acquire semaphore (non-blocking).
-	select {
-	case s.sem <- struct{}{}:
-		defer func() { <-s.sem }()
-	default:
+	if !s.sem.TryAcquire() {
 		s.logger.Info(s.ctx, "cron: skipping job: max concurrent reached", "id", job.ID, "name", job.Name)
 		return
 	}
+	defer s.sem.Release()
 
 	s.logger.Info(s.ctx, "cron: triggering job", "id", job.ID, "name", job.Name)
 

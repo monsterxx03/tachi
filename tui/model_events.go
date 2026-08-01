@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 func (m *Model) nextEvent() tea.Cmd {
@@ -79,9 +80,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			Content: confirmTitle + "\n" + event.ToolDiff,
 		})
 		if len(event.ToolDiff) > 100 {
-			runes := []rune(event.ToolDiff)
-			preview := string(runes[:100])
-			m.logger.Info(context.Background(), "TUI: diff preview", "text", preview+"...")
+			m.logger.Info(context.Background(), "TUI: diff preview", "text", strutil.Truncate(event.ToolDiff, 100))
 		} else {
 			m.logger.Info(context.Background(), "TUI: diff", "text", event.ToolDiff)
 		}

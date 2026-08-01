@@ -4,7 +4,12 @@
 // split mid-sequence.
 package strutil
 
-import "strings"
+import (
+	"fmt"
+	"strings"
+
+	"github.com/google/uuid"
+)
 
 // truncate returns the first max runes of s, never splitting multi-byte
 // characters (e.g. Chinese) mid-sequence. truncated reports whether s was
@@ -80,4 +85,63 @@ func FirstLine(s string) string {
 // via Truncate to max runes with an ellipsis if needed.
 func FirstLineOrTruncate(s string, max int) string {
 	return Truncate(FirstLine(s), max)
+}
+
+// IsCJK reports whether r is a CJK character (Chinese/Japanese/Korean).
+// Covers the union of blocks used across tachi: CJK Radicals Supplement
+// through Unified Ideographs (incl. Extension A, Hiragana, Katakana),
+// Compatibility Ideographs, Extension B, and Hangul Syllables.
+func IsCJK(r rune) bool {
+	return (r >= 0x2E80 && r <= 0x9FFF) || // Radicals Supplement .. Unified Ideographs
+		(r >= 0xF900 && r <= 0xFAFF) || // CJK Compatibility Ideographs
+		(r >= 0x20000 && r <= 0x2A6DF) || // CJK Unified Ideographs Extension B
+		(r >= 0xAC00 && r <= 0xD7AF) // Hangul Syllables
+}
+
+// ShortUUID returns the first n characters of a random UUID v4 string with
+// hyphens removed. Used for collision-resistant short IDs (session IDs,
+// worktree names, etc).
+func ShortUUID(n int) string {
+	return strings.ReplaceAll(uuid.New().String(), "-", "")[:n]
+}
+
+// HumanBytes formats a byte count as a human-readable string with units
+// (B, KB, MB, GB).
+func HumanBytes(n int64) string {
+	switch {
+	case n < 1024:
+		return fmt.Sprintf("%d B", n)
+	case n < 1024*1024:
+		return fmt.Sprintf("%.1f KB", float64(n)/1024)
+	case n < 1024*1024*1024:
+		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
+	default:
+		return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
+	}
+}
+
+// SanitizeFilename replaces characters that are problematic in filenames
+// (slash, colon, quotes, angle brackets, pipe, spaces, …) with "_", then
+// truncates to max runes (max <= 0 means no truncation). Multi-byte
+// characters are never split.
+func SanitizeFilename(s string, max int) string {
+	if s == "" {
+		return ""
+	}
+	result := strings.NewReplacer(
+		"/", "_",
+		"\\", "_",
+		":", "_",
+		"*", "_",
+		"?", "_",
+		"\"", "_",
+		"<", "_",
+		">", "_",
+		"|", "_",
+		" ", "_",
+	).Replace(s)
+	if max > 0 {
+		return TruncatePlain(result, max)
+	}
+	return result
 }

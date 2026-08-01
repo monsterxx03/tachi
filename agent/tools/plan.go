@@ -4,13 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 	"path/filepath"
 	"strings"
 	"unicode"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 // SavePlanTool saves a structured plan document to .tachi/plans/.
@@ -94,9 +94,6 @@ func (t SavePlanTool) ExecuteContext(ctx context.Context, args string) (string, 
 	} else {
 		planDir = filepath.Join(config.BaseDir(), "plans")
 	}
-	if err := os.MkdirAll(planDir, 0755); err != nil {
-		return "", fmt.Errorf("create plans dir: %w", err)
-	}
 
 	// Generate filename: {slug}-{sessionID}.json. One file per plan per
 	// session — repeated saves overwrite the same file, giving true
@@ -111,11 +108,7 @@ func (t SavePlanTool) ExecuteContext(ctx context.Context, args string) (string, 
 	// Save raw structured data as JSON — preserves the original format from
 	// the LLM without flattening to markdown. Consumers (TUI, ACP, external
 	// viewers) can render it however they want.
-	data, err := json.MarshalIndent(params, "", "  ")
-	if err != nil {
-		return "", fmt.Errorf("marshal plan: %w", err)
-	}
-	if err := os.WriteFile(filePath, data, 0644); err != nil {
+	if err := fileutil.WriteJSONShared(filePath, params); err != nil {
 		return "", fmt.Errorf("write plan file: %w", err)
 	}
 

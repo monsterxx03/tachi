@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"charm.land/lipgloss/v2"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // MCPServerItem is the display model for one MCP server in the overlay.
@@ -341,14 +342,7 @@ func (v *MCPView) renderToolList(b *strings.Builder, tools []MCPToolItem, maxLin
 		}
 
 		// Take first line only, then truncate to descMaxRunes runes
-		desc := t.Description
-		if nl := strings.IndexByte(desc, '\n'); nl >= 0 {
-			desc = desc[:nl]
-		}
-		descRunes := []rune(desc)
-		if len(descRunes) > descMaxRunes {
-			desc = string(descRunes[:descMaxRunes-1]) + "…"
-		}
+		desc := strutil.TruncateFitted(strutil.FirstLine(t.Description), descMaxRunes)
 		descStyled := dimStyle.Render(desc)
 
 		cursor := " "

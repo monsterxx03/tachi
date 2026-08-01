@@ -12,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 type InputSubmitMsg string
@@ -522,7 +523,7 @@ func (i *InputArea) updateCompletions() {
 				if desc == "" {
 					desc = "skill"
 				} else if len([]rune(desc)) > maxCompletionDescLen {
-					desc = string([]rune(desc)[:maxCompletionDescLen]) + "…"
+					desc = strutil.TruncateFitted(desc, maxCompletionDescLen+1)
 				}
 				i.completions = append(i.completions, Command{
 					Name:        "/" + name,

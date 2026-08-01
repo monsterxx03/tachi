@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 const maxOutputSnippet = 10 * 1024 // 10KB
@@ -90,14 +92,7 @@ func tailSnippet(s string, maxLen int) string {
 	if i := strings.IndexByte(s[start:], '\n'); i >= 0 && i < maxLen/2 {
 		start += i + 1
 	}
-	return "(truncated, showing tail " + formatBytes(maxLen) + ")\n" + s[start:]
-}
-
-func formatBytes(n int) string {
-	if n >= 1024 {
-		return fmt.Sprintf("%dKB", n/1024)
-	}
-	return fmt.Sprintf("%dB", n)
+	return "(truncated, showing tail " + strutil.HumanBytes(int64(maxLen)) + ")\n" + s[start:]
 }
 
 func indent(s, prefix string) string {

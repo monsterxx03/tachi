@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"gopkg.in/yaml.v3"
@@ -343,22 +344,17 @@ func (s *Store) Create(name, description, body string, tags []string, source str
 
 	// Check for existing skill
 	skillFile := filepath.Join(skillDir, "SKILL.md")
-	if _, err := os.Stat(skillFile); err == nil {
+	if fileutil.Exists(skillFile) {
 		if !overwrite {
 			return nil, fmt.Errorf("skill %q already exists at %s (use overwrite=true to replace)", name, skillFile)
 		}
 		s.logger.Info(context.Background(), "skill: Create: overwriting existing skill", "skill", name, "path", skillFile)
 	}
 
-	// Create directory
-	if err := os.MkdirAll(skillDir, 0755); err != nil {
-		return nil, fmt.Errorf("failed to create skill directory: %w", err)
-	}
-
 	// Build SKILL.md content
 	content := buildSkillMarkdown(name, description, body, tags, true)
 
-	if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
+	if err := fileutil.WriteFileShared(skillFile, []byte(content)); err != nil {
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
 	}
 
@@ -461,7 +457,7 @@ func (s *Store) Update(name string, description, body string, tags []string, sou
 	// Build new SKILL.md
 	content := buildSkillMarkdown(name, description, body, tags, enabled)
 
-	if err := os.WriteFile(skillFile, []byte(content), 0644); err != nil {
+	if err := fileutil.WriteFileShared(skillFile, []byte(content)); err != nil {
 		return nil, fmt.Errorf("failed to write SKILL.md: %w", err)
 	}
 
@@ -505,7 +501,7 @@ func (s *Store) findSkillDir(name, source string) (string, string, error) {
 	for i, dir := range s.dirs {
 		skillDir := filepath.Join(dir, name)
 		skillFile := filepath.Join(skillDir, "SKILL.md")
-		if _, err := os.Stat(skillFile); err == nil {
+		if fileutil.Exists(skillFile) {
 			return skillDir, s.source[i], nil
 		}
 	}

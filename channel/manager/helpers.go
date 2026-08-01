@@ -51,16 +51,16 @@ func buildUserMessageWithAttachments(msg channel.IncomingMessage) (string, []llm
 				// let it use Bash tools (pdftotext, python, etc.) to parse it.
 				parts = append(parts, fmt.Sprintf(
 					"[文件: %s (%s, %s)]\n文件已保存到本地: %s\n你可以使用 Bash 工具来解析这个文件（例如 pdftotext 解析 PDF、python 解析 Excel 等）。",
-					att.FileName, att.MimeType, humanSize(int(att.Size)), att.SavedPath))
+					att.FileName, att.MimeType, strutil.HumanBytes(att.Size), att.SavedPath))
 			} else {
 				parts = append(parts, fmt.Sprintf("[文件: %s (%s, %s)]",
-					att.FileName, att.MimeType, humanSize(int(att.Size))))
+					att.FileName, att.MimeType, strutil.HumanBytes(att.Size)))
 			}
 
 		case channel.AttachmentTypeImage:
-			imgMsg := fmt.Sprintf("[图片: %s (%s)]", att.FileName, humanSize(int(att.Size)))
+			imgMsg := fmt.Sprintf("[图片: %s (%s)]", att.FileName, strutil.HumanBytes(att.Size))
 			if att.SavedPath != "" {
-				imgMsg = fmt.Sprintf("[图片: %s (已保存到 %s, %s)]", att.FileName, att.SavedPath, humanSize(int(att.Size)))
+				imgMsg = fmt.Sprintf("[图片: %s (已保存到 %s, %s)]", att.FileName, att.SavedPath, strutil.HumanBytes(att.Size))
 			}
 			parts = append(parts, imgMsg)
 
@@ -89,36 +89,14 @@ func buildUserMessageWithAttachments(msg channel.IncomingMessage) (string, []llm
 
 // sanitizeFilename replaces characters that are problematic in filenames.
 func sanitizeFilename(s string) string {
-	if s == "" {
-		return ""
-	}
-	// Replace problematic chars with underscore.
-	replacer := strings.NewReplacer(
-		" ", "_",
-		"/", "_",
-		"\\", "_",
-		":", "_",
-		"*", "",
-		"?", "",
-		"\"", "",
-		"<", "",
-		">", "",
-		"|", "",
-	)
-	result := replacer.Replace(s)
-	// Trim to reasonable length (rune-aware).
-	return strutil.TruncatePlain(result, 60)
+	// Replace problematic chars with underscore, then trim to a reasonable
+	// length (rune-aware).
+	return strutil.SanitizeFilename(s, 60)
 }
 
 // humanSize formats a byte count as a human-readable string.
 func humanSize(n int) string {
-	if n < 1024 {
-		return fmt.Sprintf("%dB", n)
-	}
-	if n < 1024*1024 {
-		return fmt.Sprintf("%.1fKB", float64(n)/1024)
-	}
-	return fmt.Sprintf("%.1fMB", float64(n)/(1024*1024))
+	return strutil.HumanBytes(int64(n))
 }
 
 // --- Streaming callback context ---

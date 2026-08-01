@@ -10,6 +10,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 type StatusBar struct {
@@ -159,11 +160,7 @@ func (s StatusBar) View() string {
 // maxSessionTitleLen runes. Uses rune-aware truncation to safely
 // handle multi-byte characters (e.g. CJK).
 func (s StatusBar) truncateTitle(title string) string {
-	runes := []rune(title)
-	if len(runes) > maxSessionTitleLen {
-		return string(runes[:maxSessionTitleLen-1]) + "…"
-	}
-	return title
+	return strutil.TruncateFitted(title, maxSessionTitleLen)
 }
 
 func (s StatusBar) buildUsageRight() string {

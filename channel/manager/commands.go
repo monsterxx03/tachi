@@ -717,12 +717,10 @@ func (m *Manager) handleCommitCommand(ctx context.Context, threadID string) (str
 
 	// Global one-off concurrency cap: reject with a hint instead of silently
 	// queueing behind the cached-agent lock.
-	select {
-	case m.oneoffSem <- struct{}{}:
-		defer func() { <-m.oneoffSem }()
-	default:
-		return "", fmt.Errorf("已有 %d 个长任务（/commit、/review）在运行，请稍后再试", len(m.oneoffSem))
+	if !m.oneoffSem.TryAcquire() {
+		return "", fmt.Errorf("已有 %d 个长任务（/commit、/review）在运行，请稍后再试", m.oneoffSem.Len())
 	}
+	defer m.oneoffSem.Release()
 
 	// Register so /stop and /new can cancel this run mid-flight.
 	ctx, done := m.registerOneoff(threadID, ctx)
@@ -797,12 +795,10 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 
 	// Global one-off concurrency cap: reject with a hint instead of silently
 	// queueing behind the cached-agent lock.
-	select {
-	case m.oneoffSem <- struct{}{}:
-		defer func() { <-m.oneoffSem }()
-	default:
-		return "", fmt.Errorf("已有 %d 个长任务（/commit、/review）在运行，请稍后再试", len(m.oneoffSem))
+	if !m.oneoffSem.TryAcquire() {
+		return "", fmt.Errorf("已有 %d 个长任务（/commit、/review）在运行，请稍后再试", m.oneoffSem.Len())
 	}
+	defer m.oneoffSem.Release()
 
 	// Register so /stop and /new can cancel this run mid-flight.
 	ctx, done := m.registerOneoff(threadID, ctx)

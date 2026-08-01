@@ -9,8 +9,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/google/uuid"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // Store defines the interface for session persistence
@@ -51,42 +52,23 @@ func (s *FileStore) messagesPath(id string) string {
 
 // CreateSession creates a new session directory and meta.json
 func (s *FileStore) CreateSession(session *Session) error {
-	dir := s.sessionDir(session.ID)
-	if err := os.MkdirAll(dir, 0700); err != nil {
-		return fmt.Errorf("create session dir: %w", err)
-	}
-
-	data, err := json.Marshal(session)
-	if err != nil {
-		return fmt.Errorf("marshal meta: %w", err)
-	}
-
-	if err := os.WriteFile(s.metaPath(session.ID), data, 0600); err != nil {
+	if err := fileutil.WriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
 		return fmt.Errorf("write meta.json: %w", err)
 	}
 
 	// Create empty messages.jsonl
-	f, err := os.Create(s.messagesPath(session.ID))
-	if err != nil {
+	if err := fileutil.WriteFilePrivate(s.messagesPath(session.ID), []byte{}); err != nil {
 		return fmt.Errorf("create messages.jsonl: %w", err)
 	}
-	f.Close()
-
 	return nil
 }
 
 // LoadMeta loads meta.json for a session
 func (s *FileStore) LoadMeta(id string) (*Session, error) {
-	data, err := os.ReadFile(s.metaPath(id))
-	if err != nil {
+	var session Session
+	if err := fileutil.ReadJSON(s.metaPath(id), &session); err != nil {
 		return nil, fmt.Errorf("read meta.json: %w", err)
 	}
-
-	var session Session
-	if err := json.Unmarshal(data, &session); err != nil {
-		return nil, fmt.Errorf("unmarshal meta: %w", err)
-	}
-
 	return &session, nil
 }
 
@@ -145,15 +127,9 @@ func (s *FileStore) LoadMessages(id string) ([]Message, error) {
 
 // UpdateMeta updates the meta.json file
 func (s *FileStore) UpdateMeta(session *Session) error {
-	data, err := json.Marshal(session)
-	if err != nil {
-		return fmt.Errorf("marshal meta: %w", err)
-	}
-
-	if err := os.WriteFile(s.metaPath(session.ID), data, 0600); err != nil {
+	if err := fileutil.WriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
 		return fmt.Errorf("write meta.json: %w", err)
 	}
-
 	return nil
 }
 
@@ -196,21 +172,18 @@ func (s *FileStore) DeleteSession(id string) error {
 // GenerateID generates a new session ID in format: YYYY-MM-DD-HHMMSS-uuid
 func GenerateID() string {
 	t := time.Now()
-	shortUUID := uuid.New().String()[:8]
+	shortUUID := strutil.ShortUUID(8)
 	return fmt.Sprintf("%d-%02d-%02d-%02d%02d%02d-%s",
 		t.Year(), t.Month(), t.Day(),
 		t.Hour(), t.Minute(), t.Second(),
 		shortUUID)
 }
 
-// ExtractTitle extracts the first user message content as title (max 50 runes).
-// Uses rune-based truncation to safely handle multi-byte characters (e.g. CJK).
+// ExtractTitle extracts the first user message content as title, capped at
+// 50 runes (ellipsis included in the budget when truncated). Uses rune-based
+// truncation to safely handle multi-byte characters (e.g. CJK).
 func ExtractTitle(content string) string {
-	runes := []rune(content)
-	if len(runes) > 50 {
-		return string(runes[:47]) + "…"
-	}
-	return content
+	return strutil.TruncateFitted(content, 50)
 }
 
 // LoadSubagentMessages loads all subagent messages for a session.
