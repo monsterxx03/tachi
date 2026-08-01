@@ -121,7 +121,7 @@ type ProviderConfig struct {
 }
 
 type WebSearchConfig struct {
-	Type       string        `yaml:"type" default:"brave"` // brave, serper, serpapi
+	Type       string        `yaml:"type" default:"brave"` // Search provider type; only "brave" is supported for now (extensible for future providers)
 	Key        string        `yaml:"key"`
 	Timeout    time.Duration `yaml:"timeout" default:"30s"`
 	MaxResults int           `yaml:"max_results" default:"10"`

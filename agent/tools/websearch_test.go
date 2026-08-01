@@ -78,7 +78,7 @@ func TestWebSearchResult_Marshal(t *testing.T) {
 			},
 		},
 		DurationMs: 100,
-		Provider:   "serper",
+		Provider:   "brave",
 	}
 
 	data, err := json.Marshal(result)
