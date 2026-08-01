@@ -1,20 +1,22 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
 	"sync"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
-// pauseStore persists web search provider pause state to a JSON file.
-//
-// The file lives at <BaseDir>/websearch_paused.json and is shared by every
-// WebSearchTool instance (main agent, sub-agents, channels), so a quota pause
-// survives across runs and propagates process-wide. Access is serialized by a
-// package-level mutex; writes are atomic (tmp + rename), so a corrupt file
-// never blocks searches.
+// pauseStore persists provider pause state to a JSON file. It is shared by
+// the WebSearch and WebFetch tools: each tool instance points at its own
+// file (config.WebSearchPausePath / config.WebFetchPausePath), and a quota
+// pause survives across runs and propagates process-wide. Access is
+// serialized by a package-level mutex; writes are atomic (tmp + rename), so
+// a corrupt file never blocks fetches/searches.
 type pauseStore struct {
 	path string
 }
@@ -52,7 +54,10 @@ func (s *pauseStore) pausedProviders(now time.Time) map[string]websearchPauseRec
 	}
 	if expired {
 		data.Providers = out
-		s.save(data)
+		if err := s.save(data); err != nil {
+			logger.Default().Warn(context.Background(), "provider pause state: failed to prune expired pauses",
+				"path", s.path, "err", err)
+		}
 	}
 	return out
 }
@@ -72,7 +77,10 @@ func (s *pauseStore) pause(provider, reason string, resumeAfter time.Time) {
 		ResumeAfter: resumeAfter,
 		Reason:      reason,
 	}
-	s.save(data)
+	if err := s.save(data); err != nil {
+		logger.Default().Warn(context.Background(), "provider pause state: failed to persist pause",
+			"provider", provider, "path", s.path, "err", err)
+	}
 }
 
 // load reads the pause file; a missing or unreadable file yields empty state.

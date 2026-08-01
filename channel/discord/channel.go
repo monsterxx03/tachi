@@ -821,7 +821,10 @@ func (ch *DiscordChannel) respondInteraction(s *discordgo.Session, i *discordgo.
 			ch.logger.Error(context.Background(), "discord: slash command followup failed, degrading to channel message", err, "content_len", len(chunk))
 			// Send the remaining chunks (including this one) as a regular
 			// channel message — no interaction time limit applies.
-			ch.sendText(i.ChannelID, strings.Join(chunks[idx:], ""))
+			remaining := strings.Join(chunks[idx:], "")
+			if err := ch.sendText(i.ChannelID, remaining); err != nil {
+				ch.logger.Error(context.Background(), "discord: degraded channel message send failed", err, "content_len", len(remaining))
+			}
 			return
 		}
 	}

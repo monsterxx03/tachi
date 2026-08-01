@@ -56,9 +56,23 @@ If there is nothing to commit, say so and do not create an empty commit.
 
 ### Commit message style
 
-- Keep the subject line short — aim for under 72 characters (ideally 50-60) so it reads well in the terminal.
+- **Use Conventional Commits**: start the subject with a type prefix describing the nature of the change, then a concise summary of this commit's theme. Use the most fitting type:
+  - feat — new feature
+  - fix — bug fix
+  - refactor — code restructure without behavior change
+  - docs — documentation only
+  - style — formatting / whitespace (non-functional)
+  - test — tests only
+  - chore — maintenance, deps, tooling
+  - perf — performance improvement
+  - Optionally add a scope in parentheses, e.g. feat(websearch): ...
+- The subject line must stay **under 72 characters** (ideally 50-60) so it reads well in the terminal.
+- If a body is needed, **wrap every body line at 72 characters** — git log indents the body by 4 spaces in an 80-column terminal, so 72 keeps lines from wrapping.
 - Write a high-level summary of what changed and why. Do NOT include implementation details such as function names, variable names, or line-level changes.
 - Prefer a single concise subject line; only add a body via an extra -m flag if the change genuinely needs more context.
+
+Example:
+  git commit -m "feat(websearch): add exa provider with quota fallback" -m "Brave rate limits now fall back to exa automatically, and credit-exhausted providers pause until the next billing cycle." -m "Co-authored-by: SomeModel-1.0 <somemodel-1.0@tachi>"
 
 ### Co-author trailer
 
