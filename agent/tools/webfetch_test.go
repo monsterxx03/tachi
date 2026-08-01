@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -9,9 +10,12 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/netutil"
 )
 
@@ -365,7 +369,7 @@ func TestWebFetchTool_CacheWithTruncation(t *testing.T) {
 // Firecrawl backend & reserved-address fallback
 // ---------------------------------------------------------------------------
 
-func TestWebFetchTool_SelectBackend(t *testing.T) {
+func TestWebFetchTool_ActiveBackends(t *testing.T) {
 	orig := netutil.LookupIP
 	t.Cleanup(func() { netutil.LookupIP = orig })
 
@@ -373,28 +377,52 @@ func TestWebFetchTool_SelectBackend(t *testing.T) {
 	priv := func(host string) ([]net.IP, error) { return []net.IP{net.ParseIP("10.0.0.1")}, nil }
 	fail := func(host string) ([]net.IP, error) { return nil, errors.New("dns fail") }
 
+	fc := config.WebFetchProviderConfig{Type: config.WebFetchProviderFirecrawl, Key: "k"}
+	fcNoKey := config.WebFetchProviderConfig{Type: config.WebFetchProviderFirecrawl}
+
 	tests := []struct {
 		name   string
 		tool   WebFetchTool
 		url    string
 		lookup func(string) ([]net.IP, error)
-		want   string
+		want   []string // expected backend types in priority order
 	}{
-		{"zero value defaults to native", WebFetchTool{}, "https://example.com", pub, "native"},
-		{"explicit native type", WebFetchTool{Type: "native", Key: "k"}, "https://example.com", pub, "native"},
-		{"firecrawl without key", WebFetchTool{Type: "firecrawl"}, "https://example.com", pub, "native"},
-		{"firecrawl public target", WebFetchTool{Type: "firecrawl", Key: "k"}, "https://example.com", pub, "firecrawl"},
-		{"firecrawl reserved target", WebFetchTool{Type: "firecrawl", Key: "k"}, "https://example.com", priv, "native"},
-		{"firecrawl dns failure", WebFetchTool{Type: "firecrawl", Key: "k"}, "https://example.com", fail, "native"},
-		{"firecrawl private ip literal", WebFetchTool{Type: "firecrawl", Key: "k"}, "http://10.0.0.5/x", pub, "native"},
+		{"zero value: native only", WebFetchTool{}, "https://example.com", pub, []string{config.WebFetchProviderNative}},
+		{"firecrawl without key: native only", WebFetchTool{Providers: []config.WebFetchProviderConfig{fcNoKey}}, "https://example.com", pub, []string{config.WebFetchProviderNative}},
+		{"firecrawl public: firecrawl then native", WebFetchTool{Providers: []config.WebFetchProviderConfig{fc}}, "https://example.com", pub, []string{config.WebFetchProviderFirecrawl, config.WebFetchProviderNative}},
+		{"firecrawl reserved: native only", WebFetchTool{Providers: []config.WebFetchProviderConfig{fc}}, "https://example.com", priv, []string{config.WebFetchProviderNative}},
+		{"firecrawl dns failure: native only", WebFetchTool{Providers: []config.WebFetchProviderConfig{fc}}, "https://example.com", fail, []string{config.WebFetchProviderNative}},
+		{"firecrawl private ip literal: native only", WebFetchTool{Providers: []config.WebFetchProviderConfig{fc}}, "http://10.0.0.5/x", pub, []string{config.WebFetchProviderNative}},
 	}
-	for _, tt := range tests {
+	for i := range tests {
+		tt := &tests[i]
 		t.Run(tt.name, func(t *testing.T) {
 			netutil.LookupIP = tt.lookup
-			if got := tt.tool.selectBackend(tt.url); got != tt.want {
-				t.Errorf("selectBackend(%q) = %q, want %q", tt.url, got, tt.want)
+			tt.tool.pause = &pauseStore{path: filepath.Join(t.TempDir(), "paused.json")}
+			backends := tt.tool.activeBackends(tt.url)
+			got := make([]string, 0, len(backends))
+			for _, b := range backends {
+				got = append(got, b.Type())
+			}
+			if !slices.Equal(got, tt.want) {
+				t.Errorf("activeBackends(%q) = %v, want %v", tt.url, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestWebFetchTool_ActiveBackends_SkipsPaused(t *testing.T) {
+	tool := WebFetchTool{
+		Providers: []config.WebFetchProviderConfig{
+			{Type: config.WebFetchProviderFirecrawl, Key: "k"},
+		},
+		pause: &pauseStore{path: filepath.Join(t.TempDir(), "paused.json")},
+	}
+	tool.pause.pause(config.WebFetchProviderFirecrawl, "credits exhausted (402)", nextBillingCycle(time.Now()))
+
+	backends := tool.activeBackends("https://example.com")
+	if len(backends) != 1 || backends[0].Type() != config.WebFetchProviderNative {
+		t.Errorf("paused firecrawl must be skipped, native remains; got %v", backends)
 	}
 }
 
@@ -418,7 +446,7 @@ func TestWebFetchTool_Firecrawl_ReservedFallbackToNative(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	tool := &WebFetchTool{Type: "firecrawl", Key: "fc-test-key", BaseURL: fcSrv.URL}
+	tool := &WebFetchTool{Providers: []config.WebFetchProviderConfig{{Type: config.WebFetchProviderFirecrawl, Key: "fc-test-key", BaseURL: fcSrv.URL}}}
 	result, err := tool.ExecuteContext(t.Context(), `{"url": "`+srv.URL+`"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -470,7 +498,7 @@ func TestWebFetchTool_Firecrawl_UsesFirecrawlBackend(t *testing.T) {
 	}))
 	defer fcSrv.Close()
 
-	tool := &WebFetchTool{Type: "firecrawl", Key: "fc-test-key", BaseURL: fcSrv.URL}
+	tool := &WebFetchTool{Providers: []config.WebFetchProviderConfig{{Type: config.WebFetchProviderFirecrawl, Key: "fc-test-key", BaseURL: fcSrv.URL}}}
 	result, err := tool.ExecuteContext(t.Context(), `{"url": "https://example.com/page"}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -521,6 +549,103 @@ func TestWebFetchTool_Firecrawl_ErrorHint(t *testing.T) {
 		if got := firecrawlErrorHint(tt.code); !strings.Contains(got, tt.want) {
 			t.Errorf("firecrawlErrorHint(%d) = %q, want it to contain %q", tt.code, got, tt.want)
 		}
+	}
+}
+
+// fakeFetchBackend is a test double implementing webFetchBackend.
+type fakeFetchBackend struct {
+	name   string
+	result webFetchFetchResult
+	err    *searchErr
+	calls  int
+}
+
+func (f *fakeFetchBackend) Type() string { return f.name }
+func (f *fakeFetchBackend) Fetch(_ context.Context, _ *http.Client, _ string) (webFetchFetchResult, *searchErr) {
+	f.calls++
+	return f.result, f.err
+}
+
+func newWebFetchTestTool(t *testing.T) *WebFetchTool {
+	t.Helper()
+	return &WebFetchTool{
+		pause: &pauseStore{path: filepath.Join(t.TempDir(), "paused.json")},
+	}
+}
+
+func TestWebFetchTool_FetchWithBackends_FallbackOnQuota(t *testing.T) {
+	tool := newWebFetchTestTool(t)
+	firecrawl := &fakeFetchBackend{name: config.WebFetchProviderFirecrawl,
+		err: &searchErr{kind: errQuota, message: "credits exhausted (402)"}}
+	native := &fakeFetchBackend{name: config.WebFetchProviderNative,
+		result: webFetchFetchResult{content: "native content", contentType: "text/plain", bytes: 14, code: 200, codeText: "200 OK"}}
+
+	out, err := tool.fetchWithBackends(context.Background(), webFetchArgs{URL: "https://example.com"}, "https://example.com",
+		[]webFetchBackend{firecrawl, native})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "native content") {
+		t.Errorf("expected native fallback content, got: %s", out)
+	}
+
+	// The quota-hit backend must be paused until the next billing cycle.
+	paused := tool.pause.pausedProviders(time.Now())
+	if _, ok := paused[config.WebFetchProviderFirecrawl]; !ok {
+		t.Errorf("expected firecrawl paused after quota error, got %v", paused)
+	}
+}
+
+func TestWebFetchTool_FetchWithBackends_FallbackOnRateLimit_NoPause(t *testing.T) {
+	tool := newWebFetchTestTool(t)
+	firecrawl := &fakeFetchBackend{name: config.WebFetchProviderFirecrawl,
+		err: &searchErr{kind: errRateLimit, message: "rate limited (429)"}}
+	native := &fakeFetchBackend{name: config.WebFetchProviderNative,
+		result: webFetchFetchResult{content: "native content", contentType: "text/plain", bytes: 14, code: 200, codeText: "200 OK"}}
+
+	out, err := tool.fetchWithBackends(context.Background(), webFetchArgs{URL: "https://example.com"}, "https://example.com",
+		[]webFetchBackend{firecrawl, native})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if !strings.Contains(out, "native content") {
+		t.Errorf("expected native fallback content, got: %s", out)
+	}
+
+	// A transient rate limit must NOT pause the backend.
+	if paused := tool.pause.pausedProviders(time.Now()); len(paused) != 0 {
+		t.Errorf("rate limits must not pause backends, got %v", paused)
+	}
+}
+
+func TestFirecrawlBackend_Quota(t *testing.T) {
+	fcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPaymentRequired)
+		w.Write([]byte(`{"success":false,"error":"Insufficient credits"}`))
+	}))
+	defer fcSrv.Close()
+
+	b := &firecrawlBackend{apiKey: "k", baseURL: fcSrv.URL}
+	_, serr := b.Fetch(context.Background(), fcSrv.Client(), "https://example.com")
+	if serr == nil || serr.kind != errQuota {
+		t.Fatalf("expected errQuota for 402, got %+v", serr)
+	}
+	if !strings.Contains(serr.message, "Insufficient credits") {
+		t.Errorf("expected credit hint in message, got: %s", serr.message)
+	}
+}
+
+func TestFirecrawlBackend_RateLimit(t *testing.T) {
+	fcSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusTooManyRequests)
+		w.Write([]byte(`{"success":false,"error":"Rate limit exceeded"}`))
+	}))
+	defer fcSrv.Close()
+
+	b := &firecrawlBackend{apiKey: "k", baseURL: fcSrv.URL}
+	_, serr := b.Fetch(context.Background(), fcSrv.Client(), "https://example.com")
+	if serr == nil || serr.kind != errRateLimit {
+		t.Fatalf("expected errRateLimit for 429, got %+v", serr)
 	}
 }
 

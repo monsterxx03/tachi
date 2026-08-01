@@ -92,3 +92,11 @@ func HostIsReserved(host string) (bool, error) {
 	}
 	return false, nil
 }
+
+// IsLoopbackHost reports whether host is a loopback hostname, without doing
+// any DNS resolution. Unlike HostIsReserved it only recognizes the well-known
+// loopback names/literals (localhost, 127.0.0.1, ::1) and is meant for cheap
+// local-dev decisions such as not forcing an http→https upgrade.
+func IsLoopbackHost(host string) bool {
+	return host == "localhost" || host == "127.0.0.1" || host == "::1"
+}

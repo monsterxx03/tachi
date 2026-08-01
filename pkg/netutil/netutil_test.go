@@ -150,3 +150,22 @@ func TestHostIsReserved_Hostname(t *testing.T) {
 		})
 	}
 }
+
+func TestIsLoopbackHost(t *testing.T) {
+	cases := []struct {
+		host string
+		want bool
+	}{
+		{"localhost", true},
+		{"127.0.0.1", true},
+		{"::1", true},
+		{"example.com", false},
+		{"localhost.localdomain", false},
+		{"127.0.0.2", false},
+	}
+	for _, tc := range cases {
+		if got := IsLoopbackHost(tc.host); got != tc.want {
+			t.Errorf("IsLoopbackHost(%q) = %v, want %v", tc.host, got, tc.want)
+		}
+	}
+}

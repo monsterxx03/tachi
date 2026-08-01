@@ -545,17 +545,16 @@ func (a *AIAgent) RegisterTools() {
 			a.Config.ToolRegistry.Register(ws)
 		}
 
-		// WebFetch — always registered, no API key needed (firecrawl type
-		// needs key; reserved targets fall back to native regardless).
-		a.Config.ToolRegistry.Register(&tools.WebFetchTool{
-			Type:           a.Config.FullConfig.WebFetch.Type,
-			Key:            a.Config.FullConfig.WebFetch.Key,
-			BaseURL:        a.Config.FullConfig.WebFetch.BaseURL,
+		// WebFetch — always registered; the built-in native backend needs no
+		// API key (firecrawl providers fall back to native on reserved
+		// targets or quota/rate-limit errors).
+		a.Config.ToolRegistry.Register(tools.NewWebFetchTool(tools.WebFetchToolConfig{
+			Providers:      a.Config.FullConfig.WebFetch.Providers,
 			Timeout:        a.Config.FullConfig.WebFetch.Timeout,
 			Proxy:          a.Config.FullConfig.WebFetch.Proxy,
 			ResultBaseDir:  a.Config.FullConfig.ToolResult.ResultFileDir(),
 			MaxReturnChars: a.Config.FullConfig.ToolResult.MaxResultChars(),
-		})
+		}))
 	}
 
 	// RecordMemory / MemoryRecall — only when memory backend is configured

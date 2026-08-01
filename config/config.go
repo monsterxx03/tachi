@@ -126,6 +126,13 @@ const (
 	WebSearchProviderBrave = "brave"
 )
 
+// Web fetch provider types. Referenced by WebFetchProviderConfig.Type.
+// Native is the built-in fallback and never needs to be configured.
+const (
+	WebFetchProviderFirecrawl = "firecrawl" // requires an API key
+	WebFetchProviderNative    = "native"    // built-in fallback
+)
+
 // WebSearchConfig configures the web search tool.
 //
 // Providers is a priority-ordered list: entries are tried front-to-back.
@@ -150,12 +157,26 @@ type WebSearchProviderConfig struct {
 	BaseURL string `yaml:"base_url"`           // optional API base URL override (exa default: https://api.exa.ai)
 }
 
+// WebFetchConfig configures the web fetch tool.
+//
+// Providers is a priority-ordered list of API-keyed backends (e.g.
+// firecrawl). The built-in native fetcher is always appended as the final
+// fallback — it needs no configuration and never pauses. When a provider's
+// quota/credits are exhausted (a clear error code: HTTP 402), it is marked
+// paused in <BaseDir>/webfetch_paused.json until the start of the next
+// billing cycle; transient rate limits (HTTP 429) only skip to the next
+// backend without pausing. Fallbacks are silent to the user (WARN logs only).
 type WebFetchConfig struct {
-	Type    string        `yaml:"type" default:"native"` // Fetch backend: "native" (default) | "firecrawl" (extensible for future providers)
-	Key     string        `yaml:"key"`                   // Firecrawl API key (required when type=firecrawl)
-	BaseURL string        `yaml:"base_url"`              // Firecrawl API base URL (default: https://api.firecrawl.dev)
-	Timeout time.Duration `yaml:"timeout" default:"60s"` // HTTP request timeout
-	Proxy   string        `yaml:"proxy"`                 // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
+	Providers []WebFetchProviderConfig `yaml:"providers"`
+	Timeout   time.Duration            `yaml:"timeout" default:"60s"` // HTTP request timeout
+	Proxy     string                   `yaml:"proxy"`                 // Optional proxy URL (e.g. socks5://127.0.0.1:1080)
+}
+
+// WebFetchProviderConfig is a single web fetch provider entry.
+type WebFetchProviderConfig struct {
+	Type    string `yaml:"type" default:"firecrawl"` // WebFetchProviderFirecrawl (native always falls back, no config needed)
+	Key     string `yaml:"key"`                      // provider API key
+	BaseURL string `yaml:"base_url"`                 // optional API base URL override (firecrawl default: https://api.firecrawl.dev)
 }
 
 // MCPTransportType represents the type of MCP transport protocol
@@ -933,6 +954,13 @@ func CronStorePath() string {
 // the next billing cycle.
 func WebSearchPausePath() string {
 	return filepath.Join(BaseDir(), "websearch_paused.json")
+}
+
+// WebFetchPausePath returns the path to the web fetch provider pause state
+// file. Quota-exhausted backends (e.g. firecrawl) are marked here and resume
+// at the start of the next billing cycle.
+func WebFetchPausePath() string {
+	return filepath.Join(BaseDir(), "webfetch_paused.json")
 }
 
 func Load() (*Config, error) {
