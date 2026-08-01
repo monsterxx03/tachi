@@ -120,12 +120,34 @@ type ProviderConfig struct {
 	Spec ModelSpec `yaml:"spec"`
 }
 
+// Web search provider types. Referenced by WebSearchProviderConfig.Type.
+const (
+	WebSearchProviderExa   = "exa" // default provider
+	WebSearchProviderBrave = "brave"
+)
+
+// WebSearchConfig configures the web search tool.
+//
+// Providers is a priority-ordered list: entries are tried front-to-back.
+// When a provider's monthly credit/quota is exhausted (a clear error code:
+// HTTP 402, or Brave's 429 with X-RateLimit-Remaining monthly remainder 0),
+// it is marked paused in <BaseDir>/websearch_paused.json until the start of
+// the next billing cycle (1st of next month) and searches fall back to the
+// next provider. Transient rate limits (HTTP 429) only skip to the next
+// provider without pausing. All of this is silent to the user (WARN logs
+// only); the tool errors out only when every provider is unavailable.
 type WebSearchConfig struct {
-	Type       string        `yaml:"type" default:"brave"` // Search provider type; only "brave" is supported for now (extensible for future providers)
-	Key        string        `yaml:"key"`
-	Timeout    time.Duration `yaml:"timeout" default:"30s"`
-	MaxResults int           `yaml:"max_results" default:"10"`
-	Proxy      string        `yaml:"proxy"` // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+	Providers  []WebSearchProviderConfig `yaml:"providers"`
+	Timeout    time.Duration             `yaml:"timeout" default:"30s"`
+	MaxResults int                       `yaml:"max_results" default:"10"`
+	Proxy      string                    `yaml:"proxy"` // Optional proxy URL (e.g. socks5://127.0.0.1:1080, http://127.0.0.1:8080)
+}
+
+// WebSearchProviderConfig is a single web search provider entry.
+type WebSearchProviderConfig struct {
+	Type    string `yaml:"type" default:"exa"` // WebSearchProviderExa (default) | WebSearchProviderBrave
+	Key     string `yaml:"key"`                // provider API key
+	BaseURL string `yaml:"base_url"`           // optional API base URL override (exa default: https://api.exa.ai)
 }
 
 type WebFetchConfig struct {
@@ -906,6 +928,13 @@ func CronStorePath() string {
 	return filepath.Join(BaseDir(), cronStoreFileName)
 }
 
+// WebSearchPausePath returns the path to the web search provider pause state
+// file. Quota-exhausted providers are marked here and resume at the start of
+// the next billing cycle.
+func WebSearchPausePath() string {
+	return filepath.Join(BaseDir(), "websearch_paused.json")
+}
+
 func Load() (*Config, error) {
 	path, err := ConfigPath()
 	if err != nil {
@@ -985,7 +1014,10 @@ func Init() (string, error) {
 			APIKey:  "<your-api-key>",
 		},
 	}
-	cfg.WebSearch.Key = "<your-web-search-api-key>"
+	cfg.WebSearch.Providers = []WebSearchProviderConfig{
+		{Type: WebSearchProviderExa, Key: "<your-exa-api-key>"}, // default provider
+		// {Type: WebSearchProviderBrave, Key: "<your-brave-api-key>"}, // optional fallback provider
+	}
 
 	data, err := yaml.Marshal(cfg)
 	if err != nil {

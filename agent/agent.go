@@ -536,17 +536,16 @@ func (a *AIAgent) RegisterTools() {
 	a.Config.ToolRegistry.Register(tools.NewBashTool(a.Config.ProcessManager))
 	a.Config.ToolRegistry.Register(tools.AskUserTool{})
 
-	// WebSearch — only register if provider + key are configured
+	// WebSearch — only register if at least one provider + key is configured
 	if a.Config.FullConfig != nil {
-		ws := tools.WebSearchTool{
-			ProviderType: a.Config.FullConfig.WebSearch.Type,
-			APIKey:       a.Config.FullConfig.WebSearch.Key,
-			Timeout:      a.Config.FullConfig.WebSearch.Timeout,
-			MaxResults:   a.Config.FullConfig.WebSearch.MaxResults,
-			Proxy:        a.Config.FullConfig.WebSearch.Proxy,
-		}
-		if _, key := ws.ResolveProvider(); key != "" {
-			a.Config.ToolRegistry.Register(&ws)
+		ws := tools.NewWebSearchTool(tools.WebSearchToolConfig{
+			Providers:  a.Config.FullConfig.WebSearch.Providers,
+			Timeout:    a.Config.FullConfig.WebSearch.Timeout,
+			MaxResults: a.Config.FullConfig.WebSearch.MaxResults,
+			Proxy:      a.Config.FullConfig.WebSearch.Proxy,
+		})
+		if ws.Configured() {
+			a.Config.ToolRegistry.Register(ws)
 		}
 
 		// WebFetch — always registered, no API key needed (firecrawl type
