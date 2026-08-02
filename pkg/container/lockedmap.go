@@ -3,6 +3,9 @@
 // single type that encapsulates the lock, eliminating lock/unlock
 // boilerplate at call sites while retaining compile-time type safety.
 //
+// Reads use a read lock (Load/Range/Len), so read-heavy workloads (e.g.
+// search hot paths) benefit from concurrent readers.
+//
 // Prefer LockedMap over sync.Map when:
 //   - You want type safety (no interface{} / type assertions)
 //   - Keys are frequently added and removed (not write-once-read-many)
@@ -11,19 +14,41 @@ package container
 
 import "sync"
 
-// Map is a generic concurrent map protected by a mutex. The zero value is
-// ready to use; the internal map is lazily initialized on first write.
+// LockedMap is a generic concurrent map protected by a read-write mutex.
+// The zero value is ready to use; the internal map is lazily initialized on
+// first write.
 type LockedMap[K comparable, V any] struct {
-	mu sync.Mutex
+	mu sync.RWMutex
 	m  map[K]V
 }
 
 // Load returns the value stored for key, and whether it was present.
 func (lm *LockedMap[K, V]) Load(key K) (V, bool) {
-	lm.mu.Lock()
+	lm.mu.RLock()
 	v, ok := lm.m[key]
-	lm.mu.Unlock()
+	lm.mu.RUnlock()
 	return v, ok
+}
+
+// Len returns the number of entries in the map.
+func (lm *LockedMap[K, V]) Len() int {
+	lm.mu.RLock()
+	n := len(lm.m)
+	lm.mu.RUnlock()
+	return n
+}
+
+// Range calls f for each key/value pair in the map until f returns false.
+// The order is unspecified. The map must not be mutated from within f
+// (deadlock — the read lock is held).
+func (lm *LockedMap[K, V]) Range(f func(key K, val V) bool) {
+	lm.mu.RLock()
+	defer lm.mu.RUnlock()
+	for k, v := range lm.m {
+		if !f(k, v) {
+			break
+		}
+	}
 }
 
 // Store sets the value for key.
