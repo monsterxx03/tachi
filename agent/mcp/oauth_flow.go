@@ -493,6 +493,106 @@ func buildWellKnownURLs(baseURL, suffix string) []string {
 
 // --- browser callback ---
 
+// --- shared local callback server ---
+
+// oauthCallbackServer is a local HTTP listener that captures the OAuth
+// redirect, validating the state parameter. Shared by the browser and manual
+// flows so the CSRF check, error handling and HTML responses live in one
+// place (they were previously ~50 duplicated lines).
+type oauthCallbackServer struct {
+	httpSrv *http.Server
+	mu      sync.Mutex
+	gotCode string
+	gotErr  string
+	done    chan struct{}
+}
+
+// ErrOAuthCallbackTimeout is returned by Wait when no redirect arrives
+// within oauthCallbackTimeout. Callers decide between erroring (browser
+// flow) and re-sending manual instructions (manual flow).
+var ErrOAuthCallbackTimeout = errors.New("timed out waiting for OAuth callback")
+
+// startOAuthCallbackServer binds the callback listener on the configured
+// host/port. state is validated on every callback (CSRF guard).
+func startOAuthCallbackServer(srv *config.MCPServerConfig, state string) (*oauthCallbackServer, error) {
+	s := &oauthCallbackServer{done: make(chan struct{})}
+
+	mux := http.NewServeMux()
+	mux.HandleFunc(oauthCallbackPath, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+
+		s.mu.Lock()
+		defer s.mu.Unlock()
+
+		if e := q.Get("error"); e != "" {
+			s.gotErr = fmt.Sprintf("OAuth error: %s — %s", e, q.Get("error_description"))
+			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>%s</p></body></html>", s.gotErr)
+			close(s.done)
+			return
+		}
+		if q.Get("state") != state {
+			s.gotErr = "state mismatch — possible CSRF attack"
+			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>State mismatch</p></body></html>")
+			close(s.done)
+			return
+		}
+
+		s.gotCode = q.Get("code")
+		fmt.Fprintf(w, "<html><body><h1>Auth Successful ✓</h1><p>You can close this window.</p></body></html>")
+		close(s.done)
+	})
+
+	serverAddr := fmt.Sprintf("%s:%d", srv.OAuth.CallbackHost, srv.OAuth.CallbackPort)
+	httpSrv := &http.Server{
+		Addr:           serverAddr,
+		Handler:        mux,
+		ReadTimeout:    10 * time.Second,
+		WriteTimeout:   10 * time.Second,
+		IdleTimeout:    oauthCallbackTimeout,
+		MaxHeaderBytes: 1 << 20,
+	}
+	ln, err := net.Listen("tcp", httpSrv.Addr)
+	if err != nil {
+		return nil, err
+	}
+	go func() { _ = httpSrv.Serve(ln) }()
+	s.httpSrv = httpSrv
+	return s, nil
+}
+
+// Close shuts down the listener.
+func (s *oauthCallbackServer) Close() error {
+	if s.httpSrv != nil {
+		return s.httpSrv.Close()
+	}
+	return nil
+}
+
+// Wait blocks until the callback arrives (returning the authorization code),
+// the context is cancelled, or oauthCallbackTimeout elapses.
+func (s *oauthCallbackServer) Wait(ctx context.Context) (string, error) {
+	select {
+	case <-s.done:
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.gotErr != "" {
+			return "", errors.New(s.gotErr)
+		}
+		if s.gotCode == "" {
+			return "", errors.New("no authorization code received")
+		}
+		return s.gotCode, nil
+
+	case <-ctx.Done():
+		return "", ctx.Err()
+
+	case <-time.After(oauthCallbackTimeout):
+		return "", ErrOAuthCallbackTimeout
+	}
+}
+
+// --- browser flow ---
+
 func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, statusFn func(string)) error {
 	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
@@ -545,56 +645,11 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, status
 		statusFn(fmt.Sprintf("Auth URL (opening browser):\n%s", authURL))
 	}
 
-	// Local callback server
-	var (
-		mu      sync.Mutex
-		gotCode string
-		gotErr  string
-	)
-	done := make(chan struct{})
-
-	mux := http.NewServeMux()
-	mux.HandleFunc(oauthCallbackPath, func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		code := q.Get("code")
-
-		mu.Lock()
-		defer mu.Unlock()
-
-		if e := q.Get("error"); e != "" {
-			gotErr = fmt.Sprintf("OAuth error: %s — %s", e, q.Get("error_description"))
-			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>%s</p></body></html>", gotErr)
-			close(done)
-			return
-		}
-		if q.Get("state") != state {
-			gotErr = "state mismatch — possible CSRF attack"
-			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>State mismatch</p></body></html>")
-			close(done)
-			return
-		}
-
-		gotCode = code
-		fmt.Fprintf(w, "<html><body><h1>Auth Successful ✓</h1><p>You can close this window.</p></body></html>")
-		close(done)
-	})
-
-	serverAddr := fmt.Sprintf("%s:%d", srv.OAuth.CallbackHost, srv.OAuth.CallbackPort)
-	httpSrv := &http.Server{
-		Addr:           serverAddr,
-		Handler:        mux,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		IdleTimeout:    oauthCallbackTimeout,
-		MaxHeaderBytes: 1 << 20,
-	}
-
-	ln, err := net.Listen("tcp", httpSrv.Addr)
+	cb, err := startOAuthCallbackServer(srv, state)
 	if err != nil {
 		return fmt.Errorf("listen: %w", err)
 	}
-	go func() { _ = httpSrv.Serve(ln) }()
-	defer httpSrv.Close()
+	defer cb.Close()
 
 	// Open the browser. If that fails (e.g. headless server), bail immediately
 	// rather than waiting 5 minutes for a callback that will never arrive.
@@ -602,28 +657,15 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, status
 		return fmt.Errorf("cannot open browser: %w", err)
 	}
 
-	select {
-	case <-done:
-		mu.Lock()
-		defer mu.Unlock()
-		if gotErr != "" {
-			return errors.New(gotErr)
-		}
-		if gotCode == "" {
-			return errors.New("no authorization code received")
-		}
-		if err := handler.ProcessAuthorizationResponse(ctx, gotCode, state, codeVerifier); err != nil {
-			return fmt.Errorf("token exchange: %w", err)
-		}
-		logger.FromContext(ctx).Info(ctx, "MCP: browser OAuth succeeded", "server", srv.Name)
-		return nil
-
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case <-time.After(oauthCallbackTimeout):
-		return errors.New("timed out waiting for browser redirect")
+	code, err := cb.Wait(ctx)
+	if err != nil {
+		return err
 	}
+	if err := handler.ProcessAuthorizationResponse(ctx, code, state, codeVerifier); err != nil {
+		return fmt.Errorf("token exchange: %w", err)
+	}
+	logger.FromContext(ctx).Info(ctx, "MCP: browser OAuth succeeded", "server", srv.Name)
+	return nil
 }
 
 // --- manual flow ---
@@ -678,81 +720,27 @@ func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn 
 	authURL, _ := handler.GetAuthorizationURL(ctx, state, codeChallenge)
 	logger.FromContext(ctx).Info(ctx, "MCP: manual OAuth authorize URL", "server", srv.Name, "auth_url", authURL)
 
-	mux := http.NewServeMux()
-	var (
-		mu      sync.Mutex
-		gotCode string
-		gotErr  string
-	)
-	done := make(chan struct{})
-
-	mux.HandleFunc(oauthCallbackPath, func(w http.ResponseWriter, r *http.Request) {
-		q := r.URL.Query()
-		code := q.Get("code")
-
-		mu.Lock()
-		defer mu.Unlock()
-
-		if e := q.Get("error"); e != "" {
-			gotErr = fmt.Sprintf("OAuth error: %s — %s", e, q.Get("error_description"))
-			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>%s</p></body></html>", gotErr)
-			close(done)
-			return
-		}
-		if q.Get("state") != state {
-			gotErr = "state mismatch — possible CSRF attack"
-			fmt.Fprintf(w, "<html><body><h1>Auth Failed</h1><p>State mismatch</p></body></html>")
-			close(done)
-			return
-		}
-
-		gotCode = code
-		fmt.Fprintf(w, "<html><body><h1>Auth Successful ✓</h1><p>You can close this window.</p></body></html>")
-		close(done)
-	})
-
-	serverAddr := fmt.Sprintf("%s:%d", srv.OAuth.CallbackHost, srv.OAuth.CallbackPort)
-	httpSrv := &http.Server{
-		Addr:           serverAddr,
-		Handler:        mux,
-		ReadTimeout:    10 * time.Second,
-		WriteTimeout:   10 * time.Second,
-		IdleTimeout:    oauthCallbackTimeout,
-		MaxHeaderBytes: 1 << 20,
-	}
-
-	ln, err := net.Listen("tcp", httpSrv.Addr)
+	cb, err := startOAuthCallbackServer(srv, state)
 	if err != nil {
 		return deliverManualInstructions(runErrFn, srv.Name, authURL)
 	}
-	go func() { _ = httpSrv.Serve(ln) }()
-	defer httpSrv.Close()
+	defer cb.Close()
 
 	// Show auth URL and waiting status in one message.
 	runErrFn(fmt.Sprintf("Auth URL:\n%s\n\nWaiting for callback...", authURL))
 
-	select {
-	case <-done:
-		mu.Lock()
-		defer mu.Unlock()
-		if gotErr != "" {
-			return errors.New(gotErr)
-		}
-		if gotCode == "" {
-			return errors.New("no authorization code received")
-		}
-		if err := handler.ProcessAuthorizationResponse(ctx, gotCode, state, codeVerifier); err != nil {
-			return fmt.Errorf("token exchange: %w", err)
-		}
-		logger.FromContext(ctx).Info(ctx, "MCP: manual callback OAuth succeeded", "server", srv.Name)
-		return nil
-
-	case <-ctx.Done():
-		return ctx.Err()
-
-	case <-time.After(oauthCallbackTimeout):
+	code, err := cb.Wait(ctx)
+	if errors.Is(err, ErrOAuthCallbackTimeout) {
 		return deliverManualInstructions(runErrFn, srv.Name, authURL)
 	}
+	if err != nil {
+		return err
+	}
+	if err := handler.ProcessAuthorizationResponse(ctx, code, state, codeVerifier); err != nil {
+		return fmt.Errorf("token exchange: %w", err)
+	}
+	logger.FromContext(ctx).Info(ctx, "MCP: manual callback OAuth succeeded", "server", srv.Name)
+	return nil
 }
 
 // buildManualAuthURL generates an authorization URL for the pure-manual

@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 // ToolListDelta describes the changes detected during a tool list refresh.
@@ -32,17 +33,19 @@ type toolSignature struct {
 	Hash uint64 // fnv64a hash of JSON-serialized input schema
 }
 
+// serverToolSigs is the per-server signature list stored in the cache.
+// The alias disambiguates container.LockedMap[string][]toolSignature in the
+// struct field (Go parses the trailing [] as an index expression there).
+type serverToolSigs = []toolSignature
+
 // toolListCache tracks the last known tool state per server and provides
 // diff-based change detection. Thread-safe.
 type toolListCache struct {
-	mu      sync.RWMutex
-	entries map[string][]toolSignature // serverName → sorted signatures
+	entries container.LockedMap[string, serverToolSigs] // serverName → sorted signatures
 }
 
 func newToolListCache() *toolListCache {
-	return &toolListCache{
-		entries: make(map[string][]toolSignature),
-	}
+	return &toolListCache{}
 }
 
 // computeToolHash computes a hash of the tool's name and input schema for
@@ -69,18 +72,14 @@ func (c *toolListCache) Snapshot(serverName string, tools []MCPTool) {
 		return sigs[i].Name < sigs[j].Name
 	})
 
-	c.mu.Lock()
-	c.entries[serverName] = sigs
-	c.mu.Unlock()
+	c.entries.Store(serverName, sigs)
 }
 
 // Diff compares new tools against the cached snapshot for the given server
 // and returns the delta. Returns all tools as Added if no cache exists
 // (first-time use).
 func (c *toolListCache) Diff(serverName string, newTools []MCPTool) *ToolListDelta {
-	c.mu.RLock()
-	oldSigs := c.entries[serverName]
-	c.mu.RUnlock()
+	oldSigs, _ := c.entries.Load(serverName)
 
 	delta := &ToolListDelta{ServerName: serverName}
 

@@ -273,18 +273,7 @@ func (t *WebFetchTool) fetchWithBackends(ctx context.Context, args webFetchArgs,
 		if e, ok := webFetchCacheGet(cacheKey); ok {
 			logger.FromContext(ctx).Info(ctx, "WebFetch: provider served cache hit",
 				"provider", b.Type(), "url", u)
-			content := t.truncateWebFetchOutput(ctx, e.content, u)
-			if args.Prompt != "" {
-				content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
-			}
-			out := buildWebFetchOutput(u, webFetchCacheEntry{
-				content:     content,
-				contentType: e.contentType,
-				bytes:       e.bytes,
-				code:        e.code,
-				codeText:    e.codeText,
-			}, 0)
-			return marshalResult(out)
+			return t.shapeOutput(ctx, u, e, args.Prompt, 0)
 		}
 
 		start := time.Now()
@@ -305,23 +294,13 @@ func (t *WebFetchTool) fetchWithBackends(ctx context.Context, args webFetchArgs,
 				size:        len(res.content),
 			})
 
-			// Apply file-based truncation if content exceeds the limit.
-			content := t.truncateWebFetchOutput(ctx, res.content, u)
-
-			// Prepend prompt if given.
-			if args.Prompt != "" {
-				content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", args.Prompt, content)
-			}
-
-			out := buildWebFetchOutput(u, webFetchCacheEntry{
-				content:     content,
+			return t.shapeOutput(ctx, u, webFetchCacheEntry{
+				content:     res.content,
 				contentType: res.contentType,
 				bytes:       res.bytes,
 				code:        res.code,
 				codeText:    res.codeText,
-			}, time.Since(start).Milliseconds())
-
-			return marshalResult(out)
+			}, args.Prompt, time.Since(start).Milliseconds())
 		}
 
 		switch serr.kind {
@@ -776,6 +755,29 @@ func crossHostRedirectOutput(originalURL string, resp *http.Response) webFetchOu
 // ---------------------------------------------------------------------------
 // File-based truncation for oversized WebFetch results
 // ---------------------------------------------------------------------------
+
+// shapeOutput applies the shared result shaping for a fetched or cached
+// entry — truncation (file-based) + prompt prefix — and builds the final
+// marshaled output. Used by both the cache-hit and fresh-fetch paths so the
+// two can never drift.
+func (t *WebFetchTool) shapeOutput(ctx context.Context, u string, e webFetchCacheEntry, prompt string, durationMs int64) (string, error) {
+	// Apply file-based truncation if content exceeds the limit.
+	content := t.truncateWebFetchOutput(ctx, e.content, u)
+
+	// Prepend prompt if given.
+	if prompt != "" {
+		content = fmt.Sprintf("[WebFetch 提取指令: %s]\n\n--- 以下为网页内容 ---\n\n%s", prompt, content)
+	}
+
+	out := buildWebFetchOutput(u, webFetchCacheEntry{
+		content:     content,
+		contentType: e.contentType,
+		bytes:       e.bytes,
+		code:        e.code,
+		codeText:    e.codeText,
+	}, durationMs)
+	return marshalResult(out)
+}
 
 // truncateWebFetchOutput checks if the fetched content exceeds
 // MaxReturnChars and, if so, saves the full output to disk and
