@@ -2,7 +2,6 @@ package container
 
 import (
 	"fmt"
-	"reflect"
 	"slices"
 	"sort"
 	"strings"
@@ -117,7 +116,7 @@ func TestSearchFuzzy(t *testing.T) {
 				for i, m := range got {
 					paths[i] = m.Path
 				}
-				if !contains(paths, "tui/model.go") {
+				if !slices.Contains(paths, "tui/model.go") {
 					t.Errorf("expected model.go in results: %v", paths)
 				}
 			},
@@ -139,7 +138,7 @@ func TestSearchFuzzy(t *testing.T) {
 				for i, m := range got {
 					paths[i] = m.Path
 				}
-				if !contains(paths, "tools/grep.go") {
+				if !slices.Contains(paths, "tools/grep.go") {
 					t.Errorf("expected grep.go in results: %v", paths)
 				}
 			},
@@ -152,7 +151,7 @@ func TestSearchFuzzy(t *testing.T) {
 				for i, m := range got {
 					paths[i] = m.Path
 				}
-				if !contains(paths, "tools/glob.go") {
+				if !slices.Contains(paths, "tools/glob.go") {
 					t.Errorf("expected glob.go in results: %v", paths)
 				}
 			},
@@ -165,7 +164,7 @@ func TestSearchFuzzy(t *testing.T) {
 				for i, m := range got {
 					paths[i] = m.Path
 				}
-				if !contains(paths, "agent/agent.go") {
+				if !slices.Contains(paths, "agent/agent.go") {
 					t.Errorf("expected agent.go in results: %v", paths)
 				}
 			},
@@ -307,13 +306,6 @@ func TestWalkPrefixExactCase(t *testing.T) {
 	if got := tr.Search("src/", 10); len(got) < 1 {
 		t.Errorf("expected results for src/: %v", got)
 	}
-}
-
-// reflect is used in TestSearchExact-style assertions if needed
-var _ = reflect.TypeOf
-
-func contains(ss []string, s string) bool {
-	return slices.Contains(ss, s)
 }
 
 func TestPathTrieSiblings(t *testing.T) {

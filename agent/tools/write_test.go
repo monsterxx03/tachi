@@ -3,6 +3,7 @@ package tools
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -66,7 +67,7 @@ func TestWriteTool_WriteAbsolutePath(t *testing.T) {
 	}
 
 	// Verify output message
-	if !containsStr(output, filePath) {
+	if !strings.Contains(output, filePath) {
 		t.Errorf("expected output to mention path, got: %s", output)
 	}
 }
@@ -197,12 +198,3 @@ func TestWriteTool_NotParallel(t *testing.T) {
 	}
 }
 
-// containsStr reports whether substr is within s.
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
