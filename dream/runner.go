@@ -25,8 +25,10 @@ type RunConfig struct {
 	// DreamProvider from config — if set, dream resolves its own provider.
 	DreamProvider string // provider name (empty → use fallback)
 
-	// Providers is the full provider list from config, used to resolve DreamProvider.
-	Providers []config.ProviderConfig
+	// Config is the full config, used to resolve DreamProvider via the shared
+	// config.BuildProvider (env-aware API keys + field validation). Required
+	// when DreamProvider is set.
+	Config *config.Config
 
 	MaxIter         int
 	MaxTokens       int
@@ -137,20 +139,12 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 // resolveProvider picks the provider: DreamProvider config > FallbackProvider.
 func resolveProvider(cfg RunConfig) (llm.Provider, error) {
 	if cfg.DreamProvider != "" {
-		// Find provider config by name.
-		var pCfg *config.ProviderConfig
-		for i := range cfg.Providers {
-			if cfg.Providers[i].Name == cfg.DreamProvider {
-				pCfg = &cfg.Providers[i]
-				break
-			}
+		if cfg.Config == nil {
+			return nil, fmt.Errorf("dream: config required to resolve provider %q", cfg.DreamProvider)
 		}
-		if pCfg == nil {
-			return nil, fmt.Errorf("dream: provider %q not found", cfg.DreamProvider)
-		}
-		p, err := llm.NewProvider(pCfg.Type, pCfg.APIKey, pCfg.BaseURL, pCfg.Model)
+		p, _, err := cfg.Config.BuildProvider(cfg.DreamProvider)
 		if err != nil {
-			return nil, fmt.Errorf("dream: create provider: %w", err)
+			return nil, fmt.Errorf("dream: resolve provider: %w", err)
 		}
 		return p, nil
 	}
