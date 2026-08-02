@@ -46,6 +46,7 @@ func (a *AIAgent) NewDeepResearch(cfg *config.Config) (*deepresearch.DeepResearc
 		a.Config.Provider,
 		runner,
 		lg,
+		cfg.MaxTokens,
 	), nil
 }
 
@@ -66,5 +67,6 @@ func (a *AIAgent) NewDeepResearchWithProvider(
 		provider,
 		runner,
 		lg,
+		cfg.MaxTokens,
 	), nil
 }

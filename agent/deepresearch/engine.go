@@ -52,6 +52,9 @@ type DeepResearch struct {
 	defaultProvider llm.Provider
 	runner          SubagentRunner
 	logger          *logger.Logger
+	// reportMaxTokens caps the direct LLM call that generates the report
+	// HTML. Follows the top-level config max_tokens (never hardcoded).
+	reportMaxTokens int
 
 	// providerCache caches named providers to avoid re-creating them on each
 	// call to getProvider. The default provider is NOT cached here since it
@@ -67,19 +70,27 @@ type DeepResearch struct {
 //   - defaultProvider: fallback LLM provider when a named provider is not found
 //   - runner: used to execute sub-agent research tasks
 //   - logger: optional logger for debug output
+//   - reportMaxTokens: MaxTokens budget for the report-generation LLM call,
+//     taken from the top-level config max_tokens; <= 0 falls back to the
+//     package default.
 func New(
 	cfg *config.DeepResearchConfig,
 	providersCfg []config.ProviderConfig,
 	defaultProvider llm.Provider,
 	runner SubagentRunner,
 	logger *logger.Logger,
+	reportMaxTokens int,
 ) *DeepResearch {
+	if reportMaxTokens <= 0 {
+		reportMaxTokens = config.DefaultMaxTokens
+	}
 	return &DeepResearch{
 		cfg:             cfg,
 		providersCfg:    providersCfg,
 		defaultProvider: defaultProvider,
 		runner:          runner,
 		logger:          logger,
+		reportMaxTokens: reportMaxTokens,
 		providerCache:   make(map[string]llm.Provider),
 	}
 }
@@ -404,8 +415,15 @@ func (dr *DeepResearch) buildResearcherPrompt(query, researchGoal string) string
 	return prompt + timeInfo
 }
 
-// writeReport generates the final research report via a sub-agent.
-// The sub-agent uses WriteFile to save the HTML to outputPath.
+// writeReport generates the final research report.
+// The HTML is produced by a direct LLM call and written to outputPath by
+// the engine itself — never delegated to a sub-agent. This guarantees the
+// announced "saved" path always matches what is actually on disk (a
+// sub-agent writer could fail to write or write elsewhere, and the engine
+// had no way to verify before announcing success).
+//
+// Returns a concise summary (not the HTML) for display in chat UIs; the
+// full HTML lives in the file at outputPath.
 func (dr *DeepResearch) writeReport(
 	ctx context.Context,
 	topic string,
@@ -414,33 +432,72 @@ func (dr *DeepResearch) writeReport(
 	outputPath string,
 ) (string, error) {
 	if len(learnings) == 0 {
-		return dr.buildPartialReport(topic, learnings, urls, nil), nil
+		report := dr.buildPartialReport(topic, learnings, urls, nil)
+		if err := fileutil.WriteFileShared(outputPath, []byte(report)); err != nil {
+			return "", fmt.Errorf("save partial report: %w", err)
+		}
+		return report, nil
 	}
 
-	return dr.writeReportViaSubagent(ctx, topic, learnings, urls, outputPath)
+	html, err := dr.generateReportHTML(ctx, topic, learnings, urls)
+	if err != nil {
+		return "", err
+	}
+
+	if err := fileutil.WriteFileShared(outputPath, []byte(html)); err != nil {
+		return "", fmt.Errorf("save report: %w", err)
+	}
+
+	return buildReportSummary(topic, learnings, urls, outputPath), nil
 }
 
-// writeReportViaSubagent delegates report writing to a sub-agent.
-// The sub-agent is instructed to use WriteFile to save the HTML to outputPath.
-func (dr *DeepResearch) writeReportViaSubagent(
+// generateReportHTML produces the final HTML report via a direct LLM call.
+// A direct call (instead of a sub-agent) lets the engine control MaxTokens —
+// reports routinely exceed the sub-agent's 4096-token cap — and keeps file
+// writing in the engine, so the saved path is always the reported path.
+func (dr *DeepResearch) generateReportHTML(
 	ctx context.Context,
 	topic string,
 	learnings []string,
 	urls []string,
-	outputPath string,
 ) (string, error) {
-	prompt := dr.buildReportWriterPrompt(topic, learnings, urls, outputPath)
-
-	dr.log("DeepResearch: writing report via sub-agent")
-	output, err := dr.runner.Run(ctx, prompt, dr.cfg.ResearcherTools())
+	provider, err := dr.getProvider(dr.cfg.QueryGeneratorProvider)
 	if err != nil {
-		return "", fmt.Errorf("report sub-agent: %w", err)
+		return "", fmt.Errorf("get provider for report writing: %w", err)
 	}
-	return output, nil
+
+	prompt := dr.buildReportWriterPrompt(topic, learnings, urls, "")
+
+	disabled := false
+	resp, err := provider.CreateChat(ctx, []llm.Message{
+		{Role: "system", Content: prompt},
+		{Role: "user", Content: fmt.Sprintf("Write the research report for: %s", topic)},
+	}, nil, llm.ChatOptions{
+		MaxTokens: dr.reportMaxTokens,
+		Thinking:  &disabled,
+	})
+	if err != nil {
+		return "", fmt.Errorf("LLM report generation failed: %w", err)
+	}
+
+	html := strings.TrimSpace(resp.Content)
+	if html == "" {
+		return "", fmt.Errorf("LLM returned empty report")
+	}
+	return html, nil
+}
+
+// buildReportSummary returns a concise summary of the completed research
+// report for display in chat UIs — the full HTML stays in the file at
+// outputPath and is never pasted into the conversation.
+func buildReportSummary(topic string, learnings []string, urls []string, outputPath string) string {
+	return fmt.Sprintf("📄 **研究报告已完成**\n\n- **主题**: %s\n- **发现**: %d 条\n- **来源**: %d 个\n- **文件**: `%s`",
+		topic, len(learnings), len(urls), outputPath)
 }
 
 // buildReportWriterPrompt builds the prompt for the report writer.
-// outputPath is the target file path for the HTML report.
+// outputPath is informational — the engine writes the file itself after
+// the LLM returns the HTML, so the prompt only needs the HTML content back.
 func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string, urls []string, outputPath string) string {
 	learningsText := strings.Join(learnings, "\n\n---\n\n")
 	urlsText := strings.Join(urls, "\n")

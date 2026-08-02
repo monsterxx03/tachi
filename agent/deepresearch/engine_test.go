@@ -3,6 +3,8 @@ package deepresearch
 import (
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -65,6 +67,14 @@ func (m *mockProvider) CreateChatStream(_ context.Context, _ []llm.Message, _ []
 	return nil, fmt.Errorf("not implemented")
 }
 
+// mockProviderFail always fails CreateChat — used to exercise the engine's
+// report-generation error path.
+type mockProviderFail struct{ mockProvider }
+
+func (m *mockProviderFail) CreateChat(_ context.Context, _ []llm.Message, _ []llm.Tool, _ llm.ChatOptions) (*llm.Response, error) {
+	return nil, fmt.Errorf("mock provider failure")
+}
+
 // ---- test config helper ----
 
 func testConfig() *config.Config {
@@ -86,7 +96,7 @@ func TestNewEngine(t *testing.T) {
 	runner := &mockSubagentRunner{}
 	logger := logger.Default()
 
-	engine := New(&cfg.DeepResearch, cfg.Providers, mockProv, runner, logger)
+	engine := New(&cfg.DeepResearch, cfg.Providers, mockProv, runner, logger, cfg.MaxTokens)
 	if engine == nil {
 		t.Fatal("New returned nil")
 	}
@@ -205,7 +215,7 @@ func TestTruncateText(t *testing.T) {
 
 func TestBuildPartialReport(t *testing.T) {
 	cfg := testConfig()
-	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil)
+	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil, cfg.MaxTokens)
 
 	report := engine.buildPartialReport("test topic", []string{"learning 1", "learning 2"}, []string{"https://example.com"}, nil)
 
@@ -231,7 +241,7 @@ func TestBuildPartialReport(t *testing.T) {
 
 func TestBuildPartialReportWithError(t *testing.T) {
 	cfg := testConfig()
-	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil)
+	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil, cfg.MaxTokens)
 
 	err := fmt.Errorf("test error")
 	report := engine.buildPartialReport("test", []string{"learning"}, nil, err)
@@ -243,12 +253,94 @@ func TestBuildPartialReportWithError(t *testing.T) {
 
 func TestBuildPartialReportNoLearnings(t *testing.T) {
 	cfg := testConfig()
-	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil)
+	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil, cfg.MaxTokens)
 
 	report := engine.buildPartialReport("test", nil, nil, nil)
 
 	if !strings.Contains(report, "No findings") {
 		t.Errorf("report should mention no findings, got: %s", report)
+	}
+}
+
+// TestWriteReport_SavesHTMLAndReturnsSummary verifies the report writer
+// generates HTML via a direct LLM call, the engine writes it to outputPath
+// itself, and the returned summary references the saved file — the announced
+// path must always match what is actually on disk.
+func TestWriteReport_SavesHTMLAndReturnsSummary(t *testing.T) {
+	cfg := testConfig()
+	prov := &mockProvider{responses: map[string]string{
+		"Write the research report for: test topic": "<!DOCTYPE html><html><head><title>R</title></head><body><h1>Report</h1></body></html>",
+	}}
+	engine := New(&cfg.DeepResearch, cfg.Providers, prov, &mockSubagentRunner{}, nil, cfg.MaxTokens)
+
+	outputPath := filepath.Join(t.TempDir(), "2026-08-02_1932-test-topic.html")
+	summary, err := engine.writeReport(context.Background(), "test topic",
+		[]string{"learning 1", "learning 2"}, []string{"https://example.com"}, outputPath)
+	if err != nil {
+		t.Fatalf("writeReport: %v", err)
+	}
+
+	// The file must exist on disk at the announced path.
+	data, readErr := os.ReadFile(outputPath)
+	if readErr != nil {
+		t.Fatalf("report file not found at outputPath: %v", readErr)
+	}
+	if !strings.Contains(string(data), "<html>") {
+		t.Errorf("file content should be HTML, got: %s", data)
+	}
+
+	// Summary must be concise and reference the file path.
+	if !strings.Contains(summary, outputPath) {
+		t.Errorf("summary should contain output path, got: %q", summary)
+	}
+	if strings.Contains(summary, "<html>") {
+		t.Errorf("summary must not contain raw HTML, got: %q", summary)
+	}
+}
+
+// TestWriteReport_EmptyLearningsStillSavesFile verifies that a research run
+// with no learnings still produces a partial report file on disk instead of
+// announcing a save that never happened.
+func TestWriteReport_EmptyLearningsStillSavesFile(t *testing.T) {
+	cfg := testConfig()
+	engine := New(&cfg.DeepResearch, cfg.Providers, &mockProvider{}, &mockSubagentRunner{}, nil, cfg.MaxTokens)
+
+	outputPath := filepath.Join(t.TempDir(), "empty.html")
+	report, err := engine.writeReport(context.Background(), "empty topic", nil, nil, outputPath)
+	if err != nil {
+		t.Fatalf("writeReport: %v", err)
+	}
+
+	if _, readErr := os.Stat(outputPath); readErr != nil {
+		t.Fatalf("partial report file not saved: %v", readErr)
+	}
+	if !strings.Contains(report, "No findings") {
+		t.Errorf("report should mention no findings, got: %q", report)
+	}
+}
+
+// TestWriteReport_LLMFailureReturnsError verifies a report-generation LLM
+// failure surfaces as an error so Run() falls back to a partial report
+// instead of announcing a bogus save.
+func TestWriteReport_LLMFailureReturnsError(t *testing.T) {
+	cfg := testConfig()
+	prov := &mockProviderFail{}
+	engine := New(&cfg.DeepResearch, cfg.Providers, prov, &mockSubagentRunner{}, nil, cfg.MaxTokens)
+
+	outputPath := filepath.Join(t.TempDir(), "fail.html")
+	_, err := engine.writeReport(context.Background(), "topic",
+		[]string{"learning"}, []string{"https://example.com"}, outputPath)
+	if err == nil {
+		t.Fatal("expected error from failing LLM provider")
+	}
+}
+
+// TestBuildReportSummary verifies the summary format.
+func TestBuildReportSummary(t *testing.T) {
+	summary := buildReportSummary("topic", []string{"a", "b"}, []string{"u1"}, "/tmp/r.html")
+	if !strings.Contains(summary, "topic") || !strings.Contains(summary, "2 条") ||
+		!strings.Contains(summary, "1 个") || !strings.Contains(summary, "/tmp/r.html") {
+		t.Errorf("unexpected summary: %q", summary)
 	}
 }
 

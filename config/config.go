@@ -640,8 +640,8 @@ The HTML should be a complete, valid HTML5 document with <!DOCTYPE html>, <html>
 Include all CSS inline in a <style> tag within <head>. Do NOT use external CSS or JavaScript.
 Write the report in {language}.
 
-Use the WriteFile tool to save the HTML report to: {output_path}
-Then return the complete HTML content of the report as your final output.`
+Output the complete HTML document as your final response. The report file will be saved by the system to: {output_path}
+Do NOT call any tools. Return the full HTML content only, without markdown code fences.`
 
 type DeepResearchConfig struct {
 	DefaultDepth   int           `yaml:"default_depth" default:"2"`

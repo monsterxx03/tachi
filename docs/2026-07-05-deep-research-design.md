@@ -166,12 +166,16 @@ function deepResearch(query, depth, breadth, learnings=[], urls=[]):
         )
 
     ──────────────────────────────────────────
-    ④ 写最终报告（SubAgent 写出 HTML 文件）
+    ④ 写最终报告（引擎直调 LLM 生成 HTML 并自行落盘）
     ──────────────────────────────────────────
-    // 使用一个报告 SubAgent 来写 HTML 报告。
-    // SubAgent 的工具集中包含 WriteFile，可以直接将 HTML 写入 outputPath。
-    // 成功路径返回 HTML 内容；失败时降级为 buildPartialReport 并保存到同一路径。
-    report = writeReportViaSubagent(query, allLearnings, allUrls, outputPath)
+    // 报告生成走引擎直调 LLM（与 generateQueries 同一模式），不再委托
+    // SubAgent 写文件：SubAgent 的 MaxTokens 被 executor 写死为 4096，
+    // 装不下 10KB+ 的 HTML，且引擎无法验证 SubAgent 是否真的把文件写到了
+    // outputPath —— 之前存在"提示已保存但磁盘无文件"的假成功问题。
+    // 引擎拿到 HTML 后自行 WriteFileShared 到 outputPath，成功路径返回
+    // 简洁摘要（供聊天界面展示），HTML 只落在磁盘上。
+    // 失败时降级为 buildPartialReport 并保存到同一路径。
+    report = writeReport(query, allLearnings, allUrls, outputPath)
     return report
 ```
 
@@ -198,7 +202,7 @@ Return your findings as a structured summary with:
 Available tools: WebSearch, WebFetch, ReadFile, Grep
 ```
 
-#### 写报告 SubAgent（`config.deep_research.prompts.report_writer`）
+#### 写报告 Prompt（`config.deep_research.prompts.report_writer`）
 
 ```
 You are a research report writer. Write a comprehensive, well-structured,
@@ -213,7 +217,7 @@ Source URLs:
 {urls}
 
 Write a self-contained HTML5 document with inline CSS styling.
-Use the WriteFile tool to save it to: {outputPath}
+The report file will be saved by the system to: {outputPath}
 
 The report should include:
 1. Executive Summary
@@ -400,8 +404,10 @@ func (cfg *DeepResearchConfig) QueryGeneratorPrompt() string {
     return defaultQueryGeneratorPrompt
 }
 
-// report_writer 不再有 mode 切换——始终通过 SubAgent 写 HTML 报告。
-// Prompt 模板变量增加 {outputPath}，SubAgent 通过 WriteFile 写入指定路径。
+// report_writer 不再有 mode 切换——报告 HTML 由引擎直调 LLM 生成（MaxTokens
+// 跟随顶层配置 max_tokens），引擎自行 WriteFileShared 落盘到 outputPath。
+// Prompt 模板变量保留 {outputPath} 仅作提示（"文件将由系统保存到..."），
+// 不再要求 SubAgent 用 WriteFile 写文件。
 func (cfg *DeepResearchConfig) ReportWriterPrompt() string {
     if cfg.Prompts != nil && cfg.Prompts.ReportWriter != "" {
         return cfg.Prompts.ReportWriter
