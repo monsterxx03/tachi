@@ -176,6 +176,7 @@ func (a *AIAgent) initHookSystemFrom(sysCfg *AgentSystemConfig) {
 	// Auto-detect Herdr integration
 	if sysCfg.Herdr.IsEnabled() && hooks.DetectHerdr() {
 		handler := hooks.NewHerdrHandler()
+		handler.SetLogger(a.Config.Logger)
 		for event := range hooks.EventActions {
 			evt := event
 			d.RegisterCallback(evt, "herdr", func(ctx context.Context, e string, p []byte) {

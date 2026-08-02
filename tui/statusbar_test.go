@@ -752,7 +752,9 @@ func TestStatusBar_TPS_Reset(t *testing.T) {
 	if s.currentTPS() != 0 {
 		t.Error("after reset, live TPS must be 0")
 	}
-	if s.lastTPS != want {
+	// The frozen rate is recomputed from the (now slightly older) segment,
+	// so it can be one less than the value captured a microsecond earlier.
+	if s.lastTPS != want && s.lastTPS != want-1 {
 		t.Errorf("ResetTPS must freeze the last rate into lastTPS: got %d, want %d", s.lastTPS, want)
 	}
 }
@@ -822,6 +824,27 @@ func TestStatusBar_TPS_PausedRendersInIdleView(t *testing.T) {
 	view := s.View()
 	if !strings.Contains(view, tpsPausedStyle.Render(strutil.FormatTPS(s.lastTPS))) {
 		t.Errorf("idle view should show the frozen TPS value dimmed, got %q", view)
+	}
+	if strings.Contains(view, streamingTPSString(t)) {
+		t.Errorf("paused view must not show the live colored TPS, got %q", view)
+	}
+}
+
+// TestStatusBar_TPS_PausedRendersDuringToolExecution verifies that after a
+// generation segment ends at a tool-call boundary (live rate reset while the
+// TUI state is still streaming), the frozen rate stays visible dimmed instead
+// of disappearing until the next segment's first delta.
+func TestStatusBar_TPS_PausedRendersDuringToolExecution(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	s.ResetTPS() // tool-call boundary: ResetTPS fires, state stays streaming
+	if s.lastTPS <= 0 {
+		t.Fatal("ResetTPS should have frozen a rate")
+	}
+	view := s.View()
+	if !strings.Contains(view, tpsPausedStyle.Render(strutil.FormatTPS(s.lastTPS))) {
+		t.Errorf("tool-execution view should show the frozen TPS value dimmed, got %q", view)
 	}
 	if strings.Contains(view, streamingTPSString(t)) {
 		t.Errorf("paused view must not show the live colored TPS, got %q", view)

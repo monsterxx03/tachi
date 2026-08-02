@@ -729,8 +729,22 @@ func (a *AIAgent) handleFinishReason(
 	case finishReasonToolCalls, finishReasonToolUse:
 		return a.handleToolCallFinish(ctx, acc, rs, params, ch)
 	case finishReasonMaxTokens, finishReasonLength:
+		// Truncated: tool_use deltas may be incomplete (arguments cut off),
+		// so never execute them — handleLengthFinish drops them and asks
+		// the model to retry.
 		return a.handleLengthFinish(ctx, acc, rs, ch)
 	default:
+		if len(acc.toolCalls) > 0 {
+			// Some providers/models report "stop" (or leave it blank) on a
+			// message that still carries tool_use deltas — e.g. OpenAI
+			// Responses derives the finish reason from the LAST output item
+			// only, so a reasoning model appending text after a function
+			// call yields "stop" with pending tool calls. Dropping them
+			// would end the turn without executing the tools (the pane
+			// flips to idle while the user expects work to continue) —
+			// execute them instead.
+			return a.handleToolCallFinish(ctx, acc, rs, params, ch)
+		}
 		return a.handleStopFinish(ctx, acc, rs, ch)
 	}
 }
@@ -1032,9 +1046,10 @@ func (a *AIAgent) handleStopFinish(
 ) loopOutcome {
 	rs.LengthRetries = 0
 	msg := acc.assistantMessage()
-	// A stop response carries no executable tool calls; drop stragglers so
-	// the recorded history never holds unpaired tool_use blocks (the same
-	// protocol constraint as the length-continuation path above).
+	// handleFinishReason routes any stop response carrying tool calls to
+	// handleToolCallFinish, so a stop reaching here carries none; the nil
+	// assignment stays as a defensive drop so the recorded history never
+	// holds unpaired tool_use blocks.
 	msg.ToolCalls = nil
 	rs.append(msg)
 

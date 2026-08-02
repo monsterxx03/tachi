@@ -242,13 +242,15 @@ func (s StatusBar) buildUsageRight() string {
 	var parts []string
 
 	// Live output rate: colored while a generation segment is active; when the
-	// segment ends (tool call / turn end) the last rate stays visible, dimmed
-	// to signal a pause. Rendered first (leftmost in the right half) so the
-	// static context usage sits flush against the right edge. No label — the
-	// "/s" unit and the rate-tier color carry the meaning.
+	// segment ends (tool call boundary, turn end) the last rate stays visible,
+	// dimmed to signal a pause — including while a tool executes (the TUI
+	// state stays streaming, but the live segment is already reset). Rendered
+	// first (leftmost in the right half) so the static context usage sits
+	// flush against the right edge. No label — the "/s" unit and the
+	// rate-tier color carry the meaning.
 	if tps := s.currentTPS(); tps > 0 {
 		parts = append(parts, tpsStyleFor(tps).Render(strutil.FormatTPS(tps)))
-	} else if s.lastTPS > 0 && s.state != stateStreaming {
+	} else if s.lastTPS > 0 {
 		parts = append(parts, tpsPausedStyle.Render(strutil.FormatTPS(s.lastTPS)))
 	}
 

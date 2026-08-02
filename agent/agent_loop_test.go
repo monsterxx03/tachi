@@ -516,6 +516,42 @@ func TestExecuteToolCalls_ToolError(t *testing.T) {
 
 // ---- Tests: handleFinishReason via the agent loop ----
 
+// TestAgentLoop_StopWithToolCallsExecutesTools verifies that a provider
+// reporting "stop" on a message that still carries tool_use deltas does NOT
+// end the turn: the tools execute, then the loop continues to a normal stop.
+// Without this, the turn would silently end (integrations like Herdr flip to
+// idle) while the tool work was skipped.
+func TestAgentLoop_StopWithToolCallsExecutesTools(t *testing.T) {
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			{ // iteration 1: text + tool call, but finish_reason=stop
+				{Type: llm.StreamEventTextDelta, TextDelta: "let me check"},
+				{Type: llm.StreamEventToolUseStart, ToolIndex: 0, ToolCall: &llm.ToolCall{ID: "call-1", Type: "function", Function: llm.ToolCallFunction{Name: "Bash"}}},
+				{Type: llm.StreamEventInputJSONDelta, ToolIndex: 0, InputDelta: `{"command":"echo hi"}`},
+				{Type: llm.StreamEventDone, FinishReason: "stop"},
+			},
+			textSeq("done"),
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	a.RegisterTool(bashStub())
+
+	ch := a.RunConversationStream(t.Context(), nil, "hi", "", llm.ChatOptions{MaxTokens: 4096})
+	result, events := drainAgentEvents(ch)
+
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
+	// The tool must have run even though the finish reason said "stop".
+	if !toolResultContains(events, false, "ran: echo hi") {
+		t.Errorf("expected Bash tool result in events, got %d events", len(events))
+	}
+	// The turn must not have ended at the tool iteration — the final
+	// response comes from the second (stop) iteration.
+	assert.Equal(t, "done", result.Response)
+}
+
 func TestAgentLoop_MaxTokensContinueAndStop(t *testing.T) {
 	// After 3 max_tokens continuations, the loop should stop with length_exhausted.
 	mp := &mockStreamProvider{
