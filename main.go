@@ -201,12 +201,7 @@ func resolveProviderFromConfig(cfg *config.Config) (llm.Provider, *config.Resolv
 		return nil, nil, err
 	}
 
-	provider, err := llm.NewProvider(
-		resolved.Provider.Type,
-		resolved.Provider.APIKey,
-		resolved.Provider.BaseURL,
-		resolved.Provider.Model,
-	)
+	provider, err := config.NewProviderFromResolved(&resolved.Provider)
 	if err != nil {
 		return nil, nil, err
 	}

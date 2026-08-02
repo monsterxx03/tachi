@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -258,20 +259,13 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 // (set via /thinking). Returns the display string and whether the provider was
 // successfully restored.
 func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
-	pCfg := m.cfg.FindProvider(s.ProviderName)
-	if pCfg == nil {
+	provider, sp, err := m.cfg.BuildProvider(s.ProviderName)
+	if errors.Is(err, config.ErrProviderNotFound) {
 		// Keep current provider, show the session's expected info
 		return fmt.Sprintf("%s [unmatched]", s.ProviderName), false
 	}
-
-	sp, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
 		return fmt.Sprintf("%s [error]", s.ProviderName), false
-	}
-
-	provider, err := llm.NewProvider(sp.Type, sp.APIKey, sp.BaseURL, sp.Model)
-	if err != nil {
-		return fmt.Sprintf("%s (%s) [error]", sp.Type, sp.Model), false
 	}
 
 	m.agent.SetProvider(provider)

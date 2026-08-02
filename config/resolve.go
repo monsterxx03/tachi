@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -12,6 +13,46 @@ import (
 
 // DefaultContextWindow is used when the model is unknown and no override is configured.
 const DefaultContextWindow int64 = 128_000
+
+// ErrProviderNotFound is returned by BuildProvider when the requested name is
+// empty or not present in the providers list. Callers decide between silent
+// fallback (dedicated providers) and fail-fast (/model switch, github).
+var ErrProviderNotFound = errors.New("provider not found")
+
+// NewProviderFromResolved constructs an llm.Provider from a resolved provider
+// config. This is the single place the ResolvedProvider fields map onto
+// llm.NewProvider's positional args — callers never hand-copy the four
+// strings (baseURL/apiKey order is a classic mis-pass).
+func NewProviderFromResolved(r *ResolvedProvider) (llm.Provider, error) {
+	return llm.NewProvider(r.Type, r.APIKey, r.BaseURL, r.Model)
+}
+
+// BuildProvider resolves a named provider and constructs the llm.Provider —
+// the single home of the FindProvider → ResolveProviderConfig → NewProvider
+// dance that used to be hand-copied across frontends (channel /model, github,
+// tui selectors, acp, main). Returns ErrProviderNotFound when name is empty
+// or unknown; resolution/construction errors are wrapped with context.
+//
+// The resolved provider is returned alongside so callers that need
+// ContextWindow / Model don't re-resolve.
+func (c *Config) BuildProvider(name string) (llm.Provider, *ResolvedProvider, error) {
+	if name == "" {
+		return nil, nil, ErrProviderNotFound
+	}
+	pCfg := c.FindProvider(name)
+	if pCfg == nil {
+		return nil, nil, ErrProviderNotFound
+	}
+	resolved, err := ResolveProviderConfig(pCfg)
+	if err != nil {
+		return nil, nil, fmt.Errorf("resolve provider %q: %w", name, err)
+	}
+	p, err := NewProviderFromResolved(resolved)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create provider %q: %w", name, err)
+	}
+	return p, resolved, nil
+}
 
 type ResolvedProvider struct {
 	Type          string

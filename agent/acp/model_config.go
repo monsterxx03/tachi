@@ -2,6 +2,7 @@ package acp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -244,10 +245,8 @@ func providerThinkingDefault(sess *ACPSession) (*bool, string) {
 	if providerName == "" {
 		providerName = config.ResolveProviderName(sess.cfg)
 	}
-	if pCfg := sess.cfg.FindProvider(providerName); pCfg != nil {
-		if rp, err := config.ResolveProviderConfig(pCfg); err == nil {
-			return rp.Thinking, rp.ThinkingEffort
-		}
+	if _, rp, err := sess.cfg.BuildProvider(providerName); err == nil {
+		return rp.Thinking, rp.ThinkingEffort
 	}
 	return nil, ""
 }
@@ -269,12 +268,10 @@ func applySessionThinking(aiAgent *agent.AIAgent, cfg *config.Config, sess *sess
 		providerName = config.ResolveProviderName(cfg)
 	}
 	if providerName != "" && cfg != nil {
-		if pCfg := cfg.FindProvider(providerName); pCfg != nil {
-			if rp, err := config.ResolveProviderConfig(pCfg); err == nil {
-				thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *rp)
-				aiAgent.SetThinking(thinking, effort)
-				return
-			}
+		if _, rp, err := cfg.BuildProvider(providerName); err == nil {
+			thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *rp)
+			aiAgent.SetThinking(thinking, effort)
+			return
 		}
 	}
 	// Provider config unresolvable: apply the override directly. Concrete
@@ -341,24 +338,12 @@ func switchSessionModel(ctx context.Context, sess *ACPSession, providerName stri
 		return fmt.Errorf("agent not available")
 	}
 
-	pCfg := sess.cfg.FindProvider(providerName)
-	if pCfg == nil {
+	provider, resolved, err := sess.cfg.BuildProvider(providerName)
+	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found", providerName)
 	}
-
-	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
 		return fmt.Errorf("resolve provider: %w", err)
-	}
-
-	provider, err := llm.NewProvider(
-		resolved.Type,
-		resolved.APIKey,
-		resolved.BaseURL,
-		resolved.Model,
-	)
-	if err != nil {
-		return fmt.Errorf("create provider: %w", err)
 	}
 
 	// Update the agent provider and context window atomically.

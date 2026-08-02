@@ -2,6 +2,7 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -338,19 +339,12 @@ func (ch *GitHubChannel) resolveProvider(ctx context.Context) error {
 		providerName = cfg.Provider // use default provider
 	}
 
-	pCfg := cfg.FindProvider(providerName)
-	if pCfg == nil {
+	provider, resolved, err := cfg.BuildProvider(providerName)
+	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found in config", providerName)
 	}
-
-	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
-		return fmt.Errorf("resolve provider %q: %w", providerName, err)
-	}
-
-	provider, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-	if err != nil {
-		return fmt.Errorf("create provider %q: %w", providerName, err)
+		return err
 	}
 
 	ch.provider = provider

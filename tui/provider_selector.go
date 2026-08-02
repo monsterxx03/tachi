@@ -83,7 +83,7 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 		m.exitModelSelect("Error: " + err.Error())
 		return nil
 	}
-	provider, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	provider, err := config.NewProviderFromResolved(resolved)
 	if err != nil {
 		m.exitModelSelect("Error: " + err.Error())
 		return nil
