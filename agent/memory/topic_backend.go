@@ -22,6 +22,32 @@ import (
 // being re-read from disk. Balances accuracy vs I/O.
 const decayCacheTTL = 30 * time.Second
 
+// Memory recall scoring constants — tuned heuristics, adjust together.
+const (
+	// decayFloor: fully-decayed facts still retain this fraction of score.
+	decayFloor = 0.3
+	// decayWeight: how much the decay state (0..1) pulls the multiplier
+	// from decayFloor up toward 1.0.
+	decayWeight = 0.7
+	// supersededPenalty: fixed downrank for facts marked superseded by dream.
+	supersededPenalty = 0.3
+	// reinforcementThreshold / reinforcementBonus: facts recalled at least
+	// this many times get a small boost.
+	reinforcementThreshold = 3
+	reinforcementBonus     = 0.1
+	// lowConfidenceThreshold: topic results scoring below this are too weak
+	// to stand alone — supplement with recent session summaries.
+	lowConfidenceThreshold = 0.3
+	// sessionFallbackScore: confidence given to session-summary entries so
+	// they rank above weak topic matches but below strong content hits.
+	sessionFallbackScore = 0.7
+	// recentWindow: entries younger than this get a recency bonus.
+	recentWindow = 7 * 24 * time.Hour
+	// keywordLineBonus / recencyBonus: scoring bumps in the content matcher.
+	keywordLineBonus = 0.2
+	recencyBonus     = 0.1
+)
+
 // SessionProvider provides access to recent session metadata for temporal
 // query fallback. When the keyword-based topic search returns no results
 // (or very low confidence), TopicBackend falls back to recent session
@@ -181,15 +207,15 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 	// - Reinforcement bonus: facts that have been frequently recalled are boosted
 	for i := range allResults {
 		if fs, ok := decayStates[allResults[i].ID]; ok {
-			decayMultiplier := 0.3 + 0.7*fs.Decay
+			decayMultiplier := decayFloor + decayWeight*fs.Decay
 			allResults[i].Score *= decayMultiplier
 
 			if fs.Superseded {
-				allResults[i].Score -= 0.3
+				allResults[i].Score -= supersededPenalty
 			}
 
-			if fs.Reinforcements >= 3 {
-				allResults[i].Score += 0.1
+			if fs.Reinforcements >= reinforcementThreshold {
+				allResults[i].Score += reinforcementBonus
 			}
 		}
 	}
@@ -203,13 +229,15 @@ func (t *TopicBackend) Recall(ctx context.Context, query string, limit int) ([]E
 	}
 
 	// Session fallback: when topic search returns no results or very low
-	// confidence (top score < 0.3), supplement with recent session summaries.
-	// This handles temporal/navigational queries like "什么我们最近聊过什么"
-	// that keyword-based grep cannot match, without hardcoding any trigger words.
+	// confidence (top score below lowConfidenceThreshold), supplement with
+	// recent session summaries. This handles temporal/navigational queries
+	// like "什么我们最近聊过什么" that keyword-based grep cannot match,
+	// without hardcoding any trigger words.
 	//
-	// Session entries get a medium confidence score (0.7) so they rank above
-	// weak topic matches (decayed/superseded) but below strong content hits.
-	if (len(allResults) == 0 || allResults[0].Score < 0.3) && t.sessionProvider != nil {
+	// Session entries get a medium confidence score (sessionFallbackScore) so
+	// they rank above weak topic matches (decayed/superseded) but below
+	// strong content hits.
+	if (len(allResults) == 0 || allResults[0].Score < lowConfidenceThreshold) && t.sessionProvider != nil {
 		sessionEntries, err := t.fetchRecentSessions(ctx, limit)
 		if err != nil {
 			t.logger.Error(ctx, "session fallback", err)
@@ -261,7 +289,7 @@ func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]En
 			Summary:   title,
 			Content:   content.String(),
 			Timestamp: s.CreatedAt.Unix(),
-			Score:     0.7,
+			Score:     sessionFallbackScore,
 		})
 	}
 	return entries, nil
@@ -590,7 +618,7 @@ func computeScoreMulti(block string, keywords []string) float64 {
 	title := strings.ToLower(extractTitle(block))
 	for _, kw := range keywords {
 		if strings.Contains(title, kw) {
-			score += 0.2
+			score += keywordLineBonus
 			break
 		}
 	}
@@ -598,16 +626,16 @@ func computeScoreMulti(block string, keywords []string) float64 {
 	// Keyword line match bonus.
 	for _, kw := range keywords {
 		if matchesKeywordLine(block, kw) {
-			score += 0.2
+			score += keywordLineBonus
 			break
 		}
 	}
 
-	// Recency bonus: if timestamp is recent (within 7 days).
+	// Recency bonus: if timestamp is recent (within recentWindow).
 	if ts := extractTimestamp(block); ts > 0 {
 		age := time.Since(time.Unix(ts, 0))
-		if age < 7*24*time.Hour {
-			score += 0.1
+		if age < recentWindow {
+			score += recencyBonus
 		}
 	}
 
