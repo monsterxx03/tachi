@@ -233,3 +233,49 @@ func TestMap_LoadOrCompute_ConcurrentRace(t *testing.T) {
 		}
 	}
 }
+
+// TestMap_Len verifies Len reports the entry count on a zero-value map too.
+func TestMap_Len(t *testing.T) {
+	var m LockedMap[string, int]
+	if got := m.Len(); got != 0 {
+		t.Fatalf("Len on empty map = %d, want 0", got)
+	}
+	m.Store("a", 1)
+	m.Store("b", 2)
+	if got := m.Len(); got != 2 {
+		t.Fatalf("Len = %d, want 2", got)
+	}
+	m.Delete("a")
+	if got := m.Len(); got != 1 {
+		t.Fatalf("Len after delete = %d, want 1", got)
+	}
+}
+
+// TestMap_Range verifies Range visits every entry and stops on false.
+func TestMap_Range(t *testing.T) {
+	var m LockedMap[string, int]
+	for i := 0; i < 5; i++ {
+		m.Store(string(rune('a'+i)), i)
+	}
+
+	seen := 0
+	sum := 0
+	m.Range(func(_ string, v int) bool {
+		seen++
+		sum += v
+		return true
+	})
+	if seen != 5 || sum != 10 {
+		t.Fatalf("Range visited %d entries (sum %d), want 5 (sum 10)", seen, sum)
+	}
+
+	// Early stop.
+	visited := 0
+	m.Range(func(_ string, _ int) bool {
+		visited++
+		return visited < 2
+	})
+	if visited != 2 {
+		t.Fatalf("Range early-stop visited %d, want 2", visited)
+	}
+}

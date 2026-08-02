@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"sort"
 	"strings"
-	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/pkg/container"
@@ -28,11 +27,15 @@ type DeferredTool struct {
 	serverLower string
 }
 
+// deferredToolPtr disambiguates container.LockedMap[string]*DeferredTool in
+// the struct field (Go parses the trailing * as part of the type but the
+// field position needs the alias).
+type deferredToolPtr = *DeferredTool
+
 // DeferredPool stores all MCP tools that are not yet loaded into the
 // LLM's active tool set. Thread-safe.
 type DeferredPool struct {
-	mu    sync.RWMutex
-	tools map[string]*DeferredTool
+	tools container.LockedMap[string, deferredToolPtr]
 }
 
 // searchTerm is a pre-compiled search term for efficient matching.
@@ -55,67 +58,59 @@ func compileWordPattern(term string) *regexp.Regexp {
 
 // NewDeferredPool creates an empty deferred pool.
 func NewDeferredPool() *DeferredPool {
-	return &DeferredPool{tools: make(map[string]*DeferredTool)}
+	return &DeferredPool{}
 }
 
 // Add inserts a tool into the pool.
 func (p *DeferredPool) Add(t *DeferredTool) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.tools[t.Name] = t
+	p.tools.Store(t.Name, t)
 }
 
 // Get returns a tool by name, or nil if not found.
 func (p *DeferredPool) Get(name string) *DeferredTool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return p.tools[name]
+	v, _ := p.tools.Load(name)
+	return v
 }
 
 // Len returns the number of tools in the pool.
 func (p *DeferredPool) Len() int {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	return len(p.tools)
+	return p.tools.Len()
 }
 
 // All returns all tools in the pool (for directory listing).
 func (p *DeferredPool) All() []*DeferredTool {
-	p.mu.RLock()
-	defer p.mu.RUnlock()
-	result := make([]*DeferredTool, 0, len(p.tools))
-	for _, t := range p.tools {
-		result = append(result, t)
-	}
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Name < result[j].Name
+	all := make([]*DeferredTool, 0, p.tools.Len())
+	p.tools.Range(func(_ string, t *DeferredTool) bool {
+		all = append(all, t)
+		return true
 	})
-	return result
+	sort.Slice(all, func(i, j int) bool {
+		return all[i].Name < all[j].Name
+	})
+	return all
 }
 
 // RemoveByServer removes all tools belonging to the given server from the pool.
 // Returns the number of tools removed.
 func (p *DeferredPool) RemoveByServer(serverName string) int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	removed := 0
-	for name, t := range p.tools {
+	var toRemove []string
+	p.tools.Range(func(name string, t *DeferredTool) bool {
 		if t.ServerName == serverName {
-			delete(p.tools, name)
-			removed++
+			toRemove = append(toRemove, name)
 		}
+		return true
+	})
+	for _, name := range toRemove {
+		p.tools.Delete(name)
 	}
-	return removed
+	return len(toRemove)
 }
 
 // Remove removes a single tool from the pool by its full name.
 // Returns the removed tool, or nil if not found.
 func (p *DeferredPool) Remove(name string) *DeferredTool {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	t := p.tools[name]
-	delete(p.tools, name)
-	return t
+	v, _ := p.tools.LoadAndDelete(name)
+	return v
 }
 
 // SearchResult is a single search result returned by Search.
@@ -135,12 +130,11 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 		maxResults = 20
 	}
 
-	p.mu.RLock()
-	allTools := make([]*DeferredTool, 0, len(p.tools))
-	for _, t := range p.tools {
+	allTools := make([]*DeferredTool, 0, p.tools.Len())
+	p.tools.Range(func(_ string, t *DeferredTool) bool {
 		allTools = append(allTools, t)
-	}
-	p.mu.RUnlock()
+		return true
+	})
 
 	query = strings.TrimSpace(query)
 	if query == "" {
