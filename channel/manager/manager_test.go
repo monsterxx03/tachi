@@ -1038,7 +1038,6 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	assert.Equal(t, "claude-haiku", name)
 }
 
-
 // --- Skill command tests ---
 
 // TestHandleSkillList_Empty verifies that /skill list returns the "no skills"
