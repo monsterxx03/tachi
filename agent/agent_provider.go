@@ -37,34 +37,40 @@ func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string
 	return p
 }
 
+// setupDedicatedProvider resolves the named provider (via the shared
+// config.BuildProvider) and assigns it through the given setter, skipping
+// when the name is empty or resolution fails. Shared by the Setup*Provider
+// methods — they differ only in the config field, purpose string and
+// assignment target.
+func (a *AIAgent) setupDedicatedProvider(cfg *config.Config, purpose, name string, assign func(llm.Provider)) {
+	if cfg == nil || name == "" {
+		return
+	}
+	if p := a.resolveProviderByName(cfg, purpose, name); p != nil {
+		assign(p)
+	}
+}
+
 // SetupTitleProvider resolves and creates a dedicated LLM provider for title
 // generation from config. When title_provider is empty or not found, title
 // generation falls back to the main conversation provider.
 func (a *AIAgent) SetupTitleProvider(cfg *config.Config) {
+	if cfg == nil {
+		return
+	}
 	a.titleGenEnabled = cfg.TitleGeneration == nil || *cfg.TitleGeneration
-
-	tpName := cfg.TitleProvider
-	if tpName == "" {
-		return
-	}
-
-	tp := a.resolveProviderByName(cfg, "title", tpName)
-	if tp == nil {
-		return
-	}
-	a.titleModelProvider = tp
+	a.setupDedicatedProvider(cfg, "title", cfg.TitleProvider, func(p llm.Provider) {
+		a.titleModelProvider = p
+	})
 }
 
 // SetupCommitProvider resolves and creates a dedicated LLM provider for /commit
 // message generation from config. When commit_provider is empty or not found,
 // commit generation falls back to the main conversation provider.
 func (a *AIAgent) SetupCommitProvider(cfg *config.Config) {
-	cpName := cfg.CommitProvider
-	if cpName == "" {
-		return
-	}
-
-	a.Config.CommitProvider = a.resolveProviderByName(cfg, "commit", cpName)
+	a.setupDedicatedProvider(cfg, "commit", cfg.CommitProvider, func(p llm.Provider) {
+		a.Config.CommitProvider = p
+	})
 }
 
 // CommitProvider returns the dedicated commit provider, or nil if none is configured
@@ -83,15 +89,9 @@ func (a *AIAgent) ReviewProvider() llm.Provider {
 // code review from config. When review.provider is empty or not found, /review
 // falls back to the main conversation provider.
 func (a *AIAgent) SetupReviewProvider(cfg *config.Config) {
-	if cfg == nil {
-		return
-	}
-	rpName := cfg.Review.Provider
-	if rpName == "" {
-		return
-	}
-
-	a.Config.ReviewProvider = a.resolveProviderByName(cfg, "review", rpName)
+	a.setupDedicatedProvider(cfg, "review", cfg.Review.Provider, func(p llm.Provider) {
+		a.Config.ReviewProvider = p
+	})
 }
 
 // ResolveAdversarialRoundModels validates the configured adversarial review
@@ -151,12 +151,9 @@ func (a *AIAgent) RunProvider() llm.Provider {
 // run mode from config. When run_provider is empty or not found, run mode
 // falls back to the main conversation provider.
 func (a *AIAgent) SetupRunProvider(cfg *config.Config) {
-	rpName := cfg.RunProvider
-	if rpName == "" {
-		return
-	}
-
-	a.Config.RunProvider = a.resolveProviderByName(cfg, "run", rpName)
+	a.setupDedicatedProvider(cfg, "run", cfg.RunProvider, func(p llm.Provider) {
+		a.Config.RunProvider = p
+	})
 }
 
 // generateTitle uses the LLM to produce a concise session title from the first

@@ -152,14 +152,10 @@ func (a *AIAgent) lazyRegisterMCPTool(name string) error {
 // SetupSubagentProvider resolves and creates a dedicated LLM provider for
 // sub-agent execution from config. Falls back to main provider when not set.
 func (a *AIAgent) SetupSubagentProvider(cfg *config.Config) {
-	sc := cfg.Subagent
-
-	// Resolve dedicated subagent provider if configured
-	if sc.Provider == "" {
-		return
-	}
-
-	a.Config.SubagentProvider = a.resolveProviderByName(cfg, "subagent", sc.Provider)
+	// Resolve dedicated subagent provider if configured.
+	a.setupDedicatedProvider(cfg, "subagent", cfg.Subagent.Provider, func(p llm.Provider) {
+		a.Config.SubagentProvider = p
+	})
 }
 
 // newSubagentEventSink creates a SubagentEventSink that forwards subagent
