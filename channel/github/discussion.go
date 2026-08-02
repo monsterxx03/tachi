@@ -67,10 +67,10 @@ func RunDiscussionTurn(
 	// in the global oneoff dir for troubleshooting).
 	eventCh := discussionAgent.RunOneOffStream(ctx, provider, systemPrompt, userMessage, llm.ChatOptions{
 		MaxTokens: agent.DefaultMaxTokens,
-	}, agent.OneOffMeta{
+	}, agent.WithOneOffMeta(&agent.OneOffMeta{
 		Kind:  "github-discussion",
 		Extra: map[string]string{"repo": repoName},
-	})
+	}))
 
 	// Drain events.
 	var result *agent.RunResult

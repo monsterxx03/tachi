@@ -85,9 +85,9 @@ func (c *childAdapter) Run(
 
 		// Run via RunOneOffStream — we consume parent agent events and
 		// translate them to the subagent-local StreamEvent type.
-		// OneOffMeta{} — sub-agents keep their own dedicated recorder
+		// No one-off meta: sub-agents keep their own dedicated recorder
 		// (agent/subagent/recorder.go); the one-off sidecar stays off here.
-		ch := child.RunOneOffStream(ctx, provider, systemPrompt, userPrompt, opts, OneOffMeta{})
+		ch := child.RunOneOffStream(ctx, provider, systemPrompt, userPrompt, opts)
 		for event := range ch {
 			out <- translateEvent(event)
 		}

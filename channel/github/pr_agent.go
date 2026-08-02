@@ -15,8 +15,8 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
-	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/container"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -188,14 +188,14 @@ func RunPRGeneration(ctx context.Context, cfg *PRGenerationConfig) *PRResult {
 	// --- Run the agent ---
 	eventCh := implAgent.RunOneOffStream(ctx, cfg.Provider, systemPrompt, userMessage, llm.ChatOptions{
 		MaxTokens: agent.DefaultMaxTokens,
-	}, agent.OneOffMeta{
+	}, agent.WithOneOffMeta(&agent.OneOffMeta{
 		Kind: "github-pr",
 		Extra: map[string]string{
 			"repo":   cfg.RepoName,
 			"issue":  fmt.Sprintf("%d", cfg.Issue.GetNumber()),
 			"branch": branch,
 		},
-	})
+	}))
 
 	var result *agent.RunResult
 	for ev := range eventCh {

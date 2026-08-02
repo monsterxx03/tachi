@@ -92,10 +92,10 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	// bad memory consolidations can be traced back to the exact run.
 	eventCh := dreamAgent.RunOneOffStream(ctx, provider, systemPrompt, userPrompt, llm.ChatOptions{
 		MaxTokens: cfg.MaxTokens,
-	}, agent.OneOffMeta{
+	}, agent.WithOneOffMeta(&agent.OneOffMeta{
 		Kind:  "dream",
 		Extra: map[string]string{"domain": plan.Group.Domain, "root": plan.Group.Root},
-	})
+	}))
 
 	// Drain events.
 	var lastErr error

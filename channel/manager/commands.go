@@ -759,8 +759,8 @@ func (m *Manager) handleCommitCommand(ctx context.Context, threadID string) (str
 	// duration of this run without touching the registry.
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts,
-		agent.OneOffMeta{Kind: "commit", SessionID: sessionID},
-		agent.WithToolSet(tools.ToolNameBash))
+		agent.WithToolSet(tools.ToolNameBash),
+		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit", SessionID: sessionID}))
 
 	text, err, incomplete := m.drainOneOffEvents(ctx, eventCh, aiAgent)
 	if err != nil {
@@ -897,7 +897,7 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 		defer forked.Close()
 
 		eventCh := forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt, spec.Prompt, opts,
-			agent.OneOffMeta{Kind: spec.Kind, SessionID: sessionID})
+			agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: sessionID}))
 
 		text, err, incomplete := m.drainOneOffEvents(ctx, eventCh, forked.Agent())
 		if err != nil {
