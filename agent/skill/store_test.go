@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -336,41 +337,41 @@ func TestBuildActivationMessage(t *testing.T) {
 	if msg == "" {
 		t.Error("expected non-empty message")
 	}
-	if !contains(msg, "code-review") {
+	if !strings.Contains(msg, "code-review") {
 		t.Error("message should contain skill name")
 	}
-	if !contains(msg, "When reviewing code") {
+	if !strings.Contains(msg, "When reviewing code") {
 		t.Error("message should contain body")
 	}
-	if !contains(msg, "references/checklist.md") {
+	if !strings.Contains(msg, "references/checklist.md") {
 		t.Error("message should mention supporting files")
 	}
 
 	// With user instruction
 	msg2 := BuildActivationMessage(sk, "main.go")
-	if !contains(msg2, "main.go") {
+	if !strings.Contains(msg2, "main.go") {
 		t.Error("message should contain user instruction")
 	}
 }
 
 func TestBuildDirectiveMessage(t *testing.T) {
 	msg := BuildDirectiveMessage("code-review", "auth.go")
-	if !contains(msg, "code-review") {
+	if !strings.Contains(msg, "code-review") {
 		t.Error("should contain skill name")
 	}
-	if !contains(msg, "auth.go") {
+	if !strings.Contains(msg, "auth.go") {
 		t.Error("should contain directive")
 	}
-	if contains(msg, "# Code Review") {
+	if strings.Contains(msg, "# Code Review") {
 		t.Error("should NOT contain skill body")
 	}
 
 	// Empty directive
 	msg2 := BuildDirectiveMessage("lint", "")
-	if !contains(msg2, "lint") {
+	if !strings.Contains(msg2, "lint") {
 		t.Error("should contain skill name")
 	}
-	if !contains(msg2, "(none)") {
+	if !strings.Contains(msg2, "(none)") {
 		t.Error("should indicate no directive")
 	}
 }
@@ -394,19 +395,6 @@ func TestXmlEscape(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) > 0 && len(substr) > 0 && len(s) >= len(substr) &&
-		searchSubstring(s, substr)
-}
-
-func searchSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 func TestStoreCreate(t *testing.T) {
 	tmpDir := t.TempDir()
@@ -443,13 +431,13 @@ func TestStoreCreate(t *testing.T) {
 		t.Fatalf("failed to read created SKILL.md: %v", err)
 	}
 	content := string(data)
-	if !contains(content, "name: test-skill") {
+	if !strings.Contains(content, "name: test-skill") {
 		t.Error("SKILL.md should contain frontmatter name")
 	}
-	if !contains(content, "Do stuff.") {
+	if !strings.Contains(content, "Do stuff.") {
 		t.Error("SKILL.md should contain body")
 	}
-	if !contains(content, "tags:") {
+	if !strings.Contains(content, "tags:") {
 		t.Error("SKILL.md should contain tags")
 	}
 
@@ -552,37 +540,37 @@ func TestStoreCreate_NoProjectDir(t *testing.T) {
 func TestBuildSkillMarkdown(t *testing.T) {
 	result := buildSkillMarkdown("my-skill", "A skill", "# Body\n\nText", []string{"tag1", "tag2"}, true)
 
-	if !contains(result, "name: my-skill") {
+	if !strings.Contains(result, "name: my-skill") {
 		t.Error("frontmatter should contain name")
 	}
-	if !contains(result, "description: A skill") {
+	if !strings.Contains(result, "description: A skill") {
 		t.Error("frontmatter should contain description")
 	}
-	if !contains(result, "tags:") {
+	if !strings.Contains(result, "tags:") {
 		t.Error("frontmatter should contain tags")
 	}
-	if !contains(result, "  - tag1") {
+	if !strings.Contains(result, "  - tag1") {
 		t.Error("frontmatter should list tags")
 	}
-	if contains(result, "enabled:") {
+	if strings.Contains(result, "enabled:") {
 		t.Error("frontmatter should NOT contain enabled when true (default)")
 	}
-	if !contains(result, "# Body") {
+	if !strings.Contains(result, "# Body") {
 		t.Error("should contain body")
 	}
-	if !contains(result, "Text\n") {
+	if !strings.Contains(result, "Text\n") {
 		t.Error("should end with trailing newline")
 	}
 
 	// No tags
 	result2 := buildSkillMarkdown("untagged", "desc", "body", nil, true)
-	if contains(result2, "tags:") {
+	if strings.Contains(result2, "tags:") {
 		t.Error("should not contain tags when nil")
 	}
 
 	// Disabled skill — enabled: false is written explicitly
 	result3 := buildSkillMarkdown("disabled-skill", "desc", "body", nil, false)
-	if !contains(result3, "enabled: false") {
+	if !strings.Contains(result3, "enabled: false") {
 		t.Error("frontmatter should contain 'enabled: false' when disabled")
 	}
 	// Round-trip: the generated file must parse back as disabled
@@ -847,7 +835,7 @@ func TestStoreEnabled(t *testing.T) {
 	}
 	if _, err := s.Load("disabled-skill"); err == nil {
 		t.Error("Load(disabled-skill) should fail")
-	} else if !contains(err.Error(), "disabled") {
+	} else if !strings.Contains(err.Error(), "disabled") {
 		t.Errorf("Load(disabled-skill) error should mention 'disabled', got %q", err.Error())
 	}
 	if _, err := s.Load("global-disabled"); err == nil {
@@ -889,10 +877,10 @@ func TestStoreEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !contains(string(data), "enabled: false") {
+	if !strings.Contains(string(data), "enabled: false") {
 		t.Error("rewritten SKILL.md should keep 'enabled: false'")
 	}
-	if !contains(string(data), "new desc") {
+	if !strings.Contains(string(data), "new desc") {
 		t.Error("rewritten SKILL.md should contain updated description")
 	}
 	// Still not loadable after the update.
@@ -920,7 +908,7 @@ func TestStoreEnabled(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if contains(string(data), "enabled:") {
+	if strings.Contains(string(data), "enabled:") {
 		t.Error("rewriting an enabled skill should NOT add an enabled field")
 	}
 }

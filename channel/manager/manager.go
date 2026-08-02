@@ -431,15 +431,8 @@ func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.R
 
 	// Session-level /model override wins over the global provider.
 	if sess != nil && sess.ProviderName != "" {
-		pCfg := m.cfg.FindProvider(sess.ProviderName)
-		if pCfg != nil {
-			rp, err := config.ResolveProviderConfig(pCfg)
-			if err == nil {
-				p, err := llm.NewProvider(rp.Type, rp.APIKey, rp.BaseURL, rp.Model)
-				if err == nil {
-					prov, resolved, name = p, &config.ResolvedConfig{Provider: *rp}, sess.ProviderName
-				}
-			}
+		if p, rp, err := m.cfg.BuildProvider(sess.ProviderName); err == nil {
+			prov, resolved, name = p, &config.ResolvedConfig{Provider: *rp}, sess.ProviderName
 		}
 		if prov == nil {
 			m.logger.Warn(context.Background(), "channel: thread has ProviderName but could not resolve; falling back to global",
@@ -495,12 +488,7 @@ func (m *Manager) initProvider() error {
 				return initProviderResult{}, fmt.Errorf("resolve config: %w", err)
 			}
 
-			provider, err := llm.NewProvider(
-				resolved.Provider.Type,
-				resolved.Provider.APIKey,
-				resolved.Provider.BaseURL,
-				resolved.Provider.Model,
-			)
+			provider, err := config.NewProviderFromResolved(&resolved.Provider)
 			if err != nil {
 				return initProviderResult{}, fmt.Errorf("create provider: %w", err)
 			}

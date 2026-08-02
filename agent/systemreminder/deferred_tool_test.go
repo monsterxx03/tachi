@@ -1,6 +1,7 @@
 package systemreminder
 
 import (
+	"strings"
 	"testing"
 )
 
@@ -107,18 +108,18 @@ func TestDeferredToolReminder_UndiscoveredTools(t *testing.T) {
 	// Should mention the undiscovered tool
 	full := lines[0]
 	// Check format: tool name — description
-	if !contains(full, "mcp__pg__query") {
+	if !strings.Contains(full, "mcp__pg__query") {
 		t.Errorf("expected undiscovered tool name in output, got: %s", full)
 	}
 	// Should NOT mention the already-discovered tool
-	if contains(full, "mcp__gh__pr") {
+	if strings.Contains(full, "mcp__gh__pr") {
 		t.Errorf("did not expect discovered tool name in output, got: %s", full)
 	}
 	// Should include a hint about total tools
-	if !contains(full, "2 个 MCP 工具") {
+	if !strings.Contains(full, "2 个 MCP 工具") {
 		t.Errorf("expected total tool count hint, got: %s", full)
 	}
-	if !contains(full, "1 个已加载") {
+	if !strings.Contains(full, "1 个已加载") {
 		t.Errorf("expected loaded count hint, got: %s", full)
 	}
 }
@@ -138,11 +139,11 @@ func TestDeferredToolReminder_AllUndiscovered(t *testing.T) {
 		t.Fatal("expected non-nil result with undiscovered tools")
 	}
 	full := lines[0]
-	if !contains(full, "mcp__pg__query") || !contains(full, "mcp__gh__pr") {
+	if !strings.Contains(full, "mcp__pg__query") || !strings.Contains(full, "mcp__gh__pr") {
 		t.Errorf("expected both tool names in output, got: %s", full)
 	}
 	// When all undiscovered, should show "共 N 个 MCP 工具可用"
-	if !contains(full, "2 个 MCP 工具可用") {
+	if !strings.Contains(full, "2 个 MCP 工具可用") {
 		t.Errorf("expected 'N 个工具可用' hint, got: %s", full)
 	}
 }
@@ -161,7 +162,7 @@ func TestDeferredToolReminder_DescriptionTruncation(t *testing.T) {
 		t.Fatal("expected non-nil result")
 	}
 	// Description should be truncated to 100 runes + "..."
-	if !contains(lines[0], "...") {
+	if !strings.Contains(lines[0], "...") {
 		t.Errorf("expected truncated description ending with ..., got: %s", lines[0])
 	}
 }
@@ -181,7 +182,7 @@ func TestDeferredToolReminder_MultilineDescription(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
-	if contains(lines[0], "Second line") {
+	if strings.Contains(lines[0], "Second line") {
 		t.Errorf("expected only first line of description, got: %s", lines[0])
 	}
 }
@@ -199,7 +200,7 @@ func TestDeferredToolReminder_FirstLineOnly(t *testing.T) {
 	if len(lines) == 0 {
 		t.Fatal("expected non-nil result")
 	}
-	if !contains(lines[0], "mcp__x__y — foo") {
+	if !strings.Contains(lines[0], "mcp__x__y — foo") {
 		t.Errorf("expected 'name — desc' format, got: %s", lines[0])
 	}
 }
@@ -224,15 +225,3 @@ func TestDeferredToolReminder_FiresOnlyOnce(t *testing.T) {
 	}
 }
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && containsStr(s, substr)
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

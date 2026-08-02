@@ -592,13 +592,13 @@ func TestBuildUserMessageWithAttachments_TextFile(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "[文件: main.go]") {
+	if !strings.Contains(result, "[文件: main.go]") {
 		t.Errorf("expected file header, got %q", result)
 	}
-	if !contains(result, "package main") {
+	if !strings.Contains(result, "package main") {
 		t.Errorf("expected file content, got %q", result)
 	}
-	if !contains(result, "请帮我 review 这段代码") {
+	if !strings.Contains(result, "请帮我 review 这段代码") {
 		t.Errorf("expected original text, got %q", result)
 	}
 }
@@ -616,10 +616,10 @@ func TestBuildUserMessageWithAttachments_Image(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "[图片: image.jpg (64.0 KB)]") {
+	if !strings.Contains(result, "[图片: image.jpg (64.0 KB)]") {
 		t.Errorf("expected image summary, got %q", result)
 	}
-	if !contains(result, "这是什么图片？") {
+	if !strings.Contains(result, "这是什么图片？") {
 		t.Errorf("expected original text, got %q", result)
 	}
 }
@@ -637,10 +637,10 @@ func TestBuildUserMessageWithAttachments_Error(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "下载失败") || !contains(result, "secret.pdf") {
+	if !strings.Contains(result, "下载失败") || !strings.Contains(result, "secret.pdf") {
 		t.Errorf("expected error info, got %q", result)
 	}
-	if !contains(result, "看下这个文件") {
+	if !strings.Contains(result, "看下这个文件") {
 		t.Errorf("expected original text, got %q", result)
 	}
 }
@@ -663,7 +663,7 @@ func TestBuildUserMessageWithAttachments_MultipleAttachments(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "file A") || !contains(result, "file B") {
+	if !strings.Contains(result, "file A") || !strings.Contains(result, "file B") {
 		t.Errorf("expected both files, got %q", result)
 	}
 }
@@ -683,10 +683,10 @@ func TestBuildUserMessageWithAttachments_BinaryFile(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	if !contains(result, "archive.zip") || !contains(result, "1.0 MB") {
+	if !strings.Contains(result, "archive.zip") || !strings.Contains(result, "1.0 MB") {
 		t.Errorf("expected binary file info, got %q", result)
 	}
-	if !contains(result, "解压这个文件") {
+	if !strings.Contains(result, "解压这个文件") {
 		t.Errorf("expected original text, got %q", result)
 	}
 }
@@ -706,10 +706,10 @@ func TestBuildUserMessageWithAttachments_TextFileWithSavedPath(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	assert.True(t, contains(result, "已保存到"), "should mention saved path: %s", result)
-	assert.True(t, contains(result, "main.go-12345"), "should include full path: %s", result)
-	assert.True(t, contains(result, "package main"), "should include inline content: %s", result)
-	assert.True(t, contains(result, "帮我看下这个文件"), "should include original text: %s", result)
+	assert.True(t, strings.Contains(result, "已保存到"), "should mention saved path: %s", result)
+	assert.True(t, strings.Contains(result, "main.go-12345"), "should include full path: %s", result)
+	assert.True(t, strings.Contains(result, "package main"), "should include inline content: %s", result)
+	assert.True(t, strings.Contains(result, "帮我看下这个文件"), "should include original text: %s", result)
 }
 
 func TestBuildUserMessageWithAttachments_BinaryWithSavedPath(t *testing.T) {
@@ -727,9 +727,9 @@ func TestBuildUserMessageWithAttachments_BinaryWithSavedPath(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	assert.True(t, contains(result, "已保存到本地"), "should mention local save: %s", result)
-	assert.True(t, contains(result, "Bash"), "should mention Bash tool: %s", result)
-	assert.True(t, contains(result, "解析这个 PDF"), "should include original text: %s", result)
+	assert.True(t, strings.Contains(result, "已保存到本地"), "should mention local save: %s", result)
+	assert.True(t, strings.Contains(result, "Bash"), "should mention Bash tool: %s", result)
+	assert.True(t, strings.Contains(result, "解析这个 PDF"), "should include original text: %s", result)
 }
 
 func TestBuildUserMessageWithAttachments_ImageWithSavedPath(t *testing.T) {
@@ -746,9 +746,9 @@ func TestBuildUserMessageWithAttachments_ImageWithSavedPath(t *testing.T) {
 		},
 	}
 	result, _ := buildUserMessageWithAttachments(msg)
-	assert.True(t, contains(result, "已保存到"), "should mention saved path: %s", result)
-	assert.True(t, contains(result, "photo.jpg-xyz"), "should include file path: %s", result)
-	assert.True(t, contains(result, "这是什么图片？"), "should include original text: %s", result)
+	assert.True(t, strings.Contains(result, "已保存到"), "should mention saved path: %s", result)
+	assert.True(t, strings.Contains(result, "photo.jpg-xyz"), "should include file path: %s", result)
+	assert.True(t, strings.Contains(result, "这是什么图片？"), "should include original text: %s", result)
 }
 
 func TestBuildUserMessageWithAttachments_ImageWithContent(t *testing.T) {
@@ -767,8 +767,8 @@ func TestBuildUserMessageWithAttachments_ImageWithContent(t *testing.T) {
 		},
 	}
 	result, images := buildUserMessageWithAttachments(msg)
-	assert.True(t, contains(result, "describe this"), "should include user text")
-	assert.True(t, contains(result, "[图片: photo.jpg"), "should include image marker")
+	assert.True(t, strings.Contains(result, "describe this"), "should include user text")
+	assert.True(t, strings.Contains(result, "[图片: photo.jpg"), "should include image marker")
 	assert.Len(t, images, 1, "should return one image part")
 	assert.Equal(t, "image/jpeg", images[0].MediaType)
 	assert.NotEmpty(t, images[0].Data, "should have base64 data")
@@ -1038,19 +1038,6 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	assert.Equal(t, "claude-haiku", name)
 }
 
-// contains is a simple substring check helper.
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && containsStr(s, substr)
-}
-
-func containsStr(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}
 
 // --- Skill command tests ---
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"testing"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
@@ -213,17 +214,17 @@ func TestBuildPartialReport(t *testing.T) {
 	}
 
 	// Should contain topic
-	if !contains(report, "test topic") {
+	if !strings.Contains(report, "test topic") {
 		t.Errorf("report should contain topic, got: %s", report)
 	}
 
 	// Should contain learnings
-	if !contains(report, "learning 1") {
+	if !strings.Contains(report, "learning 1") {
 		t.Errorf("report should contain learnings, got: %s", report)
 	}
 
 	// Should contain Sources section
-	if !contains(report, "Sources") {
+	if !strings.Contains(report, "Sources") {
 		t.Errorf("report should contain Sources section, got: %s", report)
 	}
 }
@@ -235,7 +236,7 @@ func TestBuildPartialReportWithError(t *testing.T) {
 	err := fmt.Errorf("test error")
 	report := engine.buildPartialReport("test", []string{"learning"}, nil, err)
 
-	if !contains(report, "interrupted") {
+	if !strings.Contains(report, "interrupted") {
 		t.Errorf("report should mention interruption, got: %s", report)
 	}
 }
@@ -246,22 +247,10 @@ func TestBuildPartialReportNoLearnings(t *testing.T) {
 
 	report := engine.buildPartialReport("test", nil, nil, nil)
 
-	if !contains(report, "No findings") {
+	if !strings.Contains(report, "No findings") {
 		t.Errorf("report should mention no findings, got: %s", report)
 	}
 }
 
 // ---- helpers ----
 
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && searchString(s, substr)
-}
-
-func searchString(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
-}

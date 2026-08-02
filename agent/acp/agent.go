@@ -111,12 +111,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		return acp.NewSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
 
-	provider, err := llm.NewProvider(
-		resolved.Provider.Type,
-		resolved.Provider.APIKey,
-		resolved.Provider.BaseURL,
-		resolved.Provider.Model,
-	)
+	provider, err := config.NewProviderFromResolved(&resolved.Provider)
 	if err != nil {
 		return acp.NewSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
@@ -488,12 +483,12 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		}
 	}
 
-	provider, err := llm.NewProvider(
-		provType,
-		resolved.Provider.APIKey,
-		resolved.Provider.BaseURL,
-		provModel,
-	)
+	provider, err := config.NewProviderFromResolved(&config.ResolvedProvider{
+		Type:    provType,
+		Model:   provModel,
+		APIKey:  resolved.Provider.APIKey,
+		BaseURL: resolved.Provider.BaseURL,
+	})
 	if err != nil {
 		return acp.ResumeSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
@@ -653,12 +648,12 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	}
 
-	provider, err := llm.NewProvider(
-		provType,
-		resolved.Provider.APIKey,
-		resolved.Provider.BaseURL,
-		provModel,
-	)
+	provider, err := config.NewProviderFromResolved(&config.ResolvedProvider{
+		Type:    provType,
+		Model:   provModel,
+		APIKey:  resolved.Provider.APIKey,
+		BaseURL: resolved.Provider.BaseURL,
+	})
 	if err != nil {
 		return acp.LoadSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}

@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	cmds "github.com/monsterxx03/tachi/agent/commands"
@@ -16,31 +17,22 @@ func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
 }
 
 // resolveProviderByName resolves a configured provider name to an llm.Provider
-// (alias-aware lookup via cfg.FindProvider). Returns nil on any failure with a
-// warn/error log naming the provider — callers decide between silent fallback
-// (dedicated providers) and fail-fast (adversarial review, checked later at
-// /review start). Shared by every Setup*Provider method so the four-step
-// resolve dance (FindProvider → ResolveProviderConfig → NewProvider → log)
-// lives in exactly one place.
+// via the shared config.BuildProvider (the single home of the
+// FindProvider → ResolveProviderConfig → NewProvider dance). Returns nil on
+// any failure with a warn/error log naming the provider — callers decide
+// between silent fallback (dedicated providers) and fail-fast (adversarial
+// review, checked later at /review start). Shared by every Setup*Provider
+// method.
 func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string) llm.Provider {
-	pCfg := cfg.FindProvider(name)
-	if pCfg == nil {
+	p, resolved, err := cfg.BuildProvider(name)
+	if errors.Is(err, config.ErrProviderNotFound) {
 		a.Config.Logger.Info(context.Background(), "Agent: "+purpose+" provider not found, falling back to main model", "provider", name)
 		return nil
 	}
-
-	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
 		a.Config.Logger.Error(context.Background(), "Agent: failed to resolve "+purpose+" provider, falling back to main model", err, "provider", name)
 		return nil
 	}
-
-	p, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
-	if err != nil {
-		a.Config.Logger.Error(context.Background(), "Agent: failed to create "+purpose+" provider, falling back to main model", err, "provider", name)
-		return nil
-	}
-
 	a.Config.Logger.Info(context.Background(), "Agent: using "+purpose+" provider", "provider", name, "type", resolved.Type, "model", resolved.Model)
 	return p
 }

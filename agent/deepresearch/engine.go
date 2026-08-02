@@ -556,7 +556,7 @@ func (dr *DeepResearch) getProvider(name string) (llm.Provider, error) {
 			if err != nil {
 				return nil, fmt.Errorf("resolve provider %q: %w", name, err)
 			}
-			provider, err := llm.NewProvider(resolved.Type, resolved.APIKey, resolved.BaseURL, resolved.Model)
+			provider, err := config.NewProviderFromResolved(resolved)
 			if err != nil {
 				return nil, fmt.Errorf("create provider %q: %w", name, err)
 			}

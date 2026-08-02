@@ -1019,11 +1019,6 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 			}
 		}
 
-		var providers []config.ProviderConfig
-		if cfg != nil {
-			providers = cfg.Providers
-		}
-
 		runFn := func(ctx context.Context, plan dream.Plan) (dream.State, error) {
 			// Use a fresh session manager so Load(id) doesn't mutate
 			// the TUI's current-session pointer.
@@ -1041,7 +1036,7 @@ func (m *Model) handleDreamCommand() tea.Cmd {
 			return dream.RunDream(ctx, plan, dream.RunConfig{
 				FallbackProvider: provider,
 				DreamProvider:    dreamProvider,
-				Providers:        providers,
+				Config:           cfg,
 				MaxIter:          maxIter,
 				MaxTokens:        m.chatOpts.MaxTokens,
 				MaxMessageChars:  maxMessageChars,

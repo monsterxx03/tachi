@@ -270,14 +270,12 @@ func (m *Manager) handleModelList(threadID string) (string, error) {
 // window, a compaction is triggered first using the current (wide-context)
 // provider — otherwise the next API call would fail with context overflow.
 func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
-	pCfg := m.cfg.FindProvider(name)
-	if pCfg == nil {
+	_, resolved, err := m.cfg.BuildProvider(name)
+	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Sprintf("Provider %q not found. Use /model to see available models.", name), nil
 	}
-
-	resolved, err := config.ResolveProviderConfig(pCfg)
 	if err != nil {
-		return "", fmt.Errorf("resolve provider %q: %w", name, err)
+		return "", err
 	}
 
 	sm := m.newSessionManager()
