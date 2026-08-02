@@ -3,6 +3,7 @@ package tui
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	"charm.land/bubbles/v2/spinner"
 	tea "charm.land/bubbletea/v2"
@@ -31,6 +32,12 @@ type StatusBar struct {
 	modeBadge     string // current mode badge text (e.g. "[auto]")
 	reviewBadge   string // multi-round /review indicator (e.g. "⚔️ 挑战者 2/5"); empty when not reviewing
 	thinkingLevel string // current thinking level ("none"/"low"/.../"max"/"default"); empty = not shown
+	// Live output-rate tracking (tokens per minute). tpmTokens accumulates
+	// estimated output tokens from text deltas; tpmStart is the zero time of
+	// the current generation segment (set on first delta). Reset at tool-call
+	// boundaries and when the turn ends.
+	tpmTokens int64
+	tpmStart  time.Time
 }
 
 const (
@@ -48,7 +55,14 @@ func NewStatusBar(providerInfo string, contextWindow int64) StatusBar {
 }
 
 func (s *StatusBar) SetWidth(w int)                  { s.width = w }
-func (s *StatusBar) SetState(st state)               { s.state = st }
+func (s *StatusBar) SetState(st state) {
+	s.state = st
+	if st != stateStreaming {
+		// Leaving a streaming segment: never let a stale live TPM linger
+		// (covers turn end, cancel, error, and idle transitions).
+		s.ResetTPM()
+	}
+}
 func (s *StatusBar) SetUsage(u *llm.Usage)           { s.totalUsage = u }
 func (s *StatusBar) SetCopyMode(b bool)              { s.copyMode = b }
 func (s *StatusBar) SetProviderInfo(info string)     { s.providerInfo = info }
@@ -57,6 +71,47 @@ func (s *StatusBar) SetSessionInfo(title, id string) { s.sessionTitle = title; s
 func (s *StatusBar) ProviderInfo() string            { return s.providerInfo }
 
 func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
+
+// AddStreamedOutput accumulates estimated output tokens (text AND thinking
+// deltas) for the live TPM display. The first delta starts the timing
+// segment; the rate reflects the provider's full generation throughput,
+// matching the API's output-token accounting (which includes reasoning).
+func (s *StatusBar) AddStreamedOutput(text string) {
+	if text == "" {
+		return
+	}
+	if s.tpmStart.IsZero() {
+		s.tpmStart = time.Now()
+	}
+	s.tpmTokens += agent.EstimateTokenCount(text)
+}
+
+// ResetTPM clears the live tokens-per-minute tracking (tool-call boundary or
+// turn end). The next output delta starts a fresh timing segment.
+func (s *StatusBar) ResetTPM() {
+	s.tpmTokens = 0
+	s.tpmStart = time.Time{}
+}
+
+// currentTPM returns the live output rate in tokens/min, or 0 when no
+// generation segment is active or it has run less than a second.
+func (s *StatusBar) currentTPM() int64 {
+	if s.tpmTokens <= 0 || s.tpmStart.IsZero() {
+		return 0
+	}
+	elapsed := time.Since(s.tpmStart)
+	if elapsed < time.Second {
+		return 0 // avoid wild spikes from the first instants
+	}
+	return int64(float64(s.tpmTokens) / elapsed.Minutes())
+}
+
+// showingTPM reports whether a live TPM value would currently be rendered
+// (used to decide whether the right half of the status bar is non-empty).
+func (s *StatusBar) showingTPM() bool {
+	return s.state == stateStreaming && s.currentTPM() > 0
+}
+
 func (s *StatusBar) SetMCPReady(v bool)    { s.mcpReady = v }
 func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
 func (s *StatusBar) SetMCPError(v string)  { s.mcpError = v }
@@ -140,7 +195,7 @@ func (s StatusBar) View() string {
 	}
 
 	var right string
-	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 {
+	if (s.totalUsage != nil && s.totalUsage.LastInputTokens > 0) || s.showingTPM() {
 		right = s.buildUsageRight()
 	}
 
@@ -178,10 +233,29 @@ func (s StatusBar) buildUsageRight() string {
 		parts = append(parts, usageColorStyle(pct).Render(ctxStr))
 	}
 
+	// Live output rate: only meaningful while a generation segment is active.
+	if s.state == stateStreaming {
+		if tpm := s.currentTPM(); tpm > 0 {
+			parts = append(parts, fmt.Sprintf("tpm: %s", formatTPM(tpm)))
+		}
+	}
+
 	if len(parts) == 0 {
 		return ""
 	}
 	return strings.Join(parts, " ") + " "
+}
+
+// formatTPM renders a tokens-per-minute value compactly (e.g. "1.2k").
+func formatTPM(tpm int64) string {
+	switch {
+	case tpm >= 100_000:
+		return fmt.Sprintf("%.0fk", float64(tpm)/1000)
+	case tpm >= 10_000:
+		return fmt.Sprintf("%.1fk", float64(tpm)/1000)
+	default:
+		return fmt.Sprintf("%d", tpm)
+	}
 }
 
 func usageColorStyle(pct float64) lipgloss.Style {
