@@ -49,6 +49,11 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			// preservation on resume.
 
 		case agent.AgentEventToolCallStart:
+			// Round boundary: the next LLM iteration appends fresh text after
+			// this tool executes. Break the segment so a round whose text
+			// doesn't end in a newline can't fuse onto the next round's
+			// opening ("让我先搜索一下搜索结果是…").
+			ensureSegmentBreak(&text)
 			m.logger.Info(ctx, "channel: tool call start", "tool", event.ToolName)
 
 		case agent.AgentEventToolCallArgs:
@@ -70,6 +75,9 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			aiAgent.ConfirmTool(agent.ConfirmAllowOnce)
 
 		case agent.AgentEventAskUser:
+			// Question round boundary: the LLM's follow-up text starts a new
+			// segment after the user answers.
+			ensureSegmentBreak(&text)
 			if ta != nil && ta.askUserThreadID != "" {
 				ta.mu.Lock()
 				ta.askUserRespCh = make(chan tools.AskUserResult, 1)
@@ -102,6 +110,9 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			}
 
 		case agent.AgentEventSteerCheck:
+			// Steer fires at a tool boundary; the next iteration's text opens
+			// a fresh segment.
+			ensureSegmentBreak(&text)
 			// Only process steer when ta is non-nil (agent turn path).
 			if ta == nil {
 				continue
@@ -204,6 +215,22 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 		return "", nil
 	}
 	return result, nil
+}
+
+// ensureSegmentBreak separates consecutive LLM iterations in the accumulated
+// reply text. The agent streams one text segment per iteration — "text → tool
+// call → text → …" — and without a break a round whose text doesn't end in a
+// newline fuses onto the next round's opening. No-op when the buffer is empty
+// (tool called before any text) or already ends in a newline.
+func ensureSegmentBreak(text *strings.Builder) {
+	if text.Len() == 0 {
+		return
+	}
+	s := text.String()
+	if s[len(s)-1] == '\n' {
+		return
+	}
+	text.WriteByte('\n')
 }
 
 // convertQuestions converts agent-level tools.Question values to the
