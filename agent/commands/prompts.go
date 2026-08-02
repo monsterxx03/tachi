@@ -5,10 +5,14 @@ import (
 	"strings"
 )
 
-// ReviewUserPrompt builds the prompt for a code review of current repo changes.
+// ReviewUserPrompt builds the prompt for a single-round code review of
+// current repo changes. outPath is the orchestrator-allocated report path
+// the LLM must write to (single-round reviews used to let the LLM invent its
+// own filename, which made the artifact unfollowable — the orchestrator now
+// owns the path, same as multi-round).
 // The forked agent will only have Bash, ReadFile, Glob, Grep, and WriteFile tools.
-func ReviewUserPrompt() string {
-	return `## Context to gather (use the Bash tool — do not assume output without running commands)
+func ReviewUserPrompt(outPath string) string {
+	prompt := `## Context to gather (use the Bash tool — do not assume output without running commands)
 
 Run these in the current working directory (Bash's cwd is the process cwd) and use the output as context:
 
@@ -59,9 +63,9 @@ End with a brief overall assessment of the change set.
 
 After completing the review, save the full report to a file using **WriteFile**:
 
-1. Ensure the directory .tachi/reviews/ exists (use 'mkdir -p .tachi/reviews' via Bash).
-2. Write the report to .tachi/reviews/[timestamp]-[summary]-review.md, where [timestamp] is obtained by running 'date +%Y-%m-%d-%H%M' via Bash (precise to the minute), and [summary] is a short 2-4 word kebab-case summary of the changes being reviewed (e.g. "fix-input-wrapping", "add-lsp-support"). Do NOT use the git branch name.
-3. The report file should contain the complete review output including all findings and the overall assessment.`
+1. Ensure the directory of the report path exists (use 'mkdir -p' via Bash if needed).
+2. Write the complete report to this exact path: {outPath}. Do NOT invent your own filename — the orchestrator has already allocated this path.`
+	return strings.ReplaceAll(prompt, "{outPath}", outPath)
 }
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md.

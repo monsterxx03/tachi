@@ -55,6 +55,9 @@ type DeepResearch struct {
 	// reportMaxTokens caps the direct LLM call that generates the report
 	// HTML. Follows the top-level config max_tokens (never hardcoded).
 	reportMaxTokens int
+	// lastReportPath is the output path of the most recent Run(), set so
+	// callers can register the artifact with the session (see ReportPath).
+	lastReportPath string
 
 	// providerCache caches named providers to avoid re-creating them on each
 	// call to getProvider. The default provider is NOT cached here since it
@@ -131,6 +134,7 @@ func (dr *DeepResearch) Run(ctx context.Context, topic string, depth, breadth in
 
 	// Pre-compute output path once so success and error paths share the same filename.
 	outputPath := dr.reportPath(topic)
+	dr.lastReportPath = outputPath
 
 	allLearnings, allURLs, err := dr.deepResearch(researchCtx, topic, depth, breadth, nil, progress)
 	if err != nil {
@@ -564,6 +568,14 @@ func (dr *DeepResearch) reportPath(topic string) string {
 	now := time.Now()
 	filename := fmt.Sprintf("%s-%s.html", now.Format("2006-01-02_1504"), slug)
 	return filepath.Join(config.ResearchDir(), filename)
+}
+
+// ReportPath returns the output path of the most recent Run() call ("" when
+// Run has never completed). The path is set at the START of Run (before
+// research), so a failed Run may return a path whose file does not exist —
+// callers MUST os.Stat the path before registering it as an artifact.
+func (dr *DeepResearch) ReportPath() string {
+	return dr.lastReportPath
 }
 
 // saveReport saves the report content to the given file path.

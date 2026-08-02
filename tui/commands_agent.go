@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	tea "charm.land/bubbletea/v2"
@@ -9,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // ------- Agent-driven commands (trigger LLM conversations) -------
@@ -226,6 +229,46 @@ func (m *Model) showReviewReportHint(report cmds.RoundReport) {
 		m.chatview.AddMessage(chatMessage{Role: "error",
 			Content: fmt.Sprintf("⚠️ 第 %d 轮未成功保存报告，后续轮次将跳过它", report.Round)})
 	}
+}
+
+// appendReviewArtifact registers the final review report as a session
+// artifact (best-effort). It stashes the reminder in m.reviewReminder; the
+// actual splice into m.history happens AFTER the one-off savedHistory
+// restore (see model_events.go TurnComplete), since splicing here would be
+// wiped by m.history = m.savedHistory. Runs on the main event loop.
+func (m *Model) appendReviewArtifact(rounds int, reportPath string) {
+	// Only register when the report file exists (matches channel/ACP).
+	if _, statErr := os.Stat(reportPath); statErr != nil {
+		m.logger.Warn(context.Background(), "TUI: review artifact: report missing on disk, not registered", "path", reportPath, "err", statErr)
+		return
+	}
+	ref := session.ArtifactRef{
+		Kind:  session.ArtifactKindReview,
+		Title: fmt.Sprintf("代码审查（%d 轮）", rounds),
+		Path:  reportPath,
+	}
+	if m.agent != nil {
+		if sm := m.agent.SessionManager(); sm != nil {
+			if err := sm.AppendArtifact(ref); err != nil {
+				m.logger.Warn(context.Background(), "TUI: review artifact: append failed", "err", err)
+			}
+		}
+	}
+	m.reviewReminder = session.FormatArtifactReminder([]session.ArtifactRef{ref})
+}
+
+// spliceReviewReminderIntoHistory appends the stashed review reminder to
+// m.history. Called after the one-off savedHistory restore so the splice is
+// not wiped. No-op when nothing is stashed.
+func (m *Model) spliceReviewReminderIntoHistory() {
+	if m.reviewReminder == "" {
+		return
+	}
+	m.history = append(m.history, llm.Message{
+		Role:    "user",
+		Content: m.reviewReminder,
+	})
+	m.reviewReminder = ""
 }
 
 // sendInitCommand sends the init prompt to LLM to generate .tachi.md

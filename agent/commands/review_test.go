@@ -541,19 +541,22 @@ func TestReviewOrchestrator_SingleRoundSpec(t *testing.T) {
 	if spec.Round != 1 || spec.Provider != p || spec.Kind != "review" {
 		t.Errorf("spec = %+v, want round 1 / main provider / kind review", spec)
 	}
-	if spec.Prompt != ReviewUserPrompt() {
-		t.Error("single-round prompt must be the standard review prompt")
+	// Since the artifact follow-up change, single-round reviews also get an
+	// orchestrator-owned output path and the prompt instructs the LLM to
+	// write the report there.
+	if spec.OutPath == "" {
+		t.Error("single-round OutPath must be non-empty (orchestrator-owned path)")
 	}
-	if spec.OutPath != "" {
-		t.Errorf("single-round OutPath = %q, want empty (LLM names its own report)", spec.OutPath)
+	if !strings.Contains(spec.Prompt, spec.OutPath) {
+		t.Errorf("single-round prompt must reference the outPath %q", spec.OutPath)
 	}
 
 	done, report := orch.Complete()
 	if !done {
 		t.Error("single round must complete after one round")
 	}
-	if report.Path != "" {
-		t.Errorf("single-round report = %+v, want empty (no orchestrator-owned path)", report)
+	if report.Path == "" {
+		t.Error("single-round report must carry the orchestrator-owned path")
 	}
 	if _, ok := orch.Next(); ok {
 		t.Error("Next after completion must return ok=false")
@@ -638,35 +641,36 @@ func TestReviewOrchestrator_FromCommand(t *testing.T) {
 		return out, nil
 	}
 
-	// No argument → single round, no report dir.
-	orch, err := NewReviewOrchestratorFromCommand("/review", ReviewOptions{}, resolve, "")
+	// No argument → single round. Since the artifact follow-up change the
+	// single round ALSO gets an orchestrator-owned report dir + path, so the
+	// report can be registered as a followable artifact.
+	baseDir := t.TempDir()
+	orch, err := NewReviewOrchestratorFromCommand("/review", ReviewOptions{}, resolve, baseDir)
 	if err != nil {
 		t.Fatalf("single: %v", err)
 	}
 	if orch.IsMultiRound() || orch.TotalRounds() != 1 {
 		t.Errorf("single: total=%d multi=%v, want 1/false", orch.TotalRounds(), orch.IsMultiRound())
 	}
-	if _, err := os.Stat(".tachi/reviews"); !os.IsNotExist(err) {
-		t.Error("single round must not create the report directory")
+	if fi, err := os.Stat(filepath.Join(baseDir, ".tachi/reviews")); err != nil || !fi.IsDir() {
+		t.Error("single round must create the report directory (artifact follow-up)")
 	}
 
 	// "/review 5" → 5 rounds, report dir created by the orchestrator.
-	// baseDir "" anchors at the process CWD (the TUI convention).
-	orch, err = NewReviewOrchestratorFromCommand("/review 5", ReviewOptions{}, resolve, "")
+	orch, err = NewReviewOrchestratorFromCommand("/review 5", ReviewOptions{}, resolve, baseDir)
 	if err != nil {
 		t.Fatalf("multi: %v", err)
 	}
 	if orch.TotalRounds() != 5 || !orch.IsMultiRound() {
 		t.Errorf("multi: total=%d multi=%v, want 5/true", orch.TotalRounds(), orch.IsMultiRound())
 	}
-	if fi, err := os.Stat(".tachi/reviews"); err != nil || !fi.IsDir() {
+	if fi, err := os.Stat(filepath.Join(baseDir, ".tachi/reviews")); err != nil || !fi.IsDir() {
 		t.Errorf("multi: report dir not created: %v", err)
 	}
 
 	// A non-empty baseDir anchors the report dir there (the ACP convention:
 	// sess.cwd may differ from the process CWD — the dir the LLM's WriteFile
 	// resolves against MUST match the one the orchestrator verifies).
-	baseDir := t.TempDir()
 	anchoredOrch, err := NewReviewOrchestratorFromCommand("/review 3", ReviewOptions{}, resolve, baseDir)
 	if err != nil {
 		t.Fatalf("multi+baseDir: %v", err)

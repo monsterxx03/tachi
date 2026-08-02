@@ -38,10 +38,14 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 	// that contains their tool_calls — which is what the LLM API expects.
 	var pendingToolResults []llm.Message
 
-	// pendingReminder buffers the most recent MessageTypeReminder content so it
-	// can be prepended to the subsequent MessageTypeUser. This preserves the
+	// pendingReminders buffers consecutive MessageTypeReminder contents to
+	// be prepended to the subsequent MessageTypeUser, preserving the
 	// <system-reminder> prefix that historyHasReminder() checks for.
-	var pendingReminder string
+	// ACCUMULATING: an artifact reminder (from /research or /review) is
+	// routinely followed by that turn's date reminder — a single-value
+	// buffer would drop the artifact on the next disk reload, breaking
+	// follow-up after a restart.
+	var pendingReminders []string
 
 	flushAssistant := func() {
 		if len(thinkingBlocks) == 0 && assistantText == "" && len(toolCalls) == 0 {
@@ -89,9 +93,9 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			flushAssistant()
 			flushToolResults()
 			content := msg.Content
-			if pendingReminder != "" {
-				content = pendingReminder + "\n" + content
-				pendingReminder = ""
+			if len(pendingReminders) > 0 {
+				content = strings.Join(pendingReminders, "\n") + "\n" + content
+				pendingReminders = nil
 			}
 			result = append(result, llm.Message{
 				Role:    "user",
@@ -150,20 +154,27 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			continue
 
 		case session.MessageTypeReminder:
-			// Buffer the reminder content and prepend it to the subsequent
-			// user message when it arrives. This preserves the original
-			// <system-reminder> prefix so that agent_loop.go's
-			// historyHasReminder() can detect that reminders were already
-			// injected, preventing first-message-only reminders (project
-			// context, git status) from being regenerated on every resume
-			// or continuation after a one-off command like /commit.
-			pendingReminder = msg.Content
+			// Accumulate; ALL buffered reminders are prepended to the next
+			// user message. Keeps artifact reminders alive even when
+			// followed by per-turn reminders like the date block.
+			pendingReminders = append(pendingReminders, msg.Content)
 		}
 	}
 
 	// Flush any remaining buffered content.
 	flushAssistant()
 	flushToolResults()
+
+	// Trailing un-consumed reminders (no user message after them, e.g. an
+	// artifact reminder appended by a completed /research or /review) must
+	// still reach the LLM — otherwise reloading from disk would drop them,
+	// breaking follow-up after agent eviction or a restart.
+	if len(pendingReminders) > 0 {
+		result = append(result, llm.Message{
+			Role:    "user",
+			Content: strings.Join(pendingReminders, "\n"),
+		})
+	}
 
 	// Strip orphaned tool calls from all assistant messages.
 	// LLM APIs (DeepSeek, Anthropic) require every tool_use block to have

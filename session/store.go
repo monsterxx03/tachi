@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
@@ -20,6 +21,7 @@ type Store interface {
 	LoadMeta(id string) (*Session, error)
 	AppendMessage(id string, msg *Message) error
 	LoadMessages(id string) ([]Message, error)
+	ReplaceLastMessage(id string, msg *Message) error
 	UpdateMeta(session *Session) error
 	ListSessions() ([]*Session, error)
 	DeleteSession(id string) error
@@ -123,6 +125,43 @@ func (s *FileStore) LoadMessages(id string) ([]Message, error) {
 	}
 
 	return messages, nil
+}
+
+// ReplaceLastMessage overwrites the last message in messages.jsonl. Used by
+// artifact-reminder merging (session.artifact.go) to extend an existing
+// reminder block in place; rewrites the whole file since jsonl append-only
+// stores cannot patch the tail in place. Session histories are bounded, so
+// the rewrite is cheap.
+//
+// Concurrency: this is a read-modify-write over the whole file. Callers MUST
+// guarantee no concurrent writes to the same session (e.g. hold the Manager
+// mutex or the cached-agent lock) — a concurrent AppendMessage from another
+// Manager instance during the rewrite window would be lost.
+func (s *FileStore) ReplaceLastMessage(id string, msg *Message) error {
+	msgs, err := s.LoadMessages(id)
+	if err != nil {
+		return fmt.Errorf("load messages: %w", err)
+	}
+	if len(msgs) == 0 {
+		return fmt.Errorf("no messages to replace")
+	}
+	msgs[len(msgs)-1] = *msg
+
+	var sb strings.Builder
+	for i := range msgs {
+		data, err := json.Marshal(&msgs[i])
+		if err != nil {
+			return fmt.Errorf("marshal message: %w", err)
+		}
+		sb.WriteString(string(data))
+		sb.WriteByte('\n')
+	}
+
+	path := s.messagesPath(id)
+	if err := fileutil.AtomicWriteFilePrivate(path, []byte(sb.String())); err != nil {
+		return fmt.Errorf("rewrite messages.jsonl: %w", err)
+	}
+	return nil
 }
 
 // UpdateMeta updates the meta.json file

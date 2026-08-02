@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // --- /commit ---
@@ -108,6 +110,16 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 	}
 	defer m.releaseAgent(ca)
 
+	// Ensure the thread has a session before running: the first message on a
+	// thread may be /review itself, and runAgentTurn's prepareThreadSession
+	// never runs for slash commands. Without it the artifact registration in
+	// appendReviewArtifact would find no session.
+	if _, resolved, _ := m.getProviderForThread(threadID); resolved != nil {
+		if sm, _ := m.prepareThreadSession(threadID, resolved); sm != nil {
+			ca.agent.SetSessionManager(sm)
+		}
+	}
+
 	workDir := m.effectiveThreadWorkDir(ca, threadID)
 	// Bind the thread's working directory so each round's Bash/WriteFile
 	// tools resolve relative paths against it — this MUST match the baseDir
@@ -179,7 +191,11 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 
 	var out strings.Builder // single-round text only
 	incompleteRounds := 0
+	var lastOutPath string // last round's orchestrator-owned report path (multi-round only)
 	runErr := orch.Run(func(spec cmds.RoundSpec) error {
+		if spec.OutPath != "" {
+			lastOutPath = spec.OutPath
+		}
 		// Per-round banner + report path hint (multi-round only).
 		banner := fmt.Sprintf("── 第 %d 轮（%d/%d）— %s ──", spec.Round, spec.Round, orch.TotalRounds(), cmds.RoleName(spec.Role))
 		if orch.IsMultiRound() && spec.OutPath != "" {
@@ -245,6 +261,14 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 	// Success line. Multi-round: status reflects any incomplete rounds and
 	// points at the report directory (text already pushed per round).
 	if orch.IsMultiRound() {
+		// Register the final round's report as a session artifact. Incomplete
+		// rounds (drainOneOffEvents' incomplete flag) still splice into
+		// ca.history so the user can ask about what DID complete, but skip
+		// the disk registration — a truncated report isn't advertised as a
+		// durable artifact.
+		if lastOutPath != "" {
+			m.appendReviewArtifact(threadID, ca, orch.TotalRounds(), lastOutPath, incompleteRounds == 0)
+		}
 		dir, _ := filepath.Rel(workDir, orch.ReportDir())
 		if dir == "" || strings.HasPrefix(dir, "..") {
 			dir = orch.ReportDir()
@@ -257,9 +281,44 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 	}
 
 	// Single-round: append a short completion marker so an empty/plain reply
-	// still signals the review happened.
+	// still signals the review happened. The orchestrator owns the
+	// single-round report path too, so register it as a followable artifact.
+	if lastOutPath != "" {
+		m.appendReviewArtifact(threadID, ca, 1, lastOutPath, true)
+	}
 	result := strings.TrimSpace(out.String())
 	return result + "\n\n✅ 审查完成（1 轮）", nil
+}
+
+// appendReviewArtifact registers the final review report as a session
+// artifact. Best-effort: failures are logged, never surfaced as a review
+// error. persist=false (incomplete rounds) skips the disk write but still
+// splices into ca.history. Caller holds the cached agent's lock; the file
+// must exist on disk.
+func (m *Manager) appendReviewArtifact(threadID string, ca *cachedAgent, rounds int, reportPath string, persist bool) {
+	if _, statErr := os.Stat(reportPath); statErr != nil {
+		m.logger.Warn(context.Background(), "channel: review artifact: report missing on disk, not registered", "path", reportPath, "err", statErr)
+		return
+	}
+	ref := session.ArtifactRef{
+		Kind:  session.ArtifactKindReview,
+		Title: fmt.Sprintf("代码审查（%d 轮）", rounds),
+		Path:  reportPath,
+	}
+
+	if persist {
+		sm := m.newSessionManager()
+		if sm != nil {
+			sess, err := sm.FindByThreadID(threadID)
+			if err != nil || sess == nil {
+				m.logger.Warn(context.Background(), "channel: review artifact: session not found", "thread", threadID, "err", err)
+			} else if err := sm.AppendArtifactTo(sess.ID, ref); err != nil {
+				m.logger.Warn(context.Background(), "channel: review artifact: append failed", "err", err)
+			}
+		}
+	}
+
+	m.spliceArtifactIntoCache(ca, ref)
 }
 
 // --- helpers for one-off LLM commands (/commit, /review) ---

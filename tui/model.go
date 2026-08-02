@@ -131,6 +131,14 @@ type Model struct {
 	isReviewing   bool                     // true during a review run (single or multi-round; blocks user input)
 	reviewOrch    *cmds.ReviewOrchestrator // non-nil while a review is running (see reviewOrch doc above)
 	forkedAgent   *agent.ForkedAgent       // active forked agent (e.g. /review), closed on TurnComplete/error
+	// researchReminder / reviewReminder: pending artifact reminder blocks
+	// awaiting splice into m.history. research is written by the research
+	// goroutine (safe via happens-before through the status channel) and
+	// spliced in researchDoneMsg; review is set by appendReviewArtifact and
+	// spliced after the one-off savedHistory restore (splicing earlier would
+	// be wiped by m.history = m.savedHistory).
+	researchReminder string
+	reviewReminder   string
 
 	pendingQueue []string // messages queued during streaming for auto-send on TurnComplete
 	streamGen    int      // incremented on each new stream; used to ignore stale events
@@ -694,6 +702,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case researchDoneMsg:
 		m.isResearching = false
 		m.cancelFunc = nil
+		// Splice the completed research's artifact reminder into the
+		// in-memory history so follow-up turns can read the report.
+		if m.researchReminder != "" {
+			m.history = append(m.history, llm.Message{
+				Role:    "user",
+				Content: m.researchReminder,
+			})
+			m.researchReminder = ""
+		}
 
 	case switchProviderMsg:
 		m.pendingSwitchProvider = &pendingSwitchProvider{

@@ -393,6 +393,29 @@ func TestHistoryHasReminder_Empty(t *testing.T) {
 	assert.False(t, historyHasReminder(nil))
 }
 
+// TestHistoryHasReminder_StandaloneArtifactReminder guards J1/#3: a
+// standalone artifact reminder spliced as the history's first message
+// (thread's first message was /research or /review) must NOT count as
+// evidence of an injected first-message reminder — otherwise project
+// context / date / git reminders would never be injected on the first real
+// user turn.
+func TestHistoryHasReminder_StandaloneArtifactReminder(t *testing.T) {
+	artifactReminder := session.FormatArtifactReminder([]session.ArtifactRef{
+		{Kind: session.ArtifactKindResearch, Title: "主题", Path: "/tmp/r.html"},
+	})
+	history := []llm.Message{
+		{Role: "user", Content: artifactReminder},
+	}
+	assert.False(t, historyHasReminder(history), "standalone artifact reminder must not count as a first-message reminder")
+
+	// Once a REAL user message carries a reminder prefix, it counts.
+	history = append(history, llm.Message{
+		Role:    "user",
+		Content: "<system-reminder>\nProject Context\n</system-reminder>\n\n真实用户消息",
+	})
+	assert.True(t, historyHasReminder(history))
+}
+
 // ---- Tests: buildLLMTools ----
 
 func TestBuildLLMTools(t *testing.T) {

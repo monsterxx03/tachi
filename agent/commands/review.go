@@ -277,7 +277,7 @@ type RoundSpec struct {
 	Round    int
 	Role     ReviewRole
 	Provider llm.Provider
-	OutPath  string // multi-round: orchestrator-owned report path (in prompt); single-round: empty (LLM names its own)
+	OutPath  string // orchestrator-owned report path (in prompt) for single AND multi-round runs
 	Prompt   string
 	Kind     string // OneOffMeta.Kind: "review" (single) / "review-round-N"
 }
@@ -304,11 +304,15 @@ type ReviewOrchestrator struct {
 	current   int
 	reports   []RoundReport
 	opts      ReviewOptions
+	// singleOutPath is the orchestrator-owned report path for single-round
+	// runs (allocated in Next, verified in Complete so RoundReport carries
+	// the real path for artifact registration). Multi-round uses reports.
+	singleOutPath string
 }
 
 // NewReviewOrchestrator builds an orchestrator from already-resolved inputs.
-// reportDir is only meaningful in multi-round mode (pass "" for single-round
-// — the LLM names its own report there). providers must have length == rounds.
+// reportDir is the orchestrator-owned report directory for single AND multi
+// round runs. providers must have length == rounds.
 func NewReviewOrchestrator(rounds int, providers []llm.Provider, reportDir string, opts ReviewOptions) (*ReviewOrchestrator, error) {
 	if rounds < 1 {
 		return nil, fmt.Errorf("review rounds must be >= 1, got %d", rounds)
@@ -343,12 +347,11 @@ func NewReviewOrchestratorFromCommand(input string, opts ReviewOptions, resolve 
 	if err != nil {
 		return nil, err
 	}
-	reportDir := ""
-	if rounds > 1 {
-		reportDir, err = NewReviewReportDir(baseDir)
-		if err != nil {
-			return nil, fmt.Errorf("创建报告目录失败: %w", err)
-		}
+	// Single-round reviews also get an orchestrator-owned report dir + exact
+	// output path, so the result can be registered as a followable artifact.
+	reportDir, err := NewReviewReportDir(baseDir)
+	if err != nil {
+		return nil, fmt.Errorf("创建报告目录失败: %w", err)
 	}
 	return NewReviewOrchestrator(rounds, providers, reportDir, opts)
 }
@@ -357,8 +360,9 @@ func NewReviewOrchestratorFromCommand(input string, opts ReviewOptions, resolve 
 // review (frontends use it to skip single-round-only UI like banners).
 func (o *ReviewOrchestrator) IsMultiRound() bool { return o.rounds > 1 }
 
-// ReportDir returns the orchestrator-owned report directory ("" for
-// single-round runs — the LLM names its own report there).
+// ReportDir returns the orchestrator-owned report directory (created for
+// single AND multi-round runs — since the artifact follow-up change,
+// single-round reviews also get an orchestrator-owned path).
 func (o *ReviewOrchestrator) ReportDir() string { return o.reportDir }
 
 // TotalRounds returns the total round count (1 for single-round reviews).
@@ -386,11 +390,17 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 	round := o.current
 	provider := o.providers[round-1]
 	if o.rounds == 1 {
-		// Single-round path unchanged: standard review prompt, LLM-named report.
+		// Single-round: one reviewer pass, orchestrator-owned report path
+		// (role Judge — the final round is always the Judge). The prompt
+		// instructs the LLM to WriteFile to this exact path.
+		role := ResolveRole(1, 1)
+		outPath := ReportPathFor(o.reportDir, 1, role, provider.Model())
+		o.singleOutPath = outPath
 		return RoundSpec{
 			Round:    1,
 			Provider: provider,
-			Prompt:   ReviewUserPrompt(),
+			OutPath:  outPath,
+			Prompt:   ReviewUserPrompt(outPath),
 			Kind:     "review",
 		}, true
 	}
@@ -409,11 +419,16 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 // RoundReportFrom — the orchestrator does not trust the LLM's word) and
 // returns done=true when the chain has finished. A missing report is still
 // recorded so the NEXT round's prompt can flag it (BuildReviewPrompt's prev
-// parameter). Single-round reviews have no orchestrator-owned path — returns
-// (true, empty RoundReport).
+// parameter). Single-round reviews return their orchestrator-owned path with
+// Saved reflecting whether the LLM actually wrote the file.
 func (o *ReviewOrchestrator) Complete() (bool, RoundReport) {
 	if o.rounds == 1 {
-		return true, RoundReport{}
+		// Single-round: verify the orchestrator-owned path on disk so the
+		// RoundReport carries the real path (frontends register it as an
+		// artifact). Saved=false means the LLM didn't write the file.
+		report := RoundReportFrom(1, o.singleOutPath)
+		o.reports = append(o.reports, report)
+		return true, report
 	}
 	role := ResolveRole(o.current, o.rounds)
 	outPath := ReportPathFor(o.reportDir, o.current, role, o.providers[o.current-1].Model())

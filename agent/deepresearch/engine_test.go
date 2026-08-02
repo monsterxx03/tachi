@@ -344,4 +344,36 @@ func TestBuildReportSummary(t *testing.T) {
 	}
 }
 
+// TestReportPath_SetByRun verifies Run() records the output path so callers
+// can register the report as a session artifact.
+func TestReportPath_SetByRun(t *testing.T) {
+	cfg := testConfig()
+	prov := &mockProvider{responses: map[string]string{
+		"Write the research report for: t": "<html><body>ok</body></html>",
+	}}
+	engine := New(&cfg.DeepResearch, cfg.Providers, prov, &mockSubagentRunner{}, nil, cfg.MaxTokens)
+
+	if engine.ReportPath() != "" {
+		t.Fatalf("ReportPath before Run should be empty, got %q", engine.ReportPath())
+	}
+
+	// Redirect the research dir so the report lands in a temp dir.
+	researchDir := t.TempDir()
+	config.SetBaseDir(researchDir)
+	t.Cleanup(func() { config.SetBaseDir("") })
+
+	_, err := engine.Run(context.Background(), "t", 1, 1, nil)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	p := engine.ReportPath()
+	if p == "" {
+		t.Fatal("ReportPath empty after Run")
+	}
+	if _, statErr := os.Stat(p); statErr != nil {
+		t.Fatalf("reported path does not exist on disk: %v", statErr)
+	}
+}
+
 // ---- helpers ----

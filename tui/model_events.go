@@ -189,6 +189,11 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.isReviewing = false
 			m.reviewOrch = nil
 			m.statusbar.ClearReviewBadge()
+			// Register the final round's report as a session artifact (same
+			// mechanism as channel mode).
+			if report.Saved && report.Path != "" {
+				m.appendReviewArtifact(total, report.Path)
+			}
 			if total > 1 {
 				m.chatview.AppendTextDelta(fmt.Sprintf(
 					"\n✅ 对抗式审查完成 (%d/%d rounds)\n", total, total))
@@ -287,6 +292,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			m.history = m.savedHistory
 			m.savedHistory = nil
 		}
+		// Splice a completed review's artifact reminder AFTER the one-off
+		// restore — splicing in appendReviewArtifact would be wiped by the
+		// restore above. Research uses researchDoneMsg instead.
+		m.spliceReviewReminderIntoHistory()
 		// Capture the one-off transcript path (/commit on m.agent, /review on
 		// the fork) BEFORE the fork is closed below.
 		oneoffPath := ""

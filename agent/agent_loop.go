@@ -374,17 +374,36 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 	return ch
 }
 
-// historyHasReminder checks whether the given message history already contains
-// a synthetic <system-reminder> block injected by a previous resume. This
-// prevents duplication when the TUI re-sends the full history on subsequent
-// user messages within the same resumed session.
+// historyHasReminder reports whether the history contains evidence that
+// first-message-only reminders (project context, git status, date) were
+// already injected, so they aren't re-injected after a session reload.
+// A <system-reminder> prefix on a user message WITH real user content counts
+// as evidence; a STANDALONE reminder block (no content after
+// </system-reminder>) does not — e.g. an artifact reminder spliced as the
+// thread's first message, where the real conversation hasn't started yet.
 func historyHasReminder(history []llm.Message) bool {
 	for _, msg := range history {
-		if msg.Role == "user" && strings.HasPrefix(msg.Content, "<system-reminder>") {
+		if msg.Role != "user" {
+			continue
+		}
+		if strings.HasPrefix(msg.Content, "<system-reminder>") {
+			if isReminderOnly(msg.Content) {
+				continue // standalone reminder block — not evidence of a past first turn
+			}
 			return true
 		}
 	}
 	return false
+}
+
+// isReminderOnly reports whether content is just a <system-reminder> block
+// with no real user content after the closing tag.
+func isReminderOnly(content string) bool {
+	end := strings.Index(content, "</system-reminder>")
+	if end < 0 {
+		return false
+	}
+	return strings.TrimSpace(content[end+len("</system-reminder>"):]) == ""
 }
 
 // prepareTurnMessages builds the initial message slice for a turn: copies

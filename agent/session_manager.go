@@ -40,6 +40,11 @@ type SessionManager interface {
 	// AppendMessage records a message on the current session.
 	AppendMessage(msg *session.Message) error
 
+	// AppendArtifact records an isolated-workflow artifact (deep research,
+	// review, …) into the current session history as a reminder block, so
+	// the LLM can read the artifact file when the user follows up on it.
+	AppendArtifact(ref session.ArtifactRef) error
+
 	// LoadMessages loads all messages for the current session.
 	LoadMessages() ([]session.Message, error)
 

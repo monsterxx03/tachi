@@ -3,11 +3,13 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
 	cmds "github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/session"
 )
 
 func (m *Model) handleResearchCommand() tea.Cmd {
@@ -83,6 +85,31 @@ func (m *Model) handleResearchCommand() tea.Cmd {
 			ch <- fmt.Sprintf("❌ **研究失败**: %v", runErr)
 			return
 		}
+
+		// Register the report as a session artifact (best-effort; only when
+		// the file exists). A missing session (fresh window) must not drop
+		// the reminder — the reminder is always stashed and spliced into
+		// m.history by researchDoneMsg, so the current window can follow up
+		// even without a session.
+		var reminder string
+		if p := engine.ReportPath(); p != "" {
+			if _, statErr := os.Stat(p); statErr == nil {
+				ref := session.ArtifactRef{
+					Kind:  session.ArtifactKindResearch,
+					Title: parsed.Topic,
+					Path:  p,
+				}
+				if sm := m.agent.SessionManager(); sm != nil {
+					if err := sm.AppendArtifact(ref); err != nil {
+						m.logger.Warn(context.Background(), "TUI: research artifact: append failed", "err", err)
+					}
+				}
+				reminder = session.FormatArtifactReminder([]session.ArtifactRef{ref})
+			} else {
+				m.logger.Warn(context.Background(), "TUI: research report missing on disk", "path", p, "err", statErr)
+			}
+		}
+		m.researchReminder = reminder // happens-before: ch send below
 
 		ch <- fmt.Sprintf("✅ **研究完成**\n\n---\n\n%s", report)
 	}()

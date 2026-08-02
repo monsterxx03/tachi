@@ -93,6 +93,12 @@ func (f *fakeSessionManager) AppendMessage(msg *session.Message) error {
 	return nil
 }
 
+// AppendArtifact records the artifact as a reminder message (no merging —
+// the fake is permissive; merge semantics are covered by the real manager).
+func (f *fakeSessionManager) AppendArtifact(ref session.ArtifactRef) error {
+	return f.AppendMessage(&session.Message{Type: session.MessageTypeReminder, Content: ref.Title + " " + ref.Path})
+}
+
 func (f *fakeSessionManager) LoadMessages() ([]session.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

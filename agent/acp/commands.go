@@ -20,6 +20,7 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // ACPSlashCommand represents a slash command available in ACP mode.
@@ -314,7 +315,11 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	// channel closes), so only one fork exists at a time — and a panic
 	// mid-round can't leak the fork.
 	stopReason := acp.StopReasonEndTurn
+	var lastOutPath string // last round's orchestrator-owned report path (multi-round only)
 	runErr := orch.Run(func(spec cmds.RoundSpec) error {
+		if spec.OutPath != "" {
+			lastOutPath = spec.OutPath
+		}
 		forked := aiAgent.Fork(agent.ForkConfig{
 			Provider:      spec.Provider,
 			MaxIterations: ropts.MaxIterations,
@@ -350,6 +355,26 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 			return stopReason, nil
 		}
 		return acp.StopReasonEndTurn, runErr
+	}
+
+	// Register the final round's report as a session artifact (only when
+	// the file exists; a missing session manager is logged, not skipped).
+	// The next Prompt reloads history from disk, where the artifact
+	// reminder is carried by ConvertSessionToLLMMessages.
+	if lastOutPath != "" {
+		if _, statErr := os.Stat(lastOutPath); statErr != nil {
+			logger.FromContext(ctx).Warn(ctx, "ACP: review artifact: report missing on disk, not registered", "path", lastOutPath, "err", statErr)
+		} else if sm := aiAgent.SessionManager(); sm != nil {
+			if err := sm.AppendArtifact(session.ArtifactRef{
+				Kind:  session.ArtifactKindReview,
+				Title: fmt.Sprintf("代码审查（%d 轮）", orch.TotalRounds()),
+				Path:  lastOutPath,
+			}); err != nil {
+				logger.FromContext(ctx).Warn(ctx, "ACP: review artifact: append failed", "err", err)
+			}
+		} else {
+			logger.FromContext(ctx).Warn(ctx, "ACP: review artifact: no session manager, not registered")
+		}
 	}
 	return acp.StopReasonEndTurn, nil
 }
@@ -696,7 +721,7 @@ func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSid
 	// Progress callbacks may fire concurrently from parallel sub-agents —
 	// serialise SessionUpdate writes.
 	var progressMu sync.Mutex
-	report, err := sess.agent.RunDeepResearch(ctx, cfg, args,
+	report, _, err := sess.agent.RunDeepResearch(ctx, cfg, args,
 		func(topic string, depth, breadth int) {
 			sendTextUpdate(ctx, conn, sessionID,
 				fmt.Sprintf("🔬 **Deep Research Started**\n\n**Topic**: %s\n**Depth**: %d | **Breadth**: %d\n\nSearching...",
@@ -722,5 +747,11 @@ func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSid
 
 	sendTextUpdate(ctx, conn, sessionID,
 		fmt.Sprintf("✅ **Research Complete**\n\n---\n\n%s", report))
+
+	// Invalidate the in-memory history cache so the NEXT Prompt reloads from
+	// disk, where the artifact reminder registered by RunDeepResearch is
+	// carried by ConvertSessionToLLMMessages. Without this, a live session
+	// with a populated cache would never see the artifact.
+	sess.history = nil
 	return acp.StopReasonEndTurn, nil
 }

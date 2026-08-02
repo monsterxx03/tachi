@@ -10,6 +10,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -168,29 +169,33 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 
 // --- /research ---
 
-// handleResearchCommand runs deep research on the given topic.
-// In channel mode, this runs synchronously (the channel goroutine blocks
-// while research is in progress). Progress messages are sent asynchronously
-// via sendToThread.
-//
-// Uses the cached agent for the thread to get the SubagentRunner.
-// The agent lock is held for the duration of research, preventing other
-// messages on the same thread from interfering.
+// handleResearchCommand runs deep research on the given topic, synchronously
+// (the channel goroutine blocks while research is in progress; progress goes
+// to the thread via sendToThread). Holds the thread's agent lock for the
+// duration, preventing concurrent messages on the same thread.
 func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 	if m.cfg == nil {
 		return "", fmt.Errorf("manager config unavailable")
 	}
 
-	// Acquire the cached agent for this thread. This gives us a fully
-	// configured agent with SubagentRunner available.
-	// Use background context since research may outlive the message context.
 	ca, err := m.acquireAgent(context.Background(), threadID)
 	if err != nil {
 		return "", fmt.Errorf("acquire agent: %w", err)
 	}
 	defer m.releaseAgent(ca)
 
-	report, err := ca.agent.RunDeepResearch(context.Background(), m.cfg, args,
+	// Ensure the thread has a session before running: the first message on a
+	// thread may be /research itself, and runAgentTurn's
+	// prepareThreadSession — which normally creates the session and wires
+	// the SessionManager — never runs for slash commands. Without it, the
+	// artifact registration below would find no session.
+	if _, resolved, _ := m.getProviderForThread(threadID); resolved != nil {
+		if sm, _ := m.prepareThreadSession(threadID, resolved); sm != nil {
+			ca.agent.SetSessionManager(sm)
+		}
+	}
+
+	report, artifact, err := ca.agent.RunDeepResearch(context.Background(), m.cfg, args,
 		// Initial progress message with the resolved parameters.
 		func(topic string, depth, breadth int) {
 			m.sendToThread(context.Background(), threadID,
@@ -210,7 +215,28 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+
+	// Splice the artifact reminder into the thread's in-memory cache:
+	// RunDeepResearch wrote it to disk, but the next turn's LLM input comes
+	// from ca.history while the cached agent is alive.
+	if artifact != nil {
+		m.spliceArtifactIntoCache(ca, *artifact)
+	}
 	return report, nil
+}
+
+// spliceArtifactIntoCache appends an artifact reminder to a thread's cached
+// in-memory history so the next turn sees it. No-op when the cache is nil
+// (first turn / after eviction — the disk reload path handles it). Caller
+// must hold the cached agent's lock.
+func (m *Manager) spliceArtifactIntoCache(ca *cachedAgent, ref session.ArtifactRef) {
+	if ca == nil || ca.history == nil {
+		return
+	}
+	ca.history = append(ca.history, llm.Message{
+		Role:    "user",
+		Content: session.FormatArtifactReminder([]session.ArtifactRef{ref}),
+	})
 }
 
 // --- /restart ---
