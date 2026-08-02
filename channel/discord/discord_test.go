@@ -1058,6 +1058,17 @@ func TestBuildSlashArgs(t *testing.T) {
 			Type:  discordgo.ApplicationCommandOptionBoolean,
 			Value: true,
 		}}, "true"},
+		{"research topic only", []*discordgo.ApplicationCommandInteractionDataOption{
+			strOpt("topic", "Go 并发模型"),
+		}, "Go 并发模型"},
+		{"research topic with depth and breadth", []*discordgo.ApplicationCommandInteractionDataOption{
+			strOpt("topic", "RAG 最新进展"),
+			{Name: "depth", Type: discordgo.ApplicationCommandOptionInteger, Value: float64(3)},
+			{Name: "breadth", Type: discordgo.ApplicationCommandOptionInteger, Value: float64(5)},
+		}, "RAG 最新进展 --depth 3 --breadth 5"},
+		{"research flags without topic still render flags", []*discordgo.ApplicationCommandInteractionDataOption{
+			{Name: "breadth", Type: discordgo.ApplicationCommandOptionInteger, Value: float64(4)},
+		}, "--breadth 4"},
 	}
 
 	for _, tt := range tests {

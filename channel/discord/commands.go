@@ -67,6 +67,30 @@ var commandOptions = map[string][]*discordgo.ApplicationCommandOption{
 			MaxValue:    10,
 		},
 	},
+	"research": {
+		{
+			Type:        discordgo.ApplicationCommandOptionString,
+			Name:        "topic",
+			Description: "Research topic / query",
+			Required:    true,
+		},
+		{
+			Type:        discordgo.ApplicationCommandOptionInteger,
+			Name:        "depth",
+			Description: "Research depth (default 2)",
+			Required:    false,
+			MinValue:    new(1.0),
+			MaxValue:    5,
+		},
+		{
+			Type:        discordgo.ApplicationCommandOptionInteger,
+			Name:        "breadth",
+			Description: "Search breadth per level (default 3)",
+			Required:    false,
+			MinValue:    new(1.0),
+			MaxValue:    10,
+		},
+	},
 }
 
 // registerSlashCommands registers Discord Application Commands from the
@@ -287,16 +311,31 @@ func (ch *DiscordChannel) respondAutocompleteEmpty(s *discordgo.Session, i *disc
 	})
 }
 
+// flagOptions maps named integer options that should be rendered as
+// "--name value" pairs by buildSlashArgs. These are /research's --depth
+// and --breadth flags, which ParseResearchArgs extracts from the args
+// string. Other named integer options (e.g. /review rounds) stay as bare
+// values because their handlers parse positionally.
+var flagOptions = map[string]bool{
+	"depth":   true,
+	"breadth": true,
+}
+
 // buildSlashArgs converts discordgo ApplicationCommandInteractionDataOption
 // into a space-separated argument string. Integer options (e.g. /review
 // rounds) are rendered as their decimal value; number and boolean options
-// likewise; string options as-is.
+// likewise; string options as-is. Named integer options in flagOptions
+// (e.g. /research depth/breadth) are rendered with their --flag prefix.
 func buildSlashArgs(options []*discordgo.ApplicationCommandInteractionDataOption) string {
 	var parts []string
 	for _, opt := range options {
 		switch opt.Type {
 		case discordgo.ApplicationCommandOptionInteger:
-			parts = append(parts, strconv.FormatInt(opt.IntValue(), 10))
+			if flagOptions[opt.Name] {
+				parts = append(parts, "--"+opt.Name, strconv.FormatInt(opt.IntValue(), 10))
+			} else {
+				parts = append(parts, strconv.FormatInt(opt.IntValue(), 10))
+			}
 		case discordgo.ApplicationCommandOptionNumber:
 			parts = append(parts, strconv.FormatFloat(opt.FloatValue(), 'f', -1, 64))
 		case discordgo.ApplicationCommandOptionBoolean:
