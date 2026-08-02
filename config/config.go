@@ -749,22 +749,6 @@ type PprofConfig struct {
 	Port    int  `yaml:"port" default:"6060"`
 }
 
-// SystemPromptHint returns a system prompt snippet explaining how to use
-// pprof for debugging Tachi itself. Returns empty string when pprof is
-// not enabled or the port is 0.
-func (c PprofConfig) SystemPromptHint() string {
-	if !c.Enabled || c.Port == 0 {
-		return ""
-	}
-	addr := fmt.Sprintf("127.0.0.1:%d", c.Port)
-	return fmt.Sprintf(`- Pprof debug server: http://%s/debug/pprof/ — if the user asks you to debug
-  Tachi's own performance issues (CPU, memory, goroutines), you can use Bash
-  to run: go tool pprof http://%s/debug/pprof/profile?seconds=30 (CPU),
-  go tool pprof http://%s/debug/pprof/heap (memory), or
-  curl http://%s/debug/pprof/goroutine?debug=2 (goroutine dump)
-`, addr, addr, addr, addr)
-}
-
 // Addr returns the listen address ("127.0.0.1:<port>") if pprof is enabled,
 // or empty string otherwise.
 func (c PprofConfig) Addr() string {

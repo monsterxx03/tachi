@@ -58,7 +58,7 @@ func (m *Manager) handleCommitCommand(ctx context.Context, threadID string) (str
 
 	aiAgent := ca.agent
 	sessionID := m.threadSessionID(threadID)
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID, m.cfg.Debug.PPROF)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID)
 
 	eventCh := aiAgent.RunCommitOneOff(ctx, systemPrompt, sessionID, config.DefaultMaxTokens, "")
 
@@ -143,7 +143,7 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 		aiAgent.Config.Thinking, aiAgent.Config.ThinkingEffort)
 
 	sessionID := m.threadSessionID(threadID)
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID, m.cfg.Debug.PPROF)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID)
 	opts := llm.ChatOptions{
 		MaxTokens:      config.DefaultMaxTokens,
 		Thinking:       thinking,

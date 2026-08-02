@@ -3,6 +3,7 @@ package agent
 import (
 	"context"
 	"errors"
+	"os"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/hooks"
@@ -73,6 +74,7 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		GitReminder:         sysCfg.SystemReminder.GitReminder,
 		MemoryRecallLimit:   sysCfg.Memory.RecallLimit,
 		MemoryRecallTimeout: sysCfg.Memory.Timeout,
+		Pprof:               &sysCfg.Debug.PPROF,
 	})
 
 	// --- built-in tools + web search ---
@@ -450,6 +452,16 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 	// Git reminder (configurable).
 	if sysCfg.GitReminder == nil || *sysCfg.GitReminder {
 		reminders = append(reminders, systemreminder.GitReminder{})
+	}
+
+	// Pprof debug reminder — one shot per agent instance, carrying the actual
+	// bound port (bootstrap may have auto-incremented it) and the process PID.
+	if sysCfg.Pprof != nil && sysCfg.Pprof.Enabled {
+		reminders = append(reminders, &systemreminder.PprofReminder{
+			Enabled: sysCfg.Pprof.Enabled,
+			Port:    sysCfg.Pprof.Port,
+			PID:     os.Getpid(),
+		})
 	}
 
 	// Memory recall reminder (only when memory backend is enabled).

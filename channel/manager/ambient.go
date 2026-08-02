@@ -315,7 +315,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	forkAgent.SetContextWindow(resolved.Provider.ContextWindow)
 
 	// Build system prompt with whisper suffix for group chat.
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", "", m.cfg.Debug.PPROF) + "\n" + whisperPromptSuffix
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", "") + "\n" + whisperPromptSuffix
 
 	// Build run options for the ambient turn: one-off recorder + steer channel.
 	// One-off recorder captures the full execution as a sidecar JSONL (anchored

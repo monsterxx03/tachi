@@ -30,6 +30,7 @@ type AgentSystemConfig struct {
 	Herdr          config.HerdrConfig
 	Subagent       config.SubagentConfig
 	SystemReminder config.SystemReminderConfig
+	Debug          config.DebugConfig
 }
 
 // SystemConfigFromConfig 从完整的 config.Config 提取 AgentSystemConfig。
@@ -47,6 +48,7 @@ func SystemConfigFromConfig(cfg *config.Config) AgentSystemConfig {
 		Herdr:          cfg.Herdr,
 		Subagent:       cfg.Subagent,
 		SystemReminder: cfg.SystemReminder,
+		Debug:          cfg.Debug,
 	}
 }
 
@@ -57,6 +59,7 @@ type SystemReminderConfig struct {
 	GitReminder         *bool
 	MemoryRecallLimit   int
 	MemoryRecallTimeout time.Duration
+	Pprof               *config.PprofConfig // nil or !Enabled → no pprof reminder
 }
 
 // AgentConfig 封装构造 AIAgent 所需的所有参数。

@@ -111,7 +111,7 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 					if cur := sm.Current(); cur != nil {
 						sid = cur.ID
 					}
-					systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid, m.cfg.Debug.PPROF)
+					systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid)
 					_, finalizeErr := agent.FinalizeCompact(sm, systemPrompt, summary)
 					if finalizeErr != nil {
 						m.logger.Error(context.Background(), "channel: /model FinalizeCompact failed", finalizeErr)
@@ -181,7 +181,7 @@ func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sess
 	if cur := sm.Current(); cur != nil {
 		sid = cur.ID
 	}
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid, m.cfg.Debug.PPROF)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid)
 	compactMsgs := make([]llm.Message, 0, len(llmMsgs)+2)
 	if systemPrompt != "" {
 		compactMsgs = append(compactMsgs, llm.Message{Role: "system", Content: systemPrompt})

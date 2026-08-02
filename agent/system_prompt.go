@@ -15,8 +15,7 @@ import (
 // instruction hierarchy, reply language, and environment info.
 // If cwd is empty, config.FindProjectRoot() is used as fallback.
 // sessionID can be empty (no current session).
-// pprofCfg controls whether pprof debug hints are included in the prompt.
-func BuildSystemPrompt(language string, cwd string, sessionID string, pprofCfg config.PprofConfig) string {
+func BuildSystemPrompt(language string, cwd string, sessionID string) string {
 	var sb strings.Builder
 
 	// ── Identity + Core traits ──────────────────────────────────────────────
@@ -105,11 +104,6 @@ YOU MUST:
 	}
 	if sessionID != "" {
 		fmt.Fprintf(&sb, "- Session ID: %s\n", sessionID)
-	}
-
-	// Pprof debug hint — only when enabled.
-	if hint := pprofCfg.SystemPromptHint(); hint != "" {
-		sb.WriteString(hint)
 	}
 
 	return sb.String()
