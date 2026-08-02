@@ -15,7 +15,6 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/skill"
-	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -245,28 +244,9 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	aiAgent := sess.agent
 
-	commitProvider := aiAgent.CommitProvider()
-	model := aiAgent.Model()
-	if commitProvider != nil {
-		// The commit prompt's co-author trailer must reflect the model that
-		// actually runs, not the main provider's.
-		model = commitProvider.Model()
-	}
-
-	thinkingDisabled := false
-	opts := llm.ChatOptions{
-		MaxTokens: config.DefaultMaxTokens,
-		Thinking:  &thinkingDisabled,
-	}
-
 	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, agent.ModeAuto, sess.ID)
 
-	// /commit only needs Bash — the tool view hides everything else for the
-	// duration of this run without touching the registry.
-	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
-		cmds.CommitUserPrompt(model), opts,
-		agent.WithToolSet(tools.ToolNameBash),
-		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)}))
+	eventCh := aiAgent.RunCommitOneOff(ctx, systemPrompt, acpOneoffSessionID(sess), config.DefaultMaxTokens, "")
 
 	stopReason, _, _ := streamToACP(ctx, sess, conn, eventCh)
 
@@ -493,30 +473,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		return acp.StopReasonEndTurn, nil
 	}
 
-	// Convert to shared UsageReportInfo
-	toolCalls := make(map[string]*cmds.ToolCallStat, len(report.ToolCalls))
-	for name, st := range report.ToolCalls {
-		toolCalls[name] = &cmds.ToolCallStat{Count: st.Count, ErrCount: st.ErrCount}
-	}
-	info := &cmds.UsageReportInfo{
-		SessionID:                report.Session.ID,
-		Provider:                 report.Session.ProviderName,
-		Title:                    report.Session.Title,
-		ContextWindow:            report.ContextWindow,
-		InputTokens:              report.Usage.InputTokens,
-		LastInputTokens:          report.Usage.LastInputTokens,
-		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
-		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
-		OutputTokens:             report.Usage.OutputTokens,
-		EstimatedInputTokens:     sess.agent.LastInputEstimate(),
-		Cost:                     report.Cost,
-		ToolCalls:                toolCalls,
-		MainCount:                report.MainCount,
-		SubCount:                 report.SubCount,
-		PprofAddr:                sess.cfg.Debug.PPROF.Addr(),
-	}
-	// Populate token breakdown from the session agent
-	info.EstBreakdown = sess.agent.LastTokenBreakdown()
+	info := agent.BuildUsageReportInfo(report, sess.agent.LastInputEstimate(), sess.agent.LastTokenBreakdown(), sess.cfg.Debug.PPROF.Addr())
 
 	text := cmds.FormatUsageReport(info)
 	sendTextUpdate(ctx, conn, sessionID, text)
@@ -730,54 +687,36 @@ func handleACPResearch(ctx context.Context, sess *ACPSession, conn *acp.AgentSid
 
 	sessionID := acp.SessionId(sess.ID)
 
-	parsed := cmds.ParseResearchArgs(args)
-	if parsed.Topic == "" {
-		sendTextUpdate(ctx, conn, sessionID, "Usage: `/research <topic> [--depth N] [--breadth N] [--format report|answer]`")
-		return acp.StopReasonEndTurn, nil
-	}
-
 	cfg := sess.cfg
 	if cfg == nil {
 		sendTextUpdate(ctx, conn, sessionID, "No configuration available.")
 		return acp.StopReasonEndTurn, nil
 	}
 
-	// Apply defaults from config if not specified
-	if parsed.Depth <= 0 {
-		parsed.Depth = cfg.DeepResearch.DefaultDepth
-	}
-	if parsed.Breadth <= 0 {
-		parsed.Breadth = cfg.DeepResearch.DefaultBreadth
-	}
-
-	engine, err := sess.agent.NewDeepResearch(cfg)
-	if err != nil {
-		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to create research engine: %v", err))
+	// Progress callbacks may fire concurrently from parallel sub-agents —
+	// serialise SessionUpdate writes.
+	var progressMu sync.Mutex
+	report, err := sess.agent.RunDeepResearch(ctx, cfg, args,
+		func(topic string, depth, breadth int) {
+			sendTextUpdate(ctx, conn, sessionID,
+				fmt.Sprintf("🔬 **Deep Research Started**\n\n**Topic**: %s\n**Depth**: %d | **Breadth**: %d\n\nSearching...",
+					topic, depth, breadth))
+		},
+		func(text string) {
+			progressMu.Lock()
+			sendTextUpdate(ctx, conn, sessionID, text)
+			progressMu.Unlock()
+		})
+	if errors.Is(err, agent.ErrResearchUsage) {
+		sendTextUpdate(ctx, conn, sessionID, "Usage: `/research <topic> [--depth N] [--breadth N] [--format report|answer]`")
 		return acp.StopReasonEndTurn, nil
 	}
-	if engine == nil {
+	if errors.Is(err, agent.ErrResearchUnavailable) {
 		sendTextUpdate(ctx, conn, sessionID, "Deep Research is not available.")
 		return acp.StopReasonEndTurn, nil
 	}
-
-	sendTextUpdate(ctx, conn, sessionID,
-		fmt.Sprintf("🔬 **Deep Research Started**\n\n**Topic**: %s\n**Depth**: %d | **Breadth**: %d\n\nSearching...",
-			parsed.Topic, parsed.Depth, parsed.Breadth))
-
-	// Run with research-specific timeout, streaming progress via SessionUpdate.
-	// Use a mutex to serialise progress callbacks, since the engine may call
-	// them concurrently from multiple goroutines (parallel sub-agents).
-	researchCtx, cancel := context.WithTimeout(ctx, cfg.DeepResearch.Timeout)
-	defer cancel()
-
-	var progressMu sync.Mutex
-	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth, func(format string, args ...any) {
-		progressMu.Lock()
-		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf(format, args...))
-		progressMu.Unlock()
-	})
-	if runErr != nil {
-		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("❌ Research failed: %v", runErr))
+	if err != nil {
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("❌ Research failed: %v", err))
 		return acp.StopReasonEndTurn, nil
 	}
 

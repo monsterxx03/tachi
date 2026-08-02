@@ -14,7 +14,6 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
-	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/dream"
@@ -786,31 +785,7 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 		return nil
 	}
 
-	// Convert tool call stats to shared type
-	toolCalls := make(map[string]*cmds.ToolCallStat, len(report.ToolCalls))
-	for name, st := range report.ToolCalls {
-		toolCalls[name] = &cmds.ToolCallStat{Count: st.Count, ErrCount: st.ErrCount}
-	}
-
-	info := &cmds.UsageReportInfo{
-		SessionID:                report.Session.ID,
-		Provider:                 report.Session.ProviderName,
-		Title:                    report.Session.Title,
-		ContextWindow:            report.ContextWindow,
-		InputTokens:              report.Usage.InputTokens,
-		LastInputTokens:          report.Usage.LastInputTokens,
-		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
-		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
-		OutputTokens:             report.Usage.OutputTokens,
-		EstimatedInputTokens:     m.totalUsage.LastInputTokens,
-		Cost:                     report.Cost,
-		ToolCalls:                toolCalls,
-		MainCount:                report.MainCount,
-		SubCount:                 report.SubCount,
-		PprofAddr:                m.cfg.Debug.PPROF.Addr(),
-	}
-	// Populate token breakdown from the agent
-	info.EstBreakdown = m.agent.LastTokenBreakdown()
+	info := agent.BuildUsageReportInfo(report, m.totalUsage.LastInputTokens, m.agent.LastTokenBreakdown(), m.cfg.Debug.PPROF.Addr())
 
 	m.chatview.AddMessage(chatMessage{
 		Role:    "assistant",
@@ -1259,21 +1234,10 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 
 	ctx := m.startTurn()
 
-	commitProvider := m.agent.CommitProvider()
-	commitModel := m.agent.Model()
-
-	// Disable thinking for /commit: the commit message task is simple and
-	// avoiding thinking saves tokens/latency.
-	commitOpts := m.chatOpts
-	thinkingDisabled := false
-	commitOpts.Thinking = &thinkingDisabled
-
 	// /commit only needs Bash — the tool view hides everything else for the
-	// duration of this run without touching the registry.
-	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
-		cmds.CommitUserPrompt(commitModel), commitOpts,
-		agent.WithToolSet(tools.ToolNameBash),
-		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()}))
+	// duration of this run without touching the registry. Keep the TUI's
+	// configured MaxTokens; the shared runner handles provider + thinking.
+	m.eventCh = m.agent.RunCommitOneOff(ctx, m.systemPrompt, m.currentSessionID(), m.chatOpts.MaxTokens, "")
 
 	return tea.Batch(
 		m.statusbar.Tick(),
