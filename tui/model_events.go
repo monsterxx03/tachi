@@ -29,12 +29,14 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 	case agent.AgentEventTextDelta:
 		m.setState(stateStreaming)
 		m.chatview.AppendTextDelta(event.TextDelta)
+		m.statusbar.AddStreamedOutput(event.TextDelta)
 		return m.nextEvent()
 
 	case agent.AgentEventThinkingDelta:
 		m.setState(stateStreaming)
 		m.chatview.AppendThinkingDelta(event.ThinkingDelta)
 		m.thinkingView.Append(event.ThinkingDelta)
+		m.statusbar.AddStreamedOutput(event.ThinkingDelta)
 		return m.nextEvent()
 
 	case agent.AgentEventToolCallStart:
@@ -44,6 +46,9 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		// tool calls start. The next turn (after tool results) will
 		// accumulate fresh thinking.
 		m.thinkingView.Reset()
+		// Tool execution marks the end of the current generation segment —
+		// the next output delta starts fresh TPM timing.
+		m.statusbar.ResetTPM()
 		return m.nextEvent()
 
 	case agent.AgentEventToolCallArgs:

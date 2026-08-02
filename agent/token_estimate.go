@@ -75,6 +75,14 @@ func isASCIIAlphaNum(r rune) bool {
 	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9')
 }
 
+// EstimateTokenCount estimates the number of tokens in a string using the
+// same character-class-aware heuristic as the internal token estimation.
+// Exported for frontends that need per-delta estimates (e.g. the TUI's
+// live tokens-per-minute status).
+func EstimateTokenCount(s string) int64 {
+	return approxTokenCount(s)
+}
+
 // EstimateContentTokens converts session messages to llm.Message (via
 // ConvertSessionToLLMMessages) and delegates to estimateInputTokens, ensuring
 // token estimation is consistent with estimateAndUpdateTokens (used in the

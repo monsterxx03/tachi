@@ -3,6 +3,7 @@ package tui
 import (
 	"strings"
 	"testing"
+	"time"
 
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
@@ -681,5 +682,110 @@ func TestStatusBar_View_MillionTokens(t *testing.T) {
 	}
 	if strings.Contains(view, "2.5M") || strings.Contains(view, "5.0M") {
 		t.Errorf("should NOT show token breakdown: got %q", view)
+	}
+}
+
+// ---- Live TPM (tokens per minute) ----
+
+func TestStatusBar_TPM_NoOutputYet(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	if s.currentTPM() != 0 {
+		t.Error("no output yet → TPM must be 0")
+	}
+	if s.showingTPM() {
+		t.Error("no output yet → should not show TPM")
+	}
+}
+
+func TestStatusBar_TPM_TracksTokensAndTime(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	// Feed a chunk of output — tokens accumulate, timing starts.
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	if s.tpmTokens <= 0 {
+		t.Fatal("AddStreamedOutput must accumulate estimated tokens")
+	}
+	if s.tpmStart.IsZero() {
+		t.Fatal("first delta must start the timing segment")
+	}
+	// Pin the elapsed time for deterministic math: ~2 minutes. elapsed is
+	// actually ≥ 2min (wall clock moved on), so the integer rate is
+	// tokens/2 or tokens/2 − 1 after truncation.
+	s.tpmStart = time.Now().Add(-2 * time.Minute)
+	want := s.tpmTokens / 2
+	if got := s.currentTPM(); got != want && got != want-1 {
+		t.Errorf("currentTPM = %d, want %d (or %d)", got, want, want-1)
+	}
+	if !s.showingTPM() {
+		t.Error("streaming with active segment should show TPM")
+	}
+}
+
+func TestStatusBar_TPM_SubSecondElapsedIsZero(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput("hello world")
+	// tpmStart is now → elapsed < 1s → 0, to avoid wild initial spikes.
+	if s.currentTPM() != 0 {
+		t.Error("sub-second elapsed should yield 0 TPM")
+	}
+}
+
+func TestStatusBar_TPM_Reset(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput("hello world")
+	s.ResetTPM()
+	if s.tpmTokens != 0 || !s.tpmStart.IsZero() {
+		t.Error("ResetTPM must clear both fields")
+	}
+	if s.currentTPM() != 0 {
+		t.Error("after reset, TPM must be 0")
+	}
+}
+
+func TestStatusBar_TPM_OnlyRendersWhileStreaming(t *testing.T) {
+	s := makeStatusBar(withState(stateIdle))
+	s.AddStreamedOutput("hello world")
+	if s.showingTPM() {
+		t.Error("TPM must not render outside the streaming state")
+	}
+	view := s.View()
+	if strings.Contains(view, "tpm:") {
+		t.Errorf("idle view must not contain tpm:, got %q", view)
+	}
+}
+
+func TestStatusBar_TPM_RendersInStreamingView(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpmStart = time.Now().Add(-2 * time.Minute)
+	view := s.View()
+	if !strings.Contains(view, "tpm:") {
+		t.Errorf("streaming view should contain tpm:, got %q", view)
+	}
+}
+
+func TestStatusBar_TPM_ResetByIdleState(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput("hello world")
+	s.SetState(stateIdle)
+	if s.tpmTokens != 0 || !s.tpmStart.IsZero() {
+		t.Error("leaving streaming must clear the live TPM state")
+	}
+}
+
+func TestFormatTPM(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{850, "850"},
+		{9_999, "9999"},
+		{12_000, "12.0k"},
+		{99_999, "100.0k"},
+		{150_000, "150k"},
+	}
+	for _, c := range cases {
+		if got := formatTPM(c.in); got != c.want {
+			t.Errorf("formatTPM(%d) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }
