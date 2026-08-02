@@ -210,7 +210,7 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 	sessID := sm.Current().ID
 	result, _ := drainAgentEvents(a.RunOneOffStream(
 		t.Context(), prov, "system prompt", "review the diff",
-		llm.ChatOptions{MaxTokens: 1024}, OneOffMeta{Kind: "review"}))
+		llm.ChatOptions{MaxTokens: 1024}, WithOneOffMeta(&OneOffMeta{Kind: "review"})))
 
 	require.NotNil(t, result)
 	assert.Equal(t, ExitReasonStop, result.ExitReason)
@@ -245,7 +245,7 @@ func TestRunOneOffStream_EmptyKindNoRecording(t *testing.T) {
 	a := newTestAgent(t, prov)
 
 	result, _ := drainAgentEvents(a.RunOneOffStream(
-		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024}, OneOffMeta{}))
+		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024}))
 	require.NotNil(t, result)
 
 	assert.Empty(t, a.LastOneoffTranscriptPath())
@@ -267,7 +267,7 @@ func TestRunOneOffStream_DisabledByConfig(t *testing.T) {
 
 	result, _ := drainAgentEvents(a.RunOneOffStream(
 		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024},
-		OneOffMeta{Kind: "commit"}))
+		WithOneOffMeta(&OneOffMeta{Kind: "commit"})))
 	require.NotNil(t, result)
 
 	assert.Empty(t, a.LastOneoffTranscriptPath())
@@ -289,7 +289,7 @@ func TestRunOneOffStream_RecorderFailureStillRuns(t *testing.T) {
 
 	result, _ := drainAgentEvents(a.RunOneOffStream(
 		t.Context(), prov, "sys", "hi", llm.ChatOptions{MaxTokens: 1024},
-		OneOffMeta{Kind: "commit"}))
+		WithOneOffMeta(&OneOffMeta{Kind: "commit"})))
 
 	// Recording failure is a Warn, never fatal — the run completes normally.
 	require.NotNil(t, result)

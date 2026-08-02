@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	md "github.com/JohannesKaufmann/html-to-markdown/v2"
 	"github.com/monsterxx03/tachi/config"
@@ -785,7 +786,8 @@ func crossHostRedirectOutput(originalURL string, resp *http.Response) webFetchOu
 // When ResultBaseDir is empty, falls back to a simple inline truncation.
 func (t *WebFetchTool) truncateWebFetchOutput(ctx context.Context, content string, rawURL string) string {
 	maxChars := t.MaxReturnChars
-	if maxChars <= 0 || len(content) <= maxChars {
+	// Rune semantics throughout: maxChars is a character count, not bytes.
+	if maxChars <= 0 || utf8.RuneCountInString(content) <= maxChars {
 		return content
 	}
 
@@ -805,24 +807,26 @@ func (t *WebFetchTool) truncateWebFetchOutput(ctx context.Context, content strin
 		return hardTruncateWebFetch(content, maxChars)
 	}
 
-	logger.FromContext(ctx).Info(ctx, "WebFetch: result too large, saved to file", "char_count", len(content), "path", filepath)
+	logger.FromContext(ctx).Info(ctx, "WebFetch: result too large, saved to file", "char_count", utf8.RuneCountInString(content), "path", filepath)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[WEBFETCH OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
-		len(content), maxChars)
+		utf8.RuneCountInString(content), maxChars)
 	fmt.Fprintf(&sb, "Use ReadFile to read the full output from:\n  %s",
 		filepath)
 	return sb.String()
 }
 
 // hardTruncateWebFetch performs a simple truncation without file persistence.
-// Used as fallback when ResultBaseDir is empty or file I/O fails.
+// Used as fallback when ResultBaseDir is empty or file I/O fails. Truncation
+// is rune-safe (strutil) so multi-byte characters are never split mid-sequence.
 func hardTruncateWebFetch(content string, maxChars int) string {
-	truncated := content[:maxChars]
+	truncated := strutil.TruncatePlain(content, maxChars)
+	truncatedRunes := utf8.RuneCountInString(content) - utf8.RuneCountInString(truncated)
 	return fmt.Sprintf(
 		"[WEBFETCH OUTPUT TRUNCATED at %d chars]\n%s\n...\n[... %d chars truncated. "+
 			"Use a more specific URL or prompt to narrow the response.]",
-		maxChars, truncated, len(content)-maxChars,
+		maxChars, truncated, truncatedRunes,
 	)
 }
 

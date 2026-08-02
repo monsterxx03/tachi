@@ -265,8 +265,8 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	// duration of this run without touching the registry.
 	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
 		cmds.CommitUserPrompt(model), opts,
-		agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)},
-		agent.WithToolSet(tools.ToolNameBash))
+		agent.WithToolSet(tools.ToolNameBash),
+		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit", SessionID: acpOneoffSessionID(sess)}))
 
 	stopReason, _, _ := streamToACP(ctx, sess, conn, eventCh)
 
@@ -344,7 +344,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		defer forked.Close()
 
 		eventCh := forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt, spec.Prompt, opts,
-			agent.OneOffMeta{Kind: spec.Kind, SessionID: acpOneoffSessionID(sess)})
+			agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: acpOneoffSessionID(sess)}))
 		var err error
 		stopReason, _, err = streamToACP(ctx, sess, conn, eventCh)
 		// A broken round (API error / budget exhaustion) must terminate the

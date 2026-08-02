@@ -1272,8 +1272,8 @@ func (m *Model) sendCommitCommand() tea.Cmd {
 	// duration of this run without touching the registry.
 	m.eventCh = m.agent.RunOneOffStream(ctx, commitProvider, m.systemPrompt,
 		cmds.CommitUserPrompt(commitModel), commitOpts,
-		agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()},
-		agent.WithToolSet(tools.ToolNameBash))
+		agent.WithToolSet(tools.ToolNameBash),
+		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit", SessionID: m.currentSessionID()}))
 
 	return tea.Batch(
 		m.statusbar.Tick(),
@@ -1403,7 +1403,7 @@ func (m *Model) startReviewRound() tea.Cmd {
 	ctx := m.startTurn()
 	m.eventCh = forked.Agent().RunOneOffStream(ctx, spec.Provider,
 		m.systemPrompt, spec.Prompt, reviewOpts,
-		agent.OneOffMeta{Kind: spec.Kind, SessionID: m.currentSessionID()})
+		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: m.currentSessionID()}))
 	return tea.Batch(m.statusbar.Tick(), m.nextEvent())
 }
 

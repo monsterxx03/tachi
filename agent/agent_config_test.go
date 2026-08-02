@@ -274,7 +274,7 @@ func TestOneOffDoesNotPublishCurrentRun(t *testing.T) {
 		textSeq("commit message"),
 	}}
 	oneoffCh := a.RunOneOffStream(t.Context(), oneoffProv, "sys", "make a commit",
-		llm.ChatOptions{MaxTokens: 1024}, OneOffMeta{})
+		llm.ChatOptions{MaxTokens: 1024})
 	oneoffResult, _ := drainAgentEvents(oneoffCh)
 	require.NotNil(t, oneoffResult)
 	require.Equal(t, ExitReasonStop, oneoffResult.ExitReason)

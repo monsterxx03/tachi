@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -23,7 +24,8 @@ const (
 //
 // When maxChars <= 0, the result is returned unchanged (no limit).
 func (m *Manager) truncateToolOutput(ctx context.Context, result string, maxChars int, fileDir string, toolName string) string {
-	if maxChars <= 0 || len(result) <= maxChars {
+	// Rune semantics throughout: maxChars is a character count, not bytes.
+	if maxChars <= 0 || utf8.RuneCountInString(result) <= maxChars {
 		return result
 	}
 
@@ -39,27 +41,29 @@ func (m *Manager) truncateToolOutput(ctx context.Context, result string, maxChar
 		return hardTruncate(result, maxChars, toolName)
 	}
 
-	m.logger.Info(ctx, "MCP: tool result too large, saved to file", "tool", toolName, "char_count", len(result), "path", filepath)
+	m.logger.Info(ctx, "MCP: tool result too large, saved to file", "tool", toolName, "char_count", utf8.RuneCountInString(result), "path", filepath)
 
 	// Best-effort background cleanup of old files.
 	go m.cleanupOldToolResults(ctx, fileDir, defaultToolResultMaxAge)
 
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "[OUTPUT TOO LARGE] Full output (%d chars) exceeds limit (%d chars).\n",
-		len(result), maxChars)
+		utf8.RuneCountInString(result), maxChars)
 	fmt.Fprintf(&sb, "Use ReadFile to read the full output from:\n  %s",
 		filepath)
 	return sb.String()
 }
 
 // hardTruncate performs a simple truncation at maxChars without file persistence.
-// Used as fallback when file I/O fails.
+// Used as fallback when file I/O fails. Truncation is rune-safe (strutil) so
+// multi-byte characters like Chinese are never split mid-sequence.
 func hardTruncate(result string, maxChars int, _ string) string {
-	truncated := result[:maxChars]
+	truncated := strutil.TruncatePlain(result, maxChars)
+	truncatedRunes := utf8.RuneCountInString(result) - utf8.RuneCountInString(truncated)
 	return fmt.Sprintf(
 		"[OUTPUT TRUNCATED at %d chars]\n%s\n...\n[... %d chars truncated. "+
 			"Use pagination or filtering on the MCP server if available.]",
-		maxChars, truncated, len(result)-maxChars,
+		maxChars, truncated, truncatedRunes,
 	)
 }
 

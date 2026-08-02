@@ -227,7 +227,6 @@ func (a *AIAgent) RunOneOffStream(
 	systemPrompt string,
 	userMessage string,
 	opts llm.ChatOptions,
-	meta OneOffMeta,
 	ropts ...RunOption,
 ) <-chan AgentEvent {
 	ch := make(chan AgentEvent, 64)
@@ -256,16 +255,11 @@ func (a *AIAgent) RunOneOffStream(
 			SkipSessionWrites: true,
 		}
 
-		// Set up one-off recorder. WithOneOffMeta (params) takes precedence;
-		// the meta function parameter is the legacy path for existing callers
-		// (/commit, /review, subagent, dream) — when both are set, meta is
-		// silently ignored.
+		// Set up one-off recorder via WithOneOffMeta when the caller wants
+		// a sidecar transcript (e.g. /commit, /review, github, dream).
 		if params != nil && params.oneoffMeta != nil {
 			params.oneoffMeta.SystemPrompt = systemPrompt
 			rs.OneoffRec = a.startOneoffRecorder(ctx, *params.oneoffMeta, provider)
-		} else if meta.Kind != "" {
-			meta.SystemPrompt = systemPrompt
-			rs.OneoffRec = a.startOneoffRecorder(ctx, meta, provider)
 		}
 		defer func() {
 			if rs.OneoffRec != nil {

@@ -411,7 +411,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	ch := aiAgent.RunOneOffStream(ctx, commitProvider, buildSystemPrompt(cfg.Language, cfg.Debug.PPROF),
-		userPrompt, opts, agent.OneOffMeta{Kind: "commit"})
+		userPrompt, opts, agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit"}))
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
 	if result == nil {
