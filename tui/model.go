@@ -117,8 +117,10 @@ type Model struct {
 	eventCh      <-chan agent.AgentEvent
 	steerCh      chan agent.SteerInput // agent → TUI: steer check requests read pending input from here
 	// steerCh 无需在 TurnComplete/Error 时置 nil：事件顺序处理，旧 turn 的
-	// loop 退出后不会再有 SteerCheck；steer 发送是 select+default 非阻塞，
-	// 新 turn 会在 sendMessage 里重建 channel。
+	// loop 退出后不会再有 SteerCheck；新 turn 会在 sendMessage 里重建 channel。
+	// channel 为缓冲 1，且 agent 侧有 steer 超时兜底：即使旧 turn 的
+	// SteerCheck 与重建后的新 channel 错配，旧 turn 也会在超时后继续，
+	// 不会永久挂死（见 agent.applySteer 的 defaultSteerTimeout）。
 	totalUsage     llm.Usage
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView

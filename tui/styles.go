@@ -89,6 +89,22 @@ var (
 	usageHighStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#ED8796"))
 
+	// Live output-rate (TPS) indicator in the statusbar right half: green =
+	// fast, yellow = normal pace, red = slow. Mirrors the usage palette.
+	tpsFastStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#A6DA95"))
+
+	tpsNormalStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#EED49F"))
+
+	tpsSlowStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#ED8796"))
+
+	// Frozen TPS value (paused between generation segments): dimmed gray to
+	// distinguish it from the live colored rate.
+	tpsPausedStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#6E738D"))
+
 	boldStyle = lipgloss.NewStyle().
 			Bold(true)
 

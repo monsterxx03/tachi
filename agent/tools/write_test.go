@@ -197,4 +197,3 @@ func TestWriteTool_NotParallel(t *testing.T) {
 		t.Error("WriteTool should not be parallel")
 	}
 }
-

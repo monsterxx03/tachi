@@ -9,8 +9,8 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/memory"
-	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/container"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // HalfLifeDays is the decay half-life in days. Facts decay to 0.5 after this

@@ -673,11 +673,11 @@ func TestView_MouseMode_CopyMode(t *testing.T) {
 }
 
 // TestStatusBar_LiveContextFraction guards the implicit dependency where the
-// statusbar's ctx: NN% (percentage-only) display is fed by the LIVE event
-// path: handleAgentEvent fills totalUsage.LastInputTokens from the agent's
-// local estimate on AgentEventUsage. If a future refactor removes that
-// assignment, the statusbar would silently stop showing context usage in a
-// fresh session (no persisted session to restore it from).
+// statusbar's NN% (percentage-only) display is fed by the LIVE event path:
+// handleAgentEvent fills totalUsage.LastInputTokens from the agent's local
+// estimate on AgentEventUsage. If a future refactor removes that assignment,
+// the statusbar would silently stop showing context usage in a fresh session
+// (no persisted session to restore it from).
 func TestStatusBar_LiveContextFraction(t *testing.T) {
 	a := agent.NewAIAgent(nil, 10)
 	defer a.Close()
@@ -700,9 +700,6 @@ func TestStatusBar_LiveContextFraction(t *testing.T) {
 	})
 
 	view := m.statusbar.View()
-	if !strings.Contains(view, "ctx:") {
-		t.Fatalf("statusbar should show ctx%% after a live usage event: %q", view)
-	}
 	// 16_000 / 128_000 = 12.5% → "12%" (round-half-to-even) or "13%".
 	if !strings.Contains(view, "12%") && !strings.Contains(view, "13%") {
 		t.Errorf("ctx percentage should be ~12%%: got %q", view)

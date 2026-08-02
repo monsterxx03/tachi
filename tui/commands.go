@@ -35,6 +35,7 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		// Reset usage so statusbar shows clean state.
 		m.totalUsage = llm.Usage{}
 		m.statusbar.SetUsage(nil)
+		m.statusbar.ClearTPS()
 		m.statusbar.SetSessionInfo("", "")
 		return nil
 	},

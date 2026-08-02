@@ -395,7 +395,6 @@ func TestXmlEscape(t *testing.T) {
 	}
 }
 
-
 func TestStoreCreate(t *testing.T) {
 	tmpDir := t.TempDir()
 	projectSkillDir := filepath.Join(tmpDir, ".tachi", "skills")

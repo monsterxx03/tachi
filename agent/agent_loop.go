@@ -820,12 +820,27 @@ func (a *AIAgent) syncLSPAfterTools(ctx context.Context, acc *streamAccumulator)
 	a.Config.LSPManager.WaitForDiagnostics(ctx, 2*time.Second)
 }
 
+// defaultSteerTimeout bounds how long applySteer waits for the frontend to
+// answer a SteerCheck. A healthy frontend replies within milliseconds; the
+// timeout guards against a desynced or stuck frontend (e.g. a channel
+// mismatch after a concurrent turn rebuilt the steer channel) permanently
+// blocking the loop. Steer is an optional injection — continuing without it
+// is always safe.
+const defaultSteerTimeout = 5 * time.Second
+
 // applySteer injects pending user input after tool results. Returns
 // outcomeStop when the context is cancelled while waiting for the TUI's
-// steer response.
+// steer response. If no steer input arrives within the steer timeout
+// (runParams.steerTimeout or defaultSteerTimeout), the loop continues as if
+// nothing was steered and logs a warning so the desync is visible instead of
+// hanging forever.
 func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParams, ch chan<- AgentEvent) loopOutcome {
 	if params == nil || params.steerCh == nil {
 		return outcomeContinue
+	}
+	timeout := params.steerTimeout
+	if timeout == 0 {
+		timeout = defaultSteerTimeout
 	}
 	ch <- AgentEvent{Type: AgentEventSteerCheck}
 	select {
@@ -848,6 +863,11 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 				Content: steerInput.Text,
 			})
 		}
+		return outcomeContinue
+	case <-time.After(timeout):
+		// No steer input in time — frontend may be desynced or stuck. Never
+		// block the loop forever; log so the mismatch is diagnosable.
+		a.Config.Logger.Warn(ctx, "Agent: steer: timed out waiting for steer response, continuing without steer", "timeout", timeout.String())
 		return outcomeContinue
 	case <-ctx.Done():
 		ch <- AgentEvent{

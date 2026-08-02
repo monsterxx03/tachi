@@ -5,8 +5,11 @@ import (
 	"testing"
 	"time"
 
+	"charm.land/lipgloss/v2"
+
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // ---- helpers ----
@@ -14,6 +17,17 @@ import (
 // sb returns a StatusBar with predictable defaults for testing.
 func sb() StatusBar {
 	return NewStatusBar("openai/gpt-4o", 128_000)
+}
+
+// streamingTPSString renders exactly what buildUsageRight emits for a
+// streaming statusbar with an active generation segment: the styled, unlabeled
+// rate only (e.g. "\x1b[33m37/s\x1b[0m").
+func streamingTPSString(t *testing.T) string {
+	t.Helper()
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	return tpsStyleFor(s.currentTPS()).Render(strutil.FormatTPS(s.currentTPS()))
 }
 
 func withState(st state) func(*StatusBar) {
@@ -299,10 +313,7 @@ func TestStatusBar_TruncateTitle_Unicode(t *testing.T) {
 func TestStatusBar_View_UsageNormal(t *testing.T) {
 	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(10_000, 500))
 	view := s.View()
-	if !strings.Contains(view, "ctx:") {
-		t.Error("View should show context usage when input tokens > 0")
-	}
-	// 10_000 / 128_000 = 7.8% → "8%"（只显示百分比，无 n/m）
+	// 10_000 / 128_000 = 7.8% → "8%"（只显示百分比，无 n/m，无 ctx: 标签）
 	if !strings.Contains(view, "8%") {
 		t.Errorf("View should show 8%%: got %q", view)
 	}
@@ -342,7 +353,7 @@ func TestStatusBar_View_UsageNearFull(t *testing.T) {
 func TestStatusBar_View_NoUsageWhenZero(t *testing.T) {
 	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(0, 0))
 	view := s.View()
-	if strings.Contains(view, "ctx:") {
+	if strings.Contains(view, "0%") {
 		t.Error("View should NOT show context usage when input tokens are 0")
 	}
 }
@@ -351,7 +362,7 @@ func TestStatusBar_View_NoUsageWhenNil(t *testing.T) {
 	s := makeStatusBar(withWidth(120), withState(stateIdle))
 	// totalUsage is nil by default
 	view := s.View()
-	if strings.Contains(view, "ctx:") {
+	if strings.Contains(view, "%") {
 		t.Error("View should NOT show context usage when usage is nil")
 	}
 }
@@ -359,7 +370,7 @@ func TestStatusBar_View_NoUsageWhenNil(t *testing.T) {
 func TestStatusBar_View_NoUsageWhenContextWindowZero(t *testing.T) {
 	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(10_000, 500), withContextWindow(0))
 	view := s.View()
-	if strings.Contains(view, "ctx:") {
+	if strings.Contains(view, "8%") {
 		t.Error("View should NOT show context usage when context window is 0")
 	}
 }
@@ -531,7 +542,7 @@ func TestStatusBar_View_OverflowNeverWraps(t *testing.T) {
 	}
 	// The right side's usage info must survive truncation.
 	// 100_000 / 128_000 = 78.1% → "78%"
-	if !strings.Contains(view, "ctx:") || !strings.Contains(view, "78%") {
+	if !strings.Contains(view, "78%") {
 		t.Errorf("right-side usage must stay visible on overflow, got %q", view)
 	}
 }
@@ -685,107 +696,156 @@ func TestStatusBar_View_MillionTokens(t *testing.T) {
 	}
 }
 
-// ---- Live TPM (tokens per minute) ----
+// ---- Live TPS (tokens per second) ----
 
-func TestStatusBar_TPM_NoOutputYet(t *testing.T) {
+func TestStatusBar_TPS_NoOutputYet(t *testing.T) {
 	s := makeStatusBar(withState(stateStreaming))
-	if s.currentTPM() != 0 {
-		t.Error("no output yet → TPM must be 0")
+	if s.currentTPS() != 0 {
+		t.Error("no output yet → TPS must be 0")
 	}
-	if s.showingTPM() {
-		t.Error("no output yet → should not show TPM")
+	if s.hasTPS() {
+		t.Error("no output yet → should not show TPS")
 	}
 }
 
-func TestStatusBar_TPM_TracksTokensAndTime(t *testing.T) {
+func TestStatusBar_TPS_TracksTokensAndTime(t *testing.T) {
 	s := makeStatusBar(withState(stateStreaming))
 	// Feed a chunk of output — tokens accumulate, timing starts.
 	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
-	if s.tpmTokens <= 0 {
+	if s.tpsTokens <= 0 {
 		t.Fatal("AddStreamedOutput must accumulate estimated tokens")
 	}
-	if s.tpmStart.IsZero() {
+	if s.tpsStart.IsZero() {
 		t.Fatal("first delta must start the timing segment")
 	}
-	// Pin the elapsed time for deterministic math: ~2 minutes. elapsed is
-	// actually ≥ 2min (wall clock moved on), so the integer rate is
+	// Pin the elapsed time for deterministic math: ~2 seconds. elapsed is
+	// actually ≥ 2s (wall clock moved on), so the integer rate is
 	// tokens/2 or tokens/2 − 1 after truncation.
-	s.tpmStart = time.Now().Add(-2 * time.Minute)
-	want := s.tpmTokens / 2
-	if got := s.currentTPM(); got != want && got != want-1 {
-		t.Errorf("currentTPM = %d, want %d (or %d)", got, want, want-1)
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	want := s.tpsTokens / 2
+	if got := s.currentTPS(); got != want && got != want-1 {
+		t.Errorf("currentTPS = %d, want %d (or %d)", got, want, want-1)
 	}
-	if !s.showingTPM() {
-		t.Error("streaming with active segment should show TPM")
+	if !s.hasTPS() {
+		t.Error("streaming with active segment should show TPS")
 	}
 }
 
-func TestStatusBar_TPM_SubSecondElapsedIsZero(t *testing.T) {
+func TestStatusBar_TPS_SubSecondElapsedIsZero(t *testing.T) {
 	s := makeStatusBar(withState(stateStreaming))
 	s.AddStreamedOutput("hello world")
-	// tpmStart is now → elapsed < 1s → 0, to avoid wild initial spikes.
-	if s.currentTPM() != 0 {
-		t.Error("sub-second elapsed should yield 0 TPM")
+	// tpsStart is now → elapsed < 1s → 0, to avoid wild initial spikes.
+	if s.currentTPS() != 0 {
+		t.Error("sub-second elapsed should yield 0 TPS")
 	}
 }
 
-func TestStatusBar_TPM_Reset(t *testing.T) {
-	s := makeStatusBar(withState(stateStreaming))
-	s.AddStreamedOutput("hello world")
-	s.ResetTPM()
-	if s.tpmTokens != 0 || !s.tpmStart.IsZero() {
-		t.Error("ResetTPM must clear both fields")
-	}
-	if s.currentTPM() != 0 {
-		t.Error("after reset, TPM must be 0")
-	}
-}
-
-func TestStatusBar_TPM_OnlyRendersWhileStreaming(t *testing.T) {
-	s := makeStatusBar(withState(stateIdle))
-	s.AddStreamedOutput("hello world")
-	if s.showingTPM() {
-		t.Error("TPM must not render outside the streaming state")
-	}
-	view := s.View()
-	if strings.Contains(view, "tpm:") {
-		t.Errorf("idle view must not contain tpm:, got %q", view)
-	}
-}
-
-func TestStatusBar_TPM_RendersInStreamingView(t *testing.T) {
+func TestStatusBar_TPS_Reset(t *testing.T) {
 	s := makeStatusBar(withState(stateStreaming))
 	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
-	s.tpmStart = time.Now().Add(-2 * time.Minute)
-	view := s.View()
-	if !strings.Contains(view, "tpm:") {
-		t.Errorf("streaming view should contain tpm:, got %q", view)
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	want := s.currentTPS()
+	s.ResetTPS()
+	if s.tpsTokens != 0 || !s.tpsStart.IsZero() {
+		t.Error("ResetTPS must clear the live timing fields")
+	}
+	if s.currentTPS() != 0 {
+		t.Error("after reset, live TPS must be 0")
+	}
+	if s.lastTPS != want {
+		t.Errorf("ResetTPS must freeze the last rate into lastTPS: got %d, want %d", s.lastTPS, want)
 	}
 }
 
-func TestStatusBar_TPM_ResetByIdleState(t *testing.T) {
+func TestStatusBar_TPS_ClearTPS(t *testing.T) {
 	s := makeStatusBar(withState(stateStreaming))
-	s.AddStreamedOutput("hello world")
-	s.SetState(stateIdle)
-	if s.tpmTokens != 0 || !s.tpmStart.IsZero() {
-		t.Error("leaving streaming must clear the live TPM state")
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	s.ResetTPS()
+	if s.lastTPS <= 0 {
+		t.Fatal("ResetTPS should have frozen a rate")
+	}
+	s.ClearTPS()
+	if s.tpsTokens != 0 || !s.tpsStart.IsZero() || s.lastTPS != 0 {
+		t.Error("ClearTPS must clear live fields AND the frozen rate")
+	}
+	if s.hasTPS() {
+		t.Error("after ClearTPS there must be no TPS to render")
 	}
 }
 
-func TestFormatTPM(t *testing.T) {
+func TestStatusBar_TPS_NothingBeforeAnySegment(t *testing.T) {
+	s := makeStatusBar(withState(stateIdle))
+	if s.hasTPS() {
+		t.Error("no segment ever → hasTPS must be false")
+	}
+	view := s.View()
+	if strings.Contains(view, streamingTPSString(t)) {
+		t.Errorf("view must not contain a TPS value before any segment, got %q", view)
+	}
+}
+
+func TestStatusBar_TPS_RendersInStreamingView(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	view := s.View()
+	if !strings.Contains(view, streamingTPSString(t)) {
+		t.Errorf("streaming view should contain the styled TPS value, got %q", view)
+	}
+}
+
+func TestStatusBar_TPS_ResetByIdleState(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	s.SetState(stateIdle)
+	if s.tpsTokens != 0 || !s.tpsStart.IsZero() {
+		t.Error("leaving streaming must clear the live timing fields")
+	}
+	if s.lastTPS <= 0 {
+		t.Error("leaving streaming must freeze the last rate (paused)")
+	}
+}
+
+// TestStatusBar_TPS_PausedRendersInIdleView verifies that after a segment
+// ends, the frozen rate stays visible — dimmed, and NOT as the live colored
+// value.
+func TestStatusBar_TPS_PausedRendersInIdleView(t *testing.T) {
+	s := makeStatusBar(withState(stateStreaming))
+	s.AddStreamedOutput(strings.Repeat("hello world ", 25))
+	s.tpsStart = time.Now().Add(-2 * time.Second)
+	s.SetState(stateIdle) // turn end: reset + freeze + paused display
+	if s.lastTPS <= 0 {
+		t.Fatal("leaving streaming must freeze the last rate")
+	}
+	view := s.View()
+	if !strings.Contains(view, tpsPausedStyle.Render(strutil.FormatTPS(s.lastTPS))) {
+		t.Errorf("idle view should show the frozen TPS value dimmed, got %q", view)
+	}
+	if strings.Contains(view, streamingTPSString(t)) {
+		t.Errorf("paused view must not show the live colored TPS, got %q", view)
+	}
+}
+
+func TestTPStyleFor(t *testing.T) {
 	cases := []struct {
 		in   int64
-		want string
+		want lipgloss.Style
 	}{
-		{850, "850"},
-		{9_999, "9999"},
-		{12_000, "12.0k"},
-		{99_999, "100.0k"},
-		{150_000, "150k"},
+		{1, tpsSlowStyle},
+		{tpsNormalThreshold - 1, tpsSlowStyle},
+		{tpsNormalThreshold, tpsNormalStyle},
+		{tpsFastThreshold - 1, tpsNormalStyle},
+		{tpsFastThreshold, tpsFastStyle},
+		{2_000, tpsFastStyle},
 	}
 	for _, c := range cases {
-		if got := formatTPM(c.in); got != c.want {
-			t.Errorf("formatTPM(%d) = %q, want %q", c.in, got, c.want)
+		got := tpsStyleFor(c.in)
+		// lipgloss.Style is a struct with a slice field ([]color.Color) and is
+		// therefore not ==-comparable — compare rendered output instead.
+		if got.Render("x") != c.want.Render("x") {
+			t.Errorf("tpsStyleFor(%d) rendered %q, want %q", c.in, got.Render("x"), c.want.Render("x"))
 		}
 	}
 }

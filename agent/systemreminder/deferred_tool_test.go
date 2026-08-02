@@ -224,4 +224,3 @@ func TestDeferredToolReminder_FiresOnlyOnce(t *testing.T) {
 		t.Error("expected nil on second call (HasFired guard)")
 	}
 }
-

@@ -32,16 +32,24 @@ type StatusBar struct {
 	modeBadge     string // current mode badge text (e.g. "[auto]")
 	reviewBadge   string // multi-round /review indicator (e.g. "⚔️ 挑战者 2/5"); empty when not reviewing
 	thinkingLevel string // current thinking level ("none"/"low"/.../"max"/"default"); empty = not shown
-	// Live output-rate tracking (tokens per minute). tpmTokens accumulates
-	// estimated output tokens from text deltas; tpmStart is the zero time of
+	// Live output-rate tracking (tokens per second). tpsTokens accumulates
+	// estimated output tokens from text deltas; tpsStart is the zero time of
 	// the current generation segment (set on first delta). Reset at tool-call
-	// boundaries and when the turn ends.
-	tpmTokens int64
-	tpmStart  time.Time
+	// boundaries and when the turn ends — the last computed rate is frozen
+	// into lastTPS so the status bar shows it dimmed (paused) until the next
+	// segment starts.
+	tpsTokens int64
+	tpsStart  time.Time
+	lastTPS   int64
 }
 
 const (
 	maxSessionTitleLen = 30
+
+	// TPS color-tier thresholds (tokens per second): below normal = red
+	// (slow, e.g. reasoning models), normal→fast = yellow, fast+ = green.
+	tpsNormalThreshold = 60
+	tpsFastThreshold   = 200
 )
 
 // statusbarTruncStyle performs true truncation (lipgloss MaxWidth) as opposed
@@ -54,13 +62,13 @@ func NewStatusBar(providerInfo string, contextWindow int64) StatusBar {
 	return StatusBar{providerInfo: providerInfo, contextWindow: contextWindow, spinner: sp}
 }
 
-func (s *StatusBar) SetWidth(w int)                  { s.width = w }
+func (s *StatusBar) SetWidth(w int) { s.width = w }
 func (s *StatusBar) SetState(st state) {
 	s.state = st
 	if st != stateStreaming {
-		// Leaving a streaming segment: never let a stale live TPM linger
+		// Leaving a streaming segment: never let a stale live TPS linger
 		// (covers turn end, cancel, error, and idle transitions).
-		s.ResetTPM()
+		s.ResetTPS()
 	}
 }
 func (s *StatusBar) SetUsage(u *llm.Usage)           { s.totalUsage = u }
@@ -73,50 +81,62 @@ func (s *StatusBar) ProviderInfo() string            { return s.providerInfo }
 func (s *StatusBar) SetPendingCount(n int) { s.pendingCount = n }
 
 // AddStreamedOutput accumulates estimated output tokens (text AND thinking
-// deltas) for the live TPM display. The first delta starts the timing
+// deltas) for the live TPS display. The first delta starts the timing
 // segment; the rate reflects the provider's full generation throughput,
 // matching the API's output-token accounting (which includes reasoning).
 func (s *StatusBar) AddStreamedOutput(text string) {
 	if text == "" {
 		return
 	}
-	if s.tpmStart.IsZero() {
-		s.tpmStart = time.Now()
+	if s.tpsStart.IsZero() {
+		s.tpsStart = time.Now()
 	}
-	s.tpmTokens += agent.EstimateTokenCount(text)
+	s.tpsTokens += agent.EstimateTokenCount(text)
 }
 
-// ResetTPM clears the live tokens-per-minute tracking (tool-call boundary or
-// turn end). The next output delta starts a fresh timing segment.
-func (s *StatusBar) ResetTPM() {
-	s.tpmTokens = 0
-	s.tpmStart = time.Time{}
+// ResetTPS clears the live tokens-per-second tracking (tool-call boundary or
+// turn end). The most recent rate is frozen into lastTPS so the status bar
+// keeps showing it dimmed (paused) instead of disappearing; the next output
+// delta starts a fresh timing segment.
+func (s *StatusBar) ResetTPS() {
+	if tps := s.currentTPS(); tps > 0 {
+		s.lastTPS = tps
+	}
+	s.tpsTokens = 0
+	s.tpsStart = time.Time{}
 }
 
-// currentTPM returns the live output rate in tokens/min, or 0 when no
+// ClearTPS fully clears the live-rate state including the frozen last rate,
+// so no stale value lingers (e.g. after /new or a session switch).
+func (s *StatusBar) ClearTPS() {
+	s.ResetTPS()
+	s.lastTPS = 0
+}
+
+// currentTPS returns the live output rate in tokens/sec, or 0 when no
 // generation segment is active or it has run less than a second.
-func (s *StatusBar) currentTPM() int64 {
-	if s.tpmTokens <= 0 || s.tpmStart.IsZero() {
+func (s *StatusBar) currentTPS() int64 {
+	if s.tpsTokens <= 0 || s.tpsStart.IsZero() {
 		return 0
 	}
-	elapsed := time.Since(s.tpmStart)
+	elapsed := time.Since(s.tpsStart)
 	if elapsed < time.Second {
 		return 0 // avoid wild spikes from the first instants
 	}
-	return int64(float64(s.tpmTokens) / elapsed.Minutes())
+	return int64(float64(s.tpsTokens) / elapsed.Seconds())
 }
 
-// showingTPM reports whether a live TPM value would currently be rendered
-// (used to decide whether the right half of the status bar is non-empty).
-func (s *StatusBar) showingTPM() bool {
-	return s.state == stateStreaming && s.currentTPM() > 0
+// hasTPS reports whether any TPS value would currently be rendered: a live
+// rate during streaming, or the frozen (paused) rate from the last segment.
+func (s *StatusBar) hasTPS() bool {
+	return s.currentTPS() > 0 || s.lastTPS > 0
 }
 
-func (s *StatusBar) SetMCPReady(v bool)    { s.mcpReady = v }
-func (s *StatusBar) SetMCPEnabled(v bool)  { s.mcpEnabled = v }
-func (s *StatusBar) SetMCPError(v string)  { s.mcpError = v }
-func (s *StatusBar) SetCompacting(v bool)  { s.compacting = v }
-func (s *StatusBar) SetMode(mode string)   { s.modeBadge = modeBadgeFor(mode) }
+func (s *StatusBar) SetMCPReady(v bool)   { s.mcpReady = v }
+func (s *StatusBar) SetMCPEnabled(v bool) { s.mcpEnabled = v }
+func (s *StatusBar) SetMCPError(v string) { s.mcpError = v }
+func (s *StatusBar) SetCompacting(v bool) { s.compacting = v }
+func (s *StatusBar) SetMode(mode string)  { s.modeBadge = modeBadgeFor(mode) }
 func (s *StatusBar) SetReviewBadge(b string) {
 	s.reviewBadge = b
 }
@@ -195,7 +215,7 @@ func (s StatusBar) View() string {
 	}
 
 	var right string
-	if (s.totalUsage != nil && s.totalUsage.LastInputTokens > 0) || s.showingTPM() {
+	if (s.totalUsage != nil && s.totalUsage.LastInputTokens > 0) || s.hasTPS() {
 		right = s.buildUsageRight()
 	}
 
@@ -221,6 +241,17 @@ func (s StatusBar) truncateTitle(title string) string {
 func (s StatusBar) buildUsageRight() string {
 	var parts []string
 
+	// Live output rate: colored while a generation segment is active; when the
+	// segment ends (tool call / turn end) the last rate stays visible, dimmed
+	// to signal a pause. Rendered first (leftmost in the right half) so the
+	// static context usage sits flush against the right edge. No label — the
+	// "/s" unit and the rate-tier color carry the meaning.
+	if tps := s.currentTPS(); tps > 0 {
+		parts = append(parts, tpsStyleFor(tps).Render(strutil.FormatTPS(tps)))
+	} else if s.lastTPS > 0 && s.state != stateStreaming {
+		parts = append(parts, tpsPausedStyle.Render(strutil.FormatTPS(s.lastTPS)))
+	}
+
 	// Context usage: show the most recent per-call input token estimate as a
 	// percentage of the context window only (no n/m breakdown). Unlike
 	// InputTokens (which accumulates across all API calls in the session and
@@ -229,15 +260,7 @@ func (s StatusBar) buildUsageRight() string {
 	// estimated locally before the call.
 	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 && s.contextWindow > 0 {
 		pct := float64(s.totalUsage.LastInputTokens) / float64(s.contextWindow) * 100
-		ctxStr := fmt.Sprintf("ctx: %s", formatPercent(pct))
-		parts = append(parts, usageColorStyle(pct).Render(ctxStr))
-	}
-
-	// Live output rate: only meaningful while a generation segment is active.
-	if s.state == stateStreaming {
-		if tpm := s.currentTPM(); tpm > 0 {
-			parts = append(parts, fmt.Sprintf("tpm: %s", formatTPM(tpm)))
-		}
+		parts = append(parts, usageColorStyle(pct).Render(formatPercent(pct)))
 	}
 
 	if len(parts) == 0 {
@@ -246,15 +269,17 @@ func (s StatusBar) buildUsageRight() string {
 	return strings.Join(parts, " ") + " "
 }
 
-// formatTPM renders a tokens-per-minute value compactly (e.g. "1.2k").
-func formatTPM(tpm int64) string {
+// tpsStyleFor returns the status-bar style for a live output rate: red when
+// slow, yellow at a normal pace, green when fast — same palette as the
+// context-usage indicator for a consistent right-half look.
+func tpsStyleFor(tps int64) lipgloss.Style {
 	switch {
-	case tpm >= 100_000:
-		return fmt.Sprintf("%.0fk", float64(tpm)/1000)
-	case tpm >= 10_000:
-		return fmt.Sprintf("%.1fk", float64(tpm)/1000)
+	case tps >= tpsFastThreshold:
+		return tpsFastStyle
+	case tps >= tpsNormalThreshold:
+		return tpsNormalStyle
 	default:
-		return fmt.Sprintf("%d", tpm)
+		return tpsSlowStyle
 	}
 }
 

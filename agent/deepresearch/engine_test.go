@@ -3,8 +3,8 @@ package deepresearch
 import (
 	"context"
 	"fmt"
-	"testing"
 	"strings"
+	"testing"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
@@ -253,4 +253,3 @@ func TestBuildPartialReportNoLearnings(t *testing.T) {
 }
 
 // ---- helpers ----
-

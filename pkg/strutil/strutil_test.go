@@ -211,3 +211,46 @@ func TestSanitizeFilename(t *testing.T) {
 		}
 	}
 }
+
+func TestFormatMagnitude(t *testing.T) {
+	cases := []struct {
+		in   int64
+		div  int64
+		unit string
+		want string
+	}{
+		{1_000, 1_000, "k", "1k"},
+		{7_300, 1_000, "k", "7.3k"},
+		{9_999, 1_000, "k", "10k"},
+		{12_000, 1_000, "k", "12k"},
+		{99_999, 1_000, "k", "100k"},
+		{150_000, 1_000, "k", "150k"},
+		{1_234_567, 1_000_000, "m", "1.2m"},
+	}
+	for _, c := range cases {
+		if got := FormatMagnitude(c.in, c.div, c.unit); got != c.want {
+			t.Errorf("FormatMagnitude(%d, %d, %q) = %q, want %q", c.in, c.div, c.unit, got, c.want)
+		}
+	}
+}
+
+func TestFormatTPS(t *testing.T) {
+	cases := []struct {
+		in   int64
+		want string
+	}{
+		{85, "85/s"},
+		{999, "999/s"},
+		{1_000, "1k/s"},
+		{7_300, "7.3k/s"},
+		{9_999, "10k/s"},
+		{12_000, "12k/s"},
+		{150_000, "150k/s"},
+		{1_234_567, "1.2m/s"},
+	}
+	for _, c := range cases {
+		if got := FormatTPS(c.in); got != c.want {
+			t.Errorf("FormatTPS(%d) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

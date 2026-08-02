@@ -6,6 +6,7 @@ package strutil
 
 import (
 	"fmt"
+	"math"
 	"strings"
 
 	"github.com/google/uuid"
@@ -117,6 +118,31 @@ func HumanBytes(n int64) string {
 		return fmt.Sprintf("%.1f MB", float64(n)/(1024*1024))
 	default:
 		return fmt.Sprintf("%.1f GB", float64(n)/(1024*1024*1024))
+	}
+}
+
+// FormatMagnitude renders v/div with one decimal place, dropping a redundant
+// ".0" so 12_000 → "12k" while 7_300 → "7.3k". Used for humanizing token
+// rates and other magnitudes (see FormatTPS).
+func FormatMagnitude(v, div int64, unit string) string {
+	r := float64(v) / float64(div)
+	if rounded := math.Round(r*10) / 10; rounded == math.Trunc(rounded) {
+		return fmt.Sprintf("%.0f%s", rounded, unit)
+	}
+	return fmt.Sprintf("%.1f%s", r, unit)
+}
+
+// FormatTPS renders a tokens-per-second value in human-friendly form with a
+// "/s" suffix: ≥1k → "7.3k/s" (or "12k/s" when the decimal is redundant),
+// ≥1M → "1.2m/s", below 1k → "200/s".
+func FormatTPS(tps int64) string {
+	switch {
+	case tps >= 1_000_000:
+		return FormatMagnitude(tps, 1_000_000, "m") + "/s"
+	case tps >= 1_000:
+		return FormatMagnitude(tps, 1_000, "k") + "/s"
+	default:
+		return fmt.Sprintf("%d/s", tps)
 	}
 }
 

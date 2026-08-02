@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -61,6 +62,7 @@ type runParams struct {
 	toolView
 	pendingImages []llm.ContentPart // run 开始时附到首条用户消息的图片
 	steerCh       chan SteerInput   // steer 输入（nil = 前端不支持 steer）
+	steerTimeout  time.Duration     // 等待 TUI steer 响应的上限（0 = 默认 defaultSteerTimeout）
 	oneoffMeta    *OneOffMeta       // one-off 转录（nil = 不录制）
 }
 
@@ -147,6 +149,15 @@ func WithPendingImages(imgs []llm.ContentPart) RunOption {
 func WithSteerChannel(ch chan SteerInput) RunOption {
 	return func(p *runParams) {
 		p.steerCh = ch
+	}
+}
+
+// WithSteerTimeout overrides how long the loop waits for a steer response
+// before continuing without steer. Zero (the default) uses
+// defaultSteerTimeout. Mainly used by tests to avoid waiting the full default.
+func WithSteerTimeout(d time.Duration) RunOption {
+	return func(p *runParams) {
+		p.steerTimeout = d
 	}
 }
 

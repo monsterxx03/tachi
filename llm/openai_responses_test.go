@@ -569,9 +569,9 @@ func TestResponsesDeriveFinishReason(t *testing.T) {
 			out = append(out, responses.ResponseOutputItemUnion{Type: lastType})
 		}
 		return &responses.Response{
-			Status:             status,
-			IncompleteDetails:  responses.ResponseIncompleteDetails{Reason: incompleteReason},
-			Output:             out,
+			Status:            status,
+			IncompleteDetails: responses.ResponseIncompleteDetails{Reason: incompleteReason},
+			Output:            out,
 		}
 	}
 
@@ -598,7 +598,7 @@ func TestResponsesDeriveFinishReason(t *testing.T) {
 
 func TestResponsesUsageMapping(t *testing.T) {
 	u := responses.ResponseUsage{
-		InputTokens: 100,
+		InputTokens:  100,
 		OutputTokens: 50,
 		InputTokensDetails: responses.ResponseUsageInputTokensDetails{
 			CachedTokens:     30,

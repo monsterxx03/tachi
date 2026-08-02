@@ -1087,6 +1087,48 @@ func TestAgentLoop_SteerCancelled_MessagesPreserved(t *testing.T) {
 	assert.True(t, found, "AgentEventError must be emitted at steer point cancel (not silent exit)")
 }
 
+// TestAgentLoop_SteerTimeoutContinues verifies that when the frontend never
+// answers a SteerCheck (e.g. a steer-channel mismatch after a concurrent turn
+// rebuilt the channel), the loop does not hang forever: after the steer
+// timeout it continues without steer and completes normally.
+func TestAgentLoop_SteerTimeoutContinues(t *testing.T) {
+	mp := &mockStreamProvider{
+		name: "mock",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"echo hi"}`),
+			textSeq("done after steer timeout"),
+		},
+	}
+
+	a := newTestAgent(t, mp)
+	a.RegisterTool(echoStub())
+
+	// Steer is enabled, but nobody ever writes to the channel — this simulates
+	// a desynced/stuck frontend that leaves the loop waiting at the steer point.
+	steerCh := make(chan SteerInput)
+
+	start := time.Now()
+	ch := a.RunConversationStream(t.Context(), nil, "run command", "", llm.ChatOptions{MaxTokens: 4096},
+		WithSteerChannel(steerCh), WithSteerTimeout(100*time.Millisecond))
+	result, events := drainAgentEvents(ch)
+
+	require.NotNil(t, result)
+	assert.Equal(t, ExitReasonStop, result.ExitReason)
+	// Must not block for the full 5s default timeout — the short configured
+	// timeout must have kicked in at the steer point.
+	assert.Less(t, time.Since(start), 5*time.Second, "loop must continue past the steer point without a response")
+
+	// The frontend still got its SteerCheck chance before the timeout.
+	var sawCheck bool
+	for _, e := range events {
+		if e.Type == AgentEventSteerCheck {
+			sawCheck = true
+			break
+		}
+	}
+	assert.True(t, sawCheck, "SteerCheck event must be emitted before timing out")
+}
+
 // ---- maybeAutoCompact tests (via CompactStrategy interface) ----
 
 func TestMaybeAutoCompact_Success(t *testing.T) {

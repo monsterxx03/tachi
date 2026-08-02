@@ -27,8 +27,13 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 
 	ctx := m.startTurn()
 
-	// Set up steer channel so pending input can be injected at tool-call boundaries.
-	m.steerCh = make(chan agent.SteerInput)
+	// Set up steer channel so pending input can be injected at tool-call
+	// boundaries. Buffered (cap 1): the SteerCheck reply must never be lost
+	// to the select+default non-blocking send racing ahead of the agent's
+	// receive — with an unbuffered channel the reply is dropped when the
+	// agent goroutine has not yet reached its receive, blocking the loop
+	// forever (the agent side additionally has a steer timeout as a backstop).
+	m.steerCh = make(chan agent.SteerInput, 1)
 	var ropts []agent.RunOption
 	ropts = append(ropts, agent.WithSteerChannel(m.steerCh))
 	if len(expanded.Images) > 0 {

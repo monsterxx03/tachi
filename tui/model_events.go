@@ -47,8 +47,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		// accumulate fresh thinking.
 		m.thinkingView.Reset()
 		// Tool execution marks the end of the current generation segment —
-		// the next output delta starts fresh TPM timing.
-		m.statusbar.ResetTPM()
+		// the next output delta starts fresh TPS timing.
+		m.statusbar.ResetTPS()
 		return m.nextEvent()
 
 	case agent.AgentEventToolCallArgs:
@@ -137,12 +137,19 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			// Send expanded steer text to agent (non-blocking with select).
 			select {
 			case m.steerCh <- agent.SteerInput{Text: expandResult.Text, Images: expandResult.Images}:
+				m.logger.Info(context.Background(), "TUI: steer sent (pending queue)", "text", strutil.Truncate(expandResult.Text, 80))
 			default:
+				// Channel full or agent not receiving (e.g. turn mismatch).
+				// Agent-side steer timeout prevents a permanent hang.
+				m.logger.Warn(context.Background(), "TUI: steer send dropped (pending queue): channel full or no receiver", "text", strutil.Truncate(expandResult.Text, 80))
 			}
 		} else {
 			select {
 			case m.steerCh <- agent.SteerInput{Text: ""}:
+				m.logger.Debug(context.Background(), "TUI: steer sent (empty)")
 			default:
+				// Nothing to send and agent not receiving — desync marker.
+				m.logger.Warn(context.Background(), "TUI: steer send dropped (empty): channel full or no receiver")
 			}
 		}
 		return m.nextEvent()
