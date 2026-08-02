@@ -7,4 +7,5 @@ const (
 	FieldTraceID   = "trace_id"
 	FieldSessionID = "session_id"
 	FieldPrefix    = "prefix"
+	FieldPID       = "pid"
 )

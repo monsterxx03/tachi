@@ -218,8 +218,14 @@ func newLogger(name string, parentWriter *rotatingWriter) *Logger {
 		minLevel: cfgLevel,
 	}
 
-	// Build slog.Logger with source attribute.
-	sl := slog.New(h).With(slog.String(FieldSource, name))
+	// Build slog.Logger with source + pid attributes. pid is captured at
+	// construction and identifies the process that wrote the line — always
+	// present so logs from concurrent tachi processes (TUI, channels,
+	// sub-agents) are distinguishable.
+	sl := slog.New(h).With(
+		slog.String(FieldSource, name),
+		slog.Int(FieldPID, os.Getpid()),
+	)
 
 	return &Logger{
 		slog:   sl,
