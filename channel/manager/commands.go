@@ -15,7 +15,6 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/skill"
-	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
@@ -738,29 +737,10 @@ func (m *Manager) handleCommitCommand(ctx context.Context, threadID string) (str
 	ctx = wdctx.WithDir(ctx, workDir)
 
 	aiAgent := ca.agent
-	commitProvider := aiAgent.CommitProvider()
-	model := aiAgent.Model()
-	if commitProvider != nil {
-		// The commit prompt's co-author trailer must reflect the model that
-		// actually runs, not the main provider's.
-		model = commitProvider.Model()
-	}
-
-	thinkingDisabled := false
-	opts := llm.ChatOptions{
-		MaxTokens: config.DefaultMaxTokens,
-		Thinking:  &thinkingDisabled,
-	}
-
 	sessionID := m.threadSessionID(threadID)
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID, m.cfg.Debug.PPROF)
 
-	// /commit only needs Bash — the tool view hides everything else for the
-	// duration of this run without touching the registry.
-	eventCh := aiAgent.RunOneOffStream(ctx, commitProvider, systemPrompt,
-		cmds.CommitUserPrompt(model), opts,
-		agent.WithToolSet(tools.ToolNameBash),
-		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit", SessionID: sessionID}))
+	eventCh := aiAgent.RunCommitOneOff(ctx, systemPrompt, sessionID, config.DefaultMaxTokens, "")
 
 	text, err, incomplete := m.drainOneOffEvents(ctx, eventCh, aiAgent)
 	if err != nil {
@@ -1149,30 +1129,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 	// this thread, and two separate reads could mix values from two estimates.
 	estTokens, estBreakdown := m.getAgentEstimateWithBreakdown(threadID)
 
-	// Convert tool call stats to shared type
-	toolCalls := make(map[string]*cmds.ToolCallStat, len(report.ToolCalls))
-	for name, st := range report.ToolCalls {
-		toolCalls[name] = &cmds.ToolCallStat{Count: st.Count, ErrCount: st.ErrCount}
-	}
-
-	info := &cmds.UsageReportInfo{
-		SessionID:                report.Session.ID,
-		Provider:                 report.Session.ProviderName,
-		Title:                    report.Session.Title,
-		ContextWindow:            report.ContextWindow,
-		InputTokens:              report.Usage.InputTokens,
-		LastInputTokens:          report.Usage.LastInputTokens,
-		CacheReadInputTokens:     report.Usage.CacheReadInputTokens,
-		CacheCreationInputTokens: report.Usage.CacheCreationInputTokens,
-		OutputTokens:             report.Usage.OutputTokens,
-		EstimatedInputTokens:     estTokens,
-		Cost:                     report.Cost,
-		ToolCalls:                toolCalls,
-		MainCount:                report.MainCount,
-		SubCount:                 report.SubCount,
-		PprofAddr:                m.cfg.Debug.PPROF.Addr(),
-	}
-	info.EstBreakdown = estBreakdown
+	info := agent.BuildUsageReportInfo(report, estTokens, estBreakdown, m.cfg.Debug.PPROF.Addr())
 
 	return cmds.FormatUsageReport(info), nil
 }
@@ -1485,20 +1442,8 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 // The agent lock is held for the duration of research, preventing other
 // messages on the same thread from interfering.
 func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
-	parsed := cmds.ParseResearchArgs(args)
-	if parsed.Topic == "" {
-		return "Usage: `/research <topic> [--depth N] [--breadth N]`", nil
-	}
-
 	if m.cfg == nil {
 		return "", fmt.Errorf("manager config unavailable")
-	}
-
-	if parsed.Depth <= 0 {
-		parsed.Depth = m.cfg.DeepResearch.DefaultDepth
-	}
-	if parsed.Breadth <= 0 {
-		parsed.Breadth = m.cfg.DeepResearch.DefaultBreadth
 	}
 
 	// Acquire the cached agent for this thread. This gives us a fully
@@ -1510,32 +1455,26 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 	}
 	defer m.releaseAgent(ca)
 
-	engine, err := ca.agent.NewDeepResearch(m.cfg)
-	if err != nil {
-		return "", fmt.Errorf("create research engine: %w", err)
+	report, err := ca.agent.RunDeepResearch(context.Background(), m.cfg, args,
+		// Initial progress message with the resolved parameters.
+		func(topic string, depth, breadth int) {
+			m.sendToThread(context.Background(), threadID,
+				fmt.Sprintf("🔬 **深度研究已启动**\n\n**主题**: %s\n**深度**: %d | **广度**: %d\n\n正在搜索中...",
+					topic, depth, breadth), "")
+		},
+		// Progress callbacks stream intermediate updates to the thread.
+		func(text string) {
+			m.sendToThread(context.Background(), threadID, text, "")
+		})
+	if errors.Is(err, agent.ErrResearchUsage) {
+		return "Usage: `/research <topic> [--depth N] [--breadth N]`", nil
 	}
-	if engine == nil {
+	if errors.Is(err, agent.ErrResearchUnavailable) {
 		return "Deep Research is not available (engine creation returned nil).", nil
 	}
-
-	// Send initial progress message
-	m.sendToThread(context.Background(), threadID,
-		fmt.Sprintf("🔬 **深度研究已启动**\n\n**主题**: %s\n**深度**: %d | **广度**: %d\n\n正在搜索中...",
-			parsed.Topic, parsed.Depth, parsed.Breadth), "")
-
-	// Run research synchronously (blocks this goroutine but the agent lock
-	// prevents concurrent access on the same thread). Progress callbacks
-	// stream intermediate updates to the thread.
-	researchCtx, cancel := context.WithTimeout(context.Background(), m.cfg.DeepResearch.Timeout)
-	defer cancel()
-
-	report, runErr := engine.Run(researchCtx, parsed.Topic, parsed.Depth, parsed.Breadth, func(format string, args ...any) {
-		m.sendToThread(researchCtx, threadID, fmt.Sprintf(format, args...), "")
-	})
-	if runErr != nil {
-		return "", fmt.Errorf("research failed: %w", runErr)
+	if err != nil {
+		return "", err
 	}
-
 	return report, nil
 }
 

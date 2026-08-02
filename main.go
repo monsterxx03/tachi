@@ -379,7 +379,6 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		}
 	}
 
-	commitProvider := aiAgent.CommitProvider()
 	model := aiAgent.Model()
 
 	// Build user prompt.
@@ -395,13 +394,6 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		userPrompt = userPrompt + "\n\n## Stdin input\n\n" + pipeData
 	}
 
-	// Disable thinking for commit (saves tokens/latency).
-	thinkingDisabled := false
-	opts := llm.ChatOptions{
-		MaxTokens: resolved.MaxTokens,
-		Thinking:  &thinkingDisabled,
-	}
-
 	outputFmt := parseOutputFormat(cmd)
 	quiet := resolveQuiet(cmd)
 
@@ -410,8 +402,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
-	ch := aiAgent.RunOneOffStream(ctx, commitProvider, buildSystemPrompt(cfg.Language, cfg.Debug.PPROF),
-		userPrompt, opts, agent.WithOneOffMeta(&agent.OneOffMeta{Kind: "commit"}))
+	ch := aiAgent.RunCommitOneOff(ctx, buildSystemPrompt(cfg.Language, cfg.Debug.PPROF), "", resolved.MaxTokens, userPrompt)
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
 	if result == nil {
