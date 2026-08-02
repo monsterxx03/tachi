@@ -362,8 +362,8 @@ func (c *ToolResultConfig) ResultFileDir() string {
 // When Provider is empty, the main provider is used.
 type SubagentConfig struct {
 	Provider       string `yaml:"provider"`         // provider name, empty → use main
-	MaxIterations  int    `yaml:"max_iterations"`   // default: 50 (hardcoded fallback)
-	MaxConcurrency int    `yaml:"max_concurrency"`  // default: 4 (hardcoded fallback)
+	MaxIterations  int    `yaml:"max_iterations"`   // default: 200 (hardcoded fallback)
+	MaxConcurrency int    `yaml:"max_concurrency"`  // default: 10 (hardcoded fallback)
 	MaxOutputChars int    `yaml:"max_output_chars"` // default: 16384 (hardcoded fallback)
 	Thinking       bool   `yaml:"thinking"`         // default: false
 

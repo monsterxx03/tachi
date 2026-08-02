@@ -72,7 +72,7 @@ Subagent（子代理）是 Tachi 的并行任务委派机制。主 agent 通过 
 | 编辑确认 | 自动跳过 | 子 agent 不应阻塞等确认 |
 | AskUser | 不注册 | 子 agent 不应打断用户 |
 | Session | 不记录 | 子 agent 对话是短暂的 |
-| 迭代预算 | 默认 50，可配置 | 防失控，与主 agent 一致 |
+| 迭代预算 | 默认 200，可配置 | 防失控，与主 agent 一致 |
 | 递归防护 | 代码 + prompt 双重禁止 | 不注册 SubAgent 工具 + system prompt 明确禁止 |
 
 ## 四、模块设计
@@ -89,8 +89,8 @@ Subagent（子代理）是 Tachi 的并行任务委派机制。主 agent 通过 
 type SubagentConfig struct {
     Provider       string `yaml:"provider"`        // provider name, empty → use main
     Model          string `yaml:"model"`           // model name, empty → use main
-    MaxIterations  int    `yaml:"max_iterations"`  // default: 50 (hardcoded fallback)
-    MaxConcurrency int    `yaml:"max_concurrency"` // default: 4 (hardcoded fallback)
+    MaxIterations  int    `yaml:"max_iterations"`  // default: 200 (hardcoded fallback)
+    MaxConcurrency int    `yaml:"max_concurrency"` // default: 10 (hardcoded fallback)
     MaxOutputChars int    `yaml:"max_output_chars"`// default: 16384 (hardcoded fallback)
     Thinking       bool   `yaml:"thinking"`        // default: false
 }
@@ -119,7 +119,7 @@ subagent:
   provider: "minimax-anthropic"
   model: "MiniMax-M2.7"
   max_iterations: 20
-  max_concurrency: 4
+  max_concurrency: 10
   max_output_chars: 16384
   thinking: false
 ```
@@ -454,7 +454,7 @@ Main LLM output:
   tool_call[1]: SubAgent("搜索最佳实践文章", allowed_tools=["WebSearch","WebFetch"])
 
 → SubagentExecutor 并行创建两个 child agent
-→ 受 max_concurrency 信号量控制（默认 4），超限时排队等待
+→ 受 max_concurrency 信号量控制（默认 10），超限时排队等待
 → 两个 RunOneOffStream 并发执行
 → 两个结果同时返回给 tool_executor
 → 两个 tool_result message 追加到主 agent 消息历史
@@ -462,7 +462,7 @@ Main LLM output:
 
 由于 `groupToolCalls()` 将相邻的 `parallel=true` 工具合并为同一组，且 SubagentTool 的 `Parallel()=true`，所以同一个 assistant turn 中的多个 `SubAgent` 调用会同组并行执行。
 
-**并发数控制**：`SubagentExecutor` 内的 `sem` channel 充当信号量，确保全局不超过 `max_concurrency`（默认 4）个子 agent 同时运行。超额的调用会在 `select` 处阻塞等待，直到有空位或 context 取消。
+**并发数控制**：`SubagentExecutor` 内的 `sem` channel 充当信号量，确保全局不超过 `max_concurrency`（默认 10）个子 agent 同时运行。超额的调用会在 `select` 处阻塞等待，直到有空位或 context 取消。
 
 
 ## 五、执行流程详解
@@ -611,7 +611,7 @@ type SubagentProgressData struct {
 多个子 agent 可能同时编辑同一文件。
 
 **缓解方案**：
-- `max_concurrency` 信号量（默认 4）限制并发子 agent 数量，降低冲突概率
+- `max_concurrency` 信号量（默认 10）限制并发子 agent 数量，降低冲突概率
 - 目前主 agent 的工具系统也不处理并发写入冲突，子 agent 继承同样的行为
 - 建议在 system prompt 中提示 LLM 避免给并行子 agent 分配写入相同文件的任务
 - 长期可引入文件锁机制（超出本次设计范围）
