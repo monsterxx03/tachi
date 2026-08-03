@@ -60,7 +60,8 @@ func (t *LSPTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"operation": {
 			Type:        "string",
-			Description: "The LSP operation to perform. Valid values: goToDefinition, findReferences, hover, documentSymbol, workspaceSymbol, goToImplementation, prepareCallHierarchy, incomingCalls, outgoingCalls",
+			Description: "The LSP operation to perform.",
+			Enum:        []string{"goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"},
 		},
 		"path": {
 			Type:        "string",

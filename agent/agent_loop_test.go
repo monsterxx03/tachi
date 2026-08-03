@@ -442,6 +442,51 @@ func TestBuildLLMTools(t *testing.T) {
 	assert.Equal(t, []string{"path"}, llmTools[0].Parameters.Required)
 }
 
+func TestBuildLLMTools_ConstraintPassthrough(t *testing.T) {
+	maxResults := 200.0
+	schemas := []agenttools.Schema{
+		{
+			Name:        "Grep",
+			Description: "Search",
+			Parameters: agenttools.ParametersSchema{
+				Type: "object",
+				Properties: map[string]agenttools.PropertySchema{
+					"output_mode": {
+						Type:    "string",
+						Enum:    []string{"files_with_matches", "content", "count"},
+						Default: "files_with_matches",
+					},
+					"max_results": {
+						Type:    "integer",
+						Maximum: &maxResults,
+					},
+					"tags": {
+						Type:  "array",
+						Items: map[string]any{"type": "string", "enum": []string{"a", "b"}},
+					},
+				},
+				Required: []string{"output_mode"},
+			},
+		},
+	}
+
+	llmTools := buildLLMTools(schemas)
+	require.Len(t, llmTools, 1)
+	props := llmTools[0].Parameters.Properties
+
+	om := props["output_mode"]
+	assert.Equal(t, []string{"files_with_matches", "content", "count"}, om.Enum)
+	assert.Equal(t, "files_with_matches", om.Default)
+
+	mr := props["max_results"]
+	require.NotNil(t, mr.Maximum)
+	assert.Equal(t, 200.0, *mr.Maximum)
+
+	tags := props["tags"]
+	require.NotNil(t, tags.Items)
+	assert.Equal(t, map[string]any{"type": "string", "enum": []string{"a", "b"}}, tags.Items)
+}
+
 func TestBuildLLMTools_Empty(t *testing.T) {
 	llmTools := buildLLMTools(nil)
 	assert.Empty(t, llmTools)

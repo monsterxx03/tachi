@@ -12,6 +12,11 @@ import (
 // Tool name constant for the MCP search tool.
 const ToolNameMCPSearchTools = "MCPSearchTools"
 
+// maxMCPSearchMaxResults caps max_results both in the schema and at runtime.
+// Schema constraints are hints to the model; ExecuteContext clamps so an
+// out-of-range value can never fan out an unbounded search.
+const maxMCPSearchMaxResults = 20
+
 // MCPSearchResult holds a single tool search result.
 // The Schema is serialized as JSON for the LLM to read.
 type MCPSearchResult struct {
@@ -76,8 +81,11 @@ func (t *MCPSearchToolsTool) Properties() map[string]PropertySchema {
 				"Prefix a term with + to require it (e.g. \"+postgres query\").",
 		},
 		"max_results": {
-			Type:        "number",
+			Type:        "integer",
 			Description: "Maximum results to return (default 5, max 20).",
+			Minimum:     new(1.0),
+			Maximum:     new(float64(maxMCPSearchMaxResults)),
+			Default:     5,
 		},
 	}
 }
@@ -110,6 +118,9 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 	if params.MaxResults <= 0 {
 		params.MaxResults = 5
 	}
+	// Clamp to the schema-declared upper bound; schema constraints are hints,
+	// not enforcement (see maxMCPSearchMaxResults).
+	params.MaxResults = min(params.MaxResults, maxMCPSearchMaxResults)
 
 	// Search the deferred pool
 	results := t.searcher.Search(params.Query, params.MaxResults)
@@ -160,6 +171,21 @@ func schemaToPropsJSON(props map[string]PropertySchema) map[string]any {
 		p := map[string]any{
 			"type":        prop.Type,
 			"description": prop.Description,
+		}
+		if len(prop.Enum) > 0 {
+			p["enum"] = prop.Enum
+		}
+		if prop.Format != "" {
+			p["format"] = prop.Format
+		}
+		if prop.Minimum != nil {
+			p["minimum"] = *prop.Minimum
+		}
+		if prop.Maximum != nil {
+			p["maximum"] = *prop.Maximum
+		}
+		if prop.Default != nil {
+			p["default"] = prop.Default
 		}
 		if prop.Items != nil {
 			p["items"] = prop.Items

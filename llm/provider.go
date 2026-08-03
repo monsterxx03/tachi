@@ -77,9 +77,14 @@ type ChatOptions struct {
 
 // ToolParameterProperty describes a single property in a tool's parameter schema.
 type ToolParameterProperty struct {
-	Type        string `json:"type"`
-	Description string `json:"description"`
-	Items       any    `json:"items,omitempty"`
+	Type        string   `json:"type"`
+	Description string   `json:"description"`
+	Enum        []string `json:"enum,omitempty"`    // Allowed values — mirrors tools.PropertySchema.Enum
+	Format      string   `json:"format,omitempty"`  // JSON Schema format hint (e.g. "date-time", "uri")
+	Minimum     *float64 `json:"minimum,omitempty"` // Inclusive lower bound (numeric types)
+	Maximum     *float64 `json:"maximum,omitempty"` // Inclusive upper bound (numeric types)
+	Default     any      `json:"default,omitempty"` // Default value shown to the model
+	Items       any      `json:"items,omitempty"`   // JSON Schema for array element type
 }
 
 // ToolParameters describes the JSON Schema for a tool's input parameters.

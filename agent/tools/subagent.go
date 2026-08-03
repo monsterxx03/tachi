@@ -73,6 +73,20 @@ func (t *SubagentTool) Description() string {
 }
 
 func (t *SubagentTool) Properties() map[string]PropertySchema {
+	// Dynamic items.enum: the model gets the exact tool names it may pass in
+	// allowed_tools, so it cannot misspell them (e.g. "ReadFileTool").
+	// Only set when non-empty — an empty enum would be invalid JSON Schema
+	// (it means "no legal values").
+	toolNames := t.runner.AvailableToolNames()
+	items := map[string]any{"type": "string"}
+	if len(toolNames) > 0 {
+		enum := make([]any, len(toolNames))
+		for i, n := range toolNames {
+			enum[i] = n
+		}
+		items["enum"] = enum
+	}
+
 	return map[string]PropertySchema{
 		"prompt": {
 			Type:        "string",
@@ -81,7 +95,7 @@ func (t *SubagentTool) Properties() map[string]PropertySchema {
 		"allowed_tools": {
 			Type:        "array",
 			Description: "Optional list of tool names the sub-agent is allowed to use. When empty, all available tools are inherited. Use this to restrict the sub-agent (e.g. [\"ReadFile\", \"Grep\", \"Glob\"] for read-only tasks).",
-			Items:       map[string]any{"type": "string"},
+			Items:       items,
 		},
 		"worktree_branch": {
 			Type: "string",

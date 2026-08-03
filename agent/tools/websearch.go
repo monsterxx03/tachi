@@ -160,7 +160,7 @@ func (t *WebSearchTool) Description() string {
 func (t *WebSearchTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"query": {Type: "string", Description: "The search query to execute"},
-		"num":   {Type: "integer", Description: "Number of results to return (default: 5, max: 10)"},
+		"num":   {Type: "integer", Description: "Number of results to return (default: 5, max: 10)", Minimum: new(1.0), Maximum: new(10.0), Default: 5},
 	}
 }
 func (t *WebSearchTool) Required() []string { return []string{"query"} }

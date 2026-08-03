@@ -56,7 +56,8 @@ func (t *CronTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"action": {
 			Type:        "string",
-			Description: "The action to perform: list, create, get, update, delete, pause, resume",
+			Description: "The action to perform.",
+			Enum:        []string{"list", "create", "get", "update", "delete", "pause", "resume"},
 		},
 		"id": {
 			Type:        "string",
@@ -77,10 +78,14 @@ func (t *CronTool) Properties() map[string]PropertySchema {
 		"type": {
 			Type:        "string",
 			Description: "Job type. Default is oneshot (fire once, auto-delete). Only set to \"recurring\" when the user explicitly asks for a repeating task like daily/weekly/every N hours.",
+			Enum:        []string{"oneshot", "recurring"},
+			Default:     "oneshot",
 		},
 		"notify": {
 			Type:        "string",
 			Description: `Notification policy. "always" (default) sends every result to the user. "when_relevant" suppresses notification when nothing meaningful is found (e.g. no changes, no updates). Use "when_relevant" when the user is monitoring something that changes infrequently (blog updates, CI status, dependency changes).`,
+			Enum:        []string{"always", "when_relevant"},
+			Default:     "always",
 		},
 		"timezone": {
 			Type:        "string",

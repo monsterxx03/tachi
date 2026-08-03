@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
 const (
@@ -40,12 +43,28 @@ type bashArgs struct {
 
 type BashTool struct {
 	processManager *ProcessManager
+	resultBaseDir  string // dir for oversized output files (default: ~/.tachi/tool_results)
+	maxResultChars int    // max runes of output returned to the LLM; 0 = no spill (1MB buffer cap still applies)
+}
+
+// BashToolConfig carries the tool's construction options.
+type BashToolConfig struct {
+	ProcessManager *ProcessManager
+	ResultBaseDir  string // Dir for oversized output files (e.g. config tool_result.file_dir)
+	MaxResultChars int    // Max runes of output passed to the LLM; 0 = no limit
 }
 
 // NewBashTool creates a BashTool with an optional ProcessManager for
 // background process support. Pass nil to disable background operations.
-func NewBashTool(pm *ProcessManager) *BashTool {
-	return &BashTool{processManager: pm}
+// ResultBaseDir/MaxResultChars enable the oversized-output spill (same
+// policy as WebFetch); when MaxResultChars <= 0 or ResultBaseDir is empty,
+// outputs are only bounded by the 1MB buffer cap.
+func NewBashTool(cfg BashToolConfig) *BashTool {
+	return &BashTool{
+		processManager: cfg.ProcessManager,
+		resultBaseDir:  cfg.ResultBaseDir,
+		maxResultChars: cfg.MaxResultChars,
+	}
 }
 
 func (t BashTool) Name() string        { return ToolNameBash }
@@ -60,7 +79,7 @@ func (t BashTool) Description() string {
 func (t BashTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"command":    {Type: "string", Description: "The bash command to execute"},
-		"timeout":    {Type: "integer", Description: "Optional timeout in milliseconds (max 600000, default 120000)"},
+		"timeout":    {Type: "integer", Description: "Optional timeout in milliseconds (max 600000, default 120000)", Minimum: new(1.0), Maximum: new(600000.0), Default: 120000},
 		"background": {Type: "boolean", Description: "Set true to run this command in the background. Requires bg_name."},
 		"bg_name":    {Type: "string", Description: "A unique name for this background process. Required when background=true. Use this name with stop_name to stop it later."},
 		"stop_name":  {Type: "string", Description: "Stop a background process by its bg_name."},
@@ -185,6 +204,7 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 			result.Stderr = fmt.Sprintf("Command interrupted: %v", err)
 		}
 		result.ExitCode = -1
+		t.spillOversized(&result)
 		return marshalResult(result)
 	}
 
@@ -197,10 +217,59 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	}
 
 	result.Stdout, result.Truncated = trimAndTruncate(stdout.Bytes())
-	stderrStr, _ := trimAndTruncate(stderr.Bytes())
+	stderrStr, stderrTruncated := trimAndTruncate(stderr.Bytes())
 	result.Stderr = stderrStr
+	result.Truncated = result.Truncated || stderrTruncated
+
+	t.spillOversized(&result)
 
 	return marshalResult(result)
+}
+
+// spillOversized replaces oversized stdout/stderr with a compact pointer to a
+// spill file on disk, instead of dumping hundreds of thousands of tokens into
+// the context window. Same policy as WebFetch: the 1MB buffer cap bounds
+// memory, maxResultChars bounds what the LLM receives. ReadFile can page
+// through the spill file with the limit/offset parameters.
+//
+// No-op when spill is disabled (no ResultBaseDir or maxResultChars <= 0).
+// Spill failures degrade silently to the already-truncated output.
+func (t *BashTool) spillOversized(r *BashResult) {
+	if t.maxResultChars <= 0 || t.resultBaseDir == "" {
+		return
+	}
+	if rc := utf8.RuneCountInString(r.Stdout); rc > t.maxResultChars {
+		if p, err := t.spillBashOutput(r.Stdout, "out"); err == nil {
+			r.Stdout = formatBashSpill("stdout", rc, t.maxResultChars, p)
+			r.Truncated = true
+		}
+	}
+	if rc := utf8.RuneCountInString(r.Stderr); rc > t.maxResultChars {
+		if p, err := t.spillBashOutput(r.Stderr, "err"); err == nil {
+			r.Stderr = formatBashSpill("stderr", rc, t.maxResultChars, p)
+			r.Truncated = true
+		}
+	}
+}
+
+// spillBashOutput writes content to a timestamped file under resultBaseDir.
+func (t *BashTool) spillBashOutput(content, kind string) (string, error) {
+	filename := fmt.Sprintf("bash_%s_%d.txt", kind, time.Now().UnixNano())
+	fp := filepath.Join(t.resultBaseDir, filename)
+	if err := fileutil.WriteFilePrivate(fp, []byte(content)); err != nil {
+		return "", err
+	}
+	return fp, nil
+}
+
+// formatBashSpill builds the compact pointer message returned to the LLM
+// instead of the full oversized output.
+func formatBashSpill(stream string, chars, limit int, path string) string {
+	return fmt.Sprintf(
+		"[BASH OUTPUT TOO LARGE] %s: %d chars exceeds limit (%d chars).\n"+
+			"Full output saved to:\n  %s\n"+
+			"Use ReadFile with limit=500 (and offset to page) to read the full output.",
+		stream, chars, limit, path)
 }
 
 func trimAndTruncate(b []byte) (string, bool) {

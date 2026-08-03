@@ -77,10 +77,62 @@ func (t MCPTool) Properties() map[string]tools.PropertySchema {
 			ps.Items = items
 		}
 
+		// Forward structured constraints declared by the MCP server. These
+		// were previously dropped at registration; the LLM API now receives
+		// the same hard constraints (enum/bounds/format/default) as built-in
+		// tools, which matters most for MCP tools — typically the least
+		// structured tools in the registry.
+		if enum, ok := stringEnum(propMap["enum"]); ok {
+			ps.Enum = enum
+		}
+		if format, ok := propMap["format"].(string); ok {
+			ps.Format = format
+		}
+		if def, ok := propMap["default"]; ok {
+			ps.Default = def
+		}
+		if min, ok := jsonNumberPtr(propMap["minimum"]); ok {
+			ps.Minimum = min
+		}
+		if max, ok := jsonNumberPtr(propMap["maximum"]); ok {
+			ps.Maximum = max
+		}
+
 		result[name] = ps
 	}
 
 	return result
+}
+
+// stringEnum extracts a string-only enum from a JSON-decoded value ([]any).
+// Returns ok=false when the value is missing, not an array, or contains
+// non-string elements — heterogeneous enums cannot be expressed in []string
+// and are dropped rather than partially forwarded. Empty arrays also return
+// false (an empty enum would be invalid JSON Schema).
+func stringEnum(v any) ([]string, bool) {
+	items, ok := v.([]any)
+	if !ok || len(items) == 0 {
+		return nil, false
+	}
+	out := make([]string, 0, len(items))
+	for _, it := range items {
+		s, ok := it.(string)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, s)
+	}
+	return out, true
+}
+
+// jsonNumberPtr extracts a numeric bound from a JSON-decoded value.
+// JSON numbers decode as float64; returns ok=false otherwise.
+func jsonNumberPtr(v any) (*float64, bool) {
+	f, ok := v.(float64)
+	if !ok {
+		return nil, false
+	}
+	return &f, true
 }
 
 // Required returns the list of required parameter names.

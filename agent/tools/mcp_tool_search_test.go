@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 )
@@ -263,5 +264,45 @@ func TestIsMCPSearchTool(t *testing.T) {
 	}
 	if IsMCPSearchTool("Bash") {
 		t.Error("expected false for built-in tool")
+	}
+}
+
+// recordingSearcher records the maxResults it was called with, for clamping tests.
+type recordingSearcher struct {
+	lastMaxResults int
+	results        []MCPSearchResultItem
+}
+
+func (s *recordingSearcher) Search(query string, maxResults int) []MCPSearchResultItem {
+	s.lastMaxResults = maxResults
+	return s.results
+}
+
+func TestMCPSearchToolsTool_MaxResultsClamped(t *testing.T) {
+	searcher := &recordingSearcher{}
+	tool := NewMCPSearchToolsTool(searcher, &stubTracker{})
+
+	// Out-of-range value must be clamped to maxMCPSearchMaxResults (20).
+	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "db", "max_results": 500}`); err != nil {
+		t.Fatalf("ExecuteContext failed: %v", err)
+	}
+	if searcher.lastMaxResults != 20 {
+		t.Errorf("expected max_results clamped to 20, got %d", searcher.lastMaxResults)
+	}
+
+	// <= 0 resets to the default 5.
+	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "db", "max_results": -1}`); err != nil {
+		t.Fatalf("ExecuteContext failed: %v", err)
+	}
+	if searcher.lastMaxResults != 5 {
+		t.Errorf("expected max_results default 5 for <= 0, got %d", searcher.lastMaxResults)
+	}
+
+	// In-range values pass through.
+	if _, err := tool.ExecuteContext(context.TODO(), `{"query": "db", "max_results": 7}`); err != nil {
+		t.Fatalf("ExecuteContext failed: %v", err)
+	}
+	if searcher.lastMaxResults != 7 {
+		t.Errorf("expected max_results 7 passed through, got %d", searcher.lastMaxResults)
 	}
 }

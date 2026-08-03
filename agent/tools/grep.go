@@ -13,6 +13,11 @@ const (
 	outputModeFiles   = "files_with_matches"
 	outputModeContent = "content"
 	outputModeCount   = "count"
+
+	// maxGrepMaxResults caps max_results both in the schema and at runtime.
+	// The schema constraint is a hint to the model; ExecuteContext clamps to
+	// this value so out-of-range inputs can never inflate the context window.
+	maxGrepMaxResults = 1000
 )
 
 // GrepResult holds structured grep output for internal formatting.
@@ -55,12 +60,12 @@ func (t GrepTool) Properties() map[string]PropertySchema {
 		"path":             {Type: "string", Description: "File or directory to search in (defaults to current directory)"},
 		"glob":             {Type: "string", Description: "Glob pattern to filter files (e.g. \"*.js\", \"*.{ts,tsx}\")"},
 		"type":             {Type: "string", Description: "File type filter using ripgrep's --type (e.g. \"go\", \"py\", \"js\")"},
-		"output_mode":      {Type: "string", Description: "Output mode: \"files_with_matches\" (default), \"content\", or \"count\""},
+		"output_mode":      {Type: "string", Description: "Output mode: \"files_with_matches\" (default), \"content\", or \"count\"", Enum: []string{"files_with_matches", "content", "count"}, Default: "files_with_matches"},
 		"case_insensitive": {Type: "boolean", Description: "Case insensitive search"},
 		"fixed_string":     {Type: "boolean", Description: "Treat pattern as a literal string, not regex (use when the pattern contains . * [ ( etc.)"},
 		"multiline":        {Type: "boolean", Description: "Enable multiline mode where . matches newlines"},
 		"context_lines":    {Type: "integer", Description: "Number of context lines to show before and after each match (content mode only)"},
-		"max_results":      {Type: "integer", Description: "Maximum number of results to return (content lines or files; default 200)"},
+		"max_results":      {Type: "integer", Description: "Maximum number of results to return (content lines or files; default 200)", Minimum: new(1.0), Maximum: new(float64(maxGrepMaxResults))},
 	}
 }
 func (t GrepTool) Required() []string { return []string{"pattern"} }
@@ -93,6 +98,10 @@ func (t GrepTool) ExecuteContext(parentCtx context.Context, args string) (string
 	if a.MaxResults != nil && *a.MaxResults > 0 {
 		maxResults = *a.MaxResults
 	}
+	// Clamp to the schema-declared upper bound. Schema constraints are hints
+	// to the model, not enforcement — the runtime is the last line of defense
+	// against out-of-range values (e.g. a model passing 100000).
+	maxResults = min(maxResults, maxGrepMaxResults)
 
 	absPath, err := resolveSearchPath(parentCtx, a.Path)
 	if err != nil {

@@ -234,3 +234,98 @@ func TestMCPTool_JSONArgsParsing(t *testing.T) {
 	assert.Equal(t, "World", argMap["name"])
 	assert.Equal(t, float64(5), argMap["count"]) // JSON numbers unmarshal as float64
 }
+
+func TestMCPToolProperties_ForwardsConstraints(t *testing.T) {
+	// MCP servers declare enum/minimum/maximum/default/format in their
+	// inputSchema; Properties() must forward them so the LLM API receives the
+	// same hard constraints as built-in tools.
+	schema := mcp.ToolInputSchema{
+		Type: "object",
+		Properties: map[string]any{
+			"mode": map[string]any{
+				"type":        "string",
+				"description": "mode selector",
+				"enum":        []any{"fast", "slow", "auto"},
+				"default":     "auto",
+			},
+			"count": map[string]any{
+				"type":    "integer",
+				"minimum": float64(1),
+				"maximum": float64(20),
+			},
+			"url": map[string]any{
+				"type":   "string",
+				"format": "uri",
+			},
+			"mixed_enum": map[string]any{
+				"type": "string",
+				"enum": []any{"ok", 42}, // heterogeneous → dropped
+			},
+			"empty_enum": map[string]any{
+				"type": "string",
+				"enum": []any{},
+			},
+			"no_type": map[string]any{
+				"description": "missing type keyword",
+			},
+		},
+	}
+
+	tool := MCPTool{serverTool: &mcp.Tool{Name: "do_stuff", InputSchema: schema}}
+	props := tool.Properties()
+
+	mode := props["mode"]
+	assert.Equal(t, "string", mode.Type)
+	assert.Equal(t, []string{"fast", "slow", "auto"}, mode.Enum)
+	assert.Equal(t, "auto", mode.Default)
+
+	count := props["count"]
+	require.NotNil(t, count.Minimum)
+	require.NotNil(t, count.Maximum)
+	assert.Equal(t, 1.0, *count.Minimum)
+	assert.Equal(t, 20.0, *count.Maximum)
+
+	assert.Equal(t, "uri", props["url"].Format)
+
+	// Heterogeneous and empty enums must NOT produce an Enum (an empty enum
+	// would be invalid JSON Schema).
+	assert.Nil(t, props["mixed_enum"].Enum)
+	assert.Nil(t, props["empty_enum"].Enum)
+
+	// Property without type keyword still forwarded with description only.
+	assert.Equal(t, "missing type keyword", props["no_type"].Description)
+}
+
+func TestStringEnum(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want []string
+		ok   bool
+	}{
+		{name: "string slice", in: []any{"a", "b"}, want: []string{"a", "b"}, ok: true},
+		{name: "mixed types", in: []any{"a", 1}, want: nil, ok: false},
+		{name: "empty", in: []any{}, want: nil, ok: false},
+		{name: "not an array", in: "a", want: nil, ok: false},
+		{name: "nil", in: nil, want: nil, ok: false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got, ok := stringEnum(c.in)
+			assert.Equal(t, c.ok, ok)
+			assert.Equal(t, c.want, got)
+		})
+	}
+}
+
+func TestJsonNumberPtr(t *testing.T) {
+	f, ok := jsonNumberPtr(float64(42))
+	require.True(t, ok)
+	assert.Equal(t, 42.0, *f)
+
+	_, ok = jsonNumberPtr("42")
+	assert.False(t, ok)
+
+	_, ok = jsonNumberPtr(nil)
+	assert.False(t, ok)
+}

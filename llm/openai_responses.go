@@ -225,7 +225,17 @@ func (p *OpenAIResponsesProvider) convertTools(tools []Tool) []responses.ToolUni
 // strictCompatibleSchema reports whether a JSON Schema is compatible with
 // OpenAI strict mode. Strict mode requires every object node (including
 // nested ones under "items") to list all of its properties in "required".
+//
+// Strict mode also rejects the "default" keyword (unsupported in the strict
+// JSON Schema subset — sending one with strict=true returns 400). Any node
+// carrying "default" forces the whole schema to strict=false. This keeps the
+// tool schemas (which now declare defaults, see tools.PropertySchema.Default)
+// safe from a future regression where every parameter of a tool is required
+// AND has a default.
 func strictCompatibleSchema(schema map[string]any) bool {
+	if _, has := schema["default"]; has {
+		return false
+	}
 	props, _ := schema["properties"].(map[string]any)
 	if len(props) > 0 {
 		required := make(map[string]bool)

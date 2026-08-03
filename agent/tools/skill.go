@@ -124,6 +124,7 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 		"operation": {
 			Type:        "string",
 			Description: `Operation to perform: "list" (browse available skills), "view" (load skill content), "create" (create a new skill), "update" (modify an existing skill), or "delete" (delete a skill)`,
+			Enum:        []string{"list", "view", "create", "update", "delete"},
 		},
 		"name": {
 			Type:        "string",
@@ -152,6 +153,8 @@ func (t *SkillTool) Properties() map[string]PropertySchema {
 		"source": {
 			Type:        "string",
 			Description: `Where to operate: "project" (default, .tachi/skills/) or "global" (~/.tachi/skills/). Used with create, update, and delete operations. For delete/update, narrows search scope. Note: listing/viewing also discovers skills from .claude/skills/ and .cursor/skills/ (read-only).`,
+			Enum:        []string{"project", "global"},
+			Default:     "project",
 		},
 		"overwrite": {
 			Type:        "boolean",

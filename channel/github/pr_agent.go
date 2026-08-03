@@ -401,7 +401,7 @@ func registerImplementationTools(a *agent.AIAgent, toolNames []string) {
 		"ReadFile":  func() tools.Tool { return tools.NewReadTool() },
 		"WriteFile": func() tools.Tool { return tools.WriteTool{} },
 		"EditFile":  func() tools.Tool { return tools.NewEditTool() },
-		"Bash":      func() tools.Tool { return tools.NewBashTool(nil) },
+		"Bash":      func() tools.Tool { return tools.NewBashTool(tools.BashToolConfig{}) },
 		"Glob":      func() tools.Tool { return tools.GlobTool{} },
 		"Grep":      func() tools.Tool { return tools.GrepTool{} },
 	}

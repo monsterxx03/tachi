@@ -52,8 +52,8 @@ func (t *ReadTool) Description() string {
 func (t *ReadTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":   {Type: "string", Description: "The path to the file to read"},
-		"offset": {Type: "number", Description: "Line number to start reading from (1-indexed, default: 1)"},
-		"limit":  {Type: "number", Description: "Number of lines to read (default: all lines from offset)"},
+		"offset": {Type: "integer", Description: "Line number to start reading from (1-indexed, default: 1)", Minimum: new(1.0)},
+		"limit":  {Type: "integer", Description: "Number of lines to read (default: all lines from offset)", Minimum: new(1.0)},
 	}
 }
 func (t *ReadTool) Required() []string { return []string{"path"} }

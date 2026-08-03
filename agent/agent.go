@@ -530,7 +530,15 @@ func (a *AIAgent) RegisterTools() {
 
 	a.Config.ToolRegistry.Register(tools.GlobTool{})
 	a.Config.ToolRegistry.Register(tools.GrepTool{})
-	a.Config.ToolRegistry.Register(tools.NewBashTool(a.Config.ProcessManager))
+	// Bash — spill oversized outputs to disk via the shared tool_result
+	// config (same policy as WebFetch). FullConfig may be nil in bare
+	// agents; those keep the plain 1MB-buffer behavior (no spill).
+	bashCfg := tools.BashToolConfig{ProcessManager: a.Config.ProcessManager}
+	if a.Config.FullConfig != nil {
+		bashCfg.ResultBaseDir = a.Config.FullConfig.ToolResult.ResultFileDir()
+		bashCfg.MaxResultChars = a.Config.FullConfig.ToolResult.MaxResultChars()
+	}
+	a.Config.ToolRegistry.Register(tools.NewBashTool(bashCfg))
 	a.Config.ToolRegistry.Register(tools.AskUserTool{})
 
 	// WebSearch — only register if at least one provider + key is configured

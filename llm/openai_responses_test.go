@@ -769,6 +769,16 @@ func TestResponsesStrictCompatibleSchema(t *testing.T) {
 			schema: `{"type":"object","required":[]}`,
 			want:   true,
 		},
+		{
+			name:   "default keyword forces non-strict",
+			schema: `{"type":"object","properties":{"a":{"type":"string","default":"x"}},"required":["a"]}`,
+			want:   false,
+		},
+		{
+			name:   "default on nested items forces non-strict",
+			schema: `{"type":"object","properties":{"q":{"type":"array","items":{"type":"object","properties":{"x":{"type":"string","default":"y"}},"required":["x"]}}},"required":["q"]}`,
+			want:   false,
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

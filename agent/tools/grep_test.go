@@ -305,3 +305,30 @@ func TestGrep_NoMatchMultipleFiles(t *testing.T) {
 		t.Errorf("expected '(no matches)' for nonexistent pattern, got:\n%s", raw)
 	}
 }
+
+func TestGrepTool_MaxResultsClamped(t *testing.T) {
+	skipWithoutRg(t)
+	tmpDir := setupGrepTestDir(t)
+
+	// Create a file with 1200 matching lines to exceed any sane limit.
+	big := filepath.Join(tmpDir, "big.log")
+	var sb strings.Builder
+	for i := 0; i < 1200; i++ {
+		sb.WriteString("hello line\n")
+	}
+	if err := os.WriteFile(big, []byte(sb.String()), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Pass a wildly out-of-range max_results; the runtime must clamp to the
+	// schema-declared upper bound (maxGrepMaxResults = 1000), not honor it.
+	tool := GrepTool{}
+	raw, err := tool.ExecuteContext(context.TODO(), `{"pattern": "hello", "path": "`+tmpDir+`", "output_mode": "content", "max_results": 100000}`)
+	if err != nil {
+		t.Fatalf("Grep failed: %v", err)
+	}
+
+	if !strings.Contains(raw, "... (showing 1000 of") {
+		t.Errorf("expected clamp to 1000 results, got output without truncation marker:\n%.500s", raw)
+	}
+}
