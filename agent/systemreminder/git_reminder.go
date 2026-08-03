@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os/exec"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // GitReminder injects the current git repository status on the first message
@@ -42,8 +44,8 @@ func (GitReminder) Generate(ctx context.Context, rctx Context) []string {
 	// Short status (porcelain).
 	statusOut, err := exec.Command("git", "status", "--porcelain").Output()
 	if err == nil {
-		statusLines := strings.Split(strings.TrimSpace(string(statusOut)), "\n")
-		if len(statusLines) > 0 && statusLines[0] != "" {
+		statusLines := strutil.SplitBy(string(statusOut), "\n")
+		if len(statusLines) > 0 {
 			// Limit to at most 30 lines to avoid blowing up the context.
 			if len(statusLines) > 30 {
 				statusLines = append(statusLines[:30], "... (truncated)")

@@ -146,6 +146,22 @@ func FormatTPS(tps int64) string {
 	}
 }
 
+// SplitBy splits s by sep into non-empty items, trimming whitespace from
+// each item. Empty and whitespace-only items are dropped, so
+// SplitBy("a, b, ,c", ",") → ["a", "b", "c"] and
+// SplitBy(" a\n\n b ", "\n") → ["a", "b"]. An empty or whitespace-only
+// string yields a nil slice. Used for --allowed-tools style CLI flags, MCP
+// select lists, and multi-line command output parsing.
+func SplitBy(s string, sep string) []string {
+	var out []string
+	for item := range strings.SplitSeq(s, sep) {
+		if item = strings.TrimSpace(item); item != "" {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
 // SanitizeFilename replaces characters that are problematic in filenames
 // (slash, colon, quotes, angle brackets, pipe, spaces, …) with "_", then
 // truncates to max runes (max <= 0 means no truncation). Multi-byte

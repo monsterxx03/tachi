@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -133,7 +134,7 @@ func (s *Store) SetLogger(l *logger.Logger) {
 // skills, so a project can suppress a global skill by disabling it locally.
 // Callers exposing skills to the LLM should skip entries with !Enabled.
 func (s *Store) List() []SkillMeta {
-	seen := make(map[string]bool)
+	seen := container.NewSet[string]()
 	var result []SkillMeta
 
 	for i, dir := range s.dirs {
@@ -164,10 +165,10 @@ func (s *Store) List() []SkillMeta {
 				if validateErr := ValidateName(name); validateErr != nil {
 					continue
 				}
-				if seen[name] {
+				if seen.Has(name) {
 					continue
 				}
-				seen[name] = true
+				seen.Add(name)
 				result = append(result, SkillMeta{
 					Name:        name,
 					Description: strutil.TruncatePlain(string(data), MaxDescriptionLen),
@@ -185,11 +186,11 @@ func (s *Store) List() []SkillMeta {
 				s.logger.Info(context.Background(), "skill: List: invalid skill name", "name", name, "dir", dir, "error", validateErr)
 				continue
 			}
-			if seen[name] {
+			if seen.Has(name) {
 				s.logger.Info(context.Background(), "skill: List: skill shadowed by higher-priority source", "skill", name, "dir", dir)
 				continue // shadowed by higher-priority skill
 			}
-			seen[name] = true
+			seen.Add(name)
 
 			desc := fm.Description
 			if desc == "" {

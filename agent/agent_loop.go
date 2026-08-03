@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
@@ -1117,33 +1118,33 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 	}
 
 	active := make([]tools.Schema, 0, len(schemas))
-	seen := make(map[string]bool)
+	seen := container.NewSet[string]()
 
 	for _, s := range schemas {
 		name := s.Name
 		switch {
 		case !tools.IsMCPSchema(name):
 			active = append(active, s)
-			seen[name] = true
+			seen.Add(name)
 		case tools.IsMCPSearchTool(name):
 			active = append(active, s)
-			seen[name] = true
+			seen.Add(name)
 		case set != nil && set.Contains(name):
 			active = append(active, s)
-			seen[name] = true
+			seen.Add(name)
 		default:
 		}
 	}
 
 	if set != nil {
 		for _, name := range set.List() {
-			if seen[name] {
+			if seen.Has(name) {
 				continue
 			}
 			dt := pool.Get(name)
 			if dt != nil {
 				active = append(active, dt.Schema)
-				seen[name] = true
+				seen.Add(name)
 			}
 		}
 	}

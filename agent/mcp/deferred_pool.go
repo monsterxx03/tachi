@@ -7,6 +7,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/pkg/container"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // DeferredTool holds metadata about an MCP tool for search purposes
@@ -147,14 +148,9 @@ func (p *DeferredPool) Search(query string, maxResults int) []SearchResult {
 	// the full "mcp__server__tool" name so the user doesn't need to know which server
 	// hosts each tool.
 	if sel, ok := strings.CutPrefix(query, "select:"); ok {
-		names := strings.Split(sel, ",")
 		var results []SearchResult
 		seen := container.NewSet[string]() // dedup across match strategies
-		for _, name := range names {
-			name = strings.TrimSpace(name)
-			if name == "" {
-				continue
-			}
+		for _, name := range strutil.SplitBy(sel, ",") {
 			// Phase 1: exact full-name match (e.g. "mcp__pg__query")
 			found := false
 			for _, t := range allTools {

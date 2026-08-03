@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // GlobResult is the result of the Glob tool
@@ -110,13 +112,9 @@ func (t GlobTool) ExecuteContext(ctx context.Context, args string) (string, erro
 	duration := time.Since(start).Milliseconds()
 
 	// Parse output - ripgrep returns relative paths from searchBaseDir
-	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	lines := strutil.SplitBy(string(output), "\n")
 	filenames := make([]string, 0, len(lines))
 	for _, line := range lines {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
-		}
 		filenames = append(filenames, toRelativePath(filepath.Join(searchBaseDir, line), absSearchDir))
 	}
 

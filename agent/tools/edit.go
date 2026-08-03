@@ -56,6 +56,29 @@ func (t *EditTool) Required() []string      { return []string{"path", "old_strin
 func (t *EditTool) Parallel() bool          { return false }
 func (t *EditTool) NeedsConfirmation() bool { return !t.acpMode }
 
+// readFileChecked reads filePath enforcing the size limit; binary files are
+// rejected so Edit never mangles non-text content. It also returns the
+// file's permission bits so callers can preserve them on write.
+func readFileChecked(filePath string) (string, os.FileMode, error) {
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to stat file: %w", err)
+	}
+	if info.Size() > maxFileSize {
+		return "", 0, ErrFileTooLarge(info.Size(), maxFileSize)
+	}
+
+	raw, err := os.ReadFile(filePath)
+	if err != nil {
+		return "", 0, fmt.Errorf("failed to read file: %w", err)
+	}
+
+	if isBinaryFile(raw) {
+		return "", 0, fmt.Errorf("cannot edit binary file: %s", filePath)
+	}
+	return string(raw), info.Mode().Perm(), nil
+}
+
 func (t *EditTool) GetDiff(ctx context.Context, args string) (string, error) {
 	return t.getLegacyDiff(ctx, args)
 }
@@ -77,24 +100,10 @@ func (t *EditTool) getLegacyDiff(ctx context.Context, args string) (string, erro
 		return fmt.Sprintf("--- new file: %s\n+++ %s\n%s", filePath, filePath, a.NewString), nil
 	}
 
-	info, err := os.Stat(filePath)
+	content, _, err := readFileChecked(filePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to stat file: %w", err)
+		return "", err
 	}
-	if info.Size() > maxFileSize {
-		return "", ErrFileTooLarge(info.Size(), maxFileSize)
-	}
-
-	raw, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-
-	if isBinaryFile(raw) {
-		return "", fmt.Errorf("cannot edit binary file: %s", filePath)
-	}
-
-	content := string(raw)
 
 	actualOld := findActualString(content, a.OldString)
 	if actualOld == "" {
@@ -209,24 +218,10 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 		}
 	}
 
-	info, err := os.Stat(filePath)
+	content, perm, err := readFileChecked(filePath)
 	if err != nil {
-		return "", fmt.Errorf("failed to stat file: %w", err)
+		return "", err
 	}
-	if info.Size() > maxFileSize {
-		return "", ErrFileTooLarge(info.Size(), maxFileSize)
-	}
-
-	raw, err := os.ReadFile(filePath)
-	if err != nil {
-		return "", fmt.Errorf("failed to read file: %w", err)
-	}
-
-	if isBinaryFile(raw) {
-		return "", fmt.Errorf("cannot edit binary file: %s", filePath)
-	}
-
-	content := string(raw)
 
 	actualOld := findActualString(content, oldString)
 	if actualOld == "" {
@@ -247,7 +242,7 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 		newContent = strings.Replace(content, actualOld, newString, 1)
 	}
 
-	if err := fileutil.WriteFile(filePath, []byte(newContent), 0o755, info.Mode().Perm()); err != nil {
+	if err := fileutil.WriteFile(filePath, []byte(newContent), 0o755, perm); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

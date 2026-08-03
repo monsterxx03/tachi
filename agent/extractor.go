@@ -8,6 +8,7 @@ import (
 
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 const keywordExtractionPrompt = "Extract 3-5 most important search keywords from the user query. " +
@@ -75,10 +76,8 @@ func (e *LLMKeywordExtractor) ExtractKeywords(ctx context.Context, query string)
 // Handles common LLM formatting artifacts: numbered lists, bullet points,
 // explanatory text, and trailing punctuation.
 func parseKeywordResponse(content string) []string {
-	lines := strings.Split(strings.TrimSpace(content), "\n")
 	var keywords []string
-	for _, line := range lines {
-		line = strings.TrimSpace(line)
+	for _, line := range strutil.SplitBy(content, "\n") {
 		// Strip common list prefixes: numbers, bullets, dashes, etc.
 		line = strings.TrimLeft(line, "-*•#0123456789. )\t")
 		line = strings.TrimSpace(line)

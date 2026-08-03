@@ -64,3 +64,38 @@ func TestGenericTypes(t *testing.T) {
 		t.Error("rune set mismatch")
 	}
 }
+
+func TestDedupe(t *testing.T) {
+	cases := []struct {
+		name string
+		in   []string
+		want []string
+	}{
+		{"nil", nil, nil},
+		{"empty", []string{}, []string{}},
+		{"single", []string{"a"}, []string{"a"}},
+		{"no dupes", []string{"a", "b", "c"}, []string{"a", "b", "c"}},
+		{"adjacent dupes", []string{"a", "a", "b"}, []string{"a", "b"}},
+		{"scattered dupes", []string{"a", "b", "a", "c", "b"}, []string{"a", "b", "c"}},
+		{"all same", []string{"x", "x", "x"}, []string{"x"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Dedupe(c.in)
+			if len(got) != len(c.want) {
+				t.Fatalf("Dedupe(%v) = %v, want %v", c.in, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("Dedupe(%v) = %v, want %v", c.in, got, c.want)
+				}
+			}
+		})
+	}
+
+	// Generic with non-string comparable type.
+	ints := Dedupe([]int{1, 2, 1, 3, 2})
+	if len(ints) != 3 || ints[0] != 1 || ints[2] != 3 {
+		t.Errorf("Dedupe ints = %v", ints)
+	}
+}

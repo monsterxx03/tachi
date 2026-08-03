@@ -254,3 +254,43 @@ func TestFormatTPS(t *testing.T) {
 		}
 	}
 }
+
+func TestSplitBy(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		sep  string
+		want []string
+	}{
+		// Comma-separated lists
+		{"empty list", "", ",", nil},
+		{"whitespace only list", "  , , ", ",", nil},
+		{"single item", "foo", ",", []string{"foo"}},
+		{"basic list", "a,b,c", ",", []string{"a", "b", "c"}},
+		{"trimmed list", " a , b , c ", ",", []string{"a", "b", "c"}},
+		{"empty entries dropped", "a,,b, ,c", ",", []string{"a", "b", "c"}},
+		{"unicode preserved", "中文, english", ",", []string{"中文", "english"}},
+		// Newline-separated lines
+		{"empty lines", "", "\n", nil},
+		{"whitespace only lines", " \n\n  ", "\n", nil},
+		{"single line", "foo", "\n", []string{"foo"}},
+		{"basic lines", "a\nb\nc", "\n", []string{"a", "b", "c"}},
+		{"blank lines dropped", "a\n\nb\n\nc", "\n", []string{"a", "b", "c"}},
+		{"trimmed lines", " a \n\tb\n c ", "\n", []string{"a", "b", "c"}},
+		{"leading trailing newlines", "\na\nb\n", "\n", []string{"a", "b"}},
+		{"crlf", "a\r\nb\r\nc", "\n", []string{"a", "b", "c"}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := SplitBy(c.in, c.sep)
+			if len(got) != len(c.want) {
+				t.Fatalf("SplitBy(%q, %q) = %#v, want %#v", c.in, c.sep, got, c.want)
+			}
+			for i := range got {
+				if got[i] != c.want[i] {
+					t.Fatalf("SplitBy(%q, %q) = %#v, want %#v", c.in, c.sep, got, c.want)
+				}
+			}
+		})
+	}
+}

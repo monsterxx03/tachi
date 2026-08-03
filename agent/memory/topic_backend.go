@@ -373,12 +373,8 @@ func (t *TopicBackend) searchDir(ctx context.Context, dir string, keywords []str
 		return nil
 	}
 
-	files := strings.Split(strings.TrimSpace(string(out)), "\n")
 	var results []Entry
-	for _, f := range files {
-		if f == "" {
-			continue
-		}
+	for _, f := range strutil.SplitBy(string(out), "\n") {
 		entries := t.extractMatchingBlocks(f, keywords)
 		results = append(results, entries...)
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/creasty/defaults"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 const mcpConfigFileName = "mcp.json"
@@ -168,7 +169,7 @@ func mergeMCPServersWithOrigin(base, override []mcpServerWithOrigin) []mcpServer
 // config, validates names, applies defaults, and stamps the Profile field.
 func finalizeMCPServers(merged []mcpServerWithOrigin) ([]MCPServerConfig, error) {
 	result := make([]MCPServerConfig, 0, len(merged))
-	seen := make(map[string]bool, len(merged))
+	seen := container.NewSet[string]()
 
 	for _, item := range merged {
 		srv := item.Server
@@ -177,10 +178,10 @@ func finalizeMCPServers(merged []mcpServerWithOrigin) ([]MCPServerConfig, error)
 		if srv.Name == "" {
 			return nil, fmt.Errorf("mcp server has no name (profile=%q)", item.Profile)
 		}
-		if seen[srv.Name] {
+		if seen.Has(srv.Name) {
 			return nil, fmt.Errorf("duplicate mcp server name %q (profile=%q)", srv.Name, item.Profile)
 		}
-		seen[srv.Name] = true
+		seen.Add(srv.Name)
 
 		if srv.Timeout == 0 {
 			srv.Timeout = Duration(10 * time.Second)

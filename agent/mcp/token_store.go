@@ -2,7 +2,6 @@ package mcp
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -75,6 +74,23 @@ func NewFileTokenStore(storageKey string) (*FileTokenStore, error) {
 	}, nil
 }
 
+// loadJSONFile reads path and unmarshals into a new T. A missing file yields
+// transport.ErrNoToken; a corrupt file is logged and also yields ErrNoToken
+// (the user will re-authenticate). Other read errors are logged and treated
+// the same way, so any failure to load persisted state falls back to the
+// auth flow rather than surfacing a transient I/O error.
+func loadJSONFile[T any](ctx context.Context, path, what string) (*T, error) {
+	var v T
+	if err := fileutil.ReadJSON(path, &v); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, transport.ErrNoToken
+		}
+		logger.FromContext(ctx).Error(ctx, "MCP: failed to load "+what, err, "path", path)
+		return nil, transport.ErrNoToken
+	}
+	return &v, nil
+}
+
 // GetToken loads the token from disk. Returns transport.ErrNoToken if
 // no token file exists or if parsing fails.
 func (s *FileTokenStore) GetToken(ctx context.Context) (*transport.Token, error) {
@@ -82,22 +98,7 @@ func (s *FileTokenStore) GetToken(ctx context.Context) (*transport.Token, error)
 		return nil, err
 	}
 
-	data, err := os.ReadFile(s.tokenPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, transport.ErrNoToken
-		}
-		return nil, fmt.Errorf("read token file %q: %w", s.tokenPath, err)
-	}
-
-	var token transport.Token
-	if err := json.Unmarshal(data, &token); err != nil {
-		// Corrupt file — treat as no token, the user will re-authenticate
-		logger.FromContext(ctx).Error(ctx, "MCP: failed to parse token file", err)
-		return nil, transport.ErrNoToken
-	}
-
-	return &token, nil
+	return loadJSONFile[transport.Token](ctx, s.tokenPath, "token file")
 }
 
 // SaveToken writes the token to disk. Creates the parent directory if needed.
@@ -121,21 +122,7 @@ func (s *FileTokenStore) GetDCRInfo(ctx context.Context) (*DCRInfo, error) {
 		return nil, err
 	}
 
-	data, err := os.ReadFile(s.dcrPath)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, transport.ErrNoToken
-		}
-		return nil, fmt.Errorf("read DCR file %q: %w", s.dcrPath, err)
-	}
-
-	var info DCRInfo
-	if err := json.Unmarshal(data, &info); err != nil {
-		logger.FromContext(ctx).Error(ctx, "MCP: failed to parse DCR file", err, "path", s.dcrPath)
-		return nil, transport.ErrNoToken
-	}
-
-	return &info, nil
+	return loadJSONFile[DCRInfo](ctx, s.dcrPath, "DCR file")
 }
 
 // SaveDCRInfo persists DCR client credentials to disk.
@@ -181,18 +168,9 @@ func (s *FileTokenStore) GetPendingState(ctx context.Context) (*OAuthPendingStat
 		return nil, err
 	}
 
-	data, err := os.ReadFile(s.pendingPath)
+	state, err := loadJSONFile[OAuthPendingState](ctx, s.pendingPath, "pending state")
 	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			return nil, transport.ErrNoToken
-		}
-		return nil, fmt.Errorf("read pending state %q: %w", s.pendingPath, err)
-	}
-
-	var state OAuthPendingState
-	if err := json.Unmarshal(data, &state); err != nil {
-		logger.FromContext(ctx).Error(ctx, "MCP: failed to parse pending state", err, "path", s.pendingPath)
-		return nil, transport.ErrNoToken
+		return nil, err
 	}
 
 	// Consume the pending state — don't allow replay
@@ -200,5 +178,5 @@ func (s *FileTokenStore) GetPendingState(ctx context.Context) (*OAuthPendingStat
 		logger.FromContext(ctx).Error(ctx, "MCP: failed to remove pending state", err, "path", s.pendingPath)
 	}
 	logger.FromContext(ctx).Info(ctx, "MCP: loaded and consumed pending OAuth state", "server", s.storageKey)
-	return &state, nil
+	return state, nil
 }

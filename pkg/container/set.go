@@ -54,3 +54,22 @@ func (s Set[T]) Range(fn func(v T)) {
 		fn(v)
 	}
 }
+
+// Dedupe returns items with duplicates removed, preserving the order of first
+// occurrences. Later duplicates are dropped, so ["a","b","a","c"] → ["a","b","c"].
+// Items of fewer than two elements are returned unchanged.
+func Dedupe[T comparable](items []T) []T {
+	if len(items) < 2 {
+		return items
+	}
+	seen := make(Set[T], len(items))
+	out := make([]T, 0, len(items))
+	for _, it := range items {
+		if seen.Has(it) {
+			continue
+		}
+		seen.Add(it)
+		out = append(out, it)
+	}
+	return out
+}

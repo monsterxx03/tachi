@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 // mcpOverlayMsg delivers an async status message to the MCP overlay.
@@ -71,7 +72,7 @@ func (m *Model) buildMCPServerItems() []MCPServerItem {
 
 		typeStr := string(srv.Type)
 		prefix := fmt.Sprintf("mcp__%s__", srv.Name)
-		seen := make(map[string]bool) // dedup by tool name
+		seen := container.NewSet[string]() // dedup by tool name
 
 		// Build helper to convert schema + DeferredTool to MCPToolItem
 		schemaToItem := func(name, desc string, params tools.ParametersSchema) MCPToolItem {
@@ -104,19 +105,19 @@ func (m *Model) buildMCPServerItems() []MCPServerItem {
 				item := schemaToItem(toolName, schema.Description, schema.Parameters)
 				item.Deferred = false
 				tools = append(tools, item)
-				seen[schema.Name] = true
+				seen.Add(schema.Name)
 			}
 		}
 
 		// 2. Collect deferred tools (not yet loaded — from deferred pool)
 		if dp := m.agent.DeferredPool(); dp != nil {
 			for _, dt := range dp.All() {
-				if strings.HasPrefix(dt.Name, prefix) && !seen[dt.Name] {
+				if strings.HasPrefix(dt.Name, prefix) && !seen.Has(dt.Name) {
 					toolName := strings.TrimPrefix(dt.Name, prefix)
 					item := schemaToItem(toolName, dt.Description, dt.Schema.Parameters)
 					item.Deferred = true
 					tools = append(tools, item)
-					seen[dt.Name] = true
+					seen.Add(dt.Name)
 				}
 			}
 		}
