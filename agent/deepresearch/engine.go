@@ -353,7 +353,7 @@ func (dr *DeepResearch) generateQueries(
 
 	now := time.Now()
 	timeContext := fmt.Sprintf("\nCurrent date and time: %s (%s, %s)",
-		now.Format("2006-01-02 15:04"),
+		now.Format(strutil.TimeFormatDateTimeShort),
 		now.Weekday().String(),
 		now.Location().String(),
 	)
@@ -412,7 +412,7 @@ func (dr *DeepResearch) buildResearcherPrompt(query, researchGoal string) string
 
 	now := time.Now()
 	timeInfo := fmt.Sprintf("\n\nCurrent date and time: %s (%s, %s)",
-		now.Format("2006-01-02 15:04"),
+		now.Format(strutil.TimeFormatDateTimeShort),
 		now.Weekday().String(),
 		now.Location().String(),
 	)
@@ -517,7 +517,7 @@ func (dr *DeepResearch) buildReportWriterPrompt(topic string, learnings []string
 
 	now := time.Now()
 	timeInfo := fmt.Sprintf("\n\nCurrent date and time: %s (%s, %s)",
-		now.Format("2006-01-02 15:04"),
+		now.Format(strutil.TimeFormatDateTimeShort),
 		now.Weekday().String(),
 		now.Location().String(),
 	)

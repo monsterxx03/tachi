@@ -305,7 +305,7 @@ func (t *WebSearchTool) noProvidersError() error {
 	if len(t.providerList()) > 0 && len(paused) > 0 {
 		names := make([]string, 0, len(paused))
 		for name, rec := range paused {
-			names = append(names, fmt.Sprintf("%s (resumes %s)", name, rec.ResumeAfter.Format("2006-01-02")))
+			names = append(names, fmt.Sprintf("%s (resumes %s)", name, rec.ResumeAfter.Format(strutil.TimeFormatDate)))
 		}
 		sort.Strings(names)
 		return fmt.Errorf("no web search providers available: all configured providers are quota-paused: %s", strings.Join(names, ", "))

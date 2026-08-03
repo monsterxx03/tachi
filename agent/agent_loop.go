@@ -451,7 +451,7 @@ func (a *AIAgent) prepareTurnMessages(
 	if reminderBlock != "" {
 		wrappedUser = reminderBlock + userMessage
 	}
-	a.conv.setMessageDate(rctx.Now.Format("2006-01-02"))
+	a.conv.setMessageDate(rctx.Now.Format(strutil.TimeFormatDate))
 
 	messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
 	return messages, reminderBlock

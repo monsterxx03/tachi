@@ -152,3 +152,29 @@ func TestExistsIsDirIsFile(t *testing.T) {
 		t.Fatal("IsFile misreports")
 	}
 }
+
+func TestRemoveIgnoreNotExist(t *testing.T) {
+	dir := t.TempDir()
+
+	// Removing a missing file is not an error.
+	if err := RemoveIgnoreNotExist(filepath.Join(dir, "nope.json")); err != nil {
+		t.Errorf("RemoveIgnoreNotExist(missing) = %v, want nil", err)
+	}
+
+	// Removing an existing file succeeds.
+	path := filepath.Join(dir, "exists.json")
+	if err := os.WriteFile(path, []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveIgnoreNotExist(path); err != nil {
+		t.Errorf("RemoveIgnoreNotExist(existing) = %v, want nil", err)
+	}
+	if Exists(path) {
+		t.Error("file still exists after RemoveIgnoreNotExist")
+	}
+
+	// Second removal is a no-op (file gone).
+	if err := RemoveIgnoreNotExist(path); err != nil {
+		t.Errorf("RemoveIgnoreNotExist(after) = %v, want nil", err)
+	}
+}

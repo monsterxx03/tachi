@@ -1,14 +1,15 @@
 package agent
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strings"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 )
 
 // BuildSystemPrompt constructs the Tachi system prompt with agent identity,
@@ -79,9 +80,7 @@ YOU MUST:
 
 	isGitRepo := false
 	if cwd != "" {
-		if err := exec.Command("git", "-C", cwd, "rev-parse", "--is-inside-work-tree").Run(); err == nil {
-			isGitRepo = true
-		}
+		isGitRepo = shutil.Success(context.Background(), cwd, "git", "rev-parse", "--is-inside-work-tree")
 	}
 	if isGitRepo {
 		sb.WriteString("- Git repository: yes\n")

@@ -3,9 +3,8 @@ package systemreminder
 import (
 	"context"
 	"fmt"
-	"os/exec"
-	"strings"
 
+	"github.com/monsterxx03/tachi/pkg/shutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -20,21 +19,18 @@ func (GitReminder) Generate(ctx context.Context, rctx Context) []string {
 		return nil
 	}
 	// Only fire if we're inside a git repository.
-	if err := exec.Command("git", "rev-parse", "--is-inside-work-tree").Run(); err != nil {
+	if !shutil.Success(ctx, "", "git", "rev-parse", "--is-inside-work-tree") {
 		return nil
 	}
 
 	var lines []string
 
 	// Current branch (including detached HEAD state).
-	branchOut, err := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD").Output()
-	if err == nil {
-		branch := strings.TrimSpace(string(branchOut))
+	if branch, err := shutil.Output(ctx, "", "git", "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
 		if branch == "HEAD" {
 			// Detached HEAD, show short commit hash.
-			commitOut, err := exec.Command("git", "rev-parse", "--short", "HEAD").Output()
-			if err == nil {
-				lines = append(lines, fmt.Sprintf("Git HEAD: detached at %s", strings.TrimSpace(string(commitOut))))
+			if commit, err := shutil.Output(ctx, "", "git", "rev-parse", "--short", "HEAD"); err == nil {
+				lines = append(lines, fmt.Sprintf("Git HEAD: detached at %s", commit))
 			}
 		} else {
 			lines = append(lines, fmt.Sprintf("Git branch: %s", branch))
@@ -42,9 +38,8 @@ func (GitReminder) Generate(ctx context.Context, rctx Context) []string {
 	}
 
 	// Short status (porcelain).
-	statusOut, err := exec.Command("git", "status", "--porcelain").Output()
-	if err == nil {
-		statusLines := strutil.SplitBy(string(statusOut), "\n")
+	if statusOut, err := shutil.Output(ctx, "", "git", "status", "--porcelain"); err == nil {
+		statusLines := strutil.SplitBy(statusOut, "\n")
 		if len(statusLines) > 0 {
 			// Limit to at most 30 lines to avoid blowing up the context.
 			if len(statusLines) > 30 {

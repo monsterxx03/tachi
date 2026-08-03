@@ -96,7 +96,7 @@ func (m *Manager) cleanupOldToolResults(ctx context.Context, fileDir string, max
 		}
 		if info.ModTime().Before(cutoff) {
 			path := filepath.Join(fileDir, entry.Name())
-			if err := os.Remove(path); err != nil {
+			if err := fileutil.RemoveIgnoreNotExist(path); err != nil {
 				m.logger.Error(ctx, "MCP: cleanupOldToolResults: remove", err, "path", path)
 			} else {
 				removed++

@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -101,7 +102,7 @@ func newOneoffRecorder(
 	}
 
 	name := fmt.Sprintf("%s-%s-%s.jsonl",
-		meta.Kind, time.Now().Format("20060102-150405"), uuid.NewString()[:4])
+		meta.Kind, time.Now().Format(strutil.TimeFormatFileStamp), uuid.NewString()[:4])
 	path := filepath.Join(dir, name)
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 	if err != nil {

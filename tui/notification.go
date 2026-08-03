@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -23,10 +24,7 @@ var (
 // handling visual state reporting itself. When true, Tachi's own terminal
 // notifications are redundant and should be skipped.
 func herdrNotifications(cfg *config.Config) bool {
-	return cfg != nil && cfg.Herdr.IsEnabled() &&
-		os.Getenv("HERDR_ENV") == "1" &&
-		os.Getenv("HERDR_SOCKET_PATH") != "" &&
-		os.Getenv("HERDR_PANE_ID") != ""
+	return cfg != nil && cfg.Herdr.IsEnabled() && hooks.DetectHerdr()
 }
 
 // terminalNotifierAvailable returns the path to terminal-notifier if it's

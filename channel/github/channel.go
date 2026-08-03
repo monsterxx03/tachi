@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"sync"
 	"time"
 
@@ -14,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -362,10 +362,8 @@ func (ch *GitHubChannel) verifyLocalRepo(repo RepoConfig) error {
 		return fmt.Errorf("local_path %q does not exist: %w", repo.LocalPath, err)
 	}
 	// Check it's a git repo.
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
-	cmd.Dir = repo.LocalPath
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("local_path %q is not a git repo: %s", repo.LocalPath, string(out))
+	if !shutil.Success(context.Background(), repo.LocalPath, "git", "rev-parse", "--git-dir") {
+		return fmt.Errorf("local_path %q is not a git repo", repo.LocalPath)
 	}
 	return nil
 }

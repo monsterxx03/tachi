@@ -366,7 +366,7 @@ func AcquireLock(memoryDir string) bool {
 	parts := strings.SplitN(strings.TrimSpace(string(data)), ":", 2)
 	if len(parts) != 2 {
 		// Corrupt lock file — take over.
-		os.Remove(lockPath)
+		_ = fileutil.RemoveIgnoreNotExist(lockPath)
 		return AcquireLock(memoryDir)
 	}
 
@@ -389,13 +389,13 @@ func AcquireLock(memoryDir string) bool {
 	}
 
 	// Lock is stale — remove and retry.
-	os.Remove(lockPath)
+	_ = fileutil.RemoveIgnoreNotExist(lockPath)
 	return AcquireLock(memoryDir)
 }
 
 // ReleaseLock removes the dream.lock file for the given memory dir.
 func ReleaseLock(memoryDir string) {
-	os.Remove(filepath.Join(memoryDir, "dream.lock"))
+	_ = fileutil.RemoveIgnoreNotExist(filepath.Join(memoryDir, "dream.lock"))
 }
 
 // --- State persistence ---

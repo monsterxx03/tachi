@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -43,11 +44,11 @@ func (ch *Channel) saveFile(userID string, filename string, data []byte) (string
 	path := f.Name()
 	if _, err := f.Write(data); err != nil {
 		f.Close()
-		os.Remove(path)
+		_ = fileutil.RemoveIgnoreNotExist(path)
 		return "", fmt.Errorf("write file: %w", err)
 	}
 	if err := f.Close(); err != nil {
-		os.Remove(path)
+		_ = fileutil.RemoveIgnoreNotExist(path)
 		return "", fmt.Errorf("close file: %w", err)
 	}
 

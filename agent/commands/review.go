@@ -12,6 +12,7 @@ import (
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // This file holds everything the /review code review command needs beyond the
@@ -227,7 +228,7 @@ func NewReviewReportDir(baseDir string) (string, error) {
 		return "", err
 	}
 	for attempt := 0; attempt < 5; attempt++ {
-		name := time.Now().Format("20060102-150405")
+		name := time.Now().Format(strutil.TimeFormatFileStamp)
 		if attempt > 0 {
 			name = fmt.Sprintf("%s-%d", name, rand.Intn(1000))
 		}

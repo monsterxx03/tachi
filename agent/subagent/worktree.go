@@ -1,11 +1,9 @@
 package subagent
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
@@ -14,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -114,23 +113,16 @@ func (wm *WorktreeManager) createWorktree(ctx context.Context, branch string) (s
 		args = append(args, "HEAD")
 	}
 
-	cmd := exec.CommandContext(ctx, "git", args...)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-
-	if err := cmd.Run(); err != nil {
-		return "", fmt.Errorf("git worktree add failed: %w (stderr: %s)", err, stderr.String())
+	if err := shutil.Run(ctx, "", "git", args...); err != nil {
+		return "", fmt.Errorf("git worktree add failed: %w", err)
 	}
 
 	return worktreePath, nil
 }
 
 func (wm *WorktreeManager) removeWorktree(path string) {
-	cmd := exec.Command("git", "worktree", "remove", "--force", path)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		wm.logger.Error(context.Background(), "WorktreeManager: failed to remove worktree", err, "path", path, "stderr", strings.TrimSpace(stderr.String()))
+	if err := shutil.Run(context.Background(), "", "git", "worktree", "remove", "--force", path); err != nil {
+		wm.logger.Error(context.Background(), "WorktreeManager: failed to remove worktree", err, "path", path)
 	}
 }
 
@@ -144,26 +136,23 @@ func (wm *WorktreeManager) collectPatch(worktreePath string) string {
 	bgCtx, cancel := context.WithTimeout(context.Background(), patchTimeout)
 	defer cancel()
 
-	cmd := exec.CommandContext(bgCtx, "git", "-C", worktreePath, "add", "-A")
-	if err := cmd.Run(); err != nil {
+	if err := shutil.Run(bgCtx, worktreePath, "git", "add", "-A"); err != nil {
 		wm.logger.Error(context.Background(), "WorktreeManager: git add -A failed", err)
 		return ""
 	}
 
-	cmd = exec.CommandContext(bgCtx, "git", "-C", worktreePath, "diff", "--cached", "--stat")
-	statOut, err := cmd.Output()
-	if err != nil || len(bytes.TrimSpace(statOut)) == 0 {
+	statOut, err := shutil.Output(bgCtx, worktreePath, "git", "diff", "--cached", "--stat")
+	if err != nil || statOut == "" {
 		return ""
 	}
 
-	cmd = exec.CommandContext(bgCtx, "git", "-C", worktreePath, "diff", "--cached")
-	diffOut, err := cmd.Output()
+	diffOut, err := shutil.Output(bgCtx, worktreePath, "git", "diff", "--cached")
 	if err != nil {
 		wm.logger.Error(context.Background(), "WorktreeManager: git diff failed", err)
 		return ""
 	}
 
-	patch := string(diffOut)
+	patch := diffOut
 
 	if len(patch) > maxPatchSize {
 		truncated := patch[:maxPatchSize]
@@ -177,23 +166,15 @@ func (wm *WorktreeManager) collectPatch(worktreePath string) string {
 }
 
 func isGitRepo() bool {
-	cmd := exec.Command("git", "rev-parse", "--git-dir")
-	return cmd.Run() == nil
+	return shutil.Success(context.Background(), "", "git", "rev-parse", "--git-dir")
 }
 
 func branchExists(branch string) bool {
-	cmd := exec.Command("git", "rev-parse", "--verify", "refs/heads/"+branch)
-	return cmd.Run() == nil
+	return shutil.Success(context.Background(), "", "git", "rev-parse", "--verify", "refs/heads/"+branch)
 }
 
 func fetchBranch(ctx context.Context, branch string) error {
-	cmd := exec.CommandContext(ctx, "git", "fetch", "origin", branch+":"+branch)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("%w (stderr: %s)", err, stderr.String())
-	}
-	return nil
+	return shutil.Run(ctx, "", "git", "fetch", "origin", branch+":"+branch)
 }
 
 // fallbackIfEmpty returns the fallback value when s is empty.

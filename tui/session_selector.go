@@ -89,7 +89,7 @@ func (m *Model) renderSessionSelection() string {
 
 	for idx := m.sessionScrollOff; idx < end; idx++ {
 		s := m.sessionList[idx]
-		dateStr := s.CreatedAt.Format("2006-01-02 15:04")
+		dateStr := s.CreatedAt.Format(strutil.TimeFormatDateTimeShort)
 		title := s.Title
 		if title == "" {
 			title = "(untitled)"

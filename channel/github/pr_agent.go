@@ -1,11 +1,9 @@
 package github
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -17,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -92,25 +91,16 @@ func (wt *prWorktree) create(ctx context.Context, branch, baseBranch string) err
 	wt.name = wtName
 
 	args := []string{"worktree", "add", "-b", branch, wt.wtPath, "origin/" + baseBranch}
-	cmd := exec.CommandContext(ctx, "git", args...)
-	cmd.Dir = wt.basePath
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git worktree add: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	if err := shutil.Run(ctx, wt.basePath, "git", args...); err != nil {
+		return fmt.Errorf("git worktree add: %w", err)
 	}
 	return nil
 }
 
 // cleanup removes the worktree.
 func (wt *prWorktree) cleanup() {
-	cmd := exec.Command("git", "worktree", "remove", "--force", wt.wtPath)
-	cmd.Dir = wt.basePath
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		_ = err // best-effort cleanup, log would be nice but we're in a defer
-	}
+	// Best-effort cleanup — the error is intentionally ignored.
+	_ = shutil.Run(context.Background(), wt.basePath, "git", "worktree", "remove", "--force", wt.wtPath)
 }
 
 // RunPRGeneration runs the PR generation agent.
@@ -369,30 +359,24 @@ func gitCommitAndPush(ctx context.Context, worktreePath, branch, token string, i
 	log := logger.New("github.pr")
 
 	// Check if there are any changes.
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain")
-	cmd.Dir = worktreePath
-	out, err := cmd.Output()
+	out, err := shutil.Output(ctx, worktreePath, "git", "status", "--porcelain")
 	if err != nil {
 		return fmt.Errorf("git status: %w", err)
 	}
-	if len(bytes.TrimSpace(out)) == 0 {
+	if out == "" {
 		log.Warn(ctx, "github: no changes to commit", "branch", branch)
 		return nil
 	}
 
 	// git add -A
-	cmd = exec.CommandContext(ctx, "git", "add", "-A")
-	cmd.Dir = worktreePath
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git add: %w (output: %s)", err, string(out))
+	if err := shutil.Run(ctx, worktreePath, "git", "add", "-A"); err != nil {
+		return fmt.Errorf("git add: %w", err)
 	}
 
 	// git commit
 	commitMsg := fmt.Sprintf("feat: %s\n\nCloses #%d", issue.GetTitle(), issue.GetNumber())
-	cmd = exec.CommandContext(ctx, "git", "commit", "-m", commitMsg)
-	cmd.Dir = worktreePath
-	if out, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("git commit: %w (output: %s)", err, string(out))
+	if err := shutil.Run(ctx, worktreePath, "git", "commit", "-m", commitMsg); err != nil {
+		return fmt.Errorf("git commit: %w", err)
 	}
 
 	// git push with token via extraheader (never stored in .git/config)
@@ -400,12 +384,8 @@ func gitCommitAndPush(ctx context.Context, worktreePath, branch, token string, i
 		"-c", fmt.Sprintf("http.extraheader=AUTHORIZATION: bearer %s", token),
 		"push", "origin", branch,
 	}
-	cmd = exec.CommandContext(ctx, "git", pushArgs...)
-	cmd.Dir = worktreePath
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		return fmt.Errorf("git push: %w (stderr: %s)", err, strings.TrimSpace(stderr.String()))
+	if err := shutil.Run(ctx, worktreePath, "git", pushArgs...); err != nil {
+		return fmt.Errorf("git push: %w", err)
 	}
 
 	log.Info(ctx, "github: pushed branch", "branch", branch)

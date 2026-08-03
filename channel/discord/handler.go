@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
 	"unicode/utf8"
@@ -12,6 +11,7 @@ import (
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 )
 
 // handleMessageCreate processes a single MESSAGE_CREATE event through
@@ -544,12 +544,8 @@ func (ch *DiscordChannel) updateChannelTopic(channelID, workDir, model string) {
 	}
 
 	branch := ""
-	if b, err := func() ([]byte, error) {
-		cmd := exec.Command("git", "rev-parse", "--abbrev-ref", "HEAD")
-		cmd.Dir = dir // run git in the thread's working directory
-		return cmd.Output()
-	}(); err == nil {
-		branch = strings.TrimSpace(string(b))
+	if b, err := shutil.Output(context.Background(), dir, "git", "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
+		branch = b
 	}
 
 	// Build the new topic text (Discord channel topic does not support

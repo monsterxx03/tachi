@@ -16,6 +16,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/transcript/render"
 	channelmgr "github.com/monsterxx03/tachi/channel/manager"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -122,7 +123,7 @@ func transcriptList(ctx context.Context, cmd *cli.Command) error {
 	fmt.Printf("%-40s  %-20s  %s\n", "SESSION ID", "DATE", "TITLE")
 	fmt.Println(strings.Repeat("─", 100))
 	for _, s := range sessions {
-		date := s.CreatedAt.Format("2006-01-02 15:04")
+		date := s.CreatedAt.Format(strutil.TimeFormatDateTimeShort)
 		fmt.Printf("%-40s  %-20s  %s\n", s.ID, date, s.Title)
 	}
 	fmt.Printf("\n%d sessions total.\n", len(sessions))

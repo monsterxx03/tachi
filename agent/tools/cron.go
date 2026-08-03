@@ -300,7 +300,7 @@ func (t *CronTool) handleResume(params cronArgs) (string, error) {
 	fmt.Fprintf(&sb, "▶️ Job %q (%s) resumed.\n", job.ID, job.Name)
 	fmt.Fprintf(&sb, "Schedule: %s\n", job.Schedule)
 	if nextRun := computeNextRun(job.Schedule); nextRun != nil {
-		fmt.Fprintf(&sb, "Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
+		fmt.Fprintf(&sb, "Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 	return sb.String(), nil
 }
@@ -327,7 +327,7 @@ func formatJobSummary(job *cron.Job) string {
 
 	nextRun := computeNextRun(job.Schedule)
 	if nextRun != nil && job.Status == cron.JobStatusActive {
-		fmt.Fprintf(&sb, "  Next: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
+		fmt.Fprintf(&sb, "  Next: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 
 	if !job.LastRunAt.IsZero() {
@@ -339,7 +339,7 @@ func formatJobSummary(job *cron.Job) string {
 		if lastStatus == "error" {
 			icon = "❌"
 		}
-		fmt.Fprintf(&sb, "  Last: %s %s", icon, job.LastRunAt.Format("2006-01-02 15:04:05 MST"))
+		fmt.Fprintf(&sb, "  Last: %s %s", icon, job.LastRunAt.Format(strutil.TimeFormatDateTime))
 		if job.LastRunError != "" {
 			fmt.Fprintf(&sb, " (%s)", job.LastRunError)
 		}
@@ -365,7 +365,7 @@ func formatJobDetail(job *cron.Job) string {
 
 	nextRun := computeNextRun(job.Schedule)
 	if nextRun != nil && job.Status == cron.JobStatusActive {
-		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
+		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 
 	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)
@@ -377,10 +377,10 @@ func formatJobDetail(job *cron.Job) string {
 		fmt.Fprintf(&sb, "- Timezone: %s\n", job.Timezone)
 	}
 
-	fmt.Fprintf(&sb, "- Created: %s\n", job.CreatedAt.Format("2006-01-02 15:04:05 MST"))
+	fmt.Fprintf(&sb, "- Created: %s\n", job.CreatedAt.Format(strutil.TimeFormatDateTime))
 
 	if !job.LastRunAt.IsZero() {
-		fmt.Fprintf(&sb, "- Last run: %s (status: %s)", job.LastRunAt.Format("2006-01-02 15:04:05 MST"), job.LastRunStatus)
+		fmt.Fprintf(&sb, "- Last run: %s (status: %s)", job.LastRunAt.Format(strutil.TimeFormatDateTime), job.LastRunStatus)
 		if job.LastRunError != "" {
 			fmt.Fprintf(&sb, " — %s", job.LastRunError)
 		}
@@ -401,7 +401,7 @@ func formatJobCreated(job *cron.Job) string {
 
 	nextRun := computeNextRun(job.Schedule)
 	if nextRun != nil {
-		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format("2006-01-02 15:04:05 MST"))
+		fmt.Fprintf(&sb, "- Next run: %s\n", nextRun.Format(strutil.TimeFormatDateTime))
 	}
 
 	fmt.Fprintf(&sb, "- Prompt: %s\n", job.Prompt)

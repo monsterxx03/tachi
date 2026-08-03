@@ -174,7 +174,7 @@ func (s *FileTokenStore) GetPendingState(ctx context.Context) (*OAuthPendingStat
 	}
 
 	// Consume the pending state — don't allow replay
-	if err := os.Remove(s.pendingPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+	if err := fileutil.RemoveIgnoreNotExist(s.pendingPath); err != nil {
 		logger.FromContext(ctx).Error(ctx, "MCP: failed to remove pending state", err, "path", s.pendingPath)
 	}
 	logger.FromContext(ctx).Info(ctx, "MCP: loaded and consumed pending OAuth state", "server", s.storageKey)

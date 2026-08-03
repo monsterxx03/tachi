@@ -124,7 +124,7 @@ func (s *stateStore) deleteAccount(accountID string) error {
 		s.allowFromPath(accountID),
 	}
 	for _, f := range files {
-		os.Remove(f)
+		_ = fileutil.RemoveIgnoreNotExist(f)
 	}
 	return nil
 }

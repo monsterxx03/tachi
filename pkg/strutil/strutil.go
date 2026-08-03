@@ -162,6 +162,21 @@ func SplitBy(s string, sep string) []string {
 	return out
 }
 
+// Time format layouts shared across the codebase. Centralizing them means a
+// format tweak (e.g. switching zone style) touches one place.
+const (
+	// TimeFormatDateTime renders a full timestamp with zone: "2006-01-02 15:04:05 MST".
+	// Used for cron schedule listings and transcript timestamps.
+	TimeFormatDateTime = "2006-01-02 15:04:05 MST"
+	// TimeFormatDateTimeShort renders minute precision: "2006-01-02 15:04".
+	TimeFormatDateTimeShort = "2006-01-02 15:04"
+	// TimeFormatDate renders just the date: "2006-01-02".
+	TimeFormatDate = "2006-01-02"
+	// TimeFormatFileStamp renders a filesystem-safe timestamp for file and
+	// directory names: "20060102-150405" (no separators, second precision).
+	TimeFormatFileStamp = "20060102-150405"
+)
+
 // SanitizeFilename replaces characters that are problematic in filenames
 // (slash, colon, quotes, angle brackets, pipe, spaces, …) with "_", then
 // truncates to max runes (max <= 0 means no truncation). Multi-byte

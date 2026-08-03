@@ -276,7 +276,7 @@ func (t *TopicBackend) fetchRecentSessions(ctx context.Context, limit int) ([]En
 		// Build a rich content string with session metadata + recent user messages.
 		var content strings.Builder
 		fmt.Fprintf(&content, "Session: %s\nDate: %s\n",
-			title, s.CreatedAt.Format("2006-01-02 15:04"))
+			title, s.CreatedAt.Format(strutil.TimeFormatDateTimeShort))
 		for i, msg := range s.RecentMessages {
 			if i > 0 {
 				content.WriteByte('\n')
@@ -723,7 +723,7 @@ func extractTimestamp(block string) int64 {
 				if t, err := time.Parse(time.RFC3339, sub[:min(len(sub), 25)]); err == nil {
 					return t.Unix()
 				}
-				if t, err := time.Parse("2006-01-02", sub[:10]); err == nil {
+				if t, err := time.Parse(strutil.TimeFormatDate, sub[:10]); err == nil {
 					return t.Unix()
 				}
 			}

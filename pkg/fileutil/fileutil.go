@@ -4,6 +4,7 @@ package fileutil
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 )
@@ -121,6 +122,16 @@ func AtomicWriteJSONShared(path string, v any) error {
 func Exists(path string) bool {
 	_, err := os.Stat(path)
 	return err == nil
+}
+
+// RemoveIgnoreNotExist removes the file at path, treating a missing file as
+// success. Other errors (permissions, I/O) are returned. Used for best-effort
+// cleanup where a concurrently-removed file is not an error.
+func RemoveIgnoreNotExist(path string) error {
+	if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	return nil
 }
 
 // IsDir reports whether path exists and is a directory.
