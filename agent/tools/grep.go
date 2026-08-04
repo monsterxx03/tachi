@@ -43,6 +43,7 @@ type grepArgs struct {
 	Multiline       bool   `json:"multiline"`
 	ContextLines    *int   `json:"context_lines"`
 	MaxResults      *int   `json:"max_results"`
+	IncludeIgnored  bool   `json:"include_ignored"`
 }
 
 type GrepTool struct{}
@@ -52,7 +53,8 @@ func (t GrepTool) Description() string {
 	return "Search file contents using ripgrep. " +
 		"Supports regex or fixed-string patterns, file type filtering, and glob filtering. " +
 		"Returns matching file paths by default, or matching lines with context in content mode. " +
-		"Use fixed_string=true when searching for literal text containing regex special characters."
+		"Use fixed_string=true when searching for literal text containing regex special characters. " +
+		"Use include_ignored=true to also search files excluded by .gitignore (node_modules, build output)."
 }
 func (t GrepTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
@@ -66,6 +68,7 @@ func (t GrepTool) Properties() map[string]PropertySchema {
 		"multiline":        {Type: "boolean", Description: "Enable multiline mode where . matches newlines"},
 		"context_lines":    {Type: "integer", Description: "Number of context lines to show before and after each match (content mode only)"},
 		"max_results":      {Type: "integer", Description: "Maximum number of results to return (content lines or files; default 200)", Minimum: new(1.0), Maximum: new(float64(maxGrepMaxResults))},
+		"include_ignored":  {Type: "boolean", Description: "Also search files excluded by .gitignore/.ignore/.rgignore (e.g. node_modules, build output)"},
 	}
 }
 func (t GrepTool) Required() []string { return []string{"pattern"} }
@@ -195,6 +198,11 @@ func buildRgArgs(a *grepArgs) []string {
 	}
 	if a.Multiline {
 		args = append(args, "-U", "--multiline-dotall")
+	}
+	if a.IncludeIgnored {
+		// Search files excluded by ignore files (node_modules, build output).
+		// VCS metadata dirs are still excluded via the --glob rules above.
+		args = append(args, "--no-ignore")
 	}
 	if a.Type != "" {
 		args = append(args, "--type", a.Type)

@@ -332,3 +332,36 @@ func TestGrepTool_MaxResultsClamped(t *testing.T) {
 		t.Errorf("expected clamp to 1000 results, got output without truncation marker:\n%.500s", raw)
 	}
 }
+
+func TestGrep_IncludeIgnored(t *testing.T) {
+	skipWithoutRg(t)
+	dir := setupGrepTestDir(t)
+
+	// A file excluded by .ignore, with content unique to it. (.ignore is
+	// honored by rg even outside git repos, unlike .gitignore.)
+	ignoreFile := "ignored.txt\n"
+	if err := os.WriteFile(filepath.Join(dir, ".ignore"), []byte(ignoreFile), 0644); err != nil {
+		t.Fatalf("Failed to write .ignore: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "ignored.txt"), []byte("hello ignored\n"), 0644); err != nil {
+		t.Fatalf("Failed to write ignored.txt: %v", err)
+	}
+
+	// Default: .ignore-excluded file must not appear.
+	raw, err := (&GrepTool{}).ExecuteContext(context.TODO(), `{"pattern": "hello ignored", "path": "`+dir+`"}`)
+	if err != nil {
+		t.Fatalf("Grep failed: %v", err)
+	}
+	if strings.Contains(raw, "ignored.txt") {
+		t.Errorf("ignored file should be excluded by default, got:\n%s", raw)
+	}
+
+	// include_ignored=true: the excluded file is searched.
+	raw, err = (&GrepTool{}).ExecuteContext(context.TODO(), `{"pattern": "hello ignored", "path": "`+dir+`", "include_ignored": true}`)
+	if err != nil {
+		t.Fatalf("Grep with include_ignored failed: %v", err)
+	}
+	if !strings.Contains(raw, "ignored.txt") {
+		t.Errorf("expected ignored.txt with include_ignored=true, got:\n%s", raw)
+	}
+}

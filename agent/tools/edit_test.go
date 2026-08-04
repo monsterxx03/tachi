@@ -321,3 +321,115 @@ func TestEditTool_GetDiff_Legacy_InvalidArgs(t *testing.T) {
 }
 
 // ============================================================================
+
+func TestEditTool_TrailingWhitespaceFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ws.txt")
+	// "foo bar" is followed by " baz" on the same line — no "foo bar\n" in file.
+	if err := os.WriteFile(path, []byte("hello world\nfoo bar baz\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	tool := EditTool{}
+	// Model copies old_string with a trailing newline (thinks it's a whole
+	// line); exact match fails, the trailing-whitespace fallback kicks in and
+	// replaces only "foo bar", leaving " baz" intact.
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"foo bar\n","new_string":"replaced"}`)
+	if err != nil {
+		t.Fatalf("trailing-whitespace fallback failed: %v", err)
+	}
+	if result == "" {
+		t.Fatal("expected non-empty result")
+	}
+
+	content, _ := os.ReadFile(path)
+	expected := "hello world\nreplaced baz\n"
+	if string(content) != expected {
+		t.Fatalf("expected %q, got %q", expected, string(content))
+	}
+}
+
+func TestEditTool_ExactMatchWinsOverFallback(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ws2.txt")
+	// "foo" appears as a prefix of "foo bar"; searching "foo" must hit the
+	// exact first occurrence, not some trimmed variant elsewhere.
+	if err := os.WriteFile(path, []byte("foo bar\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	tool := EditTool{}
+	// Exact match "foo" exists (inside "foo bar") — first occurrence replaced.
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"foo","new_string":"X"}`)
+	if err != nil {
+		t.Fatalf("exact match should succeed: %v", err)
+	}
+
+	content, _ := os.ReadFile(path)
+	expected := "X bar\n"
+	if string(content) != expected {
+		t.Fatalf("expected %q, got %q", expected, string(content))
+	}
+}
+
+func TestEditTool_FallbackAmbiguityCaughtByUniqueness(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ws3.txt")
+	// "foo" occurs twice in the file (as a prefix of "foo bar" and "foo baz"),
+	// but "foo\n" does not exist — the model's old_string fails exactly and
+	// falls back to "foo", which is non-unique. The edit must refuse rather
+	// than silently pick the first occurrence.
+	if err := os.WriteFile(path, []byte("foo bar\nfoo baz\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	tool := EditTool{}
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"foo\n","new_string":"X"}`)
+	if err == nil {
+		t.Fatal("expected ambiguity error for non-unique fallback match")
+	}
+	if !strings.Contains(err.Error(), "matches 2 locations") {
+		t.Errorf("expected uniqueness error, got: %v", err)
+	}
+
+	content, _ := os.ReadFile(path)
+	if string(content) != "foo bar\nfoo baz\n" {
+		t.Fatalf("file must be untouched after refused edit, got: %q", string(content))
+	}
+}
+
+func TestEditTool_TolerantMatchAnnotated(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tolerant.txt")
+	if err := os.WriteFile(path, []byte("hello world\nfoo bar baz\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	tool := EditTool{}
+	// Trailing-newline fallback triggers a tolerant match; the success message
+	// must surface which actual string was matched so the model can verify.
+	result, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"foo bar\n","new_string":"replaced"}`)
+	if err != nil {
+		t.Fatalf("edit failed: %v", err)
+	}
+	if !strings.Contains(result, "tolerant match") || !strings.Contains(result, "foo bar") {
+		t.Errorf("expected tolerant-match annotation, got: %q", result)
+	}
+}
+
+func TestEditTool_NotFoundGuidesReload(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "stale.txt")
+	os.WriteFile(path, []byte("hello world\n"), 0644)
+
+	tool := EditTool{}
+	_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"nope","new_string":"x"}`)
+	if err == nil {
+		t.Fatal("expected not-found error")
+	}
+	if !strings.Contains(err.Error(), "read tool to reload") {
+		t.Errorf("expected reload guidance, got: %v", err)
+	}
+}
+
+// ============================================================================

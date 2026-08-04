@@ -1,6 +1,7 @@
 package tools
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/base64"
@@ -19,7 +20,10 @@ import (
 	"github.com/monsterxx03/tachi/llm"
 )
 
-const maxFileSize = 256 * 1024 // 256KB
+const (
+	maxFileSize  = 256 * 1024 // 256KB
+	maxLineChars = 2000       // per-line truncation for context safety
+)
 
 // ErrFileTooLarge creates an error when a file exceeds the size limit
 func ErrFileTooLarge(actualSize, limitSize int64) error {
@@ -46,13 +50,16 @@ func NewReadTool() *ReadTool {
 
 func (t *ReadTool) Name() string { return ToolNameRead }
 func (t *ReadTool) Description() string {
-	return "Read the contents of a file. For image files (png, jpg, gif, webp), " +
-		"returns a description and makes the image available to vision-capable models."
+	return "Read the contents of a text file. For image files (png, jpg, gif, webp), returns a " +
+		"placeholder and makes the image available to vision-capable models. " +
+		"Use offset (1-based; negative reads from the end, e.g. -100 = last 100 lines) and limit " +
+		"to page through large files — truncated reads include a hint on how to continue. " +
+		"Directories are not readable here; use the glob tool or bash ls instead. Do not use bash cat."
 }
 func (t *ReadTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":   {Type: "string", Description: "The path to the file to read"},
-		"offset": {Type: "integer", Description: "Line number to start reading from (1-indexed, default: 1)", Minimum: new(1.0)},
+		"offset": {Type: "integer", Description: "Line number to start reading from (1-indexed, default: 1; negative reads from the end, e.g. -100 = last 100 lines)"},
 		"limit":  {Type: "integer", Description: "Number of lines to read (default: all lines from offset)", Minimum: new(1.0)},
 	}
 }
@@ -154,25 +161,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 			return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
 		}
 
-		lines := strings.Split(resp.Content, "\n")
-
-		start := 0
-		if argsMap.Offset > 0 {
-			start = argsMap.Offset - 1
-		}
-		if start >= len(lines) {
-			return "", nil
-		}
-
-		end := len(lines)
-		if argsMap.Limit > 0 {
-			end = start + argsMap.Limit
-		}
-		if end > len(lines) {
-			end = len(lines)
-		}
-
-		return strings.Join(lines[start:end], "\n"), nil
+		return formatReadOutput(strings.Split(resp.Content, "\n"), argsMap.Offset, argsMap.Limit), nil
 	}
 
 	// Check file size before reading.
@@ -183,8 +172,15 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)
 	}
+	if info.IsDir() {
+		return "", fmt.Errorf("cannot read directory: %s. Use glob to find files or bash ls to list contents", argsMap.Path)
+	}
 	if argsMap.Limit <= 0 && info.Size() > maxFileSize {
-		return "", ErrFileTooLarge(info.Size(), maxFileSize)
+		err := ErrFileTooLarge(info.Size(), maxFileSize)
+		if lines := countLines(filePath); lines > 0 {
+			return "", fmt.Errorf("%w. File has ~%d lines — use offset/limit to read it in parts", err, lines)
+		}
+		return "", fmt.Errorf("%w. Use offset/limit to read it in parts", err)
 	}
 
 	// Check cache: if the file hasn't changed since last read, return a short hint
@@ -224,26 +220,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
 	}
 
-	lines := strings.Split(string(content), "\n")
-
-	// Default offset is 1 (1-indexed), convert to 0-indexed
-	start := 0
-	if argsMap.Offset > 0 {
-		start = argsMap.Offset - 1
-	}
-	if start >= len(lines) {
-		return "", nil
-	}
-
-	end := len(lines)
-	if argsMap.Limit > 0 {
-		end = start + argsMap.Limit
-	}
-	if end > len(lines) {
-		end = len(lines)
-	}
-
-	result := strings.Join(lines[start:end], "\n")
+	result := formatReadOutput(strings.Split(string(content), "\n"), argsMap.Offset, argsMap.Limit)
 
 	// Update cache
 	t.mu.Lock()
@@ -254,6 +231,97 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	t.mu.Unlock()
 
 	return result, nil
+}
+
+// formatReadOutput computes the line window (with negative-offset tail reads),
+// truncates over-long lines, and appends actionable hints when the read was
+// truncated or offset was out of range.
+func formatReadOutput(lines []string, offset, limit int) string {
+	total := len(lines)
+
+	// strings.Split on content ending with "\n" yields a phantom trailing
+	// empty element; drop it so line counts and tail offsets match what the
+	// user sees (e.g. offset=-1 must return the real last line, not "").
+	if total > 1 && lines[total-1] == "" {
+		lines = lines[:total-1]
+		total--
+	}
+
+	start := 0
+	switch {
+	case offset < 0:
+		start = total + offset
+		if start < 0 {
+			start = 0
+		}
+	case offset > 0:
+		start = offset - 1
+	}
+	if start >= total {
+		return fmt.Sprintf("[Offset %d is beyond the end of the file (%d lines total).]", offset, total)
+	}
+
+	end := total
+	if limit > 0 {
+		end = start + limit
+		if end > total {
+			end = total
+		}
+	}
+
+	// Truncate over-long lines (minified files etc.) so a single line can't
+	// blow up the context window. Byte-length pre-filter avoids the []rune
+	// allocation for the common short-line case (rune count ≤ byte count).
+	truncatedLines := 0
+	out := make([]string, 0, end-start)
+	for _, line := range lines[start:end] {
+		if len(line) > maxLineChars {
+			if runes := []rune(line); len(runes) > maxLineChars {
+				line = string(runes[:maxLineChars]) + "..."
+				truncatedLines++
+			}
+		}
+		out = append(out, line)
+	}
+
+	result := strings.Join(out, "\n")
+	var hints []string
+	if end < total {
+		hints = append(hints, fmt.Sprintf("Showing lines %d-%d of %d. Use offset=%d to continue.", start+1, end, total, end+1))
+	}
+	if truncatedLines > 0 {
+		hints = append(hints, fmt.Sprintf("%d long line(s) truncated to %d chars", truncatedLines, maxLineChars))
+	}
+	if len(hints) > 0 {
+		result += "\n\n[" + strings.Join(hints, "; ") + "]"
+	}
+	return result
+}
+
+// countLines streams a file counting newlines with a fixed-size buffer, so
+// memory stays bounded regardless of line length. Returns 0 when the count
+// could not be determined.
+const maxCountedLines = 1_000_000
+
+func countLines(path string) int {
+	f, err := os.Open(path)
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	r := bufio.NewReaderSize(f, 64*1024)
+	buf := make([]byte, 64*1024)
+	n := 0
+	for n < maxCountedLines {
+		read, err := r.Read(buf)
+		if read > 0 {
+			n += bytes.Count(buf[:read], []byte{'\n'})
+		}
+		if err != nil {
+			break
+		}
+	}
+	return n
 }
 
 func readCacheKey(path string, offset, limit int) string {

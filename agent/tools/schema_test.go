@@ -80,8 +80,8 @@ func TestReadToolSchemaTypes(t *testing.T) {
 	offset, ok := p["offset"]
 	require.True(t, ok, "offset property missing")
 	assert.Equal(t, "integer", offset.Type)
-	require.NotNil(t, offset.Minimum)
-	assert.Equal(t, 1.0, *offset.Minimum)
+	// Negative offsets are valid (tail reads), so no Minimum constraint.
+	assert.Nil(t, offset.Minimum)
 
 	limit, ok := p["limit"]
 	require.True(t, ok, "limit property missing")

@@ -64,19 +64,22 @@ func TestReadToolWithOffsetAndLimit(t *testing.T) {
 	}{
 		{"default (no offset/limit)", 0, 0, content},
 		{"offset only", 3, 0, "line3\nline4\nline5\nline6\nline7\nline8\nline9\nline10"},
-		{"limit only", 0, 5, "line1\nline2\nline3\nline4\nline5"},
-		{"offset and limit", 3, 4, "line3\nline4\nline5\nline6"},
-		{"offset 1 (1-indexed)", 1, 3, "line1\nline2\nline3"},
-		{"offset beyond end", 20, 0, ""},
+		{"limit only", 0, 5, "line1\nline2\nline3\nline4\nline5\n\n[Showing lines 1-5 of 10. Use offset=6 to continue.]"},
+		{"offset and limit", 3, 4, "line3\nline4\nline5\nline6\n\n[Showing lines 3-6 of 10. Use offset=7 to continue.]"},
+		{"offset 1 (1-indexed)", 1, 3, "line1\nline2\nline3\n\n[Showing lines 1-3 of 10. Use offset=4 to continue.]"},
+		{"offset beyond end", 20, 0, "[Offset 20 is beyond the end of the file (10 lines total).]"},
 		{"limit exceeds remaining", 8, 10, "line8\nline9\nline10"},
+		{"tail offset", -3, 0, "line8\nline9\nline10"},
+		{"tail offset with limit", -5, 3, "line6\nline7\nline8\n\n[Showing lines 6-8 of 10. Use offset=9 to continue.]"},
+		{"tail offset beyond start", -100, 0, content},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			var args string
-			if tt.offset > 0 && tt.limit > 0 {
+			if tt.offset != 0 && tt.limit > 0 {
 				args = fmt.Sprintf(`{"path": "/tmp/test_read_offset.txt", "offset": %d, "limit": %d}`, tt.offset, tt.limit)
-			} else if tt.offset > 0 {
+			} else if tt.offset != 0 {
 				args = fmt.Sprintf(`{"path": "/tmp/test_read_offset.txt", "offset": %d}`, tt.offset)
 			} else if tt.limit > 0 {
 				args = fmt.Sprintf(`{"path": "/tmp/test_read_offset.txt", "limit": %d}`, tt.limit)
@@ -145,6 +148,9 @@ func TestReadToolTooLarge(t *testing.T) {
 	if !strings.Contains(err.Error(), "file too large") {
 		t.Errorf("Expected 'file too large' error, got: %v", err)
 	}
+	if !strings.Contains(err.Error(), "offset/limit") {
+		t.Errorf("Expected offset/limit guidance in error, got: %v", err)
+	}
 
 	// Offset-only (no limit) should also fail — unbounded from offset to EOF
 	_, err = tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_large.txt", "offset": 5}`)
@@ -160,7 +166,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Large file with offset+limit should succeed: %v", err)
 	}
-	expected := "line02\nline03\nline04"
+	expected := "line02\nline03\nline04\n\n[Showing lines 2-4 of 11. Use offset=5 to continue.]"
 	if result != expected {
 		t.Errorf("Expected %q, got %q", expected, result)
 	}
@@ -170,7 +176,7 @@ func TestReadToolTooLarge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Large file with limit-only should succeed: %v", err)
 	}
-	expected = "line01\nline02"
+	expected = "line01\nline02\n\n[Showing lines 1-2 of 11. Use offset=3 to continue.]"
 	if result != expected {
 		t.Errorf("Expected %q, got %q", expected, result)
 	}
@@ -435,5 +441,101 @@ func TestReadToolImageUnknownExtBinary(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "binary file") {
 		t.Errorf("Expected binary file error, got: %v", err)
+	}
+}
+
+func TestReadToolLongLineTruncation(t *testing.T) {
+	tool := NewReadTool()
+
+	// A single line longer than maxLineChars plus a normal second line.
+	long := strings.Repeat("x", maxLineChars+50)
+	content := long + "\nnormal"
+	if err := os.WriteFile("/tmp/test_longline.txt", []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_longline.txt")
+
+	result, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_longline.txt"}`)
+	if err != nil {
+		t.Fatalf("Read failed: %v", err)
+	}
+	if strings.Contains(result, strings.Repeat("x", maxLineChars+1)) {
+		t.Error("Long line was not truncated")
+	}
+	if !strings.Contains(result, "...") {
+		t.Errorf("Expected truncation marker, got: %q", result)
+	}
+	if !strings.Contains(result, "1 long line(s) truncated to 2000 chars") {
+		t.Errorf("Expected truncation hint, got: %q", result)
+	}
+	if !strings.Contains(result, "normal") {
+		t.Errorf("Expected second line preserved, got: %q", result)
+	}
+}
+
+func TestReadToolTailOffsetWithTrailingNewline(t *testing.T) {
+	tool := NewReadTool()
+
+	// File ends with "\n" — strings.Split would yield a phantom trailing
+	// empty element; line counting and tail offsets must ignore it.
+	content := "line1\nline2\nline3\n"
+	if err := os.WriteFile("/tmp/test_read_tail_nl.txt", []byte(content), 0644); err != nil {
+		t.Fatalf("Failed to create test file: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_tail_nl.txt")
+
+	tests := []struct {
+		name   string
+		offset int
+		limit  int
+		want   string
+	}{
+		{"tail last line", -1, 0, "line3"},
+		{"tail whole file", -3, 0, "line1\nline2\nline3"},
+		{"tail beyond start", -100, 0, "line1\nline2\nline3"},
+		{"limit counts real lines", 0, 2, "line1\nline2\n\n[Showing lines 1-2 of 3. Use offset=3 to continue.]"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var args string
+			if tt.offset != 0 && tt.limit > 0 {
+				args = fmt.Sprintf(`{"path": "/tmp/test_read_tail_nl.txt", "offset": %d, "limit": %d}`, tt.offset, tt.limit)
+			} else if tt.offset != 0 {
+				args = fmt.Sprintf(`{"path": "/tmp/test_read_tail_nl.txt", "offset": %d}`, tt.offset)
+			} else if tt.limit > 0 {
+				args = fmt.Sprintf(`{"path": "/tmp/test_read_tail_nl.txt", "limit": %d}`, tt.limit)
+			} else {
+				args = `{"path": "/tmp/test_read_tail_nl.txt"}`
+			}
+
+			result, err := tool.ExecuteContext(context.TODO(), args)
+			if err != nil {
+				t.Fatalf("ReadTool.Execute failed: %v", err)
+			}
+			if result != tt.want {
+				t.Errorf("Expected %q, got %q", tt.want, result)
+			}
+		})
+	}
+}
+
+func TestReadToolDirectory(t *testing.T) {
+	tool := NewReadTool()
+
+	if err := os.MkdirAll("/tmp/test_read_dir", 0755); err != nil {
+		t.Fatalf("Failed to create test dir: %v", err)
+	}
+	defer os.Remove("/tmp/test_read_dir")
+
+	_, err := tool.ExecuteContext(context.TODO(), `{"path": "/tmp/test_read_dir"}`)
+	if err == nil {
+		t.Fatal("Expected error for directory read")
+	}
+	if !strings.Contains(err.Error(), "cannot read directory") {
+		t.Errorf("Expected directory error, got: %v", err)
+	}
+	if !strings.Contains(err.Error(), "glob") {
+		t.Errorf("Expected glob guidance in error, got: %v", err)
 	}
 }

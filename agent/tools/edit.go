@@ -40,7 +40,9 @@ func (t *EditTool) SetACPMode(v bool) { t.acpMode = v }
 
 func (t *EditTool) Name() string { return ToolNameEdit }
 func (t *EditTool) Description() string {
-	return "Performs exact string replacements in files. Specify old_string to find and new_string to replace with. " +
+	return "Performs exact string replacements in files. Use for incremental edits — " +
+		"do not use bash sed or the write tool for small changes. Read the file first so old_string " +
+		"matches its current content; a failed match usually means the file changed — re-read before retrying. " +
 		"Use replace_all to replace all occurrences. To create a new file, use an empty old_string."
 }
 func (t *EditTool) IsDestructive() bool { return true }
@@ -83,6 +85,10 @@ func (t *EditTool) GetDiff(ctx context.Context, args string) (string, error) {
 	return t.getLegacyDiff(ctx, args)
 }
 
+// staleFileHint is appended to old_string-not-found errors: the most common
+// cause is the model editing from stale context, so guide it to re-read.
+const staleFileHint = "The file may have changed since your last read — use the read tool to reload it before retrying."
+
 func (t *EditTool) getLegacyDiff(ctx context.Context, args string) (string, error) {
 	var a struct {
 		FilePath   string `json:"path"`
@@ -107,7 +113,7 @@ func (t *EditTool) getLegacyDiff(ctx context.Context, args string) (string, erro
 
 	actualOld := findActualString(content, a.OldString)
 	if actualOld == "" {
-		return "", fmt.Errorf("old_string not found in %s", filePath)
+		return "", fmt.Errorf("old_string not found in %s. %s", filePath, staleFileHint)
 	}
 
 	return generateDiffSnippet(content, actualOld, a.NewString), nil
@@ -159,7 +165,7 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 			}
 			actualOld := findActualString(resp.Content, a.OldString)
 			if actualOld == "" {
-				return "", fmt.Errorf("old_string not found in %s", filePath)
+				return "", fmt.Errorf("old_string not found in %s. %s", filePath, staleFileHint)
 			}
 			if !a.ReplaceAll && strings.Count(resp.Content, actualOld) > 1 {
 				return "", fmt.Errorf("old_string matches multiple locations in %s", filePath)
@@ -225,7 +231,7 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 
 	actualOld := findActualString(content, oldString)
 	if actualOld == "" {
-		return "", fmt.Errorf("old_string not found in %s. Make sure it matches the file content exactly, including whitespace and indentation", filePath)
+		return "", fmt.Errorf("old_string not found in %s. Make sure it matches the file content exactly, including whitespace and indentation. %s", filePath, staleFileHint)
 	}
 
 	if !replaceAll {
@@ -247,27 +253,56 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 	}
 
 	snippet := generateDiffSnippet(content, actualOld, newString)
-	return fmt.Sprintf("Successfully edited %s\n%s", filePath, snippet), nil
+	msg := fmt.Sprintf("Successfully edited %s\n%s", filePath, snippet)
+	if actualOld != oldString {
+		// Tolerant match (quote normalization or trailing-whitespace fallback)
+		// hit a slightly different range than the model wrote — surface it so
+		// the model can verify the diff hit the intended location.
+		msg += fmt.Sprintf("\nNote: old_string matched as %q (tolerant match)", actualOld)
+	}
+	return msg, nil
 }
 
-// findActualString finds the matching string in fileContent, with curly quote normalization fallback.
+// findActualString finds the matching string in fileContent, with fallbacks:
+//  1. exact match (after curly-quote normalization)
+//  2. trailing-whitespace-insensitive match — the model often drops trailing
+//     spaces/newlines when copying old_string from a read
+//
+// Returns the actual substring from fileContent so replacements preserve the
+// file's real bytes.
 func findActualString(fileContent, searchString string) string {
-	if strings.Contains(fileContent, searchString) {
-		return searchString
+	if actual, ok := findNormalized(fileContent, searchString); ok {
+		return actual
 	}
 
-	normalizedSearch := normalizeQuotes(searchString)
+	// Trailing-whitespace fallback: strip trailing whitespace from the search
+	// string and retry. The replaced range excludes the whitespace, which
+	// stays untouched in the file. An all-whitespace search string would
+	// degenerate to an empty match — reject it explicitly.
+	trimmed := strings.TrimRight(searchString, " \t\r\n")
+	if trimmed != "" && trimmed != searchString {
+		if actual, ok := findNormalized(fileContent, trimmed); ok {
+			return actual
+		}
+	}
+	return ""
+}
+
+// findNormalized matches search inside the curly-quote-normalized content and
+// maps the match back to the original content's byte range.
+func findNormalized(fileContent, search string) (string, bool) {
+	normalizedSearch := normalizeQuotes(search)
 	normalizedFile := normalizeQuotes(fileContent)
 
 	normIdx := strings.Index(normalizedFile, normalizedSearch)
 	if normIdx == -1 {
-		return ""
+		return "", false
 	}
 
 	// Map byte offsets in normalizedFile back to the original fileContent.
 	// Walk both strings rune-by-rune in a single pass to find both boundaries.
 	origIdx, origEnd := mapNormalizedRange(fileContent, normalizedFile, normIdx, len(normalizedSearch))
-	return fileContent[origIdx:origEnd]
+	return fileContent[origIdx:origEnd], true
 }
 
 // mapNormalizedRange converts a byte range [normStart, normStart+normLen) in the
