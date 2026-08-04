@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -429,6 +430,139 @@ func TestEditTool_NotFoundGuidesReload(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "read tool to reload") {
 		t.Errorf("expected reload guidance, got: %v", err)
+	}
+}
+
+func TestEditTool_ParallelAlwaysTrue(t *testing.T) {
+	tool := EditTool{}
+	if !tool.Parallel() {
+		t.Error("EditTool must declare parallel support (per-path locks handle conflicts)")
+	}
+	if tool.NeedsConfirmation() {
+		t.Error("EditTool must never require interactive confirmation")
+	}
+}
+
+func TestEditTool_ConcurrentSameFileSerialized(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "same.txt")
+	if err := os.WriteFile(path, []byte("line0\nline1\n"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	tool := EditTool{}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	// Two edits to DIFFERENT parts of the same file run concurrently; the
+	// per-path lock serializes the read-modify-write cycles so both edits
+	// land — without the lock, one edit's write would clobber the other.
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"line0","new_string":"a0"}`)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+path+`","old_string":"line1","new_string":"a1"}`)
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent edit failed: %v", err)
+		}
+	}
+
+	content, _ := os.ReadFile(path)
+	if got := string(content); got != "a0\na1\n" {
+		t.Fatalf("expected both edits applied (%q), got %q", "a0\na1\n", got)
+	}
+}
+
+func TestEditTool_ConcurrentDifferentFiles(t *testing.T) {
+	dir := t.TempDir()
+	pathA := filepath.Join(dir, "a.txt")
+	pathB := filepath.Join(dir, "b.txt")
+	for _, p := range []string{pathA, pathB} {
+		if err := os.WriteFile(p, []byte("hello\n"), 0644); err != nil {
+			t.Fatalf("failed to write test file: %v", err)
+		}
+	}
+
+	tool := EditTool{}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+pathA+`","old_string":"hello","new_string":"world"}`)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+pathB+`","old_string":"hello","new_string":"tachi"}`)
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent edit failed: %v", err)
+		}
+	}
+
+	contentA, _ := os.ReadFile(pathA)
+	contentB, _ := os.ReadFile(pathB)
+	if string(contentA) != "world\n" || string(contentB) != "tachi\n" {
+		t.Fatalf("expected both edits applied, got %q and %q", string(contentA), string(contentB))
+	}
+}
+
+func TestEditTool_ConcurrentCreateAndEditViaSymlinkedDir(t *testing.T) {
+	dir := t.TempDir()
+	realDir := filepath.Join(dir, "real")
+	if err := os.MkdirAll(realDir, 0755); err != nil {
+		t.Fatalf("failed to create real dir: %v", err)
+	}
+	linkDir := filepath.Join(dir, "link")
+	if err := os.Symlink(realDir, linkDir); err != nil {
+		t.Skipf("symlinks not supported: %v", err)
+	}
+
+	tool := EditTool{}
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
+
+	// The same to-be-created file reached via two aliases (symlinked parent):
+	// both calls must serialize on ONE lock key, so create + edit both land.
+	realPath := filepath.Join(realDir, "new.txt")
+	linkPath := filepath.Join(linkDir, "new.txt")
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+realPath+`","old_string":"","new_string":"base"}`)
+		errs <- err
+	}()
+	go func() {
+		defer wg.Done()
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+linkPath+`","old_string":"base","new_string":"edited"}`)
+		errs <- err
+	}()
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatalf("concurrent alias edit failed: %v", err)
+		}
+	}
+
+	content, _ := os.ReadFile(realPath)
+	if got := string(content); got != "edited" {
+		t.Fatalf("expected final content %q, got %q", "edited", got)
 	}
 }
 

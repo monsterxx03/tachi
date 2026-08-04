@@ -68,7 +68,7 @@ type SystemReminderConfig struct {
 // 字段分类：
 //   - "构造输入"：构造时被消费，派生到运行时字段（titleGenEnabled /
 //     PermState / Frontend）。构造完成后这些字段不再被读取——改它们无效，
-//     要改运行时行为请用对应 Setter（SetAutoApproveEdits 等）。
+//     要改运行时行为请用对应 Setter（SetACPFileMode 等）。
 //   - "只读配置"：构造后不变，通过 Config 引用
 //   - "回填"：由 Configure() 初始化后回填
 type AgentConfig struct {
@@ -89,7 +89,6 @@ type AgentConfig struct {
 	PlanToolEnabled       bool  // 构造输入 → 派生 FrontendConfig
 	TitleGenEnabled       *bool // 构造输入（nil = config-based）
 	SkipMemoryRecall      bool  // 只读配置
-	AutoApproveEdits      bool  // 构造输入 → 初始化 PermState
 	AutoApprovePolicyAsks bool  // 构造输入 → 初始化 PermState
 
 	// --- 独立 Provider（构造输入；nil = fallback 到主 provider）---
@@ -154,9 +153,9 @@ type AgentConfig struct {
 // itself (auto/chat/plan) is not part of FrontendConfig — it is a
 // runtime-mutable field on AIAgent, changed via SetMode().
 type FrontendConfig struct {
-	// ACPFileMode enables ACP file I/O for the EditFile tool. When true,
-	// NeedsConfirmation returns false (Zed handles review) and ExecuteContext
-	// routes writes through conn.WriteTextFile for inline diffs.
+	// ACPFileMode routes EditFile writes through conn.WriteTextFile for
+	// Zed's inline diff UI. Edits never require interactive confirmation in
+	// any mode (see EditTool); ACPFileMode only changes the write channel.
 	ACPFileMode bool
 
 	// PlanToolEnabled gates registration of the SavePlan tool. Only ACP
@@ -195,14 +194,14 @@ type RuntimeChannels struct {
 // fields are modified during a session by user actions:
 //   - PermissionHandler: set when PermissionModeExternal is active
 //   - AutoApprovePolicyAsks: set when user chooses "allow all"
-//   - AutoApproveEdits: set from config or when user picks "always"
-//     on an edit confirmation (session-scoped)
 //
-// Initial values come from AgentConfig.AutoApprove* construct inputs.
+// Initial values come from AgentConfig construct inputs.
 type PermissionState struct {
 	// PermissionHandler is called by PermissionModeExternal to decide
 	// tool execution. It receives the tool name, tool call ID, diff
 	// preview, and raw args. Returns (approved, error).
+	// NOTE: EditFile is outside this contract — edits never require
+	// confirmation, so the handler is not invoked for them.
 	PermissionHandler PermissionHandler
 
 	// AutoApprovePolicyAsks makes PermissionModeSkip approve policy
@@ -210,12 +209,6 @@ type PermissionState struct {
 	// explicitly chose "allow all" (ACP); channel/subagent/one-off
 	// runs leave it false.
 	AutoApprovePolicyAsks bool
-
-	// AutoApproveEdits skips EditFile confirmation prompts. Set from
-	// config tui.auto_approve_edits, or at runtime when the user picks
-	// "always" on an edit confirmation (session-scoped). Affects only
-	// EditFile — unlike PermissionModeSkip, bash policy asks still prompt.
-	AutoApproveEdits bool
 }
 
 // ---------------------------------------------------------------------------

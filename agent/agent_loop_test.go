@@ -980,81 +980,10 @@ func TestAgentLoop_AskUserQuestionResponded(t *testing.T) {
 	assert.Equal(t, ExitReasonStop, result.ExitReason)
 }
 
-// ---- Tests: EditFile auto-approve (tui.auto_approve_edits / session "always") ----
-
-func TestAgentLoop_EditAutoApproveAlwaysKey(t *testing.T) {
-	mp := &mockStreamProvider{
-		name: "mock",
-		sequences: [][]llm.StreamEvent{
-			toolCallSeq("EditFile", "call-1", `{"path":"/tmp/a","old_string":"x","new_string":"y"}`),
-			toolCallSeq("EditFile", "call-2", `{"path":"/tmp/b","old_string":"x","new_string":"y"}`),
-			textSeq("both edited"),
-		},
-	}
-
-	a := newTestAgent(t, mp)
-	a.SetPermissionMode(PermissionModeTUI)
-	a.RegisterTool(confirmStub())
-
-	ch := a.RunConversationStream(t.Context(), nil, "edit files", "", llm.ChatOptions{MaxTokens: 4096})
-	var result *RunResult
-	confirms := 0
-	var toolResults []string
-	for e := range ch {
-		if e.Type == AgentEventToolConfirmation {
-			confirms++
-			a.ConfirmTool(ConfirmAllowAlways)
-		}
-		if e.Type == AgentEventToolResult && !e.ToolIsError {
-			toolResults = append(toolResults, e.ToolResult)
-		}
-		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
-			result = e.Result
-		}
-	}
-
-	require.NotNil(t, result)
-	assert.Equal(t, "both edited", result.Response)
-	assert.Equal(t, 1, confirms, "second edit should skip confirmation after 'always'")
-	assert.Len(t, toolResults, 2, "both edits should execute")
-}
-
-func TestAgentLoop_EditAutoApproveFlagSet(t *testing.T) {
-	mp := &mockStreamProvider{
-		name: "mock",
-		sequences: [][]llm.StreamEvent{
-			toolCallSeq("EditFile", "call-1", `{"path":"/tmp/a","old_string":"x","new_string":"y"}`),
-			toolCallSeq("EditFile", "call-2", `{"path":"/tmp/b","old_string":"x","new_string":"y"}`),
-			textSeq("both edited"),
-		},
-	}
-
-	a := newTestAgent(t, mp)
-	a.SetPermissionMode(PermissionModeTUI)
-	a.SetAutoApproveEdits(true) // config tui.auto_approve_edits
-	a.RegisterTool(confirmStub())
-
-	result, events := drainAgentEvents(
-		a.RunConversationStream(t.Context(), nil, "edit files", "", llm.ChatOptions{MaxTokens: 4096}))
-
-	require.NotNil(t, result)
-	assert.Equal(t, "both edited", result.Response)
-	confirms := 0
-	executed := 0
-	for _, e := range events {
-		if e.Type == AgentEventToolConfirmation {
-			confirms++
-		}
-		if e.Type == AgentEventToolResult && !e.ToolIsError {
-			executed++
-		}
-	}
-	assert.Equal(t, 0, confirms, "no confirmation prompts when auto-approve is set")
-	assert.Equal(t, 2, executed, "both edits should execute")
-}
-
-// Bash policy asks must NOT be affected by edit auto-approve.
-func TestAgentLoop_EditAutoApproveDoesNotAffectBashAsk(t *testing.T) {
+// EditFile never requires confirmation (design decision) — the confirmation
+// flow remains for other confirmation-gated tools (e.g. bash policy asks).
+// Bash policy asks must still prompt in TUI mode.
+func TestAgentLoop_BashAskConfirmsInTUI(t *testing.T) {
 	mp := &mockStreamProvider{
 		name: "mock",
 		sequences: [][]llm.StreamEvent{
@@ -1065,7 +994,6 @@ func TestAgentLoop_EditAutoApproveDoesNotAffectBashAsk(t *testing.T) {
 
 	a := newTestAgent(t, mp)
 	a.SetPermissionMode(PermissionModeTUI)
-	a.SetAutoApproveEdits(true)
 	a.RegisterTool(bashStub())
 	a.SetPermissionPolicy(permission.NewPolicy(
 		permission.Rules{Ask: []string{"git push*"}}, permission.Rules{}))
@@ -1085,7 +1013,7 @@ func TestAgentLoop_EditAutoApproveDoesNotAffectBashAsk(t *testing.T) {
 
 	require.NotNil(t, result)
 	assert.Equal(t, "done", result.Response)
-	assert.Equal(t, 1, confirms, "bash ask must still prompt despite edit auto-approve")
+	assert.Equal(t, 1, confirms, "bash ask must still prompt in TUI mode")
 }
 
 // ---- Tests: Context cancellation at various agent-loop phases ----

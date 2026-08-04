@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/coder/acp-go-sdk"
@@ -24,8 +25,15 @@ const (
 )
 
 // EditTool performs exact string replacements in files.
+//
+// Edits are never gated behind interactive confirmation (design decision:
+// the diff preview is delivered in the result, and channel/TUI flows treat
+// edits as always-approved). Parallel() is therefore always true; per-path
+// locks serialize edits to the same file while different files proceed
+// concurrently.
 type EditTool struct {
-	acpMode bool // true = route writes through ACP writeTextFile, skip Tachi confirmation
+	acpMode   bool // true = route writes through ACP writeTextFile
+	fileLocks sync.Map // resolved path -> *sync.Mutex
 }
 
 // NewEditTool creates an EditTool.
@@ -33,9 +41,9 @@ func NewEditTool() *EditTool {
 	return &EditTool{}
 }
 
-// SetACPMode enables ACP mode. In ACP mode, NeedsConfirmation returns false
-// (Zed handles review via its inline accept/reject UI) and ExecuteContext
-// routes file writes through conn.WriteTextFile.
+// SetACPMode enables ACP mode. In ACP mode ExecuteContext routes file writes
+// through conn.WriteTextFile (Zed shows inline diff); without ACP it writes
+// locally. Confirmation is never required either way.
 func (t *EditTool) SetACPMode(v bool) { t.acpMode = v }
 
 func (t *EditTool) Name() string { return ToolNameEdit }
@@ -55,8 +63,40 @@ func (t *EditTool) Properties() map[string]PropertySchema {
 	}
 }
 func (t *EditTool) Required() []string      { return []string{"path", "old_string", "new_string"} }
-func (t *EditTool) Parallel() bool          { return false }
-func (t *EditTool) NeedsConfirmation() bool { return !t.acpMode }
+func (t *EditTool) Parallel() bool          { return true }
+func (t *EditTool) NeedsConfirmation() bool { return false }
+
+// lockFile serializes edits to the same resolved path, returning an unlock
+// func. Different paths proceed concurrently — the read-modify-write cycle
+// per path is atomic.
+//
+// Symlink normalization: EvalSymlinks fails when the leaf doesn't exist yet
+// (createNewFile path), so fall back to resolving the nearest existing
+// ancestor and re-attaching the basename — two aliases of a to-be-created
+// file must share a key. Hard-link aliases of the same inode are NOT
+// serialized (known limitation, last-writer-wins).
+func (t *EditTool) lockFile(p string) func() {
+	real := p
+	if r, err := filepath.EvalSymlinks(p); err == nil {
+		real = r
+	} else if dir, base := filepath.Split(p); dir != "" {
+		if r, err := filepath.EvalSymlinks(filepath.Clean(dir)); err == nil {
+			real = filepath.Join(r, base)
+		}
+	}
+	real = filepath.Clean(real)
+	// The lock table grows with the number of distinct paths edited in a
+	// session (accepted upper bound: hundreds to low thousands of entries).
+	if mu, ok := t.fileLocks.Load(real); ok {
+		m := mu.(*sync.Mutex)
+		m.Lock()
+		return m.Unlock
+	}
+	mu, _ := t.fileLocks.LoadOrStore(real, &sync.Mutex{})
+	m := mu.(*sync.Mutex)
+	m.Lock()
+	return m.Unlock
+}
 
 // readFileChecked reads filePath enforcing the size limit; binary files are
 // rejected so Edit never mangles non-text content. It also returns the
@@ -81,6 +121,11 @@ func readFileChecked(filePath string) (string, os.FileMode, error) {
 	return string(raw), info.Mode().Perm(), nil
 }
 
+// GetDiff returns a diff preview for confirmation flows. Reserved for
+// future confirmation-gated tools: EditTool itself never requires
+// confirmation, so this is not called on the production path. Note it reads
+// the file without holding the per-path lock — re-enabling confirmation
+// must acquire lockFile first.
 func (t *EditTool) GetDiff(ctx context.Context, args string) (string, error) {
 	return t.getLegacyDiff(ctx, args)
 }
@@ -140,6 +185,11 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 	}
 
 	filePath := resolveEditPath(ctx, a.FilePath)
+
+	// Serialize edits to the same file (parallel tool calls may target it);
+	// different files run concurrently.
+	unlock := t.lockFile(filePath)
+	defer unlock()
 
 	// In ACP mode, route through ACP client for Zed inline diff + accept/reject.
 	if t.acpMode {
@@ -209,7 +259,7 @@ func createNewFile(ctx context.Context, filePath, content string) (string, error
 		return "", fmt.Errorf("file already exists: %s (use a non-empty old_string to edit it)", filePath)
 	}
 
-	if err := fileutil.WriteFileShared(filePath, []byte(content)); err != nil {
+	if err := fileutil.AtomicWriteFileShared(filePath, []byte(content)); err != nil {
 		return "", fmt.Errorf("failed to create file: %w", err)
 	}
 	return fmt.Sprintf("Created new file %s (%d bytes)", filePath, len(content)), nil
@@ -248,7 +298,9 @@ func editExistingFile(ctx context.Context, filePath, oldString, newString string
 		newContent = strings.Replace(content, actualOld, newString, 1)
 	}
 
-	if err := fileutil.WriteFile(filePath, []byte(newContent), 0o755, perm); err != nil {
+	// Atomic write: parallel ReadFile calls in the same turn must never
+	// observe a half-written file (they may see old content — fine).
+	if err := fileutil.AtomicWriteFile(filePath, []byte(newContent), 0o755, perm); err != nil {
 		return "", fmt.Errorf("failed to write file: %w", err)
 	}
 

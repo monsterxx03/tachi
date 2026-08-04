@@ -239,7 +239,6 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		ContextWindow:    resolved.Provider.ContextWindow,
 		Logger:           logger.New("tui"),
 		PermissionMode:   agent.PermissionModeTUI,
-		AutoApproveEdits: cfg.TUI.AutoApproveEdits,
 		Thinking:         resolved.Provider.Thinking,
 		ThinkingEffort:   resolved.Provider.ThinkingEffort,
 		FullConfig:       cfg,

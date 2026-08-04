@@ -212,7 +212,6 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 
 	// PermState initialization
 	a.PermState = &PermissionState{
-		AutoApproveEdits:      cfg.AutoApproveEdits,
 		AutoApprovePolicyAsks: cfg.AutoApprovePolicyAsks,
 	}
 
@@ -353,13 +352,6 @@ func (a *AIAgent) PermissionPolicy() *permission.Policy {
 // choice, e.g. ACP); false (default) = deny with an explanatory error.
 func (a *AIAgent) SetAutoApprovePolicyAsks(v bool) {
 	a.PermState.AutoApprovePolicyAsks = v
-}
-
-// SetAutoApproveEdits skips EditFile confirmation prompts (TUI-oriented).
-// Unlike PermissionModeSkip, it affects only EditFile — bash policy asks
-// and any other confirmations still prompt.
-func (a *AIAgent) SetAutoApproveEdits(v bool) {
-	a.PermState.AutoApproveEdits = v
 }
 
 // SetACPFileMode enables ACP file I/O for the EditFile tool.
