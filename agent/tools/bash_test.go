@@ -6,6 +6,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBashTool_Execute(t *testing.T) {
@@ -172,4 +173,79 @@ func spillFileNameFrom(msg string) string {
 		return msg[i:]
 	}
 	return msg[i : i+end]
+}
+
+func TestBashTool_AutoBackground(t *testing.T) {
+	pm := NewProcessManager()
+	tool := BashTool{processManager: pm, foregroundWindow: 200 * time.Millisecond}
+
+	result, err := tool.ExecuteContext(context.TODO(), `{"command": "sleep 1; echo done"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var r BashResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	if !r.Backgrounded {
+		t.Fatalf("expected backgrounded=true for slow command, got %+v", r)
+	}
+	if r.BgName == "" {
+		t.Fatal("expected bgName to be set")
+	}
+	if !strings.Contains(r.Stderr, "continuing in background") {
+		t.Errorf("expected background hint in stderr, got: %s", r.Stderr)
+	}
+
+	// The adopted process must be tracked and stoppable.
+	infos := pm.List()
+	if len(infos) != 1 || infos[0].Name != r.BgName {
+		t.Fatalf("expected adopted process %q in manager, got %+v", r.BgName, infos)
+	}
+
+	if _, err := pm.Stop(r.BgName); err != nil {
+		t.Fatalf("stop adopted process failed: %v", err)
+	}
+}
+
+func TestBashTool_AutoBackgroundDisabledWithoutManager(t *testing.T) {
+	// No ProcessManager: legacy timeout behavior (kill + interrupted).
+	tool := BashTool{foregroundWindow: 200 * time.Millisecond}
+
+	result, err := tool.ExecuteContext(context.TODO(), `{"command": "sleep 1; echo done"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var r BashResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	if r.Backgrounded {
+		t.Fatal("expected no backgrounding without a ProcessManager")
+	}
+	if !r.Interrupted || !strings.Contains(r.Stderr, "timed out") {
+		t.Errorf("expected legacy timeout result, got %+v", r)
+	}
+}
+
+func TestBashTool_FastCommandNotBackgrounded(t *testing.T) {
+	tool := BashTool{processManager: NewProcessManager(), foregroundWindow: 5 * time.Second}
+
+	result, err := tool.ExecuteContext(context.TODO(), `{"command": "echo hello"}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	var r BashResult
+	if err := json.Unmarshal([]byte(result), &r); err != nil {
+		t.Fatalf("failed to parse result: %v", err)
+	}
+
+	if r.Backgrounded {
+		t.Fatalf("fast command must not be backgrounded, got %+v", r)
+	}
+	if r.Stdout != "hello" || r.ExitCode != 0 {
+		t.Errorf("expected stdout 'hello' exit 0, got %+v", r)
+	}
 }

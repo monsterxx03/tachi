@@ -91,7 +91,7 @@ func TestReadToolSchemaTypes(t *testing.T) {
 }
 
 func TestBashToolSchemaConstraints(t *testing.T) {
-	p := BashTool{}.Properties()
+	p := (&BashTool{}).Properties()
 
 	timeout, ok := p["timeout"]
 	require.True(t, ok, "timeout property missing")
@@ -100,7 +100,7 @@ func TestBashToolSchemaConstraints(t *testing.T) {
 	require.NotNil(t, timeout.Maximum)
 	assert.Equal(t, 1.0, *timeout.Minimum)
 	assert.Equal(t, 600000.0, *timeout.Maximum)
-	assert.Equal(t, 120000, timeout.Default)
+	assert.Equal(t, 15000, timeout.Default)
 }
 
 func TestWebSearchToolSchemaConstraints(t *testing.T) {

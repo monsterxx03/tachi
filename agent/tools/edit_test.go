@@ -533,23 +533,29 @@ func TestEditTool_ConcurrentCreateAndEditViaSymlinkedDir(t *testing.T) {
 		t.Skipf("symlinks not supported: %v", err)
 	}
 
-	tool := EditTool{}
-	var wg sync.WaitGroup
-	errs := make(chan error, 2)
-
-	// The same to-be-created file reached via two aliases (symlinked parent):
-	// both calls must serialize on ONE lock key, so create + edit both land.
 	realPath := filepath.Join(realDir, "new.txt")
 	linkPath := filepath.Join(linkDir, "new.txt")
+	tool := EditTool{}
+
+	// Deterministic setup: create first (synchronously), then verify that
+	// concurrent edits through the two aliases share ONE lock key — without
+	// the ancestor-symlink normalization, the read-modify-write cycles would
+	// race and one edit would be lost.
+	if _, err := tool.ExecuteContext(context.TODO(), `{"path":"`+realPath+`","old_string":"","new_string":"line0\nline1\n"}`); err != nil {
+		t.Fatalf("create failed: %v", err)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, 2)
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
-		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+realPath+`","old_string":"","new_string":"base"}`)
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+realPath+`","old_string":"line0","new_string":"a0"}`)
 		errs <- err
 	}()
 	go func() {
 		defer wg.Done()
-		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+linkPath+`","old_string":"base","new_string":"edited"}`)
+		_, err := tool.ExecuteContext(context.TODO(), `{"path":"`+linkPath+`","old_string":"line1","new_string":"a1"}`)
 		errs <- err
 	}()
 	wg.Wait()
@@ -561,8 +567,8 @@ func TestEditTool_ConcurrentCreateAndEditViaSymlinkedDir(t *testing.T) {
 	}
 
 	content, _ := os.ReadFile(realPath)
-	if got := string(content); got != "edited" {
-		t.Fatalf("expected final content %q, got %q", "edited", got)
+	if got := string(content); got != "a0\na1\n" {
+		t.Fatalf("expected both edits applied (%q), got %q — alias locks diverged", "a0\na1\n", got)
 	}
 }
 

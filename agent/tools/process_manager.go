@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"syscall"
 	"time"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/container"
@@ -101,13 +102,35 @@ func (mp *ManagedProcess) toInfo() *ManagedProcessInfo {
 	}
 
 	if mp.stdoutBuf != nil {
-		info.RecentStdout = mp.stdoutBuf.String()
+		info.RecentStdout = truncateRecent(mp.stdoutBuf)
 	}
 	if mp.stderrBuf != nil {
-		info.RecentStderr = mp.stderrBuf.String()
+		info.RecentStderr = truncateRecent(mp.stderrBuf)
 	}
 
 	return info
+}
+
+// truncateRecent caps the recent-output snapshot (adopted foreground
+// processes may carry a 1MB ring buffer; List must stay context-safe).
+// Overwritten (wrapped) buffers are flagged so readers know the head is gone.
+func truncateRecent(buf *container.RingBuf) string {
+	s := buf.String()
+	if len(s) <= recentOutputCap && !buf.Wrapped() {
+		return s
+	}
+	head := ""
+	if buf.Wrapped() {
+		head = "[HEAD DROPPED]\n"
+	}
+	cut := recentOutputCap - len(head)
+	if cut < 0 {
+		cut = 0
+	}
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return head + s[:cut] + "\n... (truncated)"
 }
 
 // ProcessManager manages background processes started by the Bash tool.
@@ -158,32 +181,77 @@ func (pm *ProcessManager) Start(ctx context.Context, name, command string) (*Man
 		stdoutBuf: stdoutBuf,
 		stderrBuf: stderrBuf,
 	}
-	mp.status.Store(_psRunning)
-
-	// Background goroutine: waits for process exit.
-	go func() {
-		err := cmd.Wait()
-
-		var ec int32
-		if err != nil {
-			if exitErr, ok := err.(*exec.ExitError); ok {
-				ec = int32(exitErr.ExitCode())
-			} else {
-				ec = -1
-				mp.ExitErr = err // set before status store for toInfo visibility
-			}
-		}
-		mp.exitCode.Store(ec)
-
-		// CAS ensures stopProcess and this goroutine don't race.
-		if !mp.status.CompareAndSwap(_psRunning, _psExited) {
-			return // stopProcess already set status to _psKilled
-		}
-	}()
-
-	pm.processes.Store(name, mp)
+	if !pm.register(mp, true) {
+		// Concurrent Start with the same name won the race — kill this one.
+		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
+		return nil, fmt.Errorf("background process '%s' already exists; stop it first or use a different name", name)
+	}
 
 	return mp.toInfo(), nil
+}
+
+// Adopt takes over an already-started foreground command and registers it as
+// a background process. Used when a foreground command outlives its window
+// (auto-background). The command must have been started with Setsid (process
+// group leader) so Stop can kill the whole tree.
+//
+// The caller's own goroutine keeps waiting on cmd.Wait() (exec.Cmd forbids
+// concurrent Wait calls), so no wait goroutine is started here; the caller
+// must call mp.recordExit(err) once Wait returns.
+func (pm *ProcessManager) Adopt(name, command string, cmd *exec.Cmd, startedAt time.Time, stdoutBuf, stderrBuf *container.RingBuf) (*ManagedProcess, error) {
+	mp := &ManagedProcess{
+		Name:      name,
+		Command:   command,
+		Cmd:       cmd,
+		PID:       cmd.Process.Pid,
+		StartedAt: startedAt,
+		stdoutBuf: stdoutBuf,
+		stderrBuf: stderrBuf,
+	}
+	if !pm.register(mp, false) {
+		return nil, fmt.Errorf("background process '%s' already exists; stop it first or use a different name", name)
+	}
+	return mp, nil
+}
+
+// register stores a running ManagedProcess under its name atomically and,
+// when waitSelf is true, starts the goroutine that records its exit state
+// (Start path). Adopted processes pass false — their waiter goroutine
+// already exists. Returns false when a process with the same name is already
+// registered (the caller must clean up the command).
+func (pm *ProcessManager) register(mp *ManagedProcess, waitSelf bool) bool {
+	mp.status.Store(_psRunning)
+	if _, loaded := pm.processes.LoadOrStore(mp.Name, mp); loaded {
+		return false
+	}
+	if waitSelf {
+		go func() {
+			err := mp.Cmd.Wait()
+			mp.recordExit(err)
+		}()
+	}
+	return true
+}
+
+// recordExit stores the exit state of a managed process. Safe to call more
+// than once (rendezvous paths may race); the CAS guard lets exactly one call
+// win.
+func (mp *ManagedProcess) recordExit(err error) {
+	to := int32(_psExited)
+	var ec int32
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			ec = int32(exitErr.ExitCode())
+		} else {
+			ec = -1
+			mp.ExitErr = err // surfaced via toInfo when status is _psError
+			to = int32(_psError)
+		}
+	}
+	if !mp.status.CompareAndSwap(_psRunning, to) {
+		return // already recorded or killed by stopProcess
+	}
+	mp.exitCode.Store(ec)
 }
 
 // Stop terminates a background process by name. Sends SIGTERM to the process
