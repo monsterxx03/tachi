@@ -20,3 +20,16 @@ type ReminderCollector interface {
 	// AddReminder appends a reminder to the collector.
 	AddReminder(r systemreminder.Reminder)
 }
+
+// disabledReminderCollector is a no-op ReminderCollector used by
+// non-interactive modes (e.g. `tachi -p`) that want zero system reminders.
+// Collect always returns an empty string, and AddReminder is a no-op so
+// later registrations (LSP diagnostics, deferred MCP tools, background
+// tasks) stay inert without panicking on a nil collector.
+type disabledReminderCollector struct{}
+
+func (disabledReminderCollector) Collect(context.Context, systemreminder.Context) string {
+	return ""
+}
+
+func (disabledReminderCollector) AddReminder(systemreminder.Reminder) {}

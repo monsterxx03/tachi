@@ -72,12 +72,21 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 	}
 
 	// --- Reminder collector (after memory + skills, before MCP) ---
-	a.buildReminderCollectorFrom(SystemReminderConfig{
-		GitReminder:         sysCfg.SystemReminder.GitReminder,
-		MemoryRecallLimit:   sysCfg.Memory.RecallLimit,
-		MemoryRecallTimeout: sysCfg.Memory.Timeout,
-		Pprof:               &sysCfg.Debug.PPROF,
-	})
+	if a.Config.DisableSystemReminders {
+		// Non-interactive modes (e.g. `tachi -p`) want zero system reminders:
+		// no date/git/project context, no skills catalog, no memory recall.
+		// The no-op collector keeps later AddReminder calls (LSP diagnostics,
+		// deferred MCP tools) inert and safe.
+		a.Config.Logger.Info(ctx, "System reminders: disabled (non-interactive mode)")
+		a.Config.ReminderCollector = disabledReminderCollector{}
+	} else {
+		a.buildReminderCollectorFrom(SystemReminderConfig{
+			GitReminder:         sysCfg.SystemReminder.GitReminder,
+			MemoryRecallLimit:   sysCfg.Memory.RecallLimit,
+			MemoryRecallTimeout: sysCfg.Memory.Timeout,
+			Pprof:               &sysCfg.Debug.PPROF,
+		})
+	}
 
 	// --- built-in tools + web search ---
 	a.RegisterTools()

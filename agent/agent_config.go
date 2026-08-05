@@ -85,11 +85,12 @@ type AgentConfig struct {
 	Logger *logger.Logger
 
 	// --- 功能开关（构造输入）---
-	ACPFileMode           bool  // 构造输入 → 派生 FrontendConfig
-	PlanToolEnabled       bool  // 构造输入 → 派生 FrontendConfig
-	TitleGenEnabled       *bool // 构造输入（nil = config-based）
-	SkipMemoryRecall      bool  // 只读配置
-	AutoApprovePolicyAsks bool  // 构造输入 → 初始化 PermState
+	ACPFileMode            bool  // 构造输入 → 派生 FrontendConfig
+	PlanToolEnabled        bool  // 构造输入 → 派生 FrontendConfig
+	TitleGenEnabled        *bool // 构造输入（nil = config-based）
+	SkipMemoryRecall       bool  // 只读配置
+	DisableSystemReminders bool  // 只读配置：禁用全部 system reminder（非交互模式如 `tachi -p`）
+	AutoApprovePolicyAsks  bool  // 构造输入 → 初始化 PermState
 
 	// --- 独立 Provider（构造输入；nil = fallback 到主 provider）---
 	TitleProvider    llm.Provider

@@ -25,11 +25,6 @@ const (
 	// it is automatically moved to the background (see BashTool).
 	defaultForegroundWindow = 15 * time.Second
 
-	// legacyBashTimeout applies when no ProcessManager is available: the
-	// command cannot be backgrounded, so the pre-auto-background hard-kill
-	// window is kept.
-	legacyBashTimeout = 120 * time.Second
-
 	// drainTimeout bounds waiting for a killed process to exit. SIGKILL
 	// cannot terminate D-state (uninterruptible sleep) processes, so an
 	// unbounded wait could hang the tool call forever.

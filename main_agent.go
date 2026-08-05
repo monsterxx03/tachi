@@ -150,16 +150,17 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:         provider,
-		ContextWindow:    resolved.Provider.ContextWindow,
-		MaxIterations:    maxIters,
-		Logger:           logger.New("run"),
-		PermissionMode:   agent.PermissionModeSkip,
-		SkipMemoryRecall: true,
-		Thinking:         resolved.Provider.Thinking,
-		ThinkingEffort:   resolved.Provider.ThinkingEffort,
-		FullConfig:       cfg,
-		SystemConfig:     agent.SystemConfigFromConfig(cfg),
+		Provider:               provider,
+		ContextWindow:          resolved.Provider.ContextWindow,
+		MaxIterations:          maxIters,
+		Logger:                 logger.New("run"),
+		PermissionMode:         agent.PermissionModeSkip,
+		SkipMemoryRecall:       true,
+		DisableSystemReminders: true, // non-interactive: no date/git/project/skills reminders
+		Thinking:               resolved.Provider.Thinking,
+		ThinkingEffort:         resolved.Provider.ThinkingEffort,
+		FullConfig:             cfg,
+		SystemConfig:           agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
