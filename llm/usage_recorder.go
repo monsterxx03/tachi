@@ -89,11 +89,13 @@ type UsageRow struct {
 }
 
 // Cost computes this row's cost in CNY from its own price snapshot.
+// Rows carry already-normalized input (cache-miss scale) and already-resolved
+// unit prices, so this is pure arithmetic via the shared costFromParts.
 func (r *UsageRow) Cost() float64 {
-	return float64(r.InputTokens)/1_000_000*r.InputPrice +
-		float64(r.CacheReadInputTokens)/1_000_000*r.CacheReadPrice +
-		float64(r.CacheCreationInputTokens)/1_000_000*r.CacheCreationPrice +
-		float64(r.OutputTokens)/1_000_000*r.OutputPrice
+	return costFromParts(
+		r.InputTokens, r.CacheReadInputTokens, r.CacheCreationInputTokens, r.OutputTokens,
+		r.InputPrice, r.OutputPrice, r.CacheReadPrice, r.CacheCreationPrice,
+	)
 }
 
 // Unpriced reports whether the row had no effective price at call time.
@@ -331,23 +333,14 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 			pr = resolved
 		}
 	}
-	cacheReadPrice := pr.CacheReadInputPrice
-	if cacheReadPrice <= 0 {
-		cacheReadPrice = pr.InputPrice
-	}
-	cacheCreationPrice := pr.CacheCreationInputPrice
-	if cacheCreationPrice <= 0 {
-		cacheCreationPrice = pr.InputPrice
-	}
+	cacheReadPrice, cacheCreationPrice := CacheReadCreationPrice(pr)
 
-	// Normalize input to cache-miss scale. OpenAI-family APIs (openai /
-	// openai-res) report input_tokens INCLUDING cache-read tokens; Anthropic
-	// does not. Billing a hit token at both input and cache-read prices would
+	// Normalize input to cache-miss scale (shared rule, see
+	// NormalizeCacheMissInput): OpenAI-family APIs (openai / openai-res)
+	// report input_tokens INCLUDING cache-read tokens; Anthropic does not.
+	// Billing a hit token at both input and cache-read prices would
 	// double-count it.
-	input := u.InputTokens
-	if p.inner.Name() != ProviderTypeAnthropic {
-		input = max(input-u.CacheReadInputTokens, 0)
-	}
+	input := NormalizeCacheMissInput(u.InputTokens, u.CacheReadInputTokens, p.inner.Name())
 
 	provider := p.providerName
 	if provider == "" {

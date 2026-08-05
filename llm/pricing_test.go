@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"math"
 	"testing"
 )
 
@@ -64,6 +65,155 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 			}
 			if got.CacheReadInputPrice != tt.want.CacheReadInputPrice {
 				t.Errorf("CacheReadInputPrice = %v, want %v", got.CacheReadInputPrice, tt.want.CacheReadInputPrice)
+			}
+		})
+	}
+}
+
+func TestNormalizeCacheMissInput(t *testing.T) {
+	tests := []struct {
+		name         string
+		input        int64
+		cacheRead    int64
+		providerType string
+		want         int64
+	}{
+		{name: "openai subtracts cache read", input: 1_000, cacheRead: 300, providerType: ProviderTypeOpenAI, want: 700},
+		{name: "anthropic keeps full input", input: 1_000, cacheRead: 300, providerType: ProviderTypeAnthropic, want: 1_000},
+		{name: "cache read exceeds input clamps to 0", input: 100, cacheRead: 200, providerType: ProviderTypeOpenAI, want: 0},
+		{name: "empty provider treated as openai family", input: 1_000, cacheRead: 300, providerType: "", want: 700},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := NormalizeCacheMissInput(tt.input, tt.cacheRead, tt.providerType); got != tt.want {
+				t.Errorf("NormalizeCacheMissInput() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCacheReadCreationPrice(t *testing.T) {
+	// Unset cache prices fall back to the regular input price.
+	read, creation := CacheReadCreationPrice(&ModelPrice{InputPrice: 1.0, OutputPrice: 2.0})
+	if read != 1.0 || creation != 1.0 {
+		t.Errorf("fallback = (%v, %v), want (1.0, 1.0)", read, creation)
+	}
+
+	// Explicit cache prices are honored.
+	read, creation = CacheReadCreationPrice(&ModelPrice{
+		InputPrice:              1.0,
+		CacheReadInputPrice:     0.02,
+		CacheCreationInputPrice: 1.5,
+	})
+	if read != 0.02 || creation != 1.5 {
+		t.Errorf("explicit = (%v, %v), want (0.02, 1.5)", read, creation)
+	}
+}
+
+func TestCostForUsage(t *testing.T) {
+	tests := []struct {
+		name         string
+		usage        *Usage
+		price        *ModelPrice
+		providerType string
+		want         float64
+	}{
+		{
+			name:         "nil usage",
+			usage:        nil,
+			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0},
+			providerType: ProviderTypeOpenAI,
+			want:         0,
+		},
+		{
+			name:         "nil price",
+			usage:        &Usage{InputTokens: 1000, OutputTokens: 500},
+			price:        nil,
+			providerType: ProviderTypeOpenAI,
+			want:         0,
+		},
+		{
+			name:         "zero price",
+			usage:        &Usage{InputTokens: 1000, OutputTokens: 500},
+			price:        &ModelPrice{InputPrice: 0, OutputPrice: 0},
+			providerType: ProviderTypeOpenAI,
+			want:         0,
+		},
+		{
+			name:         "basic calculation",
+			usage:        &Usage{InputTokens: 1_000_000, OutputTokens: 500_000},
+			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0},
+			providerType: ProviderTypeOpenAI,
+			want:         1.0 + 1.0, // 1M input * ¥1 + 500K output * ¥2/1M
+		},
+		{
+			name: "openai subtracts cache read",
+			usage: &Usage{
+				InputTokens:          1_000_000,
+				OutputTokens:         500_000,
+				CacheReadInputTokens: 300_000,
+			},
+			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+			providerType: ProviderTypeOpenAI,
+			// Cache miss: 700K * 1 / 1M = 0.7
+			// Cache read: 300K * 0.02 / 1M = 0.006
+			// Output: 500K * 2 / 1M = 1.0
+			// Total: 1.706
+			want: 0.7 + 0.006 + 1.0,
+		},
+		{
+			name: "anthropic does not subtract cache read",
+			usage: &Usage{
+				InputTokens:          1_000_000,
+				OutputTokens:         500_000,
+				CacheReadInputTokens: 300_000,
+			},
+			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+			providerType: ProviderTypeAnthropic,
+			// Input kept at 1M (no subtraction): 1.0
+			// Cache read: 300K * 0.02 / 1M = 0.006
+			// Output: 500K * 2 / 1M = 1.0
+			// Total: 2.006
+			want: 1.0 + 0.006 + 1.0,
+		},
+		{
+			name: "cache read falls back to input price",
+			usage: &Usage{
+				InputTokens:          1_000_000,
+				CacheReadInputTokens: 400_000,
+			},
+			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}, // no CacheReadInputPrice
+			providerType: ProviderTypeOpenAI,
+			// Cache miss: 600K * 1 / 1M = 0.6
+			// Cache read: 400K * 1 / 1M = 0.4 (fallback to input price)
+			// Total: 1.0
+			want: 1.0,
+		},
+		{
+			name: "cache creation",
+			usage: &Usage{
+				InputTokens:              1_000_000,
+				OutputTokens:             500_000,
+				CacheCreationInputTokens: 200_000,
+			},
+			price: &ModelPrice{
+				InputPrice:              1.0,
+				OutputPrice:             2.0,
+				CacheCreationInputPrice: 1.5,
+			},
+			providerType: ProviderTypeOpenAI,
+			// Input (cache miss): 1M * 1 = 1.0
+			// Cache creation: 200K * 1.5/1M = 0.3
+			// Output: 500K * 2/1M = 1.0
+			want: 1.0 + 0.3 + 1.0,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CostForUsage(tt.usage, tt.price, tt.providerType)
+			if math.Abs(got-tt.want) > 0.0001 {
+				t.Errorf("CostForUsage() = %v, want %v", got, tt.want)
 			}
 		})
 	}

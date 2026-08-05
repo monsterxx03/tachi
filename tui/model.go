@@ -411,12 +411,11 @@ func (m *Model) accumulateUsage(u *llm.Usage) {
 	m.statusbar.SetCost(m.sessionCost)
 }
 
-// costForUsage computes the CNY cost of a single API call, mirroring the
-// usage ledger's billing exactly (RecordingProvider.record + UsageRow.Cost,
-// docs/2026-08-05-usage-billing.md): the input scale and the per-call price
-// snapshot follow the same rules, so the statusbar stays consistent with
-// /usage. Notably, Anthropic's input_tokens are NOT cache-read-normalized
-// (they exclude cache reads to begin with).
+// costForUsage computes the CNY cost of a single API call, delegating the
+// billing arithmetic to llm.CostForUsage — the SAME rules as the usage
+// ledger (RecordingProvider.record + UsageRow.Cost): cache-miss input
+// normalization per provider family and per-call price snapshots. This keeps
+// the statusbar cost consistent with /usage.
 // Returns 0 when no price is available (unknown model / no overrides, or a
 // bare agent without a configured provider — e.g. unit tests).
 func (m *Model) costForUsage(u *llm.Usage) float64 {
@@ -431,28 +430,7 @@ func (m *Model) costForUsage(u *llm.Usage) float64 {
 	if price == nil || (price.InputPrice == 0 && price.OutputPrice == 0) {
 		return 0
 	}
-
-	// Cache-miss input: OpenAI-family APIs report input_tokens INCLUDING
-	// cache reads; Anthropic does not. Same normalization as the ledger.
-	input := u.InputTokens
-	if p.Name() != llm.ProviderTypeAnthropic {
-		input = max(input-u.CacheReadInputTokens, 0)
-	}
-
-	// Cache read/creation prices fall back to the regular input price.
-	cacheReadPrice := price.CacheReadInputPrice
-	if cacheReadPrice <= 0 {
-		cacheReadPrice = price.InputPrice
-	}
-	cacheCreationPrice := price.CacheCreationInputPrice
-	if cacheCreationPrice <= 0 {
-		cacheCreationPrice = price.InputPrice
-	}
-
-	return float64(input)/1_000_000*price.InputPrice +
-		float64(u.CacheReadInputTokens)/1_000_000*cacheReadPrice +
-		float64(u.CacheCreationInputTokens)/1_000_000*cacheCreationPrice +
-		float64(u.OutputTokens)/1_000_000*price.OutputPrice
+	return llm.CostForUsage(u, price, p.Name())
 }
 
 // currentProviderName returns the config provider name for cost resolution:
