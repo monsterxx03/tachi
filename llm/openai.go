@@ -332,10 +332,18 @@ func (p *OpenAIProvider) CreateChatStream(ctx context.Context, messages []Messag
 func emitOpenAIStreamChunk(resp openai.ChatCompletionStreamResponse, lastFinishReason *string, lastUsage **Usage, ch chan<- StreamEvent) {
 	// Capture usage from the last chunk (when stream_options.include_usage is set)
 	if resp.Usage != nil {
-		*lastUsage = &Usage{
+		usage := &Usage{
 			InputTokens:  int64(resp.Usage.PromptTokens),
 			OutputTokens: int64(resp.Usage.CompletionTokens),
 		}
+		// Cache-hit tokens: DeepSeek (and some other OpenAI-compatible
+		// providers) report them via prompt_tokens_details.cached_tokens.
+		// Without this, hit tokens would be billed at the full input price
+		// instead of the cache-read price.
+		if details := resp.Usage.PromptTokensDetails; details != nil {
+			usage.CacheReadInputTokens = int64(details.CachedTokens)
+		}
+		*lastUsage = usage
 	}
 
 	if len(resp.Choices) == 0 {

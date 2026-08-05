@@ -443,3 +443,51 @@ func TestDeepSeekThinking_Stream(t *testing.T) {
 		t.Errorf("text deltas = %v, want [hello  world]", texts)
 	}
 }
+
+// TestOpenAIStreamUsage_CachedTokens verifies that cache-hit tokens reported
+// by OpenAI-compatible providers (e.g. DeepSeek's prompt_tokens_details.
+// cached_tokens) are captured into CacheReadInputTokens, so CalculateCost
+// bills them at the cache-read price instead of the full input price.
+func TestOpenAIStreamUsage_CachedTokens(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.Header().Set("Cache-Control", "no-cache")
+		// DeepSeek-style final usage chunk (stream_options.include_usage):
+		// 768 of 841 prompt tokens were cache hits.
+		_, _ = w.Write([]byte(
+			"data: {\"choices\":[{\"delta\":{\"content\":\"hello\"}}]}\n\n" +
+				"data: {\"choices\":[],\"usage\":{\"prompt_tokens\":841,\"completion_tokens\":16," +
+				"\"total_tokens\":857,\"prompt_tokens_details\":{\"cached_tokens\":768}," +
+				"\"prompt_cache_hit_tokens\":768,\"prompt_cache_miss_tokens\":73}}\n\n" +
+				"data: [DONE]\n\n",
+		))
+	}))
+	defer server.Close()
+
+	p := NewOpenAIProvider("key", server.URL, "deepseek-v4-flash")
+	ch, err := p.CreateChatStream(t.Context(), []Message{{Role: "user", Content: "hi"}}, nil, ChatOptions{MaxTokens: 100})
+	requireNoError(t, err)
+
+	var doneEv StreamEvent
+	for ev := range ch {
+		if ev.Type == StreamEventDone {
+			doneEv = ev
+			break
+		}
+		if ev.Type == StreamEventError {
+			t.Fatalf("stream error: %v", ev.Error)
+		}
+	}
+	if doneEv.Usage == nil {
+		t.Fatal("expected usage on StreamEventDone")
+	}
+	if doneEv.Usage.InputTokens != 841 {
+		t.Errorf("InputTokens = %d, want 841", doneEv.Usage.InputTokens)
+	}
+	if doneEv.Usage.OutputTokens != 16 {
+		t.Errorf("OutputTokens = %d, want 16", doneEv.Usage.OutputTokens)
+	}
+	if doneEv.Usage.CacheReadInputTokens != 768 {
+		t.Errorf("CacheReadInputTokens = %d, want 768 (cached_tokens must be parsed)", doneEv.Usage.CacheReadInputTokens)
+	}
+}
