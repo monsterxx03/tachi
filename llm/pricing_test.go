@@ -6,33 +6,35 @@ import (
 )
 
 func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
+	flash := &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02}
+	pro := &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.025}
 	tests := []struct {
 		model string
 		want  *ModelPrice
 	}{
 		{
 			model: "deepseek-v4-flash",
-			want:  &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+			want:  flash,
 		},
 		{
 			model: "deepseek-chat",
-			want:  &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+			want:  flash,
 		},
 		{
 			model: "deepseek-v4-pro",
-			want:  &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.1},
+			want:  pro,
 		},
 		{
 			model: "deepseek-reasoner",
-			want:  &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.1},
+			want:  pro,
 		},
 		{
 			model: "DeepSeek-V4-Flash",
-			want:  &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+			want:  flash,
 		},
 		{
 			model: "unknown-deepseek-model",
-			want:  &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+			want:  flash,
 		},
 		{
 			model: "gpt-4",
@@ -70,6 +72,52 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 	}
 }
 
+func TestGetBuiltinModelPrice_NewModels(t *testing.T) {
+	tests := []struct {
+		model string
+		want  *ModelPrice
+	}{
+		{
+			model: "glm-5.2",
+			want:  &ModelPrice{InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0},
+		},
+		{
+			model: "z-ai/glm-5.2",
+			want:  &ModelPrice{InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0},
+		},
+		{
+			model: "kimi-k3",
+			want:  &ModelPrice{InputPrice: 20.0, OutputPrice: 100.0, CacheReadInputPrice: 2.0},
+		},
+		{
+			model: "mimo-v2.5",
+			want:  &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
+		},
+		{
+			model: "mimo-v2.5-pro",
+			want:  &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.025},
+		},
+		{
+			model: "MIMO-V2.5-PRO", // case-insensitive
+			want:  &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.025},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := GetBuiltinModelPrice(tt.model)
+			if got == nil {
+				t.Fatalf("GetBuiltinModelPrice(%q) = nil, want %+v", tt.model, tt.want)
+			}
+			if got.InputPrice != tt.want.InputPrice || got.OutputPrice != tt.want.OutputPrice ||
+				got.CacheReadInputPrice != tt.want.CacheReadInputPrice ||
+				got.CacheCreationInputPrice != tt.want.CacheCreationInputPrice {
+				t.Errorf("GetBuiltinModelPrice(%q) = %+v, want %+v", tt.model, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestNormalizeCacheMissInput(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -93,13 +141,13 @@ func TestNormalizeCacheMissInput(t *testing.T) {
 }
 
 func TestCacheReadCreationPrice(t *testing.T) {
-	// Unset cache prices fall back to the regular input price.
+	// 0 means "not charged" (free) — no fallback to the input price.
 	read, creation := CacheReadCreationPrice(&ModelPrice{InputPrice: 1.0, OutputPrice: 2.0})
-	if read != 1.0 || creation != 1.0 {
-		t.Errorf("fallback = (%v, %v), want (1.0, 1.0)", read, creation)
+	if read != 0 || creation != 0 {
+		t.Errorf("unset = (%v, %v), want (0, 0) = free", read, creation)
 	}
 
-	// Explicit cache prices are honored.
+	// Explicit positive prices are returned as-is.
 	read, creation = CacheReadCreationPrice(&ModelPrice{
 		InputPrice:              1.0,
 		CacheReadInputPrice:     0.02,
@@ -177,17 +225,15 @@ func TestCostForUsage(t *testing.T) {
 			want: 1.0 + 0.006 + 1.0,
 		},
 		{
-			name: "cache read falls back to input price",
+			name: "unset cache read price = free",
 			usage: &Usage{
 				InputTokens:          1_000_000,
 				CacheReadInputTokens: 400_000,
 			},
-			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}, // no CacheReadInputPrice
+			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}, // CacheReadInputPrice = 0
 			providerType: ProviderTypeOpenAI,
-			// Cache miss: 600K * 1 / 1M = 0.6
-			// Cache read: 400K * 1 / 1M = 0.4 (fallback to input price)
-			// Total: 1.0
-			want: 1.0,
+			// Cache miss: 600K * 1 / 1M = 0.6; cache read free → 0.
+			want: 0.6,
 		},
 		{
 			name: "cache creation",
@@ -206,6 +252,21 @@ func TestCostForUsage(t *testing.T) {
 			// Cache creation: 200K * 1.5/1M = 0.3
 			// Output: 500K * 2/1M = 1.0
 			want: 1.0 + 0.3 + 1.0,
+		},
+		{
+			name: "zero cache creation price = free",
+			usage: &Usage{
+				InputTokens:              1_000_000,
+				CacheCreationInputTokens: 200_000,
+			},
+			price: &ModelPrice{
+				InputPrice:  8.0,
+				OutputPrice: 28.0,
+				// CacheCreationInputPrice 未设 = 0 = 不计费
+			},
+			providerType: ProviderTypeOpenAI,
+			// Input: 1M * 8 = 8.0; cache creation free → 0; no output.
+			want: 8.0,
 		},
 	}
 

@@ -326,7 +326,7 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 		sid = normalizeSubagentSessionID(sid)
 	}
 
-	// Price snapshot at call time; fallbacks applied before writing.
+	// Price snapshot at call time (0 for a category = not charged).
 	pr := &ModelPrice{}
 	if p.price != nil {
 		if resolved := p.price(p.inner.Model()); resolved != nil {

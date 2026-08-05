@@ -3,12 +3,19 @@ package llm
 import "strings"
 
 // ModelPrice represents the pricing per 1M tokens in CNY.
-// Zero values mean "not configured" — no cost will be calculated for that category.
+//
+// A price of 0 for a category means "not charged" (free). Only explicit
+// positive values are billed. A fully unpriced model (Input & Output both
+// 0) incurs no cost at all.
+//
+// 缓存价格原则：厂商的计费项没列（= 0）就是不计费——收费的厂商会明码标价
+// （如 Anthropic 的缓存写入、MiniMax 的 ¥2.625/M）。不要用 fallback 猜测
+// 未列价格。
 type ModelPrice struct {
 	InputPrice              float64 // CNY per 1M input tokens (cache miss)
 	OutputPrice             float64 // CNY per 1M output tokens
-	CacheReadInputPrice     float64 // CNY per 1M cache read input tokens (0 = use InputPrice)
-	CacheCreationInputPrice float64 // CNY per 1M cache creation input tokens (0 = use InputPrice)
+	CacheReadInputPrice     float64 // CNY per 1M cache read input tokens (0 = free)
+	CacheCreationInputPrice float64 // CNY per 1M cache creation input tokens (0 = free)
 }
 
 // GetBuiltinModelPrice returns the built-in price for a given model, or nil if unknown.
@@ -19,6 +26,38 @@ func GetBuiltinModelPrice(model string) *ModelPrice {
 	switch {
 	case strings.Contains(model, "deepseek"):
 		return getDeepSeekPrice(model)
+	case strings.Contains(model, "glm-5.2"):
+		// 智谱 GLM-5.2（国内版）。Source: https://bigmodel.cn/pricing
+		// 缓存存储（写入）限时免费 → CacheCreationInputPrice = 0。
+		return &ModelPrice{
+			InputPrice:          8.0,
+			OutputPrice:         28.0,
+			CacheReadInputPrice: 2.0,
+		}
+	case strings.Contains(model, "kimi-k3"):
+		// 月之暗面 Kimi K3（国内版）。Source: https://platform.kimi.com
+		// 官方价格表只有三价（输入/输出/缓存命中），未列缓存写入费 = 免费。
+		return &ModelPrice{
+			InputPrice:          20.0,
+			OutputPrice:         100.0,
+			CacheReadInputPrice: 2.0,
+		}
+	case strings.Contains(model, "mimo-v2.5-pro"):
+		// 小米 MiMo-V2.5 Pro（国内版）。Source: https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go
+		// 缓存写入限时免费 → CacheCreationInputPrice = 0。
+		return &ModelPrice{
+			InputPrice:          3.0,
+			OutputPrice:         6.0,
+			CacheReadInputPrice: 0.025,
+		}
+	case strings.Contains(model, "mimo-v2.5"):
+		// 小米 MiMo-V2.5（国内版）。Source: https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go
+		// 缓存写入限时免费 → CacheCreationInputPrice = 0。
+		return &ModelPrice{
+			InputPrice:          1.0,
+			OutputPrice:         2.0,
+			CacheReadInputPrice: 0.02,
+		}
 	}
 
 	return nil
@@ -26,6 +65,10 @@ func GetBuiltinModelPrice(model string) *ModelPrice {
 
 // getDeepSeekPrice returns pricing for DeepSeek models.
 // Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+//
+// DeepSeek 的上下文硬盘缓存（kv_cache）没有"缓存写入费"这一计费项：每个
+// 请求自动触发缓存构建（落盘），官方文档只区分命中/未命中两类输入计费。
+// 未列写入费 = 免费 → CacheCreationInputPrice = 0。
 func getDeepSeekPrice(model string) *ModelPrice {
 	switch {
 	case strings.Contains(model, "deepseek-v4-flash"),
@@ -37,11 +80,10 @@ func getDeepSeekPrice(model string) *ModelPrice {
 		}
 	case strings.Contains(model, "deepseek-v4-pro"),
 		strings.Contains(model, "deepseek-reasoner"):
-		// 2.5折优惠价 (有效期至 2026/05/31 23:59)
 		return &ModelPrice{
 			InputPrice:          3.0,
 			OutputPrice:         6.0,
-			CacheReadInputPrice: 0.1,
+			CacheReadInputPrice: 0.025,
 		}
 	default:
 		// Unknown DeepSeek variant — use flash pricing as conservative default
@@ -91,19 +133,11 @@ func NormalizeCacheMissInput(input, cacheRead int64, providerType string) int64 
 	return max(input-cacheRead, 0)
 }
 
-// CacheReadCreationPrice resolves the effective cache read/creation unit
-// prices for a model, falling back to the regular input price when unset
-// (0 means "not configured").
+// CacheReadCreationPrice returns the cache read/creation unit prices as
+// configured. 0 means "not charged" (free) — only explicit positive values
+// are billed (厂商没列的价格就是不计费，不做 fallback 猜测).
 func CacheReadCreationPrice(price *ModelPrice) (cacheRead, cacheCreation float64) {
-	cacheRead = price.CacheReadInputPrice
-	if cacheRead <= 0 {
-		cacheRead = price.InputPrice
-	}
-	cacheCreation = price.CacheCreationInputPrice
-	if cacheCreation <= 0 {
-		cacheCreation = price.InputPrice
-	}
-	return cacheRead, cacheCreation
+	return price.CacheReadInputPrice, price.CacheCreationInputPrice
 }
 
 // costFromParts is the shared per-1M-token cost arithmetic over already
@@ -119,8 +153,9 @@ func costFromParts(input, cacheRead, cacheCreation, output int64, inputPrice, ou
 
 // CostForUsage computes the CNY cost of an API call's usage, applying the
 // usage ledger's exact billing rules (RecordingProvider.record +
-// UsageRow.Cost): cache-miss input normalization per provider family and
-// cache price fallbacks. Returns 0 for nil inputs or a fully unpriced model.
+// UsageRow.Cost): cache-miss input normalization per provider family, and
+// cache prices as configured (0 = not charged). Returns 0 for nil inputs or
+// a fully unpriced model.
 //
 // providerType is llm.ProviderTypeAnthropic vs anything else (OpenAI-family)
 // and selects the input normalization scale.
