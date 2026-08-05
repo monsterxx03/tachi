@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -375,6 +376,62 @@ func TestStatusBar_View_NoUsageWhenContextWindowZero(t *testing.T) {
 	}
 }
 
+// ---- Session cost ----
+
+// costString renders exactly what buildUsageRight emits for a given cost
+// (e.g. costStyle.Render("¥0.010")), matching the styled substring used in
+// View assertions.
+func costString(c float64) string {
+	return costStyle.Render(fmt.Sprintf("¥%.3f", c))
+}
+
+func TestStatusBar_View_Cost(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(10_000, 500))
+	s.SetCost(0.010)
+	view := s.View()
+	if !strings.Contains(view, costString(0.010)) {
+		t.Errorf("View should show the session cost ¥0.010: got %q", view)
+	}
+}
+
+func TestStatusBar_View_CostRightOfContextUsage(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(10_000, 500))
+	s.SetCost(0.010)
+	view := s.View()
+	// Cost must appear after (to the right of) the context percentage.
+	pctIdx := strings.Index(view, "8%")
+	costIdx := strings.Index(view, costString(0.010))
+	if pctIdx < 0 {
+		t.Fatalf("View should show the context usage 8%%: got %q", view)
+	}
+	if costIdx < 0 {
+		t.Fatalf("View should show the session cost: got %q", view)
+	}
+	if costIdx < pctIdx {
+		t.Errorf("Cost (%d) should be rendered right of context usage (%d): %q", costIdx, pctIdx, view)
+	}
+}
+
+func TestStatusBar_View_NoCostWhenZero(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateIdle), withUsage(10_000, 500))
+	// cost is 0 by default — must not render a ¥ placeholder.
+	view := s.View()
+	if strings.Contains(view, "¥") {
+		t.Errorf("View should NOT show cost when it is 0: got %q", view)
+	}
+}
+
+func TestStatusBar_View_NoCostWithoutUsage(t *testing.T) {
+	s := makeStatusBar(withWidth(120), withState(stateIdle))
+	s.SetCost(0.010)
+	view := s.View()
+	// buildUsageRight is skipped entirely when there is no usage/TPS — cost
+	// alone must not force the right half to render.
+	if strings.Contains(view, "¥") {
+		t.Errorf("View should NOT show cost when there is no usage to display: got %q", view)
+	}
+}
+
 // ---- Token formatting ----
 
 func TestFormatTokens_Zero(t *testing.T) {
@@ -583,6 +640,11 @@ func TestStatusBar_Setters(t *testing.T) {
 	s.SetUsage(u)
 	if s.totalUsage != u {
 		t.Error("SetUsage should store the pointer")
+	}
+
+	s.SetCost(0.0125)
+	if s.cost != 0.0125 {
+		t.Errorf("SetCost: want 0.0125, got %v", s.cost)
 	}
 
 	s.SetCopyMode(true)

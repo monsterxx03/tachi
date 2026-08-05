@@ -19,6 +19,7 @@ type StatusBar struct {
 	providerInfo  string
 	state         state
 	totalUsage    *llm.Usage
+	cost          float64 // session cost in CNY, accumulated by the Model
 	contextWindow int64
 	copyMode      bool
 	spinner       spinner.Model
@@ -72,6 +73,7 @@ func (s *StatusBar) SetState(st state) {
 	}
 }
 func (s *StatusBar) SetUsage(u *llm.Usage)           { s.totalUsage = u }
+func (s *StatusBar) SetCost(c float64)               { s.cost = c }
 func (s *StatusBar) SetCopyMode(b bool)              { s.copyMode = b }
 func (s *StatusBar) SetProviderInfo(info string)     { s.providerInfo = info }
 func (s *StatusBar) SetContextWindow(cw int64)       { s.contextWindow = cw }
@@ -263,6 +265,13 @@ func (s StatusBar) buildUsageRight() string {
 	if s.totalUsage != nil && s.totalUsage.LastInputTokens > 0 && s.contextWindow > 0 {
 		pct := float64(s.totalUsage.LastInputTokens) / float64(s.contextWindow) * 100
 		parts = append(parts, usageColorStyle(pct).Render(formatPercent(pct)))
+	}
+
+	// Session cost (CNY): rightmost element, flush against the right edge.
+	// Accumulated incrementally by the Model per API call (accumulateUsage),
+	// with per-call price snapshots matching the usage ledger's semantics.
+	if s.cost > 0 {
+		parts = append(parts, costStyle.Render(fmt.Sprintf("¥%.3f", s.cost)))
 	}
 
 	if len(parts) == 0 {

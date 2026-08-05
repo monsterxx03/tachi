@@ -105,6 +105,12 @@ var (
 	tpsPausedStyle = lipgloss.NewStyle().
 			Foreground(lipgloss.Color("#6E738D"))
 
+	// Session cost indicator (¥) in the statusbar right half: warm peach to
+	// stand out from the green/yellow/red usage palette without implying a
+	// warning level.
+	costStyle = lipgloss.NewStyle().
+			Foreground(lipgloss.Color("#F5A97F"))
+
 	boldStyle = lipgloss.NewStyle().
 			Bold(true)
 

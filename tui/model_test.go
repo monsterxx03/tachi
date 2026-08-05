@@ -2,6 +2,7 @@ package tui
 
 import (
 	"errors"
+	"math"
 	"strings"
 	"syscall"
 	"testing"
@@ -844,5 +845,123 @@ func TestHandleThinkingCommand_NoSession(t *testing.T) {
 	}
 	if got := m.statusbar.thinkingLevel; got != "max" {
 		t.Errorf("thinkingLevel = %q, want %q (provider default)", got, "max")
+	}
+}
+
+// ---- Session cost (statusbar) ----
+
+// testModelWithAgent returns a minimal Model whose agent has a real provider,
+// so costForUsage can resolve prices.
+func testModelWithAgent(provider llm.Provider) *Model {
+	m := testModel()
+	m.agent = agent.NewAIAgent(provider, 10)
+	return m
+}
+
+// TestModel_CostForUsage_OpenAIFamily verifies the OpenAI-family billing
+// scale: input_tokens INCLUDE cache reads, so they are subtracted before
+// billing (mirroring the usage ledger). deepseek-v4-flash built-in pricing:
+// input 1.0, output 2.0, cache read 0.02 CNY per 1M tokens.
+func TestModel_CostForUsage_OpenAIFamily(t *testing.T) {
+	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testModelWithAgent(provider)
+	defer m.agent.Close()
+
+	cost := m.costForUsage(&llm.Usage{
+		InputTokens:          1_000_000,
+		CacheReadInputTokens: 200_000,
+		OutputTokens:         500_000,
+	})
+	// input = 1M - 200K = 800K → 0.8; cache read 200K → 0.004; output 500K → 1.0
+	want := 0.8 + 0.004 + 1.0
+	if math.Abs(cost-want) > 1e-9 {
+		t.Errorf("costForUsage(openai) = %v, want %v", cost, want)
+	}
+}
+
+// TestModel_CostForUsage_Anthropic verifies Anthropic's input_tokens are NOT
+// cache-read-normalized (they exclude cache reads to begin with) — same as
+// the ledger. Custom pricing: input 3.0, output 15.0, cache read 0.3.
+func TestModel_CostForUsage_Anthropic(t *testing.T) {
+	provider, err := llm.NewProvider("anthropic", "sk", "", "claude-sonnet-4-5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testModelWithAgent(provider)
+	defer m.agent.Close()
+	m.cfg = &config.Config{
+		Providers: []config.ProviderConfig{
+			{
+				Name:  "claude",
+				Type:  "anthropic",
+				Model: "claude-sonnet-4-5",
+				Spec: config.ModelSpec{
+					Pricing: &config.ModelPricing{
+						InputPrice:          new(3.0),
+						OutputPrice:         new(15.0),
+						CacheReadInputPrice: new(0.3),
+					},
+				},
+			},
+		},
+	}
+	// No session yet → currentProviderName falls back to the single
+	// configured provider ("claude"), which carries the custom pricing.
+	cost := m.costForUsage(&llm.Usage{
+		InputTokens:          1_000_000,
+		CacheReadInputTokens: 200_000,
+		OutputTokens:         500_000,
+	})
+	// input kept at 1M (no cache-read subtraction) → 3.0;
+	// cache read 200K → 0.06; output 500K → 7.5. Total 10.56.
+	want := 3.0 + 0.06 + 7.5
+	if math.Abs(cost-want) > 1e-9 {
+		t.Errorf("costForUsage(anthropic) = %v, want %v", cost, want)
+	}
+}
+
+// TestModel_CostForUsage_NoPrice ensures an unpriced model yields 0.
+func TestModel_CostForUsage_NoPrice(t *testing.T) {
+	provider, err := llm.NewProvider("openai", "sk", "", "some-unknown-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testModelWithAgent(provider)
+	defer m.agent.Close()
+
+	if cost := m.costForUsage(&llm.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}); cost != 0 {
+		t.Errorf("costForUsage(unpriced) = %v, want 0", cost)
+	}
+}
+
+// TestModel_AccumulateUsage_Cost verifies accumulateUsage accumulates the
+// per-call cost into sessionCost and pushes it to the statusbar.
+func TestModel_AccumulateUsage_Cost(t *testing.T) {
+	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := testModelWithAgent(provider)
+	defer m.agent.Close()
+
+	// 1M input + 1M output → 1.0 + 2.0 = 3.0 (deepseek-v4-flash).
+	m.accumulateUsage(&llm.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
+	if m.sessionCost != 3.0 {
+		t.Errorf("sessionCost after first call = %v, want 3.0", m.sessionCost)
+	}
+	if m.statusbar.cost != 3.0 {
+		t.Errorf("statusbar cost = %v, want 3.0", m.statusbar.cost)
+	}
+
+	// Second call (no input, 500K output) → +1.0, total 4.0.
+	m.accumulateUsage(&llm.Usage{OutputTokens: 500_000})
+	if m.sessionCost != 4.0 {
+		t.Errorf("sessionCost after second call = %v, want 4.0", m.sessionCost)
+	}
+	if m.statusbar.cost != 4.0 {
+		t.Errorf("statusbar cost = %v, want 4.0", m.statusbar.cost)
 	}
 }

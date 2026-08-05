@@ -252,6 +252,25 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 	}
 	m.totalUsage.LastInputTokens = lastInput
 	m.statusbar.SetUsage(&m.totalUsage)
+
+	// Rebuild the session cost from the usage ledger — the single source of
+	// truth for cost (/usage), where each row carries a per-call price
+	// snapshot. Full scan here is fine: this runs only on session restore /
+	// switch (low frequency), unlike the incremental per-call accumulation
+	// in accumulateUsage. No current session (startup, /new) → cost stays 0.
+	m.sessionCost = 0
+	if sm := m.agent.SessionManager(); sm != nil {
+		if curr := sm.Current(); curr != nil {
+			if rec := m.agent.UsageRecorder(); rec != nil {
+				if rows, err := rec.Rows(curr.ID, curr.CreatedAt); err == nil {
+					for _, row := range rows {
+						m.sessionCost += row.Cost()
+					}
+				}
+			}
+		}
+	}
+	m.statusbar.SetCost(m.sessionCost)
 }
 
 // restoreSessionProvider resolves and switches the agent's provider to match

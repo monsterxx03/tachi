@@ -53,40 +53,6 @@ func getDeepSeekPrice(model string) *ModelPrice {
 	}
 }
 
-// CalculateCost computes the cost in CNY from a Usage and ModelPrice.
-// Returns 0 if usage or price is nil, or if the price is entirely zero.
-func CalculateCost(usage *Usage, price *ModelPrice) float64 {
-	if usage == nil || price == nil {
-		return 0
-	}
-	if price.InputPrice == 0 && price.OutputPrice == 0 {
-		return 0
-	}
-
-	// Cache miss input tokens = total input - cache read (if cache read is reported).
-	// API reports InputTokens as total (cache miss + cache hit).
-	cacheMissInput := max(usage.InputTokens-usage.CacheReadInputTokens, 0)
-
-	// Cache read price falls back to regular input price if not set.
-	cacheReadPrice := price.CacheReadInputPrice
-	if cacheReadPrice <= 0 {
-		cacheReadPrice = price.InputPrice
-	}
-
-	// Cache creation price falls back to regular input price if not set.
-	cacheCreationPrice := price.CacheCreationInputPrice
-	if cacheCreationPrice <= 0 {
-		cacheCreationPrice = price.InputPrice
-	}
-
-	cost := float64(cacheMissInput)/1_000_000*price.InputPrice +
-		float64(usage.CacheReadInputTokens)/1_000_000*cacheReadPrice +
-		float64(usage.CacheCreationInputTokens)/1_000_000*cacheCreationPrice +
-		float64(usage.OutputTokens)/1_000_000*price.OutputPrice
-
-	return cost
-}
-
 // ResolveModelPrice resolves the effective pricing for a model.
 // It checks provider-level overrides first (nil ptr means "not set"), then falls
 // back to built-in pricing. Returns nil if no pricing is available.

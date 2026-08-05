@@ -34,7 +34,9 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 		m.agent.ClearSession()
 		// Reset usage so statusbar shows clean state.
 		m.totalUsage = llm.Usage{}
+		m.sessionCost = 0
 		m.statusbar.SetUsage(nil)
+		m.statusbar.SetCost(0)
 		m.statusbar.ClearTPS()
 		m.statusbar.SetSessionInfo("", "")
 		return nil

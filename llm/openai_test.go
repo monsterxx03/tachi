@@ -446,7 +446,7 @@ func TestDeepSeekThinking_Stream(t *testing.T) {
 
 // TestOpenAIStreamUsage_CachedTokens verifies that cache-hit tokens reported
 // by OpenAI-compatible providers (e.g. DeepSeek's prompt_tokens_details.
-// cached_tokens) are captured into CacheReadInputTokens, so CalculateCost
+// cached_tokens) are captured into CacheReadInputTokens, so cost accounting
 // bills them at the cache-read price instead of the full input price.
 func TestOpenAIStreamUsage_CachedTokens(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

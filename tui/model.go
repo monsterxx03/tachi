@@ -122,6 +122,7 @@ type Model struct {
 	// SteerCheck 与重建后的新 channel 错配，旧 turn 也会在超时后继续，
 	// 不会永久挂死（见 agent.applySteer 的 defaultSteerTimeout）。
 	totalUsage     llm.Usage
+	sessionCost    float64 // cumulative session cost in CNY (per-call incremental)
 	pendingConfirm *pendingConfirm
 	askUserView    *AskUserView
 
@@ -401,7 +402,72 @@ func (m *Model) accumulateUsage(u *llm.Usage) {
 	m.totalUsage.OutputTokens += u.OutputTokens
 	m.totalUsage.CacheCreationInputTokens += u.CacheCreationInputTokens
 	m.totalUsage.CacheReadInputTokens += u.CacheReadInputTokens
+	// Session cost accumulates incrementally per call, billed at the price
+	// effective when the call was made — the same per-call snapshot semantics
+	// as the usage ledger (see costForUsage), so the statusbar stays in line
+	// with /usage.
+	m.sessionCost += m.costForUsage(u)
 	m.statusbar.SetUsage(&m.totalUsage)
+	m.statusbar.SetCost(m.sessionCost)
+}
+
+// costForUsage computes the CNY cost of a single API call, mirroring the
+// usage ledger's billing exactly (RecordingProvider.record + UsageRow.Cost,
+// docs/2026-08-05-usage-billing.md): the input scale and the per-call price
+// snapshot follow the same rules, so the statusbar stays consistent with
+// /usage. Notably, Anthropic's input_tokens are NOT cache-read-normalized
+// (they exclude cache reads to begin with).
+// Returns 0 when no price is available (unknown model / no overrides, or a
+// bare agent without a configured provider — e.g. unit tests).
+func (m *Model) costForUsage(u *llm.Usage) float64 {
+	if u == nil || m.agent == nil {
+		return 0
+	}
+	p := m.agent.Provider()
+	if p == nil {
+		return 0
+	}
+	price := cmds.ResolveModelPrice(m.cfg, m.currentProviderName(), p.Model())
+	if price == nil || (price.InputPrice == 0 && price.OutputPrice == 0) {
+		return 0
+	}
+
+	// Cache-miss input: OpenAI-family APIs report input_tokens INCLUDING
+	// cache reads; Anthropic does not. Same normalization as the ledger.
+	input := u.InputTokens
+	if p.Name() != llm.ProviderTypeAnthropic {
+		input = max(input-u.CacheReadInputTokens, 0)
+	}
+
+	// Cache read/creation prices fall back to the regular input price.
+	cacheReadPrice := price.CacheReadInputPrice
+	if cacheReadPrice <= 0 {
+		cacheReadPrice = price.InputPrice
+	}
+	cacheCreationPrice := price.CacheCreationInputPrice
+	if cacheCreationPrice <= 0 {
+		cacheCreationPrice = price.InputPrice
+	}
+
+	return float64(input)/1_000_000*price.InputPrice +
+		float64(u.CacheReadInputTokens)/1_000_000*cacheReadPrice +
+		float64(u.CacheCreationInputTokens)/1_000_000*cacheCreationPrice +
+		float64(u.OutputTokens)/1_000_000*price.OutputPrice
+}
+
+// currentProviderName returns the config provider name for cost resolution:
+// the session's recorded provider (kept in sync on /model switch), falling
+// back to the active config provider when no session is current yet.
+func (m *Model) currentProviderName() string {
+	if sm := m.agent.SessionManager(); sm != nil {
+		if curr := sm.Current(); curr != nil && curr.ProviderName != "" {
+			return curr.ProviderName
+		}
+	}
+	if m.cfg != nil {
+		return config.ResolveProviderName(m.cfg)
+	}
+	return ""
 }
 
 // waitForMCP starts a background goroutine that waits for MCP async init
