@@ -54,7 +54,9 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 			// AgentConfig.KeywordProvider, or let configure fall back to the
 			// main provider.
 			if tb, ok := backend.(*memory.TopicBackend); ok && a.Config.Provider != nil {
-				tb.SetKeywordExtractor(NewLLMKeywordExtractor(a.Config.Provider, a.Config.Provider.Model(), sysCfg.Memory.Timeout, a.Config.Logger))
+				ext := NewLLMKeywordExtractor(a.Config.Provider, a.Config.Provider.Model(), sysCfg.Memory.Timeout, a.Config.Logger)
+				ext.SetSessionIDResolver(a.sessionID)
+				tb.SetKeywordExtractor(ext)
 				a.Config.Logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
 			}
 		}
@@ -510,6 +512,12 @@ func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
 		return
 	}
 
-	tb.SetKeywordExtractor(NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.Config.Logger))
+	// Wrap the dedicated provider for usage billing (main provider is
+	// already wrapped at construction), and anchor extraction to the
+	// current session.
+	sp = wrapForUsage(sp, a.usageRecorder(), cfg, kpName)
+	ext := NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.Config.Logger)
+	ext.SetSessionIDResolver(a.sessionID)
+	tb.SetKeywordExtractor(ext)
 	a.Config.Logger.Info(context.Background(), "Memory: keyword extractor re-wired with dedicated provider", "provider", kpName, "type", resolved.Type, "model", resolved.Model)
 }

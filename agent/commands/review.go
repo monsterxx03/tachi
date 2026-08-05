@@ -280,7 +280,9 @@ type RoundSpec struct {
 	Provider llm.Provider
 	OutPath  string // orchestrator-owned report path (in prompt) for single AND multi-round runs
 	Prompt   string
-	Kind     string // OneOffMeta.Kind: "review" (single) / "review-round-N"
+	// Kind is the usage-ledger kind: llm.UsageKindReview (single round) or a
+	// review-round-N string normalized back to review at record time.
+	Kind llm.UsageKind
 }
 
 // ReviewOrchestrator owns the full /review orchestration state shared by the
@@ -402,7 +404,7 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 			Provider: provider,
 			OutPath:  outPath,
 			Prompt:   ReviewUserPrompt(outPath),
-			Kind:     "review",
+			Kind:     llm.UsageKindReview,
 		}, true
 	}
 	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports)
@@ -412,7 +414,7 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 		Provider: provider,
 		OutPath:  outPath,
 		Prompt:   prompt,
-		Kind:     fmt.Sprintf("review-round-%d", round),
+		Kind:     llm.UsageKind(fmt.Sprintf("review-round-%d", round)),
 	}, true
 }
 

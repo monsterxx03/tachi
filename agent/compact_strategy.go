@@ -31,6 +31,11 @@ func (s *llmCompactStrategy) Compact(ctx context.Context, messages []llm.Message
 	copy(compactMsgs, messages)
 	compactMsgs = append(compactMsgs, llm.Message{Role: "user", Content: compactPrompt})
 
+	// Usage billing: /compact and auto-compact summaries are direct
+	// CreateChat calls — tag the kind. Session anchoring is provided by the
+	// caller (doCompact sets llm.WithSessionID on the compact context).
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindCompact)
+
 	resp, err := s.provider.CreateChat(ctx, compactMsgs, nil, llm.ChatOptions{
 		MaxTokens: maxTokens,
 	})

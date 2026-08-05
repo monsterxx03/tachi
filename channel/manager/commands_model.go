@@ -164,11 +164,19 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 // The caller (handleModelSwitch) is responsible for calling FinalizeCompact
 // to create the new session and migrate the ThreadID.
 func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sessionMsgs []session.Message) (string, error) {
-	// Get the current (old) provider — before switching.
-	oldProvider, _, _ := m.getProviderForThread(threadID)
+	// Get the current (old) provider — before switching. The third return is
+	// the THREAD's actual provider name (per-session /model override wins over
+	// the global one) — it must back both the ledger row and the price
+	// resolution, or a non-default thread provider would be mislabeled and
+	// priced under the global provider's overrides.
+	oldProvider, _, provName := m.getProviderForThread(threadID)
 	if oldProvider == nil {
 		return "", fmt.Errorf("no current provider available for compact")
 	}
+	// Usage billing: the manager-owned provider is outside the agent's
+	// recording chain — wrap it for this call so the summary cost is billed
+	// (kind + session anchoring set below).
+	oldProvider = agent.WrapProviderForUsage(oldProvider, m.cfg, provName)
 
 	// Convert session messages to LLM messages for the provider API.
 	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldProvider.Name())
@@ -201,6 +209,10 @@ func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sess
 
 	ctx, cancel := context.WithTimeout(context.Background(), compactTimeout)
 	defer cancel()
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindCompact)
+	if sid != "" {
+		ctx = llm.WithSessionID(ctx, sid)
+	}
 
 	resp, err := oldProvider.CreateChat(ctx, compactMsgs, nil, llm.ChatOptions{
 		MaxTokens: maxTokens,

@@ -32,6 +32,7 @@ const (
 	cronStoreFileName         = "crons.json"
 	toolResultsDirName        = "tool_results"
 	oneoffDirName             = "oneoff"
+	usageDirName              = "usage"
 	defaultToolResultMaxChars = 50000
 )
 
@@ -896,6 +897,12 @@ func SessionDir() (string, error) {
 // 有会话上下文的记录在 <SessionDir>/<id>/oneoff/ 下。
 func OneoffDir() string {
 	return filepath.Join(configDir(), oneoffDirName)
+}
+
+// UsageDir 返回 usage 计费账本的全局存储目录（<home>/usage/）。
+// 按日分片：<UsageDir>/YYYY-MM-DD.jsonl；永久保留，不做清理。
+func UsageDir() string {
+	return filepath.Join(configDir(), usageDirName)
 }
 
 // LogsDir returns the path to the debug logs directory.

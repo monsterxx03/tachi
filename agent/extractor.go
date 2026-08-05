@@ -25,6 +25,9 @@ type LLMKeywordExtractor struct {
 	model    string
 	timeout  time.Duration
 	logger   *logger.Logger
+	// sessionID returns the current session ID for usage-ledger anchoring
+	// ("" when session-less). Injected by the agent; nil disables anchoring.
+	sessionID func() string
 }
 
 // NewLLMKeywordExtractor creates an extractor backed by an LLM provider.
@@ -42,12 +45,27 @@ func NewLLMKeywordExtractor(provider llm.Provider, model string, timeout time.Du
 	}
 }
 
+// SetSessionIDResolver injects a session-ID provider used to anchor keyword
+// extraction calls in the usage ledger to the current session.
+func (e *LLMKeywordExtractor) SetSessionIDResolver(fn func() string) {
+	e.sessionID = fn
+}
+
 // ExtractKeywords calls the LLM to extract 3-5 search keywords from the query.
 // Returns an error if the LLM call fails, times out, or returns no keywords.
 // The caller (TopicBackend.Recall) falls back to the raw query on error.
 func (e *LLMKeywordExtractor) ExtractKeywords(ctx context.Context, query string) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, e.timeout)
 	defer cancel()
+
+	// Usage billing: tag the kind and anchor to the current session so
+	// keyword extraction costs land in the session's ledger rows.
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindKeyword)
+	if e.sessionID != nil {
+		if sid := e.sessionID(); sid != "" {
+			ctx = llm.WithSessionID(ctx, sid)
+		}
+	}
 
 	messages := []llm.Message{
 		{Role: "system", Content: keywordExtractionPrompt},

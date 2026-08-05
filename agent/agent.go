@@ -8,12 +8,14 @@ import (
 	"sync"
 	"sync/atomic"
 
+	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -142,6 +144,16 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.Manager, error) {
 	a := NewAIAgent(cfg.Provider, cfg.MaxIterations)
 
+	// Usage billing: wrap every provider so all LLM calls are recorded into
+	// the ledger. MUST run before a.Config = cfg so derived providers
+	// (CompactStrategy, Setup*Provider, keyword extractor) all receive the
+	// wrapped instances — wrapping after would silently miss call sites.
+	rec := cfg.UsageRecorder
+	if rec == nil {
+		rec = getGlobalUsageRecorder()
+	}
+	wrapUsageProviders(&cfg, rec)
+
 	// Adopt the caller's config wholesale, then restore NewAIAgent defaults
 	// for fields the caller left nil. Wholesale assignment keeps this
 	// maintenance-free: newly added AgentConfig fields need no copy here.
@@ -191,6 +203,11 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	} else if hasCfg {
 		a.SetupAdversarialProviders(cfg.FullConfig)
 	}
+	// Adversarial providers — whether caller-pre-resolved or resolved from
+	// config here — are wrapped AFTER the Setup section, so the pre-resolved
+	// pointers survive construction (see wrapUsageProviders) while both paths
+	// still get /review billing.
+	wrapResolvedAdversarial(&a.Config, rec, cfg.FullConfig)
 	if cfg.RunProvider != nil {
 		a.Config.RunProvider = cfg.RunProvider
 	} else if hasCfg {
@@ -857,6 +874,140 @@ func (a *AIAgent) KillBackgroundProcesses() {
 		return
 	}
 	a.Config.ProcessManager.KillAll()
+}
+
+// --- Usage billing ledger wiring ---
+// See docs/2026-08-05-usage-billing.md. Every LLM call (loop turns, one-off
+// runs, direct CreateChat calls) is recorded by a RecordingProvider wrapped
+// around each provider at construction time.
+
+// usageDirFn returns the ledger directory; injectable for tests (mirrors the
+// oneoffSessionDirFn pattern in oneoff_recorder.go).
+var usageDirFn = config.UsageDir
+
+var (
+	globalUsageRecorderOnce sync.Once
+	globalUsageRecorder     *llm.UsageRecorder
+)
+
+// getGlobalUsageRecorder returns the process-wide usage ledger recorder,
+// created lazily from <home>/usage/. Constructing it has no side effects —
+// the directory is created only on the first Record. AgentConfig
+// UsageRecorder injection (tests, per-process managers) takes precedence.
+func getGlobalUsageRecorder() *llm.UsageRecorder {
+	globalUsageRecorderOnce.Do(func() {
+		globalUsageRecorder = llm.NewUsageRecorder(usageDirFn())
+	})
+	return globalUsageRecorder
+}
+
+// usageRecorder returns the agent's ledger recorder: the injected one wins,
+// else the process-wide singleton.
+func (a *AIAgent) usageRecorder() *llm.UsageRecorder {
+	if a.Config.UsageRecorder != nil {
+		return a.Config.UsageRecorder
+	}
+	return getGlobalUsageRecorder()
+}
+
+// UsageRecorder returns the agent's usage billing ledger recorder (the
+// injected one, or the process-wide singleton). Frontends pass it to
+// ComputeSessionUsage for /usage. Always non-nil in practice — the recorder
+// is constructed without side effects and cannot fail; ComputeSessionUsage
+// still tolerates nil defensively.
+func (a *AIAgent) UsageRecorder() *llm.UsageRecorder {
+	return a.usageRecorder()
+}
+
+// WrapProviderForUsage wraps p with the process-wide usage ledger recorder,
+// resolving price snapshots via cfg + providerName. Idempotent — an
+// already-wrapped provider passes through unchanged. This is the escape hatch
+// for bare-agent call sites (dream runner, github bot) that construct
+// providers outside NewAIAgentWithConfig: wrapping here keeps their LLM calls
+// billed even though kind/session tagging happens at RunOneOffStream.
+func WrapProviderForUsage(p llm.Provider, cfg *config.Config, providerName string) llm.Provider {
+	return wrapForUsage(p, getGlobalUsageRecorder(), cfg, providerName)
+}
+
+// GlobalUsageRecorder returns the process-wide usage ledger recorder (the
+// same instance NewAIAgentWithConfig uses when no recorder is injected).
+// Channel/ACP/bot frontends use it for /usage and one-off provider wrapping.
+func GlobalUsageRecorder() *llm.UsageRecorder {
+	return getGlobalUsageRecorder()
+}
+
+// wrapForUsage wraps p with rec for usage billing, resolving price snapshots
+// via cfg + providerName. Idempotent (WrapRecordingProvider); nil p or nil
+// rec passes through untouched.
+func wrapForUsage(p llm.Provider, rec *llm.UsageRecorder, cfg *config.Config, providerName string) llm.Provider {
+	if p == nil || rec == nil {
+		return p
+	}
+	return llm.WrapRecordingProvider(p, rec, providerName, func(model string) *llm.ModelPrice {
+		return cmds.ResolveModelPrice(cfg, providerName, model)
+	})
+}
+
+// wrapUsageProviders wraps every provider in cfg with usage-ledger recording.
+// Must run BEFORE the config is adopted so all derived providers
+// (CompactStrategy, Setup*Provider, keyword extractor) see wrapped instances.
+// rec == nil disables wrapping (no recording, no overhead).
+func wrapUsageProviders(cfg *AgentConfig, rec *llm.UsageRecorder) {
+	if rec == nil {
+		return
+	}
+	var mainName, titleName, commitName, reviewName, runName, subName string
+	if full := cfg.FullConfig; full != nil {
+		mainName = full.Provider
+		titleName = full.TitleProvider
+		commitName = full.CommitProvider
+		reviewName = full.Review.Provider
+		runName = full.RunProvider
+		subName = full.Subagent.Provider
+	}
+
+	cfg.Provider = wrapForUsage(cfg.Provider, rec, cfg.FullConfig, mainName)
+	cfg.TitleProvider = wrapForUsage(cfg.TitleProvider, rec, cfg.FullConfig, titleName)
+	cfg.CommitProvider = wrapForUsage(cfg.CommitProvider, rec, cfg.FullConfig, commitName)
+	cfg.ReviewProvider = wrapForUsage(cfg.ReviewProvider, rec, cfg.FullConfig, reviewName)
+	cfg.RunProvider = wrapForUsage(cfg.RunProvider, rec, cfg.FullConfig, runName)
+	cfg.SubagentProvider = wrapForUsage(cfg.SubagentProvider, rec, cfg.FullConfig, subName)
+	// Adversarial providers are intentionally NOT wrapped here: pre-resolved
+	// pointers must survive construction untouched (tests pin this contract).
+	// They are wrapped once after the Setup section via wrapResolvedAdversarial.
+}
+
+// wrapResolvedAdversarial wraps the adversarial providers (whether
+// caller-pre-resolved in cfg or resolved by SetupAdversarialProviders from
+// config) with usage billing. It runs after the Setup section — before that,
+// the pre-resolved pointers must stay untouched (see wrapUsageProviders) and
+// the config-resolved ones do not exist yet. WrapRecordingProvider's
+// idempotence makes this safe even if a provider was already wrapped.
+//
+// Guard: when cfg.Review.Adversarial is nil, config-based resolution has no
+// names to wrap, but CALLER-pre-resolved providers may still exist — they are
+// wrapped by the loop below (which iterates the actual list, not the config)
+// with an empty provider name (RecordingProvider falls back to inner.Name()).
+func wrapResolvedAdversarial(cfg *AgentConfig, rec *llm.UsageRecorder, full *config.Config) {
+	if rec == nil || cfg == nil {
+		return
+	}
+	names := []string{}
+	if full != nil && full.Review.Adversarial != nil {
+		names = full.Review.Adversarial.Models
+	}
+	judgeName := ""
+	if full != nil && full.Review.Adversarial != nil {
+		judgeName = full.Review.Adversarial.JudgeModel
+	}
+	for i, p := range cfg.AdversarialModels {
+		name := ""
+		if i < len(names) {
+			name = names[i]
+		}
+		cfg.AdversarialModels[i] = wrapForUsage(p, rec, full, name)
+	}
+	cfg.AdversarialJudge = wrapForUsage(cfg.AdversarialJudge, rec, full, judgeName)
 }
 
 // Close releases resources held by the agent, including killing all tracked

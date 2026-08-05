@@ -325,7 +325,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	// to be injected via steer (drainEvents handles this). Created by
 	// flushAmbientBatch when marking the thread active.
 	oneoffMeta := &agent.OneOffMeta{
-		Kind:         "ambient",
+		Kind:         llm.UsageKindAmbient,
 		SessionID:    m.threadSessionID(threadID),
 		SystemPrompt: systemPrompt,
 		Extra:        map[string]string{"thread": threadID},

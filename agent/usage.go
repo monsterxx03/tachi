@@ -21,23 +21,33 @@ type ToolCallStat struct {
 type SessionUsageReport struct {
 	Session       *session.Session
 	Usage         llm.Usage
-	Cost          float64
 	ContextWindow int64
 	ToolCalls     map[string]*ToolCallStat // keyed by tool name
 	MainCount     int                      // tool calls in main session
 	SubCount      int                      // tool calls in sub-agents
+
+	// Usage ledger aggregation (docs/2026-08-05-usage-billing.md).
+	// Cost is computed EXCLUSIVELY from the ledger — never from
+	// messages/subagent transcripts (which would double-count subagent
+	// rows, since subagent calls are also in the ledger).
+	Cost            float64                             // total cost (all kinds)
+	LedgerAvailable bool                                // false = pre-upgrade session (no ledger rows)
+	KindCosts       map[llm.UsageKind]cmds.KindCostStat // per-kind breakdown
+	ModelCosts      map[string]float64                  // "provider:model" → cost
+	UnpricedCalls   int                                 // rows without an effective price at call time
 }
 
 // ComputeSessionUsage computes the SessionUsageReport for the given session
-// by scanning its messages (and sub-agent JSONL files). It reconstructs
-// cumulative usage, calculates cost, and counts tool calls per name.
+// by scanning its messages (and sub-agent JSONL files) for token/tool stats,
+// plus the usage ledger for cost.
 //
 // sm must have the target session already loaded as current (e.g. via
 // sm.Load(sessID) or sm.FindByThreadID).
 //
-// price may be nil — in that case Cost is left at 0.
+// rec may be nil — the ledger is then skipped and LedgerAvailable stays false
+// (cost section shows "no billing data").
 // contextWindow is optional (0 = not shown).
-func ComputeSessionUsage(sm SessionManager, price *llm.ModelPrice, contextWindow int64) (*SessionUsageReport, error) {
+func ComputeSessionUsage(sm SessionManager, rec *llm.UsageRecorder, contextWindow int64) (*SessionUsageReport, error) {
 	if sm == nil || !sm.HasCurrent() {
 		return nil, fmt.Errorf("no active session")
 	}
@@ -70,21 +80,32 @@ func ComputeSessionUsage(sm SessionManager, price *llm.ModelPrice, contextWindow
 		CacheReadInputTokens:     totalCacheRead,
 	}
 
-	// ---- cost ----
-	var cost float64
-	if price != nil {
-		cost = llm.CalculateCost(&usage, price)
-		subMsgs, _ := sm.LoadSubagentMessages(curr.ID)
-		for _, sMsgs := range subMsgs {
-			for _, msg := range sMsgs {
-				if msg.Usage != nil {
-					cost += llm.CalculateCost(&llm.Usage{
-						InputTokens:              msg.Usage.InputTokens,
-						OutputTokens:             msg.Usage.OutputTokens,
-						CacheReadInputTokens:     msg.Usage.CacheReadInputTokens,
-						CacheCreationInputTokens: msg.Usage.CacheCreationInputTokens,
-					}, price)
-				}
+	// ---- cost: usage ledger only ----
+	report := &SessionUsageReport{
+		Session:       curr,
+		Usage:         usage,
+		ContextWindow: contextWindow,
+	}
+	if rec != nil {
+		// Scan lower bound: session IDs embed the creation date
+		// (YYYY-MM-DD-…), so day files older than the session can be skipped.
+		rows, rErr := rec.Rows(curr.ID, curr.CreatedAt)
+		if rErr != nil {
+			return nil, fmt.Errorf("load usage ledger: %w", rErr)
+		}
+		report.LedgerAvailable = len(rows) > 0
+		report.KindCosts = make(map[llm.UsageKind]cmds.KindCostStat)
+		report.ModelCosts = make(map[string]float64)
+		for _, row := range rows {
+			c := row.Cost()
+			report.Cost += c
+			ks := report.KindCosts[row.Kind]
+			ks.Cost += c
+			ks.Calls++
+			report.KindCosts[row.Kind] = ks
+			report.ModelCosts[row.Provider+":"+row.Model] += c
+			if row.Unpriced() {
+				report.UnpricedCalls++
 			}
 		}
 	}
@@ -99,16 +120,11 @@ func ComputeSessionUsage(sm SessionManager, price *llm.ModelPrice, contextWindow
 	for _, sMsgs := range subMsgsMap {
 		countMessages(sMsgs, tc, &subCount)
 	}
+	report.ToolCalls = tc
+	report.MainCount = mainCount
+	report.SubCount = subCount
 
-	return &SessionUsageReport{
-		Session:       curr,
-		Usage:         usage,
-		Cost:          cost,
-		ContextWindow: contextWindow,
-		ToolCalls:     tc,
-		MainCount:     mainCount,
-		SubCount:      subCount,
-	}, nil
+	return report, nil
 }
 
 // countMessages scans a message slice, counting tool calls and errors into
@@ -162,6 +178,10 @@ func BuildUsageReportInfo(report *SessionUsageReport, estTokens int64, estBreakd
 		OutputTokens:             report.Usage.OutputTokens,
 		EstimatedInputTokens:     estTokens,
 		Cost:                     report.Cost,
+		LedgerAvailable:          report.LedgerAvailable,
+		KindCosts:                report.KindCosts,
+		ModelCosts:               report.ModelCosts,
+		UnpricedCalls:            report.UnpricedCalls,
 		ToolCalls:                toolCalls,
 		MainCount:                report.MainCount,
 		SubCount:                 report.SubCount,

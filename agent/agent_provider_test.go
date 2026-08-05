@@ -159,10 +159,16 @@ func TestConfigure_AdversarialPreresolvedSkipsSetup(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewAIAgentWithConfig: %v", err)
 	}
-	if len(a.Config.AdversarialModels) != 1 || a.Config.AdversarialModels[0] != pre {
-		t.Errorf("caller-preresolved models overwritten: %v", a.Config.AdversarialModels)
+	// The caller's providers are wrapped by RecordingProvider (usage billing),
+	// which is a transparent decorator — the underlying pre-resolved provider
+	// must still be the one in use (Name()/Model() pass through).
+	if len(a.Config.AdversarialModels) != 1 || a.Config.AdversarialModels[0] == nil {
+		t.Fatalf("caller-preresolved models dropped: %v", a.Config.AdversarialModels)
 	}
-	if a.Config.AdversarialJudge != pre {
+	if got := a.Config.AdversarialModels[0].Name(); got != pre.Name() {
+		t.Errorf("caller-preresolved models overwritten: Name()=%s want %s", got, pre.Name())
+	}
+	if a.Config.AdversarialJudge == nil || a.Config.AdversarialJudge.Name() != pre.Name() {
 		t.Errorf("caller-preresolved judge overwritten: %v", a.Config.AdversarialJudge)
 	}
 }

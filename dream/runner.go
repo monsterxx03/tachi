@@ -30,6 +30,17 @@ type RunConfig struct {
 	// when DreamProvider is set.
 	Config *config.Config
 
+	// ProviderName is the config provider name backing FallbackProvider,
+	// used for usage-ledger rows/price resolution when the fallback path is
+	// taken (DreamProvider empty). Empty = fallback is already usage-wrapped
+	// (e.g. TUI passes the main agent's provider).
+	ProviderName string
+
+	// Recorder, when non-nil, is used for usage-ledger rows instead of the
+	// process-wide recorder (agent.WrapProviderForUsage). Tests inject a
+	// temp-dir recorder for isolation; production leaves it nil.
+	Recorder *llm.UsageRecorder
+
 	MaxIter         int
 	MaxTokens       int
 	MaxMessageChars int // max chars per message in prompt (default 2000)
@@ -49,9 +60,18 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		"domain", plan.Group.Domain, "root", plan.Group.Root, "memory_root", plan.Group.MemoryRoot, "active_sessions", len(plan.ActiveSessions))
 
 	// Resolve provider.
-	provider, err := resolveProvider(cfg)
+	provider, providerName, err := resolveProvider(cfg)
 	if err != nil {
 		return State{}, err
+	}
+	// Usage billing: dream agents are bare NewAIAgent constructions whose
+	// provider never passes through NewAIAgentWithConfig's wrapping — wrap it
+	// here so dream LLM calls land in the ledger (idempotent: an already
+	// wrapped fallback, e.g. TUI's main provider, passes through untouched).
+	if cfg.Recorder != nil {
+		provider = llm.WrapRecordingProvider(provider, cfg.Recorder, providerName, nil)
+	} else {
+		provider = agent.WrapProviderForUsage(provider, cfg.Config, providerName)
 	}
 
 	// Capture the watermark BEFORE building summaries: messages arriving
@@ -95,7 +115,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	eventCh := dreamAgent.RunOneOffStream(ctx, provider, systemPrompt, userPrompt, llm.ChatOptions{
 		MaxTokens: cfg.MaxTokens,
 	}, agent.WithOneOffMeta(&agent.OneOffMeta{
-		Kind:  "dream",
+		Kind:  llm.UsageKindDream,
 		Extra: map[string]string{"domain": plan.Group.Domain, "root": plan.Group.Root},
 	}))
 
@@ -137,23 +157,24 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 }
 
 // resolveProvider picks the provider: DreamProvider config > FallbackProvider.
-func resolveProvider(cfg RunConfig) (llm.Provider, error) {
+// Returns the provider and its CONFIG name (for usage-ledger rows/price).
+func resolveProvider(cfg RunConfig) (llm.Provider, string, error) {
 	if cfg.DreamProvider != "" {
 		if cfg.Config == nil {
-			return nil, fmt.Errorf("dream: config required to resolve provider %q", cfg.DreamProvider)
+			return nil, "", fmt.Errorf("dream: config required to resolve provider %q", cfg.DreamProvider)
 		}
 		p, _, err := cfg.Config.BuildProvider(cfg.DreamProvider)
 		if err != nil {
-			return nil, fmt.Errorf("dream: resolve provider: %w", err)
+			return nil, "", fmt.Errorf("dream: resolve provider: %w", err)
 		}
-		return p, nil
+		return p, cfg.DreamProvider, nil
 	}
 
 	// Use fallback.
 	if cfg.FallbackProvider == nil {
-		return nil, fmt.Errorf("dream: no provider available")
+		return nil, "", fmt.Errorf("dream: no provider available")
 	}
-	return cfg.FallbackProvider, nil
+	return cfg.FallbackProvider, cfg.ProviderName, nil
 }
 
 // buildSessionSummaries loads and filters messages for each active session.

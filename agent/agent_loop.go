@@ -261,6 +261,15 @@ func (a *AIAgent) RunOneOffStream(
 		if params != nil && params.oneoffMeta != nil {
 			params.oneoffMeta.SystemPrompt = systemPrompt
 			rs.OneoffRec = a.startOneoffRecorder(ctx, *params.oneoffMeta, provider)
+			// Usage billing: tag the run's calls with the one-off kind and
+			// anchor them via the same three-level resolution the recorder
+			// uses (meta.SessionID → current session → global), so ambient
+			// and /review forks (no SessionManager) land in the right
+			// session's ledger rows.
+			ctx = llm.WithUsageKind(ctx, params.oneoffMeta.Kind)
+			if sid := a.resolveOneoffSessionID(*params.oneoffMeta); sid != "" {
+				ctx = llm.WithSessionID(ctx, sid)
+			}
 		}
 		defer func() {
 			if rs.OneoffRec != nil {
@@ -340,6 +349,12 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			params.oneoffMeta.SystemPrompt = systemPrompt
 			rs.OneoffRec = a.startOneoffRecorder(ctx, *params.oneoffMeta, a.Config.Provider)
 			rs.SkipSessionWrites = true
+			// Usage billing: tag calls with the one-off kind and anchor via
+			// resolveOneoffSessionID (see RunOneOffStream).
+			ctx = llm.WithUsageKind(ctx, params.oneoffMeta.Kind)
+			if sid := a.resolveOneoffSessionID(*params.oneoffMeta); sid != "" {
+				ctx = llm.WithSessionID(ctx, sid)
+			}
 		}
 		defer func() {
 			if rs.OneoffRec != nil {

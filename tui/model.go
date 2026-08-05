@@ -390,16 +390,6 @@ func (m *Model) startTurn() context.Context {
 	return ctx
 }
 
-// resolveModelPrice resolves the effective pricing for the current model.
-// Checks provider config overrides first, then falls back to built-in pricing.
-func (m *Model) resolveModelPrice() *llm.ModelPrice {
-	providerName := ""
-	if m.cfg != nil {
-		providerName = m.cfg.Provider
-	}
-	return cmds.ResolveModelPrice(m.cfg, providerName, m.agent.Model())
-}
-
 // accumulateUsage merges an llm.Usage into totalUsage and refreshes the
 // status bar and cost display. Called after each API call (tool-call rounds
 // and TurnComplete) to keep the status bar in sync.

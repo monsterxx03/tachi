@@ -24,9 +24,10 @@ import (
 // OneOffMeta describes a one-off (side-channel) execution to be recorded.
 // An empty Kind disables recording entirely.
 type OneOffMeta struct {
-	// Kind classifies the execution: "commit" | "review" | "ambient" |
-	// "dream" | "compact" | "github-discussion" | "github-pr" | ...
-	Kind string
+	// Kind classifies the execution: one of the llm.UsageKind constants
+	// (commit, review, ambient, dream, github-*, ...). Type-aligned with the
+	// usage ledger so kind strings can never drift between the two.
+	Kind llm.UsageKind
 
 	// SessionID anchors the record under <session>/<id>/oneoff/.
 	// Empty → resolved from the agent's current session; if there is none,
@@ -47,7 +48,7 @@ type OneOffMeta struct {
 // Type is always "meta"; renderers treat unknown types with a default branch.
 type oneoffMetaLine struct {
 	Type         string            `json:"type"`
-	Kind         string            `json:"kind"`
+	Kind         llm.UsageKind     `json:"kind"`
 	SessionID    string            `json:"session_id,omitempty"`
 	CWD          string            `json:"cwd,omitempty"`
 	Provider     string            `json:"provider,omitempty"`
@@ -69,7 +70,7 @@ var (
 type oneoffRecorder struct {
 	file      *os.File
 	path      string
-	kind      string
+	kind      llm.UsageKind
 	startedAt time.Time
 	bytes     int64
 }
@@ -92,7 +93,7 @@ func newOneoffRecorder(
 		}
 		dir = filepath.Join(sessionDir, sessionID, "oneoff")
 	} else {
-		dir = filepath.Join(oneoffHomeDirFn(), meta.Kind)
+		dir = filepath.Join(oneoffHomeDirFn(), string(meta.Kind))
 		// Lazy retention sweep — only the global dir is age-managed;
 		// per-session oneoff dirs die with session eviction.
 		sweepOneoffDir(dir, retentionDays)

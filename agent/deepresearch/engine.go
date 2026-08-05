@@ -371,6 +371,10 @@ func (dr *DeepResearch) generateQueries(
 	}
 
 	disabled := false
+	// Usage billing: tag the call kind; session anchoring comes from the
+	// caller's ctx (llm.WithSessionID) when a session is active, otherwise
+	// the row falls to the global bucket (acceptable, documented).
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindResearchQuery)
 	resp, err := provider.CreateChat(ctx, messages, nil, llm.ChatOptions{
 		MaxTokens: 2048,
 		Thinking:  &disabled,
@@ -473,6 +477,8 @@ func (dr *DeepResearch) generateReportHTML(
 	prompt := dr.buildReportWriterPrompt(topic, learnings, urls, "")
 
 	disabled := false
+	// Usage billing: tag the call kind (see generateQueries for anchoring).
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindResearchReport)
 	resp, err := provider.CreateChat(ctx, []llm.Message{
 		{Role: "system", Content: prompt},
 		{Role: "user", Content: fmt.Sprintf("Write the research report for: %s", topic)},

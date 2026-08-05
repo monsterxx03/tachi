@@ -68,7 +68,7 @@ func RunDiscussionTurn(
 	eventCh := discussionAgent.RunOneOffStream(ctx, provider, systemPrompt, userMessage, llm.ChatOptions{
 		MaxTokens: agent.DefaultMaxTokens,
 	}, agent.WithOneOffMeta(&agent.OneOffMeta{
-		Kind:  "github-discussion",
+		Kind:  llm.UsageKindGithubDiscussion,
 		Extra: map[string]string{"repo": repoName},
 	}))
 

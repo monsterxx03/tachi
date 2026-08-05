@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -156,5 +157,47 @@ A fact worth remembering.
 	}
 	if fs.Reinforcements != 5 {
 		t.Errorf("reinforcements during dream were lost: expected 5, got %d", fs.Reinforcements)
+	}
+}
+
+// TestRunDream_RecordsUsageLedger is the B1 regression guard: dream agents
+// are bare NewAIAgent constructions — the provider must be usage-wrapped at
+// the RunDream call site (or via an injected recorder) so dream LLM calls
+// land in the ledger with kind=dream.
+func TestRunDream_RecordsUsageLedger(t *testing.T) {
+	provider := &mockProvider{streamFn: func(ctx context.Context) (<-chan llm.StreamEvent, error) {
+		return stopStream(), nil
+	}}
+	rec := llm.NewUsageRecorder(t.TempDir())
+	memRoot := t.TempDir()
+
+	state, err := RunDream(context.Background(), testPlan(memRoot), RunConfig{
+		FallbackProvider: provider,
+		ProviderName:     "dream-pro",
+		MaxIter:          5,
+		MaxTokens:        100,
+		MaxMessageChars:  2000,
+		Recorder:         rec,
+		Logger:           logger.Default(),
+	}, func(id string) ([]session.Message, error) { return nil, nil })
+	if err != nil {
+		t.Fatalf("RunDream: %v", err)
+	}
+	_ = state
+
+	rows, err := rec.Rows("", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) == 0 {
+		t.Fatal("B1: no ledger rows recorded for dream run (provider not usage-wrapped?)")
+	}
+	for _, r := range rows {
+		if r.Kind != llm.UsageKindDream {
+			t.Errorf("row kind = %q, want dream", r.Kind)
+		}
+		if r.Provider != "dream-pro" {
+			t.Errorf("row provider = %q, want dream-pro", r.Provider)
+		}
 	}
 }

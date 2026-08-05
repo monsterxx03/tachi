@@ -136,6 +136,12 @@ type AgentConfig struct {
 	// --- 压缩策略（测试可 mock）---
 	CompactStrategy CompactStrategy
 
+	// --- usage 计费账本 ---
+	// UsageRecorder 记录所有 LLM 调用的 token 用量（provider 层包装采集）。
+	// nil = 使用进程级共享单例（<home>/usage/，见 getGlobalUsageRecorder）。
+	// 测试注入自建 recorder 以隔离磁盘写入。
+	UsageRecorder *llm.UsageRecorder
+
 	// --- 系统配置 ---
 	SystemConfig AgentSystemConfig
 	FullConfig   *config.Config

@@ -35,6 +35,7 @@ func (m *Manager) runDreamForPlan(ctx context.Context, plan dream.Plan) (dream.S
 	return dream.RunDream(ctx, plan, dream.RunConfig{
 		FallbackProvider: provider,
 		DreamProvider:    m.cfg.Dream.Provider,
+		ProviderName:     resolved.Provider.Name, // for usage-ledger rows (fallback path)
 		Config:           m.cfg,
 		MaxIter:          m.cfg.Dream.SubagentMaxIter,
 		MaxTokens:        m.cfg.MaxTokens,

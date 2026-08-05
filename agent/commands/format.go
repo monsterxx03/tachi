@@ -3,13 +3,21 @@ package commands
 import (
 	"fmt"
 	"maps"
+	"math"
 	"slices"
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
+
+// roundToMicro rounds a CNY cost to the nearest micro (1e-6) so summed
+// sub-costs display without float64 accumulation noise.
+func roundToMicro(v float64) int {
+	return int(math.Round(v * 1e6))
+}
 
 // ---------------------------------------------------------------------------
 // /usage formatting
@@ -40,7 +48,12 @@ type UsageReportInfo struct {
 	// Populated from agent.LastTokenBreakdown() by each caller (TUI/channel/ACP).
 	EstBreakdown tokenbreakdown.Breakdown
 
-	Cost float64
+	// Cost comes from the usage ledger (single source of truth).
+	Cost            float64                        // total cost (all kinds)
+	LedgerAvailable bool                           // false = pre-upgrade session (no ledger rows)
+	KindCosts       map[llm.UsageKind]KindCostStat // per-kind breakdown (cost + calls)
+	ModelCosts      map[string]float64             // "provider:model" → cost
+	UnpricedCalls   int                            // rows without an effective price at call time
 
 	ToolCalls map[string]*ToolCallStat
 	MainCount int
@@ -49,6 +62,14 @@ type UsageReportInfo struct {
 	// PprofAddr is the pprof debug server address (e.g. "127.0.0.1:6060").
 	// Empty when pprof is not enabled.
 	PprofAddr string
+}
+
+// KindCostStat records cost and call count for one usage kind in the
+// /usage report. Defined here (not in agent/) so FormatUsageReport consumes
+// it directly without an agent import — agent/ already imports commands.
+type KindCostStat struct {
+	Cost  float64
+	Calls int
 }
 
 // ToolCallStat records per-tool call counts and error counts.
@@ -136,12 +157,44 @@ func FormatUsageReport(info *UsageReportInfo) string {
 		}
 	}
 
-	// Cost
+	// Cost — from the usage ledger (single source of truth).
 	sb.WriteString("**Cost**\n\n")
-	if info.Cost <= 0 {
-		sb.WriteString("No pricing data available\n\n")
+	if !info.LedgerAvailable {
+		sb.WriteString("本会话暂无计费数据\n\n")
 	} else {
 		fmt.Fprintf(&sb, "Total cost: **¥%.4f**\n\n", info.Cost)
+
+		// 会话成本 = conversation + subagent；旁路明细 = 其余 kind（对齐
+		// docs §9：旁路请求不含会话本身成本）。
+		var sessionCost, sessionCalls int
+		var sideParts []string
+		kinds := slices.Sorted(maps.Keys(info.KindCosts))
+		for _, k := range kinds {
+			st := info.KindCosts[k]
+			if k == llm.UsageKindConversation || k == llm.UsageKindSubagent {
+				sessionCost += roundToMicro(st.Cost)
+				sessionCalls += st.Calls
+				continue
+			}
+			sideParts = append(sideParts, fmt.Sprintf("%s ¥%.4f × %d", k, st.Cost, st.Calls))
+		}
+		if sessionCost > 0 || sessionCalls > 0 {
+			fmt.Fprintf(&sb, "会话成本: ¥%.4f (%d 次调用)\n\n", float64(sessionCost)/1e6, sessionCalls)
+		}
+		if len(sideParts) > 0 {
+			fmt.Fprintf(&sb, "旁路请求: %s\n\n", strings.Join(sideParts, " | "))
+		}
+		if len(info.ModelCosts) > 0 {
+			models := slices.Sorted(maps.Keys(info.ModelCosts))
+			mParts := make([]string, 0, len(models))
+			for _, mk := range models {
+				mParts = append(mParts, fmt.Sprintf("%s ¥%.4f", mk, info.ModelCosts[mk]))
+			}
+			fmt.Fprintf(&sb, "模型分布: %s\n\n", strings.Join(mParts, " | "))
+		}
+		if info.UnpricedCalls > 0 {
+			fmt.Fprintf(&sb, "%d 次调用未计价（无价格表）\n\n", info.UnpricedCalls)
+		}
 	}
 
 	// Tool calls

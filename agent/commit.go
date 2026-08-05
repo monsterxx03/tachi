@@ -40,5 +40,5 @@ func (a *AIAgent) RunCommitOneOff(ctx context.Context, systemPrompt, sessionID s
 	}
 	return a.RunOneOffStream(ctx, commitProvider, systemPrompt, prompt, opts,
 		WithToolSet(tools.ToolNameBash),
-		WithOneOffMeta(&OneOffMeta{Kind: "commit", SessionID: sessionID}))
+		WithOneOffMeta(&OneOffMeta{Kind: llm.UsageKindCommit, SessionID: sessionID}))
 }

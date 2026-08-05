@@ -9,7 +9,6 @@ import (
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/llm"
 )
 
 // --- /mcp ---
@@ -113,16 +112,15 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 		return "No session found for this thread. Send a message first to start a session.", nil
 	}
 
-	// Resolve price and context window
-	var price *llm.ModelPrice
+	// Resolve context window; cost now comes from the usage ledger (single
+	// source of truth) — no price resolution needed here.
 	var contextWindow int64
 	_, resolved := m.getProvider()
 	if resolved != nil {
 		contextWindow = resolved.Provider.ContextWindow
-		price = cmds.ResolveModelPrice(m.cfg, resolved.Provider.Name, resolved.Provider.Model)
 	}
 
-	report, err := agent.ComputeSessionUsage(sm, price, contextWindow)
+	report, err := agent.ComputeSessionUsage(sm, agent.GlobalUsageRecorder(), contextWindow)
 	if err != nil {
 		return fmt.Sprintf("Failed to compute usage: %v", err), nil
 	}

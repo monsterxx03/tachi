@@ -219,12 +219,6 @@ func loadSessionHistory(ctx context.Context, sess *ACPSession) []llm.Message {
 	return history
 }
 
-// resolveModelPrice resolves the effective price for the current provider+model,
-// including any per-provider overrides configured for this session's provider.
-func resolveModelPrice(sess *ACPSession) *llm.ModelPrice {
-	return cmds.ResolveModelPrice(sess.cfg, sess.resolveProviderName(), sess.agent.Model())
-}
-
 // ---------------------------------------------------------------------------
 // /commit handler
 // ---------------------------------------------------------------------------
@@ -491,8 +485,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		return acp.StopReasonEndTurn, nil
 	}
 
-	price := resolveModelPrice(sess)
-	report, err := agent.ComputeSessionUsage(sm, price, sess.agent.ContextWindow())
+	report, err := agent.ComputeSessionUsage(sm, sess.agent.UsageRecorder(), sess.agent.ContextWindow())
 	if err != nil {
 		sendTextUpdate(ctx, conn, sessionID, "Usage: "+err.Error())
 		return acp.StopReasonEndTurn, nil

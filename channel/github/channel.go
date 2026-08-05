@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/google/go-github/v69/github"
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -347,7 +348,10 @@ func (ch *GitHubChannel) resolveProvider(ctx context.Context) error {
 		return err
 	}
 
-	ch.provider = provider
+	// Usage billing: github agents are bare NewAIAgent constructions (dream
+	// pattern) whose provider never passes through NewAIAgentWithConfig —
+	// wrap here so all github LLM calls (discussion, PR) land in the ledger.
+	ch.provider = agent.WrapProviderForUsage(provider, cfg, providerName)
 	ch.logger.Info(ctx, "github: provider resolved", "provider", providerName, "model", resolved.Model)
 	return nil
 }

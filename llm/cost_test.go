@@ -29,41 +29,6 @@ func TestEffortFromString_Invalid(t *testing.T) {
 	}
 }
 
-func TestCalculateUsageCosts(t *testing.T) {
-	price := &ModelPrice{InputPrice: 2.0, OutputPrice: 4.0}
-
-	usages := []Usage{
-		{InputTokens: 100_000, OutputTokens: 50_000},
-		{InputTokens: 200_000, OutputTokens: 100_000},
-	}
-
-	total := CalculateUsageCosts(usages, price)
-	// Usage 0: 100K*2/1M + 50K*4/1M = 0.2 + 0.2 = 0.4
-	// Usage 1: 200K*2/1M + 100K*4/1M = 0.4 + 0.4 = 0.8
-	// Total: 1.2
-	expected := 0.4 + 0.8
-	if total < expected-0.0001 || total > expected+0.0001 {
-		t.Errorf("CalculateUsageCosts() = %v, want %v (within tolerance)", total, expected)
-	}
-}
-
-func TestCalculateUsageCosts_NilPrice(t *testing.T) {
-	usages := []Usage{
-		{InputTokens: 100_000, OutputTokens: 50_000},
-	}
-	total := CalculateUsageCosts(usages, nil)
-	if total != 0 {
-		t.Errorf("CalculateUsageCosts(nil price) = %v, want 0", total)
-	}
-}
-
-func TestCalculateUsageCosts_Empty(t *testing.T) {
-	total := CalculateUsageCosts(nil, &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0})
-	if total != 0 {
-		t.Errorf("CalculateUsageCosts(empty) = %v, want 0", total)
-	}
-}
-
 func TestCalculateCost_NegativeCacheRead(t *testing.T) {
 	// Edge case: CacheReadInputTokens exceeds InputTokens (shouldn't happen,
 	// but test defensive handling)
@@ -141,13 +106,5 @@ func TestResolveModelPrice_PartialOverride(t *testing.T) {
 	}
 	if price.CacheReadInputPrice != 0 {
 		t.Errorf("CacheReadInputPrice = %v, want 0", price.CacheReadInputPrice)
-	}
-}
-
-func TestCostSummary_ZeroValues(t *testing.T) {
-	// Sanity check: CostSummary with zero values
-	cs := CostSummary{}
-	if cs.TotalCost != 0 || cs.MainCost != 0 || cs.SubagentCost != 0 {
-		t.Error("expected all zero CostSummary")
 	}
 }

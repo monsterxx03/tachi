@@ -40,6 +40,12 @@ func (a *AIAgent) doCompact(ctx context.Context, messages []llm.Message) (summar
 	}()
 
 	// 2. Generate summary via the compact strategy.
+	// Usage billing: anchor the compact call to the current session so the
+	// summary cost lands in the right session's ledger rows (the strategy
+	// itself tags the kind).
+	if sid := a.sessionID(); sid != "" {
+		compactCtx = llm.WithSessionID(compactCtx, sid)
+	}
 	summary, err = a.Config.CompactStrategy.Compact(compactCtx, messages, a.Config.FullConfig.Compact.MaxTokens)
 	if err != nil {
 		return "", nil, fmt.Errorf("compact LLM call: %w", err)

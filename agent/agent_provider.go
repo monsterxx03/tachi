@@ -42,12 +42,20 @@ func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string
 // when the name is empty or resolution fails. Shared by the Setup*Provider
 // methods — they differ only in the config field, purpose string and
 // assignment target.
+//
+// The resolved provider is wrapped for usage billing here: Setup resolves
+// config NAMES into brand-new provider instances (BuildProvider), which
+// never pass through wrapUsageProviders — wrapping in the assign path is the
+// single choke point that covers title/commit/review/run/subagent alike.
+// Caller-pre-resolved providers bypass this method entirely and are wrapped
+// by wrapUsageProviders instead (WrapRecordingProvider is idempotent per
+// recorder, so no path can double-wrap).
 func (a *AIAgent) setupDedicatedProvider(cfg *config.Config, purpose, name string, assign func(llm.Provider)) {
 	if cfg == nil || name == "" {
 		return
 	}
 	if p := a.resolveProviderByName(cfg, purpose, name); p != nil {
-		assign(p)
+		assign(wrapForUsage(p, a.usageRecorder(), cfg, name))
 	}
 }
 
@@ -168,6 +176,11 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 	if p == nil {
 		p = a.Config.Provider
 	}
+
+	// Usage billing: title generation is a direct CreateChat call — tag the
+	// kind so ledger rows are grouped under title. Session anchoring already
+	// happens via chatOpts.SessionID below.
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindTitle)
 
 	messages := []llm.Message{
 		{

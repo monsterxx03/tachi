@@ -112,6 +112,11 @@ func (e *Executor) run(
 	branch string,
 	worktreePath string,
 ) (string, *tools.SubagentResult, error) {
+	// Usage billing: subagent calls flow through child.RunOneOffStream which
+	// has no one-off meta — tag the kind here so ledger rows are grouped
+	// under subagent (and the composite session ID is normalized to the
+	// parent session by RecordingProvider).
+	ctx = llm.WithUsageKind(ctx, llm.UsageKindSubagent)
 	subagentSessionID := shortID
 	if parentID := e.agent.ParentSessionID(); parentID != "" {
 		subagentSessionID = parentID + ":" + shortID
