@@ -3,6 +3,7 @@ package discord
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"os"
 	"strings"
 	"sync"
@@ -411,14 +412,19 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 
 	if result.Err != nil {
 		ch.logger.Error(context.Background(), "discord: handler error", result.Err)
-		return
+		// Fall through — the manager packages the error text into
+		// result.Reply (e.g. "❌ <err>"), so sending the reply below
+		// surfaces the failure to the user instead of staying silent.
+		// Matches weixin behavior.
 	}
 
 	// Send the reply.
 	reply := result.Reply
-	if reply.Content == "" {
+	content, shouldSend := replyContentForResult(result)
+	if !shouldSend {
 		return
 	}
+	reply.Content = content
 
 	// Build a MessageReference so the response shows as a Discord reply
 	// to the user's message (unless the incoming message has no ID or is
@@ -482,6 +488,20 @@ func (ch *DiscordChannel) processHandlerResult(m *discordgo.MessageCreate, resul
 	if !isDM(m.GuildID) && !isThread {
 		ch.updateChannelTopic(channelID, result.WorkDir, result.Model)
 	}
+}
+
+// replyContentForResult resolves the text to send for a HandlerResult.
+// Returns shouldSend=false when there is nothing to send (empty reply with
+// no error). On error with an empty reply, synthesizes a "❌ <err>" text so
+// failures are surfaced to the user instead of staying silent.
+func replyContentForResult(result channel.HandlerResult) (content string, shouldSend bool) {
+	if result.Reply.Content != "" {
+		return result.Reply.Content, true
+	}
+	if result.Err != nil {
+		return fmt.Sprintf("❌ %v", result.Err), true
+	}
+	return "", false
 }
 
 // resolveSenderName returns the best display name for a user.

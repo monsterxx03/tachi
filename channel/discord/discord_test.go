@@ -2,6 +2,7 @@ package discord
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strconv"
@@ -1119,5 +1120,66 @@ func TestStatusEmbedFinishDescTruncated(t *testing.T) {
 	}
 	if !strings.Contains(truncated, "还有") {
 		t.Errorf("truncated tool record should carry a remaining-count marker: %q", truncated)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// handler.go — replyContentForResult
+// ---------------------------------------------------------------------------
+
+// TestReplyContentForResult covers how processHandlerResult decides what to
+// send. The key behavior: an LLM/agent error must reach the user — the reply
+// is sent when present, otherwise a synthesized "❌ <err>" text is used, so
+// Discord never stays silent on failure (matches weixin).
+func TestReplyContentForResult(t *testing.T) {
+	boom := errors.New("llm api error: 500")
+
+	tests := []struct {
+		name     string
+		result   channel.HandlerResult
+		wantText string
+		wantSend bool
+	}{
+		{
+			name:     "normal reply",
+			result:   channel.HandlerResult{Reply: channel.OutgoingMessage{Content: "hello"}},
+			wantText: "hello",
+			wantSend: true,
+		},
+		{
+			name: "error with manager-packaged reply",
+			result: channel.HandlerResult{
+				Reply: channel.OutgoingMessage{Content: "❌ llm api error: 500"},
+				Err:   boom,
+			},
+			wantText: "❌ llm api error: 500",
+			wantSend: true,
+		},
+		{
+			name: "error without reply content synthesizes error text",
+			result: channel.HandlerResult{
+				Err: boom,
+			},
+			wantText: "❌ llm api error: 500",
+			wantSend: true,
+		},
+		{
+			name:     "empty result sends nothing",
+			result:   channel.HandlerResult{},
+			wantText: "",
+			wantSend: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			content, shouldSend := replyContentForResult(tt.result)
+			if shouldSend != tt.wantSend {
+				t.Errorf("shouldSend = %v, want %v", shouldSend, tt.wantSend)
+			}
+			if content != tt.wantText {
+				t.Errorf("content = %q, want %q", content, tt.wantText)
+			}
+		})
 	}
 }
