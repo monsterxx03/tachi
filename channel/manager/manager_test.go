@@ -142,30 +142,45 @@ func TestIncomingOutgoingMessage(t *testing.T) {
 	assert.Equal(t, "hi there", out.Content)
 }
 
+// TestNewManager verifies New resolves the provider eagerly: a config
+// without a provider fails construction.
 func TestNewManager(t *testing.T) {
-	cfg := config.DefaultConfig()
-
-	mgr := New(Config{
-		Cfg: cfg,
-	})
-
-	require.NotNil(t, mgr)
+	_, err := New(config.DefaultConfig())
+	require.Error(t, err)
 }
 
-func TestNewManagerDefaults(t *testing.T) {
-	cfg := config.DefaultConfig()
-
-	mgr := New(Config{
-		Cfg: cfg,
-	})
-
-	require.NotNil(t, mgr)
+// mustNewManager builds a Manager for tests, injecting a resolvable default
+// provider when cfg has none (New fails otherwise). The provider list is
+// only appended to when empty, so tests that assert on their own provider
+// lists are unaffected. The resolved provider is given a dummy API key —
+// BuildProvider requires one even though tests never make real API calls.
+func mustNewManager(t *testing.T, cfg *config.Config) *Manager {
+	t.Helper()
+	if cfg == nil {
+		cfg = config.DefaultConfig()
+	}
+	if cfg.Provider == "" {
+		if len(cfg.Providers) > 0 {
+			cfg.Provider = cfg.Providers[0].Name
+		} else {
+			cfg.Provider = "test"
+			cfg.Providers = []config.ProviderConfig{
+				{Name: "test", Type: "openai", Model: "test-model", APIKey: "sk-test"},
+			}
+		}
+	}
+	for i := range cfg.Providers {
+		if cfg.Providers[i].Name == cfg.Provider && cfg.Providers[i].APIKey == "" {
+			cfg.Providers[i].APIKey = "sk-test"
+		}
+	}
+	mgr, err := New(cfg)
+	require.NoError(t, err)
+	return mgr
 }
 
 func TestManagerAddChannel(t *testing.T) {
-	mgr := New(Config{
-		Cfg: config.DefaultConfig(),
-	})
+	mgr := mustNewManager(t, config.DefaultConfig())
 
 	mgr.Add(&mockChannel{name: "chan-a"})
 	mgr.Add(&mockChannel{name: "chan-b"})
@@ -192,38 +207,11 @@ func TestChannelStopsOnContextCancel(t *testing.T) {
 	assert.False(t, ch.isRunning())
 }
 
-func TestMessageHandlerReturnsErrorWithoutProvider(t *testing.T) {
-	mgr := New(Config{
-		Cfg: config.DefaultConfig(),
-	})
-
-	handler := mgr.buildHandler()
-
-	msg := channel.IncomingMessage{
-		ThreadID:  "thread-1",
-		MessageID: "msg-1",
-		Content:   "hello",
-	}
-
-	ctx := t.Context()
-	result := handler(ctx, msg)
-
-	// Expect error: initProvider was never called, so provider is nil.
-	assert.Error(t, result.Err)
-	// Handler still returns a structured OutgoingMessage with error text.
-	assert.Equal(t, "thread-1", result.Reply.ThreadID)
-	assert.Equal(t, "msg-1", result.Reply.ReplyTo)
-	assert.Contains(t, result.Reply.Content, "❌")
-	assert.False(t, result.Steered)
-}
-
 // TestDrainEvents_BasicResponse verifies drainEvents collects a clean
 // text response from the agent event channel.
 func TestDrainEvents_BasicResponse(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg: cfg,
-	})
+	mgr := mustNewManager(t, cfg)
 
 	mp := &mockProvider{
 		name:      "mock",
@@ -254,9 +242,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 // we handle it), drainEvents auto-approves and continues.
 func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg: cfg,
-	})
+	mgr := mustNewManager(t, cfg)
 
 	mp := &mockProvider{}
 	mp.streamFunc = func(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
@@ -302,9 +288,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 // auto-rejects AskUser events without blocking.
 func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg: cfg,
-	})
+	mgr := mustNewManager(t, cfg)
 
 	mp := &mockProvider{}
 	mp.streamFunc = func(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
@@ -347,22 +331,20 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 // ThreadID, loadThreadSession creates a fresh session manager and session.
 func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 	// Inject resolved config so loadThreadSession can call sm.New().
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock"}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock"}
 
 	// Unique per invocation to avoid interference from prior test runs.
 	threadID := fmt.Sprintf("new-%s-%d", t.Name(), time.Now().UnixNano())
-	sm, history, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
+	sm, history, err := mgr.loadThreadSession(threadID, mgr.defaultResolvedProvider)
 	require.NoError(t, err)
 	require.NotNil(t, sm)
 	assert.True(t, sm.HasCurrent(), "session should be auto-created")
@@ -378,22 +360,20 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	cfg := config.DefaultConfig()
 	store := newTempSessionStore(t)
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: store,
-	})
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = store
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock"}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock"}
 
 	threadID := fmt.Sprintf("hist-%s-%d", t.Name(), time.Now().UnixNano())
 
 	// First call: creates session + records a user message.
-	sm1, _, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
+	sm1, _, err := mgr.loadThreadSession(threadID, mgr.defaultResolvedProvider)
 	require.NoError(t, err)
 
 	msg := &sesspkg.Message{
@@ -404,7 +384,7 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	require.NoError(t, err)
 
 	// Second call: should find the existing session and return history.
-	sm2, history, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
+	sm2, history, err := mgr.loadThreadSession(threadID, mgr.defaultResolvedProvider)
 	require.NoError(t, err)
 	require.NotNil(t, history, "should return history from existing session")
 	assert.Len(t, history, 1)
@@ -420,17 +400,15 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	cfg := config.DefaultConfig()
 	store := newTempSessionStore(t)
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: store,
-	})
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = store
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock"}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock"}
 
 	handler := mgr.buildCommandHandler()
 	require.NotNil(t, handler)
@@ -453,7 +431,7 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	assert.Contains(t, resp.Content, "Started a new conversation")
 
 	// /usage requires a pre-existing session — load one first.
-	sm, _, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
+	sm, _, err := mgr.loadThreadSession(threadID, mgr.defaultResolvedProvider)
 	require.NoError(t, err)
 	require.NotNil(t, sm)
 	require.True(t, sm.HasCurrent())
@@ -491,17 +469,15 @@ func (m *mockCommandChannel) SetCommandHandler(handler channel.CommandHandler) {
 // (which requires a real config provider).
 func TestCommandChannel_Injection(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock"}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock"}
 
 	// Build the handler and simulate the Start() injection logic.
 	cmdHandler := mgr.buildCommandHandler()
@@ -527,17 +503,15 @@ func TestCommandChannel_Injection(t *testing.T) {
 // succeeds without panicking.
 func TestCommandChannel_NotInjectedToPlainChannel(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock"}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock"}
 
 	cmdHandler := mgr.buildCommandHandler()
 
@@ -775,20 +749,17 @@ func TestHandleModelCommand_List(t *testing.T) {
 			{Name: "deepseek", Type: "openai", Model: "deepseek-chat", BaseURL: "https://api.deepseek.com/v1"},
 		},
 	}
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	// Set up the provider manually (simulating what initProvider would do).
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	// Set up the provider manually (simulating what New's resolveProvider does).
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
 		Name:          "gpt-5.2",
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
-	mgr.currentProviderName = "gpt-5.2"
 
 	resp, err := mgr.handleModelCommand("thread-1", "")
 	require.NoError(t, err)
@@ -811,12 +782,10 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
 		},
 	}
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
 		Name:          "gpt-5.2",
@@ -824,7 +793,6 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
-	mgr.currentProviderName = "gpt-5.2"
 
 	resp, err := mgr.handleModelCommand("thread-1", "claude-haiku")
 	require.NoError(t, err)
@@ -834,18 +802,15 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 	assert.Contains(t, resp, "This thread will now use this model")
 
 	// Verify the override is resolved via getProviderForThread.
-	prov, resolved, name := mgr.getProviderForThread("thread-1")
-	assert.Equal(t, "claude-haiku", name)
-	assert.NotNil(t, prov)
-	assert.NotNil(t, resolved)
+	resolved := mgr.getProviderForThread("thread-1")
+	assert.Equal(t, "claude-haiku", resolved.Name)
+	assert.NotNil(t, resolved.Provider)
 	assert.Equal(t, "anthropic", resolved.Type)
 	assert.Equal(t, "claude-3-5-haiku-20241022", resolved.Model)
 
 	// Global state is unchanged.
-	mgr.providerMu.RLock()
-	defer mgr.providerMu.RUnlock()
-	assert.Equal(t, "gpt-5.2", mgr.currentProviderName)
-	assert.Equal(t, "openai", mgr.resolvedConfig.Type)
+	assert.Equal(t, "gpt-5.2", mgr.defaultResolvedProvider.Name)
+	assert.Equal(t, "openai", mgr.defaultResolvedProvider.Type)
 }
 
 // TestHandleModelCommand_Unknown verifies that /model <unknown> returns
@@ -856,34 +821,19 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 			{Name: "gpt-5.2", Type: "openai", Model: "gpt-5.2"},
 		},
 	}
-	mgr := New(Config{
-		Cfg: cfg,
-	})
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:  &mockProvider{name: "openai"},
 		Type:      "openai",
 		Model:     "gpt-5.2",
 		Name:      "gpt-5.2",
 		MaxTokens: 4096,
 	}
-	mgr.currentProviderName = "gpt-5.2"
 
 	resp, err := mgr.handleModelCommand("thread-1", "nonexistent")
 	require.NoError(t, err)
 	assert.Contains(t, resp, "not found")
 	assert.Contains(t, resp, "/model")
-}
-
-// TestHandleModelCommand_NoProviders verifies the empty providers case.
-func TestHandleModelCommand_NoProviders(t *testing.T) {
-	cfg := &config.Config{}
-	mgr := New(Config{
-		Cfg: cfg,
-	})
-
-	resp, err := mgr.handleModelCommand("thread-1", "")
-	require.NoError(t, err)
-	assert.Contains(t, resp, "No providers configured")
 }
 
 // TestHandleModelCommand_ListAfterSwitch verifies that after a switch,
@@ -895,12 +845,10 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
 		},
 	}
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
 		Name:          "gpt-5.2",
@@ -908,7 +856,6 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
-	mgr.currentProviderName = "gpt-5.2"
 
 	// Before switch: gpt-5.2 is active.
 	resp, err := mgr.handleModelCommand("thread-1", "")
@@ -936,12 +883,10 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
 		},
 	}
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
 		Name:          "gpt-5.2",
@@ -949,7 +894,6 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
-	mgr.currentProviderName = "gpt-5.2"
 
 	// /model (list)
 	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
@@ -971,8 +915,7 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	assert.Contains(t, resp, "Switched to **claude-haiku**")
 
 	// Verify the override is resolved via getProviderForThread.
-	_, _, name := mgr.getProviderForThread("thread-1")
-	assert.Equal(t, "claude-haiku", name)
+	assert.Equal(t, "claude-haiku", mgr.getProviderForThread("thread-1").Name)
 }
 
 // TestHandleModelCommand_ViaCommandHandler verifies /model via the typed
@@ -984,12 +927,10 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 			{Name: "claude-haiku", Type: "anthropic", Model: "claude-3-5-haiku-20241022", APIKey: "sk-ant-test"},
 		},
 	}
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
 		Name:          "gpt-5.2",
@@ -997,7 +938,6 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
-	mgr.currentProviderName = "gpt-5.2"
 
 	handler := mgr.buildCommandHandler()
 
@@ -1013,8 +953,7 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	assert.Contains(t, resp.Content, "Switched to **claude-haiku**")
 
 	// Verify the override is resolved via getProviderForThread.
-	_, _, name := mgr.getProviderForThread("thread-1")
-	assert.Equal(t, "claude-haiku", name)
+	assert.Equal(t, "claude-haiku", mgr.getProviderForThread("thread-1").Name)
 }
 
 // --- Skill command tests ---
@@ -1023,10 +962,8 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 // message when no skills are defined.
 func TestHandleSkillList_Empty(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 
 	resp, err := mgr.handleSkillList()
 	require.NoError(t, err)
@@ -1036,10 +973,8 @@ func TestHandleSkillList_Empty(t *testing.T) {
 // TestHandleSkillReload verifies that /skill reload re-scans directories.
 func TestHandleSkillReload(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 
 	resp, err := mgr.handleSkillReload()
 	require.NoError(t, err)
@@ -1050,10 +985,8 @@ func TestHandleSkillReload(t *testing.T) {
 // TestHandleSkillCommand_List verifies /skill and /skill list via handleSkillCommand.
 func TestHandleSkillCommand_List(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 
 	// /skill (empty args)
 	resp, err := mgr.handleSkillCommand("")
@@ -1069,10 +1002,8 @@ func TestHandleSkillCommand_List(t *testing.T) {
 // TestHandleSkillCommand_Reload verifies /skill reload via handleSkillCommand.
 func TestHandleSkillCommand_Reload(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 
 	resp, err := mgr.handleSkillCommand("reload")
 	require.NoError(t, err)
@@ -1082,10 +1013,8 @@ func TestHandleSkillCommand_Reload(t *testing.T) {
 // TestHandleSkillCommand_UnknownSub verifies /skill with unknown sub-command.
 func TestHandleSkillCommand_UnknownSub(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 
 	resp, err := mgr.handleSkillCommand("unknown-skill")
 	require.NoError(t, err)
@@ -1095,10 +1024,8 @@ func TestHandleSkillCommand_UnknownSub(t *testing.T) {
 // TestSkillViaTextSlash_List verifies /skill via the text-based handler.
 func TestSkillViaTextSlash_List(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 
 	result := mgr.handleSlashCommand(t.Context(), channel.IncomingMessage{
 		Content:   "/skill",
@@ -1128,10 +1055,8 @@ func TestSkillViaTextSlash_List(t *testing.T) {
 // TestSkillViaCommandHandler verifies /skill via the typed CommandHandler.
 func TestSkillViaCommandHandler(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:        cfg,
-		SkillStore: skill.NewStoreWithDirs(nil, nil),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.skillStore = skill.NewStoreWithDirs(nil, nil)
 	handler := mgr.buildCommandHandler()
 
 	// /skill list via typed command
@@ -1154,9 +1079,7 @@ func TestSkillViaCommandHandler(t *testing.T) {
 // for non-skill messages.
 func TestIsSkillActivation_NoSkill(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg: cfg,
-	})
+	mgr := mustNewManager(t, cfg)
 
 	_, _, ok := mgr.isSkillActivation("/help")
 	assert.False(t, ok)
@@ -1169,9 +1092,7 @@ func TestIsSkillActivation_NoSkill(t *testing.T) {
 // /skill reload are not treated as skill activations.
 func TestIsSkillActivation_ListNotActivation(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg: cfg,
-	})
+	mgr := mustNewManager(t, cfg)
 
 	_, _, ok := mgr.isSkillActivation("/skill list")
 	assert.False(t, ok, "/skill list should not be an activation")
@@ -1183,9 +1104,7 @@ func TestIsSkillActivation_ListNotActivation(t *testing.T) {
 // TestPrepareSkillActivation_NotFound verifies error handling for unknown skills.
 func TestPrepareSkillActivation_NotFound(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg: cfg,
-	})
+	mgr := mustNewManager(t, cfg)
 
 	_, errMsg, err := mgr.prepareSkillActivation("nonexistent-skill", "")
 	assert.Error(t, err)
@@ -1200,15 +1119,14 @@ func newThinkingTestManager(t *testing.T) *Manager {
 	t.Helper()
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{
-			{Name: "deepseek", Type: "openai", Model: "deepseek-v4-flash", BaseURL: "https://api.deepseek.com/v1"},
+			{Name: "deepseek", Type: "openai", Model: "deepseek-v4-flash", BaseURL: "https://api.deepseek.com/v1",
+				Spec: config.ModelSpec{ThinkingLevel: "high"}}, // provider config default: high (matches defaultResolvedProvider below)
 		},
 	}
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:       &mockProvider{name: "openai"},
 		Type:           "openai",
 		Model:          "deepseek-v4-flash",
 		Name:           "deepseek",
@@ -1217,7 +1135,6 @@ func newThinkingTestManager(t *testing.T) *Manager {
 		MaxTokens:      4096,
 		MaxIterations:  50,
 	}
-	mgr.currentProviderName = "deepseek"
 	return mgr
 }
 
@@ -1260,14 +1177,11 @@ func TestHandleThinkingCommand_SetLevel(t *testing.T) {
 	assert.Equal(t, "high", sess.ThinkingLevel)
 
 	// getProviderForThread applies the override on top of the provider config.
-	_, resolved, _ := mgr.getProviderForThread("thread-1")
-	require.NotNil(t, resolved)
+	resolved := mgr.getProviderForThread("thread-1")
 	assert.Equal(t, "high", resolved.ThinkingEffort)
 
-	// The global resolvedConfig must NOT be mutated (copy-on-write).
-	mgr.providerMu.RLock()
-	global := mgr.resolvedConfig.ThinkingEffort
-	mgr.providerMu.RUnlock()
+	// The global defaultResolvedProvider must NOT be mutated (copy-on-write).
+	global := mgr.defaultResolvedProvider.ThinkingEffort
 	assert.Equal(t, "high", global) // provider default is also high — use none below to prove isolation
 }
 
@@ -1278,16 +1192,13 @@ func TestHandleThinkingCommand_NoneOverridesAndIsolatesGlobal(t *testing.T) {
 	_, err := mgr.handleThinkingCommand("thread-1", "none")
 	require.NoError(t, err)
 
-	_, resolved, _ := mgr.getProviderForThread("thread-1")
-	require.NotNil(t, resolved)
+	resolved := mgr.getProviderForThread("thread-1")
 	require.NotNil(t, resolved.Thinking)
 	assert.False(t, *resolved.Thinking)
 	assert.Equal(t, "", resolved.ThinkingEffort)
 
 	// Global provider config untouched.
-	mgr.providerMu.RLock()
-	assert.Nil(t, mgr.resolvedConfig.Thinking)
-	mgr.providerMu.RUnlock()
+	assert.Nil(t, mgr.defaultResolvedProvider.Thinking)
 }
 
 func TestHandleThinkingCommand_DefaultClearsOverride(t *testing.T) {
@@ -1298,8 +1209,7 @@ func TestHandleThinkingCommand_DefaultClearsOverride(t *testing.T) {
 	require.NoError(t, err)
 
 	// max passes through unchanged (API maps it server-side).
-	_, resolved, _ := mgr.getProviderForThread("thread-1")
-	require.NotNil(t, resolved)
+	resolved := mgr.getProviderForThread("thread-1")
 	assert.Equal(t, "max", resolved.ThinkingEffort)
 
 	// Reset to provider default.
@@ -1313,7 +1223,7 @@ func TestHandleThinkingCommand_DefaultClearsOverride(t *testing.T) {
 	assert.Equal(t, "", sess.ThinkingLevel)
 
 	// Falls back to the provider config default (high).
-	_, resolved, _ = mgr.getProviderForThread("thread-1")
+	resolved = mgr.getProviderForThread("thread-1")
 	assert.Equal(t, "high", resolved.ThinkingEffort)
 }
 
@@ -1409,12 +1319,10 @@ func newOneoffTestManagerWithProvider(t *testing.T, prov llm.Provider, threadID 
 		{Name: "openai", Type: "openai", Model: "test-model"},
 	}
 
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.provider = prov
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+		Provider:      prov,
 		Type:          "openai",
 		Model:         "test-model",
 		Name:          "openai",
@@ -1422,7 +1330,6 @@ func newOneoffTestManagerWithProvider(t *testing.T, prov llm.Provider, threadID 
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
-	mgr.currentProviderName = "openai"
 
 	// Redirect the config base dir so transcripts can't leak into the real
 	// ~/.tachi even if the toggle above is missed (SetBaseDir("") restores
@@ -1431,10 +1338,15 @@ func newOneoffTestManagerWithProvider(t *testing.T, prov llm.Provider, threadID 
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir("") })
 
-	// Seed a session bound to threadID with a temp working directory.
+	// Seed a session bound to threadID with a temp working directory. The
+	// session's ProviderName is deliberately empty so getProviderForThread
+	// skips the session-override branch — a non-empty name matching
+	// cfg.Providers would resolve a REAL provider (mustNewManager injects a
+	// dummy API key), and the one-off commands must run against the injected
+	// mock provider instead of hitting the network.
 	workDir := t.TempDir()
 	sm := mgr.newSessionManager()
-	sess, err := sm.New("openai", workDir)
+	sess, err := sm.New("", workDir)
 	require.NoError(t, err)
 	sess.WorkingDir = workDir
 	require.NoError(t, sm.UpdateMeta(sess))

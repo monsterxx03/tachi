@@ -43,10 +43,7 @@ func (m *Manager) initCron(ctx context.Context) error {
 func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 	m.logger.Info(ctx, "channel: cron trigger", "job", job.ID, "job_name", job.Name, "thread", job.TargetThreadID)
 
-	_, resolved, _ := m.getProviderForThread(job.TargetThreadID)
-	if resolved == nil {
-		return fmt.Errorf("channel: provider not initialized for cron trigger")
-	}
+	resolved := m.getProviderForThread(job.TargetThreadID)
 
 	ca, err := m.acquireAgent(ctx, job.TargetThreadID)
 	if err != nil {

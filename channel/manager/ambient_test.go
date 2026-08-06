@@ -17,10 +17,8 @@ import (
 func TestWhisperGuard_NonDirectedGroupChat(t *testing.T) {
 	// Non-directed group chat message with whisper enabled → should be buffered.
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	handler := mgr.buildHandler()
 
@@ -48,10 +46,8 @@ func TestWhisperGuard_DirectedGroupChat(t *testing.T) {
 		BaseURL: "http://localhost:1234",
 	}}
 	cfg.Provider = "test"
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	handler := mgr.buildHandler()
 
@@ -82,10 +78,8 @@ func TestWhisperGuard_NonGroupChat(t *testing.T) {
 		BaseURL: "http://localhost:1234",
 	}}
 	cfg.Provider = "test"
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	handler := mgr.buildHandler()
 
@@ -115,10 +109,8 @@ func TestWhisperGuard_Disabled(t *testing.T) {
 		BaseURL: "http://localhost:1234",
 	}}
 	cfg.Provider = "test"
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	handler := mgr.buildHandler()
 
@@ -138,10 +130,8 @@ func TestWhisperGuard_Disabled(t *testing.T) {
 
 func TestAmbientBuffer_Batching(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	handler := mgr.buildHandler()
 
@@ -173,10 +163,8 @@ func TestAmbientBuffer_Batching(t *testing.T) {
 func TestAmbientBuffer_Cap(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Channel.Whisper.AmbientMaxBuffer = 3 // Very small cap for testing
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	handler := mgr.buildHandler()
 
@@ -208,10 +196,8 @@ func TestAmbientBuffer_Cap(t *testing.T) {
 func TestAmbientSteer_ActiveTurn(t *testing.T) {
 	// When an agent turn is active, ambient messages should be marked as Steered.
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
 
 	// Manually set up a thread with an active turn.
 	ta := &threadActivation{
@@ -296,7 +282,7 @@ func TestBuildAmbientPrompt_NoHistory(t *testing.T) {
 
 func TestIsSilence(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{Cfg: cfg})
+	mgr := mustNewManager(t, cfg)
 
 	assert.True(t, mgr.isSilence("[SILENT]"))
 	assert.True(t, mgr.isSilence("[silent]"))
@@ -356,7 +342,7 @@ func TestDefaultAmbientTools_ReadOnly(t *testing.T) {
 func TestAppendToAmbientHistory_Cap(t *testing.T) {
 	cfg := config.DefaultConfig()
 	cfg.Channel.Whisper.AmbientMaxHistory = 3
-	mgr := New(Config{Cfg: cfg})
+	mgr := mustNewManager(t, cfg)
 	ta := &threadActivation{}
 
 	ta.mu.Lock()
@@ -378,7 +364,7 @@ func TestAppendToAmbientHistory_Cap(t *testing.T) {
 
 func TestAmbientBatchWindow_Backoff(t *testing.T) {
 	cfg := config.DefaultConfig() // AmbientBatchWindow = 30s
-	mgr := New(Config{Cfg: cfg})
+	mgr := mustNewManager(t, cfg)
 	ta := &threadActivation{}
 
 	// No silences → base window.
@@ -432,11 +418,13 @@ func TestTrimAmbientHistory(t *testing.T) {
 }
 
 func TestFlushAmbientBatch_RecordsHistoryAndCleanup(t *testing.T) {
-	cfg := config.DefaultConfig() // no providers → turn exits early
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
+	cfg := config.DefaultConfig()
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	// Inject a mock provider so the ambient turn completes without a real
+	// API call (mustNewManager resolves a real provider; an unresolved one
+	// would otherwise hit the network and hang the test).
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock", responses: []string{"[SILENT]"}}
 
 	ta := mgr.activateThread("wave:group:gc_flush", t.Context())
 	ta.mu.Lock()
@@ -466,17 +454,15 @@ func TestFlushAmbientBatch_RecordsHistoryAndCleanup(t *testing.T) {
 
 func TestAmbientPreempt_DirectedMessage(t *testing.T) {
 	cfg := config.DefaultConfig()
-	mgr := New(Config{
-		Cfg:          cfg,
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, cfg)
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock", responses: []string{"收到"}}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock", responses: []string{"收到"}}
 
 	// Simulate a running ambient turn.
 	preempted := false

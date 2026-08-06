@@ -106,7 +106,7 @@ func TestFinalizeCompactResult_NilAgentStillFinalizes(t *testing.T) {
 	threadID := uniqueThreadID(t)
 
 	// Seed a session for the thread so finalize has something to compact.
-	sm, _, err := mgr.loadThreadSession(threadID, mgr.resolvedConfig)
+	sm, _, err := mgr.loadThreadSession(threadID, mgr.defaultResolvedProvider)
 	require.NoError(t, err)
 	require.True(t, sm.HasCurrent())
 	oldSessionID := sm.Current().ID
@@ -130,17 +130,15 @@ func TestFinalizeCompactResult_NilAgentStillFinalizes(t *testing.T) {
 
 func newTestManagerWithProvider(t *testing.T) *Manager {
 	t.Helper()
-	mgr := New(Config{
-		Cfg:          config.DefaultConfig(),
-		SessionStore: newTempSessionStore(t),
-	})
-	mgr.resolvedConfig = &config.ResolvedProvider{
+	mgr := mustNewManager(t, config.DefaultConfig())
+	mgr.sessionStore = newTempSessionStore(t)
+	mgr.defaultResolvedProvider = &config.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
 		MaxTokens:     4096,
 	}
-	mgr.provider = &mockProvider{name: "mock"}
+	mgr.defaultResolvedProvider.Provider = &mockProvider{name: "mock"}
 	return mgr
 }
 

@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"errors"
 	"os"
 	"sync"
 
@@ -109,10 +108,8 @@ func (m *Manager) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 //     current entry for threadID — otherwise it was evicted concurrently
 //     and we must retry.
 func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAgent, error) {
-	prov, resolved, curName := m.getProviderForThread(threadID)
-	if prov == nil || resolved == nil {
-		return nil, errProviderNotInitialized
-	}
+	resolved := m.getProviderForThread(threadID)
+	curName := resolved.Name
 
 	for {
 		m.agentCacheMu.Lock()
@@ -153,7 +150,7 @@ func (m *Manager) acquireAgent(ctx context.Context, threadID string) (*cachedAge
 		}
 
 		if ca.agent == nil {
-			built, err := m.buildAgent(ctx, threadID, prov, resolved)
+			built, err := m.buildAgent(ctx, threadID, resolved)
 			if err != nil {
 				// Roll back: drop the empty slot so the next attempt
 				// starts fresh, and release the long lock.
@@ -187,11 +184,7 @@ func (m *Manager) releaseAgent(ca *cachedAgent) {
 // prov and resolved are the provider and config to use for this agent.
 // Callers should pass the result of getProviderForThread(threadID) so that
 // per-thread /model overrides are respected.
-func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Provider, resolved *config.ResolvedProvider) (*agent.AIAgent, error) {
-	if prov == nil || resolved == nil {
-		return nil, errProviderNotInitialized
-	}
-
+func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *config.ResolvedProvider) (*agent.AIAgent, error) {
 	titleGen := false // channel mode has no title UI; skip the extra LLM call
 
 	// Inject shared MCP — Configure() will skip MCP init.
@@ -201,7 +194,7 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 	}
 
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:        prov,
+		Provider:        resolved.Provider,
 		ContextWindow:   resolved.ContextWindow,
 		Logger:          m.logger,
 		PermissionMode:  agent.PermissionModeSkip,
@@ -265,10 +258,6 @@ func (m *Manager) evictAllAgents() {
 	}
 	m.logger.Info(context.Background(), "channel: evicted all cached agents (provider switch)")
 }
-
-// errProviderNotInitialized is returned when acquireAgent runs before
-// initProvider has populated the manager's provider state.
-var errProviderNotInitialized = errors.New("channel: provider not initialized; call Start() first")
 
 // getAgentEstimateWithBreakdown returns the token estimate and its breakdown
 // from the cached agent for the given thread, read atomically so the two

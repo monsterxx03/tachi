@@ -79,9 +79,9 @@ func (m *Manager) handleCDCommand(threadID, dir string) (string, error) {
 	ca, ok := m.agentCache[threadID]
 	if !ok {
 		// Fetch provider name outside the lock to avoid lock ordering
-		// issues with providerMu (getProviderForThread acquires RLock).
+		// issues with the agent cache.
 		m.agentCacheMu.Unlock()
-		_, _, curName := m.getProviderForThread(threadID)
+		curName := m.getProviderForThread(threadID).Name
 		m.agentCacheMu.Lock()
 		if ca, ok = m.agentCache[threadID]; !ok {
 			ca = &cachedAgent{

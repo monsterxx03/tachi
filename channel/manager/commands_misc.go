@@ -189,10 +189,9 @@ func (m *Manager) handleResearchCommand(threadID, args string) (string, error) {
 	// prepareThreadSession — which normally creates the session and wires
 	// the SessionManager — never runs for slash commands. Without it, the
 	// artifact registration below would find no session.
-	if _, resolved, _ := m.getProviderForThread(threadID); resolved != nil {
-		if sm, _ := m.prepareThreadSession(threadID, resolved); sm != nil {
-			ca.agent.SetSessionManager(sm)
-		}
+	resolved := m.getProviderForThread(threadID)
+	if sm, _ := m.prepareThreadSession(threadID, resolved); sm != nil {
+		ca.agent.SetSessionManager(sm)
 	}
 
 	report, artifact, err := ca.agent.RunDeepResearch(context.Background(), m.cfg, args,

@@ -114,10 +114,9 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 	// thread may be /review itself, and runAgentTurn's prepareThreadSession
 	// never runs for slash commands. Without it the artifact registration in
 	// appendReviewArtifact would find no session.
-	if _, resolved, _ := m.getProviderForThread(threadID); resolved != nil {
-		if sm, _ := m.prepareThreadSession(threadID, resolved); sm != nil {
-			ca.agent.SetSessionManager(sm)
-		}
+	resolved := m.getProviderForThread(threadID)
+	if sm, _ := m.prepareThreadSession(threadID, resolved); sm != nil {
+		ca.agent.SetSessionManager(sm)
 	}
 
 	workDir := m.effectiveThreadWorkDir(ca, threadID)

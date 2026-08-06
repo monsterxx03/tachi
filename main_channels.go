@@ -27,9 +27,10 @@ func runChannels(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	mgr := channelmgr.New(channelmgr.Config{
-		Cfg: cfg,
-	})
+	mgr, err := channelmgr.New(cfg)
+	if err != nil {
+		return fmt.Errorf("channel: %w", err)
+	}
 
 	active := cfg.Channel.ActiveChannels()
 	if len(active) == 0 {

@@ -260,11 +260,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	// included), so the thread can never get stuck "active".
 	defer m.endAmbientTurn(ta, steerCh)
 
-	prov, resolved, _ := m.getProviderForThread(threadID)
-	if prov == nil || resolved == nil {
-		m.logger.Warn(ctx, "channel: ambient turn skipped (no provider)", "thread", threadID)
-		return
-	}
+	resolved := m.getProviderForThread(threadID)
 
 	whisperCfg := m.cfg.Channel.Whisper
 
@@ -299,7 +295,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	// Ambient turns should only use the whitelisted tools (MemoryRecall,
 	// WebFetch, WebSearch by default) without MCP tool access.
 	forked := parentAgent.Fork(agent.ForkConfig{
-		Provider:      prov,
+		Provider:      resolved.Provider,
 		MaxIterations: whisperCfg.AmbientMaxIterations,
 		AllowedTools:  allowedTools,
 		NoMCP:         true,

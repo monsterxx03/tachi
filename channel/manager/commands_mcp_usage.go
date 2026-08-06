@@ -114,11 +114,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 
 	// Resolve context window; cost now comes from the usage ledger (single
 	// source of truth) — no price resolution needed here.
-	var contextWindow int64
-	_, resolved := m.getProvider()
-	if resolved != nil {
-		contextWindow = resolved.ContextWindow
-	}
+	contextWindow := m.defaultResolvedProvider.ContextWindow
 
 	report, err := agent.ComputeSessionUsage(sm, agent.GlobalUsageRecorder(), contextWindow)
 	if err != nil {

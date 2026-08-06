@@ -147,18 +147,6 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			return m.handleSlashCommand(ctx, msg)
 		}
 
-		prov, resolved := m.getProvider()
-		if prov == nil || resolved == nil {
-			return channel.HandlerResult{
-				Reply: channel.OutgoingMessage{
-					ThreadID: msg.ThreadID,
-					Content:  "❌ channel manager not initialized; call Start() first",
-					ReplyTo:  msg.MessageID,
-				},
-				Err: fmt.Errorf("channel manager not initialized"),
-			}
-		}
-
 		// sendProgress pushes intermediate tool results in verbose mode.
 		sendProgress := func(text string) {
 			m.sendToThread(ctx, msg.ThreadID, text, msg.MessageID)
@@ -297,10 +285,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			// to use (e.g., updating Discord channel topic). Read before
 			// eviction in the compact path below.
 			workDir := m.getThreadWorkDir(msg.ThreadID)
-			model := ""
-			if _, resolved, _ := m.getProviderForThread(msg.ThreadID); resolved != nil {
-				model = resolved.Model
-			}
+			model := m.getProviderForThread(msg.ThreadID).Model
 			if result.err != nil {
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
@@ -418,11 +403,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}()
 
-	_, resolved, _ := m.getProviderForThread(msg.ThreadID)
-	if resolved == nil {
-		ta.resultCh <- handlerResult{err: fmt.Errorf("channel: provider not initialized")}
-		return
-	}
+	resolved := m.getProviderForThread(msg.ThreadID)
 
 	// Mode-specific prologue: cached agent vs throwaway compact agent.
 	scope, err := m.acquireForTurn(ctx, msg.ThreadID, ta.isCompact)
@@ -569,8 +550,8 @@ type turnScope struct {
 // tool view.
 func (m *Manager) acquireForTurn(ctx context.Context, threadID string, isCompact bool) (*turnScope, error) {
 	if isCompact {
-		prov, resolved, _ := m.getProviderForThread(threadID)
-		aiAgent, err := m.buildAgent(ctx, threadID, prov, resolved)
+		resolved := m.getProviderForThread(threadID)
+		aiAgent, err := m.buildAgent(ctx, threadID, resolved)
 		if err != nil {
 			return nil, fmt.Errorf("compact: build agent: %w", err)
 		}

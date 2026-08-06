@@ -2,7 +2,6 @@ package manager
 
 import (
 	"context"
-	"fmt"
 
 	"github.com/monsterxx03/tachi/dream"
 	"github.com/monsterxx03/tachi/session"
@@ -27,10 +26,7 @@ func (m *Manager) executeDream(ctx context.Context) error {
 
 // runDreamForPlan executes the dream pipeline for a single domain.
 func (m *Manager) runDreamForPlan(ctx context.Context, plan dream.Plan) (dream.State, error) {
-	provider, resolved := m.getProvider()
-	if resolved == nil {
-		return dream.State{}, errDreamNoProvider
-	}
+	provider := m.defaultResolvedProvider.Provider
 
 	return dream.RunDream(ctx, plan, dream.RunConfig{
 		FallbackProvider: provider,
@@ -53,5 +49,3 @@ func (m *Manager) buildMessageLoader() func(string) ([]session.Message, error) {
 		return sm.LoadMessages()
 	}
 }
-
-var errDreamNoProvider = fmt.Errorf("dream: main provider not initialized")

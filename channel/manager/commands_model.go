@@ -170,10 +170,7 @@ func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sess
 	// carries the THREAD's actual provider name (per-session /model override
 	// wins over the global one) — the wrapping layer reads it from there, so
 	// a non-default thread provider is neither mislabeled nor mispriced.
-	oldProvider, _, _ := m.getProviderForThread(threadID)
-	if oldProvider == nil {
-		return "", fmt.Errorf("no current provider available for compact")
-	}
+	oldProvider := m.getProviderForThread(threadID).Provider
 	// Usage billing: the manager-owned provider is outside the agent's
 	// recording chain — wrap it for this call so the summary cost is billed
 	// (kind + session anchoring set below). The row's provider name and price
@@ -261,17 +258,13 @@ func (m *Manager) handleThinkingCommand(threadID, args string) (string, error) {
 	// Ensure a provider is available before persisting. The per-session
 	// override is applied to the cached agent below via a single
 	// getProviderForThread (session meta already updated); a thread-level
-	// override that fails to resolve falls back to the global provider, so
-	// checking the global state here is sufficient.
-	if _, resolved := m.getProvider(); resolved == nil {
-		return "无法解析当前 provider 配置，无法设置 thinking level。", nil
-	}
+	// override that fails to resolve falls back to the global provider.
 
 	if sess == nil {
 		// No session yet — create one bound to this thread so the override
 		// persists across turns (same pattern as /model).
 		wd, _ := os.Getwd()
-		newSess, err := sm.New(m.currentProviderName, wd)
+		newSess, err := sm.New(m.defaultResolvedProvider.Name, wd)
 		if err != nil {
 			return "", fmt.Errorf("create session: %w", err)
 		}
@@ -307,10 +300,7 @@ func (m *Manager) handleThinkingCommand(threadID, args string) (string, error) {
 // session's effective thinking config. If no agent is cached yet, the next
 // turn's build picks the override up via getProviderForThread — no-op here.
 func (m *Manager) applyThinkingToCachedAgent(threadID string, sess *session.Session) {
-	_, resolved, _ := m.getProviderForThread(threadID)
-	if resolved == nil {
-		return
-	}
+	resolved := m.getProviderForThread(threadID)
 	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *resolved)
 
 	m.agentCacheMu.Lock()

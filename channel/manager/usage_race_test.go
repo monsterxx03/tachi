@@ -17,7 +17,7 @@ import (
 // must not block an in-flight turn), so before turnState this raced on both
 // lastInputTokens and lastTokenBreakdown. Run with -race.
 func TestGetAgentEstimateWithBreakdown_ConcurrentTurn(t *testing.T) {
-	m := New(Config{Cfg: config.DefaultConfig()})
+	m := mustNewManager(t, config.DefaultConfig())
 
 	const threadID = "thread-usage-race"
 	ai := agent.NewAIAgent(nil, 10)
@@ -63,7 +63,7 @@ func TestGetAgentEstimateWithBreakdown_ConcurrentTurn(t *testing.T) {
 }
 
 func TestGetAgentEstimateWithBreakdown_UnknownThread(t *testing.T) {
-	m := New(Config{Cfg: config.DefaultConfig()})
+	m := mustNewManager(t, config.DefaultConfig())
 
 	total, bd := m.getAgentEstimateWithBreakdown("no-such-thread")
 	if total != 0 {

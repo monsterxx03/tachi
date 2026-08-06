@@ -34,10 +34,7 @@ func (m *Manager) buildCommandHandler() channel.CommandHandler {
 			workDir = m.getThreadWorkDir(cmd.ThreadID)
 		}
 		// Resolve the current model name for channel topic display.
-		model := ""
-		if _, resolved, _ := m.getProviderForThread(cmd.ThreadID); resolved != nil {
-			model = resolved.Model
-		}
+		model := m.getProviderForThread(cmd.ThreadID).Model
 		// Return the full OutgoingMessage so channels can send attachments
 		// (e.g., /transcript HTML file) alongside the text reply.
 		reply := result.Reply

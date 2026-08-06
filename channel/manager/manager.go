@@ -22,38 +22,6 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// Config holds the configuration for creating a Manager.
-type Config struct {
-	// Cfg is the loaded tachi configuration (providers, web search, MCP, etc.).
-	Cfg *config.Config
-
-	// ProviderName overrides the default provider from config.
-	// If empty, uses the config's default provider.
-	ProviderName string
-
-	// ModelName overrides the model. If empty, uses the provider's configured model.
-	ModelName string
-
-	// SessionStore overrides the default file-based session store.
-	// If nil, sessions are stored under ~/.tachi/session (default).
-	// Tests should inject a FileStore backed by a temporary directory.
-	SessionStore session.Store
-
-	// SkillStore overrides the default skill store. If nil, the manager
-	// auto-builds one scanning the project's `.tachi/skills/` and the
-	// user-global skill directory. Tests should inject a hermetic store
-	// (e.g. via skill.NewStoreWithDirs) so they don't pick up real skills
-	// from the host filesystem.
-	SkillStore *skill.Store
-}
-
-// initProviderResult holds the lazily-computed provider state.
-type initProviderResult struct {
-	provider llm.Provider
-	resolved *config.ResolvedProvider
-	name     string // Provider config name from config (e.g., "gpt-5.2", "claude")
-}
-
 // Manager orchestrates Channel implementations and bridges them to agent instances.
 //
 // # Responsibilities
@@ -120,19 +88,15 @@ type initProviderResult struct {
 // to the agent at the next tool-call boundary, allowing the user to refine
 // instructions mid-turn without waiting for the current turn to finish.
 type Manager struct {
-	cfg                 *config.Config
-	providerName        string
-	modelName           string
-	currentProviderName string // Tracks which provider is currently active
+	cfg *config.Config
 
-	// Lazy-initialized via sync.OnceValues.
-	initProviderFn func() (initProviderResult, error)
-	provider       llm.Provider
-	resolvedConfig *config.ResolvedProvider
-
-	// providerMu protects provider and resolvedConfig during model switching.
-	// Both are set once in initProvider() and can be updated by /model command.
-	providerMu sync.RWMutex
+	// defaultResolvedProvider is the eagerly-resolved default provider, set
+	// once in New and immutable after construction (per-thread /model
+	// overrides live in session meta, never here), so reads need no lock.
+	// New returns an error when resolution fails, so a constructed Manager
+	// always has a non-nil defaultResolvedProvider — callers can dereference
+	// it directly without nil checks.
+	defaultResolvedProvider *config.ResolvedProvider
 
 	// Session store override (nil = use default ~/.tachi/session).
 	sessionStore session.Store
@@ -260,27 +224,28 @@ type handlerResult struct {
 	attachments []channel.OutgoingAttachment
 }
 
-// New creates a Manager.
-// Channels are interactive — the iteration budget is always unlimited (0).
-func New(mcfg Config) *Manager {
-	skillStore := mcfg.SkillStore
-	if skillStore == nil {
-		skillStore = skill.NewStore(config.FindProjectRoot())
+// New creates a Manager and eagerly resolves the default provider from cfg.
+// Returns an error when the provider cannot be resolved — the manager is
+// not constructed, so callers must not proceed (don't Start, don't handle
+// messages). Channels are interactive — the iteration budget is always
+// unlimited (0).
+func New(cfg *config.Config) (*Manager, error) {
+	resolved, err := cfg.DefaultProvider()
+	if err != nil {
+		return nil, err
 	}
 	return &Manager{
-		cfg:            mcfg.Cfg,
-		providerName:   mcfg.ProviderName,
-		modelName:      mcfg.ModelName,
-		sessionStore:   mcfg.SessionStore,
-		skillStore:     skillStore,
-		agentCache:     make(map[string]*cachedAgent),
-		processManager: tools.NewProcessManager(),
-		logger:         logger.New("channel"),
-		group:          syncx.NewGroup(),
-		threadChannels: make(map[string]channel.Channel),
-		oneoffCancels:  make(map[string]context.CancelFunc),
-		oneoffSem:      syncx.NewSemaphore(maxOneoffConcurrency),
-	}
+		cfg:                     cfg,
+		defaultResolvedProvider: resolved,
+		skillStore:              skill.NewStore(config.FindProjectRoot()),
+		agentCache:              make(map[string]*cachedAgent),
+		processManager:          tools.NewProcessManager(),
+		logger:                  logger.New("channel"),
+		group:                   syncx.NewGroup(),
+		threadChannels:          make(map[string]channel.Channel),
+		oneoffCancels:           make(map[string]context.CancelFunc),
+		oneoffSem:               syncx.NewSemaphore(maxOneoffConcurrency),
+	}, nil
 }
 
 // Add registers a Channel. Must be called before Start().
@@ -297,9 +262,7 @@ func (m *Manager) Add(ch channel.Channel) {
 // ctx governs the lifetime of all channels — cancelling it triggers graceful
 // shutdown.
 func (m *Manager) Start(ctx context.Context) error {
-	if err := m.initProvider(); err != nil {
-		return fmt.Errorf("channel: %w", err)
-	}
+	// New already resolved the provider — reaching Start means it succeeded.
 
 	// Initialize cron scheduler if enabled.
 	if m.cfg != nil && m.cfg.Cron.IsEnabled() {
@@ -397,15 +360,6 @@ func (m *Manager) Start(ctx context.Context) error {
 
 // --- Provider resolution ---
 
-// getProvider returns the current global (default) provider and resolved config
-// under read lock. Use getProviderForThread for agent turn paths that should
-// respect per-thread /model overrides.
-func (m *Manager) getProvider() (llm.Provider, *config.ResolvedProvider) {
-	m.providerMu.RLock()
-	defer m.providerMu.RUnlock()
-	return m.provider, m.resolvedConfig
-}
-
 // getProviderForThread returns the provider for the given thread by reading
 // the session's ProviderName override (set by /model) from session meta.
 // Falls back to the global provider when the session has no override or
@@ -414,8 +368,8 @@ func (m *Manager) getProvider() (llm.Provider, *config.ResolvedProvider) {
 // The session's per-session thinking override (set by /thinking) is applied
 // on top of whichever provider wins, so future agent builds for this thread
 // inherit it. The returned resolved config is a fresh copy — the global
-// resolvedConfig is never mutated.
-func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.ResolvedProvider, string) {
+// defaultResolvedProvider is never mutated.
+func (m *Manager) getProviderForThread(threadID string) *config.ResolvedProvider {
 	var sess *session.Session
 	if threadID != "" && m.cfg != nil {
 		sm := m.newSessionManager()
@@ -425,35 +379,27 @@ func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.R
 		}
 	}
 
-	var prov llm.Provider
-	var resolved *config.ResolvedProvider
-	var name string
+	resolved := m.defaultResolvedProvider
 
 	// Session-level /model override wins over the global provider.
 	if sess != nil && sess.ProviderName != "" {
 		if rp, err := m.cfg.BuildProvider(sess.ProviderName); err == nil {
-			prov, resolved, name = rp.Provider, rp, sess.ProviderName
-		}
-		if prov == nil {
+			resolved = rp
+		} else {
 			m.logger.Warn(context.Background(), "channel: thread has ProviderName but could not resolve; falling back to global",
-				"thread", threadID, "provider_name", sess.ProviderName)
+				"thread", threadID, "provider_name", sess.ProviderName, "error", err)
 		}
-	}
-	if prov == nil {
-		m.providerMu.RLock()
-		prov, resolved, name = m.provider, m.resolvedConfig, m.currentProviderName
-		m.providerMu.RUnlock()
 	}
 
 	// Per-session thinking override wins over the provider config default.
-	// Copy before mutating: the global resolvedConfig is shared state.
+	// Copy before mutating: the global defaultResolvedProvider is shared state.
 	if sess != nil && sess.ThinkingLevel != "" {
 		cp := *resolved
 		cp.Thinking, cp.ThinkingEffort = cmds.EffectiveThinking(sess.ThinkingLevel, cp)
 		resolved = &cp
 	}
 
-	return prov, resolved, name
+	return resolved
 }
 
 // providerNameForThread returns the provider config name active for the
@@ -467,43 +413,7 @@ func (m *Manager) providerNameForThread(threadID string) string {
 			return sess.ProviderName
 		}
 	}
-	m.providerMu.RLock()
-	defer m.providerMu.RUnlock()
-	return m.currentProviderName
-}
-
-func (m *Manager) initProvider() error {
-	if m.initProviderFn == nil {
-		m.initProviderFn = sync.OnceValues(func() (initProviderResult, error) {
-			// If a channel-specific provider name is configured, override.
-			cfg := m.cfg
-			if m.providerName != "" {
-				cfgCopy := *m.cfg
-				cfgCopy.Provider = m.providerName
-				cfg = &cfgCopy
-			}
-
-			resolved, err := cfg.DefaultProvider()
-			if err != nil {
-				return initProviderResult{}, fmt.Errorf("resolve config: %w", err)
-			}
-
-			// Capture the resolved provider name for /model display.
-			name := resolved.Name
-
-			return initProviderResult{provider: resolved.Provider, resolved: resolved, name: name}, nil
-		})
-	}
-	result, err := m.initProviderFn()
-	if err != nil {
-		return err
-	}
-	m.providerMu.Lock()
-	m.provider = result.provider
-	m.resolvedConfig = result.resolved
-	m.currentProviderName = result.name
-	m.providerMu.Unlock()
-	return nil
+	return m.defaultResolvedProvider.Name
 }
 
 // newSessionManager creates a session manager backed by m.sessionStore
