@@ -138,6 +138,11 @@ func main() {
 				},
 			},
 			{
+				Name:   "usage",
+				Usage:  "Show total cost from the usage ledger (all-time + per-day)",
+				Action: runUsage,
+			},
+			{
 				Name:  "transcript",
 				Usage: "Visualize session transcripts",
 				Commands: []*cli.Command{
@@ -221,14 +226,14 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:         resolved.Provider,
-		ContextWindow:    resolved.ContextWindow,
-		Logger:           logger.New("tui"),
-		PermissionMode:   agent.PermissionModeTUI,
-		Thinking:         resolved.Thinking,
-		ThinkingEffort:   resolved.ThinkingEffort,
-		FullConfig:       cfg,
-		SystemConfig:     agent.SystemConfigFromConfig(cfg),
+		Provider:       resolved.Provider,
+		ContextWindow:  resolved.ContextWindow,
+		Logger:         logger.New("tui"),
+		PermissionMode: agent.PermissionModeTUI,
+		Thinking:       resolved.Thinking,
+		ThinkingEffort: resolved.ThinkingEffort,
+		FullConfig:     cfg,
+		SystemConfig:   agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)

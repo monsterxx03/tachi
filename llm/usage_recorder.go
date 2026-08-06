@@ -184,6 +184,20 @@ func (r *UsageRecorder) fileFor(ts time.Time) (*os.File, error) {
 // Files are streamed line-by-line (bufio) — the ledger is kept forever, so
 // whole-file reads would grow linearly with age.
 func (r *UsageRecorder) Rows(sessionID string, from time.Time) ([]UsageRow, error) {
+	return r.scanRows(from, func(row *UsageRow) bool { return row.SessionID == sessionID })
+}
+
+// RowsAll returns EVERY ledger row (session-scoped or session-less), scanning
+// day files from (and including) the given lower bound date onward; a zero
+// from scans all files. Used by global aggregation (tachi usage) where no
+// session filter applies.
+func (r *UsageRecorder) RowsAll(from time.Time) ([]UsageRow, error) {
+	return r.scanRows(from, nil)
+}
+
+// scanRows streams every day file, keeping rows for which match is nil
+// (keep all) or returns true.
+func (r *UsageRecorder) scanRows(from time.Time, match func(row *UsageRow) bool) ([]UsageRow, error) {
 	entries, err := os.ReadDir(r.dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -222,9 +236,13 @@ func (r *UsageRecorder) Rows(sessionID string, from time.Time) ([]UsageRow, erro
 			if err := json.Unmarshal([]byte(line), &row); err != nil {
 				continue // best-effort: skip malformed lines
 			}
-			if row.SessionID == sessionID {
+			if match == nil || match(&row) {
 				rows = append(rows, row)
 			}
+		}
+		if err := sc.Err(); err != nil {
+			_ = f.Close()
+			return nil, err
 		}
 		_ = f.Close()
 	}
