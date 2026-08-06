@@ -179,20 +179,6 @@ func main() {
 	}
 }
 
-func resolveProviderFromConfig(cfg *config.Config) (llm.Provider, *config.ResolvedConfig, error) {
-	resolved, err := config.Resolve(cfg)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	provider, err := config.NewProviderFromResolved(&resolved.Provider)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	return provider, resolved, nil
-}
-
 func runTUI(ctx context.Context, cmd *cli.Command) error {
 	// If -e/--edit flag is set, open the config file in the default editor and exit.
 	if cmd.Bool("edit") {
@@ -228,19 +214,19 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	provider, resolved, err := resolveProviderFromConfig(cfg)
+	resolved, err := cfg.DefaultProvider()
 	if err != nil {
 		return err
 	}
 
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:         provider,
-		ContextWindow:    resolved.Provider.ContextWindow,
+		Provider:         resolved.Provider,
+		ContextWindow:    resolved.ContextWindow,
 		Logger:           logger.New("tui"),
 		PermissionMode:   agent.PermissionModeTUI,
-		Thinking:         resolved.Provider.Thinking,
-		ThinkingEffort:   resolved.Provider.ThinkingEffort,
+		Thinking:         resolved.Thinking,
+		ThinkingEffort:   resolved.ThinkingEffort,
 		FullConfig:       cfg,
 		SystemConfig:     agent.SystemConfigFromConfig(cfg),
 	})
@@ -252,7 +238,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 	defer aiAgent.Close()
 
-	providerInfo := fmt.Sprintf("%s (%s)", resolved.Provider.Type, resolved.Provider.Model)
+	providerInfo := fmt.Sprintf("%s (%s)", resolved.Type, resolved.Model)
 
 	var initialSessionList []*session.Session
 
@@ -289,7 +275,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		},
 		ProviderInfo:       providerInfo,
 		Config:             cfg,
-		ContextWindow:      resolved.Provider.ContextWindow,
+		ContextWindow:      resolved.ContextWindow,
 		InitialSessionList: initialSessionList,
 		MCPManager:         mcpMgr,
 		MCPServers:         cfg.MCPServers,

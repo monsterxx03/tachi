@@ -8,7 +8,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -78,12 +77,7 @@ func (m *Model) exitModelSelect(msg string) {
 
 func (m *Model) switchToProvider(idx int) tea.Cmd {
 	pCfg := &m.providerItems[idx]
-	resolved, err := config.ResolveProviderConfig(pCfg)
-	if err != nil {
-		m.exitModelSelect("Error: " + err.Error())
-		return nil
-	}
-	provider, err := config.NewProviderFromResolved(resolved)
+	resolved, err := m.cfg.BuildProvider(pCfg.Name)
 	if err != nil {
 		m.exitModelSelect("Error: " + err.Error())
 		return nil
@@ -98,7 +92,7 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	targetCW := resolved.ContextWindow
 	if m.shouldCompactBeforeSwitch(currentEstimate, targetCW) {
 		m.pendingSwitchProvider = &pendingSwitchProvider{
-			provider:       provider,
+			provider:       resolved.Provider,
 			providerName:   pCfg.Name,
 			providerInfo:   providerInfo,
 			contextWindow:  targetCW,
@@ -128,7 +122,7 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	}
 
 	// Normal switch — context fits in the target model's window.
-	m.agent.SetProvider(provider)
+	m.agent.SetProvider(resolved.Provider)
 	m.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
 	m.reapplySessionThinking() // keep the per-session /thinking override, if any
 	m.agent.SetContextWindow(targetCW)

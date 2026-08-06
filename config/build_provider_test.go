@@ -2,7 +2,6 @@ package config
 
 import (
 	"errors"
-	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -24,17 +23,32 @@ func testConfig(t *testing.T) *Config {
 	return cfg
 }
 
-// TestBuildProvider_NotFound verifies empty and unknown names map to
-// ErrProviderNotFound (callers choose fallback vs fail-fast).
+// TestBuildProvider_NotFound verifies that unknown names map to
+// ErrProviderNotFound (callers choose fallback vs fail-fast). An EMPTY name
+// is not an error: it means "the default provider" (BuildProvider("")
+// ≡ DefaultProvider()).
 func TestBuildProvider_NotFound(t *testing.T) {
 	cfg := testConfig(t)
 
-	for _, name := range []string{"", "nonexistent"} {
-		p, resolved, err := cfg.BuildProvider(name)
-		assert.Nil(t, p, "provider for %q should be nil", name)
-		assert.Nil(t, resolved)
-		assert.ErrorIs(t, err, ErrProviderNotFound, "name %q should map to ErrProviderNotFound", name)
-	}
+	// Empty name resolves the default provider — the shared `""` = default rule.
+	resolved, err := cfg.BuildProvider("")
+	assert.NoError(t, err, "empty name should resolve the default provider")
+	assert.NotNil(t, resolved.Provider)
+	assert.Equal(t, "deepseek", resolved.Name)
+
+	// Unknown names still fail.
+	resolved, err = cfg.BuildProvider("nonexistent")
+	assert.Nil(t, resolved)
+	assert.ErrorIs(t, err, ErrProviderNotFound, "unknown name should map to ErrProviderNotFound")
+}
+
+// TestBuildProvider_NoDefault: with no default configured at all, the empty
+// name surfaces ErrProviderNotFound (same as an unknown name).
+func TestBuildProvider_NoDefault(t *testing.T) {
+	cfg := &Config{} // no Provider field, no Providers
+	resolved, err := cfg.BuildProvider("")
+	assert.Nil(t, resolved)
+	assert.ErrorIs(t, err, ErrProviderNotFound)
 }
 
 // TestBuildProvider_OK verifies a configured name resolves into a provider
@@ -43,32 +57,15 @@ func TestBuildProvider_NotFound(t *testing.T) {
 func TestBuildProvider_OK(t *testing.T) {
 	cfg := testConfig(t)
 
-	p, resolved, err := cfg.BuildProvider("deepseek")
+	resolved, err := cfg.BuildProvider("deepseek")
 	require.NoError(t, err)
-	require.NotNil(t, p)
 	require.NotNil(t, resolved)
+	require.NotNil(t, resolved.Provider)
 
 	assert.Equal(t, "deepseek", resolved.Name)
 	assert.Equal(t, "deepseek-v4", resolved.Model)
-	assert.Equal(t, "deepseek-v4", p.Model())
+	assert.Equal(t, "deepseek-v4", resolved.Provider.Model())
 	assert.True(t, resolved.ContextWindow > 0)
-}
-
-// TestNewProviderFromResolved verifies the constructor maps ResolvedProvider
-// fields onto llm.NewProvider's positional args (baseURL/apiKey order guard).
-func TestNewProviderFromResolved(t *testing.T) {
-	cfg := testConfig(t)
-	_, resolved, err := cfg.BuildProvider("deepseek")
-	require.NoError(t, err)
-
-	p, err := NewProviderFromResolved(resolved)
-	require.NoError(t, err)
-	assert.Equal(t, "deepseek-v4", p.Model())
-
-	// Unsupported type surfaces as an error.
-	_, err = NewProviderFromResolved(&ResolvedProvider{Type: "bogus", Model: "x", APIKey: "k"})
-	require.Error(t, err)
-	assert.True(t, strings.Contains(err.Error(), "unsupported provider type"))
 }
 
 // TestBuildProvider_MissingAPIKey verifies the resolution error is wrapped
@@ -79,9 +76,9 @@ func TestBuildProvider_MissingAPIKey(t *testing.T) {
 	t.Setenv("DEEPSEEK_API_KEY", "") // ensure no env fallback
 
 	// Provider type "openai" reads OPENAI_API_KEY — make sure it's empty too.
-	// ResolveAPIKey falls back to pCfg.APIKey which we cleared.
-	p, _, err := cfg.BuildProvider("deepseek")
-	assert.Nil(t, p)
+	// resolveAPIKey falls back to pCfg.APIKey which we cleared.
+	resolved, err := cfg.BuildProvider("deepseek")
+	assert.Nil(t, resolved)
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrProviderNotFound), "missing API key is not a not-found error")
 }

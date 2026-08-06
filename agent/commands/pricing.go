@@ -23,7 +23,7 @@ import (
 // no extra handling here.
 func ResolveModelPrice(cfg *config.Config, providerName, model string) *llm.ModelPrice {
 	if cfg != nil && providerName != "" {
-		if pCfg := cfg.FindProvider(providerName); pCfg != nil {
+		if pCfg := cfg.ProviderConfig(providerName); pCfg != nil {
 			// Spec.Pricing is optional (pointer); nil means "no overrides".
 			var input, output, cacheRead, cacheCreate *float64
 			if p := pCfg.Spec.Pricing; p != nil {

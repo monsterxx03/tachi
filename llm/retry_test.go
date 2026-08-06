@@ -23,8 +23,9 @@ type stubProvider struct {
 	streamCalls int
 }
 
-func (s *stubProvider) Name() string  { return "stub" }
-func (s *stubProvider) Model() string { return "stub-model" }
+func (s *stubProvider) Name() string         { return "stub" }
+func (s *stubProvider) ProviderName() string { return "" }
+func (s *stubProvider) Model() string        { return "stub-model" }
 
 func (s *stubProvider) CreateChat(_ context.Context, _ []Message, _ []Tool, _ ChatOptions) (*Response, error) {
 	i := s.chatCalls

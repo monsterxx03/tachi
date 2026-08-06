@@ -340,7 +340,7 @@ func (ch *GitHubChannel) resolveProvider(ctx context.Context) error {
 		providerName = cfg.Provider // use default provider
 	}
 
-	provider, resolved, err := cfg.BuildProvider(providerName)
+	resolved, err := cfg.BuildProvider(providerName)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found in config", providerName)
 	}
@@ -351,7 +351,8 @@ func (ch *GitHubChannel) resolveProvider(ctx context.Context) error {
 	// Usage billing: github agents are bare NewAIAgent constructions (dream
 	// pattern) whose provider never passes through NewAIAgentWithConfig —
 	// wrap here so all github LLM calls (discussion, PR) land in the ledger.
-	ch.provider = agent.WrapProviderForUsage(provider, cfg, providerName)
+	// The row's provider name comes from the provider itself (BuildProvider).
+	ch.provider = agent.WrapProviderForUsage(resolved.Provider, cfg)
 	ch.logger.Info(ctx, "github: provider resolved", "provider", providerName, "model", resolved.Model)
 	return nil
 }

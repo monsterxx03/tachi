@@ -303,10 +303,8 @@ func (m *Model) currentThinkingLevel() string {
 				providerName = curr.ProviderName
 			}
 		}
-		if providerName == "" {
-			providerName = config.ResolveProviderName(m.cfg)
-		}
-		if pCfg := m.cfg.FindProvider(providerName); pCfg != nil && pCfg.Spec.ThinkingLevel != "" {
+		// Empty name → default provider (ProviderConfig resolves it).
+		if pCfg := m.cfg.ProviderConfig(providerName); pCfg != nil && pCfg.Spec.ThinkingLevel != "" {
 			return pCfg.Spec.ThinkingLevel
 		}
 	}
@@ -443,7 +441,7 @@ func (m *Model) currentProviderName() string {
 		}
 	}
 	if m.cfg != nil {
-		return config.ResolveProviderName(m.cfg)
+		return m.cfg.DefaultProviderName()
 	}
 	return ""
 }

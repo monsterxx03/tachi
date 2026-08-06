@@ -28,8 +28,9 @@ type reviewMockProvider struct {
 	lastOpts llm.ChatOptions
 }
 
-func (p *reviewMockProvider) Name() string  { return p.name }
-func (p *reviewMockProvider) Model() string { return p.model }
+func (p *reviewMockProvider) Name() string         { return p.name }
+func (p *reviewMockProvider) ProviderName() string { return "" }
+func (p *reviewMockProvider) Model() string        { return p.model }
 func (p *reviewMockProvider) CreateChat(context.Context, []llm.Message, []llm.Tool, llm.ChatOptions) (*llm.Response, error) {
 	return nil, errors.New("not implemented")
 }

@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
@@ -19,8 +20,9 @@ type mockProvider struct {
 	streamFn func(ctx context.Context) (<-chan llm.StreamEvent, error)
 }
 
-func (p *mockProvider) Name() string  { return "mock" }
-func (p *mockProvider) Model() string { return "mock-model" }
+func (p *mockProvider) Name() string         { return "mock" }
+func (p *mockProvider) ProviderName() string { return "" }
+func (p *mockProvider) Model() string        { return "mock-model" }
 
 func (p *mockProvider) CreateChat(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (*llm.Response, error) {
 	return nil, fmt.Errorf("not implemented")
@@ -69,7 +71,11 @@ func TestRunDream_WatermarkIsSnapshotTime(t *testing.T) {
 
 	state, err := RunDream(context.Background(), testPlan(memRoot), RunConfig{
 		FallbackProvider: provider,
-		MaxIter:          3,
+		// Isolate ledger writes: without an injected recorder the run would
+		// fall through to the process-wide ledger (~/.tachi/usage/) and
+		// pollute the real usage billing data with mock rows.
+		Recorder: llm.NewUsageRecorder(t.TempDir()),
+		MaxIter:  3,
 	}, testLoadMessages)
 	if err != nil {
 		t.Fatalf("RunDream: %v", err)
@@ -145,7 +151,9 @@ A fact worth remembering.
 
 	state, err := RunDream(context.Background(), plan, RunConfig{
 		FallbackProvider: provider,
-		MaxIter:          3,
+		// Isolate ledger writes (same reason as the watermark test).
+		Recorder: llm.NewUsageRecorder(t.TempDir()),
+		MaxIter:  3,
 	}, testLoadMessages)
 	if err != nil {
 		t.Fatalf("RunDream: %v", err)
@@ -163,7 +171,8 @@ A fact worth remembering.
 // TestRunDream_RecordsUsageLedger is the B1 regression guard: dream agents
 // are bare NewAIAgent constructions — the provider must be usage-wrapped at
 // the RunDream call site (or via an injected recorder) so dream LLM calls
-// land in the ledger with kind=dream.
+// land in the ledger with kind=dream. The row's provider name comes from the
+// provider itself (the mock has none → type name "mock").
 func TestRunDream_RecordsUsageLedger(t *testing.T) {
 	provider := &mockProvider{streamFn: func(ctx context.Context) (<-chan llm.StreamEvent, error) {
 		return stopStream(), nil
@@ -173,7 +182,6 @@ func TestRunDream_RecordsUsageLedger(t *testing.T) {
 
 	state, err := RunDream(context.Background(), testPlan(memRoot), RunConfig{
 		FallbackProvider: provider,
-		ProviderName:     "dream-pro",
 		MaxIter:          5,
 		MaxTokens:        100,
 		MaxMessageChars:  2000,
@@ -196,8 +204,57 @@ func TestRunDream_RecordsUsageLedger(t *testing.T) {
 		if r.Kind != llm.UsageKindDream {
 			t.Errorf("row kind = %q, want dream", r.Kind)
 		}
-		if r.Provider != "dream-pro" {
-			t.Errorf("row provider = %q, want dream-pro", r.Provider)
+		if r.Provider != "" {
+			t.Errorf("row provider = %q, want \"\" (mock has no config name — no type-name fallback)", r.Provider)
 		}
+	}
+}
+
+// TestResolveProvider verifies provider selection: DreamProvider from config
+// wins (aliases resolve via BuildProvider; the provider carries its real
+// config name), otherwise the caller's FallbackProvider passes through.
+func TestResolveProvider(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Providers = append(cfg.Providers, config.ProviderConfig{
+		Name: "dream-real", Type: "openai", Model: "some-model",
+		BaseURL: "https://api.example.com/v1", APIKey: "sk-test",
+	})
+	cfg.ProviderAliases = map[string]string{"dream-alias": "dream-real"}
+	// What LoadFrom does after parsing YAML: fields hold the real name, but
+	// BuildProvider("dream-alias") still resolves at runtime (ProviderConfig).
+	cfg.ExpandProviderAliases()
+
+	// DreamProvider branch: runtime alias input resolves via BuildProvider,
+	// and the provider carries the resolved config name.
+	p, err := resolveProvider(RunConfig{
+		DreamProvider: "dream-alias",
+		Config:        cfg,
+		Logger:        logger.Default(),
+	})
+	if err != nil {
+		t.Fatalf("resolveProvider(DreamProvider alias): %v", err)
+	}
+	if got := p.ProviderName(); got != "dream-real" {
+		t.Errorf("DreamProvider alias: ProviderName = %q, want %q", got, "dream-real")
+	}
+
+	// Fallback branch: the caller's provider passes through unchanged.
+	fallback := &mockProvider{streamFn: func(ctx context.Context) (<-chan llm.StreamEvent, error) {
+		return stopStream(), nil
+	}}
+	p2, err := resolveProvider(RunConfig{
+		FallbackProvider: fallback,
+		Logger:           logger.Default(),
+	})
+	if err != nil {
+		t.Fatalf("resolveProvider(fallback): %v", err)
+	}
+	if p2 != llm.Provider(fallback) {
+		t.Error("fallback: provider not passed through unchanged")
+	}
+
+	// No provider available at all → error.
+	if _, err := resolveProvider(RunConfig{Logger: logger.Default()}); err == nil {
+		t.Error("resolveProvider with no provider: expected error")
 	}
 }

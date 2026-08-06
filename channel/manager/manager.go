@@ -50,7 +50,7 @@ type Config struct {
 // initProviderResult holds the lazily-computed provider state.
 type initProviderResult struct {
 	provider llm.Provider
-	resolved *config.ResolvedConfig
+	resolved *config.ResolvedProvider
 	name     string // Provider config name from config (e.g., "gpt-5.2", "claude")
 }
 
@@ -128,7 +128,7 @@ type Manager struct {
 	// Lazy-initialized via sync.OnceValues.
 	initProviderFn func() (initProviderResult, error)
 	provider       llm.Provider
-	resolvedConfig *config.ResolvedConfig
+	resolvedConfig *config.ResolvedProvider
 
 	// providerMu protects provider and resolvedConfig during model switching.
 	// Both are set once in initProvider() and can be updated by /model command.
@@ -400,7 +400,7 @@ func (m *Manager) Start(ctx context.Context) error {
 // getProvider returns the current global (default) provider and resolved config
 // under read lock. Use getProviderForThread for agent turn paths that should
 // respect per-thread /model overrides.
-func (m *Manager) getProvider() (llm.Provider, *config.ResolvedConfig) {
+func (m *Manager) getProvider() (llm.Provider, *config.ResolvedProvider) {
 	m.providerMu.RLock()
 	defer m.providerMu.RUnlock()
 	return m.provider, m.resolvedConfig
@@ -415,7 +415,7 @@ func (m *Manager) getProvider() (llm.Provider, *config.ResolvedConfig) {
 // on top of whichever provider wins, so future agent builds for this thread
 // inherit it. The returned resolved config is a fresh copy — the global
 // resolvedConfig is never mutated.
-func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.ResolvedConfig, string) {
+func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.ResolvedProvider, string) {
 	var sess *session.Session
 	if threadID != "" && m.cfg != nil {
 		sm := m.newSessionManager()
@@ -426,13 +426,13 @@ func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.R
 	}
 
 	var prov llm.Provider
-	var resolved *config.ResolvedConfig
+	var resolved *config.ResolvedProvider
 	var name string
 
 	// Session-level /model override wins over the global provider.
 	if sess != nil && sess.ProviderName != "" {
-		if p, rp, err := m.cfg.BuildProvider(sess.ProviderName); err == nil {
-			prov, resolved, name = p, &config.ResolvedConfig{Provider: *rp}, sess.ProviderName
+		if rp, err := m.cfg.BuildProvider(sess.ProviderName); err == nil {
+			prov, resolved, name = rp.Provider, rp, sess.ProviderName
 		}
 		if prov == nil {
 			m.logger.Warn(context.Background(), "channel: thread has ProviderName but could not resolve; falling back to global",
@@ -449,7 +449,7 @@ func (m *Manager) getProviderForThread(threadID string) (llm.Provider, *config.R
 	// Copy before mutating: the global resolvedConfig is shared state.
 	if sess != nil && sess.ThinkingLevel != "" {
 		cp := *resolved
-		cp.Provider.Thinking, cp.Provider.ThinkingEffort = cmds.EffectiveThinking(sess.ThinkingLevel, cp.Provider)
+		cp.Thinking, cp.ThinkingEffort = cmds.EffectiveThinking(sess.ThinkingLevel, cp)
 		resolved = &cp
 	}
 
@@ -483,20 +483,15 @@ func (m *Manager) initProvider() error {
 				cfg = &cfgCopy
 			}
 
-			resolved, err := config.Resolve(cfg)
+			resolved, err := cfg.DefaultProvider()
 			if err != nil {
 				return initProviderResult{}, fmt.Errorf("resolve config: %w", err)
 			}
 
-			provider, err := config.NewProviderFromResolved(&resolved.Provider)
-			if err != nil {
-				return initProviderResult{}, fmt.Errorf("create provider: %w", err)
-			}
-
 			// Capture the resolved provider name for /model display.
-			name := resolved.Provider.Name
+			name := resolved.Name
 
-			return initProviderResult{provider: provider, resolved: resolved, name: name}, nil
+			return initProviderResult{provider: resolved.Provider, resolved: resolved, name: name}, nil
 		})
 	}
 	result, err := m.initProviderFn()
@@ -537,7 +532,7 @@ func (m *Manager) newSessionManager() *session.Manager {
 // If found, returns the session manager loaded with that session and the
 // converted LLM message history. If not found, creates a new session manager
 // with a fresh session and returns nil history.
-func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedConfig) (*session.Manager, []llm.Message, error) {
+func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedProvider) (*session.Manager, []llm.Message, error) {
 	var sm *session.Manager
 	if m.sessionStore != nil {
 		sm = session.NewManagerWithStore(m.sessionStore, m.logger)
@@ -560,7 +555,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 	if sess == nil {
 		// No existing session → create a new one now. The agent will
 		// record the first message.
-		if _, err := sm.New(resolved.Provider.Name, ""); err != nil {
+		if _, err := sm.New(resolved.Name, ""); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		sm.SetThreadID(threadID)
@@ -577,7 +572,7 @@ func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedCo
 		return sm, nil, nil
 	}
 
-	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Provider.Type)
+	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, resolved.Type)
 	if err != nil {
 		return sm, nil, fmt.Errorf("convert messages: %w", err)
 	}

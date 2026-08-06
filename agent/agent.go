@@ -305,8 +305,14 @@ func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 	}
 }
 
+// SetProvider switches the main conversation provider. The new provider is
+// re-wrapped for usage billing, so runtime model switches stay on the ledger
+// (see docs/2026-08-05-usage-billing.md). WrapRecordingProvider is idempotent
+// per recorder: an already-wrapped provider passes through untouched, so this
+// is safe for every call site. The ledger row's provider name comes from the
+// provider itself (config-resolved providers carry it via NewNamedProvider).
 func (a *AIAgent) SetProvider(provider llm.Provider) {
-	a.Config.Provider = provider
+	a.Config.Provider = wrapForUsage(provider, a.usageRecorder(), a.Config.FullConfig)
 }
 
 // SetThinking updates the agent-level default thinking config (switch +
@@ -920,13 +926,14 @@ func (a *AIAgent) UsageRecorder() *llm.UsageRecorder {
 }
 
 // WrapProviderForUsage wraps p with the process-wide usage ledger recorder,
-// resolving price snapshots via cfg + providerName. Idempotent — an
-// already-wrapped provider passes through unchanged. This is the escape hatch
-// for bare-agent call sites (dream runner, github bot) that construct
+// resolving price snapshots via cfg. Idempotent — an already-wrapped provider
+// passes through unchanged. This is the escape hatch for bare-agent call
+// sites (dream runner, github bot, channel /model compact) that construct
 // providers outside NewAIAgentWithConfig: wrapping here keeps their LLM calls
-// billed even though kind/session tagging happens at RunOneOffStream.
-func WrapProviderForUsage(p llm.Provider, cfg *config.Config, providerName string) llm.Provider {
-	return wrapForUsage(p, getGlobalUsageRecorder(), cfg, providerName)
+// billed even though kind/session tagging happens at RunOneOffStream. The
+// ledger row's provider name comes from the provider itself.
+func WrapProviderForUsage(p llm.Provider, cfg *config.Config) llm.Provider {
+	return wrapForUsage(p, getGlobalUsageRecorder(), cfg)
 }
 
 // GlobalUsageRecorder returns the process-wide usage ledger recorder (the
@@ -937,14 +944,24 @@ func GlobalUsageRecorder() *llm.UsageRecorder {
 }
 
 // wrapForUsage wraps p with rec for usage billing, resolving price snapshots
-// via cfg + providerName. Idempotent (WrapRecordingProvider); nil p or nil
-// rec passes through untouched.
-func wrapForUsage(p llm.Provider, rec *llm.UsageRecorder, cfg *config.Config, providerName string) llm.Provider {
-	if p == nil || rec == nil {
+// via cfg. Idempotent (WrapRecordingProvider); nil p passes through
+// untouched.
+//
+// The ledger row's provider name is taken from the provider itself
+// (Provider.ProviderName): config-resolved providers carry their config name
+// via NewNamedProvider (through the decorator chain), so callers never pass
+// or think about names. Bare providers (test mocks, ad-hoc construction)
+// return "" and fall back to the type name.
+//
+// rec is always non-nil at every call site (injected recorder, or
+// usageRecorder/getGlobalUsageRecorder which never return nil); WrapRecording
+// Provider still guards nil defensively.
+func wrapForUsage(p llm.Provider, rec *llm.UsageRecorder, cfg *config.Config) llm.Provider {
+	if p == nil {
 		return p
 	}
-	return llm.WrapRecordingProvider(p, rec, providerName, func(model string) *llm.ModelPrice {
-		return cmds.ResolveModelPrice(cfg, providerName, model)
+	return llm.WrapRecordingProvider(p, rec, func(provider llm.Provider, model string) *llm.ModelPrice {
+		return cmds.ResolveModelPrice(cfg, provider.ProviderName(), model)
 	})
 }
 
@@ -956,22 +973,14 @@ func wrapUsageProviders(cfg *AgentConfig, rec *llm.UsageRecorder) {
 	if rec == nil {
 		return
 	}
-	var mainName, titleName, commitName, reviewName, runName, subName string
-	if full := cfg.FullConfig; full != nil {
-		mainName = full.Provider
-		titleName = full.TitleProvider
-		commitName = full.CommitProvider
-		reviewName = full.Review.Provider
-		runName = full.RunProvider
-		subName = full.Subagent.Provider
-	}
-
-	cfg.Provider = wrapForUsage(cfg.Provider, rec, cfg.FullConfig, mainName)
-	cfg.TitleProvider = wrapForUsage(cfg.TitleProvider, rec, cfg.FullConfig, titleName)
-	cfg.CommitProvider = wrapForUsage(cfg.CommitProvider, rec, cfg.FullConfig, commitName)
-	cfg.ReviewProvider = wrapForUsage(cfg.ReviewProvider, rec, cfg.FullConfig, reviewName)
-	cfg.RunProvider = wrapForUsage(cfg.RunProvider, rec, cfg.FullConfig, runName)
-	cfg.SubagentProvider = wrapForUsage(cfg.SubagentProvider, rec, cfg.FullConfig, subName)
+	// Provider names come from the providers themselves (NewNamedProvider);
+	// nothing to thread through here.
+	cfg.Provider = wrapForUsage(cfg.Provider, rec, cfg.FullConfig)
+	cfg.TitleProvider = wrapForUsage(cfg.TitleProvider, rec, cfg.FullConfig)
+	cfg.CommitProvider = wrapForUsage(cfg.CommitProvider, rec, cfg.FullConfig)
+	cfg.ReviewProvider = wrapForUsage(cfg.ReviewProvider, rec, cfg.FullConfig)
+	cfg.RunProvider = wrapForUsage(cfg.RunProvider, rec, cfg.FullConfig)
+	cfg.SubagentProvider = wrapForUsage(cfg.SubagentProvider, rec, cfg.FullConfig)
 	// Adversarial providers are intentionally NOT wrapped here: pre-resolved
 	// pointers must survive construction untouched (tests pin this contract).
 	// They are wrapped once after the Setup section via wrapResolvedAdversarial.
@@ -984,30 +993,17 @@ func wrapUsageProviders(cfg *AgentConfig, rec *llm.UsageRecorder) {
 // the config-resolved ones do not exist yet. WrapRecordingProvider's
 // idempotence makes this safe even if a provider was already wrapped.
 //
-// Guard: when cfg.Review.Adversarial is nil, config-based resolution has no
-// names to wrap, but CALLER-pre-resolved providers may still exist — they are
-// wrapped by the loop below (which iterates the actual list, not the config)
-// with an empty provider name (RecordingProvider falls back to inner.Name()).
+// The loop iterates the actual list (not the config), so caller-pre-resolved
+// providers are covered even when config resolution has nothing to wrap;
+// names come from the providers themselves, falling back to the type name.
 func wrapResolvedAdversarial(cfg *AgentConfig, rec *llm.UsageRecorder, full *config.Config) {
 	if rec == nil || cfg == nil {
 		return
 	}
-	names := []string{}
-	if full != nil && full.Review.Adversarial != nil {
-		names = full.Review.Adversarial.Models
+	for i := range cfg.AdversarialModels {
+		cfg.AdversarialModels[i] = wrapForUsage(cfg.AdversarialModels[i], rec, full)
 	}
-	judgeName := ""
-	if full != nil && full.Review.Adversarial != nil {
-		judgeName = full.Review.Adversarial.JudgeModel
-	}
-	for i, p := range cfg.AdversarialModels {
-		name := ""
-		if i < len(names) {
-			name = names[i]
-		}
-		cfg.AdversarialModels[i] = wrapForUsage(p, rec, full, name)
-	}
-	cfg.AdversarialJudge = wrapForUsage(cfg.AdversarialJudge, rec, full, judgeName)
+	cfg.AdversarialJudge = wrapForUsage(cfg.AdversarialJudge, rec, full)
 }
 
 // Close releases resources held by the agent, including killing all tracked

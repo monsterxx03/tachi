@@ -11,7 +11,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -506,10 +505,11 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 	if !a.Config.SessionManager.HasCurrent() {
 		providerName := a.Config.Provider.Name()
 		if a.Config.FullConfig != nil {
-			if pn := config.ResolveProviderName(a.Config.FullConfig); pn != "" {
-				// Resolve alias to the actual provider name for session storage,
-				// so that session metadata and /usage show the real provider name.
-				providerName = a.Config.FullConfig.ResolveAlias(pn)
+			// DefaultProviderName already normalizes provider_aliases — the
+			// stored name is the real config provider name (session metadata
+			// and /usage group by it).
+			if pn := a.Config.FullConfig.DefaultProviderName(); pn != "" {
+				providerName = pn
 			}
 		}
 		wd, _ := os.Getwd()

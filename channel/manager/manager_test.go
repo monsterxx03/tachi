@@ -84,7 +84,8 @@ type mockProvider struct {
 	streamFunc func(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error)
 }
 
-func (p *mockProvider) Name() string { return p.name }
+func (p *mockProvider) Name() string         { return p.name }
+func (p *mockProvider) ProviderName() string { return "" }
 
 func (p *mockProvider) Model() string { return "mock-model" }
 
@@ -351,13 +352,11 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 		SessionStore: newTempSessionStore(t),
 	})
 	// Inject resolved config so loadThreadSession can call sm.New().
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		ContextWindow: 128_000,
+		MaxTokens:     4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -383,13 +382,11 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 		Cfg:          cfg,
 		SessionStore: store,
 	})
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		ContextWindow: 128_000,
+		MaxTokens:     4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -427,13 +424,11 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 		Cfg:          cfg,
 		SessionStore: store,
 	})
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		ContextWindow: 128_000,
+		MaxTokens:     4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -500,13 +495,11 @@ func TestCommandChannel_Injection(t *testing.T) {
 		Cfg:          cfg,
 		SessionStore: newTempSessionStore(t),
 	})
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		ContextWindow: 128_000,
+		MaxTokens:     4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -538,13 +531,11 @@ func TestCommandChannel_NotInjectedToPlainChannel(t *testing.T) {
 		Cfg:          cfg,
 		SessionStore: newTempSessionStore(t),
 	})
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		ContextWindow: 128_000,
+		MaxTokens:     4096,
 	}
 	mgr.provider = &mockProvider{name: "mock"}
 
@@ -790,12 +781,10 @@ func TestHandleModelCommand_List(t *testing.T) {
 	})
 	// Set up the provider manually (simulating what initProvider would do).
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:  "openai",
-			Model: "gpt-5.2",
-			Name:  "gpt-5.2",
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "gpt-5.2",
+		Name:          "gpt-5.2",
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
@@ -827,13 +816,11 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "gpt-5.2",
-			Name:          "gpt-5.2",
-			ContextWindow: 128_000,
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "gpt-5.2",
+		Name:          "gpt-5.2",
+		ContextWindow: 128_000,
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
@@ -851,14 +838,14 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 	assert.Equal(t, "claude-haiku", name)
 	assert.NotNil(t, prov)
 	assert.NotNil(t, resolved)
-	assert.Equal(t, "anthropic", resolved.Provider.Type)
-	assert.Equal(t, "claude-3-5-haiku-20241022", resolved.Provider.Model)
+	assert.Equal(t, "anthropic", resolved.Type)
+	assert.Equal(t, "claude-3-5-haiku-20241022", resolved.Model)
 
 	// Global state is unchanged.
 	mgr.providerMu.RLock()
 	defer mgr.providerMu.RUnlock()
 	assert.Equal(t, "gpt-5.2", mgr.currentProviderName)
-	assert.Equal(t, "openai", mgr.resolvedConfig.Provider.Type)
+	assert.Equal(t, "openai", mgr.resolvedConfig.Type)
 }
 
 // TestHandleModelCommand_Unknown verifies that /model <unknown> returns
@@ -873,12 +860,10 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 		Cfg: cfg,
 	})
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:  "openai",
-			Model: "gpt-5.2",
-			Name:  "gpt-5.2",
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:      "openai",
+		Model:     "gpt-5.2",
+		Name:      "gpt-5.2",
 		MaxTokens: 4096,
 	}
 	mgr.currentProviderName = "gpt-5.2"
@@ -915,13 +900,11 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "gpt-5.2",
-			Name:          "gpt-5.2",
-			ContextWindow: 128_000,
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "gpt-5.2",
+		Name:          "gpt-5.2",
+		ContextWindow: 128_000,
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
@@ -958,13 +941,11 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "gpt-5.2",
-			Name:          "gpt-5.2",
-			ContextWindow: 128_000,
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "gpt-5.2",
+		Name:          "gpt-5.2",
+		ContextWindow: 128_000,
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
@@ -1008,13 +989,11 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "gpt-5.2",
-			Name:          "gpt-5.2",
-			ContextWindow: 128_000,
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "gpt-5.2",
+		Name:          "gpt-5.2",
+		ContextWindow: 128_000,
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}
@@ -1229,16 +1208,14 @@ func newThinkingTestManager(t *testing.T) *Manager {
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = &mockProvider{name: "openai"}
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:           "openai",
-			Model:          "deepseek-v4-flash",
-			Name:           "deepseek",
-			ThinkingEffort: "high", // provider config default: high
-			ContextWindow:  128_000,
-		},
-		MaxTokens:     4096,
-		MaxIterations: 50,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:           "openai",
+		Model:          "deepseek-v4-flash",
+		Name:           "deepseek",
+		ThinkingEffort: "high", // provider config default: high
+		ContextWindow:  128_000,
+		MaxTokens:      4096,
+		MaxIterations:  50,
 	}
 	mgr.currentProviderName = "deepseek"
 	return mgr
@@ -1285,11 +1262,11 @@ func TestHandleThinkingCommand_SetLevel(t *testing.T) {
 	// getProviderForThread applies the override on top of the provider config.
 	_, resolved, _ := mgr.getProviderForThread("thread-1")
 	require.NotNil(t, resolved)
-	assert.Equal(t, "high", resolved.Provider.ThinkingEffort)
+	assert.Equal(t, "high", resolved.ThinkingEffort)
 
 	// The global resolvedConfig must NOT be mutated (copy-on-write).
 	mgr.providerMu.RLock()
-	global := mgr.resolvedConfig.Provider.ThinkingEffort
+	global := mgr.resolvedConfig.ThinkingEffort
 	mgr.providerMu.RUnlock()
 	assert.Equal(t, "high", global) // provider default is also high — use none below to prove isolation
 }
@@ -1303,13 +1280,13 @@ func TestHandleThinkingCommand_NoneOverridesAndIsolatesGlobal(t *testing.T) {
 
 	_, resolved, _ := mgr.getProviderForThread("thread-1")
 	require.NotNil(t, resolved)
-	require.NotNil(t, resolved.Provider.Thinking)
-	assert.False(t, *resolved.Provider.Thinking)
-	assert.Equal(t, "", resolved.Provider.ThinkingEffort)
+	require.NotNil(t, resolved.Thinking)
+	assert.False(t, *resolved.Thinking)
+	assert.Equal(t, "", resolved.ThinkingEffort)
 
 	// Global provider config untouched.
 	mgr.providerMu.RLock()
-	assert.Nil(t, mgr.resolvedConfig.Provider.Thinking)
+	assert.Nil(t, mgr.resolvedConfig.Thinking)
 	mgr.providerMu.RUnlock()
 }
 
@@ -1323,7 +1300,7 @@ func TestHandleThinkingCommand_DefaultClearsOverride(t *testing.T) {
 	// max passes through unchanged (API maps it server-side).
 	_, resolved, _ := mgr.getProviderForThread("thread-1")
 	require.NotNil(t, resolved)
-	assert.Equal(t, "max", resolved.Provider.ThinkingEffort)
+	assert.Equal(t, "max", resolved.ThinkingEffort)
 
 	// Reset to provider default.
 	_, err = mgr.handleThinkingCommand("thread-1", "default")
@@ -1337,7 +1314,7 @@ func TestHandleThinkingCommand_DefaultClearsOverride(t *testing.T) {
 
 	// Falls back to the provider config default (high).
 	_, resolved, _ = mgr.getProviderForThread("thread-1")
-	assert.Equal(t, "high", resolved.Provider.ThinkingEffort)
+	assert.Equal(t, "high", resolved.ThinkingEffort)
 }
 
 func TestHandleThinkingCommand_InvalidLevel(t *testing.T) {
@@ -1437,13 +1414,11 @@ func newOneoffTestManagerWithProvider(t *testing.T, prov llm.Provider, threadID 
 		SessionStore: newTempSessionStore(t),
 	})
 	mgr.provider = prov
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			Name:          "openai",
-			ContextWindow: 128_000,
-		},
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		Name:          "openai",
+		ContextWindow: 128_000,
 		MaxTokens:     4096,
 		MaxIterations: 50,
 	}

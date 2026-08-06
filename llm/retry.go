@@ -53,6 +53,10 @@ func NewRetryProvider(inner Provider, cfg RetryConfig) *RetryProvider {
 func (r *RetryProvider) Name() string  { return r.inner.Name() }
 func (r *RetryProvider) Model() string { return r.inner.Model() }
 
+// ProviderName forwards the inner provider's config name through the
+// decorator chain (see Provider.ProviderName).
+func (r *RetryProvider) ProviderName() string { return r.inner.ProviderName() }
+
 func (r *RetryProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
 	var lastErr error
 	for attempt := 0; attempt <= r.cfg.MaxRetries; attempt++ {

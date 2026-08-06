@@ -138,7 +138,7 @@ func (s *ACPSession) ProviderType() string {
 		return s.agent.Provider().Name()
 	}
 	if s.cfg != nil {
-		if p := s.cfg.FindProvider(s.resolveProviderName()); p != nil {
+		if p := s.cfg.ProviderConfig(s.resolveProviderName()); p != nil {
 			return p.Type
 		}
 	}

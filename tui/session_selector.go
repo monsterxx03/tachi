@@ -192,7 +192,7 @@ func (m *Model) loadSession(idx int) (tea.Model, tea.Cmd) {
 
 	providerType := m.agent.Provider().Name()
 	if s.ProviderName != "" {
-		if pCfg := m.cfg.FindProvider(s.ProviderName); pCfg != nil {
+		if pCfg := m.cfg.ProviderConfig(s.ProviderName); pCfg != nil {
 			providerType = pCfg.Type
 		}
 	}
@@ -278,7 +278,7 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 // (set via /thinking). Returns the display string and whether the provider was
 // successfully restored.
 func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
-	provider, sp, err := m.cfg.BuildProvider(s.ProviderName)
+	sp, err := m.cfg.BuildProvider(s.ProviderName)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		// Keep current provider, show the session's expected info
 		return fmt.Sprintf("%s [unmatched]", s.ProviderName), false
@@ -287,7 +287,7 @@ func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
 		return fmt.Sprintf("%s [error]", s.ProviderName), false
 	}
 
-	m.agent.SetProvider(provider)
+	m.agent.SetProvider(sp.Provider)
 	// Session-level thinking override wins over the provider config default.
 	thinking, effort := cmds.EffectiveThinking(s.ThinkingLevel, *sp)
 	m.agent.SetThinking(thinking, effort)

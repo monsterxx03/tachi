@@ -18,13 +18,13 @@ func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
 
 // resolveProviderByName resolves a configured provider name to an llm.Provider
 // via the shared config.BuildProvider (the single home of the
-// FindProvider → ResolveProviderConfig → NewProvider dance). Returns nil on
+// ProviderConfig → NewProvider dance). Returns nil on
 // any failure with a warn/error log naming the provider — callers decide
 // between silent fallback (dedicated providers) and fail-fast (adversarial
 // review, checked later at /review start). Shared by every Setup*Provider
 // method.
 func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string) llm.Provider {
-	p, resolved, err := cfg.BuildProvider(name)
+	resolved, err := cfg.BuildProvider(name)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		a.Config.Logger.Info(context.Background(), "Agent: "+purpose+" provider not found, falling back to main model", "provider", name)
 		return nil
@@ -34,7 +34,7 @@ func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string
 		return nil
 	}
 	a.Config.Logger.Info(context.Background(), "Agent: using "+purpose+" provider", "provider", name, "type", resolved.Type, "model", resolved.Model)
-	return p
+	return resolved.Provider
 }
 
 // setupDedicatedProvider resolves the named provider (via the shared
@@ -55,7 +55,7 @@ func (a *AIAgent) setupDedicatedProvider(cfg *config.Config, purpose, name strin
 		return
 	}
 	if p := a.resolveProviderByName(cfg, purpose, name); p != nil {
-		assign(wrapForUsage(p, a.usageRecorder(), cfg, name))
+		assign(wrapForUsage(p, a.usageRecorder(), cfg))
 	}
 }
 

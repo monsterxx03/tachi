@@ -511,7 +511,7 @@ func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
 		return // no dedicated keyword provider configured; main provider is already set
 	}
 
-	sp, resolved, err := cfg.BuildProvider(kpName)
+	resolved, err := cfg.BuildProvider(kpName)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		a.Config.Logger.Info(context.Background(), "Memory: keyword_provider not found, falling back to main provider", "provider", kpName)
 		return
@@ -523,8 +523,9 @@ func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
 
 	// Wrap the dedicated provider for usage billing (main provider is
 	// already wrapped at construction), and anchor extraction to the
-	// current session.
-	sp = wrapForUsage(sp, a.usageRecorder(), cfg, kpName)
+	// current session. The row's provider name comes from the provider
+	// itself (BuildProvider-resolved).
+	sp := wrapForUsage(resolved.Provider, a.usageRecorder(), cfg)
 	ext := NewLLMKeywordExtractor(sp, resolved.Model, cfg.Memory.Timeout, a.Config.Logger)
 	ext.SetSessionIDResolver(a.sessionID)
 	tb.SetKeywordExtractor(ext)

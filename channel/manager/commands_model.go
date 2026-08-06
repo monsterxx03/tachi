@@ -71,7 +71,7 @@ func (m *Manager) handleModelList(threadID string) (string, error) {
 // window, a compaction is triggered first using the current (wide-context)
 // provider — otherwise the next API call would fail with context overflow.
 func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
-	_, resolved, err := m.cfg.BuildProvider(name)
+	resolved, err := m.cfg.BuildProvider(name)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Sprintf("Provider %q not found. Use /model to see available models.", name), nil
 	}
@@ -130,18 +130,20 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 	// ── Persist the new provider name ─────────────────────────────────
 	// After a potential compact, sm.Current() is either the new session
 	// (compact succeeded) or the original session (no compact needed).
+	// resolved.Name is already alias-normalized (BuildProvider resolves
+	// provider_aliases before returning the resolved config).
 	curr := sm.Current()
 	if curr == nil {
 		// No session at all — create one now to persist the model choice.
 		wd, _ := os.Getwd()
-		newSess, err := sm.New(m.cfg.ResolveAlias(name), wd)
+		newSess, err := sm.New(resolved.Name, wd)
 		if err != nil {
 			return "", fmt.Errorf("create session: %w", err)
 		}
 		sm.SetThreadID(threadID)
 		curr = newSess
 	}
-	curr.ProviderName = m.cfg.ResolveAlias(name)
+	curr.ProviderName = resolved.Name
 	curr.UpdatedAt = time.Now()
 	if err := sm.UpdateMeta(curr); err != nil {
 		m.logger.Error(context.Background(), "channel: /model update session meta failed", err, "thread", threadID)
@@ -164,19 +166,19 @@ func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
 // The caller (handleModelSwitch) is responsible for calling FinalizeCompact
 // to create the new session and migrate the ThreadID.
 func (m *Manager) runCompactForSwitch(threadID string, sm *session.Manager, sessionMsgs []session.Message) (string, error) {
-	// Get the current (old) provider — before switching. The third return is
-	// the THREAD's actual provider name (per-session /model override wins over
-	// the global one) — it must back both the ledger row and the price
-	// resolution, or a non-default thread provider would be mislabeled and
-	// priced under the global provider's overrides.
-	oldProvider, _, provName := m.getProviderForThread(threadID)
+	// Get the current (old) provider — before switching. The provider itself
+	// carries the THREAD's actual provider name (per-session /model override
+	// wins over the global one) — the wrapping layer reads it from there, so
+	// a non-default thread provider is neither mislabeled nor mispriced.
+	oldProvider, _, _ := m.getProviderForThread(threadID)
 	if oldProvider == nil {
 		return "", fmt.Errorf("no current provider available for compact")
 	}
 	// Usage billing: the manager-owned provider is outside the agent's
 	// recording chain — wrap it for this call so the summary cost is billed
-	// (kind + session anchoring set below).
-	oldProvider = agent.WrapProviderForUsage(oldProvider, m.cfg, provName)
+	// (kind + session anchoring set below). The row's provider name and price
+	// come from the provider itself (thread-resolved via BuildProvider).
+	oldProvider = agent.WrapProviderForUsage(oldProvider, m.cfg)
 
 	// Convert session messages to LLM messages for the provider API.
 	llmMsgs, err := agent.ConvertSessionToLLMMessages(sessionMsgs, oldProvider.Name())
@@ -309,7 +311,7 @@ func (m *Manager) applyThinkingToCachedAgent(threadID string, sess *session.Sess
 	if resolved == nil {
 		return
 	}
-	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, resolved.Provider)
+	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *resolved)
 
 	m.agentCacheMu.Lock()
 	ca, ok := m.agentCache[threadID]

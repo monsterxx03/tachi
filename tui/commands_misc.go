@@ -1,6 +1,7 @@
 package tui
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -48,33 +49,22 @@ func (m *Model) handleThinkingCommand() tea.Cmd {
 	if hasSession {
 		providerName = curr.ProviderName
 	}
-	if providerName == "" {
-		if m.cfg == nil {
-			m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
-			m.chatview.AddMessage(chatMessage{
-				Role:    "assistant",
-				Content: "无法解析默认 provider（配置缺失）。",
-			})
-			return nil
-		}
-		providerName = config.ResolveProviderName(m.cfg)
-	}
-	if m.cfg == nil || m.cfg.FindProvider(providerName) == nil {
+	if m.cfg == nil {
 		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",
-			Content: fmt.Sprintf("无法解析 provider **%s** 的配置，无法设置 thinking level。", providerName),
+			Content: "无法解析默认 provider（配置缺失）。",
 		})
 		return nil
 	}
-	pCfg := m.cfg.FindProvider(providerName)
-	sp, err := config.ResolveProviderConfig(pCfg)
+	sp, err := m.cfg.BuildProvider(providerName) // empty name → default
 	if err != nil {
+		msg := fmt.Sprintf("无法解析 provider **%s** 的配置，无法设置 thinking level。", providerName)
+		if !errors.Is(err, config.ErrProviderNotFound) {
+			msg = fmt.Sprintf("解析 provider 配置失败: %v", err)
+		}
 		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
-		m.chatview.AddMessage(chatMessage{
-			Role:    "assistant",
-			Content: fmt.Sprintf("解析 provider 配置失败: %v", err),
-		})
+		m.chatview.AddMessage(chatMessage{Role: "assistant", Content: msg})
 		return nil
 	}
 
@@ -177,15 +167,7 @@ func (m *Model) reapplySessionThinking() {
 		return
 	}
 	providerName := curr.ProviderName
-	if providerName == "" {
-		providerName = config.ResolveProviderName(m.cfg)
-	}
-	pCfg := m.cfg.FindProvider(providerName)
-	if pCfg == nil {
-		m.syncThinkingBadge()
-		return
-	}
-	sp, err := config.ResolveProviderConfig(pCfg)
+	sp, err := m.cfg.BuildProvider(providerName) // empty name → default
 	if err != nil {
 		m.syncThinkingBadge()
 		return

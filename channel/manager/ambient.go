@@ -312,7 +312,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 
 	defer forked.Close()
 	forkAgent := forked.Agent()
-	forkAgent.SetContextWindow(resolved.Provider.ContextWindow)
+	forkAgent.SetContextWindow(resolved.ContextWindow)
 
 	// Build system prompt with whisper suffix for group chat.
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", "") + "\n" + whisperPromptSuffix

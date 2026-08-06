@@ -115,8 +115,9 @@ type acpReviewMockProvider struct {
 	model       string
 }
 
-func (p *acpReviewMockProvider) Name() string  { return p.name }
-func (p *acpReviewMockProvider) Model() string { return p.model }
+func (p *acpReviewMockProvider) Name() string         { return p.name }
+func (p *acpReviewMockProvider) ProviderName() string { return "" }
+func (p *acpReviewMockProvider) Model() string        { return p.model }
 func (p *acpReviewMockProvider) CreateChat(context.Context, []llm.Message, []llm.Tool, llm.ChatOptions) (*llm.Response, error) {
 	return nil, errors.New("not implemented")
 }
@@ -278,8 +279,9 @@ type acpFailingProvider struct {
 	model       string
 }
 
-func (p *acpFailingProvider) Name() string  { return p.name }
-func (p *acpFailingProvider) Model() string { return p.model }
+func (p *acpFailingProvider) Name() string         { return p.name }
+func (p *acpFailingProvider) ProviderName() string { return "" }
+func (p *acpFailingProvider) Model() string        { return p.model }
 func (p *acpFailingProvider) CreateChat(context.Context, []llm.Message, []llm.Tool, llm.ChatOptions) (*llm.Response, error) {
 	return nil, errors.New("not implemented")
 }

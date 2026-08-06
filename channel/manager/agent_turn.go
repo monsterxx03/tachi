@@ -299,7 +299,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 			workDir := m.getThreadWorkDir(msg.ThreadID)
 			model := ""
 			if _, resolved, _ := m.getProviderForThread(msg.ThreadID); resolved != nil {
-				model = resolved.Provider.Model
+				model = resolved.Model
 			}
 			if result.err != nil {
 				return channel.HandlerResult{

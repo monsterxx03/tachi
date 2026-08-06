@@ -19,7 +19,7 @@ import (
 //
 // Used by every entry point that runs an agent turn on a thread:
 // runAgentTurn (cached + compact) and OnCronTrigger.
-func (m *Manager) prepareThreadSession(threadID string, resolved *config.ResolvedConfig) (*session.Manager, []llm.Message) {
+func (m *Manager) prepareThreadSession(threadID string, resolved *config.ResolvedProvider) (*session.Manager, []llm.Message) {
 	sm, priorHistory, err := m.loadThreadSession(threadID, resolved)
 	if err != nil {
 		m.logger.Error(context.Background(), "channel: session setup failed", err, "thread", threadID)
@@ -28,7 +28,7 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *config.Resolve
 	}
 
 	if sm != nil && !sm.HasCurrent() {
-		if _, err := sm.New(resolved.Provider.Name, ""); err != nil {
+		if _, err := sm.New(resolved.Name, ""); err != nil {
 			m.logger.Error(context.Background(), "channel: create fallback session failed", err, "thread", threadID)
 		} else {
 			sm.SetThreadID(threadID)

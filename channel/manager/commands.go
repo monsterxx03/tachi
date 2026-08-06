@@ -36,7 +36,7 @@ func (m *Manager) buildCommandHandler() channel.CommandHandler {
 		// Resolve the current model name for channel topic display.
 		model := ""
 		if _, resolved, _ := m.getProviderForThread(cmd.ThreadID); resolved != nil {
-			model = resolved.Provider.Model
+			model = resolved.Model
 		}
 		// Return the full OutgoingMessage so channels can send attachments
 		// (e.g., /transcript HTML file) alongside the text reply.

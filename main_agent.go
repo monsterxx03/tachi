@@ -35,7 +35,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	provider, resolved, err := resolveProviderFromConfig(cfg)
+	resolved, err := cfg.DefaultProvider()
 	if err != nil {
 		return err
 	}
@@ -47,8 +47,8 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	aiAgent, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:         provider,
-		ContextWindow:    resolved.Provider.ContextWindow,
+		Provider:         resolved.Provider,
+		ContextWindow:    resolved.ContextWindow,
 		MaxIterations:    maxIters,
 		Logger:           logger.New("run"),
 		PermissionMode:   agent.PermissionModeSkip,
@@ -87,7 +87,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	quiet := resolveQuiet(cmd)
 
 	if !quiet {
-		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Type, resolved.Model)
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
@@ -137,7 +137,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	provider, resolved, err := resolveProviderFromConfig(cfg)
+	resolved, err := cfg.DefaultProvider()
 	if err != nil {
 		return err
 	}
@@ -150,15 +150,15 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:               provider,
-		ContextWindow:          resolved.Provider.ContextWindow,
+		Provider:               resolved.Provider,
+		ContextWindow:          resolved.ContextWindow,
 		MaxIterations:          maxIters,
 		Logger:                 logger.New("run"),
 		PermissionMode:         agent.PermissionModeSkip,
 		SkipMemoryRecall:       true,
 		DisableSystemReminders: true, // non-interactive: no date/git/project/skills reminders
-		Thinking:               resolved.Provider.Thinking,
-		ThinkingEffort:         resolved.Provider.ThinkingEffort,
+		Thinking:               resolved.Thinking,
+		ThinkingEffort:         resolved.ThinkingEffort,
 		FullConfig:             cfg,
 		SystemConfig:           agent.SystemConfigFromConfig(cfg),
 	})
@@ -170,16 +170,15 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	if rp := aiAgent.RunProvider(); rp != nil {
 		aiAgent.SetProvider(rp)
 		// Update display info to reflect the run provider.
-		resolved.Provider.Type = rp.Name()
-		resolved.Provider.Model = rp.Model()
+		resolved.Type = rp.Name()
+		resolved.Model = rp.Model()
 		// Re-resolve run provider config to get the correct context window
-		// and thinking defaults.
-		if rpCfg := cfg.FindProvider(cfg.RunProvider); rpCfg != nil {
-			if rpResolved, err := config.ResolveProviderConfig(rpCfg); err == nil {
-				aiAgent.SetContextWindow(rpResolved.ContextWindow)
-				resolved.Provider.ContextWindow = rpResolved.ContextWindow
-				aiAgent.SetThinking(rpResolved.Thinking, rpResolved.ThinkingEffort)
-			}
+		// and thinking defaults (provider construction is cheap; we only use
+		// the resolved config here).
+		if rpResolved, err := cfg.BuildProvider(cfg.RunProvider); err == nil {
+			aiAgent.SetContextWindow(rpResolved.ContextWindow)
+			resolved.ContextWindow = rpResolved.ContextWindow
+			aiAgent.SetThinking(rpResolved.Thinking, rpResolved.ThinkingEffort)
 		}
 	}
 
@@ -206,7 +205,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if !quiet {
-		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Provider.Type, resolved.Provider.Model)
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Type, resolved.Model)
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 

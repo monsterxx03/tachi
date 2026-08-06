@@ -13,6 +13,7 @@ import (
 type AnthropicProvider struct {
 	client anthropic.Client
 	model  string
+	name   string // config provider name ("" = unknown); see Provider.ProviderName
 }
 
 func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
@@ -33,6 +34,8 @@ func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
 func (p *AnthropicProvider) Name() string {
 	return ProviderTypeAnthropic
 }
+
+func (p *AnthropicProvider) ProviderName() string { return p.name }
 
 func (p *AnthropicProvider) Model() string {
 	return p.model

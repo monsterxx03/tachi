@@ -117,7 +117,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 	var contextWindow int64
 	_, resolved := m.getProvider()
 	if resolved != nil {
-		contextWindow = resolved.Provider.ContextWindow
+		contextWindow = resolved.ContextWindow
 	}
 
 	report, err := agent.ComputeSessionUsage(sm, agent.GlobalUsageRecorder(), contextWindow)

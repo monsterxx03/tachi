@@ -105,27 +105,23 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		}
 	}
 
-	// Resolve provider from config
-	resolved, err := config.Resolve(t.cfg)
+	// Resolve provider from config (provider + resolved config in one step;
+	// the provider carries its config name for ledger grouping).
+	resolved, err := t.cfg.DefaultProvider()
 	if err != nil {
 		return acp.NewSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
 
-	provider, err := config.NewProviderFromResolved(&resolved.Provider)
-	if err != nil {
-		return acp.NewSessionResponse{}, fmt.Errorf("create provider: %w", err)
-	}
-
 	configureCtx := context.Background()
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
-		Provider:        provider,
-		ContextWindow:   resolved.Provider.ContextWindow,
+		Provider:        resolved.Provider,
+		ContextWindow:   resolved.ContextWindow,
 		Logger:          t.logger,
 		PermissionMode:  agent.PermissionModeExternal,
 		ACPFileMode:     true,
 		PlanToolEnabled: true,
-		Thinking:        resolved.Provider.Thinking,
-		ThinkingEffort:  resolved.Provider.ThinkingEffort,
+		Thinking:        resolved.Thinking,
+		ThinkingEffort:  resolved.ThinkingEffort,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
 	})
@@ -160,7 +156,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: session manager init warning: %v", smErr))
 	} else {
 		sm.SetMaxKeep(t.cfg.SessionCleanupMaxCount)
-		if _, err := sm.New(resolved.Provider.Name, cwd); err != nil {
+		if _, err := sm.New(resolved.Name, cwd); err != nil {
 			t.logger.Warn(ctx, fmt.Sprintf("ACP: failed to create session: %v", err))
 		}
 		aiAgent.SetSessionManager(sm)
@@ -209,7 +205,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	})
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session created id=%s", sess.ID))
-	opt, _ := buildModelConfigOption(t.cfg, resolved.Provider.Name)
+	opt, _ := buildModelConfigOption(t.cfg, resolved.Name)
 	modeOpt := buildModeConfigOption(agent.ModeAuto)
 	thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
 	configOpts := []acp.SessionConfigOption{}
@@ -467,42 +463,24 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		cwd = loaded.WorkingDir
 	}
 
-	// Rebuild AIAgent for this resumed session
-	resolved, err := config.Resolve(t.cfg)
+	// Rebuild AIAgent for this resumed session. providerForLoadedSession
+	// prefers the session's stored provider (when it still resolves), else
+	// falls back to the main provider.
+	providerResolved, err := providerForLoadedSession(t.cfg, loaded.ProviderName)
 	if err != nil {
 		return acp.ResumeSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
 	}
 
-	// Use session's original provider if available
-	provType := resolved.Provider.Type
-	provModel := resolved.Provider.Model
-	if loaded.ProviderName != "" {
-		if pCfg := t.cfg.FindProvider(loaded.ProviderName); pCfg != nil {
-			provType = pCfg.Type
-			provModel = pCfg.Model
-		}
-	}
-
-	provider, err := config.NewProviderFromResolved(&config.ResolvedProvider{
-		Type:    provType,
-		Model:   provModel,
-		APIKey:  resolved.Provider.APIKey,
-		BaseURL: resolved.Provider.BaseURL,
-	})
-	if err != nil {
-		return acp.ResumeSessionResponse{}, fmt.Errorf("create provider: %w", err)
-	}
-
 	configureCtx := context.Background()
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
-		Provider:        provider,
-		ContextWindow:   resolved.Provider.ContextWindow,
+		Provider:        providerResolved.Provider,
+		ContextWindow:   providerResolved.ContextWindow,
 		Logger:          t.logger,
 		PermissionMode:  agent.PermissionModeExternal,
 		ACPFileMode:     true,
 		PlanToolEnabled: true,
-		Thinking:        resolved.Provider.Thinking,
-		ThinkingEffort:  resolved.Provider.ThinkingEffort,
+		Thinking:        providerResolved.Thinking,
+		ThinkingEffort:  providerResolved.ThinkingEffort,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
 	})
@@ -632,43 +610,28 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	}
 
-	// Resolve provider from config
-	resolved, err := config.Resolve(t.cfg)
+	// Resolve provider: the session's stored provider when available
+	// (matches ResumeSession behavior), else the main provider.
+	loadedName := ""
+	if loaded != nil {
+		loadedName = loaded.ProviderName
+	}
+	providerResolved, err := providerForLoadedSession(t.cfg, loadedName)
 	if err != nil {
 		return acp.LoadSessionResponse{}, fmt.Errorf("resolve provider: %w", err)
-	}
-
-	// Use session's stored provider if available (matches ResumeSession behavior)
-	provType := resolved.Provider.Type
-	provModel := resolved.Provider.Model
-	if loaded != nil && loaded.ProviderName != "" {
-		if pCfg := t.cfg.FindProvider(loaded.ProviderName); pCfg != nil {
-			provType = pCfg.Type
-			provModel = pCfg.Model
-		}
-	}
-
-	provider, err := config.NewProviderFromResolved(&config.ResolvedProvider{
-		Type:    provType,
-		Model:   provModel,
-		APIKey:  resolved.Provider.APIKey,
-		BaseURL: resolved.Provider.BaseURL,
-	})
-	if err != nil {
-		return acp.LoadSessionResponse{}, fmt.Errorf("create provider: %w", err)
 	}
 
 	// Create independent AIAgent
 	configureCtx := context.Background()
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
-		Provider:        provider,
-		ContextWindow:   resolved.Provider.ContextWindow,
+		Provider:        providerResolved.Provider,
+		ContextWindow:   providerResolved.ContextWindow,
 		Logger:          t.logger,
 		PermissionMode:  agent.PermissionModeExternal,
 		ACPFileMode:     true,
 		PlanToolEnabled: true,
-		Thinking:        resolved.Provider.Thinking,
-		ThinkingEffort:  resolved.Provider.ThinkingEffort,
+		Thinking:        providerResolved.Thinking,
+		ThinkingEffort:  providerResolved.ThinkingEffort,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
 	})
@@ -705,7 +668,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 			aiAgent.SetSessionManager(sm)
 		} else {
 			t.logger.Info(ctx, "ACP: LoadSession no existing session, creating new")
-			if _, err := sm.New(resolved.Provider.Name, cwd); err != nil {
+			if _, err := sm.New(providerResolved.Provider.ProviderName(), cwd); err != nil {
 				t.logger.Warn(ctx, fmt.Sprintf("ACP: failed to create session: %v", err))
 			}
 			aiAgent.SetSessionManager(sm)
@@ -785,6 +748,22 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		ConfigOptions: configOpts,
 		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
+}
+
+// providerForLoadedSession builds the provider for a resumed/loaded session:
+// the session's stored provider name when it still resolves, else the main
+// provider (stale names — provider removed from config — fall through
+// silently). The provider carries its config name (BuildProvider /
+// DefaultProvider → NewNamedProvider), so ledger rows group by the REAL
+// provider — the old hand-built ResolvedProvider here dropped the Name field
+// and silently fell back to type-name grouping.
+func providerForLoadedSession(cfg *config.Config, loadedName string) (*config.ResolvedProvider, error) {
+	if loadedName != "" {
+		if resolved, err := cfg.BuildProvider(loadedName); err == nil {
+			return resolved, nil
+		}
+	}
+	return cfg.DefaultProvider()
 }
 
 // findLatestSessionByCwd scans disk sessions and returns the most recent

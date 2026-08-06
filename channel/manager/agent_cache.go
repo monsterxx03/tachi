@@ -187,7 +187,7 @@ func (m *Manager) releaseAgent(ca *cachedAgent) {
 // prov and resolved are the provider and config to use for this agent.
 // Callers should pass the result of getProviderForThread(threadID) so that
 // per-thread /model overrides are respected.
-func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Provider, resolved *config.ResolvedConfig) (*agent.AIAgent, error) {
+func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Provider, resolved *config.ResolvedProvider) (*agent.AIAgent, error) {
 	if prov == nil || resolved == nil {
 		return nil, errProviderNotInitialized
 	}
@@ -202,14 +202,14 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
 		Provider:        prov,
-		ContextWindow:   resolved.Provider.ContextWindow,
+		ContextWindow:   resolved.ContextWindow,
 		Logger:          m.logger,
 		PermissionMode:  agent.PermissionModeSkip,
 		TitleGenEnabled: &titleGen,
 		ProcessManager:  m.processManager,
 		MCPManager:      sharedMCP,
-		Thinking:        resolved.Provider.Thinking,
-		ThinkingEffort:  resolved.Provider.ThinkingEffort,
+		Thinking:        resolved.Thinking,
+		ThinkingEffort:  resolved.ThinkingEffort,
 		FullConfig:      m.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(m.cfg),
 	})
@@ -226,7 +226,7 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, prov llm.Prov
 		m.logger.Info(ctx, "channel: thread is interactive", "thread", threadID)
 	}
 
-	m.logger.Info(ctx, "channel: built cached agent", "thread", threadID, "provider", resolved.Provider.Type, "model", resolved.Provider.Model)
+	m.logger.Info(ctx, "channel: built cached agent", "thread", threadID, "provider", resolved.Type, "model", resolved.Model)
 	return a, nil
 }
 

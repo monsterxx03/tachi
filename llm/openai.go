@@ -32,6 +32,7 @@ type OpenAIProvider struct {
 	model   string
 	apiKey  string
 	baseURL string
+	name    string // config provider name ("" = unknown); see Provider.ProviderName
 }
 
 func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
@@ -63,6 +64,8 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 func (p *OpenAIProvider) Name() string {
 	return ProviderTypeOpenAI
 }
+
+func (p *OpenAIProvider) ProviderName() string { return p.name }
 
 func (p *OpenAIProvider) Model() string {
 	return p.model

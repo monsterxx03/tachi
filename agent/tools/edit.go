@@ -32,7 +32,7 @@ const (
 // locks serialize edits to the same file while different files proceed
 // concurrently.
 type EditTool struct {
-	acpMode   bool // true = route writes through ACP writeTextFile
+	acpMode   bool     // true = route writes through ACP writeTextFile
 	fileLocks sync.Map // resolved path -> *sync.Mutex
 }
 

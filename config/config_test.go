@@ -130,7 +130,7 @@ func TestTUIInputHistoryLimit(t *testing.T) {
 	assert.Equal(t, 0, c.TUI.InputHistoryLimit)
 }
 
-func TestFindProvider(t *testing.T) {
+func TestProviderConfig(t *testing.T) {
 	cfg := &Config{
 		Providers: []ProviderConfig{
 			{Name: "alpha", Type: "openai"},
@@ -138,18 +138,18 @@ func TestFindProvider(t *testing.T) {
 		},
 	}
 
-	p := cfg.FindProvider("alpha")
+	p := cfg.ProviderConfig("alpha")
 	require.NotNil(t, p)
 	assert.Equal(t, "openai", p.Type)
 
-	p = cfg.FindProvider("beta")
+	p = cfg.ProviderConfig("beta")
 	require.NotNil(t, p)
 	assert.Equal(t, "anthropic", p.Type)
 
-	assert.Nil(t, cfg.FindProvider("gamma"))
+	assert.Nil(t, cfg.ProviderConfig("gamma"))
 }
 
-func TestFindProvider_Alias(t *testing.T) {
+func TestProviderConfig_Alias(t *testing.T) {
 	cfg := &Config{
 		Providers: []ProviderConfig{
 			{Name: "gpt-4o-mini", Type: "openai", Model: "gpt-4o-mini"},
@@ -162,18 +162,18 @@ func TestFindProvider_Alias(t *testing.T) {
 	}
 
 	// Alias resolves to actual provider.
-	p := cfg.FindProvider("fast")
+	p := cfg.ProviderConfig("fast")
 	require.NotNil(t, p)
 	assert.Equal(t, "openai", p.Type)
 	assert.Equal(t, "gpt-4o-mini", p.Model)
 
-	p = cfg.FindProvider("main")
+	p = cfg.ProviderConfig("main")
 	require.NotNil(t, p)
 	assert.Equal(t, "anthropic", p.Type)
 	assert.Equal(t, "claude-sonnet-4-20250514", p.Model)
 
 	// Direct provider name still works.
-	p = cfg.FindProvider("gpt-4o-mini")
+	p = cfg.ProviderConfig("gpt-4o-mini")
 	require.NotNil(t, p)
 	assert.Equal(t, "openai", p.Type)
 
@@ -188,12 +188,12 @@ func TestFindProvider_Alias(t *testing.T) {
 			"fast": "gpt-4o-mini",
 		},
 	}
-	p = cfg2.FindProvider("fast")
+	p = cfg2.ProviderConfig("fast")
 	require.NotNil(t, p)
 	assert.Equal(t, "openai", p.Type) // alias resolved to gpt-4o-mini
 
 	// Unknown alias returns nil.
-	assert.Nil(t, cfg.FindProvider("nonexistent"))
+	assert.Nil(t, cfg.ProviderConfig("nonexistent"))
 
 	// Nil alias map still works.
 	cfg3 := &Config{
@@ -201,13 +201,13 @@ func TestFindProvider_Alias(t *testing.T) {
 			{Name: "alpha", Type: "openai"},
 		},
 	}
-	p = cfg3.FindProvider("alpha")
+	p = cfg3.ProviderConfig("alpha")
 	require.NotNil(t, p)
 	assert.Equal(t, "openai", p.Type)
-	assert.Nil(t, cfg3.FindProvider("beta"))
+	assert.Nil(t, cfg3.ProviderConfig("beta"))
 }
 
-func TestFindProvider_Alias_Chain(t *testing.T) {
+func TestProviderConfig_Alias_Chain(t *testing.T) {
 	// Chained aliases are not supported: a → b → actual
 	// Only one level of alias resolution is performed.
 	cfg := &Config{
@@ -221,10 +221,10 @@ func TestFindProvider_Alias_Chain(t *testing.T) {
 		},
 	}
 	// "a" resolves to "b", but "b" is not a provider name — returns nil.
-	assert.Nil(t, cfg.FindProvider("a"))
+	assert.Nil(t, cfg.ProviderConfig("a"))
 }
 
-func TestResolve_FullConfig(t *testing.T) {
+func TestDefaultProvider_FullConfig(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	cfg := &Config{
 		Provider:      "my-provider",
@@ -241,17 +241,17 @@ func TestResolve_FullConfig(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg)
+	resolved, err := cfg.DefaultProvider()
 	require.NoError(t, err)
-	assert.Equal(t, "anthropic", resolved.Provider.Type)
-	assert.Equal(t, "claude-3", resolved.Provider.Model)
-	assert.Equal(t, "https://api.example.com", resolved.Provider.BaseURL)
-	assert.Equal(t, "sk-from-config", resolved.Provider.APIKey)
+	assert.Equal(t, "anthropic", resolved.Type)
+	assert.Equal(t, "claude-3", resolved.Model)
+	assert.Equal(t, "https://api.example.com", resolved.BaseURL)
+	assert.Equal(t, "sk-from-config", resolved.APIKey)
 	assert.Equal(t, 8000, resolved.MaxTokens)
 	assert.Equal(t, 5, resolved.MaxIterations)
 }
 
-func TestResolve_EnvOverridesAPIKey(t *testing.T) {
+func TestDefaultProvider_EnvOverridesAPIKey(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "sk-from-env")
 	cfg := &Config{
 		Provider: "test",
@@ -260,12 +260,12 @@ func TestResolve_EnvOverridesAPIKey(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg)
+	resolved, err := cfg.DefaultProvider()
 	require.NoError(t, err)
-	assert.Equal(t, "sk-from-env", resolved.Provider.APIKey)
+	assert.Equal(t, "sk-from-env", resolved.APIKey)
 }
 
-func TestResolve_MissingAPIKey(t *testing.T) {
+func TestDefaultProvider_MissingAPIKey(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	cfg := &Config{
 		Provider: "test",
@@ -274,33 +274,20 @@ func TestResolve_MissingAPIKey(t *testing.T) {
 		},
 	}
 
-	_, err := Resolve(cfg)
+	_, err := cfg.DefaultProvider()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "API key required")
 	assert.Contains(t, err.Error(), "OPENAI_API_KEY")
 }
 
-func TestResolve_MissingProvider(t *testing.T) {
-	cfg := &Config{
-		Provider: "nonexistent",
-		Providers: []ProviderConfig{
-			{Name: "test", Type: "openai", Model: "gpt-4", APIKey: "sk-test"},
-		},
-	}
-
-	_, err := Resolve(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "not found")
-}
-
-func TestResolve_NoProviderConfigured(t *testing.T) {
+func TestDefaultProvider_NoProviderConfigured(t *testing.T) {
 	cfg := DefaultConfig()
-	_, err := Resolve(cfg)
+	_, err := cfg.DefaultProvider()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no provider configured")
 }
 
-func TestResolve_SingleProviderAutoSelect(t *testing.T) {
+func TestDefaultProvider_SingleProviderAutoSelect(t *testing.T) {
 	t.Setenv("OPENAI_API_KEY", "")
 	cfg := &Config{
 		MaxTokens:     DefaultMaxTokens,
@@ -310,12 +297,12 @@ func TestResolve_SingleProviderAutoSelect(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg)
+	resolved, err := cfg.DefaultProvider()
 	require.NoError(t, err)
-	assert.Equal(t, "gpt-4", resolved.Provider.Model)
+	assert.Equal(t, "gpt-4", resolved.Model)
 }
 
-func TestResolve_ConfigSelectsProvider(t *testing.T) {
+func TestDefaultProvider_ConfigSelectsProvider(t *testing.T) {
 	t.Setenv("ANTHROPIC_API_KEY", "")
 	cfg := &Config{
 		Provider:      "beta",
@@ -327,14 +314,14 @@ func TestResolve_ConfigSelectsProvider(t *testing.T) {
 		},
 	}
 
-	resolved, err := Resolve(cfg)
+	resolved, err := cfg.DefaultProvider()
 	require.NoError(t, err)
-	assert.Equal(t, "anthropic", resolved.Provider.Type)
-	assert.Equal(t, "claude-3", resolved.Provider.Model)
-	assert.Equal(t, "sk-b", resolved.Provider.APIKey)
+	assert.Equal(t, "anthropic", resolved.Type)
+	assert.Equal(t, "claude-3", resolved.Model)
+	assert.Equal(t, "sk-b", resolved.APIKey)
 }
 
-func TestResolve_MissingType(t *testing.T) {
+func TestDefaultProvider_MissingType(t *testing.T) {
 	cfg := &Config{
 		Provider: "test",
 		Providers: []ProviderConfig{
@@ -342,7 +329,7 @@ func TestResolve_MissingType(t *testing.T) {
 		},
 	}
 
-	_, err := Resolve(cfg)
+	_, err := cfg.DefaultProvider()
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "no type set")
 }
@@ -928,7 +915,7 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 		APIKey: apiKey,
 		Spec:   ModelSpec{ThinkingLevel: "none"},
 	}
-	resolved, err := ResolveProviderConfig(pNone)
+	resolved, err := resolveProviderConfig(pNone)
 	require.NoError(t, err)
 	require.NotNil(t, resolved.Thinking)
 	assert.False(t, *resolved.Thinking)
@@ -942,7 +929,7 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 		APIKey: apiKey,
 		Spec:   ModelSpec{ThinkingLevel: "high"},
 	}
-	resolved, err = ResolveProviderConfig(pHigh)
+	resolved, err = resolveProviderConfig(pHigh)
 	require.NoError(t, err)
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "high", resolved.ThinkingEffort)
@@ -956,7 +943,7 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 		APIKey: apiKey,
 		Spec:   ModelSpec{ThinkingLevel: "max"},
 	}
-	resolved, err = ResolveProviderConfig(pMaxFlash)
+	resolved, err = resolveProviderConfig(pMaxFlash)
 	require.NoError(t, err)
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "max", resolved.ThinkingEffort)
@@ -968,7 +955,7 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 		Model:  "deepseek-v4-pro",
 		APIKey: apiKey,
 	}
-	resolved, err = ResolveProviderConfig(pEmpty)
+	resolved, err = resolveProviderConfig(pEmpty)
 	require.NoError(t, err)
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "", resolved.ThinkingEffort)
@@ -981,8 +968,89 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 		APIKey: apiKey,
 		Spec:   ModelSpec{ThinkingLevel: "max"},
 	}
-	resolved, err = ResolveProviderConfig(pClaude)
+	resolved, err = resolveProviderConfig(pClaude)
 	require.NoError(t, err)
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "max", resolved.ThinkingEffort)
+}
+
+// TestDefaultProviderName_Alias: the main-provider name exit point must
+// normalize provider_aliases itself — callers (session metadata, /usage
+// grouping) consume the REAL config provider name without sprinkling
+// resolveAlias at call sites.
+func TestDefaultProviderName_Alias(t *testing.T) {
+	cfg := &Config{
+		Provider: "main_provider", // alias in the top-level provider field
+		Providers: []ProviderConfig{
+			{Name: "deepseek-v4-flash", Type: "openai", Model: "deepseek-chat"},
+		},
+		ProviderAliases: map[string]string{"main_provider": "deepseek-v4-flash"},
+	}
+	assert.Equal(t, "deepseek-v4-flash", cfg.DefaultProviderName())
+
+	// No alias configured → field value passes through unchanged.
+	plain := &Config{Provider: "deepseek-v4-flash"}
+	assert.Equal(t, "deepseek-v4-flash", plain.DefaultProviderName())
+
+	// Single-provider fallback is untouched by aliases.
+	single := &Config{
+		Providers:       []ProviderConfig{{Name: "deepseek-v4-flash"}},
+		ProviderAliases: map[string]string{"fast": "deepseek-v4-flash"},
+	}
+	assert.Equal(t, "deepseek-v4-flash", single.DefaultProviderName())
+}
+
+// TestExpandProviderAliases: alias expansion happens ONCE at load
+// (LoadFrom → ExpandProviderAliases) — every provider-reference field,
+// top-level and nested, must hold the REAL provider name afterwards, so no
+// call site outside config needs to know about aliases.
+func TestExpandProviderAliases(t *testing.T) {
+	cfg := &Config{
+		Provider:       "main_provider",
+		TitleProvider:  "fast",
+		CommitProvider: "main_provider",
+		RunProvider:    "fast",
+		Subagent:       SubagentConfig{Provider: "main_provider"},
+		Review: ReviewConfig{
+			Provider: "fast",
+			Adversarial: &AdversarialReviewConfig{
+				Models:     []string{"fast", "main_provider"},
+				JudgeModel: "fast",
+			},
+		},
+		Memory:       MemoryConfig{KeywordProvider: "fast"},
+		DeepResearch: DeepResearchConfig{QueryGeneratorProvider: "main_provider"},
+		Dream:        DreamConfig{Provider: "fast"},
+		Providers: []ProviderConfig{
+			{Name: "deepseek-v4-flash", Type: "openai", Model: "deepseek-chat"},
+			{Name: "deepseek-v4-pro", Type: "openai", Model: "deepseek-chat"},
+		},
+		ProviderAliases: map[string]string{
+			"main_provider": "deepseek-v4-flash",
+			"fast":          "deepseek-v4-pro",
+		},
+	}
+
+	cfg.ExpandProviderAliases()
+
+	assert.Equal(t, "deepseek-v4-flash", cfg.Provider)
+	assert.Equal(t, "deepseek-v4-pro", cfg.TitleProvider)
+	assert.Equal(t, "deepseek-v4-flash", cfg.CommitProvider)
+	assert.Equal(t, "deepseek-v4-pro", cfg.RunProvider)
+	assert.Equal(t, "deepseek-v4-flash", cfg.Subagent.Provider)
+	assert.Equal(t, "deepseek-v4-pro", cfg.Review.Provider)
+	if adv := cfg.Review.Adversarial; adv != nil {
+		assert.Equal(t, []string{"deepseek-v4-pro", "deepseek-v4-flash"}, adv.Models)
+		assert.Equal(t, "deepseek-v4-pro", adv.JudgeModel)
+	}
+	assert.Equal(t, "deepseek-v4-pro", cfg.Memory.KeywordProvider)
+	assert.Equal(t, "deepseek-v4-flash", cfg.DeepResearch.QueryGeneratorProvider)
+	assert.Equal(t, "deepseek-v4-pro", cfg.Dream.Provider)
+	// The map is preserved — ProviderConfig and runtime inputs still need it.
+	assert.Len(t, cfg.ProviderAliases, 2)
+
+	// No aliases configured → no-op.
+	plain := &Config{Provider: "deepseek-v4-flash"}
+	plain.ExpandProviderAliases()
+	assert.Equal(t, "deepseek-v4-flash", plain.Provider)
 }

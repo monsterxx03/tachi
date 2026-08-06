@@ -981,6 +981,11 @@ func LoadFrom(path string) (*Config, error) {
 		return nil, fmt.Errorf("config defaults: %w", err)
 	}
 
+	// Expand provider_aliases into every provider-reference field, so that
+	// after loading all fields hold REAL provider names and no call site
+	// outside this package ever needs to know about aliases.
+	cfg.ExpandProviderAliases()
+
 	return cfg, nil
 }
 
@@ -1056,37 +1061,6 @@ func Init() (string, error) {
 		return "", err
 	}
 	return path, nil
-}
-
-func (c *Config) FindProvider(name string) *ProviderConfig {
-	// Resolve alias first: if name is an alias, use the target provider name.
-	target := name
-	if c.ProviderAliases != nil {
-		if t, ok := c.ProviderAliases[name]; ok {
-			target = t
-		}
-	}
-	// Look up the (possibly resolved) name in providers.
-	for j := range c.Providers {
-		if c.Providers[j].Name == target {
-			return &c.Providers[j]
-		}
-	}
-	return nil
-}
-
-// ResolveAlias resolves an alias to the actual provider name.
-// If the name is not an alias, it returns the name unchanged.
-// This is used when storing provider names in session metadata,
-// so that the stored value reflects the real provider config name
-// rather than a potentially transient alias.
-func (c *Config) ResolveAlias(name string) string {
-	if c.ProviderAliases != nil {
-		if t, ok := c.ProviderAliases[name]; ok {
-			return t
-		}
-	}
-	return name
 }
 
 // MCPEnabled returns true if at least one MCP server is configured.

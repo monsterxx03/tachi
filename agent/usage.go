@@ -103,7 +103,13 @@ func ComputeSessionUsage(sm SessionManager, rec *llm.UsageRecorder, contextWindo
 			ks.Cost += c
 			ks.Calls++
 			report.KindCosts[row.Kind] = ks
-			report.ModelCosts[row.Provider+":"+row.Model] += c
+			// Bare providers (no config name) write an empty provider — group
+			// them under an explicit placeholder instead of a bare ":model".
+			provider := row.Provider
+			if provider == "" {
+				provider = "(unknown)"
+			}
+			report.ModelCosts[provider+":"+row.Model] += c
 			if row.Unpriced() {
 				report.UnpricedCalls++
 			}

@@ -470,13 +470,11 @@ func TestAmbientPreempt_DirectedMessage(t *testing.T) {
 		Cfg:          cfg,
 		SessionStore: newTempSessionStore(t),
 	})
-	mgr.resolvedConfig = &config.ResolvedConfig{
-		Provider: config.ResolvedProvider{
-			Type:          "openai",
-			Model:         "test-model",
-			ContextWindow: 128_000,
-		},
-		MaxTokens: 4096,
+	mgr.resolvedConfig = &config.ResolvedProvider{
+		Type:          "openai",
+		Model:         "test-model",
+		ContextWindow: 128_000,
+		MaxTokens:     4096,
 	}
 	mgr.provider = &mockProvider{name: "mock", responses: []string{"收到"}}
 

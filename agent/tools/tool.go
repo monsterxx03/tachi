@@ -33,12 +33,12 @@ const (
 type PropertySchema struct {
 	Type        string   `json:"type"`
 	Description string   `json:"description"`
-	Enum        []string `json:"enum,omitempty"`        // Allowed values (constrained at the API level, not just described)
-	Format      string   `json:"format,omitempty"`      // JSON Schema format hint (e.g. "date-time", "uri")
-	Minimum     *float64 `json:"minimum,omitempty"`     // Inclusive lower bound (numeric types)
-	Maximum     *float64 `json:"maximum,omitempty"`     // Inclusive upper bound (numeric types)
-	Default     any      `json:"default,omitempty"`     // Default value shown to the model
-	Items       any      `json:"items,omitempty"`       // JSON Schema for array element type
+	Enum        []string `json:"enum,omitempty"`    // Allowed values (constrained at the API level, not just described)
+	Format      string   `json:"format,omitempty"`  // JSON Schema format hint (e.g. "date-time", "uri")
+	Minimum     *float64 `json:"minimum,omitempty"` // Inclusive lower bound (numeric types)
+	Maximum     *float64 `json:"maximum,omitempty"` // Inclusive upper bound (numeric types)
+	Default     any      `json:"default,omitempty"` // Default value shown to the model
+	Items       any      `json:"items,omitempty"`   // JSON Schema for array element type
 }
 
 // Tool is the interface that all tools must implement

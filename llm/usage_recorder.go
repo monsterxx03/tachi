@@ -67,7 +67,7 @@ type UsageRow struct {
 	TS        time.Time `json:"ts"`
 	SessionID string    `json:"session_id,omitempty"` // empty = session-less (global)
 	Kind      UsageKind `json:"kind"`
-	Provider  string    `json:"provider"` // config provider name (e.g. "deepseek-v4-flash")
+	Provider  string    `json:"provider,omitempty"` // config provider name (e.g. "deepseek-v4-flash"); "" = unknown
 	Model     string    `json:"model"`
 
 	// Token counts. InputTokens is ALWAYS cache-miss (unhit) — OpenAI-family
@@ -232,20 +232,19 @@ func (r *UsageRecorder) Rows(sessionID string, from time.Time) ([]UsageRow, erro
 }
 
 // PriceResolver resolves the effective price for a model at call time.
-// The agent constructs it closing over the config + the provider's config
-// name (llm.Provider.Name() only returns the type name, which cannot be used
-// to look up per-provider price overrides).
-type PriceResolver func(model string) *ModelPrice
+// The agent constructs it closing over the config; the provider argument
+// carries the config name (Provider.ProviderName) for per-provider price
+// overrides.
+type PriceResolver func(provider Provider, model string) *ModelPrice
 
 // RecordingProvider wraps a Provider and records every successful LLM call's
 // usage into the ledger. It MUST be the outermost decorator (outside
 // RetryProvider): otherwise a retried logical call would record one row per
 // successful attempt.
 type RecordingProvider struct {
-	inner        Provider
-	rec          *UsageRecorder
-	providerName string // config provider name (e.g. "deepseek-v4-flash"); "" = fall back to inner.Name()
-	price        PriceResolver
+	inner Provider
+	rec   *UsageRecorder
+	price PriceResolver
 }
 
 // WrapRecordingProvider wraps inner with usage recording. Returns inner
@@ -254,24 +253,29 @@ type RecordingProvider struct {
 // returned as-is, so repeated wrapping at different provider-creation points
 // can never double-record a call.
 //
-// providerName is the CONFIG provider name (e.g. "deepseek-v4-flash"),
-// written into ledger rows for grouping — llm.Provider.Name() only returns
-// the type name (openai/anthropic), which cannot distinguish two providers
-// of the same type. Empty falls back to inner.Name().
+// The ledger row's provider name comes from inner.ProviderName() (the config
+// name, e.g. "deepseek-v4-flash") — no name is threaded through the
+// constructor; bare providers without a config name write an empty string.
 // price may be nil: rows are then written with zero prices (counted as
 // unpriced) but tokens are still tracked.
-func WrapRecordingProvider(inner Provider, rec *UsageRecorder, providerName string, price PriceResolver) Provider {
+func WrapRecordingProvider(inner Provider, rec *UsageRecorder, price PriceResolver) Provider {
 	if inner == nil || rec == nil {
 		return inner
 	}
 	if rp, ok := inner.(*RecordingProvider); ok && rp.rec == rec {
 		return inner // already wrapped with this recorder — never double-record
 	}
-	return &RecordingProvider{inner: inner, rec: rec, providerName: providerName, price: price}
+	return &RecordingProvider{inner: inner, rec: rec, price: price}
 }
 
 func (p *RecordingProvider) Name() string  { return p.inner.Name() }
 func (p *RecordingProvider) Model() string { return p.inner.Model() }
+
+// ProviderName forwards the inner provider's config name through the
+// decorator chain (see Provider.ProviderName) — defensive: the recording
+// layer is always outermost by construction, but a re-wrapped chain must not
+// lose it.
+func (p *RecordingProvider) ProviderName() string { return p.inner.ProviderName() }
 
 func (p *RecordingProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
 	resp, err := p.inner.CreateChat(ctx, messages, tools, opts)
@@ -329,7 +333,7 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 	// Price snapshot at call time (0 for a category = not charged).
 	pr := &ModelPrice{}
 	if p.price != nil {
-		if resolved := p.price(p.inner.Model()); resolved != nil {
+		if resolved := p.price(p.inner, p.inner.Model()); resolved != nil {
 			pr = resolved
 		}
 	}
@@ -342,10 +346,10 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 	// double-count it.
 	input := NormalizeCacheMissInput(u.InputTokens, u.CacheReadInputTokens, p.inner.Name())
 
-	provider := p.providerName
-	if provider == "" {
-		provider = p.Name() // fallback for bare wrapping (tests, ad-hoc callers)
-	}
+	// Provider name: the provider's config name (Provider.ProviderName); a
+	// bare provider without a config name writes "" — the type name is an
+	// implementation detail, not a provider identity, so we never fake it.
+	provider := p.inner.ProviderName()
 
 	return p.rec.Record(UsageRow{
 		TS:                       time.Now(),

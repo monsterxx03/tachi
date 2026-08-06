@@ -25,13 +25,15 @@ import (
 // mockStreamProvider implements llm.Provider and lets tests control the
 // exact stream events produced, including multi-turn sequences.
 type mockStreamProvider struct {
-	name      string
-	sequences [][]llm.StreamEvent // each entry is one API call's full stream
-	callIdx   int
+	name         string
+	providerName string              // config provider name (Provider.ProviderName); "" = unknown
+	sequences    [][]llm.StreamEvent // each entry is one API call's full stream
+	callIdx      int
 }
 
-func (p *mockStreamProvider) Name() string  { return p.name }
-func (p *mockStreamProvider) Model() string { return "mock-model" }
+func (p *mockStreamProvider) Name() string         { return p.name }
+func (p *mockStreamProvider) Model() string        { return "mock-model" }
+func (p *mockStreamProvider) ProviderName() string { return p.providerName }
 
 func (p *mockStreamProvider) CreateChat(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (*llm.Response, error) {
 	return nil, fmt.Errorf("not implemented")
@@ -63,8 +65,9 @@ type failingStreamProvider struct {
 	name string
 }
 
-func (p *failingStreamProvider) Name() string  { return p.name }
-func (p *failingStreamProvider) Model() string { return "mock-model" }
+func (p *failingStreamProvider) Name() string         { return p.name }
+func (p *failingStreamProvider) ProviderName() string { return "" }
+func (p *failingStreamProvider) Model() string        { return "mock-model" }
 func (p *failingStreamProvider) CreateChat(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (*llm.Response, error) {
 	return nil, fmt.Errorf("not implemented")
 }
@@ -1026,8 +1029,9 @@ type cancelAfterStreamProvider struct {
 	name string
 }
 
-func (p *cancelAfterStreamProvider) Name() string  { return p.name }
-func (p *cancelAfterStreamProvider) Model() string { return "mock-model" }
+func (p *cancelAfterStreamProvider) Name() string         { return p.name }
+func (p *cancelAfterStreamProvider) ProviderName() string { return "" }
+func (p *cancelAfterStreamProvider) Model() string        { return "mock-model" }
 func (p *cancelAfterStreamProvider) CreateChat(ctx context.Context, _ []llm.Message, _ []llm.Tool, _ llm.ChatOptions) (*llm.Response, error) {
 	return nil, fmt.Errorf("not implemented")
 }

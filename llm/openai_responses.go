@@ -26,6 +26,7 @@ type OpenAIResponsesProvider struct {
 	model   string
 	apiKey  string
 	baseURL string
+	name    string // config provider name ("" = unknown); see Provider.ProviderName
 }
 
 func NewOpenAIResponsesProvider(apiKey, baseURL, model string) *OpenAIResponsesProvider {
@@ -51,8 +52,9 @@ func NewOpenAIResponsesProvider(apiKey, baseURL, model string) *OpenAIResponsesP
 	}
 }
 
-func (p *OpenAIResponsesProvider) Name() string  { return ProviderTypeOpenAIResponses }
-func (p *OpenAIResponsesProvider) Model() string { return p.model }
+func (p *OpenAIResponsesProvider) Name() string         { return ProviderTypeOpenAIResponses }
+func (p *OpenAIResponsesProvider) Model() string        { return p.model }
+func (p *OpenAIResponsesProvider) ProviderName() string { return p.name }
 
 // roleForResponses maps a tachi message role to the Responses API role.
 // system and developer messages are handled by convertMessages (joined into

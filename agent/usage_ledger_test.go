@@ -119,7 +119,7 @@ func TestRunOneOffStream_RecordsUsageRows(t *testing.T) {
 
 	// Wrap the provider manually — NewAIAgent does not (NewAIAgentWithConfig
 	// does); the kind/session anchoring being tested lives in RunOneOffStream.
-	wrapped := llm.WrapRecordingProvider(provider, rec, "deepseek-v4-flash", func(model string) *llm.ModelPrice {
+	wrapped := llm.WrapRecordingProvider(provider, rec, func(provider llm.Provider, model string) *llm.ModelPrice {
 		return &llm.ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}
 	})
 
@@ -150,6 +150,78 @@ func TestRunOneOffStream_RecordsUsageRows(t *testing.T) {
 	}
 }
 
+// TestWrapForUsage_ResolvesAlias is the regression guard for ledger rows
+// recording a provider_aliases key instead of the real provider name:
+// config `provider: main_provider` with
+// `provider_aliases: {main_provider: deepseek-v4-flash}` must never write
+// "main_provider" into usage rows. Alias expansion happens ONCE at config
+// load (Config.ExpandProviderAliases — called by LoadFrom); this test
+// exercises that expansion + the wrapping chain end-to-end, so the row
+// carries the resolved config provider name ("deepseek-v4-flash").
+func TestWrapForUsage_ResolvesAlias(t *testing.T) {
+	overrideOneoffDirs(t)
+
+	provider := &mockStreamProvider{
+		name:         "openai",
+		providerName: "deepseek-v4-flash", // config-resolved providers carry their name
+		sequences: [][]llm.StreamEvent{
+			{
+				{Type: llm.StreamEventDone, FinishReason: "stop", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}},
+			},
+		},
+	}
+	rec := llm.NewUsageRecorder(t.TempDir())
+	full := config.DefaultConfig()
+	full.ProviderAliases = map[string]string{"main_provider": "deepseek-v4-flash"}
+	full.Providers = append(full.Providers, config.ProviderConfig{
+		Name: "deepseek-v4-flash", Type: "openai", Model: "deepseek-chat",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-test",
+	})
+	full.Provider = "main_provider" // alias in the top-level provider field
+	full.ExpandProviderAliases()    // what LoadFrom does after parsing YAML
+
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		Provider:      provider,
+		Logger:        logger.Default(),
+		FullConfig:    full,
+		UsageRecorder: rec,
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
+	// wrapUsageProviders must have wrapped the main provider under the RESOLVED
+	// name — exercise it end-to-end through a one-off run.
+	wrapped := a.Config.Provider
+	if _, ok := wrapped.(*llm.RecordingProvider); !ok {
+		t.Fatalf("main provider = %T, want *llm.RecordingProvider", wrapped)
+	}
+
+	sm := &fakeSessionManager{}
+	if _, err := sm.New("deepseek-v4-flash", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	a.Config.SessionManager = sm
+
+	ch := a.RunOneOffStream(context.Background(), wrapped, "sys", "hello",
+		llm.ChatOptions{MaxTokens: 100}, WithOneOffMeta(&OneOffMeta{Kind: "commit"}))
+	for ev := range ch {
+		if ev.Type == AgentEventError {
+			t.Fatalf("one-off run failed: %v", ev.Result.Error)
+		}
+	}
+
+	rows, err := rec.Rows(sm.Current().ID, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1", len(rows))
+	}
+	if rows[0].Provider != "deepseek-v4-flash" {
+		t.Errorf("Provider = %q, want %q (alias must resolve to the real provider name)", rows[0].Provider, "deepseek-v4-flash")
+	}
+}
+
 // TestRunOneOffStream_NoSessionFallsToGlobal: session-less one-off runs
 // (tachi -c) must record rows with an empty session_id — visible in the
 // global bucket, not silently dropped.
@@ -169,7 +241,7 @@ func TestRunOneOffStream_NoSessionFallsToGlobal(t *testing.T) {
 	a.Config.Logger = logger.Default()
 	a.Config.UsageRecorder = rec // no SessionManager at all
 
-	wrapped := llm.WrapRecordingProvider(provider, rec, "deepseek-v4-flash", nil)
+	wrapped := llm.WrapRecordingProvider(provider, rec, nil)
 	ch := a.RunOneOffStream(context.Background(), wrapped, "sys", "msg",
 		llm.ChatOptions{MaxTokens: 100}, WithOneOffMeta(&OneOffMeta{Kind: "commit"}))
 	for ev := range ch {
@@ -225,7 +297,92 @@ func TestNewAIAgentWithConfig_DedicatedProvidersBilled(t *testing.T) {
 	if _, ok := commitProv.(*llm.RecordingProvider); !ok {
 		t.Fatalf("CommitProvider = %T, want *llm.RecordingProvider (F1: Setup-resolved providers must be wrapped)", commitProv)
 	}
-	if wrapped := llm.WrapRecordingProvider(commitProv, rec, commitName, nil); wrapped != commitProv {
+	if wrapped := llm.WrapRecordingProvider(commitProv, rec, nil); wrapped != commitProv {
 		t.Error("WrapRecordingProvider not idempotent: re-wrapping changed the instance")
+	}
+}
+
+// TestSetProvider_ReWrapsForUsage is the regression guard for runtime model
+// switches (TUI /model, ACP SetSessionConfigOption) dropping the main
+// provider off the usage ledger: those call sites build a FRESH provider via
+// config.BuildProvider — an unwrapped instance that never passes through
+// NewAIAgentWithConfig's wrapUsageProviders. SetProvider must re-wrap it (so
+// post-switch conversation calls still land in the ledger) and rows must
+// group by the CONFIG provider name, which the provider carries itself via
+// Provider.ProviderName (through the RetryProvider decorator chain).
+func TestSetProvider_ReWrapsForUsage(t *testing.T) {
+	overrideOneoffDirs(t)
+
+	rec := llm.NewUsageRecorder(t.TempDir())
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		Provider:      &mockStreamProvider{name: "openai"},
+		Logger:        logger.Default(),
+		FullConfig:    config.DefaultConfig(),
+		UsageRecorder: rec,
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
+
+	sm := &fakeSessionManager{}
+	if _, err := sm.New("deepseek-v4-flash", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	a.Config.SessionManager = sm
+
+	// Simulate a model switch: a BRAND-NEW unwrapped provider (exactly what
+	// config.BuildProvider returns at the switch call sites). Real
+	// config-resolved providers carry their config name (Provider.ProviderName,
+	// verified end-to-end in llm.TestNewNamedProvider_CarriesConfigName) —
+	// the mock models that contract here.
+	a.SetProvider(&mockStreamProvider{
+		name:         "openai",
+		providerName: "deepseek-v4-pro",
+		sequences: [][]llm.StreamEvent{
+			{
+				{Type: llm.StreamEventDone, FinishReason: "stop", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}},
+			},
+		},
+	})
+
+	if _, ok := a.Config.Provider.(*llm.RecordingProvider); !ok {
+		t.Fatalf("provider after SetProvider = %T, want *llm.RecordingProvider", a.Config.Provider)
+	}
+
+	// A post-switch call must still land in the ledger, grouped by the
+	// config provider name (auto-resolved from the provider, not a type name).
+	ch := a.RunOneOffStream(context.Background(), a.Config.Provider, "sys", "hello",
+		llm.ChatOptions{MaxTokens: 100}, WithOneOffMeta(&OneOffMeta{Kind: "commit"}))
+	for ev := range ch {
+		if ev.Type == AgentEventError {
+			t.Fatalf("one-off run failed: %v", ev.Result.Error)
+		}
+	}
+
+	rows, err := rec.Rows(sm.Current().ID, time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("ledger rows = %d, want 1 (post-switch calls must still be recorded)", len(rows))
+	}
+	if rows[0].Provider != "deepseek-v4-pro" {
+		t.Errorf("Provider = %q, want %q (config name carried by the provider)", rows[0].Provider, "deepseek-v4-pro")
+	}
+
+	// Providers without a config name (test mocks, ad-hoc construction) fall
+	// back to the type name — still recorded, just coarser grouping.
+	a.SetProvider(&mockStreamProvider{name: "openai"})
+	if _, ok := a.Config.Provider.(*llm.RecordingProvider); !ok {
+		t.Fatalf("provider after SetProvider = %T, want *llm.RecordingProvider", a.Config.Provider)
+	}
+
+	// Idempotence: re-switching to an already-wrapped provider (e.g.
+	// main_agent.go's pre-wrapped RunProvider) must not nest another wrapper —
+	// a nested RecordingProvider would record every call twice.
+	wrapped := a.Config.Provider
+	a.SetProvider(wrapped)
+	if a.Config.Provider != wrapped {
+		t.Fatalf("SetProvider double-wrapped: got %T, want same *llm.RecordingProvider instance", a.Config.Provider)
 	}
 }

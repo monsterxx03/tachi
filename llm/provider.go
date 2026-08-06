@@ -205,19 +205,39 @@ type StreamEvent struct {
 // Provider defines the interface for LLM providers
 type Provider interface {
 	Name() string
+	// ProviderName returns the CONFIG provider name (e.g. "deepseek-v4-flash")
+	// — distinct from Name(), which returns the type name ("openai"/"anthropic")
+	// and cannot distinguish two providers of the same type. Every provider
+	// must implement it: config-resolved providers carry their name (see
+	// NewNamedProvider), decorators forward it from their inner provider, and
+	// providers without a config name (test mocks, ad-hoc construction)
+	// return "". This is how usage-ledger rows group by the real provider
+	// without callers threading names around.
+	ProviderName() string
 	Model() string
 	CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error)
 	CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error)
 }
 
 func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) {
+	return NewNamedProvider(providerType, "", apiKey, baseURL, model)
+}
+
+// NewNamedProvider is NewProvider with the provider's CONFIG name (e.g.
+// "deepseek-v4-flash") attached, so the constructed provider can report it
+// via ProviderName. name may be "" for providers not backed by a config
+// entry. This is the single construction point for config-resolved
+// providers — see config.NewProviderFromResolved.
+func NewNamedProvider(providerType, name, apiKey, baseURL, model string) (Provider, error) {
 	switch providerType {
 	case ProviderTypeOpenAI:
 		// go-openai has no built-in retry; wrap with RetryProvider so
 		// transient failures (connection reset, 429/5xx) don't abort
 		// the whole turn.
+		p := NewOpenAIProvider(apiKey, baseURL, model)
+		p.name = name
 		return NewRetryProvider(
-			NewOpenAIProvider(apiKey, baseURL, model),
+			p,
 			RetryConfig{MaxRetries: 2},
 		), nil
 	case ProviderTypeOpenAIResponses:
@@ -226,11 +246,15 @@ func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) 
 		// MaxRetries=2, honoring Retry-After headers). The RetryProvider
 		// cannot classify its errors anyway (apierror is an internal
 		// package), so wrapping here would only add duplicate retries.
-		return NewOpenAIResponsesProvider(apiKey, baseURL, model), nil
+		p := NewOpenAIResponsesProvider(apiKey, baseURL, model)
+		p.name = name
+		return p, nil
 	case ProviderTypeAnthropic:
 		// anthropic-sdk-go already retries internally (default MaxRetries=2),
 		// so no extra wrapping is needed here.
-		return NewAnthropicProvider(apiKey, baseURL, model), nil
+		p := NewAnthropicProvider(apiKey, baseURL, model)
+		p.name = name
+		return p, nil
 	default:
 		return nil, fmt.Errorf("unsupported provider type: %s", providerType)
 	}

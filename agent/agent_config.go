@@ -100,7 +100,7 @@ type AgentConfig struct {
 	SubagentProvider llm.Provider
 
 	// --- 思考模式默认值（构造输入；nil/空 = provider/模型默认）---
-	// 由配置 ProviderConfig.ThinkingLevel 解析而来（resolved.Provider.Thinking /
+	// 由配置 ProviderConfig.ThinkingLevel 解析而来（resolved.Thinking /
 	// ThinkingEffort）。runLoop 在 ChatOptions 未显式指定时填充这两个值，
 	// 因此所有前端（TUI / channel / ACP / one-off）自动继承模型级思考配置，
 	// 而 /commit 等显式覆盖的调用不受影响。

@@ -627,16 +627,12 @@ func (dr *DeepResearch) getProvider(name string) (llm.Provider, error) {
 
 	for _, p := range dr.providersCfg {
 		if p.Name == name {
-			resolved, err := config.ResolveProviderConfig(&p)
+			resolved, err := p.NewProvider()
 			if err != nil {
 				return nil, fmt.Errorf("resolve provider %q: %w", name, err)
 			}
-			provider, err := config.NewProviderFromResolved(resolved)
-			if err != nil {
-				return nil, fmt.Errorf("create provider %q: %w", name, err)
-			}
-			dr.providerCache[name] = provider
-			return provider, nil
+			dr.providerCache[name] = resolved.Provider
+			return resolved.Provider, nil
 		}
 	}
 

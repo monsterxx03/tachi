@@ -37,6 +37,7 @@ type mockProvider struct {
 }
 
 func (m *mockProvider) Name() string         { return "mock" }
+func (m *mockProvider) ProviderName() string { return "" }
 func (m *mockProvider) Model() string        { return "mock-model" }
 func (m *mockProvider) Close()               {}
 func (m *mockProvider) SetAPIKey(_ string)   {}

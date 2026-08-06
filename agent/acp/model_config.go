@@ -239,13 +239,10 @@ func providerThinkingDefault(sess *ACPSession) (*bool, string) {
 		return nil, ""
 	}
 	providerName := ""
-	if cur := sess.sessMgr.Current(); cur != nil && cur.ProviderName != "" {
+	if cur := sess.sessMgr.Current(); cur != nil {
 		providerName = cur.ProviderName
 	}
-	if providerName == "" {
-		providerName = config.ResolveProviderName(sess.cfg)
-	}
-	if _, rp, err := sess.cfg.BuildProvider(providerName); err == nil {
+	if rp, err := sess.cfg.BuildProvider(providerName); err == nil { // empty name → default
 		return rp.Thinking, rp.ThinkingEffort
 	}
 	return nil, ""
@@ -264,11 +261,9 @@ func applySessionThinking(aiAgent *agent.AIAgent, cfg *config.Config, sess *sess
 		return
 	}
 	providerName := sess.ProviderName
-	if providerName == "" && cfg != nil {
-		providerName = config.ResolveProviderName(cfg)
-	}
-	if providerName != "" && cfg != nil {
-		if _, rp, err := cfg.BuildProvider(providerName); err == nil {
+	if cfg != nil {
+		// Empty name → default provider (BuildProvider resolves it).
+		if rp, err := cfg.BuildProvider(providerName); err == nil {
 			thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *rp)
 			aiAgent.SetThinking(thinking, effort)
 			return
@@ -338,7 +333,7 @@ func switchSessionModel(ctx context.Context, sess *ACPSession, providerName stri
 		return fmt.Errorf("agent not available")
 	}
 
-	provider, resolved, err := sess.cfg.BuildProvider(providerName)
+	resolved, err := sess.cfg.BuildProvider(providerName)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found", providerName)
 	}
@@ -346,8 +341,11 @@ func switchSessionModel(ctx context.Context, sess *ACPSession, providerName stri
 		return fmt.Errorf("resolve provider: %w", err)
 	}
 
-	// Update the agent provider and context window atomically.
-	sess.agent.SetProvider(provider)
+	// Update the agent provider and context window atomically. SetProvider
+	// re-wraps the fresh provider for usage billing — a bare assignment would
+	// silently drop the new provider's calls off the ledger, and the provider
+	// carries its own config name for row grouping (see NewNamedProvider).
+	sess.agent.SetProvider(resolved.Provider)
 	sess.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
 	sess.agent.SetContextWindow(resolved.ContextWindow)
 

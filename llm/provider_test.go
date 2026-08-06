@@ -140,3 +140,38 @@ func TestNewProvider_OpenAIWithBaseURL(t *testing.T) {
 		t.Errorf("Name() = %q", p.Name())
 	}
 }
+
+// TestNewNamedProvider_CarriesConfigName verifies that NewNamedProvider
+// attaches the config provider name to the constructed provider AND that the
+// name survives the decorator chain (RetryProvider for openai, bare
+// instances for anthropic/openai-res) — ProviderName() must resolve it at
+// every layer, since usage-ledger wrapping relies on it to group rows by the
+// real config name.
+func TestNewNamedProvider_CarriesConfigName(t *testing.T) {
+	cases := []struct {
+		name string
+		typ  string
+	}{
+		{"deepseek-v4-flash", ProviderTypeOpenAI},        // wrapped: RetryProvider → OpenAIProvider
+		{"deepseek-v4-pro", ProviderTypeOpenAIResponses}, // bare instance
+		{"anthropic-main", ProviderTypeAnthropic},        // bare instance
+	}
+	for _, c := range cases {
+		p, err := NewNamedProvider(c.typ, c.name, "sk-test", "", "some-model")
+		if err != nil {
+			t.Fatalf("NewNamedProvider(%s) error: %v", c.typ, err)
+		}
+		if got := p.ProviderName(); got != c.name {
+			t.Errorf("%s: ProviderName() = %q, want %q", c.typ, got, c.name)
+		}
+	}
+
+	// NewProvider (unnamed) yields a provider that reports no config name.
+	p, err := NewProvider(ProviderTypeOpenAI, "sk-test", "", "some-model")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := p.ProviderName(); got != "" {
+		t.Errorf("NewProvider: ProviderName() = %q, want \"\"", got)
+	}
+}

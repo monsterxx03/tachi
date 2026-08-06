@@ -15,15 +15,17 @@ import (
 
 // stubRecordingProvider is a minimal Provider for recording tests.
 type stubRecordingProvider struct {
-	name    string
-	model   string
-	resp    *Response
-	stream  []StreamEvent
-	chatErr error
+	name         string
+	providerName string // config name (Provider.ProviderName); "" = unknown
+	model        string
+	resp         *Response
+	stream       []StreamEvent
+	chatErr      error
 }
 
-func (s *stubRecordingProvider) Name() string  { return s.name }
-func (s *stubRecordingProvider) Model() string { return s.model }
+func (s *stubRecordingProvider) Name() string         { return s.name }
+func (s *stubRecordingProvider) ProviderName() string { return s.providerName }
+func (s *stubRecordingProvider) Model() string        { return s.model }
 
 func (s *stubRecordingProvider) CreateChat(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (*Response, error) {
 	if s.chatErr != nil {
@@ -48,8 +50,9 @@ func TestRecordingProvider_CreateChat(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{
-		name:  ProviderTypeOpenAI,
-		model: "deepseek-chat",
+		name:         ProviderTypeOpenAI,
+		providerName: "deepseek-v4-flash",
+		model:        "deepseek-chat",
 		resp: &Response{
 			Content: "hi",
 			Usage: &Usage{
@@ -59,7 +62,7 @@ func TestRecordingProvider_CreateChat(t *testing.T) {
 			},
 		},
 	}
-	p := WrapRecordingProvider(inner, rec, "deepseek-v4-flash", func(model string) *ModelPrice {
+	p := WrapRecordingProvider(inner, rec, func(provider Provider, model string) *ModelPrice {
 		return &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02}
 	})
 
@@ -122,7 +125,7 @@ func TestRecordingProvider_CreateChat_AnthropicNoNormalize(t *testing.T) {
 			},
 		},
 	}
-	p := WrapRecordingProvider(inner, rec, "deepseek-v4-flash", nil) // nil price → unpriced row, tokens still tracked
+	p := WrapRecordingProvider(inner, rec, nil) // nil price → unpriced row, tokens still tracked
 	ctx := context.Background()
 	if _, err := p.CreateChat(ctx, nil, nil, ChatOptions{}); err != nil {
 		t.Fatalf("CreateChat: %v", err)
@@ -154,7 +157,7 @@ func TestRecordingProvider_CreateChatStream_PassthroughAndRecord(t *testing.T) {
 			{Type: StreamEventDone, FinishReason: "stop", Usage: &Usage{InputTokens: 100, OutputTokens: 10}},
 		},
 	}
-	p := WrapRecordingProvider(inner, rec, "deepseek-v4-flash", func(string) *ModelPrice { return &ModelPrice{InputPrice: 1, OutputPrice: 2} })
+	p := WrapRecordingProvider(inner, rec, func(Provider, string) *ModelPrice { return &ModelPrice{InputPrice: 1, OutputPrice: 2} })
 	ch, err := p.CreateChatStream(context.Background(), nil, nil, ChatOptions{})
 	if err != nil {
 		t.Fatalf("CreateChatStream: %v", err)
@@ -176,7 +179,7 @@ func TestRecordingProvider_ErrorsNotRecorded(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{chatErr: errors.New("boom")}
-	p := WrapRecordingProvider(inner, rec, "deepseek-v4-flash", nil)
+	p := WrapRecordingProvider(inner, rec, nil)
 	_, err := p.CreateChat(context.Background(), nil, nil, ChatOptions{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -194,7 +197,7 @@ func TestRecordingProvider_SubagentCompositeID(t *testing.T) {
 		name: ProviderTypeOpenAI, model: "m",
 		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 1}},
 	}
-	p := WrapRecordingProvider(inner, rec, "deepseek-v4-flash", nil)
+	p := WrapRecordingProvider(inner, rec, nil)
 
 	// Composite "parent:short" → parent session.
 	ctx := WithUsageKind(context.Background(), UsageKindSubagent)
@@ -314,13 +317,13 @@ func TestWrapRecordingProvider_Idempotent(t *testing.T) {
 	rec := NewUsageRecorder(t.TempDir())
 	inner := &stubRecordingProvider{name: ProviderTypeOpenAI, model: "m",
 		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 1}}}
-	wrapped := WrapRecordingProvider(inner, rec, "cfg-a", nil)
-	if again := WrapRecordingProvider(wrapped, rec, "cfg-a", nil); again != wrapped {
+	wrapped := WrapRecordingProvider(inner, rec, nil)
+	if again := WrapRecordingProvider(wrapped, rec, nil); again != wrapped {
 		t.Error("WrapRecordingProvider not idempotent for the same recorder")
 	}
 	// Different recorder → new wrapper (still safe: distinct ledgers).
 	other := NewUsageRecorder(t.TempDir())
-	if again := WrapRecordingProvider(wrapped, other, "cfg-a", nil); again == wrapped {
+	if again := WrapRecordingProvider(wrapped, other, nil); again == wrapped {
 		t.Error("different recorder should produce a new wrapper")
 	}
 }
