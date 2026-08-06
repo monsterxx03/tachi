@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -472,8 +473,9 @@ func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
 
 // sendUsageUpdate sends a UsageUpdate notification to the ACP client with the
 // current context window usage estimate, matching the values shown in the TUI
-// statusbar (LastInputEstimate / ContextWindow). Skips sending if either value
-// is zero (agent not fully initialized).
+// statusbar (LastInputEstimate / ContextWindow), plus the cumulative session
+// cost from the usage ledger. Skips sending if either usage value is zero
+// (agent not fully initialized).
 //
 // ctx governs the notification write. Streaming paths pass the stream ctx;
 // deferred goroutines (time.AfterFunc after the request returned) pass
@@ -487,15 +489,48 @@ func sendUsageUpdate(ctx context.Context, conn *acp.AgentSideConnection, session
 	if used <= 0 || cw <= 0 {
 		return
 	}
+	update := &acp.SessionUsageUpdate{
+		Size: int(cw),
+		Used: int(used),
+	}
+	if cost := sessionLedgerCost(sess); cost > 0 {
+		update.Cost = &acp.Cost{Amount: cost, Currency: "CNY"}
+	}
 	_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: sessionID,
 		Update: acp.SessionUpdate{
-			UsageUpdate: &acp.SessionUsageUpdate{
-				Size: int(cw),
-				Used: int(used),
-			},
+			UsageUpdate: update,
 		},
 	})
+}
+
+// sessionLedgerCost returns the cumulative CNY cost of the session from the
+// usage ledger — the same single source of truth /usage uses (rows for this
+// session ID, scanned from the session's creation date onward; subagent rows
+// are normalized onto the parent session by the recorder). Best-effort:
+// returns 0 when the ledger or session manager is unavailable, or on any read
+// error — usage reporting must never break the ACP stream.
+func sessionLedgerCost(sess *ACPSession) float64 {
+	if sess == nil || sess.agent == nil || sess.sessMgr == nil {
+		return 0
+	}
+	rec := sess.agent.UsageRecorder()
+	if rec == nil {
+		return 0
+	}
+	from := time.Time{}
+	if curr := sess.sessMgr.Current(); curr != nil {
+		from = curr.CreatedAt // skip day files older than the session
+	}
+	rows, err := rec.Rows(sess.ID, from)
+	if err != nil {
+		return 0
+	}
+	var cost float64
+	for i := range rows {
+		cost += rows[i].Cost()
+	}
+	return cost
 }
 
 // replaySessionHistory replays all stored messages from a loaded session as ACP
