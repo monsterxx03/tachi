@@ -802,3 +802,156 @@ func TestStreamToACP_InterruptedWithCtxErr(t *testing.T) {
 		t.Errorf("stopReason = %v, want Cancelled", stopReason)
 	}
 }
+
+// ── messageId tests ─────────────────────────────────────────────────────────
+
+// extractUpdateMessageID pulls the messageId field from a session/update
+// notification, returning "" when absent (user chunks, tool calls, etc).
+func extractUpdateMessageID(msg map[string]any) string {
+	params, _ := msg["params"].(map[string]any)
+	update, _ := params["update"].(map[string]any)
+	id, _ := update["messageId"].(string)
+	return id
+}
+
+// updateType returns the sessionUpdate discriminator of a notification.
+func updateType(msg map[string]any) string {
+	params, _ := msg["params"].(map[string]any)
+	update, _ := params["update"].(map[string]any)
+	t, _ := update["sessionUpdate"].(string)
+	return t
+}
+
+// messageChunkIDs collects messageIds of all agent_message_chunk /
+// agent_thought_chunk notifications in order.
+func messageChunkIDs(notifications []map[string]any, chunkType string) []string {
+	var ids []string
+	for _, n := range notifications {
+		if updateType(n) == chunkType {
+			ids = append(ids, extractUpdateMessageID(n))
+		}
+	}
+	return ids
+}
+
+// TestStreamToACP_MessageID_SharedAcrossTextDeltas pins that streamed text
+// deltas of ONE logical message share a single messageId — the client groups
+// them into one message.
+func TestStreamToACP_MessageID_SharedAcrossTextDeltas(t *testing.T) {
+	sess, _ := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+	conn, w, ch := mockACPConn(t)
+
+	evCh := make(chan agent.AgentEvent, 4)
+	for _, d := range []string{"Hel", "lo, ", "world"} {
+		evCh <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: d}
+	}
+	close(evCh)
+
+	stopReason, _, _ := streamToACP(context.Background(), sess, conn, evCh)
+	assert.Equal(t, acp.StopReasonEndTurn, stopReason)
+	notifications := drainNotifications(w, ch)
+
+	require.Len(t, notifications, 3)
+	ids := messageChunkIDs(notifications, "agent_message_chunk")
+	require.Len(t, ids, 3)
+	require.NotEmpty(t, ids[0], "text chunks must carry a messageId")
+	assert.Equal(t, ids[0], ids[1], "deltas of one message share an ID")
+	assert.Equal(t, ids[0], ids[2], "deltas of one message share an ID")
+}
+
+// TestStreamToACP_MessageID_RotatesAfterToolResult pins that text emitted
+// AFTER a tool round (the model's next response) starts a NEW message ID —
+// otherwise the client would merge two distinct messages around the tool.
+func TestStreamToACP_MessageID_RotatesAfterToolResult(t *testing.T) {
+	sess, _ := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+	conn, w, ch := mockACPConn(t)
+
+	evCh := make(chan agent.AgentEvent, 8)
+	evCh <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "before tool"}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventToolCallStart, ToolName: "bash", ToolID: "call_1"}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventToolCallArgs, ToolID: "call_1", ToolArgs: `{"command":"ls"}`}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventToolResult, ToolID: "call_1", ToolName: "bash"}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "after tool"}
+	close(evCh)
+
+	streamToACP(context.Background(), sess, conn, evCh)
+	notifications := drainNotifications(w, ch)
+
+	ids := messageChunkIDs(notifications, "agent_message_chunk")
+	require.Len(t, ids, 2, "two text messages expected")
+	require.NotEmpty(t, ids[0])
+	require.NotEmpty(t, ids[1])
+	assert.NotEqual(t, ids[0], ids[1], "post-tool text must start a new message")
+}
+
+// TestStreamToACP_MessageID_NotificationIsolated pins that one-shot
+// notifications (auto-compact) are their own message AND terminate the
+// in-flight text message — text after them starts a fresh ID.
+func TestStreamToACP_MessageID_NotificationIsolated(t *testing.T) {
+	sess, _ := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+	conn, w, ch := mockACPConn(t)
+
+	evCh := make(chan agent.AgentEvent, 4)
+	evCh <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "before compact"}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventAutoCompactStart}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "after compact"}
+	close(evCh)
+
+	streamToACP(context.Background(), sess, conn, evCh)
+	notifications := drainNotifications(w, ch)
+
+	ids := messageChunkIDs(notifications, "agent_message_chunk")
+	require.Len(t, ids, 3, "text + compact notice + text")
+	for _, id := range ids {
+		require.NotEmpty(t, id)
+	}
+	assert.NotEqual(t, ids[0], ids[1], "notification is its own message")
+	assert.NotEqual(t, ids[1], ids[2], "post-notification text is a new message")
+	assert.NotEqual(t, ids[0], ids[2], "post-notification text is a new message")
+}
+
+// TestStreamToACP_MessageID_ThoughtSeparateFromText pins that a thinking
+// stream and a text stream of the same response get distinct IDs — clients
+// render reasoning and answer as separate blocks.
+func TestStreamToACP_MessageID_ThoughtSeparateFromText(t *testing.T) {
+	sess, _ := newACPReviewSession(t, testConfig, &acpReviewMockProvider{name: "p", model: "m"})
+	conn, w, ch := mockACPConn(t)
+
+	evCh := make(chan agent.AgentEvent, 4)
+	evCh <- agent.AgentEvent{Type: agent.AgentEventThinkingDelta, ThinkingDelta: "hmm"}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventThinkingDelta, ThinkingDelta: " let me see"}
+	evCh <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "answer"}
+	close(evCh)
+
+	streamToACP(context.Background(), sess, conn, evCh)
+	notifications := drainNotifications(w, ch)
+
+	thoughtIDs := messageChunkIDs(notifications, "agent_thought_chunk")
+	require.Len(t, thoughtIDs, 2)
+	require.NotEmpty(t, thoughtIDs[0])
+	assert.Equal(t, thoughtIDs[0], thoughtIDs[1], "one thinking message spans deltas")
+
+	textIDs := messageChunkIDs(notifications, "agent_message_chunk")
+	require.Len(t, textIDs, 1)
+	require.NotEmpty(t, textIDs[0])
+	assert.NotEqual(t, thoughtIDs[0], textIDs[0], "thinking and text are separate messages")
+}
+
+// TestStreamToACP_MessageID_ReplayUnique pins that replayed history assigns a
+// fresh ID per assistant/thinking message.
+func TestStreamToACP_MessageID_ReplayUnique(t *testing.T) {
+	_, acpSess := setupSessionWithMessages(t, "/proj", []session.Message{
+		{Type: session.MessageTypeAssistant, Content: "first"},
+		{Type: session.MessageTypeThinking, Content: "thinking"},
+		{Type: session.MessageTypeAssistant, Content: "second"},
+	})
+
+	conn, w, ch := mockACPConn(t)
+	replaySessionHistory(t.Context(), conn, acpSess)
+	notifications := drainNotifications(w, ch)
+
+	textIDs := messageChunkIDs(notifications, "agent_message_chunk")
+	require.Len(t, textIDs, 2, "two assistant messages")
+	require.NotEmpty(t, textIDs[0])
+	assert.NotEqual(t, textIDs[0], textIDs[1], "each replayed message gets its own ID")
+}

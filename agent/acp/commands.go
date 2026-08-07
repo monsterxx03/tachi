@@ -187,11 +187,13 @@ func makeACPSkillHandler(skillName string) func(ctx context.Context, sess *ACPSe
 // Helper utilities
 // ---------------------------------------------------------------------------
 
-// sendTextUpdate sends a text-only SessionUpdate to the client.
+// sendTextUpdate sends a text-only SessionUpdate to the client. Each call is
+// its own logical message (slash feedback, command output) — always start a
+// fresh message ID so it never merges with surrounding agent text.
 func sendTextUpdate(ctx context.Context, conn *acp.AgentSideConnection, sessID acp.SessionId, text string) {
 	_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 		SessionId: sessID,
-		Update:    acp.UpdateAgentMessageText(text),
+		Update:    agentMessageTextChunk(text, nextMessageID()),
 	})
 }
 

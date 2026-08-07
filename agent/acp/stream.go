@@ -12,8 +12,48 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
 )
+
+// nextMessageID returns a fresh ID for an ACP message chunk. ACP requires
+// message IDs in UUID format; ShortUUID(32) yields the full 32-hex-digit body
+// of a random UUID v4 (hyphens dropped), same collision resistance as the
+// session IDs built elsewhere in the codebase.
+func nextMessageID() string {
+	return strutil.ShortUUID(32)
+}
+
+// agentMessageTextChunk builds an agent_message_chunk update carrying msgID.
+// Chunks sharing the same ID belong to the same logical message; a changed ID
+// marks a new one — this is what lets clients (Zed) group streamed chunks into
+// distinct messages instead of guessing boundaries from chunk-type switches
+// (which mis-merge "mid-tool preamble" with the final answer). An empty msgID
+// falls back to the SDK helper (no ID), keeping existing call sites safe.
+func agentMessageTextChunk(text, msgID string) acp.SessionUpdate {
+	if msgID == "" {
+		return acp.UpdateAgentMessageText(text)
+	}
+	return acp.SessionUpdate{
+		AgentMessageChunk: &acp.SessionUpdateAgentMessageChunk{
+			Content:   acp.TextBlock(text),
+			MessageId: &msgID,
+		},
+	}
+}
+
+// agentThoughtTextChunk is the thought-chunk counterpart of agentMessageTextChunk.
+func agentThoughtTextChunk(text, msgID string) acp.SessionUpdate {
+	if msgID == "" {
+		return acp.UpdateAgentThoughtText(text)
+	}
+	return acp.SessionUpdate{
+		AgentThoughtChunk: &acp.SessionUpdateAgentThoughtChunk{
+			Content:   acp.TextBlock(text),
+			MessageId: &msgID,
+		},
+	}
+}
 
 // streamToACP consumes the AgentEvent channel and converts events into ACP
 // session/update notifications. Blocks until the channel is closed or ctx is cancelled.
@@ -40,6 +80,12 @@ func streamToACP(
 	var runErr error
 	toolArgs := make(map[string]string)      // toolID → accumulated args JSON
 	pendingStarts := make(map[string]string) // toolID → toolName (buffered start, sent when args arrive)
+	// Message ID state: tracks the in-flight agent text/thought message so
+	// streamed chunks share one ID per logical message. Reset when a logical
+	// message ends (tool result, notification, error, turn complete) so the
+	// next message — e.g. the model's response after a tool round — starts a
+	// fresh ID (Zed's reliable message boundary, see nextMessageID).
+	var textMsgID, thoughtMsgID string
 
 	for {
 		select {
@@ -50,15 +96,21 @@ func streamToACP(
 
 			switch event.Type {
 			case agent.AgentEventTextDelta:
+				if textMsgID == "" {
+					textMsgID = nextMessageID()
+				}
 				_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 					SessionId: sessionID,
-					Update:    acp.UpdateAgentMessageText(event.TextDelta),
+					Update:    agentMessageTextChunk(event.TextDelta, textMsgID),
 				})
 
 			case agent.AgentEventThinkingDelta:
+				if thoughtMsgID == "" {
+					thoughtMsgID = nextMessageID()
+				}
 				_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 					SessionId: sessionID,
-					Update:    acp.UpdateAgentThoughtText(event.ThinkingDelta),
+					Update:    agentThoughtTextChunk(event.ThinkingDelta, thoughtMsgID),
 				})
 
 			case agent.AgentEventToolCallStart:
@@ -147,11 +199,18 @@ func streamToACP(
 				// After each tool result, send a UsageUpdate so Zed can show
 				// real-time context window usage in its status bar.
 				sendUsageUpdate(ctx, conn, sessionID, sess)
+				// The tool round ended — the in-flight LLM message (if any) is
+				// complete. Any subsequent text/thought deltas belong to the
+				// NEXT model response and must start a fresh message ID.
+				textMsgID, thoughtMsgID = "", ""
 
 			case agent.AgentEventTurnComplete:
 				// Clear buffers for the next turn.
 				clear(toolArgs)
 				clear(pendingStarts)
+				// Any in-flight message is done; the summary below (and any
+				// next-turn output) starts fresh IDs.
+				textMsgID, thoughtMsgID = "", ""
 				if event.Result != nil {
 					stopReason = mapStopReason(event.Result.ExitReason)
 					lastUsage = event.Result.Usage
@@ -160,7 +219,7 @@ func streamToACP(
 						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
 							_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 								SessionId: sessionID,
-								Update:    acp.UpdateAgentMessageText(summary),
+								Update:    agentMessageTextChunk(summary, nextMessageID()),
 							})
 						}
 					}
@@ -188,25 +247,28 @@ func streamToACP(
 				}
 
 			case agent.AgentEventAutoCompactStart:
-				// Compact in progress; send a brief notification.
+				// Compact in progress; send a brief notification as its own
+				// message so it doesn't merge with surrounding agent text.
+				textMsgID, thoughtMsgID = "", ""
 				_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 					SessionId: sessionID,
-					Update:    acp.UpdateAgentMessageText("🔄 正在压缩对话历史……"),
+					Update:    agentMessageTextChunk("🔄 正在压缩对话历史……", nextMessageID()),
 				})
 
 			case agent.AgentEventAutoCompactDone:
+				textMsgID, thoughtMsgID = "", ""
 				if event.Result != nil && event.Result.Error != nil {
 					// Compact failed.
 					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 						SessionId: sessionID,
-						Update:    acp.UpdateAgentMessageText(fmt.Sprintf("⚠️ 对话压缩失败: %v", event.Result.Error)),
+						Update:    agentMessageTextChunk(fmt.Sprintf("⚠️ 对话压缩失败: %v", event.Result.Error), nextMessageID()),
 					})
 				} else if event.CompactSummary != "" {
 					// Compact succeeded — send the summary.
 					summary := fmt.Sprintf("🔍 **对话已压缩**（旧消息数: %d 条）\n\n%s", event.OldMsgCount, event.CompactSummary)
 					_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 						SessionId: sessionID,
-						Update:    acp.UpdateAgentMessageText(summary),
+						Update:    agentMessageTextChunk(summary, nextMessageID()),
 					})
 				}
 
@@ -237,9 +299,10 @@ func streamToACP(
 						// chain uses the error to stop before wasting the next
 						// round on a broken model.
 						runErr = event.Result.Error
+						textMsgID, thoughtMsgID = "", ""
 						_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 							SessionId: sessionID,
-							Update:    acp.UpdateAgentMessageText("Error: " + event.Result.Error.Error()),
+							Update:    agentMessageTextChunk("Error: "+event.Result.Error.Error(), nextMessageID()),
 						})
 					}
 				}
@@ -569,15 +632,17 @@ func replaySessionHistory(ctx context.Context, conn *acp.AgentSideConnection, se
 			})
 
 		case session.MessageTypeAssistant:
+			// Each replayed message is a complete logical message — give it a
+			// fresh ID so the client renders it as its own message block.
 			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 				SessionId: sessionID,
-				Update:    acp.UpdateAgentMessageText(msg.Content),
+				Update:    agentMessageTextChunk(msg.Content, nextMessageID()),
 			})
 
 		case session.MessageTypeThinking:
 			_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 				SessionId: sessionID,
-				Update:    acp.UpdateAgentThoughtText(msg.Content),
+				Update:    agentThoughtTextChunk(msg.Content, nextMessageID()),
 			})
 
 		case session.MessageTypeToolCall:

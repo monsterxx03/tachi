@@ -227,6 +227,15 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: Prompt called for session %s", sess.ID))
 
+	// Per ACP Message IDs: echo the client's user-message ID if provided so it
+	// can correlate the turn; otherwise assign one so the client still gets a
+	// stable identifier for this user message.
+	userMsgID := req.MessageId
+	if userMsgID == nil {
+		id := nextMessageID()
+		userMsgID = &id
+	}
+
 	// Serialize prompts within a session (defensive — ACP protocol guarantees sequential)
 	sess.mu.Lock()
 	defer sess.mu.Unlock()
@@ -258,7 +267,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 		if err != nil {
 			return acp.PromptResponse{}, err
 		}
-		return acp.PromptResponse{StopReason: stopReason}, nil
+		return acp.PromptResponse{StopReason: stopReason, UserMessageId: userMsgID}, nil
 	}
 	// ---- END ----
 
@@ -296,8 +305,9 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	stopReason, usage, _ := streamToACP(promptCtx, sess, t.conn, eventCh)
 
 	return acp.PromptResponse{
-		StopReason: stopReason,
-		Usage:      toACPUsage(usage),
+		StopReason:    stopReason,
+		Usage:         toACPUsage(usage),
+		UserMessageId: userMsgID,
 	}, nil
 }
 
