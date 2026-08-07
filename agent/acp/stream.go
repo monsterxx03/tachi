@@ -262,6 +262,18 @@ func streamToACP(
 			}
 
 		case <-ctx.Done():
+			// Mid-turn cancellation race: the agent loop is still unwinding
+			// (LLM streaming or a tool call in flight) and its AgentEventError
+			// — which carries rs.Messages with the partial turn — is produced
+			// AFTER this branch fires. We must not wait for it (a hung tool
+			// would stall the Cancel), so instead invalidate the history
+			// cache: it still holds the PREVIOUS completed turn, and reusing
+			// it on the next Prompt would mask every step of the interrupted
+			// turn. The next Prompt reloads from disk instead — messages.jsonl
+			// is written incrementally by the loop (user, assistant with tool
+			// calls, each executed tool result), so the partial turn's steps
+			// survive there.
+			sess.history = nil
 			return acp.StopReasonCancelled, lastUsage, nil
 		}
 	}
