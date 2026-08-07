@@ -90,9 +90,10 @@ func (t *BashTool) Description() string {
 		"Use for running build commands, tests, git operations, and other shell tasks. "
 	if t.processManager != nil {
 		desc += "Commands still running after the foreground window (~15s, or the timeout value if shorter) " +
-			"are automatically moved to the background — check progress with list_bg and stop with stop_name. " +
-			"Run long-lived commands in background with background=true and stop with stop_name. " +
-			"Use list_bg to list all background processes."
+			"are automatically moved to the background. To manage them, call this tool again with the " +
+			"`list_bg` parameter set to true (lists running background processes) or the `stop_name` parameter " +
+			"set to the process name (stops one). `list_bg` and `stop_name` are JSON parameters of this tool — " +
+			"not shell commands."
 	}
 	return desc
 }
@@ -105,9 +106,9 @@ func (t *BashTool) Properties() map[string]PropertySchema {
 		"command":    {Type: "string", Description: "The bash command to execute"},
 		"timeout":    {Type: "integer", Description: timeoutDesc, Minimum: new(1.0), Maximum: new(600000.0), Default: 15000},
 		"background": {Type: "boolean", Description: "Set true to run this command in the background. Requires bg_name."},
-		"bg_name":    {Type: "string", Description: "A unique name for this background process. Required when background=true. Use this name with stop_name to stop it later."},
-		"stop_name":  {Type: "string", Description: "Stop a background process by its bg_name."},
-		"list_bg":    {Type: "boolean", Description: "Set true to list all running background processes."},
+		"bg_name":    {Type: "string", Description: "A unique name for this background process. Required when background=true. Reference this name later via the stop_name parameter."},
+		"stop_name":  {Type: "string", Description: "When set, stops the background process with this bg_name instead of executing a command. This is a JSON parameter of this tool, not a shell command."},
+		"list_bg":    {Type: "boolean", Description: "When set to true, lists all running background processes instead of executing a command. This is a JSON parameter of this tool, not a shell command."},
 	}
 }
 func (t BashTool) Required() []string { return []string{"command"} }
