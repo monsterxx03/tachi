@@ -138,6 +138,100 @@ func TestContractAnthropicStream(t *testing.T) {
 	require.Equal(t, int64(120), events[6].Usage.InputTokens)
 }
 
+// TestContractAnthropicPingAndCache locks two real-API behaviors mockllm now
+// mirrors: heartbeat ping events interleaved between content blocks (SDK
+// consumes them silently — the event sequence is unaffected), and the cache
+// accounting fields on message_start/message_delta usage.
+func TestContractAnthropicPingAndCache(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolAnthropic))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.Thinking("思考"),
+		mockllm.Ping(), // real APIs insert pings between blocks
+		mockllm.Text("你好"),
+		mockllm.Ping(),
+		mockllm.Usage(120, 30),
+		mockllm.Finish("stop"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewAnthropicProvider("test-key", mock.BaseURL(), "mock-model")
+	ch, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil,
+		llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+
+	events := consumeStream(t, ch)
+	// pings vanish: thinking + signature + text + msgDelta + done
+	require.Len(t, events, 5)
+	require.Equal(t, llm.StreamEventThinkingDelta, events[0].Type)
+	require.Equal(t, "思考", events[0].ThinkingDelta)
+	require.Equal(t, llm.StreamEventTextDelta, events[2].Type)
+	require.Equal(t, "你好", events[2].TextDelta)
+
+	require.Equal(t, llm.StreamEventMessageDelta, events[3].Type)
+	require.NotNil(t, events[3].Usage)
+	require.Equal(t, int64(120), events[3].Usage.InputTokens)
+	require.Equal(t, int64(30), events[3].Usage.OutputTokens)
+	// cache fields present on the wire, parsed into the client usage
+	require.Equal(t, int64(0), events[3].Usage.CacheCreationInputTokens)
+	require.Equal(t, int64(0), events[3].Usage.CacheReadInputTokens)
+
+	require.Equal(t, llm.StreamEventDone, events[4].Type)
+	require.Equal(t, "end_turn", events[4].FinishReason)
+}
+
+// TestContractUsageWithCache locks the cache accounting in UsageWithCache:
+// cache-read tokens surface via prompt_tokens_details.cached_tokens on the
+// OpenAI wire and cache_read_input_tokens on the Anthropic wire; cache
+// creation only exists on Anthropic (cache_creation_input_tokens).
+func TestContractUsageWithCache(t *testing.T) {
+	t.Run("openai cache read", func(t *testing.T) {
+		mock := mockllm.NewServer()
+		defer mock.Close()
+		mock.Script(mockllm.Step{Reply: mockllm.Stream(
+			mockllm.Text("ok"),
+			mockllm.UsageWithCache(100, 20, 45, 10),
+			mockllm.Finish("stop"),
+			mockllm.Done(),
+		)})
+		provider := llm.NewOpenAIProvider("test-key", mock.BaseURL(), "mock-model")
+		ch, err := provider.CreateChatStream(context.Background(),
+			[]llm.Message{{Role: "user", Content: "hi"}}, nil, llm.ChatOptions{MaxTokens: 4096})
+		require.NoError(t, err)
+		events := consumeStream(t, ch)
+		require.Len(t, events, 3)
+		require.Equal(t, llm.StreamEventDone, events[2].Type)
+		require.NotNil(t, events[2].Usage)
+		require.Equal(t, int64(100), events[2].Usage.InputTokens)
+		require.Equal(t, int64(45), events[2].Usage.CacheReadInputTokens)
+		// cache creation is not expressible on the OpenAI wire
+		require.Equal(t, int64(0), events[2].Usage.CacheCreationInputTokens)
+	})
+
+	t.Run("anthropic cache read and creation", func(t *testing.T) {
+		mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolAnthropic))
+		defer mock.Close()
+		mock.Script(mockllm.Step{Reply: mockllm.Stream(
+			mockllm.Text("ok"),
+			mockllm.UsageWithCache(100, 20, 45, 10),
+			mockllm.Finish("stop"),
+			mockllm.Done(),
+		)})
+		provider := llm.NewAnthropicProvider("test-key", mock.BaseURL(), "mock-model")
+		ch, err := provider.CreateChatStream(context.Background(),
+			[]llm.Message{{Role: "user", Content: "hi"}}, nil, llm.ChatOptions{MaxTokens: 4096})
+		require.NoError(t, err)
+		events := consumeStream(t, ch)
+		require.Len(t, events, 3)
+		require.Equal(t, llm.StreamEventMessageDelta, events[1].Type)
+		require.NotNil(t, events[1].Usage)
+		require.Equal(t, int64(100), events[1].Usage.InputTokens)
+		require.Equal(t, int64(45), events[1].Usage.CacheReadInputTokens)
+		require.Equal(t, int64(10), events[1].Usage.CacheCreationInputTokens)
+	})
+}
+
 // TestContractOpenAIStopReason locks the plain-stop finish: OpenAI "stop",
 // Anthropic "end_turn" — both must surface as Done without a tool_calls
 // finish so the agent loop ends the turn.

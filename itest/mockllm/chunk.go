@@ -55,21 +55,24 @@ const (
 	chunkDone
 	chunkPause
 	chunkMalformed
+	chunkPing
 )
 
 // Chunk is a single step in a scripted stream reply. Constructed via the
 // package-level functions (Thinking, Text, ToolCallStart, ...); the wire
 // rendering is protocol-specific (see render.go).
 type Chunk struct {
-	kind             chunkKind
-	text             string
-	id               string
-	name             string
-	args             string
-	finish           string
-	promptTokens     int
-	completionTokens int
-	pause            time.Duration
+	kind              chunkKind
+	text              string
+	id                string
+	name              string
+	args              string
+	finish            string
+	promptTokens      int
+	completionTokens  int
+	cacheReadTokens   int
+	cacheCreationToks int
+	pause             time.Duration
 }
 
 // Thinking emits a reasoning/thinking delta. On the Anthropic protocol the
@@ -116,6 +119,24 @@ func Usage(promptTokens, completionTokens int) Chunk {
 	return Chunk{kind: chunkUsage, promptTokens: promptTokens, completionTokens: completionTokens}
 }
 
+// UsageWithCache is Usage plus cache accounting: cacheRead = tokens served
+// from a cache hit, cacheCreation = tokens written into the cache.
+// Protocol mapping:
+//   - Anthropic: cache_read_input_tokens / cache_creation_input_tokens on
+//     message_delta usage (mirrors the real API).
+//   - OpenAI: only cache read is expressible — prompt_tokens_details.
+//     cached_tokens (parsed by go-openai into Usage.CacheReadInputTokens);
+//     cache creation has no standard OpenAI field and stays 0.
+func UsageWithCache(promptTokens, completionTokens, cacheRead, cacheCreation int) Chunk {
+	return Chunk{
+		kind:              chunkUsage,
+		promptTokens:      promptTokens,
+		completionTokens:  completionTokens,
+		cacheReadTokens:   cacheRead,
+		cacheCreationToks: cacheCreation,
+	}
+}
+
 // Done terminates the SSE stream. OpenAI: "data: [DONE]". Anthropic:
 // message_stop event. Omitted, the server closes the stream at the end of
 // the chunk list (clients treat EOF as stream end); always prefer an explicit
@@ -134,6 +155,13 @@ func Pause(d time.Duration) Chunk {
 // Malformed writes a broken SSE line, exercising client error handling.
 func Malformed() Chunk {
 	return Chunk{kind: chunkMalformed}
+}
+
+// Ping emits an Anthropic heartbeat event ({"type":"ping"}), which real APIs
+// insert between content blocks; the SDK consumes it silently. OpenAI
+// protocol: no-op. Insert it anywhere in the stream to model a real flow.
+func Ping() Chunk {
+	return Chunk{kind: chunkPing}
 }
 
 // ReplyFunc renders one HTTP response for a script step.

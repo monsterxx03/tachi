@@ -85,13 +85,17 @@ func renderOpenAIStream(ctx context.Context, w http.ResponseWriter, chunks []Chu
 		case chunkFinish:
 			data(choice(map[string]any{}, mapFinishReason(ProtocolOpenAI, c.finish)))
 		case chunkUsage:
+			oaiUsage := map[string]any{
+				"prompt_tokens":     c.promptTokens,
+				"completion_tokens": c.completionTokens,
+				"total_tokens":      c.promptTokens + c.completionTokens,
+			}
+			// Cache-read tokens ride in prompt_tokens_details.cached_tokens
+			// (go-openai parses them into Usage.CacheReadInputTokens).
+			oaiUsage["prompt_tokens_details"] = map[string]any{"cached_tokens": c.cacheReadTokens}
 			data(map[string]any{
 				"choices": []any{},
-				"usage": map[string]any{
-					"prompt_tokens":     c.promptTokens,
-					"completion_tokens": c.completionTokens,
-					"total_tokens":      c.promptTokens + c.completionTokens,
-				},
+				"usage":   oaiUsage,
 			})
 		case chunkDone:
 			fmt.Fprint(w, "data: [DONE]\n\n")
@@ -111,6 +115,8 @@ func renderOpenAIStream(ctx context.Context, w http.ResponseWriter, chunks []Chu
 			}
 		case chunkSignature:
 			// OpenAI has no signature concept — ignored.
+		case chunkPing:
+			// OpenAI has no heartbeat event — ignored.
 		}
 	}
 }
@@ -172,9 +178,21 @@ func renderOpenAIJSON(w http.ResponseWriter, content, reasoning string, toolCall
 // event name. Thinking blocks carry a signature; usage is folded into
 // message_delta.
 
+// anthropicUsage mirrors the real API's usage payload: input/output plus the
+// cache accounting fields (cache_creation_input_tokens / cache_read_input_tokens)
+// and service_tier that message_start and message_delta carry.
 type anthropicUsage struct {
-	InputTokens  int `json:"input_tokens"`
-	OutputTokens int `json:"output_tokens"`
+	InputTokens              int    `json:"input_tokens"`
+	OutputTokens             int    `json:"output_tokens"`
+	CacheCreationInputTokens int    `json:"cache_creation_input_tokens"`
+	CacheReadInputTokens     int    `json:"cache_read_input_tokens"`
+	ServiceTier              string `json:"service_tier"`
+}
+
+// anthropicZeroUsage is the baseline usage attached to message_start, matching
+// the real API's field set (cache counts 0, service tier "standard").
+func anthropicZeroUsage() anthropicUsage {
+	return anthropicUsage{ServiceTier: "standard"}
 }
 
 func renderAnthropicStream(ctx context.Context, w http.ResponseWriter, chunks []Chunk) {
@@ -203,7 +221,7 @@ func renderAnthropicStream(ctx context.Context, w http.ResponseWriter, chunks []
 			"content":       []any{},
 			"stop_reason":   nil,
 			"stop_sequence": nil,
-			"usage":         map[string]any{"input_tokens": 0, "output_tokens": 0},
+			"usage":         anthropicZeroUsage(),
 		},
 	})
 
@@ -247,7 +265,12 @@ func renderAnthropicStream(ctx context.Context, w http.ResponseWriter, chunks []
 			// chunk after the finish (unusual ordering) is dropped — it
 			// cannot be retro-attached to the already-flushed delta.
 			if !finished {
-				pendingUsage = &anthropicUsage{InputTokens: c.promptTokens, OutputTokens: c.completionTokens}
+				u := anthropicZeroUsage()
+				u.InputTokens = c.promptTokens
+				u.OutputTokens = c.completionTokens
+				u.CacheReadInputTokens = c.cacheReadTokens
+				u.CacheCreationInputTokens = c.cacheCreationToks
+				pendingUsage = &u
 			}
 		case chunkFinish:
 			md := map[string]any{
@@ -264,6 +287,10 @@ func renderAnthropicStream(ctx context.Context, w http.ResponseWriter, chunks []
 			finished = true
 		case chunkDone:
 			event("message_stop", map[string]any{})
+		case chunkPing:
+			// Heartbeat event ({"type":"ping"}) — the SDK consumes it
+			// silently, exactly like real APIs send between blocks.
+			event("ping", map[string]any{})
 		case chunkPause:
 			select {
 			case <-ctx.Done():
@@ -309,9 +336,6 @@ func renderAnthropicJSON(w http.ResponseWriter, content, reasoning string) {
 		"content":       blocks,
 		"stop_reason":   "end_turn",
 		"stop_sequence": nil,
-		"usage": map[string]any{
-			"input_tokens":  0,
-			"output_tokens": 0,
-		},
+		"usage":         anthropicZeroUsage(),
 	})
 }

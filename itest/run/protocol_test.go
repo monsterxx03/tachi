@@ -80,11 +80,12 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 				)},
 				{
 					// 第二轮请求必须回传 thinking(OpenAI reasoning_content /
-					// Anthropic thinking block with signature)与工具结果
+					// Anthropic thinking block with signature)与工具结果;
+					// usage 带 cache 计数 —— 第二轮历史命中缓存是真实场景
 					Require: mockllm.HasThinking(gomega.ContainSubstring("让我查一下目录")),
 					Reply: mockllm.Stream(
 						mockllm.Text("目录里有 README.md。"),
-						mockllm.Usage(200, 20),
+						mockllm.UsageWithCache(200, 20, 120, 40),
 						mockllm.Finish("stop"),
 						mockllm.Done(),
 					),
@@ -120,6 +121,23 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 				gomega.HaveField("Content", gomega.ContainSubstring("README.md")),
 			)))
 			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
+
+			// 第二轮的 cache usage 穿透到 turn_complete 事件
+			var tcUsage *run.Usage
+			for _, ev := range events {
+				if ev.Type == "turn_complete" {
+					tcUsage = ev.Usage
+				}
+			}
+			gomega.Expect(tcUsage).NotTo(gomega.BeNil())
+			gomega.Expect(tcUsage.InputTokens).To(gomega.Equal(int64(200)))
+			gomega.Expect(tcUsage.CacheReadInputTokens).To(gomega.Equal(int64(120)))
+			if p == mockllm.ProtocolAnthropic {
+				// cache creation 只在 Anthropic 线格式上表达
+				gomega.Expect(tcUsage.CacheCreationInputTokens).To(gomega.Equal(int64(40)))
+			} else {
+				gomega.Expect(tcUsage.CacheCreationInputTokens).To(gomega.Equal(int64(0)))
+			}
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
