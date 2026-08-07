@@ -168,6 +168,7 @@ func runOutputJSONStream(aiAgent *agent.AIAgent, ch <-chan agent.AgentEvent) *ag
 			enc.Encode(streamEvent{
 				Type:       "tool_result",
 				ToolName:   event.ToolName,
+				ToolCallID: event.ToolID,
 				ToolResult: event.ToolResult,
 				DurationMS: event.ToolDuration.Milliseconds(),
 				IsError:    event.ToolIsError,

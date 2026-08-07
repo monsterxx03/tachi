@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix itest itest-run itest-tui itest-acp
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -45,3 +45,19 @@ lint-fix:
 	go fix ./...
 	@echo "=== Running golangci-lint (with --fix) ==="
 	golangci-lint run --fix ./...
+
+# Integration tests (docs/2026-07-31-tui-integration-test.md): isolated from
+# unit tests via the integration build tag; `go test ./...` stays unchanged.
+# M0 = -p pipe mode (real binary). mockllm's own unit + contract tests run
+# with the regular `test` target (no build tag).
+itest:
+	go test -tags=integration ./itest/...
+
+itest-run:
+	go test -tags=integration ./itest/run
+
+itest-tui:
+	go test -tags=integration ./itest/tui
+
+itest-acp:
+	go test -tags=integration ./itest/acp
