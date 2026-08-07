@@ -15,6 +15,41 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// newTestAgent builds an AIAgent wired to cfg. switchSessionModel resolves
+// provider names via the agent's FullConfig (SetResolvedProvider), so tests
+// that switch models must wire it. A temp usage recorder keeps provider
+// calls off <home>/usage.
+func newTestAgent(t *testing.T, provider llm.Provider, cfg *config.Config) *agent.AIAgent {
+	t.Helper()
+	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
+		Resolved:      &config.ResolvedProvider{Provider: provider},
+		MaxIterations: 0,
+		SkipConfigure: true,
+		FullConfig:    cfg,
+		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
+	return a
+}
+
+// newBareTestAgent builds a minimal bare agent (no FullConfig, no system
+// setup) for tests that don't resolve provider names.
+func newBareTestAgent(t *testing.T, provider llm.Provider, maxIter int) *agent.AIAgent {
+	t.Helper()
+	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
+		Resolved:      &config.ResolvedProvider{Provider: provider},
+		MaxIterations: maxIter,
+		SkipConfigure: true,
+		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
+	return a
+}
+
 func TestBuildModelConfigOption(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{
@@ -51,7 +86,7 @@ func TestSwitchSessionModel(t *testing.T) {
 
 	provider, err := llm.NewProvider("openai", "sk-openai", "", "gpt-4o-mini")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newTestAgent(t, provider, cfg)
 
 	sess := &ACPSession{
 		cfg:   cfg,
@@ -103,19 +138,19 @@ func TestThinkingEffortOptionsSharedWithCommands(t *testing.T) {
 func TestCurrentThinkingValue(t *testing.T) {
 	provider, err := llm.NewProvider("openai", "sk", "", "gpt-4o-mini")
 	require.NoError(t, err)
-	a := agent.NewAIAgent(provider, 0)
+	a := newBareTestAgent(t, provider, 0)
 
 	// 默认（nil/空）→ "default"（跟随 provider 默认，不再硬编码 "high"）
 	assert.Equal(t, "default", currentThinkingValue(a))
 
 	// 显式 none → "none"
 	f := false
-	a.Config.Thinking = &f
+	a.Config.Resolved.Thinking = &f
 	assert.Equal(t, "none", currentThinkingValue(a))
 
 	// 显式级别 → 级别本身
-	a.Config.Thinking = nil
-	a.Config.ThinkingEffort = "max"
+	a.Config.Resolved.Thinking = nil
+	a.Config.Resolved.ThinkingEffort = "max"
 	assert.Equal(t, "max", currentThinkingValue(a))
 
 	// nil agent → "default"
@@ -125,7 +160,7 @@ func TestCurrentThinkingValue(t *testing.T) {
 func TestSwitchSessionThinkingEffort(t *testing.T) {
 	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newBareTestAgent(t, provider, 0)
 
 	sess := &ACPSession{
 		cfg:   &config.Config{},
@@ -134,14 +169,14 @@ func TestSwitchSessionThinkingEffort(t *testing.T) {
 
 	// none → 显式关闭
 	require.NoError(t, switchSessionThinkingEffort(context.Background(), sess, "none", nil))
-	require.NotNil(t, sess.agent.Config.Thinking)
-	assert.False(t, *sess.agent.Config.Thinking)
-	assert.Equal(t, "", sess.agent.Config.ThinkingEffort)
+	require.NotNil(t, sess.agent.Config.Resolved.Thinking)
+	assert.False(t, *sess.agent.Config.Resolved.Thinking)
+	assert.Equal(t, "", sess.agent.Config.Resolved.ThinkingEffort)
 
 	// max → 原样透传（API 自己映射）
 	require.NoError(t, switchSessionThinkingEffort(context.Background(), sess, "max", nil))
-	assert.Nil(t, sess.agent.Config.Thinking)
-	assert.Equal(t, "max", sess.agent.Config.ThinkingEffort)
+	assert.Nil(t, sess.agent.Config.Resolved.Thinking)
+	assert.Equal(t, "max", sess.agent.Config.Resolved.ThinkingEffort)
 
 	// nil agent → error
 	require.Error(t, switchSessionThinkingEffort(context.Background(), &ACPSession{}, "high", nil))
@@ -159,7 +194,7 @@ func TestSwitchSessionThinkingEffort_PersistsToSession(t *testing.T) {
 
 	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newBareTestAgent(t, provider, 0)
 
 	sess := &ACPSession{
 		cfg:     &config.Config{},
@@ -194,31 +229,31 @@ func TestApplySessionThinking(t *testing.T) {
 	require.NoError(t, err)
 
 	t.Run("no override is a no-op", func(t *testing.T) {
-		a := agent.NewAIAgent(provider, 0)
+		a := newBareTestAgent(t, provider, 0)
 		applySessionThinking(a, cfg, &session.Session{})
-		assert.Nil(t, a.Config.Thinking)
-		assert.Equal(t, "", a.Config.ThinkingEffort)
+		assert.Nil(t, a.Config.Resolved.Thinking)
+		assert.Equal(t, "", a.Config.Resolved.ThinkingEffort)
 	})
 
 	t.Run("effort override passes through unchanged", func(t *testing.T) {
-		a := agent.NewAIAgent(provider, 0)
+		a := newBareTestAgent(t, provider, 0)
 		applySessionThinking(a, cfg, &session.Session{ThinkingLevel: "max", ProviderName: "deepseek"})
-		assert.Nil(t, a.Config.Thinking)
-		assert.Equal(t, "max", a.Config.ThinkingEffort) // API maps it server-side
+		assert.Nil(t, a.Config.Resolved.Thinking)
+		assert.Equal(t, "max", a.Config.Resolved.ThinkingEffort) // API maps it server-side
 	})
 
 	t.Run("none disables thinking", func(t *testing.T) {
-		a := agent.NewAIAgent(provider, 0)
+		a := newBareTestAgent(t, provider, 0)
 		applySessionThinking(a, cfg, &session.Session{ThinkingLevel: "none"})
-		require.NotNil(t, a.Config.Thinking)
-		assert.False(t, *a.Config.Thinking)
-		assert.Equal(t, "", a.Config.ThinkingEffort)
+		require.NotNil(t, a.Config.Resolved.Thinking)
+		assert.False(t, *a.Config.Resolved.Thinking)
+		assert.Equal(t, "", a.Config.Resolved.ThinkingEffort)
 	})
 
 	t.Run("nil session is a no-op", func(t *testing.T) {
-		a := agent.NewAIAgent(provider, 0)
+		a := newBareTestAgent(t, provider, 0)
 		applySessionThinking(a, cfg, nil) // must not panic
-		assert.Nil(t, a.Config.Thinking)
+		assert.Nil(t, a.Config.Resolved.Thinking)
 	})
 }
 
@@ -231,7 +266,7 @@ func TestSwitchSessionModel_UnknownProvider(t *testing.T) {
 
 	provider, err := llm.NewProvider("openai", "sk-openai", "", "gpt-4o-mini")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newTestAgent(t, provider, cfg)
 	sess := &ACPSession{cfg: cfg, agent: aiAgent}
 
 	err = switchSessionModel(context.Background(), sess, "unknown", nil)
@@ -249,7 +284,7 @@ func TestSetSessionConfigOption(t *testing.T) {
 
 	provider, err := llm.NewProvider("openai", "sk-openai", "", "gpt-4o-mini")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newTestAgent(t, provider, cfg)
 
 	ta := NewTachiAgent(cfg, "test")
 	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
@@ -276,7 +311,7 @@ func TestSetSessionConfigOption_ReasoningEffort(t *testing.T) {
 
 	provider, err := llm.NewProvider("openai", "sk-ds", "", "deepseek-v4-flash")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newBareTestAgent(t, provider, 0)
 
 	ta := NewTachiAgent(cfg, "test")
 	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
@@ -290,8 +325,8 @@ func TestSetSessionConfigOption_ReasoningEffort(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.Nil(t, sess.agent.Config.Thinking)
-	assert.Equal(t, "high", sess.agent.Config.ThinkingEffort)
+	assert.Nil(t, sess.agent.Config.Resolved.Thinking)
+	assert.Equal(t, "high", sess.agent.Config.Resolved.ThinkingEffort)
 	assert.Len(t, resp.ConfigOptions, 3) // model + mode + reasoning_effort
 
 	// max → 原样透传（API 自己映射，flash 支持 max）
@@ -303,8 +338,8 @@ func TestSetSessionConfigOption_ReasoningEffort(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	assert.Nil(t, sess.agent.Config.Thinking)
-	assert.Equal(t, "max", sess.agent.Config.ThinkingEffort)
+	assert.Nil(t, sess.agent.Config.Resolved.Thinking)
+	assert.Equal(t, "max", sess.agent.Config.Resolved.ThinkingEffort)
 
 	// none → 显式关闭思考
 	_, err = ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{
@@ -315,9 +350,9 @@ func TestSetSessionConfigOption_ReasoningEffort(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NotNil(t, sess.agent.Config.Thinking)
-	assert.False(t, *sess.agent.Config.Thinking)
-	assert.Equal(t, "", sess.agent.Config.ThinkingEffort)
+	require.NotNil(t, sess.agent.Config.Resolved.Thinking)
+	assert.False(t, *sess.agent.Config.Resolved.Thinking)
+	assert.Equal(t, "", sess.agent.Config.Resolved.ThinkingEffort)
 }
 
 func TestSetSessionConfigOption_UnsupportedConfig(t *testing.T) {
@@ -329,7 +364,7 @@ func TestSetSessionConfigOption_UnsupportedConfig(t *testing.T) {
 
 	provider, err := llm.NewProvider("openai", "sk-openai", "", "gpt-4o-mini")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newBareTestAgent(t, provider, 0)
 
 	ta := NewTachiAgent(cfg, "test")
 	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
@@ -352,7 +387,7 @@ func TestSetSessionConfigOption_UnsupportedConfig(t *testing.T) {
 func TestSwitchSessionThinkingEffort_InvalidLevel(t *testing.T) {
 	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newBareTestAgent(t, provider, 0)
 
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
@@ -367,14 +402,14 @@ func TestSwitchSessionThinkingEffort_InvalidLevel(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "invalid reasoning effort level")
 	assert.Equal(t, "", sm.Current().ThinkingLevel)
-	assert.Nil(t, aiAgent.Config.Thinking)
-	assert.Equal(t, "", aiAgent.Config.ThinkingEffort)
+	assert.Nil(t, aiAgent.Config.Resolved.Thinking)
+	assert.Equal(t, "", aiAgent.Config.Resolved.ThinkingEffort)
 
 	// 空串被容忍并视为恢复默认（不报错、不关闭思考）。
 	require.NoError(t, switchSessionThinkingEffort(context.Background(), sess, "", nil))
 	assert.Equal(t, "", sm.Current().ThinkingLevel)
-	assert.Nil(t, aiAgent.Config.Thinking)
-	assert.Equal(t, "", aiAgent.Config.ThinkingEffort)
+	assert.Nil(t, aiAgent.Config.Resolved.Thinking)
+	assert.Equal(t, "", aiAgent.Config.Resolved.ThinkingEffort)
 }
 
 // TestSwitchSessionThinkingEffort_DefaultClearsOverride pins the "default"
@@ -390,7 +425,7 @@ func TestSwitchSessionThinkingEffort_DefaultClearsOverride(t *testing.T) {
 	}
 	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newBareTestAgent(t, provider, 0)
 
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
@@ -407,8 +442,8 @@ func TestSwitchSessionThinkingEffort_DefaultClearsOverride(t *testing.T) {
 	// default → 清除 override，agent 恢复 provider 配置的默认（max）。
 	require.NoError(t, switchSessionThinkingEffort(context.Background(), sess, "default", nil))
 	assert.Equal(t, "", sm.Current().ThinkingLevel)
-	assert.Nil(t, aiAgent.Config.Thinking)
-	assert.Equal(t, "max", aiAgent.Config.ThinkingEffort)
+	assert.Nil(t, aiAgent.Config.Resolved.Thinking)
+	assert.Equal(t, "max", aiAgent.Config.Resolved.ThinkingEffort)
 }
 
 // TestSwitchSessionModel_KeepsThinkingOverride pins Addition A: switching the
@@ -426,7 +461,7 @@ func TestSwitchSessionModel_KeepsThinkingOverride(t *testing.T) {
 	}
 	provider, err := llm.NewProvider("openai", "sk-a", "", "deepseek-v4-flash")
 	require.NoError(t, err)
-	aiAgent := agent.NewAIAgent(provider, 0)
+	aiAgent := newTestAgent(t, provider, cfg)
 
 	store, err := session.NewFileStore(t.TempDir())
 	require.NoError(t, err)
@@ -439,17 +474,17 @@ func TestSwitchSessionModel_KeepsThinkingOverride(t *testing.T) {
 	// 设 per-session override: max。
 	require.NoError(t, switchSessionThinkingEffort(context.Background(), sess, "max", nil))
 	assert.Equal(t, "max", sm.Current().ThinkingLevel)
-	assert.Equal(t, "max", aiAgent.Config.ThinkingEffort)
+	assert.Equal(t, "max", aiAgent.Config.Resolved.ThinkingEffort)
 
 	// 切换 provider（新 provider pro 配置默认 high）→ override 必须保持。
 	require.NoError(t, switchSessionModel(context.Background(), sess, "pro", nil))
 	assert.Equal(t, "pro", sm.Current().ProviderName)
 	assert.Equal(t, "deepseek-v4-pro", aiAgent.Model())
-	assert.Equal(t, "max", aiAgent.Config.ThinkingEffort, "per-session override must survive a provider switch")
+	assert.Equal(t, "max", aiAgent.Config.Resolved.ThinkingEffort, "per-session override must survive a provider switch")
 
 	// 无 override 时切 provider → 采用新 provider 的配置默认。
 	require.NoError(t, switchSessionThinkingEffort(context.Background(), sess, "default", nil))
 	require.NoError(t, switchSessionModel(context.Background(), sess, "deepseek", nil))
 	// deepseek(flash) 无 thinking_level 配置 → 默认空 effort。
-	assert.Equal(t, "", aiAgent.Config.ThinkingEffort)
+	assert.Equal(t, "", aiAgent.Config.Resolved.ThinkingEffort)
 }

@@ -213,7 +213,7 @@ func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, syste
 // RunOneOffStream runs a single-turn streaming conversation with a clean
 // history (no inherited messages) using the given provider. No session
 // recording is performed — this is for one-off tasks like /commit or /init.
-// If provider is nil, falls back to a.Config.Provider.
+// If provider is nil, falls back to a.Provider().
 //
 // meta controls the one-off transcript sidecar (empty Kind = no recording):
 // the run's full execution is written to a sidecar JSONL file, keeping it
@@ -237,7 +237,7 @@ func (a *AIAgent) RunOneOffStream(
 		params := applyRunOptions(ropts)
 
 		if provider == nil {
-			provider = a.Config.Provider
+			provider = a.Provider()
 		}
 
 		if opts.MaxTokens <= 0 {
@@ -346,7 +346,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// in the sidecar too.
 		if params != nil && params.oneoffMeta != nil {
 			params.oneoffMeta.SystemPrompt = systemPrompt
-			rs.OneoffRec = a.startOneoffRecorder(ctx, *params.oneoffMeta, a.Config.Provider)
+			rs.OneoffRec = a.startOneoffRecorder(ctx, *params.oneoffMeta, a.Provider())
 			rs.SkipSessionWrites = true
 			// Usage billing: tag calls with the one-off kind and anchor via
 			// resolveOneoffSessionID (see RunOneOffStream).
@@ -379,7 +379,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		a.EstimateAndUpdateTokens(rs, messages)
 		a.runLoop(ctx, rs, &runInput{
-			Provider: a.Config.Provider,
+			Provider: a.Provider(),
 			Messages: messages,
 			Opts:     opts,
 			Params:   params,
@@ -503,7 +503,7 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 	}
 
 	if !a.Config.SessionManager.HasCurrent() {
-		providerName := a.Config.Provider.Name()
+		providerName := a.Provider().Name()
 		if a.Config.FullConfig != nil {
 			// DefaultProviderName already normalizes provider_aliases — the
 			// stored name is the real config provider name (session metadata
@@ -583,14 +583,15 @@ func (a *AIAgent) runLoop(
 
 	// Apply the agent-level default thinking config when the caller didn't
 	// specify one explicitly. This makes the model's thinking_level config
-	// (resolved into AgentConfig.Thinking/ThinkingEffort) effective across
-	// all frontends without touching every call site — while explicit
+	// (resolved into AgentConfig.Resolved.Thinking/ThinkingEffort) effective
+	// across all frontends without touching every call site — while explicit
 	// overrides (/commit disables thinking, /review opts) keep priority.
+	// runLoop only runs on constructed agents, so Resolved is always non-nil.
 	if opts.Thinking == nil {
-		opts.Thinking = a.Config.Thinking
+		opts.Thinking = a.Config.Resolved.Thinking
 	}
 	if opts.ThinkingEffort == "" {
-		opts.ThinkingEffort = a.Config.ThinkingEffort
+		opts.ThinkingEffort = a.Config.Resolved.ThinkingEffort
 	}
 
 	// Inject the current session ID so it can be forwarded as the

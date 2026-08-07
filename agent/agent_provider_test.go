@@ -15,7 +15,7 @@ import (
 // assignment is cmds.ResolveRoundModels (both tested in agent/commands);
 // here we pin the composition contract.
 func TestResolveAdversarialRoundModels(t *testing.T) {
-	a := NewAIAgent(nil, 10)
+	a := newBareTestAgent(t, nil, 10)
 	cfg := config.DefaultConfig()
 	fallback := &mockStreamProvider{name: "fb", sequences: nil}
 
@@ -84,7 +84,7 @@ func TestSetupAdversarialProviders(t *testing.T) {
 		JudgeModel: "judge-m",
 	}
 
-	a := NewAIAgent(nil, 10)
+	a := newBareTestAgent(t, nil, 10)
 	a.Config.Logger = logger.Default()
 	a.SetupAdversarialProviders(cfg)
 
@@ -120,7 +120,7 @@ func TestSetupAdversarialProviders_UnresolvableRecordsNil(t *testing.T) {
 	}
 	cfg.Review.Adversarial = &config.AdversarialReviewConfig{Models: []string{"model-a"}}
 
-	a := NewAIAgent(nil, 10)
+	a := newBareTestAgent(t, nil, 10)
 	a.Config.Logger = logger.Default()
 	a.SetupAdversarialProviders(cfg)
 	if len(a.Config.AdversarialModels) != 1 || a.Config.AdversarialModels[0] == nil {
@@ -150,7 +150,7 @@ func TestConfigure_AdversarialPreresolvedSkipsSetup(t *testing.T) {
 	full.Review.Adversarial = &config.AdversarialReviewConfig{Models: []string{"cfg-model"}}
 
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Provider:          &mockStreamProvider{name: "main"},
+		Resolved:          &config.ResolvedProvider{Provider: &mockStreamProvider{name: "main"}},
 		Logger:            logger.Default(),
 		AdversarialModels: []llm.Provider{pre},
 		AdversarialJudge:  pre,

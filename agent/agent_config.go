@@ -73,12 +73,28 @@ type SystemReminderConfig struct {
 //   - "回填"：由 Configure() 初始化后回填
 type AgentConfig struct {
 	// --- 必填 ---
-	Provider      llm.Provider
-	ContextWindow int64
+	// Resolved 是主 provider 及其解析结果——Provider / ContextWindow /
+	// Thinking / ThinkingEffort 的单一来源。构造后永不为 nil（代码可直接
+	// 解引用，无需 nil 防御）：
+	//   - 调用方传入：NewAIAgentWithConfig 拷贝一份私有副本（调用方的
+	//     *ResolvedProvider 不受 SetResolvedProvider / SetThinking /
+	//     SetContextWindow 运行时改写的影响）；
+	//   - nil：NewAIAgentWithConfig 经 FullConfig.DefaultProvider() 构造
+	//     default provider（FullConfig 为 nil 时才退化为空 ResolvedProvider，
+	//     即无主 provider——Fork / github / dream 等裸 agent 总是显式传入）。
+	Resolved *config.ResolvedProvider
 
 	// --- 基础行为 ---
 	MaxIterations  int
 	PermissionMode PermissionMode
+
+	// SkipConfigure keeps the agent "bare": NewAIAgentWithConfig skips the
+	// configure step (built-in tool registration, skills, reminder collector,
+	// subagent tool — everything AgentSystemConfig drives). Used by
+	// Fork / dream / github agents that register explicit tool whitelists or
+	// inherit tools from a parent, and by minimal test agents. With it set,
+	// SystemConfig is ignored and NewAIAgentWithConfig never returns an error.
+	SkipConfigure bool
 
 	// Logger — 一般只读，但在 session 创建时会被附加 session_id
 	//（ensureSessionAndRecordUser 在 session 创建时注入）。非 nil。
@@ -98,14 +114,6 @@ type AgentConfig struct {
 	ReviewProvider   llm.Provider
 	RunProvider      llm.Provider
 	SubagentProvider llm.Provider
-
-	// --- 思考模式默认值（构造输入；nil/空 = provider/模型默认）---
-	// 由配置 ProviderConfig.ThinkingLevel 解析而来（resolved.Thinking /
-	// ThinkingEffort）。runLoop 在 ChatOptions 未显式指定时填充这两个值，
-	// 因此所有前端（TUI / channel / ACP / one-off）自动继承模型级思考配置，
-	// 而 /commit 等显式覆盖的调用不受影响。
-	Thinking       *bool  // 默认思考开关（nil = provider 默认；false = 关闭）
-	ThinkingEffort string // 默认思考强度（已按模型归一化；空 = 模型默认）
 
 	// PendingSessionThinking 是无活跃 session 时由前端（TUI /thinking）设置的
 	// 待定 per-session thinking override。ensureSessionAndRecordUser 在首次

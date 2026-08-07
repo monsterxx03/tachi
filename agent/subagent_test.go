@@ -63,22 +63,26 @@ func TestSubagentExecutor_AvailableToolNames(t *testing.T) {
 
 func TestSubagentProvider_FallbackToMain(t *testing.T) {
 	mainProvider := &mockStreamProvider{name: "main-provider"}
-	agent := NewAIAgent(mainProvider, 50)
+	agent := newBareTestAgent(t, mainProvider, 50)
 
-	assert.Equal(t, mainProvider, agent.SubagentProvider())
+	// Falls back to the main provider (usage-wrapped by construction).
+	got := agent.SubagentProvider()
+	if got == nil || got.Name() != "main-provider" {
+		t.Errorf("SubagentProvider = %v, want the main provider (usage-wrapped)", got)
+	}
 }
 
 func TestSubagentProvider_Dedicated(t *testing.T) {
 	mainProvider := &mockStreamProvider{name: "main-provider"}
 	subProvider := &mockStreamProvider{name: "sub-provider"}
-	agent := NewAIAgent(mainProvider, 50)
+	agent := newBareTestAgent(t, mainProvider, 50)
 	agent.Config.SubagentProvider = subProvider
 
 	assert.Equal(t, subProvider, agent.SubagentProvider())
 }
 
 func TestGetTool(t *testing.T) {
-	agent := NewAIAgent(nil, 50)
+	agent := newBareTestAgent(t, nil, 50)
 	agent.RegisterTools()
 
 	tool := agent.GetTool("ReadFile")
@@ -90,7 +94,7 @@ func TestGetTool(t *testing.T) {
 }
 
 func TestNewChildAgent(t *testing.T) {
-	parent := NewAIAgent(nil, 50)
+	parent := newBareTestAgent(t, nil, 50)
 	parent.RegisterTools()
 
 	provider := &mockStreamProvider{name: "child-provider"}
@@ -102,7 +106,7 @@ func TestNewChildAgent(t *testing.T) {
 }
 
 func TestChildAdapter_Run(t *testing.T) {
-	parent := NewAIAgent(nil, 50)
+	parent := newBareTestAgent(t, nil, 50)
 	parent.RegisterTools()
 
 	provider := &mockStreamProvider{

@@ -169,7 +169,7 @@ func currentThinkingValue(a *agent.AIAgent) string {
 	if a == nil {
 		return "default"
 	}
-	if v := cmds.ThinkingLevelOf(a.Config.Thinking, a.Config.ThinkingEffort); v != "" {
+	if v := cmds.ThinkingLevelOf(a.Config.Resolved.Thinking, a.Config.Resolved.ThinkingEffort); v != "" {
 		return v
 	}
 	return "default"
@@ -321,8 +321,8 @@ func toACPUsage(u *llm.Usage) *acp.Usage {
 
 // switchSessionModel switches the LLM provider/model for the given ACP session
 // to the provider identified by providerName. It updates the in-memory agent
-// provider, context window, and persists the new provider name to disk via the
-// session manager.
+// provider, context window, thinking defaults, and persists the new provider
+// name to disk via the session manager.
 //
 // The caller must hold sess.mu.
 func switchSessionModel(ctx context.Context, sess *ACPSession, providerName string, l *logger.Logger) error {
@@ -333,21 +333,19 @@ func switchSessionModel(ctx context.Context, sess *ACPSession, providerName stri
 		return fmt.Errorf("agent not available")
 	}
 
-	resolved, err := sess.cfg.BuildProvider(providerName)
+	// SetResolvedProvider resolves via the agent's FullConfig and swaps the
+	// full resolved config (provider instance + context window + thinking
+	// defaults) in one step. The provider is re-wrapped for usage billing —
+	// a bare assignment would silently drop the new provider's calls off the
+	// ledger, and the provider carries its own config name for row grouping
+	// (see NewNamedProvider).
+	resolved, err := sess.agent.SetResolvedProvider(providerName)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found", providerName)
 	}
 	if err != nil {
 		return fmt.Errorf("resolve provider: %w", err)
 	}
-
-	// Update the agent provider and context window atomically. SetProvider
-	// re-wraps the fresh provider for usage billing — a bare assignment would
-	// silently drop the new provider's calls off the ledger, and the provider
-	// carries its own config name for row grouping (see NewNamedProvider).
-	sess.agent.SetProvider(resolved.Provider)
-	sess.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
-	sess.agent.SetContextWindow(resolved.ContextWindow)
 
 	// Persist provider name to the on-disk session metadata.
 	if sess.sessMgr != nil {

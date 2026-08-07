@@ -2,6 +2,7 @@ package agent
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os"
 	"strings"
@@ -118,14 +119,42 @@ type AIAgent struct {
 	mu         sync.RWMutex // 保护 currentRun + mode
 }
 
-func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
-	return &AIAgent{
+// NewAIAgentWithConfig creates an AIAgent from a structured config.
+// This is the recommended constructor — it replaces the pattern of
+// NewAIAgent + multiple Set*/Setup* calls.
+func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.Manager, error) {
+	// The agent always owns a non-nil Resolved (the "no nil Resolved"
+	// invariant — reads can dereference it directly):
+	//   - caller-provided: copied here so SetResolvedProvider / SetThinking /
+	//     SetContextWindow mutate a private object (the caller's original
+	//     *ResolvedProvider neither sees those writes nor leaks its own
+	//     post-construction mutations into the agent);
+	//   - nil: resolved from FullConfig's default provider, so callers that
+	//     only need the default provider skip the build dance entirely;
+	//   - nil + no FullConfig: an empty ResolvedProvider (no main provider —
+	//     bare agents like Fork / github / dream always pass one explicitly).
+	if cfg.Resolved == nil {
+		if cfg.FullConfig != nil {
+			rp, err := cfg.FullConfig.DefaultProvider()
+			if err != nil {
+				return nil, nil, err
+			}
+			cfg.Resolved = rp
+		} else {
+			cfg.Resolved = &config.ResolvedProvider{}
+		}
+	} else {
+		r := *cfg.Resolved
+		cfg.Resolved = &r
+	}
+
+	a := &AIAgent{
 		Config: AgentConfig{
-			Provider:        provider,
-			MaxIterations:   maxIterations,
+			Resolved:        cfg.Resolved,
+			MaxIterations:   cfg.MaxIterations,
 			ToolRegistry:    tools.NewRegistry(),
 			ProcessManager:  tools.NewProcessManager(),
-			CompactStrategy: &llmCompactStrategy{provider: provider},
+			CompactStrategy: &llmCompactStrategy{provider: cfg.Resolved.Provider},
 		},
 		Channels: RuntimeChannels{
 			ConfirmResp: make(chan ConfirmResponse, 1),
@@ -136,13 +165,6 @@ func NewAIAgent(provider llm.Provider, maxIterations int) *AIAgent {
 		titleGenEnabled: true,
 		mode:            ModeAuto,
 	}
-}
-
-// NewAIAgentWithConfig creates an AIAgent from a structured config.
-// This is the recommended constructor — it replaces the pattern of
-// NewAIAgent + multiple Set*/Setup* calls.
-func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.Manager, error) {
-	a := NewAIAgent(cfg.Provider, cfg.MaxIterations)
 
 	// Usage billing: wrap every provider so all LLM calls are recorded into
 	// the ledger. MUST run before a.Config = cfg so derived providers
@@ -165,7 +187,7 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 		a.Config.ProcessManager = tools.NewProcessManager()
 	}
 	if a.Config.CompactStrategy == nil {
-		a.Config.CompactStrategy = &llmCompactStrategy{provider: cfg.Provider}
+		a.Config.CompactStrategy = &llmCompactStrategy{provider: cfg.Resolved.Provider}
 	}
 
 	// MCP ownership — an injected manager is owned elsewhere (e.g.
@@ -243,11 +265,18 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 		a.Config.FullConfig = cfg.FullConfig
 	}
 
-	// Configure with the extracted system config
-	mcpMgr, err := a.configure(ctx, cfg.SystemConfig)
-	if err != nil {
-		a.Close()
-		return nil, nil, err
+	// Configure with the extracted system config. SkipConfigure keeps the
+	// agent "bare" (no built-in tools / skills / reminder collector / subagent
+	// tool — see AgentConfig.SkipConfigure); NewAIAgentWithConfig never
+	// returns an error on that path.
+	var mcpMgr *mcp.Manager
+	var err error
+	if !cfg.SkipConfigure {
+		mcpMgr, err = a.configure(ctx, cfg.SystemConfig)
+		if err != nil {
+			a.Close()
+			return nil, nil, err
+		}
 	}
 
 	// Resolve dedicated keyword provider (must be after configure, which creates a.Config.Memory)
@@ -305,14 +334,35 @@ func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 	}
 }
 
-// SetProvider switches the main conversation provider. The new provider is
-// re-wrapped for usage billing, so runtime model switches stay on the ledger
-// (see docs/2026-08-05-usage-billing.md). WrapRecordingProvider is idempotent
-// per recorder: an already-wrapped provider passes through untouched, so this
-// is safe for every call site. The ledger row's provider name comes from the
-// provider itself (config-resolved providers carry it via NewNamedProvider).
-func (a *AIAgent) SetProvider(provider llm.Provider) {
-	a.Config.Provider = wrapForUsage(provider, a.usageRecorder(), a.Config.FullConfig)
+// SetResolvedProvider switches the main provider wholesale to the named provider's
+// full resolved config (provider instance, context window, thinking
+// defaults) in one step. The name is resolved through the agent's FullConfig
+// (config.BuildProvider; empty name = the default provider), so callers pass
+// a provider config name instead of a pre-built *config.ResolvedProvider.
+//
+// Unlike SetContextWindow + SetThinking — which only change the dimensions a
+// caller explicitly passes, leaving the rest from the old provider —
+// SetResolvedProvider replaces every dimension together, so a wholesale
+// provider switch (e.g. tachi -p with a configured run provider) picks up
+// the target's resolved ContextWindow / Thinking / ThinkingEffort without
+// per-field overrides. The provider is re-wrapped for usage billing (so
+// post-switch calls stay on the ledger; the ledger row's provider name comes
+// from the provider itself — config-resolved providers carry it via
+// NewNamedProvider). The applied ResolvedProvider is returned for callers
+// that need display metadata (Type / Model / MaxTokens); it is the caller's
+// copy — the agent owns a detached one.
+func (a *AIAgent) SetResolvedProvider(providerName string) (*config.ResolvedProvider, error) {
+	if a.Config.FullConfig == nil {
+		return nil, errors.New("SetResolvedProvider: no FullConfig to resolve provider from")
+	}
+	rp, err := a.Config.FullConfig.BuildProvider(providerName)
+	if err != nil {
+		return nil, err
+	}
+	c := *rp // detach: the agent owns its Resolved (see AgentConfig.Resolved)
+	c.Provider = wrapForUsage(c.Provider, a.usageRecorder(), a.Config.FullConfig)
+	a.Config.Resolved = &c
+	return rp, nil
 }
 
 // SetThinking updates the agent-level default thinking config (switch +
@@ -320,8 +370,8 @@ func (a *AIAgent) SetProvider(provider llm.Provider) {
 // provider's thinking_level may differ from the current one, and without
 // this the runLoop would keep applying the old model's defaults.
 func (a *AIAgent) SetThinking(thinking *bool, effort string) {
-	a.Config.Thinking = thinking
-	a.Config.ThinkingEffort = effort
+	a.Config.Resolved.Thinking = thinking
+	a.Config.Resolved.ThinkingEffort = effort
 }
 
 // SetPendingSessionThinking records a per-session thinking override to apply
@@ -341,12 +391,17 @@ func (a *AIAgent) PendingSessionThinking() string {
 
 // Model returns the current model name.
 func (a *AIAgent) Model() string {
-	return a.Config.Provider.Model()
+	if a.Config.Resolved.Provider == nil {
+		return ""
+	}
+	return a.Config.Resolved.Provider.Model()
 }
 
 // Provider returns the main LLM provider for conversation turns.
+// Resolved is never nil on a constructed agent (see AgentConfig.Resolved);
+// Provider itself may be nil on bare agents with no main provider.
 func (a *AIAgent) Provider() llm.Provider {
-	return a.Config.Provider
+	return a.Config.Resolved.Provider
 }
 
 // SetPermissionMode sets how tool confirmation requests are handled.
@@ -459,7 +514,7 @@ func (p *topicSessionProvider) RecentSessions(ctx context.Context, limit int) ([
 
 // SetContextWindow sets the model's context window size for token-warning reminders.
 func (a *AIAgent) SetContextWindow(window int64) {
-	a.Config.ContextWindow = window
+	a.Config.Resolved.ContextWindow = window
 }
 
 // LastInputEstimate returns the local token estimate for the most recent
@@ -485,7 +540,7 @@ func (a *AIAgent) setCompactCooldown() {
 
 // ContextWindow returns the model's context window size.
 func (a *AIAgent) ContextWindow() int64 {
-	return a.Config.ContextWindow
+	return a.Config.Resolved.ContextWindow
 }
 
 // SetReminderCollector replaces the default reminder collector. Useful for
@@ -975,7 +1030,7 @@ func wrapUsageProviders(cfg *AgentConfig, rec *llm.UsageRecorder) {
 	}
 	// Provider names come from the providers themselves (NewNamedProvider);
 	// nothing to thread through here.
-	cfg.Provider = wrapForUsage(cfg.Provider, rec, cfg.FullConfig)
+	cfg.Resolved.Provider = wrapForUsage(cfg.Resolved.Provider, rec, cfg.FullConfig)
 	cfg.TitleProvider = wrapForUsage(cfg.TitleProvider, rec, cfg.FullConfig)
 	cfg.CommitProvider = wrapForUsage(cfg.CommitProvider, rec, cfg.FullConfig)
 	cfg.ReviewProvider = wrapForUsage(cfg.ReviewProvider, rec, cfg.FullConfig)

@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -150,11 +151,15 @@ func RunPRGeneration(ctx context.Context, cfg *PRGenerationConfig) *PRResult {
 	if maxIter <= 0 {
 		maxIter = 50
 	}
-	implAgent := agent.NewAIAgent(cfg.Provider, maxIter)
-	implAgent.SetPermissionMode(agent.PermissionModeSkip)
-	if log != nil {
-		implAgent.SetLogger(log)
-	}
+	// Bare agent: SkipConfigure skips built-in tools so only the explicit
+	// implementation tool whitelist below is available.
+	implAgent, _, _ := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Resolved:       &config.ResolvedProvider{Provider: cfg.Provider},
+		MaxIterations:  maxIter,
+		Logger:         log,
+		PermissionMode: agent.PermissionModeSkip,
+		SkipConfigure:  true,
+	})
 
 	// Register implementation tools.
 	registerImplementationTools(implAgent, cfg.ToolNames)

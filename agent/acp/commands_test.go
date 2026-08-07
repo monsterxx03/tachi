@@ -12,7 +12,6 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/assert"
 
-	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
@@ -36,7 +35,7 @@ var expectedACPCmds = []struct {
 }
 
 func TestBuildACPAvailableCommands_StaticCommands(t *testing.T) {
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	cmds := buildACPAvailableCommands(aiAgent)
 
 	// Collect all returned command names for duplicate checking
@@ -72,7 +71,7 @@ func TestBuildACPAvailableCommands_StaticCommands(t *testing.T) {
 }
 
 func TestBuildACPAvailableCommands_Count(t *testing.T) {
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	cmds := buildACPAvailableCommands(aiAgent)
 
 	// Should have exactly len(expectedACPCmds) commands (no skills configured)
@@ -80,7 +79,7 @@ func TestBuildACPAvailableCommands_Count(t *testing.T) {
 }
 
 func TestBuildACPAvailableCommands_NoDuplicates(t *testing.T) {
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	cmds := buildACPAvailableCommands(aiAgent)
 
 	names := make(map[string]int)
@@ -141,7 +140,7 @@ func (p *acpReviewMockProvider) CreateChatStream(_ context.Context, messages []l
 // the connection never terminates).
 func newACPReviewSession(t *testing.T, cfg *config.Config, p llm.Provider) (*ACPSession, *acp.AgentSideConnection) {
 	t.Helper()
-	a := agent.NewAIAgent(p, 10)
+	a := newBareTestAgent(t, p, 10)
 	a.Config.Logger = logger.Default()
 	t.Cleanup(a.Close)
 	sess := &ACPSession{

@@ -17,7 +17,7 @@ func processAlive(pid int) bool {
 // call — the turn-cancel path must kill them explicitly, otherwise a
 // long-running task (e.g. an http server) keeps running after Ctrl+C.
 func TestKillBackgroundProcesses(t *testing.T) {
-	a := NewAIAgent(nil, 10)
+	a := newBareTestAgent(t, nil, 10)
 	defer a.Close()
 
 	info, err := a.Config.ProcessManager.Start(t.Context(), "bg-test", "sleep 30")

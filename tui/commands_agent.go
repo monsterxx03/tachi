@@ -204,7 +204,7 @@ func (m *Model) startReviewRound() tea.Cmd {
 	// provider/model default — runAgentLoop applies that when we pass nil/
 	// empty through to the fork).
 	thinking, effort := cmds.ResolveReviewThinking(orch.Options(),
-		m.agent.Config.Thinking, m.agent.Config.ThinkingEffort)
+		m.agent.Config.Resolved.Thinking, m.agent.Config.Resolved.ThinkingEffort)
 	reviewOpts := m.chatOpts
 	reviewOpts.Thinking = thinking
 	reviewOpts.ThinkingEffort = effort

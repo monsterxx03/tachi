@@ -82,13 +82,18 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	// Build prompt.
 	systemPrompt, userPrompt := BuildPrompt(plan, summaries, cfg.MaxMessageChars)
 
-	// Create a sandboxed agent.
+	// Create a sandboxed agent (bare: SkipConfigure skips built-in tools /
+	// skills / reminders so the whitelist below is exhaustive).
 	maxIter := cfg.MaxIter
 	if maxIter <= 0 {
 		maxIter = 30
 	}
-	dreamAgent := agent.NewAIAgent(provider, maxIter)
-	dreamAgent.SetPermissionMode(agent.PermissionModeSkip)
+	dreamAgent, _, _ := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Resolved:       &config.ResolvedProvider{Provider: provider},
+		MaxIterations:  maxIter,
+		PermissionMode: agent.PermissionModeSkip,
+		SkipConfigure:  true,
+	})
 
 	// Register only allowed tools: ReadFile, Grep, Glob, WriteFile.
 	dreamAgent.RegisterTool(tools.NewReadTool())

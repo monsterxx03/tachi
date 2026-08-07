@@ -206,7 +206,7 @@ func TestCtrlC_Cancels_KillsBackgroundProcesses(t *testing.T) {
 	m := testModelStreaming()
 	m.cancelFunc = func() {}
 
-	a := agent.NewAIAgent(nil, 10)
+	a := newTestAIAgent(t, nil, 10)
 	defer a.Close()
 	m.agent = a
 
@@ -680,7 +680,7 @@ func TestView_MouseMode_CopyMode(t *testing.T) {
 // the statusbar would silently stop showing context usage in a fresh session
 // (no persisted session to restore it from).
 func TestStatusBar_LiveContextFraction(t *testing.T) {
-	a := agent.NewAIAgent(nil, 10)
+	a := newTestAIAgent(t, nil, 10)
 	defer a.Close()
 	// Seed the agent's local token estimate (~16k tokens for 64k chars).
 	a.EstimateAndUpdateTokens(&agent.RunState{}, []llm.Message{
@@ -721,7 +721,7 @@ func TestSyncThinkingBadge(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-	a := agent.NewAIAgent(provider, 0)
+	a := newTestAIAgent(t, provider, 0)
 	m := testModel()
 	m.agent = a
 
@@ -786,7 +786,7 @@ func TestHandleThinkingCommand_NoSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("create provider: %v", err)
 	}
-	a := agent.NewAIAgent(provider, 0)
+	a := newTestAIAgent(t, provider, 0)
 	m := testModel()
 	m.agent = a
 	m.cfg = &config.Config{
@@ -820,7 +820,7 @@ func TestHandleThinkingCommand_NoSession(t *testing.T) {
 	if got := a.PendingSessionThinking(); got != "high" {
 		t.Errorf("PendingSessionThinking = %q, want %q", got, "high")
 	}
-	if got := a.Config.ThinkingEffort; got != "high" {
+	if got := a.Config.Resolved.ThinkingEffort; got != "high" {
 		t.Errorf("Config.ThinkingEffort = %q, want %q (applied immediately)", got, "high")
 	}
 	if got := m.statusbar.thinkingLevel; got != "high" {
@@ -852,9 +852,9 @@ func TestHandleThinkingCommand_NoSession(t *testing.T) {
 
 // testModelWithAgent returns a minimal Model whose agent has a real provider,
 // so costForUsage can resolve prices.
-func testModelWithAgent(provider llm.Provider) *Model {
+func testModelWithAgent(t *testing.T, provider llm.Provider) *Model {
 	m := testModel()
-	m.agent = agent.NewAIAgent(provider, 10)
+	m.agent = newTestAIAgent(t, provider, 10)
 	return m
 }
 
@@ -867,7 +867,7 @@ func TestModel_CostForUsage_OpenAIFamily(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := testModelWithAgent(provider)
+	m := testModelWithAgent(t, provider)
 	defer m.agent.Close()
 
 	cost := m.costForUsage(&llm.Usage{
@@ -890,7 +890,7 @@ func TestModel_CostForUsage_Anthropic(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := testModelWithAgent(provider)
+	m := testModelWithAgent(t, provider)
 	defer m.agent.Close()
 	m.cfg = &config.Config{
 		Providers: []config.ProviderConfig{
@@ -929,7 +929,7 @@ func TestModel_CostForUsage_NoPrice(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := testModelWithAgent(provider)
+	m := testModelWithAgent(t, provider)
 	defer m.agent.Close()
 
 	if cost := m.costForUsage(&llm.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000}); cost != 0 {
@@ -944,7 +944,7 @@ func TestModel_AccumulateUsage_Cost(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	m := testModelWithAgent(provider)
+	m := testModelWithAgent(t, provider)
 	defer m.agent.Close()
 
 	// 1M input + 1M output → 1.0 + 2.0 = 3.0 (deepseek-v4-flash).

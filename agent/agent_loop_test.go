@@ -108,8 +108,16 @@ func toolCallSeq(name, id, args string) []llm.StreamEvent {
 // are cleaned up when the test completes.
 func newTestAgent(t *testing.T, provider llm.Provider, opts ...testAgentOpt) *AIAgent {
 	t.Helper()
-	a := NewAIAgent(provider, 10)
-	a.SetPermissionMode(PermissionModeSkip)
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		Resolved:       &config.ResolvedProvider{Provider: provider},
+		MaxIterations:  10,
+		PermissionMode: PermissionModeSkip,
+		SkipConfigure:  true,
+		UsageRecorder:  llm.NewUsageRecorder(t.TempDir()),
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
 	a.SetReminderCollector(systemreminder.NewCollector()) // no reminders — clean
 	a.SetContextWindow(128_000)
 	for _, opt := range opts {
@@ -1181,7 +1189,7 @@ func TestMaybeAutoCompact_Success(t *testing.T) {
 			Timeout:   time.Minute,
 		},
 	}
-	a.Config.ContextWindow = 1000
+	a.Config.Resolved.ContextWindow = 1000
 	a.conv.setEstimate(600, tokenbreakdown.Breakdown{}) // 60% > 50% threshold
 
 	rs := &RunState{
@@ -1235,7 +1243,7 @@ func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 			Timeout:   time.Minute,
 		},
 	}
-	a.Config.ContextWindow = 1000
+	a.Config.Resolved.ContextWindow = 1000
 	a.conv.setEstimate(600, tokenbreakdown.Breakdown{})
 
 	rs := &RunState{
@@ -1281,7 +1289,7 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 			Threshold: 0.8,
 		},
 	}
-	a.Config.ContextWindow = 1000
+	a.Config.Resolved.ContextWindow = 1000
 	a.conv.setEstimate(100, tokenbreakdown.Breakdown{}) // 10% < 80% threshold
 
 	rs := &RunState{

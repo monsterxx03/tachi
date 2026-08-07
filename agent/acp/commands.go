@@ -274,7 +274,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	// thinking dimensions follow the session's live config.
 	ropts := cmds.ResolveReviewOptions(cfg)
 	thinking, effort := cmds.ResolveReviewThinking(ropts,
-		aiAgent.Config.Thinking, aiAgent.Config.ThinkingEffort)
+		aiAgent.Config.Resolved.Thinking, aiAgent.Config.Resolved.ThinkingEffort)
 
 	systemPrompt := buildSystemPromptForCwd(cfg, sess.cwd, agent.ModeAuto, sess.ID)
 	opts := llm.ChatOptions{

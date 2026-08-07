@@ -60,17 +60,16 @@ type chatMessage struct {
 	Content string
 }
 
-// pendingSwitchProvider stores provider switch info when switching to a
+// pendingSwitchProvider stores the target provider name when switching to a
 // smaller-context model that needs compaction first. The switch is deferred
 // until after compaction completes, so the old (wider-context) provider can
-// be used for the LLM summarization call.
+// be used for the LLM summarization call. applyPendingSwitch re-resolves the
+// name via the agent's FullConfig (SetResolvedProvider), so no pre-built
+// provider instance or resolved config fields need to be carried across the
+// compact run.
 type pendingSwitchProvider struct {
-	provider       llm.Provider
-	providerName   string // config provider name for session metadata
-	providerInfo   string
-	contextWindow  int64
-	thinking       *bool  // target provider's thinking switch (nil = default)
-	thinkingEffort string // target provider's thinking effort (normalized)
+	providerName string // config provider name; re-resolved by applyPendingSwitch
+	providerInfo string // display string for statusbar/chatview
 }
 
 // reviewOrch tracks an in-flight /review run (single or multi-round).
@@ -86,12 +85,8 @@ type pendingSwitchProvider struct {
 // MUST NOT mutate Model fields directly — instead they return a message
 // that the Update function handles synchronously.
 type switchProviderMsg struct {
-	provider       llm.Provider
-	providerName   string // config provider name for session metadata
-	providerInfo   string
-	contextWindow  int64
-	thinking       *bool  // target provider's thinking switch (nil = default)
-	thinkingEffort string // target provider's thinking effort (normalized)
+	providerName string // config provider name; re-resolved by applyPendingSwitch
+	providerInfo string // display string for statusbar/chatview
 }
 
 type Model struct {
@@ -746,12 +741,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case switchProviderMsg:
 		m.pendingSwitchProvider = &pendingSwitchProvider{
-			provider:       msg.provider,
-			providerName:   msg.providerName,
-			providerInfo:   msg.providerInfo,
-			contextWindow:  msg.contextWindow,
-			thinking:       msg.thinking,
-			thinkingEffort: msg.thinkingEffort,
+			providerName: msg.providerName,
+			providerInfo: msg.providerInfo,
 		}
 		m.applyPendingSwitch()
 		return m, nil

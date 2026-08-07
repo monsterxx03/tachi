@@ -247,12 +247,12 @@ func (a *AIAgent) shouldAutoCompact() bool {
 	if a.Config.FullConfig == nil || (a.Config.FullConfig.Compact.Auto != nil && !*a.Config.FullConfig.Compact.Auto) {
 		return false
 	}
-	if a.Config.ContextWindow <= 0 {
+	if a.ContextWindow() <= 0 {
 		return false
 	}
 	if a.isCompactCooldown() {
 		return false
 	}
-	pct := float64(a.conv.tokens()) / float64(a.Config.ContextWindow)
+	pct := float64(a.conv.tokens()) / float64(a.ContextWindow())
 	return pct >= a.Config.FullConfig.Compact.Threshold
 }

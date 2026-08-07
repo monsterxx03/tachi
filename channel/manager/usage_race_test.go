@@ -4,7 +4,6 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -20,7 +19,7 @@ func TestGetAgentEstimateWithBreakdown_ConcurrentTurn(t *testing.T) {
 	m := mustNewManager(t, config.DefaultConfig())
 
 	const threadID = "thread-usage-race"
-	ai := agent.NewAIAgent(nil, 10)
+	ai := newTestAIAgent(t, nil, 10)
 	m.agentCache[threadID] = &cachedAgent{agent: ai}
 
 	msgs := []llm.Message{

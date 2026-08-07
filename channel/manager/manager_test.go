@@ -218,7 +218,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 		responses: []string{"Hello, I'm Tachi!"},
 	}
 
-	aiAgent := agent.NewAIAgent(mp, 10)
+	aiAgent := newTestAIAgent(t, mp, 10)
 	aiAgent.SetPermissionMode(agent.PermissionModeSkip)
 
 	eventCh := aiAgent.RunConversationStream(
@@ -264,7 +264,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 		return ch, nil
 	}
 
-	aiAgent := agent.NewAIAgent(mp, 10)
+	aiAgent := newTestAIAgent(t, mp, 10)
 	aiAgent.SetPermissionMode(agent.PermissionModeSkip)
 	// Register EditFile so the tool call can be dispatched (it will error on
 	// file read, but the key assertion is: it doesn't deadlock).
@@ -310,7 +310,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 		return ch, nil
 	}
 
-	aiAgent := agent.NewAIAgent(mp, 10)
+	aiAgent := newTestAIAgent(t, mp, 10)
 	aiAgent.SetPermissionMode(agent.PermissionModeSkip)
 	aiAgent.RegisterTool(agenttools.AskUserTool{})
 
@@ -1261,7 +1261,7 @@ func TestHandleThinkingCommand_AppliesToCachedAgent(t *testing.T) {
 	ca, err := mgr.acquireAgent(context.Background(), "thread-1")
 	require.NoError(t, err)
 	require.NotNil(t, ca.agent)
-	assert.Equal(t, "high", ca.agent.Config.ThinkingEffort) // provider default
+	assert.Equal(t, "high", ca.agent.Config.Resolved.ThinkingEffort) // provider default
 	mgr.releaseAgent(ca)
 
 	// Set thinking to none via /thinking.
@@ -1274,9 +1274,9 @@ func TestHandleThinkingCommand_AppliesToCachedAgent(t *testing.T) {
 	require.NoError(t, err)
 	defer mgr.releaseAgent(ca)
 	require.NotNil(t, ca.agent)
-	require.NotNil(t, ca.agent.Config.Thinking)
-	assert.False(t, *ca.agent.Config.Thinking)
-	assert.Equal(t, "", ca.agent.Config.ThinkingEffort)
+	require.NotNil(t, ca.agent.Config.Resolved.Thinking)
+	assert.False(t, *ca.agent.Config.Resolved.Thinking)
+	assert.Equal(t, "", ca.agent.Config.Resolved.ThinkingEffort)
 }
 
 // ---- /commit and /review tests ----

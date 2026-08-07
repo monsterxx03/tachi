@@ -24,7 +24,7 @@ func newTestSessionManager(t *testing.T, providerName string) *session.Manager {
 }
 
 func TestLoadSessionHistory_NoSessionManager(t *testing.T) {
-	a := NewAIAgent(nil, 10)
+	a := newBareTestAgent(t, nil, 10)
 
 	history, err := a.LoadSessionHistory()
 	if err != nil {
@@ -36,7 +36,7 @@ func TestLoadSessionHistory_NoSessionManager(t *testing.T) {
 }
 
 func TestLoadSessionHistory_EmptySession(t *testing.T) {
-	a := NewAIAgent(&mockStreamProvider{name: "anthropic"}, 10)
+	a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 10)
 	a.SetSessionManager(newTestSessionManager(t, "anthropic"))
 
 	history, err := a.LoadSessionHistory()
@@ -49,7 +49,7 @@ func TestLoadSessionHistory_EmptySession(t *testing.T) {
 }
 
 func TestLoadSessionHistory_ConvertsMessages(t *testing.T) {
-	a := NewAIAgent(&mockStreamProvider{name: "anthropic"}, 10)
+	a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 10)
 	sm := newTestSessionManager(t, "anthropic")
 	a.SetSessionManager(sm)
 
@@ -80,7 +80,7 @@ func TestLoadSessionHistory_ConvertsMessages(t *testing.T) {
 // migrating off hand-rolled LoadMessages + ConvertSessionToLLMMessages rely on:
 // the conversion uses the agent's own provider name.
 func TestLoadSessionHistory_UsesProviderName(t *testing.T) {
-	a := NewAIAgent(&mockStreamProvider{name: "openai"}, 10)
+	a := newBareTestAgent(t, &mockStreamProvider{name: "openai"}, 10)
 	sm := newTestSessionManager(t, "openai")
 	a.SetSessionManager(sm)
 

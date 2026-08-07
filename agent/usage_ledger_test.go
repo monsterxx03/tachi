@@ -112,7 +112,7 @@ func TestRunOneOffStream_RecordsUsageRows(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	a := NewAIAgent(provider, 10)
+	a := newBareTestAgent(t, provider, 10)
 	a.Config.Logger = logger.Default()
 	a.Config.SessionManager = sm
 	a.Config.UsageRecorder = rec
@@ -181,7 +181,7 @@ func TestWrapForUsage_ResolvesAlias(t *testing.T) {
 	full.ExpandProviderAliases()    // what LoadFrom does after parsing YAML
 
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Provider:      provider,
+		Resolved:      &config.ResolvedProvider{Provider: provider},
 		Logger:        logger.Default(),
 		FullConfig:    full,
 		UsageRecorder: rec,
@@ -191,7 +191,7 @@ func TestWrapForUsage_ResolvesAlias(t *testing.T) {
 	}
 	// wrapUsageProviders must have wrapped the main provider under the RESOLVED
 	// name — exercise it end-to-end through a one-off run.
-	wrapped := a.Config.Provider
+	wrapped := a.Config.Resolved.Provider
 	if _, ok := wrapped.(*llm.RecordingProvider); !ok {
 		t.Fatalf("main provider = %T, want *llm.RecordingProvider", wrapped)
 	}
@@ -237,7 +237,7 @@ func TestRunOneOffStream_NoSessionFallsToGlobal(t *testing.T) {
 		},
 	}
 	rec := llm.NewUsageRecorder(t.TempDir())
-	a := NewAIAgent(provider, 10)
+	a := newBareTestAgent(t, provider, 10)
 	a.Config.Logger = logger.Default()
 	a.Config.UsageRecorder = rec // no SessionManager at all
 
@@ -279,7 +279,7 @@ func TestNewAIAgentWithConfig_DedicatedProvidersBilled(t *testing.T) {
 	full.CommitProvider = commitName
 
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Provider:      &mockStreamProvider{name: "openai", sequences: [][]llm.StreamEvent{}},
+		Resolved:      &config.ResolvedProvider{Provider: &mockStreamProvider{name: "openai", sequences: [][]llm.StreamEvent{}}},
 		Logger:        logger.Default(),
 		FullConfig:    full,
 		UsageRecorder: rec,
@@ -302,87 +302,71 @@ func TestNewAIAgentWithConfig_DedicatedProvidersBilled(t *testing.T) {
 	}
 }
 
-// TestSetProvider_ReWrapsForUsage is the regression guard for runtime model
-// switches (TUI /model, ACP SetSessionConfigOption) dropping the main
-// provider off the usage ledger: those call sites build a FRESH provider via
-// config.BuildProvider — an unwrapped instance that never passes through
-// NewAIAgentWithConfig's wrapUsageProviders. SetProvider must re-wrap it (so
-// post-switch conversation calls still land in the ledger) and rows must
-// group by the CONFIG provider name, which the provider carries itself via
-// Provider.ProviderName (through the RetryProvider decorator chain).
-func TestSetProvider_ReWrapsForUsage(t *testing.T) {
+// TestSetResolvedProvider_SwitchesWholesale pins the wholesale provider switch used
+// by runAgent (tachi -p with a run provider): SetResolvedProvider resolves the
+// named provider via the agent's FullConfig and swaps EVERY dimension together
+// (provider + context window + thinking defaults — no per-field overrides
+// needed after the switch) while wrapping the provider for usage billing, so
+// post-switch calls stay on the ledger grouped by the config name.
+func TestSetResolvedProvider_SwitchesWholesale(t *testing.T) {
 	overrideOneoffDirs(t)
 
-	rec := llm.NewUsageRecorder(t.TempDir())
+	full := config.DefaultConfig()
+	cw := int64(200_000)
+	full.Providers = append(full.Providers, config.ProviderConfig{
+		Name: "run-pro", Type: "openai", Model: "deepseek-chat",
+		BaseURL: "https://api.openai.com/v1", APIKey: "sk-test",
+		Spec: config.ModelSpec{ContextWindow: &cw, ThinkingLevel: "high"},
+	})
+	full.RunProvider = "run-pro"
+
+	off := false
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Provider:      &mockStreamProvider{name: "openai"},
+		Resolved: &config.ResolvedProvider{
+			Provider:       &mockStreamProvider{name: "old"},
+			ContextWindow:  64_000,
+			Thinking:       &off,
+			ThinkingEffort: "",
+		},
 		Logger:        logger.Default(),
-		FullConfig:    config.DefaultConfig(),
-		UsageRecorder: rec,
+		FullConfig:    full,
+		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),
 	})
 	if err != nil {
 		t.Fatalf("NewAIAgentWithConfig: %v", err)
 	}
 
-	sm := &fakeSessionManager{}
-	if _, err := sm.New("deepseek-v4-flash", "/tmp"); err != nil {
-		t.Fatal(err)
-	}
-	a.Config.SessionManager = sm
-
-	// Simulate a model switch: a BRAND-NEW unwrapped provider (exactly what
-	// config.BuildProvider returns at the switch call sites). Real
-	// config-resolved providers carry their config name (Provider.ProviderName,
-	// verified end-to-end in llm.TestNewNamedProvider_CarriesConfigName) —
-	// the mock models that contract here.
-	a.SetProvider(&mockStreamProvider{
-		name:         "openai",
-		providerName: "deepseek-v4-pro",
-		sequences: [][]llm.StreamEvent{
-			{
-				{Type: llm.StreamEventDone, FinishReason: "stop", Usage: &llm.Usage{InputTokens: 100, OutputTokens: 10}},
-			},
-		},
-	})
-
-	if _, ok := a.Config.Provider.(*llm.RecordingProvider); !ok {
-		t.Fatalf("provider after SetProvider = %T, want *llm.RecordingProvider", a.Config.Provider)
-	}
-
-	// A post-switch call must still land in the ledger, grouped by the
-	// config provider name (auto-resolved from the provider, not a type name).
-	ch := a.RunOneOffStream(context.Background(), a.Config.Provider, "sys", "hello",
-		llm.ChatOptions{MaxTokens: 100}, WithOneOffMeta(&OneOffMeta{Kind: "commit"}))
-	for ev := range ch {
-		if ev.Type == AgentEventError {
-			t.Fatalf("one-off run failed: %v", ev.Result.Error)
-		}
-	}
-
-	rows, err := rec.Rows(sm.Current().ID, time.Time{})
+	// Wholesale switch by provider name: the target's full resolved config
+	// (context window / thinking) takes effect in one call.
+	applied, err := a.SetResolvedProvider(full.RunProvider)
 	if err != nil {
-		t.Fatal(err)
-	}
-	if len(rows) != 1 {
-		t.Fatalf("ledger rows = %d, want 1 (post-switch calls must still be recorded)", len(rows))
-	}
-	if rows[0].Provider != "deepseek-v4-pro" {
-		t.Errorf("Provider = %q, want %q (config name carried by the provider)", rows[0].Provider, "deepseek-v4-pro")
+		t.Fatalf("SetResolvedProvider: %v", err)
 	}
 
-	// Providers without a config name (test mocks, ad-hoc construction) fall
-	// back to the type name — still recorded, just coarser grouping.
-	a.SetProvider(&mockStreamProvider{name: "openai"})
-	if _, ok := a.Config.Provider.(*llm.RecordingProvider); !ok {
-		t.Fatalf("provider after SetProvider = %T, want *llm.RecordingProvider", a.Config.Provider)
+	// Every dimension switched together — no SetContextWindow / SetThinking
+	// overrides needed after the switch.
+	if a.ContextWindow() != 200_000 {
+		t.Errorf("ContextWindow = %d, want 200000 (must follow the new provider)", a.ContextWindow())
+	}
+	if a.Config.Resolved.ThinkingEffort != "high" {
+		t.Errorf("ThinkingEffort = %q, want %q (must follow the new provider)", a.Config.Resolved.ThinkingEffort, "high")
+	}
+	if _, ok := a.Config.Resolved.Provider.(*llm.RecordingProvider); !ok {
+		t.Fatalf("provider after SetResolvedProvider = %T, want *llm.RecordingProvider", a.Config.Resolved.Provider)
+	}
+	// The wrapped provider carries the config name, so ledger rows group by it
+	// (the contract the old SetProvider test pinned end-to-end via the ledger).
+	if got := a.Config.Resolved.Provider.ProviderName(); got != "run-pro" {
+		t.Errorf("ProviderName = %q, want %q (ledger grouping by config name)", got, "run-pro")
+	}
+	if applied.Type != "openai" || applied.Model != "deepseek-chat" {
+		t.Errorf("applied = %+v, want the run provider's display metadata", applied)
 	}
 
-	// Idempotence: re-switching to an already-wrapped provider (e.g.
-	// main_agent.go's pre-wrapped RunProvider) must not nest another wrapper —
-	// a nested RecordingProvider would record every call twice.
-	wrapped := a.Config.Provider
-	a.SetProvider(wrapped)
-	if a.Config.Provider != wrapped {
-		t.Fatalf("SetProvider double-wrapped: got %T, want same *llm.RecordingProvider instance", a.Config.Provider)
+	// Detached: the agent owns a private copy — caller-side mutation of the
+	// returned object must not leak into the agent.
+	applied.ContextWindow = 1
+	if a.ContextWindow() != 200_000 {
+		t.Errorf("ContextWindow = %d after caller-side mutation, want detached copy", a.ContextWindow())
 	}
 }

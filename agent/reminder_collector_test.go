@@ -38,7 +38,7 @@ func TestDisabledReminderCollector_NoOp(t *testing.T) {
 func TestConfigure_DisableSystemReminders(t *testing.T) {
 	full := config.DefaultConfig()
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Provider:               &mockStreamProvider{name: "openai"},
+		Resolved:               &config.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
 		Logger:                 logger.Default(),
 		FullConfig:             full,
 		SystemConfig:           SystemConfigFromConfig(full),

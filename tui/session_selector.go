@@ -273,12 +273,13 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 	m.statusbar.SetCost(m.sessionCost)
 }
 
-// restoreSessionProvider resolves and switches the agent's provider to match
-// the given session, then applies the session's per-session thinking override
-// (set via /thinking). Returns the display string and whether the provider was
-// successfully restored.
+// restoreSessionProvider switches the agent's provider to match the given
+// session (resolving via the agent's FullConfig, wholesale — provider +
+// context window + thinking defaults in one step), then applies the session's
+// per-session thinking override (set via /thinking). Returns the display
+// string and whether the provider was successfully restored.
 func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
-	sp, err := m.cfg.BuildProvider(s.ProviderName)
+	sp, err := m.agent.SetResolvedProvider(s.ProviderName)
 	if errors.Is(err, config.ErrProviderNotFound) {
 		// Keep current provider, show the session's expected info
 		return fmt.Sprintf("%s [unmatched]", s.ProviderName), false
@@ -287,7 +288,6 @@ func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
 		return fmt.Sprintf("%s [error]", s.ProviderName), false
 	}
 
-	m.agent.SetProvider(sp.Provider)
 	// Session-level thinking override wins over the provider config default.
 	thinking, effort := cmds.EffectiveThinking(s.ThinkingLevel, *sp)
 	m.agent.SetThinking(thinking, effort)

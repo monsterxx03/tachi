@@ -92,12 +92,8 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	targetCW := resolved.ContextWindow
 	if m.shouldCompactBeforeSwitch(currentEstimate, targetCW) {
 		m.pendingSwitchProvider = &pendingSwitchProvider{
-			provider:       resolved.Provider,
-			providerName:   pCfg.Name,
-			providerInfo:   providerInfo,
-			contextWindow:  targetCW,
-			thinking:       resolved.Thinking,
-			thinkingEffort: resolved.ThinkingEffort,
+			providerName: pCfg.Name,
+			providerInfo: providerInfo,
 		}
 
 		// Exit model selection overlay and show status messages.
@@ -122,10 +118,14 @@ func (m *Model) switchToProvider(idx int) tea.Cmd {
 	}
 
 	// Normal switch — context fits in the target model's window.
-	m.agent.SetProvider(resolved.Provider)
-	m.agent.SetThinking(resolved.Thinking, resolved.ThinkingEffort)
-	m.reapplySessionThinking() // keep the per-session /thinking override, if any
-	m.agent.SetContextWindow(targetCW)
+	// SetResolvedProvider swaps the full resolved config (provider + context
+	// window + thinking defaults) in one step; the per-session /thinking
+	// override (if any) is re-applied on top.
+	if _, err := m.agent.SetResolvedProvider(pCfg.Name); err != nil {
+		m.exitModelSelect("Error: " + err.Error())
+		return nil
+	}
+	m.reapplySessionThinking()
 	m.statusbar.SetProviderInfo(providerInfo)
 	m.statusbar.SetContextWindow(targetCW)
 
@@ -168,12 +168,8 @@ func (m *Model) compactForModelSwitch() tea.Cmd {
 			m.compactForSwitch = false
 			return func() tea.Msg {
 				return switchProviderMsg{
-					provider:       ps.provider,
-					providerName:   ps.providerName,
-					providerInfo:   ps.providerInfo,
-					contextWindow:  ps.contextWindow,
-					thinking:       ps.thinking,
-					thinkingEffort: ps.thinkingEffort,
+					providerName: ps.providerName,
+					providerInfo: ps.providerInfo,
 				}
 			}
 		}
@@ -215,12 +211,21 @@ func (m *Model) applyPendingSwitch() {
 	m.pendingSwitchProvider = nil
 	m.compactForSwitch = false
 
-	m.agent.SetProvider(ps.provider)
-	m.agent.SetThinking(ps.thinking, ps.thinkingEffort)
-	m.reapplySessionThinking() // keep the per-session /thinking override, if any
-	m.agent.SetContextWindow(ps.contextWindow)
+	// Re-resolve and switch wholesale — SetResolvedProvider swaps the full
+	// resolved config (provider + context window + thinking defaults) in one
+	// step; the per-session /thinking override (if any) is re-applied on top.
+	if _, err := m.agent.SetResolvedProvider(ps.providerName); err != nil {
+		m.chatview.AddMessage(chatMessage{Role: "error", Content: fmt.Sprintf("切换 provider 失败：%v", err)})
+		m.chatview.FinishStreaming()
+		m.syncSessionInfo()
+		m.cancelFunc = nil
+		m.eventCh = nil
+		m.setState(stateIdle)
+		return
+	}
+	m.reapplySessionThinking()
 	m.statusbar.SetProviderInfo(ps.providerInfo)
-	m.statusbar.SetContextWindow(ps.contextWindow)
+	m.statusbar.SetContextWindow(m.agent.ContextWindow())
 
 	// Persist the new provider name to the session metadata.
 	if ps.providerName != "" {

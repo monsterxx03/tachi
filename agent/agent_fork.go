@@ -1,8 +1,11 @@
 package agent
 
 import (
+	"context"
+
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -63,13 +66,20 @@ func (f *ForkedAgent) Close() {
 // filtered by AllowedTools, and does NOT inherit session manager,
 // memory, LSP manager, or reminder collector.
 func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
-	child := NewAIAgent(cfg.Provider, cfg.MaxIterations)
-
-	if cfg.Logger != nil {
-		child.SetLogger(cfg.Logger)
-	} else {
-		child.SetLogger(a.Config.Logger)
+	logger := cfg.Logger
+	if logger == nil {
+		logger = a.Config.Logger
 	}
+	// Bare child: SkipConfigure skips built-in tools / skills / reminders so
+	// the child ends up with exactly the parent's (filtered) tool set below.
+	// SkipConfigure guarantees no error, so the third return is ignored.
+	child, _, _ := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		Resolved:       &config.ResolvedProvider{Provider: cfg.Provider},
+		MaxIterations:  cfg.MaxIterations,
+		Logger:         logger,
+		PermissionMode: PermissionModeSkip, // sub-agents are non-interactive
+		SkipConfigure:  true,
+	})
 
 	// Register allowed tools from parent.
 	if len(cfg.AllowedTools) == 0 {
@@ -94,7 +104,6 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 		}
 	}
 
-	child.SetPermissionMode(PermissionModeSkip) // sub-agents are non-interactive
 	child.SetReminderCollector(nil)
 
 	// Share heavy resources with parent — Close won't tear them down.

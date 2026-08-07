@@ -316,9 +316,13 @@ func (p *RecordingProvider) CreateChatStream(ctx context.Context, messages []Mes
 		for ev := range innerCh {
 			// Honor ctx cancellation: a consumer that stops draining early
 			// must not leak this goroutine (or block the inner provider's
-			// channel close) — abandon the passthrough instead.
+			// channel close) — signal the cancellation (best-effort) and
+			// abandon the passthrough instead of ending the stream cleanly.
+			// A silent close would make consumers mistake an interrupted
+			// stream for a normal completion.
 			select {
 			case <-ctx.Done():
+				p.emitCancelError(out, ctx)
 				return
 			default:
 			}
@@ -330,11 +334,22 @@ func (p *RecordingProvider) CreateChatStream(ctx context.Context, messages []Mes
 			select {
 			case out <- ev:
 			case <-ctx.Done():
+				p.emitCancelError(out, ctx)
 				return
 			}
 		}
 	}()
 	return out, nil
+}
+
+// emitCancelError forwards a stream cancellation to the consumer (best-effort
+// and non-blocking — the event is dropped when the consumer has already
+// stopped draining). ctx must be canceled at the call site.
+func (p *RecordingProvider) emitCancelError(out chan<- StreamEvent, ctx context.Context) {
+	select {
+	case out <- StreamEvent{Type: StreamEventError, Error: ctx.Err()}:
+	default:
+	}
 }
 
 // record assembles the ledger row for a completed call.

@@ -219,31 +219,24 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	resolved, err := cfg.DefaultProvider()
-	if err != nil {
-		return err
-	}
-
 	// TUI is interactive — no iteration budget cap (0 = unlimited).
+	// Resolved (main provider + resolved config) is built inside the
+	// constructor from FullConfig's default provider.
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:       resolved.Provider,
-		ContextWindow:  resolved.ContextWindow,
 		Logger:         logger.New("tui"),
 		PermissionMode: agent.PermissionModeTUI,
-		Thinking:       resolved.Thinking,
-		ThinkingEffort: resolved.ThinkingEffort,
 		FullConfig:     cfg,
 		SystemConfig:   agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
+		return err
 	}
 	if mcpMgr != nil {
 		defer mcpMgr.Close()
 	}
 	defer aiAgent.Close()
 
-	providerInfo := fmt.Sprintf("%s (%s)", resolved.Type, resolved.Model)
+	providerInfo := fmt.Sprintf("%s (%s)", aiAgent.Provider().Name(), aiAgent.Model())
 
 	var initialSessionList []*session.Session
 
@@ -276,11 +269,11 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 		Agent:        aiAgent,
 		SystemPrompt: buildSystemPrompt(cfg.Language),
 		ChatOpts: llm.ChatOptions{
-			MaxTokens: resolved.MaxTokens,
+			MaxTokens: cfg.MaxTokens,
 		},
 		ProviderInfo:       providerInfo,
 		Config:             cfg,
-		ContextWindow:      resolved.ContextWindow,
+		ContextWindow:      aiAgent.ContextWindow(),
 		InitialSessionList: initialSessionList,
 		MCPManager:         mcpMgr,
 		MCPServers:         cfg.MCPServers,

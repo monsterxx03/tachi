@@ -35,20 +35,15 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	resolved, err := cfg.DefaultProvider()
-	if err != nil {
-		return err
-	}
-
 	// Iteration budget for commit.
-	maxIters := resolved.MaxIterations
+	maxIters := cfg.GetMaxIterations()
 	if maxIters <= 0 {
 		maxIters = config.DefaultMaxIterations
 	}
 
+	// Resolved (main provider + resolved config) is built inside the
+	// constructor from FullConfig's default provider.
 	aiAgent, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:         resolved.Provider,
-		ContextWindow:    resolved.ContextWindow,
 		MaxIterations:    maxIters,
 		Logger:           logger.New("run"),
 		PermissionMode:   agent.PermissionModeSkip,
@@ -57,7 +52,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		SystemConfig:     agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
+		return err
 	}
 	defer aiAgent.Close()
 
@@ -87,11 +82,11 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 	quiet := resolveQuiet(cmd)
 
 	if !quiet {
-		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Type, resolved.Model)
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", aiAgent.Provider().Name(), aiAgent.Model())
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
-	ch := aiAgent.RunCommitOneOff(ctx, buildSystemPrompt(cfg.Language), "", resolved.MaxTokens, userPrompt)
+	ch := aiAgent.RunCommitOneOff(ctx, buildSystemPrompt(cfg.Language), "", cfg.MaxTokens, userPrompt)
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
 	if result == nil {
@@ -137,48 +132,36 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 	cfg := boot.Config
 
-	resolved, err := cfg.DefaultProvider()
-	if err != nil {
-		return err
-	}
-
 	// For single-shot run mode, 0 (unlimited) is capped to the default 50
 	// to prevent runaway loops. Set max_iterations in config to set an explicit limit.
-	maxIters := resolved.MaxIterations
+	maxIters := cfg.GetMaxIterations()
 	if maxIters <= 0 {
 		maxIters = config.DefaultMaxIterations
 	}
 
+	// Resolved (main provider + resolved config) is built inside the
+	// constructor from FullConfig's default provider.
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:               resolved.Provider,
-		ContextWindow:          resolved.ContextWindow,
 		MaxIterations:          maxIters,
 		Logger:                 logger.New("run"),
 		PermissionMode:         agent.PermissionModeSkip,
 		SkipMemoryRecall:       true,
 		DisableSystemReminders: true, // non-interactive: no date/git/project/skills reminders
-		Thinking:               resolved.Thinking,
-		ThinkingEffort:         resolved.ThinkingEffort,
 		FullConfig:             cfg,
 		SystemConfig:           agent.SystemConfigFromConfig(cfg),
 	})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: agent configuration error: %v\n", err)
+		return err
 	}
 
-	// If a run provider is configured, switch to it for tachi -p mode.
-	if rp := aiAgent.RunProvider(); rp != nil {
-		aiAgent.SetProvider(rp)
-		// Update display info to reflect the run provider.
-		resolved.Type = rp.Name()
-		resolved.Model = rp.Model()
-		// Re-resolve run provider config to get the correct context window
-		// and thinking defaults (provider construction is cheap; we only use
-		// the resolved config here).
-		if rpResolved, err := cfg.BuildProvider(cfg.RunProvider); err == nil {
-			aiAgent.SetContextWindow(rpResolved.ContextWindow)
-			resolved.ContextWindow = rpResolved.ContextWindow
-			aiAgent.SetThinking(rpResolved.Thinking, rpResolved.ThinkingEffort)
+	// Display info: default provider, or the run provider when configured —
+	// SetResolvedProvider resolves the name via the agent's FullConfig and
+	// swaps the full ResolvedProvider (instance + context window + thinking
+	// defaults) in one step.
+	providerType, providerModel := aiAgent.Provider().Name(), aiAgent.Model()
+	if cfg.RunProvider != "" {
+		if rpResolved, err := aiAgent.SetResolvedProvider(cfg.RunProvider); err == nil {
+			providerType, providerModel = rpResolved.Type, rpResolved.Model
 		}
 	}
 
@@ -205,7 +188,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	}
 
 	if !quiet {
-		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", resolved.Type, resolved.Model)
+		fmt.Fprintf(os.Stderr, "Provider: %s (%s)\n", providerType, providerModel)
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
@@ -215,7 +198,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 
 	thinkingDisabled := false
 	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language), llm.ChatOptions{
-		MaxTokens: resolved.MaxTokens,
+		MaxTokens: cfg.MaxTokens,
 		Thinking:  &thinkingDisabled,
 	})
 

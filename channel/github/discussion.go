@@ -8,6 +8,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -43,16 +44,20 @@ func RunDiscussionTurn(
 	toolNames []string,
 	log *logger.Logger,
 ) *DiscussionResult {
-	// Create a new agent (dream pattern: stateless, one-shot, explicit tool whitelist).
+	// Create a new agent (dream pattern: stateless, one-shot, explicit tool
+	// whitelist). Bare construction — SkipConfigure skips built-in tools so
+	// only the whitelisted discussion tools are available.
 	maxIter := cfg.MaxDiscussionTurns
 	if maxIter <= 0 {
 		maxIter = 10
 	}
-	discussionAgent := agent.NewAIAgent(provider, maxIter)
-	discussionAgent.SetPermissionMode(agent.PermissionModeSkip)
-	if log != nil {
-		discussionAgent.SetLogger(log)
-	}
+	discussionAgent, _, _ := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+		Resolved:       &config.ResolvedProvider{Provider: provider},
+		MaxIterations:  maxIter,
+		Logger:         log, // nil = no logger, matches the previous conditional SetLogger
+		PermissionMode: agent.PermissionModeSkip,
+		SkipConfigure:  true,
+	})
 
 	// Register only the allowed discussion tools.
 	registerDiscussionTools(discussionAgent, toolNames)

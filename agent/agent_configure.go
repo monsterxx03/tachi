@@ -53,8 +53,8 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 			// caller's responsibility — pass a pre-resolved provider in
 			// AgentConfig.KeywordProvider, or let configure fall back to the
 			// main provider.
-			if tb, ok := backend.(*memory.TopicBackend); ok && a.Config.Provider != nil {
-				ext := NewLLMKeywordExtractor(a.Config.Provider, a.Config.Provider.Model(), sysCfg.Memory.Timeout, a.Config.Logger)
+			if tb, ok := backend.(*memory.TopicBackend); ok && a.Provider() != nil {
+				ext := NewLLMKeywordExtractor(a.Provider(), a.Model(), sysCfg.Memory.Timeout, a.Config.Logger)
 				ext.SetSessionIDResolver(a.sessionID)
 				tb.SetKeywordExtractor(ext)
 				a.Config.Logger.Info(ctx, "Memory: keyword extractor wired for topic backend")
@@ -498,7 +498,7 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 // It is safe to call when memory is not configured or when no topic backend
 // is in use — it checks a.Config.Memory before doing anything.
 func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
-	if a.Config.Memory == nil || a.Config.Provider == nil {
+	if a.Config.Memory == nil || a.Provider() == nil {
 		return
 	}
 	tb, ok := a.Config.Memory.Backend.(*memory.TopicBackend)

@@ -194,15 +194,12 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *con
 	}
 
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Provider:        resolved.Provider,
-		ContextWindow:   resolved.ContextWindow,
+		Resolved:        resolved,
 		Logger:          m.logger,
 		PermissionMode:  agent.PermissionModeSkip,
 		TitleGenEnabled: &titleGen,
 		ProcessManager:  m.processManager,
 		MCPManager:      sharedMCP,
-		Thinking:        resolved.Thinking,
-		ThinkingEffort:  resolved.ThinkingEffort,
 		FullConfig:      m.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(m.cfg),
 	})

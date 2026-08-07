@@ -139,7 +139,7 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 	// the TUI/ACP side); only the provider lookup is agent-specific.
 	ropts := cmds.ResolveReviewOptions(m.cfg)
 	thinking, effort := cmds.ResolveReviewThinking(ropts,
-		aiAgent.Config.Thinking, aiAgent.Config.ThinkingEffort)
+		aiAgent.Config.Resolved.Thinking, aiAgent.Config.Resolved.ThinkingEffort)
 
 	sessionID := m.threadSessionID(threadID)
 	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID)

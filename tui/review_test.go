@@ -48,7 +48,7 @@ func (p *reviewMockProvider) CreateChatStream(_ context.Context, _ []llm.Message
 func reviewTestModel(t *testing.T, providers ...llm.Provider) *Model {
 	t.Helper()
 	m := testModel()
-	a := agent.NewAIAgent(providers[0], 10)
+	a := newTestAIAgent(t, providers[0], 10)
 	a.Config.Logger = logger.Default() // NewAIAgent leaves Logger nil; the run loop logs
 	t.Cleanup(a.Close)
 	m.agent = a
@@ -334,8 +334,8 @@ func TestAdversarialReview_ThinkingFollowsSession(t *testing.T) {
 
 	// Simulate a session thinking state (e.g. /thinking high + provider-level
 	// switch): the round must inherit both the switch and the effort.
-	m.agent.Config.Thinking = new(true)
-	m.agent.Config.ThinkingEffort = "max"
+	m.agent.Config.Resolved.Thinking = new(true)
+	m.agent.Config.Resolved.ThinkingEffort = "max"
 
 	startReview(m, dir, 2, p1, p1)
 	m.startReviewRound()
@@ -360,8 +360,8 @@ func TestAdversarialReview_ThinkingConfigPins(t *testing.T) {
 	dir := t.TempDir()
 
 	// Session says thinking on / max; config pins it off.
-	m.agent.Config.Thinking = new(true)
-	m.agent.Config.ThinkingEffort = "max"
+	m.agent.Config.Resolved.Thinking = new(true)
+	m.agent.Config.Resolved.ThinkingEffort = "max"
 	m.cfg.Review.Thinking = new(false)
 
 	startReview(m, dir, 1, p1)
@@ -383,8 +383,8 @@ func TestAdversarialReview_ThinkingLevelPinsEffort(t *testing.T) {
 	m := reviewTestModel(t, p1)
 	dir := t.TempDir()
 
-	m.agent.Config.Thinking = nil
-	m.agent.Config.ThinkingEffort = "low"
+	m.agent.Config.Resolved.Thinking = nil
+	m.agent.Config.Resolved.ThinkingEffort = "low"
 	m.cfg.Review.ThinkingLevel = "high"
 
 	startReview(m, dir, 1, p1)

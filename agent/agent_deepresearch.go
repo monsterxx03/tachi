@@ -43,7 +43,7 @@ func (a *AIAgent) NewDeepResearch(cfg *config.Config) (*deepresearch.DeepResearc
 	return deepresearch.New(
 		&cfg.DeepResearch,
 		cfg.Providers,
-		a.Config.Provider,
+		a.Provider(),
 		runner,
 		lg,
 		cfg.MaxTokens,

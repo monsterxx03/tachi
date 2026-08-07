@@ -9,8 +9,6 @@ import (
 	acp "github.com/coder/acp-go-sdk"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-
-	"github.com/monsterxx03/tachi/agent"
 )
 
 // Build a minimal mock ACP agent for testing buildPermissionHandler.
@@ -34,7 +32,7 @@ func TestBuildPermissionHandler_AllowOnce(t *testing.T) {
 	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
 
 	// Build the handler
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	// Goroutine simulates the ACP client reading the JSON-RPC request and sending a response
@@ -71,7 +69,7 @@ func TestBuildPermissionHandler_Reject(t *testing.T) {
 	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
 	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
 
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	go func() {
@@ -104,7 +102,7 @@ func TestBuildPermissionHandler_AllowAll(t *testing.T) {
 	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
 	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
 
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	go func() {
@@ -136,7 +134,7 @@ func TestBuildPermissionHandler_Cancelled(t *testing.T) {
 	conn := acp.NewAgentSideConnection(mockAgent, agentToClientW, clientToAgentR)
 	t.Cleanup(func() { agentToClientW.Close(); clientToAgentW.Close() })
 
-	aiAgent := agent.NewAIAgent(nil, 0)
+	aiAgent := newBareTestAgent(t, nil, 0)
 	handler := buildPermissionHandler(conn, "test-session", aiAgent)
 
 	go func() {

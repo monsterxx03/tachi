@@ -174,7 +174,7 @@ func (a *AIAgent) generateTitle(ctx context.Context, firstMessage string) string
 
 	p := a.titleModelProvider
 	if p == nil {
-		p = a.Config.Provider
+		p = a.Provider()
 	}
 
 	// Usage billing: title generation is a direct CreateChat call — tag the

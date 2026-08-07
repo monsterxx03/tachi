@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"slices"
 	"sync"
 	"testing"
@@ -8,8 +9,67 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
+
+// TestNewAIAgentWithConfig_ResolvesDefaultProvider pins the "no nil Resolved"
+// invariant: when the caller omits Resolved, NewAIAgentWithConfig builds the
+// default provider from FullConfig internally — callers that only need the
+// default provider skip the build dance entirely.
+func TestNewAIAgentWithConfig_ResolvesDefaultProvider(t *testing.T) {
+	cfg := config.DefaultConfig()
+	cfg.Provider = "deepseek-v4-flash"
+	cfg.Providers = []config.ProviderConfig{
+		{Name: "deepseek-v4-flash", Type: "openai", Model: "deepseek-chat",
+			BaseURL: "https://api.openai.com/v1", APIKey: "sk-test"},
+	}
+
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		FullConfig:    cfg,
+		Logger:        logger.Default(),
+		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),
+		SkipConfigure: true,
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
+	defer a.Close()
+
+	if a.Config.Resolved == nil {
+		t.Fatal("Resolved must be non-nil after construction")
+	}
+	if a.Model() != "deepseek-chat" {
+		t.Errorf("Model = %q, want %q (resolved from the default provider)", a.Model(), "deepseek-chat")
+	}
+	if a.Provider() == nil {
+		t.Error("Provider must be the resolved default provider")
+	}
+}
+
+// TestNewAIAgentWithConfig_NoConfigNoResolved pins the other invariant edge:
+// nil Resolved + nil FullConfig (bare construction) yields an EMPTY but
+// non-nil ResolvedProvider — no main provider, no error, no nil deref.
+func TestNewAIAgentWithConfig_NoConfigNoResolved(t *testing.T) {
+	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
+		SkipConfigure: true,
+	})
+	if err != nil {
+		t.Fatalf("NewAIAgentWithConfig: %v", err)
+	}
+	defer a.Close()
+
+	if a.Config.Resolved == nil {
+		t.Fatal("Resolved must be non-nil after construction")
+	}
+	if a.Provider() != nil {
+		t.Errorf("Provider = %v, want nil (no config to resolve from)", a.Provider())
+	}
+	if a.ContextWindow() != 0 {
+		t.Errorf("ContextWindow = %d, want 0", a.ContextWindow())
+	}
+}
 
 // TestConvState_ConcurrentEstimateAndRead guards the data race that motivated
 // convState. In channel mode one cached AIAgent is shared between the turn
@@ -20,7 +80,7 @@ import (
 //
 // Run with -race for this test to be meaningful.
 func TestConvState_ConcurrentEstimateAndRead(t *testing.T) {
-	a := NewAIAgent(&mockStreamProvider{name: "anthropic"}, 10)
+	a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 10)
 
 	msgs := []llm.Message{
 		{Role: "system", Content: "you are a helpful agent"},
@@ -58,7 +118,7 @@ func TestConvState_ConcurrentEstimateAndRead(t *testing.T) {
 // motivated pairing the two fields under one lock: a reader must never observe
 // a token total that disagrees with the breakdown it was computed from.
 func TestConvState_EstimateAndBreakdownStayConsistent(t *testing.T) {
-	a := NewAIAgent(&mockStreamProvider{name: "anthropic"}, 10)
+	a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 10)
 
 	short := []llm.Message{{Role: "user", Content: "hi"}}
 	long := []llm.Message{{Role: "user", Content: string(make([]byte, 40_000))}}

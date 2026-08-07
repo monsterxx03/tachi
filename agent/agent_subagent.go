@@ -23,7 +23,7 @@ func (a *AIAgent) SubagentProvider() llm.Provider {
 	if a.Config.SubagentProvider != nil {
 		return a.Config.SubagentProvider
 	}
-	return a.Config.Provider
+	return a.Provider()
 }
 
 // NewChildAgent creates a fully configured child agent backed by RunOneOffStream.
