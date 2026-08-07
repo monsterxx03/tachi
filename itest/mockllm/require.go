@@ -1,6 +1,7 @@
 package mockllm
 
 import (
+	"bytes"
 	"strconv"
 	"strings"
 )
@@ -128,6 +129,34 @@ func HasNTools(n int) RequireFunc {
 			return ""
 		}
 		return "expected exactly " + strconv.Itoa(n) + " tools, got " + strconv.Itoa(len(req.Tools))
+	}
+}
+
+// HasThinkingDisabled requires the request to carry the thinking-disabled
+// signal. `-p` mode passes Thinking: &false (main_agent.go), which renders
+// per protocol as:
+//   - OpenAI: no reasoning_effort field at all (non-DeepSeek models; DeepSeek
+//     instead sends "thinking":{"type":"disabled"} via ExtraBody)
+//   - Anthropic: "thinking":{"type":"disabled"}
+//
+// The check uses substring matching on the raw body — robust to body
+// truncation and SDK serialization details.
+func HasThinkingDisabled() RequireFunc {
+	return func(req *RecordedRequest) string {
+		hasEffort := bytes.Contains(req.RawBody, []byte("reasoning_effort"))
+		hasDisabled := bytes.Contains(req.RawBody, []byte(`"type":"disabled"`))
+		switch req.Protocol {
+		case ProtocolAnthropic:
+			if hasDisabled {
+				return ""
+			}
+			return "expected thinking: {type: disabled} in request body"
+		default: // OpenAI
+			if hasEffort {
+				return "expected no reasoning_effort in request body (thinking disabled)"
+			}
+			return ""
+		}
 	}
 }
 

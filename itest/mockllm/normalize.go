@@ -34,8 +34,10 @@ type Tool struct {
 
 // RecordedRequest is one captured request: the normalized messages/tools plus
 // the raw body and headers (headers carry x-tachi-session-id for session
-// propagation checks).
+// propagation checks). Protocol lets protocol-aware Require assertions (e.g.
+// HasThinkingDisabled) branch on the wire format.
 type RecordedRequest struct {
+	Protocol Protocol
 	Method   string
 	Path     string
 	Headers  http.Header
@@ -53,10 +55,15 @@ const maxRecordedBodySize = 64 * 1024
 // The protocol is inferred from the path (servers only route their own
 // protocol, so this is deterministic).
 func normalizeRequest(method, path string, headers http.Header, body []byte) (*RecordedRequest, error) {
+	protocol := ProtocolOpenAI
+	if path == "/v1/messages" {
+		protocol = ProtocolAnthropic
+	}
 	req := &RecordedRequest{
-		Method:  method,
-		Path:    path,
-		Headers: headers.Clone(),
+		Protocol: protocol,
+		Method:   method,
+		Path:     path,
+		Headers:  headers.Clone(),
 	}
 	if len(body) > maxRecordedBodySize {
 		req.RawBody = body[:maxRecordedBodySize]
