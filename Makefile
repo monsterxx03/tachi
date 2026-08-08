@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix itest itest-run itest-acp
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix itest itest-mockllm itest-run itest-acp
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -54,20 +54,29 @@ lint-fix:
 # Parallelism: every spec owns an isolated --home (t.TempDir()) + its own
 # mockllm server (random port) + a real tachi subprocess, so specs are safe
 # to run concurrently.
-#   - `itest` runs the three packages in parallel (go test -p); each suite's
-#     specs still run serially inside its package.
+#   - `itest` runs all three suites with `make -j3` — package parallelism
+#     (mockllm contract tests) AND ginkgo -p spec parallelism inside
+#     run/acp; total wall time ≈ mockllm + the slower suite.
 #   - `itest-run` / `itest-acp` additionally parallelize the suite's specs
 #     via ginkgo -p (ITEST_PROCS processes, default 4; override with
 #     `make ITEST_PROCS=8 itest-acp`).
+#   - `itest-run` / `itest-acp` depend on `itest-mockllm`: the contract
+#     tests lock the mock's wire format against the real SDK clients, so a
+#     wire-format regression fails fast before the suites run.
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 ITEST_PROCS ?= 4
 
 itest:
-	go test -tags=integration ./itest/...
+	$(MAKE) -j3 itest-mockllm itest-run itest-acp
 
-itest-run:
+# Contract + unit tests for the mock LLM server (no integration build tag
+# needed — the contract tests run under plain `go test` too).
+itest-mockllm:
+	go test ./itest/mockllm
+
+itest-run: itest-mockllm
 	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/run
 
-itest-acp:
+itest-acp: itest-mockllm
 	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/acp
 

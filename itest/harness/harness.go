@@ -19,6 +19,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"text/template"
 	"time"
 
@@ -200,16 +201,27 @@ func SeedWorkDir(t TB, files map[string]string) string {
 	return dir
 }
 
-// BuildBinary compiles the real tachi binary once per suite into a temp dir
-// and returns its path. Call from BeforeSuite. The build runs from the
-// repository root (located relative to this package — itest/harness → ../..)
-// because the itest packages are all behind the integration build tag.
+// BuildBinary compiles the real tachi binary and returns its path. Call from
+// BeforeSuite. The build runs from the repository root (located relative to
+// this package — itest/harness → ../..) because the itest packages are all
+// behind the integration build tag.
+//
+// When the worktree is CLEAN the binary is cached under os.TempDir() keyed
+// by the git HEAD hash: every ginkgo -p worker runs BeforeSuite, and sharing
+// one build avoids re-linking N times (4 procs = 4 links per suite). A DIRTY
+// worktree (uncommitted edits) has no stable identity to key on, so it falls
+// back to per-call builds — always correct, just not shared.
 func BuildBinary(t TB) string {
 	t.Helper()
 	root := filepath.Clean(filepath.Join("..", ".."))
 	if _, err := os.Stat(filepath.Join(root, "go.mod")); err != nil {
 		t.Fatalf("harness: locate repo root (expected go.mod in %s): %v", root, err)
 	}
+
+	if bin, ok := sharedBinary(root); ok {
+		return bin
+	}
+
 	bin := filepath.Join(t.TempDir(), "tachi")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = root
@@ -218,4 +230,39 @@ func BuildBinary(t TB) string {
 		t.Fatalf("harness: build tachi binary: %v\n%s", err, out)
 	}
 	return bin
+}
+
+// sharedBinary returns the cached binary path for a CLEAN worktree (keyed by
+// git HEAD), building it once under os.TempDir() if missing. ok=false on a
+// dirty worktree or when git is unavailable — callers fall back to a per-call
+// build. Concurrent workers (ginkgo -p) may race on the first build; each
+// builds to a pid-unique temp and atomically renames, and since the sources
+// are identical every winner is equivalent.
+func sharedBinary(root string) (string, bool) {
+	head, err := exec.Command("git", "-C", root, "rev-parse", "HEAD").Output()
+	if err != nil {
+		return "", false
+	}
+	status, err := exec.Command("git", "-C", root, "status", "--porcelain").Output()
+	if err != nil || len(status) > 0 {
+		return "", false // dirty worktree: no stable identity to share on
+	}
+
+	bin := filepath.Join(os.TempDir(), "tachi-itest-"+strings.TrimSpace(string(head)))
+	if _, err := os.Stat(bin); err == nil {
+		return bin, true
+	}
+
+	tmp := fmt.Sprintf("%s.%d.tmp", bin, os.Getpid())
+	cmd := exec.Command("go", "build", "-o", tmp, ".")
+	cmd.Dir = root
+	if err := cmd.Run(); err != nil {
+		_ = os.Remove(tmp)
+		return "", false // fall through to the per-call build, which surfaces the error
+	}
+	if err := os.Rename(tmp, bin); err != nil {
+		_ = os.Remove(tmp)
+		return bin, true // a concurrent worker won the race — reuse its build
+	}
+	return bin, true
 }
