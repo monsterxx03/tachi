@@ -259,3 +259,37 @@ func HasEffort(level string) RequireFunc {
 		}
 	}
 }
+
+// HasNoOrphanToolCalls requires every assistant tool call to be answered by a
+// tool message with the same ToolCallID. The agent strips dangling tool calls
+// from the last assistant message after a mid-turn cancel (stream.go
+// stripPendingToolCalls) — an orphan tool_use would be rejected by the LLM
+// API (Anthropic in particular requires a tool_result for every tool_use).
+//
+// NOTE: reliable for single-tool scenarios. Anthropic merges consecutive
+// tool_result blocks into ONE user message on the wire; the normalized view
+// keeps only the LAST ToolCallID of that merge, so multi-tool turns would
+// misreport earlier calls as orphans here.
+func HasNoOrphanToolCalls() RequireFunc {
+	return func(req *RecordedRequest) string {
+		var pending []string
+		for _, m := range req.Messages {
+			if m.Role == "assistant" {
+				for _, tc := range m.ToolCalls {
+					pending = append(pending, tc.ID)
+				}
+			} else if m.Role == "tool" {
+				for i, id := range pending {
+					if id == m.ToolCallID {
+						pending = append(pending[:i], pending[i+1:]...)
+						break
+					}
+				}
+			}
+		}
+		if len(pending) > 0 {
+			return "orphan tool calls without results: " + strings.Join(pending, ",")
+		}
+		return ""
+	}
+}

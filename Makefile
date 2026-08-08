@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix itest itest-run itest-tui itest-acp
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix itest itest-run itest-acp
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -50,14 +50,24 @@ lint-fix:
 # unit tests via the integration build tag; `go test ./...` stays unchanged.
 # M0 = -p pipe mode (real binary). mockllm's own unit + contract tests run
 # with the regular `test` target (no build tag).
+#
+# Parallelism: every spec owns an isolated --home (t.TempDir()) + its own
+# mockllm server (random port) + a real tachi subprocess, so specs are safe
+# to run concurrently.
+#   - `itest` runs the three packages in parallel (go test -p); each suite's
+#     specs still run serially inside its package.
+#   - `itest-run` / `itest-acp` additionally parallelize the suite's specs
+#     via ginkgo -p (ITEST_PROCS processes, default 4; override with
+#     `make ITEST_PROCS=8 itest-acp`).
+GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
+ITEST_PROCS ?= 4
+
 itest:
 	go test -tags=integration ./itest/...
 
 itest-run:
-	go test -tags=integration ./itest/run
-
-itest-tui:
-	go test -tags=integration ./itest/tui
+	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/run
 
 itest-acp:
-	go test -tags=integration ./itest/acp
+	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/acp
+

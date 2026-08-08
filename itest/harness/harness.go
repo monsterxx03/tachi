@@ -14,65 +14,97 @@
 package harness
 
 import (
+	"bytes"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"text/template"
 	"time"
 
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
 
-// configYAML renders the minimal provider fixture. The base_url differs per
-// protocol: go-openai concatenates baseURL + "/chat/completions" (needs the
-// /v1 suffix) while anthropic-sdk-go appends a trailing slash and resolves
-// "v1/messages" against it (needs the bare host) — Server.BaseURL() already
-// returns the correct value per protocol. timeout > 0 injects
-// spec.timeout into the provider fixture; secondModel adds a second provider
-// entry (same wire/base_url, that model) for /model switch scenarios.
-func configYAML(o *options, baseURL string) string {
-	spec := "      context_window: 128000\n"
-	if o.timeout > 0 {
-		spec += "      timeout: " + o.timeout.String() + "\n"
+// configYAML renders the minimal provider fixture from a template. The
+// base_url differs per protocol: go-openai concatenates baseURL +
+// "/chat/completions" (needs the /v1 suffix) while anthropic-sdk-go appends
+// a trailing slash and resolves "v1/messages" against it (needs the bare
+// host) — Server.BaseURL() already returns the correct value per protocol.
+// Optional sections (spec.timeout, a second provider for /model switches,
+// bash permission rules) render only when the corresponding option is set;
+// herdr is always pinned off to keep itests hermetic.
+func configYAML(o *options, baseURL string) (string, error) {
+	var buf bytes.Buffer
+	if err := configTmpl.Execute(&buf, configData{
+		Protocol:    o.protocol.String(),
+		BaseURL:     baseURL,
+		Timeout:     o.timeout,
+		HasTimeout:  o.timeout > 0,
+		SecondModel: o.secondModel,
+		BashAllow:   o.bashAllow,
+		BashAsk:     o.bashAsk,
+		Permissions: o.bashAllow || o.bashAsk,
+	}); err != nil {
+		return "", fmt.Errorf("harness: render config template: %w", err)
 	}
-	s := fmt.Sprintf(`provider: mock
+	return buf.String(), nil
+}
+
+// configData feeds the config fixture template.
+type configData struct {
+	Protocol    string
+	BaseURL     string
+	Timeout     time.Duration
+	HasTimeout  bool
+	SecondModel string // "" = no second provider
+	BashAllow   bool
+	BashAsk     bool
+	Permissions bool // BashAllow || BashAsk — render the permissions block
+}
+
+// configTmpl renders the config.yaml fixture. The {{- ... }} trims keep the
+// YAML free of blank lines when optional sections are absent.
+var configTmpl = template.Must(template.New("config").Parse(`provider: mock
 providers:
   - name: mock
-    type: %s
+    type: {{.Protocol}}
     model: mock-model
-    base_url: %s
+    base_url: {{.BaseURL}}
     api_key: test-key
     spec:
-%s
-`, o.protocol, baseURL, spec)
-	if o.secondModel != "" {
-		spec2 := "      context_window: 128000\n"
-		if o.timeout > 0 {
-			spec2 += "      timeout: " + o.timeout.String() + "\n"
-		}
-		s += fmt.Sprintf(`  - name: mock2
-    type: %s
-    model: %s
-    base_url: %s
+      context_window: 128000
+{{- if .HasTimeout}}
+      timeout: {{.Timeout}}
+{{- end}}
+{{- if .SecondModel}}
+  - name: mock2
+    type: {{.Protocol}}
+    model: {{.SecondModel}}
+    base_url: {{.BaseURL}}
     api_key: test-key
     spec:
-%s
-`, o.protocol, o.secondModel, baseURL, spec2)
-	}
-	s += "title_generation: false\nlanguage: zh\n"
-	// allow and ask coexist under one permissions.bash block — two top-level
-	// `permissions:` keys would fail yaml decoding with "duplicated key".
-	if o.bashAllow || o.bashAsk {
-		s += "permissions:\n  bash:\n"
-		if o.bashAllow {
-			s += "    allow:\n      - \"*\"\n"
-		}
-		if o.bashAsk {
-			s += "    ask:\n      - \"*\"\n"
-		}
-	}
-	return s
-}
+      context_window: 128000
+{{- if .HasTimeout}}
+      timeout: {{.Timeout}}
+{{- end}}
+{{- end}}
+title_generation: false
+language: zh
+herdr:
+  enabled: false
+{{- if .Permissions}}
+permissions:
+  bash:
+{{- if .BashAllow}}
+    allow:
+      - "*"
+{{- end}}
+{{- if .BashAsk}}
+    ask:
+      - "*"
+{{- end}}
+{{- end}}
+`))
 
 // TB is the minimal testing surface harness needs. Satisfied by *testing.T
 // and by ginkgo.GinkgoT() (which does not implement testing.TB due to its
@@ -139,7 +171,10 @@ func NewHome(t TB, mock *mockllm.Server, opts ...Option) string {
 		opt(o)
 	}
 	home := t.TempDir()
-	cfg := configYAML(o, mock.BaseURL())
+	cfg, err := configYAML(o, mock.BaseURL())
+	if err != nil {
+		t.Fatalf("harness: render config fixture: %v", err)
+	}
 	path := filepath.Join(home, "config.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("harness: write config fixture: %v", err)
