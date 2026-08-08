@@ -11,6 +11,15 @@ package acp_test
 // user message in the wire-specific form (OpenAI/Responses: a standalone
 // user message; Anthropic: merged into the trailing tool_result user
 // message via collectToolMessages).
+//
+// Every scenario runs a WARM-UP turn first: a completed turn populates the
+// sess.history cache (AgentEventTurnComplete). That cache is exactly what a
+// mid-turn cancel must invalidate — streamToACP's ctx.Done() branch fires
+// BEFORE the loop's AgentEventError, so without the invalidation the next
+// Prompt would reuse the stale cache and lose the entire interrupted turn
+// (regression pinned by commit 8bb56a7). The assertions below therefore
+// require the interrupted turn's messages to be VISIBLE in the resume
+// request body — a stale-cache reuse would fail them.
 
 import (
 	"context"
@@ -22,6 +31,16 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 )
+
+// warmupTurn completes one normal turn so the sess.history cache is
+// populated. Returns the mock request count AFTER this turn (1) — callers
+// subtract it from RequestCount() to count requests relative to the warm-up.
+func warmupTurn(client *acp.Client, mock *mockllm.Server, sid acpapi.SessionId) int {
+	gomega.Expect(prompt(client, sid, "热身").StopReason).To(gomega.Equal(acpapi.StopReasonEndTurn))
+	base := mock.RequestCount()
+	gomega.Expect(base).To(gomega.Equal(1), "warm-up must consume exactly one mock request")
+	return base
+}
 
 // startPrompt launches a Prompt in a goroutine and returns a channel closed
 // when the response is ready (mirrors conversation_test's cancel pattern).
@@ -48,9 +67,15 @@ func cancelTurn(done chan struct{}, resp *acpapi.PromptResponse, promptErr *erro
 }
 
 var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func() {
-	ginkgo.DescribeTable("场景 A: LLM 流式输出中取消 → 继续, 新 user 注入且无残留",
+	ginkgo.DescribeTable("场景 A: LLM 流式输出中取消 → 继续, 被中断轮可见 + 新 user 注入且无残留",
 		func(_ ginkgo.SpecContext, p mockllm.Protocol) {
 			client, mock, sid, _ := startACPTurn(p, []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("热身回复"),
+					mockllm.Usage(10, 5),
+					mockllm.Finish("stop"),
+					mockllm.Done(),
+				)},
 				{Reply: mockllm.Stream(
 					mockllm.Text("第一轮部分输出"),
 					mockllm.Pause(30*time.Second),
@@ -59,7 +84,8 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 					mockllm.Done(),
 				)},
 				{
-					// 继续后的请求: 第一轮 user 消息在 history, 新 prompt 注入
+					// 继续后的请求: 被中断轮的 user 消息必须可见(热身轮
+					// stale cache 复用时只有热身轮 + 新 prompt)
 					Require: mockllm.HasUserMessage(gomega.ContainSubstring("第一轮问题")),
 					Reply: mockllm.Stream(
 						mockllm.Text("继续的回答"),
@@ -70,6 +96,8 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 				},
 			}, nil, nil)
 
+			warmupTurn(client, mock, sid)
+
 			done, resp, promptErr := startPrompt(client, sid, "第一轮问题")
 			// 等流式输出开始后取消
 			gomega.Eventually(func() string { return client.Rec.Text() }, 5*time.Second).
@@ -77,15 +105,16 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 			gomega.Expect(client.Conn().Cancel(context.Background(), acpapi.CancelNotification{SessionId: sid})).NotTo(gomega.HaveOccurred())
 			cancelTurn(done, resp, promptErr, client, sid)
 
-			// 继续: 新 user 消息注入请求体, 无 orphan, 不出现取消后的文本
+			// 继续: 被中断轮可见, 新 user 消息注入请求体, 无 orphan,
+			// 不出现取消后的文本。注意流式中途取消时 assistant 部分文本
+			// 不落盘(recordAssistantTurn 只在消息完整后写盘)——关键断言是
+			// 被中断轮的 user 消息必须可见(stale cache 复用时整轮丢失)
 			gomega.Expect(prompt(client, sid, "继续").StopReason).To(gomega.Equal(acpapi.StopReasonEndTurn))
 			reqs := mock.Requests()
-			gomega.Expect(reqs).To(gomega.HaveLen(2))
-			gomega.Expect(reqs[1].Messages).To(gomega.ContainElement(gomega.SatisfyAll(
-				gomega.HaveField("Role", "user"),
-				gomega.HaveField("Content", gomega.ContainSubstring("继续")),
-			)))
-			gomega.Expect(mockllm.HasNoOrphanToolCalls()(reqs[1])).To(gomega.Equal(""))
+			gomega.Expect(reqs).To(gomega.HaveLen(3))
+			gomega.Expect(reqs[2].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("第一轮问题"))))
+			gomega.Expect(reqs[2].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("继续"))))
+			gomega.Expect(mockllm.HasNoOrphanToolCalls()(reqs[2])).To(gomega.Equal(""))
 			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI, ginkgo.SpecTimeout(15*time.Second)),
@@ -93,9 +122,15 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses, ginkgo.SpecTimeout(15*time.Second)),
 	)
 
-	ginkgo.DescribeTable("场景 B: 工具执行中取消 → 继续, 无 orphan tool call",
+	ginkgo.DescribeTable("场景 B: 工具执行中取消 → 继续, 被中断轮可见 + 无 orphan tool call",
 		func(_ ginkgo.SpecContext, p mockllm.Protocol) {
 			client, mock, sid, _ := startACPTurn(p, []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("热身回复"),
+					mockllm.Usage(10, 5),
+					mockllm.Finish("stop"),
+					mockllm.Done(),
+				)},
 				// Bash 真实执行 sleep(2s) — 给 cancel 一个执行中窗口
 				{Reply: mockllm.Stream(
 					mockllm.ToolCallStart("call_1", "Bash", `{"command":"sleep 2"}`),
@@ -105,7 +140,7 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 				)},
 				{
 					// 继续后的请求: 无 orphan tool call(Bash 结果要么已回传、
-					// 要么被 stripPendingToolCalls 清掉), 新 prompt 注入
+					// 要么被 stripPendingToolCalls 清掉), 被中断轮可见
 					Require: mockllm.HasNoOrphanToolCalls(),
 					Reply: mockllm.Stream(
 						mockllm.Text("恢复的回答"),
@@ -116,6 +151,8 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 				},
 			}, nil, nil)
 
+			warmupTurn(client, mock, sid)
+
 			done, resp, promptErr := startPrompt(client, sid, "跑一下命令")
 			// 等 agent 开始执行工具后取消
 			gomega.Eventually(func() []acpapi.ToolCallId { return client.Rec.ToolCallIDs() }, 5*time.Second).
@@ -123,12 +160,13 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 			gomega.Expect(client.Conn().Cancel(context.Background(), acpapi.CancelNotification{SessionId: sid})).NotTo(gomega.HaveOccurred())
 			cancelTurn(done, resp, promptErr, client, sid)
 
-			// 继续: 请求体无 orphan + 新 prompt 注入
+			// 继续: 被中断轮可见 + 请求体无 orphan + 新 prompt 注入
 			gomega.Expect(prompt(client, sid, "继续").StopReason).To(gomega.Equal(acpapi.StopReasonEndTurn))
 			reqs := mock.Requests()
-			gomega.Expect(reqs).To(gomega.HaveLen(2))
-			gomega.Expect(mockllm.HasNoOrphanToolCalls()(reqs[1])).To(gomega.Equal(""))
-			gomega.Expect(reqs[1].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("继续"))))
+			gomega.Expect(reqs).To(gomega.HaveLen(3))
+			gomega.Expect(mockllm.HasNoOrphanToolCalls()(reqs[2])).To(gomega.Equal(""))
+			gomega.Expect(reqs[2].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("跑一下命令"))))
+			gomega.Expect(reqs[2].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("继续"))))
 			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI, ginkgo.SpecTimeout(20*time.Second)),
@@ -139,6 +177,12 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 	ginkgo.DescribeTable("场景 C: tool result 回传后、第二轮 LLM 前取消 → 继续, 完整轮次 + 新 user 注入形式",
 		func(_ ginkgo.SpecContext, p mockllm.Protocol) {
 			client, mock, sid, _ := startACPTurn(p, []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("热身回复"),
+					mockllm.Usage(10, 5),
+					mockllm.Finish("stop"),
+					mockllm.Done(),
+				)},
 				{Reply: mockllm.Stream(
 					mockllm.ToolCallStart("call_1", "Bash", `{"command":"ls"}`),
 					mockllm.Usage(120, 30),
@@ -166,9 +210,11 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 				},
 			}, map[string]string{"README.md": "# Fixture\n"}, nil)
 
+			base := warmupTurn(client, mock, sid)
+
 			done, resp, promptErr := startPrompt(client, sid, "看一下目录")
-			// 等第二轮请求到达 mock(agent 已回传 tool result)后取消
-			gomega.Eventually(func() int { return mock.RequestCount() }, 10*time.Second).
+			// 等取消轮的第二个请求到达 mock(agent 已回传 tool result)后取消
+			gomega.Eventually(func() int { return mock.RequestCount() - base }, 10*time.Second).
 				Should(gomega.Equal(2))
 			gomega.Expect(client.Conn().Cancel(context.Background(), acpapi.CancelNotification{SessionId: sid})).NotTo(gomega.HaveOccurred())
 			cancelTurn(done, resp, promptErr, client, sid)
@@ -176,11 +222,13 @@ var _ = ginkgo.Describe("ACP cancel→resume edge cases (triple protocol)", func
 			// 继续: 完整 tool 轮次在 history + 新 prompt 注入(无 orphan)
 			gomega.Expect(prompt(client, sid, "继续").StopReason).To(gomega.Equal(acpapi.StopReasonEndTurn))
 			reqs := mock.Requests()
-			gomega.Expect(reqs).To(gomega.HaveLen(3))
-			gomega.Expect(mockllm.HasNoOrphanToolCalls()(reqs[2])).To(gomega.Equal(""))
+			gomega.Expect(reqs).To(gomega.HaveLen(4))
+			gomega.Expect(mockllm.HasNoOrphanToolCalls()(reqs[3])).To(gomega.Equal(""))
+			gomega.Expect(mockllm.HasToolResult("call_1", gomega.ContainSubstring("README.md"))(reqs[3])).To(gomega.Equal(""))
+			gomega.Expect(reqs[3].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("看一下目录"))))
 			// 新 prompt 文本出现在请求体(注入形式按协议不同:
 			// OpenAI/Responses 独立 user 消息, Anthropic 合并进 tool_result 消息)
-			gomega.Expect(reqs[2].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("继续"))))
+			gomega.Expect(reqs[3].Messages).To(gomega.ContainElement(gomega.HaveField("Content", gomega.ContainSubstring("继续"))))
 			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI, ginkgo.SpecTimeout(20*time.Second)),
