@@ -281,10 +281,23 @@ func applySessionThinking(aiAgent *agent.AIAgent, cfg *config.Config, sess *sess
 // single update to avoid later updates overwriting earlier ones — the protocol
 // treats ConfigOptionUpdate as a full replacement, not a delta.
 //
-// ctx governs the notification write. Callers that send from a deferred
-// goroutine (time.AfterFunc after the request returned) should pass
-// context.Background(); synchronous request handlers pass their request ctx.
+// ctx governs the notification write. Synchronous request handlers pass their
+// request ctx.
 func sendConfigOptionsUpdate(ctx context.Context, conn *acp.AgentSideConnection, sessionID string, opts ...*acp.SessionConfigOption) {
+	sendConfigOptionsUpdateMode(ctx, conn, false, sessionID, opts...)
+}
+
+// sendConfigOptionsUpdateAfterResponse is like sendConfigOptionsUpdate, but
+// registers the notification via SessionUpdateAfterResponse so it is only
+// written after the current request's response. Must be called from inside a
+// request handler with the handler's ctx — used for the session-scoped
+// notifications (available commands / config / usage) that clients key by the
+// sessionId returned in the response.
+func sendConfigOptionsUpdateAfterResponse(ctx context.Context, conn *acp.AgentSideConnection, sessionID string, opts ...*acp.SessionConfigOption) {
+	sendConfigOptionsUpdateMode(ctx, conn, true, sessionID, opts...)
+}
+
+func sendConfigOptionsUpdateMode(ctx context.Context, conn *acp.AgentSideConnection, afterResponse bool, sessionID string, opts ...*acp.SessionConfigOption) {
 	if conn == nil {
 		return
 	}
@@ -297,7 +310,11 @@ func sendConfigOptionsUpdate(ctx context.Context, conn *acp.AgentSideConnection,
 	if len(configOpts) == 0 {
 		return
 	}
-	_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+	send := conn.SessionUpdate
+	if afterResponse {
+		send = conn.SessionUpdateAfterResponse
+	}
+	_ = send(ctx, acp.SessionNotification{
 		SessionId: acp.SessionId(sessionID),
 		Update: acp.SessionUpdate{
 			ConfigOptionUpdate: &acp.SessionConfigOptionUpdate{

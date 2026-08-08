@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"time"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -162,39 +161,36 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
 	}
 
-	// Defer available commands notification to avoid a race condition on the
-	// client side: the session/update notification must arrive AFTER the
-	// session/new response, because client-side ACP libraries (e.g. agentic.nvim)
-	// subscribe to session updates only *after* receiving the session/new
-	// response callback. If the notification arrives first, the subscriber
-	// hasn't been registered yet and the update gets silently dropped.
+	// Advertise available commands, config options and usage strictly AFTER
+	// the session/new response is written: SessionUpdateAfterResponse holds
+	// the notifications in the SDK until the response bytes are on the wire.
+	// Clients (Zed, agentic.nvim) key session state by the sessionId returned
+	// in the response — a notification that arrives before it is dropped as
+	// "unknown session", and (unlike this handler) never re-sent, leaving the
+	// session permanently without slash-command autocomplete.
 	//
-	// Using time.AfterFunc(0, ...) ensures the notification is sent from a
-	// separate goroutine, so the NewSession response (written synchronously
-	// by the SDK after this function returns) hits the wire first.
+	// The previous time.AfterFunc(0, ...) deferral did not guarantee this
+	// ordering: the deferred goroutine raced the response write and routinely
+	// lost, so 90%+ of sessions never got their command list.
 	acpCommands := buildACPAvailableCommands(aiAgent)
 	sessID := acp.SessionId(sess.ID)
-	time.AfterFunc(0, func() {
-		if t.conn != nil {
-			_ = t.conn.SessionUpdate(context.Background(), acp.SessionNotification{
-				SessionId: sessID,
-				Update: acp.SessionUpdate{
-					AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
-						AvailableCommands: acpCommands,
-					},
+	if t.conn != nil {
+		_ = t.conn.SessionUpdateAfterResponse(ctx, acp.SessionNotification{
+			SessionId: sessID,
+			Update: acp.SessionUpdate{
+				AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+					AvailableCommands: acpCommands,
 				},
-			})
-			// Also advertise model and mode config options so clients can switch.
-			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-			modeOpt := buildModeConfigOption(agent.ModeAuto)
-			thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
-			// Deferred notification: the request ctx is done by the time this
-			// runs, so send on a fresh background ctx.
-			sendConfigOptionsUpdate(context.Background(), t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
-			// Send initial usage so Zed can show context window usage right away.
-			sendUsageUpdate(context.Background(), t.conn, sessID, sess)
-		}
-	})
+			},
+		})
+		// Also advertise model and mode config options so clients can switch.
+		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+		modeOpt := buildModeConfigOption(agent.ModeAuto)
+		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
+		// Send initial usage so Zed can show context window usage right away.
+		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
+	}
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session created id=%s", sess.ID))
 	opt, _ := buildModelConfigOption(t.cfg, aiAgent.Provider().ProviderName())
@@ -510,19 +506,29 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		aiAgent.SetPermissionHandler(buildPermissionHandler(t.conn, sess.ID, aiAgent))
 	}
 
-	// Defer config option notification to avoid race condition on the client side.
-	time.AfterFunc(0, func() {
-		if t.conn != nil {
-			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-			modeOpt := buildModeConfigOption(agent.ModeAuto)
-			thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
-			// Deferred notification: the request ctx is done by the time this
-			// runs, so send on a fresh background ctx.
-			sendConfigOptionsUpdate(context.Background(), t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
-			// Send initial usage so Zed can show context window usage right away.
-			sendUsageUpdate(context.Background(), t.conn, acp.SessionId(sess.ID), sess)
-		}
-	})
+	// Advertise available commands, config options and usage strictly AFTER
+	// the session/resume response is written (see NewSession for why). A
+	// resumed session must re-advertise its command list: the client may not
+	// have any cached commands for it (fresh editor window), and without this
+	// update it would show "Available commands: none" for the whole session.
+	acpCommands := buildACPAvailableCommands(aiAgent)
+	sessID := acp.SessionId(sess.ID)
+	if t.conn != nil {
+		_ = t.conn.SessionUpdateAfterResponse(ctx, acp.SessionNotification{
+			SessionId: sessID,
+			Update: acp.SessionUpdate{
+				AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+					AvailableCommands: acpCommands,
+				},
+			},
+		})
+		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+		modeOpt := buildModeConfigOption(agent.ModeAuto)
+		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
+		// Send initial usage so Zed can show context window usage right away.
+		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
+	}
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session resumed id=%s (disk session: %s)", sess.ID, sessionID))
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())
@@ -701,30 +707,27 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		}
 	}
 
-	// Defer available commands notification (see NewSession for rationale)
+	// Advertise available commands, config options and usage strictly AFTER
+	// the session/load response is written (see NewSession for why).
 	acpCommands := buildACPAvailableCommands(aiAgent)
 	sessID := acp.SessionId(sess.ID)
-	time.AfterFunc(0, func() {
-		if t.conn != nil {
-			_ = t.conn.SessionUpdate(context.Background(), acp.SessionNotification{
-				SessionId: sessID,
-				Update: acp.SessionUpdate{
-					AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
-						AvailableCommands: acpCommands,
-					},
+	if t.conn != nil {
+		_ = t.conn.SessionUpdateAfterResponse(ctx, acp.SessionNotification{
+			SessionId: sessID,
+			Update: acp.SessionUpdate{
+				AvailableCommandsUpdate: &acp.SessionAvailableCommandsUpdate{
+					AvailableCommands: acpCommands,
 				},
-			})
-			// Also advertise model and mode config options so clients can switch.
-			modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
-			modeOpt := buildModeConfigOption(agent.ModeAuto)
-			thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
-			// Deferred notification: the request ctx is done by the time this
-			// runs, so send on a fresh background ctx.
-			sendConfigOptionsUpdate(context.Background(), t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
-			// Send initial usage so Zed can show context window usage right away.
-			sendUsageUpdate(context.Background(), t.conn, sessID, sess)
-		}
-	})
+			},
+		})
+		// Also advertise model and mode config options so clients can switch.
+		modelOpt, _ := buildModelConfigOption(sess.cfg, sess.resolveProviderName())
+		modeOpt := buildModeConfigOption(agent.ModeAuto)
+		thinkingOpt := buildThinkingEffortConfigOption(currentThinkingValue(sess.agent))
+		sendConfigOptionsUpdateAfterResponse(ctx, t.conn, sess.ID, modelOpt, modeOpt, thinkingOpt)
+		// Send initial usage so Zed can show context window usage right away.
+		sendUsageUpdateAfterResponse(ctx, t.conn, sessID, sess)
+	}
 
 	t.logger.Info(ctx, fmt.Sprintf("ACP: session loaded id=%s", sess.ID))
 	opt, _ := buildModelConfigOption(t.cfg, sess.resolveProviderName())

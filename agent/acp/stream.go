@@ -552,10 +552,20 @@ func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
 // cost from the usage ledger. Skips sending if either usage value is zero
 // (agent not fully initialized).
 //
-// ctx governs the notification write. Streaming paths pass the stream ctx;
-// deferred goroutines (time.AfterFunc after the request returned) pass
-// context.Background().
+// ctx governs the notification write. Streaming paths pass the stream ctx.
 func sendUsageUpdate(ctx context.Context, conn *acp.AgentSideConnection, sessionID acp.SessionId, sess *ACPSession) {
+	sendUsageUpdateMode(ctx, conn, false, sessionID, sess)
+}
+
+// sendUsageUpdateAfterResponse is like sendUsageUpdate, but registers the
+// notification via SessionUpdateAfterResponse so it is only written after the
+// current request's response. Must be called from inside a request handler
+// with the handler's ctx (see sendConfigOptionsUpdateAfterResponse).
+func sendUsageUpdateAfterResponse(ctx context.Context, conn *acp.AgentSideConnection, sessionID acp.SessionId, sess *ACPSession) {
+	sendUsageUpdateMode(ctx, conn, true, sessionID, sess)
+}
+
+func sendUsageUpdateMode(ctx context.Context, conn *acp.AgentSideConnection, afterResponse bool, sessionID acp.SessionId, sess *ACPSession) {
 	if conn == nil || sess == nil || sess.agent == nil {
 		return
 	}
@@ -571,7 +581,11 @@ func sendUsageUpdate(ctx context.Context, conn *acp.AgentSideConnection, session
 	if cost := sessionLedgerCost(sess); cost > 0 {
 		update.Cost = &acp.Cost{Amount: cost, Currency: "CNY"}
 	}
-	_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+	send := conn.SessionUpdate
+	if afterResponse {
+		send = conn.SessionUpdateAfterResponse
+	}
+	_ = send(ctx, acp.SessionNotification{
 		SessionId: sessionID,
 		Update: acp.SessionUpdate{
 			UsageUpdate: update,

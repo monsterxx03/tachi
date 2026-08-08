@@ -211,16 +211,64 @@ func (c *recordingClient) WaitForTerminalExit(context.Context, acpapi.WaitForTer
 	return acpapi.WaitForTerminalExitResponse{}, unsupported("terminal")
 }
 
+// WireLine records one JSON-RPC line as observed on the wire, in arrival
+// order. order increments strictly with arrival; data is the raw line.
+type WireLine struct {
+	Order int
+	Data  string
+}
+
+// wireOrderReader wraps the agent's stdout, recording every JSON-RPC line
+// with its global arrival order. The receive loop reads sequentially, so the
+// order numbers reflect true wire order — the property Zed's session route
+// table depends on (response before session-scoped notifications).
+type wireOrderReader struct {
+	r     io.Reader
+	mu    sync.Mutex
+	buf   []byte
+	lines []WireLine
+	seq   int
+}
+
+func (w *wireOrderReader) Read(p []byte) (int, error) {
+	n, err := w.r.Read(p)
+	if n > 0 {
+		w.mu.Lock()
+		w.buf = append(w.buf, p[:n]...)
+		for {
+			idx := bytes.IndexByte(w.buf, '\n')
+			if idx < 0 {
+				break
+			}
+			w.seq++
+			w.lines = append(w.lines, WireLine{Order: w.seq, Data: string(w.buf[:idx])})
+			w.buf = w.buf[idx+1:]
+		}
+		w.mu.Unlock()
+	}
+	return n, err
+}
+
+// WireLines returns all recorded lines, oldest first.
+func (w *wireOrderReader) WireLines() []WireLine {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	out := make([]WireLine, len(w.lines))
+	copy(out, w.lines)
+	return out
+}
+
 // Client wraps the tachi acp subprocess and its client-side connection.
 type Client struct {
 	cmd  *exec.Cmd
 	conn *acpapi.ClientSideConnection
-	impl *recordingClient
+	impl acpapi.Client
 
 	Rec    *EventRecorder
 	Stderr bytes.Buffer
 
 	stdin io.WriteCloser
+	wire  *wireOrderReader
 
 	closeOnce sync.Once
 	closeErr  error
@@ -245,7 +293,19 @@ func Start(bin, home string, opts ...Option) (*Client, error) {
 	for _, opt := range opts {
 		opt(o)
 	}
+	impl := &recordingClient{rec: &EventRecorder{}, perm: o.perm}
+	return startWithImpl(bin, home, impl, impl.rec)
+}
 
+// StartWithImpl launches the binary like Start, but with a caller-provided
+// client implementation and event recorder (e.g. a client that mimics an
+// editor's notification handling, such as dropping updates for sessions
+// whose session/new response has not arrived yet).
+func StartWithImpl(bin, home string, impl acpapi.Client, rec *EventRecorder) (*Client, error) {
+	return startWithImpl(bin, home, impl, rec)
+}
+
+func startWithImpl(bin, home string, impl acpapi.Client, rec *EventRecorder) (*Client, error) {
 	cmd := exec.Command(bin, "acp", "--home", home)
 	stdin, err := cmd.StdinPipe()
 	if err != nil {
@@ -261,9 +321,10 @@ func Start(bin, home string, opts ...Option) (*Client, error) {
 		return nil, fmt.Errorf("acp: start: %w", err)
 	}
 
-	c.impl = &recordingClient{rec: &EventRecorder{}, perm: o.perm}
-	c.Rec = c.impl.rec
-	c.conn = acpapi.NewClientSideConnection(c.impl, stdin, stdout)
+	c.impl = impl
+	c.Rec = rec
+	c.wire = &wireOrderReader{r: stdout}
+	c.conn = acpapi.NewClientSideConnection(impl, stdin, c.wire)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -278,12 +339,22 @@ func Start(bin, home string, opts ...Option) (*Client, error) {
 	return c, nil
 }
 
+// WireLines returns every JSON-RPC line received from the agent, in wire
+// arrival order. Used by tests that assert response-before-notification
+// ordering (the property editors depend on to route session updates).
+func (c *Client) WireLines() []WireLine {
+	return c.wire.WireLines()
+}
+
 // Conn exposes the underlying client-side connection for protocol calls.
 func (c *Client) Conn() *acpapi.ClientSideConnection { return c.conn }
 
 // PermissionRequests returns the permission requests the agent has made.
 func (c *Client) PermissionRequests() []acpapi.RequestPermissionRequest {
-	return c.impl.PermissionRequests()
+	if rc, ok := c.impl.(*recordingClient); ok {
+		return rc.PermissionRequests()
+	}
+	return nil
 }
 
 // Kill terminates the subprocess WITHOUT reaping it — the single Wait call
