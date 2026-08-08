@@ -212,3 +212,50 @@ func HasModel(m Matcher) RequireFunc {
 		return "expected model matching the matcher"
 	}
 }
+
+// HasRawBodySubstring requires the raw request body to contain s — for
+// protocol-level assertions the normalized view cannot express. NOTE: the
+// same semantic may serialize under DIFFERENT field names per wire (e.g.
+// thinking effort is "reasoning_effort" on OpenAI, "output_config" on
+// Anthropic, "reasoning" on Responses) — prefer a protocol-aware helper
+// (HasEffort, HasThinkingDisabled) over a raw search unless the field is
+// genuinely protocol-agnostic.
+func HasRawBodySubstring(s string) RequireFunc {
+	return func(req *RecordedRequest) string {
+		if bytes.Contains(req.RawBody, []byte(s)) {
+			return ""
+		}
+		return "expected raw request body to contain " + strconv.Quote(s)
+	}
+}
+
+// HasEffort requires the request to carry the thinking-effort signal for the
+// given level. The field name is protocol-specific:
+//   - OpenAI: "reasoning_effort":"low"
+//   - Anthropic: "output_config":{"effort":"low"}
+//   - OpenAI Responses: "reasoning":{"effort":"low"}
+//
+// A naive substring search for one protocol's field name silently passes on
+// the others (the field never appears), so the check must branch per wire.
+func HasEffort(level string) RequireFunc {
+	return func(req *RecordedRequest) string {
+		effort := []byte(`"effort":"` + level + `"`)
+		switch req.Protocol {
+		case ProtocolAnthropic:
+			if bytes.Contains(req.RawBody, []byte(`"output_config"`)) && bytes.Contains(req.RawBody, effort) {
+				return ""
+			}
+			return "expected output_config effort " + strconv.Quote(level) + " in request body"
+		case ProtocolOpenAIResponses:
+			if bytes.Contains(req.RawBody, []byte(`"reasoning":`)) && bytes.Contains(req.RawBody, effort) {
+				return ""
+			}
+			return "expected reasoning.effort " + strconv.Quote(level) + " in request body"
+		default: // ProtocolOpenAI
+			if bytes.Contains(req.RawBody, []byte(`"reasoning_effort":"`+level+`"`)) {
+				return ""
+			}
+			return "expected reasoning_effort " + strconv.Quote(level) + " in request body"
+		}
+	}
+}
