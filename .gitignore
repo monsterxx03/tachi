@@ -3,6 +3,11 @@ tachi
 tachi-linux-amd64
 tachi-linux-arm64
 
+# ginkgo -p compiles test binaries into the package dir (itest/run/run.test);
+# without ignoring them every ginkgo run dirties the worktree, which defeats
+# harness.BuildBinary's shared-binary cache (keyed on a clean worktree).
+itest/**/*.test
+
 # Third-party channel plugins (local development only)
 third_party_channels.go
 go.work
