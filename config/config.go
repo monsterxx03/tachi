@@ -94,7 +94,7 @@ type ModelPricing struct {
 	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price,omitempty"`
 }
 
-// ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别。
+// ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别、请求行为。
 // 通过 ProviderConfig.Spec 嵌套配置（不向前兼容旧版平铺字段）。
 type ModelSpec struct {
 	// ContextWindow 手动覆盖模型上下文窗口（tokens）。
@@ -107,6 +107,17 @@ type ModelSpec struct {
 	// 请求的级别会原样透传给 API，由服务端映射到模型实际的推理强度
 	// （如 DeepSeek thinking_mode 文档的 effort 映射表）。
 	ThinkingLevel string `yaml:"thinking_level,omitempty"`
+
+	// MaxRetries 失败后的额外重试次数。nil = 使用默认（各 provider 路径均为
+	// 2 次）；0 = 禁用重试；n = 重试 n 次。
+	// 落地方式：openai（go-openai，无内置重试）走外层 RetryProvider；
+	// anthropic / openai-res 走 SDK 内置重试（option.WithMaxRetries）。
+	MaxRetries *int `yaml:"max_retries,omitempty"`
+
+	// Timeout 单次 LLM API 请求超时。0 = 使用默认（各路径不设超时）。
+	// 落地方式：openai（go-openai）设置 HTTP client 超时；
+	// anthropic / openai-res 走 SDK 的 option.WithRequestTimeout。
+	Timeout time.Duration `yaml:"timeout,omitempty"`
 
 	// Pricing 定价覆盖（可选，覆盖内置价格表）。
 	Pricing *ModelPricing `yaml:"pricing,omitempty"`

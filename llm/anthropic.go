@@ -16,15 +16,26 @@ type AnthropicProvider struct {
 	name   string // config provider name ("" = unknown); see Provider.ProviderName
 }
 
-func NewAnthropicProvider(apiKey, baseURL, model string) *AnthropicProvider {
-	opts := []option.RequestOption{
+// NewAnthropicProvider constructs the anthropic provider. The anthropic SDK
+// retries internally (default MaxRetries=2), so MaxRetries / Timeout map
+// directly to the SDK's option.WithMaxRetries / option.WithRequestTimeout;
+// unset options keep the SDK defaults.
+func NewAnthropicProvider(apiKey, baseURL, model string, opts ...ProviderOption) *AnthropicProvider {
+	o := applyOptions(opts)
+	clientOpts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		option.WithHeader("User-Agent", userAgent()),
 	}
 	if baseURL != "" {
-		opts = append(opts, option.WithBaseURL(baseURL))
+		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
 	}
-	client := anthropic.NewClient(opts...)
+	if o.MaxRetries != nil {
+		clientOpts = append(clientOpts, option.WithMaxRetries(*o.MaxRetries))
+	}
+	if o.Timeout > 0 {
+		clientOpts = append(clientOpts, option.WithRequestTimeout(o.Timeout))
+	}
+	client := anthropic.NewClient(clientOpts...)
 	return &AnthropicProvider{
 		client: client,
 		model:  model,

@@ -3,7 +3,9 @@ package config
 import (
 	"errors"
 	"testing"
+	"time"
 
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -81,4 +83,63 @@ func TestBuildProvider_MissingAPIKey(t *testing.T) {
 	assert.Nil(t, resolved)
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrProviderNotFound), "missing API key is not a not-found error")
+}
+
+// TestBuildProvider_SpecOptions verifies spec.max_retries / spec.timeout are
+// passed through to the constructed provider:
+//   - openai path → the outer RetryProvider honors the configured retry count
+//     (configured value, explicit 0 = disabled, unset = legacy default 2);
+//   - anthropic / openai-res paths construct successfully (options flow into
+//     the SDK client, which is not introspectable from here).
+func TestBuildProvider_SpecOptions(t *testing.T) {
+	three := 3
+	zero := 0
+	cases := []struct {
+		name    string
+		typ     string
+		specMax *int // spec.max_retries 配置值（nil = 不配置）
+		wantMax int  // openai 路径期望的 RetryProvider.MaxRetries
+	}{
+		{name: "openai-configured", typ: "openai", specMax: &three, wantMax: 3},
+		{name: "openai-disabled", typ: "openai", specMax: &zero, wantMax: 0},
+		{name: "openai-unset", typ: "openai", wantMax: 2}, // legacy default
+		{name: "anthropic-configured", typ: "anthropic", specMax: &three},
+		{name: "openai-res-configured", typ: "openai-res", specMax: &three},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			cfg := testConfig(t)
+			cfg.Providers[0] = ProviderConfig{
+				Name:    "p",
+				Type:    c.typ,
+				Model:   "some-model",
+				APIKey:  "sk-test",
+				BaseURL: "https://api.example.com/v1",
+				Spec: ModelSpec{
+					MaxRetries: c.specMax,
+					Timeout:    90 * time.Second,
+				},
+			}
+			resolved, err := cfg.BuildProvider("p")
+			require.NoError(t, err)
+			require.NotNil(t, resolved.Provider)
+
+			if c.typ == "openai" {
+				rp, ok := resolved.Provider.(*llm.RetryProvider)
+				require.True(t, ok, "openai provider should be wrapped in RetryProvider")
+				assert.Equal(t, c.wantMax, rp.Cfg().MaxRetries)
+			}
+		})
+	}
+}
+
+// TestBuildProvider_SpecOptionsDefault: without spec options the openai path
+// keeps the legacy default of 2 retries.
+func TestBuildProvider_SpecOptionsDefault(t *testing.T) {
+	cfg := testConfig(t)
+	resolved, err := cfg.BuildProvider("deepseek")
+	require.NoError(t, err)
+	rp, ok := resolved.Provider.(*llm.RetryProvider)
+	require.True(t, ok, "openai provider should be wrapped in RetryProvider")
+	assert.Equal(t, 2, rp.Cfg().MaxRetries)
 }

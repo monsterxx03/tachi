@@ -53,6 +53,10 @@ func NewRetryProvider(inner Provider, cfg RetryConfig) *RetryProvider {
 func (r *RetryProvider) Name() string  { return r.inner.Name() }
 func (r *RetryProvider) Model() string { return r.inner.Model() }
 
+// Cfg returns the resolved retry configuration — primarily for tests and
+// diagnostics; the retry loop itself reads the private copy.
+func (r *RetryProvider) Cfg() RetryConfig { return r.cfg }
+
 // ProviderName forwards the inner provider's config name through the
 // decorator chain (see Provider.ProviderName).
 func (r *RetryProvider) ProviderName() string { return r.inner.ProviderName() }

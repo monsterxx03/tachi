@@ -28,14 +28,20 @@ func (t *tachiTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 }
 
 type OpenAIProvider struct {
-	client  *openai.Client
-	model   string
-	apiKey  string
-	baseURL string
-	name    string // config provider name ("" = unknown); see Provider.ProviderName
+	client   *openai.Client
+	model    string
+	apiKey   string
+	baseURL  string
+	name     string // config provider name ("" = unknown); see Provider.ProviderName
+	retryMax int    // retries after the initial attempt, consumed by the outer RetryProvider (see NewNamedProvider)
 }
 
-func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
+// NewOpenAIProvider constructs the go-openai provider. go-openai has no
+// built-in retry, so MaxRetries is stored on the returned provider's retryMax
+// field and consumed by NewNamedProvider when wrapping RetryProvider; Timeout
+// sets the HTTP client's per-request timeout.
+func NewOpenAIProvider(apiKey, baseURL, model string, opts ...ProviderOption) *OpenAIProvider {
+	o := applyOptions(opts)
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
 		cfg.BaseURL = baseURL
@@ -51,13 +57,22 @@ func NewOpenAIProvider(apiKey, baseURL, model string) *OpenAIProvider {
 			baseTransport = http.DefaultTransport
 		}
 		client.Transport = &tachiTransport{base: baseTransport}
+		if o.Timeout > 0 {
+			client.Timeout = o.Timeout
+		}
+	}
+	// Default 2 retries keeps the pre-options behavior; explicit 0 disables.
+	retryMax := 2
+	if o.MaxRetries != nil {
+		retryMax = max(0, *o.MaxRetries)
 	}
 	client := openai.NewClientWithConfig(cfg)
 	return &OpenAIProvider{
-		client:  client,
-		model:   model,
-		apiKey:  apiKey,
-		baseURL: cfg.BaseURL,
+		client:   client,
+		model:    model,
+		apiKey:   apiKey,
+		baseURL:  cfg.BaseURL,
+		retryMax: retryMax,
 	}
 }
 

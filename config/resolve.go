@@ -30,13 +30,28 @@ func (pCfg *ProviderConfig) NewProvider() (*ResolvedProvider, error) {
 		return nil, fmt.Errorf("resolve provider %q: %w", pCfg.Name, err)
 	}
 	// Map the resolved fields onto llm.NewNamedProvider's positional args
-	// (type, name, apiKey, baseURL, model — the order matches the signature).
-	p, err := llm.NewNamedProvider(resolved.Type, resolved.Name, resolved.APIKey, resolved.BaseURL, resolved.Model)
+	// (type, name, apiKey, baseURL, model — the order matches the signature),
+	// plus provider options resolved from the spec (retry / timeout).
+	p, err := llm.NewNamedProvider(resolved.Type, resolved.Name, resolved.APIKey, resolved.BaseURL, resolved.Model, providerOptionsFromSpec(&pCfg.Spec)...)
 	if err != nil {
 		return nil, fmt.Errorf("create provider %q: %w", pCfg.Name, err)
 	}
 	resolved.Provider = p
 	return resolved, nil
+}
+
+// providerOptionsFromSpec 将 ProviderConfig.Spec 中可配置的 provider 行为
+// （重试次数、请求超时）转换为 llm.ProviderOption。未设置的字段不产生 option，
+// 由各 provider 路径使用默认值。
+func providerOptionsFromSpec(spec *ModelSpec) []llm.ProviderOption {
+	var opts []llm.ProviderOption
+	if spec.MaxRetries != nil {
+		opts = append(opts, llm.WithMaxRetries(*spec.MaxRetries))
+	}
+	if spec.Timeout > 0 {
+		opts = append(opts, llm.WithTimeout(spec.Timeout))
+	}
+	return opts
 }
 
 // BuildProvider resolves a named provider and constructs the llm.Provider —

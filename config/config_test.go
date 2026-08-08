@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -853,6 +854,8 @@ providers:
     spec:
       context_window: 262144
       thinking_level: high
+      max_retries: 3
+      timeout: 90s
       pricing:
         input_price: 2.5
         output_price: 8.0
@@ -876,6 +879,9 @@ providers:
 	require.NotNil(t, p.Spec.Pricing.CacheCreationInputPrice)
 	assert.Equal(t, 1.0, *p.Spec.Pricing.CacheCreationInputPrice)
 	assert.Equal(t, "high", p.Spec.ThinkingLevel)
+	require.NotNil(t, p.Spec.MaxRetries)
+	assert.Equal(t, 3, *p.Spec.MaxRetries)
+	assert.Equal(t, 90*time.Second, p.Spec.Timeout)
 
 	// 旧版平铺字段（context_window / input_price 直接挂 provider 下）不再解析。
 	oldYAML := []byte(`

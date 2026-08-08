@@ -10,6 +10,8 @@ package run_test
 // reasoning_content, Anthropic thinking blocks with signature).
 
 import (
+	"time"
+
 	"github.com/monsterxx03/tachi/itest/harness"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/itest/run"
@@ -252,5 +254,51 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
+	)
+
+	ginkgo.DescribeTable("spec.timeout 生效: 慢响应快速失败而非挂起",
+		func(_ ginkgo.SpecContext, p mockllm.Protocol) {
+			// Hold 保持响应打开直到客户端中止 —— 模拟"永远慢"的上游。
+			// 超时发生在流建立之后(headers 已返回、body 挂起), 属于
+			// mid-stream 失败: RetryProvider 按设计不重试流中途错误,
+			// anthropic/openai-res SDK 超时也直接返回 → 都是 1 次请求。
+			// 放 3 个 step 仅作守卫: 若未来某条路径开始重试超时, 脚本
+			// 未耗尽(不触发 mock.Error), 请求数断言会先行失败。
+			mock, home := startMock(p, []mockllm.Step{
+				{Reply: mockllm.Hold()},
+				{Reply: mockllm.Hold()},
+				{Reply: mockllm.Hold()},
+			}, harness.WithSpecTimeout(200*time.Millisecond))
+			workdir := harness.SeedWorkDir(ginkgo.GinkgoT(), nil)
+
+			start := time.Now()
+			res := run.Binary(bin, workdir, "--home", home, "-p", "hi", "-o", "json-stream")
+			elapsed := time.Since(start)
+
+			gomega.Expect(res.Err).NotTo(gomega.HaveOccurred())
+			// ExitReasonError → exit 1 (exitCodeForReason)
+			gomega.Expect(res.ExitCode).To(gomega.Equal(1))
+			events := run.ParseNDJSON(res.Stdout)
+
+			// 超时 → 没有 turn_complete, 只有 error 事件(消息含超时关键字)
+			gomega.Expect(events).NotTo(gomega.ContainElement(gomega.HaveField("Type", "turn_complete")))
+			gomega.Expect(events).To(gomega.ContainElement(gomega.SatisfyAll(
+				gomega.HaveField("Type", "error"),
+				gomega.HaveField("Error", gomega.SatisfyAny(
+					gomega.ContainSubstring("deadline exceeded"),
+					gomega.ContainSubstring("Client.Timeout"),
+				)),
+			)))
+
+			// 恰好 1 个请求; Hold 被客户端中止, mock 不产生错误
+			gomega.Expect(mock.Requests()).To(gomega.HaveLen(1))
+			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
+
+			// 超时生效的核心证据: 请求在 ~200ms 内被断开而不是永久
+			// 挂起(无 timeout 配置时 Hold 永不返回, 进程不会退出)。
+			gomega.Expect(elapsed).To(gomega.BeNumerically("<", 5*time.Second))
+		},
+		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI, ginkgo.SpecTimeout(15*time.Second)),
+		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic, ginkgo.SpecTimeout(15*time.Second)),
 	)
 })

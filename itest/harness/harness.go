@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
@@ -26,8 +27,13 @@ import (
 // protocol: go-openai concatenates baseURL + "/chat/completions" (needs the
 // /v1 suffix) while anthropic-sdk-go appends a trailing slash and resolves
 // "v1/messages" against it (needs the bare host) — Server.BaseURL() already
-// returns the correct value per protocol.
-func configYAML(p mockllm.Protocol, baseURL string, bashAllow bool) string {
+// returns the correct value per protocol. timeout > 0 injects
+// spec.timeout into the fixture (provider request timeout).
+func configYAML(p mockllm.Protocol, baseURL string, bashAllow bool, timeout time.Duration) string {
+	spec := "      context_window: 128000\n"
+	if timeout > 0 {
+		spec += "      timeout: " + timeout.String() + "\n"
+	}
 	s := fmt.Sprintf(`provider: mock
 providers:
   - name: mock
@@ -36,10 +42,10 @@ providers:
     base_url: %s
     api_key: test-key
     spec:
-      context_window: 128000
+%s
 title_generation: false
 language: zh
-`, p, baseURL)
+`, p, baseURL, spec)
 	if bashAllow {
 		s += "permissions:\n  bash:\n    allow:\n      - \"*\"\n"
 	}
@@ -61,6 +67,7 @@ type Option func(*options)
 type options struct {
 	protocol  mockllm.Protocol
 	bashAllow bool
+	timeout   time.Duration // spec.timeout injected into the provider fixture
 }
 
 // WithProtocol selects the mock's wire protocol (default openai); the config
@@ -76,6 +83,12 @@ func WithBashAllow() Option {
 	return func(o *options) { o.bashAllow = true }
 }
 
+// WithSpecTimeout injects spec.timeout (per-request LLM timeout) into the
+// config fixture. Zero (default) leaves the spec without a timeout.
+func WithSpecTimeout(d time.Duration) Option {
+	return func(o *options) { o.timeout = d }
+}
+
 // NewHome creates an isolated --home directory with a config.yaml wired to
 // the given mock server. The mock must be started first (its port is baked
 // into the fixture).
@@ -86,7 +99,7 @@ func NewHome(t TB, mock *mockllm.Server, opts ...Option) string {
 		opt(o)
 	}
 	home := t.TempDir()
-	cfg := configYAML(o.protocol, mock.BaseURL(), o.bashAllow)
+	cfg := configYAML(o.protocol, mock.BaseURL(), o.bashAllow, o.timeout)
 	path := filepath.Join(home, "config.yaml")
 	if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
 		t.Fatalf("harness: write config fixture: %v", err)

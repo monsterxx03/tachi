@@ -29,7 +29,12 @@ type OpenAIResponsesProvider struct {
 	name    string // config provider name ("" = unknown); see Provider.ProviderName
 }
 
-func NewOpenAIResponsesProvider(apiKey, baseURL, model string) *OpenAIResponsesProvider {
+// NewOpenAIResponsesProvider constructs the Responses API provider. The
+// official openai-go SDK retries internally (default MaxRetries=2), so
+// MaxRetries / Timeout map directly to the SDK's option.WithMaxRetries /
+// option.WithRequestTimeout; unset options keep the SDK defaults.
+func NewOpenAIResponsesProvider(apiKey, baseURL, model string, opts ...ProviderOption) *OpenAIResponsesProvider {
+	o := applyOptions(opts)
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
 		// Wrap the default HTTP client with a transport that injects the
@@ -42,6 +47,12 @@ func NewOpenAIResponsesProvider(apiKey, baseURL, model string) *OpenAIResponsesP
 		// (the SDK falls back to its default only when the option is absent),
 		// which would break request construction.
 		clientOpts = append(clientOpts, option.WithBaseURL(baseURL))
+	}
+	if o.MaxRetries != nil {
+		clientOpts = append(clientOpts, option.WithMaxRetries(*o.MaxRetries))
+	}
+	if o.Timeout > 0 {
+		clientOpts = append(clientOpts, option.WithRequestTimeout(o.Timeout))
 	}
 	client := openai.NewClient(clientOpts...)
 	return &OpenAIResponsesProvider{

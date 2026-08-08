@@ -219,8 +219,10 @@ type Provider interface {
 	CreateChatStream(ctx context.Context, messages []Message, tools []Tool, opts ChatOptions) (<-chan StreamEvent, error)
 }
 
-func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) {
-	return NewNamedProvider(providerType, "", apiKey, baseURL, model)
+// NewProvider constructs a provider from type + credentials (no config name).
+// opts may carry WithMaxRetries / WithTimeout to override default behavior.
+func NewProvider(providerType, apiKey, baseURL, model string, opts ...ProviderOption) (Provider, error) {
+	return NewNamedProvider(providerType, "", apiKey, baseURL, model, opts...)
 }
 
 // NewNamedProvider is NewProvider with the provider's CONFIG name (e.g.
@@ -228,17 +230,19 @@ func NewProvider(providerType, apiKey, baseURL, model string) (Provider, error) 
 // via ProviderName. name may be "" for providers not backed by a config
 // entry. This is the single construction point for config-resolved
 // providers — see config.NewProviderFromResolved.
-func NewNamedProvider(providerType, name, apiKey, baseURL, model string) (Provider, error) {
+func NewNamedProvider(providerType, name, apiKey, baseURL, model string, opts ...ProviderOption) (Provider, error) {
 	switch providerType {
 	case ProviderTypeOpenAI:
 		// go-openai has no built-in retry; wrap with RetryProvider so
 		// transient failures (connection reset, 429/5xx) don't abort
-		// the whole turn.
-		p := NewOpenAIProvider(apiKey, baseURL, model)
+		// the whole turn. The retry count comes from the provider itself:
+		// NewOpenAIProvider keeps the legacy default of 2 unless overridden
+		// via WithMaxRetries.
+		p := NewOpenAIProvider(apiKey, baseURL, model, opts...)
 		p.name = name
 		return NewRetryProvider(
 			p,
-			RetryConfig{MaxRetries: 2},
+			RetryConfig{MaxRetries: p.retryMax},
 		), nil
 	case ProviderTypeOpenAIResponses:
 		// No retry wrapping needed: the official openai-go SDK retries
@@ -246,13 +250,15 @@ func NewNamedProvider(providerType, name, apiKey, baseURL, model string) (Provid
 		// MaxRetries=2, honoring Retry-After headers). The RetryProvider
 		// cannot classify its errors anyway (apierror is an internal
 		// package), so wrapping here would only add duplicate retries.
-		p := NewOpenAIResponsesProvider(apiKey, baseURL, model)
+		// WithMaxRetries / WithTimeout flow into the SDK client via opts.
+		p := NewOpenAIResponsesProvider(apiKey, baseURL, model, opts...)
 		p.name = name
 		return p, nil
 	case ProviderTypeAnthropic:
 		// anthropic-sdk-go already retries internally (default MaxRetries=2),
-		// so no extra wrapping is needed here.
-		p := NewAnthropicProvider(apiKey, baseURL, model)
+		// so no extra wrapping is needed here. WithMaxRetries / WithTimeout
+		// flow into the SDK client via opts.
+		p := NewAnthropicProvider(apiKey, baseURL, model, opts...)
 		p.name = name
 		return p, nil
 	default:
