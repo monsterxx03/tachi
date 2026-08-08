@@ -37,3 +37,26 @@ jobs:
 
       - name: Build
         run: go build -trimpath -ldflags="-s -w" -o tachi .
+
+  # Integration tests (docs/2026-07-31-tui-integration-test.md): `make itest`
+  # runs the four suites in parallel (-j4) — mockllm contract tests, itest/run
+  # (-p pipe, real binary), itest/tui (in-process bubbletea: real Model +
+  # real AIAgent), itest/acp (real binary + ACP SDK) — each with ginkgo -p
+  # spec parallelism (ITEST_PROCS=4). Specs own isolated homes/mocks, so the
+  # whole thing is hermetic; run/acp build the real binary once per suite.
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: "1.26"
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Integration tests
+        run: make itest

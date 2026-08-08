@@ -61,7 +61,12 @@ func renderOpenAIStream(ctx context.Context, w http.ResponseWriter, chunks []Chu
 			}},
 		}
 	}
+	toolIdx := 0 // tool_calls[] delta index — increments per ToolCallStart
 	for _, c := range chunks {
+		// Parallel tool calls: each ToolCallStart delta carries a distinct
+		// tool_calls[] index (0, 1, ...) so the client keeps them as separate
+		// calls; ToolArgsDelta targets the most recently started tool,
+		// mirroring the Responses wire's last-tool semantics.
 		switch c.kind {
 		case chunkThinking:
 			data(choice(map[string]any{"reasoning_content": c.text}, nil))
@@ -70,16 +75,17 @@ func renderOpenAIStream(ctx context.Context, w http.ResponseWriter, chunks []Chu
 		case chunkToolStart:
 			data(choice(map[string]any{
 				"tool_calls": []any{map[string]any{
-					"index":    0,
+					"index":    toolIdx,
 					"id":       c.id,
 					"type":     "function",
 					"function": map[string]any{"name": c.name, "arguments": c.args},
 				}},
 			}, nil))
+			toolIdx++
 		case chunkToolArgs:
 			data(choice(map[string]any{
 				"tool_calls": []any{map[string]any{
-					"index":    0,
+					"index":    max(toolIdx-1, 0),
 					"function": map[string]any{"arguments": c.args},
 				}},
 			}, nil))

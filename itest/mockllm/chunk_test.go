@@ -103,6 +103,56 @@ func TestNormalizeAnthropicRequest(t *testing.T) {
 	require.Equal(t, "Bash", mock.Requests()[0].Tools[0].Name)
 }
 
+// TestNormalizeAnthropicParallelToolResults locks the parallel-tool-result
+// normalization: one user message carrying TWO tool_result blocks (the
+// agent's collectToolMessages merges consecutive tool messages) must
+// normalize into TWO tool messages — one per tool_use_id — so
+// HasToolResult(call_1, ...) can match each result individually. Before the
+// fix the merged message kept only the LAST block's ToolCallID, hiding
+// call_1's result from the assertion surface.
+func TestNormalizeAnthropicParallelToolResults(t *testing.T) {
+	body := `{
+		"model": "mock-model",
+		"messages": [
+			{"role": "user", "content": [{"type": "text", "text": "hi"}]},
+			{"role": "assistant", "content": [
+				{"type": "tool_use", "id": "call_1", "name": "Bash", "input": {"command": "echo one"}},
+				{"type": "tool_use", "id": "call_2", "name": "Bash", "input": {"command": "echo two"}}
+			]},
+			{"role": "user", "content": [
+				{"type": "tool_result", "tool_use_id": "call_1", "content": [{"type": "text", "text": "one"}]},
+				{"type": "tool_result", "tool_use_id": "call_2", "content": [{"type": "text", "text": "two"}]}
+			]}
+		]
+	}`
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolAnthropic))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(mockllm.Done())})
+	resp, err := http.Post(mock.BaseURL()+"/v1/messages", "application/json",
+		strings.NewReader(body))
+	require.NoError(t, err)
+	require.Equal(t, http.StatusOK, resp.StatusCode)
+	resp.Body.Close()
+
+	msgs := mock.Requests()[0].Messages
+	// user + assistant(two tool_use) + tool(call_1) + tool(call_2)
+	require.Len(t, msgs, 4)
+	require.Equal(t, "assistant", msgs[1].Role)
+	require.Len(t, msgs[1].ToolCalls, 2)
+
+	require.Equal(t, "tool", msgs[2].Role)
+	require.Equal(t, "call_1", msgs[2].ToolCallID)
+	require.Equal(t, "one", msgs[2].Content)
+
+	require.Equal(t, "tool", msgs[3].Role)
+	require.Equal(t, "call_2", msgs[3].ToolCallID)
+	require.Equal(t, "two", msgs[3].Content)
+
+	// HasToolResult must now match BOTH calls.
+	require.Empty(t, mockllm.HasToolResult("call_1", requireMatcher{substr: "one"})(mock.Requests()[0]))
+	require.Empty(t, mockllm.HasToolResult("call_2", requireMatcher{substr: "two"})(mock.Requests()[0]))
+}
+
 // requireMatcher is a minimal Matcher implementation for tests that do not
 // want to pull gomega into the core package tests.
 type requireMatcher struct {

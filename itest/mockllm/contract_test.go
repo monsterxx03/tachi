@@ -138,6 +138,84 @@ func TestContractAnthropicStream(t *testing.T) {
 	require.Equal(t, int64(120), events[6].Usage.InputTokens)
 }
 
+// TestContractOpenAIParallelTools locks parallel tool calls on the OpenAI
+// wire: each ToolCallStart delta must carry a distinct tool_calls[] index
+// (0, 1, ...) or the go-openai client merges the calls into one. The real
+// client parsing the mock is the arbiter — a regression to hardcoded index 0
+// shows up here as both ToolUseStart events reporting index 0.
+func TestContractOpenAIParallelTools(t *testing.T) {
+	mock := mockllm.NewServer()
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.ToolCallStart("call_1", "Bash", `{"command":"echo one"}`),
+		mockllm.ToolCallStart("call_2", "Bash", `{"command":"echo two"}`),
+		mockllm.Usage(120, 30),
+		mockllm.Finish("tool_calls"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewOpenAIProvider("test-key", mock.BaseURL(), "mock-model")
+	ch, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil,
+		llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+
+	events := consumeStream(t, ch)
+	var starts []llm.StreamEvent
+	for _, ev := range events {
+		if ev.Type == llm.StreamEventToolUseStart {
+			starts = append(starts, ev)
+		}
+	}
+	require.Len(t, starts, 2)
+	require.Equal(t, 0, starts[0].ToolIndex)
+	require.Equal(t, "call_1", starts[0].ToolCall.ID)
+	require.Equal(t, "Bash", starts[0].ToolCall.Function.Name)
+	require.Equal(t, 1, starts[1].ToolIndex)
+	require.Equal(t, "call_2", starts[1].ToolCall.ID)
+
+	require.Equal(t, llm.StreamEventDone, events[len(events)-1].Type)
+	require.Equal(t, "tool_calls", events[len(events)-1].FinishReason)
+}
+
+// TestContractAnthropicParallelTools locks parallel tool_use blocks on the
+// Anthropic wire: consecutive content_block_start(tool_use) events must get
+// distinct content block indexes (the SDK keys blocks by index — duplicates
+// collapse into one call).
+func TestContractAnthropicParallelTools(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolAnthropic))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.ToolCallStart("call_1", "Bash", `{"command":"echo one"}`),
+		mockllm.ToolCallStart("call_2", "Bash", `{"command":"echo two"}`),
+		mockllm.Usage(120, 30),
+		mockllm.Finish("tool_calls"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewAnthropicProvider("test-key", mock.BaseURL(), "mock-model")
+	ch, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil,
+		llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+
+	events := consumeStream(t, ch)
+	var starts []llm.StreamEvent
+	for _, ev := range events {
+		if ev.Type == llm.StreamEventToolUseStart {
+			starts = append(starts, ev)
+		}
+	}
+	require.Len(t, starts, 2)
+	require.Equal(t, 0, starts[0].ToolIndex)
+	require.Equal(t, "call_1", starts[0].ToolCall.ID)
+	require.Equal(t, 1, starts[1].ToolIndex)
+	require.Equal(t, "call_2", starts[1].ToolCall.ID)
+
+	require.Equal(t, llm.StreamEventDone, events[len(events)-1].Type)
+	require.Equal(t, "tool_use", events[len(events)-1].FinishReason)
+}
+
 // TestContractAnthropicPingAndCache locks two real-API behaviors mockllm now
 // mirrors: heartbeat ping events interleaved between content blocks (SDK
 // consumes them silently — the event sequence is unaffected), and the cache

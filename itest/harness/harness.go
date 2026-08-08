@@ -15,6 +15,7 @@ package harness
 
 import (
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -23,7 +24,12 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/itest/mockllm"
+	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // configYAML renders the minimal provider fixture from a template. The
@@ -199,6 +205,55 @@ func SeedWorkDir(t TB, files map[string]string) string {
 		}
 	}
 	return dir
+}
+
+// Config loads the config fixture from a --home directory exactly like the
+// real binary does (config.SetBaseDir + config.Load), so the in-process TUI
+// layer exercises the same config path as -p/ACP (which go through the
+// binary). SetBaseDir mutates a process-global — safe here because ginkgo
+// parallel nodes are separate OS processes and specs run serially within a
+// node: each spec sets its own home before loading, and nothing else reads
+// the global concurrently.
+func Config(t TB, home string) *config.Config {
+	t.Helper()
+	config.SetBaseDir(home)
+	cfg, err := config.Load()
+	if err != nil {
+		t.Fatalf("harness: load config from %s: %v", home, err)
+	}
+	return cfg
+}
+
+// NewAgent assembles a real AIAgent the way runTUI (main.go) does: the
+// config's default provider is resolved inside NewAIAgentWithConfig (its
+// base_url points at the mock), the permission mode is TUI (interactive
+// tool-confirmation events), and the session manager is wired to the home's
+// sessions dir so session files land under --home. A per-home UsageRecorder
+// is injected so the process-global ledger singleton never leaks across
+// specs (it is created lazily from the FIRST home it sees and kept forever).
+//
+// The caller owns the returned agent: Close it when done (the itest/tui
+// driver does this in DeferCleanup).
+func NewAgent(t TB, cfg *config.Config) *agent.AIAgent {
+	t.Helper()
+	ai, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
+		Logger:         logger.New("tui"),
+		PermissionMode: agent.PermissionModeTUI,
+		FullConfig:     cfg,
+		SystemConfig:   agent.SystemConfigFromConfig(cfg),
+		UsageRecorder:  llm.NewUsageRecorder(filepath.Join(config.BaseDir(), "usage")),
+	})
+	if err != nil {
+		t.Fatalf("harness: NewAIAgentWithConfig: %v", err)
+	}
+	sm, err := session.NewManager(nil)
+	if err != nil {
+		t.Fatalf("harness: session manager: %v", err)
+	}
+	sm.SetMaxKeep(cfg.SessionCleanupMaxCount)
+	sm.CleanupOldSessions()
+	ai.SetSessionManager(sm)
+	return ai
 }
 
 // BuildBinary compiles the real tachi binary and returns its path. Call from

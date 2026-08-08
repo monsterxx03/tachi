@@ -207,7 +207,19 @@ func (r *RecordedRequest) parseAnthropic(body []byte) error {
 		}
 	}
 	for _, om := range a.Messages {
+		// A user message may carry multiple tool_result blocks (parallel
+		// tool calls — the agent's collectToolMessages merges consecutive
+		// tool messages into one user message). Each block becomes its own
+		// tool message so HasToolResult(id, ...) can match every result
+		// individually; text blocks stay in the user message.
 		m := Message{Role: om.Role}
+		var toolMsg *Message // pending tool message for the current tool_result block
+		flushTool := func() {
+			if toolMsg != nil {
+				r.Messages = append(r.Messages, *toolMsg)
+				toolMsg = nil
+			}
+		}
 		for _, b := range om.Content {
 			switch b.Type {
 			case "text":
@@ -221,10 +233,10 @@ func (r *RecordedRequest) parseAnthropic(body []byte) error {
 				}
 				m.ToolCalls = append(m.ToolCalls, ToolCall{ID: b.ID, Name: b.Name, Arguments: args})
 			case "tool_result":
-				m.Role = "tool"
-				m.ToolCallID = b.ToolUseID
+				flushTool()
+				tm := Message{Role: "tool", ToolCallID: b.ToolUseID}
 				if b.IsError != nil {
-					m.IsError = *b.IsError
+					tm.IsError = *b.IsError
 				}
 				if len(b.Content) > 0 {
 					if b.Content[0] == '[' {
@@ -235,17 +247,25 @@ func (r *RecordedRequest) parseAnthropic(body []byte) error {
 						if err := json.Unmarshal(b.Content, &parts); err == nil {
 							for _, p := range parts {
 								if p.Type == "text" {
-									m.Content += p.Text
+									tm.Content += p.Text
 								}
 							}
 						}
 					} else {
-						_ = json.Unmarshal(b.Content, &m.Content)
+						_ = json.Unmarshal(b.Content, &tm.Content)
 					}
 				}
+				toolMsg = &tm
 			}
 		}
-		r.Messages = append(r.Messages, m)
+		flushTool()
+		// A user message whose blocks were ALL tool_results leaves an empty
+		// stub — drop it (the results already became their own tool
+		// messages). Messages with text/thinking/tool_calls are kept even
+		// when the content field itself is empty.
+		if m.Content != "" || m.Thinking != "" || len(m.ToolCalls) > 0 {
+			r.Messages = append(r.Messages, m)
+		}
 	}
 	for _, t := range a.Tools {
 		r.Tools = append(r.Tools, Tool{Name: t.Name, Description: t.Description})
