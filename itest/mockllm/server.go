@@ -110,12 +110,20 @@ func (s *Server) handle(w http.ResponseWriter, r *http.Request) {
 
 // pathAllowed reports whether the request path belongs to this server's
 // protocol. base_url carries the /v1 prefix in both providers, so OpenAI
-// lands on /v1/chat/completions and Anthropic on /v1/messages.
+// lands on /v1/chat/completions and Anthropic on /v1/messages. The official
+// openai-go SDK resolves "/responses" against the configured base_url
+// WITHOUT adding a path segment: a bare host base produces /responses, while
+// a base_url ending in /v1 (with trailing slash) produces /v1/responses —
+// accept both.
 func (s *Server) pathAllowed(path string) bool {
-	if s.protocol == ProtocolAnthropic {
+	switch s.protocol {
+	case ProtocolAnthropic:
 		return path == "/v1/messages"
+	case ProtocolOpenAIResponses:
+		return path == "/responses" || path == "/v1/responses"
+	default:
+		return path == "/v1/chat/completions"
 	}
-	return path == "/v1/chat/completions"
 }
 
 // fail records the first fatal error (script exhaustion / precondition
@@ -141,17 +149,21 @@ func (s *Server) Script(steps ...Step) {
 func (s *Server) URL() string { return s.srv.URL }
 
 // BaseURL returns the provider-facing base URL to put in the config
-// fixture's base_url field. The two SDKs disagree on the /v1 prefix:
+// fixture's base_url field. The three SDKs disagree on path handling:
 //   - go-openai concatenates baseURL + "/chat/completions", so OpenAI needs
 //     the explicit "/v1" suffix.
 //   - anthropic-sdk-go appends a trailing "/" to a non-root base path and
 //     then resolves "v1/messages" against it, so a "/v1" suffix would
 //     produce "/v1/v1/messages" — Anthropic needs the bare host.
+//   - openai-go (official) resolves "/responses" against the base_url as-is:
+//     a bare host yields /responses, which is what the server accepts.
 func (s *Server) BaseURL() string {
-	if s.protocol == ProtocolAnthropic {
+	switch s.protocol {
+	case ProtocolAnthropic, ProtocolOpenAIResponses:
 		return s.srv.URL
+	default:
+		return s.srv.URL + "/v1"
 	}
-	return s.srv.URL + "/v1"
 }
 
 // Protocol returns the server's wire protocol.

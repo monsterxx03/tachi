@@ -3,6 +3,7 @@ package mockllm
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 )
 
 // ToolCall is the protocol-independent view of a requested tool invocation.
@@ -56,8 +57,11 @@ const maxRecordedBodySize = 64 * 1024
 // protocol, so this is deterministic).
 func normalizeRequest(method, path string, headers http.Header, body []byte) (*RecordedRequest, error) {
 	protocol := ProtocolOpenAI
-	if path == "/v1/messages" {
+	switch path {
+	case "/v1/messages":
 		protocol = ProtocolAnthropic
+	case "/responses", "/v1/responses":
+		protocol = ProtocolOpenAIResponses
 	}
 	req := &RecordedRequest{
 		Protocol: protocol,
@@ -71,9 +75,12 @@ func normalizeRequest(method, path string, headers http.Header, body []byte) (*R
 		req.RawBody = body
 	}
 	var err error
-	if path == "/v1/messages" {
+	switch path {
+	case "/v1/messages":
 		err = req.parseAnthropic(body)
-	} else {
+	case "/responses", "/v1/responses":
+		err = req.parseOpenAIResponses(body)
+	default:
 		err = req.parseOpenAI(body)
 	}
 	if err != nil {
@@ -241,6 +248,118 @@ func (r *RecordedRequest) parseAnthropic(body []byte) error {
 		r.Messages = append(r.Messages, m)
 	}
 	for _, t := range a.Tools {
+		r.Tools = append(r.Tools, Tool{Name: t.Name, Description: t.Description})
+	}
+	return nil
+}
+
+// ── OpenAI Responses (/responses) ─────────────────────────────────────────
+
+// oaiResponsesRequestBody mirrors the official openai-go Responses API
+// request (llm/openai_responses.go buildParams): a flat input item array plus
+// instructions and tools. input items are a union of message / function_call
+// / function_call_output, folded into the protocol-independent view below.
+type oaiResponsesRequestBody struct {
+	Model        string                  `json:"model"`
+	Instructions string                  `json:"instructions"`
+	Input        []oaiResponsesInputItem `json:"input"`
+	// Responses API tools are FLAT: {"type":"function","name":...,"parameters":...}
+	// (unlike chat completions which nests them under "function").
+	Tools []struct {
+		Type        string `json:"type"`
+		Name        string `json:"name"`
+		Description string `json:"description"`
+	} `json:"tools"`
+}
+
+type oaiResponsesInputItem struct {
+	Type      string          `json:"type"`
+	Role      string          `json:"role"`
+	Content   json.RawMessage `json:"content"`
+	CallID    string          `json:"call_id"`
+	Name      string          `json:"name"`
+	Arguments string          `json:"arguments"`
+	Output    json.RawMessage `json:"output"`
+}
+
+// concatText folds a content/output value (plain string or array of
+// {type:"text"/"input_text"/"output_text", text:...} parts) into one string.
+func concatText(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	if raw[0] == '[' {
+		var parts []struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if err := json.Unmarshal(raw, &parts); err == nil {
+			var sb strings.Builder
+			for _, p := range parts {
+				if p.Text != "" {
+					sb.WriteString(p.Text)
+				}
+			}
+			return sb.String()
+		}
+	}
+	var s string
+	_ = json.Unmarshal(raw, &s)
+	return s
+}
+
+// parseOpenAIResponses normalizes a POST /responses request. The flat item
+// array maps onto the same protocol-independent Message view as the other
+// wires: function_call items are attached to the preceding assistant message
+// (the Responses API serializes tool calls as standalone items, unlike chat
+// completions which nests them), and function_call_output becomes a tool
+// message.
+func (r *RecordedRequest) parseOpenAIResponses(body []byte) error {
+	var o oaiResponsesRequestBody
+	if err := json.Unmarshal(body, &o); err != nil {
+		return err
+	}
+	if o.Instructions != "" {
+		r.Messages = append(r.Messages, Message{Role: "system", Content: o.Instructions})
+	}
+	for _, item := range o.Input {
+		switch item.Type {
+		case "message":
+			r.Messages = append(r.Messages, Message{
+				Role:    item.Role,
+				Content: concatText(item.Content),
+			})
+		case "function_call":
+			// Attach to the preceding assistant message, mirroring the
+			// nested tool_calls shape of the chat-completions wire so
+			// protocol-agnostic assertions stay uniform.
+			if len(r.Messages) > 0 && r.Messages[len(r.Messages)-1].Role == "assistant" {
+				last := &r.Messages[len(r.Messages)-1]
+				last.ToolCalls = append(last.ToolCalls, ToolCall{
+					ID:        item.CallID,
+					Name:      item.Name,
+					Arguments: item.Arguments,
+				})
+			} else {
+				// Defensive: no preceding assistant message — emit a bare one.
+				r.Messages = append(r.Messages, Message{
+					Role: "assistant",
+					ToolCalls: []ToolCall{{
+						ID:        item.CallID,
+						Name:      item.Name,
+						Arguments: item.Arguments,
+					}},
+				})
+			}
+		case "function_call_output":
+			r.Messages = append(r.Messages, Message{
+				Role:       "tool",
+				ToolCallID: item.CallID,
+				Content:    concatText(item.Output),
+			})
+		}
+	}
+	for _, t := range o.Tools {
 		r.Tools = append(r.Tools, Tool{Name: t.Name, Description: t.Description})
 	}
 	return nil

@@ -318,3 +318,170 @@ func TestContractStatusError(t *testing.T) {
 		[]llm.Message{{Role: "user", Content: "hi"}}, nil, llm.ChatOptions{MaxTokens: 4096})
 	require.Error(t, err)
 }
+
+// TestContractOpenAIResponsesStream locks the Responses API SSE line format
+// against the real official openai-go client (via llm.OpenAIResponsesProvider):
+// data-only events discriminated by the JSON "type" field, reasoning deltas,
+// output_text deltas, function_call item announcement + argument deltas, and
+// the terminal response.completed carrying usage.
+func TestContractOpenAIResponsesStream(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAIResponses))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.Thinking("让我想想"),
+		mockllm.Text("你好"),
+		mockllm.ToolCallStart("call_1", "Bash", `{"command":"ls"}`),
+		mockllm.ToolArgsDelta(`" -la"`),
+		mockllm.Usage(120, 30),
+		mockllm.Finish("tool_calls"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewOpenAIResponsesProvider("test-key", mock.BaseURL(), "mock-model")
+	ch, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil,
+		llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+
+	events := consumeStream(t, ch)
+	// thinking + text + toolUseStart + inputJSON(initial args) + inputJSON(delta) + done
+	require.Len(t, events, 6)
+
+	require.Equal(t, llm.StreamEventThinkingDelta, events[0].Type)
+	require.Equal(t, "让我想想", events[0].ThinkingDelta)
+
+	require.Equal(t, llm.StreamEventTextDelta, events[1].Type)
+	require.Equal(t, "你好", events[1].TextDelta)
+
+	require.Equal(t, llm.StreamEventToolUseStart, events[2].Type)
+	require.NotNil(t, events[2].ToolCall)
+	require.Equal(t, "call_1", events[2].ToolCall.ID)
+	require.Equal(t, "Bash", events[2].ToolCall.Function.Name)
+	require.Equal(t, 0, events[2].ToolIndex)
+
+	// ToolCallStart's initial args arrive as a separate arguments delta
+	// (the item announcement carries empty arguments).
+	require.Equal(t, llm.StreamEventInputJSONDelta, events[3].Type)
+	require.Equal(t, `{"command":"ls"}`, events[3].InputDelta)
+
+	require.Equal(t, llm.StreamEventInputJSONDelta, events[4].Type)
+	require.Equal(t, `" -la"`, events[4].InputDelta)
+
+	require.Equal(t, llm.StreamEventDone, events[5].Type)
+	// finish reason derived from the completed response's trailing output
+	// item (function_call → "tool_calls").
+	require.Equal(t, "tool_calls", events[5].FinishReason)
+	require.NotNil(t, events[5].Usage)
+	require.Equal(t, int64(120), events[5].Usage.InputTokens)
+	require.Equal(t, int64(30), events[5].Usage.OutputTokens)
+}
+
+// TestContractOpenAIResponsesCache locks cache accounting on the Responses
+// wire: cached_tokens / cache_write_tokens inside the completed usage.
+func TestContractOpenAIResponsesCache(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAIResponses))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.Text("ok"),
+		mockllm.UsageWithCache(100, 20, 45, 10),
+		mockllm.Finish("stop"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewOpenAIResponsesProvider("test-key", mock.BaseURL(), "mock-model")
+	ch, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil, llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+	events := consumeStream(t, ch)
+	require.Len(t, events, 2)
+	require.Equal(t, llm.StreamEventDone, events[1].Type)
+	require.NotNil(t, events[1].Usage)
+	require.Equal(t, int64(100), events[1].Usage.InputTokens)
+	require.Equal(t, int64(45), events[1].Usage.CacheReadInputTokens)
+	require.Equal(t, int64(10), events[1].Usage.CacheCreationInputTokens)
+}
+
+// TestContractOpenAIResponsesJSON locks the non-streaming Responses response
+// (CreateChat — title generation /compact paths).
+func TestContractOpenAIResponsesJSON(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAIResponses))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.JSON("非流式回答", "推理内容")})
+
+	provider := llm.NewOpenAIResponsesProvider("test-key", mock.BaseURL(), "mock-model")
+	resp, err := provider.CreateChat(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil, llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+	require.Equal(t, "非流式回答", resp.Content)
+	require.Equal(t, "推理内容", resp.Reasoning)
+	require.Equal(t, "stop", resp.FinishReason)
+}
+
+// TestContractOpenAIResponsesNormalize locks the request-body normalization:
+// the flat Responses input array (message / function_call / function_call_output
+// items plus instructions) folds into the same protocol-independent Message
+// view the other wires produce — function_call attaches to the preceding
+// assistant message, function_call_output becomes a tool message, and the
+// instructions surface as a system message.
+func TestContractOpenAIResponsesNormalize(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAIResponses))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.Text("ok"),
+		mockllm.Usage(10, 5),
+		mockllm.Finish("stop"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewOpenAIResponsesProvider("test-key", mock.BaseURL(), "mock-model")
+	_, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{
+			{Role: "system", Content: "你是助手"},
+			{Role: "user", Content: "hi"},
+		},
+		[]llm.Tool{{Name: "Bash", Description: "run a command"}},
+		llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+
+	reqs := mock.Requests()
+	require.Len(t, reqs, 1)
+	require.Equal(t, mockllm.ProtocolOpenAIResponses, reqs[0].Protocol)
+	require.Equal(t, "/responses", reqs[0].Path)
+	require.Len(t, reqs[0].Messages, 2)
+	require.Equal(t, "system", reqs[0].Messages[0].Role)
+	require.Equal(t, "你是助手", reqs[0].Messages[0].Content)
+	require.Equal(t, "user", reqs[0].Messages[1].Role)
+	require.Equal(t, "hi", reqs[0].Messages[1].Content)
+	require.Len(t, reqs[0].Tools, 1)
+	require.Equal(t, "Bash", reqs[0].Tools[0].Name)
+}
+
+// TestContractOpenAIResponsesIncomplete locks the incomplete terminal path:
+// Finish("length") renders response.incomplete, which must carry the buffered
+// usage exactly like the completed path (regression for the dropped-usage bug).
+func TestContractOpenAIResponsesIncomplete(t *testing.T) {
+	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAIResponses))
+	defer mock.Close()
+	mock.Script(mockllm.Step{Reply: mockllm.Stream(
+		mockllm.Text("被截断了"),
+		mockllm.Usage(100, 20),
+		mockllm.Finish("length"),
+		mockllm.Done(),
+	)})
+
+	provider := llm.NewOpenAIResponsesProvider("test-key", mock.BaseURL(), "mock-model")
+	ch, err := provider.CreateChatStream(context.Background(),
+		[]llm.Message{{Role: "user", Content: "hi"}}, nil, llm.ChatOptions{MaxTokens: 4096})
+	require.NoError(t, err)
+
+	events := consumeStream(t, ch)
+	require.Len(t, events, 2)
+	require.Equal(t, llm.StreamEventTextDelta, events[0].Type)
+	require.Equal(t, "被截断了", events[0].TextDelta)
+
+	require.Equal(t, llm.StreamEventDone, events[1].Type)
+	require.Equal(t, "length", events[1].FinishReason)
+	require.NotNil(t, events[1].Usage, "incomplete terminal must carry usage")
+	require.Equal(t, int64(100), events[1].Usage.InputTokens)
+	require.Equal(t, int64(20), events[1].Usage.OutputTokens)
+}

@@ -68,12 +68,13 @@ func HasToolResult(id string, m Matcher) RequireFunc {
 // (the agent failed to execute the tool — e.g. filtered by --allowed-tools).
 // Error signals are protocol-dependent: the Anthropic wire carries is_error
 // on tool_result blocks, while OpenAI has no such field — the agent folds
-// failures into "Error: ..." content there. Accept both.
+// failures into "Error: ..." content there; the Responses wire uses an
+// "[error] " prefix. Accept all three.
 func HasToolError(id string) RequireFunc {
 	return func(req *RecordedRequest) string {
 		for _, msg := range req.Messages {
 			if msg.Role == "tool" && msg.ToolCallID == id &&
-				(msg.IsError || strings.HasPrefix(msg.Content, "Error:")) {
+				(msg.IsError || strings.HasPrefix(msg.Content, "Error:") || strings.HasPrefix(msg.Content, "[error] ")) {
 				return ""
 			}
 		}
@@ -83,6 +84,10 @@ func HasToolError(id string) RequireFunc {
 
 // HasThinking requires an assistant message whose thinking content matches m
 // (thinking blocks round-tripped into the history on multi-turn requests).
+// NOTE: the Responses protocol forbids resending previous-turn reasoning
+// content (llm.OpenAIResponsesProvider drops thinking blocks by design), so
+// scenario layers must assert the NEGATIVE on that wire (HasNoThinking)
+// instead of calling this.
 func HasThinking(m Matcher) RequireFunc {
 	return func(req *RecordedRequest) string {
 		for _, msg := range req.Messages {
@@ -93,6 +98,20 @@ func HasThinking(m Matcher) RequireFunc {
 			}
 		}
 		return "expected an assistant message with matching thinking content"
+	}
+}
+
+// HasNoThinking requires NO message in the request to carry thinking content.
+// Used on the Responses wire, which by design must not resend previous-turn
+// reasoning — a positive assertion here locks that behavior in.
+func HasNoThinking() RequireFunc {
+	return func(req *RecordedRequest) string {
+		for _, msg := range req.Messages {
+			if msg.Thinking != "" {
+				return "expected NO thinking content in any message, got " + strconv.Quote(msg.Thinking)
+			}
+		}
+		return ""
 	}
 }
 
@@ -135,9 +154,14 @@ func HasNTools(n int) RequireFunc {
 // HasThinkingDisabled requires the request to carry the thinking-disabled
 // signal. `-p` mode passes Thinking: &false (main_agent.go), which renders
 // per protocol as:
-//   - OpenAI: no reasoning_effort field at all (non-DeepSeek models; DeepSeek
-//     instead sends "thinking":{"type":"disabled"} via ExtraBody)
+//   - OpenAI (chat completions): no reasoning_effort field at all
+//     (non-DeepSeek models; DeepSeek instead sends
+//     "thinking":{"type":"disabled"} via ExtraBody)
 //   - Anthropic: "thinking":{"type":"disabled"}
+//   - OpenAI Responses: reasoning is either omitted entirely (non-reasoning
+//     models like mock-model) or sent as "reasoning":{"effort":"none"} —
+//     the substring "reasoning_effort" never appears on this wire, so the
+//     check must look for the "reasoning" field instead.
 //
 // The check uses substring matching on the raw body — robust to body
 // truncation and SDK serialization details.
@@ -151,7 +175,18 @@ func HasThinkingDisabled() RequireFunc {
 				return ""
 			}
 			return "expected thinking: {type: disabled} in request body"
-		default: // OpenAI
+		case ProtocolOpenAIResponses:
+			// mock-model is not a reasoning-family model, so thinking
+			// disabled is expressed by OMITTING the reasoning field. If the
+			// field is present it must be effort "none" (explicitly disabled
+			// on a reasoning model).
+			hasReasoning := bytes.Contains(req.RawBody, []byte(`"reasoning":`))
+			hasEffortNone := bytes.Contains(req.RawBody, []byte(`"effort":"none"`))
+			if hasReasoning && !hasEffortNone {
+				return "expected thinking disabled on Responses wire (no reasoning field, or effort: none)"
+			}
+			return ""
+		default: // ProtocolOpenAI only
 			if hasEffort {
 				return "expected no reasoning_effort in request body (thinking disabled)"
 			}

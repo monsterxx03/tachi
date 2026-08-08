@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -171,12 +172,249 @@ func renderOpenAIJSON(w http.ResponseWriter, content, reasoning string, toolCall
 	})
 }
 
-// ── Anthropic wire format ──────────────────────────────────────────────────
+// ── OpenAI Responses wire format ───────────────────────────────────────────
 //
-// anthropic-sdk-go's SSE decoder dispatches on blank-line-separated
-// `event:`/`data:` pairs; the JSON payload's `type` field must match the
-// event name. Thinking blocks carry a signature; usage is folded into
-// message_delta.
+// The official openai-go SDK parses responses-streaming SSE by unmarshalling
+// the `data:` JSON directly (the `event:` name is decorative unless the
+// "thread." prefix or synthesizeEventData mode is used) — the JSON's own
+// "type" field discriminates the event union. Usage arrives ONLY on the
+// terminal response.completed event (inside response.usage); mid-stream
+// events carry deltas only. renderOpenAIResponsesStream therefore buffers
+// the output items / usage / finish reason while emitting delta events, then
+// flushes everything in the completed event at Done.
+
+// oaiResponsesUsage mirrors the real Responses API usage payload: input /
+// output totals plus the cache accounting (cached_tokens /
+// cache_write_tokens) and reasoning tokens. Only attached to the terminal
+// response object.
+type oaiResponsesUsage struct {
+	InputTokens        int `json:"input_tokens"`
+	OutputTokens       int `json:"output_tokens"`
+	TotalTokens        int `json:"total_tokens"`
+	InputTokensDetails struct {
+		CachedTokens     int `json:"cached_tokens"`
+		CacheWriteTokens int `json:"cache_write_tokens"`
+	} `json:"input_tokens_details"`
+	OutputTokensDetails struct {
+		ReasoningTokens int `json:"reasoning_tokens"`
+	} `json:"output_tokens_details"`
+}
+
+func renderOpenAIResponsesStream(ctx context.Context, w http.ResponseWriter, chunks []Chunk) {
+	flusher, _ := w.(http.Flusher)
+	data := func(obj any) {
+		b, err := json.Marshal(obj)
+		if err != nil {
+			return
+		}
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		if flusher != nil {
+			flusher.Flush()
+		}
+	}
+
+	var (
+		text      strings.Builder // accumulated output_text (message item + delta)
+		textItem  map[string]any  // live message item in output (flushed on first text)
+		output    []any           // full output items echoed in the completed response
+		toolCalls []*struct {
+			ID        string
+			CallID    string
+			Name      string
+			Arguments strings.Builder
+			item      map[string]any // the live function_call item in output; Arguments mirror it
+		}
+		usage  *oaiResponsesUsage
+		finish string // scripted finish reason ("stop"/"tool_calls"/"length")
+		// NOTE: output_index is NOT the real API's global item counter —
+		// thinking/text deltas share the current index and only tool starts
+		// increment it. The SDK client tracks tool indices by item_id, so the
+		// difference is invisible; kept simple on purpose.
+		idx int // output_index / item counter
+	)
+	itemID := func(prefix string) string { return fmt.Sprintf("%s_%d", prefix, idx) }
+
+	for _, c := range chunks {
+		switch c.kind {
+		case chunkThinking:
+			// Reasoning deltas stream as standalone events; the reasoning
+			// item itself is not announced (the client only consumes deltas).
+			data(map[string]any{
+				"type":    "response.reasoning_text.delta",
+				"item_id": itemID("rs"), "output_index": idx, "content_index": 0,
+				"delta": c.text,
+			})
+		case chunkText:
+			// Flush the message item into output on the FIRST text delta so
+			// it precedes any later function_call items (the real API emits
+			// text before tool calls) — deriveResponsesFinishReason scans the
+			// trailing output item for the finish reason.
+			if textItem == nil {
+				textItem = map[string]any{
+					"type": "message", "id": itemID("msg"), "role": "assistant",
+					"status": "completed",
+					"content": []any{map[string]any{
+						"type": "output_text", "text": "", "annotations": []any{},
+					}},
+				}
+				output = append(output, textItem)
+			}
+			data(map[string]any{
+				"type":    "response.output_text.delta",
+				"item_id": itemID("msg"), "output_index": idx, "content_index": 0,
+				"delta": c.text,
+			})
+			text.WriteString(c.text)
+			textItem["content"] = []any{map[string]any{
+				"type": "output_text", "text": text.String(), "annotations": []any{},
+			}}
+		case chunkToolStart:
+			// Announce the function_call item (the client maps item_id →
+			// sequential tool index here), then stream its initial args.
+			id := itemID("fc")
+			item := map[string]any{
+				"type": "function_call", "id": id,
+				"call_id": c.id, "name": c.name, "arguments": "",
+			}
+			data(map[string]any{
+				"type":    "response.output_item.added",
+				"item_id": id, "output_index": idx, "item": item,
+			})
+			tc := &struct {
+				ID        string
+				CallID    string
+				Name      string
+				Arguments strings.Builder
+				item      map[string]any
+			}{ID: id, CallID: c.id, Name: c.name, item: item}
+			toolCalls = append(toolCalls, tc)
+			output = append(output, item)
+			if c.args != "" {
+				tc.Arguments.WriteString(c.args)
+				tc.item["arguments"] = tc.Arguments.String() // keep the echoed item in sync
+				data(map[string]any{
+					"type":    "response.function_call_arguments.delta",
+					"item_id": id, "output_index": idx, "delta": c.args,
+				})
+			}
+			idx++
+		case chunkToolArgs:
+			if len(toolCalls) > 0 {
+				tc := toolCalls[len(toolCalls)-1]
+				tc.Arguments.WriteString(c.args)
+				tc.item["arguments"] = tc.Arguments.String() // keep the echoed item in sync
+				data(map[string]any{
+					"type":    "response.function_call_arguments.delta",
+					"item_id": tc.ID, "output_index": idx - 1, "delta": c.args,
+				})
+			}
+		case chunkFinish:
+			finish = c.finish
+		case chunkUsage:
+			u := &oaiResponsesUsage{}
+			u.InputTokens = c.promptTokens
+			u.OutputTokens = c.completionTokens
+			u.TotalTokens = c.promptTokens + c.completionTokens
+			u.InputTokensDetails.CachedTokens = c.cacheReadTokens
+			u.InputTokensDetails.CacheWriteTokens = c.cacheCreationToks
+			usage = u
+		case chunkDone:
+			// The message item was already flushed into output on the first
+			// text delta; now emit the terminal event carrying the full
+			// response object + usage.
+			if finish == "length" || finish == "max_tokens" {
+				resp := map[string]any{
+					"id": "resp_mock", "object": "response",
+					"created_at": time.Now().Unix(), "status": "incomplete",
+					"model": "mock-model", "output": output,
+					"incomplete_details": map[string]any{"reason": "max_output_tokens"},
+				}
+				if usage != nil {
+					resp["usage"] = usage // same accounting as the completed path
+				}
+				data(map[string]any{"type": "response.incomplete", "response": resp})
+				return
+			}
+			resp := map[string]any{
+				"id": "resp_mock", "object": "response",
+				"created_at": time.Now().Unix(), "status": "completed",
+				"model": "mock-model", "output": output,
+			}
+			if usage != nil {
+				resp["usage"] = usage
+			}
+			data(map[string]any{"type": "response.completed", "response": resp})
+			return
+		case chunkPause:
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(c.pause):
+			}
+		case chunkMalformed:
+			fmt.Fprint(w, "data: {broken json\n\n")
+			if flusher != nil {
+				flusher.Flush()
+			}
+		case chunkSignature:
+			// Responses reasoning has no signature concept — ignored.
+		case chunkPing:
+			// Responses API has no heartbeat event — ignored.
+		}
+	}
+	// No Done chunk: close the stream (the client's fallback emits a clean
+	// stop without a completed event).
+}
+
+// renderOpenAIResponsesJSON renders the non-streaming Responses API response
+// (CreateChat calls — title generation, /compact, deepresearch).
+func renderOpenAIResponsesJSON(w http.ResponseWriter, content, reasoning string, toolCallChunks []Chunk) {
+	var output []any
+	if reasoning != "" {
+		output = append(output, map[string]any{
+			"type": "reasoning", "id": "rs_0",
+			// Real DeepSeek /responses returns reasoning as PLAINTEXT
+			// reasoning_text parts in content (summary is empty) — mirror
+			// that so the client's reasoning collection path is exercised.
+			"summary": []any{},
+			"content": []any{map[string]any{
+				"type": "reasoning_text", "text": reasoning, "annotations": []any{},
+			}},
+		})
+	}
+	if content != "" {
+		output = append(output, map[string]any{
+			"type": "message", "id": "msg_0", "role": "assistant", "status": "completed",
+			"content": []any{map[string]any{
+				"type": "output_text", "text": content, "annotations": []any{},
+			}},
+		})
+	}
+	for _, c := range toolCallChunks {
+		switch c.kind {
+		case chunkToolStart:
+			output = append(output, map[string]any{
+				"type": "function_call", "id": "fc_0",
+				"call_id": c.id, "name": c.name, "arguments": c.args,
+			})
+		case chunkToolArgs:
+			// Append to the last function_call's arguments — mirrors
+			// renderOpenAIJSON so split-argument streams stay intact.
+			if len(output) > 0 {
+				if last, ok := output[len(output)-1].(map[string]any); ok && last["type"] == "function_call" {
+					last["arguments"] = last["arguments"].(string) + c.args
+				}
+			}
+		}
+	}
+	resp := map[string]any{
+		"id": "resp_mock", "object": "response",
+		"created_at": time.Now().Unix(), "status": "completed",
+		"model": "mock-model", "output": output,
+		"usage": oaiResponsesUsage{TotalTokens: 0},
+	}
+	writeJSON(w, resp)
+}
 
 // anthropicUsage mirrors the real API's usage payload: input/output plus the
 // cache accounting fields (cache_creation_input_tokens / cache_read_input_tokens)

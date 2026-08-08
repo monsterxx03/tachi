@@ -1,6 +1,7 @@
-// Package mockllm implements an in-process mock LLM server that speaks both
-// the OpenAI (POST /v1/chat/completions) and Anthropic (POST /v1/messages)
-// wire protocols over httptest.
+// Package mockllm implements an in-process mock LLM server that speaks the
+// OpenAI chat-completions (POST /v1/chat/completions), Anthropic
+// (POST /v1/messages) and OpenAI Responses (POST /responses) wire protocols
+// over httptest.
 //
 // Scenarios script the server with protocol-agnostic building blocks:
 //
@@ -32,13 +33,20 @@ const (
 	ProtocolOpenAI Protocol = iota
 	// ProtocolAnthropic serves POST /v1/messages (anthropic-sdk-go client).
 	ProtocolAnthropic
+	// ProtocolOpenAIResponses serves POST /responses (official openai-go
+	// Responses API client).
+	ProtocolOpenAIResponses
 )
 
 func (p Protocol) String() string {
-	if p == ProtocolAnthropic {
+	switch p {
+	case ProtocolAnthropic:
 		return "anthropic"
+	case ProtocolOpenAIResponses:
+		return "openai-res"
+	default:
+		return "openai"
 	}
-	return "openai"
 }
 
 // chunkKind enumerates the stream building blocks.
@@ -179,9 +187,12 @@ type Step struct {
 func Stream(chunks ...Chunk) ReplyFunc {
 	return func(ctx context.Context, w http.ResponseWriter, p Protocol) {
 		writeSSEHeaders(w)
-		if p == ProtocolAnthropic {
+		switch p {
+		case ProtocolAnthropic:
 			renderAnthropicStream(ctx, w, chunks)
-		} else {
+		case ProtocolOpenAIResponses:
+			renderOpenAIResponsesStream(ctx, w, chunks)
+		default:
 			renderOpenAIStream(ctx, w, chunks)
 		}
 	}
@@ -192,9 +203,12 @@ func Stream(chunks ...Chunk) ReplyFunc {
 func JSON(content string, reasoning string, toolCalls ...Chunk) ReplyFunc {
 	return func(_ context.Context, w http.ResponseWriter, p Protocol) {
 		w.Header().Set("Content-Type", "application/json")
-		if p == ProtocolAnthropic {
+		switch p {
+		case ProtocolAnthropic:
 			renderAnthropicJSON(w, content, reasoning)
-		} else {
+		case ProtocolOpenAIResponses:
+			renderOpenAIResponsesJSON(w, content, reasoning, toolCalls)
+		default:
 			renderOpenAIJSON(w, content, reasoning, toolCalls)
 		}
 	}
@@ -221,9 +235,12 @@ func StatusError(code int, msg string) ReplyFunc {
 func MalformedSSE() ReplyFunc {
 	return func(ctx context.Context, w http.ResponseWriter, p Protocol) {
 		writeSSEHeaders(w)
-		if p == ProtocolAnthropic {
+		switch p {
+		case ProtocolAnthropic:
 			renderAnthropicStream(ctx, w, []Chunk{{kind: chunkMalformed}})
-		} else {
+		case ProtocolOpenAIResponses:
+			renderOpenAIResponsesStream(ctx, w, []Chunk{{kind: chunkMalformed}})
+		default:
 			renderOpenAIStream(ctx, w, []Chunk{{kind: chunkMalformed}})
 		}
 	}

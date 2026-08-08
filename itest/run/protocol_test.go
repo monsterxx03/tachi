@@ -2,12 +2,17 @@
 
 package run_test
 
-// Dual-protocol -p pipe mode scenarios: the SAME script shapes served over
-// both wire formats (docs §3.2 — "same scenario, both providers behave
+// Triple-protocol -p pipe mode scenarios: the SAME script shapes served over
+// all wire formats (docs §3.2 — "same scenario, all providers behave
 // identically"). Each scenario is written once as a DescribeTable
 // parameterized by protocol; adding a new provider protocol is a one-line
-// Entry. Thinking round-trips are asserted in both protocols (OpenAI echoes
-// reasoning_content, Anthropic thinking blocks with signature).
+// Entry.
+//
+// Thinking round-trips: OpenAI (reasoning_content) and Anthropic (thinking
+// blocks with signature) ECHO previous-turn reasoning back; the Responses
+// protocol FORBIDS resending it (llm.OpenAIResponsesProvider drops thinking
+// blocks), so the tool-loop scenario asserts the negative on that wire
+// (HasNoThinking) — see thinkingRoundTripRequire.
 
 import (
 	"time"
@@ -18,6 +23,18 @@ import (
 	"github.com/onsi/ginkgo/v2"
 	"github.com/onsi/gomega"
 )
+
+// thinkingRoundTripRequire returns the second-round thinking assertion for a
+// protocol: HasThinking on wires that echo reasoning back, HasNoThinking on
+// Responses (which by design must not resend previous-turn reasoning). m is a
+// gomega matcher (ContainSubstring, ...) — the mockllm.Matcher interface is
+// satisfied by every gomega matcher.
+func thinkingRoundTripRequire(p mockllm.Protocol, m mockllm.Matcher) mockllm.RequireFunc {
+	if p == mockllm.ProtocolOpenAIResponses {
+		return mockllm.HasNoThinking()
+	}
+	return mockllm.HasThinking(m)
+}
 
 // startMock starts a protocol-specific mock server wired into an isolated
 // --home whose config fixture follows the same protocol (provider type +
@@ -68,6 +85,7 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses),
 	)
 
 	ginkgo.DescribeTable("工具调用循环: thinking 回传 + tool result 回传第二次请求",
@@ -83,8 +101,9 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 				{
 					// 第二轮请求必须回传 thinking(OpenAI reasoning_content /
 					// Anthropic thinking block with signature)与工具结果;
+					// Responses 线不回传 thinking → 负向断言(HasNoThinking)。
 					// usage 带 cache 计数 —— 第二轮历史命中缓存是真实场景
-					Require: mockllm.HasThinking(gomega.ContainSubstring("让我查一下目录")),
+					Require: thinkingRoundTripRequire(p, gomega.ContainSubstring("让我查一下目录")),
 					Reply: mockllm.Stream(
 						mockllm.Text("目录里有 README.md。"),
 						mockllm.UsageWithCache(200, 20, 120, 40),
@@ -134,8 +153,9 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 			gomega.Expect(tcUsage).NotTo(gomega.BeNil())
 			gomega.Expect(tcUsage.InputTokens).To(gomega.Equal(int64(200)))
 			gomega.Expect(tcUsage.CacheReadInputTokens).To(gomega.Equal(int64(120)))
-			if p == mockllm.ProtocolAnthropic {
-				// cache creation 只在 Anthropic 线格式上表达
+			if p == mockllm.ProtocolAnthropic || p == mockllm.ProtocolOpenAIResponses {
+				// cache creation 只在 Anthropic（cache_creation_input_tokens）
+				// 与 Responses（input_tokens_details.cache_write_tokens）线格式上表达
 				gomega.Expect(tcUsage.CacheCreationInputTokens).To(gomega.Equal(int64(40)))
 			} else {
 				gomega.Expect(tcUsage.CacheCreationInputTokens).To(gomega.Equal(int64(0)))
@@ -143,6 +163,7 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses),
 	)
 
 	ginkgo.DescribeTable("429 两次后重试成功",
@@ -171,6 +192,7 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses),
 	)
 
 	ginkgo.DescribeTable("持续 429: 重试耗尽后 run 模式报错退出 (exit 1 + error 事件)",
@@ -204,6 +226,7 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses),
 	)
 
 	ginkgo.DescribeTable("--allowed-tools 生效: 白名单外工具不执行并报错回传",
@@ -254,6 +277,7 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses),
 	)
 
 	ginkgo.DescribeTable("spec.timeout 生效: 慢响应快速失败而非挂起",
@@ -300,5 +324,6 @@ var _ = ginkgo.Describe("-p pipe mode (dual protocol)", func() {
 		},
 		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI, ginkgo.SpecTimeout(15*time.Second)),
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic, ginkgo.SpecTimeout(15*time.Second)),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses, ginkgo.SpecTimeout(15*time.Second)),
 	)
 })
