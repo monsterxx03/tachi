@@ -265,6 +265,25 @@ func GetSubagentEventSink(ctx context.Context) SubagentEventSink {
 	return sink
 }
 
+type toolIDKey struct{}
+
+// WithToolID returns a context carrying the executing tool call's ID. The
+// agent loop injects it before invoking a tool so tools that communicate
+// with an external client (e.g. the ACP terminal Bash) can reference their
+// own tool call (e.g. embedding a terminal in its tool-call update).
+func WithToolID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, toolIDKey{}, id)
+}
+
+// ToolID extracts the current tool call ID from context, if any.
+func ToolID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(toolIDKey{}).(string)
+	return id
+}
+
 // ImagePartsFromCtx retrieves image parts previously stored via AddImageParts.
 // Returns nil if the context has no carrier or no parts were added.
 func ImagePartsFromCtx(ctx context.Context) []llm.ContentPart {

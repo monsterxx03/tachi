@@ -404,7 +404,7 @@ func gitCommitAndPush(ctx context.Context, worktreePath, branch, token string, i
 func registerImplementationTools(a *agent.AIAgent, toolNames []string) {
 	constructors := map[string]func() tools.Tool{
 		"ReadFile":  func() tools.Tool { return tools.NewReadTool() },
-		"WriteFile": func() tools.Tool { return tools.WriteTool{} },
+		"WriteFile": func() tools.Tool { return tools.NewWriteTool() },
 		"EditFile":  func() tools.Tool { return tools.NewEditTool() },
 		"Bash":      func() tools.Tool { return tools.NewBashTool(tools.BashToolConfig{}) },
 		"Glob":      func() tools.Tool { return tools.GlobTool{} },

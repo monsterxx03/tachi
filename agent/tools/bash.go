@@ -13,6 +13,8 @@ import (
 	"time"
 	"unicode/utf8"
 
+	acp "github.com/coder/acp-go-sdk"
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
@@ -60,7 +62,20 @@ type BashTool struct {
 	// automatically moved to the background. 0 = defaultForegroundWindow.
 	// Exposed as a field for tests.
 	foregroundWindow time.Duration
+
+	// acpMode routes execution through the ACP client's terminal API
+	// (terminal/create + wait_for_exit + kill + release) when a connection is
+	// available, instead of running the command locally. Enabled only for ACP
+	// sessions whose client declares the terminal capability; other entry
+	// modes (tui/channel/-p) keep the local implementation.
+	acpMode bool
 }
+
+// SetACPMode enables ACP terminal delegation. In ACP mode ExecuteContext
+// executes commands via the client's terminal API (real-time output in the
+// editor) instead of locally. The permission policy (checkBashPermission) is
+// unaffected — it gates on the tool name, not the execution backend.
+func (t *BashTool) SetACPMode(v bool) { t.acpMode = v }
 
 // BashToolConfig carries the tool's construction options.
 type BashToolConfig struct {
@@ -88,7 +103,7 @@ func (t *BashTool) Description() string {
 	desc := "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +
 		"Use for running build commands, tests, git operations, and other shell tasks. "
-	if t.processManager != nil {
+	if t.processManager != nil && !t.acpMode {
 		desc += "Commands still running after the foreground window (~15s, or the timeout value if shorter) " +
 			"are automatically moved to the background. To manage them, call this tool again with the " +
 			"`list_bg` parameter set to true (lists running background processes) or the `stop_name` parameter " +
@@ -98,18 +113,29 @@ func (t *BashTool) Description() string {
 	return desc
 }
 func (t *BashTool) Properties() map[string]PropertySchema {
-	timeoutDesc := "Foreground window in milliseconds — commands still running after it are moved to the background (default 15000, max 600000)"
-	if t.processManager == nil {
-		timeoutDesc = "Optional timeout in milliseconds before the command is killed (max 600000)"
+	// ACP terminal mode: the command runs client-side and the client owns the
+	// process lifecycle — there is no local backgrounding. The timeout is a
+	// hard kill deadline and may WIDEN the default window, so long-running
+	// commands (builds/tests) must set it explicitly. Background management
+	// params are dropped entirely.
+	timeoutDesc := "Hard kill deadline in milliseconds — the command is killed after this duration (default 15000, max 600000). Set it explicitly for long-running builds/tests."
+	if !t.acpMode {
+		timeoutDesc = "Foreground window in milliseconds — commands still running after it are moved to the background (default 15000, max 600000)"
+		if t.processManager == nil {
+			timeoutDesc = "Optional timeout in milliseconds before the command is killed (max 600000)"
+		}
 	}
-	return map[string]PropertySchema{
-		"command":    {Type: "string", Description: "The bash command to execute"},
-		"timeout":    {Type: "integer", Description: timeoutDesc, Minimum: new(1.0), Maximum: new(600000.0), Default: 15000},
-		"background": {Type: "boolean", Description: "Set true to run this command in the background. Requires bg_name."},
-		"bg_name":    {Type: "string", Description: "A unique name for this background process. Required when background=true. Reference this name later via the stop_name parameter."},
-		"stop_name":  {Type: "string", Description: "When set, stops the background process with this bg_name instead of executing a command. This is a JSON parameter of this tool, not a shell command."},
-		"list_bg":    {Type: "boolean", Description: "When set to true, lists all running background processes instead of executing a command. This is a JSON parameter of this tool, not a shell command."},
+	props := map[string]PropertySchema{
+		"command": {Type: "string", Description: "The bash command to execute"},
+		"timeout": {Type: "integer", Description: timeoutDesc, Minimum: new(1.0), Maximum: new(600000.0), Default: 15000},
 	}
+	if !t.acpMode {
+		props["background"] = PropertySchema{Type: "boolean", Description: "Set true to run this command in the background. Requires bg_name."}
+		props["bg_name"] = PropertySchema{Type: "string", Description: "A unique name for this background process. Required when background=true. Reference this name later via the stop_name parameter."}
+		props["stop_name"] = PropertySchema{Type: "string", Description: "When set, stops the background process with this bg_name instead of executing a command. This is a JSON parameter of this tool, not a shell command."}
+		props["list_bg"] = PropertySchema{Type: "boolean", Description: "When set to true, lists all running background processes instead of executing a command. This is a JSON parameter of this tool, not a shell command."}
+	}
+	return props
 }
 func (t BashTool) Required() []string { return []string{"command"} }
 func (t BashTool) Parallel() bool     { return false }
@@ -120,6 +146,31 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		return "", err
 	}
 
+	// ACP terminal delegation: execute via the client's terminal API so the
+	// editor shows real-time output. Only active when the session enabled ACP
+	// mode AND a connection is present (defensive — a stray flag without a
+	// connection falls back to local execution below).
+	if t.acpMode {
+		// Background management belongs to local execution (ProcessManager).
+		// Terminal mode has no such concept — the client owns the process
+		// lifecycle — so reject these params explicitly instead of silently
+		// ignoring them (the schema already omits them, but models may reuse
+		// local-mode habits from other sessions).
+		if a.Background || a.ListBg || a.StopName != "" || a.BgName != "" {
+			return "", fmt.Errorf("background process management is not supported in ACP terminal mode")
+		}
+		if conn := acpctx.Conn(ctx); conn != nil {
+			return t.executeTerminal(ctx, conn, &a)
+		}
+	}
+
+	return t.executeLocal(ctx, &a)
+}
+
+// executeLocal runs the command on the local machine. This is the original
+// BashTool behavior, used by every entry mode (tui/channel/-p) and by ACP
+// sessions whose client does not declare the terminal capability.
+func (t BashTool) executeLocal(ctx context.Context, a *bashArgs) (string, error) {
 	pm := t.processManager
 
 	// list_bg: list all background processes
@@ -349,6 +400,230 @@ func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		}
 		killAndDrain()
 		return interrupted(fmt.Sprintf("Command interrupted: %v", ctx.Err()))
+	}
+}
+
+// terminalConn abstracts the ACP client-side terminal API subset used by
+// executeTerminal, so the terminal path can be unit-tested with a fake.
+// *acp.AgentSideConnection satisfies it.
+type terminalConn interface {
+	CreateTerminal(ctx context.Context, req acp.CreateTerminalRequest) (acp.CreateTerminalResponse, error)
+	KillTerminal(ctx context.Context, req acp.KillTerminalRequest) (acp.KillTerminalResponse, error)
+	TerminalOutput(ctx context.Context, req acp.TerminalOutputRequest) (acp.TerminalOutputResponse, error)
+	ReleaseTerminal(ctx context.Context, req acp.ReleaseTerminalRequest) (acp.ReleaseTerminalResponse, error)
+	WaitForTerminalExit(ctx context.Context, req acp.WaitForTerminalExitRequest) (acp.WaitForTerminalExitResponse, error)
+	SessionUpdate(ctx context.Context, n acp.SessionNotification) error
+}
+
+// clientCallCtx returns a detached short-lived context for client API calls
+// that must survive the run context's cancellation (kill/output during
+// interrupt, release). The SDK's waitForResponse sends a $/cancel_request and
+// drops the response on ctx cancellation — issuing cleanup calls with the
+// already-cancelled run ctx would make them no-ops. A fresh context avoids
+// racing our own cleanup against the cancelled run.
+func clientCallCtx() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.Background(), 5*time.Second)
+}
+
+// executeTerminal runs the command through the ACP client's terminal API:
+//
+//  1. terminal/create spawns the command in the client environment (async)
+//  2. the terminal is embedded in the tool call so the client streams output
+//  3. terminal/wait_for_exit races a foreground window (kill on timeout)
+//  4. terminal/release frees the client-side terminal on every exit path
+//
+// The command runs as `bash -c <command>` so the full shell string keeps its
+// exact semantics (pipes, &&, redirection), matching local execution. ACP
+// terminals expose a single merged output stream — stdout and stderr are
+// reported together in BashResult.Stdout.
+func (t BashTool) executeTerminal(ctx context.Context, conn terminalConn, a *bashArgs) (string, error) {
+	if a.Command == "" {
+		return "", fmt.Errorf("command is required")
+	}
+
+	sessionID := acpctx.SessionID(ctx)
+
+	// ACP requires an absolute cwd. Session cwds are absolute by contract;
+	// resolve defensively so a relative dir never reaches the client. An
+	// empty cwd is rejected explicitly rather than silently falling back to
+	// the agent process's local directory (wrong semantics on remote setups).
+	cwd := wdctx.Dir(ctx)
+	if cwd == "" {
+		return "", fmt.Errorf("session working directory is not set; cannot run ACP terminal command")
+	}
+	if !filepath.IsAbs(cwd) {
+		if abs, err := filepath.Abs(cwd); err == nil {
+			cwd = abs
+		}
+	}
+
+	createResp, err := conn.CreateTerminal(ctx, acp.CreateTerminalRequest{
+		SessionId:       sessionID,
+		Command:         "bash",
+		Args:            []string{"-c", a.Command},
+		Cwd:             &cwd,
+		OutputByteLimit: acp.Ptr(maxOutputSize),
+	})
+	if err != nil {
+		return "", fmt.Errorf("ACP terminal create failed: %w", err)
+	}
+	terminalID := createResp.TerminalId
+	if terminalID == "" {
+		// Nothing was created client-side — no release needed, but fail fast
+		// instead of firing every subsequent request with an empty ID.
+		return "", fmt.Errorf("ACP terminal create returned an empty terminalId")
+	}
+
+	// Release is mandatory and must survive ctx cancellation, so it runs on a
+	// detached short-lived context. The deferred call makes every exit path
+	// (normal exit, timeout, cancel, wait error) release exactly once.
+	released := false
+	release := func() {
+		if released {
+			return
+		}
+		released = true
+		rctx, cancel := clientCallCtx()
+		defer cancel()
+		_, _ = conn.ReleaseTerminal(rctx, acp.ReleaseTerminalRequest{
+			SessionId:  sessionID,
+			TerminalId: terminalID,
+		})
+	}
+	defer release()
+
+	// Embed the terminal in the tool call so the client renders live output
+	// inline and keeps it after release. Requires the executor to have
+	// injected the tool call ID (tools.WithToolID); without it the terminal
+	// still runs and streams in the client's terminal view.
+	if toolID := ToolID(ctx); toolID != "" {
+		_ = conn.SessionUpdate(ctx, acp.SessionNotification{
+			SessionId: sessionID,
+			Update: acp.UpdateToolCall(
+				acp.ToolCallId(toolID),
+				acp.WithUpdateContent([]acp.ToolCallContent{acp.ToolTerminalRef(terminalID)}),
+			),
+		})
+	}
+
+	// Kill deadline: ACP terminal mode has no backgrounding path, so the
+	// timeout is a HARD kill deadline. Unlike local mode it may also WIDEN
+	// the default window — long-running builds/tests must be able to set
+	// timeout=300000 without being killed after the default 15s.
+	window := t.foregroundWindow
+	if window <= 0 {
+		window = defaultForegroundWindow
+	}
+	if a.Timeout != nil && *a.Timeout > 0 {
+		window = time.Duration(*a.Timeout) * time.Millisecond
+	}
+
+	start := time.Now()
+	// waitCtx bounds the wait_for_exit call: when the run context is
+	// cancelled or the timeout fires, waitCancel() releases the goroutine
+	// (and the SDK's pending entry) instead of leaving it hung until the
+	// client happens to respond.
+	waitCtx, waitCancel := context.WithCancel(ctx)
+	defer waitCancel()
+	waitResp := make(chan acp.WaitForTerminalExitResponse, 1)
+	waitErr := make(chan error, 1)
+	go func() {
+		resp, err := conn.WaitForTerminalExit(waitCtx, acp.WaitForTerminalExitRequest{
+			SessionId:  sessionID,
+			TerminalId: terminalID,
+		})
+		if err != nil {
+			waitErr <- err
+			return
+		}
+		waitResp <- resp
+	}()
+
+	// fetchOutput retrieves the client-side terminal output.
+	fetchOutput := func(ctx context.Context) (string, bool) {
+		out, err := conn.TerminalOutput(ctx, acp.TerminalOutputRequest{
+			SessionId:  sessionID,
+			TerminalId: terminalID,
+		})
+		if err != nil {
+			return "", false
+		}
+		return out.Output, out.Truncated
+	}
+
+	// interrupt kills the command and reports the partial output. Shared by
+	// the timeout and cancel paths. Kill/output run on detached contexts: the
+	// run ctx may already be cancelled here, and the SDK would turn
+	// ctx-cancelled calls into no-ops (with a $/cancel_request) — the cleanup
+	// must actually reach the client.
+	interrupt := func(reason string) (string, error) {
+		kctx, kcancel := clientCallCtx()
+		_, _ = conn.KillTerminal(kctx, acp.KillTerminalRequest{
+			SessionId:  sessionID,
+			TerminalId: terminalID,
+		})
+		kcancel()
+		octx, ocancel := clientCallCtx()
+		out, truncated := fetchOutput(octx)
+		ocancel()
+		return marshalResult(BashResult{
+			Stdout:      out,
+			Stderr:      reason,
+			ExitCode:    -1,
+			DurationMs:  time.Since(start).Milliseconds(),
+			Interrupted: true,
+			Truncated:   truncated,
+		})
+	}
+
+	// timer bounds the kill deadline; Stop() releases its resources as soon
+	// as the command exits (a short-lived command would otherwise keep the
+	// timer alive until the window elapses).
+	timer := time.NewTimer(window)
+	defer timer.Stop()
+
+	select {
+	case resp := <-waitResp:
+		exitCode := 0
+		if resp.ExitCode != nil {
+			exitCode = *resp.ExitCode
+		}
+		out, truncated := fetchOutput(ctx)
+		result := BashResult{
+			Stdout:     out,
+			ExitCode:   exitCode,
+			DurationMs: time.Since(start).Milliseconds(),
+			Truncated:  truncated,
+		}
+		if resp.Signal != nil {
+			// Terminated by a signal — mirror local semantics where a
+			// signal-killed command reports a non-zero exit.
+			result.ExitCode = -1
+			result.Stderr = fmt.Sprintf("terminated by signal %s", *resp.Signal)
+		}
+		return marshalResult(result)
+
+	case err := <-waitErr:
+		if ctx.Err() != nil {
+			// The wait failed because the run context was cancelled —
+			// report the interruption instead of a spurious wait error
+			// (the client-side command is killed by the interrupt path).
+			return interrupt(fmt.Sprintf("Command interrupted: %v", ctx.Err()))
+		}
+		// wait_for_exit failed (unsupported client, transport error) — kill
+		// the command so nothing keeps running client-side.
+		_, _ = conn.KillTerminal(ctx, acp.KillTerminalRequest{
+			SessionId:  sessionID,
+			TerminalId: terminalID,
+		})
+		release()
+		return "", fmt.Errorf("ACP terminal wait_for_exit failed: %w", err)
+
+	case <-timer.C:
+		return interrupt(fmt.Sprintf("Command killed after %s (client-side terminal timeout)", window))
+
+	case <-ctx.Done():
+		return interrupt(fmt.Sprintf("Command interrupted: %v", ctx.Err()))
 	}
 }
 

@@ -37,9 +37,15 @@ type cachedEntry struct {
 
 // ReadTool reads the contents of a file
 type ReadTool struct {
-	mu    sync.RWMutex
-	cache map[string]cachedEntry
+	mu      sync.RWMutex
+	cache   map[string]cachedEntry
+	acpMode bool // true = route reads through ACP readTextFile when a connection is available
 }
+
+// SetACPMode enables ACP mode. In ACP mode ExecuteContext routes reads
+// through conn.ReadTextFile (client-side file system) instead of the local
+// filesystem.
+func (t *ReadTool) SetACPMode(v bool) { t.acpMode = v }
 
 // NewReadTool creates a ReadTool with initialized cache state.
 func NewReadTool() *ReadTool {
@@ -132,36 +138,38 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	}
 
 	// In ACP mode, route through ACP client so Zed shows which file is being read.
-	if conn := acpctx.Conn(ctx); conn != nil {
-		resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
-			SessionId: acpctx.SessionID(ctx),
-			Path:      filePath,
-		})
-		if err != nil {
-			return "", fmt.Errorf("ACP readTextFile failed: %w", err)
-		}
-
-		// Check for image files (by extension + magic bytes)
-		content := []byte(resp.Content)
-		if mime := detectImageMime(filePath, content); mime != "" {
-			encoded := base64.StdEncoding.EncodeToString(content)
-			AddImageParts(ctx, []llm.ContentPart{
-				{
-					Type:      llm.ContentPartImage,
-					MediaType: mime,
-					Data:      encoded,
-				},
+	if t.acpMode {
+		if conn := acpctx.Conn(ctx); conn != nil {
+			resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
+				SessionId: acpctx.SessionID(ctx),
+				Path:      filePath,
 			})
-			return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
-				filepath.Base(filePath), mime, len(content), len(encoded)), nil
-		}
+			if err != nil {
+				return "", fmt.Errorf("ACP readTextFile failed: %w", err)
+			}
 
-		// Reject other binary files.
-		if isBinaryFile(content) {
-			return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
-		}
+			// Check for image files (by extension + magic bytes)
+			content := []byte(resp.Content)
+			if mime := detectImageMime(filePath, content); mime != "" {
+				encoded := base64.StdEncoding.EncodeToString(content)
+				AddImageParts(ctx, []llm.ContentPart{
+					{
+						Type:      llm.ContentPartImage,
+						MediaType: mime,
+						Data:      encoded,
+					},
+				})
+				return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
+					filepath.Base(filePath), mime, len(content), len(encoded)), nil
+			}
 
-		return formatReadOutput(strings.Split(resp.Content, "\n"), argsMap.Offset, argsMap.Limit), nil
+			// Reject other binary files.
+			if isBinaryFile(content) {
+				return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
+			}
+
+			return formatReadOutput(strings.Split(resp.Content, "\n"), argsMap.Offset, argsMap.Limit), nil
+		}
 	}
 
 	// Check file size before reading.

@@ -99,7 +99,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	dreamAgent.RegisterTool(tools.NewReadTool())
 	dreamAgent.RegisterTool(tools.GrepTool{})
 	dreamAgent.RegisterTool(tools.GlobTool{})
-	dreamAgent.RegisterTool(tools.WriteTool{})
+	dreamAgent.RegisterTool(tools.NewWriteTool())
 
 	// Inject PathPolicy: restrict WriteFile to only the memory directory.
 	policy := &tools.PathPolicy{

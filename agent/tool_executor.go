@@ -162,9 +162,10 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 
 			// Build event sink for SubAgent tool to forward internal tool calls upstream.
 			subCtx := ctx
+			subCtx = tools.WithToolID(subCtx, tc.ID)
 			if tc.Function.Name == tools.ToolNameSubAgent {
 				sink := a.newSubagentEventSink(ch, tc.ID)
-				subCtx = tools.WithSubagentEventSink(ctx, sink)
+				subCtx = tools.WithSubagentEventSink(subCtx, sink)
 			}
 
 			// Fire tool_call hook before parallel invocation
@@ -297,6 +298,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 		// For SubAgent: build event sink to forward internal tool calls upstream
 		// (real-time display in TUI).
 		subCtx := ctx
+		subCtx = tools.WithToolID(subCtx, tc.ID)
 		if tc.Function.Name == tools.ToolNameSubAgent {
 			sink := a.newSubagentEventSink(ch, tc.ID)
 			subCtx = tools.WithSubagentEventSink(ctx, sink)

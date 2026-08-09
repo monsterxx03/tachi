@@ -10,26 +10,34 @@ import (
 	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
-	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // WriteTool writes content to a file
-type WriteTool struct{}
+type WriteTool struct {
+	acpMode bool // true = route writes through ACP writeTextFile when a connection is available
+}
 
-func (t WriteTool) Name() string        { return ToolNameWrite }
-func (t WriteTool) Description() string { return "Writes a file to the local filesystem." }
-func (t WriteTool) IsDestructive() bool { return true }
-func (t WriteTool) Properties() map[string]PropertySchema {
+// SetACPMode enables ACP mode. In ACP mode ExecuteContext routes writes
+// through conn.WriteTextFile (client-side file system) instead of the local
+// filesystem.
+func (t *WriteTool) SetACPMode(v bool) { t.acpMode = v }
+
+// NewWriteTool creates a WriteTool.
+func NewWriteTool() *WriteTool { return &WriteTool{} }
+
+func (t *WriteTool) Name() string        { return ToolNameWrite }
+func (t *WriteTool) Description() string { return "Writes a file to the local filesystem." }
+func (t *WriteTool) IsDestructive() bool { return true }
+func (t *WriteTool) Properties() map[string]PropertySchema {
 	return map[string]PropertySchema{
 		"path":    {Type: "string", Description: "The path to write to"},
 		"content": {Type: "string", Description: "The content to write"},
 	}
 }
-func (t WriteTool) Required() []string { return []string{"path", "content"} }
-func (t WriteTool) Parallel() bool     { return false }
+func (t *WriteTool) Required() []string { return []string{"path", "content"} }
+func (t *WriteTool) Parallel() bool     { return false }
 
-func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	logger.FromContext(ctx).Info(ctx, fmt.Sprintf("ACP write: ExecuteContext called, conn=%v", acpctx.Conn(ctx) != nil))
+func (t *WriteTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var argsMap struct {
 		Path    string `json:"path"`
 		Content string `json:"content"`
@@ -52,16 +60,18 @@ func (t WriteTool) ExecuteContext(ctx context.Context, args string) (string, err
 	}
 
 	// In ACP mode, route through ACP client for Zed inline diff + accept/reject.
-	if conn := acpctx.Conn(ctx); conn != nil {
-		_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
-			SessionId: acpctx.SessionID(ctx),
-			Path:      filePath,
-			Content:   argsMap.Content,
-		})
-		if err != nil {
-			return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
+	if t.acpMode {
+		if conn := acpctx.Conn(ctx); conn != nil {
+			_, err := conn.WriteTextFile(ctx, acp.WriteTextFileRequest{
+				SessionId: acpctx.SessionID(ctx),
+				Path:      filePath,
+				Content:   argsMap.Content,
+			})
+			if err != nil {
+				return "", fmt.Errorf("ACP writeTextFile failed: %w", err)
+			}
+			return fmt.Sprintf("Successfully wrote via ACP to %s (%d bytes)", argsMap.Path, len(argsMap.Content)), nil
 		}
-		return fmt.Sprintf("Successfully wrote via ACP to %s (%d bytes)", argsMap.Path, len(argsMap.Content)), nil
 	}
 
 	if err := fileutil.WriteFileShared(filePath, []byte(argsMap.Content)); err != nil {

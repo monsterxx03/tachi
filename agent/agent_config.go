@@ -101,7 +101,9 @@ type AgentConfig struct {
 	Logger *logger.Logger
 
 	// --- 功能开关（构造输入）---
-	ACPFileMode            bool  // 构造输入 → 派生 FrontendConfig
+	ACPFileMode            bool  // 构造输入 → 派生 FrontendConfig（路由 EditFile/WriteFile 写操作走客户端 fs/write_text_file）
+	ACPReadMode            bool  // 构造输入 → 派生 FrontendConfig（路由 ReadFile 读操作走客户端 fs/read_text_file）
+	ACPTerminalBash        bool  // 构造输入 → 派生 FrontendConfig（路由 Bash 执行走客户端 terminal API）
 	PlanToolEnabled        bool  // 构造输入 → 派生 FrontendConfig
 	TitleGenEnabled        *bool // 构造输入（nil = config-based）
 	SkipMemoryRecall       bool  // 只读配置
@@ -170,10 +172,22 @@ type AgentConfig struct {
 // itself (auto/chat/plan) is not part of FrontendConfig — it is a
 // runtime-mutable field on AIAgent, changed via SetMode().
 type FrontendConfig struct {
-	// ACPFileMode routes EditFile writes through conn.WriteTextFile for
-	// Zed's inline diff UI. Edits never require interactive confirmation in
-	// any mode (see EditTool); ACPFileMode only changes the write channel.
+	// ACPFileMode routes EditFile/WriteFile writes through
+	// conn.WriteTextFile for Zed's inline diff UI. Edits never require
+	// interactive confirmation in any mode (see EditTool); ACPFileMode only
+	// changes the write channel. Set from clientCapabilities.fs.writeTextFile.
 	ACPFileMode bool
+
+	// ACPReadMode routes ReadFile through conn.ReadTextFile (client-side
+	// file system) so the editor shows which file is being read. Set from
+	// clientCapabilities.fs.readTextFile.
+	ACPReadMode bool
+
+	// ACPTerminalBash routes Bash execution through the client's terminal
+	// API (terminal/create etc.) so the editor shows live command output.
+	// Set from clientCapabilities.terminal. Only meaningful for ACP
+	// sessions; other frontends never set it and keep the local Bash.
+	ACPTerminalBash bool
 
 	// PlanToolEnabled gates registration of the SavePlan tool. Only ACP
 	// sessions enable it — ACP clients (e.g. Zed) render a structured plan

@@ -257,6 +257,8 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	// Frontend config
 	a.Frontend = FrontendConfig{
 		ACPFileMode:     cfg.ACPFileMode,
+		ACPReadMode:     cfg.ACPReadMode,
+		ACPTerminalBash: cfg.ACPTerminalBash,
 		PlanToolEnabled: cfg.PlanToolEnabled,
 	}
 
@@ -290,12 +292,12 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 		a.SetSkipMemoryRecall(true)
 	}
 
-	// Unregister AskUser when not interactive (channel/-p mode default)
-	// Interactive modes (TUI, ACP with elicitation) keep it registered
-	if cfg.PermissionMode != PermissionModeTUI {
-		if cfg.PermissionMode == PermissionModeSkip || !cfg.ACPFileMode {
-			a.UnregisterTool(tools.ToolNameAskUser)
-		}
+	// Unregister AskUser when not interactive (channel/-p mode default).
+	// Interactive modes (TUI, ACP) keep it registered; in ACP sessions the
+	// elicitation capability check (supportsElicitation) decides separately
+	// whether the tool stays usable.
+	if cfg.PermissionMode == PermissionModeSkip {
+		a.UnregisterTool(tools.ToolNameAskUser)
 	}
 
 	// Return mcpMgr only when we own it (caller should Close it)
@@ -590,8 +592,23 @@ func (a *AIAgent) recordSession(rs *RunState, msg *session.Message) {
 // --- Tool Registry ---
 
 func (a *AIAgent) RegisterTools() {
-	a.Config.ToolRegistry.Register(tools.NewReadTool())
-	a.Config.ToolRegistry.Register(tools.WriteTool{})
+	// ReadFile/WriteFile/EditFile route through the ACP client's file system
+	// (fs/read_text_file, fs/write_text_file) when the client declares the
+	// corresponding capability; Bash routes through the client's terminal API
+	// when it declares the terminal capability. Other frontends (tui/channel/
+	// -p) never set these flags and keep the fully local implementations.
+	readTool := tools.NewReadTool()
+	if a.Frontend.ACPReadMode {
+		readTool.SetACPMode(true)
+	}
+	a.Config.ToolRegistry.Register(readTool)
+
+	writeTool := tools.NewWriteTool()
+	if a.Frontend.ACPFileMode {
+		writeTool.SetACPMode(true)
+	}
+	a.Config.ToolRegistry.Register(writeTool)
+
 	editTool := tools.NewEditTool()
 	if a.Frontend.ACPFileMode {
 		editTool.SetACPMode(true)
@@ -608,7 +625,11 @@ func (a *AIAgent) RegisterTools() {
 		bashCfg.ResultBaseDir = a.Config.FullConfig.ToolResult.ResultFileDir()
 		bashCfg.MaxResultChars = a.Config.FullConfig.ToolResult.MaxResultChars()
 	}
-	a.Config.ToolRegistry.Register(tools.NewBashTool(bashCfg))
+	bashTool := tools.NewBashTool(bashCfg)
+	if a.Frontend.ACPTerminalBash {
+		bashTool.SetACPMode(true)
+	}
+	a.Config.ToolRegistry.Register(bashTool)
 	a.Config.ToolRegistry.Register(tools.AskUserTool{})
 
 	// WebSearch — only register if at least one provider + key is configured
