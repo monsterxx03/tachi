@@ -57,10 +57,11 @@ func extractPathFromURI(uri string) string {
 	return uri
 }
 
-// buildSystemPromptForCwd constructs the system prompt for ACP mode with a specific
-// working directory and session mode. In plan mode, the plan mode prompt is appended.
-func buildSystemPromptForCwd(cfg *config.Config, cwd string, mode string, sessionID string) string {
-	prompt := agent.BuildSystemPrompt(cfg.Language, cwd, sessionID)
+// buildSystemPromptForCwd constructs the system prompt for ACP mode with a
+// specific working directory, additional workspace roots, and session mode.
+// In plan mode, the plan mode prompt is appended.
+func buildSystemPromptForCwd(cfg *config.Config, cwd string, additionalDirs []string, mode string, sessionID string) string {
+	prompt := agent.BuildSystemPromptWithRoots(cfg.Language, cwd, additionalDirs, sessionID)
 	if mode == agent.ModePlan {
 		prompt += "\n\n" + agent.BuildPlanModePrompt()
 	}

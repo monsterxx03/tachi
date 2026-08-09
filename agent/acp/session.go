@@ -17,7 +17,12 @@ import (
 type ACPSession struct {
 	ID  string
 	cwd string
-	cfg *config.Config // for slash command handler access (provider resolution, language, etc.)
+	// additionalDirs are the additional workspace roots (absolute paths)
+	// declared for this session via ACP additionalDirectories. cwd remains
+	// the primary root; the effective root set is [cwd, ...additionalDirs].
+	// Relative paths always resolve against cwd only.
+	additionalDirs []string
+	cfg            *config.Config // for slash command handler access (provider resolution, language, etc.)
 
 	agent   *agent.AIAgent
 	mcpMgr  *mcp.Manager
@@ -71,6 +76,7 @@ func NewACPSessionManager() *ACPSessionManager {
 func (sm *ACPSessionManager) New(
 	parentCtx context.Context,
 	cwd string,
+	additionalDirs []string,
 	cfg *config.Config,
 	aiAgent *agent.AIAgent,
 	mcpMgr *mcp.Manager,
@@ -89,14 +95,15 @@ func (sm *ACPSessionManager) New(
 	}
 
 	sess := &ACPSession{
-		ID:      id,
-		cwd:     cwd,
-		cfg:     cfg,
-		agent:   aiAgent,
-		mcpMgr:  mcpMgr,
-		sessMgr: sessMgr,
-		ctx:     sessCtx,
-		cancel:  sessCancel,
+		ID:             id,
+		cwd:            cwd,
+		additionalDirs: additionalDirs,
+		cfg:            cfg,
+		agent:          aiAgent,
+		mcpMgr:         mcpMgr,
+		sessMgr:        sessMgr,
+		ctx:            sessCtx,
+		cancel:         sessCancel,
 	}
 
 	sm.mu.Lock()

@@ -93,7 +93,7 @@ func TestFollowCompactedChain_CycleSafe(t *testing.T) {
 
 func TestACPSessionManagerRekey(t *testing.T) {
 	mgr := NewACPSessionManager()
-	sess := mgr.New(t.Context(), "/tmp", nil, nil, nil, nil)
+	sess := mgr.New(t.Context(), "/tmp", nil, nil, nil, nil, nil)
 	oldID := sess.ID
 
 	mgr.Rekey(oldID, "new-id")

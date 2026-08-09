@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -61,10 +62,11 @@ func (t *TachiAgent) Initialize(ctx context.Context, req acp.InitializeRequest) 
 			},
 			LoadSession: true,
 			SessionCapabilities: acp.SessionCapabilities{
-				List:   &acp.SessionListCapabilities{},
-				Close:  &acp.SessionCloseCapabilities{},
-				Resume: &acp.SessionResumeCapabilities{},
-				Delete: &acp.SessionDeleteCapabilities{},
+				List:                  &acp.SessionListCapabilities{},
+				Close:                 &acp.SessionCloseCapabilities{},
+				Resume:                &acp.SessionResumeCapabilities{},
+				Delete:                &acp.SessionDeleteCapabilities{},
+				AdditionalDirectories: &acp.SessionAdditionalDirectoriesCapabilities{},
 			},
 			McpCapabilities: acp.McpCapabilities{
 				Http: true,
@@ -102,6 +104,10 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		if err != nil {
 			return acp.NewSessionResponse{}, fmt.Errorf("cannot determine working directory: %w", err)
 		}
+	}
+	additionalDirs, err := validateAdditionalDirectories(cwd, req.AdditionalDirectories)
+	if err != nil {
+		return acp.NewSessionResponse{}, err
 	}
 
 	// Resolved (main provider + resolved config) is built inside the
@@ -154,7 +160,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, cwd, additionalDirs, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Wire up permission handler for this session
 	if t.conn != nil {
@@ -290,7 +296,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	}
 
 	// Build system prompt (use session cwd and current mode for environment info)
-	systemPrompt := buildSystemPromptForCwd(t.cfg, sess.cwd, sess.agent.Mode(), sess.ID)
+	systemPrompt := buildSystemPromptForCwd(t.cfg, sess.cwd, sess.additionalDirs, sess.agent.Mode(), sess.ID)
 
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{
@@ -379,8 +385,9 @@ func (t *TachiAgent) ListSessions(ctx context.Context, req acp.ListSessionsReque
 			continue
 		}
 		info := acp.SessionInfo{
-			SessionId: acp.SessionId(sess.ID),
-			Cwd:       sess.cwd,
+			SessionId:             acp.SessionId(sess.ID),
+			Cwd:                   sess.cwd,
+			AdditionalDirectories: sess.additionalDirs,
 		}
 		if sess.sessMgr != nil {
 			if cur := sess.sessMgr.Current(); cur != nil {
@@ -431,8 +438,18 @@ func (t *TachiAgent) ListSessions(ctx context.Context, req acp.ListSessionsReque
 func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionRequest) (acp.ResumeSessionResponse, error) {
 	t.logger.Info(ctx, fmt.Sprintf("ACP: ResumeSession called for session %s", req.SessionId))
 
-	// Check if already in memory
-	if _, ok := t.sessions.Get(string(req.SessionId)); ok {
+	// Check if already in memory. Per the additional-directories spec, a
+	// resume request's additionalDirectories is the complete resulting list
+	// (omitted or empty = none), so the in-memory fast path applies the
+	// request's list instead of blindly no-op'ing.
+	if sess, ok := t.sessions.Get(string(req.SessionId)); ok {
+		dirs, err := validateAdditionalDirectories(sess.cwd, req.AdditionalDirectories)
+		if err != nil {
+			return acp.ResumeSessionResponse{}, err
+		}
+		sess.mu.Lock()
+		sess.additionalDirs = dirs
+		sess.mu.Unlock()
 		return acp.ResumeSessionResponse{}, nil
 	}
 
@@ -459,6 +476,10 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	cwd := req.Cwd
 	if cwd == "" {
 		cwd = loaded.WorkingDir
+	}
+	additionalDirs, err := validateAdditionalDirectories(cwd, req.AdditionalDirectories)
+	if err != nil {
+		return acp.ResumeSessionResponse{}, err
 	}
 
 	// Rebuild AIAgent for this resumed session. providerForLoadedSession
@@ -492,7 +513,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent.SetSessionManager(diskMgr)
 
 	// Create ACP session with existing disk session manager
-	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, diskMgr)
+	sess := t.sessions.New(ctx, cwd, additionalDirs, t.cfg, aiAgent, mcpMgr, diskMgr)
 
 	// Keep the ACP session addressable by the client-requested ID (see
 	// LoadSession for rationale — compact chain may have switched the
@@ -569,6 +590,10 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		if err != nil {
 			return acp.LoadSessionResponse{}, fmt.Errorf("cannot determine working directory: %w", err)
 		}
+	}
+	additionalDirs, err := validateAdditionalDirectories(cwd, req.AdditionalDirectories)
+	if err != nil {
+		return acp.LoadSessionResponse{}, err
 	}
 
 	// Try to load an existing session from disk first (before creating provider,
@@ -678,7 +703,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, cwd, additionalDirs, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Keep the ACP session addressable by the client-requested ID. If the
 	// compact-chain follow above loaded a different on-disk session, the
@@ -747,6 +772,37 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		ConfigOptions: configOpts,
 		Modes:         buildModeState(agent.ModeAuto),
 	}, nil
+}
+
+// validateAdditionalDirectories validates and normalizes an ACP
+// additionalDirectories list (Additional Workspace Roots spec):
+//   - every entry must be a non-empty absolute path;
+//   - exact duplicates and entries identical to cwd are dropped, preserving
+//     first-occurrence order;
+//   - a nil or empty input yields no additional roots ([]).
+//
+// Malformed entries are rejected with an invalid_params error per the spec:
+// the agent MUST NOT silently drop unsupported or unauthorized roots.
+func validateAdditionalDirectories(cwd string, dirs []string) ([]string, error) {
+	if len(dirs) == 0 {
+		return nil, nil
+	}
+	out := make([]string, 0, len(dirs))
+	seen := make(map[string]bool, len(dirs))
+	for _, d := range dirs {
+		if d == "" {
+			return nil, fmt.Errorf("invalid_params: additionalDirectories entry must not be empty")
+		}
+		if !filepath.IsAbs(d) {
+			return nil, fmt.Errorf("invalid_params: additionalDirectories entry must be an absolute path: %q", d)
+		}
+		if d == cwd || seen[d] {
+			continue
+		}
+		seen[d] = true
+		out = append(out, d)
+	}
+	return out, nil
 }
 
 // providerForLoadedSession builds the provider for a resumed/loaded session:

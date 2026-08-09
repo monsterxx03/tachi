@@ -13,7 +13,7 @@ func TestACPSessionManager_Lifecycle(t *testing.T) {
 	sm := NewACPSessionManager()
 
 	// Create a session
-	sess := sm.New(t.Context(), "/tmp", nil, nil, nil, nil)
+	sess := sm.New(t.Context(), "/tmp", nil, nil, nil, nil, nil)
 	assert.NotEmpty(t, sess.ID)
 	assert.Equal(t, "/tmp", sess.cwd)
 	assert.Empty(t, sess.ProviderType())
@@ -38,8 +38,8 @@ func TestACPSessionManager_CloseAll(t *testing.T) {
 	sm := NewACPSessionManager()
 
 	// Create multiple sessions
-	sess1 := sm.New(t.Context(), "/tmp/a", nil, nil, nil, nil)
-	sess2 := sm.New(t.Context(), "/tmp/b", nil, nil, nil, nil)
+	sess1 := sm.New(t.Context(), "/tmp/a", nil, nil, nil, nil, nil)
+	sess2 := sm.New(t.Context(), "/tmp/b", nil, nil, nil, nil, nil)
 	assert.Len(t, sm.List(), 2)
 
 	// Close all
@@ -109,7 +109,7 @@ func TestCloseAll(t *testing.T) {
 	ta := NewTachiAgent(cfg, "1.0")
 
 	// Add sessions
-	sess := ta.sessions.New(t.Context(), "/tmp", nil, nil, nil, nil)
+	sess := ta.sessions.New(t.Context(), "/tmp", nil, nil, nil, nil, nil)
 	assert.Len(t, ta.sessions.List(), 1)
 
 	ta.CloseAll()
@@ -120,14 +120,14 @@ func TestCloseAll(t *testing.T) {
 func TestACPSession_CloseWithMCPandSessionManager(t *testing.T) {
 	sm := NewACPSessionManager()
 	// No MCP manager, no session manager — just verify Close works
-	sess := sm.New(t.Context(), "/tmp", nil, nil, nil, nil)
+	sess := sm.New(t.Context(), "/tmp", nil, nil, nil, nil, nil)
 	assert.NotPanics(t, func() { sess.Close() })
 	assert.Error(t, sess.ctx.Err())
 }
 
 func TestACPSession_setPromptCancel(t *testing.T) {
 	sm := NewACPSessionManager()
-	sess := sm.New(t.Context(), "/tmp", nil, nil, nil, nil)
+	sess := sm.New(t.Context(), "/tmp", nil, nil, nil, nil, nil)
 
 	// setPromptCancel stores and clears the cancel func
 	cancelCalled := false

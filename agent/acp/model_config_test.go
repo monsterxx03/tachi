@@ -287,7 +287,7 @@ func TestSetSessionConfigOption(t *testing.T) {
 	aiAgent := newTestAgent(t, provider, cfg)
 
 	ta := NewTachiAgent(cfg, "test")
-	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
+	sess := ta.sessions.New(t.Context(), "/tmp", nil, cfg, aiAgent, nil, nil)
 
 	resp, err := ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{
 		ValueId: &acp.SetSessionConfigOptionValueId{
@@ -314,7 +314,7 @@ func TestSetSessionConfigOption_ReasoningEffort(t *testing.T) {
 	aiAgent := newBareTestAgent(t, provider, 0)
 
 	ta := NewTachiAgent(cfg, "test")
-	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
+	sess := ta.sessions.New(t.Context(), "/tmp", nil, cfg, aiAgent, nil, nil)
 
 	// high → effort 原样写入 agent
 	resp, err := ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{
@@ -367,7 +367,7 @@ func TestSetSessionConfigOption_UnsupportedConfig(t *testing.T) {
 	aiAgent := newBareTestAgent(t, provider, 0)
 
 	ta := NewTachiAgent(cfg, "test")
-	sess := ta.sessions.New(t.Context(), "/tmp", cfg, aiAgent, nil, nil)
+	sess := ta.sessions.New(t.Context(), "/tmp", nil, cfg, aiAgent, nil, nil)
 
 	resp, err := ta.SetSessionConfigOption(t.Context(), acp.SetSessionConfigOptionRequest{
 		ValueId: &acp.SetSessionConfigOptionValueId{

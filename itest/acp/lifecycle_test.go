@@ -90,4 +90,34 @@ var _ = ginkgo.Describe("ACP handshake & session lifecycle", func() {
 		// Closing stdin drives runACPAgent's connection loop to EOF → exit.
 		gomega.Expect(client.Close()).NotTo(gomega.HaveOccurred())
 	})
+
+	ginkgo.It("session/new 带 additionalDirectories, session/list 可查到", func() {
+		client, home := startACPClient()
+
+		resp, err := client.Conn().NewSession(context.Background(), acpapi.NewSessionRequest{
+			Cwd:                   home,
+			AdditionalDirectories: []string{"/shared-lib", "/docs"},
+			McpServers:            []acpapi.McpServer{},
+		})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(string(resp.SessionId)).NotTo(gomega.BeEmpty())
+
+		listResp, err := client.Conn().ListSessions(context.Background(), acpapi.ListSessionsRequest{})
+		gomega.Expect(err).NotTo(gomega.HaveOccurred())
+		gomega.Expect(listResp.Sessions).To(gomega.HaveLen(1))
+		gomega.Expect(listResp.Sessions[0].Cwd).To(gomega.Equal(home))
+		gomega.Expect(listResp.Sessions[0].AdditionalDirectories).To(gomega.Equal([]string{"/shared-lib", "/docs"}))
+	})
+
+	ginkgo.It("session/new 拒绝相对路径 additionalDirectories", func() {
+		client, home := startACPClient()
+
+		_, err := client.Conn().NewSession(context.Background(), acpapi.NewSessionRequest{
+			Cwd:                   home,
+			AdditionalDirectories: []string{"relative/path"},
+			McpServers:            []acpapi.McpServer{},
+		})
+		gomega.Expect(err).To(gomega.HaveOccurred())
+		gomega.Expect(err.Error()).To(gomega.ContainSubstring("invalid_params"))
+	})
 })

@@ -17,6 +17,18 @@ import (
 // If cwd is empty, config.FindProjectRoot() is used as fallback.
 // sessionID can be empty (no current session).
 func BuildSystemPrompt(language string, cwd string, sessionID string) string {
+	return buildSystemPrompt(language, cwd, nil, sessionID)
+}
+
+// BuildSystemPromptWithRoots is BuildSystemPrompt plus additional workspace
+// roots (multi-root sessions). additionalRoots are absolute paths; they are
+// listed so the model knows the extra roots exist and uses absolute paths
+// for them — relative paths still resolve against cwd only.
+func BuildSystemPromptWithRoots(language string, cwd string, additionalRoots []string, sessionID string) string {
+	return buildSystemPrompt(language, cwd, additionalRoots, sessionID)
+}
+
+func buildSystemPrompt(language string, cwd string, additionalRoots []string, sessionID string) string {
 	var sb strings.Builder
 
 	// ── Identity + Core traits ──────────────────────────────────────────────
@@ -77,6 +89,10 @@ YOU MUST:
 		cwd = config.FindProjectRoot()
 	}
 	fmt.Fprintf(&sb, "- Working directory: %s\n", cwd)
+
+	if len(additionalRoots) > 0 {
+		fmt.Fprintf(&sb, "- Additional workspace roots: %s (absolute paths only; relative paths always resolve against the working directory)\n", strings.Join(additionalRoots, ", "))
+	}
 
 	isGitRepo := false
 	if cwd != "" {
