@@ -625,72 +625,67 @@ func TestTokenize(t *testing.T) {
 }
 
 // ---------------------------------------------------------------------------
-// matchesAny
+// parseSearchQuery
 // ---------------------------------------------------------------------------
 
-func TestMatchesAny(t *testing.T) {
-	tests := []struct {
-		name string
-		term string
-		tool *DeferredTool
-		want bool
-	}{
-		{"exact name part", "query", &DeferredTool{
-			nameParts: []string{"postgres", "query"},
-		}, true},
-		{"substring name part", "quer", &DeferredTool{
-			nameParts: []string{"postgres", "query"},
-		}, true},
-		{"search hint", "pg", &DeferredTool{
-			nameParts: []string{"postgres", "query"},
-			hintLower: "pg, database",
-		}, true},
-		{"description", "execute", &DeferredTool{
-			nameParts: []string{"postgres", "query"},
-			descLower: "execute sql",
-		}, true},
-		{"server name exact", "postgres", &DeferredTool{
-			nameParts:   []string{"pg", "query"},
-			serverLower: "postgres",
-		}, true},
-		{"server name contains", "postgr", &DeferredTool{
-			nameParts:   []string{"pg", "query"},
-			serverLower: "postgres",
-		}, true},
-		{"no match", "python", &DeferredTool{
-			nameParts: []string{"postgres", "query"},
-		}, false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			st := searchTerm{raw: tt.term, pattern: compileWordPattern(tt.term)}
-			got := matchesAny(st, tt.tool)
-			assert.Equal(t, tt.want, got)
-		})
-	}
+func TestParseSearchQuery(t *testing.T) {
+	// "+" prefix marks a term as required; required terms also score.
+	required, scoring := parseSearchQuery("+pg query")
+	assert.Equal(t, []string{"pg"}, required)
+	assert.Equal(t, []string{"pg", "query"}, scoring)
+
+	// "+get_mcp_server_detail" → all four tokens required (underscore/camel
+	// splitting happens in tokenize, before the "+" is stripped).
+	required, scoring = parseSearchQuery("+get_mcp_server_detail")
+	assert.Equal(t, []string{"get", "mcp", "server", "detail"}, required)
+	assert.Equal(t, []string{"get", "mcp", "server", "detail"}, scoring)
+
+	// Repeated terms (with or without "+") are deduplicated — bm25 would
+	// otherwise double-count each occurrence.
+	required, scoring = parseSearchQuery("+postgres postgres")
+	assert.Equal(t, []string{"postgres"}, required)
+	assert.Equal(t, []string{"postgres"}, scoring)
+
+	// No usable terms.
+	required, scoring = parseSearchQuery("++")
+	assert.Empty(t, required)
+	assert.Empty(t, scoring)
 }
 
 // ---------------------------------------------------------------------------
-// scoreTool
+// tokenizeField
 // ---------------------------------------------------------------------------
 
-func TestScoreTool(t *testing.T) {
-	dt := &DeferredTool{
-		nameParts:   []string{"postgres", "query"},
-		descLower:   "execute sql queries against postgresql",
-		hintLower:   "postgres, query, sql, database",
-		serverLower: "postgres",
-	}
+func TestTokenizeField(t *testing.T) {
+	assert.Equal(t, []string{"postgres"}, tokenizeField("postgres"))
+	assert.Equal(t, []string{"iam", "admin"}, tokenizeField("iam-admin"))
+	assert.Equal(t, []string{"sql", "query", "against", "database"}, tokenizeField("SQL query against the database"))
+	// Stop words removed
+	assert.Equal(t, []string{"query", "database"}, tokenizeField("query the database"))
+	// Underscore and CamelCase splitting
+	assert.Equal(t, []string{"create", "pull", "request"}, tokenizeField("createPullRequest"))
+	assert.Equal(t, []string{"get", "mcp", "server", "detail"}, tokenizeField("get_mcp_server_detail"))
+	assert.Nil(t, tokenizeField(""))
+}
 
-	// Server exact match
-	assert.Greater(t, scoreTool(searchTerm{raw: "postgres", pattern: compileWordPattern("postgres")}, dt), 0)
-	// Name part exact match
-	assert.Greater(t, scoreTool(searchTerm{raw: "query", pattern: compileWordPattern("query")}, dt), 0)
-	// Description match (lowest)
-	score := scoreTool(searchTerm{raw: "execute", pattern: compileWordPattern("execute")}, dt)
-	assert.Greater(t, score, 0)
-	// No match
-	assert.Equal(t, 0, scoreTool(searchTerm{raw: "python", pattern: compileWordPattern("python")}, dt))
+// ---------------------------------------------------------------------------
+// BM25 keyword ranking
+// ---------------------------------------------------------------------------
+
+// TestSearch_Keyword_BM25FieldWeights verifies the BM25 field boosts keep the
+// previous ranking intent: a server-name match outranks a description-only
+// match.
+func TestSearch_Keyword_BM25FieldWeights(t *testing.T) {
+	p := NewDeferredPool()
+	p.Add(testDeferredTool("mcp__postgres__ping", "postgres", "Returns pong"))
+	p.Add(testDeferredTool("mcp__x__query", "x", "Query the postgres database"))
+	p.Add(testDeferredTool("mcp__y__ping", "y", "Query things"))
+
+	results := p.Search("postgres", 5)
+	require.Len(t, results, 2)
+	// server-name match (server + name parts) ranks above description-only match
+	assert.Equal(t, "mcp__postgres__ping", results[0].Name)
+	assert.Equal(t, "mcp__x__query", results[1].Name)
 }
 
 // ---------------------------------------------------------------------------

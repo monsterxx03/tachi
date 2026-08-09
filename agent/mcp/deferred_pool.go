@@ -1,11 +1,12 @@
 package mcp
 
 import (
-	"regexp"
 	"sort"
 	"strings"
+	"unicode"
 
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/pkg/bm25"
 	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -39,23 +40,17 @@ type DeferredPool struct {
 	tools container.LockedMap[string, deferredToolPtr]
 }
 
-// searchTerm is a pre-compiled search term for efficient matching.
-// The regex pattern is compiled once per query, not per tool.
-type searchTerm struct {
-	raw      string
-	required bool
-	pattern  *regexp.Regexp // compiled \b word boundary pattern
-}
-
-// compileWordPattern compiles a word-boundary regex for the given term.
-func compileWordPattern(term string) *regexp.Regexp {
-	pattern := `\b` + regexp.QuoteMeta(term) + `\b`
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil
-	}
-	return re
-}
+// BM25 field boosts for keyword search, mirroring the previous hand-tuned
+// weights (server 15 > name 10 > hint 4 > desc 2): the server name is the
+// strongest signal, then the tool name, then the curated search hint, then
+// the raw description. Field order is positional — bm25 matches fields by
+// index — so it must stay in sync with newSearchIndex.
+const (
+	searchBoostServer = 6
+	searchBoostName   = 4
+	searchBoostHint   = 2
+	searchBoostDesc   = 1
+)
 
 // NewDeferredPool creates an empty deferred pool.
 func NewDeferredPool() *DeferredPool {
@@ -219,84 +214,127 @@ func (p *DeferredPool) toResult(t *DeferredTool) SearchResult {
 	}
 }
 
-// keywordSearch scores tools by keyword relevance and returns top results.
-// Uses pre-compiled regex patterns and cached lowercase fields to avoid
-// repeated allocations in the inner loop.
+// keywordSearch scores tools by BM25 relevance and returns the top results.
+//
+// The index is rebuilt from scratch on every call: the corpus is small (tens
+// to hundreds of short documents), so rebuild cost is negligible, and it
+// keeps Search free of shared mutable state — safe to call concurrently with
+// Add/Remove.
 func (p *DeferredPool) keywordSearch(tools []*DeferredTool, query string, maxResults int) []SearchResult {
 	query = strings.TrimSpace(query)
-	tokens := tokenize(query) // tokenize first — CamelCase detection needs original case
+	required, scoring := parseSearchQuery(query)
 
-	// Build pre-compiled search terms — regex compiled once per term, reused across all tools
-	var allTerms []searchTerm
-	for _, tok := range tokens {
-		if strings.HasPrefix(tok, "+") && len(tok) > 1 {
-			allTerms = append(allTerms, searchTerm{
-				raw:      tok[1:],
-				required: true,
-				pattern:  compileWordPattern(tok[1:]),
-			})
-		} else {
-			allTerms = append(allTerms, searchTerm{
-				raw:     tok,
-				pattern: compileWordPattern(tok),
-			})
-		}
-	}
-
-	// Partition: dedup scoring terms, collect required terms for pre-filter
-	seen := make(map[string]bool)
-	var requiredTerms, scoringTerms []searchTerm
-	for _, st := range allTerms {
-		if !seen[st.raw] {
-			seen[st.raw] = true
-			scoringTerms = append(scoringTerms, st)
-		}
-		if st.required {
-			requiredTerms = append(requiredTerms, st)
-		}
-	}
+	ix := newSearchIndex(tools)
+	scores := ix.Scores(scoring)
 
 	type scored struct {
 		tool  *DeferredTool
-		score int
+		score float64
+		doc   int
 	}
-	var scoredTools []scored
-
-	for _, t := range tools {
-		// Pre-filter: ALL required terms must match
-		skip := false
-		for _, rt := range requiredTerms {
-			if !matchesAny(rt, t) {
-				skip = true
-				break
-			}
-		}
-		if skip {
+	var ranked []scored
+	for i, t := range tools {
+		if scores[i] <= 0 {
 			continue
 		}
-
-		// Single scoring pass — uses cached fields + pre-compiled regex
-		totalScore := 0
-		for _, st := range scoringTerms {
-			totalScore += scoreTool(st, t)
+		// BM25 has no notion of required terms; enforce them as a pre-filter.
+		if !matchesRequired(ix, i, required) {
+			continue
 		}
-
-		if totalScore > 0 {
-			scoredTools = append(scoredTools, scored{tool: t, score: totalScore})
-		}
+		ranked = append(ranked, scored{tool: t, score: scores[i], doc: i})
 	}
 
-	// Sort by score descending
-	sort.Slice(scoredTools, func(i, j int) bool {
-		return scoredTools[i].score > scoredTools[j].score
+	// Sort by score descending; ties broken by document order for stability.
+	sort.Slice(ranked, func(i, j int) bool {
+		if ranked[i].score != ranked[j].score {
+			return ranked[i].score > ranked[j].score
+		}
+		return ranked[i].doc < ranked[j].doc
 	})
 
-	n := min(len(scoredTools), maxResults)
+	n := min(len(ranked), maxResults)
 	results := make([]SearchResult, n)
 	for i := range n {
-		results[i] = p.toResult(scoredTools[i].tool)
+		results[i] = p.toResult(ranked[i].tool)
 	}
 	return results
+}
+
+// parseSearchQuery splits a search query into required and scoring terms.
+//
+// Terms are split on underscores and CamelCase (so "get_mcp_server_detail"
+// yields four tokens) and deduplicated — bm25 does not deduplicate query
+// terms, each occurrence would inflate the score. A "+" prefix marks a term
+// as required: every result must contain it. Required terms also participate
+// in scoring, matching the previous behavior.
+func parseSearchQuery(query string) (required, scoring []string) {
+	seen := make(map[string]bool)
+	for _, tok := range tokenize(query) {
+		term := strings.TrimPrefix(tok, "+")
+		if term == "" || seen[term] {
+			continue
+		}
+		seen[term] = true
+		scoring = append(scoring, term)
+		if strings.HasPrefix(tok, "+") {
+			required = append(required, term)
+		}
+	}
+	return required, scoring
+}
+
+// newSearchIndex builds a fresh BM25 index over the given tools.
+//
+// Field order (0-3) is the positional contract with bm25 — keep in sync with
+// the boost constants above. The server name appears both inside the
+// name-part field (parseToolName includes the server segment) and in its own
+// field; the double hit deliberately reinforces the "looking for a server"
+// signal, as the previous scoring did.
+func newSearchIndex(tools []*DeferredTool) *bm25.Index {
+	docs := make([]bm25.Document, len(tools))
+	for i, t := range tools {
+		docs[i] = bm25.Document{Fields: []bm25.Field{
+			// 0: tool name parts ("mcp__pg__query" → [pg, query])
+			{Boost: searchBoostName, Tokens: t.nameParts},
+			// 1: server name ("postgres")
+			{Boost: searchBoostServer, Tokens: tokenizeField(t.serverLower)},
+			// 2: curated search hint
+			{Boost: searchBoostHint, Tokens: tokenizeField(t.hintLower)},
+			// 3: full description
+			{Boost: searchBoostDesc, Tokens: tokenizeField(t.descLower)},
+		}}
+	}
+	return bm25.New(docs, bm25.DefaultParams())
+}
+
+// tokenizeField splits a pre-lowercased metadata string into search tokens:
+// words are split on underscores and CamelCase, with stop words and empties
+// removed (bm25 expects pre-normalized tokens). Used for the server, search
+// hint and description fields; tool name parts are already tokens.
+func tokenizeField(s string) []string {
+	var toks []string
+	for _, word := range strings.FieldsFunc(s, func(r rune) bool {
+		return !unicode.IsLetter(r) && !unicode.IsDigit(r)
+	}) {
+		for _, sub := range splitOnUnderscoreOrCamel(word) {
+			if sub != "" && !isStopWord(sub) {
+				toks = append(toks, sub)
+			}
+		}
+	}
+	return toks
+}
+
+// matchesRequired reports whether document doc contains every required term.
+// A term "matches" when its BM25 score against the document alone is
+// non-zero, i.e. the term appears in at least one indexed field.
+func matchesRequired(ix *bm25.Index, doc int, required []string) bool {
+	for _, term := range required {
+		if ix.Score([]string{term}, doc) <= 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // "mcp__postgres__query" → ["postgres", "query"]
@@ -391,71 +429,6 @@ func tokenize(query string) []string {
 		}
 	}
 	return result
-}
-
-// matchesAny checks if a search term matches any part of the tool metadata.
-// Uses pre-compiled regex and cached lowercase fields — no regex compilation in hot path.
-func matchesAny(st searchTerm, t *DeferredTool) bool {
-	termLower := strings.ToLower(st.raw)
-
-	// Server name
-	if t.serverLower == termLower || strings.Contains(t.serverLower, termLower) {
-		return true
-	}
-
-	// Tool name parts (pre-parsed, lowercased)
-	for _, p := range t.nameParts {
-		if p == termLower || strings.Contains(p, termLower) {
-			return true
-		}
-	}
-
-	// Search hint (pre-compiled regex)
-	if st.pattern != nil && st.pattern.MatchString(t.hintLower) {
-		return true
-	}
-
-	// Description (pre-compiled regex)
-	if st.pattern != nil && st.pattern.MatchString(t.descLower) {
-		return true
-	}
-
-	return false
-}
-
-// scoreTool calculates a relevance score for a search term against tool metadata.
-// Uses pre-compiled regex and cached lowercase fields — no regex compilation in hot path.
-func scoreTool(st searchTerm, t *DeferredTool) int {
-	termLower := strings.ToLower(st.raw)
-	score := 0
-
-	// Server name match (highest — user likely looking for a specific server)
-	if t.serverLower == termLower {
-		score += 15
-	} else if strings.Contains(t.serverLower, termLower) {
-		score += 8
-	}
-
-	// Tool name parts (pre-parsed, lowercased)
-	for _, p := range t.nameParts {
-		if p == termLower {
-			score += 10
-		} else if strings.Contains(p, termLower) {
-			score += 5
-		}
-	}
-
-	// Search hint (curated signal, pre-compiled regex)
-	if st.pattern != nil && st.pattern.MatchString(t.hintLower) {
-		score += 4
-	}
-
-	// Description (pre-compiled regex)
-	if st.pattern != nil && st.pattern.MatchString(t.descLower) {
-		score += 2
-	}
-
-	return score
 }
 
 // NewDeferredToolFromMCPTool converts an MCPTool to a DeferredTool for storage.
