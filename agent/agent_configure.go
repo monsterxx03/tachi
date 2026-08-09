@@ -63,7 +63,15 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 	}
 
 	// --- Skill system ---
-	a.initSkills()
+	if a.Config.DisableSkills {
+		// Non-interactive modes (e.g. `tachi -p`) skip skill discovery:
+		// no skill store scan, no Skill tool registration, no skill
+		// list reminder. The SkillListReminder stays nil — code paths
+		// referencing it must nil-check (see buildReminderCollectorFrom).
+		a.Config.Logger.Info(ctx, "Skills: disabled (non-interactive mode)")
+	} else {
+		a.initSkills()
+	}
 
 	// --- Bash permission policy (global config + project .tachi/permissions.yaml) ---
 	// Caller should set permission policy via AgentConfig or SetPermissionPolicy before Configure.
@@ -93,7 +101,13 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 
 	// --- MCP servers (async) ---
 	var mgr *mcp.Manager
-	if !a.mcpOwned {
+	if a.Config.DisableMCP {
+		// Non-interactive modes (e.g. `tachi -p`) skip MCP entirely:
+		// no server connection, no MCPSearchTools registration, no
+		// DeferredToolReminder. MCPManager stays nil — WaitForMCP /
+		// MCPReady / DeferredPool / discoveredSet all nil-check.
+		a.Config.Logger.Info(ctx, "MCP: disabled (non-interactive mode)")
+	} else if !a.mcpOwned {
 		// Shared MCP was injected via SetSharedMCP — reuse it. The owner
 		// (e.g. channel.Manager) is responsible for ConnectAll/Close, so we
 		// return nil here to keep the caller's `defer mgr.Close()` a no-op.
@@ -448,11 +462,17 @@ func (a *AIAgent) buildReminderCollectorFrom(sysCfg SystemReminderConfig) {
 	reminders = append(reminders,
 		systemreminder.DateReminder{},
 		systemreminder.ProjectContextReminder{},
-		a.skillListReminder,
 		&systemreminder.BackgroundTaskReminder{
 			Provider: &backgroundTaskProvider{pm: a.Config.ProcessManager},
 		},
 	)
+
+	// Skill list reminder — only when skills are initialized (DisableSkills
+	// leaves skillListReminder nil, and appending a nil Reminder would panic
+	// on first Collect).
+	if a.skillListReminder != nil {
+		reminders = append(reminders, a.skillListReminder)
+	}
 
 	// Plan tracking reminder — only meaningful where SavePlan is available
 	// (ACP sessions with a plan card UI).

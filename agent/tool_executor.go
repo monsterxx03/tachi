@@ -333,9 +333,12 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 		}
 
 		// When skill_create succeeds, mark the SkillListReminder dirty so the
-		// updated skill list is injected on the next user message.
+		// updated skill list is injected on the next user message. Guarded by
+		// nil check: DisableSkills leaves skillListReminder unset.
 		if tc.Function.Name == tools.ToolNameSkill && tr.Status == tools.ToolResultSuccess {
-			a.skillListReminder.MarkDirty()
+			if a.skillListReminder != nil {
+				a.skillListReminder.MarkDirty()
+			}
 		}
 
 		// EditFile never requires confirmation (design decision), so this

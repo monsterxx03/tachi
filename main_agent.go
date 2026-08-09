@@ -48,6 +48,8 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		Logger:           logger.New("run"),
 		PermissionMode:   agent.PermissionModeSkip,
 		SkipMemoryRecall: true,
+		DisableMCP:       true, // commit only needs Bash — skip MCP connection entirely
+		DisableSkills:    true, // and skill discovery
 		FullConfig:       cfg,
 		SystemConfig:     agent.SystemConfigFromConfig(cfg),
 	})
@@ -147,6 +149,8 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 		PermissionMode:         agent.PermissionModeSkip,
 		SkipMemoryRecall:       true,
 		DisableSystemReminders: true, // non-interactive: no date/git/project/skills reminders
+		DisableMCP:             true, // non-interactive: skip MCP server connection
+		DisableSkills:          true, // non-interactive: skip skill discovery
 		FullConfig:             cfg,
 		SystemConfig:           agent.SystemConfigFromConfig(cfg),
 	})
@@ -170,6 +174,8 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	aiAgent.UnregisterTool(tools.ToolNameAskUser)
 
 	// Wait briefly for MCP to connect so the first LLM call has tools available.
+	// No-op when MCP is disabled (DisableMCP): WaitForMCP returns immediately
+	// on a nil manager.
 	mcpCtx, mcpCancel := context.WithTimeout(ctx, 5*time.Second)
 	if err := aiAgent.WaitForMCP(mcpCtx); err != nil {
 		fmt.Fprintf(os.Stderr, "MCP: background init still in progress (continuing)...\n")

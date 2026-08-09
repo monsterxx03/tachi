@@ -106,6 +106,8 @@ type AgentConfig struct {
 	TitleGenEnabled        *bool // 构造输入（nil = config-based）
 	SkipMemoryRecall       bool  // 只读配置
 	DisableSystemReminders bool  // 只读配置：禁用全部 system reminder（非交互模式如 `tachi -p`）
+	DisableMCP             bool  // 只读配置：跳过 MCP server 连接与工具发现（非交互模式如 `tachi -p` / `tachi commit`）
+	DisableSkills          bool  // 只读配置：跳过 skill store 扫描与 skill 工具注册（非交互模式如 `tachi -p` / `tachi commit`）
 	AutoApprovePolicyAsks  bool  // 构造输入 → 初始化 PermState
 
 	// --- 独立 Provider（构造输入；nil = fallback 到主 provider）---
