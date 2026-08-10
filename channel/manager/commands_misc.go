@@ -56,9 +56,8 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string, aiAgent
 	if err != nil {
 		return "", fmt.Errorf("创建压缩会话失败: %w", err)
 	}
-
-	// Migrate ThreadID to new session (sm.Current now points to the new session).
-	sm.SetThreadID(threadID)
+	// ThreadID migration is handled inside FinalizeCompact: the new session
+	// inherits the binding and the old session releases it.
 
 	return fmt.Sprintf(
 		"🔍 对话已压缩\n\n原会话: %s (%s)\n消息数: %d\n\n摘要:\n%s",

@@ -44,7 +44,13 @@ func (a *AIAgent) CompleteCompact(sm SessionManager, systemPrompt, summary strin
 // history (with system prompt prepended) ready for RunConversationStream.
 //
 // The old session's meta is updated with compacted_child_id.
-// ThreadID migration is handled by the caller if needed.
+// The thread binding (ThreadID) is migrated here: the new session inherits
+// the old session's ThreadID and the old session releases it. Without this,
+// FindByThreadID (channel mode's session lookup) would keep resolving to the
+// pre-compact session and reload its full history on every turn — causing
+// repeated auto-compaction right after a compaction reset the context. This
+// applies to every entry point (TUI, ACP, channel), including the auto-compact
+// path inside the agent loop, where no caller can perform the migration.
 //
 // Prefer AIAgent.CompleteCompact, which additionally cleans up orphaned
 // sessions on failure; call this directly only when there is no agent.
@@ -90,12 +96,18 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	newSess.Title = oldSess.Title
 	newSess.CompactedParentID = oldSess.ID
 	newSess.CompactedParentTitle = oldSess.Title
+	newSess.ThreadID = oldSess.ThreadID // migrate the thread binding, if any
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
 	}
 
 	// 4. Update old session meta
 	oldSess.CompactedChildID = newSess.ID
+	// Release the thread binding so FindByThreadID resolves to the new
+	// session (it is newer, and channel mode must not reload the
+	// pre-compact history). Also lets session cleanup reclaim the old
+	// session instead of pinning every compacted ancestor forever.
+	oldSess.ThreadID = ""
 	if err := sm.UpdateMeta(oldSess); err != nil {
 		// Non-fatal: log but continue. The new session is already created.
 		// The old session's compacted_child_id is missing, but the new

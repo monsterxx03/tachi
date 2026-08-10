@@ -105,6 +105,65 @@ func TestFinalizeCompact_PreservesProviderModelWorkingDir(t *testing.T) {
 	assert.Equal(t, oldSess.WorkingDir, newSess.WorkingDir)
 }
 
+// TestFinalizeCompact_MigratesThreadID guards against repeated auto-compact
+// on channel threads: after a compaction the new session must own the thread
+// binding and the old session must release it, so FindByThreadID (channel
+// mode's session lookup) resolves to the compacted session — not the
+// pre-compact one with its full history. Without this migration, a thread's
+// next turn reloads the full history and auto-compacts again right after a
+// compaction reset the context.
+func TestFinalizeCompact_MigratesThreadID(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("openai", "/my/project")
+	require.NoError(t, err)
+	sm.SetThreadID("discord:12345")
+
+	_, err = FinalizeCompact(sm, "prompt", "summary")
+	require.NoError(t, err)
+
+	// The NEW session owns the thread binding.
+	newSess := sm.Current()
+	require.NotNil(t, newSess)
+	assert.NotEqual(t, oldSess.ID, newSess.ID)
+	assert.Equal(t, "discord:12345", newSess.ThreadID, "new session should inherit the thread binding")
+
+	// FindByThreadID must resolve to the new session (the compacted one).
+	found, err := sm.FindByThreadID("discord:12345")
+	require.NoError(t, err)
+	require.NotNil(t, found)
+	assert.Equal(t, newSess.ID, found.ID, "FindByThreadID should hit the new session")
+
+	// The old session releases the binding, so cleanup can reclaim it and
+	// lookups are unambiguous even if list ordering ever changes.
+	oldLoaded, err := store.LoadMeta(oldSess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "", oldLoaded.ThreadID, "old session should release the thread binding")
+	assert.Equal(t, newSess.ID, oldLoaded.CompactedChildID)
+}
+
+// TestFinalizeCompact_NoThreadIDNoop ensures the migration is a no-op when the
+// old session has no thread binding (TUI/one-off sessions).
+func TestFinalizeCompact_NoThreadIDNoop(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("openai", "/my/project")
+	require.NoError(t, err)
+
+	_, err = FinalizeCompact(sm, "prompt", "summary")
+	require.NoError(t, err)
+
+	newSess := sm.Current()
+	assert.Equal(t, "", newSess.ThreadID)
+	oldLoaded, err := store.LoadMeta(oldSess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "", oldLoaded.ThreadID)
+}
+
 func TestDrainCompactEvents_ReturnsResponseText(t *testing.T) {
 	ch := make(chan AgentEvent, 10)
 

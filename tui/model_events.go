@@ -226,12 +226,6 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			summary := event.Result.Response
 			sm := m.agent.SessionManager()
 
-			// Save old ThreadID before FinalizeCompact (sm.New changes current)
-			oldThreadID := ""
-			if oldSess := sm.Current(); oldSess != nil {
-				oldThreadID = oldSess.ThreadID
-			}
-
 			oldMsgCount := len(m.savedHistory)
 			newHistory, err := m.agent.CompleteCompact(sm, m.systemPrompt, summary)
 			if err != nil {
@@ -242,11 +236,8 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 				m.rollbackCompact("压缩失败: " + err.Error())
 				return nil
 			}
-
-			// Migrate ThreadID to new session
-			if oldThreadID != "" {
-				sm.SetThreadID(oldThreadID)
-			}
+			// ThreadID migration is handled inside FinalizeCompact: the new
+			// session inherits the binding and the old session releases it.
 
 			m.history = newHistory
 			m.savedHistory = nil
