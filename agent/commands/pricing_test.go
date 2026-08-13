@@ -4,9 +4,34 @@ import (
 	"testing"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 func f64(v float64) *float64 { return &v }
+
+// pricesEqual compares two resolved ModelPrice snapshots deeply: the four
+// unit prices plus each band's window/name/prices. ModelPrice now carries a
+// slice (Bands), so struct equality (==) no longer compiles — this is the
+// field-wise stand-in for the tests that compare resolution outcomes.
+func pricesEqual(a, b *llm.ModelPrice) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	if a.InputPrice != b.InputPrice || a.OutputPrice != b.OutputPrice ||
+		a.CacheReadInputPrice != b.CacheReadInputPrice ||
+		a.CacheCreationInputPrice != b.CacheCreationInputPrice {
+		return false
+	}
+	if len(a.Bands) != len(b.Bands) {
+		return false
+	}
+	for i := range a.Bands {
+		if a.Bands[i] != b.Bands[i] {
+			return false
+		}
+	}
+	return true
+}
 
 func TestResolveModelPrice_UsesProviderOverrides(t *testing.T) {
 	cfg := &config.Config{
@@ -15,7 +40,7 @@ func TestResolveModelPrice_UsesProviderOverrides(t *testing.T) {
 			Type:  "anthropic",
 			Model: "claude-sonnet-4-5",
 			Spec: config.ModelSpec{
-				Pricing: &config.ModelPricing{
+				Pricing: &llm.PricingConfig{
 					InputPrice:  f64(1.5),
 					OutputPrice: f64(7.5),
 				},
@@ -42,7 +67,7 @@ func TestResolveModelPrice_CacheOverrides(t *testing.T) {
 		Providers: []config.ProviderConfig{{
 			Name: "custom",
 			Spec: config.ModelSpec{
-				Pricing: &config.ModelPricing{
+				Pricing: &llm.PricingConfig{
 					CacheReadInputPrice:     f64(0.3),
 					CacheCreationInputPrice: f64(3.75),
 				},
@@ -76,7 +101,7 @@ func TestResolveModelPrice_FallsBackToBuiltin(t *testing.T) {
 	if withProvider == nil || noProvider == nil {
 		t.Fatalf("expected built-in price for a known model (got %v / %v)", withProvider, noProvider)
 	}
-	if *withProvider != *noProvider {
+	if !pricesEqual(withProvider, noProvider) {
 		t.Errorf("a provider without prices should match the built-in lookup: %+v vs %+v",
 			withProvider, noProvider)
 	}
@@ -86,7 +111,7 @@ func TestResolveModelPrice_UnknownProviderName(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{{
 			Name: "known",
-			Spec: config.ModelSpec{Pricing: &config.ModelPricing{InputPrice: f64(99)}},
+			Spec: config.ModelSpec{Pricing: &llm.PricingConfig{InputPrice: f64(99)}},
 		}},
 	}
 
@@ -99,7 +124,7 @@ func TestResolveModelPrice_UnknownProviderName(t *testing.T) {
 	if price.InputPrice == 99 {
 		t.Error("prices from an unrelated provider must not leak in")
 	}
-	if *price != *builtin {
+	if !pricesEqual(price, builtin) {
 		t.Errorf("unknown provider should fall back to built-in: %+v vs %+v", price, builtin)
 	}
 }

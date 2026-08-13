@@ -119,8 +119,8 @@ func TestRunOneOffStream_RecordsUsageRows(t *testing.T) {
 
 	// Wrap the provider manually — NewAIAgent does not (NewAIAgentWithConfig
 	// does); the kind/session anchoring being tested lives in RunOneOffStream.
-	wrapped := llm.WrapRecordingProvider(provider, rec, func(provider llm.Provider, model string) *llm.ModelPrice {
-		return &llm.ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}
+	wrapped := llm.WrapRecordingProvider(provider, rec, func(provider llm.Provider, model string) llm.ResolvedPrice {
+		return llm.ResolvedPrice{Price: llm.ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}}
 	})
 
 	ch := a.RunOneOffStream(context.Background(), wrapped, "sys", "hello",

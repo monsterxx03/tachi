@@ -86,6 +86,12 @@ type UsageRow struct {
 	OutputPrice        float64 `json:"output_price"`
 	CacheReadPrice     float64 `json:"cache_read_price"`
 	CacheCreationPrice float64 `json:"cache_creation_price"`
+
+	// Band names the time-of-use band that was in effect at call time
+	// (e.g. "peak" for DeepSeek 峰谷定价); empty = flat price applied.
+	// Written from the resolved price's band (ResolvedPrice.Band) — the
+	// row stays self-contained: "why is this row priced like this".
+	Band string `json:"band,omitempty"`
 }
 
 // Cost computes this row's cost in CNY from its own price snapshot.
@@ -249,11 +255,32 @@ func (r *UsageRecorder) scanRows(from time.Time, match func(row *UsageRow) bool)
 	return rows, nil
 }
 
+// ResolvedPrice is the outcome of one price resolution: the FINAL per-call
+// price snapshot (already pinned to the call's point in time — time-of-use
+// bands have been applied, Bands consumed) plus the name of the band that
+// matched ("" = flat price).
+type ResolvedPrice struct {
+	Price ModelPrice
+	Band  string
+}
+
+// HasPrice reports whether the resolution found any effective price at all.
+// A fully-zero snapshot (nil resolution, unknown model, or explicitly-free
+// pricing) counts as "no price data" — cost arithmetic yields 0 either way,
+// but callers that need to distinguish (e.g. /usage's "No pricing data
+// available" vs a priced report) use this.
+func (r ResolvedPrice) HasPrice() bool {
+	return r.Price.InputPrice != 0 || r.Price.OutputPrice != 0 ||
+		r.Price.CacheReadInputPrice != 0 || r.Price.CacheCreationInputPrice != 0
+}
+
 // PriceResolver resolves the effective price for a model at call time.
 // The agent constructs it closing over the config; the provider argument
 // carries the config name (Provider.ProviderName) for per-provider price
-// overrides.
-type PriceResolver func(provider Provider, model string) *ModelPrice
+// overrides. Resolution MUST pin the price to the call's point in time
+// (e.g. ResolveModelPriceAt with time.Now()) — the returned snapshot is
+// written verbatim to the ledger row.
+type PriceResolver func(provider Provider, model string) ResolvedPrice
 
 // RecordingProvider wraps a Provider and records every successful LLM call's
 // usage into the ledger. It MUST be the outermost decorator (outside
@@ -364,12 +391,13 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 	}
 
 	// Price snapshot at call time (0 for a category = not charged).
-	pr := &ModelPrice{}
+	// The resolver pins the price to now (time-of-use aware); an unpriced
+	// model yields a zero price and is counted as unpriced.
+	rp := ResolvedPrice{}
 	if p.price != nil {
-		if resolved := p.price(p.inner, p.inner.Model()); resolved != nil {
-			pr = resolved
-		}
+		rp = p.price(p.inner, p.inner.Model())
 	}
+	pr := &rp.Price
 	cacheReadPrice, cacheCreationPrice := CacheReadCreationPrice(pr)
 
 	// Normalize input to cache-miss scale (shared rule, see
@@ -398,6 +426,7 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 		OutputPrice:              pr.OutputPrice,
 		CacheReadPrice:           cacheReadPrice,
 		CacheCreationPrice:       cacheCreationPrice,
+		Band:                     rp.Band,
 	})
 }
 

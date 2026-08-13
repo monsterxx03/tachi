@@ -85,15 +85,6 @@ func FindProjectRoot() string {
 	return cwd
 }
 
-// ModelPricing 定价覆盖（CNY / 1M tokens）。
-// 设置后覆盖内置价格表；设为 0 禁用该项成本计算；留空（nil）时使用内置价格表。
-type ModelPricing struct {
-	InputPrice              *float64 `yaml:"input_price,omitempty"`
-	OutputPrice             *float64 `yaml:"output_price,omitempty"`
-	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price,omitempty"`
-	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price,omitempty"`
-}
-
 // ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别、请求行为。
 // 通过 ProviderConfig.Spec 嵌套配置（不向前兼容旧版平铺字段）。
 type ModelSpec struct {
@@ -119,8 +110,9 @@ type ModelSpec struct {
 	// anthropic / openai-res 走 SDK 的 option.WithRequestTimeout。
 	Timeout time.Duration `yaml:"timeout,omitempty"`
 
-	// Pricing 定价覆盖（可选，覆盖内置价格表）。
-	Pricing *ModelPricing `yaml:"pricing,omitempty"`
+	// Pricing 定价覆盖（可选，覆盖内置价格表）。类型定义在 llm 包
+	// （llm.PricingConfig）——定价 schema 单一来源，config 只负责装载。
+	Pricing *llm.PricingConfig `yaml:"pricing,omitempty"`
 }
 
 type ProviderConfig struct {

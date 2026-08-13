@@ -62,8 +62,8 @@ func TestRecordingProvider_CreateChat(t *testing.T) {
 			},
 		},
 	}
-	p := WrapRecordingProvider(inner, rec, func(provider Provider, model string) *ModelPrice {
-		return &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02}
+	p := WrapRecordingProvider(inner, rec, func(provider Provider, model string) ResolvedPrice {
+		return ResolvedPrice{Price: ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02}}
 	})
 
 	ctx := WithUsageKind(context.Background(), UsageKindCommit)
@@ -157,7 +157,9 @@ func TestRecordingProvider_CreateChatStream_PassthroughAndRecord(t *testing.T) {
 			{Type: StreamEventDone, FinishReason: "stop", Usage: &Usage{InputTokens: 100, OutputTokens: 10}},
 		},
 	}
-	p := WrapRecordingProvider(inner, rec, func(Provider, string) *ModelPrice { return &ModelPrice{InputPrice: 1, OutputPrice: 2} })
+	p := WrapRecordingProvider(inner, rec, func(Provider, string) ResolvedPrice {
+		return ResolvedPrice{Price: ModelPrice{InputPrice: 1, OutputPrice: 2}}
+	})
 	ch, err := p.CreateChatStream(context.Background(), nil, nil, ChatOptions{})
 	if err != nil {
 		t.Fatalf("CreateChatStream: %v", err)
@@ -223,6 +225,54 @@ func TestRecordingProvider_SubagentCompositeID(t *testing.T) {
 	// The composite row must NOT appear under its own ID.
 	if orphan, _ := rec.Rows("sess-9:ab12", time.Time{}); len(orphan) != 0 {
 		t.Fatalf("composite ID leaked: %+v", orphan)
+	}
+}
+
+// TestRecordingProvider_BandWrittenToRow: the resolver's matched band name
+// lands in the ledger row (json "band"), so the row stays self-contained —
+// "why is this row priced like this" is auditable without re-resolving.
+func TestRecordingProvider_BandWrittenToRow(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewUsageRecorder(dir)
+	inner := &stubRecordingProvider{
+		name:  ProviderTypeOpenAI,
+		model: "deepseek-chat",
+		resp:  &Response{Usage: &Usage{InputTokens: 100, OutputTokens: 10}},
+	}
+	// Resolver pins a peak-band snapshot (as cmds.ResolveModelPriceAt does at
+	// call time).
+	p := WrapRecordingProvider(inner, rec, func(Provider, string) ResolvedPrice {
+		return ResolvedPrice{
+			Price: ModelPrice{InputPrice: 3.0, OutputPrice: 9.0, CacheReadInputPrice: 0.10},
+			Band:  "peak",
+		}
+	})
+	if _, err := p.CreateChat(context.Background(), nil, nil, ChatOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := rec.Rows("", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	if rows[0].Band != "peak" {
+		t.Errorf("Band = %q, want peak", rows[0].Band)
+	}
+	if rows[0].InputPrice != 3.0 {
+		t.Errorf("InputPrice = %v, want 3.0 (band snapshot)", rows[0].InputPrice)
+	}
+
+	// JSON round-trip: band serializes as json "band". Derive the day file
+	// from the recorded row's own timestamp, not a second time.Now() — a
+	// midnight-crossing execution must not read the wrong (empty) file.
+	data, err := os.ReadFile(filepath.Join(dir, rows[0].TS.Format("2006-01-02")+".jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"band":"peak"`) {
+		t.Errorf("row JSON must carry the band: %s", data)
 	}
 }
 

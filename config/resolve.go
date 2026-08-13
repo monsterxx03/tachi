@@ -300,3 +300,23 @@ func (c *Config) ExpandProviderAliases() {
 	c.DeepResearch.QueryGeneratorProvider = resolve(c.DeepResearch.QueryGeneratorProvider)
 	c.Dream.Provider = resolve(c.Dream.Provider)
 }
+
+// PricingSchedule implements llm.PriceScheduleSource: it returns the
+// provider's pricing override block verbatim (nil = unknown provider or no
+// pricing configured — llm.ResolveModelPriceAt then uses the built-in table
+// alone). The type is llm.PricingConfig, so there is NO translation: the
+// config carries the resolver's own schema, one source of truth.
+//
+// This is the config side of the dependency-inverted pricing resolver: all
+// pricing SEMANTICS (built-in table, versioning, band inheritance, time
+// pinning) live in llm; config only loads user-facing YAML into llm types.
+func (c *Config) PricingSchedule(providerName string) *llm.PricingConfig {
+	if c == nil || providerName == "" {
+		return nil
+	}
+	pCfg := c.ProviderConfig(providerName)
+	if pCfg == nil {
+		return nil
+	}
+	return pCfg.Spec.Pricing
+}

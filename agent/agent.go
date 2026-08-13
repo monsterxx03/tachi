@@ -8,8 +8,8 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
-	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -1036,8 +1036,8 @@ func wrapForUsage(p llm.Provider, rec *llm.UsageRecorder, cfg *config.Config) ll
 	if p == nil {
 		return p
 	}
-	return llm.WrapRecordingProvider(p, rec, func(provider llm.Provider, model string) *llm.ModelPrice {
-		return cmds.ResolveModelPrice(cfg, provider.ProviderName(), model)
+	return llm.WrapRecordingProvider(p, rec, func(provider llm.Provider, model string) llm.ResolvedPrice {
+		return llm.ResolveModelPriceAt(cfg, provider.ProviderName(), model, time.Now())
 	})
 }
 
