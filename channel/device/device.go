@@ -89,6 +89,35 @@ func NewChannel(cfg DeviceConfig) (*DeviceChannel, error) {
 
 func (d *DeviceChannel) Name() string { return "device" }
 
+// ShowTurnSummary reports whether assistant replies should include the
+// iteration/duration/trace footer. The device face page is a personified
+// conversation UI — technical metadata would break the illusion, so the
+// footer is suppressed.
+func (d *DeviceChannel) ShowTurnSummary() bool { return false }
+
+// SystemPromptSuffix returns extra system prompt instructions for the device
+// channel. Replies on the face page are spoken aloud via browser TTS and
+// shown in a compact chat log, so they must be short, plain text, and free
+// of emoji/markdown (the TTS layer strips markdown symbols before reading).
+func (d *DeviceChannel) SystemPromptSuffix() string {
+	return `
+## Device — Voice Conversation
+
+You are talking to the user through a voice-enabled browser interface
+(a face with eyes, microphone and camera). Your reply is read aloud by
+text-to-speech, so write for the ear, not for the screen.
+
+Rules:
+- Keep replies SHORT — one or two sentences at most. This is a spoken
+  conversation, not a document.
+- Use plain text only. No emoji, no markdown formatting (bold, code
+  blocks, headings, bullet lists).
+- Be warm and conversational, like talking face to face.
+- When the user sends a photo, describe what you see briefly and reply
+  conversationally.
+`
+}
+
 func (d *DeviceChannel) OnStart(ctx context.Context) error { return nil }
 
 func (d *DeviceChannel) Run(ctx context.Context, handler channel.MessageHandler) error {
@@ -99,7 +128,7 @@ func (d *DeviceChannel) Run(ctx context.Context, handler channel.MessageHandler)
 	mux.HandleFunc("/api/chat", d.handleChat)
 	mux.HandleFunc("/api/vision", d.handleVision)
 	mux.HandleFunc("/api/health", func(w http.ResponseWriter, _ *http.Request) {
-		w.Write([]byte("ok"))
+		_, _ = w.Write([]byte("ok"))
 	})
 
 	addr := fmt.Sprintf("%s:%d", d.cfg.Host, d.cfg.Port)
@@ -134,7 +163,7 @@ func (d *DeviceChannel) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	w.Write(data)
+	_, _ = w.Write(data)
 }
 
 // handleChat accepts {message: "..."} and returns {reply: "..."}.

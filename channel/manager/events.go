@@ -28,7 +28,12 @@ import (
 // onTextDelta is an optional callback for streaming text output. It is called
 // for each AgentEventTextDelta so channel implementations can push text in
 // real time (e.g. Wave streaming cards). It may be nil.
-func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback) (string, error) {
+//
+// showTurnSummary controls whether the "回合: N 次迭代, 耗时 xx, trace: xxx"
+// footer is appended to the assistant reply on AgentEventTurnComplete.
+// Channels implementing channel.TurnSummaryPolicy can opt out; everything
+// else defaults to true.
+func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, aiAgent *agent.AIAgent, sendProgress func(string), ta *threadActivation, onTextDelta StreamingCallback, showTurnSummary bool) (string, error) {
 	var text strings.Builder
 	var lastErr error
 	pushedTools := make(map[string]bool) // tool IDs already streamed to card
@@ -182,7 +187,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				// text already accumulated all AgentEventTextDelta across
 				// iterations — keep it. event.Result.Response only carries
 				// the last iteration's text and would discard earlier output.
-				if event.Result.IterationsUsed > 0 {
+				if showTurnSummary && event.Result.IterationsUsed > 0 {
 					if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
 						text.WriteString(summary)
 					}

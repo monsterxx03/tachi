@@ -496,6 +496,14 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 		}
 	}
 
+	// Channels may opt out of the turn summary footer (iterations/duration/
+	// trace) via channel.TurnSummaryPolicy — e.g. the device face page keeps
+	// replies clean. Everything else shows the summary.
+	showTurnSummary := true
+	if s, ok := threadCh.(channel.TurnSummaryPolicy); ok {
+		showTurnSummary = s.ShowTurnSummary()
+	}
+
 	// Store thread context for AskUser support — drainEvents uses these
 	// to send questions to the user and wait for a reply.
 	ta.mu.Lock()
@@ -506,7 +514,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	eventCh := aiAgent.RunConversationStream(ctx, priorHistory, userContent, systemPrompt, llm.ChatOptions{
 		MaxTokens: resolved.MaxTokens,
 	}, scope.ropts...)
-	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, onTextDelta)
+	text, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, ta, onTextDelta, showTurnSummary)
 
 	// Update the in-memory history cache with the full message slice from
 	// this turn (history + wrapped user msg + assistant + tool results).

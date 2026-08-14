@@ -24,8 +24,8 @@
     flex-direction: column;
     align-items: center;
   }
-  #stage { position: relative; width: 100%; flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; }
-  canvas#face { width: 100%; height: 100%; display: block; cursor: pointer; }
+  #stage { position: fixed; inset: 0; overflow: hidden; }
+  canvas#face { position: absolute; inset: 0; width: 100%; height: 100%; display: block; cursor: pointer; }
 
   #statusbar {
     position: absolute; top: 12px; left: 0; right: 0;
@@ -39,8 +39,12 @@
   body.mood-speak #statusdot { background: var(--ok); }
 
   #controls {
+    position: fixed; left: 50%; bottom: 0; transform: translateX(-50%);
     width: 100%; max-width: 560px; padding: 14px 16px 20px;
     display: flex; flex-direction: column; gap: 10px; z-index: 10;
+    max-height: calc(100vh - 24px);
+    max-height: calc(100dvh - 24px);
+    overflow-y: auto;
   }
   #talkbtn {
     height: 56px; border: none; border-radius: 28px;
@@ -215,7 +219,7 @@ function draw() {
   tickBlink(now);
 
   const cx1 = W * 0.36, cx2 = W * 0.64;
-  const cy = H * 0.42;
+  const cy = H * 0.48;
   const rx = Math.min(W * 0.09, H * 0.1);
   const ry = rx * 1.15;
 

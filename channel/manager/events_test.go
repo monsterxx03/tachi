@@ -2,6 +2,7 @@ package manager
 
 import (
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/stretchr/testify/assert"
@@ -23,7 +24,7 @@ func TestDrainEvents_SegmentBreakBetweenToolRounds(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "搜索结果是：x"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "让我先搜索一下\n搜索结果是：x", text)
 }
@@ -39,7 +40,7 @@ func TestDrainEvents_NoDoubleBreakWhenEndsWithNewline(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "搜索结果是：x"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "让我先搜索一下\n搜索结果是：x", text)
 }
@@ -55,7 +56,7 @@ func TestDrainEvents_NoLeadingBreakWhenToolCalledFirst(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "结果是 x"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "结果是 x", text)
 }
@@ -73,7 +74,7 @@ func TestDrainEvents_SegmentBreakAcrossMultipleRounds(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "第三轮"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "第一轮\n第二轮\n第三轮", text)
 }
@@ -90,7 +91,29 @@ func TestDrainEvents_SegmentBreakOnSteerBoundary(t *testing.T) {
 	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "后半"}
 	close(ch)
 
-	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil)
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, true)
 	require.NoError(t, err)
 	assert.Equal(t, "前半\n后半", text)
+}
+
+// TestDrainEvents_TurnSummarySuppressed verifies that when showTurnSummary
+// is false (e.g. the device channel opted out via channel.TurnSummaryPolicy),
+// the iteration/duration/trace footer is NOT appended to the reply.
+func TestDrainEvents_TurnSummarySuppressed(t *testing.T) {
+	mgr, _ := newOneoffTestManager(t, nil, "drain-nosummary-thread")
+
+	ch := make(chan agent.AgentEvent, 16)
+	ch <- agent.AgentEvent{Type: agent.AgentEventTextDelta, TextDelta: "你好"}
+	ch <- agent.AgentEvent{Type: agent.AgentEventTurnComplete, Result: &agent.RunResult{
+		IterationsUsed: 3,
+		Duration:       5 * time.Second,
+		TraceID:        "trace_abc",
+	}}
+	close(ch)
+
+	text, err := mgr.drainEvents(t.Context(), ch, nil, nil, nil, nil, false)
+	require.NoError(t, err)
+	assert.Equal(t, "你好", text)
+	assert.NotContains(t, text, "回合")
+	assert.NotContains(t, text, "trace")
 }

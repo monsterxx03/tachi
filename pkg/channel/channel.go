@@ -389,6 +389,22 @@ type SystemPromptSuffixer interface {
 	SystemPromptSuffix() string
 }
 
+// TurnSummaryPolicy is an optional interface for channels that want to
+// control whether assistant replies include the turn summary footer
+// (iterations, duration, trace ID) appended by the manager.
+//
+// Channels that do NOT implement this interface default to showing the
+// summary. A channel implementing it and returning false gets clean,
+// assistant-only replies — useful for face-style UIs (e.g. the device
+// channel) where technical metadata would break the interaction illusion.
+type TurnSummaryPolicy interface {
+	Channel
+
+	// ShowTurnSummary reports whether assistant replies should append the
+	// "回合: N 次迭代, 耗时 xx, trace: xxx" footer. Default is true.
+	ShowTurnSummary() bool
+}
+
 // Autocompleter is an optional interface for channels that want to receive
 // the list of available option values for slash command autocomplete.
 // The Manager calls SetProviderNames and SetThinkingLevels before Run().

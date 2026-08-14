@@ -91,7 +91,7 @@ func (m *Manager) OnCronTrigger(ctx context.Context, job *cron.Job) error {
 		m.sendToThread(ctx, job.TargetThreadID, text, fmt.Sprintf("cron_%s_%d", job.ID, time.Now().Unix()))
 	}
 
-	result, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, nil, nil)
+	result, err := m.drainEvents(ctx, eventCh, aiAgent, sendProgress, nil, nil, true)
 
 	// Update cached history after cron turn.
 	if msgs := aiAgent.GetLastMessages(); len(msgs) > 0 {

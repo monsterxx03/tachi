@@ -229,7 +229,7 @@ func TestDrainEvents_BasicResponse(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(t.Context(), eventCh, aiAgent, nil, nil, nil)
+	result, err := mgr.drainEvents(t.Context(), eventCh, aiAgent, nil, nil, nil, true)
 	require.NoError(t, err)
 	// Response should include the original text followed by turn summary
 	assert.Contains(t, result, "Hello, I'm Tachi!")
@@ -278,7 +278,7 @@ func TestDrainEvents_ConfirmationDoesNotDeadlock(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(t.Context(), eventCh, aiAgent, nil, nil, nil)
+	result, err := mgr.drainEvents(t.Context(), eventCh, aiAgent, nil, nil, nil, true)
 	t.Logf("result=%q err=%v", result, err)
 	// Either result is set (tool executed) or err (file not found) — neither
 	// case is a deadlock. The function must return.
@@ -322,7 +322,7 @@ func TestDrainEvents_AskUserDoesNotDeadlock(t *testing.T) {
 		llm.ChatOptions{MaxTokens: 4096},
 	)
 
-	result, err := mgr.drainEvents(t.Context(), eventCh, aiAgent, nil, nil, nil)
+	result, err := mgr.drainEvents(t.Context(), eventCh, aiAgent, nil, nil, nil, true)
 	t.Logf("result=%q err=%v", result, err)
 	// Must not deadlock — either completes with an error or empty response.
 }

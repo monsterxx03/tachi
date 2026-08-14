@@ -345,7 +345,7 @@ func (m *Manager) runAmbientTurn(ctx context.Context, threadID string, msgs []am
 	eventCh := forkAgent.RunConversationStream(ctx, trimAmbientHistory(sessionHistory),
 		buildAmbientPrompt(history, msgs), systemPrompt,
 		llm.ChatOptions{MaxTokens: maxTokens}, ambientRopts...)
-	text, err := m.drainEvents(ctx, eventCh, forkAgent, nil, ta, nil)
+	text, err := m.drainEvents(ctx, eventCh, forkAgent, nil, ta, nil, true)
 
 	if err != nil {
 		if ctx.Err() != nil {
