@@ -25,12 +25,15 @@
 package device
 
 import (
+	"bytes"
 	"context"
 	"embed"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -50,9 +53,13 @@ var faceFS embed.FS
 //	      enabled: true
 //	      host: 0.0.0.0
 //	      port: 8080
+//	      tts_url: http://127.0.0.1:8888   # Kokoro TTS 服务（可选）
 type DeviceConfig struct {
-	Host string `yaml:"host"`
-	Port int    `yaml:"port"`
+	Host    string `yaml:"host"`
+	Port    int    `yaml:"port"`
+	TTSURL  string `yaml:"tts_url"`  // Kokoro TTS 服务地址，空则前端直连
+	TTSVoice string `yaml:"tts_voice"` // 默认音色
+	TTSSpeed float64 `yaml:"tts_speed"` // 语速
 }
 
 func init() {
@@ -61,7 +68,7 @@ func init() {
 		if err != nil {
 			return nil, fmt.Errorf("device: marshal config: %w", err)
 		}
-		cfg := DeviceConfig{Host: "0.0.0.0", Port: 8080}
+		cfg := DeviceConfig{Host: "0.0.0.0", Port: 8080, TTSVoice: "zf_027", TTSSpeed: 1.05}
 		if err := yaml.Unmarshal(b, &cfg); err != nil {
 			return nil, fmt.Errorf("device: unmarshal config: %w", err)
 		}
@@ -81,10 +88,16 @@ type DeviceChannel struct {
 	cfg     DeviceConfig
 	handler channel.MessageHandler
 	server  *http.Server
+	ttsHTTP *http.Client
+	ttsCache map[string]string // text -> base64 wav（简单去重，不缓存 TTS 服务）
 }
 
 func NewChannel(cfg DeviceConfig) (*DeviceChannel, error) {
-	return &DeviceChannel{cfg: cfg}, nil
+	return &DeviceChannel{
+		cfg: cfg,
+		ttsHTTP: &http.Client{Timeout: 30 * time.Second},
+		ttsCache: make(map[string]string),
+	}, nil
 }
 
 func (d *DeviceChannel) Name() string { return "device" }
@@ -119,6 +132,53 @@ Rules:
 }
 
 func (d *DeviceChannel) OnStart(ctx context.Context) error { return nil }
+
+// synthSpeech 调本地 Kokoro TTS 把文本合成 wav（base64）。
+// 返回空字符串表示 TTS 不可用（前端会自动降级到浏览器语音）。
+func (d *DeviceChannel) synthSpeech(text string) string {
+	if d.cfg.TTSURL == "" {
+		return ""
+	}
+	clean := strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r == '\t' {
+			return ' '
+		}
+		return r
+	}, text)
+	if len(clean) > 500 {
+		clean = clean[:500]
+	}
+	if v, ok := d.ttsCache[clean]; ok {
+		return v
+	}
+	payload, _ := json.Marshal(map[string]any{
+		"text":  clean,
+		"voice": d.cfg.TTSVoice,
+		"speed": d.cfg.TTSSpeed,
+	})
+	req, err := http.NewRequest(http.MethodPost, d.cfg.TTSURL+"/tts", bytes.NewReader(payload))
+	if err != nil {
+		return ""
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := d.ttsHTTP.Do(req)
+	if err != nil {
+		return ""
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	wav, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
+	if err != nil {
+		return ""
+	}
+	b64 := base64.StdEncoding.EncodeToString(wav)
+	if len(d.ttsCache) < 512 { // 防内存膨胀
+		d.ttsCache[clean] = b64
+	}
+	return b64
+}
 
 func (d *DeviceChannel) Run(ctx context.Context, handler channel.MessageHandler) error {
 	d.handler = handler
@@ -194,12 +254,18 @@ func (d *DeviceChannel) handleChat(w http.ResponseWriter, r *http.Request) {
 		Directed:  true,
 	})
 
+	reply := result.Reply.Content
 	resp := map[string]any{
-		"reply": result.Reply.Content,
+		"reply": reply,
 		"ok":    result.Err == nil,
 	}
 	if result.Err != nil {
 		resp["error"] = result.Err.Error()
+	} else {
+		// 服务端生成语音，随响应推给前端（TTS 不可用时 audio 为空，前端降级）
+		if audio := d.synthSpeech(reply); audio != "" {
+			resp["audio"] = audio
+		}
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)
@@ -248,12 +314,15 @@ func (d *DeviceChannel) handleVision(w http.ResponseWriter, r *http.Request) {
 		}},
 	})
 
+	reply := result.Reply.Content
 	resp := map[string]any{
-		"reply": result.Reply.Content,
+		"reply": reply,
 		"ok":    result.Err == nil,
 	}
 	if result.Err != nil {
 		resp["error"] = result.Err.Error()
+	} else if audio := d.synthSpeech(reply); audio != "" {
+		resp["audio"] = audio
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	json.NewEncoder(w).Encode(resp)

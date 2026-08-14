@@ -314,7 +314,10 @@ async function sendChat(text) {
     if (!data.ok) throw new Error(data.error || "agent 错误");
     appendLog("a", data.reply);
     setMood(moods.SPEAK, Math.min(2000 + data.reply.length * 40, 8000));
-    speak(data.reply);
+    // 优先播放服务端推的语音；没有或失败则回退直连 TTS / 浏览器语音
+    if (!data.audio || !(await playServerAudio(data.audio))) {
+      speak(data.reply);
+    }
   } catch (e) {
     appendLog("t", "出错：" + e.message);
     setMood(moods.IDLE);
@@ -324,14 +327,39 @@ async function sendChat(text) {
   }
 }
 
-/* ---------- TTS ---------- */
-let zhVoices = [];
-function loadVoices() { zhVoices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("zh")); }
-if (speechSynthesis) {
-  loadVoices();
-  speechSynthesis.onvoiceschanged = loadVoices;
+/* ---------- TTS：本地 Kokoro（优先）→ 浏览器 speechSynthesis（降级） ---------- */
+const TTS_URL = "http://" + location.hostname + ":8888";  // 本地 Kokoro 服务
+const TTS_VOICE = "zf_027";  // 元气少女
+
+let ttsQueue = [];       // 待播放音频队列
+let isTTSPlaying = false;
+let ttsCtx = null;       // AudioContext（惰性创建）
+let ttsGain = null;
+
+function ttsAudioContext() {
+  if (!ttsCtx) {
+    ttsCtx = new (window.AudioContext || window.webkitAudioContext)();
+    ttsGain = ttsCtx.createGain();
+    ttsGain.gain.value = 1.0;
+    ttsGain.connect(ttsCtx.destination);
+  }
+  return ttsCtx;
 }
-function speak(text) {
+
+async function ttsKokoro(text) {
+  const resp = await fetch(TTS_URL + "/tts", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ text: text.replace(/[*#`>\n]+/g, " ").slice(0, 500), voice: TTS_VOICE, speed: 1.05 }),
+  });
+  if (!resp.ok) throw new Error("TTS " + resp.status);
+  const buf = await resp.arrayBuffer();
+  const ctx = ttsAudioContext();
+  const audioBuf = await ctx.decodeAudioData(buf);
+  return audioBuf;
+}
+
+function ttsSpeakBrowser(text) {  // 降级方案
   if (!("speechSynthesis" in window)) return;
   speechSynthesis.cancel();
   const u = new SpeechSynthesisUtterance(text.replace(/[*#`>\n]+/g, " "));
@@ -339,6 +367,67 @@ function speak(text) {
   if (zhVoices.length) u.voice = zhVoices[0];
   u.rate = 1.05;
   speechSynthesis.speak(u);
+}
+
+function ttsStop() {
+  ttsQueue = [];
+  if (ttsCtx && ttsCtx.state !== "closed") ttsCtx.close().catch(() => {});
+  ttsCtx = null;
+  isTTSPlaying = false;
+  if ("speechSynthesis" in window) speechSynthesis.cancel();
+}
+
+function ttsPlayNext() {
+  if (isTTSPlaying || !ttsQueue.length || !ttsCtx) return;
+  isTTSPlaying = true;
+  const src = ttsCtx.createBufferSource();
+  src.buffer = ttsQueue.shift();
+  src.connect(ttsGain);
+  src.onended = () => {
+    isTTSPlaying = false;
+    if (ttsQueue.length) ttsPlayNext();
+    else if (ttsCtx && ttsCtx.state === "running") ttsCtx.suspend().catch(() => {});
+  };
+  src.start();
+}
+
+async function speak(text) {
+  const clean = text.replace(/[*#`>\n]+/g, " ").trim();
+  if (!clean) return;
+  try {
+    const audioBuf = await ttsKokoro(clean);
+    ttsAudioContext();           // 确保已创建
+    if (ttsCtx.state === "suspended") await ttsCtx.resume();
+    // 新消息打断旧语音（仅清队列，让正在播的播完再换——避免生硬）
+    ttsQueue = [audioBuf];
+    ttsPlayNext();
+  } catch (e) {
+    ttsSpeakBrowser(clean);      // Kokoro 不可用时降级
+  }
+}
+
+/* 播放服务端推送的 base64 音频（/api/chat 响应里的 audio 字段）*/
+async function playServerAudio(b64) {
+  try {
+    const bin = atob(b64);
+    const buf = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+    const ctx = ttsAudioContext();
+    if (ctx.state === "suspended") await ctx.resume();
+    const audioBuf = await ctx.decodeAudioData(buf.buffer);
+    ttsQueue = [audioBuf];
+    ttsPlayNext();
+    return true;
+  } catch (e) {
+    return false;  // 解码失败由调用方降级
+  }
+}
+
+let zhVoices = [];
+function loadVoices() { zhVoices = speechSynthesis.getVoices().filter(v => v.lang.toLowerCase().startsWith("zh")); }
+if (speechSynthesis) {
+  loadVoices();
+  speechSynthesis.onvoiceschanged = loadVoices;
 }
 
 /* ---------- 摄像头 ---------- */
@@ -382,7 +471,9 @@ document.getElementById("snap").addEventListener("click", async () => {
       if (!data.ok) throw new Error(data.error || "vision 错误");
       appendLog("a", data.reply);
       setMood(moods.SPEAK, Math.min(2000 + data.reply.length * 40, 8000));
-      speak(data.reply);
+      if (!data.audio || !(await playServerAudio(data.audio))) {
+        speak(data.reply);
+      }
     } catch (e) {
       appendLog("t", "出错：" + e.message);
       setMood(moods.IDLE);
@@ -410,7 +501,8 @@ document.getElementById("textin").addEventListener("keydown", e => {
 /* ---------- 启动检查 ---------- */
 if (!SR) talkbtn.textContent = "浏览器不支持语音";
 else talkbtn.disabled = false;
-if (!("speechSynthesis" in window)) setStatusText("此浏览器不支持语音合成");
+fetch(TTS_URL + "/healthz").then(r => r.ok && setStatusText("Kokoro 语音在线 🎙️"))
+  .catch(() => setStatusText("TTS 服务不可用，将使用浏览器语音"));
 </script>
 </body>
 </html>
