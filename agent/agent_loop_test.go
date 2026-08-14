@@ -40,6 +40,16 @@ func (p *mockStreamProvider) CreateChat(ctx context.Context, messages []llm.Mess
 }
 
 func (p *mockStreamProvider) CreateChatStream(ctx context.Context, messages []llm.Message, tools []llm.Tool, opts llm.ChatOptions) (<-chan llm.StreamEvent, error) {
+	// A real provider rejects a request whose context is already cancelled;
+	// surface that as a stream error so callers take the interrupted path
+	// instead of reading a stream that never comes.
+	if err := ctx.Err(); err != nil {
+		ch := make(chan llm.StreamEvent, 1)
+		ch <- llm.StreamEvent{Type: llm.StreamEventError, Error: err}
+		close(ch)
+		return ch, nil
+	}
+
 	if p.callIdx >= len(p.sequences) {
 		ch := make(chan llm.StreamEvent, 1)
 		ch <- llm.StreamEvent{Type: llm.StreamEventError, Error: fmt.Errorf("no more sequences")}
@@ -53,8 +63,23 @@ func (p *mockStreamProvider) CreateChatStream(ctx context.Context, messages []ll
 	ch := make(chan llm.StreamEvent, len(events)+4)
 	go func() {
 		defer close(ch)
+		// A nil sequence is a "hang" stream: it never emits events on its
+		// own — an LLM response still in flight. It stays open until the
+		// context is cancelled, then aborts with a stream error, exactly
+		// like a real provider whose network stream is cut mid-turn. Tests
+		// must cancel the context (otherwise the goroutine leaks).
+		if events == nil {
+			<-ctx.Done()
+			ch <- llm.StreamEvent{Type: llm.StreamEventError, Error: ctx.Err()}
+			return
+		}
 		for _, e := range events {
-			ch <- e
+			select {
+			case ch <- e:
+			case <-ctx.Done():
+				ch <- llm.StreamEvent{Type: llm.StreamEventError, Error: ctx.Err()}
+				return
+			}
 		}
 	}()
 	return ch, nil

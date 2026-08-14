@@ -23,7 +23,13 @@ func TestAgentLoop_CancelPersistsPartialTurnToDisk(t *testing.T) {
 		sequences: [][]llm.StreamEvent{
 			toolCallSeq("Bash", "call-1", `{"command":"cmd1"}`),
 			toolCallSeq("Bash", "call-2", `{"command":"cmd2"}`),
-			textSeq("never reached"),
+			// nil = hang stream: the third LLM call never completes on its
+			// own — it stays "in flight" until the test cancels, then aborts
+			// with a stream error (exactly like a real provider whose network
+			// stream is cut mid-turn). This makes the mid-turn cancel
+			// deterministic regardless of scheduler timing: the loop cannot
+			// finish this turn before cancel() lands.
+			nil,
 		},
 	}
 
