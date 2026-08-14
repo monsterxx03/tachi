@@ -65,7 +65,12 @@ func (a *AIAgent) describeImagesIfNeeded(ctx context.Context, rs *RunState, opts
 			}
 		}
 		if len(imgs) > 0 {
-			targets = append(targets, target{idx: i, role: msg.Role, msgText: msg.Content, images: imgs})
+			// msgText feeds the image-description prompt as context. Strip
+			// any injected <system-reminder> block first: reminders (git
+			// status, memory recall, MCP/skill hints, ...) are meant for the
+			// main model, and leaking them into the describing model could
+			// distort its output.
+			targets = append(targets, target{idx: i, role: msg.Role, msgText: stripSystemReminder(msg.Content), images: imgs})
 		}
 	}
 	if len(targets) == 0 {
@@ -257,6 +262,22 @@ func (a *AIAgent) buildVisionDelegate() (llm.Provider, error) {
 func imageContentKey(part llm.ContentPart) string {
 	h := sha256.Sum256([]byte(part.MediaType + "|" + part.Data))
 	return hex.EncodeToString(h[:])
+}
+
+// stripSystemReminder removes a leading <system-reminder>...</system-reminder>
+// block from message text. prepareTurnMessages prepends such blocks (git
+// status, memory recall, MCP/skill hints, date, project context, ...) to the
+// user message before the loop; they must never reach the image-description
+// call — the describing model should only see the user's actual text. A
+// message without the prefix is returned unchanged.
+func stripSystemReminder(content string) string {
+	if !strings.HasPrefix(content, "<system-reminder>") {
+		return content
+	}
+	if end := strings.Index(content, "</system-reminder>"); end >= 0 {
+		return strings.TrimPrefix(content[end+len("</system-reminder>"):], "\n")
+	}
+	return content
 }
 
 // visionDelegateName returns a display name for the delegate provider.

@@ -762,7 +762,7 @@ func (a *AIAgent) discoveredSet() *mcp.DiscoveredSet {
 // DeferredToolReminder as dirty so it fires on the next user message.
 // This is used when a user manually enables an MCP server mid-session —
 // tools are deferred (not immediately visible to the LLM) and hinted via
-// the <available-deferred-tools> system reminder.
+// the <system-reminder> deferred-tools block.
 // Returns the number of tools added.
 func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
 	pool := a.DeferredPool()

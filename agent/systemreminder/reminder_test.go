@@ -278,69 +278,52 @@ func TestSkillListReminder_EmptySkills(t *testing.T) {
 	}
 }
 
-// ---- TaggedReminder tests ---------------------------------------------------
+// ---- All reminders share a single <system-reminder> block ---------------
 
-// mockTaggedReminder is a test stub that implements both Reminder and TaggedReminder.
-type mockTaggedReminder struct {
-	tag     string
+// mockReminder is a test stub for exercising the collector.
+type mockReminder struct {
 	content []string
 }
 
-func (m *mockTaggedReminder) Generate(_ context.Context, _ Context) []string { return m.content }
-func (m *mockTaggedReminder) WrapperTag() string                             { return m.tag }
+func (m *mockReminder) Generate(_ context.Context, _ Context) []string { return m.content }
 
-func TestTaggedReminder_WrappedInOwnTag(t *testing.T) {
-	c := NewCollector(
-		&mockTaggedReminder{tag: "relevant-memories", content: []string{"memory 1", "memory 2"}},
-	)
-	result := c.Collect(t.Context(), Context{IsFirstMessage: true})
-	if !strings.Contains(result, "<relevant-memories>") {
-		t.Errorf("expected <relevant-memories> tag, got: %s", result)
-	}
-	if !strings.Contains(result, "</relevant-memories>") {
-		t.Errorf("expected </relevant-memories> tag, got: %s", result)
-	}
-	if strings.Contains(result, "<system-reminder>") {
-		t.Errorf("expected no <system-reminder> tag for tagged-only reminders, got: %s", result)
-	}
-	if !strings.Contains(result, "memory 1") || !strings.Contains(result, "memory 2") {
-		t.Errorf("expected memory content, got: %s", result)
-	}
-}
-
-func TestTaggedReminder_MixedWithDefault(t *testing.T) {
+func TestCollector_MergesAllRemindersIntoOneSystemReminderBlock(t *testing.T) {
 	c := NewCollector(
 		DateReminder{},
-		&mockTaggedReminder{tag: "relevant-memories", content: []string{"memory 1"}},
+		&mockReminder{content: []string{"memory 1"}},
+		&mockReminder{content: []string{"deferred tools hint"}},
 	)
 	result := c.Collect(t.Context(), Context{
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 6, 1, 0, 0, 0, 0, time.UTC),
 	})
-	// Should have both blocks
-	if !strings.Contains(result, "<system-reminder>") {
-		t.Errorf("expected <system-reminder> tag, got: %s", result)
+
+	// Exactly one wrapper block; every reminder's output lives inside it.
+	if strings.Count(result, "<system-reminder>") != 1 {
+		t.Errorf("expected exactly one <system-reminder> open tag, got: %s", result)
 	}
-	if !strings.Contains(result, "<relevant-memories>") {
-		t.Errorf("expected <relevant-memories> tag, got: %s", result)
+	if strings.Count(result, "</system-reminder>") != 1 {
+		t.Errorf("expected exactly one </system-reminder> close tag, got: %s", result)
 	}
-	// <relevant-memories> should come after <system-reminder>
-	sysIdx := strings.Index(result, "<system-reminder>")
-	memIdx := strings.Index(result, "<relevant-memories>")
-	if sysIdx < 0 || memIdx < 0 || memIdx <= sysIdx {
-		t.Errorf("expected <system-reminder> before <relevant-memories>, got: %s", result)
+	for _, want := range []string{"Sunday, June 1, 2025", "memory 1", "deferred tools hint"} {
+		if !strings.Contains(result, want) {
+			t.Errorf("expected %q inside the block, got: %s", want, result)
+		}
 	}
-	if !strings.Contains(result, "Sunday, June 1, 2025") {
-		t.Errorf("expected date in system-reminder, got: %s", result)
-	}
-	if !strings.Contains(result, "memory 1") {
-		t.Errorf("expected memory in relevant-memories, got: %s", result)
+	// No legacy per-reminder tags may leak out.
+	for _, legacy := range []string{
+		"<relevant-memories>", "<available-skills>",
+		"<available-deferred-tools>", "<lsp-diagnostics>",
+	} {
+		if strings.Contains(result, legacy) {
+			t.Errorf("legacy tag %q must not appear, got: %s", legacy, result)
+		}
 	}
 }
 
-func TestTaggedReminder_EmptyGenerate_NoBlock(t *testing.T) {
+func TestCollector_EmptyGenerate_NoBlock(t *testing.T) {
 	c := NewCollector(
-		&mockTaggedReminder{tag: "relevant-memories", content: nil},
+		&mockReminder{content: nil},
 	)
 	result := c.Collect(t.Context(), Context{IsFirstMessage: true})
 	if result != "" {

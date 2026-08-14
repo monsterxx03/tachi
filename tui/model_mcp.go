@@ -360,7 +360,7 @@ func (m *Model) mcpOverlayAuth(name string) tea.Cmd {
 
 // mcpOverlayConnectAndRegister connects to a server and adds its tools to the
 // deferred pool (not directly registered), so the LLM learns about them
-// via the <available-deferred-tools> system reminder and MCPSearchTools.
+// via the <system-reminder> deferred-tools hint and MCPSearchTools.
 func (m *Model) mcpOverlayConnectAndRegister(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)
@@ -379,7 +379,7 @@ func (m *Model) mcpOverlayConnectAndRegister(srv *config.MCPServerConfig, ch cha
 
 // mcpOverlayReconnectAndRegister reconnects to a server and adds its tools to the
 // deferred pool (not directly registered), so the LLM learns about them
-// via the <available-deferred-tools> system reminder and MCPSearchTools.
+// via the <system-reminder> deferred-tools hint and MCPSearchTools.
 func (m *Model) mcpOverlayReconnectAndRegister(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
 	ctx, cancel := context.WithTimeout(context.Background(), mcpCommandTimeout)

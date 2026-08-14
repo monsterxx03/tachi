@@ -95,7 +95,17 @@ func TestDescribeImagesIfNeeded_UserImage_ReplacedWithDescription(t *testing.T) 
 	delegate := &visionMockProvider{name: "gpt5", model: "gpt-5.2", desc: "一只猫趴在键盘上"}
 	a := newVisionTestAgent(t, delegate)
 
-	rs := &RunState{Messages: []llm.Message{userMsgWithImg("这张图里是什么", "AAAA")}}
+	// Simulate prepareTurnMessages: the user message arrives with a
+	// <system-reminder> block prepended (git status, memory recall, ...).
+	reminder := "<system-reminder>\nGit: on branch main, clean\n</system-reminder>\n"
+	rs := &RunState{Messages: []llm.Message{{
+		Role:    "user",
+		Content: reminder + "这张图里是什么",
+		ContentParts: []llm.ContentPart{
+			{Type: llm.ContentPartText, Text: "这张图里是什么"},
+			imgPart("AAAA"),
+		},
+	}}}
 	a.describeImagesIfNeeded(context.Background(), rs, &llm.ChatOptions{SessionID: "sess-1"})
 
 	parts := rs.Messages[0].ContentParts
@@ -111,6 +121,24 @@ func TestDescribeImagesIfNeeded_UserImage_ReplacedWithDescription(t *testing.T) 
 	assert.Equal(t, "image/png", delegate.lastImg.MediaType)
 	assert.Equal(t, "AAAA", delegate.lastImg.Data)
 	assert.Contains(t, delegate.lastText, "这张图里是什么", "prompt must carry the message text as context")
+	assert.NotContains(t, delegate.lastText, "<system-reminder>", "prompt must not leak system reminders into the vision call")
+	assert.NotContains(t, delegate.lastText, "Git: on branch main", "prompt must not leak reminder content")
+}
+
+func TestStripSystemReminder(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"no reminder", "看图", "看图"},
+		{"reminder prefix", "<system-reminder>\nGit: clean\n</system-reminder>\n看图", "看图"},
+		{"reminder only", "<system-reminder>\nGit: clean\n</system-reminder>\n", ""},
+		{"unclosed tag keeps content", "<system-reminder>\n看图", "<system-reminder>\n看图"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, stripSystemReminder(tc.in))
+		})
+	}
 }
 
 func TestDescribeImagesIfNeeded_ToolImage_MergedIntoContent(t *testing.T) {

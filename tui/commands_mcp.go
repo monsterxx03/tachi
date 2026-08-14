@@ -336,7 +336,7 @@ func readNextMCPStatus(ch <-chan string) tea.Cmd {
 
 // connectAndRegisterMCP connects to a server and adds its tools to the
 // deferred pool (not directly registered), so the LLM learns about them
-// via the <available-deferred-tools> system reminder and MCPSearchTools.
+// via the <system-reminder> deferred-tools hint and MCPSearchTools.
 // Sends the result message to ch for safe delivery in the TUI update loop.
 func (m *Model) connectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)
@@ -357,7 +357,7 @@ func (m *Model) connectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- str
 
 // reconnectAndRegisterMCP reconnects to a server and adds its tools to the
 // deferred pool (not directly registered), so the LLM learns about them
-// via the <available-deferred-tools> system reminder and MCPSearchTools.
+// via the <system-reminder> deferred-tools hint and MCPSearchTools.
 // Sends the result message to ch for safe delivery in the TUI update loop.
 func (m *Model) reconnectAndRegisterMCP(srv *config.MCPServerConfig, ch chan<- string) {
 	defer close(ch)

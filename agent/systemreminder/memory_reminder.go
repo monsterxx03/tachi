@@ -13,10 +13,7 @@ import (
 
 // MemoryRecallReminder injects relevant memories from the memory backend
 // on every user message. It uses the user's current prompt as a search query
-// and wraps results in <relevant-memories> blocks.
-//
-// Implements TaggedReminder so output is wrapped in <relevant-memories>
-// rather than mixed into <system-reminder>.
+// and injects the results into the <system-reminder> block.
 //
 // Timeout controls the maximum duration of the Recall call. A timeout of 0
 // or less defaults to 3 seconds — recall is best-effort and should not delay
@@ -25,11 +22,6 @@ type MemoryRecallReminder struct {
 	Backend memory.Backend // nil = memory not configured
 	Limit   int            // max recall results (default 5)
 	Timeout time.Duration  // recall timeout (0 = default 3s)
-}
-
-// WrapperTag implements the TaggedReminder interface.
-func (r MemoryRecallReminder) WrapperTag() string {
-	return "relevant-memories"
 }
 
 // Generate implements the Reminder interface. Fires only on real user messages

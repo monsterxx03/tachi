@@ -23,17 +23,9 @@ type SkillMetaRecord struct {
 // fires on the first user message of a conversation or when the skill list has
 // changed (e.g., after skill_create). This avoids wasting context window on
 // repeated injections of a largely static catalog.
-//
-// Implements TaggedReminder so its output gets its own <available-skills> block
-// independent of <system-reminder>.
 type SkillListReminder struct {
 	provider SkillMetaProvider
 	dirty    bool // true when the skill list has changed and needs re-injection
-}
-
-// WrapperTag implements the TaggedReminder interface.
-func (r *SkillListReminder) WrapperTag() string {
-	return "available-skills"
 }
 
 // NewSkillListReminder creates a SkillListReminder backed by the given provider.

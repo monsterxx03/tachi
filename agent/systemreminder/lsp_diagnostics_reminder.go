@@ -22,13 +22,11 @@ type LSPDiagnosticsProvider interface {
 	IsConfigured() bool
 }
 
-// LSPDiagnosticsReminder injects an <lsp-diagnostics> block at tool-result
+// LSPDiagnosticsReminder injects an LSP diagnostics block at tool-result
 // boundaries when new diagnostics (errors/warnings/hints) are detected on
 // any LSP server. It tracks the last diagnostic state per server with a
 // content hash to avoid repeating the same diagnostics every iteration.
-//
-// Implements TaggedReminder so output gets its own tag independent of
-// <system-reminder>.
+// The block is merged into the single <system-reminder> wrapper.
 type LSPDiagnosticsReminder struct {
 	Provider LSPDiagnosticsProvider
 
@@ -40,11 +38,6 @@ type LSPDiagnosticsReminder struct {
 	// MaxDiagnostics limits how many individual diagnostic lines are shown
 	// in the reminder block. Defaults to 10 if <= 0.
 	MaxDiagnostics int
-}
-
-// WrapperTag implements the TaggedReminder interface.
-func (r *LSPDiagnosticsReminder) WrapperTag() string {
-	return "lsp-diagnostics"
 }
 
 func (r *LSPDiagnosticsReminder) Generate(ctx context.Context, rctx Context) []string {

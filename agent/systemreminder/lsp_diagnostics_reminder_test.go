@@ -1,7 +1,6 @@
 package systemreminder
 
 import (
-	"strings"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent/lsp"
@@ -77,15 +76,7 @@ func TestLSPDiagnosticsReminder_SkipsWhenNoServers(t *testing.T) {
 	}
 }
 
-func TestLSPDiagnosticsReminder_TaggedReminder(t *testing.T) {
-	r := &LSPDiagnosticsReminder{}
-	if r.WrapperTag() != "lsp-diagnostics" {
-		t.Errorf("expected 'lsp-diagnostics' tag, got %q", r.WrapperTag())
-	}
-}
-
 func TestLSPDiagnosticsReminder_CollectorIntegration(t *testing.T) {
-	// Ensures it plays nicely with the Collector's TaggedReminder logic.
 	c := NewCollector(
 		DateReminder{},
 		&LSPDiagnosticsReminder{Provider: &mockLSPDiagProvider{configured: false}},
@@ -139,26 +130,5 @@ func TestLSPDiagnosticsReminder_HashDedup(t *testing.T) {
 	r := &LSPDiagnosticsReminder{}
 	if r.lastHashes != nil {
 		t.Error("expected nil lastHashes initially")
-	}
-}
-
-// Verify the WrapperTag interface assertion compiles.
-var _ TaggedReminder = (*LSPDiagnosticsReminder)(nil)
-
-func TestLSPDiagnosticsReminder_CollectorTaggedOutput(t *testing.T) {
-	// When a TaggedReminder fires with a collector, it should produce its own
-	// <lsp-diagnostics> block, not be merged into <system-reminder>.
-	// Because we can't create real LSPServer instances with diagnostics,
-	// we test the collector's tag-handling via mockTaggedReminder with the
-	// same tag to ensure the collector handles this tag correctly.
-	c := NewCollector(
-		&mockTaggedReminder{tag: "lsp-diagnostics", content: []string{"gopls: 1 diagnostics (1 errors)"}},
-	)
-	result := c.Collect(t.Context(), Context{IsToolResult: true})
-	if !strings.Contains(result, "<lsp-diagnostics>") {
-		t.Errorf("expected <lsp-diagnostics> tag, got: %s", result)
-	}
-	if strings.Contains(result, "<system-reminder>") {
-		t.Errorf("expected no <system-reminder> for tagged-only, got: %s", result)
 	}
 }

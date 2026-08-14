@@ -3,8 +3,9 @@ package systemreminder
 import (
 	"context"
 	"fmt"
-	"github.com/monsterxx03/tachi/pkg/strutil"
 	"strings"
+
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // DeferredToolProvider provides MCP tool metadata for the reminder.
@@ -23,28 +24,21 @@ type DeferredToolTracker interface {
 	Contains(name string) bool
 }
 
-// DeferredToolReminder injects an <available-deferred-tools> block showing
+// DeferredToolReminder injects a deferred-tools block showing
 // MCP tools that are available but not yet loaded. This lets the LLM know
-// what tools it can search for via MCPSearchTools.
+// what tools it can search for via MCPSearchTools. The block is merged into
+// the single <system-reminder> wrapper.
 //
 // With async MCP init, tools may not be known on the very first user message
 // (deferredPool is empty). The reminder fires on the first message where
 // undiscovered tools exist, whether that's message #1 or #N. It fires at
 // most once per session (HasFired guard), but can re-fire when Dirty is set
 // to true (e.g., user manually enabled an MCP server mid-session).
-//
-// Implements TaggedReminder so output gets its own <available-deferred-tools>
-// block independent of <system-reminder>.
 type DeferredToolReminder struct {
 	Provider DeferredToolProvider
 	Tracker  DeferredToolTracker
 	HasFired bool // set to true after generating output; prevents repeats
 	Dirty    bool // when true, re-fires even if HasFired (for mid-session toggle)
-}
-
-// WrapperTag implements the TaggedReminder interface.
-func (r *DeferredToolReminder) WrapperTag() string {
-	return "available-deferred-tools"
 }
 
 func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []string {

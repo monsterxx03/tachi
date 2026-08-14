@@ -64,17 +64,10 @@ type Reminder interface {
 	Generate(ctx context.Context, rctx Context) []string
 }
 
-// TaggedReminder is an optional interface that Reminders can implement
-// to declare their own XML wrapper tag. When a Reminder implements this,
-// its output is wrapped in <tag>...</tag> instead of the default
-// <system-reminder> block.
-type TaggedReminder interface {
-	Reminder
-	WrapperTag() string // e.g. "relevant-memories"
-}
-
 // Collector aggregates a set of Reminders and formats active ones into a
-// single <system-reminder>...</system-reminder> block.
+// single <system-reminder>...</system-reminder> block. All reminders share
+// the same wrapper tag so downstream consumers (message stripping, session
+// parsing, model prompts) only ever need to handle one tag shape.
 type Collector struct {
 	reminders []Reminder
 }
@@ -90,83 +83,41 @@ func (c *Collector) AddReminder(r Reminder) {
 	c.reminders = append(c.reminders, r)
 }
 
-// reminderGroup holds accumulated output parts and a human-readable name
-// of the reminders that fired, for logging.
-type reminderGroup struct {
-	lines     []string
-	firedName string
-}
-
-// collectGroups iterates all registered reminders and groups their output
-// by wrapper tag. Returns the default (untagged) group and a tag→group map.
-func (c *Collector) collectGroups(ctx context.Context, rctx Context) (*reminderGroup, map[string]*reminderGroup) {
-	defaultG := &reminderGroup{}
-	taggedG := make(map[string]*reminderGroup)
-
-	for _, r := range c.reminders {
-		generated := r.Generate(ctx, rctx)
-		if len(generated) == 0 {
-			continue
-		}
-
-		name := fmt.Sprintf("%T", r)
-		if tr, ok := r.(TaggedReminder); ok {
-			tag := tr.WrapperTag()
-			g, ok := taggedG[tag]
-			if !ok {
-				g = &reminderGroup{}
-				taggedG[tag] = g
-			}
-			g.lines = append(g.lines, generated...)
-			if g.firedName == "" {
-				g.firedName = name
-			} else {
-				g.firedName += ", " + name
-			}
-		} else {
-			defaultG.lines = append(defaultG.lines, generated...)
-			if defaultG.firedName == "" {
-				defaultG.firedName = name
-			} else {
-				defaultG.firedName += ", " + name
-			}
-		}
-	}
-
-	return defaultG, taggedG
-}
-
-// Collect queries every registered reminder and groups output by wrapper tag.
-// Reminders that implement TaggedReminder get their own <tag>...</tag> block;
-// all others are combined into the default <system-reminder> block.
+// Collect queries every registered reminder, concatenates their output in
+// registration order, and wraps it in a single <system-reminder> block.
 // Returns an empty string when no reminders are active or c is nil.
 func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 	if c == nil {
 		return ""
 	}
 
-	defaultG, taggedG := c.collectGroups(ctx, rctx)
-
 	var sb strings.Builder
-	if len(defaultG.lines) > 0 {
-		rctx.Info(ctx, "systemreminder: firing reminder(s)", "names", defaultG.firedName)
-		sb.WriteString("<system-reminder>\n")
-		for _, line := range defaultG.lines {
-			sb.WriteString(line)
-			sb.WriteByte('\n')
+	var lines []string
+	var firedName string
+
+	for _, r := range c.reminders {
+		generated := r.Generate(ctx, rctx)
+		if len(generated) == 0 {
+			continue
 		}
-		sb.WriteString("</system-reminder>\n")
+		lines = append(lines, generated...)
+		if firedName == "" {
+			firedName = fmt.Sprintf("%T", r)
+		} else {
+			firedName += ", " + fmt.Sprintf("%T", r)
+		}
 	}
-	for tag, g := range taggedG {
-		rctx.Info(ctx, "systemreminder: firing tagged reminder(s)", "names", g.firedName)
-		sb.WriteString("<" + tag + ">\n")
-		for _, line := range g.lines {
-			sb.WriteString(line)
-			sb.WriteByte('\n')
-		}
-		sb.WriteString("</" + tag + ">\n")
+	if len(lines) == 0 {
+		return ""
 	}
 
+	rctx.Info(ctx, "systemreminder: firing reminder(s)", "names", firedName)
+	sb.WriteString("<system-reminder>\n")
+	for _, line := range lines {
+		sb.WriteString(line)
+		sb.WriteByte('\n')
+	}
+	sb.WriteString("</system-reminder>\n")
 	return sb.String()
 }
 
