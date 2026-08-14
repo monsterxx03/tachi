@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -489,5 +490,45 @@ func TestOpenAIStreamUsage_CachedTokens(t *testing.T) {
 	}
 	if doneEv.Usage.CacheReadInputTokens != 768 {
 		t.Errorf("CacheReadInputTokens = %d, want 768 (cached_tokens must be parsed)", doneEv.Usage.CacheReadInputTokens)
+	}
+}
+
+// TestOpenAIConvertMessages_ImagePart_NoDetailField guards the fix for
+// OpenAI-compatible providers that reject the image `detail` field (e.g.
+// litellm → MiniMax returns HTTP 400 "invalid image detail: auto"). The
+// `detail` key must stay off the wire; OpenAI officially defaults it to
+// "auto", so omitting it does not change behavior on OpenAI models.
+func TestOpenAIConvertMessages_ImagePart_NoDetailField(t *testing.T) {
+	p := NewOpenAIProvider("key", "", "gpt-4o")
+	msgs := []Message{{
+		Role: "user",
+		ContentParts: []ContentPart{
+			{Type: ContentPartText, Text: "看图"},
+			{Type: ContentPartImage, MediaType: "image/png", Data: "aGVsbG8="},
+		},
+	}}
+
+	out := p.convertMessages(msgs)
+	if len(out) != 1 || len(out[0].MultiContent) != 2 {
+		t.Fatalf("expected 1 message with 2 content parts, got %d/%d", len(out), len(out[0].MultiContent))
+	}
+	img := out[0].MultiContent[1].ImageURL
+	if img == nil {
+		t.Fatal("image_url must be set for an image part")
+	}
+	if img.URL != "data:image/png;base64,aGVsbG8=" {
+		t.Errorf("unexpected image data URI: %q", img.URL)
+	}
+	if img.Detail != "" {
+		t.Errorf("image detail must be empty for OpenAI-compatible providers, got %q", img.Detail)
+	}
+
+	// The serialized wire body must not carry a "detail" key at all.
+	body, err := json.Marshal(out[0])
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(body), `"detail"`) {
+		t.Errorf("wire body must not contain image detail field: %s", body)
 	}
 }

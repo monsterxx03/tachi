@@ -133,8 +133,14 @@ func (p *OpenAIProvider) convertMessages(messages []Message) []openai.ChatComple
 					m.MultiContent = append(m.MultiContent, openai.ChatMessagePart{
 						Type: openai.ChatMessagePartTypeImageURL,
 						ImageURL: &openai.ChatMessageImageURL{
-							URL:    dataURI,
-							Detail: openai.ImageURLDetailAuto,
+							URL: dataURI,
+							// Detail is deliberately left unset (empty). OpenAI
+							// defaults it to "auto" anyway, so there is no
+							// behavior change on official models — while
+							// OpenAI-compatible gateways/providers (litellm →
+							// MiniMax, Kimi, etc.) reject the `detail` field
+							// outright (HTTP 400 "invalid image detail: auto").
+							// The omitempty tag keeps it out of the wire body.
 						},
 					})
 				}
