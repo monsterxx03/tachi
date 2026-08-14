@@ -2,6 +2,8 @@ package llm
 
 import (
 	"testing"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 func TestUserAgent_Dev(t *testing.T) {
@@ -102,22 +104,22 @@ func TestNewTool_NoProperties(t *testing.T) {
 }
 
 func TestNewProvider_OpenAI(t *testing.T) {
-	p, err := NewProvider(ProviderTypeOpenAI, "sk-test", "", "gpt-4o")
+	p, err := NewProvider(config.ProviderTypeOpenAI, "sk-test", "", "gpt-4o")
 	if err != nil {
 		t.Fatalf("NewProvider(openai) error: %v", err)
 	}
-	if p.Name() != ProviderTypeOpenAI {
-		t.Errorf("Name() = %q, want %q", p.Name(), ProviderTypeOpenAI)
+	if p.Name() != config.ProviderTypeOpenAI {
+		t.Errorf("Name() = %q, want %q", p.Name(), config.ProviderTypeOpenAI)
 	}
 }
 
 func TestNewProvider_Anthropic(t *testing.T) {
-	p, err := NewProvider(ProviderTypeAnthropic, "sk-ant-test", "", "claude-sonnet-4-6")
+	p, err := NewProvider(config.ProviderTypeAnthropic, "sk-ant-test", "", "claude-sonnet-4-6")
 	if err != nil {
 		t.Fatalf("NewProvider(anthropic) error: %v", err)
 	}
-	if p.Name() != ProviderTypeAnthropic {
-		t.Errorf("Name() = %q, want %q", p.Name(), ProviderTypeAnthropic)
+	if p.Name() != config.ProviderTypeAnthropic {
+		t.Errorf("Name() = %q, want %q", p.Name(), config.ProviderTypeAnthropic)
 	}
 }
 
@@ -132,11 +134,11 @@ func TestNewProvider_Unknown(t *testing.T) {
 }
 
 func TestNewProvider_OpenAIWithBaseURL(t *testing.T) {
-	p, err := NewProvider(ProviderTypeOpenAI, "key", "https://api.example.com/v1", "gpt-4o-mini")
+	p, err := NewProvider(config.ProviderTypeOpenAI, "key", "https://api.example.com/v1", "gpt-4o-mini")
 	if err != nil {
 		t.Fatalf("NewProvider error: %v", err)
 	}
-	if p.Name() != ProviderTypeOpenAI {
+	if p.Name() != config.ProviderTypeOpenAI {
 		t.Errorf("Name() = %q", p.Name())
 	}
 }
@@ -152,9 +154,9 @@ func TestNewNamedProvider_CarriesConfigName(t *testing.T) {
 		name string
 		typ  string
 	}{
-		{"deepseek-v4-flash", ProviderTypeOpenAI},        // wrapped: RetryProvider → OpenAIProvider
-		{"deepseek-v4-pro", ProviderTypeOpenAIResponses}, // bare instance
-		{"anthropic-main", ProviderTypeAnthropic},        // bare instance
+		{"deepseek-v4-flash", config.ProviderTypeOpenAI},        // wrapped: RetryProvider → OpenAIProvider
+		{"deepseek-v4-pro", config.ProviderTypeOpenAIResponses}, // bare instance
+		{"anthropic-main", config.ProviderTypeAnthropic},        // bare instance
 	}
 	for _, c := range cases {
 		p, err := NewNamedProvider(c.typ, c.name, "sk-test", "", "some-model")
@@ -167,7 +169,7 @@ func TestNewNamedProvider_CarriesConfigName(t *testing.T) {
 	}
 
 	// NewProvider (unnamed) yields a provider that reports no config name.
-	p, err := NewProvider(ProviderTypeOpenAI, "sk-test", "", "some-model")
+	p, err := NewProvider(config.ProviderTypeOpenAI, "sk-test", "", "some-model")
 	if err != nil {
 		t.Fatal(err)
 	}

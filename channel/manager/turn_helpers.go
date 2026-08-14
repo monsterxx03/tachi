@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 	"github.com/monsterxx03/tachi/session"
@@ -19,7 +18,7 @@ import (
 //
 // Used by every entry point that runs an agent turn on a thread:
 // runAgentTurn (cached + compact) and OnCronTrigger.
-func (m *Manager) prepareThreadSession(threadID string, resolved *config.ResolvedProvider) (*session.Manager, []llm.Message) {
+func (m *Manager) prepareThreadSession(threadID string, resolved *llm.ResolvedProvider) (*session.Manager, []llm.Message) {
 	sm, priorHistory, err := m.loadThreadSession(threadID, resolved)
 	if err != nil {
 		m.logger.Error(context.Background(), "channel: session setup failed", err, "thread", threadID)

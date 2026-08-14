@@ -7,7 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 func TestIsValidThinkingLevel(t *testing.T) {
@@ -75,7 +75,7 @@ func TestThinkingOverrideFromLevel(t *testing.T) {
 
 func TestEffectiveThinking(t *testing.T) {
 	// Provider config default: thinking high.
-	resolved := config.ResolvedProvider{
+	resolved := llm.ResolvedProvider{
 		Model:          "deepseek-v4-flash",
 		ThinkingEffort: "high",
 	}

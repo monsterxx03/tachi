@@ -5,7 +5,7 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // ThinkingEffortLevels are the concrete selectable effort levels (without
@@ -65,7 +65,7 @@ func ThinkingLevelOf(thinking *bool, effort string) string {
 // the session's per-session ThinkingLevel override (set via /thinking) wins;
 // an empty (or "default") level falls back to the provider's resolved
 // defaults (resolved.Thinking / resolved.ThinkingEffort).
-func EffectiveThinking(level string, resolved config.ResolvedProvider) (thinking *bool, effort string) {
+func EffectiveThinking(level string, resolved llm.ResolvedProvider) (thinking *bool, effort string) {
 	if level == "" || level == "default" {
 		return resolved.Thinking, resolved.ThinkingEffort
 	}

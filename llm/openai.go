@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/sashabaranov/go-openai"
 )
@@ -40,7 +41,7 @@ type OpenAIProvider struct {
 // built-in retry, so MaxRetries is stored on the returned provider's retryMax
 // field and consumed by NewNamedProvider when wrapping RetryProvider; Timeout
 // sets the HTTP client's per-request timeout.
-func NewOpenAIProvider(apiKey, baseURL, model string, opts ...ProviderOption) *OpenAIProvider {
+func NewOpenAIProvider(apiKey, baseURL, model string, opts ...config.ProviderOption) *OpenAIProvider {
 	o := applyOptions(opts)
 	cfg := openai.DefaultConfig(apiKey)
 	if baseURL != "" {
@@ -77,7 +78,7 @@ func NewOpenAIProvider(apiKey, baseURL, model string, opts ...ProviderOption) *O
 }
 
 func (p *OpenAIProvider) Name() string {
-	return ProviderTypeOpenAI
+	return config.ProviderTypeOpenAI
 }
 
 func (p *OpenAIProvider) ProviderName() string { return p.name }

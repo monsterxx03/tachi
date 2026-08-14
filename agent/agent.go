@@ -135,13 +135,13 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	//     bare agents like Fork / github / dream always pass one explicitly).
 	if cfg.Resolved == nil {
 		if cfg.FullConfig != nil {
-			rp, err := cfg.FullConfig.DefaultProvider()
+			rp, err := llm.DefaultProvider(cfg.FullConfig)
 			if err != nil {
 				return nil, nil, err
 			}
 			cfg.Resolved = rp
 		} else {
-			cfg.Resolved = &config.ResolvedProvider{}
+			cfg.Resolved = &llm.ResolvedProvider{}
 		}
 	} else {
 		r := *cfg.Resolved
@@ -340,7 +340,7 @@ func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 // full resolved config (provider instance, context window, thinking
 // defaults) in one step. The name is resolved through the agent's FullConfig
 // (config.BuildProvider; empty name = the default provider), so callers pass
-// a provider config name instead of a pre-built *config.ResolvedProvider.
+// a provider config name instead of a pre-built *llm.ResolvedProvider.
 //
 // Unlike SetContextWindow + SetThinking — which only change the dimensions a
 // caller explicitly passes, leaving the rest from the old provider —
@@ -353,11 +353,11 @@ func (a *AIAgent) ConfirmTool(resp ConfirmResponse) {
 // NewNamedProvider). The applied ResolvedProvider is returned for callers
 // that need display metadata (Type / Model / MaxTokens); it is the caller's
 // copy — the agent owns a detached one.
-func (a *AIAgent) SetResolvedProvider(providerName string) (*config.ResolvedProvider, error) {
+func (a *AIAgent) SetResolvedProvider(providerName string) (*llm.ResolvedProvider, error) {
 	if a.Config.FullConfig == nil {
 		return nil, errors.New("SetResolvedProvider: no FullConfig to resolve provider from")
 	}
-	rp, err := a.Config.FullConfig.BuildProvider(providerName)
+	rp, err := llm.BuildProvider(a.Config.FullConfig, providerName)
 	if err != nil {
 		return nil, err
 	}

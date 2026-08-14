@@ -1,19 +1,19 @@
-package config
+package llm
 
 import (
 	"errors"
 	"testing"
 	"time"
 
-	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
-func testConfig(t *testing.T) *Config {
+func testConfig(t *testing.T) *config.Config {
 	t.Helper()
-	cfg := DefaultConfig()
-	cfg.Providers = []ProviderConfig{
+	cfg := config.DefaultConfig()
+	cfg.Providers = []config.ProviderConfig{
 		{
 			Name:    "deepseek",
 			Type:    "openai",
@@ -33,13 +33,13 @@ func TestBuildProvider_NotFound(t *testing.T) {
 	cfg := testConfig(t)
 
 	// Empty name resolves the default provider — the shared `""` = default rule.
-	resolved, err := cfg.BuildProvider("")
+	resolved, err := BuildProvider(cfg, "")
 	assert.NoError(t, err, "empty name should resolve the default provider")
 	assert.NotNil(t, resolved.Provider)
 	assert.Equal(t, "deepseek", resolved.Name)
 
 	// Unknown names still fail.
-	resolved, err = cfg.BuildProvider("nonexistent")
+	resolved, err = BuildProvider(cfg, "nonexistent")
 	assert.Nil(t, resolved)
 	assert.ErrorIs(t, err, ErrProviderNotFound, "unknown name should map to ErrProviderNotFound")
 }
@@ -47,8 +47,8 @@ func TestBuildProvider_NotFound(t *testing.T) {
 // TestBuildProvider_NoDefault: with no default configured at all, the empty
 // name surfaces ErrProviderNotFound (same as an unknown name).
 func TestBuildProvider_NoDefault(t *testing.T) {
-	cfg := &Config{} // no Provider field, no Providers
-	resolved, err := cfg.BuildProvider("")
+	cfg := &config.Config{} // no Provider field, no Providers
+	resolved, err := BuildProvider(cfg, "")
 	assert.Nil(t, resolved)
 	assert.ErrorIs(t, err, ErrProviderNotFound)
 }
@@ -59,7 +59,7 @@ func TestBuildProvider_NoDefault(t *testing.T) {
 func TestBuildProvider_OK(t *testing.T) {
 	cfg := testConfig(t)
 
-	resolved, err := cfg.BuildProvider("deepseek")
+	resolved, err := BuildProvider(cfg, "deepseek")
 	require.NoError(t, err)
 	require.NotNil(t, resolved)
 	require.NotNil(t, resolved.Provider)
@@ -79,7 +79,7 @@ func TestBuildProvider_MissingAPIKey(t *testing.T) {
 
 	// Provider type "openai" reads OPENAI_API_KEY — make sure it's empty too.
 	// resolveAPIKey falls back to pCfg.APIKey which we cleared.
-	resolved, err := cfg.BuildProvider("deepseek")
+	resolved, err := BuildProvider(cfg, "deepseek")
 	assert.Nil(t, resolved)
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrProviderNotFound), "missing API key is not a not-found error")
@@ -109,23 +109,23 @@ func TestBuildProvider_SpecOptions(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			cfg := testConfig(t)
-			cfg.Providers[0] = ProviderConfig{
+			cfg.Providers[0] = config.ProviderConfig{
 				Name:    "p",
 				Type:    c.typ,
 				Model:   "some-model",
 				APIKey:  "sk-test",
 				BaseURL: "https://api.example.com/v1",
-				Spec: ModelSpec{
+				Spec: config.ModelSpec{
 					MaxRetries: c.specMax,
 					Timeout:    90 * time.Second,
 				},
 			}
-			resolved, err := cfg.BuildProvider("p")
+			resolved, err := BuildProvider(cfg, "p")
 			require.NoError(t, err)
 			require.NotNil(t, resolved.Provider)
 
 			if c.typ == "openai" {
-				rp, ok := resolved.Provider.(*llm.RetryProvider)
+				rp, ok := resolved.Provider.(*RetryProvider)
 				require.True(t, ok, "openai provider should be wrapped in RetryProvider")
 				assert.Equal(t, c.wantMax, rp.Cfg().MaxRetries)
 			}
@@ -137,9 +137,9 @@ func TestBuildProvider_SpecOptions(t *testing.T) {
 // keeps the legacy default of 2 retries.
 func TestBuildProvider_SpecOptionsDefault(t *testing.T) {
 	cfg := testConfig(t)
-	resolved, err := cfg.BuildProvider("deepseek")
+	resolved, err := BuildProvider(cfg, "deepseek")
 	require.NoError(t, err)
-	rp, ok := resolved.Provider.(*llm.RetryProvider)
+	rp, ok := resolved.Provider.(*RetryProvider)
 	require.True(t, ok, "openai provider should be wrapped in RetryProvider")
 	assert.Equal(t, 2, rp.Cfg().MaxRetries)
 }

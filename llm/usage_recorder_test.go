@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // stubRecordingProvider is a minimal Provider for recording tests.
@@ -50,7 +52,7 @@ func TestRecordingProvider_CreateChat(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{
-		name:         ProviderTypeOpenAI,
+		name:         config.ProviderTypeOpenAI,
 		providerName: "deepseek-v4-flash",
 		model:        "deepseek-chat",
 		resp: &Response{
@@ -114,7 +116,7 @@ func TestRecordingProvider_CreateChat_AnthropicNoNormalize(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{
-		name:  ProviderTypeAnthropic,
+		name:  config.ProviderTypeAnthropic,
 		model: "claude-x",
 		resp: &Response{
 			Usage: &Usage{
@@ -149,7 +151,7 @@ func TestRecordingProvider_CreateChatStream_PassthroughAndRecord(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{
-		name:  ProviderTypeOpenAI,
+		name:  config.ProviderTypeOpenAI,
 		model: "deepseek-chat",
 		stream: []StreamEvent{
 			{Type: StreamEventTextDelta, TextDelta: "hel"},
@@ -196,7 +198,7 @@ func TestRecordingProvider_SubagentCompositeID(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{
-		name: ProviderTypeOpenAI, model: "m",
+		name: config.ProviderTypeOpenAI, model: "m",
 		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 1}},
 	}
 	p := WrapRecordingProvider(inner, rec, nil)
@@ -235,7 +237,7 @@ func TestRecordingProvider_BandWrittenToRow(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{
-		name:  ProviderTypeOpenAI,
+		name:  config.ProviderTypeOpenAI,
 		model: "deepseek-chat",
 		resp:  &Response{Usage: &Usage{InputTokens: 100, OutputTokens: 10}},
 	}
@@ -365,7 +367,7 @@ func TestUsageRecorder_FilePerm0600(t *testing.T) {
 // provider-creation points can never double-record a call.
 func TestWrapRecordingProvider_Idempotent(t *testing.T) {
 	rec := NewUsageRecorder(t.TempDir())
-	inner := &stubRecordingProvider{name: ProviderTypeOpenAI, model: "m",
+	inner := &stubRecordingProvider{name: config.ProviderTypeOpenAI, model: "m",
 		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 1}}}
 	wrapped := WrapRecordingProvider(inner, rec, nil)
 	if again := WrapRecordingProvider(wrapped, rec, nil); again != wrapped {

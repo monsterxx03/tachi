@@ -109,7 +109,7 @@ func toolCallSeq(name, id, args string) []llm.StreamEvent {
 func newTestAgent(t *testing.T, provider llm.Provider, opts ...testAgentOpt) *AIAgent {
 	t.Helper()
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:       &config.ResolvedProvider{Provider: provider},
+		Resolved:       &llm.ResolvedProvider{Provider: provider},
 		MaxIterations:  10,
 		PermissionMode: PermissionModeSkip,
 		SkipConfigure:  true,

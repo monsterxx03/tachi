@@ -7,6 +7,7 @@ import (
 
 	"github.com/anthropics/anthropic-sdk-go"
 	"github.com/anthropics/anthropic-sdk-go/option"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -20,7 +21,7 @@ type AnthropicProvider struct {
 // retries internally (default MaxRetries=2), so MaxRetries / Timeout map
 // directly to the SDK's option.WithMaxRetries / option.WithRequestTimeout;
 // unset options keep the SDK defaults.
-func NewAnthropicProvider(apiKey, baseURL, model string, opts ...ProviderOption) *AnthropicProvider {
+func NewAnthropicProvider(apiKey, baseURL, model string, opts ...config.ProviderOption) *AnthropicProvider {
 	o := applyOptions(opts)
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -43,7 +44,7 @@ func NewAnthropicProvider(apiKey, baseURL, model string, opts ...ProviderOption)
 }
 
 func (p *AnthropicProvider) Name() string {
-	return ProviderTypeAnthropic
+	return config.ProviderTypeAnthropic
 }
 
 func (p *AnthropicProvider) ProviderName() string { return p.name }

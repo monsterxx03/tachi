@@ -9,7 +9,6 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -184,7 +183,7 @@ func (m *Manager) releaseAgent(ca *cachedAgent) {
 // prov and resolved are the provider and config to use for this agent.
 // Callers should pass the result of getProviderForThread(threadID) so that
 // per-thread /model overrides are respected.
-func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *config.ResolvedProvider) (*agent.AIAgent, error) {
+func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *llm.ResolvedProvider) (*agent.AIAgent, error) {
 	titleGen := false // channel mode has no title UI; skip the extra LLM call
 
 	// Inject shared MCP — Configure() will skip MCP init.

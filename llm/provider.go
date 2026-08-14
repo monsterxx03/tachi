@@ -3,6 +3,8 @@ package llm
 import (
 	"context"
 	"fmt"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // Version is set from main at startup (populated via ldflags at build time).
@@ -31,12 +33,8 @@ func SessionIDFromCtx(ctx context.Context) (string, bool) {
 	return id, ok
 }
 
-// Provider type constants.
-const (
-	ProviderTypeOpenAI          = "openai"
-	ProviderTypeOpenAIResponses = "openai-res"
-	ProviderTypeAnthropic       = "anthropic"
-)
+// Provider type constants live in config (ProviderTypeOpenAI etc.) — the
+// canonical identifiers shared with the config package.
 
 type ThinkingBlock struct {
 	Type      string // "thinking" | "redacted_thinking"
@@ -221,7 +219,7 @@ type Provider interface {
 
 // NewProvider constructs a provider from type + credentials (no config name).
 // opts may carry WithMaxRetries / WithTimeout to override default behavior.
-func NewProvider(providerType, apiKey, baseURL, model string, opts ...ProviderOption) (Provider, error) {
+func NewProvider(providerType, apiKey, baseURL, model string, opts ...config.ProviderOption) (Provider, error) {
 	return NewNamedProvider(providerType, "", apiKey, baseURL, model, opts...)
 }
 
@@ -230,9 +228,9 @@ func NewProvider(providerType, apiKey, baseURL, model string, opts ...ProviderOp
 // via ProviderName. name may be "" for providers not backed by a config
 // entry. This is the single construction point for config-resolved
 // providers — see config.NewProviderFromResolved.
-func NewNamedProvider(providerType, name, apiKey, baseURL, model string, opts ...ProviderOption) (Provider, error) {
+func NewNamedProvider(providerType, name, apiKey, baseURL, model string, opts ...config.ProviderOption) (Provider, error) {
 	switch providerType {
-	case ProviderTypeOpenAI:
+	case config.ProviderTypeOpenAI:
 		// go-openai has no built-in retry; wrap with RetryProvider so
 		// transient failures (connection reset, 429/5xx) don't abort
 		// the whole turn. The retry count comes from the provider itself:
@@ -244,7 +242,7 @@ func NewNamedProvider(providerType, name, apiKey, baseURL, model string, opts ..
 			p,
 			RetryConfig{MaxRetries: p.retryMax},
 		), nil
-	case ProviderTypeOpenAIResponses:
+	case config.ProviderTypeOpenAIResponses:
 		// No retry wrapping needed: the official openai-go SDK retries
 		// 408/409/429/5xx and connection errors internally (default
 		// MaxRetries=2, honoring Retry-After headers). The RetryProvider
@@ -254,7 +252,7 @@ func NewNamedProvider(providerType, name, apiKey, baseURL, model string, opts ..
 		p := NewOpenAIResponsesProvider(apiKey, baseURL, model, opts...)
 		p.name = name
 		return p, nil
-	case ProviderTypeAnthropic:
+	case config.ProviderTypeAnthropic:
 		// anthropic-sdk-go already retries internally (default MaxRetries=2),
 		// so no extra wrapping is needed here. WithMaxRetries / WithTimeout
 		// flow into the SDK client via opts.

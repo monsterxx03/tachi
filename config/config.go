@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/creasty/defaults"
-	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"gopkg.in/yaml.v3"
@@ -109,9 +108,10 @@ type ModelSpec struct {
 	// anthropic / openai-res 走 SDK 的 option.WithRequestTimeout。
 	Timeout time.Duration `yaml:"timeout,omitempty"`
 
-	// Pricing 定价覆盖（可选，覆盖内置价格表）。类型定义在 llm 包
-	// （llm.PricingConfig）——定价 schema 单一来源，config 只负责装载。
-	Pricing *llm.PricingConfig `yaml:"pricing,omitempty"`
+	// Pricing 定价覆盖（可选，覆盖内置价格表）。类型定义在本包
+	// （PricingConfig）——定价 schema 单一来源，config 只负责装载，
+	// 定价语义（内置表/分时带）由 llm 解析。
+	Pricing *PricingConfig `yaml:"pricing,omitempty"`
 }
 
 type ProviderConfig struct {
@@ -1011,14 +1011,14 @@ func Init() (string, error) {
 	cfg.Providers = []ProviderConfig{
 		{
 			Name:    "deepseek-v4-flash",
-			Type:    llm.ProviderTypeAnthropic,
+			Type:    ProviderTypeAnthropic,
 			Model:   "deepseek-v4-flash",
 			BaseURL: "https://api.deepseek.com/anthropic",
 			APIKey:  "<your-api-key>",
 		},
 		{
 			Name:    "deepseek-v4-pro",
-			Type:    llm.ProviderTypeAnthropic,
+			Type:    ProviderTypeAnthropic,
 			Model:   "deepseek-v4-pro",
 			BaseURL: "https://api.deepseek.com/anthropic",
 			APIKey:  "<your-api-key>",

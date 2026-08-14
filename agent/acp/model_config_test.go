@@ -22,7 +22,7 @@ import (
 func newTestAgent(t *testing.T, provider llm.Provider, cfg *config.Config) *agent.AIAgent {
 	t.Helper()
 	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: provider},
+		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		MaxIterations: 0,
 		SkipConfigure: true,
 		FullConfig:    cfg,
@@ -39,7 +39,7 @@ func newTestAgent(t *testing.T, provider llm.Provider, cfg *config.Config) *agen
 func newBareTestAgent(t *testing.T, provider llm.Provider, maxIter int) *agent.AIAgent {
 	t.Helper()
 	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: provider},
+		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		MaxIterations: maxIter,
 		SkipConfigure: true,
 		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),

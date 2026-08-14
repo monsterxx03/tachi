@@ -96,7 +96,7 @@ type Manager struct {
 	// New returns an error when resolution fails, so a constructed Manager
 	// always has a non-nil defaultResolvedProvider — callers can dereference
 	// it directly without nil checks.
-	defaultResolvedProvider *config.ResolvedProvider
+	defaultResolvedProvider *llm.ResolvedProvider
 
 	// Session store override (nil = use default ~/.tachi/session).
 	sessionStore session.Store
@@ -230,7 +230,7 @@ type handlerResult struct {
 // messages). Channels are interactive — the iteration budget is always
 // unlimited (0).
 func New(cfg *config.Config) (*Manager, error) {
-	resolved, err := cfg.DefaultProvider()
+	resolved, err := llm.DefaultProvider(cfg)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +369,7 @@ func (m *Manager) Start(ctx context.Context) error {
 // on top of whichever provider wins, so future agent builds for this thread
 // inherit it. The returned resolved config is a fresh copy — the global
 // defaultResolvedProvider is never mutated.
-func (m *Manager) getProviderForThread(threadID string) *config.ResolvedProvider {
+func (m *Manager) getProviderForThread(threadID string) *llm.ResolvedProvider {
 	var sess *session.Session
 	if threadID != "" && m.cfg != nil {
 		sm := m.newSessionManager()
@@ -383,7 +383,7 @@ func (m *Manager) getProviderForThread(threadID string) *config.ResolvedProvider
 
 	// Session-level /model override wins over the global provider.
 	if sess != nil && sess.ProviderName != "" {
-		if rp, err := m.cfg.BuildProvider(sess.ProviderName); err == nil {
+		if rp, err := llm.BuildProvider(m.cfg, sess.ProviderName); err == nil {
 			resolved = rp
 		} else {
 			m.logger.Warn(context.Background(), "channel: thread has ProviderName but could not resolve; falling back to global",
@@ -442,7 +442,7 @@ func (m *Manager) newSessionManager() *session.Manager {
 // If found, returns the session manager loaded with that session and the
 // converted LLM message history. If not found, creates a new session manager
 // with a fresh session and returns nil history.
-func (m *Manager) loadThreadSession(threadID string, resolved *config.ResolvedProvider) (*session.Manager, []llm.Message, error) {
+func (m *Manager) loadThreadSession(threadID string, resolved *llm.ResolvedProvider) (*session.Manager, []llm.Message, error) {
 	var sm *session.Manager
 	if m.sessionStore != nil {
 		sm = session.NewManagerWithStore(m.sessionStore, m.logger)

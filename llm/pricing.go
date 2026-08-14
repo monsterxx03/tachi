@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -65,9 +66,8 @@ func (b PriceBand) matches(hour int) bool {
 // carry the four unit-price fields. ApplyPriceOverrides copies non-nil
 // overrides onto the receiver (nil = keep the field's current value, an
 // explicit 0 = free). One method to touch when a price dimension is added.
-type PriceOverrides interface {
-	ApplyPriceOverrides(input, output, cacheRead, cacheCreate *float64)
-}
+// The interface itself lives in config (pure data contract); the runtime
+// price types below implement it.
 
 // ApplyPriceOverrides implements PriceOverrides for ModelPrice.
 func (p *ModelPrice) ApplyPriceOverrides(input, output, cacheRead, cacheCreate *float64) {
@@ -214,9 +214,9 @@ var deepseekProPriceVersions = []builtinPriceVersion{
 // version whose EffectiveFrom is not after at, so an out-of-order slice
 // silently resolves the wrong price. The DeepSeek version tests pin this.
 //
-// Use this (not GetBuiltinModelPrice) anywhere the call time is known —
-// the usage ledger and the TUI statusbar both resolve "the price at call
-// time", which is exactly the time-of-use semantics.
+// This is the only built-in lookup — the usage ledger and the TUI statusbar
+// both resolve "the price at call time", which is exactly the time-of-use
+// semantics.
 func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
 	versions := builtinVersionsFor(model)
 	if len(versions) == 0 {
@@ -237,13 +237,6 @@ func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
 		}
 	}
 	return cur
-}
-
-// GetBuiltinModelPrice returns the built-in price in effect right now (see
-// GetBuiltinModelPriceAt). Kept for compatibility — prefer the At variant
-// when the call time is known, since the effective price may depend on it.
-func GetBuiltinModelPrice(model string) *ModelPrice {
-	return GetBuiltinModelPriceAt(model, time.Now())
 }
 
 // builtinVersionsFor returns the version list for a model, or nil if unknown.
@@ -310,75 +303,18 @@ func deepseekVersions(model string) []builtinPriceVersion {
 	}
 }
 
-// PricingConfig is the user-facing per-provider pricing override block (the
-// YAML under `provider.spec.pricing:`), defined here so config.Config uses
-// the SAME type as the resolver — one source of truth for the pricing
-// schema, no translation layer. The yaml tags are struct metadata consumed
-// by config's YAML loading; this package itself never imports yaml.
-//
-// All fields are optional: nil = not set (flat prices fall back to the
-// built-in table; band fields inherit the flat price), explicit 0 = free.
-// Timezone anchors band selection (IANA name, e.g. "Asia/Shanghai");
-// empty = the instant's own local timezone.
-type PricingConfig struct {
-	InputPrice              *float64        `yaml:"input_price,omitempty"`
-	OutputPrice             *float64        `yaml:"output_price,omitempty"`
-	CacheReadInputPrice     *float64        `yaml:"cache_read_input_price,omitempty"`
-	CacheCreationInputPrice *float64        `yaml:"cache_creation_input_price,omitempty"`
-	Timezone                string          `yaml:"timezone,omitempty"`
-	Bands                   []PriceBandSpec `yaml:"bands,omitempty"`
-}
-
-// HasAny reports whether at least one flat override is set — when none is,
-// the flat price falls back to the built-in table (a bands-only override
-// then inherits the built-in flat prices).
-func (p *PricingConfig) HasAny() bool {
-	return p.InputPrice != nil || p.OutputPrice != nil ||
-		p.CacheReadInputPrice != nil || p.CacheCreationInputPrice != nil
-}
-
-// Apply copies non-nil price overrides onto dst (a ModelPrice or PriceBand)
-// — the existing convention: unset fields keep their value, an explicit 0
-// means free.
-func (p *PricingConfig) Apply(dst PriceOverrides) {
-	dst.ApplyPriceOverrides(p.InputPrice, p.OutputPrice, p.CacheReadInputPrice, p.CacheCreationInputPrice)
-}
-
-// PriceBandSpec is one raw time-of-use band in user-facing form: Start/End
-// are "HH:MM" (24h, inclusive start, exclusive end; end <= start wraps past
-// midnight, end == start = whole day; minutes must be 0). nil price fields
-// inherit the flat price, explicit 0 = free.
-type PriceBandSpec struct {
-	Name                    string   `yaml:"name,omitempty"` // band name written to the ledger row ("" = unnamed)
-	Start                   string   `yaml:"start"`
-	End                     string   `yaml:"end"`
-	InputPrice              *float64 `yaml:"input_price,omitempty"`
-	OutputPrice             *float64 `yaml:"output_price,omitempty"`
-	CacheReadInputPrice     *float64 `yaml:"cache_read_input_price,omitempty"`
-	CacheCreationInputPrice *float64 `yaml:"cache_creation_input_price,omitempty"`
-}
-
-// PriceScheduleSource supplies per-provider pricing overrides to
-// ResolveModelPriceAt. config.Config implements it — the dependency
-// direction stays config → llm, so the whole pricing domain (schema,
-// built-in table, versioning, band inheritance, time pinning) can live in
-// this package without an import cycle.
-type PriceScheduleSource interface {
-	// PricingSchedule returns the provider's pricing override block, or nil
-	// when the provider is unknown or has no pricing configured — the
-	// resolver then falls back to the built-in table alone.
-	PricingSchedule(providerName string) *PricingConfig
-}
+// PricingConfig / PriceBandSpec are defined in config (pure data, loaded
+// from YAML); the pricing semantics below consume them.
 
 // ResolveModelPriceAt resolves the effective price for model at time at —
 // the single pricing entry point for the usage ledger (RecordingProvider's
-// resolver) and live estimates (statusbar). src supplies per-provider raw
+// resolver) and live estimates (statusbar). cfg supplies per-provider raw
 // overrides; model selects the versioned built-in table entry at at. The
 // returned ResolvedPrice is pinned to at: time-of-use bands have been
 // applied, Bands consumed.
 //
 // Resolution order:
-//  1. Flat (平段) price: src's override fields when any is set (unset fields
+//  1. Flat (平段) price: cfg's override fields when any is set (unset fields
 //     = 0/free, NOT built-in fallback); when the source provides bands but
 //     no flat fields, the flat price falls back to the built-in table so a
 //     bands-only override keeps the built-in base price.
@@ -387,13 +323,13 @@ type PriceScheduleSource interface {
 //     unparseable times are skipped (flat price) with a warn — a typo'd band
 //     must not be silently ignored.
 //  3. The snapshot is pinned to at via ModelPrice.PriceAt.
-func ResolveModelPriceAt(src PriceScheduleSource, providerName, model string, at time.Time) ResolvedPrice {
+func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time.Time) ResolvedPrice {
 	var flat *ModelPrice
-	var bands []PriceBandSpec
+	var bands []config.PriceBandSpec
 	tzName := ""
 
-	if src != nil {
-		if p := src.PricingSchedule(providerName); p != nil {
+	if cfg != nil {
+		if p := PricingSchedule(cfg, providerName); p != nil {
 			bands = p.Bands
 			tzName = p.Timezone
 			if p.HasAny() {
@@ -456,7 +392,7 @@ func ResolveModelPriceAt(src PriceScheduleSource, providerName, model string, at
 // buildPriceBand converts a raw band spec into a PriceBand, filling nil
 // price fields from the flat price (inheritance). Returns an error for
 // unparseable times — the band is then skipped (flat price applies).
-func buildPriceBand(bs PriceBandSpec, flat *ModelPrice) (PriceBand, error) {
+func buildPriceBand(bs config.PriceBandSpec, flat *ModelPrice) (PriceBand, error) {
 	start, err := parseBandHour(bs.Start)
 	if err != nil {
 		return PriceBand{}, err
@@ -500,45 +436,13 @@ func parseBandHour(s string) (int, error) {
 	return h, nil
 }
 
-// ResolveModelPrice resolves the effective pricing for a model.
-// It checks provider-level overrides first (nil ptr means "not set"), then falls
-// back to built-in pricing. Returns nil if no pricing is available.
-//
-// Deprecated: no production callers remain — the pricing entry point is
-// ResolveModelPriceAt (time-of-use aware, versioned built-in table, config
-// overrides via PriceScheduleSource). Kept for the legacy tests in this
-// package; the built-in fallback here is NOT time-aware (GetBuiltinModelPrice
-// = at now), so do not reintroduce it as a production path.
-func ResolveModelPrice(model string, inputPrice, outputPrice, cacheReadPrice, cacheCreationPrice *float64) *ModelPrice {
-	// Check for provider-level overrides
-	if inputPrice != nil || outputPrice != nil || cacheReadPrice != nil || cacheCreationPrice != nil {
-		p := &ModelPrice{}
-		if inputPrice != nil {
-			p.InputPrice = *inputPrice
-		}
-		if outputPrice != nil {
-			p.OutputPrice = *outputPrice
-		}
-		if cacheReadPrice != nil {
-			p.CacheReadInputPrice = *cacheReadPrice
-		}
-		if cacheCreationPrice != nil {
-			p.CacheCreationInputPrice = *cacheCreationPrice
-		}
-		return p
-	}
-
-	// Fall back to built-in pricing
-	return GetBuiltinModelPrice(model)
-}
-
 // NormalizeCacheMissInput returns the cache-miss input token count for a
 // provider family. OpenAI-style APIs (openai / openai-res) report
 // input_tokens INCLUDING cache-read tokens; Anthropic does not. Billing a
 // hit token at both input and cache-read prices would double-count it, so
 // cache reads are subtracted everywhere except Anthropic.
 func NormalizeCacheMissInput(input, cacheRead int64, providerType string) int64 {
-	if providerType == ProviderTypeAnthropic {
+	if providerType == config.ProviderTypeAnthropic {
 		return input
 	}
 	return max(input-cacheRead, 0)
@@ -568,7 +472,7 @@ func costFromParts(input, cacheRead, cacheCreation, output int64, inputPrice, ou
 // cache prices as configured (0 = not charged). Returns 0 for nil inputs or
 // a fully unpriced model.
 //
-// providerType is llm.ProviderTypeAnthropic vs anything else (OpenAI-family)
+// providerType is config.ProviderTypeAnthropic vs anything else (OpenAI-family)
 // and selects the input normalization scale.
 func CostForUsage(usage *Usage, price *ModelPrice, providerType string) float64 {
 	if usage == nil || price == nil {

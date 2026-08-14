@@ -14,6 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // deferredToolProviderAdapter adapts mcp.DeferredPool to the
@@ -533,8 +534,8 @@ func (a *AIAgent) resolveKeywordProvider(cfg *config.Config) {
 		return // no dedicated keyword provider configured; main provider is already set
 	}
 
-	resolved, err := cfg.BuildProvider(kpName)
-	if errors.Is(err, config.ErrProviderNotFound) {
+	resolved, err := llm.BuildProvider(cfg, kpName)
+	if errors.Is(err, llm.ErrProviderNotFound) {
 		a.Config.Logger.Info(context.Background(), "Memory: keyword_provider not found, falling back to main provider", "provider", kpName)
 		return
 	}

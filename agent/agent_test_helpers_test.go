@@ -4,7 +4,6 @@ import (
 	"context"
 	"testing"
 
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -15,7 +14,7 @@ import (
 func newBareTestAgent(t *testing.T, provider llm.Provider, maxIter int) *AIAgent {
 	t.Helper()
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: provider},
+		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		MaxIterations: maxIter,
 		SkipConfigure: true,
 		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),

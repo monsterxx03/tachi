@@ -899,7 +899,7 @@ func TestModel_CostForUsage_Anthropic(t *testing.T) {
 				Type:  "anthropic",
 				Model: "claude-sonnet-4-5",
 				Spec: config.ModelSpec{
-					Pricing: &llm.PricingConfig{
+					Pricing: &config.PricingConfig{
 						InputPrice:          new(3.0),
 						OutputPrice:         new(15.0),
 						CacheReadInputPrice: new(0.3),

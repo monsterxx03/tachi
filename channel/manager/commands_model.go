@@ -10,7 +10,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -71,8 +70,8 @@ func (m *Manager) handleModelList(threadID string) (string, error) {
 // window, a compaction is triggered first using the current (wide-context)
 // provider — otherwise the next API call would fail with context overflow.
 func (m *Manager) handleModelSwitch(threadID, name string) (string, error) {
-	resolved, err := m.cfg.BuildProvider(name)
-	if errors.Is(err, config.ErrProviderNotFound) {
+	resolved, err := llm.BuildProvider(m.cfg, name)
+	if errors.Is(err, llm.ErrProviderNotFound) {
 		return fmt.Sprintf("Provider %q not found. Use /model to see available models.", name), nil
 	}
 	if err != nil {

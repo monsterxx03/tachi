@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -38,7 +39,7 @@ func TestDisabledReminderCollector_NoOp(t *testing.T) {
 func TestConfigure_DisableSystemReminders(t *testing.T) {
 	full := config.DefaultConfig()
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:               &config.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
+		Resolved:               &llm.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
 		Logger:                 logger.Default(),
 		FullConfig:             full,
 		SystemConfig:           SystemConfigFromConfig(full),

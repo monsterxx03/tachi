@@ -89,7 +89,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 		maxIter = 30
 	}
 	dreamAgent, _, _ := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Resolved:       &config.ResolvedProvider{Provider: provider},
+		Resolved:       &llm.ResolvedProvider{Provider: provider},
 		MaxIterations:  maxIter,
 		PermissionMode: agent.PermissionModeSkip,
 		SkipConfigure:  true,
@@ -163,7 +163,7 @@ func resolveProvider(cfg RunConfig) (llm.Provider, error) {
 		if cfg.Config == nil {
 			return nil, fmt.Errorf("dream: config required to resolve provider %q", cfg.DreamProvider)
 		}
-		resolved, err := cfg.Config.BuildProvider(cfg.DreamProvider)
+		resolved, err := llm.BuildProvider(cfg.Config, cfg.DreamProvider)
 		if err != nil {
 			return nil, fmt.Errorf("dream: resolve provider: %w", err)
 		}

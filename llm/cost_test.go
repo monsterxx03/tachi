@@ -28,21 +28,3 @@ func TestEffortFromString_Invalid(t *testing.T) {
 		t.Errorf("effortFromString('extreme') = %q, want 'high'", result)
 	}
 }
-
-func TestResolveModelPrice_PartialOverride(t *testing.T) {
-	// Only override output price, input price should be 0 (not fallback to built-in)
-	outputPrice := 8.0
-	price := ResolveModelPrice("deepseek-v4-flash", nil, &outputPrice, nil, nil)
-	if price == nil {
-		t.Fatal("expected non-nil price")
-	}
-	if price.InputPrice != 0 {
-		t.Errorf("InputPrice = %v, want 0 (no override)", price.InputPrice)
-	}
-	if price.OutputPrice != 8.0 {
-		t.Errorf("OutputPrice = %v, want 8.0", price.OutputPrice)
-	}
-	if price.CacheReadInputPrice != 0 {
-		t.Errorf("CacheReadInputPrice = %v, want 0", price.CacheReadInputPrice)
-	}
-}

@@ -150,7 +150,7 @@ func TestConfigure_AdversarialPreresolvedSkipsSetup(t *testing.T) {
 	full.Review.Adversarial = &config.AdversarialReviewConfig{Models: []string{"cfg-model"}}
 
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:          &config.ResolvedProvider{Provider: &mockStreamProvider{name: "main"}},
+		Resolved:          &llm.ResolvedProvider{Provider: &mockStreamProvider{name: "main"}},
 		Logger:            logger.Default(),
 		AdversarialModels: []llm.Provider{pre},
 		AdversarialJudge:  pre,

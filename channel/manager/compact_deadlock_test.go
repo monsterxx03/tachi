@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 )
 
 // The /compact finalize path has to borrow the thread's cached agent to supply
@@ -132,7 +133,7 @@ func newTestManagerWithProvider(t *testing.T) *Manager {
 	t.Helper()
 	mgr := mustNewManager(t, config.DefaultConfig())
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,

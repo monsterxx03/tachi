@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/openai/openai-go/v3"
 	"github.com/openai/openai-go/v3/option"
@@ -33,7 +34,7 @@ type OpenAIResponsesProvider struct {
 // official openai-go SDK retries internally (default MaxRetries=2), so
 // MaxRetries / Timeout map directly to the SDK's option.WithMaxRetries /
 // option.WithRequestTimeout; unset options keep the SDK defaults.
-func NewOpenAIResponsesProvider(apiKey, baseURL, model string, opts ...ProviderOption) *OpenAIResponsesProvider {
+func NewOpenAIResponsesProvider(apiKey, baseURL, model string, opts ...config.ProviderOption) *OpenAIResponsesProvider {
 	o := applyOptions(opts)
 	clientOpts := []option.RequestOption{
 		option.WithAPIKey(apiKey),
@@ -63,7 +64,7 @@ func NewOpenAIResponsesProvider(apiKey, baseURL, model string, opts ...ProviderO
 	}
 }
 
-func (p *OpenAIResponsesProvider) Name() string         { return ProviderTypeOpenAIResponses }
+func (p *OpenAIResponsesProvider) Name() string         { return config.ProviderTypeOpenAIResponses }
 func (p *OpenAIResponsesProvider) Model() string        { return p.model }
 func (p *OpenAIResponsesProvider) ProviderName() string { return p.name }
 

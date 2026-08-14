@@ -627,7 +627,7 @@ func (dr *DeepResearch) getProvider(name string) (llm.Provider, error) {
 
 	for _, p := range dr.providersCfg {
 		if p.Name == name {
-			resolved, err := p.NewProvider()
+			resolved, err := llm.NewProviderFromConfig(&p)
 			if err != nil {
 				return nil, fmt.Errorf("resolve provider %q: %w", name, err)
 			}

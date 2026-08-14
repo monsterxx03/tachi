@@ -242,7 +242,7 @@ func providerThinkingDefault(sess *ACPSession) (*bool, string) {
 	if cur := sess.sessMgr.Current(); cur != nil {
 		providerName = cur.ProviderName
 	}
-	if rp, err := sess.cfg.BuildProvider(providerName); err == nil { // empty name → default
+	if rp, err := llm.BuildProvider(sess.cfg, providerName); err == nil { // empty name → default
 		return rp.Thinking, rp.ThinkingEffort
 	}
 	return nil, ""
@@ -263,7 +263,7 @@ func applySessionThinking(aiAgent *agent.AIAgent, cfg *config.Config, sess *sess
 	providerName := sess.ProviderName
 	if cfg != nil {
 		// Empty name → default provider (BuildProvider resolves it).
-		if rp, err := cfg.BuildProvider(providerName); err == nil {
+		if rp, err := llm.BuildProvider(cfg, providerName); err == nil {
 			thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, *rp)
 			aiAgent.SetThinking(thinking, effort)
 			return
@@ -272,7 +272,7 @@ func applySessionThinking(aiAgent *agent.AIAgent, cfg *config.Config, sess *sess
 	// Provider config unresolvable: apply the override directly. Concrete
 	// levels don't need the provider defaults; only "default" would, and it
 	// falls back to the agent's current (constructor-set) config.
-	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, config.ResolvedProvider{})
+	thinking, effort := cmds.EffectiveThinking(sess.ThinkingLevel, llm.ResolvedProvider{})
 	aiAgent.SetThinking(thinking, effort)
 }
 
@@ -357,7 +357,7 @@ func switchSessionModel(ctx context.Context, sess *ACPSession, providerName stri
 	// ledger, and the provider carries its own config name for row grouping
 	// (see NewNamedProvider).
 	resolved, err := sess.agent.SetResolvedProvider(providerName)
-	if errors.Is(err, config.ErrProviderNotFound) {
+	if errors.Is(err, llm.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found", providerName)
 	}
 	if err != nil {

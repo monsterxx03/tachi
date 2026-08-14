@@ -11,7 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/transcript/render"
-	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -57,10 +57,10 @@ func (m *Model) handleThinkingCommand() tea.Cmd {
 		})
 		return nil
 	}
-	sp, err := m.cfg.BuildProvider(providerName) // empty name → default
+	sp, err := llm.BuildProvider(m.cfg, providerName) // empty name → default
 	if err != nil {
 		msg := fmt.Sprintf("无法解析 provider **%s** 的配置，无法设置 thinking level。", providerName)
-		if !errors.Is(err, config.ErrProviderNotFound) {
+		if !errors.Is(err, llm.ErrProviderNotFound) {
 			msg = fmt.Sprintf("解析 provider 配置失败: %v", err)
 		}
 		m.chatview.AddMessage(chatMessage{Role: "user", Content: display})
@@ -167,7 +167,7 @@ func (m *Model) reapplySessionThinking() {
 		return
 	}
 	providerName := curr.ProviderName
-	sp, err := m.cfg.BuildProvider(providerName) // empty name → default
+	sp, err := llm.BuildProvider(m.cfg, providerName) // empty name → default
 	if err != nil {
 		m.syncThinkingBadge()
 		return

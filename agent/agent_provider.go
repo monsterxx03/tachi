@@ -24,8 +24,8 @@ func (a *AIAgent) SetTitleGenEnabled(enabled bool) {
 // review, checked later at /review start). Shared by every Setup*Provider
 // method.
 func (a *AIAgent) resolveProviderByName(cfg *config.Config, purpose, name string) llm.Provider {
-	resolved, err := cfg.BuildProvider(name)
-	if errors.Is(err, config.ErrProviderNotFound) {
+	resolved, err := llm.BuildProvider(cfg, name)
+	if errors.Is(err, llm.ErrProviderNotFound) {
 		a.Config.Logger.Info(context.Background(), "Agent: "+purpose+" provider not found, falling back to main model", "provider", name)
 		return nil
 	}

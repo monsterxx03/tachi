@@ -818,13 +818,13 @@ func validateAdditionalDirectories(cwd string, dirs []string) ([]string, error) 
 // DefaultProvider → NewNamedProvider), so ledger rows group by the REAL
 // provider — the old hand-built ResolvedProvider here dropped the Name field
 // and silently fell back to type-name grouping.
-func providerForLoadedSession(cfg *config.Config, loadedName string) (*config.ResolvedProvider, error) {
+func providerForLoadedSession(cfg *config.Config, loadedName string) (*llm.ResolvedProvider, error) {
 	if loadedName != "" {
-		if resolved, err := cfg.BuildProvider(loadedName); err == nil {
+		if resolved, err := llm.BuildProvider(cfg, loadedName); err == nil {
 			return resolved, nil
 		}
 	}
-	return cfg.DefaultProvider()
+	return llm.DefaultProvider(cfg)
 }
 
 // findLatestSessionByCwd scans disk sessions and returns the most recent

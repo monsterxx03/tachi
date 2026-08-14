@@ -181,7 +181,7 @@ func TestWrapForUsage_ResolvesAlias(t *testing.T) {
 	full.ExpandProviderAliases()    // what LoadFrom does after parsing YAML
 
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: provider},
+		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		Logger:        logger.Default(),
 		FullConfig:    full,
 		UsageRecorder: rec,
@@ -279,7 +279,7 @@ func TestNewAIAgentWithConfig_DedicatedProvidersBilled(t *testing.T) {
 	full.CommitProvider = commitName
 
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: &mockStreamProvider{name: "openai", sequences: [][]llm.StreamEvent{}}},
+		Resolved:      &llm.ResolvedProvider{Provider: &mockStreamProvider{name: "openai", sequences: [][]llm.StreamEvent{}}},
 		Logger:        logger.Default(),
 		FullConfig:    full,
 		UsageRecorder: rec,
@@ -322,7 +322,7 @@ func TestSetResolvedProvider_SwitchesWholesale(t *testing.T) {
 
 	off := false
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved: &config.ResolvedProvider{
+		Resolved: &llm.ResolvedProvider{
 			Provider:       &mockStreamProvider{name: "old"},
 			ContextWindow:  64_000,
 			Thinking:       &off,

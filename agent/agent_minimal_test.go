@@ -9,6 +9,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -26,7 +27,7 @@ func TestConfigure_DisableMCPAndSkills(t *testing.T) {
 	}
 
 	a, mgr, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:               &config.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
+		Resolved:               &llm.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
 		Logger:                 logger.Default(),
 		FullConfig:             full,
 		SystemConfig:           sysCfg,
@@ -55,7 +56,7 @@ func TestConfigure_DisableMCPAndSkills(t *testing.T) {
 func TestConfigure_DisableSkills_WithFullReminders(t *testing.T) {
 	full := config.DefaultConfig()
 	a, _, err := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
+		Resolved:      &llm.ResolvedProvider{Provider: &mockStreamProvider{name: "openai"}},
 		Logger:        logger.Default(),
 		FullConfig:    full,
 		SystemConfig:  SystemConfigFromConfig(full),

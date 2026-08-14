@@ -456,7 +456,7 @@ func TestAmbientPreempt_DirectedMessage(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,

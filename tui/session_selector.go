@@ -10,7 +10,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
@@ -280,7 +279,7 @@ func (m *Model) rebuildTotalUsage(msgs []session.Message) {
 // string and whether the provider was successfully restored.
 func (m *Model) restoreSessionProvider(s *session.Session) (string, bool) {
 	sp, err := m.agent.SetResolvedProvider(s.ProviderName)
-	if errors.Is(err, config.ErrProviderNotFound) {
+	if errors.Is(err, llm.ErrProviderNotFound) {
 		// Keep current provider, show the session's expected info
 		return fmt.Sprintf("%s [unmatched]", s.ProviderName), false
 	}

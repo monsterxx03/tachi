@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -56,7 +57,7 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 
 		// OpenAI doesn't support thinking blocks natively — prepend them
 		// to the Content field so the conversation context is preserved.
-		if providerType == llm.ProviderTypeOpenAI && len(thinkingBlocks) > 0 {
+		if providerType == config.ProviderTypeOpenAI && len(thinkingBlocks) > 0 {
 			var parts []string
 			for _, tb := range thinkingBlocks {
 				parts = append(parts, tb.Thinking)

@@ -334,7 +334,7 @@ func TestLoadThreadSession_CreatesNewSession(t *testing.T) {
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
 	// Inject resolved config so loadThreadSession can call sm.New().
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
@@ -362,7 +362,7 @@ func TestLoadThreadSession_LoadsExistingSession(t *testing.T) {
 	store := newTempSessionStore(t)
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = store
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
@@ -402,7 +402,7 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	store := newTempSessionStore(t)
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = store
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
@@ -471,7 +471,7 @@ func TestCommandChannel_Injection(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
@@ -505,7 +505,7 @@ func TestCommandChannel_NotInjectedToPlainChannel(t *testing.T) {
 	cfg := config.DefaultConfig()
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Type:          "openai",
 		Model:         "test-model",
 		ContextWindow: 128_000,
@@ -752,7 +752,7 @@ func TestHandleModelCommand_List(t *testing.T) {
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
 	// Set up the provider manually (simulating what New's resolveProvider does).
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
@@ -784,7 +784,7 @@ func TestHandleModelCommand_Switch(t *testing.T) {
 	}
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
@@ -822,7 +822,7 @@ func TestHandleModelCommand_Unknown(t *testing.T) {
 		},
 	}
 	mgr := mustNewManager(t, cfg)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:  &mockProvider{name: "openai"},
 		Type:      "openai",
 		Model:     "gpt-5.2",
@@ -847,7 +847,7 @@ func TestHandleModelCommand_ListAfterSwitch(t *testing.T) {
 	}
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
@@ -885,7 +885,7 @@ func TestHandleModelCommand_ViaTextSlash(t *testing.T) {
 	}
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
@@ -929,7 +929,7 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	}
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:      &mockProvider{name: "openai"},
 		Type:          "openai",
 		Model:         "gpt-5.2",
@@ -1125,7 +1125,7 @@ func newThinkingTestManager(t *testing.T) *Manager {
 	}
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:       &mockProvider{name: "openai"},
 		Type:           "openai",
 		Model:          "deepseek-v4-flash",
@@ -1321,7 +1321,7 @@ func newOneoffTestManagerWithProvider(t *testing.T, prov llm.Provider, threadID 
 
 	mgr := mustNewManager(t, cfg)
 	mgr.sessionStore = newTempSessionStore(t)
-	mgr.defaultResolvedProvider = &config.ResolvedProvider{
+	mgr.defaultResolvedProvider = &llm.ResolvedProvider{
 		Provider:      prov,
 		Type:          "openai",
 		Model:         "test-model",

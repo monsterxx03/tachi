@@ -77,7 +77,7 @@ func (m *Model) exitModelSelect(msg string) {
 
 func (m *Model) switchToProvider(idx int) tea.Cmd {
 	pCfg := &m.providerItems[idx]
-	resolved, err := m.cfg.BuildProvider(pCfg.Name)
+	resolved, err := llm.BuildProvider(m.cfg, pCfg.Name)
 	if err != nil {
 		m.exitModelSelect("Error: " + err.Error())
 		return nil

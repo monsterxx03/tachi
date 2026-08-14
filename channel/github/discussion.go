@@ -8,7 +8,6 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -52,7 +51,7 @@ func RunDiscussionTurn(
 		maxIter = 10
 	}
 	discussionAgent, _, _ := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Resolved:       &config.ResolvedProvider{Provider: provider},
+		Resolved:       &llm.ResolvedProvider{Provider: provider},
 		MaxIterations:  maxIter,
 		Logger:         log, // nil = no logger, matches the previous conditional SetLogger
 		PermissionMode: agent.PermissionModeSkip,

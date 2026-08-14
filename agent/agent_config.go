@@ -82,7 +82,7 @@ type AgentConfig struct {
 	//   - nil：NewAIAgentWithConfig 经 FullConfig.DefaultProvider() 构造
 	//     default provider（FullConfig 为 nil 时才退化为空 ResolvedProvider，
 	//     即无主 provider——Fork / github / dream 等裸 agent 总是显式传入）。
-	Resolved *config.ResolvedProvider
+	Resolved *llm.ResolvedProvider
 
 	// --- 基础行为 ---
 	MaxIterations  int

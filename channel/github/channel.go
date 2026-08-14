@@ -340,8 +340,8 @@ func (ch *GitHubChannel) resolveProvider(ctx context.Context) error {
 		providerName = cfg.Provider // use default provider
 	}
 
-	resolved, err := cfg.BuildProvider(providerName)
-	if errors.Is(err, config.ErrProviderNotFound) {
+	resolved, err := llm.BuildProvider(cfg, providerName)
+	if errors.Is(err, llm.ErrProviderNotFound) {
 		return fmt.Errorf("provider %q not found in config", providerName)
 	}
 	if err != nil {

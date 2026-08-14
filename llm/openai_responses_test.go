@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/openai/openai-go/v3/responses"
 )
 
@@ -668,7 +669,7 @@ func TestResponsesConvertMessages_SteerBecomesUser(t *testing.T) {
 }
 
 func TestNewProvider_OpenAIResponses(t *testing.T) {
-	p, err := NewProvider(ProviderTypeOpenAIResponses, "sk-test", "https://api.openai.com/v1", "gpt-5.6")
+	p, err := NewProvider(config.ProviderTypeOpenAIResponses, "sk-test", "https://api.openai.com/v1", "gpt-5.6")
 	if err != nil {
 		t.Fatalf("NewProvider: %v", err)
 	}
@@ -676,7 +677,7 @@ func TestNewProvider_OpenAIResponses(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *OpenAIResponsesProvider, got %T", p)
 	}
-	if rp.Name() != ProviderTypeOpenAIResponses {
+	if rp.Name() != config.ProviderTypeOpenAIResponses {
 		t.Errorf("Name = %q", rp.Name())
 	}
 	if rp.Model() != "gpt-5.6" {

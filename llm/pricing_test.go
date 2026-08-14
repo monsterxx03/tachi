@@ -4,6 +4,8 @@ import (
 	"math"
 	"testing"
 	"time"
+
+	"github.com/monsterxx03/tachi/config"
 )
 
 // prePeak is a fixed instant before DeepSeek's 峰谷定价 effective date
@@ -208,52 +210,6 @@ func TestPriceAt(t *testing.T) {
 	}
 }
 
-func TestGetBuiltinModelPrice_NewModels(t *testing.T) {
-	tests := []struct {
-		model string
-		want  *ModelPrice
-	}{
-		{
-			model: "glm-5.2",
-			want:  &ModelPrice{InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0},
-		},
-		{
-			model: "z-ai/glm-5.2",
-			want:  &ModelPrice{InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0},
-		},
-		{
-			model: "kimi-k3",
-			want:  &ModelPrice{InputPrice: 20.0, OutputPrice: 100.0, CacheReadInputPrice: 2.0},
-		},
-		{
-			model: "mimo-v2.5",
-			want:  &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
-		},
-		{
-			model: "mimo-v2.5-pro",
-			want:  &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.025},
-		},
-		{
-			model: "MIMO-V2.5-PRO", // case-insensitive
-			want:  &ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.025},
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.model, func(t *testing.T) {
-			got := GetBuiltinModelPrice(tt.model)
-			if got == nil {
-				t.Fatalf("GetBuiltinModelPrice(%q) = nil, want %+v", tt.model, tt.want)
-			}
-			if got.InputPrice != tt.want.InputPrice || got.OutputPrice != tt.want.OutputPrice ||
-				got.CacheReadInputPrice != tt.want.CacheReadInputPrice ||
-				got.CacheCreationInputPrice != tt.want.CacheCreationInputPrice {
-				t.Errorf("GetBuiltinModelPrice(%q) = %+v, want %+v", tt.model, got, tt.want)
-			}
-		})
-	}
-}
-
 func TestNormalizeCacheMissInput(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -262,9 +218,9 @@ func TestNormalizeCacheMissInput(t *testing.T) {
 		providerType string
 		want         int64
 	}{
-		{name: "openai subtracts cache read", input: 1_000, cacheRead: 300, providerType: ProviderTypeOpenAI, want: 700},
-		{name: "anthropic keeps full input", input: 1_000, cacheRead: 300, providerType: ProviderTypeAnthropic, want: 1_000},
-		{name: "cache read exceeds input clamps to 0", input: 100, cacheRead: 200, providerType: ProviderTypeOpenAI, want: 0},
+		{name: "openai subtracts cache read", input: 1_000, cacheRead: 300, providerType: config.ProviderTypeOpenAI, want: 700},
+		{name: "anthropic keeps full input", input: 1_000, cacheRead: 300, providerType: config.ProviderTypeAnthropic, want: 1_000},
+		{name: "cache read exceeds input clamps to 0", input: 100, cacheRead: 200, providerType: config.ProviderTypeOpenAI, want: 0},
 		{name: "empty provider treated as openai family", input: 1_000, cacheRead: 300, providerType: "", want: 700},
 	}
 	for _, tt := range tests {
@@ -306,28 +262,28 @@ func TestCostForUsage(t *testing.T) {
 			name:         "nil usage",
 			usage:        nil,
 			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0},
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			want:         0,
 		},
 		{
 			name:         "nil price",
 			usage:        &Usage{InputTokens: 1000, OutputTokens: 500},
 			price:        nil,
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			want:         0,
 		},
 		{
 			name:         "zero price",
 			usage:        &Usage{InputTokens: 1000, OutputTokens: 500},
 			price:        &ModelPrice{InputPrice: 0, OutputPrice: 0},
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			want:         0,
 		},
 		{
 			name:         "basic calculation",
 			usage:        &Usage{InputTokens: 1_000_000, OutputTokens: 500_000},
 			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0},
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			want:         1.0 + 1.0, // 1M input * ¥1 + 500K output * ¥2/1M
 		},
 		{
@@ -338,7 +294,7 @@ func TestCostForUsage(t *testing.T) {
 				CacheReadInputTokens: 300_000,
 			},
 			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			// Cache miss: 700K * 1 / 1M = 0.7
 			// Cache read: 300K * 0.02 / 1M = 0.006
 			// Output: 500K * 2 / 1M = 1.0
@@ -353,7 +309,7 @@ func TestCostForUsage(t *testing.T) {
 				CacheReadInputTokens: 300_000,
 			},
 			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
-			providerType: ProviderTypeAnthropic,
+			providerType: config.ProviderTypeAnthropic,
 			// Input kept at 1M (no subtraction): 1.0
 			// Cache read: 300K * 0.02 / 1M = 0.006
 			// Output: 500K * 2 / 1M = 1.0
@@ -367,7 +323,7 @@ func TestCostForUsage(t *testing.T) {
 				CacheReadInputTokens: 400_000,
 			},
 			price:        &ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}, // CacheReadInputPrice = 0
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			// Cache miss: 600K * 1 / 1M = 0.6; cache read free → 0.
 			want: 0.6,
 		},
@@ -383,7 +339,7 @@ func TestCostForUsage(t *testing.T) {
 				OutputPrice:             2.0,
 				CacheCreationInputPrice: 1.5,
 			},
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			// Input (cache miss): 1M * 1 = 1.0
 			// Cache creation: 200K * 1.5/1M = 0.3
 			// Output: 500K * 2/1M = 1.0
@@ -400,7 +356,7 @@ func TestCostForUsage(t *testing.T) {
 				OutputPrice: 28.0,
 				// CacheCreationInputPrice 未设 = 0 = 不计费
 			},
-			providerType: ProviderTypeOpenAI,
+			providerType: config.ProviderTypeOpenAI,
 			// Input: 1M * 8 = 8.0; cache creation free → 0; no output.
 			want: 8.0,
 		},
@@ -411,54 +367,6 @@ func TestCostForUsage(t *testing.T) {
 			got := CostForUsage(tt.usage, tt.price, tt.providerType)
 			if math.Abs(got-tt.want) > 0.0001 {
 				t.Errorf("CostForUsage() = %v, want %v", got, tt.want)
-			}
-		})
-	}
-}
-
-func TestResolveModelPrice(t *testing.T) {
-	inputPrice := 5.0
-	outputPrice := 10.0
-
-	tests := []struct {
-		name               string
-		model              string
-		inputPrice         *float64
-		outputPrice        *float64
-		cacheReadPrice     *float64
-		cacheCreationPrice *float64
-		wantNil            bool
-	}{
-		{
-			name:        "provider override",
-			model:       "deepseek-v4-flash",
-			inputPrice:  &inputPrice,
-			outputPrice: &outputPrice,
-			wantNil:     false,
-		},
-		{
-			name:    "built-in deepseek",
-			model:   "deepseek-chat",
-			wantNil: false,
-		},
-		{
-			name:    "unknown model no override",
-			model:   "unknown-model",
-			wantNil: true,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := ResolveModelPrice(tt.model, tt.inputPrice, tt.outputPrice, tt.cacheReadPrice, tt.cacheCreationPrice)
-			if tt.wantNil && got != nil {
-				t.Errorf("ResolveModelPrice() = %+v, want nil", got)
-			}
-			if !tt.wantNil && got == nil {
-				t.Errorf("ResolveModelPrice() = nil, want non-nil")
-			}
-			if tt.inputPrice != nil && got != nil && got.InputPrice != *tt.inputPrice {
-				t.Errorf("InputPrice = %v, want %v", got.InputPrice, *tt.inputPrice)
 			}
 		})
 	}

@@ -3,15 +3,14 @@ package config
 import (
 	"testing"
 
-	"github.com/monsterxx03/tachi/llm"
 	"gopkg.in/yaml.v3"
 )
 
-// TestPricingConfigYAMLUnmarshal: llm.PricingConfig must load from the
+// TestPricingConfigYAMLUnmarshal: PricingConfig must load from the
 // user-facing YAML through yaml.v3 with the same schema as the historical
-// config.ModelPricing (the tags now live on the llm type). The flat-price
-// path is covered by the existing spec tests; this pins the time-of-use
-// fields (timezone + bands).
+// config.ModelPricing (the tags live on the type in this package). The
+// flat-price path is covered by the existing spec tests; this pins the
+// time-of-use fields (timezone + bands).
 func TestPricingConfigYAMLUnmarshal(t *testing.T) {
 	const doc = `
 provider: ds
@@ -51,8 +50,8 @@ providers:
 		t.Errorf("bands = %+v, want the peak band", p.Bands)
 	}
 
-	// Type sanity: the field IS llm.PricingConfig (the resolver's own type).
-	if _, ok := any(p).(*llm.PricingConfig); !ok {
-		t.Errorf("Spec.Pricing = %T, want *llm.PricingConfig", p)
+	// Type sanity: the field IS PricingConfig (the schema's own type).
+	if _, ok := any(p).(*PricingConfig); !ok {
+		t.Errorf("Spec.Pricing = %T, want *PricingConfig", p)
 	}
 }

@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -14,7 +13,7 @@ import (
 func newTestAIAgent(t *testing.T, provider llm.Provider, maxIter int) *agent.AIAgent {
 	t.Helper()
 	a, _, err := agent.NewAIAgentWithConfig(context.Background(), agent.AgentConfig{
-		Resolved:      &config.ResolvedProvider{Provider: provider},
+		Resolved:      &llm.ResolvedProvider{Provider: provider},
 		MaxIterations: maxIter,
 		SkipConfigure: true,
 		UsageRecorder: llm.NewUsageRecorder(t.TempDir()),

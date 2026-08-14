@@ -40,7 +40,7 @@ func TestResolveModelPrice_UsesProviderOverrides(t *testing.T) {
 			Type:  "anthropic",
 			Model: "claude-sonnet-4-5",
 			Spec: config.ModelSpec{
-				Pricing: &llm.PricingConfig{
+				Pricing: &config.PricingConfig{
 					InputPrice:  f64(1.5),
 					OutputPrice: f64(7.5),
 				},
@@ -67,7 +67,7 @@ func TestResolveModelPrice_CacheOverrides(t *testing.T) {
 		Providers: []config.ProviderConfig{{
 			Name: "custom",
 			Spec: config.ModelSpec{
-				Pricing: &llm.PricingConfig{
+				Pricing: &config.PricingConfig{
 					CacheReadInputPrice:     f64(0.3),
 					CacheCreationInputPrice: f64(3.75),
 				},
@@ -111,7 +111,7 @@ func TestResolveModelPrice_UnknownProviderName(t *testing.T) {
 	cfg := &config.Config{
 		Providers: []config.ProviderConfig{{
 			Name: "known",
-			Spec: config.ModelSpec{Pricing: &llm.PricingConfig{InputPrice: f64(99)}},
+			Spec: config.ModelSpec{Pricing: &config.PricingConfig{InputPrice: f64(99)}},
 		}},
 	}
 

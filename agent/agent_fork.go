@@ -5,7 +5,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -74,7 +73,7 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	// the child ends up with exactly the parent's (filtered) tool set below.
 	// SkipConfigure guarantees no error, so the third return is ignored.
 	child, _, _ := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:       &config.ResolvedProvider{Provider: cfg.Provider},
+		Resolved:       &llm.ResolvedProvider{Provider: cfg.Provider},
 		MaxIterations:  cfg.MaxIterations,
 		Logger:         logger,
 		PermissionMode: PermissionModeSkip, // sub-agents are non-interactive
