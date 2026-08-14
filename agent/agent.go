@@ -117,6 +117,16 @@ type AIAgent struct {
 	conv       *convState   // 会话级滚动状态（token 估算、compact 冷却、消息日期）
 	currentRun *RunState    // 当前运行的实时状态（loop 写，外部并发读）
 	mu         sync.RWMutex // 保护 currentRun + mode
+
+	// Vision fallback（懒构建，mutex 保护）：当当前模型不支持图片时，用
+	// 配置中第一个支持图片的 provider 描述图片。Once 保证每个 agent 只
+	// 解析一次；err 为 nil 时 delegate 才可用（无可用 provider 也会缓存）。
+	visionDelegateOnce sync.Once
+	visionDelegate     llm.Provider
+	visionDelegateErr  error
+	// visionDelegateOverride（仅测试）直接替换 config 解析的 delegate，
+	// 用于单测描述转换逻辑而不触发真实 provider 构建。
+	visionDelegateOverride llm.Provider
 }
 
 // NewAIAgentWithConfig creates an AIAgent from a structured config.

@@ -39,6 +39,11 @@ const (
 	UsageKindResearchReport   UsageKind = "research-report"
 	UsageKindGithubDiscussion UsageKind = "github-discussion"
 	UsageKindGithubPR         UsageKind = "github-pr"
+	// UsageKindVision marks image-description calls: a vision-capable
+	// provider describing an image on behalf of a text-only model (see
+	// agent.describeImages). Grouped separately so the fallback cost is
+	// visible in the ledger instead of inflating the conversation bucket.
+	UsageKindVision UsageKind = "vision"
 )
 
 // ctxKeyUsageKind is the context key for the per-call usage kind.

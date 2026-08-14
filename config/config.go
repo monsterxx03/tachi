@@ -97,6 +97,14 @@ type ModelSpec struct {
 	// （如 DeepSeek thinking_mode 文档的 effort 映射表）。
 	ThinkingLevel string `yaml:"thinking_level,omitempty"`
 
+	// Vision 标记模型是否支持图片（多模态）输入。
+	//   - nil（默认）：按模型名内置能力表自动判断（llm.ModelSupportsVision）
+	//   - true：显式声明支持图片
+	//   - false：显式声明不支持图片（即使模型名命中了能力表）
+	// 当当前模型不支持图片但输入包含图片时，Tachi 会调用配置中第一个
+	// 支持图片的 provider 描述图片，再把描述文本喂给当前模型。
+	Vision *bool `yaml:"vision,omitempty"`
+
 	// MaxRetries 失败后的额外重试次数。nil = 使用默认（各 provider 路径均为
 	// 2 次）；0 = 禁用重试；n = 重试 n 次。
 	// 落地方式：openai（go-openai，无内置重试）走外层 RetryProvider；

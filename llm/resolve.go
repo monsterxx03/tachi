@@ -115,6 +115,13 @@ type ResolvedProvider struct {
 	// ThinkingEffort 思考强度（原样透传；空 = 模型默认）。
 	ThinkingEffort string
 
+	// SupportsVision 标记模型是否支持图片（多模态）输入。
+	// 由 ProviderConfig.Spec.Vision 显式配置解析而来；未配置时按模型名
+	// 内置能力表（ModelSupportsVision）自动判断。为 false 时，若输入包含
+	// 图片，agent 会用配置中第一个支持图片的 provider 描述图片后再交给
+	// 当前模型（见 agent.describeImages）。
+	SupportsVision bool
+
 	// Session-level execution limits, resolved from the config (per-session
 	// values, not per-provider — kept here so every caller of BuildProvider /
 	// DefaultProvider gets them in one struct).
@@ -173,6 +180,12 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 		thinkingEffort = pCfg.Spec.ThinkingLevel
 	}
 
+	// Resolve vision capability: explicit spec.vision override wins;
+	// otherwise fall back to the built-in model-name capability table.
+	// ModelSupportsVision is conservative (unknown names → false), so an
+	// unmarked text-only model is never assumed vision-capable.
+	supportsVision := ProviderConfigSupportsVision(pCfg)
+
 	return &ResolvedProvider{
 		Type:           pCfg.Type,
 		Model:          pCfg.Model,
@@ -182,7 +195,23 @@ func resolveProviderConfig(pCfg *config.ProviderConfig) (*ResolvedProvider, erro
 		Name:           pCfg.Name,
 		Thinking:       thinking,
 		ThinkingEffort: thinkingEffort,
+		SupportsVision: supportsVision,
 	}, nil
+}
+
+// ProviderConfigSupportsVision reports whether a provider config's model
+// accepts image input: an explicit spec.vision override wins, otherwise the
+// built-in model-name capability table (ModelSupportsVision) is consulted.
+// This is the single source of truth shared by ResolvedProvider resolution
+// and the agent's vision-fallback delegate selection.
+func ProviderConfigSupportsVision(pCfg *config.ProviderConfig) bool {
+	if pCfg == nil {
+		return false
+	}
+	if pCfg.Spec.Vision != nil {
+		return *pCfg.Spec.Vision
+	}
+	return ModelSupportsVision(pCfg.Model)
 }
 
 func resolveAPIKey(pCfg *config.ProviderConfig) (key string, envName string) {

@@ -880,3 +880,40 @@ func TestExpandProviderAliases(t *testing.T) {
 	plain.ExpandProviderAliases()
 	assert.Equal(t, "deepseek-v4-flash", plain.Provider)
 }
+
+func TestLoadFrom_ProviderVisionFlag(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	yaml := `providers:
+  - name: text-only
+    type: openai
+    model: deepseek-v4-flash
+    api_key: sk-test
+    spec:
+      vision: false
+  - name: explicit-vision
+    type: openai
+    model: my-private-vl
+    api_key: sk-test
+    spec:
+      vision: true
+  - name: auto-detect
+    type: anthropic
+    model: claude-sonnet-4-6
+    api_key: sk-test
+`
+	require.NoError(t, os.WriteFile(path, []byte(yaml), 0600))
+
+	cfg, err := LoadFrom(path)
+	require.NoError(t, err)
+	require.Len(t, cfg.Providers, 3)
+
+	assert.NotNil(t, cfg.Providers[0].Spec.Vision)
+	assert.False(t, *cfg.Providers[0].Spec.Vision, "explicit vision: false loads as false")
+
+	assert.NotNil(t, cfg.Providers[1].Spec.Vision)
+	assert.True(t, *cfg.Providers[1].Spec.Vision, "explicit vision: true loads as true")
+
+	assert.Nil(t, cfg.Providers[2].Spec.Vision, "omitted vision stays nil (auto-detect at resolve time)")
+}

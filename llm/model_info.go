@@ -77,3 +77,55 @@ func isReasoningModelPrefix(model string) bool {
 func IsReasoningModelPrefix(model string) bool {
 	return isReasoningModelPrefix(model)
 }
+
+// ModelSupportsVision reports whether a model is known to accept image
+// (multi-modal) input, based on its name. This is the built-in capability
+// table used as the fallback when the provider's spec does not explicitly
+// set vision. It is deliberately conservative: only well-known vision
+// families return true, and unknown model names return false — sending
+// image parts to a text-only model errors out, whereas describing images
+// through a vision-capable provider is always safe. Users can override the
+// result per-provider via spec.vision (see config.ModelSpec.Vision).
+func ModelSupportsVision(model string) bool {
+	m := strings.ToLower(model)
+
+	// Claude 3+ family — all variants accept images.
+	if strings.Contains(m, "claude") {
+		return true
+	}
+	// OpenAI vision-capable families (gpt-4o / gpt-4.1 / gpt-5 / o4 /
+	// gpt-4-turbo / gpt-4-vision). o1/o3/gpt-4/gpt-4.5 are excluded: only
+	// the listed variants reliably accept image input.
+	if strings.Contains(m, "gpt-4o") || strings.Contains(m, "gpt-4.1") ||
+		strings.Contains(m, "gpt-5") || strings.Contains(m, "o4") ||
+		strings.Contains(m, "gpt-4-turbo") || strings.Contains(m, "gpt-4-vision") {
+		return true
+	}
+	// Qwen vision variants (qwen-vl, qwen2.5-vl, qwen3-vl, ...). The plain
+	// "qwen" family is text-only, so the "vl" marker is required.
+	if strings.Contains(m, "qwen") && strings.Contains(m, "vl") {
+		return true
+	}
+	// Zhipu GLM vision variants (glm-4v / glm-4.1v / glm-4.5v). The plain
+	// glm family (glm-4, glm-4.5, glm-4.6) is text-only.
+	if strings.Contains(m, "glm-4v") || strings.Contains(m, "glm-4.1v") || strings.Contains(m, "glm-4.5v") {
+		return true
+	}
+	// Gemini family — all variants accept images.
+	if strings.Contains(m, "gemini") {
+		return true
+	}
+	// Xiaomi MiMo family — all variants accept images.
+	if strings.Contains(m, "mimo") {
+		return true
+	}
+	// Moonshot Kimi family — all variants accept images.
+	if strings.Contains(m, "kimi") {
+		return true
+	}
+	// MiniMax family — all variants accept images.
+	if strings.Contains(m, "minimax") {
+		return true
+	}
+	return false
+}

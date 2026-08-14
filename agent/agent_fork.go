@@ -72,8 +72,24 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 	// Bare child: SkipConfigure skips built-in tools / skills / reminders so
 	// the child ends up with exactly the parent's (filtered) tool set below.
 	// SkipConfigure guarantees no error, so the third return is ignored.
+	resolved := &llm.ResolvedProvider{Provider: cfg.Provider}
+	// Carry the resolved capability metadata so the child's vision fallback
+	// (describeImagesIfNeeded) knows whether its model sees images natively,
+	// and can pick a different configured provider as the description
+	// delegate when it does not. FullConfig is passed along so the child can
+	// resolve that delegate; the dedicated-provider Setup section in
+	// NewAIAgentWithConfig is a no-op for typical configs (empty names).
+	if name := cfg.Provider.ProviderName(); name != "" {
+		resolved.Name = name
+		if a.Config.FullConfig != nil {
+			if pCfg := a.Config.FullConfig.ProviderConfig(name); pCfg != nil {
+				resolved.SupportsVision = llm.ProviderConfigSupportsVision(pCfg)
+			}
+		}
+	}
 	child, _, _ := NewAIAgentWithConfig(context.Background(), AgentConfig{
-		Resolved:       &llm.ResolvedProvider{Provider: cfg.Provider},
+		Resolved:       resolved,
+		FullConfig:     a.Config.FullConfig,
 		MaxIterations:  cfg.MaxIterations,
 		Logger:         logger,
 		PermissionMode: PermissionModeSkip, // sub-agents are non-interactive

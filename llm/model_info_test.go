@@ -94,3 +94,39 @@ func TestModelContextWindow_EmptyString(t *testing.T) {
 		t.Errorf("ModelContextWindow('') = %d, want 0", got)
 	}
 }
+
+func TestModelSupportsVision(t *testing.T) {
+	visionModels := []string{
+		"claude-sonnet-4-6", "claude-opus-4", "claude-haiku-3-5", "claude-3-5-sonnet",
+		"gpt-4o", "gpt-4o-mini", "gpt-4.1", "gpt-4.1-mini", "gpt-5.2", "gpt-5.1-codex",
+		"o4-mini", "o4", "gpt-4-turbo", "gpt-4-vision-preview",
+		"qwen-vl-max", "qwen2.5-vl-72b", "qwen3-vl-plus",
+		"glm-4v", "glm-4.1v", "glm-4.5v",
+		"gemini-2.5-pro", "gemini-1.5-flash",
+		"mimo-2.5", "mimo-vl-7b", "mimo-7b",
+		"kimi-k3", "kimi-k2", "kimi-latest",
+		"minimax-m2", "minimax-abab6.5s",
+	}
+	for _, m := range visionModels {
+		t.Run("vision_"+m, func(t *testing.T) {
+			if !ModelSupportsVision(m) {
+				t.Errorf("ModelSupportsVision(%q) = false, want true", m)
+			}
+		})
+	}
+
+	textOnlyModels := []string{
+		"deepseek-v4-flash", "deepseek-reasoner", "deepseek-chat",
+		"gpt-4", "gpt-3.5-turbo", "o1-mini", "o1", "o3", "gpt-4.5",
+		"qwen-turbo", "qwen2.5-72b", "qwen-max",
+		"glm-4", "glm-4.5", "glm-4.6",
+		"", "unknown-model",
+	}
+	for _, m := range textOnlyModels {
+		t.Run("text_"+m, func(t *testing.T) {
+			if ModelSupportsVision(m) {
+				t.Errorf("ModelSupportsVision(%q) = true, want false", m)
+			}
+		})
+	}
+}

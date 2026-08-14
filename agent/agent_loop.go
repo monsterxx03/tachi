@@ -623,6 +623,17 @@ func (a *AIAgent) runLoop(
 		default:
 		}
 
+		// ── Vision fallback (before any LLM call) ──
+		// When the current model cannot see images and the conversation
+		// carries image parts, describe them through a vision-capable
+		// provider and replace the parts with text in-place on rs.Messages
+		// (each image is described once per turn). Runs before auto-compact
+		// AND the main call so neither sees raw image parts: the compact
+		// provider is the main (possibly text-only) provider, and a raw
+		// image would make its API call fail. No-op when the model supports
+		// images or no images are present.
+		a.describeImagesIfNeeded(ctx, rs, &opts)
+
 		// ── Auto-compact check (before LLM call) ──
 		// Checked at the loop top so it fires regardless of the previous
 		// iteration's finish reason (tool_calls, stop, length). When a

@@ -115,3 +115,52 @@ func TestResolveProviderConfig_ThinkingLevel(t *testing.T) {
 	assert.Nil(t, resolved.Thinking)
 	assert.Equal(t, "max", resolved.ThinkingEffort)
 }
+
+func TestResolveProviderConfig_SupportsVision(t *testing.T) {
+	apiKey := "sk-test"
+
+	// 未配置 spec.vision → 按模型名自动判断
+	pDeepSeek := &config.ProviderConfig{
+		Name:   "deepseek-flash",
+		Type:   "openai",
+		Model:  "deepseek-v4-flash",
+		APIKey: apiKey,
+	}
+	resolved, err := resolveProviderConfig(pDeepSeek)
+	require.NoError(t, err)
+	assert.False(t, resolved.SupportsVision, "deepseek should be auto-detected as text-only")
+
+	pClaude := &config.ProviderConfig{
+		Name:   "claude",
+		Type:   "anthropic",
+		Model:  "claude-sonnet-4-6",
+		APIKey: apiKey,
+	}
+	resolved, err = resolveProviderConfig(pClaude)
+	require.NoError(t, err)
+	assert.True(t, resolved.SupportsVision, "claude should be auto-detected as vision-capable")
+
+	// 显式 vision: true 覆盖自动判断（未知/文本模型强制支持）
+	pUnknown := &config.ProviderConfig{
+		Name:   "custom-vl",
+		Type:   "openai",
+		Model:  "my-private-vl-model",
+		APIKey: apiKey,
+		Spec:   config.ModelSpec{Vision: boolPtr(true)},
+	}
+	resolved, err = resolveProviderConfig(pUnknown)
+	require.NoError(t, err)
+	assert.True(t, resolved.SupportsVision)
+
+	// 显式 vision: false 覆盖自动判断（能力表命中的模型强制关闭）
+	pClaudeNoVision := &config.ProviderConfig{
+		Name:   "claude-text",
+		Type:   "anthropic",
+		Model:  "claude-sonnet-4-6",
+		APIKey: apiKey,
+		Spec:   config.ModelSpec{Vision: boolPtr(false)},
+	}
+	resolved, err = resolveProviderConfig(pClaudeNoVision)
+	require.NoError(t, err)
+	assert.False(t, resolved.SupportsVision)
+}
