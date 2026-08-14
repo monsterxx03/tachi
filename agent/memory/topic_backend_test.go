@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -19,7 +20,7 @@ func setupTopicBackend(t *testing.T) (*TopicBackend, string) {
 
 	tmpDir := t.TempDir()
 
-	backend, err := NewTopicBackend(Config{
+	backend, err := NewTopicBackend(config.MemoryConfig{
 		BaseDir: tmpDir,
 	}, nil)
 	if err != nil {
@@ -433,7 +434,7 @@ We chose SQLite.
 	os.MkdirAll(topicsA, 0755)
 	os.WriteFile(filepath.Join(topicsA, "db.md"), []byte(topicContent), 0644)
 
-	backendA, err := NewTopicBackend(Config{BaseDir: dirA}, nil)
+	backendA, err := NewTopicBackend(config.MemoryConfig{BaseDir: dirA}, nil)
 	if err != nil {
 		t.Fatalf("NewTopicBackend A: %v", err)
 	}
@@ -473,7 +474,7 @@ We chose SQLite.
 }`, factID, factID)
 	os.WriteFile(filepath.Join(memoryB, DreamStateFile), []byte(stateJSON), 0644)
 
-	backendB, err := NewTopicBackend(Config{BaseDir: dirB}, nil)
+	backendB, err := NewTopicBackend(config.MemoryConfig{BaseDir: dirB}, nil)
 	if err != nil {
 		t.Fatalf("NewTopicBackend B: %v", err)
 	}

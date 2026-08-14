@@ -39,7 +39,9 @@ func (a *deferredToolProviderAdapter) All() []systemreminder.DeferredToolRecord 
 func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
 	// --- Memory backend (before skills — buildReminderCollector reads a.Config.Memory) ---
 	if sysCfg.Memory.Type != "" {
-		memCfg := sysCfg.Memory.ToMemoryConfig()
+		// BaseDir is runtime-only (yaml:"-") — inject the state base dir here.
+		memCfg := sysCfg.Memory
+		memCfg.BaseDir = config.BaseDir()
 		backend, err := memory.New(sysCfg.Memory.Type, memCfg, a.Config.Logger)
 		if err != nil {
 			a.Config.Logger.Error(ctx, "Memory: failed to init backend", err, "type", sysCfg.Memory.Type)

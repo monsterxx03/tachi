@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/creasty/defaults"
-	"github.com/monsterxx03/tachi/agent/memory"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
@@ -542,23 +541,7 @@ type MemoryConfig struct {
 	Timeout           time.Duration `yaml:"timeout" default:"10s"`            // context deadline for Store/Recall/Forget
 	RecallLimit       int           `yaml:"recall_limit" default:"5"`         // max memories recalled per turn by automatic MemoryRecallReminder
 	DecayHalfLifeDays int           `yaml:"decay_half_life_days" default:"7"` // decay half-life in days for TopicBackend (default 7)
-}
-
-// ToMemoryConfig converts the YAML-level MemoryConfig to the runtime
-// memory.Config used by backends. Injects the base directory and
-// applies a fallback timeout if the config value is zero.
-func (mc *MemoryConfig) ToMemoryConfig() memory.Config {
-	timeout := mc.Timeout
-	if timeout <= 0 {
-		timeout = 10 * time.Second
-	}
-
-	return memory.Config{
-		Type:              mc.Type,
-		BaseDir:           BaseDir(),
-		Timeout:           timeout,
-		DecayHalfLifeDays: mc.DecayHalfLifeDays,
-	}
+	BaseDir           string        `yaml:"-"`                                // runtime-only: state base dir, injected by the agent (not serialized)
 }
 
 // LSPConfig holds configuration for all LSP servers.

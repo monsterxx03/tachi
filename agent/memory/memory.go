@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -71,16 +72,8 @@ type Backend interface {
 	ReinforceFact(ctx context.Context, entryID string) error
 }
 
-// Config is the configuration for the TopicBackend.
-type Config struct {
-	Type              string        // backend type (only "topic")
-	BaseDir           string        // ~/.tachi/
-	Timeout           time.Duration // context deadline for Store/Recall/Forget calls (default 10s)
-	DecayHalfLifeDays int           // decay half-life in days (default 7); only used by TopicBackend
-}
-
 // New creates a backend by type. Only "topic" is supported.
-func New(backendType string, cfg Config, logger *logger.Logger) (Backend, error) {
+func New(backendType string, cfg config.MemoryConfig, logger *logger.Logger) (Backend, error) {
 	if cfg.Timeout <= 0 {
 		cfg.Timeout = 10 * time.Second
 	}

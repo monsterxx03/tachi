@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
@@ -101,7 +102,7 @@ type TopicBackend struct {
 // NewTopicBackend creates a TopicBackend.
 // globalDir is required (typically ~/.tachi/memory/).
 // projectDir may be empty if not in a git repository.
-func NewTopicBackend(cfg Config, l *logger.Logger) (*TopicBackend, error) {
+func NewTopicBackend(cfg config.MemoryConfig, l *logger.Logger) (*TopicBackend, error) {
 	globalDir := filepath.Join(cfg.BaseDir, "memory")
 	if err := os.MkdirAll(filepath.Join(globalDir, "topics"), 0700); err != nil {
 		return nil, fmt.Errorf("topic: create global memory dir: %w", err)
