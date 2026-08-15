@@ -155,6 +155,12 @@ type IncomingMessage struct {
 	// When true, AskUserAnswers is ignored and nil answers are routed to the
 	// agent, signalling cancellation.
 	CancelAskUser bool
+
+	// ThinkingLevel optionally overrides the session's thinking level for
+	// this turn (e.g. "none" to disable thinking on voice/device channels).
+	// Empty means "follow the session/provider default". When non-empty, the
+	// manager persists it to the thread session so subsequent turns keep it.
+	ThinkingLevel string
 }
 
 // OutgoingAttachment represents a file or media attachment to be sent

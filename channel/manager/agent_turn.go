@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
@@ -466,6 +467,26 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	if ca != nil && ca.history != nil {
 		priorHistory = ca.history
 		m.logger.Info(ctx, "channel: using cached history", "thread", msg.ThreadID, "msgs", len(ca.history))
+	}
+
+	// Per-message thinking override (e.g. the device/voice channel disables
+	// thinking for snappier spoken replies). Persist it to the thread session
+	// so subsequent turns keep the override, and apply it to the agent's
+	// resolved config immediately so this very turn honours it.
+	if msg.ThinkingLevel != "" {
+		if sm != nil {
+			if cur := sm.Current(); cur != nil && cur.ThinkingLevel != msg.ThinkingLevel {
+				cur.ThinkingLevel = msg.ThinkingLevel
+				cur.UpdatedAt = time.Now()
+				if err := sm.UpdateMeta(cur); err != nil {
+					m.logger.Error(ctx, "channel: persist thinking override", err, "thread", msg.ThreadID)
+				}
+			}
+		}
+		cp := *resolved // detach: resolved may be the shared global default
+		thinking, effort := cmds.EffectiveThinking(msg.ThinkingLevel, cp)
+		aiAgent.SetThinking(thinking, effort)
+		m.logger.Info(ctx, "channel: thinking override applied", "thread", msg.ThreadID, "level", msg.ThinkingLevel)
 	}
 
 	// Steer channel + user content (text + images).

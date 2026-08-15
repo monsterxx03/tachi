@@ -40,6 +40,7 @@ import (
 	"gopkg.in/yaml.v3"
 
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 //go:embed face.html
@@ -55,10 +56,10 @@ var faceFS embed.FS
 //	      port: 8080
 //	      tts_url: http://127.0.0.1:8888   # Kokoro TTS 服务（可选）
 type DeviceConfig struct {
-	Host    string `yaml:"host"`
-	Port    int    `yaml:"port"`
-	TTSURL  string `yaml:"tts_url"`  // Kokoro TTS 服务地址，空则前端直连
-	TTSVoice string `yaml:"tts_voice"` // 默认音色
+	Host     string  `yaml:"host"`
+	Port     int     `yaml:"port"`
+	TTSURL   string  `yaml:"tts_url"`   // Kokoro TTS 服务地址，空则前端降级浏览器语音
+	TTSVoice string  `yaml:"tts_voice"` // 默认音色
 	TTSSpeed float64 `yaml:"tts_speed"` // 语速
 }
 
@@ -85,17 +86,19 @@ const deviceThreadID = "device"
 const maxImageBytes = 10 << 20
 
 type DeviceChannel struct {
-	cfg     DeviceConfig
-	handler channel.MessageHandler
-	server  *http.Server
-	ttsHTTP *http.Client
+	cfg      DeviceConfig
+	handler  channel.MessageHandler
+	server   *http.Server
+	log      *logger.Logger
+	ttsHTTP  *http.Client
 	ttsCache map[string]string // text -> base64 wav（简单去重，不缓存 TTS 服务）
 }
 
 func NewChannel(cfg DeviceConfig) (*DeviceChannel, error) {
 	return &DeviceChannel{
-		cfg: cfg,
-		ttsHTTP: &http.Client{Timeout: 30 * time.Second},
+		cfg:      cfg,
+		log:      logger.New("channel.device"),
+		ttsHTTP:  &http.Client{Timeout: 5 * time.Minute}, // IndexTTS 生成慢（M1 上 20-40s+），放宽到 5 分钟
 		ttsCache: make(map[string]string),
 	}, nil
 }
@@ -121,22 +124,32 @@ You are talking to the user through a voice-enabled browser interface
 text-to-speech, so write for the ear, not for the screen.
 
 Rules:
+- OUTPUT ONLY THE FINAL ANSWER. Your reply must contain exactly the words
+  you would say out loud — nothing else. Never include analysis, reasoning,
+  plans, inner monologue, or meta-commentary about the user, the question,
+  or yourself (no "I should...", no "The user is testing...", no "Let me
+  respond with...", no explanations of your intent).
 - Keep replies SHORT — one or two sentences at most. This is a spoken
   conversation, not a document.
-- Use plain text only. No emoji, no markdown formatting (bold, code
-  blocks, headings, bullet lists).
+- Use plain text only. No emoji, no markdown formatting, no bullet lists,
+  no headers, no quotes around your answer.
 - Be warm and conversational, like talking face to face.
 - When the user sends a photo, describe what you see briefly and reply
   conversationally.
+
+If the user jokes or provokes you, just play along conversationally in
+character — answer directly, don't narrate how you're going to handle it.
 `
 }
 
 func (d *DeviceChannel) OnStart(ctx context.Context) error { return nil }
 
 // synthSpeech 调本地 Kokoro TTS 把文本合成 wav（base64）。
-// 返回空字符串表示 TTS 不可用（前端会自动降级到浏览器语音）。
-func (d *DeviceChannel) synthSpeech(text string) string {
+// 返回空字符串表示 TTS 不可用（前端会自动降级到浏览器语音）；
+// 请求失败时记录日志，便于排查语音链路问题。
+func (d *DeviceChannel) synthSpeech(ctx context.Context, text string) string {
 	if d.cfg.TTSURL == "" {
+		d.log.Debug(ctx, "device: TTS not configured, browser speech will be used")
 		return ""
 	}
 	clean := strings.Map(func(r rune) rune {
@@ -158,19 +171,23 @@ func (d *DeviceChannel) synthSpeech(text string) string {
 	})
 	req, err := http.NewRequest(http.MethodPost, d.cfg.TTSURL+"/tts", bytes.NewReader(payload))
 	if err != nil {
+		d.log.Warn(ctx, "device: build TTS request failed", "error", err)
 		return ""
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := d.ttsHTTP.Do(req)
 	if err != nil {
+		d.log.Warn(ctx, "device: TTS request failed", "url", d.cfg.TTSURL, "error", err)
 		return ""
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
+		d.log.Warn(ctx, "device: TTS returned non-200", "url", d.cfg.TTSURL, "status", resp.StatusCode)
 		return ""
 	}
 	wav, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20))
 	if err != nil {
+		d.log.Warn(ctx, "device: read TTS response failed", "error", err)
 		return ""
 	}
 	b64 := base64.StdEncoding.EncodeToString(wav)
@@ -248,10 +265,11 @@ func (d *DeviceChannel) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := d.handler(r.Context(), channel.IncomingMessage{
-		ThreadID:  deviceThreadID,
-		MessageID: uuid.NewString(),
-		Content:   req.Message,
-		Directed:  true,
+		ThreadID:      deviceThreadID,
+		MessageID:     uuid.NewString(),
+		Content:       req.Message,
+		Directed:      true,
+		ThinkingLevel: "none", // 语音对话关闭思考，加快响应
 	})
 
 	reply := result.Reply.Content
@@ -263,7 +281,7 @@ func (d *DeviceChannel) handleChat(w http.ResponseWriter, r *http.Request) {
 		resp["error"] = result.Err.Error()
 	} else {
 		// 服务端生成语音，随响应推给前端（TTS 不可用时 audio 为空，前端降级）
-		if audio := d.synthSpeech(reply); audio != "" {
+		if audio := d.synthSpeech(r.Context(), reply); audio != "" {
 			resp["audio"] = audio
 		}
 	}
@@ -302,10 +320,11 @@ func (d *DeviceChannel) handleVision(w http.ResponseWriter, r *http.Request) {
 	}
 
 	result := d.handler(r.Context(), channel.IncomingMessage{
-		ThreadID:  deviceThreadID,
-		MessageID: uuid.NewString(),
-		Content:   prompt,
-		Directed:  true,
+		ThreadID:      deviceThreadID,
+		MessageID:     uuid.NewString(),
+		Content:       prompt,
+		Directed:      true,
+		ThinkingLevel: "none", // 语音对话关闭思考，加快响应
 		Attachments: []channel.Attachment{{
 			Type:     channel.AttachmentTypeImage,
 			FileName: "camera.jpg",
@@ -321,7 +340,7 @@ func (d *DeviceChannel) handleVision(w http.ResponseWriter, r *http.Request) {
 	}
 	if result.Err != nil {
 		resp["error"] = result.Err.Error()
-	} else if audio := d.synthSpeech(reply); audio != "" {
+	} else if audio := d.synthSpeech(r.Context(), reply); audio != "" {
 		resp["audio"] = audio
 	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
