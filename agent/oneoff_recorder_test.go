@@ -222,16 +222,36 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 	lines := readJSONLLines(t, path)
 	// The intermediate assistant line (empty text + usage, from the tool_calls
 	// step) mirrors what recordAssistantTurn writes to a normal session — the
-	// sidecar is a faithful mirror of messages.jsonl semantics.
+	// sidecar is a faithful mirror of messages.jsonl semantics. Each API call
+	// additionally records an "api_request" line (system prompt + tools).
 	assert.Equal(t,
-		[]string{"meta", "user", "assistant", "tool_call", "tool_result", "assistant"},
+		[]string{"meta", "user", "api_request", "assistant", "tool_call", "tool_result", "api_request", "assistant"},
 		lineTypes(lines))
 	assert.Equal(t, "review", lines[0]["kind"])
 	assert.Equal(t, "system prompt", lines[0]["system_prompt"])
 	assert.Equal(t, "review the diff", lines[1]["content"])
-	assert.Equal(t, "Bash", lines[3]["name"])
-	assert.Contains(t, lines[4]["result"], "executed: git status")
-	assert.Equal(t, "review done", lines[5]["content"])
+	assert.Equal(t, "Bash", lines[4]["name"])
+	assert.Contains(t, lines[5]["result"], "executed: git status")
+	assert.Equal(t, "review done", lines[7]["content"])
+
+	// api_request lines carry the system prompt and tool schemas of each call.
+	req1 := lines[2]
+	assert.Equal(t, "api_request", req1["type"])
+	assert.Equal(t, "system prompt", req1["system_prompt"])
+	req1Tools, ok := req1["tools"].([]any)
+	require.True(t, ok, "api_request tools should be a list")
+	require.NotEmpty(t, req1Tools)
+	firstTool, ok := req1Tools[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "Bash", firstTool["name"])
+	assert.Contains(t, firstTool, "parameters", "tool schema should be recorded")
+
+	req2 := lines[6]
+	assert.Equal(t, "api_request", req2["type"])
+	assert.Equal(t, "system prompt", req2["system_prompt"])
+	req2Tools, ok := req2["tools"].([]any)
+	require.True(t, ok)
+	require.NotEmpty(t, req2Tools)
 
 	// Main session history stays untouched — isolation preserved.
 	msgs, err := sm.LoadMessages()
@@ -307,4 +327,45 @@ func mustReadDir(t *testing.T, dir string) []string {
 		names = append(names, e.Name())
 	}
 	return names
+}
+
+func TestOneoffRecorder_RecordAPIRequest(t *testing.T) {
+	_, homeDir := overrideOneoffDirs(t)
+
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", nil, "/repo", 30)
+	require.NoError(t, err)
+
+	rec.recordAPIRequest(&session.APIRequest{
+		SystemPrompt: "system prompt",
+		UserPrompt:   "review the diff",
+		Iteration:    2,
+		Tools: []session.APITool{{
+			Name:        "ReadFile",
+			Description: "Read a file",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path"}},"required":["path"]}`),
+		}},
+	})
+	path, _, _ := rec.close()
+
+	lines := readJSONLLines(t, path)
+	require.Len(t, lines, 2) // meta + api_request
+	assert.Equal(t, []string{"meta", "api_request"}, lineTypes(lines))
+
+	req := lines[1]
+	assert.Equal(t, "api_request", req["type"])
+	assert.Equal(t, "system prompt", req["system_prompt"])
+	assert.Equal(t, "review the diff", req["user_prompt"])
+	assert.Equal(t, float64(2), req["iteration"])
+	tools, ok := req["tools"].([]any)
+	require.True(t, ok)
+	require.Len(t, tools, 1)
+	tool, ok := tools[0].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "ReadFile", tool["name"])
+	assert.Equal(t, "Read a file", tool["description"])
+	params, ok := tool["parameters"].(map[string]any)
+	require.True(t, ok, "tool schema should be an object")
+	assert.Equal(t, "object", params["type"])
+	// Global dir layout unchanged.
+	require.True(t, strings.Contains(path, filepath.Join(homeDir, "commit")))
 }

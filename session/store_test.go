@@ -1,9 +1,11 @@
 package session
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestGenerateID(t *testing.T) {
@@ -112,5 +114,101 @@ func TestStore(t *testing.T) {
 	}
 	if _, err := os.Stat(sessionDir); !os.IsNotExist(err) {
 		t.Error("session directory still exists after delete")
+	}
+}
+
+func TestStoreAPIRequests(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, err := NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+
+	sess := &Session{ID: GenerateID(), Title: "API Req Test"}
+	if err := store.CreateSession(sess); err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// No file yet → empty, no error.
+	reqs, err := store.LoadAPIRequests(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadAPIRequests on fresh session failed: %v", err)
+	}
+	if len(reqs) != 0 {
+		t.Fatalf("expected 0 requests, got %d", len(reqs))
+	}
+
+	// Append two requests.
+	r1 := &APIRequest{
+		Timestamp:    time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC),
+		SystemPrompt: "You are Tachi.",
+		Tools: []APITool{{
+			Name:        "ReadFile",
+			Description: "Read a file",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string"}}}`),
+		}},
+	}
+	r2 := &APIRequest{
+		Timestamp:    time.Date(2026, 8, 15, 10, 1, 0, 0, time.UTC),
+		SystemPrompt: "You are Tachi.",
+		Tools:        nil,
+	}
+	for _, r := range []*APIRequest{r1, r2} {
+		if err := store.AppendAPIRequest(sess.ID, r); err != nil {
+			t.Fatalf("AppendAPIRequest failed: %v", err)
+		}
+	}
+
+	reqs, err = store.LoadAPIRequests(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadAPIRequests failed: %v", err)
+	}
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests, got %d", len(reqs))
+	}
+	if reqs[0].SystemPrompt != "You are Tachi." {
+		t.Errorf("system prompt mismatch: %q", reqs[0].SystemPrompt)
+	}
+	if len(reqs[0].Tools) != 1 || reqs[0].Tools[0].Name != "ReadFile" {
+		t.Errorf("tools not round-tripped: %+v", reqs[0].Tools)
+	}
+	if string(reqs[0].Tools[0].Parameters) != `{"type":"object","properties":{"path":{"type":"string"}}}` {
+		t.Errorf("parameters not round-tripped: %s", reqs[0].Tools[0].Parameters)
+	}
+
+	// Malformed line is skipped, valid lines still load.
+	reqPath := filepath.Join(tmpDir, sess.ID, "api_requests.jsonl")
+	f, err := os.OpenFile(reqPath, os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		t.Fatalf("open api_requests.jsonl: %v", err)
+	}
+	if _, err := f.WriteString("{not-json\n"); err != nil {
+		t.Fatalf("write malformed line: %v", err)
+	}
+	f.Close()
+
+	reqs, err = store.LoadAPIRequests(sess.ID)
+	if err != nil {
+		t.Fatalf("LoadAPIRequests with malformed line failed: %v", err)
+	}
+	if len(reqs) != 2 {
+		t.Fatalf("expected 2 requests after malformed line, got %d", len(reqs))
+	}
+
+	// Manager round-trip.
+	mgr := NewManagerWithStore(store, nil)
+	mgr.SetCurrent(sess)
+	if err := mgr.AppendAPIRequest(&APIRequest{
+		Timestamp:    time.Now(),
+		SystemPrompt: "third",
+	}); err != nil {
+		t.Fatalf("Manager.AppendAPIRequest failed: %v", err)
+	}
+	reqs, err = mgr.LoadAPIRequests(sess.ID)
+	if err != nil {
+		t.Fatalf("Manager.LoadAPIRequests failed: %v", err)
+	}
+	if len(reqs) != 3 || reqs[2].SystemPrompt != "third" {
+		t.Fatalf("manager round-trip mismatch: %+v", reqs)
 	}
 }

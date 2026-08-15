@@ -136,6 +136,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			Name:       tc.Function.Name,
 			Args:       tc.Function.Arguments,
 			ToolCallID: tc.ID,
+			Iteration:  rs.APICalls, // the API call that produced this tool request
 		})
 	}
 
@@ -243,6 +244,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
+			Iteration:  rs.APICalls, // the API call that produced this tool request
 		})
 
 		// Fire tool_result hook
@@ -278,6 +280,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			Name:       tc.Function.Name,
 			Args:       tc.Function.Arguments,
 			ToolCallID: tc.ID,
+			Iteration:  rs.APICalls, // the API call that produced this tool request
 		})
 
 		// For SubAgent: notify TUI that a subagent has started.
@@ -473,6 +476,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
+			Iteration:  rs.APICalls, // the API call that produced this tool request
 		})
 
 		// Fire tool_result hook only if tool_call was dispatched, so every

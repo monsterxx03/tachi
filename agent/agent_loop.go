@@ -171,6 +171,7 @@ func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usag
 			Type:      session.MessageTypeThinking,
 			Content:   tb.Thinking,
 			Signature: tb.Signature,
+			Iteration: rs.APICalls, // the API call that produced this thinking
 		})
 	}
 	if text != "" || usage != nil {
@@ -184,9 +185,10 @@ func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usag
 			}
 		}
 		a.recordSession(rs, &session.Message{
-			Type:    session.MessageTypeAssistant,
-			Content: text,
-			Usage:   su,
+			Type:      session.MessageTypeAssistant,
+			Content:   text,
+			Usage:     su,
+			Iteration: rs.APICalls, // the API call that produced this text
 		})
 	}
 }
@@ -654,6 +656,11 @@ func (a *AIAgent) runLoop(
 		// prompt cache invalidations. A per-run tool view (if set) narrows
 		// this to the run's allowed subset.
 		llmTools := buildLLMTools(a.filterActiveSchemas(a.resolve(ctx).schemas()))
+
+		// Record the request context (system prompt + tool schemas) so the
+		// /transcript report can show what the model saw on this call.
+		// Best-effort: failures are logged, never fatal.
+		a.recordAPIRequest(ctx, rs, in.Provider, opts, llmTools)
 
 		streamCh, err := in.Provider.CreateChatStream(ctx, rs.Messages, llmTools, opts)
 		if err != nil {

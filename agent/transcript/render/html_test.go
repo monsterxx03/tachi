@@ -1,12 +1,15 @@
 package render
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/transcript"
 	"github.com/monsterxx03/tachi/session"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestFormatArgsJSON_Valid(t *testing.T) {
@@ -712,5 +715,251 @@ func TestSessionMessageToEventView_ToolResult(t *testing.T) {
 	}
 	if ev.Icon != "📋" {
 		t.Errorf("Icon = %q, want 📋", ev.Icon)
+	}
+}
+
+// findGroups returns the request groups of a turn in order.
+func findGroups(turn TurnView) []*RequestGroupView {
+	var groups []*RequestGroupView
+	for i := range turn.Items {
+		if turn.Items[i].Kind == "group" {
+			groups = append(groups, turn.Items[i].Group)
+		}
+	}
+	return groups
+}
+
+func TestBuildReportDataFromMessagesWithRequests(t *testing.T) {
+	s := &session.Session{ID: "api-reqs", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+
+	t0 := time.Date(2026, 8, 15, 10, 0, 0, 0, time.UTC)
+	t1 := time.Date(2026, 8, 15, 10, 1, 0, 0, time.UTC)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "Q1", Timestamp: t0},
+		{Type: session.MessageTypeAssistant, Content: "A1", Timestamp: t0.Add(30 * time.Second), Iteration: 1},
+		{Type: session.MessageTypeUser, Content: "Q2", Timestamp: t1},
+		{Type: session.MessageTypeAssistant, Content: "A2", Timestamp: t1.Add(30 * time.Second), Iteration: 2},
+	}
+
+	reqs := []session.APIRequest{
+		{Timestamp: t0.Add(5 * time.Second), Iteration: 1, UserPrompt: "Q1", SystemPrompt: "SP1", Model: "mock-model", Provider: "deepseek-v4-flash", Thinking: "high", Tools: []session.APITool{{Name: "ReadFile", Parameters: json.RawMessage(`{"type":"object"}`)}}},
+		{Timestamp: t1.Add(5 * time.Second), Iteration: 2, UserPrompt: "Q2", SystemPrompt: "SP1", Model: "mock-model", Provider: "deepseek-v4-flash", Thinking: "high", Tools: []session.APITool{{Name: "Bash", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)}}},
+	}
+
+	data := BuildReportDataFromMessagesWithRequests(s, msgs, nil, reqs)
+
+	if data.Stats.APICallCount != 2 {
+		t.Errorf("APICallCount = %d, want 2", data.Stats.APICallCount)
+	}
+	if len(data.Transcript.Turns) != 2 {
+		t.Fatalf("len(Turns) = %d, want 2", len(data.Transcript.Turns))
+	}
+
+	// Turn 1: user event + one request group (iteration 1).
+	turn1 := data.Transcript.Turns[0]
+	if len(turn1.APIRequests) != 1 || turn1.APIRequests[0].Iteration != 1 {
+		t.Fatalf("turn1 APIRequests = %+v, want iteration 1", turn1.APIRequests)
+	}
+	groups1 := findGroups(turn1)
+	if len(groups1) != 1 {
+		t.Fatalf("turn1 groups = %d, want 1", len(groups1))
+	}
+	g1 := groups1[0]
+	if g1.Iteration != 1 || g1.UserPrompt != "Q1" || g1.SystemPrompt != "SP1" {
+		t.Errorf("group1 = iter %d / user %q / sp %q, want 1/Q1/SP1", g1.Iteration, g1.UserPrompt, g1.SystemPrompt)
+	}
+	if g1.Model != "mock-model" || g1.Provider != "deepseek-v4-flash" || g1.Thinking != "high" {
+		t.Errorf("group1 = model %q / provider %q / thinking %q, want mock-model/deepseek-v4-flash/high", g1.Model, g1.Provider, g1.Thinking)
+	}
+	if g1.SystemPromptSame || g1.AllSame {
+		t.Error("group1 marked same — nothing precedes it")
+	}
+	if len(g1.Tools) != 1 || g1.Tools[0].Name != "ReadFile" {
+		t.Errorf("group1 Tools = %+v, want [ReadFile]", g1.Tools)
+	}
+	if g1.Tools[0].Schema == "" {
+		t.Error("group1 tool schema empty, want pretty JSON")
+	}
+	// The iteration-1 assistant event lives inside the group.
+	if len(g1.Events) != 1 || g1.Events[0].Content != "A1" {
+		t.Errorf("group1 Events = %+v, want [A1]", g1.Events)
+	}
+
+	// Turn 2: user event + group (iteration 2), same prompt, different tools.
+	turn2 := data.Transcript.Turns[1]
+	groups2 := findGroups(turn2)
+	if len(groups2) != 1 {
+		t.Fatalf("turn2 groups = %d, want 1", len(groups2))
+	}
+	g2 := groups2[0]
+	if g2.Iteration != 2 || !g2.SystemPromptSame {
+		t.Errorf("group2 = iter %d same=%v, want iter 2 / same prompt", g2.Iteration, g2.SystemPromptSame)
+	}
+	if len(g2.Tools) != 1 || g2.Tools[0].Name != "Bash" {
+		t.Errorf("group2 Tools = %+v, want [Bash]", g2.Tools)
+	}
+	if g2.ToolsSame || g2.AllSame {
+		t.Error("group2 marked fully same — tools differ")
+	}
+}
+
+func TestRequestGroup_MultipleToolCallsInOneRequest(t *testing.T) {
+	// Core requirement: several tool calls issued by the SAME API request are
+	// grouped together in one request group.
+	s := &session.Session{ID: "multi-tool-group", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	t0 := time.Date(2026, 8, 15, 12, 0, 0, 0, time.UTC)
+
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "Q1", Timestamp: t0},
+		{Type: session.MessageTypeToolCall, Name: "Bash", ToolCallID: "c1", Timestamp: t0.Add(5 * time.Second), Iteration: 1},
+		{Type: session.MessageTypeToolCall, Name: "ReadFile", ToolCallID: "c2", Timestamp: t0.Add(6 * time.Second), Iteration: 1},
+		{Type: session.MessageTypeToolResult, Name: "Bash", ToolCallID: "c1", Timestamp: t0.Add(7 * time.Second), Iteration: 1},
+		{Type: session.MessageTypeToolResult, Name: "ReadFile", ToolCallID: "c2", Timestamp: t0.Add(8 * time.Second), Iteration: 1},
+		{Type: session.MessageTypeAssistant, Content: "A1", Timestamp: t0.Add(9 * time.Second), Iteration: 1},
+	}
+	reqs := []session.APIRequest{
+		{Timestamp: t0.Add(2 * time.Second), Iteration: 1, UserPrompt: "Q1", SystemPrompt: "SP", Tools: []session.APITool{{Name: "Bash"}, {Name: "ReadFile"}}},
+	}
+
+	data := BuildReportDataFromMessagesWithRequests(s, msgs, nil, reqs)
+	groups := findGroups(data.Transcript.Turns[0])
+	require.Len(t, groups, 1, "one request group")
+
+	// Both tool calls (and their results + final text) live in the group.
+	var toolCalls []string
+	for _, ev := range groups[0].Events {
+		if ev.Type == "tool_call" {
+			toolCalls = append(toolCalls, ev.Name)
+		}
+	}
+	assert.Equal(t, []string{"Bash", "ReadFile"}, toolCalls, "tool calls grouped under their request")
+	if len(groups[0].Events) != 5 {
+		t.Errorf("group events = %d, want 5 (2 calls + 2 results + text)", len(groups[0].Events))
+	}
+}
+
+func TestBuildReportDataFromMessagesWithRequests_NoRequests(t *testing.T) {
+	s := &session.Session{ID: "no-api-reqs", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "Q1", Timestamp: time.Now()},
+		{Type: session.MessageTypeAssistant, Content: "A1", Timestamp: time.Now()},
+	}
+
+	// nil requests → no groups, all events flat, no crash.
+	data := BuildReportDataFromMessagesWithRequests(s, msgs, nil, nil)
+	if len(data.Transcript.Turns) != 1 {
+		t.Fatalf("len(Turns) = %d, want 1", len(data.Transcript.Turns))
+	}
+	turn := data.Transcript.Turns[0]
+	if len(turn.APIRequests) != 0 {
+		t.Errorf("APIRequests = %d, want 0", len(turn.APIRequests))
+	}
+	if groups := findGroups(turn); len(groups) != 0 {
+		t.Errorf("groups = %d, want 0 (no requests recorded)", len(groups))
+	}
+	if data.Stats.APICallCount != 0 {
+		t.Errorf("APICallCount = %d, want 0", data.Stats.APICallCount)
+	}
+}
+
+func TestAssignAPIRequests_EmptyTurns(t *testing.T) {
+	// Guards: no turns / mismatched starts must not panic or modify.
+	turns := []TurnView{}
+	assignAPIRequests(turns, nil, nil, []session.APIRequest{{Timestamp: time.Now(), SystemPrompt: "SP"}})
+
+	turns = []TurnView{{ID: 1}}
+	assignAPIRequests(turns, []time.Time{}, [][]time.Time{}, []session.APIRequest{{Timestamp: time.Now(), SystemPrompt: "SP"}})
+	if len(turns[0].APIRequests) != 0 {
+		t.Error("request leaked into turn despite start mismatch")
+	}
+}
+
+func TestGenerateHTMLWithAPIRequests(t *testing.T) {
+	s := &session.Session{
+		ID:        "html-api-reqs",
+		Title:     "HTML API Req Test",
+		CreatedAt: time.Now(),
+		UpdatedAt: time.Now(),
+	}
+	msgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "Q1", Timestamp: time.Now()},
+		{Type: session.MessageTypeAssistant, Content: "A1", Timestamp: time.Now(), Iteration: 1},
+	}
+	reqs := []session.APIRequest{{
+		Timestamp:    time.Now(),
+		Iteration:    1,
+		UserPrompt:   "Q1",
+		SystemPrompt: "You are Tachi — the test system prompt.",
+		Tools: []session.APITool{{
+			Name:        "ReadFile",
+			Description: "Read a file from disk",
+			Parameters:  json.RawMessage(`{"type":"object","properties":{"path":{"type":"string","description":"file path"}},"required":["path"]}`),
+		}},
+	}}
+
+	data := BuildReportDataFromMessagesWithRequests(s, msgs, nil, reqs)
+	html, err := GenerateHTML(data)
+	if err != nil {
+		t.Fatalf("GenerateHTML: %v", err)
+	}
+
+	for _, want := range []string{
+		"API 请求 #1",
+		"System Prompt",
+		"You are Tachi — the test system prompt.",
+		"Tools（1）",
+		"Q1", // request group bound to the user prompt (rg-prompt)
+		"ReadFile",
+		"Read a file from disk",
+		"file path", // schema survives into the report (quotes are HTML-escaped)
+		"API 调用",    // sidebar stat
+	} {
+		if !strings.Contains(html, want) {
+			t.Errorf("generated HTML missing %q", want)
+		}
+	}
+}
+
+func TestBuildReportDataWithReminderLeadingTurn(t *testing.T) {
+	// Real sessions open each turn with a <system-reminder> block buffered
+	// ahead of the user message. Regression test: turn starts must still be
+	// attributed so API requests land in their groups.
+	s := &session.Session{ID: "reminder-turn", CreatedAt: time.Now(), UpdatedAt: time.Now()}
+
+	t0 := time.Date(2026, 8, 15, 11, 0, 0, 0, time.UTC)
+	msgs := []session.Message{
+		{Type: session.MessageTypeReminder, Content: "<system-reminder>context</system-reminder>", Timestamp: t0},
+		{Type: session.MessageTypeUser, Content: "Q1", Timestamp: t0.Add(time.Second)},
+		{Type: session.MessageTypeAssistant, Content: "A1", Timestamp: t0.Add(30 * time.Second), Iteration: 1},
+		{Type: session.MessageTypeReminder, Content: "<system-reminder>more</system-reminder>", Timestamp: t0.Add(time.Minute)},
+		{Type: session.MessageTypeUser, Content: "Q2", Timestamp: t0.Add(61 * time.Second)},
+		{Type: session.MessageTypeAssistant, Content: "A2", Timestamp: t0.Add(90 * time.Second), Iteration: 2},
+	}
+	reqs := []session.APIRequest{
+		{Timestamp: t0.Add(5 * time.Second), Iteration: 1, UserPrompt: "Q1", SystemPrompt: "SP", Tools: []session.APITool{{Name: "Grep"}}},
+		{Timestamp: t0.Add(65 * time.Second), Iteration: 2, UserPrompt: "Q2", SystemPrompt: "SP", Tools: []session.APITool{{Name: "Bash"}}},
+	}
+
+	data := BuildReportDataFromMessagesWithRequests(s, msgs, nil, reqs)
+	if len(data.Transcript.Turns) != 2 {
+		t.Fatalf("len(Turns) = %d, want 2", len(data.Transcript.Turns))
+	}
+	groups1 := findGroups(data.Transcript.Turns[0])
+	groups2 := findGroups(data.Transcript.Turns[1])
+	if len(groups1) != 1 {
+		t.Errorf("turn1 groups = %d, want 1 (reminder-led turn)", len(groups1))
+	}
+	if len(groups2) != 1 {
+		t.Errorf("turn2 groups = %d, want 1", len(groups2))
+	}
+	if got := groups1[0].Tools[0].Name; got != "Grep" {
+		t.Errorf("turn1 tool = %q, want Grep", got)
+	}
+	if got := groups2[0].Tools[0].Name; got != "Bash" {
+		t.Errorf("turn2 tool = %q, want Bash", got)
+	}
+	if got := groups1[0].UserPrompt; got != "Q1" {
+		t.Errorf("group1 user prompt = %q, want Q1", got)
 	}
 }

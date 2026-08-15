@@ -16,6 +16,10 @@ type fakeSessionManager struct {
 	current  *session.Session
 	messages []session.Message
 
+	// apiRequests accumulates recorded API request payloads (system prompt
+	// + tool schemas) for assertions in tests.
+	apiRequests []session.APIRequest
+
 	// appendErr, when non-nil, is returned by every AppendMessage call.
 	// Set this to test how the agent loop handles session write failures.
 	appendErr error
@@ -91,6 +95,26 @@ func (f *fakeSessionManager) AppendMessage(msg *session.Message) error {
 	}
 	f.messages = append(f.messages, *msg)
 	return nil
+}
+
+// AppendAPIRequest stores the request in memory (no file I/O in the fake).
+func (f *fakeSessionManager) AppendAPIRequest(req *session.APIRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if req.Timestamp.IsZero() {
+		req.Timestamp = time.Now()
+	}
+	f.apiRequests = append(f.apiRequests, *req)
+	return nil
+}
+
+// LoadAPIRequests returns a copy of the recorded requests.
+func (f *fakeSessionManager) LoadAPIRequests(sessionID string) ([]session.APIRequest, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := make([]session.APIRequest, len(f.apiRequests))
+	copy(out, f.apiRequests)
+	return out, nil
 }
 
 // AppendArtifact records the artifact as a reminder message (no merging —

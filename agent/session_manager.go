@@ -40,6 +40,16 @@ type SessionManager interface {
 	// AppendMessage records a message on the current session.
 	AppendMessage(msg *session.Message) error
 
+	// AppendAPIRequest records one LLM API call's request payload (system
+	// prompt + tool schemas) on the current session. Best-effort: callers
+	// log returned errors and continue — recording must never break the
+	// agent loop.
+	AppendAPIRequest(req *session.APIRequest) error
+
+	// LoadAPIRequests reads all recorded API requests for a session by ID.
+	// Returns nil (no error) when the session has no api_requests.jsonl.
+	LoadAPIRequests(sessionID string) ([]session.APIRequest, error)
+
 	// AppendArtifact records an isolated-workflow artifact (deep research,
 	// review, …) into the current session history as a reminder block, so
 	// the LLM can read the artifact file when the user follows up on it.

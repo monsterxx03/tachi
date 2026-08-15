@@ -678,7 +678,9 @@ func handleACPTranscript(ctx context.Context, sess *ACPSession, conn *acp.AgentS
 	curr := sm.Current()
 	// Sub-agent sidecar messages are optional — a load failure is non-fatal.
 	subagents, _ := sm.LoadSubagentMessages(curr.ID)
-	data := render.BuildReportDataFromMessages(curr, msgs, subagents)
+	// API request records (system prompt + tool schemas) are optional too.
+	apiReqs, _ := sm.LoadAPIRequests(curr.ID)
+	data := render.BuildReportDataFromMessagesWithRequests(curr, msgs, subagents, apiReqs)
 	html, err := render.GenerateHTML(data)
 	if err != nil {
 		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to generate transcript HTML: %v", err))

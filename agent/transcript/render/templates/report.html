@@ -85,6 +85,7 @@
   .turn-label{font-size:13px;font-weight:600;color:var(--accent);white-space:nowrap}
   .turn-preview{font-size:13px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .turn-duration{font-size:11px;color:var(--muted);white-space:nowrap}
+  .turn-tools{font-size:11px;color:var(--yellow);background:var(--yellow-soft);border:1px solid var(--border);border-radius:10px;padding:1px 8px;white-space:nowrap;flex-shrink:0}
   .turn-body{padding:0 16px 12px}
   .turn.collapsed .turn-body{display:none}
 
@@ -113,6 +114,27 @@
   .ev-body.collapsed{display:none}
   .ev-args{background:var(--bg);border:1px solid var(--border);border-radius:4px;padding:8px 12px;margin-top:4px;font-family:var(--mono);font-size:12px;color:var(--text-dim);white-space:pre-wrap;max-height:200px;overflow-y:auto;line-height:1.5}
   .ev-tool_result .ev-body{overflow:hidden;min-width:0}
+
+  /* ── API request sections (system prompt / tool schemas) ── */
+  .ev-api-req .ev-body{border-left-color:var(--blue)}
+  .api-req-label{font-size:12px;font-weight:600;color:var(--text-dim);margin-bottom:4px}
+  .same-tag{font-size:10px;color:var(--muted);border:1px solid var(--border);border-radius:8px;padding:0 6px;margin-left:6px;font-weight:400}
+  .iter-tag{font-size:10px;color:var(--text-dim);background:var(--bg2);border:1px solid var(--border);border-radius:8px;padding:0 6px;margin-left:4px;white-space:nowrap}
+  .tool-item{border:1px solid var(--border);border-radius:5px;padding:8px 12px;margin:6px 0;background:var(--card)}
+  .tool-header{display:flex;align-items:baseline;gap:10px;flex-wrap:wrap}
+  .tool-name{font-family:var(--mono);font-size:13px;font-weight:600;color:var(--blue)}
+  .tool-desc{font-size:12px;color:var(--text-dim)}
+
+  /* ── Request group (one API call + its events) ── */
+  .req-group{border:1px solid var(--border);border-radius:var(--radius);margin:10px 0;background:var(--card);box-shadow:var(--shadow)}
+  .req-group-header{display:flex;align-items:center;gap:8px;padding:8px 12px;cursor:pointer;user-select:none;background:var(--bg)}
+  .req-group-header:hover{background:var(--bg2)}
+  .rg-caret{font-size:11px;color:var(--muted);transition:transform .2s;width:12px;text-align:center;flex-shrink:0}
+  .req-group.collapsed .rg-caret{transform:rotate(-90deg)}
+  .rg-title{font-size:13px;font-weight:600;color:var(--blue);white-space:nowrap}
+  .rg-prompt{font-size:12px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .req-group-body{padding:8px 12px 12px}
+  .req-group.collapsed .req-group-body{display:none}
 
   /* ── Children (sub-agent) ── */
   .ev-children{margin-left:12px;margin-top:6px;padding-left:14px;border-left:1px dashed var(--border-strong)}
@@ -167,7 +189,88 @@
         {{if $turn.Duration}}<span class="turn-duration">{{$turn.Duration}}</span>{{end}}
       </div>
       <div class="turn-body">
-        {{range $turn.Events}}{{template "event" .}}{{end}}
+        {{if and $turn.APIRequests (not $turn.HasRequestGroups)}}
+        <div class="legacy-reqs">
+          {{range $req := $turn.APIRequests}}
+          <div class="ev ev-api-req">
+            <div class="ev-header clickable" onclick="toggleApiReq(this)">
+              <span class="ev-icon">🔁</span>
+              <span class="ev-toggle" data-toggle-type="system">▶ API 请求{{if gt $req.Iteration 0}} #{{$req.Iteration}}{{end}}{{if $req.AllSame}}（与上一条相同）{{end}}</span>
+              {{if $req.UserPrompt}}<span class="ev-meta">«{{truncate $req.UserPrompt 40}}»</span>{{end}}
+              {{if or $req.Model $req.Thinking}}<span class="ev-meta">{{$req.Model}}{{if and $req.Model $req.Thinking}} · {{end}}{{if $req.Thinking}}thinking {{$req.Thinking}}{{end}}</span>{{end}}
+            </div>
+            <div class="ev-body collapsed">
+              {{if $req.SystemPrompt}}
+              <div class="api-req-label">🧠 System Prompt{{if $req.SystemPromptSame}}<span class="same-tag">同上</span>{{end}}</div>
+              <div class="ev-content mono">{{$req.SystemPrompt}}</div>
+              {{end}}
+              {{if $req.Tools}}
+              <div class="api-req-label" style="margin-top:8px">🔧 Tools（{{len $req.Tools}}）{{if $req.ToolsSame}}<span class="same-tag">同上</span>{{end}}</div>
+              {{range $req.Tools}}
+              <div class="tool-item">
+                <div class="tool-header">
+                  <span class="tool-name">{{.Name}}</span>
+                  {{if .Description}}<span class="tool-desc">{{.Description}}</span>{{end}}
+                </div>
+                {{if .Schema}}<div class="ev-args">{{.Schema}}</div>{{end}}
+              </div>
+              {{end}}
+              {{end}}
+            </div>
+          </div>
+          {{end}}
+        </div>
+        {{end}}
+        {{range $item := $turn.Items}}
+          {{if eq $item.Kind "group"}}
+          {{with $g := $item.Group}}
+          <div class="req-group" data-iteration="{{$g.Iteration}}">
+            <div class="req-group-header clickable" onclick="toggleReqGroup(this)">
+              <span class="rg-caret">▶</span>
+              <span class="rg-title">🔁 API 请求{{if gt $g.Iteration 0}} #{{$g.Iteration}}{{end}}{{if $g.AllSame}}<span class="same-tag">与上一条相同</span>{{end}}</span>
+              {{if $g.UserPrompt}}<span class="rg-prompt">«{{truncate $g.UserPrompt 60}}»</span>{{end}}
+              {{if or $g.Model $g.Thinking}}<span class="ev-meta">{{$g.Model}}{{if and $g.Model $g.Thinking}} · {{end}}{{if $g.Thinking}}thinking {{$g.Thinking}}{{end}}</span>{{end}}
+              {{if $g.Tools}}<span class="turn-tools" title="工具定义数">🔧 {{len $g.Tools}}</span>{{end}}
+            </div>
+            <div class="req-group-body">
+              {{if $g.SystemPrompt}}
+              <div class="ev ev-api-req">
+                <div class="ev-header clickable" onclick="toggleApiReq(this)">
+                  <span class="ev-icon">🧠</span>
+                  <span class="ev-toggle" data-toggle-type="system">▶ System Prompt{{if $g.SystemPromptSame}}<span class="same-tag">同上</span>{{end}}</span>
+                </div>
+                <div class="ev-body collapsed">
+                  <div class="ev-content mono">{{$g.SystemPrompt}}</div>
+                </div>
+              </div>
+              {{end}}
+              {{if $g.Tools}}
+              <div class="ev ev-api-req">
+                <div class="ev-header clickable" onclick="toggleApiReq(this)">
+                  <span class="ev-icon">🔧</span>
+                  <span class="ev-toggle" data-toggle-type="tools">▶ Tools（{{len $g.Tools}}）{{if $g.ToolsSame}}<span class="same-tag">同上</span>{{end}}</span>
+                </div>
+                <div class="ev-body collapsed">
+                  {{range $g.Tools}}
+                  <div class="tool-item">
+                    <div class="tool-header">
+                      <span class="tool-name">{{.Name}}</span>
+                      {{if .Description}}<span class="tool-desc">{{.Description}}</span>{{end}}
+                    </div>
+                    {{if .Schema}}<div class="ev-args">{{.Schema}}</div>{{end}}
+                  </div>
+                  {{end}}
+                </div>
+              </div>
+              {{end}}
+              {{range $g.Events}}{{template "event" .}}{{end}}
+            </div>
+          </div>
+          {{end}}
+          {{else}}
+          {{template "event" $item.Event}}
+          {{end}}
+        {{end}}
       </div>
     </div>
     {{end}}
@@ -190,6 +293,7 @@
         <div class="sitem"><div class="n">{{.Stats.ThinkingCount}}</div><div class="l">思考块</div></div>
         <div class="sitem"><div class="n">{{.Stats.TextCount}}</div><div class="l">回复</div></div>
         <div class="sitem"><div class="n">{{.Stats.SubAgentCount}}</div><div class="l">子代理</div></div>
+        {{if .Stats.APICallCount}}<div class="sitem"><div class="n">{{.Stats.APICallCount}}</div><div class="l">API 调用</div></div>{{end}}
       </div>
       {{if .Stats.ToolErrorCount}}<div style="margin-top:8px;font-size:11px;color:var(--red)">⚠ {{.Stats.ToolErrorCount}} 个错误</div>{{end}}
     </div>
@@ -231,6 +335,7 @@
   <div class="ev-header">
     <span class="ev-icon">{{.Icon}}</span>
     <span style="font-weight:600;color:var(--yellow);font-size:13px">{{.Name}}</span>
+    {{if .Iteration}}<span class="iter-tag" title="产生该调用的 API 请求">⚙#{{.Iteration}}</span>{{end}}
     {{if .HasChildren}}<span class="ev-toggle" data-toggle-type="children" onclick="toggleChildren(this)">▶ 子代理</span>{{end}}
     <span class="ev-meta">{{.Timestamp}}</span>
   </div>
@@ -346,6 +451,34 @@
     }
   }
 
+  function toggleApiReq(hdr) {
+    var body = hdr.nextElementSibling;
+    var tgl = hdr.querySelector('.ev-toggle');
+    var collapsed = body.classList.toggle('collapsed');
+    if (tgl) {
+      tgl.textContent = (collapsed ? '▶ ' : '▼ ') + tgl.textContent.replace(/^[▶▼]\s*/, '');
+    }
+  }
+
+  function toggleReqGroup(hdr) {
+    hdr.parentElement.classList.toggle('collapsed');
+  }
+
+  function setReqGroups(collapsed) {
+    document.querySelectorAll('.req-group').forEach(function(g) {
+      g.classList.toggle('collapsed', collapsed);
+    });
+  }
+
+  function setApiReqBodies(collapsed) {
+    document.querySelectorAll('.ev-api-req .ev-body').forEach(function(b) {
+      b.classList.toggle('collapsed', collapsed);
+    });
+    document.querySelectorAll('.ev-api-req .ev-toggle').forEach(function(t) {
+      t.textContent = (collapsed ? '▶ ' : '▼ ') + t.textContent.replace(/^[▶▼]\s*/, '');
+    });
+  }
+
   function expandAll() {
     document.querySelectorAll('.ev-thinking .ev-body.collapsed').forEach(function(b) {
       b.classList.remove('collapsed');
@@ -371,6 +504,8 @@
     document.querySelectorAll('.ev-toggle[data-toggle-type="children"]').forEach(function(t) {
       t.textContent = '▼ 子代理';
     });
+    setApiReqBodies(false);
+    setReqGroups(false);
   }
 
   function collapseAll() {
@@ -398,6 +533,8 @@
     document.querySelectorAll('.ev-toggle[data-toggle-type="children"]').forEach(function(t) {
       t.textContent = '▶ 子代理';
     });
+    setApiReqBodies(true);
+    setReqGroups(true);
   }
 
   document.addEventListener('DOMContentLoaded', function() {

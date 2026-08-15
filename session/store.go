@@ -25,6 +25,12 @@ type Store interface {
 	UpdateMeta(session *Session) error
 	ListSessions() ([]*Session, error)
 	DeleteSession(id string) error
+	// AppendAPIRequest records one LLM API call's request payload (system
+	// prompt + tool schemas) to the session's api_requests.jsonl.
+	AppendAPIRequest(id string, req *APIRequest) error
+	// LoadAPIRequests reads all recorded API requests for a session.
+	// Returns nil (no error) when the session has no api_requests.jsonl.
+	LoadAPIRequests(id string) ([]APIRequest, error)
 }
 
 // FileStore implements Store interface using filesystem
@@ -50,6 +56,10 @@ func (s *FileStore) metaPath(id string) string {
 
 func (s *FileStore) messagesPath(id string) string {
 	return filepath.Join(s.sessionDir(id), "messages.jsonl")
+}
+
+func (s *FileStore) apiRequestsPath(id string) string {
+	return filepath.Join(s.sessionDir(id), "api_requests.jsonl")
 }
 
 // CreateSession creates a new session directory and meta.json
@@ -125,6 +135,64 @@ func (s *FileStore) LoadMessages(id string) ([]Message, error) {
 	}
 
 	return messages, nil
+}
+
+// AppendAPIRequest appends one API request record to api_requests.jsonl.
+// The file is created on first write; missing session directories surface
+// as an error so callers can log (recording is best-effort by design).
+func (s *FileStore) AppendAPIRequest(id string, req *APIRequest) error {
+	data, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal api request: %w", err)
+	}
+
+	f, err := os.OpenFile(s.apiRequestsPath(id), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return fmt.Errorf("open api_requests.jsonl: %w", err)
+	}
+	defer f.Close()
+
+	if _, err := f.Write(append(data, '\n')); err != nil {
+		return fmt.Errorf("write api request: %w", err)
+	}
+
+	return nil
+}
+
+// LoadAPIRequests reads all API request records for a session. Missing file
+// (no requests recorded yet) returns nil, nil. Malformed lines are skipped —
+// this is auxiliary debug data, and a single bad line must not break report
+// generation.
+func (s *FileStore) LoadAPIRequests(id string) ([]APIRequest, error) {
+	f, err := os.Open(s.apiRequestsPath(id))
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("open api_requests.jsonl: %w", err)
+	}
+	defer f.Close()
+
+	var reqs []APIRequest
+	scanner := bufio.NewScanner(f)
+	// Generous buffer: system prompts and tool schemas can be large.
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		var req APIRequest
+		if err := json.Unmarshal(line, &req); err != nil {
+			continue // skip malformed line
+		}
+		reqs = append(reqs, req)
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scan api requests: %w", err)
+	}
+
+	return reqs, nil
 }
 
 // ReplaceLastMessage overwrites the last message in messages.jsonl. Used by

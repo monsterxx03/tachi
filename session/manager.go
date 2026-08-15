@@ -302,6 +302,25 @@ func (m *Manager) LoadSubagentMessages(sessionID string) (map[string][]Message, 
 	return LoadSubagentMessages(sessionID)
 }
 
+// AppendAPIRequest records one LLM API call's request payload (system prompt
+// + tool schemas) to the current session. Best-effort: errors are returned
+// for the caller to log — recording must never break the agent loop.
+func (m *Manager) AppendAPIRequest(req *APIRequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return fmt.Errorf("no current session")
+	}
+	return m.store.AppendAPIRequest(m.current.ID, req)
+}
+
+// LoadAPIRequests reads all recorded API requests for a session by ID.
+// Returns nil (no error) when the session has no api_requests.jsonl.
+func (m *Manager) LoadAPIRequests(sessionID string) ([]APIRequest, error) {
+	return m.store.LoadAPIRequests(sessionID)
+}
+
 // Delete deletes a session by ID
 func (m *Manager) Delete(id string) error {
 	return m.store.DeleteSession(id)

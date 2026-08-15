@@ -130,8 +130,10 @@ func (m *Manager) handleTranscriptCommand(threadID, args string) channel.Handler
 
 	// Sub-agent sidecar messages are optional — a load failure is non-fatal.
 	subagents, _ := sm.LoadSubagentMessages(sess.ID)
+	// API request records (system prompt + tool schemas) are optional too.
+	apiReqs, _ := sm.LoadAPIRequests(sess.ID)
 
-	data := render.BuildReportDataFromMessages(sess, msgs, subagents)
+	data := render.BuildReportDataFromMessagesWithRequests(sess, msgs, subagents, apiReqs)
 	html, err := render.GenerateHTML(data)
 	if err != nil {
 		return errReply(fmt.Errorf("generate HTML: %w", err))

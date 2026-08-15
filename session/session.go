@@ -1,6 +1,7 @@
 package session
 
 import (
+	"encoding/json"
 	"time"
 )
 
@@ -51,6 +52,7 @@ type Usage struct {
 	EstimatedInputTokens     int64 `json:"estimated_input_tokens,omitempty"` // chars/4 local estimate — matches what statusbar showed during conversation
 }
 
+// Message represents a message in the session history.
 type Message struct {
 	Type       MessageType `json:"type"`
 	Content    string      `json:"content,omitempty"`
@@ -63,5 +65,41 @@ type Message struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	SubagentID string      `json:"subagent_id,omitempty"` // shortID for SubAgent tool_result → subagent/<id>.jsonl
 	Usage      *Usage      `json:"usage,omitempty"`       // token usage from the LLM response that produced this message
+	Iteration  int         `json:"iteration,omitempty"`   // 1-based LLM API call that produced this message (0 = not request-bound)
 	Timestamp  time.Time   `json:"timestamp"`
+}
+
+// APITool is a tool definition as sent to the LLM in one API request.
+// Parameters carries the full JSON schema (llm.ToolParameters) so transcript
+// viewers can inspect exactly what the model was offered.
+type APITool struct {
+	Name        string          `json:"name"`
+	Description string          `json:"description"`
+	Parameters  json.RawMessage `json:"parameters,omitempty"`
+}
+
+// APIRequest captures one LLM API call's request payload — the system prompt,
+// tool schemas, and the user prompt that triggered it. Stored in
+// api_requests.jsonl, one line per request, and consumed by the /transcript
+// report to show what the agent saw on each call.
+type APIRequest struct {
+	Timestamp time.Time `json:"timestamp"`
+	// Iteration is the 1-based API call sequence number within the session.
+	// tool_call / tool_result messages carry the same number, linking each
+	// tool execution to the request that produced it.
+	Iteration int `json:"iteration,omitempty"`
+	// SystemPrompt is the system message content sent with this request.
+	SystemPrompt string `json:"system_prompt"`
+	// UserPrompt is the latest user (or steer) message content in the request
+	// — the input this call was answering.
+	UserPrompt string `json:"user_prompt,omitempty"`
+	// Model is the model name this request was sent to (e.g. "deepseek-v4-flash").
+	Model string `json:"model,omitempty"`
+	// Provider is the config provider name backing the model ("" when unknown).
+	Provider string `json:"provider,omitempty"`
+	// Thinking captures the thinking mode actually used for this request:
+	// "none" (disabled), a reasoning effort ("low"/"high"/...), or "" for the
+	// provider default.
+	Thinking string    `json:"thinking,omitempty"`
+	Tools    []APITool `json:"tools,omitempty"`
 }

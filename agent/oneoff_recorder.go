@@ -58,6 +58,16 @@ type oneoffMetaLine struct {
 	Extra        map[string]string `json:"extra,omitempty"`
 }
 
+// oneoffAPIRequestLine captures one LLM API call's request payload (system
+// prompt + tool schemas) inside a one-off transcript. Type is "api_request";
+// the embedded APIRequest flattens into the same JSON object, so the file
+// stays a uniform JSONL stream: meta / user / assistant / tool_call / ... /
+// api_request.
+type oneoffAPIRequestLine struct {
+	Type string `json:"type"` // "api_request"
+	session.APIRequest
+}
+
 // Injectable for tests (mirrors subagent/recorder.go's sessionDirFn).
 var (
 	oneoffSessionDirFn = config.SessionDir
@@ -138,6 +148,18 @@ func newOneoffRecorder(
 func (r *oneoffRecorder) record(msg *session.Message) {
 	msg.Timestamp = time.Now()
 	_ = r.writeLine(msg)
+}
+
+// recordAPIRequest appends one API request payload (system prompt + tool
+// schemas + user prompt) as an "api_request" line. Best-effort, same policy
+// as record.
+func (r *oneoffRecorder) recordAPIRequest(req *session.APIRequest) {
+	req.Timestamp = time.Now()
+	line := oneoffAPIRequestLine{
+		Type:       "api_request",
+		APIRequest: *req,
+	}
+	_ = r.writeLine(line)
 }
 
 func (r *oneoffRecorder) writeLine(v any) error {
