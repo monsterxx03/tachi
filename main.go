@@ -175,6 +175,21 @@ func main() {
 					},
 				},
 			},
+			{
+				Name:  "web",
+				Usage: "Start the local web console (sessions / usage / oneoffs)",
+				Flags: []cli.Flag{
+					&cli.StringFlag{
+						Name:  "addr",
+						Usage: "Listen address (default: config.yaml web.addr or 127.0.0.1:8787)",
+					},
+					&cli.BoolFlag{
+						Name:  "no-open",
+						Usage: "Don't open the browser automatically",
+					},
+				},
+				Action: runWeb,
+			},
 		},
 	}
 

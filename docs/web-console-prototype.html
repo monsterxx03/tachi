@@ -1,0 +1,650 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Tachi Console — 原型 v3</title>
+<style>
+  :root {
+    --bg: #fafaf8; --bg2: #f3f2ef; --card: #ffffff;
+    --border: #e4e3df; --border-strong: #d4d3ce;
+    --text: #2c2c28; --text-dim: #6b6b65; --muted: #9d9d95;
+    --accent: #4a9e6e; --accent-soft: #e8f5ed;
+    --blue: #3b82c4; --blue-soft: #eff6ff;
+    --yellow: #b8860b; --yellow-soft: #fefce8;
+    --red: #d9444f; --red-soft: #fef2f2;
+    --purple: #7c3aed; --purple-soft: #f5f3ff;
+    --gold: #a16207;
+    --radius: 6px; --shadow: 0 1px 3px rgba(0,0,0,.06);
+    --mono: 'SF Mono','Fira Code','Cascadia Code',Menlo,monospace;
+    --sans: -apple-system,BlinkMacSystemFont,'PingFang SC','Segoe UI',system-ui,sans-serif;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: var(--sans); font-size: 14px; line-height: 1.6; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+
+  .topbar { background: var(--card); border-bottom: 1px solid var(--border); padding: 0 20px; display: flex; align-items: center; gap: 14px; flex-shrink: 0; height: 52px; }
+  .logo { font-size: 16px; font-weight: 700; color: var(--accent); letter-spacing: -0.3px; display: flex; align-items: center; gap: 6px; margin-right: 8px; }
+  .nav-tabs { display: flex; align-self: stretch; }
+  .nav-tab { display: flex; align-items: center; padding: 0 15px; font-size: 14px; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; user-select: none; gap: 6px; }
+  .nav-tab:hover { color: var(--text); }
+  .nav-tab.active { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+  .spacer { flex: 1; }
+  .search { display: flex; align-items: center; gap: 6px; background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 5px 11px; color: var(--muted); font-size: 13px; width: 240px; }
+  .status { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); font-family: var(--mono); background: var(--bg); border: 1px solid var(--border); border-radius: 5px; padding: 4px 10px; }
+  .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--accent); }
+  .btn { font-size: 12px; padding: 5px 11px; border-radius: 5px; border: 1px solid var(--border); background: var(--bg); color: var(--text-dim); cursor: pointer; transition: all .15s; white-space: nowrap; }
+  .btn:hover { border-color: var(--accent); color: var(--accent); }
+  .btn.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .btn.primary:hover { opacity: .9; color: #fff; }
+
+  .app { flex: 1; display: flex; overflow: hidden; }
+  .main { flex: 1; overflow-y: auto; }
+  .wrap { max-width: 1200px; margin: 0 auto; padding: 22px 24px 40px; }
+  .page-title { font-size: 20px; font-weight: 600; margin-bottom: 2px; }
+  .page-sub { font-size: 13px; color: var(--text-dim); margin-bottom: 18px; }
+
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: var(--shadow); padding: 18px 20px; }
+  .card-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .card-head h3 { font-size: 13px; font-weight: 600; }
+  .grid { display: grid; gap: 14px; margin-bottom: 14px; }
+  .grid-4 { grid-template-columns: repeat(4, 1fr); }
+  .grid-2 { grid-template-columns: 1.6fr 1fr; }
+  .grid-2b { grid-template-columns: 1.1fr 1fr; }
+
+  .stat { padding: 16px 18px; }
+  .stat-label { font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+  .stat-value { font-size: 25px; font-weight: 700; letter-spacing: -0.5px; margin-bottom: 3px; }
+  .stat-value.gold { color: var(--gold); }
+  .stat-sub { font-size: 11px; color: var(--muted); }
+  .stat-sub .up { color: var(--accent); font-weight: 500; }
+  .stat-sub .warn { color: var(--yellow); }
+
+  .barchart { display: flex; align-items: flex-end; gap: 12px; height: 150px; padding: 6px 2px 0; }
+  .bar-col { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 6px; height: 100%; justify-content: flex-end; min-width: 0; }
+  .bar { width: 24px; border-radius: 3px 3px 0 0; background: var(--border); position: relative; transition: filter .15s; cursor: pointer; }
+  .bar:hover { filter: brightness(.92); }
+  .bar .val { position: absolute; top: -18px; left: 50%; transform: translateX(-50%); font-size: 9px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; opacity: 0; transition: opacity .15s; }
+  .bar-col:hover .val { opacity: 1; }
+  .bar.hl { background: var(--blue); }
+  .bar.top { background: var(--accent); }
+  .bar-label { font-size: 9px; color: var(--muted); }
+  .chart-legend { display: flex; gap: 14px; margin-top: 10px; font-size: 11px; color: var(--text-dim); }
+  .legend-item { display: flex; align-items: center; gap: 5px; }
+  .legend-swatch { width: 10px; height: 10px; border-radius: 2px; }
+
+  .stacked { display: flex; height: 20px; border-radius: 5px; overflow: hidden; margin-bottom: 14px; background: var(--bg2); }
+  .stacked div { cursor: pointer; transition: filter .15s; }
+  .stacked div:hover { filter: brightness(.95); }
+  .kind-rows { display: flex; flex-direction: column; gap: 8px; }
+  .kind-row { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .kind-row .sw { width: 10px; height: 10px; border-radius: 2px; flex-shrink: 0; }
+  .kind-row .name { color: var(--text-dim); flex: 1; }
+  .kind-row .pct { color: var(--text-dim); width: 38px; text-align: right; }
+  .kind-row .amt { color: var(--muted); width: 64px; text-align: right; font-family: var(--mono); font-size: 12px; }
+
+  table.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  table.tbl th { text-align: left; color: var(--muted); font-weight: 500; padding: 7px 10px; background: var(--bg2); font-size: 12px; }
+  table.tbl th:first-child { border-radius: 5px 0 0 5px; }
+  table.tbl th:last-child { border-radius: 0 5px 5px 0; }
+  table.tbl td { padding: 9px 10px; border-bottom: 1px solid var(--border); color: var(--text-dim); }
+  table.tbl tr:last-child td { border-bottom: none; }
+  table.tbl td.gold { color: var(--gold); font-weight: 600; font-family: var(--mono); }
+  table.tbl td.strong { color: var(--text); }
+  table.tbl tr:hover td { background: var(--bg); }
+  table.tbl tr.rowlink { cursor: pointer; }
+  table.tbl .mono { font-family: var(--mono); font-size: 12px; }
+  .badge { font-size: 11px; padding: 1px 7px; border-radius: 10px; font-family: var(--mono); white-space: nowrap; }
+  .badge.green { color: var(--accent); background: var(--accent-soft); border: 1px solid rgba(74,158,110,.3); }
+  .badge.blue { color: var(--blue); background: var(--blue-soft); border: 1px solid rgba(59,130,196,.3); }
+  .badge.yellow { color: var(--yellow); background: var(--yellow-soft); border: 1px solid rgba(184,134,11,.3); }
+  .badge.purple { color: var(--purple); background: var(--purple-soft); border: 1px solid rgba(124,58,237,.3); }
+  .badge.gray { color: var(--text-dim); background: var(--bg2); border: 1px solid var(--border); }
+
+  .sess-item { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 5px; cursor: pointer; }
+  .sess-item:hover { background: var(--bg); }
+  .sess-item.active { background: var(--accent-soft); outline: 1px solid rgba(74,158,110,.35); }
+  .sess-dot { width: 7px; height: 7px; border-radius: 4px; flex-shrink: 0; background: var(--border-strong); }
+  .sess-dot.on { background: var(--accent); }
+  .sess-body { flex: 1; min-width: 0; }
+  .sess-title { font-size: 13px; font-weight: 600; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sess-meta { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .sess-cost { font-size: 12px; font-weight: 600; color: var(--gold); font-family: var(--mono); flex-shrink: 0; }
+
+  .inspector { display: flex; height: 100%; }
+  .sess-list { width: 290px; background: var(--bg2); border-right: 1px solid var(--border); display: flex; flex-direction: column; flex-shrink: 0; }
+  .sess-list-head { padding: 12px 12px 8px; }
+  .sess-search { width: 100%; background: var(--card); border: 1px solid var(--border); border-radius: 5px; color: var(--text); padding: 6px 10px; font-size: 13px; outline: none; }
+  .sess-search:focus { border-color: var(--accent); }
+  .sess-search::placeholder { color: var(--muted); }
+  .sess-count { font-size: 11px; color: var(--muted); padding: 4px 12px; }
+  .sess-list-body { flex: 1; overflow-y: auto; padding: 4px 8px; }
+
+  .detail { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .detail-head { padding: 14px 20px 12px; background: var(--card); border-bottom: 1px solid var(--border); }
+  .detail-title-row { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; flex-wrap: wrap; }
+  .detail-title { font-size: 16px; font-weight: 600; margin-right: 4px; }
+  .detail-meta { display: flex; gap: 14px; font-size: 12px; color: var(--muted); flex-wrap: wrap; }
+  .detail-meta b { color: var(--text-dim); font-weight: 500; }
+  .detail-meta .mono { font-family: var(--mono); font-size: 11px; }
+
+  .sub-tabs { display: flex; align-items: center; gap: 2px; background: var(--card); border-bottom: 1px solid var(--border); padding: 0 14px; flex-shrink: 0; }
+  .sub-tab { padding: 10px 14px; font-size: 13px; color: var(--text-dim); cursor: pointer; border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; user-select: none; }
+  .sub-tab.active { color: var(--accent); font-weight: 600; border-bottom-color: var(--accent); }
+  .sub-tab:hover:not(.active) { color: var(--text); }
+  .sub-tab .cnt { font-size: 11px; background: var(--bg2); border-radius: 8px; padding: 0 6px; color: var(--muted); }
+
+  /* 消息流：请求组 */
+  .timeline { flex: 1; overflow-y: auto; padding: 18px 22px 40px; }
+  .req-group { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 16px; background: var(--card); box-shadow: var(--shadow); max-width: 900px; overflow: hidden; }
+  .req-group-header { display: flex; align-items: center; gap: 10px; padding: 11px 16px; cursor: pointer; user-select: none; background: var(--card); border-bottom: 1px solid var(--border); }
+  .req-group-header:hover { background: var(--bg); }
+  .rg-caret { font-size: 11px; color: var(--muted); transition: transform .2s; width: 12px; text-align: center; flex-shrink: 0; }
+  .req-group.collapsed .rg-caret { transform: rotate(-90deg); }
+  .rg-title { font-size: 13px; font-weight: 700; color: var(--blue); white-space: nowrap; }
+  .rg-model { font-size: 11px; color: var(--text-dim); font-family: var(--mono); white-space: nowrap; }
+  .rg-badge { font-size: 10px; color: var(--text-dim); background: var(--bg2); border: 1px solid var(--border); border-radius: 10px; padding: 1px 8px; white-space: nowrap; font-family: var(--mono); }
+  .rg-badge .cost { color: var(--gold); font-weight: 600; }
+  .rg-badge .tok { color: var(--accent); }
+  .rg-prompt { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex: 1; min-width: 0; }
+  .rg-tools { font-size: 10px; color: var(--blue); background: var(--blue-soft); border: 1px solid rgba(59,130,196,.3); border-radius: 10px; padding: 1px 8px; white-space: nowrap; flex-shrink: 0; }
+  .req-group-body { padding: 6px 0 4px; }
+  .req-group.collapsed .req-group-body { display: none; }
+
+  .req-payload { margin: 8px 16px 10px; border: 1px dashed var(--border-strong); border-radius: 5px; background: var(--bg); }
+  .req-payload-item { border-bottom: 1px dotted var(--border); }
+  .req-payload-item:last-child { border-bottom: none; }
+  .rpi-head { display: flex; align-items: center; gap: 7px; padding: 8px 12px; cursor: pointer; user-select: none; font-size: 12px; color: var(--text-dim); }
+  .rpi-head:hover { background: var(--card); }
+  .rpi-caret { font-size: 10px; color: var(--muted); transition: transform .15s; width: 10px; text-align: center; }
+  .req-payload-item.open .rpi-caret { transform: rotate(90deg); }
+  .rpi-label { font-weight: 600; }
+  .rpi-hint { color: var(--muted); font-family: var(--mono); font-size: 11px; margin-left: auto; }
+  .rpi-body { display: none; padding: 0 12px 10px; }
+  .req-payload-item.open .rpi-body { display: block; }
+  .rpi-body pre { font-family: var(--mono); font-size: 11.5px; color: var(--text-dim); white-space: pre-wrap; word-break: break-all; line-height: 1.55; max-height: 260px; overflow-y: auto; background: var(--card); border: 1px solid var(--border); border-radius: 4px; padding: 10px 12px; }
+  .tool-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .tool-chip { font-family: var(--mono); font-size: 11px; color: var(--blue); background: var(--blue-soft); border: 1px solid rgba(59,130,196,.35); border-radius: 4px; padding: 2px 8px; cursor: pointer; }
+  .tool-chip:hover { background: var(--blue); color: #fff; }
+  .tool-chip.active { background: var(--blue); color: #fff; border-color: var(--blue); box-shadow: 0 0 0 1px rgba(59,130,196,.4); }
+  .rpi-user pre { background: var(--card); border-left: 3px solid var(--blue); border-radius: 0 4px 4px 0; }
+
+  /* 事件流 */
+  .ev { margin: 0 16px; border-bottom: 1px dotted var(--border); }
+  .ev:last-of-type { border-bottom: none; }
+  .ev-header { display: flex; align-items: flex-start; gap: 8px; padding: 8px; border-radius: 4px; }
+  .ev-header.clickable { cursor: pointer; }
+  .ev-header.clickable:hover { background: var(--bg); }
+  .ev-icon { flex-shrink: 0; width: 21px; text-align: center; font-size: 13px; padding-top: 1px; }
+  .ev-body { margin-left: 29px; padding: 2px 0 8px 12px; border-left: 2px solid var(--border); min-width: 0; }
+  .ev-user .ev-body { border-left-color: var(--blue); }
+  .ev-text .ev-body { border-left-color: var(--accent); }
+  .ev-thinking .ev-body { border-left-color: var(--muted); }
+  .ev-tool_call .ev-body { border-left-color: var(--yellow); }
+  .ev-tool_result .ev-body { border-left-color: var(--accent); }
+  .ev-reminder .ev-body { border-left-color: var(--yellow); }
+  .ev-content { font-size: 13.5px; color: var(--text); white-space: pre-wrap; word-break: break-word; line-height: 1.6; }
+  .ev-thinking .ev-content { color: var(--text-dim); font-style: italic; font-size: 12.5px; }
+  .ev-content.mono { font-family: var(--mono); font-size: 12px; line-height: 1.55; }
+  .ev-meta { font-size: 11px; color: var(--muted); margin-top: 3px; display: flex; gap: 10px; }
+  .ev-args { display: none; background: var(--bg); border: 1px solid var(--border); border-radius: 4px; padding: 8px 12px; margin-top: 5px; font-family: var(--mono); font-size: 12px; color: var(--text-dim); white-space: pre-wrap; max-height: 180px; overflow-y: auto; line-height: 1.5; }
+  .ev.open .ev-args { display: block; }
+  .ev-args.res { color: var(--text); background: var(--accent-soft); }
+  .tc-header { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .tc-name { font-family: var(--mono); font-weight: 600; color: var(--blue); }
+  .tc-status { font-size: 11px; margin-left: auto; color: var(--muted); font-family: var(--mono); }
+  .tc-status .ok { color: var(--accent); }
+  .tc-status .err { color: var(--red); }
+  .ev-thinking summary { cursor: pointer; list-style: none; display: inline-block; font-size: 11.5px; color: var(--text-dim); font-style: italic; padding: 6px 8px; border-radius: 4px; }
+  .ev-thinking summary:hover { background: var(--bg2); }
+  .ev-thinking summary::before { content: "▸ "; }
+  .ev-thinking details[open] summary::before { content: "▾ "; }
+
+  .oneoff-list { flex: 1; overflow-y: auto; padding: 18px 22px 40px; }
+  .oneoff-item { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 16px; margin-bottom: 10px; box-shadow: var(--shadow); max-width: 860px; }
+  .oneoff-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+  .oneoff-file { font-family: var(--mono); font-size: 12px; color: var(--text-dim); }
+  .oneoff-meta { display: flex; gap: 14px; font-size: 11px; color: var(--muted); flex-wrap: wrap; }
+  .oneoff-meta b { color: var(--text-dim); font-weight: 500; }
+
+  .empty { display: flex; flex-direction: column; align-items: center; justify-content: flex-start; color: var(--muted); padding-top: 80px; gap: 8px; font-size: 13px; }
+  .empty .big { font-size: 34px; }
+  .hidden { display: none !important; }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 5px; border: 2px solid transparent; background-clip: content-box; }
+  ::-webkit-scrollbar-thumb:hover { background-color: var(--muted); background-clip: content-box; }
+  ::-webkit-scrollbar-track { background: transparent; }
+</style>
+</head>
+<body>
+
+<!-- ═══ Top bar ═══ -->
+<div class="topbar">
+  <div class="logo">⚡ Tachi Console</div>
+  <div class="nav-tabs">
+    <div class="nav-tab active" data-view="overview">📊 概览</div>
+    <div class="nav-tab" data-view="sessions">💬 Sessions</div>
+    <div class="nav-tab" data-view="usage">💰 Usage 明细</div>
+    <div class="nav-tab" data-view="oneoffs">🧩 OneOffs</div>
+  </div>
+  <div class="spacer"></div>
+  <div class="search">🔍 搜索会话 / 模型 / 文件…</div>
+  <div class="status"><span class="dot"></span>127.0.0.1:8787</div>
+  <button class="btn">刷新</button>
+</div>
+
+<div class="app">
+
+  <!-- ═══ 概览 ═══ -->
+  <div class="main" id="view-overview">
+    <div class="wrap">
+      <div class="page-title">费用总览</div>
+      <div class="page-sub">数据截至 2026-08-17 22:02 · 每 30s 自动刷新 · 来源 ~/.tachi/usage/</div>
+      <div class="grid grid-4">
+        <div class="card stat"><div class="stat-label">总费用（历史）</div><div class="stat-value gold">¥26.25</div><div class="stat-sub"><span class="up">↑ ¥1.18 今日</span> · 环比 +6.2%</div></div>
+        <div class="card stat"><div class="stat-label">LLM 调用次数</div><div class="stat-value">3,975</div><div class="stat-sub"><span class="up">+152 今日</span> · 跨 8 天</div></div>
+        <div class="card stat"><div class="stat-label">会话数</div><div class="stat-value">84</div><div class="stat-sub">8 个有记录 · 3 个今日更新</div></div>
+        <div class="card stat"><div class="stat-label">今日费用</div><div class="stat-value gold">¥1.18</div><div class="stat-sub"><span class="warn">模型均价 ¥0.0078 / 调用</span></div></div>
+      </div>
+      <div class="grid grid-2">
+        <div class="card">
+          <div class="card-head"><h3>每日费用趋势</h3><span class="hint" style="font-size:11px;color:var(--muted)">近 14 天</span></div>
+          <div class="barchart">
+            <div class="bar-col"><div class="bar" style="height:30%" title="¥0.15"><span class="val">0.15</span></div><span class="bar-label">08-04</span></div>
+            <div class="bar-col"><div class="bar" style="height:48%" title="¥0.42"><span class="val">0.42</span></div><span class="bar-label">08-05</span></div>
+            <div class="bar-col"><div class="bar" style="height:36%" title="¥0.28"><span class="val">0.28</span></div><span class="bar-label">08-06</span></div>
+            <div class="bar-col"><div class="bar" style="height:72%" title="¥2.08"><span class="val">2.08</span></div><span class="bar-label">08-07</span></div>
+            <div class="bar-col"><div class="bar" style="height:55%" title="¥1.37"><span class="val">1.37</span></div><span class="bar-label">08-08</span></div>
+            <div class="bar-col"><div class="bar" style="height:86%" title="¥2.52"><span class="val">2.52</span></div><span class="bar-label">08-09</span></div>
+            <div class="bar-col"><div class="bar" style="height:42%" title="¥1.09"><span class="val">1.09</span></div><span class="bar-label">08-10</span></div>
+            <div class="bar-col"><div class="bar" style="height:62%" title="¥1.78"><span class="val">1.78</span></div><span class="bar-label">08-11</span></div>
+            <div class="bar-col"><div class="bar" style="height:51%" title="¥1.42"><span class="val">1.42</span></div><span class="bar-label">08-12</span></div>
+            <div class="bar-col"><div class="bar" style="height:74%" title="¥2.03"><span class="val">2.03</span></div><span class="bar-label">08-13</span></div>
+            <div class="bar-col"><div class="bar top" style="height:100%" title="¥4.81"><span class="val">4.81</span></div><span class="bar-label">08-14</span></div>
+            <div class="bar-col"><div class="bar" style="height:33%" title="¥0.24"><span class="val">0.24</span></div><span class="bar-label">08-15</span></div>
+            <div class="bar-col"><div class="bar" style="height:60%" title="¥1.62"><span class="val">1.62</span></div><span class="bar-label">08-16</span></div>
+            <div class="bar-col"><div class="bar hl" style="height:28%" title="¥1.18"><span class="val">1.18</span></div><span class="bar-label">今天</span></div>
+          </div>
+          <div class="chart-legend">
+            <span class="legend-item"><span class="legend-swatch" style="background:var(--border)"></span>常规</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:var(--accent)"></span>峰值日</span>
+            <span class="legend-item"><span class="legend-swatch" style="background:var(--blue)"></span>今日</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>按调用类型占比</h3><span class="hint" style="font-size:11px;color:var(--muted)">全部时间</span></div>
+          <div class="stacked">
+            <div style="width:56%; background:var(--blue)" title="conversation 56%"></div>
+            <div style="width:14%; background:var(--gold)" title="subagent 14%"></div>
+            <div style="width:16%; background:var(--accent)" title="commit/review 16%"></div>
+            <div style="width:8%; background:var(--yellow)" title="ambient/dream 8%"></div>
+            <div style="width:6%; background:var(--purple)" title="vision/其他 6%"></div>
+          </div>
+          <div class="kind-rows">
+            <div class="kind-row"><span class="sw" style="background:var(--blue)"></span><span class="name">conversation（对话）</span><span class="pct">56%</span><span class="amt">¥14.70</span></div>
+            <div class="kind-row"><span class="sw" style="background:var(--gold)"></span><span class="name">subagent（子代理）</span><span class="pct">14%</span><span class="amt">¥3.68</span></div>
+            <div class="kind-row"><span class="sw" style="background:var(--accent)"></span><span class="name">commit / review</span><span class="pct">16%</span><span class="amt">¥4.20</span></div>
+            <div class="kind-row"><span class="sw" style="background:var(--yellow)"></span><span class="name">ambient / dream</span><span class="pct">8%</span><span class="amt">¥2.10</span></div>
+            <div class="kind-row"><span class="sw" style="background:var(--purple)"></span><span class="name">vision / 其他</span><span class="pct">6%</span><span class="amt">¥1.57</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-2b">
+        <div class="card">
+          <div class="card-head"><h3>按模型明细</h3><span class="hint" style="font-size:11px;color:var(--muted)">按费用降序</span></div>
+          <table class="tbl">
+            <thead><tr><th>模型</th><th style="text-align:right">调用</th><th style="text-align:right">输入 tok</th><th style="text-align:right">输出 tok</th><th style="text-align:right">费用</th></tr></thead>
+            <tbody>
+              <tr><td class="strong">deepseek-v4-flash</td><td style="text-align:right" class="mono">2,842</td><td style="text-align:right" class="mono">28.2M</td><td style="text-align:right" class="mono">3.1M</td><td style="text-align:right" class="gold">¥18.33</td></tr>
+              <tr><td class="strong">claude-sonnet-4.5</td><td style="text-align:right" class="mono">686</td><td style="text-align:right" class="mono">7.4M</td><td style="text-align:right" class="mono">0.9M</td><td style="text-align:right" class="gold">¥4.94</td></tr>
+              <tr><td class="strong">gpt-4o-mini</td><td style="text-align:right" class="mono">306</td><td style="text-align:right" class="mono">3.1M</td><td style="text-align:right" class="mono">0.4M</td><td style="text-align:right" class="gold">¥1.86</td></tr>
+              <tr><td class="strong">deepseek-v3.2</td><td style="text-align:right" class="mono">102</td><td style="text-align:right" class="mono">0.8M</td><td style="text-align:right" class="mono">0.1M</td><td style="text-align:right" class="gold">¥0.34</td></tr>
+              <tr><td colspan="4" style="color:var(--muted)">共 5 个模型 · 无未计价调用</td><td style="text-align:right" class="gold">¥26.25</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="card">
+          <div class="card-head"><h3>最近会话</h3><span class="hint" style="font-size:11px;color:var(--muted)">点击进入会话详情 →</span></div>
+          <div class="sess-item active" data-open-session="s1"><span class="sess-dot on"></span><div class="sess-body"><div class="sess-title">规划一个 web 子命令 · web console 设计</div><div class="sess-meta">2026-08-17 21:06 · 270 msgs · 59 tool calls</div></div><div class="sess-cost">¥1.18</div></div>
+          <div class="sess-item" data-open-session="s3"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">代码变更</div><div class="sess-meta">2026-08-15 21:02 · 51 msgs · 2 oneoffs</div></div><div class="sess-cost">¥0.78</div></div>
+          <div class="sess-item" data-open-session="s4"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">版本更新内容</div><div class="sess-meta">2026-08-15 20:24 · 38 msgs</div></div><div class="sess-cost">¥0.26</div></div>
+          <div class="sess-item" data-open-session="s2"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">Greetings</div><div class="sess-meta">2026-08-15 21:47 · 15 msgs</div></div><div class="sess-cost">¥0.03</div></div>
+          <div class="sess-item" data-open-session="s5"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">设备通道API</div><div class="sess-meta">2026-08-14 22:57 · 23 msgs · 1 oneoff</div></div><div class="sess-cost">¥0.08</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Sessions ═══ -->
+  <div class="main hidden" id="view-sessions">
+    <div class="wrap">
+      <div class="page-title">Sessions</div>
+      <div class="page-sub">全部会话 · 按最近更新排序</div>
+      <div class="card" style="padding:12px 16px">
+        <table class="tbl">
+          <thead><tr><th>标题</th><th>ID</th><th>Provider</th><th>模式</th><th>消息</th><th>工具</th><th>OneOffs</th><th>创建</th><th style="text-align:right">费用</th></tr></thead>
+          <tbody>
+            <tr class="rowlink" data-open-session="s1"><td class="strong">规划一个 web 子命令 · web console 设计</td><td class="mono" style="font-size:11px">2026-08-17-210610-2a60f79b</td><td class="mono">oc-deepseek-v4-flash</td><td><span class="badge green">auto</span></td><td style="text-align:right">270</td><td style="text-align:right">59</td><td style="text-align:right">0</td><td class="mono" style="font-size:11px">08-17 21:06</td><td style="text-align:right" class="gold">¥1.18</td></tr>
+            <tr class="rowlink" data-open-session="s3"><td>代码变更</td><td class="mono" style="font-size:11px">2026-08-15-210237-42bbaae0</td><td class="mono">oc-deepseek-v4-flash</td><td><span class="badge green">auto</span></td><td style="text-align:right">51</td><td style="text-align:right">12</td><td style="text-align:right">2</td><td class="mono" style="font-size:11px">08-15 21:02</td><td style="text-align:right" class="gold">¥0.78</td></tr>
+            <tr class="rowlink" data-open-session="s4"><td>版本更新内容</td><td class="mono" style="font-size:11px">2026-08-15-202407-79908172</td><td class="mono">oc-deepseek-v4-flash</td><td><span class="badge green">auto</span></td><td style="text-align:right">38</td><td style="text-align:right">9</td><td style="text-align:right">0</td><td class="mono" style="font-size:11px">08-15 20:24</td><td style="text-align:right" class="gold">¥0.26</td></tr>
+            <tr class="rowlink" data-open-session="s2"><td>Greetings</td><td class="mono" style="font-size:11px">2026-08-15-214751-aae98b57</td><td class="mono">oc-deepseek-v4-flash</td><td><span class="badge green">auto</span></td><td style="text-align:right">15</td><td style="text-align:right">2</td><td style="text-align:right">0</td><td class="mono" style="font-size:11px">08-15 21:47</td><td style="text-align:right" class="gold">¥0.03</td></tr>
+            <tr class="rowlink" data-open-session="s5"><td>设备通道API</td><td class="mono" style="font-size:11px">2026-08-14-225741-86761789</td><td class="mono">oc-deepseek-v4-flash</td><td><span class="badge green">auto</span></td><td style="text-align:right">23</td><td style="text-align:right">8</td><td style="text-align:right">1</td><td class="mono" style="font-size:11px">08-14 22:57</td><td style="text-align:right" class="gold">¥0.08</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Usage ═══ -->
+  <div class="main hidden" id="view-usage">
+    <div class="wrap">
+      <div class="page-title">Usage 明细</div>
+      <div class="page-sub">费用账本 · 按日分片 JSONL · 永久保留</div>
+      <div class="card" style="padding:12px 16px">
+        <div class="card-head"><h3>每日账本</h3><span class="hint" style="font-size:11px;color:var(--muted)">来源 ~/.tachi/usage/YYYY-MM-DD.jsonl</span></div>
+        <table class="tbl">
+          <thead><tr><th>日期</th><th style="text-align:right">调用</th><th style="text-align:right">输入 tok</th><th style="text-align:right">输出 tok</th><th style="text-align:right">缓存读</th><th style="text-align:right">未计价</th><th style="text-align:right">费用</th></tr></thead>
+          <tbody>
+            <tr><td class="mono strong">2026-08-17</td><td style="text-align:right" class="mono">152</td><td style="text-align:right" class="mono">1.9M</td><td style="text-align:right" class="mono">0.21M</td><td style="text-align:right" class="mono">0.85M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥1.18</td></tr>
+            <tr><td class="mono">2026-08-16</td><td style="text-align:right" class="mono">148</td><td style="text-align:right" class="mono">2.1M</td><td style="text-align:right" class="mono">0.24M</td><td style="text-align:right" class="mono">0.92M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥1.62</td></tr>
+            <tr><td class="mono">2026-08-15</td><td style="text-align:right" class="mono">61</td><td style="text-align:right" class="mono">0.4M</td><td style="text-align:right" class="mono">0.05M</td><td style="text-align:right" class="mono">0.3M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥0.24</td></tr>
+            <tr><td class="mono">2026-08-14</td><td style="text-align:right" class="mono">271</td><td style="text-align:right" class="mono">5.6M</td><td style="text-align:right" class="mono">0.7M</td><td style="text-align:right" class="mono">2.1M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥4.81</td></tr>
+            <tr><td class="mono">2026-08-13</td><td style="text-align:right" class="mono">182</td><td style="text-align:right" class="mono">3.8M</td><td style="text-align:right" class="mono">0.45M</td><td style="text-align:right" class="mono">1.5M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥2.03</td></tr>
+            <tr><td class="mono">2026-08-10</td><td style="text-align:right" class="mono">127</td><td style="text-align:right" class="mono">2.2M</td><td style="text-align:right" class="mono">0.28M</td><td style="text-align:right" class="mono">1.1M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥1.09</td></tr>
+            <tr><td class="mono">2026-08-09</td><td style="text-align:right" class="mono">203</td><td style="text-align:right" class="mono">4.9M</td><td style="text-align:right" class="mono">0.6M</td><td style="text-align:right" class="mono">2.3M</td><td style="text-align:right">0</td><td style="text-align:right" class="gold">¥2.52</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ OneOffs ═══ -->
+  <div class="main hidden" id="view-oneoffs">
+    <div class="wrap">
+      <div class="page-title">OneOffs</div>
+      <div class="page-sub">旁路执行记录 · 按 kind 分组 · 来源 ~/.tachi/oneoff/&lt;kind&gt;/</div>
+      <div class="grid" style="grid-template-columns:1fr 1fr">
+        <div class="card"><div class="card-head"><h3>commit</h3><span class="badge green">¥2.84</span></div><table class="tbl"><thead><tr><th>文件</th><th>时间</th><th style="text-align:right">费用</th></tr></thead><tbody>
+          <tr><td class="mono" style="font-size:11px">commit-20260814-231845-7065.jsonl</td><td class="mono" style="font-size:11px">08-14 23:18</td><td style="text-align:right" class="gold">¥0.12</td></tr>
+          <tr><td class="mono" style="font-size:11px">commit-20260814-231702-3821.jsonl</td><td class="mono" style="font-size:11px">08-14 23:17</td><td style="text-align:right" class="gold">¥0.09</td></tr></tbody></table></div>
+        <div class="card"><div class="card-head"><h3>review</h3><span class="badge purple">¥1.02</span></div><table class="tbl"><thead><tr><th>文件</th><th>时间</th><th style="text-align:right">费用</th></tr></thead><tbody>
+          <tr><td class="mono" style="font-size:11px">review-round-1-20260814-232001-114.jsonl</td><td class="mono" style="font-size:11px">08-14 23:20</td><td style="text-align:right" class="gold">¥0.21</td></tr>
+          <tr><td class="mono" style="font-size:11px">review-round-2-20260814-232321-907.jsonl</td><td class="mono" style="font-size:11px">08-14 23:23</td><td style="text-align:right" class="gold">¥0.18</td></tr></tbody></table></div>
+        <div class="card"><div class="card-head"><h3>ambient</h3><span class="badge yellow">¥1.66</span></div><table class="tbl"><thead><tr><th>文件</th><th>时间</th><th style="text-align:right">费用</th></tr></thead><tbody>
+          <tr><td class="mono" style="font-size:11px">ambient-20260814-210315-552.jsonl</td><td class="mono" style="font-size:11px">08-14 21:03</td><td style="text-align:right" class="gold">¥0.06</td></tr></tbody></table></div>
+        <div class="card"><div class="card-head"><h3>dream</h3><span class="badge gold">¥0.62</span></div><table class="tbl"><thead><tr><th>文件</th><th>时间</th><th style="text-align:right">费用</th></tr></thead><tbody>
+          <tr><td class="mono" style="font-size:11px">dream-20260815-060002-77.jsonl</td><td class="mono" style="font-size:11px">08-15 06:00</td><td style="text-align:right" class="gold">¥0.62</td></tr></tbody></table></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Session Inspector ═══ -->
+  <div class="main hidden" id="view-inspector" style="padding:0; overflow:hidden">
+    <div class="inspector">
+      <div class="sess-list">
+        <div class="sess-list-head"><input class="sess-search" placeholder="🔍 搜索会话…" id="sess-search"></div>
+        <div class="sess-count">8 个会话</div>
+        <div class="sess-list-body" id="sess-list-body">
+          <div class="sess-item active" data-session="s1"><span class="sess-dot on"></span><div class="sess-body"><div class="sess-title">规划一个 web 子命令</div><div class="sess-meta">08-17 21:06 · 270 msgs</div></div><div class="sess-cost">¥1.18</div></div>
+          <div class="sess-item" data-session="s3"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">代码变更</div><div class="sess-meta">08-15 21:02 · 51 msgs</div></div><div class="sess-cost">¥0.78</div></div>
+          <div class="sess-item" data-session="s4"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">版本更新内容</div><div class="sess-meta">08-15 20:24 · 38 msgs</div></div><div class="sess-cost">¥0.26</div></div>
+          <div class="sess-item" data-session="s2"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">Greetings</div><div class="sess-meta">08-15 21:47 · 15 msgs</div></div><div class="sess-cost">¥0.03</div></div>
+          <div class="sess-item" data-session="s5"><span class="sess-dot"></span><div class="sess-body"><div class="sess-title">设备通道API</div><div class="sess-meta">08-14 22:57 · 23 msgs</div></div><div class="sess-cost">¥0.08</div></div>
+        </div>
+      </div>
+
+      <div class="detail">
+        <div class="detail-head">
+          <div class="detail-title-row">
+            <span class="detail-title">规划一个 web 子命令 · web console 设计</span>
+            <span class="badge green">auto</span>
+            <span class="badge gray">oc-deepseek-v4-flash</span>
+            <span class="badge" style="color:var(--gold);background:var(--yellow-soft)">¥1.18</span>
+            <span style="flex:1"></span>
+            <button class="btn primary">⬇ 导出 Transcript</button>
+          </div>
+          <div class="detail-meta">
+            <span>ID <b class="mono">2026-08-17-210610-2a60f79b</b></span>
+            <span>创建 <b>08-17 21:06</b></span>
+            <span>更新 <b>08-17 21:41</b></span>
+            <span>消息 <b>270</b></span>
+            <span>工具调用 <b>59</b></span>
+            <span>输入 <b class="mono">1.2M tok</b></span>
+            <span>输出 <b class="mono">0.15M tok</b></span>
+            <span>目录 <b>/Users/yejia/repos/tachi</b></span>
+          </div>
+        </div>
+
+        <div class="sub-tabs">
+          <div class="sub-tab active" data-subtab="messages">消息流<span class="cnt">52 次请求</span></div>
+          <div class="sub-tab" data-subtab="oneoffs">OneOffs<span class="cnt">0</span></div>
+        </div>
+
+        <!-- 消息流：请求组 -->
+        <div class="timeline" id="sub-messages">
+          <!-- Request #1 -->
+          <div class="req-group collapsed">
+            <div class="req-group-header" onclick="toggleGroup(this)">
+              <span class="rg-caret">▼</span>
+              <span class="rg-title">Request #1</span>
+              <span class="rg-model">deepseek-v4-flash</span>
+              <span class="rg-badge">in <span class="tok">10.5k</span> · out <span class="tok">472</span></span>
+              <span class="rg-badge"><span class="cost">¥0.016</span></span>
+              <span class="rg-prompt">规划一个 web 子命令，启动一个 web server…</span>
+              <span class="rg-tools">🔧 35 tools</span>
+            </div>
+            <div class="req-group-body">
+              <div class="req-payload">
+                <div class="req-payload-item">
+                  <div class="rpi-head" onclick="togglePayload(this)">
+                    <span class="rpi-caret">▸</span><span class="rpi-label">📨 请求详情</span>
+                    <span class="rpi-hint">21:07:20 · thinking high · 721ms</span>
+                  </div>
+                  <div class="rpi-body">
+                    <div class="req-payload-item">
+                      <div class="rpi-head" onclick="togglePayload(this)"><span class="rpi-caret">▸</span><span class="rpi-label">User prompt</span></div>
+                      <div class="rpi-body">
+                        <pre class="rpi-user">规划一个 web 子命令，启动一个 web server， 用于展示tachi 的相关状态/数据.
+
+- 前后端分离，前端要做工程化，技术选型你看.
+- 开发时本地启动前端，调用后端接口, 编译打包时将前端编译产物 embed 进 go 二进制</pre>
+                      </div>
+                    </div>
+                    <div class="req-payload-item">
+                      <div class="rpi-head" onclick="togglePayload(this)"><span class="rpi-caret">▸</span><span class="rpi-label">System Prompt</span><span class="rpi-hint">7,204 chars</span></div>
+                      <div class="rpi-body">
+                        <pre># Tachi — Development Conventions (Agent Guide)
+
+## Code Organization
+- Prefer reusing shared packages under `pkg/`...
+- Extract business-agnostic common logic into the corresponding package under `pkg/`
+
+## Quality Assurance
+- Run `make lint` before the end of every turn and ensure it passes
+- Predefine constants: do not hard-code magic values...</pre>
+                      </div>
+                    </div>
+                    <div class="req-payload-item">
+                      <div class="rpi-head" onclick="togglePayload(this)"><span class="rpi-caret">▸</span><span class="rpi-label">Tools（35）</span><span class="rpi-hint">schema 可逐个展开</span></div>
+                      <div class="rpi-body">
+                        <div class="tool-chips" id="tool-chips-1">
+                          <span class="tool-chip" data-tool="Bash">Bash</span><span class="tool-chip" data-tool="Grep">Grep</span><span class="tool-chip" data-tool="Glob">Glob</span><span class="tool-chip" data-tool="ReadFile">ReadFile</span><span class="tool-chip" data-tool="WriteFile">WriteFile</span><span class="tool-chip" data-tool="EditFile">EditFile</span><span class="tool-chip" data-tool="WebSearch">WebSearch</span><span class="tool-chip" data-tool="WebFetch">WebFetch</span><span class="tool-chip" data-tool="LSP">LSP</span><span class="tool-chip" data-tool="LSPDiagnostics">LSPDiagnostics</span><span class="tool-chip" data-tool="Skill">Skill</span><span class="tool-chip" data-tool="MemoryRecall">MemoryRecall</span><span class="tool-chip" data-tool="RecordMemory">RecordMemory</span><span class="tool-chip" data-tool="SavePlan">SavePlan</span><span class="tool-chip" data-tool="SubAgent">SubAgent</span>
+                        </div>
+                        <pre id="tool-schema-1" class="tool-schema-out" style="margin-top:8px">点击上方 tool 名称查看对应 schema</pre>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="ev ev-user">
+                <div class="ev-header"><span class="ev-icon">👤</span><div class="ev-body"><div class="ev-content">规划一个 web 子命令，启动一个 web server…</div></div></div>
+              </div>
+              <div class="ev ev-thinking">
+                <div class="ev-header">
+                  <span class="ev-icon">💭</span>
+                  <div class="ev-body">
+                    <details>
+                      <summary>thinking · 推理过程（默认折叠）</summary>
+                      <div class="ev-content" style="padding:8px 0 4px">The user wants me to plan a `web` subcommand. Requirements:
+1. Frontend-backend separation with proper engineering setup
+2. Dev: local frontend hits backend APIs; build: embed frontend into Go binary
+3. Data: per-session conversations (incl. oneoff), costs, DevTools style; global costs
+4. open-pencil MCP design mockup first</div>
+                    </details>
+                  </div>
+                </div>
+              </div>
+              <div class="ev ev-tool_call">
+                <div class="ev-header clickable" onclick="toggleEv(this)">
+                  <span class="ev-icon">🔧</span>
+                  <div class="ev-body">
+                    <div class="tc-header"><span class="tc-name">Bash</span><span class="tc-status"><span class="ok">✔ 37ms</span></span></div>
+                    <div class="ev-args">{"command": "ls -la /Users/yejia/repos/tachi && echo --- && cat Makefile"}</div>
+                    <div class="ev-args res">total 100584
+drwxr-xr-x@ 34 yejia staff 1088 Aug 15 22:50 .
+...
+build:
+	go build -trimpath -ldflags="$(LDFLAGS)" -o tachi .</div>
+                  </div>
+                </div>
+              </div>
+              <div class="ev ev-tool_call">
+                <div class="ev-header clickable" onclick="toggleEv(this)">
+                  <span class="ev-icon">🔧</span>
+                  <div class="ev-body">
+                    <div class="tc-header"><span class="tc-name">WebSearch</span><span class="tc-status"><span class="ok">✔ 1.2s</span></span></div>
+                    <div class="ev-args">{"query": "OpenPencil MCP server RPC timeout github issue"}</div>
+                    <div class="ev-args res">#488  MCP automation orphan server never self-heals
+#489  fix(mcp): close orphaned servers that no app ever claims</div>
+                  </div>
+                </div>
+              </div>
+              <div class="ev ev-text">
+                <div class="ev-header"><span class="ev-icon">💬</span><div class="ev-body"><div class="ev-content">好的，我来先了解一下项目现状和 open-pencil 的用法，然后规划并出设计稿。</div></div></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Request #2 -->
+          <div class="req-group collapsed">
+            <div class="req-group-header" onclick="toggleGroup(this)">
+              <span class="rg-caret">▼</span>
+              <span class="rg-title">Request #2</span>
+              <span class="rg-model">deepseek-v4-flash</span>
+              <span class="rg-badge">in <span class="tok">7.3k</span> · out <span class="tok">276</span></span>
+              <span class="rg-badge"><span class="cost">¥0.011</span></span>
+              <span class="rg-prompt">继续 · 记录一下这个工具调用结果…</span>
+              <span class="rg-tools">🔧 35 tools</span>
+            </div>
+            <div class="req-group-body">
+              <div class="ev ev-thinking">
+                <div class="ev-header">
+                  <span class="ev-icon">💭</span>
+                  <div class="ev-body">
+                    <details>
+                      <summary>thinking · 推理过程（默认折叠）</summary>
+                      <div class="ev-content" style="padding:8px 0 4px">The tool results show the repo structure and Makefile. I should now inspect the session data structures to plan the API.</div>
+                    </details>
+                  </div>
+                </div>
+              </div>
+              <div class="ev ev-tool_call">
+                <div class="ev-header clickable" onclick="toggleEv(this)">
+                  <span class="ev-icon">🔧</span>
+                  <div class="ev-body">
+                    <div class="tc-header"><span class="tc-name">ReadFile</span><span class="tc-status"><span class="ok">✔ 12ms</span></span></div>
+                    <div class="ev-args">{"path": "session/session.go", "limit": 140}</div>
+                    <div class="ev-args res">// Message represents a message in the session history.
+type Message struct {
+    Type       MessageType `json:"type"`
+    Content    string      `json:"content,omitempty"`
+    Usage      *Usage      `json:"usage,omitempty"`
+    Iteration  int         `json:"iteration,omitempty"`
+    Timestamp  time.Time   `json:"timestamp"`
+}</div>
+                  </div>
+                </div>
+              </div>
+              <div class="ev ev-text">
+                <div class="ev-header"><span class="ev-icon">💬</span><div class="ev-body"><div class="ev-content">先同步一下进展：目前规划已经完成——数据源、后端架构、前端选型都定了，等你确认设计稿。</div></div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- OneOffs 子 tab -->
+        <div class="oneoff-list hidden" id="sub-oneoffs">
+          <div class="empty"><div class="big">🧩</div><div>此会话暂无 oneoff（旁路执行）记录</div><div style="font-size:12px">侧信道调用（/commit、/review、ambient、dream）会记录在这里</div></div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+  const views = ['overview', 'sessions', 'usage', 'oneoffs', 'inspector'];
+  function showView(name) {
+    views.forEach(v => document.getElementById('view-' + v).classList.toggle('hidden', v !== name));
+    document.querySelectorAll('.nav-tab').forEach(t => t.classList.toggle('active', t.dataset.view === name));
+  }
+  document.querySelectorAll('.nav-tab').forEach(el => el.addEventListener('click', () => showView(el.dataset.view)));
+  document.querySelectorAll('[data-open-session]').forEach(el => {
+    el.addEventListener('click', () => { selectSession(el.dataset.openSession); showView('inspector'); });
+  });
+
+  const sessionEls = document.querySelectorAll('#sess-list-body .sess-item');
+  function selectSession(id) { sessionEls.forEach(el => el.classList.toggle('active', el.dataset.session === id)); }
+  sessionEls.forEach(el => el.addEventListener('click', () => selectSession(el.dataset.session)));
+
+  document.querySelectorAll('.sub-tab').forEach(tab => {
+    tab.addEventListener('click', () => {
+      document.querySelectorAll('.sub-tab').forEach(t => t.classList.toggle('active', t === tab));
+      ['messages', 'oneoffs'].forEach(s => document.getElementById('sub-' + s).classList.toggle('hidden', s !== tab.dataset.subtab));
+    });
+  });
+
+  function toggleGroup(h) { h.parentElement.classList.toggle('collapsed'); }
+  function togglePayload(h) { h.parentElement.classList.toggle('open'); }
+  function toggleEv(h) { h.parentElement.classList.toggle('open'); }
+
+  document.getElementById('sess-search').addEventListener('input', e => {
+    const q = e.target.value.toLowerCase();
+    sessionEls.forEach(el => el.style.display = el.textContent.toLowerCase().includes(q) ? '' : 'none');
+  });
+
+  // tool 名称 → schema 的映射（原型为示意，真实实现从 /api 返回完整 schema）
+  const TOOL_SCHEMAS = {
+    Bash: { "name": "Bash", "description": "执行 shell 命令并返回输出", "parameters": { "type": "object", "properties": { "command": { "type": "string", "description": "要执行的 bash 命令" }, "timeout": { "type": "integer", "description": "超时毫秒数，默认 15000" } }, "required": ["command"] } },
+    Grep: { "name": "Grep", "description": "使用 ripgrep 搜索文件内容", "parameters": { "type": "object", "properties": { "pattern": { "type": "string" }, "path": { "type": "string" }, "output_mode": { "enum": ["files_with_matches", "content", "count"], "type": "string" } }, "required": ["pattern"] } },
+    Glob: { "name": "Glob", "description": "按 glob 模式查找文件", "parameters": { "type": "object", "properties": { "pattern": { "type": "string" }, "path": { "type": "string" } }, "required": ["pattern"] } },
+    ReadFile: { "name": "ReadFile", "description": "读取文本文件内容", "parameters": { "type": "object", "properties": { "path": { "type": "string" }, "offset": { "type": "integer" }, "limit": { "type": "integer" } }, "required": ["path"] } },
+    WriteFile: { "name": "WriteFile", "description": "写入文件（覆盖或新建）", "parameters": { "type": "object", "properties": { "path": { "type": "string" }, "content": { "type": "string" } }, "required": ["path", "content"] } },
+    EditFile: { "name": "EditFile", "description": "对文件做精确字符串替换", "parameters": { "type": "object", "properties": { "path": { "type": "string" }, "old_string": { "type": "string" }, "new_string": { "type": "string" }, "replace_all": { "type": "boolean" } }, "required": ["path", "old_string", "new_string"] } },
+    WebSearch: { "name": "WebSearch", "description": "执行网页搜索并返回结果", "parameters": { "type": "object", "properties": { "query": { "type": "string" }, "num": { "type": "integer", "maximum": 10 } }, "required": ["query"] } },
+    WebFetch: { "name": "WebFetch", "description": "抓取 URL 内容并转为 markdown", "parameters": { "type": "object", "properties": { "url": { "type": "string" }, "prompt": { "type": "string" } }, "required": ["url"] } },
+    LSP: { "name": "LSP", "description": "语言感知的代码智能操作", "parameters": { "type": "object", "properties": { "operation": { "enum": ["goToDefinition", "findReferences", "hover", "documentSymbol", "workspaceSymbol", "goToImplementation", "prepareCallHierarchy", "incomingCalls", "outgoingCalls"], "type": "string" }, "path": { "type": "string" }, "query": { "type": "string" } }, "required": ["operation", "path"] } },
+    LSPDiagnostics: { "name": "LSPDiagnostics", "description": "获取文件/工作区诊断信息", "parameters": { "type": "object", "properties": { "path": { "type": "string" } } } },
+    Skill: { "name": "Skill", "description": "管理 skills：查看/创建/更新/删除", "parameters": { "type": "object", "properties": { "operation": { "enum": ["list", "view", "create", "update", "delete"], "type": "string" }, "name": { "type": "string" } }, "required": ["operation"] } },
+    MemoryRecall: { "name": "MemoryRecall", "description": "从持久记忆中检索相关信息", "parameters": { "type": "object", "properties": { "query": { "type": "string" }, "limit": { "type": "integer" } }, "required": ["query"] } },
+    RecordMemory: { "name": "RecordMemory", "description": "记录重要信息到持久记忆", "parameters": { "type": "object", "properties": { "content": { "type": "string" }, "tags": { "type": "array", "items": { "type": "string" } } }, "required": ["content"] } },
+    SavePlan: { "name": "SavePlan", "description": "保存或更新结构化计划文档", "parameters": { "type": "object", "properties": { "title": { "type": "string" }, "content": { "type": "string" }, "steps": { "type": "array" } }, "required": ["title", "content"] } },
+    SubAgent: { "name": "SubAgent", "description": "委派任务给隔离的子代理", "parameters": { "type": "object", "properties": { "prompt": { "type": "string" }, "allowed_tools": { "type": "array" } }, "required": ["prompt"] } }
+  };
+
+  // 绑定 tool chip 点击：高亮 + 显示 schema
+  document.querySelectorAll('.tool-chip').forEach(chip => {
+    chip.addEventListener('click', () => {
+      const name = chip.dataset.tool;
+      const container = chip.closest('.rpi-body');
+      const out = container.querySelector('.tool-schema-out');
+      if (!out) return;
+      // 高亮切换
+      container.querySelectorAll('.tool-chip').forEach(c => c.classList.remove('active'));
+      chip.classList.add('active');
+      const schema = TOOL_SCHEMAS[name];
+      out.textContent = schema ? JSON.stringify(schema, null, 2) : `未找到 tool: ${name}`;
+    });
+  });
+</script>
+</body>
+</html>

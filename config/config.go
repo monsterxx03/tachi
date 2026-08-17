@@ -789,6 +789,21 @@ type Config struct {
 	Hooks                  HooksConfig          `yaml:"hooks"`                           // Event hook system (user-defined commands)
 	Herdr                  HerdrConfig          `yaml:"herdr"`                           // Herdr terminal multiplexer integration
 	Debug                  DebugConfig          `yaml:"debug"`                           // Debug/observability settings (pprof, etc.)
+	Web                    WebConfig            `yaml:"web"`                             // Web console (tachi web)
+}
+
+// WebConfig controls the local web console (`tachi web`): a read-only
+// dashboard over sessions, one-off transcripts and the usage ledger.
+type WebConfig struct {
+	// Addr is the listen address (default: 127.0.0.1:8787).
+	Addr string `yaml:"addr" default:"127.0.0.1:8787"`
+	// APIKey enables auth for /api/*: when non-empty, every request must
+	// carry the matching X-Api-Key header (constant-time compared).
+	// Empty = local development mode, no auth required.
+	APIKey string `yaml:"api_key"`
+	// AllowedOrigins enables CORS for the listed origins (dev mode when the
+	// frontend runs on the Vite dev server; empty = same-origin only).
+	AllowedOrigins []string `yaml:"allowed_origins"`
 }
 
 // OneoffConfig controls one-off transcript recording: sidecar JSONL files

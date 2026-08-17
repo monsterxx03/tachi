@@ -22,3 +22,8 @@ terminal-bench-2-1/
 chrome-extension/dist/
 chrome-extension/*.zip
 
+
+# Web console frontend
+web/frontend/node_modules/
+web/frontend/dist/
+web/frontend/*.tsbuildinfo
