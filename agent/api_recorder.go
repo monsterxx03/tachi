@@ -16,24 +16,28 @@ import (
 // never breaks the agent loop.
 
 // recordAPIRequest persists one LLM API call's request context (system prompt
-// + tool schemas). Call right before Provider.CreateChatStream.
+// + tool schemas) plus its wall-clock duration. Call after the call's stream
+// has finished (requestStart is the moment the request was initiated), so the
+// record is written a single time already carrying its duration — sessions
+// store api_requests.jsonl as append-only JSONL, so writing once at the end
+// avoids any need to patch the earlier line in place.
 //
 // Main sessions write to the session's api_requests.jsonl. Side-channel runs
 // (one-off tasks, ambient — flagged SkipSessionWrites) keep their trail in
 // the one-off sidecar as "api_request" lines when one is attached. Sub-agents
 // have no one-off recorder, so their requests are not recorded anywhere.
-func (a *AIAgent) recordAPIRequest(ctx context.Context, rs *RunState, provider llm.Provider, opts llm.ChatOptions, tools []llm.Tool) {
-	systemPrompt := extractSystemPrompt(rs.Messages)
+func (a *AIAgent) recordAPIRequest(ctx context.Context, rs *RunState, provider llm.Provider, opts llm.ChatOptions, tools []llm.Tool, requestStart time.Time) {
 	req := &session.APIRequest{
-		Timestamp:    time.Now(),
+		Timestamp:    requestStart,
 		Iteration:    rs.APICalls,
 		Seq:          rs.Seq, // session-wide request number shared with request-bound messages
-		SystemPrompt: systemPrompt,
+		SystemPrompt: extractSystemPrompt(rs.Messages),
 		UserPrompt:   extractUserPrompt(rs.Messages),
 		Model:        requestModel(provider),
 		Provider:     requestProvider(provider),
 		Thinking:     requestThinking(opts),
 		Tools:        toAPITools(tools),
+		DurationMs:   time.Since(requestStart).Milliseconds(),
 	}
 
 	if rs.SkipSessionWrites {

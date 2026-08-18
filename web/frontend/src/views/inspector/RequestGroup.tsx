@@ -221,6 +221,14 @@ export function RequestGroup({
           Request #{iteration}
         </span>
         {model && <span className="text-[11px] text-inkdim mono">{model}</span>}
+        {req?.duration_ms ? (
+          <span
+            className="text-[11px] text-inkdim mono whitespace-nowrap"
+            title="API 调用耗时"
+          >
+            ⏱ {durMs(req.duration_ms)}
+          </span>
+        ) : null}
         {(inTokens !== undefined || outTokens !== undefined) && (
           <span className="text-[10px] text-inkdim bg-paper2 border border-line rounded-full px-2 py-0.5 whitespace-nowrap font-mono">
             in <span className="text-accent">{compact(inTokens)}</span> · out{' '}
@@ -343,7 +351,7 @@ function StepBlock({ step }: { step: Step }) {
                   : '✓ ok'
                 : '… 执行中'}
               {call.tool_call_id && <> · {call.tool_call_id}</>}
-              {call.duration_ms !== undefined && <> · {durMs(call.duration_ms)}</>}
+              {result?.duration_ms !== undefined && <> · {durMs(result.duration_ms)}</>}
               {(argsString(call) || result?.result) && (
                 <> · {open ? '收起' : '展开'}</>
               )}

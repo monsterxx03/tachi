@@ -29,6 +29,12 @@ type mockStreamProvider struct {
 	providerName string              // config provider name (Provider.ProviderName); "" = unknown
 	sequences    [][]llm.StreamEvent // each entry is one API call's full stream
 	callIdx      int
+	// streamDelay, when > 0, sleeps in CreateChatStream before handing back
+	// the stream. Lets tests exercise timing that is otherwise below the
+	// millisecond resolution of the fast in-memory mock (e.g. measuring the
+	// API request duration). Default 0 — no extra latency for the bulk of
+	// tests.
+	streamDelay time.Duration
 }
 
 func (p *mockStreamProvider) Name() string         { return p.name }
@@ -59,6 +65,12 @@ func (p *mockStreamProvider) CreateChatStream(ctx context.Context, messages []ll
 
 	events := p.sequences[p.callIdx]
 	p.callIdx++
+
+	// Optional delay so per-request wall-clock timing is measurable even
+	// against the otherwise-instant in-memory mock.
+	if p.streamDelay > 0 {
+		time.Sleep(p.streamDelay)
+	}
 
 	ch := make(chan llm.StreamEvent, len(events)+4)
 	go func() {

@@ -1,6 +1,7 @@
 package agent
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -193,12 +194,24 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 	sessionDir, _ := overrideOneoffDirs(t)
 
 	// Agent with a real session rooted at the overridden session dir.
+	// Stream delay + a slow tool make the api_request and tool_result
+	// durations measurably non-zero against the fast in-memory mock.
 	prov := &mockStreamProvider{name: "mock", sequences: [][]llm.StreamEvent{
 		toolCallSeq("Bash", "call_1", `{"command":"git status"}`),
 		textSeq("review done"),
-	}}
+	}, streamDelay: 5 * time.Millisecond}
 	a := newTestAgent(t, prov)
-	a.RegisterTool(echoStub())
+	a.RegisterTool(&stubTool{
+		name: "Bash",
+		desc: "Run a command",
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			time.Sleep(5 * time.Millisecond) // make tool_result duration measurable
+			var m map[string]any
+			json.Unmarshal([]byte(args), &m)
+			cmd, _ := m["command"].(string)
+			return "executed: " + cmd, nil
+		},
+	})
 
 	store, err := session.NewFileStore(sessionDir)
 	require.NoError(t, err)
@@ -232,12 +245,15 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 	assert.Equal(t, "review the diff", lines[1]["content"])
 	assert.Equal(t, "Bash", lines[4]["name"])
 	assert.Contains(t, lines[5]["result"], "executed: git status")
+	// The tool_result line carries the execution duration.
+	assert.Greater(t, lines[5]["duration_ms"].(float64), float64(0), "tool_result records the tool execution duration")
 	assert.Equal(t, "review done", lines[7]["content"])
 
 	// api_request lines carry the system prompt and tool schemas of each call.
 	req1 := lines[2]
 	assert.Equal(t, "api_request", req1["type"])
 	assert.Equal(t, "system prompt", req1["system_prompt"])
+	assert.Greater(t, req1["duration_ms"].(float64), float64(0), "api_request carries the LLM call duration")
 	req1Tools, ok := req1["tools"].([]any)
 	require.True(t, ok, "api_request tools should be a list")
 	require.NotEmpty(t, req1Tools)
@@ -249,6 +265,7 @@ func TestRunOneOffStream_RecordsSidecar(t *testing.T) {
 	req2 := lines[6]
 	assert.Equal(t, "api_request", req2["type"])
 	assert.Equal(t, "system prompt", req2["system_prompt"])
+	assert.Greater(t, req2["duration_ms"].(float64), float64(0), "api_request carries the LLM call duration")
 	req2Tools, ok := req2["tools"].([]any)
 	require.True(t, ok)
 	require.NotEmpty(t, req2Tools)
@@ -368,4 +385,30 @@ func TestOneoffRecorder_RecordAPIRequest(t *testing.T) {
 	assert.Equal(t, "object", params["type"])
 	// Global dir layout unchanged.
 	require.True(t, strings.Contains(path, filepath.Join(homeDir, "commit")))
+}
+
+func TestOneoffRecorder_RecordAPIRequestWithDuration(t *testing.T) {
+	_, _ = overrideOneoffDirs(t)
+
+	rec, err := newOneoffRecorder(OneOffMeta{Kind: "commit"}, "", nil, "/repo", 30)
+	require.NoError(t, err)
+
+	// The run loop writes the api_request line once, AFTER the call completes,
+	// already carrying its start time and wall-clock duration — no in-place
+	// patching. Interleaved messages preserve the sidecar's row order.
+	start := time.Now().Add(-2 * time.Second)
+	rec.recordAPIRequest(&session.APIRequest{Seq: 1, Timestamp: start, SystemPrompt: "p1", DurationMs: 2000})
+	rec.record(&session.Message{Type: session.MessageTypeAssistant, Content: "a1"})
+	rec.record(&session.Message{Type: session.MessageTypeToolResult, Name: "Bash", Content: "r1", DurationMs: 7})
+	rec.recordAPIRequest(&session.APIRequest{Seq: 2, Timestamp: start, SystemPrompt: "p2", DurationMs: 3000})
+
+	path, _, _ := rec.close()
+	lines := readJSONLLines(t, path)
+	require.Equal(t, []string{"meta", "api_request", "assistant", "tool_result", "api_request"}, lineTypes(lines))
+	// api_request lines carry their duration (written once, at record time).
+	assert.Equal(t, float64(2000), lines[1]["duration_ms"])
+	// Interleaved messages preserved, tool_result keeps its own duration.
+	assert.Equal(t, "a1", lines[2]["content"])
+	assert.Equal(t, float64(7), lines[3]["duration_ms"])
+	assert.Equal(t, float64(3000), lines[4]["duration_ms"])
 }

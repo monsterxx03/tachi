@@ -82,6 +82,39 @@ func (s *Server) sessionUsage(id string) *usageSummary {
 	return summarizeUsage(rows)
 }
 
+// sessionRequestCosts returns the precise per-call cost for each API request,
+// aligned to the order of apiReqs (chronological). The ledger's
+// kind=conversation rows are the main-loop LLM calls — the same ones
+// recorded as api_requests — and both are appended in call order, so pairing
+// the conversation rows (sorted by TS) with apiReqs (already in file order)
+// 1:1 yields the matching cost per request. Other kinds (title, subagent,
+// review, ...) don't appear in api_requests and are filtered out. On any
+// mismatch (e.g. legacy data) we return costs in order up to the shorter
+// length; extras simply have no cost.
+func (s *Server) sessionRequestCosts(id string, apiReqs []session.APIRequest) []float64 {
+	rows, err := s.Usage.Rows(id, sessionCreatedFromID(id))
+	if err != nil {
+		return nil
+	}
+	// Keep only main-loop conversation calls, in chronological order —
+	// ledger files stream oldest-first, but sort defensively anyway.
+	conversation := make([]llm.UsageRow, 0, len(rows))
+	for i := range rows {
+		if rows[i].Kind == llm.UsageKindConversation {
+			conversation = append(conversation, rows[i])
+		}
+	}
+	slices.SortFunc(conversation, func(a, b llm.UsageRow) int { return a.TS.Compare(b.TS) })
+
+	costs := make([]float64, len(apiReqs))
+	for i := range costs {
+		if i < len(conversation) {
+			costs[i] = conversation[i].Cost()
+		}
+	}
+	return costs
+}
+
 // sessionUsageBySession aggregates the ledger in one pass, grouped by
 // session_id, scanning only day files from the OLDEST session's creation
 // date onward (no session can have rows before it exists). The list
@@ -277,6 +310,17 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	if subagents == nil {
 		subagents = map[string][]session.Message{}
+	}
+	// Attach the precise per-call cost (from the usage ledger's
+	// conversation-kind rows, paired 1:1 in call order) to each request so
+	// the inspector shows real numbers instead of estimating. The recorder
+	// never sets Cost, so this is a display-only enrichment of this response.
+	if costs := s.sessionRequestCosts(id, apiReqs); costs != nil {
+		for i := range apiReqs {
+			if i < len(costs) {
+				apiReqs[i].Cost = costs[i]
+			}
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{

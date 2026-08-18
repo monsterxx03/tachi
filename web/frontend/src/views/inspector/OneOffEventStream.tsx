@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { shortTime } from '../../lib/format'
+import { durMs, shortTime } from '../../lib/format'
 import type { APIRequest, Message } from '../../types/api'
 import { MessageEvent } from './RequestGroup'
 import { buildTurns, TurnBlock } from './TurnBlock'
@@ -45,6 +45,8 @@ interface OneOffAPIRequest {
   model?: string
   provider?: string
   thinking?: string
+  /** Wall-clock duration of this API call in ms (absent on legacy data). */
+  duration_ms?: number
   tools?: { name?: string; description?: string }[]
 }
 
@@ -118,6 +120,11 @@ function APIRequestCard({ req }: { req: OneOffAPIRequest }) {
               <span className="text-muted text-xs mono">iter {req.iteration}</span>
             )}
             {req.seq != null && <span className="text-muted text-xs mono">seq {req.seq}</span>}
+            {req.duration_ms ? (
+              <span className="text-muted text-xs mono" title="API 调用耗时">
+                ⏱ {durMs(req.duration_ms)}
+              </span>
+            ) : null}
             <span className="ml-auto text-[11px] text-muted whitespace-nowrap">
               {open ? '收起' : '展开'}
             </span>

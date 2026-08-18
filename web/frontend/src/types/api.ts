@@ -95,6 +95,11 @@ export interface APIRequest {
   model?: string
   provider?: string
   thinking?: string
+  /** Wall-clock duration of this API call in ms (0/absent on legacy data). */
+  duration_ms?: number
+  /** Precise CNY cost (¥) of this API call, from the backend usage ledger
+   *  (absent on legacy data / when not resolved). */
+  cost?: number
   tools?: APITool[]
 }
 

@@ -245,6 +245,7 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
+			DurationMs: tr.Duration.Milliseconds(),
 			Iteration:  rs.APICalls, // the API call that produced this tool request
 			Seq:        rs.Seq,      // session-wide request number (same as api_requests record)
 		})
@@ -479,6 +480,7 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 			IsError:    toolMsg.IsError,
 			ToolCallID: tc.ID,
 			SubagentID: tr.SubagentID,
+			DurationMs: tr.Duration.Milliseconds(),
 			Iteration:  rs.APICalls, // the API call that produced this tool request
 			Seq:        rs.Seq,      // session-wide request number (same as api_requests record)
 		})

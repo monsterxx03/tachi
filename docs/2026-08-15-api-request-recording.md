@@ -39,12 +39,36 @@ type APIRequest struct {
     // （"low"/"high"/...）、或 ""（provider 默认）。
     Thinking string    `json:"thinking,omitempty"`
     Tools    []APITool `json:"tools,omitempty"`
+    // DurationMs 是该次 API 调用的墙钟耗时（毫秒），从请求发出到流结束。
+    // 0 = 尚未测得（请求在开流前失败，或历史记录早于耗时追踪）。
+    DurationMs int64 `json:"duration_ms,omitempty"`
 }
 ```
 
 `session.Message` 增加 `Iteration` 字段（产生该消息的 API 调用序号），
 one-off sidecar 文件（`oneoff/<kind>-<ts>.jsonl`）以 `api_request` 类型行记录同一结构
 （`oneoffAPIRequestLine{Type:"api_request"; session.APIRequest}`，JSON 平铺）。
+
+## 耗时记录（duration）
+
+除请求内容外，三类落盘文件都记录**耗时**，用于排查"慢了 / 卡了"：
+
+- **`api_requests.jsonl`（及 one-off `api_request` 行）**：`DurationMs` = 一次 API 调用的
+  墙钟耗时。`runLoop` 在每次调用前记 `requestStart`，**流结束后**（`consumeStream` 返回，或
+  `CreateChatStream` 出错）一次性调用 `a.recordAPIRequest(ctx, rs, ..., requestStart)`——记录在
+  写入时就带 `Timestamp: requestStart` 与 `DurationMs`。不采用"先写入、完后再回填"，因为两处存储
+  都是 append-only JSONL，回填就要整文件重写 / 原地打补丁，而 api_requests 只有 `/transcript`
+  事后渲染这一消费方，没有边跑边读需求，所以**等执行结束再一次性写入**最简洁、无二次改写。
+- **`messages.jsonl`（及 one-off 消息行）**：`tool_result` 消息的 `DurationMs` = 该工具一次执行的
+  墙钟耗时（`tr.Duration`），在 `executeToolCallsParallel` / `executeToolCallsSequential` 记录时填入。
+
+两处都走 `session.Message.DurationMs` / `session.APIRequest.DurationMs`（`omitempty`，为 0 时不落盘），
+因此主会话、one-off sidecar 一并覆盖，旧数据不受影响。
+
+`/transcript` 报告（`agent/transcript/render/html.go` + `report.html`）也会展示这些耗时：
+- API 请求组（`RequestGroupView`）和扁平请求列表的标题上显示 `⏱ x.xs`（API 调用耗时）。
+- `tool_result` 事件标题上显示 `⏱ x.xs`（工具执行耗时）。
+耗时在渲染层用 `pkg/strutil.FormatMs` 格式化为 `850ms` / `1.5s` / `2m 5s`，并新增 `.dur-tag` 样式。
 
 ## 记录链路
 
@@ -112,13 +136,15 @@ ACP `agent/acp/commands.go`、channel `channel/manager/commands_misc.go`）
 
 | 文件 | 操作 | 说明 |
 |------|------|------|
-| `session/session.go` | 修改 | `APIRequest` / `APITool` 类型 |
+| `session/session.go` | 修改 | `APIRequest` / `APITool` 类型；`Message` / `APIRequest` 加 `DurationMs` |
 | `session/store.go` | 修改 | Store 接口 + FileStore `AppendAPIRequest` / `LoadAPIRequests`（api_requests.jsonl） |
 | `session/manager.go` | 修改 | Manager 对应方法 |
-| `agent/api_recorder.go` | 新建 | `recordAPIRequest` / `extractSystemPrompt` / `toAPITools` |
-| `agent/oneoff_recorder.go` | 修改 | `oneoffAPIRequestLine` + `recordAPIRequest`（sidecar `api_request` 行） |
-| `agent/agent_loop.go` | 修改 | runLoop 每次 CreateChatStream 前记录 |
+| `agent/api_recorder.go` | 新建 | `recordAPIRequest`（流结束后带耗时一次写入）/ `extractSystemPrompt` / `toAPITools` |
+| `agent/oneoff_recorder.go` | 修改 | `oneoffAPIRequestLine` + `recordAPIRequest`（sidecar `api_request` 行，保留 req 自带 Timestamp/DurationMs） |
+| `agent/tool_executor.go` | 修改 | `tool_result` 消息填 `DurationMs` |
+| `agent/agent_loop.go` | 修改 | 每次调用前记 `requestStart`，流结束后一次写入带耗时 |
 | `agent/session_manager.go` | 修改 | SessionManager 接口加 `AppendAPIRequest` / `LoadAPIRequests` |
-| `agent/transcript/render/html.go` | 修改 | TurnView/APIRequestView、归属逻辑、新构造函数、APICallCount |
-| `agent/transcript/render/templates/report.html` | 修改 | 请求卡片、徽标、CSS、JS |
+| `agent/transcript/render/html.go` | 修改 | TurnView/APIRequestView、归属逻辑、新构造函数、APICallCount；EventView/APIRequestView/RequestGroupView 加 `DurationMs`/`Duration` |
+| `agent/transcript/render/templates/report.html` | 修改 | 请求卡片、徽标、CSS、JS；`⏱` 耗时标签（`.dur-tag`） |
+| `pkg/strutil` | 修改 | 新增 `FormatMs`（毫秒耗时格式化：`850ms`/`1.5s`/`2m 5s`） |
 | 4 个 `/transcript` 入口 | 修改 | 加载并传入 apiReqs |

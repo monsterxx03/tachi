@@ -86,6 +86,7 @@
   .turn-preview{font-size:13px;color:var(--text-dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
   .turn-duration{font-size:11px;color:var(--muted);white-space:nowrap}
   .turn-tools{font-size:11px;color:var(--yellow);background:var(--yellow-soft);border:1px solid var(--border);border-radius:10px;padding:1px 8px;white-space:nowrap;flex-shrink:0}
+  .dur-tag{font-size:11px;color:var(--accent);background:var(--accent-soft);border:1px solid var(--border);border-radius:10px;padding:1px 8px;white-space:nowrap;font-family:var(--mono);flex-shrink:0}
   .turn-body{padding:0 16px 12px}
   .turn.collapsed .turn-body{display:none}
 
@@ -198,6 +199,7 @@
               <span class="ev-toggle" data-toggle-type="system">▶ API 请求{{if gt $req.Iteration 0}} #{{$req.Iteration}}{{end}}{{if $req.AllSame}}（与上一条相同）{{end}}</span>
               {{if $req.UserPrompt}}<span class="ev-meta">«{{truncate $req.UserPrompt 40}}»</span>{{end}}
               {{if or $req.Model $req.Thinking}}<span class="ev-meta">{{$req.Model}}{{if and $req.Model $req.Thinking}} · {{end}}{{if $req.Thinking}}thinking {{$req.Thinking}}{{end}}</span>{{end}}
+              {{if $req.Duration}}<span class="dur-tag" title="API 调用耗时">⏱ {{$req.Duration}}</span>{{end}}
             </div>
             <div class="ev-body collapsed">
               {{if $req.SystemPrompt}}
@@ -230,6 +232,7 @@
               <span class="rg-title">🔁 API 请求{{if gt $g.Iteration 0}} #{{$g.Iteration}}{{end}}{{if $g.AllSame}}<span class="same-tag">与上一条相同</span>{{end}}</span>
               {{if $g.UserPrompt}}<span class="rg-prompt">«{{truncate $g.UserPrompt 60}}»</span>{{end}}
               {{if or $g.Model $g.Thinking}}<span class="ev-meta">{{$g.Model}}{{if and $g.Model $g.Thinking}} · {{end}}{{if $g.Thinking}}thinking {{$g.Thinking}}{{end}}</span>{{end}}
+              {{if $g.Duration}}<span class="dur-tag" title="API 调用耗时">⏱ {{$g.Duration}}</span>{{end}}
               {{if $g.Tools}}<span class="turn-tools" title="工具定义数">🔧 {{len $g.Tools}}</span>{{end}}
             </div>
             <div class="req-group-body">
@@ -352,6 +355,7 @@
     <span class="ev-icon">{{.Icon}}</span>
     <span class="ev-toggle" data-toggle-type="result">▶ 结果</span>
     <span style="color:var(--text-dim);font-size:12px">→ {{.Name}}</span>
+    {{if .Duration}}<span class="dur-tag" title="工具执行耗时">⏱ {{.Duration}}</span>{{end}}
     <span class="ev-meta">{{.Timestamp}}</span>
   </div>
   <div class="ev-body collapsed">

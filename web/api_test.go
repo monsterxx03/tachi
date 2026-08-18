@@ -430,3 +430,43 @@ func TestGetSessionOneOffsEmptyDirIsArray(t *testing.T) {
 		t.Fatal("oneoffs must deserialize to a non-nil array")
 	}
 }
+
+// TestSessionRequestCostsPairsConversationRows verifies the per-request cost
+// pairing: conversation-kind ledger rows pair 1:1 (chronologically) with the
+// api_requests, while other kinds (subagent) are filtered out so the alignment
+// stays exact.
+func TestSessionRequestCostsPairsConversationRows(t *testing.T) {
+	dir := t.TempDir()
+	store, err := session.NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	id := "2026-08-01-120000-00000001" // creation day 2026-08-01
+	sess := &session.Session{ID: id, CreatedAt: now, UpdatedAt: now}
+	if err := store.CreateSession(sess); err != nil {
+		t.Fatal(err)
+	}
+	s := &Server{Store: store, Usage: llm.NewUsageRecorder(filepath.Join(dir, "usage"))}
+
+	// A subagent call (ignored: not conversation), then two conversation calls
+	// with distinct costs (1000×¥3/1M + 100×¥9/1M patterns).
+	_ = s.Usage.Record(llm.UsageRow{TS: now, SessionID: id, Kind: llm.UsageKindSubagent, Model: "m", InputTokens: 1000, InputPrice: 100})
+	_ = s.Usage.Record(llm.UsageRow{TS: now.Add(time.Millisecond), SessionID: id, Kind: llm.UsageKindConversation, Model: "m", InputTokens: 1000, InputPrice: 3})                                        // 0.003
+	_ = s.Usage.Record(llm.UsageRow{TS: now.Add(2 * time.Millisecond), SessionID: id, Kind: llm.UsageKindConversation, Model: "m", InputTokens: 2000, OutputTokens: 100, InputPrice: 3, OutputPrice: 9}) // 0.0069
+
+	apiReqs := []session.APIRequest{
+		{Seq: 1, Timestamp: now.Add(time.Millisecond)},
+		{Seq: 2, Timestamp: now.Add(2 * time.Millisecond)},
+	}
+	costs := s.sessionRequestCosts(id, apiReqs)
+	if len(costs) != 2 {
+		t.Fatalf("costs len = %d, want 2", len(costs))
+	}
+	if math.Abs(costs[0]-0.003) > 1e-9 {
+		t.Fatalf("cost[0] = %v, want 0.003", costs[0])
+	}
+	if math.Abs(costs[1]-0.0069) > 1e-9 {
+		t.Fatalf("cost[1] = %v, want 0.0069", costs[1])
+	}
+}

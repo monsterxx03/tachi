@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -110,6 +111,8 @@ func TestExtractUserPrompt(t *testing.T) {
 
 func TestRecordAPIRequestIntegration(t *testing.T) {
 	// Two API calls: first triggers a Bash tool call, second answers with text.
+	// The stream delay makes both the LLM call duration (< streamDelay on the
+	// wire) and the tool execution duration measurably non-zero.
 	provider := &mockStreamProvider{
 		name:         "openai",
 		providerName: "deepseek-v4-flash",
@@ -117,6 +120,7 @@ func TestRecordAPIRequestIntegration(t *testing.T) {
 			toolCallSeq("Bash", "call-1", `{"command":"ls"}`),
 			textSeq("done"),
 		},
+		streamDelay: 5 * time.Millisecond,
 	}
 
 	fake := &fakeSessionManager{}
@@ -133,6 +137,7 @@ func TestRecordAPIRequestIntegration(t *testing.T) {
 		},
 		required: []string{"command"},
 		executeFn: func(ctx context.Context, args string) (string, error) {
+			time.Sleep(5 * time.Millisecond) // make tool_result duration measurable
 			return "ok", nil
 		},
 	})
@@ -157,6 +162,7 @@ func TestRecordAPIRequestIntegration(t *testing.T) {
 		assert.Equal(t, "mock-model", req.Model, "call %d model", i)
 		assert.Equal(t, "deepseek-v4-flash", req.Provider, "call %d provider", i)
 		assert.Equal(t, "high", req.Thinking, "call %d thinking", i)
+		assert.Greater(t, req.DurationMs, int64(0), "call %d should carry its wall-clock duration after the stream completes", i)
 		require.NotEmpty(t, req.Tools, "call %d tools", i)
 		assert.Equal(t, "Bash", req.Tools[0].Name)
 		assert.NotEmpty(t, req.Tools[0].Parameters, "call %d schema", i)
@@ -169,16 +175,21 @@ func TestRecordAPIRequestIntegration(t *testing.T) {
 	require.NoError(t, err)
 	iterByType := map[session.MessageType]int{}
 	seqByType := map[session.MessageType]int{}
+	durByType := map[session.MessageType]int64{}
 	for _, m := range msgs {
 		if m.Type == session.MessageTypeToolCall || m.Type == session.MessageTypeToolResult {
 			iterByType[m.Type] = m.Iteration
 			seqByType[m.Type] = m.Seq
+			durByType[m.Type] = m.DurationMs
 		}
 	}
 	assert.Equal(t, 1, iterByType[session.MessageTypeToolCall], "tool_call belongs to iteration 1")
 	assert.Equal(t, 1, iterByType[session.MessageTypeToolResult], "tool_result belongs to iteration 1")
 	assert.Equal(t, 1, seqByType[session.MessageTypeToolCall], "tool_call shares seq 1 with its api request")
 	assert.Equal(t, 1, seqByType[session.MessageTypeToolResult], "tool_result shares seq 1 with its api request")
+	// The tool execution duration lands on the tool_result message.
+	assert.Zero(t, durByType[session.MessageTypeToolCall], "tool_call records no duration of its own")
+	assert.Greater(t, durByType[session.MessageTypeToolResult], int64(0), "tool_result carries the tool execution duration")
 }
 
 func TestRecordAPISeqContinuesAcrossTurns(t *testing.T) {

@@ -695,11 +695,12 @@ func TestSessionMessageToEventView_ToolCall(t *testing.T) {
 
 func TestSessionMessageToEventView_ToolResult(t *testing.T) {
 	msg := session.Message{
-		Type:      session.MessageTypeToolResult,
-		Name:      "Bash",
-		Result:    "stdout output",
-		IsError:   false,
-		Timestamp: time.Now(),
+		Type:       session.MessageTypeToolResult,
+		Name:       "Bash",
+		Result:     "stdout output",
+		IsError:    false,
+		Timestamp:  time.Now(),
+		DurationMs: 1234,
 	}
 
 	ev := sessionMessageToEventView(msg)
@@ -715,6 +716,13 @@ func TestSessionMessageToEventView_ToolResult(t *testing.T) {
 	}
 	if ev.Icon != "📋" {
 		t.Errorf("Icon = %q, want 📋", ev.Icon)
+	}
+	// Tool execution duration surfaces on the event.
+	if ev.DurationMs != 1234 {
+		t.Errorf("DurationMs = %d, want 1234", ev.DurationMs)
+	}
+	if ev.Duration == "" {
+		t.Error("Duration should be formatted for display")
 	}
 }
 
@@ -743,8 +751,8 @@ func TestBuildReportDataFromMessagesWithRequests(t *testing.T) {
 	}
 
 	reqs := []session.APIRequest{
-		{Timestamp: t0.Add(5 * time.Second), Iteration: 1, UserPrompt: "Q1", SystemPrompt: "SP1", Model: "mock-model", Provider: "deepseek-v4-flash", Thinking: "high", Tools: []session.APITool{{Name: "ReadFile", Parameters: json.RawMessage(`{"type":"object"}`)}}},
-		{Timestamp: t1.Add(5 * time.Second), Iteration: 2, UserPrompt: "Q2", SystemPrompt: "SP1", Model: "mock-model", Provider: "deepseek-v4-flash", Thinking: "high", Tools: []session.APITool{{Name: "Bash", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)}}},
+		{Timestamp: t0.Add(5 * time.Second), Iteration: 1, UserPrompt: "Q1", SystemPrompt: "SP1", Model: "mock-model", Provider: "deepseek-v4-flash", Thinking: "high", DurationMs: 1500, Tools: []session.APITool{{Name: "ReadFile", Parameters: json.RawMessage(`{"type":"object"}`)}}},
+		{Timestamp: t1.Add(5 * time.Second), Iteration: 2, UserPrompt: "Q2", SystemPrompt: "SP1", Model: "mock-model", Provider: "deepseek-v4-flash", Thinking: "high", DurationMs: 2500, Tools: []session.APITool{{Name: "Bash", Parameters: json.RawMessage(`{"type":"object","properties":{"command":{"type":"string"}}}`)}}},
 	}
 
 	data := BuildReportDataFromMessagesWithRequests(s, msgs, nil, reqs)
@@ -785,6 +793,13 @@ func TestBuildReportDataFromMessagesWithRequests(t *testing.T) {
 	if len(g1.Events) != 1 || g1.Events[0].Content != "A1" {
 		t.Errorf("group1 Events = %+v, want [A1]", g1.Events)
 	}
+	// API call duration surfaces on both the request view and its group.
+	if turn1.APIRequests[0].DurationMs != 1500 || turn1.APIRequests[0].Duration != "1.5s" {
+		t.Errorf("turn1 request duration = %d/%q, want 1500/1.5s", turn1.APIRequests[0].DurationMs, turn1.APIRequests[0].Duration)
+	}
+	if g1.DurationMs != 1500 || g1.Duration != "1.5s" {
+		t.Errorf("group1 duration = %d/%q, want 1500/1.5s", g1.DurationMs, g1.Duration)
+	}
 
 	// Turn 2: user event + group (iteration 2), same prompt, different tools.
 	turn2 := data.Transcript.Turns[1]
@@ -801,6 +816,9 @@ func TestBuildReportDataFromMessagesWithRequests(t *testing.T) {
 	}
 	if g2.ToolsSame || g2.AllSame {
 		t.Error("group2 marked fully same — tools differ")
+	}
+	if g2.DurationMs != 2500 || g2.Duration != "2.5s" {
+		t.Errorf("group2 duration = %d/%q, want 2500/2.5s", g2.DurationMs, g2.Duration)
 	}
 }
 
@@ -885,12 +903,15 @@ func TestGenerateHTMLWithAPIRequests(t *testing.T) {
 	msgs := []session.Message{
 		{Type: session.MessageTypeUser, Content: "Q1", Timestamp: time.Now()},
 		{Type: session.MessageTypeAssistant, Content: "A1", Timestamp: time.Now(), Iteration: 1},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: `{"command":"ls"}`, ToolCallID: "t1", Timestamp: time.Now(), Iteration: 1},
+		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "file1\nfile2", ToolCallID: "t1", Timestamp: time.Now(), Iteration: 1, DurationMs: 1234},
 	}
 	reqs := []session.APIRequest{{
 		Timestamp:    time.Now(),
 		Iteration:    1,
 		UserPrompt:   "Q1",
 		SystemPrompt: "You are Tachi — the test system prompt.",
+		DurationMs:   2500,
 		Tools: []session.APITool{{
 			Name:        "ReadFile",
 			Description: "Read a file from disk",
@@ -914,6 +935,9 @@ func TestGenerateHTMLWithAPIRequests(t *testing.T) {
 		"Read a file from disk",
 		"file path", // schema survives into the report (quotes are HTML-escaped)
 		"API 调用",    // sidebar stat
+		// Durations are rendered for both the API request group and the tool result.
+		"⏱ 2.5s", // API call duration tag
+		"⏱ 1.2s", // tool_result duration tag
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("generated HTML missing %q", want)

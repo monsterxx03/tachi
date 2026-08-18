@@ -669,14 +669,16 @@ func (a *AIAgent) runLoop(
 		// prompt cache invalidations. A per-run tool view (if set) narrows
 		// this to the run's allowed subset.
 		llmTools := buildLLMTools(a.filterActiveSchemas(a.resolve(ctx).schemas()))
-
-		// Record the request context (system prompt + tool schemas) so the
-		// /transcript report can show what the model saw on this call.
-		// Best-effort: failures are logged, never fatal.
-		a.recordAPIRequest(ctx, rs, in.Provider, opts, llmTools)
+		// Record the request start so the api_requests entry (written once the
+		// stream finishes) can carry both its true start time and wall-clock
+		// duration. Best-effort: failures are logged, never fatal.
+		requestStart := time.Now()
 
 		streamCh, err := in.Provider.CreateChatStream(ctx, rs.Messages, llmTools, opts)
 		if err != nil {
+			// Request context + (near-zero) duration recorded now, since the
+			// call never produced a stream to await.
+			a.recordAPIRequest(ctx, rs, in.Provider, opts, llmTools, requestStart)
 			ch <- a.terminalError(ctx, rs, ExitReasonError, fmt.Errorf("API call failed: %w", err), nil)
 			return
 		}
@@ -691,6 +693,9 @@ func (a *AIAgent) runLoop(
 		acc, err := consumeStream(streamCh, ch, rs.APICalls, func() {
 			a.dispatchEvent(ctx, hooks.EventStreamStart, hooks.Payload{})
 		})
+		// The call's duration is now known — record the request (with start
+		// time + duration) once, on both success and stream error.
+		a.recordAPIRequest(ctx, rs, in.Provider, opts, llmTools, requestStart)
 		if err != nil {
 			exitReason := ExitReasonError
 			if ctx.Err() != nil {

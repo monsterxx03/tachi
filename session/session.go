@@ -65,7 +65,10 @@ type Message struct {
 	ToolCallID string      `json:"tool_call_id,omitempty"`
 	SubagentID string      `json:"subagent_id,omitempty"` // shortID for SubAgent tool_result → subagent/<id>.jsonl
 	Usage      *Usage      `json:"usage,omitempty"`       // token usage from the LLM response that produced this message
-	Iteration  int         `json:"iteration,omitempty"`   // 1-based LLM API call that produced this message (0 = not request-bound)
+	// DurationMs is the wall-clock execution duration of a tool call, recorded
+	// on the matching tool_result message. 0 = not a completed tool result.
+	DurationMs int64 `json:"duration_ms,omitempty"`
+	Iteration  int   `json:"iteration,omitempty"` // 1-based LLM API call that produced this message (0 = not request-bound)
 	// Seq is the session-wide request sequence number: monotonic across
 	// turns (unlike Iteration, which resets to 1 per turn). API-request-bound
 	// messages carry the same Seq as their api_requests.jsonl record, giving
@@ -115,4 +118,13 @@ type APIRequest struct {
 	// provider default.
 	Thinking string    `json:"thinking,omitempty"`
 	Tools    []APITool `json:"tools,omitempty"`
+	// DurationMs is the wall-clock duration of the LLM API call, from request
+	// start until the stream completes. 0 = not yet measured (request failed
+	// before a stream, or legacy record written before duration tracking).
+	DurationMs int64 `json:"duration_ms,omitempty"`
+	// Cost is the precise CNY cost of this API call (¥), taken from the usage
+	// ledger's conversation-kind row paired to this request. 0 = not resolved
+	// (the recorder never sets it — it's filled only by the web layer for
+	// display, so it never persists into the jsonl sidecar).
+	Cost float64 `json:"cost,omitempty"`
 }

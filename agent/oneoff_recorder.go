@@ -151,10 +151,14 @@ func (r *oneoffRecorder) record(msg *session.Message) {
 }
 
 // recordAPIRequest appends one API request payload (system prompt + tool
-// schemas + user prompt) as an "api_request" line. Best-effort, same policy
-// as record.
+// schemas + user prompt + duration) as an "api_request" line. The request's
+// Timestamp (set by the agent to the call's start time) and DurationMs are
+// preserved; a zero Timestamp (direct/test callers) defaults to now.
+// Best-effort, same policy as record.
 func (r *oneoffRecorder) recordAPIRequest(req *session.APIRequest) {
-	req.Timestamp = time.Now()
+	if req.Timestamp.IsZero() {
+		req.Timestamp = time.Now()
+	}
 	line := oneoffAPIRequestLine{
 		Type:       "api_request",
 		APIRequest: *req,

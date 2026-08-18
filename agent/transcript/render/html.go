@@ -78,17 +78,21 @@ type TurnItem struct {
 // RequestGroupView groups every event produced by one API call (iteration):
 // the request's system prompt + tools, plus its thinking/text/tool events.
 type RequestGroupView struct {
-	Iteration        int         `json:"iteration"`
-	UserPrompt       string      `json:"user_prompt,omitempty"` // the user input this request answered
-	SystemPrompt     string      `json:"system_prompt,omitempty"`
-	SystemPromptSame bool        `json:"system_prompt_same,omitempty"`
-	Tools            []ToolView  `json:"tools,omitempty"`
-	ToolsSame        bool        `json:"tools_same,omitempty"`
-	AllSame          bool        `json:"all_same,omitempty"` // identical to previous request
-	Model            string      `json:"model,omitempty"`    // model this request was sent to
-	Provider         string      `json:"provider,omitempty"` // config provider name
-	Thinking         string      `json:"thinking,omitempty"` // "none" | effort | "" = default
-	Events           []EventView `json:"events,omitempty"`   // thinking/text/tool_call/tool_result of this request
+	Iteration        int        `json:"iteration"`
+	UserPrompt       string     `json:"user_prompt,omitempty"` // the user input this request answered
+	SystemPrompt     string     `json:"system_prompt,omitempty"`
+	SystemPromptSame bool       `json:"system_prompt_same,omitempty"`
+	Tools            []ToolView `json:"tools,omitempty"`
+	ToolsSame        bool       `json:"tools_same,omitempty"`
+	AllSame          bool       `json:"all_same,omitempty"` // identical to previous request
+	Model            string     `json:"model,omitempty"`    // model this request was sent to
+	Provider         string     `json:"provider,omitempty"` // config provider name
+	Thinking         string     `json:"thinking,omitempty"` // "none" | effort | "" = default
+	// DurationMs is this request's wall-clock call duration; Duration the
+	// preformatted display string. Enriched from the request's APIRequestView.
+	DurationMs int64       `json:"duration_ms,omitempty"`
+	Duration   string      `json:"duration,omitempty"`
+	Events     []EventView `json:"events,omitempty"` // thinking/text/tool_call/tool_result of this request
 }
 
 // APIRequestView is a display-friendly API request. *Same flags mark content
@@ -105,6 +109,10 @@ type APIRequestView struct {
 	Model            string     `json:"model,omitempty"`    // model this request was sent to
 	Provider         string     `json:"provider,omitempty"` // config provider name
 	Thinking         string     `json:"thinking,omitempty"` // "none" | effort | "" = default
+	// DurationMs is this API call's wall-clock duration; Duration the
+	// preformatted display string ("850ms", "1.2s", ...).
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Duration   string `json:"duration,omitempty"`
 }
 
 // ToolView is a display-friendly tool definition from an API request.
@@ -132,6 +140,12 @@ type EventView struct {
 	// tool_result event, linking it to the request group that emitted it.
 	// 0 = not request-bound (user / reminder / steer).
 	Iteration int `json:"iteration,omitempty"`
+
+	// DurationMs is the wall-clock execution duration, displayed-friendly.
+	// Set on tool_result events (tool execution). Duration is the preformatted
+	// string shown in the report ("850ms", "1.2s", ...).
+	DurationMs int64  `json:"duration_ms,omitempty"`
+	Duration   string `json:"duration,omitempty"`
 }
 
 // StatsView holds aggregated statistics for the transcript.
@@ -491,6 +505,8 @@ func assignAPIRequests(turns []TurnView, turnStarts []time.Time, turnTimes [][]t
 			Model:        req.Model,
 			Provider:     req.Provider,
 			Thinking:     req.Thinking,
+			DurationMs:   req.DurationMs,
+			Duration:     strutil.FormatMs(req.DurationMs),
 			Tools:        buildToolViews(req.Tools),
 		}
 		if prevReq != nil {
@@ -544,6 +560,8 @@ func buildTurnItems(turn *TurnView) []TurnItem {
 				g.Model = req.Model
 				g.Provider = req.Provider
 				g.Thinking = req.Thinking
+				g.DurationMs = req.DurationMs
+				g.Duration = req.Duration
 			}
 			cur = g
 			items = append(items, TurnItem{Kind: "group", Group: g})
@@ -620,6 +638,13 @@ func sessionMessageToEventView(msg session.Message) EventView {
 	}
 
 	ev.Icon, ev.CSSClass = sessionIconAndClass(msg)
+
+	// Tool execution duration (present on tool_result messages).
+	if msg.DurationMs > 0 {
+		ev.DurationMs = msg.DurationMs
+		ev.Duration = strutil.FormatMs(msg.DurationMs)
+	}
+
 	return ev
 }
 

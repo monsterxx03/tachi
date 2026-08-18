@@ -221,6 +221,15 @@ function resolveReq(
   return rv.seq !== undefined ? reqBySeq[rv.seq] : undefined
 }
 
+// Cost shown for one request: prefer the backend's precise per-call figure
+// (attached to the resolved api_request), falling back to a token-based
+// estimate for legacy data that predates cost resolution.
+function requestCostOf(rv: RequestView, reqBySeq: Record<number, APIRequest>): number {
+  const req = resolveReq(rv, reqBySeq)
+  if (req?.cost !== undefined && req.cost > 0) return req.cost
+  return requestCost(rv.events)
+}
+
 export function TurnBlock({
   turn,
   reqBySeq,
@@ -232,7 +241,7 @@ export function TurnBlock({
 
   const stepCount = turn.requests.reduce((a, r) => a + r.steps.length, 0)
   const totalCost = turn.requests.reduce(
-    (a, r) => a + requestCost(r.events),
+    (a, r) => a + requestCostOf(r, reqBySeq),
     0,
   )
   const lastReq = turn.requests[turn.requests.length - 1]
@@ -329,7 +338,7 @@ export function TurnBlock({
                   key={rv.iteration}
                   iteration={rv.iteration}
                   model={req?.model}
-                  cost={requestCost(rv.events)}
+                  cost={requestCostOf(rv, reqBySeq)}
                   inTokens={inTok}
                   outTokens={outTok}
                   toolCount={req?.tools?.length ?? 0}

@@ -294,3 +294,24 @@ func TestSplitBy(t *testing.T) {
 		})
 	}
 }
+
+func TestFormatMs(t *testing.T) {
+	tests := []struct {
+		ms   int64
+		want string
+	}{
+		{0, ""},
+		{-5, ""},
+		{850, "850ms"},
+		{1234, "1.2s"},
+		{2500, "2.5s"},
+		{60000, "1m 0s"},
+		{125000, "2m 5s"},
+	}
+
+	for _, tt := range tests {
+		if got := FormatMs(tt.ms); got != tt.want {
+			t.Errorf("FormatMs(%d) = %q, want %q", tt.ms, got, tt.want)
+		}
+	}
+}

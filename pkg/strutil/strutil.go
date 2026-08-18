@@ -146,6 +146,23 @@ func FormatTPS(tps int64) string {
 	}
 }
 
+// FormatMs renders a millisecond duration for display. It returns "" for
+// non-positive input so callers can omit the label entirely. Examples:
+// 850 → "850ms", 1234 → "1.2s", 125000 → "2m 5s".
+func FormatMs(ms int64) string {
+	if ms <= 0 {
+		return ""
+	}
+	switch {
+	case ms < 1000:
+		return fmt.Sprintf("%dms", ms)
+	case ms < 60000:
+		return fmt.Sprintf("%.1fs", float64(ms)/1000)
+	default:
+		return fmt.Sprintf("%dm %ds", ms/60000, (ms%60000)/1000)
+	}
+}
+
 // SplitBy splits s by sep into non-empty items, trimming whitespace from
 // each item. Empty and whitespace-only items are dropped, so
 // SplitBy("a, b, ,c", ",") → ["a", "b", "c"] and
