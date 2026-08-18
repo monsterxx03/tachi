@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState, type ReactNode } from 'react'
+import { useCallback, useState, type ReactNode } from 'react'
 import { BrowserRouter, Route, Routes } from 'react-router-dom'
 
-import { AuthError, getApiKey } from './api/client'
+import { AuthError } from './api/client'
 import { ApiKeyGate } from './auth/ApiKeyGate'
 import { TopBar } from './layout/TopBar'
 import { Overview } from './views/Overview'
@@ -13,30 +13,17 @@ import { Inspector } from './views/inspector/Inspector'
 /** Global context: any view can report a 401 via this callback. */
 export type AuthReporter = (err: unknown) => void
 
-/** App shell: holds auth state, renders the gate when unauthorized. */
+/** App shell: holds auth state, renders the gate when unauthorized.
+ *
+ * There is deliberately NO startup auth probe: every view already reports
+ * 401s through onAuthError (useApi / useSessionList), so the first real
+ * request decides. This keeps page loads to exactly the requests the page
+ * needs — no extra /api/usage ping on every refresh. */
 export default function App() {
   const [authFailed, setAuthFailed] = useState(false)
-  const [ready, setReady] = useState(false)
-
-  // Probe the API once on startup: no key configured → everything just works.
-  useEffect(() => {
-    let cancelled = false
-    void (async () => {
-      try {
-        await fetch('/api/usage', {
-          headers: getApiKey() ? { 'X-Api-Key': getApiKey() } : {},
-        })
-        if (!cancelled) setAuthFailed(false)
-      } catch {
-        if (!cancelled) setAuthFailed(true)
-      } finally {
-        if (!cancelled) setReady(true)
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [])
+  // Bumped when the API key is entered, so the route tree re-mounts and
+  // every view refetches with the new key.
+  const [routeKey, setRouteKey] = useState(0)
 
   const reportAuth: AuthReporter = useCallback((err) => {
     if (err instanceof AuthError) setAuthFailed(true)
@@ -44,18 +31,8 @@ export default function App() {
 
   const onGated = useCallback(() => {
     setAuthFailed(false)
-    // Re-mount routes so data refetches with the new key.
-    setReady(false)
-    setTimeout(() => setReady(true), 0)
+    setRouteKey((k) => k + 1)
   }, [])
-
-  if (!ready) {
-    return (
-      <div className="flex items-center justify-center h-screen bg-paper text-sm text-inkdim">
-        正在连接 Tachi 后端…
-      </div>
-    )
-  }
 
   if (authFailed) {
     return <ApiKeyGate onSuccess={onGated} />
@@ -66,16 +43,16 @@ export default function App() {
   // h-full split view, and Sessions needs its container ref for infinite
   // scroll).
   function scrollView(node: ReactNode): ReactNode {
-  return <div className="h-full overflow-y-auto">{node}</div>
-}
+    return <div className="h-full overflow-y-auto">{node}</div>
+  }
 
-return (
+  return (
     <BrowserRouter>
       <div className="flex flex-col h-screen">
         <TopBar />
         <div className="flex-1 overflow-hidden">
           <div className="h-full">
-            <Routes>
+            <Routes key={routeKey}>
               <Route
                 path="/"
                 element={scrollView(<Overview onAuthError={reportAuth} />)}

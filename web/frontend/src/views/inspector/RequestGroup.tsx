@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import type { APIRequest, Message } from '../../types/api'
 import { compact, durMs, yuan } from '../../lib/format'
-import type { Step } from './Inspector'
+import type { Step } from './TurnBlock'
 
 // ── event icons / labels ───────────────────────────────────────────────────
 
@@ -17,7 +17,7 @@ const ICONS: Record<string, string> = {
 
 // ── one message ────────────────────────────────────────────────────────────
 
-function MessageEvent({
+export function MessageEvent({
   m,
   toolCallIds,
 }: {

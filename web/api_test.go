@@ -3,8 +3,11 @@ package web
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -234,5 +237,196 @@ func TestListSessionsEmpty(t *testing.T) {
 	resp := listSessions(t, s, "")
 	if resp.Total != 0 || len(resp.Sessions) != 0 || resp.NextCursor != "" {
 		t.Fatalf("empty list = %+v, want zero sessions/total/cursor", resp)
+	}
+}
+
+// TestListSessionsUsageGrouped verifies the list endpoint aggregates the
+// usage ledger in ONE grouped scan: each session's cost comes from its own
+// ledger rows, session-less (global oneoff) rows count for nobody, and the
+// ledger is scanned once for the whole page (sessionUsageBySession).
+func TestListSessionsUsageGrouped(t *testing.T) {
+	s := newListSessionsServer(t, 3)
+	sessions, err := s.Store.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	// Newest session: 1000 input tokens @ ¥3/1M → ¥0.003.
+	if err := s.Usage.Record(llm.UsageRow{
+		TS: now, SessionID: sessions[0].ID, Kind: llm.UsageKindConversation, Model: "m1",
+		InputTokens: 1000, InputPrice: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Middle session: 2000 in @ ¥3 + 100 out @ ¥9 → 0.006 + 0.0009 = ¥0.0069.
+	if err := s.Usage.Record(llm.UsageRow{
+		TS: now, SessionID: sessions[1].ID, Kind: llm.UsageKindConversation, Model: "m1",
+		InputTokens: 2000, OutputTokens: 100, InputPrice: 3, OutputPrice: 9,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Session-less row (global oneoff) — must count for NO session.
+	if err := s.Usage.Record(llm.UsageRow{
+		TS: now, SessionID: "", Kind: llm.UsageKindConversation, Model: "m1",
+		InputTokens: 999999, InputPrice: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := listSessions(t, s, "")
+	if len(resp.Sessions) != 3 {
+		t.Fatalf("got %d sessions, want 3", len(resp.Sessions))
+	}
+	costOf := map[string]float64{}
+	for _, item := range resp.Sessions {
+		costOf[item.ID] = item.Cost
+	}
+	if got := costOf[sessions[0].ID]; math.Abs(got-0.003) > 1e-9 {
+		t.Fatalf("newest cost = %v, want 0.003", got)
+	}
+	if got := costOf[sessions[1].ID]; math.Abs(got-0.0069) > 1e-9 {
+		t.Fatalf("middle cost = %v, want 0.0069", got)
+	}
+	if got := costOf[sessions[2].ID]; got != 0 {
+		t.Fatalf("oldest cost = %v, want 0 (no ledger rows)", got)
+	}
+}
+
+// TestListSessionsUsageSkipsPreCreationRows: the ledger scan starts at the
+// oldest listed session's creation date (parsed from its ID prefix) — rows
+// written before a session existed must not contribute to its cost.
+func TestListSessionsUsageSkipsPreCreationRows(t *testing.T) {
+	s := newListSessionsServer(t, 1)
+	sessions, err := s.Store.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sessions[0].ID // creation date = 2026-08-01 (from the ID prefix)
+
+	// Written BEFORE the session's creation day → must be skipped.
+	if err := s.Usage.Record(llm.UsageRow{
+		TS: time.Date(2026, 7, 30, 10, 0, 0, 0, time.Local), SessionID: id,
+		Kind: llm.UsageKindConversation, Model: "m1", InputTokens: 1000, InputPrice: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	// Written ON the creation day → counted (1000 × ¥3/1M = ¥0.003).
+	if err := s.Usage.Record(llm.UsageRow{
+		TS: time.Date(2026, 8, 1, 10, 0, 0, 0, time.Local), SessionID: id,
+		Kind: llm.UsageKindConversation, Model: "m1", InputTokens: 1000, InputPrice: 3,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	resp := listSessions(t, s, "")
+	if len(resp.Sessions) != 1 {
+		t.Fatalf("got %d sessions, want 1", len(resp.Sessions))
+	}
+	if got := resp.Sessions[0].Cost; math.Abs(got-0.003) > 1e-9 {
+		t.Fatalf("cost = %v, want 0.003 (pre-creation rows must be skipped)", got)
+	}
+}
+
+// TestGetSessionOneOffsIsArray guards against the oneoffs field regressing
+// back to a bare directory-path string: the frontend types it as an array of
+// summaries and calls .map() on it, so a string breaks the Inspector's
+// oneoff tab at runtime.
+func TestGetSessionOneOffsIsArray(t *testing.T) {
+	s := newListSessionsServer(t, 1)
+	sessions, err := s.Store.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sessions[0].ID
+
+	// sessionOneOffDir resolves against the global config base dir — point it
+	// at a temp home so the test never touches the real ~/.tachi.
+	home := t.TempDir()
+	prev := config.BaseDir()
+	config.SetBaseDir(home)
+	defer config.SetBaseDir(prev)
+
+	oneoffDir := filepath.Join(home, "session", id, "oneoff")
+	if err := os.MkdirAll(oneoffDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	lines := "{\"type\":\"meta\",\"kind\":\"commit\",\"model\":\"m1\"}\n{\"type\":\"event\"}\n"
+	if err := os.WriteFile(filepath.Join(oneoffDir, "2026-01.jsonl"), []byte(lines), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	req := httptest.NewRequest("GET", "/api/sessions/"+id, nil)
+	req.SetPathValue("id", id)
+	rr := httptest.NewRecorder()
+	s.handleGetSession(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var resp struct {
+		OneOffs []oneOffSummary `json:"oneoffs"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(resp.OneOffs) != 1 {
+		t.Fatalf("oneoffs = %#v, want exactly 1 summary", resp.OneOffs)
+	}
+	if resp.OneOffs[0].File != "2026-01.jsonl" || resp.OneOffs[0].EventCount != 1 {
+		t.Fatalf("unexpected summary: %+v", resp.OneOffs[0])
+	}
+
+	// The dedicated listing endpoint must agree.
+	req2 := httptest.NewRequest("GET", "/api/sessions/"+id+"/oneoff", nil)
+	req2.SetPathValue("id", id)
+	rr2 := httptest.NewRecorder()
+	s.handleListSessionOneOffs(rr2, req2)
+	if rr2.Code != 200 {
+		t.Fatalf("oneoff list status = %d, body = %s", rr2.Code, rr2.Body.String())
+	}
+	var resp2 struct {
+		OneOffs []oneOffSummary `json:"oneoffs"`
+	}
+	if err := json.Unmarshal(rr2.Body.Bytes(), &resp2); err != nil {
+		t.Fatalf("decode oneoff list: %v", err)
+	}
+	if len(resp2.OneOffs) != 1 {
+		t.Fatalf("oneoff list = %#v, want exactly 1 summary", resp2.OneOffs)
+	}
+}
+
+// TestGetSessionOneOffsEmptyDirIsArray: a session with NO oneoff dir (the
+// common case) must still serialize oneoffs as "[]", not null — the frontend
+// reads .length off it unconditionally.
+func TestGetSessionOneOffsEmptyDirIsArray(t *testing.T) {
+	s := newListSessionsServer(t, 1)
+	sessions, err := s.Store.ListSessions()
+	if err != nil {
+		t.Fatal(err)
+	}
+	id := sessions[0].ID
+
+	home := t.TempDir()
+	prev := config.BaseDir()
+	config.SetBaseDir(home)
+	defer config.SetBaseDir(prev)
+
+	req := httptest.NewRequest("GET", "/api/sessions/"+id, nil)
+	req.SetPathValue("id", id)
+	rr := httptest.NewRecorder()
+	s.handleGetSession(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	if strings.Contains(rr.Body.String(), `"oneoffs":null`) {
+		t.Fatalf("oneoffs must be [] not null, body = %s", rr.Body.String())
+	}
+	var resp struct {
+		OneOffs []oneOffSummary `json:"oneoffs"`
+	}
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if resp.OneOffs == nil {
+		t.Fatal("oneoffs must deserialize to a non-nil array")
 	}
 }

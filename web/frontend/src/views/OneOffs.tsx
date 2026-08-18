@@ -2,7 +2,7 @@ import { api } from '../api/client'
 import type { AuthReporter } from '../App'
 import { useApi } from '../lib/useApi'
 import { compact, shortTime } from '../lib/format'
-import { Card, CardHead, Empty, PageHead } from '../components/ui'
+import { Card, CardHead, Empty, Loading, PageHead } from '../components/ui'
 import type { OneOffSummary } from '../types/api'
 
 const KIND_BADGE: Record<string, 'green' | 'blue' | 'yellow' | 'purple' | 'gray'> = {
@@ -61,7 +61,7 @@ export function OneOffs({ onAuthError }: { onAuthError: AuthReporter }) {
     onAuthError,
   )
 
-  if (loading) return <PageHead title="OneOffs" sub="加载中…" />
+  if (loading) return <Loading text="加载旁路记录…" />
   if (error) {
     return (
       <div className="p-6">

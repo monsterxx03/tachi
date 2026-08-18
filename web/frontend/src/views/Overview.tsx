@@ -5,7 +5,7 @@ import { api } from '../api/client'
 import type { AuthReporter } from '../App'
 import { useApi } from '../lib/useApi'
 import { num, yuan } from '../lib/format'
-import { Card, CardHead, PageHead, StatCard } from '../components/ui'
+import { Card, CardHead, Loading, PageHead, StatCard } from '../components/ui'
 
 const KIND_COLORS: Record<string, string> = {
   conversation: '#3b82c4',
@@ -68,7 +68,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
   const [kindMode, setKindMode] = useState<'all' | 'recent'>('all')
 
   if (loading || sessions.loading) {
-    return <PageHead title="费用总览" sub="加载中…" />
+    return <Loading text="加载费用总览…" />
   }
   if (error || sessions.error) {
     return (
@@ -117,22 +117,16 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
         <StatCard
           label="会话数"
           value={num(sessionTotal)}
-          sub="按创建时间倒序"
         />
         <StatCard
           label="今日费用"
           value={yuan(today?.cost)}
           valueClass="text-gold"
-          sub={
-            <span className="text-warn">
-              模型均价 ¥{(today?.cost ?? 0) / Math.max(today?.calls ?? 1, 1) / 10000}
-            </span>
-          }
         />
       </div>
 
       <div className="grid grid-cols-[1.6fr_1fr] gap-3.5 mb-3.5">
-        <Card>
+        <Card className="px-4 py-4">
           <CardHead
             title="每日费用趋势"
             right={
@@ -155,7 +149,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
           <BarChart days={u.days.slice(0, 14).map((d) => ({ date: d.date, cost: d.cost }))} />
         </Card>
 
-        <Card>
+        <Card className="px-4 py-4">
           <CardHead
             title="按调用类型占比"
             right={
@@ -210,7 +204,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
       </div>
 
       <div className="grid grid-cols-[1.1fr_1fr] gap-3.5">
-        <Card>
+        <Card className="px-4 py-4">
           <CardHead title="按模型明细" right={<span className="hint">按费用降序</span>} />
           <table className="w-full border-collapse text-[13px]">
             <thead>
@@ -238,7 +232,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
           </table>
         </Card>
 
-        <Card>
+        <Card className="px-4 py-4">
           <CardHead
             title="最新会话"
             right={<Link to="/sessions" className="text-xs text-linkblue hover:underline">查看全部 →</Link>}

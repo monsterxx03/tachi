@@ -1,10 +1,9 @@
 // Formatting helpers shared across views.
 
-/** ¥ with 2-4 decimals; drops trailing zeros. */
+/** ¥ rounded to cents (2 decimals). */
 export function yuan(v: number | undefined): string {
   if (v === undefined || Number.isNaN(v)) return '¥0.00'
-  const s = v.toFixed(4).replace(/\.?0+$/, '')
-  return '¥' + (s === '¥' ? '0' : s)
+  return '¥' + v.toFixed(2)
 }
 
 /** "12.3k" / "1.2M" style token counts. */

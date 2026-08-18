@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web web-build web-dev itest itest-mockllm itest-run itest-tui itest-acp
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web-build itest itest-mockllm itest-run itest-tui itest-acp
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -23,20 +23,6 @@ build-linux:
 
 build-linux-arm64:
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
-
-# Run the built web console (embedded frontend) and open the browser.
-web: web-build
-	go run . web
-
-# Dev mode: run the Go backend (serving /api) and the Vite dev server
-# (HMR) side by side. Vite proxies /api to the backend on :8787.
-# (Stop with Ctrl-C; the backend is a background job.)
-web-dev:
-	@echo "Starting Go backend on http://127.0.0.1:8787 ..."
-	@go run . web --addr 127.0.0.1:8787 --no-open &
-	@sleep 1
-	@echo "Starting Vite dev server on http://localhost:5173 ..."
-	@$(NPM) run dev
 
 test:
 	go test ./...

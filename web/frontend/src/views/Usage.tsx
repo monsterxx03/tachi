@@ -2,7 +2,7 @@ import { api } from '../api/client'
 import type { AuthReporter } from '../App'
 import { useApi } from '../lib/useApi'
 import { compact, num, yuan } from '../lib/format'
-import { Card, CardHead, PageHead } from '../components/ui'
+import { Card, CardHead, Loading, PageHead } from '../components/ui'
 
 export function Usage({ onAuthError }: { onAuthError: AuthReporter }) {
   const { data, loading, error, reload } = useApi(
@@ -11,7 +11,7 @@ export function Usage({ onAuthError }: { onAuthError: AuthReporter }) {
     onAuthError,
   )
 
-  if (loading) return <PageHead title="Usage 明细" sub="加载中…" />
+  if (loading) return <Loading text="加载费用账本…" />
   if (error) {
     return (
       <div className="p-6">

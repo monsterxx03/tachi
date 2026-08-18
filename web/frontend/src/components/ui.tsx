@@ -88,6 +88,16 @@ export function PageHead({ title, sub }: { title: string; sub?: ReactNode }) {
   )
 }
 
+/** Full-area centered loading state (spinner + optional text). */
+export function Loading({ text = '加载中…' }: { text?: string }) {
+  return (
+    <div className="h-full flex items-center justify-center gap-2.5 text-sm text-inkdim">
+      <span className="w-4 h-4 rounded-full border-2 border-line border-t-accent animate-spin" />
+      {text}
+    </div>
+  )
+}
+
 /** Empty state (centered hint). */
 export function Empty({
   icon,

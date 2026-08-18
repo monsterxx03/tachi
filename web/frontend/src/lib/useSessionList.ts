@@ -30,6 +30,19 @@ export interface UseSessionListResult {
 /** Default page size for the session list; the backend caps at 200. */
 export const SESSION_PAGE_SIZE = 50
 
+// Module-level first-page cache shared by the list page and the Inspector
+// sidebar: navigating from /sessions into /sessions/:id reuses the list the
+// user just browsed instead of re-fetching it (and re-paying the backend's
+// per-session usage ledger lookups). reload() invalidates it.
+interface SessionListCache {
+  sessions: SessionSummaryItem[]
+  total: number
+  nextCursor: string
+  ts: number
+}
+let listCache: SessionListCache | null = null
+const LIST_CACHE_TTL_MS = 60_000
+
 /**
  * Keyset-paginated session list with infinite-scroll wiring.
  *
@@ -61,9 +74,13 @@ export function useSessionList(
   const containerRef = useRef<HTMLDivElement>(null)
   const sentinelRef = useRef<HTMLDivElement>(null)
 
-  const reload = useCallback(() => setNonce((n) => n + 1), [])
+  const reload = useCallback(() => {
+    listCache = null
+    setNonce((n) => n + 1)
+  }, [])
 
-  // First page (and reload). Replaces the whole list.
+  // First page (and reload). Replaces the whole list. Serves from the shared
+  // module cache when fresh (see SessionListCache above).
   useEffect(() => {
     const gen = ++genRef.current
     let cancelled = false
@@ -71,6 +88,18 @@ export function useSessionList(
     setLoading(true)
     setError(null)
     setLoadMoreError(null)
+
+    const cached = listCache
+    if (cached && Date.now() - cached.ts < LIST_CACHE_TTL_MS) {
+      setSessions(cached.sessions)
+      setTotal(cached.total)
+      setHasMore(!!cached.nextCursor)
+      cursorRef.current = cached.nextCursor
+      setLoading(false)
+      busyRef.current = false
+      return
+    }
+
     api
       .listSessions({ limit: pageSize })
       .then((page) => {
@@ -79,6 +108,12 @@ export function useSessionList(
         setTotal(page.total)
         setHasMore(!!page.next_cursor)
         cursorRef.current = page.next_cursor ?? ''
+        listCache = {
+          sessions: page.sessions,
+          total: page.total,
+          nextCursor: page.next_cursor ?? '',
+          ts: Date.now(),
+        }
       })
       .catch((err: unknown) => {
         if (cancelled || gen !== genRef.current) return

@@ -1,11 +1,12 @@
-import { Link } from 'react-router-dom'
+import { Link, useNavigate } from 'react-router-dom'
 
 import type { AuthReporter } from '../App'
-import { Badge, Card, PageHead } from '../components/ui'
+import { Badge, Card, Loading, PageHead } from '../components/ui'
 import { num, shortTime, yuan } from '../lib/format'
 import { SESSION_PAGE_SIZE, useSessionList } from '../lib/useSessionList'
 
 export function Sessions({ onAuthError }: { onAuthError: AuthReporter }) {
+  const navigate = useNavigate()
   const {
     sessions,
     total,
@@ -20,7 +21,7 @@ export function Sessions({ onAuthError }: { onAuthError: AuthReporter }) {
     sentinelRef,
   } = useSessionList(SESSION_PAGE_SIZE, onAuthError)
 
-  if (loading) return <PageHead title="Sessions" sub="加载中…" />
+  if (loading) return <Loading text="加载会话列表…" />
   if (error) {
     return (
       <div className="p-6">
@@ -58,7 +59,7 @@ export function Sessions({ onAuthError }: { onAuthError: AuthReporter }) {
                 <tr
                   key={s.id}
                   className="border-b border-line last:border-0 hover:bg-paper cursor-pointer"
-                  onClick={() => (window.location.href = `/sessions/${s.id}`)}
+                  onClick={() => navigate(`/sessions/${s.id}`)}
                 >
                   <td className="px-2 py-2 text-ink font-medium max-w-[260px] truncate">
                     {s.title || '(无标题)'}

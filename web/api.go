@@ -54,13 +54,63 @@ func (s *Server) readSession(w http.ResponseWriter, id string) *session.Session 
 	return sess
 }
 
-// sessionUsage aggregates the ledger rows belonging to one session.
+// sessionCreatedFromID extracts the creation date from a time-prefixed
+// session ID ("YYYY-MM-DD-HHMMSS-uuid"); zero time when unparseable.
+// The usage ledger is sharded per day, and a session's rows can only exist
+// from its creation day onward — so this date is a safe lower bound for
+// ledger scans of that session.
+func sessionCreatedFromID(id string) time.Time {
+	if len(id) < 10 {
+		return time.Time{}
+	}
+	t, err := time.Parse("2006-01-02", id[:10])
+	if err != nil {
+		return time.Time{}
+	}
+	return t
+}
+
+// sessionUsage aggregates the ledger rows belonging to one session,
+// scanning only day files from the session's creation date onward.
+// Used by single-session endpoints (detail view); the list endpoint uses
+// sessionUsageBySession instead so it scans the ledger exactly once.
 func (s *Server) sessionUsage(id string) *usageSummary {
-	rows, err := s.Usage.Rows(id, time.Time{})
+	rows, err := s.Usage.Rows(id, sessionCreatedFromID(id))
 	if err != nil {
 		return &usageSummary{}
 	}
 	return summarizeUsage(rows)
+}
+
+// sessionUsageBySession aggregates the ledger in one pass, grouped by
+// session_id, scanning only day files from the OLDEST session's creation
+// date onward (no session can have rows before it exists). The list
+// endpoint needs per-session cost/calls for every row it returns — calling
+// sessionUsage(id) per session would re-scan the day files once per session
+// (O(sessions × rows)); grouping one scan is O(rows). Session-less rows
+// (global oneoffs) are skipped.
+func (s *Server) sessionUsageBySession(sessions []*session.Session) map[string]*usageSummary {
+	from := time.Time{}
+	for _, sess := range sessions {
+		if c := sessionCreatedFromID(sess.ID); !c.IsZero() && (from.IsZero() || c.Before(from)) {
+			from = c
+		}
+	}
+	rows, err := s.Usage.RowsAll(from)
+	if err != nil {
+		return map[string]*usageSummary{}
+	}
+	groups := map[string][]llm.UsageRow{}
+	for i := range rows {
+		if rows[i].SessionID != "" {
+			groups[rows[i].SessionID] = append(groups[rows[i].SessionID], rows[i])
+		}
+	}
+	out := make(map[string]*usageSummary, len(groups))
+	for id, group := range groups {
+		out[id] = summarizeUsage(group)
+	}
+	return out
 }
 
 // ── GET /api/sessions ──────────────────────────────────────────────────────
@@ -140,8 +190,13 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 		nextCursor = sessions[end-1].ID
 	}
 
+	// One ledger scan for the whole page, grouped per session (see
+	// sessionUsageBySession) — never one full scan per session. The scan
+	// starts at the oldest session on this page's creation date, so older
+	// ledger day files (before any listed session existed) are skipped.
+	usageBySession := s.sessionUsageBySession(sessions[start:end])
 	writeJSON(w, http.StatusOK, map[string]any{
-		"sessions":    s.buildSessionsListItems(sessions[start:end]),
+		"sessions":    s.buildSessionsListItems(sessions[start:end], usageBySession),
 		"total":       len(sessions),
 		"next_cursor": nextCursor,
 	})
@@ -149,9 +204,10 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 
 // buildSessionsListItems computes the compact list row for each session:
 // message/tool counts from a streaming scan (never a full unmarshal), oneoff
-// count from the dir glob, cost from the usage ledger. Only called for the
-// sessions on the current page.
-func (s *Server) buildSessionsListItems(sessions []*session.Session) []sessionsListItem {
+// count from the dir glob, cost from the usageBySession map (precomputed in
+// one ledger pass by the caller). Only called for the sessions on the
+// current page.
+func (s *Server) buildSessionsListItems(sessions []*session.Session, usageBySession map[string]*usageSummary) []sessionsListItem {
 	items := make([]sessionsListItem, 0, len(sessions))
 	for _, sess := range sessions {
 		msgCount, toolCalls := s.Store.CountMessages(sess.ID)
@@ -159,7 +215,10 @@ func (s *Server) buildSessionsListItems(sessions []*session.Session) []sessionsL
 		if names, err := filepath.Glob(filepath.Join(s.sessionOneOffDir(sess.ID), "*.jsonl")); err == nil {
 			oneoffCount = len(names)
 		}
-		u := s.sessionUsage(sess.ID)
+		u := usageBySession[sess.ID]
+		if u == nil {
+			u = &usageSummary{}
+		}
 		items = append(items, sessionsListItem{
 			ID:             sess.ID,
 			Title:          sess.Title,
@@ -207,7 +266,18 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	}
 	apiReqs, _ := s.Store.LoadAPIRequests(id)
 	subagents, _ := session.LoadSubagentMessages(id)
-	oneoffs := s.sessionOneOffDir(id)
+	oneoffs := s.scanOneOffDir(s.sessionOneOffDir(id))
+	// Array fields must never serialize as null: the frontend calls
+	// .map()/.length on them unconditionally. Nil slices become "[]".
+	if msgs == nil {
+		msgs = []session.Message{}
+	}
+	if apiReqs == nil {
+		apiReqs = []session.APIRequest{}
+	}
+	if subagents == nil {
+		subagents = map[string][]session.Message{}
+	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
 		"meta":         sess,
@@ -237,8 +307,10 @@ type oneoffMetaLine struct {
 }
 
 // scanOneOffDir lists *.jsonl files under dir with their meta header.
+// Always returns a non-nil slice (JSON "[]"), never null — the frontend
+// types these fields as arrays and calls .map()/.length on them.
 func (s *Server) scanOneOffDir(dir string) []oneOffSummary {
-	var out []oneOffSummary
+	out := make([]oneOffSummary, 0)
 	names, err := filepath.Glob(filepath.Join(dir, "*.jsonl"))
 	if err != nil || len(names) == 0 {
 		return out
@@ -253,7 +325,9 @@ func (s *Server) scanOneOffDir(dir string) []oneOffSummary {
 			File: filepath.Base(p),
 			Size: info.Size(),
 		}
+		hasMeta := false
 		if meta, ok := readOneOffMeta(p); ok {
+			hasMeta = true
 			sum.Kind = meta.Kind
 			sum.Provider = meta.Provider
 			sum.Model = meta.Model
@@ -262,10 +336,14 @@ func (s *Server) scanOneOffDir(dir string) []oneOffSummary {
 			t := meta.StartedAt
 			sum.StartedAt = &t
 		}
-		// Count non-meta lines as events.
+		// Count non-meta lines as events: every newline-delimited line is
+		// one event, minus the meta header when one is present.
 		data, _ := os.ReadFile(p)
 		if len(data) > 0 {
 			sum.EventCount = strings.Count(string(data), "\n")
+			if hasMeta {
+				sum.EventCount--
+			}
 		}
 		out = append(out, sum)
 	}
@@ -298,7 +376,7 @@ func (s *Server) handleListSessionOneOffs(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{
-		"oneoffs": s.sessionOneOffDir(id),
+		"oneoffs": s.scanOneOffDir(s.sessionOneOffDir(id)),
 	})
 }
 
