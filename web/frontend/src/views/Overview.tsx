@@ -64,7 +64,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
     [],
     onAuthError,
   )
-  const sessions = useApi(() => api.listSessions(), [], onAuthError)
+  const sessions = useApi(() => api.listSessions({ limit: 6 }), [], onAuthError)
   const [kindMode, setKindMode] = useState<'all' | 'recent'>('all')
 
   if (loading || sessions.loading) {
@@ -82,7 +82,8 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
     )
   }
   const u = data!
-  const sess = sessions.data!.sessions
+  const recentSessions = sessions.data!.sessions
+  const sessionTotal = sessions.data!.total
   const today = u.days[0]
   const kindProps = Object.entries(u.by_kind).map(([k, v]) => ({
     kind: k,
@@ -91,7 +92,6 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
     share: u.total_cost > 0 ? v.cost / u.total_cost : 0,
   }))
   kindProps.sort((a, b) => b.cost - a.cost)
-  const recentSessions = sess.slice(0, 6)
 
   return (
     <div className="max-w-[1200px] mx-auto p-5 pb-10">
@@ -100,7 +100,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
         sub={`数据截至 ${new Date().toLocaleString('zh-CN')} · 每 30s 自动刷新 · 来源 ~/.tachi/usage/`}
       />
 
-      <div className="grid grid-cols-4 gap-3.5 mb-3.5">
+      <div className="grid grid-cols-3 gap-3.5 mb-3.5">
         <StatCard
           label="总费用（历史）"
           value={yuan(u.total_cost)}
@@ -115,16 +115,10 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
           }
         />
         <StatCard
-          label="LLM 调用次数"
-          value={num(u.total_calls)}
-          sub={
-            <span>
-              <span className="text-accent font-medium">+{num(today?.calls)} 今日</span>{' '}
-              · 跨 {u.days.length} 天
-            </span>
-          }
+          label="会话数"
+          value={num(sessionTotal)}
+          sub="按创建时间倒序"
         />
-        <StatCard label="会话数" value={num(sess.length)} sub="按最近更新排序" />
         <StatCard
           label="今日费用"
           value={yuan(today?.cost)}
@@ -246,7 +240,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
 
         <Card>
           <CardHead
-            title="最近会话"
+            title="最新会话"
             right={<Link to="/sessions" className="text-xs text-linkblue hover:underline">查看全部 →</Link>}
           />
           <div className="flex flex-col gap-0.5">
@@ -262,7 +256,7 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
                     {s.title || '(无标题)'}
                   </span>
                   <span className="block text-[11px] text-muted">
-                    {s.updated_at.slice(0, 16).replace('T', ' ')} · {num(s.message_count)} msgs
+                    {s.created_at.slice(0, 16).replace('T', ' ')} · {num(s.message_count)} msgs
                     {s.tool_calls > 0 && ` · ${num(s.tool_calls)} tools`}
                   </span>
                 </span>

@@ -1,11 +1,16 @@
 package web
 
 import (
+	"encoding/json"
+	"fmt"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/session"
 )
 
 func configWebAPIKey(key string) config.WebConfig {
@@ -105,5 +110,129 @@ func TestAPIKeyDisabledWhenEmpty(t *testing.T) {
 	s := &Server{Cfg: configWebAPIKey("")}
 	if !s.apiKeyMatches("") {
 		t.Fatal("empty configured key disables auth")
+	}
+}
+
+// listSessionsResponse mirrors the JSON shape of GET /api/sessions.
+type listSessionsResponse struct {
+	Sessions   []sessionsListItem `json:"sessions"`
+	Total      int                `json:"total"`
+	NextCursor string             `json:"next_cursor"`
+}
+
+// newListSessionsServer builds a Server over a temp dir with n sessions
+// whose IDs are time-prefixed in ascending order (oldest first). The newest
+// session gets a small message history (one user + one tool_call).
+func newListSessionsServer(t *testing.T, n int) *Server {
+	t.Helper()
+	dir := t.TempDir()
+	store, err := session.NewFileStore(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ids := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		// ID prefix encodes the creation time; 2026-08-01 + i days.
+		created := time.Date(2026, 8, 1+i, 9, 0, 0, 0, time.Local)
+		id := fmt.Sprintf("%04d-%02d-%02d-%02d%02d%02d-%08x",
+			created.Year(), created.Month(), created.Day(),
+			created.Hour(), created.Minute(), created.Second(), i)
+		ids = append(ids, id)
+		sess := &session.Session{
+			ID:        id,
+			Title:     fmt.Sprintf("session-%d", i),
+			CreatedAt: created,
+			UpdatedAt: created.Add(time.Hour),
+		}
+		if err := store.CreateSession(sess); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// The newest session (last created) gets 1 user + 1 tool_call message.
+	if n > 0 {
+		for _, m := range []session.MessageType{session.MessageTypeUser, session.MessageTypeToolCall} {
+			if err := store.AppendMessage(ids[n-1], &session.Message{Type: m, Timestamp: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	return &Server{Store: store, Usage: llm.NewUsageRecorder(filepath.Join(dir, "usage"))}
+}
+
+func listSessions(t *testing.T, s *Server, query string) listSessionsResponse {
+	t.Helper()
+	req := httptest.NewRequest("GET", "/api/sessions"+query, nil)
+	rr := httptest.NewRecorder()
+	s.handleListSessions(rr, req)
+	if rr.Code != 200 {
+		t.Fatalf("status = %d, body = %s", rr.Code, rr.Body.String())
+	}
+	var resp listSessionsResponse
+	if err := json.Unmarshal(rr.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	return resp
+}
+
+func TestListSessionsPagination(t *testing.T) {
+	s := newListSessionsServer(t, 5)
+
+	// First page: newest 2 first, by creation time (ID) descending.
+	p1 := listSessions(t, s, "?limit=2")
+	if p1.Total != 5 {
+		t.Fatalf("total = %d, want 5", p1.Total)
+	}
+	if len(p1.Sessions) != 2 {
+		t.Fatalf("page size = %d, want 2", len(p1.Sessions))
+	}
+	if p1.Sessions[0].ID <= p1.Sessions[1].ID {
+		t.Fatalf("page not sorted descending: %s before %s", p1.Sessions[0].ID, p1.Sessions[1].ID)
+	}
+	if p1.NextCursor != p1.Sessions[1].ID {
+		t.Fatalf("next_cursor = %q, want last id %q", p1.NextCursor, p1.Sessions[1].ID)
+	}
+	// Newest session's stats: 1 user + 1 tool_call.
+	if got := p1.Sessions[0].MessageCount; got != 2 {
+		t.Fatalf("newest message_count = %d, want 2", got)
+	}
+	if got := p1.Sessions[0].ToolCalls; got != 1 {
+		t.Fatalf("newest tool_calls = %d, want 1", got)
+	}
+
+	// Walk the rest with the cursor; pages must not overlap or skip.
+	seen := map[string]bool{}
+	for _, s := range p1.Sessions {
+		seen[s.ID] = true
+	}
+	cursor := p1.NextCursor
+	for pages := 1; cursor != "" && pages < 10; pages++ {
+		page := listSessions(t, s, "?limit=2&cursor="+cursor)
+		if len(page.Sessions) == 0 {
+			t.Fatalf("non-empty next_cursor but empty page (cursor=%q)", cursor)
+		}
+		for _, item := range page.Sessions {
+			if seen[item.ID] {
+				t.Fatalf("duplicate session %s across pages", item.ID)
+			}
+			seen[item.ID] = true
+		}
+		cursor = page.NextCursor
+	}
+	if len(seen) != 5 {
+		t.Fatalf("walked %d unique sessions, want 5", len(seen))
+	}
+
+	// Last page has no next_cursor.
+	last := listSessions(t, s, "?limit=5")
+	if last.NextCursor != "" {
+		t.Fatalf("full-page fetch should have empty next_cursor, got %q", last.NextCursor)
+	}
+}
+
+func TestListSessionsEmpty(t *testing.T) {
+	s := newListSessionsServer(t, 0)
+	resp := listSessions(t, s, "")
+	if resp.Total != 0 || len(resp.Sessions) != 0 || resp.NextCursor != "" {
+		t.Fatalf("empty list = %+v, want zero sessions/total/cursor", resp)
 	}
 }

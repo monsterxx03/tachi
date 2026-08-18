@@ -117,6 +117,47 @@ func TestStore(t *testing.T) {
 	}
 }
 
+func TestCountMessages(t *testing.T) {
+	tmpDir := t.TempDir()
+	store, err := NewFileStore(tmpDir)
+	if err != nil {
+		t.Fatalf("NewStore failed: %v", err)
+	}
+	sess := &Session{ID: GenerateID(), Title: "count"}
+	if err := store.CreateSession(sess); err != nil {
+		t.Fatalf("CreateSession failed: %v", err)
+	}
+
+	// Empty session → zero counts.
+	if total, tools := store.CountMessages(sess.ID); total != 0 || tools != 0 {
+		t.Fatalf("empty session = %d/%d, want 0/0", total, tools)
+	}
+	// Unknown session → zero counts (best-effort).
+	if total, tools := store.CountMessages("does-not-exist"); total != 0 || tools != 0 {
+		t.Fatalf("missing session = %d/%d, want 0/0", total, tools)
+	}
+
+	msgs := []*Message{
+		{Type: MessageTypeUser, Content: "hello"},
+		{Type: MessageTypeAssistant, Content: "hi"},
+		{Type: MessageTypeToolCall, Name: "read_file"},
+		{Type: MessageTypeToolResult, Result: `{"type":"tool_call"} in content`},
+	}
+	for _, m := range msgs {
+		if err := store.AppendMessage(sess.ID, m); err != nil {
+			t.Fatalf("AppendMessage failed: %v", err)
+		}
+	}
+
+	total, tools := store.CountMessages(sess.ID)
+	if total != len(msgs) {
+		t.Fatalf("total = %d, want %d", total, len(msgs))
+	}
+	if tools != 1 {
+		t.Fatalf("tool_calls = %d, want 1 (only the real tool_call message)", tools)
+	}
+}
+
 func TestStoreAPIRequests(t *testing.T) {
 	tmpDir := t.TempDir()
 	store, err := NewFileStore(tmpDir)

@@ -12,8 +12,8 @@ import type {
   Message,
   OneOffEvents,
   SessionDetail,
+  SessionListPage,
   SessionMeta,
-  SessionSummaryItem,
   UsageSummary,
 } from '../types/api'
 
@@ -85,8 +85,13 @@ async function request<T>(path: string, opts: RequestOptions = {}): Promise<T> {
 // ── typed endpoints ────────────────────────────────────────────────────────
 
 export const api = {
-  listSessions: () =>
-    request<{ sessions: SessionSummaryItem[] }>('/api/sessions'),
+  listSessions: (params?: { limit?: number; cursor?: string }) => {
+    const q = new URLSearchParams()
+    if (params?.limit != null) q.set('limit', String(params.limit))
+    if (params?.cursor) q.set('cursor', params.cursor)
+    const qs = q.toString()
+    return request<SessionListPage>(`/api/sessions${qs ? `?${qs}` : ''}`)
+  },
 
   getSession: (id: string) =>
     request<SessionDetail>(`/api/sessions/${encodeURIComponent(id)}`),

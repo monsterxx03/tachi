@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,25 +82,79 @@ type sessionsListItem struct {
 	Calls          int       `json:"calls"`
 }
 
+// listSessionsPageSize is the default page size for GET /api/sessions;
+// callers pass ?limit= to override (capped at listSessionsPageSizeMax).
+const (
+	listSessionsPageSize    = 50
+	listSessionsPageSizeMax = 200
+)
+
+// handleListSessions returns sessions sorted by creation time descending —
+// session IDs embed their creation timestamp (YYYY-MM-DD-HHMMSS-uuid), so
+// lexicographic ID order IS chronological order and the last returned ID
+// works as a stable keyset cursor.
+//
+// Query params:
+//   - limit: page size (default 50, max 200). Only the sessions on the
+//     current page get their per-session stats computed (streaming message
+//     count, oneoff glob, usage lookup) — lightweight callers (e.g. the
+//     overview page's "recent sessions") pass a small limit instead of
+//     paying for every session on disk.
+//   - cursor: the ID of the last session of the previous page (exclusive);
+//     omit for the first page.
+//
+// Response: {"sessions": [...], "total": N, "next_cursor": "<id>"} —
+// next_cursor is empty when there are no more pages.
 func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
+	limit := listSessionsPageSize
+	if v := r.URL.Query().Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = min(n, listSessionsPageSizeMax)
+		}
+	}
+	cursor := r.URL.Query().Get("cursor")
+
 	sessions, err := s.Store.ListSessions()
 	if err != nil {
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("list sessions: %v", err))
 		return
 	}
+	// Creation time descending = ID descending (IDs are time-prefixed).
 	slices.SortFunc(sessions, func(a, b *session.Session) int {
-		return b.UpdatedAt.Compare(a.UpdatedAt)
+		return strings.Compare(b.ID, a.ID)
 	})
 
-	items := make([]sessionsListItem, 0, len(sessions))
-	for _, sess := range sessions {
-		msgs, _ := s.Store.LoadMessages(sess.ID)
-		toolCalls := 0
-		for i := range msgs {
-			if msgs[i].Type == session.MessageTypeToolCall {
-				toolCalls++
+	start := 0
+	if cursor != "" {
+		for i, sess := range sessions {
+			if sess.ID == cursor {
+				start = i + 1
+				break
 			}
 		}
+	}
+	end := min(start+limit, len(sessions))
+
+	nextCursor := ""
+	if end < len(sessions) && end > 0 {
+		nextCursor = sessions[end-1].ID
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"sessions":    s.buildSessionsListItems(sessions[start:end]),
+		"total":       len(sessions),
+		"next_cursor": nextCursor,
+	})
+}
+
+// buildSessionsListItems computes the compact list row for each session:
+// message/tool counts from a streaming scan (never a full unmarshal), oneoff
+// count from the dir glob, cost from the usage ledger. Only called for the
+// sessions on the current page.
+func (s *Server) buildSessionsListItems(sessions []*session.Session) []sessionsListItem {
+	items := make([]sessionsListItem, 0, len(sessions))
+	for _, sess := range sessions {
+		msgCount, toolCalls := s.Store.CountMessages(sess.ID)
 		oneoffCount := 0
 		if names, err := filepath.Glob(filepath.Join(s.sessionOneOffDir(sess.ID), "*.jsonl")); err == nil {
 			oneoffCount = len(names)
@@ -113,7 +168,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			WorkingDir:     sess.WorkingDir,
 			CreatedAt:      sess.CreatedAt,
 			UpdatedAt:      sess.UpdatedAt,
-			MessageCount:   len(msgs),
+			MessageCount:   msgCount,
 			ToolCalls:      toolCalls,
 			OneOffCount:    oneoffCount,
 			CompactedChild: sess.CompactedChildID,
@@ -121,8 +176,7 @@ func (s *Server) handleListSessions(w http.ResponseWriter, r *http.Request) {
 			Calls:          u.TotalCalls,
 		})
 	}
-
-	writeJSON(w, http.StatusOK, map[string]any{"sessions": items})
+	return items
 }
 
 // ── GET /api/sessions/{id} ─────────────────────────────────────────────────

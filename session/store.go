@@ -2,6 +2,7 @@ package session
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -135,6 +136,39 @@ func (s *FileStore) LoadMessages(id string) ([]Message, error) {
 	}
 
 	return messages, nil
+}
+
+// CountMessages streams a session's messages.jsonl and returns the total
+// message count plus the number of tool_call messages — the two numbers the
+// session-list UI needs. Unlike LoadMessages it never unmarshals full
+// messages (a single huge tool result can be megabytes), so it stays cheap
+// for large histories and is safe to call per list page.
+//
+// The type field is always the first JSON key of a serialized Message
+// (struct field order), so a line-level prefix check is exact — no
+// false positives from content text. Best-effort: malformed or unreadable
+// lines just stop the scan early with what was counted so far.
+func (s *FileStore) CountMessages(id string) (total, toolCalls int) {
+	f, err := os.Open(s.messagesPath(id))
+	if err != nil {
+		return 0, 0
+	}
+	defer f.Close()
+
+	const toolCallPrefix = `{"type":"tool_call"`
+	scanner := bufio.NewScanner(f)
+	scanner.Buffer(make([]byte, 0, 64*1024), 10*1024*1024)
+	for scanner.Scan() {
+		line := scanner.Bytes()
+		if len(line) == 0 {
+			continue
+		}
+		total++
+		if bytes.HasPrefix(line, []byte(toolCallPrefix)) {
+			toolCalls++
+		}
+	}
+	return total, toolCalls
 }
 
 // AppendAPIRequest appends one API request record to api_requests.jsonl.

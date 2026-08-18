@@ -4,6 +4,7 @@ import { Link, useParams } from 'react-router-dom'
 import { api } from '../../api/client'
 import type { AuthReporter } from '../../App'
 import { useApi } from '../../lib/useApi'
+import { SESSION_PAGE_SIZE, useSessionList } from '../../lib/useSessionList'
 import { num, shortTime, yuan } from '../../lib/format'
 import { Badge, Empty } from '../../components/ui'
 import { RequestGroup } from './RequestGroup'
@@ -394,7 +395,7 @@ function PreludeReminder({ m }: { m: Message }) {
 export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
   const { id = '' } = useParams()
   const detail = useApi(() => api.getSession(id), [id], onAuthError)
-  const sessions = useApi(() => api.listSessions(), [], onAuthError)
+  const sessionList = useSessionList(SESSION_PAGE_SIZE, onAuthError)
   const [tab, setTab] = useState<'messages' | 'oneoffs'>('messages')
 
   // Build the turn → request → step hierarchy once loaded.
@@ -413,13 +414,13 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
     return map
   }, [detail.data])
 
-  if (detail.loading || sessions.loading) {
+  if (detail.loading || sessionList.loading) {
     return <div className="h-full flex items-center justify-center text-sm text-inkdim">加载会话…</div>
   }
-  if (detail.error || sessions.error) {
+  if (detail.error || sessionList.error) {
     return (
       <div className="p-6">
-        <div className="text-sm text-danger">{detail.error ?? sessions.error}</div>
+        <div className="text-sm text-danger">{detail.error ?? sessionList.error}</div>
         <Link to="/" className="btn mt-3 inline-block">返回</Link>
       </div>
     )
@@ -438,12 +439,28 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
           />
         </div>
         <div className="text-[11px] text-muted px-3 pb-1">
-          {sessions.data!.sessions.length} 个会话
+          {sessionList.total} 个会话
         </div>
-        <div className="flex-1 overflow-y-auto px-2">
-          {sessions.data!.sessions.map((s) => (
+        <div ref={sessionList.containerRef} className="flex-1 overflow-y-auto px-2">
+          {sessionList.sessions.map((s) => (
             <SessionRow key={s.id} s={s} active={s.id === id} />
           ))}
+          {/* 滚动加载哨兵 */}
+          <div ref={sessionList.sentinelRef} />
+          {sessionList.loadingMore && (
+            <div className="py-2 text-center text-[11px] text-muted">加载中…</div>
+          )}
+          {sessionList.loadMoreError && (
+            <div className="py-2 text-center text-[11px]">
+              <span className="text-danger">加载失败</span>{' '}
+              <button className="btn" onClick={sessionList.loadMore}>重试</button>
+            </div>
+          )}
+          {!sessionList.hasMore && sessionList.total > 0 && (
+            <div className="py-2 text-center text-[11px] text-muted">
+              已加载全部 {sessionList.total} 个会话
+            </div>
+          )}
         </div>
       </div>
 

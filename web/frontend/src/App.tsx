@@ -61,9 +61,11 @@ export default function App() {
     return <ApiKeyGate onSuccess={onGated} />
   }
 
-  // scrollView wraps the scrollable page views (not the Inspector, which
-// manages its own internal scrolling as an h-full split view).
-function scrollView(node: ReactNode): ReactNode {
+  // scrollView wraps the scrollable page views (not the Inspector or the
+  // Sessions list, which manage their own scrolling: the Inspector is an
+  // h-full split view, and Sessions needs its container ref for infinite
+  // scroll).
+  function scrollView(node: ReactNode): ReactNode {
   return <div className="h-full overflow-y-auto">{node}</div>
 }
 
@@ -80,7 +82,7 @@ return (
               />
               <Route
                 path="/sessions"
-                element={scrollView(<Sessions onAuthError={reportAuth} />)}
+                element={<Sessions onAuthError={reportAuth} />}
               />
               <Route
                 path="/usage"

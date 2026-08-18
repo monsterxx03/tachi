@@ -69,6 +69,15 @@ export interface SessionSummaryItem {
   calls: number
 }
 
+/** One page of GET /api/sessions (keyset-paginated by session id). */
+export interface SessionListPage {
+  sessions: SessionSummaryItem[]
+  /** Total number of sessions on disk (not just this page). */
+  total: number
+  /** ID of the last session of this page; pass as cursor for the next page. */
+  next_cursor?: string
+}
+
 export interface APITool {
   name: string
   description: string
