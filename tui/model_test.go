@@ -860,8 +860,9 @@ func testModelWithAgent(t *testing.T, provider llm.Provider) *Model {
 
 // TestModel_CostForUsage_OpenAIFamily verifies the OpenAI-family billing
 // scale: input_tokens INCLUDE cache reads, so they are subtracted before
-// billing (mirroring the usage ledger). deepseek-v4-flash built-in pricing:
-// input 1.0, output 2.0, cache read 0.02 CNY per 1M tokens.
+// billing (mirroring the usage ledger). Flat pricing is pinned via cfg
+// (input 1.0, output 2.0, cache read 0.02 CNY per 1M tokens) so the test is
+// deterministic and independent of the built-in table's time-of-use bands.
 func TestModel_CostForUsage_OpenAIFamily(t *testing.T) {
 	provider, err := llm.NewProvider("openai", "sk", "", "deepseek-v4-flash")
 	if err != nil {
@@ -869,6 +870,22 @@ func TestModel_CostForUsage_OpenAIFamily(t *testing.T) {
 	}
 	m := testModelWithAgent(t, provider)
 	defer m.agent.Close()
+	m.cfg = &config.Config{
+		Providers: []config.ProviderConfig{
+			{
+				Name:  "openai",
+				Type:  "openai",
+				Model: "deepseek-v4-flash",
+				Spec: config.ModelSpec{
+					Pricing: &config.PricingConfig{
+						InputPrice:          new(1.0),
+						OutputPrice:         new(2.0),
+						CacheReadInputPrice: new(0.02),
+					},
+				},
+			},
+		},
+	}
 
 	cost := m.costForUsage(&llm.Usage{
 		InputTokens:          1_000_000,
@@ -946,8 +963,25 @@ func TestModel_AccumulateUsage_Cost(t *testing.T) {
 	}
 	m := testModelWithAgent(t, provider)
 	defer m.agent.Close()
+	// Pin flat pricing (1.0/2.0) via cfg for determinism — independent of the
+	// built-in table's time-of-use bands.
+	m.cfg = &config.Config{
+		Providers: []config.ProviderConfig{
+			{
+				Name:  "openai",
+				Type:  "openai",
+				Model: "deepseek-v4-flash",
+				Spec: config.ModelSpec{
+					Pricing: &config.PricingConfig{
+						InputPrice:  new(1.0),
+						OutputPrice: new(2.0),
+					},
+				},
+			},
+		},
+	}
 
-	// 1M input + 1M output → 1.0 + 2.0 = 3.0 (deepseek-v4-flash).
+	// 1M input + 1M output → 1.0 + 2.0 = 3.0.
 	m.accumulateUsage(&llm.Usage{InputTokens: 1_000_000, OutputTokens: 1_000_000})
 	if m.sessionCost != 3.0 {
 		t.Errorf("sessionCost after first call = %v, want 3.0", m.sessionCost)
