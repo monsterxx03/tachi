@@ -5,7 +5,6 @@ package web
 import (
 	"context"
 	"crypto/subtle"
-	"embed"
 	"io/fs"
 	"log"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
+	"github.com/monsterxx03/tachi/web/frontend"
 )
 
 // Server hosts the web console HTTP endpoints.
@@ -130,13 +130,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 
 // ── embedded static assets ────────────────────────────────────────────────
 
-//go:embed dist
-var distFS embed.FS
-
-// distSub returns the embedded frontend build as an fs.FS, or an empty FS
+// staticFS returns the embedded frontend build as an fs.FS, or an empty FS
 // when the dist directory is absent (no frontend build happened yet).
 func staticFS() fs.FS {
-	sub, err := fs.Sub(distFS, "dist")
+	sub, err := fs.Sub(frontend.DistFS, "dist")
 	if err != nil {
 		return emptyFS{}
 	}

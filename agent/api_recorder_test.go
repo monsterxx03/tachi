@@ -153,6 +153,7 @@ func TestRecordAPIRequestIntegration(t *testing.T) {
 		assert.Equal(t, "You are Tachi.", req.SystemPrompt, "call %d system prompt", i)
 		assert.Equal(t, "hello", req.UserPrompt, "call %d user prompt", i)
 		assert.Equal(t, i+1, req.Iteration, "call %d iteration", i)
+		assert.Equal(t, i+1, req.Seq, "call %d seq", i)
 		assert.Equal(t, "mock-model", req.Model, "call %d model", i)
 		assert.Equal(t, "deepseek-v4-flash", req.Provider, "call %d provider", i)
 		assert.Equal(t, "high", req.Thinking, "call %d thinking", i)
@@ -162,17 +163,92 @@ func TestRecordAPIRequestIntegration(t *testing.T) {
 	}
 
 	// Tool_call/tool_result messages carry the iteration of the request that
-	// produced them, linking execution back to the API call.
+	// produced them, linking execution back to the API call — and the same
+	// session-wide Seq as the api_requests record.
 	msgs, err := fake.LoadMessages()
 	require.NoError(t, err)
 	iterByType := map[session.MessageType]int{}
+	seqByType := map[session.MessageType]int{}
 	for _, m := range msgs {
 		if m.Type == session.MessageTypeToolCall || m.Type == session.MessageTypeToolResult {
 			iterByType[m.Type] = m.Iteration
+			seqByType[m.Type] = m.Seq
 		}
 	}
 	assert.Equal(t, 1, iterByType[session.MessageTypeToolCall], "tool_call belongs to iteration 1")
 	assert.Equal(t, 1, iterByType[session.MessageTypeToolResult], "tool_result belongs to iteration 1")
+	assert.Equal(t, 1, seqByType[session.MessageTypeToolCall], "tool_call shares seq 1 with its api request")
+	assert.Equal(t, 1, seqByType[session.MessageTypeToolResult], "tool_result shares seq 1 with its api request")
+}
+
+func TestRecordAPISeqContinuesAcrossTurns(t *testing.T) {
+	// Two turns, two API calls each (tool call then text answer). Iteration
+	// restarts at 1 per turn, but Seq must keep counting session-wide
+	// (1,2,3,4) so request-bound messages and api_requests records stay
+	// linkable across turns.
+	provider := &mockStreamProvider{
+		name: "openai",
+		sequences: [][]llm.StreamEvent{
+			toolCallSeq("Bash", "call-1", `{"command":"ls"}`), textSeq("a2"), // turn 1
+			toolCallSeq("Bash", "call-2", `{"command":"pwd"}`), textSeq("b2"), // turn 2
+		},
+	}
+
+	fake := &fakeSessionManager{}
+	fake.SetCurrent(&session.Session{ID: "api-rec-seq", Title: "pre-set"})
+
+	a := newTestAgent(t, provider, func(ag *AIAgent) {
+		ag.SetSessionManager(fake)
+	})
+	a.Config.ToolRegistry.Register(&stubTool{
+		name: "Bash",
+		desc: "Run a command",
+		props: map[string]agenttools.PropertySchema{
+			"command": {Type: "string", Description: "command to run"},
+		},
+		required: []string{"command"},
+		executeFn: func(ctx context.Context, args string) (string, error) {
+			return "ok", nil
+		},
+	})
+
+	// Turn 1: two calls.
+	ch := a.RunConversationStream(context.Background(), nil, "first", "You are Tachi.", llm.ChatOptions{MaxTokens: 1024})
+	result, _ := drainAgentEvents(ch)
+	require.NotNil(t, result)
+	require.NoError(t, result.Error)
+
+	// Turn 2: two more calls on the same session.
+	ch = a.RunConversationStream(context.Background(), nil, "second", "You are Tachi.", llm.ChatOptions{MaxTokens: 1024})
+	result, _ = drainAgentEvents(ch)
+	require.NotNil(t, result)
+	require.NoError(t, result.Error)
+
+	require.Len(t, fake.apiRequests, 4, "two API requests per turn")
+
+	// Iteration resets per turn; Seq keeps counting session-wide.
+	iters := make([]int, len(fake.apiRequests))
+	seqs := make([]int, len(fake.apiRequests))
+	for i, r := range fake.apiRequests {
+		iters[i] = r.Iteration
+		seqs[i] = r.Seq
+	}
+	assert.Equal(t, []int{1, 2, 1, 2}, iters, "iteration restarts at 1 each turn")
+	assert.Equal(t, []int{1, 2, 3, 4}, seqs, "seq is monotonic across turns")
+
+	// Request-bound messages carry the same Seq as their api_requests record:
+	// the first occurrence of iteration 1 belongs to turn 1 (seq 1), the
+	// second to turn 2 (seq 3) — Seq disambiguates the repeated iteration.
+	msgs, err := fake.LoadMessages()
+	require.NoError(t, err)
+	seqByIter := map[int][]int{} // iteration -> seqs of its assistant messages
+	for _, m := range msgs {
+		if m.Type == session.MessageTypeAssistant && m.Iteration > 0 {
+			seqByIter[m.Iteration] = append(seqByIter[m.Iteration], m.Seq)
+		}
+	}
+	assert.Equal(t, []int{1, 3}, seqByIter[1], "iteration 1 appears in turns 1 and 2")
+	assert.Equal(t, []int{2, 4}, seqByIter[2], "iteration 2 appears in turns 1 and 2")
 }
 
 func TestRecordAPIRequestSkippedForOneOff(t *testing.T) {

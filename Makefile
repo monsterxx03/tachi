@@ -7,12 +7,13 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -s -w -X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)
 NPM := npm --prefix web/frontend
 
-# Build the frontend into web/dist so it's embedded into the Go binary.
-web-build:
-	$(NPM) install && $(NPM) run build
 
 build: web-build
 	go build -trimpath -ldflags="$(LDFLAGS)" -o tachi .
+
+# Build the frontend into web/frontend/dist so it's embedded into the Go binary.
+web-build:
+	$(NPM) install && $(NPM) run build
 
 build-debug:
 	go build -ldflags="-X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)" -o tachi .

@@ -66,7 +66,13 @@ type Message struct {
 	SubagentID string      `json:"subagent_id,omitempty"` // shortID for SubAgent tool_result → subagent/<id>.jsonl
 	Usage      *Usage      `json:"usage,omitempty"`       // token usage from the LLM response that produced this message
 	Iteration  int         `json:"iteration,omitempty"`   // 1-based LLM API call that produced this message (0 = not request-bound)
-	Timestamp  time.Time   `json:"timestamp"`
+	// Seq is the session-wide request sequence number: monotonic across
+	// turns (unlike Iteration, which resets to 1 per turn). API-request-bound
+	// messages carry the same Seq as their api_requests.jsonl record, giving
+	// consumers a stable cross-turn link. 0 = not request-bound (user /
+	// reminder) or legacy data written before Seq existed.
+	Seq       int       `json:"seq,omitempty"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 // APITool is a tool definition as sent to the LLM in one API request.
@@ -84,10 +90,17 @@ type APITool struct {
 // report to show what the agent saw on each call.
 type APIRequest struct {
 	Timestamp time.Time `json:"timestamp"`
-	// Iteration is the 1-based API call sequence number within the session.
+	// Iteration is the 1-based API call sequence number within the turn that
+	// made this request (it restarts at 1 for every fresh user prompt).
 	// tool_call / tool_result messages carry the same number, linking each
 	// tool execution to the request that produced it.
 	Iteration int `json:"iteration,omitempty"`
+	// Seq is the session-wide request sequence number: monotonic across
+	// turns. Request-bound session messages (thinking / assistant /
+	// tool_call / tool_result) carry the same Seq, so consumers can link a
+	// request record to its messages even when Iteration repeats across
+	// turns. 0 = legacy record written before Seq existed.
+	Seq int `json:"seq,omitempty"`
 	// SystemPrompt is the system message content sent with this request.
 	SystemPrompt string `json:"system_prompt"`
 	// UserPrompt is the latest user (or steer) message content in the request

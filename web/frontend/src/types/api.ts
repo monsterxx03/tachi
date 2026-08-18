@@ -30,6 +30,9 @@ export interface Message {
   subagent_id?: string
   usage?: Usage
   iteration?: number
+  /** Session-wide request sequence: monotonic across turns, shared with the
+   *  matching api_requests record. Absent on user/reminder and legacy data. */
+  seq?: number
   duration_ms?: number
   timestamp: string
 }
@@ -75,6 +78,9 @@ export interface APITool {
 export interface APIRequest {
   timestamp: string
   iteration?: number
+  /** Session-wide request sequence: monotonic across turns, shared with the
+   *  matching request-bound messages. Absent on legacy data. */
+  seq?: number
   system_prompt: string
   user_prompt?: string
   model?: string

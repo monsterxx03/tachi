@@ -8,7 +8,7 @@ import type { Step } from './Inspector'
 const ICONS: Record<string, string> = {
   user: '👤',
   assistant: '💬',
-  thinking: '💭',
+  thinking: '🧠',
   tool_call: '🔧',
   tool_result: '📋',
   reminder: 'ℹ️',
@@ -17,11 +17,28 @@ const ICONS: Record<string, string> = {
 
 // ── one message ────────────────────────────────────────────────────────────
 
-function MessageEvent({ m }: { m: Message }) {
+function MessageEvent({
+  m,
+  toolCallIds,
+}: {
+  m: Message
+  /** Tool call IDs issued by this request — shown when an assistant message
+   *  has no text (a pure tool-call iteration would otherwise render blank). */
+  toolCallIds?: string[]
+}) {
   const isCall = m.type === 'tool_call'
   const hasCollapsible = isCall || m.type === 'tool_result'
   const isReminder = m.type === 'reminder'
   const [open, setOpen] = useState(isCall || isReminder ? false : hasCollapsible)
+
+  // Tool call IDs issued by this request, shown under assistant messages —
+  // whether or not the assistant also produced text.
+  const toolCallNote =
+    m.type === 'assistant' && toolCallIds && toolCallIds.length > 0 ? (
+      <div className="mt-1 text-[11px] text-muted mono">
+        🔧 发起工具调用 · {toolCallIds.join(' · ')}
+      </div>
+    ) : null
 
   return (
     <div className={`ev ev-${m.type}`}>
@@ -57,6 +74,7 @@ function MessageEvent({ m }: { m: Message }) {
             <div className="text-[11px] text-muted mono">
               {m.is_error ? '✗ error' : '✓ ok'}
               {m.name && ` · ${m.name}`}
+              {m.tool_call_id && ` · ${m.tool_call_id}`}
               {m.duration_ms !== undefined && <> · {durMs(m.duration_ms)}</>}
               {m.result ? ` · ${open ? '收起' : '展开结果'}` : ''}
             </div>
@@ -80,19 +98,23 @@ function MessageEvent({ m }: { m: Message }) {
                 </pre>
               )}
             </div>
-          ) : (
-            showableContent(m) && (
-              <div
-                className={`mt-1 text-[13.5px] leading-relaxed whitespace-pre-wrap break-words ${
-                  m.type === 'thinking'
-                    ? 'text-inkdim italic text-[12.5px]'
-                    : 'text-ink'
-                }`}
-              >
-                {truncate(m.content ?? '', 900)}
-              </div>
-            )
-          )}
+          ) : showableContent(m) ? (
+            <div
+              className={`mt-1 text-[13.5px] leading-relaxed whitespace-pre-wrap break-words ${
+                m.type === 'thinking'
+                  ? 'text-inkdim italic text-[12.5px]'
+                  : 'text-ink'
+              }`}
+            >
+              {truncate(m.content ?? '', 900)}
+              {toolCallNote}
+            </div>
+          ) : toolCallNote ? (
+            // Pure tool-call iteration: the assistant text is empty, but the
+            // request did issue tool calls — surface their IDs instead of a
+            // blank row.
+            toolCallNote
+          ) : null}
           {hasCollapsible && open && argsString(m) !== null && (
             <pre className="mt-1.5 bg-paper border border-line rounded p-2.5 mono text-xs text-inkdim whitespace-pre-wrap break-all max-h-[180px] overflow-auto">
               {argsString(m)}
@@ -148,9 +170,13 @@ export interface RequestGroupProps {
   cost: number
   inTokens?: number
   outTokens?: number
-  prompt?: string
   toolCount: number
   req?: APIRequest
+  /** Clean user input for this request, from messages.jsonl (no
+   *  system-reminder wrapper). Only present for requests that actually
+   *  carried new user input: the turn's first request (trigger message) or
+   *  one preceded by a steer / continuation. */
+  userPrompt?: string
   /** Non-step messages bound to this iteration (thinking / assistant / ...). */
   events: Message[]
   /** Ordered tool executions (tool_call + tool_result pairs). */
@@ -164,15 +190,21 @@ export function RequestGroup({
   cost,
   inTokens,
   outTokens,
-  prompt,
   toolCount,
   req,
+  userPrompt,
   events,
   steps,
   defaultCollapsed = true,
 }: RequestGroupProps) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   const [payloadOpen, setPayloadOpen] = useState(false)
+
+  // Tool call IDs issued by this request (from its steps), used to fill in
+  // blank assistant rows on pure tool-call iterations.
+  const toolCallIds = steps
+    .map((s) => s.call.tool_call_id)
+    .filter((id): id is string => Boolean(id))
 
   return (
     <div className="border border-line rounded-card bg-card shadow-card mb-4 max-w-[900px] overflow-hidden">
@@ -200,9 +232,7 @@ export function RequestGroup({
             <span className="text-gold font-semibold">{yuan(cost)}</span>
           </span>
         )}
-        <span className="text-xs text-muted flex-1 min-w-0 truncate">
-          {prompt ?? ''}
-        </span>
+        <span className="flex-1" />
         {toolCount > 0 && (
           <span className="text-[10px] text-linkblue bg-linksoft rounded-full px-2 py-0.5 whitespace-nowrap border border-line">
             🔧 {toolCount} tools
@@ -233,15 +263,18 @@ export function RequestGroup({
 
                 {payloadOpen && (
                   <div className="px-3 pb-2.5">
-                    {/* User prompt */}
-                    {req.user_prompt && (
+                    {/* User prompt — only when this request carried new user
+                        input (turn trigger / steer / continuation), from the
+                        clean messages.jsonl copy (no system-reminder
+                        wrapper). Intermediate tool-loop requests have none. */}
+                    {userPrompt && (
                       <>
                         <div className="border-t border-dotted border-line" />
                         <div className="flex items-center gap-2 px-1 py-2 text-xs text-inkdim">
                           <span className="font-semibold">User prompt</span>
                         </div>
                         <pre className="pl-2 border-l-[3px] border-linkblue rounded-r bg-card p-2.5 mono text-xs text-inkdim whitespace-pre-wrap break-all">
-                          {req.user_prompt}
+                          {userPrompt}
                         </pre>
                       </>
                     )}
@@ -276,7 +309,7 @@ export function RequestGroup({
           )}
 
           {events.map((m, i) => (
-            <MessageEvent key={i} m={m} />
+            <MessageEvent key={i} m={m} toolCallIds={toolCallIds} />
           ))}
           {steps.map((s, i) => (
             <StepBlock key={i} step={s} />
@@ -309,6 +342,7 @@ function StepBlock({ step }: { step: Step }) {
                   ? '✗ error'
                   : '✓ ok'
                 : '… 执行中'}
+              {call.tool_call_id && <> · {call.tool_call_id}</>}
               {call.duration_ms !== undefined && <> · {durMs(call.duration_ms)}</>}
               {(argsString(call) || result?.result) && (
                 <> · {open ? '收起' : '展开'}</>

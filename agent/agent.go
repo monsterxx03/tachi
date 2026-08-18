@@ -599,6 +599,44 @@ func (a *AIAgent) recordSession(rs *RunState, msg *session.Message) {
 	}
 }
 
+// sessionSeqBase returns the highest request Seq recorded so far in the
+// current session (scanning both messages and api_requests). A new turn's
+// requests continue numbering from here, keeping Seq monotonic across turns
+// and process restarts (it is derived from disk, not in-memory state).
+// Returns 0 when no session is active or nothing is recorded yet.
+// Best-effort: a read failure is logged and treated as 0.
+func (a *AIAgent) sessionSeqBase() int {
+	sm := a.Config.SessionManager
+	if sm == nil {
+		return 0
+	}
+	cur := sm.Current()
+	if cur == nil {
+		return 0
+	}
+
+	base := 0
+	if msgs, err := sm.LoadMessages(); err == nil {
+		for i := range msgs {
+			if msgs[i].Seq > base {
+				base = msgs[i].Seq
+			}
+		}
+	} else {
+		a.Config.Logger.Warn(context.Background(), "Agent: sessionSeqBase: load messages failed", err)
+	}
+	if reqs, err := sm.LoadAPIRequests(cur.ID); err == nil {
+		for i := range reqs {
+			if reqs[i].Seq > base {
+				base = reqs[i].Seq
+			}
+		}
+	} else {
+		a.Config.Logger.Warn(context.Background(), "Agent: sessionSeqBase: load api requests failed", err)
+	}
+	return base
+}
+
 // --- Tool Registry ---
 
 func (a *AIAgent) RegisterTools() {

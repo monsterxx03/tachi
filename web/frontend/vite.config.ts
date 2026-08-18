@@ -15,9 +15,9 @@ export default defineConfig({
     },
   },
   build: {
-    // Output straight into web/dist so the Go binary embeds it via
-    // //go:embed dist (see web/server.go).
-    outDir: '../dist',
+    // Output into web/frontend/dist so the Go binary embeds it via
+    // //go:embed dist (see web/frontend/embed.go).
+    outDir: 'dist',
     emptyOutDir: true,
   },
 })

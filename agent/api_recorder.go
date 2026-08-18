@@ -27,6 +27,7 @@ func (a *AIAgent) recordAPIRequest(ctx context.Context, rs *RunState, provider l
 	req := &session.APIRequest{
 		Timestamp:    time.Now(),
 		Iteration:    rs.APICalls,
+		Seq:          rs.Seq, // session-wide request number shared with request-bound messages
 		SystemPrompt: systemPrompt,
 		UserPrompt:   extractUserPrompt(rs.Messages),
 		Model:        requestModel(provider),

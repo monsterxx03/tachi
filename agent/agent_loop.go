@@ -172,6 +172,7 @@ func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usag
 			Content:   tb.Thinking,
 			Signature: tb.Signature,
 			Iteration: rs.APICalls, // the API call that produced this thinking
+			Seq:       rs.Seq,      // session-wide request number (same as api_requests record)
 		})
 	}
 	if text != "" || usage != nil {
@@ -189,6 +190,7 @@ func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usag
 			Content:   text,
 			Usage:     su,
 			Iteration: rs.APICalls, // the API call that produced this text
+			Seq:       rs.Seq,      // session-wide request number (same as api_requests record)
 		})
 	}
 }
@@ -373,6 +375,12 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		a.mu.Unlock()
 
 		a.ensureSessionAndRecordUser(ctx, rs, userMessage, reminderBlock, ch)
+
+		// Continue the session-wide request counter from what's already on
+		// disk (messages or api_requests), so Seq stays monotonic across
+		// turns and process restarts. Must run after ensureSessionAndRecordUser
+		// (which may create the session) and before the loop's first API call.
+		rs.Seq = a.sessionSeqBase()
 
 		// Fire turn_start hook before entering agent loop
 		a.dispatchEvent(ctx, hooks.EventTurnStart, hooks.Payload{
@@ -649,6 +657,11 @@ func (a *AIAgent) runLoop(
 		}
 
 		rs.APICalls++
+		// Seq advances in lockstep with APICalls: every API call is one
+		// session-wide request, whatever its per-turn iteration number.
+		// One-off runs leave the base at 0, so their sidecar transcripts
+		// number requests 1, 2, 3, ... from the run's start.
+		rs.Seq++
 
 		// Rebuild tool schemas each iteration. When ToolSearch is active,
 		// newly discovered MCP tools are added to the list, enabling the LLM
@@ -926,9 +939,14 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 		rs.append(msg)
 		a.Config.Logger.Info(ctx, "Agent: steer: injected RoleSteer msg", "steerText", strutil.Truncate(steerInput.Text, 80))
 		if steerInput.Text != "" {
+			// The steer message is appended to rs.Messages, so it becomes the
+			// next call's input — tag it with the upcoming request's
+			// iteration/seq to keep it inside that request group.
 			a.recordSession(rs, &session.Message{
-				Type:    session.MessageTypeUser,
-				Content: steerInput.Text,
+				Type:      session.MessageTypeUser,
+				Content:   steerInput.Text,
+				Iteration: rs.APICalls + 1,
+				Seq:       rs.Seq + 1,
 			})
 		}
 		return outcomeContinue
@@ -960,9 +978,16 @@ func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulato
 	if block := a.collectReminders(ctx, rctx); block != "" {
 		rs.append(llm.Message{Role: "user", Content: block})
 		a.Config.Logger.Info(ctx, "Agent: loop reminder injected", "block", strutil.Truncate(block, 200))
+		// The reminder is appended to rs.Messages as a user message, so it
+		// feeds the NEXT API call — tag it with the upcoming request's
+		// iteration/seq (the loop increments both right before that call).
+		// This keeps the reminder inside the request group it affects
+		// instead of the turn's postlude.
 		a.recordSession(rs, &session.Message{
-			Type:    session.MessageTypeReminder,
-			Content: block,
+			Type:      session.MessageTypeReminder,
+			Content:   block,
+			Iteration: rs.APICalls + 1,
+			Seq:       rs.Seq + 1,
 		})
 	}
 }
@@ -1051,16 +1076,22 @@ func (a *AIAgent) appendLengthContinuation(ctx context.Context, acc *streamAccum
 	rctx := a.buildReminderContext(false, false)
 	rctx.CurrentPrompt = continuationText
 	reminderBlock := a.collectReminders(ctx, rctx)
-	// Record reminder before user message so session file order matches LLM input
+	// Record reminder before user message so session file order matches LLM
+	// input. Both feed the NEXT API call, so they carry the upcoming
+	// request's iteration/seq (the loop increments them before that call).
 	if reminderBlock != "" {
 		a.recordSession(rs, &session.Message{
-			Type:    session.MessageTypeReminder,
-			Content: reminderBlock,
+			Type:      session.MessageTypeReminder,
+			Content:   reminderBlock,
+			Iteration: rs.APICalls + 1,
+			Seq:       rs.Seq + 1,
 		})
 	}
 	a.recordSession(rs, &session.Message{
-		Type:    session.MessageTypeUser,
-		Content: continuationText,
+		Type:      session.MessageTypeUser,
+		Content:   continuationText,
+		Iteration: rs.APICalls + 1,
+		Seq:       rs.Seq + 1,
 	})
 
 	wrappedContinuation := continuationText

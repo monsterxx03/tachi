@@ -263,7 +263,7 @@ type PermissionState struct {
 //     mu (its own writes are already visible to it); mu exists purely to
 //     synchronize cross-goroutine readers via snapshotMessages.
 //
-//  2. Loop goroutine only (no guard): StartTime, TraceID, APICalls,
+//  2. Loop goroutine only (no guard): StartTime, TraceID, APICalls, Seq,
 //     LengthRetries, Budget, SkipSessionWrites, OneoffRec — written at run
 //     start or by the loop itself; every access happens on the run goroutine.
 //
@@ -282,9 +282,15 @@ type RunState struct {
 	Messages []llm.Message
 
 	// ── 仅 run goroutine 访问（无需锁，归属此处仅为聚合）──
-	StartTime         time.Time
-	TraceID           string
-	APICalls          int
+	StartTime time.Time
+	TraceID   string
+	APICalls  int
+	// Seq is the session-wide request sequence number. Initialized at turn
+	// start from the current session's recorded maximum (sessionSeqBase),
+	// then incremented in lockstep with APICalls in runLoop — so Seq and
+	// APICalls always stay 1:1. One-off runs (SkipSessionWrites) leave Seq
+	// at 0: their sidecar transcripts start numbering from 1.
+	Seq               int
 	LengthRetries     int
 	Budget            *IterationBudget
 	SkipSessionWrites bool

@@ -20,6 +20,13 @@ import type { APIRequest, Message, SessionSummaryItem } from '../../types/api'
 // message whose iteration drops (previous set iteration > current) starts a
 // new turn. Steering (a mid-turn injected user prompt) does not reset the
 // counter and stays within the current turn.
+//
+// User messages themselves carry no iteration (the backend records them
+// without one), so they can't trigger a boundary directly. They are buffered
+// as "pending" until the next iteration-bearing message arrives: if that
+// message starts a new turn (iteration dropped), the buffered user becomes
+// the new turn's title; otherwise (steer / trailing reminder) it stays at
+// the end of the current turn.
 
 export interface Step {
   call: Message
@@ -28,7 +35,9 @@ export interface Step {
 
 export interface RequestView {
   iteration: number
-  req?: APIRequest
+  /** Session-wide request seq (from the messages of this request), used to
+   *  look up the matching api_requests record across turns. */
+  seq?: number
   events: Message[] // non-step messages bound to this iteration (thinking/assistant)
   steps: Step[]
 }
@@ -53,6 +62,15 @@ function buildTurns(messages: Message[]): TurnView[] {
   let prevIter: number | undefined
   let curTurn: TurnView | null = null
   let curReq: RequestView | null = null
+  // Iteration-less messages (user / reminder) buffered until the next
+  // iteration-bearing message decides which turn they belong to.
+  let pending: Message[] = []
+
+  const openTurn = (): TurnView => {
+    const t: TurnView = { id: turns.length, requests: [], prelude: [], postlude: [] }
+    turns.push(t)
+    return t
+  }
 
   const closeReq = () => {
     if (curReq) {
@@ -61,46 +79,107 @@ function buildTurns(messages: Message[]): TurnView[] {
     }
   }
 
+  // Whether the current turn already holds request content (an open request
+  // counts too — requests are closed only when the iteration changes).
+  const turnHasContent = () => curReq !== null || curTurn!.requests.length > 0
+
+  // Assign buffered iteration-less messages to curTurn: a user at the head
+  // of an empty turn becomes the turn title; anything else is a prelude
+  // (leading reminder) or postlude (trailing reminder / steer).
+  const flushPending = () => {
+    for (const m of pending) {
+      if (m.type === 'user') {
+        if (!turnHasContent() && !curTurn!.user) curTurn!.user = m
+        else curTurn!.postlude.push(m)
+      } else {
+        if (!turnHasContent()) curTurn!.prelude.push(m)
+        else curTurn!.postlude.push(m)
+      }
+    }
+    pending = []
+  }
+
   for (const m of messages) {
     const it = m.iteration ?? 0
     const newTurn = it !== 0 && startNewTurn(prevIter, it)
 
-    if (newTurn || curTurn === null) {
+    if (it === 0) {
+      // iteration-less message: reminder / user / steer.
+      if (curTurn === null) curTurn = openTurn()
+      if (!turnHasContent() && pending.length === 0) {
+        // Turn head: assign immediately (reminder precedes user here).
+        if (m.type === 'user') {
+          if (!curTurn.user) curTurn.user = m
+          else curTurn.postlude.push(m)
+        } else {
+          curTurn.prelude.push(m)
+        }
+      } else {
+        // Mid-turn or trailing: defer until the next iteration decides.
+        pending.push(m)
+      }
+      continue
+    }
+
+    // An iteration-bearing message: first settle any buffered messages.
+    // A buffered user preceding a dropped-or-flat iteration (it <= prev)
+    // was the next turn's trigger, so open that turn before flushing. Flat
+    // (1 → 1) can't be caught by startNewTurn's strict drop, but the
+    // pending user makes the boundary unambiguous — a steer always keeps
+    // the counter rising (APICalls increments monotonically).
+    let openedForPending = false
+    if (pending.length > 0) {
+      openedForPending = prevIter !== undefined && it <= prevIter && turnHasContent()
+      if (openedForPending) {
+        closeReq()
+        curTurn = openTurn()
+      }
+      flushPending()
+    }
+
+    if (newTurn && !openedForPending) {
       closeReq()
-      curTurn = { id: turns.length, requests: [], prelude: [], postlude: [] }
-      turns.push(curTurn)
+      curTurn = openTurn()
       curReq = null
     }
 
-    if (it === 0) {
-      // iteration-less message: reminder / user / steer. Attach to the turn.
-      if (m.type === 'user' && curTurn.requests.length === 0) {
-        curTurn.user = m
+    prevIter = it
+    if (curReq && curReq.iteration !== it) {
+      closeReq()
+    }
+    if (!curReq) {
+      // Seq comes from the request-bound messages themselves: all messages
+      // of one API call share the same session-wide seq (new data only;
+      // legacy messages have none).
+      curReq = { iteration: it, seq: m.seq, events: [], steps: [] }
+    }
+    if (m.type === 'tool_call') {
+      curReq.steps.push({ call: m })
+    } else if (m.type === 'tool_result') {
+      // Attach to the unpaired step with the same tool_call_id — the only
+      // reliable key when the same tool runs in parallel (name alone would
+      // mispair, leaving steps stuck at "… 执行中"). Legacy data without
+      // ids falls back to the previous last-step name match.
+      const byId = curReq.steps.find(
+        (s) => !s.result && s.call.tool_call_id && s.call.tool_call_id === m.tool_call_id,
+      )
+      if (byId) {
+        byId.result = m
       } else {
-        // steer or trailing reminder — keep in postlude (or prelude if first)
-        if (curTurn.requests.length === 0) curTurn.prelude.push(m)
-        else curTurn.postlude.push(m)
-      }
-    } else {
-      prevIter = it
-      if (curReq && curReq.iteration !== it) {
-        closeReq()
-      }
-      if (!curReq) {
-        curReq = { iteration: it, events: [], steps: [] }
-      }
-      if (m.type === 'tool_call') {
-        // try to pair with an immediately following tool_result of same name
-        curReq.steps.push({ call: m })
-      } else if (m.type === 'tool_result') {
-        // attach to the last unpaired step with matching name
         const last = curReq.steps[curReq.steps.length - 1]
         if (last && last.call.name === m.name && !last.result) last.result = m
         else curReq.events.push(m)
-      } else {
-        curReq.events.push(m)
       }
+    } else {
+      curReq.events.push(m)
     }
+  }
+
+  // Stream ended with buffered iteration-less messages (e.g. a user prompt
+  // whose turn has not produced output yet): keep them at the end of the
+  // current turn.
+  if (pending.length > 0 && curTurn) {
+    flushPending()
   }
   closeReq()
   return turns
@@ -136,12 +215,23 @@ function requestTokens(events: Message[]) {
 // triggering user prompt + request/step/cost summary; inside, each API
 // request renders as a RequestGroup with its steps.
 
+// resolveReq finds the APIRequest record for one request view via the
+// session-wide seq (unique across turns). Records written before seq existed
+// have no link and yield undefined — the request details are simply not
+// shown for such legacy data.
+function resolveReq(
+  rv: RequestView,
+  reqBySeq: Record<number, APIRequest>,
+): APIRequest | undefined {
+  return rv.seq !== undefined ? reqBySeq[rv.seq] : undefined
+}
+
 function TurnBlock({
   turn,
-  reqByIter,
+  reqBySeq,
 }: {
   turn: TurnView
-  reqByIter: Record<number, APIRequest>
+  reqBySeq: Record<number, APIRequest>
 }) {
   const [open, setOpen] = useState(true)
 
@@ -153,7 +243,7 @@ function TurnBlock({
   const lastReq = turn.requests[turn.requests.length - 1]
   const prompt =
     turn.user?.content ||
-    lastReq?.req?.user_prompt ||
+    (lastReq ? resolveReq(lastReq, reqBySeq)?.user_prompt : undefined) ||
     turn.requests[0]?.events.find((m) => m.type === 'user')?.content ||
     undefined
   const startTime = turn.user?.timestamp || turn.prelude[0]?.timestamp
@@ -182,7 +272,7 @@ function TurnBlock({
           {prompt && (
             <span className="mr-2 text-muted">«</span>
           )}
-          {prompt || '(无触发消息)'}
+          {prompt ? truncate(prompt, 80) : '(无触发消息)'}
           {prompt && <span className="ml-2 text-muted">»</span>}
         </span>
         <span className="text-[10px] text-inkdim bg-paper2 border border-line rounded-full px-2 py-0.5 whitespace-nowrap mono">
@@ -202,7 +292,8 @@ function TurnBlock({
 
       {open && (
         <div className="border-t border-line p-3">
-          {/* prelude (leading reminders) */}
+          {/* prelude (leading reminders) — these system reminders were sent
+              together with the user prompt, so the full prompt follows them */}
           {turn.prelude.length > 0 && (
             <div className="mb-2 space-y-1">
               {turn.prelude.map((m, i) => (
@@ -211,10 +302,33 @@ function TurnBlock({
             </div>
           )}
 
+          {/* full user prompt (trigger message) */}
+          {turn.user && (
+            <div className="mb-2 flex items-start gap-2 rounded border border-line bg-linksoft px-3 py-2">
+              <span className="shrink-0 text-[13px] pt-0.5">👤</span>
+              <div className="min-w-0 flex-1">
+                <div className="text-[13px] leading-relaxed text-ink whitespace-pre-wrap break-words">
+                  {turn.user.content}
+                </div>
+                <div className="mt-0.5 text-[11px] text-muted mono">
+                  {(turn.user.content ?? '').length.toLocaleString()} chars
+                </div>
+              </div>
+            </div>
+          )}
+
           <div className="space-y-2">
             {turn.requests.map((rv) => {
-              const req = rv.req ?? reqByIter[rv.iteration]
+              const req = resolveReq(rv, reqBySeq)
               const { inTok, outTok } = requestTokens(rv.events)
+              // Clean user input for this request, only when this request
+              // actually carried new user input: a steer / continuation
+              // bound to it (they carry iteration now), or the turn's
+              // trigger message on the first request. Intermediate tool
+              // loops have no user prompt — and shouldn't show one.
+              const userPrompt =
+                rv.events.filter((m) => m.type === 'user').pop()?.content ??
+                (rv.iteration === 1 ? turn.user?.content : undefined)
               return (
                 <RequestGroup
                   key={rv.iteration}
@@ -223,9 +337,9 @@ function TurnBlock({
                   cost={requestCost(rv.events)}
                   inTokens={inTok}
                   outTokens={outTok}
-                  prompt={req?.user_prompt ? truncate(req.user_prompt, 80) : undefined}
                   toolCount={req?.tools?.length ?? 0}
                   req={req}
+                  userPrompt={userPrompt}
                   events={rv.events}
                   steps={rv.steps}
                 />
@@ -289,12 +403,12 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
     return buildTurns(detail.data.messages)
   }, [detail.data])
 
-  // Map iteration → API request (for system prompt / tools in the request).
-  // Iteration numbers restart at 1 per turn.
-  const reqByIter: Record<number, APIRequest> = useMemo(() => {
+  // Session-wide seq → APIRequest (unique across turns, unlike the per-turn
+  // iteration). Records without seq (legacy data) simply don't resolve.
+  const reqBySeq: Record<number, APIRequest> = useMemo(() => {
     const map: Record<number, APIRequest> = {}
     for (const req of detail.data?.api_requests ?? []) {
-      if (req.iteration) map[req.iteration] = req
+      if (req.seq) map[req.seq] = req
     }
     return map
   }, [detail.data])
@@ -388,7 +502,7 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
                 <TurnBlock
                   key={turn.id}
                   turn={turn}
-                  reqByIter={reqByIter}
+                  reqBySeq={reqBySeq}
                 />
               ))}
             </div>
