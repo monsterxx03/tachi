@@ -65,6 +65,8 @@ func TestModelContextWindow_Others(t *testing.T) {
 		{"qwen-plus", 1_000_000},
 		{"glm-4", 200_000},
 		{"minimax-m2", 204_800},
+		{"minimax-m2.7", 204_800},
+		{"minimax-m3", 1_000_000},
 		{"kimi-v2", 256_000},
 		{"deepseek-v4-flash", 1_000_000},
 		{"deepseek-chat", 1_000_000},
@@ -105,7 +107,7 @@ func TestModelSupportsVision(t *testing.T) {
 		"gemini-2.5-pro", "gemini-1.5-flash",
 		"mimo-2.5", "mimo-vl-7b", "mimo-7b",
 		"kimi-k3", "kimi-k2", "kimi-latest",
-		"minimax-m2", "minimax-abab6.5s",
+		"minimax-m2", "minimax-m2.7", "minimax-m3", "minimax-abab6.5s",
 	}
 	for _, m := range visionModels {
 		t.Run("vision_"+m, func(t *testing.T) {

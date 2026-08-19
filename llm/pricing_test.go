@@ -250,6 +250,74 @@ func TestCacheReadCreationPrice(t *testing.T) {
 	}
 }
 
+// TestGetBuiltinModelPrice_MiniMax pins the MiniMax paygo prices from
+// https://platform.minimaxi.com/docs/guides/pricing-paygo . M3 uses the
+// ≤512k tier (the >512k tier is intentionally not modeled — see
+// minimaxVersions comment). Cache creation is "not listed" for M3
+// (CacheCreationInputPrice = 0 per the "未列即不计费" rule); M2.7 系列
+// charges ¥2.625/M explicitly.
+func TestGetBuiltinModelPrice_MiniMax(t *testing.T) {
+	at := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local)
+	tests := []struct {
+		model string
+		want  *ModelPrice
+	}{
+		{
+			model: "MiniMax-M3",
+			want: &ModelPrice{
+				InputPrice: 2.10, OutputPrice: 8.40, CacheReadInputPrice: 0.42,
+				// CacheCreationInputPrice = 0 (未列即不计费)
+			},
+		},
+		{
+			model: "minimax-m3",
+			want: &ModelPrice{
+				InputPrice: 2.10, OutputPrice: 8.40, CacheReadInputPrice: 0.42,
+			},
+		},
+		{
+			model: "MiniMax-M2.7",
+			want: &ModelPrice{
+				InputPrice: 2.1, OutputPrice: 8.4,
+				CacheReadInputPrice: 0.42, CacheCreationInputPrice: 2.625,
+			},
+		},
+		{
+			model: "MiniMax-M2.7-highspeed",
+			want: &ModelPrice{
+				InputPrice: 4.2, OutputPrice: 16.8,
+				CacheReadInputPrice: 0.42, CacheCreationInputPrice: 2.625,
+			},
+		},
+		// Unknown MiniMax variant → M2.7 default (conservative fallback).
+		{
+			model: "MiniMax-M-future",
+			want: &ModelPrice{
+				InputPrice: 2.1, OutputPrice: 8.4,
+				CacheReadInputPrice: 0.42, CacheCreationInputPrice: 2.625,
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := GetBuiltinModelPriceAt(tt.model, at)
+			if got == nil {
+				t.Fatalf("GetBuiltinModelPriceAt(%q, at) = nil", tt.model)
+			}
+			if got.InputPrice != tt.want.InputPrice ||
+				got.OutputPrice != tt.want.OutputPrice ||
+				got.CacheReadInputPrice != tt.want.CacheReadInputPrice ||
+				got.CacheCreationInputPrice != tt.want.CacheCreationInputPrice {
+				t.Errorf("GetBuiltinModelPriceAt(%q) = %+v, want %+v", tt.model, got, tt.want)
+			}
+			if len(got.Bands) != 0 {
+				t.Errorf("MiniMax has no time-of-use bands, got %+v", got.Bands)
+			}
+		})
+	}
+}
+
 func TestCostForUsage(t *testing.T) {
 	tests := []struct {
 		name         string

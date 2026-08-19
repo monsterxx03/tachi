@@ -278,6 +278,8 @@ func builtinVersionsFor(model string) []builtinPriceVersion {
 			OutputPrice:         2.0,
 			CacheReadInputPrice: 0.02,
 		}}}
+	case strings.Contains(model, "minimax"):
+		return minimaxVersions(model)
 	}
 
 	return nil
@@ -300,6 +302,47 @@ func deepseekVersions(model string) []builtinPriceVersion {
 	default:
 		// Unknown DeepSeek variant — use flash pricing as conservative default
 		return deepseekFlashPriceVersions
+	}
+}
+
+// minimaxVersions returns the MiniMax version list for a model variant.
+// Source: https://platform.minimaxi.com/docs/guides/pricing-paygo
+//
+// 缓存写入费：M3 价格表未列 → 按"未列即不计费" = 0；M2.7 系列明码标价 ¥2.625/M。
+// M3 在 > 512k 输入时价格翻倍，但当前按 ≤512k 一档计入（避免按输入 token 量
+// 分档的复杂机制；超长请求将按本档低估）。
+func minimaxVersions(model string) []builtinPriceVersion {
+	switch {
+	case strings.Contains(model, "minimax-m3"):
+		// MiniMax-M3 paygo 标准价（≤512k 输入永久五折）。
+		return []builtinPriceVersion{{Price: ModelPrice{
+			InputPrice:          2.10,
+			OutputPrice:         8.40,
+			CacheReadInputPrice: 0.42,
+		}}}
+	case strings.Contains(model, "minimax-m2.7-highspeed"):
+		return []builtinPriceVersion{{Price: ModelPrice{
+			InputPrice:              4.2,
+			OutputPrice:             16.8,
+			CacheReadInputPrice:     0.42,
+			CacheCreationInputPrice: 2.625,
+		}}}
+	case strings.Contains(model, "minimax-m2.7"):
+		return []builtinPriceVersion{{Price: ModelPrice{
+			InputPrice:              2.1,
+			OutputPrice:             8.4,
+			CacheReadInputPrice:     0.42,
+			CacheCreationInputPrice: 2.625,
+		}}}
+	default:
+		// Unknown MiniMax variant — use M2.7 pricing as conservative default
+		// (M2.7 是当前主力通用模型，M2/M2.5 等历史模型同价)。
+		return []builtinPriceVersion{{Price: ModelPrice{
+			InputPrice:              2.1,
+			OutputPrice:             8.4,
+			CacheReadInputPrice:     0.42,
+			CacheCreationInputPrice: 2.625,
+		}}}
 	}
 }
 

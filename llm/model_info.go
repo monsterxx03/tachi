@@ -36,6 +36,10 @@ func ModelContextWindow(model string) int64 {
 		return 1000_000
 	case strings.Contains(model, "glm"):
 		return 200_000
+	case strings.Contains(model, "minimax-m3"):
+		// MiniMax-M3: 1M 上下文 + 原生多模态(text/vision/video)。
+		// Source: https://platform.minimaxi.com/docs/guides/text-generation
+		return 1_000_000
 	case strings.Contains(model, "minimax"):
 		return 204_800
 	case strings.Contains(model, "kimi-k3"):
