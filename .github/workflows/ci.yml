@@ -13,6 +13,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # web/frontend/dist is gitignored and embedded via //go:embed dist, so
+      # build it before any Go compile (go test ./... covers web/frontend).
+      - name: Build web frontend
+        uses: ./.github/actions/web-build
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
@@ -29,6 +34,10 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # web/frontend/dist is gitignored and embedded via //go:embed dist.
+      - name: Build web frontend
+        uses: ./.github/actions/web-build
 
       - name: Setup Go
         uses: actions/setup-go@v5
@@ -49,6 +58,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      # web/frontend/dist is gitignored and embedded via //go:embed dist; the
+      # itest harness (itest/run, itest/acp) compiles the real binary, so the
+      # frontend must exist before `make itest`.
+      - name: Build web frontend
+        uses: ./.github/actions/web-build
 
       - name: Setup Go
         uses: actions/setup-go@v5

@@ -16,6 +16,10 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # web/frontend/dist is gitignored and embedded via //go:embed dist.
+      - name: Build web frontend
+        uses: ./.github/actions/web-build
+
       - name: Setup Go
         uses: actions/setup-go@v5
         with:

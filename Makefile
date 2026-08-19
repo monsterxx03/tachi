@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web-build itest itest-mockllm itest-run itest-tui itest-acp
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -15,19 +15,28 @@ build: web-build
 web-build:
 	$(NPM) install && $(NPM) run build
 
-build-debug:
+# The module embeds web/frontend/dist (web/frontend/embed.go), so any Go
+# compile needs it to exist first. Check instead of unconditionally building:
+# dist is only missing on a fresh checkout, and npm build is expensive.
+web-check:
+	@if [ ! -f web/frontend/dist/index.html ]; then \
+		echo "web/frontend/dist is missing — building the frontend first"; \
+		$(MAKE) web-build; \
+	fi
+
+build-debug: web-check
 	go build -ldflags="-X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.Version=$(VERSION)" -o tachi .
 
-build-linux:
+build-linux: web-check
 	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-amd64 .
 
-build-linux-arm64:
+build-linux-arm64: web-check
 	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -trimpath -ldflags="$(LDFLAGS)" -o tachi-linux-arm64 .
 
-test:
+test: web-check
 	go test ./...
 
-test-cover:
+test-cover: web-check
 	@echo "=== Running tests with coverage ==="
 	@go test -coverprofile=coverage.out ./...
 	@echo ""
@@ -37,7 +46,7 @@ test-cover:
 	@echo "=== Total coverage: $$(go tool cover -func=coverage.out | tail -1 | awk '{print $$NF}') ==="
 	@rm -f coverage.out
 
-test-cover-html:
+test-cover-html: web-check
 	go test -coverprofile=coverage.out ./... && \
 	go tool cover -html=coverage.out && \
 	rm -f coverage.out
@@ -72,7 +81,7 @@ lint-fix:
 GINKGO := go run github.com/onsi/ginkgo/v2/ginkgo
 ITEST_PROCS ?= 4
 
-itest:
+itest: web-check
 	$(MAKE) -j4 itest-mockllm itest-run itest-tui itest-acp
 
 # Contract + unit tests for the mock LLM server (no integration build tag

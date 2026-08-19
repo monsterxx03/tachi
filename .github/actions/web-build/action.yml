@@ -1,0 +1,26 @@
+name: web-build
+description: >-
+  Build the web console frontend into web/frontend/dist. The dist tree is
+  gitignored and embedded into the Go binary via web/frontend/embed.go
+  (//go:embed dist), so any Go compile of the module needs this step first.
+
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        # vite 5 requires ^18.0.0 || >=20.0.0 (package-lock.json engines).
+        node-version: "20"
+        cache: npm
+        cache-dependency-path: web/frontend/package-lock.json
+
+    - name: Install dependencies
+      shell: bash
+      working-directory: web/frontend
+      run: npm ci
+
+    - name: Build
+      shell: bash
+      working-directory: web/frontend
+      run: npm run build
