@@ -52,7 +52,6 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("GET /api/sessions/{id}/oneoff", s.handleListSessionOneOffs)
 	mux.HandleFunc("GET /api/sessions/{id}/oneoff/{file}", s.handleGetOneOff)
-	mux.HandleFunc("GET /api/oneoff", s.handleListGlobalOneOffs)
 	mux.HandleFunc("GET /api/usage", s.handleUsage)
 	mux.HandleFunc("GET /api/sessions/{id}/transcript", s.handleTranscript)
 

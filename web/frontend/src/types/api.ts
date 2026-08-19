@@ -151,7 +151,3 @@ export interface OneOffEvents {
   file: string
   events: unknown[]
 }
-
-export interface GlobalOneOffs {
-  kinds: Record<string, OneOffSummary[]>
-}

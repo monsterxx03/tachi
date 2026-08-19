@@ -7,7 +7,6 @@ import { TopBar } from './layout/TopBar'
 import { Overview } from './views/Overview'
 import { Sessions } from './views/Sessions'
 import { Usage } from './views/Usage'
-import { OneOffs } from './views/OneOffs'
 import { Inspector } from './views/inspector/Inspector'
 
 /** Global context: any view can report a 401 via this callback. */
@@ -64,10 +63,6 @@ export default function App() {
               <Route
                 path="/usage"
                 element={scrollView(<Usage onAuthError={reportAuth} />)}
-              />
-              <Route
-                path="/oneoffs"
-                element={scrollView(<OneOffs onAuthError={reportAuth} />)}
               />
               <Route
                 path="/sessions/:id"

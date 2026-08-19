@@ -8,7 +8,6 @@
 
 import type {
   APIRequest,
-  GlobalOneOffs,
   Message,
   OneOffEvents,
   SessionDetail,
@@ -105,8 +104,6 @@ export const api = {
     request<OneOffEvents>(
       `/api/sessions/${encodeURIComponent(id)}/oneoff/${encodeURIComponent(file)}`,
     ),
-
-  globalOneOffs: () => request<GlobalOneOffs>('/api/oneoff'),
 
   usage: () => request<UsageSummary>('/api/usage'),
 

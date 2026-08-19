@@ -460,28 +460,6 @@ func (s *Server) handleGetOneOff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"file": file, "events": events})
 }
 
-// GET /api/oneoff — global one-off transcripts grouped by kind.
-func (s *Server) handleListGlobalOneOffs(w http.ResponseWriter, r *http.Request) {
-	root := config.OneoffDir()
-	entries, err := os.ReadDir(root)
-	if err != nil {
-		if errors.Is(err, os.ErrNotExist) {
-			writeJSON(w, http.StatusOK, map[string]any{"kinds": map[string]any{}})
-			return
-		}
-		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("read oneoff dir: %v", err))
-		return
-	}
-	kinds := map[string]any{}
-	for _, e := range entries {
-		if !e.IsDir() {
-			continue
-		}
-		kinds[e.Name()] = s.scanOneOffDir(filepath.Join(root, e.Name()))
-	}
-	writeJSON(w, http.StatusOK, map[string]any{"kinds": kinds})
-}
-
 // ── GET /api/usage ─────────────────────────────────────────────────────────
 
 func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {

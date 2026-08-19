@@ -5,7 +5,6 @@ const NAV = [
   { to: '/', label: '📊 概览', end: true },
   { to: '/sessions', label: '💬 Sessions' },
   { to: '/usage', label: '💰 Usage 明细' },
-  { to: '/oneoffs', label: '🧩 OneOffs' },
 ]
 
 /** Top bar: the single navigation layer (logo + tabs + status). */
