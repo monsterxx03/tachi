@@ -164,12 +164,12 @@ func TestResumeSession_InMemoryAppliesRequestedRoots(t *testing.T) {
 }
 
 func TestBuildSystemPromptWithRoots(t *testing.T) {
-	prompt := agent.BuildSystemPromptWithRoots("en", "/project", []string{"/shared-lib", "/docs"}, "sess-1")
+	prompt := agent.BuildSystemPromptWithRoots("en", "/project", []string{"/shared-lib", "/docs"}, "sess-1", "")
 	assert.Contains(t, prompt, "- Working directory: /project")
 	assert.Contains(t, prompt, "- Additional workspace roots: /shared-lib, /docs")
 
 	// Plain BuildSystemPrompt must not emit the roots section.
-	plain := agent.BuildSystemPrompt("en", "/project", "sess-1")
+	plain := agent.BuildSystemPrompt("en", "/project", "sess-1", "")
 	assert.NotContains(t, plain, "Additional workspace roots")
 }
 

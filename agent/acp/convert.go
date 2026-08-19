@@ -61,7 +61,7 @@ func extractPathFromURI(uri string) string {
 // specific working directory, additional workspace roots, and session mode.
 // In plan mode, the plan mode prompt is appended.
 func buildSystemPromptForCwd(cfg *config.Config, cwd string, additionalDirs []string, mode string, sessionID string) string {
-	prompt := agent.BuildSystemPromptWithRoots(cfg.Language, cwd, additionalDirs, sessionID)
+	prompt := agent.BuildSystemPromptWithRoots(cfg.Language, cwd, additionalDirs, sessionID, cfg.ExtraSystemPrompt)
 	if mode == agent.ModePlan {
 		prompt += "\n\n" + agent.BuildPlanModePrompt()
 	}

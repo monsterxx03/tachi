@@ -159,7 +159,7 @@ func Launch(t TB, home string, mock *mockllm.Server, opts ...Option) *Session {
 
 	m := realtui.NewModel(realtui.ModelConfig{
 		Agent:              ai,
-		SystemPrompt:       agent.BuildSystemPrompt(cfg.Language, "", ""),
+		SystemPrompt:       agent.BuildSystemPrompt(cfg.Language, "", "", cfg.ExtraSystemPrompt),
 		ChatOpts:           llm.ChatOptions{MaxTokens: cfg.MaxTokens},
 		ProviderInfo:       fmt.Sprintf("%s (%s)", ai.Provider().Name(), ai.Model()),
 		Config:             cfg,

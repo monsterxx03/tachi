@@ -767,6 +767,7 @@ type Config struct {
 	TUI                    TUIConfig            `yaml:"tui"`
 	SystemReminder         SystemReminderConfig `yaml:"system_reminder"`
 	Language               string               `yaml:"language" default:"English"`      // Reply language for LLM
+	ExtraSystemPrompt      string               `yaml:"extra_system_prompt,omitempty"`   // Optional user-supplied system prompt content; when set, appended to the end of the system prompt
 	TitleGeneration        *bool                `yaml:"title_generation" default:"true"` // set false to use truncation
 	TitleProvider          string               `yaml:"title_provider"`                  // optional: provider name for title generation (defaults to main provider)
 	CommitProvider         string               `yaml:"commit_provider"`                 // optional: provider name for /commit (defaults to main provider)

@@ -47,7 +47,7 @@ func (m *Manager) finalizeCompactResult(threadID string, summary string, aiAgent
 	if cur := sm.Current(); cur != nil {
 		sid = cur.ID
 	}
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, "", sid, m.cfg.ExtraSystemPrompt)
 	if aiAgent != nil {
 		_, err = aiAgent.CompleteCompact(sm, systemPrompt, summary)
 	} else {

@@ -25,8 +25,8 @@ import (
 //	go build -ldflags="-X main.Version=$(git describe --tags --always --dirty)" .
 var Version = "dev"
 
-func buildSystemPrompt(language string) string {
-	return agent.BuildSystemPrompt(language, "", "")
+func buildSystemPrompt(cfg *config.Config) string {
+	return agent.BuildSystemPrompt(cfg.Language, "", "", cfg.ExtraSystemPrompt)
 }
 
 var commonFlags = []cli.Flag{
@@ -278,7 +278,7 @@ func runTUI(ctx context.Context, cmd *cli.Command) error {
 
 	return tui.Run(tui.ModelConfig{
 		Agent:        aiAgent,
-		SystemPrompt: buildSystemPrompt(cfg.Language),
+		SystemPrompt: buildSystemPrompt(cfg),
 		ChatOpts: llm.ChatOptions{
 			MaxTokens: cfg.MaxTokens,
 		},

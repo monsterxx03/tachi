@@ -480,7 +480,7 @@ func (m *Manager) runAgentTurn(ctx context.Context, msg channel.IncomingMessage,
 	if sm != nil && sm.Current() != nil {
 		sessionID = sm.Current().ID
 	}
-	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID)
+	systemPrompt := agent.BuildSystemPrompt(m.cfg.Language, workDir, sessionID, m.cfg.ExtraSystemPrompt)
 	if ta.groupChat && m.cfg.Channel.Whisper.WhisperEnabled() {
 		systemPrompt += "\n" + whisperPromptSuffix
 	}

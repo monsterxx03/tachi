@@ -16,19 +16,21 @@ import (
 // instruction hierarchy, reply language, and environment info.
 // If cwd is empty, config.FindProjectRoot() is used as fallback.
 // sessionID can be empty (no current session).
-func BuildSystemPrompt(language string, cwd string, sessionID string) string {
-	return buildSystemPrompt(language, cwd, nil, sessionID)
+// extra is optional user-supplied system prompt content (config
+// extra_system_prompt); when non-empty it is appended at the end.
+func BuildSystemPrompt(language string, cwd string, sessionID string, extra string) string {
+	return buildSystemPrompt(language, cwd, nil, sessionID, extra)
 }
 
 // BuildSystemPromptWithRoots is BuildSystemPrompt plus additional workspace
 // roots (multi-root sessions). additionalRoots are absolute paths; they are
 // listed so the model knows the extra roots exist and uses absolute paths
 // for them — relative paths still resolve against cwd only.
-func BuildSystemPromptWithRoots(language string, cwd string, additionalRoots []string, sessionID string) string {
-	return buildSystemPrompt(language, cwd, additionalRoots, sessionID)
+func BuildSystemPromptWithRoots(language string, cwd string, additionalRoots []string, sessionID string, extra string) string {
+	return buildSystemPrompt(language, cwd, additionalRoots, sessionID, extra)
 }
 
-func buildSystemPrompt(language string, cwd string, additionalRoots []string, sessionID string) string {
+func buildSystemPrompt(language string, cwd string, additionalRoots []string, sessionID string, extra string) string {
 	var sb strings.Builder
 
 	// ── Identity + Core traits ──────────────────────────────────────────────
@@ -119,6 +121,15 @@ YOU MUST:
 	}
 	if sessionID != "" {
 		fmt.Fprintf(&sb, "- Session ID: %s\n", sessionID)
+	}
+
+	// ── Extra system prompt (user-configured) ─────────────────────────────
+	// Config extra_system_prompt, appended verbatim at the end so it stays
+	// inside the Level-1 system prompt while taking effect on every entry
+	// mode (tui, channel, acp, -p run). Trimming stray whitespace keeps the
+	// join clean for YAML block scalars.
+	if extra != "" {
+		sb.WriteString("\n\n" + strings.TrimSpace(extra) + "\n")
 	}
 
 	return sb.String()

@@ -2,6 +2,7 @@ package acp
 
 import (
 	"os/exec"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -34,6 +35,16 @@ func TestBuildSystemPromptForCwd(t *testing.T) {
 		prompt := buildSystemPromptForCwd(&config.Config{Language: "en"}, "/tmp", nil, agent.ModePlan, "")
 		assert.Contains(t, prompt, "PLAN MODE")
 		assert.Contains(t, prompt, "SavePlan")
+	})
+
+	t.Run("extra system prompt appended", func(t *testing.T) {
+		prompt := buildSystemPromptForCwd(&config.Config{Language: "en", ExtraSystemPrompt: "## Extra\nCustom content."}, "/tmp", nil, agent.ModeAuto, "")
+		assert.Contains(t, prompt, "## Extra\nCustom content.")
+		// Appended after the environment section, before the plan-mode prompt.
+		promptPlan := buildSystemPromptForCwd(&config.Config{Language: "en", ExtraSystemPrompt: "## Extra\nCustom content."}, "/tmp", nil, agent.ModePlan, "")
+		assert.Contains(t, promptPlan, "## Extra\nCustom content.")
+		assert.True(t, strings.Index(promptPlan, "## Extra") < strings.Index(promptPlan, "PLAN MODE"),
+			"extra system prompt must precede the plan-mode supplement")
 	})
 }
 

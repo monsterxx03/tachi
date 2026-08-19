@@ -88,7 +88,7 @@ func runCommit(ctx context.Context, cmd *cli.Command) error {
 		fmt.Fprintf(os.Stderr, "Output format: %s\n\n", outputFmt)
 	}
 
-	ch := aiAgent.RunCommitOneOff(ctx, buildSystemPrompt(cfg.Language), "", cfg.MaxTokens, userPrompt)
+	ch := aiAgent.RunCommitOneOff(ctx, buildSystemPrompt(cfg), "", cfg.MaxTokens, userPrompt)
 
 	result := runOutputLoop(aiAgent, ch, outputFmt, quiet)
 	if result == nil {
@@ -203,7 +203,7 @@ func runAgent(ctx context.Context, cmd *cli.Command) error {
 	applyToolRestrictions(aiAgent, cmd)
 
 	thinkingDisabled := false
-	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg.Language), llm.ChatOptions{
+	ch := aiAgent.RunConversationStream(ctx, history, prompt, buildSystemPrompt(cfg), llm.ChatOptions{
 		MaxTokens: cfg.MaxTokens,
 		Thinking:  &thinkingDisabled,
 	})
