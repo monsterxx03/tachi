@@ -5,7 +5,7 @@ import { api } from '../../api/client'
 import type { AuthReporter } from '../../App'
 import { useApi } from '../../lib/useApi'
 import { SESSION_PAGE_SIZE, useSessionList } from '../../lib/useSessionList'
-import { num, shortTime, yuan } from '../../lib/format'
+import { num, shortTime, yuan, compact } from '../../lib/format'
 import { Badge, Empty, Loading } from '../../components/ui'
 import { buildTurns, TurnBlock } from './TurnBlock'
 import { OneOffEventStream } from './OneOffEventStream'
@@ -87,6 +87,27 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
   const meta = detail.data!.meta
   const oneoffs = detail.data!.oneoffs ?? []
 
+  // Session-wide token totals come from the backend ledger summary (covers
+  // subagent/title/etc. calls too, not just the message stream). Input is
+  // cache-miss only, and cache read/creation are separate, so the hit rate
+  // is read / (read + creation + input). Cache & hit show only when the
+  // cache was actually used; the whole stat hides on older backends.
+  const usage = detail.data!.usage
+  const hasTokens = usage.total_input !== undefined || usage.total_output !== undefined
+  const inputTok = usage.total_input ?? 0
+  const cacheRead = usage.total_cache_read ?? 0
+  const cacheCreation = usage.total_cache_creation ?? 0
+  const cacheTok = cacheRead + cacheCreation
+  const hitRate =
+    cacheRead > 0 && hasTokens
+      ? Math.round((cacheRead / (cacheRead + cacheCreation + inputTok)) * 100)
+      : undefined
+  const tokenText = hasTokens
+    ? `in ${compact(usage.total_input)} · out ${compact(usage.total_output)}` +
+      (cacheTok > 0 ? ` · cache ${compact(cacheTok)}` : '') +
+      (hitRate !== undefined ? ` · hit ${hitRate}%` : '')
+    : ''
+
   return (
     <div className="flex h-full">
       {/* 左侧会话列表 */}
@@ -150,6 +171,9 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
             <span>创建 <b className="text-inkdim">{shortTime(meta.created_at)}</b></span>
             <span>消息 <b className="text-inkdim">{num(detail.data!.messages.length)}</b></span>
             <span>工具 <b className="text-inkdim">{num(detail.data!.messages.filter((m) => m.type === 'tool_call').length)}</b></span>
+            {hasTokens && (
+              <span>Token <b className="text-inkdim mono text-[11px]">{tokenText}</b></span>
+            )}
             {meta.working_dir && (
               <span className="hidden xl:inline">目录 <b className="text-inkdim">{meta.working_dir}</b></span>
             )}

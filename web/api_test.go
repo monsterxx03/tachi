@@ -23,16 +23,17 @@ func configWebAPIKey(key string) config.WebConfig {
 func TestSummarizeUsageTotals(t *testing.T) {
 	rows := []llm.UsageRow{
 		{
-			TS:                   time.Date(2026, 8, 17, 10, 0, 0, 0, time.Local),
-			SessionID:            "s1",
-			Kind:                 llm.UsageKindConversation,
-			Model:                "deepseek-v4-flash",
-			InputTokens:          1000,
-			OutputTokens:         200,
-			CacheReadInputTokens: 800,
-			InputPrice:           1.5,
-			OutputPrice:          4.5,
-			CacheReadPrice:       0.05,
+			TS:                       time.Date(2026, 8, 17, 10, 0, 0, 0, time.Local),
+			SessionID:                "s1",
+			Kind:                     llm.UsageKindConversation,
+			Model:                    "deepseek-v4-flash",
+			InputTokens:              1000,
+			OutputTokens:             200,
+			CacheReadInputTokens:     800,
+			CacheCreationInputTokens: 50,
+			InputPrice:               1.5,
+			OutputPrice:              4.5,
+			CacheReadPrice:           0.05,
 		},
 		{
 			TS:           time.Date(2026, 8, 17, 12, 0, 0, 0, time.Local),
@@ -61,6 +62,20 @@ func TestSummarizeUsageTotals(t *testing.T) {
 	// row3: 2000*3/1e6 = 0.006
 	if sum.TotalCalls != 3 {
 		t.Fatalf("TotalCalls = %d, want 3", sum.TotalCalls)
+	}
+	// Token totals across all rows: 1000+500+2000 in, 200+100+0 out,
+	// 800 cache read (row1 only), 50 cache creation (row1 only).
+	if sum.TotalInput != 3500 {
+		t.Fatalf("TotalInput = %d, want 3500", sum.TotalInput)
+	}
+	if sum.TotalOutput != 300 {
+		t.Fatalf("TotalOutput = %d, want 300", sum.TotalOutput)
+	}
+	if sum.TotalCacheRead != 800 {
+		t.Fatalf("TotalCacheRead = %d, want 800", sum.TotalCacheRead)
+	}
+	if sum.TotalCacheCreation != 50 {
+		t.Fatalf("TotalCacheCreation = %d, want 50", sum.TotalCacheCreation)
 	}
 	// sort/order of days: newest first → 08-17, 08-16
 	if len(sum.Days) != 2 {

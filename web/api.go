@@ -472,12 +472,20 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 }
 
 // usageSummary aggregates ledger rows: totals + per-day + per-kind + per-model.
+// Token totals are session-wide across ALL ledger kinds (conversation,
+// subagent, title, ...). The three input categories are mutually exclusive
+// on the ledger (InputTokens is already cache-miss, see llm.UsageRow), so
+// the cache hit rate is read / (read + creation + input).
 type usageSummary struct {
-	TotalCost  float64                `json:"total_cost"`
-	TotalCalls int                    `json:"total_calls"`
-	Days       []usageDayStat         `json:"days"` // newest first
-	ByKind     map[string]usageAmount `json:"by_kind"`
-	ByModel    map[string]usageAmount `json:"by_model"`
+	TotalCost          float64                `json:"total_cost"`
+	TotalCalls         int                    `json:"total_calls"`
+	TotalInput         int64                  `json:"total_input"`  // cache-miss input (all kinds)
+	TotalOutput        int64                  `json:"total_output"` // shown in the inspector header
+	TotalCacheRead     int64                  `json:"total_cache_read"`
+	TotalCacheCreation int64                  `json:"total_cache_creation"`
+	Days               []usageDayStat         `json:"days"` // newest first
+	ByKind             map[string]usageAmount `json:"by_kind"`
+	ByModel            map[string]usageAmount `json:"by_model"`
 }
 
 type usageDayStat struct {
@@ -513,6 +521,10 @@ func summarizeUsage(rows []llm.UsageRow) *usageSummary {
 			day = &usageDayStat{Date: date}
 			dayMap[date] = day
 		}
+		sum.TotalInput += row.InputTokens
+		sum.TotalOutput += row.OutputTokens
+		sum.TotalCacheRead += row.CacheReadInputTokens
+		sum.TotalCacheCreation += row.CacheCreationInputTokens
 		day.Cost += cost
 		day.Calls++
 		day.Input += row.InputTokens

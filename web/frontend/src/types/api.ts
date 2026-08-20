@@ -133,6 +133,13 @@ export interface UsageDayStat {
 export interface UsageSummary {
   total_cost: number
   total_calls: number
+  /** Session-wide token totals (all ledger kinds); absent on older backends.
+   *  Input is cache-miss only; cache read/creation are separate, so the hit
+   *  rate = read / (read + creation + input). */
+  total_input?: number
+  total_output?: number
+  total_cache_read?: number
+  total_cache_creation?: number
   days: UsageDayStat[]
   by_kind: Record<string, UsageAmount>
   by_model: Record<string, UsageAmount>
