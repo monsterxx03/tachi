@@ -256,6 +256,64 @@ func TestCacheReadCreationPrice(t *testing.T) {
 // minimaxVersions comment). Cache creation is "not listed" for M3
 // (CacheCreationInputPrice = 0 per the "未列即不计费" rule); M2.7 系列
 // charges ¥2.625/M explicitly.
+func TestGetBuiltinModelPrice_GLM(t *testing.T) {
+	at := time.Date(2026, 8, 20, 12, 0, 0, 0, time.Local)
+	tests := []struct {
+		model string
+		want  *ModelPrice
+	}{
+		{
+			// GLM-5.3 与 GLM-5.2 同价（Source: https://open.bigmodel.cn/pricing）。
+			model: "glm-5.3",
+			want: &ModelPrice{
+				InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0,
+				// CacheCreationInputPrice = 0（缓存存储限时免费）。
+			},
+		},
+		{
+			model: "GLM-5.3",
+			want: &ModelPrice{
+				InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0,
+			},
+		},
+		{
+			model: "glm-5.2",
+			want: &ModelPrice{
+				InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0,
+			},
+		},
+		// Unknown GLM variant (e.g. glm-5) → unpriced, not the 5.3 table.
+		{
+			model: "glm-5",
+			want:  nil,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.model, func(t *testing.T) {
+			got := GetBuiltinModelPriceAt(tt.model, at)
+			if tt.want == nil {
+				if got != nil {
+					t.Errorf("GetBuiltinModelPriceAt(%q) = %+v, want nil", tt.model, got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("GetBuiltinModelPriceAt(%q, at) = nil", tt.model)
+			}
+			if got.InputPrice != tt.want.InputPrice ||
+				got.OutputPrice != tt.want.OutputPrice ||
+				got.CacheReadInputPrice != tt.want.CacheReadInputPrice ||
+				got.CacheCreationInputPrice != tt.want.CacheCreationInputPrice {
+				t.Errorf("GetBuiltinModelPriceAt(%q) = %+v, want %+v", tt.model, got, tt.want)
+			}
+			if len(got.Bands) != 0 {
+				t.Errorf("GLM has no time-of-use bands, got %+v", got.Bands)
+			}
+		})
+	}
+}
+
 func TestGetBuiltinModelPrice_MiniMax(t *testing.T) {
 	at := time.Date(2026, 8, 19, 12, 0, 0, 0, time.Local)
 	tests := []struct {

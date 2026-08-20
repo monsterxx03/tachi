@@ -152,62 +152,12 @@ type builtinPriceVersion struct {
 	Price         ModelPrice
 }
 
-// tzAsiaShanghai anchors DeepSeek's peak-pricing bands: the official
-// schedule is defined in 北京时间. China has no DST since 1991, so a fixed
-// +08:00 zone is exact and needs no tzdata.
-var tzAsiaShanghai = time.FixedZone("Asia/Shanghai", 8*3600)
-
-// deepSeekPeakEffectiveFrom is 2026-08-17 00:00 北京时间 — when DeepSeek's
-// 峰谷定价 (peak/off-peak) takes effect per the official pricing page.
-// 高峰时段 = 北京时间 09:00-12:00、14:00-18:00；空闲时段 = 高峰的一半。
-// Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
-var deepSeekPeakEffectiveFrom = time.Date(2026, 8, 17, 0, 0, 0, 0, tzAsiaShanghai)
-
-// deepseekFlashPriceVersions: 老价（¥1/2/0.02）+ 2026-08-17 起峰谷价
-// （空闲 ¥1.5/4.5/0.05，高峰 ¥3/9/0.10）。
-var deepseekFlashPriceVersions = []builtinPriceVersion{
-	{
-		// 8/16 及以前：flat，无时段。
-		Price: ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02},
-	},
-	{
-		EffectiveFrom: deepSeekPeakEffectiveFrom,
-		Price: ModelPrice{
-			// 平段 = 空闲时段价。
-			InputPrice: 1.5, OutputPrice: 4.5, CacheReadInputPrice: 0.05,
-			Location: tzAsiaShanghai,
-			Bands: []PriceBand{
-				// 高峰：09:00-12:00、14:00-18:00（北京时间），空闲 = 高峰一半。
-				{Name: "peak", StartHour: 9, EndHour: 12, InputPrice: 3.0, OutputPrice: 9.0, CacheReadInputPrice: 0.10},
-				{Name: "peak", StartHour: 14, EndHour: 18, InputPrice: 3.0, OutputPrice: 9.0, CacheReadInputPrice: 0.10},
-			},
-		},
-	},
-}
-
-// deepseekProPriceVersions: 老价（¥3/6/0.025）+ 2026-08-17 起峰谷价
-// （空闲 ¥4.5/13.5/0.15，高峰 ¥9/27/0.30）。
-var deepseekProPriceVersions = []builtinPriceVersion{
-	{
-		Price: ModelPrice{InputPrice: 3.0, OutputPrice: 6.0, CacheReadInputPrice: 0.025},
-	},
-	{
-		EffectiveFrom: deepSeekPeakEffectiveFrom,
-		Price: ModelPrice{
-			InputPrice: 4.5, OutputPrice: 13.5, CacheReadInputPrice: 0.15,
-			Location: tzAsiaShanghai,
-			Bands: []PriceBand{
-				{Name: "peak", StartHour: 9, EndHour: 12, InputPrice: 9.0, OutputPrice: 27.0, CacheReadInputPrice: 0.30},
-				{Name: "peak", StartHour: 14, EndHour: 18, InputPrice: 9.0, OutputPrice: 27.0, CacheReadInputPrice: 0.30},
-			},
-		},
-	},
-}
-
 // GetBuiltinModelPriceAt returns the built-in price for a given model as it
 // was in effect at time at, or nil if unknown. Versioned entries
 // (builtinPriceVersion.EffectiveFrom) switch automatically at their
 // effective instant; unversioned models return their single price for any at.
+// The model → prices mapping lives in the built-in registry
+// (builtin_models.go), not here.
 //
 // INVARIANT: each model's version slice MUST stay ordered by EffectiveFrom
 // ascending (initial unversioned entry first) — the scan picks the last
@@ -218,16 +168,16 @@ var deepseekProPriceVersions = []builtinPriceVersion{
 // both resolve "the price at call time", which is exactly the time-of-use
 // semantics.
 func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
-	versions := builtinVersionsFor(model)
-	if len(versions) == 0 {
+	record := lookup(model)
+	if record == nil || len(record.prices) == 0 {
 		return nil
 	}
 	// Linear scan (at most a handful of versions per model): the last
 	// version whose EffectiveFrom is not after at wins.
 	var cur *ModelPrice
-	for i := range versions {
-		if versions[i].EffectiveFrom.IsZero() || !at.Before(versions[i].EffectiveFrom) {
-			p := versions[i].Price
+	for i := range record.prices {
+		if record.prices[i].EffectiveFrom.IsZero() || !at.Before(record.prices[i].EffectiveFrom) {
+			p := record.prices[i].Price
 			// Defensive: copy the Bands slice so callers can never mutate
 			// the shared built-in table through a returned price.
 			if p.Bands != nil {
@@ -237,113 +187,6 @@ func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice {
 		}
 	}
 	return cur
-}
-
-// builtinVersionsFor returns the version list for a model, or nil if unknown.
-func builtinVersionsFor(model string) []builtinPriceVersion {
-	model = strings.ToLower(model)
-
-	switch {
-	case strings.Contains(model, "deepseek"):
-		return deepseekVersions(model)
-	case strings.Contains(model, "glm-5.2"):
-		// 智谱 GLM-5.2（国内版）。Source: https://bigmodel.cn/pricing
-		// 缓存存储（写入）限时免费 → CacheCreationInputPrice = 0。
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:          8.0,
-			OutputPrice:         28.0,
-			CacheReadInputPrice: 2.0,
-		}}}
-	case strings.Contains(model, "kimi-k3"):
-		// 月之暗面 Kimi K3（国内版）。Source: https://platform.kimi.com
-		// 官方价格表只有三价（输入/输出/缓存命中），未列缓存写入费 = 免费。
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:          20.0,
-			OutputPrice:         100.0,
-			CacheReadInputPrice: 2.0,
-		}}}
-	case strings.Contains(model, "mimo-v2.5-pro"):
-		// 小米 MiMo-V2.5 Pro（国内版）。Source: https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go
-		// 缓存写入限时免费 → CacheCreationInputPrice = 0。
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:          3.0,
-			OutputPrice:         6.0,
-			CacheReadInputPrice: 0.025,
-		}}}
-	case strings.Contains(model, "mimo-v2.5"):
-		// 小米 MiMo-V2.5（国内版）。Source: https://mimo.mi.com/docs/zh-CN/price/pay-as-you-go
-		// 缓存写入限时免费 → CacheCreationInputPrice = 0。
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:          1.0,
-			OutputPrice:         2.0,
-			CacheReadInputPrice: 0.02,
-		}}}
-	case strings.Contains(model, "minimax"):
-		return minimaxVersions(model)
-	}
-
-	return nil
-}
-
-// deepseekVersions returns the DeepSeek version list for a model variant.
-// Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
-//
-// DeepSeek 的上下文硬盘缓存（kv_cache）没有"缓存写入费"这一计费项：每个
-// 请求自动触发缓存构建（落盘），官方文档只区分命中/未命中两类输入计费。
-// 未列写入费 = 免费 → CacheCreationInputPrice = 0（各版本均适用）。
-func deepseekVersions(model string) []builtinPriceVersion {
-	switch {
-	case strings.Contains(model, "deepseek-v4-flash"),
-		strings.Contains(model, "deepseek-chat"):
-		return deepseekFlashPriceVersions
-	case strings.Contains(model, "deepseek-v4-pro"),
-		strings.Contains(model, "deepseek-reasoner"):
-		return deepseekProPriceVersions
-	default:
-		// Unknown DeepSeek variant — use flash pricing as conservative default
-		return deepseekFlashPriceVersions
-	}
-}
-
-// minimaxVersions returns the MiniMax version list for a model variant.
-// Source: https://platform.minimaxi.com/docs/guides/pricing-paygo
-//
-// 缓存写入费：M3 价格表未列 → 按"未列即不计费" = 0；M2.7 系列明码标价 ¥2.625/M。
-// M3 在 > 512k 输入时价格翻倍，但当前按 ≤512k 一档计入（避免按输入 token 量
-// 分档的复杂机制；超长请求将按本档低估）。
-func minimaxVersions(model string) []builtinPriceVersion {
-	switch {
-	case strings.Contains(model, "minimax-m3"):
-		// MiniMax-M3 paygo 标准价（≤512k 输入永久五折）。
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:          2.10,
-			OutputPrice:         8.40,
-			CacheReadInputPrice: 0.42,
-		}}}
-	case strings.Contains(model, "minimax-m2.7-highspeed"):
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:              4.2,
-			OutputPrice:             16.8,
-			CacheReadInputPrice:     0.42,
-			CacheCreationInputPrice: 2.625,
-		}}}
-	case strings.Contains(model, "minimax-m2.7"):
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:              2.1,
-			OutputPrice:             8.4,
-			CacheReadInputPrice:     0.42,
-			CacheCreationInputPrice: 2.625,
-		}}}
-	default:
-		// Unknown MiniMax variant — use M2.7 pricing as conservative default
-		// (M2.7 是当前主力通用模型，M2/M2.5 等历史模型同价)。
-		return []builtinPriceVersion{{Price: ModelPrice{
-			InputPrice:              2.1,
-			OutputPrice:             8.4,
-			CacheReadInputPrice:     0.42,
-			CacheCreationInputPrice: 2.625,
-		}}}
-	}
 }
 
 // PricingConfig / PriceBandSpec are defined in config (pure data, loaded

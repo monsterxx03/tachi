@@ -64,13 +64,21 @@ func TestModelContextWindow_Others(t *testing.T) {
 		{"qwen-max", 1_000_000},
 		{"qwen-plus", 1_000_000},
 		{"glm-4", 200_000},
+		{"glm-5.2", 1_000_000},
+		{"glm-5.3", 1_000_000},
 		{"minimax-m2", 204_800},
 		{"minimax-m2.7", 204_800},
 		{"minimax-m3", 1_000_000},
 		{"kimi-v2", 256_000},
+		{"kimi-k3", 1_000_000},
 		{"deepseek-v4-flash", 1_000_000},
 		{"deepseek-chat", 1_000_000},
 		{"deepseek-v4-pro", 1_000_000},
+		// MiMo-V2.5 系列：官方名为 mimo-v2.5（旧代码 "mimo-2.5" 漏 v 导致
+		// 上下文解析为 0，重构后统一并兼容历史别名）。
+		{"mimo-v2.5", 1_000_000},
+		{"mimo-v2.5-pro", 1_000_000},
+		{"mimo-2.5", 1_000_000}, // 历史别名兼容
 	}
 
 	for _, tt := range tests {
