@@ -280,11 +280,12 @@ func (m *Manager) RefreshNow(ctx context.Context, serverName string) (*ToolListD
 func (m *Manager) applyToolDelta(serverName string, delta *ToolListDelta, newTools []MCPTool) {
 	prefix := "mcp__" + serverName + "__"
 
-	// 1. Handle removals: remove from pool and discovered set
+	// 1. Handle removals: remove from pool and from every per-session
+	// discovered set (a removed tool is gone for all sessions).
 	for _, name := range delta.Removed {
 		fullName := prefix + name
 		m.pool.Remove(fullName)
-		m.set.Remove(fullName)
+		m.EachDiscoveredSet(func(s *DiscoveredSet) { s.Remove(fullName) })
 		m.logger.Info(context.Background(), "MCP: refresh removed", "tool", fullName)
 	}
 

@@ -74,7 +74,7 @@ func (m *Manager) executeSlashCommand(ctx context.Context, cmd channel.SlashComm
 				return textHandlerResult(text), err
 			}
 		}
-		text, err := m.handleMCPList()
+		text, err := m.handleMCPList(cmd.ThreadID)
 		return textHandlerResult(text), err
 	case "usage":
 		text, err := m.handleUsageCommand(cmd.ThreadID)

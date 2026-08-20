@@ -225,8 +225,10 @@ func loadSessionHistory(ctx context.Context, sess *ACPSession) []llm.Message {
 // /commit handler
 // ---------------------------------------------------------------------------
 
-// acpOneoffSessionID returns the tachi session ID anchoring one-off
-// transcripts (/commit, /review) to this ACP session's directory.
+// acpOneoffSessionID returns the ID of the tachi session backing this ACP
+// session. Used both to anchor one-off transcripts (/commit, /review) under
+// the session directory and to scope per-session MCP tool discovery in the
+// /mcp list. Returns "" when no session has been created yet.
 func acpOneoffSessionID(sess *ACPSession) string {
 	if sess.sessMgr != nil {
 		if cur := sess.sessMgr.Current(); cur != nil {
@@ -539,7 +541,7 @@ func handleACPMCPList(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		return acp.StopReasonEndTurn, nil
 	}
 
-	infos := cmds.BuildMCPServerInfos(servers, sess.mcpMgr)
+	infos := cmds.BuildMCPServerInfos(servers, sess.mcpMgr, acpOneoffSessionID(sess))
 	sendTextUpdate(ctx, conn, sessionID, cmds.FormatMCPList(infos))
 	return acp.StopReasonEndTurn, nil
 }

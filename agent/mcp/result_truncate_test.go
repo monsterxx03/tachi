@@ -9,10 +9,11 @@ import (
 	"time"
 
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/monsterxx03/tachi/config"
 )
 
 func TestTruncateToolOutput_UnderLimit(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	result := strings.Repeat("hello", 100) // 500 chars
 	output := mgr.truncateToolOutput(t.Context(), result, 1000, "", "mcp__test__echo")
 	if output != result {
@@ -21,7 +22,7 @@ func TestTruncateToolOutput_UnderLimit(t *testing.T) {
 }
 
 func TestTruncateToolOutput_ZeroLimit(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	result := strings.Repeat("hello", 1000) // 5000 chars
 	output := mgr.truncateToolOutput(t.Context(), result, 0, "", "mcp__test__echo")
 	if output != result {
@@ -30,7 +31,7 @@ func TestTruncateToolOutput_ZeroLimit(t *testing.T) {
 }
 
 func TestTruncateToolOutput_OverLimit_FilePersistence(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	result := strings.Repeat("abcdefghij", 1000) // 10000 chars
 	tmpDir := t.TempDir()
 
@@ -75,7 +76,7 @@ func TestTruncateToolOutput_OverLimit_FilePersistence(t *testing.T) {
 }
 
 func TestTruncateToolOutput_FallbackOnBadDir(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	result := strings.Repeat("x", 10000)
 	// Use a path that can't be created (file where dir should be).
 	badDir := filepath.Join(t.TempDir(), "notadir")
@@ -132,7 +133,7 @@ func TestSanitizeForFilename(t *testing.T) {
 func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 	// Build an MCPTool backed by a Manager with a stub client that returns
 	// a large result.
-	mgr := NewManager(t.Context(), 5000, t.TempDir(), nil)
+	mgr := NewManager(t.Context(), &config.Config{ToolResult: config.ToolResultConfig{MaxChars: 5000, FileDir: t.TempDir()}}, nil)
 
 	largeContent := strings.Repeat("abcdefghij", 1000) // 10000 chars
 	addTestClient(mgr, "test-server", &stubMCPClient{
@@ -173,7 +174,7 @@ func TestMCPTool_ExecuteContext_Truncation(t *testing.T) {
 }
 
 func TestCleanupOldToolResults(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	tmpDir := t.TempDir()
 
 	// Create a fresh file (should survive cleanup).
@@ -220,14 +221,14 @@ func TestCleanupOldToolResults(t *testing.T) {
 }
 
 func TestCleanupOldToolResults_EmptyDir(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	tmpDir := t.TempDir()
 	// Should not panic or error on empty dir.
 	mgr.cleanupOldToolResults(t.Context(), tmpDir, 24*time.Hour)
 }
 
 func TestCleanupOldToolResults_NonExistentDir(t *testing.T) {
-	mgr := NewManager(t.Context(), 0, "", nil)
+	mgr := NewManager(t.Context(), nil, nil)
 	// Should not panic on non-existent dir.
 	mgr.cleanupOldToolResults(t.Context(), "/nonexistent/path/tool_results", 24*time.Hour)
 }

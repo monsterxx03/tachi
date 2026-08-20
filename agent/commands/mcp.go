@@ -11,15 +11,18 @@ import (
 )
 
 // BuildMCPServerInfos assembles the display data for all configured MCP servers.
-// mgr may be nil (tools/status info will be omitted).
-func BuildMCPServerInfos(servers []config.MCPServerConfig, mgr *mcp.Manager) []MCPServerInfo {
+// mgr may be nil (tools/status info will be omitted). sessionID selects the
+// per-session discovered set shown as "loaded"; pass "" to show none as loaded.
+func BuildMCPServerInfos(servers []config.MCPServerConfig, mgr *mcp.Manager, sessionID string) []MCPServerInfo {
 	// Collect tool info from MCP manager (if available).
 	var poolToolsByServer map[string][]*mcp.DeferredTool
 	var discovered map[string]bool
 	if mgr != nil {
 		discovered = make(map[string]bool)
-		for _, name := range mgr.DiscoveredSet().List() {
-			discovered[name] = true
+		if set := mgr.SetIfExists(sessionID); set != nil {
+			for _, name := range set.List() {
+				discovered[name] = true
+			}
 		}
 		poolToolsByServer = make(map[string][]*mcp.DeferredTool)
 		for _, dt := range mgr.Pool().All() {

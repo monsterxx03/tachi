@@ -211,7 +211,10 @@ func (a *AIAgent) EstimateAndUpdateTokens(rs *RunState, messages []llm.Message) 
 		return
 	}
 
-	schemas := a.filterActiveSchemas(a.Config.ToolRegistry.GetSchemas())
+	// Resolve the session for per-session MCP tool filtering. Called from
+	// within a run (session exists) or from tests outside one (empty ID →
+	// auto-load tools only, which is fine for an estimate).
+	schemas := a.filterActiveSchemas(a.currentSessionID(), a.Config.ToolRegistry.GetSchemas())
 	systemPrompt := ""
 	if len(messages) > 0 && messages[0].Role == "system" {
 		systemPrompt = messages[0].Content

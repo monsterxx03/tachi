@@ -45,16 +45,25 @@ type MCPSearchTracker interface {
 	List() []string
 }
 
+// MCPSearchTrackerProvider resolves the tracker for a given session. The
+// LLM's session ID is carried in the tool-call context (tools.WithSessionID,
+// injected by the agent loop); the provider maps it to that session's
+// discovered-tool set so discoveries are recorded per session.
+// Implemented by mcp.Manager.
+type MCPSearchTrackerProvider interface {
+	TrackerFor(sessionID string) MCPSearchTracker
+}
+
 // MCPSearchToolsTool allows the LLM to search for and load MCP tools.
 // Registered as a built-in tool when MCP servers are configured.
 type MCPSearchToolsTool struct {
 	searcher MCPSearcher
-	tracker  MCPSearchTracker
+	provider MCPSearchTrackerProvider
 }
 
 // NewMCPSearchToolsTool creates a new MCPSearchTools tool.
-func NewMCPSearchToolsTool(searcher MCPSearcher, tracker MCPSearchTracker) *MCPSearchToolsTool {
-	return &MCPSearchToolsTool{searcher: searcher, tracker: tracker}
+func NewMCPSearchToolsTool(searcher MCPSearcher, provider MCPSearchTrackerProvider) *MCPSearchToolsTool {
+	return &MCPSearchToolsTool{searcher: searcher, provider: provider}
 }
 
 func (t *MCPSearchToolsTool) Name() string { return ToolNameMCPSearchTools }
@@ -125,10 +134,19 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 	// Search the deferred pool
 	results := t.searcher.Search(params.Query, params.MaxResults)
 
-	// Mark matched tools as discovered
+	// Resolve the tracker for the session active in this tool call. The
+	// agent loop injects the session ID into the context (tools.WithSessionID);
+	// a missing ID (e.g. non-loop invocation) means we still return search
+	// results but don't persist the discovery to any session.
+	sid := SessionIDFromCtx(ctx)
+	tracker := t.provider.TrackerFor(sid)
+
+	// Mark matched tools as discovered in the active session's set
 	toolDefs := make(map[string]any)
 	for _, r := range results {
-		t.tracker.Add(r.Name)
+		if tracker != nil {
+			tracker.Add(r.Name)
+		}
 
 		// Build a JSON-friendly tool definition for the LLM
 		toolDefs[r.Name] = map[string]any{

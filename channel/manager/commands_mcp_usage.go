@@ -78,15 +78,16 @@ func (m *Manager) handleMCPAuth(threadID, serverName string) (string, error) {
 }
 
 // handleMCPList returns a markdown-formatted list of configured MCP servers
-// with their discovered (loaded) tools when the shared MCP manager is available.
-func (m *Manager) handleMCPList() (string, error) {
+// with their discovered (loaded) tools for the given thread's session, when
+// the shared MCP manager is available.
+func (m *Manager) handleMCPList(threadID string) (string, error) {
 	servers := m.cfg.MCPServers
 	if len(servers) == 0 {
 		return "No MCP servers configured.", nil
 	}
 
 	mgr := m.initSharedMCP()
-	infos := cmds.BuildMCPServerInfos(servers, mgr)
+	infos := cmds.BuildMCPServerInfos(servers, mgr, m.threadSessionID(threadID))
 	return cmds.FormatMCPList(infos), nil
 }
 

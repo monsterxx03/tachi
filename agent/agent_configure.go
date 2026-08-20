@@ -117,7 +117,7 @@ func (a *AIAgent) configure(ctx context.Context, sysCfg AgentSystemConfig) (*mcp
 		// We still register the search tool and DeferredToolReminder so this
 		// agent can use the shared deferred pool for tool discovery.
 		a.attachSharedMCPReminder()
-		searchTool := tools.NewMCPSearchToolsTool(a.DeferredPool(), a.discoveredSet())
+		searchTool := tools.NewMCPSearchToolsTool(a.DeferredPool(), a.Config.MCPManager)
 		a.RegisterTool(searchTool)
 	} else if len(sysCfg.MCPServers) > 0 {
 		var err error
@@ -257,17 +257,16 @@ func convertLSPConfig(cfg *config.LSPConfig) *lsp.Config {
 // connection / discovery phase.
 func (a *AIAgent) attachSharedMCPReminder() {
 	pool := a.DeferredPool()
-	set := a.discoveredSet()
-	if pool == nil || set == nil {
+	if pool == nil {
 		return
 	}
 	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
 		Provider: &deferredToolProviderAdapter{pool: pool},
-		Tracker:  set,
+		Tracker:  a.sessionAwareTracker(),
 	}
-	total := pool.Len()
-	discovered := len(set.List())
-	if discovered < total {
+	// The reminder fires for whichever session is active when it collects;
+	// register it whenever there are deferred tools to hint about.
+	if pool.Len() > 0 {
 		a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
 	}
 }
@@ -345,13 +344,13 @@ func (a *AIAgent) onMCPToolsRefreshed(delta *mcp.ToolListDelta) {
 
 // initMCPAsync is the internal variant that takes AgentSystemConfig.
 func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*mcp.Manager, error) {
-	mgr := mcp.NewManager(ctx, sysCfg.ToolResult.MaxResultChars(), sysCfg.ToolResult.ResultFileDir(), a.Config.Logger)
+	mgr := mcp.NewManager(ctx, a.Config.FullConfig, a.Config.Logger)
 	a.Config.MCPManager = mgr
 
 	// Register MCPSearchTools immediately so the LLM can discover tools
 	// as they come in. The pool is empty initially, so search returns
 	// nothing until MCP servers finish connecting.
-	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr.DiscoveredSet())
+	searchTool := tools.NewMCPSearchToolsTool(mgr.Pool(), mgr)
 	a.RegisterTool(searchTool)
 	a.Config.Logger.Info(ctx, "MCP: registered MCPSearchTools tool (async init)", "servers", len(sysCfg.MCPServers))
 
@@ -390,20 +389,21 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 	}
 
 	pool := a.Config.MCPManager.Pool()
-	set := a.Config.MCPManager.DiscoveredSet()
 	total := pool.Len()
-	discovered := len(set.List())
 
-	// Create DeferredToolReminder (always, for potential use via toggle)
+	// Create DeferredToolReminder (always, for potential use via toggle).
+	// Its tracker resolves the discovered set of whichever session is active
+	// when the reminder fires, so it works per session without a global set.
 	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
 		Provider: &deferredToolProviderAdapter{pool: pool},
-		Tracker:  set,
+		Tracker:  a.sessionAwareTracker(),
 	}
 
-	// Register DeferredToolReminder only if there are undiscovered tools
-	if discovered < total {
+	// Register DeferredToolReminder whenever there are deferred tools —
+	// the per-session tracker decides what still needs hinting per session.
+	if total > 0 {
 		a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
-		a.Config.Logger.Info(ctx, "MCP: DeferredToolReminder added", "undiscovered", total-discovered, "total", total)
+		a.Config.Logger.Info(ctx, "MCP: DeferredToolReminder added", "total", total)
 	}
 
 	// Start background tool list refresher for HTTP MCP servers

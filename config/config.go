@@ -24,6 +24,7 @@ const (
 	sessionDirName            = "session"
 	logsDirName               = "logs"
 	mcpTokensDirName          = "mcp_tokens"
+	mcpDiscoveredFileName     = "mcp_discovered.json"
 	skillsDirName             = "skills"
 	weixinStateDirName        = "weixin"
 	researchDirName           = "research"
@@ -923,6 +924,16 @@ func LogsDir() string {
 // MCPTokensDir returns the path to the MCP OAuth tokens directory.
 func MCPTokensDir() string {
 	return filepath.Join(BaseDir(), mcpTokensDirName)
+}
+
+// MCPDiscoveredFile returns the path to the persisted MCP discovered-tools
+// file for the given session. Each session keeps its own record of which MCP
+// tools the LLM has loaded via MCPSearchTools, so a restart (or a resumed
+// session) restores exactly that session's tools without re-searching. The
+// file lives inside the session directory, so session cleanup deletes it
+// automatically.
+func MCPDiscoveredFile(sessionID string) string {
+	return filepath.Join(BaseDir(), sessionDirName, sessionID, mcpDiscoveredFileName)
 }
 
 // GlobalSkillsDir returns the path to the global (user-level) skills directory.

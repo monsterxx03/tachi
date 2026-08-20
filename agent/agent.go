@@ -744,7 +744,6 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 	}
 
 	pool := a.DeferredPool()
-	set := a.discoveredSet()
 
 	// 2. Remove from deferred pool
 	if pool != nil {
@@ -754,15 +753,17 @@ func (a *AIAgent) UnregisterMCPServer(serverName string) {
 		}
 	}
 
-	// 3. Remove from discovered set
-	if set != nil {
-		// Collect tool names with this prefix from the discovered set
-		for _, name := range set.List() {
-			if strings.HasPrefix(name, prefix) {
-				set.Remove(name)
-				a.Config.Logger.Info(context.Background(), "MCP: removed tool from discovered set", "tool", name)
+	// 3. Remove from every per-session discovered set — disabling a server
+	// is a global fact, so no session should keep its tools marked as loaded.
+	if a.Config.MCPManager != nil {
+		a.Config.MCPManager.EachDiscoveredSet(func(set *mcp.DiscoveredSet) {
+			for _, name := range set.List() {
+				if strings.HasPrefix(name, prefix) {
+					set.Remove(name)
+					a.Config.Logger.Info(context.Background(), "MCP: removed tool from discovered set", "tool", name)
+				}
 			}
-		}
+		})
 	}
 }
 
@@ -787,13 +788,33 @@ func (a *AIAgent) MCPInitErrors() []error {
 	return a.mcpInitErrors
 }
 
-// discoveredSet returns the MCP discovered set owned by the agent's
-// MCP manager, or nil if no manager is configured. Internal helper.
-func (a *AIAgent) discoveredSet() *mcp.DiscoveredSet {
-	if a.Config.MCPManager == nil {
+// discoveredSetFor returns the MCP discovered set for the given session,
+// lazily creating and restoring it via the manager. Returns nil when MCP is
+// disabled or the session ID is empty. Internal helper.
+func (a *AIAgent) discoveredSetFor(sessionID string) *mcp.DiscoveredSet {
+	if a.Config.MCPManager == nil || sessionID == "" {
 		return nil
 	}
-	return a.Config.MCPManager.DiscoveredSet()
+	return a.Config.MCPManager.SetFor(sessionID)
+}
+
+// currentSessionID returns the ID of the currently active session, or ""
+// when no session manager/current session exists.
+func (a *AIAgent) currentSessionID() string {
+	if a.Config.SessionManager == nil {
+		return ""
+	}
+	cur := a.Config.SessionManager.Current()
+	if cur == nil {
+		return ""
+	}
+	return cur.ID
+}
+
+// currentDiscoveredSet returns the discovered set of the currently active
+// session, or nil when there is none. Internal helper.
+func (a *AIAgent) currentDiscoveredSet() *mcp.DiscoveredSet {
+	return a.discoveredSetFor(a.currentSessionID())
 }
 
 // AddDeferredMCPTools adds MCP tools to the deferred pool and marks the
@@ -819,6 +840,26 @@ func (a *AIAgent) AddDeferredMCPTools(tools []mcp.MCPTool) int {
 	return count
 }
 
+// sessionAwareDeferredTracker adapts the per-session discovered sets to the
+// DeferredToolTracker interface. Contains checks the currently active
+// session's set, so the deferred-tool reminder always reflects the session
+// the user is talking to (TUI: the one session; channel: the per-thread
+// session active when the reminder fires).
+type sessionAwareDeferredTracker struct {
+	a *AIAgent
+}
+
+func (t *sessionAwareDeferredTracker) Contains(name string) bool {
+	set := t.a.currentDiscoveredSet()
+	return set != nil && set.Contains(name)
+}
+
+// sessionAwareTracker returns a DeferredToolTracker backed by the current
+// session's discovered set.
+func (a *AIAgent) sessionAwareTracker() *sessionAwareDeferredTracker {
+	return &sessionAwareDeferredTracker{a: a}
+}
+
 // NotifyDeferredToolsAdded marks the DeferredToolReminder as dirty and ensures
 // it's registered in the reminder collector so the LLM is notified of newly
 // available deferred tools on the next user message. Safe to call even when
@@ -833,7 +874,7 @@ func (a *AIAgent) NotifyDeferredToolsAdded() {
 		}
 		a.deferredToolReminder = &systemreminder.DeferredToolReminder{
 			Provider: &deferredToolProviderAdapter{pool: pool},
-			Tracker:  a.discoveredSet(),
+			Tracker:  a.sessionAwareTracker(),
 			Dirty:    true,
 		}
 	} else {

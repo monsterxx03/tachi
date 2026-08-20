@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path"
 	"strings"
 	"sync"
@@ -14,6 +15,7 @@ import (
 	"github.com/mark3labs/mcp-go/client"
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/mark3labs/mcp-go/mcp"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/httpx"
@@ -51,10 +53,21 @@ type Manager struct {
 	mu      sync.RWMutex
 
 	pool     *DeferredPool
-	set      *DiscoveredSet
 	initDone chan struct{}
 
 	initDoneOnce sync.Once
+
+	// Per-session discovered-tool sets, keyed by session ID. Lazily created
+	// by SetFor on first use and restored from the session's persistence
+	// file, so each session keeps its own set of tools loaded via
+	// MCPSearchTools across restarts. Protected by mu.
+	sets map[string]*DiscoveredSet
+
+	// autoLoadNames holds the full names of auto-load tools (session-
+	// independent baselines). Injected into every per-session set at
+	// creation, so they are visible without being searched for. Populated
+	// by PopulateFromConnect; protected by mu.
+	autoLoadNames []string
 
 	// Tool result truncation — configured from config.ToolResult.
 	// 0 means no limit (opt-out).
@@ -68,23 +81,39 @@ type Manager struct {
 	serverCfgs  map[string]config.MCPServerConfig // server name -> config (for whitelist/blacklist filtering)
 }
 
-// NewManager creates an empty MCP client manager with the given tool result
-// truncation config. maxChars <= 0 means no limit. Old tool result files in
-// fileDir are cleaned up on construction (best-effort, errors are logged).
-func NewManager(ctx context.Context, maxChars int, fileDir string, l *logger.Logger) *Manager {
+// NewManager creates an empty MCP client manager from the given full config.
+// It derives the tool result truncation settings (max chars + oversized
+// result file dir) from cfg.ToolResult. Discovered-tool persistence is
+// per-session: sets are created lazily via SetFor once a session ID is known,
+// each persisted to ~/.tachi/session/<id>/mcp_discovered.json.
+//
+// A nil cfg yields zero-value settings: no result truncation limit and no
+// result file dir (used by tests and callers that only need the pool). Old
+// tool result files in fileDir are cleaned up on construction (best-effort,
+// errors are logged).
+func NewManager(ctx context.Context, cfg *config.Config, l *logger.Logger) *Manager {
+	var (
+		maxChars  int
+		resultDir string
+	)
+	if cfg != nil {
+		maxChars = cfg.ToolResult.MaxResultChars()
+		resultDir = cfg.ToolResult.ResultFileDir()
+	}
+
 	m := &Manager{
 		clients:        make(map[string]MCPClient),
 		logger:         l,
 		pool:           NewDeferredPool(),
-		set:            NewDiscoveredSet(),
+		sets:           make(map[string]*DiscoveredSet),
 		initDone:       make(chan struct{}),
 		maxResultChars: maxChars,
-		resultFileDir:  fileDir,
+		resultFileDir:  resultDir,
 		toolCache:      newToolListCache(),
 		serverTypes:    make(map[string]bool),
 	}
-	if fileDir != "" {
-		m.cleanupOldToolResults(ctx, fileDir, defaultToolResultMaxAge)
+	if m.resultFileDir != "" {
+		m.cleanupOldToolResults(ctx, m.resultFileDir, defaultToolResultMaxAge)
 	}
 	return m
 }
@@ -99,9 +128,167 @@ func (m *Manager) ToolResultMaxChars() int { return m.maxResultChars }
 // ToolResultFileDir returns the configured directory for storing oversized results.
 func (m *Manager) ToolResultFileDir() string { return m.resultFileDir }
 
-// DiscoveredSet returns the discovered-tools set owned by this manager.
-// Always non-nil.
-func (m *Manager) DiscoveredSet() *DiscoveredSet { return m.set }
+// SetFor returns the discovered-tools set for the given session, lazily
+// creating it and restoring its persisted state from disk on first use.
+// Sessions are isolated: tools discovered in one session never leak into
+// another. Returns nil for an empty session ID (no session context — e.g.
+// one-off runs without session recording).
+func (m *Manager) SetFor(sessionID string) *DiscoveredSet {
+	if sessionID == "" {
+		return nil
+	}
+
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if s, ok := m.sets[sessionID]; ok {
+		return s
+	}
+
+	s := NewDiscoveredSet(config.MCPDiscoveredFile(sessionID))
+	m.sets[sessionID] = s
+	// Auto-load tools are the session-independent baseline of every set.
+	for _, name := range m.autoLoadNames {
+		s.addNoPersist(name)
+	}
+	m.restoreDiscoveredFromDisk(context.Background(), s)
+	return s
+}
+
+// SetIfExists returns the discovered-tools set for the given session if it
+// was already created, or nil otherwise. Read-only — never creates a set or
+// touches disk. Useful for queries that must not side-effect (e.g. the
+// deferred-tool reminder checking whether a tool was discovered).
+func (m *Manager) SetIfExists(sessionID string) *DiscoveredSet {
+	if sessionID == "" {
+		return nil
+	}
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.sets[sessionID]
+}
+
+// TrackerFor implements tools.MCPSearchTrackerProvider: it routes the
+// MCPSearchTools tool's "mark as discovered" writes to the set of the session
+// active in the calling context. Returns nil when there is no session context
+// (the search tool then still returns results but does not persist them).
+// The explicit empty-ID check avoids boxing a typed nil into a non-nil
+// interface.
+func (m *Manager) TrackerFor(sessionID string) tools.MCPSearchTracker {
+	if sessionID == "" {
+		return nil
+	}
+	return m.SetFor(sessionID)
+}
+
+// EachDiscoveredSet iterates over all per-session discovered sets created so
+// far. Used for global cleanups that apply to every session (e.g. a server
+// being unregistered or a tool removed by refresh). The callback runs while
+// the manager's read lock is held — it must not call back into the manager.
+func (m *Manager) EachDiscoveredSet(fn func(s *DiscoveredSet)) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	for _, s := range m.sets {
+		fn(s)
+	}
+}
+
+// restoreDiscoveredFromDisk merges the persisted discovered-tool names back
+// into the given set, keeping only tools that still exist in the deferred
+// pool. Called by SetFor when a session's set is first created. Auto-load
+// tools already added by PopulateFromConnect are left untouched (AddAll is
+// idempotent). Names for servers that were removed from config or renamed are
+// warned about and dropped from the persisted file.
+func (m *Manager) restoreDiscoveredFromDisk(ctx context.Context, set *DiscoveredSet) {
+	if set.persistPath == "" {
+		return
+	}
+
+	names, err := set.LoadFromDisk()
+	if err != nil {
+		if !errors.Is(err, os.ErrNotExist) {
+			m.logger.Error(ctx, "MCP: failed to read persisted discovered tools, ignoring", err, "path", set.persistPath)
+			return
+		}
+		// First run: no history file yet. Persist the current set
+		// (auto-load tools) so future restarts have a baseline.
+		if saveErr := set.Save(); saveErr != nil {
+			m.logger.Error(ctx, "MCP: failed to persist discovered tools", saveErr, "path", set.persistPath)
+		}
+		return
+	}
+
+	// Pool not populated yet (MCP servers still connecting, or all failed):
+	// there is no way to tell real stale tools from tools that will come
+	// back once a server connects. Keep the whole history — dropping here
+	// would permanently erase the session's discovery record. Stale cleanup
+	// resumes once the pool is populated (backfillAutoLoadIntoSets).
+	if m.pool.Len() == 0 && len(names) > 0 {
+		set.AddAll(names)
+		m.logger.Info(ctx, "MCP: kept persisted discovered tools (pool not populated yet, stale check deferred)", "count", len(names), "path", set.persistPath)
+		return
+	}
+
+	// Split persisted names into those still present in the pool and stale
+	// ones (server removed from config / tool renamed on a connected
+	// server). A tool whose server is still configured but did not connect
+	// this run (connection failed or still in progress) is kept — it was
+	// not deleted, it just hasn't been discovered yet.
+	var restored, stale []string
+	for _, name := range names {
+		if m.pool.Get(name) != nil {
+			restored = append(restored, name)
+		} else if m.serverStillConfigured(name) {
+			restored = append(restored, name)
+		} else {
+			stale = append(stale, name)
+		}
+	}
+
+	// Warn about stale entries — they can no longer be loaded — and drop
+	// them from the in-memory set first; the final write below persists the
+	// cleaned state.
+	for _, name := range stale {
+		m.logger.Warn(ctx, "MCP: dropping stale discovered tool from persisted file (not found in pool)", "tool", name, "path", set.persistPath)
+		set.removeNoPersist(name)
+	}
+
+	switch {
+	case len(restored) > 0:
+		// Merging restores writes the full set (auto-load + restored) back
+		// to disk, which implicitly drops the stale names.
+		set.AddAll(restored)
+	case len(stale) > 0:
+		// Everything was stale: rewrite the file so it no longer lists the
+		// dropped names (keeps whatever auto-load tools are in the set).
+		if saveErr := set.Save(); saveErr != nil {
+			m.logger.Error(ctx, "MCP: failed to persist cleaned discovered tools", saveErr, "path", set.persistPath)
+		}
+	}
+
+	if len(restored) > 0 {
+		m.logger.Info(ctx, "MCP: restored discovered tools from disk", "count", len(restored), "dropped", len(stale), "total", set.Len(), "path", set.persistPath)
+	} else if len(stale) > 0 {
+		m.logger.Info(ctx, "MCP: no discoverable tools restored; cleaned stale entries", "dropped", len(stale), "path", set.persistPath)
+	}
+}
+
+// serverStillConfigured reports whether the tool's MCP server is present in
+// the configured server set. A configured-but-unconnected server means the
+// tool simply hasn't been discovered this run (server still connecting or
+// failed this time) — not that the tool was deleted — so the persisted name
+// should be kept. Only tools whose server is gone from the config are real
+// stale entries.
+//
+// Caller must hold m.mu (restoreDiscoveredFromDisk runs under it via
+// SetFor / backfillAutoLoadIntoSets).
+func (m *Manager) serverStillConfigured(toolName string) bool {
+	for server := range m.serverCfgs {
+		if strings.HasPrefix(toolName, "mcp__"+server+"__") {
+			return true
+		}
+	}
+	return false
+}
 
 // InitDone returns a channel that is closed once the manager's async
 // initialization (ConnectAll + pool population) has finished. Callers can
@@ -184,7 +371,13 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		}
 
 		if isAutoLoad {
-			m.set.Add(t.Name())
+			// Auto-load tools are the baseline of every session's discovered
+			// set. They're recorded here and injected into each per-session
+			// set lazily by SetFor (and backfilled into any sets created
+			// before the pool finished populating).
+			m.mu.Lock()
+			m.autoLoadNames = append(m.autoLoadNames, t.Name())
+			m.mu.Unlock()
 			autoLoad = append(autoLoad, t)
 		}
 	}
@@ -199,8 +392,29 @@ func (m *Manager) PopulateFromConnect(ctx context.Context, cfg *config.Config) (
 		m.toolCache.Snapshot(serverName, tools)
 	}
 
+	// Backfill auto-load tools into any per-session sets that were created
+	// before the pool finished populating (e.g. an early filterActiveSchemas
+	// call while MCP was still connecting).
+	m.backfillAutoLoadIntoSets()
+
 	m.logger.Info(ctx, "MCP: populated tools", "total", m.pool.Len(), "autoLoad", len(autoLoad), "toolSearch", useToolSearch, "threshold", cfg.MCPToolSearch.MinToolsForSearch)
 	return autoLoad, all, errs
+}
+
+// backfillAutoLoadIntoSets injects the auto-load tool names into every
+// per-session set already created, and re-runs the restore for sets that
+// were created before the pool finished populating (their earlier restore
+// had to keep the whole history because the pool was empty — now that the
+// pool is populated, real stale tools can be dropped).
+func (m *Manager) backfillAutoLoadIntoSets() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, s := range m.sets {
+		for _, name := range m.autoLoadNames {
+			s.addNoPersist(name)
+		}
+		m.restoreDiscoveredFromDisk(context.Background(), s)
+	}
 }
 
 // isWhitelisted checks whether a tool name matches an entry in the whitelist.

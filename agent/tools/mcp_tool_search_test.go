@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -15,7 +16,9 @@ func (s *stubSearcher) Search(query string, maxResults int) []MCPSearchResultIte
 	return s.results
 }
 
-// stubTracker implements MCPSearchTracker for testing.
+// stubTracker implements MCPSearchTracker for testing. It also implements
+// MCPSearchTrackerProvider, returning itself for any session ID — callers
+// that want to observe per-session routing use stubSessionTrackerProvider.
 type stubTracker struct {
 	added []string
 }
@@ -27,6 +30,8 @@ func (s *stubTracker) Add(name string) {
 func (s *stubTracker) List() []string {
 	return s.added
 }
+
+func (s *stubTracker) TrackerFor(sessionID string) MCPSearchTracker { return s }
 
 func TestMCPSearchToolsTool_Name(t *testing.T) {
 	tool := NewMCPSearchToolsTool(nil, nil)
@@ -304,5 +309,82 @@ func TestMCPSearchToolsTool_MaxResultsClamped(t *testing.T) {
 	}
 	if searcher.lastMaxResults != 7 {
 		t.Errorf("expected max_results 7 passed through, got %d", searcher.lastMaxResults)
+	}
+}
+
+// stubSessionTrackerProvider routes TrackerFor by session ID, so tests can
+// observe per-session discovery routing.
+type stubSessionTrackerProvider struct {
+	trackers map[string]*stubTracker
+}
+
+func (p *stubSessionTrackerProvider) TrackerFor(sessionID string) MCPSearchTracker {
+	if p.trackers == nil {
+		return nil
+	}
+	tr, ok := p.trackers[sessionID]
+	if !ok {
+		return nil // explicit nil interface — never box a typed nil
+	}
+	return tr
+}
+
+// queryFilterSearcher mimics the real DeferredPool's "select:" filtering so
+// per-session routing tests can assert that only the requested tool is
+// recorded.
+type queryFilterSearcher struct {
+	results []MCPSearchResultItem
+}
+
+func (s *queryFilterSearcher) Search(query string, maxResults int) []MCPSearchResultItem {
+	sel, ok := strings.CutPrefix(query, "select:")
+	if !ok {
+		return s.results
+	}
+	var out []MCPSearchResultItem
+	for _, name := range strings.Split(sel, ",") {
+		for _, r := range s.results {
+			if r.Name == name || strings.HasSuffix(r.Name, "__"+name) {
+				out = append(out, r)
+			}
+		}
+	}
+	return out
+}
+
+func TestMCPSearchToolsTool_Execute_SessionRouting(t *testing.T) {
+	provider := &stubSessionTrackerProvider{trackers: map[string]*stubTracker{
+		"sess-a": {},
+		"sess-b": {},
+	}}
+	searcher := &queryFilterSearcher{results: []MCPSearchResultItem{
+		{Name: "mcp__pg__query", Description: "Query DB"},
+		{Name: "mcp__pg__list", Description: "List tables"},
+	}}
+	tool := NewMCPSearchToolsTool(searcher, provider)
+
+	// Session A discovers pg__query; session B discovers pg__list.
+	args := `{"query": "select:mcp__pg__query"}`
+	if _, err := tool.ExecuteContext(WithSessionID(t.Context(), "sess-a"), args); err != nil {
+		t.Fatalf("sess-a execute failed: %v", err)
+	}
+	args = `{"query": "select:mcp__pg__list"}`
+	if _, err := tool.ExecuteContext(WithSessionID(t.Context(), "sess-b"), args); err != nil {
+		t.Fatalf("sess-b execute failed: %v", err)
+	}
+
+	if got := provider.trackers["sess-a"].added; len(got) != 1 || got[0] != "mcp__pg__query" {
+		t.Errorf("sess-a discovered %v, want [mcp__pg__query]", got)
+	}
+	if got := provider.trackers["sess-b"].added; len(got) != 1 || got[0] != "mcp__pg__list" {
+		t.Errorf("sess-b discovered %v, want [mcp__pg__list]", got)
+	}
+
+	// No session context: must not panic and must not record anywhere.
+	if _, err := tool.ExecuteContext(context.Background(), `{"query": "select:mcp__pg__query"}`); err != nil {
+		t.Fatalf("no-session execute failed: %v", err)
+	}
+	if got := provider.trackers["sess-a"].added; len(got) != 1 {
+		t.Errorf("no-session call leaked into sess-a: %v", got)
 	}
 }

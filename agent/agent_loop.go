@@ -668,7 +668,7 @@ func (a *AIAgent) runLoop(
 		// to call them. The tool list is monotonic (only grows), minimizing
 		// prompt cache invalidations. A per-run tool view (if set) narrows
 		// this to the run's allowed subset.
-		llmTools := buildLLMTools(a.filterActiveSchemas(a.resolve(ctx).schemas()))
+		llmTools := buildLLMTools(a.filterActiveSchemas(tools.SessionIDFromCtx(ctx), a.resolve(ctx).schemas()))
 		// Record the request start so the api_requests entry (written once the
 		// stream finishes) can carry both its true start time and wall-clock
 		// duration. Best-effort: failures are logged, never fatal.
@@ -1167,11 +1167,13 @@ func (a *AIAgent) handleStopFinish(
 //     is never touched, and the filter runs every iteration.
 //
 //  2. MCP ToolSearch: when the deferred MCP pool is non-empty, only
-//     discovered MCP tools (plus all built-ins) are included.
+//     discovered MCP tools for the given session (plus all built-ins) are
+//     included. Each session has its own discovered-tool set, so sessions
+//     don't leak tool selections into each other.
 //
 // When ToolSearch is not active (no MCP manager, e.g. no MCP servers):
 //   - Only mode filtering applies
-func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
+func (a *AIAgent) filterActiveSchemas(sessionID string, schemas []tools.Schema) []tools.Schema {
 	// Layer 1: mode-based destructive tool filtering
 	if a.Mode() != ModeAuto {
 		schemas = filterDestructiveSchemas(schemas, a.Config.ToolRegistry)
@@ -1182,7 +1184,7 @@ func (a *AIAgent) filterActiveSchemas(schemas []tools.Schema) []tools.Schema {
 
 	// Layer 2: MCP ToolSearch filtering (existing logic)
 	pool := a.DeferredPool()
-	set := a.discoveredSet()
+	set := a.discoveredSetFor(sessionID)
 	if pool == nil || pool.Len() == 0 {
 		return schemas
 	}
