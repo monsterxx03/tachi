@@ -19,7 +19,10 @@ func BuildMCPServerInfos(servers []config.MCPServerConfig, mgr *mcp.Manager, ses
 	var discovered map[string]bool
 	if mgr != nil {
 		discovered = make(map[string]bool)
-		if set := mgr.SetIfExists(sessionID); set != nil {
+		// SetFor lazily creates/restores the session's discovered set, so a
+		// session whose set hasn't been touched yet this process (e.g. right
+		// after restart) still shows its persisted loaded tools.
+		if set := mgr.SetFor(sessionID); set != nil {
 			for _, name := range set.List() {
 				discovered[name] = true
 			}

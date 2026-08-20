@@ -154,19 +154,6 @@ func (m *Manager) SetFor(sessionID string) *DiscoveredSet {
 	return s
 }
 
-// SetIfExists returns the discovered-tools set for the given session if it
-// was already created, or nil otherwise. Read-only — never creates a set or
-// touches disk. Useful for queries that must not side-effect (e.g. the
-// deferred-tool reminder checking whether a tool was discovered).
-func (m *Manager) SetIfExists(sessionID string) *DiscoveredSet {
-	if sessionID == "" {
-		return nil
-	}
-	m.mu.RLock()
-	defer m.mu.RUnlock()
-	return m.sets[sessionID]
-}
-
 // TrackerFor implements tools.MCPSearchTrackerProvider: it routes the
 // MCPSearchTools tool's "mark as discovered" writes to the set of the session
 // active in the calling context. Returns nil when there is no session context

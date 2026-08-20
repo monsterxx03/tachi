@@ -72,7 +72,6 @@ func TestManager_SetFor_LazilyCreatesAndIsolatesSessions(t *testing.T) {
 func TestManager_SetFor_EmptySessionID(t *testing.T) {
 	m := NewManager(t.Context(), nil, nil)
 	assert.Nil(t, m.SetFor(""))
-	assert.Nil(t, m.SetIfExists(""))
 }
 
 func TestManager_SetFor_RestoresPersistedSession(t *testing.T) {
