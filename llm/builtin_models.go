@@ -141,9 +141,15 @@ var builtinModels = []builtinModel{
 
 	// ---- DeepSeek ----
 	{
-		match:   []string{"deepseek-v4-pro", "deepseek-reasoner"},
+		match:   []string{"deepseek-v4-pro"},
 		context: 1_000_000,
 		prices:  deepseekProPriceVersions,
+	},
+	{
+		match:   []string{"deepseek-v4-flash-vision-exp"},
+		context: 1_000_000,
+		vision:  true,
+		prices:  deepseekFlashPriceVersions,
 	},
 	{
 		match:   []string{"deepseek"},
