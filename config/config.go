@@ -121,6 +121,12 @@ type ModelSpec struct {
 	// （PricingConfig）——定价 schema 单一来源，config 只负责装载，
 	// 定价语义（内置表/分时带）由 llm 解析。
 	Pricing *PricingConfig `yaml:"pricing,omitempty"`
+
+	// CreditRate 配置 credit 计算的速率（每 unitDivisor 个 token 的 credit
+	// 单价，见 llm.ComputeCredit）。nil/未配置 = 0（不产生 credit）。
+	// 计算时优先用账本行内记录的调用时刻快照；升级前的历史行没有快照，
+	// 聚合展示时用此处配置的当前 rate 实时回算。
+	CreditRate *float64 `yaml:"credit_rate,omitempty"`
 }
 
 type ProviderConfig struct {

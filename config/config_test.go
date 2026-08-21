@@ -751,6 +751,7 @@ providers:
         output_price: 8.0
         cache_read_input_price: 0.1
         cache_creation_input_price: 1.0
+      credit_rate: 0.05
 `)
 	cfg := &Config{}
 	require.NoError(t, yaml.Unmarshal(yamlData, cfg))
@@ -772,6 +773,8 @@ providers:
 	require.NotNil(t, p.Spec.MaxRetries)
 	assert.Equal(t, 3, *p.Spec.MaxRetries)
 	assert.Equal(t, 90*time.Second, p.Spec.Timeout)
+	require.NotNil(t, p.Spec.CreditRate)
+	assert.Equal(t, 0.05, *p.Spec.CreditRate)
 
 	// 旧版平铺字段（context_window / input_price 直接挂 provider 下）不再解析。
 	oldYAML := []byte(`

@@ -54,6 +54,9 @@ type UsageReportInfo struct {
 	KindCosts       map[llm.UsageKind]KindCostStat // per-kind breakdown (cost + calls)
 	ModelCosts      map[string]float64             // "provider:model" → cost
 	UnpricedCalls   int                            // rows without an effective price at call time
+	// Credit is the ledger's total credit (snapshot-per-row; pre-upgrade
+	// rows recomputed from the current configured rate).
+	Credit float64
 
 	ToolCalls map[string]*ToolCallStat
 	MainCount int
@@ -162,7 +165,11 @@ func FormatUsageReport(info *UsageReportInfo) string {
 	if !info.LedgerAvailable {
 		sb.WriteString("本会话暂无计费数据\n\n")
 	} else {
-		fmt.Fprintf(&sb, "Total cost: **¥%.4f**\n\n", info.Cost)
+		fmt.Fprintf(&sb, "Total cost: **¥%.4f**\n", info.Cost)
+		if info.Credit != 0 {
+			fmt.Fprintf(&sb, "Credit: **%.2f**\n", info.Credit)
+		}
+		sb.WriteString("\n")
 
 		// 会话成本 = conversation + subagent；旁路明细 = 其余 kind（对齐
 		// docs §9：旁路请求不含会话本身成本）。

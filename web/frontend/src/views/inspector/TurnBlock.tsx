@@ -1,6 +1,6 @@
 import { useState } from 'react'
 
-import { shortTime, yuan } from '../../lib/format'
+import { credit, shortTime, yuan } from '../../lib/format'
 import type { APIRequest, Message } from '../../types/api'
 import { RequestGroup } from './RequestGroup'
 
@@ -230,6 +230,15 @@ function requestCostOf(rv: RequestView, reqBySeq: Record<number, APIRequest>): n
   return requestCost(rv.events)
 }
 
+// requestCreditOf mirrors requestCostOf but for credit: the backend fills it
+// from the ledger (see APIRequest.credit); there is no event-based estimate,
+// so unpaired/legacy requests simply report 0 (and stay hidden).
+function requestCreditOf(rv: RequestView, reqBySeq: Record<number, APIRequest>): number {
+  const req = resolveReq(rv, reqBySeq)
+  if (req?.credit !== undefined && req.credit > 0) return req.credit
+  return 0
+}
+
 export function TurnBlock({
   turn,
   reqBySeq,
@@ -242,6 +251,10 @@ export function TurnBlock({
   const stepCount = turn.requests.reduce((a, r) => a + r.steps.length, 0)
   const totalCost = turn.requests.reduce(
     (a, r) => a + requestCostOf(r, reqBySeq),
+    0,
+  )
+  const totalCredit = turn.requests.reduce(
+    (a, r) => a + requestCreditOf(r, reqBySeq),
     0,
   )
   const lastReq = turn.requests[turn.requests.length - 1]
@@ -292,6 +305,11 @@ export function TurnBlock({
             {yuan(totalCost)}
           </span>
         )}
+        {totalCredit > 0 && (
+          <span className="text-[10px] text-gold font-semibold bg-warnsoft border border-line rounded-full px-2 py-0.5 whitespace-nowrap mono">
+            {credit(totalCredit)}
+          </span>
+        )}
       </div>
 
       {open && (
@@ -339,6 +357,7 @@ export function TurnBlock({
                   iteration={rv.iteration}
                   model={req?.model}
                   cost={requestCostOf(rv, reqBySeq)}
+                  credit={requestCreditOf(rv, reqBySeq)}
                   inTokens={inTok}
                   outTokens={outTok}
                   toolCount={req?.tools?.length ?? 0}

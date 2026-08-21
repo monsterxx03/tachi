@@ -489,7 +489,7 @@ func handleACPUsage(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCo
 		return acp.StopReasonEndTurn, nil
 	}
 
-	report, err := agent.ComputeSessionUsage(sm, sess.agent.UsageRecorder(), sess.agent.ContextWindow())
+	report, err := agent.ComputeSessionUsage(sm, sess.agent.UsageRecorder(), sess.agent.ContextWindow(), sess.cfg)
 	if err != nil {
 		sendTextUpdate(ctx, conn, sessionID, "Usage: "+err.Error())
 		return acp.StopReasonEndTurn, nil

@@ -5,6 +5,7 @@ import (
 
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -35,6 +36,11 @@ type SessionUsageReport struct {
 	KindCosts       map[llm.UsageKind]cmds.KindCostStat // per-kind breakdown
 	ModelCosts      map[string]float64                  // "provider:model" → cost
 	UnpricedCalls   int                                 // rows without an effective price at call time
+	// Credit is the ledger's total credit: each row contributes its call-time
+	// snapshot (UsageRow.Credit), except pre-upgrade rows without a snapshot
+	// which are recomputed from the CURRENT configured rate (see
+	// llm.UsageRow.CreditValue / llm.ResolveCreditRate).
+	Credit float64
 }
 
 // ComputeSessionUsage computes the SessionUsageReport for the given session
@@ -47,7 +53,9 @@ type SessionUsageReport struct {
 // rec may be nil — the ledger is then skipped and LedgerAvailable stays false
 // (cost section shows "no billing data").
 // contextWindow is optional (0 = not shown).
-func ComputeSessionUsage(sm SessionManager, rec *llm.UsageRecorder, contextWindow int64) (*SessionUsageReport, error) {
+// cfg supplies the current credit_rate for recomputing pre-upgrade rows
+// without a credit snapshot (see llm.UsageRow.CreditValue); nil = rate 0.
+func ComputeSessionUsage(sm SessionManager, rec *llm.UsageRecorder, contextWindow int64, cfg *config.Config) (*SessionUsageReport, error) {
 	if sm == nil || !sm.HasCurrent() {
 		return nil, fmt.Errorf("no active session")
 	}
@@ -99,6 +107,7 @@ func ComputeSessionUsage(sm SessionManager, rec *llm.UsageRecorder, contextWindo
 		for _, row := range rows {
 			c := row.Cost()
 			report.Cost += c
+			report.Credit += row.CreditValue(llm.ResolveCreditRate(cfg, row.Provider, row.Model))
 			ks := report.KindCosts[row.Kind]
 			ks.Cost += c
 			ks.Calls++
@@ -184,6 +193,7 @@ func BuildUsageReportInfo(report *SessionUsageReport, estTokens int64, estBreakd
 		OutputTokens:             report.Usage.OutputTokens,
 		EstimatedInputTokens:     estTokens,
 		Cost:                     report.Cost,
+		Credit:                   report.Credit,
 		LedgerAvailable:          report.LedgerAvailable,
 		KindCosts:                report.KindCosts,
 		ModelCosts:               report.ModelCosts,

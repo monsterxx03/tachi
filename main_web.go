@@ -28,7 +28,7 @@ func runWeb(ctx context.Context, cmd *cli.Command) error {
 		addr = "127.0.0.1:8787"
 	}
 
-	srv, err := web.New(cfg.Web)
+	srv, err := web.New(cfg)
 	if err != nil {
 		return fmt.Errorf("init web server: %w", err)
 	}

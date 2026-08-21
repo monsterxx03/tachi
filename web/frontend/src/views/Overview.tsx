@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { api } from '../api/client'
 import type { AuthReporter } from '../App'
 import { useApi } from '../lib/useApi'
-import { num, yuan } from '../lib/format'
+import { credit, num, yuan } from '../lib/format'
 import { Card, CardHead, Loading, PageHead, StatCard } from '../components/ui'
 
 const KIND_COLORS: Record<string, string> = {
@@ -111,6 +111,9 @@ export function Overview({ onAuthError }: { onAuthError: AuthReporter }) {
                 ↑ {yuan(today?.cost)} 今日
               </span>{' '}
               · 环比 +6.2%
+              {u.total_credit ? (
+                <span className="text-gold font-medium"> · Credit {credit(u.total_credit)}</span>
+              ) : null}
             </span>
           }
         />

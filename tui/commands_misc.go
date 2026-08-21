@@ -188,7 +188,7 @@ func (m *Model) handleUsageCommand() tea.Cmd {
 		return nil
 	}
 
-	report, err := agent.ComputeSessionUsage(sm, m.agent.UsageRecorder(), m.agent.ContextWindow())
+	report, err := agent.ComputeSessionUsage(sm, m.agent.UsageRecorder(), m.agent.ContextWindow(), m.cfg)
 	if err != nil {
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",

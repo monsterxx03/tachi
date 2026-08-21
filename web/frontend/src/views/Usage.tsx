@@ -1,7 +1,7 @@
 import { api } from '../api/client'
 import type { AuthReporter } from '../App'
 import { useApi } from '../lib/useApi'
-import { compact, num, yuan } from '../lib/format'
+import { compact, credit, num, yuan } from '../lib/format'
 import { Card, CardHead, Loading, PageHead } from '../components/ui'
 
 export function Usage({ onAuthError }: { onAuthError: AuthReporter }) {
@@ -119,6 +119,11 @@ export function Usage({ onAuthError }: { onAuthError: AuthReporter }) {
         总余额估算：<span className="mono text-gold">{yuan(u.total_cost)}</span>（
         {compact(u.total_calls)} 次调用）
       </div>
+      {u.total_credit ? (
+        <div className="mt-1 text-xs text-muted">
+          Credit：<span className="mono text-gold">{credit(u.total_credit)}</span>
+        </div>
+      ) : null}
     </div>
   )
 }

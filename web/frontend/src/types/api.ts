@@ -100,6 +100,9 @@ export interface APIRequest {
   /** Precise CNY cost (¥) of this API call, from the backend usage ledger
    *  (absent on legacy data / when not resolved). */
   cost?: number
+  /** Precise credit of this API call, from the same ledger row as cost
+   *  (absent on legacy data / when not resolved). */
+  credit?: number
   tools?: APITool[]
 }
 
@@ -133,6 +136,10 @@ export interface UsageDayStat {
 export interface UsageSummary {
   total_cost: number
   total_calls: number
+  /** Total credit across all rows (call-time snapshots; pre-upgrade rows
+   *  recomputed from the current configured credit_rate). Absent on older
+   *  backends. */
+  total_credit?: number
   /** Session-wide token totals (all ledger kinds); absent on older backends.
    *  Input is cache-miss only; cache read/creation are separate, so the hit
    *  rate = read / (read + creation + input). */

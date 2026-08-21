@@ -2,6 +2,7 @@ package httpx
 
 import (
 	"bufio"
+	"context"
 	"crypto/tls"
 	"fmt"
 	"net"
@@ -47,7 +48,13 @@ func newHTTPClient(proxyURL string, timeout time.Duration) (*http.Client, error)
 			return nil, fmt.Errorf("socks5 proxy %q: %w", proxyURL, err)
 		}
 		transport = &http.Transport{
-			Dial: dialer.Dial,
+			// DialContext (not the deprecated Dial) so the transport can
+			// cancel in-flight dials; proxy.Dialer only exposes Dial, so
+			// adapt it here (the ctx parameter is unused by the socks5
+			// dialer).
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.Dial(network, addr)
+			},
 		}
 
 	default:

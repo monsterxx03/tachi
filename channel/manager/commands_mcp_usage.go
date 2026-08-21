@@ -117,7 +117,7 @@ func (m *Manager) handleUsageCommand(threadID string) (string, error) {
 	// source of truth) — no price resolution needed here.
 	contextWindow := m.defaultResolvedProvider.ContextWindow
 
-	report, err := agent.ComputeSessionUsage(sm, agent.GlobalUsageRecorder(), contextWindow)
+	report, err := agent.ComputeSessionUsage(sm, agent.GlobalUsageRecorder(), contextWindow, m.cfg)
 	if err != nil {
 		return fmt.Sprintf("Failed to compute usage: %v", err), nil
 	}

@@ -45,7 +45,7 @@ func TestComputeSessionUsage_LedgerCost(t *testing.T) {
 		}
 	}
 
-	report, err := ComputeSessionUsage(sm, rec, 128000)
+	report, err := ComputeSessionUsage(sm, rec, 128000, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -80,7 +80,7 @@ func TestComputeSessionUsage_NilRecorder(t *testing.T) {
 	if _, err := sm.New("deepseek-v4-flash", "/tmp"); err != nil {
 		t.Fatal(err)
 	}
-	report, err := ComputeSessionUsage(sm, nil, 0)
+	report, err := ComputeSessionUsage(sm, nil, 0, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -121,7 +121,7 @@ func TestRunOneOffStream_RecordsUsageRows(t *testing.T) {
 	// does); the kind/session anchoring being tested lives in RunOneOffStream.
 	wrapped := llm.WrapRecordingProvider(provider, rec, func(provider llm.Provider, model string) llm.ResolvedPrice {
 		return llm.ResolvedPrice{Price: llm.ModelPrice{InputPrice: 1.0, OutputPrice: 2.0}}
-	})
+	}, nil)
 
 	ch := a.RunOneOffStream(context.Background(), wrapped, "sys", "hello",
 		llm.ChatOptions{MaxTokens: 100}, WithOneOffMeta(&OneOffMeta{Kind: "commit"}))
@@ -241,7 +241,7 @@ func TestRunOneOffStream_NoSessionFallsToGlobal(t *testing.T) {
 	a.Config.Logger = logger.Default()
 	a.Config.UsageRecorder = rec // no SessionManager at all
 
-	wrapped := llm.WrapRecordingProvider(provider, rec, nil)
+	wrapped := llm.WrapRecordingProvider(provider, rec, nil, nil)
 	ch := a.RunOneOffStream(context.Background(), wrapped, "sys", "msg",
 		llm.ChatOptions{MaxTokens: 100}, WithOneOffMeta(&OneOffMeta{Kind: "commit"}))
 	for ev := range ch {
@@ -297,7 +297,7 @@ func TestNewAIAgentWithConfig_DedicatedProvidersBilled(t *testing.T) {
 	if _, ok := commitProv.(*llm.RecordingProvider); !ok {
 		t.Fatalf("CommitProvider = %T, want *llm.RecordingProvider (F1: Setup-resolved providers must be wrapped)", commitProv)
 	}
-	if wrapped := llm.WrapRecordingProvider(commitProv, rec, nil); wrapped != commitProv {
+	if wrapped := llm.WrapRecordingProvider(commitProv, rec, nil, nil); wrapped != commitProv {
 		t.Error("WrapRecordingProvider not idempotent: re-wrapping changed the instance")
 	}
 }
@@ -370,3 +370,60 @@ func TestSetResolvedProvider_SwitchesWholesale(t *testing.T) {
 		t.Errorf("ContextWindow = %d after caller-side mutation, want detached copy", a.ContextWindow())
 	}
 }
+
+// TestComputeSessionUsage_Credit pins the credit aggregation semantics:
+// rows with a call-time snapshot keep it; pre-upgrade rows (nil Credit) are
+// recomputed from the CURRENT configured credit_rate (cfg), never the price
+// snapshot path.
+func TestComputeSessionUsage_Credit(t *testing.T) {
+	sm := &fakeSessionManager{}
+	if _, err := sm.New("deepseek-v4-flash", "/tmp"); err != nil {
+		t.Fatal(err)
+	}
+	sid := sm.Current().ID
+
+	rec := llm.NewUsageRecorder(t.TempDir())
+	now := time.Now()
+	// Row 1: pre-upgrade style (no Credit snapshot) — must fall back to cfg rate.
+	// Row 2: snapshot 9999 — must win over the cfg rate.
+	snapshot := 9999.0
+	rows := []llm.UsageRow{
+		{TS: now, SessionID: sid, Kind: llm.UsageKindConversation, Provider: "deepseek-v4-flash", Model: "deepseek-chat",
+			InputTokens: 1000, OutputTokens: 100, InputPrice: 1.0, OutputPrice: 2.0},
+		{TS: now, SessionID: sid, Kind: llm.UsageKindCommit, Provider: "deepseek-v4-flash", Model: "deepseek-chat",
+			InputTokens: 100, OutputTokens: 100, InputPrice: 1.0, OutputPrice: 2.0, Credit: &snapshot},
+	}
+	for _, r := range rows {
+		if err := rec.Record(r); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	cfg := &config.Config{
+		Providers: []config.ProviderConfig{{
+			Name:  "deepseek-v4-flash",
+			Type:  "openai",
+			Model: "deepseek-chat",
+			Spec:  config.ModelSpec{CreditRate: f64ptr(0.5)},
+		}},
+	}
+	report, err := ComputeSessionUsage(sm, rec, 128000, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := llm.ComputeCredit(1100, 0.5) + snapshot // 1100 tokens × rate 0.5 + snapshot row
+	if report.Credit != want {
+		t.Errorf("Credit = %v, want %v", report.Credit, want)
+	}
+
+	// nil cfg → rate 0: the pre-upgrade row recomputes to 0, the snapshot stays.
+	report, err = ComputeSessionUsage(sm, rec, 128000, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Credit != snapshot {
+		t.Errorf("Credit with nil cfg = %v, want %v (snapshot only)", report.Credit, snapshot)
+	}
+}
+
+func f64ptr(v float64) *float64 { return &v }

@@ -79,19 +79,28 @@ func (s *Server) sessionUsage(id string) *usageSummary {
 	if err != nil {
 		return &usageSummary{}
 	}
-	return summarizeUsage(rows)
+	return summarizeUsage(rows, s.FullCfg)
 }
 
-// sessionRequestCosts returns the precise per-call cost for each API request,
-// aligned to the order of apiReqs (chronological). The ledger's
+// requestCharge pairs one API request's ledger-derived cost with its credit
+// (both display-only enrichments of api_requests, never persisted).
+type requestCharge struct {
+	Cost   float64
+	Credit float64
+}
+
+// sessionRequestCharges returns the precise per-call cost AND credit for each
+// API request, aligned to the order of apiReqs (chronological). The ledger's
 // kind=conversation rows are the main-loop LLM calls — the same ones
 // recorded as api_requests — and both are appended in call order, so pairing
 // the conversation rows (sorted by TS) with apiReqs (already in file order)
-// 1:1 yields the matching cost per request. Other kinds (title, subagent,
+// 1:1 yields the matching charge per request. Other kinds (title, subagent,
 // review, ...) don't appear in api_requests and are filtered out. On any
-// mismatch (e.g. legacy data) we return costs in order up to the shorter
-// length; extras simply have no cost.
-func (s *Server) sessionRequestCosts(id string, apiReqs []session.APIRequest) []float64 {
+// mismatch (e.g. legacy data) we return charges in order up to the shorter
+// length; extras simply have no charge. Credit follows UsageRow.CreditValue:
+// call-time snapshot, or recomputed from the CURRENT configured rate for
+// pre-credit rows.
+func (s *Server) sessionRequestCharges(id string, apiReqs []session.APIRequest) []requestCharge {
 	rows, err := s.Usage.Rows(id, sessionCreatedFromID(id))
 	if err != nil {
 		return nil
@@ -106,13 +115,15 @@ func (s *Server) sessionRequestCosts(id string, apiReqs []session.APIRequest) []
 	}
 	slices.SortFunc(conversation, func(a, b llm.UsageRow) int { return a.TS.Compare(b.TS) })
 
-	costs := make([]float64, len(apiReqs))
-	for i := range costs {
+	charges := make([]requestCharge, len(apiReqs))
+	for i := range charges {
 		if i < len(conversation) {
-			costs[i] = conversation[i].Cost()
+			row := &conversation[i]
+			charges[i].Cost = row.Cost()
+			charges[i].Credit = row.CreditValue(llm.ResolveCreditRate(s.FullCfg, row.Provider, row.Model))
 		}
 	}
-	return costs
+	return charges
 }
 
 // sessionUsageBySession aggregates the ledger in one pass, grouped by
@@ -141,7 +152,7 @@ func (s *Server) sessionUsageBySession(sessions []*session.Session) map[string]*
 	}
 	out := make(map[string]*usageSummary, len(groups))
 	for id, group := range groups {
-		out[id] = summarizeUsage(group)
+		out[id] = summarizeUsage(group, s.FullCfg)
 	}
 	return out
 }
@@ -311,14 +322,16 @@ func (s *Server) handleGetSession(w http.ResponseWriter, r *http.Request) {
 	if subagents == nil {
 		subagents = map[string][]session.Message{}
 	}
-	// Attach the precise per-call cost (from the usage ledger's
+	// Attach the precise per-call cost + credit (from the usage ledger's
 	// conversation-kind rows, paired 1:1 in call order) to each request so
 	// the inspector shows real numbers instead of estimating. The recorder
-	// never sets Cost, so this is a display-only enrichment of this response.
-	if costs := s.sessionRequestCosts(id, apiReqs); costs != nil {
+	// never sets Cost/Credit, so this is a display-only enrichment of this
+	// response.
+	if charges := s.sessionRequestCharges(id, apiReqs); charges != nil {
 		for i := range apiReqs {
-			if i < len(costs) {
-				apiReqs[i].Cost = costs[i]
+			if i < len(charges) {
+				apiReqs[i].Cost = charges[i].Cost
+				apiReqs[i].Credit = charges[i].Credit
 			}
 		}
 	}
@@ -468,7 +481,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 		writeJSONError(w, http.StatusInternalServerError, fmt.Sprintf("read usage ledger: %v", err))
 		return
 	}
-	writeJSON(w, http.StatusOK, summarizeUsage(rows))
+	writeJSON(w, http.StatusOK, summarizeUsage(rows, s.FullCfg))
 }
 
 // usageSummary aggregates ledger rows: totals + per-day + per-kind + per-model.
@@ -479,6 +492,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 type usageSummary struct {
 	TotalCost          float64                `json:"total_cost"`
 	TotalCalls         int                    `json:"total_calls"`
+	TotalCredit        float64                `json:"total_credit"`
 	TotalInput         int64                  `json:"total_input"`  // cache-miss input (all kinds)
 	TotalOutput        int64                  `json:"total_output"` // shown in the inspector header
 	TotalCacheRead     int64                  `json:"total_cache_read"`
@@ -503,7 +517,7 @@ type usageAmount struct {
 	Calls int     `json:"calls"`
 }
 
-func summarizeUsage(rows []llm.UsageRow) *usageSummary {
+func summarizeUsage(rows []llm.UsageRow, cfg *config.Config) *usageSummary {
 	sum := &usageSummary{
 		ByKind:  map[string]usageAmount{},
 		ByModel: map[string]usageAmount{},
@@ -513,6 +527,7 @@ func summarizeUsage(rows []llm.UsageRow) *usageSummary {
 		row := &rows[i]
 		cost := row.Cost()
 		sum.TotalCost += cost
+		sum.TotalCredit += row.CreditValue(llm.ResolveCreditRate(cfg, row.Provider, row.Model))
 		sum.TotalCalls++
 
 		date := row.TS.Format("2006-01-02")

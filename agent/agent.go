@@ -1125,9 +1125,13 @@ func wrapForUsage(p llm.Provider, rec *llm.UsageRecorder, cfg *config.Config) ll
 	if p == nil {
 		return p
 	}
-	return llm.WrapRecordingProvider(p, rec, func(provider llm.Provider, model string) llm.ResolvedPrice {
-		return llm.ResolveModelPriceAt(cfg, provider.ProviderName(), model, time.Now())
-	})
+	return llm.WrapRecordingProvider(p, rec,
+		func(provider llm.Provider, model string) llm.ResolvedPrice {
+			return llm.ResolveModelPriceAt(cfg, provider.ProviderName(), model, time.Now())
+		},
+		func(provider llm.Provider, model string) float64 {
+			return llm.ResolveCreditRate(cfg, provider.ProviderName(), model)
+		})
 }
 
 // wrapUsageProviders wraps every provider in cfg with usage-ledger recording.

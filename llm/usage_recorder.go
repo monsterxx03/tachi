@@ -4,12 +4,14 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -97,6 +99,33 @@ type UsageRow struct {
 	// Written from the resolved price's band (ResolvedPrice.Band) — the
 	// row stays self-contained: "why is this row priced like this".
 	Band string `json:"band,omitempty"`
+
+	// Credit is the credit snapshot computed at call time from the model
+	// spec's credit_rate (see ComputeCredit). *float64 distinguishes "the
+	// row predates the credit feature" (nil → aggregators recompute from
+	// the CURRENT configured rate, see CreditValue) from "the snapshot was
+	// genuinely 0" (rate unconfigured at call time → stays 0 forever, the
+	// same snapshot semantics as the price fields).
+	Credit *float64 `json:"credit,omitempty"`
+}
+
+// TotalTokens returns the row's total token count. The four categories are
+// mutually exclusive on the ledger (InputTokens is already cache-miss, see
+// the comment on InputTokens), so the sum counts every token exactly once.
+func (r *UsageRow) TotalTokens() int64 {
+	return r.InputTokens + r.OutputTokens + r.CacheReadInputTokens + r.CacheCreationInputTokens
+}
+
+// CreditValue returns the row's credit snapshot, or recomputes it from the
+// given current rate when the row predates the credit snapshot (nil Credit —
+// pre-upgrade ledger lines). Rows written after the credit feature landed
+// always carry a snapshot and never re-resolve against current config, so
+// their credit stays stable exactly like their cost does.
+func (r *UsageRow) CreditValue(rate float64) float64 {
+	if r.Credit != nil {
+		return *r.Credit
+	}
+	return ComputeCredit(r.TotalTokens(), rate)
 }
 
 // Cost computes this row's cost in CNY from its own price snapshot.
@@ -112,6 +141,28 @@ func (r *UsageRow) Cost() float64 {
 // Unpriced reports whether the row had no effective price at call time.
 func (r *UsageRow) Unpriced() bool {
 	return r.InputPrice == 0 && r.OutputPrice == 0
+}
+
+// creditUnitDivisor is the token denominator of the credit formula. The
+// intermediate micro-credit is computed per creditUnitDivisor tokens (the
+// unit in which credit_rate is expressed), scaled by 1e6 (the micro unit),
+// then divided back by creditUnitDivisor to yield the REAL credit — the
+// round-trip through 1e6 keeps the formula literal so this stays a single
+// adjustable constant.
+const creditUnitDivisor = 1_000_000
+
+// ComputeCredit computes the credit for a call's total token count at the
+// given rate (model spec credit_rate; 0 = no credit):
+//
+//	microCredit = round(totalTokens / creditUnitDivisor × rate × 1_000_000)
+//	credit      = microCredit / creditUnitDivisor
+//
+// The intermediate microCredit is NOT the return value: ComputeCredit returns
+// the real credit (the bottom-line number users see), which ledger snapshots,
+// aggregations and displays all consume directly.
+func ComputeCredit(totalTokens int64, rate float64) float64 {
+	micro := math.Round(float64(totalTokens) / creditUnitDivisor * rate * 1_000_000)
+	return micro / creditUnitDivisor
 }
 
 // UsageRecorder appends UsageRows to per-day JSONL files under dir.
@@ -287,14 +338,39 @@ func (r ResolvedPrice) HasPrice() bool {
 // written verbatim to the ledger row.
 type PriceResolver func(provider Provider, model string) ResolvedPrice
 
+// CreditRateResolver resolves the configured credit rate (model spec
+// credit_rate) for a model at call time. It pairs with PriceResolver: the
+// agent constructs it closing over the config; an unconfigured rate
+// resolves to 0. The resolved rate is written into the ledger row as a
+// credit SNAPSHOT (see UsageRow.Credit) — never re-resolved later.
+type CreditRateResolver func(provider Provider, model string) float64
+
+// ResolveCreditRate returns the configured credit rate for a provider+model
+// from cfg's model spec (credit_rate), or 0 when unset or unknown. It is the
+// "current rate" used both for new ledger snapshots (via CreditRateResolver)
+// and for recomputing pre-credit ledger rows at display time (UsageRow
+// .CreditValue). An empty provider name resolves to the default provider
+// (same rule as pricing, see config.ProviderConfig).
+func ResolveCreditRate(cfg *config.Config, providerName, model string) float64 {
+	if cfg == nil {
+		return 0
+	}
+	p := cfg.ProviderConfig(providerName)
+	if p == nil || p.Spec.CreditRate == nil {
+		return 0
+	}
+	return *p.Spec.CreditRate
+}
+
 // RecordingProvider wraps a Provider and records every successful LLM call's
 // usage into the ledger. It MUST be the outermost decorator (outside
 // RetryProvider): otherwise a retried logical call would record one row per
 // successful attempt.
 type RecordingProvider struct {
-	inner Provider
-	rec   *UsageRecorder
-	price PriceResolver
+	inner  Provider
+	rec    *UsageRecorder
+	price  PriceResolver
+	credit CreditRateResolver
 }
 
 // WrapRecordingProvider wraps inner with usage recording. Returns inner
@@ -307,15 +383,17 @@ type RecordingProvider struct {
 // name, e.g. "deepseek-v4-flash") — no name is threaded through the
 // constructor; bare providers without a config name write an empty string.
 // price may be nil: rows are then written with zero prices (counted as
-// unpriced) but tokens are still tracked.
-func WrapRecordingProvider(inner Provider, rec *UsageRecorder, price PriceResolver) Provider {
+// unpriced) but tokens are still tracked. credit resolves the model spec's
+// credit_rate for the row's credit snapshot; nil = rate 0 (rows carry a 0
+// snapshot, still a snapshot — see UsageRow.Credit).
+func WrapRecordingProvider(inner Provider, rec *UsageRecorder, price PriceResolver, credit CreditRateResolver) Provider {
 	if inner == nil || rec == nil {
 		return inner
 	}
 	if rp, ok := inner.(*RecordingProvider); ok && rp.rec == rec {
 		return inner // already wrapped with this recorder — never double-record
 	}
-	return &RecordingProvider{inner: inner, rec: rec, price: price}
+	return &RecordingProvider{inner: inner, rec: rec, price: price, credit: credit}
 }
 
 func (p *RecordingProvider) Name() string  { return p.inner.Name() }
@@ -417,6 +495,17 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 	// implementation detail, not a provider identity, so we never fake it.
 	provider := p.inner.ProviderName()
 
+	// Credit snapshot at call time: resolve the model spec's credit_rate
+	// and compute the credit for the call's total tokens. Always written
+	// (even when 0) so every post-upgrade row is a real snapshot — nil
+	// Credit only ever means "pre-upgrade row" (see UsageRow.Credit).
+	var creditRate float64
+	if p.credit != nil {
+		creditRate = p.credit(p.inner, p.inner.Model())
+	}
+	totalTokens := input + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	credit := ComputeCredit(totalTokens, creditRate)
+
 	return p.rec.Record(UsageRow{
 		TS:                       time.Now(),
 		SessionID:                sid,
@@ -432,6 +521,7 @@ func (p *RecordingProvider) record(ctx context.Context, opts ChatOptions, u *Usa
 		CacheReadPrice:           cacheReadPrice,
 		CacheCreationPrice:       cacheCreationPrice,
 		Band:                     rp.Band,
+		Credit:                   &credit,
 	})
 }
 

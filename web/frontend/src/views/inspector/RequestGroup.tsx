@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import type { APIRequest, Message } from '../../types/api'
-import { compact, durMs, yuan } from '../../lib/format'
+import { compact, credit as fmtCredit, durMs, yuan } from '../../lib/format'
 import type { Step } from './TurnBlock'
 
 // ── event icons / labels ───────────────────────────────────────────────────
@@ -168,6 +168,7 @@ export interface RequestGroupProps {
   iteration: number
   model?: string
   cost: number
+  credit: number
   inTokens?: number
   outTokens?: number
   toolCount: number
@@ -188,6 +189,7 @@ export function RequestGroup({
   iteration,
   model,
   cost,
+  credit,
   inTokens,
   outTokens,
   toolCount,
@@ -238,6 +240,11 @@ export function RequestGroup({
         {cost > 0 && (
           <span className="text-[10px] text-inkdim bg-paper2 border border-line rounded-full px-2 py-0.5 whitespace-nowrap font-mono">
             <span className="text-gold font-semibold">{yuan(cost)}</span>
+          </span>
+        )}
+        {credit > 0 && (
+          <span className="text-[10px] text-inkdim bg-paper2 border border-line rounded-full px-2 py-0.5 whitespace-nowrap font-mono">
+            <span className="text-gold font-semibold">{fmtCredit(credit)}</span>
           </span>
         )}
         <span className="flex-1" />

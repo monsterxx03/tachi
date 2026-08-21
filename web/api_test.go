@@ -56,7 +56,7 @@ func TestSummarizeUsageTotals(t *testing.T) {
 		},
 	}
 
-	sum := summarizeUsage(rows)
+	sum := summarizeUsage(rows, nil)
 
 	// Total cost: row1 (1000*1.5/1e6 + 200*4.5/1e6 + 800*0.05/1e6) = 0.0015+0.0009+0.00004
 	// row3: 2000*3/1e6 = 0.006
@@ -105,7 +105,7 @@ func TestSummarizeUsageTotals(t *testing.T) {
 }
 
 func TestSummarizeUsageEmpty(t *testing.T) {
-	sum := summarizeUsage(nil)
+	sum := summarizeUsage(nil, nil)
 	if sum.TotalCalls != 0 || sum.TotalCost != 0 {
 		t.Fatalf("empty summary should be zero, got %+v", sum)
 	}
@@ -474,14 +474,14 @@ func TestSessionRequestCostsPairsConversationRows(t *testing.T) {
 		{Seq: 1, Timestamp: now.Add(time.Millisecond)},
 		{Seq: 2, Timestamp: now.Add(2 * time.Millisecond)},
 	}
-	costs := s.sessionRequestCosts(id, apiReqs)
-	if len(costs) != 2 {
-		t.Fatalf("costs len = %d, want 2", len(costs))
+	charges := s.sessionRequestCharges(id, apiReqs)
+	if len(charges) != 2 {
+		t.Fatalf("charges len = %d, want 2", len(charges))
 	}
-	if math.Abs(costs[0]-0.003) > 1e-9 {
-		t.Fatalf("cost[0] = %v, want 0.003", costs[0])
+	if math.Abs(charges[0].Cost-0.003) > 1e-9 {
+		t.Fatalf("cost[0] = %v, want 0.003", charges[0].Cost)
 	}
-	if math.Abs(costs[1]-0.0069) > 1e-9 {
-		t.Fatalf("cost[1] = %v, want 0.0069", costs[1])
+	if math.Abs(charges[1].Cost-0.0069) > 1e-9 {
+		t.Fatalf("cost[1] = %v, want 0.0069", charges[1].Cost)
 	}
 }

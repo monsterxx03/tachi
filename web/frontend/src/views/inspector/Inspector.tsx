@@ -5,7 +5,7 @@ import { api } from '../../api/client'
 import type { AuthReporter } from '../../App'
 import { useApi } from '../../lib/useApi'
 import { SESSION_PAGE_SIZE, useSessionList } from '../../lib/useSessionList'
-import { num, shortTime, yuan, compact } from '../../lib/format'
+import { credit, num, shortTime, yuan, compact } from '../../lib/format'
 import { Badge, Empty, Loading } from '../../components/ui'
 import { buildTurns, TurnBlock } from './TurnBlock'
 import { OneOffEventStream } from './OneOffEventStream'
@@ -154,6 +154,9 @@ export function Inspector({ onAuthError }: { onAuthError: AuthReporter }) {
             <Badge color="green">{meta.mode || 'auto'}</Badge>
             {meta.provider_name && <Badge color="gray">{meta.provider_name}</Badge>}
             <Badge color="gold">{yuan(detail.data!.usage.total_cost)}</Badge>
+            {detail.data!.usage.total_credit ? (
+              <Badge color="gold">{credit(detail.data!.usage.total_credit)}</Badge>
+            ) : null}
             <span className="flex-1" />
             <a
               className="btn-primary"

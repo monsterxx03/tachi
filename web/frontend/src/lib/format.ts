@@ -20,6 +20,12 @@ export function num(n: number | undefined): string {
   return n.toLocaleString('en-US')
 }
 
+/** Credit rounded to 2 decimals (display only; underlying values keep full precision). */
+export function credit(v: number | undefined): string {
+  if (v === undefined || Number.isNaN(v)) return '0.00'
+  return v.toFixed(2)
+}
+
 /** "08-17 21:06" from an ISO timestamp. */
 export function shortTime(iso?: string): string {
   if (!iso) return ''

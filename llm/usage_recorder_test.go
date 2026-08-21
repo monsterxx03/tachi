@@ -66,7 +66,7 @@ func TestRecordingProvider_CreateChat(t *testing.T) {
 	}
 	p := WrapRecordingProvider(inner, rec, func(provider Provider, model string) ResolvedPrice {
 		return ResolvedPrice{Price: ModelPrice{InputPrice: 1.0, OutputPrice: 2.0, CacheReadInputPrice: 0.02}}
-	})
+	}, nil)
 
 	ctx := WithUsageKind(context.Background(), UsageKindCommit)
 	ctx = WithSessionID(ctx, "sess-1")
@@ -127,7 +127,7 @@ func TestRecordingProvider_CreateChat_AnthropicNoNormalize(t *testing.T) {
 			},
 		},
 	}
-	p := WrapRecordingProvider(inner, rec, nil) // nil price → unpriced row, tokens still tracked
+	p := WrapRecordingProvider(inner, rec, nil, nil) // nil price → unpriced row, tokens still tracked
 	ctx := context.Background()
 	if _, err := p.CreateChat(ctx, nil, nil, ChatOptions{}); err != nil {
 		t.Fatalf("CreateChat: %v", err)
@@ -161,7 +161,7 @@ func TestRecordingProvider_CreateChatStream_PassthroughAndRecord(t *testing.T) {
 	}
 	p := WrapRecordingProvider(inner, rec, func(Provider, string) ResolvedPrice {
 		return ResolvedPrice{Price: ModelPrice{InputPrice: 1, OutputPrice: 2}}
-	})
+	}, nil)
 	ch, err := p.CreateChatStream(context.Background(), nil, nil, ChatOptions{})
 	if err != nil {
 		t.Fatalf("CreateChatStream: %v", err)
@@ -183,7 +183,7 @@ func TestRecordingProvider_ErrorsNotRecorded(t *testing.T) {
 	dir := t.TempDir()
 	rec := NewUsageRecorder(dir)
 	inner := &stubRecordingProvider{chatErr: errors.New("boom")}
-	p := WrapRecordingProvider(inner, rec, nil)
+	p := WrapRecordingProvider(inner, rec, nil, nil)
 	_, err := p.CreateChat(context.Background(), nil, nil, ChatOptions{})
 	if err == nil {
 		t.Fatal("expected error")
@@ -201,7 +201,7 @@ func TestRecordingProvider_SubagentCompositeID(t *testing.T) {
 		name: config.ProviderTypeOpenAI, model: "m",
 		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 1}},
 	}
-	p := WrapRecordingProvider(inner, rec, nil)
+	p := WrapRecordingProvider(inner, rec, nil, nil)
 
 	// Composite "parent:short" → parent session.
 	ctx := WithUsageKind(context.Background(), UsageKindSubagent)
@@ -248,7 +248,7 @@ func TestRecordingProvider_BandWrittenToRow(t *testing.T) {
 			Price: ModelPrice{InputPrice: 3.0, OutputPrice: 9.0, CacheReadInputPrice: 0.10},
 			Band:  "peak",
 		}
-	})
+	}, nil)
 	if _, err := p.CreateChat(context.Background(), nil, nil, ChatOptions{}); err != nil {
 		t.Fatal(err)
 	}
@@ -369,13 +369,13 @@ func TestWrapRecordingProvider_Idempotent(t *testing.T) {
 	rec := NewUsageRecorder(t.TempDir())
 	inner := &stubRecordingProvider{name: config.ProviderTypeOpenAI, model: "m",
 		resp: &Response{Usage: &Usage{InputTokens: 10, OutputTokens: 1}}}
-	wrapped := WrapRecordingProvider(inner, rec, nil)
-	if again := WrapRecordingProvider(wrapped, rec, nil); again != wrapped {
+	wrapped := WrapRecordingProvider(inner, rec, nil, nil)
+	if again := WrapRecordingProvider(wrapped, rec, nil, nil); again != wrapped {
 		t.Error("WrapRecordingProvider not idempotent for the same recorder")
 	}
 	// Different recorder → new wrapper (still safe: distinct ledgers).
 	other := NewUsageRecorder(t.TempDir())
-	if again := WrapRecordingProvider(wrapped, other, nil); again == wrapped {
+	if again := WrapRecordingProvider(wrapped, other, nil, nil); again == wrapped {
 		t.Error("different recorder should produce a new wrapper")
 	}
 }
@@ -395,5 +395,104 @@ func TestNormalizeUsageKind(t *testing.T) {
 		if got := normalizeUsageKind(c.in); got != c.want {
 			t.Errorf("normalizeUsageKind(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestComputeCredit(t *testing.T) {
+	tests := []struct {
+		name        string
+		totalTokens int64
+		rate        float64
+		want        float64
+	}{
+		// microCredit = round(totalTokens / 1e6 × rate × 1e6)，返回值为
+		// 实际积分 = microCredit / 1e6。
+		{"one unit at 0.5", 1_000_000, 0.5, 0.5},
+		{"ten units at 0.5", 10_000_000, 0.5, 5},
+		{"half unit rounds up", 500_000, 0.5, 0.25},
+		{"unconfigured rate → 0", 1_000_000, 0, 0},
+		{"no tokens → 0", 0, 0.5, 0},
+		{"sub-unit tokens at small rate", 1000, 0.05, 5e-05},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ComputeCredit(tt.totalTokens, tt.rate); got != tt.want {
+				t.Errorf("ComputeCredit(%d, %v) = %v, want %v", tt.totalTokens, tt.rate, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUsageRow_CreditValue(t *testing.T) {
+	snapshot := 1234.0
+	row := UsageRow{
+		InputTokens: 1000, OutputTokens: 200,
+		CacheReadInputTokens: 300, CacheCreationInputTokens: 100,
+	}
+	if got := row.TotalTokens(); got != 1600 {
+		t.Errorf("TotalTokens = %d, want 1600", got)
+	}
+
+	// nil snapshot (pre-upgrade row) → recompute from the current rate.
+	if got := row.CreditValue(0.05); got != ComputeCredit(1600, 0.05) {
+		t.Errorf("CreditValue(0.05) = %v, want %v", got, ComputeCredit(1600, 0.05))
+	}
+
+	// Snapshot wins — the current rate is ignored (same semantics as prices).
+	row.Credit = &snapshot
+	if got := row.CreditValue(999); got != snapshot {
+		t.Errorf("CreditValue with snapshot = %v, want snapshot %v", got, snapshot)
+	}
+}
+
+func TestRecordingProvider_CreditSnapshot(t *testing.T) {
+	dir := t.TempDir()
+	rec := NewUsageRecorder(dir)
+	inner := &stubRecordingProvider{
+		name:  config.ProviderTypeOpenAI,
+		model: "deepseek-chat",
+		resp: &Response{Usage: &Usage{
+			InputTokens:          900,
+			OutputTokens:         100,
+			CacheReadInputTokens: 100,
+		}},
+	}
+	// OpenAI-family: input is normalized to cache-miss (900 - 100 read) →
+	// total = 800 + 100 + 100 = 1000 tokens.
+	p := WrapRecordingProvider(inner, rec, nil, func(Provider, string) float64 { return 0.5 })
+	if _, err := p.CreateChat(context.Background(), nil, nil, ChatOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := rec.Rows("", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 1 {
+		t.Fatalf("rows = %d, want 1", len(rows))
+	}
+	want := ComputeCredit(1000, 0.5)
+	if rows[0].Credit == nil || *rows[0].Credit != want {
+		t.Errorf("Credit = %v, want snapshot %v (rate 0.5 over 1000 tokens)", rows[0].Credit, want)
+	}
+
+	// nil credit resolver → 0 snapshot (still non-nil: a real snapshot).
+	inner2 := &stubRecordingProvider{
+		name:  config.ProviderTypeOpenAI,
+		model: "m",
+		resp:  &Response{Usage: &Usage{InputTokens: 500, OutputTokens: 500}},
+	}
+	p2 := WrapRecordingProvider(inner2, rec, nil, nil)
+	if _, err := p2.CreateChat(context.Background(), nil, nil, ChatOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	rows, err = rec.Rows("", time.Time{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("rows = %d, want 2", len(rows))
+	}
+	if rows[1].Credit == nil || *rows[1].Credit != 0 {
+		t.Errorf("Credit with nil resolver = %v, want 0 snapshot", rows[1].Credit)
 	}
 }

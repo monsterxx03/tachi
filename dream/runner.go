@@ -64,7 +64,7 @@ func RunDream(ctx context.Context, plan Plan, cfg RunConfig, loadMessages func(i
 	// here so dream LLM calls land in the ledger (idempotent: an already
 	// wrapped fallback, e.g. TUI's main provider, passes through untouched).
 	if cfg.Recorder != nil {
-		provider = llm.WrapRecordingProvider(provider, cfg.Recorder, nil)
+		provider = llm.WrapRecordingProvider(provider, cfg.Recorder, nil, nil)
 	} else {
 		provider = agent.WrapProviderForUsage(provider, cfg.Config)
 	}

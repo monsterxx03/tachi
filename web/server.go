@@ -20,13 +20,16 @@ import (
 
 // Server hosts the web console HTTP endpoints.
 type Server struct {
-	Cfg   config.WebConfig
-	Store *session.FileStore
-	Usage *llm.UsageRecorder
+	Cfg     config.WebConfig
+	FullCfg *config.Config // full tachi config — credit rate lookup for pre-credit ledger rows; nil = rate 0
+	Store   *session.FileStore
+	Usage   *llm.UsageRecorder
 }
 
 // New creates a Server backed by the configured Tachi state dirs.
-func New(cfg config.WebConfig) (*Server, error) {
+// cfg is the FULL tachi config: Cfg.Web drives auth/CORS, FullCfg feeds
+// ledger credit aggregation (llm.ResolveCreditRate).
+func New(cfg *config.Config) (*Server, error) {
 	sessDir, err := config.SessionDir()
 	if err != nil {
 		return nil, err
@@ -36,9 +39,10 @@ func New(cfg config.WebConfig) (*Server, error) {
 		return nil, err
 	}
 	return &Server{
-		Cfg:   cfg,
-		Store: store,
-		Usage: llm.NewUsageRecorder(config.UsageDir()),
+		Cfg:     cfg.Web,
+		FullCfg: cfg,
+		Store:   store,
+		Usage:   llm.NewUsageRecorder(config.UsageDir()),
 	}, nil
 }
 

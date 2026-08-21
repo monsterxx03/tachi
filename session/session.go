@@ -127,4 +127,9 @@ type APIRequest struct {
 	// (the recorder never sets it — it's filled only by the web layer for
 	// display, so it never persists into the jsonl sidecar).
 	Cost float64 `json:"cost,omitempty"`
+	// Credit is the precise credit of this API call, taken from the same
+	// ledger row as Cost (call-time snapshot; pre-upgrade rows recomputed
+	// from the current configured rate). 0 = not resolved (display-only,
+	// never persists — same rule as Cost).
+	Credit float64 `json:"credit,omitempty"`
 }
