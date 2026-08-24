@@ -22,6 +22,12 @@ DeepSeek 官方宣布 2026-08-17 00:00（北京时间）起采用**峰谷定价*
 
 Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 
+> **8/24 更新**：官方 2026-08-24 00:00（北京时间）起高峰时段收窄为
+> **周一至周五**（09:00-12:00、14:00-18:00），周六周日全天空闲（= 谷价）。
+> 内置表新增第三版本（`EffectiveFrom: 2026-08-24`），peak band 带
+> `Days: Mon-Fri` 过滤，周末回退平段价。8/17-8/23 的「每天峰谷」版本保留，
+> 历史行快照不受影响。
+
 这带来三个设计问题，本方案逐一解决：
 1. **时段**：高峰是两个不连续区间 → 多个 band 条目，首个匹配生效。
 2. **时区**：官方按北京时间分时，不是用户本地时区 → band 判定需要时区基准。
@@ -53,6 +59,7 @@ RecordingProvider.record → UsageRow（价格快照 + band 字段）
 ```go
 type PriceBand struct {
     Name       string  // 时段名，写进账本行 band 字段（审计）
+    Days       []time.Weekday // 星期过滤（空 = 每天；Monday=1 … Sunday=7 的 Go 约定）
     StartHour  int     // 0-23，含
     EndHour    int     // 0-24，不含；EndHour <= StartHour 跨午夜（EndHour==StartHour = 全天）
     InputPrice, OutputPrice, CacheReadInputPrice, CacheCreationInputPrice float64
@@ -72,7 +79,8 @@ func (p *ModelPrice) PriceAt(t time.Time) (ModelPrice, string)
 - **半开区间** `[StartHour, EndHour)`：09:00-12:00 含 9 不含 12；跨午夜 23:00-07:00
   覆盖 23、0-6 点。
 - **首个匹配生效**：多条目按配置顺序，命中即返回（DeepSeek 两个高峰区间就是两条）。
-- **时区**：`PriceAt` 先把 t 转到 `Location`（nil → t 自己的时区）再取小时。内置
+- **时区**：`PriceAt` 先把 t 转到 `Location`（nil → t 自己的时区）再取**星期+小时**
+  ——days 过滤与小时判定共用同一时区基准（周末判定同样锚定厂商时区）。内置
   DeepSeek 表锚定 `time.FixedZone("Asia/Shanghai", 8*3600)`（中国无 DST，零依赖）。
 
 ### 版本化内置表
@@ -87,9 +95,10 @@ type builtinPriceVersion struct {
 func GetBuiltinModelPriceAt(model string, at time.Time) *ModelPrice
 ```
 
-DeepSeek flash/pro 各两个版本：老价（无 EffectiveFrom）+ 8/17 起峰谷价。老价与
-峰谷价同写进代码，`at` 决定取哪版——**发布不受厂商定价日绑架**，历史行快照天然正确
-（8/17 前记老价、之后记峰谷价）。
+DeepSeek flash/pro 各三个版本：老价（无 EffectiveFrom）+ 8/17 起峰谷价
+（每天）+ 8/24 起工作日峰谷价（peak band 带 `Days: Mon-Fri`，周末回退平段
+= 谷价）。各版本同写进代码，`at` 决定取哪版——**发布不受厂商定价日绑架**，
+历史行快照天然正确（8/17 前记老价、8/17-8/23 记每天峰谷、8/24 起记工作日峰谷）。
 
 `GetBuiltinModelPrice(model)` 保留为 `GetBuiltinModelPriceAt(model, time.Now())`
 的兼容壳——**生产路径请用 At 版**（账本/TUI 都解析"调用时刻"）。
@@ -140,8 +149,9 @@ func ResolveModelPriceAt(src PriceScheduleSource, providerName, model string, at
    （未设字段 = 0/免费）；四价全 nil 但有 `Bands` → 平段回退内置表（bands-only
    覆盖继承内置平段价）；无 override → 内置 `GetBuiltinModelPriceAt(model, at)`。
 2. **时段合并**：source `Bands` **完全替代**内置 bands（override 语义）；每条 band
-   未设的价字段**继承平段价**（显式 0 = 免费）；时间解析失败（非整点）→ 跳过该
-   band（回退平段）并 warn；`timezone` 非空且 IANA 可解析 → 覆盖判定时区。
+   未设的价字段**继承平段价**（显式 0 = 免费）；时间解析失败（非整点）或 days 越界
+   （非 1-7）→ 跳过该 band（回退平段）并 warn；`timezone` 非空且 IANA 可解析 →
+   覆盖判定时区。
 3. **定格**：`PriceAt(at)` → `ResolvedPrice{快照, band名}`。
 
 ### config（config/config.go）
@@ -152,17 +162,20 @@ providers:
     spec:
       pricing:
         timezone: "Asia/Shanghai"        # 可选；空 = 本地时区
-        input_price: 1.5                 # 平段价 = 空闲价
+        input_price: 1.5                 # 平段价 = 谷价（空闲价）
         output_price: 4.5
         cache_read_input_price: 0.05
         bands:                           # 可选；替代内置时段表
           - name: peak
+            days: [1,2,3,4,5]            # 可选；1=周一 … 7=周日；空 = 每天。
+                                         # 未列出的星期回退平段价（= 周末全天谷价）
             start: "09:00"               # HH:MM，含
             end: "12:00"                 # HH:MM，不含；end<=start 跨午夜
             input_price: 3.0             # 未设字段继承平段价；显式 0 = 免费
             output_price: 9.0
             cache_read_input_price: 0.10
           - name: peak
+            days: [1,2,3,4,5]
             start: "14:00"
             end: "18:00"
             input_price: 3.0
@@ -184,7 +197,7 @@ providers:
 | 跨午夜 | `EndHour <= StartHour` 回绕；End==Start = 全天 | 区间逻辑天然处理 |
 | 未命中时段 | 回退平段价，band 名空 | 与"平段 = 默认价"模型一致 |
 | 账本行 band 字段 | 做（`json:"band,omitempty"`） | 审计"为什么这行这个价"，为时段小计留口 |
-| 日期窗口/星期过滤 | 不做（一期） | 拍板"只要小时段" |
+| 星期过滤 | 做：band 级 `days`（数字 1-7，1=周一；空 = 每天） | 厂商按工作日/周末分时（DeepSeek 8/24 起周末全天谷价）；未命中星期回退平段 |
 
 ---
 
@@ -199,19 +212,27 @@ providers:
 4. **快照不追溯**：改 config / 内置表只影响之后的新行（既有不变量 §8）。
 5. **Bands 永不序列化**：`json:"-"`；账本行只存定格快照 + band 名。
 6. **config bands 完全替代内置 bands**：override 语义，不叠加。
-7. **解析失败不破坏调用**：bad band / bad timezone 跳过，回退平段（埋点零风险精神）。
+7. **解析失败不破坏调用**：bad band / bad days / bad timezone 跳过，回退平段
+   （埋点零风险精神）。
+8. **days 空 = 每天**：无 `days` 的 band 行为与加 days 前逐字节一致；8/17-8/23
+   内置版本无 Days 过滤，8/24 起才有。
 
 ---
 
 ## 五、测试要点
 
 - **llm/pricing_test.go**：`PriceAt`（无 bands 恒等 / 首个匹配 / 跨午夜 / 未命中回
-  平段 / 快照不带 Bands）；`GetBuiltinModelPriceAt` 版本切换（8/16 老价 vs 8/17
-  峰谷价）；峰谷时段选择（含 UTC 同一时刻命中北京时段 = 时区锚定验证）。测试全部
-  用**固定时刻**，不依赖 time.Now()，8/17 前后跑都稳定。
+  平段 / 快照不带 Bands / days 过滤：工作日命中、周末回平段、无 days = 每天）；
+  `GetBuiltinModelPriceAt` 版本切换（8/16 老价 vs 8/17 峰谷价 vs 8/24 工作日峰谷
+  ——8/22 周六仍峰谷验证历史快照、8/29 周六回谷价）；峰谷时段选择（含 UTC 同一时刻
+  命中北京时段 = 时区锚定验证）。测试全部用**固定时刻**，不依赖 time.Now()。
 - **agent/commands/pricing_test.go**：config bands 命中/未命中；继承平段；显式 0 =
   免费；非整点解析失败跳过；bands-only 继承内置平段；timezone（UTC 时刻 vs 北京）；
   config bands 替代内置（8/17 后 10:00 内置是 peak，自定义 bands 时回到平段）。
+- **llm/pricing_resolve_test.go**：config days 命中/未命中（工作日 vs 周末）；
+  days 越界（0/8）→ 跳过 band 回平段；`parseBandDays`（1-7 映射、7→周日、去重、
+  越界报错）。
+- **config/pricing_yaml_test.go**：YAML `days` 字段装载。
 - **llm/usage_recorder_test.go**：resolver 返回的 band 名写进账本行 + JSON
   `"band"` 字段。
 - **回归**：全量 `go test ./...` 37 包绿；`make lint` 过。
@@ -223,12 +244,15 @@ providers:
 | 文件 | 改动 |
 |------|------|
 | `llm/pricing.go` | `PriceBand` / `ModelPrice.Location+Bands` / `PriceAt` / `builtinPriceVersion`+`GetBuiltinModelPriceAt` / DeepSeek 峰谷价（flash+pro，8/17 起，Asia/Shanghai） |
+| `llm/pricing.go`（8/24） | `PriceBand.Days` 星期过滤 + `matches(weekday, hour)` / `buildPriceBand`+`parseBandDays`（1-7，空 = 每天，越界跳过） |
+| `llm/builtin_models.go`（8/24） | DeepSeek 第三价格版本：8/24 起工作日峰谷（peak band 带 Days Mon-Fri），周末全天谷价 |
+| `config/provider_defs.go`（8/24） | `PriceBandSpec.Days []int`（yaml `days,omitempty`，1-7） |
 | `llm/usage_recorder.go` | `ResolvedPrice`+`HasPrice` / `PriceResolver` 返回类型 / `UsageRow.Band` / record 写 band |
 | `config/config.go` | `ModelSpec.Pricing` 类型改为 `*llm.PricingConfig`（config 的 `ModelPricing`/`PriceBandConfig` 删除——schema 单源） |
 | `config/resolve.go` | `Config.PricingSchedule`（实现 `llm.PriceScheduleSource`，原样返回、零搬运） |
 | `agent/commands/pricing.go` | `ResolveModelPrice` 薄壳（转发 `llm.ResolveModelPriceAt`，TUI 入口） |
 | `agent/agent.go` | `wrapForUsage` 闭包改用 `llm.ResolveModelPriceAt(cfg, ..., time.Now())` |
-| 测试 | llm（fake source 解析语义）+ config（PricingSchedule 接线 + YAML 装载）+ commands（接线） |
+| 测试 | llm（fake source 解析语义 + 星期机制 + 8/24 版本切换）+ config（PricingSchedule 接线 + YAML 装载 days）+ commands（接线；`pricesEqual` 改 `reflect.DeepEqual` 因 PriceBand 含 slice） |
 
 ## 后续（未实现，已知待办）
 

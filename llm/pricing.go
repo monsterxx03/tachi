@@ -36,25 +36,39 @@ type ModelPrice struct {
 }
 
 // PriceBand is one time-of-use pricing band: effective during
-// [StartHour, EndHour) in the model's Location (see ModelPrice.Location).
-// EndHour <= StartHour wraps past midnight (e.g. 23:00→07:00); EndHour ==
-// StartHour therefore covers the whole day. All four unit prices are the
-// FINAL effective values (0 = not charged) — inheritance from the flat
-// price is applied by the resolver BEFORE building the band (see
-// ResolveModelPriceAt).
+// [StartHour, EndHour) on Days (empty = every day) in the model's Location
+// (see ModelPrice.Location). EndHour <= StartHour wraps past midnight
+// (e.g. 23:00→07:00); EndHour == StartHour therefore covers the whole day.
+// All four unit prices are the FINAL effective values (0 = not charged) —
+// inheritance from the flat price is applied by the resolver BEFORE building
+// the band (see ResolveModelPriceAt).
 type PriceBand struct {
-	Name                    string // band name written to the ledger row (UsageRow.Band); "" = unnamed
-	StartHour               int    // 0-23, inclusive
-	EndHour                 int    // 0-24, exclusive; <= StartHour wraps past midnight
+	Name                    string         // band name written to the ledger row (UsageRow.Band); "" = unnamed
+	Days                    []time.Weekday // 1-7 filter; empty = every day (Monday=1 … Sunday=7, Go convention)
+	StartHour               int            // 0-23, inclusive
+	EndHour                 int            // 0-24, exclusive; <= StartHour wraps past midnight
 	InputPrice              float64
 	OutputPrice             float64
 	CacheReadInputPrice     float64
 	CacheCreationInputPrice float64
 }
 
-// matches reports whether hour falls in the band's [StartHour, EndHour)
-// window (already converted to the band's timezone by PriceAt).
-func (b PriceBand) matches(hour int) bool {
+// matches reports whether weekday+hour fall in the band's window (already
+// converted to the band's timezone by PriceAt). An empty Days list matches
+// every weekday — the pre-days behavior.
+func (b PriceBand) matches(weekday time.Weekday, hour int) bool {
+	if len(b.Days) > 0 {
+		found := false
+		for _, d := range b.Days {
+			if d == weekday {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return false
+		}
+	}
 	if b.EndHour > b.StartHour {
 		return hour >= b.StartHour && hour < b.EndHour
 	}
@@ -118,9 +132,11 @@ func (p *ModelPrice) PriceAt(t time.Time) (ModelPrice, string) {
 	if loc == nil {
 		loc = t.Location()
 	}
-	hour := t.In(loc).Hour()
+	local := t.In(loc)
+	weekday := local.Weekday()
+	hour := local.Hour()
 	for _, b := range p.Bands {
-		if b.matches(hour) {
+		if b.matches(weekday, hour) {
 			return ModelPrice{
 				InputPrice:              b.InputPrice,
 				OutputPrice:             b.OutputPrice,
@@ -277,7 +293,7 @@ func ResolveModelPriceAt(cfg *config.Config, providerName, model string, at time
 
 // buildPriceBand converts a raw band spec into a PriceBand, filling nil
 // price fields from the flat price (inheritance). Returns an error for
-// unparseable times — the band is then skipped (flat price applies).
+// unparseable times or days — the band is then skipped (flat price applies).
 func buildPriceBand(bs config.PriceBandSpec, flat *ModelPrice) (PriceBand, error) {
 	start, err := parseBandHour(bs.Start)
 	if err != nil {
@@ -287,8 +303,13 @@ func buildPriceBand(bs config.PriceBandSpec, flat *ModelPrice) (PriceBand, error
 	if err != nil {
 		return PriceBand{}, err
 	}
+	days, err := parseBandDays(bs.Days)
+	if err != nil {
+		return PriceBand{}, err
+	}
 	band := PriceBand{
 		Name:      bs.Name,
+		Days:      days,
 		StartHour: start,
 		EndHour:   end,
 		// Inherit the flat price; explicit 0 in config = free.
@@ -320,6 +341,32 @@ func parseBandHour(s string) (int, error) {
 		return 0, fmt.Errorf("invalid band time %q (want whole hour 00-23)", s)
 	}
 	return h, nil
+}
+
+// parseBandDays converts user-facing day numbers (1 = Monday … 7 = Sunday)
+// into Go weekdays (Sunday = 0 … Saturday = 6). Empty input = nil (the band
+// matches every day). Returns an error for out-of-range numbers so the band
+// is skipped with a warn rather than silently mis-filtered. Duplicates are
+// collapsed.
+func parseBandDays(days []int) ([]time.Weekday, error) {
+	if len(days) == 0 {
+		return nil, nil
+	}
+	out := make([]time.Weekday, 0, len(days))
+	seen := make(map[time.Weekday]struct{}, len(days))
+	for _, d := range days {
+		if d < 1 || d > 7 {
+			return nil, fmt.Errorf("invalid day %d (want 1-7, 1 = Monday … 7 = Sunday)", d)
+		}
+		// 1→Monday(1) … 6→Saturday(6), 7→Sunday(0): Go's Weekday numbers
+		// Sunday = 0, so day % 7 lands exactly on the Go value.
+		wd := time.Weekday(d % 7)
+		if _, ok := seen[wd]; !ok {
+			seen[wd] = struct{}{}
+			out = append(out, wd)
+		}
+	}
+	return out, nil
 }
 
 // NormalizeCacheMissInput returns the cache-miss input token count for a

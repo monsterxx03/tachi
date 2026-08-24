@@ -1,6 +1,7 @@
 package llm
 
 import (
+	"reflect"
 	"testing"
 	"time"
 
@@ -26,10 +27,16 @@ func cfgWithPricing(p *config.PricingConfig) *config.Config {
 // zone). time.Local would make these tests fail on non-UTC+8 machines.
 var cstFixed = time.FixedZone("CST", 8*3600)
 
-// atHour is a fixed +08:00 instant on 2026-08-17 (tests never rely on
-// time.Now() so band selection is deterministic and portable).
+// atHour is a fixed +08:00 instant on 2026-08-17 (Monday) — tests never
+// rely on time.Now() so band selection is deterministic and portable.
 func atHour(h int) time.Time {
 	return time.Date(2026, 8, 17, h, 0, 0, 0, cstFixed)
+}
+
+// atHourOn returns a fixed +08:00 instant on the given August 2026 date —
+// for tests that need a specific weekday (2026-08-22 is a Saturday).
+func atHourOn(day, h int) time.Time {
+	return time.Date(2026, 8, day, h, 0, 0, 0, cstFixed)
 }
 
 // TestResolveModelPriceAt_Bands: a source band applies at its hours (with
@@ -50,6 +57,98 @@ func TestResolveModelPriceAt_Bands(t *testing.T) {
 	out := ResolveModelPriceAt(cfg, "custom", "some-model", atHour(13))
 	if out.Price.InputPrice != 1.0 || out.Price.OutputPrice != 2.0 || out.Band != "" {
 		t.Errorf("off-band = %+v (band %q), want flat 1.0/2.0", out.Price, out.Band)
+	}
+}
+
+// TestResolveModelPriceAt_BandDays: a band with Days (1-7, 1=Monday) only
+// matches on those weekdays — the same peak hours fall back to the flat
+// price on other days (e.g. weekends fully off-peak).
+func TestResolveModelPriceAt_BandDays(t *testing.T) {
+	cfg := cfgWithPricing(&config.PricingConfig{
+		InputPrice:  f64(1.0),
+		OutputPrice: f64(2.0),
+		Bands: []config.PriceBandSpec{
+			{Name: "peak", Days: []int{1, 2, 3, 4, 5}, Start: "09:00", End: "12:00", InputPrice: f64(3.0)},
+		},
+	})
+
+	// Monday 10:00 (atHour = 2026-08-17, a Monday) → in band.
+	mon := ResolveModelPriceAt(cfg, "custom", "m", atHour(10))
+	if mon.Price.InputPrice != 3.0 || mon.Band != "peak" {
+		t.Errorf("monday 10:00 = %+v (band %q), want 3.0 + peak", mon.Price, mon.Band)
+	}
+	// Saturday 10:00 (2026-08-22) → band days miss → flat all day.
+	sat := ResolveModelPriceAt(cfg, "custom", "m", atHourOn(22, 10))
+	if sat.Price.InputPrice != 1.0 || sat.Band != "" {
+		t.Errorf("saturday 10:00 = %+v (band %q), want flat 1.0 (weekend off-peak)", sat.Price, sat.Band)
+	}
+	// Sunday 14:00 (2026-08-23) → flat too.
+	sun := ResolveModelPriceAt(cfg, "custom", "m", atHourOn(23, 14))
+	if sun.Price.InputPrice != 1.0 || sun.Band != "" {
+		t.Errorf("sunday 14:00 = %+v (band %q), want flat 1.0", sun.Price, sun.Band)
+	}
+	// Day 7 (Sunday) in the list still respects the hour window.
+	weekend := cfgWithPricing(&config.PricingConfig{
+		InputPrice: f64(1.0),
+		Bands: []config.PriceBandSpec{
+			{Name: "sunday-peak", Days: []int{7}, Start: "14:00", End: "18:00", InputPrice: f64(5.0)},
+		},
+	})
+	sunPeak := ResolveModelPriceAt(weekend, "custom", "m", atHourOn(23, 15))
+	if sunPeak.Price.InputPrice != 5.0 || sunPeak.Band != "sunday-peak" {
+		t.Errorf("sunday 15:00 with days=[7] = %+v (band %q), want 5.0 + sunday-peak", sunPeak.Price, sunPeak.Band)
+	}
+	// …but the same hour on Monday (day 1) misses.
+	monOff := ResolveModelPriceAt(weekend, "custom", "m", atHour(15))
+	if monOff.Price.InputPrice != 1.0 || monOff.Band != "" {
+		t.Errorf("monday 15:00 with days=[7] = %+v (band %q), want flat 1.0", monOff.Price, monOff.Band)
+	}
+}
+
+// TestResolveModelPriceAt_BandInvalidDaysSkipped: out-of-range day numbers
+// (outside 1-7) make the whole band unparseable — it is skipped and the
+// flat price applies, consistent with the "bad band never breaks a call"
+// invariant.
+func TestResolveModelPriceAt_BandInvalidDaysSkipped(t *testing.T) {
+	cfg := cfgWithPricing(&config.PricingConfig{
+		InputPrice: f64(1.0),
+		Bands: []config.PriceBandSpec{
+			{Name: "bad-day", Days: []int{0}, Start: "09:00", End: "12:00", InputPrice: f64(9.0)},
+			{Name: "bad-day-8", Days: []int{8}, Start: "14:00", End: "18:00", InputPrice: f64(9.0)},
+		},
+	})
+	rp := ResolveModelPriceAt(cfg, "custom", "m", atHour(10))
+	if rp.Price.InputPrice != 1.0 || rp.Band != "" {
+		t.Errorf("invalid-days bands must be skipped: %+v (band %q)", rp.Price, rp.Band)
+	}
+}
+
+// TestParseBandDays: user-facing day numbers (1-7, 1=Monday) map to Go
+// weekdays; duplicates collapse; empty = nil (every day); out-of-range
+// numbers error so the band is skipped.
+func TestParseBandDays(t *testing.T) {
+	// Empty = every day (the pre-days behavior).
+	got, err := parseBandDays(nil)
+	if err != nil || got != nil {
+		t.Errorf("parseBandDays(nil) = %v, %v; want nil, nil", got, err)
+	}
+	// Mon-Fri: 1,2,3,4,5 → Monday..Friday.
+	got, err = parseBandDays([]int{1, 2, 3, 4, 5})
+	want := []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("parseBandDays([1..5]) = %v, %v; want %v", got, err, want)
+	}
+	// 7 → Sunday (Go Weekday 0), and duplicates collapse.
+	got, err = parseBandDays([]int{7, 7, 1, 1})
+	want = []time.Weekday{time.Sunday, time.Monday}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("parseBandDays([7,7,1,1]) = %v, %v; want %v", got, err, want)
+	}
+	// Out-of-range numbers error.
+	for _, bad := range [][]int{{0}, {8}, {-1}} {
+		if _, err := parseBandDays(bad); err == nil {
+			t.Errorf("parseBandDays(%v) must error", bad)
+		}
 	}
 }
 

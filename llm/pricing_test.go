@@ -26,15 +26,7 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 			want:  flash,
 		},
 		{
-			model: "deepseek-chat",
-			want:  flash,
-		},
-		{
 			model: "deepseek-v4-pro",
-			want:  pro,
-		},
-		{
-			model: "deepseek-reasoner",
 			want:  pro,
 		},
 		{
@@ -84,7 +76,9 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 // TestGetBuiltinModelPriceAt_DeepSeekPeakVersions pins the versioned DeepSeek
 // table: the old flat prices until 2026-08-17 00:00 北京时间, then 峰谷定价
 // (空闲 = flat, 高峰 09:00-12:00 / 14:00-18:00 北京时间 at twice the off-peak
-// prices). Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+// prices), then from 2026-08-24 the peak window narrows to WORKDAYS only —
+// weekends fall back to the flat off-peak price all day.
+// Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 func TestGetBuiltinModelPriceAt_DeepSeekPeakVersions(t *testing.T) {
 	// 8/16: old flat prices, no bands.
 	old := GetBuiltinModelPriceAt("deepseek-v4-flash", prePeak)
@@ -103,14 +97,35 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakVersions(t *testing.T) {
 	if peak.InputPrice != 1.5 || peak.OutputPrice != 4.5 || peak.CacheReadInputPrice != 0.05 {
 		t.Errorf("flat (off-peak) prices = %+v, want 1.5/4.5/0.05", peak)
 	}
+	// 8/17-8/23 version: EVERY day has peak hours (no Days filter).
+	for _, b := range peak.Bands {
+		if len(b.Days) != 0 {
+			t.Errorf("8/17 version band Days = %v, want nil (every day)", b.Days)
+		}
+	}
+
+	// 8/24 起: workday-only peak bands (Mon-Fri), weekend = flat off-peak all day.
+	weekday := GetBuiltinModelPriceAt("deepseek-v4-flash", time.Date(2026, 8, 24, 0, 0, 0, 0, tzAsiaShanghai))
+	if weekday == nil || len(weekday.Bands) != 2 {
+		t.Fatalf("weekday-peak version = %+v, want 2 bands", weekday)
+	}
+	if weekday.InputPrice != 1.5 || weekday.OutputPrice != 4.5 || weekday.CacheReadInputPrice != 0.05 {
+		t.Errorf("flat (off-peak) prices = %+v, want 1.5/4.5/0.05", weekday)
+	}
+	for _, b := range weekday.Bands {
+		if len(b.Days) != 5 {
+			t.Errorf("8/24 version band Days = %v, want 5 weekdays (Mon-Fri)", b.Days)
+		}
+	}
 }
 
 // TestGetBuiltinModelPriceAt_DeepSeekPeakSelection exercises band selection at
 // fixed instants, including timezone anchoring (北京时间 — the same instant
-// expressed in UTC must hit the same band).
+// expressed in UTC must hit the same band) and the 8/24 workday-only
+// schedule (weekend peak hours fall back to the off-peak flat price).
 func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
-	beijing := func(hour int) time.Time {
-		return time.Date(2026, 8, 17, hour, 0, 0, 0, tzAsiaShanghai)
+	beijing := func(day, hour int) time.Time {
+		return time.Date(2026, 8, day, hour, 0, 0, 0, tzAsiaShanghai)
 	}
 	cases := []struct {
 		name string
@@ -118,16 +133,28 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
 		want float64 // input price at that instant
 		band string
 	}{
-		{"off-peak 08:00", beijing(8), 1.5, ""},
-		{"peak 09:00", beijing(9), 3.0, "peak"},
-		{"peak 11:59", beijing(11), 3.0, "peak"},
-		{"between peaks 12:00", beijing(12), 1.5, ""},
-		{"between peaks 13:00", beijing(13), 1.5, ""},
-		{"peak 14:00", beijing(14), 3.0, "peak"},
-		{"peak 17:59", beijing(17), 3.0, "peak"},
-		{"off-peak 18:00", beijing(18), 1.5, ""},
-		{"off-peak 23:00", beijing(23), 1.5, ""},
+		// 8/17 (Monday) — 每天峰谷 version: peak hours every day of the week.
+		{"off-peak 08:00", beijing(17, 8), 1.5, ""},
+		{"peak 09:00", beijing(17, 9), 3.0, "peak"},
+		{"peak 11:59", beijing(17, 11), 3.0, "peak"},
+		{"between peaks 12:00", beijing(17, 12), 1.5, ""},
+		{"between peaks 13:00", beijing(17, 13), 1.5, ""},
+		{"peak 14:00", beijing(17, 14), 3.0, "peak"},
+		{"peak 17:59", beijing(17, 17), 3.0, "peak"},
+		{"off-peak 18:00", beijing(17, 18), 1.5, ""},
+		{"off-peak 23:00", beijing(17, 23), 1.5, ""},
 		{"same instant in UTC 06:30 (14:30 Beijing)", time.Date(2026, 8, 17, 6, 30, 0, 0, time.UTC), 3.0, "peak"},
+		// 8/22 (Saturday) — still the 8/17 EVERY-day version: weekends had
+		// peak hours before 8/24 (historical snapshots must stay correct).
+		{"8/22 saturday 10:00 still peak", beijing(22, 10), 3.0, "peak"},
+		// 8/24 (Monday) onward — workday-only version: weekdays peak…
+		{"8/24 monday 10:00 peak", beijing(24, 10), 3.0, "peak"},
+		{"8/25 tuesday 15:00 peak", beijing(25, 15), 3.0, "peak"},
+		{"8/25 tuesday 08:00 off-peak", beijing(25, 8), 1.5, ""},
+		// …and weekends fall back to the off-peak flat price ALL DAY.
+		{"8/29 saturday 10:00 off-peak", beijing(29, 10), 1.5, ""},
+		{"8/30 sunday 10:00 off-peak", beijing(30, 10), 1.5, ""},
+		{"8/30 sunday 15:00 off-peak", beijing(30, 15), 1.5, ""},
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
@@ -145,17 +172,21 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
 		})
 	}
 
-	// pro: peak 10:00 → 9.0/27.0/0.30.
-	pro := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(10))
+	// pro: peak 10:00 → 9.0/27.0/0.30 (weekday, post-8/24) and weekend off-peak.
+	pro := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(25, 10))
 	if pro == nil {
 		t.Fatal("pro price = nil")
 	}
-	snap, band := pro.PriceAt(beijing(10))
+	snap, band := pro.PriceAt(beijing(25, 10))
 	if snap.InputPrice != 9.0 || snap.OutputPrice != 27.0 || snap.CacheReadInputPrice != 0.30 {
 		t.Errorf("pro peak prices = %+v, want 9.0/27.0/0.30", snap)
 	}
 	if band != "peak" {
 		t.Errorf("pro band = %q, want peak", band)
+	}
+	proWeekend, band := GetBuiltinModelPriceAt("deepseek-v4-pro", beijing(30, 10)).PriceAt(beijing(30, 10))
+	if proWeekend.InputPrice != 4.5 || proWeekend.OutputPrice != 13.5 || band != "" {
+		t.Errorf("pro weekend = %+v (band %q), want flat 4.5/13.5", proWeekend, band)
 	}
 }
 
@@ -207,6 +238,36 @@ func TestPriceAt(t *testing.T) {
 	snap, band = night.PriceAt(at(12))
 	if snap.InputPrice != 1.0 || band != "" {
 		t.Errorf("12:00 outside night band: (%+v, %q)", snap, band)
+	}
+
+	// Days filter: the same hours peak on weekdays only — weekends fall back
+	// to flat ALL DAY. 2026-08-24 is a Monday, 08-29 a Saturday.
+	workday := flat
+	workday.Bands = []PriceBand{{
+		Name: "peak", Days: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday},
+		StartHour: 9, EndHour: 12, InputPrice: 3.0,
+	}}
+	monday := func(h int) time.Time { return time.Date(2026, 8, 24, h, 0, 0, 0, time.Local) }
+	saturday := func(h int) time.Time { return time.Date(2026, 8, 29, h, 0, 0, 0, time.Local) }
+	snap, band = workday.PriceAt(monday(10))
+	if snap.InputPrice != 3.0 || band != "peak" {
+		t.Errorf("monday 10:00 must hit the workday band: (%+v, %q)", snap, band)
+	}
+	snap, band = workday.PriceAt(monday(13))
+	if snap.InputPrice != 1.0 || band != "" {
+		t.Errorf("monday 13:00 outside band hours: (%+v, %q)", snap, band)
+	}
+	snap, band = workday.PriceAt(saturday(10))
+	if snap.InputPrice != 1.0 || band != "" {
+		t.Errorf("saturday 10:00 must fall back to flat (weekend, band days miss): (%+v, %q)", snap, band)
+	}
+
+	// A band WITHOUT Days matches every weekday (the pre-days behavior).
+	anyday := flat
+	anyday.Bands = []PriceBand{{Name: "peak", StartHour: 9, EndHour: 12, InputPrice: 3.0}}
+	snap, band = anyday.PriceAt(saturday(10))
+	if snap.InputPrice != 3.0 || band != "peak" {
+		t.Errorf("no-days band must match weekends too: (%+v, %q)", snap, band)
 	}
 }
 

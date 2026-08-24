@@ -94,8 +94,12 @@ func (p *PricingConfig) Apply(dst PriceOverrides) {
 // are "HH:MM" (24h, inclusive start, exclusive end; end <= start wraps past
 // midnight, end == start = whole day; minutes must be 0). nil price fields
 // inherit the flat price, explicit 0 = free.
+// Days restricts the band to a subset of the week (1 = Monday … 7 = Sunday);
+// empty = every day. Days with a band miss the weekday → the flat price
+// applies (e.g. a workday-only peak band leaves weekends fully off-peak).
 type PriceBandSpec struct {
 	Name                    string   `yaml:"name,omitempty"` // band name written to the ledger row ("" = unnamed)
+	Days                    []int    `yaml:"days,omitempty"` // 1=周一 … 7=周日；空 = 每天
 	Start                   string   `yaml:"start"`
 	End                     string   `yaml:"end"`
 	InputPrice              *float64 `yaml:"input_price,omitempty"`

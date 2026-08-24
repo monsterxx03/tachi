@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/monsterxx03/tachi/config"
@@ -10,9 +11,10 @@ import (
 func f64(v float64) *float64 { return &v }
 
 // pricesEqual compares two resolved ModelPrice snapshots deeply: the four
-// unit prices plus each band's window/name/prices. ModelPrice now carries a
-// slice (Bands), so struct equality (==) no longer compiles — this is the
-// field-wise stand-in for the tests that compare resolution outcomes.
+// unit prices plus each band's window/days/name/prices. ModelPrice now
+// carries slices (Bands, PriceBand.Days), so struct equality (==) no longer
+// compiles — this is the field-wise stand-in for the tests that compare
+// resolution outcomes.
 func pricesEqual(a, b *llm.ModelPrice) bool {
 	if a == nil || b == nil {
 		return a == b
@@ -26,7 +28,7 @@ func pricesEqual(a, b *llm.ModelPrice) bool {
 		return false
 	}
 	for i := range a.Bands {
-		if a.Bands[i] != b.Bands[i] {
+		if !reflect.DeepEqual(a.Bands[i], b.Bands[i]) {
 			return false
 		}
 	}
