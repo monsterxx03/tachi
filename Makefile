@@ -8,7 +8,7 @@ LDFLAGS := -s -w -X main.Version=$(VERSION) -X github.com/monsterxx03/tachi/llm.
 NPM := npm --prefix web/frontend
 
 
-build: web-build
+build: web-check
 	go build -trimpath -ldflags="$(LDFLAGS)" -o tachi .
 
 # Build the frontend into web/frontend/dist so it's embedded into the Go binary.
