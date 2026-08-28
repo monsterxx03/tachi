@@ -343,6 +343,21 @@ func TestGetBuiltinModelPrice_GLM(t *testing.T) {
 				InputPrice: 8.0, OutputPrice: 28.0, CacheReadInputPrice: 2.0,
 			},
 		},
+		{
+			// GLM-5.3-Flash 5 折限时两周促销价（Source: https://bigmodel.cn/pricing）。
+			// 变体记录排在 glm-5.3 之前，不会被 8/28/2 家族价误匹配。
+			model: "glm-5.3-flash",
+			want: &ModelPrice{
+				InputPrice: 0.4, OutputPrice: 1.4, CacheReadInputPrice: 0.115,
+				// CacheCreationInputPrice = 0（缓存存储限时免费）。
+			},
+		},
+		{
+			model: "GLM-5.3-Flash",
+			want: &ModelPrice{
+				InputPrice: 0.4, OutputPrice: 1.4, CacheReadInputPrice: 0.115,
+			},
+		},
 		// Unknown GLM variant (e.g. glm-5) → unpriced, not the 5.3 table.
 		{
 			model: "glm-5",

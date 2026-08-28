@@ -74,6 +74,14 @@ var builtinModels = []builtinModel{
 
 	// ---- 智谱 GLM ----
 	{
+		// 变体必须在家族记录之前——"glm-5.3-flash" 也含子串 "glm-5.3"。
+		// Source: https://bigmodel.cn/pricing
+		match:   []string{"glm-5.3-flash"},
+		context: 1_000_000,
+		vision:  true, // 输入模态：图片、视频、文件、文本
+		prices:  glm53FlashPriceVersions,
+	},
+	{
 		match:   []string{"glm-5.3", "glm-5.2"},
 		context: 1_000_000,
 		prices:  glm52PriceVersions,
@@ -295,6 +303,16 @@ var glm52PriceVersions = []builtinPriceVersion{{Price: ModelPrice{
 	InputPrice:          8.0,
 	OutputPrice:         28.0,
 	CacheReadInputPrice: 2.0,
+}}}
+
+// glm53FlashPriceVersions: 智谱 GLM-5.3-Flash（国内版）5 折限时两周促销价。
+// 输入 0.4 / 输出 1.4 / cache 命中 0.115；缓存存储限时免费 → CacheCreationInputPrice = 0。
+// 促销结束后将切换到常规价 0.8/2.8/0.23，届时再加一条 EffectiveFrom 版本。
+// Source: https://bigmodel.cn/pricing
+var glm53FlashPriceVersions = []builtinPriceVersion{{Price: ModelPrice{
+	InputPrice:          0.4,
+	OutputPrice:         1.4,
+	CacheReadInputPrice: 0.115,
 }}}
 
 // kimiK3PriceVersions: 月之暗面 Kimi K3（国内版）。
