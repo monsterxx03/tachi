@@ -1382,6 +1382,10 @@ func TestCommitCommand_RunsOneOffTurn(t *testing.T) {
 // TestCommitCommand_StreamsToCallback verifies the handler forwards text
 // deltas to the streaming callback attached to the context (the mechanism
 // Discord uses for live status embeds during a run).
+//
+// The turn summary (footer) is also forwarded as a final text delta so
+// streaming channels that build their reply from streamed deltas (e.g.
+// wave's streaming card) don't lose the iteration/cost info.
 func TestCommitCommand_StreamsToCallback(t *testing.T) {
 	threadID := "commit-stream-thread"
 	mgr, _ := newOneoffTestManager(t, []string{"streamed commit message"}, threadID)
@@ -1403,7 +1407,13 @@ func TestCommitCommand_StreamsToCallback(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	assert.Equal(t, "streamed commit message", streamed)
+	// Original behaviour: the text delta is streamed.
+	assert.Contains(t, streamed, "streamed commit message")
+	// New behaviour: the turn summary footer is streamed as well, so
+	// streaming cards end with the same iteration/cost info as the
+	// final reply text.
+	assert.Contains(t, streamed, "回合")
+	assert.Contains(t, streamed, "次迭代")
 }
 
 // TestCommitCommand_ViaTextSlash verifies the "/commit" text command routes

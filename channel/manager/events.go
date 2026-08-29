@@ -185,6 +185,16 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				if event.Result.IterationsUsed > 0 {
 					if summary := agent.FormatTurnSummary(event.Result); summary != "" {
 						text.WriteString(summary)
+						// Streaming channels accumulate text via onTextDelta,
+						// so the turn summary must also be streamed — otherwise
+						// it would only exist in the final text and be dropped
+						// by channels that build their reply from streamed
+						// deltas (e.g. wave's streaming card uses sw.total).
+						if onTextDelta != nil {
+							if err := onTextDelta(StreamEvent{Type: StreamEventTextDelta, Text: summary}); err != nil {
+								m.logger.Warn(ctx, "channel: streaming turn summary callback error", "error", err)
+							}
+						}
 					}
 				}
 				if event.Result.Error != nil {
