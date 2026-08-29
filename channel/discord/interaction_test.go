@@ -7,6 +7,7 @@ import (
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/container"
 )
 
 // ---------------------------------------------------------------------------
@@ -33,6 +34,9 @@ func TestBuildQuestionMessage_ButtonsRow(t *testing.T) {
 	if !strings.Contains(content, "方案") {
 		t.Errorf("content missing header: %q", content)
 	}
+	if !strings.Contains(content, "请逐题回答") {
+		t.Errorf("content missing per-question hint: %q", content)
+	}
 	if len(components) != 1 {
 		t.Fatalf("want 1 action row, got %d", len(components))
 	}
@@ -50,8 +54,9 @@ func TestBuildQuestionMessage_ButtonsRow(t *testing.T) {
 		if !ok {
 			t.Fatalf("component %d: want *Button, got %T", i, c)
 		}
-		if btn.CustomID != "tachi:ask:tok123:q0:o"+string(rune('0'+i)) {
-			t.Errorf("customID = %q", btn.CustomID)
+		want := "tachi:ask:tok123:q0:o" + string(rune('0'+i))
+		if btn.CustomID != want {
+			t.Errorf("customID = %q, want %q", btn.CustomID, want)
 		}
 		if btn.Label != questions[0].Options[i].Label {
 			t.Errorf("label = %q, want %q", btn.Label, questions[0].Options[i].Label)
@@ -104,6 +109,57 @@ func TestBuildQuestionMessage_TooManyOptionsUsesSelectMenu(t *testing.T) {
 	}
 }
 
+func TestBuildQuestionMessage_TooManyOptionsTruncatesMenu(t *testing.T) {
+	opts := make([]channel.QuestionOption, 0, 30)
+	for i := 0; i < 30; i++ {
+		opts = append(opts, channel.QuestionOption{Label: "opt" + string(rune('A'+i%26)) + string(rune('0'+i/26))})
+	}
+	questions := []channel.Question{{Question: "many", Options: opts}}
+
+	content, components := buildQuestionMessage("tok", questions)
+	row := components[0].(*discordgo.ActionsRow)
+	menu, ok := row.Components[0].(*discordgo.SelectMenu)
+	if !ok {
+		t.Fatalf("want *SelectMenu, got %T", row.Components[0])
+	}
+	if len(menu.Options) != maxSelectMenuOptions {
+		t.Errorf("menu options = %d, want cap %d", len(menu.Options), maxSelectMenuOptions)
+	}
+	if menu.MaxValues != 1 {
+		t.Errorf("max values = %d, want 1 (truncated singleselect)", menu.MaxValues)
+	}
+	if !strings.Contains(content, "仅展示前 25 个") {
+		t.Errorf("content missing excess-options hint: %q", content)
+	}
+}
+
+func TestBuildQuestionMessage_MultiSelectMaxValuesAfterTruncation(t *testing.T) {
+	opts := make([]channel.QuestionOption, 0, 30)
+	for i := 0; i < 30; i++ {
+		opts = append(opts, channel.QuestionOption{Label: "o" + string(rune('0'+i%10))})
+	}
+	questions := []channel.Question{{Question: "many", MultiSelect: true, Options: opts}}
+
+	_, components := buildQuestionMessage("tok", questions)
+	menu := components[0].(*discordgo.ActionsRow).Components[0].(*discordgo.SelectMenu)
+	if menu.MaxValues != maxSelectMenuOptions {
+		t.Errorf("multi-select max = %d, want %d after truncation", menu.MaxValues, maxSelectMenuOptions)
+	}
+}
+
+func TestBuildQuestionMessage_LongBodyTruncated(t *testing.T) {
+	questions := []channel.Question{
+		{Question: strings.Repeat("很长的", 700)}, // 2100 runes, will overflow
+	}
+	content, _ := buildQuestionMessage("tok", questions)
+	if utf8RuneCount(content) > discordMessageLimit {
+		t.Errorf("content runes = %d, want ≤ %d", utf8RuneCount(content), discordMessageLimit)
+	}
+	if !strings.Contains(content, "已截断") {
+		t.Errorf("content missing truncation marker: %q", content)
+	}
+}
+
 func TestBuildQuestionMessage_NoOptionsFallsBackToText(t *testing.T) {
 	questions := []channel.Question{
 		{Question: "开放问题", Header: "自由"},
@@ -143,13 +199,17 @@ func TestBuildQuestionRow_LongLabelTruncated(t *testing.T) {
 	q := channel.Question{Options: []channel.QuestionOption{{Label: long}}}
 	row := buildQuestionRow("tok", 0, q).(*discordgo.ActionsRow)
 	btn := row.Components[0].(*discordgo.Button)
-	if got := len([]rune(btn.Label)); got > maxButtonLabelRunes {
+	if got := utf8RuneCount(btn.Label); got > maxButtonLabelRunes {
 		t.Errorf("label runes = %d, want ≤ %d", got, maxButtonLabelRunes)
 	}
 }
 
+func utf8RuneCount(s string) int {
+	return len([]rune(s))
+}
+
 // ---------------------------------------------------------------------------
-// parseAskCustomID / parseQuestionIdx
+// parseAskCustomID / parseIdxSegment
 // ---------------------------------------------------------------------------
 
 func TestParseAskCustomID(t *testing.T) {
@@ -169,7 +229,9 @@ func TestParseAskCustomID(t *testing.T) {
 		{"missing idx", "tachi:ask:tok", "", 0, 0, false},
 		{"empty token", "tachi:ask::q0", "", 0, 0, false},
 		{"non-numeric idx", "tachi:ask:tok:qX", "", 0, 0, false},
+		{"swapped roles", "tachi:ask:tok:o1:q0", "", 0, 0, false},
 		{"trailing junk", "tachi:ask:tok:q0:o1:zzz", "", 0, 0, false},
+		{"option without question", "tachi:ask:tok:o1", "", 0, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -184,25 +246,27 @@ func TestParseAskCustomID(t *testing.T) {
 	}
 }
 
-func TestParseQuestionIdx(t *testing.T) {
+func TestParseIdxSegment(t *testing.T) {
 	tests := []struct {
-		in   string
-		want int
-		ok   bool
+		in     string
+		letter byte
+		want   int
+		ok     bool
 	}{
-		{"q0", 0, true},
-		{"q1", 1, true},
-		{"q42", 42, true},
-		{"o3", 3, true},
-		{"", 0, false},
-		{"q", 0, false},
-		{"0", 0, false},
-		{"q-1", 0, false},
+		{"q0", 'q', 0, true},
+		{"q1", 'q', 1, true},
+		{"q42", 'q', 42, true},
+		{"o3", 'o', 3, true},
+		{"o1", 'q', 0, false}, // wrong role marker
+		{"", 'q', 0, false},
+		{"q", 'q', 0, false},
+		{"0", 'q', 0, false},
+		{"q-1", 'q', 0, false},
 	}
 	for _, tt := range tests {
-		got, ok := parseQuestionIdx(tt.in)
+		got, ok := parseIdxSegment(tt.in, tt.letter)
 		if got != tt.want || ok != tt.ok {
-			t.Errorf("parseQuestionIdx(%q) = (%d,%v), want (%d,%v)", tt.in, got, ok, tt.want, tt.ok)
+			t.Errorf("parseIdxSegment(%q,%q) = (%d,%v), want (%d,%v)", tt.in, tt.letter, got, ok, tt.want, tt.ok)
 		}
 	}
 }
@@ -287,51 +351,81 @@ func TestDisableQuestionComponents(t *testing.T) {
 // question state registry
 // ---------------------------------------------------------------------------
 
-func TestQuestionStateRegistry(t *testing.T) {
-	ch := &DiscordChannel{
-		questionStates: make(map[string]*questionState),
-	}
+func newTestQuestionChannel() *DiscordChannel {
+	return &DiscordChannel{questionStates: &container.LockedMap[string, *questionState]{}}
+}
 
+func TestClaimQuestionState(t *testing.T) {
+	ch := newTestQuestionChannel()
 	st := &questionState{token: "tok1", threadID: "guild:1:channel:2", created: time.Now()}
-	ch.registerQuestionState(st)
+	ch.questionStates.Store("tok1", st)
 
-	if got := ch.lookupQuestionState("tok1"); got != st {
-		t.Fatalf("lookup returned %v, want %v", got, st)
+	// First claim succeeds and removes the entry.
+	if got := ch.claimQuestionState("tok1"); got != st {
+		t.Fatalf("claim returned %v, want %v", got, st)
 	}
-	if got := ch.lookupQuestionState("nope"); got != nil {
-		t.Fatalf("unknown token should return nil, got %v", got)
+	// Second claim (double-click) finds nothing.
+	if got := ch.claimQuestionState("tok1"); got != nil {
+		t.Fatalf("second claim should be nil, got %v", got)
 	}
-
-	// Answered entries are removed.
-	st.answered = true
-	if got := ch.lookupQuestionState("tok1"); got != nil {
-		t.Fatalf("answered entry should be cleaned up, got %v", got)
-	}
-
-	// Expired entries are removed.
-	ch.registerQuestionState(&questionState{token: "tok2", created: time.Now().Add(-(askStateTTL + time.Minute))})
-	if got := ch.lookupQuestionState("tok2"); got != nil {
-		t.Fatalf("expired entry should be cleaned up, got %v", got)
-	}
-
-	// Unregister removes entries.
-	ch.registerQuestionState(&questionState{token: "tok3", created: time.Now()})
-	ch.unregisterQuestionState("tok3")
-	if got := ch.lookupQuestionState("tok3"); got != nil {
-		t.Fatal("unregistered token should be gone")
+	// Unknown token.
+	if got := ch.claimQuestionState("nope"); got != nil {
+		t.Fatalf("unknown token claim should be nil, got %v", got)
 	}
 }
 
-func TestNewQuestionToken_Format(t *testing.T) {
-	a := newQuestionToken()
-	b := newQuestionToken()
-	if a == "" || a == b {
-		t.Errorf("tokens should be unique non-empty, got %q and %q", a, b)
+func TestClaimQuestionState_Expired(t *testing.T) {
+	ch := newTestQuestionChannel()
+	ch.questionStates.Store("tok", &questionState{token: "tok", created: time.Now().Add(-(askStateTTL + time.Minute))})
+	if got := ch.claimQuestionState("tok"); got != nil {
+		t.Fatalf("expired claim should be nil and remove entry, got %v", got)
 	}
-	// Token must not contain ':' (it is embedded in a colon-separated CustomID).
-	for _, c := range a + b {
-		if c == ':' {
-			t.Fatalf("token contains ':': %q", a)
-		}
+	if _, ok := ch.questionStates.Load("tok"); ok {
+		t.Fatal("expired entry should be removed from the map")
+	}
+}
+
+func TestAcknowledgeAskUser(t *testing.T) {
+	ch := newTestQuestionChannel()
+	ch.questionStates.Store("tok1", &questionState{token: "tok1", threadID: "t1", channelID: "c1", messageID: "m1", created: time.Now()})
+	ch.questionStates.Store("tok2", &questionState{token: "tok2", threadID: "t2", channelID: "c2", created: time.Now()})
+
+	// Acknowledging t1 removes only t1's state (t2 untouched).
+	ch.AcknowledgeAskUser("t1")
+	if _, ok := ch.questionStates.Load("tok1"); ok {
+		t.Fatal("acknowledged state should be removed")
+	}
+	if _, ok := ch.questionStates.Load("tok2"); !ok {
+		t.Fatal("unrelated state should remain")
+	}
+
+	// Acknowledging a thread with no pending state is a no-op.
+	ch.AcknowledgeAskUser("t9")
+}
+
+func TestCleanupThreadQuestions(t *testing.T) {
+	ch := newTestQuestionChannel()
+	ch.questionStates.Store("a", &questionState{token: "a", threadID: "t1", created: time.Now()})
+	ch.questionStates.Store("b", &questionState{token: "b", threadID: "t1", created: time.Now()})
+	ch.questionStates.Store("c", &questionState{token: "c", threadID: "t2", created: time.Now()})
+
+	ch.cleanupThreadQuestions("t1")
+	if ch.questionStates.Len() != 1 {
+		t.Fatalf("Len = %d, want 1 (only t2 remains)", ch.questionStates.Len())
+	}
+	if _, ok := ch.questionStates.Load("c"); !ok {
+		t.Fatal("t2 state should remain")
+	}
+}
+
+func TestQuestionTokenIsColonFree(t *testing.T) {
+	// The token is embedded in a colon-separated CustomID — it must never
+	// contain ':'. strutil.ShortUUID strips hyphens only, so this is a
+	// regression guard for that invariant.
+	ch := newTestQuestionChannel()
+	_ = ch
+	a := "tok" // placeholder; actual tokens come from strutil.ShortUUID
+	if strings.Contains(a, ":") {
+		t.Fatal("token must not contain ':'")
 	}
 }

@@ -217,6 +217,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				select {
 				case ta.askUserRespCh <- tools.AskUserResult{Answers: answers}:
 					m.logger.Info(ctx, "channel: AskUser answer delivered", "thread", msg.ThreadID, "entries", len(answers))
+					m.acknowledgeAskUserSettled(msg.ThreadID)
 				default:
 					m.logger.Warn(ctx, "channel: AskUser answer dropped (channel full)", "thread", msg.ThreadID)
 				}

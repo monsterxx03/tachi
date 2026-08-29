@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/container"
 	"github.com/monsterxx03/tachi/pkg/httpx"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"gopkg.in/yaml.v3"
@@ -109,10 +110,11 @@ type DiscordChannel struct {
 	componentHandlers map[string]componentHandler
 
 	// Pending AskUserQuestion prompts, keyed by their CustomID token.
-	// Guarded by questionStatesMu (PresentQuestions runs on the agent-turn
-	// goroutine; component interactions arrive on discordgo goroutines).
-	questionStates   map[string]*questionState
-	questionStatesMu sync.Mutex
+	// Implemented as a LockedMap: PresentQuestions runs on the agent-turn
+	// goroutine, component interactions arrive on discordgo goroutines, and
+	// text-fallback acks come from the manager — all need synchronized
+	// access, and claim/cleanup rely on atomic LoadAndDelete.
+	questionStates *container.LockedMap[string, *questionState]
 
 	// Slash command handler (injected by Manager via CommandChannel interface)
 	cmdHandler channel.CommandHandler
@@ -174,7 +176,7 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 		httpClient:            httpClient,
 		cacheDir:              cacheDir,
 		componentHandlers:     make(map[string]componentHandler),
-		questionStates:        make(map[string]*questionState),
+		questionStates:        &container.LockedMap[string, *questionState]{},
 		memberCache:           newMemberCache(),
 		deduper:               newMessageDeduper(),
 		topicStatus:           make(map[string]topicEntry),

@@ -2,14 +2,14 @@ package discord
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/pkg/channel"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // Interactive AskUserQuestion support.
@@ -26,19 +26,35 @@ import (
 //   - PresentQuestions renders the questions as a Discord message: each
 //     multiple-choice question becomes a row of buttons (single-select with
 //     ≤5 options) or a select menu (multi-select / more options); questions
-//     without options tell the user to reply with text.
+//     without options tell the user to reply with text. Discord hard limits
+//     (5 action rows, 25 menu options, 2000-char messages) are enforced
+//     before sending so a prompt can never fail the API call and strand the
+//     agent turn.
 //   - Button/menu clicks arrive as INTERACTION_CREATE (message component)
 //     events in a discordgo callback goroutine, while the agent turn blocks
-//     in the manager. The click handler builds an IncomingMessage with
-//     AskUserAnswers and delegates to the same message handler the manager
-//     passed to Run(), which routes the answers back to the waiting agent
-//     (it returns Steered=true and never produces a reply to send).
-//   - The question message is edited after an answer is recorded to disable
-//     the components and show what was chosen, preventing double answers.
+//     in the manager. The click handler atomically claims the pending state,
+//     builds an IncomingMessage with AskUserAnswers and delegates to the
+//     same message handler the manager passed to Run(), which routes the
+//     answers back to the waiting agent (it returns Steered=true and never
+//     produces a reply to send).
+//   - The question message is edited after an answer is recorded (via the
+//     interaction token when available, falling back to a plain message
+//     edit) to disable the components and show what was chosen, preventing
+//     double answers.
+//   - When the user answers with plain text (manager fallback) or cancels,
+//     the manager calls AcknowledgeAskUser (AskUserAcknowledger hook) and
+//     the channel retires the pending state + disables the buttons, so a
+//     stale click can never start an unintended second turn.
 //
-// The CustomID namespace is "tachi:ask:<token>:q<idx>:o<optIdx>" (buttons)
-// and "tachi:ask:<token>:q<idx>" (select menues). <token> is unique per
-// PresentQuestions call and is the key into the pending-questions registry.
+// Pending states live in a container.LockedMap keyed by a per-prompt token
+// embedded in the CustomIDs. PresentQuestions stores a placeholder entry
+// before sending, then re-stores the full state (with the message ID) under
+// the lock after a successful send — any subsequent claim is guaranteed to
+// observe the complete state. Claiming (button click) uses atomic
+// LoadAndDelete so concurrent double-clicks can never both deliver answers.
+//
+// CustomID namespace: "tachi:ask:<token>:q<idx>:o<optIdx>" (buttons) and
+// "tachi:ask:<token>:q<idx>" (select menus).
 
 const (
 	// askCustomIDPrefix is the shared prefix for every AskUserQuestion
@@ -50,38 +66,51 @@ const (
 	// Discord interaction tokens expire ~15 minutes after the message is
 	// sent; after that button clicks fail client-side anyway, and typing a
 	// text reply remains the fallback (manager routes raw text as an answer
-	// to the first question). This TTL only guards the registry.
+	// to the first question). Claim checks this TTL after LoadAndDelete.
 	askStateTTL = 15 * time.Minute
 
 	// maxActionRows is Discord's limit of action rows per message.
 	maxActionRows = 5
 	// maxButtonsPerRow is Discord's limit of buttons per action row.
 	maxButtonsPerRow = 5
+	// maxSelectMenuOptions is Discord's limit of options in a select menu.
+	maxSelectMenuOptions = 25
 	// maxButtonLabelRunes is Discord's button label limit.
 	maxButtonLabelRunes = 80
 	// maxSelectOptionDescRunes is Discord's select option description limit.
 	maxSelectOptionDescRunes = 100
+	// maxQuestionMsgRunes is the pre-send cap for the question message body;
+	// it leaves headroom under Discord's 2000-char limit for the "已选择"
+	// summary appended by markQuestionAnswered.
+	maxQuestionMsgRunes = discordMessageLimit - 60
 )
 
 // questionState tracks a delivered AskUserQuestion prompt so component
 // interactions can be routed back to the waiting agent turn.
+//
+// A state's lifetime in the registry equals its answerability: it is stored
+// on presentation, atomically claimed (LoadAndDelete) on a button/menu
+// click, and deleted by AcknowledgeAskUser on text-fallback answers. The
+// absence of an entry therefore means "already settled".
 type questionState struct {
 	token     string // unique token embedded in CustomIDs
 	threadID  string // manager thread ID the answers must be routed to
 	channelID string // Discord channel the question message lives in
-	messageID string // Discord message ID of the question message
+	messageID string // Discord message ID; only set on the post-send version
 	questions []channel.Question
-	answered  bool // already answered (clicked) — reject further clicks
 	created   time.Time
 }
 
+// Compile-time assertions that DiscordChannel satisfies the interactive
+// contract expected by the manager: keeping AskUserQuestion registered and
+// retiring UI state when prompts settle via the text fallback.
+var (
+	_ channel.InteractiveChannel  = (*DiscordChannel)(nil)
+	_ channel.AskUserAcknowledger = (*DiscordChannel)(nil)
+)
+
 // Interactive implements channel.InteractiveChannel.
 func (ch *DiscordChannel) Interactive() bool { return true }
-
-// Compile-time assertion that DiscordChannel satisfies the interactive
-// channel contract expected by the manager (keeps AskUserQuestion
-// registered for Discord threads and routes answers back).
-var _ channel.InteractiveChannel = (*DiscordChannel)(nil)
 
 // PresentQuestions implements channel.InteractiveChannel. It renders the
 // agent's questions as a Discord message with buttons / select menus and
@@ -89,7 +118,14 @@ var _ channel.InteractiveChannel = (*DiscordChannel)(nil)
 // routed back to the waiting agent turn. Returns nil once the message is
 // sent; the actual answer arrives asynchronously via a component
 // interaction, which re-enters through the normal message handler.
+//
+// Any leftover pending state for the same thread is discarded first (a
+// previous prompt may have timed out or settled without UI interaction),
+// keeping the registry bounded per thread.
 func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyID string, questions []channel.Question) error {
+	if len(questions) == 0 {
+		return fmt.Errorf("discord: PresentQuestions called with no questions")
+	}
 	sess := ch.session
 	if sess == nil {
 		return fmt.Errorf("discord: session not initialized")
@@ -99,15 +135,18 @@ func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyI
 		return fmt.Errorf("discord: invalid threadID %q", threadID)
 	}
 
-	token := newQuestionToken()
-	st := &questionState{
+	// Drop any stale pending state for this thread before presenting a new
+	// prompt (bounded registry, no unbounded growth across repeated turns).
+	ch.cleanupThreadQuestions(threadID)
+
+	token := strutil.ShortUUID(16)
+	ch.questionStates.Store(token, &questionState{
 		token:     token,
 		threadID:  threadID,
 		channelID: channelID,
 		questions: questions,
 		created:   time.Now(),
-	}
-	ch.registerQuestionState(st)
+	})
 
 	content, components := buildQuestionMessage(token, questions)
 	sent, err := sess.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
@@ -115,11 +154,21 @@ func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyI
 		Components: components,
 	})
 	if err != nil {
-		ch.unregisterQuestionState(token)
+		ch.questionStates.Delete(token)
 		return fmt.Errorf("discord: send question message: %w", err)
 	}
 
-	st.messageID = sent.ID
+	// Re-store under the lock with the message ID filled in. Any claim
+	// (component click) happens after this Store returns, so it is
+	// guaranteed to observe the complete state (no torn reads).
+	ch.questionStates.Store(token, &questionState{
+		token:     token,
+		threadID:  threadID,
+		channelID: channelID,
+		messageID: sent.ID,
+		questions: questions,
+		created:   time.Now(),
+	})
 	ch.logger.Info(ctx, "discord: AskUser questions presented", "thread", threadID,
 		"count", len(questions), "channel", channelID, "message", sent.ID)
 	return nil
@@ -129,9 +178,12 @@ func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyI
 // prompt plus one action row per multiple-choice question (buttons for
 // single-select with ≤5 options, a select menu otherwise). Questions
 // without options get no components — the user replies with plain text.
+// Discord hard limits are enforced: ≤5 action rows, ≤25 menu options
+// (excess options fall back to a text hint), and the body is truncated to
+// stay under the 2000-char message limit.
 func buildQuestionMessage(token string, questions []channel.Question) (string, []discordgo.MessageComponent) {
 	var b strings.Builder
-	b.WriteString("❓ **Tachi 需要你确认几个问题**\n")
+	b.WriteString("❓ **Tachi 需要你确认几个问题**\n请逐题回答，回答后我会继续询问剩余问题。\n")
 
 	var rows []discordgo.MessageComponent
 	for i, q := range questions {
@@ -146,9 +198,14 @@ func buildQuestionMessage(token string, questions []channel.Question) (string, [
 			fmt.Fprintf(&b, "**%d. %s**\n", i+1, q.Question)
 		}
 
-		// Allocate an action row only while the 5-row budget lasts.
+		// Allocate an action row while the 5-row budget lasts. Menus with
+		// more than 25 options are rendered truncated (the menu itself caps
+		// at 25) with a hint that the rest must be typed.
 		if len(rows) < maxActionRows && len(q.Options) > 0 {
 			if row := buildQuestionRow(token, i, q); row != nil {
+				if len(q.Options) > maxSelectMenuOptions {
+					b.WriteString("→ ⚠️ 选项过多，仅展示前 25 个；其他选项请直接回复文字\n")
+				}
 				rows = append(rows, row)
 				continue
 			}
@@ -160,7 +217,11 @@ func buildQuestionMessage(token string, questions []channel.Question) (string, [
 		}
 	}
 
-	return strings.TrimSpace(b.String()), rows
+	content := strings.TrimSpace(b.String())
+	if utf8.RuneCountInString(content) > maxQuestionMsgRunes {
+		content = strutil.TruncatePlain(content, maxQuestionMsgRunes) + "\n\n⚠️ 问题列表过长，已截断…"
+	}
+	return content, rows
 }
 
 // buildQuestionRow builds a single action row for question qi:
@@ -193,13 +254,15 @@ func buildQuestionRow(token string, qi int, q channel.Question) discordgo.Messag
 
 // buildQuestionSelectMenu builds the select menu for question qi.
 // The option value IS its label — the agent's answer carries the label text.
-// MinValues is pinned to 1 so a selection is always submitted.
+// MinValues is pinned to 1 so a selection is always submitted. Options are
+// capped at Discord's 25-option menu limit (excess handled by the caller's
+// text hint).
 func buildQuestionSelectMenu(token string, qi int, q channel.Question) *discordgo.SelectMenu {
 	if len(q.Options) == 0 {
 		return nil
 	}
-	opts := make([]discordgo.SelectMenuOption, 0, len(q.Options))
-	for _, opt := range q.Options {
+	opts := make([]discordgo.SelectMenuOption, 0, min(len(q.Options), maxSelectMenuOptions))
+	for _, opt := range q.Options[:min(len(q.Options), maxSelectMenuOptions)] {
 		label := truncateRunes(opt.Label, maxButtonLabelRunes)
 		opts = append(opts, discordgo.SelectMenuOption{
 			Label:       label,
@@ -210,7 +273,7 @@ func buildQuestionSelectMenu(token string, qi int, q channel.Question) *discordg
 	min := 1
 	max := 1
 	if q.MultiSelect {
-		max = len(opts)
+		max = len(opts) // computed after the 25-option cap
 	}
 	return &discordgo.SelectMenu{
 		CustomID:    fmt.Sprintf("%s%s:q%d", askCustomIDPrefix, token, qi),
@@ -221,8 +284,10 @@ func buildQuestionSelectMenu(token string, qi int, q channel.Question) *discordg
 	}
 }
 
-// parseAskCustomID splits a "tachi:ask:<token>:q<idx>[:o<optIdx>]" CustomID.
-// oi is -1 for select-menu interactions (no button option index).
+// parseAskCustomID splits a "tachi:ask:<token>:q<idx>:o<optIdx>" CustomID
+// into its parts, validating segment roles: the question segment must start
+// with 'q' and the optional option segment with 'o'. oi is -1 for
+// select-menu interactions (no button option index).
 func parseAskCustomID(customID string) (token string, qi, oi int, ok bool) {
 	if !strings.HasPrefix(customID, askCustomIDPrefix) {
 		return "", 0, 0, false
@@ -233,27 +298,27 @@ func parseAskCustomID(customID string) (token string, qi, oi int, ok bool) {
 		return "", 0, 0, false
 	}
 	token = parts[0]
-	qi, ok = parseQuestionIdx(parts[1])
-	if !ok || token == "" {
+	if token == "" {
+		return "", 0, 0, false
+	}
+	qi, ok = parseIdxSegment(parts[1], 'q')
+	if !ok {
 		return "", 0, 0, false
 	}
 	oi = -1
-	if len(parts) >= 3 {
-		if oi, ok = parseQuestionIdx(parts[2]); !ok {
+	if len(parts) == 3 {
+		if oi, ok = parseIdxSegment(parts[2], 'o'); !ok {
 			return "", 0, 0, false
 		}
 	}
 	return token, qi, oi, true
 }
 
-// parseQuestionIdx parses an index segment consisting of a single letter
-// followed by digits ("q0", "o3", "q12"...). Returns the parsed value.
-func parseQuestionIdx(s string) (int, bool) {
-	if len(s) < 2 {
-		return 0, false
-	}
-	c := s[0]
-	if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') {
+// parseIdxSegment parses "<letter><digits>" (e.g. "q0", "o12"). The letter
+// must match the expected role marker, keeping malformed CustomIDs (e.g.
+// swapped q/o roles) from ever resolving.
+func parseIdxSegment(s string, letter byte) (int, bool) {
+	if len(s) < 2 || s[0] != letter {
 		return 0, false
 	}
 	n := 0
@@ -271,46 +336,65 @@ func parseQuestionIdx(s string) (int, bool) {
 
 // --- pending question state registry -------------------------------------
 
-// registerQuestionState stores a pending question prompt keyed by token.
-func (ch *DiscordChannel) registerQuestionState(st *questionState) {
-	ch.questionStatesMu.Lock()
-	ch.questionStates[st.token] = st
-	ch.questionStatesMu.Unlock()
-}
-
-// unregisterQuestionState removes a pending question prompt.
-func (ch *DiscordChannel) unregisterQuestionState(token string) {
-	ch.questionStatesMu.Lock()
-	delete(ch.questionStates, token)
-	ch.questionStatesMu.Unlock()
-}
-
-// lookupQuestionState returns the pending state for token, or nil when
-// unknown, already answered, or expired (expired entries are cleaned up).
-func (ch *DiscordChannel) lookupQuestionState(token string) *questionState {
-	ch.questionStatesMu.Lock()
-	defer ch.questionStatesMu.Unlock()
-
-	st, ok := ch.questionStates[token]
-	if !ok {
-		return nil
+// cleanupThreadQuestions removes every pending state for the given thread.
+// Used when presenting a new prompt for a thread (old prompts may have
+// settled without UI: turn-timeout, /stop, etc.).
+func (ch *DiscordChannel) cleanupThreadQuestions(threadID string) {
+	var stale []string
+	ch.questionStates.Range(func(token string, st *questionState) bool {
+		if st.threadID == threadID {
+			stale = append(stale, token)
+		}
+		return true
+	})
+	for _, token := range stale {
+		ch.questionStates.Delete(token)
 	}
-	if st.answered || time.Since(st.created) > askStateTTL {
-		delete(ch.questionStates, token)
+}
+
+// claimQuestionState atomically claims the pending state for a token on a
+// button/menu click. Claims are take-once: LoadAndDelete removes the entry
+// under the lock, so concurrent double-clicks can never both receive the
+// state (the loser gets nil and short-circuits with an ephemeral notice).
+func (ch *DiscordChannel) claimQuestionState(token string) *questionState {
+	st, ok := ch.questionStates.LoadAndDelete(token)
+	if !ok || time.Since(st.created) > askStateTTL {
 		return nil
 	}
 	return st
 }
 
-// markQuestionAnswered flags a pending question as answered and edits the
-// question message to disable its components, showing what was chosen.
-// Best-effort: failures are logged, not propagated (the answer itself is
-// already on its way to the agent).
-func (ch *DiscordChannel) markQuestionAnswered(st *questionState, summary string) {
-	ch.questionStatesMu.Lock()
-	st.answered = true
-	ch.questionStatesMu.Unlock()
+// AcknowledgeAskUser implements channel.AskUserAcknowledger. Called by the
+// manager after an AskUserQuestion prompt is settled through the fallback
+// path (plain-text answer or explicit cancel, both of which the channel
+// cannot observe directly). The matching pending state is retired and its
+// buttons disabled so a stale click cannot start an unintended second turn.
+// UI-click answers also trigger this (the state is already claimed/removed
+// by then), so the lookup simply finds nothing and returns — idempotent.
+func (ch *DiscordChannel) AcknowledgeAskUser(threadID string) {
+	var st *questionState
+	ch.questionStates.Range(func(token string, s *questionState) bool {
+		if s.threadID == threadID {
+			st = s
+			return false
+		}
+		return true
+	})
+	if st == nil {
+		return
+	}
+	ch.questionStates.Delete(st.token)
+	ch.markQuestionAnswered(st, nil, "")
+}
 
+// markQuestionAnswered flags a pending question as settled and edits the
+// question message to disable its components, showing what was chosen.
+// When a component interaction is available (UI-click path) the edit is
+// performed through the interaction token (InteractionResponseEdit), which
+// properly completes the interaction; otherwise a plain message edit is
+// used. Best-effort: failures are logged, not propagated (the answer itself
+// is already on its way to the agent).
+func (ch *DiscordChannel) markQuestionAnswered(st *questionState, interaction *discordgo.Interaction, summary string) {
 	sess := ch.session
 	if sess == nil || st.messageID == "" {
 		return
@@ -324,6 +408,18 @@ func (ch *DiscordChannel) markQuestionAnswered(st *questionState, summary string
 	}
 	disableQuestionComponents(components)
 
+	// Preferred: complete the interaction via its token. This also removes
+	// the client-side loading state on the clicked button.
+	if interaction != nil {
+		if _, err := sess.InteractionResponseEdit(interaction, &discordgo.WebhookEdit{
+			Content:    &content,
+			Components: &components,
+		}); err == nil {
+			return
+		} else {
+			ch.logger.Error(context.Background(), "discord: interaction response edit failed, falling back to message edit", err)
+		}
+	}
 	if _, err := sess.ChannelMessageEditComplex(&discordgo.MessageEdit{
 		Channel:    st.channelID,
 		ID:         st.messageID,
@@ -355,9 +451,9 @@ func disableQuestionComponents(components []discordgo.MessageComponent) {
 
 // handleComponentInteraction processes an INTERACTION_CREATE of type
 // message component (button click / select menu selection) for an
-// AskUserQuestion prompt. It routes the chosen answer back to the waiting
-// agent turn through the message handler and edits the question message to
-// disable the components.
+// AskUserQuestion prompt. It atomically claims the pending state, routes
+// the chosen answer back to the waiting agent turn through the message
+// handler, and edits the question message to disable the components.
 func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *discordgo.InteractionCreate, handler channel.MessageHandler) {
 	data, ok := i.Data.(*discordgo.MessageComponentInteractionData)
 	if !ok {
@@ -370,10 +466,11 @@ func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *di
 		return
 	}
 
-	st := ch.lookupQuestionState(token)
+	st := ch.claimQuestionState(token)
 	if st == nil {
-		// Unknown / expired / double-clicked. Reply ephemerally so the user
-		// knows to type the answer instead of clicking a dead button.
+		// Unknown / expired / already claimed (double-click). Reply
+		// ephemerally so the user knows to type the answer instead of
+		// clicking a dead button.
 		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 			Type: discordgo.InteractionResponseChannelMessageWithSource,
 			Data: &discordgo.InteractionResponseData{
@@ -387,6 +484,14 @@ func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *di
 	// Resolve the answers from the interaction payload.
 	answers, summary, ok := resolveQuestionAnswers(st.questions, data, qi, oi)
 	if !ok {
+		ch.logger.Warn(context.Background(), "discord: question interaction out of range", "token", token, "qi", qi, "oi", oi)
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ 无效的问题选项，请直接发文字告诉我。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 		return
 	}
 
@@ -398,7 +503,7 @@ func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *di
 	}
 
 	// Disable the components and show the choice (best-effort).
-	ch.markQuestionAnswered(st, summary)
+	ch.markQuestionAnswered(st, i.Interaction, summary)
 
 	// Deliver the answer to the agent turn. The manager handler routes
 	// AskUserAnswers back to the waiting drainEvents and returns
@@ -413,7 +518,17 @@ func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *di
 		ch.logger.Info(context.Background(), "discord: AskUser answer routed to agent",
 			"thread", st.threadID, "answers", len(answers))
 	} else {
-		ch.logger.Warn(context.Background(), "discord: component handler returned non-steered result", "thread", st.threadID)
+		// Defensive: this should not normally happen (a claimed click implies
+		// a waiting agent turn), but if the turn ended between claim and
+		// delivery the handler runs a full turn whose reply would otherwise
+		// be silently dropped — surface it instead of swallowing it.
+		ch.logger.Warn(context.Background(), "discord: question click produced non-steered result; forwarding reply",
+			"thread", st.threadID)
+		if result.Reply.Content != "" {
+			if err := ch.sendText(st.channelID, result.Reply.Content); err != nil {
+				ch.logger.Error(context.Background(), "discord: forward stale question click reply failed", err)
+			}
+		}
 	}
 }
 
@@ -447,15 +562,4 @@ func resolveQuestionAnswers(questions []channel.Question, data *discordgo.Messag
 		summary = value
 	}
 	return answers, summary, true
-}
-
-// newQuestionToken returns a random hex token used in component CustomIDs.
-func newQuestionToken() string {
-	b := make([]byte, 8)
-	if _, err := rand.Read(b); err != nil {
-		// crypto/rand failure is effectively impossible on normal systems;
-		// fall back to a time-based token rather than failing the turn.
-		return fmt.Sprintf("t%x", time.Now().UnixNano())
-	}
-	return hex.EncodeToString(b)
 }

@@ -565,6 +565,24 @@ func (m *Manager) presentQuestionsToChannel(threadID, replyID string, questions 
 	}
 }
 
+// acknowledgeAskUserSettled notifies the channel that owns the given thread
+// that an AskUserQuestion prompt has been answered (via UI or fallback text)
+// or cancelled, so it can retire the pending UI state (disable buttons, drop
+// the registry entry) and prevent stale clicks from starting an unintended
+// second turn. Interactive channels that don't implement AskUserAcknowledger
+// simply skip this.
+func (m *Manager) acknowledgeAskUserSettled(threadID string) {
+	m.threadChannelMu.RLock()
+	ch, ok := m.threadChannels[threadID]
+	m.threadChannelMu.RUnlock()
+	if !ok {
+		return
+	}
+	if ack, ok := ch.(channel.AskUserAcknowledger); ok {
+		ack.AcknowledgeAskUser(threadID)
+	}
+}
+
 // Close releases all resources held by the Manager, including killing all
 // tracked background processes, evicting cached agents, and tearing down
 // the shared MCP manager. Safe to call multiple times.
