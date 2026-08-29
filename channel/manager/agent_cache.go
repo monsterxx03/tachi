@@ -209,9 +209,15 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *llm
 	// Non-interactive channels unregister AskUserQuestion so the LLM
 	// never attempts to use it. Interactive channels (those implementing
 	// InteractiveChannel with Interactive()==true) keep it registered.
+	//
+	// Note: NewAIAgentWithConfig unconditionally unregisters AskUser for
+	// PermissionModeSkip (channel mode), so the interactive branch must
+	// re-register it here — "thread is interactive" logging alone would be
+	// misleading (the tool exists only after this re-registration).
 	if !m.isThreadChannelInteractive(threadID) {
 		a.UnregisterTool(tools.ToolNameAskUser)
 	} else {
+		a.RegisterTool(tools.AskUserTool{})
 		m.logger.Info(ctx, "channel: thread is interactive", "thread", threadID)
 	}
 
