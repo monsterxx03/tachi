@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
 // cachedAgent wraps a per-thread AIAgent with serialization (so a single
@@ -219,6 +220,16 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *llm
 	} else {
 		a.RegisterTool(tools.AskUserTool{})
 		m.logger.Info(ctx, "channel: thread is interactive", "thread", threadID)
+	}
+
+	// Register channel-specific tools (optional ToolProvider interface).
+	// e.g. the wave channel injects its todo tool, which needs the wave
+	// client's access_token and only makes sense on wave threads.
+	if tp, ok := m.channelForThread(threadID).(channel.ToolProvider); ok {
+		for _, t := range tp.ChannelTools() {
+			a.RegisterTool(t)
+			m.logger.Info(ctx, "channel: registered channel tool", "thread", threadID, "tool", t.Name())
+		}
 	}
 
 	m.logger.Info(ctx, "channel: built cached agent", "thread", threadID, "provider", resolved.Type, "model", resolved.Model)

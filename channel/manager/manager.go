@@ -633,12 +633,18 @@ func (m *Manager) setThreadChannel(threadID string, ch channel.Channel) {
 // isThreadChannelInteractive checks whether the channel for the given
 // thread implements InteractiveChannel and reports itself as interactive.
 func (m *Manager) isThreadChannelInteractive(threadID string) bool {
-	m.threadChannelMu.RLock()
-	ch, ok := m.threadChannels[threadID]
-	m.threadChannelMu.RUnlock()
-	if !ok {
+	ch := m.channelForThread(threadID)
+	if ch == nil {
 		return false
 	}
 	ic, ok := ch.(channel.InteractiveChannel)
 	return ok && ic.Interactive()
+}
+
+// channelForThread returns the channel that owns the given thread, or nil
+// when the mapping is unknown (e.g. a thread that never received a message).
+func (m *Manager) channelForThread(threadID string) channel.Channel {
+	m.threadChannelMu.RLock()
+	defer m.threadChannelMu.RUnlock()
+	return m.threadChannels[threadID]
 }

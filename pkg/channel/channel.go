@@ -41,7 +41,11 @@
 // Initially only long-polling-style channels need to be supported.
 package channel
 
-import "context"
+import (
+	"context"
+
+	"github.com/monsterxx03/tachi/agent/tools"
+)
 
 // AttachmentType categorises the type of file attachment in an incoming message.
 type AttachmentType string
@@ -397,6 +401,23 @@ type AskUserAcknowledger interface {
 	// any pending UI for that thread as settled (disable buttons, drop
 	// state) so it cannot be clicked again.
 	AcknowledgeAskUser(threadID string)
+}
+
+// ToolProvider is an optional interface for channels that inject
+// channel-specific tools into the agent's tool registry. The Manager calls
+// ChannelTools when building an agent for a thread owned by this channel,
+// registering every returned tool so the LLM can use them.
+//
+// Typical use: a channel wraps its backend APIs (auth, platform-specific
+// endpoints) as tools that only make sense within that channel — e.g. a
+// Wave-only todo tool that needs the Wave client's access_token.
+type ToolProvider interface {
+	Channel
+
+	// ChannelTools returns the tools to register on agents serving this
+	// channel's threads. Called once per agent build; registration is
+	// idempotent (same-name tools overwrite).
+	ChannelTools() []tools.Tool
 }
 
 // SystemPromptSuffixer is an optional interface for channels that want to
