@@ -132,6 +132,10 @@ var commandHandlers = map[string]func(*Model) tea.Cmd{
 	"usage": func(m *Model) tea.Cmd {
 		return m.handleUsageCommand()
 	},
+	"sh": func(m *Model) tea.Cmd {
+		return m.handleShCommand()
+	},
+
 	"review": func(m *Model) tea.Cmd {
 		return m.sendReviewCommand()
 	},

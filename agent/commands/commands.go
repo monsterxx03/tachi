@@ -50,6 +50,7 @@ var Registry = []Def{
 	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},
 	{Name: "cron", Description: "List cron jobs", Modes: []Mode{ModeChannel}},
 	{Name: "cd", Description: "Change working directory for this thread", InputHint: "<directory>", Modes: []Mode{ModeChannel}},
+	{Name: "sh", Description: "Run a shell command in the thread working directory and echo its output (no LLM)", InputHint: "<command>", Modes: []Mode{ModeTUI, ModeChannel}},
 	{Name: "stop", Description: "Stop the current LLM turn", Modes: []Mode{ModeChannel}},
 	{Name: "research", Description: "Deep research on a topic. Usage: /research <topic> [--depth 2] [--breadth 3]", InputHint: "<topic>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "restart", Description: "Restart Tachi via systemctl (requires systemd)", Modes: []Mode{ModeChannel}},

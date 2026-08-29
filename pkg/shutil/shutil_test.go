@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOutputTrimmed(t *testing.T) {
@@ -79,5 +80,74 @@ func TestStderrCapped(t *testing.T) {
 	}
 	if len(err.Error()) > maxErrOutput+256 {
 		t.Errorf("error too long: %d bytes", len(err.Error()))
+	}
+}
+
+func TestShellCapturesCombinedOutputAndExitCode(t *testing.T) {
+	out, code, err := Shell(context.Background(), "", "echo out; echo err >&2; exit 7")
+	if code != 7 {
+		t.Errorf("exit code = %d, want 7", code)
+	}
+	if err == nil || !strings.Contains(err.Error(), "exit status 7") {
+		t.Errorf("err = %v, want exit status 7", err)
+	}
+	if !strings.Contains(out, "out") || !strings.Contains(out, "err") {
+		t.Errorf("output %q missing stdout/stderr", out)
+	}
+}
+
+func TestShellRunsInDir(t *testing.T) {
+	dir := t.TempDir()
+	out, code, err := Shell(context.Background(), dir, "pwd")
+	if err != nil || code != 0 {
+		t.Fatalf("Shell failed: %v (code %d)", err, code)
+	}
+	if out != dir {
+		t.Errorf("pwd = %q, want %q", out, dir)
+	}
+}
+
+func TestShellTimeoutKillsProcess(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+	_, _, _ = Shell(ctx, "", "sleep 5")
+	if ctx.Err() == nil {
+		t.Fatal("expected context deadline exceeded")
+	}
+}
+
+func TestShellOutputCapped(t *testing.T) {
+	out, _, err := Shell(context.Background(), "", "seq 1 100000")
+	if err != nil {
+		t.Fatalf("Shell failed: %v", err)
+	}
+	if len(out) > maxShellOutput+16 {
+		t.Errorf("output len %d exceeds cap %d", len(out), maxShellOutput)
+	}
+}
+
+func TestFormatShellResult(t *testing.T) {
+	got := FormatShellResult("ls", "file1\nfile2", 0, false)
+	want := "$ ls\n```\nfile1\nfile2\n```\n"
+	if got != want {
+		t.Errorf("FormatShellResult = %q, want %q", got, want)
+	}
+
+	got = FormatShellResult("false", "", 1, false)
+	want = "$ false\n(exit 1)"
+	if got != want {
+		t.Errorf("FormatShellResult = %q, want %q", got, want)
+	}
+
+	got = FormatShellResult("sleep", "", 0, true)
+	want = "$ sleep\n⏱️ timed out, process killed"
+	if got != want {
+		t.Errorf("FormatShellResult = %q, want %q", got, want)
+	}
+
+	got = FormatShellResult("true", "", 0, false)
+	want = "$ true\n(no output)"
+	if got != want {
+		t.Errorf("FormatShellResult = %q, want %q", got, want)
 	}
 }

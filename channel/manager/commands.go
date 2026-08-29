@@ -85,6 +85,9 @@ func (m *Manager) executeSlashCommand(ctx context.Context, cmd channel.SlashComm
 	case "cd":
 		text, err := m.handleCDCommand(cmd.ThreadID, cmd.Args)
 		return textHandlerResult(text), err
+	case "sh":
+		text, err := m.handleShCommand(ctx, cmd.ThreadID, cmd.Args)
+		return textHandlerResult(text), err
 	case "stop":
 		text, err := m.handleStopCommand(cmd.ThreadID)
 		return textHandlerResult(text), err

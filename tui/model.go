@@ -717,6 +717,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, readNextDreamStatus(msg.nextCh)
 		}
 
+	case shDoneMsg:
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: msg.content,
+		})
+
 	case researchStatusMsg:
 		m.chatview.AddMessage(chatMessage{
 			Role:    "assistant",

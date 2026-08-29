@@ -10,9 +10,11 @@ package shutil
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -65,4 +67,68 @@ func Success(ctx context.Context, dir, name string, args ...string) bool {
 func clip(s string) string {
 	s = strings.TrimSpace(s)
 	return strutil.Truncate(s, maxErrOutput)
+}
+
+// --- Raw shell execution (/sh slash command) ---
+
+// DefaultShellTimeout bounds /sh slash-command execution so a runaway
+// command cannot pin a thread's handler (or the TUI) indefinitely.
+const DefaultShellTimeout = 60 * time.Second
+
+// maxShellOutput caps the combined output returned by Shell (in runes),
+// keeping the echoed reply within IM message size limits.
+const maxShellOutput = 4 * 1024
+
+// Shell runs command via "sh -c" in dir ("" = the process's current
+// directory) and returns its combined stdout+stderr (trimmed, capped at
+// maxShellOutput runes) together with the process exit code. Non-zero
+// exits are reported as an "exit status N" error; a cancelled or
+// timed-out context kills the child process and surfaces the context
+// error (callers distinguish via ctx.Err()).
+func Shell(ctx context.Context, dir, command string) (string, int, error) {
+	cmd := exec.CommandContext(ctx, "sh", "-c", command)
+	if dir != "" {
+		cmd.Dir = dir
+	}
+	var combined bytes.Buffer
+	cmd.Stdout = &combined
+	cmd.Stderr = &combined
+
+	runErr := cmd.Run()
+	out := strutil.Truncate(strings.TrimSpace(combined.String()), maxShellOutput)
+
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		return out, exitErr.ExitCode(), fmt.Errorf("exit status %d", exitErr.ExitCode())
+	}
+	return out, 0, runErr
+}
+
+// FormatShellResult renders a Shell() outcome for direct echo in /sh
+// replies (markdown-capable IMs and the TUI chat view):
+//
+//	$ <command>
+//	```
+//	<output>
+//	```
+//	(exit N)        — only when the exit code is non-zero
+//	⏱️ timed out    — only when timedOut (context deadline / cancel)
+//	(no output)     — only when the command produced no output
+func FormatShellResult(command, output string, exitCode int, timedOut bool) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "$ %s\n", command)
+	if output != "" {
+		b.WriteString("```\n")
+		b.WriteString(output)
+		b.WriteString("\n```\n")
+	}
+	switch {
+	case timedOut:
+		b.WriteString("⏱️ timed out, process killed")
+	case exitCode != 0:
+		fmt.Fprintf(&b, "(exit %d)", exitCode)
+	case output == "":
+		b.WriteString("(no output)")
+	}
+	return b.String()
 }

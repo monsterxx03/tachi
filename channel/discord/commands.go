@@ -57,6 +57,14 @@ var commandOptions = map[string][]*discordgo.ApplicationCommandOption{
 			Required:    true,
 		},
 	},
+	"sh": {
+		{
+			Type:        discordgo.ApplicationCommandOptionString,
+			Name:        "command",
+			Description: "Shell command to run (stdout+stderr echoed, 60s timeout)",
+			Required:    true,
+		},
+	},
 	"review": {
 		{
 			Type:        discordgo.ApplicationCommandOptionInteger,
