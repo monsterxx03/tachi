@@ -277,7 +277,7 @@ func TestParseIdxSegment(t *testing.T) {
 
 func TestResolveQuestionAnswers_Button(t *testing.T) {
 	questions := []channel.Question{{Options: []channel.QuestionOption{{Label: "A", Description: "x"}, {Label: "B"}}}}
-	data := &discordgo.MessageComponentInteractionData{CustomID: "tachi:ask:t:q0:o1"}
+	data := discordgo.MessageComponentInteractionData{CustomID: "tachi:ask:t:q0:o1"}
 	answers, summary, ok := resolveQuestionAnswers(questions, data, 0, 1)
 	if !ok {
 		t.Fatal("want ok")
@@ -292,7 +292,7 @@ func TestResolveQuestionAnswers_Button(t *testing.T) {
 
 func TestResolveQuestionAnswers_SingleSelectMenu(t *testing.T) {
 	questions := []channel.Question{{Options: []channel.QuestionOption{{Label: "A"}, {Label: "B"}}}}
-	data := &discordgo.MessageComponentInteractionData{Values: []string{"B"}}
+	data := discordgo.MessageComponentInteractionData{Values: []string{"B"}}
 	answers, _, ok := resolveQuestionAnswers(questions, data, 0, -1)
 	if !ok || answers["q0"] != "B" {
 		t.Errorf("answers = %v, ok = %v", answers, ok)
@@ -301,7 +301,7 @@ func TestResolveQuestionAnswers_SingleSelectMenu(t *testing.T) {
 
 func TestResolveQuestionAnswers_MultiSelect(t *testing.T) {
 	questions := []channel.Question{{MultiSelect: true, Options: []channel.QuestionOption{{Label: "A"}, {Label: "B"}, {Label: "C"}}}}
-	data := &discordgo.MessageComponentInteractionData{Values: []string{"A", "C"}}
+	data := discordgo.MessageComponentInteractionData{Values: []string{"A", "C"}}
 	answers, summary, ok := resolveQuestionAnswers(questions, data, 0, -1)
 	if !ok {
 		t.Fatal("want ok")
@@ -316,10 +316,10 @@ func TestResolveQuestionAnswers_MultiSelect(t *testing.T) {
 
 func TestResolveQuestionAnswers_OutOfRange(t *testing.T) {
 	questions := []channel.Question{{Options: []channel.QuestionOption{{Label: "A"}}}}
-	if _, _, ok := resolveQuestionAnswers(questions, &discordgo.MessageComponentInteractionData{}, 3, -1); ok {
+	if _, _, ok := resolveQuestionAnswers(questions, discordgo.MessageComponentInteractionData{}, 3, -1); ok {
 		t.Error("out-of-range question index should fail")
 	}
-	if _, _, ok := resolveQuestionAnswers(questions, &discordgo.MessageComponentInteractionData{}, 0, 5); ok {
+	if _, _, ok := resolveQuestionAnswers(questions, discordgo.MessageComponentInteractionData{}, 0, 5); ok {
 		t.Error("out-of-range option index should fail")
 	}
 }
@@ -427,5 +427,40 @@ func TestQuestionTokenIsColonFree(t *testing.T) {
 	a := "tok" // placeholder; actual tokens come from strutil.ShortUUID
 	if strings.Contains(a, ":") {
 		t.Fatal("token must not contain ':'")
+	}
+}
+
+// TestComponentInteractionDataValueType guards the root cause of "button
+// click → interaction failed": discordgo v0.29.0 stores message component
+// data as a VALUE type in InteractionCreate.Data (see its UnmarshalJSON and
+// the MessageComponentData helper). handleComponentInteraction must assert
+// the value type — a pointer assertion always fails, silently leaves the
+// interaction unacknowledged, and Discord shows "This interaction failed"
+// after 3 seconds. The test mirrors discordgo's decoding exactly.
+func TestComponentInteractionDataValueType(t *testing.T) {
+	// What discordgo v0.29.0 produces for an INTERACTION_CREATE with type
+	// InteractionMessageComponent (value, not pointer).
+	decoded := discordgo.MessageComponentInteractionData{CustomID: "tachi:ask:tok:q0:o0"}
+	ic := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			ID:   "1",
+			Type: discordgo.InteractionMessageComponent,
+			Data: decoded,
+		},
+	}
+
+	// The handler's assertion must match the value type.
+	data, ok := ic.Data.(discordgo.MessageComponentInteractionData)
+	if !ok {
+		t.Fatal("BUG: i.Data must be the value type MessageComponentInteractionData; " +
+			"asserting the pointer type (the original bug) makes every button click fail")
+	}
+	if data.CustomID != "tachi:ask:tok:q0:o0" {
+		t.Errorf("CustomID = %q", data.CustomID)
+	}
+
+	// Guard against regressing to the pointer assertion.
+	if _, ok := ic.Data.(*discordgo.MessageComponentInteractionData); ok {
+		t.Error("pointer assertion must NOT match: discordgo stores the value type")
 	}
 }

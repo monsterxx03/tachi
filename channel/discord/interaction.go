@@ -455,8 +455,25 @@ func disableQuestionComponents(components []discordgo.MessageComponent) {
 // the chosen answer back to the waiting agent turn through the message
 // handler, and edits the question message to disable the components.
 func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *discordgo.InteractionCreate, handler channel.MessageHandler) {
-	data, ok := i.Data.(*discordgo.MessageComponentInteractionData)
+	// discordgo v0.29.0 stores message component data as a VALUE type in
+	// i.Data (see Interaction.UnmarshalJSON and the official
+	// MessageComponentData helper). Asserting the pointer type instead —
+	// the original bug — always fails, silently returning without
+	// acknowledging the interaction and leaving the user staring at a
+	// "This interaction failed" error after Discord's 3s timeout.
+	data, ok := i.Data.(discordgo.MessageComponentInteractionData)
 	if !ok {
+		ch.logger.Error(context.Background(), "discord: unexpected component interaction data type",
+			fmt.Errorf("type=%v", i.Type), "dataType", fmt.Sprintf("%T", i.Data))
+		// Never walk away from an unanswered interaction: acknowledge it
+		// (best-effort) so the user gets a hint instead of a dead button.
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ 组件数据解析失败，请直接发文字回复。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
 		return
 	}
 
@@ -535,7 +552,7 @@ func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *di
 // resolveQuestionAnswers maps a component interaction payload to the answer
 // map expected by the agent ("q<idx>" → label text). summary is a short
 // human-readable "what was chosen" note for the edited message.
-func resolveQuestionAnswers(questions []channel.Question, data *discordgo.MessageComponentInteractionData, qi, oi int) (answers map[string]string, summary string, ok bool) {
+func resolveQuestionAnswers(questions []channel.Question, data discordgo.MessageComponentInteractionData, qi, oi int) (answers map[string]string, summary string, ok bool) {
 	if qi < 0 || qi >= len(questions) {
 		return nil, "", false
 	}
