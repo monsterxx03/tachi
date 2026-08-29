@@ -377,6 +377,28 @@ type InteractiveChannel interface {
 	PresentQuestions(ctx context.Context, threadID, replyID string, questions []Question) error
 }
 
+// AskUserAcknowledger is an optional interface for interactive channels
+// that want to know when an AskUserQuestion prompt is settled through the
+// manager's fallback path (user typed a plain-text reply instead of using
+// the presented UI, or explicitly cancelled). The answer has already been
+// routed to the waiting agent when this is called.
+//
+// Channels use this to clean up their pending UI state so stale controls
+// (e.g. still-clickable buttons from a text-answered question) can never
+// trigger a second, unintended turn. UI-driven answers should NOT rely on
+// this hook — the channel already knows about its own clicks — although
+// implementations must tolerate it being called for those too (it is
+// invoked for every settled prompt, regardless of answer source).
+type AskUserAcknowledger interface {
+	Channel
+
+	// AcknowledgeAskUser is called after an AskUserQuestion prompt for the
+	// given thread has been answered or cancelled. The channel should mark
+	// any pending UI for that thread as settled (disable buttons, drop
+	// state) so it cannot be clicked again.
+	AcknowledgeAskUser(threadID string)
+}
+
 // SystemPromptSuffixer is an optional interface for channels that want to
 // inject additional instructions into the agent's system prompt. The suffix
 // is appended once per turn, after the base system prompt and any
