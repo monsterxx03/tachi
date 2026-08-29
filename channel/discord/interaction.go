@@ -118,8 +118,15 @@ type questionState struct {
 	threadID  string // manager thread ID the answers must be routed to
 	channelID string // Discord channel the question message lives in
 	messageID string // Discord message ID; only set on the post-send version
-	questions []channel.Question
-	created   time.Time
+	// content and components cache the exact rendering sent to Discord.
+	// markQuestionAnswered reuses them (disabling the components, appending
+	// the answer summary) so the question message is never re-rendered into
+	// a different layout — e.g. a modal prompt must not turn back into a
+	// pile of per-question button rows after submission.
+	content    string
+	components []discordgo.MessageComponent
+	questions  []channel.Question
+	created    time.Time
 }
 
 // Compile-time assertions that DiscordChannel satisfies the interactive
@@ -181,14 +188,18 @@ func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyI
 
 	// Re-store under the lock with the message ID filled in. Any claim
 	// (component click) happens after this Store returns, so it is
-	// guaranteed to observe the complete state (no torn reads).
+	// guaranteed to observe the complete state (no torn reads). The exact
+	// sent rendering is cached so markQuestionAnswered can disable its
+	// components without re-rendering the prompt into a different layout.
 	ch.questionStates.Store(token, &questionState{
-		token:     token,
-		threadID:  threadID,
-		channelID: channelID,
-		messageID: sent.ID,
-		questions: questions,
-		created:   time.Now(),
+		token:      token,
+		threadID:   threadID,
+		channelID:  channelID,
+		messageID:  sent.ID,
+		content:    content,
+		components: components,
+		questions:  questions,
+		created:    time.Now(),
 	})
 	ch.logger.Info(ctx, "discord: AskUser questions presented", "thread", threadID,
 		"count", len(questions), "channel", channelID, "message", sent.ID)
@@ -514,6 +525,9 @@ func (ch *DiscordChannel) AcknowledgeAskUser(threadID string) {
 
 // markQuestionAnswered flags a pending question as settled and edits the
 // question message to disable its components, showing what was chosen.
+// The edit reuses the exact rendering cached at send time (questionState
+// content/components) rather than re-rendering via buildQuestion* — a
+// modal prompt must not morph back into per-question button rows.
 // When a component interaction is available (UI-click path) the edit is
 // performed through the interaction token (InteractionResponseEdit), which
 // properly completes the interaction; otherwise a plain message edit is
@@ -525,13 +539,8 @@ func (ch *DiscordChannel) markQuestionAnswered(st *questionState, interaction *d
 		return
 	}
 
-	// Re-render the message with all components disabled and a note about
-	// the chosen answer appended to the text.
-	content, components := buildQuestionMessage(st.token, st.questions)
-	if summary != "" {
-		content = content + "\n\n✅ 已选择: " + summary
-	}
-	disableQuestionComponents(components)
+	// Keep the sent layout; disable all components and note the choice.
+	content, components := answeredEditing(st, summary)
 
 	// Preferred: complete the interaction via its token. This also removes
 	// the client-side loading state on the clicked button.
@@ -553,6 +562,22 @@ func (ch *DiscordChannel) markQuestionAnswered(st *questionState, interaction *d
 	}); err != nil {
 		ch.logger.Error(context.Background(), "discord: disable question components failed", err, "channel", st.channelID)
 	}
+}
+
+// answeredEditing builds the settled-message edit from a questionState's
+// cached rendering: the original content plus an answer summary, with every
+// cached component disabled. It deliberately does NOT re-render via
+// buildQuestion* — a modal prompt (question list + "开始回答" button) must
+// keep that shape after submission instead of morphing back into per-
+// question button rows.
+func answeredEditing(st *questionState, summary string) (string, []discordgo.MessageComponent) {
+	content := st.content
+	if summary != "" {
+		content = content + "\n\n✅ 已选择: " + summary
+	}
+	components := st.components
+	disableQuestionComponents(components)
+	return content, components
 }
 
 // disableQuestionComponents marks every button / select menu in the

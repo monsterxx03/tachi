@@ -613,3 +613,48 @@ func TestModalAnswers_SkipsBlank(t *testing.T) {
 		t.Error("blank answer must be skipped")
 	}
 }
+
+// TestAnsweredEditing_KeepsModalShape guards against the regression where the
+// settled-message edit re-rendered the prompt via buildQuestionMessage
+// (per-question button rows), turning a modal-mode question message into a
+// pile of buttons ("why is it an input box in the modal but a wall of
+// buttons in the channel?"). The edit must reuse the cached render: modal
+// mode keeps its single "开始回答" button (now disabled) + summary.
+func TestAnsweredEditing_KeepsModalShape(t *testing.T) {
+	questions := []channel.Question{
+		{Question: "q1", Options: []channel.QuestionOption{{Label: "a"}, {Label: "b"}}},
+		{Question: "q2", Options: []channel.QuestionOption{{Label: "x"}, {Label: "y"}}},
+	}
+	content, comps := buildModalModeMessage("tok", questions)
+	st := &questionState{content: content, components: comps}
+
+	editedContent, editedComps := answeredEditing(st, "Q1: a | Q2: x")
+
+	if !strings.Contains(editedContent, "✅ 已选择: Q1: a | Q2: x") {
+		t.Errorf("summary missing from edited content: %q", editedContent)
+	}
+	if !strings.Contains(editedContent, "弹窗") {
+		t.Errorf("modal-mode prompt text must be preserved, got: %q", editedContent)
+	}
+	if len(editedComps) != 1 {
+		t.Fatalf("components = %d rows, want 1 (single begin button preserved)", len(editedComps))
+	}
+	row, ok := editedComps[0].(*discordgo.ActionsRow)
+	if !ok || len(row.Components) != 1 {
+		t.Fatalf("expected one action row with one button")
+	}
+	btn, ok := row.Components[0].(*discordgo.Button)
+	if !ok {
+		t.Fatalf("component is %T, want *Button", row.Components[0])
+	}
+	if btn.CustomID != "tachi:ask:tok:begin" {
+		t.Errorf("begin button replaced: CustomID = %q", btn.CustomID)
+	}
+	if !btn.Disabled {
+		t.Error("begin button must be disabled after answering")
+	}
+	// Button rows must not have appeared (the old re-render bug).
+	if strings.Contains(editedContent, "选项见下方按钮") {
+		t.Error("per-question button-row copy leaked back into the edited content")
+	}
+}
