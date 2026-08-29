@@ -108,6 +108,12 @@ type DiscordChannel struct {
 	// Component callback registry (Phase 2+)
 	componentHandlers map[string]componentHandler
 
+	// Pending AskUserQuestion prompts, keyed by their CustomID token.
+	// Guarded by questionStatesMu (PresentQuestions runs on the agent-turn
+	// goroutine; component interactions arrive on discordgo goroutines).
+	questionStates   map[string]*questionState
+	questionStatesMu sync.Mutex
+
 	// Slash command handler (injected by Manager via CommandChannel interface)
 	cmdHandler channel.CommandHandler
 
@@ -168,6 +174,7 @@ func NewChannel(cfg DiscordConfig) (*DiscordChannel, error) {
 		httpClient:            httpClient,
 		cacheDir:              cacheDir,
 		componentHandlers:     make(map[string]componentHandler),
+		questionStates:        make(map[string]*questionState),
 		memberCache:           newMemberCache(),
 		deduper:               newMessageDeduper(),
 		topicStatus:           make(map[string]topicEntry),
@@ -217,7 +224,10 @@ Platform characteristics:
 - Media attachments (images, files) are supported as separate uploads
 - Threads are fully supported: the bot can receive and reply inside
   Discord threads without @mention by default (configurable via
-  thread_require_mention)`
+  thread_require_mention)
+- AskUserQuestion renders as interactive buttons / select menus — use it
+  to ask the user multiple-choice questions and get answers through UI
+  clicks (questions without options fall back to a text reply)`
 }
 
 // Send implements channel.MessageSender for proactive message delivery
@@ -484,6 +494,8 @@ func (ch *DiscordChannel) onInteractionCreate(handler channel.MessageHandler) an
 			ch.handleSlashCommand(s, i)
 		case discordgo.InteractionApplicationCommandAutocomplete:
 			ch.handleAutocomplete(s, i)
+		case discordgo.InteractionMessageComponent:
+			ch.handleComponentInteraction(s, i, handler)
 		}
 	}
 }
