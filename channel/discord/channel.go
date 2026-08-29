@@ -498,6 +498,8 @@ func (ch *DiscordChannel) onInteractionCreate(handler channel.MessageHandler) an
 			ch.handleAutocomplete(s, i)
 		case discordgo.InteractionMessageComponent:
 			ch.handleComponentInteraction(s, i, handler)
+		case discordgo.InteractionModalSubmit:
+			ch.handleModalSubmit(s, i, handler)
 		}
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/bwmarrin/discordgo"
 	"github.com/monsterxx03/tachi/pkg/channel"
@@ -217,30 +218,34 @@ func TestParseAskCustomID(t *testing.T) {
 		name      string
 		customID  string
 		wantToken string
+		wantKind  askCustomIDKind
 		wantQI    int
 		wantOI    int
 		wantOK    bool
 	}{
-		{"button", "tachi:ask:abc123:q0:o2", "abc123", 0, 2, true},
-		{"select menu", "tachi:ask:abc123:q1", "abc123", 1, -1, true},
-		{"multi digit idx", "tachi:ask:tok:q12:o34", "tok", 12, 34, true},
-		{"unrelated prefix", "tachi:other:xyz", "", 0, 0, false},
-		{"wrong prefix", "hello:q0", "", 0, 0, false},
-		{"missing idx", "tachi:ask:tok", "", 0, 0, false},
-		{"empty token", "tachi:ask::q0", "", 0, 0, false},
-		{"non-numeric idx", "tachi:ask:tok:qX", "", 0, 0, false},
-		{"swapped roles", "tachi:ask:tok:o1:q0", "", 0, 0, false},
-		{"trailing junk", "tachi:ask:tok:q0:o1:zzz", "", 0, 0, false},
-		{"option without question", "tachi:ask:tok:o1", "", 0, 0, false},
+		{"button", "tachi:ask:abc123:q0:o2", "abc123", askCustomIDButton, 0, 2, true},
+		{"select menu", "tachi:ask:abc123:q1", "abc123", askCustomIDSelect, 1, -1, true},
+		{"begin modal", "tachi:ask:abc123:begin", "abc123", askCustomIDBegin, 0, -1, true},
+		{"submit modal", "tachi:ask:abc123:submit", "abc123", askCustomIDSubmit, 0, -1, true},
+		{"multi digit idx", "tachi:ask:tok:q12:o34", "tok", askCustomIDButton, 12, 34, true},
+		{"unrelated prefix", "tachi:other:xyz", "", 0, 0, 0, false},
+		{"wrong prefix", "hello:q0", "", 0, 0, 0, false},
+		{"missing idx", "tachi:ask:tok", "", 0, 0, 0, false},
+		{"empty token", "tachi:ask::q0", "", 0, 0, 0, false},
+		{"non-numeric idx", "tachi:ask:tok:qX", "", 0, 0, 0, false},
+		{"swapped roles", "tachi:ask:tok:o1:q0", "", 0, 0, 0, false},
+		{"trailing junk", "tachi:ask:tok:q0:o1:zzz", "", 0, 0, 0, false},
+		{"option without question", "tachi:ask:tok:o1", "", 0, 0, 0, false},
+		{"begin with junk", "tachi:ask:tok:begin:zzz", "", 0, 0, 0, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			token, qi, oi, ok := parseAskCustomID(tt.customID)
+			token, kind, qi, oi, ok := parseAskCustomID(tt.customID)
 			if ok != tt.wantOK {
 				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
 			}
-			if token != tt.wantToken || qi != tt.wantQI || oi != tt.wantOI {
-				t.Errorf("got (%q,%d,%d), want (%q,%d,%d)", token, qi, oi, tt.wantToken, tt.wantQI, tt.wantOI)
+			if token != tt.wantToken || kind != tt.wantKind || qi != tt.wantQI || oi != tt.wantOI {
+				t.Errorf("got (%q,%v,%d,%d), want (%q,%v,%d,%d)", token, kind, qi, oi, tt.wantToken, tt.wantKind, tt.wantQI, tt.wantOI)
 			}
 		})
 	}
@@ -462,5 +467,149 @@ func TestComponentInteractionDataValueType(t *testing.T) {
 	// Guard against regressing to the pointer assertion.
 	if _, ok := ic.Data.(*discordgo.MessageComponentInteractionData); ok {
 		t.Error("pointer assertion must NOT match: discordgo stores the value type")
+	}
+}
+
+// TestModalSubmitDataValueType mirrors discordgo v0.29.0's decoding of a
+// modal submission: ModalSubmitInteractionData is stored by value in
+// i.Data. handleModalSubmit must assert the value type.
+func TestModalSubmitDataValueType(t *testing.T) {
+	decoded := discordgo.ModalSubmitInteractionData{CustomID: "tachi:ask:tok:submit"}
+	ic := &discordgo.InteractionCreate{
+		Interaction: &discordgo.Interaction{
+			ID:   "1",
+			Type: discordgo.InteractionModalSubmit,
+			Data: decoded,
+		},
+	}
+	if _, ok := ic.Data.(discordgo.ModalSubmitInteractionData); !ok {
+		t.Fatal("BUG: modal submit data must be asserted as the value type")
+	}
+	if _, ok := ic.Data.(*discordgo.ModalSubmitInteractionData); ok {
+		t.Error("pointer assertion must NOT match: discordgo stores the value type")
+	}
+}
+
+func TestBuildModalModeMessage(t *testing.T) {
+	questions := []channel.Question{
+		{Question: "最近在忙什么？", Header: "近况", Options: []channel.QuestionOption{{Label: "A"}, {Label: "B"}}},
+		{Question: "体验如何？", MultiSelect: true, Options: []channel.QuestionOption{{Label: "X"}, {Label: "Y"}}},
+	}
+	content, comps := buildModalModeMessage("tok", questions)
+	if !strings.Contains(content, "最近在忙什么？") || !strings.Contains(content, "选项: A / B") {
+		t.Errorf("content missing question/options: %q", content)
+	}
+	if len(comps) != 1 {
+		t.Fatalf("comps = %d, want 1 action row", len(comps))
+	}
+	row, ok := comps[0].(*discordgo.ActionsRow)
+	if !ok || len(row.Components) != 1 {
+		t.Fatalf("expected one action row with one button")
+	}
+	btn, ok := row.Components[0].(*discordgo.Button)
+	if !ok || btn.CustomID != "tachi:ask:tok:begin" {
+		t.Errorf("expected begin button, got %#v", btn)
+	}
+}
+
+func TestBuildQuestionPresentation_ModalUnderCap(t *testing.T) {
+	questions := make([]channel.Question, maxModalQuestions)
+	_, comps := buildQuestionPresentation("tok", questions)
+	if len(comps) != 1 {
+		t.Fatalf("≤%d questions must use modal mode (single begin button), got %d rows", maxModalQuestions, len(comps))
+	}
+}
+
+func TestBuildQuestionPresentation_ButtonFallbackOverCap(t *testing.T) {
+	questions := make([]channel.Question, maxModalQuestions+1)
+	for i := range questions {
+		questions[i] = channel.Question{Options: []channel.QuestionOption{{Label: "a"}, {Label: "b"}}}
+	}
+	_, comps := buildQuestionPresentation("tok", questions)
+	if len(comps) <= 1 {
+		t.Fatalf(">%d questions must fall back to per-question rows, got %d", maxModalQuestions, len(comps))
+	}
+}
+
+func TestBuildAnswerModal(t *testing.T) {
+	questions := []channel.Question{
+		{Question: "q1", Header: "h1", Options: []channel.QuestionOption{{Label: "a"}, {Label: "b"}}},
+		{Question: "q2"},
+	}
+	m := buildAnswerModal("tok", questions)
+	if m.CustomID != "tachi:ask:tok:submit" {
+		t.Errorf("CustomID = %q", m.CustomID)
+	}
+	if m.Title == "" || utf8.RuneCountInString(m.Title) > maxModalTitleRunes {
+		t.Errorf("title = %q", m.Title)
+	}
+	if len(m.Components) != 2 {
+		t.Fatalf("rows = %d, want 2", len(m.Components))
+	}
+	row0, ok := m.Components[0].(*discordgo.ActionsRow)
+	if !ok || len(row0.Components) != 1 {
+		t.Fatalf("row 0 malformed")
+	}
+	in, ok := row0.Components[0].(*discordgo.TextInput)
+	if !ok {
+		t.Fatalf("row 0 component is %T, want *TextInput", row0.Components[0])
+	}
+	if in.CustomID != "tachi:ask:tok:q0" || !in.Required {
+		t.Errorf("input = %#v", in)
+	}
+	if !strings.Contains(in.Placeholder, "1=a") || !strings.Contains(in.Placeholder, "2=b") {
+		t.Errorf("placeholder missing options: %q", in.Placeholder)
+	}
+}
+
+func TestBuildModalPlaceholder_MultiSelectHint(t *testing.T) {
+	q := channel.Question{Question: "which?", MultiSelect: true, Options: []channel.QuestionOption{{Label: "x"}, {Label: "y"}}}
+	p := buildModalPlaceholder(q)
+	if !strings.Contains(p, "多选") {
+		t.Errorf("placeholder missing multi-select hint: %q", p)
+	}
+	if utf8.RuneCountInString(p) > maxModalPlaceholderRunes {
+		t.Errorf("placeholder too long: %d", utf8.RuneCountInString(p))
+	}
+}
+
+func TestModalAnswerFromTextInput(t *testing.T) {
+	questions := []channel.Question{
+		{Question: "q1", Options: []channel.QuestionOption{{Label: "a"}, {Label: "b"}}},
+		{Question: "q2"},
+	}
+	values := modalTextInputValues([]discordgo.MessageComponent{
+		&discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			&discordgo.TextInput{CustomID: "tachi:ask:tok:q0", Value: "  a  "},
+		}},
+		&discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			&discordgo.TextInput{CustomID: "tachi:ask:tok:q1", Value: "free text"},
+		}},
+	})
+	answers, summary := modalAnswers(questions, "tok", values)
+	if answers["q0"] != "a" || answers["q1"] != "free text" {
+		t.Errorf("answers = %v", answers)
+	}
+	if !strings.Contains(summary, "Q1: a") || !strings.Contains(summary, "Q2: free text") {
+		t.Errorf("summary = %q", summary)
+	}
+}
+
+func TestModalAnswers_SkipsBlank(t *testing.T) {
+	questions := []channel.Question{{Question: "q1"}, {Question: "q2"}}
+	values := modalTextInputValues([]discordgo.MessageComponent{
+		&discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			&discordgo.TextInput{CustomID: "tachi:ask:tok:q0", Value: "yes"},
+		}},
+		&discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			&discordgo.TextInput{CustomID: "tachi:ask:tok:q1", Value: "   "},
+		}},
+	})
+	answers, _ := modalAnswers(questions, "tok", values)
+	if len(answers) != 1 || answers["q0"] != "yes" {
+		t.Errorf("answers = %v, want only q0", answers)
+	}
+	if _, ok := answers["q1"]; ok {
+		t.Error("blank answer must be skipped")
 	}
 }

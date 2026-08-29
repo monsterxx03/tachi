@@ -23,21 +23,25 @@ import (
 //
 // This file implements that contract for Discord:
 //
-//   - PresentQuestions renders the questions as a Discord message: each
-//     multiple-choice question becomes a row of buttons (single-select with
-//     ≤5 options) or a select menu (multi-select / more options); questions
-//     without options tell the user to reply with text. Discord hard limits
-//     (5 action rows, 25 menu options, 2000-char messages) are enforced
-//     before sending so a prompt can never fail the API call and strand the
-//     agent turn.
-//   - Button/menu clicks arrive as INTERACTION_CREATE (message component)
-//     events in a discordgo callback goroutine, while the agent turn blocks
-//     in the manager. The click handler atomically claims the pending state,
-//     builds an IncomingMessage with AskUserAnswers and delegates to the
-//     same message handler the manager passed to Run(), which routes the
-//     answers back to the waiting agent (it returns Steered=true and never
-//     produces a reply to send).
-//   - The question message is edited after an answer is recorded (via the
+//   - PresentQuestions renders the questions as a Discord message. The
+//     primary interaction model is a modal: the message lists every
+//     question (options included) plus a single "开始回答" button whose
+//     click opens a modal with one text input per question; submitting the
+//     modal delivers ALL answers in one round trip — matching the
+//     AskUserQuestion tool semantics (one call returns all answers). The
+//     modal is capped at 5 questions (Discord's modal component limit);
+//     prompts beyond that fall back to per-question button rows
+//     (single-select ≤5 options → buttons, multi-select / more options →
+//     select menu), a legacy mode kept for capability.
+//   - Component interactions arrive as INTERACTION_CREATE events in a
+//     discordgo callback goroutine, while the agent turn blocks in the
+//     manager: the "开始回答" click responds with the modal; the modal
+//     submission (InteractionModalSubmit) atomically claims the pending
+//     state, builds an IncomingMessage with AskUserAnswers and delegates to
+//     the same message handler the manager passed to Run(), which routes
+//     the answers back to the waiting agent (it returns Steered=true and
+//     never produces a reply to send).
+//   - The question message is edited after answers are recorded (via the
 //     interaction token when available, falling back to a plain message
 //     edit) to disable the components and show what was chosen, preventing
 //     double answers.
@@ -50,11 +54,15 @@ import (
 // embedded in the CustomIDs. PresentQuestions stores a placeholder entry
 // before sending, then re-stores the full state (with the message ID) under
 // the lock after a successful send — any subsequent claim is guaranteed to
-// observe the complete state. Claiming (button click) uses atomic
-// LoadAndDelete so concurrent double-clicks can never both deliver answers.
+// observe the complete state. Claiming (button click / modal submission)
+// uses atomic LoadAndDelete so concurrent double-interactions can never
+// both deliver answers; the modal's "开始回答" button itself only reads
+// (Load) the state, which stays claimable until the final submission.
 //
-// CustomID namespace: "tachi:ask:<token>:q<idx>:o<optIdx>" (buttons) and
-// "tachi:ask:<token>:q<idx>" (select menus).
+// CustomID namespace: "tachi:ask:<token>:q<idx>:o<optIdx>" (button),
+// "tachi:ask:<token>:q<idx>" (select menu), "tachi:ask:<token>:begin"
+// (open the answer modal) and "tachi:ask:<token>:submit" (modal
+// submission).
 
 const (
 	// askCustomIDPrefix is the shared prefix for every AskUserQuestion
@@ -83,6 +91,19 @@ const (
 	// it leaves headroom under Discord's 2000-char limit for the "已选择"
 	// summary appended by markQuestionAnswered.
 	maxQuestionMsgRunes = discordMessageLimit - 60
+
+	// maxModalQuestions is Discord's cap on modal components (each question
+	// takes one action row holding a text input). Prompts with more
+	// questions fall back to per-question button rows.
+	maxModalQuestions = 5
+	// maxModalTitleRunes is Discord's modal title limit.
+	maxModalTitleRunes = 45
+	// maxModalLabelRunes is Discord's text-input label limit.
+	maxModalLabelRunes = 45
+	// maxModalPlaceholderRunes is Discord's text-input placeholder limit.
+	maxModalPlaceholderRunes = 100
+	// maxModalAnswerRunes caps each typed answer (well under Discord's 4000).
+	maxModalAnswerRunes = 400
 )
 
 // questionState tracks a delivered AskUserQuestion prompt so component
@@ -148,7 +169,7 @@ func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyI
 		created:   time.Now(),
 	})
 
-	content, components := buildQuestionMessage(token, questions)
+	content, components := buildQuestionPresentation(token, questions)
 	sent, err := sess.ChannelMessageSendComplex(channelID, &discordgo.MessageSend{
 		Content:    content,
 		Components: components,
@@ -172,6 +193,68 @@ func (ch *DiscordChannel) PresentQuestions(ctx context.Context, threadID, replyI
 	ch.logger.Info(ctx, "discord: AskUser questions presented", "thread", threadID,
 		"count", len(questions), "channel", channelID, "message", sent.ID)
 	return nil
+}
+
+// buildQuestionPresentation picks the rendering strategy for a prompt:
+//   - ≤maxModalQuestions questions → modal mode: a question list plus a
+//     "start answering" button that opens a modal collecting every answer
+//     in a single submission (the interaction model users expect from
+//     AskUserQuestion — one round trip, all answers at once)
+//   - more questions → per-question button rows (Discord hard-caps modal
+//     components at 5), keeping the per-question click model as fallback
+func buildQuestionPresentation(token string, questions []channel.Question) (string, []discordgo.MessageComponent) {
+	if len(questions) <= maxModalQuestions {
+		return buildModalModeMessage(token, questions)
+	}
+	return buildQuestionMessage(token, questions)
+}
+
+// buildModalModeMessage renders the modal-mode prompt: the full question
+// list in the body (options included, so the user can read everything
+// before opening the modal) plus a single "开始回答" button whose click
+// opens the answer modal. One action row only, so there is never any
+// button-row clutter regardless of question count.
+func buildModalModeMessage(token string, questions []channel.Question) (string, []discordgo.MessageComponent) {
+	var b strings.Builder
+	b.WriteString("❓ **Tachi 需要你确认几个问题**\n")
+	b.WriteString("点击下方按钮，在弹窗中一次性回答所有问题：每个问题一个输入框，选择题填入选项文字，多选请用逗号分隔。\n")
+	for i, q := range questions {
+		if i > 0 {
+			b.WriteString("\n")
+		}
+		header := strings.TrimSpace(q.Header)
+		if header != "" {
+			fmt.Fprintf(&b, "**%d. %s** — *%s*\n", i+1, strings.TrimSpace(q.Question), header)
+		} else {
+			fmt.Fprintf(&b, "**%d. %s**\n", i+1, strings.TrimSpace(q.Question))
+		}
+		if len(q.Options) > 0 {
+			b.WriteString("选项: ")
+			for oi, opt := range q.Options {
+				if oi > 0 {
+					b.WriteString(" / ")
+				}
+				b.WriteString(opt.Label)
+			}
+			b.WriteString("\n")
+		}
+		if q.MultiSelect {
+			b.WriteString("（可多选，用逗号分隔）\n")
+		}
+	}
+
+	content := strings.TrimSpace(b.String())
+	if utf8.RuneCountInString(content) > maxQuestionMsgRunes {
+		content = strutil.TruncatePlain(content, maxQuestionMsgRunes) + "\n\n⚠️ 问题列表过长，已截断…"
+	}
+	row := discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+		&discordgo.Button{
+			Label:    "✅ 开始回答",
+			Style:    discordgo.PrimaryButton,
+			CustomID: fmt.Sprintf("%s%s:begin", askCustomIDPrefix, token),
+		},
+	}}
+	return content, []discordgo.MessageComponent{&row}
 }
 
 // buildQuestionMessage renders questions into a Discord message: a text
@@ -284,34 +367,76 @@ func buildQuestionSelectMenu(token string, qi int, q channel.Question) *discordg
 	}
 }
 
-// parseAskCustomID splits a "tachi:ask:<token>:q<idx>:o<optIdx>" CustomID
-// into its parts, validating segment roles: the question segment must start
-// with 'q' and the optional option segment with 'o'. oi is -1 for
-// select-menu interactions (no button option index).
-func parseAskCustomID(customID string) (token string, qi, oi int, ok bool) {
+// askCustomIDKind identifies what a parsed AskUserQuestion CustomID refers
+// to: a component click on an answer row, the "start answering" button that
+// opens the modal, or the modal's own submission ID.
+type askCustomIDKind int
+
+const (
+	askCustomIDSelect askCustomIDKind = iota // "q<idx>" — select menu selection
+	askCustomIDButton                        // "q<idx>:o<optIdx>" — button click
+	askCustomIDBegin                         // "begin" — open the answer modal
+	askCustomIDSubmit                        // "submit" — modal submission
+)
+
+func (k askCustomIDKind) String() string {
+	switch k {
+	case askCustomIDSelect:
+		return "select"
+	case askCustomIDButton:
+		return "button"
+	case askCustomIDBegin:
+		return "begin"
+	case askCustomIDSubmit:
+		return "submit"
+	}
+	return "unknown"
+}
+
+// parseAskCustomID splits a "tachi:ask:<token>:<rest>" CustomID into its
+// parts, validating segment roles:
+//
+//   - "q<idx>"             → select-menu interaction (kind=Select, oi=-1)
+//   - "q<idx>:o<optIdx>"   → button interaction (kind=Button)
+//   - "begin"              → open-answer-modal button (kind=Begin)
+//   - "submit"             → modal submission (kind=Submit)
+func parseAskCustomID(customID string) (token string, kind askCustomIDKind, qi, oi int, ok bool) {
 	if !strings.HasPrefix(customID, askCustomIDPrefix) {
-		return "", 0, 0, false
+		return "", 0, 0, 0, false
 	}
 	parts := strings.Split(strings.TrimPrefix(customID, askCustomIDPrefix), ":")
-	// Exactly 2 segments for select menus / questions, 3 for buttons.
+	// Exactly 2 segments for select/begin/submit, 3 for buttons.
 	if len(parts) < 2 || len(parts) > 3 {
-		return "", 0, 0, false
+		return "", 0, 0, 0, false
 	}
 	token = parts[0]
 	if token == "" {
-		return "", 0, 0, false
+		return "", 0, 0, 0, false
+	}
+	switch parts[1] {
+	case "begin":
+		if len(parts) != 2 {
+			return "", 0, 0, 0, false
+		}
+		return token, askCustomIDBegin, 0, -1, true
+	case "submit":
+		if len(parts) != 2 {
+			return "", 0, 0, 0, false
+		}
+		return token, askCustomIDSubmit, 0, -1, true
 	}
 	qi, ok = parseIdxSegment(parts[1], 'q')
 	if !ok {
-		return "", 0, 0, false
+		return "", 0, 0, 0, false
 	}
 	oi = -1
 	if len(parts) == 3 {
 		if oi, ok = parseIdxSegment(parts[2], 'o'); !ok {
-			return "", 0, 0, false
+			return "", 0, 0, 0, false
 		}
+		return token, askCustomIDButton, qi, oi, true
 	}
-	return token, qi, oi, true
+	return token, askCustomIDSelect, qi, oi, true
 }
 
 // parseIdxSegment parses "<letter><digits>" (e.g. "q0", "o12"). The letter
@@ -447,6 +572,222 @@ func disableQuestionComponents(components []discordgo.MessageComponent) {
 	}
 }
 
+// --- answer modal ----------------------------------------------------------
+
+// buildAnswerModal builds the modal that collects answers to every question
+// in one submission. Each question becomes one action row holding a short
+// text input; the modal's CustomID carries the pending-state token so the
+// submission can be routed back to the waiting agent turn. Callers must
+// have already checked len(questions) <= maxModalQuestions.
+func buildAnswerModal(token string, questions []channel.Question) *discordgo.InteractionResponseData {
+	rows := make([]discordgo.MessageComponent, 0, len(questions))
+	for i, q := range questions {
+		label := strings.TrimSpace(q.Header)
+		if label == "" {
+			label = strings.TrimSpace(q.Question)
+		}
+		label = truncateRunes(fmt.Sprintf("Q%d. %s", i+1, label), maxModalLabelRunes)
+		rows = append(rows, &discordgo.ActionsRow{Components: []discordgo.MessageComponent{
+			&discordgo.TextInput{
+				CustomID:    fmt.Sprintf("%s%s:q%d", askCustomIDPrefix, token, i),
+				Label:       label,
+				Style:       discordgo.TextInputShort,
+				Placeholder: buildModalPlaceholder(q),
+				Required:    true,
+				MaxLength:   maxModalAnswerRunes,
+			},
+		}})
+	}
+	return &discordgo.InteractionResponseData{
+		CustomID:   fmt.Sprintf("%s%s:submit", askCustomIDPrefix, token),
+		Title:      truncateRunes("Tachi 提问", maxModalTitleRunes),
+		Components: rows,
+	}
+}
+
+// buildModalPlaceholder builds the placeholder for a question's text input:
+// the question text, the available options ("1=label / 2=label ...") for
+// choice questions, and a multi-select hint — all truncated to Discord's
+// 100-char placeholder limit.
+func buildModalPlaceholder(q channel.Question) string {
+	var b strings.Builder
+	b.WriteString("回答: ")
+	b.WriteString(strings.TrimSpace(q.Question))
+	if len(q.Options) > 0 {
+		b.WriteString(" | 填选项文字或编号, 可选: ")
+		for oi, opt := range q.Options {
+			if oi > 0 {
+				b.WriteString(" / ")
+			}
+			fmt.Fprintf(&b, "%d=%s", oi+1, opt.Label)
+		}
+	} else {
+		b.WriteString(" | 自由作答")
+	}
+	if q.MultiSelect {
+		b.WriteString(" (多选, 逗号分隔)")
+	}
+	return truncateRunes(b.String(), maxModalPlaceholderRunes)
+}
+
+// modalTextInputValues walks a modal's component tree and collects every
+// text input's CustomID → submitted value.
+func modalTextInputValues(components []discordgo.MessageComponent) map[string]string {
+	values := make(map[string]string)
+	var walk func([]discordgo.MessageComponent)
+	walk = func(comps []discordgo.MessageComponent) {
+		for _, c := range comps {
+			switch comp := c.(type) {
+			case *discordgo.ActionsRow:
+				walk(comp.Components)
+			case *discordgo.TextInput:
+				if comp.CustomID != "" {
+					values[comp.CustomID] = comp.Value
+				}
+			}
+		}
+	}
+	walk(components)
+	return values
+}
+
+// modalAnswers maps the modal's submitted values to the answer map expected
+// by the agent ("q<idx>" → text) plus a human-readable summary. Missing or
+// blank inputs are skipped.
+func modalAnswers(questions []channel.Question, token string, raw map[string]string) (answers map[string]string, summary string) {
+	answers = make(map[string]string)
+	var parts []string
+	for i := range questions {
+		key := fmt.Sprintf("%s%s:q%d", askCustomIDPrefix, token, i)
+		v := strings.TrimSpace(raw[key])
+		if v == "" {
+			continue
+		}
+		answers[fmt.Sprintf("q%d", i)] = v
+		parts = append(parts, fmt.Sprintf("Q%d: %s", i+1, v))
+	}
+	return answers, strings.Join(parts, " | ")
+}
+
+// pendingQuestionState reads the pending state for a token WITHOUT claiming
+// it — used by the modal's "start answering" button, which may be clicked
+// several times while the user works through the modal. The state is only
+// claimed (LoadAndDelete) on the final submission, so opening the modal can
+// never consume the answerability of the prompt.
+func (ch *DiscordChannel) pendingQuestionState(token string) *questionState {
+	st, ok := ch.questionStates.Load(token)
+	if !ok || time.Since(st.created) > askStateTTL {
+		return nil
+	}
+	return st
+}
+
+// handleBeginAnswer handles a click on the modal-mode "开始回答" button: it
+// responds with the answer modal. The pending state is left untouched so
+// the submission (a separate interaction) can claim it later.
+func (ch *DiscordChannel) handleBeginAnswer(s *discordgo.Session, i *discordgo.InteractionCreate, token string) {
+	st := ch.pendingQuestionState(token)
+	if st == nil {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ 这个问题已过期或已回答，请直接发文字告诉我。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseModal,
+		Data: buildAnswerModal(token, st.questions),
+	}); err != nil {
+		ch.logger.Error(context.Background(), "discord: open answer modal failed", err, "token", token)
+	}
+}
+
+// handleModalSubmit processes an INTERACTION_CREATE of type
+// InteractionModalSubmit for an AskUserQuestion modal. It claims the
+// pending state, collects all text-input values into the agent's answer
+// map, routes them to the waiting turn via the message handler, and edits
+// the question message to disable its components and show the summary.
+func (ch *DiscordChannel) handleModalSubmit(s *discordgo.Session, i *discordgo.InteractionCreate, handler channel.MessageHandler) {
+	// Same value-type caveat as message component data: discordgo v0.29.0
+	// stores ModalSubmitInteractionData by value in i.Data.
+	data, ok := i.Data.(discordgo.ModalSubmitInteractionData)
+	if !ok {
+		ch.logger.Error(context.Background(), "discord: unexpected modal submit data type",
+			fmt.Errorf("type=%v", i.Type), "dataType", fmt.Sprintf("%T", i.Data))
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "❌ 提交数据解析失败，请直接发文字回复。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+	token, kind, _, _, ok := parseAskCustomID(data.CustomID)
+	if !ok || kind != askCustomIDSubmit {
+		return // not one of ours — ignore silently
+	}
+
+	st := ch.claimQuestionState(token)
+	if st == nil {
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ 这个问题已过期或已回答，请直接发文字告诉我。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+
+	answers, summary := modalAnswers(st.questions, token, modalTextInputValues(data.Components))
+	if len(answers) == 0 {
+		ch.logger.Warn(context.Background(), "discord: modal submit with no answers", "token", token)
+		_ = s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+			Type: discordgo.InteractionResponseChannelMessageWithSource,
+			Data: &discordgo.InteractionResponseData{
+				Content: "⚠️ 没有收到你的任何回答，请直接发文字告诉我。",
+				Flags:   discordgo.MessageFlagsEphemeral,
+			},
+		})
+		return
+	}
+
+	// ACK fast (deferred update hides the loading state).
+	if err := s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+		Type: discordgo.InteractionResponseDeferredMessageUpdate,
+	}); err != nil {
+		ch.logger.Error(context.Background(), "discord: modal submit ack failed", err, "token", token)
+	}
+	ch.markQuestionAnswered(st, i.Interaction, summary)
+
+	msgID := i.Message.ID
+	if msgID == "" {
+		msgID = st.messageID
+	}
+	incoming := channel.IncomingMessage{
+		ThreadID:       st.threadID,
+		MessageID:      msgID,
+		Content:        summary,
+		AskUserAnswers: answers,
+	}
+	if result := handler(context.Background(), incoming); result.Steered {
+		ch.logger.Info(context.Background(), "discord: AskUser modal answers routed to agent",
+			"thread", st.threadID, "answers", len(answers))
+	} else {
+		ch.logger.Warn(context.Background(), "discord: modal submit produced non-steered result; forwarding reply",
+			"thread", st.threadID)
+		if result.Reply.Content != "" {
+			if err := ch.sendText(st.channelID, result.Reply.Content); err != nil {
+				ch.logger.Error(context.Background(), "discord: forward stale modal submit reply failed", err)
+			}
+		}
+	}
+}
+
 // --- component interaction handling ---------------------------------------
 
 // handleComponentInteraction processes an INTERACTION_CREATE of type
@@ -477,9 +818,19 @@ func (ch *DiscordChannel) handleComponentInteraction(s *discordgo.Session, i *di
 		return
 	}
 
-	token, qi, oi, ok := parseAskCustomID(data.CustomID)
+	token, kind, qi, oi, ok := parseAskCustomID(data.CustomID)
 	if !ok {
 		// Not one of ours — ignore silently.
+		return
+	}
+	if kind == askCustomIDBegin {
+		ch.handleBeginAnswer(s, i, token)
+		return
+	}
+	if kind == askCustomIDSubmit {
+		// Modals are handled by handleModalSubmit (INTERACTION_CREATE
+		// with type InteractionModalSubmit), not component clicks — a
+		// submit CustomID here is out of place; ignore.
 		return
 	}
 
