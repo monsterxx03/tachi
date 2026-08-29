@@ -290,8 +290,14 @@ type RunState struct {
 	// then incremented in lockstep with APICalls in runLoop — so Seq and
 	// APICalls always stay 1:1. One-off runs (SkipSessionWrites) leave Seq
 	// at 0: their sidecar transcripts start numbering from 1.
-	Seq               int
-	LengthRetries     int
+	Seq           int
+	LengthRetries int
+	// TurnCost / TurnCredit 累计本回合每次已完成 API 调用的花费（CNY）与
+	// credit，计费口径与 usage 账本完全一致（RecordingProvider.record：
+	// 逐次价格快照 + cache-miss 输入归一化 + credit_rate）。TurnComplete 时
+	// 随 RunResult 带出，供各前端的回合 footer 展示。
+	TurnCost          float64
+	TurnCredit        float64
 	Budget            *IterationBudget
 	SkipSessionWrites bool
 	OneoffRec         *oneoffRecorder

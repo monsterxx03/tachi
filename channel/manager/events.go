@@ -183,7 +183,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 				// iterations — keep it. event.Result.Response only carries
 				// the last iteration's text and would discard earlier output.
 				if event.Result.IterationsUsed > 0 {
-					if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
+					if summary := agent.FormatTurnSummary(event.Result); summary != "" {
 						text.WriteString(summary)
 					}
 				}

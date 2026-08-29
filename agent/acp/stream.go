@@ -216,7 +216,7 @@ func streamToACP(
 					lastUsage = event.Result.Usage
 					// Send turn summary (iterations + duration) as a final text update.
 					if event.Result.IterationsUsed > 0 {
-						if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
+						if summary := agent.FormatTurnSummary(event.Result); summary != "" {
 							_ = conn.SessionUpdate(ctx, acp.SessionNotification{
 								SessionId: sessionID,
 								Update:    agentMessageTextChunk(summary, nextMessageID()),

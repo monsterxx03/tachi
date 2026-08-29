@@ -319,7 +319,7 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 		// before finalizing the stream display. Skipped for one-off commands
 		// (e.g. /commit, /init) and error-only results with no iterations.
 		if event.Result != nil && event.Result.IterationsUsed > 0 && !isOneOff {
-			if summary := agent.FormatTurnSummary(event.Result.IterationsUsed, event.Result.Duration, event.Result.TraceID); summary != "" {
+			if summary := agent.FormatTurnSummary(event.Result); summary != "" {
 				m.chatview.AppendTextDelta(summary)
 			}
 		}

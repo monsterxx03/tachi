@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,31 +26,56 @@ type RunResult struct {
 	ExitReason     string
 	Error          error
 	Usage          *llm.Usage // optional: token usage from the final turn
-	TraceID        string     // trace ID for this turn, for log correlation
+	// TurnCost / TurnCredit 是本回合（主循环各次 API 调用）的累计花费与
+	// credit，口径同 usage 账本；0 = 该项未产生（模型未计价 / 未配置
+	// credit_rate），前端据此决定是否在回合 footer 里展示。
+	TurnCost   float64
+	TurnCredit float64
+	TraceID    string // trace ID for this turn, for log correlation
 }
 
 // FormatTurnSummary returns a concise human-readable turn summary string
 // suitable for appending to the assistant's response. It includes the number
-// of iterations (API calls), wall-clock duration, and optionally the trace ID.
+// of iterations (API calls), wall-clock duration, this turn's spend (cost in
+// CNY and credit — shown only when billed), and optionally the trace ID.
 // Returns empty string when all values are zero/empty.
-func FormatTurnSummary(iterations int, duration time.Duration, traceID string) string {
-	if iterations <= 0 && duration <= 0 && traceID == "" {
+func FormatTurnSummary(result *RunResult) string {
+	if result == nil {
 		return ""
 	}
 	var parts []string
-	if iterations > 0 {
-		parts = append(parts, fmt.Sprintf("%d 次迭代", iterations))
+	if result.IterationsUsed > 0 {
+		parts = append(parts, fmt.Sprintf("%d 次迭代", result.IterationsUsed))
 	}
-	if duration > 0 {
-		parts = append(parts, formatTurnDuration(duration))
+	if result.Duration > 0 {
+		parts = append(parts, formatTurnDuration(result.Duration))
 	}
-	if traceID != "" {
-		parts = append(parts, fmt.Sprintf("trace: %s", traceID))
+	if result.TurnCost > 0 {
+		parts = append(parts, "¥"+trimTrailingZeros(result.TurnCost))
+	}
+	if result.TurnCredit > 0 {
+		parts = append(parts, trimTrailingZeros(result.TurnCredit)+" credit")
+	}
+	if result.TraceID != "" {
+		parts = append(parts, fmt.Sprintf("trace: %s", result.TraceID))
 	}
 	if len(parts) == 0 {
 		return ""
 	}
 	return fmt.Sprintf("\n\n*(回合: %s)*", strings.Join(parts, ", "))
+}
+
+// trimTrailingZeros renders a billing float with up to 4 decimals and no
+// trailing zeros ("0.0123", "1.5") — turn costs are typically small, so a
+// fixed %.2f would round them away, while %g can yield exponent notation.
+// Falls back to the shortest exact form for values below the 4-decimal floor.
+func trimTrailingZeros(v float64) string {
+	s := strings.TrimRight(strconv.FormatFloat(v, 'f', 4, 64), "0")
+	s = strings.TrimSuffix(s, ".")
+	if s == "" || s == "0" {
+		return strconv.FormatFloat(v, 'f', -1, 64)
+	}
+	return s
 }
 
 // formatTurnDuration formats a time.Duration as a concise human-readable string
@@ -166,6 +192,15 @@ func usageToSession(u *llm.Usage) *session.Usage {
 // recordAssistantTurn persists an assistant response (text, usage, thinking
 // blocks) to the session store. Safe to call with zero values.
 func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usage, thinkBlocks []llm.ThinkingBlock) {
+	// Accumulate the run's billing — called exactly once per completed API
+	// call, so rs.TurnCost/TurnCredit converge to the turn's total using the
+	// same per-call rules as the usage ledger (see turnBilling).
+	if usage != nil {
+		if cost, credit := a.turnBilling(usage); cost > 0 || credit > 0 {
+			rs.TurnCost += cost
+			rs.TurnCredit += credit
+		}
+	}
 	for _, tb := range thinkBlocks {
 		a.recordSession(rs, &session.Message{
 			Type:      session.MessageTypeThinking,
@@ -193,6 +228,39 @@ func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usag
 			Seq:       rs.Seq,      // session-wide request number (same as api_requests record)
 		})
 	}
+}
+
+// turnBilling computes one API call's cost (CNY) and credit with the SAME
+// rules as the usage ledger (RecordingProvider.record): per-call price
+// snapshot (time-of-use bands pinned to now), cache-miss input normalization
+// per provider family, and credit via the model spec's credit_rate over the
+// normalized total token count. Keeping both frontends (statusbar / turn
+// footer) and the ledger on one arithmetic path is what makes the numbers
+// cross-checkable against /usage.
+//
+// Returns 0, 0 when there is nothing to bill: bare agents without a provider
+// or config (unit tests), unpriced models, or models without credit_rate.
+func (a *AIAgent) turnBilling(u *llm.Usage) (cost, credit float64) {
+	if u == nil {
+		return 0, 0
+	}
+	p := a.Provider()
+	if p == nil {
+		return 0, 0
+	}
+	cfg := a.Config.FullConfig
+	providerName := p.ProviderName()
+	if rp := llm.ResolveModelPriceAt(cfg, providerName, p.Model(), time.Now()); rp.HasPrice() {
+		cost = llm.CostForUsage(u, &rp.Price, p.Name())
+	}
+	if cfg != nil {
+		if rate := llm.ResolveCreditRate(cfg, providerName, p.Model()); rate > 0 {
+			input := llm.NormalizeCacheMissInput(u.InputTokens, u.CacheReadInputTokens, p.Name())
+			total := input + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+			credit = llm.ComputeCredit(total, rate)
+		}
+	}
+	return cost, credit
 }
 
 func (a *AIAgent) RunConversation(ctx context.Context, userMessage string, systemPrompt string, opts llm.ChatOptions) *RunResult {
@@ -1057,6 +1125,8 @@ func (a *AIAgent) lengthExhausted(
 			ExitReason:     ExitReasonLengthExhausted,
 			Error:          fmt.Errorf("response truncated after %d continuation attempts", maxLengthContinueRetries),
 			Usage:          acc.usage,
+			TurnCost:       rs.TurnCost,
+			TurnCredit:     rs.TurnCredit,
 			TraceID:        rs.trace(),
 		},
 	}
@@ -1147,7 +1217,7 @@ func (a *AIAgent) handleStopFinish(
 
 	ch <- AgentEvent{
 		Type: AgentEventTurnComplete, Messages: rs.Messages, Usage: acc.usage,
-		Result: &RunResult{Response: acc.text.String(), IterationsUsed: rs.APICalls, Duration: rs.elapsed(), ExitReason: ExitReasonStop, Usage: acc.usage, TraceID: rs.trace()},
+		Result: &RunResult{Response: acc.text.String(), IterationsUsed: rs.APICalls, Duration: rs.elapsed(), ExitReason: ExitReasonStop, Usage: acc.usage, TurnCost: rs.TurnCost, TurnCredit: rs.TurnCredit, TraceID: rs.trace()},
 	}
 
 	// Fire turn_complete hook
