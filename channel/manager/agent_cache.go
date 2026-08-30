@@ -225,11 +225,16 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *llm
 	// Register channel-specific tools (optional ToolProvider interface).
 	// e.g. the wave channel injects its todo tool, which needs the wave
 	// client's access_token and only makes sense on wave threads.
-	if tp, ok := m.channelForThread(threadID).(channel.ToolProvider); ok {
-		for _, t := range tp.ChannelTools() {
-			a.RegisterTool(t)
-			m.logger.Info(ctx, "channel: registered channel tool", "thread", threadID, "tool", t.Name())
-		}
+	// ThreadToolProvider (with the thread id) is preferred when available.
+	var channelTools []tools.Tool
+	if ttp, ok := m.channelForThread(threadID).(channel.ThreadToolProvider); ok {
+		channelTools = ttp.ChannelToolsForThread(threadID)
+	} else if tp, ok := m.channelForThread(threadID).(channel.ToolProvider); ok {
+		channelTools = tp.ChannelTools()
+	}
+	for _, t := range channelTools {
+		a.RegisterTool(t)
+		m.logger.Info(ctx, "channel: registered channel tool", "thread", threadID, "tool", t.Name())
 	}
 
 	m.logger.Info(ctx, "channel: built cached agent", "thread", threadID, "provider", resolved.Type, "model", resolved.Model)
