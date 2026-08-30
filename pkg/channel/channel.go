@@ -420,19 +420,6 @@ type ToolProvider interface {
 	ChannelTools() []tools.Tool
 }
 
-// ThreadToolProvider is an optional refinement of ToolProvider for channels
-// whose tools need to know which thread they are serving (e.g. to resolve
-// the current message sender, or the chat a tool should act on). The Manager
-// prefers this interface over ToolProvider when building an agent.
-type ThreadToolProvider interface {
-	Channel
-
-	// ChannelToolsForThread returns the tools to register for the given
-	// thread. Implementations may bind per-thread context (thread id, chat
-	// id, current sender) into the tool instances.
-	ChannelToolsForThread(threadID string) []tools.Tool
-}
-
 // SystemPromptSuffixer is an optional interface for channels that want to
 // inject additional instructions into the agent's system prompt. The suffix
 // is appended once per turn, after the base system prompt and any
