@@ -65,7 +65,10 @@ func (t MCPTool) Properties() map[string]tools.PropertySchema {
 
 		ps := tools.PropertySchema{}
 
-		if typ, ok := propMap["type"].(string); ok {
+		// JSON Schema allows "type" to be an array union (e.g. ["null","array"]),
+		// but LLM tool APIs only accept a single string type. Normalize so the
+		// LLM never receives an empty/invalid type keyword.
+		if typ := typeKeyword(propMap["type"]); typ != "" {
 			ps.Type = typ
 		}
 
@@ -74,7 +77,7 @@ func (t MCPTool) Properties() map[string]tools.PropertySchema {
 		}
 
 		if items, ok := propMap["items"]; ok {
-			ps.Items = items
+			ps.Items = normalizeSchemaNode(items)
 		}
 
 		// Forward structured constraints declared by the MCP server. These
@@ -123,6 +126,52 @@ func stringEnum(v any) ([]string, bool) {
 		out = append(out, s)
 	}
 	return out, true
+}
+
+// typeKeyword extracts a plain-string "type" from a JSON-decoded schema
+// keyword. JSON Schema permits the union form (e.g. ["null","array"]), but
+// LLM tool APIs only accept a single string type — so the union is collapsed
+// to its first non-"null" member (["null","array"] → "array", which preserves
+// the useful type while dropping the nullable marker). Returns "" when the
+// keyword is missing or contains no usable type.
+func typeKeyword(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case []any:
+		for _, member := range t {
+			if s, ok := member.(string); ok && s != "null" {
+				return s
+			}
+		}
+	}
+	return ""
+}
+
+// normalizeSchemaNode recursively rewrites "type" keywords in a schema node
+// that is forwarded verbatim to the LLM API (the "items" subschema),
+// collapsing union forms into plain strings. The original MCP schema is left
+// untouched — a copy is made. A union with no non-null member drops the
+// keyword entirely rather than emitting "type": "".
+func normalizeSchemaNode(v any) any {
+	m, ok := v.(map[string]any)
+	if !ok {
+		return v
+	}
+	out := make(map[string]any, len(m)+1)
+	for k, val := range m {
+		switch k {
+		case "type":
+			if s := typeKeyword(val); s != "" {
+				out[k] = s
+			}
+		case "items":
+			out[k] = normalizeSchemaNode(val)
+		default:
+			out[k] = val
+		}
+	}
+	return out
 }
 
 // jsonNumberPtr extracts a numeric bound from a JSON-decoded value.

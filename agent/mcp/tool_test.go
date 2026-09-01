@@ -296,6 +296,125 @@ func TestMCPToolProperties_ForwardsConstraints(t *testing.T) {
 	assert.Equal(t, "missing type keyword", props["no_type"].Description)
 }
 
+func TestMCPToolProperties_UnionTypeNormalization(t *testing.T) {
+	// MCP servers may declare "type" as a JSON Schema union array (e.g.
+	// ["null","array"]); LLM APIs only accept a single string type, and an
+	// empty string broke requests. Properties() must collapse the union to
+	// its first non-null member.
+	schema := mcp.ToolInputSchema{
+		Type: "object",
+		Properties: map[string]any{
+			"domains": map[string]any{
+				"type":        []any{"null", "array"},
+				"description": "domain list",
+				"items": map[string]any{
+					"type":        []any{"null", "string"},
+					"description": "a domain",
+				},
+			},
+			"client_id": map[string]any{
+				"type": []any{"string", "null"},
+			},
+			"nullable_only": map[string]any{
+				"type": []any{"null"},
+			},
+			"plain_string": map[string]any{
+				"type": "integer",
+			},
+			"no_type": map[string]any{
+				"description": "missing type keyword",
+			},
+		},
+	}
+
+	tool := MCPTool{serverTool: &mcp.Tool{Name: "do_stuff", InputSchema: schema}}
+	props := tool.Properties()
+
+	// ["null","array"] → "array"
+	domains := props["domains"]
+	assert.Equal(t, "array", domains.Type)
+	assert.Equal(t, "domain list", domains.Description)
+
+	// items subschema is forwarded verbatim — its union type must be
+	// normalized too, and the original MCP schema must not be mutated.
+	items, ok := domains.Items.(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "string", items["type"])
+	assert.Equal(t, "a domain", items["description"])
+	rawDomains := schema.Properties["domains"].(map[string]any)
+	assert.Equal(t, []any{"null", "array"}, rawDomains["type"])
+	assert.Equal(t, []any{"null", "string"}, rawDomains["items"].(map[string]any)["type"])
+
+	// ["string","null"] → "string"
+	assert.Equal(t, "string", props["client_id"].Type)
+
+	// union of only nulls → no usable type (empty, not "null")
+	assert.Equal(t, "", props["nullable_only"].Type)
+
+	// plain string types pass through untouched
+	assert.Equal(t, "integer", props["plain_string"].Type)
+
+	// missing type keyword keeps old behavior: description only
+	assert.Equal(t, "", props["no_type"].Type)
+	assert.Equal(t, "missing type keyword", props["no_type"].Description)
+}
+
+func TestTypeKeyword(t *testing.T) {
+	cases := []struct {
+		name string
+		in   any
+		want string
+	}{
+		{name: "plain string", in: "array", want: "array"},
+		{name: "union with null", in: []any{"null", "array"}, want: "array"},
+		{name: "union null first", in: []any{"null", "string", "null"}, want: "string"},
+		{name: "union only null", in: []any{"null"}, want: ""},
+		{name: "empty union", in: []any{}, want: ""},
+		{name: "union non-string member", in: []any{"null", 42}, want: ""},
+		{name: "missing", in: nil, want: ""},
+		{name: "non-type value", in: 42, want: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, typeKeyword(c.in))
+		})
+	}
+}
+
+func TestNormalizeSchemaNode(t *testing.T) {
+	node := map[string]any{
+		"type":        []any{"null", "object"},
+		"description": "nested",
+		"items": map[string]any{
+			"type": []any{"null", "array"},
+			"items": map[string]any{
+				"type": "string",
+			},
+		},
+		"default": 42, // unrelated keywords pass through
+	}
+	got := normalizeSchemaNode(node).(map[string]any)
+
+	assert.Equal(t, "object", got["type"])
+	assert.Equal(t, "nested", got["description"])
+	assert.Equal(t, 42, got["default"])
+	items := got["items"].(map[string]any)
+	assert.Equal(t, "array", items["type"])
+	assert.Equal(t, "string", items["items"].(map[string]any)["type"])
+
+	// original untouched
+	assert.Equal(t, []any{"null", "object"}, node["type"])
+	assert.Equal(t, []any{"null", "array"}, node["items"].(map[string]any)["type"])
+
+	// union of only nulls drops the keyword
+	onlyNull := normalizeSchemaNode(map[string]any{"type": []any{"null"}}).(map[string]any)
+	_, has := onlyNull["type"]
+	assert.False(t, has)
+
+	// non-map nodes pass through unchanged
+	assert.Equal(t, "plain", normalizeSchemaNode("plain"))
+}
+
 func TestStringEnum(t *testing.T) {
 	cases := []struct {
 		name string
