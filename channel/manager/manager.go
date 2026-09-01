@@ -152,6 +152,16 @@ type Manager struct {
 	threadChannels  map[string]channel.Channel
 	threadChannelMu sync.RWMutex
 
+	// --- Per-thread defaults (workdir + provider) ---
+	//
+	// Optional defaults applied when a FRESH session is created for a
+	// thread (e.g. after /new). Set by channels via ThreadDefaultsChannel
+	// — typically parsed from user-editable platform metadata such as a
+	// group announcement. Empty workDir/providerName leave that dimension
+	// on the usual fallback (process CWD / global default provider).
+	threadDefaultsMu sync.Mutex
+	threadDefaults   map[string]threadDefaults
+
 	// --- Shared MCP backend ---
 	//
 	// All cached agents share a single *mcp.Manager. The manager owns the
@@ -243,6 +253,7 @@ func New(cfg *config.Config) (*Manager, error) {
 		logger:                  logger.New("channel"),
 		group:                   syncx.NewGroup(),
 		threadChannels:          make(map[string]channel.Channel),
+		threadDefaults:          make(map[string]threadDefaults),
 		oneoffCancels:           make(map[string]context.CancelFunc),
 		oneoffSem:               syncx.NewSemaphore(maxOneoffConcurrency),
 	}, nil
@@ -292,6 +303,11 @@ func (m *Manager) Start(ctx context.Context) error {
 			if cc, ok := ch.(channel.CommandChannel); ok {
 				cc.SetCommandHandler(cmdHandler)
 				m.logger.Info(ctx, "channel: received CommandHandler", "name", ch.Name())
+			}
+			// Inject ThreadDefaultsHandler if this channel supports it.
+			if tc, ok := ch.(channel.ThreadDefaultsChannel); ok {
+				tc.SetThreadDefaultsHandler(m.SetThreadDefaults)
+				m.logger.Info(ctx, "channel: received ThreadDefaultsHandler", "name", ch.Name())
 			}
 
 			// Inject provider names for slash command autocomplete.
@@ -436,6 +452,61 @@ func (m *Manager) newSessionManager() *session.Manager {
 	return sm
 }
 
+// --- Thread defaults ---
+
+// threadDefaults holds per-thread default config applied when a fresh
+// session is created for the thread (e.g. after /new). Empty workDir /
+// providerName mean "leave that dimension on the usual fallback".
+type threadDefaults struct {
+	workDir      string
+	providerName string
+}
+
+// SetThreadDefaults sets the default workdir / provider for a thread,
+// applied when a new session is created for it. Empty workDir or
+// providerName leave that dimension unchanged. Implemented for
+// channel.ThreadDefaultsChannel; callers typically pass metadata parsed
+// from user-editable platform state (e.g. a group announcement).
+func (m *Manager) SetThreadDefaults(threadID, workDir, providerName string) {
+	if threadID == "" {
+		return
+	}
+	m.threadDefaultsMu.Lock()
+	m.threadDefaults[threadID] = threadDefaults{workDir: workDir, providerName: providerName}
+	m.threadDefaultsMu.Unlock()
+	m.logger.Info(context.Background(), "channel: thread defaults set", "thread", threadID, "workdir", workDir, "provider", providerName)
+}
+
+// threadDefaultsFor returns the per-thread defaults, if any.
+func (m *Manager) threadDefaultsFor(threadID string) (threadDefaults, bool) {
+	m.threadDefaultsMu.Lock()
+	defer m.threadDefaultsMu.Unlock()
+	td, ok := m.threadDefaults[threadID]
+	return td, ok
+}
+
+// resolveThreadDefaults returns the (providerName, workDir) pair to use
+// when creating a FRESH session for the thread. Falls back to the given
+// default provider name when the thread has no defaults or the configured
+// provider name cannot be resolved.
+func (m *Manager) resolveThreadDefaults(threadID, fallbackProvider string) (string, string) {
+	td, ok := m.threadDefaultsFor(threadID)
+	if !ok {
+		return fallbackProvider, ""
+	}
+	providerName := td.providerName
+	if providerName != "" && m.cfg != nil {
+		if _, err := llm.BuildProvider(m.cfg, providerName); err != nil {
+			// Unresolvable provider name → fall back to the default.
+			providerName = ""
+		}
+	}
+	if providerName == "" {
+		providerName = fallbackProvider
+	}
+	return providerName, td.workDir
+}
+
 // --- Session helpers ---
 
 // loadThreadSession looks up a session by ThreadID (via session.ThreadID field).
@@ -464,8 +535,12 @@ func (m *Manager) loadThreadSession(threadID string, resolved *llm.ResolvedProvi
 
 	if sess == nil {
 		// No existing session → create a new one now. The agent will
-		// record the first message.
-		if _, err := sm.New(resolved.Name, ""); err != nil {
+		// record the first message. Apply per-thread defaults (set by
+		// channels, e.g. parsed from a group announcement) so a fresh
+		// session starts in the configured directory with the configured
+		// provider instead of the process CWD + global default.
+		providerName, wd := m.resolveThreadDefaults(threadID, resolved.Name)
+		if _, err := sm.New(providerName, wd); err != nil {
 			return sm, nil, fmt.Errorf("create session: %w", err)
 		}
 		sm.SetThreadID(threadID)

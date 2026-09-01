@@ -27,7 +27,8 @@ func (m *Manager) prepareThreadSession(threadID string, resolved *llm.ResolvedPr
 	}
 
 	if sm != nil && !sm.HasCurrent() {
-		if _, err := sm.New(resolved.Name, ""); err != nil {
+		providerName, wd := m.resolveThreadDefaults(threadID, resolved.Name)
+		if _, err := sm.New(providerName, wd); err != nil {
 			m.logger.Error(context.Background(), "channel: create fallback session failed", err, "thread", threadID)
 		} else {
 			sm.SetThreadID(threadID)

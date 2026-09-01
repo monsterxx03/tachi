@@ -282,11 +282,13 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				// Turn was cancelled by /stop or /new.
 				return channel.HandlerResult{Steered: true}
 			}
-			// Capture the thread's working directory and model for the channel
-			// to use (e.g., updating Discord channel topic). Read before
-			// eviction in the compact path below.
+			// Capture the thread's working directory, model, and provider for
+			// the channel to use (e.g., updating Discord channel topic). Read
+			// before eviction in the compact path below.
 			workDir := m.getThreadWorkDir(msg.ThreadID)
-			model := m.getProviderForThread(msg.ThreadID).Model
+			resolved := m.getProviderForThread(msg.ThreadID)
+			model := resolved.Model
+			provider := resolved.Name
 			if result.err != nil {
 				return channel.HandlerResult{
 					Reply: channel.OutgoingMessage{
@@ -295,9 +297,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						ReplyTo:     msg.MessageID,
 						Attachments: result.attachments,
 					},
-					Err:     result.err,
-					WorkDir: workDir,
-					Model:   model,
+					Err:      result.err,
+					WorkDir:  workDir,
+					Model:    model,
+					Provider: provider,
 				}
 			}
 
@@ -329,9 +332,10 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 							Content:  fmt.Sprintf("❌ 压缩失败: %v", err),
 							ReplyTo:  msg.MessageID,
 						},
-						Err:     err,
-						WorkDir: workDir,
-						Model:   model,
+						Err:      err,
+						WorkDir:  workDir,
+						Model:    model,
+						Provider: provider,
 					}
 				}
 				// Evict the cached agent so the next turn reloads history from
@@ -343,8 +347,9 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 						Content:  reply,
 						ReplyTo:  msg.MessageID,
 					},
-					WorkDir: workDir,
-					Model:   model,
+					WorkDir:  workDir,
+					Model:    model,
+					Provider: provider,
 				}
 			}
 
@@ -355,8 +360,9 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 					ReplyTo:     msg.MessageID,
 					Attachments: result.attachments,
 				},
-				WorkDir: workDir,
-				Model:   model,
+				WorkDir:  workDir,
+				Model:    model,
+				Provider: provider,
 			}
 		case <-ta.ctx.Done():
 			m.deactivateThread(msg.ThreadID, ta)

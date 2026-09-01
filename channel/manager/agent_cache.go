@@ -7,6 +7,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
@@ -234,8 +235,43 @@ func (m *Manager) buildAgent(ctx context.Context, threadID string, resolved *llm
 		m.logger.Info(ctx, "channel: registered channel tool", "thread", threadID, "tool", t.Name())
 	}
 
+	// Register the channel's per-thread reminder (optional
+	// ThreadReminderChannel interface) into the agent's reminder collector,
+	// so it rides in the unified <system-reminder> block alongside
+	// date/memory/etc. The agent cache is per-thread, so the adapter can
+	// close over the threadID. When reminders are disabled the collector is
+	// a no-op and AddReminder is safely inert.
+	if tc, ok := m.channelForThread(threadID).(channel.ThreadReminderChannel); ok {
+		a.Config.ReminderCollector.AddReminder(&threadReminder{ch: tc, threadID: threadID})
+		m.logger.Info(ctx, "channel: registered thread reminder", "thread", threadID)
+	}
+
 	m.logger.Info(ctx, "channel: built cached agent", "thread", threadID, "provider", resolved.Type, "model", resolved.Model)
 	return a, nil
+}
+
+// threadReminder adapts a channel.ThreadReminderChannel into the agent's
+// systemreminder.Reminder interface for a single thread. The channel decides
+// per call whether anything should be injected (it owns the inject-once
+// semantics); this adapter only guards the call boundary.
+type threadReminder struct {
+	ch       channel.ThreadReminderChannel
+	threadID string
+}
+
+func (r *threadReminder) Generate(ctx context.Context, rctx systemreminder.Context) []string {
+	// A channel reminder is a per-user-turn concern. Tool-result boundary
+	// collections happen many times per turn — repeating the reminder there
+	// would both spam the transcript and double-consume the channel's
+	// inject-once state.
+	if rctx.IsToolResult {
+		return nil
+	}
+	text, ok := r.ch.ThreadReminder(ctx, r.threadID)
+	if !ok || text == "" {
+		return nil
+	}
+	return []string{text}
 }
 
 // evictAgent removes the cached agent for a thread. Called by /new (the
@@ -301,13 +337,31 @@ func initialWorkDir() string {
 	return wd
 }
 
-// getThreadWorkDir returns the cached working directory for a thread, or ""
-// if no cached agent exists for the thread.
+// getThreadWorkDir returns the working directory for a thread. The cached
+// agent's workDir wins; on a cache miss (e.g. right after /new evicted the
+// agent, or after a restart before the first turn) it falls back to the
+// thread's persisted session WorkingDir — set by /new with announcement
+// defaults or by a previous /cd. This keeps state-less commands (/sh, /model,
+// ...) and announcement updates observing the configured directory instead of
+// the process CWD. Returns "" when neither source has a directory.
 func (m *Manager) getThreadWorkDir(threadID string) string {
 	m.agentCacheMu.Lock()
-	defer m.agentCacheMu.Unlock()
-	if ca, ok := m.agentCache[threadID]; ok {
+	ca, ok := m.agentCache[threadID]
+	m.agentCacheMu.Unlock()
+	if ok {
 		return ca.workDir
 	}
-	return ""
+
+	// Cache miss — consult the persisted session metadata. Only reached
+	// when the agent cache is empty for this thread, so the disk lookup is
+	// rare (per /new, not per turn).
+	sm := m.newSessionManager()
+	if sm == nil {
+		return ""
+	}
+	sess, err := sm.FindByThreadID(threadID)
+	if err != nil || sess == nil {
+		return ""
+	}
+	return sess.WorkingDir
 }

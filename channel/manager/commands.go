@@ -17,7 +17,7 @@ import (
 // This allows channels to invoke manager operations programmatically
 // without routing through the text-based message handler path.
 func (m *Manager) buildCommandHandler() channel.CommandHandler {
-	return func(ctx context.Context, cmd channel.SlashCommand) (channel.OutgoingMessage, string, string, error) {
+	return func(ctx context.Context, cmd channel.SlashCommand) (channel.OutgoingMessage, string, string, string, error) {
 		result, err := m.executeSlashCommand(ctx, cmd)
 		if err != nil {
 			// Carry partial output (e.g. a /review that failed mid-chain) so
@@ -26,22 +26,24 @@ func (m *Manager) buildCommandHandler() channel.CommandHandler {
 			if reply.ThreadID == "" {
 				reply.ThreadID = cmd.ThreadID
 			}
-			return reply, "", "", err
+			return reply, "", "", "", err
 		}
 		// Read the current workDir from cache for channel topic updates.
 		workDir := result.WorkDir
 		if workDir == "" {
 			workDir = m.getThreadWorkDir(cmd.ThreadID)
 		}
-		// Resolve the current model name for channel topic display.
-		model := m.getProviderForThread(cmd.ThreadID).Model
+		// Resolve the current model + provider name for channel topic display.
+		resolved := m.getProviderForThread(cmd.ThreadID)
+		model := resolved.Model
+		provider := resolved.Name
 		// Return the full OutgoingMessage so channels can send attachments
 		// (e.g., /transcript HTML file) alongside the text reply.
 		reply := result.Reply
 		if reply.ThreadID == "" {
 			reply.ThreadID = cmd.ThreadID
 		}
-		return reply, workDir, model, result.Err
+		return reply, workDir, model, provider, result.Err
 	}
 }
 
@@ -189,11 +191,24 @@ func (m *Manager) handleSlashCommand(ctx context.Context, msg channel.IncomingMe
 		result.Reply.ReplyTo = msg.MessageID
 	}
 
-	// Propagate the thread's current working directory so channel implementations
-	// can update platform-specific UI (e.g., Discord channel topic). Commands
-	// like /cd have just updated this in the cache.
+	// Propagate the thread's current working directory, model, and provider
+	// so channel implementations can update platform-specific UI (e.g.,
+	// Discord channel topic, Wave group announcement). Commands like /cd
+	// have just updated the workdir in the cache; model/provider come from
+	// the thread's resolved provider (session override wins). Filling them
+	// here keeps the HandlerResult complete even for state-less commands
+	// like /model (list mode), so channels never observe empty values.
 	if result.WorkDir == "" {
 		result.WorkDir = m.getThreadWorkDir(msg.ThreadID)
+	}
+	if result.Model == "" || result.Provider == "" {
+		resolved := m.getProviderForThread(msg.ThreadID)
+		if result.Model == "" {
+			result.Model = resolved.Model
+		}
+		if result.Provider == "" {
+			result.Provider = resolved.Name
+		}
 	}
 
 	return result

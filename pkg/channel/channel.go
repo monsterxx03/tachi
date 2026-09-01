@@ -254,6 +254,12 @@ type HandlerResult struct {
 	// channel implementations can display this alongside working directory
 	// and git branch info (e.g., updating the Discord channel topic).
 	Model string
+
+	// Provider is the resolved provider config name (e.g. "anthropic",
+	// "openai-custom") for the thread after processing the message. This is
+	// the cfg.Providers[].name — NOT the API type. Empty when the handler
+	// hasn't started an agent turn (steer/buffer/slash-command).
+	Provider string
 }
 
 // MessageHandler processes an incoming message and returns a response.
@@ -340,9 +346,9 @@ type SlashCommand struct {
 
 // CommandHandler executes a typed SlashCommand and returns the response
 // message (text + optional file attachments), the thread's current working
-// directory (for channel topic updates, etc.), the resolved model name,
-// and an error (if any).
-type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply OutgoingMessage, workDir string, model string, err error)
+// directory (for channel topic updates, etc.), the resolved model name, the
+// resolved provider config name, and an error (if any).
+type CommandHandler func(ctx context.Context, cmd SlashCommand) (reply OutgoingMessage, workDir string, model string, provider string, err error)
 
 // CommandChannel is an optional interface for channels that need
 // programmatic access to manager-level slash commands.
@@ -361,6 +367,48 @@ type CommandChannel interface {
 	// SetCommandHandler receives the CommandHandler for programmatic
 	// slash command execution. Called by Manager before Run().
 	SetCommandHandler(handler CommandHandler)
+}
+
+// ThreadDefaultsChannel is an optional interface for channels that need
+// to set per-thread default working directory / provider, applied when a
+// fresh session is created for the thread (e.g. after /new).
+//
+// A typical source is platform-level metadata the user can edit — e.g. a
+// group announcement on Wave carrying "workdir:" / "provider:" key-value
+// lines. The channel parses that metadata and pushes it here before a /new
+// command runs, so the next session starts in the configured directory with
+// the configured provider instead of falling back to the process CWD and
+// the global default provider.
+type ThreadDefaultsChannel interface {
+	// SetThreadDefaultsHandler receives a callback to set per-thread
+	// defaults. Called by Manager before Run(). Empty workDir/providerName
+	// leave that dimension unchanged (falls back to defaults).
+	SetThreadDefaultsHandler(handler func(threadID, workDir, providerName string))
+}
+
+// ThreadReminderChannel is an optional interface for channels that want to
+// inject a per-thread reminder into the LLM input through tachi's unified
+// <system-reminder> mechanism (agent/systemreminder Collector).
+//
+// The Manager registers a small adapter into each thread agent's reminder
+// collector when the thread's channel implements this interface, so the
+// reminder rides in the same block as date/memory/etc. reminders and is
+// recorded with the standard reminder handling — the channel never touches
+// the Collector itself.
+//
+// A typical source is platform-level metadata the user can edit — e.g. a
+// group announcement on Wave carrying a "reminder:" line.
+type ThreadReminderChannel interface {
+	// ThreadReminder returns the reminder text to inject for the current
+	// turn on the given thread. ok=false (or empty text) means "nothing to
+	// inject this turn".
+	//
+	// Called once per agent turn, at the user-message boundary only (not
+	// at tool-result boundaries). Because turns are the only call site,
+	// steered/buffered/dropped messages never consume an injection —
+	// channels own the inject-once semantics (first message / value
+	// change / process restart / session reset) via their own state.
+	ThreadReminder(ctx context.Context, threadID string) (text string, ok bool)
 }
 
 // InteractiveChannel is an optional interface for channels that support

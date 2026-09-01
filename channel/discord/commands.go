@@ -201,7 +201,7 @@ func (ch *DiscordChannel) handleSlashCommand(s *discordgo.Session, i *discordgo.
 	cmdCtx := manager.WithStreamingCallback(context.Background(), se.cb)
 
 	// Execute the command via the Manager's CommandHandler.
-	reply, workDir, model, err := cmdHandler(cmdCtx, channel.SlashCommand{
+	reply, workDir, model, _, err := cmdHandler(cmdCtx, channel.SlashCommand{
 		Name:     data.Name,
 		ThreadID: threadID,
 		Args:     args,

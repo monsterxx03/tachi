@@ -42,7 +42,28 @@ func (m *Manager) handleNewCommand(threadID string) (string, error) {
 		m.logger.Info(context.Background(), "channel: /new ended session", "id", sess.ID, "thread", threadID)
 	}
 
-	return "✅ Started a new conversation. Previous session has been ended.", nil
+	// If the thread has defaults (e.g. configured via the group
+	// announcement), immediately start a fresh session with them so the
+	// next message runs in the configured directory with the configured
+	// provider — and the reply can confirm what was applied.
+	applied := ""
+	if _, ok := m.threadDefaultsFor(threadID); ok {
+		providerName, wd := m.resolveThreadDefaults(threadID, m.defaultResolvedProvider.Name)
+		ns, err := sm.New(providerName, wd)
+		if err != nil {
+			m.logger.Error(context.Background(), "channel: /new create default session failed", err, "thread", threadID)
+		} else {
+			sm.SetThreadID(threadID)
+			wdMsg := wd
+			if wdMsg == "" {
+				wdMsg = initialWorkDir()
+			}
+			applied = fmt.Sprintf("\n✅ 已应用群配置：工作目录 `%s` · provider `%s`", wdMsg, providerName)
+			m.logger.Info(context.Background(), "channel: /new session with thread defaults", "thread", threadID, "session", ns.ID, "workdir", wd, "provider", providerName)
+		}
+	}
+
+	return "✅ Started a new conversation. Previous session has been ended." + applied, nil
 }
 
 // --- /cd ---

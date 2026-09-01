@@ -416,17 +416,17 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	threadID := fmt.Sprintf("cmd-%s-%d", t.Name(), time.Now().UnixNano())
 
 	// /mcp (global, no ThreadID)
-	resp, _, _, err := handler(t.Context(), channel.SlashCommand{Name: "mcp"})
+	resp, _, _, _, err := handler(t.Context(), channel.SlashCommand{Name: "mcp"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "No MCP servers configured")
 
 	// /cron (global, scheduler nil → "not enabled")
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "cron"})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "cron"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "not enabled")
 
 	// /new (thread-scoped) — no session needed
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "new", ThreadID: threadID})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "new", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "Started a new conversation")
 
@@ -442,12 +442,12 @@ func TestCommandHandler_BuildAndDispatch(t *testing.T) {
 	}
 	_ = sm.AppendMessage(msg)
 
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "usage", ThreadID: threadID})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "usage", ThreadID: threadID})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "📊 **Session Usage**")
 
 	// unknown command
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "nonexistent"})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "nonexistent"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "Unknown command")
 }
@@ -493,7 +493,7 @@ func TestCommandChannel_Injection(t *testing.T) {
 	require.NotNil(t, cmdCh.cmdHandler, "CommandHandler should be injected")
 
 	// The injected handler should be functional.
-	resp, _, _, err := cmdCh.cmdHandler(t.Context(), channel.SlashCommand{Name: "mcp"})
+	resp, _, _, _, err := cmdCh.cmdHandler(t.Context(), channel.SlashCommand{Name: "mcp"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "No MCP servers configured")
 }
@@ -942,13 +942,13 @@ func TestHandleModelCommand_ViaCommandHandler(t *testing.T) {
 	handler := mgr.buildCommandHandler()
 
 	// /model list via typed command.
-	resp, _, _, err := handler(t.Context(), channel.SlashCommand{Name: "model", ThreadID: "thread-1"})
+	resp, _, _, _, err := handler(t.Context(), channel.SlashCommand{Name: "model", ThreadID: "thread-1"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "Configured models (2)")
 	assert.Contains(t, resp.Content, "* gpt-5.2")
 
 	// /model switch via typed command.
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "model", Args: "claude-haiku", ThreadID: "thread-1"})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "model", Args: "claude-haiku", ThreadID: "thread-1"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "Switched to **claude-haiku**")
 
@@ -1060,17 +1060,17 @@ func TestSkillViaCommandHandler(t *testing.T) {
 	handler := mgr.buildCommandHandler()
 
 	// /skill list via typed command
-	resp, _, _, err := handler(t.Context(), channel.SlashCommand{Name: "skill"})
+	resp, _, _, _, err := handler(t.Context(), channel.SlashCommand{Name: "skill"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "No skills found")
 
 	// /skill list via typed command with Args
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "list"})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "list"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "No skills found")
 
 	// /skill reload
-	resp, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "reload"})
+	resp, _, _, _, err = handler(t.Context(), channel.SlashCommand{Name: "skill", Args: "reload"})
 	require.NoError(t, err)
 	assert.Contains(t, resp.Content, "Skills 已重新加载")
 }
