@@ -505,6 +505,38 @@ func writeMCPJSON(t *testing.T, path string, servers []MCPServerConfig) {
 	require.NoError(t, os.WriteFile(path, data, 0600))
 }
 
+func TestListMCPProfiles(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	// Base file and non-mcp files must be excluded; profiles sorted.
+	writeMCPJSON(t, filepath.Join(globalDir, mcpConfigFileName), nil)
+	require.NoError(t, os.WriteFile(filepath.Join(globalDir, "notes.json"), []byte("{}"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(globalDir, mcpProfileFileName("prod")), []byte("{}"), 0600))
+	require.NoError(t, os.WriteFile(filepath.Join(globalDir, mcpProfileFileName("dev")), []byte("{}"), 0600))
+
+	// No workDir: only global profiles.
+	assert.Equal(t, []string{"dev", "prod"}, ListMCPProfiles(""))
+
+	// Project profiles are merged in and deduplicated.
+	projectDir := t.TempDir()
+	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpProfileFileName("ci")), nil)
+	writeMCPJSON(t, filepath.Join(projectDir, ".tachi", mcpProfileFileName("prod")), nil)
+
+	assert.Equal(t, []string{"ci", "dev", "prod"}, ListMCPProfiles(projectDir))
+}
+
+func TestListMCPProfiles_None(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	SetBaseDir(t.TempDir())
+
+	assert.Empty(t, ListMCPProfiles(""))
+	assert.Empty(t, ListMCPProfiles(t.TempDir()))
+}
+
 func TestTokenStorageName(t *testing.T) {
 	// Stdio server: uses server name
 	srv := &MCPServerConfig{Name: "test-mcp", Type: MCPTransportStdio}

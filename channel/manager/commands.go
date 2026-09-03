@@ -75,6 +75,12 @@ func (m *Manager) executeSlashCommand(ctx context.Context, cmd channel.SlashComm
 				text, err := m.handleMCPAuth(cmd.ThreadID, serverName)
 				return textHandlerResult(text), err
 			}
+			if len(argParts) > 0 && argParts[0] == "profile" {
+				// Profile switching is TUI/ACP-only for now: channel mode shares
+				// one MCP manager across threads, so switching affects every
+				// conversation at once.
+				return textHandlerResult("MCP profile switching is not supported in channel mode yet — it is available via `/mcp profile` in the TUI or ACP mode."), nil
+			}
 		}
 		text, err := m.handleMCPList(cmd.ThreadID)
 		return textHandlerResult(text), err

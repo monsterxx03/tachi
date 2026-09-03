@@ -41,7 +41,7 @@ var Registry = []Def{
 	{Name: "commit", Description: "Generate commit message and commit via git", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "compact", Description: "Compress conversation history into a summary", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "init", Description: "Generate .tachi.md project context file", Modes: []Mode{ModeTUI, ModeACP}},
-	{Name: "mcp", Description: "Manage MCP servers (list, toggle, reconnect, auth)", InputHint: "list | toggle | reconnect | auth <name>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
+	{Name: "mcp", Description: "Manage MCP servers (list, toggle, reconnect, auth, profile)", InputHint: "list | toggle | reconnect | auth | profile [<name>]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "sessions", Description: "Browse and reload previous sessions", Modes: []Mode{ModeTUI}},
 	{Name: "usage", Description: "Show token usage, cost, and tool call statistics", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "review", Description: "Code review current repo changes via agent fork (correctness, quality, efficiency)", InputHint: "[rounds]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},

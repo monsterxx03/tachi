@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
 )
@@ -27,15 +29,111 @@ func (m *Model) handleMCPCommand() tea.Cmd {
 	}
 
 	switch sub {
+	case "toggle", "reconnect", "auth":
+		if m.mcpSwitching {
+			m.chatview.AddMessage(chatMessage{
+				Role:    "assistant",
+				Content: "An MCP profile switch is in progress — try again in a moment",
+			})
+			return nil
+		}
+	}
+	switch sub {
 	case "toggle":
 		return m.mcpToggle(arg)
 	case "reconnect":
 		return m.mcpReconnect(arg)
 	case "auth":
 		return m.mcpAuth(arg)
+	case "profile":
+		return m.mcpProfile(arg)
 	default:
 		// "list" or bare "/mcp" — open the overlay
 		return m.enterMCPOverlay()
+	}
+}
+
+// mcpProfile handles `/mcp profile [name]`. Without a name it lists the
+// available profiles (mcp.<name>.json in global + project scope) and marks
+// the active one. With a name it switches the active profile at runtime —
+// in-memory only, reverts on restart (same semantics as /model).
+func (m *Model) mcpProfile(name string) tea.Cmd {
+	if m.mcpSwitching {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: "An MCP profile switch is already in progress — try again in a moment",
+		})
+		return nil
+	}
+
+	workDir := config.FindProjectRoot()
+	available := config.ListMCPProfiles(workDir)
+
+	if name == "" {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: agent.FormatMCPProfileList(available, m.cfg.ActiveMCPProfile),
+		})
+		return nil
+	}
+
+	if !slices.Contains(available, name) {
+		content := fmt.Sprintf("MCP profile **%s** not found.", name)
+		if len(available) > 0 {
+			content += fmt.Sprintf(" Available: %s", strings.Join(available, ", "))
+		} else {
+			content += " No mcp.<name>.json files exist yet."
+		}
+		m.chatview.AddMessage(chatMessage{Role: "assistant", Content: content})
+		return nil
+	}
+
+	if name == m.cfg.ActiveMCPProfile {
+		m.chatview.AddMessage(chatMessage{
+			Role:    "assistant",
+			Content: fmt.Sprintf("MCP profile **%s** is already active", name),
+		})
+		return nil
+	}
+
+	m.chatview.AddMessage(chatMessage{
+		Role:    "assistant",
+		Content: fmt.Sprintf("Switching MCP profile to **%s**...", name),
+	})
+
+	m.mcpSwitching = true
+	ch := make(chan string, 1)
+	done := make(chan struct{})
+	go func() {
+		// Both channels always close, on every path: close(ch) terminates
+		// the readNextMCPStatus chain (without it the reader goroutine would
+		// leak), close(done) triggers the mcpProfileSwitchedMsg resync that
+		// clears m.mcpSwitching. LIFO: ch closes before done, so the status
+		// message is queued before the resync runs.
+		defer close(done)
+		defer close(ch)
+
+		// No outer deadline here — SwitchMCPProfile derives the batch
+		// budget from the servers' own per-server timeouts (mcp.json).
+		res, err := m.agent.SwitchMCPProfile(context.Background(), name, workDir)
+		if err != nil {
+			m.logger.Error(context.Background(), "MCP: profile switch failed", err, "profile", name)
+			ch <- fmt.Sprintf("Failed to switch MCP profile to **%s**: %v", name, err)
+			return
+		}
+		ch <- agent.FormatMCPSwitchResult(res)
+	}()
+	// Batch: stream the status message AND notify the update loop to re-sync
+	// m.mcpServers once the goroutine is done (msg handled on main goroutine).
+	return tea.Batch(readNextMCPStatus(ch), waitMCPProfileSwitched(done))
+}
+
+// waitMCPProfileSwitched returns a tea.Cmd yielding mcpProfileSwitchedMsg
+// once the switch goroutine has finished (its channel closes with it).
+func waitMCPProfileSwitched(done <-chan struct{}) tea.Cmd {
+	return func() tea.Msg {
+		<-done
+		return mcpProfileSwitchedMsg{}
 	}
 }
 

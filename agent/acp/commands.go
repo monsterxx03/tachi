@@ -526,10 +526,65 @@ func handleACPMCP(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConn
 		return handleACPMCPList(ctx, sess, conn)
 	case "reconnect":
 		return handleACPMCPReconnect(ctx, sess, conn, name)
+	case "profile":
+		return handleACPMCPProfile(ctx, sess, conn, name)
 	default:
-		sendTextUpdate(ctx, conn, sessionID, "Usage: /mcp list | /mcp reconnect <name>")
+		sendTextUpdate(ctx, conn, sessionID, "Usage: /mcp list | /mcp reconnect <name> | /mcp profile [<name>]")
 		return acp.StopReasonEndTurn, nil
 	}
+}
+
+// handleACPMCPProfile handles `/mcp profile [name]`. Without a name it lists
+// the available profiles (mcp.<name>.json in global + project scope) and
+// marks the active one. With a name it switches the active profile at
+// runtime — in-memory only, reverts on restart.
+//
+// The switch runs synchronously in the prompt goroutine (like /commit): it
+// blocks until the reconcile finishes, bounded by the per-server connect
+// timeouts plus margin. Client-side cancellation of the prompt propagates
+// through ctx into in-flight connections. Concurrent switches are rejected
+// by the agent's in-flight lock.
+func handleACPMCPProfile(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection, name string) (acp.StopReason, error) {
+	sessionID := acp.SessionId(sess.ID)
+
+	// The session's cwd scopes the project-level .tachi/mcp.<name>.json
+	// lookup (empty cwd → global scope only, same as LoadMCPServers).
+	workDir := sess.cwd
+	available := config.ListMCPProfiles(workDir)
+
+	if name == "" {
+		sendTextUpdate(ctx, conn, sessionID, agent.FormatMCPProfileList(available, sess.cfg.ActiveMCPProfile))
+		return acp.StopReasonEndTurn, nil
+	}
+
+	if !slices.Contains(available, name) {
+		content := fmt.Sprintf("MCP profile **%s** not found.", name)
+		if len(available) > 0 {
+			content += fmt.Sprintf(" Available: %s", strings.Join(available, ", "))
+		} else {
+			content += " No mcp.<name>.json files exist yet."
+		}
+		sendTextUpdate(ctx, conn, sessionID, content)
+		return acp.StopReasonEndTurn, nil
+	}
+
+	if name == sess.cfg.ActiveMCPProfile {
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("MCP profile **%s** is already active", name))
+		return acp.StopReasonEndTurn, nil
+	}
+
+	sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Switching MCP profile to **%s**...", name))
+
+	// sess.agent's manager and cfg are the same objects SwitchMCPProfile
+	// mutates (both come from NewAIAgentWithConfig / t.cfg), so subsequent
+	// /mcp list calls reflect the new server set.
+	res, err := sess.agent.SwitchMCPProfile(ctx, name, workDir)
+	if err != nil {
+		sendTextUpdate(ctx, conn, sessionID, fmt.Sprintf("Failed to switch MCP profile to **%s**: %v", name, err))
+		return acp.StopReasonEndTurn, nil
+	}
+	sendTextUpdate(ctx, conn, sessionID, agent.FormatMCPSwitchResult(res))
+	return acp.StopReasonEndTurn, nil
 }
 
 func handleACPMCPList(ctx context.Context, sess *ACPSession, conn *acp.AgentSideConnection) (acp.StopReason, error) {

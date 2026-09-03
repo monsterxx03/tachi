@@ -112,7 +112,8 @@ type AIAgent struct {
 	skillListReminder    *systemreminder.SkillListReminder
 	lastOneoffPath       atomic.Pointer[string] // 由 run goroutine 写、前端并发读（oneoff 侧车路径）
 	mcpInitErrors        []error
-	mcpOwned             bool // Configure 前由 Config.MCPManager==nil 设定；Close 据此决定是否销毁
+	mcpOwned             bool       // Configure 前由 Config.MCPManager==nil 设定；Close 据此决定是否销毁
+	mcpSwitchMu          sync.Mutex // 串行化 MCP profile 切换（TryLock：并发切换直接失败）
 
 	conv       *convState   // 会话级滚动状态（token 估算、compact 冷却、消息日期）
 	currentRun *RunState    // 当前运行的实时状态（loop 写，外部并发读）

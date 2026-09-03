@@ -26,6 +26,12 @@ type mcpStatusMsg struct {
 	nextCh  <-chan string
 }
 
+// mcpProfileSwitchedMsg signals that an MCP profile switch goroutine has
+// finished. The switch replaced config.MCPServers, so the Model must re-sync
+// its mcpServers snapshot from the shared config — done here in the update
+// loop (never from the goroutine) to avoid data races with rendering.
+type mcpProfileSwitchedMsg struct{}
+
 // dreamStatusMsg carries an async status message from AutoDream execution
 // to be displayed in the chat view from within the TUI update loop.
 // Mirrors mcpStatusMsg — the generic channel→chatview pattern.

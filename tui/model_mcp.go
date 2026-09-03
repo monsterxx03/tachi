@@ -158,6 +158,14 @@ func (m *Model) refreshMCPServerItems() {
 func (m *Model) handleKeyManagingMCP(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	act := m.mcpView.HandleKey(msg.String())
 
+	// While a profile switch is in flight, block mutating actions (their
+	// effects — toggles, reconnections — would be clobbered by the switch's
+	// resync). Dismissing the overlay stays available.
+	if act != MCPActionDismiss && m.mcpSwitching {
+		m.mcpView.SetMessage("MCP profile switch in progress — try again in a moment")
+		return m, nil
+	}
+
 	switch act {
 	case MCPActionDismiss:
 		m.exitMCPOverlay()

@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/creasty/defaults"
@@ -12,6 +14,12 @@ import (
 )
 
 const mcpConfigFileName = "mcp.json"
+
+// DefaultMCPServerTimeout is the per-server connect timeout applied when a
+// server's "timeout" field is unset (mcp.json, duration string like "30s").
+// Also the fallback for operations that batch-connect servers (e.g. MCP
+// profile switches derive their overall budget from per-server timeouts).
+const DefaultMCPServerTimeout = Duration(10 * time.Second)
 
 // mcpConfigFile is the JSON structure for a single MCP config file.
 type mcpConfigFile struct {
@@ -120,6 +128,41 @@ func mcpProfileFileName(profile string) string {
 	return fmt.Sprintf("mcp.%s.json", profile)
 }
 
+// mcpProfileGlob matches profile files (mcp.<name>.json) but not the base
+// file (mcp.json — the "*" requires at least one character).
+const mcpProfileGlob = "mcp.*.json"
+
+// ListMCPProfiles returns the names of available MCP profiles: the <name>
+// part of every mcp.<name>.json found in the global base dir and, when
+// workDir is non-empty, the project's .tachi dir. The result is deduplicated
+// (a profile may exist in both scopes) and sorted. Returns nil when no
+// profile files exist.
+func ListMCPProfiles(workDir string) []string {
+	dirs := []string{BaseDir()}
+	if workDir != "" {
+		dirs = append(dirs, filepath.Join(workDir, ".tachi"))
+	}
+
+	seen := container.NewSet[string]()
+	var names []string
+	for _, dir := range dirs {
+		matches, err := filepath.Glob(filepath.Join(dir, mcpProfileGlob))
+		if err != nil {
+			continue // malformed pattern — impossible with the constant above
+		}
+		for _, path := range matches {
+			name := strings.TrimSuffix(strings.TrimPrefix(filepath.Base(path), "mcp."), ".json")
+			if name == "" || seen.Has(name) {
+				continue
+			}
+			seen.Add(name)
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // loadMCPJSONFile reads and parses a single MCP JSON config file.
 func loadMCPJSONFile(path string) ([]MCPServerConfig, error) {
 	data, err := os.ReadFile(path)
@@ -184,7 +227,7 @@ func finalizeMCPServers(merged []mcpServerWithOrigin) ([]MCPServerConfig, error)
 		seen.Add(srv.Name)
 
 		if srv.Timeout == 0 {
-			srv.Timeout = Duration(10 * time.Second)
+			srv.Timeout = DefaultMCPServerTimeout
 		}
 
 		if err := defaults.Set(&srv); err != nil {

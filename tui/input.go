@@ -11,6 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -515,6 +516,8 @@ func (i *InputArea) updateCompletions() {
 		i.completions = matchCommands(val)
 		// Append /thinking level options when the command is (partially) typed.
 		i.appendThinkingCompletions(val)
+		// Append /mcp subcommand and profile-name suggestions.
+		i.appendMCPCompletions(val)
 		// Append matching skill names
 		prefix := strings.TrimPrefix(val, "/")
 		for _, name := range i.skillNames {
@@ -564,6 +567,57 @@ func (i *InputArea) appendThinkingCompletions(val string) {
 			Name:        "/thinking " + level,
 			Description: cmds.ThinkingLevelDescriptions[level],
 		})
+	}
+}
+
+// mcpSubcommands drives /mcp subcommand completion (order = suggestion order).
+var mcpSubcommands = []struct {
+	name string
+	desc string
+}{
+	{"list", "Open the MCP server overlay"},
+	{"toggle", "Enable/disable a server: /mcp toggle <name>"},
+	{"reconnect", "Reconnect a server: /mcp reconnect <name>"},
+	{"auth", "Authorize an HTTP server: /mcp auth <name>"},
+	{"profile", "Switch MCP profile: /mcp profile <name>"},
+}
+
+// appendMCPCompletions adds /mcp suggestions to the completion list:
+//   - "/mcp" or "/mcp <partial>"    → subcommand names
+//   - "/mcp profile <partial>"      → available profile names (mcp.<name>.json)
+func (i *InputArea) appendMCPCompletions(val string) {
+	rest, ok := strings.CutPrefix(val, "/mcp")
+	if !ok {
+		return
+	}
+	// Only suggest once the command name is fully typed.
+	if rest != "" && !strings.HasPrefix(rest, " ") {
+		return
+	}
+
+	trimmed := strings.TrimSpace(rest)
+	switch {
+	case trimmed == "profile" || strings.HasPrefix(trimmed, "profile "):
+		// Typing the profile name → suggest available profiles.
+		partial := strings.TrimSpace(strings.TrimPrefix(trimmed, "profile"))
+		for _, p := range config.ListMCPProfiles(config.FindProjectRoot()) {
+			if strings.HasPrefix(p, partial) {
+				i.completions = append(i.completions, Command{
+					Name:        "/mcp profile " + p,
+					Description: "Switch MCP profile",
+				})
+			}
+		}
+	case !strings.Contains(trimmed, " "):
+		// Typing a subcommand.
+		for _, sub := range mcpSubcommands {
+			if strings.HasPrefix(sub.name, trimmed) {
+				i.completions = append(i.completions, Command{
+					Name:        "/mcp " + sub.name,
+					Description: sub.desc,
+				})
+			}
+		}
 	}
 }
 

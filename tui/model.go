@@ -164,6 +164,13 @@ type Model struct {
 
 	mcpReady bool // whether MCP background init has completed
 
+	// mcpSwitching is true while a /mcp profile switch goroutine is in
+	// flight. Set on the main goroutine when the switch starts, cleared when
+	// mcpProfileSwitchedMsg arrives. Guards re-entrant /mcp mutations
+	// (profile / toggle / reconnect / auth) whose effects a concurrent
+	// switch would silently clobber.
+	mcpSwitching bool
+
 	dreamOrch *dream.Orchestrator // active dream orchestrator (nil when idle)
 
 	logger *logger.Logger
@@ -699,6 +706,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.nextCh != nil {
 			return m, readNextMCPStatus(msg.nextCh)
 		}
+
+	case mcpProfileSwitchedMsg:
+		// Profile switch finished (success or failure — done closes on all
+		// paths) — re-sync the server snapshot from the config the agent
+		// mutated and allow MCP mutations again.
+		m.mcpSwitching = false
+		m.mcpServers = m.cfg.MCPServers
 
 	case dreamStatusMsg:
 		// Sentinel: clean up orchestrator reference without displaying.
