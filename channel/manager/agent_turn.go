@@ -181,7 +181,7 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 		// If there are ambient messages buffered, prepend them as steer context.
 		if len(ambientSteer) > 0 {
 			ta.mu.Lock()
-			ta.pending = append([]string{formatAmbientForSteer(ambientSteer)}, ta.pending...)
+			ta.pending = append([]pendingSteerMsg{{content: formatAmbientForSteer(ambientSteer)}}, ta.pending...)
 			ta.mu.Unlock()
 		}
 
@@ -237,7 +237,11 @@ func (m *Manager) buildHandler() channel.MessageHandler {
 				ta.isCompact = isCompactCmd
 			} else {
 				// Agent already running — queue this message as steer input.
-				ta.pending = append(ta.pending, msg.Content)
+				// Keep attachments: steer injection rebuilds image content
+				// parts from them so mid-turn screenshots/files still reach
+				// the vision pipeline (previously only msg.Content was
+				// queued and attachments were silently dropped).
+				ta.pending = append(ta.pending, pendingSteerMsg{content: msg.Content, attachments: msg.Attachments})
 				pendingLen := len(ta.pending)
 				ta.mu.Unlock()
 				m.logger.Info(ctx, "channel: steer queued", "thread", msg.ThreadID, "pending", pendingLen)

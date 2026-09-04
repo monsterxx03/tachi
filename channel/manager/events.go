@@ -7,6 +7,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/channel"
 )
 
@@ -121,8 +122,21 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			// and any buffered ambient (group chat) messages.
 			ta.mu.Lock()
 			var parts []string
+			var images []llm.ContentPart
 			if len(ta.pending) > 0 {
-				parts = append(parts, ta.pending...)
+				for _, pm := range ta.pending {
+					// Rebuild text + image content parts from the queued
+					// message. Attachments that arrived mid-turn (screenshots
+					// sent right after a question, etc.) must reach the vision
+					// pipeline just like attachments on the first message —
+					// buildUserContent turns image bytes into ContentParts and
+					// leaves a placeholder in the text for text-only models.
+					text, imgs := buildUserContent(pm.content, pm.attachments)
+					if text != "" {
+						parts = append(parts, text)
+					}
+					images = append(images, imgs...)
+				}
 				ta.pending = nil
 			}
 			// Drain ambient messages as formatted steer context, and record
@@ -139,7 +153,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			joined := ""
 			if len(parts) > 0 {
 				joined = strings.Join(parts, "\n\n")
-				m.logger.Info(ctx, "channel: steer inject", "content_len", len(joined))
+				m.logger.Info(ctx, "channel: steer inject", "content_len", len(joined), "images", len(images))
 			}
 			ta.mu.Unlock()
 
@@ -147,7 +161,7 @@ func (m *Manager) drainEvents(ctx context.Context, ch <-chan agent.AgentEvent, a
 			// Select on both the turn ctx (ambient preemption) and the thread
 			// ctx (/stop) to avoid leaking this goroutine on cancellation.
 			select {
-			case steerCh <- agent.SteerInput{Text: joined}:
+			case steerCh <- agent.SteerInput{Text: joined, Images: images}:
 			case <-ctx.Done():
 				return text.String(), ctx.Err()
 			case <-ta.ctx.Done():

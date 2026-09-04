@@ -24,14 +24,25 @@ import (
 // LLM input (vision). A text placeholder is still included in the message text
 // so the LLM sees the image reference even when ContentParts are not supported.
 func buildUserMessageWithAttachments(msg channel.IncomingMessage) (string, []llm.ContentPart) {
-	if len(msg.Attachments) == 0 {
-		return msg.Content, nil
+	return buildUserContent(msg.Content, msg.Attachments)
+}
+
+// buildUserContent renders a user message (text + attachments) into the text
+// sent to the LLM plus any image ContentParts for multi-modal input. It is
+// shared by the first-message path (buildUserMessageWithAttachments) and the
+// steer injection path: attachments arriving mid-turn while an agent is
+// already running must reach the vision pipeline exactly like attachments on
+// the message that started the turn — otherwise a queued screenshot degrades
+// to a bare "[图片]" placeholder and the LLM never sees its content.
+func buildUserContent(content string, attachments []channel.Attachment) (string, []llm.ContentPart) {
+	if len(attachments) == 0 {
+		return content, nil
 	}
 
 	var parts []string
 	var images []llm.ContentPart
 
-	for _, att := range msg.Attachments {
+	for _, att := range attachments {
 		if att.Error != "" {
 			parts = append(parts, fmt.Sprintf("[文件: %s (下载失败: %s)]", att.FileName, att.Error))
 			continue
@@ -80,8 +91,8 @@ func buildUserMessageWithAttachments(msg channel.IncomingMessage) (string, []llm
 		}
 	}
 
-	if msg.Content != "" {
-		parts = append(parts, msg.Content)
+	if content != "" {
+		parts = append(parts, content)
 	}
 
 	return strings.Join(parts, "\n\n"), images

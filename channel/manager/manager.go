@@ -193,7 +193,7 @@ type threadActivation struct {
 	mu          sync.Mutex
 	steerRespCh chan agent.SteerInput // agent reads steer input from this
 	resultCh    chan handlerResult    // agent sends final result here
-	pending     []string              // queued steer messages
+	pending     []pendingSteerMsg     // queued steer messages
 	ctx         context.Context       // agent context for cancellation
 	cancel      context.CancelFunc    // cancels the agent turn
 	cancelled   bool                  // true when this turn was cancelled externally
@@ -224,6 +224,17 @@ type ambientMsg struct {
 	content   string
 	sender    string
 	timestamp time.Time
+}
+
+// pendingSteerMsg is a user message queued for steer injection while an agent
+// turn is already running on the thread. It keeps the message text together
+// with its attachments — previously only the text was queued and any image or
+// file attached to a mid-turn message was silently dropped, so a screenshot
+// sent right after a question reached the LLM as a bare "[图片]" placeholder
+// with no pixel data and no vision-fallback description.
+type pendingSteerMsg struct {
+	content     string
+	attachments []channel.Attachment
 }
 
 // handlerResult is the internal result type sent from the agent goroutine
