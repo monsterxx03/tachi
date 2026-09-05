@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"log"
 
@@ -66,11 +67,22 @@ func main() {
 	// Initial state broadcast (drives tray label/icon + frontend status bar).
 	desk.setState(AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"})
 
-	// Idle heartbeat so the menu bar always reflects the current state.
-	go desk.simulateRuntime()
+	// Boot the real tachi agent (falls back to simulated turns on failure).
+	if err := desk.initAgent(context.Background()); err != nil {
+		log.Printf("agent unavailable, falling back to simulated turns: %v", err)
+		desk.setState(AgentState{Status: StatusIdle, Label: "空闲", Detail: "未配置 agent（模拟模式）"})
+	}
 
-	// Keep the process alive on clean quit so defers/cleanup can run.
+	// Optional self-test driver (TACHI_DEMO): inject JS to type & send from
+	// within the webview, so we can exercise input + state transitions without
+	// relying on system-level mouse/keyboard coordinates.
+	if demoEnabled() {
+		go runJsDemo(window)
+	}
+
+	// Run the application.
 	if err := app.Run(); err != nil {
 		log.Fatal(err)
 	}
+	desk.teardownAgent()
 }
