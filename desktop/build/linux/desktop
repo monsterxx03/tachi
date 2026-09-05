@@ -1,0 +1,13 @@
+[Desktop Entry]
+Version=1.0
+Name=Tachi Desktop
+Comment=Tachi — AI Agent desktop companion
+# The Exec line includes %u to pass the URL to the application
+Exec=/usr/local/bin/tachi-desktop %u
+Terminal=false
+Type=Application
+Icon=tachi-desktop
+Categories=Utility;
+StartupWMClass=tachi-desktop
+
+ 

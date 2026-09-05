@@ -1,0 +1,15 @@
+{
+	"fixed": {
+		"file_version": "0.1.0"
+	},
+	"info": {
+		"0000": {
+			"ProductVersion": "0.1.0",
+			"CompanyName": "monsterxx03",
+			"FileDescription": "Tachi — AI Agent desktop companion",
+			"LegalCopyright": "(c) 2026, Tachi",
+			"ProductName": "Tachi Desktop",
+			"Comments": "Tachi Desktop"
+		}
+	}
+}
