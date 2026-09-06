@@ -122,6 +122,10 @@ function App() {
   const [tps, setTps] = useState(0)
   const [lastTps, setLastTps] = useState(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  const [mcpOpen, setMcpOpen] = useState(false)
+  const [mcpServers, setMcpServers] = useState<any[]>([])
+  const [mcpLoading, setMcpLoading] = useState<Record<string, boolean>>({})
+  const [mcpProfile, setMcpProfile] = useState<{ active: string; available: string[] }>({ active: '', available: [] })
   // Per-session message pagination: how much of the session history is loaded
   // on the client, and the oldest loaded raw-message timestamp (used as the
   // "load earlier" cursor).
@@ -200,6 +204,35 @@ function App() {
     } catch { /* ignore */ }
   }, [])
 
+  // refreshMCP reloads the MCP servers/tools + profile for the current session.
+  const refreshMCP = useCallback(async () => {
+    try {
+      const sv = (await (AgentService as any).ListMCPServers?.()) || []
+      setMcpServers(sv)
+      const prof = await (AgentService as any).ListMCPProfiles?.()
+      if (prof) setMcpProfile({ active: prof.active || '', available: prof.available || [] })
+    } catch { /* ignore */ }
+  }, [])
+  const toggleServer = useCallback(async (name: string, enabled: boolean) => {
+    setMcpLoading((p) => ({ ...p, [name]: true }))
+    try { await (AgentService as any).SetMCPServerEnabled?.(name, enabled) } catch { /* ignore */ }
+    refreshMCP()
+    setMcpLoading((p) => ({ ...p, [name]: false }))
+  }, [refreshMCP])
+  const toggleTool = useCallback(async (name: string, enabled: boolean) => {
+    setMcpLoading((p) => ({ ...p, [name]: true }))
+    try { await (AgentService as any).SetMCPToolEnabled?.(name, enabled) } catch { /* ignore */ }
+    refreshMCP()
+    setMcpLoading((p) => ({ ...p, [name]: false }))
+  }, [refreshMCP])
+  const toggleProfile = useCallback(async (name: string) => {
+    if (name === mcpProfile.active) return
+    setMcpLoading((p) => ({ ...p, __profile__: true }))
+    try { await (AgentService as any).SetMCPProfile?.(name) } catch { /* ignore */ }
+    refreshMCP()
+    setMcpLoading((p) => ({ ...p, __profile__: false }))
+  }, [mcpProfile.active, refreshMCP])
+
   const loadAll = useCallback(async () => {
     setLoading(true)
     const list = (await AgentService.ListSessions().catch(() => null)) || []
@@ -230,7 +263,8 @@ function App() {
     setSessions(list.map((s) => ({ ...s, active: s.id === cur?.id })))
     setLoading(false)
     refreshProvider()
-  }, [msgCache, scrollToBottom, refreshProvider, refreshCost])
+    refreshMCP()
+  }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP])
 
   const clickSession = useCallback(async (id: string) => {
     setCurrentId(id)
@@ -254,7 +288,8 @@ function App() {
     refreshRunning()
     refreshCost(id)
     refreshProvider()
-  }, [sessions, msgCache, scrollToBottom, refreshRunning, refreshProvider, refreshCost])
+    refreshMCP()
+  }, [sessions, msgCache, scrollToBottom, refreshRunning, refreshProvider, refreshCost, refreshMCP])
 
   const newChat = useCallback(async () => {
     const ns = await AgentService.NewSession().catch(() => null)
@@ -486,11 +521,26 @@ function App() {
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
                   {credit > 0 ? <span className="usage-credit" title="当前会话积分">{credit} 积分</span> : null}
                 </span>
+                <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
+                  <span className="mcp-ico">M</span>
+                  <span className="mcp-count">{mcpServers.filter((s) => s.connected).length || ''}</span>
+                </button>
               </div>
             </div>
           </footer>
         </main>
       </div>
+      {mcpOpen && (
+        <MCPPanel
+          servers={mcpServers}
+          loading={mcpLoading}
+          profile={mcpProfile}
+          onClose={() => setMcpOpen(false)}
+          onToggleServer={toggleServer}
+          onToggleTool={toggleTool}
+          onToggleProfile={toggleProfile}
+        />
+      )}
     </div>
   )
 }
@@ -589,6 +639,69 @@ function ToolCard({ name, title, args, summary, ok }: { name: string; title?: st
       {summary ? <div className={`tool-summary ${long && !expanded ? 'clamp' : ''}`}>{summary}</div> : null}
       <div className="tool-meta"><code>$ {name} …</code>{summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copy(summary) }}><CopyIcon /></button> : null}<span>0.8s</span></div>
     </div>
+  )
+}
+
+function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggleTool, onToggleProfile }: {
+  servers: any[]
+  loading: Record<string, boolean>
+  profile: { active: string; available: string[] }
+  onClose: () => void
+  onToggleServer: (name: string, enabled: boolean) => void
+  onToggleTool: (name: string, enabled: boolean) => void
+  onToggleProfile: (name: string) => void
+}) {
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  const profileBusy = !!loading.__profile__
+  return (
+    <>
+      <div className="mcp-overlay" onClick={onClose} />
+      <div className="mcp-panel">
+        <div className="mcp-head">
+          <span className="mcp-title">MCP Servers</span>
+          <div className="mcp-profile">
+            <span className="mcp-profile-label">profile</span>
+            <select className="mcp-profile-select" value={profile.active || ''} disabled={profileBusy} onChange={(e) => onToggleProfile(e.target.value)}>
+              <option value="">default</option>
+              {(profile.available || []).map((p) => <option key={p} value={p}>{p}</option>)}
+            </select>
+          </div>
+          <button className="mcp-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="mcp-body">
+          {servers.length === 0 && <div className="mcp-empty">未配置 MCP server（~/.tachi/mcp.json）</div>}
+          {servers.map((s) => {
+            const isOpen = !collapsed[s.name]
+            const toolCount = (s.tools || []).length
+            const busy = !!loading[s.name]
+            return (
+              <div key={s.name} className="mcp-server">
+                <div className="mcp-server-row" onClick={() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] }))}>
+                  <span className="mcp-server-name">{s.name}</span>
+                  <span className={`mcp-server-state ${s.connected ? 'on' : 'off'}`}>{s.connected ? '已连接' : '未连接'}</span>
+                  <span className="mcp-toolcount">{toolCount} 工具</span>
+                  <button className={`mcp-toggle ${s.connected ? 'on' : ''}`} disabled={busy} onClick={(e) => { e.stopPropagation(); onToggleServer(s.name, !s.connected) }}>
+                    {busy ? <><span className="mcp-spinner" /> 连接中…</> : (s.connected ? '禁用' : '启用')}
+                  </button>
+                </div>
+                {isOpen && (s.tools || []).map((t) => {
+                  const tbusy = !!loading[t.name]
+                  return (
+                    <div key={t.name} className="mcp-tool">
+                      <span className={`mcp-tool-state ${t.loaded ? 'loaded' : ''}`}>{t.loaded ? '✓ 已加载' : '○ 未加载'}</span>
+                      <span className="mcp-tool-name" title={t.description || ''}>{t.toolName}</span>
+                      <button className={`mcp-toggle ${t.loaded ? 'on' : ''}`} disabled={tbusy} onClick={() => onToggleTool(t.name, !t.loaded)}>
+                        {tbusy ? <><span className="mcp-spinner" /> 处理中…</> : (t.loaded ? '禁用' : '启用')}
+                      </button>
+                    </div>
+                  )
+                })}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    </>
   )
 }
 

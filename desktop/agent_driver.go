@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"log"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -28,7 +29,26 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 	d.cfg = cfg
 	d.systemPrompt = agent.BuildSystemPrompt(cfg.Language, "", "", cfg.ExtraSystemPrompt)
 	d.sm = d.newSessionManager()
+	// Build the shared MCP manager (when any servers are configured) and connect
+	// in the background. It is shared across all per-session agents; the
+	// manager's per-session discovered sets keep each session's tool loading
+	// isolated (mirrors channel's initSharedMCP).
+	if cfg.MCPEnabled() {
+		d.mcp = mcp.NewManager(ctx, cfg, logger.New("desktop"))
+		go d.populateSharedMCP(ctx, d.mcp)
+	}
 	return nil
+}
+
+// populateSharedMCP connects all configured MCP servers in the background and
+// fills the manager's deferred pool / per-session discovered sets. Errors are
+// logged; partial discovery is acceptable (mirrors channel's populateSharedMCP).
+func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
+	defer mgr.MarkInitDone()
+	_, _, errs := mgr.PopulateFromConnect(ctx, d.cfg)
+	for _, err := range errs {
+		log.Printf("desktop MCP: load error: %v", err)
+	}
 }
 
 // newSessionManager creates a fresh session manager honoring the configured
@@ -45,33 +65,35 @@ func (d *desktopApp) newSessionManager() *session.Manager {
 }
 
 // buildAgentForSession constructs an AIAgent wired to the given session manager,
-// using the shared desktop config/system prompt. Provider/thinking overrides are
-// applied by the caller after construction. It returns the agent and its
-// (disabled) MCP manager so the caller can track both for teardown.
-func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manager) (*agent.AIAgent, *mcp.Manager, error) {
+// using the shared desktop config/system prompt and the SHARED MCP manager (so
+// multiple sessions reuse one MCP connection layer; per-session tool loading is
+// isolated by the manager's discovered sets). It returns the agent; the caller
+// applies provider/thinking overrides.
+func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manager) (*agent.AIAgent, error) {
 	maxIters := config.DefaultMaxIterations
 	if d.cfg != nil {
 		if m := d.cfg.GetMaxIterations(); m > 0 {
 			maxIters = m
 		}
 	}
-	a, mcpMgr, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
+	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
 		MaxIterations:          maxIters,
 		Logger:                 logger.New("desktop"),
 		PermissionMode:         agent.PermissionModeSkip,
-		DisableMCP:             true, // MCP wired in a later iteration
+		DisableMCP:             d.mcp == nil, // MCP enabled only when a shared manager exists
 		DisableSkills:          true,
 		DisableSystemReminders: true,
+		MCPManager:             d.mcp, // shared manager (nil when no MCP configured)
 		FullConfig:             d.cfg,
 		SystemConfig:           agent.SystemConfigFromConfig(d.cfg),
 	})
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if sm != nil {
 		a.SetSessionManager(sm)
 	}
-	return a, mcpMgr, nil
+	return a, nil
 }
 
 // applyThinking configures the given agent's thinking level from a session's
@@ -90,21 +112,22 @@ func applyThinking(a *agent.AIAgent, level string) {
 	}
 }
 
-// teardownAgent closes every per-session agent and its MCP manager, ensuring
-// lifecycle events (e.g. session_end) are dispatched before the process exits.
+// teardownAgent closes every per-session agent and the shared MCP manager,
+// ensuring lifecycle events (e.g. session_end) are dispatched before exit.
 func (d *desktopApp) teardownAgent() {
 	d.mu.Lock()
 	runs := make([]*sessionRun, 0, len(d.runs))
 	for _, r := range d.runs {
 		runs = append(runs, r)
 	}
+	mcp := d.mcp
 	d.mu.Unlock()
 	for _, r := range runs {
 		if r.agent != nil {
 			r.agent.Close()
 		}
-		if r.mcp != nil {
-			r.mcp.Close()
-		}
+	}
+	if mcp != nil {
+		mcp.Close()
 	}
 }
