@@ -42,6 +42,7 @@ function App() {
   const [cost, setCost] = useState(0)
   const [credit, setCredit] = useState(0)
   const [cacheHitRate, setCacheHitRate] = useState(0)
+  const [hasCacheHit, setHasCacheHit] = useState(false)
   const [workDir, setWorkDir] = useState('')
   const [editingWd, setEditingWd] = useState(false)
   const [wdInput, setWdInput] = useState('')
@@ -127,7 +128,7 @@ function App() {
   const refreshCost = useCallback(async (id: string) => {
     try {
       const u = await (AgentService as any).GetSessionUsage?.(id)
-      if (u) { setCost(u.cost || 0); setCredit(u.credit || 0); setCacheHitRate(u.cacheHitRate || 0) }
+      if (u) { setCost(u.cost || 0); setCredit(u.credit || 0); setCacheHitRate(u.cacheHitRate || 0); setHasCacheHit(!!u.hasCacheHit) }
     } catch { /* ignore */ }
   }, [])
 
@@ -296,8 +297,8 @@ function App() {
 
   useEffect(() => {
     const off = Events.On('agent:cost', (event) => {
-      const d = event.data as { sessionId: string; cost: number; credit: number; cacheHitRate?: number }
-      if (d.sessionId === currentId) { setCost(d.cost || 0); setCredit(d.credit || 0); if (d.cacheHitRate != null) setCacheHitRate(d.cacheHitRate) }
+      const d = event.data as { sessionId: string; cost: number; credit: number; cacheHitRate?: number; hasCacheHit?: boolean }
+      if (d.sessionId === currentId) { setCost(d.cost || 0); setCredit(d.credit || 0); if (d.cacheHitRate != null) setCacheHitRate(d.cacheHitRate); setHasCacheHit(!!d.hasCacheHit) }
     })
     return () => off?.()
   }, [currentId])
@@ -533,6 +534,9 @@ function App() {
                   </span>
                 )}
               </div>
+              {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
+                : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
+                : null}
               <div className="provider-picker">
                 <select className="provider-select" value={providerName} onChange={async (e) => {
                   const name = e.target.value
@@ -550,10 +554,7 @@ function App() {
                 </select>
                 <ContextRing estimate={ctxEstimate} window={ctxWindow} />
                 <span className="usage-meta">
-                  {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
-                    : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
-                    : null}
-                  {cacheHitRate > 0 ? <CacheRing rate={cacheHitRate} /> : null}
+                  {hasCacheHit ? <CacheRing rate={cacheHitRate} /> : null}
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
                   {credit > 0 ? <span className="usage-credit" title="当前会话积分">{credit} 积分</span> : null}
                 </span>

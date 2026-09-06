@@ -587,18 +587,21 @@ func (d *desktopApp) rebuildCostCredit(r *sessionRun) {
 		have = true
 	}
 	var rate float64
+	hasCacheHit := false
 	// "Recent" cache-hit rate = the LAST call's cache-read / (cache-miss + cache-read).
 	// Cache-creation tokens (writing new cache entries) are excluded. Ledger rows are
 	// appended in call order, so the last row is the most recent API call.
 	if have {
 		if total := lastInTok + lastCrTok; total > 0 {
 			rate = float64(lastCrTok) / float64(total)
+			hasCacheHit = true
 		}
 	}
 	d.mu.Lock()
 	r.cost = cost
 	r.credit = credit
 	r.cacheHitRate = rate
+	r.hasCacheHit = hasCacheHit
 	d.mu.Unlock()
 }
 
@@ -613,8 +616,9 @@ func (s *AgentService) GetSessionUsage(id string) map[string]any {
 	d.mu.Lock()
 	cost, credit := r.cost, r.credit
 	rate := r.cacheHitRate
+	hasCacheHit := r.hasCacheHit
 	d.mu.Unlock()
-	return map[string]any{"cost": cost, "credit": credit, "cacheHitRate": rate}
+	return map[string]any{"cost": cost, "credit": credit, "cacheHitRate": rate, "hasCacheHit": hasCacheHit}
 }
 
 // GetSessionWorkingDir returns the session's working directory ("" if unset).
@@ -933,6 +937,11 @@ type sessionRun struct {
 	tpsStart  time.Time
 	tpsLast   int64
 
+	// hasCacheHit indicates a recent call had usage data, so the cache-hit ring
+	// should display even when the rate is 0% (a brand-new prompt has no cache
+	// to hit, but we still want to show it rather than hide it).
+	hasCacheHit bool
+
 	// Per-turn footer bookkeeping: cost/credit snapshot at turn start so the
 	// turn's incremental cost/credit (run.cost - turnStartCost) can be shown.
 	turnStartCost   float64
@@ -1228,11 +1237,12 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 			d.mu.Lock()
 			cost, credit := r.cost, r.credit
 			rate := r.cacheHitRate
+			hasCacheHit := r.hasCacheHit
 			d.mu.Unlock()
 			if isCurrent {
 				d.app.Event.Emit("agent:usage", ev.Usage)
 			}
-			d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit, "cacheHitRate": rate})
+			d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit, "cacheHitRate": rate, "hasCacheHit": hasCacheHit})
 		}
 	case agent.AgentEventTurnComplete:
 		d.tpsReset(id)
