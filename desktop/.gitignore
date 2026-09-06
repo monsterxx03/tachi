@@ -9,3 +9,5 @@ build/ios/xcode/overlay.json
 build/ios/xcode/gen/
 build/android/overlay.json
 build/android/gen/
+# Generated bindings (wails3 generate bindings) — e.g. Go stdlib `time`
+frontend/bindings/time

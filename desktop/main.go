@@ -65,12 +65,12 @@ func main() {
 	desk.tray = setupTray(desk)
 
 	// Initial state broadcast (drives tray label/icon + frontend status bar).
-	desk.setState(AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"})
+	desk.setSessionState("", AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"})
 
 	// Boot the real tachi agent (falls back to simulated turns on failure).
 	if err := desk.initAgent(context.Background()); err != nil {
 		log.Printf("agent unavailable, falling back to simulated turns: %v", err)
-		desk.setState(AgentState{Status: StatusIdle, Label: "空闲", Detail: "未配置 agent（模拟模式）"})
+		desk.setSessionState("", AgentState{Status: StatusIdle, Label: "空闲", Detail: "未配置 agent（模拟模式）"})
 	}
 
 	// Optional self-test driver (TACHI_DEMO): inject JS to type & send from
