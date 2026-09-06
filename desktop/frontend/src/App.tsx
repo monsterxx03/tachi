@@ -121,6 +121,7 @@ function App() {
   const [credit, setCredit] = useState(0)
   const [tps, setTps] = useState(0)
   const [lastTps, setLastTps] = useState(0)
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   // Per-session message pagination: how much of the session history is loaded
   // on the client, and the oldest loaded raw-message timestamp (used as the
   // "load earlier" cursor).
@@ -379,6 +380,9 @@ function App() {
           <span className="brand-mark"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><defs><linearGradient id="tg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#8aa2ff" /><stop offset="1" stopColor="#4b5fd6" /></linearGradient></defs><rect x="1" y="1" width="14" height="14" rx="4.5" fill="url(#tg1)" /><path d="M8 3.8 L12.2 8 L8 12.2 L3.8 8 Z" fill="#fff" opacity="0.95" /></svg></span>
           <span className="brand-name">Tachi</span>
         </div>
+        <button className={`sidebar-toggle no-drag ${sidebarCollapsed ? 'is-collapsed' : ''}`} onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'}>
+          <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="6" y1="2.5" x2="6" y2="13.5"/></svg>
+        </button>
         <div className="titlebar-divider" />
         <div className="titlebar-title no-drag">
           <h2>{currentTitle}</h2>
@@ -388,7 +392,7 @@ function App() {
       </header>
 
       <div className="app-body">
-        <aside className="sidebar">
+        <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
           <button className="new-chat" onClick={newChat}><span className="new-chat-plus">＋</span> 新建会话</button>
           <nav className="session-list">
             <div className="session-section">最近</div>

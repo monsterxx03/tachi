@@ -58,7 +58,31 @@ body {
   display: flex;
   flex-direction: column;
   padding: 14px 12px 12px;
+  overflow: hidden;
+  transition: width 0.18s ease, min-width 0.18s ease, padding 0.18s ease;
 }
+
+.sidebar.collapsed {
+  width: 0;
+  min-width: 0;
+  padding: 0;
+  border-right: none;
+}
+
+.sidebar-toggle {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-right: 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s;
+}
+.sidebar-toggle:hover { background: rgba(91, 124, 255, 0.10); color: var(--text); }
 
 .sidebar-header {
   display: flex;
@@ -310,7 +334,14 @@ body {
 .tool-status { margin-left: auto; font-size: 13px; }
 .tool-status.ok { color: var(--green); }
 .tool-status.err { color: var(--red); }
-.tool-summary { font-size: 12.5px; color: var(--text-dim); margin-top: 7px; }
+.tool-summary {
+  font-size: 12.5px;
+  color: var(--text-dim);
+  margin-top: 7px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
 .tool-meta {
   display: flex;
   gap: 10px;
@@ -573,6 +604,7 @@ body {
   line-height: 1.5;
   white-space: pre-wrap;
   word-break: break-word;
+  overflow-wrap: anywhere;
   color: var(--text);
   max-height: 200px;
   overflow: auto;
