@@ -1,0 +1,51 @@
+/* ── Tachi Desktop — dark conversational UI (skeleton) ───────────────────── */
+
+:root {
+  --bg: #f5f6fa;
+  --bg-2: #eef0f6;
+  --panel: #ffffff;
+  --panel-2: #f2f3f9;
+  --border: rgba(0, 0, 0, 0.07);
+  --border-2: rgba(0, 0, 0, 0.13);
+  --text: #1d1f2b;
+  --text-dim: #6a7083;
+  --text-faint: #9aa1b5;
+  --accent: #5b7cff;
+  --accent-2: #4666e0;
+  --accent-soft: rgba(91, 124, 255, 0.12);
+  --green: #1f9d61;
+  --red: #e5484d;
+  --amber: #d9822b;
+  --user-bubble: #e9ecfa;
+  --radius: 12px;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Segoe UI", system-ui, sans-serif;
+  background: var(--bg);
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+  overflow: hidden;
+  /* Frameless: allow resizing from all edges */
+  --wails-resize: all;
+}
+
+/* ── Region drag handles (Wails v3 frameless) ────────────────────────────── */
+.drag-region { --wails-draggable: drag; }
+.no-drag { --wails-draggable: no-drag; }
+
+/* ── Layout ──────────────────────────────────────────────────────────────── */
+.app {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+  background: var(--bg);
+}
+

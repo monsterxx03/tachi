@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"sort"
 	"strings"
 	"sync"
@@ -13,6 +14,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
@@ -193,12 +195,41 @@ func (s *AgentService) GetProviderInfo() map[string]any {
 	if provider == "" && d.cfg != nil {
 		provider = d.cfg.DefaultProviderName()
 	}
+	// Context estimate: prefer the agent's live estimate; when the session was
+	// just opened (no turn yet, estimate is 0) fall back to the most recent
+	// message's persisted estimate (usage.estimated_input_tokens) so the
+	// context ring shows a sensible value for a resumed session.
+	est := r.agent.LastInputEstimate()
+	if est <= 0 {
+		est = d.estimateFromMessages(r)
+	}
 	return map[string]any{
 		"provider":        provider,
 		"model":           r.agent.Model(),
 		"contextWindow":   r.agent.ContextWindow(),
-		"contextEstimate": r.agent.LastInputEstimate(),
+		"contextEstimate": est,
 	}
+}
+
+// estimateFromMessages returns the most recent persisted input-token estimate
+// (usage.estimated_input_tokens on a session message, chars/4 heuristic), or 0
+// when the session has never carried an estimate. Mirrors TUI's session-restore
+// recovery (tui/session_selector.go).
+func (d *desktopApp) estimateFromMessages(r *sessionRun) int64 {
+	if r == nil || r.sm == nil {
+		return 0
+	}
+	msgs, err := r.sm.LoadMessages()
+	if err != nil {
+		return 0
+	}
+	var est int64
+	for _, m := range msgs {
+		if m.Usage != nil && m.Usage.EstimatedInputTokens > 0 {
+			est = m.Usage.EstimatedInputTokens
+		}
+	}
+	return est
 }
 
 // GetThinkingLevel returns the active session's thinking level. Empty =
@@ -329,7 +360,10 @@ func (s *AgentService) NewSession() SessionInfo {
 			pname = p
 		}
 	}
-	wd, _ := os.Getwd()
+	wd, err := os.UserHomeDir()
+	if err != nil {
+		wd, _ = os.Getwd()
+	}
 	sm := d.newSessionManager()
 	if sm == nil {
 		return SessionInfo{}
@@ -543,13 +577,28 @@ func (d *desktopApp) rebuildCostCredit(r *sessionRun) {
 		return
 	}
 	var cost, credit float64
+	var lastInTok, lastCrTok int64
+	var have bool
 	for _, row := range rows {
 		cost += row.Cost()
 		credit += row.CreditValue(llm.ResolveCreditRate(d.cfg, row.Provider, row.Model))
+		lastInTok = row.InputTokens
+		lastCrTok = row.CacheReadInputTokens
+		have = true
+	}
+	var rate float64
+	// "Recent" cache-hit rate = the LAST call's cache-read / (cache-miss + cache-read).
+	// Cache-creation tokens (writing new cache entries) are excluded. Ledger rows are
+	// appended in call order, so the last row is the most recent API call.
+	if have {
+		if total := lastInTok + lastCrTok; total > 0 {
+			rate = float64(lastCrTok) / float64(total)
+		}
 	}
 	d.mu.Lock()
 	r.cost = cost
 	r.credit = credit
+	r.cacheHitRate = rate
 	d.mu.Unlock()
 }
 
@@ -563,8 +612,61 @@ func (s *AgentService) GetSessionUsage(id string) map[string]any {
 	d.rebuildCostCredit(r)
 	d.mu.Lock()
 	cost, credit := r.cost, r.credit
+	rate := r.cacheHitRate
 	d.mu.Unlock()
-	return map[string]any{"cost": cost, "credit": credit}
+	return map[string]any{"cost": cost, "credit": credit, "cacheHitRate": rate}
+}
+
+// GetSessionWorkingDir returns the session's working directory ("" if unset).
+func (s *AgentService) GetSessionWorkingDir(id string) string {
+	d := s.desk
+	d.mu.Lock()
+	r := d.getRun(id)
+	d.mu.Unlock()
+	if r == nil || r.sm == nil {
+		return ""
+	}
+	if cur := r.sm.Current(); cur != nil {
+		return cur.WorkingDir
+	}
+	return ""
+}
+
+// SetSessionWorkingDir changes the session's working directory and persists it
+// to session meta. The NEXT turn runs tools under this directory (per-turn
+// wdctx injection, like channel agent_turn.go). Returns "ok" on success.
+func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
+	d := s.desk
+	if d.sm == nil {
+		return "no session manager"
+	}
+	if strings.TrimSpace(dir) == "" {
+		return "empty dir"
+	}
+	abs, err := filepath.Abs(dir)
+	if err != nil {
+		return err.Error()
+	}
+	d.mu.Lock()
+	r := d.getRun(id)
+	d.mu.Unlock()
+	if r != nil && r.sm != nil {
+		if cur := r.sm.Current(); cur != nil {
+			cur.WorkingDir = abs
+			_ = r.sm.UpdateMeta(cur)
+			return "ok"
+		}
+	}
+	// Fallback via the stable manager when the per-session sm is not bound.
+	sess, err := d.sm.Load(id)
+	if err != nil {
+		return err.Error()
+	}
+	sess.WorkingDir = abs
+	if err := d.sm.UpdateMeta(sess); err != nil {
+		return err.Error()
+	}
+	return "ok"
 }
 
 // ListMCPServers returns all configured MCP servers with their tools and, for
@@ -820,12 +922,23 @@ type sessionRun struct {
 	cost   float64
 	credit float64
 
+	// cacheHitRate is the session's cumulative prompt-cache hit rate (0..1),
+	// rebuilt from the usage ledger alongside cost/credit.
+	cacheHitRate float64
+
 	// Live output rate (tokens/sec) for the status bar, following the TUI
 	// semantics: tpsTokens accumulates agent.EstimateTokenCount of text +
 	// thinking deltas; the rate is frozen into tpsLast at segment boundaries.
 	tpsTokens int64
 	tpsStart  time.Time
 	tpsLast   int64
+
+	// Per-turn footer bookkeeping: cost/credit snapshot at turn start so the
+	// turn's incremental cost/credit (run.cost - turnStartCost) can be shown.
+	turnStartCost   float64
+	turnStartCredit float64
+	turnCost        float64
+	turnCredit      float64
 }
 
 type desktopApp struct {
@@ -1019,6 +1132,10 @@ func (d *desktopApp) startTurn(text string) {
 		return
 	}
 	r.running = true
+	// Snapshot cost/credit at turn start so the footer can show this turn's
+	// incremental cost/credit when it completes.
+	r.turnStartCost = r.cost
+	r.turnStartCredit = r.credit
 	history := r.history
 	// An interrupted session may end with a user message and no matching
 	// assistant reply. Merge that trailing user message into the new user
@@ -1029,6 +1146,13 @@ func (d *desktopApp) startTurn(text string) {
 		history = history[:n-1]
 	}
 	ctx, cancel := context.WithCancel(context.Background())
+	// Inject the session's working directory into the turn context so tool
+	// execution (wdctx.Dir) uses it — per-session, like channel agent_turn.go.
+	if r.sm != nil {
+		if cur := r.sm.Current(); cur != nil && cur.WorkingDir != "" {
+			ctx = wdctx.WithDir(ctx, cur.WorkingDir)
+		}
+	}
 	r.turnCtx, r.turnCancel = ctx, cancel
 	d.mu.Unlock()
 
@@ -1103,26 +1227,45 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		if d.app != nil {
 			d.mu.Lock()
 			cost, credit := r.cost, r.credit
+			rate := r.cacheHitRate
 			d.mu.Unlock()
 			if isCurrent {
 				d.app.Event.Emit("agent:usage", ev.Usage)
 			}
-			d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit})
+			d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit, "cacheHitRate": rate})
 		}
 	case agent.AgentEventTurnComplete:
 		d.tpsReset(id)
 		d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已回复"})
 		d.mu.Lock()
+		r := d.getRun(id)
 		if ev.Messages != nil {
-			d.getRun(id).history = ev.Messages
+			r.history = ev.Messages
 		}
+		r.turnCost = r.cost - r.turnStartCost
+		r.turnCredit = r.credit - r.turnStartCredit
+		turnCost, turnCredit := r.turnCost, r.turnCredit
 		d.mu.Unlock()
 		if d.app != nil && ev.Result != nil && isCurrent {
 			d.app.Event.Emit("agent:result", ev.Result)
+			d.app.Event.Emit("agent:turn", map[string]any{
+				"sessionId":  id,
+				"durationMs": ev.Result.Duration.Milliseconds(),
+				"iterations": ev.Result.IterationsUsed,
+				"cost":       turnCost,
+				"credit":     turnCredit,
+			})
 		}
 	case agent.AgentEventError:
 		d.tpsReset(id)
-		d.setSessionState(id, AgentState{Status: StatusError, Label: "出错", Detail: "见日志"})
+		detail := "见日志"
+		if ev.Result != nil && ev.Result.Error != nil {
+			detail = ev.Result.Error.Error()
+		}
+		d.setSessionState(id, AgentState{Status: StatusError, Label: "出错", Detail: detail})
+		if d.app != nil {
+			d.app.Event.Emit("agent:error", map[string]any{"sessionId": id, "error": detail})
+		}
 	}
 	// Forward the raw event for every session so the frontend can keep a
 	// per-session message cache (background sessions keep streaming too).

@@ -55,6 +55,28 @@ type Usage struct {
 	CacheReadInputTokens     int64
 }
 
+// CacheHitRate returns the prompt-cache hit rate (0..1) for this usage:
+// cache reads divided by the prompt tokens that could be cached (cache-miss
+// input normalized per provider family + cache reads). Cache-creation tokens
+// (writing NEW cache entries) are excluded — they are not part of the prompt
+// that can be hit. OpenAI-family reports prompt_tokens as the TOTAL (it
+// includes the cache-read tokens), so those are subtracted via
+// NormalizeCacheMissInput; Anthropic reports input_tokens as cache-miss already
+// (no subtraction). providerType is config.ProviderTypeAnthropic or any other
+// (OpenAI-family). Returns 0 for nil usage or an empty prompt. Shared by the
+// TUI / desktop status bars.
+func (u *Usage) CacheHitRate(providerType string) float64 {
+	if u == nil {
+		return 0
+	}
+	miss := NormalizeCacheMissInput(u.InputTokens, u.CacheReadInputTokens, providerType)
+	total := miss + u.CacheReadInputTokens
+	if total <= 0 {
+		return 0
+	}
+	return float64(u.CacheReadInputTokens) / float64(total)
+}
+
 type ChatOptions struct {
 	MaxTokens int
 	// Thinking controls the thinking/reasoning mode.
