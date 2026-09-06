@@ -106,6 +106,10 @@ function buildTurns(sms: SessionMessage[]): Message[] {
 function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
+  const [menu, setMenu] = useState<{ sid: string; x: number; y: number } | null>(null)
+  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string } | null>(null)
+  const [editingId, setEditingId] = useState('')
+  const [editTitle, setEditTitle] = useState('')
   const [currentTitle, setCurrentTitle] = useState<string>('Tachi')
   const [msgCache, setMsgCache] = useState<Record<string, Message[]>>({})
   const [runningSet, setRunningSet] = useState<Set<string>>(new Set())
@@ -233,6 +237,14 @@ function App() {
     setMcpLoading((p) => ({ ...p, __profile__: false }))
   }, [mcpProfile.active, refreshMCP])
 
+  const commitRename = useCallback(async (id: string) => {
+    const t = editTitle.trim()
+    setEditingId(''); setEditTitle('')
+    if (!t) return
+    await (AgentService as any).RenameSession?.(id, t).catch(() => {})
+    setSessions((prev) => prev.map((s) => (s.id === id ? { ...s, title: t } : s)))
+  }, [editTitle])
+
   const loadAll = useCallback(async () => {
     setLoading(true)
     const list = (await AgentService.ListSessions().catch(() => null)) || []
@@ -265,6 +277,11 @@ function App() {
     refreshProvider()
     refreshMCP()
   }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP])
+
+  const confirmDelete = useCallback(async (id: string) => {
+    await (AgentService as any).DeleteSession?.(id).catch(() => {})
+    loadAll()
+  }, [loadAll])
 
   const clickSession = useCallback(async (id: string) => {
     setCurrentId(id)
@@ -432,8 +449,19 @@ function App() {
           <nav className="session-list">
             <div className="session-section">最近</div>
             {sessions.map((s) => (
-              <div key={s.id} className={`session ${s.active ? 'active' : ''}`} onClick={() => clickSession(s.id)}>
-                <div className="session-title">{s.title || '未命名会话'}</div>
+              <div key={s.id} className={`session ${s.active ? 'active' : ''}`} onClick={() => clickSession(s.id)}
+                onContextMenu={(e) => { e.preventDefault(); setMenu({ sid: s.id, x: e.clientX, y: e.clientY }) }}>
+                {editingId === s.id ? (
+                  <input className="session-rename" autoFocus value={editTitle}
+                    onChange={(e) => setEditTitle(e.target.value)}
+                    onClick={(e) => e.stopPropagation()}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') { e.stopPropagation(); commitRename(s.id) }
+                      else if (e.key === 'Escape') { e.stopPropagation(); setEditingId(''); setEditTitle('') }
+                    }} />
+                ) : (
+                  <div className="session-title" onDoubleClick={() => { setEditingId(s.id); setEditTitle(s.title || ''); setMenu(null) }}>{s.title || '未命名会话'}</div>
+                )}
                 <div className="session-meta">{runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}{new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}</div>
               </div>
             ))}
@@ -540,6 +568,24 @@ function App() {
           onToggleTool={toggleTool}
           onToggleProfile={toggleProfile}
         />
+      )}
+      {menu && (
+        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+          <div className="ctx-item" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</div>
+          <div className="ctx-item danger" onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</div>
+        </div>
+      )}
+      {confirmDel && (
+        <div className="confirm-overlay" onClick={() => setConfirmDel(null)}>
+          <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-msg">删除会话「{confirmDel.title || '未命名会话'}」？</div>
+            <div className="confirm-sub">此操作不可恢复。</div>
+            <div className="confirm-actions">
+              <button className="btn ghost" onClick={() => setConfirmDel(null)}>取消</button>
+              <button className="btn danger" onClick={() => { const id = confirmDel.sid; setConfirmDel(null); confirmDelete(id) }}>删除</button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   )

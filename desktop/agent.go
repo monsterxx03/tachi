@@ -265,6 +265,46 @@ func (s *AgentService) ListSessions() []SessionInfo {
 	return infos
 }
 
+// DeleteSession deletes a session and its per-session run state. If the
+// deleted session is the currently displayed one, activeID is cleared so the
+// UI falls back to choosing/creating a session.
+func (s *AgentService) DeleteSession(id string) string {
+	d := s.desk
+	if d.sm == nil {
+		return "no session manager"
+	}
+	if err := d.sm.Delete(id); err != nil {
+		return err.Error()
+	}
+	d.mu.Lock()
+	delete(d.runs, id)
+	if d.activeID == id {
+		d.activeID = ""
+	}
+	d.mu.Unlock()
+	return "ok"
+}
+
+// RenameSession sets a session's title (used by the sidebar rename action).
+func (s *AgentService) RenameSession(id, title string) string {
+	d := s.desk
+	if d.sm == nil {
+		return "no session manager"
+	}
+	if strings.TrimSpace(title) == "" {
+		return "empty title"
+	}
+	sess, err := d.sm.Load(id)
+	if err != nil {
+		return err.Error()
+	}
+	sess.Title = title
+	if err := d.sm.UpdateMeta(sess); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
 // CurrentSession returns the active (displayed) session (nil if none).
 func (s *AgentService) CurrentSession() *SessionInfo {
 	r := s.desk.activeRun()
