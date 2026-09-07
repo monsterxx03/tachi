@@ -86,3 +86,15 @@ export function humanize(n: number): string {
 export function tpsTier(t: number): string {
   return t >= 200 ? 'fast' : t >= 60 ? 'normal' : 'slow'
 }
+
+// toLocalAsset rewrites an image src that points at a local path so it can be
+// served by the desktop's /local asset handler (see assetHandler in main.go).
+// Absolute paths pass through; relative paths are resolved against workDir.
+export function toLocalAsset(src: string | undefined, workDir: string): string {
+  if (!src) return src || ''
+  if (/^(https?:|data:|blob:|wails:)/.test(src)) return src
+  if (src.startsWith('file://')) return `/local?p=${encodeURIComponent(src.slice('file://'.length))}`
+  let p = src
+  if (!p.startsWith('/')) p = `${workDir || ''}/${p.replace(/^\.\//, '')}`
+  return `/local?p=${encodeURIComponent(p)}`
+}

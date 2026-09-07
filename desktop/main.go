@@ -4,6 +4,7 @@ import (
 	"context"
 	"embed"
 	"log"
+	"net/http"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -21,6 +22,24 @@ func init() {
 	application.RegisterEvent[AgentState]("agent:state")
 }
 
+// assetHandler serves the embedded frontend assets, and additionally answers
+// `/local?p=<abs path>` by serving a local file from disk — this lets `<img>`
+// tags in AI markdown replies render local images (e.g. screenshots) that the
+// webview otherwise cannot load by path.
+func assetHandler(assets embed.FS) http.Handler {
+	embedHandler := application.AssetFileServerFS(assets)
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/local" {
+			p := r.URL.Query().Get("p")
+			if p != "" {
+				http.ServeFile(w, r, p)
+				return
+			}
+		}
+		embedHandler.ServeHTTP(w, r)
+	})
+}
+
 func main() {
 	desk := newDesktopApp()
 
@@ -31,7 +50,7 @@ func main() {
 			application.NewService(&AgentService{desk: desk}),
 		},
 		Assets: application.AssetOptions{
-			Handler: application.AssetFileServerFS(assets),
+			Handler: assetHandler(assets),
 		},
 		Mac: application.MacOptions{
 			// Keep the app alive in the menu bar when the window closes.
