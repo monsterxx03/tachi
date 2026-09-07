@@ -490,3 +490,28 @@ type Autocompleter interface {
 	// (none/low/medium/high/xhigh/max/default) for autocomplete.
 	SetThinkingLevels(levels []string)
 }
+
+// MCPTokenUserChannel is an optional interface for channels that scope MCP
+// access tokens per conversation participant. The channel's platform carries
+// a stable participant identity per message (e.g. a domain account);
+// when present, the Manager tags the agent turn with that identity so MCP
+// HTTP calls can present the participant's own token instead of always using
+// the server-level token.
+//
+// Token resolution happens at MCP request time:
+//  1. <mcp_tokens>/<MCPTokenKey(msg)>.json — participant-scoped token, if the
+//     file exists (e.g. pre-refreshed by the channel when the message landed)
+//  2. fallback: <mcp_tokens>/<server storage key>.json — the default
+//     server-level OAuth token
+//
+// Channels that don't implement this interface (or return ok=false) keep the
+// legacy behaviour: only the server-level token is ever used.
+type MCPTokenUserChannel interface {
+	Channel
+
+	// MCPTokenKey returns the per-user MCP token file key for msg's sender,
+	// and whether this message has a participant identity at all. ok=false
+	// covers messages without a human sender (bots, system events) and
+	// fixed-identity deployments.
+	MCPTokenKey(msg IncomingMessage) (key string, ok bool)
+}
