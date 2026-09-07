@@ -17,6 +17,14 @@ APPDIR     = bin/tachi-desktop.app
 
 export PATH := $(HOME)/go/bin:$(PATH)
 
+# The repo-root go.work (../go.work) does not list this module, but Go tools
+# discover it from the parent directory anyway — leaving desktop "invisible"
+# to `go list` and breaking wails3 bindings generation (0 Services → frontend
+# TS errors). Desktop is a self-contained module (go.mod repeats the fork
+# replaces it needs), so build it outside the workspace. Targets that spawn Go
+# tooling (build/dev/run + their task dependencies) inherit this.
+export GOWORK := off
+
 .PHONY: all build dev frontend tidy clean run
 
 all: build

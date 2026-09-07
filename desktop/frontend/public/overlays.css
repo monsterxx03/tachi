@@ -12,25 +12,35 @@
   cursor: pointer;
   transition: background 0.15s, color 0.15s;
 }
-.mcp-btn:hover { background: rgba(91, 124, 255, 0.10); color: var(--text); }
+.mcp-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
 .mcp-ico { font-weight: 700; }
-.mcp-count { font-size: 10px; color: var(--green); }
+.mcp-count { font-size: 10px; color: var(--green); font-weight: 600; }
 
-.mcp-overlay { position: fixed; inset: 0; background: rgba(0, 0, 0, 0.28); z-index: 50; }
+/* Scrims stay light-neutral rather than black: a black wash over a translucent
+   window muddies the vibrancy underneath. */
+.mcp-overlay { position: fixed; inset: 0; background: rgba(16, 20, 40, 0.16); backdrop-filter: blur(1.5px); -webkit-backdrop-filter: blur(1.5px); z-index: 50; }
 .mcp-panel {
   position: fixed;
   right: 14px;
   bottom: 56px;
   width: 360px;
   max-height: 70vh;
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(250, 251, 254, 0.84));
+  backdrop-filter: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-strong);
   border: 1px solid var(--border-2);
-  border-radius: 12px;
-  box-shadow: 0 12px 38px rgba(0, 0, 0, 0.28);
+  border-top-color: var(--sheen);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-4);
   z-index: 51;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  animation: panel-in 0.22s var(--ease) both;
+}
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
 }
 .mcp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .mcp-title { font-size: 13px; font-weight: 600; }
@@ -91,67 +101,83 @@
 .ctx-menu {
   position: fixed;
   z-index: 60;
-  min-width: 120px;
-  background: var(--panel);
+  min-width: 128px;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.92), rgba(250, 251, 254, 0.86));
+  backdrop-filter: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-strong);
   border: 1px solid var(--border-2);
-  border-radius: 8px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
-  padding: 4px;
+  border-top-color: var(--sheen);
+  border-radius: 10px;
+  box-shadow: var(--shadow-3);
+  padding: 5px;
+  animation: panel-in 0.14s var(--ease) both;
 }
 .ctx-item {
   padding: 6px 10px;
   font-size: 12.5px;
   color: var(--text);
-  border-radius: 5px;
+  border-radius: 6px;
   cursor: pointer;
+  transition: background 0.1s var(--ease), color 0.1s var(--ease);
 }
-.ctx-item:hover { background: rgba(91, 124, 255, 0.12); }
+.ctx-item:hover { background: var(--accent); color: #fff; }
 .ctx-item.danger { color: var(--red); }
-.ctx-item.danger:hover { background: rgba(237, 135, 150, 0.12); }
+.ctx-item.danger:hover { background: var(--red); color: #fff; }
 .session-rename {
   width: 100%;
   border: 1px solid var(--accent);
-  border-radius: 5px;
-  background: var(--panel-2);
+  border-radius: 6px;
+  background: var(--panel-solid);
   color: var(--text);
   font-size: 12.5px;
   padding: 2px 6px;
   outline: none;
+  box-shadow: 0 0 0 3px var(--accent-ring);
 }
 
 .confirm-overlay {
   position: fixed;
   inset: 0;
   z-index: 70;
-  background: rgba(0, 0, 0, 0.4);
+  background: rgba(16, 20, 40, 0.22);
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
   display: grid;
   place-items: center;
+  animation: scrim-in 0.16s ease both;
 }
+@keyframes scrim-in { from { opacity: 0; } to { opacity: 1; } }
 .confirm-box {
   min-width: 280px;
   max-width: 380px;
-  background: var(--panel);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(250, 251, 254, 0.9));
+  backdrop-filter: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-strong);
   border: 1px solid var(--border-2);
-  border-radius: 12px;
-  box-shadow: 0 14px 44px rgba(0, 0, 0, 0.3);
-  padding: 18px;
+  border-top-color: var(--sheen);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-4);
+  padding: 20px;
+  animation: panel-in 0.2s var(--ease) both;
 }
 .confirm-msg { font-size: 14px; font-weight: 600; color: var(--text); }
 .confirm-sub { margin-top: 6px; font-size: 12px; color: var(--text-dim); }
 .confirm-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 .btn {
   border: 1px solid var(--border-2);
-  background: transparent;
+  background: rgba(255, 255, 255, 0.6);
   color: var(--text-dim);
   font-size: 12.5px;
+  font-weight: 520;
   padding: 6px 14px;
-  border-radius: 7px;
+  border-radius: 8px;
   cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
 }
-.btn:hover { background: rgba(91, 124, 255, 0.10); color: var(--text); }
-.btn.danger { border-color: var(--red); color: var(--red); }
-.btn.danger:hover { background: rgba(237, 135, 150, 0.14); }
-.btn.ghost { border-color: transparent; }
+.btn:hover { background: var(--accent-soft); color: var(--accent-2); border-color: rgba(91, 124, 255, 0.42); box-shadow: var(--shadow-1); }
+.btn.danger { border-color: rgba(220, 59, 69, 0.4); color: var(--red); }
+.btn.danger:hover { background: var(--red); color: #fff; border-color: var(--red); box-shadow: 0 2px 10px rgba(220, 59, 69, 0.28); }
+.btn.ghost { border-color: transparent; background: transparent; }
 .shortcuts-box { min-width: 260px; }
 .shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
 .shortcut-row:last-of-type { border-bottom: none; }
@@ -162,7 +188,9 @@
   padding: 3px 8px;
   border: 1px solid var(--border-2);
   border-radius: 6px;
-  background: var(--panel-2);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.95), rgba(240, 242, 248, 0.9));
+  /* Bottom inset line = the classic keycap bevel. */
+  box-shadow: inset 0 -1.5px 0 rgba(16, 20, 40, 0.09), var(--shadow-1);
   color: var(--text);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;

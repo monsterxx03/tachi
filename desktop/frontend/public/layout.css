@@ -1,14 +1,20 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
+/* The sidebar is the most see-through surface in the stack: it carries no body
+   copy, so it can float on the system vibrancy and let the desktop bleed in. */
 .sidebar {
   width: 280px;
   min-width: 280px;
-  background: var(--panel);
+  background: var(--chrome);
+  backdrop-filter: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-strong);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 14px 12px 12px;
   overflow: hidden;
-  transition: width 0.18s ease, min-width 0.18s ease, padding 0.18s ease;
+  /* Own compositing layer — see the note on .titlebar. */
+  transform: translateZ(0);
+  transition: width 0.22s var(--ease), min-width 0.22s var(--ease), padding 0.22s var(--ease);
 }
 
 .sidebar.collapsed {
@@ -25,13 +31,13 @@
   height: 26px;
   margin-right: 4px;
   border: none;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
   color: var(--text-dim);
   cursor: pointer;
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
-.sidebar-toggle:hover { background: rgba(91, 124, 255, 0.10); color: var(--text); }
+.sidebar-toggle:hover { background: var(--accent-soft); color: var(--accent-2); }
 
 .sidebar-header {
   display: flex;
@@ -51,13 +57,18 @@
   height: 24px;
   display: grid;
   place-items: center;
-  filter: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.35));
+  filter: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.45));
 }
 
 .brand-name {
   font-weight: 650;
   font-size: 15px;
-  letter-spacing: 0.3px;
+  letter-spacing: 0.2px;
+  /* Gradient wordmark — a small identity touch that costs nothing. */
+  background: linear-gradient(135deg, var(--text) 30%, var(--accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .icon-btn {
@@ -67,10 +78,11 @@
   font-size: 17px;
   cursor: pointer;
   padding: 5px 7px;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   line-height: 1;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
 }
-.icon-btn:hover { background: rgba(0, 0, 0, 0.06); color: var(--text); }
+.icon-btn:hover { background: rgba(16, 20, 40, 0.055); color: var(--text); }
 
 .new-chat {
   display: flex;
@@ -79,22 +91,28 @@
   width: 100%;
   padding: 10px 12px;
   margin-bottom: 12px;
-  background: var(--accent-soft);
-  border: 1px solid rgba(108, 140, 255, 0.25);
+  background: linear-gradient(165deg, rgba(122, 149, 255, 0.16), rgba(91, 124, 255, 0.1));
+  border: 1px solid rgba(91, 124, 255, 0.26);
   color: var(--accent-2);
   border-radius: 10px;
   font-size: 13.5px;
-  font-weight: 550;
+  font-weight: 560;
   cursor: pointer;
-  transition: background 0.15s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
 }
-.new-chat:hover { background: rgba(108, 140, 255, 0.2); }
+.new-chat:hover {
+  background: linear-gradient(165deg, rgba(122, 149, 255, 0.26), rgba(91, 124, 255, 0.18));
+  border-color: rgba(91, 124, 255, 0.42);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.5), 0 2px 8px rgba(91, 124, 255, 0.16);
+}
 .new-chat-plus { font-size: 16px; }
 
 .session-section {
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
-  letter-spacing: 0.8px;
+  letter-spacing: 0.9px;
+  font-weight: 600;
   color: var(--text-faint);
   padding: 6px 8px;
 }
@@ -106,14 +124,32 @@
 }
 
 .session {
+  position: relative;
   padding: 9px 10px;
   border-radius: 9px;
   cursor: pointer;
   margin-bottom: 2px;
+  transition: background 0.14s var(--ease);
 }
-.session:hover { background: rgba(0, 0, 0, 0.04); }
-.session.active { background: var(--panel-2); }
-.session.active .session-title { color: var(--text); }
+.session:hover { background: rgba(16, 20, 40, 0.045); }
+/* Active session: filled card + an accent rail on the leading edge, so the
+   selection survives being read at a glance. */
+.session.active {
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.86), rgba(255, 255, 255, 0.66));
+  box-shadow: var(--shadow-1);
+}
+.session.active::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 3px;
+  height: 62%;
+  border-radius: 0 3px 3px 0;
+  background: linear-gradient(180deg, var(--accent-3), var(--accent-2));
+}
+.session.active .session-title { color: var(--text); font-weight: 560; }
 .session-title {
   font-size: 13.5px;
   color: var(--text-dim);
@@ -121,11 +157,11 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.session.active .session-title { font-weight: 550; }
 .session-meta {
   font-size: 11.5px;
   color: var(--text-faint);
   margin-top: 3px;
+  font-variant-numeric: tabular-nums;
 }
 
 .sidebar-footer {
@@ -137,13 +173,14 @@
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 8px 8px;
+  padding: 8px;
   font-size: 13px;
   color: var(--text-dim);
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
 }
-.footer-item:hover { background: rgba(0, 0, 0, 0.04); color: var(--text); }
+.footer-item:hover { background: rgba(16, 20, 40, 0.045); color: var(--text); }
 .footer-ico { font-size: 14px; }
 
 /* ── Main ────────────────────────────────────────────────────────────────── */
@@ -152,7 +189,7 @@
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--bg);
+  background: transparent;
 }
 
 .app-body {
@@ -161,6 +198,13 @@
   min-height: 0;
 }
 
+/* Titlebar: same glass as the sidebar, plus a sheen along the bottom edge so
+   the chrome/content boundary reads as a fold rather than a drawn line.
+
+   `transform: translateZ(0)` + `contain: paint` promote this to its own
+   compositing layer so chat-area repaints (scrolling, hover) can't invalidate
+   the blur behind it — without that, the titlebar visibly flickers whenever
+   the transcript scrolls. */
 .titlebar {
   display: flex;
   align-items: center;
@@ -168,8 +212,15 @@
   padding: 0 16px 0 78px; /* left pad leaves room for native traffic lights */
   height: 44px;
   border-bottom: 1px solid var(--border);
-  background: var(--panel);
+  background: var(--chrome-2);
+  backdrop-filter: var(--glass-strong);
+  -webkit-backdrop-filter: var(--glass-strong);
+  box-shadow: 0 1px 0 var(--sheen) inset;
   flex-shrink: 0;
+  position: relative;
+  z-index: 2;
+  transform: translateZ(0);
+  contain: paint;
 }
 .titlebar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .titlebar-title h2 {
@@ -191,8 +242,11 @@
   white-space: nowrap;
   cursor: copy;
   user-select: text;
+  padding: 2px 5px;
+  border-radius: 5px;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
 }
-.titlebar-title .session-id:hover { color: var(--text-dim); }
+.titlebar-title .session-id:hover { background: rgba(16, 20, 40, 0.05); color: var(--text-dim); }
 .titlebar-divider {
   width: 1px;
   height: 18px;
@@ -203,10 +257,11 @@
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 5px 11px;
+  padding: 5px 12px;
   border-radius: 20px;
-  background: var(--panel-2);
-  border: 1px solid var(--border);
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.82), rgba(255, 255, 255, 0.6));
+  border: 1px solid var(--border-2);
+  box-shadow: var(--shadow-1);
   font-size: 12.5px;
   color: var(--text-dim);
   margin-left: auto;
@@ -220,5 +275,12 @@
 .dot-tool_running { color: var(--accent); }
 .dot-busy { color: var(--accent-2); }
 .dot-error { color: var(--red); }
+/* Working states pulse; idle/error stay still so motion always means "busy". */
+.dot-thinking, .dot-tool_running, .dot-busy {
+  animation: dot-pulse 1.6s ease-in-out infinite;
+}
+@keyframes dot-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
 .status-label { font-size: 12.5px; }
-

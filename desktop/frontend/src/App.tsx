@@ -556,7 +556,7 @@ function App() {
                 <span className="usage-meta">
                   {hasCacheHit ? <CacheRing rate={cacheHitRate} /> : null}
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
-                  {credit > 0 ? <span className="usage-credit" title="当前会话积分">{credit} 积分</span> : null}
+                  {credit > 0 ? <span className="usage-credit" title="当前会话积分">{credit.toFixed(2)} 积分</span> : null}
                 </span>
                 <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
                   <span className="mcp-ico">M</span>
