@@ -17,11 +17,17 @@ import (
 // backed by a temp base dir, mirroring the isolation used by token_store_test.
 func newUserScopeEnv(t *testing.T) (*userScopedTokenStore, string) {
 	t.Helper()
+	return newUserScopeEnvForKey(t, "server-key")
+}
+
+// newUserScopeEnvForKey is newUserScopeEnv with an explicit storage key.
+func newUserScopeEnvForKey(t *testing.T, storageKey string) (*userScopedTokenStore, string) {
+	t.Helper()
 	baseDir := t.TempDir()
 	config.SetBaseDir(baseDir)
 	t.Cleanup(func() { config.SetBaseDir("") })
 
-	store, err := newUserScopedTokenStore("server-key")
+	store, err := newUserScopedTokenStore(storageKey)
 	require.NoError(t, err)
 	return store, filepath.Join(baseDir, "mcp_tokens")
 }
@@ -102,4 +108,19 @@ func TestMCPTokenUserCtxHelpers(t *testing.T) {
 
 	var nilCtx context.Context // typed-nil interface exercises the nil-context guard
 	assert.Equal(t, "", MCPTokenUserFromCtx(nilCtx))
+}
+
+func TestUserScopedTokenStore_LocalhostSkipsUserScope(t *testing.T) {
+	// Local dev servers (storage key contains "localhost") must always use
+	// the server-level token, even when the ctx carries a participant key
+	// and a matching per-user token file exists.
+	store, tokensDir := newUserScopeEnvForKey(t, "localhost_dev_server")
+
+	require.NoError(t, store.SaveToken(t.Context(), &transport.Token{AccessToken: "server-token", TokenType: "Bearer"}))
+	writeUserTokenFile(t, tokensDir, "san.zhang", "user-token")
+
+	ctx := WithMCPTokenUser(t.Context(), "san.zhang")
+	got, err := store.GetToken(ctx)
+	require.NoError(t, err)
+	assert.Equal(t, "server-token", got.AccessToken)
 }

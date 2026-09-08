@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"path/filepath"
+	"strings"
 
 	"github.com/mark3labs/mcp-go/client/transport"
 	"github.com/monsterxx03/tachi/config"
@@ -70,19 +71,29 @@ func newUserScopedTokenStore(storageKey string) (*userScopedTokenStore, error) {
 	return &userScopedTokenStore{FileTokenStore: base, storageKey: storageKey}, nil
 }
 
+// localhostStorageKeyMarker marks local development MCP servers. Locally run
+// servers (e.g. http://localhost:xxxx) have no participant-scoped tokens — the
+// server-level token file is always the right credential for them, so the
+// per-user lookup is skipped entirely.
+const localhostStorageKeyMarker = "localhost"
+
 // GetToken implements transport.TokenStore with per-user → server fallback.
+// Servers whose storage key contains "localhost" skip the per-user lookup and
+// always use the server-level token file.
 func (s *userScopedTokenStore) GetToken(ctx context.Context) (*transport.Token, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	if userKey := MCPTokenUserFromCtx(ctx); userKey != "" {
-		path := filepath.Join(config.MCPTokensDir(), userKey+".json")
-		if tok, err := loadJSONFile[transport.Token](ctx, path, "user token file"); err == nil {
-			return tok, nil
+	if !strings.Contains(s.storageKey, localhostStorageKeyMarker) {
+		if userKey := MCPTokenUserFromCtx(ctx); userKey != "" {
+			path := filepath.Join(config.MCPTokensDir(), userKey+".json")
+			if tok, err := loadJSONFile[transport.Token](ctx, path, "user token file"); err == nil {
+				return tok, nil
+			}
+			// Missing or corrupt per-user file — fall through to the
+			// server-level token rather than failing the request.
 		}
-		// Missing or corrupt per-user file — fall through to the
-		// server-level token rather than failing the request.
 	}
 
 	return s.FileTokenStore.GetToken(ctx)
