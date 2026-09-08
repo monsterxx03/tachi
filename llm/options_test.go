@@ -2,9 +2,9 @@ package llm
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"testing"
 	"time"
 
@@ -72,9 +72,12 @@ func TestNewOpenAIProvider_Timeout(t *testing.T) {
 	if err == nil {
 		t.Fatal("provider with 10ms timeout should fail on a 80ms server, got nil error")
 	}
-	// go-openai surfaces the HTTP client timeout as
-	// "request canceled (Client.Timeout exceeded while awaiting headers)".
-	if !strings.Contains(err.Error(), "Client.Timeout exceeded") {
+	// Assert the timeout semantically rather than by message text. net/http
+	// surfaces an http.Client timeout either bare ("context deadline exceeded")
+	// or annotated ("... (Client.Timeout exceeded while awaiting headers)"),
+	// depending on an internal scheduling race when a custom RoundTripper
+	// (tachiTransport) is installed — see net/http client.go setRequestCancel.
+	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error should be timeout-related, got: %v", err)
 	}
 }
