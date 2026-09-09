@@ -222,6 +222,15 @@ var deepSeekPeakEffectiveFrom = time.Date(2026, 8, 17, 0, 0, 0, 0, tzAsiaShangha
 // Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
 var deepSeekWeekdayPeakEffectiveFrom = time.Date(2026, 8, 24, 0, 0, 0, 0, tzAsiaShanghai)
 
+// deepSeekFlashPriceAdjustEffectiveFrom is 2026-09-10 12:00 北京时间 — when
+// DeepSeek adjusts the flash 系列（含 deepseek-v4-flash-vision-exp）定价：
+// 空闲时段 缓存命中 ¥0.02 / 缓存未命中输入 ¥1 / 输出 ¥4；高峰时段 = 空闲 ×2
+// （¥0.04 / ¥2 / ¥8），时段表不变（周一至周五 09:00-12:00、14:00-18:00 高峰，
+// 周末全天空闲）。本次仅 flash 调价，deepseek-v4-pro 维持 8/24 版价格。
+// 生效时刻为 12:00 而非 00:00：9/10 当天 09:00-12:00 的高峰时段仍按旧价计。
+// Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+var deepSeekFlashPriceAdjustEffectiveFrom = time.Date(2026, 9, 10, 12, 0, 0, 0, tzAsiaShanghai)
+
 // DeepSeek 的上下文硬盘缓存（kv_cache）没有"缓存写入费"这一计费项：每个请求
 // 自动触发缓存构建（落盘），官方文档只区分命中/未命中两类输入计费。未列写入费
 // = 免费 → CacheCreationInputPrice = 0（各版本均适用）。
@@ -229,7 +238,9 @@ var deepSeekWeekdayPeakEffectiveFrom = time.Date(2026, 8, 24, 0, 0, 0, 0, tzAsia
 
 // deepseekFlashPriceVersions: 老价（¥1/2/0.02）+ 2026-08-17 起峰谷价
 // （空闲 ¥1.5/4.5/0.05，高峰 ¥3/9/0.10）+ 2026-08-24 起工作日峰谷
-// （周一至周五高峰，周末全天谷价 = 平段 ¥1.5/4.5/0.05）。
+// （周一至周五高峰，周末全天谷价 = 平段 ¥1.5/4.5/0.05）+ 2026-09-10 12:00 起
+// flash 系列调价（空闲 ¥1/4/0.02，高峰 = 空闲 ×2）。
+// 本表同时服务 deepseek-v4-flash-vision-exp 与未知 deepseek 变体兜底。
 var deepseekFlashPriceVersions = []builtinPriceVersion{
 	{
 		// 8/16 及以前：flat，无时段。
@@ -258,6 +269,20 @@ var deepseekFlashPriceVersions = []builtinPriceVersion{
 				// 高峰仅周一至周五：09:00-12:00、14:00-18:00（北京时间）。
 				{Name: "peak", Days: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}, StartHour: 9, EndHour: 12, InputPrice: 3.0, OutputPrice: 9.0, CacheReadInputPrice: 0.10},
 				{Name: "peak", Days: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}, StartHour: 14, EndHour: 18, InputPrice: 3.0, OutputPrice: 9.0, CacheReadInputPrice: 0.10},
+			},
+		},
+	},
+	{
+		EffectiveFrom: deepSeekFlashPriceAdjustEffectiveFrom,
+		Price: ModelPrice{
+			// 平段 = 空闲时段价；周末不命中任何 band → 全天空闲价。
+			InputPrice: 1.0, OutputPrice: 4.0, CacheReadInputPrice: 0.02,
+			Location: tzAsiaShanghai,
+			Bands: []PriceBand{
+				// 高峰仅周一至周五：09:00-12:00、14:00-18:00（北京时间），
+				// 单价 = 空闲时段 ×2。
+				{Name: "peak", Days: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}, StartHour: 9, EndHour: 12, InputPrice: 2.0, OutputPrice: 8.0, CacheReadInputPrice: 0.04},
+				{Name: "peak", Days: []time.Weekday{time.Monday, time.Tuesday, time.Wednesday, time.Thursday, time.Friday}, StartHour: 14, EndHour: 18, InputPrice: 2.0, OutputPrice: 8.0, CacheReadInputPrice: 0.04},
 			},
 		},
 	},
