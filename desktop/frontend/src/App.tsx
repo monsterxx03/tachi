@@ -15,7 +15,7 @@ import {
   type Message,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtDur, fmtTime, tpsTier } from './lib'
+import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier } from './lib'
 import {
   ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, ToolCard, MCPPanel,
 } from './components'
@@ -405,6 +405,10 @@ function App() {
 
   const meta = STATUS_META[state.status as string] ?? STATUS_META.idle
 
+  const MdImg = useCallback(({ src, alt }: { src?: string; alt?: string }) => (
+    <img src={toLocalAsset(src, workDir)} alt={alt || ''} />
+  ), [workDir])
+
   return (
     <div className="app">
       <header className="titlebar drag-region">
@@ -477,14 +481,14 @@ function App() {
                           {m.parts.map((p, i) => {
                             if (p.type === 'thinking') return <ThinkingPart key={i} text={p.text || ''} />
                             if (p.type === 'tool') return <ToolCard key={i} name={p.name || ''} title={p.title} args={p.args} summary={p.summary || ''} ok={!!p.ok} />
-                            return <div key={i} className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]}>{p.text}</ReactMarkdown></div>
+                            return <div key={i} className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg }}>{p.text}</ReactMarkdown></div>
                           })}
                         </div>
                       ) : (
                         <>
                           {m.thinking ? <ThinkingBlock thinking={m.thinking} collapsed={!!m.thinkingCollapsed} onToggle={() => toggleThinking(m.id)} /> : null}
                           {(m.tools || []).map((t, i) => <ToolCard key={i} name={t.name} title={t.title} args={t.arguments} summary={t.summary} ok={t.ok} durationMs={t.durationMs} />)}
-                          {m.text ? <div className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]}>{m.text}</ReactMarkdown></div> : null}
+                          {m.text ? <div className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg }}>{m.text}</ReactMarkdown></div> : null}
                           {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{state.status === 'thinking' ? '正在思考…' : '正在执行…'}</span> : null}
                         </>
                       )}
