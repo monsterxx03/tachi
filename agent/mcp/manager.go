@@ -625,7 +625,10 @@ func hasPersistedAuth(storageKey string) bool {
 // so that token refresh works across process restarts.
 func (m *Manager) oauthOption(ctx context.Context, srv *config.MCPServerConfig) transport.StreamableHTTPCOption {
 	oauthCfg := srv.OAuth
-	tokenStore, err := NewFileTokenStore(srv.TokenStorageName())
+	// User-scoped store: MCP requests present the current turn participant's
+	// own token when the ctx carries one (channel.MCPTokenUserChannel) and
+	// the per-user file exists, falling back to the server-level token file.
+	tokenStore, err := newUserScopedTokenStore(srv.TokenStorageName())
 	if err != nil {
 		m.logger.Error(ctx, "MCP: failed to create token store", err, "storageName", srv.TokenStorageName())
 		tokenStore = nil

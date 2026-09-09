@@ -699,12 +699,22 @@ func (m *Manager) Close() {
 // thread tracking. When an incoming message arrives, the handler records
 // the channel→threadID mapping so buildAgent can later determine whether
 // the channel supports interactive tools.
+//
+// Channels implementing channel.MCPTokenUserChannel also get their per-user
+// MCP token key tagged onto the turn context here, so MCP HTTP calls made
+// during the turn present the participant's own token (falling back to the
+// server-level token when the participant has none).
 func (m *Manager) buildHandlerForChannel(ch channel.Channel, base channel.MessageHandler) channel.MessageHandler {
 	if base == nil {
 		base = m.buildHandler()
 	}
 	return func(ctx context.Context, msg channel.IncomingMessage) channel.HandlerResult {
 		m.setThreadChannel(msg.ThreadID, ch)
+		if mcpChan, ok := ch.(channel.MCPTokenUserChannel); ok {
+			if key, ok2 := mcpChan.MCPTokenKey(msg); ok2 && key != "" {
+				ctx = mcp.WithMCPTokenUser(ctx, key)
+			}
+		}
 		return base(ctx, msg)
 	}
 }

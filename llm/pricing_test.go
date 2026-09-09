@@ -190,6 +190,72 @@ func TestGetBuiltinModelPriceAt_DeepSeekPeakSelection(t *testing.T) {
 	}
 }
 
+// TestGetBuiltinModelPriceAt_DeepSeekFlashSep2026Adjustment pins the flash-only
+// price adjustment effective 2026-09-10 12:00 (北京时间): off-peak (空闲) =
+// ¥1 input (cache miss) / ¥4 output / ¥0.02 cache hit, weekday peak bands at
+// exactly 2× off-peak (¥2/8/0.04). The effective instant is 12:00, not
+// midnight — 9/10's morning peak hours (09:00-12:00, a Thursday) still bill
+// at the OLD peak prices, and the switch happens at noon. deepseek-v4-pro is
+// NOT adjusted and keeps the 8/24 prices; deepseek-v4-flash-vision-exp shares
+// the flash table.
+// Source: https://api-docs.deepseek.com/zh-cn/quick_start/pricing/
+func TestGetBuiltinModelPriceAt_DeepSeekFlashSep2026Adjustment(t *testing.T) {
+	beijing := func(day, hour int) time.Time {
+		return time.Date(2026, 9, day, hour, 0, 0, 0, tzAsiaShanghai)
+	}
+	type price struct{ input, output, cacheRead float64 }
+	snap := func(model string, at time.Time) (ModelPrice, string) {
+		p := GetBuiltinModelPriceAt(model, at)
+		if p == nil {
+			t.Fatalf("GetBuiltinModelPriceAt(%q, %v) = nil", model, at)
+		}
+		return p.PriceAt(at)
+	}
+	assert := func(name string, got ModelPrice, band string, want price, wantBand string) {
+		t.Run(name, func(t *testing.T) {
+			if got.InputPrice != want.input || got.OutputPrice != want.output || got.CacheReadInputPrice != want.cacheRead {
+				t.Errorf("prices = %.2f/%.2f/%.2f, want %.2f/%.2f/%.2f", got.InputPrice, got.OutputPrice, got.CacheReadInputPrice, want.input, want.output, want.cacheRead)
+			}
+			if band != wantBand {
+				t.Errorf("band = %q, want %q", band, wantBand)
+			}
+		})
+	}
+
+	// 9/10 (Thursday) 11:00 — BEFORE 12:00: the 8/24 version is still in
+	// effect, so the morning peak hour bills at the OLD peak prices.
+	oldPeak, band := snap("deepseek-v4-flash", beijing(10, 11))
+	assert("9/10 11:00 pre-switch morning peak = old price", oldPeak, band, price{3.0, 9.0, 0.10}, "peak")
+
+	// 12:00 sharp — the new version takes over: off-peak flat prices.
+	offPeak, band := snap("deepseek-v4-flash", beijing(10, 12))
+	assert("9/10 12:00 switch instant = new off-peak", offPeak, band, price{1.0, 4.0, 0.02}, "")
+
+	// 14:00-18:00 on a workday — new peak bands at 2× off-peak.
+	newPeak, band := snap("deepseek-v4-flash", beijing(10, 14))
+	assert("9/10 14:00 new peak", newPeak, band, price{2.0, 8.0, 0.04}, "peak")
+	newPeak, band = snap("deepseek-v4-flash", beijing(11, 9))
+	assert("9/11 friday 09:00 new peak", newPeak, band, price{2.0, 8.0, 0.04}, "peak")
+
+	// Weekend (9/12 Saturday): off-peak all day — the Days filter still works.
+	weekend, band := snap("deepseek-v4-flash", beijing(12, 10))
+	assert("9/12 saturday 10:00 off-peak", weekend, band, price{1.0, 4.0, 0.02}, "")
+	weekend, band = snap("deepseek-v4-flash", beijing(12, 15))
+	assert("9/12 saturday 15:00 off-peak", weekend, band, price{1.0, 4.0, 0.02}, "")
+
+	// deepseek-v4-flash-vision-exp shares the flash table (incl. the new version).
+	vision, band := snap("deepseek-v4-flash-vision-exp", beijing(10, 12))
+	assert("vision-exp 9/10 12:00 off-peak", vision, band, price{1.0, 4.0, 0.02}, "")
+	vision, band = snap("deepseek-v4-flash-vision-exp", beijing(10, 14))
+	assert("vision-exp 9/10 14:00 peak", vision, band, price{2.0, 8.0, 0.04}, "peak")
+
+	// deepseek-v4-pro is NOT part of the adjustment — 8/24 prices hold.
+	pro, band := snap("deepseek-v4-pro", beijing(11, 10))
+	assert("pro unchanged: 9/11 10:00 old peak", pro, band, price{9.0, 27.0, 0.30}, "peak")
+	pro, band = snap("deepseek-v4-pro", beijing(12, 10))
+	assert("pro unchanged: 9/12 saturday off-peak", pro, band, price{4.5, 13.5, 0.15}, "")
+}
+
 // TestPriceAt covers the band-matching mechanics independent of the built-in
 // table: no-bands identity, first-match-wins, midnight wrap, miss → flat.
 func TestPriceAt(t *testing.T) {
