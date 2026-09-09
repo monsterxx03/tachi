@@ -36,6 +36,7 @@ export interface Message {
   thinkingCollapsed?: boolean
   tools?: ToolCardData[]     // streaming turn
   running?: boolean
+  stopped?: boolean          // turn was stopped by the user (not an error)
   summary?: { durationMs: number; iterations: number; cost: number; credit: number }
 }
 
@@ -47,6 +48,7 @@ export interface AgentEvent {
   ToolResult: string
   ToolIsError: boolean
   ToolDuration?: number
+  Result?: { ExitReason?: string }
 }
 
 export const STATUS_META: Record<string, { dot: string; desc: string }> = {

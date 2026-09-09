@@ -1,7 +1,7 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
-import { Events } from '@wailsio/runtime'
+import { Dialogs, Events } from '@wailsio/runtime'
 import {
   AgentService,
   AgentStatus,
@@ -19,6 +19,17 @@ import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier } from './lib'
 import {
   ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, ToolCard, MCPPanel,
 } from './components'
+
+// TableScroller wraps GFM tables in a horizontally scrollable container so a
+// table wider than the message card scrolls inside it instead of bursting out
+// of the layout. Module-level: stable identity across streaming re-renders.
+function TableScroller(props: { children?: ReactNode }) {
+  return (
+    <div className="table-scroll">
+      <table>{props.children}</table>
+    </div>
+  )
+}
 function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
@@ -44,8 +55,6 @@ function App() {
   const [cacheHitRate, setCacheHitRate] = useState(0)
   const [hasCacheHit, setHasCacheHit] = useState(false)
   const [workDir, setWorkDir] = useState('')
-  const [editingWd, setEditingWd] = useState(false)
-  const [wdInput, setWdInput] = useState('')
   const [tps, setTps] = useState(0)
   const [lastTps, setLastTps] = useState(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -58,9 +67,20 @@ function App() {
   // "load earlier" cursor).
   const [hasMore, setHasMore] = useState<Record<string, boolean>>({})
   const [earliestTs, setEarliestTs] = useState<Record<string, string>>({})
+  // Pending queue: messages the user sends while a turn is still running. They
+  // are NOT executed immediately — they sit here (each removable, the whole
+  // queue clearable) until the next steer point injects them into the running
+  // turn, or the turn ends and a natural completion auto-sends them. Keyed by
+  // session so queued input follows its own conversation.
+  const [pending, setPending] = useState<Record<string, string[]>>({})
+  const pendingRef = useRef<Record<string, string[]>>({})
+  // sendingNow guards the "立即发送" action against double-clicks while the
+  // backend is still stopping the previous turn.
+  const [sendingNow, setSendingNow] = useState(false)
   const chatRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const messages = msgCache[currentId] || []
+  const pendMsgs = pending[currentId] || []
 
   const scrollToBottom = useCallback(() => {
     setTimeout(() => { const el = chatRef.current; if (el) el.scrollTop = el.scrollHeight }, 60)
@@ -114,6 +134,146 @@ function App() {
     setMsgCache((prev) => ({ ...prev, [id]: fn(prev[id] || []) }))
   }, [])
 
+  // ── Pending queue / steer ─────────────────────────────────────────────────
+  // Queue ops keep pendingRef in sync so event listeners (which can only see
+  // the latest values through refs, not stale render closures) always act on
+  // the freshest queue.
+  const enqueuePending = useCallback((sid: string, text: string) => {
+    const next = { ...pendingRef.current, [sid]: [...(pendingRef.current[sid] || []), text] }
+    pendingRef.current = next
+    setPending(next)
+  }, [])
+  const dropPending = useCallback((sid: string, idx: number) => {
+    const list = pendingRef.current[sid] || []
+    const next = { ...pendingRef.current, [sid]: list.filter((_, i) => i !== idx) }
+    pendingRef.current = next
+    setPending(next)
+  }, [])
+  const clearPending = useCallback((sid: string) => {
+    if (!(pendingRef.current[sid] || []).length) return
+    const next = { ...pendingRef.current, [sid]: [] }
+    pendingRef.current = next
+    setPending(next)
+  }, [])
+  // takePending joins and clears the queue, returning the combined text ("" if
+  // empty) — the single drain point for steer injection / send-now / auto-flush.
+  const takePending = useCallback((sid: string) => {
+    const text = (pendingRef.current[sid] || []).join('\n\n')
+    if (text) {
+      const next = { ...pendingRef.current, [sid]: [] }
+      pendingRef.current = next
+      setPending(next)
+    }
+    return text
+  }, [])
+
+  // The current session is producing output when its run is in-flight, or the
+  // status bar is in a busy state (covers the simulated-turn fallback too).
+  const isCurrentRunning = runningSet.has(currentId) ||
+    state.status === 'thinking' || state.status === 'tool_running' || state.status === 'busy'
+
+  // sendText appends the user message + a running assistant placeholder and
+  // starts a backend turn. Shared by the composer, the queue's "send now" and
+  // the auto-flush after a naturally completed turn.
+  const sendText = useCallback((raw: string) => {
+    const text = raw.trim()
+    if (!text) return
+    const sid = currentId
+    const ts = Date.now()
+    const tsStr = new Date().toISOString()
+    setSessionMsgs(sid, (prev) => [...prev,
+      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
+      { id: `a-${ts}`, role: 'assistant', running: true, text: '', ts: tsStr },
+    ])
+    AgentService.SendMessage(text).catch(() => {})
+    setRunningSet((prev) => new Set(prev).add(sid))
+    scrollToBottom()
+  }, [currentId, setSessionMsgs, scrollToBottom])
+
+  // send routes the composer text: while a turn is running the message goes to
+  // the pending queue (to be steered in at the next tool boundary) instead of
+  // starting a second, competing turn.
+  const send = useCallback(() => {
+    const text = input.trim()
+    if (!text) return
+    setInput('')
+    if (isCurrentRunning) {
+      enqueuePending(currentId, text)
+      return
+    }
+    sendText(text)
+  }, [input, isCurrentRunning, currentId, enqueuePending, sendText])
+
+  // sendPendingNow is the pending bar's primary action: stop the current turn
+  // and send the queued text as a fresh user turn right away. The user bubble
+  // + assistant placeholder are shown immediately; if stopping the turn times
+  // out on the backend the text is put back into the queue for another try.
+  const sendPendingNow = useCallback(async () => {
+    const sid = currentId
+    const text = takePending(sid)
+    if (!text.trim()) return
+    const ts = Date.now()
+    const tsStr = new Date().toISOString()
+    setSessionMsgs(sid, (prev) => [...prev,
+      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
+      { id: `a-${ts}`, role: 'assistant', running: true, text: '', ts: tsStr },
+    ])
+    setRunningSet((prev) => new Set(prev).add(sid))
+    setSendingNow(true)
+    scrollToBottom()
+    try {
+      const ret = isCurrentRunning
+        ? await AgentService.StopAndSend(text)
+        : await AgentService.SendMessage(text)
+      if (ret && ret !== 'ok') {
+        enqueuePending(sid, text)
+      }
+    } catch { /* ignore */ }
+    setSendingNow(false)
+  }, [currentId, isCurrentRunning, takePending, setSessionMsgs, enqueuePending, scrollToBottom])
+
+  // injectSteerVisual splits the streaming assistant segment so the queued
+  // user text lands AFTER the tool work already shown and BEFORE the reply
+  // that continues after the steer point: finalize the running segment, append
+  // the user bubble, open a fresh running placeholder for the rest of the turn
+  // (subsequent deltas/tool events target the newest running assistant). When
+  // the segment has rendered nothing yet the bubble is inserted before it.
+  const injectSteerVisual = useCallback((sid: string, text: string, ts: string) => {
+    setMsgCache((prev) => {
+      const list = prev[sid] || []
+      let ai = -1
+      for (let i = list.length - 1; i >= 0; i--) {
+        if (list[i].role === 'assistant' && list[i].running) { ai = i; break }
+      }
+      if (ai < 0) return prev
+      const seg = list[ai]
+      const u: Message = { id: `u-${Date.now()}-steer`, role: 'user', text, ts }
+      if (!(seg.thinking || (seg.tools && seg.tools.length) || seg.text)) {
+        const out = [...list]
+        out.splice(ai, 0, u)
+        return { ...prev, [sid]: out }
+      }
+      const out = [...list]
+      out[ai] = { ...seg, running: false }
+      out.push(u, { id: `a-${Date.now()}-steer`, role: 'assistant', running: true, text: '', ts })
+      return { ...prev, [sid]: out }
+    })
+    setTimeout(() => { const el = chatRef.current; if (el) el.scrollTop = el.scrollHeight }, 60)
+  }, [])
+
+  // answerSteer replies to the agent's steer_check for a session: queued text
+  // is drained, shown in the transcript and injected; otherwise the empty
+  // string unblocks the agent loop without steering.
+  const answerSteer = useCallback((sid: string) => {
+    const text = takePending(sid)
+    if (!text) {
+      AgentService.Steer(sid, '').catch(() => {})
+      return
+    }
+    injectSteerVisual(sid, text, new Date().toISOString())
+    AgentService.Steer(sid, text).catch(() => {})
+  }, [takePending, injectSteerVisual])
+
   const refreshProvider = useCallback(async () => {
     try {
       const info = await (AgentService as any).GetProviderInfo?.()
@@ -139,13 +299,22 @@ function App() {
     } catch { /* ignore */ }
   }, [])
 
-  const commitWorkDir = useCallback(async (id: string, dir: string) => {
-    setEditingWd(false)
-    const t = dir.trim()
-    if (!t) return
-    await (AgentService as any).SetSessionWorkingDir?.(id, t).catch(() => {})
-    setWorkDir(t)
-  }, [])
+  // pickWorkDir opens a native folder picker (seeded at the session's current
+  // working directory) and applies the chosen directory to the session.
+  const pickWorkDir = useCallback(async (id: string) => {
+    try {
+      const picked: string | string[] = await Dialogs.OpenFile({
+        CanChooseDirectories: true,
+        CanChooseFiles: false,
+        CanCreateDirectories: true,
+        Title: '选择工作目录',
+        Directory: workDir || undefined,
+      })
+      if (typeof picked !== 'string' || !picked) return
+      await (AgentService as any).SetSessionWorkingDir?.(id, picked).catch(() => {})
+      setWorkDir(picked)
+    } catch { /* ignore */ }
+  }, [workDir])
 
   // refreshMCP reloads the MCP servers/tools + profile for the current session.
   const refreshMCP = useCallback(async () => {
@@ -209,6 +378,7 @@ function App() {
         setHasMore((p) => ({ ...p, [ns.id]: false }))
         setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
         setCost(0); setCredit(0); setTps(0); setLastTps(0)
+        refreshWorkDir(ns.id)
       }
     }
     setSessions(list.map((s) => ({ ...s, active: s.id === cur?.id })))
@@ -256,11 +426,12 @@ function App() {
       setHasMore((p) => ({ ...p, [ns.id]: false }))
       setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
       setCost(0); setCredit(0); setTps(0); setLastTps(0)
+      refreshWorkDir(ns.id)
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider])
+  }, [refreshProvider, refreshWorkDir])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
@@ -315,13 +486,26 @@ function App() {
 
   useEffect(() => {
     const off = Events.On('agent:error', (event) => {
-      const d = event.data as { sessionId: string; error: string }
+      const d = event.data as { sessionId: string; error: string; interrupted?: boolean }
       if (d.sessionId !== currentId) return
+      const interrupted = !!d.interrupted
       setMsgCache((prev) => {
         const list = prev[currentId] || []
-        const target = [...list].reverse().find((m) => m.role === 'assistant' && m.running)
+        // The turn being concluded is the newest assistant message. Unlike a
+        // running-scan, this still works when agent:event has already flipped
+        // running off (listener order is not guaranteed). Mutations are
+        // idempotent so double-handling is harmless.
+        const target = [...list].reverse().find((m) => m.role === 'assistant')
         if (!target) return prev
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? { ...m, running: false, text: (m.text || '') + '\n\n⚠ ' + (d.error || '出错') } : m)) }
+        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? {
+          ...m,
+          running: false,
+          stopped: interrupted || m.stopped,
+          // After a stop no tool_result event arrives for in-flight calls;
+          // close their cards so they don't stay "执行中" forever.
+          tools: interrupted ? (m.tools || []).map((t) => (t.done ? t : { ...t, ok: false, done: true, summary: '已中断' })) : m.tools,
+          text: interrupted ? m.text : (m.text || '') + '\n\n⚠ ' + (d.error || '出错'),
+        } : m)) }
       })
     })
     return () => off?.()
@@ -375,31 +559,47 @@ function App() {
         case 'tool_call_start': apply(sessionId, 'assistant', (m) => { const tools = m.tools || []; tools.push({ name: ev.ToolName, title: '', arguments: '', summary: '执行中…', ok: true, done: false }); return { ...m, tools, thinkingCollapsed: true } }); break
         case 'tool_result': apply(sessionId, 'assistant', (m) => { const tools = (m.tools || []).map((t) => (t.done ? t : { ...t, summary: ev.ToolResult, ok: !ev.ToolIsError, done: true, durationMs: ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined })); return { ...m, tools, thinkingCollapsed: true } }); break
         case 'turn_complete': apply(sessionId, 'assistant', (m) => ({ ...m, running: false, thinkingCollapsed: true })); refreshRunning(); break
-        case 'error': apply(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
+        case 'steer_check':
+          // The agent finished a round of tool calls and is parked, waiting
+          // for pending user input to steer the next LLM call. Queued text is
+          // drained, shown in the transcript and injected; an empty queue
+          // replies "" to unblock the loop without steering.
+          answerSteer(sessionId)
+          break
+        case 'error': {
+          const interrupted = ev.Result?.ExitReason === 'interrupted' || ev.Result?.ExitReason === 'cancelled'
+          apply(sessionId, 'assistant', (m) => ({ ...m, running: false, stopped: interrupted || m.stopped }))
+          break
+        }
       }
       if (sessionId === currentId) scrollToBottom()
       refreshRunning()
       refreshProvider()
     })
     return () => off?.()
-  }, [currentId, refreshRunning, scrollToBottom, refreshProvider])
+  }, [currentId, refreshRunning, scrollToBottom, refreshProvider, answerSteer])
 
-  const send = useCallback(() => {
-    const text = input.trim()
-    if (!text) return
-    setInput('')
-    const ts = Date.now()
-    const tsStr = new Date().toISOString()
-    const sid = currentId
-    const aid = `a-${ts}`
-    setSessionMsgs(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: aid, role: 'assistant', running: true, text: '', ts: tsStr },
-    ])
-    AgentService.SendMessage(text).catch(() => {})
-    setRunningSet((prev) => new Set(prev).add(sid))
-    scrollToBottom()
-  }, [input, currentId, setSessionMsgs, scrollToBottom])
+  // agent:idle fires after a turn goroutine has fully exited (running already
+  // reset on the backend). A NATURAL completion auto-sends whatever the user
+  // queued while the turn ran (same drain semantics as TUI's TurnComplete);
+  // stopped/errored turns leave the queue for the user to review, drop or
+  // send manually.
+  useEffect(() => {
+    const off = Events.On('agent:idle', (event) => {
+      const d = event.data as { sessionId: string; reason: string }
+      if (d.sessionId !== currentId || d.reason !== 'complete') return
+      const queued = pendingRef.current[d.sessionId] || []
+      if (queued.length === 0) return
+      sendText(takePending(d.sessionId))
+    })
+    return () => off?.()
+  }, [currentId, sendText, takePending])
+
+  // stopChat aborts the running turn in the current session (backend cancels
+  // the turn ctx — same mechanism as tui Ctrl+C / acp prompt cancel).
+  const stopChat = useCallback(() => {
+    AgentService.Stop().catch(() => {})
+  }, [])
 
   const toggleThinking = useCallback((id: string) => setSessionMsgs(currentId, (prev) => prev.map((m) => (m.id === id ? { ...m, thinkingCollapsed: !m.thinkingCollapsed } : m))), [currentId, setSessionMsgs])
 
@@ -481,15 +681,16 @@ function App() {
                           {m.parts.map((p, i) => {
                             if (p.type === 'thinking') return <ThinkingPart key={i} text={p.text || ''} />
                             if (p.type === 'tool') return <ToolCard key={i} name={p.name || ''} title={p.title} args={p.args} summary={p.summary || ''} ok={!!p.ok} />
-                            return <div key={i} className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg }}>{p.text}</ReactMarkdown></div>
+                            return <div key={i} className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg, table: TableScroller }}>{p.text}</ReactMarkdown></div>
                           })}
                         </div>
                       ) : (
                         <>
                           {m.thinking ? <ThinkingBlock thinking={m.thinking} collapsed={!!m.thinkingCollapsed} onToggle={() => toggleThinking(m.id)} /> : null}
                           {(m.tools || []).map((t, i) => <ToolCard key={i} name={t.name} title={t.title} args={t.arguments} summary={t.summary} ok={t.ok} durationMs={t.durationMs} />)}
-                          {m.text ? <div className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg }}>{m.text}</ReactMarkdown></div> : null}
+                          {m.text ? <div className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg, table: TableScroller }}>{m.text}</ReactMarkdown></div> : null}
                           {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{state.status === 'thinking' ? '正在思考…' : '正在执行…'}</span> : null}
+                          {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
                         </>
                       )}
                       {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
@@ -509,34 +710,52 @@ function App() {
           </div>
 
           <footer className="composer">
+            {pendMsgs.length > 0 && (
+              <div className="pending-bar">
+                <div className="pending-head">
+                  <span className="pending-title">
+                    {isCurrentRunning ? '⏸ 待发送 · 会在本轮工具调用结束后自动插入' : '待发送消息'}
+                  </span>
+                  <span className="pending-actions">
+                    <button className="pending-send" disabled={sendingNow} onClick={sendPendingNow}>
+                      {sendingNow ? '正在停止…' : isCurrentRunning ? '立即发送 · 打断' : '发送'}
+                    </button>
+                    <button className="pending-clear" onClick={() => clearPending(currentId)} title="清空待发送队列">清空</button>
+                  </span>
+                </div>
+                {pendMsgs.map((t, i) => (
+                  <div className="pending-item" key={`${i}-${t.slice(0, 8)}`}>
+                    <span className="pending-bullet">·</span>
+                    <span className="pending-text" title={t}>{t}</span>
+                    <button className="pending-del" title="撤回该条" onClick={() => dropPending(currentId, i)}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
             <div className="composer-box">
-              <textarea className="composer-input" ref={composerRef} value={input} onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
-                placeholder="发送消息给 Tachi…（Enter 发送，Shift+Enter 换行）" />
+              <div className="composer-input-wrap">
+                <textarea className="composer-input" ref={composerRef} value={input} onChange={(e) => setInput(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+                  placeholder={isCurrentRunning ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行）'} />
+                {isCurrentRunning && (
+                  <button className="stop-btn" title="停止生成" onClick={stopChat} aria-label="停止生成">
+                    <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
+                  </button>
+                )}
+              </div>
               <div className="composer-actions">
                 <button className="icon-btn" title="附件">＋</button>
-                <button className="send-btn" onClick={send} disabled={!input.trim()}>
+                <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
-                  <span>发送</span>
+                  <span>{isCurrentRunning ? '排队' : '发送'}</span>
                 </button>
               </div>
             </div>
             <div className="composer-status">
               <div className="work-dir-wrap">
-                {editingWd ? (
-                  <input className="work-dir-input" autoFocus value={wdInput}
-                    onChange={(e) => setWdInput(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') { e.stopPropagation(); commitWorkDir(currentId, wdInput) }
-                      else if (e.key === 'Escape') { e.stopPropagation(); setEditingWd(false) }
-                    }}
-                    onBlur={() => setEditingWd(false)} />
-                ) : (
-                  <span className="work-dir" title="工作目录（点击修改）" onClick={() => { setWdInput(workDir); setEditingWd(true) }}>
-                    <span className="work-dir-ico">⌂</span>{workDir || '未设置工作目录'}
-                  </span>
-                )}
+                <span className="work-dir" title="工作目录（点击选择）" onClick={() => pickWorkDir(currentId)}>
+                  <span className="work-dir-ico">⌂</span>{workDir || '未设置工作目录'}
+                </span>
               </div>
               {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
                 : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>

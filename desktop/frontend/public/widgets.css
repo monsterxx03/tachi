@@ -77,10 +77,24 @@
 .assistant-text a { color: var(--accent-2); text-decoration: none; border-bottom: 1px solid rgba(68, 96, 224, 0.3); }
 .assistant-text a:hover { border-bottom-color: var(--accent-2); }
 .assistant-text hr { border: none; border-top: 1px solid var(--border-2); margin: 1.2em 0; }
+/* Tables render inside .table-scroll (see App.tsx TableScroller): the wrapper
+   owns the vertical rhythm and clips horizontal overflow, so a table wider
+   than the card scrolls inside it instead of bursting out of the layout.
+   width: 100% makes tables that fit stretch across the whole reading surface
+   — auto table layout keeps column widths content-driven, and when the
+   columns' minimum widths exceed the card the table overflows the wrapper,
+   which is exactly when the horizontal scrollbar appears. */
+.assistant-text .table-scroll {
+  overflow-x: auto;
+  margin: 0.8em 0;
+  max-width: 100%;
+  -webkit-overflow-scrolling: touch;
+}
 .assistant-text table {
   border-collapse: separate;
   border-spacing: 0;
-  margin: 0.8em 0;
+  margin: 0;
+  width: 100%;
   font-size: 13px;
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
@@ -90,7 +104,9 @@
 .assistant-text tr:last-child td { border-bottom: none; }
 .assistant-text th { background: rgba(91, 124, 255, 0.07); font-weight: 620; color: var(--text); }
 
-/* Thinking block */
+/* Thinking block: a compact "thinking ▸" label that expands the reasoning
+   transcript — reads like a file-folder disclosure row instead of a lone
+   icon floating in the message. */
 .thinking-block {
   border: none;
   background: transparent;
@@ -100,15 +116,32 @@
 .thinking-head {
   display: inline-flex;
   align-items: center;
-  padding: 4px 2px;
+  gap: 5px;
+  padding: 2px 7px;
+  /* Pull the hover pill back to the text start so the label stays aligned
+     with the message body. */
+  margin-left: -7px;
+  border-radius: 6px;
   cursor: pointer;
   user-select: none;
   color: var(--text-faint);
-  font-size: 12px;
-  transition: color 0.12s ease;
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  transition: background 0.12s ease, color 0.12s ease;
 }
-.thinking-head:hover { color: var(--accent); }
-.thinking-ico { font-size: 10px; }
+.thinking-head:hover { color: var(--accent-2); background: rgba(91, 124, 255, 0.05); }
+.thinking-ico {
+  font-size: 9px;
+  line-height: 1;
+  /* Chevron points right when collapsed, rotates down when open. */
+  transform: rotate(0deg);
+  transition: transform 0.15s var(--ease);
+}
+.thinking-head.open .thinking-ico { transform: rotate(90deg); }
+.thinking-label {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-weight: 560;
+}
 .thinking-body {
   padding: 2px 0 8px 4px;
   border-left: 2px solid var(--border);
@@ -133,7 +166,10 @@
   font-size: 11.5px;
   flex-shrink: 0;
 }
-.tool-head:hover { background: transparent; }
+/* A whisper of a wash on hover — enough to say "this line is clickable"
+   without bringing back the old floating card. */
+.tool-head:hover { background: rgba(91, 124, 255, 0.05); }
+.tool-head { transition: background 0.12s ease; }
 
 /* Thinking badge (shown above the user message, folded by default) */
 .reminder-tag {
@@ -218,11 +254,13 @@
 }
 .tool-args {
   margin: 8px 0 0;
-  padding: 9px 11px;
-  background: linear-gradient(180deg, rgba(20, 22, 31, 0.04), rgba(20, 22, 31, 0.06));
-  border: 1px solid var(--border);
-  border-radius: 7px;
-  box-shadow: inset 0 1px 3px rgba(16, 20, 40, 0.04);
+  padding: 8px 11px;
+  /* Soft inset wash, no outer border/shadow — reads like the code blocks in
+     the message body rather than a separate card. */
+  background: rgba(16, 20, 40, 0.035);
+  border: none;
+  border-radius: 8px;
+  box-shadow: none;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
   line-height: 1.55;
@@ -239,25 +277,24 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin: 8px 0 4px;
+  margin: 8px 0 0;
 }
 .tool-args-label { font-size: 11.5px; color: var(--text-faint); }
 .tool-copy {
-  width: 24px;
-  height: 24px;
+  width: 22px;
+  height: 22px;
   padding: 0;
   display: grid;
   place-items: center;
-  border: 1px solid var(--border-2);
+  border: none;
   border-radius: 6px;
-  background: rgba(255, 255, 255, 0.7);
+  background: transparent;
   color: var(--text-faint);
   cursor: pointer;
-  transition: background 0.12s var(--ease), color 0.12s var(--ease), border-color 0.12s var(--ease);
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
   flex-shrink: 0;
 }
-.tool-copy:hover { background: var(--accent-soft); color: var(--accent-2); border-color: rgba(91, 124, 255, 0.42); }
-.tool-meta { display: flex; align-items: center; gap: 8px; }
+.tool-copy:hover { background: var(--accent-soft); color: var(--accent-2); }
 
 /* Running session spinner in the sidebar */
 .spin-dot {

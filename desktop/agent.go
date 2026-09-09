@@ -920,6 +920,17 @@ type sessionRun struct {
 	turnCancel context.CancelFunc
 	state      AgentState
 
+	// steerCh is this session's current-turn steer channel (buffered, cap 1):
+	// the frontend writes agent.SteerInput into it at steer points so the
+	// agent loop can inject pending user input between tool calls. Recreated
+	// per turn; never closed (a send on a closed channel panics) — cleared to
+	// nil when the turn goroutine exits.
+	steerCh chan agent.SteerInput
+	// turnDone is closed once the current turn's goroutine has fully exited
+	// (running already reset, agent:idle already emitted). StopAndSend waits on
+	// it so "stop, then immediately reply" never races a still-running turn.
+	turnDone chan struct{}
+
 	// cost/credit are the session's cumulative CNY cost and ledger credit
 	// ("积分"), rebuilt from the usage ledger (see rebuildCostCredit) — the
 	// same ledger aggregation the TUI /usage report uses.
@@ -1163,20 +1174,46 @@ func (d *desktopApp) startTurn(text string) {
 		}
 	}
 	r.turnCtx, r.turnCancel = ctx, cancel
+	// Steer wiring: the agent emits steer_check and parks on steerCh between
+	// tool calls; the frontend answers via AgentService.Steer. Buffered (cap 1)
+	// so the reply can never be lost to a select+default send racing ahead of
+	// the agent's receive. Per turn, never closed — Steer only writes while the
+	// turn is running (r.steerCh is cleared to nil on exit).
+	steerCh := make(chan agent.SteerInput, 1)
+	turnDone := make(chan struct{})
+	r.steerCh = steerCh
+	r.turnDone = turnDone
 	d.mu.Unlock()
 
 	go func() {
+		// endReason describes why the stream finished; surfaced to the frontend
+		// in the agent:idle event so it can decide whether to auto-flush the
+		// pending queue (only a natural completion auto-flushes — after a stop
+		// or an error the queue stays for the user to review/clear).
+		endReason := "error"
 		defer func() {
 			d.mu.Lock()
 			r.running = false
+			r.steerCh = nil
+			r.turnDone = nil
 			d.mu.Unlock()
+			d.emitIdle(id, endReason)
+			close(turnDone)
 		}()
 		d.setSessionState(id, AgentState{Status: StatusThinking, Label: "思考", Detail: "理解中…"})
 
 		ch := r.agent.RunConversationStream(ctx, history, text, d.systemPrompt, llm.ChatOptions{
 			MaxTokens: d.cfg.MaxTokens,
-		})
+		}, agent.WithSteerChannel(steerCh))
 		for ev := range ch {
+			switch ev.Type {
+			case agent.AgentEventTurnComplete:
+				endReason = "complete"
+			case agent.AgentEventError:
+				if ev.Result != nil && (ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled) {
+					endReason = "interrupted"
+				}
+			}
 			d.handleEvent(id, ev)
 		}
 	}()
@@ -1195,6 +1232,89 @@ func (d *desktopApp) stopTurn() {
 		c()
 	}
 	d.stopSimulatedTurn()
+}
+
+// Steer answers the agent's steer_check for a session: it delivers the text
+// the frontend queued while the turn was running so the agent loop can inject
+// it at the current steer point (after the just-finished tool calls, before
+// the next LLM call). Empty text is the "nothing queued" signal that simply
+// unblocks the loop.
+//
+// The channel is drained before writing so a reply that races a timed-out or
+// already-answered steer point can neither wedge the loop nor leave a stale
+// value behind for the next steer point to consume.
+func (s *AgentService) Steer(sessionID, text string) string {
+	d := s.desk
+	d.mu.Lock()
+	r := d.getRun(sessionID)
+	ch := r.steerCh
+	running := r.running
+	d.mu.Unlock()
+	if ch == nil || !running {
+		return "not running"
+	}
+	select {
+	case <-ch:
+	default:
+	}
+	select {
+	case ch <- agent.SteerInput{Text: text}:
+		return "ok"
+	default:
+		return "dropped"
+	}
+}
+
+// StopAndSend stops the current turn (if any) and immediately starts a new one
+// with text — the "send now" action for the pending queue. Unlike Stop
+// followed by SendMessage, it waits for the previous turn's goroutine to fully
+// exit first, so the new turn can never race the old one for run state. In the
+// simulated fallback it stops the sim and waits for it to wind down.
+func (s *AgentService) StopAndSend(text string) string {
+	if text == "" {
+		return "empty"
+	}
+	d := s.desk
+	d.mu.Lock()
+	id := d.activeID
+	if id == "" {
+		d.mu.Unlock()
+		return "no current session"
+	}
+	r := d.getRun(id)
+	cancel := r.turnCancel
+	done := r.turnDone
+	noAgent := r.agent == nil
+	wasRunning := r.running
+	d.mu.Unlock()
+
+	if noAgent {
+		d.stopSimulatedTurn()
+		// The sim goroutine clears simCh when it finishes; poll briefly so the
+		// new turn doesn't bounce off the still-active sim lock.
+		for i := 0; i < 40; i++ {
+			d.mu.Lock()
+			ch := d.simCh
+			d.mu.Unlock()
+			if ch == nil {
+				break
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	} else if wasRunning {
+		if cancel != nil {
+			cancel()
+		}
+		if done != nil {
+			select {
+			case <-done:
+			case <-time.After(10 * time.Second):
+				return "stop timeout"
+			}
+		}
+	}
+	d.startTurn(text)
+	return "ok"
 }
 
 // handleEvent maps AgentEvent types to the running state, and forwards the raw
@@ -1272,9 +1392,23 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		if ev.Result != nil && ev.Result.Error != nil {
 			detail = ev.Result.Error.Error()
 		}
-		d.setSessionState(id, AgentState{Status: StatusError, Label: "出错", Detail: detail})
+		// User-initiated stop is a normal conclusion, NOT an error — same
+		// semantics as tui (Ctrl+C), acp (prompt cancel) and channel (/stop).
+		// Keep the partial history so the next turn can continue from it.
+		interrupted := ev.Result != nil &&
+			(ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled)
+		if interrupted {
+			d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已停止"})
+			d.mu.Lock()
+			if r := d.getRun(id); ev.Messages != nil {
+				r.history = ev.Messages
+			}
+			d.mu.Unlock()
+		} else {
+			d.setSessionState(id, AgentState{Status: StatusError, Label: "出错", Detail: detail})
+		}
 		if d.app != nil {
-			d.app.Event.Emit("agent:error", map[string]any{"sessionId": id, "error": detail})
+			d.app.Event.Emit("agent:error", map[string]any{"sessionId": id, "error": detail, "interrupted": interrupted})
 		}
 	}
 	// Forward the raw event for every session so the frontend can keep a
@@ -1311,6 +1445,7 @@ func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) {
 			select {
 			case <-stop:
 				d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已停止"})
+				d.emitIdle(id, "interrupted")
 				d.endSimulatedTurn(stop)
 				return
 			case <-time.After(1400 * time.Millisecond):
@@ -1319,11 +1454,27 @@ func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) {
 		}
 		select {
 		case <-stop:
+			d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已停止"})
+			d.emitIdle(id, "interrupted")
+			d.endSimulatedTurn(stop)
+			return
 		case <-time.After(1200 * time.Millisecond):
 		}
 		d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已完成回答"})
+		d.emitIdle(id, "complete")
 		d.endSimulatedTurn(stop)
 	}()
+}
+
+// emitIdle notifies the frontend that a turn goroutine has fully finished.
+// For real agents it is emitted from the turn goroutine's defer (after running
+// is reset); the simulated fallback calls it explicitly at both exit paths.
+// reason ∈ {complete, interrupted, error} — the frontend only auto-flushes its
+// pending queue on "complete".
+func (d *desktopApp) emitIdle(id, reason string) {
+	if d.app != nil {
+		d.app.Event.Emit("agent:idle", map[string]any{"sessionId": id, "reason": reason})
+	}
 }
 
 func (d *desktopApp) stopSimulatedTurn() {

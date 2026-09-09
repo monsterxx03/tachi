@@ -43,7 +43,9 @@ function ThinkingBlock({ thinking, collapsed, onToggle }: { thinking: string; co
   const lines = thinking.split('\n')
   return (
     <div className="thinking-block">
-      <div className="thinking-head" onClick={onToggle} title="思考过程"><span className="thinking-ico">◐</span></div>
+      <div className={`thinking-head${collapsed ? '' : ' open'}`} onClick={onToggle} title={collapsed ? '点击展开思考过程' : '点击收起思考过程'} role="button">
+        <span className="thinking-ico">▸</span><span className="thinking-label">thinking</span>
+      </div>
       {!collapsed && <div className="thinking-body" ref={bodyRef}>{lines.map((l, i) => <div key={i} className="thinking-line">{l}</div>)}</div>}
     </div>
   )
@@ -69,11 +71,12 @@ function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string
         <span className="tool-ico">⚙</span><span className="tool-name">{name}</span>
         {title ? <span className="tool-title">{title}</span> : null}
         <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>
+        {durationMs ? <span className="tool-dur" title="耗时">{fmtDur(durationMs)}</span> : null}
+        {summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copy(summary) }}><CopyIcon /></button> : null}
         {long ? <span className="tool-toggle">{expanded ? '收起' : '展开'}</span> : null}
       </div>
       {expanded && args ? <div className="tool-args-wrap"><div className="tool-args-bar"><span className="tool-args-label">参数</span><button className="tool-copy" title="复制参数" onClick={(e) => { e.stopPropagation(); copy(args) }}><CopyIcon /></button></div><pre className="tool-args">{prettyArgs}</pre></div> : null}
       {expanded && summary ? <div className="tool-summary">{summary}</div> : null}
-      <div className="tool-meta">{summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copy(summary) }}><CopyIcon /></button> : null}{durationMs ? <span>{fmtDur(durationMs)}</span> : null}</div>
     </div>
   )
 }
