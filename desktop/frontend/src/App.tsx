@@ -1256,6 +1256,10 @@ function App() {
                       }
                       if (e.key === 'Escape') { e.preventDefault(); closeAt(); return }
                     }
+                    // Esc hands the focus to the message area (the Vim-like keys
+                    // live there). Not listed in the shortcut sheet on purpose:
+                    // it is a focus affordance, not a feature shortcut.
+                    if (e.key === 'Escape') { e.preventDefault(); chatRef.current?.focus(); return }
                     if (e.key !== 'Enter' || e.shiftKey) return
                     // Enter while an IME is composing confirms the candidate
                     // (选词), it must not send the message.
@@ -1355,11 +1359,13 @@ function App() {
         <div className="confirm-overlay" onClick={() => setShortcutsOpen(false)}>
           <div className="confirm-box shortcuts-box" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-msg">快捷键</div>
+            <div className="shortcut-section">全局</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
-            <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息（消息区聚焦时）</span></div>
+            <div className="shortcut-section">消息区（聚焦时）</div>
+            <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息</span></div>
             <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>
             <div className="shortcut-row"><kbd>Ctrl U / D</kbd><span>上 / 下翻半页</span></div>
             <div className="confirm-actions">

@@ -191,6 +191,17 @@
 .btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
 .btn:disabled:hover { background: transparent; color: var(--text-dim); border-color: var(--border-2); }
 .shortcuts-box { min-width: 260px; }
+/* Section label inside the shortcut sheet: shortcuts that only work in one
+   place (e.g. the message area) get their own block. */
+.shortcut-section {
+  margin: 14px 0 2px;
+  font-size: 10.5px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-faint);
+}
+.shortcut-section:first-of-type { margin-top: 6px; }
 .shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
 .shortcut-row:last-of-type { border-bottom: none; }
 .shortcut-row kbd {
