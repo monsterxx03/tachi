@@ -1,6 +1,7 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
+import rehypeHighlight from 'rehype-highlight'
 import { Dialogs, Events } from '@wailsio/runtime'
 import {
   AgentService,
@@ -23,7 +24,7 @@ import {
 import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
   ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
-  FileCard, fileFromSendFileArgs,
+  FileCard, fileFromSendFileArgs, PreBlock,
   SettingsIcon, UsageIcon, MCPIcon,
 } from './components'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
@@ -119,7 +120,14 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: str
   ), [workDir])
   return (
     <div className="assistant-text">
-      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg, table: TableScroller }}>{text}</ReactMarkdown>
+      {/* rehypeHighlight tokenises fenced code; PreBlock turns ```mermaid into a
+          diagram and leaves everything else as a plain <pre>. */}
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        rehypePlugins={[rehypeHighlight]}
+        components={{ img: MdImg, table: TableScroller, pre: PreBlock }}>
+        {text}
+      </ReactMarkdown>
     </div>
   )
 })

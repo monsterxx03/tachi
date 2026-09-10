@@ -359,3 +359,162 @@
 /* Context usage ring */
 .ctx-ring { display: block; filter: var(--shadow-1); }
 
+
+/* ── Syntax highlighting (rehype-highlight / highlight.js tokens) ─────────── */
+/* Mapped onto the app's semantic tokens rather than a vendored hljs theme, so
+   light and dark both stay legible without a second stylesheet. */
+.hljs-comment,
+.hljs-quote { color: var(--text-faint); font-style: italic; }
+.hljs-keyword,
+.hljs-literal,
+.hljs-built_in,
+.hljs-type,
+.hljs-selector-tag,
+.hljs-section,
+.hljs-doctag { color: var(--accent-2); }
+.hljs-string,
+.hljs-attr,
+.hljs-addition,
+.hljs-regexp,
+.hljs-meta .hljs-string { color: var(--green); }
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-meta,
+.hljs-variable.constant_ { color: var(--amber); }
+.hljs-title,
+.hljs-name,
+.hljs-selector-id,
+.hljs-selector-class,
+.hljs-function .hljs-title { color: var(--code-ink); font-weight: 600; }
+.hljs-attribute,
+.hljs-property,
+.hljs-variable,
+.hljs-template-variable,
+.hljs-params { color: var(--text); }
+.hljs-deletion { color: var(--red); }
+.hljs-emphasis { font-style: italic; }
+.hljs-strong { font-weight: 650; }
+
+/* ── Mermaid diagrams ─────────────────────────────────────────────────────── */
+.mermaid {
+  margin: 0.8em 0;
+  padding: 12px 14px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  overflow-x: auto;
+  text-align: center;
+}
+.mermaid svg { max-width: 100%; height: auto; }
+
+/* ── Copy buttons on code blocks & diagrams ───────────────────────────────── */
+/* The wrapper is positioned so the button can float over the block without
+   scrolling with it; it fades in on hover (or stays visible right after a copy,
+   showing the confirmation). */
+.code-wrap,
+.mermaid-wrap { position: relative; }
+/* Button row floats over the block (top-right) so it never scrolls with it. */
+.code-actions {
+  position: absolute;
+  top: calc(0.8em + 6px);
+  right: 8px;
+  z-index: 1;
+  display: flex;
+  gap: 4px;
+}
+.code-copy {
+  height: 22px;
+  min-width: 22px;
+  padding: 0 5px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel-solid);
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s var(--ease), background 0.12s var(--ease), color 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.code-wrap:hover .code-actions .code-copy,
+.mermaid-wrap:hover .code-actions .code-copy,
+.code-copy:focus-visible,
+.code-copy.is-done { opacity: 1; }
+.code-copy:hover { color: var(--accent-2); border-color: var(--accent-line); }
+.code-copy.is-done { color: var(--green); border-color: var(--green); }
+.code-copy-done { font-size: 11px; white-space: nowrap; }
+
+/* Diagrams are clickable ("show me this bigger"). */
+.mermaid { cursor: zoom-in; }
+
+/* ── Mermaid overlay (full-viewport lightbox) ─────────────────────────────── */
+/* Dimmed backdrop, diagram centred, controls as a floating pill — no dialog
+   window: click any blank area (or Esc) to dismiss. Rendered via a portal, so
+   no ancestor can pin it into a message box. */
+.mermaid-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  background: var(--scrim-strong);
+  display: flex;
+  padding: 40px 32px 84px;
+  animation: scrim-in 0.16s ease both;
+}
+.mermaid-stage {
+  /* margin:auto centres without clipping when the diagram outgrows the space
+     (align-items:center would cut off its top/left edge under overflow). */
+  margin: auto;
+  max-width: 100%;
+  max-height: 100%;
+  overflow: auto;
+}
+/* Grab-to-pan affordance, only once the diagram actually overflows. */
+.mermaid-stage.is-pannable { cursor: grab; }
+.mermaid-stage.is-dragging { cursor: grabbing; user-select: none; }
+.mermaid-zoom {
+  display: inline-block;
+  width: max-content;
+  padding: 16px 18px;
+  background: var(--panel-solid);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-4);
+}
+.mermaid-stage svg { max-width: none !important; height: auto; }
+.mermaid-controls {
+  position: absolute;
+  bottom: 22px;
+  left: 50%;
+  transform: translateX(-50%);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 8px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  box-shadow: var(--shadow-2);
+}
+.mm-btn {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 12px;
+  min-width: 26px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), color 0.12s var(--ease);
+}
+.mm-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
+.mermaid-controls .code-copy { opacity: 1; }
+.mermaid-zoom-label {
+  min-width: 46px;
+  text-align: center;
+  font-size: 11.5px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.mm-sep { width: 1px; height: 16px; background: var(--border-2); margin: 0 3px; }

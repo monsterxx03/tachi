@@ -191,3 +191,26 @@ export function insertRefText(value: string, caret: number, text: string, traili
   const insert = lead + text + (trailingSpace ? ' ' : '')
   return { value: before + insert + after, caret: caret + insert.length }
 }
+
+
+// copyText writes text to the clipboard. The async clipboard API can be
+// unavailable or reject in a webview without permission, so a hidden textarea
+// (the legacy execCommand path) stays as the fallback.
+export function copyText(text: string): void {
+  if (!text) return
+  const fallback = () => {
+    try {
+      const ta = document.createElement('textarea')
+      ta.value = text
+      document.body.appendChild(ta)
+      ta.select()
+      document.execCommand('copy')
+      document.body.removeChild(ta)
+    } catch { /* ignore */ }
+  }
+  try {
+    navigator.clipboard.writeText(text).catch(fallback)
+  } catch {
+    fallback()
+  }
+}

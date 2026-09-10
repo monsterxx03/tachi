@@ -12,25 +12,75 @@ import (
 	"github.com/monsterxx03/tachi/pkg/shutil"
 )
 
+// PromptOption customises the generated system prompt. Currently the only knob
+// is the frontend capability section (see WithFrontendCapabilities).
+type PromptOption func(*promptOptions)
+
+type promptOptions struct {
+	frontendSections []string
+}
+
+// WithFrontendCapabilities appends sections describing what the frontend the
+// agent is embedded in can render or do (e.g. the desktop client renders Mermaid
+// diagrams). They are placed before the user's extra_system_prompt, so a
+// user-configured prompt still lands last.
+func WithFrontendCapabilities(sections ...string) PromptOption {
+	return func(o *promptOptions) {
+		for _, s := range sections {
+			if strings.TrimSpace(s) != "" {
+				o.frontendSections = append(o.frontendSections, s)
+			}
+		}
+	}
+}
+
+// MermaidCapabilityPrompt tells the model that this frontend renders Mermaid
+// diagrams, and when a diagram is worth drawing. Only frontends that actually
+// render them should attach it (desktop does; TUI and plain ACP clients do not),
+// otherwise the model would emit diagrams nobody can see.
+const MermaidCapabilityPrompt = `## Diagramming (this client renders Mermaid)
+
+This client renders GitHub-flavoured Markdown AND Mermaid diagrams: a fenced
+` + "```mermaid" + ` block is turned into a real, zoomable diagram for the user. Draw one
+whenever structure is easier to see than to read:
+
+- flow, process, pipeline → flowchart (or graph)
+- sequence, ordering, timing, request lifecycle → sequenceDiagram
+- state machine, lifecycle → stateDiagram-v2
+- relationships, schema, types → classDiagram / erDiagram
+- hierarchy, decomposition → mindmap, or flowchart with subgraphs
+
+Times to use it: explaining how something works end to end, walking through a
+request/response chain, comparing options, or describing how components relate.
+Times not to: a single fact, a short answer, or anything that reads fine as one
+sentence — a diagram that adds nothing is noise.
+
+Keep each diagram focused: roughly ≤15 nodes, short labels, one idea per diagram;
+split a large picture into a few small ones instead of one sprawling graph.
+Always keep the prose around it — a sentence of framing before, the takeaway
+after. Emit valid Mermaid: quote labels containing parentheses, commas or colons
+(A["merge (fast)"]), keep HTML out of labels, and never let colour alone carry
+meaning.`
+
 // BuildSystemPrompt constructs the Tachi system prompt with agent identity,
 // instruction hierarchy, reply language, and environment info.
 // If cwd is empty, config.FindProjectRoot() is used as fallback.
 // sessionID can be empty (no current session).
 // extra is optional user-supplied system prompt content (config
 // extra_system_prompt); when non-empty it is appended at the end.
-func BuildSystemPrompt(language string, cwd string, sessionID string, extra string) string {
-	return buildSystemPrompt(language, cwd, nil, sessionID, extra)
+func BuildSystemPrompt(language string, cwd string, sessionID string, extra string, opts ...PromptOption) string {
+	return buildSystemPrompt(language, cwd, nil, sessionID, extra, opts...)
 }
 
 // BuildSystemPromptWithRoots is BuildSystemPrompt plus additional workspace
 // roots (multi-root sessions). additionalRoots are absolute paths; they are
 // listed so the model knows the extra roots exist and uses absolute paths
 // for them — relative paths still resolve against cwd only.
-func BuildSystemPromptWithRoots(language string, cwd string, additionalRoots []string, sessionID string, extra string) string {
-	return buildSystemPrompt(language, cwd, additionalRoots, sessionID, extra)
+func BuildSystemPromptWithRoots(language string, cwd string, additionalRoots []string, sessionID string, extra string, opts ...PromptOption) string {
+	return buildSystemPrompt(language, cwd, additionalRoots, sessionID, extra, opts...)
 }
 
-func buildSystemPrompt(language string, cwd string, additionalRoots []string, sessionID string, extra string) string {
+func buildSystemPrompt(language string, cwd string, additionalRoots []string, sessionID string, extra string, opts ...PromptOption) string {
 	var sb strings.Builder
 
 	// ── Identity + Core traits ──────────────────────────────────────────────
@@ -121,6 +171,20 @@ YOU MUST:
 	}
 	if sessionID != "" {
 		fmt.Fprintf(&sb, "- Session ID: %s\n", sessionID)
+	}
+
+	// ── Frontend capabilities ─────────────────────────────────────────────
+	// What the client on the other end can render or do (e.g. the desktop app
+	// renders Mermaid diagrams). Placed before the user's extra prompt so a
+	// user-configured prompt still lands last.
+	o := promptOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	for _, section := range o.frontendSections {
+		sb.WriteString("\n\n" + strings.TrimSpace(section) + "\n")
 	}
 
 	// ── Extra system prompt (user-configured) ─────────────────────────────

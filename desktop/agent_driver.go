@@ -27,7 +27,10 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 	}
 	cfg := boot.Config
 	d.cfg = cfg
-	d.systemPrompt = agent.BuildSystemPrompt(cfg.Language, "", "", cfg.ExtraSystemPrompt)
+	// The desktop frontend renders Mermaid diagrams (and a zoomable overlay for
+	// them), so the model is told it may draw one when structure beats prose.
+	d.systemPrompt = agent.BuildSystemPrompt(cfg.Language, "", "", cfg.ExtraSystemPrompt,
+		agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt))
 	d.sm = d.newSessionManager()
 	// Build the shared MCP manager (when any servers are configured) and connect
 	// in the background. It is shared across all per-session agents; the

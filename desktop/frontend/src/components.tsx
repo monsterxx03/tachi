@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type RefObject } from 'react'
+import { createPortal } from 'react-dom'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { actOnKey, fmtDur, humanize, toLocalAsset } from './lib'
+import { actOnKey, copyText, fmtDur, humanize, toLocalAsset } from './lib'
 import type { AttachmentInfo } from './types'
 
 function ContextRing({ estimate, window: w }: { estimate: number; window: number }) {
@@ -118,8 +119,6 @@ function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string
   const [expanded, setExpanded] = useState(false)
   const long = ((args?.length || 0) + summary.length) > 120
   const prettyArgs = (() => { if (!args) return ''; try { return JSON.stringify(JSON.parse(args), null, 2) } catch { return args } })()
-  const fallbackCopy = (text: string) => { try { const ta = document.createElement('textarea'); ta.value = text; document.body.appendChild(ta); ta.select(); document.execCommand('copy'); document.body.removeChild(ta) } catch { /* ignore */ } }
-  const copy = (text: string) => { if (!text) return; try { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)) } catch { fallbackCopy(text) } }
   return (
     <div className="tool-card">
       <div className="tool-head" role="button" tabIndex={0} aria-expanded={expanded}
@@ -128,10 +127,10 @@ function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string
         {title ? <span className="tool-title">{title}</span> : null}
         <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>
         {durationMs ? <span className="tool-dur" title="耗时">{fmtDur(durationMs)}</span> : null}
-        {summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copy(summary) }}><CopyIcon /></button> : null}
+        {summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copyText(summary) }}><CopyIcon /></button> : null}
         {long ? <span className="tool-toggle">{expanded ? '收起' : '展开'}</span> : null}
       </div>
-      {expanded && args ? <div className="tool-args-wrap"><div className="tool-args-bar"><span className="tool-args-label">参数</span><button className="tool-copy" title="复制参数" onClick={(e) => { e.stopPropagation(); copy(args) }}><CopyIcon /></button></div><pre className="tool-args">{prettyArgs}</pre></div> : null}
+      {expanded && args ? <div className="tool-args-wrap"><div className="tool-args-bar"><span className="tool-args-label">参数</span><button className="tool-copy" title="复制参数" onClick={(e) => { e.stopPropagation(); copyText(args || '') }}><CopyIcon /></button></div><pre className="tool-args">{prettyArgs}</pre></div> : null}
       {expanded && summary ? <div className="tool-summary">{summary}</div> : null}
     </div>
   )
@@ -199,6 +198,222 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
         </div>
       </div>
     </>
+  )
+}
+
+// MermaidDiagram renders a ```mermaid fence as a diagram.
+//
+// mermaid is imported lazily, so the library only loads when a diagram actually
+// appears in a reply, and rendering is debounced: while the fence is still being
+// streamed the source changes every frame, which would otherwise re-parse and
+// re-layout the diagram ~60x/s. Anything that does not parse (still incomplete,
+// or genuinely invalid) falls back to showing the raw code instead of an empty
+// box.
+export const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: string }) {
+  const [svg, setSvg] = useState('')
+  const [failed, setFailed] = useState(false)
+  const [open, setOpen] = useState(false)
+  const [dark, setDark] = useState(() => !!window.matchMedia?.('(prefers-color-scheme: dark)').matches)
+
+  useEffect(() => {
+    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
+    if (!mq) return
+    const onChange = () => setDark(mq.matches)
+    mq.addEventListener('change', onChange)
+    return () => mq.removeEventListener('change', onChange)
+  }, [])
+
+  useEffect(() => {
+    let alive = true
+    const timer = window.setTimeout(async () => {
+      try {
+        const mermaid = (await import('mermaid')).default
+        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: dark ? 'dark' : 'default' })
+        const { svg: out } = await mermaid.render(`mermaid-${Math.random().toString(36).slice(2, 10)}`, code)
+        if (alive) { setSvg(out); setFailed(false) }
+      } catch {
+        if (alive) { setSvg(''); setFailed(true) }
+      }
+    }, 250)
+    return () => { alive = false; window.clearTimeout(timer) }
+  }, [code, dark])
+
+  if (failed || !svg) {
+    return (
+      <div className="mermaid-wrap">
+        <div className="code-actions">
+          <CopyButton title="复制 mermaid 源码" getText={() => code} />
+        </div>
+        <pre className="mermaid-pending"><code>{code}</code></pre>
+      </div>
+    )
+  }
+  return (
+    <div className="mermaid-wrap">
+      <div className="code-actions">
+        <CopyButton title="复制 mermaid 源码" getText={() => code} />
+        <button className="code-copy" title="全屏查看" aria-label="全屏查看" onClick={() => setOpen(true)}>⤢</button>
+      </div>
+      {/* Clicking the diagram is the obvious gesture for "show me this bigger". */}
+      <div className="mermaid" title="点击全屏查看" onClick={() => setOpen(true)} dangerouslySetInnerHTML={{ __html: svg }} />
+      {open ? <MermaidViewer svg={svg} code={code} onClose={() => setOpen(false)} /> : null}
+    </div>
+  )
+})
+
+// CopyButton copies the text it is given and briefly confirms with "已复制".
+function CopyButton({ getText, title = '复制' }: { getText: () => string; title?: string }) {
+  const [done, setDone] = useState(false)
+  useEffect(() => {
+    if (!done) return
+    const t = window.setTimeout(() => setDone(false), 1200)
+    return () => window.clearTimeout(t)
+  }, [done])
+  return (
+    <button className={`code-copy${done ? ' is-done' : ''}`} title={title} aria-label={title}
+      onClick={(e) => { e.stopPropagation(); copyText(getText()); setDone(true) }}>
+      {done ? <span className="code-copy-done">已复制</span> : <CopyIcon />}
+    </button>
+  )
+}
+
+// PreBlock intercepts fenced code blocks: ```mermaid becomes a diagram, every
+// other block stays a normal <pre> (already tokenised by rehype-highlight).
+// Either way the block gets a copy button — the code itself, or for a diagram
+// its mermaid source.
+export function PreBlock(props: ComponentPropsWithoutRef<'pre'>) {
+  const ref = useRef<HTMLPreElement>(null)
+  const child = Array.isArray(props.children) ? props.children[0] : props.children
+  const el = child as { props?: { className?: string; children?: ReactNode } } | null
+  if ((el?.props?.className || '').includes('language-mermaid')) {
+    return <MermaidDiagram code={String(el?.props?.children ?? '').replace(/\n$/, '')} />
+  }
+  return (
+    <div className="code-wrap">
+      {/* Read the rendered text rather than walking the token tree: after
+          rehype-highlight the code element is a tree of spans, and innerText
+          gives back exactly what the user sees. */}
+      <div className="code-actions">
+        <CopyButton title="复制代码" getText={() => ref.current?.innerText ?? ''} />
+      </div>
+      <pre {...props} ref={ref} />
+    </div>
+  )
+}
+
+// Zoom bounds for the overlay viewer (0.2x … 6x covers "放大看细节" and
+// "整体扫一眼" without letting the diagram become unusable).
+const MERMAID_MIN_ZOOM = 0.2
+const MERMAID_MAX_ZOOM = 6
+const MERMAID_ZOOM_STEP = 1.25
+
+// useDragPan turns a scroll container into a grab-and-drag surface. While a
+// diagram is zoomed, dragging is what people reach for (the scrollbar is thin
+// and the pointer is already on the diagram), so panning moves the container's
+// scroll offsets under the cursor.
+function useDragPan(ref: RefObject<HTMLElement | null>) {
+  const [dragging, setDragging] = useState(false)
+  const [pannable, setPannable] = useState(false)
+  const origin = useRef({ x: 0, y: 0, left: 0, top: 0 })
+
+  const sync = useCallback(() => {
+    const el = ref.current
+    if (!el) return
+    setPannable(el.scrollWidth > el.clientWidth + 1 || el.scrollHeight > el.clientHeight + 1)
+  }, [ref])
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    const el = ref.current
+    if (!el || e.button !== 0) return
+    if (el.scrollWidth <= el.clientWidth && el.scrollHeight <= el.clientHeight) return // nothing to pan
+    e.preventDefault()
+    origin.current = { x: e.clientX, y: e.clientY, left: el.scrollLeft, top: el.scrollTop }
+    setDragging(true)
+    el.setPointerCapture(e.pointerId)
+  }
+  const onPointerMove = (e: React.PointerEvent) => {
+    const el = ref.current
+    if (!el || !dragging) return
+    el.scrollLeft = origin.current.left - (e.clientX - origin.current.x)
+    el.scrollTop = origin.current.top - (e.clientY - origin.current.y)
+  }
+  const end = (e: React.PointerEvent) => {
+    const el = ref.current
+    if (!el || !dragging) return
+    setDragging(false)
+    try { el.releasePointerCapture(e.pointerId) } catch { /* already released */ }
+  }
+
+  return {
+    dragging,
+    pannable,
+    sync,
+    handlers: { onPointerDown, onPointerMove, onPointerUp: end, onPointerCancel: end },
+  }
+}
+
+// MermaidViewer shows one diagram as a full-viewport overlay: dim backdrop,
+// diagram centred, controls floating at the bottom. It is rendered through a
+// portal into document.body — inside the transcript some ancestor creates a
+// containing block for `position: fixed` (transform/filter), which pinned the
+// overlay to the message box instead of the window.
+function MermaidViewer({ svg, code, onClose }: { svg: string; code: string; onClose: () => void }) {
+  const [zoom, setZoom] = useState(1)
+  const stageRef = useRef<HTMLDivElement>(null)
+  const pan = useDragPan(stageRef)
+
+  const clamp = (z: number) => Math.min(MERMAID_MAX_ZOOM, Math.max(MERMAID_MIN_ZOOM, z))
+  const fit = useCallback(() => {
+    const stage = stageRef.current
+    const el = stage?.querySelector('svg')
+    if (!stage || !el) return
+    // Measure at zoom 1 (the SVG's own layout size), then scale to fit.
+    setZoom(1)
+    requestAnimationFrame(() => {
+      const r = el.getBoundingClientRect()
+      if (!r.width || !r.height) return
+      setZoom(clamp(Math.min((stage.clientWidth - 40) / r.width, (stage.clientHeight - 40) / r.height)))
+    })
+  }, [])
+
+  useEffect(() => { fit() }, [fit])
+  // Re-check scrollability whenever the zoom (or the diagram) changes: the
+  // "grab" cursor should only promise something the user can actually do.
+  useEffect(() => { pan.sync() }, [zoom, svg, pan])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); onClose() }
+      else if (e.key === '+' || e.key === '=') { e.preventDefault(); setZoom((z) => clamp(z * MERMAID_ZOOM_STEP)) }
+      else if (e.key === '-' || e.key === '_') { e.preventDefault(); setZoom((z) => clamp(z / MERMAID_ZOOM_STEP)) }
+      else if (e.key === '0') { e.preventDefault(); setZoom(1) }
+      else if (e.key === '1') { e.preventDefault(); fit() }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  }, [fit, onClose])
+
+  // Clicking the backdrop (any blank area) closes; clicks on the diagram or the
+  // control bar stop there.
+  return createPortal(
+    <div className="mermaid-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label="Mermaid 图表">
+      <div className={`mermaid-stage${pan.dragging ? ' is-dragging' : ''}${pan.pannable ? ' is-pannable' : ''}`}
+        ref={stageRef} {...pan.handlers} onClick={(e) => e.stopPropagation()}
+        onWheel={(e) => { if (e.ctrlKey || e.metaKey) { e.preventDefault(); setZoom((z) => clamp(e.deltaY < 0 ? z * MERMAID_ZOOM_STEP : z / MERMAID_ZOOM_STEP)) } }}>
+        <div className="mermaid-zoom" style={{ zoom }} dangerouslySetInnerHTML={{ __html: svg }} />
+      </div>
+      <div className="mermaid-controls" onClick={(e) => e.stopPropagation()}>
+        <button className="mm-btn" title="缩小（-）" onClick={() => setZoom((z) => clamp(z / MERMAID_ZOOM_STEP))}>−</button>
+        <span className="mermaid-zoom-label">{Math.round(zoom * 100)}%</span>
+        <button className="mm-btn" title="放大（+）" onClick={() => setZoom((z) => clamp(z * MERMAID_ZOOM_STEP))}>+</button>
+        <span className="mm-sep" />
+        <button className="mm-btn" title="实际大小（0）" onClick={() => setZoom(1)}>100%</button>
+        <button className="mm-btn" title="适应窗口（1）" onClick={fit}>适应窗口</button>
+        <span className="mm-sep" />
+        <CopyButton title="复制 mermaid 源码" getText={() => code} />
+        <button className="mm-btn" title="关闭（Esc）" onClick={onClose}>✕</button>
+      </div>
+    </div>,
+    document.body,
   )
 }
 
