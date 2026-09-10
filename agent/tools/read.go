@@ -21,7 +21,7 @@ import (
 )
 
 const (
-	maxFileSize  = 256 * 1024 // 256KB
+	maxFileSize  = 256 * 1024 // 256KB — inlined text, bounded to protect the context window
 	maxLineChars = 2000       // per-line truncation for context safety
 )
 
@@ -72,16 +72,6 @@ func (t *ReadTool) Properties() map[string]PropertySchema {
 func (t *ReadTool) Required() []string { return []string{"path"} }
 func (t *ReadTool) Parallel() bool     { return true }
 
-// imageMimeByExt maps lowercase file extensions (including the leading dot)
-// to MIME types for image formats supported by common LLM providers.
-var imageMimeByExt = map[string]string{
-	".png":  "image/png",
-	".jpg":  "image/jpeg",
-	".jpeg": "image/jpeg",
-	".gif":  "image/gif",
-	".webp": "image/webp",
-}
-
 // imageMagicBytes contains magic byte signatures for image format detection.
 // Checked after extension match to avoid false positives.
 var imageMagicBytes = map[string][]byte{
@@ -96,7 +86,7 @@ var imageMagicBytes = map[string][]byte{
 // Returns the MIME type or empty string if not a supported image.
 func detectImageMime(filePath string, data []byte) string {
 	ext := strings.ToLower(path.Ext(filePath))
-	mime, ok := imageMimeByExt[ext]
+	mime, ok := llm.ImageMediaType(ext)
 	if !ok {
 		return ""
 	}
@@ -118,12 +108,78 @@ func detectImageMime(filePath string, data []byte) string {
 	return mime
 }
 
-func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, error) {
-	var argsMap struct {
-		Path   string `json:"path"`
-		Offset int    `json:"offset"`
-		Limit  int    `json:"limit"`
+// acpFileReader is the slice of the client connection the Read tool uses.
+// Narrowing it to an interface keeps the routing below testable without a live
+// ACP connection (same pattern as the Bash tool's terminal connection).
+type acpFileReader interface {
+	ReadTextFile(ctx context.Context, req acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error)
+}
+
+// readArgs are the Read tool's arguments.
+type readArgs struct {
+	Path   string `json:"path"`
+	Offset int    `json:"offset"`
+	Limit  int    `json:"limit"`
+}
+
+// isImagePath reports whether path carries a supported image extension. The
+// content is still validated (magic bytes) by whichever branch reads it — this
+// only decides WHERE an image is read from.
+func isImagePath(path string) bool {
+	_, ok := llm.ImageMediaType(filepath.Ext(path))
+	return ok
+}
+
+// routeToClient reports whether a read must go through the client's filesystem
+// (ACP mode + a live client connection) — which is what lets clients like Zed
+// serve unsaved editor buffers and show that a file is being read.
+//
+// Images are excluded: fs/read_text_file is text-only by protocol design (its
+// response is a string, and clients refuse binary files outright), so an image
+// can never come back through it. Reading those locally is what gets the pixels
+// to the vision pipeline.
+func routeToClient(acpMode, hasConn bool, path string) bool {
+	return acpMode && hasConn && !isImagePath(path)
+}
+
+// readViaClient reads a text file through the client's filesystem. Image and
+// binary handling below is a fallback for clients that hand back raw bytes over
+// the text API anyway; images normally never reach this path.
+func (t *ReadTool) readViaClient(ctx context.Context, conn acpFileReader, filePath string, args readArgs) (string, error) {
+	resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
+		SessionId: acpctx.SessionID(ctx),
+		Path:      filePath,
+	})
+	if err != nil {
+		return "", fmt.Errorf("ACP readTextFile failed: %w", err)
 	}
+
+	// Check for image files (by extension + magic bytes) — a client that returns
+	// bytes for image extensions anyway still gets the image treatment.
+	content := []byte(resp.Content)
+	if mime := detectImageMime(filePath, content); mime != "" {
+		encoded := base64.StdEncoding.EncodeToString(content)
+		AddImageParts(ctx, []llm.ContentPart{
+			{
+				Type:      llm.ContentPartImage,
+				MediaType: mime,
+				Data:      encoded,
+			},
+		})
+		return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
+			filepath.Base(filePath), mime, len(content), len(encoded)), nil
+	}
+
+	// Reject other binary files.
+	if isBinaryFile(content) {
+		return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
+	}
+
+	return formatReadOutput(strings.Split(resp.Content, "\n"), args.Offset, args.Limit), nil
+}
+
+func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, error) {
+	var argsMap readArgs
 	if err := json.Unmarshal([]byte(args), &argsMap); err != nil {
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
@@ -137,45 +193,21 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("cannot read from blocked device path: %s", argsMap.Path)
 	}
 
-	// In ACP mode, route through ACP client so Zed shows which file is being read.
-	if t.acpMode {
-		if conn := acpctx.Conn(ctx); conn != nil {
-			resp, err := conn.ReadTextFile(ctx, acp.ReadTextFileRequest{
-				SessionId: acpctx.SessionID(ctx),
-				Path:      filePath,
-			})
-			if err != nil {
-				return "", fmt.Errorf("ACP readTextFile failed: %w", err)
-			}
-
-			// Check for image files (by extension + magic bytes)
-			content := []byte(resp.Content)
-			if mime := detectImageMime(filePath, content); mime != "" {
-				encoded := base64.StdEncoding.EncodeToString(content)
-				AddImageParts(ctx, []llm.ContentPart{
-					{
-						Type:      llm.ContentPartImage,
-						MediaType: mime,
-						Data:      encoded,
-					},
-				})
-				return fmt.Sprintf("[Image: %s, %s, %d bytes, %d base64 chars]",
-					filepath.Base(filePath), mime, len(content), len(encoded)), nil
-			}
-
-			// Reject other binary files.
-			if isBinaryFile(content) {
-				return "", fmt.Errorf("this tool cannot read binary files; the file appears to be a binary file, please use appropriate tools for binary file analysis")
-			}
-
-			return formatReadOutput(strings.Split(resp.Content, "\n"), argsMap.Offset, argsMap.Limit), nil
-		}
+	// In ACP mode, route through ACP client so Zed shows which file is being read
+	// (images excepted — see routeToClient).
+	conn := acpctx.Conn(ctx)
+	if routeToClient(t.acpMode, conn != nil, filePath) {
+		return t.readViaClient(ctx, conn, filePath, argsMap)
 	}
 
 	// Check file size before reading.
 	// When limit is specified, the output is bounded, so we skip the size check.
 	// Without limit (full file or offset-to-EOF), enforce maxFileSize to prevent
 	// blowing up the context window.
+	//
+	// Images get their own, much larger budget: they are attached as base64
+	// content parts rather than inlined as text, so the text cap would only
+	// reject ordinary screenshots (and still leave the context untouched).
 	info, err := os.Stat(filePath)
 	if err != nil {
 		return "", fmt.Errorf("failed to stat file: %w", err)
@@ -183,7 +215,11 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 	if info.IsDir() {
 		return "", fmt.Errorf("cannot read directory: %s. Use glob to find files or bash ls to list contents", argsMap.Path)
 	}
-	if argsMap.Limit <= 0 && info.Size() > maxFileSize {
+	if isImagePath(filePath) {
+		if info.Size() > llm.MaxImageSize {
+			return "", ErrFileTooLarge(info.Size(), llm.MaxImageSize)
+		}
+	} else if argsMap.Limit <= 0 && info.Size() > maxFileSize {
 		err := ErrFileTooLarge(info.Size(), maxFileSize)
 		if lines := countLines(filePath); lines > 0 {
 			return "", fmt.Errorf("%w. File has ~%d lines — use offset/limit to read it in parts", err, lines)

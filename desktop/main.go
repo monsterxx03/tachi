@@ -47,6 +47,9 @@ func init() {
 	// Register the custom event so the binding generator emits a strongly
 	// typed JS/TS API for it. The payload is the agent state snapshot.
 	application.RegisterEvent[AgentState]("agent:state")
+	// Native file drops: the payload carries the dropped paths (see
+	// desktop/fileservice.go).
+	application.RegisterEvent[FileDropEvent]("agent:filedrop")
 }
 
 // assetHandler serves the embedded frontend assets, and additionally answers
@@ -120,10 +123,26 @@ func main() {
 		// Matches --bg in base.css for the current theme, so the window never
 		// flashes a different shade before the frontend paints.
 		BackgroundColour: background,
-		URL:              "/",
+		// Native drag-and-drop of files onto the window. Drops only register
+		// on elements marked data-file-drop-target (the composer), and the
+		// webview cannot read the paths itself — they arrive in Go via the
+		// WindowFilesDropped event below and are forwarded to the frontend.
+		EnableFileDrop: true,
+		URL:            "/",
 	})
 	desk.app = app
 	desk.window = window
+
+	// Forward native file drops to the frontend, which inserts @-references
+	// into the input area. The element id lets the frontend decide where the
+	// drop landed (and ignore drops outside the drop targets).
+	window.OnWindowEvent(events.Common.WindowFilesDropped, func(e *application.WindowEvent) {
+		elementID := ""
+		if dt := e.Context().DropTargetDetails(); dt != nil {
+			elementID = dt.ElementID
+		}
+		desk.emitFileDrop(e.Context().DroppedFiles(), elementID)
+	})
 
 	// Keep that background in step with the system when it changes under us
 	// (the frontend follows prefers-color-scheme itself; this covers the

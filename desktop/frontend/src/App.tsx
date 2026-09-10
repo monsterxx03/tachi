@@ -11,14 +11,18 @@ import {
   STATUS_META,
   THINKING_LEVELS,
   PAGE_SIZE,
+  AT_MAX_RESULTS,
+  AT_SEARCH_DEBOUNCE_MS,
   type AgentEvent,
+  type AtMatch,
+  type AtPickerState,
   type Message,
   type Part,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey } from './lib'
+import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
-  ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel,
+  ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker,
   SettingsIcon, UsageIcon, MCPIcon,
 } from './components'
 
@@ -218,6 +222,152 @@ function App() {
   const messages = msgCache[currentId] || []
   const pendMsgs = pending[currentId] || []
 
+  // ── @-file completion ─────────────────────────────────────────────────────
+  // Typing "@" opens a fuzzy picker over the session's working directory.
+  // Accepting a match splices a reference into the text; the reference is
+  // expanded backend-side at turn start (agent/atfile), so the transcript keeps
+  // showing the raw text the user typed. The trigger rule in atRefAt mirrors
+  // agent/atfile.IsRefBoundary — the popup must offer exactly what the backend
+  // will expand.
+  const [at, setAt] = useState<AtPickerState | null>(null)
+  // Query of the last scheduled search — null (not "") means "none yet": the
+  // empty query is a real query (it lists the working directory), so "" cannot
+  // double as the sentinel or the very first "@" would never be searched.
+  const atQueryRef = useRef<string | null>(null)
+  const atSeqRef = useRef(0)                     // stale-response guard
+  const atTimerRef = useRef<number | null>(null)
+  // inputRef mirrors the composer text for event listeners (Wails file drops)
+  // that must not re-subscribe on every keystroke.
+  const inputRef = useRef(input)
+  useEffect(() => { inputRef.current = input }, [input])
+  // atStateRef mirrors the picker state for the same reason (see the file-drop
+  // listener: a drop with the picker open must replace the reference being
+  // typed, not append after it).
+  const atStateRef = useRef<AtPickerState | null>(null)
+  useEffect(() => { atStateRef.current = at }, [at])
+
+  const closeAt = useCallback(() => {
+    atQueryRef.current = null
+    atSeqRef.current++
+    if (atTimerRef.current !== null) {
+      window.clearTimeout(atTimerRef.current)
+      atTimerRef.current = null
+    }
+    setAt(null)
+  }, [])
+
+  // scheduleAtSearch runs the (debounced) backend search for a query.
+  const scheduleAtSearch = useCallback((query: string) => {
+    const sid = currentId
+    atQueryRef.current = query
+    if (atTimerRef.current !== null) window.clearTimeout(atTimerRef.current)
+    const seq = ++atSeqRef.current
+    atTimerRef.current = window.setTimeout(() => {
+      atTimerRef.current = null
+      // Clear the spinner on every path — a rejected (or even synchronously
+      // throwing) call must not leave the picker stuck on "搜索中…".
+      const applyResult = (items: AtMatch[]) => {
+        if (seq !== atSeqRef.current) return // superseded by a newer query
+        setAt((p) => (p && p.query === query ? { ...p, items, idx: 0, loading: false } : p))
+      }
+      try {
+        AgentService.SearchFiles(sid, query, AT_MAX_RESULTS)
+          .then((res) => applyResult(res || []))
+          .catch(() => applyResult([]))
+      } catch {
+        applyResult([])
+      }
+    }, AT_SEARCH_DEBOUNCE_MS)
+  }, [currentId])
+
+  // syncAtRef recomputes the picker from the composer's value + caret. Called on
+  // every text/selection change, which is also how it closes: no reference under
+  // the caret means no picker.
+  const syncAtRef = useCallback((value: string, caret: number) => {
+    const ref = atRefAt(value, caret)
+    if (!ref) {
+      closeAt()
+      return
+    }
+    const count = countAtRefs(value)
+    setAt((prev) => (prev && prev.start === ref.start && prev.query === ref.query
+      ? { ...prev, count }
+      : { start: ref.start, query: ref.query, items: [], idx: 0, loading: true, count }))
+    if (atQueryRef.current !== ref.query) scheduleAtSearch(ref.query)
+  }, [closeAt, scheduleAtSearch])
+
+  // insertAtCaret splices text into the composer at the caret, keeping the focus
+  // and the caret after the inserted text.
+  const insertAtCaret = useCallback((text: string, trailingSpace: boolean, resync: boolean) => {
+    const caret = composerRef.current?.selectionStart ?? inputRef.current.length
+    const ins = insertRefText(inputRef.current, caret, text, trailingSpace)
+    setInput(ins.value)
+    requestAnimationFrame(() => {
+      const node = composerRef.current
+      if (!node) return
+      node.focus()
+      node.setSelectionRange(ins.caret, ins.caret)
+      if (resync) syncAtRef(ins.value, ins.caret)
+    })
+  }, [syncAtRef])
+
+  // acceptAt REPLACES the reference being typed with the picked path — it must
+  // not splice at the caret, or the "@query" the user was typing survives and
+  // the text ends up with a stray "@" (counted as a second reference). A
+  // directory keeps the picker open on the new prefix so the user can drill in.
+  const acceptAt = useCallback((match?: AtMatch) => {
+    if (!match || !at) return
+    const dir = !!match.isDir
+    const text = '@' + match.path + (dir ? '/' : ' ')
+    const ins = replaceRefText(inputRef.current, at.start, text)
+    atQueryRef.current = null // whatever follows is a fresh query
+    setAt(null)
+    setInput(ins.value)
+    requestAnimationFrame(() => {
+      const node = composerRef.current
+      if (!node) return
+      node.focus()
+      node.setSelectionRange(ins.caret, ins.caret)
+      if (dir) syncAtRef(ins.value, ins.caret)
+    })
+  }, [at, syncAtRef])
+
+  // A session switch changes the working directory, so any open picker is stale.
+  useEffect(() => { closeAt() }, [currentId, closeAt])
+
+  // Native file drops arrive from Go (the webview cannot read dropped paths):
+  // resolve them into @-references and splice them in at the caret.
+  useEffect(() => {
+    const off = Events.On('agent:filedrop', (event) => {
+      const d = event.data as { paths?: string[] } | undefined
+      if (!d?.paths?.length) return
+      const paths = d.paths
+      ;(async () => {
+        try {
+          const files = (await AgentService.ResolveDroppedPaths(currentId, paths)) || []
+          const refs = files.map((f) => f.ref).filter(Boolean) as string[]
+          if (!refs.length) return
+          const batch = refs.join(' ')
+          const open = atStateRef.current
+          closeAt()
+          if (open) {
+            // Drop while the picker is open: replace the "@query" being typed.
+            const ins = replaceRefText(inputRef.current, open.start, batch + ' ')
+            setInput(ins.value)
+            requestAnimationFrame(() => {
+              const node = composerRef.current
+              node?.focus()
+              node?.setSelectionRange(ins.caret, ins.caret)
+            })
+            return
+          }
+          insertAtCaret(batch, true, false)
+        } catch { /* ignore */ }
+      })()
+    })
+    return () => off?.()
+  }, [currentId, closeAt, insertAtCaret])
+
   const scrollToBottom = useCallback((force = false) => {
     // force=true is for actions where following is clearly intended (sending a
     // message, switching sessions). Otherwise the pin only happens while the
@@ -406,13 +556,14 @@ function App() {
   const send = useCallback(() => {
     const text = input.trim()
     if (!text) return
+    closeAt()
     setInput('')
     if (isCurrentRunning) {
       enqueuePending(currentId, text)
       return
     }
     sendText(text)
-  }, [input, isCurrentRunning, currentId, enqueuePending, sendText])
+  }, [input, isCurrentRunning, currentId, enqueuePending, sendText, closeAt])
 
   // sendPendingNow is the pending bar's primary action: stop the current turn
   // and send the queued text as a fresh user turn right away. The user bubble
@@ -822,6 +973,10 @@ function App() {
   }, [])
 
   const meta = STATUS_META[state.status as string] ?? STATUS_META.idle
+  // The provider picker lists names only; the selected provider's model is
+  // exposed as its tooltip instead.
+  const currentProvider = providers.find((p) => (p.name ?? p.Name) === providerName)
+  const currentProviderModel = currentProvider?.model ?? currentProvider?.Model ?? ''
 
   return (
     <div className="app">
@@ -939,20 +1094,59 @@ function App() {
                 ))}
               </div>
             )}
-            <div className="composer-box">
+            <div className="composer-box" data-file-drop-target="true">
+              {at && (
+                <AtFilePicker
+                  query={at.query}
+                  items={at.items}
+                  selected={at.idx}
+                  loading={at.loading}
+                  refCount={at.count}
+                  onPick={(i) => acceptAt(at.items[i])}
+                  onHover={(i) => setAt((p) => (p ? { ...p, idx: i } : p))}
+                />
+              )}
               <div className="composer-input-wrap">
-                <textarea className="composer-input" ref={composerRef} value={input} onChange={(e) => setInput(e.target.value)}
+                <textarea className="composer-input" ref={composerRef} value={input}
+                  onChange={(e) => { setInput(e.target.value); syncAtRef(e.target.value, e.target.selectionStart ?? e.target.value.length) }}
+                  onSelect={(e) => { const el = e.currentTarget; syncAtRef(el.value, el.selectionStart ?? el.value.length) }}
+                  onBlur={() => closeAt()}
                   onCompositionStart={() => { composingRef.current = true }}
                   onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
                   onKeyDown={(e) => {
+                    const ime = composingRef.current || imeActive(e)
+                    // While the @-picker is open it owns the navigation keys;
+                    // an IME composing (candidate selection) owns them first.
+                    if (!ime && at) {
+                      // ↑↓ and Ctrl+N/Ctrl+P both move the highlight (Ctrl+N/P
+                      // matches the TUI's keymap, and preventDefault keeps
+                      // Cocoa's own Ctrl+N/P caret movement out of the way).
+                      const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')
+                      const up = e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')
+                      if (down || up) {
+                        e.preventDefault()
+                        const delta = down ? 1 : -1
+                        setAt((p) => (p && p.items.length
+                          ? { ...p, idx: Math.max(0, Math.min(p.items.length - 1, p.idx + delta)) }
+                          : p))
+                        return
+                      }
+                      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
+                        // Tab/Enter accept the highlighted match; with no match,
+                        // Enter still sends (Tab just dismisses the picker).
+                        if (at.items.length > 0) { e.preventDefault(); acceptAt(at.items[at.idx]); return }
+                        if (e.key === 'Tab') { e.preventDefault(); closeAt(); return }
+                      }
+                      if (e.key === 'Escape') { e.preventDefault(); closeAt(); return }
+                    }
                     if (e.key !== 'Enter' || e.shiftKey) return
                     // Enter while an IME is composing confirms the candidate
                     // (选词), it must not send the message.
-                    if (composingRef.current || imeActive(e)) return
+                    if (ime) return
                     e.preventDefault()
                     send()
                   }}
-                  placeholder={isCurrentRunning ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行）'} />
+                  placeholder={isCurrentRunning ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件）'} />
                 {isCurrentRunning && (
                   <button className="stop-btn" title="停止生成" onClick={stopChat} aria-label="停止生成">
                     <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
@@ -976,12 +1170,16 @@ function App() {
                 : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
                 : null}
               <div className="provider-picker">
-                <select className="provider-select" value={providerName} onChange={async (e) => {
-                  const name = e.target.value
-                  await (AgentService as any).SwitchProvider?.(name)
-                  refreshProvider()
-                }}>
-                  {providers.map((p) => <option key={p.name ?? p.Name} value={p.name ?? p.Name}>{(p.name ?? p.Name)} · {(p.model ?? p.Model)}</option>)}
+                <select className="provider-select" value={providerName}
+                  title={currentProviderModel ? `模型：${currentProviderModel}` : undefined}
+                  onChange={async (e) => {
+                    const name = e.target.value
+                    await (AgentService as any).SwitchProvider?.(name)
+                    refreshProvider()
+                  }}>
+                  {/* Names only — the model string is long and often identical
+                      to the provider name; the tooltip above keeps it reachable. */}
+                  {providers.map((p) => <option key={p.name ?? p.Name} value={p.name ?? p.Name}>{(p.name ?? p.Name)}</option>)}
                 </select>
                 <select className="provider-select" value={thinkingLevel} onChange={async (e) => {
                   const lv = e.target.value

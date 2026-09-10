@@ -162,4 +162,55 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
   )
 }
 
-export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, SettingsIcon, UsageIcon, MCPIcon }
+// AtFilePicker is the @-file completion popup. It floats above the composer,
+// listing the files the backend fuzzy-matched under the session's working
+// directory. Keyboard handling lives in the composer (which owns the caret and
+// the text); this component only renders and reports picks.
+function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHover }: {
+  query: string
+  items: { path: string; isDir: boolean }[]
+  selected: number
+  loading: boolean
+  refCount: number
+  onPick: (index: number) => void
+  onHover: (index: number) => void
+}) {
+  const listRef = useRef<HTMLDivElement>(null)
+  // Keep the highlighted row in view while arrowing through a long list.
+  useEffect(() => {
+    const el = listRef.current?.children[selected] as HTMLElement | undefined
+    el?.scrollIntoView({ block: 'nearest' })
+  }, [selected, items])
+
+  return (
+    <div className="at-picker" role="listbox" aria-label="@ 文件">
+      <div className="at-picker-head">
+        <span className="at-picker-title">
+          @ 文件{query ? <span className="at-picker-query">{query}</span> : null}
+          {refCount > 1 ? <span className="at-picker-count">已引用 {refCount} 个</span> : null}
+        </span>
+        <span className="at-picker-hint">↑↓/Ctrl+P·N 选择 · Tab/Enter 确认 · Esc 关闭</span>
+      </div>
+      {items.length === 0 ? (
+        <div className="at-picker-empty">{loading ? '搜索中…' : '无匹配文件'}</div>
+      ) : (
+        <div className="at-picker-list" ref={listRef}>
+          {items.map((m, i) => (
+            /* onMouseDown (not onClick) with preventDefault: the textarea must
+               keep focus, or the caret we splice the reference into is lost. */
+            <div key={m.path} role="option" aria-selected={i === selected} title={m.path}
+              className={`at-picker-item${i === selected ? ' is-selected' : ''}`}
+              onMouseDown={(e) => { e.preventDefault(); onPick(i) }}
+              onMouseEnter={() => onHover(i)}>
+              <span className="at-picker-ico">{m.isDir ? '▸' : '·'}</span>
+              <span className="at-picker-path">{m.path}</span>
+              {m.isDir ? <span className="at-picker-tag">目录</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
+export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, SettingsIcon, UsageIcon, MCPIcon }

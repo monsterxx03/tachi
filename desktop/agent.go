@@ -12,11 +12,13 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
@@ -623,17 +625,7 @@ func (s *AgentService) GetSessionUsage(id string) map[string]any {
 
 // GetSessionWorkingDir returns the session's working directory ("" if unset).
 func (s *AgentService) GetSessionWorkingDir(id string) string {
-	d := s.desk
-	d.mu.Lock()
-	r := d.getRun(id)
-	d.mu.Unlock()
-	if r == nil || r.sm == nil {
-		return ""
-	}
-	if cur := r.sm.Current(); cur != nil {
-		return cur.WorkingDir
-	}
-	return ""
+	return s.desk.sessionWorkDir(id)
 }
 
 // SetSessionWorkingDir changes the session's working directory and persists it
@@ -982,12 +974,17 @@ type desktopApp struct {
 	mu    sync.Mutex
 	runs  map[string]*sessionRun // key: session ID
 	simCh chan struct{}          // simulated-turn stop signal
+
+	// fileIndex backs @-file completion in the input area (one cached path
+	// index per searched root).
+	fileIndex *fileindex.Index
 }
 
 func newDesktopApp() *desktopApp {
 	return &desktopApp{
-		runs:  make(map[string]*sessionRun),
-		simCh: nil,
+		runs:      make(map[string]*sessionRun),
+		simCh:     nil,
+		fileIndex: newFileIndex(),
 	}
 }
 
@@ -1157,6 +1154,14 @@ func (d *desktopApp) startTurn(text string) {
 	r.turnStartCost = r.cost
 	r.turnStartCredit = r.credit
 	history := r.history
+	// Expand @-file references before anything else: text files are inlined,
+	// images become multi-modal content parts. This must happen BEFORE the
+	// trailing-user merge below — history stores already-expanded user
+	// messages, so expanding the merged text would inline the same files twice.
+	// References resolve against the session's working directory (the root the
+	// tools run in), never the app bundle's cwd.
+	expanded := atfile.Expand(d.expansionRoot(r), text)
+	text = expanded.Text
 	// An interrupted session may end with a user message and no matching
 	// assistant reply. Merge that trailing user message into the new user
 	// message (instead of appending an artificial assistant reply) so the
@@ -1202,9 +1207,15 @@ func (d *desktopApp) startTurn(text string) {
 		}()
 		d.setSessionState(id, AgentState{Status: StatusThinking, Label: "思考", Detail: "理解中…"})
 
+		// Images extracted from @-image references ride along as multi-modal
+		// content parts on the trailing user message.
+		ropts := []agent.RunOption{agent.WithSteerChannel(steerCh)}
+		if len(expanded.Images) > 0 {
+			ropts = append(ropts, agent.WithPendingImages(expanded.Images))
+		}
 		ch := r.agent.RunConversationStream(ctx, history, text, d.systemPrompt, llm.ChatOptions{
 			MaxTokens: d.cfg.MaxTokens,
-		}, agent.WithSteerChannel(steerCh))
+		}, ropts...)
 		for ev := range ch {
 			switch ev.Type {
 			case agent.AgentEventTurnComplete:
@@ -1249,16 +1260,22 @@ func (s *AgentService) Steer(sessionID, text string) string {
 	r := d.getRun(sessionID)
 	ch := r.steerCh
 	running := r.running
+	// Steered text carries @-file references too, so expand it against the
+	// same root the turn's tools use (the caller already holds the lock).
+	root := d.expansionRoot(r)
 	d.mu.Unlock()
 	if ch == nil || !running {
 		return "not running"
 	}
+	// An empty steer stays empty: it is the "nothing queued" signal that
+	// unblocks the agent loop.
+	expanded := atfile.Expand(root, text)
 	select {
 	case <-ch:
 	default:
 	}
 	select {
-	case ch <- agent.SteerInput{Text: text}:
+	case ch <- agent.SteerInput{Text: expanded.Text, Images: expanded.Images}:
 		return "ok"
 	default:
 		return "dropped"

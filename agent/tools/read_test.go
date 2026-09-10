@@ -1,14 +1,19 @@
 package tools
 
 import (
+	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	acp "github.com/coder/acp-go-sdk"
+	"github.com/monsterxx03/tachi/agent/acpctx"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -537,5 +542,179 @@ func TestReadToolDirectory(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "glob") {
 		t.Errorf("Expected glob guidance in error, got: %v", err)
+	}
+}
+
+// fakeFileReader stands in for the ACP client connection (fs/read_text_file),
+// recording requests so tests can tell whether a read was routed to the client
+// or served locally.
+type fakeFileReader struct {
+	calls []acp.ReadTextFileRequest
+	body  string
+	err   error
+}
+
+func (f *fakeFileReader) ReadTextFile(_ context.Context, req acp.ReadTextFileRequest) (acp.ReadTextFileResponse, error) {
+	f.calls = append(f.calls, req)
+	if f.err != nil {
+		return acp.ReadTextFileResponse{}, f.err
+	}
+	return acp.ReadTextFileResponse{Content: f.body}, nil
+}
+
+// TestRouteToClient pins the ACP read routing: the client's filesystem is
+// text-only by protocol design, so images must be read locally — routing an
+// image through fs/read_text_file is what made image reads fail in Zed with
+// "Binary files are not supported".
+func TestRouteToClient(t *testing.T) {
+	cases := []struct {
+		name    string
+		acpMode bool
+		hasConn bool
+		path    string
+		want    bool
+	}{
+		{"acp client reads text", true, true, "/tmp/a.go", true},
+		{"acp client never reads images", true, true, "/tmp/a.png", false},
+		{"acp client never reads jpeg", true, true, "/tmp/a.JPEG", false},
+		{"no client connection", true, false, "/tmp/a.go", false},
+		{"not in acp mode", false, true, "/tmp/a.go", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := routeToClient(tc.acpMode, tc.hasConn, tc.path); got != tc.want {
+				t.Errorf("routeToClient(%v, %v, %q) = %v, want %v", tc.acpMode, tc.hasConn, tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestReadToolACPImageReadsLocally covers the reported failure: in ACP mode an
+// image must still produce a vision content part (and never trip the client's
+// text-only rejection).
+func TestReadToolACPImageReadsLocally(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "shot.png")
+	if err := os.WriteFile(path, minimalPNG(), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	tool := NewReadTool()
+	tool.SetACPMode(true)
+
+	ctx := WithImagePartsCarrier(context.Background())
+	result, err := tool.ExecuteContext(ctx, fmt.Sprintf(`{"path": %q}`, path))
+	if err != nil {
+		t.Fatalf("reading an image in ACP mode failed: %v", err)
+	}
+	if !strings.HasPrefix(result, "[Image:") {
+		t.Errorf("expected an image description, got %q", result)
+	}
+	parts := ImagePartsFromCtx(ctx)
+	if len(parts) != 1 || parts[0].MediaType != "image/png" || parts[0].Data == "" {
+		t.Fatalf("expected one png content part, got %+v", parts)
+	}
+}
+
+// TestReadToolViaClient covers the text path that stays on the client's fs,
+// through the extracted helper.
+func TestReadToolViaClient(t *testing.T) {
+	fake := &fakeFileReader{body: "package main\n"}
+	tool := NewReadTool()
+	ctx := acpctx.WithSessionID(context.Background(), acp.SessionId("sess_test"))
+
+	got, err := tool.readViaClient(ctx, fake, "/tmp/a.go", readArgs{})
+	if err != nil {
+		t.Fatalf("readViaClient: %v", err)
+	}
+	// formatReadOutput normalizes line endings, so the trailing newline is gone.
+	if got != "package main" {
+		t.Errorf("expected the client's content, got %q", got)
+	}
+	if len(fake.calls) != 1 || fake.calls[0].Path != "/tmp/a.go" || fake.calls[0].SessionId != acp.SessionId("sess_test") {
+		t.Fatalf("unexpected client request: %+v", fake.calls)
+	}
+}
+
+// TestReadToolViaClientBinaryRejected keeps the local binary guard on the client
+// path, so a client that hands back raw bytes cannot smuggle them into context.
+func TestReadToolViaClientBinaryRejected(t *testing.T) {
+	fake := &fakeFileReader{body: "abc\x00def"}
+	tool := NewReadTool()
+
+	if _, err := tool.readViaClient(context.Background(), fake, "/tmp/a.bin", readArgs{}); err == nil {
+		t.Fatal("expected binary content from the client to be rejected")
+	}
+}
+
+// TestReadToolViaClientErrorPropagates surfaces client failures (e.g. Zed's
+// "Binary files are not supported") as an error instead of empty content.
+func TestReadToolViaClientErrorPropagates(t *testing.T) {
+	fake := &fakeFileReader{err: errors.New("Binary files are not supported")}
+	tool := NewReadTool()
+
+	_, err := tool.readViaClient(context.Background(), fake, "/tmp/a.pdf", readArgs{})
+	if err == nil || !strings.Contains(err.Error(), "Binary files are not supported") {
+		t.Fatalf("expected the client error to propagate, got %v", err)
+	}
+}
+
+// largeImage returns a valid PNG header followed by padding, i.e. a file of the
+// requested size that still passes image detection (only the magic bytes are
+// validated, and padding after the trailing chunk does not disturb them).
+func largeImage(size int) []byte {
+	png := minimalPNG()
+	return append(png, bytes.Repeat([]byte{0x00}, size-len(png))...)
+}
+
+// TestReadToolImageAboveTextLimit covers a real screenshot: images are attached
+// as content parts, so they must not be rejected by the 256KB text cap.
+func TestReadToolImageAboveTextLimit(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "screenshot.png")
+	// Comfortably above maxFileSize, well below llm.MaxImageSize.
+	if err := os.WriteFile(path, largeImage(600*1024), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	tool := NewReadTool()
+	ctx := WithImagePartsCarrier(context.Background())
+	result, err := tool.ExecuteContext(ctx, fmt.Sprintf(`{"path": %q}`, path))
+	if err != nil {
+		t.Fatalf("a 600KB image must be readable, got: %v", err)
+	}
+	if !strings.HasPrefix(result, "[Image:") {
+		t.Errorf("expected an image description, got %q", result)
+	}
+	if parts := ImagePartsFromCtx(ctx); len(parts) != 1 {
+		t.Fatalf("expected one image part, got %d", len(parts))
+	}
+}
+
+// TestReadToolImageTooLarge keeps an upper bound on the image budget.
+func TestReadToolImageTooLarge(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "huge.png")
+	if err := os.WriteFile(path, largeImage(llm.MaxImageSize+1), 0o644); err != nil {
+		t.Fatalf("write image: %v", err)
+	}
+
+	tool := NewReadTool()
+	if _, err := tool.ExecuteContext(context.Background(), fmt.Sprintf(`{"path": %q}`, path)); err == nil {
+		t.Fatal("expected an oversized image to be rejected")
+	}
+}
+
+// TestReadToolTextLimitUnchanged guards that text still uses the 256KB budget.
+func TestReadToolTextLimitUnchanged(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "big.txt")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("a"), maxFileSize+1), 0o644); err != nil {
+		t.Fatalf("write text: %v", err)
+	}
+
+	tool := NewReadTool()
+	if _, err := tool.ExecuteContext(context.Background(), fmt.Sprintf(`{"path": %q}`, path)); err == nil {
+		t.Fatal("expected oversized text to be rejected")
 	}
 }

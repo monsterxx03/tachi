@@ -62,4 +62,27 @@ export const THINKING_LEVELS = ['default', 'none', 'low', 'medium', 'high', 'xhi
 // switching to a session or scrolling up for older history.
 export const PAGE_SIZE = 100
 
+// @-file completion. AT_MAX_RESULTS caps the picker's list (matching the TUI's
+// completion limit); AT_SEARCH_DEBOUNCE_MS coalesces keystrokes into one
+// backend search.
+export const AT_MAX_RESULTS = 20
+export const AT_SEARCH_DEBOUNCE_MS = 120
+
+export interface AtMatch {
+  path: string
+  isDir: boolean
+}
+
+// AtPickerState is the composer's @-file picker: the reference being typed
+// (start index + query), the matches, the highlighted row and the number of
+// references already present in the input.
+export interface AtPickerState {
+  start: number
+  query: string
+  items: AtMatch[]
+  idx: number
+  loading: boolean
+  count: number
+}
+
 export type { SessionMessage }

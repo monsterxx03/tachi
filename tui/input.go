@@ -4,14 +4,16 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 	"strings"
 
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/monsterxx03/tachi/agent/atfile"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileindex"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -33,8 +35,11 @@ type InputArea struct {
 
 	// @-file completions
 	atFileQuery       string
-	atFileMatches     []atFileMatch
+	atFileMatches     []fileindex.Match
 	atFileSelectedIdx int
+	// files indexes the working directory for @-file completion (cached per
+	// root, so keystrokes do not re-run ripgrep).
+	files *fileindex.Index
 
 	// skill completions (populated from agent skill store)
 	skillNames []string
@@ -87,6 +92,7 @@ func NewInputArea(historyMax int, historyPath string, l *logger.Logger) InputAre
 		histIdx:        -1,
 		historyPath:    historyPath,
 		pasteThreshold: 5,
+		files:          fileindex.New(l),
 		logger:         l,
 	}
 	if historyMax > 0 && historyPath != "" {
@@ -244,42 +250,22 @@ func (i *InputArea) wrapDroppedFiles(text string) (string, bool) {
 		return "", false
 	}
 
-	var wrapped []string
+	// Treat the paste as a file drop only when every part resolves to a path
+	// on disk; otherwise it is a regular text paste.
+	paths := make([]string, 0, len(parts))
 	for _, part := range parts {
 		part = strings.TrimSpace(part)
 		if part == "" {
 			continue
 		}
-
-		// Expand ~ to home directory (some terminals may paste ~ paths)
-		resolved := part
-		if strings.HasPrefix(resolved, "~") {
-			home, err := os.UserHomeDir()
-			if err != nil {
-				return "", false
-			}
-			resolved = filepath.Join(home, resolved[1:])
-		}
-
-		// Verify the path actually exists on disk
-		if _, err := os.Stat(resolved); err != nil {
+		resolved := atfile.ResolvePath(cwd, part)
+		if !fileutil.Exists(resolved) {
 			return "", false
 		}
-
-		// Convert to relative path if possible (cleaner @-references)
-		rel, err := filepath.Rel(cwd, resolved)
-		if err == nil && !strings.HasPrefix(rel, "..") {
-			wrapped = append(wrapped, "@"+rel)
-		} else {
-			// Outside cwd — use the original text
-			wrapped = append(wrapped, "@"+part)
-		}
+		paths = append(paths, resolved)
 	}
 
-	if len(wrapped) > 0 {
-		return strings.Join(wrapped, " "), true
-	}
-	return "", false
+	return atfile.RefsForPaths(cwd, paths)
 }
 
 // splitUnescaped splits text by spaces, respecting backslash-escaped spaces.
@@ -428,7 +414,7 @@ func (i *InputArea) applyAtFileCompletion() {
 
 	// Replace "@query" with "@match.Path " in the textarea value
 	val := i.textarea.Value()
-	atPos := findLastAt(val)
+	atPos := atfile.LastRefStart(val)
 	if atPos < 0 {
 		return
 	}
@@ -622,7 +608,7 @@ func (i *InputArea) appendMCPCompletions(val string) {
 }
 
 func (i *InputArea) updateAtFileCompletions(val string) {
-	atPos := findLastAt(val)
+	atPos := atfile.LastRefStart(val)
 	if atPos < 0 {
 		i.clearAtFileCompletions()
 		return

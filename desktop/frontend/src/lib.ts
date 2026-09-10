@@ -112,3 +112,71 @@ export function toLocalAsset(src: string | undefined, workDir: string): string {
   if (!p.startsWith('/')) p = `${workDir || ''}/${p.replace(/^\.\//, '')}`
   return `/local?p=${encodeURIComponent(p)}`
 }
+
+// ── @-file references ───────────────────────────────────────────────────────
+// Mirrors agent/atfile.IsRefBoundary: a reference starts at the beginning of
+// the text or after any whitespace, and runs to the next whitespace. Keeping
+// the rule identical on both sides means the popup offers exactly the
+// references the backend will expand when the message is sent.
+export function isRefBoundary(ch: string): boolean {
+  return ch === ' ' || ch === '\t' || ch === '\n' || ch === '\r'
+}
+
+// atRefAt returns the @-reference the caret sits in — its start index and the
+// query typed after it — or null when the caret is not inside one.
+export function atRefAt(value: string, caret: number): { start: number; query: string } | null {
+  for (let i = caret - 1; i >= 0; i--) {
+    const c = value[i]
+    if (c === '@') {
+      if (i > 0 && !isRefBoundary(value[i - 1])) return null // attached to a word (e.g. an email)
+      return { start: i, query: value.slice(i + 1, caret) }
+    }
+    if (isRefBoundary(c)) return null // left the reference without finding its @
+  }
+  return null
+}
+
+// countAtRefs counts the @-references in value, used for the picker's
+// "already referencing N" hint.
+export function countAtRefs(value: string): number {
+  let n = 0
+  for (let i = 0; i < value.length; i++) {
+    if (value[i] === '@' && (i === 0 || isRefBoundary(value[i - 1]))) n++
+  }
+  return n
+}
+
+// atRefEnd returns the index just past the reference starting at start — the
+// next whitespace, or the end of the text.
+export function atRefEnd(value: string, start: number): number {
+  let i = start + 1
+  while (i < value.length && !isRefBoundary(value[i])) i++
+  return i
+}
+
+// replaceRefText replaces the whole reference at start (not just up to the
+// caret — the user may be editing mid-query) with text, returning the new value
+// and the caret position after it. When the text after the reference already
+// starts with whitespace, text's own trailing space is dropped and the caret
+// skips past that existing separator — so accepting a match mid-sentence neither
+// doubles the space nor glues the next keystroke onto the path.
+export function replaceRefText(value: string, start: number, text: string): { value: string; caret: number } {
+  const rest = value.slice(atRefEnd(value, start))
+  const dropped = text.endsWith(' ') && rest !== '' && isRefBoundary(rest[0])
+  const ins = dropped ? text.slice(0, -1) : text
+  const next = value.slice(0, start) + ins + rest
+  let caret = start + ins.length
+  if (dropped) while (caret < next.length && isRefBoundary(next[caret])) caret++
+  return { value: next, caret }
+}
+
+// insertRefText splices a reference (or a space-joined batch of them) into the
+// value at caret, keeping a separating space so the reference is recognized.
+// Returns the new value and the caret position after the inserted text.
+export function insertRefText(value: string, caret: number, text: string, trailingSpace = true): { value: string; caret: number } {
+  const before = value.slice(0, caret)
+  const after = value.slice(caret)
+  const lead = before === '' || isRefBoundary(before[before.length - 1]) ? '' : ' '
+  const insert = lead + text + (trailingSpace ? ' ' : '')
+  return { value: before + insert + after, caret: caret + insert.length }
+}
