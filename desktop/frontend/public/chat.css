@@ -1,17 +1,53 @@
-/* ── Chat area ───────────────────────────────────────────────────────────── */
+/* ── Chat area ───────────────────────────────────────────────────────────────
+   chat-wrap exists solely so the "jump to latest" pill can be positioned
+   against the scroller without participating in its scrollable content. */
+.chat-wrap {
+  position: relative;
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
 .chat {
   flex: 1;
+  min-width: 0;
+  min-height: 0;
   overflow-y: auto;
-  padding: 28px 26px 24px;
+  padding: 30px 26px 24px;
   display: flex;
   flex-direction: column;
-  gap: 22px;
-  scroll-behavior: smooth;
-  /* Fence repaints inside the scroller so they never reach the glass chrome
-     above/below it. Paired with the compositing-layer promotion on .titlebar /
-     .composer / .sidebar. */
+  /* Roomy vertical rhythm now that messages are not separated by cards:
+     whitespace is the only separator between turns. */
+  gap: 30px;
+  /* Instant, not smooth: programmatic pins during streaming and the
+     scroll-position restore after loading older messages must not animate
+     (and a smooth animation would keep drifting after the user scrolls up). */
+  scroll-behavior: auto;
   contain: paint;
 }
+
+/* Shown only when the user has scrolled away from the bottom — clicking it
+   re-arms auto-follow. */
+.jump-latest {
+  position: absolute;
+  right: 22px;
+  bottom: 16px;
+  z-index: 3;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 12px;
+  border: 1px solid var(--border-2);
+  border-radius: 999px;
+  background: #ffffff;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 550;
+  cursor: pointer;
+  box-shadow: var(--shadow-2);
+  transition: color 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
+}
+.jump-latest:hover { color: var(--accent-2); border-color: rgba(91, 124, 255, 0.42); box-shadow: var(--shadow-3); }
+.jump-ico { font-size: 12px; line-height: 1; }
 
 /* ── Messages ────────────────────────────────────────────────────────────── */
 .msg {
@@ -46,15 +82,14 @@
 }
 .msg-user .msg-avatar {
   background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
-  color: #fff;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.3),
-    var(--shadow-accent);
+  color: var(--user-ink);
+  border: 1px solid rgba(91, 124, 255, 0.16);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7), var(--shadow-1);
 }
 .msg-assistant .msg-avatar {
-  background: linear-gradient(165deg, rgba(255, 255, 255, 0.95), rgba(238, 242, 255, 0.9));
+  background: linear-gradient(165deg, #ffffff, #f3f5fc);
   color: var(--accent-2);
-  border: 1px solid rgba(91, 124, 255, 0.22);
+  border: 1px solid rgba(91, 124, 255, 0.18);
   font-size: 11px;
 }
 
@@ -65,54 +100,42 @@
   min-width: 0;
 }
 
-/* Assistant card: the primary reading surface now spans the full chat width
-   (agent output — prose, code, tables, tool cards — is the main consumer of
-   horizontal space, so it gets all of it). Fully opaque card + soft
-   elevation, with a top sheen so it lifts off the glass.
-
-   Deliberately NO backdrop-filter here. Cards are the one element that gets
-   repeated dozens of times and scrolled: every blur layer is re-sampled on
-   scroll, and a repaint in one backdrop layer invalidates the others sharing
-   the same backdrop root — which made the titlebar flicker on scroll and on
-   hover. The fill is opaque anyway, so a blur behind it would be invisible
-   work. Glass stays on the chrome (sidebar/titlebar/composer), which is
-   static and few. */
+/* Assistant message: no card at all — the answer sits directly on the app
+   background, full width, so prose/code/tables read as the page itself rather
+   than as content floating inside a box. Structure comes from the inline
+   blocks (thinking row, tool rows, code/tables) and whitespace. */
 .msg-assistant .msg-content {
   flex: 1 1 auto;
   max-width: none;
   width: auto;
   min-width: 0;
-  background: linear-gradient(180deg, #ffffff, #fbfcfe);
-  border: 1px solid var(--border);
-  border-top-color: var(--sheen);
-  padding: 13px 17px;
-  border-radius: 14px;
-  box-shadow: var(--shadow-2);
+  padding: 1px 0 0;
+  background: transparent;
+  border: none;
+  box-shadow: none;
 }
 
-/* User bubble: filled accent gradient + white text. The strongest colour on
-   screen, so "what I said" is findable at a glance while scrolling. */
+/* User bubble: a soft blue wash with dark ink. Deliberately quiet — it marks
+   what you said without out-shouting the agent's answer. */
 .msg-user .msg-content {
   background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
-  color: #fff;
-  padding: 11px 15px;
+  color: var(--user-ink);
+  padding: 10px 14px;
   border-radius: 14px 14px 4px 14px;
   font-size: 14px;
   line-height: 1.55;
   max-width: 520px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.22),
-    var(--shadow-accent);
+  box-shadow: var(--shadow-1);
 }
-/* Re-tint the bits that inherit dim/faint colours inside the filled bubble. */
+/* Re-tint the bits that inherit dim/faint colours inside the tinted bubble. */
 .msg-user .msg-content .msg-ts,
 .msg-user .msg-content .reminder-head,
-.msg-user .msg-content .reminder-line { color: rgba(255, 255, 255, 0.75); }
-.msg-user .msg-content .reminder-head:hover { color: #fff; }
-.msg-user .msg-content .reminder-body { border-left-color: rgba(255, 255, 255, 0.3); }
+.msg-user .msg-content .reminder-line { color: rgba(59, 69, 112, 0.6); }
+.msg-user .msg-content .reminder-head:hover { color: var(--user-ink); }
+.msg-user .msg-content .reminder-body { border-left-color: rgba(59, 69, 112, 0.22); }
 .msg-user .msg-content code {
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: rgba(91, 124, 255, 0.13);
+  color: #33406e;
 }
 .assistant-text img {
   max-width: 100%;
@@ -170,14 +193,22 @@
 .tool-status.err { color: var(--red); }
 /* Result copy + elapsed time live on the tool header line (not their own row). */
 .tool-dur { font-size: 11px; color: var(--text-faint); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+/* Tool result: a scrollable block like the args — a long tool output expands
+   inside its own bounded area instead of stretching the whole transcript. */
 .tool-summary {
   font-size: 12.5px;
   color: var(--text-dim);
   margin-top: 7px;
+  padding: 8px 11px;
   line-height: 1.6;
   white-space: pre-wrap;
   word-break: break-word;
   overflow-wrap: anywhere;
+  background: rgba(16, 20, 40, 0.035);
+  border-radius: 8px;
+  max-height: 260px;
+  overflow-y: auto;
+  scrollbar-gutter: stable;
 }
 
 /* ── Running / typing indicator ──────────────────────────────────────────── */
@@ -216,15 +247,10 @@
 .composer {
   border-top: 1px solid var(--border);
   padding: 14px 20px 10px;
-  background: var(--chrome);
-  backdrop-filter: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-strong);
-  box-shadow: 0 -1px 0 var(--sheen) inset;
+  background: var(--chrome-2);
   flex-shrink: 0;
-  /* Own compositing layer — see the note on .titlebar in layout.css. */
   position: relative;
   z-index: 2;
-  transform: translateZ(0);
 }
 /* ── Pending queue (steer) bar ────────────────────────────────────────────── */
 /* Messages queued while a turn is running: shown above the composer, each
@@ -236,8 +262,8 @@
   gap: 4px;
   margin-bottom: 9px;
   padding: 8px 11px;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.72));
-  border: 1px solid rgba(91, 124, 255, 0.3);
+  background: #ffffff;
+  border: 1px solid rgba(91, 124, 255, 0.28);
   border-radius: 12px;
   box-shadow: var(--shadow-1);
   max-height: 148px;
@@ -320,7 +346,7 @@
 .composer-box {
   display: flex;
   flex-direction: column;
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.88), rgba(255, 255, 255, 0.72));
+  background: #ffffff;
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);
   padding: 10px 10px 8px;

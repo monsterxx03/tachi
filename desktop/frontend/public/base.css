@@ -1,4 +1,4 @@
-/* ── Tachi Desktop — macOS vibrancy conversational UI ────────────────────── */
+/* ── Tachi Desktop — flat, content-first conversational UI ───────────────── */
 
 /* Inter ships in public/ and pairs with the system stack: Inter carries Latin
    text + tabular numerals, PingFang SC covers CJK. Loaded as `swap` so the
@@ -12,29 +12,18 @@
 }
 
 :root {
-  /* Surfaces. The window itself is translucent (main.go sets
-     MacBackdropTranslucent), so surfaces are layered by opacity instead of by
-     flat fills: the further from the reading content, the more see-through.
-     Chrome (sidebar/titlebar) floats on the system blur; content cards stay
-     near-opaque so text never fights the desktop behind it. */
-  --bg: rgba(244, 245, 250, 0.72);
+  /* Flat, opaque surfaces. The window itself is opaque (main.go uses
+     MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
+     every surface is a plain colour. Depth comes from hairline borders and
+     whitespace instead of glass. */
+  --bg: #f6f7fb;         /* app background — agent messages sit directly on it */
+  --chrome: #f2f3f8;     /* sidebar */
+  --chrome-2: #fafbfd;   /* titlebar / composer */
   --panel-solid: #ffffff;
-
-  /* Chrome surfaces sit directly on the vibrancy layer. */
-  --chrome: rgba(250, 251, 254, 0.55);
-  --chrome-2: rgba(255, 255, 255, 0.44);
-
-  /* Card = the assistant bubble / tool card reading surface: highest opacity
-     in the stack, because body copy lives here. */
-  --card: rgba(255, 255, 255, 0.86);
 
   --border: rgba(16, 20, 40, 0.07);
   --border-2: rgba(16, 20, 40, 0.12);
   --border-strong: rgba(16, 20, 40, 0.18);
-
-  /* Hairline highlight along a surface's top edge — the trick that makes
-     macOS glass read as a physical pane rather than a flat rectangle. */
-  --sheen: rgba(255, 255, 255, 0.7);
 
   --text: #14161f;
   --text-dim: #5b6175;
@@ -51,23 +40,19 @@
   --red: #dc3b45;
   --amber: #cf7820;
 
-  /* User bubble: a filled accent gradient, so the eye can tell "mine" from
-     "the agent's" without reading a single word. */
-  --user-grad-a: #6a86ff;
-  --user-grad-b: #566ff0;
+  /* User bubble: a soft blue wash with dark ink — present but quiet, so it
+     never out-shouts the agent's answer. */
+  --user-grad-a: #e9eefc;
+  --user-grad-b: #e1e8fa;
+  --user-ink: #3b4570;
 
-  /* Elevation. macOS shadows are wide + very low alpha; the paired 1px
-     ambient ring is what keeps edges crisp on a busy wallpaper. */
+  /* Elevation. Wide, very low-alpha shadows; the paired 1px ambient ring is
+     what keeps raised edges crisp on the flat background. */
   --shadow-1: 0 1px 2px rgba(16, 20, 40, 0.05), 0 1px 1px rgba(16, 20, 40, 0.03);
   --shadow-2: 0 2px 6px rgba(16, 20, 40, 0.06), 0 4px 16px rgba(16, 20, 40, 0.05);
   --shadow-3: 0 6px 16px rgba(16, 20, 40, 0.09), 0 16px 40px rgba(16, 20, 40, 0.10);
   --shadow-4: 0 12px 28px rgba(16, 20, 40, 0.14), 0 28px 64px rgba(16, 20, 40, 0.16);
-  --shadow-accent: 0 2px 10px rgba(74, 102, 224, 0.28);
-
-  /* Glass recipes. saturate() before blur is what gives macOS vibrancy its
-     colour bleed — plain blur alone looks like frosted plastic. */
-  --glass: saturate(180%) blur(20px);
-  --glass-strong: saturate(190%) blur(30px);
+  --shadow-accent: 0 2px 10px rgba(74, 102, 224, 0.22);
 
   --radius-lg: 16px;
   --radius-sm: 8px;
@@ -84,10 +69,8 @@ html, body, #root {
 
 body {
   font-family: "Inter", -apple-system, "SF Pro Text", "Helvetica Neue", "PingFang SC", "Segoe UI", system-ui, sans-serif;
-  /* Transparent: this is what lets the native translucent backdrop show
-     through. Any opaque fill here would cancel the window vibrancy that
-     main.go already asks the OS for. */
-  background: transparent;
+  /* Opaque window: body paints the app background directly. */
+  background: var(--bg);
   color: var(--text);
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
@@ -106,25 +89,13 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  /* A whisper of accent tint over the system blur, so the glass reads as
-     "Tachi blue" rather than neutral grey. */
+  /* A whisper of accent tint, so the flat background reads as "Tachi blue"
+     rather than neutral grey — and so agent text sits on a lived-in surface
+     instead of a stark white sheet. */
   background:
-    radial-gradient(1200px 600px at 12% -10%, rgba(122, 149, 255, 0.13), transparent 60%),
-    radial-gradient(900px 500px at 100% 100%, rgba(91, 124, 255, 0.08), transparent 55%),
+    radial-gradient(1200px 600px at 12% -10%, rgba(122, 149, 255, 0.07), transparent 60%),
+    radial-gradient(900px 500px at 100% 100%, rgba(91, 124, 255, 0.05), transparent 55%),
     var(--bg);
-}
-
-/* Respect the OS "reduce transparency" accessibility setting: fall back to
-   solid surfaces so the UI stays legible without vibrancy. */
-@media (prefers-reduced-transparency: reduce) {
-  :root {
-    --bg: #f4f5fa;
-    --chrome: #fafbfe;
-    --chrome-2: #ffffff;
-    --card: #ffffff;
-    --glass: none;
-    --glass-strong: none;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {

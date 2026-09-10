@@ -21,6 +21,7 @@ export interface Part {
   summary?: string
   ok?: boolean
   done?: boolean
+  durationMs?: number
   toolCallId?: string
 }
 

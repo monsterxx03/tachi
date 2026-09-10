@@ -71,10 +71,15 @@ func main() {
 		MinHeight: 600,
 		Mac: application.MacWindow{
 			InvisibleTitleBarHeight: 44,
-			Backdrop:                application.MacBackdropTranslucent,
-			TitleBar:                application.MacTitleBarHidden,
+			// Opaque window: the UI is a flat, solid design (no vibrancy, no
+			// backdrop blur anywhere), so the desktop behind the window must
+			// not bleed through.
+			Backdrop: application.MacBackdropNormal,
+			TitleBar: application.MacTitleBarHidden,
 		},
-		BackgroundColour: application.NewRGB(245, 246, 250),
+		// Matches --bg in base.css so the window never flashes a different
+		// shade before the frontend paints.
+		BackgroundColour: application.NewRGB(246, 247, 251),
 		URL:              "/",
 	})
 	desk.app = app

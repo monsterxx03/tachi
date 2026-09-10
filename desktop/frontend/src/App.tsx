@@ -1,4 +1,4 @@
-import { Fragment, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import { Dialogs, Events } from '@wailsio/runtime'
@@ -13,11 +13,12 @@ import {
   PAGE_SIZE,
   type AgentEvent,
   type Message,
+  type Part,
   type SessionItem,
 } from './types'
 import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier } from './lib'
 import {
-  ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, ToolCard, MCPPanel,
+  ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel,
 } from './components'
 
 // TableScroller wraps GFM tables in a horizontally scrollable container so a
@@ -30,6 +31,130 @@ function TableScroller(props: { children?: ReactNode }) {
     </div>
   )
 }
+
+// ── Ordered turn parts ──────────────────────────────────────────────────────
+// A live turn accumulates the SAME ordered `parts` array a rebuilt transcript
+// has (see buildTurns): deltas extend the trailing part of their own kind, a
+// tool start appends a part, its result closes that part. Without this the
+// live view sorted everything into fixed buckets (all tools, then all text),
+// so a multi-step turn rendered in the wrong order until a restart rebuilt it.
+function appendPartDelta(m: Message, type: 'thinking' | 'text', delta: string): Message {
+  if (!delta) return m
+  const parts = [...(m.parts || [])]
+  const last = parts[parts.length - 1]
+  if (last && last.type === type) parts[parts.length - 1] = { ...last, text: (last.text || '') + delta }
+  else parts.push({ type, text: delta })
+  return { ...m, parts }
+}
+
+function pushToolPart(m: Message, p: Part): Message {
+  return { ...m, parts: [...(m.parts || []), p] }
+}
+
+// finishToolPart closes the newest still-running call of the named tool.
+function finishToolPart(m: Message, name: string, summary: string, ok: boolean, durationMs?: number): Message {
+  const parts = [...(m.parts || [])]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    if (p.type === 'tool' && !p.done && p.name === name) {
+      parts[i] = { ...p, summary, ok, done: true, durationMs }
+      break
+    }
+  }
+  return { ...m, parts }
+}
+
+// updateToolPart fills in the human-readable title/args for the newest
+// in-flight call (pushed by the separate agent:tool event).
+function updateToolPart(m: Message, name: string, title: string, args: string): Message {
+  const parts = [...(m.parts || [])]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    const p = parts[i]
+    if (p.type === 'tool' && !p.done && p.name === name) {
+      parts[i] = { ...p, title, args }
+      break
+    }
+  }
+  return { ...m, parts }
+}
+
+// closeOpenToolParts marks every unfinished call as aborted — used when a turn
+// is stopped/errors and no tool_result will ever arrive.
+function closeOpenToolParts(parts: Part[] | undefined, summary: string): Part[] {
+  return (parts || []).map((p) => (p.type === 'tool' && !p.done ? { ...p, ok: false, done: true, summary } : p))
+}
+
+function lastRunningAssistantIndex(list: Message[]): number {
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].role === 'assistant' && list[i].running) return i
+  }
+  return -1
+}
+
+// imeActive reports whether a key event belongs to an IME composition (Chinese
+// / Japanese / Korean candidate selection). Enter while composing confirms a
+// candidate — treating it as "submit" is the classic IME bug. keyCode 229 is
+// the fallback some WebKit builds report instead of setting isComposing.
+function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?: number }): boolean {
+  return !!e.nativeEvent?.isComposing || e.keyCode === 229
+}
+
+// ── Memoized transcript pieces ──────────────────────────────────────────────
+// Streaming replaces only the message being written (its siblings keep the
+// same object references), so memoization here means every earlier turn — and
+// its already-parsed markdown — is skipped on each animation frame. Without
+// this, a long session re-parsed the whole transcript dozens of times per
+// second, which is what made output feel jumpy.
+
+const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: string; workDir: string }) {
+  const MdImg = useCallback(({ src, alt }: { src?: string; alt?: string }) => (
+    <img src={toLocalAsset(src, workDir)} alt={alt || ''} />
+  ), [workDir])
+  return (
+    <div className="assistant-text">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg, table: TableScroller }}>{text}</ReactMarkdown>
+    </div>
+  )
+})
+
+const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir: string }) {
+  if (part.type === 'thinking') return <ThinkingPart text={part.text || ''} />
+  if (part.type === 'tool') {
+    return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok} durationMs={part.durationMs} />
+  }
+  return <MarkdownBlock text={part.text || ''} workDir={workDir} />
+})
+
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel }: {
+  m: Message
+  workDir: string
+  // Only passed while the turn is running, so finished messages keep a stable
+  // props shape and stay memoized.
+  runningLabel?: string
+}) {
+  return (
+    <div className="msg msg-assistant">
+      <div className="msg-avatar">◆</div>
+      <div className="msg-content">
+        <div className="turn-parts">
+          {(m.parts || []).map((p, i) => <TurnPart key={i} part={p} workDir={workDir} />)}
+        </div>
+        {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{runningLabel ?? '正在执行…'}</span> : null}
+        {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
+        {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
+        {m.summary ? (
+          <div className="msg-footer">
+            {m.summary.durationMs > 0 ? <span>⏱ {fmtDur(m.summary.durationMs)}</span> : null}
+            {m.summary.iterations > 0 ? <span>{m.summary.iterations} iters</span> : null}
+            {m.summary.cost > 0 ? <span>¥{m.summary.cost.toFixed(3)}</span> : null}
+            {m.summary.credit > 0 ? <span>{m.summary.credit} 积分</span> : null}
+          </div>
+        ) : null}
+      </div>
+    </div>
+  )
+})
+
 function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
@@ -77,14 +202,86 @@ function App() {
   // sendingNow guards the "立即发送" action against double-clicks while the
   // backend is still stopping the previous turn.
   const [sendingNow, setSendingNow] = useState(false)
+  // Auto-follow state: true while the view is parked at the bottom. Scrolling
+  // up flips it off (and surfaces the "jump to latest" button) so incoming
+  // streaming output no longer yanks the transcript back down under the user.
+  const followBottomRef = useRef(true)
+  const [showJump, setShowJump] = useState(false)
+  // IME composition state for the composer. Some WebKit builds fire
+  // compositionend BEFORE the Enter keydown that commits the candidate, so the
+  // ref is cleared on the next macrotask — that keeps the guard active for the
+  // committing Enter without swallowing a later, genuine Enter-to-send.
+  const composingRef = useRef(false)
   const chatRef = useRef<HTMLDivElement>(null)
   const composerRef = useRef<HTMLTextAreaElement>(null)
   const messages = msgCache[currentId] || []
   const pendMsgs = pending[currentId] || []
 
-  const scrollToBottom = useCallback(() => {
-    setTimeout(() => { const el = chatRef.current; if (el) el.scrollTop = el.scrollHeight }, 60)
+  const scrollToBottom = useCallback((force = false) => {
+    // force=true is for actions where following is clearly intended (sending a
+    // message, switching sessions). Otherwise the pin only happens while the
+    // user is parked at the bottom.
+    if (force) {
+      followBottomRef.current = true
+      setShowJump(false)
+    }
+    const el = chatRef.current
+    if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
   }, [])
+
+  // ── Frame-batched deltas ───────────────────────────────────────────────────
+  // Token deltas arrive far faster than the display refreshes. Batching them
+  // into a single state update per animation frame caps markdown parsing and
+  // layout at ~60/s instead of once per token. Non-delta events flush the
+  // buffer first, so the transcript order stays exactly as it happened.
+  const deltaQueueRef = useRef<{ sid: string; type: 'thinking' | 'text'; delta: string }[]>([])
+  const deltaRafRef = useRef<number | null>(null)
+  const flushDeltas = useCallback(() => {
+    if (deltaRafRef.current !== null) {
+      cancelAnimationFrame(deltaRafRef.current)
+      deltaRafRef.current = null
+    }
+    const q = deltaQueueRef.current
+    if (!q.length) return
+    deltaQueueRef.current = []
+    setMsgCache((prev) => {
+      // Group per session (order preserved within a session) so background
+      // sessions batched in the same frame don't clobber each other.
+      const groups = new Map<string, { type: 'thinking' | 'text'; delta: string }[]>()
+      for (const it of q) {
+        const g = groups.get(it.sid)
+        if (g) g.push(it)
+        else groups.set(it.sid, [it])
+      }
+      let out = prev
+      for (const [sid, items] of groups) {
+        const list = prev[sid] || []
+        const idx = lastRunningAssistantIndex(list)
+        if (idx < 0) continue
+        let cur = list[idx]
+        for (const it of items) cur = appendPartDelta(cur, it.type, it.delta)
+        if (cur === list[idx]) continue
+        const next = [...list]
+        next[idx] = cur
+        if (out === prev) out = { ...prev }
+        out[sid] = next
+      }
+      return out
+    })
+  }, [])
+  const enqueueDelta = useCallback((sid: string, type: 'thinking' | 'text', delta: string) => {
+    if (!delta) return
+    deltaQueueRef.current.push({ sid, type, delta })
+    if (deltaRafRef.current === null) deltaRafRef.current = requestAnimationFrame(flushDeltas)
+  }, [flushDeltas])
+
+  // Pin to the newest content after every committed update while following —
+  // doing it in a layout effect means the scroll happens in the same frame the
+  // content grows, so the view glides instead of lurching.
+  useLayoutEffect(() => {
+    const el = chatRef.current
+    if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [msgCache])
 
   // On session switch, jump straight to the newest message BEFORE paint (via
   // useLayoutEffect) so the view never briefly shows the oldest messages and
@@ -93,12 +290,24 @@ function App() {
   useLayoutEffect(() => {
     const el = chatRef.current
     if (el) el.scrollTop = el.scrollHeight
+    // A session switch always lands at the newest message — re-arm following.
+    followBottomRef.current = true
+    setShowJump(false)
   }, [currentId])
 
   const loadMoreRef = useRef(false)
   const handleScroll = () => {
     const el = chatRef.current
-    if (!el || loadMoreRef.current || loading) return
+    if (!el) return
+    // Track bottom-proximity first: scrolling up must pause auto-follow even
+    // while a page of older messages is being fetched (the early return below
+    // would otherwise swallow it).
+    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
+    if (nearBottom !== followBottomRef.current) {
+      followBottomRef.current = nearBottom
+      setShowJump(!nearBottom)
+    }
+    if (loadMoreRef.current || loading) return
     // Load older messages from the backend when the user scrolls to the top and
     // more history is known to exist.
     if (el.scrollTop <= 40 && hasMore[currentId] && earliestTs[currentId]) {
@@ -183,11 +392,11 @@ function App() {
     const tsStr = new Date().toISOString()
     setSessionMsgs(sid, (prev) => [...prev,
       { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, text: '', ts: tsStr },
+      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
     ])
     AgentService.SendMessage(text).catch(() => {})
     setRunningSet((prev) => new Set(prev).add(sid))
-    scrollToBottom()
+    scrollToBottom(true)
   }, [currentId, setSessionMsgs, scrollToBottom])
 
   // send routes the composer text: while a turn is running the message goes to
@@ -216,11 +425,11 @@ function App() {
     const tsStr = new Date().toISOString()
     setSessionMsgs(sid, (prev) => [...prev,
       { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, text: '', ts: tsStr },
+      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
     ])
     setRunningSet((prev) => new Set(prev).add(sid))
     setSendingNow(true)
-    scrollToBottom()
+    scrollToBottom(true)
     try {
       const ret = isCurrentRunning
         ? await AgentService.StopAndSend(text)
@@ -248,18 +457,20 @@ function App() {
       if (ai < 0) return prev
       const seg = list[ai]
       const u: Message = { id: `u-${Date.now()}-steer`, role: 'user', text, ts }
-      if (!(seg.thinking || (seg.tools && seg.tools.length) || seg.text)) {
+      if (!(seg.parts && seg.parts.length)) {
         const out = [...list]
         out.splice(ai, 0, u)
         return { ...prev, [sid]: out }
       }
       const out = [...list]
       out[ai] = { ...seg, running: false }
-      out.push(u, { id: `a-${Date.now()}-steer`, role: 'assistant', running: true, text: '', ts })
+      out.push(u, { id: `a-${Date.now()}-steer`, role: 'assistant', running: true, parts: [], ts })
       return { ...prev, [sid]: out }
     })
-    setTimeout(() => { const el = chatRef.current; if (el) el.scrollTop = el.scrollHeight }, 60)
-  }, [])
+    // Respect the follow state here too: a steered message landing mid-history
+    // must not yank a user who is reading older output back to the bottom.
+    scrollToBottom()
+  }, [scrollToBottom])
 
   // answerSteer replies to the agent's steer_check for a session: queued text
   // is drained, shown in the transcript and injected; otherwise the empty
@@ -369,7 +580,7 @@ function App() {
         }
       }
       refreshCost(cur.id)
-      scrollToBottom()
+      scrollToBottom(true)
     } else {
       const ns = await AgentService.NewSession().catch(() => null)
       if (ns) {
@@ -410,7 +621,7 @@ function App() {
       setLoading(false)
     }
     setTps(0); setLastTps(0)
-    scrollToBottom()
+    scrollToBottom(true)
     refreshRunning()
     refreshCost(id)
     refreshProvider()
@@ -497,15 +708,17 @@ function App() {
         // idempotent so double-handling is harmless.
         const target = [...list].reverse().find((m) => m.role === 'assistant')
         if (!target) return prev
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? {
-          ...m,
-          running: false,
-          stopped: interrupted || m.stopped,
-          // After a stop no tool_result event arrives for in-flight calls;
-          // close their cards so they don't stay "执行中" forever.
-          tools: interrupted ? (m.tools || []).map((t) => (t.done ? t : { ...t, ok: false, done: true, summary: '已中断' })) : m.tools,
-          text: interrupted ? m.text : (m.text || '') + '\n\n⚠ ' + (d.error || '出错'),
-        } : m)) }
+        const conclude = (m: Message): Message => {
+          // After a stop no tool_result event arrives for in-flight calls, so
+          // close their cards; a real error is surfaced as a trailing text
+          // part (the transcript renders parts in order — there is no
+          // separate error field to append to).
+          const parts = interrupted
+            ? closeOpenToolParts(m.parts, '已中断')
+            : [...(m.parts || []), { type: 'text' as const, text: '⚠ ' + (d.error || '出错') }]
+          return { ...m, running: false, stopped: interrupted || m.stopped, parts }
+        }
+        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? conclude(m) : m)) }
       })
     })
     return () => off?.()
@@ -532,8 +745,7 @@ function App() {
         const list = prev[currentId] || []
         const target = [...list].reverse().find((m) => m.role === 'assistant' && m.running)
         if (!target) return prev
-        const tools = (target.tools || []).map((c) => (c.name === t.name ? { ...c, title: t.title, arguments: t.args } : c))
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? { ...m, tools } : m)) }
+        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? updateToolPart(m, t.name, t.title, t.args) : m)) }
       })
     })
     return () => off?.()
@@ -553,12 +765,15 @@ function App() {
     const off = Events.On('agent:event', (event) => {
       const d = event.data as { sessionId: string; event: AgentEvent }
       const { sessionId, event: ev } = d
+      // Deltas ride the frame batcher; every other event must be applied in
+      // order, so flush pending text/thinking first.
+      if (ev.Type !== 'thinking_delta' && ev.Type !== 'text_delta') flushDeltas()
       switch (ev.Type) {
-        case 'thinking_delta': apply(sessionId, 'assistant', (m) => ({ ...m, thinking: (m.thinking || '') + (ev.ThinkingDelta || '') })); break
-        case 'text_delta': apply(sessionId, 'assistant', (m) => ({ ...m, text: (m.text || '') + ev.TextDelta, thinkingCollapsed: m.thinking ? true : m.thinkingCollapsed })); break
-        case 'tool_call_start': apply(sessionId, 'assistant', (m) => { const tools = m.tools || []; tools.push({ name: ev.ToolName, title: '', arguments: '', summary: '执行中…', ok: true, done: false }); return { ...m, tools, thinkingCollapsed: true } }); break
-        case 'tool_result': apply(sessionId, 'assistant', (m) => { const tools = (m.tools || []).map((t) => (t.done ? t : { ...t, summary: ev.ToolResult, ok: !ev.ToolIsError, done: true, durationMs: ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined })); return { ...m, tools, thinkingCollapsed: true } }); break
-        case 'turn_complete': apply(sessionId, 'assistant', (m) => ({ ...m, running: false, thinkingCollapsed: true })); refreshRunning(); break
+        case 'thinking_delta': enqueueDelta(sessionId, 'thinking', ev.ThinkingDelta || ''); break
+        case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
+        case 'tool_call_start': apply(sessionId, 'assistant', (m) => pushToolPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false })); break
+        case 'tool_result': apply(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined)); break
+        case 'turn_complete': apply(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'steer_check':
           // The agent finished a round of tool calls and is parked, waiting
           // for pending user input to steer the next LLM call. Queued text is
@@ -572,12 +787,16 @@ function App() {
           break
         }
       }
-      if (sessionId === currentId) scrollToBottom()
-      refreshRunning()
-      refreshProvider()
+      // These two are backend round-trips over IPC and used to run for EVERY
+      // delta — the single biggest cause of stutter while streaming. They only
+      // carry new information at turn boundaries.
+      if (ev.Type === 'turn_complete' || ev.Type === 'error') {
+        refreshRunning()
+        refreshProvider()
+      }
     })
     return () => off?.()
-  }, [currentId, refreshRunning, scrollToBottom, refreshProvider, answerSteer])
+  }, [currentId, refreshRunning, refreshProvider, answerSteer, flushDeltas, enqueueDelta])
 
   // agent:idle fires after a turn goroutine has fully exited (running already
   // reset on the backend). A NATURAL completion auto-sends whatever the user
@@ -601,13 +820,7 @@ function App() {
     AgentService.Stop().catch(() => {})
   }, [])
 
-  const toggleThinking = useCallback((id: string) => setSessionMsgs(currentId, (prev) => prev.map((m) => (m.id === id ? { ...m, thinkingCollapsed: !m.thinkingCollapsed } : m))), [currentId, setSessionMsgs])
-
   const meta = STATUS_META[state.status as string] ?? STATUS_META.idle
-
-  const MdImg = useCallback(({ src, alt }: { src?: string; alt?: string }) => (
-    <img src={toLocalAsset(src, workDir)} alt={alt || ''} />
-  ), [workDir])
 
   return (
     <div className="app">
@@ -639,6 +852,9 @@ function App() {
                     onChange={(e) => setEditTitle(e.target.value)}
                     onClick={(e) => e.stopPropagation()}
                     onKeyDown={(e) => {
+                      // Enter/Escape during IME composition belong to the
+                      // candidate window, not to rename/commit.
+                      if (imeActive(e)) return
                       if (e.key === 'Enter') { e.stopPropagation(); commitRename(s.id) }
                       else if (e.key === 'Escape') { e.stopPropagation(); setEditingId(''); setEditTitle('') }
                     }} />
@@ -657,7 +873,8 @@ function App() {
         </aside>
 
         <main className="main">
-          <div className="chat" ref={chatRef} onScroll={handleScroll}>
+          <div className="chat-wrap">
+            <div className="chat" ref={chatRef} onScroll={handleScroll}>
             {loading ? <div className="chat-loading">加载会话…</div> : (
               <>
                 {messages.length === 0 && (
@@ -675,37 +892,21 @@ function App() {
                       </MessageBubble>
                     </Fragment>
                   ) : (
-                    <MessageBubble key={m.id} role="assistant">
-                      {m.parts ? (
-                        <div className="turn-parts">
-                          {m.parts.map((p, i) => {
-                            if (p.type === 'thinking') return <ThinkingPart key={i} text={p.text || ''} />
-                            if (p.type === 'tool') return <ToolCard key={i} name={p.name || ''} title={p.title} args={p.args} summary={p.summary || ''} ok={!!p.ok} />
-                            return <div key={i} className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg, table: TableScroller }}>{p.text}</ReactMarkdown></div>
-                          })}
-                        </div>
-                      ) : (
-                        <>
-                          {m.thinking ? <ThinkingBlock thinking={m.thinking} collapsed={!!m.thinkingCollapsed} onToggle={() => toggleThinking(m.id)} /> : null}
-                          {(m.tools || []).map((t, i) => <ToolCard key={i} name={t.name} title={t.title} args={t.arguments} summary={t.summary} ok={t.ok} durationMs={t.durationMs} />)}
-                          {m.text ? <div className="assistant-text"><ReactMarkdown remarkPlugins={[remarkGfm]} components={{ img: MdImg, table: TableScroller }}>{m.text}</ReactMarkdown></div> : null}
-                          {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{state.status === 'thinking' ? '正在思考…' : '正在执行…'}</span> : null}
-                          {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
-                        </>
-                      )}
-                      {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
-                      {m.summary ? (
-                        <div className="msg-footer">
-                          {m.summary.durationMs > 0 ? <span>⏱ {fmtDur(m.summary.durationMs)}</span> : null}
-                          {m.summary.iterations > 0 ? <span>{m.summary.iterations} iters</span> : null}
-                          {m.summary.cost > 0 ? <span>¥{m.summary.cost.toFixed(3)}</span> : null}
-                          {m.summary.credit > 0 ? <span>{m.summary.credit} 积分</span> : null}
-                        </div>
-                      ) : null}
-                    </MessageBubble>
+                    <AssistantBubble
+                      key={m.id}
+                      m={m}
+                      workDir={workDir}
+                      runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
+                    />
                   ),
                 )}
               </>
+            )}
+            </div>
+            {showJump && (
+              <button className="jump-latest" onClick={() => scrollToBottom(true)} title="回到最新消息">
+                <span className="jump-ico">↓</span>回到最新
+              </button>
             )}
           </div>
 
@@ -735,7 +936,16 @@ function App() {
             <div className="composer-box">
               <div className="composer-input-wrap">
                 <textarea className="composer-input" ref={composerRef} value={input} onChange={(e) => setInput(e.target.value)}
-                  onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send() } }}
+                  onCompositionStart={() => { composingRef.current = true }}
+                  onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
+                  onKeyDown={(e) => {
+                    if (e.key !== 'Enter' || e.shiftKey) return
+                    // Enter while an IME is composing confirms the candidate
+                    // (选词), it must not send the message.
+                    if (composingRef.current || imeActive(e)) return
+                    e.preventDefault()
+                    send()
+                  }}
                   placeholder={isCurrentRunning ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行）'} />
                 {isCurrentRunning && (
                   <button className="stop-btn" title="停止生成" onClick={stopChat} aria-label="停止生成">

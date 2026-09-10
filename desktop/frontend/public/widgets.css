@@ -268,8 +268,9 @@
   word-break: break-word;
   overflow-wrap: anywhere;
   color: var(--text);
-  max-height: 200px;
+  max-height: 260px;
   overflow: auto;
+  scrollbar-gutter: stable;
 }
 
 /* Tool card params bar + copy buttons */
@@ -379,8 +380,8 @@
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* These were Catppuccin (dark-theme) tints — too light to read on a light
-   glass surface. Re-tuned to hold contrast while keeping the hue coding. */
+/* These were Catppuccin (dark-theme) tints — too light to read on the light
+   background. Re-tuned to hold contrast while keeping the hue coding. */
 .usage-cost { color: #c2620f; font-variant-numeric: tabular-nums; font-weight: 550; }
 .usage-credit { color: var(--green); font-variant-numeric: tabular-nums; font-weight: 550; }
 .usage-cache { color: #1f7fa8; font-variant-numeric: tabular-nums; }

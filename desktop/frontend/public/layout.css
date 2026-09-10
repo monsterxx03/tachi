@@ -1,19 +1,15 @@
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
-/* The sidebar is the most see-through surface in the stack: it carries no body
-   copy, so it can float on the system vibrancy and let the desktop bleed in. */
+/* A quiet flat panel: slightly darker than the chat background so the two
+   regions read as separate planes without borders shouting about it. */
 .sidebar {
   width: 280px;
   min-width: 280px;
   background: var(--chrome);
-  backdrop-filter: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-strong);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
   padding: 14px 12px 12px;
   overflow: hidden;
-  /* Own compositing layer — see the note on .titlebar. */
-  transform: translateZ(0);
   transition: width 0.22s var(--ease), min-width 0.22s var(--ease), padding 0.22s var(--ease);
 }
 
@@ -198,13 +194,10 @@
   min-height: 0;
 }
 
-/* Titlebar: same glass as the sidebar, plus a sheen along the bottom edge so
-   the chrome/content boundary reads as a fold rather than a drawn line.
-
-   `transform: translateZ(0)` + `contain: paint` promote this to its own
-   compositing layer so chat-area repaints (scrolling, hover) can't invalidate
-   the blur behind it — without that, the titlebar visibly flickers whenever
-   the transcript scrolls. */
+/* Titlebar: flat chrome matching the sidebar, with a hairline along the bottom
+   edge so the chrome/content boundary reads as a fold rather than a drawn line.
+   No blur, no compositing-layer tricks — nothing behind it needs protecting
+   anymore. */
 .titlebar {
   display: flex;
   align-items: center;
@@ -213,14 +206,9 @@
   height: 44px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome-2);
-  backdrop-filter: var(--glass-strong);
-  -webkit-backdrop-filter: var(--glass-strong);
-  box-shadow: 0 1px 0 var(--sheen) inset;
   flex-shrink: 0;
   position: relative;
   z-index: 2;
-  transform: translateZ(0);
-  contain: paint;
 }
 .titlebar-title { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .titlebar-title h2 {
