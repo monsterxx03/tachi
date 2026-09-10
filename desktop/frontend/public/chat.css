@@ -12,6 +12,9 @@
   min-width: 0;
   min-height: 0;
   overflow-y: auto;
+  /* Focusable for the Vim-like keys (G / gg / Ctrl+U / Ctrl+D); the focus ring
+     would trace the whole scroll region, so it is suppressed. */
+  outline: none;
   padding: 30px 26px 24px;
   display: flex;
   flex-direction: column;

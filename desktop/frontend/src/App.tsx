@@ -445,6 +445,35 @@ function App() {
     if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
   }, [])
 
+  // Vim-like keys while the message area has focus: G jumps to the newest
+  // message, gg returns to the top, Ctrl+U / Ctrl+D scroll half a page. Keys
+  // typed into the composer or a form field are never intercepted.
+  const ggPendingRef = useRef(false)
+  const onChatKey = useCallback((e: React.KeyboardEvent<HTMLDivElement>) => {
+    const target = e.target as HTMLElement | null
+    if (target?.closest('input, textarea, [contenteditable="true"]')) return
+    const el = chatRef.current
+    if (!el || e.metaKey || e.altKey) return
+
+    if (e.ctrlKey && (e.key === 'u' || e.key === 'd')) {
+      e.preventDefault()
+      el.scrollTop += (e.key === 'd' ? 1 : -1) * el.clientHeight * 0.5
+      return
+    }
+    if (e.ctrlKey) return
+    if (e.key === 'G') { e.preventDefault(); scrollToBottom(true); return } // newest message + re-arm following
+    if (e.key === 'g') {
+      e.preventDefault()
+      if (ggPendingRef.current) {
+        ggPendingRef.current = false
+        el.scrollTop = 0
+      } else {
+        ggPendingRef.current = true
+        window.setTimeout(() => { ggPendingRef.current = false }, 600)
+      }
+    }
+  }, [scrollToBottom])
+
   // ── Frame-batched deltas ───────────────────────────────────────────────────
   // Token deltas arrive far faster than the display refreshes. Batching them
   // into a single state update per animation frame caps markdown parsing and
@@ -863,18 +892,21 @@ function App() {
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
-  // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar.
+  // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
+  // Cmd+N starts a new session. (No native menu binds them, so the webview sees
+  // the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setReminderModal(null); return }
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composerRef.current?.focus() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
+      else if (e.key.toLowerCase() === 'n') { e.preventDefault(); newChat() }
       else if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) { e.preventDefault(); setShortcutsOpen((v) => !v) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [])
+  }, [newChat])
 
   useEffect(() => {
     const loadProv = async () => {
@@ -1118,7 +1150,7 @@ function App() {
 
         <main className="main">
           <div className="chat-wrap">
-            <div className="chat" ref={chatRef} onScroll={handleScroll}>
+            <div className="chat" ref={chatRef} onScroll={handleScroll} tabIndex={0} onKeyDown={onChatKey}>
             {loading ? <div className="chat-loading">加载会话…</div> : (
               <>
                 {messages.length === 0 && (
@@ -1245,6 +1277,19 @@ function App() {
                 </button>
               </div>
             </div>
+            {/* Anchored to the composer (position: relative), so the panel always
+                floats just above the input instead of covering it. */}
+            {mcpOpen && (
+              <MCPPanel
+                servers={mcpServers}
+                loading={mcpLoading}
+                profile={mcpProfile}
+                onClose={() => setMcpOpen(false)}
+                onToggleServer={toggleServer}
+                onToggleTool={toggleTool}
+                onToggleProfile={toggleProfile}
+              />
+            )}
             <div className="composer-status">
               <div className="work-dir-wrap">
                 <span className="work-dir" title="工作目录（点击选择）" onClick={() => pickWorkDir(currentId)}>
@@ -1288,17 +1333,6 @@ function App() {
           </footer>
         </main>
       </div>
-      {mcpOpen && (
-        <MCPPanel
-          servers={mcpServers}
-          loading={mcpLoading}
-          profile={mcpProfile}
-          onClose={() => setMcpOpen(false)}
-          onToggleServer={toggleServer}
-          onToggleTool={toggleTool}
-          onToggleProfile={toggleProfile}
-        />
-      )}
       {menu && (
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
@@ -1322,8 +1356,12 @@ function App() {
           <div className="confirm-box shortcuts-box" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-msg">快捷键</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
+            <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
+            <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息（消息区聚焦时）</span></div>
+            <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>
+            <div className="shortcut-row"><kbd>Ctrl U / D</kbd><span>上 / 下翻半页</span></div>
             <div className="confirm-actions">
               <button className="btn ghost" onClick={() => setShortcutsOpen(false)}>关闭（Esc）</button>
             </div>

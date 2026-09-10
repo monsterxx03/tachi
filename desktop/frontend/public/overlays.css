@@ -18,13 +18,17 @@
 
 /* Scrims stay light-neutral rather than black: a heavy black wash would feel
    like a different app on top of the flat light UI. */
-.mcp-overlay { position: fixed; inset: 0; background: var(--scrim); z-index: 50; }
 .mcp-panel {
-  position: fixed;
-  right: 14px;
-  bottom: 56px;
+  /* Popover for the MCP button in the composer's status row: anchored to the
+     composer, opening upward over the transcript — never over the input.
+     The input box and status row live in a centred --reading-width column, so
+     the panel's right edge is measured against that column (not the composer's
+     full width, which would push it out to the window edge). */
+  position: absolute;
+  right: max(6px, calc((100% - var(--reading-width)) / 2));
+  bottom: calc(100% + 10px);
   width: 360px;
-  max-height: 70vh;
+  max-height: min(70vh, 560px);
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-lg);

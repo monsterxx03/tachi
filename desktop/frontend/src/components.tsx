@@ -147,10 +147,24 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const profileBusy = !!loading.__profile__
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  // Click outside closes the popover (its natural behaviour). The toggle button
+  // is excluded: it owns open/close, and closing here would fight the reopen
+  // from its own click handler.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || boxRef.current?.contains(t) || t.closest('.mcp-btn')) return
+      onClose()
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [onClose])
+
   return (
     <>
-      <div className="mcp-overlay" onClick={onClose} />
-      <div className="mcp-panel">
+      <div className="mcp-panel" ref={boxRef}>
         <div className="mcp-head">
           <span className="mcp-title">MCP Servers</span>
           <div className="mcp-profile">
