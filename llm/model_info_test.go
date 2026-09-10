@@ -75,6 +75,9 @@ func TestModelContextWindow_Others(t *testing.T) {
 		{"deepseek-v4-flash", 1_000_000},
 		{"deepseek-chat", 1_000_000},
 		{"deepseek-v4-pro", 1_000_000},
+		// flash 简写别名（连字符 / 下划线）与 v4-flash 同上下文。
+		{"deepseek-flash", 1_000_000},
+		{"deepseek_flash", 1_000_000},
 		// MiMo-V2.5 系列：官方名为 mimo-v2.5（旧代码 "mimo-2.5" 漏 v 导致
 		// 上下文解析为 0，重构后统一并兼容历史别名）。
 		{"mimo-v2.5", 1_000_000},
@@ -117,6 +120,9 @@ func TestModelSupportsVision(t *testing.T) {
 		"mimo-2.5", "mimo-vl-7b", "mimo-7b",
 		"kimi-k3", "kimi-k2", "kimi-latest",
 		"minimax-m2", "minimax-m2.7", "minimax-m3", "minimax-abab6.5s",
+		// DeepSeek 只有 vision 变体支持图像输入；flash 简写别名与
+		// deepseek-v4-flash-vision-exp 同能力。
+		"deepseek-v4-flash-vision-exp", "deepseek-flash", "deepseek_flash", "DeepSeek-Flash",
 	}
 	for _, m := range visionModels {
 		t.Run("vision_"+m, func(t *testing.T) {

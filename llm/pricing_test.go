@@ -34,6 +34,15 @@ func TestGetBuiltinModelPrice_DeepSeek(t *testing.T) {
 			want:  flash,
 		},
 		{
+			// flash 的简写别名：与 v4-flash 同价。
+			model: "deepseek-flash",
+			want:  flash,
+		},
+		{
+			model: "deepseek_flash",
+			want:  flash,
+		},
+		{
 			model: "unknown-deepseek-model",
 			want:  flash,
 		},

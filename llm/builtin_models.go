@@ -160,6 +160,15 @@ var builtinModels = []builtinModel{
 		prices:  deepseekFlashPriceVersions,
 	},
 	{
+		// flash 的简写别名（连字符/下划线两种写法）：自建网关或配置里常见的
+		// provider/model 名，价格与上下文同 deepseek-v4-flash，但支持图像输入
+		// ——故必须排在 {"deepseek"} 兜底之前，否则拿到兜底的 vision:false。
+		match:   []string{"deepseek-flash", "deepseek_flash"},
+		context: 1_000_000,
+		vision:  true,
+		prices:  deepseekFlashPriceVersions,
+	},
+	{
 		match:   []string{"deepseek"},
 		context: 1_000_000,
 		prices:  deepseekFlashPriceVersions, // 未知变体兜底 = flash 价（保守默认）
