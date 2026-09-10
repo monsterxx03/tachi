@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { fmtDur, humanize } from './lib'
+import { actOnKey, fmtDur, humanize } from './lib'
 
 function ContextRing({ estimate, window: w }: { estimate: number; window: number }) {
   const pct = w > 0 ? Math.min(100, (estimate / w) * 100) : 0
@@ -43,7 +43,7 @@ function ThinkingBlock({ thinking, collapsed, onToggle }: { thinking: string; co
   const lines = thinking.split('\n')
   return (
     <div className="thinking-block">
-      <div className={`thinking-head${collapsed ? '' : ' open'}`} onClick={onToggle} title={collapsed ? '点击展开思考过程' : '点击收起思考过程'} role="button">
+      <div className={`thinking-head${collapsed ? '' : ' open'}`} onClick={onToggle} onKeyDown={actOnKey(onToggle)} tabIndex={0} title={collapsed ? '点击展开思考过程' : '点击收起思考过程'} role="button" aria-expanded={!collapsed}>
         <span className="thinking-ico">▸</span><span className="thinking-label">thinking</span>
       </div>
       {!collapsed && <div className="thinking-body" ref={bodyRef}>{lines.map((l, i) => <div key={i} className="thinking-line">{l}</div>)}</div>}
@@ -59,6 +59,21 @@ function CopyIcon() {
   return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>)
 }
 
+// Small 14px stroke icons for the sidebar footer and the MCP button. They
+// replace the ad-hoc glyphs (⚙ ¤ M) whose shape depends on whichever system
+// font happens to supply them.
+function SettingsIcon() {
+  return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="8" x2="20" y2="8" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="9" cy="8" r="2.2" /><circle cx="15" cy="16" r="2.2" /></svg>)
+}
+
+function UsageIcon() {
+  return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><line x1="6" y1="20" x2="6" y2="12" /><line x1="12" y1="20" x2="12" y2="5" /><line x1="18" y1="20" x2="18" y2="15" /></svg>)
+}
+
+function MCPIcon() {
+  return (<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v6" /><path d="M15 3v6" /><path d="M6 9h12v3a6 6 0 0 1-12 0V9z" /><path d="M12 18v3" /></svg>)
+}
+
 function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string; title?: string; args?: string; summary: string; ok: boolean; durationMs?: number }) {
   const [expanded, setExpanded] = useState(false)
   const long = ((args?.length || 0) + summary.length) > 120
@@ -67,7 +82,8 @@ function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string
   const copy = (text: string) => { if (!text) return; try { navigator.clipboard.writeText(text).catch(() => fallbackCopy(text)) } catch { fallbackCopy(text) } }
   return (
     <div className="tool-card">
-      <div className="tool-head" style={{ cursor: 'pointer' }} onClick={() => setExpanded((e) => !e)}>
+      <div className="tool-head" role="button" tabIndex={0} aria-expanded={expanded}
+        onClick={() => setExpanded((e) => !e)} onKeyDown={actOnKey(() => setExpanded((e) => !e))}>
         <span className="tool-ico">⚙</span><span className="tool-name">{name}</span>
         {title ? <span className="tool-title">{title}</span> : null}
         <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>
@@ -115,7 +131,9 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
             const busy = !!loading[s.name]
             return (
               <div key={s.name} className="mcp-server">
-                <div className="mcp-server-row" onClick={() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] }))}>
+                <div className="mcp-server-row" role="button" tabIndex={0} aria-expanded={isOpen}
+                  onClick={() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] }))}
+                  onKeyDown={actOnKey(() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] })))}>
                   <span className="mcp-server-name">{s.name}</span>
                   <span className={`mcp-server-state ${s.connected ? 'on' : 'off'}`}>{s.connected ? '已连接' : '未连接'}</span>
                   <span className="mcp-toolcount">{toolCount} 工具</span>
@@ -144,4 +162,4 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
   )
 }
 
-export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel }
+export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, SettingsIcon, UsageIcon, MCPIcon }

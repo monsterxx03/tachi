@@ -2,13 +2,13 @@
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb {
-  background: rgba(16, 20, 40, 0.16);
-  border-radius: 5px;
+  background: var(--scrollbar);
+  border-radius: var(--radius-xs);
   /* Transparent border + clipped background = inset thumb without a track. */
   border: 3px solid transparent;
   background-clip: content-box;
 }
-::-webkit-scrollbar-thumb:hover { background: rgba(16, 20, 40, 0.3); background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-hover); background-clip: content-box; }
 ::-webkit-scrollbar-corner { background: transparent; }
 
 /* Welcome empty state */
@@ -27,7 +27,7 @@
   -webkit-background-clip: text;
   background-clip: text;
   -webkit-text-fill-color: transparent;
-  filter: drop-shadow(0 4px 16px rgba(91, 124, 255, 0.35));
+  filter: var(--glow-accent);
   animation: welcome-float 4s ease-in-out infinite;
 }
 @keyframes welcome-float {
@@ -49,21 +49,21 @@
 .assistant-text li { margin: 0.3em 0; }
 .assistant-text li::marker { color: var(--accent); }
 .assistant-text code {
-  background: rgba(91, 124, 255, 0.1);
-  color: #3d4ba8;
+  background: var(--accent-soft);
+  color: var(--code-ink);
   padding: 0.15em 0.42em;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 0.88em;
 }
 .assistant-text pre {
-  background: linear-gradient(180deg, rgba(20, 22, 31, 0.035), rgba(20, 22, 31, 0.055));
+  background: linear-gradient(180deg, var(--wash), var(--wash-2));
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);
   padding: 12px 14px;
   overflow-x: auto;
   margin: 0.8em 0;
-  box-shadow: inset 0 1px 3px rgba(16, 20, 40, 0.04);
+  box-shadow: inset 0 1px 3px var(--wash);
 }
 .assistant-text pre code { background: none; padding: 0; color: var(--text); font-size: 12.5px; line-height: 1.6; }
 .assistant-text blockquote {
@@ -102,7 +102,7 @@
 }
 .assistant-text th, .assistant-text td { border-bottom: 1px solid var(--border); padding: 7px 11px; text-align: left; }
 .assistant-text tr:last-child td { border-bottom: none; }
-.assistant-text th { background: rgba(91, 124, 255, 0.07); font-weight: 620; color: var(--text); }
+.assistant-text th { background: var(--accent-softer); font-weight: 620; color: var(--text); }
 
 /* Thinking block: a compact "thinking ▸" label that expands the reasoning
    transcript — reads like a file-folder disclosure row instead of a lone
@@ -121,7 +121,7 @@
   /* Pull the hover pill back to the text start so the label stays aligned
      with the message body. */
   margin-left: -7px;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   user-select: none;
   color: var(--text-faint);
@@ -129,7 +129,7 @@
   letter-spacing: 0.02em;
   transition: background 0.12s ease, color 0.12s ease;
 }
-.thinking-head:hover { color: var(--accent-2); background: rgba(91, 124, 255, 0.05); }
+.thinking-head:hover { color: var(--accent-2); background: var(--accent-softer); }
 .thinking-ico {
   font-size: 9px;
   line-height: 1;
@@ -154,29 +154,14 @@
 .thinking-line:not(:last-child) { margin-bottom: 2px; }
 
 /* Tool card expand/collapse */
-.tool-summary.clamp {
-  display: -webkit-box;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
 .tool-toggle {
   margin-left: 8px;
   color: var(--text-faint);
   font-size: 11.5px;
   flex-shrink: 0;
 }
-/* A whisper of a wash on hover — enough to say "this line is clickable"
-   without bringing back the old floating card. */
-.tool-head:hover { background: rgba(91, 124, 255, 0.05); }
-.tool-head { transition: background 0.12s ease; }
 
 /* Thinking badge (shown above the user message, folded by default) */
-.reminder-tag {
-  display: inline-flex;
-  align-items: center;
-  margin: 0;
-}
 .reminder-head {
   display: inline-flex;
   align-items: center;
@@ -185,23 +170,13 @@
   color: var(--text-faint);
   font-size: 11px;
   padding: 0;
-  border-radius: 5px;
+  border-radius: var(--radius-xs);
   cursor: pointer;
   user-select: none;
   transition: color 0.12s ease;
 }
 .reminder-head:hover { color: var(--accent); }
 .reminder-ico { font-size: 11px; font-weight: 700; }
-.reminder-body {
-  margin-top: 6px;
-  max-height: 200px;
-  overflow-y: auto;
-  scrollbar-gutter: stable;
-  border-left: 2px solid var(--border);
-  padding: 2px 0 4px 10px;
-}
-.reminder-line { font-size: 12px; line-height: 1.6; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
-.reminder-line:not(:last-child) { margin-bottom: 2px; }
 
 .user-meta { display: flex; align-items: center; justify-content: flex-end; gap: 6px; margin-top: 6px; }
 .user-meta .msg-ts { margin-top: 0; }
@@ -218,29 +193,13 @@
   padding: 2px 0 4px 10px;
 }
 
-/* Chat loading / load-earlier */
+/* Chat loading */
 .chat-loading {
   padding: 60px 0;
   text-align: center;
   color: var(--text-faint);
   font-size: 13.5px;
 }
-.load-earlier {
-  display: block;
-  margin: 0 auto 20px;
-  padding: 6px 15px;
-  border: 1px solid var(--border-2);
-  border-radius: 18px;
-  /* Opaque, no blur: this button lives inside the scrolling chat region (see
-     the note on .msg-assistant .msg-content). */
-  background: linear-gradient(180deg, #ffffff, #f4f6fb);
-  box-shadow: var(--shadow-1);
-  color: var(--text-dim);
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: color 0.14s var(--ease), border-color 0.14s var(--ease), box-shadow 0.14s var(--ease);
-}
-.load-earlier:hover { color: var(--accent-2); border-color: rgba(91, 124, 255, 0.42); box-shadow: var(--shadow-2); }
 
 /* Tool card param title + full args */
 .tool-title {
@@ -257,9 +216,9 @@
   padding: 8px 11px;
   /* Soft inset wash, no outer border/shadow — reads like the code blocks in
      the message body rather than a separate card. */
-  background: rgba(16, 20, 40, 0.035);
+  background: var(--wash);
   border: none;
-  border-radius: 8px;
+  border-radius: var(--radius-sm);
   box-shadow: none;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
@@ -288,7 +247,7 @@
   display: grid;
   place-items: center;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   background: transparent;
   color: var(--text-faint);
   cursor: pointer;
@@ -340,37 +299,44 @@
   gap: 12px;
 }
 
-/* Provider picker in the top bar */
+/* Provider / thinking-level pickers in the composer status bar. Native
+   `<select>` chrome is dropped (appearance: none) so they read as part of the
+   flat status row; the caret is a token-driven icon, since a borderless
+   <select> is otherwise indistinguishable from static text. */
 .provider-picker {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-left: auto;
+  /* Without this the picker is a plain block and its children fall back to
+     inline flow — i.e. the whole status row wraps like a paragraph. */
+  min-width: 0;
 }
 .provider-select {
-  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+  background-color: transparent;
+  background-image: var(--icon-caret);
+  background-repeat: no-repeat;
+  background-position: right 4px center;
+  background-size: 11px 11px;
   border: none;
-  border-radius: 6px;
+  border-radius: var(--radius-xs);
   color: var(--text-dim);
   font-size: 12px;
-  padding: 4px 6px;
+  padding: 4px 18px 4px 6px;
   cursor: pointer;
-  outline: none;
+  /* Shrinks before anything else, clipping its own text; the caret lives in
+     the padding box, so it stays visible at any width. */
+  flex: 0 1 auto;
+  min-width: 0;
   max-width: 220px;
-  transition: background 0.15s, color 0.15s;
+  transition: background-color 0.15s, color 0.15s;
 }
 .provider-select:hover,
 .provider-select:focus {
-  background: rgba(91, 124, 255, 0.08);
+  background-color: var(--accent-softer);
   color: var(--text);
-}
-.provider-model {
-  font-size: 12px;
-  color: var(--text-dim);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 160px;
 }
 .usage-meta {
   display: inline-flex;
@@ -380,11 +346,10 @@
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* These were Catppuccin (dark-theme) tints — too light to read on the light
-   background. Re-tuned to hold contrast while keeping the hue coding. */
-.usage-cost { color: #c2620f; font-variant-numeric: tabular-nums; font-weight: 550; }
+/* Hue-coded metrics: cost amber, credit green, throughput green→amber→red by
+   tier. Values come from the semantic tokens so both themes stay legible. */
+.usage-cost { color: var(--amber); font-variant-numeric: tabular-nums; font-weight: 550; }
 .usage-credit { color: var(--green); font-variant-numeric: tabular-nums; font-weight: 550; }
-.usage-cache { color: #1f7fa8; font-variant-numeric: tabular-nums; }
 .usage-tps { font-variant-numeric: tabular-nums; font-weight: 550; }
 .usage-tps.tps-fast { color: var(--green); }
 .usage-tps.tps-normal { color: var(--amber); }
@@ -392,5 +357,5 @@
 .usage-tps.tps-paused { color: var(--text-faint); font-weight: 400; }
 
 /* Context usage ring */
-.ctx-ring { display: block; filter: drop-shadow(0 1px 2px rgba(16, 20, 40, 0.08)); }
+.ctx-ring { display: block; filter: var(--shadow-1); }
 

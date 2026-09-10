@@ -16,9 +16,10 @@ import {
   type Part,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier } from './lib'
+import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey } from './lib'
 import {
   ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel,
+  SettingsIcon, UsageIcon, MCPIcon,
 } from './components'
 
 // TableScroller wraps GFM tables in a horizontally scrollable container so a
@@ -826,7 +827,7 @@ function App() {
     <div className="app">
       <header className="titlebar drag-region">
         <div className="brand no-drag">
-          <span className="brand-mark"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><defs><linearGradient id="tg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="#8aa2ff" /><stop offset="1" stopColor="#4b5fd6" /></linearGradient></defs><rect x="1" y="1" width="14" height="14" rx="4.5" fill="url(#tg1)" /><path d="M8 3.8 L12.2 8 L8 12.2 L3.8 8 Z" fill="#fff" opacity="0.95" /></svg></span>
+          <span className="brand-mark"><svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true"><defs><linearGradient id="tg1" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stopColor="var(--accent-3)" /><stop offset="1" stopColor="var(--accent-strong)" /></linearGradient></defs><rect x="1" y="1" width="14" height="14" rx="4.5" fill="url(#tg1)" /><path d="M8 3.8 L12.2 8 L8 12.2 L3.8 8 Z" fill="var(--on-accent)" opacity="0.95" /></svg></span>
           <span className="brand-name">Tachi</span>
         </div>
         <button className={`sidebar-toggle no-drag ${sidebarCollapsed ? 'is-collapsed' : ''}`} onClick={() => setSidebarCollapsed((v) => !v)} title={sidebarCollapsed ? '展开会话侧栏' : '收起会话侧栏'}>
@@ -845,7 +846,10 @@ function App() {
           <nav className="session-list">
             <div className="session-section">最近</div>
             {sessions.map((s) => (
+              /* Row (not a <button>): it hosts a rename <input> and a context
+                 menu, so it takes role/tabIndex + Enter/Space instead. */
               <div key={s.id} className={`session ${s.active ? 'active' : ''}`} onClick={() => clickSession(s.id)}
+                role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}
                 onContextMenu={(e) => { e.preventDefault(); setMenu({ sid: s.id, x: e.clientX, y: e.clientY }) }}>
                 {editingId === s.id ? (
                   <input className="session-rename" autoFocus value={editTitle}
@@ -864,11 +868,13 @@ function App() {
                 <div className="session-meta">{runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}{new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}</div>
               </div>
             ))}
-            {sessions.length === 0 && <div className="session-meta" style={{ padding: '6px 8px' }}>暂无会话</div>}
+            {sessions.length === 0 && <div className="session-empty">暂无会话</div>}
           </nav>
           <footer className="sidebar-footer">
-            <div className="footer-item"><span className="footer-ico">⚙</span> 设置</div>
-            <div className="footer-item"><span className="footer-ico">¤</span> 用量</div>
+            {/* Both entries are placeholders: disabled (and dimmed) rather than
+                clickable-looking no-ops. */}
+            <button className="footer-item" disabled title="暂未实现"><span className="footer-ico"><SettingsIcon /></span> 设置</button>
+            <button className="footer-item" disabled title="暂未实现"><span className="footer-ico"><UsageIcon /></span> 用量</button>
           </footer>
         </aside>
 
@@ -954,7 +960,6 @@ function App() {
                 )}
               </div>
               <div className="composer-actions">
-                <button className="icon-btn" title="附件">＋</button>
                 <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
                   <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
                   <span>{isCurrentRunning ? '排队' : '发送'}</span>
@@ -992,7 +997,7 @@ function App() {
                   {credit > 0 ? <span className="usage-credit" title="当前会话积分">{credit.toFixed(2)} 积分</span> : null}
                 </span>
                 <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
-                  <span className="mcp-ico">M</span>
+                  <span className="mcp-ico"><MCPIcon /></span>
                   <span className="mcp-count">{mcpServers.filter((s) => s.connected).length || ''}</span>
                 </button>
               </div>
@@ -1012,9 +1017,9 @@ function App() {
         />
       )}
       {menu && (
-        <div className="ctx-menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
-          <div className="ctx-item" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</div>
-          <div className="ctx-item danger" onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</div>
+        <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+          <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
+          <button className="ctx-item danger" role="menuitem" onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
         </div>
       )}
       {confirmDel && (

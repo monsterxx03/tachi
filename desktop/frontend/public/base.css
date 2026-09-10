@@ -1,12 +1,16 @@
 /* ── Tachi Desktop — flat, content-first conversational UI ───────────────── */
 
-/* Inter ships in public/ and pairs with the system stack: Inter carries Latin
-   text + tabular numerals, PingFang SC covers CJK. Loaded as `swap` so the
-   first paint never blocks on the 315KB file. */
+/* Inter ships in public/ as the OFFICIAL variable build (wght 100–900).
+   It must be variable: the UI leans on a fine weight scale (520…650), and a
+   single static instance declared over a range would collapse all of them
+   into one weight — the descriptor says the face *covers* 400–650, so the
+   browser uses it as-is and never synthesises (body also sets
+   font-synthesis: none). Inter carries Latin + numerals + tabular figures;
+   PingFang SC, later in the stack, covers CJK. */
 @font-face {
   font-family: "Inter";
-  src: url("/Inter-Medium.ttf") format("truetype");
-  font-weight: 400 650;
+  src: url("/InterVariable.woff2") format("woff2");
+  font-weight: 100 900;
   font-style: normal;
   font-display: swap;
 }
@@ -15,36 +19,85 @@
   /* Flat, opaque surfaces. The window itself is opaque (main.go uses
      MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
      every surface is a plain colour. Depth comes from hairline borders and
-     whitespace instead of glass. */
+     whitespace instead of glass. Light surfaces, lightest-first:
+     panel-solid (raised) > chrome-2 (titlebar/composer) > bg > chrome (sidebar). */
   --bg: #f6f7fb;         /* app background — agent messages sit directly on it */
-  --chrome: #f2f3f8;     /* sidebar */
+  --chrome: #f2f3f8;     /* sidebar — the one recessed plane */
   --chrome-2: #fafbfd;   /* titlebar / composer */
   --panel-solid: #ffffff;
+  --panel-2: #f3f5fc;    /* second raised tone — avatar / keycap gradients */
+  --panel-veil-a: rgba(255, 255, 255, 0.86);  /* active session card, top */
+  --panel-veil-b: rgba(255, 255, 255, 0.66);  /* …and bottom */
+  --veil: rgba(255, 255, 255, 0.6);           /* quiet filled buttons */
+  --sheen: rgba(255, 255, 255, 0.45);         /* inset top highlight on chips */
+  /* Text carried by a saturated fill. White in both themes — the *fill* is
+     what moves (see --accent-strong / --red-strong), not the ink. */
+  --on-accent: #ffffff;
 
   --border: rgba(16, 20, 40, 0.07);
   --border-2: rgba(16, 20, 40, 0.12);
-  --border-strong: rgba(16, 20, 40, 0.18);
+
+  /* Inset washes (tool output, args, code blocks) and row hovers — always a
+     *light* or *dark* veil, never a fixed colour, so they survive dark mode. */
+  --wash: rgba(16, 20, 40, 0.035);
+  --wash-2: rgba(16, 20, 40, 0.055);
+  --hover: rgba(16, 20, 40, 0.045);
+  --hover-2: rgba(16, 20, 40, 0.055);
+
+  --scrollbar: rgba(16, 20, 40, 0.16);
+  --scrollbar-hover: rgba(16, 20, 40, 0.3);
 
   --text: #14161f;
   --text-dim: #5b6175;
-  --text-faint: #8f96aa;
+  /* Metadata (timestamps, session times, tool durations, thinking label) runs
+     at 10.5–11.5px, so it needs the 4.5:1 of small text — the old #8f96aa sat
+     at 2.76:1 and read as a smudge. */
+  --text-faint: #676d7b;
 
-  --accent: #5b7cff;
-  --accent-2: #4460e0;
-  --accent-3: #7a95ff;
+  /* Accent roles are split because dark mode pulls them apart: a colour that
+     reads well as *ink* on the surface is too light to carry white text, and
+     vice versa. In light mode all three collapse to nearly one hue. */
+  --accent: #5b7cff;         /* fills, rings, status dots, soft washes */
+  --accent-2: #4460e0;       /* accent as ink (links, icons, labels) */
+  --accent-3: #7a95ff;       /* light end of button gradients */
+  --accent-strong: #4460e0;  /* saturated fill that carries white text */
   --accent-soft: rgba(91, 124, 255, 0.12);
   --accent-softer: rgba(91, 124, 255, 0.07);
   --accent-ring: rgba(91, 124, 255, 0.22);
+  --accent-line-soft: rgba(91, 124, 255, 0.26);  /* resting tinted border */
+  --accent-line: rgba(91, 124, 255, 0.42);       /* hover/focus tinted border */
+  --accent-tint-a: rgba(122, 149, 255, 0.16);    /* tinted button wash */
 
-  --green: #12915a;
-  --red: #dc3b45;
-  --amber: #cf7820;
+  /* Semantic colours, tuned to clear 4.5:1 as small text on --bg. The
+     "-strong" variants back white text and so must stay dark. */
+  --green: #0f7a4b;
+  --red: #c9303a;
+  --red-strong: #c9303a;
+  --red-line: rgba(201, 48, 58, 0.42);
+  --red-wash: rgba(201, 48, 58, 0.1);
+  --amber: #a15c0b;
+
+  /* Inline code in an assistant reply. */
+  --code-ink: #3d4ba8;
+
+  /* Modal scrims stay a light neutral rather than black on the flat light UI;
+     dark mode has no choice but to go black. */
+  --scrim: rgba(16, 20, 40, 0.12);
+  --scrim-strong: rgba(16, 20, 40, 0.2);
 
   /* User bubble: a soft blue wash with dark ink — present but quiet, so it
      never out-shouts the agent's answer. */
   --user-grad-a: #e9eefc;
   --user-grad-b: #e1e8fa;
   --user-ink: #3b4570;
+  --user-ink-dim: rgba(59, 69, 112, 0.72);
+  --user-code-bg: rgba(91, 124, 255, 0.13);
+  --user-code-ink: #2b3763;
+
+  /* The two ambient tints that make the flat background read as "Tachi blue"
+     rather than neutral grey. */
+  --app-tint-a: rgba(122, 149, 255, 0.07);
+  --app-tint-b: rgba(91, 124, 255, 0.05);
 
   /* Elevation. Wide, very low-alpha shadows; the paired 1px ambient ring is
      what keeps raised edges crisp on the flat background. */
@@ -53,11 +106,109 @@
   --shadow-3: 0 6px 16px rgba(16, 20, 40, 0.09), 0 16px 40px rgba(16, 20, 40, 0.10);
   --shadow-4: 0 12px 28px rgba(16, 20, 40, 0.14), 0 28px 64px rgba(16, 20, 40, 0.16);
   --shadow-accent: 0 2px 10px rgba(74, 102, 224, 0.22);
+  --shadow-accent-hover: 0 4px 14px rgba(74, 102, 224, 0.36);
+  --shadow-danger: 0 2px 10px rgba(220, 59, 69, 0.28);
+  /* Decorative accent glows (brand mark, welcome glyph). */
+  --glow-accent: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.45));
 
-  --radius-lg: 16px;
+  /* Radius scale. Anything rounder than the "pill" preset (status badge,
+     jump button, avatars) uses 999px / 50% directly. */
+  --radius-xs: 6px;
   --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-pill: 999px;
+
+  /* Disclosure caret for the borderless <select>s. An icon rather than a
+     drawn border, so it is a token too — its stroke mirrors --text-faint. */
+  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%23676d7b' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+  /* Reading column: messages and the composer share this width, so the input
+     lines up with the transcript instead of stretching to the window edge
+     (a maximised 1920 window would otherwise give prose a 1536px measure). */
+  --reading-width: 780px;
 
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+/* Dark: the same flat system, inverted. Raised surfaces get *lighter* rather
+   than lighter-than-white, and every wash flips from an ink veil to a light
+   one. The window follows the system (main.go reads app.Env.IsDarkMode() for
+   the pre-paint background colour). */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #16181e;
+    --chrome: #111319;
+    --chrome-2: #191c23;
+    --panel-solid: #20232b;
+    --panel-2: #262a33;
+    --panel-veil-a: rgba(255, 255, 255, 0.075);
+    --panel-veil-b: rgba(255, 255, 255, 0.045);
+    --veil: rgba(255, 255, 255, 0.05);
+    --sheen: rgba(255, 255, 255, 0.06);
+
+    --border: rgba(255, 255, 255, 0.09);
+    --border-2: rgba(255, 255, 255, 0.14);
+
+    --wash: rgba(255, 255, 255, 0.05);
+    --wash-2: rgba(255, 255, 255, 0.075);
+    --hover: rgba(255, 255, 255, 0.055);
+    --hover-2: rgba(255, 255, 255, 0.085);
+
+    --scrollbar: rgba(255, 255, 255, 0.18);
+    --scrollbar-hover: rgba(255, 255, 255, 0.32);
+
+    --text: #e7e9f0;
+    --text-dim: #a6acbd;
+    --text-faint: #8f96a8;
+
+    --accent: #7c96ff;
+    --accent-2: #9db1ff;
+    --accent-3: #6f8bfa;
+    --accent-strong: #3b52c4;
+    --accent-soft: rgba(124, 150, 255, 0.16);
+    --accent-softer: rgba(124, 150, 255, 0.10);
+    --accent-ring: rgba(124, 150, 255, 0.3);
+    --accent-line-soft: rgba(124, 150, 255, 0.3);
+    --accent-line: rgba(124, 150, 255, 0.48);
+    --accent-tint-a: rgba(124, 150, 255, 0.2);
+
+    --green: #46c98a;
+    --red: #ff7a82;
+    --red-strong: #b7283a;
+    --red-line: rgba(255, 122, 130, 0.45);
+    --red-wash: rgba(255, 122, 130, 0.14);
+    --amber: #e2a355;
+
+    --code-ink: #b9c6ff;
+
+    --scrim: rgba(0, 0, 0, 0.45);
+    --scrim-strong: rgba(0, 0, 0, 0.55);
+
+    --user-grad-a: #232a44;
+    --user-grad-b: #1d2338;
+    --user-ink: #dde3ff;
+    --user-ink-dim: rgba(221, 227, 255, 0.68);
+    --user-code-bg: rgba(124, 150, 255, 0.18);
+    --user-code-ink: #dfe5ff;
+
+    --app-tint-a: rgba(122, 149, 255, 0.06);
+    --app-tint-b: rgba(91, 124, 255, 0.05);
+
+    /* Dark surfaces swallow ambient shadows, so these carry more weight in
+       black instead of grey. */
+    --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 1px rgba(0, 0, 0, 0.3);
+    --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.45), 0 4px 16px rgba(0, 0, 0, 0.35);
+    --shadow-3: 0 6px 16px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.45);
+    --shadow-4: 0 12px 28px rgba(0, 0, 0, 0.55), 0 28px 64px rgba(0, 0, 0, 0.5);
+    --shadow-accent: 0 2px 10px rgba(45, 68, 190, 0.4);
+    --shadow-accent-hover: 0 4px 14px rgba(45, 68, 190, 0.5);
+    --shadow-danger: 0 2px 10px rgba(0, 0, 0, 0.5);
+    --glow-accent: drop-shadow(0 2px 10px rgba(124, 150, 255, 0.4));
+    --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%238f96a8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+
+    color-scheme: dark;
+  }
 }
 
 * { box-sizing: border-box; }
@@ -93,9 +244,17 @@ body {
      rather than neutral grey — and so agent text sits on a lived-in surface
      instead of a stark white sheet. */
   background:
-    radial-gradient(1200px 600px at 12% -10%, rgba(122, 149, 255, 0.07), transparent 60%),
-    radial-gradient(900px 500px at 100% 100%, rgba(91, 124, 255, 0.05), transparent 55%),
+    radial-gradient(1200px 600px at 12% -10%, var(--app-tint-a), transparent 60%),
+    radial-gradient(900px 500px at 100% 100%, var(--app-tint-b), transparent 55%),
     var(--bg);
+}
+
+/* Keyboard affordance for the rows that are divs-with-onClick rather than
+   real buttons. Pointer users never see it; Tab users always do. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+  border-radius: var(--radius-xs);
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -1,3 +1,4 @@
+import type { KeyboardEvent } from 'react'
 import type { SessionMessage } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Message } from './types'
 
@@ -85,6 +86,19 @@ export function humanize(n: number): string {
 // <60 slow (red), 60–199 normal (yellow), >=200 fast (green).
 export function tpsTier(t: number): string {
   return t >= 200 ? 'fast' : t >= 60 ? 'normal' : 'slow'
+}
+
+// actOnKey makes a div-with-onClick keyboard-operable. Rows that host their own
+// controls (session rows, tool headers, MCP rows) cannot be real <button>s —
+// a nested button/input is invalid — so they take role="button" + tabIndex and
+// this Enter/Space handler instead.
+export function actOnKey(fn: () => void) {
+  return (e: KeyboardEvent<HTMLElement>) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault()
+      fn()
+    }
+  }
 }
 
 // toLocalAsset rewrites an image src that points at a local path so it can be
