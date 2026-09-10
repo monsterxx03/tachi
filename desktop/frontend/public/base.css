@@ -137,18 +137,24 @@
    the pre-paint background colour). */
 @media (prefers-color-scheme: dark) {
   :root {
-    --bg: #16181e;
-    --chrome: #111319;
-    --chrome-2: #191c23;
-    --panel-solid: #20232b;
-    --panel-2: #262a33;
+    /* Surfaces sit at "standard dark" (VS Code / ChatGPT territory) rather
+       than near-black: bg is ~#212429, and the ladder keeps the same shape as
+       the light theme — chrome (sidebar) is the most recessed plane, then bg,
+       then the chrome-2 bars, then raised panels. Panel-solid is held just low
+       enough that --text-faint still clears 4.5:1 on it (placeholders and MCP
+       labels live there). */
+    --bg: #212429;
+    --chrome: #1a1d22;
+    --chrome-2: #262931;
+    --panel-solid: #2b2f37;
+    --panel-2: #2f333b;
     --panel-veil-a: rgba(255, 255, 255, 0.075);
     --panel-veil-b: rgba(255, 255, 255, 0.045);
     --veil: rgba(255, 255, 255, 0.05);
     --sheen: rgba(255, 255, 255, 0.06);
 
-    --border: rgba(255, 255, 255, 0.09);
-    --border-2: rgba(255, 255, 255, 0.14);
+    --border: rgba(255, 255, 255, 0.1);
+    --border-2: rgba(255, 255, 255, 0.15);
 
     --wash: rgba(255, 255, 255, 0.05);
     --wash-2: rgba(255, 255, 255, 0.075);
@@ -160,7 +166,7 @@
 
     --text: #e7e9f0;
     --text-dim: #a6acbd;
-    --text-faint: #8f96a8;
+    --text-faint: #949bad;
 
     --accent: #7c96ff;
     --accent-2: #9db1ff;
@@ -205,7 +211,7 @@
     --shadow-accent-hover: 0 4px 14px rgba(45, 68, 190, 0.5);
     --shadow-danger: 0 2px 10px rgba(0, 0, 0, 0.5);
     --glow-accent: drop-shadow(0 2px 10px rgba(124, 150, 255, 0.4));
-    --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%238f96a8' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+    --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%23949bad' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
     color-scheme: dark;
   }

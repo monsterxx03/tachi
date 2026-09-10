@@ -18,7 +18,7 @@ import (
 // launch.
 var (
 	windowBgLight = application.NewRGB(0xf6, 0xf7, 0xfb)
-	windowBgDark  = application.NewRGB(0x16, 0x18, 0x1e)
+	windowBgDark  = application.NewRGB(0x21, 0x24, 0x29)
 )
 
 // forcedAppearance reads TACHI_DESKTOP_APPEARANCE ("dark" / "light") and maps
@@ -71,7 +71,7 @@ func main() {
 	desk := newDesktopApp()
 
 	app := application.New(application.Options{
-		Name:        "tachi-desktop",
+		Name:        "Tachi",
 		Description: "Tachi — AI Agent desktop companion",
 		Services: []application.Service{
 			application.NewService(&AgentService{desk: desk}),

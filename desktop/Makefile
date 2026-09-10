@@ -1,9 +1,10 @@
 # Tachi desktop — build/run targets (Wails v3, macOS).
 #
 # Usage:
-#   make build    → wails3 package → bin/tachi-desktop.app (frontend + go + codesign)
-#   make run      → build then `open -n bin/tachi-desktop.app`
+#   make build    → wails3 package → bin/Tachi.app (frontend + go + codesign)
+#   make run      → build then `open -n bin/Tachi.app`
 #   make dev      → wails3 dev (hot reload)
+#   make appicon  → 由 build/appicon-source.jpg 重新生成应用图标（appicon.png + Icon Composer 资源）
 #   make frontend → npm run build in frontend/
 #   make tidy     → go mod tidy
 #   make clean    → remove bin/ and frontend/dist
@@ -13,7 +14,7 @@
 GO        ?= go
 WAILS     ?= wails3
 NPM       ?= npm
-APPDIR     = bin/tachi-desktop.app
+APPDIR     = bin/Tachi.app
 
 export PATH := $(HOME)/go/bin:$(PATH)
 
@@ -25,7 +26,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build dev frontend tidy clean run
+.PHONY: all build dev appicon frontend tidy clean run
 
 all: build
 
@@ -34,6 +35,12 @@ build:
 
 dev:
 	$(WAILS) dev
+
+# appicon regenerates the macOS app icon from build/appicon-source.jpg. The
+# output is a rounded square with a transparent surround (macOS does not mask
+# app icons for you), then `make build` recompiles icons.icns from it.
+appicon:
+	swift build/make-appicon.swift
 
 frontend:
 	cd frontend && $(NPM) run build

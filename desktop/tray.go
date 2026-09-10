@@ -32,7 +32,7 @@ func setupTray(d *desktopApp) *application.SystemTray {
 	tray := d.app.SystemTray.New()
 	tray.SetTemplateIcon(iconIdle)
 	tray.SetLabel("空闲")
-	tray.SetTooltip("Tachi Desktop")
+	tray.SetTooltip("Tachi")
 
 	menu := d.app.NewMenu()
 	menu.Add("打开主窗口").OnClick(func(ctx *application.Context) {

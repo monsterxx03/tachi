@@ -6,11 +6,11 @@ version: '3'
 # This information is used to generate the build assets.
 info:
   companyName: "monsterxx03" # The name of the company
-  productName: "Tachi Desktop" # The name of the application
+  productName: "Tachi" # The name of the application
   productIdentifier: "com.monsterxx03.tachi.desktop" # The unique product identifier
   description: "Tachi — AI Agent desktop companion" # The application description
   copyright: "(c) 2026, Tachi" # Copyright text
-  comments: "Tachi Desktop" # Comments
+  comments: "Tachi" # Comments
   version: "0.1.0" # The application version
   # cfBundleIconName: "appicon" # The macOS icon name in Assets.car icon bundles (optional)
   #                               # Should match the name of your .icon file without the extension

@@ -135,7 +135,7 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
 }) {
   return (
     <div className="msg msg-assistant">
-      <div className="msg-avatar">◆</div>
+      <div className="msg-avatar"><img src="/agent-avatar.png" alt="" draggable={false} /></div>
       <div className="msg-content">
         <div className="turn-parts">
           {(m.parts || []).map((p, i) => <TurnPart key={i} part={p} workDir={workDir} />)}
