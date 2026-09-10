@@ -306,8 +306,9 @@ func NewAIAgentWithConfig(ctx context.Context, cfg AgentConfig) (*AIAgent, *mcp.
 	// Unregister AskUser when not interactive (channel/-p mode default).
 	// Interactive modes (TUI, ACP) keep it registered; in ACP sessions the
 	// elicitation capability check (supportsElicitation) decides separately
-	// whether the tool stays usable.
-	if cfg.PermissionMode == PermissionModeSkip {
+	// whether the tool stays usable, and AskUserEnabled forces it on for
+	// interactive frontends that run with skipped permissions (desktop).
+	if cfg.PermissionMode == PermissionModeSkip && !cfg.AskUserEnabled {
 		a.UnregisterTool(tools.ToolNameAskUser)
 	}
 

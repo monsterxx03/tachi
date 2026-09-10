@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
-import { actOnKey, fmtDur, humanize } from './lib'
+import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
+import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { actOnKey, fmtDur, humanize, toLocalAsset } from './lib'
+import type { AttachmentInfo } from './types'
 
 function ContextRing({ estimate, window: w }: { estimate: number; window: number }) {
   const pct = w > 0 ? Math.min(100, (estimate / w) * 100) : 0
@@ -47,6 +50,43 @@ function ThinkingBlock({ thinking, collapsed, onToggle }: { thinking: string; co
         <span className="thinking-ico">▸</span><span className="thinking-label">thinking</span>
       </div>
       {!collapsed && <div className="thinking-body" ref={bodyRef}>{lines.map((l, i) => <div key={i} className="thinking-line">{l}</div>)}</div>}
+    </div>
+  )
+}
+
+// fileFromSendFileArgs reconstructs an attachment from a recorded SendFile call,
+// so reloaded sessions show the file card instead of a raw tool card.
+export function fileFromSendFileArgs(args: string): AttachmentInfo | null {
+  if (!args) return null
+  try {
+    const path = (JSON.parse(args) as { path?: string }).path
+    if (typeof path !== 'string' || !path) return null
+    return { path, name: path.split('/').pop() || path }
+  } catch {
+    return null
+  }
+}
+
+// FileCard is a file the agent handed over: name, size, and the two actions a
+// desktop user wants — open it, or show it in Finder. Images get an inline
+// preview (served through the /local asset handler).
+export function FileCard({ file }: { file: AttachmentInfo }) {
+  const [preview, setPreview] = useState(false)
+  const isImage = /\.(png|jpe?g|gif|webp|svg)$/i.test(file.path)
+  return (
+    <div className="file-card">
+      <div className="file-head">
+        <span className="file-ico">{isImage ? '🖼' : '📄'}</span>
+        <span className="file-name" title={file.path}>{file.name}</span>
+        <span className="file-actions">
+          {isImage ? (
+            <button className="file-btn" onClick={() => setPreview((v) => !v)}>{preview ? '收起' : '预览'}</button>
+          ) : null}
+          <button className="file-btn" onClick={() => AgentService.OpenPath(file.path).catch(() => {})}>打开</button>
+          <button className="file-btn" onClick={() => AgentService.RevealPath(file.path).catch(() => {})}>在 Finder 中显示</button>
+        </span>
+      </div>
+      {isImage && preview ? <img className="file-preview" src={toLocalAsset(file.path, '')} alt={file.name} /> : null}
     </div>
   )
 }
@@ -213,4 +253,109 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
   )
 }
 
-export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, SettingsIcon, UsageIcon, MCPIcon }
+// AskForm renders an AskUserQuestion form INLINE in the transcript (no modal):
+// it takes the place of the pending AskUserQuestion tool card, so the questions
+// appear exactly where the agent asked them. One block per question, options as
+// single-choice rows or checkboxes, plus a free-text field. Answers are keyed by
+// the full question text with values joined by ", " — the convention the TUI
+// established (see tui/askuserview.go GetAnswers), so the model sees one shape
+// whichever frontend asked.
+function AskForm({ questions, onSubmit, onCancel }: {
+  questions: Question[]
+  onSubmit: (answers: Record<string, string>) => void
+  onCancel: () => void
+}) {
+  const [picked, setPicked] = useState<Record<number, string[]>>({})
+  const [text, setText] = useState<Record<number, string>>({})
+
+  const toggle = (qi: number, label: string, multi: boolean) => {
+    setPicked((prev) => {
+      const cur = prev[qi] || []
+      if (!multi) return { ...prev, [qi]: cur[0] === label ? [] : [label] }
+      return { ...prev, [qi]: cur.includes(label) ? cur.filter((l) => l !== label) : [...cur, label] }
+    })
+  }
+
+  const partsFor = (qi: number) => {
+    const parts = [...(picked[qi] || [])]
+    const t = (text[qi] || '').trim()
+    if (t) parts.push(t)
+    return parts
+  }
+  // Submittable as soon as the form is open: unanswered questions are simply
+  // left out of the map (the model sees what was answered). A hard "answer every
+  // question" gate used to disable the button — with no :disabled styling it
+  // looked clickable and did nothing, which is exactly how a silent dead button
+  // happens.
+  const submit = () => {
+    const answers: Record<string, string> = {}
+    questions.forEach((q, qi) => {
+      const parts = partsFor(qi)
+      if (parts.length) answers[q.question] = parts.join(', ')
+    })
+    onSubmit(answers)
+  }
+
+  // Cmd/Ctrl+Enter submits. Esc deliberately does NOT decline: the form lives in
+  // the transcript, where Esc is already "dismiss the @-picker / close a modal",
+  // and silently dropping a question would be a nasty surprise.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) { e.preventDefault(); submit() }
+    }
+    window.addEventListener('keydown', onKey, true)
+    return () => window.removeEventListener('keydown', onKey, true)
+  })
+
+  return (
+    <div className="ask-form" aria-label="Tachi 提问">
+      <div className="ask-head">
+        <span className="ask-title">Tachi 想确认几个问题</span>
+        <span className="ask-sub">回答后本轮继续执行</span>
+      </div>
+      <div className="ask-body">
+        {questions.map((q, qi) => {
+          const options = q.options || []
+          const multi = !!q.multi_select
+          const chosen = picked[qi] || []
+          return (
+            <div className="ask-q" key={qi}>
+              <div className="ask-q-head">
+                <span className="ask-chip">{q.header}</span>
+                <span className="ask-question">{q.question}</span>
+                {multi ? <span className="ask-tag">可多选</span> : null}
+              </div>
+              {options.length > 0 && (
+                <div className="ask-options">
+                  {options.map((o) => {
+                    const on = chosen.includes(o.label)
+                    return (
+                      <div key={o.label} role={multi ? 'checkbox' : 'radio'} aria-checked={on} tabIndex={0}
+                        className={`ask-option${on ? ' is-on' : ''}`}
+                        title={o.description || ''}
+                        onClick={() => toggle(qi, o.label, multi)}
+                        onKeyDown={actOnKey(() => toggle(qi, o.label, multi))}>
+                        <span className={`ask-mark ${multi ? 'is-box' : 'is-radio'}`}>{on ? (multi ? '✓' : '●') : ''}</span>
+                        <span className="ask-label">{o.label}</span>
+                        {o.description ? <span className="ask-desc">{o.description}</span> : null}
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+              <input className="ask-input" value={text[qi] || ''} onChange={(e) => setText((p) => ({ ...p, [qi]: e.target.value }))}
+                placeholder={options.length > 0 ? '其他回答（自由输入，可留空）' : '在此输入回答'} />
+            </div>
+          )
+        })}
+      </div>
+      <div className="ask-actions">
+        <span className="ask-hint">⌘↩ 提交</span>
+        <button className="btn ghost" onClick={onCancel}>跳过</button>
+        <button className="btn" onClick={submit}>提交</button>
+      </div>
+    </div>
+  )
+}
+
+export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon }

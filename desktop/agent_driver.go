@@ -80,6 +80,7 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manag
 		MaxIterations:          maxIters,
 		Logger:                 logger.New("desktop"),
 		PermissionMode:         agent.PermissionModeSkip,
+		AskUserEnabled:         true,         // the desktop renders question forms itself
 		DisableMCP:             d.mcp == nil, // MCP enabled only when a shared manager exists
 		DisableSkills:          true,
 		DisableSystemReminders: true,

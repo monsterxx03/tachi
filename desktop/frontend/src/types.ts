@@ -12,6 +12,14 @@ export interface ToolCardData {
   durationMs?: number
 }
 
+// AttachmentInfo is a file the agent handed over (SendFile). It is derived from
+// the recorded tool call itself, so the live turn and reloaded history render
+// the very same card — one path, no duplicated rendering.
+export interface AttachmentInfo {
+  path: string
+  name: string
+}
+
 export interface Part {
   type: 'thinking' | 'text' | 'tool'
   text?: string
@@ -23,6 +31,7 @@ export interface Part {
   done?: boolean
   durationMs?: number
   toolCallId?: string
+  file?: AttachmentInfo
 }
 
 export interface Message {

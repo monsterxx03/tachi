@@ -182,6 +182,10 @@
 .btn.danger { border-color: var(--red-line); color: var(--red); }
 .btn.danger:hover { background: var(--red-strong); color: var(--on-accent); border-color: var(--red-strong); box-shadow: var(--shadow-danger); }
 .btn.ghost { border-color: transparent; background: transparent; }
+/* A disabled .btn must LOOK disabled: buttons that silently do nothing (because
+   :disabled had no style) are indistinguishable from broken ones. */
+.btn:disabled { opacity: 0.45; cursor: default; box-shadow: none; }
+.btn:disabled:hover { background: transparent; color: var(--text-dim); border-color: var(--border-2); }
 .shortcuts-box { min-width: 260px; }
 .shortcut-row { display: flex; align-items: center; gap: 12px; padding: 8px 0; border-bottom: 1px solid var(--border); font-size: 13px; color: var(--text-dim); }
 .shortcut-row:last-of-type { border-bottom: none; }
@@ -199,3 +203,89 @@
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 12px;
 }
+
+/* ── AskUserQuestion form (inline in the transcript) ─────────────────────── */
+/* Lives in the message flow, in place of the tool card that asked: the agent
+   parks the turn until these are answered, so the form is not modal — the user
+   can scroll the transcript, read context and answer in their own time. */
+.ask-form {
+  margin: 8px 0 4px;
+  border: 1px solid var(--accent-line-soft);
+  border-radius: var(--radius-lg);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.ask-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--accent-softer);
+}
+.ask-title { font-size: 13px; font-weight: 650; color: var(--text); }
+.ask-sub { font-size: 11.5px; color: var(--text-faint); }
+.ask-body { padding: 12px 14px; display: flex; flex-direction: column; gap: 16px; }
+.ask-q-head { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; }
+.ask-chip {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--accent-2);
+  background: var(--accent-soft);
+  border-radius: var(--radius-pill);
+  padding: 1px 8px;
+}
+.ask-question { font-size: 13px; color: var(--text); }
+.ask-tag { font-size: 11px; color: var(--text-faint); border: 1px solid var(--border-2); border-radius: var(--radius-pill); padding: 0 6px; }
+.ask-options { display: flex; flex-direction: column; gap: 4px; margin: 8px 0 6px; }
+.ask-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 9px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  transition: background 0.12s var(--ease), border-color 0.12s var(--ease);
+}
+.ask-option:hover { background: var(--hover); }
+.ask-option.is-on { border-color: var(--accent-line); background: var(--accent-softer); }
+.ask-mark {
+  flex-shrink: 0;
+  width: 14px;
+  height: 14px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 9px;
+  line-height: 1;
+  color: var(--on-accent);
+  border: 1px solid var(--border-2);
+}
+.ask-mark.is-box { border-radius: 3px; }
+.ask-mark.is-radio { border-radius: 50%; }
+.ask-option.is-on .ask-mark { background: var(--accent); border-color: var(--accent); }
+.ask-label { font-size: 13px; color: var(--text); }
+.ask-desc { font-size: 11.5px; color: var(--text-faint); margin-left: auto; text-align: right; }
+.ask-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel-2);
+  color: var(--text);
+  font-size: 13px;
+  font-family: inherit;
+}
+.ask-input:focus { outline: none; border-color: var(--accent-line); }
+.ask-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--wash);
+}
+.ask-hint { margin-right: auto; font-size: 11px; color: var(--text-faint); }

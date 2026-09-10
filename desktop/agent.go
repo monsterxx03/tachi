@@ -1208,8 +1208,11 @@ func (d *desktopApp) startTurn(text string) {
 		d.setSessionState(id, AgentState{Status: StatusThinking, Label: "思考", Detail: "理解中…"})
 
 		// Images extracted from @-image references ride along as multi-modal
-		// content parts on the trailing user message.
-		ropts := []agent.RunOption{agent.WithSteerChannel(steerCh)}
+		// content parts on the trailing user message; SendFile lets the agent
+		// hand the user a file it produced. No callback is needed: the
+		// transcript renders the attachment card from the tool call itself, so
+		// the live turn and reloaded history take one rendering path.
+		ropts := []agent.RunOption{agent.WithSteerChannel(steerCh), agent.WithExtraTools(tools.NewSendFileTool())}
 		if len(expanded.Images) > 0 {
 			ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 		}
@@ -1363,6 +1366,20 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 	case agent.AgentEventToolResult:
 		d.tpsReset(id)
 		d.setSessionState(id, AgentState{Status: StatusToolRunning, Label: "执行", Detail: "工具完成"})
+	case agent.AgentEventAskUser:
+		// The agent loop is parked, waiting for the user's answers. Push the
+		// questions to the frontend, which renders the form and answers via
+		// AgentService.AnswerQuestion (the TUI does the same through
+		// RespondToAskUser).
+		d.tpsReset(id)
+		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "提问", Detail: "等待回答"})
+		if d.app != nil {
+			d.app.Event.Emit("agent:ask", AskEvent{
+				SessionID: id,
+				ToolID:    ev.ToolID,
+				Questions: ev.Questions,
+			})
+		}
 	case agent.AgentEventAutoCompactStart:
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩上下文…"})
 	case agent.AgentEventUsage:

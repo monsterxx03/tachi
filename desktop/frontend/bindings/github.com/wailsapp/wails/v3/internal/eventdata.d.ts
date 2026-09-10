@@ -12,6 +12,7 @@ import type * as main$0 from "../../../../monsterxx03/tachi/desktop/models.js";
 declare module "@wailsio/runtime" {
     namespace Events {
         interface CustomEvents {
+            "agent:ask": main$0.AskEvent;
             "agent:filedrop": main$0.FileDropEvent;
             "agent:state": main$0.AgentState;
         }

@@ -32,6 +32,17 @@ export function fmtDur(ms: number): string {
   return `${m}m${rs > 0 ? rs + 's' : ''}`
 }
 
+// Turn ids must be UNIQUE across pages. History is loaded page by page and
+// older pages are PREPENDED into the client-side transcript, so an index-based
+// id ("h-0", "h-1", …) repeats in every page — and duplicate React keys make
+// cards reuse each other's component state, so clicking one message appeared to
+// toggle nothing (or toggled a different message). A module-level counter is
+// enough: ids only have to be unique within this document.
+let turnSeq = 0
+function nextTurnId(): string {
+  return `h-${++turnSeq}`
+}
+
 // Rebuild turns from RAW session messages, preserving the real in-turn order:
 // one assistant card per turn with interleaved thinking / assistant text / tool cards.
 export function buildTurns(sms: SessionMessage[]): Message[] {
@@ -43,12 +54,12 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
     if (sm.role === 'user') {
       const r = extractReminder(sm.content)
       const rem = r.reminder || pendingReminder || undefined
-      turns.push({ id: `h-${turns.length}`, role: 'user', text: r.text, reminder: rem, reminderCollapsed: rem ? true : undefined, ts: sm.timestamp || undefined })
+      turns.push({ id: nextTurnId(), role: 'user', text: r.text, reminder: rem, reminderCollapsed: rem ? true : undefined, ts: sm.timestamp || undefined })
       cur = null
       return
     }
     if (!cur || cur.role !== 'assistant') {
-      cur = { id: `h-${turns.length}`, role: 'assistant', parts: [], ts: sm.timestamp || undefined }
+      cur = { id: nextTurnId(), role: 'assistant', parts: [], ts: sm.timestamp || undefined }
       turns.push(cur)
     }
     if (!cur.parts) cur.parts = []

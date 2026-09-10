@@ -25,6 +25,35 @@ type Question struct {
 	MultiSelect bool             `json:"multi_select"`
 }
 
+// UnmarshalJSON accepts BOTH spellings of the multi-select flag: the tool schema
+// advertises "multiSelect" (which is what models actually emit — every recorded
+// AskUserQuestion call uses that casing), while this struct marshals
+// "multi_select". With the tag alone, encoding/json silently dropped the
+// model's camelCase key, so MultiSelect stayed false no matter what was asked:
+// every question behaved as single-select in the TUI, in channels and in ACP —
+// the multi-select schema branch there was never even reached.
+func (q *Question) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		Question   string           `json:"question"`
+		Header     string           `json:"header"`
+		Options    []QuestionOption `json:"options"`
+		MultiCamel *bool            `json:"multiSelect"`  // tool-schema spelling (models emit this)
+		MultiSnake *bool            `json:"multi_select"` // struct spelling (round-trips)
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	q.Question, q.Header, q.Options = raw.Question, raw.Header, raw.Options
+	switch {
+	case raw.MultiCamel != nil:
+		q.MultiSelect = *raw.MultiCamel
+	case raw.MultiSnake != nil:
+		q.MultiSelect = *raw.MultiSnake
+	}
+	return nil
+}
+
 // AskUserResult holds the user's answers to the questions
 type AskUserResult struct {
 	Answers     map[string]string
@@ -180,41 +209,26 @@ func buildElicitationSchema(questions []Question) acp.UnstableElicitationSchema 
 		required = append(required, propName)
 
 		if len(q.Options) > 0 {
-			// Multiple choice: use oneOf for single-select, array for multi-select.
-			if q.MultiSelect {
-				// Multi-select: array of items with anyOf.
-				items := make([]map[string]any, 0, len(q.Options))
-				for _, opt := range q.Options {
-					items = append(items, map[string]any{
-						"const":       opt.Label,
-						"title":       opt.Label,
-						"description": opt.Description,
-					})
-				}
-				properties[propName] = map[string]any{
-					"type":        "array",
-					"title":       q.Header,
-					"description": q.Question,
-					"items": map[string]any{
-						"anyOf": items,
-					},
-				}
-			} else {
-				// Single-select: oneOf with const/title/description.
-				oneOf := make([]map[string]any, 0, len(q.Options))
-				for _, opt := range q.Options {
-					oneOf = append(oneOf, map[string]any{
-						"const":       opt.Label,
-						"title":       opt.Label,
-						"description": opt.Description,
-					})
-				}
-				properties[propName] = map[string]any{
-					"type":        "string",
-					"title":       q.Header,
-					"description": q.Question,
-					"oneOf":       oneOf,
-				}
+			// ACP elicitation forms admit only flat objects with primitive and
+			// enum properties (spec: "Form schemas are flat objects whose
+			// properties use the supported primitive and enum schemas"), so a
+			// multi-select question cannot be expressed as an array — it
+			// degrades to a single choice here. Interactive frontends that
+			// render their own form (TUI, desktop, channels) do honour
+			// multi_select.
+			oneOf := make([]map[string]any, 0, len(q.Options))
+			for _, opt := range q.Options {
+				oneOf = append(oneOf, map[string]any{
+					"const":       opt.Label,
+					"title":       opt.Label,
+					"description": opt.Description,
+				})
+			}
+			properties[propName] = map[string]any{
+				"type":        "string",
+				"title":       q.Header,
+				"description": q.Question,
+				"oneOf":       oneOf,
 			}
 		} else {
 			// Free-text input.

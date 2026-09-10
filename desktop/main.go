@@ -50,6 +50,9 @@ func init() {
 	// Native file drops: the payload carries the dropped paths (see
 	// desktop/fileservice.go).
 	application.RegisterEvent[FileDropEvent]("agent:filedrop")
+	// AskUserQuestion forms: the payload carries the questions to render (see
+	// desktop/askuser.go).
+	application.RegisterEvent[AskEvent]("agent:ask")
 }
 
 // assetHandler serves the embedded frontend assets, and additionally answers

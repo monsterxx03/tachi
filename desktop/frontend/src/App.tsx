@@ -22,9 +22,11 @@ import {
 } from './types'
 import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
-  ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker,
+  ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
+  FileCard, fileFromSendFileArgs,
   SettingsIcon, UsageIcon, MCPIcon,
 } from './components'
+import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 
 // TableScroller wraps GFM tables in a horizontally scrollable container so a
 // table wider than the message card scrolls inside it instead of bursting out
@@ -52,7 +54,7 @@ function appendPartDelta(m: Message, type: 'thinking' | 'text', delta: string): 
   return { ...m, parts }
 }
 
-function pushToolPart(m: Message, p: Part): Message {
+function pushPart(m: Message, p: Part): Message {
   return { ...m, parts: [...(m.parts || []), p] }
 }
 
@@ -125,25 +127,49 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: str
 const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir: string }) {
   if (part.type === 'thinking') return <ThinkingPart text={part.text || ''} />
   if (part.type === 'tool') {
+    // A SendFile call IS the attachment — show the file card rather than a raw
+    // tool card (covers the live turn and reloaded history alike).
+    if (part.name === 'SendFile') {
+      const file = fileFromSendFileArgs(part.args || '')
+      if (file) return <FileCard file={file} />
+    }
     return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok} durationMs={part.durationMs} />
   }
   return <MarkdownBlock text={part.text || ''} workDir={workDir} />
 })
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer }: {
   m: Message
   workDir: string
   // Only passed while the turn is running, so finished messages keep a stable
   // props shape and stay memoized.
   runningLabel?: string
+  // Pending AskUserQuestion questions for THIS session: the form replaces the
+  // tool card that asked them, so they appear in the transcript where they belong.
+  ask?: Question[] | null
+  onAnswer?: (answers: Record<string, string> | null) => void
 }) {
+  // Render the form in place of the pending AskUserQuestion card. Any other
+  // unfinished card of the same tool is left alone; the loop only ever asks one
+  // question set at a time, so the first match is the one waiting.
+  let askShown = false
+  const parts = (m.parts || []).map((p, i) => {
+    if (ask && onAnswer && !askShown && p.type === 'tool' && !p.done && p.name === 'AskUserQuestion') {
+      askShown = true
+      return <AskForm key={i} questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
+    }
+    return <TurnPart key={i} part={p} workDir={workDir} />
+  })
   return (
     <div className="msg msg-assistant">
       <div className="msg-avatar"><img src="/agent-avatar.png" alt="" draggable={false} /></div>
       <div className="msg-content">
-        <div className="turn-parts">
-          {(m.parts || []).map((p, i) => <TurnPart key={i} part={p} workDir={workDir} />)}
-        </div>
+        <div className="turn-parts">{parts}</div>
+        {/* Fallback: a pending ask with no matching tool card (e.g. the card was
+            closed by an interruption) still has to be answerable. */}
+        {ask && onAnswer && !askShown && m.running ? (
+          <AskForm questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
+        ) : null}
         {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{runningLabel ?? '正在执行…'}</span> : null}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
         {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
@@ -334,6 +360,37 @@ function App() {
 
   // A session switch changes the working directory, so any open picker is stale.
   useEffect(() => { closeAt() }, [currentId, closeAt])
+
+  // ── AskUserQuestion ───────────────────────────────────────────────────────
+  // The agent parks the turn and waits for answers; the questions arrive as an
+  // event and are answered through AgentService.AnswerQuestion (the TUI answers
+  // the same channel via RespondToAskUser). Pending questions are kept per
+  // session so a background session's question never hijacks the foreground UI.
+  const [asks, setAsks] = useState<Record<string, { toolId: string; questions: Question[] }>>({})
+  const clearAsk = useCallback((sid: string) => {
+    setAsks((prev) => {
+      if (!prev[sid]) return prev
+      const next = { ...prev }
+      delete next[sid]
+      return next
+    })
+  }, [])
+
+  // answerQuestion answers (or declines, with null) the pending AskUserQuestion.
+  const answerQuestion = useCallback((sid: string, answers: Record<string, string> | null) => {
+    clearAsk(sid)
+    // nil answers = the user declined; the model is told the question went
+    // unanswered instead of being handed a made-up choice.
+    AgentService.AnswerQuestion(sid, answers, null).catch(() => {})
+  }, [clearAsk])
+
+  // answerCurrent is the stable callback the transcript form uses for the
+  // session on screen.
+  const answerCurrent = useCallback((a: Record<string, string> | null) => answerQuestion(currentId, a), [currentId, answerQuestion])
+
+  // Note: pending questions are NOT cleared on session switch — the agent is
+  // still parked, so switching back must show the same form. They are cleared
+  // when the turn ends (see the agent:idle / agent:error listeners below).
 
   // Native file drops arrive from Go (the webview cannot read dropped paths):
   // resolve them into @-references and splice them in at the caret.
@@ -847,9 +904,26 @@ function App() {
     return () => off?.()
   }, [currentId])
 
+  // Questions arrive while the turn is parked; the form renders in the
+  // transcript (see AssistantBubble), so pull the view down to it.
+  useEffect(() => {
+    const off = Events.On('agent:ask', (event) => {
+      const d = event.data as { sessionId?: string; toolId?: string; questions?: Question[] } | undefined
+      if (!d?.sessionId || !d.questions?.length) return
+      setAsks((prev) => ({ ...prev, [d.sessionId as string]: { toolId: d.toolId || '', questions: d.questions as Question[] } }))
+      // The form renders in the transcript, so follow it into view — but only
+      // while the user is already parked at the bottom: yanking someone who is
+      // reading history down to a form would be exactly the kind of
+      // interruption this UI should avoid.
+      if (d.sessionId === currentId) scrollToBottom()
+    })
+    return () => off?.()
+  }, [currentId, scrollToBottom])
+
   useEffect(() => {
     const off = Events.On('agent:error', (event) => {
       const d = event.data as { sessionId: string; error: string; interrupted?: boolean }
+      clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
       if (d.sessionId !== currentId) return
       const interrupted = !!d.interrupted
       setMsgCache((prev) => {
@@ -874,7 +948,7 @@ function App() {
       })
     })
     return () => off?.()
-  }, [currentId])
+  }, [currentId, clearAsk])
 
   useEffect(() => {
     const off = Events.On('agent:turn', (event) => {
@@ -923,7 +997,7 @@ function App() {
       switch (ev.Type) {
         case 'thinking_delta': enqueueDelta(sessionId, 'thinking', ev.ThinkingDelta || ''); break
         case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
-        case 'tool_call_start': apply(sessionId, 'assistant', (m) => pushToolPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false })); break
+        case 'tool_call_start': apply(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false })); break
         case 'tool_result': apply(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined)); break
         case 'turn_complete': apply(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'steer_check':
@@ -958,13 +1032,14 @@ function App() {
   useEffect(() => {
     const off = Events.On('agent:idle', (event) => {
       const d = event.data as { sessionId: string; reason: string }
+      clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
       if (d.sessionId !== currentId || d.reason !== 'complete') return
       const queued = pendingRef.current[d.sessionId] || []
       if (queued.length === 0) return
       sendText(takePending(d.sessionId))
     })
     return () => off?.()
-  }, [currentId, sendText, takePending])
+  }, [currentId, sendText, takePending, clearAsk])
 
   // stopChat aborts the running turn in the current session (backend cancels
   // the turn ctx — same mechanism as tui Ctrl+C / acp prompt cancel).
@@ -1058,6 +1133,8 @@ function App() {
                       m={m}
                       workDir={workDir}
                       runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
+                      ask={m.running ? (asks[currentId]?.questions || null) : null}
+                      onAnswer={answerCurrent}
                     />
                   ),
                 )}
