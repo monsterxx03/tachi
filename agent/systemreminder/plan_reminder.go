@@ -33,25 +33,45 @@ func (r PlanTrackingReminder) Generate(ctx context.Context, rctx Context) []stri
 		return nil
 	}
 
-	return []string{
-		fmt.Sprintf("Active plan: `%s` — %s", plan.Path, plan.Title),
+	return reminderLines(plan)
+}
+
+// reminderLines renders the active plan as the lines the model sees.
+//
+// The plan_id is part of it because it is the thing that has to stay STABLE across updates:
+// nothing else tells the model which document it is updating, and the tool schema asks for
+// an id — so a reminder that stayed silent about it would invite a fresh id on every save,
+// turning each update into yet another file (the very drift plan_id exists to prevent).
+func reminderLines(plan *planInfo) []string {
+	lines := []string{fmt.Sprintf("Active plan: `%s` — %s", plan.Path, plan.Title)}
+	if plan.PlanID != "" {
+		lines = append(lines, fmt.Sprintf(
+			"plan_id: `%s` — pass this SAME value when you update the plan; that is what keeps a retitled "+
+				"plan updating in place instead of forking into a second file.", plan.PlanID))
+	} else {
+		lines = append(lines, "plan_id: (none yet) — pass a plan_id of your choice together with the same "+
+			"title on your next update to pin this plan's identity, then keep reusing it.")
+	}
+	return append(lines,
 		"",
 		"Periodically call the SavePlan tool to update step statuses as you complete each step.",
 		"Mark steps as `in_progress` when starting work and `completed` when finished.",
-	}
+	)
 }
 
 // planInfo holds metadata about an active plan file.
 type planInfo struct {
 	Path    string
 	Title   string
+	PlanID  string
 	ModTime time.Time
 }
 
 // planFile is used to parse the JSON structure of saved plans.
 type planFile struct {
-	Title string     `json:"title"`
-	Steps []planStep `json:"steps"`
+	Title  string     `json:"title"`
+	PlanID string     `json:"plan_id"`
+	Steps  []planStep `json:"steps"`
 }
 
 type planStep struct {
@@ -111,6 +131,7 @@ func findActivePlan(root, sessionID string) *planInfo {
 		candidates = append(candidates, planInfo{
 			Path:    path,
 			Title:   pf.Title,
+			PlanID:  pf.PlanID,
 			ModTime: info.ModTime(),
 		})
 	}
