@@ -27,11 +27,11 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 	}
 	cfg := boot.Config
 	d.cfg = cfg
-	// The desktop frontend renders Mermaid diagrams (and a zoomable overlay for
-	// them), so the model is told it may draw one when structure beats prose.
-	d.systemPrompt = agent.BuildSystemPrompt(cfg.Language, "", "", cfg.ExtraSystemPrompt,
-		agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt))
 	d.sm = d.newSessionManager()
+	// The system prompt is deliberately NOT built here: it is session-derived
+	// (working directory, ID), so systemPromptFor resolves it per turn — and that
+	// builder is where the Mermaid capability of this frontend is declared.
+
 	// Build the shared MCP manager (when any servers are configured) and connect
 	// in the background. It is shared across all per-session agents; the
 	// manager's per-session discovered sets keep each session's tool loading
@@ -41,6 +41,74 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 		go d.populateSharedMCP(ctx, d.mcp)
 	}
 	return nil
+}
+
+// systemPromptCacheMax pins the built-prompt memo (see systemPromptFor). Keys are
+// the exact build inputs, so the pin only matters for a long-lived process that
+// walks through many sessions and directories; when it is reached the map is
+// dropped wholesale and rebuilt on demand.
+const systemPromptCacheMax = 64
+
+// promptKey identifies a built system prompt. Both parts are build inputs, so a
+// miss and a change are the same event.
+type promptKey struct {
+	cwd string
+	id  string
+}
+
+// systemPromptFor returns the system prompt to send for session id, built from
+// the session's CURRENT working directory and ID.
+//
+// The prompt cannot be a startup singleton the way a single-session TUI's is
+// (there the process cwd IS the session directory, thanks to os.Chdir). One
+// desktop process hosts several sessions, each pointing at its own tree, and a
+// GUI's process cwd is not a working directory at all — macOS hands a
+// Finder-launched app "/" — so a prompt built once would advertise "/" forever
+// while the tools (wdctx) and @-file references already resolved against the
+// session's directory. Resolving on demand keeps the advertised directory, the
+// tool root and the @-file root the same thing.
+//
+// The cache is keyed on the resolved (working directory, session ID) pair, which
+// is what makes a directory change take effect on the next turn with no
+// invalidation hook: the new directory is a new key, so it rebuilds. The build
+// is not free — it probes git (shutil in agent.buildSystemPrompt) — hence the
+// memo for the unchanged case.
+//
+// Callers must NOT hold d.mu: the working directory is read through it, and the
+// build is far too slow to run under it.
+//
+// The Mermaid capability is declared here because this frontend renders diagrams
+// (and a zoomable overlay for them).
+func (d *desktopApp) systemPromptFor(id string) string {
+	if d.cfg == nil {
+		return ""
+	}
+	cwd := d.sessionWorkDir(id)
+	if cwd == "" {
+		// A session that never picked a folder runs its tools in the process cwd
+		// (wdctx's fallback, and the @-file root's). Say so, instead of letting
+		// BuildSystemPrompt walk up to a git root the tools would never use.
+		cwd = processCWD()
+	}
+	key := promptKey{cwd: cwd, id: id}
+
+	d.promptMu.Lock()
+	cached, ok := d.promptCache[key]
+	d.promptMu.Unlock()
+	if ok {
+		return cached
+	}
+
+	prompt := agent.BuildSystemPrompt(d.cfg.Language, cwd, id, d.cfg.ExtraSystemPrompt,
+		agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt))
+
+	d.promptMu.Lock()
+	defer d.promptMu.Unlock()
+	if d.promptCache == nil || len(d.promptCache) >= systemPromptCacheMax {
+		d.promptCache = make(map[promptKey]string)
+	}
+	d.promptCache[key] = prompt
+	return prompt
 }
 
 // populateSharedMCP connects all configured MCP servers in the background and

@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -58,22 +59,49 @@ func init() {
 	application.RegisterEvent[string](uiThemeEventName)
 }
 
+// localAssetRoute is the prefix the webview uses to reach files on disk (see
+// assetHandler).
+const localAssetRoute = "/local"
+
 // assetHandler serves the embedded frontend assets, and additionally answers
-// `/local?p=<abs path>` by serving a local file from disk — this lets `<img>`
-// tags in AI markdown replies render local images (e.g. screenshots) that the
-// webview otherwise cannot load by path.
+// local files for the two cases the webview cannot load by path:
+//
+//	/local?p=<abs path>   — a single file, addressed by query
+//	/local/<abs path>     — the same file with the disk path in the URL PATH
+//
+// The query form is what markdown images use (toLocalAsset). The path form
+// exists for the HTML preview: the document loads from /local/.../report.html,
+// so its own relative references ("./chart.js", "./style.css") resolve against
+// that URL and land back here — under the query form the browser would resolve
+// them against the app root and 404.
+//
+// Both forms serve any path the user can read, which is the desktop app's
+// standing trade: the route is only reachable from its own webview, and the
+// files being shown are the ones the agent just handed over.
 func assetHandler(assets embed.FS) http.Handler {
 	embedHandler := application.AssetFileServerFS(assets)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/local" {
-			p := r.URL.Query().Get("p")
-			if p != "" {
-				http.ServeFile(w, r, p)
-				return
-			}
+		if p := localAssetPath(r); p != "" {
+			http.ServeFile(w, r, p)
+			return
 		}
 		embedHandler.ServeHTTP(w, r)
 	})
+}
+
+// localAssetPath maps a /local request onto a disk path, or returns "" when the
+// request is not one (and should fall through to the embedded assets).
+func localAssetPath(r *http.Request) string {
+	if r.URL.Path == localAssetRoute {
+		return r.URL.Query().Get("p")
+	}
+	rest, ok := strings.CutPrefix(r.URL.Path, localAssetRoute+"/")
+	if !ok || rest == "" {
+		return ""
+	}
+	// The URL path is already percent-decoded by net/http, and Clean keeps a
+	// ".." segment from climbing out of the absolute path it is joined onto.
+	return filepath.Clean("/" + rest)
 }
 
 func main() {

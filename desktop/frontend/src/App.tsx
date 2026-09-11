@@ -1,7 +1,4 @@
-import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import rehypeHighlight from 'rehype-highlight'
+import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Dialogs, Events } from '@wailsio/runtime'
 import {
   AgentService,
@@ -21,26 +18,16 @@ import {
   type Part,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
   ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, CommandPicker, ToolCard, MCPPanel, AtFilePicker, AskForm,
-  FileCard, fileFromSendFileArgs, PreBlock,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle,
 } from './components'
+import { FileCard, fileFromSendFileArgs } from './filepreview'
+import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-
-// TableScroller wraps GFM tables in a horizontally scrollable container so a
-// table wider than the message card scrolls inside it instead of bursting out
-// of the layout. Module-level: stable identity across streaming re-renders.
-function TableScroller(props: { children?: ReactNode }) {
-  return (
-    <div className="table-scroll">
-      <table>{props.children}</table>
-    </div>
-  )
-}
 
 // ── Ordered turn parts ──────────────────────────────────────────────────────
 // A live turn accumulates the SAME ordered `parts` array a rebuilt transcript
@@ -131,33 +118,20 @@ function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?: numbe
 // this, a long session re-parsed the whole transcript dozens of times per
 // second, which is what made output feel jumpy.
 
-const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: string; workDir: string }) {
-  const MdImg = useCallback(({ src, alt }: { src?: string; alt?: string }) => (
-    <img src={toLocalAsset(src, workDir)} alt={alt || ''} />
-  ), [workDir])
-  return (
-    <div className="assistant-text">
-      {/* rehypeHighlight tokenises fenced code; PreBlock turns ```mermaid into a
-          diagram and leaves everything else as a plain <pre>. */}
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        rehypePlugins={[rehypeHighlight]}
-        components={{ img: MdImg, table: TableScroller, pre: PreBlock }}>
-        {text}
-      </ReactMarkdown>
-    </div>
-  )
-})
+// The markdown itself is rendered by MarkdownBlock and the attachment cards by
+// FileCard (see markdown.tsx / filepreview.tsx): this file only decides which
+// piece a turn part turns into.
 
 const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir: string }) {
   if (part.type === 'thinking') return <ThinkingPart text={part.text || ''} />
   if (part.type === 'notice') return <NoticePart part={part} />
   if (part.type === 'tool') {
     // A SendFile call IS the attachment — show the file card rather than a raw
-    // tool card (covers the live turn and reloaded history alike).
+    // tool card (covers the live turn and reloaded history alike). workDir
+    // resolves the relative paths a model sometimes writes.
     if (part.name === 'SendFile') {
       const file = fileFromSendFileArgs(part.args || '')
-      if (file) return <FileCard file={file} />
+      if (file) return <FileCard file={file} workDir={workDir} />
     }
     return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok} durationMs={part.durationMs} defaultExpanded={part.expand} />
   }

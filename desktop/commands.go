@@ -200,9 +200,12 @@ func runCompactCommand(c *commandRun) error {
 	if len(history) == 0 {
 		return errors.New("对话历史为空，无需压缩")
 	}
+	// One prompt for both the summarising turn and the hand-off: the session
+	// cannot move under way, and CompleteCompact must record what was sent.
+	systemPrompt := c.desk.systemPromptFor(c.id)
 
 	stream := r.agent.RunConversationStream(c.ctx, history, cmds.BuildCompactInstruction(),
-		c.desk.systemPrompt, llm.ChatOptions{MaxTokens: c.desk.cfg.MaxTokens}, agent.WithNoTools())
+		systemPrompt, llm.ChatOptions{MaxTokens: c.desk.cfg.MaxTokens}, agent.WithNoTools())
 
 	var summary strings.Builder
 	for ev := range stream {
@@ -219,7 +222,7 @@ func runCompactCommand(c *commandRun) error {
 		return errors.New("压缩未产生摘要")
 	}
 
-	newHistory, err := r.agent.CompleteCompact(r.sm, c.desk.systemPrompt, summary.String())
+	newHistory, err := r.agent.CompleteCompact(r.sm, systemPrompt, summary.String())
 	if err != nil {
 		return err
 	}
@@ -284,7 +287,7 @@ func runReviewCommand(c *commandRun) error {
 		})
 		defer forked.Close()
 
-		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPrompt, spec.Prompt, opts,
+		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPromptFor(c.id), spec.Prompt, opts,
 			agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: c.id}))
 		for ev := range stream {
 			c.ech <- ev
@@ -302,7 +305,7 @@ func runReviewCommand(c *commandRun) error {
 // run is one-off — it never appends to the session — so the conversation is left
 // exactly as it was, with only the transcript showing what happened.
 func runCommitCommand(c *commandRun) error {
-	stream := c.run.agent.RunCommitOneOff(c.ctx, c.desk.systemPrompt, c.id, c.desk.cfg.MaxTokens, "")
+	stream := c.run.agent.RunCommitOneOff(c.ctx, c.desk.systemPromptFor(c.id), c.id, c.desk.cfg.MaxTokens, "")
 	for ev := range stream {
 		c.ech <- ev
 	}

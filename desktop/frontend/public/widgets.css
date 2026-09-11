@@ -507,11 +507,12 @@
 /* Diagrams are clickable ("show me this bigger"). */
 .mermaid { cursor: zoom-in; }
 
-/* ── Mermaid overlay (full-viewport lightbox) ─────────────────────────────── */
-/* Dimmed backdrop, diagram centred, controls as a floating pill — no dialog
-   window: click any blank area (or Esc) to dismiss. Rendered via a portal, so
-   no ancestor can pin it into a message box. */
-.mermaid-overlay {
+/* ── Preview lightbox (full-viewport) ─────────────────────────────────────── */
+/* One shell for every "show me this bigger": mermaid diagrams, attachment
+   images, attachment documents. Dimmed backdrop, content centred, controls as a
+   floating pill — no dialog window: click any blank area (or Esc) to dismiss.
+   Rendered via a portal, so no ancestor can pin it into a message box. */
+.viewer-overlay {
   position: fixed;
   inset: 0;
   z-index: 90;
@@ -520,27 +521,48 @@
   padding: 40px 32px 84px;
   animation: scrim-in 0.16s ease both;
 }
-.mermaid-stage {
-  /* margin:auto centres without clipping when the diagram outgrows the space
+.viewer-stage {
+  /* margin:auto centres without clipping when the content outgrows the space
      (align-items:center would cut off its top/left edge under overflow). */
   margin: auto;
   max-width: 100%;
   max-height: 100%;
   overflow: auto;
 }
-/* Grab-to-pan affordance, only once the diagram actually overflows. */
-.mermaid-stage.is-pannable { cursor: grab; }
-.mermaid-stage.is-dragging { cursor: grabbing; user-select: none; }
-.mermaid-zoom {
-  display: inline-block;
-  width: max-content;
+/* Grab-to-pan affordance, only once the content actually overflows. */
+.viewer-stage.is-pannable { cursor: grab; }
+.viewer-stage.is-dragging { cursor: grabbing; user-select: none; }
+/* Documents (markdown, HTML) fill the frame instead of being centred to their
+   own size: a report wants the room, and the height has to be definite for the
+   iframe inside to resolve its own 100%. */
+.viewer-stage.is-doc { width: 100%; height: 100%; }
+.viewer-zoom { display: inline-block; width: max-content; }
+/* A diagram is drawn on transparency, so it gets a panel to sit on; an image has
+   its own edges and gets none. */
+.viewer-zoom-paper {
   padding: 16px 18px;
   background: var(--panel-solid);
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-4);
 }
-.mermaid-stage svg { max-width: none !important; height: auto; }
-.mermaid-controls {
+.viewer-stage svg { max-width: none !important; height: auto; }
+.viewer-image { display: block; max-width: none; }
+.viewer-frame { display: block; width: 100%; height: 100%; border: 0; }
+.viewer-doc {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 26px 32px;
+  background: var(--panel-solid);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-4);
+}
+/* A table is not prose: the reading measure that keeps a README comfortable would
+   only squash a spreadsheet, so the lightbox hands it the whole stage. */
+.viewer-doc.is-table {
+  max-width: 100%;
+  padding: 16px 18px;
+}
+.viewer-controls {
   position: absolute;
   bottom: 22px;
   left: 50%;
@@ -554,7 +576,7 @@
   border-radius: var(--radius-pill);
   box-shadow: var(--shadow-2);
 }
-.mm-btn {
+.viewer-btn {
   border: none;
   background: transparent;
   color: var(--text-dim);
@@ -567,13 +589,20 @@
   cursor: pointer;
   transition: background 0.12s var(--ease), color 0.12s var(--ease);
 }
-.mm-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
-.mermaid-controls .code-copy { opacity: 1; }
-.mermaid-zoom-label {
+.viewer-btn:hover { background: var(--accent-soft); color: var(--accent-2); }
+.viewer-controls .code-copy { opacity: 1; }
+/* The truncation notice sits inside the paper card here, so it is an inset strip
+   rather than the full-bleed one the card uses under its content. */
+.viewer-doc .file-preview-note {
+  border-radius: var(--radius-sm);
+  padding: 7px 10px;
+  margin: 0 0 14px;
+}
+.viewer-zoom-label {
   min-width: 46px;
   text-align: center;
   font-size: 11.5px;
   color: var(--text-dim);
   font-variant-numeric: tabular-nums;
 }
-.mm-sep { width: 1px; height: 16px; background: var(--border-2); margin: 0 3px; }
+.viewer-sep { width: 1px; height: 16px; background: var(--border-2); margin: 0 3px; }

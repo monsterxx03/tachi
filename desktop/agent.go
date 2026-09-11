@@ -974,10 +974,16 @@ type desktopApp struct {
 	// sm is a stable session manager (no bound current) used to list on-disk
 	// sessions. It is created once in initAgent and is never repointed; the
 	// "displayed" session is tracked separately via activeID (guarded by mu).
-	sm           *session.Manager
-	mcp          *mcp.Manager // shared MCP manager (nil = no MCP configured)
-	cfg          *config.Config
-	systemPrompt string
+	sm  *session.Manager
+	mcp *mcp.Manager // shared MCP manager (nil = no MCP configured)
+	cfg *config.Config
+
+	// promptCache memoizes built system prompts, keyed by the exact build inputs
+	// (working directory + session ID) — see systemPromptFor. Guarded by
+	// promptMu, NOT by mu: the build is slow (it probes git) and must never run
+	// under the app-wide lock.
+	promptMu    sync.Mutex
+	promptCache map[promptKey]string
 
 	// activeID is the ID of the currently displayed session ("" when none).
 	// Written under mu by New/Load; read under mu everywhere except where the
@@ -1280,7 +1286,7 @@ func (d *desktopApp) startTurn(text string) {
 		if len(expanded.Images) > 0 {
 			ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 		}
-		ch := r.agent.RunConversationStream(ctx, history, text, d.systemPrompt, llm.ChatOptions{
+		ch := r.agent.RunConversationStream(ctx, history, text, d.systemPromptFor(id), llm.ChatOptions{
 			MaxTokens: d.cfg.MaxTokens,
 		}, ropts...)
 		for ev := range ch {

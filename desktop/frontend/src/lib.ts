@@ -133,6 +133,17 @@ export function actOnKey(fn: () => void) {
   }
 }
 
+// fmtBytes renders a byte count the way the agent's own confirmation message
+// does (pkg/strutil.HumanBytes), so "README.md · 12.4 KB" on the card and
+// "✅ 文件 README.md (12.4 KB) 已加入发送队列" in the transcript agree.
+export function fmtBytes(n: number): string {
+  if (!isFinite(n) || n <= 0) return '0 B'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(1)} GB`
+}
+
 // toLocalAsset rewrites an image src that points at a local path so it can be
 // served by the desktop's /local asset handler (see assetHandler in main.go).
 // Absolute paths pass through; relative paths are resolved against workDir.
@@ -143,6 +154,17 @@ export function toLocalAsset(src: string | undefined, workDir: string): string {
   let p = src
   if (!p.startsWith('/')) p = `${workDir || ''}/${p.replace(/^\.\//, '')}`
   return `/local?p=${encodeURIComponent(p)}`
+}
+
+// toLocalPath is the same asset route in its path form (/local/<path>). It is
+// what a previewed document is loaded through: with the disk path in the URL
+// PATH, the document's own relative references ("./chart.js") resolve against it
+// and come back to the same handler — under the query form the browser would
+// resolve them against the app root and 404. Each segment is encoded separately
+// so a "/" in the path stays a separator while a "#" or "?" in a FILE NAME is
+// escaped rather than read as URL syntax.
+export function toLocalPath(path: string): string {
+  return '/local' + path.split('/').map(encodeURIComponent).join('/')
 }
 
 // ── @-file references ───────────────────────────────────────────────────────
