@@ -21,7 +21,11 @@ export interface AttachmentInfo {
 }
 
 export interface Part {
-  type: 'thinking' | 'text' | 'tool'
+  type: 'thinking' | 'text' | 'tool' | 'notice'
+  // notice: a one-line event in the transcript that is not part of the
+  // conversation itself (auto-compaction). `label` is the line, `summary` the
+  // optional body it can unfold, `done === false` while it is still running.
+  label?: string
   text?: string
   name?: string
   title?: string
@@ -59,6 +63,10 @@ export interface AgentEvent {
   ToolIsError: boolean
   ToolDuration?: number
   Result?: { ExitReason?: string }
+  // Auto-compaction (agent's auto_compact_done): the summary that replaced the
+  // old history and how many messages it replaced.
+  CompactSummary?: string
+  OldMsgCount?: number
 }
 
 export const STATUS_META: Record<string, { dot: string; desc: string }> = {

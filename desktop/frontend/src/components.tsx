@@ -4,7 +4,7 @@ import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/to
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize, toLocalAsset } from './lib'
 import { useThemeSnapshot, type Theme } from './theme'
-import type { AttachmentInfo } from './types'
+import type { AttachmentInfo, Part } from './types'
 import type { ContextInfoVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
@@ -172,6 +172,33 @@ function ThinkingBlock({ thinking, collapsed, onToggle }: { thinking: string; co
         <span className="thinking-ico">▸</span><span className="thinking-label">thinking</span>
       </div>
       {!collapsed && <div className="thinking-body" ref={bodyRef}>{lines.map((l, i) => <div key={i} className="thinking-line">{l}</div>)}</div>}
+    </div>
+  )
+}
+
+// NoticePart renders a transcript notice: a one-line event that is not part of
+// the conversation (auto-compaction, so far). Its body — the generated history
+// summary — stays folded, because the point of the notice is that something
+// happened to the context, not to re-read what it produced.
+function NoticePart({ part }: { part: Part }) {
+  const [open, setOpen] = useState(false)
+  const body = part.summary || ''
+  return (
+    <div className="notice-block">
+      <div
+        className={`notice-head${part.done === false ? ' running' : ''}${open ? ' open' : ''}${body ? '' : ' static'}`}
+        role={body ? 'button' : undefined}
+        tabIndex={body ? 0 : undefined}
+        aria-expanded={body ? open : undefined}
+        title={body ? (open ? '点击收起摘要' : '点击查看压缩摘要') : undefined}
+        onClick={body ? () => setOpen((v) => !v) : undefined}
+        onKeyDown={body ? actOnKey(() => setOpen((v) => !v)) : undefined}
+      >
+        <span className="notice-ico">⟳</span>
+        <span className="notice-label">{part.label || ''}</span>
+        {body ? <span className="notice-toggle">{open ? '收起' : '摘要'}</span> : null}
+      </div>
+      {open && body ? <div className="notice-body">{body}</div> : null}
     </div>
   )
 }
@@ -753,4 +780,4 @@ function AskForm({ questions, onSubmit, onCancel }: {
   )
 }
 
-export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, UserBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }

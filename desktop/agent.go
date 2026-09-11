@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -951,6 +952,14 @@ type sessionRun struct {
 	turnStartCredit float64
 	turnCost        float64
 	turnCredit      float64
+
+	// compaction records what auto-compaction did to this conversation during
+	// the current turn (nil = it did not compact). The agent loop compacts
+	// in-flight and moves the conversation into a CHILD session (see
+	// agent.FinalizeCompact), so the result is held here and the run is re-homed
+	// once the turn settles — the stream must keep its original key until then,
+	// or the running message would be re-keyed under the frontend's feet.
+	compaction *compactionRecord
 }
 
 type desktopApp struct {
@@ -1206,6 +1215,14 @@ func (d *desktopApp) startTurn(text string) {
 			r.steerCh = nil
 			r.turnDone = nil
 			d.mu.Unlock()
+			// Auto-compaction moved this conversation into a child session
+			// mid-turn: re-home the run now and hand the frontend the id it
+			// should address from here on. This has to happen BEFORE agent:idle,
+			// because idle is what drains the queue of messages the user typed
+			// while the turn ran — under the old id those would be sent to the
+			// pre-compaction session, which is no longer where the conversation
+			// lives. followCompaction returns the id either way.
+			id = d.followCompaction(id)
 			d.emitIdle(id, endReason)
 			close(turnDone)
 		}()
@@ -1393,6 +1410,60 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		d.notify.notifyAsk(d.sessionTitle(id), questions)
 	case agent.AgentEventAutoCompactStart:
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩上下文…"})
+		// Compaction is an LLM call of its own and takes a while, so the
+		// transcript says what the pause is. (The raw event is forwarded too,
+		// but the notice is Go's, like the TUI's and ACP's wording.)
+		if d.app != nil {
+			d.app.Event.Emit("agent:compact_start", map[string]any{"sessionId": id})
+		}
+	case agent.AgentEventAutoCompactDone:
+		// Failure keeps the original history — the loop retries on its next
+		// iteration (which is also where a cancelled turn ends: the loop top
+		// notices ctx.Done and terminates as interrupted).
+		if ev.Result != nil && ev.Result.Error != nil {
+			// A user stop and the compact timeout are different stories: one is
+			// "you cancelled it", the other is the loop about to retry. Only the
+			// real failure touches the status label — a cancelled turn reports
+			// itself a moment later through the interrupted path.
+			reason := "failed"
+			switch {
+			case errors.Is(ev.Result.Error, context.Canceled):
+				reason = "cancelled"
+			case errors.Is(ev.Result.Error, context.DeadlineExceeded):
+				reason = "timeout"
+			default:
+				d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩失败，继续"})
+			}
+			if d.app != nil {
+				d.app.Event.Emit("agent:compact_done", map[string]any{
+					"sessionId": id,
+					"reason":    reason,
+					"error":     ev.Result.Error.Error(),
+				})
+			}
+			break
+		}
+		// Success: the agent swapped the conversation into a child session. The
+		// run keeps its current key until the turn ends (see followCompaction).
+		d.mu.Lock()
+		moved := ""
+		if r := d.getRun(id); r != nil && r.sm != nil {
+			if cur := r.sm.Current(); cur != nil {
+				moved = cur.ID
+				if moved != id {
+					r.compaction = &compactionRecord{SessionID: moved, OldMsgCount: ev.OldMsgCount, Summary: ev.CompactSummary}
+				}
+			}
+		}
+		d.mu.Unlock()
+		if d.app != nil {
+			d.app.Event.Emit("agent:compact_done", map[string]any{
+				"sessionId": id,
+				"movedTo":   moved,
+				"oldCount":  ev.OldMsgCount,
+				"summary":   ev.CompactSummary,
+			})
+		}
 	case agent.AgentEventUsage:
 		// Recompute the session's cumulative cost/credit from the usage ledger
 		// and push it to the status bar (frontend listens for "agent:cost").
@@ -1522,9 +1593,18 @@ func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) {
 // is reset); the simulated fallback calls it explicitly at both exit paths.
 // reason ∈ {complete, interrupted, error} — the frontend only auto-flushes its
 // pending queue on "complete".
+// emitIdle tells the frontend a turn's goroutine has fully exited. It carries
+// whether that turn was the DISPLAYED session, because that — not the
+// frontend's own currentId — is what decides if a queued message may be
+// auto-sent: a compaction switch can move the session between the event being
+// emitted and the callback running, and the comparison has to survive that.
 func (d *desktopApp) emitIdle(id, reason string) {
 	if d.app != nil {
-		d.app.Event.Emit("agent:idle", map[string]any{"sessionId": id, "reason": reason})
+		d.app.Event.Emit("agent:idle", map[string]any{
+			"sessionId": id,
+			"reason":    reason,
+			"current":   d.currentID() == id,
+		})
 	}
 }
 

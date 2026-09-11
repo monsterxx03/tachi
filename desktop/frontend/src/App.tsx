@@ -23,7 +23,7 @@ import {
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
-  ContextMeter, CacheRing, ThinkingPart, UserBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
+  ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
   FileCard, fileFromSendFileArgs, PreBlock,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle,
 } from './components'
@@ -71,6 +71,21 @@ function finishToolPart(m: Message, name: string, summary: string, ok: boolean, 
     }
   }
   return { ...m, parts }
+}
+
+// finishNotice completes the newest in-flight notice (auto-compaction pushes one
+// when it starts and fills in its outcome here). A notice that never had a start
+// — the window was opened while a compaction was already running — is appended
+// as an already-finished one rather than dropped.
+function finishNotice(m: Message, label: string, summary?: string): Message {
+  const parts = [...(m.parts || [])]
+  for (let i = parts.length - 1; i >= 0; i--) {
+    if (parts[i].type === 'notice' && parts[i].done === false) {
+      parts[i] = { ...parts[i], label, summary, done: true }
+      return { ...m, parts }
+    }
+  }
+  return { ...m, parts: [...parts, { type: 'notice', label, summary, done: true }] }
 }
 
 // updateToolPart fills in the human-readable title/args for the newest
@@ -135,6 +150,7 @@ const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { text: str
 
 const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir: string }) {
   if (part.type === 'thinking') return <ThinkingPart text={part.text || ''} />
+  if (part.type === 'notice') return <NoticePart part={part} />
   if (part.type === 'tool') {
     // A SendFile call IS the attachment — show the file card rather than a raw
     // tool card (covers the live turn and reloaded history alike).
@@ -1022,17 +1038,23 @@ function App() {
     return () => off?.()
   }, [currentId])
 
+  // applyToSession patches the newest message of the given role in a session.
+  // Every streaming handler funnels through it (text/tool deltas and the
+  // auto-compaction notices), so a live transcript is only ever mutated in one
+  // place — and it keys purely off the session ID the backend sent, never off
+  // currentId, so a background session still updates correctly.
+  const applyToSession = useCallback((sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message) => {
+    setMsgCache((prev) => {
+      const list = prev[sid] || []
+      const target = role === 'user'
+        ? [...list].reverse().find((m) => m.role === 'user')
+        : [...list].reverse().find((m) => m.role === 'assistant' && m.running)
+      if (!target) return prev
+      return { ...prev, [sid]: list.map((m) => (m.id === target.id ? fn(m) : m)) }
+    })
+  }, [])
+
   useEffect(() => {
-    const apply = (sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message) => {
-      setMsgCache((prev) => {
-        const list = prev[sid] || []
-        const target = role === 'user'
-          ? [...list].reverse().find((m) => m.role === 'user')
-          : [...list].reverse().find((m) => m.role === 'assistant' && m.running)
-        if (!target) return prev
-        return { ...prev, [sid]: list.map((m) => (m.id === target.id ? fn(m) : m)) }
-      })
-    }
     const off = Events.On('agent:event', (event) => {
       const d = event.data as { sessionId: string; event: AgentEvent }
       const { sessionId, event: ev } = d
@@ -1042,9 +1064,9 @@ function App() {
       switch (ev.Type) {
         case 'thinking_delta': enqueueDelta(sessionId, 'thinking', ev.ThinkingDelta || ''); break
         case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
-        case 'tool_call_start': apply(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false })); break
-        case 'tool_result': apply(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined)); break
-        case 'turn_complete': apply(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
+        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false })); break
+        case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined)); break
+        case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'steer_check':
           // The agent finished a round of tool calls and is parked, waiting
           // for pending user input to steer the next LLM call. Queued text is
@@ -1054,7 +1076,7 @@ function App() {
           break
         case 'error': {
           const interrupted = ev.Result?.ExitReason === 'interrupted' || ev.Result?.ExitReason === 'cancelled'
-          apply(sessionId, 'assistant', (m) => ({ ...m, running: false, stopped: interrupted || m.stopped }))
+          applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false, stopped: interrupted || m.stopped }))
           break
         }
       }
@@ -1067,7 +1089,69 @@ function App() {
       }
     })
     return () => off?.()
-  }, [currentId, refreshRunning, refreshProvider, answerSteer, flushDeltas, enqueueDelta])
+  }, [currentId, applyToSession, refreshRunning, refreshProvider, answerSteer, flushDeltas, enqueueDelta])
+
+  // moveSession follows a conversation that auto-compaction moved into a new
+  // session. Everything per-session in this component is keyed by session ID
+  // (transcript, pagination cursor, queued input, pending question), so it all
+  // moves together and the window then points at the session the conversation
+  // actually lives in. The transcript is CARRIED OVER rather than reloaded: it
+  // is what the user is reading, and the compaction notice inside it says why
+  // the context looks different from here on.
+  const moveSession = useCallback((from: string, to: string) => {
+    if (!from || !to || from === to) return
+    const rename = <T,>(rec: Record<string, T>): Record<string, T> => {
+      if (!(from in rec)) return rec
+      const { [from]: moved, ...rest } = rec
+      return { ...rest, [to]: moved }
+    }
+    setMsgCache(rename)
+    setHasMore(rename)
+    setEarliestTs(rename)
+    setPending(rename)
+    setAsks(rename)
+    pendingRef.current = rename(pendingRef.current)
+    setRunningSet((prev) => (prev.has(from) ? new Set([...prev].map((id) => (id === from ? to : id))) : prev))
+    setCurrentId(to)
+    // The compacted child is a new row in the sidebar (the parent stays as the
+    // pre-compaction history, exactly as in the TUI). The `active` flag is
+    // frontend state, so it is re-derived here rather than fetched.
+    setSessions((prev) => prev.map((s) => ({ ...s, active: s.id === to })))
+    void AgentService.ListSessions()
+      .then((list) => { if (list) setSessions(list.map((s) => ({ ...s, active: s.id === to }))) })
+      .catch(() => {})
+    void refreshRunning()
+    refreshWorkDir(to)
+  }, [refreshRunning, refreshWorkDir])
+
+  // Auto-compaction: when the token estimate crosses the configured threshold
+  // the agent compacts in-flight and moves the conversation into a new (child)
+  // session. The notices carry Go's wording — the TUI and ACP show the same
+  // event — and the switch arrives once the stream has settled, because a
+  // mid-turn re-key would move the transcript out from under the running
+  // message.
+  useEffect(() => {
+    const offStart = Events.On('agent:compact_start', (event) => {
+      const d = event.data as { sessionId: string }
+      applyToSession(d.sessionId, 'assistant', (m) => pushPart(m, { type: 'notice', label: '正在压缩对话历史…', done: false }))
+    })
+    const offDone = Events.On('agent:compact_done', (event) => {
+      const d = event.data as { sessionId: string; error?: string; reason?: string; oldCount?: number; summary?: string }
+      // A user stop and the compact timeout are not failures worth alarming
+      // about: the first is what the stop button is for, the second is retried
+      // by the agent loop on its next iteration.
+      const label = d.reason === 'cancelled' ? '对话压缩已终止'
+        : d.reason === 'timeout' ? '对话压缩超时，稍后重试'
+        : d.error ? `对话压缩失败：${d.error}`
+        : `对话已压缩（旧消息数 ${d.oldCount ?? 0} 条）`
+      applyToSession(d.sessionId, 'assistant', (m) => finishNotice(m, label, d.summary))
+    })
+    const offSwitch = Events.On('agent:session_switched', (event) => {
+      const d = event.data as { previousId: string; sessionId: string }
+      moveSession(d.previousId, d.sessionId)
+    })
+    return () => { offStart?.(); offDone?.(); offSwitch?.() }
+  }, [applyToSession, moveSession])
 
   // agent:idle fires after a turn goroutine has fully exited (running already
   // reset on the backend). A NATURAL completion auto-sends whatever the user
@@ -1076,15 +1160,19 @@ function App() {
   // send manually.
   useEffect(() => {
     const off = Events.On('agent:idle', (event) => {
-      const d = event.data as { sessionId: string; reason: string }
+      const d = event.data as { sessionId: string; reason: string; current?: boolean }
       clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
-      if (d.sessionId !== currentId || d.reason !== 'complete') return
+      // `current` comes from the backend (was this the displayed session?) rather
+      // than being compared against this closure's currentId: an auto-compaction
+      // switch can move the session between the two events, and React state read
+      // through a stale closure would then silently drop the queued message.
+      if (!d.current || d.reason !== 'complete') return
       const queued = pendingRef.current[d.sessionId] || []
       if (queued.length === 0) return
       sendText(takePending(d.sessionId))
     })
     return () => off?.()
-  }, [currentId, sendText, takePending, clearAsk])
+  }, [sendText, takePending, clearAsk])
 
   // stopChat aborts the running turn in the current session (backend cancels
   // the turn ctx — same mechanism as tui Ctrl+C / acp prompt cancel).
