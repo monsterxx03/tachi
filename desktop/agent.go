@@ -54,6 +54,42 @@ func (s *AgentService) GetState() AgentState {
 	return s.desk.currentState()
 }
 
+// GetMode returns the active session's mode: auto, chat or plan.
+func (s *AgentService) GetMode() string {
+	return s.desk.sessionMode(s.desk.currentID())
+}
+
+// SetMode switches the active session's mode and returns "ok", or a sentence saying why
+// it could not (no agent yet, unknown mode, a turn in flight).
+//
+// A mode is not just a label: chat and plan hide the destructive tools from the schema
+// the model sees, and plan additionally appends the plan-mode rules to the system prompt.
+// That filter runs every iteration, so switching mid-turn would pull tools out from under
+// a running agent — a running session has to wait.
+func (s *AgentService) SetMode(mode string) string {
+	d := s.desk
+	id := d.currentID()
+
+	d.mu.Lock()
+	r := d.runs[id]
+	running := false
+	if r != nil {
+		running = r.running
+	}
+	d.mu.Unlock()
+
+	if r == nil || r.agent == nil {
+		return "agent not ready"
+	}
+	if running {
+		return "会话正在运行中，等这一轮结束再切模式"
+	}
+	if err := r.agent.SetMode(mode); err != nil {
+		return err.Error()
+	}
+	return "ok"
+}
+
 // SendMessage starts a turn. It returns immediately; state changes are
 // streamed to the frontend via the "agent:state" event and to the menu bar.
 func (s *AgentService) SendMessage(text string) string {
@@ -1084,6 +1120,13 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 			}
 		}
 		applyThinking(a, sess.ThinkingLevel)
+		// Honour the mode the session was left in. meta.json is the record (an editor or
+		// an earlier desktop turn may have written it), so starting in auto regardless
+		// would make the recorded mode and the live one disagree — and the system prompt
+		// would drop the plan-mode rules the session is supposed to be running under.
+		if sess.Mode != "" && sess.Mode != agent.ModeAuto {
+			_ = a.SetMode(sess.Mode)
+		}
 	}
 
 	d.mu.Lock()
@@ -1445,6 +1488,13 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 	case agent.AgentEventToolResult:
 		d.tpsReset(id)
 		d.setSessionState(id, AgentState{Status: StatusToolRunning, Label: "执行", Detail: "工具完成"})
+		// A saved plan changes the plan panel. The panel's payload is the FILE
+		// (GetPlan), so the event only says "re-read it": that keeps the panel and the
+		// record from drifting, and it is why the tool args are not carried here.
+		// Success only — a SavePlan that failed to write changed nothing.
+		if isCurrent && d.app != nil && ev.ToolName == tools.ToolNameSavePlan && !ev.ToolIsError {
+			d.app.Event.Emit("agent:plan", map[string]any{"sessionId": id})
+		}
 	case agent.AgentEventAskUser:
 		// The agent loop is parked, waiting for the user's answers. Push the
 		// questions to the frontend, which renders the form and answers via

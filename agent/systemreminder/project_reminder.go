@@ -3,6 +3,7 @@ package systemreminder
 import (
 	"context"
 	"os"
+	"path/filepath"
 )
 
 // ProjectContextReminder injects the contents of .tachi.md (if present) on the
@@ -15,8 +16,9 @@ func (ProjectContextReminder) Generate(ctx context.Context, rctx Context) []stri
 		return nil
 	}
 
-	// Read .tachi.md relative to the process working directory.
-	data, err := os.ReadFile(".tachi.md")
+	// Read .tachi.md from the turn's working directory (see workDir) — the project
+	// the session is pointed at, not the one the process happens to sit in.
+	data, err := os.ReadFile(filepath.Join(workDir(ctx), ".tachi.md"))
 	if err != nil {
 		return nil // No .tachi.md — nothing to inject.
 	}

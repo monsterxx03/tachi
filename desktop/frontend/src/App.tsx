@@ -25,10 +25,11 @@ import {
 } from './components'
 import { FileCard, fileFromSendFileArgs } from './filepreview'
 import { DiffPanel } from './diff'
+import { PlanChip, PlanPanel } from './plan'
 import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
-import type { CommandVO, FileChangeVO, ReviewFindingsVO, SessionRootsVO, TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, FileChangeVO, PlanVO, ReviewFindingsVO, SessionRootsVO, TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ── Ordered turn parts ──────────────────────────────────────────────────────
 // A live turn accumulates the SAME ordered `parts` array a rebuilt transcript
@@ -277,6 +278,15 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   )
 })
 
+// MODE_META labels the three session modes. Each one changes what the model can do —
+// chat and plan drop the destructive tools from its schema, plan additionally appends the
+// plan-mode rules — so the label says the capability, not just the name.
+const MODE_META: Record<string, { label: string; hint: string }> = {
+  auto: { label: '自动', hint: '完整权限：可以改文件、执行命令' },
+  chat: { label: '只读', hint: '只读问答：破坏性工具对模型不可见' },
+  plan: { label: '计划', hint: '规划模式：只读探索 + SavePlan 产出计划，之后切回自动执行' },
+}
+
 function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
@@ -318,6 +328,49 @@ function App() {
   // leaving another session's changes on screen — and it is also what keeps 发给 agent
   // (P3) from sending into a session the findings never came from.
   useEffect(() => { setDiffPanelOpen(false) }, [currentId])
+
+  // The plan panel (P1): this session's newest plan. Read from disk on demand — the
+  // agent:plan event only says "re-read it", so the panel can never drift from the file
+  // that IS the document. Same lifetime as the diff panel: closed and re-read when the
+  // session changes.
+  const [plan, setPlan] = useState<PlanVO | null>(null)
+  const [planOpen, setPlanOpen] = useState(false)
+  const refreshPlan = useCallback(async () => {
+    if (!currentId) { setPlan(null); return }
+    try {
+      setPlan(await AgentService.GetPlan(currentId) || null)
+    } catch {
+      setPlan(null)
+    }
+  }, [currentId])
+  useEffect(() => { setPlanOpen(false); void refreshPlan() }, [currentId, refreshPlan])
+  useEffect(() => {
+    const off = Events.On('agent:plan', () => { void refreshPlan() })
+    return () => off?.()
+  }, [refreshPlan])
+
+  // The session's mode (P2). It is not a label but a capability switch: chat and plan hide
+  // the destructive tools from the model, and plan appends the plan-mode rules to the
+  // system prompt — so the select sits next to the model, and a rejected switch says why
+  // instead of silently springing back.
+  const [mode, setMode] = useState('auto')
+  const [modeNotice, setModeNotice] = useState('')
+  const refreshMode = useCallback(async () => {
+    try {
+      setMode((await AgentService.GetMode()) || 'auto')
+    } catch { /* keep the last known mode */ }
+  }, [])
+  useEffect(() => { setModeNotice(''); void refreshMode() }, [currentId, refreshMode])
+  const changeMode = useCallback(async (next: string) => {
+    const res = await AgentService.SetMode(next)
+    if (res && res !== 'ok') {
+      setModeNotice(res)
+      void refreshMode() // show what it actually is, not what was clicked
+      return
+    }
+    setModeNotice('')
+    setMode(next)
+  }, [refreshMode])
   // A review run started from a turn's footer. Local to the app (not persisted): it only
   // exists to show "评审中…" and to keep the button from starting a second run.
   const [reviewPending, setReviewPending] = useState(false)
@@ -1741,10 +1794,28 @@ function App() {
                   {extraRootCount > 0 ? <span className="work-dir-count" title={`${extraRootCount} 个附加目录`}>+{extraRootCount}</span> : null}
                 </button>
               </div>
+              {/* The plan (P1). Only present when this session has saved one: an always-
+                  visible chip that usually says "no plan" is a chip that trains you to
+                  ignore it. */}
+              {plan?.steps?.length ? (
+                <div className="plan-wrap popover-anchor">
+                  {planOpen ? <PlanPanel plan={plan} workDir={workDir} mode={mode} onSwitchMode={changeMode} onClose={() => setPlanOpen(false)} /> : null}
+                  <PlanChip plan={plan} open={planOpen} onToggle={() => setPlanOpen((v) => !v)} />
+                </div>
+              ) : null}
               {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
                 : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>
                 : null}
               <div className="provider-picker">
+                {/* Mode: what this session may do. It sits with the model because the two
+                    together describe the turn about to run. */}
+                <select className="provider-select mode-select" value={mode}
+                  title={MODE_META[mode]?.hint}
+                  onChange={(e) => void changeMode(e.target.value)}>
+                  {(['auto', 'chat', 'plan'] as const).map((m) =>
+                    <option key={m} value={m}>{MODE_META[m].label}</option>)}
+                </select>
+                {modeNotice ? <span className="mode-notice" title={modeNotice}>⚠</span> : null}
                 <select className="provider-select" value={providerName}
                   title={currentProviderModel ? `模型：${currentProviderModel}` : undefined}
                   onChange={async (e) => {

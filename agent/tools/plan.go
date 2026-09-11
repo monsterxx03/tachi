@@ -11,6 +11,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // SavePlanTool saves a structured plan document to .tachi/plans/.
@@ -62,6 +63,37 @@ type SavePlanParams struct {
 type SavePlanStep struct {
 	Content string `json:"content"`
 	Status  string `json:"status"`
+}
+
+// PlanFromToolArgs decodes SavePlan arguments into the structured plan they describe.
+// Returns false when the args are not a usable plan (empty, invalid JSON, or no steps):
+// a call we cannot read is a tool call, not a plan.
+//
+// This is the ONE parser for "the plan a SavePlan call carries". Three consumers need
+// it — the ACP plan session update (an editor's plan card), the desktop's plan panel
+// (live) and the plan file reader (after a restart) — and the on-disk shape of a saved
+// plan is SavePlanParams, so reading a file and reading a call are the same decode.
+func PlanFromToolArgs(argsJSON string) (SavePlanParams, bool) {
+	var params SavePlanParams
+	if argsJSON == "" {
+		return SavePlanParams{}, false
+	}
+	if err := json.Unmarshal([]byte(argsJSON), &params); err != nil {
+		return SavePlanParams{}, false
+	}
+	if len(params.Steps) == 0 {
+		return SavePlanParams{}, false
+	}
+	return params, true
+}
+
+// PlanFromFile reads a plan document written by SavePlanTool.
+func PlanFromFile(path string) (SavePlanParams, error) {
+	var params SavePlanParams
+	if err := fileutil.ReadJSON(path, &params); err != nil {
+		return SavePlanParams{}, err
+	}
+	return params, nil
 }
 
 func (t SavePlanTool) ExecuteContext(ctx context.Context, args string) (string, error) {
@@ -156,8 +188,12 @@ func planSlug(title string) string {
 	if slug == "" {
 		slug = "plan"
 	}
-	if len(slug) > 48 {
-		slug = slug[:48]
-	}
-	return slug
+	// Cap by RUNES, not bytes: a byte slice through "面板" (planSlug keeps CJK as-is)
+	// leaves half a character behind, and the resulting file name is not valid UTF-8 —
+	// the write then fails with "illegal byte sequence".
+	return strutil.TruncatePlain(slug, maxPlanSlugRunes)
 }
+
+// maxPlanSlugRunes bounds the title slug. It exists so a plan's file name stays a
+// readable, navigable length while the title itself can be as long as it likes.
+const maxPlanSlugRunes = 48

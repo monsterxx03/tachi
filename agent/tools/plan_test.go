@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
 )
@@ -126,5 +127,39 @@ func TestSavePlan_InvalidStepStatus(t *testing.T) {
 	args := `{"title": "P", "content": "c", "steps": [{"content": "s", "status": "bogus"}]}`
 	if _, err := tool.ExecuteContext(ctx, args); err == nil {
 		t.Error("expected error for invalid step status")
+	}
+}
+
+// TestPlanSlug_LongCJKTitleStaysWritable pins the file-name rule against the failure it
+// used to have: planSlug keeps CJK as-is, and capping it with a BYTE slice can cut a
+// character in half. The slug then is not valid UTF-8, so the plan file cannot be
+// created at all — the tool returns "illegal byte sequence" and nothing is saved.
+func TestPlanSlug_LongCJKTitleStaysWritable(t *testing.T) {
+	title := "Desktop plan 面板（P1 显示 + P2 plan 模式 + 提醒会话化）以及更多中文标题字符用来越过截断长度"
+
+	slug := planSlug(title)
+	if !utf8.ValidString(slug) {
+		t.Fatalf("slug is not valid UTF-8 (%q) — the file write would fail", slug)
+	}
+	if n := utf8.RuneCountInString(slug); n > maxPlanSlugRunes {
+		t.Errorf("slug has %d runes, want at most %d", n, maxPlanSlugRunes)
+	}
+
+	// And the whole path must be creatable: this is the assertion that would have caught
+	// the bug (planSlug alone only shows a bad string).
+	ctx, tmpDir := planTestCtx(t, "sess-cjk")
+	args, err := json.Marshal(SavePlanParams{
+		Title:   title,
+		Content: "正文",
+		Steps:   []SavePlanStep{{Content: "第一步", Status: "pending"}},
+	})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := (SavePlanTool{}).ExecuteContext(ctx, string(args)); err != nil {
+		t.Fatalf("saving a plan with a long CJK title failed: %v", err)
+	}
+	if files := listPlanFiles(t, tmpDir); len(files) != 1 {
+		t.Fatalf("expected 1 plan file, got %d", len(files))
 	}
 }

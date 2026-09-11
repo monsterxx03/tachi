@@ -27,3 +27,6 @@ chrome-extension/*.zip
 web/frontend/node_modules/
 web/frontend/dist/
 web/frontend/*.tsbuildinfo
+
+# go build . inside the desktop module writes the module-named binary here
+desktop/desktop

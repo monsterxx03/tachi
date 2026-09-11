@@ -495,26 +495,14 @@ func fileChangeContent(fc tools.FileChange) *acp.ToolCallContent {
 // buildPlanUpdateFromArgs parses SavePlan tool args and builds an ACP plan
 // session update with structured entries. Returns nil if args are invalid.
 func buildPlanUpdateFromArgs(argsJSON string) *acp.SessionUpdate {
-	if argsJSON == "" {
-		return nil
-	}
-	var args struct {
-		Title string `json:"title"`
-		Steps []struct {
-			Content string `json:"content"`
-			Status  string `json:"status"`
-		} `json:"steps"`
-	}
-	if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-		return nil
-	}
-	if len(args.Steps) == 0 {
+	plan, ok := tools.PlanFromToolArgs(argsJSON)
+	if !ok {
 		return nil
 	}
 
-	entries := make([]acp.PlanEntry, 0, len(args.Steps))
+	entries := make([]acp.PlanEntry, 0, len(plan.Steps))
 
-	for _, s := range args.Steps {
+	for _, s := range plan.Steps {
 		var status acp.PlanEntryStatus
 		switch s.Status {
 		case "in_progress":

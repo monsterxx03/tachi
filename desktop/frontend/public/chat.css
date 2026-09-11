@@ -576,6 +576,43 @@ button.work-dir {
   color: var(--accent-2);
 }
 
+/* ── Plan chip (footer) ───────────────────────────────────────────────────── */
+/* Sits with the workspace chip: both answer "what is this session working on".
+   Only rendered when a plan exists, so it never becomes furniture. */
+.plan-wrap { display: inline-flex; align-items: center; min-width: 0; }
+.plan-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 7px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.plan-chip:hover { background: var(--accent-soft); color: var(--accent-2); }
+.plan-ico { color: var(--text-faint); }
+.plan-chip-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--wash-2);
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+
+/* The mode select sits with the model select (the two together describe the turn), and
+   the ⚠ appears only when a switch was refused — e.g. a turn in flight — carrying the
+   reason as its title. */
+.mode-select { max-width: 82px; }
+.mode-notice { color: var(--amber); font-size: 12px; cursor: help; flex-shrink: 0; }
+
 /* ── @-file completion picker ─────────────────────────────────────────────── */
 /* Floats above the composer while a reference is being typed, listing the
    files the backend fuzzy-matched under the session's working directory. */

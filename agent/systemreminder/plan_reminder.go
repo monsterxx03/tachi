@@ -28,7 +28,7 @@ func (r PlanTrackingReminder) Generate(ctx context.Context, rctx Context) []stri
 		return nil
 	}
 
-	plan := findActivePlan(rctx.SessionID)
+	plan := findActivePlan(config.FindProjectRootFrom(workDir(ctx)), rctx.SessionID)
 	if plan == nil {
 		return nil
 	}
@@ -58,12 +58,16 @@ type planStep struct {
 	Status string `json:"status"`
 }
 
-// findActivePlan scans .tachi/plans/ under the project root, finds the most
-// recent plan file for the given session that has at least one non-completed
-// step, and returns it. Returns nil if no active plan is found.
-func findActivePlan(sessionID string) *planInfo {
-	root := config.FindProjectRoot()
-	if root == "" {
+// findActivePlan scans <root>/.tachi/plans, finds the most recent plan file for
+// the given session that has at least one non-completed step, and returns it.
+// Returns nil if no active plan is found.
+//
+// root is the PROJECT root the plan was written under — the git root of the turn's
+// working directory (see workDir), never config.FindProjectRoot(): the process
+// working directory of a GUI app is not a project, and SavePlan resolves its own
+// directory the same session-scoped way.
+func findActivePlan(root, sessionID string) *planInfo {
+	if root == "" || sessionID == "" {
 		return nil
 	}
 

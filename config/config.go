@@ -68,20 +68,34 @@ func FindProjectRoot() string {
 	if err != nil {
 		return ""
 	}
-	dir := cwd
+	return FindProjectRootFrom(cwd)
+}
+
+// FindProjectRootFrom is FindProjectRoot for an explicit starting directory.
+//
+// The directory cannot always come from the process: one desktop process hosts
+// several sessions in different trees, and its own working directory is
+// meaningless there (macOS hands a Finder-launched app "/"). Callers that know
+// which tree they are in — a session's working directory, a sub-agent worktree —
+// pass it in. An empty dir has no root to find and returns "".
+func FindProjectRootFrom(dir string) string {
+	if dir == "" {
+		return ""
+	}
+	d := dir
 	for {
-		gitPath := filepath.Join(dir, ".git")
+		gitPath := filepath.Join(d, ".git")
 		if fileutil.Exists(gitPath) {
-			return dir
+			return d
 		}
-		parent := filepath.Dir(dir)
-		if parent == dir {
+		parent := filepath.Dir(d)
+		if parent == d {
 			// Reached filesystem root — stop
 			break
 		}
-		dir = parent
+		d = parent
 	}
-	return cwd
+	return dir
 }
 
 // ModelSpec 汇总模型级运行时属性：上下文窗口、定价、思考级别、请求行为。

@@ -59,6 +59,37 @@ type promptKey struct {
 	cwd   string
 	id    string
 	roots string
+	// mode changes the prompt (plan mode appends its own rules), so it is a key input
+	// like any other — see the comment on the key's construction.
+	mode string
+}
+
+// sessionMode reports the mode this session is in: the bound agent's runtime value when
+// there is one, else the persisted meta (a session that has not been built yet still
+// carries the mode it was left in).
+func (d *desktopApp) sessionMode(id string) string {
+	d.mu.Lock()
+	r := d.runs[id]
+	if r == nil {
+		d.mu.Unlock()
+		return agent.ModeAuto
+	}
+	a, sm := r.agent, r.sm
+	d.mu.Unlock()
+
+	// Read the agent OUTSIDE d.mu: Mode() takes the agent's own lock, and no caller
+	// should be able to hold both.
+	if a != nil {
+		if mode := a.Mode(); mode != "" {
+			return mode
+		}
+	}
+	if sm != nil {
+		if cur := sm.Current(); cur != nil && cur.Mode != "" {
+			return cur.Mode
+		}
+	}
+	return agent.ModeAuto
 }
 
 // systemPromptFor returns the system prompt to send for session id, built from
@@ -98,11 +129,16 @@ func (d *desktopApp) systemPromptFor(id string) string {
 	// the empty string into a statement instead of "go find a project root".
 	cwd := d.sessionWorkDir(id)
 	roots := d.promptRoots(id)
+	mode := d.sessionMode(id)
 	opts := []agent.PromptOption{agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt)}
 	if cwd == "" {
 		opts = append(opts, agent.WithoutWorkingDir())
 	}
-	key := promptKey{cwd: cwd, id: id, roots: strings.Join(roots, "\x00")}
+	// mode is part of the key because it is part of the prompt: plan mode APPENDS the
+	// plan-mode rules below, so a cached auto-mode prompt handed to a plan-mode turn
+	// would tell the model it may edit files right after it was put on a leash. Same
+	// trap as roots: a build input that is not in the key is a stale prompt.
+	key := promptKey{cwd: cwd, id: id, roots: strings.Join(roots, "\x00"), mode: mode}
 
 	d.promptMu.Lock()
 	cached, ok := d.promptCache[key]
@@ -112,6 +148,12 @@ func (d *desktopApp) systemPromptFor(id string) string {
 	}
 
 	prompt := agent.BuildSystemPromptWithRoots(d.cfg.Language, cwd, roots, id, d.cfg.ExtraSystemPrompt, opts...)
+	// Plan mode is a property of the TURN (the mode can change between turns), so the
+	// supplement is appended here rather than baked into the session prompt — the same
+	// shape the TUI uses (effectiveSystemPrompt) and ACP applies per prompt.
+	if mode == agent.ModePlan {
+		prompt += "\n\n" + agent.BuildPlanModePrompt()
+	}
 
 	d.promptMu.Lock()
 	defer d.promptMu.Unlock()
@@ -159,16 +201,28 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manag
 		}
 	}
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		MaxIterations:          maxIters,
-		Logger:                 logger.New("desktop"),
-		PermissionMode:         agent.PermissionModeSkip,
-		AskUserEnabled:         true,         // the desktop renders question forms itself
-		DisableMCP:             d.mcp == nil, // MCP enabled only when a shared manager exists
-		DisableSkills:          true,
-		DisableSystemReminders: true,
-		MCPManager:             d.mcp, // shared manager (nil when no MCP configured)
-		FullConfig:             d.cfg,
-		SystemConfig:           agent.SystemConfigFromConfig(d.cfg),
+		MaxIterations:  maxIters,
+		Logger:         logger.New("desktop"),
+		PermissionMode: agent.PermissionModeSkip,
+		AskUserEnabled: true,         // the desktop renders question forms itself
+		DisableMCP:     d.mcp == nil, // MCP enabled only when a shared manager exists
+		DisableSkills:  true,
+		// System reminders stay ON. They are the only thing that tells the agent
+		// about the project it is working in (.tachi.md, git state) and the only
+		// thing that keeps an active plan's step statuses current.
+		//
+		// They used to be disabled here, because the contextual ones resolved their
+		// directory from the PROCESS — and a desktop process hosts many sessions in
+		// different trees while its own working directory is meaningless (macOS hands
+		// a Finder-launched app "/"). That is fixed: every contextual reminder now
+		// reads the turn's working directory from the context (see
+		// systemreminder.workDir), so they describe the session, not the process.
+		MCPManager: d.mcp, // shared manager (nil when no MCP configured)
+		// Plan mode's structured output. The desktop renders it as the footer's plan
+		// panel, which is exactly the "plan card UI" this flag gates registration on.
+		PlanToolEnabled: true,
+		FullConfig:      d.cfg,
+		SystemConfig:    agent.SystemConfigFromConfig(d.cfg),
 	})
 	if err != nil {
 		return nil, err

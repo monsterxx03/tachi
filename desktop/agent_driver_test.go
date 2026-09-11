@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 )
 
@@ -85,5 +86,50 @@ func TestSystemPromptForWithoutWorkspace(t *testing.T) {
 	d.cfg = nil
 	if got := d.systemPromptFor("unknown"); got != "" {
 		t.Errorf("expected an empty prompt without config, got %q", got)
+	}
+}
+
+// TestSystemPromptForPlanMode pins the P2 prompt rule: plan mode appends the plan-mode
+// rules to the turn's prompt, and — because the prompt is memoized — the mode has to be
+// part of the cache key. Without that, the second call below would hand a plan-mode turn
+// the CACHED auto-mode prompt, i.e. it would be told it may edit files right after being
+// put on a leash. (Same failure shape as the working-directory key this test file already
+// covers.)
+func TestSystemPromptForPlanMode(t *testing.T) {
+	dir := t.TempDir()
+	d, _, sid := newRootsApp(t, dir)
+
+	auto := d.systemPromptFor(sid)
+	if strings.Contains(auto, "Plan Mode (ACTIVE)") {
+		t.Errorf("auto mode must not carry the plan-mode rules")
+	}
+
+	// Persist plan mode the way AIAgent.SetMode does (session meta), which is also how a
+	// session left in plan mode by an editor arrives here.
+	cur := d.getRun(sid).sm.Current()
+	cur.Mode = agent.ModePlan
+	if err := d.getRun(sid).sm.UpdateMeta(cur); err != nil {
+		t.Fatalf("update meta: %v", err)
+	}
+
+	plan := d.systemPromptFor(sid)
+	if !strings.Contains(plan, "Plan Mode (ACTIVE)") {
+		t.Fatalf("the plan-mode turn's prompt is missing the plan-mode rules (mode is not reaching the builder)")
+	}
+	if plan == auto {
+		t.Fatal("the prompt memo returned the auto-mode prompt for a plan-mode turn: mode must be part of the cache key")
+	}
+	if got := d.sessionMode(sid); got != agent.ModePlan {
+		t.Errorf("sessionMode() = %q, want %q", got, agent.ModePlan)
+	}
+
+	// Switching back must be just as immediate.
+	cur = d.getRun(sid).sm.Current()
+	cur.Mode = agent.ModeAuto
+	if err := d.getRun(sid).sm.UpdateMeta(cur); err != nil {
+		t.Fatalf("update meta: %v", err)
+	}
+	if back := d.systemPromptFor(sid); back != auto {
+		t.Errorf("switching back to auto should return the auto prompt again")
 	}
 }

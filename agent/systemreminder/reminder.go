@@ -10,8 +10,25 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
+
+// workDir is the directory a contextual reminder describes: the TURN's working
+// directory (wdctx), never the process's.
+//
+// It has to come from the context because a reminder is generated per turn inside a
+// process that may host many sessions in different trees — and because a GUI's own
+// working directory is meaningless (macOS hands a Finder-launched app "/", so a
+// process-cwd reminder would describe the filesystem root). Single-session
+// frontends are unaffected: wdctx falls back to the process working directory, which
+// for the CLI/TUI is the directory it was started in.
+//
+// Any reminder that reads a file or runs a command relative to a project (project
+// context, git status, plan tracking) must go through this instead of os.Getwd.
+func workDir(ctx context.Context) string {
+	return wdctx.Dir(ctx)
+}
 
 // Context carries the dynamic state available when generating reminders.
 // All fields are zero-valued when not applicable; individual reminders
