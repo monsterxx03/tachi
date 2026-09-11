@@ -357,15 +357,9 @@
 .usage-tps.tps-paused { color: var(--text-faint); font-weight: 400; }
 
 /* Context usage ring — a button (click opens the breakdown popover, see
-   ContextMeter). The hover wash matches the other status-row buttons; the
-   negative margin keeps the ring optically aligned while widening the hit area.
-   The wrapper exists to position the popover against the ring itself (the panel
-   cannot be a child of the button). */
-.ctx-wrap {
-  position: relative;
-  display: inline-flex;
-  flex-shrink: 0;
-}
+   ContextMeter). The hover wash matches the other status-row buttons, and the
+   negative margin keeps the ring optically aligned while widening the hit area;
+   the positioning wrapper lives on .popover-anchor (chat.css). */
 .ctx-btn {
   display: inline-flex;
   align-items: center;

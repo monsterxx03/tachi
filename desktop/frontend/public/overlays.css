@@ -1,3 +1,27 @@
+/* ── Status-row popovers (shared shell) ─────────────────────────────────── */
+/* Both popovers in the composer's status row — the context ring's breakdown and
+   the MCP panel — are anchored to their OWN trigger, not to the composer. The
+   triggers sit near the row's right end (the provider picker takes the auto
+   margin), so a panel that floats off the composer ends up nowhere near the
+   thing that opened it. Each trigger is wrapped in .popover-anchor (see
+   chat.css); the panel then hangs off that wrapper with one shared gap and
+   grows LEFT, so a trigger close to the window edge cannot push it out of the
+   window. */
+.popover-panel {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 10px);
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-4);
+  animation: panel-in 0.22s var(--ease) both;
+}
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.98); }
+  to { opacity: 1; transform: none; }
+}
+
 /* ── MCP status-bar button + panel ─────────────────────────────────────── */
 .mcp-btn {
   display: inline-flex;
@@ -16,32 +40,16 @@
 .mcp-ico { display: inline-flex; align-items: center; }
 .mcp-count { font-size: 10px; color: var(--green); font-weight: 600; }
 
-/* Scrims stay light-neutral rather than black: a heavy black wash would feel
-   like a different app on top of the flat light UI. */
+/* MCP panel: the shared popover shell (.popover-panel) plus its own size and
+   internal scrolling — the server list can be long, so the body scrolls while
+   the header stays put. */
 .mcp-panel {
-  /* Popover for the MCP button in the composer's status row: anchored to the
-     composer, opening upward over the transcript — never over the input.
-     The input box and status row live in a centred --reading-width column, so
-     the panel's right edge is measured against that column (not the composer's
-     full width, which would push it out to the window edge). */
-  position: absolute;
-  right: max(6px, calc((100% - var(--reading-width)) / 2));
-  bottom: calc(100% + 10px);
   width: 360px;
   max-height: min(70vh, 560px);
-  background: var(--panel-solid);
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
   z-index: 51;
   display: flex;
   flex-direction: column;
   overflow: hidden;
-  animation: panel-in 0.22s var(--ease) both;
-}
-@keyframes panel-in {
-  from { opacity: 0; transform: translateY(8px) scale(0.98); }
-  to { opacity: 1; transform: none; }
 }
 
 .mcp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
@@ -105,30 +113,15 @@
 .mcp-tool-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 /* ── Context-usage popover (the composer's ring) ──────────────────────────── */
-/* Anchored to the RING, not to the composer: the ring is the popover's trigger
-   and it sits near the right end of the status row (the provider picker takes
-   the auto margin), so the panel hangs off .ctx-wrap — the ring's own box — and
-   grows to the left: a centred panel would run past the window edge, and the
-   composer-anchored version this replaced floated nowhere near its trigger. The
-   6px nudge puts the ring just inside the panel's footprint rather than exactly
-   under its corner. Answers "the window is 80% full, of what" with the same
-   buckets /usage prints.
-   The gap keeps it hugging the trigger — 10px, like .mcp-panel — so the panel
-   does overlap the top of the input box. That is the deliberate trade: the ring
-   is what this belongs to, and the input's text starts at the far left of the
-   box, so only empty space is covered. */
+/* The shared popover shell (.popover-panel) hanging off the ring's own box, plus
+   this panel's own width/padding. Answers "the window is 80% full, of what" with
+   the same buckets /usage prints. Because it hugs the ring, it does overlap the
+   top of the input box: the ring is what this belongs to, and the input's text
+   starts at the far left of its box, so only empty space is covered. */
 .ctx-panel {
-  position: absolute;
-  right: -6px;
-  bottom: calc(100% + 10px);
   width: 320px;
   padding: 12px 14px 10px;
-  background: var(--panel-solid);
-  border: 1px solid var(--border-2);
-  border-radius: var(--radius-lg);
-  box-shadow: var(--shadow-4);
   z-index: 52;
-  animation: panel-in 0.22s var(--ease) both;
 }
 .ctx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
 .ctx-title { font-size: 13px; font-weight: 600; }

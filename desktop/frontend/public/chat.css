@@ -526,10 +526,18 @@
   color: var(--text-dim);
   min-width: 0;
 }
-.composer-status .ctx-wrap,
+/* Popovers in the status row (the context ring's breakdown, the MCP panel) are
+   anchored to their own trigger: the trigger is wrapped in .popover-anchor, which
+   is the panel's containing block (see .popover-panel in overlays.css). It also
+   carries the flex behaviour the trigger needs — never shrink in the row, so the
+   trigger keeps its size while the flexible labels clip around it. */
+.popover-anchor {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
 .composer-status .usage-tps,
-.composer-status .usage-meta,
-.composer-status .mcp-btn { flex-shrink: 0; }
+.composer-status .usage-meta { flex-shrink: 0; }
 
 .work-dir-wrap { display: inline-flex; align-items: center; min-width: 0; }
 .work-dir {

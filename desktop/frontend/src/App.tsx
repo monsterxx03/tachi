@@ -1289,19 +1289,6 @@ function App() {
                 </button>
               </div>
             </div>
-            {/* Anchored to the composer (position: relative), so the panel always
-                floats just above the input instead of covering it. */}
-            {mcpOpen && (
-              <MCPPanel
-                servers={mcpServers}
-                loading={mcpLoading}
-                profile={mcpProfile}
-                onClose={() => setMcpOpen(false)}
-                onToggleServer={toggleServer}
-                onToggleTool={toggleTool}
-                onToggleProfile={toggleProfile}
-              />
-            )}
             <div className="composer-status">
               <div className="work-dir-wrap">
                 <span className="work-dir" title="工作目录（点击选择）" onClick={() => pickWorkDir(currentId)}>
@@ -1336,10 +1323,27 @@ function App() {
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
                   {credit > 0 ? <span className="usage-credit" title="当前会话积分">{fmtCredit(credit)} 积分</span> : null}
                 </span>
-                <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
-                  <span className="mcp-ico"><MCPIcon /></span>
-                  <span className="mcp-count">{mcpServers.filter((s) => s.connected).length || ''}</span>
-                </button>
+                <span className="popover-anchor">
+                  <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
+                    <span className="mcp-ico"><MCPIcon /></span>
+                    <span className="mcp-count">{mcpServers.filter((s) => s.connected).length || ''}</span>
+                  </button>
+                  {/* Anchored to the button itself (see .popover-panel), like the
+                      ring's breakdown: the status row's right end is where the
+                      triggers are, so the panel hangs off its own trigger and
+                      stays attached to the thing that opened it. */}
+                  {mcpOpen && (
+                    <MCPPanel
+                      servers={mcpServers}
+                      loading={mcpLoading}
+                      profile={mcpProfile}
+                      onClose={() => setMcpOpen(false)}
+                      onToggleServer={toggleServer}
+                      onToggleTool={toggleTool}
+                      onToggleProfile={toggleProfile}
+                    />
+                  )}
+                </span>
               </div>
             </div>
           </footer>

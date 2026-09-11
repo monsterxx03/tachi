@@ -79,9 +79,9 @@ function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; e
     // The wrapper is the popover's containing block: the panel cannot live
     // inside the <button> (a button may not contain a block element, and clicks
     // would land on it), so the ring's box is what the panel hangs off.
-    <span className="ctx-wrap">
+    <span className="popover-anchor">
       {open ? (
-        <div className="ctx-panel" ref={boxRef}>
+        <div className="popover-panel ctx-panel" ref={boxRef}>
           <ContextPanel info={info} loading={loading} />
         </div>
       ) : null}
@@ -327,7 +327,7 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
 
   return (
     <>
-      <div className="mcp-panel" ref={boxRef}>
+      <div className="popover-panel mcp-panel" ref={boxRef}>
         <div className="mcp-head">
           <span className="mcp-title">MCP Servers</span>
           <div className="mcp-profile">
