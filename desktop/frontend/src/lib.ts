@@ -32,6 +32,16 @@ export function fmtDur(ms: number): string {
   return `${m}m${rs > 0 ? rs + 's' : ''}`
 }
 
+// fmtCredit renders a credit amount with a fixed 2 decimals. Credit is an
+// accounting unit, so every frontend shows the same amount the same way: this
+// matches the Go turn footer (agent.formatCredit) and the web console's
+// "credit" helper (web/frontend/src/lib/format.ts) — and it also hides the
+// float noise left by summing per-call ledger snapshots.
+export function fmtCredit(v: number): string {
+  if (!isFinite(v)) return '0.00'
+  return v.toFixed(2)
+}
+
 // Turn ids must be UNIQUE across pages. History is loaded page by page and
 // older pages are PREPENDED into the client-side transcript, so an index-based
 // id ("h-0", "h-1", …) repeats in every page — and duplicate React keys make

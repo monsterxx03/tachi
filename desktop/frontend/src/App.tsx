@@ -21,7 +21,7 @@ import {
   type Part,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
   ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
   FileCard, fileFromSendFileArgs, PreBlock,
@@ -186,7 +186,7 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
             {m.summary.durationMs > 0 ? <span>⏱ {fmtDur(m.summary.durationMs)}</span> : null}
             {m.summary.iterations > 0 ? <span>{m.summary.iterations} iters</span> : null}
             {m.summary.cost > 0 ? <span>¥{m.summary.cost.toFixed(3)}</span> : null}
-            {m.summary.credit > 0 ? <span>{m.summary.credit} 积分</span> : null}
+            {m.summary.credit > 0 ? <span>{fmtCredit(m.summary.credit)} 积分</span> : null}
           </div>
         ) : null}
       </div>
@@ -1326,7 +1326,7 @@ function App() {
                 <span className="usage-meta">
                   {hasCacheHit ? <CacheRing rate={cacheHitRate} /> : null}
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}
-                  {credit > 0 ? <span className="usage-credit" title="当前会话积分">{credit.toFixed(2)} 积分</span> : null}
+                  {credit > 0 ? <span className="usage-credit" title="当前会话积分">{fmtCredit(credit)} 积分</span> : null}
                 </span>
                 <button className="mcp-btn" title="MCP servers / tools" onClick={() => setMcpOpen((v) => !v)}>
                   <span className="mcp-ico"><MCPIcon /></span>

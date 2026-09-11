@@ -30,7 +30,7 @@ func TestFormatTurnSummary(t *testing.T) {
 		{
 			name:   "cost and credit appended when billed",
 			result: &RunResult{IterationsUsed: 2, Duration: 1500 * time.Millisecond, TurnCost: 0.0123, TurnCredit: 4.2},
-			want:   "\n\n*(回合: 2 次迭代, 1.5s, ¥0.0123, 4.2 credit)*",
+			want:   "\n\n*(回合: 2 次迭代, 1.5s, ¥0.0123, 4.20 credit)*",
 		},
 		{
 			name:   "unpriced turn (zero cost/credit) hides billing",
@@ -40,7 +40,14 @@ func TestFormatTurnSummary(t *testing.T) {
 		{
 			name:   "credit without cost (credit_rate set, model unpriced)",
 			result: &RunResult{IterationsUsed: 1, TurnCredit: 1},
-			want:   "\n\n*(回合: 1 次迭代, 1 credit)*",
+			want:   "\n\n*(回合: 1 次迭代, 1.00 credit)*",
+		},
+		{
+			// Credit is a fixed 2-decimal display: summed per-call snapshots
+			// must not leak float noise into the footer.
+			name:   "credit is fixed to 2 decimals",
+			result: &RunResult{IterationsUsed: 1, TurnCredit: 0.1 + 0.2},
+			want:   "\n\n*(回合: 1 次迭代, 0.30 credit)*",
 		},
 	}
 	for _, tt := range tests {

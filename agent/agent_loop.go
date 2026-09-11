@@ -38,6 +38,9 @@ type RunResult struct {
 // suitable for appending to the assistant's response. It includes the number
 // of iterations (API calls), wall-clock duration, this turn's spend (cost in
 // CNY and credit — shown only when billed), and optionally the trace ID.
+// Cost keeps trimTrailingZeros' extra precision (a single turn can cost far
+// less than ¥0.01); credit is normalized to a fixed 2 decimals so every
+// frontend shows the same amount (see creditDisplayDecimals).
 // Returns empty string when all values are zero/empty.
 func FormatTurnSummary(result *RunResult) string {
 	if result == nil {
@@ -54,7 +57,7 @@ func FormatTurnSummary(result *RunResult) string {
 		parts = append(parts, "¥"+trimTrailingZeros(result.TurnCost))
 	}
 	if result.TurnCredit > 0 {
-		parts = append(parts, trimTrailingZeros(result.TurnCredit)+" credit")
+		parts = append(parts, formatCredit(result.TurnCredit)+" credit")
 	}
 	if result.TraceID != "" {
 		parts = append(parts, fmt.Sprintf("trace: %s", result.TraceID))
@@ -76,6 +79,19 @@ func trimTrailingZeros(v float64) string {
 		return strconv.FormatFloat(v, 'f', -1, 64)
 	}
 	return s
+}
+
+// creditDisplayDecimals is the fixed precision for every user-facing credit
+// display (turn footers here, the desktop status bar / message footer, the web
+// console usage views). Credit is an accounting unit, so a fixed precision
+// both keeps the same amount readable identically across frontends and hides
+// the float noise of summing per-call snapshots. Cost is deliberately NOT
+// normalized this way — see trimTrailingZeros.
+const creditDisplayDecimals = 2
+
+// formatCredit renders a credit amount with a fixed 2 decimals ("4.20").
+func formatCredit(v float64) string {
+	return strconv.FormatFloat(v, 'f', creditDisplayDecimals, 64)
 }
 
 // formatTurnDuration formats a time.Duration as a concise human-readable string
