@@ -1,6 +1,6 @@
 # Desktop 变更审阅（Diff Review）设计
 
-> 版本: 0.9 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
+> 版本: 0.10 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
 > 关联: [desktop/agent.go](../desktop/agent.go)、[agent/acp/stream.go](../agent/acp/stream.go)、
 >       [agent/tools/edit.go](../agent/tools/edit.go)、[agent/tools/arg_summary.go](../agent/tools/arg_summary.go)、
 >       [agent/tool_executor.go](../agent/tool_executor.go)、[App.tsx](../desktop/frontend/src/App.tsx)、
@@ -25,6 +25,13 @@
 12. [附录 A：diff 生产者与消费者清单](#附录-adiff-生产者与消费者清单)
 
 ---
+
+## 本版修订（0.9 → 0.10：卡片不再重复显示工具输出）
+
+有 diff 的 tool card 不再渲染 `summary`。对 EditFile/WriteFile 来说，工具输出就是同一处变更的文本版
+（P1 之前桌面唯一能看到的那段带行号文本）——diff 是它的**更好渲染**，不是它的补充，
+两样一起摆只是把同一件事说两遍。失败的调用没有 diff（`hasDiff` 要求 `ok`），错误文本照旧显示；
+「复制结果」按钮同此口径，只在没有 diff 的卡片上出现。
 
 ## 本版修订（0.8 → 0.9：P3 实现回填）
 
@@ -558,8 +565,10 @@ export const DiffBlock = memo(function DiffBlock({ change, open }: {
 
 **Tool card**（[components.tsx:281](../desktop/frontend/src/components.tsx)）：
 `ToolCard` 增三个可选 prop —— `change?: FileChangeVO`、`done?: boolean`、`diffOpen?: boolean`。
-有 `change` 且 `done && ok` 时，卡片主体渲染 `DiffBlock` 而不是原来的纯文本摘要；
-`summary`（工具输出文本）仍在，退到 diff 下方作为细节。
+有 `change` 且 `done && ok` 时，卡片主体渲染 `DiffBlock`，而 `summary`（工具输出文本）**不再渲染**：
+对 EditFile/WriteFile 而言那段输出就是同一处变更的文本版（带行号的旧形态），放在 diff 下面只是重复一次。
+失败的调用没有 diff（`hasDiff` 要求 `ok`），错误文本照旧显示——那正是它唯一的内容。
+「复制结果」按钮同此口径：只在没有 diff 的卡片上出现，否则它复制的是一段屏幕上看不到的文字。
 
 > `done` 必须是显式 prop：`agent:tool` 与 `tool_call_start` 推入的 part 默认 `ok: true, done: false`
 > （[App.tsx:1170](../desktop/frontend/src/App.tsx)），

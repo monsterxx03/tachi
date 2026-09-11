@@ -299,8 +299,11 @@ function ToolCard({ name, title, args, summary, ok, done, change, diffOpen, dura
   onToggleDiff?: () => void
 }) {
   const [expanded, setExpanded] = useState(!!defaultExpanded)
-  // The diff is what the card is FOR once a call has changed a file: it becomes the
-  // body (with the tool's own output kept below it as the details).
+  // The diff is what the card is FOR once a call has changed a file: it becomes the body,
+  // and the tool's own output is NOT repeated below it — for EditFile/WriteFile that
+  // output is the same change described as text, so the diff is the better rendering of
+  // it, not an addition to it. A call that failed has no diff (see hasDiff), so its error
+  // text is shown as usual.
   const hasDiff = !!(change && done && ok)
   const open = hasDiff ? !!diffOpen : expanded
   const toggle = hasDiff ? onToggleDiff : () => setExpanded((e) => !e)
@@ -322,12 +325,13 @@ function ToolCard({ name, title, args, summary, ok, done, change, diffOpen, dura
         ) : null}
         <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>
         {durationMs ? <span className="tool-dur" title="耗时">{fmtDur(durationMs)}</span> : null}
-        {summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copyText(summary) }}><CopyIcon /></button> : null}
+        {/* Copying the result only makes sense when the result is on screen: a diff card
+            replaced it with the diff. */}
+        {summary && !hasDiff ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copyText(summary) }}><CopyIcon /></button> : null}
         {hasDiff ? <span className="tool-toggle">{open ? '收起' : '查看'}</span>
           : long ? <span className="tool-toggle">{expanded ? '收起' : '展开'}</span> : null}
       </div>
       {hasDiff && open ? <DiffBlock change={change!} /> : null}
-      {hasDiff && open && summary ? <div className="tool-summary">{summary}</div> : null}
       {!hasDiff && expanded && args ? <div className="tool-args-wrap"><div className="tool-args-bar"><span className="tool-args-label">参数</span><button className="tool-copy" title="复制参数" onClick={(e) => { e.stopPropagation(); copyText(args || '') }}><CopyIcon /></button></div><pre className="tool-args">{prettyArgs}</pre></div> : null}
       {!hasDiff && expanded && summary ? <div className="tool-summary">{summary}</div> : null}
     </div>
