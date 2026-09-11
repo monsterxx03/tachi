@@ -1,5 +1,5 @@
 // Package commands provides shared slash command definitions, lookup, and
-// formatting utilities used across TUI, channel, and ACP modes.
+// formatting utilities used across the TUI, channel, ACP and desktop modes.
 //
 // Each mode retains its own handler signatures and dispatch mechanisms —
 // this package extracts the common metadata and presentation logic that
@@ -20,6 +20,7 @@ const (
 	ModeTUI     Mode = "tui"
 	ModeChannel Mode = "channel"
 	ModeACP     Mode = "acp"
+	ModeDesktop Mode = "desktop"
 )
 
 // Def describes a slash command's metadata. All modes share this registry
@@ -38,13 +39,13 @@ var Registry = []Def{
 	{Name: "quit", Description: "Exit tachi", Modes: []Mode{ModeTUI}},
 	{Name: "model", Description: "Switch provider/model", InputHint: "[name]", Modes: []Mode{ModeTUI, ModeChannel}},
 	{Name: "thinking", Description: "Set thinking level for this session", InputHint: "none | low | medium | high | xhigh | max | default", Modes: []Mode{ModeTUI, ModeChannel}},
-	{Name: "commit", Description: "Generate commit message and commit via git", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
-	{Name: "compact", Description: "Compress conversation history into a summary", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
+	{Name: "commit", Description: "Generate commit message and commit via git", Modes: []Mode{ModeTUI, ModeChannel, ModeACP, ModeDesktop}},
+	{Name: "compact", Description: "Compress conversation history into a summary", Modes: []Mode{ModeTUI, ModeChannel, ModeACP, ModeDesktop}},
 	{Name: "init", Description: "Generate .tachi.md project context file", Modes: []Mode{ModeTUI, ModeACP}},
 	{Name: "mcp", Description: "Manage MCP servers (list, toggle, reconnect, auth, profile)", InputHint: "list | toggle | reconnect | auth | profile [<name>]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "sessions", Description: "Browse and reload previous sessions", Modes: []Mode{ModeTUI}},
 	{Name: "usage", Description: "Show token usage, cost, and tool call statistics", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
-	{Name: "review", Description: "Code review current repo changes via agent fork (correctness, quality, efficiency)", InputHint: "[rounds]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
+	{Name: "review", Description: "Code review current repo changes via agent fork (correctness, quality, efficiency)", InputHint: "[rounds]", Modes: []Mode{ModeTUI, ModeChannel, ModeACP, ModeDesktop}},
 	{Name: "skill", Description: "List or activate skills", InputHint: "list | reload | <name>", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "transcript", Description: "Generate session transcript report", Modes: []Mode{ModeTUI, ModeChannel, ModeACP}},
 	{Name: "dream", Description: "Run AutoDream memory consolidation now", Modes: []Mode{ModeTUI}},

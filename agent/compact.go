@@ -36,6 +36,15 @@ func (a *AIAgent) CompleteCompact(sm SessionManager, systemPrompt, summary strin
 		return nil, err
 	}
 
+	// Recompute the token estimate (and its breakdown) for the history the
+	// conversation now has. Without this the estimate still describes the history
+	// that was just summarised, and nothing would correct it until the next API
+	// call — which a MANUAL /compact never makes, so every frontend (context
+	// ring, context popover, token warnings) would keep showing the pre-compaction
+	// numbers. Passing nil for the run state is the documented way to prime the
+	// estimate outside a turn.
+	a.EstimateAndUpdateTokens(nil, newHistory)
+
 	return newHistory, nil
 }
 

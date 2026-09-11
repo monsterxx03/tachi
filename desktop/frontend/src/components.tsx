@@ -5,7 +5,7 @@ import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize, toLocalAsset } from './lib'
 import { useThemeSnapshot, type Theme } from './theme'
 import type { AttachmentInfo, Part } from './types'
-import type { ContextInfoVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, ContextInfoVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
 // ring. Purely decorative — ContextMeter (below) owns the button semantics and
@@ -682,6 +682,41 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
 // the full question text with values joined by ", " — the convention the TUI
 // established (see tui/askuserview.go GetAnswers), so the model sees one shape
 // whichever frontend asked.
+
+// CommandPicker lists the slash commands a bare "/" prefix matches. It shares the
+// @-file picker's shell (the two never show at once — one is triggered by "@",
+// the other by a leading "/"), so the composer has a single floating-picker look.
+function CommandPicker({ items, selected, onPick }: { items: CommandVO[]; selected: number; onPick: (i: number) => void }) {
+  return (
+    <div className="at-picker">
+      <div className="at-picker-head">
+        <span className="at-picker-title"><span className="at-picker-query">/</span> 命令</span>
+        <span className="at-picker-hint">↑↓ 选择 · Tab/Enter 补全</span>
+      </div>
+      {items.length === 0 ? (
+        <div className="at-picker-empty">没有匹配的命令</div>
+      ) : (
+        <div className="at-picker-list">
+          {items.map((c, i) => (
+            <div
+              key={c.name}
+              className={`at-picker-item${i === selected ? ' is-selected' : ''}`}
+              onClick={() => onPick(i)}
+              onMouseEnter={() => onPick(i)}
+              role="option"
+              aria-selected={i === selected}
+            >
+              <span className="at-picker-path">/{c.name}</span>
+              <span className="cmd-desc">{c.description}</span>
+              {c.inputHint ? <span className="at-picker-tag">{c.inputHint}</span> : null}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function AskForm({ questions, onSubmit, onCancel }: {
   questions: Question[]
   onSubmit: (answers: Record<string, string>) => void
@@ -780,4 +815,4 @@ function AskForm({ questions, onSubmit, onCancel }: {
   )
 }
 
-export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }

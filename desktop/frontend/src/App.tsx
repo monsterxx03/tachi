@@ -23,12 +23,13 @@ import {
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
-  ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
+  ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, CommandPicker, ToolCard, MCPPanel, AtFilePicker, AskForm,
   FileCard, fileFromSendFileArgs, PreBlock,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle,
 } from './components'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
+import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // TableScroller wraps GFM tables in a horizontally scrollable container so a
 // table wider than the message card scrolls inside it instead of bursting out
@@ -285,6 +286,12 @@ function App() {
   // agent/atfile.IsRefBoundary — the popup must offer exactly what the backend
   // will expand.
   const [at, setAt] = useState<AtPickerState | null>(null)
+  // Slash commands the backend supports (fetched once: the set is static per
+  // build) and the "/" palette's highlight. The palette is derived from the
+  // input below rather than stored, so there is no way for it to go stale.
+  const [cmdList, setCmdList] = useState<CommandVO[]>([])
+  const [cmdDismissed, setCmdDismissed] = useState<string | null>(null)
+  const [cmdIdx, setCmdIdx] = useState(0)
   // Query of the last scheduled search — null (not "") means "none yet": the
   // empty query is a real query (it lists the working directory), so "" cannot
   // double as the sentinel or the very first "@" would never be searched.
@@ -665,6 +672,66 @@ function App() {
     scrollToBottom(true)
   }, [currentId, setSessionMsgs, scrollToBottom])
 
+  // applyToSession patches the newest message of the given role in a session.
+  // Every streaming handler funnels through it (text/tool deltas and the
+  // auto-compaction notices), so a live transcript is only ever mutated in one
+  // place — and it keys purely off the session ID the backend sent, never off
+  // currentId, so a background session still updates correctly.
+  const applyToSession = useCallback((sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message) => {
+    setMsgCache((prev) => {
+      const list = prev[sid] || []
+      const target = role === 'user'
+        ? [...list].reverse().find((m) => m.role === 'user')
+        : [...list].reverse().find((m) => m.role === 'assistant' && m.running)
+      if (!target) return prev
+      return { ...prev, [sid]: list.map((m) => (m.id === target.id ? fn(m) : m)) }
+    })
+  }, [])
+
+  // runCommand sends a slash command. It renders exactly like a message — user
+  // bubble plus a running assistant placeholder, so the command's streamed output
+  // has somewhere to land — but the backend dispatches it instead of starting a
+  // chat turn. A non-empty result means the command never ran (unknown, or the
+  // session is busy): that is shown as a notice rather than an empty reply.
+  const runCommand = useCallback((text: string) => {
+    const sid = currentId
+    const ts = Date.now()
+    const tsStr = new Date().toISOString()
+    setSessionMsgs(sid, (prev) => [...prev,
+      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
+      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
+    ])
+    setRunningSet((prev) => new Set(prev).add(sid))
+    scrollToBottom(true)
+    AgentService.RunCommand(text).then((refusal) => {
+      if (!refusal) return
+      applyToSession(sid, 'assistant', (m) => ({ ...finishNotice(m, refusal), running: false }))
+      setRunningSet((prev) => { const next = new Set(prev); next.delete(sid); return next })
+    }).catch(() => {
+      applyToSession(sid, 'assistant', (m) => ({ ...finishNotice(m, '命令执行失败'), running: false }))
+      setRunningSet((prev) => { const next = new Set(prev); next.delete(sid); return next })
+    })
+  }, [currentId, setSessionMsgs, scrollToBottom, applyToSession])
+
+  // acceptCommand completes the palette's highlighted name into the input,
+  // leaving a trailing space so arguments follow naturally. Completing rather
+  // than sending is deliberate: "/rev" + Enter should not run the wrong command.
+  const acceptCommand = useCallback((cmd?: CommandVO) => {
+    if (!cmd) return
+    setCmdIdx(0)
+    setInput('/' + cmd.name + ' ')
+    requestAnimationFrame(() => composerRef.current?.focus())
+  }, [])
+
+  // The "/" palette: open while the input is a bare command name still being
+  // typed (a space means arguments follow, an exact name means the command is
+  // complete). Derived from the input rather than stored, so it can never
+  // disagree with what would actually be dispatched; Esc dismisses the palette
+  // for the current query only, so typing on reopens it.
+  const cmdQuery = input.startsWith('/') && !/\s/.test(input.slice(1)) ? input.slice(1) : null
+  const cmdMatches = cmdQuery === null ? [] : cmdList.filter((c) => c.name.startsWith(cmdQuery.toLowerCase()))
+  const cmdOpen = cmdQuery !== null && cmdDismissed !== cmdQuery && !cmdList.some((c) => c.name === cmdQuery)
+
   // send routes the composer text: while a turn is running the message goes to
   // the pending queue (to be steered in at the next tool boundary) instead of
   // starting a second, competing turn.
@@ -673,12 +740,18 @@ function App() {
     if (!text) return
     closeAt()
     setInput('')
+    // A leading "/" is a command, never a message: the backend owns the list and
+    // answers with a notice when it does not know the name.
+    if (text.startsWith('/')) {
+      runCommand(text)
+      return
+    }
     if (isCurrentRunning) {
       enqueuePending(currentId, text)
       return
     }
     sendText(text)
-  }, [input, isCurrentRunning, currentId, enqueuePending, sendText, closeAt])
+  }, [input, isCurrentRunning, currentId, enqueuePending, sendText, closeAt, runCommand])
 
   // sendPendingNow is the pending bar's primary action: stop the current turn
   // and send the queued text as a fresh user turn right away. The user bubble
@@ -913,6 +986,13 @@ function App() {
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
+  // The slash commands the desktop supports. Fetched once — the set is baked into
+  // the build — and used both by the "/" palette and to decide what a lead-in "/"
+  // means when sending.
+  useEffect(() => {
+    AgentService.ListCommands().then((list) => setCmdList(list || [])).catch(() => {})
+  }, [])
+
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
   // Cmd+N starts a new session. (No native menu binds them, so the webview sees
   // the key events.)
@@ -1038,22 +1118,6 @@ function App() {
     return () => off?.()
   }, [currentId])
 
-  // applyToSession patches the newest message of the given role in a session.
-  // Every streaming handler funnels through it (text/tool deltas and the
-  // auto-compaction notices), so a live transcript is only ever mutated in one
-  // place — and it keys purely off the session ID the backend sent, never off
-  // currentId, so a background session still updates correctly.
-  const applyToSession = useCallback((sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message) => {
-    setMsgCache((prev) => {
-      const list = prev[sid] || []
-      const target = role === 'user'
-        ? [...list].reverse().find((m) => m.role === 'user')
-        : [...list].reverse().find((m) => m.role === 'assistant' && m.running)
-      if (!target) return prev
-      return { ...prev, [sid]: list.map((m) => (m.id === target.id ? fn(m) : m)) }
-    })
-  }, [])
-
   useEffect(() => {
     const off = Events.On('agent:event', (event) => {
       const d = event.data as { sessionId: string; event: AgentEvent }
@@ -1092,37 +1156,61 @@ function App() {
   }, [currentId, applyToSession, refreshRunning, refreshProvider, answerSteer, flushDeltas, enqueueDelta])
 
   // moveSession follows a conversation that auto-compaction moved into a new
-  // session. Everything per-session in this component is keyed by session ID
-  // (transcript, pagination cursor, queued input, pending question), so it all
-  // moves together and the window then points at the session the conversation
-  // actually lives in. The transcript is CARRIED OVER rather than reloaded: it
-  // is what the user is reading, and the compaction notice inside it says why
-  // the context looks different from here on.
+  // session. It is deliberately NOT a cache rename: the compacted session is a
+  // different conversation — it begins at the summary, not at the messages that
+  // were summarised — so the old transcript is dropped and the new session is
+  // loaded from disk like any other. Carrying the transcript over left the
+  // pre-compaction messages visible under the new session, which is exactly what
+  // a user scrolling up must not see.
+  //
+  // What DOES move is what belongs to the conversation rather than to the view:
+  // the queue of messages typed while the turn ran, and a pending question. The
+  // metrics (context estimate, cost/credit including the cache-hit ring) are
+  // re-read for the new session — they are per-session on the backend, and the
+  // child has its own ledger from here on.
   const moveSession = useCallback((from: string, to: string) => {
     if (!from || !to || from === to) return
-    const rename = <T,>(rec: Record<string, T>): Record<string, T> => {
+    const moveKey = <T,>(rec: Record<string, T>): Record<string, T> => {
       if (!(from in rec)) return rec
-      const { [from]: moved, ...rest } = rec
-      return { ...rest, [to]: moved }
+      const { [from]: kept, ...rest } = rec
+      return { ...rest, [to]: kept }
     }
-    setMsgCache(rename)
-    setHasMore(rename)
-    setEarliestTs(rename)
-    setPending(rename)
-    setAsks(rename)
-    pendingRef.current = rename(pendingRef.current)
+    const dropKey = <T,>(rec: Record<string, T>): Record<string, T> => {
+      if (!(from in rec) && !(to in rec)) return rec
+      const { [from]: dropped, [to]: replaced, ...rest } = rec
+      return rest
+    }
+    setPending(moveKey)
+    pendingRef.current = moveKey(pendingRef.current)
+    setAsks(moveKey)
+    setMsgCache(dropKey)
+    setHasMore(dropKey)
+    setEarliestTs(dropKey)
     setRunningSet((prev) => (prev.has(from) ? new Set([...prev].map((id) => (id === from ? to : id))) : prev))
     setCurrentId(to)
     // The compacted child is a new row in the sidebar (the parent stays as the
-    // pre-compaction history, exactly as in the TUI). The `active` flag is
-    // frontend state, so it is re-derived here rather than fetched.
+    // pre-compaction history, exactly as in the TUI). `active` is frontend state,
+    // so it is re-derived rather than fetched.
     setSessions((prev) => prev.map((s) => ({ ...s, active: s.id === to })))
     void AgentService.ListSessions()
       .then((list) => { if (list) setSessions(list.map((s) => ({ ...s, active: s.id === to }))) })
       .catch(() => {})
-    void refreshRunning()
+    setTps(0); setLastTps(0)
+    void (async () => {
+      setLoading(true)
+      const page: any = await (AgentService as any).LoadSession?.(to, PAGE_SIZE).catch(() => null)
+      setMsgCache((prev) => ({ ...prev, [to]: page?.messages ? buildTurns(page.messages) : [] }))
+      setHasMore((p) => ({ ...p, [to]: !!page?.hasMore }))
+      setEarliestTs((p) => ({ ...p, [to]: page?.messages?.[0]?.timestamp }))
+      setLoading(false)
+      scrollToBottom(true)
+    })()
+    refreshRunning()
+    refreshCost(to)
+    refreshProvider()
+    refreshMCP()
     refreshWorkDir(to)
-  }, [refreshRunning, refreshWorkDir])
+  }, [refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkDir, scrollToBottom])
 
   // Auto-compaction: when the token estimate crosses the configured threshold
   // the agent compacts in-flight and moves the conversation into a new (child)
@@ -1308,6 +1396,13 @@ function App() {
               </div>
             )}
             <div className="composer-box" data-file-drop-target="true">
+              {cmdOpen && (
+                <CommandPicker
+                  items={cmdMatches}
+                  selected={Math.min(cmdIdx, Math.max(0, cmdMatches.length - 1))}
+                  onPick={(i) => acceptCommand(cmdMatches[i])}
+                />
+              )}
               {at && (
                 <AtFilePicker
                   query={at.query}
@@ -1351,6 +1446,28 @@ function App() {
                         if (e.key === 'Tab') { e.preventDefault(); closeAt(); return }
                       }
                       if (e.key === 'Escape') { e.preventDefault(); closeAt(); return }
+                    }
+                    // The "/" palette owns the navigation keys while it is open
+                    // (the @-picker cannot be open at the same time: one is
+                    // triggered by "@", the other by a leading "/").
+                    if (!ime && cmdOpen) {
+                      const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')
+                      const up = e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')
+                      if (down || up) {
+                        e.preventDefault()
+                        const delta = down ? 1 : -1
+                        setCmdIdx((i) => Math.max(0, Math.min(cmdMatches.length - 1, i + delta)))
+                        return
+                      }
+                      if (e.key === 'Tab') { e.preventDefault(); acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)]); return }
+                      if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(cmdQuery); return }
+                      // Enter completes rather than sends while the name is still
+                      // partial: "/rev" + Enter must not run the wrong command.
+                      if (e.key === 'Enter' && !e.shiftKey && cmdMatches.length > 0) {
+                        e.preventDefault()
+                        acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)])
+                        return
+                      }
                     }
                     // Esc hands the focus to the message area (the Vim-like keys
                     // live there). Not listed in the shortcut sheet on purpose:

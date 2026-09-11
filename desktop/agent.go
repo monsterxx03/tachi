@@ -1129,6 +1129,82 @@ func (d *desktopApp) setSessionState(id string, st AgentState) {
 	}
 }
 
+// beginTurn marks a session's run busy and returns the scaffolding every turn
+// shares, whatever it is about to run (a conversation reply or a slash command):
+// a cancellable context that carries the session's working directory (so tools
+// run where the session does), the steer channel the frontend answers, and the
+// done channel StopAndSend waits on. ok is false when there is nothing to run —
+// no run, or one already busy, since a session runs one turn at a time.
+//
+// Callers must NOT hold d.mu.
+func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, cancel context.CancelFunc, steerCh chan agent.SteerInput, turnDone chan struct{}, ok bool) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if r == nil || r.running {
+		return nil, nil, nil, nil, false
+	}
+	r.running = true
+	// Snapshot cost/credit at turn start so the footer can show this turn's
+	// incremental cost/credit when it completes.
+	r.turnStartCost = r.cost
+	r.turnStartCredit = r.credit
+
+	ctx, cancel = context.WithCancel(context.Background())
+	if r.sm != nil {
+		if cur := r.sm.Current(); cur != nil && cur.WorkingDir != "" {
+			ctx = wdctx.WithDir(ctx, cur.WorkingDir)
+		}
+	}
+	r.turnCtx, r.turnCancel = ctx, cancel
+	// Steer wiring: the agent emits steer_check and parks on steerCh between
+	// tool calls; the frontend answers via AgentService.Steer. Buffered (cap 1)
+	// so the reply can never be lost to a select+default send racing ahead of
+	// the agent's receive. Per turn, never closed — Steer only writes while the
+	// turn is running (r.steerCh is cleared to nil on exit).
+	steerCh = make(chan agent.SteerInput, 1)
+	turnDone = make(chan struct{})
+	r.steerCh = steerCh
+	r.turnDone = turnDone
+	return ctx, cancel, steerCh, turnDone, true
+}
+
+// endTurn finishes a turn: clears the run's busy state, re-homes it if
+// auto-compaction moved the conversation, and tells the frontend the turn is
+// over. The session hand-off has to happen BEFORE agent:idle, because idle is
+// what drains the queue of messages the user typed while the turn ran — under
+// the old id those would be sent to the session the conversation has left.
+func (d *desktopApp) endTurn(id, endReason string) {
+	d.mu.Lock()
+	if r := d.runs[id]; r != nil {
+		r.running = false
+		r.steerCh = nil
+		r.turnDone = nil
+	}
+	d.mu.Unlock()
+	d.emitIdle(d.followCompaction(id), endReason)
+}
+
+// runHistory returns the session's in-memory conversation history (nil when the
+// session is unknown).
+func (d *desktopApp) runHistory(id string) []llm.Message {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if r := d.runs[id]; r != nil {
+		return r.history
+	}
+	return nil
+}
+
+// setRunHistory replaces the session's in-memory conversation history — used
+// after a compaction, which hands the run a shorter one.
+func (d *desktopApp) setRunHistory(id string, history []llm.Message) {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	if r := d.runs[id]; r != nil {
+		r.history = history
+	}
+}
+
 // startTurn dispatches to the active session's real agent when configured,
 // otherwise to the simulated fallback so the UI always responds.
 func (d *desktopApp) startTurn(text string) {
@@ -1156,17 +1232,16 @@ func (d *desktopApp) startTurn(text string) {
 		r = pr
 	}
 
-	d.mu.Lock()
-	if r.running {
-		d.mu.Unlock()
+	// Mark the run busy and take the turn scaffolding (cancellable context,
+	// steer channel, done channel) before touching the history: a busy session
+	// must not be prepared for a second turn at all.
+	ctx, cancel, steerCh, turnDone, ok := d.beginTurn(id, r)
+	if !ok {
 		return
 	}
-	r.running = true
-	// Snapshot cost/credit at turn start so the footer can show this turn's
-	// incremental cost/credit when it completes.
-	r.turnStartCost = r.cost
-	r.turnStartCredit = r.credit
-	history := r.history
+	_ = cancel // held by the run (r.turnCancel); Stop is the user-facing path
+
+	history := d.runHistory(id)
 	// Expand @-file references before anything else: text files are inlined,
 	// images become multi-modal content parts. This must happen BEFORE the
 	// trailing-user merge below — history stores already-expanded user
@@ -1183,25 +1258,6 @@ func (d *desktopApp) startTurn(text string) {
 		text = history[n-1].Content + "\n" + text
 		history = history[:n-1]
 	}
-	ctx, cancel := context.WithCancel(context.Background())
-	// Inject the session's working directory into the turn context so tool
-	// execution (wdctx.Dir) uses it — per-session, like channel agent_turn.go.
-	if r.sm != nil {
-		if cur := r.sm.Current(); cur != nil && cur.WorkingDir != "" {
-			ctx = wdctx.WithDir(ctx, cur.WorkingDir)
-		}
-	}
-	r.turnCtx, r.turnCancel = ctx, cancel
-	// Steer wiring: the agent emits steer_check and parks on steerCh between
-	// tool calls; the frontend answers via AgentService.Steer. Buffered (cap 1)
-	// so the reply can never be lost to a select+default send racing ahead of
-	// the agent's receive. Per turn, never closed — Steer only writes while the
-	// turn is running (r.steerCh is cleared to nil on exit).
-	steerCh := make(chan agent.SteerInput, 1)
-	turnDone := make(chan struct{})
-	r.steerCh = steerCh
-	r.turnDone = turnDone
-	d.mu.Unlock()
 
 	go func() {
 		// endReason describes why the stream finished; surfaced to the frontend
@@ -1210,20 +1266,7 @@ func (d *desktopApp) startTurn(text string) {
 		// or an error the queue stays for the user to review/clear).
 		endReason := "error"
 		defer func() {
-			d.mu.Lock()
-			r.running = false
-			r.steerCh = nil
-			r.turnDone = nil
-			d.mu.Unlock()
-			// Auto-compaction moved this conversation into a child session
-			// mid-turn: re-home the run now and hand the frontend the id it
-			// should address from here on. This has to happen BEFORE agent:idle,
-			// because idle is what drains the queue of messages the user typed
-			// while the turn ran — under the old id those would be sent to the
-			// pre-compaction session, which is no longer where the conversation
-			// lives. followCompaction returns the id either way.
-			id = d.followCompaction(id)
-			d.emitIdle(id, endReason)
+			d.endTurn(id, endReason)
 			close(turnDone)
 		}()
 		d.setSessionState(id, AgentState{Status: StatusThinking, Label: "思考", Detail: "理解中…"})
