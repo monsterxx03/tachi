@@ -213,8 +213,16 @@ export function FileCard({ file }: { file: AttachmentInfo }) {
   )
 }
 
-function MessageBubble({ role, children }: { role: 'user' | 'assistant'; children: ReactNode }) {
-  return (<div className={`msg msg-${role}`}><div className="msg-avatar">{role === 'user' ? 'U' : '◆'}</div><div className="msg-content">{children}</div></div>)
+// UserBubble is the user's own message. It carries no avatar: the bubble is
+// already unmistakable — right-aligned, tinted, opposite the agent's — so an
+// avatar next to it would only add a chip repeating "this one is you" (and the
+// row would lose 42px of room for what you actually wrote).
+function UserBubble({ children }: { children: ReactNode }) {
+  return (
+    <div className="msg msg-user">
+      <div className="msg-content">{children}</div>
+    </div>
+  )
 }
 
 function CopyIcon() {
@@ -745,4 +753,4 @@ function AskForm({ questions, onSubmit, onCancel }: {
   )
 }
 
-export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, UserBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }

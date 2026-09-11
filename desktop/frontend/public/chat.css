@@ -91,7 +91,9 @@
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: none; }
 }
-.msg-user { flex-direction: row-reverse; }
+/* The user's own message has no avatar (see UserBubble), so the bubble is simply
+   pushed to the right end of the reading column. */
+.msg-user { justify-content: flex-end; }
 
 .msg-avatar {
   width: 30px;
@@ -107,12 +109,6 @@
     inset 0 1px 0 var(--sheen),
     var(--shadow-1);
   user-select: none;
-}
-.msg-user .msg-avatar {
-  background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
-  color: var(--user-ink);
-  border: 1px solid var(--accent-line-soft);
-  box-shadow: inset 0 1px 0 var(--sheen), var(--shadow-1);
 }
 .msg-assistant .msg-avatar {
   background: linear-gradient(165deg, var(--panel-solid), var(--panel-2));
@@ -153,14 +149,15 @@
   box-shadow: none;
 }
 
-/* User bubble: a soft blue wash with dark ink. Deliberately quiet — it marks
-   what you said without out-shouting the agent's answer. It carries a tinted
-   hairline so the bubble still reads as a shape on the blue-tinted background
-   (a plain wash alone dissolved into it). */
+/* User bubble: a soft wash with dark ink. Deliberately quiet — it marks what
+   you said without out-shouting the agent's answer. It carries its own hairline
+   (--user-line, warm in light mode, blue in dark) so the bubble still reads as
+   a shape on the tinted background — a plain wash alone dissolved into it — and
+   so the accent stays reserved for things you can act on. */
 .msg-user .msg-content {
   background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
   color: var(--user-ink);
-  border: 1px solid var(--accent-line-soft);
+  border: 1px solid var(--user-line);
   padding: 10px 14px;
   border-radius: 14px 14px 4px 14px;
   font-size: 14px;
@@ -184,9 +181,12 @@
   margin: 8px 0;
 }
 
+/* Assistant prose is what the app is for, so it gets book-like leading: a
+   generous line-height on a light warm page is what makes a long answer
+   comfortable to read rather than merely legible. */
 .assistant-text {
   font-size: 14.5px;
-  line-height: 1.68;
+  line-height: 1.76;
   color: var(--text);
   letter-spacing: 0.005em;
 }

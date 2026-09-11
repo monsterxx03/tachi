@@ -18,120 +18,136 @@
 :root {
   /* Flat, opaque surfaces. The window itself is opaque (main.go uses
      MacBackdropNormal) — there is no vibrancy layer and no backdrop blur, so
-     every surface is a plain colour. Depth comes from a real tonal ladder
-     (each plane is a visibly different tone), hairline borders and whitespace
-     instead of glass. Light surfaces, lightest-first: panel-solid (raised
-     cards/popovers) > chrome-2 (titlebar/composer bars) > bg (content plane)
-     > chrome (sidebar — the one recessed plane). */
-  --bg: #eef1f8;         /* app background — agent messages sit directly on it */
-  --bg-top: #f5f8fd;     /* …and its lighter top edge (see .app's gradient) */
-  --chrome: #e9edf6;     /* sidebar — the one recessed plane */
-  --chrome-2: #f9fbff;   /* titlebar / composer */
-  --panel-solid: #ffffff;
-  --panel-2: #edf1fa;    /* second raised tone — avatar / keycap gradients */
-  --panel-veil-a: rgba(255, 255, 255, 0.94);  /* active session card, top */
-  --panel-veil-b: rgba(255, 255, 255, 0.74);  /* …and bottom */
-  --veil: rgba(255, 255, 255, 0.68);          /* quiet filled buttons */
-  --sheen: rgba(255, 255, 255, 0.55);         /* inset top highlight on chips */
+     every surface is a plain colour. The light theme is PAPER: a light warm
+     off-white ladder (book paper, not sand) with soft warm-grey ink — text
+     slightly off-black, hairlines and shadows as faint as they can be while
+     still doing their job — so a long reading session sits on a page instead of
+     on a screen. Depth comes from a real ladder (an earlier pass kept every
+     plane above ~92% lightness with no middle, which reads as white no matter
+     how the borders are tuned) plus the hairlines and whitespace.
+     Lightest-first: panel-solid (raised cards/popovers) > chrome-2
+     (titlebar/composer bars) > bg (content plane) > chrome (sidebar — the one
+     recessed plane).
+     The accent stays the brand blue: paper with ink-blue is the pairing this was
+     designed around, and it keeps the identity constant across themes (a warm
+     accent would change the app's colour when the switch flips). */
+  --bg: #f7f4ee;         /* app background — agent messages sit directly on it */
+  --bg-top: #fdfbf7;     /* …and its lighter top edge (see .app's gradient) */
+  --chrome: #f3efe7;     /* sidebar — a hair deeper than the page, not a panel */
+  --chrome-2: #fdfbf7;   /* titlebar / composer */
+  --panel-solid: #fffefa; /* cards/popovers: warm white, still brighter than bg */
+  --panel-2: #f2ede5;    /* second raised tone — avatar / keycap gradients */
+  --panel-veil-a: rgba(255, 254, 250, 0.95);  /* active session card, top */
+  --panel-veil-b: rgba(255, 254, 250, 0.8);   /* …and bottom */
+  --veil: rgba(255, 254, 250, 0.75);          /* quiet filled buttons */
+  --sheen: rgba(255, 255, 255, 0.6);          /* inset top highlight on chips */
   /* Text carried by a saturated fill. White in both themes — the *fill* is
      what moves (see --accent-strong / --red-strong), not the ink. */
   --on-accent: #ffffff;
 
-  /* Borders and washes are ink veils rather than greys, so they tint with the
-     blue-cast surfaces instead of turning muddy on top of them. */
-  --border: rgba(18, 24, 48, 0.1);
-  --border-2: rgba(18, 24, 48, 0.16);
+  /* Borders, washes and shadows are warm ink veils — brown-grey, not neutral
+     black — so they sit in the same family as the surfaces instead of greying
+     them out. The bias is deliberately slight: the surfaces carry the warmth,
+     the ink only has to avoid fighting it. */
+  --border: rgba(62, 54, 44, 0.12);
+  --border-2: rgba(62, 54, 44, 0.17);
 
   /* Inset washes (tool output, args, code blocks) and row hovers — always a
      *light* or *dark* veil, never a fixed colour, so they survive dark mode. */
-  --wash: rgba(18, 24, 48, 0.045);
-  --wash-2: rgba(18, 24, 48, 0.07);
-  --hover: rgba(18, 24, 48, 0.055);
-  --hover-2: rgba(18, 24, 48, 0.07);
+  --wash: rgba(62, 54, 44, 0.05);
+  --wash-2: rgba(62, 54, 44, 0.075);
+  --hover: rgba(62, 54, 44, 0.055);
+  --hover-2: rgba(62, 54, 44, 0.08);
 
-  --scrollbar: rgba(18, 24, 48, 0.2);
-  --scrollbar-hover: rgba(18, 24, 48, 0.34);
+  --scrollbar: rgba(62, 54, 44, 0.2);
+  --scrollbar-hover: rgba(62, 54, 44, 0.32);
 
   /* Dot grid on the content plane (see .chat-wrap::before): just enough ink to
      give a large empty transcript a texture instead of blank paper. */
-  --grid-dot: rgba(18, 24, 48, 0.055);
+  --grid-dot: rgba(62, 54, 44, 0.05);
 
-  --text: #12151f;
-  --text-dim: #4a5163;
+  --text: #2b2621;
+  --text-dim: #5b554d;
   /* Metadata (timestamps, session times, tool durations, thinking label) runs
      at 10.5–11.5px, so it needs the 4.5:1 of small text — and it is the
      *lightest* grey that still clears 4.5:1 on the recessed sidebar (--chrome,
      the darkest light surface) as well as on --bg. Anything lighter reads as a
      smudge. */
-  --text-faint: #5f6675;
+  --text-faint: #6b655c;
 
   /* Accent roles are split because dark mode pulls them apart: a colour that
      reads well as *ink* on the surface is too light to carry white text, and
-     vice versa. In light mode all three collapse to nearly one hue. */
-  --accent: #5b7cff;         /* fills, rings, status dots, soft washes */
-  --accent-2: #3f5ad8;       /* accent as ink (links, icons, labels) */
+     vice versa. In light mode all three collapse to nearly one hue — the brand
+     blue, kept as the action/ink colour against the warm surfaces. */
+  --accent: #4a6cf5;         /* fills, rings, status dots, soft washes */
+  --accent-2: #2f4bd6;       /* accent as ink (links, icons, labels) */
   --accent-3: #7a95ff;       /* light end of button gradients */
-  --accent-strong: #3f5ad8;  /* saturated fill that carries white text */
-  --accent-soft: rgba(91, 124, 255, 0.13);
-  --accent-softer: rgba(91, 124, 255, 0.08);
-  --accent-ring: rgba(91, 124, 255, 0.24);
-  --accent-line-soft: rgba(91, 124, 255, 0.3);   /* resting tinted border */
-  --accent-line: rgba(91, 124, 255, 0.46);       /* hover/focus tinted border */
-  --accent-tint-a: rgba(122, 149, 255, 0.18);    /* tinted button wash */
+  --accent-strong: #3550d8;  /* saturated fill that carries white text */
+  --accent-soft: rgba(74, 108, 245, 0.14);
+  --accent-softer: rgba(74, 108, 245, 0.09);
+  --accent-ring: rgba(74, 108, 245, 0.26);
+  --accent-line-soft: rgba(74, 108, 245, 0.32);  /* resting tinted border */
+  --accent-line: rgba(74, 108, 245, 0.5);        /* hover/focus tinted border */
+  --accent-tint-a: rgba(122, 149, 255, 0.2);     /* tinted button wash */
 
   /* Semantic colours, tuned to clear 4.5:1 as small text on --bg. The
      "-strong" variants back white text and so must stay dark. */
-  --green: #0f7a4b;
-  --red: #c9303a;
-  --red-strong: #c9303a;
-  --red-line: rgba(201, 48, 58, 0.42);
-  --red-wash: rgba(201, 48, 58, 0.1);
-  --amber: #a15c0b;
+  --green: #0d6f45;
+  --red: #bf2831;
+  --red-strong: #bf2831;
+  --red-line: rgba(191, 40, 49, 0.45);
+  --red-wash: rgba(191, 40, 49, 0.11);
+  --amber: #8a4b08;
 
   /* Inline code in an assistant reply. */
-  --code-ink: #3d4ba8;
+  --code-ink: #34429e;
 
-  /* Modal scrims stay a light neutral rather than black on the flat light UI;
+  /* Modal scrims stay a light warm veil rather than black on the flat light UI;
      dark mode has no choice but to go black. */
-  --scrim: rgba(18, 24, 48, 0.14);
-  --scrim-strong: rgba(18, 24, 48, 0.22);
+  --scrim: rgba(62, 54, 44, 0.14);
+  --scrim-strong: rgba(62, 54, 44, 0.2);
 
-  /* User bubble: a soft blue wash with dark ink — present but quiet, so it
-     never out-shouts the agent's answer. */
-  --user-grad-a: #e3eafc;
-  --user-grad-b: #d7e1f8;
-  --user-ink: #333e69;
-  --user-ink-dim: rgba(51, 62, 105, 0.72);
-  --user-code-bg: rgba(91, 124, 255, 0.14);
-  --user-code-ink: #2b3763;
+  /* User bubble: a warm paper wash with brown ink — present but quiet, so it
+     never out-shouts the agent's answer. Its own line colour (rather than the
+     accent line) keeps it in the warm family; the accent is reserved for things
+     you act on. */
+  --user-grad-a: #f1eade;
+  --user-grad-b: #eae1d0;
+  --user-ink: #4a4235;
+  --user-ink-dim: rgba(74, 66, 53, 0.72);
+  --user-code-bg: rgba(62, 54, 44, 0.12);
+  --user-code-ink: #3f382c;
+  --user-line: rgba(62, 54, 44, 0.16);
 
-  /* The two ambient tints that make the flat background read as "Tachi blue"
-     rather than neutral grey, plus the vertical light falloff .app paints. */
-  --app-tint-a: rgba(122, 149, 255, 0.12);
-  --app-tint-b: rgba(91, 124, 255, 0.09);
+  /* The two ambient tints that make the flat background read as sunlight on
+     paper rather than neutral grey, plus the vertical light falloff .app
+     paints. Kept faint: a strong halo turns a warm page into a tinted one. */
+  --app-tint-a: rgba(255, 224, 178, 0.13);
+  --app-tint-b: rgba(172, 146, 110, 0.07);
 
   /* Context-breakdown palette (the ring's popover, see ContextMeter): one hue
      per bucket, in the order /usage lists them. The three "infrastructure"
      buckets share a blue ramp — they are all scaffolding rather than things the
      user wrote — and the content buckets get their own hues. Every colour is
      opaque so it reads both as a bar segment and as a 8px dot. */
-  --ctx-system: #3f5ad8;
-  --ctx-internal-tools: #6d8bf5;
-  --ctx-mcp-tools: #a8b6f0;
-  --ctx-user-messages: #0f7a4b;
-  --ctx-assistant-messages: #a15c0b;
-  --ctx-tool-results: #0d7a86;
-  --ctx-other: #6b7280;
+  --ctx-system: #2f4bd6;
+  --ctx-internal-tools: #5c80ef;
+  --ctx-mcp-tools: #93a6e8;
+  --ctx-user-messages: #0d6f45;
+  --ctx-assistant-messages: #96550a;
+  --ctx-tool-results: #0b6a75;
+  --ctx-other: #6d6459;
 
-  /* Elevation. Wide, very low-alpha shadows; the paired 1px ambient ring is
-     what keeps raised edges crisp on the flat background. */
-  --shadow-1: 0 1px 2px rgba(18, 24, 48, 0.06), 0 1px 1px rgba(18, 24, 48, 0.04);
-  --shadow-2: 0 2px 6px rgba(18, 24, 48, 0.07), 0 5px 18px rgba(18, 24, 48, 0.06);
-  --shadow-3: 0 8px 20px rgba(18, 24, 48, 0.1), 0 20px 44px rgba(18, 24, 48, 0.12);
-  --shadow-4: 0 14px 32px rgba(18, 24, 48, 0.16), 0 32px 72px rgba(18, 24, 48, 0.18);
-  --shadow-accent: 0 2px 10px rgba(74, 102, 224, 0.24);
-  --shadow-accent-hover: 0 4px 14px rgba(74, 102, 224, 0.38);
-  --shadow-danger: 0 2px 10px rgba(220, 59, 69, 0.28);
+  /* Elevation. Warm ink rather than neutral black, and light: on paper a raised
+     edge is a hint, not a drop shadow. The paired 1px ambient ring is what keeps
+     those edges crisp without weight. */
+  --shadow-1: 0 1px 2px rgba(62, 54, 44, 0.06), 0 1px 1px rgba(62, 54, 44, 0.04);
+  --shadow-2: 0 2px 6px rgba(62, 54, 44, 0.06), 0 5px 18px rgba(62, 54, 44, 0.05);
+  --shadow-3: 0 8px 20px rgba(62, 54, 44, 0.08), 0 20px 44px rgba(62, 54, 44, 0.09);
+  --shadow-4: 0 14px 32px rgba(62, 54, 44, 0.12), 0 32px 72px rgba(62, 54, 44, 0.14);
+  --shadow-accent: 0 2px 10px rgba(53, 80, 216, 0.26);
+  --shadow-accent-hover: 0 4px 14px rgba(53, 80, 216, 0.4);
+  --shadow-danger: 0 2px 10px rgba(191, 40, 49, 0.3);
   /* Decorative accent glows (brand mark, welcome glyph). */
   --glow-accent: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.45));
 
@@ -145,7 +161,7 @@
 
   /* Disclosure caret for the borderless <select>s. An icon rather than a
      drawn border, so it is a token too — its stroke mirrors --text-faint. */
-  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%235f6675' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%236b655c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   /* Reading column: messages and the composer share this width, so the input
      lines up with the transcript instead of stretching to the window edge
@@ -232,6 +248,7 @@
   --user-ink-dim: rgba(221, 227, 255, 0.68);
   --user-code-bg: rgba(124, 150, 255, 0.18);
   --user-code-ink: #dfe5ff;
+  --user-line: rgba(124, 150, 255, 0.3);
 
   --app-tint-a: rgba(122, 149, 255, 0.06);
   --app-tint-b: rgba(91, 124, 255, 0.05);

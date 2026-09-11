@@ -23,7 +23,7 @@ import {
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
-  ContextMeter, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
+  ContextMeter, CacheRing, ThinkingPart, UserBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
   FileCard, fileFromSendFileArgs, PreBlock,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle,
 } from './components'
@@ -1167,13 +1167,13 @@ function App() {
                 {messages.map((m) =>
                   m.role === 'user' ? (
                     <Fragment key={m.id}>
-                      <MessageBubble role="user">
+                      <UserBubble>
                         {m.text}
                         <span className="user-meta">
                           {m.reminder ? <button className="reminder-head" title="系统提醒" onClick={() => setReminderModal(m.reminder || '')}><span className="reminder-ico">!</span></button> : null}
                           {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
                         </span>
-                      </MessageBubble>
+                      </UserBubble>
                     </Fragment>
                   ) : (
                     <AssistantBubble
