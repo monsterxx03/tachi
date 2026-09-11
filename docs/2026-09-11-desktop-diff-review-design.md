@@ -1,6 +1,6 @@
 # Desktop 变更审阅（Diff Review）设计
 
-> 版本: 0.3（P1 已实现） | 日期: 2026-09-11 | 状态: P1 已落地
+> 版本: 0.9 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
 > 关联: [desktop/agent.go](../desktop/agent.go)、[agent/acp/stream.go](../agent/acp/stream.go)、
 >       [agent/tools/edit.go](../agent/tools/edit.go)、[agent/tools/arg_summary.go](../agent/tools/arg_summary.go)、
 >       [agent/tool_executor.go](../agent/tool_executor.go)、[App.tsx](../desktop/frontend/src/App.tsx)、
@@ -25,6 +25,35 @@
 12. [附录 A：diff 生产者与消费者清单](#附录-adiff-生产者与消费者清单)
 
 ---
+
+## 本版修订（0.8 → 0.9：P3 实现回填）
+
+P3（评论回灌）已实现，**纯前端，不需要新绑定**——输送管道就是 composer 那条 `SendMessage`。四处决定，
+外加一处顺带补上的缺口，都写进 §12.5 与 §12.7：
+
+1. **默认勾选规则**：🐛/⚠️ 默认勾上，💡 默认不勾。评审说"这里有问题"时前两档是要动的，💡 多为"可以考虑"，
+   留给读者自己加——省掉一轮取消，也不会把鸡毛蒜皮一起塞给 agent。
+2. **草稿是面板局部的**：以 findings 在载荷里的下标为键，**只存读者的编辑**，没动过的条目没有记录、
+   由 `defaultPick(severity)` 实时推导。载荷晚到或被替换都不需要同步步骤；代价是关面板即丢草稿，
+   所以 **Esc 在输入框里先是失焦、第二下才关闭**，免得把正在写的补充说明一起关掉。
+3. **发送走 composer 同一条路**：会话在跑时进待发队列，而不是直连 `SendMessage`。`beginTurn` 会拒绝忙碌会话，
+   直连等于静默丢消息；这也是 §12.5 里"Steer 是插话、新 turn 是反馈"的落地方式——两者最终共用同一段发送代码。
+4. **发送后关面板并清空草稿**：面板是覆盖式的，接下来该看的是对话里的流式输出；要对照着看，重开一次即可。
+5. **顺带补上的缺口（P2b 遗留，冒烟时暴露）**：当意见指向**本轮没改过的文件**（评审看得比 diff 作用域宽）时，
+   `findingMatchesFile` 会把它从每个文件组里过滤掉——面板头部数着 2 条，却只渲染出 1 条，读者既看不到也勾不上，
+   而「全选」又确实把它算进了消息。现在这类意见有自己的一组（`其它文件 / 不在本轮差异里`），照常可勾、可补充。
+
+## 本版修订（0.3 → 0.4：P2 定稿）
+
+P2 的三处粒度/载体决定已经拍定，写进[§12](#12-p2-详细设计工作树-diff--结构化评审)：
+
+1. **findings 的载体是工具**（`ReportFinding`），不是 JSON 段、也不是解析报告文件。决定性理由是
+   工具调用天然落进 session 记录 → findings 重启/切会话可重放，与 P1 的 diff 同性质、零迁移。
+2. **评审入口是 turn 级唯一入口**（footer chip 那一行），**不在每个 edit 卡片上放**。第三条理由是硬约束：
+   卡片渲染的是片段（行号是片段内的），findings 带的是文件真实行号，**两个坐标系不兼容**——
+   意见只能落在整文件 diff 面板上。
+3. **不做全自动，默认显式**：一次 review 是一整个 fork 回合（默认上限 200 iterations、最多 10 轮），
+   每轮对话后自动挂一个几分钟/几分钱的回合是量级错误；竞品也都是显式动作。可选自动化按会话开关 + 两道护栏。
 
 ## 本版修订（0.2 → 0.3：实现回填）
 
@@ -583,7 +612,8 @@ P1 不做，但数据结构上不要挡住：
   它今天唯一的短板是评审意见只能吐进聊天流。给它一个 diff 承载面即可——
   这比 Claude 的 "Review code" 更强，因为 Tachi 的评审本身就是多轮 fork。
 - **P3 行内评论 → prompt**：评论需要 `path` + 片段行号 → 已经有（`Hunk.OldLine`/`NewLine`）；
-  输送管道已经有（`Steer`，[agent.go:1333](../desktop/agent.go)）。
+  输送管道也已经有——就是一条普通的用户消息（`SendMessage`，与 composer 同路）。`Steer` 不是这个场景的
+  通道（它只在回合运行中回答 `steer_check`，空闲时返回 "not running"），详见 §12.5。
 - **P4 checkpoint**：用私有 git ref，每个 user message 前打点。边界见 §8.6。
 
 ---
@@ -691,7 +721,7 @@ Conductor 明确承认这点（只恢复 files + git + chat）。因此 P4 立�
 
 ---
 
-## 9.5 实现验证记录（P1）
+## 9.5 实现验证记录（P1 / P2a）
 
 | 项 | 结果 |
 |---|---|
@@ -703,13 +733,23 @@ Conductor 明确承认这点（只恢复 files + git + chat）。因此 P4 立�
 | 全量 `make test` / `make itest`（ACP 51 项）/ 两侧 lint | 通过 |
 | 真机·历史通路 | 卡片显示 `+N −M`、展开后段落着色正确、失败编辑无 diff、footer chip `🧾 2 files +8 −2 · 含 shell`、chip 一次展开全部 diff、`replace_all` 表头有标注 |
 | 真机·实时通路（脚本化 mock LLM 跑真实 turn） | 发送前 0 个 diff，工具完成后卡片出现 `+1 −1`、chip 出现 `1 files +1 −1` —— 证明 `agent:tool` 的 `change` 经 `updateToolPart` 落到了 part 上 |
+| **P2a** `pkg/linediff.ParseUnified` 单测（普通修改 / 创建 / 删除 / 二进制 / rename / 引号路径 / 多文件 / mode-only / 空 diff） | 通过 |
+| **P2a** `GetTurnDiff` 单测（改文件 / 未跟踪 / 限定 path / 相对路径 / 仓库外的 path / 非 git / 无工作区 / 干净树）—— 全部在 `t.TempDir()` 的临时 git 仓库上，不碰用户目录与全局 git 配置 | 通过 |
+| **P2b** `ReportFindingTool` 单测（完整意见 / 区间 / 只回第一行 / path、line、text、severity、区间反转、非法 JSON 六类负例）+ 声明性（非破坏、非并发、severity 枚举） | 通过 |
+| **P2b** `extraForkTools`（普通 fork 无附加工具；评审 fork 拿到 ReportFinding）+ 白名单不含它 | 通过 |
+| **P2b** 真机 | 面板汇总「评审意见 3 条 🐛1 ⚠️1 💡1 · 来自最近一次评审」；`[bug]` 意见挂在它所评论的那一行代码下方（带"建议："），孤儿意见标出 `（main.go:99，不在以上差异行内）`，文件头显示「N 条意见」 |
+| **P2c** `AppendReviewScope` 单测 + **作用域穿透**（ReviewOptions.Scope → orchestrator 的 `Next()` → 单轮与多轮 prompt 都带 `## Scope`） | 通过 |
+| **P2c** `ReviewChanges` 三道拒绝（无改动 / 无活跃会话 / 会话不匹配） | 通过 |
+| **P2c** `GetReviewFindings`（真实记录形态 / 只取最新一份 / 无评审时给 note） | 通过 |
+| **P2c** 真机（用 mockllm 驱动真实评审） | 点「评审本轮改动」→ 评审 fork 收到的 prompt 里带 `## Scope (only these files)` 与两个改动文件的绝对路径 + `git diff HEAD -- …` 指令；评审记录落 `oneoff/review-*.jsonl`；**重启 app 后**面板仍能读到该次评审的 2 条意见（`评审意见 2 条 🐛1 💡1`），`[bug]` 行内挂在被评论的第 17 行下、带「建议：」 |
+| **P2a** 真机 | footer 出现两个入口（`🧾 2 files +8 −2 · 含 shell` 与「完整 diff」）；面板显示 `main.go +17 −2` 与**双列真实行号**（旧侧 1,2 删除 / 新侧 1–18 新增 / 3:18 上下文），未跟踪的 `CHANGELOG.md` 标「新增」并合成全新增 hunk；每个文件头有「打开」 |
 
 ## 10. 分阶段实施
 
 | 阶段 | 内容 | 交付物 |
 |---|---|---|
 | **P1**（本次设计主体） | `tools.FileChangeForTool` + `pkg/linediff` + ACP 薄适配 + desktop 两条通路派生 + `DiffBlock` + tool card diff 渲染 + turn footer chip + 两个设计令牌 | 可审阅的片段 diff |
-| **P2** | git 参与：整文件 diff / 工作树 diff + `/review` 的评审意见落进行内评论 | 完整变更视图 + agent 自审 |
+| **P2**（详见 §12） | git 参与：整文件 / 工作树 diff（真实行号）+ `ReportFinding` 结构化 findings + turn 级「评审本轮改动」入口 | 完整变更视图 + agent 自审 |
 | **P3** | 行内评论 → 组装 `file:line` prompt → 走 `Steer` 回灌 | 人机回路闭环 |
 | **P4** | 私有 git ref checkpoint + 悬停 revert（边界按 §8.6 交付） | 可回退 |
 
@@ -729,10 +769,190 @@ P1 的边界（务必遵守）：**不改** `generateDiffSnippet`、**不改** `
 
 已决定：`Hunk.OldLine`/`NewLine` 保留但 P1 不渲染（§5.3 / §6.2）；`replace_all` 的表头标注"整段对照"（§6.2）；
 chip 保留 `+N −M` 字形、口径写进 tooltip（§5.4）；折叠统一 24 行、`WriteFile` 不做特例（0.3 修订 4）。
+
+P2 三问已定稿（§12）：findings 用 `ReportFinding` 工具上报；评审入口 turn 级唯一、**不放在 per-call 卡片**；
+自动化默认关（按会话开关 + 护栏），评审作用域默认"本轮改动的 path 集合"。
 4. **`pkg/linediff` vs `agent/tools`**：把 hunk 算法放进 `tools` 可以少建一个包，
    但 `tools` 已经承载工具实现 + args 摘要两类关注点。倾向前者（§6.2），待评审确认。
 
 ---
+
+## 12. P2 详细设计（工作树 diff + 结构化评审）
+
+### 12.1 目标与不做的
+
+目标：把"这一轮到底改了什么"从**片段**提升到**文件真实坐标**，并让评审意见落到具体行上。
+不做：checkpoint / 回退（P4）、行内评论回灌（P3）、非 git 目录的替代实现（只做诚实降级）。
+
+### 12.2 P2a 数据源：git（真实行号）——✅ 已实现
+
+实现落点：`pkg/linediff.ParseUnified`（解析 git 输出 → 复用 `Hunk`）+ `desktop/gitdiff.go`
+（`GetTurnDiff` / `TurnDiffVO` / `FileDiffVO`）+ `frontend/src/diff.tsx` 的 `DiffPanel`
+（footer 的「完整 diff」按钮打开，与 P1 共用 `DiffLines`，只多一列行号）。
+实现细节与文档的差异：`git diff --no-color -U3` 的结果里，**没有 HEAD 的仓库**退化为
+`git diff --cached` + `git diff`（此时"所有内容都是新的"，未跟踪分支会兜住它）；
+未跟踪文件的内容在 Go 侧合成全新增（`maxPreviewBytes` 截断）；总 hunk 数超过 2000 时截断并出提示。
+
+- **`pkg/linediff` 增加 `ParseUnified(diffText) []FileDiff`**：解析 git 输出成 `FileDiff{Path, Hunks}`，
+  复用 P1 的 `Hunk` 类型——在解析结果里 `OldLine`/`NewLine` 就是**文件真实行号**。
+  于是一份数据模型、两个视图：P1 的卡片不渲染行号，P2 的面板渲染，差别只在渲染器的一个开关。
+- **desktop 绑定** `GetTurnDiff(sessionID string, paths []string) []FileDiffVO`：
+  - root = 会话主目录；`git diff HEAD -- <paths>`（无 HEAD 时退 `git diff` + `git status`）；
+  - **未跟踪文件单独处理**（`git ls-files --others --exclude-standard -- <paths>`）→ 全新增，`OldLine = 0`；
+  - 非 git 目录 / 没有 git → 返回带 `error` 的空结果，UI 明说"这里只有片段 diff"，不假装；
+  - 边界：二进制（git 输出 "Binary files differ" → `binary: true`）、超大（截断 + 标注）、
+    rename/copy（按 git 的 rename 头显示，不合并两侧）、CRLF（按字节，不转换）。
+- **前端变更面板**：从 footer chip 打开，复用查看器浮层（滚动 / Esc / 关闭都是现成的），
+  按文件分组、**显示真实行号**，行样式沿用 P1 的 `.diff-line`（多一列行号）。
+  文件头有两个入口：**预览**（复用 `PreviewFile`——`FilePreviewOverlay` 直接用附件卡片那套查看器：
+  markdown/mermaid、HTML 沙箱、图片 lightbox、高亮源码、CSV 表格）与**打开**（系统默认应用）。
+  「预览」这条也顺带回答了原 §11 待决 3。
+
+### 12.3 P2b 评审产物：`ReportFinding` 工具 —— ✅ 已实现
+
+实现落点：`agent/tools/reportfinding.go`（参数校验 + 只回一行确认，不写任何文件）；
+`agent/agent_fork.go` 的 `ForkConfig.ForReview` 在**白名单之后**把工具注册到子 agent
+（因此它既不在主 registry、也不在 `DefaultReviewAllowedTools` 里，两处都有测试钉住）；
+四个评审入口（desktop / acp / tui / channel）都标了 `ForReview: true`；`ReviewUserPrompt` 的
+"Output format" 一节改成"每条意见一次 ReportFinding，散文只留给最后的叙述性报告"。
+
+实现时补了三条文档没写的决定：
+
+1. **面板只显示"最近一次评审"的意见**（`latestFindings`）：findings 没有评审 ID，
+   "历史上所有意见"会让已修的旧意见永远挂在面板上。规则：从最后一条含 findings 的消息取，
+   新的评审**替换**旧的列表。
+2. **findings 与文件的匹配**：模型写的 path 可能是仓库相对或绝对，面板按"去掉 root 前缀后相等"匹配。
+3. **行内落点**：优先挂在该意见所指行的 **new 侧**（删除文件退到 old 侧）；
+   若该行不在差异范围内（评审看的是更大的窗口，或文件在评审后又变了），
+   退回文件组的末尾并标注"（path:line，不在以上差异行内）"——**不静默丢弃**。
+
+- 新增 `agent/tools/reportfinding.go`：`ReportFinding{path, line, end_line, severity(bug|warn|info), category, text, suggestion}`。
+  **只注册给评审 fork**，不进主 agent 的工具集（评审是唯一需要这份结构化输出的场景）。
+- **为什么是工具**：工具调用天然落进 session 记录 → findings 重启 / 切会话后**可重放**（与 P1 的 diff 同性质，
+  零迁移、零新持久化字段）；schema 就是契约，比"让模型吐 JSON、前端容错解析"稳；
+  评审 prompt 只需把"输出格式"一节改成"逐条用 ReportFinding 上报"。报告文件保留（人读的长文），
+  findings 是给 UI 的索引。
+- **渲染位置**：只在变更面板（真实行号所在），按 severity 过滤。per-call 卡片不挂 findings（§12.4 第 3 条）。
+
+### 12.4 P2c 触发：turn 级唯一入口 —— ✅ 主体已实现
+
+实现落点：`cmds.ReviewOptions.Scope` + `cmds.AppendReviewScope`（在 orchestrator 的 `Next()` 里追加到每一轮
+prompt，不动任何既有签名）；`desktop/commands.go` 的 `commandRun.scope` 与 `ReviewChanges(sessionID, paths)`
+绑定（校验无改动/无活跃会话/会话不匹配，其余复用 `startCommand` 的 turn 脚手架）；前端 footer 的
+「评审本轮改动」按钮（评审中禁用、会话忙时禁用、note 提示）。
+
+**实现时暴露的两件事（都已修，值得记）**：
+
+1. **findings 不能在会话 transcript 里找**：评审是 one-off fork 运行，它的消息落在
+   `session/<id>/oneoff/review-*.jsonl`，**不进会话历史**（这是有意的：评审是旁路运行，不该污染主上下文）。
+   所以 `GetReviewFindings(sessionID)` 直接读**最新一份评审记录**——文件即记录，
+   既覆盖"刚评审完"也覆盖"重启之后"（真机验证过：重启后仍能读到上一轮的 2 条意见）。
+2. **两份记录的 `args` 形态不同**：会话 messages.jsonl 里 `args` 是对象，而 one-off 记录里是 **JSON 字符串**。
+   解析器两种都要接受——只按对象解析会静默读到 0 条（这个 bug 逃过了当时的单测，因为单测用的是对象形态；
+   现在测试用真实形态 + 面板在无意见时也会显示 note，便于下次一眼看出）。
+
+**未实现（刻意）**：按会话的"每轮结束自动评审"开关。理由见下——它是我明确不推荐的默认行为；
+若要做，护栏按本节开头的两条（仅本轮有变更时触发、>20 文件或 >500 行先问）执行。
+
+### 12.4（原设计）P2c 触发：turn 级唯一入口
+
+- 一个 turn **一个**入口，长在 footer chip 那一行：`🧾 3 files +24 −7 · 含 shell  [评审]`。
+- **不放在每个 edit 卡片上**，三条理由：
+  1. **噪音**：10 次 edit 就是 10 个按钮，等于推翻 P1 的"轻入口"决定；
+  2. **同文件多次编辑无法归属**：chip 的聚合按 `path` 去重（一个文件改两次算一个），评审的作用域跟着这个粒度；
+  3. **坐标系不兼容（硬约束）**：卡片渲染的是片段（片段内行号），findings 带的是文件真实行号；
+     要把意见落到卡片上需要"当时的文件内容"才能映射，P1 没有——所以意见只能落在整文件面板。
+- 点击后以**本轮 path 集合**为作用域：prompt 带 path 列表，fork 用 `git diff HEAD -- <paths>`
+  （比现在 `/review` 让模型自己看整个仓库更聚焦、更省 token，也修掉"`/review` 与刚跑完这轮脱节"）。
+- 状态与成本：chip 上显示 评审中 / 已评审（N 条）；用量已按 `UsageKindReview` 单独记账，天然可见。
+- **不做全自动，默认显式**：一次 review 是一个 fork 回合（`DefaultReviewMaxIterations = 200`、最多 10 轮），
+  每轮对话后自动挂一个是量级错误；竞品（Claude Code "Review code"、Cursor）也都是显式动作；自动会变噪音。
+- **按会话的"每轮结束自动评审"：不做**（已决定）。理由与前面一致——一次 review 是一整个 fork 回合
+  （默认上限 200 iterations、最多 10 轮），每轮对话后自动挂一个是量级错误，而且小改动也弹意见会让这个功能
+  被忽略。真要做的话，做法是"仅本轮有文件变更时触发 + 变更超阈值（>20 文件或 >500 行）先问再跑"，
+  这里只记录，不在计划内。
+- 文件级动作（次要）：长在面板的**文件头**上（真实行号在那里），不回到卡片。
+
+### 12.5 P2d（= P3 的前半）：评论回灌 —— ✅ 已实现
+
+findings → 行内评论 → 勾选若干条 → 组装 `file:line` 清单 → **作为一条普通的用户消息开一个新 turn**
+（`SendMessage` → `startTurn`，与 composer 同一条路）。
+
+**实现落点**（纯前端，无新绑定）：
+
+- `diff.tsx`：`defaultPick(severity)` / `findingAnchor(finding)` / `buildFindingMessage(items)`
+  ——消息格式的唯一下落，后者是纯函数；`FindingRow` 长出勾选框与补充框（`CommentField`，按内容自动长高），
+  `DiffPanel` 持有 drafts、实时派生 picks，面板底部是 `sticky` 的 `.diff-sendbar`
+  （`已选 N/M · 全选 · 全不选 · 发给 agent`）。
+- `App.tsx`：`sendFindings` = 关面板 + 走 composer 那条路（会话在跑则入待发队列，空闲则 `sendText`）；
+  另外**切换会话时关掉面板**——面板属于打开它的那个会话，这同时保证"发给 agent"不会发进别的会话。
+- `viewer.tsx`：`ViewerOverlay` 的 Esc 在焦点落在 `INPUT`/`TEXTAREA`/contenteditable 时**先失焦、不关闭**，
+  第二下才关。这是所有浮层的统一契约，不止服务 P3。
+
+消息形状（真机在 LLM 边界抓到过原文）：
+
+```
+请按以下评审意见修改（共 2 条）：
+
+1. main.go:17［bug］超时常量与注释不一致
+   建议：提取常量并在注释里引用
+   补充：按建议改，别动其它地方
+2. notes.txt:2［info］这行可以更具体
+   建议：补一句上下文
+   补充：这处先不动
+```
+
+锚点在前、`建议` 与读者的 `补充` 缩进在下：模型要动手的是锚点，其余是上下文。`findingAnchor` 用
+`path:line` / `path:line-endLine`（`line` 缺失时只给 `path`），正是 P1 特意保留 `Hunk.OldLine`/`NewLine`
+要换来的那套**文件真实坐标**——tool card 上的片段行号没有这个资格。
+
+**发送行为**：勾选与补充说明是读者对评审的回应，所以它必须和手打一条消息完全等价——走 `sendText`
+（= `SendMessage` → `startTurn`），因此白拿 transcript 记录、turn footer、Stop、上下文压缩等既有行为。
+会话正好在跑时并入待发队列（见本版修订第 3 条：直连会被 `beginTurn` 静默丢弃）。
+
+**为什么是"新 turn"而不是 `Steer`**（0.7 曾写成 Steer，本版保留这段更正）：
+
+- `Steer` 的语义是**回答回合运行期间的 `steer_check`**：把排队文本注入到当前回合的下一个 steer 点
+  （刚跑完的工具之后、下一次 LLM 调用之前）。它**开不了 turn**——没有回合在跑时直接返回 `"not running"`
+  （[agent.go](../desktop/agent.go) 的 `Steer`）。评审结束时会话是空闲的，用 Steer 只会得到一句
+  "not running"。
+- 反馈意见在语义上就是**新的一轮对话**：用户读了评审结果，要求 agent 按意见改。它和用户手打的
+  "把第 17 行那个常量提出来" 没有区别，所以走同一条路。
+- `Steer` 仍有它的位置：**用户恰好在某个回合还在跑的时候**提交评论，那才是插话（
+  `StopAndSend` 是"打断并替换"的变体）。这是 composer 现在已有的行为，P3 直接沿用即可。
+
+**不做**：评论的持久化（草稿随面板走）、按意见行做 diff 局部高亮、把 findings 的 category 一起写进消息。
+
+### 12.6 P2 验证计划
+
+- **Go**：`ParseUnified` 表驱动（普通修改 / 新增 / 删除 / 多 hunk / 二进制 / rename / 空 diff）；
+  `GetTurnDiff` 在 `t.TempDir()` 里临时 `git init` 的仓库上验证（**绝不写用户目录**），
+  覆盖未跟踪文件、指定 path 过滤、非 git 目录的降级；`ReportFinding` 的参数校验 + 只对评审 fork 可见。
+- **真机**：造一个含多次编辑 + 新建文件 + 未跟踪文件的会话 → 点 chip → 面板显示真实行号与文件分组；
+  在非 git 目录下打开 → 显示降级文案而不是空白。
+
+### 12.7 P3 验证记录
+
+与 P1/P2 同样的真机套路（隔离 HOME + `TachiSmoke.app` + `TACHI_DEMO_JS` 驱动 + 截图带断言的横幅），
+外加**在 LLM 边界复核**：mock 把收到的请求原文落盘，确认发出去的就是 UI 组装的那一份。
+
+驱动脚本按顺序断言了十件事，全部通过：
+
+| # | 断言 | 结果 |
+|---|---|---|
+| 1 | 面板渲染出**全部** findings（含不在 diff 里的那条） | ✅ 2 条：`组=main.go 默认勾选=true` / `组=其它文件 默认勾选=false` |
+| 2 | 默认勾选规则（🐛 勾、💡 不勾）与发送栏计数一致 | ✅ `已选 1 / 2 条`，按钮可用 |
+| 3 | 全不选 → 计数 0、补充框收起、按钮禁用；全选 → 2/2；单条取消 → 1/2 | ✅ 三步都对 |
+| 4 | 补充框按内容自动长高 | ✅ 35 → 54px |
+| 5 | Esc 第一下只失焦，面板不关、内容不丢 | ✅ 仍打开，焦点回 BODY，值保留 |
+| 6 | Esc 第二下关闭 | ✅ |
+| 7 | 重开面板回到默认勾选（草稿不跨面板） | ✅ `已选 1 / 2`、补充框 1 个 |
+| 8 | 发给 agent → 面板关闭 + transcript 多一条用户消息 | ✅ 内容含锚点、建议、补充 |
+| 9 | mock 回复正常回流（发送确实开了新 turn） | ✅ |
+| 10 | LLM 边界的请求原文 == UI 组装的消息 | ✅ 逐字一致（含两条锚点与两处补充） |
+
+**这一步的价值**：第 1 条断言就是那处 P2b 缺口被发现的现场——功能都"对"，但面板头部的计数、
+渲染出的行数、发送栏的计数三者不一致，只有把 UI 拉起来真点一遍才看得见。
 
 ## 附录 A：diff 生产者与消费者清单
 

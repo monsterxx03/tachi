@@ -43,7 +43,10 @@ type commandRun struct {
 	id   string
 	ctx  context.Context
 	args string
-	ech  chan<- agent.AgentEvent
+	// scope limits the command to specific paths (currently only /review uses it: the
+	// turn-level "review these changes" entry knows which files the turn touched).
+	scope []string
+	ech   chan<- agent.AgentEvent
 }
 
 // desktopCommandHandlers maps a command name to its desktop implementation.
@@ -88,7 +91,30 @@ func (s *AgentService) RunCommand(text string) string {
 		return fmt.Sprintf("desktop 暂不支持 /%s", def.Name)
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(body, def.Name))
-	return s.desk.startCommand(def.Name, args, handler)
+	return s.desk.startCommand(def.Name, args, nil, handler)
+}
+
+// ReviewChanges runs a review SCOPED to the files a turn changed: the desktop's
+// turn-level entry, one click next to the diff chip. It runs as a normal turn — the
+// session goes busy, Stop cancels it, and the reviewer's ReportFinding calls stream into
+// the transcript, which is exactly how the findings reach the diff panel.
+//
+// Returns "" when the run started, or a reason the UI shows instead.
+func (s *AgentService) ReviewChanges(sessionID string, paths []string) string {
+	if len(paths) == 0 {
+		return "这一轮没有可评审的改动"
+	}
+	d := s.desk
+	d.mu.Lock()
+	active := d.activeID
+	d.mu.Unlock()
+	if active == "" {
+		return "没有活跃会话"
+	}
+	if sessionID != "" && sessionID != active {
+		return "只能评审当前会话的改动"
+	}
+	return d.startCommand("review", "", paths, desktopCommandHandlers["review"])
 }
 
 // startCommand runs a command with a turn's lifecycle. The event source is the
@@ -103,7 +129,7 @@ func (s *AgentService) RunCommand(text string) string {
 //
 // Returns "" when the command started, or the reason it did not — the frontend
 // shows that instead of a turn that never happened.
-func (d *desktopApp) startCommand(name, args string, handler func(*commandRun) error) string {
+func (d *desktopApp) startCommand(name, args string, scope []string, handler func(*commandRun) error) string {
 	d.mu.Lock()
 	id := d.activeID
 	if id == "" {
@@ -145,7 +171,7 @@ func (d *desktopApp) startCommand(name, args string, handler func(*commandRun) e
 		startedAt := time.Now()
 		go func() {
 			defer close(events)
-			if err := handler(&commandRun{desk: d, run: r, id: id, ctx: ctx, args: args, ech: events}); err != nil {
+			if err := handler(&commandRun{desk: d, run: r, id: id, ctx: ctx, args: args, scope: scope, ech: events}); err != nil {
 				events <- agent.AgentEvent{Type: agent.AgentEventError, Result: &agent.RunResult{Error: err}}
 			}
 		}()
@@ -262,6 +288,9 @@ func runReviewCommand(c *commandRun) error {
 		reviewProvider = rp
 	}
 	ropts := cmds.ResolveReviewOptions(cfg)
+	// A scoped run (ReviewChanges) reviews exactly the files the turn touched; the plain
+	// /review command leaves this empty and reviews the whole working tree.
+	ropts.Scope = c.scope
 	thinking, effort := cmds.ResolveReviewThinking(ropts, a.Config.Resolved.Thinking, a.Config.Resolved.ThinkingEffort)
 	opts := llm.ChatOptions{MaxTokens: config.DefaultMaxTokens, Thinking: thinking, ThinkingEffort: effort}
 
@@ -283,6 +312,7 @@ func runReviewCommand(c *commandRun) error {
 			Provider:      spec.Provider,
 			MaxIterations: ropts.MaxIterations,
 			AllowedTools:  ropts.AllowedTools,
+			ForReview:     true,
 			Logger:        a.Logger(),
 		})
 		defer forked.Close()

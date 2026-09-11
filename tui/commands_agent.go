@@ -177,6 +177,7 @@ func (m *Model) startReviewRound() tea.Cmd {
 		Provider:      spec.Provider,
 		MaxIterations: orch.Options().MaxIterations,
 		AllowedTools:  orch.Options().AllowedTools,
+		ForReview:     true,
 		Logger:        m.agent.Logger(),
 	})
 	m.forkedAgent = forked

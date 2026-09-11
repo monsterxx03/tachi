@@ -15,7 +15,10 @@
 // on a change later).
 package linediff
 
-import "strings"
+import (
+	"strconv"
+	"strings"
+)
 
 // Kind classifies one hunk line.
 type Kind string
@@ -130,4 +133,169 @@ func trimTerminator(oldLines, newLines []string) ([]string, []string) {
 	default:
 		return oldLines, newLines
 	}
+}
+
+// FileDiff is one file's changes in a unified diff — the shape `git diff` emits, and
+// what the desktop's changes panel renders. Unlike a fragment diff (Fragments), the
+// line numbers here are REAL file coordinates: that is the whole point of parsing
+// git's output instead of re-diffing two fragments ourselves.
+type FileDiff struct {
+	// Path is the post-image path (the file as it is now), relative to the repo.
+	Path string
+	// OldPath is the pre-image path of a rename/copy ("" otherwise).
+	OldPath string
+	// Created/Deleted mark the /dev/null sides: the whole file appeared or went away.
+	Created bool
+	Deleted bool
+	// Binary marks a file git will not diff as text (no hunks).
+	Binary bool
+	// Hunks carry real line numbers; empty for a binary or a mode-only change.
+	Hunks []Hunk
+	// Added/Removed count the hunk lines.
+	Added   int
+	Removed int
+}
+
+// ParseUnified parses unified diff text (what `git diff` prints, with or without
+// -U<n>) into per-file changes. Anything that is not a file or a hunk header is
+// ignored, so mode changes, index lines and "\ No newline at end of file" markers
+// pass through harmlessly. An empty or hunk-less input yields nil.
+//
+// Paths in git's output are QUOTED when they contain spaces or non-ASCII bytes
+// (core.quotePath), so the header values go through unquoting — a diff of a file
+// named "报告 2026.md" arrives as a C-escaped string, and a parser that skipped this
+// would show the escapes to the user.
+func ParseUnified(diffText string) []FileDiff {
+	var files []FileDiff
+	var cur *FileDiff
+	var oldLine, newLine int
+	inHunk := false
+
+	flush := func() {
+		if cur == nil {
+			return
+		}
+		// A deleted file's post-image is /dev/null, but the panel still needs a name:
+		// report the file under its pre-image path.
+		if cur.Path == "" {
+			cur.Path = cur.OldPath
+		}
+		cur.Added, cur.Removed = Counts(cur.Hunks)
+		files = append(files, *cur)
+		cur = nil
+	}
+
+	for line := range strings.SplitSeq(diffText, "\n") {
+		switch {
+		case strings.HasPrefix(line, "diff --git "):
+			flush()
+			cur = &FileDiff{}
+			inHunk = false
+
+		case cur == nil:
+			// Anything before the first file header is noise.
+
+		case strings.HasPrefix(line, "new file mode"):
+			cur.Created = true
+		case strings.HasPrefix(line, "deleted file mode"):
+			cur.Deleted = true
+		case strings.HasPrefix(line, "rename from "), strings.HasPrefix(line, "copy from "):
+			cur.OldPath = unquotePath(strings.SplitN(line, " ", 3)[2])
+		case strings.HasPrefix(line, "Binary files ") || strings.HasPrefix(line, "GIT binary patch"):
+			cur.Binary = true
+
+		case strings.HasPrefix(line, "--- "):
+			// The pre-image path. /dev/null means the file did not exist before.
+			if p := diffPath(line[4:], "a/"); p == "/dev/null" {
+				cur.Created = true
+			} else if cur.OldPath == "" {
+				cur.OldPath = p
+			}
+		case strings.HasPrefix(line, "+++ "):
+			p := diffPath(line[4:], "b/")
+			if p == "/dev/null" {
+				cur.Deleted = true
+			} else {
+				cur.Path = p
+			}
+
+		case strings.HasPrefix(line, "@@"):
+			oldLine, newLine = parseHunkHeader(line)
+			inHunk = true
+
+		case inHunk:
+			if line == "" {
+				// The trailing newline of the diff, or the blank separator between
+				// file sections — never a line of content (a real empty context line
+				// carries a space prefix).
+				continue
+			}
+			switch line[0] {
+			case ' ':
+				cur.Hunks = append(cur.Hunks, Hunk{Kind: KindContext, OldLine: oldLine, NewLine: newLine, Text: line[1:]})
+				oldLine++
+				newLine++
+			case '-':
+				cur.Hunks = append(cur.Hunks, Hunk{Kind: KindDel, OldLine: oldLine, Text: line[1:]})
+				oldLine++
+			case '+':
+				cur.Hunks = append(cur.Hunks, Hunk{Kind: KindAdd, NewLine: newLine, Text: line[1:]})
+				newLine++
+			}
+		}
+	}
+	flush()
+	return files
+}
+
+// diffPath extracts a path from a "--- a/x" / "+++ b/x" header value: unquote it,
+// then drop the a/ or b/ prefix git puts on. A path that does not carry the prefix
+// (some tools omit it) is returned as it is.
+func diffPath(value, prefix string) string {
+	// git appends a tab-separated timestamp in some (non-git) unified diffs.
+	if i := strings.IndexByte(value, '\t'); i >= 0 {
+		value = value[:i]
+	}
+	p := unquotePath(value)
+	if p != "/dev/null" && strings.HasPrefix(p, prefix) {
+		p = p[len(prefix):]
+	}
+	return p
+}
+
+// unquotePath undoes git's C-style quoting of a path.
+func unquotePath(value string) string {
+	value = strings.TrimSpace(value)
+	if len(value) < 2 || value[0] != '"' {
+		return value
+	}
+	if unquoted, err := strconv.Unquote(value); err == nil {
+		return unquoted
+	}
+	return value
+}
+
+// parseHunkHeader reads the starting line numbers out of "@@ -12,3 +12,4 @@ ctx".
+func parseHunkHeader(line string) (oldLine, newLine int) {
+	rest := strings.TrimPrefix(line, "@@")
+	if i := strings.Index(rest, "@@"); i >= 0 {
+		rest = rest[:i]
+	}
+	for _, field := range strings.Fields(rest) {
+		start := strings.TrimPrefix(field, "-")
+		start = strings.TrimPrefix(start, "+")
+		if i := strings.IndexByte(start, ','); i >= 0 {
+			start = start[:i]
+		}
+		n, err := strconv.Atoi(start)
+		if err != nil {
+			continue
+		}
+		if field[0] == '-' {
+			oldLine = n
+		} else {
+			newLine = n
+		}
+	}
+	return oldLine, newLine
 }

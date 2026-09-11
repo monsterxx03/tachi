@@ -330,3 +330,34 @@ function ExpandButton({ onFull }: { onFull: () => void }) {
 function TruncatedNotice({ meta }: { meta: FilePreviewVO }) {
   return <div className="file-preview-note">文件较大，此处只显示开头部分（共 {fmtBytes(meta.size)}）</div>
 }
+
+// FilePreviewOverlay opens the attachment preview for an arbitrary local path — the
+// same viewers an attachment card uses (markdown with its mermaid, HTML sandbox, image
+// lightbox, highlighted source, CSV table). It exists so "look at this file" means one
+// thing in this app wherever it is asked from: the SendFile card or the diff panel.
+//
+// Unlike FileCard this fetches eagerly: the caller has already decided to show the file,
+// so there is no card to render first.
+export function FilePreviewOverlay({ path, name, onClose }: { path: string; name?: string; onClose: () => void }) {
+  const [meta, setMeta] = useState<FilePreviewVO | null>(null)
+  const base = name || path.split('/').pop() || path
+
+  useEffect(() => {
+    let alive = true
+    AgentService.PreviewFile(path, true)
+      .then((vo) => { if (alive) setMeta(vo) })
+      .catch(() => { if (alive) setMeta(null) })
+    return () => { alive = false }
+  }, [path])
+
+  if (!meta || !meta.previewable) {
+    return (
+      <ViewerOverlay label={base} onClose={onClose} stageClass="is-doc" controls={<CloseButton onClose={onClose} />}>
+        <div className="viewer-doc diff-panel-empty">
+          {meta === null ? '读取中…' : meta.error ? `无法读取：${meta.error}` : '这个文件没有可预览的内容，用「打开」交给系统应用'}
+        </div>
+      </ViewerOverlay>
+    )
+  }
+  return <FileFullscreen file={{ path, name: base }} path={path} meta={meta} onClose={onClose} />
+}

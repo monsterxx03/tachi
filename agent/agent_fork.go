@@ -21,12 +21,27 @@ func forkTool(t tools.Tool) tools.Tool {
 	return t
 }
 
+// extraForkTools returns the tools a fork gets on top of its parent's whitelist. Kept
+// as a pure function so the rule is testable without building an agent.
+func extraForkTools(cfg ForkConfig) []tools.Tool {
+	if cfg.ForReview {
+		return []tools.Tool{tools.ReportFindingTool{}}
+	}
+	return nil
+}
+
 // ForkConfig controls child agent creation from a parent AIAgent.
 type ForkConfig struct {
 	Provider      llm.Provider   // required — LLM provider
 	MaxIterations int            // 0 = unlimited
 	MaxTokens     int            // 0 = default (4096)
 	AllowedTools  []string       // empty = copy all parent tools
+	// ForReview marks a code-review fork. It gets tools.ReportFindingTool on top of
+	// the whitelist — the tool that records a finding as a session record. It is
+	// deliberately NOT in the main registry: the agent has no business declaring
+	// findings about its own work, and a review fork is the only place that output is
+	// consumed.
+	ForReview     bool
 	NoMCP         bool           // true = don't inherit shared MCP Manager
 	Logger        *logger.Logger // nil = use parent logger
 	SessionID     string         // logging hint
@@ -117,6 +132,12 @@ func (a *AIAgent) Fork(cfg ForkConfig) *ForkedAgent {
 				}
 			}
 		}
+	}
+
+	// Review-only tools, added AFTER the whitelist copy so they do not have to appear
+	// in DefaultReviewAllowedTools (which lists what the reviewer may READ).
+	for _, t := range extraForkTools(cfg) {
+		child.Config.ToolRegistry.Register(t)
 	}
 
 	child.SetReminderCollector(nil)

@@ -155,3 +155,152 @@ func TestFragmentsMultiOccurrence(t *testing.T) {
 		t.Errorf("expected the delete run before the add run, got %+v", hunks)
 	}
 }
+
+// TestParseUnified covers the shapes `git diff` actually prints. The fixtures are
+// literal git output (paths, index lines and all) so the parser is tested against the
+// real format rather than a tidied-up idea of it.
+func TestParseUnified(t *testing.T) {
+	tests := []struct {
+		name  string
+		diff  string
+		check func(t *testing.T, files []FileDiff)
+	}{
+		{
+			name: "modified file keeps real line numbers",
+			diff: "diff --git a/src/main.go b/src/main.go\n" +
+				"index 1111111..2222222 100644\n" +
+				"--- a/src/main.go\n" +
+				"+++ b/src/main.go\n" +
+				"@@ -10,3 +10,4 @@ func main() {\n" +
+				" \tctx := context.Background()\n" +
+				"-\told()\n" +
+				"+\tnewWith(30 * time.Second)\n" +
+				"+\tdefer cancel()\n" +
+				" \treturn\n",
+			check: func(t *testing.T, files []FileDiff) {
+				if len(files) != 1 {
+					t.Fatalf("got %d files, want 1", len(files))
+				}
+				f := files[0]
+				if f.Path != "src/main.go" || f.OldPath != "src/main.go" {
+					t.Errorf("paths = %q / %q", f.Path, f.OldPath)
+				}
+				if f.Added != 2 || f.Removed != 1 {
+					t.Errorf("counts = %d/%d, want 2/1", f.Added, f.Removed)
+				}
+				want := []Hunk{
+					{Kind: KindContext, OldLine: 10, NewLine: 10, Text: "\tctx := context.Background()"},
+					{Kind: KindDel, OldLine: 11, Text: "\told()"},
+					{Kind: KindAdd, NewLine: 11, Text: "\tnewWith(30 * time.Second)"},
+					{Kind: KindAdd, NewLine: 12, Text: "\tdefer cancel()"},
+					{Kind: KindContext, OldLine: 12, NewLine: 13, Text: "\treturn"},
+				}
+				if len(f.Hunks) != len(want) {
+					t.Fatalf("hunks = %+v", f.Hunks)
+				}
+				for i := range want {
+					if f.Hunks[i] != want[i] {
+						t.Errorf("hunk %d = %+v, want %+v", i, f.Hunks[i], want[i])
+					}
+				}
+			},
+		},
+		{
+			name: "two files in one diff",
+			diff: "diff --git a/a.go b/a.go\n--- a/a.go\n+++ b/a.go\n@@ -1 +1 @@\n-x\n+y\n" +
+				"diff --git a/b.go b/b.go\n--- a/b.go\n+++ b/b.go\n@@ -5 +5 @@\n-p\n+q\n",
+			check: func(t *testing.T, files []FileDiff) {
+				if len(files) != 2 || files[0].Path != "a.go" || files[1].Path != "b.go" {
+					t.Fatalf("files = %+v", files)
+				}
+			},
+		},
+		{
+			name: "created file",
+			diff: "diff --git a/CHANGELOG.md b/CHANGELOG.md\n" +
+				"new file mode 100644\nindex 0000000..3333333\n" +
+				"--- /dev/null\n+++ b/CHANGELOG.md\n@@ -0,0 +1,2 @@\n+# Changelog\n+\n",
+			check: func(t *testing.T, files []FileDiff) {
+				f := files[0]
+				if !f.Created || f.Deleted {
+					t.Errorf("created = %v deleted = %v, want created", f.Created, f.Deleted)
+				}
+				if f.Path != "CHANGELOG.md" || f.Added != 2 || f.Removed != 0 {
+					t.Errorf("file = %+v", f)
+				}
+				if f.Hunks[0].OldLine != 0 || f.Hunks[0].NewLine != 1 {
+					t.Errorf("first hunk = %+v (a created file has no old line)", f.Hunks[0])
+				}
+			},
+		},
+		{
+			name: "deleted file",
+			diff: "diff --git a/gone.go b/gone.go\ndeleted file mode 100644\n--- a/gone.go\n+++ /dev/null\n@@ -1 +0,0 @@\n-bye\n",
+			check: func(t *testing.T, files []FileDiff) {
+				f := files[0]
+				if !f.Deleted || f.Path != "gone.go" {
+					t.Errorf("file = %+v, want a deleted gone.go", f)
+				}
+			},
+		},
+		{
+			name: "binary file has no hunks",
+			diff: "diff --git a/logo.png b/logo.png\nindex 1111111..2222222 100644\nBinary files a/logo.png and b/logo.png differ\n",
+			check: func(t *testing.T, files []FileDiff) {
+				if len(files) != 1 || !files[0].Binary || len(files[0].Hunks) != 0 {
+					t.Errorf("files = %+v, want one binary file with no hunks", files)
+				}
+			},
+		},
+		{
+			name: "rename carries both paths",
+			diff: "diff --git a/old.go b/new.go\nsimilarity index 95%\nrename from old.go\nrename to new.go\n" +
+				"--- a/old.go\n+++ b/new.go\n@@ -1 +1 @@\n-a\n+b\n",
+			check: func(t *testing.T, files []FileDiff) {
+				f := files[0]
+				if f.Path != "new.go" || f.OldPath != "old.go" {
+					t.Errorf("paths = %q / %q, want new.go / old.go", f.Path, f.OldPath)
+				}
+			},
+		},
+		{
+			name: "quoted paths (spaces and non-ASCII) are unquoted",
+			diff: "diff --git \"a/\\346\\212\\245\\345\\221\\212 2026.md\" \"b/\\346\\212\\245\\345\\221\\212 2026.md\"\n" +
+				"--- \"a/\\346\\212\\245\\345\\221\\212 2026.md\"\n+++ \"b/\\346\\212\\245\\345\\221\\212 2026.md\"\n@@ -1 +1 @@\n-a\n+b\n",
+			check: func(t *testing.T, files []FileDiff) {
+				if want := "报告 2026.md"; files[0].Path != want {
+					t.Errorf("Path = %q, want %q", files[0].Path, want)
+				}
+			},
+		},
+		{
+			name: "no newline marker and mode-only change are ignored",
+			diff: "diff --git a/mode.sh b/mode.sh\nold mode 100644\nnew mode 100755\n" +
+				"diff --git a/tail.txt b/tail.txt\n--- a/tail.txt\n+++ b/tail.txt\n@@ -1 +1 @@\n-a\n\\ No newline at end of file\n+b\n",
+			check: func(t *testing.T, files []FileDiff) {
+				if len(files) != 2 {
+					t.Fatalf("files = %+v, want two (one with no hunks)", files)
+				}
+				if len(files[0].Hunks) != 0 {
+					t.Errorf("mode-only change has hunks: %+v", files[0].Hunks)
+				}
+				if files[1].Added != 1 || files[1].Removed != 1 {
+					t.Errorf("tail.txt counts = %d/%d", files[1].Added, files[1].Removed)
+				}
+			},
+		},
+		{
+			name: "empty input",
+			diff: "",
+			check: func(t *testing.T, files []FileDiff) {
+				if len(files) != 0 {
+					t.Errorf("files = %+v, want none", files)
+				}
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) { tt.check(t, ParseUnified(tt.diff)) })
+	}
+}

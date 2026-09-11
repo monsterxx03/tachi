@@ -24,10 +24,11 @@ import {
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
 import { FileCard, fileFromSendFileArgs } from './filepreview'
+import { DiffPanel } from './diff'
 import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
-import type { CommandVO, FileChangeVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, FileChangeVO, ReviewFindingsVO, SessionRootsVO, TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ── Ordered turn parts ──────────────────────────────────────────────────────
 // A live turn accumulates the SAME ordered `parts` array a rebuilt transcript
@@ -115,7 +116,7 @@ function togglePartDiff(m: Message, index: number): Message {
 // (the same file edited twice counts once), fragment line counts summed, and whether
 // the turn ran shell commands at all — whose changes never show up in a diff derived
 // from tool arguments.
-function turnDiffStat(parts: Part[] | undefined): { files: number; added: number; removed: number; shell: boolean } {
+function turnDiffStat(parts: Part[] | undefined): { files: number; added: number; removed: number; shell: boolean; paths: string[] } {
   const byPath = new Map<string, { added: number; removed: number }>()
   let shell = false
   for (const p of parts || []) {
@@ -131,7 +132,7 @@ function turnDiffStat(parts: Part[] | undefined): { files: number; added: number
     added += v.added
     removed += v.removed
   }
-  return { files: byPath.size, added, removed, shell }
+  return { files: byPath.size, added, removed, shell, paths: [...byPath.keys()] }
 }
 
 // closeOpenToolParts marks every unfinished call as aborted — used when a turn
@@ -184,12 +185,21 @@ const TurnPart = memo(function TurnPart({ part, workDir, onToggleDiff }: { part:
   return <MarkdownBlock text={part.text || ''} workDir={workDir} />
 })
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, onToggleDiff, onToggleAllDiffs }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, reviewPending, reviewNotice, sessionBusy }: {
   m: Message
   workDir: string
   // Diff interaction: one card at a time, or the whole turn from the footer chip.
   onToggleDiff?: (partIndex: number) => void
   onToggleAllDiffs?: (value: boolean) => void
+  // Opens the working-tree diff panel for this turn's files (git-backed, real line
+  // numbers) — the authoritative view behind the fragment diffs.
+  onOpenDiffPanel?: (paths: string[]) => void
+  // The turn-level review: one click, scoped to exactly this turn's files.
+  onReviewChanges?: (paths: string[]) => void
+  reviewPending?: boolean
+  reviewNotice?: string
+  // The session is mid-turn, so a review has to wait its turn.
+  sessionBusy?: boolean
   // Only passed while the turn is running, so finished messages keep a stable
   // props shape and stay memoized.
   runningLabel?: string
@@ -237,6 +247,21 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
               {diffStat.removed > 0 ? <span className="diff-count is-del">−{diffStat.removed}</span> : null}
               {diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
             </button>
+            {/* The second view: the same changes against git HEAD, with real file
+                line numbers. The chip above stays the light touch (it toggles the
+                inline fragment diffs); this one is the full picture. */}
+            <button type="button" className="diff-chip" title="与 git HEAD 对照的完整 diff（真实文件行号）"
+              onClick={() => onOpenDiffPanel?.(diffStat.paths)}>完整 diff</button>
+            {/* The review entry: ONE per turn, never per edit card — the review's scope
+                is this turn's file set, and findings carry real file lines that a
+                fragment card has no coordinates for. */}
+            <button type="button" className="diff-chip"
+              disabled={reviewPending || sessionBusy}
+              title={reviewPending ? '评审进行中…' : sessionBusy ? '等这一轮跑完' : '让 agent 只评审本轮改动的这些文件（只读；意见会落在 diff 面板里）'}
+              onClick={() => onReviewChanges?.(diffStat.paths)}>
+              {reviewPending ? '评审中…' : '评审本轮改动'}
+            </button>
+            {reviewNotice ? <span className="diff-notice">{reviewNotice}</span> : null}
           </div>
         ) : null}
         {m.summary ? (
@@ -284,6 +309,19 @@ function App() {
   const [rootsOpen, setRootsOpen] = useState(false)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
+  // Working-tree diff panel (P2): opened from a turn's footer, fetched on demand.
+  const [diffPanelOpen, setDiffPanelOpen] = useState(false)
+  const [diffPanelData, setDiffPanelData] = useState<TurnDiffVO | null>(null)
+  const [diffPanelLoading, setDiffPanelLoading] = useState(false)
+  // The panel belongs to the session it was opened for: its diff, its findings, and the
+  // paths behind 预览/打开 all come from there. Switching sessions closes it rather than
+  // leaving another session's changes on screen — and it is also what keeps 发给 agent
+  // (P3) from sending into a session the findings never came from.
+  useEffect(() => { setDiffPanelOpen(false) }, [currentId])
+  // A review run started from a turn's footer. Local to the app (not persisted): it only
+  // exists to show "评审中…" and to keep the button from starting a second run.
+  const [reviewPending, setReviewPending] = useState(false)
+  const [reviewNotice, setReviewNotice] = useState('')
   // The chip's "+N" badge: the chip itself shows the primary path, so this is what
   // says the workspace extends beyond it.
   const extraRootCount = (roots?.additional || []).length
@@ -971,6 +1009,71 @@ function App() {
     }
   }, [workDir, refreshWorkspace])
 
+  // openDiffPanel fetches the turn's files against git HEAD. It is a deliberate
+  // on-demand call: git runs once per open, not once per render.
+  // Review findings come from the backend, which reads them out of the session's newest
+  // review transcript: a review is a one-off run, so its findings live in that file
+  // rather than in the conversation history — and that is also what makes them survive
+  // a restart.
+  const [reviewFindings, setReviewFindings] = useState<ReviewFindingsVO | null>(null)
+
+  // A review is a turn like any other: when the session stops running, it is over.
+  const sessionBusy = state.status !== 'idle' && state.status !== 'error'
+  useEffect(() => {
+    if (!sessionBusy) setReviewPending(false)
+  }, [sessionBusy])
+
+  // startReview runs the review fork scoped to one turn's files. The run is a normal
+  // turn, so its findings stream into the transcript and the diff panel picks them up
+  // from there — no extra plumbing, and they survive a restart like any other message.
+  const startReview = useCallback(async (paths: string[]) => {
+    setReviewNotice('')
+    setReviewPending(true)
+    try {
+      const res = await AgentService.ReviewChanges(currentId, paths)
+      if (res) {
+        setReviewPending(false)
+        setReviewNotice(res)
+      }
+    } catch (e) {
+      setReviewPending(false)
+      setReviewNotice(String(e))
+    }
+  }, [currentId])
+
+  // sendFindings is how the diff panel leaves: the picked findings become one ordinary
+  // user message. It rides the composer's route instead of a channel of its own — while a
+  // turn is running the message queues for the next steer point, because startTurn refuses
+  // a busy session (so sending directly would drop the text in silence). The panel closes
+  // on its way out; the reply then streams into the transcript behind it.
+  const sendFindings = useCallback((text: string) => {
+    setDiffPanelOpen(false)
+    if (isCurrentRunning) {
+      enqueuePending(currentId, text)
+      return
+    }
+    sendText(text)
+  }, [currentId, isCurrentRunning, enqueuePending, sendText])
+
+  const openDiffPanel = useCallback(async (paths: string[]) => {
+    setDiffPanelOpen(true)
+    setDiffPanelData(null)
+    setDiffPanelLoading(true)
+    try {
+      const [diff, findings] = await Promise.all([
+        AgentService.GetTurnDiff(currentId, paths),
+        AgentService.GetReviewFindings(currentId),
+      ])
+      setDiffPanelData(diff || null)
+      setReviewFindings(findings || null)
+    } catch {
+      setDiffPanelData(null)
+      setReviewFindings(null)
+    } finally {
+      setDiffPanelLoading(false)
+    }
+  }, [currentId])
+
   const removeRoot = useCallback(async (id: string, path: string) => {
     setRootsError('')
     setRootsBusy(true)
@@ -1477,12 +1580,22 @@ function App() {
                       onAnswer={answerCurrent}
                       onToggleDiff={(i) => patchMessage(m.id, (msg) => togglePartDiff(msg, i))}
                       onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
+                      onOpenDiffPanel={openDiffPanel}
+                      onReviewChanges={startReview}
+                      reviewPending={reviewPending}
+                      reviewNotice={reviewNotice}
+                      sessionBusy={sessionBusy}
                     />
                   ),
                 )}
               </>
             )}
             </div>
+            {diffPanelOpen ? (
+              <DiffPanel diff={diffPanelData} loading={diffPanelLoading} findings={reviewFindings?.findings || []}
+                findingsNote={reviewFindings?.note} onClose={() => setDiffPanelOpen(false)}
+                onSend={sendFindings} />
+            ) : null}
             {showJump && (
               <button className="jump-latest" onClick={() => scrollToBottom(true)} title="回到最新消息">
                 <span className="jump-ico">↓</span>回到最新

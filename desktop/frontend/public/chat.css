@@ -881,3 +881,207 @@ button.work-dir {
 }
 .diff-chip:hover { background: var(--accent-soft); color: var(--accent-2); }
 .diff-chip-shell { color: var(--text-faint); }
+
+/* ── Working-tree diff panel (P2) ─────────────────────────────────────────── */
+/* The same Hunk model as the card's fragment diff, but with REAL file line
+   numbers — that is the whole difference between the two views, so the line
+   styles are shared and only the number column is added. */
+.viewer-doc.is-diff {
+  max-width: 1100px;
+  padding: 18px 22px;
+}
+.diff-panel-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 12px;
+}
+.diff-panel-title { font-size: 13px; font-weight: 600; color: var(--text); }
+.diff-panel-root {
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-faint);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.diff-panel-note { margin-left: auto; flex-shrink: 0; font-size: 10.5px; color: var(--text-faint); }
+.diff-panel-empty {
+  padding: 10px 0;
+  font-size: 11.5px;
+  color: var(--text-faint);
+}
+.diff-file + .diff-file { margin-top: 16px; }
+.diff-file-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0 5px;
+  border-bottom: 1px solid var(--border);
+  margin-bottom: 5px;
+}
+.diff-badge {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  background: var(--wash-2);
+  color: var(--text-dim);
+}
+.diff-badge.is-new { color: var(--green); }
+.diff-badge.is-gone { color: var(--red); }
+.diff-open {
+  flex-shrink: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 11px;
+  font-family: inherit;
+  padding: 2px 7px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.diff-open:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* Real file coordinates: old and new side by side, tabular so they line up. */
+.diff-ln {
+  flex-shrink: 0;
+  width: 38px;
+  text-align: right;
+  color: var(--text-faint);
+  font-variant-numeric: tabular-nums;
+  user-select: none;
+}
+/* File headers in a diff get the room to breathe that a card header does not. */
+.viewer-doc.is-diff .diff-path { flex: 1; font-size: 12px; color: var(--text); }
+
+/* ── Review findings (P2b) ────────────────────────────────────────────────── */
+/* A finding sits directly under the line it is about: a review comment belongs next
+   to the code it questions, not in a separate list you have to cross-reference. */
+.diff-findings {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 9px;
+  margin-bottom: 12px;
+  border-radius: var(--radius-sm);
+  background: var(--wash);
+  font-size: 11.5px;
+}
+.diff-findings-title { color: var(--text); font-weight: 560; }
+.finding-count {
+  flex-shrink: 0;
+  padding: 0 6px;
+  border-radius: var(--radius-pill);
+  background: var(--panel-solid);
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+}
+.diff-findings-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; }
+.finding {
+  display: flex;
+  gap: 6px;
+  margin: 2px 0 4px 92px;   /* aligned under the code column (two number columns + sign) */
+  padding: 4px 8px;
+  border-left: 2px solid var(--border-2);
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  background: var(--wash);
+  font-family: inherit;
+  font-size: 11.5px;
+  white-space: normal;
+  line-height: 1.5;
+}
+.finding.is-bug { border-left-color: var(--red); }
+.finding.is-warn { border-left-color: var(--amber); }
+.finding.is-info { border-left-color: var(--accent); }
+.finding-sev { flex-shrink: 0; }
+.finding-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.finding-text { color: var(--text); }
+.finding-fix { color: var(--text-dim); }
+.finding-orphan { color: var(--text-faint); font-size: 10.5px; }
+/* A finding whose file is not in the diff has no code column to be indented under. */
+.finding-list .finding { margin-left: 0; }
+
+/* ── Picking findings into a message (P3) ─────────────────────────────────── */
+/* The tick is the contract with the message: only ticked findings are sent, so an
+   unticked row stays readable but visibly steps back. */
+.finding-pick {
+  display: flex;
+  align-items: flex-start;
+  flex-shrink: 0;
+  padding-top: 1px;
+  cursor: pointer;
+}
+.finding-pick input { margin: 0; cursor: pointer; accent-color: var(--accent); }
+.finding.is-unpicked .finding-body { opacity: 0.55; }
+/* The note under a ticked finding. JS sets its height to fit the text; overflow is
+   hidden so the pre-grow frame does not flash a scrollbar. */
+.finding-comment {
+  width: 100%;
+  margin-top: 3px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--panel-solid);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 11.5px;
+  line-height: 1.45;
+  resize: none;
+  overflow: hidden;
+  outline: none;
+}
+.finding-comment:focus { border-color: var(--accent-line); }
+.finding-comment::placeholder { color: var(--text-faint); }
+/* The bar the panel ends on. It is sticky because the decision to send comes AFTER
+   reading the diff — by then the panel's own header is far above. */
+.diff-sendbar {
+  position: sticky;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 9px 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--panel-solid);
+  box-shadow: 0 -8px 16px -12px rgba(0, 0, 0, 0.45);
+  font-size: 11.5px;
+}
+.diff-sendbar-count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.diff-sendbar-count strong { color: var(--text); font-weight: 600; }
+.diff-sendbar-link {
+  border: none;
+  background: transparent;
+  color: var(--accent-2);
+  font-family: inherit;
+  font-size: 11.5px;
+  padding: 2px 5px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.diff-sendbar-link:hover { background: var(--accent-soft); }
+.diff-sendbar-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; }
+.diff-sendbar-go {
+  flex-shrink: 0;
+  border: none;
+  background: linear-gradient(165deg, var(--accent-3), var(--accent-strong));
+  color: var(--on-accent);
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 560;
+  padding: 5px 12px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: inset 0 1px 0 var(--sheen), var(--shadow-accent);
+  transition: filter 0.15s var(--ease);
+}
+.diff-sendbar-go:hover { filter: brightness(1.07); }
+.diff-sendbar-go:disabled { opacity: 0.5; cursor: default; filter: none; }
+
+/* The review entry: disabled while a turn runs (a review IS a turn, so it waits). */
+.diff-chip:disabled { opacity: 0.55; cursor: default; }
+.diff-chip:disabled:hover { background: transparent; color: var(--text-dim); }
+.diff-notice { font-size: 11px; color: var(--text-faint); }

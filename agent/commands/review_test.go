@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 )
@@ -848,5 +849,77 @@ func TestBuildReviewPrompt_UnknownRoleDoesNotPanic(t *testing.T) {
 		if !strings.Contains(p, want) {
 			t.Errorf("unknown role prompt missing fallback naming %q", want)
 		}
+	}
+}
+
+// TestReviewAllowlistExcludesReportFinding: the reviewer's whitelist lists what it may
+// READ. ReportFinding is added to a review fork by ForkConfig.ForReview instead, so it
+// must not appear here — this list is also the parent-registry filter, and the tool is
+// deliberately not in the parent registry.
+func TestReviewAllowlistExcludesReportFinding(t *testing.T) {
+	for _, name := range DefaultReviewAllowedTools() {
+		if name == tools.ToolNameReportFinding {
+			t.Fatal("ReportFinding must not be in DefaultReviewAllowedTools (it is added by ForReview)")
+		}
+	}
+}
+
+// TestAppendReviewScope covers the text the turn-level entry adds.
+func TestAppendReviewScope(t *testing.T) {
+	const base = "Review the current repo changes.\n"
+
+	if got := AppendReviewScope(base, nil); got != base {
+		t.Errorf("an empty scope must leave the prompt untouched, got %q", got)
+	}
+
+	got := AppendReviewScope(base, []string{"src/main.go", "pkg/x.go"})
+	for _, want := range []string{
+		"## Scope (only these files)",
+		"- src/main.go",
+		"- pkg/x.go",
+		"git diff HEAD -- src/main.go pkg/x.go",
+		"git ls-files --others --exclude-standard -- src/main.go pkg/x.go",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("scoped prompt is missing %q\n%s", want, got)
+		}
+	}
+	// The scope is a suffix, not a replacement: the review instructions must survive.
+	if !strings.HasPrefix(got, "Review the current repo changes.") {
+		t.Error("the scoped prompt dropped the original instructions")
+	}
+}
+
+// TestReviewScopeReachesThePrompt is the plumbing check that matters: a scoped run
+// (desktop's "review these changes") sets ReviewOptions.Scope, and the only thing the
+// forked reviewer ever sees is the prompt the orchestrator hands it. If the scope stops
+// at ReviewOptions, the review silently widens back to the whole tree.
+func TestReviewScopeReachesThePrompt(t *testing.T) {
+	opts := ReviewOptions{MaxIterations: 5, AllowedTools: DefaultReviewAllowedTools(), Scope: []string{"src/main.go"}}
+	orch, err := NewReviewOrchestrator(1, []llm.Provider{testProviders("mock")[0]}, t.TempDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	spec, ok := orch.Next()
+	if !ok {
+		t.Fatal("orchestrator produced no round")
+	}
+	if !strings.Contains(spec.Prompt, "## Scope (only these files)") || !strings.Contains(spec.Prompt, "- src/main.go") {
+		t.Errorf("the single-round prompt lost the scope:\n%s", spec.Prompt)
+	}
+
+	// Multi-round: every round keeps it (the adversarial rounds discuss the same files).
+	opts.Scope = []string{"src/main.go"}
+	multi, err := NewReviewOrchestrator(2, testProviders("a", "b"), t.TempDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	round, ok := multi.Next()
+	if !ok {
+		t.Fatal("multi-round orchestrator produced no round")
+	}
+	if !strings.Contains(round.Prompt, "## Scope (only these files)") {
+		t.Errorf("the multi-round prompt lost the scope:\n%s", round.Prompt)
 	}
 }

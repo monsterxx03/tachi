@@ -42,7 +42,7 @@ All output — including the review report saved to disk — **must** be written
 ### Rules
 
 - You may use **ReadFile** to read specific files for deeper context, **Glob** to discover related files, **Grep** to find usages/references across the codebase, and **Bash** for git commands and basic inspection.
-- Do NOT modify any files — this is a read-only review. The **WriteFile** tool may only be used to write the final review report (see below).
+- Do NOT modify any files — this is a read-only review. The **WriteFile** tool may only be used to write the final review report (see below), and **ReportFinding** only records a finding; it changes nothing.
 - Do NOT run build/test commands unless needed to verify correctness (e.g. compilation check).
 - Focus on the **changes** in the diff, not the entire codebase.
 - If the diff is empty (no changes to review), state that clearly.
@@ -50,14 +50,21 @@ All output — including the review report saved to disk — **must** be written
 
 ### Output format
 
-Present your review in a clear structured format. Group findings by file, then by concern. For each finding, state:
-- **File** and relevant line range
-- **Severity**: 🐛 Bug / ⚠️ Warning / 💡 Suggestion
-- **Category**: Correctness / Quality / Efficiency / Security / Maintainability
-- **Explanation** with specific reasoning
-- **Suggestion** (how to fix or improve)
+Record EVERY finding with the **ReportFinding** tool — one call per finding, no exceptions:
 
-End with a brief overall assessment of the change set.
+- path and line (1-based, as they appear in the diff); end_line when it spans several lines
+- severity: bug (wrong, or will break) / warn (risky or questionable) / info (suggestion)
+- category: Correctness / Quality / Efficiency / Security / Maintainability
+- text: what is wrong, with the reasoning that makes it checkable
+- suggestion: how to fix or improve it
+
+A finding that exists only in prose is invisible to the UI: it cannot be attached to a line, so
+the reader has to hunt for it. Report first, summarise afterwards. Several problems in one file
+are several calls — do not merge them into one.
+
+Then write the human-readable report (see below): grouped by file, referring to the findings you
+recorded, ending with a brief overall assessment of the change set. Do not repeat every finding
+verbatim — the report is the narrative, the findings are the index.
 
 ### Save the review report
 
@@ -193,6 +200,32 @@ func sanitizeFileName(s string) string {
 		"?", "-", "*", "-", `"`, "-", "<", "-", ">", "-", "|", "-",
 	)
 	return replacer.Replace(s)
+}
+
+// AppendReviewScope constrains an otherwise repo-wide review prompt to specific files.
+//
+// The desktop's turn-level entry ("评审本轮改动") knows exactly which files the turn
+// touched. Without this the reviewer would run git diff HEAD across the whole tree and
+// report on work that is not under discussion — and pay for the tokens.
+//
+// Returns prompt unchanged when scope is empty (the plain /review path).
+func AppendReviewScope(prompt string, scope []string) string {
+	if len(scope) == 0 {
+		return prompt
+	}
+
+	var b strings.Builder
+	b.WriteString(strings.TrimRight(prompt, "\n"))
+	b.WriteString("\n\n## Scope (only these files)\n\n")
+	b.WriteString("Review ONLY the changes in these files — they are what the latest turn touched:\n\n")
+	for _, p := range scope {
+		b.WriteString("- " + p + "\n")
+	}
+	b.WriteString("\nGet their diff with the Bash tool: `git diff HEAD -- " + strings.Join(scope, " ") + "`, " +
+		"and for files that are brand new `git ls-files --others --exclude-standard -- " +
+		strings.Join(scope, " ") + "`.\n")
+	b.WriteString("If a command happens to show changes to other files, ignore them: they are outside this review.\n")
+	return b.String()
 }
 
 // BuildReviewPrompt constructs the complete user message for one adversarial

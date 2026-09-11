@@ -153,6 +153,10 @@ export function useViewerZoomKeys({ fit, reset, zoomBy }: {
 // composer's own Esc handling. One case it cannot cover: once focus is inside the
 // previewed iframe (HTML, PDF), its keys belong to the iframe's document and never
 // reach this handler — the ✕ is always there for that.
+//
+// Typing is not dismissing: while a field INSIDE the overlay has focus (the diff
+// panel's finding notes), Esc first leaves the field and only the next Esc closes.
+// Without that, the shell would throw away what was being written.
 export function ViewerOverlay({ label, stageRef, stageClass, stageProps, controls, onClose, children }: {
   label: string
   stageRef?: RefObject<HTMLDivElement>
@@ -169,6 +173,14 @@ export function ViewerOverlay({ label, stageRef, stageClass, stageProps, control
       if (e.key !== 'Escape') return
       e.preventDefault()
       e.stopPropagation()
+      // A field inside the overlay owns the first Esc: blur it and let the next one
+      // close. Checked on the focused element rather than on the viewer, so it holds for
+      // any field a viewer grows later.
+      const el = document.activeElement
+      if (el instanceof HTMLElement && (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) {
+        el.blur()
+        return
+      }
       onClose()
     }
     // Window-level (capture) so the gesture is tracked wherever the pointer goes,

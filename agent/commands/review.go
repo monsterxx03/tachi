@@ -129,6 +129,11 @@ type ReviewOptions struct {
 	// ThinkingLevel pins the thinking effort (/thinking level values; "" =
 	// follow the current session).
 	ThinkingLevel string
+	// Scope limits the review to these paths (the files a turn changed). Empty =
+	// review the whole working tree, which is what the /review command does.
+	// Frontends set it for the turn-level "review these changes" entry; it is not
+	// configurable.
+	Scope []string
 }
 
 // ResolveReviewOptions applies the config defaults for /review parameters:
@@ -403,11 +408,13 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 			Round:    1,
 			Provider: provider,
 			OutPath:  outPath,
-			Prompt:   ReviewUserPrompt(outPath),
+			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath), o.opts.Scope),
 			Kind:     llm.UsageKindReview,
 		}, true
 	}
 	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports)
+	// Every round keeps the scope: the adversarial rounds discuss the same changes.
+	prompt = AppendReviewScope(prompt, o.opts.Scope)
 	return RoundSpec{
 		Round:    round,
 		Role:     role,

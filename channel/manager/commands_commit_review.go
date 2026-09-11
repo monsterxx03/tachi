@@ -205,6 +205,7 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 			Provider:      spec.Provider,
 			MaxIterations: ropts.MaxIterations,
 			AllowedTools:  ropts.AllowedTools,
+			ForReview:     true,
 			Logger:        aiAgent.Logger(),
 		})
 		defer forked.Close()

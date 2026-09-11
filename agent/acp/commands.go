@@ -322,6 +322,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 			Provider:      spec.Provider,
 			MaxIterations: ropts.MaxIterations,
 			AllowedTools:  ropts.AllowedTools,
+			ForReview:     true,
 			Logger:        aiAgent.Logger(),
 		})
 		defer forked.Close()
