@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { DiffBlock } from './diff'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
 import type { Theme } from './theme'
 import type { AtMatch, Part } from './types'
-import type { CommandVO, ContextInfoVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, ContextInfoVO, FileChangeVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
 // ring. Purely decorative — ContextMeter (below) owns the button semantics and
@@ -278,23 +279,57 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
 // defaultExpanded opens the card with its output already showing: set for tool
 // calls the user requested directly (/sh), where the output IS the answer. Only
 // the initial state — the header still folds it away like any other card.
-function ToolCard({ name, title, args, summary, ok, durationMs, defaultExpanded }: { name: string; title?: string; args?: string; summary: string; ok: boolean; durationMs?: number; defaultExpanded?: boolean }) {
+//
+// A card that carries a change is CONTROLLED: its open state is Part.diffOpen, owned
+// by App, because the turn footer's chip opens/closes every diff of the turn at once.
+// Cards without a change keep the local state they always had.
+function ToolCard({ name, title, args, summary, ok, done, change, diffOpen, durationMs, defaultExpanded, onToggleDiff }: {
+  name: string
+  title?: string
+  args?: string
+  summary: string
+  ok: boolean
+  // done gates the diff: a call that is still running (or failed) changed nothing,
+  // so drawing its diff would claim something that has not happened.
+  done?: boolean
+  change?: FileChangeVO | null
+  diffOpen?: boolean
+  durationMs?: number
+  defaultExpanded?: boolean
+  onToggleDiff?: () => void
+}) {
   const [expanded, setExpanded] = useState(!!defaultExpanded)
+  // The diff is what the card is FOR once a call has changed a file: it becomes the
+  // body (with the tool's own output kept below it as the details).
+  const hasDiff = !!(change && done && ok)
+  const open = hasDiff ? !!diffOpen : expanded
+  const toggle = hasDiff ? onToggleDiff : () => setExpanded((e) => !e)
   const long = ((args?.length || 0) + summary.length) > 120
   const prettyArgs = (() => { if (!args) return ''; try { return JSON.stringify(JSON.parse(args), null, 2) } catch { return args } })()
   return (
     <div className="tool-card">
-      <div className="tool-head" role="button" tabIndex={0} aria-expanded={expanded}
-        onClick={() => setExpanded((e) => !e)} onKeyDown={actOnKey(() => setExpanded((e) => !e))}>
+      <div className="tool-head" role="button" tabIndex={0} aria-expanded={open}
+        onClick={toggle} onKeyDown={actOnKey(() => toggle?.())}>
         <span className="tool-ico">⚙</span><span className="tool-name">{name}</span>
         {title ? <span className="tool-title">{title}</span> : null}
+        {/* The per-card entry into the diff: the same numbers the footer chip sums,
+            so the light touch and the full view agree. */}
+        {hasDiff ? (
+          <span className="tool-diffstat">
+            {change!.added > 0 ? <span className="diff-count is-add">+{change!.added}</span> : null}
+            {change!.removed > 0 ? <span className="diff-count is-del">−{change!.removed}</span> : null}
+          </span>
+        ) : null}
         <span className={`tool-status ${ok ? 'ok' : 'err'}`}>{ok ? '✓' : '✗'}</span>
         {durationMs ? <span className="tool-dur" title="耗时">{fmtDur(durationMs)}</span> : null}
         {summary ? <button className="tool-copy" title="复制结果" onClick={(e) => { e.stopPropagation(); copyText(summary) }}><CopyIcon /></button> : null}
-        {long ? <span className="tool-toggle">{expanded ? '收起' : '展开'}</span> : null}
+        {hasDiff ? <span className="tool-toggle">{open ? '收起' : '查看'}</span>
+          : long ? <span className="tool-toggle">{expanded ? '收起' : '展开'}</span> : null}
       </div>
-      {expanded && args ? <div className="tool-args-wrap"><div className="tool-args-bar"><span className="tool-args-label">参数</span><button className="tool-copy" title="复制参数" onClick={(e) => { e.stopPropagation(); copyText(args || '') }}><CopyIcon /></button></div><pre className="tool-args">{prettyArgs}</pre></div> : null}
-      {expanded && summary ? <div className="tool-summary">{summary}</div> : null}
+      {hasDiff && open ? <DiffBlock change={change!} /> : null}
+      {hasDiff && open && summary ? <div className="tool-summary">{summary}</div> : null}
+      {!hasDiff && expanded && args ? <div className="tool-args-wrap"><div className="tool-args-bar"><span className="tool-args-label">参数</span><button className="tool-copy" title="复制参数" onClick={(e) => { e.stopPropagation(); copyText(args || '') }}><CopyIcon /></button></div><pre className="tool-args">{prettyArgs}</pre></div> : null}
+      {!hasDiff && expanded && summary ? <div className="tool-summary">{summary}</div> : null}
     </div>
   )
 }

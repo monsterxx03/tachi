@@ -89,7 +89,7 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
       if (sm.content) cur.parts.push({ type: 'text', text: sm.content })
       cur.ts = cur.ts || sm.timestamp
     } else if (sm.role === 'tool_call') {
-      cur.parts.push({ type: 'tool', name: sm.toolName, title: sm.title, args: sm.args, summary: '执行中…', ok: true, done: false, toolCallId: sm.toolCallId })
+      cur.parts.push({ type: 'tool', name: sm.toolName, title: sm.title, args: sm.args, summary: '执行中…', ok: true, done: false, toolCallId: sm.toolCallId, change: sm.change })
     } else if (sm.role === 'tool_result') {
       const t = [...cur.parts].reverse().find((p) => p.type === 'tool' && (p.toolCallId === sm.toolCallId || !p.done))
       if (t) { t.summary = sm.toolResult; t.ok = !sm.isError; t.done = true }

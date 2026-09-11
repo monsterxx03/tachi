@@ -2,20 +2,12 @@ package acp
 
 import (
 	"context"
-	"encoding/json"
 
 	acp "github.com/coder/acp-go-sdk"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/tools"
 )
-
-// editArgs mirrors the EditTool argument struct for parsing diff content from args JSON.
-type editArgs struct {
-	FilePath   string `json:"path"`
-	OldString  string `json:"old_string"`
-	NewString  string `json:"new_string"`
-	ReplaceAll bool   `json:"replace_all"`
-}
 
 // buildPermissionHandler creates a PermissionHandler that delegates to the ACP
 // client's RequestPermission flow. It returns whether the user approved the action.
@@ -24,15 +16,17 @@ type editArgs struct {
 func buildPermissionHandler(conn *acp.AgentSideConnection, sessionID string, aiAgent *agent.AIAgent) agent.PermissionHandler {
 	return func(ctx context.Context, toolName, toolID, diff, args string) (bool, error) {
 
-		// Build content to show in the permission dialog
+		// Build content to show in the permission dialog.
+		//
+		// The structured form comes from the SAME derivation the tool-call stream uses
+		// (tools.FileChangeForTool → fileChangeContent): two independent parsers of the
+		// same arguments would drift, and this preview is what clients like
+		// agentic.nvim render in the actual file buffer (split view or inline virtual
+		// text) rather than as plain text in chat.
 		var content []acp.ToolCallContent
 		if diff != "" {
-			// Try to send a structured diff (oldText/newText) so clients like
-			// agentic.nvim can show proper diff previews (split view or inline
-			// virtual text) in the actual file buffer, not just plain text in chat.
-			var ea editArgs
-			if err := json.Unmarshal([]byte(args), &ea); err == nil && ea.FilePath != "" {
-				content = append(content, acp.ToolDiffContent(ea.FilePath, ea.NewString, ea.OldString))
+			if fc, ok := tools.FileChangeForTool(toolName, args); ok {
+				content = append(content, *fileChangeContent(fc))
 			} else {
 				// Fallback: send diff as plain text
 				content = append(content, acp.ToolContent(acp.TextBlock(diff)))

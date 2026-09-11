@@ -1,4 +1,4 @@
-import type { SessionInfo, SessionMessage } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { FileChangeVO, SessionInfo, SessionMessage } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 export interface SessionItem extends SessionInfo { active?: boolean }
 
@@ -36,6 +36,13 @@ export interface Part {
   durationMs?: number
   toolCallId?: string
   file?: AttachmentInfo
+  // change: the file change this tool call set out to make (derived in Go from the
+  // call's args, never persisted). Only rendered once the part is done and ok — a
+  // running or failed call changed nothing.
+  change?: FileChangeVO | null
+  // diffOpen: whether the card shows its diff. Owned here (not inside the card)
+  // because the turn footer's chip opens/closes every diff of the turn at once.
+  diffOpen?: boolean
   // expand: the card opens with its output showing. Set for tool calls the USER
   // asked for directly (the /sh slash command) — that output is the answer, so
   // folding it away would hide what was requested.

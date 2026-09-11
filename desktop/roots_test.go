@@ -5,9 +5,11 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // newRootsApp returns an app with a session manager bound to a session whose
@@ -482,5 +484,68 @@ func TestRememberWorkspaceSurvivesThemeChange(t *testing.T) {
 	rememberWorkspace(t.TempDir())
 	if got := loadUIState(); got.Theme != themeDark {
 		t.Errorf("after remembering a workspace: theme = %q, want it kept", got.Theme)
+	}
+}
+
+// TestChangeVO pins the desktop derivation: it must agree with the ACP derivation
+// (same source function) and carry render-ready hunks.
+func TestChangeVO(t *testing.T) {
+	t.Run("edit", func(t *testing.T) {
+		vo := changeVO("EditFile", `{"path":"/a.go","old_string":"keep\nold\n","new_string":"keep\nnew\n"}`)
+		if vo == nil {
+			t.Fatal("expected a change")
+		}
+		if vo.Path != "/a.go" || vo.Added != 1 || vo.Removed != 1 {
+			t.Errorf("vo = %+v, want /a.go with 1 added and 1 removed", vo)
+		}
+		if len(vo.Hunks) != 3 || vo.Hunks[0].Kind != "context" || vo.Hunks[1].Kind != "del" || vo.Hunks[2].Kind != "add" {
+			t.Errorf("hunks = %+v, want context/del/add", vo.Hunks)
+		}
+	})
+
+	t.Run("replace_all is flagged", func(t *testing.T) {
+		vo := changeVO("EditFile", `{"path":"/a.go","old_string":"x","new_string":"y","replace_all":true}`)
+		if vo == nil || !vo.ReplaceAll {
+			t.Errorf("vo = %+v, want ReplaceAll set", vo)
+		}
+	})
+
+	t.Run("write is a create", func(t *testing.T) {
+		vo := changeVO("WriteFile", `{"path":"/new.go","content":"a\nb\n"}`)
+		if vo == nil || vo.Added != 2 || vo.Removed != 0 {
+			t.Errorf("vo = %+v, want 2 added / 0 removed", vo)
+		}
+	})
+
+	t.Run("non-file tools have no change", func(t *testing.T) {
+		for _, args := range []string{`{"path":"/a.go"}`, `{"command":"ls"}`, "", "not json"} {
+			if vo := changeVO("ReadFile", args); vo != nil {
+				t.Errorf("changeVO(ReadFile, %q) = %+v, want nil", args, vo)
+			}
+		}
+	})
+}
+
+// TestBuildSessionMessagesCarriesChange: the historical path derives the diff from the
+// recorded args, so an old session shows diffs without any migration.
+func TestBuildSessionMessagesCarriesChange(t *testing.T) {
+	raw := []session.Message{
+		{Type: session.MessageTypeUser, Content: "edit it", Timestamp: time.Now()},
+		{Type: session.MessageTypeToolCall, Name: "EditFile", ToolCallID: "c1",
+			Args: map[string]any{"path": "/a.go", "old_string": "old\n", "new_string": "new\n"},
+			Timestamp: time.Now()},
+		{Type: session.MessageTypeToolCall, Name: "ReadFile", ToolCallID: "c2",
+			Args: map[string]any{"path": "/a.go"}, Timestamp: time.Now()},
+	}
+
+	msgs := buildSessionMessages(raw)
+	if len(msgs) != 3 {
+		t.Fatalf("got %d messages, want 3", len(msgs))
+	}
+	if msgs[1].Change == nil || msgs[1].Change.Path != "/a.go" {
+		t.Errorf("the edit's change = %+v, want it derived from the recorded args", msgs[1].Change)
+	}
+	if msgs[2].Change != nil {
+		t.Errorf("a read has no change, got %+v", msgs[2].Change)
 	}
 }

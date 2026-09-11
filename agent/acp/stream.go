@@ -459,48 +459,37 @@ func extractFileLocation(argsJSON string) (path string, line *int) {
 	return args.Path, nil
 }
 
-// buildDiffFromArgs attempts to build a diff content block from tool call arguments.
-// For EditFile, it extracts path, old_string, new_string.
-// For WriteFile (new file), it extracts path and content (new) with no old text.
-// Returns nil if args are missing or incomplete.
+// buildDiffFromArgs builds the structured diff block for a tool call from its raw
+// arguments, or nil when the call does not change a file's text.
+//
+// The derivation itself lives in tools.FileChangeForTool (shared with the desktop
+// frontend); this function only turns the neutral result into an ACP SDK type.
 func buildDiffFromArgs(toolName string, argsJSON string) *acp.ToolCallContent {
-	if argsJSON == "" {
+	fc, ok := tools.FileChangeForTool(toolName, argsJSON)
+	if !ok {
 		return nil
 	}
+	return fileChangeContent(fc)
+}
 
-	switch toolName {
-	case tools.ToolNameEdit:
-		var args struct {
-			Path      string `json:"path"`
-			OldString string `json:"old_string"`
-			NewString string `json:"new_string"`
-		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return nil
-		}
-		if args.Path == "" || (args.OldString == "" && args.NewString == "") {
-			return nil
-		}
-		c := acp.ToolDiffContent(args.Path, args.NewString, args.OldString)
-		return &c
-
-	case tools.ToolNameWrite:
-		var args struct {
-			Path    string `json:"path"`
-			Content string `json:"content"`
-		}
-		if err := json.Unmarshal([]byte(argsJSON), &args); err != nil {
-			return nil
-		}
-		if args.Path == "" || args.Content == "" {
-			return nil
-		}
-		// WriteFile creates/replaces a file — show new content without old text.
-		c := acp.ToolDiffContent(args.Path, args.Content)
-		return &c
+// fileChangeContent is the ONE place a neutral FileChange becomes an ACP SDK type.
+// Both producers route through it — the tool-call stream above and the permission
+// preview (permission.go) — so the two cannot render the same arguments differently.
+//
+// The old text is passed ONLY when there is one. ToolDiffContent takes it as a
+// variadic, and the SDK's own contract says a nil OldText means "new file"
+// (types_gen.go: "The original content (None for new files)"). Passing an empty
+// string instead would put `"oldText": ""` on the wire, so a create would start
+// reading as "the file used to be empty" — a wire-visible behavior change for Zed
+// and agentic.nvim.
+func fileChangeContent(fc tools.FileChange) *acp.ToolCallContent {
+	var c acp.ToolCallContent
+	if fc.OldText == "" {
+		c = acp.ToolDiffContent(fc.Path, fc.NewText)
+	} else {
+		c = acp.ToolDiffContent(fc.Path, fc.NewText, fc.OldText)
 	}
-
-	return nil
+	return &c
 }
 
 // buildPlanUpdateFromArgs parses SavePlan tool args and builds an ACP plan

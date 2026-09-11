@@ -27,7 +27,7 @@ import { FileCard, fileFromSendFileArgs } from './filepreview'
 import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
-import type { CommandVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, FileChangeVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ── Ordered turn parts ──────────────────────────────────────────────────────
 // A live turn accumulates the SAME ordered `parts` array a rebuilt transcript
@@ -76,18 +76,62 @@ function finishNotice(m: Message, label: string, summary?: string): Message {
   return { ...m, parts: [...parts, { type: 'notice', label, summary, done: true }] }
 }
 
-// updateToolPart fills in the human-readable title/args for the newest
-// in-flight call (pushed by the separate agent:tool event).
-function updateToolPart(m: Message, name: string, title: string, args: string): Message {
+// updateToolPart fills in the human-readable title/args (and the derived change) for
+// the newest in-flight call, pushed by the separate agent:tool event. That event
+// fires twice — once when the model starts the call (args still empty) and once with
+// the complete arguments right before execution — so the second patch is what
+// actually brings the diff in.
+function updateToolPart(m: Message, name: string, title: string, args: string, change?: FileChangeVO | null): Message {
   const parts = [...(m.parts || [])]
   for (let i = parts.length - 1; i >= 0; i--) {
     const p = parts[i]
     if (p.type === 'tool' && !p.done && p.name === name) {
-      parts[i] = { ...p, title, args }
+      parts[i] = { ...p, title, args, change: change ?? p.change }
       break
     }
   }
   return { ...m, parts }
+}
+
+// setPartDiffs sets diffOpen on every diff-carrying part of ONE message: the turn
+// footer's chip opens/closes the whole turn at once. value undefined = toggle each
+// part on its own current state... which is why the chip passes an explicit value.
+function setPartDiffs(m: Message, value: boolean): Message {
+  return {
+    ...m,
+    parts: (m.parts || []).map((p) => (p.type === 'tool' && p.change ? { ...p, diffOpen: value } : p)),
+  }
+}
+
+// togglePartDiff flips one card's diff (the per-card entry).
+function togglePartDiff(m: Message, index: number): Message {
+  return {
+    ...m,
+    parts: (m.parts || []).map((p, i) => (i === index && p.type === 'tool' ? { ...p, diffOpen: !p.diffOpen } : p)),
+  }
+}
+
+// turnDiffStat aggregates a turn's changes for the footer chip: files deduped by path
+// (the same file edited twice counts once), fragment line counts summed, and whether
+// the turn ran shell commands at all — whose changes never show up in a diff derived
+// from tool arguments.
+function turnDiffStat(parts: Part[] | undefined): { files: number; added: number; removed: number; shell: boolean } {
+  const byPath = new Map<string, { added: number; removed: number }>()
+  let shell = false
+  for (const p of parts || []) {
+    if (p.type !== 'tool') continue
+    if (p.name === 'Bash') shell = true
+    if (!p.change || !p.done || !p.ok) continue
+    const cur = byPath.get(p.change.path) || { added: 0, removed: 0 }
+    byPath.set(p.change.path, { added: cur.added + (p.change.added || 0), removed: cur.removed + (p.change.removed || 0) })
+  }
+  let added = 0
+  let removed = 0
+  for (const v of byPath.values()) {
+    added += v.added
+    removed += v.removed
+  }
+  return { files: byPath.size, added, removed, shell }
 }
 
 // closeOpenToolParts marks every unfinished call as aborted — used when a turn
@@ -122,7 +166,7 @@ function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?: numbe
 // FileCard (see markdown.tsx / filepreview.tsx): this file only decides which
 // piece a turn part turns into.
 
-const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir: string }) {
+const TurnPart = memo(function TurnPart({ part, workDir, onToggleDiff }: { part: Part; workDir: string; onToggleDiff?: () => void }) {
   if (part.type === 'thinking') return <ThinkingPart text={part.text || ''} />
   if (part.type === 'notice') return <NoticePart part={part} />
   if (part.type === 'tool') {
@@ -133,14 +177,19 @@ const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir
       const file = fileFromSendFileArgs(part.args || '')
       if (file) return <FileCard file={file} workDir={workDir} />
     }
-    return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok} durationMs={part.durationMs} defaultExpanded={part.expand} />
+    return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok}
+      done={part.done} change={part.change} diffOpen={part.diffOpen} durationMs={part.durationMs}
+      defaultExpanded={part.expand} onToggleDiff={onToggleDiff} />
   }
   return <MarkdownBlock text={part.text || ''} workDir={workDir} />
 })
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, onToggleDiff, onToggleAllDiffs }: {
   m: Message
   workDir: string
+  // Diff interaction: one card at a time, or the whole turn from the footer chip.
+  onToggleDiff?: (partIndex: number) => void
+  onToggleAllDiffs?: (value: boolean) => void
   // Only passed while the turn is running, so finished messages keep a stable
   // props shape and stay memoized.
   runningLabel?: string
@@ -152,13 +201,18 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // Render the form in place of the pending AskUserQuestion card. Any other
   // unfinished card of the same tool is left alone; the loop only ever asks one
   // question set at a time, so the first match is the one waiting.
+  // The turn's changes: what the footer chip summarizes and what "expand all" acts on.
+  const diffStat = turnDiffStat(m.parts)
+  const diffParts = (m.parts || []).filter((p) => p.type === 'tool' && p.change && p.done && p.ok)
+  const allDiffsOpen = diffParts.length > 0 && diffParts.every((p) => p.diffOpen)
+
   let askShown = false
   const parts = (m.parts || []).map((p, i) => {
     if (ask && onAnswer && !askShown && p.type === 'tool' && !p.done && p.name === 'AskUserQuestion') {
       askShown = true
       return <AskForm key={i} questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
     }
-    return <TurnPart key={i} part={p} workDir={workDir} />
+    return <TurnPart key={i} part={p} workDir={workDir} onToggleDiff={onToggleDiff ? () => onToggleDiff(i) : undefined} />
   })
   return (
     <div className="msg msg-assistant">
@@ -173,6 +227,18 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
         {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{runningLabel ?? '正在执行…'}</span> : null}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
         {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
+        {diffStat.files > 0 ? (
+          <div className="msg-footer">
+            <button type="button" className="diff-chip"
+              title={`本次工具调用在片段内新增/删除的行数（不是 git numstat）${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在 diff 里' : ''}`}
+              onClick={() => onToggleAllDiffs?.(!allDiffsOpen)}>
+              🧾 {diffStat.files} files
+              {diffStat.added > 0 ? <span className="diff-count is-add">+{diffStat.added}</span> : null}
+              {diffStat.removed > 0 ? <span className="diff-count is-del">−{diffStat.removed}</span> : null}
+              {diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
+            </button>
+          </div>
+        ) : null}
         {m.summary ? (
           <div className="msg-footer">
             {m.summary.durationMs > 0 ? <span>⏱ {fmtDur(m.summary.durationMs)}</span> : null}
@@ -409,6 +475,17 @@ function App() {
   // answerCurrent is the stable callback the transcript form uses for the
   // session on screen.
   const answerCurrent = useCallback((a: Record<string, string> | null) => answerQuestion(currentId, a), [currentId, answerQuestion])
+
+  // patchMessage applies a transform to ONE message of the current session (by id):
+  // the shape a transcript-local interaction needs, so the message map stays the
+  // single source of truth for what is expanded.
+  const patchMessage = useCallback((msgId: string, fn: (m: Message) => Message) => {
+    setMsgCache((prev) => {
+      const list = prev[currentId]
+      if (!list) return prev
+      return { ...prev, [currentId]: list.map((m) => (m.id === msgId ? fn(m) : m)) }
+    })
+  }, [currentId])
 
   // Note: pending questions are NOT cleared on session switch — the agent is
   // still parked, so switching back must show the same form. They are cleared
@@ -1146,12 +1223,12 @@ function App() {
 
   useEffect(() => {
     const off = Events.On('agent:tool', (event) => {
-      const t = event.data as { name: string; title: string; args: string }
+      const t = event.data as { name: string; title: string; args: string; change?: FileChangeVO | null }
       setMsgCache((prev) => {
         const list = prev[currentId] || []
         const target = [...list].reverse().find((m) => m.role === 'assistant' && m.running)
         if (!target) return prev
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? updateToolPart(m, t.name, t.title, t.args) : m)) }
+        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? updateToolPart(m, t.name, t.title, t.args, t.change) : m)) }
       })
     })
     return () => off?.()
@@ -1398,6 +1475,8 @@ function App() {
                       runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
                       ask={m.running ? (asks[currentId]?.questions || null) : null}
                       onAnswer={answerCurrent}
+                      onToggleDiff={(i) => patchMessage(m.id, (msg) => togglePartDiff(msg, i))}
+                      onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
                     />
                   ),
                 )}

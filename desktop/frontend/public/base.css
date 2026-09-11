@@ -97,6 +97,10 @@
   --red-strong: #bf2831;
   --red-line: rgba(191, 40, 49, 0.45);
   --red-wash: rgba(191, 40, 49, 0.11);
+  /* Diff rows: the whole line is washed, so these sit a step lighter than the
+     -wash tokens used for chips and notices. */
+  --diff-add-wash: rgba(13, 111, 69, 0.09);
+  --diff-del-wash: rgba(191, 40, 49, 0.08);
   --amber: #8a4b08;
 
   /* Inline code in an assistant reply. */
@@ -234,6 +238,8 @@
   --red-strong: #b7283a;
   --red-line: rgba(255, 122, 130, 0.45);
   --red-wash: rgba(255, 122, 130, 0.14);
+  --diff-add-wash: rgba(70, 201, 138, 0.11);
+  --diff-del-wash: rgba(255, 122, 130, 0.11);
   --amber: #e2a355;
 
   --code-ink: #b9c6ff;

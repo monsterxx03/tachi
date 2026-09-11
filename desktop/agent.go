@@ -104,6 +104,10 @@ type SessionMessage struct {
 	Title      string       `json:"title,omitempty"` // human-readable args summary
 	Args       string       `json:"args,omitempty"`  // raw JSON args
 	IsError    bool         `json:"isError,omitempty"`
+	// Change is the file change this tool call set out to make (nil for tools that
+	// change no text). It is DERIVED from Args, never persisted, so reloading any old
+	// session shows the same diffs with no migration.
+	Change *FileChangeVO `json:"change,omitempty"`
 }
 
 // MCPToolVO describes one tool under an MCP server for the status-bar panel.
@@ -517,6 +521,7 @@ func buildSessionMessages(raw []session.Message) []SessionMessage {
 			out = append(out, SessionMessage{
 				Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
 				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON),
+				Change:    changeVO(rm.Name, argsJSON),
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			})
 		case session.MessageTypeToolResult:
@@ -1431,9 +1436,10 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		// and full args.
 		if d.app != nil && isCurrent {
 			d.app.Event.Emit("agent:tool", map[string]any{
-				"name":  ev.ToolName,
-				"title": tools.ToolArgsSummary(ev.ToolName, ev.ToolArgs),
-				"args":  ev.ToolArgs,
+				"name":   ev.ToolName,
+				"title":  tools.ToolArgsSummary(ev.ToolName, ev.ToolArgs),
+				"args":   ev.ToolArgs,
+				"change": changeVO(ev.ToolName, ev.ToolArgs),
 			})
 		}
 	case agent.AgentEventToolResult:
