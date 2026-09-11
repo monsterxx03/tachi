@@ -16,7 +16,6 @@ import (
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
-	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
 )
 
@@ -184,10 +183,7 @@ func (t *ReadTool) ExecuteContext(ctx context.Context, args string) (string, err
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	filePath := argsMap.Path
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(wdctx.Dir(ctx), filePath)
-	}
+	filePath := ResolvePath(ctx, argsMap.Path)
 
 	if isBlockedDevicePath(filePath) {
 		return "", fmt.Errorf("cannot read from blocked device path: %s", argsMap.Path)

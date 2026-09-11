@@ -55,6 +55,10 @@ type uiState struct {
 	// Theme is the user's explicit choice; "" means "follow the system", which
 	// is also what an absent file means.
 	Theme string `json:"theme,omitempty"`
+	// LastWorkspace is the directory the user last picked as a session's primary
+	// root. A new session starts there (see defaultWorkspaceFor) instead of at the
+	// home directory, which is far too wide to be a workspace.
+	LastWorkspace string `json:"lastWorkspace,omitempty"`
 }
 
 func uiStatePath() string { return filepath.Join(config.BaseDir(), uiStateFile) }
@@ -73,7 +77,9 @@ func loadUIState() uiState {
 		return uiState{}
 	}
 	if !validTheme(st.Theme) {
-		return uiState{}
+		// Drop the bad field on its own rather than the whole struct: the file holds
+		// more than one preference, and one stale value must not discard the rest.
+		st.Theme = ""
 	}
 	return st
 }
@@ -156,11 +162,28 @@ func (c *themeController) setFromFrontend(choice string) {
 	c.mu.Lock()
 	c.manual = choice
 	c.mu.Unlock()
-	saveUIState(uiState{Theme: choice})
+	persistTheme(choice)
 	if choice == "" {
 		return
 	}
 	c.apply(choice, false) // the choice outranks systemDark
+}
+
+// persistTheme records the theme choice in desktop_ui.json without touching the
+// window — split out from setFromFrontend so the FILE contract is testable on its
+// own (the controller's other half reaches into the native window, which blocks
+// forever in a test binary with no app event loop).
+//
+// Read-modify-write, not a fresh struct: desktop_ui.json holds more than the theme
+// (the remembered workspace lives there too), so each writer has to preserve the
+// other's fields.
+func persistTheme(choice string) {
+	st := loadUIState()
+	if st.Theme == choice {
+		return
+	}
+	st.Theme = choice
+	saveUIState(st)
 }
 
 // onSystemChange repaints the frame when the OS appearance changes, unless a

@@ -95,6 +95,13 @@ export const AT_SEARCH_DEBOUNCE_MS = 120
 export interface AtMatch {
   path: string
   isDir: boolean
+  // ref is the reference the backend wants inserted ('@' included): a match under
+  // the primary root is relative, one under an additional root is absolute — a
+  // relative path there would resolve against the primary and point elsewhere.
+  ref?: string
+  // root labels the additional root a match came from ("" = primary), so two roots
+  // holding the same path are tellable apart in the list.
+  root?: string
 }
 
 // AtPickerState is the composer's @-file picker: the reference being typed

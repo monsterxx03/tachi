@@ -7,8 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-
-	"github.com/monsterxx03/tachi/agent/wdctx"
 )
 
 func checkRipgrep() error {
@@ -18,14 +16,15 @@ func checkRipgrep() error {
 	return nil
 }
 
+// resolveSearchPath turns the search path argument into an absolute path: the
+// shared resolution rule (ResolvePath) plus the two things a search needs — an
+// empty path means the working directory itself, and the result must be absolute
+// for ripgrep.
 func resolveSearchPath(ctx context.Context, path string) (string, error) {
 	if path == "" {
 		path = "."
 	}
-	if !filepath.IsAbs(path) {
-		path = filepath.Join(wdctx.Dir(ctx), path)
-	}
-	abs, err := filepath.Abs(path)
+	abs, err := filepath.Abs(ResolvePath(ctx, path))
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve path: %w", err)
 	}

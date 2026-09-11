@@ -8,7 +8,6 @@ import (
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
-	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 )
 
@@ -46,10 +45,7 @@ func (t *WriteTool) ExecuteContext(ctx context.Context, args string) (string, er
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	filePath := argsMap.Path
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(wdctx.Dir(ctx), filePath)
-	}
+	filePath := ResolvePath(ctx, argsMap.Path)
 
 	// Enforce path policy (used by Dream sub-agent sandbox).
 	if policy := GetPathPolicy(ctx); policy != nil {

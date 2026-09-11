@@ -65,18 +65,20 @@ func TestSystemPromptForFollowsSessionWorkingDir(t *testing.T) {
 	}
 }
 
-// TestSystemPromptForWithoutSessionUsesProcessCwd covers sessions that never
-// picked a folder: the advertised directory is the process cwd — the same root
-// the tools (wdctx) and @-file references fall back to.
-func TestSystemPromptForWithoutSessionUsesProcessCwd(t *testing.T) {
-	dir := t.TempDir()
-	t.Chdir(dir)
-
+// TestSystemPromptForWithoutWorkspace covers sessions that never picked a folder:
+// the prompt SAYS SO instead of substituting the process cwd. For a
+// Finder-launched GUI app that cwd is "/", so the substitution advertised the
+// filesystem root as the workspace and invited absolute paths there — the original
+// "Working directory: /" bug. The tools still fall back to the process cwd (wdctx),
+// which is why the composer asks the user to pick a directory rather than leaving
+// the session in this state.
+func TestSystemPromptForWithoutWorkspace(t *testing.T) {
 	d := newTestApp()
 	d.cfg = &config.Config{Language: "en"}
 
-	if got, want := promptWorkingDir(d.systemPromptFor("unknown")), "- Working directory: "+dir; got != want {
-		t.Errorf("expected the process cwd fallback %q, got %q", want, got)
+	want := "- Working directory: (not set yet — ask the user which directory to work in before using relative paths)"
+	if got := promptWorkingDir(d.systemPromptFor("unknown")); got != want {
+		t.Errorf("expected an explicit unset line\n got %q\nwant %q", got, want)
 	}
 
 	// No config (bootstrap failed) → no prompt, like the simulated turn path.

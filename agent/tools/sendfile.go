@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
@@ -69,11 +68,8 @@ func (t *SendFileTool) ExecuteContext(ctx context.Context, args string) (string,
 		return "", fmt.Errorf("path is required")
 	}
 
-	// Resolve relative path via working directory context.
-	filePath := p.Path
-	if !filepath.IsAbs(filePath) {
-		filePath = filepath.Join(wdctx.Dir(ctx), filePath)
-	}
+	// Resolve relative path via the shared rule (see ResolvePath).
+	filePath := ResolvePath(ctx, p.Path)
 
 	// Stat the file to check it exists and get size.
 	info, err := os.Stat(filePath)

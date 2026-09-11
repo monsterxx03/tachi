@@ -6,14 +6,21 @@ import (
 )
 
 type Session struct {
-	ID           string    `json:"id"`
-	ThreadID     string    `json:"thread_id,omitempty"` // channel ThreadID for session lookup
-	Title        string    `json:"title"`
-	ProviderName string    `json:"provider_name,omitempty"` // config provider name (e.g. "deepseek-v4-flash"); empty = default provider
-	WorkingDir   string    `json:"working_dir,omitempty"`   // working directory at session creation time
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
-	SkipDream    bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	ID           string `json:"id"`
+	ThreadID     string `json:"thread_id,omitempty"` // channel ThreadID for session lookup
+	Title        string `json:"title"`
+	ProviderName string `json:"provider_name,omitempty"` // config provider name (e.g. "deepseek-v4-flash"); empty = default provider
+	WorkingDir   string `json:"working_dir,omitempty"`   // working directory at session creation time
+	// AdditionalDirs are extra workspace roots (absolute paths, ordered): fully
+	// writable, but relative paths NEVER resolve against them — the model is told
+	// to use absolute paths, mirroring ACP's additionalDirectories and Claude
+	// Code's --add-dir. The effective root set is [WorkingDir, ...AdditionalDirs].
+	// Empty for sessions that never added one, so old session files read back with
+	// identical behavior.
+	AdditionalDirs []string  `json:"additional_dirs,omitempty"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+	SkipDream      bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
 	// Session mode: "auto" (default), "chat", or "plan".
 	// Controls tool visibility: auto = full access, chat/plan = read-only.

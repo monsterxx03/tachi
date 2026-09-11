@@ -99,13 +99,11 @@ func (t *LSPTool) ExecuteContext(ctx context.Context, args string) (string, erro
 		return lspMarshalError(ToolNameLSP, fmt.Sprintf("invalid arguments: %v", err)), nil
 	}
 
-	// Resolve file path relative to working directory.
+	// The working directory doubles as this call's workspace root — it is passed
+	// down for relative display and workspace-symbol queries — and as the base a
+	// relative path resolves against (ResolvePath).
 	wd := wdctx.Dir(ctx)
-	absPath := input.Path
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(wd, absPath)
-	}
-	absPath = filepath.Clean(absPath)
+	absPath := filepath.Clean(ResolvePath(ctx, input.Path))
 
 	// Operations that do NOT need line/character: workspaceSymbol, documentSymbol.
 	needsPosition := input.Operation != "workspaceSymbol" && input.Operation != "documentSymbol"

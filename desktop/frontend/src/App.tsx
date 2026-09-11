@@ -21,13 +21,13 @@ import {
 import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
   ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, CommandPicker, ToolCard, MCPPanel, AtFilePicker, AskForm,
-  SettingsIcon, UsageIcon, MCPIcon, ThemeToggle,
+  SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
 import { FileCard, fileFromSendFileArgs } from './filepreview'
 import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
-import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ── Ordered turn parts ──────────────────────────────────────────────────────
 // A live turn accumulates the SAME ordered `parts` array a rebuilt transcript
@@ -211,6 +211,16 @@ function App() {
   const [cacheHitRate, setCacheHitRate] = useState(0)
   const [hasCacheHit, setHasCacheHit] = useState(false)
   const [workDir, setWorkDir] = useState('')
+  // Workspace roots (primary + additional) and the popover that manages them. The
+  // popover is only mounted while open, so its own outside-click/Esc handling is
+  // not running behind the scenes.
+  const [roots, setRoots] = useState<SessionRootsVO | null>(null)
+  const [rootsOpen, setRootsOpen] = useState(false)
+  const [rootsBusy, setRootsBusy] = useState(false)
+  const [rootsError, setRootsError] = useState('')
+  // The chip's "+N" badge: the chip itself shows the primary path, so this is what
+  // says the workspace extends beyond it.
+  const extraRootCount = (roots?.additional || []).length
   const [tps, setTps] = useState(0)
   const [lastTps, setLastTps] = useState(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
@@ -354,7 +364,9 @@ function App() {
   const acceptAt = useCallback((match?: AtMatch) => {
     if (!match || !at) return
     const dir = !!match.isDir
-    const text = '@' + match.path + (dir ? '/' : ' ')
+    // The backend decides the reference form (relative under the primary root,
+    // absolute under an additional one); Path is only what the row displays.
+    const text = (match.ref || '@' + match.path) + (dir ? '/' : ' ')
     const ins = replaceRefText(inputRef.current, at.start, text)
     atQueryRef.current = null // whatever follows is a fresh query
     setAt(null)
@@ -817,29 +829,82 @@ function App() {
     } catch { /* ignore */ }
   }, [])
 
-  const refreshWorkDir = useCallback(async (id: string) => {
+  // refreshWorkspace loads a session's workspace context: the primary directory
+  // (bash's cwd, relative-path base) and the full root set the picker and the
+  // prompt use. Both come from the session meta, so they move together.
+  const refreshWorkspace = useCallback(async (id: string) => {
     try {
       const w = await (AgentService as any).GetSessionWorkingDir?.(id)
       setWorkDir(w || '')
     } catch { /* ignore */ }
+    try {
+      setRoots((await AgentService.GetSessionRoots(id)) || null)
+    } catch { setRoots(null) }
   }, [])
 
   // pickWorkDir opens a native folder picker (seeded at the session's current
-  // working directory) and applies the chosen directory to the session.
+  // working directory) and applies the chosen directory to the session. It stays
+  // SINGLE-select, and separate from "add directory": which folder is primary is
+  // never something to guess from the order of a multi-selection.
   const pickWorkDir = useCallback(async (id: string) => {
     try {
       const picked: string | string[] = await Dialogs.OpenFile({
         CanChooseDirectories: true,
         CanChooseFiles: false,
         CanCreateDirectories: true,
-        Title: '选择工作目录',
+        AllowsMultipleSelection: false,
+        Title: '选择主工作目录',
         Directory: workDir || undefined,
       })
       if (typeof picked !== 'string' || !picked) return
-      await (AgentService as any).SetSessionWorkingDir?.(id, picked).catch(() => {})
+      const res = await (AgentService as any).SetSessionWorkingDir?.(id, picked).catch((e: unknown) => String(e))
+      if (res && res !== 'ok') setRootsError(res)
       setWorkDir(picked)
+      // A directory that just became the primary stops being an additional root, so
+      // the list is re-read rather than patched.
+      await refreshWorkspace(id)
     } catch { /* ignore */ }
-  }, [workDir])
+  }, [workDir, refreshWorkspace])
+
+  // addRoots appends additional workspace roots through a MULTI-select picker (the
+  // Wails dialog returns a list when AllowsMultipleSelection is set). Validation —
+  // absolute, no whitespace, exists, is a directory — lives in the backend, and its
+  // message is what the popover shows.
+  const addRoots = useCallback(async (id: string) => {
+    setRootsError('')
+    setRootsBusy(true)
+    try {
+      const picked: string | string[] = await Dialogs.OpenFile({
+        CanChooseDirectories: true,
+        CanChooseFiles: false,
+        CanCreateDirectories: false,
+        AllowsMultipleSelection: true,
+        Title: '添加工作区目录（可多选）',
+        Directory: workDir || undefined,
+      })
+      const dirs = Array.isArray(picked) ? picked : picked ? [picked] : []
+      if (dirs.length === 0) return
+      const res = await AgentService.AddSessionRoots(id, dirs).catch((e) => String(e))
+      if (res !== 'ok') setRootsError(res || '添加失败')
+      await refreshWorkspace(id)
+    } catch (e) {
+      setRootsError(String(e))
+    } finally {
+      setRootsBusy(false)
+    }
+  }, [workDir, refreshWorkspace])
+
+  const removeRoot = useCallback(async (id: string, path: string) => {
+    setRootsError('')
+    setRootsBusy(true)
+    try {
+      const res = await AgentService.RemoveSessionRoot(id, path).catch((e) => String(e))
+      if (res !== 'ok') setRootsError(res || '移除失败')
+      await refreshWorkspace(id)
+    } finally {
+      setRootsBusy(false)
+    }
+  }, [refreshWorkspace])
 
   // refreshMCP reloads the MCP servers/tools + profile for the current session.
   const refreshMCP = useCallback(async () => {
@@ -903,15 +968,15 @@ function App() {
         setHasMore((p) => ({ ...p, [ns.id]: false }))
         setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
         setCost(0); setCredit(0); setTps(0); setLastTps(0)
-        refreshWorkDir(ns.id)
+        refreshWorkspace(ns.id)
       }
     }
     setSessions(list.map((s) => ({ ...s, active: s.id === cur?.id })))
     setLoading(false)
     refreshProvider()
     refreshMCP()
-    if (cur) refreshWorkDir(cur.id)
-  }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP, refreshWorkDir])
+    if (cur) refreshWorkspace(cur.id)
+  }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP, refreshWorkspace])
   const confirmDelete = useCallback(async (id: string) => {
     await (AgentService as any).DeleteSession?.(id).catch(() => {})
     loadAll()
@@ -940,8 +1005,8 @@ function App() {
     refreshCost(id)
     refreshProvider()
     refreshMCP()
-    refreshWorkDir(id)
-  }, [sessions, msgCache, scrollToBottom, refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkDir])
+    refreshWorkspace(id)
+  }, [sessions, msgCache, scrollToBottom, refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkspace])
 
   const newChat = useCallback(async () => {
     const ns = await AgentService.NewSession().catch(() => null)
@@ -951,12 +1016,12 @@ function App() {
       setHasMore((p) => ({ ...p, [ns.id]: false }))
       setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
       setCost(0); setCredit(0); setTps(0); setLastTps(0)
-      refreshWorkDir(ns.id)
+      refreshWorkspace(ns.id)
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkDir])
+  }, [refreshProvider, refreshWorkspace])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
@@ -1183,8 +1248,8 @@ function App() {
     refreshCost(to)
     refreshProvider()
     refreshMCP()
-    refreshWorkDir(to)
-  }, [refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkDir, scrollToBottom])
+    refreshWorkspace(to)
+  }, [refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkspace, scrollToBottom])
 
   // Auto-compaction: when the token estimate crosses the configured threshold
   // the agent compacts in-flight and moves the conversation into a new (child)
@@ -1469,10 +1534,20 @@ function App() {
               </div>
             </div>
             <div className="composer-status">
-              <div className="work-dir-wrap">
-                <span className="work-dir" title="工作目录（点击选择）" onClick={() => pickWorkDir(currentId)}>
+              <div className="work-dir-wrap popover-anchor">
+                {rootsOpen ? (
+                  <RootsPanel roots={roots} error={rootsError} busy={rootsBusy}
+                    onPickPrimary={() => pickWorkDir(currentId)}
+                    onAdd={() => addRoots(currentId)}
+                    onRemove={(p) => removeRoot(currentId, p)}
+                    onClose={() => setRootsOpen(false)} />
+                ) : null}
+                <button type="button" className="work-dir" aria-expanded={rootsOpen}
+                  title={workDir ? `工作区目录：${workDir}（点击管理）` : '工作区目录（点击管理）'}
+                  onClick={() => { setRootsError(''); setRootsOpen((v) => !v) }}>
                   <span className="work-dir-ico">⌂</span>{workDir || '未设置工作目录'}
-                </span>
+                  {extraRootCount > 0 ? <span className="work-dir-count" title={`${extraRootCount} 个附加目录`}>+{extraRootCount}</span> : null}
+                </button>
               </div>
               {tps > 0 ? <span className={`usage-tps tps-${tpsTier(tps)}`} title="当前输出速率">{tps}/s</span>
                 : lastTps > 0 ? <span className="usage-tps tps-paused" title="最近输出速率">{lastTps}/s</span>

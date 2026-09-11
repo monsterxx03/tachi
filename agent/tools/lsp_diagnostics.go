@@ -70,12 +70,11 @@ func (t *LSPDiagnosticsTool) ExecuteContext(ctx context.Context, args string) (s
 	return t.projectSummary(wd)
 }
 
+// fileDiagnostics reports diagnostics for one file. wd is the workspace root used
+// for the display path (and, for a relative filePath, the base ResolvePath resolves
+// against).
 func (t *LSPDiagnosticsTool) fileDiagnostics(ctx context.Context, filePath, wd string) (string, error) {
-	absPath := filePath
-	if !filepath.IsAbs(absPath) {
-		absPath = filepath.Join(wd, absPath)
-	}
-	absPath = filepath.Clean(absPath)
+	absPath := filepath.Clean(ResolvePath(ctx, filePath))
 	uri := lsp.PathToURI(absPath)
 
 	// Ensure file is opened on the server.

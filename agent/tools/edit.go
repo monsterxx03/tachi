@@ -12,7 +12,6 @@ import (
 
 	"github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/agent/acpctx"
-	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -145,7 +144,7 @@ func (t *EditTool) getLegacyDiff(ctx context.Context, args string) (string, erro
 		return "", fmt.Errorf("invalid arguments: %w", err)
 	}
 
-	filePath := resolveEditPath(ctx, a.FilePath)
+	filePath := ResolvePath(ctx, a.FilePath)
 
 	if a.OldString == "" {
 		return fmt.Sprintf("--- new file: %s\n+++ %s\n%s", filePath, filePath, a.NewString), nil
@@ -184,7 +183,7 @@ func (t *EditTool) executeLegacy(ctx context.Context, args string) (string, erro
 		return "", fmt.Errorf("old_string and new_string are identical, no edit needed")
 	}
 
-	filePath := resolveEditPath(ctx, a.FilePath)
+	filePath := ResolvePath(ctx, a.FilePath)
 
 	// Serialize edits to the same file (parallel tool calls may target it);
 	// different files run concurrently.
@@ -452,13 +451,4 @@ func findLineIndex(content, substr string) int {
 		return -1
 	}
 	return strings.Count(before, "\n")
-}
-
-// resolveEditPath resolves a file path for the Edit tool, making relative paths
-// relative to the context-provided working directory (for worktree isolation).
-func resolveEditPath(ctx context.Context, path string) string {
-	if filepath.IsAbs(path) {
-		return path
-	}
-	return filepath.Join(wdctx.Dir(ctx), path)
 }

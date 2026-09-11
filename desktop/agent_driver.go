@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"log"
+	"strings"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
@@ -51,13 +52,17 @@ const systemPromptCacheMax = 64
 
 // promptKey identifies a built system prompt. Both parts are build inputs, so a
 // miss and a change are the same event.
+// promptKey identifies a built system prompt. Every part is a build input, so a
+// miss and a change are the same event. roots is the joined filtered root set
+// (order-sensitive: reordering the list is a different prompt).
 type promptKey struct {
-	cwd string
-	id  string
+	cwd   string
+	id    string
+	roots string
 }
 
 // systemPromptFor returns the system prompt to send for session id, built from
-// the session's CURRENT working directory and ID.
+// the session's CURRENT working directory, additional roots and ID.
 //
 // The prompt cannot be a startup singleton the way a single-session TUI's is
 // (there the process cwd IS the session directory, thanks to os.Chdir). One
@@ -68,29 +73,36 @@ type promptKey struct {
 // session's directory. Resolving on demand keeps the advertised directory, the
 // tool root and the @-file root the same thing.
 //
-// The cache is keyed on the resolved (working directory, session ID) pair, which
-// is what makes a directory change take effect on the next turn with no
-// invalidation hook: the new directory is a new key, so it rebuilds. The build
-// is not free — it probes git (shutil in agent.buildSystemPrompt) — hence the
-// memo for the unchanged case.
+// The cache is keyed on the resolved (working directory, session ID, additional
+// roots) triple, which is what makes a directory or ROOT change take effect on the
+// next turn with no invalidation hook: either is a new key, so it rebuilds. The
+// build is not free — it probes git (shutil in agent.buildSystemPrompt) — hence the
+// memo for the unchanged case. A root whose directory has since vanished is not a
+// key input either: it is filtered out before the key is formed (see promptRoots),
+// so a deleted volume cannot make the prompt advertise a path that is not there.
 //
 // Callers must NOT hold d.mu: the working directory is read through it, and the
 // build is far too slow to run under it.
 //
 // The Mermaid capability is declared here because this frontend renders diagrams
-// (and a zoomable overlay for them).
+// (and a zoomable overlay for them). A session with no workspace yet is passed
+// through as an explicit state (WithoutWorkingDir), never as the process cwd.
 func (d *desktopApp) systemPromptFor(id string) string {
 	if d.cfg == nil {
 		return ""
 	}
+	// A session that has not chosen a workspace says exactly that, and nothing is
+	// substituted: the process cwd of a GUI app is "/" (launched from Finder), so
+	// filling it in would advertise the filesystem root as the working directory —
+	// and invite the model to use absolute paths there. agent.WithoutWorkingDir turns
+	// the empty string into a statement instead of "go find a project root".
 	cwd := d.sessionWorkDir(id)
+	roots := d.promptRoots(id)
+	opts := []agent.PromptOption{agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt)}
 	if cwd == "" {
-		// A session that never picked a folder runs its tools in the process cwd
-		// (wdctx's fallback, and the @-file root's). Say so, instead of letting
-		// BuildSystemPrompt walk up to a git root the tools would never use.
-		cwd = processCWD()
+		opts = append(opts, agent.WithoutWorkingDir())
 	}
-	key := promptKey{cwd: cwd, id: id}
+	key := promptKey{cwd: cwd, id: id, roots: strings.Join(roots, "\x00")}
 
 	d.promptMu.Lock()
 	cached, ok := d.promptCache[key]
@@ -99,8 +111,7 @@ func (d *desktopApp) systemPromptFor(id string) string {
 		return cached
 	}
 
-	prompt := agent.BuildSystemPrompt(d.cfg.Language, cwd, id, d.cfg.ExtraSystemPrompt,
-		agent.WithFrontendCapabilities(agent.MermaidCapabilityPrompt))
+	prompt := agent.BuildSystemPromptWithRoots(d.cfg.Language, cwd, roots, id, d.cfg.ExtraSystemPrompt, opts...)
 
 	d.promptMu.Lock()
 	defer d.promptMu.Unlock()

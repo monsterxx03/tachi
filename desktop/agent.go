@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -363,10 +362,13 @@ func (s *AgentService) NewSession() SessionInfo {
 			pname = p
 		}
 	}
-	wd, err := os.UserHomeDir()
-	if err != nil {
-		wd, _ = os.Getwd()
-	}
+	// A new session starts in the workspace the user last used, not at $HOME: the
+	// home directory (or the filesystem root) is too wide to be an agent workspace —
+	// the @-file index would cover everything, and relative paths would resolve
+	// against a directory that is not a project. With nothing to inherit the session
+	// starts WITHOUT a workspace and the composer asks for one (see
+	// defaultWorkspaceFor / wideRootReason).
+	wd := d.defaultWorkspaceFor()
 	sm := d.newSessionManager()
 	if sm == nil {
 		return SessionInfo{}
@@ -635,7 +637,7 @@ func (s *AgentService) GetSessionWorkingDir(id string) string {
 func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	d := s.desk
 	if d.sm == nil {
-		return "no session manager"
+		return errNoSessionManager.Error()
 	}
 	if strings.TrimSpace(dir) == "" {
 		return "empty dir"
@@ -644,25 +646,26 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	if err != nil {
 		return err.Error()
 	}
-	d.mu.Lock()
-	r := d.getRun(id)
-	d.mu.Unlock()
-	if r != nil && r.sm != nil {
-		if cur := r.sm.Current(); cur != nil {
-			cur.WorkingDir = abs
-			_ = r.sm.UpdateMeta(cur)
-			return "ok"
+	// The primary is guarded too, not just the additional roots: $HOME used to be
+	// every new session's default, and a session pointed at it indexes the whole home
+	// directory for @-completion.
+	if reason := wideRootReason(abs); reason != "" {
+		return reason
+	}
+	if err := d.updateSessionMeta(id, func(sess *session.Session) {
+		sess.WorkingDir = abs
+		// A directory that just BECAME the primary is no longer an additional root:
+		// re-normalizing drops it (and any duplicate), so the root set stays
+		// truthful no matter whether the change came from the folder picker or from
+		// the root list.
+		if roots, nerr := agent.NormalizeAdditionalRoots(abs, sess.AdditionalDirs); nerr == nil {
+			sess.AdditionalDirs = roots
 		}
-	}
-	// Fallback via the stable manager when the per-session sm is not bound.
-	sess, err := d.sm.Load(id)
-	if err != nil {
+	}); err != nil {
 		return err.Error()
 	}
-	sess.WorkingDir = abs
-	if err := d.sm.UpdateMeta(sess); err != nil {
-		return err.Error()
-	}
+	// Remember the explicit choice: the next new session starts here.
+	rememberWorkspace(abs)
 	return "ok"
 }
 

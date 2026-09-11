@@ -12,12 +12,27 @@ import (
 	"github.com/monsterxx03/tachi/pkg/shutil"
 )
 
-// PromptOption customises the generated system prompt. Currently the only knob
-// is the frontend capability section (see WithFrontendCapabilities).
+// PromptOption customises the generated system prompt. Currently there are two
+// knobs: the frontend capability section (see WithFrontendCapabilities) and the
+// explicit "no workspace chosen yet" state (see WithoutWorkingDir).
 type PromptOption func(*promptOptions)
 
 type promptOptions struct {
 	frontendSections []string
+	// withoutWorkingDir marks an empty cwd as a REAL state — the caller manages
+	// sessions whose workspace the user has not chosen yet — rather than as "use
+	// the process's project root".
+	withoutWorkingDir bool
+}
+
+// WithoutWorkingDir says that an empty cwd means "no workspace has been chosen",
+// not "go find one": the prompt then states that instead of substituting the
+// process working directory (or a git root above it). It exists for the desktop
+// client, whose sessions can legitimately start without a directory — and whose
+// process cwd is meaningless anyway (a Finder-launched GUI app gets "/", so the
+// substitution would advertise the filesystem root as the workspace).
+func WithoutWorkingDir() PromptOption {
+	return func(o *promptOptions) { o.withoutWorkingDir = true }
 }
 
 // WithFrontendCapabilities appends sections describing what the frontend the
@@ -83,6 +98,16 @@ func BuildSystemPromptWithRoots(language string, cwd string, additionalRoots []s
 func buildSystemPrompt(language string, cwd string, additionalRoots []string, sessionID string, extra string, opts ...PromptOption) string {
 	var sb strings.Builder
 
+	// Options are resolved up front: the Environment section (below) already needs
+	// to know whether an empty cwd is a real state, and the frontend sections are
+	// emitted much later.
+	o := promptOptions{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+
 	// ── Identity + Core traits ──────────────────────────────────────────────
 	sb.WriteString(`You are Tachi — a thoughtful, curious coding agent who brings genuine warmth and playful intelligence to every task. You're here to help, but more than that — you love understanding how things work and finding elegant ways to make them better. Think of yourself as a companion who happens to be very good with tools.
 
@@ -137,10 +162,17 @@ YOU MUST:
 	// ── Environment ────────────────────────────────────────────────────────
 	sb.WriteString("\n\n## Environment\n\n")
 
-	if cwd == "" {
+	if cwd == "" && !o.withoutWorkingDir {
 		cwd = config.FindProjectRoot()
 	}
-	fmt.Fprintf(&sb, "- Working directory: %s\n", cwd)
+	if cwd == "" {
+		// An explicit "no workspace yet" (desktop sessions that inherited nothing):
+		// state it, rather than filling in the process cwd — for a GUI app that is
+		// "/" and would invite absolute paths into the filesystem root.
+		sb.WriteString("- Working directory: (not set yet — ask the user which directory to work in before using relative paths)\n")
+	} else {
+		fmt.Fprintf(&sb, "- Working directory: %s\n", cwd)
+	}
 
 	if len(additionalRoots) > 0 {
 		fmt.Fprintf(&sb, "- Additional workspace roots: %s (absolute paths only; relative paths always resolve against the working directory)\n", strings.Join(additionalRoots, ", "))
@@ -177,12 +209,6 @@ YOU MUST:
 	// What the client on the other end can render or do (e.g. the desktop app
 	// renders Mermaid diagrams). Placed before the user's extra prompt so a
 	// user-configured prompt still lands last.
-	o := promptOptions{}
-	for _, opt := range opts {
-		if opt != nil {
-			opt(&o)
-		}
-	}
 	for _, section := range o.frontendSections {
 		sb.WriteString("\n\n" + strings.TrimSpace(section) + "\n")
 	}

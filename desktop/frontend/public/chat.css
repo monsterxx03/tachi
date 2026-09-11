@@ -557,6 +557,24 @@
 }
 .work-dir:hover { background: var(--accent-soft); color: var(--accent-2); }
 .work-dir-ico { color: var(--text-faint); }
+/* The chip is a <button> now (it opens the workspace popover rather than a folder
+   picker), so the browser's own button chrome is reset away. */
+button.work-dir {
+  border: none;
+  background: transparent;
+  font-family: inherit;
+  max-width: 340px;
+}
+/* "+N": the chip shows the primary path, and this is what says the session reaches
+   further than it. */
+.work-dir-count {
+  flex-shrink: 0;
+  font-size: 10px;
+  padding: 0 4px;
+  border-radius: var(--radius-pill);
+  background: var(--accent-soft);
+  color: var(--accent-2);
+}
 
 /* ── @-file completion picker ─────────────────────────────────────────────── */
 /* Floats above the composer while a reference is being typed, listing the
@@ -616,6 +634,16 @@
   text-overflow: ellipsis;
 }
 .at-picker-tag { margin-left: auto; flex-shrink: 0; color: var(--text-faint); font-size: 10.5px; }
+/* The root a match came from, shown only for additional roots: the same relative
+   path can exist in two roots, so the label is a word rather than a colour. */
+.at-picker-root {
+  flex-shrink: 0;
+  color: var(--accent-2);
+  background: var(--accent-soft);
+  border-radius: var(--radius-xs);
+  padding: 0 5px;
+  font-size: 10.5px;
+}
 
 /* Wails puts this class on the drop target (data-file-drop-target) while a
    native file drag hovers it, so the composer is its own drop affordance. */

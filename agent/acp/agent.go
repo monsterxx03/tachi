@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"path/filepath"
 
 	acp "github.com/coder/acp-go-sdk"
 
@@ -781,34 +780,19 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 }
 
 // validateAdditionalDirectories validates and normalizes an ACP
-// additionalDirectories list (Additional Workspace Roots spec):
-//   - every entry must be a non-empty absolute path;
-//   - exact duplicates and entries identical to cwd are dropped, preserving
-//     first-occurrence order;
-//   - a nil or empty input yields no additional roots ([]).
+// additionalDirectories list (Additional Workspace Roots spec).
 //
-// Malformed entries are rejected with an invalid_params error per the spec:
-// the agent MUST NOT silently drop unsupported or unauthorized roots.
+// The normalization itself is shared with the desktop frontend
+// (agent.NormalizeAdditionalRoots) so both cannot drift; what stays here is the
+// ACP error contract — malformed entries are rejected with an invalid_params error
+// per the spec, because the agent MUST NOT silently drop unsupported or
+// unauthorized roots.
 func validateAdditionalDirectories(cwd string, dirs []string) ([]string, error) {
-	if len(dirs) == 0 {
-		return nil, nil
+	roots, err := agent.NormalizeAdditionalRoots(cwd, dirs)
+	if err != nil {
+		return nil, fmt.Errorf("invalid_params: %w", err)
 	}
-	out := make([]string, 0, len(dirs))
-	seen := make(map[string]bool, len(dirs))
-	for _, d := range dirs {
-		if d == "" {
-			return nil, fmt.Errorf("invalid_params: additionalDirectories entry must not be empty")
-		}
-		if !filepath.IsAbs(d) {
-			return nil, fmt.Errorf("invalid_params: additionalDirectories entry must be an absolute path: %q", d)
-		}
-		if d == cwd || seen[d] {
-			continue
-		}
-		seen[d] = true
-		out = append(out, d)
-	}
-	return out, nil
+	return roots, nil
 }
 
 // providerForLoadedSession builds the provider for a resumed/loaded session:

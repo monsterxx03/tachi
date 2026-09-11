@@ -66,3 +66,42 @@ func TestBuildSystemPromptFrontendCapabilities(t *testing.T) {
 		t.Error("blank sections must not change the prompt")
 	}
 }
+
+// TestBuildSystemPromptWithoutWorkingDir pins the two meanings of an empty cwd:
+// by default it means "use this process's project root" (what tui / channel / -p
+// rely on), and with WithoutWorkingDir it means "no workspace chosen yet" — which
+// the desktop needs, because substituting its process cwd would advertise "/" for
+// a Finder-launched GUI app.
+func TestBuildSystemPromptWithoutWorkingDir(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+
+	// Default: the process's project root is filled in.
+	if got := BuildSystemPrompt("en", "", "sid", ""); !strings.Contains(got, "- Working directory: "+dir) {
+		t.Errorf("expected the process project root %q in the prompt", dir)
+	}
+
+	// Explicit "not set yet": nothing is substituted, and the model is told to ask.
+	got := BuildSystemPrompt("en", "", "sid", "", WithoutWorkingDir())
+	if strings.Contains(got, "- Working directory: "+dir) {
+		t.Error("WithoutWorkingDir must not substitute the process directory")
+	}
+	if !strings.Contains(got, "- Working directory: (not set yet") {
+		t.Errorf("expected an explicit unset line, got %q", promptLine(got, "- Working directory:"))
+	}
+
+	// A real directory is unaffected by the option.
+	if got := BuildSystemPrompt("en", dir, "sid", "", WithoutWorkingDir()); !strings.Contains(got, "- Working directory: "+dir) {
+		t.Errorf("a set working directory must still be advertised, got %q", promptLine(got, "- Working directory:"))
+	}
+}
+
+// promptLine returns the first line with the given prefix (test failure messages).
+func promptLine(prompt, prefix string) string {
+	for _, line := range strings.Split(prompt, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return line
+		}
+	}
+	return ""
+}

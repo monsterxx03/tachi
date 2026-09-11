@@ -3,8 +3,8 @@ import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/to
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
 import type { Theme } from './theme'
-import type { Part } from './types'
-import type { CommandVO, ContextInfoVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { AtMatch, Part } from './types'
+import type { CommandVO, ContextInfoVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
 // ring. Purely decorative — ContextMeter (below) owns the button semantics and
@@ -378,13 +378,96 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
   )
 }
 
+// RootsPanel is the workspace popover behind the composer's directory chip: the
+// session's primary directory plus its additional roots, and the two actions the
+// list needs — change the primary, add more.
+//
+// The primary is not removable (only replaceable): bash's cwd, relative paths and
+// the git probe all hang off it, so "no primary" is not a state worth offering.
+// A root whose directory has vanished is shown greyed rather than dropped — does an
+// unmounted volume come back? That is the user's call, not ours.
+function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClose }: {
+  roots: SessionRootsVO | null
+  error: string
+  busy: boolean
+  onPickPrimary: () => void
+  onAdd: () => void
+  onRemove: (path: string) => void
+  onClose: () => void
+}) {
+  const primary = roots?.primary || ''
+  const additional = roots?.additional || []
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  // Same dismissal contract as the MCP panel: click outside, or Esc. The chip that
+  // owns open/close is excluded, or closing here would fight its own click.
+  useEffect(() => {
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || boxRef.current?.contains(t) || t.closest('.work-dir')) return
+      onClose()
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') onClose() }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [onClose])
+
+  return (
+    <div className="popover-panel roots-panel" ref={boxRef}>
+      <div className="roots-head">
+        <span className="roots-title">工作区目录</span>
+        <span className="roots-sub">相对路径以主目录为准，附加目录用绝对路径访问</span>
+      </div>
+
+      <div className="roots-sec">主目录</div>
+      <div className="roots-row">
+        <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
+        <button className="roots-btn" disabled={busy} onClick={onPickPrimary}>{primary ? '更换…' : '选择…'}</button>
+      </div>
+
+      <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
+      {additional.length === 0
+        ? <div className="roots-empty">还没有附加目录</div>
+        : additional.map((r) => (
+          <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
+            <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
+            <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
+            {r.exists ? null : (
+              <span className="roots-stale" title="目录已不存在：system prompt 不再列出它，@ 搜索也会跳过">已失效</span>
+            )}
+            <button className="roots-btn" disabled={busy} title="从附加目录中移除" onClick={() => onRemove(r.path)}>移除</button>
+          </div>
+        ))}
+
+      {error ? <div className="roots-error">{error}</div> : null}
+
+      <div className="roots-actions">
+        <button className="roots-add" disabled={busy || !primary}
+          title={primary ? '添加附加目录（可多选）' : '请先设置主目录'}
+          onClick={onAdd}>＋ 添加目录</button>
+      </div>
+    </div>
+  )
+}
+
+// baseName is the display name of a root: its last path segment.
+function baseName(p: string): string {
+  const trimmed = p.replace(/\/+$/, '')
+  const i = trimmed.lastIndexOf('/')
+  return i >= 0 ? trimmed.slice(i + 1) : trimmed
+}
+
 // AtFilePicker is the @-file completion popup. It floats above the composer,
 // listing the files the backend fuzzy-matched under the session's working
 // directory. Keyboard handling lives in the composer (which owns the caret and
 // the text); this component only renders and reports picks.
 function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHover }: {
   query: string
-  items: { path: string; isDir: boolean }[]
+  items: AtMatch[]
   selected: number
   loading: boolean
   refCount: number
@@ -414,11 +497,15 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
           {items.map((m, i) => (
             /* onMouseDown (not onClick) with preventDefault: the textarea must
                keep focus, or the caret we splice the reference into is lost. */
-            <div key={m.path} role="option" aria-selected={i === selected} title={m.path}
+            <div key={(m.ref || m.path) + m.root} role="option" aria-selected={i === selected} title={m.ref || m.path}
               className={`at-picker-item${i === selected ? ' is-selected' : ''}`}
               onMouseDown={(e) => { e.preventDefault(); onPick(i) }}
               onMouseEnter={() => onHover(i)}>
               <span className="at-picker-ico">{m.isDir ? '▸' : '·'}</span>
+              {/* The root label comes FIRST, as a word rather than a colour: two
+                  roots can hold the same relative path, and "which one is this"
+                  has to be answerable at a glance (and without colour vision). */}
+              {m.root ? <span className="at-picker-root">[{m.root}]</span> : null}
               <span className="at-picker-path">{m.path}</span>
               {m.isDir ? <span className="at-picker-tag">目录</span> : null}
             </div>
@@ -569,4 +656,4 @@ function AskForm({ questions, onSubmit, onCancel }: {
   )
 }
 
-export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
