@@ -5,7 +5,9 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 	"unicode/utf8"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
@@ -161,5 +163,138 @@ func TestPlanSlug_LongCJKTitleStaysWritable(t *testing.T) {
 	}
 	if files := listPlanFiles(t, tmpDir); len(files) != 1 {
 		t.Fatalf("expected 1 plan file, got %d", len(files))
+	}
+}
+
+// writeRawPlan drops a plan file straight into the temp plans directory (bypassing the
+// tool), so a test can set up "plans that were already there".
+func writeRawPlan(t *testing.T, tmpDir, name, body string) string {
+	t.Helper()
+	path := filepath.Join(tmpDir, ".tachi", "plans", name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write raw plan: %v", err)
+	}
+	return path
+}
+
+func agePlan(t *testing.T, path string, d time.Duration) {
+	t.Helper()
+	old := time.Now().Add(-d)
+	if err := os.Chtimes(path, old, old); err != nil {
+		t.Fatalf("chtimes: %v", err)
+	}
+}
+
+func savePlan(t *testing.T, ctx context.Context, params SavePlanParams) {
+	t.Helper()
+	args, err := json.Marshal(params)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := (SavePlanTool{}).ExecuteContext(ctx, string(args)); err != nil {
+		t.Fatalf("save %q: %v", params.Title, err)
+	}
+}
+
+// TestSavePlan_PlanIDUpdatesInPlace pins the identity rule: with a plan_id, rewording the
+// title updates the SAME document. Without an id (the historical behaviour) every
+// rewording forked the plan into a new file — which is how one session ended up holding
+// three copies of one plan, only the newest of them visible in the UI.
+func TestSavePlan_PlanIDUpdatesInPlace(t *testing.T) {
+	ctx, tmpDir := planTestCtx(t, "sess-id")
+
+	savePlan(t, ctx, SavePlanParams{
+		Title: "计划 A", Content: "正文", PlanID: "plan-1",
+		Steps: []SavePlanStep{{Content: "第一步", Status: "pending"}},
+	})
+	savePlan(t, ctx, SavePlanParams{
+		Title: "计划 A（已完成）", Content: "正文", PlanID: "plan-1",
+		Steps: []SavePlanStep{{Content: "第一步", Status: "completed"}},
+	})
+
+	files := listPlanFiles(t, tmpDir)
+	if len(files) != 1 {
+		t.Fatalf("rewording under the same plan_id must not fork the plan: got %d files", len(files))
+	}
+	plan := readPlan(t, files[0])
+	if plan.Title != "计划 A（已完成）" || plan.PlanID != "plan-1" {
+		t.Errorf("the update did not land in place: %+v", plan)
+	}
+	if !allStepsCompleted(plan.Steps) {
+		t.Error("step statuses were not updated")
+	}
+}
+
+// A save tidies up after itself: this session's finished plans move to archive/, a plan
+// that is still in progress stays where it is, and nothing of another session's is touched
+// (the file-name suffix is what makes that true).
+func TestSavePlan_ArchivesFinishedPlansOnly(t *testing.T) {
+	ctx, tmpDir := planTestCtx(t, "sess-arch")
+	finished := writeRawPlan(t, tmpDir, "old-fin-sess-arch.json",
+		`{"title":"做完了的","content":"","steps":[{"content":"a","status":"completed"}]}`)
+	ongoing := writeRawPlan(t, tmpDir, "ongoing-sess-arch.json",
+		`{"title":"还在做的","content":"","steps":[{"content":"a","status":"in_progress"}]}`)
+	foreign := writeRawPlan(t, tmpDir, "theirs-sess-other.json",
+		`{"title":"别人的","content":"","steps":[{"content":"a","status":"completed"}]}`)
+
+	savePlan(t, ctx, SavePlanParams{
+		Title: "新计划", Content: "正文", PlanID: "plan-new",
+		Steps: []SavePlanStep{{Content: "起点", Status: "pending"}},
+	})
+
+	if _, err := os.Stat(finished); !os.IsNotExist(err) {
+		t.Errorf("a finished plan should have been archived, not left in the active list")
+	}
+	archived := filepath.Join(tmpDir, ".tachi", "plans", "archive", filepath.Base(finished))
+	if _, err := os.Stat(archived); err != nil {
+		t.Errorf("the finished plan should still exist under archive/: %v", err)
+	}
+	if _, err := os.Stat(ongoing); err != nil {
+		t.Errorf("a plan that is still in progress must NOT be archived: %v", err)
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Errorf("another session's plan must not be touched: %v", err)
+	}
+	// Count only THIS session's active plans (the directory also holds the foreign one).
+	active := 0
+	for _, f := range listPlanFiles(t, tmpDir) {
+		if strings.HasSuffix(f, "-sess-arch.json") {
+			active++
+		}
+	}
+	if active != 2 {
+		t.Errorf("this session's active plans = %d, want 2 (the new one and the unfinished one)", active)
+	}
+}
+
+// The retention window applies to the archive too, or it would only be a slower leak.
+func TestSavePlan_RemovesExpiredPlans(t *testing.T) {
+	ctx, tmpDir := planTestCtx(t, "sess-exp")
+	ancient := writeRawPlan(t, tmpDir, "ancient-sess-exp.json",
+		`{"title":"很久以前","content":"","steps":[{"content":"a","status":"pending"}]}`)
+	foreign := writeRawPlan(t, tmpDir, "ancient-sess-other.json",
+		`{"title":"别人的很久以前","content":"","steps":[{"content":"a","status":"pending"}]}`)
+	archivedOld := writeRawPlan(t, tmpDir, filepath.Join("archive", "archived-ancient-sess-exp.json"),
+		`{"title":"归档很久了","content":"","steps":[{"content":"a","status":"completed"}]}`)
+	agePlan(t, ancient, 40*24*time.Hour)
+	agePlan(t, foreign, 40*24*time.Hour)
+	agePlan(t, archivedOld, 40*24*time.Hour)
+
+	savePlan(t, ctx, SavePlanParams{
+		Title: "新计划", Content: "正文", PlanID: "plan-exp",
+		Steps: []SavePlanStep{{Content: "起点", Status: "pending"}},
+	})
+
+	if _, err := os.Stat(ancient); !os.IsNotExist(err) {
+		t.Error("a plan older than the retention window should have been removed")
+	}
+	if _, err := os.Stat(archivedOld); !os.IsNotExist(err) {
+		t.Error("the archive should age out as well")
+	}
+	if _, err := os.Stat(foreign); err != nil {
+		t.Errorf("another session's old plan must not be removed: %v", err)
 	}
 }

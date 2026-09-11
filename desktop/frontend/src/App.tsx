@@ -335,10 +335,10 @@ function App() {
   // session changes.
   const [plan, setPlan] = useState<PlanVO | null>(null)
   const [planOpen, setPlanOpen] = useState(false)
-  const refreshPlan = useCallback(async () => {
+  const refreshPlan = useCallback(async (path = '') => {
     if (!currentId) { setPlan(null); return }
     try {
-      setPlan(await AgentService.GetPlan(currentId) || null)
+      setPlan(await AgentService.GetPlan(currentId, path) || null)
     } catch {
       setPlan(null)
     }
@@ -348,6 +348,14 @@ function App() {
     const off = Events.On('agent:plan', () => { void refreshPlan() })
     return () => off?.()
   }, [refreshPlan])
+
+  // deletePlan removes one of this session's plans, then re-reads: the list shrinks, and
+  // if the plan being shown was the one deleted the newest remaining takes its place
+  // (the backend validates the path against this session's files — see DeletePlan).
+  const deletePlan = useCallback(async (path: string) => {
+    await AgentService.DeletePlan(currentId, path)
+    void refreshPlan()
+  }, [currentId, refreshPlan])
 
   // The session's mode (P2). It is not a label but a capability switch: chat and plan hide
   // the destructive tools from the model, and plan appends the plan-mode rules to the
@@ -1799,7 +1807,9 @@ function App() {
                   ignore it. */}
               {plan?.steps?.length ? (
                 <div className="plan-wrap popover-anchor">
-                  {planOpen ? <PlanPanel plan={plan} workDir={workDir} mode={mode} onSwitchMode={changeMode} onClose={() => setPlanOpen(false)} /> : null}
+                  {planOpen ? <PlanPanel plan={plan} workDir={workDir} mode={mode}
+                    onSelect={(p) => void refreshPlan(p)} onDelete={deletePlan}
+                    onSwitchMode={changeMode} onClose={() => setPlanOpen(false)} /> : null}
                   <PlanChip plan={plan} open={planOpen} onToggle={() => setPlanOpen((v) => !v)} />
                 </div>
               ) : null}

@@ -251,6 +251,9 @@ Allowed tools: ReadFile, Glob, Grep, LSP, WebSearch, WebFetch, Skill, AskUserQue
 
 Call the SavePlan tool with:
 - title: A concise title for the plan
+- plan_id: A short stable id for THIS plan (e.g. "plan-1"). Pass the SAME id on every
+  later update — including when you reword the title — so the plan is updated in place.
+  Only a genuinely different plan gets a new id.
 - steps: A structured task list, each with content (imperative form) and status
   (pending / in_progress / completed)
 

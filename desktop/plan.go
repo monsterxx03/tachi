@@ -26,7 +26,18 @@ type PlanStepVO struct {
 	Status  string `json:"status"`
 }
 
-// PlanVO is the plan panel's payload: the newest plan saved for this session.
+// PlanEntryVO is one row of the plan panel's list: enough to choose between a session's
+// plans without loading them all. A session accumulates plans (one file per plan), so the
+// list is the difference between "the newest plan" and "the plans".
+type PlanEntryVO struct {
+	Title     string `json:"title"`
+	Path      string `json:"path"`
+	Done      int    `json:"done"`
+	Total     int    `json:"total"`
+	UpdatedAt string `json:"updatedAt,omitempty"`
+}
+
+// PlanVO is the plan panel's payload: the plan being shown, plus the session's list.
 type PlanVO struct {
 	Title   string       `json:"title"`
 	Content string       `json:"content"`
@@ -38,15 +49,20 @@ type PlanVO struct {
 	// "when was this last touched" is what tells you whether it still describes the
 	// work in front of you.
 	UpdatedAt string `json:"updatedAt,omitempty"`
-	// Others counts the further plans this session has saved under other titles.
-	Others int `json:"others,omitempty"`
+	// Plans lists every plan this session still has (newest first), the shown one
+	// included — the UI needs to say "3 of 5" without a second round-trip.
+	Plans []PlanEntryVO `json:"plans,omitempty"`
 	// Note explains an empty plan (none yet, unreadable) — an empty panel and a panel
 	// with nothing to say are different states.
 	Note string `json:"note,omitempty"`
 }
 
-// GetPlan returns this session's newest plan.
-func (s *AgentService) GetPlan(sessionID string) PlanVO {
+// GetPlan returns one of this session's plans — the newest when path is empty, otherwise
+// the plan at path (which must be one of this session's own plan files).
+//
+// The list travels with the payload: a session can hold several plans, and the panel
+// shows both the one you are reading and how many others are there.
+func (s *AgentService) GetPlan(sessionID, path string) PlanVO {
 	if sessionID == "" {
 		return PlanVO{Note: "没有会话"}
 	}
@@ -55,30 +71,93 @@ func (s *AgentService) GetPlan(sessionID string) PlanVO {
 		return PlanVO{Note: "这个会话还没有计划"}
 	}
 
-	plan, err := tools.PlanFromFile(paths[0])
+	chosen := paths[0]
+	if path != "" {
+		if !containsPath(paths, path) {
+			return PlanVO{Plans: s.planList(paths), Note: "这份计划不属于这个会话"}
+		}
+		chosen = path
+	}
+
+	plan, err := tools.PlanFromFile(chosen)
 	if err != nil {
-		return PlanVO{Path: paths[0], Note: "计划文件读不出来：" + err.Error()}
+		return PlanVO{Path: chosen, Plans: s.planList(paths), Note: "计划文件读不出来：" + err.Error()}
 	}
 
 	vo := PlanVO{
 		Title:   plan.Title,
 		Content: plan.Content,
-		Path:    paths[0],
-		Others:  len(paths) - 1,
+		Path:    chosen,
+		Plans:   s.planList(paths),
 	}
 	if plan.Title == "" {
-		vo.Title = filepath.Base(paths[0])
+		vo.Title = filepath.Base(chosen)
 	}
 	for _, st := range plan.Steps {
 		vo.Steps = append(vo.Steps, PlanStepVO{Content: st.Content, Status: st.Status})
 	}
-	if info, err := os.Stat(paths[0]); err == nil {
+	if info, err := os.Stat(chosen); err == nil {
 		vo.UpdatedAt = info.ModTime().Format(time.RFC3339)
 	}
 	if len(vo.Steps) == 0 {
 		vo.Note = "计划里没有步骤"
 	}
 	return vo
+}
+
+// DeletePlan removes one of this session's plan files and returns "ok".
+//
+// The path comes from the frontend, so it is validated against this session's own plan
+// files first: a binding that deletes whatever it is handed is an arbitrary-file-delete
+// primitive, and this one is reachable from a UI listing.
+func (s *AgentService) DeletePlan(sessionID, path string) string {
+	if sessionID == "" {
+		return "没有会话"
+	}
+	if path == "" {
+		return "没有指定要删除的计划"
+	}
+	if !containsPath(s.desk.planFilesFor(sessionID), path) {
+		return "这份计划不属于这个会话，没有删除"
+	}
+	if err := os.Remove(path); err != nil {
+		return "删除失败：" + err.Error()
+	}
+	return "ok"
+}
+
+// planList summarizes every plan of this session, newest first.
+func (s *AgentService) planList(paths []string) []PlanEntryVO {
+	entries := make([]PlanEntryVO, 0, len(paths))
+	for _, p := range paths {
+		e := PlanEntryVO{Path: p}
+		if info, err := os.Stat(p); err == nil {
+			e.UpdatedAt = info.ModTime().Format(time.RFC3339)
+		}
+		if plan, err := tools.PlanFromFile(p); err == nil {
+			e.Title = plan.Title
+			e.Total = len(plan.Steps)
+			for _, st := range plan.Steps {
+				if st.Status == "completed" {
+					e.Done++
+				}
+			}
+		}
+		if e.Title == "" {
+			e.Title = filepath.Base(p)
+		}
+		entries = append(entries, e)
+	}
+	return entries
+}
+
+func containsPath(paths []string, path string) bool {
+	for _, p := range paths {
+		if p == path {
+			return true
+		}
+	}
+	return false
 }
 
 // planFilesFor lists this session's plan files, newest first.
