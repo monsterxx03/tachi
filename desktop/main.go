@@ -144,6 +144,14 @@ func main() {
 	desk.app = app
 	desk.window = window
 
+	// Native notifications for the two moments the app waits on the user (a
+	// finished turn, a parked AskUserQuestion). They are posted only while the
+	// window is unfocused; permission is asked once, in the background, so the
+	// prompt is not tied to the first notification. See desktop/notify.go.
+	desk.notify = newNotifier(window)
+	desk.notify.onNotificationClick()
+	go desk.notify.requestAuthorization()
+
 	// Forward native file drops to the frontend, which inserts @-references
 	// into the input area. The element id lets the frontend decide where the
 	// drop landed (and ignore drops outside the drop targets).

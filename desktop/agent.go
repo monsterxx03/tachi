@@ -957,6 +957,10 @@ type desktopApp struct {
 	app    *application.App
 	tray   *application.SystemTray
 	window *application.WebviewWindow
+	// notify posts native notifications for turns that finish (or questions that
+	// appear) while the window is unfocused. Set once during startup, before any
+	// turn can run (see newNotifier).
+	notify *notifier
 
 	// sm is a stable session manager (no bound current) used to list on-disk
 	// sessions. It is created once in initAgent and is never repointed; the
@@ -1380,6 +1384,13 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 				Questions: ev.Questions,
 			})
 		}
+		// The turn cannot proceed without the user, so tell them — unless they
+		// are already looking at the window (see notifier).
+		questions := make([]string, 0, len(ev.Questions))
+		for _, q := range ev.Questions {
+			questions = append(questions, q.Question)
+		}
+		d.notify.notifyAsk(d.sessionTitle(id), questions)
 	case agent.AgentEventAutoCompactStart:
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "处理", Detail: "压缩上下文…"})
 	case agent.AgentEventUsage:
@@ -1419,6 +1430,12 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 				"cost":       turnCost,
 				"credit":     turnCredit,
 			})
+		}
+		// The other moment worth interrupting for (see notifier): the turn is
+		// done and nobody is looking at the window. A user-initiated stop is
+		// excluded — announcing "回合完成" right after the user hit stop is noise.
+		if ev.Result != nil && ev.Result.ExitReason != agent.ExitReasonInterrupted && ev.Result.ExitReason != agent.ExitReasonCancelled {
+			d.notify.notifyTurnDone(d.sessionTitle(id), ev.Result.IterationsUsed, ev.Result.Duration)
 		}
 	case agent.AgentEventError:
 		d.tpsReset(id)
