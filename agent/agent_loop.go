@@ -152,6 +152,13 @@ type AgentEvent struct {
 	IterCount        int    // For AgentEventSubagentDone: sub-agent iteration count
 	SubagentToolName string // For AgentEventSubagentToolCall: internal tool name
 	SubagentToolDone bool   // For AgentEventSubagentToolCall: true if tool completed
+	// ToolAutoExpand is a display hint for frontends: the tool call was
+	// requested DIRECTLY by the user (a frontend slash command such as the
+	// desktop's /sh) rather than decided by the model, so its output is what the
+	// user asked for and should be shown rather than folded away. Only set by
+	// such callers; everything else leaves it false and gets the usual collapsed
+	// card.
+	ToolAutoExpand bool
 }
 
 // Exit reasons for RunResult.ExitReason — the terminal-outcome protocol

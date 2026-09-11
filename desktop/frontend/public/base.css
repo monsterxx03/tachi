@@ -117,7 +117,6 @@
   --user-ink-dim: rgba(74, 66, 53, 0.72);
   --user-code-bg: rgba(62, 54, 44, 0.12);
   --user-code-ink: #3f382c;
-  --user-line: rgba(62, 54, 44, 0.16);
 
   /* The two ambient tints that make the flat background read as sunlight on
      paper rather than neutral grey, plus the vertical light falloff .app
@@ -248,7 +247,6 @@
   --user-ink-dim: rgba(221, 227, 255, 0.68);
   --user-code-bg: rgba(124, 150, 255, 0.18);
   --user-code-ink: #dfe5ff;
-  --user-line: rgba(124, 150, 255, 0.3);
 
   --app-tint-a: rgba(122, 149, 255, 0.06);
   --app-tint-b: rgba(91, 124, 255, 0.05);

@@ -149,21 +149,20 @@
   box-shadow: none;
 }
 
-/* User bubble: a soft wash with dark ink. Deliberately quiet — it marks what
-   you said without out-shouting the agent's answer. It carries its own hairline
-   (--user-line, warm in light mode, blue in dark) so the bubble still reads as
-   a shape on the tinted background — a plain wash alone dissolved into it — and
-   so the accent stays reserved for things you can act on. */
+/* User bubble: a soft wash with dark ink, and nothing else — no border, no
+   shadow, no tail corner. It used to carry all three, which read as a card
+   dropped into a page of flat prose (the tail also pointed at an avatar that no
+   longer exists). The tonal step alone delimits it: a tint a few points deeper
+   than the content plane is enough to say "this one is mine" without competing
+   with the answer. The accent stays reserved for things you can act on. */
 .msg-user .msg-content {
   background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
   color: var(--user-ink);
-  border: 1px solid var(--user-line);
-  padding: 10px 14px;
-  border-radius: 14px 14px 4px 14px;
+  padding: 9px 13px;
+  border-radius: 14px;
   font-size: 14px;
   line-height: 1.55;
   max-width: 520px;
-  box-shadow: var(--shadow-1), inset 0 1px 0 var(--sheen);
 }
 /* Re-tint the bits that inherit dim/faint colours inside the tinted bubble. */
 .msg-user .msg-content .msg-ts,

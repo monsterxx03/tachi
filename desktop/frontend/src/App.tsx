@@ -159,7 +159,7 @@ const TurnPart = memo(function TurnPart({ part, workDir }: { part: Part; workDir
       const file = fileFromSendFileArgs(part.args || '')
       if (file) return <FileCard file={file} />
     }
-    return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok} durationMs={part.durationMs} />
+    return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok} durationMs={part.durationMs} defaultExpanded={part.expand} />
   }
   return <MarkdownBlock text={part.text || ''} workDir={workDir} />
 })
@@ -1128,7 +1128,7 @@ function App() {
       switch (ev.Type) {
         case 'thinking_delta': enqueueDelta(sessionId, 'thinking', ev.ThinkingDelta || ''); break
         case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
-        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false })); break
+        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand })); break
         case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined)); break
         case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'steer_check':

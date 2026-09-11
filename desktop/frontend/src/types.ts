@@ -36,6 +36,10 @@ export interface Part {
   durationMs?: number
   toolCallId?: string
   file?: AttachmentInfo
+  // expand: the card opens with its output showing. Set for tool calls the USER
+  // asked for directly (the /sh slash command) — that output is the answer, so
+  // folding it away would hide what was requested.
+  expand?: boolean
 }
 
 export interface Message {
@@ -67,6 +71,9 @@ export interface AgentEvent {
   // old history and how many messages it replaced.
   CompactSummary?: string
   OldMsgCount?: number
+  // ToolAutoExpand: display hint from the backend for user-requested tool calls
+  // (see Part.expand).
+  ToolAutoExpand?: boolean
 }
 
 export const STATUS_META: Record<string, { dot: string; desc: string }> = {

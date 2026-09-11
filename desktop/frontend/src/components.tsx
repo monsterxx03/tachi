@@ -313,8 +313,11 @@ function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }
   )
 }
 
-function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string; title?: string; args?: string; summary: string; ok: boolean; durationMs?: number }) {
-  const [expanded, setExpanded] = useState(false)
+// defaultExpanded opens the card with its output already showing: set for tool
+// calls the user requested directly (/sh), where the output IS the answer. Only
+// the initial state — the header still folds it away like any other card.
+function ToolCard({ name, title, args, summary, ok, durationMs, defaultExpanded }: { name: string; title?: string; args?: string; summary: string; ok: boolean; durationMs?: number; defaultExpanded?: boolean }) {
+  const [expanded, setExpanded] = useState(!!defaultExpanded)
   const long = ((args?.length || 0) + summary.length) > 120
   const prettyArgs = (() => { if (!args) return ''; try { return JSON.stringify(JSON.parse(args), null, 2) } catch { return args } })()
   return (

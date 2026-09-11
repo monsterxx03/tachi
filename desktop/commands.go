@@ -17,10 +17,15 @@ import (
 	"fmt"
 	"strings"
 
+	"encoding/json"
+	"time"
+
 	"github.com/monsterxx03/tachi/agent"
 	cmds "github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 )
 
 // CommandVO describes a slash command for the composer's "/" palette.
@@ -48,6 +53,7 @@ var desktopCommandHandlers = map[string]func(*commandRun) error{
 	"compact": runCompactCommand,
 	"review":  runReviewCommand,
 	"commit":  runCommitCommand,
+	"sh":      runShellCommand,
 }
 
 // ListCommands returns the slash commands the desktop supports, in registry
@@ -136,6 +142,7 @@ func (d *desktopApp) startCommand(name, args string, handler func(*commandRun) e
 		d.setSessionState(id, AgentState{Status: StatusBusy, Label: "执行", Detail: "/" + name})
 
 		events := make(chan agent.AgentEvent, 64)
+		startedAt := time.Now()
 		go func() {
 			defer close(events)
 			if err := handler(&commandRun{desk: d, run: r, id: id, ctx: ctx, args: args, ech: events}); err != nil {
@@ -143,22 +150,37 @@ func (d *desktopApp) startCommand(name, args string, handler func(*commandRun) e
 			}
 		}()
 
+		// Sub-runs report their own completion; the command as a whole completes
+		// once, at the end (see the doc comment). A failure anywhere keeps the
+		// turn in the error state the handler/loop already reported.
 		var lastComplete *agent.AgentEvent
+		failed := false
 		for ev := range events {
 			switch ev.Type {
 			case agent.AgentEventTurnComplete:
 				lastComplete = &ev // forwarded once the whole command is done
 				continue
 			case agent.AgentEventError:
+				failed = true
 				if ev.Result != nil && (ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled) {
 					endReason = "interrupted"
 				}
 			}
 			d.handleEvent(id, ev)
 		}
-		if lastComplete != nil && endReason != "error" {
+		if !failed {
 			endReason = "complete"
-			d.handleEvent(id, *lastComplete)
+			if lastComplete != nil {
+				d.handleEvent(id, *lastComplete)
+			} else {
+				// A command that calls no LLM (/sh) has no run to report, but the
+				// transcript still has to stop showing "running" and the footer
+				// still wants the wall-clock time.
+				d.handleEvent(id, agent.AgentEvent{
+					Type:   agent.AgentEventTurnComplete,
+					Result: &agent.RunResult{Duration: time.Since(startedAt)},
+				})
+			}
 		}
 	}()
 	return ""
@@ -285,4 +307,85 @@ func runCommitCommand(c *commandRun) error {
 		c.ech <- ev
 	}
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// /sh
+// ---------------------------------------------------------------------------
+
+// runShellCommand runs a shell command in the session's working directory and
+// echoes the result — no LLM involved.
+//
+// The output is rendered as a TOOL CARD, the same shape the agent's own Bash
+// calls take: a local command is then visually distinct from something the model
+// said, and it inherits the card's affordances (exit status, duration,
+// collapsible full output). That is also why the card body does not repeat the
+// command (unlike shutil.FormatShellResult, which the chat frontends use where
+// the reply has to be self-contained) — it is already the card's title.
+//
+// The result is deliberately NOT appended to the conversation: /sh is a local
+// escape hatch, and the model should not start reasoning about a command it
+// never ran.
+func runShellCommand(c *commandRun) error {
+	command := strings.TrimSpace(c.args)
+	if command == "" {
+		// A usage line, not an error: the turn ends normally with the hint in
+		// the transcript, exactly like the TUI's /sh does.
+		c.ech <- agent.AgentEvent{
+			Type:      agent.AgentEventTextDelta,
+			TextDelta: "用法：/sh <command> — 在会话工作目录执行 shell 命令并回显输出（不经过模型，目录切换不持久）",
+		}
+		return nil
+	}
+
+	// The Bash arg shape, so tools.ToolArgsSummary renders the same title the
+	// agent's own Bash calls get.
+	args, _ := json.Marshal(map[string]string{"command": command})
+	c.ech <- agent.AgentEvent{
+		Type:           agent.AgentEventToolCallStart,
+		ToolName:       tools.ToolNameBash,
+		ToolArgs:       string(args),
+		ToolAutoExpand: true, // the user asked for this output: show it, don't fold it
+	}
+
+	// Bounded by the shared timeout AND by the turn's context, so the stop button
+	// kills a runaway command just like it stops a turn.
+	ctx, cancel := context.WithTimeout(c.ctx, shutil.DefaultShellTimeout)
+	defer cancel()
+	start := time.Now()
+	out, code, _ := shutil.Shell(ctx, c.desk.sessionWorkDir(c.id), command)
+
+	note := ""
+	switch {
+	case errors.Is(c.ctx.Err(), context.Canceled):
+		note = "⏹ 已终止"
+	case errors.Is(ctx.Err(), context.DeadlineExceeded):
+		note = "⏱️ 超时，进程已终止"
+	case code != 0:
+		note = fmt.Sprintf("(exit %d)", code)
+	}
+	c.ech <- agent.AgentEvent{
+		Type:         agent.AgentEventToolResult,
+		ToolName:     tools.ToolNameBash,
+		ToolResult:   shellEcho(out, note),
+		ToolIsError:  note != "",
+		ToolDuration: time.Since(start),
+	}
+	return nil
+}
+
+// shellEcho is the tool card body for /sh: the command's combined output plus the
+// same trailers the chat frontends print (exit code, timeout, cancellation), or
+// an explicit "no output" so the card never looks empty for a silent command.
+func shellEcho(out, note string) string {
+	switch {
+	case note != "":
+		if strings.TrimSpace(out) == "" {
+			return note
+		}
+		return out + "\n" + note
+	case strings.TrimSpace(out) == "":
+		return "(no output)"
+	}
+	return out
 }
