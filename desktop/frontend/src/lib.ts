@@ -32,6 +32,17 @@ export function fmtDur(ms: number): string {
   return `${m}m${rs > 0 ? rs + 's' : ''}`
 }
 
+// fmtShare renders a share of a whole (0..1) as a percentage: "62%", "8.5%",
+// "0.4%". Slices smaller than 1% keep a decimal so they do not all collapse
+// into "0%" — a bucket that exists should never look empty.
+export function fmtShare(v: number): string {
+  if (!isFinite(v) || v <= 0) return '0%'
+  const pct = v * 100
+  if (pct >= 10) return `${Math.round(pct)}%`
+  if (pct >= 1) return `${pct.toFixed(1)}%`
+  return `${pct.toFixed(2)}%`
+}
+
 // fmtCredit renders a credit amount with a fixed 2 decimals. Credit is an
 // accounting unit, so every frontend shows the same amount the same way: this
 // matches the Go turn footer (agent.formatCredit) and the web console's

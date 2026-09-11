@@ -191,8 +191,8 @@
 
 /* Titlebar: flat chrome matching the sidebar, with a hairline along the bottom
    edge so the chrome/content boundary reads as a fold rather than a drawn line.
-   No blur, no compositing-layer tricks — nothing behind it needs protecting
-   anymore. */
+   No blur, no compositing-layer tricks — the 1px inset highlight along the top
+   edge is what keeps the bar looking lit rather than pasted on. */
 .titlebar {
   display: flex;
   align-items: center;
@@ -201,6 +201,7 @@
   height: 44px;
   border-bottom: 1px solid var(--border);
   background: var(--chrome-2);
+  box-shadow: inset 0 1px 0 var(--sheen);
   flex-shrink: 0;
   position: relative;
   z-index: 2;
@@ -236,6 +237,15 @@
   background: var(--border-2);
 }
 
+/* Right-hand cluster: the theme switch and the status badge travel together at
+   the far edge (one auto margin, so they can never drift apart mid-window). */
+.titlebar-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+}
+
 .status-badge {
   display: flex;
   align-items: center;
@@ -247,8 +257,75 @@
   box-shadow: var(--shadow-1);
   font-size: 12.5px;
   color: var(--text-dim);
-  margin-left: auto;
 }
+
+/* ── Theme switch (light / dark) ─────────────────────────────────────────── */
+/* A two-slot pill with a sliding thumb: which side is "on" reads at a glance,
+   and the thumb is the affordance that says "click to move it". The active
+   slot's icon takes the accent ink, the idle one fades back — no text, so it
+   costs 54px of titlebar and stays legible in both themes.
+
+   The well uses --chrome (the recessed plane) and the thumb --panel-solid (the
+   raised one), which keeps "thumb sits above the well" true in BOTH themes —
+   a light-veil background would have made the dark thumb the darker of the
+   two and read as a hole. */
+.theme-toggle {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  width: 54px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-pill);
+  background: var(--chrome);
+  color: var(--text-faint);
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: border-color 0.16s var(--ease);
+}
+.theme-toggle:hover { border-color: var(--accent-line); }
+.theme-ico {
+  position: relative;
+  z-index: 1; /* above the thumb */
+  display: grid;
+  place-items: center;
+  width: 26px; /* two slots fill the 52px content box exactly */
+  height: 100%;
+  transition: color 0.2s var(--ease), opacity 0.2s var(--ease);
+}
+.theme-toggle[data-state="light"] .theme-ico-sun,
+.theme-toggle[data-state="dark"] .theme-ico-moon { color: var(--accent-2); }
+.theme-toggle[data-state="light"] .theme-ico-moon,
+.theme-toggle[data-state="dark"] .theme-ico-sun { opacity: 0.5; }
+.theme-thumb {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-1);
+  transition: transform 0.22s var(--ease);
+}
+.theme-toggle[data-state="dark"] .theme-thumb { transform: translateX(26px); }
+.theme-toggle[data-state="light"] .theme-ico-sun,
+.theme-toggle[data-state="dark"] .theme-ico-moon { color: var(--accent-2); }
+.theme-toggle[data-state="light"] .theme-ico-moon,
+.theme-toggle[data-state="dark"] .theme-ico-sun { opacity: 0.5; }
+.theme-thumb {
+  position: absolute;
+  top: 1px;
+  left: 2px;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-1);
+  transition: transform 0.22s var(--ease);
+}
+.theme-toggle[data-state="dark"] .theme-thumb { transform: translateX(26px); }
 .dot {
   font-size: 11px;
   line-height: 1;

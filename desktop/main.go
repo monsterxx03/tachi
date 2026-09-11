@@ -53,6 +53,9 @@ func init() {
 	// AskUserQuestion forms: the payload carries the questions to render (see
 	// desktop/askuser.go).
 	application.RegisterEvent[AskEvent]("agent:ask")
+	// Theme switches from the titlebar: the frontend sends the theme it just
+	// applied (see desktop/uitheme.go).
+	application.RegisterEvent[string](uiThemeEventName)
 }
 
 // assetHandler serves the embedded frontend assets, and additionally answers
@@ -91,12 +94,14 @@ func main() {
 		},
 	})
 
-	// Appearance: follow the system by default (the frontend's
-	// prefers-color-scheme rides on the same Cocoa appearance), or take a
-	// forced value from TACHI_DESKTOP_APPEARANCE.
-	appearance := forcedAppearance()
-	dark := appearance == application.NSAppearanceNameDarkAqua ||
-		(appearance == application.DefaultAppearance && app.Env.IsDarkMode())
+	// Appearance: follow the system by default, unless the app has remembered a
+	// manual choice from the titlebar switch (desktop_ui.json, mirrored by the
+	// frontend) — or a forced value from TACHI_DESKTOP_APPEARANCE (dev aid),
+	// which outranks both. Resolving this BEFORE the window exists is what keeps
+	// a manual dark theme from flashing a light frame on launch.
+	storedTheme := loadUIState().Theme
+	forcedTheme := forcedAppearance()
+	appearance, dark := resolveTheme(storedTheme, forcedTheme, app.Env.IsDarkMode())
 	background := windowBgLight
 	if dark {
 		background = windowBgDark
@@ -120,11 +125,14 @@ func main() {
 			// not bleed through.
 			Backdrop: application.MacBackdropNormal,
 			TitleBar: application.MacTitleBarHidden,
-			// DefaultAppearance lets the webview follow the system theme.
+			// The appearance resolved above: the user's remembered choice, the
+			// dev override, or DefaultAppearance (= follow the system, which is
+			// also what an untouched switch resolves to).
 			Appearance: appearance,
 		},
 		// Matches --bg in base.css for the current theme, so the window never
-		// flashes a different shade before the frontend paints.
+		// flashes a different shade before the frontend paints. Kept in step by
+		// themeController once the frontend is running.
 		BackgroundColour: background,
 		// Native drag-and-drop of files onto the window. Drops only register
 		// on elements marked data-file-drop-target (the composer), and the
@@ -147,18 +155,21 @@ func main() {
 		desk.emitFileDrop(e.Context().DroppedFiles(), elementID)
 	})
 
-	// Keep that background in step with the system when it changes under us
-	// (the frontend follows prefers-color-scheme itself; this covers the
-	// pre-paint flash and the frame around the webview).
-	if appearance == application.DefaultAppearance {
-		app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(*application.ApplicationEvent) {
-			colour := windowBgLight
-			if app.Env.IsDarkMode() {
-				colour = windowBgDark
-			}
-			window.SetBackgroundColour(colour)
-		})
-	}
+	// Keep the window background in step with the theme while the app runs:
+	// the frontend mirrors every switch over uiThemeEventName (it owns the
+	// choice — its inline boot script is what paints the first frame), and the
+	// system-appearance listener covers the pre-paint colour and the frame
+	// around the webview. Both are no-ops while a manual choice or the dev
+	// override owns the theme (see themeController).
+	themes := newThemeController(window, storedTheme, forcedTheme)
+	app.Event.On(uiThemeEventName, func(e *application.CustomEvent) {
+		if theme, ok := e.Data.(string); ok {
+			themes.setFromFrontend(theme)
+		}
+	})
+	app.Event.OnApplicationEvent(events.Mac.ApplicationDidChangeTheme, func(*application.ApplicationEvent) {
+		themes.onSystemChange(app.Env.IsDarkMode())
+	})
 
 	// Menu bar item reflecting the agent state.
 	desk.tray = setupTray(desk)

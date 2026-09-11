@@ -43,6 +43,7 @@
   from { opacity: 0; transform: translateY(8px) scale(0.98); }
   to { opacity: 1; transform: none; }
 }
+
 .mcp-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
 .mcp-title { font-size: 13px; font-weight: 600; }
 .mcp-profile { display: inline-flex; align-items: center; gap: 6px; }
@@ -102,6 +103,87 @@
 .mcp-tool-state { font-size: 11px; color: var(--text-faint); }
 .mcp-tool-state.loaded { color: var(--green); }
 .mcp-tool-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── Context-usage popover (the composer's ring) ──────────────────────────── */
+/* Anchored to the RING, not to the composer: the ring is the popover's trigger
+   and it sits near the right end of the status row (the provider picker takes
+   the auto margin), so the panel hangs off .ctx-wrap — the ring's own box — and
+   grows to the left: a centred panel would run past the window edge, and the
+   composer-anchored version this replaced floated nowhere near its trigger. The
+   6px nudge puts the ring just inside the panel's footprint rather than exactly
+   under its corner. Answers "the window is 80% full, of what" with the same
+   buckets /usage prints.
+   The gap keeps it hugging the trigger — 10px, like .mcp-panel — so the panel
+   does overlap the top of the input box. That is the deliberate trade: the ring
+   is what this belongs to, and the input's text starts at the far left of the
+   box, so only empty space is covered. */
+.ctx-panel {
+  position: absolute;
+  right: -6px;
+  bottom: calc(100% + 10px);
+  width: 320px;
+  padding: 12px 14px 10px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-4);
+  z-index: 52;
+  animation: panel-in 0.22s var(--ease) both;
+}
+.ctx-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.ctx-title { font-size: 13px; font-weight: 600; }
+.ctx-total { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+.ctx-sub { margin-top: 2px; font-size: 11px; color: var(--text-faint); }
+/* Stacked bar. Segments are sized by their token count via flex-grow, so the
+   proportions need no rounding and the bar always fills its width exactly; the
+   1px gap is what makes the parts read as parts. */
+.ctx-bar {
+  display: flex;
+  gap: 1px;
+  height: 8px;
+  margin: 11px 0;
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+}
+.ctx-seg { flex-basis: 0; min-width: 3px; }
+.ctx-rows { display: flex; flex-direction: column; gap: 5px; }
+.ctx-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+.ctx-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+.ctx-name {
+  flex: 1;
+  min-width: 0;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ctx-pct { width: 40px; text-align: right; color: var(--text-faint); }
+.ctx-empty { padding: 14px 0 10px; text-align: center; font-size: 12px; line-height: 1.7; color: var(--text-faint); }
+/* The estimate is a local heuristic — say so, so nobody reconciles it against a
+   provider's bill. */
+.ctx-foot {
+  margin-top: 11px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+/* One hue per bucket (see --ctx-* in base.css). */
+.ctx-c-system { background: var(--ctx-system); }
+.ctx-c-internalTools { background: var(--ctx-internal-tools); }
+.ctx-c-mcpTools { background: var(--ctx-mcp-tools); }
+.ctx-c-userMessages { background: var(--ctx-user-messages); }
+.ctx-c-assistantMessages { background: var(--ctx-assistant-messages); }
+.ctx-c-toolResults { background: var(--ctx-tool-results); }
+.ctx-c-other { background: var(--ctx-other); }
 
 /* ── Sidebar context menu + rename ─────────────────────────────────────── */
 .ctx-menu {

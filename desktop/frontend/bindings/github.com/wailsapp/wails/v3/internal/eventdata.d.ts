@@ -15,6 +15,7 @@ declare module "@wailsio/runtime" {
             "agent:ask": main$0.AskEvent;
             "agent:filedrop": main$0.FileDropEvent;
             "agent:state": main$0.AgentState;
+            "ui:theme": string;
         }
     }
 }

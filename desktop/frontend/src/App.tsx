@@ -23,10 +23,11 @@ import {
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, toLocalAsset, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import {
-  ContextRing, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
+  ContextMeter, CacheRing, ThinkingPart, MessageBubble, ToolCard, MCPPanel, AtFilePicker, AskForm,
   FileCard, fileFromSendFileArgs, PreBlock,
-  SettingsIcon, UsageIcon, MCPIcon,
+  SettingsIcon, UsageIcon, MCPIcon, ThemeToggle,
 } from './components'
+import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 
 // TableScroller wraps GFM tables in a horizontally scrollable container so a
@@ -222,6 +223,10 @@ function App() {
   const [tps, setTps] = useState(0)
   const [lastTps, setLastTps] = useState(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
+  // Theme (light/dark) for the titlebar switch; useThemeHostSync mirrors the
+  // active theme to Go, which owns the window colour outside the webview.
+  const [theme, toggleTheme] = useTheme()
+  useThemeHostSync()
   const [mcpOpen, setMcpOpen] = useState(false)
   const [mcpServers, setMcpServers] = useState<any[]>([])
   const [mcpLoading, setMcpLoading] = useState<Record<string, boolean>>({})
@@ -1107,7 +1112,10 @@ function App() {
         <div className="titlebar-title no-drag">
           {currentId ? <span className="session-id" title={currentId + '（点击复制）'} onClick={() => navigator.clipboard?.writeText(currentId).catch(() => {})}>{currentId}</span> : null}
         </div>
-        <div className="status-badge no-drag"><span className={`dot dot-${state.status}`}>{meta.dot}</span><span className="status-label">{state.label}</span></div>
+        <div className="titlebar-right no-drag">
+          <ThemeToggle theme={theme} onToggle={toggleTheme} />
+          <div className="status-badge"><span className={`dot dot-${state.status}`}>{meta.dot}</span><span className="status-label">{state.label}</span></div>
+        </div>
       </header>
 
       <div className="app-body">
@@ -1322,7 +1330,7 @@ function App() {
                 }}>
                   {THINKING_LEVELS.map((l) => <option key={l} value={l}>{l}</option>)}
                 </select>
-                <ContextRing estimate={ctxEstimate} window={ctxWindow} />
+                <ContextMeter sessionId={currentId} estimate={ctxEstimate} window={ctxWindow} />
                 <span className="usage-meta">
                   {hasCacheHit ? <CacheRing rate={cacheHitRate} /> : null}
                   {cost > 0 ? <span className="usage-cost" title="当前会话成本">¥{cost.toFixed(3)}</span> : null}

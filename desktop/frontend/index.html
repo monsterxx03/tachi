@@ -3,6 +3,28 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- Theme boot. Resolves the stored choice (else the system preference) and
+         stamps it on <html> while the document is still parsing — the inline
+         script is deliberate: a module/deferred script would run after the
+         first paint, which is exactly the white flash this avoids. Go decides
+         the window's pre-paint colour from the same choice (desktop/uitheme.go);
+         this decides the first painted frame. Keep the storage key in sync with
+         STORAGE_KEY in src/theme.ts. -->
+    <script>
+      (function () {
+        var theme
+        try {
+          var stored = localStorage.getItem('tachi.desktop.theme')
+          theme = stored === 'light' || stored === 'dark' ? stored : null
+        } catch (e) {
+          theme = null // storage blocked → fall through to the system preference
+        }
+        if (!theme) {
+          theme = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+        }
+        document.documentElement.dataset.theme = theme
+      })()
+    </script>
     <link rel="stylesheet" href="/base.css" />
     <link rel="stylesheet" href="/layout.css" />
     <link rel="stylesheet" href="/chat.css" />

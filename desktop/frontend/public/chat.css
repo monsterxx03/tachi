@@ -7,7 +7,26 @@
   flex: 1;
   min-height: 0;
 }
+/* A whisper of dot grid (22px pitch, ~5% ink) fading out below the fold: it
+   gives the large empty stretches of the content plane a texture to sit on
+   instead of reading as blank paper, and is far too faint to compete with
+   prose, code or tool output. Drawn on a pseudo-element rather than on .chat
+   itself so the mask cannot fade the messages with it; .chat is lifted above
+   it. Flat and static — no blur, nothing to composite. */
+.chat-wrap::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background-image: radial-gradient(var(--grid-dot) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: linear-gradient(180deg, #000 0%, #000 38%, transparent 76%);
+  mask-image: linear-gradient(180deg, #000 0%, #000 38%, transparent 76%);
+}
 .chat {
+  position: relative;
+  z-index: 1; /* above the grid, so messages stay crisp */
   flex: 1;
   min-width: 0;
   min-height: 0;
@@ -135,16 +154,19 @@
 }
 
 /* User bubble: a soft blue wash with dark ink. Deliberately quiet — it marks
-   what you said without out-shouting the agent's answer. */
+   what you said without out-shouting the agent's answer. It carries a tinted
+   hairline so the bubble still reads as a shape on the blue-tinted background
+   (a plain wash alone dissolved into it). */
 .msg-user .msg-content {
   background: linear-gradient(165deg, var(--user-grad-a), var(--user-grad-b));
   color: var(--user-ink);
+  border: 1px solid var(--accent-line-soft);
   padding: 10px 14px;
   border-radius: 14px 14px 4px 14px;
   font-size: 14px;
   line-height: 1.55;
   max-width: 520px;
-  box-shadow: var(--shadow-1);
+  box-shadow: var(--shadow-1), inset 0 1px 0 var(--sheen);
 }
 /* Re-tint the bits that inherit dim/faint colours inside the tinted bubble. */
 .msg-user .msg-content .msg-ts,
@@ -279,6 +301,8 @@
   border-top: 1px solid var(--border);
   padding: 14px 26px 10px;
   background: var(--chrome-2);
+  /* Same lit top edge as the titlebar — the two bars are the same plane. */
+  box-shadow: inset 0 1px 0 var(--sheen);
   flex-shrink: 0;
   position: relative;
   z-index: 2;
@@ -502,7 +526,7 @@
   color: var(--text-dim);
   min-width: 0;
 }
-.composer-status .ctx-ring,
+.composer-status .ctx-wrap,
 .composer-status .usage-tps,
 .composer-status .usage-meta,
 .composer-status .mcp-btn { flex-shrink: 0; }

@@ -2,21 +2,142 @@ import { memo, useCallback, useEffect, useRef, useState, type ComponentPropsWith
 import { createPortal } from 'react-dom'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import { actOnKey, copyText, fmtDur, humanize, toLocalAsset } from './lib'
+import { actOnKey, copyText, fmtDur, fmtShare, humanize, toLocalAsset } from './lib'
+import { useThemeSnapshot, type Theme } from './theme'
 import type { AttachmentInfo } from './types'
+import type { ContextInfoVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
+// ContextRing is the meter itself: used fraction of the context window as a
+// ring. Purely decorative — ContextMeter (below) owns the button semantics and
+// the popover, so the SVG carries no title/role of its own.
 function ContextRing({ estimate, window: w }: { estimate: number; window: number }) {
   const pct = w > 0 ? Math.min(100, (estimate / w) * 100) : 0
   const r = 8, c = 2 * Math.PI * r
   const off = c - (pct / 100) * c
-  const title = w > 0 ? `${pct.toFixed(1)}% (${humanize(estimate)} / ${humanize(w)})` : '上下文 —'
   return (
-    <svg className="ctx-ring" width="22" height="22" viewBox="0 0 22 22" role="img" aria-label={title}>
-      <title>{title}</title>
+    <svg className="ctx-ring" width="22" height="22" viewBox="0 0 22 22" aria-hidden="true">
       <circle cx="11" cy="11" r={r} fill="none" stroke="var(--border)" strokeWidth="2.5" />
       <circle cx="11" cy="11" r={r} fill="none" stroke={pct > 80 ? 'var(--amber)' : 'var(--accent)'} strokeWidth="2.5" strokeDasharray={c} strokeDashoffset={off} strokeLinecap="round" transform="rotate(-90 11 11)" />
     </svg>
   )
+}
+
+// ContextMeter is the composer's context ring plus the popover behind it: the
+// ring answers "how full is the window", the popover answers "full of WHAT" —
+// the same buckets /usage prints (system prompt, tool schemas, the
+// conversation, tool output), from the agent's own estimate (see
+// desktop/contextinfo.go). Fetched on open rather than polled: the numbers only
+// move when a turn runs.
+function ContextMeter({ sessionId, estimate, window: w }: { sessionId: string; estimate: number; window: number }) {
+  const [open, setOpen] = useState(false)
+  const [info, setInfo] = useState<ContextInfoVO | null>(null)
+  const [loading, setLoading] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+
+  const pct = w > 0 ? Math.min(100, (estimate / w) * 100) : 0
+  const label = w > 0 ? `上下文 ${pct.toFixed(1)}%（${humanize(estimate)} / ${humanize(w)}）` : '上下文 —'
+
+  const load = useCallback(async () => {
+    setLoading(true)
+    try {
+      setInfo((await AgentService.GetContextInfo(sessionId)) || null)
+    } catch {
+      setInfo(null) // no agent yet (simulated mode) — the panel says so
+    } finally {
+      setLoading(false)
+    }
+  }, [sessionId])
+
+  // Fetch on open, and again when the session or the estimate moves while it
+  // stays open — otherwise a popover left open during a turn would keep showing
+  // the numbers from the moment it was opened. estimate only changes per API
+  // call, so this is one cheap IPC per turn iteration, not a poll.
+  useEffect(() => {
+    if (open) void load()
+  }, [open, load, estimate])
+
+  // Same dismissal contract as the MCP panel: click outside, or Esc.
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || boxRef.current?.contains(t) || t.closest('.ctx-btn')) return
+      setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setOpen(false) }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
+
+  const toggle = () => setOpen((v) => !v)
+
+  return (
+    // The wrapper is the popover's containing block: the panel cannot live
+    // inside the <button> (a button may not contain a block element, and clicks
+    // would land on it), so the ring's box is what the panel hangs off.
+    <span className="ctx-wrap">
+      {open ? (
+        <div className="ctx-panel" ref={boxRef}>
+          <ContextPanel info={info} loading={loading} />
+        </div>
+      ) : null}
+      <button type="button" className="ctx-btn" aria-label={`${label}，点击查看明细`} aria-expanded={open} onClick={toggle}>
+        <ContextRing estimate={estimate} window={w} />
+      </button>
+    </span>
+  )
+}
+
+// ContextPanel is the popover body: one stacked bar on top, one row per bucket
+// below it. Buckets come from Go already labelled and already filtered.
+function ContextPanel({ info, loading }: { info: ContextInfoVO | null; loading: boolean }) {
+  const est = info?.estimate || 0
+  const win = info?.contextWindow || 0
+  const parts = info?.parts || []
+
+  return (
+    <>
+      <div className="ctx-head">
+        <span className="ctx-title">上下文占用</span>
+        <span className="ctx-total">{info === null && loading ? '读取中…' : win > 0 ? `${humanize(est)} / ${humanize(win)}` : humanize(est)}</span>
+      </div>
+      {est > 0 && win > 0 ? <div className="ctx-sub">{pctOf(est, win)} 的上下文窗口</div> : null}
+      {est <= 0 ? (
+        <div className="ctx-empty">还没有可用的估算<br />下一轮对话后可见</div>
+      ) : parts.length === 0 ? (
+        <div className="ctx-empty">分项明细需下一轮对话后可见<br />（当前为历史会话的估算总量）</div>
+      ) : (
+        <>
+          {/* flex-grow carries the proportion, so the bar needs no rounding math
+              and can never fall short of 100% because of it. */}
+          <div className="ctx-bar">
+            {parts.map((p) => (
+              <span key={p.key} className={`ctx-seg ctx-c-${p.key}`} style={{ flexGrow: p.tokens }} />
+            ))}
+          </div>
+          <div className="ctx-rows">
+            {parts.map((p) => (
+              <div className="ctx-row" key={p.key}>
+                <span className={`ctx-dot ctx-c-${p.key}`} />
+                <span className="ctx-name">{p.label}</span>
+                <span className="ctx-tokens">{humanize(p.tokens)}</span>
+                <span className="ctx-pct">{fmtShare(p.tokens / est)}</span>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+      <div className="ctx-foot">本地 chars/4 估算，非 API 返回用量</div>
+    </>
+  )
+}
+
+function pctOf(part: number, whole: number): string {
+  return `${((part / whole) * 100).toFixed(1)}%`
 }
 
 // CacheRing renders the cache-hit rate as a ring (like ContextRing for
@@ -113,6 +234,48 @@ function UsageIcon() {
 
 function MCPIcon() {
   return (<svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><path d="M9 3v6" /><path d="M15 3v6" /><path d="M6 9h12v3a6 6 0 0 1-12 0V9z" /><path d="M12 18v3" /></svg>)
+}
+
+function SunIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+      <circle cx="12" cy="12" r="4.1" />
+      <path d="M12 2.8v2.3M12 18.9v2.3M2.8 12h2.3M18.9 12h2.3M5.5 5.5l1.6 1.6M16.9 16.9l1.6 1.6M18.5 5.5l-1.6 1.6M7.1 16.9l-1.6 1.6" />
+    </svg>
+  )
+}
+
+function MoonIcon() {
+  return (
+    <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1z" />
+    </svg>
+  )
+}
+
+// ThemeToggle is the titlebar light/dark switch: a two-slot pill with a sliding
+// thumb, so the state reads as "which side is on" even before the icons are
+// parsed. The label states the ACTION (what a click does), matching how the
+// sidebar toggle is labelled.
+function ThemeToggle({ theme, onToggle }: { theme: Theme; onToggle: () => void }) {
+  const dark = theme === 'dark'
+  const label = dark ? '切换到浅色模式' : '切换到深色模式'
+  return (
+    <button
+      type="button"
+      className="theme-toggle no-drag"
+      data-state={theme}
+      role="switch"
+      aria-checked={dark}
+      aria-label={label}
+      title={label}
+      onClick={onToggle}
+    >
+      <span className="theme-ico theme-ico-sun" aria-hidden="true"><SunIcon /></span>
+      <span className="theme-ico theme-ico-moon" aria-hidden="true"><MoonIcon /></span>
+      <span className="theme-thumb" aria-hidden="true" />
+    </button>
+  )
 }
 
 function ToolCard({ name, title, args, summary, ok, durationMs }: { name: string; title?: string; args?: string; summary: string; ok: boolean; durationMs?: number }) {
@@ -227,15 +390,10 @@ export const MermaidDiagram = memo(function MermaidDiagram({ code }: { code: str
   const [svg, setSvg] = useState('')
   const [failed, setFailed] = useState(false)
   const [open, setOpen] = useState(false)
-  const [dark, setDark] = useState(() => !!window.matchMedia?.('(prefers-color-scheme: dark)').matches)
-
-  useEffect(() => {
-    const mq = window.matchMedia?.('(prefers-color-scheme: dark)')
-    if (!mq) return
-    const onChange = () => setDark(mq.matches)
-    mq.addEventListener('change', onChange)
-    return () => mq.removeEventListener('change', onChange)
-  }, [])
+  // Mermaid draws its own palette, so it has to be told which theme is on
+  // screen — the app theme, not the OS preference: a user who picked dark on a
+  // light Mac must not get a white diagram in a dark transcript.
+  const dark = useThemeSnapshot() === 'dark'
 
   useEffect(() => {
     let alive = true
@@ -587,4 +745,4 @@ function AskForm({ questions, onSubmit, onCancel }: {
   )
 }
 
-export { ContextRing, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon }
+export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, MessageBubble, CopyIcon, ToolCard, MCPPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
