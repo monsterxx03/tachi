@@ -170,6 +170,12 @@
   font-size: 14px;
   line-height: 1.55;
   max-width: 520px;
+  /* A pasted link has no space to break at, so the default `normal` lets it run straight out
+     of the bubble (measured: a 265-char URL made the content 1733px wide inside a 520px
+     bubble). `anywhere` breaks it — and unlike `break-word` it also lets the bubble shrink to
+     the room it has, because min-content is computed with the break opportunity included
+     (same rule as the findings pane; see .finding-text). */
+  overflow-wrap: anywhere;
 }
 /* Re-tint the bits that inherit dim/faint colours inside the tinted bubble. */
 .msg-user .msg-content .msg-ts,

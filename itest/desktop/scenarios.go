@@ -198,6 +198,21 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// 用户气泡里的长链接：粘贴的 URL 没有空格可断，折行规则必须给到气泡本身。
+		//
+		{
+			name: "bubble-wrap",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe bubble-wrap scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("链接收到了。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+			},
+		},
+		//
 		// 上下文占用环（ContextMeter）：新会话跑完一轮之后它必须有数。
 		//
 		{
