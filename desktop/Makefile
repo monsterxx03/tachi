@@ -16,6 +16,17 @@ WAILS     ?= wails3
 NPM       ?= npm
 APPDIR     = bin/Tachi.app
 
+# LOCAL_SIGN_ID is the local, self-signed code-signing identity used by
+# `make sign-local`. macOS ties TCC grants — notification permission included —
+# to an app's code identity, and `wails3 package` leaves the bundle AD-HOC
+# signed, whose identity is a content hash: it changes on every rebuild, so the
+# permission the user granted is forgotten and the app can end up with
+# notifications denied for good ("Notifications are not allowed for this
+# application"). Re-signing with a certificate keeps the identity stable across
+# rebuilds. Create it once (Keychain Access → Certificate Assistant, or a
+# self-signed cert trusted for code signing) and it lives in the login keychain.
+LOCAL_SIGN_ID ?= Tachi Local Code Signing
+
 export PATH := $(HOME)/go/bin:$(PATH)
 
 # The repo-root go.work (../go.work) does not list this module, but Go tools
@@ -26,7 +37,7 @@ export PATH := $(HOME)/go/bin:$(PATH)
 # tooling (build/dev/run + their task dependencies) inherit this.
 export GOWORK := off
 
-.PHONY: all build dev appicon frontend tidy clean run
+.PHONY: all build dev appicon frontend tidy clean run sign-local
 
 all: build
 
@@ -53,3 +64,11 @@ run: build
 
 clean:
 	rm -rf bin frontend/dist
+
+# sign-local re-signs the packaged app with the local certificate so its code
+# identity (and therefore its notification permission) survives rebuilds.
+# Run it after `make build`.
+sign-local:
+	test -d $(APPDIR) || (echo "no $(APPDIR) yet — run make build first"; exit 1)
+	codesign --force --deep --sign "$(LOCAL_SIGN_ID)" $(APPDIR)
+	codesign -dv --verbose=2 $(APPDIR) 2>&1 | grep -E "Authority|flags"
