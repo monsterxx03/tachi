@@ -133,6 +133,43 @@ export function actOnKey(fn: () => void) {
   }
 }
 
+// SessionRow is one line of the sidebar: a conversation, plus the sessions it was compacted from.
+export type SessionRow<T> = { session: T; compactedFrom: T[] }
+
+// sessionRows folds a session list into rows, one per conversation.
+//
+// A compaction chain is ONE conversation to the reader — the child continues where the parent
+// stopped, and both carry the same title — so the ancestors hang under their child (closed)
+// instead of standing beside it as extra, identically-named sessions. That is also what keeps the
+// sidebar the same after a restart: the shape is derived from `compactedParentId` in meta.json, not
+// from the live switch the frontend happens to have witnessed.
+//
+// The input's order is preserved (ListSessions sorts newest-first), so the newest link of a chain
+// is the row and its ancestors follow it newest-first. A parent whose child is no longer in the
+// list (deleted) is a row of its own — its history is still reachable.
+export function sessionRows<T extends { id: string; compactedParentId?: string }>(list: T[]): SessionRow<T>[] {
+  const byId = new Map(list.map((s) => [s.id, s]))
+  const hasChild = new Set<string>()
+  for (const s of list) {
+    if (s.compactedParentId && byId.has(s.compactedParentId)) hasChild.add(s.compactedParentId)
+  }
+  const rows: SessionRow<T>[] = []
+  for (const s of list) {
+    if (hasChild.has(s.id)) continue // its child carries this conversation's row
+    const compactedFrom: T[] = []
+    const seen = new Set([s.id]) // a corrupted pair of links must not loop forever
+    let parentId = s.compactedParentId
+    while (parentId && byId.has(parentId) && !seen.has(parentId)) {
+      const parent = byId.get(parentId) as T
+      seen.add(parentId)
+      compactedFrom.push(parent)
+      parentId = parent.compactedParentId
+    }
+    rows.push({ session: s, compactedFrom })
+  }
+  return rows
+}
+
 // fmtBytes renders a byte count the way the agent's own confirmation message
 // does (pkg/strutil.HumanBytes), so "README.md · 12.4 KB" on the card and
 // "✅ 文件 README.md (12.4 KB) 已加入发送队列" in the transcript agree.

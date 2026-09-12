@@ -154,9 +154,12 @@ function FindingRow({ item, pick, onPick, orphan }: {
   const finding = item.finding
   const meta = SEVERITY_META[finding.severity] || SEVERITY_META.info
   return (
-    <div className={`finding is-${finding.severity}${orphan ? ' is-orphan' : ''}${pick.checked ? '' : ' is-unpicked'}`}>
+    // data-finding-idx is the jump target: the arrows find a row by the finding's index in
+    // the payload, which is stable across renders and unique across the whole pane.
+    <div className={`finding is-${finding.severity}${orphan ? ' is-orphan' : ''}${pick.checked ? '' : ' is-unpicked'}`}
+      data-finding-idx={item.idx}>
       {/* The tick is the whole contract with the message: only what is ticked is sent. */}
-      <label className="finding-pick" title={pick.checked ? '取消：不写进发给 agent 的清单' : '选中：写进发给 agent 的清单'}>
+      <label className="finding-pick" title={pick.checked ? '取消：不写进发给 Tachi 的清单' : '选中：写进发给 Tachi 的清单'}>
         <input type="checkbox" checked={pick.checked}
           onChange={(e) => onPick(item.idx, { ...pick, checked: e.target.checked })} />
       </label>
@@ -233,6 +236,23 @@ function DiffCounts({ added, removed }: { added: number; removed: number }) {
   )
 }
 
+// JUMP_HIGHLIGHT_MS is how long the row an arrow landed on stays marked. Long enough to
+// find it after the scroll settles, short enough not to look like a selection — the tick
+// box is what expresses "this one", and a second, stronger-looking state would compete.
+const JUMP_HIGHLIGHT_MS = 1400
+
+// jumpRank is a finding's position along the ↑/↓ walk: the FILE's index in the diff first
+// (the order the groups render in), then the line inside it. Derived from the data rather
+// than read off the DOM, because a folded file's rows are not in the DOM at all — and the
+// arrows must still be able to reach them.
+function jumpRank(f: FindingVO, fileOrder: Map<string, number>, root: string): [number, number] {
+  for (const [path, i] of fileOrder) {
+    if (findingMatchesFile(root, f.path, path)) return [i, f.line || 0]
+  }
+  // A file the diff does not show sits in the 其它文件 group, i.e. after every real group.
+  return [fileOrder.size, f.line || 0]
+}
+
 // DiffFindingsPane is the 意见 + diff view: the working-tree diff of the reviewed files, with
 // the review's findings anchored on the lines they name, plus the picker that turns them into
 // one ordinary message.
@@ -241,10 +261,13 @@ function DiffCounts({ added, removed }: { added: number; removed: number }) {
 // report that explains them belong side by side in the side-channel panel — and an overlay
 // covering the conversation is exactly what this design set out to remove
 // (docs/2026-09-12-desktop-oneoff-panel-design.md §5.3).
-export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, onSend, onOpenReport, onRerun }: {
+export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, onSend, onOpenReport, onRerun }: {
   diff: TurnDiffVO | null
   loading: boolean
   findings: FindingVO[]
+  // The run this payload belongs to (sessionId/run name). The draft and the walk are per run:
+  // see the reset effect below.
+  runKey: string
   // One line explaining an empty findings list: "no review yet" and "a review found nothing"
   // are different facts, and a silent pane tells the reader neither.
   note?: string
@@ -254,6 +277,8 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // Whether a diff was even asked for. A run opened from the switcher carries no file set
   // (a review's scope lives with the turn that started it), and saying so beats an empty box.
   hasPaths: boolean
+  // Why the diff could not be read ("" when it was). An empty pane must not have to guess.
+  diffError?: string
   // Sends the picked findings as an ordinary user message. Absent only when there is
   // nowhere to send them, and then the pane is read-only.
   onSend?: (text: string) => void
@@ -295,8 +320,92 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       onClick={() => onOpenReport?.()}>报告</button>
   ) : null
 
+  // ── Folding ─────────────────────────────────────────────────────────────────
+  // fileOpen is a map of exceptions to a DERIVED default: a file with findings is open (the
+  // review is what the reader came for), one without is folded (its diff is context, not
+  // news). Nothing has to be seeded when the payload arrives, and a re-run's findings cannot
+  // fight a stored default — the same shape the picking draft uses.
+  const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({})
+  const keyOf = (f: FileDiffVO) => (f.oldPath || '') + f.path
+  const findingsOf = (path: string) => items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, path))
+  const isOpen = (f: FileDiffVO) => fileOpen[keyOf(f)] ?? findingsOf(f.path).length > 0
+  // The key of the group a finding was rendered under ("" when the diff does not show it):
+  // that is what a jump has to unfold before the row exists to scroll to.
+  const keyForFinding = (f: FindingVO) => {
+    const file = (diff?.files || []).find((g) => findingMatchesFile(diff?.root || '', f.path, g.path))
+    return file ? keyOf(file) : ''
+  }
+
+  // ── Jumping between findings (the ↑/↓ pair in the header) ───────────────────
+  const paneRef = useRef<HTMLDivElement>(null)
+  // The walk order and the current position. Both are derived from the payload rather than
+  // from the DOM, so a folded file's findings are still reachable (see jumpRank).
+  const fileOrder = new Map<string, number>()
+  ;(diff?.files || []).forEach((f, i) => fileOrder.set(f.path, i))
+  const jumpOrder = [...items, ...outsideItems]
+    .sort((a, b) => {
+      const [fa, la] = jumpRank(a.finding, fileOrder, diff?.root || '')
+      const [fb, lb] = jumpRank(b.finding, fileOrder, diff?.root || '')
+      return fa - fb || la - lb || a.idx - b.idx
+    })
+    .map((it) => it.idx)
+  const [jumpPos, setJumpPos] = useState<number | null>(null)
+  const lastJumpRef = useRef<number | null>(null)
+  // pendingJump drives the actual scroll: it is set by the click and consumed by the effect
+  // below, i.e. AFTER React has committed the unfold the jump may have asked for. `at` makes
+  // two jumps to the same finding two different states, so the second one still runs.
+  const [pendingJump, setPendingJump] = useState<{ idx: number; at: number } | null>(null)
+
+  // The draft and the walk belong to the RUN whose payload they describe. Switching runs in
+  // the switcher, or re-running a review, replaces the findings — and BOTH indexes point at
+  // findings that no longer exist (the tick would follow a position onto an unrelated row,
+  // and the walk would report a position it never took). Keyed by the run rather than by the
+  // findings themselves: a LIVE run's record grows finding by finding, and a reset per
+  // arrival would wipe the reader's edits while they are still writing them.
+  useEffect(() => {
+    setEdits({})
+    lastJumpRef.current = null
+    setJumpPos(null)
+  }, [runKey])
+
+  const jumpTo = (step: 1 | -1) => {    if (jumpOrder.length === 0) return
+    const from = lastJumpRef.current === null ? null : jumpOrder.indexOf(lastJumpRef.current)
+    // First press: ↓ starts at the first finding, ↑ at the last, so either arrow can enter
+    // the walk from nothing. Afterwards the walk CLAMPS at the ends rather than wrapping —
+    // a list this short is easier to trust when the ends are ends.
+    const at = from === null
+      ? (step === 1 ? 0 : jumpOrder.length - 1)
+      : Math.max(0, Math.min(jumpOrder.length - 1, from + step))
+    const idx = jumpOrder[at]
+    lastJumpRef.current = idx
+    setJumpPos(at)
+    // The target may live in a folded file, whose rows are not rendered yet: unfold it in the
+    // same update, and let the effect scroll once React has committed that.
+    const target = [...items, ...outsideItems].find((it) => it.idx === idx)
+    const key = target ? keyForFinding(target.finding) : ''
+    if (key) setFileOpen((prev) => (prev[key] === true ? prev : { ...prev, [key]: true }))
+    setPendingJump({ idx, at: Date.now() })
+  }
+
+  useEffect(() => {
+    if (!pendingJump) return
+    const el = paneRef.current?.querySelector<HTMLElement>(`[data-finding-idx="${pendingJump.idx}"]`)
+    if (!el) return
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+    el.classList.add('is-jump-target')
+    const timer = window.setTimeout(() => el.classList.remove('is-jump-target'), JUMP_HIGHLIGHT_MS)
+    return () => { window.clearTimeout(timer); el.classList.remove('is-jump-target') }
+  }, [pendingJump])
+
   return (
-    <div className="viewer-doc is-diff">
+    <div className="viewer-doc is-diff" ref={paneRef} tabIndex={-1}
+      // Alt+↑/↓ walks the findings from anywhere inside the pane (a click on a tick box is
+      // enough to put focus here) — the buttons are the pointer's way to the same walk.
+      onKeyDown={(e) => {
+        if (!e.altKey || (e.key !== 'ArrowUp' && e.key !== 'ArrowDown')) return
+        e.preventDefault()
+        jumpTo(e.key === 'ArrowDown' ? 1 : -1)
+      }}>
       <div className="diff-panel-head">
         <span className="diff-panel-title">本轮改动</span>
         {diff?.root ? <span className="diff-panel-root" title={diff.root}>{diff.root}</span> : null}
@@ -327,19 +436,23 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
         </div>
       ) : null}
       {loading ? <div className="diff-panel-empty">读取中…</div> : null}
+      {/* A failed read is its own line, above the empty-state explanation: "the diff could
+          not be read" and "there is nothing to show" are different facts, and the pane used
+          to print the second while meaning the first. */}
+      {!loading && diffError ? <div className="diff-panel-empty">读取 diff 失败：{diffError}</div> : null}
       {!loading && !hasPaths ? (
         <div className="diff-panel-empty">
           这次运行没有带上被评审的文件清单 —— 从被评审的那一轮点「完整 diff」进来，就会看到与 git HEAD 的对照
         </div>
       ) : null}
-      {!loading && hasPaths && diff?.note ? <div className="diff-panel-empty">{diff.note}</div> : null}
-      {!loading && hasPaths && !diff?.note && (diff?.files || []).length === 0 ? (
+      {!loading && !diffError && hasPaths && diff?.note ? <div className="diff-panel-empty">{diff.note}</div> : null}
+      {!loading && !diffError && hasPaths && !diff?.note && (diff?.files || []).length === 0 ? (
         <div className="diff-panel-empty">没有未提交的改动（可能已经提交）——「完整 diff」只能看工作树里未提交的差异</div>
       ) : null}
       {(diff?.files || []).map((f) => (
-        <FileDiffGroup key={(f.oldPath || '') + f.path} file={f} root={diff?.root || ''}
+        <FileDiffGroup key={keyOf(f)} file={f} root={diff?.root || ''}
           findings={items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, f.path))}
-          picks={picks} onPick={onPick} />
+          picks={picks} onPick={onPick} open={isOpen(f)} onToggle={() => setFileOpen((p) => ({ ...p, [keyOf(f)]: !isOpen(f) }))} />
       ))}
       {outsideItems.length > 0 ? (
         <div className="diff-file">
@@ -358,20 +471,42 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
           </div>
         </div>
       ) : null}
-      {/* The way out: the picked findings become one ordinary user message. It is a bar
-          rather than another thing in the header because the reader decides AFTER reading
-          the diff, by which point the header is far above. */}
-      {findings.length > 0 && onSend ? (
+      {/* The way out AND the way through: the picked findings become one ordinary user message,
+          and the ↑/↓ pair walks the findings. It is a STICKY bar rather than another row in the
+          header for a reason the walk made concrete: the pane scrolls (that is how a long diff
+          gets read) and a header scrolls away with it, so jumping down to a finding left the
+          arrows off-screen and the reader had to scroll back up to jump again. The bar is the
+          only thing that stays put.
+          The action sits at the LEFT end: the pane scrolls vertically to read a long diff,
+          and a button at the right end of a bar that wide is the one thing a reader could
+          miss. The count it acts on stands next to it, the explanation stays at the right.
+          The walk is separate from all of that on purpose: which findings are TICKED is a
+          decision about sending, where you are in the list is not — so a pane with no send
+          path (no onSend) still gets the arrows. */}
+      {findings.length > 0 ? (
         <div className="diff-sendbar">
-          <span className="diff-sendbar-count">已选 <strong>{picked.length}</strong> / {findings.length} 条</span>
-          <button type="button" className="diff-sendbar-link" onClick={() => setAll(true)}>全选</button>
-          <button type="button" className="diff-sendbar-link" onClick={() => setAll(false)}>全不选</button>
-          <span className="diff-sendbar-hint">作为一条普通消息发出，之后照常在对话里继续</span>
-          <button type="button" className="diff-sendbar-go" disabled={picked.length === 0}
-            title={picked.length === 0 ? '先勾选至少一条意见' : '把勾选的意见发给 agent'}
-            onClick={() => onSend(buildFindingMessage(picked))}>
-            发给 agent
-          </button>
+          {onSend ? (
+            <>
+              <button type="button" className="diff-sendbar-go" disabled={picked.length === 0}
+                title={picked.length === 0 ? '先勾选至少一条意见' : '把勾选的意见发给 Tachi'}
+                onClick={() => onSend(buildFindingMessage(picked))}>
+                发给 Tachi
+              </button>
+              <span className="diff-sendbar-count">已选 <strong>{picked.length}</strong> / {findings.length} 条</span>
+              <button type="button" className="diff-sendbar-link" onClick={() => setAll(true)}>全选</button>
+              <button type="button" className="diff-sendbar-link" onClick={() => setAll(false)}>全不选</button>
+            </>
+          ) : null}
+          {/* The walk, with its position: "where am I" has to be readable at the moment the
+              jump lands, which is exactly when the header is not on screen. */}
+          <span className="diff-jump">
+            <button type="button" className="diff-jump-btn" title="上一条意见（Alt+↑）"
+              aria-label="上一条意见" onClick={() => jumpTo(-1)}>↑</button>
+            <button type="button" className="diff-jump-btn" title="下一条意见（Alt+↓）"
+              aria-label="下一条意见" onClick={() => jumpTo(1)}>↓</button>
+            {jumpPos !== null ? <span className="diff-jump-pos">{jumpPos + 1}/{jumpOrder.length}</span> : null}
+          </span>
+          {onSend ? <span className="diff-sendbar-hint">作为一条普通消息发出</span> : null}
         </div>
       ) : null}
     </div>
@@ -379,21 +514,30 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
 }
 
 // FileDiffGroup is one file in the panel: its header (with the badges that explain
-// what happened to it) and its hunks.
-function FileDiffGroup({ file, root, findings, picks, onPick }: {
+// what happened to it) and, when unfolded, its hunks.
+//
+// The fold is CONTROLLED by the pane: which files start folded is a rule about the review
+// (a file with findings opens, one without stays shut), and the ↑/↓ walk has to be able to
+// unfold a file before it can scroll to a finding inside it. Both need one owner.
+function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: {
   file: FileDiffVO
   root: string
   findings: PlacedFinding[]
   picks: FindingPick[]
   onPick: (idx: number, next: FindingPick) => void
+  open: boolean
+  onToggle: () => void
 }) {
   const abs = root && !file.path.startsWith('/') ? `${root}/${file.path}` : file.path
   // The file's own content, the way every other file in this app is shown — the same
   // PreviewFile machinery behind the attachment cards.
   const [peek, setPeek] = useState(false)
   return (
-    <div className="diff-file">
+    <div className={`diff-file${open ? '' : ' is-folded'}`}>
       <div className="diff-file-head">
+        <button type="button" className="diff-file-toggle" aria-expanded={open}
+          title={open ? '收起这个文件的差异' : '展开这个文件的差异'}
+          onClick={onToggle}>{open ? '▾' : '▸'}</button>
         <span className="diff-path" title={abs}>{file.path}</span>
         {file.oldPath && file.oldPath !== file.path ? <span className="diff-badge" title={`原路径 ${file.oldPath}`}>重命名</span> : null}
         {file.created ? <span className="diff-badge is-new">新增</span> : null}
@@ -408,7 +552,9 @@ function FileDiffGroup({ file, root, findings, picks, onPick }: {
           onClick={() => { AgentService.OpenPath(abs).catch(() => {}) }}>打开</button>
       </div>
       {peek ? <FilePreviewOverlay path={abs} name={file.path.split('/').pop()} onClose={() => setPeek(false)} /> : null}
-      {file.binary ? (
+      {/* A folded file keeps its header (path, badges, the finding count and the two ways
+          into the file) and drops the hunks — including the findings that sit on them. */}
+      {!open ? null : file.binary ? (
         <div className="diff-panel-empty">二进制文件，git 不逐行比较</div>
       ) : file.hunks?.length ? (
         <DiffLines hunks={file.hunks} lineNumbers findings={findings}

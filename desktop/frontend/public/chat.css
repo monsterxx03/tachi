@@ -450,6 +450,37 @@
 }
 .composer-input::placeholder { color: var(--text-faint); }
 .composer-input-wrap { position: relative; }
+/* The grab strip at the top of the composer box (the first child of .composer-box, above the
+   textarea). It is where the reader says "this message needs more room": drag up to grow, arrow
+   keys work too (it is a real separator, not a decoration). The visible affordance is a small
+   pill rather than the whole strip — an 8px hit area is easy to miss, and a permanently visible
+   handle would be a decoration on every keystroke. */
+.composer-resizer {
+  position: relative;
+  height: 8px;
+  margin: 0 0 2px;
+  cursor: row-resize;
+  touch-action: none;
+}
+.composer-resizer::after {
+  content: '';
+  position: absolute;
+  left: 50%;
+  top: 3px;
+  transform: translateX(-50%);
+  width: 30px;
+  height: 3px;
+  border-radius: var(--radius-pill);
+  background: var(--border-2);
+  transition: background 0.15s var(--ease);
+}
+.composer-resizer:hover::after,
+.composer-resizer:focus-visible::after,
+.composer-resizer.is-dragging::after { background: var(--accent-2); }
+.composer-resizer:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); border-radius: var(--radius-xs); }
+/* While a drag is in flight the pointer is over text: no selection, and the resize cursor stays
+   even where the strip is not under the pointer. Mirrors body.is-resizing for the side panel. */
+body.is-resizing-y { cursor: row-resize; user-select: none; }
 /* Round stop button: a spinning ring around a square — reads as "generating,
    click to stop" (like iOS/claude desktop). The ring rotates on ::before so
    the center glyph stays upright. */
@@ -931,7 +962,12 @@ button.work-dir {
    numbers — that is the whole difference between the two views, so the line
    styles are shared and only the number column is added. */
 .viewer-doc.is-diff {
-  max-width: 1100px;
+  /* 1100px is the reading-width cap this pane shares with the file-preview overlay; `100%` is
+     the cap it needs as a PANEL: in the side column the pane must never be wider than the
+     column, or the whole pane (and the send bar with it) starts scrolling sideways — measured
+     at 734px inside a 419px panel in oneoff-footer, with the bar's left end 300px out of view.
+     Long diff LINES still scroll, in `.diff-body`, which is where that belongs. */
+  max-width: min(1100px, 100%);
   padding: 18px 22px;
 }
 .diff-panel-head {
@@ -941,8 +977,23 @@ button.work-dir {
   padding-bottom: 10px;
   border-bottom: 1px solid var(--border);
   margin-bottom: 12px;
+  /* This row, and the two below, WRAP instead of widening the pane. The panel is a narrow
+     column by design (the reader drags it to taste), and a row of non-shrinkable controls —
+     badges, 预览/打开, the note — gave the pane a min-content width of nearly twice the
+     viewport: measured in oneoff-footer, the pane (and with it the send bar's ends) then
+     scrolled sideways, so 「发给 Tachi」 could only be reached by dragging the scrollbar.
+     Wrapping costs a second line in a narrow panel and keeps every control in view. */
+  flex-wrap: wrap;
 }
 .diff-panel-title { font-size: 13px; font-weight: 600; color: var(--text); }
+/* The two long-text items of a diff head (the repo root, and each file's path) take the line's
+   spare room and TRUNCATE, instead of setting the line's width from their own text. `flex-basis:
+   0` alone is not enough: with the default `min-width: auto` an item's minimum is its
+   min-content, which for `white-space: nowrap` is the WHOLE string — so the row could not get
+   narrower than the longest path in it, and the pane inherited that width (measured +281px in
+   oneoff-footer, which is what pushed the send bar's ends out of view). */
+.viewer-doc.is-diff .diff-panel-root,
+.viewer-doc.is-diff .diff-path { flex: 1 1 0; min-width: 0; }
 .diff-panel-root {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   font-size: 11px;
@@ -961,6 +1012,7 @@ button.work-dir {
 .diff-file-head {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* see .diff-panel-head */
   gap: 8px;
   padding: 4px 0 5px;
   border-bottom: 1px solid var(--border);
@@ -988,6 +1040,24 @@ button.work-dir {
   cursor: pointer;
 }
 .diff-open:hover { background: var(--accent-soft); color: var(--accent-2); }
+/* The fold switch for one file. A glyph button rather than a clickable header: the same
+   row already hosts 预览/打开 and the badges, and a click on those must not fold. */
+.diff-file-toggle {
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 9px;
+  line-height: 1;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.diff-file-toggle:hover { background: var(--accent-soft); color: var(--accent-2); }
+.diff-file-toggle:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
 /* Real file coordinates: old and new side by side, tabular so they line up. */
 .diff-ln {
   flex-shrink: 0;
@@ -1006,6 +1076,7 @@ button.work-dir {
 .diff-findings {
   display: flex;
   align-items: center;
+  flex-wrap: wrap; /* see .diff-panel-head: a row of controls must not widen the pane */
   gap: 8px;
   padding: 7px 9px;
   margin-bottom: 12px;
@@ -1023,6 +1094,26 @@ button.work-dir {
   font-variant-numeric: tabular-nums;
 }
 .diff-findings-hint { margin-left: auto; color: var(--text-faint); font-size: 10.5px; }
+/* The walk between findings: two arrows and how far along it is. It lives in the sticky send
+   bar (see .diff-sendbar) rather than next to the count: the count is a fact about the run,
+   the walk is where the reader IS, and only the bar stays on screen while a long diff is read. */
+.diff-jump { display: inline-flex; align-items: center; gap: 2px; flex-shrink: 0; }
+.diff-jump-btn {
+  width: 17px;
+  height: 17px;
+  padding: 0;
+  border: 1px solid var(--border);
+  background: var(--panel-solid);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 10px;
+  line-height: 1;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+}
+.diff-jump-btn:hover { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent-line); }
+.diff-jump-btn:focus-visible { outline: none; box-shadow: 0 0 0 2px var(--accent-ring); }
+.diff-jump-pos { color: var(--text-faint); font-size: 10.5px; font-variant-numeric: tabular-nums; padding: 0 2px; }
 .finding {
   display: flex;
   gap: 6px;
@@ -1055,8 +1146,11 @@ button.work-dir {
 .finding-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 /* A finding is written in inline markdown, so the row renders it (InlineMd) instead of
    showing the punctuation. Newlines in the model's text are meaningful — suggestions
-   arrive as short lists — hence pre-wrap rather than the parent's `normal`. */
-.finding-text, .finding-fix { white-space: pre-wrap; }
+   arrive as short lists — hence pre-wrap rather than the parent's `normal`.
+   overflow-wrap: anywhere is what keeps a long unbreakable token (a path, a URL) from
+   widening the PANE: the reader may have to read it, but not by scrolling the diff bar
+   out of view (see the sendbar at the bottom of this section). */
+.finding-text, .finding-fix { white-space: pre-wrap; overflow-wrap: anywhere; }
 .finding-text { color: var(--text); }
 .finding-fix { color: var(--text-dim); }
 /* Inline code mirrors .assistant-text code, so a code span reads the same in a reply and
@@ -1075,6 +1169,14 @@ button.work-dir {
 .finding-orphan { color: var(--text-faint); font-size: 10.5px; }
 /* A finding whose file is not in the diff has no code column to be indented under. */
 .finding-list .finding { margin-left: 0; }
+/* The row an arrow landed on. Marked rather than selected: the tick box is what says
+   "this one", so the walk only has to be findable — an animated wash that fades out,
+   plus a leading edge the eye catches after a scroll. */
+.finding.is-jump-target { animation: finding-landed 1.4s var(--ease); }
+@keyframes finding-landed {
+  from { background: var(--accent-soft); box-shadow: inset 3px 0 0 var(--accent-2); }
+  to { background: var(--wash); box-shadow: inset 3px 0 0 transparent; }
+}
 
 /* ── Picking findings into a message (P3) ─────────────────────────────────── */
 /* The tick is the contract with the message: only ticked findings are sent, so an
@@ -1108,12 +1210,18 @@ button.work-dir {
 .finding-comment:focus { border-color: var(--accent-line); }
 .finding-comment::placeholder { color: var(--text-faint); }
 /* The bar the panel ends on. It is sticky because the decision to send comes AFTER
-   reading the diff — by then the panel's own header is far above. */
+   reading the diff — by then the panel's own header is far above — and it now also carries
+   the ↑/↓ walk, for the same reason: a control the reader uses WHILE the pane is scrolled
+   has to live in the thing that does not scroll.
+   flex-wrap: the bar holds five controls (and two more now), and a narrow panel must WRAP
+   them instead of widening the pane by their min-content — the same rule as .diff-panel-head
+   and .diff-file-head, and the one that keeps the horizontal scrollbar away. */
 .diff-sendbar {
   position: sticky;
   bottom: 0;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
   margin-top: 16px;
   padding: 9px 11px;

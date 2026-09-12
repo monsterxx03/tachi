@@ -16,10 +16,16 @@ import (
 type Result struct {
 	Scenario string   `json:"scenario"`
 	Lines    []Line   `json:"lines"`
-	Error    string   `json:"error,omitempty"` // a JS exception that ended the run early
-	Done     bool     `json:"done"`            // false = the driver died mid-way (watchdog)
+	Error    string   `json:"error,omitempty"`   // a JS exception that ended the run early
+	Done     bool     `json:"done"`              // false = the driver died mid-way (watchdog)
 	MS       int      `json:"ms"`
 	Missing  []string `json:"missing,omitempty"` // selectors the driver waited for and never saw
+	// Console is everything the page logged, riding in the SAME body as the verdict.
+	// It used to be a second POST to /console, and that POST races the runner: /result is
+	// what unblocks it, and it reads the console right away — so a console error recorded
+	// while the driver was still asserting was almost always lost, which is exactly the
+	// line that explains a strange failure.
+	Console []string `json:"console,omitempty"`
 }
 
 // Line is one assertion or one informational log line.
@@ -81,6 +87,12 @@ func newSink() (*sink, error) {
 		s.mu.Lock()
 		if s.result == nil {
 			s.result = &res
+			// The console rides in the result, so the runner can read both after the same
+			// POST — see Result.Console. /console stays for a driver that dies before
+			// reporting (it has nowhere else to put them).
+			if len(res.Console) > 0 {
+				s.console = append(s.console, res.Console...)
+			}
 			close(s.done)
 		}
 		s.mu.Unlock()

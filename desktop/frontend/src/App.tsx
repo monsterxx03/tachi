@@ -8,7 +8,7 @@ import {
   type Message,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionRows } from './lib'
 import {
   ContextMeter, CacheRing, UserBubble, MCPPanel, AskForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
@@ -169,6 +169,10 @@ function App() {
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
   const [editTitle, setEditTitle] = useState('')
+  // Which folded compaction chains the reader opened, by the chain head's session id. Closed by
+  // default — the chain is one conversation, and its history is a click away, not the thing the
+  // sidebar is for. Not persisted, like every other disclosure state.
+  const [openChains, setOpenChains] = useState<Record<string, boolean>>({})
   const [, setCurrentTitle] = useState<string>('Tachi')
   // Auto-follow state: true while the view is parked at the bottom. Scrolling up flips it
   // off (and surfaces the "jump to latest" button) so incoming streaming output no longer
@@ -200,18 +204,16 @@ function App() {
     refreshRunning, markRunning, enqueueDelta, flushDeltas,
   } = useSessionTranscript(currentId, scrollToBottom)
   const state = useAgentStatus()
-  // The statusbar's numbers (cost/credit/缓存环/速率) belong to the session on screen; they
-  // are cleared before the next session's ledger is read (see useSessionUsage).
+  // The statusbar's numbers (cost/credit/缓存环/速率/上下文环) belong to the session on
+  // screen; they are cleared before the next session's ledger is read (see useSessionUsage).
   const {
-    cost, credit, cacheHitRate, hasCacheHit, tps, lastTps,
+    cost, credit, cacheHitRate, hasCacheHit, tps, lastTps, ctxEstimate, ctxWindow,
     refresh: refreshUsage, clear: clearUsage, resetRate: resetTps,
   } = useSessionUsage(currentId)
   const [loading, setLoading] = useState(false)
   const [providers, setProviders] = useState<any[]>([])
   const [providerName, setProviderName] = useState('')
   const [thinkingLevel, setThinkingLevel] = useState('none')
-  const [ctxEstimate, setCtxEstimate] = useState(0)
-  const [ctxWindow, setCtxWindow] = useState(0)
   const [workDir, setWorkDir] = useState('')
   // Workspace roots (primary + additional) and the popover that manages them. The
   // popover is only mounted while open, so its own outside-click/Esc handling is
@@ -473,7 +475,7 @@ function App() {
   const refreshProvider = useCallback(async () => {
     try {
       const info = await (AgentService as any).GetProviderInfo?.()
-      if (info) { setProviderName(info.provider); setCtxEstimate(info.contextEstimate || 0); setCtxWindow(info.contextWindow || 0) }
+      if (info) setProviderName(info.provider)
       const lv = await (AgentService as any).GetThinkingLevel?.()
       if (lv) setThinkingLevel(lv)
     } catch { /* ignore */ }
@@ -817,7 +819,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   // the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setReminderModal(null); return }
+      if (e.key === 'Escape') {
+        // Claim the gesture only when something here was actually dismissed: the side panel
+        // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
+        // as "somebody else used this key". An unconditional preventDefault would swallow every
+        // Escape before the panel's handler could see it as unclaimed.
+        if (shortcutsOpen || confirmDel || menu || reminderModal) e.preventDefault()
+        setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setReminderModal(null)
+        return
+      }
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
@@ -826,7 +836,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChat])
+  }, [newChat, shortcutsOpen, confirmDel, menu, reminderModal])
 
   useEffect(() => {
     const loadProv = async () => {
@@ -940,6 +950,39 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     AgentService.Stop().catch(() => {})
   }, [])
 
+  // sessionRow renders one session's line in the sidebar. It is a function rather than an inline
+  // map body because the chain folding needs it twice: once for the conversation's newest link and
+  // once per session it was compacted from (see sessionRows).
+  const sessionRow = (s: SessionItem, compacted: boolean) => (
+    /* Row (not a <button>): it hosts a rename <input> and a context
+       menu, so it takes role/tabIndex + Enter/Space instead. */
+    <div key={s.id} className={`session ${s.active ? 'active' : ''}${compacted ? ' is-compacted' : ''}`}
+      onClick={() => clickSession(s.id)}
+      role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}
+      onContextMenu={(e) => { e.preventDefault(); setMenu({ sid: s.id, x: e.clientX, y: e.clientY }) }}>
+      {editingId === s.id ? (
+        <input className="session-rename" autoFocus value={editTitle}
+          onChange={(e) => setEditTitle(e.target.value)}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => {
+            // Enter/Escape during IME composition belong to the
+            // candidate window, not to rename/commit.
+            if (imeActive(e)) return
+            if (e.key === 'Enter') { e.stopPropagation(); commitRename(s.id) }
+            else if (e.key === 'Escape') { e.stopPropagation(); setEditingId(''); setEditTitle('') }
+          }} />
+      ) : (
+        <div className="session-title" onDoubleClick={() => { setEditingId(s.id); setEditTitle(s.title || ''); setMenu(null) }}>{s.title || '未命名会话'}</div>
+      )}
+      <div className="session-meta">
+        {runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}
+        {/* A compacted-away session says what it is: same title, older time, and it is history. */}
+        {compacted ? <span className="session-tag" title="这一段对话在压缩时被摘要取代，可以回看">压缩前</span> : null}
+        {new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}
+      </div>
+    </div>
+  )
+
   const meta = STATUS_META[state.status as string] ?? STATUS_META.idle
   // The provider picker lists names only; the selected provider's model is
   // exposed as its tooltip instead.
@@ -976,28 +1019,24 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           <button className="new-chat" onClick={newChat}><span className="new-chat-plus">＋</span> 新建会话</button>
           <nav className="session-list">
             <div className="session-section">最近</div>
-            {sessions.map((s) => (
-              /* Row (not a <button>): it hosts a rename <input> and a context
-                 menu, so it takes role/tabIndex + Enter/Space instead. */
-              <div key={s.id} className={`session ${s.active ? 'active' : ''}`} onClick={() => clickSession(s.id)}
-                role="button" tabIndex={0} onKeyDown={actOnKey(() => clickSession(s.id))}
-                onContextMenu={(e) => { e.preventDefault(); setMenu({ sid: s.id, x: e.clientX, y: e.clientY }) }}>
-                {editingId === s.id ? (
-                  <input className="session-rename" autoFocus value={editTitle}
-                    onChange={(e) => setEditTitle(e.target.value)}
-                    onClick={(e) => e.stopPropagation()}
-                    onKeyDown={(e) => {
-                      // Enter/Escape during IME composition belong to the
-                      // candidate window, not to rename/commit.
-                      if (imeActive(e)) return
-                      if (e.key === 'Enter') { e.stopPropagation(); commitRename(s.id) }
-                      else if (e.key === 'Escape') { e.stopPropagation(); setEditingId(''); setEditTitle('') }
-                    }} />
-                ) : (
-                  <div className="session-title" onDoubleClick={() => { setEditingId(s.id); setEditTitle(s.title || ''); setMenu(null) }}>{s.title || '未命名会话'}</div>
-                )}
-                <div className="session-meta">{runningSet.has(s.id) ? <span className="spin-dot" title="运行中" /> : null}{new Date(s.updatedAt).toLocaleString('zh-CN', { hour12: false })}</div>
-              </div>
+            {/* One row per CONVERSATION, not per session: a compaction chain is folded into its
+                newest link, with the sessions it was compacted from underneath it (closed) — see
+                sessionRows. Rendering the raw list made the pre-compaction session look like a
+                second, identically-titled conversation. */}
+            {sessionRows(sessions).map((row) => (
+              <Fragment key={row.session.id}>
+                {sessionRow(row.session, false)}
+                {row.compactedFrom.length > 0 ? (
+                  <button type="button" className={`session-chain${openChains[row.session.id] ? ' is-open' : ''}`}
+                    aria-expanded={!!openChains[row.session.id]}
+                    title={openChains[row.session.id] ? '收起压缩前的会话' : '展开压缩前的会话（同一段对话的上一节）'}
+                    onClick={() => setOpenChains((p) => ({ ...p, [row.session.id]: !p[row.session.id] }))}>
+                    <span className="session-chain-caret">{openChains[row.session.id] ? '▾' : '▸'}</span>
+                    压缩前 {row.compactedFrom.length} 节
+                  </button>
+                ) : null}
+                {openChains[row.session.id] ? row.compactedFrom.map((s) => sessionRow(s, true)) : null}
+              </Fragment>
             ))}
             {sessions.length === 0 && <div className="session-empty">暂无会话</div>}
           </nav>
@@ -1111,6 +1150,10 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                     const name = e.target.value
                     await (AgentService as any).SwitchProvider?.(name)
                     refreshProvider()
+                    // A different provider is a different context window, so the ring has to
+                    // re-read (it is no longer a side effect of refreshProvider — see
+                    // useSessionUsage).
+                    refreshUsage(currentId)
                   }}>
                   {/* Names only — the model string is long and often identical
                       to the provider name; the tooltip above keeps it reachable. */}

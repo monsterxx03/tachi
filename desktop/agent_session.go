@@ -22,6 +22,12 @@ type SessionInfo struct {
 	Provider  string    `json:"provider"`
 	CreatedAt time.Time `json:"createdAt"`
 	UpdatedAt time.Time `json:"updatedAt"`
+	// CompactedParentID names the session this one was compacted FROM ("" when it was not). It is
+	// the one piece of the compaction chain the sidebar needs: a chain is ONE conversation, and the
+	// frontend folds a parent under the child it became. The child is the newest link, so a fresh
+	// launch can rebuild the same shape from meta.json — which the frontend's own memory of the
+	// live switch (agent:session_switched) could not do.
+	CompactedParentID string `json:"compactedParentId,omitempty"`
 }
 
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
@@ -339,11 +345,12 @@ func (d *desktopApp) pageSessionMessages(r *sessionRun, id, before string, limit
 
 func toSessionInfo(ss *session.Session) SessionInfo {
 	return SessionInfo{
-		ID:        ss.ID,
-		Title:     ss.Title,
-		Provider:  ss.ProviderName,
-		CreatedAt: ss.CreatedAt,
-		UpdatedAt: ss.UpdatedAt,
+		ID:                ss.ID,
+		Title:             ss.Title,
+		Provider:          ss.ProviderName,
+		CreatedAt:         ss.CreatedAt,
+		UpdatedAt:         ss.UpdatedAt,
+		CompactedParentID: ss.CompactedParentID,
 	}
 }
 

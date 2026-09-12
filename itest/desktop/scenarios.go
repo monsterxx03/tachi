@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -9,6 +10,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
 
@@ -99,6 +101,20 @@ func (c *checkCtx) sessionCount() int {
 	return n
 }
 
+// sessionMetas reads every session's meta.json as raw JSON (the scenario-level view of what the
+// app wrote on disk — including fields the frontend binding does not carry, like the child link).
+func (c *checkCtx) sessionMetas() []map[string]any {
+	paths, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*", "meta.json"))
+	var out []map[string]any
+	for _, p := range paths {
+		var m map[string]any
+		if err := readJSON(p, &m); err == nil {
+			out = append(out, m)
+		}
+	}
+	return out
+}
+
 const (
 	// A text turn long enough to still be running while the driver queues a message and
 	// clicks 立即发送. The pauses are the point: they make the interruption window real.
@@ -182,8 +198,24 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// 上下文占用环（ContextMeter）：新会话跑完一轮之后它必须有数。
+		//
+		{
+			name: "ctx-ring",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe ctx-ring scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: bashStream("sleep 4 && echo smoke-slow", "call_slow")},
+				{Reply: textStream("慢工具跑完了。", 1200)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+			},
+		},
+		//
 		// Session-scoped numbers: a brand-new session must not inherit the previous one's
-		// cache ring or cost (that bug is in .tachi.md's list), the sidebar row must pick
+		// cache ring or cost (that bug is in docs/agents/desktop.md's list), the sidebar row must pick
 		// up the generated title from the session_title event, and creating one hands the
 		// caret to the composer.
 		//
@@ -199,6 +231,81 @@ func scenarios() []scenario {
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				c.check("两个会话各跑了一轮", len(c.requests) == 2, requestCount(c.requests))
+			},
+		},
+		//
+		// The input box's height: the reader drags its top edge (or presses ↑ on the handle) and
+		// the box grows — the conversation giving up the room, up to the window's share of it.
+		// Nothing is persisted, so dragging back down must leave the stylesheet's height and no
+		// inline style behind.
+		//
+		{
+			name: "composer-height",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe composer-height scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// Never used: the driver only drags the box, and nothing here sends a message. It
+				// exists so the mock is a well-formed script rather than an empty one.
+				{Reply: textStream("不应该被调用。", 300)},
+			},
+			after: func(c *checkCtx) {
+				c.check("拖动输入框高度不发任何请求", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
+		//
+		// Compaction, from the desktop's side: /compact runs the summarising turn, the
+		// conversation moves into a child session, and the sidebar has to keep showing ONE row
+		// for it (the child, with the pre-compaction session folded under it). The ring's
+		// numbers are captured before and after, because "the context was summarised" has to be
+		// visible in the meter that reports it.
+		//
+		{
+			name: "compact",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe compact scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// A first turn big enough that summarising it MOVES the meter: the estimate is
+				// dominated by the system prompt and tool schemas (a small turn is lost in the
+				// rounding), so a scenario about "the context got smaller" needs a conversation
+				// that was actually taking up room — which is the only reason anyone compacts.
+				{Reply: textStream(strings.Repeat("这是一段很长的历史内容，用来把上下文撑起来。", 1500), 600)},
+				// …and a SECOND turn, because the estimate describes the PROMPT of the last call:
+				// a reply only enters the measurement when the next call is made with it in the
+				// history. Without this turn the big reply is never counted, and "before" would
+				// read the same floor as "after".
+				{Reply: textStream("第二轮回复：确认。", 600)},
+				// The /compact turn: the model has to produce the summary the child session is
+				// built from (an empty reply makes the command refuse).
+				{Reply: textStream("历史摘要：用户要求查看工作目录；已确认只有一个 README.md。", 600)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两轮对话加一次压缩，共三次调用", len(c.requests) == 3, requestCount(c.requests))
+				_, compacted := c.requestSeen("compress the above conversation")
+				c.check("压缩 fork 收到了压缩指令", compacted, "")
+
+				// The disk half of the same fact: the chain is linked BOTH ways, which is what
+				// lets a fresh launch rebuild the folded shape (the frontend only sees
+				// compacted_parent_id).
+				metas := c.sessionMetas()
+				c.check("压缩后有两个会话", len(metas) == 2, strconv.Itoa(len(metas)))
+				var child, parent map[string]any
+				for _, m := range metas {
+					if m["compacted_parent_id"] != nil {
+						child = m
+					} else {
+						parent = m
+					}
+				}
+				c.check("子会话记下了它的父会话", child != nil && parent != nil,
+					fmt.Sprintf("metas=%v", metas))
+				if child != nil && parent != nil {
+					c.check("父子互相指向对方",
+						child["compacted_parent_id"] == parent["id"] && parent["compacted_child_id"] == child["id"],
+						fmt.Sprintf("child.parent=%v parent.child=%v", child["compacted_parent_id"], parent["compacted_child_id"]))
+				}
 			},
 		},
 		//
@@ -291,21 +398,28 @@ func scenarios() []scenario {
 			},
 			gitInit: true,
 			steps: []mockllm.Step{
-				// Turn 1: write a file, then say so.
-				{Reply: writeFileStream("NOTES.md", "first line\nsecond line\n", "call_w1")},
-				{Reply: textStream("已经写下 NOTES.md。", 900)},
+				// Turn 1: write TWO files, then say so. Two files, because the pane's fold rule
+				// needs a file WITH a finding and one without in the same diff — the review
+				// below reports on NOTES.md only. NOTES.md is LONG on purpose: the pane has to
+				// SCROLL for the walk's home (the sticky bar) to be the thing under test — a
+				// ten-line file would let a header-hosted ↑/↓ pass, because nothing ever scrolls
+				// it off the top.
+				{Reply: writeFileStream("NOTES.md", strings.Repeat("一行笔记：这一行只是为了让 diff 足够长，面板必须滚动才看得到下面的意见。\n", 80), "call_w1")},
+				{Reply: writeFileStream("OTHER.md", "another file\n", "call_w2")},
+				{Reply: textStream("已经写下 NOTES.md 和 OTHER.md。", 900)},
 				// Review 1: one finding, then the reply.
 				{Reply: findingStream("NOTES.md", 1, "warn", "call_f1")},
 				{Reply: textStream("评审完成：1 条意见。", 1100)},
 				// Review 2, re-run from the panel over the same files: TWO findings, so the
-				// chip's count is what tells the two runs apart.
-				{Reply: findingStream("NOTES.md", 1, "warn", "call_f2")},
-				{Reply: findingStream("NOTES.md", 2, "info", "call_f3")},
+				// chip's count is what tells the two runs apart — and both are DEEP in the file,
+				// so walking to the second one scrolls the pane the way a reader's would.
+				{Reply: findingStream("NOTES.md", 40, "warn", "call_f2")},
+				{Reply: findingStream("NOTES.md", 60, "info", "call_f3")},
 				{Reply: textStream("再次评审完成：2 条意见。", 1100)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				c.check("一轮对话加两轮评审，共七次调用", len(c.requests) == 7, requestCount(c.requests))
+				c.check("一轮对话（两次写文件）加两轮评审，共八次调用", len(c.requests) == 8, requestCount(c.requests))
 				// The review is scoped: its prompt must carry the scope section naming the
 				// file the turn touched — that is what makes findings land in file
 				// coordinates. Asserting on the path alone would pass on the FIRST turn's
@@ -313,6 +427,19 @@ func scenarios() []scenario {
 				// below is the thing to look for.
 				_, scoped := c.requestSeen("## Scope (only these files)")
 				c.check("评审 fork 的 prompt 带上了作用域", scoped, "")
+
+				// The report's language: the prompt is mixed-language, so the model has to be told
+				// explicitly — and the sandbox config says `language: zh`, which is where the value
+				// has to come from. Asserted at the LLM boundary: this is the prompt the reviewer
+				// actually received, not the one the UI thinks it sent.
+				// The marker is the section's own SENTENCE, not its heading: the templates used to
+				// carry an `### Output language` of their own, and a `###` heading contains the `##`
+				// prefix — a heading-shaped marker would be found even if the section were never
+				// appended, which is the regression this check exists to catch.
+				_, langSection := c.requestSeen("Write the report AND every finding (its text and its suggestion) in zh")
+				c.check("评审 prompt 带上了输出语言一节，且取自 config.language（sandbox 配的是 zh）", langSection, "")
+				_, notLang := c.requestSeen(commands.DefaultReplyLanguage)
+				c.check("配置了 language 时不会退回兜底语言", !notLang, "")
 
 				records := c.oneOffFiles()
 				// Two runs, two records: the re-run starts a NEW one-off (a review is not

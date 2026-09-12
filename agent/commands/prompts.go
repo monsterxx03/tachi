@@ -9,9 +9,10 @@ import (
 // current repo changes. outPath is the orchestrator-allocated report path
 // the LLM must write to (single-round reviews used to let the LLM invent its
 // own filename, which made the artifact unfollowable — the orchestrator now
-// owns the path, same as multi-round).
+// owns the path, same as multi-round). language is config.Language: the report
+// and its findings are written in it (see ReviewLanguageSection).
 // The forked agent will only have Bash, ReadFile, Glob, Grep, and WriteFile tools.
-func ReviewUserPrompt(outPath string) string {
+func ReviewUserPrompt(outPath, language string) string {
 	prompt := `## Context to gather (use the Bash tool — do not assume output without running commands)
 
 Run these in the current working directory (Bash's cwd is the process cwd) and use the output as context:
@@ -34,10 +35,6 @@ Perform a thorough code review of all changes visible in the diff above. Analyze
 4. **Security** — Any injection vulnerabilities, hardcoded secrets, insufficient input validation, privilege issues?
 
 5. **Maintainability** — Are there hard-to-change coupling, duplicated logic, overly complex functions, missing abstraction boundaries?
-
-### Output language
-
-All output — including the review report saved to disk — **must** be written in the language specified by your system prompt's reply language instruction. Do not switch languages mid-review.
 
 ### Rules
 
@@ -72,7 +69,10 @@ After completing the review, save the full report to a file using **WriteFile**:
 
 1. Ensure the directory of the report path exists (use 'mkdir -p' via Bash if needed).
 2. Write the complete report to this exact path: {outPath}. Do NOT invent your own filename — the orchestrator has already allocated this path.`
-	return strings.ReplaceAll(prompt, "{outPath}", outPath)
+	prompt = strings.ReplaceAll(prompt, "{outPath}", outPath)
+	// The language directive goes last: it is a constraint on the whole output, and the section
+	// reads as the final word after the task and the save instructions.
+	return prompt + ReviewLanguageSection(language)
 }
 
 // InitPromptTemplate is the prompt sent to LLM to generate .tachi.md.
@@ -202,6 +202,38 @@ func sanitizeFileName(s string) string {
 	return replacer.Replace(s)
 }
 
+// DefaultReplyLanguage is what an unset `language` in the config means for a prompt: the model
+// decides from the request. Shared with the system prompt's "Reply in …" line (see agent.
+// BuildSystemPrompt) so the two prompts cannot disagree about what "no language" means.
+const DefaultReplyLanguage = "the user's language"
+
+// ReviewLanguageSection is the review prompts' language directive, and the ONLY one either
+// prompt carries: the templates used to spell out a `### Output language` of their own, pointing
+// at the SYSTEM PROMPT ("written in the language specified by your system prompt's reply language
+// instruction") while this one points at the config — two sources of truth for one choice, which
+// a model may resolve either way. It is a section of its own rather than a clause in the task
+// description because the review templates are mixed-language (English task lists, Chinese report
+// instructions), and a model reading them answers in whichever language the surrounding text is
+// in — the report and the findings are what a human then reads, so the choice belongs to the
+// reader's config, the same `language` the session replies in.
+//
+// language comes from config.Language verbatim (see ReviewOptions.Language); an empty value falls
+// back to the system prompt's sentinel, so the section is never a hollow "write in ''".
+func ReviewLanguageSection(language string) string {
+	if language == "" {
+		language = DefaultReplyLanguage
+	}
+	return fmt.Sprintf(`
+
+## Output language
+
+Write the report AND every finding (its text and its suggestion) in %s. Do not switch languages
+mid-review. Keep code, identifiers, file paths and quoted snippets exactly as they are — do not
+translate them.
+
+`, language)
+}
+
 // AppendReviewScope constrains an otherwise repo-wide review prompt to specific files.
 //
 // The desktop's turn-level entry ("评审本轮改动") knows exactly which files the turn
@@ -233,7 +265,7 @@ func AppendReviewScope(prompt string, scope []string) string {
 // exact report path the orchestrator has allocated (no placeholders — the LLM
 // must not invent its own filename); prev carries the status of prior rounds'
 // reports (Saved=false entries are flagged as missing and skipped).
-func BuildReviewPrompt(role ReviewRole, round, totalRounds int, outPath string, prev []RoundReport) string {
+func BuildReviewPrompt(role ReviewRole, round, totalRounds int, outPath string, prev []RoundReport, language string) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "你是代码审查的第 %d 轮%s (Round %d/%d — %s)。\n\n",
 		round, RoleName(role), round, totalRounds, RoleEnName(role))
@@ -335,10 +367,6 @@ Perform a thorough code review of ALL changes visible in the diff above. Analyze
 - **Category**: Correctness / Quality / Efficiency / Security / Maintainability
 - 具体的理由和修复建议
 
-### Output language
-
-All output — including the review report saved to disk — **must** be written in the language specified by your system prompt's reply language instruction. Do not switch languages mid-review.
-
 ### Rules
 
 - You may use **ReadFile** to read specific files for deeper context, **Glob** to discover related files, **Grep** to find usages/references across the codebase, and **Bash** for git commands and basic inspection.
@@ -358,6 +386,10 @@ All output — including the review report saved to disk — **must** be written
 
 	// Save instruction — orchestrator-owned path, written verbatim.
 	fmt.Fprintf(&b, "\n### 保存报告\n\n完成后用 WriteFile 保存报告到：%s（编排器给出的确切路径，目录已创建，无需 mkdir）\n", outPath)
+
+	// Same language rule as the single-round prompt (see ReviewLanguageSection): last, so it
+	// constrains the whole output rather than one part of it.
+	b.WriteString(ReviewLanguageSection(language))
 
 	return b.String()
 }

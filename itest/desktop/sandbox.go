@@ -18,7 +18,7 @@ import (
 //
 //	<sandbox>/
 //	  TachiSmoke.app/      a private copy of the app, renamed so pkill can never hit the
-//	                       user's own Tachi (see the bundle rules in .tachi.md)
+//	                       user's own Tachi (see the bundle rules in docs/agents/desktop.md)
 //	  home/                $HOME for the run: .tachi/config.yaml, session store, UI state
 //	  work/                the session's working directory (what tools and @-references see)
 //	  driver.js            harness.js + the scenario, with the sink URL filled in
@@ -94,7 +94,7 @@ func (sb *sandbox) prepareApp(srcApp string) error {
 		}
 	}
 	// Ad-hoc signing is enough here: the smoke app never asks for TCC permissions
-	// (notifications are only exercised by hand — see .tachi.md).
+	// (notifications are only exercised by hand — see docs/agents/desktop.md).
 	return run("codesign", "--force", "--deep", "--sign", "-", sb.appPath)
 }
 

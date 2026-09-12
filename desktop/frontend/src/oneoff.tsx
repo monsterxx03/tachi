@@ -8,7 +8,7 @@
 //
 // Design: docs/2026-09-12-desktop-oneoff-panel-design.md §5
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { AgentService, type OneOffDetailVO, type OneOffRequestVO, type OneOffVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
 import { buildTurns, fmtDur, fmtTime } from './lib'
@@ -122,6 +122,10 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   const [tab, setTab] = useState<OneOffTab>('flow')
   const [diff, setDiff] = useState<TurnDiffVO | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
+  // Why the diff could not be read. Kept apart from `diff === null` because those are two
+  // different facts — "no changes to show" and "the read failed" — and an empty pane cannot
+  // tell the reader which one it is looking at.
+  const [diffError, setDiffError] = useState('')
   // The report's text, tagged with the run it was read for. The text is a FILE fetched by name,
   // and the 报告 pane stays open across a switch in the switcher — so a cache without the run's
   // key would print one run's report under another run's file line, and refuse to refetch.
@@ -262,6 +266,7 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
     const files = pathsKey ? pathsKey.split('\n') : []
     if (files.length === 0) {
       setDiff(null)
+      setDiffError('')
       diffRunRef.current = ''
       return
     }
@@ -270,9 +275,17 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
     diffRunRef.current = key
     let alive = true
     setDiffLoading(true)
+    setDiffError('')
     AgentService.GetTurnDiff(sessionId, files)
       .then((d) => { if (alive) setDiff(d || null) })
-      .catch(() => { if (alive) setDiff(null) })
+      .catch((e) => {
+        if (!alive) return
+        setDiff(null)
+        // Read back for the reader instead of dropping it: an empty pane and a failed read
+        // look identical, and the reason is the only thing that tells them apart.
+        setDiffError(String(e))
+        diffRunRef.current = '' // a retry (reopening the pane) may try again
+      })
       .finally(() => { if (alive) setDiffLoading(false) })
     return () => { alive = false }
   }, [tab, sessionId, runKey, pathsKey])
@@ -303,10 +316,10 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   return useMemo(() => ({
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
     select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, diff,
-    diffLoading, reportText, openFindings, openReport,
+    diffLoading, diffError, reportText, openFindings, openReport, runKey,
   }), [
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, reportText, openFindings, openReport,
+    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, diffError, reportText, openFindings, openReport, runKey,
   ])
 }
 
@@ -372,8 +385,59 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   }, [])
   // The width under the pointer while a drag is in flight; null means "the reader's own width,
   // as far as the window allows".
-  const [draggingWidth, setDraggingWidth] = useState<number | null>(null)
-  const shownWidth = draggingWidth ?? clampPanelWidth(width, room)
+  //
+  // The IN-FLIGHT width is NOT React state, and that is the whole point: the width lives on the
+  // panel, so a state update per pointermove re-rendered the whole panel — the 意见 pane's diff
+  // included, a couple of hundred rows and more on a real review — before the browser had even
+  // laid the new width out. That is what 「左右拖动时很卡」 was. The drag now writes the width
+  // straight to the element (one style write per move; the browser still lays out once per frame)
+  // and hands the number back to React on release, where it is committed and persisted.
+  const [dragging, setDragging] = useState(false)
+  const panelRef = useRef<HTMLElement | null>(null)
+  // The drag's own value, so a render that happens mid-drag (a streamed delta, a findings update,
+  // a window resize re-measuring the room) cannot put React's older number back on screen.
+  const dragPxRef = useRef<number | null>(null)
+  useLayoutEffect(() => {
+    if (dragPxRef.current !== null && panelRef.current) {
+      panelRef.current.style.width = `${dragPxRef.current}px`
+    }
+  })
+  // What React renders is the STORED width clamped to the room — unchanged while a drag is in
+  // flight (the drag owns the element then, and re-asserts its own value after every commit).
+  const shownWidth = clampPanelWidth(width, room)
+
+  // Esc closes the panel — the × says exactly that (CloseButton's title, the same string every
+  // viewer shows), and nothing used to listen here: the viewers' Esc handling lives in
+  // ViewerOverlay, which this COLUMN is not. It is listened for on the window because the
+  // gesture must work wherever the reader's attention is inside the panel — and WebKit does not
+  // focus a div on click, so by the time they press it the focus may well be on the body.
+  //
+  // Two rules keep it from stealing other people's keys:
+  //   - an Escape somebody has already claimed is not ours (`defaultPrevented`: the composer uses
+  //     Esc to leave the input — where /review leaves the focus — the @-picker and "/" palette to
+  //     close, App's menus and modals to dismiss). A modal surface that is up claims it even
+  //     earlier: ViewerOverlay runs in the capture phase and stops the event there, so a viewer
+  //     over the panel closes first, by construction;
+  //   - a focused FIELD inside the panel owns the first one: it blurs, so a half-typed note is
+  //     not destroyed by the same key that closes the pane, and the next press closes.
+  // The second rule is ViewerOverlay's, verbatim; the first is what makes it safe for a column
+  // that shares the screen with the composer, unlike a modal.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return
+      const el = document.activeElement
+      if (el instanceof HTMLElement && panelRef.current?.contains(el) &&
+        (el.tagName === 'TEXTAREA' || el.tagName === 'INPUT' || el.isContentEditable)) {
+        e.preventDefault()
+        el.blur()
+        return
+      }
+      e.preventDefault()
+      onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
 
   const dragRef = useRef<{ x: number; w: number } | null>(null)
   const detachRef = useRef<(() => void) | null>(null)
@@ -383,7 +447,8 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   const startDrag = (e: React.PointerEvent<HTMLDivElement>) => {
     e.preventDefault()
     dragRef.current = { x: e.clientX, w: shownWidth }
-    setDraggingWidth(shownWidth)
+    dragPxRef.current = shownWidth
+    setDragging(true)
     // The listeners attach HERE, synchronously, rather than in an effect keyed on the drag
     // state: React commits that state asynchronously, and a fast drag delivers its first moves
     // before such an effect could run — the drag would start with a dead first frame (measured:
@@ -394,13 +459,20 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
     }
     const move = (ev: PointerEvent) => {
       const px = widthAt(ev.clientX)
-      if (px !== null) setDraggingWidth(px)
+      if (px === null) return
+      dragPxRef.current = px
+      // The only thing this needs to change IS a width, so change it here rather than through a
+      // re-render — see the note on `dragging` above.
+      if (panelRef.current) panelRef.current.style.width = `${px}px`
     }
     const finish = (ev: PointerEvent) => {
       const px = widthAt(ev.clientX)
       dragRef.current = null
+      dragPxRef.current = null
       detach()
-      setDraggingWidth(null)
+      setDragging(false)
+      // The choice goes back to React (and to disk) here, once — the render that follows writes
+      // the same number it was given, and the drag never had a state update of its own.
       if (px !== null) onResizeCommit(px)
     }
     const detach = () => {
@@ -428,10 +500,10 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   }
 
   return (
-    <aside className="oneoff-panel" aria-label="旁路运行" style={{ width: shownWidth }}>
+    <aside className="oneoff-panel" aria-label="旁路运行" ref={panelRef} style={{ width: shownWidth }}>
       {/* The grab strip on the panel's edge. It sits INSIDE the panel because the panel clips
           its own overflow, and it carries the separator semantics a screen reader needs. */}
-      <div className={`oneoff-resizer${draggingWidth !== null ? ' is-dragging' : ''}`} role="separator"
+      <div className={`oneoff-resizer${dragging ? ' is-dragging' : ''}`} role="separator"
         aria-orientation="vertical" aria-label="调整旁路面板宽度" tabIndex={0}
         title="拖动调整宽度（← → 也可以）"
         onPointerDown={startDrag} onKeyDown={onHandleKey} />
@@ -537,7 +609,8 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
                 when the caller knew the reviewed files (a review's own chip does); a run opened
                 from the switcher says so instead of showing an empty box. */}
             {shown === 'findings' ? (
-              <DiffFindingsPane diff={diff} loading={diffLoading} findings={findings}
+              <DiffFindingsPane diff={diff} loading={diffLoading} findings={findings} runKey={api.runKey}
+                diffError={api.diffError}
                 note={detail.header.findings ? undefined
                   : detail.header.report ? '评审写了报告，但没有记录结构化意见 —— 意见只在报告正文里'
                     : '这次评审没有报告问题'}

@@ -49,3 +49,16 @@ func TestContextParts(t *testing.T) {
 		t.Errorf("contextParts(zero) = %+v, want empty", got)
 	}
 }
+
+// The context ring and the popover read the same rule (contextUsageOf), on paths where the
+// agent may legitimately not be built yet — a failed bootstrap, or a run the backend created
+// but never prepared. Both must read as "nothing to measure", never panic.
+func TestContextUsageOfWithoutAnAgent(t *testing.T) {
+	d := &desktopApp{runs: make(map[string]*sessionRun)}
+	if est, win := d.contextUsageOf(nil); est != 0 || win != 0 {
+		t.Errorf("contextUsageOf(nil) = (%d, %d), want (0, 0)", est, win)
+	}
+	if est, win := d.contextUsageOf(&sessionRun{}); est != 0 || win != 0 {
+		t.Errorf("contextUsageOf(agentless run) = (%d, %d), want (0, 0)", est, win)
+	}
+}

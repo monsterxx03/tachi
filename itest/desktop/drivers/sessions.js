@@ -1,6 +1,6 @@
 // sessions — per-session numbers, the live sidebar title, and where the caret goes.
 //
-// Two of the three leaks in .tachi.md live here: a brand-new session must not inherit the
+// Two of the three leaks in docs/agents/desktop.md live here: a brand-new session must not inherit the
 // previous session's cache ring, and the row must pick up the generated title when the
 // session_title event arrives (without it the row says 未命名会话 forever). And creating a
 // session is the one moment the composer takes focus by itself — the click leaves it on the

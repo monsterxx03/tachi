@@ -34,7 +34,7 @@ Per scenario the runner builds a throwaway sandbox:
 ```
 <sandbox>/
   TachiSmoke.app/   a private copy of the app, executable renamed so no pkill can reach
-                    the user's own Tachi (same reasoning as .tachi.md's bundle rules)
+                    the user's own Tachi (same reasoning as docs/agents/desktop.md's bundle rules)
   home/             $HOME for the run: config.yaml pointing at the mock, session store
   work/             the session's working directory (what tools and @-references see)
   driver.js         harness.js + the scenario, with the sink URL filled in
@@ -80,7 +80,7 @@ Keep both halves small: one behaviour per scenario, and assert what the user wou
   macOS 15+ has closed the window-capture APIs (`CGWindowListCreateImage` is obsoleted,
   `screencapture -R` fails, `-l <windowid>` is blank for a WebKit window) — a "capture"
   that silently returns the desktop is worse than none. The evidence is `dom.html` plus the
-  assertion lines; for a picture, take one by hand (the recipe in .tachi.md).
+  assertion lines; for a picture, take one by hand (the recipe in docs/agents/desktop.md).
 - **The driver runs once, at launch.** It is handed to the app through `TACHI_DEMO_JS`
   (see `desktop/demo.go`), so a scenario cannot be re-run in a live app.
 - **Only one instance.** The runner refuses to start while a `TachiSmoke` is alive: `open`

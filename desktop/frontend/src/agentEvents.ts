@@ -38,10 +38,17 @@ export function useAgentStatus(): AgentState {
 
 // ── The active session's numbers ────────────────────────────────────────────
 // Cumulative cost/credit ("积分") from the usage ledger, the cache-hit rate behind the ring,
-// and the output rate. Session-scoped as a whole: switching sessions clears the row first
-// and then re-reads the new session's ledger, because anything fetched per session that is
-// merely overwritten keeps the previous session's value on screen whenever the payload is
-// empty (that is exactly how a brand-new session inherited the last one's cache ring).
+// the output rate, and the context-window estimate behind the context ring. Session-scoped as
+// a whole: switching sessions clears the row first and then re-reads the new session's
+// numbers, because anything fetched per session that is merely overwritten keeps the previous
+// session's value on screen whenever the payload is empty (that is exactly how a brand-new
+// session inherited the last one's cache ring).
+//
+// The context estimate belongs here rather than in App because it shares this hook's one hard
+// requirement — it must follow the API calls, not the turn. It used to be read only on
+// mount / new / switch / turn_complete, so during a long turn (many tool rounds) the ring sat
+// at the value the turn started with while the popover, which fetches when it opens, already
+// knew the new one (「上下文圆环一直是空的，点开倒是有」 — pinned by ctx-ring).
 export function useSessionUsage(currentId: string) {
   const [cost, setCost] = useState(0)
   const [credit, setCredit] = useState(0)
@@ -49,15 +56,28 @@ export function useSessionUsage(currentId: string) {
   const [hasCacheHit, setHasCacheHit] = useState(false)
   const [tps, setTps] = useState(0)
   const [lastTps, setLastTps] = useState(0)
+  const [ctxEstimate, setCtxEstimate] = useState(0)
+  const [ctxWindow, setCtxWindow] = useState(0)
 
-  // refresh re-reads one session's ledger. Applied unconditionally: a missing payload means
+  // refresh re-reads one session's numbers. Applied unconditionally: a missing payload means
   // "nothing recorded", not "keep what is there".
+  //
+  // Both reads are BY ID. The context numbers could come from GetProviderInfo in the same
+  // round trip, but that one describes whatever the backend has active — and a refresh that
+  // races a session switch would then put one session's window into another's ring.
   const refresh = useCallback(async (id: string) => {
     try {
       const u = await (AgentService as any).GetSessionUsage?.(id)
       setCost(u?.cost || 0); setCredit(u?.credit || 0)
       setCacheHitRate(u?.cacheHitRate || 0); setHasCacheHit(!!u?.hasCacheHit)
     } catch { /* ignore: a failed fetch is not evidence of zero */ }
+    // The estimate for a session that has not run a turn in this process yet — just created,
+    // or resumed from disk — which the per-call event cannot supply.
+    try {
+      const info = await AgentService.GetContextInfo(id)
+      setCtxEstimate(info?.estimate || 0)
+      setCtxWindow(info?.contextWindow || 0)
+    } catch { /* ignore: same rule as above */ }
   }, [])
 
   // clear blanks the row immediately — the other half of refresh: the fetch confirms the
@@ -65,6 +85,7 @@ export function useSessionUsage(currentId: string) {
   // meantime.
   const clear = useCallback(() => {
     setCost(0); setCredit(0); setCacheHitRate(0); setHasCacheHit(false)
+    setCtxEstimate(0); setCtxWindow(0)
   }, [])
 
   // The output rate is per-turn-ish: a session switch resets it rather than carrying a
@@ -75,8 +96,20 @@ export function useSessionUsage(currentId: string) {
 
   useEffect(() => {
     const offCost = Events.On('agent:cost', (event) => {
-      const d = event.data as { sessionId: string; cost: number; credit: number; cacheHitRate?: number; hasCacheHit?: boolean }
-      if (d.sessionId === currentId) { setCost(d.cost || 0); setCredit(d.credit || 0); if (d.cacheHitRate != null) setCacheHitRate(d.cacheHitRate); setHasCacheHit(!!d.hasCacheHit) }
+      const d = event.data as {
+        sessionId: string; cost: number; credit: number
+        cacheHitRate?: number; hasCacheHit?: boolean
+        contextEstimate?: number; contextWindow?: number
+      }
+      if (d.sessionId === currentId) {
+        setCost(d.cost || 0); setCredit(d.credit || 0)
+        if (d.cacheHitRate != null) setCacheHitRate(d.cacheHitRate)
+        setHasCacheHit(!!d.hasCacheHit)
+        // Every API call moves these (see desktop/agent_turn.go emitUsage), which is what
+        // makes the ring keep up with a turn in flight.
+        if (d.contextEstimate != null) setCtxEstimate(d.contextEstimate)
+        if (d.contextWindow != null) setCtxWindow(d.contextWindow)
+      }
     })
     const offTps = Events.On('agent:tps', (event) => {
       const d = event.data as { sessionId: string; tps: number; lastTps?: number }
@@ -89,7 +122,7 @@ export function useSessionUsage(currentId: string) {
     return () => { offCost?.(); offTps?.() }
   }, [currentId])
 
-  return { cost, credit, cacheHitRate, hasCacheHit, tps, lastTps, refresh, clear, resetRate }
+  return { cost, credit, cacheHitRate, hasCacheHit, tps, lastTps, ctxEstimate, ctxWindow, refresh, clear, resetRate }
 }
 
 // ── The agent stream ────────────────────────────────────────────────────────

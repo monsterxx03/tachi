@@ -64,15 +64,13 @@ const smoke = (() => {
   }
 
   function post(body) {
+    // The console rides in the SAME body: /result is what unblocks the runner, so a second
+    // POST with the console lines would race it — and lose (see Result.Console on the Go side).
+    body.console = consoleLines
     try {
       fetch(SINK + '/result', { method: 'POST', body: JSON.stringify(body) }).catch(() => {})
     } catch (e) {
       /* the runner will time out; the banner is still on screen */
-    }
-    if (consoleLines.length) {
-      try {
-        fetch(SINK + '/console', { method: 'POST', body: JSON.stringify({ lines: consoleLines }) }).catch(() => {})
-      } catch (e) {}
     }
   }
 

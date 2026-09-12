@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 
+	"github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/shutil"
 )
@@ -155,7 +156,7 @@ YOU MUST:
 
 	// ── Reply language ─────────────────────────────────────────────────────
 	if language == "" {
-		language = "the user's language"
+		language = commands.DefaultReplyLanguage
 	}
 	fmt.Fprintf(&sb, "Reply in %s. ", language)
 

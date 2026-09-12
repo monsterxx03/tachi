@@ -1,6 +1,6 @@
 // send-now — interrupt a running turn with a queued message (「立即发送」).
 //
-// This is the ordering fix in .tachi.md's history: the interrupted turn's terminal event
+// This is the ordering fix in docs/agents/desktop.md's history: the interrupted turn's terminal event
 // targets "the newest running assistant", so a placeholder placed before it was the one
 // marked 已停止 and its own reply was dropped. Asserted from the UI here and from the
 // prompt by the runner.

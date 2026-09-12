@@ -134,6 +134,11 @@ type ReviewOptions struct {
 	// Frontends set it for the turn-level "review these changes" entry; it is not
 	// configurable.
 	Scope []string
+	// Language is config.Language: the language the report and its findings must be
+	// written in. The review prompt is mixed-language (English task lists, Chinese
+	// report instructions), so without this the model answers in whichever language the
+	// surrounding text happens to be in — and the report is what a human reads.
+	Language string
 }
 
 // ResolveReviewOptions applies the config defaults for /review parameters:
@@ -166,7 +171,20 @@ func ResolveReviewOptions(cfg *config.Config) ReviewOptions {
 		AllowedTools:  allowedTools,
 		Thinking:      thinking,
 		ThinkingLevel: thinkingLevel,
+		// The report is read by a human, so its language follows the session's `language` — the
+		// review prompt itself is mixed-language (English task lists, Chinese report notes), which
+		// leaves a model to pick whichever the surrounding text is in.
+		Language: languageOf(cfg),
 	}
+}
+
+// languageOf reads config.Language defensively: ResolveReviewOptions is also called with a nil
+// config (tests, and a bootstrap that failed), and the prompt builders handle "" themselves.
+func languageOf(cfg *config.Config) string {
+	if cfg == nil {
+		return ""
+	}
+	return cfg.Language
 }
 
 // ResolveReviewThinking maps the /review thinking config to the concrete
@@ -254,10 +272,10 @@ func NewReviewReportDir(baseDir string) (string, error) {
 //
 // ReviewOrchestrator.Next() calls this for every multi-round spec, so the
 // per-round bookkeeping can never drift across frontends.
-func BuildRoundPrompt(dir string, round, totalRounds int, provider llm.Provider, prev []RoundReport) (ReviewRole, string, string) {
+func BuildRoundPrompt(dir string, round, totalRounds int, provider llm.Provider, prev []RoundReport, language string) (ReviewRole, string, string) {
 	role := ResolveRole(round, totalRounds)
 	outPath := ReportPathFor(dir, round, role, provider.Model())
-	prompt := BuildReviewPrompt(role, round, totalRounds, outPath, prev)
+	prompt := BuildReviewPrompt(role, round, totalRounds, outPath, prev, language)
 	return role, outPath, prompt
 }
 
@@ -408,11 +426,11 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 			Round:    1,
 			Provider: provider,
 			OutPath:  outPath,
-			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath), o.opts.Scope),
+			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language), o.opts.Scope),
 			Kind:     llm.UsageKindReview,
 		}, true
 	}
-	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports)
+	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports, o.opts.Language)
 	// Every round keeps the scope: the adversarial rounds discuss the same changes.
 	prompt = AppendReviewScope(prompt, o.opts.Scope)
 	return RoundSpec{

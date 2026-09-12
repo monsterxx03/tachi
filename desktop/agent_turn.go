@@ -314,7 +314,18 @@ func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
 	if isCurrent && usage != nil {
 		d.app.Event.Emit("agent:usage", usage)
 	}
-	d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit, "cacheHitRate": rate, "hasCacheHit": hasCacheHit})
+	// The context ring rides the same event as the cost row: both are "this session's
+	// numbers", and both are only meaningful right after an API call. Without it the ring
+	// waited for the END of the turn (the frontend refreshed it from GetProviderInfo on
+	// turn_complete), so a long turn — many tool rounds — left the ring at the value it had
+	// when the turn started, while the popover, which fetches on open, already knew. See
+	// itest/desktop/drivers/ctx-ring.js.
+	est, win := d.contextUsageOf(r)
+	d.app.Event.Emit("agent:cost", map[string]any{
+		"sessionId": id, "cost": cost, "credit": credit,
+		"cacheHitRate": rate, "hasCacheHit": hasCacheHit,
+		"contextEstimate": est, "contextWindow": win,
+	})
 }
 
 // handleEvent maps AgentEvent types to the running state, and forwards the raw

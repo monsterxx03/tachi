@@ -137,11 +137,15 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		lines = snk.lines()
 		lines = append(lines, Line{Label: "driver 在预算内完成", OK: false,
 			Detail: fmt.Sprintf("等了 %s 没收到结果（下面是它走到的地方）", timeout)})
-		for _, c := range snk.consoleLines() {
-			lines = append(lines, Line{Label: "console", OK: true, Detail: c})
-		}
 	} else if res.Error != "" {
 		lines = append(lines, Line{Label: "driver 抛异常", OK: false, Detail: res.Error})
+	}
+	// Everything the page logged, in BOTH cases: a console error while a driver is still
+	// making its way through the assertions is usually the "why" of a strange failure
+	// (a binding that rejected, a state that never arrived) — and dropping it unless the
+	// driver timed out kept exactly that answer out of the report.
+	for _, c := range snk.consoleLines() {
+		lines = append(lines, Line{Label: "console", OK: true, Detail: c})
 	}
 	if !res.Done && reported {
 		lines = append(lines, Line{Label: "driver 跑到了结尾", OK: false,

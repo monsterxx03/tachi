@@ -34,6 +34,25 @@ export function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?
   return !!e.nativeEvent?.isComposing || e.keyCode === 229
 }
 
+// The input box's height, when the reader drags its top edge.
+//
+// COMPOSER_INPUT_MIN_H mirrors .composer-input's min-height in chat.css (46px) — the floor is
+// the stylesheet's own height, so "dragged back down" and "never dragged" are the same look.
+// The ceiling is a FRACTION of the window rather than a pixel count: the box may grow to be
+// comfortable, never to swallow the conversation it is written into, and that ratio is what
+// holds on a small screen too.
+//
+// Nothing here is persisted, deliberately — unlike the side panel's width, which is a layout
+// choice the reader makes once. The box's height is about the message being written now.
+const COMPOSER_INPUT_MIN_H = 46
+const COMPOSER_INPUT_MAX_FRACTION = 0.6
+const COMPOSER_INPUT_KEY_STEP = 24
+
+function composerInputMaxH(): number {
+  if (typeof window === 'undefined') return COMPOSER_INPUT_MIN_H * 4
+  return Math.max(COMPOSER_INPUT_MIN_H * 2, Math.round(window.innerHeight * COMPOSER_INPUT_MAX_FRACTION))
+}
+
 export type ComposerDeps = {
   currentId: string
   // A turn is already running in the session on screen, so text belongs in the queue rather
@@ -501,8 +520,78 @@ export function useComposer(deps: ComposerDeps) {
     return () => off?.()
   }, [sendText, takePending, clearAsk])
 
-  // ── Focus ─────────────────────────────────────────────────────────────────
-  // The two halves of the UI hand focus to each other (Esc leaves the composer, a new
+  // ── Height (the reader drags the box's top edge) ───────────────────────────
+  // null = the stylesheet's default. One number serves both the height and the ceiling: the
+  // stylesheet's max-height exists to stop the DEFAULT from eating the transcript, and a reader
+  // who deliberately asks for a taller box has already answered that question.
+  const [inputHeight, setInputHeight] = useState<number | null>(null)
+  const [heightDragging, setHeightDragging] = useState(false)
+  const heightDragRef = useRef<{ y: number; h: number } | null>(null)
+  const heightDetachRef = useRef<(() => void) | null>(null)
+  // The composer can be unmounted mid-drag (a session switch re-renders the footer); then
+  // nothing would ever remove the window listeners.
+  useEffect(() => () => heightDetachRef.current?.(), [])
+  // A shrunken window must not leave a box taller than its share of the screen.
+  useEffect(() => {
+    const reclamp = () => setInputHeight((h) => (h === null ? h : Math.min(h, composerInputMaxH())))
+    window.addEventListener('resize', reclamp)
+    return () => window.removeEventListener('resize', reclamp)
+  }, [])
+
+  const startHeightDrag = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault()
+    // The baseline comes from the DOM, not from a constant: on the first drag the box is whatever
+    // the stylesheet made it, and that is the honest starting point.
+    const startH = inputHeight ?? composerRef.current?.offsetHeight ?? COMPOSER_INPUT_MIN_H
+    heightDragRef.current = { y: e.clientY, h: startH }
+    setInputHeight(startH)
+    setHeightDragging(true)
+    const heightAt = (clientY: number) => {
+      const d = heightDragRef.current
+      if (!d) return null
+      // Up is taller: the handle sits on the TOP edge, so the box grows away from the pointer.
+      return Math.max(COMPOSER_INPUT_MIN_H, Math.min(composerInputMaxH(), Math.round(d.h + (d.y - clientY))))
+    }
+    const move = (ev: PointerEvent) => {
+      const h = heightAt(ev.clientY)
+      if (h !== null) setInputHeight(h)
+    }
+    const finish = (ev: PointerEvent) => {
+      const h = heightAt(ev.clientY)
+      heightDragRef.current = null
+      detach()
+      setHeightDragging(false)
+      // Dragged back down to the floor = "not resized", so the default stays a single value in CSS.
+      setInputHeight(h !== null && h > COMPOSER_INPUT_MIN_H ? h : null)
+    }
+    const detach = () => {
+      window.removeEventListener('pointermove', move)
+      window.removeEventListener('pointerup', finish)
+      window.removeEventListener('pointercancel', finish)
+      document.body.classList.remove('is-resizing-y')
+      heightDetachRef.current = null
+    }
+    // Attached synchronously, like the side panel's resizer: React commits the state
+    // asynchronously, and a fast drag delivers its first moves before an effect could attach.
+    window.addEventListener('pointermove', move)
+    window.addEventListener('pointerup', finish)
+    window.addEventListener('pointercancel', finish)
+    document.body.classList.add('is-resizing-y')
+    heightDetachRef.current = detach
+  }
+  // Arrow keys resize too: the handle is a real focusable separator, not a decoration.
+  const onHeightKey = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    const dir = e.key === 'ArrowUp' ? 1 : e.key === 'ArrowDown' ? -1 : 0
+    if (!dir) return
+    e.preventDefault()
+    const from = inputHeight ?? composerRef.current?.offsetHeight ?? COMPOSER_INPUT_MIN_H
+    const next = Math.max(COMPOSER_INPUT_MIN_H, Math.min(composerInputMaxH(), from + dir * COMPOSER_INPUT_KEY_STEP))
+    setInputHeight(next > COMPOSER_INPUT_MIN_H ? next : null)
+  }
+  // Height and max-height together, and only once the reader has resized.
+  const inputStyle = inputHeight ? { height: inputHeight, maxHeight: inputHeight } : undefined
+
+  // ── Focus ─────────────────────────────────────────────────────────────────  // The two halves of the UI hand focus to each other (Esc leaves the composer, a new
   // session enters it), and those callers sit in dependency lists — so both get a stable
   // identity instead of a fresh closure per render, which would make every caller churn.
   const focusInput = useCallback(() => composerRef.current?.focus(), [])
@@ -519,6 +608,8 @@ export function useComposer(deps: ComposerDeps) {
   return {
     // input box
     input, setInput, composerRef, composingRef, syncAtRef, closeAt, focusInput, focusTranscript,
+    // input box height (drag / arrow keys; never persisted)
+    inputStyle, startHeightDrag, onHeightKey, heightDragging,
     // @-picker + "/" palette
     at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, cmdQuery, setCmdDismissed, acceptCommand,
     // queue
@@ -538,7 +629,7 @@ export type ComposerApi = ReturnType<typeof useComposer>
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
 export function Composer({ api, running, onStop }: { api: ComposerApi; running: boolean; onStop: () => void }) {
-  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript } = api
+  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging } = api
 
   return (
     <>
@@ -565,6 +656,14 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
         </div>
       )}
       <div className="composer-box" data-file-drop-target="true">
+        {/* The grab strip along the box's top edge: a real focusable separator, and the only way
+            the reader says "I need more room to write this than a one-liner". It sits INSIDE the
+            box so the drag target moves with it, and it must not swallow the box's own focus
+            (a click on it never focuses the textarea — that is what preventDefault is for). */}
+        <div className={`composer-resizer${heightDragging ? ' is-dragging' : ''}`} role="separator"
+          aria-orientation="horizontal" aria-label="调整输入框高度" tabIndex={0}
+          title="向上拖动加高输入框（↑ ↓ 也可以）"
+          onPointerDown={startHeightDrag} onKeyDown={onHeightKey} />
         {cmdOpen && (
           <CommandPicker
             items={cmdMatches}
@@ -584,7 +683,7 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
           />
         )}
         <div className="composer-input-wrap">
-          <textarea className="composer-input" ref={composerRef} value={input}
+          <textarea className="composer-input" ref={composerRef} value={input} style={inputStyle}
             onChange={(e) => { setInput(e.target.value); syncAtRef(e.target.value, e.target.selectionStart ?? e.target.value.length) }}
             onSelect={(e) => { const el = e.currentTarget; syncAtRef(el.value, el.selectionStart ?? el.value.length) }}
             onBlur={() => closeAt()}

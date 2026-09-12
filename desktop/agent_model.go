@@ -88,6 +88,22 @@ func (s *AgentService) SwitchProvider(name string) string {
 	return "ok"
 }
 
+// contextUsageOf is the ONE rule for "how full is this session's window": the agent's live
+// estimate (recomputed before every API call — see agent/token_estimate.go), falling back to
+// the most recent message's persisted estimate for a session that has not run a turn in this
+// process yet. GetProviderInfo and the per-call "agent:cost" payload both go through it, so
+// the ring and the popover cannot drift apart by construction.
+func (d *desktopApp) contextUsageOf(r *sessionRun) (est, window int64) {
+	if r == nil || r.agent == nil {
+		return 0, 0
+	}
+	est = r.agent.LastInputEstimate()
+	if est <= 0 {
+		est = d.estimateFromMessages(r)
+	}
+	return est, r.agent.ContextWindow()
+}
+
 // GetProviderInfo returns the active session's provider/model/context-window.
 func (s *AgentService) GetProviderInfo() map[string]any {
 	d := s.desk
@@ -108,14 +124,11 @@ func (s *AgentService) GetProviderInfo() map[string]any {
 	// just opened (no turn yet, estimate is 0) fall back to the most recent
 	// message's persisted estimate (usage.estimated_input_tokens) so the
 	// context ring shows a sensible value for a resumed session.
-	est := r.agent.LastInputEstimate()
-	if est <= 0 {
-		est = d.estimateFromMessages(r)
-	}
+	est, win := d.contextUsageOf(r)
 	return map[string]any{
 		"provider":        provider,
 		"model":           r.agent.Model(),
-		"contextWindow":   r.agent.ContextWindow(),
+		"contextWindow":   win,
 		"contextEstimate": est,
 	}
 }

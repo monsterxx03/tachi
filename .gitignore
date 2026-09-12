@@ -1,7 +1,10 @@
-# Build output
-tachi
-tachi-linux-amd64
-tachi-linux-arm64
+# Build output. ANCHORED to the repo root on purpose: an unanchored `tachi` also matches
+# any DIRECTORY of that name, which silently swallowed the generated frontend bindings
+# under desktop/frontend/bindings/github.com/monsterxx03/tachi/ — so they were never
+# tracked, and a fresh checkout had to regenerate them before tsc would run.
+/tachi
+/tachi-linux-amd64
+/tachi-linux-arm64
 
 # ginkgo -p compiles test binaries into the package dir (itest/run/run.test);
 # without ignoring them every ginkgo run dirties the worktree, which defeats

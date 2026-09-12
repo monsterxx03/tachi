@@ -353,6 +353,11 @@ func TestResolveReviewOptions_Defaults(t *testing.T) {
 	if opts.ThinkingLevel != "" {
 		t.Errorf("ThinkingLevel = %q, want empty (follow the current session)", opts.ThinkingLevel)
 	}
+	// A nil config (a bootstrap that failed) must not invent a language: the prompt builders
+	// turn "" into DefaultReplyLanguage themselves (see languageOf).
+	if opts.Language != "" {
+		t.Errorf("nil config: Language = %q, want empty", opts.Language)
+	}
 
 	cfg := config.DefaultConfig()
 	opts = ResolveReviewOptions(cfg)
@@ -361,6 +366,11 @@ func TestResolveReviewOptions_Defaults(t *testing.T) {
 	}
 	if opts.Thinking != nil {
 		t.Error("default config must not pin Thinking (nil = follow the current session)")
+	}
+	// …and the language follows the config the same way the system prompt's "Reply in …" does:
+	// DefaultConfig applies the yaml default (`default:"English"`), so it must land here too.
+	if opts.Language != "English" {
+		t.Errorf("Language = %q, want the config default English", opts.Language)
 	}
 }
 
@@ -371,6 +381,7 @@ func TestResolveReviewOptions_ConfigOverrides(t *testing.T) {
 	thinking := true
 	cfg.Review.Thinking = &thinking
 	cfg.Review.ThinkingLevel = "high"
+	cfg.Language = "zh"
 
 	opts := ResolveReviewOptions(cfg)
 	if opts.MaxIterations != 42 {
@@ -384,6 +395,10 @@ func TestResolveReviewOptions_ConfigOverrides(t *testing.T) {
 	}
 	if opts.ThinkingLevel != "high" {
 		t.Errorf("ThinkingLevel = %q, want high", opts.ThinkingLevel)
+	}
+	// The review report's language comes from the same `language` the session replies in.
+	if opts.Language != "zh" {
+		t.Errorf("Language = %q, want zh (config.Language must reach the review prompt)", opts.Language)
 	}
 }
 
@@ -723,10 +738,10 @@ func TestBuildRoundPrompt_MatchesManualComputation(t *testing.T) {
 
 	// BuildRoundPrompt must compute exactly what the manual three-liner does
 	// (TUI and ACP previously each spelled this out by hand).
-	role, outPath, prompt := BuildRoundPrompt(dir, 2, 3, provider, prev)
+	role, outPath, prompt := BuildRoundPrompt(dir, 2, 3, provider, prev, "")
 	wantRole := ResolveRole(2, 3)
 	wantPath := ReportPathFor(dir, 2, wantRole, provider.Model())
-	wantPrompt := BuildReviewPrompt(wantRole, 2, 3, wantPath, prev)
+	wantPrompt := BuildReviewPrompt(wantRole, 2, 3, wantPath, prev, "")
 
 	if role != wantRole {
 		t.Errorf("role = %v, want %v", role, wantRole)
@@ -739,7 +754,7 @@ func TestBuildRoundPrompt_MatchesManualComputation(t *testing.T) {
 	}
 
 	// Final round is always Judge.
-	role, outPath, _ = BuildRoundPrompt(dir, 3, 3, provider, prev)
+	role, outPath, _ = BuildRoundPrompt(dir, 3, 3, provider, prev, "")
 	if role != RoleJudge || outPath != ReportPathFor(dir, 3, RoleJudge, "model-x") {
 		t.Errorf("final round: role=%v outPath=%q, want Judge round-3-judge", role, outPath)
 	}
@@ -770,7 +785,7 @@ func TestRoundReportFrom(t *testing.T) {
 // ---- BuildReviewPrompt ----
 
 func TestBuildReviewPrompt_ReviewerRound(t *testing.T) {
-	p := BuildReviewPrompt(RoleReviewer, 1, 3, "/reviews/round-1-review-m.md", nil)
+	p := BuildReviewPrompt(RoleReviewer, 1, 3, "/reviews/round-1-review-m.md", nil, "")
 	for _, want := range []string{
 		"第 1 轮审查者", "Round 1/3 — Reviewer",
 		"全部变更", "Correctness", "Security", "Maintainability",
@@ -791,7 +806,7 @@ func TestBuildReviewPrompt_ChallengerListsPriorReports(t *testing.T) {
 		{Round: 1, Path: "/reviews/round-1-review-m1.md", Saved: true},
 		{Round: 2, Path: "/reviews/round-2-challenge-m2.md", Saved: false}, // missing
 	}
-	p := BuildReviewPrompt(RoleJudge, 3, 3, "/reviews/round-3-judge-m3.md", prev)
+	p := BuildReviewPrompt(RoleJudge, 3, 3, "/reviews/round-3-judge-m3.md", prev, "")
 	for _, want := range []string{
 		"第 3 轮裁决者", "Round 3/3 — Judge",
 		"/reviews/round-1-review-m1.md", // saved → path listed
@@ -812,7 +827,7 @@ func TestBuildReviewPrompt_ChallengerListsPriorReports(t *testing.T) {
 }
 
 func TestBuildReviewPrompt_OutPathVerbatimNoPlaceholders(t *testing.T) {
-	p := BuildReviewPrompt(RoleChallenger, 2, 3, "/reviews/r2-challenge.md", []RoundReport{{Round: 1, Path: "/reviews/r1-review.md", Saved: true}})
+	p := BuildReviewPrompt(RoleChallenger, 2, 3, "/reviews/r2-challenge.md", []RoundReport{{Round: 1, Path: "/reviews/r1-review.md", Saved: true}}, "")
 	if !strings.Contains(p, "/reviews/r2-challenge.md") {
 		t.Error("prompt must contain the exact outPath")
 	}
@@ -827,7 +842,7 @@ func TestBuildReviewPrompt_OutPathVerbatimNoPlaceholders(t *testing.T) {
 // "前 0 轮" phrasing — callers never hit it (rounds==1 takes a separate path),
 // but the prompt must degrade gracefully if it is reused.
 func TestBuildReviewPrompt_JudgeRound1NeverSaysPriorZero(t *testing.T) {
-	p := BuildReviewPrompt(RoleJudge, 1, 1, "/reviews/r1-judge.md", nil)
+	p := BuildReviewPrompt(RoleJudge, 1, 1, "/reviews/r1-judge.md", nil, "")
 	if strings.Contains(p, "前 0 轮") {
 		t.Error("judge prompt with round==1 must not read '前 0 轮'")
 	}
@@ -840,7 +855,7 @@ func TestBuildReviewPrompt_JudgeRound1NeverSaysPriorZero(t *testing.T) {
 // builder against a future ReviewRole value — the header naming must fall
 // back instead of panicking on a slice index.
 func TestBuildReviewPrompt_UnknownRoleDoesNotPanic(t *testing.T) {
-	p := BuildReviewPrompt(ReviewRole(99), 1, 3, "/reviews/round-1-review-m.md", nil)
+	p := BuildReviewPrompt(ReviewRole(99), 1, 3, "/reviews/round-1-review-m.md", nil, "")
 	if p == "" {
 		t.Error("prompt must not be empty")
 	}
@@ -921,5 +936,91 @@ func TestReviewScopeReachesThePrompt(t *testing.T) {
 	}
 	if !strings.Contains(round.Prompt, "## Scope (only these files)") {
 		t.Errorf("the multi-round prompt lost the scope:\n%s", round.Prompt)
+	}
+}
+
+// languageDirective is the sentence ReviewLanguageSection renders for a language, and the marker
+// the tests below match on. It is deliberately NOT the section heading: the templates used to
+// carry an `### Output language` of their own, and any `###` heading contains the `##` prefix —
+// so a heading-shaped marker would still be found even if the appended section were dropped
+// (which is exactly the regression these tests exist to catch).
+func languageDirective(language string) string {
+	return "Write the report AND every finding (its text and its suggestion) in " + language
+}
+
+// TestReviewLanguageReachesThePrompt: the report is read by a human, so `language` has to travel
+// from the config all the way into the prompt the forked reviewer sees — the review templates are
+// mixed-language, and a model reading them otherwise answers in whichever language they were
+// written in (the complaint: 「review 报告提示 llm 跟随目前 config.language 设定的语言」).
+//
+// The config → ReviewOptions hop is asserted in TestResolveReviewOptions_*; this one starts at
+// ReviewOptions and follows the value into every prompt a round can hand the model.
+func TestReviewLanguageReachesThePrompt(t *testing.T) {
+	opts := ReviewOptions{MaxIterations: 5, AllowedTools: DefaultReviewAllowedTools(), Language: "zh"}
+	// Single round…
+	orch, err := NewReviewOrchestrator(1, []llm.Provider{testProviders("mock")[0]}, t.TempDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, ok := orch.Next()
+	if !ok {
+		t.Fatal("orchestrator produced no round")
+	}
+	if !strings.Contains(spec.Prompt, languageDirective("zh")) {
+		t.Errorf("single-round prompt lost the language:\n%s", spec.Prompt)
+	}
+	// …and every round of a multi-round chain (the judge writes the final report).
+	multi, err := NewReviewOrchestrator(2, testProviders("a", "b"), t.TempDir(), opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rounds := 0
+	for {
+		round, ok := multi.Next()
+		if !ok {
+			break
+		}
+		rounds++
+		if !strings.Contains(round.Prompt, languageDirective("zh")) {
+			t.Errorf("round %d lost the language:\n%s", round.Round, round.Prompt)
+		}
+		multi.Complete()
+	}
+	if rounds != 2 {
+		t.Errorf("rounds walked = %d, want 2 (the loop body is what asserts the language)", rounds)
+	}
+	// The orchestrator is not the only way in: BuildRoundPrompt is also used directly.
+	if _, _, p := BuildRoundPrompt(t.TempDir(), 1, 3, testProviders("m")[0], nil, "English"); !strings.Contains(p, languageDirective("English")) {
+		t.Errorf("BuildRoundPrompt lost the language:\n%s", p)
+	}
+
+	// ONE directive, not two: the templates used to carry their own `### Output language` pointing
+	// at the SYSTEM PROMPT while ReviewLanguageSection points at the config — two sources of truth
+	// for one choice, which a model may resolve either way. Both builders must now say it once.
+	for name, p := range map[string]string{
+		"single round": ReviewUserPrompt("/r.md", "zh"),
+		"multi round":  BuildReviewPrompt(RoleJudge, 2, 2, "/r.md", nil, "zh"),
+	} {
+		if strings.Contains(p, "reply language instruction") {
+			t.Errorf("%s: the stale 'language specified by your system prompt' directive is back:\n%s", name, p)
+		}
+		if n := strings.Count(p, languageDirective("zh")); n != 1 {
+			t.Errorf("%s: the language directive appears %d times, want exactly 1", name, n)
+		}
+	}
+}
+
+// TestReviewLanguageEmptyFallsBack: an unset `language` must not leave a hollow "write in ''" —
+// the same sentinel the system prompt uses applies here (DefaultReplyLanguage). Asserted through
+// both prompt builders rather than on the section alone: the fallback matters where it lands.
+func TestReviewLanguageEmptyFallsBack(t *testing.T) {
+	want := languageDirective(DefaultReplyLanguage)
+	for name, got := range map[string]string{
+		"reviewer round": BuildReviewPrompt(RoleReviewer, 1, 1, "/r.md", nil, ""),
+		"single round":   ReviewUserPrompt("/r.md", ""),
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%s: empty language must fall back to %q:\n%s", name, DefaultReplyLanguage, got)
+		}
 	}
 }
