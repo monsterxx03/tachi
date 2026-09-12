@@ -293,6 +293,30 @@ func (d *desktopApp) endTurn(id, endReason string) {
 	d.emitIdle(d.followCompaction(id), endReason)
 }
 
+
+// emitUsage recomputes a session's cost/credit from the usage ledger and pushes them to
+// the status bar (the frontend listens for "agent:cost"). It runs at every point where the
+// ledger may have grown — after each API call AND at turn end — because the incremental
+// usage event only covers tool-call rounds. usage, when non-nil, is forwarded to the
+// frontend as the raw per-call numbers ("agent:usage"); the cost payload always comes from
+// the ledger so both paths agree by construction.
+func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
+	if d.app == nil {
+		return
+	}
+	r := d.getRun(id)
+	d.rebuildCostCredit(r)
+	d.mu.Lock()
+	cost, credit := r.cost, r.credit
+	rate := r.cacheHitRate
+	hasCacheHit := r.hasCacheHit
+	d.mu.Unlock()
+	if isCurrent && usage != nil {
+		d.app.Event.Emit("agent:usage", usage)
+	}
+	d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit, "cacheHitRate": rate, "hasCacheHit": hasCacheHit})
+}
+
 // handleEvent maps AgentEvent types to the running state, and forwards the raw
 // event to the frontend so it can do streaming rendering.
 func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
@@ -408,24 +432,14 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 			})
 		}
 	case agent.AgentEventUsage:
-		// Recompute the session's cumulative cost/credit from the usage ledger
-		// and push it to the status bar (frontend listens for "agent:cost").
-		r := d.getRun(id)
-		d.rebuildCostCredit(r)
-		if d.app != nil {
-			d.mu.Lock()
-			cost, credit := r.cost, r.credit
-			rate := r.cacheHitRate
-			hasCacheHit := r.hasCacheHit
-			d.mu.Unlock()
-			if isCurrent {
-				d.app.Event.Emit("agent:usage", ev.Usage)
-			}
-			d.app.Event.Emit("agent:cost", map[string]any{"sessionId": id, "cost": cost, "credit": credit, "cacheHitRate": rate, "hasCacheHit": hasCacheHit})
-		}
+		d.emitUsage(id, isCurrent, ev.Usage)
 	case agent.AgentEventTurnComplete:
 		d.tpsReset(id)
 		d.setSessionState(id, AgentState{Status: StatusIdle, Label: "空闲", Detail: "已回复"})
+		// Refresh the status bar here as well, not only on the incremental usage event:
+		// that event is emitted for tool-call rounds alone, so a turn ending in a plain
+		// reply left the cost and the cache-hit ring at zero until a session switch.
+		d.emitUsage(id, isCurrent, nil)
 		d.mu.Lock()
 		r := d.getRun(id)
 		if ev.Messages != nil {
