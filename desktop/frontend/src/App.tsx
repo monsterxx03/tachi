@@ -1,26 +1,17 @@
 import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { Dialogs, Events } from '@wailsio/runtime'
-import {
-  AgentService,
-  AgentStatus,
-  type AgentState,
-} from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import {
   STATUS_META,
   THINKING_LEVELS,
   PAGE_SIZE,
-  AT_MAX_RESULTS,
-  AT_SEARCH_DEBOUNCE_MS,
-  type AgentEvent,
-  type AtMatch,
-  type AtPickerState,
   type Message,
   type Part,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey } from './lib'
 import {
-  ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, CommandPicker, ToolCard, MCPPanel, AtFilePicker, AskForm,
+  ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, ToolCard, MCPPanel, AskForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
 import { FileCard, fileFromSendFileArgs } from './filepreview'
@@ -29,12 +20,12 @@ import { PlanChip, PlanPanel } from './plan'
 import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
-import type { CommandVO, FileChangeVO, PlanVO, ReviewFindingsVO, SessionRootsVO, TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { PlanVO, ReviewFindingsVO, SessionRootsVO, TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
-import { appendPartDelta, pushPart, finishToolPart, finishNotice, updateToolPart, setPartDiffs, togglePartDiff, turnDiffStat, closeOpenToolParts, lastRunningAssistantIndex } from './transcript'
-function imeActive(e: { nativeEvent?: { isComposing?: boolean }; keyCode?: number }): boolean {
-  return !!e.nativeEvent?.isComposing || e.keyCode === 229
-}
+import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
+import { useSessionTranscript } from './useTranscript'
+import { useAgentStatus, useSessionUsage, useAgentStream } from './agentEvents'
+import { useComposer, Composer, imeActive } from './composer'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
 // Streaming replaces only the message being written (its siblings keep the
@@ -181,20 +172,46 @@ function App() {
   const [editingId, setEditingId] = useState('')
   const [editTitle, setEditTitle] = useState('')
   const [, setCurrentTitle] = useState<string>('Tachi')
-  const [msgCache, setMsgCache] = useState<Record<string, Message[]>>({})
-  const [runningSet, setRunningSet] = useState<Set<string>>(new Set())
-  const [state, setState] = useState<AgentState>({ status: AgentStatus.StatusIdle, label: '空闲', detail: '就绪' })
-  const [input, setInput] = useState('')
+  // Auto-follow state: true while the view is parked at the bottom. Scrolling up flips it
+  // off (and surfaces the "jump to latest" button) so incoming streaming output no longer
+  // yanks the transcript back down under the user. Declared up here because the transcript
+  // store below scrolls through it (a steered message follows the same rule).
+  const chatRef = useRef<HTMLDivElement>(null)
+  const followBottomRef = useRef(true)
+  const [showJump, setShowJump] = useState(false)
+  const scrollToBottom = useCallback((force = false) => {
+    // force=true is for actions where following is clearly intended (sending a message,
+    // switching sessions). Otherwise the pin only happens while the user is parked at the
+    // bottom.
+    if (force) {
+      followBottomRef.current = true
+      setShowJump(false)
+    }
+    const el = chatRef.current
+    if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
+  }, [])
+  // Per-session transcript state — messages, running flags, the loaded window, the delta
+  // buffer — has exactly one owner (useTranscript.ts), so "belongs to a session" is a
+  // property of the type rather than a convention to remember.
+  const {
+    msgCache, runningSet, hasMore, earliestTs,
+    updateSession, patchMessage, applyToSession, sealRunningSegment, injectSteerVisual,
+    setSessionPage, prependSessionPage, markHistoryEnd, openSession, rekeySession,
+    refreshRunning, markRunning, enqueueDelta, flushDeltas,
+  } = useSessionTranscript(currentId, scrollToBottom)
+  const state = useAgentStatus()
+  // The statusbar's numbers (cost/credit/缓存环/速率) belong to the session on screen; they
+  // are cleared before the next session's ledger is read (see useSessionUsage).
+  const {
+    cost, credit, cacheHitRate, hasCacheHit, tps, lastTps,
+    refresh: refreshUsage, clear: clearUsage, resetRate: resetTps,
+  } = useSessionUsage(currentId)
   const [loading, setLoading] = useState(false)
   const [providers, setProviders] = useState<any[]>([])
   const [providerName, setProviderName] = useState('')
   const [thinkingLevel, setThinkingLevel] = useState('none')
   const [ctxEstimate, setCtxEstimate] = useState(0)
   const [ctxWindow, setCtxWindow] = useState(0)
-  const [cost, setCost] = useState(0)
-  const [credit, setCredit] = useState(0)
-  const [cacheHitRate, setCacheHitRate] = useState(0)
-  const [hasCacheHit, setHasCacheHit] = useState(false)
   const [workDir, setWorkDir] = useState('')
   // Workspace roots (primary + additional) and the popover that manages them. The
   // popover is only mounted while open, so its own outside-click/Esc handling is
@@ -274,8 +291,6 @@ function App() {
   // The chip's "+N" badge: the chip itself shows the primary path, so this is what
   // says the workspace extends beyond it.
   const extraRootCount = (roots?.additional || []).length
-  const [tps, setTps] = useState(0)
-  const [lastTps, setLastTps] = useState(0)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   // Theme (light/dark) for the titlebar switch; useThemeHostSync mirrors the
   // active theme to Go, which owns the window colour outside the webview.
@@ -285,243 +300,9 @@ function App() {
   const [mcpServers, setMcpServers] = useState<any[]>([])
   const [mcpLoading, setMcpLoading] = useState<Record<string, boolean>>({})
   const [mcpProfile, setMcpProfile] = useState<{ active: string; available: string[] }>({ active: '', available: [] })
-  // Per-session message pagination: how much of the session history is loaded
-  // on the client, and the oldest loaded raw-message timestamp (used as the
-  // "load earlier" cursor).
-  const [hasMore, setHasMore] = useState<Record<string, boolean>>({})
-  const [earliestTs, setEarliestTs] = useState<Record<string, string>>({})
-  // Pending queue: messages the user sends while a turn is still running. They
-  // are NOT executed immediately — they sit here (each removable, the whole
-  // queue clearable) until the next steer point injects them into the running
-  // turn, or the turn ends and a natural completion auto-sends them. Keyed by
-  // session so queued input follows its own conversation.
-  const [pending, setPending] = useState<Record<string, string[]>>({})
-  const pendingRef = useRef<Record<string, string[]>>({})
-  // sendingNow guards the "立即发送" action against double-clicks while the
-  // backend is still stopping the previous turn.
-  const [sendingNow, setSendingNow] = useState(false)
-  // Auto-follow state: true while the view is parked at the bottom. Scrolling
-  // up flips it off (and surfaces the "jump to latest" button) so incoming
-  // streaming output no longer yanks the transcript back down under the user.
-  const followBottomRef = useRef(true)
-  const [showJump, setShowJump] = useState(false)
-  // IME composition state for the composer. Some WebKit builds fire
-  // compositionend BEFORE the Enter keydown that commits the candidate, so the
-  // ref is cleared on the next macrotask — that keeps the guard active for the
-  // committing Enter without swallowing a later, genuine Enter-to-send.
-  const composingRef = useRef(false)
-  const chatRef = useRef<HTMLDivElement>(null)
-  const composerRef = useRef<HTMLTextAreaElement>(null)
+  // Per-session message pagination (how much of a session's history is loaded, and the
+  // "load earlier" cursor) lives in the transcript store with the messages it describes.
   const messages = msgCache[currentId] || []
-  const pendMsgs = pending[currentId] || []
-
-  // ── @-file completion ─────────────────────────────────────────────────────
-  // Typing "@" opens a fuzzy picker over the session's working directory.
-  // Accepting a match splices a reference into the text; the reference is
-  // expanded backend-side at turn start (agent/atfile), so the transcript keeps
-  // showing the raw text the user typed. The trigger rule in atRefAt mirrors
-  // agent/atfile.IsRefBoundary — the popup must offer exactly what the backend
-  // will expand.
-  const [at, setAt] = useState<AtPickerState | null>(null)
-  // Slash commands the backend supports (fetched once: the set is static per
-  // build) and the "/" palette's highlight. The palette is derived from the
-  // input below rather than stored, so there is no way for it to go stale.
-  const [cmdList, setCmdList] = useState<CommandVO[]>([])
-  const [cmdDismissed, setCmdDismissed] = useState<string | null>(null)
-  const [cmdIdx, setCmdIdx] = useState(0)
-  // Query of the last scheduled search — null (not "") means "none yet": the
-  // empty query is a real query (it lists the working directory), so "" cannot
-  // double as the sentinel or the very first "@" would never be searched.
-  const atQueryRef = useRef<string | null>(null)
-  const atSeqRef = useRef(0)                     // stale-response guard
-  const atTimerRef = useRef<number | null>(null)
-  // inputRef mirrors the composer text for event listeners (Wails file drops)
-  // that must not re-subscribe on every keystroke.
-  const inputRef = useRef(input)
-  useEffect(() => { inputRef.current = input }, [input])
-  // atStateRef mirrors the picker state for the same reason (see the file-drop
-  // listener: a drop with the picker open must replace the reference being
-  // typed, not append after it).
-  const atStateRef = useRef<AtPickerState | null>(null)
-  useEffect(() => { atStateRef.current = at }, [at])
-
-  const closeAt = useCallback(() => {
-    atQueryRef.current = null
-    atSeqRef.current++
-    if (atTimerRef.current !== null) {
-      window.clearTimeout(atTimerRef.current)
-      atTimerRef.current = null
-    }
-    setAt(null)
-  }, [])
-
-  // scheduleAtSearch runs the (debounced) backend search for a query.
-  const scheduleAtSearch = useCallback((query: string) => {
-    const sid = currentId
-    atQueryRef.current = query
-    if (atTimerRef.current !== null) window.clearTimeout(atTimerRef.current)
-    const seq = ++atSeqRef.current
-    atTimerRef.current = window.setTimeout(() => {
-      atTimerRef.current = null
-      // Clear the spinner on every path — a rejected (or even synchronously
-      // throwing) call must not leave the picker stuck on "搜索中…".
-      const applyResult = (items: AtMatch[]) => {
-        if (seq !== atSeqRef.current) return // superseded by a newer query
-        setAt((p) => (p && p.query === query ? { ...p, items, idx: 0, loading: false } : p))
-      }
-      try {
-        AgentService.SearchFiles(sid, query, AT_MAX_RESULTS)
-          .then((res) => applyResult(res || []))
-          .catch(() => applyResult([]))
-      } catch {
-        applyResult([])
-      }
-    }, AT_SEARCH_DEBOUNCE_MS)
-  }, [currentId])
-
-  // syncAtRef recomputes the picker from the composer's value + caret. Called on
-  // every text/selection change, which is also how it closes: no reference under
-  // the caret means no picker.
-  const syncAtRef = useCallback((value: string, caret: number) => {
-    const ref = atRefAt(value, caret)
-    if (!ref) {
-      closeAt()
-      return
-    }
-    const count = countAtRefs(value)
-    setAt((prev) => (prev && prev.start === ref.start && prev.query === ref.query
-      ? { ...prev, count }
-      : { start: ref.start, query: ref.query, items: [], idx: 0, loading: true, count }))
-    if (atQueryRef.current !== ref.query) scheduleAtSearch(ref.query)
-  }, [closeAt, scheduleAtSearch])
-
-  // insertAtCaret splices text into the composer at the caret, keeping the focus
-  // and the caret after the inserted text.
-  const insertAtCaret = useCallback((text: string, trailingSpace: boolean, resync: boolean) => {
-    const caret = composerRef.current?.selectionStart ?? inputRef.current.length
-    const ins = insertRefText(inputRef.current, caret, text, trailingSpace)
-    setInput(ins.value)
-    requestAnimationFrame(() => {
-      const node = composerRef.current
-      if (!node) return
-      node.focus()
-      node.setSelectionRange(ins.caret, ins.caret)
-      if (resync) syncAtRef(ins.value, ins.caret)
-    })
-  }, [syncAtRef])
-
-  // acceptAt REPLACES the reference being typed with the picked path — it must
-  // not splice at the caret, or the "@query" the user was typing survives and
-  // the text ends up with a stray "@" (counted as a second reference). A
-  // directory keeps the picker open on the new prefix so the user can drill in.
-  const acceptAt = useCallback((match?: AtMatch) => {
-    if (!match || !at) return
-    const dir = !!match.isDir
-    // The backend decides the reference form (relative under the primary root,
-    // absolute under an additional one); Path is only what the row displays.
-    const text = (match.ref || '@' + match.path) + (dir ? '/' : ' ')
-    const ins = replaceRefText(inputRef.current, at.start, text)
-    atQueryRef.current = null // whatever follows is a fresh query
-    setAt(null)
-    setInput(ins.value)
-    requestAnimationFrame(() => {
-      const node = composerRef.current
-      if (!node) return
-      node.focus()
-      node.setSelectionRange(ins.caret, ins.caret)
-      if (dir) syncAtRef(ins.value, ins.caret)
-    })
-  }, [at, syncAtRef])
-
-  // A session switch changes the working directory, so any open picker is stale.
-  useEffect(() => { closeAt() }, [currentId, closeAt])
-
-  // ── AskUserQuestion ───────────────────────────────────────────────────────
-  // The agent parks the turn and waits for answers; the questions arrive as an
-  // event and are answered through AgentService.AnswerQuestion (the TUI answers
-  // the same channel via RespondToAskUser). Pending questions are kept per
-  // session so a background session's question never hijacks the foreground UI.
-  const [asks, setAsks] = useState<Record<string, { toolId: string; questions: Question[] }>>({})
-  const clearAsk = useCallback((sid: string) => {
-    setAsks((prev) => {
-      if (!prev[sid]) return prev
-      const next = { ...prev }
-      delete next[sid]
-      return next
-    })
-  }, [])
-
-  // answerQuestion answers (or declines, with null) the pending AskUserQuestion.
-  const answerQuestion = useCallback((sid: string, answers: Record<string, string> | null) => {
-    clearAsk(sid)
-    // nil answers = the user declined; the model is told the question went
-    // unanswered instead of being handed a made-up choice.
-    AgentService.AnswerQuestion(sid, answers, null).catch(() => {})
-  }, [clearAsk])
-
-  // answerCurrent is the stable callback the transcript form uses for the
-  // session on screen.
-  const answerCurrent = useCallback((a: Record<string, string> | null) => answerQuestion(currentId, a), [currentId, answerQuestion])
-
-  // patchMessage applies a transform to ONE message of the current session (by id):
-  // the shape a transcript-local interaction needs, so the message map stays the
-  // single source of truth for what is expanded.
-  const patchMessage = useCallback((msgId: string, fn: (m: Message) => Message) => {
-    setMsgCache((prev) => {
-      const list = prev[currentId]
-      if (!list) return prev
-      return { ...prev, [currentId]: list.map((m) => (m.id === msgId ? fn(m) : m)) }
-    })
-  }, [currentId])
-
-  // Note: pending questions are NOT cleared on session switch — the agent is
-  // still parked, so switching back must show the same form. They are cleared
-  // when the turn ends (see the agent:idle / agent:error listeners below).
-
-  // Native file drops arrive from Go (the webview cannot read dropped paths):
-  // resolve them into @-references and splice them in at the caret.
-  useEffect(() => {
-    const off = Events.On('agent:filedrop', (event) => {
-      const d = event.data as { paths?: string[] } | undefined
-      if (!d?.paths?.length) return
-      const paths = d.paths
-      ;(async () => {
-        try {
-          const files = (await AgentService.ResolveDroppedPaths(currentId, paths)) || []
-          const refs = files.map((f) => f.ref).filter(Boolean) as string[]
-          if (!refs.length) return
-          const batch = refs.join(' ')
-          const open = atStateRef.current
-          closeAt()
-          if (open) {
-            // Drop while the picker is open: replace the "@query" being typed.
-            const ins = replaceRefText(inputRef.current, open.start, batch + ' ')
-            setInput(ins.value)
-            requestAnimationFrame(() => {
-              const node = composerRef.current
-              node?.focus()
-              node?.setSelectionRange(ins.caret, ins.caret)
-            })
-            return
-          }
-          insertAtCaret(batch, true, false)
-        } catch { /* ignore */ }
-      })()
-    })
-    return () => off?.()
-  }, [currentId, closeAt, insertAtCaret])
-
-  const scrollToBottom = useCallback((force = false) => {
-    // force=true is for actions where following is clearly intended (sending a
-    // message, switching sessions). Otherwise the pin only happens while the
-    // user is parked at the bottom.
-    if (force) {
-      followBottomRef.current = true
-      setShowJump(false)
-    }
-    const el = chatRef.current
-    if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [])
 
   // Vim-like keys while the message area has focus: G jumps to the newest
   // message, gg returns to the top, Ctrl+U / Ctrl+D scroll half a page. Keys
@@ -553,58 +334,8 @@ function App() {
   }, [scrollToBottom])
 
   // ── Frame-batched deltas ───────────────────────────────────────────────────
-  // Token deltas arrive far faster than the display refreshes. Batching them
-  // into a single state update per animation frame caps markdown parsing and
-  // layout at ~60/s instead of once per token. Non-delta events flush the
-  // buffer first, so the transcript order stays exactly as it happened.
-  const deltaQueueRef = useRef<{ sid: string; type: 'thinking' | 'text'; delta: string }[]>([])
-  const deltaRafRef = useRef<number | null>(null)
-  const flushDeltas = useCallback(() => {
-    if (deltaRafRef.current !== null) {
-      cancelAnimationFrame(deltaRafRef.current)
-      deltaRafRef.current = null
-    }
-    const q = deltaQueueRef.current
-    if (!q.length) return
-    deltaQueueRef.current = []
-    setMsgCache((prev) => {
-      // Group per session (order preserved within a session) so background
-      // sessions batched in the same frame don't clobber each other.
-      const groups = new Map<string, { type: 'thinking' | 'text'; delta: string }[]>()
-      for (const it of q) {
-        const g = groups.get(it.sid)
-        if (g) g.push(it)
-        else groups.set(it.sid, [it])
-      }
-      let out = prev
-      for (const [sid, items] of groups) {
-        let list = prev[sid] || []
-        let idx = lastRunningAssistantIndex(list)
-        if (idx < 0) {
-          // Same reason as applyToSession's openIfMissing: deltas can arrive before the
-          // frontend has placed the placeholder for the turn producing them.
-          const ts = Date.now()
-          list = [...list, { id: `a-${ts}-open`, role: 'assistant', running: true, parts: [], ts: new Date(ts).toISOString() }]
-          prev = { ...prev, [sid]: list }
-          out = prev
-          idx = list.length - 1
-        }
-        let cur = list[idx]
-        for (const it of items) cur = appendPartDelta(cur, it.type, it.delta)
-        if (cur === list[idx]) continue
-        const next = [...list]
-        next[idx] = cur
-        if (out === prev) out = { ...prev }
-        out[sid] = next
-      }
-      return out
-    })
-  }, [])
-  const enqueueDelta = useCallback((sid: string, type: 'thinking' | 'text', delta: string) => {
-    if (!delta) return
-    deltaQueueRef.current.push({ sid, type, delta })
-    if (deltaRafRef.current === null) deltaRafRef.current = requestAnimationFrame(flushDeltas)
-  }, [flushDeltas])
+  // (enqueueDelta / flushDeltas live in useTranscript.ts — the batcher buffers the
+  // streamed deltas of every session, so it belongs with the transcript it feeds.)
 
   // Pin to the newest content after every committed update while following —
   // doing it in a layout effect means the scroll happens in the same frame the
@@ -649,13 +380,14 @@ function App() {
         try {
           const page: any = await (AgentService as any).LoadSessionMore?.(currentId, before, PAGE_SIZE)
           if (!page || !page.messages || page.messages.length === 0) {
-            setHasMore((p) => ({ ...p, [currentId]: false }))
+            markHistoryEnd(currentId)
             return
           }
-          const more = buildTurns(page.messages)
-          setMsgCache((prev) => ({ ...prev, [currentId]: [...more, ...(prev[currentId] || [])] }))
-          setEarliestTs((p) => ({ ...p, [currentId]: page.messages[0].timestamp }))
-          setHasMore((p) => ({ ...p, [currentId]: !!page.hasMore }))
+          prependSessionPage(currentId, {
+            messages: buildTurns(page.messages),
+            hasMore: !!page.hasMore,
+            earliestTs: page.messages[0].timestamp,
+          })
         } catch { /* ignore */ }
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const c = chatRef.current
@@ -666,285 +398,21 @@ function App() {
     }
   }
 
-  const refreshRunning = useCallback(async () => {
-    const list = (await AgentService.RunningSessions().catch(() => null)) || []
-    setRunningSet(new Set(list))
-  }, [])
-  const setSessionMsgs = useCallback((id: string, fn: (l: Message[]) => Message[]) => {
-    setMsgCache((prev) => ({ ...prev, [id]: fn(prev[id] || []) }))
-  }, [])
-
-  // ── Pending queue / steer ─────────────────────────────────────────────────
-  // Queue ops keep pendingRef in sync so event listeners (which can only see
-  // the latest values through refs, not stale render closures) always act on
-  // the freshest queue.
-  const enqueuePending = useCallback((sid: string, text: string) => {
-    const next = { ...pendingRef.current, [sid]: [...(pendingRef.current[sid] || []), text] }
-    pendingRef.current = next
-    setPending(next)
-  }, [])
-  const dropPending = useCallback((sid: string, idx: number) => {
-    const list = pendingRef.current[sid] || []
-    const next = { ...pendingRef.current, [sid]: list.filter((_, i) => i !== idx) }
-    pendingRef.current = next
-    setPending(next)
-  }, [])
-  const clearPending = useCallback((sid: string) => {
-    if (!(pendingRef.current[sid] || []).length) return
-    const next = { ...pendingRef.current, [sid]: [] }
-    pendingRef.current = next
-    setPending(next)
-  }, [])
-  // takePending joins and clears the queue, returning the combined text ("" if
-  // empty) — the single drain point for steer injection / send-now / auto-flush.
-  const takePending = useCallback((sid: string) => {
-    const text = (pendingRef.current[sid] || []).join('\n\n')
-    if (text) {
-      const next = { ...pendingRef.current, [sid]: [] }
-      pendingRef.current = next
-      setPending(next)
-    }
-    return text
-  }, [])
-
   // The current session is producing output when its run is in-flight, or the
   // status bar is in a busy state (covers the simulated-turn fallback too).
   const isCurrentRunning = runningSet.has(currentId) ||
     state.status === 'thinking' || state.status === 'tool_running' || state.status === 'busy'
 
-  // sendText appends the user message + a running assistant placeholder and
-  // starts a backend turn. Shared by the composer, the queue's "send now" and
-  // the auto-flush after a naturally completed turn.
-  const sendText = useCallback((raw: string) => {
-    const text = raw.trim()
-    if (!text) return
-    const sid = currentId
-    const ts = Date.now()
-    const tsStr = new Date().toISOString()
-    setSessionMsgs(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
-    ])
-    AgentService.SendMessage(text).catch(() => {})
-    setRunningSet((prev) => new Set(prev).add(sid))
-    scrollToBottom(true)
-  }, [currentId, setSessionMsgs, scrollToBottom])
-
-  // sealRunningSegment finalizes the turn's currently-streaming assistant segment.
-  //
-  // An interrupted turn's terminal event (error / ExitReason=cancelled) is applied to the
-  // newest RUNNING assistant — so if the next message's placeholder is already in the
-  // transcript when it arrives, the flag lands on the wrong message. That is exactly what
-  // "立即发送" used to produce: the brand-new placeholder read 已停止, and the reply that
-  // followed had no running message to attach to and was dropped. Sealing first leaves the
-  // incoming event with nothing to hit; a segment that rendered nothing is removed rather
-  // than left as an empty bubble.
-  const sealRunningSegment = useCallback((sid: string) => {
-    setMsgCache((prev) => {
-      const list = prev[sid]
-      if (!list) return prev
-      const back = [...list].reverse().findIndex((m) => m.role === 'assistant' && m.running)
-      if (back < 0) return prev
-      const idx = list.length - 1 - back
-      const seg = list[idx]
-      const out = [...list]
-      if (!(seg.parts && seg.parts.length)) out.splice(idx, 1)
-      else out[idx] = { ...seg, running: false, stopped: true }
-      return { ...prev, [sid]: out }
-    })
-  }, [])
-
-  // applyToSession patches the newest message of the given role in a session.
-  // Every streaming handler funnels through it (text/tool deltas and the
-  // auto-compaction notices), so a live transcript is only ever mutated in one
-  // place — and it keys purely off the session ID the backend sent, never off
-  // currentId, so a background session still updates correctly.
-  // applyToSession patches the newest message of the given role in a session.
-  //
-  // openIfMissing is for STREAM events (a delta, a tool call): if the session has no running
-  // assistant, they open one. A turn can start before the frontend has placed its
-  // placeholder — exactly what "[立即发送]" does, because the backend begins the next turn
-  // while the stop call is still on its way back — and without this every delta of that turn
-  // was dropped on the floor ("the reply never appeared"). Terminal events (turn_complete,
-  // error) deliberately do NOT open one: they exist to close a turn, so creating a message
-  // for them would turn an interrupted turn into a phantom empty bubble.
-  const applyToSession = useCallback((sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message, openIfMissing = false) => {
-    setMsgCache((prev) => {
-      const list = prev[sid] || []
-      const target = role === 'user'
-        ? [...list].reverse().find((m) => m.role === 'user')
-        : [...list].reverse().find((m) => m.role === 'assistant' && m.running)
-      if (!target) {
-        if (!openIfMissing || role !== 'assistant') return prev
-        const ts = Date.now()
-        const fresh: Message = { id: `a-${ts}-open`, role: 'assistant', running: true, parts: [], ts: new Date(ts).toISOString() }
-        return { ...prev, [sid]: [...list, fn(fresh)] }
-      }
-      return { ...prev, [sid]: list.map((m) => (m.id === target.id ? fn(m) : m)) }
-    })
-  }, [])
-
-  // runCommand sends a slash command. It renders exactly like a message — user
-  // bubble plus a running assistant placeholder, so the command's streamed output
-  // has somewhere to land — but the backend dispatches it instead of starting a
-  // chat turn. A non-empty result means the command never ran (unknown, or the
-  // session is busy): that is shown as a notice rather than an empty reply.
-  const runCommand = useCallback((text: string) => {
-    const sid = currentId
-    const ts = Date.now()
-    const tsStr = new Date().toISOString()
-    setSessionMsgs(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
-    ])
-    setRunningSet((prev) => new Set(prev).add(sid))
-    scrollToBottom(true)
-    AgentService.RunCommand(text).then((refusal) => {
-      if (!refusal) return
-      applyToSession(sid, 'assistant', (m) => ({ ...finishNotice(m, refusal), running: false }))
-      setRunningSet((prev) => { const next = new Set(prev); next.delete(sid); return next })
-    }).catch(() => {
-      applyToSession(sid, 'assistant', (m) => ({ ...finishNotice(m, '命令执行失败'), running: false }))
-      setRunningSet((prev) => { const next = new Set(prev); next.delete(sid); return next })
-    })
-  }, [currentId, setSessionMsgs, scrollToBottom, applyToSession])
-
-  // acceptCommand completes the palette's highlighted name into the input,
-  // leaving a trailing space so arguments follow naturally. Completing rather
-  // than sending is deliberate: "/rev" + Enter should not run the wrong command.
-  const acceptCommand = useCallback((cmd?: CommandVO) => {
-    if (!cmd) return
-    setCmdIdx(0)
-    setInput('/' + cmd.name + ' ')
-    requestAnimationFrame(() => composerRef.current?.focus())
-  }, [])
-
-  // The "/" palette: open while the input is a bare command name still being
-  // typed (a space means arguments follow, an exact name means the command is
-  // complete). Derived from the input rather than stored, so it can never
-  // disagree with what would actually be dispatched; Esc dismisses the palette
-  // for the current query only, so typing on reopens it.
-  const cmdQuery = input.startsWith('/') && !/\s/.test(input.slice(1)) ? input.slice(1) : null
-  const cmdMatches = cmdQuery === null ? [] : cmdList.filter((c) => c.name.startsWith(cmdQuery.toLowerCase()))
-  const cmdOpen = cmdQuery !== null && cmdDismissed !== cmdQuery && !cmdList.some((c) => c.name === cmdQuery)
-
-  // send routes the composer text: while a turn is running the message goes to
-  // the pending queue (to be steered in at the next tool boundary) instead of
-  // starting a second, competing turn.
-  const send = useCallback(() => {
-    const text = input.trim()
-    if (!text) return
-    closeAt()
-    setInput('')
-    // A leading "/" is a command, never a message: the backend owns the list and
-    // answers with a notice when it does not know the name.
-    if (text.startsWith('/')) {
-      runCommand(text)
-      return
-    }
-    if (isCurrentRunning) {
-      enqueuePending(currentId, text)
-      return
-    }
-    sendText(text)
-  }, [input, isCurrentRunning, currentId, enqueuePending, sendText, closeAt, runCommand])
-
-  // sendPendingNow is the pending bar's primary action: stop the current turn
-  // and send the queued text as a fresh user turn right away. The user bubble
-  // + assistant placeholder are shown immediately; if stopping the turn times
-  // out on the backend the text is put back into the queue for another try.
-  // sendPendingNow is the queue's "[立即发送]": interrupt the running turn and send the
-  // queued text as the next one.
-  //
-  // Two things have to be true at once, and the ORDER is what makes them so:
-  //   1. the interrupted turn's segment is sealed BEFORE the new message is placed — its
-  //      terminal event (error / interrupted) targets "the newest running assistant", so a
-  //      message placed first would be the one marked 已停止 (and its own reply dropped);
-  //   2. the assistant placeholder is NOT placed here at all — the stream events open it
-  //      (see applyToSession's openIfMissing), because the backend starts the next turn while
-  //      the stop call is still on its way back, so its first delta can beat this function.
-  // Only the user's bubble goes in now: it has to stay above the reply.
-  const sendPendingNow = useCallback(async () => {
-    const sid = currentId
-    const text = takePending(sid)
-    if (!text.trim()) return
-    setSendingNow(true)
-
-    if (!isCurrentRunning) {
-      // Nothing to interrupt: the plain send path places both bubbles and owns the IPC.
-      sendText(text)
-      setSendingNow(false)
-      return
-    }
-
-    sealRunningSegment(sid)
-    const ts = Date.now()
-    setSessionMsgs(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: new Date(ts).toISOString() },
-    ])
-    setRunningSet((prev) => new Set(prev).add(sid))
-    scrollToBottom(true)
-
-    const requeue = () => {
-      // Nothing was sent, so the segment we just opened must be closed again — and the text
-      // belongs back in the queue rather than in the transcript as if it had gone out.
-      sealRunningSegment(sid)
-      enqueuePending(sid, text)
-      refreshRunning()
-    }
-    try {
-      const ret = await AgentService.StopAndSend(text)
-      if (ret && ret !== 'ok') requeue()
-    } catch {
-      requeue()
-    }
-    setSendingNow(false)
-  }, [currentId, isCurrentRunning, takePending, setSessionMsgs, enqueuePending, scrollToBottom,
-      sealRunningSegment, refreshRunning, sendText])
-
-  // injectSteerVisual splits the streaming assistant segment so the queued
-  // user text lands AFTER the tool work already shown and BEFORE the reply
-  // that continues after the steer point: finalize the running segment, append
-  // the user bubble, open a fresh running placeholder for the rest of the turn
-  // (subsequent deltas/tool events target the newest running assistant). When
-  // the segment has rendered nothing yet the bubble is inserted before it.
-  const injectSteerVisual = useCallback((sid: string, text: string, ts: string) => {
-    setMsgCache((prev) => {
-      const list = prev[sid] || []
-      let ai = -1
-      for (let i = list.length - 1; i >= 0; i--) {
-        if (list[i].role === 'assistant' && list[i].running) { ai = i; break }
-      }
-      if (ai < 0) return prev
-      const seg = list[ai]
-      const u: Message = { id: `u-${Date.now()}-steer`, role: 'user', text, ts }
-      if (!(seg.parts && seg.parts.length)) {
-        const out = [...list]
-        out.splice(ai, 0, u)
-        return { ...prev, [sid]: out }
-      }
-      const out = [...list]
-      out[ai] = { ...seg, running: false }
-      out.push(u, { id: `a-${Date.now()}-steer`, role: 'assistant', running: true, parts: [], ts })
-      return { ...prev, [sid]: out }
-    })
-    // Respect the follow state here too: a steered message landing mid-history
-    // must not yank a user who is reading older output back to the bottom.
-    scrollToBottom()
-  }, [scrollToBottom])
-
-  // answerSteer replies to the agent's steer_check for a session: queued text
-  // is drained, shown in the transcript and injected; otherwise the empty
-  // string unblocks the agent loop without steering.
-  const answerSteer = useCallback((sid: string) => {
-    const text = takePending(sid)
-    if (!text) {
-      AgentService.Steer(sid, '').catch(() => {})
-      return
-    }
-    injectSteerVisual(sid, text, new Date().toISOString())
-    AgentService.Steer(sid, text).catch(() => {})
-  }, [takePending, injectSteerVisual])
+  // The composer: the input box, the @-picker and "/" palette, the queue of messages typed
+  // while a turn runs, and the answer form for a parked question. It routes what the user
+  // commits (send now / queue / slash command) into the transcript store.
+  const composer = useComposer({
+    currentId,
+    running: isCurrentRunning,
+    transcript: { updateSession, applyToSession, injectSteerVisual, sealRunningSegment, markRunning, refreshRunning },
+    scrollToBottom,
+    chatRef,
+  })
 
   const refreshProvider = useCallback(async () => {
     try {
@@ -953,26 +421,6 @@ function App() {
       const lv = await (AgentService as any).GetThinkingLevel?.()
       if (lv) setThinkingLevel(lv)
     } catch { /* ignore */ }
-  }, [])
-
-  // refreshCost fetches the current session's cumulative cost/credit ("积分")
-  // from the backend's usage ledger (counterpart to TUI's statusbar cost).
-  const refreshCost = useCallback(async (id: string) => {
-    try {
-      const u = await (AgentService as any).GetSessionUsage?.(id)
-      // Applied unconditionally: a missing payload means "nothing recorded", and guarding it
-      // with `if (u)` is what let one session's numbers survive into the next.
-      setCost(u?.cost || 0); setCredit(u?.credit || 0)
-      setCacheHitRate(u?.cacheHitRate || 0); setHasCacheHit(!!u?.hasCacheHit)
-    } catch { /* ignore: a failed fetch is not evidence of zero */ }
-  }, [])
-
-  // clearUsage blanks the whole session-scoped usage row (cost, credit, cache ring). It is
-  // the immediate half of refreshCost: the fetch confirms the zeros, and this makes sure the
-  // row never shows another session's numbers in the meantime — a brand-new session used to
-  // inherit the previous one's cache rate while having sent nothing at all.
-  const clearUsage = useCallback(() => {
-    setCost(0); setCredit(0); setCacheHitRate(0); setHasCacheHit(false)
   }, [])
 
   // refreshWorkspace loads a session's workspace context: the primary directory
@@ -1074,19 +522,15 @@ function App() {
     }
   }, [currentId])
 
-  // sendFindings is how the diff panel leaves: the picked findings become one ordinary
-  // user message. It rides the composer's route instead of a channel of its own — while a
-  // turn is running the message queues for the next steer point, because startTurn refuses
-  // a busy session (so sending directly would drop the text in silence). The panel closes
-  // on its way out; the reply then streams into the transcript behind it.
+  // sendFindings is how the diff panel leaves: the picked findings become one ordinary user
+  // message. It rides the composer's route (submit) instead of a channel of its own — while
+  // a turn is running the message queues for the next steer point, because startTurn refuses
+  // a busy session (so sending directly would drop the text in silence). The panel closes on
+  // its way out; the reply then streams into the transcript behind it.
   const sendFindings = useCallback((text: string) => {
     setDiffPanelOpen(false)
-    if (isCurrentRunning) {
-      enqueuePending(currentId, text)
-      return
-    }
-    sendText(text)
-  }, [currentId, isCurrentRunning, enqueuePending, sendText])
+    composer.submit(text)
+  }, [composer])
 
   const openDiffPanel = useCallback(async (paths: string[]) => {
     setDiffPanelOpen(true)
@@ -1166,22 +610,18 @@ function App() {
       if (!msgCache[cur.id]) {
         const page: any = await (AgentService as any).LoadSession?.(cur.id, PAGE_SIZE)
         if (page?.messages) {
-          setMsgCache((prev) => ({ ...prev, [cur!.id]: buildTurns(page.messages) }))
-          setHasMore((p) => ({ ...p, [cur!.id]: !!page.hasMore }))
-          setEarliestTs((p) => ({ ...p, [cur!.id]: page.messages[0]?.timestamp }))
+          setSessionPage(cur.id, { messages: buildTurns(page.messages), hasMore: !!page.hasMore, earliestTs: page.messages[0]?.timestamp || '' })
         }
       }
-      refreshCost(cur.id)
+      refreshUsage(cur.id)
       scrollToBottom(true)
     } else {
       const ns = await AgentService.NewSession().catch(() => null)
       if (ns) {
         setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
-        setMsgCache((p) => ({ ...p, [ns.id]: [] }))
-        setHasMore((p) => ({ ...p, [ns.id]: false }))
-        setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
-        clearUsage(); setTps(0); setLastTps(0)
-        refreshCost(ns.id)
+        openSession(ns.id)
+        clearUsage(); resetTps()
+        refreshUsage(ns.id)
         refreshWorkspace(ns.id)
       }
     }
@@ -1190,7 +630,7 @@ function App() {
     refreshProvider()
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
-  }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP, refreshWorkspace, clearUsage])
+  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage])
   const confirmDelete = useCallback(async (id: string) => {
     await (AgentService as any).DeleteSession?.(id).catch(() => {})
     loadAll()
@@ -1207,46 +647,36 @@ function App() {
       setLoading(true)
       const page: any = await (AgentService as any).LoadSession?.(id, PAGE_SIZE)
       if (page?.messages) {
-        setMsgCache((prev) => ({ ...prev, [id]: buildTurns(page.messages) }))
-        setHasMore((p) => ({ ...p, [id]: !!page.hasMore }))
-        setEarliestTs((p) => ({ ...p, [id]: page.messages[0]?.timestamp }))
+        setSessionPage(id, { messages: buildTurns(page.messages), hasMore: !!page.hasMore, earliestTs: page.messages[0]?.timestamp || '' })
       }
       setLoading(false)
     }
-    setTps(0); setLastTps(0)
+    resetTps()
     scrollToBottom(true)
     refreshRunning()
-    refreshCost(id)
+    refreshUsage(id)
     refreshProvider()
     refreshMCP()
     refreshWorkspace(id)
-  }, [sessions, msgCache, scrollToBottom, refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkspace])
+  }, [sessions, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
 
   const newChat = useCallback(async () => {
     const ns = await AgentService.NewSession().catch(() => null)
     if (ns) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
-      setMsgCache((prev) => ({ ...prev, [ns.id]: [] }))
-      setHasMore((p) => ({ ...p, [ns.id]: false }))
-      setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
-      clearUsage(); setTps(0); setLastTps(0)
-      refreshCost(ns.id)
+      openSession(ns.id)
+      clearUsage(); resetTps()
+      refreshUsage(ns.id)
       refreshWorkspace(ns.id)
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace, refreshCost, clearUsage])
+  }, [refreshProvider, refreshWorkspace, refreshUsage, clearUsage])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
-  // The slash commands the desktop supports. Fetched once — the set is baked into
-  // the build — and used both by the "/" palette and to decide what a lead-in "/"
-  // means when sending.
-  useEffect(() => {
-    AgentService.ListCommands().then((list) => setCmdList(list || [])).catch(() => {})
-  }, [])
-
+  // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
   // Cmd+N starts a new session. (No native menu binds them, so the webview sees
   // the key events.)
@@ -1254,7 +684,7 @@ function App() {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') { setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setReminderModal(null); return }
       if (!e.metaKey) return
-      if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composerRef.current?.focus() }
+      if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
       else if (e.key.toLowerCase() === 'n') { e.preventDefault(); newChat() }
       else if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) { e.preventDefault(); setShortcutsOpen((v) => !v) }
@@ -1275,148 +705,22 @@ function App() {
     loadProv()
   }, [])
 
-  useEffect(() => {
-    const off = Events.On('agent:state', (event) => { setState(event.data as AgentState) })
-    AgentService.GetState().then((s) => setState(s)).catch(() => {})
-    return () => off?.()
+  // The generated title arrives as an event; the sidebar renders a list fetched at
+  // load/switch, so the row has to be patched in place or it keeps saying 未命名会话.
+  const setSessionTitle = useCallback((sid: string, title: string) => {
+    setSessions((prev) => prev.map((s) => (s.id === sid ? { ...s, title } : s)))
   }, [])
 
-  useEffect(() => {
-    const off = Events.On('agent:cost', (event) => {
-      const d = event.data as { sessionId: string; cost: number; credit: number; cacheHitRate?: number; hasCacheHit?: boolean }
-      if (d.sessionId === currentId) { setCost(d.cost || 0); setCredit(d.credit || 0); if (d.cacheHitRate != null) setCacheHitRate(d.cacheHitRate); setHasCacheHit(!!d.hasCacheHit) }
-    })
-    return () => off?.()
-  }, [currentId])
-
-  useEffect(() => {
-    const off = Events.On('agent:tps', (event) => {
-      const d = event.data as { sessionId: string; tps: number; lastTps?: number }
-      if (d.sessionId !== currentId) return
-      if (d.tps > 0) { setTps(d.tps); setLastTps(0) }
-      else { setTps(0); if (d.lastTps) setLastTps(d.lastTps) }
-    })
-    return () => off?.()
-  }, [currentId])
-
-  // Questions arrive while the turn is parked; the form renders in the
-  // transcript (see AssistantBubble), so pull the view down to it.
-  useEffect(() => {
-    const off = Events.On('agent:ask', (event) => {
-      const d = event.data as { sessionId?: string; toolId?: string; questions?: Question[] } | undefined
-      if (!d?.sessionId || !d.questions?.length) return
-      setAsks((prev) => ({ ...prev, [d.sessionId as string]: { toolId: d.toolId || '', questions: d.questions as Question[] } }))
-      // The form renders in the transcript, so follow it into view — but only
-      // while the user is already parked at the bottom: yanking someone who is
-      // reading history down to a form would be exactly the kind of
-      // interruption this UI should avoid.
-      if (d.sessionId === currentId) scrollToBottom()
-    })
-    return () => off?.()
-  }, [currentId, scrollToBottom])
-
-  useEffect(() => {
-    const off = Events.On('agent:error', (event) => {
-      const d = event.data as { sessionId: string; error: string; interrupted?: boolean }
-      clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
-      if (d.sessionId !== currentId) return
-      const interrupted = !!d.interrupted
-      setMsgCache((prev) => {
-        const list = prev[currentId] || []
-        // The turn being concluded is the newest assistant message. Unlike a
-        // running-scan, this still works when agent:event has already flipped
-        // running off (listener order is not guaranteed). Mutations are
-        // idempotent so double-handling is harmless.
-        const target = [...list].reverse().find((m) => m.role === 'assistant')
-        if (!target) return prev
-        const conclude = (m: Message): Message => {
-          // After a stop no tool_result event arrives for in-flight calls, so
-          // close their cards; a real error is surfaced as a trailing text
-          // part (the transcript renders parts in order — there is no
-          // separate error field to append to).
-          const parts = interrupted
-            ? closeOpenToolParts(m.parts, '已中断')
-            : [...(m.parts || []), { type: 'text' as const, text: '⚠ ' + (d.error || '出错') }]
-          return { ...m, running: false, stopped: interrupted || m.stopped, parts }
-        }
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? conclude(m) : m)) }
-      })
-    })
-    return () => off?.()
-  }, [currentId, clearAsk])
-
-  useEffect(() => {
-    const off = Events.On('agent:turn', (event) => {
-      const d = event.data as { sessionId: string; durationMs: number; iterations: number; cost: number; credit: number }
-      if (d.sessionId !== currentId) return
-      setMsgCache((prev) => {
-        const list = prev[currentId] || []
-        const target = [...list].reverse().find((m) => m.role === 'assistant')
-        if (!target) return prev
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? { ...m, summary: d } : m)) }
-      })
-    })
-    return () => off?.()
-  }, [currentId])
-
-  useEffect(() => {
-    const off = Events.On('agent:tool', (event) => {
-      const t = event.data as { name: string; title: string; args: string; change?: FileChangeVO | null }
-      setMsgCache((prev) => {
-        const list = prev[currentId] || []
-        const target = [...list].reverse().find((m) => m.role === 'assistant' && m.running)
-        if (!target) return prev
-        return { ...prev, [currentId]: list.map((m) => (m.id === target.id ? updateToolPart(m, t.name, t.title, t.args, t.change) : m)) }
-      })
-    })
-    return () => off?.()
-  }, [currentId])
-
-  useEffect(() => {
-    const off = Events.On('agent:event', (event) => {
-      const d = event.data as { sessionId: string; event: AgentEvent }
-      const { sessionId, event: ev } = d
-      // Deltas ride the frame batcher; every other event must be applied in
-      // order, so flush pending text/thinking first.
-      if (ev.Type !== 'thinking_delta' && ev.Type !== 'text_delta') flushDeltas()
-      switch (ev.Type) {
-        case 'thinking_delta': enqueueDelta(sessionId, 'thinking', ev.ThinkingDelta || ''); break
-        case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
-        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand }), true); break
-        case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined), true); break
-        case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
-        case 'session_title': {
-          // The generated title arrives here and nowhere else: the sidebar renders the list it
-          // fetched on load/switch, so without this the row kept saying 未命名会话 for the rest
-          // of the session (the title was in the meta file all along, and only a restart — or a
-          // session switch — ever showed it).
-          const title = ev.Title
-          if (title) setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title } : s)))
-          break
-        }
-        case 'steer_check':
-          // The agent finished a round of tool calls and is parked, waiting
-          // for pending user input to steer the next LLM call. Queued text is
-          // drained, shown in the transcript and injected; an empty queue
-          // replies "" to unblock the loop without steering.
-          answerSteer(sessionId)
-          break
-        case 'error': {
-          const interrupted = ev.Result?.ExitReason === 'interrupted' || ev.Result?.ExitReason === 'cancelled'
-          applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false, stopped: interrupted || m.stopped }))
-          break
-        }
-      }
-      // These two are backend round-trips over IPC and used to run for EVERY
-      // delta — the single biggest cause of stutter while streaming. They only
-      // carry new information at turn boundaries.
-      if (ev.Type === 'turn_complete' || ev.Type === 'error') {
-        refreshRunning()
-        refreshProvider()
-      }
-    })
-    return () => off?.()
-  }, [currentId, applyToSession, refreshRunning, refreshProvider, answerSteer, flushDeltas, enqueueDelta])
+  // Everything the running turn reports about itself, applied to the transcript
+  // (agent:event / agent:tool / agent:turn / agent:error — see agentEvents.ts). The steer
+  // reply and the question cleanup come from the composer: both are about the queue/form
+  // that lives there.
+  useAgentStream({
+    currentId,
+    updateSession, applyToSession, enqueueDelta, flushDeltas, refreshRunning,
+    refreshProvider, answerSteer: composer.answerSteer, clearAsk: composer.clearAsk,
+    onSessionTitle: setSessionTitle,
+  })
 
   // moveSession follows a conversation that auto-compaction moved into a new
   // session. It is deliberately NOT a cache rename: the compacted session is a
@@ -1433,23 +737,12 @@ function App() {
   // child has its own ledger from here on.
   const moveSession = useCallback((from: string, to: string) => {
     if (!from || !to || from === to) return
-    const moveKey = <T,>(rec: Record<string, T>): Record<string, T> => {
-      if (!(from in rec)) return rec
-      const { [from]: kept, ...rest } = rec
-      return { ...rest, [to]: kept }
-    }
-    const dropKey = <T,>(rec: Record<string, T>): Record<string, T> => {
-      if (!(from in rec) && !(to in rec)) return rec
-      const { [from]: dropped, [to]: replaced, ...rest } = rec
-      return rest
-    }
-    setPending(moveKey)
-    pendingRef.current = moveKey(pendingRef.current)
-    setAsks(moveKey)
-    setMsgCache(dropKey)
-    setHasMore(dropKey)
-    setEarliestTs(dropKey)
-    setRunningSet((prev) => (prev.has(from) ? new Set([...prev].map((id) => (id === from ? to : id))) : prev))
+    // The queue of messages typed while the turn ran and its pending question are the
+    // conversation's, so they follow it; the transcript's half of the same move (drop the
+    // parent's window, carry the running flag over) is the store's own rule — see rekeySession
+    // in useTranscript.ts.
+    composer.rekeySessions(from, to)
+    rekeySession(from, to)
     setCurrentId(to)
     // The compacted child is a new row in the sidebar (the parent stays as the
     // pre-compaction history, exactly as in the TUI). `active` is frontend state,
@@ -1458,22 +751,24 @@ function App() {
     void AgentService.ListSessions()
       .then((list) => { if (list) setSessions(list.map((s) => ({ ...s, active: s.id === to }))) })
       .catch(() => {})
-    setTps(0); setLastTps(0)
+    resetTps()
     void (async () => {
       setLoading(true)
       const page: any = await (AgentService as any).LoadSession?.(to, PAGE_SIZE).catch(() => null)
-      setMsgCache((prev) => ({ ...prev, [to]: page?.messages ? buildTurns(page.messages) : [] }))
-      setHasMore((p) => ({ ...p, [to]: !!page?.hasMore }))
-      setEarliestTs((p) => ({ ...p, [to]: page?.messages?.[0]?.timestamp }))
+      setSessionPage(to, {
+        messages: page?.messages ? buildTurns(page.messages) : [],
+        hasMore: !!page?.hasMore,
+        earliestTs: page?.messages?.[0]?.timestamp || '',
+      })
       setLoading(false)
       scrollToBottom(true)
     })()
     refreshRunning()
-    refreshCost(to)
+    refreshUsage(to)
     refreshProvider()
     refreshMCP()
     refreshWorkspace(to)
-  }, [refreshRunning, refreshProvider, refreshCost, refreshMCP, refreshWorkspace, scrollToBottom])
+  }, [rekeySession, setSessionPage, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, scrollToBottom])
 
   // Auto-compaction: when the token estimate crosses the configured threshold
   // the agent compacts in-flight and moves the conversation into a new (child)
@@ -1503,27 +798,6 @@ function App() {
     })
     return () => { offStart?.(); offDone?.(); offSwitch?.() }
   }, [applyToSession, moveSession])
-
-  // agent:idle fires after a turn goroutine has fully exited (running already
-  // reset on the backend). A NATURAL completion auto-sends whatever the user
-  // queued while the turn ran (same drain semantics as TUI's TurnComplete);
-  // stopped/errored turns leave the queue for the user to review, drop or
-  // send manually.
-  useEffect(() => {
-    const off = Events.On('agent:idle', (event) => {
-      const d = event.data as { sessionId: string; reason: string; current?: boolean }
-      clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
-      // `current` comes from the backend (was this the displayed session?) rather
-      // than being compared against this closure's currentId: an auto-compaction
-      // switch can move the session between the two events, and React state read
-      // through a stale closure would then silently drop the queued message.
-      if (!d.current || d.reason !== 'complete') return
-      const queued = pendingRef.current[d.sessionId] || []
-      if (queued.length === 0) return
-      sendText(takePending(d.sessionId))
-    })
-    return () => off?.()
-  }, [sendText, takePending, clearAsk])
 
   // stopChat aborts the running turn in the current session (backend cancels
   // the turn ctx — same mechanism as tui Ctrl+C / acp prompt cancel).
@@ -1620,8 +894,8 @@ function App() {
                       m={m}
                       workDir={workDir}
                       runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
-                      ask={m.running ? (asks[currentId]?.questions || null) : null}
-                      onAnswer={answerCurrent}
+                      ask={m.running ? (composer.ask?.questions || null) : null}
+                      onAnswer={composer.answerCurrent}
                       onToggleDiff={(i) => patchMessage(m.id, (msg) => togglePartDiff(msg, i))}
                       onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
                       onOpenDiffPanel={openDiffPanel}
@@ -1649,127 +923,7 @@ function App() {
           </div>
 
           <footer className="composer">
-            {pendMsgs.length > 0 && (
-              <div className="pending-bar">
-                <div className="pending-head">
-                  <span className="pending-title">
-                    {isCurrentRunning ? '⏸ 待发送 · 会在本轮工具调用结束后自动插入' : '待发送消息'}
-                  </span>
-                  <span className="pending-actions">
-                    <button className="pending-send" disabled={sendingNow} onClick={sendPendingNow}>
-                      {sendingNow ? '正在停止…' : isCurrentRunning ? '立即发送 · 打断' : '发送'}
-                    </button>
-                    <button className="pending-clear" onClick={() => clearPending(currentId)} title="清空待发送队列">清空</button>
-                  </span>
-                </div>
-                {pendMsgs.map((t, i) => (
-                  <div className="pending-item" key={`${i}-${t.slice(0, 8)}`}>
-                    <span className="pending-bullet">·</span>
-                    <span className="pending-text" title={t}>{t}</span>
-                    <button className="pending-del" title="撤回该条" onClick={() => dropPending(currentId, i)}>✕</button>
-                  </div>
-                ))}
-              </div>
-            )}
-            <div className="composer-box" data-file-drop-target="true">
-              {cmdOpen && (
-                <CommandPicker
-                  items={cmdMatches}
-                  selected={Math.min(cmdIdx, Math.max(0, cmdMatches.length - 1))}
-                  onPick={(i) => acceptCommand(cmdMatches[i])}
-                />
-              )}
-              {at && (
-                <AtFilePicker
-                  query={at.query}
-                  items={at.items}
-                  selected={at.idx}
-                  loading={at.loading}
-                  refCount={at.count}
-                  onPick={(i) => acceptAt(at.items[i])}
-                  onHover={(i) => setAt((p) => (p ? { ...p, idx: i } : p))}
-                />
-              )}
-              <div className="composer-input-wrap">
-                <textarea className="composer-input" ref={composerRef} value={input}
-                  onChange={(e) => { setInput(e.target.value); syncAtRef(e.target.value, e.target.selectionStart ?? e.target.value.length) }}
-                  onSelect={(e) => { const el = e.currentTarget; syncAtRef(el.value, el.selectionStart ?? el.value.length) }}
-                  onBlur={() => closeAt()}
-                  onCompositionStart={() => { composingRef.current = true }}
-                  onCompositionEnd={() => { window.setTimeout(() => { composingRef.current = false }, 0) }}
-                  onKeyDown={(e) => {
-                    const ime = composingRef.current || imeActive(e)
-                    // While the @-picker is open it owns the navigation keys;
-                    // an IME composing (candidate selection) owns them first.
-                    if (!ime && at) {
-                      // ↑↓ and Ctrl+N/Ctrl+P both move the highlight (Ctrl+N/P
-                      // matches the TUI's keymap, and preventDefault keeps
-                      // Cocoa's own Ctrl+N/P caret movement out of the way).
-                      const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')
-                      const up = e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')
-                      if (down || up) {
-                        e.preventDefault()
-                        const delta = down ? 1 : -1
-                        setAt((p) => (p && p.items.length
-                          ? { ...p, idx: Math.max(0, Math.min(p.items.length - 1, p.idx + delta)) }
-                          : p))
-                        return
-                      }
-                      if (e.key === 'Tab' || (e.key === 'Enter' && !e.shiftKey)) {
-                        // Tab/Enter accept the highlighted match; with no match,
-                        // Enter still sends (Tab just dismisses the picker).
-                        if (at.items.length > 0) { e.preventDefault(); acceptAt(at.items[at.idx]); return }
-                        if (e.key === 'Tab') { e.preventDefault(); closeAt(); return }
-                      }
-                      if (e.key === 'Escape') { e.preventDefault(); closeAt(); return }
-                    }
-                    // The "/" palette owns the navigation keys while it is open
-                    // (the @-picker cannot be open at the same time: one is
-                    // triggered by "@", the other by a leading "/").
-                    if (!ime && cmdOpen) {
-                      const down = e.key === 'ArrowDown' || (e.ctrlKey && e.key.toLowerCase() === 'n')
-                      const up = e.key === 'ArrowUp' || (e.ctrlKey && e.key.toLowerCase() === 'p')
-                      if (down || up) {
-                        e.preventDefault()
-                        const delta = down ? 1 : -1
-                        setCmdIdx((i) => Math.max(0, Math.min(cmdMatches.length - 1, i + delta)))
-                        return
-                      }
-                      if (e.key === 'Tab') { e.preventDefault(); acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)]); return }
-                      if (e.key === 'Escape') { e.preventDefault(); setCmdDismissed(cmdQuery); return }
-                      // Enter completes rather than sends while the name is still
-                      // partial: "/rev" + Enter must not run the wrong command.
-                      if (e.key === 'Enter' && !e.shiftKey && cmdMatches.length > 0) {
-                        e.preventDefault()
-                        acceptCommand(cmdMatches[Math.min(cmdIdx, cmdMatches.length - 1)])
-                        return
-                      }
-                    }
-                    // Esc hands the focus to the message area (the Vim-like keys
-                    // live there). Not listed in the shortcut sheet on purpose:
-                    // it is a focus affordance, not a feature shortcut.
-                    if (e.key === 'Escape') { e.preventDefault(); chatRef.current?.focus(); return }
-                    if (e.key !== 'Enter' || e.shiftKey) return
-                    // Enter while an IME is composing confirms the candidate
-                    // (选词), it must not send the message.
-                    if (ime) return
-                    e.preventDefault()
-                    send()
-                  }}
-                  placeholder={isCurrentRunning ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件）'} />
-                {isCurrentRunning && (
-                  <button className="stop-btn" title="停止生成" onClick={stopChat} aria-label="停止生成">
-                    <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>
-                  </button>
-                )}
-              </div>
-              <div className="composer-actions">
-                <button className="send-btn" onClick={send} disabled={!input.trim() || sendingNow}>
-                  <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><line x1="5" y1="12" x2="19" y2="12" /><polyline points="12 5 19 12 12 19" /></svg>
-                  <span>{isCurrentRunning ? '排队' : '发送'}</span>
-                </button>
-              </div>
-            </div>
+            <Composer api={composer} running={isCurrentRunning} onStop={stopChat} />
             <div className="composer-status">
               <div className="work-dir-wrap popover-anchor">
                 {rootsOpen ? (
