@@ -1,6 +1,6 @@
 # Desktop Plan 面板设计
 
-> 版本: 0.2 | 日期: 2026-09-12 | 状态: P1（显示）/ P2（plan 模式）已实现；多份计划与清理已实现
+> 版本: 0.3 | 日期: 2026-09-12 | 状态: P1（显示）/ P2（plan 模式）已实现；多份计划与清理已实现；步骤状态回写已实现并补验（§7）
 > 关联: [desktop/plan.go](../desktop/plan.go)、[desktop/frontend/src/plan.tsx](../desktop/frontend/src/plan.tsx)、
 >       [agent/tools/plan.go](../agent/tools/plan.go)、[agent/systemreminder/](../agent/systemreminder/)、
 >       [2026-09-11-desktop-diff-review-design.md](./2026-09-11-desktop-diff-review-design.md)
@@ -98,13 +98,50 @@
   - 面板标题/计数/四个步骤的状态/正文 markdown 全对；
   - mock 直接返回一次 SavePlan 工具调用 → 计划真的落盘（`实时保存的计划-smoke-diff-0001.json`），
     chip **实时**从 `2/4` 变成新计划的 `1/3`（证明 `PlanToolEnabled` + `agent:plan` + `GetPlan` 整条链路）。
+- **真机补验（2026-09-12 晚，步骤状态回写）**：一个 mock 回合里**两次** SavePlan，同一个 `plan_id`：
+  - 第一次三步全 `pending` → chip `计划 0/3`，面板 `○ 第一步 / ○ 第二步 / ○ 第三步`；
+  - 第二次（用户发「继续」触发新回合）第一步 `completed`、第二步 `in_progress` →
+    chip `计划 1/3`，面板 `✓ 第一步（划掉）/ ▶ 第二步 / ○ 第三步`；
+  - **磁盘**：`.tachi/plans/回写验证-<sid>.json` 里 steps 状态已是 completed/in_progress/pending，
+    且 plans 目录**只有这一份**——同 id 原地更新，没有分叉出第二份；
+  - **提醒真的进了 prompt**：第二回合的请求体里带着
+    `Active plan: <path>` + `plan_id: plan-cb` + 那两条指令（见 §3.2 的 id 三处通道之 ③）。
+  - 脚本：`/tmp/smoke-cb/main.go`（mock）、`/tmp/drive-cb.js`（driver）。
 - **未验证**：从 UI 的 `<select>` 切换模式——driver 用原生 setter + `change` 事件没能被 React 接住，
   所以那一轮没有真正切换（prompt 里也就没有 Plan Mode）。该路径由上面的 Go 测试覆盖；
-  UI 交互需要人工点一次确认。
+  UI 交互需要人工点一次确认。（**2026-09-12 晚已补验**：同一手法在 driver 里对三个 select
+  生效正常——`SetMode(chat/auto)`、`SetThinkingLevel`、`SwitchProvider` 的值都粘住了，
+  见 desktop 可维护性清理那一轮的冒烟记录。）
 
 ## 6. 不做
 
-- 步骤状态回写 / 「按计划继续推进」按钮：涉及「计划归谁所有」（agent 保存 vs 用户改动），
-  且会引入新的写盘绑定，收益不明。
+- **「按计划继续推进」按钮**：UI 上一键把「继续做下一步」交给 agent。要新增一条注入路径，
+  且得先想清楚在 plan 模式下发（那它只能再产一份计划）还是 auto 模式下发——收益不明，暂不做。
+- **计划的归属策略**：计划文件是 agent 的产物，但面板允许用户删除/切换计划。用户改动与 agent 回写
+  谁优先、要不要版本或锁，没有定义，暂不做。
 - 跨 session id 的归属：计划按 session ID 归属，对话被续接成新 id 后旧计划不再显示（见 §2 事实 5）。
   放宽到"同工作区的所有计划"会把别人的计划也拉进来，需要先想清楚权限/噪音，暂不做。
+
+## 7. 步骤状态回写：已实现，不是"不做"
+
+0.2 把「步骤状态回写」和「按计划继续推进按钮」写成了同一条"不做"，这不准确——回写的链路早就通了，
+只是没人做过真机验证（§5 补验后确认）。它由四件东西组成，缺一件就不成立：
+
+| 环节 | 在哪 |
+|---|---|
+| 状态字段 | `SavePlan` 的 `steps[].status`（`pending / in_progress / completed`，必填） |
+| 原地更新 | `plan_id`：同一个 id 复用 → 同一份文件（否则每次更新都多一份计划） |
+| 提醒模型去更新 | `PlanTrackingReminder`：会话名下存在**未全部完成**、**24h 内**改过的计划时才出现，且**不按模式门控**——所以切到 auto 真正干活时它照样提醒 |
+| 面板实时 | SavePlan 成功 → `agent:plan` 事件（只喊"重读"）→ 前端 `GetPlan` 读磁盘。磁盘是真源 |
+
+**已修（2026-09-12）**：`agent_loop` 现在按 reminder 粒度去重——`systemreminder.Collector` 多了 `CollectPieces`（逐条，`Collect` 变成"逐条 + 渲染"的薄封装），`RunState` 记住本回合已经注入过什么（`seedReminders` / `freshReminders`），`injectLoopReminders` 只追加**变了的**。
+
+- **不变就不说**：一块文本进过一次上下文，重复它只花 token（而且花在 prompt 末尾——唯一缓存帮不上忙的位置）。
+- **变了仍然说**：计划刚出现、LSP 报出诊断、后台任务结束，都照旧立刻注入。
+- **不动历史**：仍然只追加，绝不改写已发出的消息 → 前缀缓存零影响（改写中段会让缓存从那一点起全部失效，见下）。
+- 测试：`agent/reminder_loop_test.go`（不变 → 一个回合只注入一次；变了 → 每轮都注入），把去重关掉会红；`agent/systemreminder` 里另有 `CollectPieces` 与 `Collect` 渲染一致的用例。
+
+**仍然存在（不是本机制造成的）**：桌面的 `agent_turn.go` 在"历史最后一条是 user 消息"（中断/续接）时会把那条**连同它携带的 reminder 块**合并进新的用户消息，于是上一轮的旧块（可能含旧 plan_id）会随历史继续往前走。它由 `ConvertSessionToLLMMessages` 把 reminder 前缀拼回 user 内容的有意设计放大（那是 `historyHasReminder` 依赖的）。要去掉得让该合并剔除 reminder 前缀——属于桌面侧的会话续接逻辑，未做。
+
+**另一处观察（未处理）**：`llm/anthropic.go:238` 只给 **system prompt** 打了 `cache_control` breakpoint，messages 完全没标记（顶层那个 breakpoint 还留着 `FIXME` 注释）。也就是说 Anthropic 这条路上会话历史从来没吃到缓存——那是白送的收益，但它与 plan 无关，单独看。
+
