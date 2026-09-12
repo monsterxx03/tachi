@@ -1010,8 +1010,19 @@ function App() {
   const refreshCost = useCallback(async (id: string) => {
     try {
       const u = await (AgentService as any).GetSessionUsage?.(id)
-      if (u) { setCost(u.cost || 0); setCredit(u.credit || 0); setCacheHitRate(u.cacheHitRate || 0); setHasCacheHit(!!u.hasCacheHit) }
-    } catch { /* ignore */ }
+      // Applied unconditionally: a missing payload means "nothing recorded", and guarding it
+      // with `if (u)` is what let one session's numbers survive into the next.
+      setCost(u?.cost || 0); setCredit(u?.credit || 0)
+      setCacheHitRate(u?.cacheHitRate || 0); setHasCacheHit(!!u?.hasCacheHit)
+    } catch { /* ignore: a failed fetch is not evidence of zero */ }
+  }, [])
+
+  // clearUsage blanks the whole session-scoped usage row (cost, credit, cache ring). It is
+  // the immediate half of refreshCost: the fetch confirms the zeros, and this makes sure the
+  // row never shows another session's numbers in the meantime — a brand-new session used to
+  // inherit the previous one's cache rate while having sent nothing at all.
+  const clearUsage = useCallback(() => {
+    setCost(0); setCredit(0); setCacheHitRate(0); setHasCacheHit(false)
   }, [])
 
   // refreshWorkspace loads a session's workspace context: the primary directory
@@ -1219,7 +1230,8 @@ function App() {
         setMsgCache((p) => ({ ...p, [ns.id]: [] }))
         setHasMore((p) => ({ ...p, [ns.id]: false }))
         setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
-        setCost(0); setCredit(0); setTps(0); setLastTps(0)
+        clearUsage(); setTps(0); setLastTps(0)
+        refreshCost(ns.id)
         refreshWorkspace(ns.id)
       }
     }
@@ -1228,7 +1240,7 @@ function App() {
     refreshProvider()
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
-  }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP, refreshWorkspace])
+  }, [msgCache, scrollToBottom, refreshProvider, refreshCost, refreshMCP, refreshWorkspace, clearUsage])
   const confirmDelete = useCallback(async (id: string) => {
     await (AgentService as any).DeleteSession?.(id).catch(() => {})
     loadAll()
@@ -1267,13 +1279,14 @@ function App() {
       setMsgCache((prev) => ({ ...prev, [ns.id]: [] }))
       setHasMore((p) => ({ ...p, [ns.id]: false }))
       setEarliestTs((p) => ({ ...p, [ns.id]: '' }))
-      setCost(0); setCredit(0); setTps(0); setLastTps(0)
+      clearUsage(); setTps(0); setLastTps(0)
+      refreshCost(ns.id)
       refreshWorkspace(ns.id)
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace])
+  }, [refreshProvider, refreshWorkspace, refreshCost, clearUsage])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
