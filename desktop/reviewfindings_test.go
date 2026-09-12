@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/monsterxx03/tachi/config"
@@ -107,5 +108,87 @@ func TestGetReviewFindingsNone(t *testing.T) {
 	vo := svc.GetReviewFindings("never-reviewed")
 	if len(vo.Findings) != 0 || vo.Note == "" {
 		t.Errorf("vo = %+v, want an explanatory note", vo)
+	}
+}
+
+// The report path is recorded in the meta header, because the report file and the record
+// live in different trees and are otherwise related only by a timestamp in their names.
+// With it the panel can hand the report to the reader — and can tell "found nothing" apart
+// from "recorded nothing".
+func TestGetReviewFindingsCarriesReport(t *testing.T) {
+	base := t.TempDir()
+	config.SetBaseDir(base)
+	svc := &AgentService{desk: newTestApp()}
+
+	report := filepath.Join(base, "reviews", "20260912-010101", "round-1-reviewer-mock.md")
+	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte("# 评审报告\n\n正文"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sid := writeReviewTranscript(t, "review-20260912-010101-aaaa.jsonl", []map[string]any{
+		{"type": "meta", "kind": "review", "extra": map[string]string{"report": report}},
+		{"type": "tool_call", "name": "ReportFinding", "args": map[string]any{
+			"path": "main.go", "line": 3, "severity": "warn", "text": "有点问题"}},
+	})
+
+	vo := svc.GetReviewFindings(sid)
+	if vo.Report != report {
+		t.Errorf("Report = %q, want %q", vo.Report, report)
+	}
+	if vo.Note != "" {
+		t.Errorf("Note = %q, want none when findings were recorded", vo.Note)
+	}
+}
+
+// A review that wrote its report but called ReportFinding zero times is NOT the same fact
+// as a review that found nothing: its opinions exist only in prose, so the panel must say
+// that rather than report 没有问题.
+func TestGetReviewFindingsReportWithoutFindings(t *testing.T) {
+	base := t.TempDir()
+	config.SetBaseDir(base)
+	svc := &AgentService{desk: newTestApp()}
+
+	report := filepath.Join(base, "reviews", "20260912-010101", "round-1-reviewer-mock.md")
+	if err := os.MkdirAll(filepath.Dir(report), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(report, []byte("# 报告"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	sid := writeReviewTranscript(t, "review-20260912-010101-aaaa.jsonl", []map[string]any{
+		{"type": "meta", "kind": "review", "extra": map[string]string{"report": report}},
+		{"type": "assistant", "content": "详见报告"},
+	})
+
+	vo := svc.GetReviewFindings(sid)
+	if len(vo.Findings) != 0 {
+		t.Fatalf("findings = %+v, want none", vo.Findings)
+	}
+	if !strings.Contains(vo.Note, "结构化") {
+		t.Errorf("Note = %q, want it to say no structured finding was recorded", vo.Note)
+	}
+	if vo.Report != report {
+		t.Errorf("the report must still be offered: %q", vo.Report)
+	}
+}
+
+// A recorded path with nothing at it (the round died before writing) is not evidence of a
+// report: that case keeps the plain "found nothing" wording.
+func TestGetReviewFindingsReportPathWithoutFile(t *testing.T) {
+	base := t.TempDir()
+	config.SetBaseDir(base)
+	svc := &AgentService{desk: newTestApp()}
+
+	missing := filepath.Join(base, "reviews", "never-written.md")
+	sid := writeReviewTranscript(t, "review-20260912-010101-aaaa.jsonl", []map[string]any{
+		{"type": "meta", "kind": "review", "extra": map[string]string{"report": missing}},
+	})
+
+	if vo := svc.GetReviewFindings(sid); !strings.Contains(vo.Note, "没有报告问题") {
+		t.Errorf("Note = %q, want the plain 'found nothing' wording", vo.Note)
 	}
 }

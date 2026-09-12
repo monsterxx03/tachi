@@ -346,7 +346,7 @@ func runReviewCommand(c *commandRun) error {
 		defer forked.Close()
 
 		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPromptFor(c.id), spec.Prompt, opts,
-			agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: c.id}))
+			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, c.id, spec.OutPath)))
 		for ev := range stream {
 			c.ech <- ev
 		}

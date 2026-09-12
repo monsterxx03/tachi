@@ -1,6 +1,6 @@
 # Desktop 变更审阅（Diff Review）设计
 
-> 版本: 0.11 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
+> 版本: 0.12 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
 > 关联: [desktop/agent.go](../desktop/agent.go)、[agent/acp/stream.go](../agent/acp/stream.go)、
 >       [agent/tools/edit.go](../agent/tools/edit.go)、[agent/tools/arg_summary.go](../agent/tools/arg_summary.go)、
 >       [agent/tool_executor.go](../agent/tool_executor.go)、[App.tsx](../desktop/frontend/src/App.tsx)、
@@ -25,6 +25,27 @@
 12. [附录 A：diff 生产者与消费者清单](#附录-adiff-生产者与消费者清单)
 
 ---
+
+## 本版修订（0.11 → 0.12：报告与记录显式关联）
+
+评审产出两份东西：**结构化的 findings**（每条一次 `ReportFinding`）和**人读的 markdown 报告**
+（`<root>/.tachi/reviews/<ts>/round-N-<role>-<model>.md`）。桌面只读前者，而两者的关系此前只能靠
+**文件名里的时间戳**间接猜——报告在项目树、记录在 `session/<id>/oneoff/`，没有一处写明"这份记录的报告在哪"。
+
+1. **记录里显式写上报告路径**：`OneOffMeta.Extra`（现成的扩展位）加 `report` 键，由四个前端的评审 runner 统一经
+   `agent.OneOffMetaForReview(kind, sessionID, spec.OutPath)` 写入。`RoundSpec.OutPath` 本来就有，只是没人记。
+2. **面板把报告交给读者**：`ReviewFindingsVO.Report` → 意见汇总行（以及"零意见"的提示行）多一个「报告」按钮，
+   用面板既有的文件预览浮层打开（markdown 走应用自己的渲染器）。在此之前**报告在磁盘上但 UI 没有任何入口**。
+3. **两种「零意见」被区分开**：`最近一次评审没有报告问题`（真没发现）vs
+   `评审写了报告，但没有记录结构化意见（可能没有调用 ReportFinding）——意见只在报告正文里`。
+   判据是"报告路径已记录 **且文件真的存在**"（记录里有路径但文件没落盘 = 那轮死在写报告之前，仍按"没发现问题"表述）。
+   这与 0.11 修的"空评审"是同一类混淆：**看不见 ≠ 没问题**。
+
+**顺带把关联机制本身写清楚**（此前散在代码注释里）：findings 与 diff 的对齐**完全靠坐标数值相等**——
+`path` 决定落在哪个文件组（`findingMatchesFile` 剥 `./` 与 root 前缀后精确比，匹配不上归「其它文件」组），
+`line` 决定落在哪一行（`h.newLine === f.line`，删除行回退 `h.oldLine`，对不上降级为"孤儿"渲染）。
+锚点全部由模型自己写在 finding 里，**没有映射表、也不校验行号是否存在**；行号是评审当时的，工作树一变就会漂移，
+这正是降级渲染存在的理由。
 
 ## 本版修订（0.9 → 0.10：卡片不再重复显示工具输出）
 

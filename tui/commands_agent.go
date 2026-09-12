@@ -213,7 +213,7 @@ func (m *Model) startReviewRound() tea.Cmd {
 	ctx := m.startTurn()
 	m.eventCh = forked.Agent().RunOneOffStream(ctx, spec.Provider,
 		m.systemPrompt, spec.Prompt, reviewOpts,
-		agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: m.currentSessionID()}))
+		agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, m.currentSessionID(), spec.OutPath)))
 	return tea.Batch(m.statusbar.Tick(), m.nextEvent())
 }
 

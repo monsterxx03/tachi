@@ -328,7 +328,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 		defer forked.Close()
 
 		eventCh := forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt, spec.Prompt, opts,
-			agent.WithOneOffMeta(&agent.OneOffMeta{Kind: spec.Kind, SessionID: acpOneoffSessionID(sess)}))
+			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, acpOneoffSessionID(sess), spec.OutPath)))
 		var err error
 		stopReason, _, err = streamToACP(ctx, sess, conn, eventCh)
 		// A broken round (API error / budget exhaustion) must terminate the

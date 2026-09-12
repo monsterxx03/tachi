@@ -44,6 +44,25 @@ type OneOffMeta struct {
 	Extra map[string]string
 }
 
+// OneOffKeyReport is the Extra key naming where a one-off run's human-readable report was
+// written.
+//
+// It exists because the report and this record are otherwise related only by the timestamp
+// in their file names — one lives under the project's .tachi/reviews/<ts>/, the other under
+// the session's oneoff/ dir. A reader that wants to offer the report to the user, or to say
+// "the review wrote a report but recorded no findings", needs the path rather than a guess.
+const OneOffKeyReport = "report"
+
+// OneOffMetaForReview is the recorded meta of a review round: which kind of review it was,
+// the session it belongs to, and the report path the round's prompt told the model to write.
+func OneOffMetaForReview(kind llm.UsageKind, sessionID, reportPath string) *OneOffMeta {
+	meta := &OneOffMeta{Kind: kind, SessionID: sessionID}
+	if reportPath != "" {
+		meta.Extra = map[string]string{OneOffKeyReport: reportPath}
+	}
+	return meta
+}
+
 // oneoffMetaLine is the first line of every one-off transcript file.
 // Type is always "meta"; renderers treat unknown types with a default branch.
 type oneoffMetaLine struct {

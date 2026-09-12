@@ -1654,7 +1654,8 @@ function App() {
             </div>
             {diffPanelOpen ? (
               <DiffPanel diff={diffPanelData} loading={diffPanelLoading} findings={reviewFindings?.findings || []}
-                findingsNote={reviewFindings?.note} onClose={() => setDiffPanelOpen(false)}
+                findingsNote={reviewFindings?.note} findingsReport={reviewFindings?.report}
+                onClose={() => setDiffPanelOpen(false)}
                 onSend={sendFindings} />
             ) : null}
             {showJump && (

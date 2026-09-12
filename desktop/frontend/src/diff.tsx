@@ -219,16 +219,20 @@ function DiffCounts({ added, removed }: { added: number; removed: number }) {
 // DiffPanel is the turn's working-tree diff: every file the turn touched, against
 // git HEAD, with real line numbers. It rides on the shared viewer overlay, so scroll,
 // Esc and click-away all behave like every other overlay in the app.
-export function DiffPanel({ diff, loading, findings, findingsNote, onClose, onSend }: {
+export function DiffPanel({ diff, loading, findings, findingsNote, findingsReport, onClose, onSend }: {
   diff: TurnDiffVO | null
   loading: boolean
   findings: FindingVO[]
   findingsNote?: string
+  // Where the review's human-readable report landed. The findings are the index, the
+  // report is the narrative — and until now nothing in the UI pointed at it.
+  findingsReport?: string
   onClose: () => void
   // Sends the picked findings as an ordinary user message. Absent only when there is
   // nowhere to send them, and then the panel is read-only.
   onSend?: (text: string) => void
 }) {
+  const [reportPeek, setReportPeek] = useState(false)
   const counts: Record<string, number> = { bug: 0, warn: 0, info: 0 }
   for (const f of findings) counts[f.severity] = (counts[f.severity] || 0) + 1
 
@@ -254,6 +258,12 @@ export function DiffPanel({ diff, loading, findings, findingsNote, onClose, onSe
   // counting findings nobody can read or tick, so it gets a group of its own.
   const outsideItems = items.filter((it) => !(diff?.files || []).some(
     (f) => findingMatchesFile(diff?.root || '', it.finding.path, f.path)))
+  // The report is a file like any other: the panel previews it with the same overlay it
+  // already uses for source files, which renders markdown through the app's renderer.
+  const reportButton = findingsReport ? (
+    <button type="button" className="diff-open" title={findingsReport}
+      onClick={() => setReportPeek(true)}>报告</button>
+  ) : null
 
   return (
     <ViewerOverlay label="本轮改动（与 git HEAD 对照）" onClose={onClose} stageClass="is-doc"
@@ -266,8 +276,14 @@ export function DiffPanel({ diff, loading, findings, findingsNote, onClose, onSe
         </div>
         {/* The note is shown even when there are no findings: "no review yet" and
             "a review found nothing" are different facts, and a silent panel tells you
-            neither. */}
-        {findings.length === 0 && findingsNote ? <div className="diff-findings"><span className="diff-findings-hint">{findingsNote}</span></div> : null}
+            neither. The report button sits next to it, because a report that exists is
+            exactly what explains an empty findings list. */}
+        {findings.length === 0 && findingsNote ? (
+          <div className="diff-findings">
+            <span className="diff-findings-hint">{findingsNote}</span>
+            {reportButton}
+          </div>
+        ) : null}
         {findings.length > 0 ? (
           <div className="diff-findings">
             <span className="diff-findings-title">评审意见 {findings.length} 条</span>
@@ -275,6 +291,7 @@ export function DiffPanel({ diff, loading, findings, findingsNote, onClose, onSe
               <span key={s} className={`finding-count is-${s}`}>{SEVERITY_META[s].icon} {counts[s]}</span>
             ))}
             <span className="diff-findings-hint">{findingsNote || '来自最近一次评审'}</span>
+            {reportButton}
           </div>
         ) : null}
         {loading ? <div className="diff-panel-empty">读取中…</div> : null}
@@ -321,6 +338,10 @@ export function DiffPanel({ diff, loading, findings, findingsNote, onClose, onSe
           </div>
         ) : null}
       </div>
+      {reportPeek && findingsReport ? (
+        <FilePreviewOverlay path={findingsReport} name={findingsReport.split('/').pop()}
+          onClose={() => setReportPeek(false)} />
+      ) : null}
     </ViewerOverlay>
   )
 }
