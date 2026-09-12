@@ -31,7 +31,7 @@ func (s *AgentService) SetMode(mode string) string {
 	d.mu.Unlock()
 
 	if r == nil || r.agent == nil {
-		return "agent not ready"
+		return refuseNoSession
 	}
 	if running {
 		return "会话正在运行中，等这一轮结束再切模式"
@@ -59,14 +59,14 @@ func (s *AgentService) SwitchProvider(name string) string {
 	}
 	id := d.currentID()
 	if id == "" {
-		return "no current session"
+		return refuseNoSession
 	}
 	r, err := d.prepareSession(context.Background(), id)
 	if err != nil {
 		return err.Error()
 	}
 	if r.agent == nil {
-		return "agent not ready"
+		return refuseNoSession
 	}
 	if _, err := r.agent.SetResolvedProvider(name); err != nil {
 		return err.Error()
@@ -144,14 +144,14 @@ func (s *AgentService) SetThinkingLevel(level string) string {
 	}
 	id := d.currentID()
 	if id == "" {
-		return "no current session"
+		return refuseNoSession
 	}
 	r, err := d.prepareSession(context.Background(), id)
 	if err != nil {
 		return err.Error()
 	}
 	if r.agent == nil {
-		return "agent not ready"
+		return refuseNoSession
 	}
 	applyThinking(r.agent, level)
 	store := level

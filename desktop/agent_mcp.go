@@ -108,12 +108,10 @@ func (s *AgentService) SetMCPToolEnabled(name string, enabled bool) string {
 	if d.cfg == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
-	d.mu.Lock()
-	sid := d.activeID
-	r := d.getRun(sid)
-	d.mu.Unlock()
+	sid := d.currentID()
+	r := d.runOf(sid)
 	if sid == "" {
-		return "no current session"
+		return refuseNoSession
 	}
 	set := d.mcp.SetFor(sid)
 	if set == nil {
@@ -156,14 +154,11 @@ func (s *AgentService) SetMCPProfile(name string) string {
 	if d.cfg == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
-	d.mu.Lock()
-	sid := d.activeID
-	r := d.getRun(sid)
-	d.mu.Unlock()
-	if sid == "" || r == nil || r.agent == nil {
-		return "no current session agent"
+	a, refuse := d.agentOf(d.currentID())
+	if refuse != "" {
+		return refuse
 	}
-	if _, err := r.agent.SwitchMCPProfile(context.Background(), name, config.FindProjectRoot()); err != nil {
+	if _, err := a.SwitchMCPProfile(context.Background(), name, config.FindProjectRoot()); err != nil {
 		return err.Error()
 	}
 	return "ok"

@@ -57,9 +57,7 @@ func contextParts(tb tokenbreakdown.Breakdown) []ContextPartVO {
 // the zero value, which the frontend renders as "not measured yet".
 func (s *AgentService) GetContextInfo(id string) ContextInfoVO {
 	d := s.desk
-	d.mu.Lock()
-	r := d.getRun(id)
-	d.mu.Unlock()
+	r := d.runOf(id)
 	if r == nil || r.agent == nil {
 		return ContextInfoVO{}
 	}

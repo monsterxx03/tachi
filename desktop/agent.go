@@ -120,6 +120,35 @@ func (d *desktopApp) getRun(id string) *sessionRun {
 	return r
 }
 
+// runOf returns a session's run WITHOUT creating one: nil means nothing has been
+// prepared for that id yet. getRun is for callers that are about to put something in the
+// run; a lookup that only asks "is there one?" must not leave an empty entry behind
+// (the guards that follow `getRun` were dead code precisely because it never returns
+// nil). Callers must NOT hold d.mu.
+func (d *desktopApp) runOf(id string) *sessionRun {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.runs[id]
+}
+
+// refuseNoSession is the single refusal for "this needs a session with a live agent and
+// there is none". The desktop UI is Chinese and shows these strings as they are (the
+// mode selector renders one verbatim), so it is written once — the three English
+// variants it replaces ("no current session", "no current session agent", "agent not
+// ready") were leaking into a Chinese window.
+const refuseNoSession = "没有活跃会话"
+
+// agentOf is runOf plus the readiness rule the UI bindings share: the session exists AND
+// its agent has been built. The second return is the refusal to hand back (empty when
+// there is an agent). Callers must NOT hold d.mu.
+func (d *desktopApp) agentOf(id string) (*agent.AIAgent, string) {
+	r := d.runOf(id)
+	if r == nil || r.agent == nil {
+		return nil, refuseNoSession
+	}
+	return r.agent, ""
+}
+
 // activeRun returns the run for the currently displayed session (nil when no
 // session is active). It is the per-session source of truth for provider/agent
 // reading in the UI.

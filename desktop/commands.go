@@ -162,7 +162,7 @@ func (d *desktopApp) startCommand(name, args string, scope []string, handler fun
 	id := d.activeID
 	if id == "" {
 		d.mu.Unlock()
-		return "没有活跃会话"
+		return refuseNoSession
 	}
 	r := d.getRun(id)
 	d.mu.Unlock()

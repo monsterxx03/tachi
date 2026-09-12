@@ -45,7 +45,7 @@ func (s *AgentService) StopAndSend(text string) string {
 	id := d.activeID
 	if id == "" {
 		d.mu.Unlock()
-		return "no current session"
+		return refuseNoSession
 	}
 	r := d.getRun(id)
 	cancel := r.turnCancel
