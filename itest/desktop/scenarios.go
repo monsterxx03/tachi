@@ -1,11 +1,14 @@
 package main
 
 import (
+	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
 
@@ -70,6 +73,30 @@ func planCopies(req *mockllm.RecordedRequest) int {
 func (c *checkCtx) planFiles() []string {
 	matches, _ := filepath.Glob(filepath.Join(c.work, ".tachi", "plans", "*.json"))
 	return matches
+}
+
+// oneOffFiles returns the side-channel (one-off) records this run left in the session
+// store: <home>/.tachi/session/<id>/oneoff/*.jsonl. One record per run — a multi-round
+// review writes one per round.
+func (c *checkCtx) oneOffFiles() []string {
+	matches, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*", "oneoff", "*.jsonl"))
+	return matches
+}
+
+// sessionCount is how many sessions the run left behind (each is one directory under the
+// session store), so a scenario can tell "switched to mine and back" from "created extra".
+func (c *checkCtx) sessionCount() int {
+	entries, err := os.ReadDir(filepath.Join(c.home, ".tachi", "session"))
+	if err != nil {
+		return -1
+	}
+	n := 0
+	for _, e := range entries {
+		if e.IsDir() {
+			n++
+		}
+	}
+	return n
 }
 
 const (
@@ -156,8 +183,9 @@ func scenarios() []scenario {
 		},
 		//
 		// Session-scoped numbers: a brand-new session must not inherit the previous one's
-		// cache ring or cost (that bug is in .tachi.md's list), and the sidebar row must pick
-		// up the generated title from the session_title event.
+		// cache ring or cost (that bug is in .tachi.md's list), the sidebar row must pick
+		// up the generated title from the session_title event, and creating one hands the
+		// caret to the composer.
 		//
 		{
 			name: "sessions",
@@ -171,6 +199,202 @@ func scenarios() []scenario {
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				c.check("两个会话各跑了一轮", len(c.requests) == 2, requestCount(c.requests))
+			},
+		},
+		//
+		// The side-channel panel: a typed /review is a one-off fork, so it leaves a record
+		// in the session's oneoff/ directory and the panel replays it from there. The
+		// driver asserts what the panel SHOWS; these checks assert what actually landed on
+		// disk and what the reviewer was told — the half no DOM inspection can see.
+		//
+		{
+			name: "oneoff-panel",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe oneoff-panel scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// One review round: a tool call, then the reply. The tool call exists so the
+				// replay has a card to render, not just prose.
+				{Reply: bashStream("echo oneoff-smoke", "call_r1")},
+				{Reply: textStream("评审完成：本次改动没有发现问题。", 1100)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("评审这一轮调用了两次模型", len(c.requests) == 2, requestCount(c.requests))
+
+				records := c.oneOffFiles()
+				c.check("会话目录里留下了这次评审的记录", len(records) == 1, fileList(records))
+				if len(records) == 1 {
+					// The header is what the panel's switcher is built from, so its shape is
+					// part of the contract: kind, session id, and where the report goes.
+					head, err := os.ReadFile(records[0])
+					if err != nil {
+						c.check("记录可读", false, err.Error())
+					} else {
+						var meta struct {
+							Type      string            `json:"type"`
+							Kind      string            `json:"kind"`
+							SessionID string            `json:"session_id"`
+							Extra     map[string]string `json:"extra"`
+						}
+						line := strings.SplitN(string(head), "\n", 2)[0]
+						if err := json.Unmarshal([]byte(line), &meta); err != nil {
+							c.check("记录首行是 meta", false, err.Error())
+						} else {
+							c.check("记录首行是 meta 且 kind=review", meta.Type == "meta" && meta.Kind == "review",
+								meta.Type+"/"+meta.Kind)
+							c.check("记录归属这个会话", meta.SessionID != "", meta.SessionID)
+							c.check("记录带上了报告路径", meta.Extra["report"] != "", meta.Extra["report"])
+						}
+					}
+				}
+
+				// The reviewer must have been handed the review prompt — the panel replays
+				// whatever the model got, so a prompt that never arrived would be invisible.
+				_, prompted := c.requestSeen("Perform a thorough code review")
+				c.check("评审 fork 收到了评审 prompt", prompted, "")
+
+				// The panel's width is the reader's to drag, and it is a desktop preference: the
+				// driver dragged it to the floor and then to the ceiling, and left the panel open.
+				// The stored value must be the LAST drag — above the floor — because a file still
+				// holding the floor would mean the second drag never reached the disk. What the
+				// ceiling is (window, less sidebar and the conversation's minimum) is asserted in
+				// the driver, as the fact it exists for. (Reading the preference BACK is the
+				// second launch's job, which one smoke run cannot stage.)
+				var ui struct {
+					OneOffPanelOpen  bool `json:"oneOffPanelOpen"`
+					OneOffPanelWidth int  `json:"oneOffPanelWidth"`
+				}
+				if err := readJSON(filepath.Join(c.home, ".tachi", "desktop_ui.json"), &ui); err != nil {
+					c.check("桌面偏好文件可读", false, err.Error())
+				} else {
+					c.check("面板开关写进了 desktop_ui.json", ui.OneOffPanelOpen,
+						"oneOffPanelOpen="+strconv.FormatBool(ui.OneOffPanelOpen))
+					// 320 = the floor, mirrored by desktop/uitheme.go's oneOffPanelMinWidth and
+					// oneoff.tsx's ONE_OFF_PANEL_MIN_WIDTH.
+					c.check("拖出来的宽度写进了 desktop_ui.json", ui.OneOffPanelWidth > 320,
+						"oneOffPanelWidth="+strconv.Itoa(ui.OneOffPanelWidth))
+				}
+			},
+		},
+		//
+		// The OTHER entry into a review: the turn-level chip. It only exists on a turn that
+		// changed something (hence the WriteFile), and the review it starts is scoped to that
+		// turn's files (hence gitInit — a scoped review refuses when there is no baseline).
+		// What the driver pins is the chip's state machine: 评审本轮改动 → 已评审 N 条 · 查看,
+		// with the count coming from the backend's own tally of ReportFinding calls.
+		//
+		{
+			name: "oneoff-footer",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe oneoff-footer scenario's working directory\n",
+			},
+			gitInit: true,
+			steps: []mockllm.Step{
+				// Turn 1: write a file, then say so.
+				{Reply: writeFileStream("NOTES.md", "first line\nsecond line\n", "call_w1")},
+				{Reply: textStream("已经写下 NOTES.md。", 900)},
+				// Review 1: one finding, then the reply.
+				{Reply: findingStream("NOTES.md", 1, "warn", "call_f1")},
+				{Reply: textStream("评审完成：1 条意见。", 1100)},
+				// Review 2, re-run from the panel over the same files: TWO findings, so the
+				// chip's count is what tells the two runs apart.
+				{Reply: findingStream("NOTES.md", 1, "warn", "call_f2")},
+				{Reply: findingStream("NOTES.md", 2, "info", "call_f3")},
+				{Reply: textStream("再次评审完成：2 条意见。", 1100)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("一轮对话加两轮评审，共七次调用", len(c.requests) == 7, requestCount(c.requests))
+				// The review is scoped: its prompt must carry the scope section naming the
+				// file the turn touched — that is what makes findings land in file
+				// coordinates. Asserting on the path alone would pass on the FIRST turn's
+				// prompt (the user's own words mention the file), which is why the marker
+				// below is the thing to look for.
+				_, scoped := c.requestSeen("## Scope (only these files)")
+				c.check("评审 fork 的 prompt 带上了作用域", scoped, "")
+
+				records := c.oneOffFiles()
+				// Two runs, two records: the re-run starts a NEW one-off (a review is not
+				// resumable), which is also what makes the panel's switcher show both.
+				c.check("两次评审各留一份记录", len(records) == 2, fileList(records))
+				if len(records) == 2 {
+					// P4's durable half: the record names the turn that asked for the review and
+					// the files it was scoped to. Without them a restart loses the pairing (the
+					// turn's chip could no longer say 已评审) and the diff pane has nothing to
+					// show — the frontend's own memory of both dies with the window.
+					head, err := os.ReadFile(records[0])
+					if err != nil {
+						c.check("记录可读", false, err.Error())
+					} else {
+						var meta struct {
+							Extra map[string]string `json:"extra"`
+						}
+						line := strings.SplitN(string(head), "\n", 2)[0]
+						if err := json.Unmarshal([]byte(line), &meta); err != nil {
+							c.check("记录首行可解析", false, err.Error())
+						} else {
+							c.check("记录写下了被评审的那一轮", meta.Extra[agent.OneOffKeyReviewedMsg] != "",
+								meta.Extra[agent.OneOffKeyReviewedMsg])
+							c.check("记录写下了评审范围", meta.Extra[agent.OneOffKeyPaths] != "",
+								meta.Extra[agent.OneOffKeyPaths])
+						}
+					}
+				}
+
+				// The panel's open/closed state is a desktop preference: the driver leaves the
+				// panel open, so the file has to say so. (What it is restored FROM is only
+				// exercised by a second launch, which one smoke run cannot do.) The WIDTH is the
+				// oneoff-panel scenario's business — this driver never drags the handle.
+				var ui struct {
+					OneOffPanelOpen bool `json:"oneOffPanelOpen"`
+				}
+				if err := readJSON(filepath.Join(c.home, ".tachi", "desktop_ui.json"), &ui); err != nil {
+					c.check("桌面偏好文件可读", false, err.Error())
+				} else {
+					c.check("面板开关写进了 desktop_ui.json", ui.OneOffPanelOpen,
+						"oneOffPanelOpen="+strconv.FormatBool(ui.OneOffPanelOpen))
+				}
+			},
+		},
+		//
+		// Switching away from a RUNNING session and back: the restored view must land at the
+		// newest message and stay there while the stream keeps writing. The driver measures the
+		// gap to the bottom on every frame across the switch, so the reported "先向上飘再跳到底"
+		// is a number rather than an impression.
+		//
+		// The history deliberately contains a MERMAID DIAGRAM: it renders asynchronously (lazy
+		// import + a debounced render), so on every switch back the diagram grows from its
+		// placeholder into a real figure — content changing height AFTER the pin to the bottom,
+		// which is what makes the view drift.
+		//
+		{
+			name: "switch-scroll",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe switch-scroll scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("先看一张图：\n\n```mermaid\ngraph TD\n  A[开始] --> B{判断}\n  B --> C[结束]\n```\n\n图看完了。", 900)},
+				// A turn that stays running while the driver goes away and comes back.
+				{Reply: mockllm.Stream(
+					mockllm.Text("第一段，先铺一点内容，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第二段还在写，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("第三段，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("就这样结束。"),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 60, 900, 20),
+					mockllm.Done(),
+				)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两轮对话各调用了一次模型", len(c.requests) == 2, requestCount(c.requests))
+				// Switching away must not create a session on the backend beyond the two the
+				// driver used: a spurious third would mean the restore path re-created one.
+				c.check("没有多余的会话", c.sessionCount() == 2, strconv.Itoa(c.sessionCount()))
 			},
 		},
 		//
@@ -247,6 +471,47 @@ func planStream(planID, s1, s2, s3, callID string) mockllm.ReplyFunc {
 		mockllm.ToolCallStart(callID, "SavePlan", args),
 		mockllm.Finish("tool_calls"),
 		mockllm.UsageWithCache(1400, 50, 1300, 10),
+		mockllm.Done(),
+	)
+}
+
+// jsonArgs marshals a tool call's arguments.
+//
+// The other stream builders in this file hand-build their JSON, which is fine while the values
+// hold no escapes — but a single real newline inside a JSON string makes the whole arguments
+// object invalid, and the tool then fails on a fixture that looks correct in the source. So
+// anything carrying free text goes through the encoder.
+func jsonArgs(v any) string {
+	b, err := json.Marshal(v)
+	if err != nil {
+		panic("smoke fixture: " + err.Error())
+	}
+	return string(b)
+}
+
+// writeFileStream is one WriteFile tool call. It exists so a turn can be a turn that CHANGED
+// something: the footer's review entry (and 「完整 diff」) only appear on such a turn.
+func writeFileStream(path, content, callID string) mockllm.ReplyFunc {
+	args := jsonArgs(map[string]string{"path": path, "content": content})
+	return mockllm.Stream(
+		mockllm.ToolCallStart(callID, "WriteFile", args),
+		mockllm.Finish("tool_calls"),
+		mockllm.UsageWithCache(1500, 40, 1400, 10),
+		mockllm.Done(),
+	)
+}
+
+// findingStream is one ReportFinding call — the review's structured output, and what the
+// conversation's anchor counts (the backend tallies these calls, see emitOneOff).
+func findingStream(path string, line int, severity, callID string) mockllm.ReplyFunc {
+	args := jsonArgs(map[string]any{
+		"path": path, "line": line, "severity": severity, "category": "Quality",
+		"text": "这一行可以更清楚", "suggestion": "补一句注释说明",
+	})
+	return mockllm.Stream(
+		mockllm.ToolCallStart(callID, "ReportFinding", args),
+		mockllm.Finish("tool_calls"),
+		mockllm.UsageWithCache(1200, 50, 1100, 10),
 		mockllm.Done(),
 	)
 }

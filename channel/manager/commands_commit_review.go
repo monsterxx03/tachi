@@ -211,7 +211,7 @@ func (m *Manager) handleReviewCommand(ctx context.Context, threadID, args string
 		defer forked.Close()
 
 		eventCh := forked.Agent().RunOneOffStream(ctx, spec.Provider, systemPrompt, spec.Prompt, opts,
-			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, sessionID, spec.OutPath)))
+			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, sessionID, spec.OutPath, agent.ReviewOrigin{})))
 
 		text, err, incomplete := m.drainOneOffEvents(ctx, eventCh, forked.Agent())
 		if err != nil {

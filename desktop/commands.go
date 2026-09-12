@@ -37,6 +37,9 @@ type CommandVO struct {
 
 // commandRun is everything a handler needs: the session's run, the turn's
 // context, the raw arguments, and the channel its events are pumped into.
+// commandRun is one command's execution context. scope and reviewedMsg are the desktop's
+// review context: which files the review covers, and which turn asked for it (see
+// agent.ReviewOrigin).
 type commandRun struct {
 	desk *desktopApp
 	run  *sessionRun
@@ -46,17 +49,48 @@ type commandRun struct {
 	// scope limits the command to specific paths (currently only /review uses it: the
 	// turn-level "review these changes" entry knows which files the turn touched).
 	scope []string
-	ech   chan<- agent.AgentEvent
+	// reviewedMsg is the conversation message the run was started for ("" for a typed
+	// command). It is recorded with the run so a restart can still pair the two.
+	reviewedMsg string
+	ech         chan<- agent.AgentEvent
 }
 
 // desktopCommandHandlers maps a command name to its desktop implementation.
 // Only names in this map are offered to the frontend (see ListCommands), so a
 // registry entry without an implementation is simply not advertised.
 var desktopCommandHandlers = map[string]func(*commandRun) error{
-	"compact": runCompactCommand,
-	"review":  runReviewCommand,
-	"commit":  runCommitCommand,
-	"sh":      runShellCommand,
+	"compact":       runCompactCommand,
+	commandReview:   runReviewCommand,
+	commandCommit:   runCommitCommand,
+	"sh":            runShellCommand,
+}
+
+// The commands that run as one-off forks. Named because more than the tables below needs them:
+// a finished run is announced by WHAT it was (see oneOffDoneBody in notify.go).
+const (
+	commandReview = "review"
+	commandCommit = "commit"
+)
+
+// commandLane says where a command's UI events go, and it is a property of the COMMAND
+// rather than of "being a command": /review and /commit run one-off forks, whose process
+// belongs in the side-channel panel, while /compact rewrites this very conversation (its
+// summary IS its output) and /sh echoes a command the user wanted to see here. Declared in
+// one place so the split cannot drift per call site.
+var commandLane = map[string]runLane{
+	"compact":      laneTranscript,
+	"sh":           laneTranscript,
+	commandReview:  laneOneOff,
+	commandCommit:  laneOneOff,
+}
+
+// laneFor answers the table above, defaulting to the transcript: a command whose lane
+// nobody declared keeps the behaviour it had.
+func laneFor(name string) runLane {
+	if lane, ok := commandLane[name]; ok {
+		return lane
+	}
+	return laneTranscript
 }
 
 // ListCommands returns the slash commands the desktop supports, in registry
@@ -91,16 +125,22 @@ func (s *AgentService) RunCommand(text string) string {
 		return fmt.Sprintf("desktop 暂不支持 /%s", def.Name)
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(body, def.Name))
-	return s.desk.startCommand(def.Name, args, nil, handler)
+	// A typed command has no turn behind it: the review it starts covers the whole tree.
+	return s.desk.startCommand(def.Name, args, nil, "", laneFor(def.Name), handler)
 }
 
 // ReviewChanges runs a review SCOPED to the files a turn changed: the desktop's
-// turn-level entry, one click next to the diff chip. It runs as a normal turn — the
-// session goes busy, Stop cancels it, and the reviewer's ReportFinding calls stream into
-// the transcript, which is exactly how the findings reach the diff panel.
+// turn-level entry, one click next to the diff chip. It runs as a turn — the session
+// goes busy, Stop cancels it, and the reviewer's ReportFinding calls are counted for the
+// frontend's one-line anchor — but its process goes to the side-channel lane: the
+// conversation keeps one line about the review, and the panel shows the rest.
+//
+// reviewedMsg is the id of the turn whose footer was clicked. It is recorded WITH the run
+// (agent.ReviewOrigin) because that pairing is otherwise only in the frontend's memory: a
+// restart would lose it, and the turn could no longer say 已评审 N 条.
 //
 // Returns "" when the run started, or a reason the UI shows instead.
-func (s *AgentService) ReviewChanges(sessionID string, paths []string) string {
+func (s *AgentService) ReviewChanges(sessionID string, paths []string, reviewedMsg string) string {
 	if len(paths) == 0 {
 		return "这一轮没有可评审的改动"
 	}
@@ -117,7 +157,7 @@ func (s *AgentService) ReviewChanges(sessionID string, paths []string) string {
 	if notice := s.nothingToReview(active, paths); notice != "" {
 		return notice
 	}
-	return d.startCommand("review", "", paths, desktopCommandHandlers["review"])
+	return d.startCommand(commandReview, "", paths, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
 }
 
 // nothingToReview explains why a review would have nothing to look at ("" when it would).
@@ -140,6 +180,13 @@ func (s *AgentService) nothingToReview(sessionID string, paths []string) string 
 		// GetTurnDiff already explained it in the user's words (no workspace, not a git
 		// repository, paths outside it) — every one of those means no baseline to diff
 		// against, so the review would be blind for the same reason.
+		//
+		// The ignored case is the one where "no baseline" is the wrong half of the story: the
+		// file exists and is new, git simply hides it, and a reviewer reading the tree would
+		// see it. Saying so is the difference between "nothing to review" and "I cannot see it".
+		if diff.Ignored > 0 {
+			return diff.Note + "；评审同样看不到被忽略的文件，因此没有开始评审"
+		}
 		return diff.Note + "；没有可对照的基线，评审看不到改动，因此没有开始评审"
 	}
 	return "这些文件在工作树里已经没有未提交的差异了（可能已经提交）——评审只能看未提交的改动，所以没有开始评审"
@@ -157,7 +204,21 @@ func (s *AgentService) nothingToReview(sessionID string, paths []string) string 
 //
 // Returns "" when the command started, or the reason it did not — the frontend
 // shows that instead of a turn that never happened.
-func (d *desktopApp) startCommand(name, args string, scope []string, handler func(*commandRun) error) string {
+// emitOneOff reports a side-channel run's lifecycle on the one-off lane.
+//
+// It carries FACTS ONLY — that a run of this kind started, and how it ended (findings
+// counted, duration, iterations, why it failed). The content is not sent: the run writes
+// its own record file as it goes, and the panel reads that. One source of truth, and no
+// second streaming implementation to keep in step with the transcript's.
+func (d *desktopApp) emitOneOff(id string, payload map[string]any) {
+	if d.app == nil {
+		return
+	}
+	payload["sessionId"] = id
+	d.app.Event.Emit("agent:oneoff", payload)
+}
+
+func (d *desktopApp) startCommand(name, args string, scope []string, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
 	d.mu.Lock()
 	id := d.activeID
 	if id == "" {
@@ -187,6 +248,10 @@ func (d *desktopApp) startCommand(name, args string, scope []string, handler fun
 	}
 	_ = cancel // held by the run (r.turnCancel); Stop is the user-facing path
 
+	if lane == laneOneOff {
+		d.emitOneOff(id, map[string]any{"kind": name, "phase": "start"})
+	}
+
 	go func() {
 		endReason := "error"
 		defer func() {
@@ -199,7 +264,10 @@ func (d *desktopApp) startCommand(name, args string, scope []string, handler fun
 		startedAt := time.Now()
 		go func() {
 			defer close(events)
-			if err := handler(&commandRun{desk: d, run: r, id: id, ctx: ctx, args: args, scope: scope, ech: events}); err != nil {
+			if err := handler(&commandRun{
+				desk: d, run: r, id: id, ctx: ctx, args: args, scope: scope,
+				reviewedMsg: reviewedMsg, ech: events,
+			}); err != nil {
 				events <- agent.AgentEvent{Type: agent.AgentEventError, Result: &agent.RunResult{Error: err}}
 			}
 		}()
@@ -209,6 +277,7 @@ func (d *desktopApp) startCommand(name, args string, scope []string, handler fun
 		// turn in the error state the handler/loop already reported.
 		var lastComplete *agent.AgentEvent
 		failed := false
+		findings := 0
 		for ev := range events {
 			switch ev.Type {
 			case agent.AgentEventTurnComplete:
@@ -219,22 +288,55 @@ func (d *desktopApp) startCommand(name, args string, scope []string, handler fun
 				if ev.Result != nil && (ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled) {
 					endReason = "interrupted"
 				}
+			case agent.AgentEventToolCallStart:
+				// The one number the conversation's anchor shows about a review. Counted
+				// here rather than read back from the record: this is the live signal, and
+				// the file would have to be parsed while it is still being written.
+				if ev.ToolName == tools.ToolNameReportFinding {
+					findings++
+				}
 			}
-			d.handleEvent(id, ev)
+			d.handleEventIn(id, ev, lane)
 		}
 		if !failed {
 			endReason = "complete"
 			if lastComplete != nil {
-				d.handleEvent(id, *lastComplete)
+				d.handleEventIn(id, *lastComplete, lane)
 			} else {
 				// A command that calls no LLM (/sh) has no run to report, but the
 				// transcript still has to stop showing "running" and the footer
 				// still wants the wall-clock time.
-				d.handleEvent(id, agent.AgentEvent{
+				d.handleEventIn(id, agent.AgentEvent{
 					Type:   agent.AgentEventTurnComplete,
 					Result: &agent.RunResult{Duration: time.Since(startedAt)},
-				})
+				}, lane)
 			}
+		}
+		if lane == laneOneOff {
+			// The run's outcome, for the anchor and the panel. `interrupted` is not an
+			// error: a stop the user asked for ends the run the same way it ends a turn.
+			payload := map[string]any{"kind": name, "phase": "end", "findings": findings}
+			if lastComplete != nil && lastComplete.Result != nil {
+				payload["durationMs"] = lastComplete.Result.Duration.Milliseconds()
+				payload["iterations"] = lastComplete.Result.IterationsUsed
+			}
+			if endReason != "complete" {
+				payload["phase"] = "error"
+				switch {
+				case endReason == "interrupted":
+					payload["interrupted"] = true
+					payload["error"] = "已停止"
+				case lastComplete != nil && lastComplete.Result != nil && lastComplete.Result.Error != nil:
+					payload["error"] = lastComplete.Result.Error.Error()
+				default:
+					payload["error"] = "运行失败，见日志"
+				}
+			}
+			d.emitOneOff(id, payload)
+			// …and the same fact as a notification. A side-channel run has nothing on screen to
+			// watch, so when the window is not focused this is the ONLY signal that it is over —
+			// and it names the run and its outcome, which is why it is not notifyTurnDone.
+			d.notify.notifyOneOffDone(d.sessionTitle(id), name, findings, endReason)
 		}
 	}()
 	return ""
@@ -346,7 +448,8 @@ func runReviewCommand(c *commandRun) error {
 		defer forked.Close()
 
 		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPromptFor(c.id), spec.Prompt, opts,
-			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, c.id, spec.OutPath)))
+			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, c.id, spec.OutPath,
+				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope})))
 		for ev := range stream {
 			c.ech <- ev
 		}

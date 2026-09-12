@@ -6,25 +6,25 @@ import {
   THINKING_LEVELS,
   PAGE_SIZE,
   type Message,
-  type Part,
   type SessionItem,
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey } from './lib'
 import {
-  ContextMeter, CacheRing, ThinkingPart, NoticePart, UserBubble, ToolCard, MCPPanel, AskForm,
+  ContextMeter, CacheRing, UserBubble, MCPPanel, AskForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
-import { FileCard, fileFromSendFileArgs } from './filepreview'
-import { DiffPanel } from './diff'
+import { TurnPart } from './parts'
+import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
+import type { OneOffRun } from './agentEvents'
+import type { OneOffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
-import { MarkdownBlock } from './markdown'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
-import type { PlanVO, ReviewFindingsVO, SessionRootsVO, TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
-import { useAgentStatus, useSessionUsage, useAgentStream } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream } from './agentEvents'
 import { useComposer, Composer, imeActive } from './composer'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
@@ -34,29 +34,12 @@ import { useComposer, Composer, imeActive } from './composer'
 // this, a long session re-parsed the whole transcript dozens of times per
 // second, which is what made output feel jumpy.
 
-// The markdown itself is rendered by MarkdownBlock and the attachment cards by
-// FileCard (see markdown.tsx / filepreview.tsx): this file only decides which
-// piece a turn part turns into.
+// The markdown, the tool cards and the attachment cards are rendered by their own
+// modules (markdown.tsx / components.tsx / filepreview.tsx); WHICH piece a part turns
+// into is decided in parts.tsx, shared with the side-channel panel so a replayed run
+// and a live turn render identically.
 
-const TurnPart = memo(function TurnPart({ part, workDir, onToggleDiff }: { part: Part; workDir: string; onToggleDiff?: () => void }) {
-  if (part.type === 'thinking') return <ThinkingPart text={part.text || ''} />
-  if (part.type === 'notice') return <NoticePart part={part} />
-  if (part.type === 'tool') {
-    // A SendFile call IS the attachment — show the file card rather than a raw
-    // tool card (covers the live turn and reloaded history alike). workDir
-    // resolves the relative paths a model sometimes writes.
-    if (part.name === 'SendFile') {
-      const file = fileFromSendFileArgs(part.args || '')
-      if (file) return <FileCard file={file} workDir={workDir} />
-    }
-    return <ToolCard name={part.name || ''} title={part.title} args={part.args} summary={part.summary || ''} ok={!!part.ok}
-      done={part.done} change={part.change} diffOpen={part.diffOpen} durationMs={part.durationMs}
-      defaultExpanded={part.expand} onToggleDiff={onToggleDiff} />
-  }
-  return <MarkdownBlock text={part.text || ''} workDir={workDir} />
-})
-
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, reviewPending, reviewNotice, sessionBusy }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onOpenOneOff, reviewPending, reviewDone, reviewNotice, sessionBusy }: {
   m: Message
   workDir: string
   // Diff interaction: one card at a time, or the whole turn from the footer chip.
@@ -69,7 +52,12 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // The clicked turn's message id travels with the request, so the run's state can be shown
   // on the very footer that started it (and on no other).
   onReviewChanges?: (paths: string[], msgId?: string) => void
+  // Opens the side-channel panel — where a review's process, findings and report live.
+  onOpenOneOff?: () => void
   reviewPending?: boolean
+  // The finished review's chip text ("已评审 3 条 · 查看"). Passed as a primitive so this
+  // memoized bubble keeps a stable props shape; undefined means "no review yet".
+  reviewDone?: string
   reviewNotice?: string
   // The session is mid-turn, so a review has to wait its turn.
   sessionBusy?: boolean
@@ -127,12 +115,22 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
               onClick={() => onOpenDiffPanel?.(diffStat.paths)}>完整 diff</button>
             {/* The review entry: ONE per turn, never per edit card — the review's scope
                 is this turn's file set, and findings carry real file lines that a
-                fragment card has no coordinates for. */}
+                fragment card has no coordinates for.
+                It is a small state machine, because a review is a side-channel run: its
+                process goes to the panel, so once it is done this chip is the way TO it
+                rather than another way to start one. */}
             <button type="button" className="diff-chip"
-              disabled={reviewPending || sessionBusy}
-              title={reviewPending ? '评审进行中…' : sessionBusy ? '等这一轮跑完' : '让 agent 只评审本轮改动的这些文件（只读；意见会落在 diff 面板里）'}
-              onClick={() => onReviewChanges?.(diffStat.paths, m.id)}>
-              {reviewPending ? '评审中…' : '评审本轮改动'}
+              /* Both 「评审中…」 and 「已评审 · 查看」 LOOK at a run — one to watch it work, one to
+                 read it — so both stay clickable. Only STARTING a review waits for the turn to
+                 finish. (Disabling on sessionBusy alone is what made the chip unclickable while
+                 it was busy running the very review it was reporting on.) */
+              disabled={!reviewPending && !reviewDone && sessionBusy}
+              title={reviewPending ? '评审进行中（过程在右侧面板）'
+                : reviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
+                  : sessionBusy ? '等这一轮跑完'
+                    : '让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）'}
+              onClick={() => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(diffStat.paths, m.id))}>
+              {reviewPending ? '评审中…' : (reviewDone || '评审本轮改动')}
             </button>
             {/* The refusal reason is a TOOLTIP, not a paragraph: printed in full here it
                 shoved the chips around (the sentence is a whole line), and hovering is the
@@ -177,6 +175,8 @@ function App() {
   // yanks the transcript back down under the user. Declared up here because the transcript
   // store below scrolls through it (a steered message follows the same rule).
   const chatRef = useRef<HTMLDivElement>(null)
+  // The transcript's content box (see the JSX): what the follow-the-bottom observer watches.
+  const chatContentRef = useRef<HTMLDivElement>(null)
   const followBottomRef = useRef(true)
   const [showJump, setShowJump] = useState(false)
   const scrollToBottom = useCallback((force = false) => {
@@ -220,15 +220,10 @@ function App() {
   const [rootsOpen, setRootsOpen] = useState(false)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
-  // Working-tree diff panel (P2): opened from a turn's footer, fetched on demand.
-  const [diffPanelOpen, setDiffPanelOpen] = useState(false)
-  const [diffPanelData, setDiffPanelData] = useState<TurnDiffVO | null>(null)
-  const [diffPanelLoading, setDiffPanelLoading] = useState(false)
-  // The panel belongs to the session it was opened for: its diff, its findings, and the
-  // paths behind 预览/打开 all come from there. Switching sessions closes it rather than
-  // leaving another session's changes on screen — and it is also what keeps 发给 agent
-  // (P3) from sending into a session the findings never came from.
-  useEffect(() => { setDiffPanelOpen(false) }, [currentId])
+  // The working-tree diff and the review's findings used to ride in an overlay owned here
+  // (diffPanelOpen/Data/Loading, closed on every session switch). They are panes of the
+  // side-channel panel now: the panel is the thing that belongs to a session, and switching
+  // sessions already resets its selection — see useOneOffs.
 
   // The plan panel (P1): this session's newest plan. Read from disk on demand — the
   // agent:plan event only says "re-read it", so the panel can never drift from the file
@@ -287,6 +282,11 @@ function App() {
   // on every other session's as well. A turn id settles both: a message id is unique across
   // sessions, so no bubble can show another turn's answer.
   const [reviewPending, setReviewPending] = useState<{ msgId: string } | null>(null)
+  // The finished review, for the footer chip of the turn that started it. It survives the
+  // pending state (which the session going idle clears) so the chip can say 已评审 N 条.
+  const [reviewResult, setReviewResult] = useState<{ msgId: string; run: OneOffRun } | null>(null)
+  // Which turn the run in flight belongs to, held across the result event (see startReview).
+  const reviewForRef = useRef('')
   const [reviewNotice, setReviewNotice] = useState<{ msgId: string; text: string } | null>(null)
   // The chip's "+N" badge: the chip itself shows the primary path, so this is what
   // says the workspace extends beyond it.
@@ -297,6 +297,42 @@ function App() {
   const [theme, toggleTheme] = useTheme()
   useThemeHostSync()
   const [mcpOpen, setMcpOpen] = useState(false)
+  // The side-channel panel (third column): /review and /commit run as one-off forks, and
+  // their process belongs here rather than in the conversation — see
+  // docs/2026-09-12-desktop-oneoff-panel-design.md. The panel is a reader over the same
+  // records the findings panel reads, so it needs no live stream of its own until P2.
+  const [oneoffOpen, setOneoffOpen] = useState(false)
+  // What the backend reports about the session's side-channel runs: `live` while one is
+  // running, `result` once it ended (see agentEvents.ts). The panel needs the first, the
+  // conversation's one-line anchor the second.
+  const oneoffRun = useOneOffStream(currentId)
+  const oneoff = useOneOffs(currentId, oneoffOpen, oneoffRun.live)
+
+  // The panel's open/closed state is a desktop preference (desktop_ui.json): "I keep it open"
+  // has to survive a restart like every other layout choice. Read once at mount — the render is
+  // driven by the state above, the file is only what it is restored FROM.
+  const [oneoffWidth, setOneoffWidth] = useState(ONE_OFF_PANEL_DEFAULT_WIDTH)
+  useEffect(() => {
+    AgentService.GetUIState()
+      .then((st) => {
+        if (st?.oneOffPanelOpen) setOneoffOpen(true)
+        // 0 = never dragged. Anything the layout cannot honour is refused by the backend too.
+        if (st?.oneOffPanelWidth) setOneoffWidth(st.oneOffPanelWidth)
+      })
+      .catch(() => { /* an unreadable preference just means the defaults */ })
+  }, [])
+  const setOneOffOpen = useCallback((open: boolean) => {
+    setOneoffOpen(open)
+    // Best effort, like every other uiState write: a failure costs the next launch the
+    // panel's position, nothing more.
+    AgentService.SetOneOffPanelOpen(open).catch(() => {})
+  }, [])
+  // The width follows the pointer during a drag (state only) and is written when the drag ends:
+  // one small file write per gesture instead of one per frame.
+  const commitOneOffWidth = useCallback((px: number) => {
+    setOneoffWidth(px)
+    AgentService.SetOneOffPanelWidth(px).catch(() => {})
+  }, [])
   const [mcpServers, setMcpServers] = useState<any[]>([])
   const [mcpLoading, setMcpLoading] = useState<Record<string, boolean>>({})
   const [mcpProfile, setMcpProfile] = useState<{ active: string; available: string[] }>({ active: '', available: [] })
@@ -344,6 +380,26 @@ function App() {
     const el = chatRef.current
     if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
   }, [msgCache])
+
+  // …and pin again when the content changes height WITHOUT a message update.
+  //
+  // Messages are not the only thing that grows a transcript: a mermaid diagram renders
+  // asynchronously (lazy import + debounced render), an image or attachment card gets its
+  // height when the file loads, a tool card expands on click. All of that happens after the
+  // pin above, and with the scroll anchor being the TOP of the viewport the visible content
+  // slides up by exactly the height that appeared — until the next delta pins it back down
+  // ("先向上飘，再跳到底"). Watching the content box is what makes following mean "the newest
+  // message is in view", whatever moved it.
+  useEffect(() => {
+    const el = chatContentRef.current
+    if (!el || typeof ResizeObserver === 'undefined') return
+    const ro = new ResizeObserver(() => {
+      const c = chatRef.current
+      if (c && followBottomRef.current) c.scrollTop = c.scrollHeight
+    })
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   // On session switch, jump straight to the newest message BEFORE paint (via
   // useLayoutEffect) so the view never briefly shows the oldest messages and
@@ -490,66 +546,136 @@ function App() {
 
   // openDiffPanel fetches the turn's files against git HEAD. It is a deliberate
   // on-demand call: git runs once per open, not once per render.
-  // Review findings come from the backend, which reads them out of the session's newest
-  // review transcript: a review is a one-off run, so its findings live in that file
-  // rather than in the conversation history — and that is also what makes them survive
-  // a restart.
-  const [reviewFindings, setReviewFindings] = useState<ReviewFindingsVO | null>(null)
+  // The review's findings and its diff are the side-channel panel's business now: it reads
+  // them per RUN (desktop/oneoff.go collects each record's own ReportFinding calls) instead of
+  // asking for "the newest review in the session".
 
-  // A review is a turn like any other: when the session stops running, it is over.
+  // A review is over when its RUN is over — and the session's busy flag cannot decide that: between
+  // the click and the fork going busy the session is still idle, so a "clear while idle" rule fired
+  // in exactly that window and dropped the pending state before the run had even started. That rule
+  // was put back for one control run, and the chip's observed sequence went
+  // 评审本轮改动 → 已评审 1 条 · 查看 (the middle state never appears) against
+  // 评审中… → 已评审 1 条 · 查看 with this effect deciding — i.e. the reader's report
+  // 「立刻会变成已评审查看，但没法点击」. The run's own end event is the fact; it is paired to the
+  // turn through reviewForRef, which is why the clearing lives in the effect below.
   const sessionBusy = state.status !== 'idle' && state.status !== 'error'
-  useEffect(() => {
-    // Only the session that started the review can finish it: clearing whenever ANY session
-    // is idle would drop the state of a review still running in another one.
-    if (reviewPending && !sessionBusy) setReviewPending(null)
-  }, [reviewPending, sessionBusy])
 
   // startReview runs the review fork scoped to one turn's files. The run is a normal
   // turn, so its findings stream into the transcript and the diff panel picks them up
   // from there — no extra plumbing, and they survive a restart like any other message.
+  // startReview runs the review fork scoped to one turn's files. It runs as a turn (the
+  // session goes busy, Stop cancels it), but its process goes to the side-channel panel: the
+  // conversation keeps this turn's footer as the anchor, the panel shows the rest.
   const startReview = useCallback(async (paths: string[], msgId?: string) => {
     const sid = currentId
-    if (!msgId) return
     setReviewNotice(null)
-    setReviewPending({ msgId })
+    // msgId pairs the run back to the turn whose chip started it. A re-run from the panel may
+    // have none (a whole-tree review has no turn) — the run is worth starting either way; what
+    // it cannot do is light up a footer that does not exist.
+    if (msgId) {
+      setReviewPending({ msgId })
+      // Remember which turn this is for. The run's result arrives as an event, and by then this
+      // state may already be cleared (the session going idle does that), so the pairing cannot
+      // lean on reviewPending still being set.
+      reviewForRef.current = msgId
+    }
     try {
-      const res = await AgentService.ReviewChanges(sid, paths)
-      setReviewPending(null)
-      if (res) setReviewNotice({ msgId, text: res })
+      const res = await AgentService.ReviewChanges(sid, paths, msgId || '')
+      // A refusal means no run started, so the pending state ends HERE. Success must NOT clear
+      // it: this call only ever STARTS the fork (it runs on in the background), so clearing here
+      // made the chip flash 「评审中…」 and fall straight back — onto 「已评审 · 查看」, because
+      // the record (with its reviewed_msg) is on disk from the first line, while the run was
+      // still going. Measured report: 「点击评审按钮后，立刻会变成已评审查看，但没法点击」 —
+      // and it WAS unclickable, because the session is busy running the review.
+      if (res) {
+        setReviewPending(null)
+        reviewForRef.current = ''
+        // The refusal belongs to the chip that asked (if one did); a re-run from the panel has
+        // nowhere to show it, and its own pane says what happened to the run.
+        if (msgId) setReviewNotice({ msgId, text: res })
+      }
     } catch (e) {
       setReviewPending(null)
-      setReviewNotice({ msgId, text: String(e) })
+      reviewForRef.current = ''
+      if (msgId) setReviewNotice({ msgId, text: String(e) })
     }
   }, [currentId])
 
-  // sendFindings is how the diff panel leaves: the picked findings become one ordinary user
+  // reviewDoneLabel is the footer chip's 已评审 state for a turn, from two sources:
+//
+//   - the run that just finished in THIS window (its count is exact — the backend tallied the
+//     findings as they were called); and
+//   - the records on disk, which is what survives a restart: each review records the turn it
+//     was started for (agent.OneOffKeyReviewedMsg), so the pairing comes back with the session.
+//     Those runs have no loaded count (counting means reading the whole record), so the chip
+//     says 已评审 and the panel — which loads the run's detail when selected — shows how many.
+//
+// Returns undefined when this turn has never been reviewed, which is what leaves the chip as
+// 「评审本轮改动」.
+function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun } | null, runs: OneOffVO[]): string | undefined {
+  if (result?.msgId === msgId) return oneOffRunLabel(result.run)
+  // A run that is STILL GOING does not count as done, even though its record is already on disk
+  // with this turn's id in it: that is what made the chip claim 已评审 while the review was
+  // still working. The record's own running flag is an mtime heuristic, so this is the same
+  // "still writing" notion the panel uses.
+  return runs.some((it) => it.reviewedMsg === msgId && !it.running) ? '已评审 · 查看' : undefined
+}
+
+// ── The conversation's one line about a side-channel run ─────────────────────
+  // A review's process no longer streams into the transcript, so what is left here is the
+  // anchor: the turn's footer says how it ended and opens the panel, and a typed /review or
+  // /commit closes its placeholder bubble with a single line. Design §5.4.
+  //
+  // The result pairs with the turn that started it through reviewForRef rather than through
+  // reviewPending: the two states change at different moments (this event ends the pending one),
+  // and the pairing must survive everything that re-renders in between.
+  useEffect(() => {
+    const run = oneoffRun.result
+    if (!run || run.kind !== 'review') return
+    const msgId = reviewForRef.current
+    if (!msgId) return // started from the composer: the notice path owns it
+    reviewForRef.current = ''
+    setReviewResult({ msgId, run })
+    // The run is over, so the chip leaves 评审中… — the end EVENT is what says so (see the note
+    // above about the idle-flag rule that used to clear it too early).
+    setReviewPending(null)
+  }, [oneoffRun.result])
+
+  // A typed command's placeholder is a bubble the composer opened; hand the result to it so
+  // it can become one line. `at` guards against re-firing on unrelated re-renders.
+  const noticedRunRef = useRef(0)
+  useEffect(() => {
+    const run = oneoffRun.result
+    if (!run || run.at === noticedRunRef.current) return
+    noticedRunRef.current = run.at
+    composer.noticeCommandResult(run)
+  }, [oneoffRun.result, composer])
+
+  // A run started → show it. The reader just launched it, and this is where its output goes;
+  // nothing else opens the panel on its own.
+  useEffect(() => {
+    if (oneoffRun.live) setOneOffOpen(true)
+  }, [oneoffRun.live?.at])
+
+  // openDiffPanel is the turn's 「完整 diff」 entry. It no longer opens an overlay: the diff,
+  // the findings that point at it and the report that explains them are panes of the
+  // side-channel panel, so this just shows that panel and lands on 意见. The FILES come from
+  // the run's own record (LoadOneOff → agent.OneOffKeyPaths), not from the caller: this turn's
+  // file set is about the turn, and the panel is shown per RUN — handing it over is what let a
+  // stale set anchor a later run's findings on the wrong lines.
+  const openDiffPanel = useCallback(() => {
+    setOneOffOpen(true)
+    oneoff.openFindings()
+  }, [oneoff])
+
+  // sendFindings is how the panel's findings leave: the picked ones become one ordinary user
   // message. It rides the composer's route (submit) instead of a channel of its own — while
   // a turn is running the message queues for the next steer point, because startTurn refuses
-  // a busy session (so sending directly would drop the text in silence). The panel closes on
-  // its way out; the reply then streams into the transcript behind it.
+  // a busy session (so sending directly would drop the text in silence). The reply then
+  // streams into the transcript, and the panel stays where it is.
   const sendFindings = useCallback((text: string) => {
-    setDiffPanelOpen(false)
     composer.submit(text)
   }, [composer])
-
-  const openDiffPanel = useCallback(async (paths: string[]) => {
-    setDiffPanelOpen(true)
-    setDiffPanelData(null)
-    setDiffPanelLoading(true)
-    try {
-      const [diff, findings] = await Promise.all([
-        AgentService.GetTurnDiff(currentId, paths),
-        AgentService.GetReviewFindings(currentId),
-      ])
-      setDiffPanelData(diff || null)
-      setReviewFindings(findings || null)
-    } catch {
-      setDiffPanelData(null)
-      setReviewFindings(null)
-    } finally {
-      setDiffPanelLoading(false)
-    }
-  }, [currentId])
 
   const removeRoot = useCallback(async (id: string, path: string) => {
     setRootsError('')
@@ -621,6 +747,9 @@ function App() {
         setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
         openSession(ns.id)
         clearUsage(); resetTps()
+        // A session created at launch is an empty conversation too, so the caret starts in
+        // the composer (the welcome text below asks the user to type there).
+        composer.focusInput()
         refreshUsage(ns.id)
         refreshWorkspace(ns.id)
       }
@@ -630,7 +759,7 @@ function App() {
     refreshProvider()
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
-  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage])
+  }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput])
   const confirmDelete = useCallback(async (id: string) => {
     await (AgentService as any).DeleteSession?.(id).catch(() => {})
     loadAll()
@@ -666,13 +795,19 @@ function App() {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
       openSession(ns.id)
       clearUsage(); resetTps()
+      // The new session is an empty conversation, so the caret belongs in the composer and
+      // the user can start typing. It goes here rather than at the end of the function for
+      // the same reason it exists at all: the click that created the session (or ⌘N) leaves
+      // focus on the button, and this is the last place that must own focus — the refreshes
+      // below are pure reads and must not race it.
+      composer.focusInput()
       refreshUsage(ns.id)
       refreshWorkspace(ns.id)
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace, refreshUsage, clearUsage])
+  }, [refreshProvider, refreshWorkspace, refreshUsage, clearUsage, composer.focusInput])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
@@ -826,6 +961,11 @@ function App() {
           {currentId ? <span className="session-id" title={currentId + '（点击复制）'} onClick={() => navigator.clipboard?.writeText(currentId).catch(() => {})}>{currentId}</span> : null}
         </div>
         <div className="titlebar-right no-drag">
+          <button className={`sidebar-toggle oneoff-toggle no-drag ${oneoffOpen ? '' : 'is-collapsed'}`}
+            onClick={() => setOneOffOpen(!oneoffOpen)}
+            title={oneoffOpen ? '收起旁路面板' : '展开旁路面板（评审 / 提交的过程）'}>
+            <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="10" y1="2.5" x2="10" y2="13.5"/></svg>
+          </button>
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
           <div className="status-badge"><span className={`dot dot-${state.status}`}>{meta.dot}</span><span className="status-label">{state.label}</span></div>
         </div>
@@ -872,6 +1012,10 @@ function App() {
         <main className="main">
           <div className="chat-wrap">
             <div className="chat" ref={chatRef} onScroll={handleScroll} tabIndex={0} onKeyDown={onChatKey}>
+            {/* The transcript's own box, and the thing follow-the-bottom watches: the
+                SCROLLPORT's box does not change when its content grows, so the observer has to
+                sit on the content. See the ResizeObserver effect. */}
+            <div className="chat-content" ref={chatContentRef}>
             {loading ? <div className="chat-loading">加载会话…</div> : (
               <>
                 {messages.length === 0 && (
@@ -900,7 +1044,9 @@ function App() {
                       onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
                       onOpenDiffPanel={openDiffPanel}
                       onReviewChanges={startReview}
+                      onOpenOneOff={() => setOneOffOpen(true)}
                       reviewPending={reviewPending?.msgId === m.id}
+                      reviewDone={reviewDoneLabel(m.id, reviewResult, oneoff.items)}
                       reviewNotice={reviewNotice?.msgId === m.id ? reviewNotice.text : undefined}
                       sessionBusy={sessionBusy}
                     />
@@ -909,12 +1055,7 @@ function App() {
               </>
             )}
             </div>
-            {diffPanelOpen ? (
-              <DiffPanel diff={diffPanelData} loading={diffPanelLoading} findings={reviewFindings?.findings || []}
-                findingsNote={reviewFindings?.note} findingsReport={reviewFindings?.report}
-                onClose={() => setDiffPanelOpen(false)}
-                onSend={sendFindings} />
-            ) : null}
+            </div>
             {showJump && (
               <button className="jump-latest" onClick={() => scrollToBottom(true)} title="回到最新消息">
                 <span className="jump-ico">↓</span>回到最新
@@ -1013,6 +1154,9 @@ function App() {
             </div>
           </footer>
         </main>
+        {oneoffOpen ? <OneOffPanel api={oneoff} workDir={workDir} busy={isCurrentRunning} width={oneoffWidth}
+          onResizeCommit={commitOneOffWidth} onSend={sendFindings}
+          onRerun={(paths, msgId) => void startReview(paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
       </div>
       {menu && (
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>

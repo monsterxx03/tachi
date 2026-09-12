@@ -20,9 +20,11 @@ import {
   type Message,
 } from './types'
 import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { OneOffRun } from './agentEvents'
 import { atRefAt, countAtRefs, insertRefText, replaceRefText } from './lib'
 import { finishNotice } from './transcript'
 import { AtFilePicker, CommandPicker } from './components'
+import { oneOffDoneLabel } from './oneoff'
 
 // imeActive reports whether a key event belongs to an IME composition (Chinese / Japanese /
 // Korean candidate selection). Enter while composing confirms a candidate — treating it as
@@ -62,6 +64,9 @@ export function useComposer(deps: ComposerDeps) {
   // guard active for the committing Enter without swallowing a later, genuine Enter-to-send.
   const composingRef = useRef(false)
   const composerRef = useRef<HTMLTextAreaElement>(null)
+  // The assistant bubble the last slash command opened, waiting to be closed: a side-channel
+  // command's output goes to the panel, so this is what its one-line anchor is written into.
+  const commandRef = useRef<{ sid: string; id: string } | null>(null)
 
   // ── @-file completion ─────────────────────────────────────────────────────
   // Typing "@" opens a fuzzy picker over the session's working directory. Accepting a match
@@ -278,6 +283,11 @@ export function useComposer(deps: ComposerDeps) {
     const sid = currentId
     const ts = Date.now()
     const tsStr = new Date().toISOString()
+    // The placeholder is a bubble this composer opened, and it is the composer that closes it:
+    // a side-channel command (/review, /commit) sends no content into the conversation, so the
+    // bubble has to become one line saying where its output went (see noticeCommandResult).
+    // Addressing it by the id remembered here beats "the newest running assistant".
+    commandRef.current = { sid, id: `a-${ts}` }
     updateSession(sid, (prev) => [...prev,
       { id: `u-${ts}`, role: 'user', text, ts: tsStr },
       { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
@@ -285,6 +295,7 @@ export function useComposer(deps: ComposerDeps) {
     markRunning(sid, true)
     scrollToBottom(true)
     const refuse = (label: string) => {
+      commandRef.current = null
       applyToSession(sid, 'assistant', (m) => ({ ...finishNotice(m, label), running: false }))
       markRunning(sid, false)
     }
@@ -292,6 +303,20 @@ export function useComposer(deps: ComposerDeps) {
       if (refusal) refuse(refusal)
     }).catch(() => refuse('命令执行失败'))
   }, [currentId, updateSession, markRunning, scrollToBottom, applyToSession])
+
+  // noticeCommandResult closes the placeholder a side-channel command opened: its output went
+  // to the panel (see agentEvents.ts / oneoff.tsx), so the conversation keeps one line naming
+  // what happened and where the rest is. A no-op when the last command was refused (nothing
+  // to close) or when the run predates this window.
+  const noticeCommandResult = useCallback((run: OneOffRun) => {
+    const slot = commandRef.current
+    if (!slot) return
+    commandRef.current = null
+    updateSession(slot.sid, (list) => list.map((m) => (
+      m.id === slot.id ? { ...finishNotice(m, oneOffDoneLabel(run)), running: false } : m
+    )))
+    markRunning(slot.sid, false)
+  }, [updateSession, markRunning])
 
   // route is the single decision about text the user has committed: a leading "/" is a
   // command (the backend owns the list and answers with a notice when it does not know the
@@ -476,6 +501,13 @@ export function useComposer(deps: ComposerDeps) {
     return () => off?.()
   }, [sendText, takePending, clearAsk])
 
+  // ── Focus ─────────────────────────────────────────────────────────────────
+  // The two halves of the UI hand focus to each other (Esc leaves the composer, a new
+  // session enters it), and those callers sit in dependency lists — so both get a stable
+  // identity instead of a fresh closure per render, which would make every caller churn.
+  const focusInput = useCallback(() => composerRef.current?.focus(), [])
+  const focusTranscript = useCallback(() => chatRef.current?.focus(), [chatRef])
+
   // The "/" palette is DERIVED from the input rather than stored, so it can never disagree
   // with what would actually be dispatched: it is open while the input is a bare command name
   // still being typed (a space means arguments follow, an exact name means it is complete),
@@ -486,9 +518,7 @@ export function useComposer(deps: ComposerDeps) {
 
   return {
     // input box
-    input, setInput, composerRef, composingRef, syncAtRef, closeAt,
-    focusInput: () => composerRef.current?.focus(),
-    focusTranscript: () => chatRef.current?.focus(),
+    input, setInput, composerRef, composingRef, syncAtRef, closeAt, focusInput, focusTranscript,
     // @-picker + "/" palette
     at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, cmdQuery, setCmdDismissed, acceptCommand,
     // queue
@@ -497,7 +527,7 @@ export function useComposer(deps: ComposerDeps) {
     // questions
     ask: asks[currentId] || null, answer, answerCurrent, clearAsk,
     // sending
-    send, submit, answerSteer,
+    send, submit, answerSteer, noticeCommandResult,
   }
 }
 

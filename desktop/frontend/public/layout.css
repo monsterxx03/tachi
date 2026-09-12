@@ -20,6 +20,92 @@
   border-right: none;
 }
 
+/* ── Side-channel panel (the third column) ──────────────────────────────────
+   The mirror of the sidebar, for /review and /commit: those run as one-off
+   forks, so their process is something you go and look at rather than a turn
+   that interrupts the conversation. Full height, and as wide as the reader made
+   it (the width is theirs to drag and is remembered — see oneoff.tsx); the chat
+   keeps `min-width: 0`, so it yields the room instead of overflowing. */
+.oneoff-panel {
+  width: 420px;
+  min-width: 320px; /* mirrored by ONE_OFF_PANEL_MIN_WIDTH in frontend/src/oneoff.tsx */
+  position: relative; /* the resize handle is anchored to this edge */
+  display: flex;
+  flex-direction: column;
+  background: var(--chrome);
+  border-left: 1px solid var(--border);
+  overflow: hidden;
+}
+
+/* The grab strip along the panel's left edge. It lives INSIDE the panel because the panel
+   clips its own overflow (a handle hanging outside would be cut off), and it is a real
+   focusable separator so the width is reachable without a pointer. */
+.oneoff-resizer {
+  position: absolute;
+  left: 0;
+  top: 0;
+  bottom: 0;
+  width: 6px;
+  z-index: 6;
+  cursor: col-resize;
+  background: transparent;
+  transition: background 0.15s var(--ease);
+}
+.oneoff-resizer:hover,
+.oneoff-resizer:focus-visible,
+.oneoff-resizer.is-dragging { background: var(--accent-line-soft); }
+.oneoff-resizer:focus-visible { outline: none; }
+/* While a drag is in flight the pointer is over the transcript: no text selection, and the
+   resize cursor stays even where the strip is not under the pointer. */
+body.is-resizing { cursor: col-resize; user-select: none; }
+
+.oneoff-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  padding: 12px 12px 10px;
+  border-bottom: 1px solid var(--border);
+}
+
+.oneoff-title {
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-dim);
+  letter-spacing: 0.02em;
+}
+
+/* The switcher: one entry per run of this session. A native <select> because the
+   list is a menu of records, and the platform already knows how to present one. */
+.oneoff-select {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--panel-solid);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12px;
+}
+
+.oneoff-icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-dim);
+  font-size: 13px;
+  cursor: pointer;
+  transition: background 0.15s var(--ease), color 0.15s var(--ease);
+}
+.oneoff-icon:hover { background: var(--accent-soft); color: var(--accent-2); }
+
 .sidebar-toggle {
   display: grid;
   place-items: center;

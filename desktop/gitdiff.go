@@ -45,6 +45,11 @@ type TurnDiffVO struct {
 	// Note says in the user's words why the list is empty or incomplete: no
 	// workspace, not a git repository, paths outside it, output truncated.
 	Note string `json:"note,omitempty"`
+	// Ignored counts the requested paths git ignores (and therefore never diffs). It is a
+	// typed half of Note for callers that have to act on it — 「评审本轮改动」 refuses on an
+	// empty diff, and its refusal has to say "the reviewer cannot see this file" rather than
+	// "there is nothing to review".
+	Ignored int `json:"ignored,omitempty"`
 }
 
 // FileDiffVO is one file's working-tree change.
@@ -126,7 +131,59 @@ func (s *AgentService) GetTurnDiff(sessionID string, paths []string) TurnDiffVO 
 		vo.Files = trimmed
 		vo.Note = joinNotes(vo.Note, "改动很大，这里只显示了一部分")
 	}
+
+	// A requested path git IGNORES shows up in neither list above — `git diff HEAD` does not
+	// track it, and `ls-files --others --exclude-standard` excludes it by definition — so the
+	// panel was left with an empty diff and nothing to say, and filled the silence with
+	// 「没有未提交的改动（可能已经提交）」. That is the wrong explanation: the file is right
+	// there, brand new. Saying WHICH rule hides it turns a puzzle into a fact.
+	if len(vo.Files) == 0 {
+		if ignored := ignoredPaths(root, inside); len(ignored) > 0 {
+			vo.Ignored = len(ignored)
+			vo.Note = joinNotes(vo.Note, ignoredNote(ignored))
+		}
+	}
 	return vo
+}
+
+// ignoredPaths returns the requested paths that git ignores, with the rule that hides them
+// (from `git check-ignore -v`, which prints "<source>:<line>:<pattern>\t<path>").
+func ignoredPaths(root string, paths []string) []string {
+	if len(paths) == 0 {
+		return nil
+	}
+	out, err := gitOutput(root, gitArgs([]string{"check-ignore", "-v", "--"}, paths)...)
+	if err != nil {
+		// check-ignore exits 1 when nothing matches, and that is the common case.
+		return nil
+	}
+	var lines []string
+	for _, line := range strings.Split(strings.TrimSpace(out), "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// ignoredNote is the user-facing sentence for ignored paths: how many, and the rule behind the
+// first one (the pattern is the actionable part — it tells the reader where to look).
+func ignoredNote(ignored []string) string {
+	first := ignored[0]
+	detail := ""
+	if fields := strings.SplitN(first, "\t", 2); len(fields) == 2 {
+		source, path := fields[0], fields[1]
+		// source is "<file>:<line>:<pattern>"; the file is what a reader can go and open.
+		rule := source
+		if i := strings.LastIndex(source, ":"); i > 0 {
+			rule = source[:i]
+		}
+		detail = fmt.Sprintf("（如 %s，来自 %s）", path, rule)
+	}
+	if len(ignored) == 1 {
+		return "这个文件被 git 忽略，工作树 diff 不显示它" + detail
+	}
+	return fmt.Sprintf("这 %d 个文件被 git 忽略，工作树 diff 不显示它们%s", len(ignored), detail)
 }
 
 // gitArgs joins a command prefix with a pathspec list. Spelled out because a slice

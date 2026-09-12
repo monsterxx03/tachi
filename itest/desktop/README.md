@@ -59,6 +59,23 @@ Keep both halves small: one behaviour per scenario, and assert what the user wou
 
 ## Constraints and gotchas
 
+- **Run one smoke at a time.** Two runs fight over the screen: the runner's preflight may refuse,
+  and — worse — an app window that ends up behind another stops painting (measured: 0 rAF frames
+  while another window was in front), and a resize observer is delivered by the browser's
+  rendering steps, so an occluded window starves that probe too. `switch-scroll` falls back to a
+  timer rule when no delivery arrives, and prints which rule judged; do not read its PASS/FAIL
+  without looking at that line.
+- **A probe must judge what was painted — and WHERE the read happens is what decides that.** A pin
+  runs in a ResizeObserver callback (after layout, before paint), so a read taken BEFORE the pin
+  only reports the intermediate state "content grew, pin not run yet" — which is never drawn.
+  Reading `scrollHeight` forces layout, and layout comes before the pin, so a rAF probe is exactly
+  such a read: it reported a lone 298px excursion with 0 on both sides. The honest read is in an
+  observer of your OWN — observers are called in registration order, so one registered after the
+  app's runs after the pin and still before the paint. Verify a new judge BOTH ways: it must read
+  0 with the fix in place, and catch the drift with the fix disabled. (Disabling the pin in this
+  very scenario is what turned a 298px figure into a DRAWN excursion — the same number the rAF
+  artefact had reported, which is precisely why the second reading is the one that counts.)
+
 - **There is no screenshot.** Capturing the window needs it on the visible Space, and
   macOS 15+ has closed the window-capture APIs (`CGWindowListCreateImage` is obsoleted,
   `screencapture -R` fails, `-l <windowid>` is blank for a WebKit window) — a "capture"

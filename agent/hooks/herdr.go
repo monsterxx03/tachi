@@ -9,6 +9,8 @@ import (
 	"os"
 	"time"
 
+	"golang.org/x/term"
+
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -41,11 +43,25 @@ type HerdrHandler struct {
 	sendCh chan map[string]any
 }
 
+// stdoutIsTerminal reports whether this process's stdout is a terminal.
+//
+// The pane test, and the reason it is part of the detection: a Herdr report describes a PANE.
+// The TUI renders to the pane's pty, so its stdout is that terminal; the desktop app and an
+// editor-hosted ACP server are not in any pane — they merely inherit HERDR_* from whatever
+// shell launched them (a GUI app started from a Herdr pane keeps those variables for its whole
+// life). Reporting "pane busy/idle" from such a process is a report about nothing, and it made
+// the desktop double-notify: its own native notification plus the terminal one Herdr raises
+// for a window that has no pane.
+//
+// Overridable so a test can cover both sides without a pty.
+var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+
 // DetectHerdr reports whether Tachi is running inside a Herdr-managed pane.
 func DetectHerdr() bool {
 	return os.Getenv("HERDR_ENV") == "1" &&
 		os.Getenv("HERDR_SOCKET_PATH") != "" &&
-		os.Getenv("HERDR_PANE_ID") != ""
+		os.Getenv("HERDR_PANE_ID") != "" &&
+		stdoutIsTerminal()
 }
 
 // NewHerdrHandler creates a handler from the current process environment.

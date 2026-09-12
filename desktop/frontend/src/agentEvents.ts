@@ -220,3 +220,63 @@ export function useAgentStream(deps: AgentStreamDeps) {
     return () => off?.()
   }, [applyToSession, refreshRunning, refreshProvider, answerSteer, flushDeltas, enqueueDelta, onSessionTitle])
 }
+
+// OneOffRun is one side-channel run (/review, /commit) as the frontend sees it.
+//
+// The backend reports its LIFECYCLE only — start, then end or error, with the facts the
+// conversation's one-line anchor needs — never its content: the run writes its own record
+// file, and the panel reads that. One source of truth, and no second streaming path to keep
+// in step with the transcript's. Design §4.2.
+export type OneOffRun = {
+  kind: string
+  phase: 'start' | 'end' | 'error'
+  // findings is the number of ReportFinding calls the run made (0 for /commit).
+  findings: number
+  durationMs: number
+  iterations: number
+  // interrupted marks a stop the user asked for — a conclusion, not a failure.
+  interrupted?: boolean
+  error?: string
+  // at distinguishes two runs of the same kind: the payload carries no run id, and the
+  // effects that react to a result must fire once per run.
+  at: number
+}
+
+// useOneOffStream follows the side-channel runs of the session ON SCREEN: `live` while one
+// is running (the panel polls its record), `result` once it ended.
+export function useOneOffStream(currentId: string) {
+  const [live, setLive] = useState<OneOffRun | null>(null)
+  const [result, setResult] = useState<OneOffRun | null>(null)
+
+  useEffect(() => {
+    const off = Events.On('agent:oneoff', (event) => {
+      const d = event.data as {
+        sessionId?: string; kind?: string; phase?: string; findings?: number
+        durationMs?: number; iterations?: number; interrupted?: boolean; error?: string
+      }
+      // Only the displayed session's runs: the anchor is a line in THIS conversation, and a
+      // run in a background session has no line here to fill in.
+      if (!d?.sessionId || d.sessionId !== currentId) return
+      const run: OneOffRun = {
+        kind: d.kind || '',
+        phase: d.phase === 'start' ? 'start' : d.phase === 'error' ? 'error' : 'end',
+        findings: d.findings || 0,
+        durationMs: d.durationMs || 0,
+        iterations: d.iterations || 0,
+        interrupted: d.interrupted,
+        error: d.error,
+        at: Date.now(),
+      }
+      if (run.phase === 'start') {
+        setLive(run)
+        setResult(null)
+        return
+      }
+      setLive(null)
+      setResult(run)
+    })
+    return () => off?.()
+  }, [currentId])
+
+  return { live, result }
+}

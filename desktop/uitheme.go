@@ -59,6 +59,27 @@ type uiState struct {
 	// root. A new session starts there (see defaultWorkspaceFor) instead of at the
 	// home directory, which is far too wide to be a workspace.
 	LastWorkspace string `json:"lastWorkspace,omitempty"`
+	// OneOffPanelOpen remembers the side-channel panel (docs/2026-09-12-desktop-oneoff-panel-design.md):
+	// "I keep it open" should survive a restart like every other layout choice. The
+	// frontend owns the value and mirrors it here, which is also what makes it
+	// inspectable in support ("what is this window actually showing?").
+	OneOffPanelOpen bool `json:"oneOffPanelOpen,omitempty"`
+	// OneOffPanelWidth is that panel's width in CSS pixels (0 = never dragged, use the
+	// default). A preference file is editable by hand, so the setter refuses values outside
+	// the panel's own bounds rather than trusting the number (see validOneOffPanelWidth).
+	OneOffPanelWidth int `json:"oneOffPanelWidth,omitempty"`
+}
+
+// The panel's width bounds, mirrored by the frontend (desktop/frontend/src/oneoff.tsx) — it
+// clamps what the drag produces, and this side keeps a hand-edited file from storing something
+// a layout cannot honour.
+const (
+	oneOffPanelMinWidth = 320
+	oneOffPanelMaxWidth = 1000
+)
+
+func validOneOffPanelWidth(px int) bool {
+	return px >= oneOffPanelMinWidth && px <= oneOffPanelMaxWidth
 }
 
 func uiStatePath() string { return filepath.Join(config.BaseDir(), uiStateFile) }

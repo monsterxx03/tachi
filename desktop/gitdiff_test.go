@@ -172,6 +172,47 @@ func TestGetTurnDiffNoWorkspace(t *testing.T) {
 
 // TestGetTurnDiffCleanTree: nothing changed means nothing to show — and no note,
 // because there is nothing to explain.
+// TestGetTurnDiffIgnoredPath is the case that made the panel lie: a path git ignores appears in
+// neither `git diff HEAD` nor `ls-files --others --exclude-standard`, so the panel showed an
+// empty diff and explained it as 「没有未提交的改动（可能已经提交）」 — for a file that was
+// written seconds earlier. The ignore rule is the honest explanation, and 评审本轮改动 has to
+// refuse with it rather than with "nothing to review".
+func TestGetTurnDiffIgnoredPath(t *testing.T) {
+	repo := gitRepo(t)
+	writeRepoFile(t, repo, ".gitignore", "scratch/\n")
+	ignored := writeRepoFile(t, repo, "scratch/report.md", "# a report\n")
+	_, svc, sid := newRootsApp(t, repo)
+
+	vo := svc.GetTurnDiff(sid, []string{ignored})
+	if len(vo.Files) != 0 {
+		t.Fatalf("files = %+v, want none (git never diffs an ignored path)", vo.Files)
+	}
+	if vo.Ignored != 1 {
+		t.Errorf("Ignored = %d, want 1", vo.Ignored)
+	}
+	if !strings.Contains(vo.Note, "被 git 忽略") {
+		t.Errorf("Note = %q, want the ignore rule named", vo.Note)
+	}
+	// The rule's source is what a reader can act on, so it has to be in the sentence.
+	if !strings.Contains(vo.Note, ".gitignore") {
+		t.Errorf("Note = %q, want the .gitignore source", vo.Note)
+	}
+	// And the review entry must refuse with THAT reason, not with "already committed".
+	notice := svc.nothingToReview(sid, []string{ignored})
+	if !strings.Contains(notice, "被 git 忽略") {
+		t.Errorf("nothingToReview = %q, want the ignore reason", notice)
+	}
+	if strings.Contains(notice, "可能已经提交") {
+		t.Errorf("nothingToReview = %q, must not blame a commit", notice)
+	}
+
+	// A path that is neither ignored nor changed keeps the existing wording.
+	clean := filepath.Join(repo, "src/main.go")
+	if note := svc.GetTurnDiff(sid, []string{clean}).Note; strings.Contains(note, "被 git 忽略") {
+		t.Errorf("a tracked, clean path must not be reported as ignored: %q", note)
+	}
+}
+
 func TestGetTurnDiffCleanTree(t *testing.T) {
 	repo := gitRepo(t)
 	_, svc, sid := newRootsApp(t, repo)
@@ -200,7 +241,7 @@ func TestNothingToReviewDetectsCommittedChanges(t *testing.T) {
 	tracked := filepath.Join(repo, "src/main.go")
 
 	// Committed and untouched: the turn's file is gone from the working tree.
-	got := svc.ReviewChanges(sid, []string{tracked})
+	got := svc.ReviewChanges(sid, []string{tracked}, "")
 	if got == "" {
 		t.Fatal("a review of committed changes must not start")
 	}

@@ -1,10 +1,10 @@
 package main
 
-// Native notifications for the two moments the app is waiting on the user while
-// they are looking somewhere else: a turn has finished, or the agent is parked
-// on an AskUserQuestion.
+// Native notifications for the moments the app has news while the user is looking
+// somewhere else: a turn has finished, the agent is parked on an AskUserQuestion, or a
+// side-channel run (/review, /commit) is over.
 //
-// Both are posted ONLY while the window does not have focus. A notification for
+// All of them are posted ONLY while the window does not have focus. A notification for
 // something you are already watching is noise — the transcript, the status
 // badge and the menu-bar item all say the same thing — so focus, not the turn
 // itself, is what decides.
@@ -38,6 +38,11 @@ const (
 	notifyAskTitle   = "Tachi 需要你的回答"
 	notifyAskWaiting = "等待你的回答"
 	notifyTurnDone   = "回合完成"
+	// A side-channel run is announced by WHAT it was, not as 回合完成: it never had a turn on
+	// screen, so the name is the part the reader does not already know.
+	notifyReviewName = "评审"
+	notifyCommitName = "提交"
+	notifyOneOffName = "旁路运行"
 	// notifySubtitleMaxRune keeps a long session title from pushing the body out
 	// of the visible area.
 	notifySubtitleMaxRune = 40
@@ -134,6 +139,48 @@ func (n *notifier) notifyTurnDone(sessionTitle string, iterations int, took time
 // questions are waiting.
 func (n *notifier) notifyAsk(sessionTitle string, questions []string) {
 	n.notify(notifyAskTitle, sessionTitle, askBody(len(questions)))
+}
+
+// notifyOneOffDone reports a finished side-channel run (/review, /commit). It gets its own copy
+// rather than notifyTurnDone for two reasons: a run has no turn on screen to look at, so when
+// the window is not focused this is the ONLY signal that it is over — and what came of it
+// (a review's findings, or that it failed) is the part the reader would otherwise have to come
+// back for.
+func (n *notifier) notifyOneOffDone(sessionTitle, kind string, findings int, outcome string) {
+	n.notify(notifyAppTitle, sessionTitle, oneOffDoneBody(kind, findings, outcome))
+}
+
+// oneOffDoneBody is the one-line body for a finished run. `outcome` is the command lane's end
+// reason: "complete", "interrupted" (the reader stopped it), or anything else — a failure.
+func oneOffDoneBody(kind string, findings int, outcome string) string {
+	name := oneOffRunName(kind)
+	switch outcome {
+	case "interrupted":
+		return name + "已停止"
+	case "complete":
+		if kind == commandCommit {
+			return name + "完成" // a commit has no findings to report
+		}
+		if findings == 0 {
+			return name + "完成 · 未报问题"
+		}
+		return fmt.Sprintf("%s完成 · %d 条意见", name, findings)
+	default:
+		return name + "未完成（见日志）"
+	}
+}
+
+// oneOffRunName is the reader-facing name of a run's kind. A review's rounds are recorded as
+// review-round-N (see agent.OneOffRecorder), so this is a prefix test.
+func oneOffRunName(kind string) string {
+	switch {
+	case strings.HasPrefix(kind, commandReview):
+		return notifyReviewName
+	case kind == commandCommit:
+		return notifyCommitName
+	default:
+		return notifyOneOffName
+	}
 }
 
 // turnDoneBody is the one-line body for a finished turn.

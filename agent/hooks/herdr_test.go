@@ -168,3 +168,37 @@ func TestHerdrHandlerMappings(t *testing.T) {
 		}
 	}
 }
+
+// TestDetectHerdrRequiresATerminal pins the pane test: the environment alone is not enough.
+//
+// The desktop app and an editor-hosted ACP server inherit HERDR_* from whatever shell launched
+// them and keep them for their whole life, so an env-only check reported pane state for a pane
+// they are not in — which is how the desktop came to notify twice (its own native notification
+// plus the terminal one Herdr raises for a window that has no pane).
+func TestDetectHerdrRequiresATerminal(t *testing.T) {
+	setEnv := func(env, sock, pane string) {
+		t.Setenv("HERDR_ENV", env)
+		t.Setenv("HERDR_SOCKET_PATH", sock)
+		t.Setenv("HERDR_PANE_ID", pane)
+	}
+	orig := stdoutIsTerminal
+	t.Cleanup(func() { stdoutIsTerminal = orig })
+
+	setEnv("1", "/tmp/herdr.sock", "w1:p5")
+	stdoutIsTerminal = func() bool { return true }
+	if !DetectHerdr() {
+		t.Error("a TUI inside a pane (env + a terminal on stdout) must be detected")
+	}
+
+	stdoutIsTerminal = func() bool { return false }
+	if DetectHerdr() {
+		t.Error("a process that only INHERITED the env (stdout is not a terminal) is not in a pane")
+	}
+
+	// The env still has to be complete: an id-less environment is not a pane either.
+	setEnv("1", "/tmp/herdr.sock", "")
+	stdoutIsTerminal = func() bool { return true }
+	if DetectHerdr() {
+		t.Error("a missing pane id must not be detected")
+	}
+}

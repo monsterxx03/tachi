@@ -53,12 +53,52 @@ type OneOffMeta struct {
 // "the review wrote a report but recorded no findings", needs the path rather than a guess.
 const OneOffKeyReport = "report"
 
+// OneOffKeyReviewedMsg is the Extra key naming the conversation message a review was started
+// FOR (desktop: the id of the turn whose footer was clicked).
+//
+// Without it the pairing between "this review" and "that turn" lives only in the frontend's
+// memory: a restart lost it, and the turn's chip could no longer say 已评审 N 条. The record is
+// the durable half — it is written when the run starts and read back by the panel.
+const OneOffKeyReviewedMsg = "reviewed_msg"
+
+// OneOffKeyPaths is the Extra key carrying the file set a scoped review was limited to, as a
+// JSON array.
+//
+// The scope is a property of the TURN that asked for the review (its changed files), and the
+// record otherwise cannot say which files it was asked about: the diff pane needs them to show
+// anything after a restart, and the prompt text is not a place to parse them out of.
+const OneOffKeyPaths = "paths"
+
+// ReviewOrigin is the desktop's context for a review round: which turn asked for it and which
+// files it covers. Both are optional — the TUI, ACP and channel frontends review the whole
+// working tree and have no turn to point at, so they pass the zero value.
+type ReviewOrigin struct {
+	// ReviewedMsg is the message id of the turn whose footer started the review ("" when the
+	// review was started from a command line).
+	ReviewedMsg string
+	// Paths is the file set the review is scoped to (nil = the whole working tree).
+	Paths []string
+}
+
 // OneOffMetaForReview is the recorded meta of a review round: which kind of review it was,
-// the session it belongs to, and the report path the round's prompt told the model to write.
-func OneOffMetaForReview(kind llm.UsageKind, sessionID, reportPath string) *OneOffMeta {
+// the session it belongs to, the report path the round's prompt told the model to write, and
+// — when the frontend knows them — the turn and the files it was asked about.
+func OneOffMetaForReview(kind llm.UsageKind, sessionID, reportPath string, origin ReviewOrigin) *OneOffMeta {
 	meta := &OneOffMeta{Kind: kind, SessionID: sessionID}
+	extra := map[string]string{}
 	if reportPath != "" {
-		meta.Extra = map[string]string{OneOffKeyReport: reportPath}
+		extra[OneOffKeyReport] = reportPath
+	}
+	if origin.ReviewedMsg != "" {
+		extra[OneOffKeyReviewedMsg] = origin.ReviewedMsg
+	}
+	if len(origin.Paths) > 0 {
+		if b, err := json.Marshal(origin.Paths); err == nil {
+			extra[OneOffKeyPaths] = string(b)
+		}
+	}
+	if len(extra) > 0 {
+		meta.Extra = extra
 	}
 	return meta
 }

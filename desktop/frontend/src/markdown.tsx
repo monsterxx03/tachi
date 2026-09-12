@@ -3,7 +3,7 @@
 // highlighted code). Keeping it in one module is what makes "the same file looks
 // the same in the chat and in the card" true by construction.
 
-import { memo, useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type ComponentPropsWithoutRef, type ReactNode } from 'react'
 import ReactMarkdown from 'react-markdown'
 import remarkGfm from 'remark-gfm'
 import rehypeHighlight from 'rehype-highlight'
@@ -42,6 +42,48 @@ export const MarkdownBlock = memo(function MarkdownBlock({ text, workDir }: { te
       </ReactMarkdown>
     </div>
   )
+})
+
+// ── Inline markdown ─────────────────────────────────────────────────────────
+// InlineMd renders the inline markdown ONE PIECE OF PROSE is written in: `code`, **bold**,
+// *emphasis*, and [label](url). Anything else stays literal text — and that is the point:
+// the grammar below IS the contract, so what a finding shows can never drift from what it
+// says.
+//
+// Why not MarkdownBlock: that one mounts react-markdown with remark-gfm + rehype-highlight
+// and wraps its output in `.assistant-text` (document typography, block margins). The
+// review panel renders 30+ findings at once, each a sentence — instantiating that pipeline
+// 60 times to decorate compact list rows costs far more than the rows themselves, and its
+// block spacing fights the list layout.
+//
+// Links render as an anchor whose label is shown and whose target is in the tooltip, but a
+// click does not navigate: this app has no external-link path (no OpenURL binding and no
+// navigation interception), so following one would take the whole webview off the app.
+// Making links live is its own change, not a side effect of rendering a finding.
+const INLINE_MD = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\*([^*\n]+)\*|\[([^\]\n]+)\]\(([^)\s]+)\)/g
+
+// inlineNodes splits text into literal chunks and inline elements, keyed by offset so a
+// re-render of the same finding never remounts a node.
+function inlineNodes(text: string): ReactNode[] {
+  const out: ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(INLINE_MD)) {
+    const at = m.index ?? 0
+    if (at > last) out.push(text.slice(last, at))
+    const key = `md-${at}`
+    if (m[1] !== undefined) out.push(<code key={key}>{m[1]}</code>)
+    else if (m[2] !== undefined) out.push(<strong key={key}>{m[2]}</strong>)
+    else if (m[3] !== undefined) out.push(<em key={key}>{m[3]}</em>)
+    else out.push(<a key={key} className="md-link" href={m[5]} title={m[5]} onClick={(e) => e.preventDefault()}>{m[4]}</a>)
+    last = at + m[0].length
+  }
+  if (last < text.length) out.push(text.slice(last))
+  return out
+}
+
+export const InlineMd = memo(function InlineMd({ text }: { text: string }) {
+  const nodes = useMemo(() => inlineNodes(text), [text])
+  return <>{nodes}</>
 })
 
 // MermaidDiagram renders a ```mermaid fence as a diagram.

@@ -3,8 +3,9 @@
 //   - DiffBlock — the per-call FRAGMENT diff on a tool card. Line numbers are
 //     fragment-relative there, so they are not shown (a fragment has no position in
 //     the file), and a long diff folds.
-//   - DiffPanel — the turn's WORKING-TREE diff against git HEAD, opened from the
-//     footer chip. Here the numbers are real file coordinates, so they ARE shown.
+//   - DiffFindingsPane — the PANE the side-channel panel shows: the reviewed files'
+//     working-tree diff against git HEAD (real file coordinates, so numbers ARE shown)
+//     with the review's findings anchored on the lines they name.
 //
 // Both render the same `Hunk` lines through DiffLines, which is what keeps the two
 // views from drifting: the difference is a flag, not a second implementation.
@@ -13,7 +14,7 @@ import { Fragment, memo, useCallback, useEffect, useRef, useState, type ReactNod
 import { AgentService, type FileChangeVO, type FileDiffVO, type FindingVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Hunk } from '../bindings/github.com/monsterxx03/tachi/pkg/linediff'
 import { FilePreviewOverlay } from './filepreview'
-import { CloseButton, ViewerOverlay } from './viewer'
+import { InlineMd } from './markdown'
 
 // DIFF_FOLD_LINES is how much of a change shows before folding.
 const DIFF_FOLD_LINES = 24
@@ -91,6 +92,17 @@ const SEVERITY_META: Record<string, { icon: string; label: string }> = {
   info: { icon: '💡', label: 'info' },
 }
 
+// CATEGORY_META names the review's five perspectives (ReportFinding's schema fixes them).
+// The value comes from the model, so an unknown one falls back to the raw string: a finding
+// is never worth losing to a label lookup.
+const CATEGORY_META: Record<string, string> = {
+  Correctness: '正确性',
+  Quality: '代码质量',
+  Efficiency: '性能',
+  Security: '安全',
+  Maintainability: '可维护性',
+}
+
 // PlacedFinding is a finding together with its index in the panel's payload. Findings
 // carry no id of their own, so that index is what the draft is keyed by.
 type PlacedFinding = { finding: FindingVO; idx: number }
@@ -149,9 +161,14 @@ function FindingRow({ item, pick, onPick, orphan }: {
           onChange={(e) => onPick(item.idx, { ...pick, checked: e.target.checked })} />
       </label>
       <span className="finding-sev" title={meta.label}>{meta.icon}</span>
+      {finding.category ? (
+        <span className="finding-cat" title={`评审维度：${finding.category}`}>
+          {CATEGORY_META[finding.category] || finding.category}
+        </span>
+      ) : null}
       <span className="finding-body">
-        <span className="finding-text">{finding.text}</span>
-        {finding.suggestion ? <span className="finding-fix">建议：{finding.suggestion}</span> : null}
+        <span className="finding-text"><InlineMd text={finding.text} /></span>
+        {finding.suggestion ? <span className="finding-fix">建议：<InlineMd text={finding.suggestion} /></span> : null}
         {orphan ? <span className="finding-orphan">（{findingAnchor(finding)}，不在以上差异行内）</span> : null}
         {/* Only a ticked finding asks for a note: this is where the reader says how they
             want it fixed, or that this spot should be left alone. */}
@@ -216,23 +233,36 @@ function DiffCounts({ added, removed }: { added: number; removed: number }) {
   )
 }
 
-// DiffPanel is the turn's working-tree diff: every file the turn touched, against
-// git HEAD, with real line numbers. It rides on the shared viewer overlay, so scroll,
-// Esc and click-away all behave like every other overlay in the app.
-export function DiffPanel({ diff, loading, findings, findingsNote, findingsReport, onClose, onSend }: {
+// DiffFindingsPane is the 意见 + diff view: the working-tree diff of the reviewed files, with
+// the review's findings anchored on the lines they name, plus the picker that turns them into
+// one ordinary message.
+//
+// It renders as a PANE, not as an overlay. The findings, the diff they point at and the
+// report that explains them belong side by side in the side-channel panel — and an overlay
+// covering the conversation is exactly what this design set out to remove
+// (docs/2026-09-12-desktop-oneoff-panel-design.md §5.3).
+export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, onSend, onOpenReport, onRerun }: {
   diff: TurnDiffVO | null
   loading: boolean
   findings: FindingVO[]
-  findingsNote?: string
-  // Where the review's human-readable report landed. The findings are the index, the
-  // report is the narrative — and until now nothing in the UI pointed at it.
-  findingsReport?: string
-  onClose: () => void
+  // One line explaining an empty findings list: "no review yet" and "a review found nothing"
+  // are different facts, and a silent pane tells the reader neither.
+  note?: string
+  // The report's path, when the run wrote one: the 报告 pane renders its content, and this
+  // only wears it as a tooltip.
+  report?: string
+  // Whether a diff was even asked for. A run opened from the switcher carries no file set
+  // (a review's scope lives with the turn that started it), and saying so beats an empty box.
+  hasPaths: boolean
   // Sends the picked findings as an ordinary user message. Absent only when there is
-  // nowhere to send them, and then the panel is read-only.
+  // nowhere to send them, and then the pane is read-only.
   onSend?: (text: string) => void
+  onOpenReport?: () => void
+  // Runs the review again over the same files. Present only for a run that recorded a scope
+  // (a scoped review) — re-running after a fix is the natural next step from here, and the
+  // record is what makes "the same files" answerable.
+  onRerun?: () => void
 }) {
-  const [reportPeek, setReportPeek] = useState(false)
   const counts: Record<string, number> = { bug: 0, warn: 0, info: 0 }
   for (const f of findings) counts[f.severity] = (counts[f.severity] || 0) + 1
 
@@ -258,91 +288,93 @@ export function DiffPanel({ diff, loading, findings, findingsNote, findingsRepor
   // counting findings nobody can read or tick, so it gets a group of its own.
   const outsideItems = items.filter((it) => !(diff?.files || []).some(
     (f) => findingMatchesFile(diff?.root || '', it.finding.path, f.path)))
-  // The report is a file like any other: the panel previews it with the same overlay it
-  // already uses for source files, which renders markdown through the app's renderer.
-  const reportButton = findingsReport ? (
-    <button type="button" className="diff-open" title={findingsReport}
-      onClick={() => setReportPeek(true)}>报告</button>
+  // The report is a file like any other, and the 报告 pane renders it with the app's own
+  // markdown renderer — but it is a PANE of this panel, not another overlay stacked on top.
+  const reportButton = report ? (
+    <button type="button" className="diff-open" title={report}
+      onClick={() => onOpenReport?.()}>报告</button>
   ) : null
 
   return (
-    <ViewerOverlay label="本轮改动（与 git HEAD 对照）" onClose={onClose} stageClass="is-doc"
-      controls={<CloseButton onClose={onClose} />}>
-      <div className="viewer-doc is-diff">
-        <div className="diff-panel-head">
-          <span className="diff-panel-title">本轮改动</span>
-          {diff?.root ? <span className="diff-panel-root" title={diff.root}>{diff.root}</span> : null}
-          <span className="diff-panel-note">与 git HEAD 对照 · 行号为文件真实行号</span>
-        </div>
-        {/* The note is shown even when there are no findings: "no review yet" and
-            "a review found nothing" are different facts, and a silent panel tells you
-            neither. The report button sits next to it, because a report that exists is
-            exactly what explains an empty findings list. */}
-        {findings.length === 0 && findingsNote ? (
-          <div className="diff-findings">
-            <span className="diff-findings-hint">{findingsNote}</span>
-            {reportButton}
-          </div>
-        ) : null}
-        {findings.length > 0 ? (
-          <div className="diff-findings">
-            <span className="diff-findings-title">评审意见 {findings.length} 条</span>
-            {(['bug', 'warn', 'info'] as const).filter((s) => counts[s] > 0).map((s) => (
-              <span key={s} className={`finding-count is-${s}`}>{SEVERITY_META[s].icon} {counts[s]}</span>
-            ))}
-            <span className="diff-findings-hint">{findingsNote || '来自最近一次评审'}</span>
-            {reportButton}
-          </div>
-        ) : null}
-        {loading ? <div className="diff-panel-empty">读取中…</div> : null}
-        {!loading && diff?.note ? <div className="diff-panel-empty">{diff.note}</div> : null}
-        {!loading && !diff?.note && (diff?.files || []).length === 0 ? (
-          <div className="diff-panel-empty">没有未提交的改动（可能已经提交）——面板和「评审本轮改动」都只能看工作树里未提交的差异</div>
-        ) : null}
-        {(diff?.files || []).map((f) => (
-          <FileDiffGroup key={(f.oldPath || '') + f.path} file={f} root={diff?.root || ''}
-            findings={items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, f.path))}
-            picks={picks} onPick={onPick} />
-        ))}
-        {outsideItems.length > 0 ? (
-          <div className="diff-file">
-            <div className="diff-file-head">
-              <span className="diff-path">其它文件</span>
-              <span className="diff-badge" title="评审提到了这一轮没有改动的文件">不在本轮差异里</span>
-              <span className="finding-count is-bug" title="该文件上的评审意见">{outsideItems.length} 条意见</span>
-            </div>
-            {/* No code lines here, so the rows drop the code-column indent they get
-                when they sit under a line. */}
-            <div className="finding-list">
-              {outsideItems.map((it) => (
-                <FindingRow key={it.idx} item={it} pick={picks[it.idx] ?? defaultPick(it.finding.severity)}
-                  onPick={onPick} orphan />
-              ))}
-            </div>
-          </div>
-        ) : null}
-        {/* The way out of the panel: the picked findings become one ordinary user message.
-            It is a bar rather than another thing in the header because the reader decides
-            AFTER reading the diff, by which point the header is far above. */}
-        {findings.length > 0 && onSend ? (
-          <div className="diff-sendbar">
-            <span className="diff-sendbar-count">已选 <strong>{picked.length}</strong> / {findings.length} 条</span>
-            <button type="button" className="diff-sendbar-link" onClick={() => setAll(true)}>全选</button>
-            <button type="button" className="diff-sendbar-link" onClick={() => setAll(false)}>全不选</button>
-            <span className="diff-sendbar-hint">作为一条普通消息发出，之后照常在对话里继续</span>
-            <button type="button" className="diff-sendbar-go" disabled={picked.length === 0}
-              title={picked.length === 0 ? '先勾选至少一条意见' : '把勾选的意见发给 agent'}
-              onClick={() => onSend(buildFindingMessage(picked))}>
-              发给 agent
-            </button>
-          </div>
+    <div className="viewer-doc is-diff">
+      <div className="diff-panel-head">
+        <span className="diff-panel-title">本轮改动</span>
+        {diff?.root ? <span className="diff-panel-root" title={diff.root}>{diff.root}</span> : null}
+        <span className="diff-panel-note">与 git HEAD 对照 · 行号为文件真实行号</span>
+        {onRerun ? (
+          <button type="button" className="diff-open" title="按同一批文件再评审一次（改动还可以更新）"
+            onClick={onRerun}>重新评审</button>
         ) : null}
       </div>
-      {reportPeek && findingsReport ? (
-        <FilePreviewOverlay path={findingsReport} name={findingsReport.split('/').pop()}
-          onClose={() => setReportPeek(false)} />
+      {/* The note is shown even when there are no findings: "no review yet" and
+          "a review found nothing" are different facts, and a silent panel tells you
+          neither. The report button sits next to it, because a report that exists is
+          exactly what explains an empty findings list. */}
+      {findings.length === 0 && note ? (
+        <div className="diff-findings">
+          <span className="diff-findings-hint">{note}</span>
+          {reportButton}
+        </div>
       ) : null}
-    </ViewerOverlay>
+      {findings.length > 0 ? (
+        <div className="diff-findings">
+          <span className="diff-findings-title">评审意见 {findings.length} 条</span>
+          {(['bug', 'warn', 'info'] as const).filter((s) => counts[s] > 0).map((s) => (
+            <span key={s} className={`finding-count is-${s}`}>{SEVERITY_META[s].icon} {counts[s]}</span>
+          ))}
+          <span className="diff-findings-hint">{note || '来自这次运行自己的 ReportFinding'}</span>
+          {reportButton}
+        </div>
+      ) : null}
+      {loading ? <div className="diff-panel-empty">读取中…</div> : null}
+      {!loading && !hasPaths ? (
+        <div className="diff-panel-empty">
+          这次运行没有带上被评审的文件清单 —— 从被评审的那一轮点「完整 diff」进来，就会看到与 git HEAD 的对照
+        </div>
+      ) : null}
+      {!loading && hasPaths && diff?.note ? <div className="diff-panel-empty">{diff.note}</div> : null}
+      {!loading && hasPaths && !diff?.note && (diff?.files || []).length === 0 ? (
+        <div className="diff-panel-empty">没有未提交的改动（可能已经提交）——「完整 diff」只能看工作树里未提交的差异</div>
+      ) : null}
+      {(diff?.files || []).map((f) => (
+        <FileDiffGroup key={(f.oldPath || '') + f.path} file={f} root={diff?.root || ''}
+          findings={items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, f.path))}
+          picks={picks} onPick={onPick} />
+      ))}
+      {outsideItems.length > 0 ? (
+        <div className="diff-file">
+          <div className="diff-file-head">
+            <span className="diff-path">其它文件</span>
+            <span className="diff-badge" title="评审提到了这一轮没有改动的文件">不在本轮差异里</span>
+            <span className="finding-count is-bug" title="该文件上的评审意见">{outsideItems.length} 条意见</span>
+          </div>
+          {/* No code lines here, so the rows drop the code-column indent they get
+              when they sit under a line. */}
+          <div className="finding-list">
+            {outsideItems.map((it) => (
+              <FindingRow key={it.idx} item={it} pick={picks[it.idx] ?? defaultPick(it.finding.severity)}
+                onPick={onPick} orphan />
+            ))}
+          </div>
+        </div>
+      ) : null}
+      {/* The way out: the picked findings become one ordinary user message. It is a bar
+          rather than another thing in the header because the reader decides AFTER reading
+          the diff, by which point the header is far above. */}
+      {findings.length > 0 && onSend ? (
+        <div className="diff-sendbar">
+          <span className="diff-sendbar-count">已选 <strong>{picked.length}</strong> / {findings.length} 条</span>
+          <button type="button" className="diff-sendbar-link" onClick={() => setAll(true)}>全选</button>
+          <button type="button" className="diff-sendbar-link" onClick={() => setAll(false)}>全不选</button>
+          <span className="diff-sendbar-hint">作为一条普通消息发出，之后照常在对话里继续</span>
+          <button type="button" className="diff-sendbar-go" disabled={picked.length === 0}
+            title={picked.length === 0 ? '先勾选至少一条意见' : '把勾选的意见发给 agent'}
+            onClick={() => onSend(buildFindingMessage(picked))}>
+            发给 agent
+          </button>
+        </div>
+      ) : null}
+    </div>
   )
 }
 

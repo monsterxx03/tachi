@@ -42,6 +42,33 @@ func TestAskBody(t *testing.T) {
 	}
 }
 
+func TestOneOffDoneBody(t *testing.T) {
+	// The copy NAMES the run: there was no turn on screen, so 回合完成 would leave the reader
+	// wondering what finished. What came of it is the reason to come back.
+	tests := []struct {
+		name     string
+		kind     string
+		findings int
+		outcome  string
+		want     string
+	}{
+		{"review with findings", commandReview, 2, "complete", "评审完成 · 2 条意见"},
+		{"review with nothing to report", commandReview, 0, "complete", "评审完成 · 未报问题"},
+		{"a later round is still a review", "review-round-2", 1, "complete", "评审完成 · 1 条意见"},
+		{"a commit has no findings", commandCommit, 0, "complete", "提交完成"},
+		{"stopped by the reader", commandReview, 0, "interrupted", "评审已停止"},
+		{"a failed run says so", commandReview, 0, "error", "评审未完成（见日志）"},
+		{"an unknown kind still says something", "dream", 0, "complete", "旁路运行完成 · 未报问题"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := oneOffDoneBody(tt.kind, tt.findings, tt.outcome); got != tt.want {
+				t.Errorf("oneOffDoneBody(%q, %d, %q) = %q, want %q", tt.kind, tt.findings, tt.outcome, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestTruncateRunes(t *testing.T) {
 	// The subtitle is cut on character boundaries, never mid-CJK-character, and
 	// marked when it was cut.

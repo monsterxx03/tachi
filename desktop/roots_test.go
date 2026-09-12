@@ -556,15 +556,15 @@ func TestBuildSessionMessagesCarriesChange(t *testing.T) {
 func TestReviewChangesGuards(t *testing.T) {
 	d, svc, _ := newRootsApp(t, t.TempDir())
 
-	if got := svc.ReviewChanges("", nil); !strings.Contains(got, "没有可评审的改动") {
+	if got := svc.ReviewChanges("", nil, ""); !strings.Contains(got, "没有可评审的改动") {
 		t.Errorf("empty scope = %q, want a refusal", got)
 	}
-	if got := svc.ReviewChanges("", []string{"a.go"}); !strings.Contains(got, "活跃会话") {
+	if got := svc.ReviewChanges("", []string{"a.go"}, ""); !strings.Contains(got, "活跃会话") {
 		t.Errorf("no active session = %q, want a refusal", got)
 	}
 
 	d.activeID = "some-session"
-	if got := svc.ReviewChanges("another-session", []string{"a.go"}); !strings.Contains(got, "当前会话") {
+	if got := svc.ReviewChanges("another-session", []string{"a.go"}, ""); !strings.Contains(got, "当前会话") {
 		t.Errorf("session mismatch = %q, want a refusal", got)
 	}
 }

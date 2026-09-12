@@ -1,8 +1,10 @@
-// sessions — per-session numbers and the live sidebar title.
+// sessions — per-session numbers, the live sidebar title, and where the caret goes.
 //
 // Two of the three leaks in .tachi.md live here: a brand-new session must not inherit the
 // previous session's cache ring, and the row must pick up the generated title when the
-// session_title event arrives (without it the row says 未命名会话 forever).
+// session_title event arrives (without it the row says 未命名会话 forever). And creating a
+// session is the one moment the composer takes focus by itself — the click leaves it on the
+// button, so a new session has to start with the user able to type.
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
@@ -23,8 +25,19 @@
   const oldTitle = smoke.text('.session.active .session-title')
   smoke.check('侧边栏标题已生成', oldTitle !== '' && oldTitle !== '未命名会话', oldTitle)
 
+  // Hand the caret to the transcript before creating the session: the assertion below only
+  // proves anything if the composer was NOT focused beforehand.
+  smoke.q('.chat').focus()
+
   if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') !== oldTitle, '切到新会话', 10000))) return smoke.finish()
+  // Focus was moved off the composer above, so this says the app did it, not that it was
+  // already there. No waitFor: the composer is focused before the sidebar is refreshed, so
+  // by the time the title changed the caret is settled — and a waitFor that failed here
+  // would only add a second, redundant failure line.
+  const active = document.activeElement
+  smoke.check('新建会话后光标自动落在输入框', active === smoke.q('.composer-input'),
+    'activeElement=' + (active ? (active.className || active.tagName) : '(无)'))
   const ringGone = await smoke.waitFor(() => !smoke.q('svg.ctx-ring[aria-label^="缓存命中率"]'), '新会话的用量环清空', 8000)
   smoke.check('新会话不继承上一个会话的缓存环', !!ringGone, smoke.text('.usage-meta'))
   smoke.check('新会话状态行是空的', smoke.text('.usage-meta') === '', JSON.stringify(smoke.text('.usage-meta')))

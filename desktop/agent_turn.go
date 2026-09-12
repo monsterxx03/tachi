@@ -319,8 +319,35 @@ func (d *desktopApp) emitUsage(id string, isCurrent bool, usage *llm.Usage) {
 
 // handleEvent maps AgentEvent types to the running state, and forwards the raw
 // event to the frontend so it can do streaming rendering.
+// runLane says where a run's UI events go.
+//
+// A conversation turn streams into the transcript, where it belongs. A command that runs an
+// one-off fork (/review, /commit) reports to the side-channel lane instead: its content is
+// written to its own record file, which the panel reads, and the conversation is left with a
+// single anchor line. The session state (busy / tps / usage) updates the same way on both
+// lanes — only the CONVERSATION payloads move.
+//
+// Design: docs/2026-09-12-desktop-oneoff-panel-design.md §4.2
+type runLane int
+
+const (
+	// laneTranscript: text / thinking / tool events become the conversation.
+	laneTranscript runLane = iota
+	// laneOneOff: they are dropped from the conversation — the record file is the content —
+	// and only the one-off lane's lifecycle events (see emitOneOff) are sent.
+	laneOneOff
+)
+
 func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
+	d.handleEventIn(id, ev, laneTranscript)
+}
+
+func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane) {
 	isCurrent := d.currentID() == id
+	// toTranscript decides whether THIS event may become part of the conversation. The
+	// state updates below are never gated: a review still shows 执行/思考 in the status bar,
+	// still moves the token rate, still refreshes the usage numbers.
+	toTranscript := d.app != nil && lane == laneTranscript
 	switch ev.Type {
 	case agent.AgentEventThinkingDelta:
 		d.tpsAdd(id, ev.ThinkingDelta)
@@ -336,7 +363,7 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		// Push a lightweight tool event carrying the human-readable args summary
 		// (reuses tools.ToolArgsSummary) so the frontend can render the title
 		// and full args.
-		if d.app != nil && isCurrent {
+		if toTranscript && isCurrent {
 			d.app.Event.Emit("agent:tool", map[string]any{
 				"name":   ev.ToolName,
 				"title":  tools.ToolArgsSummary(ev.ToolName, ev.ToolArgs),
@@ -351,7 +378,7 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		// (GetPlan), so the event only says "re-read it": that keeps the panel and the
 		// record from drifting, and it is why the tool args are not carried here.
 		// Success only — a SavePlan that failed to write changed nothing.
-		if isCurrent && d.app != nil && ev.ToolName == tools.ToolNameSavePlan && !ev.ToolIsError {
+		if toTranscript && isCurrent && ev.ToolName == tools.ToolNameSavePlan && !ev.ToolIsError {
 			d.app.Event.Emit("agent:plan", map[string]any{"sessionId": id})
 		}
 	case agent.AgentEventAskUser:
@@ -449,7 +476,7 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		r.turnCredit = r.credit - r.turnStartCredit
 		turnCost, turnCredit := r.turnCost, r.turnCredit
 		d.mu.Unlock()
-		if d.app != nil && ev.Result != nil && isCurrent {
+		if toTranscript && ev.Result != nil && isCurrent {
 			d.app.Event.Emit("agent:result", ev.Result)
 			d.app.Event.Emit("agent:turn", map[string]any{
 				"sessionId":  id,
@@ -462,7 +489,10 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		// The other moment worth interrupting for (see notifier): the turn is
 		// done and nobody is looking at the window. A user-initiated stop is
 		// excluded — announcing "回合完成" right after the user hit stop is noise.
-		if ev.Result != nil && ev.Result.ExitReason != agent.ExitReasonInterrupted && ev.Result.ExitReason != agent.ExitReasonCancelled {
+		// A one-off run ends here too — the command lane forwards its last TurnComplete — but it
+		// has its own notification, raised where its outcome is known (see notifyOneOffDone):
+		// announcing 「回合完成」 for a run with no turn on screen says nothing useful.
+		if lane == laneTranscript && ev.Result != nil && ev.Result.ExitReason != agent.ExitReasonInterrupted && ev.Result.ExitReason != agent.ExitReasonCancelled {
 			d.notify.notifyTurnDone(d.sessionTitle(id), ev.Result.IterationsUsed, ev.Result.Duration)
 		}
 	case agent.AgentEventError:
@@ -486,13 +516,18 @@ func (d *desktopApp) handleEvent(id string, ev agent.AgentEvent) {
 		} else {
 			d.setSessionState(id, AgentState{Status: StatusError, Label: "出错", Detail: detail})
 		}
-		if d.app != nil {
+		// A conversation turn concludes its newest assistant bubble; an one-off run has no
+		// bubble to conclude (its failure is reported on its own lane, see emitOneOff), and
+		// patching "the newest assistant" would hit the turn the review was FOR.
+		if toTranscript {
 			d.app.Event.Emit("agent:error", map[string]any{"sessionId": id, "error": detail, "interrupted": interrupted})
 		}
 	}
 	// Forward the raw event for every session so the frontend can keep a
-	// per-session message cache (background sessions keep streaming too).
-	if d.app != nil {
+	// per-session message cache (background sessions keep streaming too). This is the second
+	// of the two paths into the transcript (the typed events above are the first), so a
+	// side-channel run must be kept out of it as well.
+	if toTranscript {
 		d.app.Event.Emit("agent:event", map[string]any{"sessionId": id, "event": ev})
 	}
 }

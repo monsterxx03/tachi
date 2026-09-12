@@ -109,3 +109,34 @@ func TestLoadUIStateIgnoresGarbage(t *testing.T) {
 		})
 	}
 }
+
+// TestOneOffPanelWidthBounds: the panel's width is a preference a user can also hand-edit, so
+// the setter refuses a number the layout cannot honour instead of storing it — the default is a
+// better failure than a 3px-wide panel.
+func TestOneOffPanelWidthBounds(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	svc := &AgentService{}
+
+	svc.SetOneOffPanelWidth(480)
+	if got := svc.GetUIState().OneOffPanelWidth; got != 480 {
+		t.Errorf("width = %d, want 480", got)
+	}
+	for _, bad := range []int{0, 10, oneOffPanelMinWidth - 1, oneOffPanelMaxWidth + 1, 100000, -400} {
+		svc.SetOneOffPanelWidth(bad)
+		if got := svc.GetUIState().OneOffPanelWidth; got != 480 {
+			t.Errorf("width after %d = %d, want the previous 480 (out of bounds is not stored)", bad, got)
+		}
+	}
+	// Both bounds are inclusive: they are what the drag clamps to.
+	for _, ok := range []int{oneOffPanelMinWidth, oneOffPanelMaxWidth} {
+		svc.SetOneOffPanelWidth(ok)
+		if got := svc.GetUIState().OneOffPanelWidth; got != ok {
+			t.Errorf("width = %d, want %d", got, ok)
+		}
+	}
+	// The open flag and the width share the file without clobbering each other.
+	svc.SetOneOffPanelOpen(true)
+	if st := svc.GetUIState(); !st.OneOffPanelOpen || st.OneOffPanelWidth != oneOffPanelMaxWidth {
+		t.Errorf("state = %+v, want both fields kept", st)
+	}
+}

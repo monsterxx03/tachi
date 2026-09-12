@@ -35,16 +35,23 @@
      would trace the whole scroll region, so it is suppressed. */
   outline: none;
   padding: 30px 26px 24px;
-  display: flex;
-  flex-direction: column;
-  /* Roomy vertical rhythm now that messages are not separated by cards:
-     whitespace is the only separator between turns. */
-  gap: 30px;
   /* Instant, not smooth: programmatic pins during streaming and the
      scroll-position restore after loading older messages must not animate
      (and a smooth animation would keep drifting after the user scrolls up). */
   scroll-behavior: auto;
   contain: paint;
+}
+
+/* The transcript's content box. It carries the message rhythm (the scrollport above it does
+   not lay anything out), and it is the element the follow-the-bottom ResizeObserver watches:
+   a scrollport's own box never changes when its content grows, so the observer has to sit on
+   the content that does. */
+.chat-content {
+  display: flex;
+  flex-direction: column;
+  /* Roomy vertical rhythm now that messages are not separated by cards:
+     whitespace is the only separator between turns. */
+  gap: 30px;
 }
 
 /* Shown only when the user has scrolled away from the bottom — clicking it
@@ -1033,9 +1040,38 @@ button.work-dir {
 .finding.is-warn { border-left-color: var(--amber); }
 .finding.is-info { border-left-color: var(--accent); }
 .finding-sev { flex-shrink: 0; }
+/* The review's dimension (Correctness / Quality / …): a quiet tag. The severity icon
+   already says how bad it is; this only says of what kind, so it must not compete. */
+.finding-cat {
+  flex-shrink: 0;
+  padding: 0 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-faint);
+  white-space: nowrap;
+}
 .finding-body { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+/* A finding is written in inline markdown, so the row renders it (InlineMd) instead of
+   showing the punctuation. Newlines in the model's text are meaningful — suggestions
+   arrive as short lists — hence pre-wrap rather than the parent's `normal`. */
+.finding-text, .finding-fix { white-space: pre-wrap; }
 .finding-text { color: var(--text); }
 .finding-fix { color: var(--text-dim); }
+/* Inline code mirrors .assistant-text code, so a code span reads the same in a reply and
+   in a finding about that reply. */
+.finding-body code {
+  background: var(--accent-soft);
+  color: var(--code-ink);
+  padding: 0.1em 0.35em;
+  border-radius: var(--radius-xs);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 0.9em;
+}
+/* A link shows where it points (in the tooltip) but does not navigate: the app has no
+   external-link path, and following one would take the webview off the app. */
+.finding-body .md-link { color: var(--accent-2); text-decoration: underline dotted; cursor: default; }
 .finding-orphan { color: var(--text-faint); font-size: 10.5px; }
 /* A finding whose file is not in the diff has no code column to be indented under. */
 .finding-list .finding { margin-left: 0; }
@@ -1130,3 +1166,110 @@ button.work-dir {
   color: var(--amber);
   cursor: help;
 }
+
+/* ── Side-channel panel body ────────────────────────────────────────────────
+   P1 renders the 过程 pane: the run's own messages, replayed through the same
+   parts the transcript uses (see parts.tsx). The 意见+diff and 报告 panes move in
+   from the diff overlay in P3. */
+.oneoff-body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  flex: 1;
+  min-height: 0;
+  padding: 10px 12px 18px;
+  overflow: auto;
+}
+/* The replay reuses the transcript's messages, so the rule that centres prose at a
+   reading width inside the chat — and the avatar column — must not apply here. */
+.oneoff-body .msg { max-width: none; margin-inline: 0; gap: 0; }
+.oneoff-body .msg-content { flex: 1 1 auto; }
+.oneoff-body .msg-user { justify-content: flex-start; }
+
+.oneoff-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px dashed var(--border);
+  font-size: 11px;
+  color: var(--text-faint);
+}
+.oneoff-empty { font-size: 12px; color: var(--text-faint); padding: 4px 0; }
+/* The live marker: the run is still writing its record, and the panel is polling it. */
+.oneoff-live { color: var(--accent-2); }
+
+/* The panes of one run: 过程 is what it did, 意见 pairs its findings with the diff they name,
+   报告 is the narrative. Only the panes a run actually has appear (a commit has neither
+   findings nor a report). */
+.oneoff-tabs {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 6px 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+.oneoff-tab {
+  padding: 4px 9px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.oneoff-tab:hover { color: var(--text); }
+.oneoff-tab.active { color: var(--accent-2); border-bottom-color: var(--accent-2); }
+/* The report pane reuses .oneoff-meta for its file line, where the 打开 button carries the
+   request-row look without stretching to the full width. */
+.oneoff-open-report { width: auto; margin-left: auto; }
+
+/* The requests a run made. Only the SUMMARY arrives with the run: a record's request
+   payloads are over half of its bytes (system prompt and tool schemas repeat in every
+   call), so a row fetches its own text when the reader opens it. */
+.oneoff-reqs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  padding-top: 8px;
+  border-top: 1px dashed var(--border);
+}
+.oneoff-req-title { font-size: 11px; color: var(--text-faint); margin-bottom: 3px; }
+.oneoff-req { display: flex; flex-direction: column; gap: 4px; }
+.oneoff-req-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 3px 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-xs);
+  background: var(--wash);
+  color: var(--text-dim);
+  font-family: inherit;
+  font-size: 11px;
+  text-align: left;
+  cursor: pointer;
+}
+.oneoff-req-row:hover { border-color: var(--border-2); color: var(--text); }
+.oneoff-req-seq { color: var(--text); font-variant-numeric: tabular-nums; }
+.oneoff-req-tools, .oneoff-req-dur, .oneoff-req-ts { color: var(--text-faint); font-variant-numeric: tabular-nums; }
+.oneoff-req-ts { margin-left: auto; }
+
+.oneoff-pre {
+  margin: 0;
+  padding: 6px 8px;
+  max-height: 260px;
+  overflow: auto;
+  background: var(--wash);
+  border-radius: var(--radius-xs);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-dim);
+}
+.oneoff-sys summary { font-size: 11px; color: var(--text-faint); cursor: pointer; }
+.oneoff-sys[open] summary { margin-bottom: 4px; }
