@@ -196,7 +196,9 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // numbers) — the authoritative view behind the fragment diffs.
   onOpenDiffPanel?: (paths: string[]) => void
   // The turn-level review: one click, scoped to exactly this turn's files.
-  onReviewChanges?: (paths: string[]) => void
+  // The clicked turn's message id travels with the request, so the run's state can be shown
+  // on the very footer that started it (and on no other).
+  onReviewChanges?: (paths: string[], msgId?: string) => void
   reviewPending?: boolean
   reviewNotice?: string
   // The session is mid-turn, so a review has to wait its turn.
@@ -259,10 +261,13 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
             <button type="button" className="diff-chip"
               disabled={reviewPending || sessionBusy}
               title={reviewPending ? '评审进行中…' : sessionBusy ? '等这一轮跑完' : '让 agent 只评审本轮改动的这些文件（只读；意见会落在 diff 面板里）'}
-              onClick={() => onReviewChanges?.(diffStat.paths)}>
+              onClick={() => onReviewChanges?.(diffStat.paths, m.id)}>
               {reviewPending ? '评审中…' : '评审本轮改动'}
             </button>
-            {reviewNotice ? <span className="diff-notice">{reviewNotice}</span> : null}
+            {/* The refusal reason is a TOOLTIP, not a paragraph: printed in full here it
+                shoved the chips around (the sentence is a whole line), and hovering is the
+                honest place for the detail — 「完整 diff」 spells out the same thing. */}
+            {reviewNotice ? <span className="diff-notice" title={reviewNotice}>⚠ 没有开始评审</span> : null}
           </div>
         ) : null}
         {m.summary ? (
@@ -379,10 +384,14 @@ function App() {
     setModeNotice('')
     setMode(next)
   }, [refreshMode])
-  // A review run started from a turn's footer. Local to the app (not persisted): it only
-  // exists to show "评审中…" and to keep the button from starting a second run.
-  const [reviewPending, setReviewPending] = useState(false)
-  const [reviewNotice, setReviewNotice] = useState('')
+  // A review run started from a turn's footer. Local to the app (not persisted) and keyed by
+  // THE TURN WHOSE BUTTON WAS CLICKED (its message id): the button belongs to one footer, so
+  // its "评审中…" state and its refusal reason belong there too. Un-scoped they appeared on
+  // every turn's footer — and, because the session's messages are re-rendered on a switch,
+  // on every other session's as well. A turn id settles both: a message id is unique across
+  // sessions, so no bubble can show another turn's answer.
+  const [reviewPending, setReviewPending] = useState<{ msgId: string } | null>(null)
+  const [reviewNotice, setReviewNotice] = useState<{ msgId: string; text: string } | null>(null)
   // The chip's "+N" badge: the chip itself shows the primary path, so this is what
   // says the workspace extends beyond it.
   const extraRootCount = (roots?.additional || []).length
@@ -1081,24 +1090,26 @@ function App() {
   // A review is a turn like any other: when the session stops running, it is over.
   const sessionBusy = state.status !== 'idle' && state.status !== 'error'
   useEffect(() => {
-    if (!sessionBusy) setReviewPending(false)
-  }, [sessionBusy])
+    // Only the session that started the review can finish it: clearing whenever ANY session
+    // is idle would drop the state of a review still running in another one.
+    if (reviewPending && !sessionBusy) setReviewPending(null)
+  }, [reviewPending, sessionBusy])
 
   // startReview runs the review fork scoped to one turn's files. The run is a normal
   // turn, so its findings stream into the transcript and the diff panel picks them up
   // from there — no extra plumbing, and they survive a restart like any other message.
-  const startReview = useCallback(async (paths: string[]) => {
-    setReviewNotice('')
-    setReviewPending(true)
+  const startReview = useCallback(async (paths: string[], msgId?: string) => {
+    const sid = currentId
+    if (!msgId) return
+    setReviewNotice(null)
+    setReviewPending({ msgId })
     try {
-      const res = await AgentService.ReviewChanges(currentId, paths)
-      if (res) {
-        setReviewPending(false)
-        setReviewNotice(res)
-      }
+      const res = await AgentService.ReviewChanges(sid, paths)
+      setReviewPending(null)
+      if (res) setReviewNotice({ msgId, text: res })
     } catch (e) {
-      setReviewPending(false)
-      setReviewNotice(String(e))
+      setReviewPending(null)
+      setReviewNotice({ msgId, text: String(e) })
     }
   }, [currentId])
 
@@ -1643,8 +1654,8 @@ function App() {
                       onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
                       onOpenDiffPanel={openDiffPanel}
                       onReviewChanges={startReview}
-                      reviewPending={reviewPending}
-                      reviewNotice={reviewNotice}
+                      reviewPending={reviewPending?.msgId === m.id}
+                      reviewNotice={reviewNotice?.msgId === m.id ? reviewNotice.text : undefined}
                       sessionBusy={sessionBusy}
                     />
                   ),

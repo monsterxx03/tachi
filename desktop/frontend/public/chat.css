@@ -1121,4 +1121,12 @@ button.work-dir {
 /* The review entry: disabled while a turn runs (a review IS a turn, so it waits). */
 .diff-chip:disabled { opacity: 0.55; cursor: default; }
 .diff-chip:disabled:hover { background: transparent; color: var(--text-dim); }
-.diff-notice { font-size: 11px; color: var(--text-faint); }
+/* A refused review: a marker plus the reason on hover. It must never squeeze the chips it
+   sits next to, hence nowrap + no shrink — the detail lives in the title and in the panel. */
+.diff-notice {
+  flex-shrink: 0;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--amber);
+  cursor: help;
+}

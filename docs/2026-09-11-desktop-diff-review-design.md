@@ -1,6 +1,6 @@
 # Desktop 变更审阅（Diff Review）设计
 
-> 版本: 0.12 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
+> 版本: 0.13 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
 > 关联: [desktop/agent.go](../desktop/agent.go)、[agent/acp/stream.go](../agent/acp/stream.go)、
 >       [agent/tools/edit.go](../agent/tools/edit.go)、[agent/tools/arg_summary.go](../agent/tools/arg_summary.go)、
 >       [agent/tool_executor.go](../agent/tool_executor.go)、[App.tsx](../desktop/frontend/src/App.tsx)、
@@ -25,6 +25,16 @@
 12. [附录 A：diff 生产者与消费者清单](#附录-adiff-生产者与消费者清单)
 
 ---
+
+## 本版修订（0.12 → 0.13：拒绝提示的归属与形态）
+
+评审被拒时那句解释原来直接铺在按钮旁，而且**发给每一条 assistant 气泡**——于是它出现在每一轮 footer 上，
+换个会话也照样跟着（session 的消息是重渲染的）。两处都收口：
+
+- **归属**：提示与「评审中…」按**被点击的那一轮**（消息 id）记，只有那条消息的 footer 显示。消息 id 天然跨会话唯一，
+  所以"别的会话也在旁边显示"这类问题不可能再出现。
+- **形态**：footer 里只留 8 字标记 `⚠ 没有开始评审`（琥珀色、nowrap、不收缩），完整原因进 tooltip；
+  「完整 diff」面板里本来就有同义的长句。实测点击前后 chip 宽度不变（151/54/78 → 151/54/78）。
 
 ## 本版修订（0.11 → 0.12：报告与记录显式关联）
 
