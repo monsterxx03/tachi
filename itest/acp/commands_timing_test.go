@@ -17,6 +17,9 @@ package acp_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
+	"time"
 
 	acpapi "github.com/coder/acp-go-sdk"
 	"github.com/monsterxx03/tachi/itest/acp"
@@ -56,6 +59,90 @@ func newSessionSequence(client *acp.Client, cwd string, n int) ([]string, []acp.
 	return sids, client.WireLines()
 }
 
+// firstAdvertisedCommands parses the first session/update of sid that carries an
+// availableCommands payload. found reports whether the session was seen advertising at all —
+// which is a different fact from "it advertised an empty list", and the specs need both.
+func firstAdvertisedCommands(lines []acp.WireLine, sid string) (names []string, found bool) {
+	for _, l := range lines {
+		var m wireMsg
+		if json.Unmarshal([]byte(l.Data), &m) != nil {
+			continue
+		}
+		if m.Method != "session/update" || m.Params.SessionId != sid || len(m.Params.Update.AvailableCommands) == 0 {
+			continue
+		}
+		var cmds []struct {
+			Name string `json:"name"`
+		}
+		if json.Unmarshal(m.Params.Update.AvailableCommands, &cmds) == nil {
+			for _, c := range cmds {
+				names = append(names, c.Name)
+			}
+		}
+		return names, true
+	}
+	return nil, false
+}
+
+// waitForAdvertisedCommands polls the recorded wire until EVERY session in sids has been
+// seen advertising its commands, then returns the snapshot the callers assert on.
+//
+// Taking one snapshot right after NewSession/ResumeSession races the pipe: the SDK flushes
+// this notification strictly AFTER the response bytes (that ordering is the property the
+// whole spec file is about), so when the response reaches us the notification may still be
+// in flight. Measured on this machine: the name-list spec below failed 1 run in 17 with an
+// empty name list — i.e. the snapshot was simply taken too early. Waiting for the FACT
+// (the line is here) instead of a duration is what makes the spec deterministic.
+func waitForAdvertisedCommands(client *acp.Client, sids []string, timeout time.Duration) []acp.WireLine {
+	deadline := time.Now().Add(timeout)
+	for {
+		lines := client.WireLines()
+		var missing []string
+		for _, sid := range sids {
+			if _, found := firstAdvertisedCommands(lines, sid); !found {
+				missing = append(missing, sid)
+			}
+		}
+		if len(missing) == 0 {
+			return lines
+		}
+		if time.Now().After(deadline) {
+			ginkgo.AddReportEntry("wire-without-commands", fmt.Sprintf(
+				"%d/%d session(s) never advertised: %v\nwire lines:\n%s",
+				len(missing), len(sids), missing, dumpWire(lines)))
+			return lines
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+// dumpWire renders the recorded lines for a failure report. The specs used to fail with a
+// bare "nil does not contain elements", which cannot tell "the notification never arrived"
+// from "it arrived empty" — the two have completely different causes.
+func dumpWire(lines []acp.WireLine) string {
+	var b strings.Builder
+	for _, l := range lines {
+		var m wireMsg
+		if json.Unmarshal([]byte(l.Data), &m) != nil {
+			continue
+		}
+		if m.Method != "session/update" {
+			fmt.Fprintf(&b, "[%d] %s\n", l.Order, truncateWire(l.Data, 140))
+			continue
+		}
+		fmt.Fprintf(&b, "[%d] session/update sid=%q commands=%s\n", l.Order, m.Params.SessionId,
+			truncateWire(string(m.Params.Update.AvailableCommands), 100))
+	}
+	return b.String()
+}
+
+func truncateWire(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "…"
+}
+
 var _ = ginkgo.Describe("ACP available-commands delivery", func() {
 	ginkgo.It("session/new response 先于 available-commands 通知到达 (slash command 可补全)", func() {
 		mock := mockllm.NewServer()
@@ -68,6 +155,10 @@ var _ = ginkgo.Describe("ACP available-commands delivery", func() {
 
 		const n = 40
 		sids, lines := newSessionSequence(client, home, n)
+		// One snapshot right after the last response would race the pipe for that session's
+		// notification (see waitForAdvertisedCommands) and turn into a "missing" count that
+		// has nothing to do with the ordering being asserted here.
+		lines = waitForAdvertisedCommands(client, sids, 3*time.Second)
 
 		byOrder := map[int]wireMsg{}
 		for _, l := range lines {
@@ -130,8 +221,9 @@ var _ = ginkgo.Describe("ACP available-commands delivery", func() {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 
 		// The resumed session must re-advertise its command list, strictly
-		// after the resume response (same routing rule as session/new).
-		lines := client.WireLines()
+		// after the resume response (same routing rule as session/new). Wait for the
+		// notification to actually arrive — a snapshot taken now races the pipe.
+		lines := waitForAdvertisedCommands(client, []string{string(sid)}, 3*time.Second)
 		var resumeOrder, cmdOrder = -1, -1
 		for _, l := range lines {
 			var m wireMsg
@@ -159,27 +251,15 @@ var _ = ginkgo.Describe("ACP available-commands delivery", func() {
 		gomega.Expect(err).NotTo(gomega.HaveOccurred())
 		ginkgo.DeferCleanup(client.Close)
 
-		_, lines := newSessionSequence(client, home, 1)
+		sids, lines := newSessionSequence(client, home, 1)
+		// Wait for the notification itself: the response arriving first is the property under
+		// test, but it also means the notification can still be in flight when we look.
+		lines = waitForAdvertisedCommands(client, sids, 3*time.Second)
 
-		// Grab the first available-commands notification and check its names.
-		var names []string
-		for _, l := range lines {
-			var m wireMsg
-			if json.Unmarshal([]byte(l.Data), &m) != nil {
-				continue
-			}
-			if m.Method == "session/update" && len(m.Params.Update.AvailableCommands) > 0 {
-				var cmds []struct {
-					Name string `json:"name"`
-				}
-				if json.Unmarshal(m.Params.Update.AvailableCommands, &cmds) == nil {
-					for _, c := range cmds {
-						names = append(names, c.Name)
-					}
-				}
-				break
-			}
-		}
+		// The first available-commands notification of the session, and its names.
+		names, advertised := firstAdvertisedCommands(lines, sids[0])
+		gomega.Expect(advertised).To(gomega.BeTrue(),
+			"the session must advertise available commands at all")
 		gomega.Expect(names).To(gomega.ContainElements(
 			"commit", "review", "init", "compact", "usage", "mcp", "skill", "transcript", "research",
 		), "all ACP static commands must be advertised")
