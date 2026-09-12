@@ -17,6 +17,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/session"
@@ -1322,7 +1323,14 @@ func (d *desktopApp) startTurn(text string) {
 		// pending queue (only a natural completion auto-flushes — after a stop
 		// or an error the queue stays for the user to review/clear).
 		endReason := "error"
+		exitReason, iters := "", 0
 		defer func() {
+			// One line per turn: how it ended. Without it a turn that produced nothing (or
+			// ended as interrupted for no visible reason) leaves no trace at all — the
+			// frontend only learns the exit reason through the payload it renders, and a
+			// dropped reply then looks like a silent backend.
+			logger.New("desktop").Info(context.Background(), "turn finished",
+				"session", id, "reason", endReason, "exit", exitReason, "iterations", iters)
 			d.endTurn(id, endReason)
 			close(turnDone)
 		}()
@@ -1348,6 +1356,10 @@ func (d *desktopApp) startTurn(text string) {
 				if ev.Result != nil && (ev.Result.ExitReason == agent.ExitReasonInterrupted || ev.Result.ExitReason == agent.ExitReasonCancelled) {
 					endReason = "interrupted"
 				}
+			}
+			if ev.Result != nil {
+				exitReason = ev.Result.ExitReason
+				iters = ev.Result.IterationsUsed
 			}
 			d.handleEvent(id, ev)
 		}

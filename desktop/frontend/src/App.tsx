@@ -699,9 +699,17 @@ function App() {
       }
       let out = prev
       for (const [sid, items] of groups) {
-        const list = prev[sid] || []
-        const idx = lastRunningAssistantIndex(list)
-        if (idx < 0) continue
+        let list = prev[sid] || []
+        let idx = lastRunningAssistantIndex(list)
+        if (idx < 0) {
+          // Same reason as applyToSession's openIfMissing: deltas can arrive before the
+          // frontend has placed the placeholder for the turn producing them.
+          const ts = Date.now()
+          list = [...list, { id: `a-${ts}-open`, role: 'assistant', running: true, parts: [], ts: new Date(ts).toISOString() }]
+          prev = { ...prev, [sid]: list }
+          out = prev
+          idx = list.length - 1
+        }
         let cur = list[idx]
         for (const it of items) cur = appendPartDelta(cur, it.type, it.delta)
         if (cur === list[idx]) continue
@@ -843,18 +851,56 @@ function App() {
     scrollToBottom(true)
   }, [currentId, setSessionMsgs, scrollToBottom])
 
+  // sealRunningSegment finalizes the turn's currently-streaming assistant segment.
+  //
+  // An interrupted turn's terminal event (error / ExitReason=cancelled) is applied to the
+  // newest RUNNING assistant — so if the next message's placeholder is already in the
+  // transcript when it arrives, the flag lands on the wrong message. That is exactly what
+  // "立即发送" used to produce: the brand-new placeholder read 已停止, and the reply that
+  // followed had no running message to attach to and was dropped. Sealing first leaves the
+  // incoming event with nothing to hit; a segment that rendered nothing is removed rather
+  // than left as an empty bubble.
+  const sealRunningSegment = useCallback((sid: string) => {
+    setMsgCache((prev) => {
+      const list = prev[sid]
+      if (!list) return prev
+      const back = [...list].reverse().findIndex((m) => m.role === 'assistant' && m.running)
+      if (back < 0) return prev
+      const idx = list.length - 1 - back
+      const seg = list[idx]
+      const out = [...list]
+      if (!(seg.parts && seg.parts.length)) out.splice(idx, 1)
+      else out[idx] = { ...seg, running: false, stopped: true }
+      return { ...prev, [sid]: out }
+    })
+  }, [])
+
   // applyToSession patches the newest message of the given role in a session.
   // Every streaming handler funnels through it (text/tool deltas and the
   // auto-compaction notices), so a live transcript is only ever mutated in one
   // place — and it keys purely off the session ID the backend sent, never off
   // currentId, so a background session still updates correctly.
-  const applyToSession = useCallback((sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message) => {
+  // applyToSession patches the newest message of the given role in a session.
+  //
+  // openIfMissing is for STREAM events (a delta, a tool call): if the session has no running
+  // assistant, they open one. A turn can start before the frontend has placed its
+  // placeholder — exactly what "[立即发送]" does, because the backend begins the next turn
+  // while the stop call is still on its way back — and without this every delta of that turn
+  // was dropped on the floor ("the reply never appeared"). Terminal events (turn_complete,
+  // error) deliberately do NOT open one: they exist to close a turn, so creating a message
+  // for them would turn an interrupted turn into a phantom empty bubble.
+  const applyToSession = useCallback((sid: string, role: 'user' | 'assistant', fn: (m: Message) => Message, openIfMissing = false) => {
     setMsgCache((prev) => {
       const list = prev[sid] || []
       const target = role === 'user'
         ? [...list].reverse().find((m) => m.role === 'user')
         : [...list].reverse().find((m) => m.role === 'assistant' && m.running)
-      if (!target) return prev
+      if (!target) {
+        if (!openIfMissing || role !== 'assistant') return prev
+        const ts = Date.now()
+        const fresh: Message = { id: `a-${ts}-open`, role: 'assistant', running: true, parts: [], ts: new Date(ts).toISOString() }
+        return { ...prev, [sid]: [...list, fn(fresh)] }
+      }
       return { ...prev, [sid]: list.map((m) => (m.id === target.id ? fn(m) : m)) }
     })
   }, [])
@@ -928,29 +974,54 @@ function App() {
   // and send the queued text as a fresh user turn right away. The user bubble
   // + assistant placeholder are shown immediately; if stopping the turn times
   // out on the backend the text is put back into the queue for another try.
+  // sendPendingNow is the queue's "[立即发送]": interrupt the running turn and send the
+  // queued text as the next one.
+  //
+  // Two things have to be true at once, and the ORDER is what makes them so:
+  //   1. the interrupted turn's segment is sealed BEFORE the new message is placed — its
+  //      terminal event (error / interrupted) targets "the newest running assistant", so a
+  //      message placed first would be the one marked 已停止 (and its own reply dropped);
+  //   2. the assistant placeholder is NOT placed here at all — the stream events open it
+  //      (see applyToSession's openIfMissing), because the backend starts the next turn while
+  //      the stop call is still on its way back, so its first delta can beat this function.
+  // Only the user's bubble goes in now: it has to stay above the reply.
   const sendPendingNow = useCallback(async () => {
     const sid = currentId
     const text = takePending(sid)
     if (!text.trim()) return
+    setSendingNow(true)
+
+    if (!isCurrentRunning) {
+      // Nothing to interrupt: the plain send path places both bubbles and owns the IPC.
+      sendText(text)
+      setSendingNow(false)
+      return
+    }
+
+    sealRunningSegment(sid)
     const ts = Date.now()
-    const tsStr = new Date().toISOString()
     setSessionMsgs(sid, (prev) => [...prev,
-      { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
+      { id: `u-${ts}`, role: 'user', text, ts: new Date(ts).toISOString() },
     ])
     setRunningSet((prev) => new Set(prev).add(sid))
-    setSendingNow(true)
     scrollToBottom(true)
+
+    const requeue = () => {
+      // Nothing was sent, so the segment we just opened must be closed again — and the text
+      // belongs back in the queue rather than in the transcript as if it had gone out.
+      sealRunningSegment(sid)
+      enqueuePending(sid, text)
+      refreshRunning()
+    }
     try {
-      const ret = isCurrentRunning
-        ? await AgentService.StopAndSend(text)
-        : await AgentService.SendMessage(text)
-      if (ret && ret !== 'ok') {
-        enqueuePending(sid, text)
-      }
-    } catch { /* ignore */ }
+      const ret = await AgentService.StopAndSend(text)
+      if (ret && ret !== 'ok') requeue()
+    } catch {
+      requeue()
+    }
     setSendingNow(false)
-  }, [currentId, isCurrentRunning, takePending, setSessionMsgs, enqueuePending, scrollToBottom])
+  }, [currentId, isCurrentRunning, takePending, setSessionMsgs, enqueuePending, scrollToBottom,
+      sealRunningSegment, refreshRunning, sendText])
 
   // injectSteerVisual splits the streaming assistant segment so the queued
   // user text lands AFTER the tool work already shown and BEFORE the reply
@@ -1432,8 +1503,8 @@ function App() {
       switch (ev.Type) {
         case 'thinking_delta': enqueueDelta(sessionId, 'thinking', ev.ThinkingDelta || ''); break
         case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
-        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand })); break
-        case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined)); break
+        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand }), true); break
+        case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined), true); break
         case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'steer_check':
           // The agent finished a round of tool calls and is parked, waiting
