@@ -153,20 +153,20 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   width: 100%;
   padding: 10px 12px;
   margin-bottom: 12px;
-  background: linear-gradient(165deg, var(--accent-tint-a), var(--accent-soft));
+  /* A flat tinted button: no gradient and no inset sheen — the tint and the
+     hairline are the whole surface (see the flat "go" recipe in chat.css). */
+  background: var(--accent-soft);
   border: 1px solid var(--accent-line-soft);
   color: var(--accent-2);
   border-radius: var(--radius-md);
   font-size: 13.5px;
   font-weight: 560;
   cursor: pointer;
-  box-shadow: inset 0 1px 0 var(--sheen);
-  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), box-shadow 0.16s var(--ease);
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
 }
 .new-chat:hover {
-  background: linear-gradient(165deg, var(--accent-line-soft), var(--accent-line-soft));
+  background: var(--accent-tint-a);
   border-color: var(--accent-line);
-  box-shadow: inset 0 1px 0 var(--sheen), var(--shadow-accent);
 }
 .new-chat-plus { font-size: 16px; }
 

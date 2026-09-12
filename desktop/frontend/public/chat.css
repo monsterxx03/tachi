@@ -359,19 +359,24 @@
   text-overflow: ellipsis;
 }
 .pending-actions { display: inline-flex; align-items: center; gap: 6px; flex-shrink: 0; }
+/* Every "go" button in the app is the same FLAT recipe: one solid fill, no
+   gradient, no inset sheen, no coloured glow. The gradient was the last raised
+   surface in an otherwise hairline-based UI (it read as a pill stuck onto the
+   page), and its light end carried white at 3.1:1 — half the label sat on a
+   colour it should not have been on. The fill is calmer and flatter too: see
+   --accent-strong. */
 .pending-send {
   border: none;
-  background: linear-gradient(165deg, var(--accent-3), var(--accent-strong));
+  background: var(--accent-strong);
   color: var(--on-accent);
   font-size: 12px;
   font-weight: 560;
   padding: 4px 10px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  box-shadow: inset 0 1px 0 var(--sheen), var(--shadow-accent);
   transition: filter 0.15s var(--ease);
 }
-.pending-send:hover { filter: brightness(1.07); }
+.pending-send:hover { filter: brightness(1.06); }
 .pending-send:disabled { opacity: 0.55; cursor: default; filter: none; }
 .pending-clear {
   border: 1px solid var(--border-2);
@@ -519,7 +524,11 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   border-right-color: var(--red-line);
   animation: stop-spin 0.8s linear infinite;
 }
-.stop-btn:hover { background: var(--red); color: var(--on-accent); }
+/* The hover fill is --red-strong, not --red: --red is tuned as INK (it has to
+   clear 4.5:1 as small text), and a fill that carries a white glyph needs the
+   opposite end — white on --red was 2.5:1 in the dark theme, on --red-strong
+   6.2:1. Same rule the two tokens are named for. */
+.stop-btn:hover { background: var(--red-strong); color: var(--on-accent); }
 .stop-btn:hover::before { border-top-color: var(--on-accent); border-right-color: var(--sheen); }
 .stop-btn:active { transform: scale(0.95); }
 @keyframes stop-spin { to { transform: rotate(360deg); } }
@@ -533,7 +542,8 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 6px;
-  background: linear-gradient(165deg, var(--accent-3), var(--accent-strong));
+  /* The flat "go" recipe (see .pending-send): a solid fill, nothing else. */
+  background: var(--accent-strong);
   color: var(--on-accent);
   border: none;
   padding: 7px 15px;
@@ -541,18 +551,14 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
   font-size: 13px;
   font-weight: 580;
   cursor: pointer;
-  box-shadow:
-    inset 0 1px 0 var(--sheen),
-    var(--shadow-accent);
-  transition: filter 0.15s var(--ease), transform 0.08s var(--ease), box-shadow 0.15s var(--ease);
+  transition: filter 0.15s var(--ease), transform 0.08s var(--ease);
 }
-.send-btn:hover { filter: brightness(1.06); box-shadow: inset 0 1px 0 var(--sheen), var(--shadow-accent-hover); }
+.send-btn:hover { filter: brightness(1.05); }
 .send-btn:active { transform: translateY(1px) scale(0.985); }
 .send-btn:disabled {
   opacity: 0.42;
   cursor: not-allowed;
   filter: saturate(0.6);
-  box-shadow: none;
 }
 
 /* One row, always — the bits that must never be cut (rings, throughput, the
@@ -1254,7 +1260,8 @@ button.work-dir {
 .diff-sendbar-go {
   flex-shrink: 0;
   border: none;
-  background: linear-gradient(165deg, var(--accent-3), var(--accent-strong));
+  /* The flat "go" recipe (see .pending-send). */
+  background: var(--accent-strong);
   color: var(--on-accent);
   font-family: inherit;
   font-size: 12px;
@@ -1262,10 +1269,9 @@ button.work-dir {
   padding: 5px 12px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  box-shadow: inset 0 1px 0 var(--sheen), var(--shadow-accent);
   transition: filter 0.15s var(--ease);
 }
-.diff-sendbar-go:hover { filter: brightness(1.07); }
+.diff-sendbar-go:hover { filter: brightness(1.06); }
 .diff-sendbar-go:disabled { opacity: 0.5; cursor: default; filter: none; }
 
 /* The review entry: disabled while a turn runs (a review IS a turn, so it waits). */

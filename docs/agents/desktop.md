@@ -205,6 +205,14 @@ const type = (el, t) => {
   against the old neutral ~0.010), with Ayu's *warm* grey editor fg as the CONTENT ink (`--text`
   #cecdc6) and its cool `ui.fg` family as the CHROME ink (`--text-dim`/`--text-faint`, 10.5–11.5px
   metadata). Body text runs ~9:1, against ~12.8:1 before the 2026-09-12 pass.
+- **Every "go" button is ONE flat recipe — do not put the gradient back.** `.send-btn`, `.pending-send`,
+  `.diff-sendbar-go` and `.plan-start` share a single solid `--accent-strong` fill: no gradient, no inset
+  sheen, no coloured glow (`.new-chat` is the tinted variant of the same idea). That 165deg gradient was the
+  last raised surface in an otherwise hairline-based UI, and its light end carried the button's own white
+  label at **3.1:1** — flattening fixed the look and a legibility bug in one move. Two consequences worth
+  keeping: button contrast is now tuned in ONE place (`--accent-strong`, which is why the dark theme's sits
+  at chroma ~0.11), and **a fill that carries white text always takes the `-strong` variant** — the stop
+  button's hover used `--red` (tuned as INK) and put a white glyph on 2.5:1.
 - **What bounds the palette is `--text-faint`'s 4.5:1 floor, not `--text`.** It is the token that lands
   on the *lightest* plane (placeholders, MCP labels, `.file-note` — panel-solid, and panel-2 under the
   picker/CSV headers), so it pins both the ink (~#9ca3b1) and the top of the ladder (~#303541). Any
