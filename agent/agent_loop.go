@@ -340,7 +340,8 @@ func (a *AIAgent) RunOneOffStream(
 		}
 
 		// Fresh history (nil) — one-off runs never inherit messages.
-		messages, reminderBlock := a.prepareTurnMessages(ctx, nil, userMessage, systemPrompt)
+		messages, reminderPieces := a.prepareTurnMessages(ctx, nil, userMessage, systemPrompt)
+		reminderBlock := systemreminder.RenderPieces(reminderPieces)
 
 		// Create RunState with SkipSessionWrites=true. One-off runs never
 		// publish their RunState to a.currentRun — the main conversation's
@@ -373,6 +374,9 @@ func (a *AIAgent) RunOneOffStream(
 
 		traceID := logger.NewTraceID()
 		rs.begin(traceID)
+		// What this turn's first injection already told the model — the loop must not
+		// repeat it after every tool round.
+		rs.seedReminders(reminderPieces)
 		ctx = logger.WithTraceID(ctx, traceID)
 		ctx = logger.WithLogger(ctx, a.Config.Logger)
 
@@ -415,7 +419,8 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			opts.MaxTokens = DefaultMaxTokens
 		}
 
-		messages, reminderBlock := a.prepareTurnMessages(ctx, history, userMessage, systemPrompt)
+		messages, reminderPieces := a.prepareTurnMessages(ctx, history, userMessage, systemPrompt)
+		reminderBlock := systemreminder.RenderPieces(reminderPieces)
 
 		// Attach pending images from params as multi-modal content parts
 		// on the trailing user message, so providers can format them correctly (e.g.
@@ -458,6 +463,9 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 
 		traceID := logger.NewTraceID()
 		rs.begin(traceID)
+		// What this turn's first injection already told the model — the loop must not
+		// repeat it after every tool round.
+		rs.seedReminders(reminderPieces)
 		ctx = logger.WithTraceID(ctx, traceID)
 		ctx = logger.WithLogger(ctx, a.Config.Logger)
 
@@ -532,7 +540,7 @@ func (a *AIAgent) prepareTurnMessages(
 	history []llm.Message,
 	userMessage string,
 	systemPrompt string,
-) (msgs []llm.Message, reminderBlock string) {
+) (msgs []llm.Message, reminderPieces []systemreminder.Piece) {
 	messages := make([]llm.Message, len(history))
 	copy(messages, history)
 
@@ -561,15 +569,15 @@ func (a *AIAgent) prepareTurnMessages(
 
 	rctx := a.buildReminderContext(reminderIsFirst, false)
 	rctx.CurrentPrompt = userMessage
-	reminderBlock = a.collectReminders(ctx, rctx)
+	reminderPieces = a.collectReminderPieces(ctx, rctx)
 	wrappedUser := userMessage
-	if reminderBlock != "" {
-		wrappedUser = reminderBlock + userMessage
+	if block := systemreminder.RenderPieces(reminderPieces); block != "" {
+		wrappedUser = block + userMessage
 	}
 	a.conv.setMessageDate(rctx.Now.Format(strutil.TimeFormatDate))
 
 	messages = append(messages, llm.Message{Role: "user", Content: wrappedUser})
-	return messages, reminderBlock
+	return messages, reminderPieces
 }
 
 // recordUserTurn persists the reminder block (if any) and the original user
@@ -1071,7 +1079,8 @@ func (a *AIAgent) injectLoopReminders(ctx context.Context, acc *streamAccumulato
 	for _, tc := range acc.toolCalls {
 		rctx.ToolNames = append(rctx.ToolNames, tc.Function.Name)
 	}
-	if block := a.collectReminders(ctx, rctx); block != "" {
+	if fresh := rs.freshReminders(a.collectReminderPieces(ctx, rctx)); len(fresh) > 0 {
+		block := systemreminder.RenderPieces(fresh)
 		rs.append(llm.Message{Role: "user", Content: block})
 		a.Config.Logger.Info(ctx, "Agent: loop reminder injected", "block", strutil.Truncate(block, 200))
 		// The reminder is appended to rs.Messages as a user message, so it
@@ -1388,6 +1397,15 @@ func (a *AIAgent) collectReminders(ctx context.Context, rctx systemreminder.Cont
 		return ""
 	}
 	return a.Config.ReminderCollector.Collect(ctx, rctx)
+}
+
+// collectReminderPieces is the same collection, unrendered and per reminder — what the
+// loop needs to tell "the model already has this" from "this changed".
+func (a *AIAgent) collectReminderPieces(ctx context.Context, rctx systemreminder.Context) []systemreminder.Piece {
+	if a.Config.ReminderCollector == nil {
+		return nil
+	}
+	return a.Config.ReminderCollector.CollectPieces(ctx, rctx)
 }
 
 // sessionID returns the current session's ID, or empty string if no session.

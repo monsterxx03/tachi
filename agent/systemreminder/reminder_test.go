@@ -330,3 +330,52 @@ func TestCollector_EmptyGenerate_NoBlock(t *testing.T) {
 		t.Errorf("expected empty when no reminders fire, got: %s", result)
 	}
 }
+
+// TestCollectPieces_RendersLikeCollect pins the two entry points together: the loop
+// uses the pieces (to tell what changed since its last injection), everyone else uses
+// the rendered string. If they ever disagree, the dedup would be comparing text the
+// model never sees.
+func TestCollectPieces_RendersLikeCollect(t *testing.T) {
+	c := NewCollector(DateReminder{}, GitReminder{})
+	rctx := Context{
+		IsFirstMessage: true,
+		Now:            time.Date(2025, 7, 15, 14, 30, 45, 0, time.UTC),
+	}
+
+	pieces := c.CollectPieces(t.Context(), rctx)
+	if len(pieces) == 0 {
+		t.Fatal("expected at least one piece")
+	}
+	if got, want := RenderPieces(pieces), c.Collect(t.Context(), rctx); got != want {
+		t.Errorf("RenderPieces(CollectPieces) != Collect\n got: %q\nwant: %q", got, want)
+	}
+
+	// One piece per reminder that fired, named by its type (the dedup key), each with
+	// the lines that reminder generated.
+	names := map[string]bool{}
+	for _, p := range pieces {
+		if p.Name == "" {
+			t.Errorf("piece without a name: %+v", p)
+		}
+		if names[p.Name] {
+			t.Errorf("duplicate piece name %q", p.Name)
+		}
+		names[p.Name] = true
+		if len(p.Lines) == 0 {
+			t.Errorf("piece %q has no lines", p.Name)
+		}
+	}
+
+	// No reminder fires → no pieces, and an empty render. (Both of these skip a
+	// tool-result boundary that is not a first message.)
+	quiet := Context{IsToolResult: true, IsFirstMessage: false, SessionID: "s"}
+	if pieces := c.CollectPieces(t.Context(), quiet); len(pieces) != 0 {
+		t.Errorf("expected no pieces, got %+v", pieces)
+	}
+	if got := c.Collect(t.Context(), quiet); got != "" {
+		t.Errorf("Collect on a quiet context = %q, want empty", got)
+	}
+	if got := RenderPieces(nil); got != "" {
+		t.Errorf("RenderPieces(nil) = %q, want empty", got)
+	}
+}

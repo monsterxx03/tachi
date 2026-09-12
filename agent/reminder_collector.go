@@ -17,6 +17,11 @@ type ReminderCollector interface {
 	// reminders are active.
 	Collect(ctx context.Context, rctx systemreminder.Context) string
 
+	// CollectPieces is the same collection, one Piece per reminder that fired.
+	// The agent loop uses it to append only what changed since its last
+	// injection instead of repeating the whole block every iteration.
+	CollectPieces(ctx context.Context, rctx systemreminder.Context) []systemreminder.Piece
+
 	// AddReminder appends a reminder to the collector.
 	AddReminder(r systemreminder.Reminder)
 }
@@ -30,6 +35,10 @@ type disabledReminderCollector struct{}
 
 func (disabledReminderCollector) Collect(context.Context, systemreminder.Context) string {
 	return ""
+}
+
+func (disabledReminderCollector) CollectPieces(context.Context, systemreminder.Context) []systemreminder.Piece {
+	return nil
 }
 
 func (disabledReminderCollector) AddReminder(systemreminder.Reminder) {}

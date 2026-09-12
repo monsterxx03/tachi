@@ -9,6 +9,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/permission"
 	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
@@ -302,6 +303,44 @@ type RunState struct {
 	Budget            *IterationBudget
 	SkipSessionWrites bool
 	OneoffRec         *oneoffRecorder
+
+	// injectedReminders records what this TURN has already put in front of the model,
+	// keyed by reminder piece name. The loop re-runs the collector after every tool
+	// round, and an unchanged piece would otherwise be appended again — the same text
+	// repeated once per iteration, paid for at the tail of a growing prompt (the one
+	// place a prompt cache never helps). Only the run goroutine touches this.
+	injectedReminders map[string]string
+}
+
+// seedReminders records the pieces a turn's first injection carried. Called once per
+// turn, right where the reminder block is attached to the user message.
+func (rs *RunState) seedReminders(pieces []systemreminder.Piece) {
+	if rs.injectedReminders == nil {
+		rs.injectedReminders = make(map[string]string, len(pieces))
+	}
+	for _, p := range pieces {
+		rs.injectedReminders[p.Name] = systemreminder.RenderPieces([]systemreminder.Piece{p})
+	}
+}
+
+// freshReminders drops the pieces this turn has already injected — the model is still
+// carrying them in context, so repeating them costs tokens and says nothing new. What
+// remains (a reminder that changed, e.g. fresh LSP diagnostics) is recorded as injected
+// and returned for the caller to append.
+func (rs *RunState) freshReminders(pieces []systemreminder.Piece) []systemreminder.Piece {
+	var fresh []systemreminder.Piece
+	for _, p := range pieces {
+		rendered := systemreminder.RenderPieces([]systemreminder.Piece{p})
+		if rs.injectedReminders[p.Name] == rendered {
+			continue
+		}
+		if rs.injectedReminders == nil {
+			rs.injectedReminders = make(map[string]string, 1)
+		}
+		rs.injectedReminders[p.Name] = rendered
+		fresh = append(fresh, p)
+	}
+	return fresh
 }
 
 // snapshotMessages returns a shallow copy of the stored message slice.

@@ -81,6 +81,18 @@ type Reminder interface {
 	Generate(ctx context.Context, rctx Context) []string
 }
 
+// Piece is one reminder's contribution to a block, kept separate from the rest so a
+// caller can tell what actually changed since the last injection. The agent loop
+// re-injects its reminder block after every tool round; without this, an unchanged
+// reminder is repeated verbatim into a growing context (tokens spent, nothing learned).
+type Piece struct {
+	// Name is the reminder's type name — stable within a build, which is all the
+	// dedup needs.
+	Name string
+	// Lines are what the reminder generated, in registration order.
+	Lines []string
+}
+
 // Collector aggregates a set of Reminders and formats active ones into a
 // single <system-reminder>...</system-reminder> block. All reminders share
 // the same wrapper tag so downstream consumers (message stripping, session
@@ -100,16 +112,14 @@ func (c *Collector) AddReminder(r Reminder) {
 	c.reminders = append(c.reminders, r)
 }
 
-// Collect queries every registered reminder, concatenates their output in
-// registration order, and wraps it in a single <system-reminder> block.
-// Returns an empty string when no reminders are active or c is nil.
-func (c *Collector) Collect(ctx context.Context, rctx Context) string {
+// CollectPieces queries every registered reminder and returns one Piece per reminder
+// that fired, in registration order. Empty when none did (or c is nil).
+func (c *Collector) CollectPieces(ctx context.Context, rctx Context) []Piece {
 	if c == nil {
-		return ""
+		return nil
 	}
 
-	var sb strings.Builder
-	var lines []string
+	var pieces []Piece
 	var firedName string
 
 	for _, r := range c.reminders {
@@ -117,25 +127,47 @@ func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 		if len(generated) == 0 {
 			continue
 		}
-		lines = append(lines, generated...)
+		name := fmt.Sprintf("%T", r)
+		pieces = append(pieces, Piece{Name: name, Lines: generated})
 		if firedName == "" {
-			firedName = fmt.Sprintf("%T", r)
+			firedName = name
 		} else {
-			firedName += ", " + fmt.Sprintf("%T", r)
+			firedName += ", " + name
 		}
 	}
-	if len(lines) == 0 {
-		return ""
+	if len(pieces) == 0 {
+		return nil
 	}
 
 	rctx.Info(ctx, "systemreminder: firing reminder(s)", "names", firedName)
+	return pieces
+}
+
+// RenderPieces wraps pieces into the single <system-reminder> block every consumer
+// expects. Empty input renders "", so "nothing to say" and "say nothing" stay the same
+// thing.
+func RenderPieces(pieces []Piece) string {
+	if len(pieces) == 0 {
+		return ""
+	}
+
+	var sb strings.Builder
 	sb.WriteString("<system-reminder>\n")
-	for _, line := range lines {
-		sb.WriteString(line)
-		sb.WriteByte('\n')
+	for _, p := range pieces {
+		for _, line := range p.Lines {
+			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
 	}
 	sb.WriteString("</system-reminder>\n")
 	return sb.String()
+}
+
+// Collect returns the block as one string: CollectPieces plus RenderPieces. Callers
+// with nothing to compare against (a turn's first injection, a one-off run) want this
+// shape; the loop uses the pieces.
+func (c *Collector) Collect(ctx context.Context, rctx Context) string {
+	return RenderPieces(c.CollectPieces(ctx, rctx))
 }
 
 // WrapUserMessage prepends the <system-reminder> block (if any) to the
