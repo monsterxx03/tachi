@@ -1,4 +1,4 @@
-.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp
+.PHONY: build build-debug build-linux test test-cover test-cover-html lint lint-fix web-build web-check itest itest-mockllm itest-run itest-tui itest-acp desktop-smoke
 
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 
@@ -97,4 +97,12 @@ itest-tui: itest-mockllm
 
 itest-acp: itest-mockllm
 	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/acp
+
+# desktop-smoke drives the REAL desktop app (see itest/desktop/README.md): a throwaway
+# bundle, scripted model, and a driver that asserts what the UI shows. Not part of
+# `itest`: it needs the GUI (a `make -C desktop build` bundle and a window server).
+# Pass a subset with `make desktop-smoke ARGS="-run send-now -v"`.
+desktop-smoke:
+	cd desktop && $(MAKE) frontend && go build -o bin/Tachi .
+	go run ./itest/desktop $(ARGS)
 
