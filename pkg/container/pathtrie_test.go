@@ -473,3 +473,37 @@ func BenchmarkSearchWeirdChars(b *testing.B) {
 }
 
 var _ = strings.Compare
+
+// TestSearchNonASCIIPaths covers paths whose bytes are not ASCII: the trie is keyed by
+// BYTES, so iterating a path by rune would keep only the first byte of every multi-byte
+// character. Serving a mangled path is not a cosmetic bug — the @-file picker inserts
+// whatever it is handed, and the mangled path does not exist on disk.
+func TestSearchNonASCIIPaths(t *testing.T) {
+	const cjk = "docs/实时保存的计划.md"
+	tr := NewPathTrie(paths("lib/helper.go", cjk))
+
+	got := tr.Search("实时", 10)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 match, got %v", got)
+	}
+	if got[0].Path != cjk {
+		t.Errorf("path mangled: got %q (% x), want %q", got[0].Path, got[0].Path, cjk)
+	}
+}
+
+// TestSearchNonASCIIPrefix is the same for the prefix-scoped branch: a query containing
+// "/" walks the trie through walkPrefix, which had the identical rune-boundary bug.
+func TestSearchNonASCIIPrefix(t *testing.T) {
+	const cjk = "文档/笔记/说明.md"
+	tr := NewPathTrie(paths("docs/readme.md", cjk))
+
+	got := tr.Search("文档/", 10)
+	if len(got) == 0 {
+		t.Fatal("expected a match for the non-ASCII prefix")
+	}
+	for _, m := range got {
+		if !strings.HasPrefix(m.Path, "文档/") {
+			t.Errorf("path mangled under a non-ASCII prefix: %q", m.Path)
+		}
+	}
+}

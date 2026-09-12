@@ -44,7 +44,11 @@ func (t *PathTrie) insert(path string) {
 		return
 	}
 	cur := t.root
-	for i := range path {
+	// Byte-wise on purpose: the trie is keyed by raw path bytes. `for i := range path`
+	// would walk RUNE boundaries and `path[i]` would hand back only the first byte of
+	// every multi-byte character, silently truncating any non-ASCII file name
+	// ("实时保存的计划.json" collapsed to its first seven bytes).
+	for i := 0; i < len(path); i++ {
 		b := path[i]
 		child, ok := cur.children[b]
 		if !ok {
@@ -220,7 +224,9 @@ func (t *PathTrie) Search(query string, topN int) []Match {
 // walkPrefix follows an exact (case-insensitive) path through the trie.
 func (t *PathTrie) walkPrefix(prefix string) *trieNode {
 	cur := t.root
-	for i := range prefix {
+	// Byte-wise, for the same reason as insert: rune indices would skip the continuation
+	// bytes of a non-ASCII prefix and walk a path that was never inserted.
+	for i := 0; i < len(prefix); i++ {
 		b := prefix[i]
 		found := false
 		for cb, child := range cur.children {
