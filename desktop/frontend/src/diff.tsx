@@ -280,7 +280,7 @@ export function DiffPanel({ diff, loading, findings, findingsNote, onClose, onSe
         {loading ? <div className="diff-panel-empty">读取中…</div> : null}
         {!loading && diff?.note ? <div className="diff-panel-empty">{diff.note}</div> : null}
         {!loading && !diff?.note && (diff?.files || []).length === 0 ? (
-          <div className="diff-panel-empty">本轮改动与 HEAD 一致（或改动不在这棵树里）</div>
+          <div className="diff-panel-empty">没有未提交的改动（可能已经提交）——面板和「评审本轮改动」都只能看工作树里未提交的差异</div>
         ) : null}
         {(diff?.files || []).map((f) => (
           <FileDiffGroup key={(f.oldPath || '') + f.path} file={f} root={diff?.root || ''}

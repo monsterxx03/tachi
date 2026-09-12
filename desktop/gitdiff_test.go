@@ -184,3 +184,39 @@ func TestGetTurnDiffCleanTree(t *testing.T) {
 		t.Errorf("Root = %q, want the workspace %q", vo.Root, repo)
 	}
 }
+
+// A review reads the working tree, and the file list is all that survives a turn — so once
+// the changes are committed there is nothing for it to see. Reporting that instead of
+// running a review that finds "no changes" is what keeps the panel's 「没有报告问题」 from
+// meaning "the reviewer was blind".
+func TestNothingToReviewDetectsCommittedChanges(t *testing.T) {
+	repo := gitRepo(t)
+	d, svc, sid := newRootsApp(t, repo)
+	// ReviewChanges acts on the ACTIVE session; the test helper binds the run but does not
+	// make it active (no UI selected it).
+	d.mu.Lock()
+	d.activeID = sid
+	d.mu.Unlock()
+	tracked := filepath.Join(repo, "src/main.go")
+
+	// Committed and untouched: the turn's file is gone from the working tree.
+	got := svc.ReviewChanges(sid, []string{tracked})
+	if got == "" {
+		t.Fatal("a review of committed changes must not start")
+	}
+	if !strings.Contains(got, "已经提交") {
+		t.Errorf("the notice must name the likely cause: %q", got)
+	}
+
+	// An actual working-tree change is reviewable again.
+	writeRepoFile(t, repo, "src/main.go", "package main\n\nfunc main() {\n\tnewOne()\n}\n")
+	if notice := svc.nothingToReview(sid, []string{tracked}); notice != "" {
+		t.Errorf("an uncommitted change must be reviewable, got %q", notice)
+	}
+
+	// So is a file git does not track yet (GetTurnDiff synthesizes it as all-added).
+	writeRepoFile(t, repo, "src/brand-new.go", "package main\n")
+	if notice := svc.nothingToReview(sid, []string{filepath.Join(repo, "src/brand-new.go")}); notice != "" {
+		t.Errorf("a brand-new file must be reviewable, got %q", notice)
+	}
+}

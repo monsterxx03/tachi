@@ -114,7 +114,35 @@ func (s *AgentService) ReviewChanges(sessionID string, paths []string) string {
 	if sessionID != "" && sessionID != active {
 		return "只能评审当前会话的改动"
 	}
+	if notice := s.nothingToReview(active, paths); notice != "" {
+		return notice
+	}
 	return d.startCommand("review", "", paths, desktopCommandHandlers["review"])
+}
+
+// nothingToReview explains why a review would have nothing to look at ("" when it would).
+//
+// A review reads the WORKING TREE — its prompt tells the fork to run `git diff HEAD --
+// <paths>` — and the file list is all that survives a turn (no snapshot of the content is
+// kept anywhere). So once those changes are committed the diff is empty, and the reviewer
+// would dutifully report "no changes", which the panel then renders as 「最近一次评审没有
+// 报告问题」: a review that saw nothing, dressed up as a review that found nothing.
+//
+// Saying so instead is the honest version. The judgement is GetTurnDiff's — the same call
+// the diff panel makes — so the button and the panel can never disagree about whether
+// there is anything there.
+func (s *AgentService) nothingToReview(sessionID string, paths []string) string {
+	diff := s.GetTurnDiff(sessionID, paths)
+	if len(diff.Files) > 0 {
+		return ""
+	}
+	if diff.Note != "" {
+		// GetTurnDiff already explained it in the user's words (no workspace, not a git
+		// repository, paths outside it) — every one of those means no baseline to diff
+		// against, so the review would be blind for the same reason.
+		return diff.Note + "；没有可对照的基线，评审看不到改动，因此没有开始评审"
+	}
+	return "这些文件在工作树里已经没有未提交的差异了（可能已经提交）——评审只能看未提交的改动，所以没有开始评审"
 }
 
 // startCommand runs a command with a turn's lifecycle. The event source is the

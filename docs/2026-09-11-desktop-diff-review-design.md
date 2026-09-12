@@ -1,6 +1,6 @@
 # Desktop 变更审阅（Diff Review）设计
 
-> 版本: 0.10 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
+> 版本: 0.11 | 日期: 2026-09-12 | 状态: P1/P2/P3 已落地；P4（checkpoint）未开始
 > 关联: [desktop/agent.go](../desktop/agent.go)、[agent/acp/stream.go](../agent/acp/stream.go)、
 >       [agent/tools/edit.go](../agent/tools/edit.go)、[agent/tools/arg_summary.go](../agent/tools/arg_summary.go)、
 >       [agent/tool_executor.go](../agent/tool_executor.go)、[App.tsx](../desktop/frontend/src/App.tsx)、
@@ -844,6 +844,14 @@ P2 三问已定稿（§12）：findings 用 `ReportFinding` 工具上报；评�
 - **渲染位置**：只在变更面板（真实行号所在），按 severity 过滤。per-call 卡片不挂 findings（§12.4 第 3 条）。
 
 ### 12.4 P2c 触发：turn 级唯一入口 —— ✅ 主体已实现
+
+**不做空评审**（0.11 补）：diff 的来源是**评审那一刻的工作树**（`AppendReviewScope` 给的命令就是
+`git diff HEAD -- <paths>`），而一轮结束时唯一被记住的是**文件路径**——内容没有任何快照。
+所以这些改动一旦被 commit，评审就会看到空 diff、如实报告"无改动"，
+面板再把它渲染成「最近一次评审没有报告问题」：**一场什么都没看到的评审，被显示成没发现问题**。
+现在点按钮前先用 `GetTurnDiff`（与 diff 面板同一个调用）探测：没有未提交差异就返回实话
+（"可能已经提交"），非 git/无工作目录则回传该 note——按钮与面板因此不可能对"有没有东西可看"给出两种答案。
+根治仍是 P4（每个 user message 前的 checkpoint ref），届时评审与面板都改看 `git diff <base>..工作树`。
 
 实现落点：`cmds.ReviewOptions.Scope` + `cmds.AppendReviewScope`（在 orchestrator 的 `Next()` 里追加到每一轮
 prompt，不动任何既有签名）；`desktop/commands.go` 的 `commandRun.scope` 与 `ReviewChanges(sessionID, paths)`
