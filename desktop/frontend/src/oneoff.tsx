@@ -117,8 +117,7 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   // requests: the lazily fetched prompt text, keyed by the request's Seq. A record keeps
   // its prompts per call (over half of its bytes), so they are fetched only when asked for.
   const [requests, setRequests] = useState<Record<number, OneOffRequestVO | 'loading'>>({})
-  // tab: which pane is showing. It starts on 过程 (what the run DID) and switches to 意见
-  // when the reader arrives from a review's own entry — see openFindings.
+  // tab: which pane is showing. It starts on 过程 (what the run DID); 意见 is a click on the tab.
   const [tab, setTab] = useState<OneOffTab>('flow')
   const [diff, setDiff] = useState<TurnDiffVO | null>(null)
   const [diffLoading, setDiffLoading] = useState(false)
@@ -243,15 +242,6 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
       .catch((e) => settle({ seq, notice: String(e) } as OneOffRequestVO))
   }, [sessionId, selected])
 
-  // openFindings is the entry a review's own chip uses: it shows the findings of the run being
-  // displayed, against the diff of the files THAT RUN reviewed. Those files come from the run's
-  // own record (P4's OneOffKeyPaths) and from nowhere else — the caller's idea of "which turn
-  // was this" is not the record's, and a file set handed over by the caller outlives the run it
-  // came from, which anchored every later run's findings on the wrong lines.
-  const openFindings = useCallback(() => {
-    setTab('findings')
-  }, [])
-
   // Everything cached per run is tagged with the SESSION as well as the run — a record's name is
   // a timestamp within its session, so two sessions can hold the same one.
   const runKey = detail ? `${sessionId}/${detail.header.name}` : ''
@@ -316,10 +306,10 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   return useMemo(() => ({
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
     select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, diff,
-    diffLoading, diffError, reportText, openFindings, openReport, runKey,
+    diffLoading, diffError, reportText, openReport, runKey,
   }), [
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, diffError, reportText, openFindings, openReport, runKey,
+    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, diffError, reportText, openReport, runKey,
   ])
 }
 

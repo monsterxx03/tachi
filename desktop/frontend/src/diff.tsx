@@ -3,9 +3,10 @@
 //   - DiffBlock — the per-call FRAGMENT diff on a tool card. Line numbers are
 //     fragment-relative there, so they are not shown (a fragment has no position in
 //     the file), and a long diff folds.
-//   - DiffFindingsPane — the PANE the side-channel panel shows: the reviewed files'
-//     working-tree diff against git HEAD (real file coordinates, so numbers ARE shown)
-//     with the review's findings anchored on the lines they name.
+//   - DiffFindingsPane — the working-tree diff of a file set against git HEAD (real file
+//     coordinates, so numbers ARE shown), with a run's findings anchored on the lines they
+//     name. It is rendered as the side-channel panel's 意见 pane, and — with no findings —
+//     as TurnDiffOverlay, the turn's own 「完整 diff」.
 //
 // Both render the same `Hunk` lines through DiffLines, which is what keeps the two
 // views from drifting: the difference is a flag, not a second implementation.
@@ -14,6 +15,7 @@ import { Fragment, memo, useCallback, useEffect, useRef, useState, type ReactNod
 import { AgentService, type FileChangeVO, type FileDiffVO, type FindingVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Hunk } from '../bindings/github.com/monsterxx03/tachi/pkg/linediff'
 import { FilePreviewOverlay } from './filepreview'
+import { CloseButton, ViewerOverlay } from './viewer'
 import { InlineMd } from './markdown'
 
 // DIFF_FOLD_LINES is how much of a change shows before folding.
@@ -261,7 +263,7 @@ function jumpRank(f: FindingVO, fileOrder: Map<string, number>, root: string): [
 // report that explains them belong side by side in the side-channel panel — and an overlay
 // covering the conversation is exactly what this design set out to remove
 // (docs/2026-09-12-desktop-oneoff-panel-design.md §5.3).
-export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, onSend, onOpenReport, onRerun }: {
+export function DiffFindingsPane({ diff, loading, findings, note, report, hasPaths, runKey, diffError, expandAll, onSend, onOpenReport, onRerun }: {
   diff: TurnDiffVO | null
   loading: boolean
   findings: FindingVO[]
@@ -277,6 +279,12 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // Whether a diff was even asked for. A run opened from the switcher carries no file set
   // (a review's scope lives with the turn that started it), and saying so beats an empty box.
   hasPaths: boolean
+  // The fold's default when a file has no findings. False for the panel, where the diff is
+  // context around the review and a wall of it buries the findings; TRUE for TurnDiffOverlay,
+  // where the diff IS the content and folding it would hand the reader a list of file headers
+  // with nothing to read (measured: `.diff-ln` count 0 in the smoke run — the line numbers the
+  // chip promises were behind a fold nobody asked for).
+  expandAll?: boolean
   // Why the diff could not be read ("" when it was). An empty pane must not have to guess.
   diffError?: string
   // Sends the picked findings as an ordinary user message. Absent only when there is
@@ -321,14 +329,16 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   ) : null
 
   // ── Folding ─────────────────────────────────────────────────────────────────
-  // fileOpen is a map of exceptions to a DERIVED default: a file with findings is open (the
-  // review is what the reader came for), one without is folded (its diff is context, not
-  // news). Nothing has to be seeded when the payload arrives, and a re-run's findings cannot
-  // fight a stored default — the same shape the picking draft uses.
+  // fileOpen is a map of exceptions to a DERIVED default: in the panel a file with findings is
+  // open (the review is what the reader came for), one without is folded (its diff is context,
+  // not news) — and a pane whose diff has no findings at all (TurnDiffOverlay) passes
+  // `expandAll`, because there the diff is the only content there is. Nothing has to be seeded
+  // when the payload arrives, and a re-run's findings cannot fight a stored default — the same
+  // shape the picking draft uses.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({})
   const keyOf = (f: FileDiffVO) => (f.oldPath || '') + f.path
   const findingsOf = (path: string) => items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, path))
-  const isOpen = (f: FileDiffVO) => fileOpen[keyOf(f)] ?? findingsOf(f.path).length > 0
+  const isOpen = (f: FileDiffVO) => fileOpen[keyOf(f)] ?? (expandAll || findingsOf(f.path).length > 0)
   // The key of the group a finding was rendered under ("" when the diff does not show it):
   // that is what a jump has to unfold before the row exists to scroll to.
   const keyForFinding = (f: FindingVO) => {
@@ -442,7 +452,8 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       {!loading && diffError ? <div className="diff-panel-empty">读取 diff 失败：{diffError}</div> : null}
       {!loading && !hasPaths ? (
         <div className="diff-panel-empty">
-          这次运行没有带上被评审的文件清单 —— 从被评审的那一轮点「完整 diff」进来，就会看到与 git HEAD 的对照
+          这次运行没有记录文件清单 —— 打字发起的 /review 覆盖整棵树，没有可对照的文件集。
+          某轮改动的完整 diff 请点那一轮自己的「完整 diff」（它不必有评审）
         </div>
       ) : null}
       {!loading && !diffError && hasPaths && diff?.note ? <div className="diff-panel-empty">{diff.note}</div> : null}
@@ -510,6 +521,68 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
         </div>
       ) : null}
     </div>
+  )
+}
+
+// TurnDiffOverlay is the turn's own 「完整 diff」: the files THIS turn changed, against git
+// HEAD, at reading size (real file coordinates — the same 「与 git HEAD 对照的完整 diff（真实
+// 文件行号）」 its chip promises).
+//
+// It is scoped to the CLICK rather than to a side-channel run: the paths arrive as a prop, the
+// diff is fetched on open and dropped on close, and nothing about it is remembered. That is the
+// whole difference from the panel's 意见 pane, which answers "what did that RUN review" and can
+// therefore only diff the file set the run recorded (docs/2026-09-12-desktop-oneoff-panel-design.md
+// §5.3) — a turn nobody has reviewed has no run at all, so routing this chip through the panel
+// showed an empty column.
+export function TurnDiffOverlay({ sessionId, paths, onClose }: {
+  sessionId: string
+  // The turn's file set, as the footer aggregated it. Fetched against `sessionId` at open time,
+  // so a session switch mid-fetch cannot land another session's diff here.
+  paths: string[]
+  onClose: () => void
+}) {
+  const [diff, setDiff] = useState<TurnDiffVO | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  // The caller's array is rebuilt on every render of the bubble that owns the chip, so the
+  // fetch is keyed by the paths' CONTENT: a new array holding the same files must not re-ask.
+  const files = paths.join('\n')
+
+  useEffect(() => {
+    const list = files ? files.split('\n') : []
+    setDiff(null)
+    setError('')
+    if (list.length === 0) {
+      setLoading(false)
+      return
+    }
+    let alive = true
+    setLoading(true)
+    AgentService.GetTurnDiff(sessionId, list)
+      .then((d) => { if (alive) setDiff(d || null) })
+      .catch((e) => {
+        if (!alive) return
+        setDiff(null)
+        // Read back for the reader instead of dropping it: an empty pane and a failed read
+        // look identical, and the reason is the only thing that tells them apart.
+        setError(String(e))
+      })
+      .finally(() => { if (alive) setLoading(false) })
+    return () => { alive = false }
+  }, [sessionId, files])
+
+  const count = files ? files.split('\n').length : 0
+  return (
+    <ViewerOverlay label={`本轮改动 — ${count} 个文件（与 git HEAD 对照）`} onClose={onClose} stageClass="is-doc"
+      controls={<CloseButton onClose={onClose} />}>
+      {/* findings=[] on purpose: this surface is about the WORKING TREE, not about a review.
+          Everything else (the head, the per-file fold, 预览/打开) is the panel's own rendering,
+          which is what keeps the two diffs from drifting apart.
+          expandAll: with no findings to fold AROUND, every file opens — the diff is the content
+          here, not context for a review. */}
+      <DiffFindingsPane diff={diff} loading={loading} findings={[]} runKey={`${sessionId}\n${files}`}
+        hasPaths={count > 0} diffError={error} expandAll />
+    </ViewerOverlay>
   )
 }
 

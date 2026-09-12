@@ -1,6 +1,6 @@
 # Desktop 旁路运行面板（One-off Sidecar Panel）设计
 
-> 版本: 0.9 | 日期: 2026-09-12 | 状态: 全部落地（P0–P4 + 收尾三项 + 宽度可拖拽 + 两个 bug + 评审 6 条）
+> 版本: 0.10 | 日期: 2026-09-13 | 状态: 全部落地（P0–P4 + 收尾三项 + 宽度可拖拽 + 两个 bug + 评审 6 条 + 「完整 diff」回浮层）
 > 关联: [commands.go](../desktop/commands.go)、[agent_turn.go](../desktop/agent_turn.go)、
 >       [agent_session.go](../desktop/agent_session.go)、[reviewfindings.go](../desktop/reviewfindings.go)、
 >       [oneoff_recorder.go](../agent/oneoff_recorder.go)、[uitheme.go](../desktop/uitheme.go)、
@@ -26,6 +26,35 @@
 11. [测试计划](#11-测试计划)
 12. [分阶段实施](#12-分阶段实施)
 13. [待决问题](#13-待决问题)
+
+---
+
+## 本版修订（0.9 → 0.10：「完整 diff」回到它自己的表面——它承诺的是回合，不是运行）
+
+使用者报告：「当没有 review 时，点击『完整 diff』，侧边栏展示的是空的」。
+
+根因是**入口和数据源分属两个模型**。那个 chip 承诺的是**这一轮**的完整 diff（`title` 写的就是「与 git
+HEAD 对照的完整 diff（真实文件行号）」），而 P3 把它指到了面板上、P4 又把调用方的 paths 从面板里拿掉
+（那次是为了修「调用方的文件集永不过期」）——于是面板只能拿**记录里的 `header.paths`**，也就是**某一次
+运行**的文件集。两个后果同一个根因：没有评审的会话里面板列表是空的（`ListOneOffs` 的 note 就是使用者
+看到的那句「这个会话还没有旁路运行」），有评审时点某一轮的 chip 显示的却是**切换器里选中那次运行**的
+diff。P2a 的形态（`openDiffPanel(paths)` → 浮层 → `GetTurnDiff(sid, 本轮 paths)`）本来是对的，P3 把
+它改道时没有数据源可以接。
+
+1. **`TurnDiffOverlay`（[diff.tsx](../desktop/frontend/src/diff.tsx)）**：`ViewerOverlay` +
+   `DiffFindingsPane`（`findings=[]`、`expandAll`）。paths 是**那次点击自己的**：打开时取、关闭时丢，
+   App 侧的 state 只有「哪一轮 + 哪个会话」（切会话即关），因此**不会**变成 P4 修掉的那种长期锚点。
+2. **面板回到只回答「这次旁路运行做了什么」**：`openFindings` 失去唯一调用者（它只是 `setTab('findings')`），
+   删掉；进 意见 页就是点那一页自己的标签。`DiffFindingsPane` 的 `hasPaths=false` 文案随之改口径
+   （「打字发起的 /review 覆盖整棵树」+ 指向回合自己的入口）。
+3. **折叠默认值要看表面**：面板的规则「有意见的文件展开、没意见的折叠」在没有意见的表面上是全折——chip
+   承诺的 diff 变成一串文件名，smoke 实测 `.diff-ln` 计数 0。`DiffFindingsPane` 多一个 `expandAll`
+   （只有 `TurnDiffOverlay` 传），面板行为不变。
+4. **smoke 那条断言本来就长错了地方**：`oneoff-footer` 用「完整 diff」当**进 意见 页的触发器**来断言，
+   于是它同时钉住了一个按钮和一次页面切换——按钮一改道它就既测不到 意见 页、也测不到按钮本身。现在
+   「完整 diff」的 6 条断言挪到**评审之前**（这一事实的产出点是"还没有 run"的时刻：浮层打开、面板没被
+   牵连、本轮两个文件、有真实行号、默认展开、Esc 关掉），进 意见 页改点「意见」标签。场景 77 项断言，
+   整套 11/11 通过。
 
 ---
 

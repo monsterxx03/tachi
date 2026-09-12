@@ -22,6 +22,41 @@
   smoke.check('有改动的回合才有评审入口', true, smoke.qa('.diff-chip').map((b) => b.textContent).join(' | '))
   smoke.check('评审前没有已评审状态', !smoke.qa('.diff-chip').some((b) => b.textContent.indexOf('已评审') >= 0), '')
 
+  // ── 「完整 diff」 belongs to the TURN, and works with no review at all ────────
+  // This is the entry's own promise (与 git HEAD 对照的完整 diff，真实行号), and it used to be
+  // routed into the side-channel panel — which is keyed by RUN. On a turn nobody had reviewed
+  // there was no run to show, so the click opened an empty column (「点完整 diff，侧边栏是空的」);
+  // once a run did exist, the panel showed the SELECTED run's file set rather than this turn's.
+  // Hence both halves are pinned HERE, before any review exists: the turn's own files are in the
+  // overlay, and no panel was involved in getting them.
+  const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)
+  if (!diffChip) return smoke.fail('找到「完整 diff」入口', '按钮找不到')
+  diffChip.click()
+  const overlay = await smoke.waitFor('.viewer-overlay .viewer-doc.is-diff', '「完整 diff」打开宽浮层', 8000)
+  if (!overlay) return smoke.finish()
+  smoke.check('没有评审时也不打开旁路面板（它按 run 组织，此刻没有 run）',
+    !smoke.q('.oneoff-panel'), smoke.q('.oneoff-panel') ? '面板被打开了' : '')
+  const turnDiff = await smoke.waitFor(
+    () => (smoke.text('.viewer-doc.is-diff').indexOf('OTHER.md') >= 0 ? smoke.text('.viewer-doc.is-diff') : null),
+    '浮层里是本轮两个文件对 HEAD 的差异', 10000)
+  smoke.check('浮层里就是本轮改动的文件（NOTES.md + OTHER.md）',
+    !!turnDiff && turnDiff.indexOf('NOTES.md') >= 0 && turnDiff.indexOf('OTHER.md') >= 0,
+    (turnDiff || '').slice(0, 100))
+  smoke.check('带真实文件行号（卡片上的片段 diff 没有这一列）',
+    smoke.qa('.viewer-doc.is-diff .diff-ln').length > 0,
+    String(smoke.qa('.viewer-doc.is-diff .diff-ln').length))
+  // The fold's default is the panel's ("a file with findings opens, one without is folded") and
+  // that rule makes no sense here: with no findings at all it folded EVERY file, so the chip's
+  // promise arrived as a list of file headers — the reader had to click each one to see a diff.
+  smoke.check('浮层里每个文件默认展开（没有意见可围着折）',
+    smoke.qa('.viewer-doc.is-diff .diff-file').length > 0 &&
+    smoke.qa('.viewer-doc.is-diff .diff-file').every((g) => !g.classList.contains('is-folded')),
+    smoke.qa('.viewer-doc.is-diff .diff-file').map((g) => g.className).join(' | '))
+  smoke.check('没有评审就没有意见行', !smoke.q('.viewer-doc.is-diff .finding'), '')
+  smoke.key(document.body, 'Escape')
+  const closed = await smoke.waitFor(() => !smoke.q('.viewer-overlay'), 'Esc 关掉浮层', 5000)
+  smoke.check('Esc 关掉浮层（viewer 的通用约定）', !!closed, '')
+
   // The chip's MIDDLE state — the one that was reported missing (「点击评审按钮后，立刻会变成
   // 已评审查看，但没法点击，应该是评审中」). Two things made it invisible: the pending state was
   // cleared as soon as the fork had been STARTED (while the record on disk already carried this
@@ -82,13 +117,15 @@
     '面板回放这次评审', 8000)
   smoke.check('面板回放出这次评审的回复', !!replay, (replay || '').slice(0, 80))
 
-  // P3: the 意见 pane pairs the run's OWN findings with the diff of the files it reviewed —
-  // 「完整 diff」 lands there. This is the fix for "点完整 diff 什么也看不到".
-  const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)
-  if (!diffChip) return smoke.fail('找到「完整 diff」入口', '按钮找不到')
-  diffChip.click()
+  // P3: the 意见 pane pairs the run's OWN findings with the diff of the files it reviewed. The
+  // way in is the pane's own TAB — 「完整 diff」 used to be pressed into service as this trigger,
+  // which is exactly how the chip came to promise the TURN's diff while showing a run's (and why
+  // a turn with no review opened an empty column; that chip is pinned above, on its own).
+  const findingsTab = smoke.qa('.oneoff-tab').find((b) => b.textContent.indexOf('意见') >= 0)
+  if (!findingsTab) return smoke.fail('面板有「意见」标签', smoke.allText('.oneoff-tab').join('|'))
+  findingsTab.click()
   if (!(await smoke.waitFor('.oneoff-tab.active', '面板切到意见区', 8000))) return smoke.finish()
-  smoke.check('「完整 diff」切到意见 + diff 区', smoke.text('.oneoff-tab.active').indexOf('意见') >= 0, smoke.text('.oneoff-tab.active'))
+  smoke.check('「意见」标签切到意见 + diff 区', smoke.text('.oneoff-tab.active').indexOf('意见') >= 0, smoke.text('.oneoff-tab.active'))
   const pane = await smoke.waitFor(() => smoke.text('.oneoff-body').indexOf('NOTES.md') >= 0 ? smoke.text('.oneoff-body') : null,
     '意见区显示被评审的文件 diff', 10000)
   smoke.check('意见区里有被评审文件的 diff', !!pane && pane.indexOf('NOTES.md') >= 0, (pane || '').slice(0, 100))

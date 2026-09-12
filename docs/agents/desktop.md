@@ -92,7 +92,13 @@ const type = (el, t) => {
 - **An assertion belongs to the scenario that produces the fact** (and to the line that produces
   it — see the missing `reviewedMsg` assignment). The panel-width check sat in `oneoff-footer`'s
   `after` while the driver that drags the handle is `oneoff-panel`'s: it read
-  `oneOffPanelWidth=0` forever, and the fix was moving the check, not the code
+  `oneOffPanelWidth=0` forever, and the fix was moving the check, not the code. Its sibling:
+  **a control used as a TRIGGER for another behaviour pins neither.** `oneoff-footer` pressed the
+  footer's 「完整 diff」 to get INTO the 意见 pane, so when that button was re-pointed at the turn's
+  own diff overlay the assertion silently stopped being about the pane it named — a button and a
+  page switch were riding on one click. The chip's assertions now sit BEFORE any review exists
+  (the moment that fact is produced: no run, overlay opens, this turn's files, real line numbers,
+  files expanded, Esc closes) and the 意见 pane is entered by clicking its own tab.
 - **A transient state belongs to the trail; a steady state belongs to a direct read.** The 10ms
   sampler that catches the middle of a state machine (`评审中…`) can be starved while the webview
   is busy, so its last tick may never see the state that persisted — one `oneoff-footer` run
@@ -156,6 +162,22 @@ const type = (el, t) => {
 - **A state flag must be ended by the fact that ends it**: `reviewPending` was cleared when `ReviewChanges` returned (that call only STARTS the fork) and, in a second rule, whenever the session was idle — but the session is still idle in the window between the click and the fork going busy, so the middle state was wiped before it could ever be seen, and the chip fell through to 已评审 while being disabled by the very run it described (the report: 「立刻会变成已评审查看，但没法点击」). The run's own end event is the fact that ends it. Verified by putting the idle rule back for one control run: the chip's trail became 评审本轮改动 → 已评审 1 条 · 查看 with no middle state at all.
 
 - **Session-scoped UI state must be keyed by session, or reset on switch**: one React tree renders every session, so anything derived from the ACTIVE session silently leaks into the next one. Hit three times: the review notice (now keyed by the clicked turn's message id), plan/findings (reloaded on switch), and the cache-hit ring + cost (a new session inherited the previous one's numbers — anything fetched per session must be applied unconditionally, `if (u)` keeps stale values when the payload is empty).
+- **An entry's data source must belong to the surface the entry opens** (`desktop/frontend/src/App.tsx` +
+  `diff.tsx`): the turn footer's 「完整 diff」 promises *this turn* against git HEAD (its own tooltip says
+  真实文件行号) but had been routed into the side-channel panel, which is keyed by RUN — so on a turn nobody
+  had reviewed it opened an empty column (「当没有 review 时，点击『完整 diff』，侧边栏展示的是空的」: the
+  panel's list has no runs, and it says so), and whenever a run did exist it showed the *selected* run's file
+  set rather than this turn's. The panel cannot do better: after P4 its diff comes from the run's recorded
+  scope (`header.paths`) and nowhere else, because a caller-supplied set outlives the run it came from (that
+  leak is why P4 removed it). So the turn's diff went back to a surface of its own — `TurnDiffOverlay`
+  (`ViewerOverlay` + `DiffFindingsPane` with `findings=[]`), whose paths are the click's own: fetched on
+  open, dropped on close, so they can never become that stale anchor. Two corollaries worth keeping:
+  **a fold default belongs to the surface that shows the diff** (the panel's rule "a file with findings
+  opens, one without stays folded" folded EVERY file on a surface that has no findings at all, so the
+  promised diff arrived as a list of filenames — measured `.diff-ln` = 0, hence `expandAll`), and
+  **a helper whose only caller is gone goes with it** (`openFindings`, the second way into 意见, was deleted
+  rather than left as a path nobody walks).
+
 - **The transcript itself lives in `desktop/frontend/src/useTranscript.ts`** (messages per session, running flags, the loaded window + its cursor, the frame-batched delta queue). Every mutator takes the session it is for — `updateSession` is the one funnel, everything else is built on it — so "this belongs to a conversation" is enforced by the signature instead of remembered. App.tsx must not declare its own `useState<Record<string, Message[]>>`; a new per-session need is a new op in that hook.
 - **Backend events are subscribed in `desktop/frontend/src/agentEvents.ts`** (`useAgentStatus` / `useSessionUsage` / `useAgentStream`) — status, the active session's live numbers, and the agent stream that writes the transcript. Each payload names its session; compare it against `currentId` only where the UI genuinely means "on screen" (a sidebar row, the error bubble), never to address storage.
 

@@ -14,6 +14,7 @@ import {
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
 import { TurnPart } from './parts'
+import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import type { OneOffRun } from './agentEvents'
 import type { OneOffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
@@ -222,10 +223,16 @@ function App() {
   const [rootsOpen, setRootsOpen] = useState(false)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
-  // The working-tree diff and the review's findings used to ride in an overlay owned here
-  // (diffPanelOpen/Data/Loading, closed on every session switch). They are panes of the
-  // side-channel panel now: the panel is the thing that belongs to a session, and switching
-  // sessions already resets its selection — see useOneOffs.
+  // The turn whose 「完整 diff」 is open: the files that turn changed, with the session they
+  // belong to. Owned here because the chip that opens it lives in the transcript, and closed on
+  // every session switch (a diff is about the session it was taken in).
+  //
+  // The REVIEW's findings and its diff are the side-channel panel's business instead: the panel
+  // reads them per RUN (desktop/oneoff.go collects each record's own ReportFinding calls), while
+  // this overlay answers a question about a TURN — "what does the working tree look like now,
+  // against HEAD" — which is answerable with no run at all.
+  const [turnDiff, setTurnDiff] = useState<{ sessionId: string; paths: string[] } | null>(null)
+  useEffect(() => { setTurnDiff(null) }, [currentId])
 
   // The plan panel (P1): this session's newest plan. Read from disk on demand — the
   // agent:plan event only says "re-read it", so the panel can never drift from the file
@@ -659,16 +666,17 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     if (oneoffRun.live) setOneOffOpen(true)
   }, [oneoffRun.live?.at])
 
-  // openDiffPanel is the turn's 「完整 diff」 entry. It no longer opens an overlay: the diff,
-  // the findings that point at it and the report that explains them are panes of the
-  // side-channel panel, so this just shows that panel and lands on 意见. The FILES come from
-  // the run's own record (LoadOneOff → agent.OneOffKeyPaths), not from the caller: this turn's
-  // file set is about the turn, and the panel is shown per RUN — handing it over is what let a
-  // stale set anchor a later run's findings on the wrong lines.
-  const openDiffPanel = useCallback(() => {
-    setOneOffOpen(true)
-    oneoff.openFindings()
-  }, [oneoff])
+  // openDiffPanel is the turn's 「完整 diff」 entry: the files THIS turn changed, against git
+  // HEAD, in a lightbox over the conversation.
+  //
+  // It used to hand the job to the side-channel panel, which is scoped to a RUN — so a turn
+  // nobody had reviewed opened an empty column (there is no run to show, and the panel's list
+  // says so), and a reviewed one showed the SELECTED run's file set rather than this turn's.
+  // The paths are the click's own: fetched on open, dropped on close, and never stored per run
+  // — which is also what keeps them from becoming the stale anchor P4 removed.
+  const openDiffPanel = useCallback((paths: string[]) => {
+    setTurnDiff({ sessionId: currentId, paths })
+  }, [currentId])
 
   // sendFindings is how the panel's findings leave: the picked ones become one ordinary user
   // message. It rides the composer's route (submit) instead of a channel of its own — while
@@ -1249,6 +1257,8 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           </div>
         </div>
       )}
+      {turnDiff ? <TurnDiffOverlay sessionId={turnDiff.sessionId} paths={turnDiff.paths}
+        onClose={() => setTurnDiff(null)} /> : null}
     </div>
   )
 }
