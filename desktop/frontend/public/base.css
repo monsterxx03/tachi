@@ -330,10 +330,43 @@ body {
   border-radius: var(--radius-xs);
 }
 
+/* Reduced motion: entrances, reveals and ambient drift stand down — that is decoration.
+   STATUS motion is exempt, and the list below is explicit because the blanket rule it
+   accompanies used to freeze it too: on a machine with "Reduce motion" on, the sidebar's
+   running dot, the stop button's ring, the header's busy pulse and the compaction/MCP
+   spinners all sat perfectly still. A spinner that does not turn does not read as "working",
+   it reads as idle or broken — and in the sidebar's case the dot is the ONLY per-session
+   running marker there is. Add a status indicator here when you add one; decoration stays
+   covered by the blanket rule. The durations are repeated on purpose: the blanket rule uses
+   `!important`, so nothing else can bring an element's own duration back. */
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+  }
+  .spin-dot {                                     /* sidebar: session is running */
+    animation-duration: 0.8s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .typing i {                                     /* reply is being generated */
+    animation-duration: 1.2s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .stop-btn::before {                             /* turn is running, click to stop */
+    animation-duration: 0.8s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .dot-thinking, .dot-tool_running, .dot-busy {   /* titlebar status: something is happening */
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .mcp-spinner {                                  /* MCP server connecting */
+    animation-duration: 0.7s !important;
+    animation-iteration-count: infinite !important;
+  }
+  .notice-head.running .notice-ico {              /* still compacting */
+    animation-duration: 1.2s !important;
+    animation-iteration-count: infinite !important;
   }
 }

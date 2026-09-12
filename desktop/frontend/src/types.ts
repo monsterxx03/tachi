@@ -81,6 +81,10 @@ export interface AgentEvent {
   // ToolAutoExpand: display hint from the backend for user-requested tool calls
   // (see Part.expand).
   ToolAutoExpand?: boolean
+  // Title: for session_title — the name the model generated for this session. It is
+  // persisted in the session meta, but the sidebar renders the list it fetched, so the
+  // event is the only thing that can update the row while the session is open.
+  Title?: string
 }
 
 export const STATUS_META: Record<string, { dot: string; desc: string }> = {

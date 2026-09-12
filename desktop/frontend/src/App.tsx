@@ -1506,6 +1506,15 @@ function App() {
         case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand }), true); break
         case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined), true); break
         case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
+        case 'session_title': {
+          // The generated title arrives here and nowhere else: the sidebar renders the list it
+          // fetched on load/switch, so without this the row kept saying 未命名会话 for the rest
+          // of the session (the title was in the meta file all along, and only a restart — or a
+          // session switch — ever showed it).
+          const title = ev.Title
+          if (title) setSessions((prev) => prev.map((s) => (s.id === sessionId ? { ...s, title } : s)))
+          break
+        }
         case 'steer_check':
           // The agent finished a round of tool calls and is parked, waiting
           // for pending user input to steer the next LLM call. Queued text is
