@@ -175,3 +175,33 @@ const type = (el, t) => {
 
 - **The one-off panel's × promised Esc and nothing listened — and who owns the FIRST press is decided by focus** (`desktop/frontend/src/oneoff.tsx`): a column is not a `ViewerOverlay`, so the viewers' dismissal contract never covered it and the key did nothing at all. Two consequences worth keeping: `App`'s global handler must not claim every Escape unconditionally (it would swallow the panel's before the panel could see it as unclaimed — `defaultPrevented` is the handshake), and the panel is a window-level listener that refuses only an ALREADY-CLAIMED key, so a viewer or modal still wins by construction (ViewerOverlay claims it in the capture phase and stops it there). Both orderings are pinned in `oneoff-footer`, because the composer is the common case, not a corner: `/review` leaves the focus in the composer, so there the first Esc only hands the focus to the message area (`.chat`, verified) and the SECOND closes; a field inside the panel blurs on the first. The reader chose this ordering over "panel wins" — 「面板内输入框第一次只退出输入」 and the composer's Esc are the same gesture.
 
+## Desktop Themes (the dark palette)
+
+- **The dark theme is Ayu Mirage-derived and its contrast is low ON PURPOSE — do not "fix" it.** The
+  family is that theme's blue-grey (`surface.base` #1F2430, panel #282E3B, panel shadow black @0.2),
+  lifted one OKLCH step so the app reads as graphite instead of black (`--bg` #252a35, chroma ~0.022
+  against the old neutral ~0.010), with Ayu's *warm* grey editor fg as the CONTENT ink (`--text`
+  #cecdc6) and its cool `ui.fg` family as the CHROME ink (`--text-dim`/`--text-faint`, 10.5–11.5px
+  metadata). Body text runs ~9:1, against ~12.8:1 before the 2026-09-12 pass.
+- **What bounds the palette is `--text-faint`'s 4.5:1 floor, not `--text`.** It is the token that lands
+  on the *lightest* plane (placeholders, MCP labels, `.file-note` — panel-solid, and panel-2 under the
+  picker/CSV headers), so it pins both the ink (~#9ca3b1) and the top of the ladder (~#303541). Any
+  "make it lighter/greyer still" edit has to trade against that: raise the planes and the smallest
+  text is what breaks first, and `--text` has room to spare. Verify with a WCAG ratio check across
+  every plane (`luminance` + alpha compositing), not by eye.
+- **`windowBgLight`/`windowBgDark` (main.go) are the same decision in a second place** — the pre-paint
+  window colour, which `uitheme.go` also feeds to the native appearance. They had silently drifted
+  (light was #f6f7fb against a #f7f4ee page); move them with `--bg`.
+- **One definition per mode, and it lives in `frontend/public/base.css`**: the `:root[data-theme="dark"]`
+  block, resolved by the boot script in index.html + `src/theme.ts`. No frontend rule reads
+  `prefers-color-scheme`, and no other file carries dark colours — the hljs tokens in `widgets.css`
+  map onto the semantic tokens, so a palette edit covers code blocks for free. A one-off shadow in
+  `chat.css` was the exception and is now `--shadow-up`.
+- **To SEE a palette change, do not reach for the app window** (window capture is dead on macOS 26 —
+  see the smoke section). Render the tokens instead: extract both blocks from base.css (next to
+  `git show HEAD:desktop/frontend/public/base.css` for the before) into a small HTML page whose
+  swatches/mock rows read `var(--token)`, one scope per variant, and screenshot it with headless
+  Chrome (`--headless=new --force-device-scale-factor=2.6 --window-size=…`). That gives a real A/B of
+  the REAL values, and a 3-way render is how 「再灰一点 / 再亮一档」 gets decided without a rebuild
+  loop.
+

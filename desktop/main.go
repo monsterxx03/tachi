@@ -18,8 +18,8 @@ import (
 // paints — it has to follow the theme, or a dark desktop gets a white flash on
 // launch.
 var (
-	windowBgLight = application.NewRGB(0xf6, 0xf7, 0xfb)
-	windowBgDark  = application.NewRGB(0x21, 0x24, 0x29)
+	windowBgLight = application.NewRGB(0xf7, 0xf4, 0xee)
+	windowBgDark  = application.NewRGB(0x25, 0x2a, 0x35)
 )
 
 // forcedAppearance reads TACHI_DESKTOP_APPEARANCE ("dark" / "light") and maps

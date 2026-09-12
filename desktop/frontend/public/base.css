@@ -151,6 +151,9 @@
   --shadow-accent: 0 2px 10px rgba(53, 80, 216, 0.26);
   --shadow-accent-hover: 0 4px 14px rgba(53, 80, 216, 0.4);
   --shadow-danger: 0 2px 10px rgba(191, 40, 49, 0.3);
+  /* The one upward shadow (the 意见 pane's sticky send bar, chat.css) — a
+     token so it follows the same ink as the others in both themes. */
+  --shadow-up: 0 -8px 16px -12px rgba(62, 54, 44, 0.35);
   /* Decorative accent glows (brand mark, welcome glyph). */
   --glow-accent: drop-shadow(0 2px 8px rgba(108, 140, 255, 0.45));
 
@@ -188,39 +191,48 @@
    the same choice for the window's pre-paint colour and native appearance
    (main.go + desktop_ui.json). */
 :root[data-theme="dark"] {
-  /* Surfaces sit at "standard dark" (VS Code / ChatGPT territory) rather
-     than near-black: bg is ~#212429, and the ladder keeps the same shape as
-     the light theme — chrome (sidebar) is the most recessed plane, then bg,
-     then the chrome-2 bars, then raised panels. Panel-solid is held just low
-     enough that --text-faint still clears 4.5:1 on it (placeholders and MCP
-     labels live there). */
-  --bg: #212429;
-  --bg-top: #24272d;
-  --chrome: #1a1d22;
-  --chrome-2: #262931;
-  --panel-solid: #2b2f37;
-  --panel-2: #2f333b;
+  /* Ayu Mirage, lifted. The family is that theme's blue-grey — surface.base
+     #1F2430, panel #282E3B, panel shadow black @0.2 — but every plane sits one
+     OKLCH step higher (bg is ~#252a35 rather than #1f2430) so the app reads as
+     graphite instead of black, and the chroma is raised from the old neutral
+     grey to Ayu's ~0.022 blue cast. The ladder keeps the light theme's shape:
+     chrome (sidebar) is the most recessed plane, then bg, then the chrome-2
+     bars, then raised panels.
+     The ink is split the way Ayu splits it: CONTENT (--text) is that theme's
+     warm grey editor fg (#CCCAC2 family), while CHROME (--text-dim/-faint,
+     metadata, labels) stays cool in its ui.fg (#707A8C) family.
+     Contrast is deliberately low — body text runs ~9:1, against ~12.8:1 before
+     — and it is --text-faint that bounds the whole palette: its 4.5:1 floor
+     (placeholders, MCP labels, the 10.5–11.5px metadata) is what pins the ink
+     at ~#9ca3b1 and the top of the ladder at ~#303541. Lower the planes any
+     further and THAT is what breaks first; --text has room to spare. */
+  --bg: #252a35;
+  --bg-top: #292e3a;
+  --chrome: #1e222b;
+  --chrome-2: #2b303b;
+  --panel-solid: #303541;
+  --panel-2: #343944;
   --panel-veil-a: rgba(255, 255, 255, 0.075);
   --panel-veil-b: rgba(255, 255, 255, 0.045);
   --veil: rgba(255, 255, 255, 0.05);
   --sheen: rgba(255, 255, 255, 0.06);
 
-  --border: rgba(255, 255, 255, 0.1);
-  --border-2: rgba(255, 255, 255, 0.15);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-2: rgba(255, 255, 255, 0.14);
 
-  --wash: rgba(255, 255, 255, 0.05);
-  --wash-2: rgba(255, 255, 255, 0.075);
-  --hover: rgba(255, 255, 255, 0.055);
-  --hover-2: rgba(255, 255, 255, 0.085);
+  --wash: rgba(255, 255, 255, 0.045);
+  --wash-2: rgba(255, 255, 255, 0.07);
+  --hover: rgba(255, 255, 255, 0.05);
+  --hover-2: rgba(255, 255, 255, 0.08);
 
-  --scrollbar: rgba(255, 255, 255, 0.18);
-  --scrollbar-hover: rgba(255, 255, 255, 0.32);
+  --scrollbar: rgba(255, 255, 255, 0.16);
+  --scrollbar-hover: rgba(255, 255, 255, 0.3);
 
-  --grid-dot: rgba(255, 255, 255, 0.05);
+  --grid-dot: rgba(255, 255, 255, 0.045);
 
-  --text: #e7e9f0;
-  --text-dim: #a6acbd;
-  --text-faint: #949bad;
+  --text: #cecdc6;
+  --text-dim: #a9b0bd;
+  --text-faint: #9ca3b1;
 
   --accent: #7c96ff;
   --accent-2: #9db1ff;
@@ -244,18 +256,21 @@
 
   --code-ink: #b9c6ff;
 
-  --scrim: rgba(0, 0, 0, 0.45);
-  --scrim-strong: rgba(0, 0, 0, 0.55);
+  --scrim: rgba(9, 11, 15, 0.42);
+  --scrim-strong: rgba(9, 11, 15, 0.52);
 
-  --user-grad-a: #232a44;
-  --user-grad-b: #1d2338;
+  /* The bubble sits ABOVE the content plane in dark (a raised blue note) —
+     the same move the light theme makes in reverse, where it is a warm wash
+     *deeper* than the page. Both inks stay legible on it (~8:1). */
+  --user-grad-a: #2c3246;
+  --user-grad-b: #262c3e;
   --user-ink: #dde3ff;
   --user-ink-dim: rgba(221, 227, 255, 0.68);
   --user-code-bg: rgba(124, 150, 255, 0.18);
   --user-code-ink: #dfe5ff;
 
-  --app-tint-a: rgba(122, 149, 255, 0.06);
-  --app-tint-b: rgba(91, 124, 255, 0.05);
+  --app-tint-a: rgba(122, 149, 255, 0.05);
+  --app-tint-b: rgba(91, 124, 255, 0.045);
 
   /* Same buckets, lifted for a dark surface (see the light block). */
   --ctx-system: #8ea7ff;
@@ -264,19 +279,22 @@
   --ctx-user-messages: #46c98a;
   --ctx-assistant-messages: #e2a355;
   --ctx-tool-results: #4fc3d4;
-  --ctx-other: #949bad;
+  --ctx-other: #a2a9b6;
 
-  /* Dark surfaces swallow ambient shadows, so these carry more weight in
-     black instead of grey. */
-  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.4), 0 1px 1px rgba(0, 0, 0, 0.3);
-  --shadow-2: 0 2px 6px rgba(0, 0, 0, 0.45), 0 4px 16px rgba(0, 0, 0, 0.35);
-  --shadow-3: 0 6px 16px rgba(0, 0, 0, 0.5), 0 16px 40px rgba(0, 0, 0, 0.45);
-  --shadow-4: 0 12px 28px rgba(0, 0, 0, 0.55), 0 28px 64px rgba(0, 0, 0, 0.5);
+  /* Dark surfaces swallow ambient shadows, so these carry more weight than the
+     light theme's — but in a blue-black, and lighter than they used to be: a
+     low-contrast palette loses its calm the moment popovers wear hard black
+     edges. Ayu Mirage shadows its panels with black at 0.2–0.3. */
+  --shadow-1: 0 1px 2px rgba(8, 10, 14, 0.34), 0 1px 1px rgba(8, 10, 14, 0.24);
+  --shadow-2: 0 2px 6px rgba(8, 10, 14, 0.38), 0 4px 16px rgba(8, 10, 14, 0.28);
+  --shadow-3: 0 6px 16px rgba(8, 10, 14, 0.42), 0 16px 40px rgba(8, 10, 14, 0.36);
+  --shadow-4: 0 12px 28px rgba(8, 10, 14, 0.46), 0 28px 64px rgba(8, 10, 14, 0.4);
   --shadow-accent: 0 2px 10px rgba(45, 68, 190, 0.4);
   --shadow-accent-hover: 0 4px 14px rgba(45, 68, 190, 0.5);
-  --shadow-danger: 0 2px 10px rgba(0, 0, 0, 0.5);
-  --glow-accent: drop-shadow(0 2px 10px rgba(124, 150, 255, 0.4));
-  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%23949bad' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  --shadow-danger: 0 2px 10px rgba(8, 10, 14, 0.45);
+  --shadow-up: 0 -8px 16px -12px rgba(8, 10, 14, 0.4);
+  --glow-accent: drop-shadow(0 2px 10px rgba(124, 150, 255, 0.35));
+  --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%239ca3b1' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
 
   color-scheme: dark;
 }

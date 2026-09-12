@@ -1234,7 +1234,7 @@ button.work-dir {
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
   background: var(--panel-solid);
-  box-shadow: 0 -8px 16px -12px rgba(0, 0, 0, 0.45);
+  box-shadow: var(--shadow-up);
   font-size: 11.5px;
 }
 .diff-sendbar-count { color: var(--text-dim); font-variant-numeric: tabular-nums; }
