@@ -7,7 +7,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -194,14 +193,13 @@ func (d *desktopApp) newSessionManager() *session.Manager {
 // isolated by the manager's discovered sets). It returns the agent; the caller
 // applies provider/thinking overrides.
 func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manager) (*agent.AIAgent, error) {
-	maxIters := config.DefaultMaxIterations
-	if d.cfg != nil {
-		if m := d.cfg.GetMaxIterations(); m > 0 {
-			maxIters = m
-		}
-	}
+	// No iteration budget: this frontend is INTERACTIVE, like the TUI, ACP and channel, and
+	// none of those cap a turn (main.go: "TUI is interactive — no iteration budget cap").
+	// `max_iterations` in config.yaml is the SINGLE-SHOT knob — main_agent.go's `tachi -p` and
+	// the one-off commands are the only places that read it — so reading it here quietly capped
+	// desktop turns at 50 and ended them mid-work for no visible reason. The user is watching
+	// and can Stop; a runaway loop is their call, not the config's.
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		MaxIterations:  maxIters,
 		Logger:         logger.New("desktop"),
 		PermissionMode: agent.PermissionModeSkip,
 		AskUserEnabled: true,         // the desktop renders question forms itself
