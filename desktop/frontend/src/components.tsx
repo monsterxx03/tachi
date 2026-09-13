@@ -110,7 +110,7 @@ function ContextPanel({ info, loading }: { info: ContextInfoVO | null; loading: 
       {est <= 0 ? (
         <div className="ctx-empty">还没有可用的估算<br />下一轮对话后可见</div>
       ) : parts.length === 0 ? (
-        <div className="ctx-empty">分项明细需下一轮对话后可见<br />（当前为历史会话的估算总量）</div>
+        <div className="ctx-empty">分项明细需下一轮对话后可见<br />（当前总量来自历史会话）</div>
       ) : (
         <>
           {/* flex-grow carries the proportion, so the bar needs no rounding math
@@ -132,7 +132,12 @@ function ContextPanel({ info, loading }: { info: ContextInfoVO | null; loading: 
           </div>
         </>
       )}
-      <div className="ctx-foot">本地 chars/4 估算，非 API 返回用量</div>
+      {/* The total is anchored on what the provider billed (see the Go side,
+          convState.contextEstimate) while the split is the local character
+          estimate — so the caveat names both instead of disowning the number
+          as "not API usage", which stopped being true once it was anchored.
+          Total first: it is the line above the parts. */}
+      <div className="ctx-foot">总量以最近一次 API 用量为准，分项为本地 chars/4 估算</div>
     </>
   )
 }

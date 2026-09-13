@@ -533,12 +533,17 @@ func (a *AIAgent) SetContextWindow(window int64) {
 	a.Config.Resolved.ContextWindow = window
 }
 
-// LastInputEstimate returns the local token estimate for the most recent
-// API call, computed by estimateAndUpdateTokens before the call. This is
-// deliberately conservative (overestimates) and is used for both
-// token-warning reminders and the TUI statusbar context fraction.
+// LastInputEstimate returns the context size to report for the most recent API call: the REAL
+// prompt size the provider billed, scaled by how much the local estimate has moved since (see
+// convState.contextEstimate). With no completed call yet it is the local estimate itself.
+//
+// ONE accessor on purpose. The character estimate is biased by content — it under-counts mixed
+// CJK/JSON by ~18% — so the number is anchored on what was actually billed, and everyone who
+// DISPLAYS a context size reads THIS (the TUI's statusbar/warnings, the desktop's cost event and
+// its context popover). Two accessors for one fact is how the ring and its own popover came to
+// disagree — `ctx-ring` caught exactly that.
 func (a *AIAgent) LastInputEstimate() int64 {
-	return a.conv.tokens()
+	return a.conv.contextEstimate()
 }
 
 // isCompactCooldown returns true if the token estimate has not grown

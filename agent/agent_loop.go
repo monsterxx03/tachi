@@ -223,6 +223,19 @@ func (a *AIAgent) recordAssistantTurn(rs *RunState, text string, usage *llm.Usag
 			rs.TurnCost += cost
 			rs.TurnCredit += credit
 		}
+		// Anchor the reported context size on what this call actually billed, together with the
+		// estimate that was made for it (see convState): the estimate's own bias is already known
+		// by then, and the next turns only need its DELTA. a.conv.tokens() is still this call's
+		// estimate — the next one is taken at the top of the next iteration.
+		//
+		// One-off runs are skipped for the same reason the estimate write below is: they share
+		// this agent's convState but never touch its estimate (EstimateAndUpdateTokens returns
+		// early, see shouldAutoCompact's note), so anchoring on a side-channel prompt would pair
+		// it with the MAIN conversation's estimate and collapse the ring to the side-channel's
+		// number until the main conversation's next call.
+		if p := a.Provider(); p != nil && !rs.SkipSessionWrites {
+			a.conv.setPromptAnchor(llm.PromptTokens(usage, p.Name()), a.conv.tokens())
+		}
 	}
 	for _, tb := range thinkBlocks {
 		a.recordSession(rs, &session.Message{

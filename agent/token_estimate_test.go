@@ -1,9 +1,11 @@
 package agent
 
 import (
+	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"testing"
 
 	agenttools "github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -421,4 +423,128 @@ func TestTokenBreakdown_SteerIsUser(t *testing.T) {
 	assert.Equal(t, int64(0), tb.Other, "steer msgs should not be in Other")
 	assert.Equal(t, tb.Total, tb.UserMessages,
 		"Total should equal user (steer merged into UserMessages)")
+}
+
+// TestContextEstimateAnchorsOnTheRealPromptSize pins the calibration that keeps the context ring
+// honest. The character estimate alone is biased on mixed content — measured 0.815x (≈18% low)
+// against the provider's own accounting on a long Chinese conversation full of JSON tool results —
+// so the reported size is anchored on the last call's REAL prompt size and scaled by the estimate's
+// movement since: the bias then applies to one turn's additions instead of the whole prompt.
+func TestContextEstimateAnchorsOnTheRealPromptSize(t *testing.T) {
+	c := newConvState()
+
+	// Before any call in this process there is nothing to anchor on: the estimate is all there is.
+	c.setEstimate(1000, tokenbreakdown.Breakdown{Total: 1000})
+	if got := c.contextEstimate(); got != 1000 {
+		t.Errorf("with no anchor the estimate itself must be reported, got %d", got)
+	}
+
+	// A call whose real prompt (2000) was bigger than the estimate made for it (1500): the real
+	// number wins, because that is what the provider billed.
+	c.setEstimate(1500, tokenbreakdown.Breakdown{Total: 1500})
+	c.setPromptAnchor(2000, 1500)
+	if got := c.contextEstimate(); got != 2000 {
+		t.Errorf("the anchor must replace the estimate, got %d want 2000", got)
+	}
+
+	// The next turn adds messages: the estimate's movement is applied to the ANCHOR (×1.13 here),
+	// so the reported size keeps the anchor's absolute scale instead of the estimate's bias.
+	c.setEstimate(1700, tokenbreakdown.Breakdown{Total: 1700})
+	if got := c.contextEstimate(); got != 2266 { // 2000 × 1700/1500
+		t.Errorf("growth must scale the anchor, got %d want 2266", got)
+	}
+
+	// Compaction REPLACES the history with a summary: the estimate drops, and the reported size
+	// must drop with it — an additive "+delta with a floor at the anchor" would sit on the
+	// pre-compaction number, which is the one number compaction exists to bring down.
+	c.setEstimate(200, tokenbreakdown.Breakdown{Total: 200})
+	if got := c.contextEstimate(); got != 266 { // 2000 × 200/1500
+		t.Errorf("a shrink must scale the anchor down too, got %d want 266", got)
+	}
+}
+
+// TestRecordAssistantTurnAnchorsTheContextEstimate pins the WIRING, not the arithmetic: a completed
+// API call is the moment the real prompt size becomes known, so that is where the anchor has to be
+// taken (a test of contextEstimate alone would pass even if nothing ever called setPromptAnchor).
+func TestRecordAssistantTurnAnchorsTheContextEstimate(t *testing.T) {
+	a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 5)
+	defer a.Close()
+
+	a.conv.setEstimate(1500, tokenbreakdown.Breakdown{Total: 1500})
+	a.recordAssistantTurn(&RunState{}, "hi", &llm.Usage{
+		InputTokens:          500,  // Anthropic: the cache-miss part alone…
+		CacheReadInputTokens: 1500, // …plus what the cache served = 2000 for the prompt
+	}, nil)
+
+	if got := a.conv.contextEstimate(); got != 2000 {
+		t.Errorf("a completed call must anchor the reported context size, got %d want 2000", got)
+	}
+}
+
+// TestOneOffRunsDoNotMoveTheContextAnchor pins that a side-channel run leaves the main
+// conversation's anchor alone. One-off runs (SkipSessionWrites: /review, /commit, dream, a channel
+// ambient turn) share this agent's convState but never touch its estimate, so anchoring on their
+// own prompt size would pair a side-channel prompt with the MAIN conversation's estimate and
+// collapse the reported context size to the side-channel's number until the next main-turn call.
+func TestOneOffRunsDoNotMoveTheContextAnchor(t *testing.T) {
+	a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 5)
+	defer a.Close()
+
+	// The main conversation's call: 2000 billed against a 1500 estimate, so the anchor is 2000.
+	a.conv.setEstimate(1500, tokenbreakdown.Breakdown{Total: 1500})
+	a.recordAssistantTurn(&RunState{}, "hi", &llm.Usage{InputTokens: 2000}, nil)
+	if got := a.conv.contextEstimate(); got != 2000 {
+		t.Fatalf("setup: the main call must anchor the report, got %d want 2000", got)
+	}
+
+	// A side-channel run reports a MUCH smaller prompt — it does not carry the conversation. It
+	// must not become the number the main conversation reports.
+	a.recordAssistantTurn(&RunState{SkipSessionWrites: true}, "review", &llm.Usage{InputTokens: 300}, nil)
+
+	if got := a.conv.contextEstimate(); got != 2000 {
+		t.Errorf("a one-off run must not move the anchor: got %d, want 2000 (the main conversation)", got)
+	}
+}
+
+// TestAutoCompactFiresOnTheReportedSize pins that the auto-compact TRIGGER follows the number the
+// meter shows, not the raw character estimate. On mixed content the two differ by ~18%, and a
+// trigger that disagreed with the ring would compact while the ring still looked roomy, or hold off
+// while it warned — the reader has to be able to predict it. Both directions are pinned here,
+// because "fire on the anchored value" is only half of it: an OVER-counting estimate must equally
+// not fire a compaction the real prompt does not justify.
+func TestAutoCompactFiresOnTheReportedSize(t *testing.T) {
+	autoCompactAgent := func(window, threshold float64) *AIAgent {
+		enabled := true
+		a := newBareTestAgent(t, &mockStreamProvider{name: "anthropic"}, 5)
+		t.Cleanup(a.Close)
+		a.Config.FullConfig = &config.Config{
+			Compact: config.CompactConfig{Auto: &enabled, Threshold: threshold},
+		}
+		a.Config.Resolved.ContextWindow = int64(window)
+		return a
+	}
+	// The anchor: a call billed `real` against an estimate of `atAnchor`; then the estimate moves to
+	// `now` (what the current prompt is estimated at). contextEstimate() = real × now/atAnchor.
+	anchorThen := func(a *AIAgent, real, atAnchor, now int64) {
+		a.conv.setEstimate(atAnchor, tokenbreakdown.Breakdown{})
+		a.conv.setPromptAnchor(real, atAnchor)
+		a.conv.setEstimate(now, tokenbreakdown.Breakdown{})
+	}
+
+	// UNDER-counting (mixed CJK + JSON): 760 raw is 76% of the 1000-token window — under the 80%
+	// threshold — but the last call billed 900 and the estimate has moved 700→760 since, so the
+	// prompt is really at ~977 (97%). The compaction the ring is about to warn about must fire.
+	under := autoCompactAgent(1000, 0.8)
+	anchorThen(under, 900, 700, 760)
+	if !under.shouldAutoCompact() {
+		t.Error("the trigger must fire on the reported size (977), not the raw estimate (760)")
+	}
+
+	// OVER-counting (plain English): 900 raw reads 90%, but the same prompt was billed at 500 — the
+	// conversation is really at 64%, and compacting it would cut a history the ring says is fine.
+	over := autoCompactAgent(1000, 0.8)
+	anchorThen(over, 500, 700, 900)
+	if over.shouldAutoCompact() {
+		t.Error("an over-counting estimate must not fire a compaction the real prompt does not justify")
+	}
 }

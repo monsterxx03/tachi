@@ -146,6 +146,21 @@ func textStream(text string, cacheRead int) mockllm.ReplyFunc {
 	)
 }
 
+// textStreamPrompt is textStream with an explicit PROMPT size. Scenarios about the context meter
+// need the mock to report a prompt that matches the conversation it was given: the meter is anchored
+// on what the provider billed (llm.PromptTokens), so a fixed 1200-token report standing next to a
+// 30k-token history is a state the app cannot reach in production — the scenario would be testing
+// the mock's arithmetic instead of the app's. (The meter used to show the local estimate, which is
+// why the old fixed numbers went unnoticed; see docs/agents/desktop.md.)
+func textStreamPrompt(text string, cacheRead, prompt int) mockllm.ReplyFunc {
+	return mockllm.Stream(
+		mockllm.Text(text),
+		mockllm.Finish("stop"),
+		mockllm.UsageWithCache(prompt, 60, cacheRead, 20),
+		mockllm.Done(),
+	)
+}
+
 // bashStream makes the run do something: one tool call, then whatever comes next.
 func bashStream(cmd, id string) mockllm.ReplyFunc {
 	return mockllm.Stream(
@@ -310,15 +325,15 @@ func scenarios() []scenario {
 				// dominated by the system prompt and tool schemas (a small turn is lost in the
 				// rounding), so a scenario about "the context got smaller" needs a conversation
 				// that was actually taking up room — which is the only reason anyone compacts.
-				{Reply: textStream(strings.Repeat("这是一段很长的历史内容，用来把上下文撑起来。", 1500), 600)},
+				{Reply: textStreamPrompt(strings.Repeat("这是一段很长的历史内容，用来把上下文撑起来。", 1500), 600, 8000)},
 				// …and a SECOND turn, because the estimate describes the PROMPT of the last call:
 				// a reply only enters the measurement when the next call is made with it in the
 				// history. Without this turn the big reply is never counted, and "before" would
 				// read the same floor as "after".
-				{Reply: textStream("第二轮回复：确认。", 600)},
+				{Reply: textStreamPrompt("第二轮回复：确认。", 600, 20000)},
 				// The /compact turn: the model has to produce the summary the child session is
 				// built from (an empty reply makes the command refuse).
-				{Reply: textStream("历史摘要：用户要求查看工作目录；已确认只有一个 README.md。", 600)},
+				{Reply: textStreamPrompt("历史摘要：用户要求查看工作目录；已确认只有一个 README.md。", 600, 22000)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))

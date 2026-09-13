@@ -38,10 +38,12 @@ type UsageReportInfo struct {
 	CacheCreationInputTokens int64
 	OutputTokens             int64
 
-	// EstimatedInputTokens is the local heuristic estimate (chars/4) of
-	// the most recent API call's input tokens, set by estimateAndUpdateTokens
-	// before each LLM call. This is the numerator used for context percentage
-	// display across TUI, channel, and ACP modes.
+	// EstimatedInputTokens is the numerator of the context percentage. It is
+	// whatever the calling frontend's live source reports (TUI:
+	// totalUsage.LastInputTokens; channel/ACP: the agent's LastInputEstimate),
+	// and that source is anchored on the last COMPLETED call's real prompt size
+	// once there is one (see agent.convState.contextEstimate) — the chars/4
+	// estimate is only the pre-first-call fallback, not the whole story.
 	EstimatedInputTokens int64
 
 	// EstBreakdown is the categorized breakdown of EstimatedInputTokens.

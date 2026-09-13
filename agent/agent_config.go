@@ -404,6 +404,17 @@ type convState struct {
 	tokenBreakdown  tokenbreakdown.Breakdown
 	compactEstimate int64
 	lastMessageDate string
+
+	// lastPromptReal / lastPromptEstimate anchor the context size the frontends report: the prompt
+	// size the provider BILLED for the most recent call (llm.PromptTokens), and the character
+	// estimate that was made for that same call. The estimate alone is biased on mixed content —
+	// measured 0.815x (≈18% low) on a long Chinese conversation with JSON tool results, the opposite
+	// of the "conservative overestimate" the estimator's comment claimed — so the reported number is
+	// the real anchor scaled by the estimate's movement since (a RATIO; see contextEstimate): the
+	// error becomes one turn's delta instead of the whole prompt's bias. Zero means "no call yet in
+	// this process".
+	lastPromptReal     int64
+	lastPromptEstimate int64
 }
 
 func newConvState() *convState { return &convState{} }
@@ -422,6 +433,36 @@ func (s *convState) setEstimate(total int64, tb tokenbreakdown.Breakdown) {
 	defer s.mu.Unlock()
 	s.inputTokens = total
 	s.tokenBreakdown = tb
+}
+
+// setPromptAnchor records what the provider actually billed for the most recent call together
+// with the estimate that was made for it (see the fields above).
+func (s *convState) setPromptAnchor(real, estimate int64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastPromptReal = real
+	s.lastPromptEstimate = estimate
+}
+
+// contextEstimate returns the context size to report: the last call's REAL prompt size, moved by
+// how the estimate has changed since that call.
+//
+// The shape of the correction is a RATIO (real × current/atAnchor), not "real + delta", and that is
+// deliberate: the estimate's bias is roughly proportional to the content, so scaling the anchor by
+// the estimate's own movement keeps the correction working in BOTH directions. An additive delta
+// with a floor at `real` looks right while the history only grows and is badly wrong the moment it
+// does not: after a compaction the history is REPLACED by a summary, the estimate drops, and the
+// ring would sit on the pre-compaction number until the next call — the very number compaction
+// exists to bring down (`compact` asserts the meter falls). Scaling re-syncs it instead.
+//
+// With no anchor (nothing completed in this process yet) the plain estimate is all there is.
+func (s *convState) contextEstimate() int64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.lastPromptReal <= 0 || s.lastPromptEstimate <= 0 || s.inputTokens <= 0 {
+		return s.inputTokens
+	}
+	return s.lastPromptReal * s.inputTokens / s.lastPromptEstimate
 }
 
 // estimateSnapshot returns the token total and its breakdown read under a

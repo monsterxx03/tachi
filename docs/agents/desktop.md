@@ -105,7 +105,15 @@ const type = (el, t) => {
 - **Only one instance may run**: `open` on a live instance merely activates it and passes NO
   environment (so the driver never runs and the previous scenario's app answers), and
   `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's running app. The unique
-  executable name is what makes `pkill -f TachiSmoke` safe; check with `pgrep -fl Tachi`
+  executable name is what makes `pkill -f TachiSmoke` safe — check with `pgrep -fl Tachi`. But that
+  pattern also matches the SANDBOX's own build (`codesign --force --deep --sign - …/TachiSmoke.app`
+  carries it on the command line), so a stray `pkill -f TachiSmoke` while a run is preparing kills
+  the ad-hoc signing and the scenario reports `sandbox — codesign …: signal: terminated` before its
+  app ever launches — the same pattern the runner's own "kill it first" message recommends. Never
+  kill a run in flight for a second reason: every sandbox app shares the bundle id
+  `com.monsterxx03.tachi.smoke`, so the instance it leaves behind is exactly what the next run's
+  `open` will activate (measured: a killed run's app from an old sandbox answered the next run's
+  `send-now`, which then hung with the app dying of a stale SIGTERM mid-scenario)
 - **Run the suite SERIALLY — one invocation at a time.** The drivers are timing-sensitive in a way that
   turns load into false failures: each has a 1m30s budget, assertions wait 3s for a synthetic drag or a
   transient state, and a starved webview misses both. Measured: two overlapping `desktop-smoke` runs (or a
@@ -354,6 +362,35 @@ const type = (el, t) => {
   chrome. It took its own styles with it — `STATUS_META` (`types.ts`), `.status-badge` / `.dot*` /
   `.status-label` / `dot-pulse` (`layout.css`) and the reduced-motion exemption (`base.css`) — so a status
   dot that comes back starts from those, not from a bare node.
+
+- **The context ring is ANCHORED on the last call's real prompt size, not on the character
+  estimate** (`desktop/contextinfo.go` → `AIAgent.LastInputEstimateWithBreakdown`). The estimate
+  (`agent/token_estimate.go`) is character-class based and its bias depends on the content: it
+  over-counts plain English and UNDER-counts mixed CJK + JSON (whitespace is charged nothing), which
+  measured **0.815x** on a long Chinese conversation full of tool results — a ring reading 716,714
+  while the provider had billed 879,259. So the reported number is the last call's real prompt size
+  (`llm.PromptTokens`: input + cache read + cache creation for Anthropic; the total alone for
+  OpenAI-family, whose `prompt_tokens` already contains the cache reads) scaled by the estimate's
+  movement since that call — the bias then applies to one turn's additions instead of the whole
+  prompt. Two
+  consequences worth keeping: the breakdown in the popover is scaled to that total (`Breakdown.ScaleTo`,
+  because the parts must add up to the number above them — `ctx-ring` asserts they agree within 0.5
+  points), and a session restored from disk anchors on the last recorded message instead
+  (`estimateFromMessages`), so a reload is not a step backwards. The popover's own caveat has to
+  follow: it said the number was a local estimate and NOT API usage, which the anchoring made false
+  (`components.tsx`, the context panel's footer).
+  The correction is a RATIO of the estimate's movement applied to the anchored real value, not an
+  additive delta with a floor: after a compaction the history is REPLACED by a summary, and a floor
+  would leave the ring sitting on the pre-compaction number — the one number compaction exists to
+  bring down (`compact` asserts the meter falls). One consequence for the smoke suite: a scenario
+  about the meter must have the mock report a prompt size that matches the conversation it was given
+  (`textStreamPrompt`); a fixed 1200-token report next to a 30k-token history is a state the app
+  cannot reach in production, so the scenario would be testing the mock's arithmetic. The auto-compact
+  THRESHOLD reads the anchored value too (`shouldAutoCompact`), so the trigger and the meter agree —
+  the reader can predict when it fires. The cooldown is the one comparison still on the raw estimate,
+  and rightly so: it measures the conversation against itself, where the bias cancels. A scenario that
+  exercises AUTO-compaction therefore has to give the mock a plausible prompt size as well — the
+  anchored value is what fires.
 
 - **The sidebar is `sessionRow` in `App.tsx`**: the conversation list, the folded compaction chains
   (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /

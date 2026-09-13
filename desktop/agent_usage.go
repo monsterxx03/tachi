@@ -123,10 +123,12 @@ func tpsRate(tokens int64, start time.Time) int64 {
 	return int64(float64(tokens) / elapsed.Seconds())
 }
 
-// estimateFromMessages returns the most recent persisted input-token estimate
-// (usage.estimated_input_tokens on a session message, chars/4 heuristic), or 0
-// when the session has never carried an estimate. Mirrors TUI's session-restore
-// recovery (tui/session_selector.go).
+// estimateFromMessages returns the context size to report for a session with no call in this
+// process: the most recent call's RECORDED prompt size (`llm.PromptTokens` over the persisted usage
+// counts) — the real number, since nothing has been appended since that call — falling back to
+// `usage.estimated_input_tokens` (the chars/4 heuristic) for records too old to carry the counts,
+// or 0 when the session has never carried either. Mirrors TUI's session-restore recovery
+// (tui/session_selector.go).
 func (d *desktopApp) estimateFromMessages(r *sessionRun) int64 {
 	if r == nil || r.sm == nil {
 		return 0
@@ -135,11 +137,32 @@ func (d *desktopApp) estimateFromMessages(r *sessionRun) int64 {
 	if err != nil {
 		return 0
 	}
-	var est int64
+	providerType := ""
+	if r.agent != nil && r.agent.Provider() != nil {
+		providerType = r.agent.Provider().Name()
+	}
+	var est, real int64
 	for _, m := range msgs {
-		if m.Usage != nil && m.Usage.EstimatedInputTokens > 0 {
-			est = m.Usage.EstimatedInputTokens
+		u := m.Usage
+		if u == nil || u.EstimatedInputTokens <= 0 {
+			continue
 		}
+		est = u.EstimatedInputTokens
+		// The same call's REAL prompt size, in the provider's own terms (llm.PromptTokens: the
+		// cache counts are inside the input for OpenAI-family, beside it for Anthropic).
+		//
+		// A session restored from disk has had nothing appended since that call, so this IS the
+		// context size right now — and reporting the character estimate instead would under-report
+		// mixed content by ~18% until this process makes a call of its own (which then anchors it
+		// in convState). `est` stays as the fallback for records old enough to lack the counts.
+		real = llm.PromptTokens(&llm.Usage{
+			InputTokens:              u.InputTokens,
+			CacheReadInputTokens:     u.CacheReadInputTokens,
+			CacheCreationInputTokens: u.CacheCreationInputTokens,
+		}, providerType)
+	}
+	if real > 0 {
+		return real
 	}
 	return est
 }

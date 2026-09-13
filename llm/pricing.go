@@ -369,6 +369,26 @@ func parseBandDays(days []int) ([]time.Weekday, error) {
 	return out, nil
 }
 
+// PromptTokens is the size of the prompt that was actually sent, in tokens — the number a
+// context-window percentage should report. It is provider-dependent, and it is the same difference
+// NormalizeCacheMissInput handles from the other direction:
+//
+//   - Anthropic reports input_tokens as the CACHE-MISS part alone, with the cache read and cache
+//     creation counts beside it, so the prompt is their sum.
+//   - OpenAI-family reports prompt_tokens (Responses: input_tokens) as the TOTAL, cache reads
+//     included and the cache counts carried as detail fields inside it — adding them double counts.
+//
+// Zero means "no call to measure yet": callers fall back to the character estimate.
+func PromptTokens(u *Usage, providerType string) int64 {
+	if u == nil {
+		return 0
+	}
+	if providerType == config.ProviderTypeAnthropic {
+		return u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+	}
+	return u.InputTokens
+}
+
 // NormalizeCacheMissInput returns the cache-miss input token count for a
 // provider family. OpenAI-style APIs (openai / openai-res) report
 // input_tokens INCLUDING cache-read tokens; Anthropic does not. Billing a

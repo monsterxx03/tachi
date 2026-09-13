@@ -123,9 +123,19 @@ func EstimateContentTokens(msgs []session.Message, providerName string) int64 {
 // allocation overhead of buildLLMTools conversion in the hot path
 // (estimateAndUpdateTokens is called multiple times per agent loop).
 //
-// The estimate is deliberately conservative (overestimates) to trigger timely
-// warnings and compaction. Once the API responds, the actual InputTokens from
-// the response replace this estimate.
+// This is a character-class estimate, and its bias depends on the content: it OVER-counts plain
+// English prose (the 4-chars-per-token rule is deliberately pessimistic) and UNDER-counts mixed
+// CJK + JSON, where whitespace is charged nothing and a Hanzi is assumed to cost one token —
+// measured 0.815x against the provider's own accounting on a long Chinese conversation with tool
+// results (a 716,714 estimate against 879,259 billed, ≈18% low). So the estimate is only half the
+// story: what the frontends DISPLAY is anchored on the real prompt size of the last call
+// (convState.contextEstimate), and this estimate supplies the movement since.
+//
+// The auto-compact THRESHOLD reads the anchored value too (see shouldAutoCompact), so the trigger
+// and the meter agree — which is most of the point of anchoring: the reader can predict when it
+// fires. The cooldown is the one comparison left on this raw estimate, and legitimately so: it asks
+// whether the conversation has grown 20% since the last compaction, an estimate measured against
+// itself, where the bias cancels.
 func estimateInputTokens(messages []llm.Message, systemPrompt string, schemas []tools.Schema) tokenbreakdown.Breakdown {
 	var tb tokenbreakdown.Breakdown
 
@@ -234,18 +244,38 @@ func (a *AIAgent) LastTokenBreakdown() tokenbreakdown.Breakdown {
 	return a.conv.snapshotBreakdown()
 }
 
-// LastInputEstimateWithBreakdown returns the most recent token estimate and its
-// breakdown, read atomically so the two always describe the same estimate.
+// LastInputEstimateWithBreakdown returns the context size to report and its breakdown, read
+// atomically so the two always describe the same number.
+//
+// The total is ANCHORED on the last call's real prompt size when there is one (see
+// convState.contextEstimate): the character estimate alone runs ~18% low on mixed CJK/JSON
+// content, and a context ring that under-reports is worse than no ring. The breakdown is scaled to
+// the reported total so its parts still add up to it.
 func (a *AIAgent) LastInputEstimateWithBreakdown() (int64, tokenbreakdown.Breakdown) {
-	return a.conv.estimateSnapshot()
+	est, tb := a.conv.estimateSnapshot()
+	real := a.conv.contextEstimate()
+	if real <= 0 || real == est {
+		return est, tb
+	}
+	return real, tb.ScaleTo(real)
 }
 
 // shouldAutoCompact checks whether automatic compaction should be triggered.
 // Returns true when all of the following hold:
 //   - auto-compact is enabled in config
 //   - context window is known
-//   - estimated input tokens >= contextWindow * threshold
+//   - the reported context size >= contextWindow * threshold
 //   - not in cooldown (token estimate hasn't grown 20% since last compact)
+//
+// The size it compares is contextEstimate() — the SAME number the ring and the statusbar show, not
+// the raw character estimate. The two disagree on mixed content (the estimate runs ~18% low there),
+// and a trigger that disagreed with the meter would compact while the ring still looked roomy, or
+// hold off while it warned; the reader has to be able to predict when it fires. Before the anchor
+// existed the raw estimate was the only thing available.
+//
+// The cooldown is deliberately still on raw estimates (see convState.compactCooldown): it asks
+// whether the conversation has grown 20% since the last compaction, a comparison of the estimate
+// against ITSELF, where the bias — and so the units — cancel.
 func (a *AIAgent) shouldAutoCompact() bool {
 	if a.Config.FullConfig == nil || (a.Config.FullConfig.Compact.Auto != nil && !*a.Config.FullConfig.Compact.Auto) {
 		return false
@@ -256,6 +286,6 @@ func (a *AIAgent) shouldAutoCompact() bool {
 	if a.isCompactCooldown() {
 		return false
 	}
-	pct := float64(a.conv.tokens()) / float64(a.ContextWindow())
+	pct := float64(a.conv.contextEstimate()) / float64(a.ContextWindow())
 	return pct >= a.Config.FullConfig.Compact.Threshold
 }

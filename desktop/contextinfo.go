@@ -67,9 +67,9 @@ func (s *AgentService) GetContextInfo(id string) ContextInfoVO {
 	// can straddle a concurrent turn's update and mix two estimates.
 	est, tb := r.agent.LastInputEstimateWithBreakdown()
 	if est <= 0 {
-		// Resumed session, no turn in this app run yet: only the total survives
-		// on disk (a message's estimated_input_tokens — the breakdown is not
-		// persisted), which is exactly what /usage falls back to as well.
+		// Resumed session, no turn in this app run yet: only the total survives on disk (a
+		// message's recorded usage — the breakdown is not persisted), which is exactly what /usage
+		// falls back to as well.
 		est = d.estimateFromMessages(r)
 	}
 	info.Estimate = est
