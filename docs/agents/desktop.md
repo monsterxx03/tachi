@@ -210,6 +210,15 @@ const type = (el, t) => {
 
 ## Desktop UI State
 
+- **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
+  (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge
+  by one `margin-left: auto`; a new titlebar control belongs in that cluster. The work-status badge that used
+  to end it (状态圆点 + 文字) was removed on 2026-09-13 （「右上角的工作状态指示删掉」）: 运行中 already reads
+  from the sidebar row's `spin-dot` and the reply's typing dots, so the agent state needs no echo in the
+  chrome. It took its own styles with it — `STATUS_META` (`types.ts`), `.status-badge` / `.dot*` /
+  `.status-label` / `dot-pulse` (`layout.css`) and the reduced-motion exemption (`base.css`) — so a status
+  dot that comes back starts from those, not from a bare node.
+
 - **The sidebar is `sessionRow` in `App.tsx`**: the conversation list, the folded compaction chains
   (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
   重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that

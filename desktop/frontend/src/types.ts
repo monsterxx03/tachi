@@ -87,11 +87,6 @@ export interface AgentEvent {
   Title?: string
 }
 
-export const STATUS_META: Record<string, { dot: string; desc: string }> = {
-  idle: { dot: '●', desc: '空闲' }, thinking: { dot: '◐', desc: '思考中' }, tool_running: { dot: '◑', desc: '执行工具' },
-  busy: { dot: '◒', desc: '处理中' }, error: { dot: '▲', desc: '出错' },
-}
-
 export const THINKING_LEVELS = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max']
 // PAGE_SIZE is the number of raw session messages loaded per "page" when
 // switching to a session or scrolling up for older history.

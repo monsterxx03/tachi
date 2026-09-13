@@ -358,26 +358,13 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   background: var(--border-2);
 }
 
-/* Right-hand cluster: the theme switch and the status badge travel together at
-   the far edge (one auto margin, so they can never drift apart mid-window). */
+/* Right-hand cluster: the side-panel toggle and the theme switch sit at the far
+   edge (one auto margin, so nothing else can drift between them mid-window). */
 .titlebar-right {
   display: flex;
   align-items: center;
   gap: 10px;
   margin-left: auto;
-}
-
-.status-badge {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  padding: 5px 12px;
-  border-radius: var(--radius-pill);
-  background: linear-gradient(180deg, var(--panel-veil-a), var(--veil));
-  border: 1px solid var(--border-2);
-  box-shadow: var(--shadow-1);
-  font-size: 12.5px;
-  color: var(--text-dim);
 }
 
 /* ── Theme switch (light / dark) ─────────────────────────────────────────── */
@@ -447,21 +434,3 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   transition: transform 0.22s var(--ease);
 }
 .theme-toggle[data-state="dark"] .theme-thumb { transform: translateX(26px); }
-.dot {
-  font-size: 11px;
-  line-height: 1;
-}
-.dot-idle { color: var(--green); }
-.dot-thinking { color: var(--amber); }
-.dot-tool_running { color: var(--accent); }
-.dot-busy { color: var(--accent-2); }
-.dot-error { color: var(--red); }
-/* Working states pulse; idle/error stay still so motion always means "busy". */
-.dot-thinking, .dot-tool_running, .dot-busy {
-  animation: dot-pulse 1.6s ease-in-out infinite;
-}
-@keyframes dot-pulse {
-  0%, 100% { opacity: 1; }
-  50% { opacity: 0.4; }
-}
-.status-label { font-size: 12.5px; }

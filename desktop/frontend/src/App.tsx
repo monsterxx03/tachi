@@ -2,7 +2,6 @@ import { Fragment, memo, useCallback, useEffect, useLayoutEffect, useRef, useSta
 import { Dialogs, Events } from '@wailsio/runtime'
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import {
-  STATUS_META,
   THINKING_LEVELS,
   PAGE_SIZE,
   type Message,
@@ -991,7 +990,6 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     </div>
   )
 
-  const meta = STATUS_META[state.status as string] ?? STATUS_META.idle
   // The provider picker lists names only; the selected provider's model is
   // exposed as its tooltip instead.
   const currentProvider = providers.find((p) => (p.name ?? p.Name) === providerName)
@@ -1018,7 +1016,6 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
             <svg width="15" height="15" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round"><rect x="1.5" y="2.5" width="13" height="11" rx="2"/><line x1="10" y1="2.5" x2="10" y2="13.5"/></svg>
           </button>
           <ThemeToggle theme={theme} onToggle={toggleTheme} />
-          <div className="status-badge"><span className={`dot dot-${state.status}`}>{meta.dot}</span><span className="status-label">{state.label}</span></div>
         </div>
       </header>
 

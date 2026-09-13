@@ -19,9 +19,10 @@ import type { AgentEvent, Message } from './types'
 import { pushPart, finishToolPart, updateToolPart, closeOpenToolParts } from './transcript'
 
 // ── Agent status ────────────────────────────────────────────────────────────
-// The statusbar's dot. NOT session-scoped: the backend runs one turn at a time, so this is
-// simply "what the agent is doing now", and it is the second signal behind isCurrentRunning
-// (a turn that has stopped but whose run has not been reaped yet).
+// What the agent is doing right now. NOT session-scoped: the backend runs one turn at a time,
+// so this is simply "what the agent is doing now", and it is the second signal behind
+// isCurrentRunning (a turn that has stopped but whose run has not been reaped yet) — it also
+// picks the running turn's spinner label (正在思考… / 正在执行…).
 const AGENT_IDLE: AgentState = { status: AgentStatus.StatusIdle, label: '空闲', detail: '就绪' }
 
 export function useAgentStatus(): AgentState {
