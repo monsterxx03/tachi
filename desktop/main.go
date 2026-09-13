@@ -119,6 +119,9 @@ func main() {
 		Mac: application.MacOptions{
 			// Keep the app alive in the menu bar when the window closes.
 			ApplicationShouldTerminateAfterLastWindowClosed: false,
+			// Regular in a real session; accessory while a script drives the app, so a run
+			// never takes the foreground (see activationPolicy).
+			ActivationPolicy: activationPolicy(),
 		},
 	})
 
@@ -167,7 +170,12 @@ func main() {
 		// webview cannot read the paths itself — they arrive in Go via the
 		// WindowFilesDropped event below and are forwarded to the frontend.
 		EnableFileDrop: true,
-		URL:            "/",
+		// A run that must not take the foreground is created HIDDEN and put on screen by
+		// the demo bootstrap instead, at the BOTTOM of the window stack
+		// (orderWindow:NSWindowBelow — never makeKeyAndOrderFront, which activates the app
+		// and takes the user's focus): see webview_awake_darwin.go.
+		Hidden: demoNoActivate(),
+		URL:    "/",
 	})
 	desk.app = app
 	desk.window = window

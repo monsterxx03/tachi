@@ -25,6 +25,37 @@ func demoEnabled() bool {
 
 const demoFlagPath = "/tmp/tachi-demo.flag"
 
+// The demo bootstrap's two delays, in order: enough for the app's main loop to start (a
+// main-thread dispatch that lands before it never runs), then the page's own time to load
+// before the driver is injected. Together they are the ~2s the driver has always waited for.
+const (
+	demoBootstrapDelay = 500 * time.Millisecond
+	demoLoadDelay      = 1500 * time.Millisecond
+)
+
+// demoNoActivateEnv keeps a scripted run from taking the foreground. The smoke suite sets it,
+// because it launches the app once per scenario and each launch used to steal the foreground
+// from whoever was working — whatever they were typing at that instant landed in the smoke's
+// own composer. Three things have to hold together, and each was measured on its own: the
+// runner also launches with `open -g` (LaunchServices must not ask the app to activate), the
+// app starts as an ACCESSORY app (Wails activates a Regular one itself from
+// ApplicationDidFinishLaunching — with a Regular policy `open -g` alone still brought the app
+// to the front ~1.4s in), and its window is created hidden and put on screen by the demo
+// bootstrap without becoming key (see webview_awake_darwin.go). A hand-run (a screenshot of a
+// specific screen) leaves it unset, so its window still comes to the front as before.
+const demoNoActivateEnv = "TACHI_DEMO_NO_ACTIVATE"
+
+// activationPolicy is Regular, except for a scripted run that asks not to be activated.
+func activationPolicy() application.ActivationPolicy {
+	if demoNoActivate() {
+		return application.ActivationPolicyAccessory
+	}
+	return application.ActivationPolicyRegular
+}
+
+// demoNoActivate reports whether this run must keep its hands off the foreground.
+func demoNoActivate() bool { return os.Getenv(demoNoActivateEnv) == "1" }
+
 // runJsDemo drives the WebView DOM via Wails ExecJS — a reliable way to
 // "type into the input and send" without depending on system-level mouse and
 // keyboard coordinates. The WebView content is not exposed to the Accessibility
@@ -34,15 +65,43 @@ const demoFlagPath = "/tmp/tachi-demo.flag"
 // TACHI_DEMO_JS=<file> runs that file's JS instead of the canned messages, which
 // is how a SPECIFIC screen gets driven (open a session, expand an attachment
 // preview, open the lightbox …) while screenshots are taken from outside.
+// unthrottleReason is what keepPageAwake reported: "" when the page can no longer be
+// throttled, otherwise why it still can — handed to the driver, which asserts on it.
 func runJsDemo(window *application.WebviewWindow) {
 	if window == nil {
 		return
 	}
+	// First let the app's main loop start: the two steps below are dispatched onto the main
+	// thread, and a dispatch that lands before the loop runs is never executed at all — the
+	// driver goroutine then waits forever and the run reports nothing (measured: a probe app
+	// launched with the bootstrap moved to t=0 never reached its own driver).
+	time.Sleep(demoBootstrapDelay)
+
+	// Get the window on screen and lift WebKit's occlusion throttling BEFORE the driver runs.
+	// A scripted run happens on a machine that is in use, so its window WILL be covered by
+	// whatever the user is working in, and WebKit reads a covered window as a hidden page —
+	// frames stop, timers clamp to 1Hz. This also shows the window (a no-activate run is
+	// created hidden, see demoNoActivate) with `orderFront:`, i.e. visible but never key.
+	//
+	// It has to happen BEFORE the wait below rather than after it: the page needs that time to
+	// load, and a driver injected into a document that is still loading is simply lost
+	// (measured: `compact`, the fixture slowest to load, timed out with nothing reported while
+	// the other scenarios passed).
+	//
+	// A run that lost the switch must fail on one readable line instead of as a pile of
+	// timeouts (see webview_awake_darwin.go and itest/desktop/drivers/harness.js). The verdict
+	// rides in the SAME ExecJS call as the driver: a separate call is dispatched on its own,
+	// and Wails sends a script queued while the runtime is still loading in a different order
+	// than the next one — which loses the flag.
+	reason := keepPageAwake(window)
+
 	// Give the webview a moment to load the React app.
-	time.Sleep(2 * time.Second)
+	time.Sleep(demoLoadDelay)
 
 	if script, ok := demoScriptFromFile(); ok {
-		window.ExecJS(script)
+		window.ExecJS(fmt.Sprintf(
+			"window.__tachiDemoUnthrottled = %t; window.__tachiDemoUnthrottleError = %q;\n%s",
+			reason == "", reason, script))
 		return
 	}
 

@@ -177,10 +177,18 @@ func (sb *sandbox) writeDriver(driversDir, scenarioName, sinkURL string) (string
 // launch starts the app through LaunchServices (`open`), which is what makes its window
 // frontmost and interactive (a direct exec would run, but attached to nothing). The env vars
 // are how the app learns about the isolated HOME and the driver.
+//
+// TACHI_DEMO_NO_ACTIVATE plus `open -g` keep the launch from taking the foreground — the suite
+// starts the app once per scenario, and an activated app pulls the window in front of the
+// user's work every time (and out of whatever Space they were on). BOTH are needed: `-g` stops
+// LaunchServices from asking the app to activate itself, and demo mode then launches as a
+// hidden-window accessory app so nothing else activates it either — see activationPolicy and
+// demoNoActivate in desktop/demo.go, which spell out what each one was measured to fix.
 func (sb *sandbox) launch() error {
-	return run("open", sb.appPath,
+	return run("open", "-g", sb.appPath,
 		"--env", "HOME="+sb.home,
 		"--env", "TACHI_DEMO=1",
+		"--env", "TACHI_DEMO_NO_ACTIVATE=1",
 		"--env", "TACHI_DEMO_JS="+filepath.Join(sb.dir, "driver.js"),
 	)
 }
