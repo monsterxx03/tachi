@@ -403,6 +403,19 @@ const type = (el, t) => {
   (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
   重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that
   hands the screen to another app is asserted, never clicked, in a driver (see the smoke rules).
+- **Deleting a session with a turn in flight is REFUSED, by the backend** (`DeleteSession` in
+  `desktop/agent_session.go`): the running turn owns a goroutine whose session writes (`AppendMessage` —
+  `O_APPEND` with no `O_CREATE`, so it just fails once the directory is gone) and run-map writes
+  (`setSessionState` → `getRun`) are keyed by nothing but that id, so deleting underneath it loses the
+  transcript silently, keeps the model running and the tools firing, and can rebuild a directory holding
+  `meta.json` but no `messages.jsonl` (any path that goes through `MkdirAll` — `SetTitle`, the compaction's
+  `UpdateMeta`) — a phantom row in the sidebar that opens empty. Stopping is therefore the user's explicit
+  call, and the refusal (`refuseDeleteRunning`) names it. Two rules ride with it: the running flag is read
+  and the run removed in ONE critical section (a turn starting between the two would be dropped from the map
+  mid-flight), and the frontend renders the reason in the confirmation box that raised the delete while the
+  menu's 删除 entry is `disabled` for a running session — a `.catch(() => {})` here would read as a no-op.
+  Covered by `TestDeleteSessionRefuses*` (a refused delete must not touch the directory, the run or
+  `activeID`) and the `delete-running` smoke scenario.
 
 - **Following the bottom must survive async height changes, not just message updates** (`desktop/frontend/src/App.tsx`): the transcript pin ran only when `msgCache` changed, so anything that grew the content afterwards — a mermaid diagram finishing its async render, an image/attachment card loading, a tool card expanding — slid the visible content up by exactly that height until the next delta pinned it back ("切回会话时先向上飘，再跳到底"; measured at 298px in `switch-scroll`). The fix is a `ResizeObserver` on a `.chat-content` wrapper (the scrollport's own box never changes when its content grows) that re-pins while following. Any new "sticky bottom" behavior must go through the same observer.
 

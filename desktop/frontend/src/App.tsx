@@ -264,7 +264,10 @@ function App() {
   const [sessions, setSessions] = useState<SessionItem[]>([])
   const [currentId, setCurrentId] = useState<string>('')
   const [menu, setMenu] = useState<{ sid: string; x: number; y: number } | null>(null)
-  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string } | null>(null)
+  // The delete confirmation. `error` holds the backend's refusal (a session with a turn
+  // in flight cannot be deleted) so it lands in the box that asked the question, next to
+  // the button that was just pressed — a console-only failure would read as a no-op.
+  const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; error?: string } | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
@@ -890,7 +893,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     if (cur) refreshWorkspace(cur.id)
   }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput])
   const confirmDelete = useCallback(async (id: string) => {
-    await (AgentService as any).DeleteSession?.(id).catch(() => {})
+    const res = await (AgentService as any).DeleteSession?.(id).catch(() => null)
+    // "ok" (or a missing binding) is the only success. Anything else — in practice the
+    // backend refusing because a turn is still running — keeps the box open with the
+    // reason in it, and does NOT reload the list (nothing changed).
+    if (res && res !== 'ok') {
+      setConfirmDel((prev) => (prev && prev.sid === id ? { ...prev, error: res } : prev))
+      return
+    }
+    setConfirmDel(null)
     loadAll()
   }, [loadAll])
 
@@ -1334,7 +1345,9 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
-          <button className="ctx-item danger" role="menuitem" onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
+          <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
+            title={runningSet.has(menu.sid) ? '会话正在运行，请先停止这一轮' : undefined}
+            onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
         </div>
       )}
       {confirmDel && (
@@ -1342,9 +1355,10 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-msg">删除会话「{confirmDel.title || '未命名会话'}」？</div>
             <div className="confirm-sub">此操作不可恢复。</div>
+            {confirmDel.error ? <div className="confirm-error">⚠ {confirmDel.error}</div> : null}
             <div className="confirm-actions">
               <button className="btn ghost" onClick={() => setConfirmDel(null)}>取消</button>
-              <button className="btn danger" onClick={() => { const id = confirmDel.sid; setConfirmDel(null); confirmDelete(id) }}>删除</button>
+              <button className="btn danger" onClick={() => { const id = confirmDel.sid; confirmDelete(id) }}>删除</button>
             </div>
           </div>
         </div>

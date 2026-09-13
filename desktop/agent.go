@@ -143,6 +143,11 @@ func (d *desktopApp) runOf(id string) *sessionRun {
 // ready") were leaking into a Chinese window.
 const refuseNoSession = "没有活跃会话"
 
+// refuseDeleteRunning is DeleteSession's refusal for a session whose turn is still in
+// flight. The frontend renders it in the confirmation box that raised the delete, so it
+// has to name the way out rather than only the refusal.
+const refuseDeleteRunning = "会话正在运行，请先停止这一轮再删除"
+
 // agentOf is runOf plus the readiness rule the UI bindings share: the session exists AND
 // its agent has been built. The second return is the refusal to hand back (empty when
 // there is an agent). Callers must NOT hold d.mu.
