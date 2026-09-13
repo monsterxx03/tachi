@@ -90,8 +90,8 @@ var BuiltinDenyRules = []string{
 }
 
 // Policy evaluates Bash commands against allow/ask/deny rules, plus the
-// built-in structured rm guard and session-scoped exact-command approvals
-// ("always allow" in the TUI). Safe for concurrent use.
+// built-in structured rm guard and a session-scoped "stop asking" switch
+// (the frontends' 「本会话全部允许」). Safe for concurrent use.
 type Policy struct {
 	deny  []string
 	ask   []string
@@ -102,8 +102,11 @@ type Policy struct {
 	// NewPolicyNoBuiltins (permissions.bash.disable_builtin_deny).
 	builtinRm bool
 
-	mu           sync.Mutex
-	sessionExact map[string]struct{}
+	mu sync.Mutex
+	// allowAllAsks is the session-scoped approval: every ask rule is treated as
+	// allowed until this policy goes away. Deny rules are decided ABOVE it in
+	// CheckBash, so it can never turn "stop asking me" into "run what I forbade".
+	allowAllAsks bool
 }
 
 // NewPolicy merges global and project-level rules into a Policy.
@@ -126,7 +129,7 @@ func NewPolicyNoBuiltins(global, project Rules) *Policy {
 }
 
 func newPolicy(global, project Rules, builtinRm bool) *Policy {
-	p := &Policy{sessionExact: make(map[string]struct{}), builtinRm: builtinRm}
+	p := &Policy{builtinRm: builtinRm}
 	p.deny = append(append([]string{}, global.Deny...), project.Deny...)
 	p.ask = append(append([]string{}, global.Ask...), project.Ask...)
 	p.allow = append([]string{}, global.Allow...) // project allow intentionally dropped
@@ -141,13 +144,28 @@ func (p *Policy) Empty() bool {
 	return len(p.deny) == 0 && len(p.ask) == 0 && len(p.allow) == 0 && !p.builtinRm
 }
 
-// AllowExactSession records an exact command string as approved for the rest
-// of the session (the "always allow" choice in the TUI). Matching is exact:
-// a composite command is remembered as a whole and never widened to a prefix.
-func (p *Policy) AllowExactSession(command string) {
+// AllowAllAsksForSession stops this session's ask rules from asking: every command
+// they would have sent to the user is allowed instead. This is the frontends'
+// 「本会话全部允许」 (the TUI's `a`), and it is deliberately SESSION-scoped — the
+// policy is built per agent, so it dies with the conversation.
+//
+// It does NOT disable deny rules. CheckBash decides deny while it walks the command
+// and returns before an ask is ever raised, so the switch cannot be reached for a
+// forbidden command: "stop asking me" never becomes "run what I forbade".
+func (p *Policy) AllowAllAsksForSession() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
-	p.sessionExact[normalize(command)] = struct{}{}
+	p.allowAllAsks = true
+}
+
+// ResetSessionApprovals drops the session-scoped approvals, so the next command
+// asks again. Called when a conversation ENDS (a new session is not the session the
+// user approved). The user's rules are not state and are untouched — deny/ask/allow
+// still describe the same commands.
+func (p *Policy) ResetSessionApprovals() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.allowAllAsks = false
 }
 
 // CheckBash evaluates command against the policy and returns the decision
@@ -164,17 +182,12 @@ func (p *Policy) AllowExactSession(command string) {
 //     ask match → Ask.
 //   - Whole command: any Deny → Deny; else any Ask → Ask; else Allow.
 //   - Unparseable commands → Ask (conservative).
-//   - Exact session approvals short-circuit to Allow.
+//   - A session-wide approval (AllowAllAsksForSession) turns Ask into Allow —
+//     and only Ask: deny is decided above this point, so a forbidden command
+//     can never be reached by it.
 func (p *Policy) CheckBash(command string) (Decision, string) {
 	cmd := normalize(command)
 	if cmd == "" {
-		return DecisionAllow, ""
-	}
-
-	p.mu.Lock()
-	_, approved := p.sessionExact[cmd]
-	p.mu.Unlock()
-	if approved {
 		return DecisionAllow, ""
 	}
 
@@ -205,6 +218,15 @@ func (p *Policy) CheckBash(command string) (Decision, string) {
 		}
 	}
 	if askRule != "" {
+		// The session-wide approval is applied HERE and not at the top of the
+		// function on purpose: every deny check above has already run, so an
+		// allowed session can never run a command the rules forbid.
+		p.mu.Lock()
+		allowed := p.allowAllAsks
+		p.mu.Unlock()
+		if allowed {
+			return DecisionAllow, ""
+		}
 		return DecisionAsk, askRule
 	}
 	return DecisionAllow, ""

@@ -108,8 +108,9 @@ export interface PermissionRequest {
 }
 
 // The three answers a permission card can send. The values are the wire contract
-// with AnswerPermission (see desktop/permission.go).
-export type PermissionDecision = 'allow_once' | 'allow_always' | 'deny'
+// with AnswerPermission (see desktop/permission.go): `allow_session` stops this
+// session's ask rules from asking again (it is not a per-command memory).
+export type PermissionDecision = 'allow_once' | 'allow_session' | 'deny'
 
 export const THINKING_LEVELS = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max']
 // PAGE_SIZE is the number of raw session messages loaded per "page" when

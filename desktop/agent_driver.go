@@ -235,8 +235,8 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 		return nil, err
 	}
 	// The ask decision belongs to this session's user. Installed after construction
-	// because the handler reaches back into the agent for "本会话始终允许"
-	// (AllowExactSession records the command on the session's own policy).
+	// because the handler reaches back into the agent for 「本会话全部允许」 (which
+	// flips the session-wide switch on this agent's own policy).
 	a.SetPermissionHandler(d.permissionHandler(sessionID, a))
 	if sm != nil {
 		a.SetSessionManager(sm)

@@ -102,15 +102,18 @@ checkBashPermission            ← 新增（agent/agent_permission.go）
 
 | 模式 | deny | ask |
 |------|------|-----|
-| TUI（`PermissionModeTUI`） | 错误反馈 LLM | 复用确认弹窗：命令 + 命中规则；`y` 允许一次 / `a` 本会话始终允许（精确命令串记忆）/ `n` 拒绝并取消本轮 |
+| TUI（`PermissionModeTUI`） | 错误反馈 LLM | 复用确认弹窗：命令 + 命中规则；`y` 允许一次 / `a` 本会话全部允许（本会话不再询问 ask，deny 仍生效）/ `n` 拒绝并取消本轮 |
 | ACP（`PermissionModeExternal`） | 错误反馈 LLM | 转发 `session/request_permission`，客户端原生 UI 决策 |
 | channel / subagent / `tachi -p`（`PermissionModeSkip`） | 错误反馈 LLM | **拒绝**，提示用户加 allow 规则（无人值守场景不做交互） |
 
 特例：ACP 客户端选择 "allow all" 后，agent 切到 `PermissionModeSkip` 并置 `autoApprovePolicyAsks=true`——用户显式选择了全部放行，ask 不再拒绝。该标志与 channel 等场景的 Skip 语义隔离，互不影响。
 
 > **2026-09-13 补记**：desktop 也接进了 `PermissionModeExternal`（`desktop/permission.go` 自带
-> `PermissionHandler`），命中 ask 时在窗口里弹确认卡（拒绝 / 本会话始终允许 / 允许一次，对齐 TUI 的 n/a/y）。
-> 「本会话始终允许」用 `AllowExactSession` 记精确命令，不切 Skip——那会连用户写的 deny 规则一起关掉。
+> `PermissionHandler`），命中 ask 时在窗口里弹确认卡（拒绝 / 本会话全部允许 / 允许一次，对齐 TUI 的 n/a/y）。
+> 两个前端的「本会话全部允许」是**同一个开关**：翻掉该会话 policy 上的 `AllowAllAsksForSession`，此后
+> 命中 ask 的命令在 policy 层放行；deny 不受影响（它在 ask 之前判定）。这个语义在 2026-09-13 之前是
+> 「记住精确命令串」（`AllowExactSession`），改掉的原因是它按不动：agent 造出来的命令几乎不重复，而
+> TUI 的提示语一直写的就是 `always(session)`。
 > 侧路运行（/review、/commit）没有可确认的对话回合，仍走「拒绝 + 提示加 allow 规则」。
 > 所以上表是**三种后端模式**的行为，不再是"交互入口"的完整清单；desktop 一侧的约定见
 > [docs/agents/desktop.md](agents/desktop.md)。
@@ -133,16 +136,22 @@ checkBashPermission            ← 新增（agent/agent_permission.go）
 ```go
 ConfirmDeny        // 拒绝（本轮取消，与 EditFile 拒绝语义一致）
 ConfirmAllowOnce   // 仅本次
-ConfirmAllowAlways // 本次 + 记住精确命令串（session 级，仅 Bash ask 有语义）
+ConfirmAllowSession // 本次 + 本会话不再询问 ask（session 级，仅 Bash ask 有语义）
 ```
 
-- "始终允许"采用**精确命令串匹配**（空白归一化后），不做前缀泛化；复合命令整体记忆
-- EditFile 等既有确认流程中 AllowAlways 等同 AllowOnce
+- 「本会话全部允许」是**整个会话**的：翻掉该 agent 自己 policy 上的开关（`AllowAllAsksForSession`），
+  此后命中 ask 的命令在 policy 层直接放行。它**不是**按命令串记忆 —— agent 造出来的命令几乎不会逐字
+  重复，记住一条等于给了一个按不动的按钮
+- 这个开关只把 **ask 变 allow**：deny 在 `CheckBash` 遍历命令时就已判定并提前返回，所以「别再问我」
+  永远不会变成「放行我禁止的东西」
+- 它是**状态**：会话结束（TUI 的 `/new` → `AIAgent.ClearSession` → `Policy.ResetSessionApprovals`）
+  即清空，下一个会话重新问。规则（deny/ask/allow 三段）不是状态，不受影响
+- EditFile 等既有确认流程中 AllowSession 等同 AllowOnce
 - 全部调用方（TUI、main、channel、ACP stream、agent_loop、测试）已迁移
 
 ## 9. 实现阶段与后续方向
 
-**v1（本次）**：策略包（mvdan/sh 解析 + glob 匹配）、全局 + 项目级配置、executor 注入、TUI 三键确认、ACP 转发与 allow-all 联动、channel/subagent/-p ask=deny、session 精确记忆。
+**v1（本次）**：策略包（mvdan/sh 解析 + glob 匹配）、全局 + 项目级配置、executor 注入、TUI 三键确认、ACP 转发与 allow-all 联动、channel/subagent/-p ask=deny、会话级放行开关。
 
 **v2 候选**：
 

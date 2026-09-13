@@ -38,14 +38,16 @@ type PermissionEvent struct {
 	Preview   string `json:"preview"`
 }
 
-// The decisions the confirm card can send. `allow_always` mirrors the TUI's `a`
-// (approve this call and remember the exact command for the rest of the
-// session) rather than ACP's allow-all — switching the whole session to Skip
-// would also switch off the deny rules the user wrote.
+// The decisions the confirm card can send. `allow_session` is the frontends'
+// 「本会话全部允许」: it stops this session's ask rules from asking again, by flipping
+// the switch the policy owns (AllowAllAsksForSession) — the same one the TUI's `a`
+// flips. It is NOT a command memory: an agent's commands almost never repeat
+// verbatim, so remembering one of them would be a button that cannot deliver.
+// Deny rules are untouched — the agent decides them before an ask is raised.
 const (
-	permAllowOnce   = "allow_once"
-	permAllowAlways = "allow_always"
-	permDeny        = "deny"
+	permAllowOnce    = "allow_once"
+	permAllowSession = "allow_session"
+	permDeny         = "deny"
 )
 
 // pendingPermission is one parked ask: the channel its answer arrives on. The session
@@ -78,9 +80,9 @@ func askable(ctx context.Context) bool {
 func permKey(sessionID, toolID string) string { return sessionID + "\x00" + toolID }
 
 // permissionHandler builds the PermissionHandler installed on one session's agent.
-// `a` is captured for AllowExactSession (the "本会话始终允许" decision records the
-// command on that session's own policy — the policy is built per agent, see
-// agent_configure.go).
+// `a` is captured for the session-wide approval: 「本会话全部允许」 flips the switch on
+// that session's own policy (per agent, see agent_configure.go), which is also what
+// makes the NEXT ask inside this session skip the handler entirely.
 func (d *desktopApp) permissionHandler(sessionID string, a *agent.AIAgent) agent.PermissionHandler {
 	return func(ctx context.Context, toolName, toolID, preview, args string) (bool, error) {
 		return d.askPermission(ctx, sessionID, a, toolName, toolID, preview, args)
@@ -134,14 +136,12 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 
 	select {
 	case decision := <-answer:
-		if decision == permAllowAlways {
-			// Only a real command is remembered: an unparsable call cannot be the
-			// exact command the user chose, and recording "" would put a junk key
-			// in the session's approval set.
-			if cmd := bashCommandOf(args); cmd != "" {
-				if p := a.PermissionPolicy(); p != nil {
-					p.AllowExactSession(cmd)
-				}
+		if decision == permAllowSession {
+			// 「本会话全部允许」: hand the fact to the policy, which is where the
+			// session's ask rules are evaluated — so every later ask skips this
+			// handler (no card, no notification) instead of parking again.
+			if p := a.PermissionPolicy(); p != nil {
+				p.AllowAllAsksForSession()
 			}
 		}
 		return decision != permDeny, nil
@@ -156,7 +156,7 @@ func (d *desktopApp) askPermission(ctx context.Context, sessionID string, a *age
 // call (or another conversation) is refused instead of approving something else.
 func (s *AgentService) AnswerPermission(sessionID, toolID, decision string) string {
 	d := s.desk
-	if decision != permAllowOnce && decision != permAllowAlways && decision != permDeny {
+	if decision != permAllowOnce && decision != permAllowSession && decision != permDeny {
 		return "unknown decision"
 	}
 
@@ -178,11 +178,11 @@ func (s *AgentService) AnswerPermission(sessionID, toolID, decision string) stri
 	}
 }
 
-// bashCommandOf extracts the "command" field of a Bash tool call's arguments. It
-// parses the TOOL's own arguments (the same JSON the tool and the agent's own
-// policy check read), not any rendering of them, and a parse failure is simply
-// "no command" — an unparsable call cannot be the exact command the user chose to
-// remember, so AllowExactSession is skipped rather than remembered wrong.
+// bashCommandOf extracts the "command" field of a Bash tool call's arguments — the
+// one line a permission notification names (see notifyPermission). It parses the
+// TOOL's own arguments, the same JSON the tool and the agent's policy check read,
+// never a rendering of them; a parse failure is simply "no command", and the
+// notification then falls back to the bare waiting phrase.
 func bashCommandOf(args string) string {
 	var a struct {
 		Command string `json:"command"`

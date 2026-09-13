@@ -81,10 +81,12 @@ const (
 	ConfirmDeny ConfirmResponse = iota
 	// ConfirmAllowOnce approves this call only.
 	ConfirmAllowOnce
-	// ConfirmAllowAlways approves this call and remembers the exact command
-	// for the rest of the session (only meaningful for Bash policy asks;
-	// other tools treat it as AllowOnce).
-	ConfirmAllowAlways
+	// ConfirmAllowSession approves this call AND stops the frontend asking about
+	// bash policy `ask` rules for the rest of the session (the "stop asking me"
+	// choice — 「本会话全部允许」 / `a`). Only meaningful for Bash policy asks;
+	// other tools treat it as AllowOnce. Deny rules are unaffected: they are
+	// decided before an ask is ever raised.
+	ConfirmAllowSession
 )
 
 type AIAgent struct {
@@ -576,6 +578,12 @@ func (a *AIAgent) ClearSession() {
 	}
 	// Clear skill activation state so the same skills can be re-activated.
 	a.activeSkills = nil
+	// And the session-scoped permission approvals: this conversation is over, so a
+	// new one asks again. (The rules themselves are not state — they still describe
+	// the same commands.)
+	if a.Config.PermissionPolicy != nil {
+		a.Config.PermissionPolicy.ResetSessionApprovals()
+	}
 }
 
 // GetTool retrieves a tool from the agent's registry by name.

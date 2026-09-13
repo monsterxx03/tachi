@@ -12,8 +12,8 @@ import (
 )
 
 // askCmd + askArgs are one Bash call the way the agent sees it: the tool args as
-// JSON (what AllowExactSession needs) and the preview the agent renders for the
-// card (what the user reads).
+// JSON (what the notification names) and the preview the agent renders for the card
+// (what the user reads).
 const (
 	askCmd  = "git push origin main"
 	askArgs = `{"command":"git push origin main"}`
@@ -141,22 +141,69 @@ func TestAskPermissionAllowOnceDoesNotRemember(t *testing.T) {
 	}
 }
 
-func TestAskPermissionAllowAlwaysRemembersExactCommand(t *testing.T) {
+// 「本会话全部允许」 stops the ASKING, not just this one call: the answer flips the
+// switch on the session's own policy, and the agent consults that BEFORE reaching
+// this handler — so the next ask rule, for a DIFFERENT command (the case that
+// matters: an agent's commands do not repeat verbatim), is simply allowed.
+//
+// The end-to-end half of that (a second command that shows no card) is the
+// `perm-session` smoke scenario; it needs the real loop, since with the switch on
+// the agent never calls this handler at all.
+func TestAskPermissionAllowSessionFlipsTheSessionsPolicy(t *testing.T) {
 	d, svc, a, p := newAskTest(t)
 	out := startAsk(t, d, a)
 
-	if got := svc.AnswerPermission("s1", "call_1", permAllowAlways); got != "ok" {
+	if got := svc.AnswerPermission("s1", "call_1", permAllowSession); got != "ok" {
 		t.Fatalf("answer refused: %q", got)
 	}
 	if o := awaitAsk(t, out); !o.approved || o.err != nil {
-		t.Fatalf("allow_always = %+v, want approved", o)
+		t.Fatalf("allow_session = %+v, want approved", o)
 	}
-	if dec, _ := p.CheckBash(askCmd); dec != permission.DecisionAllow {
-		t.Errorf("allow_always did not record the command: decision = %v", dec)
+	// A command this session never saw, matching the same ask rule: allowed too.
+	if dec, _ := p.CheckBash("git push origin dev"); dec != permission.DecisionAllow {
+		t.Errorf("the session switch was not flipped: decision = %v", dec)
 	}
-	// Exact, not a prefix: another push must still ask (the TUI's `a` semantics).
-	if dec, _ := p.CheckBash("git push origin other"); dec != permission.DecisionAsk {
-		t.Errorf("allow_always widened to other commands: decision = %v", dec)
+	// Nothing parked: the wait ended with the answer, not with a leftover row.
+	d.mu.Lock()
+	n := len(d.perms)
+	d.mu.Unlock()
+	if n != 0 {
+		t.Errorf("%d pending ask(s) left behind", n)
+	}
+}
+
+// The switch is the SESSION's, i.e. the agent's own policy — a second conversation
+// must still be asked (each desktop session builds its own agent).
+func TestAskPermissionAllowSessionIsScopedToItsSession(t *testing.T) {
+	d, svc, a1, p1 := newAskTest(t)
+	other := &agent.AIAgent{}
+	otherPolicy := permission.NewPolicy(permission.Rules{Ask: []string{"git push*"}}, permission.Rules{})
+	other.SetPermissionPolicy(otherPolicy)
+
+	out := startAsk(t, d, a1)
+	if got := svc.AnswerPermission("s1", "call_1", permAllowSession); got != "ok" {
+		t.Fatalf("answer refused: %q", got)
+	}
+	awaitAsk(t, out)
+	if dec, _ := p1.CheckBash(askCmd); dec != permission.DecisionAllow {
+		t.Fatalf("first session's switch was not flipped: %v", dec)
+	}
+
+	// Another session's policy is untouched, so its ask still parks here.
+	otherOut := make(chan askOutcome, 1)
+	go func() {
+		ok, err := d.askPermission(context.Background(), "s2", other, "Bash", "call_9", askPrev, askArgs)
+		otherOut <- askOutcome{approved: ok, err: err}
+	}()
+	waitAskRegistered(t, d, "s2", "call_9", true)
+	if dec, _ := otherPolicy.CheckBash(askCmd); dec != permission.DecisionAsk {
+		t.Errorf("another session's policy was affected: %v", dec)
+	}
+	if got := svc.AnswerPermission("s2", "call_9", permDeny); got != "ok" {
+		t.Fatalf("answer refused: %q", got)
+	}
+	if o := awaitAsk(t, otherOut); o.approved {
+		t.Fatalf("the other session's ask = %+v, want denied", o)
 	}
 }
 

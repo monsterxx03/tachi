@@ -172,9 +172,12 @@ func (a *AIAgent) resolveBashAsk(ctx context.Context, tc llm.ToolCall, cmd, rule
 		select {
 		case resp := <-a.Channels.ConfirmResp:
 			switch resp {
-			case ConfirmAllowAlways, ConfirmAllowOnce:
-				if resp == ConfirmAllowAlways {
-					a.Config.PermissionPolicy.AllowExactSession(cmd)
+			case ConfirmAllowSession, ConfirmAllowOnce:
+				if resp == ConfirmAllowSession {
+					// 「本会话全部允许」: stop asking about this session's ask
+					// rules. Deny rules are checked before an ask is raised, so
+					// this cannot widen into "run what the rules forbid".
+					a.Config.PermissionPolicy.AllowAllAsksForSession()
 				}
 				a.dispatchPermissionResult(ctx, tc, true)
 				return tools.ToolResult{}, false, nil

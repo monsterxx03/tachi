@@ -727,6 +727,41 @@ permissions:
 				c.check("规矩与项目内容在同一条提醒里", false, "两处标记没有出现在同一条消息里")
 			},
 		},
+		//
+		// 本会话全部允许: two DIFFERENT commands match the same ask rule. The first one asks,
+		// the driver answers 「本会话全部允许」, and the second must run with no card at all —
+		// which is the whole point of the choice: an agent's shell commands do not repeat
+		// verbatim, so a per-command memory would ask again here. The second command
+		// deliberately matches the SAME rule, so a build where the switch did nothing would
+		// park on it and never reach the mock's third step.
+		//
+		{
+			name: "perm-session",
+			files: map[string]string{
+				"README.md":         "# smoke\n\nthe perm-session scenario's working directory\n",
+				"perm-fixture.txt":  "PERM-FIXTURE-CONTENT\n",
+				"perm-fixture-2.txt": "PERM-FIXTURE-2-CONTENT\n",
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				{Reply: bashStream("cat perm-fixture.txt", "call_s1")},
+				{Reply: bashStream("cat perm-fixture-2.txt", "call_s2")},
+				{Reply: textStream("两个文件都读完了。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("三步都跑到了（第二条没有被挂住）", len(c.requests) == 3, requestCount(c.requests))
+				for _, marker := range []string{"PERM-FIXTURE-CONTENT", "PERM-FIXTURE-2-CONTENT"} {
+					_, ran := c.requestSeen(marker)
+					c.check("命令真的执行了："+marker, ran, "")
+				}
+			},
+		},
 	}
 }
 

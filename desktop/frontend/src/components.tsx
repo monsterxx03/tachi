@@ -701,10 +701,16 @@ function AskForm({ questions, onSubmit, onCancel }: {
 // that hides the conversation it is about.
 //
 // It shows the agent's own preview verbatim (`$ command` + the matched rule). The
-// three buttons mirror the TUI's y/a/n: allow once, allow this exact command for the
-// rest of the session, deny. No Esc and no default-on-Enter: Esc already means
-// "dismiss the picker / close a viewer" everywhere else in this UI, and the decision
-// here can be a destructive command — it should not be one habitual keypress away.
+// three buttons mirror the TUI's y/a/n: allow once, stop asking for the rest of this
+// session, deny. The middle one is deliberately about the SESSION, not about this
+// command: an agent's shell commands almost never repeat verbatim, so 「始终允许这一条」
+// would be a button that cannot deliver — and the TUI's prompt has always labelled the
+// same choice `[a]lways(session)`. Deny rules stay in force either way (the agent
+// decides them before asking at all), which is what the hint says.
+//
+// No Esc and no default-on-Enter: Esc already means "dismiss the picker / close a
+// viewer" everywhere else in this UI, and the decision here can be a destructive
+// command — it should not be one habitual keypress away.
 function PermissionForm({ perm, onAnswer }: {
   perm: { req: PermissionRequest; busy?: boolean; err?: string }
   onAnswer: (decision: PermissionDecision) => void
@@ -719,9 +725,9 @@ function PermissionForm({ perm, onAnswer }: {
       <pre className="perm-preview">{perm.req.preview}</pre>
       {perm.err ? <div className="perm-err">{perm.err}</div> : null}
       <div className="perm-actions">
-        <span className="perm-hint">仅这一条，或整个会话都放行同一条命令</span>
+        <span className="perm-hint">仅这一条；或本会话不再询问 bash（deny 规则仍然生效）</span>
         <button className="btn ghost" disabled={busy} onClick={() => onAnswer('deny')}>拒绝</button>
-        <button className="btn ghost" disabled={busy} onClick={() => onAnswer('allow_always')}>本会话始终允许</button>
+        <button className="btn ghost" disabled={busy} onClick={() => onAnswer('allow_session')}>本会话全部允许</button>
         <button className="btn" disabled={busy} onClick={() => onAnswer('allow_once')}>{busy ? '已发送…' : '允许一次'}</button>
       </div>
     </div>

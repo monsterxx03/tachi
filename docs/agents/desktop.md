@@ -234,9 +234,13 @@ const type = (el, t) => {
   that is not the ask actually waiting (a stale card cannot approve a later command); the pending entry is
   dropped by the waiting goroutine itself, so Stop (ctx cancel) cannot leave an approvable orphan behind; a
   side-channel run has no turn on screen, so `commands.go` marks its ctx (`withoutAsk`) and the handler refuses
-  instead of parking a run nobody could answer; and `allow_always` records the exact command on THAT session's
-  policy (`AllowExactSession` — the TUI's `a`), not "switch this session to Skip" (ACP's allow-all), which would
-  also switch off the deny rules the user wrote.
+  instead of parking a run nobody could answer; and 「本会话全部允许」 is a **session** decision, not a command
+  memory — both frontends flip the same switch (`Policy.AllowAllAsksForSession`), so later asks never reach
+  either frontend at all. That last one is a correction worth not undoing: an agent's shell commands almost
+  never repeat verbatim, so remembering the approved one was a button that could not deliver, while the TUI's
+  prompt had been labelling the choice `[a]lways(session)` all along. The switch sits BELOW the deny checks in
+  `CheckBash` on purpose — "stop asking me" must never become "run what I forbade", and `perm-session` pins
+  both halves (a second, different command runs with no card; a denied command still refuses).
 
 ## Desktop UI State
 

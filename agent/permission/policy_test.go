@@ -140,25 +140,47 @@ func TestCheckBash_UnparseableIsAsk(t *testing.T) {
 	}
 }
 
-func TestCheckBash_SessionExact(t *testing.T) {
+func TestCheckBash_AllowAllAsksForSession(t *testing.T) {
 	p := NewPolicy(Rules{Ask: []string{"git push*"}}, Rules{})
 
-	// Before approval: ask.
+	// Before the approval: ask.
 	if d, _ := p.CheckBash("git push origin main"); d != DecisionAsk {
-		t.Fatalf("expected Ask before approval")
+		t.Fatalf("expected Ask before the session approval")
 	}
 
-	// Approve the exact command.
-	p.AllowExactSession("git push origin main")
+	p.AllowAllAsksForSession()
 
-	// Exact match (with different whitespace) now allowed.
-	if d, _ := p.CheckBash("git  push   origin main"); d != DecisionAllow {
-		t.Error("exact session approval should allow the same command")
+	// Every ask-matched command is now allowed — including one never seen before,
+	// which is the whole point (an agent's commands do not repeat verbatim).
+	for _, cmd := range []string{"git push origin main", "git  push   origin dev"} {
+		if d, _ := p.CheckBash(cmd); d != DecisionAllow {
+			t.Errorf("session approval should allow %q, got %v", cmd, d)
+		}
 	}
+}
 
-	// A different command matching the same ask rule still asks.
-	if d, _ := p.CheckBash("git push origin dev"); d != DecisionAsk {
-		t.Error("session approval must not widen to other commands")
+// The safety boundary of the session approval: it turns ASK into allow and nothing
+// else. Deny rules are decided while the command is walked, above the ask decision,
+// so "stop asking me" can never become "run what I forbade" — a command matching both
+// a deny and an ask rule stays denied.
+func TestCheckBash_AllowAllAsksDoesNotOverrideDeny(t *testing.T) {
+	p := NewPolicy(Rules{
+		Deny: []string{"git push --force*"},
+		Ask:  []string{"git push*"},
+	}, Rules{})
+
+	p.AllowAllAsksForSession()
+
+	if d, rule := p.CheckBash("git push --force origin main"); d != DecisionDeny {
+		t.Errorf("deny must survive the session approval: got %v (%s)", d, rule)
+	}
+	// The built-in rm guard is a deny too, and it must survive as well.
+	if d, _ := p.CheckBash("rm -rf /"); d != DecisionDeny {
+		t.Errorf("built-in deny must survive the session approval: got %v", d)
+	}
+	// ...while the ask-only command is still allowed by the approval.
+	if d, _ := p.CheckBash("git push origin main"); d != DecisionAllow {
+		t.Errorf("ask-only command should be allowed: got %v", d)
 	}
 }
 

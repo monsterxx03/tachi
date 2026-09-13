@@ -909,9 +909,10 @@ func (m *Model) handleKeyConfirmation(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "y", "Y", "enter":
 		m.agent.ConfirmTool(agent.ConfirmAllowOnce)
 	case "a", "A":
-		// Always allow: for Bash policy asks, remembers the exact command
-		// for this session; for other tools behaves as allow-once.
-		m.agent.ConfirmTool(agent.ConfirmAllowAlways)
+		// Always(session) — the label the prompt has always shown. For Bash
+		// policy asks this stops the asking for the rest of the session (deny
+		// rules keep applying); for other tools it behaves as allow-once.
+		m.agent.ConfirmTool(agent.ConfirmAllowSession)
 	case "n", "N", "esc":
 		m.agent.ConfirmTool(agent.ConfirmDeny)
 	default:

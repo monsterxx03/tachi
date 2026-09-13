@@ -167,13 +167,18 @@ func TestAgentLoop_BashPolicyAsk_TUIAllowOnce(t *testing.T) {
 	assert.True(t, toolResultContains(events, false, "ran: git push origin main"))
 }
 
-func TestAgentLoop_BashPolicyAsk_TUIAllowAlwaysRemembersExact(t *testing.T) {
+func TestAgentLoop_BashPolicyAsk_TUIAllowSessionStopsAsking(t *testing.T) {
 	cmdArgs := `{"command":"git push origin main"}`
+	// The second call is a DIFFERENT command that matches the same ask rule: that is
+	// what 「本会话全部允许」/(a) is for. A command memory would ask again here (an
+	// agent's commands do not repeat verbatim), so this fixture is what pins the
+	// session-wide semantics rather than a same-command shortcut.
+	otherArgs := `{"command":"git push origin dev"}`
 	mp := &mockStreamProvider{
 		name: "mock",
 		sequences: [][]llm.StreamEvent{
 			toolCallSeq("Bash", "call-1", cmdArgs),
-			toolCallSeq("Bash", "call-2", cmdArgs), // same command again
+			toolCallSeq("Bash", "call-2", otherArgs),
 			textSeq("both pushed"),
 		},
 	}
@@ -190,7 +195,7 @@ func TestAgentLoop_BashPolicyAsk_TUIAllowAlwaysRemembersExact(t *testing.T) {
 	for e := range ch {
 		events = append(events, e)
 		if e.Type == AgentEventToolConfirmation {
-			a.ConfirmTool(ConfirmAllowAlways)
+			a.ConfirmTool(ConfirmAllowSession)
 		}
 		if e.Type == AgentEventTurnComplete || e.Type == AgentEventError {
 			result = e.Result
@@ -200,7 +205,27 @@ func TestAgentLoop_BashPolicyAsk_TUIAllowAlwaysRemembersExact(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, "both pushed", result.Response)
 	assert.Equal(t, 1, countConfirmations(events),
-		"second identical command should skip confirmation (session-exact remember)")
+		"a different command matching the same ask rule must skip confirmation (session-wide allow)")
+}
+
+// The session approval is state, not a rule: ending the conversation (the TUI's
+// /new → ClearSession) drops it, so the next session asks again. The rules
+// themselves keep describing the same commands.
+func TestClearSessionResetsSessionApprovals(t *testing.T) {
+	a := newTestAgent(t, &mockStreamProvider{name: "mock"})
+	p := permission.NewPolicy(permission.Rules{Ask: []string{"git push*"}}, permission.Rules{})
+	a.SetPermissionPolicy(p)
+
+	p.AllowAllAsksForSession()
+	if d, _ := p.CheckBash("git push origin dev"); d != permission.DecisionAllow {
+		t.Fatalf("expected Allow after the session approval, got %v", d)
+	}
+
+	a.ClearSession()
+
+	if d, _ := p.CheckBash("git push origin dev"); d != permission.DecisionAsk {
+		t.Errorf("a new conversation must ask again, got %v", d)
+	}
 }
 
 func TestAgentLoop_BashPolicyAsk_TUIDenyCancelsTurn(t *testing.T) {
