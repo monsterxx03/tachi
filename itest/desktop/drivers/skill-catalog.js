@@ -12,8 +12,12 @@
   const reply = await smoke.waitText('.msg-assistant', '收到。', 30000)
   smoke.check('这一轮正常跑完', !!reply, smoke.text('.chat-content').slice(-70))
 
+  // "没有工具卡"在过程折叠之后变弱了（卡可能只是折起来了），所以连过程条一起断言。注意过程条
+  // 也收思考块，所以这两条合起来是"这一轮既没工具调用、也没有思考块"。
   const tools = smoke.qa('.tool-status').length
-  smoke.check('技能目录只是上下文：没有工具卡，也没有确认卡',
-    tools === 0 && smoke.qa('.perm-form').length === 0, tools + ' 张工具卡')
+  const strips = smoke.qa('.process-head').length
+  smoke.check('技能目录只是上下文：没有工具卡、没有过程条，也没有确认卡',
+    tools === 0 && strips === 0 && smoke.qa('.perm-form').length === 0,
+    tools + ' 张工具卡 / ' + strips + ' 条过程条')
   smoke.finish()
 })()

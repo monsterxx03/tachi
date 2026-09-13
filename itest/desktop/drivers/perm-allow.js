@@ -28,6 +28,12 @@
   // 工具卡接着跑完，回合继续到模型的下一条回复。
   const reply = await smoke.waitText('.msg-assistant', '读过文件了', 30000)
   smoke.check('允许后回合继续，模型给出了回复', !!reply, smoke.text('.chat-content').slice(-80))
+  // 成功的一步现在收在过程条里（默认折叠），断言卡的状态前先展开——这类"先展开再断言"
+  // 是本设计给 smoke 带来的连带改动，与 perm-deny 不同（被拒的卡是失败步，永不折叠）。
+  const strip = smoke.q('.process-head')
+  if (!strip) return smoke.fail('过程条存在', '找不到 .process-head')
+  smoke.click(strip)
+  if (!(await smoke.waitFor(() => smoke.qa('.tool-status').length > 0, '展开后工具卡出现'))) return smoke.finish()
   const status = smoke.qa('.tool-status')
   smoke.check('工具卡是成功状态', status.length > 0 && status.every((s) => s.className.indexOf('ok') >= 0),
     status.map((s) => s.className).join(','))

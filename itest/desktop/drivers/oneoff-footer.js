@@ -107,6 +107,10 @@
   // ReportFinding call must not appear.
   const chat = smoke.text('.chat')
   smoke.check('对话里没有评审的回复', chat.indexOf('评审完成：1 条意见。') < 0, '')
+  // 工具卡现在收在过程条里（成功的一步默认折叠），所以先把对话里的过程条都展开再数——
+  // 展开也让这两条断言更强：评审若真把卡留在了对话里，展开后一定会露出来。
+  smoke.qa('.chat .process-head').forEach((s) => smoke.click(s))
+  if (!(await smoke.waitFor(() => smoke.qa('.chat .tool-name').length === 2, '展开后本轮两张卡都在'))) return smoke.finish()
   const names = smoke.qa('.chat .tool-name').map((e) => e.textContent)
   smoke.check('对话里没有评审的 ReportFinding 卡', !names.some((n) => n.indexOf('ReportFinding') >= 0), names.join('|'))
   smoke.check('对话里只有本轮自己的工具卡（两个文件两张）', names.length === 2, names.join('|'))

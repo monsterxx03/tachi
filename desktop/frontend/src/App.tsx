@@ -10,8 +10,9 @@ import {
   type SessionItem,
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionRows } from './lib'
+import { lastRunningAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
-  ContextMeter, CacheRing, UserBubble, MCPPanel, AskForm, PermissionForm,
+  ContextMeter, CacheRing, ProcessStrip, UserBubble, MCPPanel, AskForm, PermissionForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
 import { TurnPart } from './parts'
@@ -41,7 +42,27 @@ import { useComposer, Composer, imeActive } from './composer'
 // into is decided in parts.tsx, shared with the side-channel panel so a replayed run
 // and a live turn render identically.
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onOpenOneOff, reviewPending, reviewDone, reviewNotice, sessionBusy }: {
+// useElapsedMs ticks once a second while a turn is running and reports how long it has
+// been going. The number is the difference between "working" and "stuck": a strip whose
+// step count has not moved is indistinguishable from a hung one without it. One ticker
+// per running turn, and the turn's strip is its only reader.
+function useElapsedMs(ts: string | undefined, running: boolean): number {
+  const [now, setNow] = useState(() => Date.now())
+  useEffect(() => {
+    if (!running) return
+    // Align the clock on the edge, not a second later: `now` was last written by the previous
+    // turn (or by mount), so the first frame would report an elapsed time derived from a stale
+    // reading.
+    setNow(Date.now())
+    const id = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(id)
+  }, [running])
+  if (!running || !ts) return 0
+  const start = Date.parse(ts)
+  return Number.isNaN(start) ? 0 : Math.max(0, now - start)
+}
+
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, elapsedMs, onFoldToggle, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onOpenOneOff, reviewPending, reviewDone, reviewNotice, sessionBusy }: {
   m: Message
   workDir: string
   // Diff interaction: one card at a time, or the whole turn from the footer chip.
@@ -66,6 +87,12 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // Only passed while the turn is running, so finished messages keep a stable
   // props shape and stay memoized.
   runningLabel?: string
+  // How long this turn has been running, for the strip's live row (0 = not running).
+  elapsedMs?: number
+  // Called AFTER a fold toggle's layout lands (see the layout effect below and
+  // repinAfterFoldToggle): lets the owner keep a bottom-following reader pinned across the
+  // layout change the toggle caused.
+  onFoldToggle?: () => void
   // Pending AskUserQuestion questions for THIS session: the form replaces the
   // tool card that asked them, so they appear in the transcript where they belong.
   ask?: Question[] | null
@@ -78,6 +105,9 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // Render the form in place of the pending AskUserQuestion card. Any other
   // unfinished card of the same tool is left alone; the loop only ever asks one
   // question set at a time, so the first match is the one waiting.
+  // Whether this turn's process timeline is open. Presentational and per turn: it is not
+  // persisted, so a reloaded conversation starts folded (the design's "展开状态是展示态").
+  const [processOpen, setProcessOpen] = useState(false)
   // The turn's changes: what the footer chip summarizes and what "expand all" acts on.
   const diffStat = turnDiffStat(m.parts)
   const diffParts = (m.parts || []).filter((p) => p.type === 'tool' && p.change && p.done && p.ok)
@@ -85,26 +115,71 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
 
   let askShown = false
   let permShown = false
-  const parts = (m.parts || []).map((p, i) => {
-    // A parked permission replaces the card of the call that is waiting. Matched by tool
-    // CALL ID, not by name: the model emits a whole batch of calls before any of them
-    // runs, so "the newest unfinished Bash card" is usually a different call than the one
-    // being asked about.
+  // One part → one piece of the transcript, with the two substitutions that put a blocking
+  // form IN the flow: a parked permission replaces the card of the call that is waiting
+  // (matched by tool CALL ID, not by name — the model emits a whole batch of calls before
+  // any of them runs, so "the newest unfinished Bash card" is usually a different call),
+  // and a pending AskUserQuestion replaces the card that asked.
+  const renderPart = (it: IndexedPart, key: string) => {
+    const p = it.part
     if (perm && onPermAnswer && !permShown && p.type === 'tool' && !p.done && p.toolCallId === perm.req.toolId) {
       permShown = true
-      return <PermissionForm key={i} perm={perm} onAnswer={onPermAnswer} />
+      return <PermissionForm key={key} perm={perm} onAnswer={onPermAnswer} />
     }
     if (ask && onAnswer && !askShown && p.type === 'tool' && !p.done && p.name === 'AskUserQuestion') {
       askShown = true
-      return <AskForm key={i} questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
+      return <AskForm key={key} questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
     }
-    return <TurnPart key={i} part={p} workDir={workDir} onToggleDiff={onToggleDiff ? () => onToggleDiff(i) : undefined} />
-  })
+    // onToggleDiff carries the part's ORIGINAL index: the footer chip opens every diff of
+    // the turn, folded ones included.
+    return <TurnPart key={key} part={p} workDir={workDir} onToggleDiff={onToggleDiff ? () => onToggleDiff(it.index) : undefined} />
+  }
+  // The turn's process is folded into one strip (see turnView): the row says how much
+  // happened and whether anything failed, the conclusion stays visible, and the parts that
+  // must never be hidden — failures, the call that is running, a blocking form's call —
+  // stay outside the fold whether or not it is open.
+  const view = turnView(m.parts, { permissionToolCallId: perm?.req.toolId, pendingAsk: !!ask })
+  // The fold's own layout change, on the frame it lands in. A layout effect (not an effect, not
+  // a rAF): the pin then happens before the browser paints the new height, so the view never
+  // gets a frame to slide up in — and it does not depend on rAF being delivered, which an
+  // occluded app window does not guarantee. The first run is the mount, which has no layout
+  // change to compensate for.
+  const foldSettled = useRef(false)
+  useLayoutEffect(() => {
+    if (!foldSettled.current) {
+      foldSettled.current = true
+      return
+    }
+    onFoldToggle?.()
+  }, [processOpen])
   return (
     <div className="msg msg-assistant">
       <div className="msg-avatar"><img src="/agent-avatar.png" alt="" draggable={false} /></div>
       <div className="msg-content">
-        <div className="turn-parts">{parts}</div>
+        <div className="turn-parts">
+          {/* The strip also renders while nothing is folded yet but a call is RUNNING: that is
+              the moment the live row matters most (the turn's only part is the running card),
+              and hiding the row then would make a busy turn look empty. Nothing folded and
+              nothing running = nothing to say, so no row at all. */}
+          {view.folded.length > 0 || (m.running && view.live) ? (
+            <div className="process-block">
+              <ProcessStrip summary={view.summary} open={processOpen}
+                onToggle={() => setProcessOpen((v) => !v)}
+                foldable={view.folded.length > 0}
+                live={m.running ? view.live : null} elapsedMs={elapsedMs} />
+              {processOpen && view.folded.length > 0
+                ? <div className="process-timeline">{view.folded.map((it) => renderPart(it, `f${it.index}`))}</div>
+                : null}
+            </div>
+          ) : null}
+          {/* Exposed parts and the conclusion, in their ORIGINAL order. The strip summarizes
+              the whole turn and goes first, but everything visible keeps the sequence the
+              parts have: pinning the conclusion last would move a mid-turn preamble BELOW the
+              call that follows it (the live window of every text-then-tool turn). */}
+          {[...view.exposed, ...(view.conclusion ? [view.conclusion] : [])]
+            .sort((a, b) => a.index - b.index)
+            .map((it) => renderPart(it, `v${it.index}`))}
+        </div>
         {/* Fallback: a pending ask with no matching tool card (e.g. the card was
             closed by an interruption) still has to be answerable. */}
         {ask && onAnswer && !askShown && m.running ? (
@@ -122,7 +197,12 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
           <div className="msg-footer">
             <button type="button" className="diff-chip"
               title={`本次工具调用在片段内新增/删除的行数（不是 git numstat）${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在 diff 里' : ''}`}
-              onClick={() => onToggleAllDiffs?.(!allDiffsOpen)}>
+              onClick={() => {
+                // The diffs live inside their tool cards, and those cards sit in the fold:
+                // opening every diff without opening the fold would look like a dead click.
+                if (!allDiffsOpen) setProcessOpen(true)
+                onToggleAllDiffs?.(!allDiffsOpen)
+              }}>
               🧾 {diffStat.files} files
               {diffStat.added > 0 ? <span className="diff-count is-add">+{diffStat.added}</span> : null}
               {diffStat.removed > 0 ? <span className="diff-count is-del">−{diffStat.removed}</span> : null}
@@ -486,6 +566,26 @@ function App() {
   // status bar is in a busy state (covers the simulated-turn fallback too).
   const isCurrentRunning = runningSet.has(currentId) ||
     state.status === 'thinking' || state.status === 'tool_running' || state.status === 'busy'
+
+  // A turn's fold toggle grows (or shrinks) that turn IN PLACE. A reader who is following the
+  // bottom has to stay there — the design's 「展开/收起不该让滚动位置跳」 — and without this the
+  // growth switches following OFF by itself: the view slides up by the height that appeared
+  // (the scroll anchor is the top of the viewport), and the scroll event that follows reads as
+  // "the reader scrolled away". Called from the bubble's LAYOUT effect, so the new content is
+  // already in the DOM and the pin lands in the same frame — not from a rAF or a timer, which
+  // an occluded webview never delivers. A reader who had scrolled away is left where they were.
+  const repinAfterFoldToggle = useCallback(() => {
+    if (!followBottomRef.current) return
+    followBottomRef.current = true
+    const el = chatRef.current
+    if (el) el.scrollTop = el.scrollHeight
+  }, [])
+
+  // How long the turn on screen has been running: the strip's live row reports it, so the reader
+  // can tell "working" from "stuck". One ticker, and the wording lives in the strip itself.
+  const runningIdx = isCurrentRunning ? lastRunningAssistantIndex(messages) : -1
+  const runningMsg = runningIdx >= 0 ? messages[runningIdx] : undefined
+  const runningElapsedMs = useElapsedMs(runningMsg?.ts, !!runningMsg)
 
   // The composer: the input box, the @-picker and "/" palette, the queue of messages typed
   // while a turn runs, and the answer form for a parked question. It routes what the user
@@ -1102,6 +1202,8 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                       m={m}
                       workDir={workDir}
                       runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
+                      elapsedMs={m.running ? runningElapsedMs : undefined}
+                      onFoldToggle={repinAfterFoldToggle}
                       ask={m.running ? (composer.ask?.questions || null) : null}
                       onAnswer={composer.answerCurrent}
                       perm={m.running ? composer.perm : null}

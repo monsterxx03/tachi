@@ -5,6 +5,7 @@
 // applies to it. They were lifted out of App.tsx because they hold no React state: reading
 // or changing them should not mean reading a 2000-line component.
 
+import { fmtDur } from './lib'
 import type { Message, Part } from './types'
 import type { FileChangeVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -124,6 +125,189 @@ export function lastRunningAssistantIndex(list: Message[]): number {
     if (list[i].role === 'assistant' && list[i].running) return i
   }
   return -1
+}
+
+// ── Turn view: the process fold ─────────────────────────────────────────────
+//
+// A long turn renders one row per part (thinking, tool card, intermediate text), so a
+// 30-step turn is 30 rows of skeleton. The noise is the ROW COUNT — every part is already
+// collapsed on its own (ThinkingPart defaults to collapsed, ToolCard to folded) — so the
+// conversation folds a turn's PROCESS into one strip and keeps its CONCLUSION visible.
+// What must never be hidden stays outside the fold: a failed call, the call a permission
+// card is parked on, the call an AskUserQuestion form is waiting on, the call that is
+// running right now, and notices.
+//
+// Rendering the timeline is still TurnPart's job: the one-off panel replays the same parts
+// and exists to show them all, so the fold belongs to the conversation, not to the part
+// renderer. This helper only decides WHAT is visible, and it is pure so both render paths
+// (live and rebuilt) share it.
+// See docs/2026-09-13-desktop-transcript-density-design.md.
+
+export interface IndexedPart {
+  part: Part
+  index: number
+}
+
+// ProcessSummary counts a turn's process. Every field is derived from the parts alone —
+// never from prose, and never from a model call: a summary that needed an API call would
+// cost a request per turn and could disagree with the history after a reload.
+export interface ProcessSummary {
+  steps: number // tool calls
+  thinking: number // thinking blocks
+  notes: number // intermediate prose folded away (not the conclusion)
+  failed: number // tool calls that did not succeed
+  files: number // ReadFile
+  edits: number // EditFile / WriteFile
+  commands: number // Bash
+  searches: number // Grep / Glob / WebSearch / WebFetch / MCP search
+  other: number // everything else (SubAgent, SavePlan, Skill, …)
+}
+
+// LiveStep is the call a running turn is executing RIGHT NOW: what the strip reports while
+// the turn is in flight, so "still working" is visible without watching cards scroll by.
+export interface LiveStep {
+  name: string
+  title?: string
+  // step is its ordinal among the turn's tool calls (第 N 步) — with the finished ones
+  // counted, because the reader is following the turn, not a card.
+  step: number
+}
+
+export interface TurnView {
+  summary: ProcessSummary
+  // folded: what the strip hides until the reader opens it.
+  folded: IndexedPart[]
+  // exposed: parts that stay visible whether or not the strip is open.
+  exposed: IndexedPart[]
+  // conclusion: the turn's LAST prose — the answer, always visible.
+  conclusion: IndexedPart | null
+  // live: the call running right now, or null (a finished turn, or one between calls).
+  live: LiveStep | null
+}
+
+export interface TurnViewOptions {
+  // The tool call a permission card is parked on (matched by call id).
+  permissionToolCallId?: string
+  // An AskUserQuestion form is waiting for an answer.
+  pendingAsk?: boolean
+}
+
+export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}): TurnView {
+  const list = parts || []
+
+  let conclusionIndex = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].type === 'text') {
+      conclusionIndex = i
+      break
+    }
+  }
+  // The call currently running (the newest unfinished one) is the turn's live evidence
+  // that something is happening, so it stays out of the fold.
+  let runningIndex = -1
+  for (let i = list.length - 1; i >= 0; i--) {
+    if (list[i].type === 'tool' && !list[i].done) {
+      runningIndex = i
+      break
+    }
+  }
+  let askIndex = -1
+  if (opts.pendingAsk) {
+    askIndex = list.findIndex((p) => p.type === 'tool' && p.name === 'AskUserQuestion' && !p.done)
+  }
+
+  const summary: ProcessSummary = { steps: 0, thinking: 0, notes: 0, failed: 0, files: 0, edits: 0, commands: 0, searches: 0, other: 0 }
+  const folded: IndexedPart[] = []
+  const exposed: IndexedPart[] = []
+  let live: LiveStep | null = null
+
+  list.forEach((part, index) => {
+    if (part.type === 'tool') {
+      summary.steps++
+      if (index === runningIndex) live = { name: part.name || '', title: part.title, step: summary.steps }
+      if (part.done && !part.ok) summary.failed++
+      countTool(summary, part.name || '')
+    } else if (part.type === 'thinking') {
+      summary.thinking++
+    } else if (part.type === 'text') {
+      summary.notes++
+    }
+
+    const parked = !!opts.permissionToolCallId && part.toolCallId === opts.permissionToolCallId
+    const staysVisible =
+      part.type === 'notice' ||
+      index === conclusionIndex ||
+      index === runningIndex ||
+      index === askIndex ||
+      parked ||
+      (part.type === 'tool' && part.done && !part.ok)
+    if (staysVisible) exposed.push({ part, index })
+    else folded.push({ part, index })
+  })
+
+  // A folded prose part is a NOTE, never the conclusion; keep the count honest by
+  // excluding the conclusion from it.
+  if (conclusionIndex >= 0) summary.notes--
+
+  let conclusion: IndexedPart | null = null
+  if (conclusionIndex >= 0) {
+    const at = exposed.findIndex((it) => it.index === conclusionIndex)
+    conclusion = at >= 0 ? exposed.splice(at, 1)[0] : null
+  }
+  return { summary, folded, exposed, conclusion, live }
+}
+
+// countTool buckets a tool call for the strip's mix line. Unknown names (a new tool, an
+// MCP server's) land in `other` rather than being dropped.
+function countTool(s: ProcessSummary, name: string): void {
+  switch (name) {
+    case 'ReadFile':
+      s.files++
+      return
+    case 'EditFile':
+    case 'WriteFile':
+      s.edits++
+      return
+    case 'Bash':
+      s.commands++
+      return
+    case 'Grep':
+    case 'Glob':
+    case 'WebSearch':
+    case 'WebFetch':
+    case 'MCPSearchTools':
+      s.searches++
+      return
+  }
+  if (name.startsWith('mcp__')) s.searches++
+  else s.other++
+}
+
+// processSummaryLine renders the strip's middle: only the categories that happened.
+export function processSummaryLine(s: ProcessSummary): string {
+  const bits: string[] = []
+  if (s.files) bits.push(`读了 ${s.files} 个文件`)
+  if (s.edits) bits.push(`改了 ${s.edits} 个文件`)
+  if (s.commands) bits.push(`跑了 ${s.commands} 条命令`)
+  if (s.searches) bits.push(`搜了 ${s.searches} 次`)
+  if (s.other) bits.push(`其它 ${s.other}`)
+  if (s.notes > 0) bits.push(`含 ${s.notes} 段过程说明`)
+  return bits.join(' · ')
+}
+
+// processLiveLine is the "what is happening now" line, shared by the turn's strip and the
+// composer's activity row: one fact, one wording — a second phrasing would drift.
+export function processLiveLine(live: LiveStep, elapsedMs?: number): string {
+  const head = `正在 ${live.name}${live.title ? ` · ${live.title}` : ''} · 第 ${live.step} 步`
+  return elapsedMs ? `${head} · ${fmtDur(elapsedMs)}` : head
+}
+
+// processStepLabel is the strip's leading count. A turn with only reasoning shows its
+// thinking blocks instead of a meaningless "0 步".
+export function processStepLabel(s: ProcessSummary): string {
+  if (s.steps > 0) return `${s.steps} 步`
+  if (s.thinking > 0) return `思考 ${s.thinking} 段`
+  return ''
 }
 
 // imeActive reports whether a key event belongs to an IME composition (Chinese

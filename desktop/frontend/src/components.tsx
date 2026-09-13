@@ -4,6 +4,7 @@ import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
 import type { Theme } from './theme'
+import { processLiveLine, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -199,6 +200,59 @@ function NoticePart({ part }: { part: Part }) {
         {body ? <span className="notice-toggle">{open ? '收起' : '摘要'}</span> : null}
       </div>
       {open && body ? <div className="notice-body">{body}</div> : null}
+    </div>
+  )
+}
+
+// ProcessStrip is one turn's process, folded into a single row: it stands in for every
+// thinking block, tool card and intermediate message of that turn, which stay behind the
+// "展开时序" toggle. The row is the summary — steps, what the tools touched, and whether
+// anything failed — so the turn's answer is what the reader lands on.
+//
+// It renders ONLY the row; the timeline belongs to the caller, which owns the open state
+// (per turn, presentational) and the part renderer. Failure is not hidden: the count turns
+// the row red, and the failed cards themselves stay outside the fold (see turnView).
+function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
+  summary: ProcessSummary
+  open: boolean
+  onToggle: () => void
+  // foldable: whether there is anything behind the toggle. A running turn can have nothing
+  // folded yet (its only part is the call that is running), so the row is then a status line
+  // rather than a button — a toggle that opens nothing is worse than none.
+  foldable?: boolean
+  // live: the call running right now. While it is set the row says WHAT is happening
+  // instead of how much has happened — the counts are the same fact told afterwards, and
+  // the elapsed time is the difference between "working" and "stuck".
+  live?: LiveStep | null
+  elapsedMs?: number
+}) {
+  const steps = processStepLabel(summary)
+  const line = processSummaryLine(summary)
+  const failed = summary.failed > 0
+  return (
+    <div
+      className={`process-head${open ? ' open' : ''}${failed ? ' failed' : ''}${live ? ' live' : ''}${foldable ? '' : ' static'}`}
+      role={foldable ? 'button' : undefined}
+      tabIndex={foldable ? 0 : undefined}
+      aria-expanded={foldable ? open : undefined}
+      title={foldable ? (open ? '收起这一轮的过程' : '展开这一轮的过程：思考、工具调用与中间说明') : undefined}
+      onClick={foldable ? onToggle : undefined}
+      onKeyDown={foldable ? actOnKey(onToggle) : undefined}
+    >
+      {live ? <span className="process-dot" aria-hidden="true" /> : <span className="process-caret">▸</span>}
+      {live ? (
+        <>
+          <span className="process-now">{processLiveLine(live, elapsedMs)}</span>
+          {failed ? <span className="process-failed">⚠ {summary.failed} 步失败</span> : null}
+        </>
+      ) : (
+        <>
+          {steps ? <span className="process-steps">{steps}</span> : null}
+          {line ? <span className="process-line">{line}</span> : null}
+          {failed ? <span className="process-failed">⚠ {summary.failed} 步失败</span> : null}
+        </>
+      )}
+      {foldable ? <span className="process-toggle">{open ? '收起' : '展开时序'}</span> : null}
     </div>
   )
 }
@@ -734,4 +788,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+export { ContextMeter, CacheRing, ProcessStrip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }

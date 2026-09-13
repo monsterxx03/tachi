@@ -156,6 +156,17 @@ func bashStream(cmd, id string) mockllm.ReplyFunc {
 	)
 }
 
+// readStream is one ReadFile tool call — used to produce a step that FAILS (an error tool
+// result is what turns a card red and a turn's strip red with it).
+func readStream(path, id string) mockllm.ReplyFunc {
+	return mockllm.Stream(
+		mockllm.ToolCallStart(id, "ReadFile", `{"path":"`+path+`"}`),
+		mockllm.Finish("tool_calls"),
+		mockllm.UsageWithCache(1500, 40, 1400, 10),
+		mockllm.Done(),
+	)
+}
+
 func scenarios() []scenario {
 	return []scenario{
 		//
@@ -783,6 +794,49 @@ permissions:
 				c.check("工作目录里的项目级 skill 进了模型上下文", catalogued,
 					"命中第 "+strconv.Itoa(at)+" 条请求")
 				c.check("技能目录随第一条请求到达", catalogued && at == 1, requestCount(c.requests))
+			},
+		},
+		//
+		// 过程折叠：一轮的 thinking / 工具卡 / 中间说明收成一行，结论正文恒显；失败不藏
+		// （过程条染红 + 那一张卡外露），点开才铺开完整时序。断言分两态：折叠时只应看到
+		// 失败那张卡，展开后两张都在。判定不看 UI 数量就下结论——Go 那半另证命令真跑了。
+		//
+		{
+			name: "transcript-fold",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe transcript-fold scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: bashStream("echo transcript-fold-ok", "call_f1")},
+				// 相对路径 → 落在沙箱工作目录里：这个"读不到"是 fixture 保证的，不是靠机器上恰好没有。
+				{Reply: readStream("missing-file.txt", "call_f2")},
+				{Reply: textStream("两步都处理完了。", 1200)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("三步都跑到了", len(c.requests) == 3, requestCount(c.requests))
+				_, ran := c.requestSeen("transcript-fold-ok")
+				c.check("成功那一步真的执行了", ran, "")
+			},
+		},
+		//
+		// 运行中的样子：工具还在跑时，过程条变成实时条（脉冲点 + 正在什么 + 第几步 + 用时），
+		// 输入框上方有同一句活动信息，正在跑的那张卡外露在过程条之外；回合结束后回到摘要、
+		// 活动行消失，而且（回复够长、内容超出一屏时）仍然贴在底部。
+		//
+		{
+			name: "transcript-live",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe transcript-live scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// sleep 让这一步真的"在跑"几秒，driver 才有东西可看。
+				{Reply: bashStream("sleep 4", "call_l1")},
+				{Reply: textStream(strings.Repeat("睡完了。这一段足够长，用来把转写撑过一屏，", 120)+"好验证跟随底部。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两步都跑到了", len(c.requests) == 2, requestCount(c.requests))
 			},
 		},
 	}

@@ -191,6 +191,57 @@
   overflow-y: auto;
 }
 
+/* Process fold: one turn's thinking blocks, tool cards and intermediate messages
+   behind a single row (transcript.ts's turnView decides what stays out of it).
+   A pill like the notice head — this is a fact about the turn, not the agent
+   talking — but it carries the step count, so the row leads with a number. */
+.process-block { margin: 2px 0 8px; }
+.process-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 4px 10px 4px 8px;
+  margin-left: -4px; /* pull the pill back to the text start, like the notice head */
+  border-radius: var(--radius-pill);
+  background: var(--wash);
+  color: var(--text-dim);
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: background 0.14s var(--ease), color 0.14s var(--ease);
+}
+.process-head:hover { background: var(--wash-2); color: var(--text); }
+/* Running: the row reports the CURRENT step instead of the finished counts, and the dot
+   is what says "still moving" when the step number has not changed for a while. */
+/* Nothing folded yet (a turn whose only part is the call running now): a status line, not
+   a button — no caret, no hover invitation, no toggle. */
+.process-head.static { cursor: default; }
+.process-head.live { border: 1px solid var(--accent-ring); background: var(--accent-soft); color: var(--text); }
+.process-head.live:hover { background: var(--accent-soft); }
+.process-head.live .process-now { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.process-dot {
+  width: 7px; height: 7px; flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--accent);
+  animation: process-pulse 1.25s ease-in-out infinite;
+}
+@keyframes process-pulse { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.35; transform: scale(0.72); } }
+.process-caret { font-size: 9px; line-height: 1; color: var(--text-faint); transition: transform 0.14s var(--ease); }
+.process-head.open .process-caret { transform: rotate(90deg); }
+.process-steps { font-weight: 560; color: var(--text); font-variant-numeric: tabular-nums; flex-shrink: 0; }
+.process-line { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.process-toggle { margin-left: auto; flex-shrink: 0; color: var(--accent-2); font-size: 11px; }
+/* A turn that had failures says so without being opened: the count turns the row
+   red, and the failed cards themselves are never folded (see turnView). */
+.process-head.failed { background: var(--red-wash); }
+.process-head.failed:hover { background: var(--red-wash); color: var(--text); }
+.process-failed { color: var(--red); font-weight: 560; flex-shrink: 0; }
+.process-timeline {
+  margin: 6px 0 2px 6px;
+  padding: 2px 0 4px 10px;
+  border-left: 2px solid var(--border-2);
+}
+
 /* Tool card expand/collapse */
 .tool-toggle {
   margin-left: 8px;

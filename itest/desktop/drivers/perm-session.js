@@ -23,6 +23,11 @@
   smoke.check('全程只出现过一张确认卡（第二条没有再问）', smoke.qa('.perm-form').length === 0,
     smoke.qa('.perm-form').length + ' 张卡还在')
 
+  // 两次成功调用属于同一轮，收在同一条过程条里 → 先展开再数卡。
+  const strip = smoke.q('.process-head')
+  if (!strip) return smoke.fail('过程条存在', '找不到 .process-head')
+  smoke.click(strip)
+  if (!(await smoke.waitFor(() => smoke.qa('.tool-status').length === 2, '展开后两张卡都在'))) return smoke.finish()
   const status = smoke.qa('.tool-status')
   smoke.check('两次调用都是成功状态', status.length === 2 && status.every((s) => s.className.indexOf('ok') >= 0),
     status.map((s) => s.className).join(','))

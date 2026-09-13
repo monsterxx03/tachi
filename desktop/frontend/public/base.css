@@ -374,6 +374,10 @@ body {
     animation-duration: 1.2s !important;
     animation-iteration-count: infinite !important;
   }
+  .process-dot {                                  /* turn is still working */
+    animation-duration: 1.25s !important;
+    animation-iteration-count: infinite !important;
+  }
   .stop-btn::before {                             /* turn is running, click to stop */
     animation-duration: 0.8s !important;
     animation-iteration-count: infinite !important;

@@ -106,6 +106,15 @@ const type = (el, t) => {
   environment (so the driver never runs and the previous scenario's app answers), and
   `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's running app. The unique
   executable name is what makes `pkill -f TachiSmoke` safe; check with `pgrep -fl Tachi`
+- **Run the suite SERIALLY — one invocation at a time.** The drivers are timing-sensitive in a way that
+  turns load into false failures: each has a 1m30s budget, assertions wait 3s for a synthetic drag or a
+  transient state, and a starved webview misses both. Measured: two overlapping `desktop-smoke` runs (or a
+  full suite racing a single-scenario run) produced 6/17 failing with "driver 在预算内完成 — 等了 1m30s"
+  plus phantom drag failures in `composer-height` / `oneoff-panel`, while the very same tree passed 17/17 in
+  1m14s when run alone. Before believing a failure, check `pgrep -fl "itest/desktop|TachiSmoke"` — and
+  re-run the scenario on its own. The synthetic DRAGS are the flakiest of all: a second gesture is
+  sometimes swallowed (`composer-height`, `oneoff-panel`), and both scenarios pass on their own on the
+  same tree — so a lone drag assertion failing in a full run is the harness until proven otherwise.
 - A background process started by a finished tool call gets reaped — keep the mock, app,
   capture and kill in one invocation
 - `open -a <path>` matches by BUNDLE and `pkill` by executable path; a capture of the wrong
@@ -308,6 +317,33 @@ const type = (el, t) => {
 - Design context and the mechanism it belongs to: [plan-panel design §7](2026-09-12-desktop-plan-panel-design.md).
 
 ## Desktop UI State
+
+- **A turn's process is folded by the CONVERSATION, not by the part renderer**: `turnView()` (`transcript.ts`,
+  pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip
+  (`ProcessStrip`, `components.tsx`) standing in for its thinking blocks, tool cards and intermediate
+  messages, the turn's LAST prose, and the parts that must never be hidden: a failed call, the call a
+  permission card is parked on, the call an AskUserQuestion form waits on, the call that is running now,
+  and notices. `TurnPart` stays atomic because `oneoff.tsx` replays the very same parts and exists to show
+  them all — a change there would make the side panel lose the process it is for. The open/closed state is
+  per turn and presentational (never persisted), and the footer's diff chip opens the fold when it opens
+  every diff, since those diffs live inside the folded cards.
+  Smoke cost: a scenario that asserts a *successful* tool card must expand the strip first
+  (`.process-head`), and "no tool cards" is no longer evidence of "no tool calls" — assert the strip's
+  absence too. `perm-deny` needs neither: a denied call is a failed part, and failures never fold.
+  While a call is RUNNING the same row reports the current step instead (`processLiveLine`); it renders
+  even when nothing is folded yet (the running card is exposed, so `folded` is empty) and is then a
+  status line rather than a toggle. There was an "activity row" above the composer saying the same
+  thing, and it was REMOVED: it existed only while a call was running, so it appeared and vanished once
+  per step and shoved the message area up and down — and the fact was already in the transcript twice
+  over. If it ever comes back, it must hold its place for the whole turn.
+  Design + clickable prototype: `docs/2026-09-13-desktop-transcript-density-design.md` (+ `.html` beside it).
+  **Do not compensate a layout change from a `requestAnimationFrame`**: an occluded app window never
+  delivers one (measured: the callback simply never ran while the driver's window was behind another
+  app), and a `setTimeout` is throttled just as unpredictably. Compensate in a LAYOUT effect instead —
+  the new content is in the DOM and the adjustment lands before paint. This is how the fold toggle keeps
+  a bottom-following reader pinned: without it, expanding a turn slides the view up by the height that
+  appeared, the next scroll event reads as "the reader scrolled away", and auto-follow switches itself
+  off (the design's 「展开/收起不该让滚动位置跳」).
 
 - **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
   (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge
