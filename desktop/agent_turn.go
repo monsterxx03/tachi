@@ -3,10 +3,12 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/atfile"
+	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/llm"
@@ -169,10 +171,7 @@ func (d *desktopApp) startTurn(text string) {
 	// assistant reply. Merge that trailing user message into the new user
 	// message (instead of appending an artificial assistant reply) so the
 	// provider never sees consecutive user messages.
-	if n := len(history); n > 0 && history[n-1].Role == "user" {
-		text = history[n-1].Content + "\n" + text
-		history = history[:n-1]
-	}
+	history, text = mergeTrailingUserMessage(history, text)
 
 	go func() {
 		// endReason describes why the stream finished; surfaced to the frontend
@@ -292,7 +291,6 @@ func (d *desktopApp) endTurn(id, endReason string) {
 	d.mu.Unlock()
 	d.emitIdle(d.followCompaction(id), endReason)
 }
-
 
 // emitUsage recomputes a session's cost/credit from the usage ledger and pushes them to
 // the status bar (the frontend listens for "agent:cost"). It runs at every point where the
@@ -671,6 +669,42 @@ func (d *desktopApp) endSimulatedTurn(stop chan struct{}) {
 		d.simCh = nil
 	}
 	d.mu.Unlock()
+}
+
+// mergeTrailingUserMessage folds a trailing user message from the history into the text
+// of the turn about to be sent, and returns the shortened history. An interrupted (or
+// killed) session can end with a user message and no reply, and a provider must never
+// see two consecutive user messages.
+//
+// The trailing message's <system-reminder> block is DROPPED rather than carried over.
+// Session conversion re-attaches the block that message was stored with — deliberately,
+// historyHasReminder relies on the prefix — so merging the content verbatim would embed
+// the PREVIOUS turn's block in this turn's user text: the model would read a stale plan
+// id, stale diagnostics and a stale branch as if they described now, and because the
+// merged text is recorded as the new message, the block would then walk forward through
+// the session turn after turn. This turn builds its own block for the current state
+// (see agent/systemreminder.UnwrapUserMessage).
+//
+// A trailing message that is nothing BUT a block is left alone, and that is a
+// deliberate trade rather than an oversight. Two shapes look identical here: a
+// reminder the loop injected mid-run (`injectLoopReminders` appends one as a user
+// message, so a Stop landing right there leaves it trailing), which is stale
+// scaffolding the next run rebuilds; and a trailing artifact reminder, which
+// ConvertSessionToLLMMessages appends as its own user message ON PURPOSE so that a
+// reload cannot drop it (see the comment there — an /research or /review finding must
+// still reach the model after a restart). There is no marker that separates them, and
+// dropping the message would silently break the second to tidy up the first, so the
+// no-user-text case keeps the behaviour it had.
+func mergeTrailingUserMessage(history []llm.Message, text string) ([]llm.Message, string) {
+	n := len(history)
+	if n == 0 || history[n-1].Role != "user" {
+		return history, text
+	}
+	trailing := history[n-1].Content
+	if unwrapped := systemreminder.UnwrapUserMessage(trailing); strings.TrimSpace(unwrapped) != "" {
+		trailing = unwrapped
+	}
+	return history[:n-1], trailing + "\n" + text
 }
 
 // runHistory returns the session's in-memory conversation history (nil when the

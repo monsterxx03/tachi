@@ -125,22 +125,6 @@ func TestDescribeImagesIfNeeded_UserImage_ReplacedWithDescription(t *testing.T) 
 	assert.NotContains(t, delegate.lastText, "Git: on branch main", "prompt must not leak reminder content")
 }
 
-func TestStripSystemReminder(t *testing.T) {
-	cases := []struct {
-		name, in, want string
-	}{
-		{"no reminder", "看图", "看图"},
-		{"reminder prefix", "<system-reminder>\nGit: clean\n</system-reminder>\n看图", "看图"},
-		{"reminder only", "<system-reminder>\nGit: clean\n</system-reminder>\n", ""},
-		{"unclosed tag keeps content", "<system-reminder>\n看图", "<system-reminder>\n看图"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			assert.Equal(t, tc.want, stripSystemReminder(tc.in))
-		})
-	}
-}
-
 func TestDescribeImagesIfNeeded_ToolImage_MergedIntoContent(t *testing.T) {
 	delegate := &visionMockProvider{name: "gpt5", desc: "一张折线图，销售额上升"}
 	a := newVisionTestAgent(t, delegate)

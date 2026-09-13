@@ -18,6 +18,7 @@ split of it, this one included.
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
 | **Desktop Skills** | you touch skill discovery, or anything that changes which tree a session works in |
+| **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued (the interrupted-turn path) |
 | **Desktop UI State** | you change the frontend: which module owns what, and the bug each convention prevents |
 | **Desktop Themes** | you touch colours |
 
@@ -275,6 +276,36 @@ const type = (el, t) => {
   first request's skill catalog) — nothing in the UI names a skill until one is used, so the prompt is the only
   place the scan is visible. The driver's half asserts the injection disturbed nothing: a turn ran, no tool
   card, no permission card.
+
+## Desktop Turn History (the interrupted-turn merge)
+
+- **A turn's history is the CONVERTED form, reminder blocks included.** `runHistory` holds
+  `[]llm.Message` as `agent.ConvertSessionToLLMMessages` builds it, and that conversion re-attaches
+  the `<system-reminder>` block to the user message it was stored with — deliberately, since
+  `historyHasReminder` reads the prefix to avoid re-injecting first-message-only reminders.
+- **So anything that MOVES a message between turns must unwrap it first.** The one such site is
+  `mergeTrailingUserMessage` (`agent_turn.go`): an interrupted or killed session can leave the
+  history ending on a user message, and that message is folded into the next turn's text so the
+  provider never sees two consecutive user messages. Merging the content verbatim carried the
+  PREVIOUS turn's block along — the model then read a stale plan id, stale diagnostics and a stale
+  branch as if they were current, and because the merged text is recorded as the new message, the
+  block walked forward through the session turn after turn. It now strips via
+  `systemreminder.UnwrapUserMessage`, the single implementation of that inverse (the vision
+  fallback's old private copy delegates to it too).
+- **A trailing message that is nothing but a block is left alone — deliberately.** Two shapes look
+  identical there: a reminder the loop injected mid-run (`injectLoopReminders` appends one as a user
+  message, so a Stop landing right there leaves it trailing), which is stale scaffolding; and a
+  trailing artifact reminder, which `ConvertSessionToLLMMessages` appends as its own user message ON
+  PURPOSE so a reload cannot drop it (an `/research` or `/review` finding must still reach the model
+  after a restart). No marker separates them, so dropping the message would break the second to tidy
+  up the first. Do not "finish the job" here without a way to tell them apart.
+- **That state is reached by RELOAD or by a well-timed Stop, not by an ordinary Stop**: a stop
+  mid-stream has already recorded the partial assistant text, so the history ends on an assistant
+  message and no merge happens. What produces a trailing user message with real text in it is a
+  session reopened after the reply was never recorded (the process was killed, or the turn
+  hard-failed) — which is why no smoke scenario covers it, and why `desktop/agent_turn_test.go`
+  builds its fixture through the REAL conversion instead of hand-writing a history shape.
+- Design context and the mechanism it belongs to: [plan-panel design §7](2026-09-12-desktop-plan-panel-design.md).
 
 ## Desktop UI State
 

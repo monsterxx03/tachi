@@ -141,7 +141,11 @@
 - **不动历史**：仍然只追加，绝不改写已发出的消息 → 前缀缓存零影响（改写中段会让缓存从那一点起全部失效，见下）。
 - 测试：`agent/reminder_loop_test.go`（不变 → 一个回合只注入一次；变了 → 每轮都注入），把去重关掉会红；`agent/systemreminder` 里另有 `CollectPieces` 与 `Collect` 渲染一致的用例。
 
-**仍然存在（不是本机制造成的）**：桌面的 `agent_turn.go` 在"历史最后一条是 user 消息"（中断/续接）时会把那条**连同它携带的 reminder 块**合并进新的用户消息，于是上一轮的旧块（可能含旧 plan_id）会随历史继续往前走。它由 `ConvertSessionToLLMMessages` 把 reminder 前缀拼回 user 内容的有意设计放大（那是 `historyHasReminder` 依赖的）。要去掉得让该合并剔除 reminder 前缀——属于桌面侧的会话续接逻辑，未做。
+**已修（2026-09-13）**：桌面的 `agent_turn.go` 在"历史最后一条是 user 消息"（中断/续接）时会把那条合并进新的用户消息；原先它连那条**携带的 reminder 块**一起搬走，于是上一轮的旧块（可能含旧 plan_id）会随历史继续往前走 —— 而且合并结果会被记成新消息，从此每一轮都带着它。它由 `ConvertSessionToLLMMessages` 把 reminder 前缀拼回 user 内容的有意设计放大（那是 `historyHasReminder` 依赖的）。现在合并前先剥掉该块的**只有这一处**实现：`systemreminder.UnwrapUserMessage`（`agent/systemreminder/reminder.go`，与 `WrapUserMessage` 成对；视觉回退那处旧的私有实现也改为委托它）。
+
+- 测试：`desktop/agent_turn_test.go` 用**真实转换**构造历史（`agent.ConvertSessionToLLMMessages`）并先断言前提"转换后块确实贴在尾条 user 上"，再断言合并后旧块不在文本里；把剥离关掉该用例会红。`systemreminder` 侧另有 `TestUnwrapUserMessage`（含 `Wrap`→`Unwrap` 往返）。
+- **只有块、没有用户文本**的尾条消息保持原样，这是取舍不是漏修：它有两种来源——跑中被注入的 loop reminder（Stop 恰好落在那一瞬）、以及转换函数**故意**追加的尾随工件 reminder（为的是重载不丢它），两者没有可区分的标记，丢掉前者会顺手弄坏后者。
+- 触发该状态的通常是**重开/重载**（回复从未落盘：进程被杀、上一轮硬失败）；普通 Stop 在流式中途会先把部分 assistant 文本记进历史，所以尾部是 assistant，不走这条合并。
 
 **另一处观察（未处理）**：`llm/anthropic.go:238` 只给 **system prompt** 打了 `cache_control` breakpoint，messages 完全没标记（顶层那个 breakpoint 还留着 `FIXME` 注释）。也就是说 Anthropic 这条路上会话历史从来没吃到缓存——那是白送的收益，但它与 plan 无关，单独看。
 

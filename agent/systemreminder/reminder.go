@@ -143,6 +143,14 @@ func (c *Collector) CollectPieces(ctx context.Context, rctx Context) []Piece {
 	return pieces
 }
 
+// ReminderBlockOpen / ReminderBlockClose delimit the single block every reminder
+// rides in. Defined once: the wrapper is a wire format (the model and
+// historyHasReminder both read it), so writing it and unwrapping it must not drift.
+const (
+	ReminderBlockOpen  = "<system-reminder>"
+	ReminderBlockClose = "</system-reminder>"
+)
+
 // RenderPieces wraps pieces into the single <system-reminder> block every consumer
 // expects. Empty input renders "", so "nothing to say" and "say nothing" stay the same
 // thing.
@@ -152,14 +160,14 @@ func RenderPieces(pieces []Piece) string {
 	}
 
 	var sb strings.Builder
-	sb.WriteString("<system-reminder>\n")
+	sb.WriteString(ReminderBlockOpen + "\n")
 	for _, p := range pieces {
 		for _, line := range p.Lines {
 			sb.WriteString(line)
 			sb.WriteByte('\n')
 		}
 	}
-	sb.WriteString("</system-reminder>\n")
+	sb.WriteString(ReminderBlockClose + "\n")
 	return sb.String()
 }
 
@@ -168,6 +176,30 @@ func RenderPieces(pieces []Piece) string {
 // shape; the loop uses the pieces.
 func (c *Collector) Collect(ctx context.Context, rctx Context) string {
 	return RenderPieces(c.CollectPieces(ctx, rctx))
+}
+
+// UnwrapUserMessage removes the <system-reminder> block WrapUserMessage prepended,
+// returning the user's own text.
+//
+// It exists for callers that MOVE a wrapped message into another turn — the desktop's
+// interrupted-turn merge, which folds a trailing user message into the next one so the
+// provider never sees two consecutive user messages. A block describes the turn it was
+// built for, so carrying one forward makes the model read an old plan id, old
+// diagnostics or an old branch as if they were current, and the block then gets
+// re-recorded with the new message and walks through the session from there. The
+// receiving turn builds its own block for the current state.
+//
+// No prefix, or an opening tag with no closing tag, returns content unchanged: a
+// malformed block is the caller's text as far as this function knows. A block with
+// nothing after it returns "".
+func UnwrapUserMessage(content string) string {
+	if !strings.HasPrefix(content, ReminderBlockOpen) {
+		return content
+	}
+	if end := strings.Index(content, ReminderBlockClose); end >= 0 {
+		return strings.TrimPrefix(content[end+len(ReminderBlockClose):], "\n")
+	}
+	return content
 }
 
 // WrapUserMessage prepends the <system-reminder> block (if any) to the

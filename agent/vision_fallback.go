@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -264,20 +265,16 @@ func imageContentKey(part llm.ContentPart) string {
 	return hex.EncodeToString(h[:])
 }
 
-// stripSystemReminder removes a leading <system-reminder>...</system-reminder>
-// block from message text. prepareTurnMessages prepends such blocks (git
-// status, memory recall, MCP/skill hints, date, project context, ...) to the
-// user message before the loop; they must never reach the image-description
-// call — the describing model should only see the user's actual text. A
-// message without the prefix is returned unchanged.
+// stripSystemReminder removes a leading <system-reminder> block from message text.
+// prepareTurnMessages prepends such blocks (git status, memory recall, MCP/skill hints,
+// date, project context, ...) to the user message before the loop; they must never reach
+// the image-description call — the describing model should only see the user's actual
+// text. A message without the prefix is returned unchanged.
+//
+// The unwrapping itself lives with the format's owner (systemreminder), so this call
+// site and the desktop's turn merge cannot drift apart.
 func stripSystemReminder(content string) string {
-	if !strings.HasPrefix(content, "<system-reminder>") {
-		return content
-	}
-	if end := strings.Index(content, "</system-reminder>"); end >= 0 {
-		return strings.TrimPrefix(content[end+len("</system-reminder>"):], "\n")
-	}
-	return content
+	return systemreminder.UnwrapUserMessage(content)
 }
 
 // visionDelegateName returns a display name for the delegate provider.

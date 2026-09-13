@@ -121,11 +121,47 @@ func TestWrapUserMessage_WithReminders(t *testing.T) {
 		IsFirstMessage: true,
 		Now:            time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC),
 	})
-	if !strings.HasPrefix(result, "<system-reminder>") {
+	if !strings.HasPrefix(result, ReminderBlockOpen) {
 		t.Errorf("expected reminder at top, got: %s", result)
 	}
 	if !strings.HasSuffix(result, "hello") {
 		t.Errorf("expected original message at end, got: %s", result)
+	}
+}
+
+// UnwrapUserMessage is the inverse of WrapUserMessage: a caller that MOVES a wrapped
+// message into another turn (the desktop's interrupted-turn merge) must drop the block
+// it came with, because a block describes the turn it was built for.
+func TestUnwrapUserMessage(t *testing.T) {
+	cases := []struct {
+		name, in, want string
+	}{
+		{"no reminder", "看图", "看图"},
+		{"reminder prefix", ReminderBlockOpen + "\nGit: clean\n" + ReminderBlockClose + "\n看图", "看图"},
+		{"reminder only", ReminderBlockOpen + "\nGit: clean\n" + ReminderBlockClose + "\n", ""},
+		{"unclosed tag keeps content", ReminderBlockOpen + "\n看图", ReminderBlockOpen + "\n看图"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := UnwrapUserMessage(tc.in); got != tc.want {
+				t.Errorf("UnwrapUserMessage(%q) = %q, want %q", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// The pair has to round-trip: WrapUserMessage is what puts a block on, so whatever takes
+// it off has to reproduce the user's text byte for byte — a merged turn must not lose or
+// mangle what they typed.
+func TestUnwrapUserMessage_RoundTrip(t *testing.T) {
+	c := NewCollector(DateReminder{})
+	rctx := Context{IsFirstMessage: true, Now: time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)}
+
+	for _, text := range []string{"hello", "", "多行\n内容", " 前后有空格 "} {
+		wrapped := c.WrapUserMessage(t.Context(), text, rctx)
+		if got := UnwrapUserMessage(wrapped); got != text {
+			t.Errorf("round trip of %q = %q, want the original text", text, got)
+		}
 	}
 }
 

@@ -510,7 +510,7 @@ func historyHasReminder(history []llm.Message) bool {
 		if msg.Role != "user" {
 			continue
 		}
-		if strings.HasPrefix(msg.Content, "<system-reminder>") {
+		if strings.HasPrefix(msg.Content, systemreminder.ReminderBlockOpen) {
 			if isReminderOnly(msg.Content) {
 				continue // standalone reminder block — not evidence of a past first turn
 			}
@@ -523,11 +523,11 @@ func historyHasReminder(history []llm.Message) bool {
 // isReminderOnly reports whether content is just a <system-reminder> block
 // with no real user content after the closing tag.
 func isReminderOnly(content string) bool {
-	end := strings.Index(content, "</system-reminder>")
+	end := strings.Index(content, systemreminder.ReminderBlockClose)
 	if end < 0 {
 		return false
 	}
-	return strings.TrimSpace(content[end+len("</system-reminder>"):]) == ""
+	return strings.TrimSpace(content[end+len(systemreminder.ReminderBlockClose):]) == ""
 }
 
 // prepareTurnMessages builds the initial message slice for a turn: copies
