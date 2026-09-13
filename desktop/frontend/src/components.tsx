@@ -4,7 +4,7 @@ import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
 import type { Theme } from './theme'
-import type { AtMatch, Part } from './types'
+import type { AtMatch, Part, PermissionDecision, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
@@ -695,4 +695,37 @@ function AskForm({ questions, onSubmit, onCancel }: {
   )
 }
 
-export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+// PermissionForm renders a parked bash permission decision INLINE in the transcript,
+// in place of the tool card that is waiting — the same placement convention AskForm
+// uses, for the same reason: the decision belongs where the call is, not in a modal
+// that hides the conversation it is about.
+//
+// It shows the agent's own preview verbatim (`$ command` + the matched rule). The
+// three buttons mirror the TUI's y/a/n: allow once, allow this exact command for the
+// rest of the session, deny. No Esc and no default-on-Enter: Esc already means
+// "dismiss the picker / close a viewer" everywhere else in this UI, and the decision
+// here can be a destructive command — it should not be one habitual keypress away.
+function PermissionForm({ perm, onAnswer }: {
+  perm: { req: PermissionRequest; busy?: boolean; err?: string }
+  onAnswer: (decision: PermissionDecision) => void
+}) {
+  const busy = !!perm.busy
+  return (
+    <div className="perm-form" aria-label="等待授权">
+      <div className="perm-head">
+        <span className="perm-title">需要你确认这条命令</span>
+        <span className="perm-sub">命中 permissions.bash.ask 规则，允许后本轮继续</span>
+      </div>
+      <pre className="perm-preview">{perm.req.preview}</pre>
+      {perm.err ? <div className="perm-err">{perm.err}</div> : null}
+      <div className="perm-actions">
+        <span className="perm-hint">仅这一条，或整个会话都放行同一条命令</span>
+        <button className="btn ghost" disabled={busy} onClick={() => onAnswer('deny')}>拒绝</button>
+        <button className="btn ghost" disabled={busy} onClick={() => onAnswer('allow_always')}>本会话始终允许</button>
+        <button className="btn" disabled={busy} onClick={() => onAnswer('allow_once')}>{busy ? '已发送…' : '允许一次'}</button>
+      </div>
+    </div>
+  )
+}
+
+export { ContextMeter, CacheRing, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }

@@ -13,8 +13,16 @@
   smoke.type('.composer-input', '写一个 NOTES.md')
   smoke.click('.send-btn')
 
-  // The chip only exists on a turn that changed something, so its arrival is also the proof
-  // that the WriteFile round landed (a fragment diff on the card feeds the same aggregate).
+  // The turn writes TWO files in two rounds, and the chip below appears as soon as the FIRST
+  // file's change landed — it is a proxy for "this turn changed something", not for "this turn's
+  // file set is final". Clicking 完整 diff on the strength of that proxy captured a one-file
+  // `paths` set, and the overlay then showed only NOTES.md: a full run failed exactly these two
+  // assertions that way (2/78, and the DOM carried NOTES.md with no OTHER.md in the overlay).
+  // What the click needs is the turn's FINAL file set, so wait for the turn's own closing line.
+  if (!(await smoke.waitText('.msg-assistant', '已经写下', 30000))) return smoke.finish()
+
+  // The chip's arrival is the proof that a changed-file turn gets a review entry (and that the
+  // WriteFile round landed — a fragment diff on the card feeds the same aggregate).
   const before = await smoke.waitFor(
     () => smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('评审本轮改动') >= 0) || null,
     'footer 出现「评审本轮改动」', 30000)

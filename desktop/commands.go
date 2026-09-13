@@ -250,6 +250,10 @@ func (d *desktopApp) startCommand(name, args string, scope []string, reviewedMsg
 
 	if lane == laneOneOff {
 		d.emitOneOff(id, map[string]any{"kind": name, "phase": "start"})
+		// A side-channel run reports into the panel's lane, so the transcript has no turn to
+		// render a bash permission card in — mark the run so the handler refuses instead of
+		// parking it on a decision nobody can make (see permission.go).
+		ctx = withoutAsk(ctx)
 	}
 
 	go func() {

@@ -18,6 +18,8 @@ import {
   type AtMatch,
   type AtPickerState,
   type Message,
+  type PermissionDecision,
+  type PermissionRequest,
 } from './types'
 import type { CommandVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
@@ -227,6 +229,61 @@ export function useComposer(deps: ComposerDeps) {
   // answerCurrent is the stable callback the transcript form uses for the session on screen.
   const answerCurrent = useCallback((a: Record<string, string> | null) => answer(currentId, a), [currentId, answer])
 
+  // ── Bash 权限确认 ─────────────────────────────────────────────────────────
+  // A bash `ask` rule parks the turn until the user decides in the app; the request arrives
+  // as an event and is answered through AgentService.AnswerPermission with the tool call id
+  // it names. Same keying as the questions above (per session, NOT cleared on session switch
+  // — the agent is still parked), and the same reason: a background session's ask must not
+  // hijack the foreground UI, but switching back must still show it.
+  //
+  // The entry keeps the answer's own state (busy / err) rather than dropping on click: the
+  // wait is ended by the BACKEND accepting the answer, and a refused one (the run is gone, the
+  // ask was already answered) must stay visible with its reason instead of vanishing into a
+  // turn that will never move again.
+  type PermEntry = { req: PermissionRequest; busy?: boolean; err?: string }
+  const [perms, setPerms] = useState<Record<string, PermEntry>>({})
+  const clearPerm = useCallback((sid: string) => {
+    setPerms((prev) => {
+      if (!prev[sid]) return prev
+      const next = { ...prev }
+      delete next[sid]
+      return next
+    })
+  }, [])
+  const answerPerm = useCallback((sid: string, req: PermissionRequest, decision: PermissionDecision) => {
+    setPerms((prev) => {
+      const cur = prev[sid]
+      // Only ever answer the ask that is on screen: a late click on a replaced card must not
+      // mark the new one busy (or clear it when it fails).
+      if (!cur || cur.req.toolId !== req.toolId || cur.busy) return prev
+      return { ...prev, [sid]: { ...cur, busy: true, err: undefined } }
+    })
+    AgentService.AnswerPermission(sid, req.toolId, decision)
+      .then((res) => {
+        if (res === 'ok') {
+          clearPerm(sid) // the backend took the decision: nothing is waiting any more
+          return
+        }
+        setPerms((prev) => {
+          const cur = prev[sid]
+          if (!cur || cur.req.toolId !== req.toolId) return prev
+          return { ...prev, [sid]: { req: cur.req, err: res || '回答失败' } }
+        })
+      })
+      .catch(() => {
+        setPerms((prev) => {
+          const cur = prev[sid]
+          if (!cur || cur.req.toolId !== req.toolId) return prev
+          return { ...prev, [sid]: { req: cur.req, err: '回答失败（后端不可达）' } }
+        })
+      })
+  }, [clearPerm])
+  // answerPermCurrent is the stable callback the transcript form uses for the session on screen.
+  const answerPermCurrent = useCallback((decision: PermissionDecision) => {
+    const cur = perms[currentId]
+    if (cur) answerPerm(currentId, cur.req, decision)
+  }, [currentId, perms, answerPerm])
+
   // ── Pending queue / steer ─────────────────────────────────────────────────
   // Queue ops keep pendingRef in sync so event listeners (which can only see the latest
   // values through refs, not stale render closures) always act on the freshest queue.
@@ -272,6 +329,7 @@ export function useComposer(deps: ComposerDeps) {
     setPending(moveKey)
     pendingRef.current = moveKey(pendingRef.current)
     setAsks(moveKey)
+    setPerms(moveKey)
   }, [])
 
   // ── Sending ───────────────────────────────────────────────────────────────
@@ -500,6 +558,19 @@ export function useComposer(deps: ComposerDeps) {
     return () => off?.()
   }, [currentId, scrollToBottom])
 
+  // A permission request arrives while the turn is parked; same placement and same
+  // follow-into-view rule as the questions above.
+  useEffect(() => {
+    const off = Events.On('agent:permission', (event) => {
+      const d = event.data as PermissionRequest | undefined
+      if (!d?.sessionId || !d.toolId) return
+      setPerms((prev) => ({ ...prev, [d.sessionId]: { req: d } }))
+      // Only while the user is already parked at the bottom (see the ask listener).
+      if (d.sessionId === currentId) scrollToBottom()
+    })
+    return () => off?.()
+  }, [currentId, scrollToBottom])
+
   // agent:idle fires after a turn goroutine has fully exited (running already reset on the
   // backend). A NATURAL completion auto-sends whatever the user queued while the turn ran
   // (same drain semantics as TUI's TurnComplete); stopped/errored turns leave the queue for
@@ -508,6 +579,7 @@ export function useComposer(deps: ComposerDeps) {
     const off = Events.On('agent:idle', (event) => {
       const d = event.data as { sessionId: string; reason: string; current?: boolean }
       clearAsk(d.sessionId) // the turn is over: nothing can still be waiting
+      clearPerm(d.sessionId) // same fact for a parked permission
       // `current` comes from the backend (was this the displayed session?) rather than being
       // compared against this closure's currentId: an auto-compaction switch can move the
       // session between the two events, and React state read through a stale closure would
@@ -518,7 +590,7 @@ export function useComposer(deps: ComposerDeps) {
       sendText(takePending(d.sessionId))
     })
     return () => off?.()
-  }, [sendText, takePending, clearAsk])
+  }, [sendText, takePending, clearAsk, clearPerm])
 
   // ── Height (the reader drags the box's top edge) ───────────────────────────
   // null = the stylesheet's default. One number serves both the height and the ceiling: the
@@ -617,6 +689,8 @@ export function useComposer(deps: ComposerDeps) {
     clearPending: () => clearPending(currentId), sendPendingNow, sendingNow, rekeySessions,
     // questions
     ask: asks[currentId] || null, answer, answerCurrent, clearAsk,
+    // bash permission (a policy `ask` rule parked the turn on the user)
+    perm: perms[currentId] || null, answerPerm: answerPermCurrent, clearPerm,
     // sending
     send, submit, answerSteer, noticeCommandResult,
   }

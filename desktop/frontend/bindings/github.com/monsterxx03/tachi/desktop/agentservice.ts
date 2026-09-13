@@ -39,6 +39,16 @@ export function AddSessionRoots(id: string, dirs: string[] | null): $Cancellable
 }
 
 /**
+ * AnswerPermission delivers the user's decision for a parked ask, unblocking the
+ * agent loop. sessionID + toolID must name the ask that is actually waiting: the
+ * frontend answers with the id it was given, so a card left over from an earlier
+ * call (or another conversation) is refused instead of approving something else.
+ */
+export function AnswerPermission(sessionID: string, toolID: string, decision: string): $CancellablePromise<string> {
+    return $Call.ByID(775183009, sessionID, toolID, decision);
+}
+
+/**
  * AnswerQuestion delivers the user's answers to a session's pending
  * AskUserQuestion, unblocking the agent loop.
  * 

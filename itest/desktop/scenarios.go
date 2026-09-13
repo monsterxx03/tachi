@@ -29,6 +29,9 @@ type scenario struct {
 	files map[string]string
 	// gitInit gives the work dir a repository with one commit (dirty-tree scenarios).
 	gitInit bool
+	// config is a YAML block appended to the sandbox config.yaml (see sandbox.writeConfig).
+	// Empty for scenarios that need no settings beyond the shared provider/mock wiring.
+	config string
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -119,6 +122,17 @@ const (
 	// A text turn long enough to still be running while the driver queues a message and
 	// clicks 立即发送. The pauses are the point: they make the interruption window real.
 	longTurn = 1500 * time.Millisecond
+	// slowWritePause holds a WriteFile round before it runs, so a turn's file set stays
+	// incomplete for a measurable stretch — oneoff-footer uses it to test that nothing acts
+	// on the turn's changes before the turn is done.
+	slowWritePause = 2 * time.Second
+	// projectRulesMarker is one SENTENCE of the rules that are injected with a .tachi.md
+	// (agent/systemreminder/project_reminder.go). It is asserted on at the LLM boundary,
+	// which is the only place the whole contract can be proven to travel: the rules are
+	// emitted by the reminder rather than written into the file, so a repo cannot be
+	// expected to carry them. Rewording them means updating this marker — and that is the
+	// point.
+	projectRulesMarker = "Keep it true, in the same turn"
 )
 
 // textStream is one assistant message streamed in a few chunks, with token usage — the
@@ -419,8 +433,13 @@ func scenarios() []scenario {
 				// SCROLL for the walk's home (the sticky bar) to be the thing under test — a
 				// ten-line file would let a header-hosted ↑/↓ pass, because nothing ever scrolls
 				// it off the top.
-				{Reply: writeFileStream("NOTES.md", strings.Repeat("一行笔记：这一行只是为了让 diff 足够长，面板必须滚动才看得到下面的意见。\n", 80), "call_w1")},
-				{Reply: writeFileStream("OTHER.md", "another file\n", "call_w2")},
+				//
+				// The SECOND write is parked for two seconds: the turn's file set is not final
+				// until that write lands, and the driver's earlier version acted on a proxy that
+				// is true after the FIRST one (see the driver). The pause makes that window big
+				// enough to be a test rather than a race nobody can reproduce.
+				{Reply: writeFileStream(0, "NOTES.md", strings.Repeat("一行笔记：这一行只是为了让 diff 足够长，面板必须滚动才看得到下面的意见。\n", 80), "call_w1")},
+				{Reply: writeFileStream(slowWritePause, "OTHER.md", "another file\n", "call_w2")},
 				{Reply: textStream("已经写下 NOTES.md 和 OTHER.md。", 900)},
 				// Review 1: one finding, then the reply.
 				{Reply: findingStream("NOTES.md", 1, "warn", "call_f1")},
@@ -600,6 +619,114 @@ func scenarios() []scenario {
 				}
 			},
 		},
+		//
+		// 权限确认（允许）: a bash command matches an `ask` rule, so the agent parks the turn
+		// on the user instead of refusing the command. The driver clicks 允许一次; the half
+		// that proves the command ACTUALLY RAN is here — the tool result (the content of the
+		// file the command read) has to be in the next request's messages, and only a run
+		// command produces it.
+		//
+		// perm-deny is the negative control that keeps this one honest: without it, a build
+		// where the ask rule silently did not match would run the command unprompted and the
+		// driver's click would land on nothing.
+		//
+		{
+			name: "perm-allow",
+			files: map[string]string{
+				"README.md":        "# smoke\n\nthe perm-allow scenario's working directory\n",
+				"perm-fixture.txt": "PERM-FIXTURE-CONTENT\n",
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				{Reply: bashStream("cat perm-fixture.txt", "call_pa1")},
+				{Reply: textStream("读过文件了：内容在上面。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// The command's OUTPUT — not its arguments — is what proves it ran.
+				_, ran := c.requestSeen("PERM-FIXTURE-CONTENT")
+				c.check("允许后命令真的执行了（工具结果回喂给了模型）", ran, requestCount(c.requests))
+			},
+		},
+		//
+		// 权限确认（拒绝）: the same rule and the same command, but the driver clicks 拒绝.
+		// The command must NOT run, and the model must be told the user refused it.
+		//
+		{
+			name: "perm-deny",
+			files: map[string]string{
+				"README.md":        "# smoke\n\nthe perm-deny scenario's working directory\n",
+				"perm-fixture.txt": "PERM-FIXTURE-CONTENT\n",
+			},
+			config: `
+permissions:
+  bash:
+    ask:
+      - "cat perm-fixture*"
+`,
+			steps: []mockllm.Step{
+				{Reply: bashStream("cat perm-fixture.txt", "call_pd1")},
+				{Reply: textStream("好，那条命令我不执行了。", 1500)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				_, ran := c.requestSeen("PERM-FIXTURE-CONTENT")
+				c.check("拒绝后命令没有执行（工具结果里没有文件内容）", !ran, requestCount(c.requests))
+				_, told := c.requestSeen("denied")
+				c.check("模型被告知这条命令被拒绝", told, "")
+			},
+		},
+		//
+		// 项目上下文与它的规矩: the session's working directory carries a .tachi.md, so the
+		// first message of the conversation gets it injected — TOGETHER with the standing
+		// rules that ride with it (see agent/systemreminder/project_reminder.go). The rules
+		// live in the reminder rather than in the file precisely so they apply to every repo,
+		// which makes this the end-to-end proof that the contract travels with the content.
+		//
+		{
+			name: "project-context",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe project-context scenario's working directory\n",
+				".tachi.md": "# 冒烟项目约定\n\n- SMOKE-PROJECT-RULE: 只改 NOTES.md，不要碰别的文件\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("知道了：只改 NOTES.md。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+
+				_, projectSeen := c.requestSeen("SMOKE-PROJECT-RULE")
+				c.check("工作目录里的 .tachi.md 进了 prompt", projectSeen, requestCount(c.requests))
+
+				// The marker is a SENTENCE of the rules, not a heading — the same way
+				// oneoff-footer pins its prompt sections: a heading contains the section's
+				// `##` prefix, so a heading-shaped marker would pass even if the section
+				// were never appended.
+				_, rulesSeen := c.requestSeen(projectRulesMarker)
+				c.check("随 .tachi.md 一起注入的规矩也进了 prompt", rulesSeen, "")
+				if !projectSeen || !rulesSeen {
+					return
+				}
+				// And the rules come first: they are the contract for the file below them.
+				for _, r := range c.requests {
+					for _, m := range r.Messages {
+						rules := strings.Index(m.Content, projectRulesMarker)
+						content := strings.Index(m.Content, "SMOKE-PROJECT-RULE")
+						if rules >= 0 && content >= 0 {
+							c.check("规矩排在项目内容之前", rules < content,
+								fmt.Sprintf("rules@%d content@%d", rules, content))
+							return
+						}
+					}
+				}
+				c.check("规矩与项目内容在同一条提醒里", false, "两处标记没有出现在同一条消息里")
+			},
+		},
 	}
 }
 
@@ -633,14 +760,23 @@ func jsonArgs(v any) string {
 
 // writeFileStream is one WriteFile tool call. It exists so a turn can be a turn that CHANGED
 // something: the footer's review entry (and 「完整 diff」) only appear on such a turn.
-func writeFileStream(path, content, callID string) mockllm.ReplyFunc {
+//
+// pause > 0 holds the reply at a KNOWN point (this file not yet written), which is how a
+// scenario tests a driver that acts on the turn's changes against a file set that is still
+// growing — see oneoff-footer, where the second write parks the turn on purpose.
+func writeFileStream(pause time.Duration, path, content, callID string) mockllm.ReplyFunc {
+	chunks := []mockllm.Chunk{}
+	if pause > 0 {
+		chunks = append(chunks, mockllm.Pause(pause))
+	}
 	args := jsonArgs(map[string]string{"path": path, "content": content})
-	return mockllm.Stream(
+	chunks = append(chunks,
 		mockllm.ToolCallStart(callID, "WriteFile", args),
 		mockllm.Finish("tool_calls"),
 		mockllm.UsageWithCache(1500, 40, 1400, 10),
 		mockllm.Done(),
 	)
+	return mockllm.Stream(chunks...)
 }
 
 // findingStream is one ReportFinding call — the review's structured output, and what the

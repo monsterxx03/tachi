@@ -380,6 +380,54 @@
 }
 .ask-hint { margin-right: auto; font-size: 11px; color: var(--text-faint); }
 
+/* ── Bash permission confirm (inline in the transcript) ───────────────────── */
+/* Same shell and same placement as .ask-form above — it is the same situation
+   (the turn is parked on the user) with a different question. The amber title is
+   the one difference: this one is about to run a command the user's own config
+   asked to be checked, so it reads as a caution rather than a question. */
+.perm-form {
+  margin: 8px 0 4px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-lg);
+  background: var(--panel-solid);
+  box-shadow: var(--shadow-1);
+  overflow: hidden;
+}
+.perm-head {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 10px 14px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--wash);
+}
+.perm-title { font-size: 13px; font-weight: 650; color: var(--amber); }
+.perm-sub { font-size: 11.5px; color: var(--text-faint); }
+/* The command is shown in the agent's own rendering, so the plane is monospace
+   like every other code surface, and it does not wrap: a long pipeline scrolls
+   sideways instead of breaking mid-token into something unreadable. */
+.perm-preview {
+  margin: 0;
+  padding: 12px 14px;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--text);
+  white-space: pre;
+  overflow-x: auto;
+}
+.perm-err { padding: 0 14px 10px; font-size: 12px; color: var(--amber); }
+.perm-actions {
+  display: flex;
+  flex-wrap: wrap; /* seven controls' worth of precedent: never widen the pane */
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--wash);
+}
+.perm-hint { margin-right: auto; font-size: 11px; color: var(--text-faint); }
+
 /* ── Workspace roots popover (the composer's ⌂ chip) ──────────────────────── */
 /* The session's root set: the primary directory, the additional roots, and the
    two actions — change the primary, add more. Same shell as the MCP/context

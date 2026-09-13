@@ -106,7 +106,11 @@ func fileExists(p string) bool {
 // writeConfig points the app at the scenario's mock. Every scenario gets its own provider
 // entry, which is why the config is written here and not checked in: the mock's port is
 // random.
-func (sb *sandbox) writeConfig(baseURL string) error {
+//
+// extra is the scenario's own YAML block (see scenario.config) — appended verbatim so a
+// scenario that needs settings the shared config does not carry (permissions.bash.ask, for
+// instance) does not have to widen this function's signature with one field per feature.
+func (sb *sandbox) writeConfig(baseURL, extra string) error {
 	cfg := fmt.Sprintf(`provider: smoke
 providers:
   - name: smoke
@@ -120,7 +124,7 @@ title_generation: false
 language: zh
 herdr:
   enabled: false
-`, baseURL)
+%s`, baseURL, extra)
 	return os.WriteFile(filepath.Join(sb.home, ".tachi", "config.yaml"), []byte(cfg), 0o600)
 }
 

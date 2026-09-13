@@ -220,7 +220,7 @@ export function useAgentStream(deps: AgentStreamDeps) {
         case 'text_delta': enqueueDelta(sessionId, 'text', ev.TextDelta); break
         // The two stream events that may have to OPEN the message they write to: a turn can
         // start before the frontend has placed its placeholder (see applyToSession).
-        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand }), true); break
+        case 'tool_call_start': applyToSession(sessionId, 'assistant', (m) => pushPart(m, { type: 'tool', name: ev.ToolName, toolCallId: ev.ToolID, title: '', args: '', summary: '执行中…', ok: true, done: false, expand: ev.ToolAutoExpand }), true); break
         case 'tool_result': applyToSession(sessionId, 'assistant', (m) => finishToolPart(m, ev.ToolName, ev.ToolResult, !ev.ToolIsError, ev.ToolDuration ? Math.round(ev.ToolDuration / 1e6) : undefined), true); break
         case 'turn_complete': applyToSession(sessionId, 'assistant', (m) => ({ ...m, running: false })); break
         case 'session_title': {

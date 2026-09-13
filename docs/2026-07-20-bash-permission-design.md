@@ -108,6 +108,13 @@ checkBashPermission            ← 新增（agent/agent_permission.go）
 
 特例：ACP 客户端选择 "allow all" 后，agent 切到 `PermissionModeSkip` 并置 `autoApprovePolicyAsks=true`——用户显式选择了全部放行，ask 不再拒绝。该标志与 channel 等场景的 Skip 语义隔离，互不影响。
 
+> **2026-09-13 补记**：desktop 也接进了 `PermissionModeExternal`（`desktop/permission.go` 自带
+> `PermissionHandler`），命中 ask 时在窗口里弹确认卡（拒绝 / 本会话始终允许 / 允许一次，对齐 TUI 的 n/a/y）。
+> 「本会话始终允许」用 `AllowExactSession` 记精确命令，不切 Skip——那会连用户写的 deny 规则一起关掉。
+> 侧路运行（/review、/commit）没有可确认的对话回合，仍走「拒绝 + 提示加 allow 规则」。
+> 所以上表是**三种后端模式**的行为，不再是"交互入口"的完整清单；desktop 一侧的约定见
+> [docs/agents/desktop.md](agents/desktop.md)。
+
 ## 7. 配置设计
 
 **全局** `~/.tachi/config.yaml`：`permissions.bash.{deny,ask,allow}`

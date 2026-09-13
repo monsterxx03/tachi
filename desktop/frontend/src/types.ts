@@ -70,6 +70,11 @@ export interface AgentEvent {
   TextDelta: string
   ThinkingDelta: string
   ToolName: string
+  // ToolID names the tool CALL a tool event belongs to. It is what lets a
+  // permission card attach to the call that is waiting (see PermissionRequest) —
+  // matching by tool name would land on whichever call of that name started last,
+  // and a model emits a whole batch of calls before any of them runs.
+  ToolID?: string
   ToolResult: string
   ToolIsError: boolean
   ToolDuration?: number
@@ -86,6 +91,25 @@ export interface AgentEvent {
   // event is the only thing that can update the row while the session is open.
   Title?: string
 }
+
+// PermissionRequest is a bash command parked on the user's decision (a policy
+// `ask` rule matched). It arrives as `agent:permission` while the turn waits, and
+// is answered through AgentService.AnswerPermission with the SAME toolId — the
+// backend refuses an answer that does not name the ask that is actually waiting.
+//
+// preview is the agent's own rendering of what is being asked ("$ command" plus
+// the matched rule) and is displayed verbatim: parsing it here would be a second
+// definition of a format the backend already owns.
+export interface PermissionRequest {
+  sessionId: string
+  toolId: string
+  toolName: string
+  preview: string
+}
+
+// The three answers a permission card can send. The values are the wire contract
+// with AnswerPermission (see desktop/permission.go).
+export type PermissionDecision = 'allow_once' | 'allow_always' | 'deny'
 
 export const THINKING_LEVELS = ['default', 'none', 'low', 'medium', 'high', 'xhigh', 'max']
 // PAGE_SIZE is the number of raw session messages loaded per "page" when

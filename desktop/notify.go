@@ -37,7 +37,12 @@ const (
 	notifyAppTitle   = "Tachi"
 	notifyAskTitle   = "Tachi 需要你的回答"
 	notifyAskWaiting = "等待你的回答"
-	notifyTurnDone   = "回合完成"
+	// A bash ask parks the turn on the user, so it is announced like a question —
+	// but the command IS the decision, and one line of it fits, so the body says
+	// which command rather than only that something is waiting.
+	notifyPermTitle   = "Tachi 等待你的授权"
+	notifyPermWaiting = "等待你的授权"
+	notifyTurnDone    = "回合完成"
 	// A side-channel run is announced by WHAT it was, not as 回合完成: it never had a turn on
 	// screen, so the name is the part the reader does not already know.
 	notifyReviewName = "评审"
@@ -46,6 +51,10 @@ const (
 	// notifySubtitleMaxRune keeps a long session title from pushing the body out
 	// of the visible area.
 	notifySubtitleMaxRune = 40
+	// notifyPermBodyMaxRune bounds the command shown as a permission request's body:
+	// the head of the command is what identifies it, and an untruncated pipeline
+	// would push the rest of the notification out of view.
+	notifyPermBodyMaxRune = 80
 )
 
 type notifier struct {
@@ -139,6 +148,24 @@ func (n *notifier) notifyTurnDone(sessionTitle string, iterations int, took time
 // questions are waiting.
 func (n *notifier) notifyAsk(sessionTitle string, questions []string) {
 	n.notify(notifyAskTitle, sessionTitle, askBody(len(questions)))
+}
+
+// notifyPermission reports a turn parked on a bash permission decision. Unlike a
+// question, the thing being decided is one command — so the body names it (the
+// user is being asked to approve THAT, and "something is waiting" would send them
+// back for a detail the ping could have carried).
+func (n *notifier) notifyPermission(sessionTitle, command string) {
+	n.notify(notifyPermTitle, sessionTitle, permBody(command))
+}
+
+// permBody is the one-line body for a parked ask. An unparsable command (empty)
+// falls back to the bare waiting phrase rather than an empty line.
+func permBody(command string) string {
+	cmd := truncateRunes(strings.TrimSpace(command), notifyPermBodyMaxRune)
+	if cmd == "" {
+		return notifyPermWaiting
+	}
+	return notifyPermWaiting + "：" + cmd
 }
 
 // notifyOneOffDone reports a finished side-channel run (/review, /commit). It gets its own copy

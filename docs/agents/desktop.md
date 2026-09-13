@@ -6,7 +6,9 @@ frontend's UI-state conventions (which module owns what).
 
 Why it lives here: `.tachi.md` is injected WHOLE into the first message of every session, so it only
 keeps the conventions that apply anywhere in the repo and points here for the rest. **New desktop
-lessons belong in THIS file, not back in `.tachi.md`.**
+lessons belong in THIS file, not back in `.tachi.md`** — and the rules that ride with that file
+(freshness in the same turn, convention-not-history, split + index when a subject grows) apply to every
+split of it, this one included.
 
 ## Contents — read the section you need, not the file
 
@@ -48,7 +50,9 @@ up in exactly one of the two, so write both. **Adding a scenario** = `drivers/<n
 the harness (`smoke.waitFor` — never a fixed sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`,
 plus `q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`) and an entry in `scenarios.go` (the
 mock's `steps`, the work-dir `files`, an `after` func for the Go-side checks). Keep both halves small:
-one behaviour per scenario, and assert what the user would notice.
+one behaviour per scenario, and assert what the user would notice. A scenario that needs settings the
+shared sandbox config does not carry sets `config` — a YAML block appended to the generated
+`config.yaml`, which is how a parked-permission scenario gets its `permissions.bash.ask` rule.
 
 ### Manual recipe — only for exploring something the suite does not cover
 
@@ -147,6 +151,15 @@ const type = (el, t) => {
   POST to `/console` sent AFTER `/result` — which is what unblocks the runner — so they raced it
   and lost, exactly when a strange failure needed them. They now ride in the result body
   (`Result.Console`), and the runner prints them for passing runs too.
+- **A proxy signal becomes true before the fact it stands for — a driver must wait for the fact its action
+  consumes** (`oneoff-footer`): the turn's 评审本轮改动 chip exists after its FIRST changed file, not after its
+  last, so a click on 「完整 diff」 that waits only for the chip captures a one-file `paths` set and the overlay
+  shows the wrong files (measured: 2/78 in a full run). The driver waits for the turn's own closing line, and
+  the scenario parks the second write for two seconds (`slowWritePause`) so the window is wide enough to be
+  TESTED rather than raced — with that wait removed the same run fails deterministically (8/34), with it it
+  passes 78/78. Two rules, both cheap: wait for the fact the action reads, not for a neighbour that merely
+  correlates with it, and widen a suspect window before you trust a fix, because a race you cannot widen is one
+  you cannot verify a fix against.
 - **A stale element swallows a gesture**: re-query the handle for EVERY synthetic drag. A driver
   that captured `.composer-resizer` once had its second drag land on a detached node, and the
   "ceiling" assertion then passed against the previous height (200px) without dragging at all.
@@ -207,6 +220,23 @@ const type = (el, t) => {
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
   popping a real Finder window.
+- **A bash `ask` rule is a question for the USER, and the desktop answers it the way ACP does — never with a
+  fourth `PermissionMode`**: every session's agent is built with `agent.PermissionModeExternal` plus a
+  `PermissionHandler` (`desktop/permission.go`), so `agent_permission.go`'s ask branch parks the turn on the
+  window and the decision comes back through `AgentService.AnswerPermission`. `PermissionModeSkip` is the wrong
+  posture here: its ask branch is the *unattended* one (channel / subagent / `tachi -p`) — it refuses the command
+  and says "add an allow rule", to the user who wrote that rule, in the one frontend that has them in front of
+  it. `deny` behaves identically either way; only `ask` differs. Taking the external path (the shape the TUI
+  confirmation and ACP's `session/request_permission` already use) is what leaves the other entry modes'
+  behaviour untouched — no agent-loop change at all.
+  Four properties worth keeping: an answer is addressed by **session + tool call id** (`permKey`), because the
+  ids come from the model and two conversations can generate the same one, and `AnswerPermission` refuses an id
+  that is not the ask actually waiting (a stale card cannot approve a later command); the pending entry is
+  dropped by the waiting goroutine itself, so Stop (ctx cancel) cannot leave an approvable orphan behind; a
+  side-channel run has no turn on screen, so `commands.go` marks its ctx (`withoutAsk`) and the handler refuses
+  instead of parking a run nobody could answer; and `allow_always` records the exact command on THAT session's
+  policy (`AllowExactSession` — the TUI's `a`), not "switch this session to Skip" (ACP's allow-all), which would
+  also switch off the deny rules the user wrote.
 
 ## Desktop UI State
 
@@ -254,10 +284,14 @@ const type = (el, t) => {
   rather than left as a path nobody walks).
 
 - **The transcript itself lives in `desktop/frontend/src/useTranscript.ts`** (messages per session, running flags, the loaded window + its cursor, the frame-batched delta queue). Every mutator takes the session it is for — `updateSession` is the one funnel, everything else is built on it — so "this belongs to a conversation" is enforced by the signature instead of remembered. App.tsx must not declare its own `useState<Record<string, Message[]>>`; a new per-session need is a new op in that hook.
+- **A system reminder is a HISTORY artifact, not a live one** (`lib.ts` + `App.tsx`): `Message.reminder` is set only by `buildTurns`, from the store's `role: reminder` rows, so the `!` affordance appears on a user bubble once the transcript is REBUILT (load / switch / restart) — a turn that has just run shows none, however much context the model actually received. Assert injected context at the LLM boundary (see the `project-context` scenario) or through a rebuild; a driver waiting for `.reminder-head` on a live first message waits forever.
 - **Backend events are subscribed in `desktop/frontend/src/agentEvents.ts`** (`useAgentStatus` / `useSessionUsage` / `useAgentStream`) — status, the active session's live numbers, and the agent stream that writes the transcript. Each payload names its session; compare it against `currentId` only where the UI genuinely means "on screen" (a sidebar row, the error bubble), never to address storage.
 
 - **A number that "follows the turn" lags a long turn — the context ring must follow each API CALL** (`desktop/agent_turn.go` + `desktop/frontend/src/agentEvents.ts`): the ring's estimate was read only on mount / new / switch / `turn_complete` (through `refreshProvider`), while the popover fetches `GetContextInfo` when it opens — so during a long turn (many tool rounds) the ring sat at whatever the turn started with (0.0% for a fresh session) while the popover at the SAME moment already said 4.4%, and switching sessions only "fixed" it because switching happens to refresh (「新建会话后 agent 执行了很多，圆环一直是空的，点开倒是有，切走再回来就正常」). `emitUsage` already ran after every API call, so the estimate now rides that event (`agent:cost` carries `contextEstimate`/`contextWindow`, from the one `contextUsageOf` rule `GetProviderInfo` shares) and the frontend keeps it in `useSessionUsage`, re-reading by id (`GetContextInfo`) only for a session that has not run a turn in this process yet. Two lessons: "the turn ended" and "the call ended" are different refresh points, and two surfaces describing the same fact must read it from ONE rule, or they can answer differently at the same instant. Pinned by `ctx-ring` (a `sleep 4` tool holds the window open and the ring is read while the tool runs).
 - **The composer is `desktop/frontend/src/composer.tsx`** (`useComposer` + the `Composer` element): the input box, the @-picker, the "/" palette, the queue of messages typed while a turn runs, and the parked-question form. All four share one decision — `route`: send now, queue for the next steer point, or dispatch as a slash command — so keep new input/queue behavior there, not in App.tsx.
+- **A parked permission is the composer's state too, and its card is matched by tool CALL ID** (`composer.tsx` + `App.tsx`): `perms` sits next to `asks` and follows the same rules — keyed by session, NOT cleared on session switch (the agent is still parked), moved on auto-compaction, cleared on `agent:idle` — and the form replaces the tool card whose `toolCallId` equals the request's (every live push of a tool part sets it from `ev.ToolID`, as the history replay already does). Matching by tool NAME is the trap: a model emits a whole batch of calls before any of them runs, so "the newest unfinished Bash card" is usually a different call than the one waiting, and the answer would land on the wrong card.
+ `agent:permission` carries the agent's own preview rendering (`bashAskPreview` — `$ command` + the matched rule) and the form shows it verbatim: parsing it in the frontend would be a second definition of a format the backend owns. The form keeps its answer's own state (`busy`/`err`) and clears only when `AnswerPermission` returns `"ok"` — the fact that ends the wait is the backend ACCEPTING the decision, and a refused one (the run is gone, it was already answered) must stay on screen with its reason rather than vanishing into a turn that will never move again.
+
 - **Path tries are byte-keyed: iterate strings by BYTE, not `for i := range s`** (`for i := range s` walks rune boundaries, so `s[i]` yields only the first byte of each multi-byte character). Cost: Chinese file names came back mangled from the @-file index — the picker showed 7 `?` and the inserted `@`-reference pointed at a file that did not exist (`pkg/container/pathtrie.go`, fixed 2026-09-12).
 
 - **A pane's width is its MIN-CONTENT width, and that is set by whichever row cannot shrink** (`desktop/frontend/public/chat.css`): in the side panel every diff head row (`.diff-panel-head`, `.diff-file-head`, `.diff-findings`) holds non-shrinkable badges/buttons, and a `white-space: nowrap` path with the default `min-width: auto` contributes its WHOLE string — so the pane measured 734px inside a 419px panel, its content scrolled sideways, and the send bar's ends went off-screen with it (the report: 「diff 文件过宽要挪动滚动条才能看到按钮」; measured `scrollW/clientW = 827/419`, and after the fix `419/419`). Three things together: `flex-wrap: wrap` on those rows, `flex: 1 1 0; min-width: 0` on the path (basis alone is not enough — the automatic minimum is the min-content), and `max-width: min(1100px, 100%)` on `.viewer-doc.is-diff`, which the file-preview overlay and the panel share. Moving the button to the bar's left end does NOT fix it: the bar spans the content width, so either end can scroll away. The user's bubble is the same problem in miniature: a pasted URL has no break opportunity, so it ran 1213px past a 520px bubble (「贴了个长链接…突破了消息气泡」; `scrollW/clientW = 1733/520` → `520/520`, pinned by `bubble-wrap`) — and it takes `overflow-wrap: anywhere` rather than `break-word`, because only the former also shrinks the min-content.

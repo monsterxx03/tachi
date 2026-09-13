@@ -89,6 +89,11 @@ type desktopApp struct {
 	runs  map[string]*sessionRun // key: session ID
 	simCh chan struct{}          // simulated-turn stop signal
 
+	// perms holds the bash policy asks that are parked on a user decision, keyed
+	// by session + tool call (permKey). A parked turn waits on its own channel
+	// until the frontend answers via AgentService.AnswerPermission. Guarded by mu.
+	perms map[string]*pendingPermission
+
 	// fileIndex backs @-file completion in the input area (one cached path
 	// index per searched root).
 	fileIndex *fileindex.Index
@@ -189,7 +194,7 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 	// simulated turns.
 	var a *agent.AIAgent
 	if d.cfg != nil {
-		a, err = d.buildAgentForSession(ctx, sm)
+		a, err = d.buildAgentForSession(ctx, id, sm)
 		if err != nil {
 			return nil, err
 		}

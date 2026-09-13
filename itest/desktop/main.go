@@ -104,7 +104,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 
 	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAI))
 	mock.Script(sc.steps...)
-	if err := sb.writeConfig(mock.BaseURL()); err != nil {
+	if err := sb.writeConfig(mock.BaseURL(), sc.config); err != nil {
 		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, verbose)
 	}
 

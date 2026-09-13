@@ -171,7 +171,7 @@ func (s *AgentService) NewSession() SessionInfo {
 	// run agent-less so turns fall back to simulation.
 	var a *agent.AIAgent
 	if d.cfg != nil {
-		a, err = d.buildAgentForSession(context.Background(), sm)
+		a, err = d.buildAgentForSession(context.Background(), sess.ID, sm)
 		if err != nil {
 			a = nil
 		} else {

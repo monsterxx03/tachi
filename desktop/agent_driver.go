@@ -192,7 +192,11 @@ func (d *desktopApp) newSessionManager() *session.Manager {
 // multiple sessions reuse one MCP connection layer; per-session tool loading is
 // isolated by the manager's discovered sets). It returns the agent; the caller
 // applies provider/thinking overrides.
-func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manager) (*agent.AIAgent, error) {
+//
+// sessionID is needed for the permission handler: a bash `ask` rule parks the
+// agent goroutine on the user, and the answer must reach THAT conversation (see
+// permission.go).
+func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string, sm *session.Manager) (*agent.AIAgent, error) {
 	// No iteration budget: this frontend is INTERACTIVE, like the TUI, ACP and channel, and
 	// none of those cap a turn (main.go: "TUI is interactive — no iteration budget cap").
 	// `max_iterations` in config.yaml is the SINGLE-SHOT knob — main_agent.go's `tachi -p` and
@@ -200,8 +204,13 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manag
 	// desktop turns at 50 and ended them mid-work for no visible reason. The user is watching
 	// and can Stop; a runaway loop is their call, not the config's.
 	a, _, err := agent.NewAIAgentWithConfig(ctx, agent.AgentConfig{
-		Logger:         logger.New("desktop"),
-		PermissionMode: agent.PermissionModeSkip,
+		Logger: logger.New("desktop"),
+		// PermissionModeExternal: this frontend is a client that has a human in
+		// front of it, exactly like ACP — so a bash policy `ask` is decided by the
+		// user in the app (permission.go) instead of being refused as it was under
+		// PermissionModeSkip, whose `ask` branch is written for unattended runs
+		// (channel / subagent / `tachi -p`). `deny` rules behave the same in both.
+		PermissionMode: agent.PermissionModeExternal,
 		AskUserEnabled: true,         // the desktop renders question forms itself
 		DisableMCP:     d.mcp == nil, // MCP enabled only when a shared manager exists
 		DisableSkills:  true,
@@ -225,6 +234,10 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sm *session.Manag
 	if err != nil {
 		return nil, err
 	}
+	// The ask decision belongs to this session's user. Installed after construction
+	// because the handler reaches back into the agent for "本会话始终允许"
+	// (AllowExactSession records the command on the session's own policy).
+	a.SetPermissionHandler(d.permissionHandler(sessionID, a))
 	if sm != nil {
 		a.SetSessionManager(sm)
 	}

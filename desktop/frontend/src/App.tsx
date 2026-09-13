@@ -5,11 +5,13 @@ import {
   THINKING_LEVELS,
   PAGE_SIZE,
   type Message,
+  type PermissionDecision,
+  type PermissionRequest,
   type SessionItem,
 } from './types'
 import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionRows } from './lib'
 import {
-  ContextMeter, CacheRing, UserBubble, MCPPanel, AskForm,
+  ContextMeter, CacheRing, UserBubble, MCPPanel, AskForm, PermissionForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
 } from './components'
 import { TurnPart } from './parts'
@@ -39,7 +41,7 @@ import { useComposer, Composer, imeActive } from './composer'
 // into is decided in parts.tsx, shared with the side-channel panel so a replayed run
 // and a live turn render identically.
 
-const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onOpenOneOff, reviewPending, reviewDone, reviewNotice, sessionBusy }: {
+const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel, ask, onAnswer, perm, onPermAnswer, onToggleDiff, onToggleAllDiffs, onOpenDiffPanel, onReviewChanges, onOpenOneOff, reviewPending, reviewDone, reviewNotice, sessionBusy }: {
   m: Message
   workDir: string
   // Diff interaction: one card at a time, or the whole turn from the footer chip.
@@ -68,6 +70,10 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   // tool card that asked them, so they appear in the transcript where they belong.
   ask?: Question[] | null
   onAnswer?: (answers: Record<string, string> | null) => void
+  // A bash permission request for THIS session: the confirm card replaces the tool
+  // card whose call is waiting (matched by toolId, below).
+  perm?: { req: PermissionRequest; busy?: boolean; err?: string } | null
+  onPermAnswer?: (decision: PermissionDecision) => void
 }) {
   // Render the form in place of the pending AskUserQuestion card. Any other
   // unfinished card of the same tool is left alone; the loop only ever asks one
@@ -78,7 +84,16 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   const allDiffsOpen = diffParts.length > 0 && diffParts.every((p) => p.diffOpen)
 
   let askShown = false
+  let permShown = false
   const parts = (m.parts || []).map((p, i) => {
+    // A parked permission replaces the card of the call that is waiting. Matched by tool
+    // CALL ID, not by name: the model emits a whole batch of calls before any of them
+    // runs, so "the newest unfinished Bash card" is usually a different call than the one
+    // being asked about.
+    if (perm && onPermAnswer && !permShown && p.type === 'tool' && !p.done && p.toolCallId === perm.req.toolId) {
+      permShown = true
+      return <PermissionForm key={i} perm={perm} onAnswer={onPermAnswer} />
+    }
     if (ask && onAnswer && !askShown && p.type === 'tool' && !p.done && p.name === 'AskUserQuestion') {
       askShown = true
       return <AskForm key={i} questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
@@ -94,6 +109,11 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
             closed by an interruption) still has to be answerable. */}
         {ask && onAnswer && !askShown && m.running ? (
           <AskForm questions={ask} onSubmit={onAnswer} onCancel={() => onAnswer(null)} />
+        ) : null}
+        {/* Same fallback for a parked permission: a turn must never be left waiting on a
+            card that is not on screen. */}
+        {perm && onPermAnswer && !permShown && m.running ? (
+          <PermissionForm perm={perm} onAnswer={onPermAnswer} />
         ) : null}
         {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{runningLabel ?? '正在执行…'}</span> : null}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
@@ -1084,6 +1104,8 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                       runningLabel={m.running ? (state.status === 'thinking' ? '正在思考…' : '正在执行…') : undefined}
                       ask={m.running ? (composer.ask?.questions || null) : null}
                       onAnswer={composer.answerCurrent}
+                      perm={m.running ? composer.perm : null}
+                      onPermAnswer={composer.answerPerm}
                       onToggleDiff={(i) => patchMessage(m.id, (msg) => togglePartDiff(msg, i))}
                       onToggleAllDiffs={(v) => patchMessage(m.id, (msg) => setPartDiffs(msg, v))}
                       onOpenDiffPanel={openDiffPanel}
