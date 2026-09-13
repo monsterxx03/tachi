@@ -55,5 +55,21 @@
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') === oldTitle, '切回旧会话', 10000))) return smoke.finish()
   const restored = await smoke.waitFor('svg.ctx-ring[aria-label^="缓存命中率"]', '切回后用量环回来', 10000)
   smoke.check('切回旧会话用量数字回来', !!restored, restored ? restored.getAttribute('aria-label') : '')
+
+  // The sidebar row's right-click menu. The 打开会话目录 item is asserted but NOT clicked: it
+  // launches the real Finder, which would take the foreground and suspend this webview
+  // mid-run (the suspension trap — see docs/agents/desktop.md). Which path it hands over is
+  // pinned in Go instead (TestOpenSessionDirOpensTheSessionDirectory), so this half only has
+  // to prove the row really offers it.
+  const row = smoke.q('.session.active')
+  row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 60, clientY: 200 }))
+  const menu = await smoke.waitFor('.ctx-menu', '会话行的右键菜单出现', 3000)
+  const items = smoke.allText('.ctx-item')
+  smoke.check('右键菜单列出「打开会话目录」', !!menu && items.indexOf('打开会话目录') >= 0, items.join(' / '))
+  // Dismiss it the way a reader does — the menu's own rule, and the DOM artifact then shows
+  // the page rather than a menu frozen over it.
+  if (menu) menu.dispatchEvent(new MouseEvent('mouseout', { bubbles: true, relatedTarget: document.body }))
+  const closed = await smoke.waitFor(() => !smoke.q('.ctx-menu'), '右键菜单失焦关闭', 2000)
+  smoke.check('右键菜单移开后关闭', !!closed, closed ? '' : smoke.text('.ctx-menu'))
   smoke.finish()
 })()

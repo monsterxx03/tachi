@@ -267,6 +267,16 @@ export function OpenPath(path: string): $CancellablePromise<string> {
 }
 
 /**
+ * OpenSessionDir opens a session's directory in the Finder — the sidebar row's right-click
+ * action. Returns "ok", or the reason it was not opened: the frontend ignores it, like every
+ * other open/reveal binding (there is nowhere honest to put the message when the very
+ * mechanism that would show it is the thing that failed).
+ */
+export function OpenSessionDir(id: string): $CancellablePromise<string> {
+    return $Call.ByID(869288799, id);
+}
+
+/**
  * PreviewFile describes the attachment at path and, when withContent is set,
  * returns the content of its text and table kinds.
  * 

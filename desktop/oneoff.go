@@ -26,7 +26,6 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
-	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -443,21 +442,14 @@ func newOneOffScanner(f *os.File) *bufio.Scanner {
 
 // oneOffDir locates a session's record directory.
 //
-// sessionID arrives from the webview, so it is treated as untrusted: only a single path
-// element is accepted. Without that check a name like "../../other-session" would move the
-// read somewhere else entirely, and these methods take a file NAME from the frontend too.
+// The session-name rule (untrusted, one path element) belongs to sessionDirPath, which this
+// shares with every other "which directory is this session" question.
 func oneOffDir(sessionID string) (string, error) {
-	if sessionID == "" {
-		return "", errors.New("没有会话")
-	}
-	if !isSinglePathElement(sessionID) {
-		return "", fmt.Errorf("非法会话名：%q", sessionID)
-	}
-	dir, err := config.SessionDir()
+	dir, err := sessionDirPath(sessionID)
 	if err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, sessionID, "oneoff"), nil
+	return filepath.Join(dir, "oneoff"), nil
 }
 
 // oneOffPath resolves a record file name inside the session's directory. Same rule as
@@ -473,12 +465,8 @@ func oneOffPath(sessionID, name string) (string, error) {
 	return filepath.Join(dir, name), nil
 }
 
-// isSinglePathElement reports whether s names one entry in one directory: no separator, no
-// traversal, and not the current/parent directory itself.
-func isSinglePathElement(s string) bool {
-	return s != "" && s != "." && s != ".." &&
-		s == filepath.Base(s) && !strings.ContainsAny(s, `/\`)
-}
+// isSinglePathElement lives beside the session-path resolution it guards (sessiondir.go): it
+// is the rule for "this name is one entry inside one directory", not a one-off detail.
 
 // GetUIState returns the desktop-only UI preferences the frontend owns.
 //
