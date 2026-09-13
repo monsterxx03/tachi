@@ -7,6 +7,8 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/mcp"
+	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -213,7 +215,13 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 		PermissionMode: agent.PermissionModeExternal,
 		AskUserEnabled: true,         // the desktop renders question forms itself
 		DisableMCP:     d.mcp == nil, // MCP enabled only when a shared manager exists
-		DisableSkills:  true,
+		// Skills are ON (DisableSkills is the knob for the NON-interactive modes),
+		// with the store built from THIS SESSION's tree rather than initSkills'
+		// process cwd: one desktop process hosts several sessions in different trees
+		// and its own cwd is meaningless (macOS hands a Finder-launched app "/"), so
+		// a cwd-built store would scan "/.tachi/skills" and miss every session's
+		// project skills. Same failure shape as the reminders below, same fix.
+		SkillStore: sessionSkillStore(sm),
 		// System reminders stay ON. They are the only thing that tells the agent
 		// about the project it is working in (.tachi.md, git state) and the only
 		// thing that keeps an active plan's step statuses current.
@@ -242,6 +250,38 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 		a.SetSessionManager(sm)
 	}
 	return a, nil
+}
+
+// sessionSkillStore builds the skill store for one session's tree, which is the
+// desktop's answer to "which skills does THIS conversation have?".
+//
+// A store's scan roots are fixed when it is built, so this is the only place the
+// desktop decides them: global skills always, plus the project-level
+// .tachi/skills, .claude/skills and .cursor/skills of the session's git root.
+// The root comes from the session's working directory and never from the process
+// cwd (see buildAgentForSession); a session that has not picked a folder yet gets
+// the global scope alone, which is what skill.NewStore("") means.
+//
+// Additional roots are deliberately NOT scanned: they are extra places to read and
+// write, not a second configuration home — the same line @-references and other
+// agents' per-directory configs draw. Moving a session is handled by
+// SetSessionWorkingDir (agent_session.go), which re-points the store in place.
+func sessionSkillStore(sm *session.Manager) *skill.Store {
+	return skill.NewStore(config.FindProjectRootFrom(currentSessionDir(sm)))
+}
+
+// currentSessionDir is the working directory of the session manager's current
+// session, or "" when there is none yet. It reads the manager the caller passes
+// rather than d.runs: an agent is built BEFORE its run is bound to the session
+// manager (see prepareSession), so the run lookup would still be empty here.
+func currentSessionDir(sm *session.Manager) string {
+	if sm == nil {
+		return ""
+	}
+	if cur := sm.Current(); cur != nil {
+		return cur.WorkingDir
+	}
+	return ""
 }
 
 // applyThinking configures the given agent's thinking level from a session's

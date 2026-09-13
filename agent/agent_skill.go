@@ -53,14 +53,31 @@ func (a *AIAgent) ReloadSkills() {
 	a.skillListReminder.SetProvider(a.Config.SkillStore)
 }
 
+// ReloadSkillsIn points the skill store at the tree that contains dir, then
+// re-registers the skill tools. Use it when the caller knows the working
+// directory the agent's own work happens in: a store's scan roots are fixed
+// when it is built (skill.Store), so a caller that moves the agent to another
+// tree has to re-point it — and FindProjectRoot's process cwd is not that
+// directory when one process hosts several sessions (config.FindProjectRootFrom).
+//
+// Activation state is reset along the way (initSkills): a name records which
+// skill was activated, and after the move it may resolve to another file.
+func (a *AIAgent) ReloadSkillsIn(dir string) {
+	a.Config.SkillStore = skill.NewStore(config.FindProjectRootFrom(dir))
+	a.ReloadSkills()
+}
+
 // initSkills initializes (or re-initializes) the skill store and registers
 // skill tools. The SkillListReminder is created on the first call and
 // reused thereafter — ReloadSkills calls SetProvider to update it.
 func (a *AIAgent) initSkills() {
 	if a.Config.SkillStore == nil {
 		a.Config.SkillStore = skill.NewStore(config.FindProjectRoot())
-		a.Config.SkillStore.SetLogger(a.Config.Logger)
 	}
+	// An INJECTED store (the desktop builds one per session tree) gets the
+	// agent's logger too: it carries the session ID, which is what makes a
+	// skill that fails to load traceable to one conversation.
+	a.Config.SkillStore.SetLogger(a.Config.Logger)
 	a.activeSkills = make(map[string]bool)
 	a.registerSkillTools()
 	if a.skillListReminder == nil {

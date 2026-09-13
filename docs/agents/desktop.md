@@ -17,6 +17,7 @@ split of it, this one included.
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
+| **Desktop Skills** | you touch skill discovery, or anything that changes which tree a session works in |
 | **Desktop UI State** | you change the frontend: which module owns what, and the bug each convention prevents |
 | **Desktop Themes** | you touch colours |
 
@@ -241,6 +242,39 @@ const type = (el, t) => {
   prompt had been labelling the choice `[a]lways(session)` all along. The switch sits BELOW the deny checks in
   `CheckBash` on purpose — "stop asking me" must never become "run what I forbade", and `perm-session` pins
   both halves (a second, different command runs with no card; a denied command still refuses).
+
+## Desktop Skills (the store belongs to the SESSION, never to the process cwd)
+
+- **Skills are ON.** `DisableSkills` was left `true` in the initial wiring commit, where it sat beside
+  `DisableMCP` / `DisableSystemReminders` as an S2 stopgap ("skip for now, wired in S3") — those two were
+  switched on and given a reason, this one was forgotten. The flag is the knob for the NON-interactive modes
+  (`tachi -p`, `tachi commit`); this frontend has a human in front of it.
+- **The store is built per session, from that session's working directory** (`sessionSkillStore` in
+  `agent_driver.go`) and handed to the agent as `AgentConfig.SkillStore`. The DEFAULT path is the trap:
+  `initSkills()` builds `skill.NewStore(config.FindProjectRoot())` — the PROCESS cwd — and a Finder-launched
+  app's cwd is `/`, so a default-built store would scan `/.tachi/skills`, offer no project skills at all, and
+  point `Skill create`'s `source: project` at the filesystem root. Same shape as the system-reminder trap
+  (`config.FindProjectRootFrom`, `systemreminder.workDir`): a per-session thing resolved from a process global.
+- **A store's scan roots are FIXED when it is built** (`skill.Store` re-reads the disk on every `List`/`Load`
+  but never re-resolves its directories), so a session that MOVES is re-pointed explicitly:
+  `SetSessionWorkingDir` → `AIAgent.ReloadSkillsIn(dir)`. Without that call the session keeps serving the old
+  tree's project skills — and sends `Skill create`'s project target there — until it is reloaded. The reload
+  also clears the activation state, which is correct: the same name may resolve to another file after the move.
+- **The scope is the session's git root, plus the global dir** (`config.GlobalSkillsDir()` = `<base>/skills`,
+  note NOT `<base>/.tachi/skills` — the two shapes differ, and a test fixture written for one is invisible to
+  the other). **Additional roots are NOT scanned**: they are extra places to read and write, not a second
+  configuration home — the same line @-references and other agents' per-directory configs draw.
+- **There is no `/skill` command and no skill UI here**: the shared registry's `Modes` for it exclude
+  `ModeDesktop`, so the catalog reminder is what tells the model what exists and the model calls the `Skill`
+  tool itself. Adding the command is the registry entry PLUS a desktop handler — its own decision, not a
+  side effect of turning discovery on. Until then the catalog's closing line ("or the user can type
+  /skill-name") is a dead end in this frontend: `RunCommand` answers 「未知命令」 for that form and
+  「desktop 暂不支持 /skill」 for the bare one.
+- **The `skill-catalog` smoke scenario pins the scan**: its fixture tree carries
+  `.tachi/skills/smoke-skill/SKILL.md`, and the assertion is on the REQUEST (`SMOKE-SKILL-MARKER` found in the
+  first request's skill catalog) — nothing in the UI names a skill until one is used, so the prompt is the only
+  place the scan is visible. The driver's half asserts the injection disturbed nothing: a turn ran, no tool
+  card, no permission card.
 
 ## Desktop UI State
 

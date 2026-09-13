@@ -408,6 +408,15 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	}); err != nil {
 		return err.Error()
 	}
+	// Skills move with the session: a store's scan roots are fixed when it is built
+	// (sessionSkillStore), so without this a session that changes folder would keep
+	// offering the OLD tree's project skills — and send Skill create's "project"
+	// target there — until it was reloaded. Re-pointed here, where the new directory
+	// is finally known. A session with no agent yet is fine: its agent will be built
+	// with the new directory, which is persisted above.
+	if a, _ := d.agentOf(id); a != nil {
+		a.ReloadSkillsIn(abs)
+	}
 	// Remember the explicit choice: the next new session starts here.
 	rememberWorkspace(abs)
 	return "ok"

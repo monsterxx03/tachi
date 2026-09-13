@@ -738,8 +738,8 @@ permissions:
 		{
 			name: "perm-session",
 			files: map[string]string{
-				"README.md":         "# smoke\n\nthe perm-session scenario's working directory\n",
-				"perm-fixture.txt":  "PERM-FIXTURE-CONTENT\n",
+				"README.md":          "# smoke\n\nthe perm-session scenario's working directory\n",
+				"perm-fixture.txt":   "PERM-FIXTURE-CONTENT\n",
 				"perm-fixture-2.txt": "PERM-FIXTURE-2-CONTENT\n",
 			},
 			config: `
@@ -760,6 +760,29 @@ permissions:
 					_, ran := c.requestSeen(marker)
 					c.check("命令真的执行了："+marker, ran, "")
 				}
+			},
+		},
+		//
+		// 会话树里的 skill：desktop 的 store 按会话的工作目录建，所以工作目录下 .tachi/skills 的
+		// 项目级 skill 会被发现，技能目录随第一条消息进入模型上下文。断言落在模型收到的请求上而不是
+		// UI 上：一个 skill 被用掉之前，界面上没有任何东西能看出它存在 —— 而按进程 cwd 建 store
+		// (这个场景要防的 bug)会去扫 "/.tachi/skills"，一条目录都发不出来。
+		//
+		{
+			name: "skill-catalog",
+			files: map[string]string{
+				"README.md":                          "# smoke\n\nthe skill-catalog scenario's working directory\n",
+				".tachi/skills/smoke-skill/SKILL.md": "---\nname: smoke-skill\ndescription: SMOKE-SKILL-MARKER from the scenario's own tree\n---\n\nbody: the marker is what the catalog reports.\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("收到。", 1200)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				at, catalogued := c.requestSeen("SMOKE-SKILL-MARKER")
+				c.check("工作目录里的项目级 skill 进了模型上下文", catalogued,
+					"命中第 "+strconv.Itoa(at)+" 条请求")
+				c.check("技能目录随第一条请求到达", catalogued && at == 1, requestCount(c.requests))
 			},
 		},
 	}
@@ -843,4 +866,3 @@ func requestCount(reqs []*mockllm.RecordedRequest) string {
 func fileList(paths []string) string {
 	return strings.Join(paths, ", ")
 }
-

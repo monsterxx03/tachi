@@ -1,11 +1,17 @@
 package main
 
 import (
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/agent/skill"
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // promptWorkingDir extracts the Working directory line of a system prompt ("" if
@@ -131,5 +137,135 @@ func TestSystemPromptForPlanMode(t *testing.T) {
 	}
 	if back := d.systemPromptFor(sid); back != auto {
 		t.Errorf("switching back to auto should return the auto prompt again")
+	}
+}
+
+// writeSkillFixture drops one valid SKILL.md at dir/<name>/SKILL.md. The frontmatter
+// name is what the store validates and the description is what the catalog reminder
+// shows, so both are real rather than placeholders.
+func writeSkillFixture(t *testing.T, dir, name, description string) {
+	t.Helper()
+	skillDir := filepath.Join(dir, name)
+	if err := os.MkdirAll(skillDir, 0o755); err != nil {
+		t.Fatalf("mkdir skill dir: %v", err)
+	}
+	md := "---\nname: " + name + "\ndescription: " + description + "\n---\n\nbody of " + name + "\n"
+	if err := os.WriteFile(filepath.Join(skillDir, "SKILL.md"), []byte(md), 0o644); err != nil {
+		t.Fatalf("write SKILL.md: %v", err)
+	}
+}
+
+// writeProjectSkillFixture is writeSkillFixture for a workspace tree, i.e. at
+// <tree>/.tachi/skills/<name> — the directory shape a project's own skills live in.
+// (The GLOBAL scope is <base>/skills instead; see config.GlobalSkillsDir.)
+func writeProjectSkillFixture(t *testing.T, tree, name, description string) {
+	t.Helper()
+	writeSkillFixture(t, filepath.Join(tree, ".tachi", "skills"), name, description)
+}
+
+// storeSkillNames lists the names a skill store currently offers.
+func storeSkillNames(store *skill.Store) []string {
+	var names []string
+	for _, m := range store.List() {
+		names = append(names, m.Name)
+	}
+	return names
+}
+
+// TestSessionSkillStoreFollowsTheSessionTree pins WHICH tree a session's skills come
+// from. A store's scan roots are fixed when it is built (skill.Store) and the desktop
+// process cwd is meaningless — macOS hands a Finder-launched app "/" — so the desktop
+// builds it from the session's working directory. A cwd-built store would scan
+// "/.tachi/skills" and offer no project skills at all, which is why DisableSkills is
+// not simply flipped on.
+func TestSessionSkillStoreFollowsTheSessionTree(t *testing.T) {
+	treeA, treeB := t.TempDir(), t.TempDir()
+	writeProjectSkillFixture(t, treeA, "skill-a", "from tree A")
+	writeProjectSkillFixture(t, treeB, "skill-b", "from tree B")
+
+	sm := newSessionManagerForTest(t, treeA)
+	// A global skill too, so the layering is pinned: always in scope, and behind the
+	// session's own tree (which is what lets a project shadow it).
+	writeSkillFixture(t, config.GlobalSkillsDir(), "global-skill", "from the global scope")
+
+	store := sessionSkillStore(sm)
+	names := storeSkillNames(store)
+
+	if !slices.Contains(names, "skill-a") {
+		t.Errorf("the session's own tree must be scanned, got %v", names)
+	}
+	if !slices.Contains(names, "global-skill") {
+		t.Errorf("global skills are always in scope, got %v", names)
+	}
+	if slices.Contains(names, "skill-b") {
+		t.Errorf("another session's tree must not leak in, got %v", names)
+	}
+	if want := filepath.Join(treeA, ".tachi", "skills"); store.Dirs()[0] != want {
+		t.Errorf("project skills must be scanned first (to shadow global ones), got %q, want %q",
+			store.Dirs()[0], want)
+	}
+}
+
+// TestSessionSkillStoreWithoutWorkspace covers a session that has not picked a folder:
+// global skills alone, and never the process cwd (skill.NewStore("")). Without an
+// existing session the same rule applies.
+func TestSessionSkillStoreWithoutWorkspace(t *testing.T) {
+	sm := newSessionManagerForTest(t, "")
+	sm.EndCurrent()
+
+	want := []string{config.GlobalSkillsDir()}
+	if got := sessionSkillStore(sm).Dirs(); !slices.Equal(got, want) {
+		t.Errorf("an empty working directory must mean the global scope only\ngot  %v\nwant %v", got, want)
+	}
+	if got := sessionSkillStore(nil).Dirs(); !slices.Equal(got, want) {
+		t.Errorf("a nil session manager must not fall back to the process cwd\ngot  %v\nwant %v", got, want)
+	}
+}
+
+// TestSetSessionWorkingDirRepointsSkills covers the other half of "skills follow the
+// session": scan roots are fixed when the store is built, so a session that MOVES has
+// to be re-pointed. Without it the session keeps serving the OLD tree's project skills
+// — and sends Skill create's "project" target there — until it is reloaded.
+func TestSetSessionWorkingDirRepointsSkills(t *testing.T) {
+	treeA, treeB := t.TempDir(), t.TempDir()
+	writeProjectSkillFixture(t, treeA, "skill-a", "from tree A")
+	writeProjectSkillFixture(t, treeB, "skill-b", "from tree B")
+
+	d, svc, sid := newRootsApp(t, treeA)
+
+	// The state buildAgentForSession leaves behind: an agent whose store is rooted at
+	// the session's tree. A bare agent suffices — reload only needs the registry.
+	a := &agent.AIAgent{Config: agent.AgentConfig{
+		ToolRegistry: tools.NewRegistry(),
+		Logger:       logger.Default(),
+	}}
+	a.ReloadSkillsIn(treeA)
+	if !slices.Contains(storeSkillNames(a.SkillStore()), "skill-a") {
+		t.Fatalf("fixture: the store did not start on tree A")
+	}
+	d.getRun(sid).agent = a
+
+	if res := svc.SetSessionWorkingDir(sid, treeB); res != "ok" {
+		t.Fatalf("SetSessionWorkingDir: %s", res)
+	}
+
+	names := storeSkillNames(a.SkillStore())
+	if !slices.Contains(names, "skill-b") {
+		t.Errorf("the store must follow the session to its new tree, got %v", names)
+	}
+	if slices.Contains(names, "skill-a") {
+		t.Errorf("the old tree's skills must be gone, got %v", names)
+	}
+}
+
+// TestSetSessionWorkingDirWithoutAgentIsSafe pins the desktop's one-off path: a session
+// whose agent has not been built yet (or whose bootstrap failed and left it agent-less)
+// must still change folder — the agent is built later, from the persisted directory.
+func TestSetSessionWorkingDirWithoutAgentIsSafe(t *testing.T) {
+	d, svc, sid := newRootsApp(t, t.TempDir())
+	_ = d
+
+	if res := svc.SetSessionWorkingDir(sid, t.TempDir()); res != "ok" {
+		t.Fatalf("SetSessionWorkingDir without an agent: %s", res)
 	}
 }
