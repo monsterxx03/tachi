@@ -265,6 +265,8 @@ function App() {
   const [currentId, setCurrentId] = useState<string>('')
   const [menu, setMenu] = useState<{ sid: string; x: number; y: number } | null>(null)
   const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string } | null>(null)
+  // The refusal reason from a delete that did NOT happen (see confirmDelete).
+  const [delErr, setDelErr] = useState<string | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
@@ -889,8 +891,18 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
   }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput])
+  // Deleting is refused while that conversation is running (AgentService.DeleteSession says why),
+  // and the reason is shown IN the dialog rather than swallowed: the menu disables the item, so
+  // reaching this point means the turn started after the menu was opened — exactly the case where
+  // a silent no-op would look like a broken button.
   const confirmDelete = useCallback(async (id: string) => {
-    await (AgentService as any).DeleteSession?.(id).catch(() => {})
+    const res = await (AgentService as any).DeleteSession?.(id).catch(() => '删除失败')
+    if (res && res !== 'ok') {
+      setDelErr(String(res))
+      return
+    }
+    setDelErr(null)
+    setConfirmDel(null)
     loadAll()
   }, [loadAll])
 
@@ -1334,7 +1346,12 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
-          <button className="ctx-item danger" role="menuitem" onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
+          {/* Deleting a RUNNING conversation is disabled here (and refused in Go): its turn is
+              still writing into that directory, and the events it streams belong to a conversation
+              that would no longer exist. */ }
+          <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
+            title={runningSet.has(menu.sid) ? '会话正在运行，先停止再删除' : undefined}
+            onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setDelErr(null); setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
         </div>
       )}
       {confirmDel && (
@@ -1342,9 +1359,10 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
             <div className="confirm-msg">删除会话「{confirmDel.title || '未命名会话'}」？</div>
             <div className="confirm-sub">此操作不可恢复。</div>
+            {delErr ? <div className="confirm-err">{delErr}</div> : null}
             <div className="confirm-actions">
-              <button className="btn ghost" onClick={() => setConfirmDel(null)}>取消</button>
-              <button className="btn danger" onClick={() => { const id = confirmDel.sid; setConfirmDel(null); confirmDelete(id) }}>删除</button>
+              <button className="btn ghost" onClick={() => { setDelErr(null); setConfirmDel(null) }}>取消</button>
+              <button className="btn danger" onClick={() => confirmDelete(confirmDel.sid)}>删除</button>
             </div>
           </div>
         </div>

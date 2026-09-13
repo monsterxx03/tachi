@@ -359,6 +359,12 @@ const type = (el, t) => {
   (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
   重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that
   hands the screen to another app is asserted, never clicked, in a driver (see the smoke rules).
+  **Deleting a RUNNING conversation is disabled in the menu and REFUSED by `AgentService.DeleteSession`**:
+  the turn in flight is still writing into that directory (messages, usage rows, tool results) and streams
+  events addressed to a conversation that would no longer exist. Two layers on purpose — the menu item is
+  the hint, the Go check is the rule, because a menu opened before the turn started is stale by the time it
+  is clicked. A refusal is shown INSIDE the confirm dialog (`.confirm-err`) instead of closing it: closing
+  would turn "refused" into "nothing happened".
 
 - **Following the bottom must survive async height changes, not just message updates** (`desktop/frontend/src/App.tsx`): the transcript pin ran only when `msgCache` changed, so anything that grew the content afterwards — a mermaid diagram finishing its async render, an image/attachment card loading, a tool card expanding — slid the visible content up by exactly that height until the next delta pinned it back ("切回会话时先向上飘，再跳到底"; measured at 298px in `switch-scroll`). The fix is a `ResizeObserver` on a `.chat-content` wrapper (the scrollport's own box never changes when its content grows) that re-pins while following. Any new "sticky bottom" behavior must go through the same observer.
 

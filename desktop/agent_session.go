@@ -95,6 +95,16 @@ func (s *AgentService) DeleteSession(id string) string {
 	if d.sm == nil {
 		return "no session manager"
 	}
+	// A turn in flight keeps writing into this conversation — messages, usage rows, tool results
+	// all land in the directory being removed, and its events would then target a conversation
+	// that no longer exists. Refused HERE rather than only in the sidebar: the menu disables the
+	// item as a hint, but the rule has to hold for a menu that was opened before the turn started.
+	d.mu.Lock()
+	running := d.runs[id] != nil && d.runs[id].running
+	d.mu.Unlock()
+	if running {
+		return "会话正在运行，先停止再删除"
+	}
 	if err := d.sm.Delete(id); err != nil {
 		return err.Error()
 	}

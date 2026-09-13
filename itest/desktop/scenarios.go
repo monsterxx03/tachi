@@ -839,6 +839,36 @@ permissions:
 				c.check("两步都跑到了", len(c.requests) == 2, requestCount(c.requests))
 			},
 		},
+		//
+		// 运行中的会话不给删：菜单里「删除」那一项是禁用的，并给出原因（title）。这一侧只验
+		// 可见的规则；真正的执行力在 Go 单测 TestDeleteSessionRefusesARunningTurn（菜单可能是
+		// 回合开始之前开出来的，那时前端拦不住）。
+		//
+		{
+			name: "session-delete-running",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe session-delete-running scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 一轮够久（长输出 + 停顿），右键菜单才有机会开在"运行中"的会话上。
+				{Reply: mockllm.Stream(
+					mockllm.Text("第一轮开始：先铺一段很长的输出，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("让这一轮持续得足够久，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("好让菜单开在一个还在跑的会话上。"),
+					mockllm.Pause(longTurn),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 120, 900, 20),
+					mockllm.Done(),
+				)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				dirs, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*"))
+				c.check("会话还在（运行中没被删掉）", len(dirs) > 0, filepath.Join(c.home, ".tachi", "session"))
+			},
+		},
 	}
 }
 

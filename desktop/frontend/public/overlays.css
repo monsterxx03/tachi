@@ -211,6 +211,16 @@
 .ctx-item:hover { background: var(--accent-strong); color: var(--on-accent); }
 .ctx-item.danger { color: var(--red); }
 .ctx-item.danger:hover { background: var(--red-strong); color: var(--on-accent); }
+/* A disabled item is a rule, not a hint: the reader gets the reason from its title. It must not
+   look pressable — and it must not light up red on hover either. */
+.ctx-item:disabled { color: var(--text-faint); cursor: default; }
+.ctx-item:disabled:hover { background: none; color: var(--text-faint); }
+.ctx-item.danger:disabled { color: var(--text-faint); }
+.ctx-item.danger:disabled:hover { background: none; color: var(--text-faint); }
+
+/* A refusal inside a confirm dialog (see confirmDelete): the dialog stays open so the reader can
+   read why and cancel — closing it would turn "refused" into "nothing happened". */
+.confirm-err { margin-top: 8px; color: var(--red); font-size: 12.5px; }
 .session-rename {
   width: 100%;
   border: 1px solid var(--accent);
