@@ -186,12 +186,18 @@ func (p *Policy) ResetSessionApprovals() {
 //     and only Ask: deny is decided above this point, so a forbidden command
 //     can never be reached by it.
 func (p *Policy) CheckBash(command string) (Decision, string) {
-	cmd := normalize(command)
-	if cmd == "" {
+	if strings.TrimSpace(command) == "" {
 		return DecisionAllow, ""
 	}
 
-	segments, err := splitShellCommands(cmd)
+	// The command is parsed AS WRITTEN. It used to be whitespace-collapsed first
+	// (normalize, for the exact-command session memory that is gone), which made every
+	// multi-line command unparseable — a heredoc's delimiter stops starting a line, and
+	// the body's quotes and backticks become live syntax — so writing a file with
+	// `cat > f <<'EOF'` fell through to the conservative ask. The parser prints canonical
+	// segments for matching, so nothing is lost by handing it the original text, and the
+	// body of a heredoc is data: it does not appear in the segments and cannot trip a rule.
+	segments, err := splitShellCommands(command)
 	if err != nil {
 		return DecisionAsk, "command could not be parsed"
 	}
@@ -245,12 +251,6 @@ func matchSegment(patterns []string, seg string) string {
 		}
 	}
 	return ""
-}
-
-// normalize collapses all whitespace runs to single spaces so that
-// session-exact matching is stable against insignificant formatting.
-func normalize(command string) string {
-	return strings.Join(strings.Fields(command), " ")
 }
 
 // matchAny returns the first pattern that matches s, or "" if none match.

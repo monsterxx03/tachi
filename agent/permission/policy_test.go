@@ -140,6 +140,40 @@ func TestCheckBash_UnparseableIsAsk(t *testing.T) {
 	}
 }
 
+// TestCheckBash_MultiLineCommandIsParsed pins that a command is classified by what it
+// RUNS, not by its line breaks. The policy used to whitespace-collapse the command before
+// parsing (for the exact-command session memory that no longer exists), which turned every
+// multi-line command into garbage: a heredoc's delimiter stopped starting a line and its
+// body's quotes became live syntax, so `cat > f <<'EOF'` — how an agent writes a file —
+// always fell through to the conservative ask and could never match a rule.
+func TestCheckBash_MultiLineCommandIsParsed(t *testing.T) {
+	writeFile := "cd /tmp && cat > script.sh <<'EOF'\n# body with \"quotes\", 'apostrophes' and `backticks`\nrm -rf /\nEOF\nbash script.sh"
+
+	// No rules: the segments are cd/cat/bash, all ordinary → allow.
+	p := NewPolicy(Rules{}, Rules{})
+	if d, rule := p.CheckBash(writeFile); d != DecisionAllow {
+		t.Errorf("a heredoc command must be judged by its commands, got %v (rule=%q)", d, rule)
+	}
+
+	// A rule matching one of those segments still fires...
+	p = NewPolicy(Rules{Ask: []string{"bash *"}}, Rules{})
+	if d, rule := p.CheckBash(writeFile); d != DecisionAsk || rule != "bash *" {
+		t.Errorf("expected the ask rule to match the command it names, got %v (rule=%q)", d, rule)
+	}
+
+	// ...but the heredoc BODY is data, not commands: text inside it never matches a rule,
+	// so writing a script that mentions a dangerous command is not itself dangerous.
+	p = NewPolicy(Rules{Deny: []string{"rm -rf /*"}}, Rules{})
+	if d, rule := p.CheckBash(writeFile); d == DecisionDeny {
+		t.Errorf("the body of a heredoc must not be matched as commands, got Deny (rule=%q)", rule)
+	}
+
+	// A genuinely broken command still takes the conservative path.
+	if d, _ := p.CheckBash("cat > f <<'EOF'\nnever closed"); d != DecisionAsk {
+		t.Errorf("an unterminated heredoc is still unparseable → Ask, got %v", d)
+	}
+}
+
 func TestCheckBash_AllowAllAsksForSession(t *testing.T) {
 	p := NewPolicy(Rules{Ask: []string{"git push*"}}, Rules{})
 
