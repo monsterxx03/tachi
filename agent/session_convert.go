@@ -88,14 +88,14 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 		pendingToolResults = nil
 	}
 
-	for _, msg := range sessionMsgs {
+	for i, msg := range sessionMsgs {
 		switch msg.Type {
 		case session.MessageTypeUser:
 			flushAssistant()
 			flushToolResults()
 			content := msg.Content
 			if len(pendingReminders) > 0 {
-				content = strings.Join(pendingReminders, "\n") + "\n" + content
+				content = reminderPrefix(pendingReminders) + content
 				pendingReminders = nil
 			}
 			result = append(result, llm.Message{
@@ -155,10 +155,27 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 			continue
 
 		case session.MessageTypeReminder:
-			// Accumulate; ALL buffered reminders are prepended to the next
-			// user message. Keeps artifact reminders alive even when
-			// followed by per-turn reminders like the date block.
-			pendingReminders = append(pendingReminders, msg.Content)
+			// Two shapes wear the same type, and only their POSITION tells them apart.
+			//
+			// A block whose next non-reminder record is the user message is that
+			// message's wrapper: the live turn prepended it (systemreminder.WrapUserMessage),
+			// and an artifact block may be followed by that turn's date block before the
+			// user text arrives. Buffering it is what this variable is for.
+			//
+			// Anything else was injected MID-turn: the loop appends one as a user-role
+			// message of its own, right after that iteration's tool results
+			// (agent_loop.go's injectLoopReminders). Buffering it would instead attach a
+			// stale block — a finished background task, an old plan id, old diagnostics —
+			// to a much later turn, and shift every request's prefix with it, so the
+			// reloaded history stops matching the provider's prompt cache. Emit it in
+			// place, which is where it was sent.
+			if reminderBelongsToNextUserMessage(sessionMsgs, i) {
+				pendingReminders = append(pendingReminders, msg.Content)
+				continue
+			}
+			flushAssistant()
+			flushToolResults()
+			result = append(result, llm.Message{Role: "user", Content: msg.Content})
 		}
 	}
 
@@ -203,6 +220,48 @@ func ConvertSessionToLLMMessages(sessionMsgs []session.Message, providerType str
 	}
 
 	return result, nil
+}
+
+// reminderPrefix renders buffered reminder blocks the way the live turn wraps a user
+// message: systemreminder.WrapUserMessage prepends the rendered block, which already
+// ends with a newline, so the user's own text follows it directly. Adding one more
+// newline here is not cosmetic — it changes the request's prefix, and the provider's
+// prompt cache then misses on every turn that was appended since the last reload (the
+// reloaded history has to be the history that was sent, byte for byte).
+func reminderPrefix(blocks []string) string {
+	prefix := strings.Join(blocks, "\n")
+	if !strings.HasSuffix(prefix, "\n") {
+		prefix += "\n"
+	}
+	return prefix
+}
+
+// reminderBelongsToNextUserMessage reports whether the reminder at index i is the
+// wrapper of the user message that follows it, as opposed to a block the loop injected
+// mid-turn (see the MessageTypeReminder case). Consecutive reminders all belong to the
+// same following message — an artifact block is routinely followed by that turn's date
+// block — and an artifact reminder at the very end of the session has no user message to
+// wrap at all, so it is left buffered for the trailing flush, which emits it on its own.
+//
+// Position alone is not quite enough: a block injected mid-turn can be the LAST record of
+// its turn (the loop injected it and nothing followed — a stop or a hard failure), and
+// then the next user message belongs to another turn. The iteration the records already
+// carry separates the two remaining shapes: a wrapper is recorded with the same iteration
+// as the message it wraps (0 for a turn's reminder + its user message; the continuation
+// prompt's reminder + prompt share theirs), while a stranded block's iteration belongs to
+// the turn that already ended.
+func reminderBelongsToNextUserMessage(msgs []session.Message, i int) bool {
+	for j := i + 1; j < len(msgs); j++ {
+		switch msgs[j].Type {
+		case session.MessageTypeReminder, session.MessageTypeConfirm:
+			continue // another block of the same wrapper; confirm records are UI-only
+		case session.MessageTypeUser:
+			return msgs[i].Iteration == msgs[j].Iteration
+		default:
+			return false
+		}
+	}
+	return true
 }
 
 // convertArgsToString normalizes the Args field (which is any in the session

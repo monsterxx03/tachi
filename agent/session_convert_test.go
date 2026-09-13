@@ -2,8 +2,10 @@ package agent
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent/systemreminder"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -291,5 +293,209 @@ func TestConvertSessionToLLMMessages_SkipsConfirm(t *testing.T) {
 
 	if len(result) != 2 {
 		t.Errorf("expected 2 messages (confirm skipped), got %d: %+v", len(result), result)
+	}
+}
+
+// reminderBlock renders a realistic reminder block: every producer renders through
+// systemreminder.RenderPieces, which is why a block ends with a newline.
+func reminderBlock(line string) string {
+	return systemreminder.RenderPieces([]systemreminder.Piece{{Name: "test", Lines: []string{line}}})
+}
+
+// TestConvertSessionToLLMMessages_ReminderSeamMatchesTheLiveWrap pins the byte-exact
+// seam between a turn's reminder block and the user's text.
+//
+// The live turn sends the two as one string, block + text (systemreminder.WrapUserMessage
+// prepends a block that already ends with a newline). A reload has to rebuild the same
+// bytes: the conversion used to insert one more "\n" between them, which is invisible in
+// the UI but changes the REQUEST, so the provider's prompt cache missed on every turn
+// appended since the last reload — measured on a real session as a 47k-token re-read.
+func TestConvertSessionToLLMMessages_ReminderSeamMatchesTheLiveWrap(t *testing.T) {
+	block := reminderBlock("Current date: Sunday, September 13, 2026 12:51:24 CST")
+	const text = "看看竞品呢，还有什么值得做的功能"
+
+	result, err := ConvertSessionToLLMMessages([]session.Message{
+		{Type: session.MessageTypeReminder, Content: block},
+		{Type: session.MessageTypeUser, Content: text},
+	}, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected one user message, got %d: %+v", len(result), result)
+	}
+	if want := block + text; result[0].Content != want {
+		t.Errorf("the seam must match the live wrap byte for byte\n  got:  %q\n  want: %q", result[0].Content, want)
+	}
+	if strings.Contains(result[0].Content, systemreminder.ReminderBlockClose+"\n\n") {
+		t.Error("a blank line was inserted after the reminder block: the reloaded history no longer matches what was sent")
+	}
+}
+
+// TestConvertSessionToLLMMessages_MidTurnReminderStaysWhereItWasSent covers the other
+// half: the loop injects a reminder mid-turn as a user-role message of its own, after
+// that iteration's tool results (injectLoopReminders), and a reload has to put it back
+// there. Buffering it onto the NEXT user message instead moved stale content — a finished
+// background task, an old plan id — onto a later turn.
+func TestConvertSessionToLLMMessages_MidTurnReminderStaysWhereItWasSent(t *testing.T) {
+	prefix, midTurn := reminderBlock("Current date: ... 10:00:00"), reminderBlock(`Background task "x" finished successfully`)
+	sessionMsgs := []session.Message{
+		{Type: session.MessageTypeReminder, Content: prefix},
+		{Type: session.MessageTypeUser, Content: "do the thing"},
+		{Type: session.MessageTypeThinking, Content: "first", Signature: "sig-1"},
+		{Type: session.MessageTypeAssistant, Content: "working"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: bashArgs, ToolCallID: "call-1"},
+		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "output", ToolCallID: "call-1"},
+		{Type: session.MessageTypeReminder, Content: midTurn, Iteration: 2, Seq: 3},
+		{Type: session.MessageTypeThinking, Content: "second", Signature: "sig-2"},
+		{Type: session.MessageTypeAssistant, Content: "done"},
+	}
+
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []llm.Message{
+		{Role: "user", Content: prefix + "do the thing"},
+		{
+			Role:           "assistant",
+			Content:        "working",
+			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "first", Signature: "sig-1"}},
+			ToolCalls: []llm.ToolCall{{
+				ID: "call-1", Type: "function",
+				Function: llm.ToolCallFunction{Name: "Bash", Arguments: bashArgs},
+			}},
+		},
+		{Role: "tool", Content: "output", ToolCallID: "call-1", Name: "Bash"},
+		// The injected block keeps its own message, exactly where it was sent.
+		{Role: "user", Content: midTurn},
+		{
+			Role:           "assistant",
+			Content:        "done",
+			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "second", Signature: "sig-2"}},
+		},
+	}
+
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("mid-turn reminder mismatch:\n  got:  %+v\n  want: %+v", result, expected)
+	}
+}
+
+// TestConvertSessionToLLMMessages_MidTurnReminderAtTheEnd covers the shape with nothing
+// after the block: it is still its own message, not a wrapper for a user message that
+// does not exist.
+func TestConvertSessionToLLMMessages_MidTurnReminderAtTheEnd(t *testing.T) {
+	tail := reminderBlock("Background task finished, no turn followed")
+	result, err := ConvertSessionToLLMMessages([]session.Message{
+		{Type: session.MessageTypeUser, Content: "hello"},
+		{Type: session.MessageTypeAssistant, Content: "hi"},
+		{Type: session.MessageTypeReminder, Content: tail, Iteration: 3, Seq: 4},
+	}, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	last := result[len(result)-1]
+	if last.Role != "user" || last.Content != tail {
+		t.Errorf("a trailing mid-turn block must survive as its own message, got %+v", last)
+	}
+}
+
+// TestConvertSessionToLLMMessages_ReminderBeforeAUserMessageStaysAWrap pins the shape the
+// buffer exists for, including the artifact case: consecutive reminder records all belong
+// to the user message that follows them, so they stay ONE prefix rather than splitting
+// into several messages.
+func TestConvertSessionToLLMMessages_ReminderBeforeAUserMessageStaysAWrap(t *testing.T) {
+	artifact, date := reminderBlock("近期产物：/tmp/report.html"), reminderBlock("Current date: ... 11:00:00")
+
+	result, err := ConvertSessionToLLMMessages([]session.Message{
+		{Type: session.MessageTypeReminder, Content: artifact},
+		{Type: session.MessageTypeReminder, Content: date},
+		{Type: session.MessageTypeUser, Content: "接着看"},
+	}, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 1 {
+		t.Fatalf("expected the two blocks to ride the same user message, got %d: %+v", len(result), result)
+	}
+	if want := activityWrap(artifact, date) + "接着看"; result[0].Content != want {
+		t.Errorf("got %q, want %q", result[0].Content, want)
+	}
+}
+
+// activityWrap is reminderPrefix for the test's two blocks.
+func activityWrap(blocks ...string) string {
+	prefix := strings.Join(blocks, "\n")
+	if !strings.HasSuffix(prefix, "\n") {
+		prefix += "\n"
+	}
+	return prefix
+}
+
+// TestConvertSessionToLLMMessages_StrandedReminderBeforeALaterTurn covers the one shape
+// position alone gets wrong: a block the loop injected mid-turn that turned out to be its
+// turn's LAST record (a stop or a hard failure right after the injection). The next user
+// message belongs to another turn — its iteration is 0, the block's is not — so the block
+// must stay where it was sent rather than ride that message.
+func TestConvertSessionToLLMMessages_StrandedReminderBeforeALaterTurn(t *testing.T) {
+	stranded, next := reminderBlock("Background task finished, then the turn ended"),
+		reminderBlock("Current date: ... 12:10:00")
+
+	result, err := ConvertSessionToLLMMessages([]session.Message{
+		{Type: session.MessageTypeUser, Content: "u1"},
+		{Type: session.MessageTypeThinking, Content: "t", Signature: "sig-1"},
+		{Type: session.MessageTypeToolCall, Name: "Bash", Args: bashArgs, ToolCallID: "call-1"},
+		{Type: session.MessageTypeToolResult, Name: "Bash", Result: "out", ToolCallID: "call-1"},
+		{Type: session.MessageTypeReminder, Content: stranded, Iteration: 2, Seq: 3},
+		{Type: session.MessageTypeReminder, Content: next},
+		{Type: session.MessageTypeUser, Content: "u2"},
+	}, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	expected := []llm.Message{
+		{Role: "user", Content: "u1"},
+		{
+			Role:           "assistant",
+			ThinkingBlocks: []llm.ThinkingBlock{{Type: "thinking", Thinking: "t", Signature: "sig-1"}},
+			ToolCalls: []llm.ToolCall{{
+				ID: "call-1", Type: "function",
+				Function: llm.ToolCallFunction{Name: "Bash", Arguments: bashArgs},
+			}},
+		},
+		{Role: "tool", Content: "out", ToolCallID: "call-1", Name: "Bash"},
+		{Role: "user", Content: stranded},
+		{Role: "user", Content: next + "u2"},
+	}
+	if !reflect.DeepEqual(result, expected) {
+		t.Errorf("stranded-before-later-turn mismatch:\n  got:  %+v\n  want: %+v", result, expected)
+	}
+}
+
+// TestConvertSessionToLLMMessages_ContinuationReminderKeepsItsIteration is the positive
+// side of the same rule: the length-continuation prompt's reminder and the prompt itself
+// are recorded with the SAME iteration, so they stay one wrapped message.
+func TestConvertSessionToLLMMessages_ContinuationReminderKeepsItsIteration(t *testing.T) {
+	block := reminderBlock("Output truncated; continue where you left off")
+	result, err := ConvertSessionToLLMMessages([]session.Message{
+		{Type: session.MessageTypeThinking, Content: "long", Signature: "sig-1"},
+		{Type: session.MessageTypeAssistant, Content: "partial"},
+		{Type: session.MessageTypeReminder, Content: block, Iteration: 2, Seq: 5},
+		{Type: session.MessageTypeUser, Content: "Please continue.", Iteration: 2, Seq: 5},
+	}, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if len(result) != 2 {
+		t.Fatalf("expected the reminder to ride the continuation prompt, got %d messages: %+v", len(result), result)
+	}
+	if want := block + "Please continue."; result[1].Content != want {
+		t.Errorf("got %q, want %q", result[1].Content, want)
 	}
 }

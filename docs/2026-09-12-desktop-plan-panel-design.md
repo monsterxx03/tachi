@@ -147,5 +147,14 @@
 - **只有块、没有用户文本**的尾条消息保持原样，这是取舍不是漏修：它有两种来源——跑中被注入的 loop reminder（Stop 恰好落在那一瞬）、以及转换函数**故意**追加的尾随工件 reminder（为的是重载不丢它），两者没有可区分的标记，丢掉前者会顺手弄坏后者。
 - 触发该状态的通常是**重开/重载**（回复从未落盘：进程被杀、上一轮硬失败）；普通 Stop 在流式中途会先把部分 assistant 文本记进历史，所以尾部是 assistant，不走这条合并。
 
-**另一处观察（未处理）**：`llm/anthropic.go:238` 只给 **system prompt** 打了 `cache_control` breakpoint，messages 完全没标记（顶层那个 breakpoint 还留着 `FIXME` 注释）。也就是说 Anthropic 这条路上会话历史从来没吃到缓存——那是白送的收益，但它与 plan 无关，单独看。
+**同族第二处（2026-09-13，已修）**：`ConvertSessionToLLMMessages` 重建历史时必须**与发送时逐字节一致**，这里有两处会破坏它：
+
+1. **接缝多一个换行**：live 是 `块 + 正文`（`RenderPieces` 渲染的块本身以 `\n` 结尾），而转换写的是 `strings.Join(pending, "\n") + "\n" + content` —— 多一个 `\n`。UI 上只是空行，但**请求本身变了**：provider 的前缀缓存在每次重载后、对「上次重载以来新跑过的回合」全部失配。实测某会话：竞品那一轮 live 668 字符、重建 669，重载后第一次请求 47,266 token 未命中（≈¥0.047）。
+2. **跑中注入的块被搬家**：`MessageTypeReminder` 有两种形态，只能靠**位置**区分 —— 其后第一条非 reminder 记录是 user → 它是那条消息的前缀（工件块 + 日期块、续写 prompt 都属此类）；否则是 loop 在工具结果之后作为**独立 user 消息**注入的（`injectLoopReminders`），必须留在原位。原先一律缓冲，于是旧的后台任务通知、旧计划提醒被贴到很晚的某一轮上（实测某轮 live 93 字符 → 重建 9,379）。
+
+修法与判据：`reminderPrefix`（块已以换行结尾就不再补）+ `reminderBelongsToNextUserMessage`（按位置判形态）。测试：`agent/session_convert_test.go` 新增 4 个用例（接缝逐字节等于 live 拼法、跑中块留在原位、结尾的跑中块自成一条、连续 reminder 仍共同作为前缀）；两处改动分别退回都会让对应用例变红。验收是在**真实会话数据**上跑的：重载重建出的 10 条 user 消息长度与当初发出的完全一致（7854/98/93/124/93/668/228/695/130…）。
+
+**与上面那处是同一个根因家族**：reminder 的「重建方式」与「发送方式」必须一致 —— 一处是合并携带旧块，一处是接缝与位置。
+
+**另一处观察（2026-09-13 校准）**：`llm/anthropic.go:238` 只给 **system prompt** 打了 `cache_control` breakpoint（messages 完全没标记，顶层那个 breakpoint 还留着 `FIXME`）。但实测表明**真正在起作用的是 provider 侧的前缀缓存**（athenai 代理）：客户端标记之外的 29 万 token 历史照样能命中 99.9%，且恰好在请求前缀出现差异处断掉（工具集变化、上面那个多出来的换行）。也就是说客户端标记不是这条路上的缓存来源；要动的收益点在前缀本身的稳定性，而不是补 breakpoint。
 
