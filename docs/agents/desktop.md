@@ -8,14 +8,47 @@ Why it lives here: `.tachi.md` is injected WHOLE into the first message of every
 keeps the conventions that apply anywhere in the repo and points here for the rest. **New desktop
 lessons belong in THIS file, not back in `.tachi.md`.**
 
+## Contents — read the section you need, not the file
+
+| Section | Read it when |
+| --- | --- |
+| **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) |
+| **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
+| **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
+| **Desktop UI State** | you change the frontend: which module owns what, and the bug each convention prevents |
+| **Desktop Themes** | you touch colours |
+
 ## Desktop Smoke Verification (demo + mockllm)
 
 Desktop-only paths (Wails wiring, rendered UI, end-to-end flows) need the real window: unit
 tests and itest cannot see whether a binding's result reaches a card. **Use the in-repo
-suite** — `make desktop-smoke` (`itest/desktop/`, see its README) — for anything touching
-desktop state, events or UI, and add a scenario when a fix deserves a regression test. It
-owns the sandbox, the isolated HOME, the scripted model and the report; the verdict is an
-exit code (`-run <name>` for one scenario, `-keep` to inspect artifacts).
+suite** for anything touching desktop state, events or UI, and add a scenario when a fix
+deserves a regression test. It owns the sandbox, the isolated HOME, the scripted model and the
+report; the verdict is an exit code.
+
+```sh
+make desktop-smoke                                  # every scenario
+make desktop-smoke ARGS="-run send-now -v"          # one of them, every assertion printed
+make desktop-smoke ARGS="-keep"                     # keep the sandbox after a pass (artifacts)
+```
+
+The suite is `itest/desktop/`: `main.go` (runner: sandbox, launch, verdict, report), `scenarios.go`
+(one conversation per scenario — the mock's steps plus the Go-side `after` assertions), `sandbox.go`
+(bundle prep, isolated HOME, launch/kill), `sink.go` (the loopback endpoint drivers report to),
+`drivers/` (harness.js + one script per scenario). Per run it builds a throwaway sandbox holding a
+private copy of the app (executable renamed so no `pkill` can reach the user's own Tachi), an isolated
+HOME with a `config.yaml` pointing at the scripted model, the work dir, `driver.js`, `dom.html` (the
+page as the verdict found it) and `mock-requests.txt` (what the model was actually asked). **`desktop/bin/Tachi.app`
+must exist** (`make -C desktop build`); the runner refreshes the executable inside it from `bin/Tachi` on
+every run, so the app under test is always the current tree.
+
+A driver asserts what the UI **shows** (transcript shape, chips, buttons); the scenario's Go half asserts
+what actually **happened** (the prompt the model received, the files written) — a regression usually shows
+up in exactly one of the two, so write both. **Adding a scenario** = `drivers/<name>.js` written against
+the harness (`smoke.waitFor` — never a fixed sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`,
+plus `q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`) and an entry in `scenarios.go` (the
+mock's `steps`, the work-dir `files`, an `after` func for the Go-side checks). Keep both halves small:
+one behaviour per scenario, and assert what the user would notice.
 
 ### Manual recipe — only for exploring something the suite does not cover
 
@@ -76,6 +109,12 @@ const type = (el, t) => {
   window) and the window must be on the visible Space anyway — a "screenshot" that silently
   returns the desktop is worse than none. The suite keeps `dom.html` + the assertion lines;
   take a picture by hand when you want one
+- **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the
+  real Finder, which takes the foreground and suspends the webview mid-run (the trap above) — so the sidebar
+  scenario asserts the menu item is there (and that its own mouseleave rule closes the menu) and leaves the
+  click alone. Which path it would hand over is pinned where the argument is known: the Go test
+  `TestOpenSessionDirOpensTheSessionDirectory` stubs `openFile` (attach.go) and reads the argv. Any "open in …"
+  action has this shape — assert the control on screen, pin the argument off screen
 - **A probe only measures what it reads at the right moment, and only ever proves one direction**:
   content that grows AFTER a pin (a mermaid diagram finishing its async render) is pinned again
   from a `ResizeObserver`, which the browser runs after layout and before paint — so a read taken
@@ -147,7 +186,34 @@ const type = (el, t) => {
 - **Build a cert once with `security` + OpenSSL if the keychain has none** (`security find-identity -v -p codesigning` → `0 valid identities found`): `openssl req -x509 -newkey rsa:2048 -nodes -subj "/CN=<name>" -addext extendedKeyUsage=critical,codeSigning …`, export with **`-legacy`** (macOS cannot verify OpenSSL 3's default PKCS#12 algorithms — "MAC verification failed"), `security import … -T /usr/bin/codesign`, then `security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem`.
 - **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in front proves nothing. And the TUI's notifications are a different mechanism entirely (`terminal-notifier` / `osascript`), so a notification whose source is terminal-notifier is never the desktop's own — **but it can still be the desktop's fault**: the app is often launched from a herdr pane, inherits `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`, and then auto-enables the herdr hook (`agent/configureHooks` → `hooks.DetectHerdr`) — so herdr, not Tachi, raises a terminal notification for a window that has no pane. `DetectHerdr` therefore also requires stdout to be a terminal (a pane's process renders into it; a GUI app and an editor-hosted ACP server merely inherited the env). To check what actually ran: `log show --last 10m --predicate 'eventMessage CONTAINS "terminal-notifier"' --style compact` prints the TCC attribution with the **responsible** process (`com.mitchellh.ghostty` = a terminal launched it). `notifyTurnDone` is for the transcript lane only: a side-channel run (/review, /commit) has no turn on screen, so it gets its own copy through `notifyOneOffDone` — 评审完成 · N 条意见 / 未报问题 / 已停止 / 未完成（见日志）, 提交完成 — raised from `commands.go`, where the outcome is known.
 
+## Desktop Backend (bindings & paths)
+
+- **The Wails bindings are GENERATED and COMMITTED**
+  (`frontend/bindings/github.com/monsterxx03/tachi/desktop/agentservice.ts`). Adding, renaming or deleting
+  an exported method on `AgentService` means re-running
+  `cd desktop && GOWORK=off wails3 generate bindings -clean=true -ts -i` (that is `build/Taskfile.yml`'s
+  `generate:bindings`, which `make build` runs for you; `-clean` empties `frontend/bindings` first). Never
+  hand-edit one: the numeric `$Call.ByID(...)` is derived from the method, and a frontend calling a method the
+  generator has not seen fails `tsc` — which is the only thing that type-checks the call at all. Regenerating
+  on a clean tree is a no-op, so a diff in that directory is always a real change.
+- **Only `desktop/` is a Go module of its own** (it is NOT listed in the repo-root `go.work`), so every Go
+  command for it runs with `GOWORK=off`: `desktop/Makefile` exports it, and the root `desktop-smoke` target
+  sets it for the one command it runs from the parent directory.
+- **A session's directory is `config.SessionDir()` + ONE path element**: `sessionDirPath(id)` in
+  `sessiondir.go` is the single resolver, and it REFUSES anything a webview could send that is not a single
+  name (`../..`, `a/b`, `.`, empty). The rule came from `oneOffDir`, which now shares it — every
+  "where is this conversation stored" question goes through that one function.
+- **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
+  window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
+  open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
+  popping a real Finder window.
+
 ## Desktop UI State
+
+- **The sidebar is `sessionRow` in `App.tsx`**: the conversation list, the folded compaction chains
+  (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
+  重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that
+  hands the screen to another app is asserted, never clicked, in a driver (see the smoke rules).
 
 - **Following the bottom must survive async height changes, not just message updates** (`desktop/frontend/src/App.tsx`): the transcript pin ran only when `msgCache` changed, so anything that grew the content afterwards — a mermaid diagram finishing its async render, an image/attachment card loading, a tool card expanding — slid the visible content up by exactly that height until the next delta pinned it back ("切回会话时先向上飘，再跳到底"; measured at 298px in `switch-scroll`). The fix is a `ResizeObserver` on a `.chat-content` wrapper (the scrollport's own box never changes when its content grows) that re-pins while following. Any new "sticky bottom" behavior must go through the same observer.
 

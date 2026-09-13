@@ -98,11 +98,14 @@ itest-tui: itest-mockllm
 itest-acp: itest-mockllm
 	$(GINKGO) -p --procs=$(ITEST_PROCS) -tags=integration ./itest/acp
 
-# desktop-smoke drives the REAL desktop app (see itest/desktop/README.md): a throwaway
+# desktop-smoke drives the REAL desktop app (see docs/agents/desktop.md): a throwaway
 # bundle, scripted model, and a driver that asserts what the UI shows. Not part of
 # `itest`: it needs the GUI (a `make -C desktop build` bundle and a window server).
 # Pass a subset with `make desktop-smoke ARGS="-run send-now -v"`.
+# GOWORK=off on the desktop build: desktop/ is a self-contained module and is NOT listed
+# in the repo-root go.work, so a `go build` inside it under workspace mode fails with
+# "main module (github.com/monsterxx03/tachi) does not contain package .../desktop".
 desktop-smoke:
-	cd desktop && $(MAKE) frontend && go build -o bin/Tachi .
+	cd desktop && $(MAKE) frontend && GOWORK=off go build -o bin/Tachi .
 	go run ./itest/desktop $(ARGS)
 

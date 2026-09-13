@@ -133,7 +133,7 @@ diff。P2a 的形态（`openDiffPanel(paths)` → 浮层 → `GetTurnDiff(sid, �
    中间态（实测：孤零零一帧 298px，前后都是 0）。诚实的读法是在**自己的** observer 回调里读：观察者
    按注册顺序回调，driver 后注册，就排在 app 的 pin 之后、paint 之前 —— 读到什么就是屏幕上是什么。
    并且这把新尺子**双向验过**：修复在位时读 0，把 pin 关掉则读到 298px（真被画出来的漂移）。
-   记录见 [itest/desktop/README.md](../itest/desktop/README.md)。
+   记录见 [docs/agents/desktop.md](agents/desktop.md) 的 Smoke 一节。
 
 **顺带**：`oneoff-panel` 场景现在 32 项断言（多的是拖拽四连：按下即进入拖拽态、拖到极限钳在 320、
 往外拖变宽、面板再宽也不吃掉对话的 480px），`oneoff-footer` 33 项（原 34 项里那条错位的宽度断言搬走了）。
@@ -156,7 +156,7 @@ diff。P2a 的形态（`openDiffPanel(paths)` → 浮层 → `GetTurnDiff(sid, �
    真机断言：重跑后 chip 报出**新的**条数（2 条 vs 1 条）、磁盘上两份记录。
 
 **顺带**：`switch-scroll` 的探针判据被重新设计（判「画出来的帧」，窗口不出帧时退化为「连续偏离」并在日志里
-说明用了哪把尺子），`itest/desktop/README.md` 记下两条约束：**一次只跑一个 smoke**、**探针要判被画出来的状态**。
+说明用了哪把尺子），[docs/agents/desktop.md](agents/desktop.md) 记下两条约束：**一次只跑一个 smoke**、**探针要判被画出来的状态**。
 
 ---
 
@@ -704,7 +704,7 @@ flowchart LR
   点击后 chip 变成「已评审 1 条 · 查看」（条数来自后端对 ReportFinding 的计数）；
   评审的回复与 ReportFinding 卡都不在对话里；chip 变成回到面板的入口。
 - 复用 `sessions` 场景的写法：断言前先把状态摆正（例如先把焦点移走），不要依赖时序巧合。
-- **探针要能在正确的时刻读**（0.8 的教训，详见 [README](../itest/desktop/README.md)）：`switch-scroll`
+- **探针要能在正确的时刻读**（0.8 的教训，详见 [docs/agents/desktop.md](agents/desktop.md)）：`switch-scroll`
   的读数必须在 app 的 pin 之后（`driver 自己的 ResizeObserver`），因为在 pin 之前读只会得到
   「内容已长高、pin 未跑」这一从不落地的中间态。并且判据要**双向**验过：修复在位读 0，修复关掉读 298px。
 - 断言要长在**能产生该事实的场景**上：宽度断言曾长在不拖手柄的 `oneoff-footer` 里，于是它看到的永远是 0。
