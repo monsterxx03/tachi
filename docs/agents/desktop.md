@@ -321,9 +321,10 @@ const type = (el, t) => {
 - **A turn's process is folded by the CONVERSATION, not by the part renderer**: `turnView()` (`transcript.ts`,
   pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip
   (`ProcessStrip`, `components.tsx`) standing in for its thinking blocks, tool cards and intermediate
-  messages, the turn's LAST prose, and the parts that must never be hidden: a failed call, the call a
-  permission card is parked on, the call an AskUserQuestion form waits on, the call that is running now,
-  and notices. `TurnPart` stays atomic because `oneoff.tsx` replays the very same parts and exists to show
+  messages, the turn's LAST prose, and the parts that must never be hidden: a FAILED call, the call a
+  permission card is parked on, the call an AskUserQuestion form waits on, and notices. A call that is
+  merely RUNNING is not among them — the live row reports it, an exposed card appeared and vanished once
+  per step and made the prose jump, and a call parked on a form is waiting rather than running. `TurnPart` stays atomic because `oneoff.tsx` replays the very same parts and exists to show
   them all — a change there would make the side panel lose the process it is for. The open/closed state is
   per turn and presentational (never persisted), and the footer's diff chip opens the fold when it opens
   every diff, since those diffs live inside the folded cards.

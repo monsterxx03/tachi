@@ -181,7 +181,7 @@ export interface TurnView {
   exposed: IndexedPart[]
   // conclusion: the turn's LAST prose — the answer, always visible.
   conclusion: IndexedPart | null
-  // live: the call running right now, or null (a finished turn, or one between calls).
+  // live: the call running right now, or null (finished, between calls, or parked on a form).
   live: LiveStep | null
 }
 
@@ -202,8 +202,12 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
       break
     }
   }
-  // The call currently running (the newest unfinished one) is the turn's live evidence
-  // that something is happening, so it stays out of the fold.
+  // The newest unfinished call: it supplies the strip's LIVE line ("正在 X · 第 N 步"), but it is
+  // NOT exposed. An exposed running card was the P1 stopgap (with no live row, it was the only
+  // thing answering "is it still working?"), and it cost a row that appeared and vanished once
+  // per step — the turn's prose jumped down and back up as each call started and finished. The
+  // live row says the same thing in place, and a reader who wants the card itself opens the
+  // timeline, where it stays put and updates in place.
   let runningIndex = -1
   for (let i = list.length - 1; i >= 0; i--) {
     if (list[i].type === 'tool' && !list[i].done) {
@@ -215,6 +219,12 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
   if (opts.pendingAsk) {
     askIndex = list.findIndex((p) => p.type === 'tool' && p.name === 'AskUserQuestion' && !p.done)
   }
+  // A call parked on a permission card is WAITING, not running: its card is replaced by the form
+  // (which says so itself), and the live row must not claim it is 正在执行.
+  let parkedIndex = -1
+  if (opts.permissionToolCallId) {
+    parkedIndex = list.findIndex((p) => p.type === 'tool' && p.toolCallId === opts.permissionToolCallId)
+  }
 
   const summary: ProcessSummary = { steps: 0, thinking: 0, notes: 0, failed: 0, files: 0, edits: 0, commands: 0, searches: 0, other: 0 }
   const folded: IndexedPart[] = []
@@ -224,7 +234,9 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
   list.forEach((part, index) => {
     if (part.type === 'tool') {
       summary.steps++
-      if (index === runningIndex) live = { name: part.name || '', title: part.title, step: summary.steps }
+      if (index === runningIndex && index !== parkedIndex && index !== askIndex) {
+        live = { name: part.name || '', title: part.title, step: summary.steps }
+      }
       if (part.done && !part.ok) summary.failed++
       countTool(summary, part.name || '')
     } else if (part.type === 'thinking') {
@@ -233,13 +245,11 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
       summary.notes++
     }
 
-    const parked = !!opts.permissionToolCallId && part.toolCallId === opts.permissionToolCallId
     const staysVisible =
       part.type === 'notice' ||
       index === conclusionIndex ||
-      index === runningIndex ||
       index === askIndex ||
-      parked ||
+      index === parkedIndex ||
       (part.type === 'tool' && part.done && !part.ok)
     if (staysVisible) exposed.push({ part, index })
     else folded.push({ part, index })

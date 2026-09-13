@@ -15,8 +15,16 @@
   smoke.check('实时条说清正在做什么', live.indexOf('正在') >= 0, live)
   smoke.check('实时条报出第几步', live.indexOf('第 1 步') >= 0, live)
   smoke.check('实时条有脉冲点（"还在动"的信号）', !!smoke.q('.process-head .process-dot'))
-  smoke.check('正在跑的那张卡外露在过程条之外（没被折叠）',
-    smoke.qa('.tool-card').length === 1, smoke.qa('.tool-card').length + ' 张卡')
+  // 运行中的卡不外露：它每完成一步就消失一次，会让下面的正文一上一下地跳。这个事实由实时行
+  // 承担；想看卡本身，点开过程条即可（它就在时序里，且会原地更新）。
+  smoke.check('运行中的卡不外露（页面不再逐步一跳）',
+    smoke.qa('.tool-card').length === 0, smoke.qa('.tool-card').length + ' 张卡')
+  smoke.click(smoke.q('.process-head'))
+  if (!(await smoke.waitFor(() => smoke.qa('.tool-card').length === 1, '展开后能看到运行中的卡'))) return smoke.finish()
+  smoke.check('展开时序能看到正在跑的那张卡',
+    smoke.text('.tool-card').indexOf('sleep 4') >= 0, smoke.text('.tool-card').slice(0, 40))
+  smoke.click(smoke.q('.process-head'))
+  if (!(await smoke.waitFor(() => smoke.qa('.tool-card').length === 0, '收起后卡片又隐去'))) return smoke.finish()
 
   // ② 回合结束：实时态收掉，摘要回来，活动行消失
   if (!(await smoke.waitText('.msg-assistant .msg-content', '好验证跟随底部', 40000))) return smoke.finish()
