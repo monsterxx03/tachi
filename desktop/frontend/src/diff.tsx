@@ -574,6 +574,7 @@ export function TurnDiffOverlay({ sessionId, paths, onClose }: {
   const count = files ? files.split('\n').length : 0
   return (
     <ViewerOverlay label={`本轮改动 — ${count} 个文件（与 git HEAD 对照）`} onClose={onClose} stageClass="is-doc"
+      findable
       controls={<CloseButton onClose={onClose} />}>
       {/* findings=[] on purpose: this surface is about the WORKING TREE, not about a review.
           Everything else (the head, the per-file fold, 预览/打开) is the panel's own rendering,

@@ -10,6 +10,7 @@
 
 import { useCallback, useEffect, useRef, useState, type ComponentPropsWithoutRef, type ReactNode, type RefObject } from 'react'
 import { createPortal } from 'react-dom'
+import { FindBar, FindButton, useFind } from './find'
 
 // Zoom bounds (0.2x … 6x covers "放大看细节" and "整体扫一眼" without letting the
 // content become unusable).
@@ -156,17 +157,29 @@ export function useViewerZoomKeys({ fit, reset, zoomBy }: {
 //
 // Typing is not dismissing: while a field INSIDE the overlay has focus (the diff
 // panel's finding notes), Esc first leaves the field and only the next Esc closes.
-// Without that, the shell would throw away what was being written.
-export function ViewerOverlay({ label, stageRef, stageClass, stageProps, controls, onClose, children }: {
+// Without that, the shell would throw away what was being written. A find bar is the
+// exception to the exception: its own Esc closes the BAR, because that is what the key
+// means in a find field — see src/find.tsx for how it claims the key before this.
+//
+// `findable` is the shell's third shared affordance (with the dismissal and the zoom
+// keys): the viewer opts in, the shell renders the bar and puts ⌕ in the pill. Opt-in
+// because a viewer whose content is not in this document — an image, or a PDF/HTML
+// iframe — has nothing to search, and the shell still owns ⌘F there so it cannot fall
+// through to a bar behind the backdrop.
+export function ViewerOverlay({ label, stageRef, stageClass, stageProps, controls, onClose, findable, children }: {
   label: string
   stageRef?: RefObject<HTMLDivElement>
   stageClass?: string
   stageProps?: ComponentPropsWithoutRef<'div'>
   controls: ReactNode
   onClose: () => void
+  findable?: boolean
   children: ReactNode
 }) {
   const dragged = useRef(false)
+  const ownStage = useRef<HTMLDivElement>(null)
+  const stage = stageRef ?? ownStage
+  const find = useFind(findable ? stage : null)
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -199,7 +212,7 @@ export function ViewerOverlay({ label, stageRef, stageClass, stageProps, control
 
   return createPortal(
     <div className="viewer-overlay" onClick={onClose} role="dialog" aria-modal="true" aria-label={label}>
-      <div ref={stageRef} className={`viewer-stage${stageClass ? ' ' + stageClass : ''}`}
+      <div ref={stage} className={`viewer-stage${stageClass ? ' ' + stageClass : ''}`}
         {...stageProps}
         onClick={(e) => {
           if (dragged.current) { e.stopPropagation(); return }
@@ -208,7 +221,11 @@ export function ViewerOverlay({ label, stageRef, stageClass, stageProps, control
         }}>
         {children}
       </div>
-      <div className="viewer-controls" onClick={(e) => e.stopPropagation()}>{controls}</div>
+      {findable && find.open ? <FindBar find={find} className="is-overlay" /> : null}
+      <div className="viewer-controls" onClick={(e) => e.stopPropagation()}>
+        {findable ? <><FindButton find={find} /><span className="viewer-sep" /></> : null}
+        {controls}
+      </div>
     </div>,
     document.body,
   )

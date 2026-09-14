@@ -17,6 +17,7 @@ import { DiffFindingsPane } from './diff'
 import { MarkdownBlock } from './markdown'
 import { UserBubble } from './components'
 import { CloseButton } from './viewer'
+import { FindBar, FindButton, useFind } from './find'
 
 // ONE_OFF_LIVE_POLL_MS is how often a RUNNING run's record is re-read. The record is written
 // line by line as the run goes, so this is a read of a file that is still growing: fast
@@ -431,6 +432,10 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   onClose: () => void
 }) {
   const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
+  // The pane's scroller doubles as the find root: the bar sticks to its top, and a jump scrolls
+  // it rather than the window.
+  const bodyRef = useRef<HTMLDivElement>(null)
+  const find = useFind(bodyRef)
   // The replay is rebuilt from the record's messages — the same input shape the transcript
   // feeds buildTurns, so the turns and their parts are the conversation's own.
   const turns = useMemo(() => (detail?.messages ? buildTurns(detail.messages) : []), [detail])
@@ -599,6 +604,7 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
         </select>
         <button type="button" className="oneoff-icon" title="重新读取"
           onClick={() => { refresh(); reloadReport() }}>⟳</button>
+        <FindButton find={find} />
         <CloseButton onClose={onClose} />
       </div>
 
@@ -616,7 +622,11 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
         </div>
       ) : null}
 
-      <div className="oneoff-body">
+      <div className="oneoff-body" ref={bodyRef}>
+        {/* ⌘F searches whatever this pane is showing — the run's process, the findings with
+            their diff, or the report. One host for the panel (not one per tab): the reader
+            asks to find in "what I am looking at", and the pane is what decides that. */}
+        {find.open ? <FindBar find={find} className="is-panel" /> : null}
         {error ? <div className="oneoff-empty">{error}</div> : null}
         {!error && items.length === 0 ? <div className="oneoff-empty">{listLoading ? '读取中…' : note}</div> : null}
         {!error && items.length > 0 && detailLoading ? <div className="oneoff-empty">读取记录中…</div> : null}

@@ -107,6 +107,13 @@
   --diff-del-wash: rgba(191, 40, 49, 0.08);
   --amber: #8a4b08;
 
+  /* ⌘F hits. Amber, not the accent: a hit has to be findable inside a diff, where green and red
+     already mean added and removed, and inside prose, where the accent means a link or inline
+     code. The current one is a solid plane with dark ink — it is painted over the other one. */
+  --find-hit: rgba(255, 199, 61, 0.42);
+  --find-hit-current: #f0b429;
+  --find-hit-current-ink: #2a2010;
+
   /* Inline code in an assistant reply. */
   --code-ink: #34429e;
 
@@ -269,6 +276,10 @@
   --diff-del-wash: rgba(255, 122, 130, 0.11);
   --amber: #e2a355;
 
+  --find-hit: rgba(255, 200, 80, 0.30);
+  --find-hit-current: #d8a13a;
+  --find-hit-current-ink: #241c10;
+
   --code-ink: #b9c6ff;
 
   --scrim: rgba(9, 11, 15, 0.42);
@@ -359,6 +370,68 @@ body {
   outline-offset: 1px;
   border-radius: var(--radius-xs);
 }
+
+/* ── ⌘F: find inside a surface ───────────────────────────────────────────────
+   One bar, two homes: the side panel (sticky inside its scrolling body, so it stays
+   put while the reader scrolls the diff under it) and every viewer (floating at the
+   stage's top-right, where a find bar is looked for). Matches are painted with the
+   CSS Custom Highlight API — src/find.tsx says why they are not <mark> elements —
+   and these two names are the only thing the paint rules need to know. */
+::highlight(tachi-find) { background-color: var(--find-hit); }
+::highlight(tachi-find-current) {
+  background-color: var(--find-hit-current);
+  color: var(--find-hit-current-ink);
+}
+.find-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-3);
+  z-index: 5;
+}
+/* The body's own padding would let content show through above a sticky bar pinned at 0. */
+.find-bar.is-panel { position: sticky; top: -10px; align-self: flex-end; }
+.find-bar.is-overlay { position: absolute; top: 44px; right: 36px; }
+.find-input {
+  width: 168px;
+  padding: 3px 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.find-input:focus { border-color: var(--accent-line); }
+.find-count {
+  min-width: 32px;
+  text-align: right;
+  font-size: 11px;
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+}
+/* A query with no hits says so in words rather than showing 0/0. */
+.find-count.is-empty { color: var(--red); }
+.find-btn,
+.find-open {
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  font: inherit;
+  font-size: 12px;
+  line-height: 1;
+  padding: 3px 5px;
+  border-radius: var(--radius-xs);
+}
+.find-btn:hover:not(:disabled),
+.find-open:hover { background: var(--accent-soft); color: var(--accent-2); }
+.find-btn:disabled { opacity: 0.4; cursor: default; }
 
 /* Reduced motion: entrances, reveals and ambient drift stand down — that is decoration.
    STATUS motion is exempt, and the list below is explicit because the blanket rule it

@@ -242,7 +242,7 @@ function FileFullscreen({ file, path, meta, onClose }: {
   }
   if (meta.kind === 'csv') {
     return (
-      <ViewerOverlay label={`${file.name} — 表格`} onClose={onClose} stageClass="is-doc" controls={<CloseButton onClose={onClose} />}>
+      <ViewerOverlay label={`${file.name} — 表格`} onClose={onClose} stageClass="is-doc" findable controls={<CloseButton onClose={onClose} />}>
         <div className="viewer-doc is-table">
           {meta.truncated ? <TruncatedNotice meta={meta} /> : null}
           <CSVTable meta={meta} />
@@ -250,8 +250,10 @@ function FileFullscreen({ file, path, meta, onClose }: {
       </ViewerOverlay>
     )
   }
+  // The text kinds are the last ones that are OURS to search: an HTML or PDF viewer draws
+  // inside an iframe, a different document this one cannot reach into (see FileViewer above).
   return (
-    <ViewerOverlay label={file.name} onClose={onClose} stageClass="is-doc" controls={<CloseButton onClose={onClose} />}>
+    <ViewerOverlay label={file.name} onClose={onClose} stageClass="is-doc" findable controls={<CloseButton onClose={onClose} />}>
       <div className="viewer-doc">
         {meta.truncated ? <TruncatedNotice meta={meta} /> : null}
         <AttachmentText path={path} meta={meta} />

@@ -1553,6 +1553,8 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
+            <div className="shortcut-section">旁路面板 / diff / 文件预览</div>
+            <div className="shortcut-row"><kbd>⌘ F</kbd><span>在本页查找（Enter / Shift+Enter 上下，Esc 关闭）</span></div>
             <div className="shortcut-section">消息区（聚焦时）</div>
             <div className="shortcut-row"><kbd>G</kbd><span>跳到最新消息</span></div>
             <div className="shortcut-row"><kbd>gg</kbd><span>回到顶部</span></div>

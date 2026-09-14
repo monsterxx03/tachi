@@ -470,6 +470,28 @@ const type = (el, t) => {
   is left alone). Both halves are pinned by `oneoff-report`, whose first checks are red when only the list
   half is missing and whose report checks are red when only the read is.
 
+- **⌘F searches a SURFACE, not the page** (`desktop/frontend/src/find.tsx`): the diff pane, a previewed file
+  and a review's report each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not
+  scroll the transcript behind it. The side panel is ONE host covering its three panes (过程 / 意见+diff /
+  报告), so the pane decides what "here" means. Four rules ride with it:
+  · hits are painted with the **CSS Custom Highlight API** (`::highlight()`, two names registered in
+    `base.css`), never by wrapping text in `<mark>` — these panes re-render under the reader (a live run's
+    record is re-read every second, a report fills in when it lands), and a DOM mutation would be thrown
+    away by the next render; a re-render only invalidates the ranges, which a MutationObserver collects
+    again (debounced: one text walk per streamed token is work nobody asked for);
+  · the key owner is installed ONCE at **module load** (window, capture). A bar may mount after the overlay
+    it sits inside, and among capture listeners on the same target the first registered runs first — so a
+    later-installed bar would lose Esc to the overlay. It consumes Esc with `stopImmediatePropagation`,
+    which is what lets the bar close instead of the viewer behind it;
+  · the bar is **mounted only while open on every surface** (`findable && find.open`) and the host handle's
+    `call()` always goes through the open path. Branching on "the field already exists" is the trap: a
+    mounted-but-closed bar looks open to the handle, `open` never becomes true, and the collect effects
+    (gated on it) never run — every count reads 无匹配 while the field and the document look perfect;
+  · `findable` is **opt-in per viewer**: an image, or an HTML/PDF frame, has no text in THIS document. The
+    shell still owns ⌘F there, so it cannot fall through to the bar of the panel dimmed behind it.
+  `file-find` pins the whole interaction (count, painted hits, Enter/Shift+Enter, the Esc ordering) and
+  `oneoff-footer` / `oneoff-report` pin the two panel panes.
+
 - **Never run a side effect inside a state updater**: React may invoke an updater more than once for the same
   update (StrictMode does; concurrent re-basing can), so `setState(prev => { fetch(...); return ... })` fires
   the request twice — and an `if (prev[k]) return prev` guard cannot help, because both invocations see the
@@ -608,6 +630,9 @@ const type = (el, t) => {
   keeping: button contrast is tuned in ONE place (`--accent-strong`, which is why the dark theme's sits at
   chroma ~0.11), and **a fill that carries white text always takes the `-strong` variant** — `--red` is tuned
   as INK and puts a white glyph below 4.5:1.
+- **Find hits are amber on purpose** (`--find-hit` wash + `--find-hit-current`, a solid plane with dark ink
+  painted over the others — base.css, both themes): a hit has to be findable inside a diff, where green and
+  red already mean added and removed, and inside prose, where the accent means a link or inline code.
 - **The reading surfaces take their sizes from ONE place** (`base.css`: `--fs-prose` 15.5px / `--fs-bubble`
   15px / `--fs-finding` 13px). "The text is too small" is an edit there, not a hunt through four files: the
   transcript's prose, the reader's own message and a review finding all read it, and code inside prose
