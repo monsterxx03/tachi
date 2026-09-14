@@ -56,6 +56,24 @@
   const item = smoke.qa('.ctx-menu .ctx-item')[0]
   smoke.check('这一轮有检查点，所以菜单项可用', !!item && !item.disabled, item ? (item.title || '可点') : '找不到菜单项')
   if (!item || item.disabled) return smoke.finish()
+
+  // The status bar's context ring has to follow the rewind: the backend recomputed the
+  // estimate for the history that REMAINS and dropped the anchor that measured the removed
+  // one, and the ring only ever learns these numbers from a push. So a rewind that forgets
+  // to push leaves it pointing at the size of the conversation that was just taken away —
+  // read BEFORE confirming, because that is the value the reader is looking at.
+  const ringPct = () => {
+    const el = smoke.q('.ctx-btn[aria-label^="上下文"]')
+    const m = el ? /上下文\s*([\d.]+)%/.exec(el.getAttribute('aria-label') || '') : null
+    return m ? parseFloat(m[1]) : null
+  }
+  // The popover says `X% 的上下文窗口` (only when both numbers are known).
+  const detailPct = () => {
+    const m = /([\d.]+)%\s*的上下文窗口/.exec(smoke.text('.ctx-panel'))
+    return m ? parseFloat(m[1]) : null
+  }
+  const ringBefore = ringPct()
+
   item.click()
 
   // The card must say what it is about to do BEFORE it does it — and the destructive half
@@ -84,6 +102,21 @@
 
   const chat = smoke.text('.chat-content')
   smoke.check('对话里留下一条回退提示', chat.indexOf('已回退到第 1 轮之前') >= 0, chat.slice(-160))
+
+  // …and the numbers the rewind changed reach the status bar, not just the agent's memory. The
+  // pair that proves it is the ring against the POPOVER, which fetches on open and so cannot be
+  // stale: both must describe the same moment. That pair is the invariant — the DIRECTION is
+  // not (with the scripted provider the anchor comes from its synthetic prompt_tokens, so the
+  // number can even rise; with a real one the dropped anchor makes it fall). Without the push
+  // the ring keeps the discarded conversation's size while the popover already has the new one.
+  smoke.click('.ctx-btn')
+  if (!(await smoke.waitFor('.ctx-panel', '明细面板打开', 5000))) return smoke.finish()
+  const detailAfter = detailPct()
+  smoke.click('.ctx-btn')
+  const ringAfter = ringPct()
+  smoke.check('回退后状态栏的上下文占用与明细同口径（环也跟上了回退）',
+    ringAfter !== null && detailAfter !== null && Math.abs(ringAfter - detailAfter) < 0.5,
+    `回退前 环=${ringBefore}% · 回退后 环=${ringAfter}% · 明细=${detailAfter}%`)
 
   // The notice's body is folded behind its own 摘要 toggle (the same part the compaction
   // notices use), so the numbers are a click away — and that click is part of what this
