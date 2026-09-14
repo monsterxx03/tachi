@@ -32,6 +32,15 @@ type RewindTurnVO struct {
 	// refused the snapshot, or the snapshot was pruned). A rewind to it may share
 	// a later turn's snapshot or be refused; the preview says which.
 	NoFiles bool `json:"noFiles,omitempty"`
+	// Reason explains NoFiles when the state is genuinely unknown, as opposed to "nothing
+	// wrote during it". The two are different answers a chooser has to tell apart: one says
+	// the workspace already is what a rewind would produce, the other says nobody recorded it.
+	Reason string `json:"reason,omitempty"`
+	// Diff is what this turn changed, counted from its own two checkpoint trees — nil when it
+	// wrote nothing, Skipped when the numbers could not be taken. It rides along so a LIST of
+	// turns can show real numbers without running git: a preview per row would mean one
+	// `git diff` per row, which is why the chooser reads this instead.
+	Diff *TurnChangesVO `json:"diff,omitempty"`
 }
 
 // RewindRootVO is one workspace root's part of a rewind preview.
@@ -72,6 +81,28 @@ type RewindPreviewVO struct {
 	Blocked string `json:"blocked,omitempty"`
 }
 
+// RewindChainVO is what the rewind-chain surface needs in ONE call: the session's rewind
+// points, and — when the chain as a whole is unusable — why.
+type RewindChainVO struct {
+	// Blocked is why no rewind of this session can run (it was compacted onwards), or "" when
+	// the chain is usable. Non-empty means the list is there to READ: every row would be
+	// refused identically, so the reason belongs at the top, once.
+	Blocked string         `json:"blocked,omitempty"`
+	Turns   []RewindTurnVO `json:"turns,omitempty"`
+}
+
+// RewindChain lists a session's rewind points together with whether the chain can be used at
+// all. No git is run: the per-turn numbers were recorded when each turn ended, and the refusal
+// is a session-link lookup.
+func (s *AgentService) RewindChain(id string) RewindChainVO {
+	d := s.desk
+	ag, refuse := d.agentOf(id)
+	if refuse != "" {
+		return RewindChainVO{Blocked: refuse}
+	}
+	return RewindChainVO{Blocked: ag.RewindChainBlocked(), Turns: s.RewindTurns(id)}
+}
+
 // RewindTurns lists the session's checkpointed turns, oldest first. It returns
 // an empty slice (not an error) when the session has no agent or no checkpoints:
 // "there is nothing to go back to" is an answer the transcript renders as such.
@@ -93,6 +124,8 @@ func (s *AgentService) RewindTurns(id string) []RewindTurnVO {
 			At:       t.At.Format("2006-01-02 15:04:05"),
 			UserText: t.UserText,
 			NoFiles:  t.NoFiles,
+			Reason:   t.Reason,
+			Diff:     turnChangesFromCheckpoint(t.Diff),
 		})
 	}
 	return out

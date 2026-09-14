@@ -29,6 +29,42 @@
   if (!(await runTurn('用 bash 写文件', '写好了。'))) return smoke.finish()
   if (!(await runTurn('第二轮', '第二轮回复。'))) return smoke.finish()
 
+  // ── 回退链：一次看到全部可回退点 ──────────────────────────────────────────
+  // 转录只装最新一页记录，所以链不可能从它来——这份列表来自检查点 manifest。这里先用
+  // ⌘⇧H 打开（会话行右键是另一个入口，回退之后再用一次），验两件事：行的状态与数字，以及
+  // 「点一行 = 打开气泡那张确认卡片」。
+  smoke.key(document.body, 'h', { metaKey: true, shiftKey: true })
+  const chainOpen = await smoke.waitFor(
+    () => (smoke.qa('.rewind-row').length ? smoke.qa('.rewind-row') : null), '⌘⇧H 打开回退链', 6000)
+  smoke.check('⌘⇧H 打开回退链', !!chainOpen, '')
+  if (!chainOpen) return smoke.finish()
+
+  const rows = () => smoke.qa('.rewind-row')
+  smoke.check('链里两轮都在（这一版没有别的入口能看到全部）', rows().length === 2,
+    smoke.allText('.rewind-row-when').join(' | '))
+  smoke.check('最新的一轮排在最上面（从新到旧）',
+    rows().length === 2 && smoke.text(rows()[0]).indexOf('第 2 轮') >= 0, smoke.text(rows()[0]).slice(0, 60))
+  const rowTexts = rows().map((r) => smoke.text(r))
+  smoke.check('只读的那一轮标成「没写文件」', rowTexts[0].indexOf('没写文件') >= 0, rowTexts[0].slice(0, 80))
+  smoke.check('写过文件的那一轮给出检查点的真实数字（2 files +2 −1）',
+    rowTexts[1].indexOf('2') >= 0 && rowTexts[1].indexOf('+2') >= 0 && rowTexts[1].indexOf('−1') >= 0,
+    rowTexts[1].slice(0, 80))
+  smoke.check('链本身就说明了语义（之后的工作会被放弃）',
+    smoke.text('.rewind-chain').indexOf('会被放弃') >= 0, smoke.text('.rewind-chain-why'))
+
+  // 点一行 → 同一张确认卡片（同一套问题：还原什么、删除什么、什么撤不回）。这里不确认，取消。
+  rows()[1].click()
+  if (!(await smoke.waitFor('.confirm-box', '链里选一轮打开确认卡', 5000))) return smoke.finish()
+  const fromChain = smoke.text('.confirm-box')
+  smoke.check('点链里的行打开的是同一张卡片（说明会删除什么）', fromChain.indexOf('删除 1') >= 0, fromChain.slice(0, 160))
+  smoke.check('卡片带着该轮的提示词', fromChain.indexOf('用 bash 写文件') >= 0, fromChain.slice(0, 160))
+  smoke.check('开卡片时链自己关掉（不叠两层）', !smoke.q('.rewind-chain'), '')
+  const cancel = smoke.qa('.confirm-box .btn.ghost')[0]
+  if (!cancel) return smoke.fail('找到取消按钮', '按钮找不到')
+  cancel.click()
+  if (!(await smoke.waitFor(() => !smoke.q('.confirm-box'), '取消后卡片关闭', 3000))) return smoke.finish()
+  smoke.check('取消不动任何东西', smoke.qa('.msg-user').length === 2, String(smoke.qa('.msg-user').length))
+
   const bubbles = smoke.qa('.msg-user')
   smoke.check('两条用户消息都在（第二轮是回退要撤销的那一轮）', bubbles.length === 2, String(bubbles.length))
   if (bubbles.length < 2) return smoke.finish()
@@ -127,6 +163,28 @@
   await smoke.sleep(200)
   const expanded = smoke.text('.chat-content')
   smoke.check('提示说明了文件动过什么', expanded.indexOf('还原 1') >= 0 && expanded.indexOf('删除 1') >= 0, expanded.slice(-160))
+
+  // ── 回退之后，链变短 ─────────────────────────────────────────────────────
+  // A rewind DROPS the turns after its target (an abandoned branch is disposable), so the list
+  // has to lose them too — a chooser still offering 「第二轮」 would promise a return to a
+  // conversation that no longer exists. This is also the session-row menu entry (the other way
+  // in) being exercised.
+  const sessionRow = smoke.qa('.session')[0]
+  if (!sessionRow) return smoke.fail('侧栏有会话行（右键入口要用它）', '找不到 .session')
+  sessionRow.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 90, clientY: 120 }))
+  if (!(await smoke.waitFor('.ctx-menu', '会话行右键菜单出现', 5000))) return smoke.finish()
+  const chainItem = smoke.qa('.ctx-menu .ctx-item').find((b) => b.textContent.indexOf('回退链') >= 0)
+  smoke.check('会话右键菜单里有回退链入口', !!chainItem, smoke.allText('.ctx-menu .ctx-item').join(' | '))
+  if (!chainItem) return smoke.finish()
+  chainItem.click()
+  if (!(await smoke.waitFor('.rewind-chain', '从会话菜单打开回退链', 5000))) return smoke.finish()
+  smoke.check('被放弃的轮次从链里消失（只剩回退到的那一轮）', rows().length === 1,
+    smoke.allText('.rewind-row-when').join(' | '))
+  smoke.check('剩下的就是回退到的那一轮', rows().length === 1 && smoke.text(rows()[0]).indexOf('第 1 轮') >= 0,
+    rows().length ? smoke.text(rows()[0]).slice(0, 60) : '(空)')
+  smoke.key(document.body, 'Escape')
+  const chainClosed = await smoke.waitFor(() => !smoke.q('.rewind-chain'), 'Esc 关掉回退链', 3000)
+  smoke.check('Esc 关掉回退链', !!chainClosed, '')
 
   const input = smoke.q('.composer-input')
   smoke.check('该轮的提示词回到输入框（可以改着重发）',

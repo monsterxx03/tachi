@@ -18,6 +18,7 @@ import {
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
+import { RewindChainOverlay } from './rewindchain'
 import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
@@ -296,6 +297,11 @@ function App() {
   // in flight cannot be deleted) so it lands in the box that asked the question, next to
   // the button that was just pressed — a console-only failure would read as a no-op.
   const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; error?: string } | null>(null)
+  // The rewind chain: this session's rewind points, from the checkpoint manifest. It is a
+  // second ENTRY to the same card (the bubble's menu is the first), not a second rewind path —
+  // hence `turns` here is only what the list renders, and a row's click goes through
+  // openRewindCard like the menu item does.
+  const [chain, setChain] = useState<{ sid: string; title: string; turns: RewindTurnVO[]; blocked?: string } | null>(null)
   // Rewind: the bubble's own menu (with the session's checkpoint boundaries, fetched when
   // it opens) and the confirmation card that shows what would be restored and — more to
   // the point — what would be DELETED, before anything moves.
@@ -942,23 +948,34 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
 
   // openRewindCard asks what the rewind would do and shows it. Nothing is touched here —
   // the preview is a read, and the card is where the reader agrees to it.
-  const openRewindCard = useCallback(async (
-    rt: { kind: string; turn?: number },
-    menu: { sid: string; turns: RewindTurnVO[] | null },
-  ) => {
-    if (rt.kind !== 'ok' || rt.turn == null) return
+  //
+  // It takes (sid, turn) rather than a resolved menu target because there are two ways in — the
+  // bubble's menu and the chain — and they must land on the SAME card: one rewind, one set of
+  // questions (what is restored, what is deleted, what cannot be undone).
+  const openRewindCard = useCallback(async (sid: string, turn: number) => {
     setRewindMenu(null)
-    const turn = rt.turn
     let preview: RewindPreviewVO
     try {
-      preview = await AgentService.PreviewRewind(menu.sid, turn)
+      preview = await AgentService.PreviewRewind(sid, turn)
     } catch (e) {
       // A preview that cannot be read still opens the card: a menu item that closes the
       // menu and shows nothing is indistinguishable from a broken button, and the reason
       // is exactly what the reader needs.
       preview = { turn, target: turn, blocked: `读取回退预览失败：${String(e)}` } as RewindPreviewVO
     }
-    setRewindCard({ sid: menu.sid, turn, preview })
+    setRewindCard({ sid, turn, preview })
+  }, [])
+
+  // openChain lists the session's rewind points. The list comes from the manifest, so it covers
+  // every turn — including the ones whose opening record is not on screen — and opening it runs
+  // no git at all (the per-turn numbers were recorded when each turn ended).
+  //
+  // A chain with NOTHING to do (no checkpoints at all) still opens: the empty state says why,
+  // and 「点了没反应」 is the one outcome a list must never have.
+  const openChain = useCallback(async (sid: string, title: string) => {
+    setMenu(null)
+    const chainVO = await AgentService.RewindChain(sid).catch(() => null)
+    setChain({ sid, title, turns: chainVO?.turns || [], blocked: chainVO?.blocked || '' })
   }, [])
 
   // confirmRewind runs it. A refusal (a running turn, a pruned checkpoint, an
@@ -1040,20 +1057,26 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
         // as "somebody else used this key". An unconditional preventDefault would swallow every
         // Escape before the panel's handler could see it as unclaimed.
-        if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal) e.preventDefault()
+        if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal || chain) e.preventDefault()
         setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setRewindMenu(null)
-        setRewindCard(null); setReminderModal(null)
+        setRewindCard(null); setReminderModal(null); setChain(null)
         return
       }
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
       else if (e.key.toLowerCase() === 'n') { e.preventDefault(); newChat() }
+      // The chain. Shift is what keeps it off ⌘H (macOS hides the window on that one) — and
+      // off anything the app already binds.
+      else if (e.shiftKey && e.key.toLowerCase() === 'h') {
+        e.preventDefault()
+        void openChain(currentId, sessions.find((x) => x.id === currentId)?.title || '会话')
+      }
       else if (e.key === '?' || (e.shiftKey && e.code === 'Slash')) { e.preventDefault(); setShortcutsOpen((v) => !v) }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal])
+  }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -1494,7 +1517,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
               title={rt.kind === 'steer'
                 ? '插话不单独成检查点：请用本轮开头那条消息回退'
                 : rt.kind === 'none' ? '这一轮没有检查点（可能已被裁剪）' : undefined}
-              onClick={() => { void openRewindCard(rt, rewindMenu) }}>回退到这里</button>
+              onClick={() => { if (rt.kind === 'ok' && rt.turn != null) void openRewindCard(rewindMenu.sid, rt.turn) }}>回退到这里</button>
           </div>
         )
       })()}
@@ -1552,6 +1575,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       )}
       {menu && (
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
+          <button className="ctx-item" role="menuitem" onClick={() => { void openChain(menu.sid, sessions.find((x) => x.id === menu.sid)?.title || '会话') }}>回退链…</button>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>
           <button className="ctx-item" role="menuitem" onClick={() => { setEditingId(menu.sid); setEditTitle(sessions.find((x) => x.id === menu.sid)?.title || ''); setMenu(null) }}>重命名</button>
           <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
@@ -1579,6 +1603,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
             <div className="shortcut-section">全局</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话</span></div>
+            <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>
             <div className="shortcut-section">旁路面板 / diff / 文件预览</div>
@@ -1606,6 +1631,9 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       )}
       {turnDiff ? <TurnDiffOverlay sessionId={turnDiff.sessionId} turn={turnDiff.turn} paths={turnDiff.paths}
         onClose={() => setTurnDiff(null)} /> : null}
+      {chain ? <RewindChainOverlay turns={chain.turns} title={chain.title}
+        onPick={(turn) => { const sid = chain.sid; setChain(null); void openRewindCard(sid, turn) }}
+        onClose={() => setChain(null)} /> : null}
     </div>
   )
 }

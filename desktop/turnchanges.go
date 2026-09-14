@@ -107,8 +107,13 @@ func changeSummaryVO(ag *agent.AIAgent, turn int) *TurnChangesVO {
 	return turnChangesFromCheckpoint(diff)
 }
 
-// turnChangesFromCheckpoint maps the checkpoint's own summary into the binding's shape.
+// turnChangesFromCheckpoint maps the checkpoint's own summary into the binding's shape. A nil
+// summary (the turn wrote nothing) maps to nil — the callers' "no numbers for this turn" case,
+// rather than a VO of zeroes that would read as "it changed nothing".
 func turnChangesFromCheckpoint(d *checkpoint.TurnDiff) *TurnChangesVO {
+	if d == nil {
+		return nil
+	}
 	return &TurnChangesVO{
 		Files:   d.Files,
 		Added:   d.Added,

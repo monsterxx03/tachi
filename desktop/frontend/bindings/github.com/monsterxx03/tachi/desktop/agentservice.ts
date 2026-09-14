@@ -395,6 +395,15 @@ export function ReviewChanges(sessionID: string, turn: number, paths: string[] |
 }
 
 /**
+ * RewindChain lists a session's rewind points together with whether the chain can be used at
+ * all. No git is run: the per-turn numbers were recorded when each turn ended, and the refusal
+ * is a session-link lookup.
+ */
+export function RewindChain(id: string): $CancellablePromise<$models.RewindChainVO> {
+    return $Call.ByID(2789526820, id);
+}
+
+/**
  * RewindTurns lists the session's checkpointed turns, oldest first. It returns
  * an empty slice (not an error) when the session has no agent or no checkpoints:
  * "there is nothing to go back to" is an answer the transcript renders as such.

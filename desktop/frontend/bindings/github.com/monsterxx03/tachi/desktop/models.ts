@@ -528,6 +528,20 @@ export interface PlanVO {
 }
 
 /**
+ * RewindChainVO is what the rewind-chain surface needs in ONE call: the session's rewind
+ * points, and — when the chain as a whole is unusable — why.
+ */
+export interface RewindChainVO {
+    /**
+     * Blocked is why no rewind of this session can run (it was compacted onwards), or "" when
+     * the chain is usable. Non-empty means the list is there to READ: every row would be
+     * refused identically, so the reason belongs at the top, once.
+     */
+    "blocked"?: string;
+    "turns"?: RewindTurnVO[] | null;
+}
+
+/**
  * RewindPreviewVO is what a rewind would do, for the confirmation card.
  */
 export interface RewindPreviewVO {
@@ -609,6 +623,21 @@ export interface RewindTurnVO {
      * a later turn's snapshot or be refused; the preview says which.
      */
     "noFiles"?: boolean;
+
+    /**
+     * Reason explains NoFiles when the state is genuinely unknown, as opposed to "nothing
+     * wrote during it". The two are different answers a chooser has to tell apart: one says
+     * the workspace already is what a rewind would produce, the other says nobody recorded it.
+     */
+    "reason"?: string;
+
+    /**
+     * Diff is what this turn changed, counted from its own two checkpoint trees — nil when it
+     * wrote nothing, Skipped when the numbers could not be taken. It rides along so a LIST of
+     * turns can show real numbers without running git: a preview per row would mean one
+     * `git diff` per row, which is why the chooser reads this instead.
+     */
+    "diff"?: TurnChangesVO | null;
 }
 
 /**

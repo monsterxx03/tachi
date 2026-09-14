@@ -258,6 +258,13 @@ func (a *AIAgent) rewindAllowed() error {
 	return nil
 }
 
+// RewindChainBlocked explains why NO rewind of this conversation can run, or "".
+//
+// Exported for the desktop's chain surface, which lists every rewind point at once: a refusal
+// that is true of all of them has to be said once, at the top, instead of being rediscovered by
+// clicking row after row and reading the same sentence each time.
+func (a *AIAgent) RewindChainBlocked() string { return a.rewindBlockedByCompaction() }
+
 // rewindBlockedByCompaction explains why this conversation cannot be rewound at all, or "".
 //
 // Compaction does not rewrite this session — it starts a NEW one that continues from a
