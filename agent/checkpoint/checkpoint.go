@@ -25,6 +25,8 @@ package checkpoint
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -263,7 +265,12 @@ func (m *Manager) SnapshotEnd(ctx context.Context, turn int) error {
 		var ended []RootState
 		for i := range rec.Roots {
 			if rec.Roots[i].EndRef != "" {
-				ended = append(ended, RootState{RootIndex: rec.Roots[i].RootIndex, EndRef: rec.Roots[i].EndRef})
+				// Carries Root/Store so the release lands in the state's OWN store
+				// (see repoFor); only the ref is kept — the START ref is this turn's
+				// rewind point and must survive (see the comment above).
+				st := rec.Roots[i]
+				st.Ref, st.Tree, st.Head, st.EndTree = "", "", "", ""
+				ended = append(ended, st)
 			}
 			rec.Roots[i].EndRef, rec.Roots[i].EndTree = "", ""
 		}
@@ -291,7 +298,7 @@ func (m *Manager) SnapshotEnd(ctx context.Context, turn int) error {
 func (m *Manager) endSnapshotRoots(ctx context.Context, rec *Record, turn int) string {
 	for i := range rec.Roots {
 		rs := &rec.Roots[i]
-		r := m.repoAt(rs.RootIndex)
+		r := m.repoFor(*rs)
 		// The same guards as the start snapshot, and here they matter for a different
 		// reason: this is the first moment a large thing the TURN CREATED is visible, and
 		// storing it is exactly what the byte guard exists to refuse.
@@ -318,7 +325,7 @@ func (m *Manager) diffStat(ctx context.Context, rec Record) (*TurnDiff, error) {
 		if rs.Tree == "" || rs.EndTree == "" {
 			continue
 		}
-		files, added, removed, err := m.repoAt(rs.RootIndex).numstat(ctx, rs.Tree, rs.EndTree)
+		files, added, removed, err := m.repoFor(rs).numstat(ctx, rs.Tree, rs.EndTree)
 		if err != nil {
 			return nil, err
 		}
@@ -356,7 +363,7 @@ func (m *Manager) TurnDiff(ctx context.Context, turn int) ([]RootDiff, bool, err
 		if rs.Tree == "" || rs.EndTree == "" {
 			continue
 		}
-		text, err := m.repoAt(rs.RootIndex).diffText(ctx, rs.Tree, rs.EndTree)
+		text, err := m.repoFor(rs).diffText(ctx, rs.Tree, rs.EndTree)
 		if err != nil {
 			return nil, false, err
 		}
@@ -391,7 +398,7 @@ func (m *Manager) TurnDiffCommand(turn int) string {
 		if rs.Tree == "" || rs.EndTree == "" {
 			continue
 		}
-		r := m.repoAt(rs.RootIndex)
+		r := m.repoFor(rs)
 		cmds = append(cmds, fmt.Sprintf("git --git-dir=%s --work-tree=%s diff %s %s",
 			shellQuote(r.dir), shellQuote(r.root), rs.Tree, rs.EndTree))
 	}
@@ -427,7 +434,7 @@ func (m *Manager) ChangedSinceTurn(ctx context.Context, turn int) ([]RootChanged
 		if rs.EndTree == "" {
 			continue
 		}
-		paths, err := m.repoAt(rs.RootIndex).treeChangedSince(ctx, rs.EndTree)
+		paths, err := m.repoFor(rs).treeChangedSince(ctx, rs.EndTree)
 		if err != nil {
 			return nil, err
 		}
@@ -458,7 +465,8 @@ func (m *Manager) snapshotRoots(ctx context.Context, man *Manifest, turn int) ([
 		return nil, reason
 	}
 	for i, root := range m.roots {
-		r := m.repoAt(i)
+		store := m.storeFor(man, root)
+		r := m.currentRepo(i, store)
 		if err := r.init(ctx); err != nil {
 			return fail("初始化检查点仓库失败: " + err.Error())
 		}
@@ -470,7 +478,7 @@ func (m *Manager) snapshotRoots(ctx context.Context, man *Manifest, turn int) ([
 			return fail(err.Error())
 		}
 		ref := refName(i, turn)
-		parent := m.parentRef(man, i, turn)
+		parent := m.parentRef(man, store, root, turn)
 		if err := r.commitTree(ctx, ref, tree, parent, fmt.Sprintf("turn %d", turn)); err != nil {
 			return fail(err.Error())
 		}
@@ -486,6 +494,7 @@ func (m *Manager) snapshotRoots(ctx context.Context, man *Manifest, turn int) ([
 		states = append(states, RootState{
 			RootIndex: i,
 			Root:      root,
+			Store:     store,
 			Ref:       ref,
 			Tree:      tree,
 			Head:      r.userHead(ctx),
@@ -521,19 +530,35 @@ func (m *Manager) guard(ctx context.Context, r repo) string {
 	return ""
 }
 
-// parentRef finds the commit the new checkpoint should chain to: the newest
-// earlier turn that has a snapshot for this root. Turns are not contiguous —
-// turns that only read record no snapshot — so "the previous turn" is wrong.
-func (m *Manager) parentRef(man *Manifest, rootIndex, turn int) string {
+// parentRef finds the commit the new checkpoint should chain to, and returns ""
+// when it starts a new chain.
+//
+// Turns are not contiguous — turns that only read record no snapshot — so "the
+// previous turn" is wrong: the newest earlier turn with a snapshot for this root is.
+//
+// Both halves of the match are load-bearing:
+//
+//   - by PATH, because an index is a position, not an identity. The previous
+//     record at the same index may describe a different directory entirely (the
+//     session was pointed elsewhere, a root was added or removed), and chaining a
+//     tree to an unrelated one's commit makes the store's history say something
+//     that never happened.
+//   - by STORE, because a ref can only be resolved inside its own repository. A
+//     record from before the path-keyed layout lives in its own (index-derived)
+//     directory: with storeFor, the snapshot stays in that store and this lookup
+//     finds its parent there; without the check, `commit-tree -p <missing ref>`
+//     fails and every later turn pays the refused-snapshot path.
+func (m *Manager) parentRef(man *Manifest, store, root string, turn int) string {
 	for i := len(man.Checkpoints) - 1; i >= 0; i-- {
 		rec := man.Checkpoints[i]
 		if rec.Turn >= turn {
 			continue
 		}
 		for _, rs := range rec.Roots {
-			if rs.RootIndex == rootIndex && rs.Tree != "" {
-				return refName(rootIndex, rec.Turn)
+			if rs.Tree == "" || rs.Root != root || storeOf(rs) != store {
+				continue
 			}
+			return refName(rs.RootIndex, rec.Turn)
 		}
 	}
 	return ""
@@ -608,22 +633,26 @@ func (m *Manager) dropStates(states []RootState) {
 		return
 	}
 	ctx := context.Background()
-	touched := map[int]bool{}
+	// Keyed by STORE, not by index: a state is released in the repository it was
+	// written in (see repoFor), and two states that share an index but not a store
+	// must not be packed through each other's directory.
+	touched := map[string]repo{}
 	for _, rs := range states {
+		r := m.repoFor(rs)
 		for _, ref := range []string{rs.Ref, rs.EndRef} {
 			if ref == "" {
 				continue
 			}
-			if err := m.repoAt(rs.RootIndex).run(ctx, "update-ref", "-d", ref); err != nil {
-				m.opts.Logger.Warn(ctx, "checkpoint: dropping ref failed", "ref", ref, "err", err)
+			if err := r.run(ctx, "update-ref", "-d", ref); err != nil {
+				m.opts.Logger.Warn(ctx, "checkpoint: dropping ref failed", "root", rs.Root, "ref", ref, "err", err)
 				continue
 			}
-			touched[rs.RootIndex] = true
+			touched[r.dir] = r
 		}
 	}
-	for idx := range touched {
-		if err := m.repoAt(idx).gc(ctx); err != nil {
-			m.opts.Logger.Warn(ctx, "checkpoint: gc after prune failed", "root", m.roots[idx], "err", err)
+	for _, r := range touched {
+		if err := r.gc(ctx); err != nil {
+			m.opts.Logger.Warn(ctx, "checkpoint: gc after prune failed", "root", r.root, "err", err)
 		}
 	}
 }
@@ -674,6 +703,9 @@ func (m *Manager) resolveTarget(man *Manifest, turn int) (Record, FileState, str
 		return Record{}, FilesUnknown, fmt.Sprintf("第 %d 轮没有检查点", turn)
 	}
 	if len(rec.Roots) > 0 {
+		if reason := missingRootDirs(rec.Roots); reason != "" {
+			return Record{}, FilesUnknown, reason
+		}
 		return rec, FilesAvailable, ""
 	}
 	if rec.Skipped != "" {
@@ -687,18 +719,114 @@ func (m *Manager) resolveTarget(man *Manifest, turn int) (Record, FileState, str
 			return Record{}, FilesUnknown, later.Skipped
 		}
 		if len(later.Roots) > 0 {
+			if reason := missingRootDirs(later.Roots); reason != "" {
+				return Record{}, FilesUnknown, reason
+			}
 			return later, FilesAvailable, ""
 		}
 	}
 	return Record{}, FilesUnchanged, ""
 }
 
-// repoAt builds the repo handle for a root index.
-func (m *Manager) repoAt(index int) repo {
-	return repo{
-		dir:  filepath.Join(m.dir, fmt.Sprintf("root-%02d", index), "repo.git"),
-		root: m.roots[index],
+// missingRootDirs names the recorded roots a rewind cannot write back to, or ""
+// when all of them are usable.
+//
+// A directory can be gone by the time a rewind runs (it was moved, deleted, or an
+// unmounted volume), and the recorded tree is useless without it. Without this
+// check the failure would surface as a raw git error from inside the restore, or —
+// worse for a path that still exists as something else — as a write into whatever
+// is there now. Refusing with a reason is the same answer the snapshot side gives
+// when a root is unusable, and it is ALL OR NOTHING like the snapshot side too:
+// restoring the roots that are still there would move only part of the workspace
+// to the turn and leave the rest where it is.
+func missingRootDirs(states []RootState) string {
+	var gone []string
+	for _, rs := range states {
+		if rs.Root == "" {
+			continue
+		}
+		if info, err := os.Stat(rs.Root); err != nil || !info.IsDir() {
+			gone = append(gone, rs.Root)
+		}
 	}
+	if len(gone) == 0 {
+		return ""
+	}
+	return "工作区目录已不存在或已不是目录，无法还原文件: " + strings.Join(gone, "、")
+}
+
+// repoFor builds the handle for a RECORDED root state: the store that state was
+// written in, and — the half that used to be wrong — the directory it actually
+// covered.
+//
+// The work tree comes from the RECORD and never from the manager's current root
+// set. Those stop agreeing the moment a session's roots change (a folder picker,
+// an added or removed additional root, a desktop project edit, a git worktree),
+// and the disagreement is silent: restoring a recorded tree into whatever
+// directory now sits at the same position writes one workspace's files into
+// another while the card reports a successful rewind.
+//
+// The store directory comes from the record too (Store, recorded with the root
+// identity fix), with the pre-fix index-derived layout as the fallback for
+// manifests written before it existed.
+func (m *Manager) repoFor(rs RootState) repo {
+	return repo{dir: filepath.Join(m.dir, storeOf(rs), "repo.git"), root: rs.Root}
+}
+
+// storeOf is the store directory name of a recorded state: the one it was written
+// in, or — for a record older than the Store field — the layout that predates it,
+// which is derived from the index that record was taken at.
+func storeOf(rs RootState) string {
+	if rs.Store != "" {
+		return rs.Store
+	}
+	return legacyStoreDir(rs.RootIndex)
+}
+
+// currentRepo builds the handle for a root of THIS manager's root set, in the
+// store the snapshot is to be written to (see storeFor: a path keeps the store it
+// already had, which is what carries a pre-fix session across the change). The
+// work tree of a snapshot is the current root by definition — everything that
+// reads or writes an EXISTING checkpoint goes through repoFor instead, so a rewind
+// can never reach a tree the record did not name.
+func (m *Manager) currentRepo(index int, store string) repo {
+	return repo{dir: filepath.Join(m.dir, store, "repo.git"), root: m.roots[index]}
+}
+
+// legacyStoreDir is the pre-fix store layout: one directory per root POSITION.
+// The position is a sorted, mutable place in the root set, which is exactly why
+// it stopped being the root's identity — see storeDirName. It survives only as
+// the fallback for records written before the fix.
+func legacyStoreDir(index int) string { return fmt.Sprintf("root-%02d", index) }
+
+// storeDirName is a root PATH's own store directory: derived from the path, so a
+// store belongs to a tree rather than to a position in a list. Two directories
+// therefore never share an index cache or a ref namespace, and a record can say
+// where its data lives instead of a reader having to re-derive it.
+func storeDirName(root string) string {
+	sum := sha256.Sum256([]byte(root))
+	return "root-" + hex.EncodeToString(sum[:6])
+}
+
+// storeFor picks the store directory a NEW snapshot of root must be written to:
+// the one an earlier record of the SAME PATH used, if there is one.
+//
+// That lookup is what keeps a session that predates path-keyed stores in its own
+// store: its chain of commits stays unbroken (parentRef resolves inside one store)
+// and its index cache survives, so the first writing turn after the upgrade does
+// not pay for a cold snapshot of the whole tree. A path that has no record yet —
+// including the new tree after a folder change — gets a fresh store of its own,
+// which is the fix: nothing from the tree that used to sit at that position can
+// leak into it.
+func (m *Manager) storeFor(man *Manifest, root string) string {
+	for i := len(man.Checkpoints) - 1; i >= 0; i-- {
+		for _, rs := range man.Checkpoints[i].Roots {
+			if rs.Root == root && rs.Tree != "" {
+				return storeOf(rs)
+			}
+		}
+	}
+	return storeDirName(root)
 }
 
 // normalizeRoots makes the root set absolute, deduplicated, and free of roots

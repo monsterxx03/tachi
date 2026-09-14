@@ -590,6 +590,16 @@ export interface RewindPreviewVO {
     "irreversible"?: string[] | null;
 
     /**
+     * RootMismatch, when set, says the files this rewind would restore belong to a
+     * DIFFERENT workspace than the session has now (the session was pointed at
+     * another folder, a root was added or removed, a project edit, a worktree).
+     * The rewind still restores the tree it recorded, so the card has to say that
+     * the directory on screen is not the one being written — otherwise "the
+     * workspace went back" reads as "the files I am looking at moved".
+     */
+    "rootMismatch"?: string;
+
+    /**
      * Blocked is why this rewind cannot run at all (no checkpoint for that turn,
      * another turn in flight). Non-empty means the card is the whole answer.
      */

@@ -4,6 +4,27 @@
 > 关联：[prompt-cache 手册](agents/prompt-cache.md)（前缀逐字节不变式，本设计的正确性根基）、
 > [desktop 手册](agents/desktop.md)（smoke 与场景约定）
 
+## 已修（2026-09-14）：根身份从「位置」改成「路径」
+
+**曾经的缺陷**：影子仓库目录是 `<session>/checkpoints/root-%02d/repo.git`（按 `root-index`），而
+`normalizeRoots` 里有 `sort.Strings` —— index 是**排序后根集里的位置**，不是根的身份；读的时候
+`repoAt(index).root = m.roots[index]` 又取**当前**根集。于是根集一变（换主目录 / 加删一个附加根 /
+项目编辑 / 切 worktree），旧检查点会 `Restore` 把**旧树记录的内容写进现在这个目录**，
+`Preview` 拿新目录的状态跟旧树的快照比却顶着旧路径的标签。实测复现过：根集 `treeA → treeB` 后回退到
+第 1 轮，`treeB/f.txt` 被写成 `treeA` 的内容，`treeA` 原地未动，卡片却报 `Restored: [f.txt]`。
+
+**现在的规则**（改 checkpoint 的根集解析之前先读这条，实现见
+[2026-09-14-desktop-project-design.md §14](2026-09-14-desktop-project-design.md)）：
+
+- 快照记录它自己的身份：`RootState.Root`（哪棵树）+ `RootState.Store`（哪个影子仓库）。
+- 读取一律走 `repoFor(state)` —— 工作树从**记录**取，永不从当前根集取。
+  `currentRepo` 只用于**给本轮打快照**。
+- 影子仓库按**路径**命名（`storeDirName`），不再按 index；同一路径沿用已有的那个 store
+  （`storeFor`，所以升级不会让老会话付一次冷快照，提交链也不会断）。
+- `parentRef` 按「路径 + store」找父提交：跨路径的 `-p` 要么解析不到 ref，要么把两棵无关的树串成一段历史。
+- 预览在「这一轮记录的工作区 ≠ 当前工作区」时明说（`Preview.RootMismatch`），
+  记录根已消失时给可读原因而不是原始 git 报错。
+
 ## P1 落地（2026-09-14）
 
 落地范围：`agent/checkpoint/`（影子仓库、懒打点、守卫、裁剪、预览、还原）→ agent 接线

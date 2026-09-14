@@ -638,11 +638,12 @@ func TestARefusedEndKeepsTheSessionCheckpointing(t *testing.T) {
 	assert.False(t, exists(root, "b.txt"), "the restored state is the refused turn's start")
 }
 
-// refsAt lists one root's checkpoint refs, so a test can assert what a drop (or a
-// rollback) released rather than trusting the manifest alone.
+// refsAt lists the checkpoint refs in the store that covers the manager's root at
+// index, so a test can assert what a drop (or a rollback) released rather than
+// trusting the manifest alone.
 func (m *Manager) refsAt(t *testing.T, index int) []string {
 	t.Helper()
-	out, err := m.repoAt(index).output(context.Background(), "for-each-ref", "--format=%(refname)")
+	out, err := m.currentRepo(index, storeDirName(m.roots[index])).output(context.Background(), "for-each-ref", "--format=%(refname)")
 	require.NoError(t, err)
 	fields := strings.Fields(out)
 	if fields == nil {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -26,10 +27,18 @@ type Preview struct {
 	// caller say "未还原任何文件" out loud instead of leaving the reader to
 	// assume the workspace moved with the conversation.
 	State FileState `json:"state"`
-	// Skipped is the technical reason State is unhelpful — a guard's wording or
-	// "git is not installed" — for a log line and a diagnosis. It is empty for
-	// FilesUnchanged, which needs no reason: nothing was wrong.
+	// Skipped is the technical reason State is unhelpful — a guard's wording,
+	// "git is not installed", or a recorded workspace that is no longer there —
+	// for a log line and a diagnosis. It is empty for FilesUnchanged, which needs
+	// no reason: nothing was wrong.
 	Skipped string `json:"skipped,omitempty"`
+	// RootMismatch, when set, says the files this rewind would restore belong to a
+	// DIFFERENT workspace than the session has now: the checkpoint's roots are not
+	// the current ones (a folder change, an added or removed additional root, a
+	// desktop project edit, a git worktree). The rewind is still the right one for
+	// those turns — it puts each recorded tree back — but the reader has to know
+	// that the directory on screen is not the one being written.
+	RootMismatch string `json:"root_mismatch,omitempty"`
 	// Irreversible lists side effects inside the rewind's span that it cannot take
 	// back. The git one is DETECTED (see committedSince): the roots' own HEAD,
 	// recorded by the checkpoints, compared against now. The rest of §6's list —
@@ -107,8 +116,14 @@ func (m *Manager) preview(ctx context.Context, turn int) (Preview, error) {
 		return Preview{Turn: turn, State: state, Skipped: reason, Irreversible: irreversible}, nil
 	}
 	p := Preview{Turn: turn, Target: target.Turn, State: state, Irreversible: irreversible}
+	// The tree this rewind will write to is the one the CHECKPOINT recorded, not
+	// the one the session has now (see repoFor). They are usually the same — and
+	// when they are not, the card has to say so: "the workspace went back" would
+	// otherwise read as "the files I am looking at moved", while the directory on
+	// screen is not the one being written.
+	p.RootMismatch = rootMismatch(m.roots, target.Roots)
 	for _, rs := range target.Roots {
-		r := m.repoAt(rs.RootIndex)
+		r := m.repoFor(rs)
 		// The current state has to become a tree before it can be compared: git
 		// cannot see untracked files in a diff against a tree, and a file the
 		// agent created is exactly what a reader needs to be warned about. The
@@ -174,7 +189,7 @@ func (m *Manager) Restore(ctx context.Context, turn int) (Restore, error) {
 
 	out := Restore{Turn: turn, Target: target.Turn, State: state}
 	for _, rs := range target.Roots {
-		r := m.repoAt(rs.RootIndex)
+		r := m.repoFor(rs)
 		cur, err := r.snapshot(ctx)
 		if err != nil {
 			return out, err
@@ -230,41 +245,69 @@ func (m *Manager) committedSince(ctx context.Context, man *Manifest, turn int) [
 		return nil // no checkpoint, so nothing recorded a HEAD to compare against
 	}
 	var out []string
-	for i, root := range m.roots {
-		was, ok := m.headAt(man, i, turn)
-		if !ok {
-			continue // not a git repository, or no commit yet when we looked
-		}
+	for _, st := range recordedHeads(man, turn) {
 		// Only a NEW commit is worth saying. A root whose repository is gone (the
 		// directory was moved or deleted) reports no HEAD at all, and "HEAD moved to
 		// nothing" describes the disappearance rather than a commit — the rewind
 		// will fail on that root by itself, with the real reason.
-		if now := m.repoAt(i).userHead(ctx); now != "" && now != was {
-			out = append(out, fmt.Sprintf("git commit 在 %s（HEAD %s → %s）", root, shortHead(was), shortHead(now)))
+		if now := m.repoFor(st).userHead(ctx); now != "" && now != st.Head {
+			out = append(out, fmt.Sprintf("git commit 在 %s（HEAD %s → %s）", st.Root, shortHead(st.Head), shortHead(now)))
 		}
 	}
 	return out
 }
 
-// headAt returns the user's HEAD for a root as the last checkpoint at or before
-// turn saw it, and whether any recorded one.
+// recordedHeads returns, per root PATH, the newest HEAD the checkpoints recorded at
+// or before turn.
+//
+// Keyed by path rather than by index, because a path is what a repository IS: the
+// same index can name two different directories over a session's life (a folder
+// change, an added root), and comparing the wrong pair would either miss a real
+// commit or invent one.
 //
 // A turn that wrote nothing has no state of its own, and the value that describes
 // it is the newest earlier one: a commit needs Bash, a turn that runs Bash
 // snapshots, so nothing can have committed in between without leaving a record.
-func (m *Manager) headAt(man *Manifest, rootIndex, turn int) (string, bool) {
+func recordedHeads(man *Manifest, turn int) []RootState {
+	seen := map[string]bool{}
+	var out []RootState
 	for i := len(man.Checkpoints) - 1; i >= 0; i-- {
 		rec := man.Checkpoints[i]
 		if rec.Turn > turn {
 			continue
 		}
 		for _, rs := range rec.Roots {
-			if rs.RootIndex == rootIndex && rs.Head != "" {
-				return rs.Head, true
+			if rs.Head == "" || rs.Root == "" || seen[rs.Root] {
+				continue
 			}
+			seen[rs.Root] = true
+			out = append(out, rs)
 		}
 	}
-	return "", false
+	return out
+}
+
+// rootMismatch describes the difference between the roots a checkpoint covers and
+// the session's current ones, as one sentence for a card, or "" when they are the
+// same set.
+//
+// It is compared as a SET: order is not meaningful to a reader ("the workspace is
+// these directories"), and the root set is sorted anyway.
+func rootMismatch(current []string, recorded []RootState) string {
+	was := make([]string, 0, len(recorded))
+	for _, rs := range recorded {
+		if rs.Root != "" {
+			was = append(was, rs.Root)
+		}
+	}
+	sort.Strings(was)
+	now := append([]string(nil), current...)
+	sort.Strings(now)
+	if slices.Equal(was, now) {
+		return ""
+	}
+	return fmt.Sprintf("这一轮记录的工作区是 %s；当前会话的工作区是 %s",
+		strings.Join(was, "、"), strings.Join(now, "、"))
 }
 
 // shortHead trims a commit hash to the part a reader compares while looking at two

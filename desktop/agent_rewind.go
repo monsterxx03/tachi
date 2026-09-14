@@ -76,6 +76,13 @@ type RewindPreviewVO struct {
 	// the agent made being the one that matters. Shown on the card, never
 	// swallowed.
 	Irreversible []string `json:"irreversible,omitempty"`
+	// RootMismatch, when set, says the files this rewind would restore belong to a
+	// DIFFERENT workspace than the session has now (the session was pointed at
+	// another folder, a root was added or removed, a project edit, a worktree).
+	// The rewind still restores the tree it recorded, so the card has to say that
+	// the directory on screen is not the one being written — otherwise "the
+	// workspace went back" reads as "the files I am looking at moved".
+	RootMismatch string `json:"rootMismatch,omitempty"`
 	// Blocked is why this rewind cannot run at all (no checkpoint for that turn,
 	// another turn in flight). Non-empty means the card is the whole answer.
 	Blocked string `json:"blocked,omitempty"`
@@ -240,6 +247,7 @@ func toRewindPreviewVO(p agent.RewindPreview) RewindPreviewVO {
 		UserText:       p.UserText,
 		FilesUnchanged: p.FilesUnchanged,
 		NoFiles:        p.NoFiles,
+		RootMismatch:   p.RootMismatch,
 		Irreversible:   p.Irreversible,
 		Blocked:        p.Blocked,
 	}

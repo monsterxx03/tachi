@@ -90,14 +90,22 @@ type RootChanged struct {
 
 // RootState is one root's snapshot within a checkpoint.
 type RootState struct {
-	// RootIndex is the root's position in the manager's ordered root set; the
-	// repository directory and the ref name are both derived from it, so it is
-	// recorded rather than re-derived from the path (a path that no longer
-	// resolves would silently fall back to index 0 and touch the wrong repo).
+	// RootIndex is the root's position in the manager's ordered root set at the
+	// time of the snapshot. It names the ref, which is why it is recorded rather
+	// than re-derived (a path that no longer resolves would silently fall back to
+	// index 0 and touch the wrong repo).
 	RootIndex int    `json:"root_index"`
 	Root      string `json:"root"`
-	Ref       string `json:"ref"`
-	Tree      string `json:"tree,omitempty"`
+	// Store is the store directory this state's snapshots live in, relative to
+	// <session>/checkpoints. Recorded for the same reason as RootIndex — and more
+	// strictly, because it is what makes a record able to say where its OWN data
+	// is: the layout used to be derived from the index, and the index is a
+	// position in a sorted, mutable root set, so a record and the store a reader
+	// picked for it could name different trees. Empty only on records written
+	// before this field existed (see storeOf).
+	Store string `json:"store,omitempty"`
+	Ref   string `json:"ref"`
+	Tree  string `json:"tree,omitempty"`
 	// Head is the user's own git HEAD when the snapshot was taken, empty when the
 	// root is not a git repository. Recorded because a rewind can restore the
 	// FILES but not the HISTORY: a commit made after this point stays in the log,

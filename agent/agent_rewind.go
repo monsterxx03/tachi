@@ -55,10 +55,19 @@ type RewindPreview struct {
 	FilesUnchanged bool `json:"filesUnchanged,omitempty"`
 	// NoFiles, when set, is why NO file was restored even though the rewind ran:
 	// the recorded state is gone (pruned) or was never taken (a guard refused the
-	// snapshot, git is missing). The conversation still moves — but the card and
-	// the notice say this plainly rather than implying the workspace moved with
-	// it (the design's "must not silently report success").
+	// snapshot, git is missing, the recorded workspace is no longer there). The
+	// conversation still moves — but the card and the notice say this plainly
+	// rather than implying the workspace moved with it (the design's "must not
+	// silently report success").
 	NoFiles string `json:"noFiles,omitempty"`
+	// RootMismatch, when set, says the files this rewind would restore belong to a
+	// different workspace than the session has now: the checkpoint's roots are not
+	// the current ones (the session was pointed at another folder, a root was added
+	// or removed, a desktop project edit, a git worktree checkout). The rewind is
+	// still the right one for those turns — each recorded tree goes back — but the
+	// reader has to know the directory on screen is not the one being written, or
+	// "the workspace went back" reads as "the files I am looking at moved".
+	RootMismatch string `json:"rootMismatch,omitempty"`
 	// Irreversible lists side effects inside the rewind's span that it cannot
 	// take back. A git commit the agent made is the one that is detected (the
 	// roots' own HEAD, recorded by the checkpoints, compared against now — see
@@ -126,6 +135,7 @@ func (a *AIAgent) PreviewRewind(ctx context.Context, turn int) (RewindPreview, e
 		Records:      rec.Records,
 		APIRecords:   rec.APIRecords,
 		Roots:        p.Roots,
+		RootMismatch: p.RootMismatch,
 		Irreversible: p.Irreversible,
 	}
 	// The file half's three outcomes, kept apart on purpose: "here is what to
@@ -375,6 +385,11 @@ func describeRewindPreview(p RewindPreview) string {
 	for _, r := range p.Roots {
 		parts = append(parts, fmt.Sprintf("%s: 改 %d / 删 %d / 增 %d",
 			r.Root, len(r.Changed), len(r.Deleted), len(r.Added)))
+	}
+	if p.RootMismatch != "" {
+		// The tree being written is not the one on screen: the summary has to carry
+		// that, or a log line reads as "the workspace I am looking at went back".
+		parts = append(parts, "注意："+p.RootMismatch)
 	}
 	if len(parts) == 0 {
 		return "回退：文件无变化"

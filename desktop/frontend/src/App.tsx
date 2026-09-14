@@ -1235,13 +1235,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       }
       // The three outcomes of the workspace half, said out loud in the same words the
       // card used — a rewind whose files did not move must never read as one whose
-      // files did.
-      const summary = p.noFiles
+      // files did. The root note rides along: the tree that was restored is not
+      // always the one on screen, and the notice is the last thing the reader sees.
+      const summary = (p.noFiles
         ? `未还原任何文件：${p.noFiles}`
         : p.filesUnchanged
           ? '这一轮之后没有文件改动，工作区无需还原'
           : added + changed + deleted === 0 ? '文件无变化'
-            : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`
+            : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`)
+        + (p.rootMismatch ? `（${p.rootMismatch}）` : '')
       // Appended as its own message rather than through applyToSession: after a rewind the
       // transcript can be EMPTY (every turn was undone), and applyToSession only attaches to
       // the newest RUNNING assistant — so the one moment the notice matters most is the one
@@ -1550,6 +1552,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
             {!rewindCard.preview.blocked && rewindCard.preview.noFiles ? (
               <div className="confirm-error">
                 ⚠ 不会还原任何文件：{rewindCard.preview.noFiles}。对话照样回退，工作区保持现状。
+              </div>
+            ) : null}
+            {/* The tree that would be restored is not always the one on screen: the
+                session may have been pointed elsewhere since that turn. Saying it here,
+                above the list, is what keeps "the workspace went back" from reading as
+                "the files I am looking at moved". */}
+            {!rewindCard.preview.blocked && rewindCard.preview.rootMismatch ? (
+              <div className="rewind-note">
+                ⚠ {rewindCard.preview.rootMismatch}。回退的是那一轮所在的工作区。
               </div>
             ) : null}
             {rewindCard.preview.roots?.length ? (
