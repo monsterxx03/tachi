@@ -10,20 +10,17 @@ expensive, and **before changing anything that shapes a request's prefix**.
 | **What actually caches** | you are about to change the system prompt, the tool list, or how a stored message is rendered |
 | **Where the numbers are** | you need the hit-rate data (or you are about to trust the desktop's ring) |
 | **Reading a drop** | a drop has been reported and you need to locate it |
-| **Baseline** | you want to know whether a number is normal, and what it cost |
+| **Baseline** | you want to know whether a number is normal |
 | **Practical notes** | you are about to run the analysis, or to write it up |
 
-Related: [`.tachi.md`](../../.tachi.md) (the Session History & Reminders invariant),
-[api request recording](../2026-08-15-api-request-recording.md) (what `api_requests.jsonl` records per
-request), [plan-panel design §7](../2026-09-12-desktop-plan-panel-design.md) (the reminder-reconstruction
-family and its measurements).
+Related: [`.tachi.md`](../../.tachi.md) (the Session History & Reminders invariant).
 
 ## What actually caches
 
 The hit that matters is the **provider's own prefix cache**, not the client's markers: `llm/anthropic.go`
-puts `cache_control` on the system prompt only (with a standing `FIXME`), yet 290k-token prefixes hit at
-~99.9% and break exactly where the request's prefix diverges. The prefix is **tools → system → messages**,
-in that order.
+puts `cache_control` on the system prompt only (with a standing `FIXME`), yet long prefixes hit at ~99.9%
+and break exactly where the request's prefix diverges. The prefix is **tools → system → messages**, in that
+order.
 
 Two consequences drive everything below:
 
@@ -51,11 +48,11 @@ the **cached** part; hit rate = `read / (read + input)`. Output tokens are not p
 Two more places, and one display trap:
 
 - `~/.tachi/usage/<date>.jsonl` is the ledger: per-call credit plus the price snapshot it was billed with.
-- **Credit ignores the cache** — it is charged on total tokens, so a cache collapse costs money (the price
-  ratio between a miss and a hit is large; the ledger's own prices are the truth) but barely moves 积分.
+- **Credit ignores the cache** — it is charged on total tokens, so a cache collapse costs money (the ledger's
+  own prices are the truth) but barely moves 积分.
 - The desktop's cache ring (in the usage row under the composer, beside ¥cost and 积分) shows the **last
-  call**, not the session — `desktop/agent_usage.go` takes the final ledger row. One bad call therefore
-  reads as 1.x% while the session cumulative is still ~99%; check the session total before believing the ring.
+  call**, not the session — `desktop/agent_usage.go` takes the final ledger row. Check the session total
+  before believing the ring.
 
 ## Reading a drop (three steps)
 
@@ -81,9 +78,9 @@ is drifting — that is a new defect, not a re-warm.
 ## Baseline — compare against this instead of guessing
 
 - **Restart with an unchanged tool set**: the first call should hit almost everything; only this turn's own
-  reminder + message is new (measured on a ~485k-token prefix: 342 uncached, 99.9%).
+  reminder + message is new.
 - **The restart right after a prefix-shaping fix**: one full re-read is the migration cost, not a regression
-  (measured: 467k uncached on a ~467k-token prefix, ≈ ¥0.47) — it recovers on the next call.
+  — it recovers on the next call.
 - Cheap arithmetic for cost: `uncached × input_price` vs `cached × cache_read_price` from the ledger row
   (the configured ratio is large, so the miss is where the money is).
 
