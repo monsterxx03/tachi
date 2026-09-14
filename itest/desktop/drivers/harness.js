@@ -100,11 +100,14 @@ const smoke = (() => {
   }
   const allText = (sel) => qa(sel).map((e) => e.textContent.replace(/\s+/g, ' ').trim())
 
-  // React inputs ignore `el.value = …`: go through the native setter so onChange fires.
+  // React inputs ignore `el.value = …`: go through the native setter so onChange fires. The
+  // prototype has to match the ELEMENT — a textarea's value setter called on an input throws
+  // (WebIDL receivers are checked), and the composer was the only field this used to drive.
   function type(sel, value) {
     const el = typeof sel === 'string' ? q(sel) : sel
     if (!el) return false
-    Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value').set.call(el, value)
+    const proto = el instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype
+    Object.getOwnPropertyDescriptor(proto, 'value').set.call(el, value)
     el.dispatchEvent(new Event('input', { bubbles: true }))
     return true
   }

@@ -19,6 +19,12 @@ const MARKER = 'SMOKE-REPORT-MARKER'
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
+  // The two keys this driver presses: ⌘F (find) and Esc (its dismissal, and the panel's own).
+  const cmdF = (target) => (target || document.body).dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
+  const esc = (target) => (target || document.body).dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+
   // Timing: the window this scenario needs is [run start, report written], and the driver has to
   // click inside it. These lines say WHEN each step happened, so a run that misses the window
   // reports a number instead of an impression.
@@ -81,6 +87,25 @@ const MARKER = 'SMOKE-REPORT-MARKER'
   // The pane also reports where it read from, and that path is the file the Go half checks.
   smoke.check('报告页标出文件名', !!smoke.q('.oneoff-open-report'),
     smoke.text('.oneoff-meta'))
+
+  // ── ⌘F in the 报告 pane ────────────────────────────────────────────────────
+  // The same panel host as the diff pane, pointed at a different pane: a report is a long
+  // document, and looking for a word in it is what find is for. The marker occurs once in the
+  // report file, so the count is exact rather than "at least one".
+  cmdF()
+  const rbar = await smoke.waitFor('.oneoff-panel .find-bar', '⌘F 在报告页上打开查找条', 5000)
+  smoke.check('⌘F 在报告页上打开查找条', !!rbar, '')
+  smoke.type('.find-bar .find-input', MARKER)
+  const counted = await smoke.waitFor(
+    () => (smoke.text('.find-count') === '1/1' ? smoke.text('.find-count') : null),
+    '报告页里数出 1 处命中', 8000)
+  smoke.check('找到的是报告正文里的那处（1/1）', !!counted, smoke.text('.find-count'))
+  smoke.check('命中画在报告正文里（高亮注册表里有 1 段）',
+    (CSS.highlights.get('tachi-find')?.size || 0) === 1, String(CSS.highlights.get('tachi-find')?.size))
+  esc()
+  const gone = await smoke.waitFor(() => !smoke.q('.find-bar'), 'Esc 关掉报告页的查找条', 3000)
+  smoke.check('Esc 只关查找条，面板与报告页都还在',
+    !!gone && !!smoke.q('.oneoff-panel') && !!smoke.q('.oneoff-open-report'), '')
 
   smoke.finish()
 })()

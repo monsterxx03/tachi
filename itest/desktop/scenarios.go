@@ -146,6 +146,11 @@ const (
 	// smokeReportMarker is a string nothing else in a smoke run produces, so finding it in the
 	// pane proves the text came from the report FILE.
 	smokeReportMarker = "SMOKE-REPORT-MARKER"
+
+	// fileFindLine / fileFindHits: the file that file-find previews repeats ONE line, so both
+	// halves can name the number of hits instead of settling for "some".
+	fileFindLine = "一行笔记，用来被查找。"
+	fileFindHits = 12
 )
 
 // smokeReportMarkdown is the report body the mock writes: the marker plus enough prose that the
@@ -724,6 +729,25 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// ⌘F in a previewed FILE — the third surface that hosts find, next to the diff and the
+		// report. The file repeats one line so the driver can name the count, and it arrives as an
+		// attachment because that is how a file gets a card, and the card is what has the ⤢ that
+		// opens the document viewer.
+		{
+			name: "file-find",
+			files: map[string]string{
+				"LONG.md": "# smoke\n\n" + strings.Repeat(fileFindLine+"\n\n", fileFindHits),
+			},
+			steps: []mockllm.Step{
+				{Reply: sendFileStream("LONG.md", "call_send")},
+				{Reply: textStream("已经把 LONG.md 发给你了。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("一轮对话两次调用（送文件 + 收尾）", len(c.requests) == 2, requestCount(c.requests))
+			},
+		},
+		//
 		// Switching away from a RUNNING session and back: the restored view must land at the
 		// newest message and stay there while the stream keeps writing. The driver measures the
 		// gap to the bottom on every frame across the switch, so the reported "先向上飘再跳到底"
@@ -1204,6 +1228,18 @@ func reportPathIn(req *mockllm.RecordedRequest) string {
 		}
 	}
 	return ""
+}
+
+// sendFileStream is one SendFile call — what puts an attachment card on screen, and with it the
+// card's ⤢ that opens a document viewer (the surface file-find searches).
+func sendFileStream(path, callID string) mockllm.ReplyFunc {
+	args := jsonArgs(map[string]string{"path": path})
+	return mockllm.Stream(
+		mockllm.ToolCallStart(callID, "SendFile", args),
+		mockllm.Finish("tool_calls"),
+		mockllm.UsageWithCache(900, 30, 860, 10),
+		mockllm.Done(),
+	)
 }
 
 // findingStream is one ReportFinding call — the review's structured output, and what the

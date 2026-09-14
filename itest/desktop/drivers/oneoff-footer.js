@@ -10,6 +10,13 @@
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
+  // Two keys this driver presses from several places: Esc (dismissal, and the panel's ownership
+  // dance at the end) and ⌘F (find, which three surfaces now host).
+  const pressEsc = (target) => (target || document.body).dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
+  const pressCmdF = (target) => (target || document.body).dispatchEvent(
+    new KeyboardEvent('keydown', { key: 'f', metaKey: true, bubbles: true, cancelable: true }))
+
   smoke.type('.composer-input', '写一个 NOTES.md')
   smoke.click('.send-btn')
 
@@ -61,6 +68,30 @@
     smoke.qa('.viewer-doc.is-diff .diff-file').every((g) => !g.classList.contains('is-folded')),
     smoke.qa('.viewer-doc.is-diff .diff-file').map((g) => g.className).join(' | '))
   smoke.check('没有评审就没有意见行', !smoke.q('.viewer-doc.is-diff .finding'), '')
+  // ── ⌘F in the diff overlay ─────────────────────────────────────────────────
+  // A diff is the surface find exists for, and this overlay is one of its three hosts (the panel
+  // and a previewed file are the others). NOTES.md's fixture repeats one line 80 times, so the
+  // count is a number rather than "some hits" — and the walk has somewhere to walk to.
+  pressCmdF()
+  const diffBar = await smoke.waitFor('.viewer-overlay .find-bar', '⌘F 在 diff 浮层里打开查找条', 5000)
+  smoke.check('⌘F 在 diff 浮层里打开查找条', !!diffBar, '')
+  smoke.type('.find-bar .find-input', '一行笔记')
+  const diffCount = await smoke.waitFor(
+    () => (smoke.text('.find-count') === '1/80' ? smoke.text('.find-count') : null),
+    '查找条数出 80 处命中', 8000)
+  smoke.check('命中数是这份 diff 里真实的条数（1/80）', !!diffCount, smoke.text('.find-count'))
+  smoke.check('命中画在 diff 正文里（高亮注册表里有 80 段）',
+    (CSS.highlights.get('tachi-find')?.size || 0) === 80, String(CSS.highlights.get('tachi-find')?.size))
+  smoke.key('.find-bar .find-input', 'Enter')
+  const diffWalk = await smoke.waitFor(
+    () => (smoke.text('.find-count') === '2/80' ? smoke.text('.find-count') : null),
+    'Enter 走到下一处命中', 5000)
+  smoke.check('Enter 走到下一处命中（2/80）', !!diffWalk, smoke.text('.find-count'))
+  pressEsc()
+  const diffBarGone = await smoke.waitFor(() => !smoke.q('.find-bar'), 'Esc 关掉查找条', 3000)
+  smoke.check('Esc 关掉查找条，diff 浮层还在（查找条拥有这个键）',
+    !!diffBarGone && !!smoke.q('.viewer-overlay'), '')
+
   smoke.key(document.body, 'Escape')
   const closed = await smoke.waitFor(() => !smoke.q('.viewer-overlay'), 'Esc 关掉浮层', 5000)
   smoke.check('Esc 关掉浮层（viewer 的通用约定）', !!closed, '')
@@ -288,8 +319,6 @@
     const el = document.activeElement
     return el ? (el.className ? '.' + String(el.className).split(' ')[0] : el.tagName) : '(无)'
   }
-  const pressEsc = (target) => (target || document.body).dispatchEvent(
-    new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }))
 
   // (1) The composer has the focus — where /review left it.
   const composerInput = smoke.q('.composer-input')
@@ -327,6 +356,24 @@
     const reopened = await smoke.waitFor('.oneoff-panel', '重新打开面板', 3000)
     smoke.check('重新打开面板（把「开着」留给落盘的断言）', !!reopened, '')
   }
+
+  // ── ⌘F in the PANEL — the same host, a different surface ────────────────────
+  // The panel is ONE find host for all three of its panes (过程 / 意见+diff / 报告): the reader
+  // asks to find in "what I am looking at", and the pane is what decides that. It is showing 意见
+  // with the second run's diff here.
+  pressCmdF()
+  const panelBar = await smoke.waitFor('.oneoff-panel .find-bar', '⌘F 在旁路面板里打开查找条', 5000)
+  smoke.check('⌘F 在旁路面板里打开查找条', !!panelBar, '')
+  smoke.type('.find-bar .find-input', 'NOTES.md')
+  const panelCount = await smoke.waitFor(
+    () => (smoke.text('.find-count').indexOf('/') > 0 ? smoke.text('.find-count') : null),
+    '面板里的查找条报出命中数', 8000)
+  smoke.check('面板里的查找条有命中（diff 的路径里有 NOTES.md）', !!panelCount, smoke.text('.find-count'))
+  smoke.check('命中画在面板正文里（高亮注册表非空）',
+    (CSS.highlights.get('tachi-find')?.size || 0) > 0, String(CSS.highlights.get('tachi-find')?.size))
+  pressEsc()
+  const panelBarGone = await smoke.waitFor(() => !smoke.q('.find-bar'), 'Esc 关掉面板里的查找条', 3000)
+  smoke.check('Esc 只关查找条，面板还在', !!panelBarGone && !!smoke.q('.oneoff-panel'), '')
 
   smoke.finish()
 })()

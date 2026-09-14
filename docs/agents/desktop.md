@@ -56,7 +56,10 @@ exactly one of the two, so write both. **Adding a scenario** = `drivers/<name>.j
 `steps`, the work-dir `files`, an `after` func for the Go-side checks). Keep both halves small: one behaviour
 per scenario, and assert what the user would notice. A scenario that needs settings the shared sandbox config
 does not carry sets `config` — a YAML block appended to the generated `config.yaml`, which is how a
-parked-permission scenario gets its `permissions.bash.ask` rule.
+parked-permission scenario gets its `permissions.bash.ask` rule. `smoke.type` picks the native value setter
+by ELEMENT (textarea vs input): React ignores `el.value = …`, and a textarea's setter called on an input
+throws, so an `<input>` field (the find bar) could not be driven at all until the harness stopped assuming
+the composer's textarea.
 
 ### Manual recipe — only for exploring something the suite does not cover
 
