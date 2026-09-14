@@ -539,6 +539,18 @@ export interface RewindChainVO {
      */
     "blocked"?: string;
     "turns"?: RewindTurnVO[] | null;
+
+    /**
+     * Position is where the conversation currently ends, as a record count. A turn whose
+     * Records equals it is the place the reader is STANDING: a rewind to it was just done (it
+     * IS where they are), and offering it as a destination would promise to undo work that is
+     * no longer there.
+     * 
+     * NO omitempty: 0 is a real position (a rewind to the first turn leaves no records at all),
+     * and dropping it from the JSON makes the frontend read "the field is missing" — which is
+     * the one value it has to keep apart from "unknown".
+     */
+    "position": number;
 }
 
 /**

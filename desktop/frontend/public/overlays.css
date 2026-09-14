@@ -845,6 +845,11 @@
 }
 .rewind-row:hover { background: var(--hover); }
 .rewind-row.is-sel { background: var(--accent-soft); border-color: var(--accent-line); }
+/* The row the reader is standing on: it stays in the timeline (it says where the
+   conversation starts from) but it is not a destination, so it is dimmed like a
+   blocked row and its action is hidden. */
+.rewind-row.is-here { opacity: 1; }
+.rewind-row.is-here .rewind-row-prompt { color: var(--text-dim); }
 .rewind-row.is-blocked { cursor: default; opacity: 0.55; }
 .rewind-row.is-blocked:hover { background: transparent; }
 .rewind-row-when { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
@@ -869,6 +874,8 @@
 /* "Nobody recorded what the workspace looked like": the one state a reader must not
    read past — a rewind to this turn moves the conversation and no file. */
 .rewind-badge.is-unknown { background: var(--hover-2); color: var(--amber); border-color: var(--border-2); }
+.rewind-badge.is-here { background: var(--accent); color: #fff; }
+.rewind-row.is-here .rewind-row-go { display: none; }
 .rewind-row-note { margin-top: 2px; font-size: 11px; color: var(--amber); }
 .rewind-row-stat {
   display: flex;

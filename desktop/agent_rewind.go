@@ -89,6 +89,15 @@ type RewindChainVO struct {
 	// refused identically, so the reason belongs at the top, once.
 	Blocked string         `json:"blocked,omitempty"`
 	Turns   []RewindTurnVO `json:"turns,omitempty"`
+	// Position is where the conversation currently ends, as a record count. A turn whose
+	// Records equals it is the place the reader is STANDING: a rewind to it was just done (it
+	// IS where they are), and offering it as a destination would promise to undo work that is
+	// no longer there.
+	//
+	// NO omitempty: 0 is a real position (a rewind to the first turn leaves no records at all),
+	// and dropping it from the JSON makes the frontend read "the field is missing" — which is
+	// the one value it has to keep apart from "unknown".
+	Position int `json:"position"`
 }
 
 // RewindChain lists a session's rewind points together with whether the chain can be used at
@@ -100,7 +109,17 @@ func (s *AgentService) RewindChain(id string) RewindChainVO {
 	if refuse != "" {
 		return RewindChainVO{Blocked: refuse}
 	}
-	return RewindChainVO{Blocked: ag.RewindChainBlocked(), Turns: s.RewindTurns(id)}
+	vo := RewindChainVO{Blocked: ag.RewindChainBlocked(), Turns: s.RewindTurns(id)}
+	// Where the reader is standing. A rewind cuts the conversation to the target's Records, so
+	// after one the record count equals that turn's Records exactly — which is how the list can
+	// say 「你在这里」 instead of leaving the reader to work out why the node they just went back
+	// to is still on offer.
+	if r := d.getRun(id); r != nil && r.sm != nil {
+		if msgs, err := r.sm.LoadMessages(); err == nil {
+			vo.Position = len(msgs)
+		}
+	}
+	return vo
 }
 
 // RewindTurns lists the session's checkpointed turns, oldest first. It returns

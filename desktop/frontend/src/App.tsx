@@ -301,7 +301,9 @@ function App() {
   // second ENTRY to the same card (the bubble's menu is the first), not a second rewind path —
   // hence `turns` here is only what the list renders, and a row's click goes through
   // openRewindCard like the menu item does.
-  const [chain, setChain] = useState<{ sid: string; title: string; turns: RewindTurnVO[]; blocked?: string } | null>(null)
+  const [chain, setChain] = useState<{
+    sid: string; title: string; turns: RewindTurnVO[]; blocked?: string; position?: number
+  } | null>(null)
   // Rewind: the bubble's own menu (with the session's checkpoint boundaries, fetched when
   // it opens) and the confirmation card that shows what would be restored and — more to
   // the point — what would be DELETED, before anything moves.
@@ -975,7 +977,12 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   const openChain = useCallback(async (sid: string, title: string) => {
     setMenu(null)
     const chainVO = await AgentService.RewindChain(sid).catch(() => null)
-    setChain({ sid, title, turns: chainVO?.turns || [], blocked: chainVO?.blocked || '' })
+    setChain({
+      sid, title, turns: chainVO?.turns || [], blocked: chainVO?.blocked || '',
+      // -1 = the position is unknown (the call failed); 0 is a real one (a rewind to the first
+      // turn leaves no records at all), so the two must not be collapsed.
+      position: chainVO?.position ?? -1,
+    })
   }, [])
 
   // confirmRewind runs it. A refusal (a running turn, a pruned checkpoint, an
@@ -1631,7 +1638,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       )}
       {turnDiff ? <TurnDiffOverlay sessionId={turnDiff.sessionId} turn={turnDiff.turn} paths={turnDiff.paths}
         onClose={() => setTurnDiff(null)} /> : null}
-      {chain ? <RewindChainOverlay turns={chain.turns} title={chain.title}
+      {chain ? <RewindChainOverlay turns={chain.turns} title={chain.title} position={chain.position ?? -1}
         onPick={(turn) => { const sid = chain.sid; setChain(null); void openRewindCard(sid, turn) }}
         onClose={() => setChain(null)} /> : null}
     </div>

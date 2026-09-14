@@ -51,6 +51,12 @@
     rowTexts[1].slice(0, 80))
   smoke.check('链本身就说明了语义（之后的工作会被放弃）',
     smoke.text('.rewind-chain').indexOf('会被放弃') >= 0, smoke.text('.rewind-chain-why'))
+  // 还没回退过：对话伸到所有轮次之后，所以位置是「对话末尾」，没有任何一行被标成「你在这里」。
+  // （这与「位置 = 0」是两回事——后者发生在回退到第一轮之后，行必须被标出来。）
+  const hereRowNow = () => rows().find((r) => smoke.text(r).indexOf('你在这里') >= 0) || null
+  smoke.check('回退之前位置是「对话末尾」，没有行被标成当前位置',
+    smoke.text('.rewind-chain-now').indexOf('对话末尾') >= 0 && hereRowNow() === null,
+    smoke.text('.rewind-chain-now'))
 
   // 点一行 → 同一张确认卡片（同一套问题：还原什么、删除什么、什么撤不回）。这里不确认，取消。
   rows()[1].click()
@@ -218,6 +224,30 @@
 
   const gone2 = await smoke.waitFor(() => smoke.qa('.msg-user').length === 0, '只读的一轮也回退了', 15000)
   smoke.check('只读的一轮同样撤回到了它之前', gone2, String(smoke.qa('.msg-user').length))
+
+  // ── 回退到最新那一轮之后：链要说出「你站在这里」 ────────────────────────────
+  // 这一轮的 records 就是现在对话的末尾，所以它不会被裁掉（没有「之后」可裁），看起来「回退
+  // 了什么都没发生」。链必须说清位置，并且不再把它当成一个目的地——否则它的卡片会承诺撤销
+  // 一批已经不存在的轮次。这正是「回退过一次后链里还有回退前的节点」那一次报告。
+  smoke.key(document.body, 'h', { metaKey: true, shiftKey: true })
+  if (!(await smoke.waitFor('.rewind-chain', '再看一次回退链', 5000))) return smoke.finish()
+  const afterRows = rows()
+  smoke.check('回退到最新那一轮后，链里仍是两轮（没有「之后」可裁）', afterRows.length === 2,
+    smoke.allText('.rewind-row-when').join(' | '))
+  const hereRow = afterRows.find((r) => smoke.text(r).indexOf('你在这里') >= 0)
+  smoke.check('最新那一轮被标成「你在这里」', !!hereRow, hereRow ? smoke.text(hereRow).slice(0, 50) : smoke.allText('.rewind-row-badge'))
+  smoke.check('位置写在最新那一行上', !!hereRow && smoke.text(afterRows[0]).indexOf('你在这里') >= 0,
+    smoke.text(afterRows[0]).slice(0, 50))
+  smoke.check('锚点不再说「对话末尾」（位置就在下面那一行）',
+    smoke.text('.rewind-chain-now').indexOf('第 2 轮的开头') >= 0, smoke.text('.rewind-chain-now'))
+  const hereGo = hereRow && hereRow.querySelector('.rewind-row-go')
+  smoke.check('这一行没有「回退到这里」入口（它不是目的地）',
+    !!hereGo && getComputedStyle(hereGo).display === 'none',
+    hereGo ? getComputedStyle(hereGo).display : '(找不到按钮)')
+  smoke.check('点它也不会打开卡片', (() => { hereRow.click(); return !smoke.q('.confirm-box') })(), '')
+
+  smoke.key(document.body, 'Escape')
+  if (!(await smoke.waitFor(() => !smoke.q('.rewind-chain'), 'Esc 关闭（结尾）', 3000))) return smoke.finish()
 
   smoke.finish()
 })()

@@ -50,10 +50,16 @@ export function chainFileState(t: RewindTurnVO): ChainFileState {
   return 'unchanged'
 }
 
-export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
+export function RewindChainOverlay({ turns, title, position, blocked, onPick, onClose }: {
   // The session's checkpoints, oldest first (the order the backend lists them in).
   turns: RewindTurnVO[]
   title: string
+  // Where the conversation currently ends, as a record count (RewindChainVO.Position). The turn
+  // whose `records` equals it is the place the reader is STANDING — right after a rewind that is
+  // the turn they went back to, and it must not be offered as a destination: its card would
+  // promise to undo work that is no longer there. It stays in the list because it still says
+  // where the conversation starts from.
+  position: number
   // blocked, when set, is why this session cannot be rewound at all (it was compacted onwards):
   // the list is then shown for reading with every row disabled, and the reason is said once at
   // the top instead of being rediscovered per click. It comes from the same call as `turns`
@@ -63,6 +69,19 @@ export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
   onClose: () => void
 }) {
   const newestFirst = useMemo(() => [...turns].reverse(), [turns])
+  // Which row the reader is standing on, if any: `position` is a record count, and a checkpoint
+  // records exactly that at the point its turn began.
+  //
+  // Three things make this less obvious than it looks. 0 is a REAL position (a rewind to the
+  // first turn cuts the conversation to nothing — that is what going back to before it means),
+  // so "no position known" is -1, not 0. Two turns can share one count (everything between
+  // them having been cut away already), and the one to mark is the NEWEST — the end of the
+  // conversation is the last turn that starts there. And no match at all is the normal state
+  // before any rewind: the conversation simply reaches past every turn.
+  let here = 0
+  for (const t of turns) {
+    if (position >= 0 && t.records === position) here = t.turn
+  }
   const [expanded, setExpanded] = useState(false)
   const shown = expanded ? newestFirst : newestFirst.slice(0, REWIND_CHAIN_TAIL)
   const hidden = newestFirst.length - shown.length
@@ -77,7 +96,9 @@ export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
     el?.scrollIntoView({ block: 'nearest' })
   }, [sel])
 
-  const pick = (turn: number) => { if (!blocked) onPick(turn) }
+  // A row the reader is standing on is not a destination (see `position`): picking it would open
+  // a card about undoing turns that do not exist any more.
+  const pick = (turn: number) => { if (!blocked && turn !== here) onPick(turn) }
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'ArrowDown') { e.preventDefault(); setSel((s) => Math.min(s + 1, shown.length - 1)) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setSel((s) => Math.max(s - 1, 0)) }
@@ -113,7 +134,12 @@ export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
           </div>
         ) : null}
 
-        <div className="rewind-chain-now"><span>现在 · 对话末尾</span></div>
+        {/* The anchor line: where the reader is. "末尾" is only true when nothing in the list
+            claims the current position — after a rewind the conversation ends at that turn's
+            START, and saying 末尾 there is what made a rewind look like it did nothing. */}
+        <div className="rewind-chain-now">
+          <span>{here ? `现在 · 第 ${here} 轮的开头（下面那一行）` : '现在 · 对话末尾'}</span>
+        </div>
 
         {shown.length === 0 ? (
           <div className="rewind-chain-empty">
@@ -124,10 +150,12 @@ export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
         <div className="rewind-chain-list">
           {shown.map((t, i) => {
             const state = chainFileState(t)
+            const isHere = t.turn === here
             const cls = [
               'rewind-row',
               i === sel ? 'is-sel' : '',
-              blocked ? 'is-blocked' : '',
+              blocked || isHere ? 'is-blocked' : '',
+              isHere ? 'is-here' : '',
             ].filter(Boolean).join(' ')
             return (
               <div key={t.turn} className={cls} data-row={i} role="button" tabIndex={-1}
@@ -140,6 +168,9 @@ export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
                 <div className="rewind-row-what">
                   <div className="rewind-row-prompt">{t.userText || '(没有记录提示词)'}</div>
                   <div className="rewind-row-badges">
+                    {isHere ? (
+                      <span className="rewind-badge is-here">你在这里</span>
+                    ) : null}
                     {state === 'files' ? (
                       <span className="rewind-badge is-files">可还原 {t.diff!.files} 个文件</span>
                     ) : null}
@@ -166,7 +197,8 @@ export function RewindChainOverlay({ turns, title, blocked, onPick, onClose }: {
                   ) : (
                     <span className="rewind-row-num is-none">—</span>
                   )}
-                  <button type="button" className="rewind-row-go" disabled={!!blocked}
+                  <button type="button" className="rewind-row-go" disabled={!!blocked || isHere}
+                    title={isHere ? '你已经在这一轮的开头：这里就是你现在的位置' : undefined}
                     onClick={(e) => { e.stopPropagation(); pick(t.turn) }}>回退到这里</button>
                 </div>
               </div>
