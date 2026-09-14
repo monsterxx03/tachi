@@ -187,9 +187,20 @@ export function PreBlock(props: ComponentPropsWithoutRef<'pre'>) {
 // source — the thing you actually want out of a diagram.
 function MermaidViewer({ svg, code, onClose }: { svg: string; code: string; onClose: () => void }) {
   const stageRef = useRef<HTMLDivElement>(null)
+  const paperRef = useRef<HTMLDivElement>(null)
   const { zoom, pan, fit, zoomBy, reset, onWheel } = useZoomPan(stageRef)
   useViewerZoomKeys({ fit, reset, zoomBy })
-  useEffect(() => { fit() }, [fit])
+  useEffect(() => {
+    // Mermaid leaves `width="100%"` on its SVG and writes the diagram's NATURAL width into its
+    // own inline style (`max-width: 1128px`). Inside this max-content paper the percentage falls
+    // back to the replaced-element default (300px), so the diagram was laid out at 300x17 while
+    // the message showed it at 708x40 — and "1:1" meant 300. Make the natural width definite
+    // BEFORE fitting, so 1:1 is the diagram's real size and fit measures something meaningful.
+    const el = paperRef.current?.querySelector('svg')
+    const natural = el?.style.maxWidth
+    if (el && natural) el.style.width = natural
+    fit()
+  }, [fit, svg])
 
   return (
     <ViewerOverlay label="Mermaid 图表" stageRef={stageRef} onClose={onClose}
@@ -201,7 +212,7 @@ function MermaidViewer({ svg, code, onClose }: { svg: string; code: string; onCl
         <CopyButton title="复制 mermaid 源码" getText={() => code} />
         <CloseButton onClose={onClose} />
       </>}>
-      <div className="viewer-zoom viewer-zoom-paper" style={{ zoom }} dangerouslySetInnerHTML={{ __html: svg }} />
+      <div ref={paperRef} className="viewer-zoom viewer-zoom-paper" style={{ zoom }} dangerouslySetInnerHTML={{ __html: svg }} />
     </ViewerOverlay>
   )
 }

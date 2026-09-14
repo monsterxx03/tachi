@@ -536,6 +536,18 @@ const type = (el, t) => {
   is left alone). Both halves are pinned by `oneoff-report`, whose first checks are red when only the list
   half is missing and whose report checks are red when only the read is.
 
+- **The lightbox's fit() measures the WINDOW, not the stage** (`desktop/frontend/src/viewer.tsx`): the stage is
+  a flex item with `margin: auto`, so it hugs its content instead of filling the overlay — fitting to that box
+  can only shrink (measured: a diagram 708px wide in the message gave a 336×53 stage inside a 1200×780
+  lightbox, so fit chose 0.245× and the diagram opened 73px wide, smaller than the message it was clicked
+  from). `viewerArea` reads the overlay's padding box instead. Two more traps come with the same feature:
+  (1) a mermaid SVG carries `width="100%"` plus its natural size in its own inline `max-width`, and inside a
+  `width: max-content` paper that percentage falls back to the replaced-element default (300px) — so "1:1"
+  meant 300px until `MermaidViewer` copies that max-width into an explicit width; (2) **`getBoundingClientRect`
+  inside a CSS-zoomed subtree is in PRE-zoom units** in this WebKit (probe: at zoom 3 the paper reads 303
+  while its unzoomed parent reads 909), so a reading of "how big is it on screen" must multiply by the zoom —
+  `mermaid-zoom` computes it that way, and its first version was fooled by exactly that into thinking a 0.245×
+  diagram was 298px wide.
 - **⌘F searches a SURFACE, not the page** (`desktop/frontend/src/find.tsx`): the diff pane, a previewed file
   and a review's report each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not
   scroll the transcript behind it. The side panel is ONE host covering its three panes (过程 / 意见+diff /

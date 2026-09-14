@@ -971,6 +971,27 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		//
+		// mermaid-zoom: a diagram rendered in a reply, clicked open. The lightbox has to show it
+		// BIGGER than the message did — that is the whole point of clicking it. It is measured in
+		// three places (the inline svg, the same svg in the overlay, the stage) because "it opened
+		// tiny" can come from either end: a fit that computed wrong, or a diagram that never got
+		// its intrinsic size inside the overlay.
+		{
+			name: "mermaid-zoom",
+			files: map[string]string{
+				"README.md": "# smoke\n\nmermaid-zoom scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// Wide on purpose (six nodes in a row): a diagram that already fills the message
+				// area is the case where "the overlay shows it smaller" is obvious.
+				{Reply: textStream("先看一张图：\n\n```mermaid\ngraph LR\n  A[读取配置] --> B[校验]\n  B --> C[建索引]\n  C --> D[跑任务]\n  D --> E[写报告]\n  E --> F[通知]\n```\n\n图看完了。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("一轮对话调用了一次模型", len(c.requests) == 1, requestCount(c.requests))
+			},
+		},
 		// Plan step write-back: the same plan_id twice, statuses advancing. The UI must show
 		// the SAME document moving 0/3 → 1/3, and the disk must hold exactly one plan file —
 		// two files would mean the model forked the plan instead of updating it.

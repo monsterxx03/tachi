@@ -70,9 +70,16 @@ export function useDragPan(ref: RefObject<HTMLElement | null>) {
 // useZoomPan is the zoom half of the lightbox: it scales the stage's single
 // scalable child and wires wheel, buttons and drag together.
 //
-// fit() measures that child at zoom 1 (its own layout size) and scales it to the
-// stage — one implementation for a diagram, a screenshot or any other block that
+// fit() measures that child at zoom 1 (its own layout size) and scales it to the space the
+// lightbox OFFERS — one implementation for a diagram, a screenshot or any other block that
 // should open "as large as it fits" rather than at an arbitrary 100%.
+//
+// The offered space is the overlay's padding box, NOT the stage's own: the stage is a flex item
+// with `margin: auto`, so it hugs its content instead of filling the window. Measuring it made
+// fit() scale everything DOWN, because a content-fitting box is by definition no larger than its
+// content and the margin is subtracted from it (measured: a diagram 708px wide in the message
+// gave a 336x53 stage inside a 1200x780 lightbox, so fit chose 0.245x — the diagram opened 73px
+// wide, smaller than in the message it was clicked from, which is precisely backwards).
 export function useZoomPan(stageRef: RefObject<HTMLElement | null>) {
   const [zoom, setZoom] = useState(1)
   const pan = useDragPan(stageRef)
@@ -80,14 +87,15 @@ export function useZoomPan(stageRef: RefObject<HTMLElement | null>) {
   const fit = useCallback(() => {
     const stage = stageRef.current
     const el = stage?.firstElementChild as HTMLElement | null
-    if (!stage || !el) return
+    const area = viewerArea(stage)
+    if (!stage || !el || !area) return
     setZoom(1)
     // Measure once the browser has applied zoom 1, or the rect is still the
     // zoomed one.
     requestAnimationFrame(() => {
       const r = el.getBoundingClientRect()
-      if (!r.width || !r.height || !stage.clientWidth || !stage.clientHeight) return
-      setZoom(clampZoom(Math.min((stage.clientWidth - VIEWER_FIT_MARGIN) / r.width, (stage.clientHeight - VIEWER_FIT_MARGIN) / r.height)))
+      if (!r.width || !r.height || !area.w || !area.h) return
+      setZoom(clampZoom(Math.min((area.w - VIEWER_FIT_MARGIN) / r.width, (area.h - VIEWER_FIT_MARGIN) / r.height)))
     })
   }, [stageRef])
 
@@ -111,6 +119,20 @@ export function useZoomPan(stageRef: RefObject<HTMLElement | null>) {
 // VIEWER_FIT_MARGIN is the breathing room fit() leaves around the content, so a
 // diagram fitted to the window is not glued to the backdrop.
 const VIEWER_FIT_MARGIN = 40
+
+// viewerArea is the space a viewer actually has: the overlay's padding box (the overlay is the
+// stage's parent — see ViewerOverlay), not the stage's content-fitting box. Returns null when
+// the stage is detached.
+function viewerArea(stage: HTMLElement | null): { w: number; h: number } | null {
+  const overlay = stage?.parentElement
+  if (!overlay) return null
+  const cs = getComputedStyle(overlay)
+  const px = (v: string) => parseFloat(v) || 0
+  return {
+    w: overlay.clientWidth - px(cs.paddingLeft) - px(cs.paddingRight),
+    h: overlay.clientHeight - px(cs.paddingTop) - px(cs.paddingBottom),
+  }
+}
 
 // useViewerZoomKeys binds the lightbox zoom keys: +/−, 0 for 1:1 and 1 to fit.
 // Registered in the capture phase and stopped there, so a viewer sitting over the
