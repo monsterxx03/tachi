@@ -391,7 +391,17 @@ const type = (el, t) => {
   pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip
   (`ProcessStrip`, `components.tsx`) standing in for its thinking blocks, tool cards and intermediate
   messages, the turn's LAST prose, and the parts that must never be hidden: a FAILED call, the call a
-  permission card is parked on, the call an AskUserQuestion form waits on, and notices. A call that is
+  permission card is parked on, the call an AskUserQuestion form waits on, and notices. **Intermediate
+  prose (any but the LAST `text`) is folded whether or not the turn failed** — an exposed failure card
+  does not drag its own round's text out with it, and the recall affordance is the strip's
+  「含 N 段过程说明」; asked about once as a bug (「失败卡还在，上一轮的正文却被折了」), `transcript-fold`
+  pins both directions (a failing turn and a failure-free control turn). **A steer splits the turn**, and
+  therefore the fold: `injectSteerVisual` seals the currently streaming segment and opens a fresh assistant
+  message for what follows, so each segment folds on its own — the prose before a steer becomes THAT
+  segment's conclusion (and is thus visible, where the same prose in a steer-less turn would usually be
+  folded), step counts are per segment (N steers = N+1 strips), and a rebuild splits in the same place
+  (the steer is a user record with `iteration > 0`). Pinned by `steer-fold`, whose Go half also proves the
+  steered text reached the model as the next request's user message. A call that is
   merely RUNNING is not among them — the live row reports it, an exposed card appeared and vanished once
   per step and made the prose jump, and a call parked on a form is waiting rather than running. `TurnPart` stays atomic because `oneoff.tsx` replays the very same parts and exists to show
   them all — a change there would make the side panel lose the process it is for. The open/closed state is

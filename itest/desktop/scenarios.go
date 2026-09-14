@@ -171,17 +171,6 @@ func bashStream(cmd, id string) mockllm.ReplyFunc {
 	)
 }
 
-// readStream is one ReadFile tool call — used to produce a step that FAILS (an error tool
-// result is what turns a card red and a turn's strip red with it).
-func readStream(path, id string) mockllm.ReplyFunc {
-	return mockllm.Stream(
-		mockllm.ToolCallStart(id, "ReadFile", `{"path":"`+path+`"}`),
-		mockllm.Finish("tool_calls"),
-		mockllm.UsageWithCache(1500, 40, 1400, 10),
-		mockllm.Done(),
-	)
-}
-
 func scenarios() []scenario {
 	return []scenario{
 		//
@@ -235,6 +224,49 @@ func scenarios() []scenario {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				_, queued := c.requestSeen("插队：先做这件")
 				c.check("排队的那条作为下一轮 user 消息到达模型", queued, "")
+			},
+		},
+		//
+		// 插话（steer，不是"立即发送"）：回合进行中排队的那条，在**工具调用的间隙**被自动插入。
+		// 它同时改变折叠的形状——`injectSteerVisual` 把这一轮切成两段（两条助手消息），每段按自己
+		// 的 parts 折叠：于是"插话之前那段正文"成了它那一段的**结论**（恒显），而"插话之后那段的
+		// 中间正文"照旧折起来。这一条正是"steer 会不会改变折叠行为"的答案，两个方向都要断。
+		//
+		{
+			name: "steer-fold",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe steer-fold scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// 第 1 段：正文 + 一条慢命令。sleep 3 是给驱动的窗口——它必须在这条命令还在跑的时候
+				// 把插话排进队列，插话才会走 steer 这条路（而不是回合结束后的自动补发）。
+				{Reply: mockllm.Stream(
+					mockllm.Text("第一段：先跑一条慢命令。"),
+					mockllm.ToolCallStart("call_s1", "Bash", `{"command":"sleep 3 && echo steer-ok"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				// 第 2 段（插话之后）：正文 + 一条命令。这段的正文是"中间说明"，收尾结论另有一段。
+				{Reply: mockllm.Stream(
+					mockllm.Text("收到插话了：这是插话之后那一段的开头。"),
+					mockllm.ToolCallStart("call_s2", "Bash", `{"command":"echo steer-after"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("两段都跑完了。", 1200)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("三次调用（两段 + 收尾）", len(c.requests) == 3, requestCount(c.requests))
+				// 插话在**第 2 次**请求里到达模型：requestSeen 返回第一处命中的序号，所以这条同时
+				// 证明它没有出现在第 1 次（那才是"已经插进去了"）。
+				at, steered := c.requestSeen("插队这条：先做这件")
+				c.check("插话作为下一轮的 user 消息注入（第 2 次请求）", steered && at == 2,
+					fmt.Sprintf("命中第 %d 次请求", at))
+				_, ran := c.requestSeen("steer-ok")
+				c.check("慢命令真的执行过", ran, "")
 			},
 		},
 		//
@@ -912,14 +944,47 @@ permissions:
 				"README.md": "# smoke\n\nthe transcript-fold scenario's working directory\n",
 			},
 			steps: []mockllm.Step{
-				{Reply: bashStream("echo transcript-fold-ok", "call_f1")},
-				// 相对路径 → 落在沙箱工作目录里：这个"读不到"是 fixture 保证的，不是靠机器上恰好没有。
-				{Reply: readStream("missing-file.txt", "call_f2")},
+				// 第 1 轮：一段正文 + 一条成功命令。这段正文是"中间说明"——它会（也应该）被折进过程条。
+				{Reply: mockllm.Stream(
+					mockllm.Text("第一步：先跑一条命令。"),
+					mockllm.ToolCallStart("call_f1", "Bash", `{"command":"echo transcript-fold-ok"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				// 第 2 轮：一段正文 + 一次读不到文件的失败调用。这里钉住那个容易看成 bug 的形状：
+				// 失败卡外露，但它**同一轮的正文**（"上一轮的输出"）照样折进过程条——折叠规则与
+				// 失败无关，不是"失败了就把正文藏了"。相对路径 → 落在沙箱工作目录里：这个"读不到"
+				// 是 fixture 保证的，不是靠机器上恰好没有。
+				{Reply: mockllm.Stream(
+					mockllm.Text("第二步：读一个不存在的文件。"),
+					mockllm.ToolCallStart("call_f2", "ReadFile", `{"path":"missing-file.txt"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
 				{Reply: textStream("两步都处理完了。", 1200)},
+				// 对照轮（整轮无失败）：中间说明同样折起来。没有这一段，"折起来是不是因为失败"就
+				// 只能靠读代码回答。
+				{Reply: mockllm.Stream(
+					mockllm.Text("对照轮第一步：先跑一条命令。"),
+					mockllm.ToolCallStart("call_c1", "Bash", `{"command":"echo control-ok-1"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: mockllm.Stream(
+					mockllm.Text("对照轮第二步：再跑一条命令。"),
+					mockllm.ToolCallStart("call_c2", "Bash", `{"command":"echo control-ok-2"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("对照轮的收尾结论。", 1200)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				c.check("三步都跑到了", len(c.requests) == 3, requestCount(c.requests))
+				c.check("两轮共六次调用", len(c.requests) == 6, requestCount(c.requests))
 				_, ran := c.requestSeen("transcript-fold-ok")
 				c.check("成功那一步真的执行了", ran, "")
 			},
