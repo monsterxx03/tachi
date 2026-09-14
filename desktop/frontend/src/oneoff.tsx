@@ -9,7 +9,7 @@
 // Design: docs/2026-09-12-desktop-oneoff-panel-design.md §5
 
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { AgentService, type OneOffDetailVO, type OneOffRequestVO, type OneOffVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import { AgentService, type FilePreviewVO, type OneOffDetailVO, type OneOffRequestVO, type OneOffVO, type TurnDiffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { OneOffRun } from './agentEvents'
 import { buildTurns, fmtDur, fmtTime } from './lib'
 import { TurnPart } from './parts'
@@ -94,6 +94,18 @@ function oneOffLabel(it: OneOffVO, busy: boolean): string {
 
 export type OneOffApi = ReturnType<typeof useOneOffs>
 
+// reportMissNote is what the 报告 pane says when the read produced no text. The kinds are the
+// ones desktop/preview.go decides (the attachment card reads the same table), and the path
+// travels with the sentence because "which file we were pointed at" is the fact a reader needs
+// when it is not where the record said it would be.
+function reportMissNote(vo: FilePreviewVO | null | undefined, file: string): string {
+  if (!vo) return `报告读不出来：${file}`
+  if (vo.kind === 'missing') return `报告还没写出来（磁盘上还没有这个文件）：${file}`
+  if (vo.error) return `无法读取报告（${vo.error}）：${file}`
+  if (!vo.previewable) return `报告是 ${vo.kind}，这里预览不了：${file}`
+  return `报告是空的：${file}`
+}
+
 // OneOffTab is which pane the panel is showing. The findings/diff pane and the report pane
 // exist for the runs that have them; a run that only produced prose shows 过程 alone.
 export type OneOffTab = 'flow' | 'findings' | 'report'
@@ -128,7 +140,17 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   // The report's text, tagged with the run it was read for. The text is a FILE fetched by name,
   // and the 报告 pane stays open across a switch in the switcher — so a cache without the run's
   // key would print one run's report under another run's file line, and refuse to refetch.
+  //
+  // ONLY a read that produced text is stored. The report's PATH is recorded when the run STARTS
+  // (it is what the round's prompt tells the model to write), so the pane is openable against a
+  // file that does not exist yet — and "not there yet" is a fact about this moment, not about
+  // the run. Storing it under the run's key would freeze the pane on that answer for good, since
+  // the key is what the reads below read as "already have it".
   const [report, setReport] = useState<{ key: string; text: string } | null>(null)
+  // Why a read produced no text, keyed the same way: the reason is the only thing that tells a
+  // file that is not written yet, one that cannot be read and one that is genuinely empty apart
+  // (the diff pane's diffError says the same thing on its own surface).
+  const [reportMiss, setReportMiss] = useState<{ key: string; note: string } | null>(null)
 
   // selectedRef mirrors the selection so a reply can be matched against it: a load for a run
   // the reader has already left must not land on top of the new one (the poll makes this
@@ -136,12 +158,14 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   const selectedRef = useRef('')
   selectedRef.current = selected
 
-  const refresh = useCallback(async (sid: string): Promise<OneOffVO[]> => {
+  const refresh = useCallback(async (sid: string, silent = false): Promise<OneOffVO[]> => {
     if (!sid) {
       setItems([]); setNote('还没有会话'); setSelected(''); setDetail(null)
       return []
     }
-    setListLoading(true)
+    // `silent` is what the live follow passes: it re-reads the list every second or so, and a
+    // poll must not flip the panel back into its "读取中…" state each time.
+    if (!silent) setListLoading(true)
     setError('')
     try {
       const res = await AgentService.ListOneOffs(sid)
@@ -156,7 +180,7 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
       setItems([]); setNote(''); setError('读取旁路记录失败：' + String(e)); setSelected('')
       return []
     } finally {
-      setListLoading(false)
+      if (!silent) setListLoading(false)
     }
   }, [])
 
@@ -189,23 +213,40 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
     void loadDetail(selected)
   }, [open, sessionId, selected, loadDetail])
 
-  // A run started: re-read the menu (its record exists from the first line) and select it, so
-  // the panel is already showing the run the reader just launched.
+  // A run started. The panel is opened BY that event, and the run's record FILE is created a
+  // moment AFTER it (the backend emits "start" before it opens the recorder), so a list read at
+  // this instant comes back empty. Nothing else on this panel re-reads the list while a run is
+  // going — and with nothing selected there is no record to follow either, because the detail
+  // poll asks for `selected` — so the whole run hides behind 「这个会话还没有旁路运行（评审、提交）」.
+  // The live follow therefore watches the LIST as well as the record.
+  //
+  // seenNewest is the newest record the panel has already accounted for. At the start that is
+  // whatever was newest THEN (not this run: its record does not exist yet), and a newest that
+  // CHANGES is this run's record landing. Comparing names rather than times leaves the reader's
+  // own pick from the switcher alone — nothing here drags them off a run they chose.
+  const seenNewest = useRef('')
   useEffect(() => {
     if (!open || !live) return
-    void (async () => {
-      const list = await refresh(sessionId)
-      if (list[0]) setSelected(list[0].name)
-    })()
-  }, [open, live?.at, sessionId, refresh])
-
-  // While it runs, follow the record. ONE_OFF_LIVE_POLL_MS is fast enough to watch the run
-  // work and slow enough that re-reading a few hundred KB costs nothing.
-  useEffect(() => {
-    if (!open || !live) return
-    const t = window.setInterval(() => { void loadDetail(selectedRef.current, true) }, ONE_OFF_LIVE_POLL_MS)
+    let first = true
+    const attach = async () => {
+      const list = await refresh(sessionId, true)
+      const newest = list[0]?.name || ''
+      if (first) {
+        first = false
+        seenNewest.current = newest
+        if (newest) setSelected(newest)
+      } else if (newest && newest !== seenNewest.current) {
+        seenNewest.current = newest
+        setSelected(newest)
+      }
+      // The record follows on its own poll: fast enough to watch the run work, slow enough that
+      // re-reading a few hundred KB costs nothing.
+      void loadDetail(selectedRef.current, true)
+    }
+    void attach()
+    const t = window.setInterval(() => void attach(), ONE_OFF_LIVE_POLL_MS)
     return () => window.clearInterval(t)
-  }, [open, live, loadDetail])
+  }, [open, live, sessionId, refresh, loadDetail])
 
   // It ended: one last read. The final poll may have caught the record mid-write, and the
   // tail of a run is exactly what a reader came for.
@@ -280,24 +321,74 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
     return () => { alive = false }
   }, [tab, sessionId, runKey, pathsKey])
 
-  // openReport renders the run's report in place: a file read through the same PreviewFile the
-  // attachment preview uses, then the app's markdown renderer. No overlay — this panel is where
-  // the report belongs.
-  const openReport = useCallback(async () => {
-    setTab('report')
-    const file = detail?.header.report
-    if (!file || !runKey || report?.key === runKey) return
+  // openReport shows the pane; readReport does the reading. The read is driven by the PANE and
+  // not by the click: every fact that can change the answer — which run is selected, whether the
+  // pane is showing, whether the run is still going — has to reach it, and a click is only one
+  // of the ways in (switching runs while the pane is open is another).
+  //
+  // The values it needs arrive through refs: it is handed to a timer, and an identity that
+  // changed on every polled record update would restart that timer every second.
+  const runKeyRef = useRef('')
+  runKeyRef.current = runKey
+  const reportFileRef = useRef('')
+  reportFileRef.current = detail?.header.report || ''
+  // The read in flight, by run key: a click and the live follow must not both start one.
+  const reportBusy = useRef('')
+
+  const readReport = useCallback(async () => {
+    const key = runKeyRef.current
+    const file = reportFileRef.current
+    if (!file || !key || reportBusy.current === key) return
+    reportBusy.current = key
     try {
       const vo = await AgentService.PreviewFile(file, true)
-      setReport({ key: runKey, text: vo?.text || '' })
+      if (runKeyRef.current !== key) return // the reader moved to another run
+      if (vo?.text) {
+        setReport({ key, text: vo.text })
+        setReportMiss(null)
+        return
+      }
+      setReportMiss({ key, note: reportMissNote(vo, file) })
     } catch (e) {
-      setReport({ key: runKey, text: '无法读取报告：' + String(e) })
+      if (runKeyRef.current === key) setReportMiss({ key, note: `无法读取报告（${String(e)}）：${file}` })
+    } finally {
+      reportBusy.current = ''
     }
-  }, [detail?.header.report, runKey, report])
+  }, [])
+
+  // Showing the pane reads it — once when the run is over, and FOLLOWING it while the run goes:
+  // the report is the round's last act, so a reader watching the pane should get it the moment
+  // it lands instead of having to look again. `report?.key` is a dependency on purpose: clearing
+  // the cache is what asks for a re-read, which is how ⟳ and a repeat click work.
+  useEffect(() => {
+    if (tab !== 'report' || !runKey || report?.key === runKey) return
+    void readReport()
+    if (!live) return
+    const t = window.setInterval(() => void readReport(), ONE_OFF_LIVE_POLL_MS)
+    return () => window.clearInterval(t)
+  }, [tab, runKey, live, report?.key, readReport])
+
+  // The tab's own click, and the 意见 pane's 「报告」 button. A report that had not been written
+  // yet is retried rather than being answered from a cached "empty".
+  const openReport = useCallback(() => {
+    setReportMiss(null)
+    setTab('report')
+    void readReport()
+  }, [readReport])
+
+  // The panel's ⟳. An ⟳ that leaves a pane still saying 读取失败 is not a refresh: it drops what
+  // was read and lets the effect above read it again.
+  const reloadReport = useCallback(() => {
+    setReport(null)
+    setReportMiss(null)
+    void readReport()
+  }, [readReport])
 
   // Only the shown run's report, so keeping the pane open across a switch is safe: a key that
-  // does not match means "not fetched yet" and the pane asks for it again.
+  // does not match means "not read yet" and the pane asks for it again — for the text and for
+  // the reason there is none.
   const reportText = report && runKey && report.key === runKey ? report.text : null
+  const reportNote = reportMiss && runKey && reportMiss.key === runKey ? reportMiss.note : null
 
   // Memoized: App destructures this object and derives a callback from it that reaches a
   // memoized message bubble, so a fresh identity on every render would break that memo and
@@ -306,10 +397,11 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   return useMemo(() => ({
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
     select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, diff,
-    diffLoading, diffError, reportText, openReport, runKey,
+    diffLoading, diffError, reportText, reportNote, openReport, reloadReport, runKey,
   }), [
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, diffError, reportText, openReport, runKey,
+    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, diffError, reportText, reportNote,
+    openReport, reloadReport, runKey,
   ])
 }
 
@@ -338,7 +430,7 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   onRerun?: (paths: string[], reviewedMsg: string) => void
   onClose: () => void
 }) {
-  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, diff, diffLoading, reportText, openReport } = api
+  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
   // The replay is rebuilt from the record's messages — the same input shape the transcript
   // feeds buildTurns, so the turns and their parts are the conversation's own.
   const turns = useMemo(() => (detail?.messages ? buildTurns(detail.messages) : []), [detail])
@@ -505,7 +597,8 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
           {items.length === 0 ? <option value="">（没有记录）</option> : null}
           {items.map((it) => <option key={it.name} value={it.name}>{oneOffLabel(it, busy)}</option>)}
         </select>
-        <button type="button" className="oneoff-icon" title="重新读取" onClick={refresh}>⟳</button>
+        <button type="button" className="oneoff-icon" title="重新读取"
+          onClick={() => { refresh(); reloadReport() }}>⟳</button>
         <CloseButton onClose={onClose} />
       </div>
 
@@ -614,13 +707,14 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
             ) : null}
 
             {/* The report, in place: the narrative behind the findings, rendered with the app's
-                own markdown pipeline rather than in another overlay. */}
+                own markdown pipeline rather than in another overlay. Three outcomes, three
+                sentences — what was read, why nothing was, and that a read is still in flight.
+                An empty pane cannot tell a reader which of the two failures they are looking
+                at, and neither can a bare 「报告是空的」 over a file that has not been written
+                yet. A note outranks the loading line: the live follow re-reads the file every
+                second, and a pane that blinked back to 读取报告… would read as a stuck pane. */}
             {shown === 'report' ? (
-              reportText === null ? (
-                <div className="oneoff-empty">读取报告…</div>
-              ) : reportText === '' ? (
-                <div className="oneoff-empty">报告是空的</div>
-              ) : (
+              reportText !== null ? (
                 <>
                   <div className="oneoff-meta">
                     <span title={detail.header.report}>{(detail.header.report || '').split('/').pop()}</span>
@@ -631,6 +725,10 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
                   </div>
                   <MarkdownBlock text={reportText} workDir={workDir} />
                 </>
+              ) : reportNote !== null ? (
+                <div className="oneoff-empty">{reportNote}</div>
+              ) : (
+                <div className="oneoff-empty">读取报告…</div>
               )
             ) : null}
           </>

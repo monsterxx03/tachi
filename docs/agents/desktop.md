@@ -452,7 +452,23 @@ const type = (el, t) => {
 - **Anything cached per run or per session must be KEYED by it**: key the cache with `sessionId/run` (a
   record's name is a timestamp within its session, so two sessions can hold the same one), and prefer the
   run's OWN record over anything a caller passes in: `agent.OneOffKeyPaths` is per run by construction, while
-  a caller's idea of "which turn was this" is not.
+  a caller's idea of "which turn was this" is not. **The key says what is IN HAND, never "we asked once"**:
+  the report pane's text is a file, and its PATH is recorded when the run starts (it is what the round's
+  prompt tells the model to write) while the file arrives at the END — so a read taken in between finds
+  nothing, and storing that under the run's key freezes the pane for good (「review 过后，点击报告页，是空
+  的」: 「报告是空的」 over a report written a moment later). Store only content; keep the reason in a second,
+  equally keyed state (`reportMissNote` in `oneoff.tsx`: missing / unreadable / not text / genuinely empty),
+  because an empty pane cannot tell them apart — the debt `diffError` pays on the diff's own surface. The
+  read is driven by the PANE (tab + run + liveness, with the cleared key as the retry), so switching runs and
+  the run ENDING both re-read, and ⟳ drops what was read instead of leaving a failure on screen.
+
+- **A panel opened BY an event cannot assume what that event announces is on disk yet**: the run's `start` is
+  emitted BEFORE the recorder is opened, so the side panel's own list read comes back empty — and with
+  nothing selected the detail poll has nothing to ask for, so a whole review hides behind 「这个会话还没有
+  旁路运行（评审、提交）」 until it ends. The live follow therefore re-reads the LIST too and takes the record
+  that appears as the one it is on (`seenNewest`, compared by name, so the reader's own pick in the switcher
+  is left alone). Both halves are pinned by `oneoff-report`, whose first checks are red when only the list
+  half is missing and whose report checks are red when only the read is.
 
 - **Never run a side effect inside a state updater**: React may invoke an updater more than once for the same
   update (StrictMode does; concurrent re-basing can), so `setState(prev => { fetch(...); return ... })` fires

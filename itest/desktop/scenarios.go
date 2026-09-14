@@ -1,10 +1,13 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"time"
@@ -133,7 +136,21 @@ const (
 	// expected to carry them. Rewording them means updating this marker — and that is the
 	// point.
 	projectRulesMarker = "Keep it true, in the same turn"
+
+	// reportWritePause is how long the report round waits before writing its report. It exists
+	// for the window it opens, not for realism: the driver has to reach the 报告 pane and read it
+	// while the file is still missing, and a window too narrow to observe is a race the assertion
+	// cannot prove anything about (see the oneoff-report scenario — its timing lines say how
+	// narrow the window actually has to be). Widened, never trimmed.
+	reportWritePause = 12 * time.Second
+	// smokeReportMarker is a string nothing else in a smoke run produces, so finding it in the
+	// pane proves the text came from the report FILE.
+	smokeReportMarker = "SMOKE-REPORT-MARKER"
 )
+
+// smokeReportMarkdown is the report body the mock writes: the marker plus enough prose that the
+// markdown renderer has something to lay out.
+var smokeReportMarkdown = "# 评审报告\n\n" + smokeReportMarker + "\n\n这是评审写的报告正文，用来验证报告页。\n"
 
 // textStream is one assistant message streamed in a few chunks, with token usage — the
 // shape every scenario needs.
@@ -667,6 +684,46 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// The 报告 pane over a report that did not exist when the pane was opened.
+		//
+		// A run's report PATH is recorded when the run STARTS — it is what the round's prompt
+		// tells the model to write — so the tab is there from the first second while the file
+		// itself only arrives at the END. A read taken in between used to be stored under the
+		// run's own key, which is also what the code read as "already have it": the pane said
+		// 「报告是空的」 for a report that was written a moment later, and never looked again
+		// (「review 过后，点击报告页，是空的」). The pause below is what makes that window
+		// testable rather than raced: without it the driver's read would happen after the write
+		// and nothing would be under test.
+		{
+			name: "oneoff-report",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe oneoff-report scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				reportWriteStep(reportWritePause, smokeReportMarkdown, "call_rep1"),
+				{Reply: textStream("评审完成，报告已写入。", 1100)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("评审这一轮调用了两次模型", len(c.requests) == 2, requestCount(c.requests))
+				// "The prompt named the path" is pinned by the step's own Require, which fails the
+				// run when it cannot find one — a round whose prompt lost the save instruction
+				// would leave the mock with nowhere to write.
+
+				// The mock wrote to the path it read out of the REQUEST, so the file existing at
+				// the orchestrator's own path is the same fact the pane goes looking for.
+				matches, _ := filepath.Glob(filepath.Join(c.work, ".tachi", "reviews", "*", "round-*.md"))
+				c.check("报告按 prompt 给的确切路径落盘", len(matches) == 1, fileList(matches))
+				if len(matches) == 1 {
+					b, err := os.ReadFile(matches[0])
+					c.check("报告里是模型写的那份正文", err == nil && strings.Contains(string(b), smokeReportMarker),
+						errText(err))
+				}
+				// The read the driver did while the file was still missing left nothing behind on
+				// disk: the pane's own state is the driver's business, asserted there.
+			},
+		},
+		//
 		// Switching away from a RUNNING session and back: the restored view must land at the
 		// newest message and stay there while the stream keeps writing. The driver measures the
 		// gap to the bottom on every frame across the switch, so the reported "先向上飘再跳到底"
@@ -1094,6 +1151,59 @@ func writeFileStream(pause time.Duration, path, content, callID string) mockllm.
 		mockllm.Done(),
 	)
 	return mockllm.Stream(chunks...)
+}
+
+// reportWriteStep is one review round that saves its report. The path is only in the REQUEST —
+// the orchestrator writes it into the prompt verbatim (commands.BuildReviewPrompt) — so the step
+// reads it out of the messages it is handed: `Require` is the hook that sees the request, it runs
+// immediately before the reply in the same handler, and the reply is BUILT there, so the WriteFile
+// carries the path the prompt named instead of a guess.
+func reportWriteStep(pause time.Duration, content, callID string) mockllm.Step {
+	var path string
+	return mockllm.Step{
+		Require: func(req *mockllm.RecordedRequest) string {
+			path = reportPathIn(req)
+			if path == "" {
+				return "评审 prompt 里没有报告路径：模型被告知往哪写，是这条断言的先决条件"
+			}
+			return ""
+		},
+		Reply: func(ctx context.Context, w http.ResponseWriter, p mockllm.Protocol) {
+			chunks := []mockllm.Chunk{}
+			if pause > 0 {
+				chunks = append(chunks, mockllm.Pause(pause))
+			}
+			chunks = append(chunks,
+				mockllm.ToolCallStart(callID, "WriteFile", jsonArgs(map[string]string{"path": path, "content": content})),
+				mockllm.Finish("tool_calls"),
+				mockllm.UsageWithCache(1500, 40, 1400, 10),
+				mockllm.Done(),
+			)
+			mockllm.Stream(chunks...)(ctx, w, p)
+		},
+	}
+}
+
+// reportPathRe finds the report path in whichever template the round was built from. Both name
+// the same orchestrator-owned path, and only in those two sentences:
+//
+//   - single round (ReviewUserPrompt): "Write the complete report to this exact path: <path>."
+//   - multi round  (BuildReviewPrompt): "…保存报告到：<path>（编排器给出的确切路径…）"
+//
+// Newest message first: the prompt is the last user message, and an earlier round's path (in a
+// multi-round chain's "previous reports" section) must not be mistaken for this one's.
+var reportPathRe = regexp.MustCompile(`(?:Write the complete report to this exact path: |保存报告到：)([^\s（]+\.md)`)
+
+func reportPathIn(req *mockllm.RecordedRequest) string {
+	for i := len(req.Messages) - 1; i >= 0; i-- {
+		if req.Messages[i].Role != "user" {
+			continue
+		}
+		if m := reportPathRe.FindStringSubmatch(req.Messages[i].Content); m != nil {
+			return m[1]
+		}
+	}
+	return ""
 }
 
 // findingStream is one ReportFinding call — the review's structured output, and what the
