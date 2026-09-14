@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -46,11 +47,14 @@ func exists(root, rel string) bool {
 }
 
 // beginSnapshot is the caller's normal sequence for a turn that writes: mark the
-// boundary, then take the file half lazily.
-func beginSnapshot(t *testing.T, m *Manager, turn int) {
+// boundary, then take the file half lazily. It asserts the turn number the
+// manager assigns, so a test that expects turn N fails loudly if Begin drifts.
+func beginSnapshot(t *testing.T, m *Manager, wantTurn int) {
 	t.Helper()
 	ctx := context.Background()
-	require.NoError(t, m.Begin(ctx, Record{Turn: turn, Records: turn, APIRecords: turn}))
+	turn, err := m.Begin(ctx, Boundary{Records: wantTurn, APIRecords: wantTurn})
+	require.NoError(t, err)
+	require.Equal(t, wantTurn, turn)
 	require.NoError(t, m.Snapshot(ctx, turn))
 }
 
@@ -107,7 +111,9 @@ func TestTurnThatOnlyReadsSharesTheNextWritersState(t *testing.T) {
 	write(t, root, "a.txt", "v2")
 
 	// Turn 2 only reads: its boundary is recorded, no snapshot is taken.
-	require.NoError(t, m.Begin(ctx, Record{Turn: 2, Records: 2, APIRecords: 2}))
+	turn2, err := m.Begin(ctx, Boundary{Records: 2, APIRecords: 2})
+	require.NoError(t, err)
+	require.Equal(t, 2, turn2)
 
 	// Turn 3 writes: its snapshot captures the state at its start, which is also
 	// the state at turn 2's start.
@@ -135,8 +141,9 @@ func TestSnapshotIsIdempotentPerTurn(t *testing.T) {
 	m, root := setup(t, Options{})
 	ctx := context.Background()
 	write(t, root, "a.txt", "v1")
-	require.NoError(t, m.Begin(ctx, Record{Turn: 1, Records: 1}))
-	require.NoError(t, m.Snapshot(ctx, 1))
+	turn, err := m.Begin(ctx, Boundary{Records: 1})
+	require.NoError(t, err)
+	require.NoError(t, m.Snapshot(ctx, turn))
 
 	// A later tool call in the same turn changes the file, then asks again.
 	write(t, root, "a.txt", "v2")
@@ -160,8 +167,9 @@ func TestSnapshotRefusesAFileOverTheByteLimit(t *testing.T) {
 	m, root := setup(t, Options{MaxBytes: 16})
 	ctx := context.Background()
 	write(t, root, "big.bin", strings.Repeat("x", 64))
-	require.NoError(t, m.Begin(ctx, Record{Turn: 1, Records: 1}))
-	require.NoError(t, m.Snapshot(ctx, 1), "a tripped guard must not fail the turn")
+	turn, err := m.Begin(ctx, Boundary{Records: 1})
+	require.NoError(t, err)
+	require.NoError(t, m.Snapshot(ctx, turn), "a tripped guard must not fail the turn")
 
 	p, err := m.Preview(ctx, 1)
 	require.NoError(t, err)
@@ -183,8 +191,9 @@ func TestSnapshotRefusesATreeOverTheFileLimit(t *testing.T) {
 	for _, name := range []string{"a", "b", "c", "d"} {
 		write(t, root, name+".txt", name)
 	}
-	require.NoError(t, m.Begin(ctx, Record{Turn: 1, Records: 1}))
-	require.NoError(t, m.Snapshot(ctx, 1))
+	turn, err := m.Begin(ctx, Boundary{Records: 1})
+	require.NoError(t, err)
+	require.NoError(t, m.Snapshot(ctx, turn))
 
 	p, err := m.Preview(ctx, 1)
 	require.NoError(t, err)
@@ -317,4 +326,24 @@ func TestNormalizeRootsDropsNestedRoots(t *testing.T) {
 
 	got := normalizeRoots([]string{base, inner, base, "", "  "})
 	assert.Equal(t, []string{base}, got)
+}
+
+// TestCouldWriteClassifiesTools pins the policy the lazy snapshot rests on: a
+// tool that is missing from the set is a change no checkpoint would cover, so
+// the write-capable ones are named explicitly and MCP tools are treated as
+// writable whatever they are.
+func TestCouldWriteClassifiesTools(t *testing.T) {
+	for _, name := range []string{
+		tools.ToolNameBash, tools.ToolNameWrite, tools.ToolNameEdit,
+		tools.ToolNameSubAgent, tools.ToolNameCron, tools.ToolNameSavePlan,
+		tools.ToolNameRecordMemory, "mcp__pg__query",
+	} {
+		assert.True(t, CouldWrite(name), "%s must trigger a snapshot before it runs", name)
+	}
+	for _, name := range []string{
+		tools.ToolNameRead, tools.ToolNameSendFile, "Glob", "Grep",
+		"WebFetch", "WebSearch", "AskUserQuestion", "MCPSearchTools", "",
+	} {
+		assert.False(t, CouldWrite(name), "%s cannot change the workspace", name)
+	}
 }

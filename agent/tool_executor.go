@@ -177,6 +177,13 @@ func (a *AIAgent) executeToolCallsParallel(ctx context.Context, rs *RunState, to
 				ToolArgs: tc.Function.Arguments,
 			})
 
+			// Take the turn's file snapshot BEFORE the tool runs: a change that
+			// happened without one is a change a rewind cannot take back, so a
+			// snapshot failure refuses the call instead of letting it through.
+			if err := a.snapshotBeforeWrite(ctx, rs, tc.Function.Name); err != nil {
+				results[i] = checkpointRefusal(tc, err)
+				return
+			}
 			results[i] = a.resolve(ctx).invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
 		})
 	}
@@ -328,7 +335,13 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 				ToolID:   tc.ID,
 				ToolArgs: tc.Function.Arguments,
 			})
-			tr = a.resolve(ctx).invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
+			// See the parallel path: the snapshot has to exist before the write.
+			if err := a.snapshotBeforeWrite(ctx, rs, tc.Function.Name); err != nil {
+				tr = checkpointRefusal(tc, err)
+				policyHandled = true
+			} else {
+				tr = a.resolve(ctx).invoke(subCtx, tc.Function.Name, tc.Function.Arguments)
+			}
 		}
 
 		// Notify TUI that subagent has completed.
@@ -500,4 +513,16 @@ func (a *AIAgent) executeToolCallsSequential(ctx context.Context, rs *RunState, 
 	}
 
 	return toolMsgs, nil
+}
+
+// checkpointRefusal builds the tool result a refused write gets: an error fed
+// back to the model, so the turn continues and the model can report the problem
+// rather than believing the write happened.
+func checkpointRefusal(tc llm.ToolCall, cause error) tools.ToolResult {
+	return tools.ToolResult{
+		Status: tools.ToolResultError,
+		Name:   tc.Function.Name,
+		Args:   tc.Function.Arguments,
+		Err:    fmt.Errorf("checkpoint failed, so the write was refused: %w", cause),
+	}
 }

@@ -119,37 +119,56 @@ func NewManager(sessionDir string, roots []string, opts Options) *Manager {
 // Roots returns the roots this manager covers, in the order it covers them.
 func (m *Manager) Roots() []string { return append([]string(nil), m.roots...) }
 
-// Begin records where a turn started. It is deliberately cheap — a manifest
-// entry, not a snapshot — so a caller can mark every turn's boundary without
-// paying for the workspace. Idempotent: calling it twice for a turn is a
-// lookup.
+// Boundary is where a turn started, as far as the session's own history is
+// concerned. The turn number is NOT part of it: the manager assigns it from the
+// manifest, the same way the request Seq is derived from disk rather than kept
+// in memory, so numbering survives a restart and needs no session-wide counter.
+type Boundary struct {
+	// Records and APIRecords are the lengths of messages.jsonl and
+	// api_requests.jsonl at this point. Rewinding truncates BOTH (the request
+	// log has to describe the conversation that is still there) but not the
+	// usage ledger: tokens were really spent, and a rewind is not a refund.
+	Records    int
+	APIRecords int
+	// UserText is the prompt that started the turn, so a rewind can put it back
+	// in the input box (what both Claude Code and Pi do) instead of making the
+	// reader retype it.
+	UserText string
+}
+
+// Begin records where a turn started and returns its number. It is deliberately
+// cheap — a manifest entry, not a snapshot — so a caller can mark every turn's
+// boundary without paying for the workspace. Call it once per turn, at the turn
+// start.
 //
 // A turn that only reads stops here, and that is the point: its file state is
 // the same as the next writing turn's starting state, so nothing is lost (see
 // resolveTarget).
-func (m *Manager) Begin(ctx context.Context, rec Record) error {
-	if rec.Turn <= 0 {
-		return fmt.Errorf("checkpoint: turn must be positive, got %d", rec.Turn)
-	}
+func (m *Manager) Begin(ctx context.Context, b Boundary) (int, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	man, err := loadManifest(m.dir)
 	if err != nil {
-		return err
+		return 0, err
 	}
-	if _, ok := man.find(rec.Turn); ok {
-		return nil
+	turn := 1
+	if n := len(man.Checkpoints); n > 0 {
+		turn = man.Checkpoints[n-1].Turn + 1
 	}
-	rec.At = time.Now().UTC()
-	rec.Roots, rec.Skipped = nil, ""
-	man.Checkpoints = append(man.Checkpoints, rec)
+	man.Checkpoints = append(man.Checkpoints, Record{
+		Turn:       turn,
+		Records:    b.Records,
+		APIRecords: b.APIRecords,
+		At:         time.Now().UTC(),
+		UserText:   b.UserText,
+	})
 	removed := man.prune(m.opts.retain())
 	if err := saveManifest(m.dir, man); err != nil {
-		return err
+		return 0, err
 	}
 	m.dropRefs(removed)
-	return nil
+	return turn, nil
 }
 
 // Snapshot takes the file half of a turn's checkpoint if it has not been taken.

@@ -288,7 +288,7 @@ type RunState struct {
 	TraceID   string
 	APICalls  int
 	// Seq is the session-wide request sequence number. Initialized at turn
-	// start from the current session's recorded maximum (sessionSeqBase),
+	// start from the current session's recorded maximum (sessionBoundary),
 	// then incremented in lockstep with APICalls in runLoop — so Seq and
 	// APICalls always stay 1:1. One-off runs (SkipSessionWrites) leave Seq
 	// at 0: their sidecar transcripts start numbering from 1.
@@ -303,6 +303,12 @@ type RunState struct {
 	Budget            *IterationBudget
 	SkipSessionWrites bool
 	OneoffRec         *oneoffRecorder
+	// checkpointTurn is the checkpoint turn number this run belongs to, assigned
+	// at the turn start (see beginCheckpointTurn). 0 means this run has no
+	// checkpoint of its own — a one-off run, checkpoints disabled, or the record
+	// failed — which disables the file half for the turn. Under mu because a
+	// rewind command reads it from another goroutine.
+	checkpointTurn int
 
 	// injectedReminders records what this TURN has already put in front of the model,
 	// keyed by reminder piece name. The loop re-runs the collector after every tool
@@ -353,6 +359,21 @@ func (rs *RunState) snapshotMessages() []llm.Message {
 	out := make([]llm.Message, len(rs.Messages))
 	copy(out, rs.Messages)
 	return out
+}
+
+// setCheckpointTurn records the checkpoint turn this run belongs to.
+func (rs *RunState) setCheckpointTurn(turn int) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.checkpointTurn = turn
+}
+
+// CheckpointTurn returns the checkpoint turn this run belongs to, or 0 when the
+// run has none (see the field's comment).
+func (rs *RunState) CheckpointTurn() int {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.checkpointTurn
 }
 
 // begin records the start time and trace ID for a new run.

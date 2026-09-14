@@ -361,6 +361,27 @@ type CompactConfig struct {
 	Threshold float64       `yaml:"threshold" default:"0.8"`   // Trigger ratio: lastInputTokens / contextWindow >= threshold
 }
 
+// CheckpointConfig holds configuration for session checkpoints: a per-turn file
+// snapshot (a private bare git repository per workspace root, under the session
+// directory) that a rewind can restore, together with the conversation.
+//
+// The guards are safety valves rather than tuned limits — they are what keeps a
+// pathological repository from making every turn slow or the snapshot store
+// enormous. A tripped guard records the turn's boundary without file state, and
+// a rewind to it says so instead of pretending it restored anything.
+type CheckpointConfig struct {
+	// Enabled defaults to true for a loaded config (see the tag). A config built
+	// in code — tests, and anything constructing one by hand — leaves it nil,
+	// which means OFF. That is deliberately the opposite of the Compact.Auto
+	// idiom, where nil means on: checkpointing writes to disk on every turn, so
+	// the default has to keep an unconfigured agent from creating a snapshot
+	// store the caller did not ask for.
+	Enabled  *bool `yaml:"enabled" default:"true"`       // capture a file snapshot per turn
+	MaxFiles int   `yaml:"max_files" default:"50000"`    // refuse a root with more covered files than this
+	MaxBytes int64 `yaml:"max_bytes" default:"33554432"` // refuse a single changed file bigger than this (32MB)
+	Retain   int   `yaml:"retain" default:"100"`         // keep this many checkpoints per session
+}
+
 // ToolResultConfig holds configuration for tool result size limits and
 // file persistence of oversized results. When a tool result exceeds
 // MaxChars, the full output is saved to disk and a truncated preview
@@ -799,6 +820,7 @@ type Config struct {
 	Subagent               SubagentConfig       `yaml:"subagent"`                        // Sub-agent configuration
 	Review                 ReviewConfig         `yaml:"review"`                          // /review code review configuration
 	Compact                CompactConfig        `yaml:"compact"`                         // /compact command configuration
+	Checkpoints            CheckpointConfig     `yaml:"checkpoints"`                     // per-turn file snapshots for /rewind
 	ToolResult             ToolResultConfig     `yaml:"tool_result"`                     // tool result size limits and file persistence
 	Cron                   CronConfig           `yaml:"cron"`                            // Cron scheduler (channel mode)
 	Dream                  DreamConfig          `yaml:"dream"`                           // AutoDream memory consolidation (channel mode)

@@ -486,13 +486,14 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		a.currentRun = rs
 		a.mu.Unlock()
 
-		a.ensureSessionAndRecordUser(ctx, rs, userMessage, reminderBlock, ch)
-
 		// Continue the session-wide request counter from what's already on
-		// disk (messages or api_requests), so Seq stays monotonic across
-		// turns and process restarts. Must run after ensureSessionAndRecordUser
-		// (which may create the session) and before the loop's first API call.
-		rs.Seq = a.sessionSeqBase()
+		// disk (messages or api_requests), so Seq stays monotonic across turns
+		// and process restarts; the same scan returns the checkpoint boundary.
+		// Both must arrive after ensureSessionAndRecordUser (which may create
+		// the session) and before the loop's first API call.
+		seq, records, apiRecords := a.ensureSessionAndRecordUser(ctx, rs, userMessage, reminderBlock, ch)
+		rs.Seq = seq
+		a.beginCheckpointTurn(ctx, rs, userMessage, records, apiRecords)
 
 		// Fire turn_start hook before entering agent loop
 		a.dispatchEvent(ctx, hooks.EventTurnStart, hooks.Payload{
@@ -613,13 +614,23 @@ func (a *AIAgent) recordUserTurn(rs *RunState, userMessage, reminderBlock string
 // ensureSessionAndRecordUser creates the session on first use (with
 // session_start hook), records the user turn, and generates a title for
 // brand-new sessions. No-op when no session manager is configured.
+// ensureSessionAndRecordUser records the user's turn, creating the session first
+// when there is none.
+//
+// It returns where the conversation stood BEFORE that message landed: the
+// highest request Seq (what the turn's numbering continues from), and the record
+// counts in messages.jsonl / api_requests.jsonl. Both come from one scan of the
+// two files, taken here because the counts must exclude the user message this
+// call is about to append — a checkpoint records them as its cut point, so a
+// rewind to this turn takes that message back out and hands it to the reader to
+// edit and re-send (what Claude Code and Pi both do).
 func (a *AIAgent) ensureSessionAndRecordUser(
 	ctx context.Context,
 	rs *RunState,
 	userMessage string,
 	reminderBlock string,
 	ch chan<- AgentEvent,
-) {
+) (seq, records, apiRecords int) {
 	if a.Config.SessionManager == nil {
 		return
 	}
@@ -661,6 +672,10 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 		})
 	}
 
+	// One scan of the session's two history files serves both the boundary a
+	// checkpoint stores and the Seq base the turn's requests continue from.
+	seq, records, apiRecords = a.sessionBoundary()
+
 	a.recordUserTurn(rs, userMessage, reminderBlock)
 
 	// Set title from first user message (LLM-generated or truncated)
@@ -670,6 +685,7 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 		// Notify TUI immediately so statusbar can refresh before LLM finishes
 		ch <- AgentEvent{Type: AgentEventSessionTitle, Title: title}
 	}
+	return seq, records, apiRecords
 }
 
 // runInput aggregates the per-run inputs of runLoop: the provider to call,

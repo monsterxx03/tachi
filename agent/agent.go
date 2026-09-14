@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/checkpoint"
 	"github.com/monsterxx03/tachi/agent/hooks"
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/agent/memory"
@@ -120,6 +121,13 @@ type AIAgent struct {
 	conv       *convState   // 会话级滚动状态（token 估算、compact 冷却、消息日期）
 	currentRun *RunState    // 当前运行的实时状态（loop 写，外部并发读）
 	mu         sync.RWMutex // 保护 currentRun + mode
+
+	// ckpt 是当前会话的检查点管理器（见 agent_checkpoint.go）。它按「会话 +
+	// 根集合」惰性构建、变更时重建；ckptMu 只保护这次替换，快照本身由管理器
+	// 自己的锁串行化。
+	ckptMu  sync.Mutex
+	ckpt    *checkpoint.Manager
+	ckptKey string
 
 	// Vision fallback（懒构建，mutex 保护）：当当前模型不支持图片时，用
 	// 配置中第一个支持图片的 provider 描述图片。Once 保证每个 agent 只
@@ -612,44 +620,6 @@ func (a *AIAgent) recordSession(rs *RunState, msg *session.Message) {
 	if err := a.Config.SessionManager.AppendMessage(msg); err != nil {
 		a.Config.Logger.Error(context.Background(), "Agent: failed to record session message", err)
 	}
-}
-
-// sessionSeqBase returns the highest request Seq recorded so far in the
-// current session (scanning both messages and api_requests). A new turn's
-// requests continue numbering from here, keeping Seq monotonic across turns
-// and process restarts (it is derived from disk, not in-memory state).
-// Returns 0 when no session is active or nothing is recorded yet.
-// Best-effort: a read failure is logged and treated as 0.
-func (a *AIAgent) sessionSeqBase() int {
-	sm := a.Config.SessionManager
-	if sm == nil {
-		return 0
-	}
-	cur := sm.Current()
-	if cur == nil {
-		return 0
-	}
-
-	base := 0
-	if msgs, err := sm.LoadMessages(); err == nil {
-		for i := range msgs {
-			if msgs[i].Seq > base {
-				base = msgs[i].Seq
-			}
-		}
-	} else {
-		a.Config.Logger.Warn(context.Background(), "Agent: sessionSeqBase: load messages failed", err)
-	}
-	if reqs, err := sm.LoadAPIRequests(cur.ID); err == nil {
-		for i := range reqs {
-			if reqs[i].Seq > base {
-				base = reqs[i].Seq
-			}
-		}
-	} else {
-		a.Config.Logger.Warn(context.Background(), "Agent: sessionSeqBase: load api requests failed", err)
-	}
-	return base
 }
 
 // --- Tool Registry ---
