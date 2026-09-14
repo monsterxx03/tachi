@@ -82,5 +82,34 @@
   smoke.check('该轮的提示词回到输入框（可以改着重发）',
     !!input && input.value === '用 bash 写文件', input ? input.value : '(找不到输入框)')
 
+  // A turn that wrote NOTHING must still be rewindable — and it is the common case
+  // ("that answer was wrong, let me ask again"), because a conversation that only
+  // reads has no file state at all. The card has to distinguish the two ways of "no
+  // file work": the workspace is ALREADY at the state to return to (a fact — what
+  // this turn is) versus "nothing was restored" (a warning). Refusing the first is
+  // the bug this half exists for.
+  if (!(await runTurn('再问一句', '第三轮回复。'))) return smoke.finish()
+  const again = smoke.qa('.msg-user')
+  smoke.check('回退之后还能接着对话', again.length === 1, String(again.length))
+  if (again.length !== 1) return smoke.finish()
+
+  again[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 260 }))
+  if (!(await smoke.waitFor('.ctx-menu', '回退菜单出现', 5000))) return smoke.finish()
+  const onlyItem = smoke.qa('.ctx-menu .ctx-item')[0]
+  smoke.check('只读的一轮也有回退入口', !!onlyItem && !onlyItem.disabled, onlyItem ? (onlyItem.title || '可点') : '找不到菜单项')
+  if (!onlyItem || onlyItem.disabled) return smoke.finish()
+  onlyItem.click()
+
+  if (!(await smoke.waitFor('.confirm-box', '回退确认卡出现', 5000))) return smoke.finish()
+  const card2 = smoke.text('.confirm-box')
+  smoke.check('不把「没有文件要还原」当成不能回退', card2.indexOf('不能回退') < 0, card2.slice(0, 200))
+  smoke.check('卡片说明工作区无需还原', card2.indexOf('无需还原') >= 0, card2.slice(0, 200))
+  const confirm2 = smoke.qa('.confirm-box .btn.danger')[0]
+  if (!confirm2) return smoke.fail('找到确认按钮', '按钮找不到')
+  confirm2.click()
+
+  const gone2 = await smoke.waitFor(() => smoke.qa('.msg-user').length === 0, '只读的一轮也回退了', 15000)
+  smoke.check('只读的一轮同样撤回到了它之前', gone2, String(smoke.qa('.msg-user').length))
+
   smoke.finish()
 })()

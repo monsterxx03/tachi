@@ -285,15 +285,22 @@ func scenarios() []scenario {
 				// Turn 1: one shell command that both creates and edits a file.
 				{Reply: bashStream("echo made > made.txt && echo changed > keep.txt", "call_w")},
 				{Reply: textStream("写好了。", 800)},
-				// Turn 2: a plain reply, which is what snapshots the state after turn 1 —
-				// without it, "back to turn 1" would have nothing to undo.
+				// Turn 2: a plain reply, so there is a later turn for the rewind to undo
+				// (and a second bubble for the "its own prompt goes back to the composer"
+				// half). The FILE state it leaves behind is what turn 1's snapshot restores.
 				{Reply: textStream("第二轮回复。", 800)},
+				// Turn 3, sent after the first rewind: a reply with no tool call at all, so
+				// this turn writes nothing — the shape whose rewind must work anyway and say
+				// that the workspace needs no restoring.
+				{Reply: textStream("第三轮回复。", 800)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				c.check("两轮共三次调用", len(c.requests) == 3, requestCount(c.requests))
+				c.check("三轮共四次调用", len(c.requests) == 4, requestCount(c.requests))
 
-				// The shell command's changes are the ones a rewind has to undo.
+				// The shell command's changes are the ones a rewind has to undo. These run
+				// AFTER the read-only turn's own rewind too, so they also say that a turn with
+				// nothing to restore leaves the workspace exactly as it found it.
 				_, statErr := os.Stat(filepath.Join(c.work, "made.txt"))
 				c.check("回退删掉了 shell 新建的文件", os.IsNotExist(statErr), statErrText(statErr))
 				content, readErr := os.ReadFile(filepath.Join(c.work, "keep.txt"))

@@ -45,10 +45,6 @@ type Record struct {
 	// exists; a rewind to it must say that no files were restored rather than
 	// silently reporting success.
 	Skipped string `json:"skipped,omitempty"`
-	// Irreversible lists side effects inside this turn that a rewind cannot
-	// take back — a git commit being the important one (detected by watching
-	// the user's own HEAD move), plus anything the caller knows about.
-	Irreversible []string `json:"irreversible,omitempty"`
 }
 
 // RootState is one root's snapshot within a checkpoint.
@@ -61,6 +57,11 @@ type RootState struct {
 	Root      string `json:"root"`
 	Ref       string `json:"ref"`
 	Tree      string `json:"tree,omitempty"`
+	// Head is the user's own git HEAD when the snapshot was taken, empty when the
+	// root is not a git repository. Recorded because a rewind can restore the
+	// FILES but not the HISTORY: a commit made after this point stays in the log,
+	// so a preview has to be able to see that it moved (see Manager.committedSince).
+	Head string `json:"head,omitempty"`
 }
 
 // findIndex returns the record for a turn together with its position, for the

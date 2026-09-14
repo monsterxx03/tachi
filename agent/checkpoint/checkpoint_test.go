@@ -173,7 +173,7 @@ func TestSnapshotRefusesAFileOverTheByteLimit(t *testing.T) {
 
 	p, err := m.Preview(ctx, 1)
 	require.NoError(t, err)
-	assert.Contains(t, p.Skipped, "byte limit")
+	assert.Contains(t, p.Skipped, "超过单文件上限")
 	assert.Empty(t, p.Roots)
 
 	res, err := m.Restore(ctx, 1)
@@ -197,7 +197,7 @@ func TestSnapshotRefusesATreeOverTheFileLimit(t *testing.T) {
 
 	p, err := m.Preview(ctx, 1)
 	require.NoError(t, err)
-	assert.Contains(t, p.Skipped, "file limit")
+	assert.Contains(t, p.Skipped, "超过上限")
 }
 
 // TestIgnoredPathsStayOutsideTheCoverage pins the documented boundary rather
@@ -263,7 +263,8 @@ func TestPruneDropsTheOldestCheckpoint(t *testing.T) {
 
 	p, err := m.Preview(ctx, 1)
 	require.NoError(t, err)
-	assert.Contains(t, p.Skipped, "not checkpointed", "a pruned turn must refuse rather than silently no-op")
+	assert.Equal(t, FilesUnknown, p.State, "a pruned checkpoint's file state is unknown, not 'nothing to do'")
+	assert.Contains(t, p.Skipped, "没有检查点", "…and the reason shown to the reader says which way it is unknown")
 
 	// The surviving checkpoints still work.
 	res, err := m.Restore(ctx, 2)
@@ -281,7 +282,227 @@ func TestRestoreRefusesAnUnbegunTurn(t *testing.T) {
 
 	p, err := m.Preview(context.Background(), 7)
 	require.NoError(t, err)
-	assert.Contains(t, p.Skipped, "not checkpointed")
+	assert.Equal(t, FilesUnknown, p.State)
+	assert.Contains(t, p.Skipped, "没有检查点", "…with a reason a rewind command can print as it is")
+}
+
+// TestRestoreHandlesAPathThatChangedShape: a path that changed KIND between the
+// checkpoint and now (a file became a directory of the same name, or the reverse)
+// is a D/F conflict. git resolves it by DELETING the obstacle, so if the removals
+// run after the writes, the second half fails on a path that is no longer there in
+// that shape — an error raised after the workspace has already moved, and one that
+// tells the reader nothing was touched.
+func TestRestoreHandlesAPathThatChangedShape(t *testing.T) {
+	cases := []struct {
+		name string
+		// at is the workspace when the checkpoint is taken; now is the workspace a
+		// rewind starts from (each removing the old shape first — creating a path
+		// where the other kind sits is the very conflict under test); want is what
+		// the checkpoint's state must look like afterwards.
+		at   func(t *testing.T, root string)
+		now  func(t *testing.T, root string)
+		want func(t *testing.T, root string) bool
+	}{
+		{
+			name: "文件变成了同名目录",
+			at:   func(t *testing.T, root string) { write(t, root, "thing", "was a file") },
+			now: func(t *testing.T, root string) {
+				require.NoError(t, os.Remove(filepath.Join(root, "thing")))
+				write(t, root, "thing/inner.txt", "inner")
+			},
+			want: func(t *testing.T, root string) bool {
+				return !isDir(t, root, "thing") && readFile(t, root, "thing") == "was a file"
+			},
+		},
+		{
+			name: "目录变成了同名文件",
+			at:   func(t *testing.T, root string) { write(t, root, "thing/inner.txt", "inner") },
+			now: func(t *testing.T, root string) {
+				require.NoError(t, os.RemoveAll(filepath.Join(root, "thing")))
+				write(t, root, "thing", "now a file")
+			},
+			want: func(t *testing.T, root string) bool {
+				return isDir(t, root, "thing") && readFile(t, root, "thing/inner.txt") == "inner"
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m, root := setup(t, Options{})
+			tc.at(t, root)
+			beginSnapshot(t, m, 1)
+			tc.now(t, root)
+
+			_, err := m.Restore(context.Background(), 1)
+			require.NoError(t, err, "a path that changed shape must not fail the whole rewind")
+			assert.True(t, tc.want(t, root), "the checkpoint's shape must be back")
+		})
+	}
+}
+
+func isDir(t *testing.T, root, rel string) bool {
+	t.Helper()
+	info, err := os.Stat(filepath.Join(root, rel))
+	require.NoError(t, err)
+	return info.IsDir()
+}
+
+// TestPreviewReportsACommitTheRewindCannotUndo is the one item on the design's
+// "irreversible" list that can be DETECTED rather than merely declared: the
+// snapshot restores files, and a commit the agent made stays in the log. The test
+// asserts both halves — the warning appears, and the commit really is still there
+// after the rewind.
+func TestPreviewReportsACommitTheRewindCannotUndo(t *testing.T) {
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+
+	git := func(args ...string) string {
+		t.Helper()
+		base := []string{"-C", root, "-c", "user.name=checkpoint-test", "-c", "user.email=test@example.invalid"}
+		out, err := exec.Command("git", append(base, args...)...).CombinedOutput()
+		require.NoError(t, err, "git %v: %s", args, out)
+		return strings.TrimSpace(string(out))
+	}
+	git("init", "--quiet", ".")
+	write(t, root, "a.txt", "v1")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "first")
+
+	// The turn starts HERE, so its snapshot is both the file state and the HEAD
+	// the rewind will be measured against.
+	beginSnapshot(t, m, 1)
+
+	p, err := m.Preview(ctx, 1)
+	require.NoError(t, err)
+	assert.Empty(t, p.Irreversible, "nothing has committed since the checkpoint")
+
+	// The work of the turn, committed by the agent — the thing a rewind cannot take
+	// back, and the reason the card exists.
+	write(t, root, "a.txt", "v2")
+	git("add", "-A")
+	git("commit", "--quiet", "-m", "agent work")
+	after := git("rev-parse", "HEAD")
+
+	p, err = m.Preview(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, p.Irreversible, 1)
+	assert.Contains(t, p.Irreversible[0], "git commit 在 "+root)
+	assert.Contains(t, p.Irreversible[0], "HEAD")
+
+	// The warning is information, not a veto: the rewind runs, the FILE comes back…
+	_, err = m.Restore(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, "v1", readFile(t, root, "a.txt"))
+	// …and the commit is exactly where it was.
+	assert.Equal(t, after, git("rev-parse", "HEAD"))
+}
+
+// TestHeadDriftNeedsARecordedHead: a root that was not a repository (or had no
+// commit) when the checkpoint was taken cannot report a drift — there is nothing
+// to compare against, and guessing "no commit" as a baseline would turn a root
+// that merely BECAME a repository into a warning nobody can act on.
+func TestHeadDriftNeedsARecordedHead(t *testing.T) {
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+	write(t, root, "a.txt", "v1")
+	beginSnapshot(t, m, 1)
+
+	cmd := exec.Command("git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+		"init", "--quiet", ".")
+	require.NoError(t, cmd.Run())
+	cmd = exec.Command("git", "-C", root, "-c", "user.name=t", "-c", "user.email=t@example.invalid",
+		"commit", "--quiet", "-am", "made a repository after the checkpoint")
+	_ = cmd.Run() // nothing staged: the commit may legitimately fail, the point is HEAD now exists
+
+	p, err := m.Preview(ctx, 1)
+	require.NoError(t, err)
+	assert.Empty(t, p.Irreversible, "no recorded HEAD means no baseline, not a drift")
+}
+
+// TestDropAfterReleasesTheAbandonedTurns pins the rewind's own cleanup: the
+// checkpoints of the turns it undid index a conversation that no longer exists, so
+// their records AND their refs go — but the turn rewound TO stays, because it is
+// the new end of the conversation and the next turn continues from it.
+func TestDropAfterReleasesTheAbandonedTurns(t *testing.T) {
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+
+	write(t, root, "a.txt", "v1")
+	beginSnapshot(t, m, 1)
+	write(t, root, "a.txt", "v2")
+	beginSnapshot(t, m, 2)
+	write(t, root, "a.txt", "v3")
+	beginSnapshot(t, m, 3)
+	require.ElementsMatch(t, []string{"refs/tachi/00/1", "refs/tachi/00/2", "refs/tachi/00/3"}, m.refsAt(t, 0))
+
+	dropped, err := m.DropAfter(1)
+	require.NoError(t, err)
+	assert.Equal(t, 2, dropped)
+
+	turns, err := m.Turns()
+	require.NoError(t, err)
+	require.Len(t, turns, 1)
+	assert.Equal(t, 1, turns[0].Turn)
+	assert.Equal(t, []string{"refs/tachi/00/1"}, m.refsAt(t, 0), "an abandoned branch is disposable: its ref goes too")
+
+	// A dropped turn is refused rather than restoring the abandoned branch...
+	p, err := m.Preview(ctx, 2)
+	require.NoError(t, err)
+	assert.Equal(t, FilesUnknown, p.State)
+
+	// ...the numbering continues from the cut...
+	turn, err := m.Begin(ctx, Boundary{})
+	require.NoError(t, err)
+	assert.Equal(t, 2, turn, "the turn after the cut is numbered from the cut")
+
+	// ...and the surviving checkpoint still restores.
+	res, err := m.Restore(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, 1, res.Target)
+	assert.Equal(t, "v1", readFile(t, root, "a.txt"))
+}
+
+// TestAFailedSnapshotReleasesTheRootsItAlreadyTook: a snapshot is all-or-nothing
+// (the caller records no state when any root fails, because restoring the roots
+// that worked would silently move the others to the wrong point in time), so the
+// refs the call created before the failure must not outlive it — nothing else
+// would ever release them, and they keep their objects alive for good.
+func TestAFailedSnapshotReleasesTheRootsItAlreadyTook(t *testing.T) {
+	base := t.TempDir()
+	// The names matter: roots are sorted, and the one that trips the guard has to
+	// be snapshotted LAST for the rollback to have something to roll back.
+	good := filepath.Join(base, "a-good")
+	bad := filepath.Join(base, "z-bad")
+	write(t, good, "a.txt", "v1")
+	write(t, bad, "b1.txt", "v1")
+	write(t, bad, "b2.txt", "v2")
+
+	m := NewManager(filepath.Join(base, "session"), []string{good, bad}, Options{MaxFiles: 1})
+	ctx := context.Background()
+	turn, err := m.Begin(ctx, Boundary{Records: 1})
+	require.NoError(t, err)
+	require.NoError(t, m.Snapshot(ctx, turn), "a tripped guard must not fail the turn")
+
+	rec, ok, err := m.Record(turn)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, rec.Roots, "no state is recorded when any root fails")
+	assert.Contains(t, rec.Skipped, "超过上限")
+
+	assert.Empty(t, m.refsAt(t, 0), "the half-taken snapshot must not leave a ref behind")
+}
+
+// refsAt lists one root's checkpoint refs, so a test can assert what a drop (or a
+// rollback) released rather than trusting the manifest alone.
+func (m *Manager) refsAt(t *testing.T, index int) []string {
+	t.Helper()
+	out, err := m.repoAt(index).output(context.Background(), "for-each-ref", "--format=%(refname)")
+	require.NoError(t, err)
+	fields := strings.Fields(out)
+	if fields == nil {
+		return []string{}
+	}
+	return fields
 }
 
 // TestTheUserRepositoryIsNeverTouched is the safety claim the design rests on,

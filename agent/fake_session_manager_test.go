@@ -28,6 +28,11 @@ type fakeSessionManager struct {
 	// appendErr, when non-nil, is returned by every AppendMessage call.
 	// Set this to test how the agent loop handles session write failures.
 	appendErr error
+
+	// loadErr, when non-nil, is returned by every history READ (LoadMessages and
+	// LoadAPIRequests). It is how a test simulates the shape a crash mid-append
+	// leaves behind: one torn line makes the real store return nothing at all.
+	loadErr error
 }
 
 func (f *fakeSessionManager) HasCurrent() bool {
@@ -117,6 +122,9 @@ func (f *fakeSessionManager) AppendAPIRequest(req *session.APIRequest) error {
 func (f *fakeSessionManager) LoadAPIRequests(sessionID string) ([]session.APIRequest, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
 	out := make([]session.APIRequest, len(f.apiRequests))
 	copy(out, f.apiRequests)
 	return out, nil
@@ -161,6 +169,9 @@ func (f *fakeSessionManager) AppendArtifact(ref session.ArtifactRef) error {
 func (f *fakeSessionManager) LoadMessages() ([]session.Message, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if f.loadErr != nil {
+		return nil, f.loadErr
+	}
 	out := make([]session.Message, len(f.messages))
 	copy(out, f.messages)
 	return out, nil

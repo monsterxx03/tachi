@@ -46,22 +46,30 @@ type RewindPreview struct {
 	// Roots is the per-root file preview: what would be restored, deleted, and
 	// (as a diffstat) how much.
 	Roots []checkpoint.RootPreview `json:"roots,omitempty"`
+	// FilesUnchanged is set when the rewind needs no file work at all: no turn
+	// at or after the target wrote anything, so the workspace already is what a
+	// rewind to it would produce. It is an ANSWER, not a warning — and it is the
+	// state of every turn in a session that never wrote a file, which is why it
+	// must not stop the conversation from going back. The reader wants the
+	// CONVERSATION, and the files happen to need nothing.
+	FilesUnchanged bool `json:"filesUnchanged,omitempty"`
+	// NoFiles, when set, is why NO file was restored even though the rewind ran:
+	// the recorded state is gone (pruned) or was never taken (a guard refused the
+	// snapshot, git is missing). The conversation still moves — but the card and
+	// the notice say this plainly rather than implying the workspace moved with
+	// it (the design's "must not silently report success").
+	NoFiles string `json:"noFiles,omitempty"`
 	// Irreversible lists side effects inside the rewind's span that it cannot
-	// take back — a git commit the agent made, above all.
+	// take back. A git commit the agent made is the one that is detected (the
+	// roots' own HEAD, recorded by the checkpoints, compared against now — see
+	// checkpoint.Manager.committedSince); the other items on the design's §6 list
+	// are not, so an empty list is not a promise that nothing else happened.
 	Irreversible []string `json:"irreversible,omitempty"`
-	// Blocked is why this rewind cannot run. Non-empty means the preview is the
-	// whole answer: nothing would (or should) change.
+	// Blocked is why this rewind cannot run AT ALL. Non-empty means the preview
+	// is the whole answer: nothing would (or should) change. It is NOT set for a
+	// missing file state — that is NoFiles, which lets the conversation rewind
+	// while the files stay put.
 	Blocked string `json:"blocked,omitempty"`
-}
-
-// Empty reports whether the rewind would change no files.
-func (p RewindPreview) Empty() bool {
-	for _, r := range p.Roots {
-		if len(r.Added)+len(r.Changed)+len(r.Deleted) > 0 {
-			return false
-		}
-	}
-	return true
 }
 
 // RewindResult is what a rewind did.
@@ -105,16 +113,26 @@ func (a *AIAgent) PreviewRewind(ctx context.Context, turn int) (RewindPreview, e
 	if err != nil {
 		return RewindPreview{}, err
 	}
-	return RewindPreview{
+	out := RewindPreview{
 		Turn:         turn,
 		Target:       p.Target,
 		UserText:     rec.UserText,
 		Records:      rec.Records,
 		APIRecords:   rec.APIRecords,
 		Roots:        p.Roots,
-		Irreversible: rec.Irreversible,
-		Blocked:      p.Skipped,
-	}, nil
+		Irreversible: p.Irreversible,
+	}
+	// The file half's three outcomes, kept apart on purpose: "here is what to
+	// restore", "nothing to restore because nothing wrote" (a fact, the rewind
+	// just goes), and "the state is unknown" (the rewind still goes, and says
+	// that no file was restored). Only a turn with no checkpoint at all blocks.
+	switch p.State {
+	case checkpoint.FilesUnchanged:
+		out.FilesUnchanged = true
+	case checkpoint.FilesUnknown:
+		out.NoFiles = p.Skipped
+	}
+	return out, nil
 }
 
 // Rewind puts the workspace and the conversation back to the start of a turn.
@@ -140,7 +158,7 @@ func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
 	}
 
 	if _, err := m.Restore(ctx, turn); err != nil {
-		return RewindResult{Preview: preview}, fmt.Errorf("还原文件失败，会话未改动: %w", err)
+		return RewindResult{Preview: preview}, fmt.Errorf("还原文件失败（部分文件可能已被改动），会话未改动: %w", err)
 	}
 
 	sm := a.Config.SessionManager
@@ -150,6 +168,20 @@ func (a *AIAgent) Rewind(ctx context.Context, turn int) (RewindResult, error) {
 	msgs, reqs, err := sm.TruncateTo(preview.Records, preview.APIRecords, rewindTag(turn))
 	if err != nil {
 		return RewindResult{Preview: preview}, fmt.Errorf("已还原文件但截断会话失败（可用 git 自行恢复）: %w", err)
+	}
+
+	// The conversation now ends at this turn, so the checkpoints AFTER it index a
+	// conversation that is gone: their cut point sits past the new end and their
+	// refs hold the branch that was just abandoned. Dropping them is what keeps
+	// "回退到第 N 轮" honest a second time — a stale record would restore the
+	// FILES to the discarded branch's point in time while the cut did nothing.
+	// Reported as a failure because the index and the conversation now disagree;
+	// the rewind itself has happened either way.
+	if dropped, derr := m.DropAfter(turn); derr != nil {
+		return RewindResult{Preview: preview}, fmt.Errorf(
+			"已还原文件并截断会话，但检查点索引未同步（被撤销的轮次仍可被回退）: %w", derr)
+	} else if dropped > 0 {
+		a.Config.Logger.Info(ctx, "Agent: dropped checkpoints left behind by the rewind", "turn", turn, "dropped", dropped)
 	}
 
 	history, err := a.LoadSessionHistory()
@@ -226,11 +258,12 @@ func (a *AIAgent) rewindManager(ctx context.Context) (*checkpoint.Manager, error
 	return m, nil
 }
 
-// rewindTag names a rewind's sidecars. It carries a timestamp because a session
-// can be rewound to the same turn more than once (work happens in between), and
-// each of those abandoned branches has to survive under its own name.
+// rewindTag names a rewind's sidecars. It carries a nanosecond timestamp because
+// a session can be rewound to the same turn more than once (work happens in
+// between, and a rewind is cheap to repeat) — with second granularity two of them
+// land on the same file and the older abandoned branch is overwritten.
 func rewindTag(turn int) string {
-	return fmt.Sprintf("turn-%d-%d", turn, time.Now().Unix())
+	return fmt.Sprintf("turn-%d-%d", turn, time.Now().UnixNano())
 }
 
 // sidecarPaths collects the sidecar files a truncation produced, skipping the
@@ -246,9 +279,19 @@ func sidecarPaths(results ...session.TruncateResult) []string {
 }
 
 // describeRewindPreview is the one-line summary a log or a channel reply shows.
+//
+// It names the two outcomes that are NOT a file change out loud, because the one
+// thing this feature must never do is let "the conversation moved and the files
+// did not" read as "everything went back".
 func describeRewindPreview(p RewindPreview) string {
 	if p.Blocked != "" {
 		return "不能回退：" + p.Blocked
+	}
+	if p.NoFiles != "" {
+		return "回退（未还原任何文件：" + p.NoFiles + "）"
+	}
+	if p.FilesUnchanged {
+		return "回退：这一轮及之后没有文件改动，工作区无需还原"
 	}
 	var parts []string
 	for _, r := range p.Roots {

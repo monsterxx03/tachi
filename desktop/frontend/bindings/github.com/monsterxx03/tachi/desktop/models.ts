@@ -506,6 +506,21 @@ export interface RewindPreviewVO {
     "roots"?: RewindRootVO[] | null;
 
     /**
+     * FilesUnchanged means there is nothing to restore: this turn and everything
+     * after it wrote no file, so the workspace is already in the state the rewind
+     * would produce. The card says so instead of showing a list of zeroes.
+     */
+    "filesUnchanged"?: boolean;
+
+    /**
+     * NoFiles, when set, is why NO file was restored even though the rewind runs.
+     * Shown on the card as a warning, never swallowed: the conversation moves back
+     * and the workspace does not, and the reader has to know which of the two
+     * happened.
+     */
+    "noFiles"?: string;
+
+    /**
      * Irreversible lists side effects the rewind cannot take back — a git commit
      * the agent made being the one that matters. Shown on the card, never
      * swallowed.
@@ -513,8 +528,8 @@ export interface RewindPreviewVO {
     "irreversible"?: string[] | null;
 
     /**
-     * Blocked is why this rewind cannot run. Non-empty means the card is the
-     * whole answer.
+     * Blocked is why this rewind cannot run at all (no checkpoint for that turn,
+     * another turn in flight). Non-empty means the card is the whole answer.
      */
     "blocked"?: string;
 }

@@ -1148,8 +1148,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         deleted += r.deleted?.length || 0
         added += r.added?.length || 0
       }
-      const summary = added + changed + deleted === 0 ? '文件无变化'
-        : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`
+      // The three outcomes of the workspace half, said out loud in the same words the
+      // card used — a rewind whose files did not move must never read as one whose
+      // files did.
+      const summary = p.noFiles
+        ? `未还原任何文件：${p.noFiles}`
+        : p.filesUnchanged
+          ? '这一轮之后没有文件改动，工作区无需还原'
+          : added + changed + deleted === 0 ? '文件无变化'
+            : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`
       // Appended as its own message rather than through applyToSession: after a rewind the
       // transcript can be EMPTY (every turn was undone), and applyToSession only attaches to
       // the newest RUNNING assistant — so the one moment the notice matters most is the one
@@ -1447,6 +1454,19 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                   ? `会撤销这一轮之后的全部工作，并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
                   : '会撤销这一轮之后的全部工作，并把该轮的提示词放回输入框。'}
             </div>
+            {/* The workspace half is a three-way answer and the card has to say which one
+                it is BEFORE the button: files to restore (the list below), nothing to
+                restore because nothing wrote (a fact, not a warning), or nothing WAS
+                restored (the conversation moves back and the workspace does not — the one
+                outcome a reader must never discover afterwards). */}
+            {!rewindCard.preview.blocked && rewindCard.preview.filesUnchanged ? (
+              <div className="rewind-note">这一轮及之后没有文件改动，工作区无需还原。</div>
+            ) : null}
+            {!rewindCard.preview.blocked && rewindCard.preview.noFiles ? (
+              <div className="confirm-error">
+                ⚠ 不会还原任何文件：{rewindCard.preview.noFiles}。对话照样回退，工作区保持现状。
+              </div>
+            ) : null}
             {rewindCard.preview.roots?.length ? (
               <div className="rewind-roots">
                 {rewindCard.preview.roots.map((r) => (

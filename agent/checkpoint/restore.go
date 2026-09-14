@@ -21,12 +21,34 @@ type Preview struct {
 	Turn   int           `json:"turn"`
 	Target int           `json:"target"`
 	Roots  []RootPreview `json:"roots,omitempty"`
-	// Skipped is the reason no file state is available: the requested point had
-	// no snapshot because a guard refused it, or because nothing has been
-	// snapshotted at all. A rewind can still move the conversation back; it must
-	// say that no files were restored rather than implying they were.
-	Skipped      string   `json:"skipped,omitempty"`
+	// State says what the workspace side of this rewind is worth: files to
+	// restore, files already right, or files nobody recorded. It is what lets a
+	// caller say "未还原任何文件" out loud instead of leaving the reader to
+	// assume the workspace moved with the conversation.
+	State FileState `json:"state"`
+	// Skipped is the technical reason State is unhelpful — a guard's wording or
+	// "git is not installed" — for a log line and a diagnosis. It is empty for
+	// FilesUnchanged, which needs no reason: nothing was wrong.
+	Skipped string `json:"skipped,omitempty"`
+	// Irreversible lists side effects inside the rewind's span that it cannot take
+	// back. The git one is DETECTED (see committedSince): the roots' own HEAD,
+	// recorded by the checkpoints, compared against now. The rest of §6's list —
+	// MCP calls, SendFile, Cron, memory writes, background processes, anything
+	// already pushed to an external service — is not detected yet.
 	Irreversible []string `json:"irreversible,omitempty"`
+}
+
+// Empty reports whether the preview would change no FILES — the question the
+// tests ask to pin "the rewind did what it said". It says nothing about State:
+// a preview with no roots is empty whether that is because nothing was recorded
+// or because nothing needed to be.
+func (p Preview) Empty() bool {
+	for _, r := range p.Roots {
+		if len(r.Added)+len(r.Changed)+len(r.Deleted) > 0 {
+			return false
+		}
+	}
+	return true
 }
 
 // RootPreview is one root's part of a preview.
@@ -42,22 +64,16 @@ type RootPreview struct {
 	Stat string `json:"stat,omitempty"`
 }
 
-// Empty reports whether the preview would change nothing.
-func (p Preview) Empty() bool {
-	for _, r := range p.Roots {
-		if len(r.Added)+len(r.Changed)+len(r.Deleted) > 0 {
-			return false
-		}
-	}
-	return true
-}
-
 // Restore is what a rewind did.
 type Restore struct {
-	Turn    int           `json:"turn"`
-	Target  int           `json:"target"`
-	Roots   []RootRestore `json:"roots,omitempty"`
-	Skipped string        `json:"skipped,omitempty"`
+	Turn   int           `json:"turn"`
+	Target int           `json:"target"`
+	Roots  []RootRestore `json:"roots,omitempty"`
+	// State is the resolveTarget outcome the restore acted on, carried out so a
+	// caller can tell "restored" from "nothing to do" from "not recorded"
+	// without re-reading the manifest.
+	State   FileState `json:"state"`
+	Skipped string    `json:"skipped,omitempty"`
 }
 
 // RootRestore is one root's part of a restore.
@@ -79,11 +95,18 @@ func (m *Manager) preview(ctx context.Context, turn int) (Preview, error) {
 	if err != nil {
 		return Preview{}, err
 	}
-	target, ok, reason := m.resolveTarget(man, turn)
-	if !ok {
-		return Preview{Turn: turn, Skipped: reason}, nil
+	target, state, reason := m.resolveTarget(man, turn)
+	// The irreversible half is computed from what the checkpoints recorded about
+	// the user's own repositories, so it is available for every outcome — including
+	// the ones that restore no file at all (a commit is still not undone).
+	irreversible := m.committedSince(ctx, man, turn)
+	if state != FilesAvailable {
+		// No checkout is attempted: the workspace is either already right
+		// (FilesUnchanged) or unknown (FilesUnknown, where the reason travels
+		// with the answer so the caller can say so).
+		return Preview{Turn: turn, State: state, Skipped: reason, Irreversible: irreversible}, nil
 	}
-	p := Preview{Turn: turn, Target: target.Turn, Irreversible: target.Irreversible}
+	p := Preview{Turn: turn, Target: target.Turn, State: state, Irreversible: irreversible}
 	for _, rs := range target.Roots {
 		r := m.repoAt(rs.RootIndex)
 		// The current state has to become a tree before it can be compared: git
@@ -124,6 +147,15 @@ func (m *Manager) preview(ctx context.Context, turn int) (Preview, error) {
 // removes the files that were created after the checkpoint — the destructive
 // half, which is why a caller shows Preview first.
 //
+// The removals run FIRST, and that order is load-bearing rather than cosmetic:
+// when a path changed shape (a file became a directory of the same name, say —
+// `foo.ts` -> `foo/index.ts`), the diff lists the new shape as added and the old
+// one as deleted, and the checkout of the old shape cannot be written while the
+// new one still occupies the name. git resolves the conflict by deleting the
+// obstacle, which then makes the second half fail on a path that is no longer
+// there in that shape — an error AFTER the workspace has already moved. Taking
+// the added files out first removes the obstacle instead of colliding with it.
+//
 // It does NOT touch the conversation: truncating messages.jsonl and
 // api_requests.jsonl is the session store's job, and the two must happen
 // together so the model's belief and the disk never disagree.
@@ -135,12 +167,12 @@ func (m *Manager) Restore(ctx context.Context, turn int) (Restore, error) {
 	if err != nil {
 		return Restore{}, err
 	}
-	target, ok, reason := m.resolveTarget(man, turn)
-	if !ok {
-		return Restore{Turn: turn, Skipped: reason}, nil
+	target, state, reason := m.resolveTarget(man, turn)
+	if state != FilesAvailable {
+		return Restore{Turn: turn, State: state, Skipped: reason}, nil
 	}
 
-	out := Restore{Turn: turn, Target: target.Turn}
+	out := Restore{Turn: turn, Target: target.Turn, State: state}
 	for _, rs := range target.Roots {
 		r := m.repoAt(rs.RootIndex)
 		cur, err := r.snapshot(ctx)
@@ -160,7 +192,12 @@ func (m *Manager) Restore(ctx context.Context, turn int) (Restore, error) {
 			restore = append(restore, c.Path)
 		}
 
-		// The index is pointed at the checkpoint first, so checkout-index writes
+		// Destructive half first, so a path that changed shape is out of the way
+		// of the write below (see the doc comment).
+		if err := removePaths(r.root, remove); err != nil {
+			return out, err
+		}
+		// The index is pointed at the checkpoint next, so checkout-index writes
 		// the recorded content rather than whatever the index happened to hold.
 		if len(restore) > 0 {
 			if err := r.setIndex(ctx, rs.Tree); err != nil {
@@ -170,9 +207,6 @@ func (m *Manager) Restore(ctx context.Context, turn int) (Restore, error) {
 				return out, err
 			}
 		}
-		if err := removePaths(r.root, remove); err != nil {
-			return out, err
-		}
 		rr := RootRestore{Root: rs.Root, Removed: remove}
 		if len(restore) > 0 {
 			sort.Strings(restore)
@@ -181,6 +215,65 @@ func (m *Manager) Restore(ctx context.Context, turn int) (Restore, error) {
 		out.Roots = append(out.Roots, rr)
 	}
 	return out, nil
+}
+
+// committedSince lists the roots whose own git HEAD moved since the turn: the one
+// side effect a rewind CANNOT undo. The files come back; the commits stay in the
+// log. A reader told "changes were rewound" therefore has to be told this in the
+// same breath (design §6), and it is the one item on that list that can be
+// DETECTED rather than merely declared.
+//
+// It compares against the HEAD the checkpoints recorded, so it needs no per-turn
+// work: the value is taken when a turn's file half is snapshotted anyway.
+func (m *Manager) committedSince(ctx context.Context, man *Manifest, turn int) []string {
+	if _, ok := man.find(turn); !ok {
+		return nil // no checkpoint, so nothing recorded a HEAD to compare against
+	}
+	var out []string
+	for i, root := range m.roots {
+		was, ok := m.headAt(man, i, turn)
+		if !ok {
+			continue // not a git repository, or no commit yet when we looked
+		}
+		// Only a NEW commit is worth saying. A root whose repository is gone (the
+		// directory was moved or deleted) reports no HEAD at all, and "HEAD moved to
+		// nothing" describes the disappearance rather than a commit — the rewind
+		// will fail on that root by itself, with the real reason.
+		if now := m.repoAt(i).userHead(ctx); now != "" && now != was {
+			out = append(out, fmt.Sprintf("git commit 在 %s（HEAD %s → %s）", root, shortHead(was), shortHead(now)))
+		}
+	}
+	return out
+}
+
+// headAt returns the user's HEAD for a root as the last checkpoint at or before
+// turn saw it, and whether any recorded one.
+//
+// A turn that wrote nothing has no state of its own, and the value that describes
+// it is the newest earlier one: a commit needs Bash, a turn that runs Bash
+// snapshots, so nothing can have committed in between without leaving a record.
+func (m *Manager) headAt(man *Manifest, rootIndex, turn int) (string, bool) {
+	for i := len(man.Checkpoints) - 1; i >= 0; i-- {
+		rec := man.Checkpoints[i]
+		if rec.Turn > turn {
+			continue
+		}
+		for _, rs := range rec.Roots {
+			if rs.RootIndex == rootIndex && rs.Head != "" {
+				return rs.Head, true
+			}
+		}
+	}
+	return "", false
+}
+
+// shortHead trims a commit hash to the part a reader compares while looking at two
+// of them side by side.
+func shortHead(h string) string {
+	if len(h) > 8 {
+		return h[:8]
+	}
+	return h
 }
 
 // change is one entry of git diff --name-status.
@@ -228,8 +321,12 @@ func removePaths(root string, paths []string) error {
 // pruneEmptyParents walks up from dir removing empty directories, stopping at
 // root (which is never removed) or at the first directory that still has
 // something in it.
+//
+// The prefix is compared WITH the separator: "/a/bc" merely starts with "/a/b",
+// and this loop deletes what it walks over, so a bare HasPrefix would let a
+// sibling directory be removed.
 func pruneEmptyParents(root, dir string) {
-	for dir != root && strings.HasPrefix(dir, root) {
+	for dir != root && strings.HasPrefix(dir, root+string(filepath.Separator)) {
 		entries, err := os.ReadDir(dir)
 		if err != nil || len(entries) > 0 {
 			return

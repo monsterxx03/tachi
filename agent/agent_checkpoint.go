@@ -23,19 +23,42 @@ import (
 //     second write in a turn is a lookup — and always BEFORE the write, which
 //     is what makes the recorded state the turn's start rather than its middle.
 
+// turnBoundary is where the conversation stood when a turn started: the request
+// Seq the turn's numbering continues from, and the two record counts a checkpoint
+// stores as its cut point.
+type turnBoundary struct {
+	Seq        int
+	Records    int
+	APIRecords int
+	// Known is false when either history file could not be read, which makes the
+	// counts unusable as a CUT POINT — and unusable means DANGEROUS, not merely
+	// imprecise: LoadMessages returns nothing at all for a single unreadable line
+	// (a crash mid-append leaves a torn one), so Records would be 0 and a rewind
+	// to such a turn would move the WHOLE conversation into a sidecar. A turn with
+	// Known=false records no checkpoint: failing closed costs one turn of
+	// rewindability, failing open costs the session.
+	Known bool
+}
+
 // beginCheckpointTurn records the turn's boundary and stores its number on the
-// run. records/apiRecords come from the boundary scan taken before this turn's
-// user message was appended, so a rewind to this turn removes that message and
-// hands it back to the reader.
+// run. b comes from the boundary scan taken before this turn's user message was
+// appended, so a rewind to this turn removes that message and hands it back to
+// the reader.
 //
 // A failure is logged, not fatal: the turn still runs, with no file snapshot of
 // its own (rs.CheckpointTurn stays 0), and a rewind to it reports that nothing
-// was snapshotted rather than pretending otherwise.
-func (a *AIAgent) beginCheckpointTurn(ctx context.Context, rs *RunState, userMessage string, records, apiRecords int) {
+// was snapshotted rather than pretending otherwise. An UNREADABLE boundary is
+// treated the same way for the same reason — see turnBoundary.Known.
+func (a *AIAgent) beginCheckpointTurn(ctx context.Context, rs *RunState, userMessage string, b turnBoundary) {
 	// One-off runs never write the main session, so they get no checkpoints:
 	// their file changes are the caller's to manage, and a rewind of the main
 	// conversation must not depend on them.
 	if rs == nil || rs.SkipSessionWrites {
+		return
+	}
+	if !b.Known {
+		a.Config.Logger.Warn(ctx, "Agent: checkpoint skipped, session history unreadable",
+			"messages_records", b.Records, "api_records", b.APIRecords)
 		return
 	}
 	m := a.checkpointManager(ctx)
@@ -43,8 +66,8 @@ func (a *AIAgent) beginCheckpointTurn(ctx context.Context, rs *RunState, userMes
 		return
 	}
 	turn, err := m.Begin(ctx, checkpoint.Boundary{
-		Records:    records,
-		APIRecords: apiRecords,
+		Records:    b.Records,
+		APIRecords: b.APIRecords,
 		UserText:   userMessage,
 	})
 	if err != nil {
@@ -149,36 +172,43 @@ func (a *AIAgent) checkpointRoots(sess *session.Session) []string {
 // checkpoint stores as its cut point).
 //
 // Derived from disk, like Seq itself, so a process restart renumbers nothing.
-// Best-effort: a read failure leaves that part at 0, which the callers treat as
-// "unknown" rather than as a real boundary.
-func (a *AIAgent) sessionBoundary() (seq, records, apiRecords int) {
+// A read failure leaves Known false, which the caller treats as "no cut point"
+// rather than as 0 — see turnBoundary.Known. The Seq stays best-effort: it only
+// numbers requests, and a file that read fine still tells us where to continue.
+func (a *AIAgent) sessionBoundary() turnBoundary {
+	var b turnBoundary
 	sm := a.Config.SessionManager
 	if sm == nil {
-		return 0, 0, 0
+		return b
 	}
 	cur := sm.Current()
 	if cur == nil {
-		return 0, 0, 0
+		return b
 	}
-	if msgs, err := sm.LoadMessages(); err == nil {
-		records = len(msgs)
+	msgs, msgErr := sm.LoadMessages()
+	if msgErr != nil {
+		a.Config.Logger.Warn(context.Background(),
+			"Agent: sessionBoundary: messages unreadable, this turn gets no checkpoint", msgErr)
+	} else {
+		b.Records = len(msgs)
 		for i := range msgs {
-			if msgs[i].Seq > seq {
-				seq = msgs[i].Seq
+			if msgs[i].Seq > b.Seq {
+				b.Seq = msgs[i].Seq
 			}
 		}
-	} else {
-		a.Config.Logger.Warn(context.Background(), "Agent: sessionBoundary: load messages failed", err)
 	}
-	if reqs, err := sm.LoadAPIRequests(cur.ID); err == nil {
-		apiRecords = len(reqs)
+	reqs, reqErr := sm.LoadAPIRequests(cur.ID)
+	if reqErr != nil {
+		a.Config.Logger.Warn(context.Background(),
+			"Agent: sessionBoundary: request log unreadable, this turn gets no checkpoint", reqErr)
+	} else {
+		b.APIRecords = len(reqs)
 		for i := range reqs {
-			if reqs[i].Seq > seq {
-				seq = reqs[i].Seq
+			if reqs[i].Seq > b.Seq {
+				b.Seq = reqs[i].Seq
 			}
 		}
-	} else {
-		a.Config.Logger.Warn(context.Background(), "Agent: sessionBoundary: load api requests failed", err)
 	}
-	return seq, records, apiRecords
+	b.Known = msgErr == nil && reqErr == nil
+	return b
 }

@@ -203,9 +203,9 @@ func (m *Manager) Snapshot(ctx context.Context, turn int) error {
 	}
 	switch {
 	case m.noGit:
-		rec.Skipped = "git is not installed"
+		rec.Skipped = "没有安装 git"
 	case len(m.roots) == 0:
-		rec.Skipped = "no workspace root"
+		rec.Skipped = "这个会话没有工作目录"
 	default:
 		states, reason := m.snapshotRoots(ctx, man, turn)
 		rec.Roots, rec.Skipped = states, reason
@@ -219,24 +219,38 @@ func (m *Manager) Snapshot(ctx context.Context, turn int) error {
 
 // snapshotRoots snapshots every root. The second return value is the reason the
 // file half was refused, or "" when it was taken.
+//
+// The refusals are written for a READER — they end up on the rewind card as the
+// reason no file was restored — so they are Chinese, like the other strings a
+// frontend shows. Raw git errors keep their own wording after a Chinese lead, the
+// way every other wrapped error in this repo does.
 func (m *Manager) snapshotRoots(ctx context.Context, man *Manifest, turn int) ([]RootState, string) {
 	states := make([]RootState, 0, len(m.roots))
+	// All or nothing: the caller records NO state when any root fails (restoring
+	// the roots that worked would silently move the others to the wrong point in
+	// time), so the refs this call already created are released with it. Left
+	// behind they would keep their objects alive for good, invisible to every
+	// other path that prunes, drops or rewinds.
+	fail := func(reason string) ([]RootState, string) {
+		m.dropStates(states)
+		return nil, reason
+	}
 	for i, root := range m.roots {
 		r := m.repoAt(i)
 		if err := r.init(ctx); err != nil {
-			return nil, "init: " + err.Error()
+			return fail("初始化检查点仓库失败: " + err.Error())
 		}
 		if reason := m.guard(ctx, r); reason != "" {
-			return nil, reason
+			return fail(reason)
 		}
 		tree, err := r.snapshot(ctx)
 		if err != nil {
-			return nil, err.Error()
+			return fail(err.Error())
 		}
 		ref := refName(i, turn)
 		parent := m.parentRef(man, i, turn)
 		if err := r.commitTree(ctx, ref, tree, parent, fmt.Sprintf("turn %d", turn)); err != nil {
-			return nil, err.Error()
+			return fail(err.Error())
 		}
 		if parent == "" {
 			// The first snapshot of a root pays for every file, and every loose
@@ -247,7 +261,13 @@ func (m *Manager) snapshotRoots(ctx context.Context, man *Manifest, turn int) ([
 				m.opts.Logger.Warn(ctx, "checkpoint: gc after cold snapshot failed", "root", root, "err", err)
 			}
 		}
-		states = append(states, RootState{RootIndex: i, Root: root, Ref: ref, Tree: tree})
+		states = append(states, RootState{
+			RootIndex: i,
+			Root:      root,
+			Ref:       ref,
+			Tree:      tree,
+			Head:      r.userHead(ctx),
+		})
 	}
 	return states, ""
 }
@@ -257,14 +277,14 @@ func (m *Manager) snapshotRoots(ctx context.Context, man *Manifest, turn int) ([
 func (m *Manager) guard(ctx context.Context, r repo) string {
 	count, err := r.trackedFileCount(ctx)
 	if err != nil {
-		return "count files: " + err.Error()
+		return "统计文件数量失败: " + err.Error()
 	}
 	if count > m.opts.maxFiles() {
-		return fmt.Sprintf("%d files exceed the %d file limit", count, m.opts.maxFiles())
+		return fmt.Sprintf("仓库有 %d 个文件，超过上限 %d（agent.checkpoints.max_files）", count, m.opts.maxFiles())
 	}
 	candidates, err := r.candidateFiles(ctx)
 	if err != nil {
-		return "list changed files: " + err.Error()
+		return "列出改动文件失败: " + err.Error()
 	}
 	for _, rel := range candidates {
 		info, err := os.Stat(filepath.Join(r.root, rel))
@@ -272,7 +292,8 @@ func (m *Manager) guard(ctx context.Context, r repo) string {
 			continue // deleted between the listing and the stat
 		}
 		if !info.IsDir() && info.Size() > m.opts.maxBytes() {
-			return fmt.Sprintf("%s is %d bytes, over the %d byte limit", rel, info.Size(), m.opts.maxBytes())
+			return fmt.Sprintf("%s 有 %d 字节，超过单文件上限 %d（agent.checkpoints.max_bytes）",
+				rel, info.Size(), m.opts.maxBytes())
 		}
 	}
 	return ""
@@ -296,22 +317,78 @@ func (m *Manager) parentRef(man *Manifest, rootIndex, turn int) string {
 	return ""
 }
 
-// dropRefs deletes the refs of pruned checkpoints and repacks once per root, so
+// DropAfter deletes the checkpoints of every turn AFTER the given one and
+// returns how many went.
+//
+// A rewind cuts the conversation back to the start of turn N, which makes every
+// record after N describe a conversation that no longer exists: its Records
+// points past the new end of messages.jsonl, and its refs hold a branch that was
+// abandoned. Keeping them is not harmless — a rewind to such a turn restores the
+// FILES to a point in time that belongs to the discarded branch, while the
+// conversation cut is silently a no-op (measured: exactly that, before this
+// existed), and the turn numbering runs on past a gap nobody can see.
+//
+// Turn N itself is kept. Its Records IS the new end of the conversation and its
+// snapshot is the state the rewind just restored, so going back to it again
+// stays a no-op instead of an error, and the next turn is numbered N+1 — which
+// is the numbering a reader expects after "back to turn N".
+func (m *Manager) DropAfter(turn int) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return 0, err
+	}
+	keep := make([]Record, 0, len(man.Checkpoints))
+	var dropped []Record
+	for _, rec := range man.Checkpoints {
+		if rec.Turn > turn {
+			dropped = append(dropped, rec)
+			continue
+		}
+		keep = append(keep, rec)
+	}
+	if len(dropped) == 0 {
+		return 0, nil
+	}
+	man.Checkpoints = keep
+	if err := saveManifest(m.dir, man); err != nil {
+		return 0, err
+	}
+	// The refs of the dropped turns are released with them, and the objects they
+	// held become unreachable — the design's "an abandoned branch is
+	// disposable" (decision 3). Their sidecar transcripts survive in rewound/.
+	m.dropRefs(dropped)
+	return len(dropped), nil
+}
+
+// dropRefs deletes the refs of dropped checkpoints and repacks once per root, so
 // a long session's store does not grow without bound.
 func (m *Manager) dropRefs(removed []Record) {
-	if len(removed) == 0 {
+	var states []RootState
+	for _, rec := range removed {
+		states = append(states, rec.Roots...)
+	}
+	m.dropStates(states)
+}
+
+// dropStates releases the refs of a set of root states and repacks the roots they
+// belonged to, so the objects those refs were the only handle on become garbage.
+// The two callers are a checkpoint being pruned/dropped and a snapshot that failed
+// after releasing some of its refs — both want the same thing.
+func (m *Manager) dropStates(states []RootState) {
+	if len(states) == 0 {
 		return
 	}
 	ctx := context.Background()
 	touched := map[int]bool{}
-	for _, rec := range removed {
-		for _, rs := range rec.Roots {
-			if err := m.repoAt(rs.RootIndex).run(ctx, "update-ref", "-d", rs.Ref); err != nil {
-				m.opts.Logger.Warn(ctx, "checkpoint: dropping ref failed", "ref", rs.Ref, "err", err)
-				continue
-			}
-			touched[rs.RootIndex] = true
+	for _, rs := range states {
+		if err := m.repoAt(rs.RootIndex).run(ctx, "update-ref", "-d", rs.Ref); err != nil {
+			m.opts.Logger.Warn(ctx, "checkpoint: dropping ref failed", "ref", rs.Ref, "err", err)
+			continue
 		}
+		touched[rs.RootIndex] = true
 	}
 	for idx := range touched {
 		if err := m.repoAt(idx).gc(ctx); err != nil {
@@ -320,39 +397,69 @@ func (m *Manager) dropRefs(removed []Record) {
 	}
 }
 
+// FileState is what a rewind knows about the WORKSPACE at the point it is
+// returning to. It is the difference between "the files are already right",
+// "here is what they were", and "nobody recorded what they were" — three
+// outcomes a rewind must report differently, because only the middle one can
+// put files back.
+type FileState int
+
+const (
+	// FilesAvailable: a snapshot carries the tree a rewind must restore.
+	FilesAvailable FileState = iota
+
+	// FilesUnchanged: no turn at or after this one wrote anything, so the
+	// workspace is already in the state a rewind to it would produce. Nothing
+	// to restore and nothing to delete — a fact, not a refusal, and no git work
+	// is needed to establish it.
+	//
+	// This is the state of every turn in a session that never wrote a file, and
+	// of the read-only turns at the tail of any session: going back to one of
+	// them must still work (the reader wants the CONVERSATION back), which is
+	// why it cannot be reported as "unknown".
+	FilesUnchanged
+
+	// FilesUnknown: the file state was never recorded (a guard refused the
+	// snapshot, git is missing) or is gone (pruned). The conversation half of
+	// the checkpoint still exists, so a rewind may proceed — but it must say
+	// that no file was restored rather than imply the workspace moved with it.
+	FilesUnknown
+)
+
 // resolveTarget returns the checkpoint that carries the file state a rewind to
-// turn needs, or the reason there is none.
+// turn needs, together with what that state is worth.
 //
 // The subtlety lazy snapshots create: a turn that wrote nothing has a boundary
 // but no snapshot of its own, and ITS starting state is the next writing turn's
-// starting state — so resolving forward is correct. But that reasoning only
-// holds while the turns in between are known to have written nothing, which is
-// what "no Roots and no Skipped" means. A turn whose snapshot was refused (a
-// guard tripped) or pruned is UNKNOWN, and a later snapshot is not a stand-in
-// for it: the files would silently come back to the wrong point in time.
-func (m *Manager) resolveTarget(man *Manifest, turn int) (Record, bool, string) {
+// starting state — so resolving forward is correct, and FilesUnchanged if there
+// is no next writer at all. But that reasoning only holds while the turns in
+// between are known to have written nothing, which is what "no Roots and no
+// Skipped" means. A turn whose snapshot was refused (a guard tripped) is
+// UNKNOWN, and a later snapshot is not a stand-in for it: the files would
+// silently come back to the wrong point in time.
+func (m *Manager) resolveTarget(man *Manifest, turn int) (Record, FileState, string) {
 	rec, ok := man.find(turn)
 	if !ok {
-		return Record{}, false, fmt.Sprintf("turn %d is not checkpointed", turn)
+		return Record{}, FilesUnknown, fmt.Sprintf("第 %d 轮没有检查点", turn)
 	}
 	if len(rec.Roots) > 0 {
-		return rec, true, ""
+		return rec, FilesAvailable, ""
 	}
 	if rec.Skipped != "" {
-		return Record{}, false, rec.Skipped
+		return Record{}, FilesUnknown, rec.Skipped
 	}
 	for _, later := range man.Checkpoints {
 		if later.Turn <= turn {
 			continue
 		}
 		if later.Skipped != "" {
-			return Record{}, false, later.Skipped
+			return Record{}, FilesUnknown, later.Skipped
 		}
 		if len(later.Roots) > 0 {
-			return later, true, ""
+			return later, FilesAvailable, ""
 		}
 	}
-	return Record{}, false, "nothing wrote during or after this turn, so the files are already as they were"
+	return Record{}, FilesUnchanged, ""
 }
 
 // repoAt builds the repo handle for a root index.

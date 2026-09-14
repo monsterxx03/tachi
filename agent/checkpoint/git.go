@@ -76,6 +76,25 @@ const objectCompression = 1
 // reported, not silently rewound); `.tachi` because it is agent state.
 const excludeFile = ".git\n.tachi\n"
 
+// userHead is the commit the ROOT's own repository has checked out, or "" when
+// the root is not a git repository (or has no commit yet).
+//
+// It is read from the USER's repository, not through this store, because that is
+// the one side effect a rewind cannot put back: the snapshot restores files, and
+// a `git commit` the agent made still sits in the log afterwards. A rewind across
+// one therefore has to say so (see Manager.preview).
+//
+// The invocation carries no --git-dir/--work-tree on purpose — those point at our
+// shadow store. The root is passed as the working directory instead, so git
+// discovers the user's repository the way the user's own shell would.
+func (r repo) userHead(ctx context.Context) string {
+	out, err := shutil.Output(ctx, r.root, "git", "rev-parse", "HEAD")
+	if err != nil {
+		return "" // not a repository, or no first commit yet: nothing to lose
+	}
+	return strings.TrimSpace(out)
+}
+
 // init creates the bare repository if it is not there yet and (re)writes the
 // built-in excludes. Idempotent: called lazily, right before the first
 // snapshot of a root, never at session start.

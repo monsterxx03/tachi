@@ -260,6 +260,10 @@
 .rewind-root-head { color: var(--text-faint); font-family: var(--mono, monospace); word-break: break-all; }
 .rewind-root-counts { margin-top: 2px; color: var(--text-dim); }
 .rewind-root-counts b { color: var(--red); font-weight: 600; }
+/* The benign workspace answer: "this turn wrote nothing, there is nothing to restore".
+   Dim, because it is a fact rather than a warning — the file lists above are the
+   destructive half and the red line is the "nothing was restored" one. */
+.rewind-note { margin-top: 10px; font-size: 12.5px; color: var(--text-faint); }
 .rewind-added {
   margin: 4px 0 0; padding-left: 16px;
   font-family: var(--mono, monospace); font-size: 11.5px; color: var(--text-faint);

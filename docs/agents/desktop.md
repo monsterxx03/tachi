@@ -126,7 +126,11 @@ const type = (el, t) => {
   transient state, and a starved webview misses both. Measured: two overlapping runs produced timeouts plus
   phantom drag failures in `composer-height` / `oneoff-panel` — and so did a single run whose only extra load
   was a 0.4s-interval front-app sampler (one `osascript` spawn per tick), while the same tree, run alone
-  with the sampler left at 3s, passed 18/18 in 1m23s then (19/19 in 1m27s today). Before believing a
+  with the sampler left at 3s, passed 18/18 in 1m23s then (19/19 in 1m27s today). An EMPTY
+  `mock-requests.txt` in the failing scenario's sandbox is the signature of a starved run rather than a
+  broken app: the request never left it. **A failing run keeps its sandbox** (`artifacts: …`, one copy of the
+  app bundle plus one per scenario), so they pile up in `$TMPDIR` — 51 of them, 21GB, on this machine; they
+  are inert, but clearing the old ones is worth it if the root volume gets tight. Before believing a
   failure, check `pgrep -fl "itest/desktop|TachiSmoke"` and re-run the scenario on its own: the synthetic
   DRAGS are the flakiest of all (a second gesture is sometimes swallowed), so a lone drag assertion failing
   in a full run is the harness until proven otherwise.
@@ -273,7 +277,12 @@ const type = (el, t) => {
   on a clean tree is a no-op, so a diff in that directory is always a real change.
 - **Only `desktop/` is a Go module of its own** (it is NOT listed in the repo-root `go.work`), so every Go
   command for it runs with `GOWORK=off`: `desktop/Makefile` exports it, and the root `desktop-smoke` target
-  sets it for the one command it runs from the parent directory.
+  sets it for the one command it runs from the parent directory. **The root `go test ./...` therefore does
+  NOT compile `desktop/`'s test package** — a signature change under `desktop/` can leave its tests
+  unbuildable with every root-level check still green (measured: `buildSessionMessages` gained an `offset`
+  argument and `roots_test.go` kept calling it with one argument; the module was broken until someone ran
+  `cd desktop && GOWORK=off go test ./...`). After touching `desktop/`, run that too — `make lint` at the
+  root does not cover it either.
 - **A session's directory is `config.SessionDir()` + ONE path element**: `sessionDirPath(id)` in
   `sessiondir.go` is the single resolver, and it REFUSES anything a webview could send that is not a single
   name (`../..`, `a/b`, `.`, empty). The rule came from `oneOffDir`, which now shares it — every

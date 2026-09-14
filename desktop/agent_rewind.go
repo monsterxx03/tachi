@@ -54,12 +54,21 @@ type RewindPreviewVO struct {
 	// composer so the reader can edit and re-send it.
 	UserText string         `json:"userText,omitempty"`
 	Roots    []RewindRootVO `json:"roots,omitempty"`
+	// FilesUnchanged means there is nothing to restore: this turn and everything
+	// after it wrote no file, so the workspace is already in the state the rewind
+	// would produce. The card says so instead of showing a list of zeroes.
+	FilesUnchanged bool `json:"filesUnchanged,omitempty"`
+	// NoFiles, when set, is why NO file was restored even though the rewind runs.
+	// Shown on the card as a warning, never swallowed: the conversation moves back
+	// and the workspace does not, and the reader has to know which of the two
+	// happened.
+	NoFiles string `json:"noFiles,omitempty"`
 	// Irreversible lists side effects the rewind cannot take back — a git commit
 	// the agent made being the one that matters. Shown on the card, never
 	// swallowed.
 	Irreversible []string `json:"irreversible,omitempty"`
-	// Blocked is why this rewind cannot run. Non-empty means the card is the
-	// whole answer.
+	// Blocked is why this rewind cannot run at all (no checkpoint for that turn,
+	// another turn in flight). Non-empty means the card is the whole answer.
 	Blocked string `json:"blocked,omitempty"`
 }
 
@@ -166,11 +175,13 @@ func (d *desktopApp) sessionRunning(id string) (bool, string) {
 // toRewindPreviewVO flattens the agent's preview into the binding's shape.
 func toRewindPreviewVO(p agent.RewindPreview) RewindPreviewVO {
 	out := RewindPreviewVO{
-		Turn:         p.Turn,
-		Target:       p.Target,
-		UserText:     p.UserText,
-		Irreversible: p.Irreversible,
-		Blocked:      p.Blocked,
+		Turn:           p.Turn,
+		Target:         p.Target,
+		UserText:       p.UserText,
+		FilesUnchanged: p.FilesUnchanged,
+		NoFiles:        p.NoFiles,
+		Irreversible:   p.Irreversible,
+		Blocked:        p.Blocked,
 	}
 	for _, r := range p.Roots {
 		out.Roots = append(out.Roots, RewindRootVO{

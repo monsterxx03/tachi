@@ -81,7 +81,7 @@ func TestCheckpointWiringRecordsBoundaryThenSnapshot(t *testing.T) {
 	a, work, ctx := checkpointTestAgent(t)
 	rs := &RunState{}
 
-	a.beginCheckpointTurn(ctx, rs, "把导出改成流式", 3, 2)
+	a.beginCheckpointTurn(ctx, rs, "把导出改成流式", boundary(3, 2))
 	require.Equal(t, 1, rs.CheckpointTurn())
 
 	m := readCheckpointManifest(t, a)
@@ -120,7 +120,7 @@ func TestCheckpointWiringSkipsOneOffRuns(t *testing.T) {
 	a, _, ctx := checkpointTestAgent(t)
 	rs := &RunState{SkipSessionWrites: true}
 
-	a.beginCheckpointTurn(ctx, rs, "评审一下", 0, 0)
+	a.beginCheckpointTurn(ctx, rs, "评审一下", boundary(0, 0))
 
 	assert.Equal(t, 0, rs.CheckpointTurn())
 	_, err := os.Stat(manifestPath(t, a))
@@ -147,7 +147,7 @@ func TestCheckpointWiringDisabledByConfig(t *testing.T) {
 			a.Config.FullConfig.Checkpoints.Enabled = tc.enabled
 			rs := &RunState{}
 
-			a.beginCheckpointTurn(ctx, rs, "你好", 0, 0)
+			a.beginCheckpointTurn(ctx, rs, "你好", boundary(0, 0))
 
 			assert.Equal(t, 0, rs.CheckpointTurn())
 			_, err := os.Stat(manifestPath(t, a))
