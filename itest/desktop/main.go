@@ -85,44 +85,45 @@ func main() {
 
 // runScenario sets up one isolated app run and reports whether it passed.
 func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Duration, verbose bool) bool {
+	start := time.Now()
 	fmt.Printf("── %s\n", sc.name)
 	dir := filepath.Join(root, sc.name)
 	sb, err := newSandbox(dir, srcApp)
 	if err != nil {
-		return report(sc.name, nil, []Line{{Label: "sandbox", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "sandbox", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 	if err := sb.seedFiles(sc.files); err != nil {
-		return report(sc.name, nil, []Line{{Label: "fixtures", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "fixtures", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 	if sc.gitInit {
 		if err := sb.gitInit(); err != nil {
-			return report(sc.name, nil, []Line{{Label: "git init", OK: false, Detail: err.Error()}}, verbose)
+			return report(sc.name, nil, []Line{{Label: "git init", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
 	if err := sb.seedExtraRoots(sc.extraRoots); err != nil {
-		return report(sc.name, nil, []Line{{Label: "extra roots", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "extra roots", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 	if err := sb.seedSession("冒烟会话", sc.extraRoots); err != nil {
-		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
 	mock := mockllm.NewServer(mockllm.WithProtocol(mockllm.ProtocolOpenAI))
 	mock.Script(sc.steps...)
 	if err := sb.writeConfig(mock.BaseURL(), sc.config); err != nil {
-		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
 	snk, err := newSink()
 	if err != nil {
-		return report(sc.name, nil, []Line{{Label: "sink", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "sink", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 	defer snk.close()
 	if _, err := sb.writeDriver(driversDir, sc.name, snk.url); err != nil {
-		return report(sc.name, nil, []Line{{Label: "driver", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "driver", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
 	if err := sb.launch(); err != nil {
-		return report(sc.name, nil, []Line{{Label: "launch", OK: false, Detail: err.Error()}}, verbose)
+		return report(sc.name, nil, []Line{{Label: "launch", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
 	res, reported := snk.wait(timeout)
@@ -166,11 +167,13 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	if sc.after != nil {
 		sc.after(ctx)
 	}
-	return report(sc.name, &res, lines, verbose)
+	return report(sc.name, &res, lines, time.Since(start), verbose)
 }
 
-// report prints one scenario's outcome; the boolean is "passed".
-func report(name string, res *Result, lines []Line, verbose bool) bool {
+// report prints one scenario's outcome; the boolean is "passed". elapsed is the whole
+// scenario — sandbox prep, launch, the driver, the Go-side checks — because that is what
+// the suite's wall clock is made of, and a scenario's cost is invisible without it.
+func report(name string, res *Result, lines []Line, elapsed time.Duration, verbose bool) bool {
 	ok := true
 	for _, l := range lines {
 		if !l.OK {
@@ -183,7 +186,7 @@ func report(name string, res *Result, lines []Line, verbose bool) bool {
 	if res != nil && res.Error != "" {
 		ok = false
 	}
-	fmt.Printf("   %s %s\n\n", mark(ok), summary(ok, lines))
+	fmt.Printf("   %s %s（%s）\n\n", mark(ok), summary(ok, lines), elapsed.Round(100*time.Millisecond))
 	return ok
 }
 
