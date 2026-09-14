@@ -33,9 +33,26 @@
   smoke.check('两条用户消息都在（第二轮是回退要撤销的那一轮）', bubbles.length === 2, String(bubbles.length))
   if (bubbles.length < 2) return smoke.finish()
 
-  // Right-click the FIRST prompt: the turn to go back to.
-  bubbles[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 260 }))
-  if (!(await smoke.waitFor('.ctx-menu', '回退菜单出现', 5000))) return smoke.finish()
+  // Right-click the FIRST prompt: the turn to go back to. Before using the menu, prove it
+  // can be DISMISSED — with the two gestures a reader actually makes (a press on blank
+  // space, Escape). A menu that cannot be closed covers the page it belongs to, and this
+  // one could not: it was dismissed by `onMouseLeave` alone, which only fires once the
+  // pointer has been inside the menu, something a right-click does not guarantee.
+  const openMenu = async (label) => {
+    bubbles[0].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 80, clientY: 260 }))
+    return !!(await smoke.waitFor('.ctx-menu', label, 5000))
+  }
+  if (!(await openMenu('回退菜单出现'))) return smoke.finish()
+  smoke.q('.chat-content').dispatchEvent(new MouseEvent('mousedown', { bubbles: true, cancelable: true }))
+  const pressClosed = await smoke.waitFor(() => !smoke.q('.ctx-menu'), '点空白处关掉菜单', 2000)
+  smoke.check('点空白处菜单关闭', !!pressClosed, pressClosed ? '' : smoke.text('.ctx-menu').slice(0, 60))
+
+  if (!(await openMenu('再次打开回退菜单'))) return smoke.finish()
+  smoke.key(document.body, 'Escape')
+  const escClosed = await smoke.waitFor(() => !smoke.q('.ctx-menu'), 'Esc 关掉菜单', 2000)
+  smoke.check('Esc 关掉菜单', !!escClosed, escClosed ? '' : smoke.text('.ctx-menu').slice(0, 60))
+
+  if (!(await openMenu('第三次打开回退菜单'))) return smoke.finish()
   const item = smoke.qa('.ctx-menu .ctx-item')[0]
   smoke.check('这一轮有检查点，所以菜单项可用', !!item && !item.disabled, item ? (item.title || '可点') : '找不到菜单项')
   if (!item || item.disabled) return smoke.finish()

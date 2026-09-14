@@ -1012,8 +1012,9 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
         // as "somebody else used this key". An unconditional preventDefault would swallow every
         // Escape before the panel's handler could see it as unclaimed.
-        if (shortcutsOpen || confirmDel || menu || reminderModal) e.preventDefault()
-        setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setReminderModal(null)
+        if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal) e.preventDefault()
+        setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setRewindMenu(null)
+        setRewindCard(null); setReminderModal(null)
         return
       }
       if (!e.metaKey) return
@@ -1024,7 +1025,27 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChat, shortcutsOpen, confirmDel, menu, reminderModal])
+  }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal])
+
+  // A context menu is dismissed the way every other popover here is: a press outside it
+  // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
+  // fires once the pointer has been INSIDE the menu, and the menu is drawn at the click
+  // point and animates in, so a right-click can leave it on screen with no gesture that
+  // closes it (measured from use: 「右键点空白处关不掉，一直显示着」).
+  //
+  // `mousedown` rather than `click`: the menu must be gone before the press lands on
+  // whatever is underneath it, and a press that lands INSIDE the menu is left alone —
+  // the entry's own click closes it after doing its work.
+  useEffect(() => {
+    if (!menu && !rewindMenu) return
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement | null
+      if (!t || t.closest('.ctx-menu')) return
+      setMenu(null); setRewindMenu(null)
+    }
+    document.addEventListener('mousedown', onDown)
+    return () => document.removeEventListener('mousedown', onDown)
+  }, [menu, rewindMenu])
 
   useEffect(() => {
     const loadProv = async () => {
