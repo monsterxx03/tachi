@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react'
-import type { SessionMessage } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { Message } from './types'
 
 export function extractReminder(content: string): { reminder: string; text: string } {
@@ -70,7 +70,14 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
   const turns: Message[] = []
   let cur: Message | null = null
   let pendingReminder = ''
+  // The turn a record belongs to, and what it changed. The backend stamps EVERY record of a
+  // turn with the turn it is part of (see stampBefore), so the card reads it from whichever
+  // record starts the card; the carry below is for the live path, where a record arrives
+  // without one. A page can open in the middle of a turn, which is exactly why the stamp may
+  // not be looked up on the opening record alone.
+  let turnStamp: { turn?: number; changes?: TurnChangesVO | null } = {}
   sms.forEach((sm) => {
+    if (sm.turn) turnStamp = { turn: sm.turn, changes: sm.changes }
     if (sm.role === 'reminder') { pendingReminder += (pendingReminder ? '\n' : '') + sm.content; return }
     if (sm.role === 'user') {
       const r = extractReminder(sm.content)
@@ -88,7 +95,10 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
       return
     }
     if (!cur || cur.role !== 'assistant') {
-      cur = { id: nextTurnId(), role: 'assistant', parts: [], ts: sm.timestamp || undefined }
+      cur = {
+        id: nextTurnId(), role: 'assistant', parts: [], ts: sm.timestamp || undefined,
+        turn: turnStamp.turn, changes: turnStamp.changes,
+      }
       turns.push(cur)
     }
     if (!cur.parts) cur.parts = []

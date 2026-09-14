@@ -41,6 +41,7 @@ export type {
     SessionRootVO,
     SessionRootsVO,
     ToolCallVo,
+    TurnChangesVO,
     TurnDiffVO,
     UIStateVO
 } from "./models.js";

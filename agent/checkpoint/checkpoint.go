@@ -217,6 +217,221 @@ func (m *Manager) Snapshot(ctx context.Context, turn int) error {
 	return saveManifest(m.dir, man)
 }
 
+// SnapshotEnd records where the turn's writes LEFT the workspace, and with it the turn's
+// own change summary.
+//
+// It is the second half of a turn's file state. `Begin` + `Snapshot` capture where the turn
+// started — what a rewind needs. This captures where it ended, which is what makes the
+// turn's changes READABLE: `git diff <start> <end>` is exactly what this turn did, and it
+// cannot be moved by a later turn, a later commit, or the user editing the file again. The
+// alternative — inferring the change from what the tool calls said they were about to do —
+// cannot see a shell command at all, and has to guess at created and deleted files.
+//
+// Only a turn that HAS a start state gets one: a turn that wrote nothing has nothing to
+// compare, and snapshotting anyway would make every read-only turn pay for a traversal —
+// the cost the lazy design exists to avoid.
+//
+// A failure here does NOT fail the turn, unlike the start snapshot: the work is already
+// done, so there is nothing left to refuse. The reason is recorded (Record.Diff.Skipped)
+// and every reader falls back to what the tool calls declared.
+func (m *Manager) SnapshotEnd(ctx context.Context, turn int) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return err
+	}
+	idx, rec, ok := man.findIndex(turn)
+	if !ok {
+		return fmt.Errorf("checkpoint: turn %d was never begun", turn)
+	}
+	if rec.Diff != nil || rec.Skipped != "" || len(rec.Roots) == 0 {
+		return nil // already ended, unknown state, or nothing was written
+	}
+
+	reason := m.endSnapshotRoots(ctx, &rec, turn)
+	if reason != "" {
+		// All or nothing, exactly like the start snapshot: half a set of end states would
+		// make the numbers look complete while covering only some roots. But only the END
+		// refs this call created are released: the START refs are this turn's rewind point,
+		// and a refused END must not take that with it. Dropping a start ref is not a
+		// tidiness problem — parentRef NAMES it when chaining the next writing turn's
+		// snapshot, so `commit-tree -p <deleted ref>` fails, that turn records no state
+		// either, and every turn after it fails the same way: one refused end switches the
+		// rest of the session's checkpoints off.
+		var ended []RootState
+		for i := range rec.Roots {
+			if rec.Roots[i].EndRef != "" {
+				ended = append(ended, RootState{RootIndex: rec.Roots[i].RootIndex, EndRef: rec.Roots[i].EndRef})
+			}
+			rec.Roots[i].EndRef, rec.Roots[i].EndTree = "", ""
+		}
+		m.dropStates(ended)
+		rec.Diff = &TurnDiff{Skipped: reason}
+		man.Checkpoints[idx] = rec
+		m.opts.Logger.Warn(ctx, "checkpoint: end-of-turn snapshot skipped", "turn", turn, "reason", reason)
+		return saveManifest(m.dir, man)
+	}
+
+	diff, statErr := m.diffStat(ctx, rec)
+	if statErr != nil {
+		// The trees are there and stay useful (the panel and the review read them); only
+		// the counting failed, so the numbers are the missing half.
+		m.opts.Logger.Warn(ctx, "checkpoint: turn diff stat failed", "turn", turn, "err", statErr)
+		diff = &TurnDiff{Skipped: "统计本轮改动失败: " + statErr.Error()}
+	}
+	rec.Diff = diff
+	man.Checkpoints[idx] = rec
+	return saveManifest(m.dir, man)
+}
+
+// endSnapshotRoots takes the end state of every root the turn's start recorded, filling
+// EndRef/EndTree in place. The second return value is the reason it could not, or "".
+func (m *Manager) endSnapshotRoots(ctx context.Context, rec *Record, turn int) string {
+	for i := range rec.Roots {
+		rs := &rec.Roots[i]
+		r := m.repoAt(rs.RootIndex)
+		// The same guards as the start snapshot, and here they matter for a different
+		// reason: this is the first moment a large thing the TURN CREATED is visible, and
+		// storing it is exactly what the byte guard exists to refuse.
+		if reason := m.guard(ctx, r); reason != "" {
+			return reason
+		}
+		tree, err := r.snapshot(ctx)
+		if err != nil {
+			return err.Error()
+		}
+		ref := endRefName(rs.RootIndex, turn)
+		if err := r.commitTree(ctx, ref, tree, rs.Ref, fmt.Sprintf("turn %d end", turn)); err != nil {
+			return err.Error()
+		}
+		rs.EndRef, rs.EndTree = ref, tree
+	}
+	return ""
+}
+
+// diffStat counts a turn's changes from its two trees, per root.
+func (m *Manager) diffStat(ctx context.Context, rec Record) (*TurnDiff, error) {
+	out := &TurnDiff{}
+	for _, rs := range rec.Roots {
+		if rs.Tree == "" || rs.EndTree == "" {
+			continue
+		}
+		files, added, removed, err := m.repoAt(rs.RootIndex).numstat(ctx, rs.Tree, rs.EndTree)
+		if err != nil {
+			return nil, err
+		}
+		out.Files += files
+		out.Added += added
+		out.Removed += removed
+	}
+	return out, nil
+}
+
+// TurnDiff returns the unified diff of a turn's own two trees, and whether there is a
+// pair to diff at all (false for a turn that wrote nothing, or whose end state is
+// missing — the caller then falls back to whatever the tool calls declared).
+//
+// Both sides are recorded trees, so the answer does not change when the worktree does:
+// asking an hour later, after a commit, gives the same diff this turn produced.
+func (m *Manager) TurnDiff(ctx context.Context, turn int) (string, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return "", false, err
+	}
+	rec, ok := man.find(turn)
+	if !ok {
+		return "", false, nil
+	}
+	var b strings.Builder
+	for _, rs := range rec.Roots {
+		if rs.Tree == "" || rs.EndTree == "" {
+			continue
+		}
+		text, err := m.repoAt(rs.RootIndex).diffText(ctx, rs.Tree, rs.EndTree)
+		if err != nil {
+			return "", false, err
+		}
+		b.WriteString(text)
+	}
+	if b.Len() == 0 {
+		return "", false, nil
+	}
+	return b.String(), true, nil
+}
+
+// TurnDiffCommand is a shell command that prints a turn's diff — for a reader that runs git
+// itself rather than being handed text (the review fork). Empty when the turn has no pair
+// of trees. Several roots are joined with `&&`: each prints its own diff.
+func (m *Manager) TurnDiffCommand(turn int) string {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return ""
+	}
+	rec, ok := man.find(turn)
+	if !ok {
+		return ""
+	}
+	var cmds []string
+	for _, rs := range rec.Roots {
+		if rs.Tree == "" || rs.EndTree == "" {
+			continue
+		}
+		r := m.repoAt(rs.RootIndex)
+		cmds = append(cmds, fmt.Sprintf("git --git-dir=%s --work-tree=%s diff %s %s",
+			shellQuote(r.dir), shellQuote(r.root), rs.Tree, rs.EndTree))
+	}
+	return strings.Join(cmds, " && ")
+}
+
+// shellQuote wraps a path so a shell hands it over as ONE argument. The store lives under
+// the session directory, and a session directory (or a workspace) can contain spaces.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
+}
+
+// ChangedSinceTurn reports which paths the working tree no longer has where the turn left
+// them, so a frozen diff can say 「这个文件之后又改过」 instead of letting the reader
+// believe the panel shows what is on disk right now.
+//
+// Paths are root-relative and returned as a set: with several roots the same relative path
+// can name two different files, and a caller that cares about that distinction has to ask
+// per root (nothing in the UI does yet).
+func (m *Manager) ChangedSinceTurn(ctx context.Context, turn int) (map[string]bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return nil, err
+	}
+	rec, ok := man.find(turn)
+	if !ok {
+		return nil, nil
+	}
+	out := map[string]bool{}
+	for _, rs := range rec.Roots {
+		if rs.EndTree == "" {
+			continue
+		}
+		paths, err := m.repoAt(rs.RootIndex).treeChangedSince(ctx, rs.EndTree)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range paths {
+			out[p] = true
+		}
+	}
+	return out, nil
+}
+
 // snapshotRoots snapshots every root. The second return value is the reason the
 // file half was refused, or "" when it was taken.
 //
@@ -375,8 +590,12 @@ func (m *Manager) dropRefs(removed []Record) {
 
 // dropStates releases the refs of a set of root states and repacks the roots they
 // belonged to, so the objects those refs were the only handle on become garbage.
-// The two callers are a checkpoint being pruned/dropped and a snapshot that failed
-// after releasing some of its refs — both want the same thing.
+//
+// EVERY ref a state carries goes, including both halves of a state that has an end — the
+// callers are a checkpoint being pruned/dropped and a snapshot that failed after releasing
+// some of its refs, and in both cases the whole state is disposable. A state whose start
+// MUST survive therefore arrives here with only EndRef set: that is what a refused END does
+// (see SnapshotEnd), and why the caller builds the list rather than passing rec.Roots.
 func (m *Manager) dropStates(states []RootState) {
 	if len(states) == 0 {
 		return
@@ -384,11 +603,16 @@ func (m *Manager) dropStates(states []RootState) {
 	ctx := context.Background()
 	touched := map[int]bool{}
 	for _, rs := range states {
-		if err := m.repoAt(rs.RootIndex).run(ctx, "update-ref", "-d", rs.Ref); err != nil {
-			m.opts.Logger.Warn(ctx, "checkpoint: dropping ref failed", "ref", rs.Ref, "err", err)
-			continue
+		for _, ref := range []string{rs.Ref, rs.EndRef} {
+			if ref == "" {
+				continue
+			}
+			if err := m.repoAt(rs.RootIndex).run(ctx, "update-ref", "-d", ref); err != nil {
+				m.opts.Logger.Warn(ctx, "checkpoint: dropping ref failed", "ref", ref, "err", err)
+				continue
+			}
+			touched[rs.RootIndex] = true
 		}
-		touched[rs.RootIndex] = true
 	}
 	for idx := range touched {
 		if err := m.repoAt(idx).gc(ctx); err != nil {
@@ -526,6 +750,12 @@ func refName(rootIndex, turn int) string {
 	return fmt.Sprintf("%s/%02d/%d", refPrefix, rootIndex, turn)
 }
 
+// endRefName is the ref holding where a turn LEFT that root (see SnapshotEnd). It sits
+// beside the start's ref so one prune or drop releases both.
+func endRefName(rootIndex, turn int) string {
+	return fmt.Sprintf("%s/%02d/%d-end", refPrefix, rootIndex, turn)
+}
+
 // TurnInfo describes one checkpointed turn, for a picker or a rewind command.
 type TurnInfo struct {
 	Turn       int       `json:"turn"`
@@ -540,6 +770,11 @@ type TurnInfo struct {
 	// Reason explains NoFiles when the state is genuinely unknown (a skipped
 	// snapshot), as opposed to "nothing wrote during it".
 	Reason string `json:"reason,omitempty"`
+	// Diff is what this turn changed, counted from its own two trees — nil when it
+	// wrote nothing, Skipped when the numbers could not be taken. It rides along here
+	// because a reader that already has the turn list (the desktop's page builder, a
+	// picker) then has the footer's numbers too, without a second call or a git run.
+	Diff *TurnDiff `json:"diff,omitempty"`
 }
 
 // Turns lists the session's checkpoints, oldest first.
@@ -561,6 +796,7 @@ func (m *Manager) Turns() ([]TurnInfo, error) {
 			UserText:   rec.UserText,
 			NoFiles:    len(rec.Roots) == 0,
 			Reason:     rec.Skipped,
+			Diff:       rec.Diff,
 		}
 		out = append(out, info)
 	}

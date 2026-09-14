@@ -518,6 +518,13 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			Opts:     opts,
 			Params:   params,
 		}, ch)
+
+		// The turn is over, however it ended — completed, stopped, or errored: record where
+		// its writes left the workspace. That is what makes this turn's changes readable
+		// afterwards as `git diff start end` instead of inferred from what the tool calls
+		// said they were about to do (which cannot see a shell command). A stopped turn
+		// wrote files just the same, so it gets one too.
+		a.endCheckpointTurn(ctx, rs)
 	}()
 
 	return ch
@@ -1186,7 +1193,7 @@ func (a *AIAgent) lengthExhausted(
 	// of an error — the user already saw the text streaming, and
 	// discarding it (or showing a red error) is worse than delivering
 	// what we have with a note that it was truncated.
-	ch <- AgentEvent{
+	a.emitTurnComplete(ctx, rs, ch, AgentEvent{
 		Type:           AgentEventTurnComplete,
 		CheckpointTurn: rs.CheckpointTurn(),
 		Messages:       rs.Messages,
@@ -1202,7 +1209,7 @@ func (a *AIAgent) lengthExhausted(
 			TurnCredit:     rs.TurnCredit,
 			TraceID:        rs.trace(),
 		},
-	}
+	})
 
 	// Fire turn_complete hook with error info so external integrations
 	// know the turn ended (even if truncated). Without this, the hook
@@ -1269,6 +1276,20 @@ func continuationPrompt(acc *streamAccumulator) string {
 	}
 }
 
+// emitTurnComplete emits the terminal event of a COMPLETED turn, recording where the turn's
+// writes left the workspace first (see endCheckpointTurn).
+//
+// The order is the whole point: the event's reader fills the transcript's footer from the
+// turn's change summary, and a snapshot taken after the event would arrive too late — the
+// footer would silently fall back to the narrower tool-call numbers, which is exactly the
+// thing the checkpoint's exact numbers are supposed to replace. The loop's other exits
+// (error, cancel — AgentEventError) are covered by the caller once runLoop returns; the call
+// is idempotent, so a turn never pays for two snapshots.
+func (a *AIAgent) emitTurnComplete(ctx context.Context, rs *RunState, ch chan<- AgentEvent, ev AgentEvent) {
+	a.endCheckpointTurn(ctx, rs)
+	ch <- ev
+}
+
 // handleStopFinish processes a normal stop response: records the assistant
 // turn, emits TurnComplete, and stores turn-level memory.
 func (a *AIAgent) handleStopFinish(
@@ -1288,10 +1309,10 @@ func (a *AIAgent) handleStopFinish(
 
 	a.recordAssistantTurn(rs, acc.text.String(), acc.usage, acc.thinkBlocks)
 
-	ch <- AgentEvent{
+	a.emitTurnComplete(ctx, rs, ch, AgentEvent{
 		Type: AgentEventTurnComplete, Messages: rs.Messages, Usage: acc.usage, CheckpointTurn: rs.CheckpointTurn(),
 		Result: &RunResult{Response: acc.text.String(), IterationsUsed: rs.APICalls, Duration: rs.elapsed(), ExitReason: ExitReasonStop, Usage: acc.usage, TurnCost: rs.TurnCost, TurnCredit: rs.TurnCredit, TraceID: rs.trace()},
-	}
+	})
 
 	// Fire turn_complete hook
 	a.dispatchEvent(ctx, hooks.EventTurnComplete, hooks.Payload{

@@ -50,6 +50,10 @@ type TurnDiffVO struct {
 	// empty diff, and its refusal has to say "the reviewer cannot see this file" rather than
 	// "there is nothing to review".
 	Ignored int `json:"ignored,omitempty"`
+	// Source says where this diff came from: "checkpoint" (the turn's own two trees — exact,
+	// frozen, shell commands included) or "tools" (this working-tree comparison of the paths
+	// the tool calls declared). See turnchanges.go.
+	Source string `json:"source,omitempty"`
 }
 
 // FileDiffVO is one file's working-tree change.
@@ -62,6 +66,11 @@ type FileDiffVO struct {
 	Hunks   []linediff.Hunk `json:"hunks"`
 	Added   int             `json:"added"`
 	Removed int             `json:"removed"`
+	// ChangedSince marks a file whose working-tree content is no longer what this turn left
+	// (another turn, the user, or a commit moved it). Only a checkpoint-sourced diff can know
+	// this, and only the panel needs it: without the flag the frozen diff would look like the
+	// disk, and 「打开文件」 would show text that does not match the hunks.
+	ChangedSince bool `json:"changedSince,omitempty"`
 }
 
 // GetTurnDiff returns the working-tree diff of paths (the files a turn touched) under
@@ -115,22 +124,7 @@ func (s *AgentService) GetTurnDiff(sessionID string, paths []string) TurnDiffVO 
 	}
 
 	// Truncate rather than stall: the panel says so and the file itself is one click away.
-	if total, kept := countHunks(vo.Files), 0; total > maxDiffHunks {
-		trimmed := vo.Files[:0]
-		for _, f := range vo.Files {
-			if kept >= maxDiffHunks {
-				break
-			}
-			if kept+len(f.Hunks) > maxDiffHunks {
-				f.Hunks = f.Hunks[:maxDiffHunks-kept]
-				f.Added, f.Removed = linediff.Counts(f.Hunks)
-			}
-			kept += len(f.Hunks)
-			trimmed = append(trimmed, f)
-		}
-		vo.Files = trimmed
-		vo.Note = joinNotes(vo.Note, "改动很大，这里只显示了一部分")
-	}
+	truncateDiff(&vo)
 
 	// A requested path git IGNORES shows up in neither list above — `git diff HEAD` does not
 	// track it, and `ls-files --others --exclude-standard` excludes it by definition — so the

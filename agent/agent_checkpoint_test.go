@@ -113,6 +113,73 @@ func TestCheckpointWiringRecordsBoundaryThenSnapshot(t *testing.T) {
 	assert.Equal(t, 1, len(readCheckpointManifest(t, a).Checkpoints))
 }
 
+// TestCheckpointWiringEndsTheTurnWithItsChanges: the turn end records where the writes LEFT
+// the workspace, and the summary that comes out of it covers what NO tool declared — two
+// files written by a shell command — because it is read from the trees, not from the calls.
+// A turn that only read gets no summary at all (and paid nothing for one).
+func TestCheckpointWiringEndsTheTurnWithItsChanges(t *testing.T) {
+	a, work, ctx, _ := rewindTestAgent(t, 0)
+
+	rs := &RunState{}
+	a.beginCheckpointTurn(ctx, rs, "用 shell 写两个文件", boundary(0, 0))
+	require.NoError(t, a.snapshotBeforeWrite(ctx, rs, tools.ToolNameBash))
+	// The turn's work: a shell command's writes, which no tool argument describes.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "made.txt"), []byte("a\nb\n"), 0o644))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "other.txt"), []byte("c\n"), 0o644))
+	a.endCheckpointTurn(ctx, rs)
+
+	d := a.TurnSummary(ctx, rs.CheckpointTurn())
+	require.NotNil(t, d, "a turn that wrote has a summary")
+	assert.Empty(t, d.Skipped)
+	assert.Equal(t, 2, d.Files)
+	assert.Equal(t, 3, d.Added)
+	assert.Equal(t, 0, d.Removed)
+
+	text, ok, err := a.TurnDiff(ctx, rs.CheckpointTurn())
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Contains(t, text, "made.txt")
+	assert.Contains(t, text, "+a")
+
+	// A turn that only reads: no end state, no summary, and the readers are told there is
+	// no pair instead of being handed zeroes.
+	read := &RunState{}
+	a.beginCheckpointTurn(ctx, read, "只是看看", boundary(0, 0))
+	a.endCheckpointTurn(ctx, read)
+	assert.Nil(t, a.TurnSummary(ctx, read.CheckpointTurn()))
+	_, ok, err = a.TurnDiff(ctx, read.CheckpointTurn())
+	require.NoError(t, err)
+	assert.False(t, ok)
+}
+
+// TestCheckpointWiringEndsAStoppedTurn is the path a stopped turn takes: the loop returns on
+// a CANCELLED context (Stop cancels it, it does not set a flag) and endCheckpointTurn is the
+// cleanup that runs afterwards. The turn's writes are on disk either way, so the numbers must
+// come out of it exactly as they do on a normal exit — running git on the dead context would
+// record "no numbers" for the very turns a rewind is most often aimed at.
+func TestCheckpointWiringEndsAStoppedTurn(t *testing.T) {
+	a, work, ctx, _ := rewindTestAgent(t, 0)
+
+	rs := &RunState{}
+	a.beginCheckpointTurn(ctx, rs, "改一半我就停了", boundary(0, 0))
+	require.NoError(t, a.snapshotBeforeWrite(ctx, rs, tools.ToolNameBash))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "half-done.txt"), []byte("写了一半\n"), 0o644))
+
+	stopped, cancel := context.WithCancel(ctx)
+	cancel() // exactly what the desktop's Stop does to the turn's context
+	a.endCheckpointTurn(stopped, rs)
+
+	d := a.TurnSummary(ctx, rs.CheckpointTurn())
+	require.NotNil(t, d, "a stopped turn still has its changes counted")
+	assert.Empty(t, d.Skipped)
+	assert.Equal(t, 1, d.Files)
+
+	// The stop must not cost the turn its way back: a rewind to it restores the file half.
+	p, err := a.PreviewRewind(ctx, rs.CheckpointTurn())
+	require.NoError(t, err)
+	assert.Equal(t, 1, len(p.Roots), "the stopped turn is still restorable")
+}
+
 // TestCheckpointWiringSkipsOneOffRuns pins that a side channel gets no
 // checkpoint: one-off runs never write the main session, so a rewind of the
 // main conversation must not depend on them.

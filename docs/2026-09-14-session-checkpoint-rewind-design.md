@@ -84,6 +84,47 @@
 后台 bash 活跃时拒绝建检查点、侧栏回退链（P2）、`/rewind` 命令面、`itest/tui` 的逐字节一致验证，
 以及 §6 清单里上面点到的那些不可逆项。
 
+### 第三轮（同日，「本轮改动」的来源改为检查点）
+
+用户提出：footer 的 `N files +x −y`、`完整 diff`、`评审本轮改动` 三处都源自**工具调用参数**
+（Edit/Write 的片段），于是 Bash 改的文件不在链上——`sed -i` 改了 40 个文件的回合，footer 连 chip
+都不出现。三处改成读**检查点**：第 N 轮 = `git diff <轮首树> <轮末树>`。
+
+**要补的一件事：轮末树。** 检查点本来只有轮首（懒打点，回退用），所以补 `SnapshotEnd`——**只对拍过
+轮首的轮次**（= 这一轮真写过）拍一次增量 `add -A`，只读轮依旧零成本；它落下的对象正是下一轮轮首快照/
+一次预览本来就要写的同一批 blob，所以更像是替下一轮预热 index。产出：
+
+- `RootState.EndRef/EndTree`（refs 里 `<turn>-end`，`prune`/`DropAfter` 连它一起删）；**轮末失败时只释放
+  end ref**——轮首 ref 是这一轮的回退点，而且 `parentRef` 会指名它给下一轮快照当 parent，删了就是
+  「`commit-tree -p <已删 ref>` 失败 → 那一轮也没状态 → 之后每轮都一样」，一次拒绝就能把会话剩下的
+  检查点全关掉；
+- `Record.Diff{Files,Added,Removed,Skipped}`：**真实 numstat**（`git diff --numstat`）记在 manifest 里，
+  于是任何读者（桌面 / tui / web）拿到同样的数字，不用跑 git；轮末快照被守卫拒绝时记 Skipped，
+  读者回落并知道原因；
+- `Manager.TurnDiff`（冻结的 unified diff，面板与评审用）、`TurnDiffCommand`（给评审 fork 自己跑的命令）、
+  `ChangedSinceTurn`（「之后又改过」标记）。
+
+**保留轮首懒快照**（用户问过能不能只留轮末树，讨论后保留），三条理由：① 轮末树给不出「轮首」——两轮
+之间用户手改/`git checkout`/后台进程改的东西会被回退默默抹掉；② 轮首快照同时是**写前闸门**（决定 11：
+快照失败挡住写，而不是事后才发现无记录）；③ 第 1 轮没有前驱，end-only 就得在**会话创建时**拍基线
+（冷启动 16.6s/2 万文件，每个会话都要付）。
+
+**两个已拍板的取舍**：**只认检查点**——被 `.gitignore` 排除的路径从此不进 chip/面板/评审（用 WriteFile
+改 `.env`、`dist/*` 也看不到了，明确接受）；检查点不可用（关闭 / 无 git / 超守卫 / one-off）时**回落到
+工具参数路径**，并且**UI 标明来源**（chip 的 tooltip、面板的标题行、`TurnChangesVO.Source` /
+`TurnDiffVO.Source`）——一个看起来一样、含义却更窄的数字，比一个小一点但说清范围的数字更糟。
+
+**实现时踩到的顺序问题**：轮末快照必须在 `TurnComplete` **事件之前**完成——footer 的数字来自那个事件，
+事件先发就会读到 nil 而静默回落到工具参数。因此两条「完成」出口都走 `emitTurnComplete`（先快照再发），
+错误/取消出口由 `runLoop` 之后的调用兜底（幂等）。兜底那次用的是 `context.WithoutCancel`：取消出口意味着
+用户按了停止，轮次上下文**已经**死了，拿它跑 git 只会得到「统计文件数量失败: context canceled」，而停止的
+那一轮恰恰是最需要数字与回退点的。同理，前端只有在**真拿到数字**时才认检查点：轮末被拒会以「零 + note」
+到达，认了它就把整个 footer（含「完整 diff」「评审本轮改动」两个入口）变空。
+
+**未做/限制**：多 root 时 diff 文本是拼接的、`ChangedSinceTurn` 按 path 集合返回（同名相对路径会混），
+桌面目前按单一 root 呈现；评审面板（`oneoff.tsx`）仍按「工作区 vs HEAD」取 diff，而评审本身读的是冻结的
+两棵树，run header 又没记 turn，所以两者在改动被提交后会不一致；`bash_ran`「覆盖范围之外」提示仍未做。
+
 ## 1. 问题
 
 长会话里 agent 走错路之后，今天只有两条路：手工 `git checkout`（并不知道它动过哪些文件），或者重开会话

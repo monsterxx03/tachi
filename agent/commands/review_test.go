@@ -883,11 +883,12 @@ func TestReviewAllowlistExcludesReportFinding(t *testing.T) {
 func TestAppendReviewScope(t *testing.T) {
 	const base = "Review the current repo changes.\n"
 
-	if got := AppendReviewScope(base, nil); got != base {
+	if got := AppendReviewScope(base, nil, ""); got != base {
 		t.Errorf("an empty scope must leave the prompt untouched, got %q", got)
 	}
 
-	got := AppendReviewScope(base, []string{"src/main.go", "pkg/x.go"})
+	// Without a checkpoint pair the reviewer reads the working tree, exactly as before.
+	got := AppendReviewScope(base, []string{"src/main.go", "pkg/x.go"}, "")
 	for _, want := range []string{
 		"## Scope (only these files)",
 		"- src/main.go",
@@ -903,6 +904,19 @@ func TestAppendReviewScope(t *testing.T) {
 	if !strings.HasPrefix(got, "Review the current repo changes.") {
 		t.Error("the scoped prompt dropped the original instructions")
 	}
+
+	// With a checkpoint pair the reviewer is pointed at the turn's OWN two trees instead of
+	// at HEAD: that is what shows a shell command's writes, and what keeps the review
+	// readable after those changes were committed (when `git diff HEAD` says nothing).
+	frozen := AppendReviewScope(base, []string{"src/main.go"}, "git --git-dir=/s/root-00/repo.git diff treeA treeB")
+	for _, want := range []string{"- src/main.go", "git --git-dir=/s/root-00/repo.git diff treeA treeB"} {
+		if !strings.Contains(frozen, want) {
+			t.Errorf("frozen scoped prompt is missing %q\n%s", want, frozen)
+		}
+	}
+	if strings.Contains(frozen, "git diff HEAD --") {
+		t.Errorf("a frozen pair must NOT send the reviewer to HEAD:\n%s", frozen)
+	}
 }
 
 // TestReviewScopeReachesThePrompt is the plumbing check that matters: a scoped run
@@ -910,7 +924,10 @@ func TestAppendReviewScope(t *testing.T) {
 // forked reviewer ever sees is the prompt the orchestrator hands it. If the scope stops
 // at ReviewOptions, the review silently widens back to the whole tree.
 func TestReviewScopeReachesThePrompt(t *testing.T) {
-	opts := ReviewOptions{MaxIterations: 5, AllowedTools: DefaultReviewAllowedTools(), Scope: []string{"src/main.go"}}
+	opts := ReviewOptions{
+		MaxIterations: 5, AllowedTools: DefaultReviewAllowedTools(),
+		Scope: []string{"src/main.go"}, DiffCommand: "git --git-dir=/s/repo.git diff treeA treeB",
+	}
 	orch, err := NewReviewOrchestrator(1, []llm.Provider{testProviders("mock")[0]}, t.TempDir(), opts)
 	if err != nil {
 		t.Fatal(err)
@@ -922,6 +939,11 @@ func TestReviewScopeReachesThePrompt(t *testing.T) {
 	}
 	if !strings.Contains(spec.Prompt, "## Scope (only these files)") || !strings.Contains(spec.Prompt, "- src/main.go") {
 		t.Errorf("the single-round prompt lost the scope:\n%s", spec.Prompt)
+	}
+	// The frozen diff command travels the same path: it is the difference between reviewing
+	// what the turn changed and reviewing whatever HEAD happens to differ in.
+	if !strings.Contains(spec.Prompt, "git --git-dir=/s/repo.git diff treeA treeB") {
+		t.Errorf("the single-round prompt lost the frozen diff command:\n%s", spec.Prompt)
 	}
 
 	// Multi-round: every round keeps it (the adversarial rounds discuss the same files).

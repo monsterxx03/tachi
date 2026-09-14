@@ -70,11 +70,11 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   onToggleAllDiffs?: (value: boolean) => void
   // Opens the working-tree diff panel for this turn's files (git-backed, real line
   // numbers) — the authoritative view behind the fragment diffs.
-  onOpenDiffPanel?: (paths: string[]) => void
+  onOpenDiffPanel?: (turn: number, paths: string[]) => void
   // The turn-level review: one click, scoped to exactly this turn's files.
   // The clicked turn's message id travels with the request, so the run's state can be shown
   // on the very footer that started it (and on no other).
-  onReviewChanges?: (paths: string[], msgId?: string) => void
+  onReviewChanges?: (turn: number, paths: string[], msgId?: string) => void
   // Opens the side-channel panel — where a review's process, findings and report live.
   onOpenOneOff?: () => void
   reviewPending?: boolean
@@ -110,6 +110,19 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
   const [processOpen, setProcessOpen] = useState(false)
   // The turn's changes: what the footer chip summarizes and what "expand all" acts on.
   const diffStat = turnDiffStat(m.parts)
+  // The turn's own numbers, when the backend has them (they come from the turn's checkpoint
+  // trees, so they include what NO tool declared). Falling back is not a failure mode to
+  // hide: the chip says which source it used, because the two count different things.
+  //
+  // A checkpoint answer WITHOUT numbers is not an answer: the turn's end state can be refused
+  // (a guard tripped on what the turn itself created, git failed), which arrives as a note and
+  // zeroes. Taking it as the chip's data would blank the footer — and with it the two entries
+  // that live in it (完整 diff / 评审本轮改动) — for a turn whose changes the tool calls DID
+  // declare. So the numbers decide the source, and the note rides along to say why.
+  const cp = m.changes && !m.changes.note ? m.changes : null
+  const chip = cp
+    ? { files: cp.files, added: cp.added, removed: cp.removed, source: 'checkpoint' as const, note: '' }
+    : { files: diffStat.files, added: diffStat.added, removed: diffStat.removed, source: 'tools' as const, note: m.changes?.note || '' }
   const diffParts = (m.parts || []).filter((p) => p.type === 'tool' && p.change && p.done && p.ok)
   const allDiffsOpen = diffParts.length > 0 && diffParts.every((p) => p.diffOpen)
 
@@ -193,26 +206,29 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
         {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{runningLabel ?? '正在执行…'}</span> : null}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
         {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
-        {diffStat.files > 0 ? (
+        {chip.files > 0 ? (
           <div className="msg-footer">
             <button type="button" className="diff-chip"
-              title={`本次工具调用在片段内新增/删除的行数（不是 git numstat）${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在 diff 里' : ''}`}
+              title={chip.source === 'checkpoint'
+                ? '本轮改动，来自检查点：与这一轮开始时的快照对比（真实 numstat，包含 shell 命令的改动）'
+                : `本轮改动来自工具调用：只是片段内的行数，不是 git numstat${chip.note ? `；检查点没有给出这一轮的数字（${chip.note}）` : ''}${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在这里' : ''}`}
               onClick={() => {
                 // The diffs live inside their tool cards, and those cards sit in the fold:
                 // opening every diff without opening the fold would look like a dead click.
                 if (!allDiffsOpen) setProcessOpen(true)
                 onToggleAllDiffs?.(!allDiffsOpen)
               }}>
-              🧾 {diffStat.files} files
-              {diffStat.added > 0 ? <span className="diff-count is-add">+{diffStat.added}</span> : null}
-              {diffStat.removed > 0 ? <span className="diff-count is-del">−{diffStat.removed}</span> : null}
-              {diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
+              🧾 {chip.files} files
+              {chip.added > 0 ? <span className="diff-count is-add">+{chip.added}</span> : null}
+              {chip.removed > 0 ? <span className="diff-count is-del">−{chip.removed}</span> : null}
+              {chip.source === 'tools' && diffStat.shell ? <span className="diff-chip-shell">· 含 shell</span> : null}
+              {chip.source === 'tools' ? <span className="diff-chip-shell">· 来自工具调用</span> : null}
             </button>
             {/* The second view: the same changes against git HEAD, with real file
                 line numbers. The chip above stays the light touch (it toggles the
                 inline fragment diffs); this one is the full picture. */}
             <button type="button" className="diff-chip" title="与 git HEAD 对照的完整 diff（真实文件行号）"
-              onClick={() => onOpenDiffPanel?.(diffStat.paths)}>完整 diff</button>
+              onClick={() => onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)}>完整 diff</button>
             {/* The review entry: ONE per turn, never per edit card — the review's scope
                 is this turn's file set, and findings carry real file lines that a
                 fragment card has no coordinates for.
@@ -229,7 +245,7 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
                 : reviewDone ? '看这次评审的过程、意见与报告（右侧面板）'
                   : sessionBusy ? '等这一轮跑完'
                     : '让 agent 只评审本轮改动的这些文件（只读；过程与意见在右侧面板）'}
-              onClick={() => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(diffStat.paths, m.id))}>
+              onClick={() => (reviewPending || reviewDone ? onOpenOneOff?.() : onReviewChanges?.(m.turn ?? 0, diffStat.paths, m.id))}>
               {reviewPending ? '评审中…' : (reviewDone || '评审本轮改动')}
             </button>
             {/* The refusal reason is a TOOLTIP, not a paragraph: printed in full here it
@@ -340,7 +356,7 @@ function App() {
   // reads them per RUN (desktop/oneoff.go collects each record's own ReportFinding calls), while
   // this overlay answers a question about a TURN — "what does the working tree look like now,
   // against HEAD" — which is answerable with no run at all.
-  const [turnDiff, setTurnDiff] = useState<{ sessionId: string; paths: string[] } | null>(null)
+  const [turnDiff, setTurnDiff] = useState<{ sessionId: string; turn: number; paths: string[] } | null>(null)
   useEffect(() => { setTurnDiff(null) }, [currentId])
 
   // The plan panel (P1): this session's newest plan. Read from disk on demand — the
@@ -708,7 +724,7 @@ function App() {
   // startReview runs the review fork scoped to one turn's files. It runs as a turn (the
   // session goes busy, Stop cancels it), but its process goes to the side-channel panel: the
   // conversation keeps this turn's footer as the anchor, the panel shows the rest.
-  const startReview = useCallback(async (paths: string[], msgId?: string) => {
+  const startReview = useCallback(async (turn: number, paths: string[], msgId?: string) => {
     const sid = currentId
     setReviewNotice(null)
     // msgId pairs the run back to the turn whose chip started it. A re-run from the panel may
@@ -722,7 +738,7 @@ function App() {
       reviewForRef.current = msgId
     }
     try {
-      const res = await AgentService.ReviewChanges(sid, paths, msgId || '')
+      const res = await AgentService.ReviewChanges(sid, turn, paths, msgId || '')
       // A refusal means no run started, so the pending state ends HERE. Success must NOT clear
       // it: this call only ever STARTS the fork (it runs on in the background), so clearing here
       // made the chip flash 「评审中…」 and fall straight back — onto 「已评审 · 查看」, because
@@ -807,8 +823,8 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   // says so), and a reviewed one showed the SELECTED run's file set rather than this turn's.
   // The paths are the click's own: fetched on open, dropped on close, and never stored per run
   // — which is also what keeps them from becoming the stale anchor P4 removed.
-  const openDiffPanel = useCallback((paths: string[]) => {
-    setTurnDiff({ sessionId: currentId, paths })
+  const openDiffPanel = useCallback((turn: number, paths: string[]) => {
+    setTurnDiff({ sessionId: currentId, turn, paths })
   }, [currentId])
 
   // sendFindings is how the panel's findings leave: the picked ones become one ordinary user
@@ -1454,7 +1470,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         </main>
         {oneoffOpen ? <OneOffPanel api={oneoff} workDir={workDir} busy={isCurrentRunning} width={oneoffWidth}
           onResizeCommit={commitOneOffWidth} onSend={sendFindings}
-          onRerun={(paths, msgId) => void startReview(paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
+          onRerun={(paths, msgId) => void startReview(0, paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
       </div>
       {rewindMenu && (() => {
         // The menu is built here rather than inline so the target resolution reads in one
@@ -1576,7 +1592,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           </div>
         </div>
       )}
-      {turnDiff ? <TurnDiffOverlay sessionId={turnDiff.sessionId} paths={turnDiff.paths}
+      {turnDiff ? <TurnDiffOverlay sessionId={turnDiff.sessionId} turn={turnDiff.turn} paths={turnDiff.paths}
         onClose={() => setTurnDiff(null)} /> : null}
     </div>
   )

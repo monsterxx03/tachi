@@ -497,6 +497,10 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 				// turn its own user bubble started (it assembles that bubble itself and
 				// never sees the record index a reload would have given it).
 				"checkpointTurn": ev.CheckpointTurn,
+				// What the turn changed, from its own two trees — the exact answer, shell
+				// commands included. Absent when the checkpoints have no pair for it, which
+				// is the frontend's cue to fall back to what the tool calls declared.
+				"changes": changeSummaryVO(r.agent, ev.CheckpointTurn),
 			})
 		}
 		// The other moment worth interrupting for (see notifier): the turn is

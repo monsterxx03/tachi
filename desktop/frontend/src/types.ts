@@ -1,4 +1,4 @@
-import type { FileChangeVO, SessionInfo, SessionMessage } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { FileChangeVO, SessionInfo, SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 export interface SessionItem extends SessionInfo { active?: boolean }
 
@@ -75,6 +75,14 @@ export interface Message {
   running?: boolean
   stopped?: boolean          // turn was stopped by the user (not an error)
   summary?: { durationMs: number; iterations: number; cost: number; credit: number }
+  // turn is the checkpointed turn this assistant card belongs to: stamped by agent:turn for a
+  // live turn, or carried from the record that began it when loaded from disk. The diff panel
+  // and the review are scoped BY TURN, so both read it from here.
+  turn?: number
+  // changes is what that turn changed, from the turn's own two checkpoint trees: exact (a
+  // shell command's writes are in it) and frozen. Absent when the checkpoints have no pair for
+  // the turn — the footer chip then falls back to what the tool calls declared, and says so.
+  changes?: TurnChangesVO | null
 }
 
 export interface AgentEvent {

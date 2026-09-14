@@ -323,6 +323,44 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// bash-diff: the turn footer, 「完整 diff」 and 「评审本轮改动」 must all describe what the
+		// turn ACTUALLY changed — and this turn changes files only through BASH, which no tool
+		// argument declares. All three used to read the tool calls: such a turn rendered no chip
+		// at all, the panel had nothing to diff, and the reviewer was handed an empty scope.
+		// They now read the turn's own two checkpoint trees, so the file list, the line counts
+		// and the reviewer's scope are taken from the same diff. The Go half asserts the review
+		// PROMPT (which files it names, and that it is pointed at the frozen pair, not at HEAD).
+		{
+			name: "bash-diff",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe bash-diff scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// Turn 1: one shell command writes both files.
+				{Reply: bashStream("printf 'a\\nb\\nc\\n' > made.txt && printf 'x\\ny\\n' > other.txt", "call_b")},
+				{Reply: textStream("两个文件写好了。", 800)},
+				// The review the driver starts from the chip. Its finding is ON made.txt, a file
+				// only a shell command created.
+				{Reply: findingStream("made.txt", 2, "warn", "call_f1")},
+				{Reply: textStream("评审完成：1 条意见。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("对话一轮 + 评审一轮共四次调用", len(c.requests) == 4, requestCount(c.requests))
+				// The reviewer is told about the files the SHELL wrote — the scope comes from the
+				// checkpoint's trees, so it contains what no tool call declared.
+				for _, name := range []string{"made.txt", "other.txt"} {
+					n, seen := c.requestSeen(name)
+					c.check("评审 scope 里包含 shell 写出的 "+name, seen, fmt.Sprintf("出现在第 %d 个请求", n))
+				}
+				if n, seen := c.requestSeen("--git-dir="); seen {
+					c.check("评审被告知读这一轮的两棵树，而不是 git diff HEAD", true, fmt.Sprintf("第 %d 个请求", n))
+				} else {
+					c.check("评审被告知读这一轮的两棵树，而不是 git diff HEAD", false, "prompt 里没有冻结 diff 命令")
+				}
+			},
+		},
+		//
 		//
 		// Rewind: "回退到这里" on a user bubble must put the workspace AND the conversation
 		// back to the start of that turn. The file the agent wrote is written through BASH

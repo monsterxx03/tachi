@@ -159,6 +159,14 @@ export interface FileDiffVO {
     "hunks": linediff$0.Hunk[] | null;
     "added": number;
     "removed": number;
+
+    /**
+     * ChangedSince marks a file whose working-tree content is no longer what this turn left
+     * (another turn, the user, or a commit moved it). Only a checkpoint-sourced diff can know
+     * this, and only the panel needs it: without the flag the frozen diff would look like the
+     * disk, and 「打开文件」 would show text that does not match the hunks.
+     */
+    "changedSince"?: boolean;
 }
 
 /**
@@ -637,6 +645,14 @@ export interface SessionMessage {
      * session-wide request # (0 = not request-bound)
      */
     "seq"?: number;
+
+    /**
+     * Turn and Changes are the footer's data, stamped on the record that BEGINS a checkpointed
+     * turn: a transcript reloaded from disk then shows the same numbers a live one did, from
+     * the same source, without the frontend mapping record indexes to turns itself.
+     */
+    "turn"?: number;
+    "changes"?: TurnChangesVO | null;
     "thinking"?: string;
     "toolCalls"?: ToolCallVo[] | null;
     "toolName"?: string;
@@ -711,6 +727,28 @@ export interface ToolCallVo {
 }
 
 /**
+ * TurnChangesVO is the footer chip's data for one turn.
+ */
+export interface TurnChangesVO {
+    "files": number;
+    "added": number;
+    "removed": number;
+
+    /**
+     * Source is changeSourceCheckpoint or changeSourceTools — the chip's tooltip says which,
+     * because the difference is exactly "did this count the shell command or not".
+     */
+    "source": string;
+
+    /**
+     * Note, when set, is why the checkpoint numbers are missing (a guard tripped at the turn
+     * end, git failed, ...). It travels with the fallback so the reader is not left guessing
+     * whether the number is complete.
+     */
+    "note"?: string;
+}
+
+/**
  * TurnDiffVO is the changes panel's payload.
  */
 export interface TurnDiffVO {
@@ -738,6 +776,13 @@ export interface TurnDiffVO {
      * "there is nothing to review".
      */
     "ignored"?: number;
+
+    /**
+     * Source says where this diff came from: "checkpoint" (the turn's own two trees — exact,
+     * frozen, shell commands included) or "tools" (this working-tree comparison of the paths
+     * the tool calls declared). See turnchanges.go.
+     */
+    "source"?: string;
 }
 
 /**

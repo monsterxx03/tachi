@@ -99,6 +99,98 @@ func (a *AIAgent) snapshotBeforeWrite(ctx context.Context, rs *RunState, toolNam
 	return m.Snapshot(ctx, turn)
 }
 
+// endCheckpointTurn records where the turn's writes LEFT the workspace (see
+// checkpoint.Manager.SnapshotEnd), which is what makes the turn's changes readable
+// exactly — from its own two trees rather than from what the tool calls declared, so a
+// shell command's writes count too.
+//
+// Called on every way a turn can finish, and never fatal: the work is done and the turn is
+// over, so a failure is logged and recorded as a reason for the reader, not turned into a
+// failed turn.
+//
+// The context is DETACHED from the turn's cancellation, which is not a detail: the loop
+// exits on a cancelled context precisely when the user stopped the turn (Stop, StopAndSend,
+// the TUI's Ctrl+C — all cancel, they do not set a flag), and this is the cleanup that runs
+// AFTER it. Running git on that dead context fails immediately, so every stopped turn would
+// report "no numbers" instead of what it changed — and its end snapshot, being refused,
+// pays the refused-end path for nothing. The work to record is already on disk; only the
+// cancellation is meaningless here. Same reasoning as dropStates, which cleans up on a
+// background context.
+func (a *AIAgent) endCheckpointTurn(ctx context.Context, rs *RunState) {
+	if rs == nil || rs.SkipSessionWrites {
+		return
+	}
+	turn := rs.CheckpointTurn()
+	if turn == 0 {
+		return
+	}
+	m := a.checkpointManager(ctx)
+	if m == nil {
+		return
+	}
+	if err := m.SnapshotEnd(context.WithoutCancel(ctx), turn); err != nil {
+		a.Config.Logger.Warn(ctx, "Agent: checkpoint end failed", "turn", turn, "err", err)
+	}
+}
+
+// TurnSummary returns what a turn changed, counted from the checkpoint's own two trees, or
+// nil when there are no numbers for it: no checkpoint, the turn wrote nothing, or its end
+// state was refused. A caller that gets nil falls back to what the tool calls declared —
+// which is what every reader did before the checkpoints existed, and is still the only
+// answer when the feature is off.
+func (a *AIAgent) TurnSummary(ctx context.Context, turn int) *checkpoint.TurnDiff {
+	m := a.checkpointManager(ctx)
+	if m == nil {
+		return nil
+	}
+	rec, ok, err := m.Record(turn)
+	if err != nil || !ok {
+		return nil
+	}
+	return rec.Diff
+}
+
+// TurnDiff returns the frozen unified diff of a turn (its start tree against its end tree),
+// and whether there is such a pair at all. Both are recorded, so the answer does not move
+// when the working tree does — asking after a commit gives the same diff the turn produced.
+func (a *AIAgent) TurnDiff(ctx context.Context, turn int) (string, bool, error) {
+	m := a.checkpointManager(ctx)
+	if m == nil {
+		return "", false, nil
+	}
+	return m.TurnDiff(ctx, turn)
+}
+
+// TurnDiffCommand returns a shell command that prints exactly what a turn changed, or ""
+// when there is no pair of trees to compare.
+//
+// It is for the review fork, which runs git ITSELF rather than being handed a diff (a diff
+// inlined into a prompt would have to be capped, and could not be re-read if the reviewer
+// wanted a second look at one file). The fork cannot name the checkpoint's trees on its
+// own — they live in the session's shadow store — so the command is spelled out for it.
+func (a *AIAgent) TurnDiffCommand(ctx context.Context, turn int) string {
+	m := a.checkpointManager(ctx)
+	if m == nil {
+		return ""
+	}
+	return m.TurnDiffCommand(turn)
+}
+
+// TurnChangedSince reports which paths the working tree no longer has where the turn left
+// them, for a diff panel that must say 「之后又改过」 rather than imply it shows the disk.
+func (a *AIAgent) TurnChangedSince(ctx context.Context, turn int) map[string]bool {
+	m := a.checkpointManager(ctx)
+	if m == nil {
+		return nil
+	}
+	changed, err := m.ChangedSinceTurn(ctx, turn)
+	if err != nil {
+		a.Config.Logger.Warn(ctx, "Agent: checkpoint changed-since failed", "turn", turn, "err", err)
+		return nil
+	}
+	return changed
+}
+
 // checkpointsEnabled reports whether this agent checkpoints at all. A nil
 // Enabled means off — see config.CheckpointConfig.Enabled for why that is the
 // opposite of the Compact.Auto idiom.

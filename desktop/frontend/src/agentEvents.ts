@@ -14,6 +14,7 @@ import {
   AgentStatus,
   type AgentState,
   type FileChangeVO,
+  type TurnChangesVO,
 } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { AgentEvent, Message } from './types'
 import { pushPart, finishToolPart, updateToolPart, closeOpenToolParts } from './transcript'
@@ -188,7 +189,13 @@ export function useAgentStream(deps: AgentStreamDeps) {
 
   useEffect(() => {
     const off = Events.On('agent:turn', (event) => {
-      const d = event.data as { sessionId: string; durationMs: number; iterations: number; cost: number; credit: number; checkpointTurn?: number }
+      const d = event.data as {
+        sessionId: string; durationMs: number; iterations: number; cost: number; credit: number
+        checkpointTurn?: number
+        // What this turn changed, from its own two checkpoint trees (absent when there is no
+        // pair for it — the footer then falls back to the tool-call fragments).
+        changes?: TurnChangesVO | null
+      }
       if (d.sessionId !== currentId) return
       updateSession(currentId, (list) => {
         const target = [...list].reverse().find((m) => m.role === 'assistant')
@@ -198,7 +205,9 @@ export function useAgentStream(deps: AgentStreamDeps) {
         const bubble = [...list].reverse().find((m) => m.role === 'user' && !m.steer)
         const turn = d.checkpointTurn || undefined
         return list.map((m) => {
-          if (target && m.id === target.id) return { ...m, summary: d }
+          // The card it belongs to, NOT the user bubble: the footer chip hangs off the
+          // assistant card, and the turn is what the diff panel and the review are scoped by.
+          if (target && m.id === target.id) return { ...m, summary: d, turn, changes: d.changes ?? undefined }
           if (bubble && m.id === bubble.id && turn) return { ...m, checkpointTurn: turn }
           return m
         })

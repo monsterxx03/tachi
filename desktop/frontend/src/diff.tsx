@@ -419,7 +419,9 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       <div className="diff-panel-head">
         <span className="diff-panel-title">本轮改动</span>
         {diff?.root ? <span className="diff-panel-root" title={diff.root}>{diff.root}</span> : null}
-        <span className="diff-panel-note">与 git HEAD 对照 · 行号为文件真实行号</span>
+        <span className="diff-panel-note">
+          {diff?.source === 'checkpoint' ? '与这一轮开始时的快照对比' : '与 git HEAD 对照'} · 行号为文件真实行号
+        </span>
         {onRerun ? (
           <button type="button" className="diff-open" title="按同一批文件再评审一次（改动还可以更新）"
             onClick={onRerun}>重新评审</button>
@@ -534,10 +536,14 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
 // therefore only diff the file set the run recorded (docs/2026-09-12-desktop-oneoff-panel-design.md
 // §5.3) — a turn nobody has reviewed has no run at all, so routing this chip through the panel
 // showed an empty column.
-export function TurnDiffOverlay({ sessionId, paths, onClose }: {
+export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
   sessionId: string
-  // The turn's file set, as the footer aggregated it. Fetched against `sessionId` at open time,
-  // so a session switch mid-fetch cannot land another session's diff here.
+  // The turn whose changes these are. It is what the backend uses to find the turn's own two
+  // checkpoint trees, so the panel shows what THAT turn changed — a shell command's writes
+  // included — instead of every uncommitted difference in the files it names.
+  turn: number
+  // The files the footer's tool calls declared. Only the FALLBACK scope: the backend uses it
+  // when the checkpoints have no pair for the turn (feature off, missing git, over its guard).
   paths: string[]
   onClose: () => void
 }) {
@@ -552,13 +558,16 @@ export function TurnDiffOverlay({ sessionId, paths, onClose }: {
     const list = files ? files.split('\n') : []
     setDiff(null)
     setError('')
-    if (list.length === 0) {
+    // Nothing to ask about only when there is neither a turn nor a file list. A turn whose
+    // changes came from a SHELL COMMAND declares no paths at all — and that is exactly the
+    // case this panel now exists for, so bailing out on an empty list would hide it.
+    if (list.length === 0 && turn === 0) {
       setLoading(false)
       return
     }
     let alive = true
     setLoading(true)
-    AgentService.GetTurnDiff(sessionId, list)
+    AgentService.GetTurnChanges(sessionId, turn, list)
       .then((d) => { if (alive) setDiff(d || null) })
       .catch((e) => {
         if (!alive) return
@@ -569,11 +578,15 @@ export function TurnDiffOverlay({ sessionId, paths, onClose }: {
       })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [sessionId, files])
+  }, [sessionId, turn, files])
 
-  const count = files ? files.split('\n').length : 0
+  // The count comes from the ANSWER, not from the paths we asked with: with a checkpoint pair
+  // the file set is the turn's own, and it can be larger than what the tool calls declared
+  // (that is the whole point) — or smaller, for a file the tool touched but never changed.
+  const count = diff?.files ? diff.files.length : (files ? files.split('\n').length : 0)
+  const source = diff?.source === 'checkpoint' ? '与这一轮开始时的快照对比' : '与 git HEAD 对照'
   return (
-    <ViewerOverlay label={`本轮改动 — ${count} 个文件（与 git HEAD 对照）`} onClose={onClose} stageClass="is-doc"
+    <ViewerOverlay label={`本轮改动 — ${count} 个文件（${source}）`} onClose={onClose} stageClass="is-doc"
       findable
       controls={<CloseButton onClose={onClose} />}>
       {/* findings=[] on purpose: this surface is about the WORKING TREE, not about a review.
@@ -617,6 +630,13 @@ function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: 
         {file.created ? <span className="diff-badge is-new">新增</span> : null}
         {file.deleted ? <span className="diff-badge is-gone">删除</span> : null}
         {file.binary ? <span className="diff-badge">二进制</span> : null}
+        {/* The frozen diff was taken at the turn's end; if the file has moved since (another
+            turn, the user, a commit), these hunks are no longer what is on disk — and 预览/打开
+            would show text that does not match them. Saying so is the difference between a
+            historical view and a wrong one. */}
+        {file.changedSince ? (
+          <span className="diff-badge" title="这个文件在这一轮之后又被改过：这里显示的是当时的内容，不是磁盘上的现在">之后又改过</span>
+        ) : null}
         {findings.length > 0 ? <span className="finding-count is-bug" title="该文件上的评审意见">{findings.length} 条意见</span> : null}
         <DiffCounts added={file.added} removed={file.removed} />
         {/* Two ways into the file, both borrowed from the attachment card: preview it

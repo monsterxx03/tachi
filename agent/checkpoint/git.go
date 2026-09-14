@@ -166,6 +166,50 @@ func (r repo) changes(ctx context.Context, from, to string) ([]byte, error) {
 	return []byte(out), nil
 }
 
+// numstat is git's own accounting for two trees: one line per changed file with
+// added/removed counts ("-\t-" for a binary one). It is the number the turn footer
+// shows, taken from the checkpoint rather than from what the tool calls claimed.
+func (r repo) numstat(ctx context.Context, from, to string) (files, added, removed int, err error) {
+	out, err := r.output(ctx, "diff", "--numstat", "--no-renames", from, to)
+	if err != nil {
+		return 0, 0, 0, err
+	}
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.SplitN(strings.TrimRight(line, "\r"), "\t", 3)
+		if len(fields) != 3 || fields[2] == "" {
+			continue // blank line, or a rename header we did not ask for
+		}
+		files++
+		// A binary file reports "-" for both sides: it changed, but there is no line
+		// count to add. Counting it as a file without lines is the honest summary.
+		if n, convErr := strconv.Atoi(fields[0]); convErr == nil {
+			added += n
+		}
+		if n, convErr := strconv.Atoi(fields[1]); convErr == nil {
+			removed += n
+		}
+	}
+	return files, added, removed, nil
+}
+
+// diffText is the unified diff between two TREES, for the changes panel and the
+// review prompt: real file coordinates, and — because both sides are recorded —
+// the same answer whenever it is asked, even after the worktree has moved on.
+func (r repo) diffText(ctx context.Context, from, to string) (string, error) {
+	return r.output(ctx, "diff", "--no-color", "-U3", "--no-renames", from, to)
+}
+
+// treeChangedSince reports whether the ROOT's working tree still differs from a tree,
+// as NUL-joined paths. It is how a frozen diff says 「这个文件之后又改过」 without
+// pretending the panel is looking at what is on disk right now.
+func (r repo) treeChangedSince(ctx context.Context, tree string) ([]string, error) {
+	out, err := r.output(ctx, "diff", "--name-only", "--no-renames", "-z", tree)
+	if err != nil {
+		return nil, err
+	}
+	return splitNul(out), nil
+}
+
 // stat returns git's diffstat between two trees, for the summary a reader
 // confirms before anything is written back.
 func (r repo) stat(ctx context.Context, from, to string) (string, error) {

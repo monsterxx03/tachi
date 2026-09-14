@@ -429,11 +429,19 @@ func TestDropAfterReleasesTheAbandonedTurns(t *testing.T) {
 
 	write(t, root, "a.txt", "v1")
 	beginSnapshot(t, m, 1)
+	require.NoError(t, m.SnapshotEnd(ctx, 1))
 	write(t, root, "a.txt", "v2")
 	beginSnapshot(t, m, 2)
+	require.NoError(t, m.SnapshotEnd(ctx, 2))
 	write(t, root, "a.txt", "v3")
 	beginSnapshot(t, m, 3)
-	require.ElementsMatch(t, []string{"refs/tachi/00/1", "refs/tachi/00/2", "refs/tachi/00/3"}, m.refsAt(t, 0))
+	require.NoError(t, m.SnapshotEnd(ctx, 3))
+	// Both refs of every turn are here: where it started and where it ended.
+	require.ElementsMatch(t, []string{
+		"refs/tachi/00/1", "refs/tachi/00/1-end",
+		"refs/tachi/00/2", "refs/tachi/00/2-end",
+		"refs/tachi/00/3", "refs/tachi/00/3-end",
+	}, m.refsAt(t, 0))
 
 	dropped, err := m.DropAfter(1)
 	require.NoError(t, err)
@@ -443,7 +451,8 @@ func TestDropAfterReleasesTheAbandonedTurns(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, turns, 1)
 	assert.Equal(t, 1, turns[0].Turn)
-	assert.Equal(t, []string{"refs/tachi/00/1"}, m.refsAt(t, 0), "an abandoned branch is disposable: its ref goes too")
+	assert.ElementsMatch(t, []string{"refs/tachi/00/1", "refs/tachi/00/1-end"}, m.refsAt(t, 0),
+		"an abandoned branch is disposable: BOTH of its refs go (a lone tree could not be diffed anyway)")
 
 	// A dropped turn is refused rather than restoring the abandoned branch...
 	p, err := m.Preview(ctx, 2)
@@ -490,6 +499,137 @@ func TestAFailedSnapshotReleasesTheRootsItAlreadyTook(t *testing.T) {
 	assert.Contains(t, rec.Skipped, "超过上限")
 
 	assert.Empty(t, m.refsAt(t, 0), "the half-taken snapshot must not leave a ref behind")
+}
+
+// TestTurnDiffIsExactAndFrozen is the point of the end-of-turn snapshot: a turn's changes
+// are read from its own two trees, so a shell command's writes count (nothing declared
+// them), created and deleted files are exact, and the answer does not change when the
+// worktree — or the store — moves on afterwards.
+func TestTurnDiffIsExactAndFrozen(t *testing.T) {
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+	write(t, root, "keep.txt", "untouched\n")
+	write(t, root, "gone.txt", "will be deleted")
+
+	beginSnapshot(t, m, 1)
+	// The "turn": everything below is what a Bash command looks like from the outside.
+	write(t, root, "new.txt", "one\ntwo\nthree\n")
+	write(t, root, "keep.txt", "untouched\nchanged\n")
+	require.NoError(t, os.Remove(filepath.Join(root, "gone.txt")))
+	require.NoError(t, m.SnapshotEnd(ctx, 1))
+
+	rec, ok, err := m.Record(1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.NotNil(t, rec.Diff, "a turn that wrote gets a summary")
+	assert.Empty(t, rec.Diff.Skipped)
+	assert.Equal(t, 3, rec.Diff.Files, "created + changed + deleted")
+	assert.Equal(t, 4, rec.Diff.Added, "three new lines plus the one added to keep.txt")
+	assert.Equal(t, 1, rec.Diff.Removed, "gone.txt's single line — keep.txt only GAINED a line")
+
+	text, hasPair, err := m.TurnDiff(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, hasPair)
+	for _, want := range []string{"new.txt", "keep.txt", "gone.txt", "+three", "-will be deleted"} {
+		assert.Contains(t, text, want)
+	}
+
+	// Frozen: a later change to the same file is NOT part of this turn's diff...
+	write(t, root, "keep.txt", "a completely different content\n")
+	later, hasPair, err := m.TurnDiff(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, hasPair)
+	assert.Equal(t, text, later, "the turn's diff must not move when the worktree does")
+
+	// ...and the panel can say so, per file, instead of implying it shows the disk.
+	changed, err := m.ChangedSinceTurn(ctx, 1)
+	require.NoError(t, err)
+	assert.True(t, changed["keep.txt"])
+	assert.False(t, changed["new.txt"], "a file nobody touched since is still where the turn left it")
+
+	// Ending twice is a no-op (a turn can be re-run through the same path on a retry).
+	require.NoError(t, m.SnapshotEnd(ctx, 1))
+	again, _, err := m.Record(1)
+	require.NoError(t, err)
+	assert.Equal(t, rec.Diff, again.Diff)
+}
+
+// TestTurnThatOnlyReadsHasNoDiff: the end snapshot is taken only for a turn that has a
+// START state, so a read-only turn pays nothing and reports nothing — and a turn whose
+// end state was refused says why rather than reporting zero files.
+func TestTurnThatOnlyReadsHasNoDiff(t *testing.T) {
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+	write(t, root, "a.txt", "v1")
+
+	// A turn that only reads: Begin, no Snapshot, then its end.
+	turn, err := m.Begin(ctx, Boundary{Records: 1})
+	require.NoError(t, err)
+	require.NoError(t, m.SnapshotEnd(ctx, turn))
+	rec, _, err := m.Record(turn)
+	require.NoError(t, err)
+	assert.Nil(t, rec.Diff, "nothing was written, so there is no pair to compare")
+
+	_, hasPair, err := m.TurnDiff(ctx, turn)
+	require.NoError(t, err)
+	assert.False(t, hasPair)
+
+	// A turn whose end snapshot is refused: the numbers are absent WITH a reason, and the
+	// end ref it took is released rather than left for nobody to find — but the START ref
+	// stays, because that is this turn's rewind point (see the cascade test below).
+	a, aRoot := setup(t, Options{})
+	beginSnapshot(t, a, 1)
+	write(t, aRoot, "huge.bin", strings.Repeat("x", 64))
+	a.opts.MaxBytes = 16
+	require.NoError(t, a.SnapshotEnd(ctx, 1), "a refused end must not fail the turn")
+
+	rec, _, err = a.Record(1)
+	require.NoError(t, err)
+	require.NotNil(t, rec.Diff)
+	assert.Contains(t, rec.Diff.Skipped, "超过单文件上限")
+	assert.Zero(t, rec.Diff.Files)
+	assert.ElementsMatch(t, []string{"refs/tachi/00/1"}, a.refsAt(t, 0),
+		"a refused end releases only its own end ref: the start ref is still the way back")
+}
+
+// TestARefusedEndKeepsTheSessionCheckpointing is the blast radius of the cleanup above, and
+// the reason it may not take rec.Roots wholesale: parentRef names the START ref of the
+// newest earlier writing turn, so a missing one makes `commit-tree -p <ref>` fail — that
+// turn records no state either, and every turn after it fails the same way. One refused end
+// would switch the rest of the session's checkpoints off, including the rewind to the turn
+// that was refused.
+func TestARefusedEndKeepsTheSessionCheckpointing(t *testing.T) {
+	m, root := setup(t, Options{MaxBytes: 16})
+	ctx := context.Background()
+	write(t, root, "a.txt", "v1")
+	beginSnapshot(t, m, 1)
+	write(t, root, "a.txt", "v2")
+	write(t, root, "big.bin", strings.Repeat("x", 64))
+	require.NoError(t, m.SnapshotEnd(ctx, 1))
+	rec1, _, err := m.Record(1)
+	require.NoError(t, err)
+	require.Contains(t, rec1.Diff.Skipped, "超过单文件上限")
+
+	// The turn that comes next must chain to turn 1's START ref as usual — the refused end
+	// belongs to the end-only half and says nothing about the start.
+	require.NoError(t, os.Remove(filepath.Join(root, "big.bin")))
+	m.opts.MaxBytes = 0 // back to the default: the guard tripped on the turn's own file
+	beginSnapshot(t, m, 2)
+	write(t, root, "b.txt", "written by turn 2\n")
+	require.NoError(t, m.SnapshotEnd(ctx, 2))
+
+	rec2, _, err := m.Record(2)
+	require.NoError(t, err)
+	require.NotNil(t, rec2.Diff, "turn 2 still gets its own numbers")
+	assert.Empty(t, rec2.Diff.Skipped)
+	assert.Equal(t, 1, rec2.Diff.Files)
+
+	// And the refused turn is still rewound to: its files come back from the START tree.
+	res, err := m.Restore(ctx, 1)
+	require.NoError(t, err)
+	assert.Equal(t, FilesAvailable, res.State)
+	assert.Equal(t, "v1", readFile(t, root, "a.txt"))
+	assert.False(t, exists(root, "b.txt"), "the restored state is the refused turn's start")
 }
 
 // refsAt lists one root's checkpoint refs, so a test can assert what a drop (or a

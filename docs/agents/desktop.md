@@ -337,6 +337,33 @@ const type = (el, t) => {
 
 ## Desktop UI State
 
+- **A turn's changes are read from its CHECKPOINT trees, everywhere they are shown.** The footer chip
+  (`N files +x −y`), 「完整 diff」 and 「评审本轮改动」 all go through `GetTurnChanges`/`reviewScopeFor`
+  (`desktop/turnchanges.go`), which diffs the turn's recorded start and end trees — so a file a SHELL
+  command wrote counts, created/deleted files are exact, and the answer does not move when the working tree
+  does (a commit no longer empties the review's subject). The tool-call fragments (`turnDiffStat`) are only
+  the FALLBACK for when there are no checkpoints, and the surface must say which source answered
+  (`TurnChangesVO.Source` / `TurnDiffVO.Source`): the same number means two different things. Four traps come
+  with it. (1) The turn's end snapshot must be taken BEFORE the `turn_complete` event (`emitTurnComplete`),
+  or the footer reads nil and silently falls back — and it must run on a context DETACHED from the turn's
+  cancellation (`context.WithoutCancel`), because the error/cancel exit is a stopped turn whose context is
+  already dead, and git on it fails instantly. (2) A refused end (`Diff.Skipped`) arrives as a note and
+  ZEROES: the chip must fall back to the tool-call numbers rather than take them as the answer, or a turn
+  that DID change files renders no footer at all (the chip, 「完整 diff」 and 「评审本轮改动」 all live in
+  it). (3) A refused end releases only its own end ref: the START ref is the turn's rewind point AND the
+  parent `parentRef` names for the NEXT writing turn, so dropping it makes `commit-tree -p <ref>` fail, and
+  every turn after that loses its checkpoint too. (4) A turn whose changes came from a shell command has NO
+  tool-declared paths, so anything that skips work on an empty path list hides exactly that case (the
+  `TurnDiffOverlay` fetch keys on the turn, not on the paths). A file the working tree no longer has where
+  the turn left it is marked 「之后又改过」 rather than shown as if the panel were the disk.
+- **The transcript's turn stamps cover every record of a turn, not only its opening one.** `sessionTurnStamps`
+  (`desktop/turnchanges.go`) keys turns by the record that BEGINS them; `buildSessionMessages` resolves that
+  to "the turn in force at this record" (`stampBefore`) and stamps every record of the page with it. A page is
+  the newest `sessionPageSize` records, so a long turn's opening record sits on an EARLIER page — resolving
+  the boundary exactly leaves the card of exactly the longest (shell-heavy) turns without its turn when the
+  transcript is reloaded: no chip numbers, and a diff panel / review scoped by turn 0. The frontend reads the
+  stamp off the record that starts the card (`buildTurns`), keeping the carry across user/reminder records for
+  the live path.
 - **A turn's process is folded by the CONVERSATION, not by the part renderer**: `turnView()` (`transcript.ts`,
   pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip
   (`ProcessStrip`, `components.tsx`) standing in for its thinking blocks, tool cards and intermediate

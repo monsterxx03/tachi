@@ -38,20 +38,25 @@ type SessionMessage struct {
 	// expressed the same way (checkpoint.Record.Records is the record index where
 	// a turn's records begin), so this is what lets the transcript say "rewind to
 	// the turn that started here" without duplicating any bookkeeping.
-	Index      int          `json:"index"`
-	Role       string       `json:"role"` // user/assistant/tool_call/tool_result/reminder
-	Content    string       `json:"content"`
-	Timestamp  string       `json:"timestamp,omitempty"` // RFC3339
-	Iteration  int          `json:"iteration,omitempty"` // 1-based LLM call within the turn
-	Seq        int          `json:"seq,omitempty"`       // session-wide request # (0 = not request-bound)
-	Thinking   string       `json:"thinking,omitempty"`
-	ToolCalls  []ToolCallVo `json:"toolCalls,omitempty"`
-	ToolName   string       `json:"toolName,omitempty"`
-	ToolResult string       `json:"toolResult,omitempty"`
-	ToolCallID string       `json:"toolCallId,omitempty"`
-	Title      string       `json:"title,omitempty"` // human-readable args summary
-	Args       string       `json:"args,omitempty"`  // raw JSON args
-	IsError    bool         `json:"isError,omitempty"`
+	Index     int    `json:"index"`
+	Role      string `json:"role"` // user/assistant/tool_call/tool_result/reminder
+	Content   string `json:"content"`
+	Timestamp string `json:"timestamp,omitempty"` // RFC3339
+	Iteration int    `json:"iteration,omitempty"` // 1-based LLM call within the turn
+	Seq       int    `json:"seq,omitempty"`       // session-wide request # (0 = not request-bound)
+	// Turn and Changes are the footer's data, stamped on the record that BEGINS a checkpointed
+	// turn: a transcript reloaded from disk then shows the same numbers a live one did, from
+	// the same source, without the frontend mapping record indexes to turns itself.
+	Turn       int            `json:"turn,omitempty"`
+	Changes    *TurnChangesVO `json:"changes,omitempty"`
+	Thinking   string         `json:"thinking,omitempty"`
+	ToolCalls  []ToolCallVo   `json:"toolCalls,omitempty"`
+	ToolName   string         `json:"toolName,omitempty"`
+	ToolResult string         `json:"toolResult,omitempty"`
+	ToolCallID string         `json:"toolCallId,omitempty"`
+	Title      string         `json:"title,omitempty"` // human-readable args summary
+	Args       string         `json:"args,omitempty"`  // raw JSON args
+	IsError    bool           `json:"isError,omitempty"`
 	// Change is the file change this tool call set out to make (nil for tools that
 	// change no text). It is DERIVED from Args, never persisted, so reloading any old
 	// session shows the same diffs with no migration.
@@ -256,7 +261,7 @@ func (s *AgentService) LoadSession(id string, limit int) SessionPage {
 	}
 	d.setSessionState(id, st)
 
-	return SessionPage{Messages: buildSessionMessages(raw, offset), HasMore: hasMore}
+	return SessionPage{Messages: buildSessionMessages(raw, offset, sessionTurnStamps(r)), HasMore: hasMore}
 }
 
 // LoadSessionMore loads up to `limit` raw messages strictly older than `before`
@@ -270,7 +275,7 @@ func (s *AgentService) LoadSessionMore(id, before string, limit int) SessionPage
 		return SessionPage{}
 	}
 	raw, offset, hasMore := d.pageSessionMessages(r, id, before, limit)
-	return SessionPage{Messages: buildSessionMessages(raw, offset), HasMore: hasMore}
+	return SessionPage{Messages: buildSessionMessages(raw, offset, sessionTurnStamps(r)), HasMore: hasMore}
 }
 
 // ActivateSession makes id the displayed session and ensures its per-session
@@ -297,11 +302,24 @@ func (s *AgentService) ActivateSession(id string) string {
 // buildSessionMessages converts raw session messages into the frontend payload,
 // preserving the true in-turn ordering (assistant text / tool calls / tool
 // results interleaved) and carrying each message's timestamp/iteration/seq.
-func buildSessionMessages(raw []session.Message, offset int) []SessionMessage {
+func buildSessionMessages(raw []session.Message, offset int, stamps map[int]turnStamp) []SessionMessage {
 	out := make([]SessionMessage, 0, len(raw))
 	var pendingThinking []string
+	// The turn each record belongs to, carried across the loop and SEEDED from the boundary in
+	// force where the page starts — a page can open in the middle of a turn (see stampBefore).
+	stamp := stampBefore(stamps, offset)
+	// Every record of a turn carries the turn, not only the one that opens it: the transcript
+	// builds its card from whichever record starts it, and a page that begins inside a turn has
+	// no opening record of its own. The switch below stays about roles; the stamp rides along.
+	emit := func(m SessionMessage, at turnStamp) SessionMessage {
+		m.Turn, m.Changes = at.Turn, at.Changes
+		return m
+	}
 	for i, rm := range raw {
 		index := offset + i
+		if at, ok := stamps[index]; ok {
+			stamp = at
+		}
 		switch rm.Type {
 		case session.MessageTypeUser:
 			// Iteration is carried for the user role too: a steer message (typed
@@ -309,12 +327,14 @@ func buildSessionMessages(raw []session.Message, offset int) []SessionMessage {
 			// is what tells the two apart — a turn's own prompt has no request
 			// attached (Iteration 0), an interjection belongs to the call it was
 			// injected before.
-			out = append(out, SessionMessage{
+			out = append(out, emit(SessionMessage{
 				Index: index, Role: "user", Content: rm.Content,
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
-			})
+			}, stamp))
 		case session.MessageTypeReminder:
-			out = append(out, SessionMessage{Index: index, Role: "reminder", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339)})
+			out = append(out, emit(SessionMessage{
+				Index: index, Role: "reminder", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			}, stamp))
 		case session.MessageTypeThinking:
 			pendingThinking = append(pendingThinking, rm.Content)
 		case session.MessageTypeAssistant:
@@ -323,21 +343,21 @@ func buildSessionMessages(raw []session.Message, offset int) []SessionMessage {
 				sm.Thinking = strings.Join(pendingThinking, "\n")
 				pendingThinking = nil
 			}
-			out = append(out, sm)
+			out = append(out, emit(sm, stamp))
 		case session.MessageTypeToolCall:
 			argsJSON := marshalArgs(rm.Args)
-			out = append(out, SessionMessage{
+			out = append(out, emit(SessionMessage{
 				Index: index, Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
 				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON),
 				Change:    changeVO(rm.Name, argsJSON),
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
-			})
+			}, stamp))
 		case session.MessageTypeToolResult:
-			out = append(out, SessionMessage{
+			out = append(out, emit(SessionMessage{
 				Index: index, Role: "tool_result", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
 				ToolResult: rm.Result, IsError: rm.IsError,
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
-			})
+			}, stamp))
 		}
 	}
 	return out

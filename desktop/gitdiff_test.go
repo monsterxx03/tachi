@@ -198,7 +198,7 @@ func TestGetTurnDiffIgnoredPath(t *testing.T) {
 		t.Errorf("Note = %q, want the .gitignore source", vo.Note)
 	}
 	// And the review entry must refuse with THAT reason, not with "already committed".
-	notice := svc.nothingToReview(sid, []string{ignored})
+	notice := svc.nothingToReview(sid, reviewScope{Paths: []string{ignored}})
 	if !strings.Contains(notice, "被 git 忽略") {
 		t.Errorf("nothingToReview = %q, want the ignore reason", notice)
 	}
@@ -241,7 +241,7 @@ func TestNothingToReviewDetectsCommittedChanges(t *testing.T) {
 	tracked := filepath.Join(repo, "src/main.go")
 
 	// Committed and untouched: the turn's file is gone from the working tree.
-	got := svc.ReviewChanges(sid, []string{tracked}, "")
+	got := svc.ReviewChanges(sid, 0, []string{tracked}, "")
 	if got == "" {
 		t.Fatal("a review of committed changes must not start")
 	}
@@ -251,13 +251,13 @@ func TestNothingToReviewDetectsCommittedChanges(t *testing.T) {
 
 	// An actual working-tree change is reviewable again.
 	writeRepoFile(t, repo, "src/main.go", "package main\n\nfunc main() {\n\tnewOne()\n}\n")
-	if notice := svc.nothingToReview(sid, []string{tracked}); notice != "" {
+	if notice := svc.nothingToReview(sid, reviewScope{Paths: []string{tracked}}); notice != "" {
 		t.Errorf("an uncommitted change must be reviewable, got %q", notice)
 	}
 
 	// So is a file git does not track yet (GetTurnDiff synthesizes it as all-added).
 	writeRepoFile(t, repo, "src/brand-new.go", "package main\n")
-	if notice := svc.nothingToReview(sid, []string{filepath.Join(repo, "src/brand-new.go")}); notice != "" {
+	if notice := svc.nothingToReview(sid, reviewScope{Paths: []string{filepath.Join(repo, "src/brand-new.go")}}); notice != "" {
 		t.Errorf("a brand-new file must be reviewable, got %q", notice)
 	}
 }

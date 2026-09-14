@@ -134,6 +134,12 @@ type ReviewOptions struct {
 	// Frontends set it for the turn-level "review these changes" entry; it is not
 	// configurable.
 	Scope []string
+	// DiffCommand, when set, is the exact command that prints what the scope covers:
+	// the desktop builds it from the turn's checkpoint trees, so the review reads what
+	// the turn ACTUALLY changed — including files a shell command wrote, and no matter
+	// what happened to the working tree since. Empty means the reviewer falls back to
+	// `git diff HEAD -- <scope>`, which is all a session without checkpoints has.
+	DiffCommand string
 	// Language is config.Language: the language the report and its findings must be
 	// written in. The review prompt is mixed-language (English task lists, Chinese
 	// report instructions), so without this the model answers in whichever language the
@@ -426,13 +432,13 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 			Round:    1,
 			Provider: provider,
 			OutPath:  outPath,
-			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language), o.opts.Scope),
+			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language), o.opts.Scope, o.opts.DiffCommand),
 			Kind:     llm.UsageKindReview,
 		}, true
 	}
 	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports, o.opts.Language)
 	// Every round keeps the scope: the adversarial rounds discuss the same changes.
-	prompt = AppendReviewScope(prompt, o.opts.Scope)
+	prompt = AppendReviewScope(prompt, o.opts.Scope, o.opts.DiffCommand)
 	return RoundSpec{
 		Round:    round,
 		Role:     role,

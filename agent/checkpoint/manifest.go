@@ -45,6 +45,26 @@ type Record struct {
 	// exists; a rewind to it must say that no files were restored rather than
 	// silently reporting success.
 	Skipped string `json:"skipped,omitempty"`
+	// Diff is what this turn CHANGED, counted from the checkpoint's own two trees
+	// (where the turn started vs where it ended). Nil means the turn wrote nothing
+	// (so there is no pair to compare); Skipped means there should have been one but
+	// it could not be taken. It lives here rather than being recomputed by whoever
+	// asks because the turn end is the only moment that knows both trees cheaply —
+	// and because every reader of a session (desktop, tui, web) then gets the same
+	// numbers without running git.
+	Diff *TurnDiff `json:"diff,omitempty"`
+}
+
+// TurnDiff is one turn's change summary, from the checkpoint's trees.
+type TurnDiff struct {
+	Files   int `json:"files"`
+	Added   int `json:"added"`
+	Removed int `json:"removed"`
+	// Skipped, when set, is why there are no numbers: the end-of-turn snapshot was
+	// refused (a guard tripped on something the turn created, git failed, ...). The
+	// turn itself is unaffected — it already happened — so this travels as a reason
+	// rather than as an error, and a reader falls back to what the tool calls declared.
+	Skipped string `json:"skipped,omitempty"`
 }
 
 // RootState is one root's snapshot within a checkpoint.
@@ -62,6 +82,13 @@ type RootState struct {
 	// FILES but not the HISTORY: a commit made after this point stays in the log,
 	// so a preview has to be able to see that it moved (see Manager.committedSince).
 	Head string `json:"head,omitempty"`
+	// EndRef and EndTree are the same root where the TURN FINISHED (see
+	// Manager.SnapshotEnd), empty when the turn has no end state — it wrote nothing,
+	// or the end snapshot was refused. The pair (Tree, EndTree) is what makes a
+	// turn's changes readable exactly and frozen: `git diff Tree EndTree` is what
+	// this turn did, and neither a later turn nor a `git commit` can move it.
+	EndRef  string `json:"end_ref,omitempty"`
+	EndTree string `json:"end_tree,omitempty"`
 }
 
 // findIndex returns the record for a turn together with its position, for the

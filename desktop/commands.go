@@ -37,6 +37,19 @@ type CommandVO struct {
 
 // commandRun is everything a handler needs: the session's run, the turn's
 // context, the raw arguments, and the channel its events are pumped into.
+// reviewScope is what a scoped review looks at.
+//
+// Paths are the file list the prompt names (and the reviewer's last-resort filter).
+// DiffCommand is how those files' changes are READ when the turn's checkpoints have a pair
+// of trees: `git diff <start> <end>` in the session's shadow store, which is exact (a shell
+// command's writes are in it) and frozen (a commit since then does not erase it). Empty
+// means the reviewer falls back to `git diff HEAD -- <paths>` — what every review did before
+// the checkpoints existed, and all a session without them has.
+type reviewScope struct {
+	Paths       []string
+	DiffCommand string
+}
+
 // commandRun is one command's execution context. scope and reviewedMsg are the desktop's
 // review context: which files the review covers, and which turn asked for it (see
 // agent.ReviewOrigin).
@@ -46,9 +59,10 @@ type commandRun struct {
 	id   string
 	ctx  context.Context
 	args string
-	// scope limits the command to specific paths (currently only /review uses it: the
-	// turn-level "review these changes" entry knows which files the turn touched).
-	scope []string
+	// scope is the review's subject (currently only /review uses it): the files the turn
+	// changed, and — when its checkpoints have a pair of trees — the exact command that
+	// prints what it changed (see reviewScope).
+	scope reviewScope
 	// reviewedMsg is the conversation message the run was started for ("" for a typed
 	// command). It is recorded with the run so a restart can still pair the two.
 	reviewedMsg string
@@ -126,7 +140,7 @@ func (s *AgentService) RunCommand(text string) string {
 	}
 	args := strings.TrimSpace(strings.TrimPrefix(body, def.Name))
 	// A typed command has no turn behind it: the review it starts covers the whole tree.
-	return s.desk.startCommand(def.Name, args, nil, "", laneFor(def.Name), handler)
+	return s.desk.startCommand(def.Name, args, reviewScope{}, "", laneFor(def.Name), handler)
 }
 
 // ReviewChanges runs a review SCOPED to the files a turn changed: the desktop's
@@ -140,8 +154,11 @@ func (s *AgentService) RunCommand(text string) string {
 // restart would lose it, and the turn could no longer say 已评审 N 条.
 //
 // Returns "" when the run started, or a reason the UI shows instead.
-func (s *AgentService) ReviewChanges(sessionID string, paths []string, reviewedMsg string) string {
-	if len(paths) == 0 {
+func (s *AgentService) ReviewChanges(sessionID string, turn int, paths []string, reviewedMsg string) string {
+	// The subject is resolved first: "there is nothing here to review" is the answer to give
+	// when there is nothing, whatever state the session is in.
+	scope := s.reviewScopeFor(sessionID, turn, paths)
+	if len(scope.Paths) == 0 {
 		return "这一轮没有可评审的改动"
 	}
 	d := s.desk
@@ -154,25 +171,50 @@ func (s *AgentService) ReviewChanges(sessionID string, paths []string, reviewedM
 	if sessionID != "" && sessionID != active {
 		return "只能评审当前会话的改动"
 	}
-	if notice := s.nothingToReview(active, paths); notice != "" {
+	if notice := s.nothingToReview(sessionID, scope); notice != "" {
 		return notice
 	}
-	return d.startCommand(commandReview, "", paths, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
+	return d.startCommand(commandReview, "", scope, reviewedMsg, laneFor(commandReview), desktopCommandHandlers[commandReview])
+}
+
+// reviewScopeFor is the review's subject, taken from the turn's checkpoints when they have a
+// pair of trees for it and from the tool-declared paths when they do not.
+//
+// The file list comes FROM THE SAME DIFF the reviewer will read, so the two can never
+// disagree about what is under review — and a file a shell command wrote is in it, which the
+// tool-declared list could never contain.
+func (s *AgentService) reviewScopeFor(sessionID string, turn int, paths []string) reviewScope {
+	out := reviewScope{Paths: paths}
+	ag, refuse := s.desk.agentOf(sessionID)
+	if refuse != "" || ag == nil || turn == 0 {
+		return out
+	}
+	text, ok, err := ag.TurnDiff(context.Background(), turn)
+	if err != nil || !ok {
+		return out
+	}
+	out.Paths = pathsFromUnified(text)
+	out.DiffCommand = ag.TurnDiffCommand(context.Background(), turn)
+	return out
 }
 
 // nothingToReview explains why a review would have nothing to look at ("" when it would).
 //
-// A review reads the WORKING TREE — its prompt tells the fork to run `git diff HEAD --
-// <paths>` — and the file list is all that survives a turn (no snapshot of the content is
-// kept anywhere). So once those changes are committed the diff is empty, and the reviewer
-// would dutifully report "no changes", which the panel then renders as 「最近一次评审没有
-// 报告问题」: a review that saw nothing, dressed up as a review that found nothing.
-//
-// Saying so instead is the honest version. The judgement is GetTurnDiff's — the same call
-// the diff panel makes — so the button and the panel can never disagree about whether
-// there is anything there.
-func (s *AgentService) nothingToReview(sessionID string, paths []string) string {
-	diff := s.GetTurnDiff(sessionID, paths)
+// With a turn's checkpoint pair the question mostly disappears: the reviewer reads the two
+// recorded trees, so a file that exists only as a shell command's output is visible, and a
+// COMMIT since then does not erase it — the case this function was written for. Only the
+// working-tree fallback can still come up empty, and there the judgement is the same call
+// the diff panel makes (GetTurnChanges), so the button and the panel cannot disagree about
+// whether there is anything to read.
+func (s *AgentService) nothingToReview(sessionID string, scope reviewScope) string {
+	if len(scope.Paths) == 0 {
+		return "这一轮没有可评审的改动"
+	}
+	if scope.DiffCommand != "" {
+		return "" // the pair of trees is there: whatever it shows is what the review reads
+	}
+	// The fallback path: the working tree against HEAD, exactly what the reviewer will run.
+	diff := s.GetTurnDiff(sessionID, scope.Paths)
 	if len(diff.Files) > 0 {
 		return ""
 	}
@@ -218,7 +260,7 @@ func (d *desktopApp) emitOneOff(id string, payload map[string]any) {
 	d.app.Event.Emit("agent:oneoff", payload)
 }
 
-func (d *desktopApp) startCommand(name, args string, scope []string, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
+func (d *desktopApp) startCommand(name, args string, scope reviewScope, reviewedMsg string, lane runLane, handler func(*commandRun) error) string {
 	d.mu.Lock()
 	id := d.activeID
 	if id == "" {
@@ -424,7 +466,8 @@ func runReviewCommand(c *commandRun) error {
 	ropts := cmds.ResolveReviewOptions(cfg)
 	// A scoped run (ReviewChanges) reviews exactly the files the turn touched; the plain
 	// /review command leaves this empty and reviews the whole working tree.
-	ropts.Scope = c.scope
+	ropts.Scope = c.scope.Paths
+	ropts.DiffCommand = c.scope.DiffCommand
 	thinking, effort := cmds.ResolveReviewThinking(ropts, a.Config.Resolved.Thinking, a.Config.Resolved.ThinkingEffort)
 	opts := llm.ChatOptions{MaxTokens: config.DefaultMaxTokens, Thinking: thinking, ThinkingEffort: effort}
 
@@ -453,7 +496,7 @@ func runReviewCommand(c *commandRun) error {
 
 		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPromptFor(c.id), spec.Prompt, opts,
 			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, c.id, spec.OutPath,
-				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope})))
+				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope.Paths})))
 		for ev := range stream {
 			c.ech <- ev
 		}

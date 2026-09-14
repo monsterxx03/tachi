@@ -240,8 +240,15 @@ translate them.
 // touched. Without this the reviewer would run git diff HEAD across the whole tree and
 // report on work that is not under discussion — and pay for the tokens.
 //
+// diffCommand, when non-empty, is how the scope's changes are read instead of
+// `git diff HEAD -- <scope>`: the desktop builds it from the turn's own checkpoint trees,
+// so the review sees exactly what that turn changed. That matters twice — a file a SHELL
+// command wrote is in the tree diff but in no tool call, and the frozen pair still answers
+// after the changes have been committed or edited again, which is precisely when
+// `git diff HEAD` would come back empty and the reviewer would report "nothing changed".
+//
 // Returns prompt unchanged when scope is empty (the plain /review path).
-func AppendReviewScope(prompt string, scope []string) string {
+func AppendReviewScope(prompt string, scope []string, diffCommand string) string {
 	if len(scope) == 0 {
 		return prompt
 	}
@@ -253,9 +260,15 @@ func AppendReviewScope(prompt string, scope []string) string {
 	for _, p := range scope {
 		b.WriteString("- " + p + "\n")
 	}
-	b.WriteString("\nGet their diff with the Bash tool: `git diff HEAD -- " + strings.Join(scope, " ") + "`, " +
-		"and for files that are brand new `git ls-files --others --exclude-standard -- " +
-		strings.Join(scope, " ") + "`.\n")
+	if diffCommand != "" {
+		b.WriteString("\nGet their diff with the Bash tool: `" + diffCommand + "` — it compares the two states of " +
+			"this turn, so it shows what the turn changed even if those changes were committed or edited since. " +
+			"The files it lists are brand new or deleted as it says; there is no need to look for untracked files.\n")
+	} else {
+		b.WriteString("\nGet their diff with the Bash tool: `git diff HEAD -- " + strings.Join(scope, " ") + "`, " +
+			"and for files that are brand new `git ls-files --others --exclude-standard -- " +
+			strings.Join(scope, " ") + "`.\n")
+	}
 	b.WriteString("If a command happens to show changes to other files, ignore them: they are outside this review.\n")
 	return b.String()
 }

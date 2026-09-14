@@ -181,6 +181,19 @@ export function GetThinkingLevel(): $CancellablePromise<string> {
 }
 
 /**
+ * GetTurnChanges is the changes panel's entry: the frozen diff of what a TURN changed, or —
+ * when the checkpoints have no pair for it — the working-tree diff of the paths the tool
+ * calls declared, which is both the pre-checkpoint behaviour and all a session without
+ * checkpoints has. TurnDiffVO.Source says which of the two came back.
+ * 
+ * paths are the caller's last resort, not its input: with a pair of trees the scope comes
+ * from the trees themselves, which is what lets a file the shell wrote appear at all.
+ */
+export function GetTurnChanges(sessionID: string, turn: number, paths: string[] | null): $CancellablePromise<$models.TurnDiffVO> {
+    return $Call.ByID(2115146208, sessionID, turn, paths);
+}
+
+/**
  * GetTurnDiff returns the working-tree diff of paths (the files a turn touched) under
  * the session's workspace. An empty paths list means the whole tree.
  */
@@ -368,8 +381,8 @@ export function RevealPath(path: string): $CancellablePromise<string> {
  * 
  * Returns "" when the run started, or a reason the UI shows instead.
  */
-export function ReviewChanges(sessionID: string, paths: string[] | null, reviewedMsg: string): $CancellablePromise<string> {
-    return $Call.ByID(1435759713, sessionID, paths, reviewedMsg);
+export function ReviewChanges(sessionID: string, turn: number, paths: string[] | null, reviewedMsg: string): $CancellablePromise<string> {
+    return $Call.ByID(1435759713, sessionID, turn, paths, reviewedMsg);
 }
 
 /**
