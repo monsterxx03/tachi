@@ -39,13 +39,30 @@ type repo struct {
 //     plus the built-ins below. A machine-wide ignore would otherwise silently
 //     shrink what a checkpoint covers, and the coverage rule has to be the one
 //     the manual documents.
+//   - user.name / user.email — the identity of the STORE's own commits. `commit-tree` will not
+//     make a commit without one, and git's fallback is to GUESS (a name from the OS, a mail
+//     from user@host): a fresh CI runner, a container, or anyone who never ran
+//     `git config user.email` has nothing to guess from, so every snapshot failed and the whole
+//     feature degraded to 「没有检查点」 — silently, because a skipped snapshot is an answer the
+//     readers are built to accept. The store is Tachi's bookkeeping, its commits are never the
+//     user's work, and none of this touches the user's repository.
 func (r repo) configArgs() []string {
 	return []string{
 		"-c", "core.compression=" + strconv.Itoa(objectCompression),
 		"-c", "core.autocrlf=false",
 		"-c", "core.excludesFile=" + filepath.Join(r.dir, "info", "exclude"),
+		"-c", "user.name=" + commitAuthorName,
+		"-c", "user.email=" + commitAuthorEmail,
 	}
 }
+
+// The identity the checkpoint store commits under. Deliberately not the user's: requiring the
+// machine to have a git identity would make the feature depend on something it has no business
+// depending on (see configArgs).
+const (
+	commitAuthorName  = "Tachi"
+	commitAuthorEmail = "checkpoint@tachi.local"
+)
 
 // args builds a git invocation pinned to this repository and work tree. The
 // repository is passed by flag rather than via environment variables on

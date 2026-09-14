@@ -836,3 +836,35 @@ func TestUntrackedFilesAcrossARewind(t *testing.T) {
 	assert.True(t, exists(root, "build/out.bin"))
 	assert.True(t, exists(root, ".gitignore"), "the rule itself is a normal file and comes back")
 }
+
+// TestTheStoreBringsItsOwnIdentity: every snapshot ends in a commit, and `git commit-tree`
+// refuses to make one without an identity — git's fallback is to GUESS a name from the OS and a
+// mail from user@host, which a fresh CI runner, a container, or a user who never ran
+// `git config user.email` cannot supply. When the guess is not available EVERY snapshot is
+// skipped, and the feature degrades to 「这个会话没有检查点」 without anyone being told: the
+// readers are built to accept a skipped snapshot as an answer.
+//
+// The store therefore commits under its own identity, and this holds it to that by running with
+// a git configuration that has none — `user.useConfigOnly` is what makes git refuse to guess,
+// i.e. the state those machines are in.
+func TestTheStoreBringsItsOwnIdentity(t *testing.T) {
+	dir := t.TempDir()
+	cfg := filepath.Join(dir, "gitconfig")
+	require.NoError(t, os.WriteFile(cfg, []byte("[user]\n\tuseConfigOnly = true\n"), 0o600))
+	t.Setenv("GIT_CONFIG_GLOBAL", cfg)
+	t.Setenv("GIT_CONFIG_SYSTEM", os.DevNull)
+
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+	write(t, root, "a.txt", "v1\n")
+	turn, err := m.Begin(ctx, Boundary{Records: 1})
+	require.NoError(t, err)
+	require.NoError(t, m.Snapshot(ctx, turn))
+
+	rec, ok, err := m.Record(turn)
+	require.NoError(t, err)
+	require.True(t, ok)
+	assert.Empty(t, rec.Skipped, "the store must not need the machine's git identity")
+	require.Len(t, rec.Roots, 1)
+	assert.NotEmpty(t, rec.Roots[0].Ref, "the snapshot is committed and has a ref")
+}
