@@ -66,9 +66,13 @@
   smoke.check('浮层里的图没有被压成小方块（占满可用宽度的大半）',
     shown.w >= areaW * 0.6,
     `图 ${shown.w}px vs 可用 ${areaW}px（zoom=${zoomNow}）`)
+  // 宽高比按 RELATIVE 判：这个 fixture 的图在消息里只有 ~40px 高，1px 的取整就能让一个
+  // ~17.7 的绝对比值动 0.45 —— 绝对容差于是变成彩票，取决于容器宽度和 mermaid 那一刻的快照。
+  // 「拉坏」指的是形状变了，而真被拉坏是几十个百分点：3% 远松于任何真实畸变，又对取整免疫。
+  const ratioGap = Math.abs(shown.w / shown.h - inline.w / inline.h) / (inline.w / inline.h)
   smoke.check('图的宽高比没被拉坏',
-    Math.abs(shown.w / shown.h - inline.w / inline.h) < 0.2,
-    `消息 ${(inline.w / inline.h).toFixed(2)} vs 浮层 ${(shown.w / shown.h).toFixed(2)}`)
+    ratioGap < 0.03,
+    `消息 ${(inline.w / inline.h).toFixed(2)} vs 浮层 ${(shown.w / shown.h).toFixed(2)}（差 ${(ratioGap * 100).toFixed(1)}%）`)
 
   smoke.key(document.body, 'Escape')
   if (!(await smoke.waitFor(() => !smoke.q('.viewer-overlay'), 'Esc 关掉浮层', 3000))) return smoke.finish()

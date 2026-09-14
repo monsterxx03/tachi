@@ -179,8 +179,11 @@
 
   /* Reading column: messages and the composer share this width, so the input
      lines up with the transcript instead of stretching to the window edge
-     (a maximised 1920 window would otherwise give prose a 1536px measure). */
-  --reading-width: 780px;
+     (a maximised 1920 window would otherwise give prose a 1536px measure —
+     this is a reading measure, not a layout accident). 860 matches what the
+     fullscreen document preview gives a prose document (.viewer-doc): the same
+     text reads at the same measure whether it is a reply or a previewed file. */
+  --reading-width: 860px;
 
   /* Reading surfaces: the sizes a reader actually READS, in one place, so
      "the text is too small" is an edit here rather than a hunt through four

@@ -508,12 +508,22 @@ const type = (el, t) => {
   same observer.
 
 - **A width bound must subtract every other fixed column — and it must limit what is SHOWN, not what is
-  STORED**: `.oneoff-panel` exists so the conversation keeps 480px, but computing its ceiling from
-  `window.innerWidth` alone forgets the 280px sidebar. Read the sibling's REAL width from the DOM
+  STORED**: `.oneoff-panel` exists so the conversation keeps a real reading width, but computing its ceiling
+  from `window.innerWidth` alone forgets the 280px sidebar. Read the sibling's REAL width from the DOM
   (`panelRoom()` in `frontend/src/oneoff.tsx`, so a folded sidebar hands the room back) and re-measure on
   `resize`. Then keep the two numbers apart: App holds the width the reader CHOSE (persisted), the panel
   derives what there is room to show (`clampPanelWidth(chosen, room)`) — writing the clamped value back to
   state makes "widening the window gives the width back" true only on the next launch.
+  **The conversation's share is a FLOOR plus a SHARE (`CHAT_MIN_WIDTH` 560, `CHAT_MIN_SHARE` 0.5), and the
+  share is the half that is easy to leave out**: a bare floor pins the conversation AT the floor and hands
+  every extra pixel to the panel — on the default 1200px window that was 480px of prose beside a 440px
+  panel, and on a 1600px one 480 beside 840. With both, 1200 gives 560/360 and anything past ~1600 splits
+  evenly. `oneoff-panel` asserts the two facts (prose ≥ 560, panel ≤ half the content area) rather than
+  recomputing the formula — but only the FLOOR is really pinned there: at the smoke's 1200px window the two
+  halves of the rule agree (560 of 920), so deleting the share would not turn that run red. The share earns
+  its keep past ~1600px, which the suite cannot stage. **And the reading column itself is `--reading-width`
+  (860px) — the same measure `.viewer-doc` gives a previewed document**, so a reply and a previewed file are
+  read at one size: a change to either is a change to both.
 
 - **Anything cached per run or per session must be KEYED by it**: key the cache with `sessionId/run` (a
   record's name is a timestamp within its session, so two sessions can hold the same one), and prefer the

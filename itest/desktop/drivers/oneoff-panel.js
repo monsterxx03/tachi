@@ -76,9 +76,11 @@
 
   // The panel's width is the reader's to drag, and it is remembered. Driving it here also pins
   // its bounds: 320px is the floor (mirrored by ONE_OFF_PANEL_MIN_WIDTH in oneoff.tsx), and the
-  // ceiling exists so the conversation keeps 480px (CHAT_MIN_WIDTH there) — asserted as that
-  // fact, not as the formula behind it, because a driver that recomputed the formula would only
-  // be reading the implementation back to itself.
+  // ceiling exists so the conversation keeps a real reading width (CHAT_MIN_WIDTH there) AND at
+  // most half the content area (CHAT_MIN_SHARE). Both are asserted as the FACTS a reader sees —
+  // 560px of prose, a panel no wider than half of what is left after the sidebar — not as the
+  // formula behind them: a driver that recomputed the formula would only be reading the
+  // implementation back to itself.
   const panelWidth = () => Math.round(smoke.q('.oneoff-panel').getBoundingClientRect().width)
   const chatWidth = () => Math.round(smoke.q('.chat').getBoundingClientRect().width)
   const handle = smoke.q('.oneoff-resizer')
@@ -108,7 +110,13 @@
   const grew = await smoke.waitFor(() => panelWidth() > 320, '往外拖变宽', 3000)
   const widest = panelWidth()
   smoke.check('拖动手柄改变面板宽度', grew, `320 → ${widest}px`)
-  smoke.check('面板再宽也不吃掉对话的最小宽度', chatWidth() >= 480, `对话 ${chatWidth()}px`)
+  const contentWidth = Math.round(window.innerWidth
+    - smoke.q('.sidebar').getBoundingClientRect().width)
+  smoke.check('面板再宽也不吃掉对话的最小宽度', chatWidth() >= 560, `对话 ${chatWidth()}px`)
+  // The share half of the rule: a bare floor would pin the conversation AT the floor and hand
+  // every extra pixel to the panel (480px of prose beside an 840px diff on a 1600px window).
+  smoke.check('面板最多占内容区的一半（宽窗口是分享，不是全给面板）',
+    panelWidth() * 2 <= contentWidth, `面板 ${panelWidth()} / 内容区 ${contentWidth}px`)
 
   smoke.finish()
 })()

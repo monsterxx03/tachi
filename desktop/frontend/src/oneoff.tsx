@@ -32,12 +32,18 @@ const ONE_OFF_PANEL_MIN_WIDTH = 320
 const ONE_OFF_PANEL_MAX_WIDTH = 1000
 // The conversation never gives up more than this, whatever the window size: the panel is a
 // side channel, and a side channel that swallows the main thing is a bug.
-const CHAT_MIN_WIDTH = 480
+const CHAT_MIN_WIDTH = 560
+// …and on a window with room to spare the space is SHARED rather than handed over: the panel's
+// room stops at half the content area. A bare floor is not enough — it pins the conversation AT
+// the floor and lets the panel take every extra pixel, so a reader who dragged the panel wide
+// saw 480px of prose beside an 840px diff on a 1600px window. Above ~1600 the two columns grow
+// together; below it the floor is what protects the conversation.
+const CHAT_MIN_SHARE = 0.5
 // One arrow-key press on the handle (a drag is not the only way to resize).
 const ONE_OFF_PANEL_KEY_STEP = 24
 
-// panelRoom is the widest the panel may be shown: the window, less the sidebar — the other
-// column that never shrinks — less CHAT_MIN_WIDTH for the conversation, capped at
+// panelRoom is the widest the panel may be shown: the content area (the window, less the sidebar
+// — the other column that never shrinks) less what the conversation keeps, capped at
 // ONE_OFF_PANEL_MAX_WIDTH. Read from the DOM rather than assumed from the CSS, so a folded
 // sidebar hands its room back. In a window too narrow to honour both minimums the panel's own
 // floor wins: something has to give there, and the conversation is what yields.
@@ -45,8 +51,9 @@ function panelRoom(): number {
   if (typeof window === 'undefined') return ONE_OFF_PANEL_MAX_WIDTH
   const sidebar = document.querySelector('.sidebar')
   const used = sidebar ? sidebar.getBoundingClientRect().width : 0
-  const room = window.innerWidth - used - CHAT_MIN_WIDTH
-  return Math.max(ONE_OFF_PANEL_MIN_WIDTH, Math.min(ONE_OFF_PANEL_MAX_WIDTH, room))
+  const content = window.innerWidth - used
+  const keep = Math.max(CHAT_MIN_WIDTH, Math.round(content * CHAT_MIN_SHARE))
+  return Math.max(ONE_OFF_PANEL_MIN_WIDTH, Math.min(ONE_OFF_PANEL_MAX_WIDTH, content - keep))
 }
 
 // clampPanelWidth limits a requested width to the room there is. The result is DISPLAY-ONLY:
