@@ -188,6 +188,20 @@ const smoke = (() => {
   // TACHI_DEMO_JS path, a stale instance) rather than failed.
   record('driver 载入', true, SCENARIO)
 
+  // Demo mode lifts WebKit's occlusion throttling (see desktop/webview_awake_darwin.go):
+  // a scripted run happens while the machine is in use, so its window WILL be covered, and
+  // a covered window otherwise reads as a hidden page — frames stop, timers clamp to 1Hz —
+  // which stretches every wait in this file ~10x. Asserted on every scenario so a run that
+  // lost that switch fails on this one readable line (naming the cause the app reported)
+  // instead of as a pile of timeouts.
+  record(
+    '页面节流已解除（窗口被盖住也能跑）',
+    window.__tachiDemoUnthrottled === true,
+    window.__tachiDemoUnthrottled
+      ? ''
+      : 'demo 模式没能关掉 WebKit 的遮挡节流：' + (window.__tachiDemoUnthrottleError || '原因未知')
+  )
+
   return {
     check: record,
     log: (label, detail) => record(label, true, detail),

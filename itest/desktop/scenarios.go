@@ -854,6 +854,41 @@ permissions:
 				c.check("两步都跑到了", len(c.requests) == 2, requestCount(c.requests))
 			},
 		},
+		//
+		// 运行中的会话删不掉（desktop/agent_session.go 的 DeleteSession）。拒绝是后端定的，
+		// 因为跑着的回合有自己的 goroutine，它的会话写入和 run map 写入都只认这个 id——在它
+		// 底下删掉目录，转录会静默丢失，还可能留下一个只有 meta.json 的重建目录。
+		//
+		// 这里跑的是一轮足够长的回合，driver 在它活着的时候右键当前会话行：删除项必须是禁用
+		// 的、点了不弹确认框；停掉这一轮之后，同一个会话又能正常删除。Go 侧只证明这一轮没有
+		// 因为删除尝试而多跑（一个请求），即拒绝没有顺手重启什么。
+		//
+		{
+			name: "delete-running",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe delete-running scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("这一轮要跑得久一点，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("好让 driver 有机会在它运行中右键会话行，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("试完删除再去按停止。"),
+					mockllm.Pause(longTurn),
+					mockllm.Pause(longTurn),
+					mockllm.Pause(longTurn),
+					mockllm.Pause(longTurn),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 120, 900, 20),
+					mockllm.Done(),
+				)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("删除被拒绝后没有多跑一轮", len(c.requests) == 1, requestCount(c.requests))
+			},
+		},
 	}
 }
 

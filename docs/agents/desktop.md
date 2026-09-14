@@ -36,6 +36,10 @@ make desktop-smoke ARGS="-run send-now -v"          # one of them, every asserti
 make desktop-smoke ARGS="-keep"                     # keep the sandbox after a pass (artifacts)
 ```
 
+The suite does not need its window in front, and does not take the front either: demo mode keeps the page
+awake while another window covers it, and a run launches without activating itself (see the two traps under
+Rules) — so a run can be left going while you work.
+
 The suite is `itest/desktop/`: `main.go` (runner: sandbox, launch, verdict, report), `scenarios.go`
 (one conversation per scenario — the mock's steps plus the Go-side `after` assertions), `sandbox.go`
 (bundle prep, isolated HOME, launch/kill), `sink.go` (the loopback endpoint drivers report to),
@@ -80,6 +84,9 @@ pkill -f TachiSmoke; kill $MOCK
 ```
 
 - `--env TACHI_DESKTOP_APPEARANCE=dark|light` forces a theme (dev aid); run twice for both palettes
+- The `osascript` query above needs **Accessibility granted to whatever runs it**: without it you get
+  `osascript 不允许辅助访问`, no window bounds, and a system prompt left on screen for the user to dismiss.
+  The suite never needs it — it drives the page from inside the app and pins window-level facts in Go tests
 - The scripted model is a driver program, not a config: `mockllm.NewServer(...)`,
   `Script(Step{Reply: Stream(Text("…"), Finish("stop"), UsageWithCache(…), Done())})`, print
   `BaseURL()`, block. It writes the isolated `config.yaml` (the port is random) and dumps
@@ -102,11 +109,11 @@ const type = (el, t) => {
 
 ### Rules and traps
 
-- **Only one instance may run**: `open` on a live instance merely activates it and passes NO
-  environment (so the driver never runs and the previous scenario's app answers), and
-  `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's running app. The unique
-  executable name is what makes `pkill -f TachiSmoke` safe — check with `pgrep -fl Tachi`. But that
-  pattern also matches the SANDBOX's own build (`codesign --force --deep --sign - …/TachiSmoke.app`
+- **Only one instance may run**: `open` on a live instance only hands the launch to the running
+  process and passes NO environment (so the driver never runs and the previous scenario's app
+  answers), and `pkill -f "Tachi.app/Contents/MacOS/Tachi"` matches the user's running app. The
+  unique executable name is what makes `pkill -f TachiSmoke` safe — check with `pgrep -fl Tachi`. But
+  that pattern also matches the SANDBOX's own build (`codesign --force --deep --sign - …/TachiSmoke.app`
   carries it on the command line), so a stray `pkill -f TachiSmoke` while a run is preparing kills
   the ad-hoc signing and the scenario reports `sandbox — codesign …: signal: terminated` before its
   app ever launches — the same pattern the runner's own "kill it first" message recommends. Never
@@ -115,25 +122,23 @@ const type = (el, t) => {
   `open` will activate (measured: a killed run's app from an old sandbox answered the next run's
   `send-now`, which then hung with the app dying of a stale SIGTERM mid-scenario)
 - **Run the suite SERIALLY — one invocation at a time.** The drivers are timing-sensitive in a way that
-  turns load into false failures: each has a 1m30s budget, assertions wait 3s for a synthetic drag or a
-  transient state, and a starved webview misses both. Measured: two overlapping `desktop-smoke` runs (or a
-  full suite racing a single-scenario run) produced 6/17 failing with "driver 在预算内完成 — 等了 1m30s"
-  plus phantom drag failures in `composer-height` / `oneoff-panel`, while the very same tree passed 17/17 in
-  1m14s when run alone. Before believing a failure, check `pgrep -fl "itest/desktop|TachiSmoke"` — and
-  re-run the scenario on its own. The synthetic DRAGS are the flakiest of all: a second gesture is
-  sometimes swallowed (`composer-height`, `oneoff-panel`), and both scenarios pass on their own on the
-  same tree — so a lone drag assertion failing in a full run is the harness until proven otherwise.
-- A background process started by a finished tool call gets reaped — keep the mock, app,
-  capture and kill in one invocation
+  turns load into false failures: each has a 1m30s budget, the assertions wait 3s for a synthetic drag or a
+  transient state, and a starved webview misses both. Measured: two overlapping runs produced timeouts plus
+  phantom drag failures in `composer-height` / `oneoff-panel` — and so did a single run whose only extra load
+  was a 0.4s-interval front-app sampler (one `osascript` spawn per tick), while the same tree, run alone
+  with the sampler left at 3s, passed 18/18 in 1m23s then (19/19 in 1m27s today). Before believing a
+  failure, check `pgrep -fl "itest/desktop|TachiSmoke"` and re-run the scenario on its own: the synthetic
+  DRAGS are the flakiest of all (a second gesture is sometimes swallowed), so a lone drag assertion failing
+  in a full run is the harness until proven otherwise.
 - `open -a <path>` matches by BUNDLE and `pkill` by executable path; a capture of the wrong
   window looks plausible, so confirm the shot is yours (titlebar / session id)
-- **A capture is not part of the suite**: macOS 15+ closed the window-capture APIs
-  (`CGWindowListCreateImage` obsoleted, `-R` fails on macOS 26, `-l` blank for a WebKit
-  window) and the window must be on the visible Space anyway — a "screenshot" that silently
-  returns the desktop is worse than none. The suite keeps `dom.html` + the assertion lines;
-  take a picture by hand when you want one
+- **A capture is not part of the suite**: the window-capture APIs are gone on this OS (`-R` fails
+  on macOS 26) and the window would have to be on the visible Space anyway — a "screenshot" that
+  silently returns the desktop is worse than none. The suite keeps `dom.html` + the assertion
+  lines; take a picture by hand when you want one
 - **A driver must not click an action that hands the screen to another app**: 打开会话目录 launches the
-  real Finder, which takes the foreground and suspends the webview mid-run (the trap above) — so the sidebar
+  real Finder — a window on the user's machine, outside the sandbox, and it takes the foreground away from
+  whoever is working, which is the one thing a run is built not to do (see the bullet below) — so the sidebar
   scenario asserts the menu item is there (and that its own mouseleave rule closes the menu) and leaves the
   click alone. Which path it would hand over is pinned where the argument is known: the Go test
   `TestOpenSessionDirOpensTheSessionDirectory` stubs `openFile` (attach.go) and reads the argv. Any "open in …"
@@ -149,8 +154,6 @@ const type = (el, t) => {
   series as the fallback for when no delivery arrives. Then verify the judge BOTH ways: 0 with the
   fix in place, and the drift with the fix disabled (that negative control is what turns a number
   into evidence)
-- **Run one smoke at a time**: a second window in front stops the browser's rendering steps, which
-  starves a resize-observer probe exactly as it starves a rAF one
 - **An assertion belongs to the scenario that produces the fact** (and to the line that produces
   it — see the missing `reviewedMsg` assignment). The panel-width check sat in `oneoff-footer`'s
   `after` while the driver that drags the handle is `oneoff-panel`'s: it read
@@ -182,15 +185,55 @@ const type = (el, t) => {
 - **A stale element swallows a gesture**: re-query the handle for EVERY synthetic drag. A driver
   that captured `.composer-resizer` once had its second drag land on a detached node, and the
   "ceiling" assertion then passed against the previous height (200px) without dragging at all.
-- **A suspended page takes the whole verdict with it**: when the smoke window loses the foreground,
-  WebKit suspends the content process (`log show --last 10m --predicate 'process CONTAINS
-  "TachiSmoke"'` spells it out: `WebProcess::prepareToSuspend` / `ProcessThrottler … foregroundActivities=0`).
-  A suspended page runs no `requestAnimationFrame` **and no `setTimeout`** — so the harness's own
-  watchdog (a timer) never fires either, and the run posts NOTHING: the report shows only the last
-  line that got out, `等了 90s 没收到结果`, with no console lines to explain it. The runner's
-  `-timeout` is the only safety net, so a driver must never wait on a *frame* — pace with a
-  macrotask yield at most, and keep the run short. Anything that needs a frame (a rAF-paced probe,
-  a real drag measurement) belongs in a hand-run on an idle machine, not in the suite.
+- **A run must not take the foreground either** (`TACHI_DEMO_NO_ACTIVATE=1`, set by `sandbox.go`). It used
+  to, once per scenario: Wails activates a REGULAR app from `ApplicationDidFinishLaunching`
+  (`activateIgnoringOtherApps`), so 18 launches meant 18 interruptions — and whatever the user was typing at
+  that instant went into the smoke's own composer. Three things hold it down, each measured on its own and
+  each leaking a ~0.6s foreground flash per launch when missing: `sandbox.go` launches with **`open -g`**
+  (with a plain `open` the app is frontmost for ~0.6s as its window appears, even if the window is never
+  ordered in); the app starts as an **ACCESSORY** app (`activationPolicy()` in `demo.go` — with a Regular
+  policy `open -g` alone is not enough, the front app became the smoke app ~1.4s into the run); and its window
+  is created `Hidden: true` and ordered in by the demo bootstrap with `orderWindow:NSWindowBelow relativeTo:0`
+  — on screen (all the page needs; being covered is covered by the switch below) but at the BOTTOM of the
+  window stack, so it neither becomes key nor covers the user's work (Wails would show it with
+  `makeKeyAndOrderFront:`, and a key window is what makes an accessory app active). Two traps live in that
+  bootstrap: the show must come AFTER the app's main loop starts (a main-thread dispatch before that never
+  runs, so the driver is never injected at all) and BEFORE the driver's own wait (a window put on screen later
+  leaves the page loading, and a script injected into a loading document is simply lost — measured: `compact`,
+  the fixture slowest to load, burned its whole 90s budget with nothing reported while the other scenarios
+  passed). With all three in place: zero front-app transitions across a full run. An interactive hand-run
+  leaves the var unset on purpose, so `open` still brings the window forward for a screenshot.
+- **A covered window is no longer a paused run — demo mode keeps the page awake, deliberately.**
+  WebKit reads a page's visibility off the WINDOW alone (`PageClientImpl::isViewVisible`: on screen, not
+  miniaturized, not occluded) and never off which app is frontmost — so an ordinary window that another
+  window covers is a *hidden* page: its frames stop and its DOM timers are clamped to 1Hz
+  (`Page::updateTimerThrottlingState` keys off `IsVisible` plus the visually-idle flag, which every
+  background app carries). Measured on a driver's own heartbeat with the window covered by another app's
+  window: interval 300ms → **1000ms**, rAF **frozen** (1152 ticks, then nothing for 45s),
+  `document.visibilityState` = `hidden` — with that, every `waitFor` in a driver runs ~10x slower, and a
+  run can post NOTHING before the runner's `-timeout` prints `等了 90s 没收到结果`. So read that message
+  as *the page was throttled*, not as *the driver hung* — the run's own `页面节流已解除` line says
+  whether the switch was lifted, and names the reason when it was not.
+  `demoEnabled()` therefore lifts it from `runJsDemo` through `keepPageAwake`
+  (`desktop/webview_awake_darwin.go`: `_setWindowOcclusionDetectionEnabled:NO` +
+  `_setHiddenPageDOMTimerThrottlingEnabled:NO` — private SPI, declared locally, applied only after a
+  `respondsToSelector:` check). Two things about that call are load-bearing and both were measured: it
+  must run on the MAIN thread (off-main the webview "looks missing"), and it must WAIT for the window
+  (the NSWindow is created on the main thread from the Wails window's own `run()`, so a call straight
+  after `NewWithOptions` legitimately answers "no native window" — `keepPageAwake` retries the two
+  transient answers). The same heartbeat then reads 304ms / 60fps / `visible` while covered. **The run no
+  longer needs the foreground window**: the whole suite was verified with its window covered for the entire
+  run (18/18 in 1m23s then; 19/19 in 1m27s today, once `delete-running` had joined), so `make desktop-smoke`
+  can be left going while the machine is used. Three things keep that honest: the app hands the outcome —
+  and, on failure, its reason — to the driver (`window.__tachiDemoUnthrottled` /
+  `__tachiDemoUnthrottleError`, riding in the SAME `ExecJS` call as the driver, because Wails dispatches a
+  script queued during runtime load in a different order than the next one) and the harness asserts it on
+  EVERY scenario (`页面节流已解除`), so a Wails/WebKit update that drops the SPI fails on one readable line
+  instead of only failing when nobody is watching the window; this is demo-only, since the shipped app must
+  follow the machine's power behaviour; and the window still has to be on screen and un-minimized — both
+  make it invisible for real, which nothing here can lift. What a driver still must not do is pace on a
+  *frame*: keep waits event-driven (`waitFor` + a macrotask yield), and leave a rAF-paced probe to a
+  hand-run on an idle machine.
 - **With Reduce motion ON, EVERY property change is a real transition** (`transition-property`
   defaults to `all`, and base.css's blanket `@media (prefers-reduced-motion: reduce)` sets
   `transition-duration: 0.01ms !important` — this machine has it on: `defaults read
@@ -208,15 +251,15 @@ const type = (el, t) => {
   rejected: `window.addEventListener('keydown-control-off', onKey)` — TS2769, the `type: string`
   overload wants an `EventListener`, and `(e: KeyboardEvent) => void` is not one. Changing the KEY
   inside the existing listener instead type-checks, which is why the second control did go red.)
-  So: check the freshness (`[ bin/Tachi -nt <the edited source> ]`), disable nothing via a build that
-  can fail silently, and mind the suspension trap above — the foreground window is what matters, so a
-  build glued to a run in one tool call can push the run past the moment the page is suspended.
+  So: check the freshness (`[ bin/Tachi -nt <the edited source> ]`), and disable nothing via a build that
+  can fail silently. (A build glued to a run in one tool call is no longer a trap in itself — demo mode
+  keeps the page awake, so a run does not need its window in front: see the covered-window bullet above.)
 
 ## Desktop Build & Signing (macOS)
 
 - **`make build` leaves the app ad-hoc signed; run `make sign-local` after it.** macOS ties TCC grants (notification permission included) to the bundle's code identity, and an ad-hoc identity is a content hash — it changes on every rebuild, so a granted permission is forgotten and the native notification path can end up refused for good (`Notifications are not allowed for this application`). `sign-local` re-signs with the local self-signed identity `Tachi Local Code Signing` (login keychain, trusted for code signing), which is stable across rebuilds.
 - **Build a cert once with `security` + OpenSSL if the keychain has none** (`security find-identity -v -p codesigning` → `0 valid identities found`): `openssl req -x509 -newkey rsa:2048 -nodes -subj "/CN=<name>" -addext extendedKeyUsage=critical,codeSigning …`, export with **`-legacy`** (macOS cannot verify OpenSSL 3's default PKCS#12 algorithms — "MAC verification failed"), `security import … -T /usr/bin/codesign`, then `security add-trusted-cert -r trustRoot -p codeSign -k ~/Library/Keychains/login.keychain-db cert.pem`.
-- **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in front proves nothing. And the TUI's notifications are a different mechanism entirely (`terminal-notifier` / `osascript`), so a notification whose source is terminal-notifier is never the desktop's own — **but it can still be the desktop's fault**: the app is often launched from a herdr pane, inherits `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`, and then auto-enables the herdr hook (`agent/configureHooks` → `hooks.DetectHerdr`) — so herdr, not Tachi, raises a terminal notification for a window that has no pane. `DetectHerdr` therefore also requires stdout to be a terminal (a pane's process renders into it; a GUI app and an editor-hosted ACP server merely inherited the env). To check what actually ran: `log show --last 10m --predicate 'eventMessage CONTAINS "terminal-notifier"' --style compact` prints the TCC attribution with the **responsible** process (`com.mitchellh.ghostty` = a terminal launched it). `notifyTurnDone` is for the transcript lane only: a side-channel run (/review, /commit) has no turn on screen, so it gets its own copy through `notifyOneOffDone` — 评审完成 · N 条意见 / 未报问题 / 已停止 / 未完成（见日志）, 提交完成 — raised from `commands.go`, where the outcome is known.
+- **Notifications only fire while the window is NOT focused** (`desktop/notify.go`): testing with the app in front proves nothing — and a no-activate smoke run is *never* focused, so that path is live during a run: it stays silent only because the sandbox bundle is ad-hoc signed and TCC refuses the request (`log show --last 10m --predicate 'process CONTAINS "TachiSmoke"'` says `didGrant: 0 hasError: 1`), so signing that copy with `make sign-local`'s identity would start pushing 回合完成 banners mid-run. And the TUI's notifications are a different mechanism entirely (`terminal-notifier` / `osascript`), so a notification whose source is terminal-notifier is never the desktop's own — **but it can still be the desktop's fault**: the app is often launched from a herdr pane, inherits `HERDR_ENV`/`HERDR_SOCKET_PATH`/`HERDR_PANE_ID`, and then auto-enables the herdr hook (`agent/configureHooks` → `hooks.DetectHerdr`) — so herdr, not Tachi, raises a terminal notification for a window that has no pane. `DetectHerdr` therefore also requires stdout to be a terminal (a pane's process renders into it; a GUI app and an editor-hosted ACP server merely inherited the env). To check what actually ran: `log show --last 10m --predicate 'eventMessage CONTAINS "terminal-notifier"' --style compact` prints the TCC attribution with the **responsible** process (`com.mitchellh.ghostty` = a terminal launched it). `notifyTurnDone` is for the transcript lane only: a side-channel run (/review, /commit) has no turn on screen, so it gets its own copy through `notifyOneOffDone` — 评审完成 · N 条意见 / 未报问题 / 已停止 / 未完成（见日志）, 提交完成 — raised from `commands.go`, where the outcome is known.
 
 ## Desktop Backend (bindings & paths)
 
@@ -346,10 +389,12 @@ const type = (el, t) => {
   per step and shoved the message area up and down — and the fact was already in the transcript twice
   over. If it ever comes back, it must hold its place for the whole turn.
   Design + clickable prototype: `docs/2026-09-13-desktop-transcript-density-design.md` (+ `.html` beside it).
-  **Do not compensate a layout change from a `requestAnimationFrame`**: an occluded app window never
-  delivers one (measured: the callback simply never ran while the driver's window was behind another
-  app), and a `setTimeout` is throttled just as unpredictably. Compensate in a LAYOUT effect instead —
-  the new content is in the DOM and the adjustment lands before paint. This is how the fold toggle keeps
+  **Do not compensate a layout change from a `requestAnimationFrame`**: a covered window makes WebKit
+  stop the page's frames outright (a covered window reads as "not visible" — measured: the callback
+  simply never ran while the driver's window was behind another app; demo mode is the exception, see
+  the smoke section), and a `setTimeout` is throttled just as unpredictably.
+  Compensate in a LAYOUT effect instead — the new content is in the DOM and the adjustment lands
+  before paint. This is how the fold toggle keeps
   a bottom-following reader pinned: without it, expanding a turn slides the view up by the height that
   appeared, the next scroll event reads as "the reader scrolled away", and auto-follow switches itself
   off (the design's 「展开/收起不该让滚动位置跳」).
@@ -396,6 +441,19 @@ const type = (el, t) => {
   (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
   重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that
   hands the screen to another app is asserted, never clicked, in a driver (see the smoke rules).
+- **Deleting a session with a turn in flight is REFUSED, by the backend** (`DeleteSession` in
+  `desktop/agent_session.go`): the running turn owns a goroutine whose session writes (`AppendMessage` —
+  `O_APPEND` with no `O_CREATE`, so it just fails once the directory is gone) and run-map writes
+  (`setSessionState` → `getRun`) are keyed by nothing but that id, so deleting underneath it loses the
+  transcript silently, keeps the model running and the tools firing, and can rebuild a directory holding
+  `meta.json` but no `messages.jsonl` (any path that goes through `MkdirAll` — `SetTitle`, the compaction's
+  `UpdateMeta`) — a phantom row in the sidebar that opens empty. Stopping is therefore the user's explicit
+  call, and the refusal (`refuseDeleteRunning`) names it. Two rules ride with it: the running flag is read
+  and the run removed in ONE critical section (a turn starting between the two would be dropped from the map
+  mid-flight), and the frontend renders the reason in the confirmation box that raised the delete while the
+  menu's 删除 entry is `disabled` for a running session — a `.catch(() => {})` here would read as a no-op.
+  Covered by `TestDeleteSessionRefuses*` (a refused delete must not touch the directory, the run or
+  `activeID`) and the `delete-running` smoke scenario.
 
 - **Following the bottom must survive async height changes, not just message updates** (`desktop/frontend/src/App.tsx`): the transcript pin ran only when `msgCache` changed, so anything that grew the content afterwards — a mermaid diagram finishing its async render, an image/attachment card loading, a tool card expanding — slid the visible content up by exactly that height until the next delta pinned it back ("切回会话时先向上飘，再跳到底"; measured at 298px in `switch-scroll`). The fix is a `ResizeObserver` on a `.chat-content` wrapper (the scrollport's own box never changes when its content grows) that re-pins while following. Any new "sticky bottom" behavior must go through the same observer.
 

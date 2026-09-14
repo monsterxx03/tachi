@@ -84,6 +84,13 @@ export function DeletePlan(sessionID: string, path: string): $CancellablePromise
  * DeleteSession deletes a session and its per-session run state. If the
  * deleted session is the currently displayed one, activeID is cleared so the
  * UI falls back to choosing/creating a session.
+ * 
+ * A session with a turn in flight is REFUSED, not stopped: the turn owns a
+ * goroutine that keeps calling the model and running tools, and its writes to
+ * the session directory (AppendMessage) and to the run map (setSessionState via
+ * getRun) are keyed by nothing but this id — deleting underneath it loses the
+ * transcript silently and can leave a rebuilt directory (a meta.json with no
+ * messages.jsonl) behind. The stop is the user's call, made explicit.
  */
 export function DeleteSession(id: string): $CancellablePromise<string> {
     return $Call.ByID(3827341809, id);
