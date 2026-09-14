@@ -167,7 +167,7 @@
   color: var(--user-ink);
   padding: 9px 13px;
   border-radius: 14px;
-  font-size: 14px;
+  font-size: var(--fs-bubble);
   line-height: 1.55;
   max-width: 520px;
   /* A pasted link has no space to break at, so the default `normal` lets it run straight out
@@ -197,7 +197,7 @@
    generous line-height on a light warm page is what makes a long answer
    comfortable to read rather than merely legible. */
 .assistant-text {
-  font-size: 14.5px;
+  font-size: var(--fs-prose);
   line-height: 1.76;
   color: var(--text);
   letter-spacing: 0.005em;
@@ -1135,7 +1135,7 @@ button.work-dir {
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: var(--wash);
   font-family: inherit;
-  font-size: 11.5px;
+  font-size: var(--fs-finding);
   white-space: normal;
   line-height: 1.5;
 }
@@ -1150,7 +1150,7 @@ button.work-dir {
   padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
-  font-size: 10px;
+  font-size: 11px;
   line-height: 1.5;
   color: var(--text-faint);
   white-space: nowrap;
@@ -1315,7 +1315,9 @@ button.work-dir {
   font-size: 11px;
   color: var(--text-faint);
 }
-.oneoff-empty { font-size: 12px; color: var(--text-faint); padding: 4px 0; }
+/* A note about a pane that has no content. `anywhere` is what keeps a long absolute PATH — the
+   report pane names the file it was pointed at — from widening the column it sits in. */
+.oneoff-empty { font-size: 12px; color: var(--text-faint); padding: 4px 0; overflow-wrap: anywhere; }
 /* The live marker: the run is still writing its record, and the panel is polling it. */
 .oneoff-live { color: var(--accent-2); }
 

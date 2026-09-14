@@ -175,6 +175,15 @@
      (a maximised 1920 window would otherwise give prose a 1536px measure). */
   --reading-width: 780px;
 
+  /* Reading surfaces: the sizes a reader actually READS, in one place, so
+     "the text is too small" is an edit here rather than a hunt through four
+     files. The type scale is deliberately not a blanket multiplier — labels,
+     badges and metadata are chrome and keep their own sizes. Code inside prose
+     follows its parent (0.88em), so it moves with these. */
+  --fs-prose: 15.5px;   /* assistant markdown: replies, a review's report, file previews */
+  --fs-bubble: 15px;    /* the reader's own message */
+  --fs-finding: 13px;   /* one review finding, in the side panel */
+
   --ease: cubic-bezier(0.32, 0.72, 0, 1);
 
   /* Light is the default. The active theme is decided by the `data-theme`

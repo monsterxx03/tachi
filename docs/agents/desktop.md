@@ -608,6 +608,12 @@ const type = (el, t) => {
   keeping: button contrast is tuned in ONE place (`--accent-strong`, which is why the dark theme's sits at
   chroma ~0.11), and **a fill that carries white text always takes the `-strong` variant** — `--red` is tuned
   as INK and puts a white glyph below 4.5:1.
+- **The reading surfaces take their sizes from ONE place** (`base.css`: `--fs-prose` 15.5px / `--fs-bubble`
+  15px / `--fs-finding` 13px). "The text is too small" is an edit there, not a hunt through four files: the
+  transcript's prose, the reader's own message and a review finding all read it, and code inside prose
+  follows its parent (0.88em). The scale is deliberately NOT a blanket multiplier — labels, badges and
+  metadata are chrome and keep their own sizes, and the panel's diff body stays at 11px so a finding is what
+  stands out against the code it is about.
 - **What bounds the palette is `--text-faint`'s 4.5:1 floor, not `--text`.** It is the token that lands on
   the *lightest* plane (placeholders, MCP labels, `.file-note` — panel-solid, and panel-2 under the
   picker/CSV headers), so it pins both the ink (~#9ca3b1) and the top of the ladder (~#303541). Any "make it
