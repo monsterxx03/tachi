@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionRows } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionRows, rewindTargetForMessage } from './lib'
 import { lastRunningAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -19,7 +19,7 @@ import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import type { OneOffRun } from './agentEvents'
-import type { OneOffVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { OneOffVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
@@ -268,6 +268,11 @@ function App() {
   // in flight cannot be deleted) so it lands in the box that asked the question, next to
   // the button that was just pressed — a console-only failure would read as a no-op.
   const [confirmDel, setConfirmDel] = useState<{ sid: string; title: string; error?: string } | null>(null)
+  // Rewind: the bubble's own menu (with the session's checkpoint boundaries, fetched when
+  // it opens) and the confirmation card that shows what would be restored and — more to
+  // the point — what would be DELETED, before anything moves.
+  const [rewindMenu, setRewindMenu] = useState<{ x: number; y: number; msg: Message; sid: string; turns: RewindTurnVO[] | null } | null>(null)
+  const [rewindCard, setRewindCard] = useState<{ sid: string; turn: number; preview: RewindPreviewVO; error?: string } | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
@@ -892,6 +897,45 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     refreshMCP()
     if (cur) refreshWorkspace(cur.id)
   }, [msgCache, openSession, setSessionPage, scrollToBottom, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace, clearUsage, composer.focusInput])
+  // openRewindMenu asks the backend where this session's turns begin and opens the
+  // bubble's menu. The list is fetched per open rather than cached: a running turn keeps
+  // adding boundaries, and a stale list would resolve a bubble to the wrong turn.
+  const openRewindMenu = useCallback(async (e: React.MouseEvent, m: Message, sid: string) => {
+    e.preventDefault()
+    const turns: RewindTurnVO[] = (await AgentService.RewindTurns(sid).catch(() => null)) || []
+    setRewindMenu({ x: e.clientX, y: e.clientY, msg: m, sid, turns })
+  }, [])
+
+  // openRewindCard asks what the rewind would do and shows it. Nothing is touched here —
+  // the preview is a read, and the card is where the reader agrees to it.
+  const openRewindCard = useCallback(async (
+    rt: { kind: string; turn?: number },
+    menu: { sid: string; turns: RewindTurnVO[] | null },
+  ) => {
+    if (rt.kind !== 'ok' || rt.turn == null) return
+    setRewindMenu(null)
+    const turn = rt.turn
+    let preview: RewindPreviewVO
+    try {
+      preview = await AgentService.PreviewRewind(menu.sid, turn)
+    } catch (e) {
+      // A preview that cannot be read still opens the card: a menu item that closes the
+      // menu and shows nothing is indistinguishable from a broken button, and the reason
+      // is exactly what the reader needs.
+      preview = { turn, target: turn, blocked: `读取回退预览失败：${String(e)}` } as RewindPreviewVO
+    }
+    setRewindCard({ sid: menu.sid, turn, preview })
+  }, [])
+
+  // confirmRewind runs it. A refusal (a running turn, a pruned checkpoint, an
+  // unavailable snapshot) lands in the card that asked, next to the button that was
+  // pressed — the backend has the last word, so it is shown verbatim.
+  const confirmRewind = useCallback(async (card: { sid: string; turn: number }) => {
+    const res = await AgentService.ApplyRewind(card.sid, card.turn).catch((e) => String(e))
+    if (res === 'ok') { setRewindCard(null); return }
+    setRewindCard((c) => (c ? { ...c, error: res } : c))
+  }, [])
+
   const confirmDelete = useCallback(async (id: string) => {
     const res = await (AgentService as any).DeleteSession?.(id).catch(() => null)
     // "ok" (or a missing binding) is the only success. Anything else — in practice the
@@ -1082,6 +1126,43 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     return () => { offStart?.(); offDone?.(); offSwitch?.() }
   }, [applyToSession, moveSession])
 
+  // A completed rewind moves the conversation backwards in place. The transcript is
+  // reloaded from disk rather than patched: the tail is gone, and only the session's own
+  // records know what the remaining history looks like. The prompt that started the
+  // rewound turn goes back into the composer, so the reader can edit and re-send it —
+  // which is the point of going back to it.
+  useEffect(() => {
+    const off = Events.On('agent:rewound', async (event) => {
+      const d = event.data as { sessionId: string; preview: RewindPreviewVO }
+      const page: any = await (AgentService as any).LoadSession?.(d.sessionId, PAGE_SIZE)
+      if (page?.messages) {
+        setSessionPage(d.sessionId, {
+          messages: buildTurns(page.messages), hasMore: !!page.hasMore,
+          earliestTs: page.messages[0]?.timestamp || '',
+        })
+      }
+      const p = d.preview || ({} as RewindPreviewVO)
+      let changed = 0, deleted = 0, added = 0
+      for (const r of p.roots || []) {
+        changed += r.changed?.length || 0
+        deleted += r.deleted?.length || 0
+        added += r.added?.length || 0
+      }
+      const summary = added + changed + deleted === 0 ? '文件无变化'
+        : `还原 ${changed} · 删回 ${deleted} · 删除 ${added}`
+      // Appended as its own message rather than through applyToSession: after a rewind the
+      // transcript can be EMPTY (every turn was undone), and applyToSession only attaches to
+      // the newest RUNNING assistant — so the one moment the notice matters most is the one
+      // moment it would be dropped.
+      updateSession(d.sessionId, (list) => [...list, {
+        id: `notice-${Date.now()}`, role: 'assistant',
+        parts: [{ type: 'notice', label: `已回退到第 ${p.turn} 轮之前`, summary, done: true }],
+      }])
+      if (p.userText) composer.setInput(p.userText)
+    })
+    return () => { off?.() }
+  }, [updateSession, setSessionPage, composer])
+
   // stopChat aborts the running turn in the current session (backend cancels
   // the turn ctx — same mechanism as tui Ctrl+C / acp prompt cancel).
   const stopChat = useCallback(() => {
@@ -1199,7 +1280,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                 {messages.map((m) =>
                   m.role === 'user' ? (
                     <Fragment key={m.id}>
-                      <UserBubble>
+                      <UserBubble onContextMenu={(e) => { void openRewindMenu(e, m, currentId) }}>
                         {m.text}
                         <span className="user-meta">
                           {m.reminder ? <button className="reminder-head" title="系统提醒" onClick={() => setReminderModal(m.reminder || '')}><span className="reminder-ico">!</span></button> : null}
@@ -1341,6 +1422,59 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           onResizeCommit={commitOneOffWidth} onSend={sendFindings}
           onRerun={(paths, msgId) => void startReview(paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
       </div>
+      {rewindMenu && (() => {
+        // The menu is built here rather than inline so the target resolution reads in one
+        // place: which turn contains this bubble, and whether it can start a rewind at all.
+        const rt = rewindTargetForMessage(rewindMenu.msg, rewindMenu.turns || [])
+        return (
+          <div className="ctx-menu" role="menu" style={{ left: rewindMenu.x, top: rewindMenu.y }} onMouseLeave={() => setRewindMenu(null)}>
+            <button className="ctx-item" role="menuitem" disabled={rt.kind !== 'ok'}
+              title={rt.kind === 'steer'
+                ? '插话不单独成检查点：请用本轮开头那条消息回退'
+                : rt.kind === 'none' ? '这一轮没有检查点（可能已被裁剪）' : undefined}
+              onClick={() => { void openRewindCard(rt, rewindMenu) }}>回退到这里</button>
+          </div>
+        )
+      })()}
+      {rewindCard && (
+        <div className="confirm-overlay" onClick={() => setRewindCard(null)}>
+          <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-msg">回退到第 {rewindCard.preview.turn} 轮之前？</div>
+            <div className="confirm-sub">
+              {rewindCard.preview.blocked
+                ? `不能回退：${rewindCard.preview.blocked}`
+                : rewindCard.preview.userText
+                  ? `会撤销这一轮之后的全部工作，并把「${rewindCard.preview.userText.slice(0, 60)}${rewindCard.preview.userText.length > 60 ? '…' : ''}」放回输入框。`
+                  : '会撤销这一轮之后的全部工作，并把该轮的提示词放回输入框。'}
+            </div>
+            {rewindCard.preview.roots?.length ? (
+              <div className="rewind-roots">
+                {rewindCard.preview.roots.map((r) => (
+                  <div key={r.root} className="rewind-root">
+                    <div className="rewind-root-head">{r.root}</div>
+                    <div className="rewind-root-counts">
+                      还原 {r.changed?.length || 0} · 删回 {r.deleted?.length || 0} · <b>删除 {r.added?.length || 0}</b>
+                    </div>
+                    {r.added?.length ? (
+                      <ul className="rewind-added">{r.added.slice(0, 8).map((f) => <li key={f}>{f}</li>)}
+                        {r.added.length > 8 ? <li>…还有 {r.added.length - 8} 个</li> : null}</ul>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {rewindCard.preview.irreversible?.length ? (
+              <div className="confirm-error">无法撤销：{rewindCard.preview.irreversible.join('；')}</div>
+            ) : null}
+            {rewindCard.error ? <div className="confirm-error">⚠ {rewindCard.error}</div> : null}
+            <div className="confirm-actions">
+              <button className="btn ghost" onClick={() => setRewindCard(null)}>取消</button>
+              <button className="btn danger" disabled={!!rewindCard.preview.blocked}
+                onClick={() => { void confirmRewind(rewindCard) }}>回退</button>
+            </div>
+          </div>
+        </div>
+      )}
       {menu && (
         <div className="ctx-menu" role="menu" style={{ left: menu.x, top: menu.y }} onMouseLeave={() => setMenu(null)}>
           <button className="ctx-item" role="menuitem" onClick={() => { AgentService.OpenSessionDir(menu.sid).catch(() => {}); setMenu(null) }}>打开会话目录</button>

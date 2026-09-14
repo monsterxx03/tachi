@@ -50,6 +50,15 @@ type SessionManager interface {
 	// Returns nil (no error) when the session has no api_requests.jsonl.
 	LoadAPIRequests(sessionID string) ([]session.APIRequest, error)
 
+	// TruncateTo rewinds the session's recorded history to a boundary: the first
+	// keepMessages records of messages.jsonl and the first keepAPIRequests of
+	// api_requests.jsonl stay, and the rest move into sidecars tagged tag (an
+	// abandoned branch is preserved, never deleted). The two files are cut
+	// together, because the request log describes the conversation.
+	//
+	// The usage ledger is NOT truncated: those tokens were really spent.
+	TruncateTo(keepMessages, keepAPIRequests int, tag string) (session.TruncateResult, session.TruncateResult, error)
+
 	// AppendArtifact records an isolated-workflow artifact (deep research,
 	// review, …) into the current session history as a reminder block, so
 	// the LLM can read the artifact file when the user follows up on it.

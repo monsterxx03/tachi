@@ -75,7 +75,15 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
     if (sm.role === 'user') {
       const r = extractReminder(sm.content)
       const rem = r.reminder || pendingReminder || undefined
-      turns.push({ id: nextTurnId(), role: 'user', text: r.text, reminder: rem, reminderCollapsed: rem ? true : undefined, ts: sm.timestamp || undefined })
+      // A steer (an interjection typed while the agent worked) is recorded as a user
+      // message too; its iteration is the call it was injected before, while a turn's
+      // own prompt has none. Nothing here decides what to DO about that — the rewind
+      // menu does (see rewindTargetForMessage).
+      turns.push({
+        id: nextTurnId(), role: 'user', text: r.text, reminder: rem,
+        reminderCollapsed: rem ? true : undefined, ts: sm.timestamp || undefined,
+        recordIndex: sm.index, steer: (sm.iteration ?? 0) > 0 || undefined,
+      })
       cur = null
       return
     }
@@ -293,4 +301,44 @@ export function copyText(text: string): void {
   } catch {
     fallback()
   }
+}
+
+
+// RewindTarget is what "回退到这里" can do with a right-clicked message.
+export type RewindTarget =
+  | { kind: 'ok'; turn: number }
+  | { kind: 'steer' }
+  | { kind: 'none' }
+
+// rewindTargetForMessage resolves a transcript message to the checkpointed turn that
+// CONTAINS it, or explains why nothing can be done with it.
+//
+// Two things make this less obvious than it looks:
+//
+//   - The match is a RANGE test, not an equality one. A checkpoint records where a
+//     turn's records BEGIN, and a turn's reminder wrapper is recorded before its user
+//     message — so the prompt's own index is turn.records or turn.records+1 depending
+//     on whether that turn had a reminder block.
+//   - Only the turn's OWN prompt can start a rewind. An interjection is a user message
+//     too, but it has no checkpoint (the loop checkpoints turns), and rewinding "from
+//     an interjection" would quietly undo the work that happened before it — so it is
+//     refused by name instead.
+export function rewindTargetForMessage(
+  msg: { recordIndex?: number; steer?: boolean; checkpointTurn?: number },
+  turns: { turn: number; records: number }[],
+): RewindTarget {
+  if (msg.steer) return { kind: 'steer' }
+  // A live bubble carries the turn outright (stamped when its turn completed); one loaded
+  // from disk carries the record index instead and resolves against the boundaries.
+  if (msg.checkpointTurn) {
+    return turns.some((t) => t.turn === msg.checkpointTurn)
+      ? { kind: 'ok', turn: msg.checkpointTurn }
+      : { kind: 'none' }
+  }
+  if (msg.recordIndex == null) return { kind: 'none' }
+  let found: { turn: number; records: number } | undefined
+  for (const t of turns) {
+    if (t.records <= msg.recordIndex) found = t
+  }
+  return found ? { kind: 'ok', turn: found.turn } : { kind: 'none' }
 }

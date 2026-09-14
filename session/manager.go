@@ -337,3 +337,33 @@ func (m *Manager) UpdateMeta(session *Session) error {
 	}
 	return m.store.UpdateMeta(session)
 }
+
+// TruncateTo rewinds the session's recorded history to a boundary: it keeps the
+// first keepMessages records of messages.jsonl and the first keepAPIRequests of
+// api_requests.jsonl, moving the rest into sidecars tagged tag.
+//
+// The two files are cut TOGETHER, because the request log describes the
+// conversation and must not outlive it. The usage ledger is deliberately left
+// alone: those tokens were really spent, and a rewind is not a refund.
+func (m *Manager) TruncateTo(keepMessages, keepAPIRequests int, tag string) (TruncateResult, TruncateResult, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	if m.current == nil {
+		return TruncateResult{}, TruncateResult{}, fmt.Errorf("no active session")
+	}
+	msgs, err := m.store.TruncateMessages(m.current.ID, keepMessages, tag)
+	if err != nil {
+		return TruncateResult{}, TruncateResult{}, err
+	}
+	reqs, err := m.store.TruncateAPIRequests(m.current.ID, keepAPIRequests, tag)
+	if err != nil {
+		return msgs, TruncateResult{}, err
+	}
+	m.current.UpdatedAt = time.Now()
+	// Best-effort, like the other metadata writes on this path: the history has
+	// already moved, and failing here would report a rewind that did happen as
+	// one that did not.
+	_ = m.store.UpdateMeta(m.current)
+	return msgs, reqs, nil
+}

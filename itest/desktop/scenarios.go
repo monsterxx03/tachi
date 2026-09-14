@@ -269,6 +269,37 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		//
+		// Rewind: "回退到这里" on a user bubble must put the workspace AND the conversation
+		// back to the start of that turn. The file the agent wrote is written through BASH
+		// (not EditFile/WriteFile), which is the coverage no other agent's checkpoints
+		// provide. The work dir is deliberately NOT a git repository: the snapshot store is
+		// private to the session, so it has to work without one.
+		{
+			name: "rewind",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe rewind scenario's working directory\n",
+				"keep.txt":  "original\n",
+			},
+			steps: []mockllm.Step{
+				// Turn 1: one shell command that both creates and edits a file.
+				{Reply: bashStream("echo made > made.txt && echo changed > keep.txt", "call_w")},
+				{Reply: textStream("写好了。", 800)},
+				// Turn 2: a plain reply, which is what snapshots the state after turn 1 —
+				// without it, "back to turn 1" would have nothing to undo.
+				{Reply: textStream("第二轮回复。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两轮共三次调用", len(c.requests) == 3, requestCount(c.requests))
+
+				// The shell command's changes are the ones a rewind has to undo.
+				_, statErr := os.Stat(filepath.Join(c.work, "made.txt"))
+				c.check("回退删掉了 shell 新建的文件", os.IsNotExist(statErr), statErrText(statErr))
+				content, readErr := os.ReadFile(filepath.Join(c.work, "keep.txt"))
+				c.check("回退还原了 shell 改过的文件", readErr == nil && string(content) == "original\n", string(content))
+			},
+		},
 		// Session-scoped numbers: a brand-new session must not inherit the previous one's
 		// cache ring or cost (that bug is in docs/agents/desktop.md's list), the sidebar row must pick
 		// up the generated title from the session_title event, and creating one hands the
@@ -969,4 +1000,13 @@ func requestCount(reqs []*mockllm.RecordedRequest) string {
 
 func fileList(paths []string) string {
 	return strings.Join(paths, ", ")
+}
+
+// statErrText describes a stat failure for a report line ("" when the file is gone,
+// which is what the rewind case expects).
+func statErrText(err error) string {
+	if err == nil {
+		return "文件仍存在"
+	}
+	return err.Error()
 }

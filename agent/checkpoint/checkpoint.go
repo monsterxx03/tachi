@@ -44,7 +44,8 @@ const (
 	// or the snapshot store enormous. Both are provisional until P1 has run
 	// against real repositories (see the design doc §5.6, "未测").
 	DefaultMaxFiles = 50_000
-	DefaultMaxBytes = 32 << 20
+	// int64 because it is compared against os.FileInfo.Size().
+	DefaultMaxBytes int64 = 32 << 20
 	// DefaultRetain mirrors Claude Code's own ceiling of 100 checkpoints per
 	// session, so the store stays bounded without the user thinking about it.
 	DefaultRetain = 100
@@ -377,6 +378,9 @@ func normalizeRoots(roots []string) []string {
 			continue
 		}
 		abs = filepath.Clean(abs)
+		if isUnboundedRoot(abs) {
+			continue
+		}
 		if seen[abs] {
 			continue
 		}
@@ -394,7 +398,77 @@ func normalizeRoots(roots []string) []string {
 	return kept
 }
 
+// isUnboundedRoot reports whether a path is too wide to ever be a workspace.
+//
+// The filesystem root and the user's home directory are the two that actually
+// occur (a GUI process's CWD is "/", and a session created before a workspace was
+// chosen inherits whatever was around): snapshotting either means walking it on
+// every turn, and `git add -A` over "/" does not finish at all. The desktop
+// refuses these as workspaces for the same reason (see defaultWorkspaceFor /
+// wideRootReason), so this is the same rule at the layer that would hang.
+func isUnboundedRoot(path string) bool {
+	if path == string(filepath.Separator) {
+		return true
+	}
+	home, err := os.UserHomeDir()
+	return err == nil && home != "" && path == filepath.Clean(home)
+}
+
 // refName is the ref holding the checkpoint of a turn for a root.
 func refName(rootIndex, turn int) string {
 	return fmt.Sprintf("%s/%02d/%d", refPrefix, rootIndex, turn)
+}
+
+// TurnInfo describes one checkpointed turn, for a picker or a rewind command.
+type TurnInfo struct {
+	Turn       int       `json:"turn"`
+	Records    int       `json:"records"`
+	APIRecords int       `json:"api_records"`
+	At         time.Time `json:"at"`
+	UserText   string    `json:"user_text,omitempty"`
+	// NoFiles is set when this turn has no file state (a guard refused it, git
+	// is missing, or the turn only read). A rewind to a turn with NoFiles either
+	// shares a later writer's snapshot or refuses — see resolveTarget.
+	NoFiles bool `json:"no_files,omitempty"`
+	// Reason explains NoFiles when the state is genuinely unknown (a skipped
+	// snapshot), as opposed to "nothing wrote during it".
+	Reason string `json:"reason,omitempty"`
+}
+
+// Turns lists the session's checkpoints, oldest first.
+func (m *Manager) Turns() ([]TurnInfo, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]TurnInfo, 0, len(man.Checkpoints))
+	for _, rec := range man.Checkpoints {
+		info := TurnInfo{
+			Turn:       rec.Turn,
+			Records:    rec.Records,
+			APIRecords: rec.APIRecords,
+			At:         rec.At,
+			UserText:   rec.UserText,
+			NoFiles:    len(rec.Roots) == 0,
+			Reason:     rec.Skipped,
+		}
+		out = append(out, info)
+	}
+	return out, nil
+}
+
+// Record returns the checkpoint recorded for a turn.
+func (m *Manager) Record(turn int) (Record, bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	man, err := loadManifest(m.dir)
+	if err != nil {
+		return Record{}, false, err
+	}
+	rec, ok := man.find(turn)
+	return rec, ok, nil
 }

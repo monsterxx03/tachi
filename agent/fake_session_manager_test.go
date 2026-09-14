@@ -20,6 +20,11 @@ type fakeSessionManager struct {
 	// + tool schemas) for assertions in tests.
 	apiRequests []session.APIRequest
 
+	// truncations records what TruncateTo was asked for, so tests can pin the
+	// cut points a rewind chose (the filesystem behaviour — sidecars and all —
+	// is covered where it lives, in the session package).
+	truncations []truncateCall
+
 	// appendErr, when non-nil, is returned by every AppendMessage call.
 	// Set this to test how the agent loop handles session write failures.
 	appendErr error
@@ -115,6 +120,36 @@ func (f *fakeSessionManager) LoadAPIRequests(sessionID string) ([]session.APIReq
 	out := make([]session.APIRequest, len(f.apiRequests))
 	copy(out, f.apiRequests)
 	return out, nil
+}
+
+// truncateCall is one invocation of TruncateTo.
+type truncateCall struct {
+	KeepMessages int
+	KeepAPI      int
+	Tag          string
+}
+
+// TruncateTo mirrors the real manager's contract in memory: the tail is dropped
+// from the fake's slices and reported as "removed". Tests that need the sidecar
+// files themselves live in the session package, where the filesystem is real.
+func (f *fakeSessionManager) TruncateTo(keepMessages, keepAPIRequests int, tag string) (session.TruncateResult, session.TruncateResult, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.truncations = append(f.truncations, truncateCall{KeepMessages: keepMessages, KeepAPI: keepAPIRequests, Tag: tag})
+	if f.current == nil {
+		return session.TruncateResult{}, session.TruncateResult{}, fmt.Errorf("no active session")
+	}
+	cut := func(n, keep int) (session.TruncateResult, int) {
+		if keep >= n {
+			return session.TruncateResult{Kept: n}, n
+		}
+		return session.TruncateResult{Kept: keep, Removed: n - keep}, keep
+	}
+	msgs, keepM := cut(len(f.messages), keepMessages)
+	reqs, keepR := cut(len(f.apiRequests), keepAPIRequests)
+	f.messages = f.messages[:keepM]
+	f.apiRequests = f.apiRequests[:keepR]
+	return msgs, reqs, nil
 }
 
 // AppendArtifact records the artifact as a reminder message (no merging —

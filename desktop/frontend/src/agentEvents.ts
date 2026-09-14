@@ -168,12 +168,20 @@ export function useAgentStream(deps: AgentStreamDeps) {
 
   useEffect(() => {
     const off = Events.On('agent:turn', (event) => {
-      const d = event.data as { sessionId: string; durationMs: number; iterations: number; cost: number; credit: number }
+      const d = event.data as { sessionId: string; durationMs: number; iterations: number; cost: number; credit: number; checkpointTurn?: number }
       if (d.sessionId !== currentId) return
       updateSession(currentId, (list) => {
         const target = [...list].reverse().find((m) => m.role === 'assistant')
-        if (!target) return list
-        return list.map((m) => (m.id === target.id ? { ...m, summary: d } : m))
+        // The turn is also the moment we learn WHICH checkpoint it was, and the newest
+        // non-steer user bubble is the prompt that started it — so this is where a live
+        // bubble (assembled here, not loaded from disk) gets the turn to rewind to.
+        const bubble = [...list].reverse().find((m) => m.role === 'user' && !m.steer)
+        const turn = d.checkpointTurn || undefined
+        return list.map((m) => {
+          if (target && m.id === target.id) return { ...m, summary: d }
+          if (bubble && m.id === bubble.id && turn) return { ...m, checkpointTurn: turn }
+          return m
+        })
       })
     })
     return () => off?.()

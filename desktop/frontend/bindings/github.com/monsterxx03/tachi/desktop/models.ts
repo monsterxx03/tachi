@@ -492,6 +492,75 @@ export interface PlanVO {
 }
 
 /**
+ * RewindPreviewVO is what a rewind would do, for the confirmation card.
+ */
+export interface RewindPreviewVO {
+    "turn": number;
+    "target": number;
+
+    /**
+     * UserText is the prompt that started the turn: the app puts it back in the
+     * composer so the reader can edit and re-send it.
+     */
+    "userText"?: string;
+    "roots"?: RewindRootVO[] | null;
+
+    /**
+     * Irreversible lists side effects the rewind cannot take back — a git commit
+     * the agent made being the one that matters. Shown on the card, never
+     * swallowed.
+     */
+    "irreversible"?: string[] | null;
+
+    /**
+     * Blocked is why this rewind cannot run. Non-empty means the card is the
+     * whole answer.
+     */
+    "blocked"?: string;
+}
+
+/**
+ * RewindRootVO is one workspace root's part of a rewind preview.
+ */
+export interface RewindRootVO {
+    "root": string;
+
+    /**
+     * Added are files that exist now and would be DELETED by the rewind,
+     * Changed ones whose content would be restored, Deleted ones that would come
+     * back. Added is listed first in the UI because it is the destructive half.
+     */
+    "added"?: string[] | null;
+    "changed"?: string[] | null;
+    "deleted"?: string[] | null;
+    "stat"?: string;
+}
+
+/**
+ * RewindTurnVO is one checkpointed turn, as a picker or the transcript needs it.
+ */
+export interface RewindTurnVO {
+    "turn": number;
+
+    /**
+     * Records is the session record index where the turn's records begin. A
+     * message belongs to this turn when Records <= index < the next turn's
+     * Records. (It is NOT the index of the user message itself: a turn's reminder
+     * wrapper is recorded first, and whether there is one varies per turn.)
+     */
+    "records": number;
+    "at": string;
+    "userText"?: string;
+
+    /**
+     * NoFiles marks a turn whose file state is unknown (it only read, a guard
+     * refused the snapshot, or the snapshot was pruned). A rewind to it may share
+     * a later turn's snapshot or be refused; the preview says which.
+     */
+    "noFiles"?: boolean;
+}
+
+/**
  * SessionInfo is a lightweight session summary for the sidebar list.
  */
 export interface SessionInfo {
@@ -516,6 +585,15 @@ export interface SessionInfo {
  * so the frontend can reconstruct the true in-turn ordering and show timestamps.
  */
 export interface SessionMessage {
+    /**
+     * Index is the message's position in the session's own record list
+     * (messages.jsonl), NOT in the page it arrived with. A checkpoint boundary is
+     * expressed the same way (checkpoint.Record.Records is the record index where
+     * a turn's records begin), so this is what lets the transcript say "rewind to
+     * the turn that started here" without duplicating any bookkeeping.
+     */
+    "index": number;
+
     /**
      * user/assistant/tool_call/tool_result/reminder
      */

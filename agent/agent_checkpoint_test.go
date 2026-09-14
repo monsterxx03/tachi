@@ -42,7 +42,9 @@ func checkpointTestAgent(t *testing.T) (*AIAgent, string, context.Context) {
 
 	work := t.TempDir()
 	enabled := true
-	a := newTestAgent(t, nil, withFakeSession())
+	// A provider is required: rebuilding a session's history converts the records
+	// with the provider's type (see LoadSessionHistory), which a rewind does.
+	a := newTestAgent(t, &mockStreamProvider{name: "anthropic"}, withFakeSession())
 	a.Config.FullConfig = &config.Config{
 		Checkpoints: config.CheckpointConfig{Enabled: &enabled},
 	}

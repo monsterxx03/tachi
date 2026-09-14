@@ -278,6 +278,15 @@ const type = (el, t) => {
   `sessiondir.go` is the single resolver, and it REFUSES anything a webview could send that is not a single
   name (`../..`, `a/b`, `.`, empty). The rule came from `oneOffDir`, which now shares it — every
   "where is this conversation stored" question goes through that one function.
+- **A GUI process's working directory is `/` — never derive a workspace root from it.** macOS launches an
+  app with CWD `/`, so anything that falls back to the ambient CWD sees the filesystem root. It cost a
+  debugging session: `wdctx.Dir(ctx)` returns the process CWD when the context carries none, so a rewind
+  invoked from an RPC handler (a bare `context.Background()`) rebuilt its snapshot manager with root `/`,
+  and `git add -A --work-tree=/` began walking the whole filesystem and never returned (the pprof stack sat
+  in `syscall.Wait4`; `sample` showed git in `read_directory_recursive`). Workspace roots come from the
+  SESSION (`sess.WorkingDir` + `AdditionalDirs` — what `/cd` updates and what survives a reload), and a
+  root that is `/` or `$HOME` is refused outright. `NewSession` already applies the same rule
+  (`defaultWorkspaceFor` / `wideRootReason`); this is that rule at the layer that would hang.
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of

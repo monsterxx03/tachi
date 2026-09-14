@@ -284,7 +284,9 @@ func (s *AgentService) LoadOneOff(sessionID, name string) OneOffDetailVO {
 
 	header.Findings = len(findings)
 	return OneOffDetailVO{
-		Header: header, Messages: buildSessionMessages(msgs),
+		// Offset 0: a one-off transcript is its own file, so its message indices
+		// are positions in that file. Nothing rewinds a side channel.
+		Header: header, Messages: buildSessionMessages(msgs, 0),
 		Requests: requests, Findings: findings,
 	}
 }

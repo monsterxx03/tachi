@@ -159,6 +159,13 @@ type AgentEvent struct {
 	// such callers; everything else leaves it false and gets the usual collapsed
 	// card.
 	ToolAutoExpand bool
+	// CheckpointTurn is the checkpoint this turn was recorded as (see
+	// agent_checkpoint.go), on AgentEventTurnComplete; 0 when the turn has none
+	// (checkpoints off, a one-off run, or the record failed). A frontend needs it
+	// to name the turn its own user bubble started — the bubble is assembled live
+	// on that side, so it never sees the record index a reload would give it, and
+	// "回退到这里" would have no turn to point at without this.
+	CheckpointTurn int
 }
 
 // Exit reasons for RunResult.ExitReason — the terminal-outcome protocol
@@ -473,6 +480,10 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 				a.stopOneoffRecorder(ctx, rs)
 			}
 		}()
+		// The turn is over when this goroutine leaves, whatever path got here. A rewind
+		// refuses while this is unset (see RunState.finished) — so it belongs on the MAIN
+		// turn path: a one-off run never publishes currentRun, and nothing reads its flag.
+		defer rs.markFinished()
 
 		traceID := logger.NewTraceID()
 		rs.begin(traceID)
@@ -1176,9 +1187,10 @@ func (a *AIAgent) lengthExhausted(
 	// discarding it (or showing a red error) is worse than delivering
 	// what we have with a note that it was truncated.
 	ch <- AgentEvent{
-		Type:     AgentEventTurnComplete,
-		Messages: rs.Messages,
-		Usage:    acc.usage,
+		Type:           AgentEventTurnComplete,
+		CheckpointTurn: rs.CheckpointTurn(),
+		Messages:       rs.Messages,
+		Usage:          acc.usage,
 		Result: &RunResult{
 			Response:       acc.text.String(),
 			IterationsUsed: rs.APICalls,
@@ -1277,7 +1289,7 @@ func (a *AIAgent) handleStopFinish(
 	a.recordAssistantTurn(rs, acc.text.String(), acc.usage, acc.thinkBlocks)
 
 	ch <- AgentEvent{
-		Type: AgentEventTurnComplete, Messages: rs.Messages, Usage: acc.usage,
+		Type: AgentEventTurnComplete, Messages: rs.Messages, Usage: acc.usage, CheckpointTurn: rs.CheckpointTurn(),
 		Result: &RunResult{Response: acc.text.String(), IterationsUsed: rs.APICalls, Duration: rs.elapsed(), ExitReason: ExitReasonStop, Usage: acc.usage, TurnCost: rs.TurnCost, TurnCredit: rs.TurnCredit, TraceID: rs.trace()},
 	}
 

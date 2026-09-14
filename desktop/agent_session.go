@@ -33,6 +33,12 @@ type SessionInfo struct {
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
 // so the frontend can reconstruct the true in-turn ordering and show timestamps.
 type SessionMessage struct {
+	// Index is the message's position in the session's own record list
+	// (messages.jsonl), NOT in the page it arrived with. A checkpoint boundary is
+	// expressed the same way (checkpoint.Record.Records is the record index where
+	// a turn's records begin), so this is what lets the transcript say "rewind to
+	// the turn that started here" without duplicating any bookkeeping.
+	Index      int          `json:"index"`
 	Role       string       `json:"role"` // user/assistant/tool_call/tool_result/reminder
 	Content    string       `json:"content"`
 	Timestamp  string       `json:"timestamp,omitempty"` // RFC3339
@@ -238,7 +244,7 @@ func (s *AgentService) LoadSession(id string, limit int) SessionPage {
 			msgs = h
 		}
 	}
-	raw, hasMore := d.pageSessionMessages(r, id, "", limit)
+	raw, offset, hasMore := d.pageSessionMessages(r, id, "", limit)
 
 	d.mu.Lock()
 	r.history = msgs
@@ -250,7 +256,7 @@ func (s *AgentService) LoadSession(id string, limit int) SessionPage {
 	}
 	d.setSessionState(id, st)
 
-	return SessionPage{Messages: buildSessionMessages(raw), HasMore: hasMore}
+	return SessionPage{Messages: buildSessionMessages(raw, offset), HasMore: hasMore}
 }
 
 // LoadSessionMore loads up to `limit` raw messages strictly older than `before`
@@ -263,8 +269,8 @@ func (s *AgentService) LoadSessionMore(id, before string, limit int) SessionPage
 	if r == nil || r.sm == nil {
 		return SessionPage{}
 	}
-	raw, hasMore := d.pageSessionMessages(r, id, before, limit)
-	return SessionPage{Messages: buildSessionMessages(raw), HasMore: hasMore}
+	raw, offset, hasMore := d.pageSessionMessages(r, id, before, limit)
+	return SessionPage{Messages: buildSessionMessages(raw, offset), HasMore: hasMore}
 }
 
 // ActivateSession makes id the displayed session and ensures its per-session
@@ -287,19 +293,28 @@ func (s *AgentService) ActivateSession(id string) string {
 // buildSessionMessages converts raw session messages into the frontend payload,
 // preserving the true in-turn ordering (assistant text / tool calls / tool
 // results interleaved) and carrying each message's timestamp/iteration/seq.
-func buildSessionMessages(raw []session.Message) []SessionMessage {
+func buildSessionMessages(raw []session.Message, offset int) []SessionMessage {
 	out := make([]SessionMessage, 0, len(raw))
 	var pendingThinking []string
-	for _, rm := range raw {
+	for i, rm := range raw {
+		index := offset + i
 		switch rm.Type {
 		case session.MessageTypeUser:
-			out = append(out, SessionMessage{Role: "user", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339)})
+			// Iteration is carried for the user role too: a steer message (typed
+			// while the agent was working) is recorded as a user message, and this
+			// is what tells the two apart — a turn's own prompt has no request
+			// attached (Iteration 0), an interjection belongs to the call it was
+			// injected before.
+			out = append(out, SessionMessage{
+				Index: index, Role: "user", Content: rm.Content,
+				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
+			})
 		case session.MessageTypeReminder:
-			out = append(out, SessionMessage{Role: "reminder", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339)})
+			out = append(out, SessionMessage{Index: index, Role: "reminder", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339)})
 		case session.MessageTypeThinking:
 			pendingThinking = append(pendingThinking, rm.Content)
 		case session.MessageTypeAssistant:
-			sm := SessionMessage{Role: "assistant", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339), Iteration: rm.Iteration, Seq: rm.Seq}
+			sm := SessionMessage{Index: index, Role: "assistant", Content: rm.Content, Timestamp: rm.Timestamp.Format(time.RFC3339), Iteration: rm.Iteration, Seq: rm.Seq}
 			if len(pendingThinking) > 0 {
 				sm.Thinking = strings.Join(pendingThinking, "\n")
 				pendingThinking = nil
@@ -308,14 +323,14 @@ func buildSessionMessages(raw []session.Message) []SessionMessage {
 		case session.MessageTypeToolCall:
 			argsJSON := marshalArgs(rm.Args)
 			out = append(out, SessionMessage{
-				Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
+				Index: index, Role: "tool_call", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
 				Args: argsJSON, Title: tools.ToolArgsSummary(rm.Name, argsJSON),
 				Change:    changeVO(rm.Name, argsJSON),
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			})
 		case session.MessageTypeToolResult:
 			out = append(out, SessionMessage{
-				Role: "tool_result", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
+				Index: index, Role: "tool_result", ToolName: rm.Name, ToolCallID: rm.ToolCallID,
 				ToolResult: rm.Result, IsError: rm.IsError,
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			})
@@ -328,33 +343,43 @@ func buildSessionMessages(raw []session.Message) []SessionMessage {
 // oldest→newest. When before (RFC3339) is non-empty, only messages strictly
 // older than it are considered (the "load earlier" page). Returns the page plus
 // whether more older messages exist.
-func (d *desktopApp) pageSessionMessages(r *sessionRun, id, before string, limit int) ([]session.Message, bool) {
+func (d *desktopApp) pageSessionMessages(r *sessionRun, id, before string, limit int) ([]session.Message, int, bool) {
 	if r == nil || r.sm == nil {
-		return nil, false
+		return nil, 0, false
 	}
 	if limit <= 0 {
 		limit = sessionPageSize
 	}
 	raw, err := r.sm.LoadSessionMessages(id)
 	if err != nil {
-		return nil, false
+		return nil, 0, false
 	}
-	pool := raw
-	if before != "" {
-		if t, perr := time.Parse(time.RFC3339, before); perr == nil {
-			pool = make([]session.Message, 0, len(raw))
-			for _, m := range raw {
-				if m.Timestamp.Before(t) {
-					pool = append(pool, m)
-				}
+	// Track WHERE each kept message sits in the session's full record list: a
+	// checkpoint boundary is a record index, so the page has to carry the absolute
+	// position rather than a position within itself (see SessionMessage.Index).
+	kept := make([]int, 0, len(raw))
+	for i, m := range raw {
+		if before != "" {
+			t, perr := time.Parse(time.RFC3339, before)
+			if perr != nil || !m.Timestamp.Before(t) {
+				continue
 			}
 		}
+		kept = append(kept, i)
 	}
-	hasMore := len(pool) > limit
+	hasMore := len(kept) > limit
 	if hasMore {
-		pool = pool[len(pool)-limit:]
+		kept = kept[len(kept)-limit:]
 	}
-	return pool, hasMore
+	pool := make([]session.Message, 0, len(kept))
+	for _, i := range kept {
+		pool = append(pool, raw[i])
+	}
+	offset := 0
+	if len(kept) > 0 {
+		offset = kept[0]
+	}
+	return pool, offset, hasMore
 }
 
 func toSessionInfo(ss *session.Session) SessionInfo {

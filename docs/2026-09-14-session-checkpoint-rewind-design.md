@@ -1,15 +1,21 @@
 # 会话检查点与回退设计（checkpoint / rewind）
 
-> 版本 0.5 | 日期 2026-09-14 | 状态：**P1 骨架已落地**（`agent/checkpoint/`，11 项单测），**尚未接进 agent loop**
+> 版本 0.6 | 日期 2026-09-14 | 状态：**P1 已落地**（核心 + agent 接线 + 桌面入口 + `rewind` 冒烟场景）；命令面（tui/acp/channel）与 P2/P3 未做
 > 关联：[prompt-cache 手册](agents/prompt-cache.md)（前缀逐字节不变式，本设计的正确性根基）、
 > [desktop 手册](agents/desktop.md)（smoke 与场景约定）
 
-## P1 骨架落地（2026-09-14）
+## P1 落地（2026-09-14）
 
-`agent/checkpoint/` 已落地：影子仓库、懒打点、守卫、裁剪、预览与还原，11 项单测
-（`go test ./agent/checkpoint/`）。尚未接进 agent loop，也没有前端入口——这是下一步。
+落地范围：`agent/checkpoint/`（影子仓库、懒打点、守卫、裁剪、预览、还原）→ agent 接线
+（轮边界 + 写前懒快照）→ `session.TruncateTo`（截断 + sidecar）→ `agent.Rewind`（预览 / 应用）→
+桌面入口（右键用户气泡 → 预览卡 → 回填输入框）→ 冒烟场景 `rewind`（23 项断言，端到端证明
+**shell 新建/改动的文件都被还原/删除**）。
 
-实现时暴露三处设计必须写明的东西，前两处是**真问题**（按最初的写法会出错）：
+尚未做：`/rewind` 命令面（tui / acp / channel）、跨压缩边界的回退、桌面回退链展示（P2）、`/branch`（P3）。
+另外 §12 的冒烟「负向控制」落在**单元层**（`TestRewindWithCheckpointsOffSaysSo` +
+`TestCheckpointWiringDisabledByConfig`）：同一段代码路径、成本却低得多，值得偏离一次。
+
+实现时暴露的东西，前三条是**真问题**（按最初的写法会出错）：
 
 1. **边界与快照拆成两个方法**：`Begin`（记轮边界，只是一条 manifest 记录）与 `Snapshot`（拍文件，懒）。
    只读轮次只调 `Begin`，所以 UI 仍能「回退到这一轮」，而它一分遍历/对象写入的钱都不付。
@@ -20,6 +26,19 @@
 3. **比较必须树对树**：`git diff <tree>` **看不见未跟踪文件**，而「agent 用 shell 新建了文件」正是这个功能
    存在的理由。因此预览与还原前先把当前状态 `add -A` + `write-tree`，再比两棵树（代价是那点对象写入，
    本来下一次快照也要写）。
+4. **检查点的根必须来自会话，绝不能来自环境的 CWD** ⭐。`wdctx.Dir(ctx)` 在没有 ctx 值时**退化到进程
+   CWD**，而 macOS GUI 进程的 CWD 是 `/`：一次 `PreviewRewind` 用 `context.Background()` 调下去，管理器
+   就以 `/` 为根重建，`git add -A --work-tree=/` **开始遍历整个文件系统且永不返回**（实测：回退永久卡在
+   一个无法结束的子进程上，pprof 栈停在 `syscall.Wait4`，`sample` 显示 git 在 `read_directory_recursive`）。
+   修法：根取 `sess.WorkingDir` + `AdditionalDirs`（`/cd` 更新的正是它，重载后也还在）；并加一道守卫，
+   `/` 与 `$HOME` 永不作为检查点根（与桌面 `defaultWorkspaceFor` 的 `wideRootReason` 同一条规则）。
+5. **轮次是否结束的标记必须挂在主路径上**：`defer rs.markFinished()` 最初落进了 `RunOneOffStream`（两个
+   函数结构相似，第一次匹配容易中招；one-off 从不发布 `currentRun`，所以那里没有任何读者），于是主轮次
+   的 run 永远是「未结束」，回退被自己的守卫一直拒绝。教训：给相似结构打补丁时要确认**所在函数**，
+   编译通过不代表改对了位置。
+6. **回退提示不能走 `applyToSession`**：它只挂到「最新的 running assistant」上，而回退之后 transcript
+   可能是**空的**（整轮都被撤销了）——最需要提示的时刻恰好是它会被丢掉的时刻。改成 `updateSession`
+   追加一条独立的 notice 消息。
 
 ## 1. 问题
 

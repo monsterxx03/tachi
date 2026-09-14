@@ -266,9 +266,9 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
 // already unmistakable — right-aligned, tinted, opposite the agent's — so an
 // avatar next to it would only add a chip repeating "this one is you" (and the
 // row would lose 42px of room for what you actually wrote).
-function UserBubble({ children }: { children: ReactNode }) {
+function UserBubble({ children, onContextMenu }: { children: ReactNode; onContextMenu?: (e: React.MouseEvent) => void }) {
   return (
-    <div className="msg msg-user">
+    <div className="msg msg-user" onContextMenu={onContextMenu}>
       <div className="msg-content">{children}</div>
     </div>
   )

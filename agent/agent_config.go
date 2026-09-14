@@ -303,6 +303,12 @@ type RunState struct {
 	Budget            *IterationBudget
 	SkipSessionWrites bool
 	OneoffRec         *oneoffRecorder
+	// finished marks that this run's turn is over. currentRun is deliberately
+	// never set to nil (channel mode reads it between turns), so "a run is in
+	// flight" cannot be answered by that pointer alone — and a rewind must not
+	// start while one is: truncating the conversation under a live turn is the
+	// one thing that cannot be made safe here.
+	finished bool
 	// checkpointTurn is the checkpoint turn number this run belongs to, assigned
 	// at the turn start (see beginCheckpointTurn). 0 means this run has no
 	// checkpoint of its own — a one-off run, checkpoints disabled, or the record
@@ -359,6 +365,20 @@ func (rs *RunState) snapshotMessages() []llm.Message {
 	out := make([]llm.Message, len(rs.Messages))
 	copy(out, rs.Messages)
 	return out
+}
+
+// markFinished records that this run's turn is over.
+func (rs *RunState) markFinished() {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	rs.finished = true
+}
+
+// isFinished reports whether this run's turn is over.
+func (rs *RunState) isFinished() bool {
+	rs.mu.RLock()
+	defer rs.mu.RUnlock()
+	return rs.finished
 }
 
 // setCheckpointTurn records the checkpoint turn this run belongs to.
@@ -499,6 +519,24 @@ func (s *convState) snapshotBreakdown() tokenbreakdown.Breakdown {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return s.tokenBreakdown
+}
+
+// resetAfterRewind drops the parts of the conversation state that describe a
+// history this session no longer has.
+//
+// The anchor goes because it is the REAL prompt size of the last call, and that
+// call's prompt contained messages the rewind just removed: keeping it would
+// report a size for a conversation that is not there (the estimate, which the
+// caller recomputes right after, is the honest answer until the next call
+// anchors again). The compaction baseline goes for the same reason — it may
+// refer to a compaction that is now in the discarded future, which would hold
+// the cooldown closed and block the compaction the shorter history may still
+// need.
+func (s *convState) resetAfterRewind() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.lastPromptReal, s.lastPromptEstimate = 0, 0
+	s.compactEstimate = 0
 }
 
 // compactCooldown reports whether the estimate has grown less than 20% since

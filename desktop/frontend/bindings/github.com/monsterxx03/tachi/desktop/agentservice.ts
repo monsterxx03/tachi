@@ -63,6 +63,16 @@ export function AnswerQuestion(sessionID: string, answers: { [_ in string]?: str
 }
 
 /**
+ * ApplyRewind performs the rewind and adopts the shorter history for this
+ * session's run, so the next turn sends it rather than the history the rewind
+ * just discarded. Returns "ok", or the reason it refused (the desktop's
+ * convention for a mutating call: the frontend renders the string as it is).
+ */
+export function ApplyRewind(id: string, turn: number): $CancellablePromise<string> {
+    return $Call.ByID(1079397011, id, turn);
+}
+
+/**
  * CurrentSession returns the active (displayed) session (nil if none).
  */
 export function CurrentSession(): $CancellablePromise<$models.SessionInfo | null> {
@@ -307,6 +317,14 @@ export function PreviewFile(path: string, withContent: boolean): $CancellablePro
 }
 
 /**
+ * PreviewRewind computes what rewinding to a turn would change, without changing
+ * anything. A Blocked preview is a normal answer the card shows, not an error.
+ */
+export function PreviewRewind(id: string, turn: number): $CancellablePromise<$models.RewindPreviewVO> {
+    return $Call.ByID(3787039355, id, turn);
+}
+
+/**
  * RemoveSessionRoot drops one additional root. The primary is not removable (the
  * UI offers "change" instead), so a path equal to it is simply not found here.
  */
@@ -351,6 +369,15 @@ export function RevealPath(path: string): $CancellablePromise<string> {
  */
 export function ReviewChanges(sessionID: string, paths: string[] | null, reviewedMsg: string): $CancellablePromise<string> {
     return $Call.ByID(1435759713, sessionID, paths, reviewedMsg);
+}
+
+/**
+ * RewindTurns lists the session's checkpointed turns, oldest first. It returns
+ * an empty slice (not an error) when the session has no agent or no checkpoints:
+ * "there is nothing to go back to" is an answer the transcript renders as such.
+ */
+export function RewindTurns(id: string): $CancellablePromise<$models.RewindTurnVO[] | null> {
+    return $Call.ByID(3277698701, id);
 }
 
 /**

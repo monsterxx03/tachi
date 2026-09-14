@@ -115,7 +115,9 @@ export function useSessionTranscript(currentId: string, scrollToBottom: (force?:
       if (ai < 0) return list
       const seg = list[ai]
       const now = Date.now()
-      const u: Message = { id: `u-${now}-steer`, role: 'user', text, ts }
+      // steer: the bubble is an interjection, not a turn's prompt — the rewind menu
+      // reads this to refuse it by name instead of quietly undoing the whole turn.
+      const u: Message = { id: `u-${now}-steer`, role: 'user', text, ts, steer: true }
       const out = [...list]
       if (!(seg.parts && seg.parts.length)) {
         out.splice(ai, 0, u)

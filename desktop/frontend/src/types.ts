@@ -54,6 +54,18 @@ export interface Message {
   role: 'user' | 'assistant'
   text?: string
   ts?: string
+  // recordIndex is where this message sits in the SESSION's record list (not in the
+  // transcript). A checkpoint boundary is expressed the same way, which is what lets
+  // "回退到这里" resolve a bubble to a turn without duplicating any bookkeeping.
+  recordIndex?: number
+  // checkpointTurn is the checkpoint this turn was recorded as. A bubble loaded from
+  // disk resolves its turn from recordIndex instead; a LIVE one is stamped here when the
+  // turn completes, because the frontend assembles that bubble itself.
+  checkpointTurn?: number
+  // steer marks a user bubble that was typed WHILE the agent was working (an
+  // interjection, recorded as a user message too). It has no checkpoint of its own:
+  // the loop checkpoints turns, not messages.
+  steer?: boolean
   reminder?: string
   reminderCollapsed?: boolean
   parts?: Part[]             // historical assistant turn: ordered segments

@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/monsterxx03/tachi/agent/checkpoint"
-	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -102,7 +101,7 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 		return nil // no session to bind a checkpoint store to
 	}
 	sess := sm.Current()
-	roots := a.checkpointRoots(ctx, sess)
+	roots := a.checkpointRoots(sess)
 	key := sess.ID + "\x00" + strings.Join(roots, "\x00")
 
 	a.ckptMu.Lock()
@@ -125,14 +124,23 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 	return a.ckpt
 }
 
-// checkpointRoots is the root set a turn's snapshot covers: the turn's working
-// directory plus whatever extra roots the session carries (session.AdditionalDirs).
-func (a *AIAgent) checkpointRoots(ctx context.Context, sess *session.Session) []string {
-	roots := []string{wdctx.Dir(ctx)}
-	if sess != nil {
-		roots = append(roots, sess.AdditionalDirs...)
+// checkpointRoots is the root set a turn's snapshot covers: the SESSION's own
+// working directory plus whatever extra roots it carries.
+//
+// It deliberately does not read the working directory out of the context.
+// wdctx.Dir falls back to the process's CWD when the context carries none, and a
+// GUI app's CWD is "/": a snapshot manager built from that runs
+// `git add -A --work-tree=/`, which walks the entire filesystem and never
+// returns (measured — it pinned a rewind behind a child process that could not
+// finish). The session's WorkingDir is the authoritative root anyway: it is what
+// /cd updates and what survives a reload.
+func (a *AIAgent) checkpointRoots(sess *session.Session) []string {
+	if sess == nil {
+		return nil
 	}
-	return roots
+	roots := make([]string, 0, 1+len(sess.AdditionalDirs))
+	roots = append(roots, sess.WorkingDir)
+	return append(roots, sess.AdditionalDirs...)
 }
 
 // sessionBoundary returns where the session's recorded history currently ends:

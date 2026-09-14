@@ -493,6 +493,10 @@ func (d *desktopApp) handleEventIn(id string, ev agent.AgentEvent, lane runLane)
 				"iterations": ev.Result.IterationsUsed,
 				"cost":       turnCost,
 				"credit":     turnCredit,
+				// The checkpoint this turn was recorded as, so the transcript can name the
+				// turn its own user bubble started (it assembles that bubble itself and
+				// never sees the record index a reload would have given it).
+				"checkpointTurn": ev.CheckpointTurn,
 			})
 		}
 		// The other moment worth interrupting for (see notifier): the turn is

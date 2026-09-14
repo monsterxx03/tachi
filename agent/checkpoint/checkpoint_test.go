@@ -347,3 +347,15 @@ func TestCouldWriteClassifiesTools(t *testing.T) {
 		assert.False(t, CouldWrite(name), "%s cannot change the workspace", name)
 	}
 }
+
+// TestNormalizeRootsDropsUnboundedRoots is the safety net for the same trap: a root
+// that is the filesystem or the user's home is never a workspace, and snapshotting
+// one means walking it every turn.
+func TestNormalizeRootsDropsUnboundedRoots(t *testing.T) {
+	home, err := os.UserHomeDir()
+	require.NoError(t, err)
+	keep := filepath.Join(t.TempDir(), "work")
+	require.NoError(t, os.MkdirAll(keep, 0o755))
+
+	assert.Equal(t, []string{keep}, normalizeRoots([]string{"/", home, keep}))
+}

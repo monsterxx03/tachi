@@ -32,6 +32,12 @@ type Store interface {
 	// LoadAPIRequests reads all recorded API requests for a session.
 	// Returns nil (no error) when the session has no api_requests.jsonl.
 	LoadAPIRequests(id string) ([]APIRequest, error)
+	// TruncateMessages keeps the first keep records of a session's
+	// messages.jsonl and moves the rest into a sidecar under tag.
+	TruncateMessages(id string, keep int, tag string) (TruncateResult, error)
+	// TruncateAPIRequests does the same for api_requests.jsonl. A rewind cuts
+	// both files together: the request log describes the conversation.
+	TruncateAPIRequests(id string, keep int, tag string) (TruncateResult, error)
 }
 
 // FileStore implements Store interface using filesystem
@@ -383,4 +389,83 @@ func LoadSubagentMessages(sessionID string) (map[string][]Message, error) {
 	}
 
 	return result, nil
+}
+
+// TruncateResult is what a truncation kept, and where the removed tail went.
+//
+// The tail is never deleted: it is moved to a sidecar beside the session so the
+// abandoned branch survives the rewind (an audit trail, and the raw material a
+// future /branch would read). Kept is the number of records left in place.
+type TruncateResult struct {
+	Kept    int
+	Removed int
+	Sidecar string // empty when nothing was removed
+}
+
+// TruncateMessages keeps the first keep records of a session's messages.jsonl
+// and moves the rest into the session's rewound/ directory under tag.
+func (s *FileStore) TruncateMessages(id string, keep int, tag string) (TruncateResult, error) {
+	return truncateJSONL(s.messagesPath(id), filepath.Join(s.sessionDir(id), rewoundDirName, "messages-"+tag+".jsonl"), keep)
+}
+
+// TruncateAPIRequests does the same for api_requests.jsonl. Both files are cut
+// together: a request log describing turns the conversation no longer has would
+// make the request panel and any cache investigation read a history that is not
+// there.
+func (s *FileStore) TruncateAPIRequests(id string, keep int, tag string) (TruncateResult, error) {
+	return truncateJSONL(s.apiRequestsPath(id), filepath.Join(s.sessionDir(id), rewoundDirName, "api-"+tag+".jsonl"), keep)
+}
+
+// rewoundDirName holds the tails of rewound histories, beside the subagent/ and
+// oneoff/ transcripts the session already keeps. It lives INSIDE the session
+// directory on purpose: a rewind's discarded branch belongs to the session it
+// was cut from, and dies with it.
+const rewoundDirName = "rewound"
+
+// truncateJSONL keeps the first keep lines of src and moves the remainder to
+// dst, byte for byte.
+//
+// The order is deliberate: the sidecar is written BEFORE the source is
+// rewritten, so a crash in between leaves the records duplicated rather than
+// lost. A rewind can be retried; a lost branch cannot.
+func truncateJSONL(src, dst string, keep int) (TruncateResult, error) {
+	data, err := os.ReadFile(src)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return TruncateResult{}, nil // nothing recorded yet
+		}
+		return TruncateResult{}, fmt.Errorf("read %s: %w", filepath.Base(src), err)
+	}
+
+	offset, total := 0, 0
+	for i := 0; i < len(data); i++ {
+		if data[i] != '\n' {
+			continue
+		}
+		total++
+		if total == keep {
+			offset = i + 1
+		}
+	}
+	// A last line without a trailing newline still counts as a record.
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		total++
+		if total <= keep {
+			offset = len(data)
+		}
+	}
+	if total <= keep {
+		return TruncateResult{Kept: total}, nil
+	}
+
+	if err := os.MkdirAll(filepath.Dir(dst), 0o700); err != nil {
+		return TruncateResult{}, fmt.Errorf("create rewound dir: %w", err)
+	}
+	if err := fileutil.AtomicWriteFilePrivate(dst, data[offset:]); err != nil {
+		return TruncateResult{}, fmt.Errorf("write sidecar: %w", err)
+	}
+	if err := fileutil.AtomicWriteFilePrivate(src, data[:offset]); err != nil {
+		return TruncateResult{}, fmt.Errorf("rewrite %s: %w", filepath.Base(src), err)
+	}
+	return TruncateResult{Kept: keep, Removed: total - keep, Sidecar: dst}, nil
 }
