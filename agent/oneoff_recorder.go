@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -69,6 +70,15 @@ const OneOffKeyReviewedMsg = "reviewed_msg"
 // anything after a restart, and the prompt text is not a place to parse them out of.
 const OneOffKeyPaths = "paths"
 
+// OneOffKeyTurn is the Extra key carrying the checkpoint turn a scoped review was scoped to.
+//
+// The record has to keep the NUMBER, not just the file list: the review reads that turn's own
+// two trees (a diff that survives a commit or a later edit), and the panel showing its findings
+// has to read the same diff. With only the paths it would fall back to the working tree, and a
+// review of committed — or since-deleted — changes would render as an empty pane whose findings
+// all look like they name files the turn never touched.
+const OneOffKeyTurn = "turn"
+
 // ReviewOrigin is the desktop's context for a review round: which turn asked for it and which
 // files it covers. Both are optional — the TUI, ACP and channel frontends review the whole
 // working tree and have no turn to point at, so they pass the zero value.
@@ -78,6 +88,9 @@ type ReviewOrigin struct {
 	ReviewedMsg string
 	// Paths is the file set the review is scoped to (nil = the whole working tree).
 	Paths []string
+	// Turn is the checkpointed turn the review is scoped to (0 when there is none — a typed
+	// /review, or a session without checkpoints).
+	Turn int
 }
 
 // OneOffMetaForReview is the recorded meta of a review round: which kind of review it was,
@@ -91,6 +104,9 @@ func OneOffMetaForReview(kind llm.UsageKind, sessionID, reportPath string, origi
 	}
 	if origin.ReviewedMsg != "" {
 		extra[OneOffKeyReviewedMsg] = origin.ReviewedMsg
+	}
+	if origin.Turn > 0 {
+		extra[OneOffKeyTurn] = strconv.Itoa(origin.Turn)
 	}
 	if len(origin.Paths) > 0 {
 		if b, err := json.Marshal(origin.Paths); err == nil {

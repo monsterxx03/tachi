@@ -187,15 +187,24 @@ export function GetThinkingLevel(): $CancellablePromise<string> {
  * checkpoints has. TurnDiffVO.Source says which of the two came back.
  * 
  * paths are the caller's last resort, not its input: with a pair of trees the scope comes
- * from the trees themselves, which is what lets a file the shell wrote appear at all.
+ * from the trees themselves, which is what lets a file the shell wrote appear at all. They are
+ * also the reason the fallback stops rather than widening: an EMPTY list means this turn
+ * declared nothing (its changes came from a shell command), and GetTurnDiff reads an empty list
+ * as "the whole tree" — a different question, whose answer would be labelled 本轮改动.
  */
 export function GetTurnChanges(sessionID: string, turn: number, paths: string[] | null): $CancellablePromise<$models.TurnDiffVO> {
     return $Call.ByID(2115146208, sessionID, turn, paths);
 }
 
 /**
- * GetTurnDiff returns the working-tree diff of paths (the files a turn touched) under
- * the session's workspace. An empty paths list means the whole tree.
+ * GetTurnDiff returns the working-tree diff of paths (the files a turn touched) under the
+ * session's workspace. An empty paths list means the whole tree.
+ * 
+ * EVERY root is diffed, not just the primary one: a session can carry additional roots, and a
+ * path under one of them is not "outside the repository" — it is in a DIFFERENT repository,
+ * with its own git. Each file carries the root it came from (FileDiffVO.Root/RootLabel), which
+ * is what lets the panel resolve it to the right absolute path instead of assuming the primary
+ * root and silently opening a same-named file there.
  */
 export function GetTurnDiff(sessionID: string, paths: string[] | null): $CancellablePromise<$models.TurnDiffVO> {
     return $Call.ByID(2623298140, sessionID, paths);

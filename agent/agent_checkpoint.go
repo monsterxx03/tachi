@@ -151,12 +151,14 @@ func (a *AIAgent) TurnSummary(ctx context.Context, turn int) *checkpoint.TurnDif
 }
 
 // TurnDiff returns the frozen unified diff of a turn (its start tree against its end tree),
-// and whether there is such a pair at all. Both are recorded, so the answer does not move
-// when the working tree does — asking after a commit gives the same diff the turn produced.
-func (a *AIAgent) TurnDiff(ctx context.Context, turn int) (string, bool, error) {
+// per workspace root, and whether there is such a pair at all. Both sides are recorded, so the
+// answer does not move when the working tree does — asking after a commit gives the same diff
+// the turn produced. Per root because the paths inside are relative to it: a caller that
+// merges them cannot tell two roots' same-named files apart.
+func (a *AIAgent) TurnDiff(ctx context.Context, turn int) ([]checkpoint.RootDiff, bool, error) {
 	m := a.checkpointManager(ctx)
 	if m == nil {
-		return "", false, nil
+		return nil, false, nil
 	}
 	return m.TurnDiff(ctx, turn)
 }
@@ -177,8 +179,9 @@ func (a *AIAgent) TurnDiffCommand(ctx context.Context, turn int) string {
 }
 
 // TurnChangedSince reports which paths the working tree no longer has where the turn left
-// them, for a diff panel that must say 「之后又改过」 rather than imply it shows the disk.
-func (a *AIAgent) TurnChangedSince(ctx context.Context, turn int) map[string]bool {
+// them, per root, for a diff panel that must say 「之后又改过」 rather than imply it shows the
+// disk. Per root for the usual reason: the paths are relative to it.
+func (a *AIAgent) TurnChangedSince(ctx context.Context, turn int) []checkpoint.RootChanged {
 	m := a.checkpointManager(ctx)
 	if m == nil {
 		return nil

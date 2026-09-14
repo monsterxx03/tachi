@@ -195,26 +195,55 @@ func (d *desktopApp) searchRoots(sessionID string) []searchRoot {
 		primary = processCWD() // no session at all (tests, one-off callers)
 	}
 
+	labels := rootLabels(primary, additional)
 	live := make([]string, 0, len(additional))
-	baseNames := make(map[string]int, len(additional))
 	for _, dir := range additional {
 		if !fileutil.IsDir(dir) {
 			continue
 		}
 		live = append(live, dir)
-		baseNames[filepath.Base(dir)]++
 	}
 
 	roots := make([]searchRoot, 0, len(live)+1)
 	roots = append(roots, searchRoot{path: primary})
 	for _, dir := range live {
+		roots = append(roots, searchRoot{path: dir, label: labels[dir]})
+	}
+	return roots
+}
+
+// rootLabels maps every DECLARED workspace root to the label the UI names it by: "" for the
+// primary, else the root's base name — or its full path when two roots share a base name.
+//
+// One rule, shared by the @-picker and the diff panel (see searchRoots and
+// FileDiffVO.RootLabel): two roots holding the same relative path have to be tellable apart
+// everywhere in the app, and not in two different ways. It is built from what the session
+// declares rather than from what exists on disk, because a diff may name a root whose
+// directory has since been removed.
+func rootLabels(primary string, additional []string) map[string]string {
+	labels := map[string]string{primary: ""}
+	baseNames := make(map[string]int, len(additional))
+	for _, dir := range additional {
+		baseNames[filepath.Base(dir)]++
+	}
+	for _, dir := range additional {
 		label := filepath.Base(dir)
 		if baseNames[label] > 1 {
 			label = dir
 		}
-		roots = append(roots, searchRoot{path: dir, label: label})
+		labels[dir] = label
 	}
-	return roots
+	return labels
+}
+
+// rootLabelFor names one root: the session's own label when it still declares it, else its
+// base name — a root the user removed since must not silently read as the primary one (that is
+// what the empty label means).
+func rootLabelFor(labels map[string]string, root string) string {
+	if label, ok := labels[root]; ok {
+		return label
+	}
+	return filepath.Base(root)
 }
 
 // sessionIsKnown reports whether id belongs to a run this app manages, as opposed to

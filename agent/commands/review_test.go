@@ -883,12 +883,12 @@ func TestReviewAllowlistExcludesReportFinding(t *testing.T) {
 func TestAppendReviewScope(t *testing.T) {
 	const base = "Review the current repo changes.\n"
 
-	if got := AppendReviewScope(base, nil, ""); got != base {
+	if got := AppendReviewScope(base, ReviewScope{}); got != base {
 		t.Errorf("an empty scope must leave the prompt untouched, got %q", got)
 	}
 
 	// Without a checkpoint pair the reviewer reads the working tree, exactly as before.
-	got := AppendReviewScope(base, []string{"src/main.go", "pkg/x.go"}, "")
+	got := AppendReviewScope(base, ReviewScope{Paths: []string{"src/main.go", "pkg/x.go"}})
 	for _, want := range []string{
 		"## Scope (only these files)",
 		"- src/main.go",
@@ -908,7 +908,10 @@ func TestAppendReviewScope(t *testing.T) {
 	// With a checkpoint pair the reviewer is pointed at the turn's OWN two trees instead of
 	// at HEAD: that is what shows a shell command's writes, and what keeps the review
 	// readable after those changes were committed (when `git diff HEAD` says nothing).
-	frozen := AppendReviewScope(base, []string{"src/main.go"}, "git --git-dir=/s/root-00/repo.git diff treeA treeB")
+	frozen := AppendReviewScope(base, ReviewScope{
+		Paths:       []string{"src/main.go"},
+		DiffCommand: "git --git-dir=/s/root-00/repo.git diff treeA treeB",
+	})
 	for _, want := range []string{"- src/main.go", "git --git-dir=/s/root-00/repo.git diff treeA treeB"} {
 		if !strings.Contains(frozen, want) {
 			t.Errorf("frozen scoped prompt is missing %q\n%s", want, frozen)
@@ -916,6 +919,52 @@ func TestAppendReviewScope(t *testing.T) {
 	}
 	if strings.Contains(frozen, "git diff HEAD --") {
 		t.Errorf("a frozen pair must NOT send the reviewer to HEAD:\n%s", frozen)
+	}
+}
+
+// TestAppendReviewScopeGroupsRoots: a session can carry additional workspace roots, and the
+// paths under each are RELATIVE to it — so a flat list is ambiguous the moment two roots hold
+// the same relative path, and the reviewer would be guessing which file (and which tree) an
+// entry means. More than one root therefore names them.
+func TestAppendReviewScopeGroupsRoots(t *testing.T) {
+	const base = "Review the current repo changes.\n"
+	got := AppendReviewScope(base, ReviewScope{
+		Paths:       []string{"shared/notes.md", "lib/util.go"},
+		DiffCommand: "git --git-dir=/s/root-00/repo.git diff treeA treeB && git --git-dir=/s/root-01/repo.git diff treeC treeD",
+		Roots: []ScopeRoot{
+			{Label: "", Root: "/work/main", Paths: []string{"shared/notes.md"}},
+			{Label: "shared-lib", Root: "/work/shared-lib", Paths: []string{"lib/util.go"}},
+		},
+	})
+	for _, want := range []string{
+		"2 working directories of this session",
+		"(primary) — /work/main",
+		"shared-lib — /work/shared-lib",
+		"- shared/notes.md",
+		"- lib/util.go",
+		"--git-dir=/s/root-01/repo.git",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("grouped scope is missing %q\n%s", want, got)
+		}
+	}
+	// The bare flat list must NOT also be printed: two entries reading "shared/notes.md" in one
+	// unlabelled list is exactly the ambiguity this grouping exists to remove.
+	if strings.Count(got, "- shared/notes.md") != 1 {
+		t.Errorf("the file is listed %d times, want once (inside its root):\n%s",
+			strings.Count(got, "- shared/notes.md"), got)
+	}
+
+	// A single root keeps the flat list: no grouping, no extra paragraph.
+	flat := AppendReviewScope(base, ReviewScope{
+		Paths: []string{"src/main.go"},
+		Roots: []ScopeRoot{{Label: "", Root: "/work/main", Paths: []string{"src/main.go"}}},
+	})
+	if strings.Contains(flat, "working directories") {
+		t.Errorf("a single root must not be announced as several:\n%s", flat)
+	}
+	if !strings.Contains(flat, "- src/main.go") {
+		t.Errorf("the flat list is missing its file:\n%s", flat)
 	}
 }
 

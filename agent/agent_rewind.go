@@ -98,6 +98,12 @@ func (a *AIAgent) RewindTurns(ctx context.Context) ([]checkpoint.TurnInfo, error
 // rewind to turn 3 because its file state is gone" is information the caller
 // shows, not a failure it retries.
 func (a *AIAgent) PreviewRewind(ctx context.Context, turn int) (RewindPreview, error) {
+	// The whole-conversation refusals come first: a rewind that cannot happen at all must be
+	// reported as such by the PREVIEW too, or the card would be built (file lists, diffstat and
+	// all) and the reader would only learn otherwise from the failure of the action it offered.
+	if why := a.rewindBlockedByCompaction(); why != "" {
+		return RewindPreview{Turn: turn, Blocked: why}, nil
+	}
 	m, err := a.rewindManager(ctx)
 	if err != nil {
 		return RewindPreview{}, err
@@ -235,6 +241,10 @@ func (a *AIAgent) recordedSystemPrompt() string {
 
 // rewindAllowed refuses a rewind while a turn is in flight: truncating the
 // conversation under a live turn is the one thing that cannot be made safe here.
+// It also refuses a conversation that has been compacted ONWARDS (see
+// compactionSuccessor) — that one is not about safety but about crossing a
+// boundary: the files would go back to before the summary while the
+// conversation that is really running continues in the successor session.
 func (a *AIAgent) rewindAllowed() error {
 	a.mu.RLock()
 	rs := a.currentRun
@@ -242,7 +252,68 @@ func (a *AIAgent) rewindAllowed() error {
 	if rs != nil && !rs.isFinished() {
 		return errors.New("有回合正在运行，请先停止再回退")
 	}
+	if why := a.rewindBlockedByCompaction(); why != "" {
+		return errors.New(why)
+	}
 	return nil
+}
+
+// rewindBlockedByCompaction explains why this conversation cannot be rewound at all, or "".
+//
+// Compaction does not rewrite this session — it starts a NEW one that continues from a
+// summary (agent/compact.go), so what this session's checkpoints describe is the state before
+// that point, and the conversation the user is living in is the successor. Rewinding here
+// would move the workspace backwards under a successor that has kept writing since, with the
+// two sessions' checkpoints then describing inconsistent trees and neither knowing it. So it
+// is refused by name, and the successor is pointed at — that is where a rewind belongs.
+func (a *AIAgent) rewindBlockedByCompaction() string {
+	child := a.compactionSuccessor()
+	if child == nil {
+		return ""
+	}
+	where := child.ID
+	if child.Title != "" {
+		where = fmt.Sprintf("「%s」", child.Title)
+	}
+	return fmt.Sprintf("这个会话已经被压缩接续（%s）：对话在那边继续，回退会把工作区退到摘要之前，因此不再支持回退。要回退请在那边做。", where)
+}
+
+// compactionSuccessor returns the session this conversation was compacted INTO, or nil.
+//
+// Two sources, and the order is not arbitrary: the link this session holds (CompactedChildID),
+// then a scan for a session naming this one as its parent. The scan is not redundant —
+// compact.go writes the parent's side BEST-EFFORT (a failed UpdateMeta is logged and ignored,
+// and the new session's own parent link is enough for the sidebar), so a store can hold a
+// child whose predecessor does not point back. The stored link is returned even when the child
+// is not in the list (a store we can read but that no longer holds it), because "this
+// conversation moved on" is exactly what must not be forgotten.
+func (a *AIAgent) compactionSuccessor() *session.Session {
+	sm := a.Config.SessionManager
+	if sm == nil {
+		return nil
+	}
+	cur := sm.Current()
+	if cur == nil {
+		return nil
+	}
+	child := &session.Session{ID: cur.CompactedChildID}
+	if list, err := sm.List(); err == nil {
+		for _, s := range list {
+			if s == nil || s.ID == cur.ID {
+				continue
+			}
+			if s.CompactedParentID == cur.ID {
+				return s
+			}
+			if child.ID != "" && s.ID == child.ID {
+				child = s // the full record, so the refusal can name the successor
+			}
+		}
+	}
+	if child.ID == "" {
+		return nil
+	}
+	return child
 }
 
 // rewindManager returns the session's checkpoint store, or an error saying why a

@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/checkpoint"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -34,6 +35,50 @@ func TestTurnChangesFallBackToTheToolPaths(t *testing.T) {
 	vo = svc.GetTurnChanges(sid, 7, nil)
 	if vo.Source != changeSourceTools {
 		t.Errorf("Source = %q for an unknown turn, want %q", vo.Source, changeSourceTools)
+	}
+	// ...but with no paths to fall back TO it must stop: an empty path list means "this turn
+	// declared no files" (a shell command wrote them), while GetTurnDiff reads it as "the whole
+	// tree" — and answering with every uncommitted change under 本轮改动 is a different question.
+	if len(vo.Files) != 0 {
+		t.Errorf("files = %+v, want none: an empty fallback scope is not the whole tree", vo.Files)
+	}
+	if !strings.Contains(vo.Note, "没有可显示的改动") {
+		t.Errorf("Note = %q, want it to say there is nothing of this turn's to show", vo.Note)
+	}
+}
+
+// TestEmptyPairIsItsOwnAnswer: a turn whose two checkpoint trees are identical HAS an answer
+// (「本轮没有改动」) and must not fall through to the working tree — whose changes belong to a
+// later turn — nor be confused with the two states that are not answers: no checkpoint for the
+// turn at all, and an end state that was refused.
+func TestEmptyPairIsItsOwnAnswer(t *testing.T) {
+	tests := []struct {
+		name    string
+		sum     *checkpoint.TurnDiff
+		want    bool
+		noteHas string
+	}{
+		{"an empty pair is an answer", &checkpoint.TurnDiff{}, true, "这一轮没有改动"},
+		{"a refused end is not", &checkpoint.TurnDiff{Skipped: "超过单文件上限"}, false, ""},
+		{"a turn with changes is not", &checkpoint.TurnDiff{Files: 2, Added: 5}, false, ""},
+		{"no checkpoint for the turn is not", nil, false, ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			vo, ok := emptyPairAnswer("/repo", tt.sum)
+			if ok != tt.want {
+				t.Fatalf("ok = %v, want %v", ok, tt.want)
+			}
+			if !ok {
+				return
+			}
+			if vo.Source != changeSourceCheckpoint || !strings.Contains(vo.Note, tt.noteHas) {
+				t.Errorf("vo = %+v, want the checkpoint source and a note saying %q", vo, tt.noteHas)
+			}
+			if len(vo.Files) != 0 {
+				t.Errorf("files = %+v, want none", vo.Files)
+			}
+		})
 	}
 }
 

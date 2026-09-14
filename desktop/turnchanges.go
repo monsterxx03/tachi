@@ -124,24 +124,53 @@ func turnChangesFromCheckpoint(d *checkpoint.TurnDiff) *TurnChangesVO {
 // checkpoints has. TurnDiffVO.Source says which of the two came back.
 //
 // paths are the caller's last resort, not its input: with a pair of trees the scope comes
-// from the trees themselves, which is what lets a file the shell wrote appear at all.
+// from the trees themselves, which is what lets a file the shell wrote appear at all. They are
+// also the reason the fallback stops rather than widening: an EMPTY list means this turn
+// declared nothing (its changes came from a shell command), and GetTurnDiff reads an empty list
+// as "the whole tree" — a different question, whose answer would be labelled 本轮改动.
 func (s *AgentService) GetTurnChanges(sessionID string, turn int, paths []string) TurnDiffVO {
-	root, _ := s.desk.sessionRoots(sessionID)
+	root, additional := s.desk.sessionRoots(sessionID)
+	labels := rootLabels(root, additional)
 	if ag, refuse := s.desk.agentOf(sessionID); refuse == "" && ag != nil && turn != 0 {
-		if text, ok, err := ag.TurnDiff(context.Background(), turn); err == nil && ok {
+		if diffs, ok, err := ag.TurnDiff(context.Background(), turn); err == nil && ok {
 			vo := TurnDiffVO{Root: root, Source: changeSourceCheckpoint}
-			vo.Files = filesFromUnified(text)
+			// One root's text at a time, each labelled with its root: the paths inside are
+			// relative to it, so a merged parse would hand the panel two roots' same-named
+			// files as one file (and 打开文件 would resolve it against the primary root).
+			for _, rd := range diffs {
+				vo.Files = append(vo.Files, filesFromUnified(rd.Text, rd.Root, rootLabelFor(labels, rd.Root))...)
+			}
 			// A file the working tree no longer has where this turn left it — a later turn,
 			// the user, or a commit — is marked rather than silently shown as if the panel
-			// were the disk.
-			if moved := ag.TurnChangedSince(context.Background(), turn); len(moved) > 0 {
+			// were the disk. Keyed by (root, path): the path alone names a different file in
+			// each root.
+			moved := map[string]bool{}
+			for _, rc := range ag.TurnChangedSince(context.Background(), turn) {
+				for _, p := range rc.Paths {
+					moved[changedKey(rc.Root, p)] = true
+				}
+			}
+			if len(moved) > 0 {
 				for i := range vo.Files {
-					vo.Files[i].ChangedSince = moved[vo.Files[i].Path]
+					vo.Files[i].ChangedSince = moved[changedKey(vo.Files[i].Root, vo.Files[i].Path)]
 				}
 			}
 			truncateDiff(&vo)
 			return vo
 		}
+		// No diff TEXT — but the checkpoint may still know the turn changed NOTHING (its two
+		// trees are identical). That is an answer of its own, and it must not fall through to
+		// the working tree, whose changes belong to some later turn under this turn's heading.
+		if empty, ok := emptyPairAnswer(root, ag.TurnSummary(context.Background(), turn)); ok {
+			return empty
+		}
+	}
+
+	if len(paths) == 0 {
+		// Nothing to fall back to, and the whole tree is not the answer: this turn declared no
+		// files (a shell command wrote them), so "本轮改动" has nothing of its own to show.
+		return TurnDiffVO{Root: root, Source: changeSourceTools,
+			Note: "这一轮没有可显示的改动：检查点里没有它的记录，工具调用也没有声明过文件"}
 	}
 
 	vo := s.GetTurnDiff(sessionID, paths)
@@ -150,10 +179,32 @@ func (s *AgentService) GetTurnChanges(sessionID string, turn int, paths []string
 	return vo
 }
 
-// filesFromUnified parses a unified diff into the panel's per-file shape. It is the same
-// parser the working-tree path uses: both sides are unified diffs, the difference is only
-// where they came from.
-func filesFromUnified(text string) []FileDiffVO {
+// changedKey identifies a file for the 「之后又改过」 lookup: the same relative path names a
+// different file in each root, so the root is part of the key. NUL cannot appear in either.
+func changedKey(root, path string) string { return root + "\x00" + path }
+
+// emptyPairAnswer is what to show when the turn has no diff text but the checkpoint knows it
+// changed nothing: the answer, and whether it applies. TurnSummary's three states are the whole
+// rule — nil (no checkpoint for the turn, or it wrote nothing at all), a reason (its end state
+// was refused) and zero files (the two trees are equal) — and only the last one is the statement
+// 「本轮没有改动」.
+func emptyPairAnswer(root string, sum *checkpoint.TurnDiff) (TurnDiffVO, bool) {
+	if sum == nil || sum.Skipped != "" || sum.Files > 0 {
+		return TurnDiffVO{}, false
+	}
+	return TurnDiffVO{Root: root, Source: changeSourceCheckpoint,
+		Note: "这一轮没有改动：检查点里它前后的两棵树一致"}, true
+}
+
+// filesFromUnified parses a unified diff into the panel's per-file shape, labelling every file
+// with the root its paths are relative to. It is the same parser the working-tree path uses:
+// both sides are unified diffs, the difference is only where they came from.
+//
+// The root travels WITH each file rather than being remembered by the caller, because a diff
+// is parsed one root at a time and the result is merged: a file that lost its root would be
+// resolved against the primary root, which is exactly how two roots' same-named files used to
+// be confused for one another.
+func filesFromUnified(text, root, label string) []FileDiffVO {
 	parsed := linediff.ParseUnified(text)
 	out := make([]FileDiffVO, 0, len(parsed))
 	for _, fd := range parsed {
@@ -161,6 +212,7 @@ func filesFromUnified(text string) []FileDiffVO {
 			Path: fd.Path, OldPath: fd.OldPath,
 			Created: fd.Created, Deleted: fd.Deleted, Binary: fd.Binary,
 			Hunks: fd.Hunks, Added: fd.Added, Removed: fd.Removed,
+			Root: root, RootLabel: label,
 		})
 	}
 	return out

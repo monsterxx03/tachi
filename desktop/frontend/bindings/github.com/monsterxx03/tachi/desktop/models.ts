@@ -167,6 +167,18 @@ export interface FileDiffVO {
      * disk, and 「打开文件」 would show text that does not match the hunks.
      */
     "changedSince"?: boolean;
+
+    /**
+     * Root is the workspace root this file came from (absolute), and RootLabel is how the UI
+     * names it: "" for the session's primary root, else the root's base name — the same rule
+     * and the same strings as AtMatch.root, so two roots holding the same relative path are
+     * tellable apart everywhere in the app, and not in two different ways.
+     * 
+     * Both may be empty (a diff built without a session root), which reads as the panel's own
+     * Root — what every file used to be assumed to be, and still is for a single-root session.
+     */
+    "root"?: string;
+    "rootLabel"?: string;
 }
 
 /**
@@ -443,6 +455,14 @@ export interface OneOffVO {
      * so the record is where it has to live.
      */
     "paths"?: string[] | null;
+
+    /**
+     * Turn is the checkpointed turn a scoped review was scoped to (0 for a whole-tree review
+     * or a session without checkpoints). The pane reads the SAME diff the reviewer read from
+     * it (the turn's own two trees), so a review of changes that were committed — or edited
+     * again — since still shows what was reviewed, with the findings anchored.
+     */
+    "turn"?: number;
 
     /**
      * Findings counts the run's ReportFinding calls. Only LoadOneOff fills it: counting

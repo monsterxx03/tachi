@@ -11,7 +11,8 @@
 桌面入口（右键用户气泡 → 预览卡 → 回填输入框）→ 冒烟场景 `rewind`（23 项断言，端到端证明
 **shell 新建/改动的文件都被还原/删除**）。
 
-尚未做：`/rewind` 命令面（tui / acp / channel）、跨压缩边界的回退、桌面回退链展示（P2）、`/branch`（P3）。
+尚未做：`/rewind` 命令面（tui / acp / channel）、桌面回退链展示（P2）、`/branch`（P3）。
+跨压缩边界的回退已定案为**禁止**（见「第五轮」）。
 另外 §12 的冒烟「负向控制」落在**单元层**（`TestRewindWithCheckpointsOffSaysSo` +
 `TestCheckpointWiringDisabledByConfig`）：同一段代码路径、成本却低得多，值得偏离一次。
 
@@ -121,9 +122,36 @@
 那一轮恰恰是最需要数字与回退点的。同理，前端只有在**真拿到数字**时才认检查点：轮末被拒会以「零 + note」
 到达，认了它就把整个 footer（含「完整 diff」「评审本轮改动」两个入口）变空。
 
-**未做/限制**：多 root 时 diff 文本是拼接的、`ChangedSinceTurn` 按 path 集合返回（同名相对路径会混），
-桌面目前按单一 root 呈现；评审面板（`oneoff.tsx`）仍按「工作区 vs HEAD」取 diff，而评审本身读的是冻结的
-两棵树，run header 又没记 turn，所以两者在改动被提交后会不一致；`bash_ran`「覆盖范围之外」提示仍未做。
+**第四轮（同日，评审面板与评审同源）**：评审读冻结的两棵树，而面板（意见 + diff）过去按「工作区 vs HEAD」
+取数 —— 改动一旦被提交或删掉，面板就成了空态，意见全掉进「其它文件 / 不在本轮差异里」，评审刚读过的文件
+看起来像它自己认错了；「重新评审」又写死 turn 0，于是这种改动**恰好**没法从面板重跑。修法是把轮次写进 run
+记录（`ReviewOrigin.Turn` / `OneOffKeyTurn` → `OneOffVO.Turn`），面板改 `GetTurnChanges(turn)`、重跑带上
+同一个轮次。同轮清掉三个取数口径的小项：**空对**（检查点说这一轮前后一致，`emptyPairAnswer`）不再回落到
+工作树，**空 paths** 不再按 `GetTurnDiff` 的旧语义 diff 整棵树，工作区那条路与面板共用 `filesFromUnified`；
+chip 在没有片段 diff 可比时，点击改为打开完整 diff（而不是展开一层空折叠）。冒烟新场景 `frozen-panel`。
+
+### 第五轮（同日，压缩之后禁止跨边界回退）
+
+压缩不改写被压缩的会话，而是**新起一个会话**从摘要继续（`agent/compact.go`），于是前一个会话的检查点
+描述的是摘要之前的状态，而读者真正在过的对话在后一个会话里。回退前者会把工作区退到摘要之前 —— 让子会话
+之后写下的文件凭空倒退，两边检查点从此描述互相矛盾的树。定案：**禁止**，并按名字拒掉（`rewindBlockedByCompaction`
+从「本会话持有的链接」或「以本会话为父的会话」找到接续者；`compact.go` 写前驱那一侧是 best-effort，所以
+那个扫描不是冗余）。拒的是**预览**（`RewindPreview.Blocked`）而不只是动作本身：否则卡片会照常列出要还原
+的文件、按钮可点，点了才失败。冒烟 `compact` 同时钉住卡片与磁盘（被拒的回退不留 `rewound/` 侧车）。
+
+**代价**（知道并接受）：`/compact` 之后，压缩前那个会话就不再能回退了；回退要在接续下去的那个会话里做。
+
+**第六轮（同日，diff 链路的 root 归属）**：多 root 时 `TurnDiff` 把各 root 的 diff 拼接、文件只留相对路径、
+面板再用**主目录**解析绝对路径 —— 第二个目录里的文件（哪怕与主目录同名）会被解析到主目录的同名位置：预览/
+打开/发送都错，且一声不响；分组身份只按 path 记，折一个会把另一个也折了。修法：`TurnDiff`/`ChangedSinceTurn`
+按 root 返回（`RootDiff`/`RootChanged`），`FileDiffVO` 带 `Root`（绝对）+ `RootLabel`（沿用 `AtMatch.root` 那套
+label 规则，抽成 `rootLabels` 与 @-picker 共用），前端按文件自己的 root 解析、身份按 `(root, path)`；
+`GetTurnDiff` 也逐 root 取数（additional root 是**另一个仓库**，不是「仓库外」），评审 scope 按 root 分组
+（`ReviewOptions.ScopeRoots`）。冒烟新场景 `multi-root`（两个 root 同名文件），并在会话夹具里支持预置
+additional roots（UI 那条路是原生目录选择器，driver 点不了）。
+
+**未做/限制**：`bash_ran`「覆盖范围之外」提示仍未做；评审意见只带一个 path 字符串，两个 root 同名文件时
+「意见挂在哪个文件上」仍可能两侧都显示（绝对路径可以唯一定位）。
 
 ## 1. 问题
 
@@ -423,7 +451,7 @@ flowchart TD
 
 - **P1（覆盖 bash）**：影子仓库 + 懒打点 + 预览 + 还原 + 原地回退 + TUI `/rewind` + 不可逆清单 +
   §5.6 的五个配套项（gc 时机、`core.compression`、`max_files` / `max_bytes` 守卫、选择性还原）。
-- **P2**：桌面每轮的回退入口与回退链展示；跨压缩边界的回退。
+- **P2**：桌面每轮的回退入口与回退链展示；跨压缩边界的回退（**已定案：禁止**，见「第五轮」）。
 - **P3**：`/branch`（读 sidecar / 复制对话到新会话）。
 
 ## 10. 风险与取舍

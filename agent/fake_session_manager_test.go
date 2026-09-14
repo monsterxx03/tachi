@@ -33,6 +33,12 @@ type fakeSessionManager struct {
 	// LoadAPIRequests). It is how a test simulates the shape a crash mid-append
 	// leaves behind: one torn line makes the real store return nothing at all.
 	loadErr error
+
+	// others are sessions List returns besides the current one. It is how a test
+	// models a conversation that MOVED ON: a compaction's successor names this
+	// session as its parent (and may be the only side of that link that exists —
+	// compact.go writes the predecessor's side best-effort).
+	others []*session.Session
 }
 
 func (f *fakeSessionManager) HasCurrent() bool {
@@ -184,10 +190,11 @@ func (f *fakeSessionManager) LoadSessionMessages(sessionID string) ([]session.Me
 func (f *fakeSessionManager) List() ([]*session.Session, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	out := append([]*session.Session(nil), f.others...)
 	if f.current != nil {
-		return []*session.Session{f.current}, nil
+		out = append([]*session.Session{f.current}, out...)
 	}
-	return nil, nil
+	return out, nil
 }
 
 func (f *fakeSessionManager) FindByThreadID(threadID string) (*session.Session, error) {

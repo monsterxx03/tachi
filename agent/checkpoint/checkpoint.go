@@ -329,39 +329,46 @@ func (m *Manager) diffStat(ctx context.Context, rec Record) (*TurnDiff, error) {
 	return out, nil
 }
 
-// TurnDiff returns the unified diff of a turn's own two trees, and whether there is a
-// pair to diff at all (false for a turn that wrote nothing, or whose end state is
-// missing — the caller then falls back to whatever the tool calls declared).
+// TurnDiff returns the unified diff of a turn's own two trees, PER ROOT, and whether there is
+// a pair to diff at all (false for a turn that wrote nothing, or whose end state is missing —
+// the caller then falls back to whatever the tool calls declared).
 //
-// Both sides are recorded trees, so the answer does not change when the worktree does:
-// asking an hour later, after a commit, gives the same diff this turn produced.
-func (m *Manager) TurnDiff(ctx context.Context, turn int) (string, bool, error) {
+// Both sides are recorded trees, so the answer does not change when the worktree does: asking
+// an hour later, after a commit, gives the same diff this turn produced.
+//
+// A root's diff is returned with the root it belongs to and never merged into one text: two
+// roots can hold the same relative path, and a reader that cannot tell them apart would open
+// the wrong file (see desktop's FileDiffVO.RootLabel).
+func (m *Manager) TurnDiff(ctx context.Context, turn int) ([]RootDiff, bool, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
 	man, err := loadManifest(m.dir)
 	if err != nil {
-		return "", false, err
+		return nil, false, err
 	}
 	rec, ok := man.find(turn)
 	if !ok {
-		return "", false, nil
+		return nil, false, nil
 	}
-	var b strings.Builder
+	var out []RootDiff
 	for _, rs := range rec.Roots {
 		if rs.Tree == "" || rs.EndTree == "" {
 			continue
 		}
 		text, err := m.repoAt(rs.RootIndex).diffText(ctx, rs.Tree, rs.EndTree)
 		if err != nil {
-			return "", false, err
+			return nil, false, err
 		}
-		b.WriteString(text)
+		if text == "" {
+			continue // this root's two trees are equal: nothing of this turn lives here
+		}
+		out = append(out, RootDiff{RootIndex: rs.RootIndex, Root: rs.Root, Text: text})
 	}
-	if b.Len() == 0 {
-		return "", false, nil
+	if len(out) == 0 {
+		return nil, false, nil
 	}
-	return b.String(), true, nil
+	return out, true, nil
 }
 
 // TurnDiffCommand is a shell command that prints a turn's diff — for a reader that runs git
@@ -398,13 +405,12 @@ func shellQuote(s string) string {
 }
 
 // ChangedSinceTurn reports which paths the working tree no longer has where the turn left
-// them, so a frozen diff can say 「这个文件之后又改过」 instead of letting the reader
-// believe the panel shows what is on disk right now.
+// them, so a frozen diff can say 「这个文件之后又改过」 instead of letting the reader believe
+// the panel shows what is on disk right now.
 //
-// Paths are root-relative and returned as a set: with several roots the same relative path
-// can name two different files, and a caller that cares about that distinction has to ask
-// per root (nothing in the UI does yet).
-func (m *Manager) ChangedSinceTurn(ctx context.Context, turn int) (map[string]bool, error) {
+// Per root, and never as one path set: paths are root-relative, so the same relative path can
+// name two different files (the caller keys its lookup by root for exactly that reason).
+func (m *Manager) ChangedSinceTurn(ctx context.Context, turn int) ([]RootChanged, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -416,7 +422,7 @@ func (m *Manager) ChangedSinceTurn(ctx context.Context, turn int) (map[string]bo
 	if !ok {
 		return nil, nil
 	}
-	out := map[string]bool{}
+	var out []RootChanged
 	for _, rs := range rec.Roots {
 		if rs.EndTree == "" {
 			continue
@@ -425,9 +431,10 @@ func (m *Manager) ChangedSinceTurn(ctx context.Context, turn int) (map[string]bo
 		if err != nil {
 			return nil, err
 		}
-		for _, p := range paths {
-			out[p] = true
+		if len(paths) == 0 {
+			continue
 		}
+		out = append(out, RootChanged{RootIndex: rs.RootIndex, Root: rs.Root, Paths: paths})
 	}
 	return out, nil
 }

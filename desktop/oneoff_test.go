@@ -166,6 +166,7 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 			agent.OneOffKeyReport:      filepath.Join(t.TempDir(), "round-1-judge.md"),
 			agent.OneOffKeyReviewedMsg: "a-1757680000",
 			agent.OneOffKeyPaths:       `["NOTES.md","src/main.go"]`,
+			agent.OneOffKeyTurn:        "3",
 		},
 	}
 	writeOneOffFile(t, dir, "review-20260912-210000-aaaa.jsonl", mustJSON(t, m))
@@ -175,7 +176,7 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 	// A malformed scope must not sink the record: the findings still show, without a diff.
 	writeOneOffFile(t, dir, "review-20260912-211000-cccc.jsonl", mustJSON(t, oneOffMetaLine{
 		Type: oneOffLineMeta, Kind: "review", SessionID: oneOffTestSession, StartedAt: started.Add(2 * time.Minute),
-		Extra: map[string]string{agent.OneOffKeyPaths: `["NOTES.md"`},
+		Extra: map[string]string{agent.OneOffKeyPaths: `["NOTES.md"`, agent.OneOffKeyTurn: "not-a-number"},
 	}))
 
 	items := (&AgentService{}).ListOneOffs(oneOffTestSession).Items
@@ -193,11 +194,17 @@ func TestListOneOffsReviewOrigin(t *testing.T) {
 	if strings.Join(scoped.Paths, ",") != "NOTES.md,src/main.go" {
 		t.Errorf("paths = %v, want the recorded scope", scoped.Paths)
 	}
-	if whole := byName["review-20260912-210500-bbbb.jsonl"]; whole.ReviewedMsg != "" || len(whole.Paths) != 0 {
+	// The TURN is the durable half of "which diff this review read": with only the paths, the
+	// findings pane falls back to the working tree — and a review of changes that were committed
+	// or deleted since then renders as an empty pane whose findings look misplaced.
+	if scoped.Turn != 3 {
+		t.Errorf("turn = %d, want the recorded turn", scoped.Turn)
+	}
+	if whole := byName["review-20260912-210500-bbbb.jsonl"]; whole.ReviewedMsg != "" || len(whole.Paths) != 0 || whole.Turn != 0 {
 		t.Errorf("a typed review must carry no origin: %+v", whole)
 	}
-	if bad := byName["review-20260912-211000-cccc.jsonl"]; len(bad.Paths) != 0 {
-		t.Errorf("a malformed scope is dropped, not fatal: %+v", bad.Paths)
+	if bad := byName["review-20260912-211000-cccc.jsonl"]; len(bad.Paths) != 0 || bad.Turn != 0 {
+		t.Errorf("a malformed scope is dropped, not fatal: %+v", bad)
 	}
 }
 

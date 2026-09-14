@@ -125,6 +125,13 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
     : { files: diffStat.files, added: diffStat.added, removed: diffStat.removed, source: 'tools' as const, note: m.changes?.note || '' }
   const diffParts = (m.parts || []).filter((p) => p.type === 'tool' && p.change && p.done && p.ok)
   const allDiffsOpen = diffParts.length > 0 && diffParts.every((p) => p.diffOpen)
+  // The chip's tooltip: where the numbers came from, and what clicking does. The second half
+  // matters because the two can differ — a turn whose changes came from a SHELL command has no
+  // fragment diffs to unfold, and its numbers are exactly the ones no fragment ever counted.
+  const chipTitle = (chip.source === 'checkpoint'
+    ? '本轮改动，来自检查点：与这一轮开始时的快照对比（真实 numstat，包含 shell 命令的改动）'
+    : `本轮改动来自工具调用：只是片段内的行数，不是 git numstat${chip.note ? `；检查点没有给出这一轮的数字（${chip.note}）` : ''}${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在这里' : ''}`)
+    + (diffParts.length === 0 ? '；点击打开完整 diff' : '；点击展开本轮所有片段 diff')
 
   let askShown = false
   let permShown = false
@@ -209,10 +216,15 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
         {chip.files > 0 ? (
           <div className="msg-footer">
             <button type="button" className="diff-chip"
-              title={chip.source === 'checkpoint'
-                ? '本轮改动，来自检查点：与这一轮开始时的快照对比（真实 numstat，包含 shell 命令的改动）'
-                : `本轮改动来自工具调用：只是片段内的行数，不是 git numstat${chip.note ? `；检查点没有给出这一轮的数字（${chip.note}）` : ''}${diffStat.shell ? '；本轮还跑了 shell 命令，那些改动不会出现在这里' : ''}`}
+              title={chipTitle}
               onClick={() => {
+                // Nothing to unfold: the turn's changes came from a shell command (or from a
+                // form the fragments cannot express), so the only place they are readable is the
+                // full diff. Toggling here would open the fold onto an empty list.
+                if (diffParts.length === 0) {
+                  onOpenDiffPanel?.(m.turn ?? 0, diffStat.paths)
+                  return
+                }
                 // The diffs live inside their tool cards, and those cards sit in the fold:
                 // opening every diff without opening the fold would look like a dead click.
                 if (!allDiffsOpen) setProcessOpen(true)
@@ -1470,7 +1482,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         </main>
         {oneoffOpen ? <OneOffPanel api={oneoff} workDir={workDir} busy={isCurrentRunning} width={oneoffWidth}
           onResizeCommit={commitOneOffWidth} onSend={sendFindings}
-          onRerun={(paths, msgId) => void startReview(0, paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
+          onRerun={(turn, paths, msgId) => void startReview(turn, paths, msgId)} onClose={() => setOneOffOpen(false)} /> : null}
       </div>
       {rewindMenu && (() => {
         // The menu is built here rather than inline so the target resolution reads in one

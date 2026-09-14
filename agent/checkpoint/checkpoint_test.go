@@ -527,11 +527,14 @@ func TestTurnDiffIsExactAndFrozen(t *testing.T) {
 	assert.Equal(t, 4, rec.Diff.Added, "three new lines plus the one added to keep.txt")
 	assert.Equal(t, 1, rec.Diff.Removed, "gone.txt's single line — keep.txt only GAINED a line")
 
-	text, hasPair, err := m.TurnDiff(ctx, 1)
+	diffs, hasPair, err := m.TurnDiff(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, hasPair)
+	require.Len(t, diffs, 1, "one root, one diff")
+	assert.Equal(t, 0, diffs[0].RootIndex)
+	assert.Equal(t, root, diffs[0].Root)
 	for _, want := range []string{"new.txt", "keep.txt", "gone.txt", "+three", "-will be deleted"} {
-		assert.Contains(t, text, want)
+		assert.Contains(t, diffs[0].Text, want)
 	}
 
 	// Frozen: a later change to the same file is NOT part of this turn's diff...
@@ -539,13 +542,16 @@ func TestTurnDiffIsExactAndFrozen(t *testing.T) {
 	later, hasPair, err := m.TurnDiff(ctx, 1)
 	require.NoError(t, err)
 	require.True(t, hasPair)
-	assert.Equal(t, text, later, "the turn's diff must not move when the worktree does")
+	assert.Equal(t, diffs, later, "the turn's diff must not move when the worktree does")
 
 	// ...and the panel can say so, per file, instead of implying it shows the disk.
 	changed, err := m.ChangedSinceTurn(ctx, 1)
 	require.NoError(t, err)
-	assert.True(t, changed["keep.txt"])
-	assert.False(t, changed["new.txt"], "a file nobody touched since is still where the turn left it")
+	require.Len(t, changed, 1)
+	assert.Equal(t, root, changed[0].Root)
+	assert.Contains(t, changed[0].Paths, "keep.txt")
+	assert.NotContains(t, changed[0].Paths, "new.txt",
+		"a file nobody touched since is still where the turn left it")
 
 	// Ending twice is a no-op (a turn can be re-run through the same path on a retry).
 	require.NoError(t, m.SnapshotEnd(ctx, 1))
@@ -719,4 +725,114 @@ func TestNormalizeRootsDropsUnboundedRoots(t *testing.T) {
 	require.NoError(t, os.MkdirAll(keep, 0o755))
 
 	assert.Equal(t, []string{keep}, normalizeRoots([]string{"/", home, keep}))
+}
+
+// TestTurnDiffKeepsRootsApart is the multi-root contract: a turn's diff comes back PER ROOT,
+// each labelled with the root its paths are relative to. Two roots can hold the same relative
+// path, and a reader handed one merged text (or a file whose root it does not know) resolves
+// it against the wrong root — which is how a panel ends up opening a same-named file that the
+// turn never touched.
+func TestTurnDiffKeepsRootsApart(t *testing.T) {
+	base := t.TempDir()
+	rootA := filepath.Join(base, "alpha")
+	rootB := filepath.Join(base, "beta")
+	for _, dir := range []string{rootA, rootB} {
+		require.NoError(t, os.MkdirAll(filepath.Join(dir, "shared"), 0o755))
+	}
+	m := NewManager(filepath.Join(base, "session"), []string{rootA, rootB}, Options{})
+	ctx := context.Background()
+
+	// Distinct markers, so "which root's text is this" is answerable at a glance.
+	write(t, rootA, "shared/notes.md", "alpha-v1\n")
+	write(t, rootB, "shared/notes.md", "beta-v1\n")
+	beginSnapshot(t, m, 1)
+
+	// The turn's work: the SAME relative path changes in both roots.
+	write(t, rootA, "shared/notes.md", "alpha-v2\n")
+	write(t, rootB, "shared/notes.md", "beta-v2\n")
+	require.NoError(t, m.SnapshotEnd(ctx, 1))
+
+	diffs, ok, err := m.TurnDiff(ctx, 1)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Len(t, diffs, 2, "one entry per root, never one merged text")
+
+	byRoot := map[string]RootDiff{}
+	for _, d := range diffs {
+		byRoot[d.Root] = d
+	}
+	for i, tt := range []struct{ root, mine, theirs string }{
+		{rootA, "alpha-v2", "beta"},
+		{rootB, "beta-v2", "alpha"},
+	} {
+		d, found := byRoot[tt.root]
+		require.True(t, found, "root %s missing from the diff", tt.root)
+		assert.Equal(t, i, d.RootIndex)
+		assert.Contains(t, d.Text, "shared/notes.md")
+		assert.Contains(t, d.Text, tt.mine, "each entry shows ITS root's change")
+		assert.NotContains(t, d.Text, tt.theirs, "one root's entry must not carry the other's content")
+	}
+
+	// The same split for 「之后又改过」: a path alone names two files here.
+	write(t, rootB, "shared/notes.md", "beta-v3\n")
+	changed, err := m.ChangedSinceTurn(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, changed, 1, "only beta moved")
+	assert.Equal(t, rootB, changed[0].Root)
+	assert.Equal(t, []string{"shared/notes.md"}, changed[0].Paths)
+}
+
+// TestUntrackedFilesAcrossARewind pins what happens to files git does not track, in the four
+// cases that actually differ. The snapshot covers the WORKSPACE (that is the feature: a shell
+// command's writes are recorded even though no tool declared them), and a rewind puts the
+// workspace back to the recorded moment — so the question "did my untracked file survive" has
+// an answer per file, and it is which side of the recorded moment the file appeared on.
+//
+// The fourth case is the one that surprises people: an IGNORED path is outside the checkpoint
+// entirely, so it survives a rewind that removes everything else — including one the agent
+// itself created. That is the price of the .gitignore rule (the design accepts it: dist/* and
+// .env are invisible to the chip, the panel and the review alike).
+func TestUntrackedFilesAcrossARewind(t *testing.T) {
+	m, root := setup(t, Options{})
+	ctx := context.Background()
+
+	// Before the checkpoint: untracked files that already exist (this root is not a git
+	// repository at all, so EVERY file here is untracked — the case the question is about).
+	write(t, root, "pre.txt", "before\n")
+	write(t, root, "keep-dir/kept.txt", "kept\n")
+	require.NoError(t, os.WriteFile(filepath.Join(root, ".gitignore"), []byte("ignored.txt\nbuild/\n"), 0o644))
+
+	beginSnapshot(t, m, 1)
+
+	// The turn's work.
+	write(t, root, "pre.txt", "after\n")               // an existing untracked file, edited
+	write(t, root, "during.txt", "made by the turn\n") // created
+	write(t, root, "sub/deep/new.txt", "in a new dir\n")
+	write(t, root, "ignored.txt", "ignored\n") // created, but .gitignore hides it
+	write(t, root, "build/out.bin", "ignored dir\n")
+	require.NoError(t, m.SnapshotEnd(ctx, 1))
+
+	// The preview is what makes the destructive half declared rather than discovered: the two
+	// files it is about to delete are named before the reader confirms.
+	p, err := m.Preview(ctx, 1)
+	require.NoError(t, err)
+	require.Len(t, p.Roots, 1)
+	assert.ElementsMatch(t, []string{"during.txt", "sub/deep/new.txt"}, p.Roots[0].Added,
+		"files created since the checkpoint are the ones a rewind deletes")
+	assert.Equal(t, []string{"pre.txt"}, p.Roots[0].Changed)
+
+	_, err = m.Restore(ctx, 1)
+	require.NoError(t, err)
+
+	assert.Equal(t, "before\n", readFile(t, root, "pre.txt"),
+		"an untracked file recorded at the checkpoint is RESTORED, content and all")
+	assert.Equal(t, "kept\n", readFile(t, root, "keep-dir/kept.txt"),
+		"an untracked file nobody touched is still there")
+	assert.False(t, exists(root, "during.txt"), "a file created by the turn is removed")
+	assert.False(t, exists(root, "sub/deep/new.txt"), "so is one created inside a new directory")
+	assert.False(t, exists(root, "sub"), "and the empty parent directories are pruned")
+	assert.True(t, exists(root, "ignored.txt"),
+		"an IGNORED file is outside the checkpoint: nothing recorded it, so nothing removes it")
+	assert.True(t, exists(root, "build/out.bin"))
+	assert.True(t, exists(root, ".gitignore"), "the rule itself is a normal file and comes back")
 }

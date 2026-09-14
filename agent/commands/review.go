@@ -140,6 +140,11 @@ type ReviewOptions struct {
 	// what happened to the working tree since. Empty means the reviewer falls back to
 	// `git diff HEAD -- <scope>`, which is all a session without checkpoints has.
 	DiffCommand string
+	// ScopeRoots groups Scope by workspace root. Set only when the session has more than one:
+	// the paths under each root are relative to it, and two roots can hold the same relative
+	// path, so a flat list would leave the reviewer guessing which file is meant (see
+	// AppendReviewScope).
+	ScopeRoots []ScopeRoot
 	// Language is config.Language: the language the report and its findings must be
 	// written in. The review prompt is mixed-language (English task lists, Chinese
 	// report instructions), so without this the model answers in whichever language the
@@ -432,13 +437,14 @@ func (o *ReviewOrchestrator) Next() (RoundSpec, bool) {
 			Round:    1,
 			Provider: provider,
 			OutPath:  outPath,
-			Prompt:   AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language), o.opts.Scope, o.opts.DiffCommand),
-			Kind:     llm.UsageKindReview,
+			Prompt: AppendReviewScope(ReviewUserPrompt(outPath, o.opts.Language),
+				ReviewScope{Paths: o.opts.Scope, DiffCommand: o.opts.DiffCommand, Roots: o.opts.ScopeRoots}),
+			Kind: llm.UsageKindReview,
 		}, true
 	}
 	role, outPath, prompt := BuildRoundPrompt(o.reportDir, round, o.rounds, provider, o.reports, o.opts.Language)
 	// Every round keeps the scope: the adversarial rounds discuss the same changes.
-	prompt = AppendReviewScope(prompt, o.opts.Scope, o.opts.DiffCommand)
+	prompt = AppendReviewScope(prompt, ReviewScope{Paths: o.opts.Scope, DiffCommand: o.opts.DiffCommand, Roots: o.opts.ScopeRoots})
 	return RoundSpec{
 		Round:    round,
 		Role:     role,

@@ -320,7 +320,7 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // diff scope. It has no file group to sit under, and dropping it would leave the header
   // counting findings nobody can read or tick, so it gets a group of its own.
   const outsideItems = items.filter((it) => !(diff?.files || []).some(
-    (f) => findingMatchesFile(diff?.root || '', it.finding.path, f.path)))
+    (f) => findingMatchesFile(f.root || diff?.root || '', it.finding.path, f.path)))
   // The report is a file like any other, and the 报告 pane renders it with the app's own
   // markdown renderer — but it is a PANE of this panel, not another overlay stacked on top.
   const reportButton = report ? (
@@ -336,13 +336,25 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // when the payload arrives, and a re-run's findings cannot fight a stored default — the same
   // shape the picking draft uses.
   const [fileOpen, setFileOpen] = useState<Record<string, boolean>>({})
-  const keyOf = (f: FileDiffVO) => (f.oldPath || '') + f.path
-  const findingsOf = (path: string) => items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, path))
-  const isOpen = (f: FileDiffVO) => fileOpen[keyOf(f)] ?? (expandAll || findingsOf(f.path).length > 0)
+  // A file's identity is (root, path), never the path alone: a session can carry additional
+  // roots, two of them can hold the same relative path, and this string is what React keys the
+  // group by and what the fold state hangs on — with the path alone, clicking one root's file
+  // would unfold the other root's. \n cannot appear in a path, so the join is unambiguous.
+  const keyOf = (f: FileDiffVO) => (f.root || '') + '\n' + (f.oldPath || '') + f.path
+  // Anchoring judges each group against ITS OWN root: that is what makes an absolute finding
+  // path resolve to the right one of two same-named files. (A finding that names a bare
+  // relative path is still ambiguous between such roots — the reviewer is told the roots for
+  // exactly that reason, and the panel shows it under each file that answers to the name.)
+  const findingsOf = (f: FileDiffVO) =>
+    items.filter((it) => findingMatchesFile(f.root || diff?.root || '', it.finding.path, f.path))
+  const isOpen = (f: FileDiffVO) => fileOpen[keyOf(f)] ?? (expandAll || findingsOf(f).length > 0)
   // The key of the group a finding was rendered under ("" when the diff does not show it):
   // that is what a jump has to unfold before the row exists to scroll to.
   const keyForFinding = (f: FindingVO) => {
-    const file = (diff?.files || []).find((g) => findingMatchesFile(diff?.root || '', f.path, g.path))
+    const files = diff?.files || []
+    // Exact root match first: a finding that named an absolute path belongs to the one group
+    // whose root prefixes it, and that is the group a jump has to unfold.
+    const file = files.find((g) => findingMatchesFile(g.root || diff?.root || '', f.path, g.path))
     return file ? keyOf(file) : ''
   }
 
@@ -464,7 +476,7 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
       ) : null}
       {(diff?.files || []).map((f) => (
         <FileDiffGroup key={keyOf(f)} file={f} root={diff?.root || ''}
-          findings={items.filter((it) => findingMatchesFile(diff?.root || '', it.finding.path, f.path))}
+          findings={findingsOf(f)}
           picks={picks} onPick={onPick} open={isOpen(f)} onToggle={() => setFileOpen((p) => ({ ...p, [keyOf(f)]: !isOpen(f) }))} />
       ))}
       {outsideItems.length > 0 ? (
@@ -585,6 +597,10 @@ export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
   // (that is the whole point) — or smaller, for a file the tool touched but never changed.
   const count = diff?.files ? diff.files.length : (files ? files.split('\n').length : 0)
   const source = diff?.source === 'checkpoint' ? '与这一轮开始时的快照对比' : '与 git HEAD 对照'
+  // A NOTE is an answer about the scope ("this turn changed nothing", "there is nothing readable
+  // for it"), and the pane already renders it in its empty state. Treating that as "no scope was
+  // recorded" would contradict the backend's own sentence with a second, wrong one.
+  const hasScope = count > 0 || !!diff?.note
   return (
     <ViewerOverlay label={`本轮改动 — ${count} 个文件（${source}）`} onClose={onClose} stageClass="is-doc"
       findable
@@ -594,8 +610,8 @@ export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
           which is what keeps the two diffs from drifting apart.
           expandAll: with no findings to fold AROUND, every file opens — the diff is the content
           here, not context for a review. */}
-      <DiffFindingsPane diff={diff} loading={loading} findings={[]} runKey={`${sessionId}\n${files}`}
-        hasPaths={count > 0} diffError={error} expandAll />
+      <DiffFindingsPane diff={diff} loading={loading} findings={[]} runKey={`${sessionId}\n${turn}\n${files}`}
+        hasPaths={hasScope} diffError={error} expandAll />
     </ViewerOverlay>
   )
 }
@@ -615,7 +631,12 @@ function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: 
   open: boolean
   onToggle: () => void
 }) {
-  const abs = root && !file.path.startsWith('/') ? `${root}/${file.path}` : file.path
+  // The file's own root wins over the panel's: a session can carry additional roots, and a
+  // path under one of them is relative to THAT root. Using the panel's (the primary) would
+  // resolve a same-named file in the primary root — previewing, opening and 发送 the wrong file,
+  // silently. file.root is empty for a single-root session, where the panel's root IS the root.
+  const fileRoot = file.root || root
+  const abs = fileRoot && !file.path.startsWith('/') ? `${fileRoot}/${file.path}` : file.path
   // The file's own content, the way every other file in this app is shown — the same
   // PreviewFile machinery behind the attachment cards.
   const [peek, setPeek] = useState(false)
@@ -634,6 +655,12 @@ function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: 
             turn, the user, a commit), these hunks are no longer what is on disk — and 预览/打开
             would show text that does not match them. Saying so is the difference between a
             historical view and a wrong one. */}
+        {/* Which additional root this file came from — shown only when there IS one
+            (file.rootLabel is empty for the primary root), so a single-root diff looks exactly
+            as it always did while two roots' same-named files stay tellable apart. */}
+        {file.rootLabel ? (
+          <span className="diff-badge" title={file.root || ''}>{file.rootLabel}</span>
+        ) : null}
         {file.changedSince ? (
           <span className="diff-badge" title="这个文件在这一轮之后又被改过：这里显示的是当时的内容，不是磁盘上的现在">之后又改过</span>
         ) : null}

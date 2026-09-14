@@ -94,6 +94,11 @@ type OneOffVO struct {
 	// The diff pane needs it to show anything, and it is a property of the turn that asked,
 	// so the record is where it has to live.
 	Paths []string `json:"paths,omitempty"`
+	// Turn is the checkpointed turn a scoped review was scoped to (0 for a whole-tree review
+	// or a session without checkpoints). The pane reads the SAME diff the reviewer read from
+	// it (the turn's own two trees), so a review of changes that were committed — or edited
+	// again — since still shows what was reviewed, with the findings anchored.
+	Turn int `json:"turn,omitempty"`
 	// Findings counts the run's ReportFinding calls. Only LoadOneOff fills it: counting
 	// means reading the whole file, and paying that for every record in the list is not
 	// worth it (the panel shows the count once a run is selected).
@@ -393,6 +398,11 @@ func readOneOffHeader(path, name string) (OneOffVO, time.Time, error) {
 			vo.Run = filepath.Dir(report)
 		}
 		vo.ReviewedMsg = m.Extra[agent.OneOffKeyReviewedMsg]
+		if raw := m.Extra[agent.OneOffKeyTurn]; raw != "" {
+			// A malformed number is the same story as a malformed path list: the pane then
+			// reads the working tree, which is what it did before the turn was recorded.
+			vo.Turn, _ = strconv.Atoi(raw)
+		}
 		if raw := m.Extra[agent.OneOffKeyPaths]; raw != "" {
 			// A malformed list is not worth failing the record over: the panel then shows
 			// the findings without a diff, which is what an unscoped review looks like too.

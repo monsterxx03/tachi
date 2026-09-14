@@ -35,6 +35,14 @@ type scenario struct {
 	// config is a YAML block appended to the sandbox config.yaml (see sandbox.writeConfig).
 	// Empty for scenarios that need no settings beyond the shared provider/mock wiring.
 	config string
+	// extraRoots are ADDITIONAL workspace roots for the session, each entry a directory the
+	// runner creates under the sandbox holding that entry's files. They are seeded rather than
+	// added in the UI because the UI's only way in is a native directory picker, which a driver
+	// cannot click — and a session's root set is what the multi-root behaviour is about.
+	//
+	// From the work dir a scenario reaches one as "../<name>/…": a scripted bash command cannot
+	// know the sandbox's absolute path, and it does not have to.
+	extraRoots map[string]map[string]string
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -67,6 +75,22 @@ func (c *checkCtx) requestSeen(want string) (int, bool) {
 	return 0, false
 }
 
+// requestAt returns request n's messages as one string (1-based, the same numbering
+// requestSeen reports), for an assertion that has to hold of ONE request rather than of the
+// run: a scenario whose fact also appears in every request's system prompt (a workspace root,
+// say) cannot be pinned by搜 the whole transcript.
+func (c *checkCtx) requestAt(n int) string {
+	if n < 1 || n > len(c.requests) {
+		return ""
+	}
+	var b strings.Builder
+	for _, m := range c.requests[n-1].Messages {
+		b.WriteString(m.Content)
+		b.WriteString("\n")
+	}
+	return b.String()
+}
+
 // planCopies counts the plan-reminder blocks in one request (the prompt-level measure of
 // "how many times was the model told about the plan").
 func planCopies(req *mockllm.RecordedRequest) int {
@@ -88,6 +112,14 @@ func (c *checkCtx) planFiles() []string {
 // review writes one per round.
 func (c *checkCtx) oneOffFiles() []string {
 	matches, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*", "oneoff", "*.jsonl"))
+	return matches
+}
+
+// rewoundSidecars lists the files a session TRUNCATION preserved: the abandoned branch a rewind
+// moves into <session>/rewound/*. A refused rewind must leave none — that is the filesystem half
+// of "nothing moved", and it is what tells a refusal apart from a rewind that quietly happened.
+func (c *checkCtx) rewoundSidecars() []string {
+	matches, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*", "rewound", "*"))
 	return matches
 }
 
@@ -361,6 +393,109 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// frozen-panel: the OTHER half of reading the checkpoint — the review's own panel. A review
+		// reads the turn's two trees, and its findings are shown against that same diff; when the
+		// pane read the WORKING TREE instead, a review of changes that were committed (or deleted)
+		// since rendered as an empty pane whose findings all looked like they named files the turn
+		// never touched. Turn 2 here deletes the two files turn 1 wrote, so nothing is left in the
+		// working tree: turn 1's 「完整 diff」, the review, and the pane must all still show them.
+		{
+			name: "frozen-panel",
+			files: map[string]string{
+				"README.md": "# smoke\n\nfrozen-panel scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// Turn 1: one shell command writes both files.
+				{Reply: bashStream("printf 'a\\nb\\nc\\n' > made.txt && printf 'x\\ny\\n' > other.txt", "call_z1")},
+				{Reply: textStream("两个文件写好了。", 800)},
+				// Turn 2: a shell command deletes them — the working tree is clean from here on.
+				{Reply: bashStream("rm -f made.txt other.txt", "call_z2")},
+				{Reply: textStream("已经删掉了。", 900)},
+				// The review of turn 1, started from its chip, and its re-run from the pane.
+				{Reply: findingStream("made.txt", 2, "warn", "call_z3")},
+				{Reply: textStream("评审完成：1 条意见。", 1000)},
+				// TWO findings this time: the chip reports the backend's tally of ReportFinding
+				// calls, so a different number is the driver's proof that a NEW run happened
+				// (a reply that merely says "2 条" would prove nothing).
+				{Reply: findingStream("other.txt", 1, "info", "call_z4")},
+				{Reply: findingStream("made.txt", 3, "warn", "call_z5")},
+				{Reply: textStream("评审完成：2 条意见。", 1100)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("两轮对话 + 评审两次共九次调用", len(c.requests) == 9, requestCount(c.requests))
+				// The reviewer is pointed at the turn's OWN two trees, not at HEAD: it has to be
+				// readable even though the files are gone, and both runs are told the same thing.
+				for _, name := range []string{"made.txt", "other.txt"} {
+					n, seen := c.requestSeen(name)
+					c.check("评审 prompt 点名了已经不在磁盘上的 "+name, seen, fmt.Sprintf("出现在第 %d 个请求", n))
+				}
+				if n, seen := c.requestSeen("--git-dir="); seen {
+					c.check("评审被告知读这一轮的两棵树", true, fmt.Sprintf("第 %d 个请求", n))
+				} else {
+					c.check("评审被告知读这一轮的两棵树", false, "prompt 里没有冻结 diff 命令")
+				}
+			},
+		},
+		//
+		// multi-root: the session has an ADDITIONAL workspace root, and both it and the primary
+		// hold a file with the SAME relative name. 「本轮改动」 has to say which tree each file
+		// belongs to: the panel resolves a file's absolute path from its root (without it, the
+		// additional root's file resolves against the primary and 预览/打开 shows the wrong
+		// one, silently), and the review's scope groups the paths by root for the same reason.
+		{
+			name: "multi-root",
+			files: map[string]string{
+				"README.md": "# smoke\n\nmulti-root scenario's primary working directory\n",
+				"notes.md":  "primary\n",
+			},
+			// Seeded, not added in the UI: the only way in is a native directory picker.
+			extraRoots: map[string]map[string]string{
+				"shared-lib": {"notes.md": "lib\n"},
+			},
+			steps: []mockllm.Step{
+				// One shell command changes the same relative path in BOTH roots. The second is
+				// reached as "../shared-lib/…": the scripted command cannot know the sandbox's
+				// absolute path, and the roots are sibling directories by construction.
+				{Reply: bashStream("printf 'main-change\\n' >> notes.md && printf 'lib-change\\n' >> ../shared-lib/notes.md", "call_mr1")},
+				{Reply: textStream("两边都改好了。", 800)},
+				{Reply: findingStream("notes.md", 2, "warn", "call_mr2")},
+				{Reply: textStream("评审完成：1 条意见。", 900)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("一轮对话加一次评审，共四次调用", len(c.requests) == 4, requestCount(c.requests))
+				// The reviewer is told WHICH tree each file is in: a flat list would leave two
+				// "notes.md" entries meaning two different files.
+				// Both facts have to hold of the SAME request — the review's. The roots are in
+				// every request's system prompt, so searching the run for the path would pass
+				// even with no grouping at all.
+				groupedAt, _ := c.requestSeen("working directories of this session")
+				c.check("评审 prompt 说明这些文件分属多个工作目录", groupedAt > 0, fmt.Sprintf("第 %d 个请求", groupedAt))
+				shared := filepath.Join(c.dir, "shared-lib")
+				scope := c.requestAt(groupedAt)
+				c.check("分组里点到了 additional root 的路径", strings.Contains(scope, shared),
+					fmt.Sprintf("request %d 里没有 %s", groupedAt, shared))
+				c.check("分组里两个 root 的清单都在", strings.Contains(scope, "(primary)") && strings.Contains(scope, "shared-lib —"),
+					truncate(scope, 200))
+				if n, seen := c.requestSeen("--git-dir="); seen {
+					c.check("评审被告知读这两棵树", true, fmt.Sprintf("第 %d 个请求", n))
+				} else {
+					c.check("评审被告知读这两棵树", false, "prompt 里没有冻结 diff 命令")
+				}
+				// The filesystem half: both roots really were changed (a scenario whose second
+				// root never got written would fail every DOM assertion for the wrong reason).
+				for _, p := range []string{
+					filepath.Join(c.work, "notes.md"),
+					filepath.Join(shared, "notes.md"),
+				} {
+					data, err := os.ReadFile(p)
+					c.check("两个 root 的 notes.md 都被改过: "+p, err == nil && strings.Contains(string(data), "-change"),
+						fmt.Sprintf("err=%v content=%q", err, truncate(string(data), 40)))
+				}
+			},
+		},
+		//
 		//
 		// Rewind: "回退到这里" on a user bubble must put the workspace AND the conversation
 		// back to the start of that turn. The file the agent wrote is written through BASH
@@ -542,6 +677,16 @@ func scenarios() []scenario {
 					c.check("父子互相指向对方",
 						child["compacted_parent_id"] == parent["id"] && parent["compacted_child_id"] == child["id"],
 						fmt.Sprintf("child.parent=%v parent.child=%v", child["compacted_parent_id"], parent["compacted_child_id"]))
+				}
+
+				// The driver right-clicks a turn in the PRE-compaction session and is refused: a
+				// rewind there would move the workspace back before the summary while the
+				// conversation continues in the child. The filesystem half of that refusal is
+				// this — a truncation would have preserved the abandoned branch in rewound/.
+				if sides := c.rewoundSidecars(); len(sides) != 0 {
+					c.check("被拒的回退没有截断任何会话（没有 rewound 侧车）", false, strings.Join(sides, ", "))
+				} else {
+					c.check("被拒的回退没有截断任何会话（没有 rewound 侧车）", true, "")
 				}
 			},
 		},

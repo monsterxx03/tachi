@@ -4,6 +4,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 )
@@ -130,8 +131,9 @@ func TestGetTurnDiffRelativePath(t *testing.T) {
 	}
 }
 
-// TestGetTurnDiffOutsideRepo: a path from an additional root that is not in this
-// repository gets a sentence, not a silent omission.
+// TestGetTurnDiffOutsideRepo: a path that is in NO workspace root of this session gets a
+// sentence, not a silent omission. (A path in an ADDITIONAL root is a different story — it is
+// diffed, see TestGetTurnDiffDiffsAdditionalRoots.)
 func TestGetTurnDiffOutsideRepo(t *testing.T) {
 	repo := gitRepo(t)
 	outside := writeRepoFile(t, t.TempDir(), "elsewhere.go", "package x\n")
@@ -141,9 +143,70 @@ func TestGetTurnDiffOutsideRepo(t *testing.T) {
 	if len(vo.Files) != 0 {
 		t.Errorf("files = %+v, want none", vo.Files)
 	}
-	if !strings.Contains(vo.Note, "不在该 git 仓库内") {
-		t.Errorf("Note = %q, want it to say the path is outside the repository", vo.Note)
+	if !strings.Contains(vo.Note, "不在任何工作目录内") {
+		t.Errorf("Note = %q, want it to say the path is in no working directory", vo.Note)
 	}
+}
+
+// TestGetTurnDiffDiffsAdditionalRoots is the multi-root fix: a path under a DECLARED additional
+// root is in a different repository, not "outside the repository", so it is diffed like any
+// other — against ITS OWN git, with the root it came from carried on every file.
+//
+// The label is what keeps the panel honest: without it a file would be resolved against the
+// primary root, and a same-named file there would be what 预览/打开 showed.
+func TestGetTurnDiffDiffsAdditionalRoots(t *testing.T) {
+	primary := gitRepo(t)
+	second := gitRepo(t)
+	// Same RELATIVE path in both roots: the case that makes a root-blind diff wrong rather
+	// than merely imprecise.
+	writeRepoFile(t, primary, "shared/notes.md", "primary\n")
+	writeRepoFile(t, second, "shared/notes.md", "second\n")
+
+	_, svc, sid := newRootsApp(t, primary)
+	if res := svc.AddSessionRoots(sid, []string{second}); res != "ok" {
+		t.Fatalf("AddSessionRoots(%q) = %q, want ok", second, res)
+	}
+
+	vo := svc.GetTurnDiff(sid, []string{
+		filepath.Join(primary, "shared/notes.md"),
+		filepath.Join(second, "shared/notes.md"),
+	})
+	if vo.Note != "" {
+		t.Errorf("Note = %q, want none: both paths are in the session's roots", vo.Note)
+	}
+	if len(vo.Files) != 2 {
+		t.Fatalf("files = %+v, want both roots' files", vo.Files)
+	}
+	byRoot := map[string]FileDiffVO{}
+	for _, f := range vo.Files {
+		if f.Path != "shared/notes.md" {
+			t.Errorf("path = %q, want the path relative to its own root", f.Path)
+		}
+		byRoot[f.Root] = f
+	}
+	if _, ok := byRoot[primary]; !ok {
+		t.Errorf("no file carried the primary root; roots seen: %v", keysOf(byRoot))
+	}
+	secondFile, ok := byRoot[second]
+	if !ok {
+		t.Fatalf("no file carried the additional root; roots seen: %v", keysOf(byRoot))
+	}
+	if secondFile.RootLabel != filepath.Base(second) {
+		t.Errorf("RootLabel = %q, want the root's base name %q", secondFile.RootLabel, filepath.Base(second))
+	}
+	if byRoot[primary].RootLabel != "" {
+		t.Errorf("RootLabel = %q for the primary root, want empty", byRoot[primary].RootLabel)
+	}
+}
+
+// keysOf lists a map's keys, for a failure message that says what actually came back.
+func keysOf(m map[string]FileDiffVO) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }
 
 // TestGetTurnDiffNotARepo and TestGetTurnDiffNoWorkspace cover the two honest

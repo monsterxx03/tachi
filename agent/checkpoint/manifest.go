@@ -67,6 +67,27 @@ type TurnDiff struct {
 	Skipped string `json:"skipped,omitempty"`
 }
 
+// RootDiff is one root's slice of a turn's changes: the unified diff between that root's own
+// two trees, labelled with the root it came from.
+//
+// Per root rather than concatenated because the paths inside are ROOT-RELATIVE: two roots can
+// hold the same relative path, and a reader handed one merged text cannot tell them apart.
+type RootDiff struct {
+	RootIndex int    `json:"root_index"`
+	Root      string `json:"root"`
+	// Text is `git diff --no-renames -U3 <start> <end>` in this root's store: the same answer
+	// whenever it is asked, because both sides are recorded trees.
+	Text string `json:"text"`
+}
+
+// RootChanged is one root's share of "the working tree moved since this turn": root-relative
+// paths, and the root that resolves them.
+type RootChanged struct {
+	RootIndex int      `json:"root_index"`
+	Root      string   `json:"root"`
+	Paths     []string `json:"paths"`
+}
+
 // RootState is one root's snapshot within a checkpoint.
 type RootState struct {
 	// RootIndex is the root's position in the manager's ordered root set; the

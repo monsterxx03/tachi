@@ -135,11 +135,13 @@ func TestCheckpointWiringEndsTheTurnWithItsChanges(t *testing.T) {
 	assert.Equal(t, 3, d.Added)
 	assert.Equal(t, 0, d.Removed)
 
-	text, ok, err := a.TurnDiff(ctx, rs.CheckpointTurn())
+	diffs, ok, err := a.TurnDiff(ctx, rs.CheckpointTurn())
 	require.NoError(t, err)
 	require.True(t, ok)
-	assert.Contains(t, text, "made.txt")
-	assert.Contains(t, text, "+a")
+	require.Len(t, diffs, 1)
+	assert.Equal(t, work, diffs[0].Root, "the diff says which root it came from")
+	assert.Contains(t, diffs[0].Text, "made.txt")
+	assert.Contains(t, diffs[0].Text, "+a")
 
 	// A turn that only reads: no end state, no summary, and the readers are told there is
 	// no pair instead of being handed zeroes.

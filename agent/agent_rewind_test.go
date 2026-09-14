@@ -368,3 +368,57 @@ func TestCheckpointRootsComeFromTheSessionNotTheAmbientCWD(t *testing.T) {
 	assert.Equal(t, []string{work, "/extra"}, a.checkpointRoots(sess))
 	assert.Nil(t, a.checkpointRoots(nil))
 }
+
+// TestRewindRefusesASessionCompactedOnwards is the decision 「压缩之后禁止跨边界回退」, and the
+// shape of the crossing is worth spelling out: compaction does not rewrite the session it
+// compacts — it starts a NEW one that continues from a summary (agent/compact.go) — so this
+// session's checkpoints describe the state BEFORE that point while the conversation the reader
+// is living in is the successor. A rewind here moves the workspace backwards under a successor
+// that has kept writing since, and the two sessions end up describing inconsistent trees
+// without either knowing.
+//
+// It is refused by name — the successor is pointed at — and it is refused by the PREVIEW too,
+// so the confirmation card is never built around a file list nobody can act on.
+func TestRewindRefusesASessionCompactedOnwards(t *testing.T) {
+	a, work, ctx, fake := rewindTestAgent(t, 0)
+
+	// A turn with a real checkpoint: the only thing that may block this rewind is the boundary.
+	rs := &RunState{}
+	a.beginCheckpointTurn(ctx, rs, "改一版", boundary(0, 0))
+	require.NoError(t, a.snapshotBeforeWrite(ctx, rs, "Bash"))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "out.txt"), []byte("written\n"), 0o644))
+	turn := rs.CheckpointTurn()
+	require.NotZero(t, turn)
+
+	// Control: the conversation has not moved on, so the rewind is offered as usual.
+	p, err := a.PreviewRewind(ctx, turn)
+	require.NoError(t, err)
+	assert.Empty(t, p.Blocked, "an un-compacted session must still be rewindable")
+
+	me := fake.Current()
+	child := &session.Session{ID: "child-1", Title: "同一段对话", CompactedParentID: me.ID}
+	fake.others = []*session.Session{child}
+	me.CompactedChildID = child.ID
+
+	p, err = a.PreviewRewind(ctx, turn)
+	require.NoError(t, err)
+	assert.Contains(t, p.Blocked, "压缩")
+	assert.Contains(t, p.Blocked, "同一段对话", "the refusal names the successor, not just its id")
+	assert.Empty(t, p.Roots, "a blocked preview must not offer a file list to confirm")
+
+	_, err = a.Rewind(ctx, turn)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "压缩")
+
+	// Nothing moved: the file the turn wrote is still there and the conversation is intact.
+	assert.True(t, workFileExists(work, "out.txt"))
+
+	// The predecessor's side of the link is written BEST-EFFORT (compact.go logs and ignores a
+	// failed UpdateMeta — the successor's own parent link is enough for the sidebar), so the
+	// successor has to be found even when this session does not know about it.
+	me.CompactedChildID = ""
+	p, err = a.PreviewRewind(ctx, turn)
+	require.NoError(t, err)
+	assert.Contains(t, p.Blocked, "压缩",
+		"a successor that only points BACK at us is still a boundary we must not cross")
+}

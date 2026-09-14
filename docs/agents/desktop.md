@@ -54,7 +54,11 @@ exactly one of the two, so write both. **Adding a scenario** = `drivers/<name>.j
 (`smoke.waitFor` — never a fixed sleep — `smoke.check(label, ok, detail)`, `smoke.finish()`, plus
 `q`/`qa`/`text`/`allText`/`type`/`pick`/`click`/`key`/`sleep`) and an entry in `scenarios.go` (the mock's
 `steps`, the work-dir `files`, an `after` func for the Go-side checks). Keep both halves small: one behaviour
-per scenario, and assert what the user would notice. A scenario that needs settings the shared sandbox config
+per scenario, and assert what the user would notice. A scenario that needs an ADDITIONAL workspace root sets
+`extraRoots` (one directory per entry under the sandbox, holding that entry's files): the root set is seeded
+into the session fixture rather than added in the UI, because the UI's only way in is a NATIVE directory
+picker no driver can click — reach a seeded root from the work dir as `../<name>/…`, since a scripted bash
+command cannot know the sandbox's absolute path. A scenario that needs settings the shared sandbox config
 does not carry sets `config` — a YAML block appended to the generated `config.yaml`, which is how a
 parked-permission scenario gets its `permissions.bash.ask` rule. `smoke.type` picks the native value setter
 by ELEMENT (textarea vs input): React ignores `el.value = …`, and a textarea's setter called on an input
@@ -356,6 +360,38 @@ const type = (el, t) => {
   tool-declared paths, so anything that skips work on an empty path list hides exactly that case (the
   `TurnDiffOverlay` fetch keys on the turn, not on the paths). A file the working tree no longer has where
   the turn left it is marked 「之后又改过」 rather than shown as if the panel were the disk.
+- **Every path in a diff carries the ROOT it came from.** A session can hold additional workspace
+  roots (`Session.AdditionalDirs`), and the paths inside each diff are RELATIVE to it — so a file
+  without its root resolves against the primary one, and a same-named file there is what 预览/打开
+  would show, silently. `FileDiffVO.Root` (absolute) + `RootLabel` ("" for the primary, else the
+  base name, or the full path when two roots share a basename — `rootLabels`, the SAME rule and
+  strings as `AtMatch.root`, so two roots are told apart everywhere and not in two different ways),
+  and the panel resolves `abs` from the file's own root. Three traps: (1) a group's identity for
+  React keys and fold state is `(root, path)` — with the path alone, folding one root's file folds
+  the other's (`diff.tsx`'s `keyOf`); (2) `GetTurnDiff` diffs EVERY root — a path in an additional
+  root is in a DIFFERENT repository, not "outside the repository", and judging it per root reported
+  every such path as belonging nowhere; (3) `checkpoint.Manager.TurnDiff`/`ChangedSinceTurn` return
+  per root (`RootDiff`/`RootChanged`) and must never be merged into one text or one path set, which
+  is also why the review's scope groups by root (`ReviewOptions.ScopeRoots` → `AppendReviewScope`).
+- **A review's PANE reads the same diff the reviewer read, by TURN.** The run record keeps the turn
+  (`OneOffKeyTurn` → `OneOffVO.Turn`, set from `reviewScope.Turn`), and the findings pane fetches
+  `GetTurnChanges(sessionId, turn, …)` — so a review of changes that were committed, or deleted, since
+  still shows the files it read, with its findings anchored. Two traps: the pane used to fetch by the
+  recorded PATH list alone, which is the working tree against HEAD (an empty pane whose findings all fell
+  into 「不在本轮差异里」); and 「重新评审」 used to hardcode turn 0, so re-running from the pane was refused
+  with 「工作树里已经没有未提交的差异」 exactly when the frozen pair made it possible. The `frozen-panel`
+  scenario pins both (turn 2 deletes what turn 1 wrote, and the pane must still show it).
+- **A rewind is only offered for the conversation the reader is still IN — a compacted-away session is
+  refused.** Compaction does not rewrite the session it compacts: it starts a NEW one that continues from a
+  summary (`agent/compact.go`), so the predecessor's checkpoints describe the state before that point while
+  the live conversation is the successor. Rewinding there would move the workspace backwards under a
+  successor that has kept writing since, leaving two sessions whose checkpoints describe inconsistent trees
+  and neither knowing it. `AIAgent.rewindBlockedByCompaction` finds the successor from the session's own link
+  OR from a session naming it as parent (`compact.go` writes the predecessor's side BEST-EFFORT, so the scan
+  is not redundant), and the refusal is raised by the PREVIEW (`RewindPreview.Blocked`) as well as the action:
+  the card then says 「不能回退：…」, disables 回退 and lists no files. Refusing only on confirm would have
+  built a card offering a rewind that cannot happen. `compact` pins both the card and the filesystem half
+  (a refused rewind leaves no `rewound/` sidecar).
 - **The transcript's turn stamps cover every record of a turn, not only its opening one.** `sessionTurnStamps`
   (`desktop/turnchanges.go`) keys turns by the record that BEGINS them; `buildSessionMessages` resolves that
   to "the turn in force at this record" (`stampBefore`) and stamps every record of the page with it. A page is

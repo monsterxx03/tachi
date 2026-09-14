@@ -2,6 +2,7 @@ package commands
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -234,40 +235,79 @@ translate them.
 `, language)
 }
 
+// ReviewScope is what a scoped review looks at: the files it names, and how to read their
+// changes.
+type ReviewScope struct {
+	// Paths are the files under review, as the prompt lists them.
+	Paths []string
+	// DiffCommand, when non-empty, is how the changes are READ instead of
+	// `git diff HEAD -- <Scope>`: the desktop builds it from the turn's own checkpoint trees,
+	// so the review sees exactly what that turn changed. That matters twice — a file a SHELL
+	// command wrote is in the tree diff but in no tool call, and the frozen pair still answers
+	// after the changes have been committed or edited again, which is precisely when
+	// `git diff HEAD` would come back empty and the reviewer would report "nothing changed".
+	DiffCommand string
+	// Roots, when it holds more than one entry, groups Paths by the workspace root they live
+	// in. A session can carry additional roots, and the paths inside each are RELATIVE to it:
+	// two roots can hold the same relative path, so a single flat list would leave the reviewer
+	// guessing which tree (and which file) an entry means.
+	Roots []ScopeRoot
+}
+
+// ScopeRoot is one root's slice of a review's scope.
+type ScopeRoot struct {
+	// Label names the root in the prompt ("" = the session's primary root).
+	Label string
+	// Root is the root's own path, so the prompt can say where these files live.
+	Root  string
+	Paths []string
+}
+
 // AppendReviewScope constrains an otherwise repo-wide review prompt to specific files.
 //
 // The desktop's turn-level entry ("评审本轮改动") knows exactly which files the turn
 // touched. Without this the reviewer would run git diff HEAD across the whole tree and
 // report on work that is not under discussion — and pay for the tokens.
 //
-// diffCommand, when non-empty, is how the scope's changes are read instead of
-// `git diff HEAD -- <scope>`: the desktop builds it from the turn's own checkpoint trees,
-// so the review sees exactly what that turn changed. That matters twice — a file a SHELL
-// command wrote is in the tree diff but in no tool call, and the frozen pair still answers
-// after the changes have been committed or edited again, which is precisely when
-// `git diff HEAD` would come back empty and the reviewer would report "nothing changed".
-//
-// Returns prompt unchanged when scope is empty (the plain /review path).
-func AppendReviewScope(prompt string, scope []string, diffCommand string) string {
-	if len(scope) == 0 {
+// Returns prompt unchanged when the scope names no files (the plain /review path).
+func AppendReviewScope(prompt string, scope ReviewScope) string {
+	if len(scope.Paths) == 0 {
 		return prompt
 	}
 
 	var b strings.Builder
 	b.WriteString(strings.TrimRight(prompt, "\n"))
 	b.WriteString("\n\n## Scope (only these files)\n\n")
-	b.WriteString("Review ONLY the changes in these files — they are what the latest turn touched:\n\n")
-	for _, p := range scope {
-		b.WriteString("- " + p + "\n")
+	b.WriteString("Review ONLY the changes in these files — they are what the latest turn touched:\n")
+	if len(scope.Roots) > 1 {
+		// Several workspace roots: listing them flat would be ambiguous the moment two roots
+		// hold the same relative path, so each group names its root.
+		b.WriteString("\nThey live in " + strconv.Itoa(len(scope.Roots)) + " working directories of this session, and the " +
+			"paths below are relative to each one:\n")
+		for _, r := range scope.Roots {
+			label := r.Label
+			if label == "" {
+				label = "(primary)"
+			}
+			b.WriteString("\n" + label + " — " + r.Root + "\n")
+			for _, p := range r.Paths {
+				b.WriteString("- " + p + "\n")
+			}
+		}
+	} else {
+		b.WriteString("\n")
+		for _, p := range scope.Paths {
+			b.WriteString("- " + p + "\n")
+		}
 	}
-	if diffCommand != "" {
-		b.WriteString("\nGet their diff with the Bash tool: `" + diffCommand + "` — it compares the two states of " +
+	if scope.DiffCommand != "" {
+		b.WriteString("\nGet their diff with the Bash tool: `" + scope.DiffCommand + "` — it compares the two states of " +
 			"this turn, so it shows what the turn changed even if those changes were committed or edited since. " +
 			"The files it lists are brand new or deleted as it says; there is no need to look for untracked files.\n")
 	} else {
-		b.WriteString("\nGet their diff with the Bash tool: `git diff HEAD -- " + strings.Join(scope, " ") + "`, " +
+		b.WriteString("\nGet their diff with the Bash tool: `git diff HEAD -- " + strings.Join(scope.Paths, " ") + "`, " +
 			"and for files that are brand new `git ls-files --others --exclude-standard -- " +
-			strings.Join(scope, " ") + "`.\n")
+			strings.Join(scope.Paths, " ") + "`.\n")
 	}
 	b.WriteString("If a command happens to show changes to other files, ignore them: they are outside this review.\n")
 	return b.String()

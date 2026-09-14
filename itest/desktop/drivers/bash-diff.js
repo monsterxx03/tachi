@@ -27,6 +27,15 @@
     smoke.text(chip).indexOf('来自工具调用') < 0 && (chip.getAttribute('title') || '').indexOf('检查点') >= 0,
     chip.getAttribute('title') || '(没有 title)')
 
+  // The chip's OWN click: this turn has no fragment diffs to unfold (no tool call declared a
+  // change), so it opens the full diff — the only place these changes are readable. It used to
+  // toggle the fold, which opened onto an empty list (a click that looked dead).
+  chip.click()
+  const viaChip = await smoke.waitFor('.viewer-overlay .viewer-doc.is-diff', '点数字 chip 打开完整 diff', 8000)
+  smoke.check('只有 shell 改动时，chip 自己就是完整 diff 的入口', !!viaChip, '')
+  smoke.key(document.body, 'Escape')
+  if (!(await smoke.waitFor(() => !smoke.q('.viewer-overlay'), '浮层关掉（下面还要再开一次）', 3000))) return smoke.finish()
+
   // 「完整 diff」 reads the turn's own two trees, so both shell-written files are in it — with
   // real line numbers, which a fragment card never had.
   const diffChip = smoke.qa('.diff-chip').find((b) => b.textContent.indexOf('完整 diff') >= 0)

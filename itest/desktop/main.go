@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -98,7 +99,10 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 			return report(sc.name, nil, []Line{{Label: "git init", OK: false, Detail: err.Error()}}, verbose)
 		}
 	}
-	if err := sb.seedSession("冒烟会话"); err != nil {
+	if err := sb.seedExtraRoots(sc.extraRoots); err != nil {
+		return report(sc.name, nil, []Line{{Label: "extra roots", OK: false, Detail: err.Error()}}, verbose)
+	}
+	if err := sb.seedSession("冒烟会话", sc.extraRoots); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, verbose)
 	}
 
@@ -269,7 +273,12 @@ func fatal(format string, args ...any) {
 // conversation with a known working directory. Without it a LaunchServices-launched app
 // would create its own session with cwd "/", and every path a scenario asserts on
 // (plans, @-references) would land somewhere else.
-func (sb *sandbox) seedSession(title string) error {
+//
+// extraRoots become the session's additional workspace roots, through the SAME store API the
+// app uses. They have to be seeded here because a root set is the one piece of scenario state a
+// driver cannot build: the UI's only way in is a NATIVE directory picker, which a scripted run
+// cannot click.
+func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string) error {
 	// The store's base dir IS the sessions directory (each session is <dir>/<id>/),
 	// not the config dir — pointing it one level up would put the fixture where the app
 	// never looks, and startup would quietly create its own session instead.
@@ -282,5 +291,49 @@ func (sb *sandbox) seedSession(title string) error {
 		return err
 	}
 	mgr.SetTitle(title)
+	if len(extraRoots) > 0 {
+		cur := mgr.Current()
+		for _, name := range sortedKeys(extraRoots) {
+			cur.AdditionalDirs = append(cur.AdditionalDirs, filepath.Join(sb.dir, name))
+		}
+		if err := mgr.UpdateMeta(cur); err != nil {
+			return err
+		}
+	}
 	return nil
+}
+
+// seedExtraRoots creates the additional workspace roots a scenario declares: one directory per
+// entry under the sandbox, holding that entry's files. They live beside the primary work dir
+// (not inside it), so a relative path cannot reach the other root by accident — and a scenario
+// can still reach it from the work dir as "../<name>/…", which is how a scripted bash command
+// touches a root whose absolute path it cannot know.
+func (sb *sandbox) seedExtraRoots(roots map[string]map[string]string) error {
+	for _, name := range sortedKeys(roots) {
+		dir := filepath.Join(sb.dir, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		for rel, content := range roots[name] {
+			p := filepath.Join(dir, rel)
+			if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+				return err
+			}
+			if err := os.WriteFile(p, []byte(content), 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// sortedKeys keeps the seeded root ORDER stable (the primary is fixed; the additional ones
+// follow in this order), so a scenario's assertions do not depend on map iteration.
+func sortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
 }

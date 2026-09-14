@@ -292,23 +292,28 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   // below cannot fire on every render — and so switching runs re-reads instead of showing the
   // previous run's diff.
   const pathsKey = useMemo(() => (detail?.header.paths || []).join('\n'), [detail])
+  // The turn the review was scoped to, when the run recorded one: the pane must read the SAME
+  // diff the reviewer read (that turn's own two trees), or a review of changes that were
+  // committed — or deleted — since renders as an empty pane whose findings all look like they
+  // name files the turn never touched.
+  const runTurn = detail?.header.turn ?? 0
   const diffRunRef = useRef('')
   useEffect(() => {
     if (tab !== 'findings' || !runKey) return
     const files = pathsKey ? pathsKey.split('\n') : []
-    if (files.length === 0) {
+    if (files.length === 0 && runTurn === 0) {
       setDiff(null)
       setDiffError('')
       diffRunRef.current = ''
       return
     }
-    const key = `${runKey}\n${pathsKey}`
+    const key = `${runKey}\n${runTurn}\n${pathsKey}`
     if (diffRunRef.current === key) return
     diffRunRef.current = key
     let alive = true
     setDiffLoading(true)
     setDiffError('')
-    AgentService.GetTurnDiff(sessionId, files)
+    AgentService.GetTurnChanges(sessionId, runTurn, files)
       .then((d) => { if (alive) setDiff(d || null) })
       .catch((e) => {
         if (!alive) return
@@ -320,7 +325,7 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
       })
       .finally(() => { if (alive) setDiffLoading(false) })
     return () => { alive = false }
-  }, [tab, sessionId, runKey, pathsKey])
+  }, [tab, sessionId, runKey, pathsKey, runTurn])
 
   // openReport shows the pane; readReport does the reading. The read is driven by the PANE and
   // not by the click: every fact that can change the answer — which run is selected, whether the
@@ -397,11 +402,11 @@ export function useOneOffs(sessionId: string, open: boolean, live: OneOffRun | n
   const refreshCurrent = useCallback(() => void refresh(sessionId), [refresh, sessionId])
   return useMemo(() => ({
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, diff,
+    select: setSelected, refresh: refreshCurrent, loadRequest, tab, setTab, pathsKey, runTurn, diff,
     diffLoading, diffError, reportText, reportNote, openReport, reloadReport, runKey,
   }), [
     items, note, selected, detail, listLoading, detailLoading, error, requests, live,
-    refreshCurrent, loadRequest, tab, pathsKey, diff, diffLoading, diffError, reportText, reportNote,
+    refreshCurrent, loadRequest, tab, pathsKey, runTurn, diff, diffLoading, diffError, reportText, reportNote,
     openReport, reloadReport, runKey,
   ])
 }
@@ -425,13 +430,19 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
   // Sends the picked findings to the agent as one ordinary user message — the panel's way
   // out, shared with the composer's own path.
   onSend?: (text: string) => void
-  // Runs another review over the same files (see DiffFindingsPane's onRerun). The paths and
-  // the reviewed message come from the run's own record, which is what makes a re-run from a
-  // historical entry as ordinary as one from the chip.
-  onRerun?: (paths: string[], reviewedMsg: string) => void
+  // Runs another review over the same scope (see DiffFindingsPane's onRerun). The turn, the
+  // paths and the reviewed message come from the run's own record, which is what makes a re-run
+  // from a historical entry as ordinary as one from the chip — and what keeps it reading the
+  // same two trees when the changes it reviewed are no longer in the working tree.
+  onRerun?: (turn: number, paths: string[], reviewedMsg: string) => void
   onClose: () => void
 }) {
-  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
+  const { items, note, selected, detail, listLoading, detailLoading, error, requests, live, select, refresh, loadRequest, tab, setTab, pathsKey, runTurn, diff, diffLoading, reportText, reportNote, openReport, reloadReport } = api
+  // Whether this run recorded a scope at all: a typed /review covers the whole tree and has
+  // nothing to name, which is a different thing from "the scope could not be read". A TURN is a
+  // scope too — a turn whose changes came from a shell command declared no paths, and saying "no
+  // file list was recorded" about it would deny the review that just read it.
+  const hasScope = pathsKey.length > 0 || runTurn > 0
   // The pane's scroller doubles as the find root: the bar sticks to its top, and a jump scrolls
   // it rather than the window.
   const bodyRef = useRef<HTMLDivElement>(null)
@@ -707,12 +718,14 @@ export function OneOffPanel({ api, workDir, busy, width, onResizeCommit, onSend,
                 note={detail.header.findings ? undefined
                   : detail.header.report ? '评审写了报告，但没有记录结构化意见 —— 意见只在报告正文里'
                     : '这次评审没有报告问题'}
-                report={detail.header.report} hasPaths={pathsKey.length > 0}
+                report={detail.header.report} hasPaths={hasScope}
                 onSend={onSend} onOpenReport={openReport}
                 /* Only a run that recorded its scope can be re-run over "the same files": a
-                   typed /review covers the whole tree and has nothing to name. */
-                onRerun={detail.header.paths?.length && onRerun
-                  ? () => onRerun(detail.header.paths || [], detail.header.reviewedMsg || '')
+                   typed /review covers the whole tree and has nothing to name. The TURN travels
+                   with it so the re-run asks the same question — the same two trees — and not
+                   the working tree, which is what it would fall back to. */
+                onRerun={hasScope && onRerun
+                  ? () => onRerun(runTurn, detail.header.paths || [], detail.header.reviewedMsg || '')
                   : undefined} />
             ) : null}
 

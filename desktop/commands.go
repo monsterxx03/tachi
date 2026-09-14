@@ -35,9 +35,12 @@ type CommandVO struct {
 	InputHint   string `json:"inputHint,omitempty"`
 }
 
-// commandRun is everything a handler needs: the session's run, the turn's
-// context, the raw arguments, and the channel its events are pumped into.
 // reviewScope is what a scoped review looks at.
+//
+// Turn is the checkpointed turn the review is scoped to (0 when there is none). It is what the
+// RUN RECORD keeps, so the panel showing this review's findings can read the same diff the
+// reviewer did — the turn's own two trees — instead of the working tree, which no longer holds
+// those changes once they are committed or edited again.
 //
 // Paths are the file list the prompt names (and the reviewer's last-resort filter).
 // DiffCommand is how those files' changes are READ when the turn's checkpoints have a pair
@@ -46,13 +49,21 @@ type CommandVO struct {
 // means the reviewer falls back to `git diff HEAD -- <paths>` — what every review did before
 // the checkpoints existed, and all a session without them has.
 type reviewScope struct {
+	Turn        int
 	Paths       []string
 	DiffCommand string
+	// Roots groups Paths by workspace root, and is set only when the session has more than
+	// one: the paths under each root are relative to it, and two roots can hold the same
+	// relative path (see commands.ScopeRoot). What is under review has to be tellable apart
+	// in the prompt for the same reason the panel needs FileDiffVO.RootLabel to open the
+	// right file.
+	Roots []cmds.ScopeRoot
 }
 
-// commandRun is one command's execution context. scope and reviewedMsg are the desktop's
-// review context: which files the review covers, and which turn asked for it (see
-// agent.ReviewOrigin).
+// commandRun is one command's execution context: everything a handler needs — the session's
+// run, the turn's context, the raw arguments, the channel its events are pumped into — plus
+// the desktop's review context, scope and reviewedMsg: which files the review covers, and
+// which turn asked for it (see agent.ReviewOrigin).
 type commandRun struct {
 	desk *desktopApp
 	run  *sessionRun
@@ -183,17 +194,35 @@ func (s *AgentService) ReviewChanges(sessionID string, turn int, paths []string,
 // The file list comes FROM THE SAME DIFF the reviewer will read, so the two can never
 // disagree about what is under review — and a file a shell command wrote is in it, which the
 // tool-declared list could never contain.
+//
+// The turn is carried even when there is no pair: it is what a re-run and the findings panel
+// use to ask the same question again, and a later commit may well have given the checkpoints
+// a pair they did not have when the review first ran.
 func (s *AgentService) reviewScopeFor(sessionID string, turn int, paths []string) reviewScope {
-	out := reviewScope{Paths: paths}
+	out := reviewScope{Turn: turn, Paths: paths}
 	ag, refuse := s.desk.agentOf(sessionID)
 	if refuse != "" || ag == nil || turn == 0 {
 		return out
 	}
-	text, ok, err := ag.TurnDiff(context.Background(), turn)
+	diffs, ok, err := ag.TurnDiff(context.Background(), turn)
 	if err != nil || !ok {
 		return out
 	}
-	out.Paths = pathsFromUnified(text)
+	primary, additional := s.desk.sessionRoots(sessionID)
+	labels := rootLabels(primary, additional)
+	out.Paths = nil
+	for _, rd := range diffs {
+		ps := pathsFromUnified(rd.Text)
+		out.Roots = append(out.Roots, cmds.ScopeRoot{
+			Label: rootLabelFor(labels, rd.Root), Root: rd.Root, Paths: ps,
+		})
+		out.Paths = append(out.Paths, ps...)
+	}
+	if len(out.Roots) < 2 {
+		// A single root needs no grouping: the flat list is already unambiguous, and the
+		// prompt is one paragraph shorter for it.
+		out.Roots = nil
+	}
 	out.DiffCommand = ag.TurnDiffCommand(context.Background(), turn)
 	return out
 }
@@ -468,6 +497,7 @@ func runReviewCommand(c *commandRun) error {
 	// /review command leaves this empty and reviews the whole working tree.
 	ropts.Scope = c.scope.Paths
 	ropts.DiffCommand = c.scope.DiffCommand
+	ropts.ScopeRoots = c.scope.Roots
 	thinking, effort := cmds.ResolveReviewThinking(ropts, a.Config.Resolved.Thinking, a.Config.Resolved.ThinkingEffort)
 	opts := llm.ChatOptions{MaxTokens: config.DefaultMaxTokens, Thinking: thinking, ThinkingEffort: effort}
 
@@ -496,7 +526,7 @@ func runReviewCommand(c *commandRun) error {
 
 		stream := forked.Agent().RunOneOffStream(c.ctx, spec.Provider, c.desk.systemPromptFor(c.id), spec.Prompt, opts,
 			agent.WithOneOffMeta(agent.OneOffMetaForReview(spec.Kind, c.id, spec.OutPath,
-				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope.Paths})))
+				agent.ReviewOrigin{ReviewedMsg: c.reviewedMsg, Paths: c.scope.Paths, Turn: c.scope.Turn})))
 		for ev := range stream {
 			c.ech <- ev
 		}

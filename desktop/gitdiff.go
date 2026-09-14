@@ -71,30 +71,126 @@ type FileDiffVO struct {
 	// this, and only the panel needs it: without the flag the frozen diff would look like the
 	// disk, and 「打开文件」 would show text that does not match the hunks.
 	ChangedSince bool `json:"changedSince,omitempty"`
+	// Root is the workspace root this file came from (absolute), and RootLabel is how the UI
+	// names it: "" for the session's primary root, else the root's base name — the same rule
+	// and the same strings as AtMatch.root, so two roots holding the same relative path are
+	// tellable apart everywhere in the app, and not in two different ways.
+	//
+	// Both may be empty (a diff built without a session root), which reads as the panel's own
+	// Root — what every file used to be assumed to be, and still is for a single-root session.
+	Root      string `json:"root,omitempty"`
+	RootLabel string `json:"rootLabel,omitempty"`
 }
 
-// GetTurnDiff returns the working-tree diff of paths (the files a turn touched) under
-// the session's workspace. An empty paths list means the whole tree.
+// GetTurnDiff returns the working-tree diff of paths (the files a turn touched) under the
+// session's workspace. An empty paths list means the whole tree.
+//
+// EVERY root is diffed, not just the primary one: a session can carry additional roots, and a
+// path under one of them is not "outside the repository" — it is in a DIFFERENT repository,
+// with its own git. Each file carries the root it came from (FileDiffVO.Root/RootLabel), which
+// is what lets the panel resolve it to the right absolute path instead of assuming the primary
+// root and silently opening a same-named file there.
 func (s *AgentService) GetTurnDiff(sessionID string, paths []string) TurnDiffVO {
-	root, _ := s.desk.sessionRoots(sessionID)
-	if root == "" {
+	primary, additional := s.desk.sessionRoots(sessionID)
+	if primary == "" {
 		return TurnDiffVO{Note: "尚未选择工作目录，只能看到片段 diff"}
 	}
-	vo := TurnDiffVO{Root: root}
+	vo := TurnDiffVO{Root: primary}
+	labels := rootLabels(primary, additional)
 
-	if out, err := gitOutput(root, "rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
+	roots := append([]string{primary}, additional...)
+	// WHICH root a requested path belongs to is decided ONCE, for all of them. Deciding it per
+	// root (each root calling the others' paths "outside") reported every additional-root path
+	// as belonging nowhere, which is both the wrong sentence and, before this, the reason such
+	// a path was silently dropped.
+	owned := make([][]string, len(roots))
+	unclaimed := 0
+	for _, p := range paths {
+		abs := resolveUnder(primary, p)
+		if abs == "" {
+			continue
+		}
+		owner := -1
+		for i, root := range roots {
+			if underRoot(root, abs) {
+				owner = i
+				break
+			}
+		}
+		if owner < 0 {
+			unclaimed++
+			continue
+		}
+		owned[owner] = append(owned[owner], abs)
+	}
+
+	repos := 0
+	var ignored []string
+	for i, root := range roots {
+		if !fileutil.IsDir(root) {
+			continue // a root whose directory is gone has nothing to diff
+		}
+		rc := rootWorkingTreeChanges(root, rootLabelFor(labels, root), owned[i])
+		if !rc.isRepo {
+			continue
+		}
+		repos++
+		vo.Files = append(vo.Files, rc.files...)
+		ignored = append(ignored, rc.ignored...)
+	}
+
+	switch {
+	case repos == 0:
 		vo.Note = "工作目录不在 git 仓库内，只能看到片段 diff"
 		return vo
+	case len(roots) > repos:
+		vo.Note = fmt.Sprintf("%d 个工作目录不在 git 仓库内，只能看到片段 diff", len(roots)-repos)
+	}
+	if unclaimed > 0 {
+		// A path that is in NO declared root: git cannot be asked about it at all (the tool
+		// wrote somewhere else), so only its fragment diff exists.
+		vo.Note = joinNotes(vo.Note, fmt.Sprintf("%d 个文件不在任何工作目录内，只能看到片段 diff", unclaimed))
 	}
 
-	inside, outside := splitByRepo(root, paths)
-	if len(outside) > 0 {
-		vo.Note = fmt.Sprintf("%d 个文件不在该 git 仓库内，只能看到片段 diff", len(outside))
-	}
+	// Truncate rather than stall: the panel says so and the file itself is one click away.
+	truncateDiff(&vo)
 
-	// Tracked changes. A repository without commits has no HEAD to compare against;
-	// everything in it is then "new" from the panel's point of view, which the
-	// untracked branch below covers — so the failure is not an error here.
+	// A requested path git IGNORES shows up in neither list — `git diff HEAD` does not track
+	// it, and `ls-files --others --exclude-standard` excludes it by definition — so the panel
+	// was left with an empty diff and nothing to say, and filled the silence with
+	// 「没有未提交的改动（可能已经提交）」. That is the wrong explanation: the file is right
+	// there, brand new. Saying WHICH rule hides it turns a puzzle into a fact.
+	if len(vo.Files) == 0 && len(ignored) > 0 {
+		vo.Ignored = len(ignored)
+		vo.Note = joinNotes(vo.Note, ignoredNote(ignored))
+	}
+	return vo
+}
+
+// rootChanges is one root's share of a working-tree diff.
+type rootChanges struct {
+	// files are the changes of the paths this root owns, each labelled with the root.
+	files []FileDiffVO
+	// ignored are those paths that git refuses to show (with the rule, for the note).
+	ignored []string
+	// isRepo is false when the root is not inside a git work tree: git can answer nothing for
+	// it, so the caller counts it and says so instead of reporting "no changes".
+	isRepo bool
+}
+
+// rootWorkingTreeChanges diffs ONE root against its own HEAD, for the paths that belong to it
+// (the caller has already decided which those are — see GetTurnDiff).
+func rootWorkingTreeChanges(root, label string, paths []string) rootChanges {
+	var rc rootChanges
+	if out, err := gitOutput(root, "rev-parse", "--is-inside-work-tree"); err != nil || strings.TrimSpace(out) != "true" {
+		return rc
+	}
+	rc.isRepo = true
+	inside := paths
+
+	// Tracked changes. A repository without commits has no HEAD to compare against; everything
+	// in it is then "new" from the panel's point of view, which the untracked branch below
+	// covers — so the failure is not an error here.
 	var tracked string
 	if _, err := gitOutput(root, "rev-parse", "--verify", "HEAD"); err == nil {
 		tracked, _ = gitOutput(root, gitArgs([]string{"diff", "HEAD", "--no-color", "-U3", "--"}, inside)...)
@@ -103,41 +199,23 @@ func (s *AgentService) GetTurnDiff(sessionID string, paths []string) TurnDiffVO 
 		unstaged, _ := gitOutput(root, gitArgs([]string{"diff", "--no-color", "-U3", "--"}, inside)...)
 		tracked = staged + unstaged
 	}
-	for _, fd := range linediff.ParseUnified(tracked) {
-		vo.Files = append(vo.Files, FileDiffVO{
-			Path: fd.Path, OldPath: fd.OldPath,
-			Created: fd.Created, Deleted: fd.Deleted, Binary: fd.Binary,
-			Hunks: fd.Hunks, Added: fd.Added, Removed: fd.Removed,
-		})
-	}
+	// The same converter the checkpoint-sourced diff uses (turnchanges.go): both sides are
+	// unified diffs, and one parser is what keeps the two panels from drifting apart.
+	rc.files = append(rc.files, filesFromUnified(tracked, root, label)...)
 
-	// Untracked files never appear in git diff: they are new content from end to end.
-	// The hunks are synthesized here (git would only say "untracked"), so the panel can
-	// show them without a second round trip.
+	// Untracked files never appear in git diff: they are new content from end to end. The hunks
+	// are synthesized here (git would only say "untracked"), so the panel can show them without
+	// a second round trip.
 	if listing, err := gitOutput(root, gitArgs([]string{"ls-files", "--others", "--exclude-standard", "--"}, inside)...); err == nil {
 		for _, rel := range strings.Split(strings.TrimSpace(listing), "\n") {
 			if rel = strings.TrimSpace(rel); rel == "" {
 				continue
 			}
-			vo.Files = append(vo.Files, untrackedFileDiff(root, rel))
+			rc.files = append(rc.files, untrackedFileDiff(root, rel, label))
 		}
 	}
-
-	// Truncate rather than stall: the panel says so and the file itself is one click away.
-	truncateDiff(&vo)
-
-	// A requested path git IGNORES shows up in neither list above — `git diff HEAD` does not
-	// track it, and `ls-files --others --exclude-standard` excludes it by definition — so the
-	// panel was left with an empty diff and nothing to say, and filled the silence with
-	// 「没有未提交的改动（可能已经提交）」. That is the wrong explanation: the file is right
-	// there, brand new. Saying WHICH rule hides it turns a puzzle into a fact.
-	if len(vo.Files) == 0 {
-		if ignored := ignoredPaths(root, inside); len(ignored) > 0 {
-			vo.Ignored = len(ignored)
-			vo.Note = joinNotes(vo.Note, ignoredNote(ignored))
-		}
-	}
-	return vo
+	rc.ignored = ignoredPaths(root, inside)
+	return rc
 }
 
 // ignoredPaths returns the requested paths that git ignores, with the rule that hides them
@@ -186,35 +264,29 @@ func gitArgs(prefix, paths []string) []string {
 	return append(append(make([]string, 0, len(prefix)+len(paths)), prefix...), paths...)
 }
 
-// splitByRepo keeps the paths that live inside root (what git can diff) and reports
-// the rest, which can only have fragment diffs.
-func splitByRepo(root string, paths []string) (inside, outside []string) {
-	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
-	seen := make(map[string]bool, len(paths))
-	for _, p := range paths {
-		if p == "" {
-			continue
-		}
-		if !filepath.IsAbs(p) {
-			p = filepath.Join(root, p)
-		}
-		p = filepath.Clean(p)
-		if !strings.HasPrefix(p+string(filepath.Separator), prefix) {
-			outside = append(outside, p)
-			continue
-		}
-		if !seen[p] {
-			seen[p] = true
-			inside = append(inside, p)
-		}
+// resolveUnder makes a path absolute the way the panel means it: a relative one resolves
+// against the root it came with (tool args are usually absolute already). "" for nothing to
+// resolve.
+func resolveUnder(root, p string) string {
+	if p == "" {
+		return ""
 	}
-	return inside, outside
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(root, p)
+	}
+	return filepath.Clean(p)
+}
+
+// underRoot reports whether an absolute path lives inside a root.
+func underRoot(root, abs string) bool {
+	prefix := strings.TrimSuffix(root, string(filepath.Separator)) + string(filepath.Separator)
+	return strings.HasPrefix(abs+string(filepath.Separator), prefix)
 }
 
 // untrackedFileDiff renders one untracked file as an all-add change with real line
 // numbers (it is new content, so every line is an addition).
-func untrackedFileDiff(root, rel string) FileDiffVO {
-	vo := FileDiffVO{Path: rel, Created: true}
+func untrackedFileDiff(root, rel, label string) FileDiffVO {
+	vo := FileDiffVO{Path: rel, Created: true, Root: root, RootLabel: label}
 	abs := filepath.Join(root, filepath.FromSlash(rel))
 
 	if looksText, err := fileutil.LooksLikeText(abs); err != nil || !looksText {
