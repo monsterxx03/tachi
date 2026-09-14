@@ -327,6 +327,58 @@ func scenarios() []scenario {
 			},
 		},
 		//
+		// A turn in flight while the reader moves between sessions: the stop control belongs to
+		// the session that is actually running, and a background turn's END has to reach that
+		// session. Before the fix the backend pushed a state only while its session was the
+		// displayed one and the frontend kept the one value it received as a global, so the red
+		// ring followed the reader into an idle session and stayed there forever — and clicking it
+		// did nothing, because Stop acts on the displayed session's turn.
+		//
+		{
+			name: "session-running",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe session-running scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				// The first turn is deliberately LONG (the pauses are the point): the driver does
+				// its switching inside that window, and the turn also has to outlive them so the
+				// END lands while another session is on screen.
+				{Reply: mockllm.Stream(
+					mockllm.Text("这一轮要跑一会儿："),
+					mockllm.Pause(longTurn),
+					mockllm.Text("趁着它还在跑，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("读者在别的会话之间来回切，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("这个回合结束后，"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("长回合收尾标记：任何一个没在跑的会话都不该留着停止按钮。"),
+					mockllm.Pause(longTurn),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 120, 900, 20),
+					mockllm.Done(),
+				)},
+				// The second turn: a new session is created while it runs, so the new conversation
+				// must be clean and the running one must keep its own marker.
+				{Reply: mockllm.Stream(
+					mockllm.Text("第二个回合。"),
+					mockllm.Pause(longTurn),
+					mockllm.Text("跑完了。"),
+					mockllm.Finish("stop"),
+					mockllm.UsageWithCache(1200, 60, 900, 20),
+					mockllm.Done(),
+				)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				// The driver sends from the fixture session alone; a third request would mean a
+				// session switch sent something by itself.
+				c.check("只有 fixture 会话里的两条请求到达模型", len(c.requests) == 2, requestCount(c.requests))
+				// fixture + the two sessions the driver created.
+				c.check("切换会话不会凭空造出新会话", c.sessionCount() == 3, strconv.Itoa(c.sessionCount()))
+			},
+		},
+		//
 		// The input box's height: the reader drags its top edge (or presses ↑ on the handle) and
 		// the box grows — the conversation giving up the room, up to the window's share of it.
 		// Nothing is persisted, so dragging back down must leave the stylesheet's height and no

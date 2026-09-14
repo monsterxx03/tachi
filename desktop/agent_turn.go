@@ -567,15 +567,64 @@ func (d *desktopApp) emitIdle(id, reason string) {
 	}
 }
 
+// setSessionState records one session's own state and reports it.
+//
+// The EVENT is per session and ALWAYS emitted, carrying the session it is about. The
+// desktop runs each session's turn in its own goroutine — switching sessions cancels
+// nothing — so the frontend keeps one state per conversation, and a background turn's
+// progress (and, more to the point, its END) has to reach the session it belongs to. It
+// used to be emitted only while that session was the displayed one, which pinned the
+// composer's stop control on whatever conversation happened to be on screen when a turn
+// started, and left it spinning there for good once the turn was over; clicking it did
+// nothing, because Stop acts on the DISPLAYED session's turn.
+//
+// The menu bar is the one surface that is NOT per session — it describes the displayed
+// session — so only that one reflects there.
 func (d *desktopApp) setSessionState(id string, st AgentState) {
+	st.SessionID = id
 	d.mu.Lock()
 	r := d.getRun(id)
 	r.state = st
 	isCurrent := d.activeID == id
 	d.mu.Unlock()
+	d.emitState(st)
 	if isCurrent {
-		d.reflectState(st)
+		d.reflectTray(st)
 	}
+}
+
+// emitState pushes one session's state to the frontend (see setSessionState).
+func (d *desktopApp) emitState(st AgentState) {
+	if d.app != nil {
+		d.app.Event.Emit("agent:state", st)
+	}
+}
+
+// reflectTray repaints the menu bar for the DISPLAYED session — the only surface where a
+// state is not per session.
+func (d *desktopApp) reflectTray(st AgentState) {
+	if d.tray == nil {
+		return
+	}
+	d.tray.SetLabel(st.Label)
+	if icon := trayIcon(st.Status); icon != nil {
+		d.tray.SetTemplateIcon(icon)
+	}
+}
+
+// reflectActive re-reports a session's state at the moment it becomes the displayed one:
+// the menu bar has to follow the switch, and re-sending the event costs nothing (the same
+// payload the session's own changes already send). LoadSession routes through
+// setSessionState because it also settles the loaded run's history; this is the lightweight
+// half, for a switch between sessions that are both already in the frontend's cache.
+func (d *desktopApp) reflectActive(id string) {
+	if id == "" {
+		return
+	}
+	st := d.stateFor(id)
+	st.SessionID = id
+	d.emitState(st)
+	d.reflectTray(st)
 }
 
 func (d *desktopApp) stateFor(id string) AgentState {
@@ -587,25 +636,18 @@ func (d *desktopApp) stateFor(id string) AgentState {
 	return AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}
 }
 
+// currentState returns the displayed session's state, NAMED by that session: the frontend
+// files what it receives by id, so a payload without one could only be applied to whatever
+// happened to be on screen when it landed.
 func (d *desktopApp) currentState() AgentState {
 	d.mu.Lock()
 	defer d.mu.Unlock()
+	st := AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}
 	if r := d.runs[d.activeID]; r != nil {
-		return r.state
+		st = r.state
 	}
-	return AgentState{Status: StatusIdle, Label: "空闲", Detail: "就绪"}
-}
-
-func (d *desktopApp) reflectState(st AgentState) {
-	if d.tray != nil {
-		d.tray.SetLabel(st.Label)
-		if icon := trayIcon(st.Status); icon != nil {
-			d.tray.SetTemplateIcon(icon)
-		}
-	}
-	if d.app != nil {
-		d.app.Event.Emit("agent:state", st)
-	}
+	st.SessionID = d.activeID
+	return st
 }
 
 func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) {

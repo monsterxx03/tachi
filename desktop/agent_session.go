@@ -287,6 +287,10 @@ func (s *AgentService) ActivateSession(id string) string {
 	d.mu.Lock()
 	d.activeID = id
 	d.mu.Unlock()
+	// The switch repaints the menu bar and re-reports the session on screen, so a state
+	// the frontend never heard about (this session has not changed since the window
+	// loaded) is not left as "whatever was on screen before".
+	d.reflectActive(id)
 	return "ok"
 }
 

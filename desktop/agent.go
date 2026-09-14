@@ -26,10 +26,18 @@ const (
 )
 
 // AgentState is the payload pushed to the frontend (and shown in the menu bar).
+//
+// SessionID names the session this state is about, and it is what makes the payload
+// usable: the desktop runs each session's turn in its own goroutine (switching sessions
+// cancels nothing), so the frontend keeps one state per conversation and files what it
+// receives by this id. A payload without one could only be applied to whatever happened to
+// be on screen when it landed — which is how a running session's spinner followed the user
+// into an idle one.
 type AgentState struct {
-	Status AgentStatus `json:"status"`
-	Label  string      `json:"label"`  // short menu-bar text, e.g. "思考"
-	Detail string      `json:"detail"` // one-line human description
+	SessionID string      `json:"sessionId"`
+	Status    AgentStatus `json:"status"`
+	Label     string      `json:"label"`  // short menu-bar text, e.g. "思考"
+	Detail    string      `json:"detail"` // one-line human description
 }
 
 // AgentService is a Wails-bound service. In S2 it drives the REAL tachi agent
@@ -39,7 +47,8 @@ type AgentService struct {
 	desk *desktopApp
 }
 
-// GetState returns the current agent state.
+// GetState returns the current agent state — the DISPLAYED session's, named by that
+// session's id so the frontend can file it under the conversation it belongs to.
 func (s *AgentService) GetState() AgentState {
 	return s.desk.currentState()
 }

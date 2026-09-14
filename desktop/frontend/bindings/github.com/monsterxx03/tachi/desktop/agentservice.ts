@@ -165,7 +165,8 @@ export function GetSessionWorkingDir(id: string): $CancellablePromise<string> {
 }
 
 /**
- * GetState returns the current agent state.
+ * GetState returns the current agent state — the DISPLAYED session's, named by that
+ * session's id so the frontend can file it under the conversation it belongs to.
  */
 export function GetState(): $CancellablePromise<$models.AgentState> {
     return $Call.ByID(637370013);

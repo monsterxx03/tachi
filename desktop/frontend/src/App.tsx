@@ -311,7 +311,9 @@ function App() {
     setSessionPage, prependSessionPage, markHistoryEnd, openSession, rekeySession,
     refreshRunning, markRunning, enqueueDelta, flushDeltas,
   } = useSessionTranscript(currentId, scrollToBottom)
-  const state = useAgentStatus()
+  // The displayed session's own status (useAgentStatus keeps one per conversation), plus this
+  // frontend's own running set.
+  const state = useAgentStatus(currentId)
   // The statusbar's numbers (cost/credit/缓存环/速率/上下文环) belong to the session on
   // screen; they are cleared before the next session's ledger is read (see useSessionUsage).
   const {
@@ -570,8 +572,10 @@ function App() {
     }
   }
 
-  // The current session is producing output when its run is in-flight, or the
-  // status bar is in a busy state (covers the simulated-turn fallback too).
+  // The session on screen is producing output when its own run is in-flight, or its own status
+  // is busy — the latter is what covers the simulated-turn fallback, which never marks the run
+  // busy. BOTH terms are scoped to currentId: the desktop runs every session's turn in its own
+  // goroutine, so the neighbour's spinner must never answer for this one.
   const isCurrentRunning = runningSet.has(currentId) ||
     state.status === 'thinking' || state.status === 'tool_running' || state.status === 'busy'
 
@@ -694,6 +698,8 @@ function App() {
   // 评审中… → 已评审 1 条 · 查看 with this effect deciding — i.e. the reader's report
   // 「立刻会变成已评审查看，但没法点击」. The run's own end event is the fact; it is paired to the
   // turn through reviewForRef, which is why the clearing lives in the effect below.
+  // The DISPLAYED session's busy flag (useAgentStatus is keyed by session id — a neighbour's
+  // turn must not disable this session's chip).
   const sessionBusy = state.status !== 'idle' && state.status !== 'error'
 
   // startReview runs the review fork scoped to one turn's files. The run is a normal

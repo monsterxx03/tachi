@@ -485,7 +485,23 @@ const type = (el, t) => {
 
 - **A state flag must be ended by the fact that ends it**: `reviewPending` was cleared when `ReviewChanges` returned (that call only STARTS the fork) and, in a second rule, whenever the session was idle — but the session is still idle in the window between the click and the fork going busy, so the middle state was wiped before it could ever be seen, and the chip fell through to 已评审 while being disabled by the very run it described (the report: 「立刻会变成已评审查看，但没法点击」). The run's own end event is the fact that ends it. Verified by putting the idle rule back for one control run: the chip's trail became 评审本轮改动 → 已评审 1 条 · 查看 with no middle state at all.
 
-- **Session-scoped UI state must be keyed by session, or reset on switch**: one React tree renders every session, so anything derived from the ACTIVE session silently leaks into the next one. Hit three times: the review notice (now keyed by the clicked turn's message id), plan/findings (reloaded on switch), and the cache-hit ring + cost (a new session inherited the previous one's numbers — anything fetched per session must be applied unconditionally, `if (u)` keeps stale values when the payload is empty).
+- **Session-scoped UI state must be keyed by session, or reset on switch**: one React tree renders every session, so anything derived from the ACTIVE session silently leaks into the next one. Hit four times: the review notice (now keyed by the clicked turn's message id), plan/findings (reloaded on switch), the cache-hit ring + cost (a new session inherited the previous one's numbers — anything fetched per session must be applied unconditionally, `if (u)` keeps stale values when the payload is empty), and the agent STATUS (see the next bullet).
+
+- **The agent status is per SESSION, and its event names the session**: `agent:state` carries
+  `sessionId`, and `useAgentStatus(currentId)` keeps one entry per conversation — a status is never
+  one global value here, because the desktop runs every session's turn in its own goroutine
+  (switching sessions cancels nothing). So `setSessionState` emits for EVERY session, and the only
+  global surface is the menu bar, which reflects the DISPLAYED one (`reflectTray` decides that
+  under the same lock that read `activeID`; `ActivateSession` re-reports the session it switches
+  to, so the tray follows the switch too). Emitting only while that session was displayed — plus a
+  frontend that kept the one value it received — shipped the reader's report
+  「运行中切到历史会话/新建会话，输入框的红圈还在转，回合结束了还在转，点停止没反应」, with four
+  faces: the stop control followed the reader into an idle session; a background turn's END was
+  never reported at all, so it never cleared (and Stop acts on the DISPLAYED session — the dead
+  button); a stale busy state made the composer QUEUE a message instead of sending it (the send
+  button said 排队, and the model was never asked); and the review chip waited on a neighbour's
+  turn. Pinned by the `session-running` scenario (three judgements, all red with the emission or
+  the keying reverted).
 - **An entry's data source must belong to the surface the entry opens** (`desktop/frontend/src/App.tsx` +
   `diff.tsx`): the turn footer's 「完整 diff」 promises *this turn* against git HEAD (its own tooltip says
   真实文件行号) but had been routed into the side-channel panel, which is keyed by RUN — so on a turn nobody

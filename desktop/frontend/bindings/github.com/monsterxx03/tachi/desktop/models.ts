@@ -10,8 +10,16 @@ import * as linediff$0 from "../pkg/linediff/models.js";
 
 /**
  * AgentState is the payload pushed to the frontend (and shown in the menu bar).
+ * 
+ * SessionID names the session this state is about, and it is what makes the payload
+ * usable: the desktop runs each session's turn in its own goroutine (switching sessions
+ * cancels nothing), so the frontend keeps one state per conversation and files what it
+ * receives by this id. A payload without one could only be applied to whatever happened to
+ * be on screen when it landed — which is how a running session's spinner followed the user
+ * into an idle one.
  */
 export interface AgentState {
+    "sessionId": string;
     "status": AgentStatus;
 
     /**

@@ -19,22 +19,42 @@ import type { AgentEvent, Message } from './types'
 import { pushPart, finishToolPart, updateToolPart, closeOpenToolParts } from './transcript'
 
 // ── Agent status ────────────────────────────────────────────────────────────
-// What the agent is doing right now. NOT session-scoped: the backend runs one turn at a time,
-// so this is simply "what the agent is doing now", and it is the second signal behind
-// isCurrentRunning (a turn that has stopped but whose run has not been reaped yet) — it also
-// picks the running turn's spinner label (正在思考… / 正在执行…).
-const AGENT_IDLE: AgentState = { status: AgentStatus.StatusIdle, label: '空闲', detail: '就绪' }
+// What each session is doing right now — one entry per conversation, keyed by the id every
+// payload carries. The caller gets the session on screen's own state, never a neighbour's.
+//
+// It used to be ONE global value, on the belief that "the backend runs one turn at a time".
+// That is not true of this frontend: every session owns its agent and turn goroutine,
+// switching sessions cancels nothing, and the sidebar marks each running session — so a
+// single value was one conversation's status read as another's. Two symptoms, one cause: the
+// stop control followed the user into sessions with nothing to stop (and clicking it did
+// nothing — Stop acts on the displayed session's turn), and since a state change was only
+// pushed while its session was displayed, a background turn's END was never reported: the
+// spinner was there to stay.
+//
+// The state a session reports before anything has been heard about it: a session that has
+// not changed state in this process is idle, so the fallback is idle and never busy — the
+// safe direction (a spinner that shows up late is a nuisance; one that cannot be cleared is
+// the bug). It carries no session id on purpose: it describes no session.
+const AGENT_IDLE: AgentState = { sessionId: '', status: AgentStatus.StatusIdle, label: '空闲', detail: '就绪' }
 
-export function useAgentStatus(): AgentState {
-  const [state, setState] = useState<AgentState>(AGENT_IDLE)
+export function useAgentStatus(currentId: string): AgentState {
+  const [byId, setById] = useState<Record<string, AgentState>>({})
   useEffect(() => {
-    const off = Events.On('agent:state', (event) => { setState(event.data as AgentState) })
-    // The event only fires on change, so the current value is fetched once at mount —
-    // otherwise a window opened mid-turn would show 空闲 until the next transition.
-    AgentService.GetState().then((s) => setState(s)).catch(() => {})
+    // An unnamed payload cannot be filed — and would otherwise be applied to whatever is on
+    // screen when it lands, which is the bug this hook exists to prevent. The backend stamps
+    // the id on every one (see setSessionState).
+    const file = (st?: AgentState | null) => {
+      if (!st?.sessionId) return
+      setById((prev) => ({ ...prev, [st.sessionId]: st }))
+    }
+    const off = Events.On('agent:state', (event) => file(event.data as AgentState))
+    // The event only fires on change, so the displayed session's current value is fetched
+    // once at mount — otherwise a window reloaded mid-turn would show 空闲 (and lose its
+    // stop control) until the next transition, however long the running tool call takes.
+    AgentService.GetState().then(file).catch(() => {})
     return () => off?.()
   }, [])
-  return state
+  return byId[currentId] || AGENT_IDLE
 }
 
 // ── The active session's numbers ────────────────────────────────────────────
