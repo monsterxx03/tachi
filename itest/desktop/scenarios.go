@@ -1557,6 +1557,22 @@ permissions:
 					"\n\n这里是那张长图：\n\n```mermaid\n" + tallMermaid() + "\n```"},
 			},
 		},
+		//
+		//
+		// zoom-fit: the lightbox must never MAGNIFY. fit() scales a diagram into the window, and
+		// doing that in both directions opened the same gesture at wildly different sizes depending
+		// on a thing the reader cannot see — the diagram's own natural size ("sometimes it opens
+		// huge"). Three sizes, so the rule is visible from both sides: one that fits with room to
+		// spare (must open at 1:1), one wider than the window (shrunk), one taller (shrunk).
+		{
+			name: "zoom-fit",
+			files: map[string]string{
+				"README.md": "# smoke\n\nzoom-fit scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("三张图：\n\n极小：\n\n```mermaid\ngraph LR\n  A[甲] --> B[乙]\n```\n\n中等：\n\n```mermaid\ngraph LR\n  A[读取配置] --> B[校验]\n  B --> C[建索引]\n  C --> D[跑任务]\n  D --> E[写报告]\n  E --> F[通知]\n```\n\n很高：\n\n```mermaid\nflowchart TD\n  N0[节点 0] --> N1[节点 1]\n  N1[节点 1] --> N2[节点 2]\n  N2[节点 2] --> N3[节点 3]\n  N3[节点 3] --> N4[节点 4]\n  N4[节点 4] --> N5[节点 5]\n  N5[节点 5] --> N6[节点 6]\n  N6[节点 6] --> N7[节点 7]\n  N7[节点 7] --> N8[节点 8]\n  N8[节点 8] --> N9[节点 9]\n  N9[节点 9] --> N10[节点 10]\n  N10[节点 10] --> N11[节点 11]\n  N11[节点 11] --> N12[节点 12]\n```\n\n三张都在这里。", 900)},
+			},
+		},
 	}
 }
 

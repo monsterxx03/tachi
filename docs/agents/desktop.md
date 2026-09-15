@@ -688,6 +688,13 @@ const type = (el, t) => {
   while its unzoomed parent reads 909), so a reading of "how big is it on screen" must multiply by the zoom —
   `mermaid-zoom` computes it that way, and its first version was fooled by exactly that into thinking a 0.245×
   diagram was 298px wide.
+  **fit() only ever SHRINKS** — it stops at the content's own size and never magnifies to fill the window.
+  "As large as it fits" applied in both directions opened the SAME gesture at wildly different sizes
+  depending on a thing the reader cannot see (measured: a two-node diagram at 277%, a wide one at 94%, a tall
+  one at 53%, with the 6× clamp reachable for anything smaller still) — the report reads as "sometimes it
+  opens huge" and has no trigger in the reader's actions. Magnifying is what the wheel, `+` and the clamp are
+  for; upscaling an IMAGE is also blur, not fitting. `zoom-fit` pins both halves (never magnified, always
+  inside the offered area).
 - **⌘F searches a SURFACE, not the page** (`desktop/frontend/src/find.tsx`): the diff pane, a previewed file
   and a review's report each host the find bar, and each searches its OWN subtree — ⌘F in a preview must not
   scroll the transcript behind it. The side panel is ONE host covering its three panes (过程 / 意见+diff /

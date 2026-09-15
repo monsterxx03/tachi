@@ -70,9 +70,10 @@ export function useDragPan(ref: RefObject<HTMLElement | null>) {
 // useZoomPan is the zoom half of the lightbox: it scales the stage's single
 // scalable child and wires wheel, buttons and drag together.
 //
-// fit() measures that child at zoom 1 (its own layout size) and scales it to the space the
-// lightbox OFFERS — one implementation for a diagram, a screenshot or any other block that
-// should open "as large as it fits" rather than at an arbitrary 100%.
+// fit() measures that child at zoom 1 (its own layout size) and scales it DOWN into the space the
+// lightbox OFFERS — one implementation for a diagram, a screenshot or any other block that should
+// open as large as it fits rather than at an arbitrary 100%. It stops at the content's own size:
+// magnifying to fill the window is not fitting (see the cap in fit()).
 //
 // The offered space is the overlay's padding box, NOT the stage's own: the stage is a flex item
 // with `margin: auto`, so it hugs its content instead of filling the window. Measuring it made
@@ -95,7 +96,18 @@ export function useZoomPan(stageRef: RefObject<HTMLElement | null>) {
     requestAnimationFrame(() => {
       const r = el.getBoundingClientRect()
       if (!r.width || !r.height || !area.w || !area.h) return
-      setZoom(clampZoom(Math.min((area.w - VIEWER_FIT_MARGIN) / r.width, (area.h - VIEWER_FIT_MARGIN) / r.height)))
+      // The fit only ever SHRINKS. Content that already fits is shown at its own size, and a
+      // reader who wants it bigger has the wheel, the + button and a 6x clamp for that — filling
+      // the window instead magnified whatever was small by as much as the empty space allowed,
+      // so the SAME gesture opened a two-node diagram at 277% (and a smaller one at the 600%
+      // clamp) and a wide one at 94%. That is the "sometimes it opens huge" report: nothing the
+      // reader did, just a diagram narrower than the window — and for an image it was also blur,
+      // since upscaling pixels is not "fitting".
+      const room = Math.min(
+        (area.w - VIEWER_FIT_MARGIN) / r.width,
+        (area.h - VIEWER_FIT_MARGIN) / r.height,
+      )
+      setZoom(clampZoom(Math.min(1, room)))
     })
   }, [stageRef])
 
