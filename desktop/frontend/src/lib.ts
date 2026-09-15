@@ -224,9 +224,13 @@ export type SessionGroup<T> = { project: ProjectVO | null; rows: SessionRow<T>[]
 // backend resolves it exactly that way (project first when it DRIVES the session, else the
 // session's own snapshot), and a row must not claim a group the resolver does not honour.
 //
-// The order inside a group is the order it came in (ListSessions: newest first), and empty
-// groups are dropped — a project with no conversations yet is still reachable from its
-// header, but the sidebar does not list a group with nothing under it.
+// EVERY project gets a group, including one with no sessions yet — that is the whole point of
+// the header: it carries the ＋ that creates the first session and the menu that renames, edits
+// or deletes the project. Dropping empty groups made a newly created project invisible (the
+// reader sees nothing after the create, and cannot reach it to make a session), which is a bug
+// the reader reports as "I made a project and nothing happened".
+//
+// The order inside a group is the order it came in (ListSessions: newest first).
 export function sessionGroups<T extends { id: string; compactedParentId?: string; projectId?: string }>(
   list: T[],
   projects: ProjectVO[],
@@ -234,8 +238,7 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
   const known = new Set(projects.map((p) => p.id))
   const groups: SessionGroup<T>[] = []
   for (const p of projects) {
-    const mine = list.filter((s) => s.projectId === p.id)
-    if (mine.length > 0) groups.push({ project: p, rows: sessionRows(mine) })
+    groups.push({ project: p, rows: sessionRows(list.filter((s) => s.projectId === p.id)) })
   }
   const loose = list.filter((s) => !s.projectId || !known.has(s.projectId))
   if (loose.length > 0) groups.push({ project: null, rows: sessionRows(loose) })

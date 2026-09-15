@@ -146,37 +146,42 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   -webkit-text-fill-color: transparent;
 }
 
+/* The sidebar's own ＋ — which is also the 无项目 bucket's action, since that is the group whose
+   rows it makes. It is a row-height ghost button, sized below the rows it adds: it used to be a
+   full-width tinted pill pinned to the top of the sidebar, where it was the loudest thing on
+   screen, sitting above the conversations that are the actual content, so it read as the page's
+   primary action rather than as "one more row here". Nothing about it is accent-tinted now —
+   the only affordance it needs is the hover the rows and the project headers already have. */
 .new-chat {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 6px;
   width: 100%;
-  padding: 10px 12px;
-  margin-bottom: 12px;
-  /* A flat tinted button: no gradient and no inset sheen — the tint and the
-     hairline are the whole surface (see the flat "go" recipe in chat.css). */
-  background: var(--accent-soft);
-  border: 1px solid var(--accent-line-soft);
-  color: var(--accent-2);
-  border-radius: var(--radius-md);
-  font-size: 13.5px;
-  font-weight: 560;
+  padding: 5px 8px;
+  margin-top: 6px;
+  background: transparent;
+  border: 1px solid transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-sm);
+  font-size: 12.5px;
+  font-family: inherit;
+  text-align: left;
   cursor: pointer;
-  transition: background 0.16s var(--ease), border-color 0.16s var(--ease);
+  transition: background 0.16s var(--ease), color 0.16s var(--ease);
 }
-.new-chat:hover {
-  background: var(--accent-tint-a);
-  border-color: var(--accent-line);
-}
-.new-chat-plus { font-size: 16px; }
+.new-chat:hover { background: var(--hover); color: var(--text); }
+.new-chat-plus { font-size: 14px; }
 
+/* The 无项目 bucket's heading. It sits at the same LEVEL as a project's header (both are
+   groups of rows), so it is sized to be read as one — just quieter, since there is nothing
+   to click, name or manage here. No uppercase: the label is Chinese, where the transform
+   does nothing but the wide letter-spacing still made it look like a stray caption. */
 .session-section {
-  font-size: 10.5px;
-  text-transform: uppercase;
-  letter-spacing: 0.9px;
+  font-size: 12px;
+  letter-spacing: 0.2px;
   font-weight: 600;
-  color: var(--text-faint);
-  padding: 6px 8px;
+  color: var(--text-dim);
+  padding: 8px 8px 2px;
 }
 
 .session-list {
@@ -232,8 +237,10 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 
 /* ── Project groups (design §7.1) ────────────────────────────────────────── */
-/* The secondary way to start a conversation: a quieter version of .new-chat, so it
-   does not compete with the primary button above it. */
+/* The sidebar's top action now that 新建会话 moved down into the list: a dashed box, the only
+   thing on the first screen that offers a way to organise the conversations. Its 12.5px text and
+   its ＋ match .new-chat, so the two read as siblings even though they sit at opposite ends of
+   the list. */
 .new-project {
   display: flex;
   align-items: center;
@@ -256,7 +263,9 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 8px;
+  /* A touch taller than a session row's padding: the header carries a bigger name, and a
+     group has to look like a group before its rows are read. */
+  padding: 7px 8px;
   margin-top: 6px;
   border-radius: var(--radius-sm);
 }
@@ -275,14 +284,16 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 .proj-name {
   flex: 1;
   min-width: 0;
-  font-size: 12.5px;
+  /* A group heading, and the parent of the rows below it: it has to read LARGER than
+     .session-title (13.5px), or the sidebar looks like two levels of the same size. */
+  font-size: 14px;
   font-weight: 600;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.proj-count { flex-shrink: 0; font-size: 10.5px; color: var(--text-faint); }
+.proj-count { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
 /* A project whose PRIMARY directory is gone drives nothing, so its members are editable
    again; the header says so instead of hiding the group (design §8.6). */
 .proj-bad {
@@ -298,7 +309,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 13px;
+  font-size: 14px;
   padding: 0 4px;
   border-radius: var(--radius-xs);
   cursor: pointer;
@@ -328,6 +339,13 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* A project's rows are indented one step, inside their own container: a header-relative
    sibling selector would also indent the 无项目 bucket that follows every group. */
 .proj-rows { margin-left: 12px; }
+/* A project with no sessions yet: the header above is where the first one is created, so the
+   group says so instead of looking broken (and instead of being hidden, which is worse). */
+.proj-empty {
+  padding: 4px 8px 2px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
 
 /* ── A folded compaction chain ─────────────────────────────────────────────── */
 /* A conversation that was compacted is ONE sidebar row: the newest link, with the sessions it

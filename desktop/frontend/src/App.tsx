@@ -1249,7 +1249,20 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
-      else if (e.key.toLowerCase() === 'n') { e.preventDefault(); newChat() }
+      else if (e.key.toLowerCase() === 'n') {
+        e.preventDefault()
+        // ⌘N makes another conversation like the one on screen: if that session belongs to a
+        // project, its successor starts INSIDE it — the project is what supplies the workspace,
+        // the extra roots and the skills, so a project-less successor would silently drop all
+        // three while looking like a fresh start.
+        //
+        // Membership is resolved exactly the way the sidebar groups it (sessionGroups): only a
+        // project that still exists counts, so a session the reader sees under 无项目 (its
+        // project was deleted, or lost out of projects.json) makes a session there too, instead
+        // of one bound to an id that no longer names anything.
+        const pid = sessions.find((x) => x.id === currentId)?.projectId
+        newChat(pid && projects.some((p) => p.id === pid) ? pid : '')
+      }
       // The chain. Shift is what keeps it off ⌘H (macOS hides the window on that one) — and
       // off anything the app already binds.
       else if (e.shiftKey && e.key.toLowerCase() === 'h') {
@@ -1261,7 +1274,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projectMenu, projectForm, confirmDelProject, editingProject])
+    projects, projectMenu, projectForm, confirmDelProject, editingProject])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -1499,6 +1512,25 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   const currentProvider = providers.find((p) => (p.name ?? p.Name) === providerName)
   const currentProviderModel = currentProvider?.model ?? currentProvider?.Model ?? ''
 
+  // The sidebar's grouping, built once: the list renders the project groups, then the plain
+  // 新建会话 button, then the 无项目 bucket — so it has to know whether that bucket exists.
+  const groups = sessionGroups(sessions, projects)
+
+  // The sidebar's own ＋ makes a session that belongs to NO project, so it sits at the head of
+  // the 无项目 bucket — directly above the label of the group whose rows it adds to — rather than
+  // at the top of the sidebar. Up there it was a full-width tinted pill: the loudest thing on
+  // screen, sitting above the conversations that are the actual content, so it read as the
+  // page's primary action instead of "one more row here".
+  //
+  // It is built once because two places render it: the head of the loose bucket, and the tail of
+  // the list when no loose bucket exists yet. A control that vanishes the moment its bucket is
+  // empty would have to be hunted for exactly when the user has nothing else to click.
+  const newSessionButton = (
+    <button className="new-chat" onClick={() => void newChat()} title="新建一个不属于任何项目的会话">
+      <span className="new-chat-plus">＋</span> 新建会话
+    </button>
+  )
+
   return (
     <div className="app">
       <header className="titlebar drag-region">
@@ -1525,12 +1557,11 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
 
       <div className="app-body">
         <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
-          <button className="new-chat" onClick={() => void newChat()}>
-            <span className="new-chat-plus">＋</span> 新建会话
-          </button>
           {/* Projects group the list (design §7.1). A project that exists but has no members
               yet still needs an entry point, so the sidebar opens the create form directly
-              rather than hiding the feature until a session happens to be bound. */}
+              rather than hiding the feature until a session happens to be bound. This is the
+              sidebar's top-level action; the plain 新建会话 button is NOT up here — it belongs
+              with the rows it makes (see newSessionButton). */}
           <button className="new-project" onClick={() => openProjectEditor()}
             title="新建项目：一组会话共用工作区的容器">
             <span className="new-chat-plus">＋</span> 新建项目
@@ -1541,7 +1572,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                 project_id points at a project that is gone — is the 无项目 bucket. The rows
                 themselves are the same conversation rows as before (sessionRows folds a
                 compaction chain INSIDE its group, because a chain shares its project). */}
-            {sessionGroups(sessions, projects).map((group) => (
+            {groups.map((group) => (
               <Fragment key={group.project?.id || '__loose__'}>
                 {group.project ? (
                   <div className="proj-head" role="button" tabIndex={0}
@@ -1574,19 +1605,42 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                       onClick={() => void newChat(group.project!.id)}>＋</button>
                   </div>
                 ) : (
-                  <div className="session-section">无项目</div>
+                  <>
+                    {/* The button sits directly above the label of the bucket it adds rows to:
+                        it is the 无项目 group's own ＋, spelled out — the written-out mirror of
+                        the small ＋ a project keeps at the end of its header. */}
+                    {newSessionButton}
+                    <div className="session-section">无项目</div>
+                  </>
                 )}
                 {projectNotice && projectNotice.id === group.project?.id ? (
                   <div className="proj-notice">⚠ {projectNotice.msg}</div>
                 ) : null}
                 {group.project && collapsedProjects[group.project.id] ? null : (
                   group.project
-                    ? <div className="proj-rows">{groupRows(group.rows)}</div>
+                    ? (
+                      <div className="proj-rows">
+                        {group.rows.length === 0
+                          // A project with no sessions yet is a normal state (it was just made, or
+                          // its last session was deleted): the header above is where its first
+                          // session is created, and this line says why the group is empty rather
+                          // than leaving the reader wondering whether the project even exists.
+                          ? <div className="proj-empty">还没有会话，点上面的 ＋ 在这个项目里新建</div>
+                          : groupRows(group.rows)}
+                      </div>
+                    )
                     : groupRows(group.rows)
                 )}
               </Fragment>
             ))}
-            {sessions.length === 0 && <div className="session-empty">暂无会话</div>}
+            {/* No loose bucket yet (nothing project-less, or no sessions at all) — the button
+                still has to be there, and it still belongs at the foot of the list: the rows it
+                makes will land right below it the moment they exist. */}
+            {groups.every((g) => g.project) ? newSessionButton : null}
+            {/* Only when there is no group at all: with a project on screen, that project's own
+                header already says it has no sessions yet, and a second "暂无会话" underneath
+                would describe the list as empty while the reader is looking at a group. */}
+            {groups.length === 0 && <div className="session-empty">暂无会话</div>}
           </nav>
           <footer className="sidebar-footer">
             {/* Both entries are placeholders: disabled (and dimmed) rather than
@@ -1963,7 +2017,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
             <div className="confirm-msg">快捷键</div>
             <div className="shortcut-section">全局</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
-            <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话</span></div>
+            <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>

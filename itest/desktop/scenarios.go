@@ -68,6 +68,11 @@ type projectSeed struct {
 	name       string
 	files      map[string]string
 	extraRoots map[string]map[string]string
+	// emptyName adds a SECOND project with no sessions at all — the state every project starts
+	// in, and the one the sidebar used to hide (a create that "did nothing"). It is given an
+	// older CreatedAt so it sorts after the member's project, which keeps the assertions that
+	// read the FIRST header pointing at the same project.
+	emptyName string
 }
 
 // A probe is one Go-side assertion, appended to the same report the driver fills.
@@ -1491,6 +1496,11 @@ permissions:
 				extraRoots: map[string]map[string]string{
 					"proj-shared": {"notes.md": "lib\n"},
 				},
+				// A second project with no sessions: the state a project is created in, which the
+				// sidebar used to hide (the reader saw nothing after pressing 保存 — "I made a
+				// project and nothing happened"). It must render a header, say it has no sessions
+				// yet, and offer the ＋ that makes the first one.
+				emptyName: "smoke-empty",
 			},
 			steps: []mockllm.Step{
 				{Reply: textStream("收到。", 400)},

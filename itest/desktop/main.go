@@ -386,6 +386,7 @@ func (sb *sandbox) seedProject(p *projectSeed) (string, error) {
 	// The sandbox's own shape of the file (the desktop's project/projectFile types are in another
 	// module and cannot be imported here) — but the JSON is what matters, and it is the same.
 	const id = "smoke-project"
+	const emptyID = "smoke-project-empty"
 	type fileProject struct {
 		ID             string    `json:"id"`
 		Name           string    `json:"name"`
@@ -394,12 +395,23 @@ func (sb *sandbox) seedProject(p *projectSeed) (string, error) {
 		CreatedAt      time.Time `json:"createdAt"`
 		UpdatedAt      time.Time `json:"updatedAt"`
 	}
+	now := time.Now()
+	projects := []fileProject{{
+		ID: id, Name: p.name, WorkingDir: primary, AdditionalDirs: additional,
+		CreatedAt: now, UpdatedAt: now,
+	}}
+	if p.emptyName != "" {
+		// Older, so the sidebar (newest first) lists it after the member's project. Its directory
+		// is the sandbox work dir: nothing has to be created for it, and an empty project's roots
+		// are never resolved (no member session exists to resolve them for).
+		projects = append(projects, fileProject{
+			ID: emptyID, Name: p.emptyName, WorkingDir: sb.work,
+			CreatedAt: now.Add(-time.Hour), UpdatedAt: now.Add(-time.Hour),
+		})
+	}
 	body, err := json.MarshalIndent(struct {
 		Projects []fileProject `json:"projects"`
-	}{Projects: []fileProject{{
-		ID: id, Name: p.name, WorkingDir: primary, AdditionalDirs: additional,
-		CreatedAt: time.Now(), UpdatedAt: time.Now(),
-	}}}, "", "  ")
+	}{Projects: projects}, "", "  ")
 	if err != nil {
 		return "", err
 	}

@@ -560,11 +560,25 @@ const type = (el, t) => {
   right-click menu for rename / edit roots / delete) and one final 无项目 bucket. Grouping happens BEFORE
   `sessionRows`, so a compaction chain folds inside its own group. Two rules that are easy to break: a
   session whose `projectId` names a project that is NOT in the list belongs to the bucket, because that is
-  what the backend's resolver does with it; and an EMPTY group is dropped (a project with no sessions yet is
-  still reachable from the list's 新建项目 button). The chip and the workspace panel wear the project's NAME
+  what the backend's resolver does with it. **EVERY project gets a group, including one with no sessions yet**
+  — the header carries the ＋ that makes the first session and the menu that renames/edits/deletes the project,
+  so a rule that hid empty groups made a freshly created project invisible (the reader saw nothing after
+  pressing 保存: "I made a project and nothing happened"). The chip and the workspace panel wear the project's NAME
   while a project drives the session, and the panel is READ-ONLY then — the three session-level writers are
   refused by the backend, so buttons that could only fail are not offered; it stays editable (with the reason
   spelled out) whenever the project stops driving the session, which is the same predicate the guards use.
+- **`＋ 新建会话` belongs to the 无项目 group, and ⌘N follows the session on screen** (`App.tsx`: the sidebar
+  renders `newSessionButton` at the head of the loose bucket, or at the tail of the list when no loose bucket
+  exists yet — exactly once, never both). The button makes a PROJECT-LESS session, so it lives above the
+  label of the bucket it adds rows to: pinned at the top of the sidebar it was a full-width accent pill, the
+  loudest thing on screen and above the conversations that are the content, which read as the page's primary
+  action instead of "one more row here". ⌘N passes the current session's `projectId` when that project is
+  still in the list — ⌘N means "another one of these", and the project is what supplies the workspace, the
+  extra roots and the skills, so a project-less successor would silently drop all three. Membership is
+  resolved by the same rule as the grouping, so a dangling id (a session shown under 无项目) makes a
+  project-less session too. The `projects` smoke scenario asserts the DOM order, that the button carries no
+  accent fill and is smaller than both a row title and a project name, and that ⌘N adds a row INSIDE the
+  project group (a row count alone cannot tell which group it landed in).
 - **A project write re-reads the reader** (`agent:workspace_changed`, emitted by `CreateProject` /
   `RenameProject` / `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend
   holds a session's workspace and the sidebar's groups BY VALUE, so a rename or an edit moved nothing on
