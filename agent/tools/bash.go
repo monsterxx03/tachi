@@ -102,7 +102,11 @@ func (t BashTool) IsDestructive() bool { return true }
 func (t *BashTool) Description() string {
 	desc := "Executes a shell command and returns its output. " +
 		"The working directory persists between commands. " +
-		"Use for running build commands, tests, git operations, and other shell tasks. "
+		"Use for running build commands, tests, git operations, and other shell tasks. " +
+		"To read a file, prefer the " + ToolNameRead + " tool over shell readers " +
+		"(`cat`, `head`, `tail`, `sed`): it pages through large files with offset/limit and " +
+		"returns images to vision models. Reach for a shell reader only when the content has to be " +
+		"transformed in a pipeline, or when many files are read at once. "
 	if t.processManager != nil && !t.acpMode {
 		desc += "Commands still running after the foreground window (~15s, or the timeout value if shorter) " +
 			"are automatically moved to the background. To manage them, call this tool again with the " +
