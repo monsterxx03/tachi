@@ -16,14 +16,21 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
-// SendMessage starts a turn. It returns immediately; state changes are
-// streamed to the frontend via the "agent:state" event and to the menu bar.
-func (s *AgentService) SendMessage(text string) string {
+// SendMessage starts a turn in the session the CALLER names. It returns immediately; state changes
+// are streamed to the frontend via the "agent:state" event and to the menu bar.
+//
+// The session is named by the caller rather than read from d.activeID, because the two can differ
+// — a restart leaves the backend with NO active session while the window still has one on screen,
+// and a stale window sends after a switch — and this used to answer "ok" for a message that went
+// nowhere: the frontend draws its bubble and a running placeholder BEFORE the call (so the reader
+// sees their text and 正在执行), and a turn that never started then never sends an event to clear
+// either one. Every path that does not start a turn now says why, and composer.tsx renders that
+// reason in the placeholder it opened (see startTurn).
+func (s *AgentService) SendMessage(sessionID, text string) string {
 	if len(text) == 0 {
 		return "empty"
 	}
-	s.desk.startTurn(text)
-	return "ok"
+	return s.desk.startTurn(sessionID, text)
 }
 
 // Stop aborts the current turn (real agent via cancel, or simulated) and
@@ -33,22 +40,23 @@ func (s *AgentService) Stop() string {
 	return "ok"
 }
 
-// StopAndSend stops the current turn (if any) and immediately starts a new one
-// with text — the "send now" action for the pending queue. Unlike Stop
-// followed by SendMessage, it waits for the previous turn's goroutine to fully
-// exit first, so the new turn can never race the old one for run state. In the
-// simulated fallback it stops the sim and waits for it to wind down.
-func (s *AgentService) StopAndSend(text string) string {
+// StopAndSend stops the named session's turn (if any) and immediately starts a new one with text —
+// the "send now" action for the pending queue. Unlike Stop followed by SendMessage, it waits for
+// the previous turn's goroutine to fully exit first, so the new turn can never race the old one for
+// run state. In the simulated fallback it stops the sim and waits for it to wind down.
+//
+// Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
+// queue on any refusal, so an empty answer is not possible.
+func (s *AgentService) StopAndSend(sessionID, text string) string {
 	if text == "" {
 		return "empty"
 	}
 	d := s.desk
-	d.mu.Lock()
-	id := d.activeID
-	if id == "" {
-		d.mu.Unlock()
+	if sessionID == "" {
 		return refuseNoSession
 	}
+	d.mu.Lock()
+	id := sessionID
 	r := d.getRun(id)
 	cancel := r.turnCancel
 	done := r.turnDone
@@ -81,8 +89,7 @@ func (s *AgentService) StopAndSend(text string) string {
 			}
 		}
 	}
-	d.startTurn(text)
-	return "ok"
+	return d.startTurn(id, text)
 }
 
 // Steer answers the agent's steer_check for a session: it delivers the text
@@ -122,29 +129,44 @@ func (s *AgentService) Steer(sessionID, text string) string {
 	}
 }
 
-// startTurn dispatches to the active session's real agent when configured,
-// otherwise to the simulated fallback so the UI always responds.
-func (d *desktopApp) startTurn(text string) {
-	d.mu.Lock()
-	id := d.activeID
+// startTurn dispatches to the named session's real agent when configured, otherwise to the
+// simulated fallback so the UI always responds.
+//
+// It returns "ok" when a turn is running, or the reason none started — never nothing. Both
+// refusals used to be bare `return`s, which is what made a lost message invisible: the caller
+// answered "ok", the frontend had already drawn the bubble, and no event ever came to clear it.
+func (d *desktopApp) startTurn(id, text string) string {
 	if id == "" {
-		d.mu.Unlock()
-		return
+		return refuseNoSession
 	}
+	d.mu.Lock()
 	r := d.getRun(id)
+	// A session runs one turn at a time, and this is asked BEFORE anything is prepared: the
+	// refusal must not depend on how far the run happens to be built (r.agent nil, a simulated
+	// turn in flight), and building an agent is exactly what must not happen for a turn that is
+	// about to be refused. beginTurn re-checks it under the lock it needs anyway, so this is the
+	// early answer, not the authoritative one.
+	busy := r.running
 	d.mu.Unlock()
+	if busy {
+		return refuseTurnRunning
+	}
 
 	// Ensure this session has its own agent (lazy per-session build). No config
 	// (bootstrap failed) → fall back to the simulated turn.
 	if r.agent == nil {
 		if d.cfg == nil {
-			d.startSimulatedTurn(context.Background(), id, text)
-			return
+			if !d.startSimulatedTurn(context.Background(), id, text) {
+				return refuseTurnRunning
+			}
+			return "ok"
 		}
 		pr, err := d.prepareSession(context.Background(), id)
 		if err != nil || pr.agent == nil {
-			d.startSimulatedTurn(context.Background(), id, text)
-			return
+			if !d.startSimulatedTurn(context.Background(), id, text) {
+				return refuseTurnRunning
+			}
+			return "ok"
 		}
 		r = pr
 	}
@@ -154,7 +176,7 @@ func (d *desktopApp) startTurn(text string) {
 	// must not be prepared for a second turn at all.
 	ctx, cancel, steerCh, turnDone, ok := d.beginTurn(id, r)
 	if !ok {
-		return
+		return refuseTurnRunning
 	}
 	_ = cancel // held by the run (r.turnCancel); Stop is the user-facing path
 
@@ -230,6 +252,7 @@ func (d *desktopApp) startTurn(text string) {
 			d.handleEvent(id, ev)
 		}
 	}()
+	return "ok"
 }
 
 func (d *desktopApp) stopTurn() {
@@ -699,14 +722,19 @@ func (d *desktopApp) currentState() AgentState {
 	return st
 }
 
-func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) {
+// startSimulatedTurn runs the canned turn the desktop falls back to when no agent is available
+// (no config, or a bootstrap that failed). It reports whether it STARTED: the simulation is a
+// per-APP singleton, so a request that arrives while one is in flight starts nothing — and the
+// caller has to say so, because a silent return here is the same invisible failure as a
+// dropped message (the frontend already drew the bubble it asked about).
+func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) bool {
 	d.mu.Lock()
 	if d.simCh != nil {
 		select {
 		case <-d.simCh:
 		default:
 			d.mu.Unlock()
-			return
+			return false
 		}
 	}
 	stop := make(chan struct{})
@@ -743,6 +771,7 @@ func (d *desktopApp) startSimulatedTurn(ctx context.Context, id, _ string) {
 		d.emitIdle(id, "complete")
 		d.endSimulatedTurn(stop)
 	}()
+	return true
 }
 
 func (d *desktopApp) stopSimulatedTurn() {

@@ -166,3 +166,35 @@ func TestAFinishedTurnIsNotReportedAsRunning(t *testing.T) {
 		})
 	}
 }
+
+// TestSendMessageNamesItsSessionAndRefusesInsteadOfDropping pins the binding's half of a bug that
+// could only ever be silent: SendMessage read the session from d.activeID (which can be empty, or
+// a different session than the one on screen — a restart or a stale window is enough), and both of
+// startTurn's escape hatches returned without a word while SendMessage answered "ok". The frontend
+// draws the user's bubble and a running placeholder BEFORE the call, so a dropped message left the
+// reader looking at their own text under a 正在执行 that nothing could clear — with no turn
+// started, nothing written, and no error anywhere.
+func TestSendMessageNamesItsSessionAndRefusesInsteadOfDropping(t *testing.T) {
+	d, svc, sid, _ := newDeleteApp(t)
+
+	// No session named: a refusal, not silence.
+	if got := svc.SendMessage("", "你好"); got != refuseNoSession {
+		t.Errorf("SendMessage with no session = %q, want %q", got, refuseNoSession)
+	}
+
+	// A session whose turn is in flight: refused, and it says why. The frontend queues rather than
+	// sends while it believes the session is running, so reaching this means the two sides disagree
+	// — which is exactly when silence cost the most.
+	d.getRun(sid).running = true
+	if got := svc.SendMessage(sid, "你好"); got != refuseTurnRunning {
+		t.Errorf("SendMessage on a running session = %q, want %q", got, refuseTurnRunning)
+	}
+	d.getRun(sid).running = false
+
+	// The ordinary case still starts a turn (the simulated fallback: this app has no config), and
+	// "ok" is what tells the caller the bubble it already drew has a turn behind it.
+	if got := svc.SendMessage(sid, "你好"); got != "ok" {
+		t.Errorf("SendMessage = %q, want ok", got)
+	}
+	d.stopSimulatedTurn()
+}

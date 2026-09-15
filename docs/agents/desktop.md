@@ -329,6 +329,21 @@ const type = (el, t) => {
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
   popping a real Finder window.
+- **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`,
+  `desktop/agent_turn.go`): both read the session from `d.activeID` and answered `"ok"` for a message
+  they never started a turn for — `startTurn`'s two escape hatches (no active session, one already
+  running) were bare `return`s, and a simulated turn that found one in flight returned silently too.
+  The frontend draws the user's bubble and a running placeholder BEFORE the call (`sendText`), so a
+  dropped message left the reader looking at their own text under a 正在执行 nothing could clear: no
+  turn, no write, no event, no error — and it is unrecoverable, because the text never reached a
+  session file at all (measured: a message that left no trace in ANY session and no line in the log,
+  while the app had been restarted — a fresh backend has no active session while the window has one on
+  screen). The id comes from the caller now and every refusal is a returned string, which the composer
+  renders in the placeholder it opened (`finishNotice` + `markRunning(false)` — the shape a refused
+  slash command already used). Two traps: `sessionIsKnown` is NOT a usable guard (it reads the RUN
+  map, so it is false for a session that exists on disk and has not been loaded yet — i.e. every first
+  send), and the busy check has to come BEFORE the agent build, or a refusal would depend on how far
+  the run happens to be built.
 - **Every desktop manager is built on ONE `FileStore` (`d.sessionStore()`), and that is load-bearing, not
   tidiness.** `FileStore.ListSessions` memoizes the session list, because the sidebar asks for its rows, then
   for the per-project counts, then for one project's members, each as a separate call — every one of them used

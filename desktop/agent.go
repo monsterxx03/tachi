@@ -184,6 +184,12 @@ func (d *desktopApp) runOf(id string) *sessionRun {
 // ready") were leaking into a Chinese window.
 const refuseNoSession = "没有活跃会话"
 
+// refuseTurnRunning is SendMessage's refusal for a session whose turn is still in flight. It is
+// rendered in the bubble the composer had already drawn for the message (see composer.tsx), so it
+// has to read as "your message did not go out" rather than as a backend error — the reader is
+// looking at what they typed, and the whole point of the refusal is that it is not a lost message.
+const refuseTurnRunning = "会话正在运行，这条消息没有发出去；可以先停止这一轮再发送"
+
 // refuseDeleteRunning is DeleteSession's refusal for a session whose turn is still in
 // flight. The frontend renders it in the confirmation box that raised the delete, so it
 // has to name the way out rather than only the refusal.

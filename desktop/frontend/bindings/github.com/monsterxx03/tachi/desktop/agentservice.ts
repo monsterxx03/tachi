@@ -515,11 +515,19 @@ export function SearchFiles(sessionID: string, query: string, limit: number): $C
 }
 
 /**
- * SendMessage starts a turn. It returns immediately; state changes are
- * streamed to the frontend via the "agent:state" event and to the menu bar.
+ * SendMessage starts a turn in the session the CALLER names. It returns immediately; state changes
+ * are streamed to the frontend via the "agent:state" event and to the menu bar.
+ * 
+ * The session is named by the caller rather than read from d.activeID, because the two can differ
+ * — a restart leaves the backend with NO active session while the window still has one on screen,
+ * and a stale window sends after a switch — and this used to answer "ok" for a message that went
+ * nowhere: the frontend draws its bubble and a running placeholder BEFORE the call (so the reader
+ * sees their text and 正在执行), and a turn that never started then never sends an event to clear
+ * either one. Every path that does not start a turn now says why, and composer.tsx renders that
+ * reason in the placeholder it opened (see startTurn).
  */
-export function SendMessage(text: string): $CancellablePromise<string> {
-    return $Call.ByID(729126489, text);
+export function SendMessage(sessionID: string, text: string): $CancellablePromise<string> {
+    return $Call.ByID(729126489, sessionID, text);
 }
 
 /**
@@ -632,14 +640,16 @@ export function Stop(): $CancellablePromise<string> {
 }
 
 /**
- * StopAndSend stops the current turn (if any) and immediately starts a new one
- * with text — the "send now" action for the pending queue. Unlike Stop
- * followed by SendMessage, it waits for the previous turn's goroutine to fully
- * exit first, so the new turn can never race the old one for run state. In the
- * simulated fallback it stops the sim and waits for it to wind down.
+ * StopAndSend stops the named session's turn (if any) and immediately starts a new one with text —
+ * the "send now" action for the pending queue. Unlike Stop followed by SendMessage, it waits for
+ * the previous turn's goroutine to fully exit first, so the new turn can never race the old one for
+ * run state. In the simulated fallback it stops the sim and waits for it to wind down.
+ * 
+ * Like SendMessage it is told WHICH session (see there); the frontend puts the text back in its
+ * queue on any refusal, so an empty answer is not possible.
  */
-export function StopAndSend(text: string): $CancellablePromise<string> {
-    return $Call.ByID(1733339567, text);
+export function StopAndSend(sessionID: string, text: string): $CancellablePromise<string> {
+    return $Call.ByID(1733339567, sessionID, text);
 }
 
 /**

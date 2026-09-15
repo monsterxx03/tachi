@@ -342,13 +342,30 @@ export function useComposer(deps: ComposerDeps) {
     const sid = currentId
     const ts = Date.now()
     const tsStr = new Date().toISOString()
+    const placeholder = `a-${ts}`
     updateSession(sid, (prev) => [...prev,
       { id: `u-${ts}`, role: 'user', text, ts: tsStr },
-      { id: `a-${ts}`, role: 'assistant', running: true, parts: [], ts: tsStr },
+      { id: placeholder, role: 'assistant', running: true, parts: [], ts: tsStr },
     ])
-    AgentService.SendMessage(text).catch(() => {})
     markRunning(sid, true)
     scrollToBottom(true)
+    // The backend is told WHICH session this belongs to and answers with a reason when no turn
+    // starts (no such session, or one already running). Rendering that reason in the placeholder
+    // this call just opened is what keeps a message that never went out from looking like one that
+    // did: otherwise the bubble sits at 正在执行 forever, waiting for a reply to a turn nobody is
+    // running, with nothing on screen saying so.
+    AgentService.SendMessage(sid, text).then((why) => {
+      if (!why || why === 'ok') return
+      updateSession(sid, (list) => list.map((m) => (
+        m.id === placeholder ? { ...finishNotice(m, why), running: false } : m
+      )))
+      markRunning(sid, false)
+    }).catch(() => {
+      updateSession(sid, (list) => list.map((m) => (
+        m.id === placeholder ? { ...finishNotice(m, '消息没有发出去'), running: false } : m
+      )))
+      markRunning(sid, false)
+    })
   }, [currentId, updateSession, markRunning, scrollToBottom])
 
   // runCommand sends a slash command. It renders exactly like a message — user bubble plus a
@@ -478,7 +495,7 @@ export function useComposer(deps: ComposerDeps) {
       refreshRunning()
     }
     try {
-      const ret = await AgentService.StopAndSend(text)
+      const ret = await AgentService.StopAndSend(sid, text)
       if (ret && ret !== 'ok') requeue()
     } catch {
       requeue()
