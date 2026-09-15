@@ -627,6 +627,15 @@ const type = (el, t) => {
   back. The fix is a `ResizeObserver` on a `.chat-content` wrapper (the scrollport's own box never changes
   when its content grows) that re-pins while following. Any new "sticky bottom" behavior must go through the
   same observer.
+  **…and only the READER ends following, never growth.** `handleScroll` used to decide "the reader scrolled
+  away" from the distance to the bottom (over 48px away = gone), which cannot tell a reader from a transcript
+  that grew: content arriving BELOW the viewport leaves `scrollTop` exactly where it was and pushes the bottom
+  away, and the scroll event the app's own pin had queued then arrived carrying that larger distance — so
+  following switched itself off, the view rested short of the newest message with 回到最新消息 showing, and it
+  was intermittent because it needs the growth to land before that queued event is delivered. Every pin now
+  goes through `pinBottom`, which RECORDS where it landed, and following ends only when `scrollTop` decreases
+  below that record — a reader's wheel, drag, `gg` or `Ctrl+U` still ends it, while growth (and the clamp a
+  session switch performs) cannot. `switch-load` pins both halves.
 
 - **A width bound must subtract every other fixed column — and it must limit what is SHOWN, not what is
   STORED**: `.oneoff-panel` exists so the conversation keeps a real reading width, but computing its ceiling

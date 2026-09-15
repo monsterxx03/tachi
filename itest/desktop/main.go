@@ -120,6 +120,13 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 			return report(sc.name, nil, []Line{{Label: "unbound session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 		}
 	}
+	// An EXTRA session, seeded BEFORE the restored one so the app still opens the newest (it is
+	// the one a driver gets by clicking a row it has never opened — see seedSecond).
+	if len(sc.seedSecond) > 0 {
+		if err := sb.seedSession("另一个会话", nil, sc.seedSecond, ""); err != nil {
+			return report(sc.name, nil, []Line{{Label: "second session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+	}
 	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}

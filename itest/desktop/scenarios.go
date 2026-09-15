@@ -58,6 +58,11 @@ type scenario struct {
 	// something a driver can do — but a seeded transcript is exactly what a restart would find,
 	// which is how at-file-reload stages its assertion.
 	seedMessages []session.Message
+	// seedSecond writes a SECOND session's transcript, one the app has never displayed. The app
+	// opens the newest session, so this one's first render happens when a driver CLICKS its row —
+	// the load-on-first-visit path (the 加载会话… placeholder), which a session that is merely
+	// re-selected never takes: switching inside one process serves the in-memory copy.
+	seedSecond []session.Message
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -1532,7 +1537,38 @@ permissions:
 					fmt.Sprintf("WorkingDir=%s want=%s", bound.WorkingDir, projectRoot))
 			},
 		},
+		//
+		//
+		// switch-load: the FIRST visit to a session, and following a transcript that grows without a
+		// message update. Every other switch driver re-selects a session the process already loaded
+		// (the in-memory copy), so the load-on-first-visit path — the 加载会话… placeholder, which
+		// arrives AFTER the switch's own pin — is the one path they all miss. The seeded transcript
+		// ends in a LONG mermaid diagram, whose height arrives asynchronously on top.
+		{
+			name: "switch-load",
+			files: map[string]string{
+				"README.md": "# smoke\n\nswitch-load scenario's working directory\n",
+			},
+			seedSecond: []session.Message{
+				{Type: session.MessageTypeUser, Content: "先讲一段"},
+				{Type: session.MessageTypeAssistant, Content: "好。\n\n" + strings.Repeat("这一段只是把转写撑长一点。", 40)},
+				{Type: session.MessageTypeUser, Content: "再补一段长的"},
+				{Type: session.MessageTypeAssistant, Content: "补完了。\n\n" + strings.Repeat("最后这一段同样只是填充。", 20) +
+					"\n\n这里是那张长图：\n\n```mermaid\n" + tallMermaid() + "\n```"},
+			},
+		},
 	}
+}
+
+// tallMermaid is a flowchart tall enough to matter: a vertical chain of nodes, each about a
+// line high, so the rendered figure is several hundred pixels tall.
+func tallMermaid() string {
+	var b strings.Builder
+	b.WriteString("flowchart TD\n")
+	for i := 1; i < 20; i++ {
+		fmt.Fprintf(&b, "  N%d[节点 %d] --> N%d[节点 %d]\n", i-1, i-1, i, i)
+	}
+	return b.String()
 }
 
 // planStream is one SavePlan tool call. The statuses are what the write-back moves.

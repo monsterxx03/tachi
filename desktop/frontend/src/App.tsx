@@ -335,7 +335,20 @@ function App() {
   // The transcript's content box (see the JSX): what the follow-the-bottom observer watches.
   const chatContentRef = useRef<HTMLDivElement>(null)
   const followBottomRef = useRef(true)
+  // The scroll position the app last accounted for: the one its own pins wrote, or the one the
+  // last scroll event reported. handleScroll reads the reader's movement against it (see there).
+  const lastTopRef = useRef(0)
   const [showJump, setShowJump] = useState(false)
+
+  // pinBottom puts the newest message in view — and RECORDS where that landed, so the scroll event
+  // the browser fires for this very assignment can never be read as the reader moving the view.
+  const pinBottom = useCallback(() => {
+    const el = chatRef.current
+    if (!el) return
+    el.scrollTop = el.scrollHeight
+    lastTopRef.current = el.scrollTop
+  }, [])
+
   const scrollToBottom = useCallback((force = false) => {
     // force=true is for actions where following is clearly intended (sending a message,
     // switching sessions). Otherwise the pin only happens while the user is parked at the
@@ -344,9 +357,8 @@ function App() {
       followBottomRef.current = true
       setShowJump(false)
     }
-    const el = chatRef.current
-    if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [])
+    if (followBottomRef.current) pinBottom()
+  }, [pinBottom])
   // Per-session transcript state — messages, running flags, the loaded window, the delta
   // buffer — has exactly one owner (useTranscript.ts), so "belongs to a session" is a
   // property of the type rather than a convention to remember.
@@ -561,9 +573,8 @@ function App() {
   // doing it in a layout effect means the scroll happens in the same frame the
   // content grows, so the view glides instead of lurching.
   useLayoutEffect(() => {
-    const el = chatRef.current
-    if (el && followBottomRef.current) el.scrollTop = el.scrollHeight
-  }, [msgCache])
+    if (followBottomRef.current) pinBottom()
+  }, [msgCache, pinBottom])
 
   // …and pin again when the content changes height WITHOUT a message update.
   //
@@ -578,36 +589,49 @@ function App() {
     const el = chatContentRef.current
     if (!el || typeof ResizeObserver === 'undefined') return
     const ro = new ResizeObserver(() => {
-      const c = chatRef.current
-      if (c && followBottomRef.current) c.scrollTop = c.scrollHeight
+      if (followBottomRef.current) pinBottom()
     })
     ro.observe(el)
     return () => ro.disconnect()
-  }, [])
+  }, [pinBottom])
 
   // On session switch, jump straight to the newest message BEFORE paint (via
   // useLayoutEffect) so the view never briefly shows the oldest messages and
   // then snaps down. The async-load path still uses scrollToBottom() after the
   // page arrives.
   useLayoutEffect(() => {
-    const el = chatRef.current
-    if (el) el.scrollTop = el.scrollHeight
+    pinBottom()
     // A session switch always lands at the newest message — re-arm following.
     followBottomRef.current = true
     setShowJump(false)
-  }, [currentId])
+  }, [currentId, pinBottom])
 
   const loadMoreRef = useRef(false)
   const handleScroll = () => {
     const el = chatRef.current
     if (!el) return
-    // Track bottom-proximity first: scrolling up must pause auto-follow even
-    // while a page of older messages is being fetched (the early return below
-    // would otherwise swallow it).
-    const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 48
-    if (nearBottom !== followBottomRef.current) {
-      followBottomRef.current = nearBottom
-      setShowJump(!nearBottom)
+    // Following is a statement about the READER, so only the reader ends it — and the one thing a
+    // reader does that leaves the bottom is move the viewport UP (scrollTop decreases).
+    //
+    // This used to be answered from the distance to the bottom ("more than 48px away = the reader
+    // scrolled away"), which cannot tell a reader from a transcript that GREW: content arriving
+    // below the viewport leaves scrollTop exactly where it was and pushes the bottom away, so the
+    // scroll event the app's own pin had queued was read as a departure. Following then switched
+    // OFF and the view rested short of the newest message, with 回到最新消息 showing — and it was
+    // intermittent, because it needs that growth to land before the queued event is delivered.
+    // pinBottom records where each pin lands, so a scroll event it caused reads as no movement.
+    const top = el.scrollTop
+    const movedUp = top < lastTopRef.current - 1
+    lastTopRef.current = top
+    if (followBottomRef.current) {
+      if (movedUp) {
+        followBottomRef.current = false
+        setShowJump(true)
+      }
+    } else if (el.scrollHeight - top - el.clientHeight < 48) {
+      // Back at the bottom (by wheel, by 回到最新消息, by G): following re-arms.
+      followBottomRef.current = true
+      setShowJump(false)
     }
     if (loadMoreRef.current || loading) return
     // Load older messages from the backend when the user scrolls to the top and
@@ -631,7 +655,12 @@ function App() {
         } catch { /* ignore */ }
         requestAnimationFrame(() => requestAnimationFrame(() => {
           const c = chatRef.current
-          if (c) c.scrollTop = c.scrollHeight - old
+          if (c) {
+            // Put the same content back at the top of the viewport, and record where that landed:
+            // this is an app-initiated move, not the reader's (see handleScroll).
+            c.scrollTop = c.scrollHeight - old
+            lastTopRef.current = c.scrollTop
+          }
           loadMoreRef.current = false
         }))
       })()
@@ -646,18 +675,16 @@ function App() {
     state.status === 'thinking' || state.status === 'tool_running' || state.status === 'busy'
 
   // A turn's fold toggle grows (or shrinks) that turn IN PLACE. A reader who is following the
-  // bottom has to stay there — the design's 「展开/收起不该让滚动位置跳」 — and without this the
-  // growth switches following OFF by itself: the view slides up by the height that appeared
-  // (the scroll anchor is the top of the viewport), and the scroll event that follows reads as
-  // "the reader scrolled away". Called from the bubble's LAYOUT effect, so the new content is
-  // already in the DOM and the pin lands in the same frame — not from a rAF or a timer, which
+  // bottom has to stay there — the design's 「展开/收起不该让滚动位置跳」 — and the pin goes through
+  // pinBottom so the growth itself cannot end following (that is handleScroll's job to get right,
+  // and this keeps the two consistent). Called from the bubble's LAYOUT effect, so the new content
+  // is already in the DOM and the pin lands in the same frame — not from a rAF or a timer, which
   // an occluded webview never delivers. A reader who had scrolled away is left where they were.
   const repinAfterFoldToggle = useCallback(() => {
     if (!followBottomRef.current) return
     followBottomRef.current = true
-    const el = chatRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [])
+    pinBottom()
+  }, [pinBottom])
 
   // How long the turn on screen has been running: the strip's live row reports it, so the reader
   // can tell "working" from "stuck". One ticker, and the wording lives in the strip itself.
