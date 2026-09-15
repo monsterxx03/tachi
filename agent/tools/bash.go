@@ -142,7 +142,28 @@ func (t *BashTool) Properties() map[string]PropertySchema {
 	return props
 }
 func (t BashTool) Required() []string { return []string{"command"} }
-func (t BashTool) Parallel() bool     { return false }
+
+// RequiredFor implements ArgRequirements: `list_bg` and `stop_name` are CONTROL calls that
+// carry no command at all — executeLocal answers them before it ever reads a.Command — so the
+// flat required list would refuse the very calls the description invites ("call this tool
+// again with the list_bg parameter set to true"). Everything else, `background: true`
+// included (it is the shape that STARTS a process), still needs a command.
+//
+// Required() above deliberately keeps advertising `command` to the model: the schema rides in
+// every request, and a tool-list change invalidates each session's prompt prefix, so the
+// relaxation belongs to the validator alone. A model that sends a command next to list_bg /
+// stop_name is served exactly the same way it always was.
+func (t BashTool) RequiredFor(argMap map[string]any) []string {
+	if listBg, _ := argMap["list_bg"].(bool); listBg {
+		return nil
+	}
+	if stopName, _ := argMap["stop_name"].(string); stopName != "" {
+		return nil
+	}
+	return t.Required()
+}
+
+func (t BashTool) Parallel() bool { return false }
 
 func (t BashTool) ExecuteContext(ctx context.Context, args string) (string, error) {
 	var a bashArgs

@@ -5,7 +5,7 @@
 // applies to it. They were lifted out of App.tsx because they hold no React state: reading
 // or changing them should not mean reading a 2000-line component.
 
-import { fmtDur } from './lib'
+import { fileFromSendFileArgs, fmtDur } from './lib'
 import type { Message, Part } from './types'
 import type { FileChangeVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -137,6 +137,14 @@ export function lastRunningAssistantIndex(list: Message[]): number {
 // card is parked on, the call an AskUserQuestion form is waiting on, the call that is
 // running right now, and notices.
 //
+// A DELIVERED attachment is not process either, and unlike the rest it does not stay in its
+// own place: a call that handed a file over IS the file card, so it is pinned to the turn's
+// TAIL (App renders view.attachments after the conclusion). A file the agent sent is the
+// point of the turn, not a step of it — behind the fold it did not merely collapse, it was
+// never in the DOM at all, so the reader had to open the process row to find what they asked
+// for. It is also NOT rendered inside the timeline: the strip stands in for the process, and
+// one card must never appear twice on one turn.
+//
 // Rendering the timeline is still TurnPart's job: the one-off panel replays the same parts
 // and exists to show them all, so the fold belongs to the conversation, not to the part
 // renderer. This helper only decides WHAT is visible, and it is pure so both render paths
@@ -158,6 +166,7 @@ export interface ProcessSummary {
   failed: number // tool calls that did not succeed
   files: number // ReadFile
   edits: number // EditFile / WriteFile
+  sent: number // SendFile — shown at the turn's tail, so the row must not call them 其它
   commands: number // Bash
   searches: number // Grep / Glob / WebSearch / WebFetch / MCP search
   other: number // everything else (SubAgent, SavePlan, Skill, …)
@@ -179,6 +188,10 @@ export interface TurnView {
   folded: IndexedPart[]
   // exposed: parts that stay visible whether or not the strip is open.
   exposed: IndexedPart[]
+  // attachments: the turn's delivered files (a SendFile call), to be rendered as a group at
+  // the turn's TAIL — after the conclusion, in the order they were sent. Never in `folded`
+  // (see the header comment) and never in the timeline.
+  attachments: IndexedPart[]
   // conclusion: the turn's LAST prose — the answer, always visible.
   conclusion: IndexedPart | null
   // live: the call running right now, or null (finished, between calls, or parked on a form).
@@ -226,9 +239,10 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
     parkedIndex = list.findIndex((p) => p.type === 'tool' && p.toolCallId === opts.permissionToolCallId)
   }
 
-  const summary: ProcessSummary = { steps: 0, thinking: 0, notes: 0, failed: 0, files: 0, edits: 0, commands: 0, searches: 0, other: 0 }
+  const summary: ProcessSummary = { steps: 0, thinking: 0, notes: 0, failed: 0, files: 0, edits: 0, sent: 0, commands: 0, searches: 0, other: 0 }
   const folded: IndexedPart[] = []
   const exposed: IndexedPart[] = []
+  const attachments: IndexedPart[] = []
   let live: LiveStep | null = null
 
   list.forEach((part, index) => {
@@ -243,6 +257,15 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
       summary.thinking++
     } else if (part.type === 'text') {
       summary.notes++
+    }
+
+    // A call that HANDED A FILE OVER is not process: the card is what the reader asked for, so it
+    // goes to the tail group instead of the fold. The predicate is deliberately the renderer's own
+    // (TurnPart draws a FileCard for exactly these), which is why a FAILED send stays put as a
+    // failure card — it delivered nothing — and a call whose args do not parse stays a tool card.
+    if (deliveredAttachment(part)) {
+      attachments.push({ part, index })
+      return
     }
 
     const staysVisible =
@@ -264,7 +287,13 @@ export function turnView(parts: Part[] | undefined, opts: TurnViewOptions = {}):
     const at = exposed.findIndex((it) => it.index === conclusionIndex)
     conclusion = at >= 0 ? exposed.splice(at, 1)[0] : null
   }
-  return { summary, folded, exposed, conclusion, live }
+  return { summary, folded, exposed, attachments, conclusion, live }
+}
+
+// deliveredAttachment reports whether a part IS the file card of a SendFile that succeeded.
+function deliveredAttachment(part: Part): boolean {
+  return part.type === 'tool' && part.name === 'SendFile' && !!part.done && !!part.ok
+    && fileFromSendFileArgs(part.args || '') !== null
 }
 
 // countTool buckets a tool call for the strip's mix line. Unknown names (a new tool, an
@@ -277,6 +306,9 @@ function countTool(s: ProcessSummary, name: string): void {
     case 'EditFile':
     case 'WriteFile':
       s.edits++
+      return
+    case 'SendFile':
+      s.sent++
       return
     case 'Bash':
       s.commands++
@@ -298,6 +330,7 @@ export function processSummaryLine(s: ProcessSummary): string {
   const bits: string[] = []
   if (s.files) bits.push(`读了 ${s.files} 个文件`)
   if (s.edits) bits.push(`改了 ${s.edits} 个文件`)
+  if (s.sent) bits.push(`发了 ${s.sent} 个文件`)
   if (s.commands) bits.push(`跑了 ${s.commands} 条命令`)
   if (s.searches) bits.push(`搜了 ${s.searches} 次`)
   if (s.other) bits.push(`其它 ${s.other}`)

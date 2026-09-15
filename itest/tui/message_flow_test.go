@@ -100,6 +100,61 @@ var _ = ginkgo.Describe("TUI 基础消息流", func() {
 		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic, ginkgo.SpecTimeout(90*time.Second)),
 		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses, ginkgo.SpecTimeout(90*time.Second)),
 	)
+
+	// 提交之后、第一个 token 到达之前，TUI 处于 stateWaiting —— 这一段和 streaming 一样
+	// 是"回合在跑"，所以输入必须照常可用、提交必须排进队列（见 model.go 的 turnRunning）。
+	//
+	// 这一格曾经是空的：handleKeyMsg 没有 stateWaiting 分支（落到 `return m, nil`），
+	// setState 又把输入框 disable —— 于是这一段里敲的字被**静默吞掉**，用户按下回车后
+	// 紧接着打的字就没了。CI 上它表现为随机失败：driver 的 WaitIdle 轮询的是**屏幕**，
+	// 而请求计数由 mock 的 goroutine 先涨，所以它可能在"屏幕还停在上一帧 idle"时返回，
+	// 接着敲的第二个问题正好落进这一格，第二个请求永远不会来。
+	//
+	// 这里用 Pause 把那一格撑成确定性的：请求 1 到达后立刻输入，断言它既**看得见**
+	// （pending 形式），又真的作为第二个请求发出去；第二轮的 Require 钉住发出去的就是原文。
+	ginkgo.DescribeTable("首 token 之前的输入不丢: 排队到下一轮而不是被吞",
+		func(_ ginkgo.SpecContext, p mockllm.Protocol) {
+			mock, home := startMock(p, []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Pause(1500*time.Millisecond), // 撑开 stateWaiting
+					mockllm.Thinking("想一下"),
+					mockllm.Text("第一答"),
+					mockllm.Usage(100, 20),
+					mockllm.Finish("stop"),
+					mockllm.Done(),
+				)},
+				{
+					Require: mockllm.HasUserMessage(gomega.ContainSubstring("第二问")),
+					Reply: mockllm.Stream(
+						mockllm.Text("第二答"),
+						mockllm.Usage(150, 10),
+						mockllm.Finish("stop"),
+						mockllm.Done(),
+					),
+				},
+			})
+			s := launch(home, mock)
+
+			s.Type("第一问")
+			s.Enter()
+			// 请求已到 mock，首个 delta 未到 —— 就是 CI 里 driver 可能返回的那一格。
+			gomega.Eventually(func() int { return mock.RequestCount() }, specTimeout, 10*time.Millisecond).Should(gomega.Equal(1))
+			s.Type("第二问")
+			s.Enter()
+
+			// 没丢：它以 pending 的形式出现在屏幕上。
+			s.Expect("第二问", specTimeout)
+
+			// 而且第一轮结束后真的发出去（这条就是 CI 上超时的那一步）。
+			s.WaitIdle(2, specTimeout)
+			s.Expect("第二答", specTimeout)
+			gomega.Expect(mock.Requests()).To(gomega.HaveLen(2))
+			gomega.Expect(mock.Error()).NotTo(gomega.HaveOccurred())
+		},
+		ginkgo.Entry("OpenAI", mockllm.ProtocolOpenAI, ginkgo.SpecTimeout(90*time.Second)),
+		ginkgo.Entry("Anthropic", mockllm.ProtocolAnthropic, ginkgo.SpecTimeout(90*time.Second)),
+		ginkgo.Entry("OpenAI Responses", mockllm.ProtocolOpenAIResponses, ginkgo.SpecTimeout(90*time.Second)),
+	)
 })
 
 // thinkingRoundTrip selects the protocol-appropriate thinking round-trip

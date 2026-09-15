@@ -200,6 +200,15 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
           {[...view.exposed, ...(view.conclusion ? [view.conclusion] : [])]
             .sort((a, b) => a.index - b.index)
             .map((it) => renderPart(it, `v${it.index}`))}
+          {/* The turn's DELIVERABLES: the files a SendFile call handed over, pinned here rather
+              than where they happened. They are not process — folding them put the answer to
+              "把 X 发给我" behind a row the reader had to open — so they are grouped at the tail,
+              after the conclusion, in the order they were sent. See turnView's rule. */}
+          {view.attachments.length > 0 ? (
+            <div className="turn-files">
+              {view.attachments.map((it) => renderPart(it, `a${it.index}`))}
+            </div>
+          ) : null}
         </div>
         {/* Fallback: a pending ask with no matching tool card (e.g. the card was
             closed by an interruption) still has to be answerable. */}

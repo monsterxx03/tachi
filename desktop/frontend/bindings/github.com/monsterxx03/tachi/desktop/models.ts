@@ -703,6 +703,13 @@ export interface SessionMessage {
     "content": string;
 
     /**
+     * DisplayContent is the user's own text when it differs from Content — only @-file
+     * expansion does that today (Content is the file inlined for the model). The transcript
+     * shows it for a user record; nothing else reads it.
+     */
+    "displayContent"?: string;
+
+    /**
      * RFC3339
      */
     "timestamp"?: string;

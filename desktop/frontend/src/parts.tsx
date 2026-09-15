@@ -12,8 +12,9 @@
 
 import { memo } from 'react'
 import type { Part } from './types'
+import { fileFromSendFileArgs } from './lib'
 import { MarkdownBlock } from './markdown'
-import { FileCard, fileFromSendFileArgs } from './filepreview'
+import { FileCard } from './filepreview'
 import { NoticePart, ThinkingPart, ToolCard } from './components'
 
 export const TurnPart = memo(function TurnPart({ part, workDir, onToggleDiff }: {

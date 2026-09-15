@@ -2,11 +2,15 @@ package tools
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestEditTool_BasicReplace(t *testing.T) {
@@ -573,3 +577,143 @@ func TestEditTool_ConcurrentCreateAndEditViaSymlinkedDir(t *testing.T) {
 }
 
 // ============================================================================
+
+// A failed anchor is the failure this tool meets most, and the usual cause is one leading
+// space or one re-wrapped line — not a file the caller has to re-read in full. The error has to
+// name the region and the difference, or every miss costs a read plus a retry.
+func TestEditTool_NotFound_DiagnosesWhitespaceOnlyDifference(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ws.txt")
+	content := "alpha\n  two-space indent\nomega\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditTool{}
+
+	// Same three lines, wrong indentation on the middle one: today's exact match fails.
+	args, _ := json.Marshal(map[string]any{
+		"path": path, "old_string": "alpha\n    two-space indent\nomega", "new_string": "ALPHA\nomega",
+	})
+	_, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "old_string not found")
+	assert.Contains(t, msg, "closest region: lines 1-3", "the region must be named")
+	assert.Contains(t, msg, "3 of 3 lines equal", "and every line matches: %s", msg)
+	assert.Contains(t, msg, "WHITESPACE only", "the diagnosis must name the cause: %s", msg)
+	assert.Contains(t, msg, `"    two-space indent"`, "expected line, whitespace visible: %s", msg)
+	assert.Contains(t, msg, `"  two-space indent"`, "actual line, whitespace visible: %s", msg)
+}
+
+// The report must not be a guess when the block is simply not there: it shows the closest
+// region and the first line that differs, which is what tells a re-wrapped anchor apart from an
+// edited one.
+func TestEditTool_NotFound_ReportsClosestRegionAndFirstDifference(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "near.txt")
+	content := "one\ntwo\nthree changed\nfour\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditTool{}
+
+	args, _ := json.Marshal(map[string]any{
+		"path": path, "old_string": "one\ntwo\nthree\nfour", "new_string": "x",
+	})
+	_, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "closest region: lines 1-4")
+	assert.Contains(t, msg, "3 of 4 lines equal")
+	assert.Contains(t, msg, "first difference at line 3")
+	assert.Contains(t, msg, `expected: "three"`)
+	assert.Contains(t, msg, `found:    "three changed"`)
+	assert.NotContains(t, msg, "WHITESPACE only", "this is not a whitespace-only difference")
+}
+
+// An ambiguous anchor names its occurrences, so lengthening it is a decision the caller can
+// make from the message instead of a second guess.
+func TestEditTool_MultipleMatches_NamesLines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "dup.txt")
+	if err := os.WriteFile(path, []byte("a\nsame\nb\nsame\nc\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditTool{}
+
+	args, _ := json.Marshal(map[string]any{"path": path, "old_string": "same", "new_string": "other"})
+	_, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "matches 2 locations")
+	assert.Contains(t, err.Error(), "lines 2, 4", "the occurrences must be named: %v", err)
+}
+
+// A tolerant match (trailing-whitespace fallback) still writes, but the note has to be
+// unmissable and locate itself: it says the edit may not have hit the range the caller meant.
+func TestEditTool_TolerantMatch_NoteLeadsAndNamesItsLine(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tolerant_line.txt")
+	if err := os.WriteFile(path, []byte("keep\nfoo bar\nkeep\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditTool{}
+
+	// The old_string carries trailing whitespace the file does not have: that is the
+	// trailing-whitespace fallback, the tolerant path this test is about.
+	args, _ := json.Marshal(map[string]any{
+		"path": path, "old_string": "foo bar \n", "new_string": "baz",
+	})
+	out, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.NoError(t, err)
+	assert.True(t, strings.HasPrefix(out, "Note:"), "the tolerant note must lead the result: %q", out)
+	assert.Contains(t, out, "tolerant match, line 2")
+	assert.Contains(t, out, "Successfully edited")
+}
+
+// The re-wrapped paragraph is the prose twin of the indentation miss: no line boundary in the
+// anchor lines up with the file's, so a line-window report finds nothing at all. A shared long
+// prefix is what says "right place, different line breaks" — the caller then rebuilds the anchor
+// from the file's own lines instead of re-reading the whole file.
+func TestEditTool_NotFound_DetectsRewrappedProse(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "wrapped.md")
+	content := "intro\n\n- **A turn's process is folded by the CONVERSATION**: `turnView()` decides what a turn\n" +
+		"  shows — one strip standing in for its thinking blocks, tool cards and intermediate\n" +
+		"  messages, the turn's LAST prose.\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditTool{}
+
+	// The same sentence, re-flowed: the caller's line breaks are its own.
+	rewrapped := "- **A turn's process is folded by the CONVERSATION**: `turnView()` decides what a turn shows —\n" +
+		"  one strip standing in for its thinking blocks, tool cards and intermediate messages, the turn's\n" +
+		"  LAST prose."
+	args, _ := json.Marshal(map[string]any{"path": path, "old_string": rewrapped, "new_string": "x"})
+	_, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.Error(t, err)
+	msg := err.Error()
+	assert.Contains(t, msg, "ARE in the file, at line 3", "the shared prefix locates the block: %s", msg)
+	assert.Contains(t, msg, "LINE BREAKS")
+	assert.Contains(t, msg, `decides what a turn"`,
+		"the file's own line must be shown, quoted and truncated at its own break: %s", msg)
+}
+
+// …and an anchor that is nowhere in the file gets no invented region: the plain hint is the
+// honest answer, and a fabricated "closest region" would be worse than none.
+func TestEditTool_NotFound_NoRegionWhenNothingMatches(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "other.txt")
+	if err := os.WriteFile(path, []byte("alpha\nbeta\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	tool := &EditTool{}
+
+	args, _ := json.Marshal(map[string]any{
+		"path": path, "old_string": "text that is nowhere near this file\nat all", "new_string": "x",
+	})
+	_, err := tool.ExecuteContext(context.TODO(), string(args))
+	require.Error(t, err)
+	assert.NotContains(t, err.Error(), "closest region")
+	assert.NotContains(t, err.Error(), "ARE in the file")
+}

@@ -39,6 +39,10 @@ func (m *Model) sendMessage(text string) tea.Cmd {
 	m.steerCh = make(chan agent.SteerInput, 1)
 	var ropts []agent.RunOption
 	ropts = append(ropts, agent.WithSteerChannel(m.steerCh))
+	// The session keeps the user's own words for the transcript: display stays unexpanded,
+	// so a reloaded conversation must show `@path` and not the inlined file (the model still
+	// gets the expanded text — see session.Message.DisplayContent).
+	ropts = append(ropts, agent.WithDisplayUserMessage(text))
 	if len(expanded.Images) > 0 {
 		ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 	}

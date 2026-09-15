@@ -36,19 +36,6 @@ const KIND_ICON: Record<string, string> = {
 // copyable text.
 const TEXT_HIGHLIGHT_MAX = 256 * 1024
 
-// fileFromSendFileArgs reconstructs an attachment from a recorded SendFile call,
-// so reloaded sessions show the file card instead of a raw tool card.
-export function fileFromSendFileArgs(args: string): AttachmentInfo | null {
-  if (!args) return null
-  try {
-    const path = (JSON.parse(args) as { path?: string }).path
-    if (typeof path !== 'string' || !path) return null
-    return { path, name: path.split('/').pop() || path }
-  } catch {
-    return null
-  }
-}
-
 // attachmentPath resolves the path the way the SendFile tool did: an absolute one
 // as-is, a relative one against the session's working directory — the model may
 // well have written "report.md", and the card has to point at the same file the

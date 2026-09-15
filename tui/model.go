@@ -34,6 +34,19 @@ const (
 	stateManagingMCP
 )
 
+// turnRunning reports whether a TURN is in flight: stateWaiting (the message was submitted, the
+// first delta has not arrived) or stateStreaming (tokens arriving). Everything keyed on "the user
+// may still type" or "how does a submit behave" asks THIS, never the two states spelled out again.
+//
+// stateWaiting was the hole: the key handler had no case for it and the input was disabled, so
+// every keystroke between Enter and the first token was dropped on the floor — silently, and for
+// as long as the provider takes to start answering. It is the SAME span as streaming (a turn is
+// running), so it gets the same treatment: typing stays enabled and the text is queued for the
+// next turn. Found by a CI failure whose race the window made reachable: the itest driver polls
+// the SCREEN, and a request can reach the mock before the busy frame is painted, so it may type
+// in exactly this window.
+func turnRunning(st state) bool { return st == stateWaiting || st == stateStreaming }
+
 type toolCallDisplay struct {
 	Name              string
 	ID                string
@@ -601,8 +614,8 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					if len(parts) > 1 {
 						extraArgs = parts[1]
 					}
-					// During streaming: can't activate skills mid-turn
-					if m.state == stateStreaming {
+					// During a running turn: can't activate skills mid-turn
+					if turnRunning(m.state) {
 						m.chatview.AddMessage(chatMessage{
 							Role:    "assistant",
 							Content: "请等待当前回合完成后再执行命令",
@@ -624,8 +637,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 
-		// During streaming: queue regular messages, allow /new, block other commands.
-		if m.state == stateStreaming {
+		// During a running turn (streaming, or the gap before the first token): queue regular
+		// messages, allow /new, block other commands.
+		if turnRunning(m.state) {
 			if cmd != nil && cmd.Name == "/new" {
 				// /new during streaming: clear queue, cancel current stream, reset.
 				m.pendingQueue = nil
@@ -669,7 +683,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.handleAgentEvent(msg.event)
 
 	case tea.PasteMsg:
-		if m.state == stateIdle || m.state == stateStreaming {
+		if m.state == stateIdle || turnRunning(m.state) {
 			oldHeight := m.input.Height()
 			var cmd tea.Cmd
 			m.input, cmd = m.input.Update(msg)
@@ -805,7 +819,10 @@ func (m *Model) handleKeyMsg(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.handleKeyAskUser(msg)
 	case stateManagingMCP:
 		return m.handleKeyManagingMCP(msg)
-	case stateIdle, stateStreaming:
+	case stateIdle, stateStreaming, stateWaiting:
+		// stateWaiting belongs here with the other two: a turn IS running, and its typing goes to
+		// the same queue (see turnRunning). Leaving it out swallowed every key between Enter and
+		// the first token.
 		return m.handleKeyIdle(msg)
 	}
 	return m, nil
@@ -1033,7 +1050,7 @@ func (m *Model) setState(st state) {
 	m.state = st
 	m.statusbar.SetState(st)
 	m.chatview.SetStreaming(st == stateStreaming)
-	m.input.SetEnabled(st == stateIdle || st == stateStreaming)
+	m.input.SetEnabled(st == stateIdle || turnRunning(st))
 }
 
 func (m *Model) renderConfirmPrompt() string {

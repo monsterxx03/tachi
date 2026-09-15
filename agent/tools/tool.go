@@ -377,6 +377,22 @@ func (r *Registry) ExecuteConfirmed(ctx context.Context, name string, args strin
 	return tool.ExecuteContext(ctx, args)
 }
 
+// ArgRequirements is the optional, argument-dependent half of a tool's schema: it lets a
+// tool decide which fields are required from the ARGUMENTS THEMSELVES rather than from the
+// tool alone. Bash is the only implementer today — its `list_bg` and `stop_name` control
+// calls REPLACE `command` instead of accompanying it, so a flat Required() list refuses
+// exactly the calls its own description invites the model to make.
+//
+// Required() still describes the MODEL-FACING schema (see ToSchema), which is why a tool
+// with an alternation like this keeps the flat list there: the tool list rides in every
+// request, so changing it invalidates each session's prompt prefix (docs/agents/prompt-cache.md).
+// A relaxed validator costs nothing, a changed schema costs the whole history.
+type ArgRequirements interface {
+	// RequiredFor returns the fields that must be present for THIS argument set. An empty
+	// result means the call is complete as sent.
+	RequiredFor(argMap map[string]any) []string
+}
+
 // validateArgs checks if the arguments match the tool's schema
 func validateArgs(tool Tool, args string) error {
 	if args == "" {
@@ -389,7 +405,11 @@ func validateArgs(tool Tool, args string) error {
 	}
 
 	// Check required fields
-	for _, field := range tool.Required() {
+	required := tool.Required()
+	if ar, ok := tool.(ArgRequirements); ok {
+		required = ar.RequiredFor(argMap)
+	}
+	for _, field := range required {
 		if _, ok := argMap[field]; !ok {
 			return &MissingArgError{Name: tool.Name(), Arg: field}
 		}

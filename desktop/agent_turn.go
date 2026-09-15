@@ -115,7 +115,7 @@ func (s *AgentService) Steer(sessionID, text string) string {
 	default:
 	}
 	select {
-	case ch <- agent.SteerInput{Text: expanded.Text, Images: expanded.Images}:
+	case ch <- agent.SteerInput{Text: expanded.Text, Display: text, Images: expanded.Images}:
 		return "ok"
 	default:
 		return "dropped"
@@ -159,6 +159,12 @@ func (d *desktopApp) startTurn(text string) {
 	_ = cancel // held by the run (r.turnCancel); Stop is the user-facing path
 
 	history := d.runHistory(id)
+	// The user's OWN words, before any expansion: the transcript must show what was typed
+	// (`@path`), while the model gets the expanded text. Session records keep both.
+	// (A merged trailing message — an interrupted session — keeps only THIS turn's text as
+	// the display while Content holds both; that path is rare and its display side is
+	// cosmetic, which is not worth threading a second display string through the merge.)
+	rawText := text
 	// Expand @-file references before anything else: text files are inlined,
 	// images become multi-modal content parts. This must happen BEFORE the
 	// trailing-user merge below — history stores already-expanded user
@@ -197,7 +203,11 @@ func (d *desktopApp) startTurn(text string) {
 		// hand the user a file it produced. No callback is needed: the
 		// transcript renders the attachment card from the tool call itself, so
 		// the live turn and reloaded history take one rendering path.
-		ropts := []agent.RunOption{agent.WithSteerChannel(steerCh), agent.WithExtraTools(tools.NewSendFileTool())}
+		ropts := []agent.RunOption{
+			agent.WithSteerChannel(steerCh),
+			agent.WithExtraTools(tools.NewSendFileTool()),
+			agent.WithDisplayUserMessage(rawText),
+		}
 		if len(expanded.Images) > 0 {
 			ropts = append(ropts, agent.WithPendingImages(expanded.Images))
 		}

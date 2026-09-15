@@ -402,8 +402,9 @@ func (a *AIAgent) RunOneOffStream(
 
 		// Record the user turn to the sidecar (no-op without a recorder —
 		// rs.SkipSessionWrites is always true here, so this never touches
-		// the main session history).
-		a.recordUserTurn(rs, userMessage, reminderBlock)
+		// the main session history). A one-off prompt is a command's own template,
+		// never an @-reference the user typed, so there is nothing to display-ify.
+		a.recordUserTurn(rs, userMessage, "", reminderBlock)
 
 		// Fire turn_start hook (paired with turn_complete/turn_truncated in runLoop)
 		a.dispatchEvent(ctx, hooks.EventTurnStart, hooks.Payload{
@@ -502,7 +503,11 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 		// and process restarts; the same scan returns the checkpoint boundary.
 		// Both must arrive after ensureSessionAndRecordUser (which may create
 		// the session) and before the loop's first API call.
-		boundary := a.ensureSessionAndRecordUser(ctx, rs, userMessage, reminderBlock, ch)
+		displayUserMessage := ""
+		if params != nil {
+			displayUserMessage = params.displayUserMessage
+		}
+		boundary := a.ensureSessionAndRecordUser(ctx, rs, userMessage, displayUserMessage, reminderBlock, ch)
 		rs.Seq = boundary.Seq
 		a.beginCheckpointTurn(ctx, rs, userMessage, boundary)
 
@@ -616,17 +621,26 @@ func (a *AIAgent) prepareTurnMessages(
 // message to the session, in the same order the LLM sees them (reminder
 // prepended to the user message). The original user text is stored without
 // the system-reminder wrapper.
-func (a *AIAgent) recordUserTurn(rs *RunState, userMessage, reminderBlock string) {
+//
+// display is the user's OWN text when the caller transformed the message before handing it
+// over (@-file expansion); it is recorded only when it differs from what was sent, so a
+// reloaded transcript shows `@path` rather than the inlined file. Empty display = the
+// message went out as typed, and the two are the same thing.
+func (a *AIAgent) recordUserTurn(rs *RunState, userMessage, display, reminderBlock string) {
 	if reminderBlock != "" {
 		a.recordSession(rs, &session.Message{
 			Type:    session.MessageTypeReminder,
 			Content: reminderBlock,
 		})
 	}
-	a.recordSession(rs, &session.Message{
+	msg := &session.Message{
 		Type:    session.MessageTypeUser,
 		Content: userMessage,
-	})
+	}
+	if display != "" && display != userMessage {
+		msg.DisplayContent = display
+	}
+	a.recordSession(rs, msg)
 }
 
 // ensureSessionAndRecordUser creates the session on first use (with
@@ -646,6 +660,7 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 	ctx context.Context,
 	rs *RunState,
 	userMessage string,
+	displayUserMessage string,
 	reminderBlock string,
 	ch chan<- AgentEvent,
 ) turnBoundary {
@@ -694,11 +709,18 @@ func (a *AIAgent) ensureSessionAndRecordUser(
 	// checkpoint stores and the Seq base the turn's requests continue from.
 	boundary := a.sessionBoundary()
 
-	a.recordUserTurn(rs, userMessage, reminderBlock)
+	a.recordUserTurn(rs, userMessage, displayUserMessage, reminderBlock)
 
 	// Set title from first user message (LLM-generated or truncated)
 	if curr := a.Config.SessionManager.Current(); curr != nil && curr.Title == "" {
-		title := a.generateTitle(ctx, userMessage)
+		// The user's OWN words, not the transformed message: a turn that started with
+		// `@README.md 看看` would otherwise title the session from the inlined file — a
+		// garbage title AND a whole file's worth of tokens spent on it.
+		titleSource := userMessage
+		if displayUserMessage != "" {
+			titleSource = displayUserMessage
+		}
+		title := a.generateTitle(ctx, titleSource)
 		a.Config.SessionManager.SetTitle(title)
 		// Notify TUI immediately so statusbar can refresh before LLM finishes
 		ch <- AgentEvent{Type: AgentEventSessionTitle, Title: title}
@@ -1093,12 +1115,19 @@ func (a *AIAgent) applySteer(ctx context.Context, rs *RunState, params *runParam
 			// The steer message is appended to rs.Messages, so it becomes the
 			// next call's input — tag it with the upcoming request's
 			// iteration/seq to keep it inside that request group.
-			a.recordSession(rs, &session.Message{
+			steerMsg := &session.Message{
 				Type:      session.MessageTypeUser,
 				Content:   steerInput.Text,
 				Iteration: rs.APICalls + 1,
 				Seq:       rs.Seq + 1,
-			})
+			}
+			// Same rule as the turn's own prompt: when the frontend expanded @-references
+			// before handing the text over, the session keeps the user's own words for the
+			// transcript while Content stays what the model received.
+			if steerInput.Display != "" && steerInput.Display != steerInput.Text {
+				steerMsg.DisplayContent = steerInput.Display
+			}
+			a.recordSession(rs, steerMsg)
 		}
 		return outcomeContinue
 	case <-time.After(timeout):

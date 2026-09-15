@@ -64,6 +64,11 @@ type runParams struct {
 	steerCh       chan SteerInput   // steer 输入（nil = 前端不支持 steer）
 	steerTimeout  time.Duration     // 等待 TUI steer 响应的上限（0 = 默认 defaultSteerTimeout）
 	oneoffMeta    *OneOffMeta       // one-off 转录（nil = 不录制）
+	// displayUserMessage is the user's own text for this turn, when the caller TRANSFORMED
+	// it before handing it over (@-file expansion). Empty = the message was sent as typed.
+	// Session records keep it as DisplayContent so a reloaded transcript shows what the user
+	// typed; the model still receives userMessage. See session.Message.DisplayContent.
+	displayUserMessage string
 }
 
 // SteerInput represents pending user input to inject at the steer point,
@@ -71,6 +76,9 @@ type runParams struct {
 type SteerInput struct {
 	Text   string
 	Images []llm.ContentPart
+	// Display is the user's own text when it differs from Text (@-file expansion applied
+	// to the steered text). Display only — see session.Message.DisplayContent.
+	Display string
 }
 
 // RunOption customises a single RunConversationStream / RunOneOffStream call.
@@ -158,6 +166,17 @@ func WithSteerChannel(ch chan SteerInput) RunOption {
 func WithSteerTimeout(d time.Duration) RunOption {
 	return func(p *runParams) {
 		p.steerTimeout = d
+	}
+}
+
+// WithDisplayUserMessage records the user's OWN text for this turn when the caller
+// transformed it before calling the agent (today: @-file expansion, which the frontends
+// apply themselves). The session keeps it as DisplayContent, so a reloaded transcript shows
+// `@path` instead of the inlined file the model was given. The model still receives the
+// transformed message — this option never changes what is sent.
+func WithDisplayUserMessage(text string) RunOption {
+	return func(p *runParams) {
+		p.displayUserMessage = text
 	}
 }
 

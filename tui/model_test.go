@@ -90,8 +90,14 @@ func TestSetState_Waiting(t *testing.T) {
 	m := testModel()
 	m.setState(stateWaiting)
 	assertState(t, m, stateWaiting)
-	if m.input.enabled {
-		t.Error("input should be disabled in waiting state")
+	// ENABLED, like streaming: stateWaiting is the gap between Enter and the first token, and a
+	// turn IS running through it (see turnRunning). It was disabled once, which dropped every
+	// keystroke typed in that gap — for as long as the provider takes to answer.
+	if !m.input.enabled {
+		t.Error("input should be enabled in waiting state (a running turn's typing is queued)")
+	}
+	if !turnRunning(stateWaiting) {
+		t.Error("stateWaiting must count as a running turn")
 	}
 }
 
@@ -600,6 +606,50 @@ func TestInputSubmit_EmptyDuringStreaming_NoOp(t *testing.T) {
 
 	if len(m.pendingQueue) != 0 {
 		t.Error("empty submit should not queue")
+	}
+}
+
+// testModelWaiting returns a model in stateWaiting — the gap between the submit and the first
+// delta, when a turn is already running.
+func testModelWaiting() *Model {
+	m := testModel()
+	m.setState(stateWaiting)
+	m.streamGen = 1
+	ch := make(chan agent.AgentEvent)
+	close(ch)
+	m.eventCh = ch
+	return m
+}
+
+// A submit in the WAITING gap queues exactly like one during streaming. This is the unit-level
+// half of the CI regression (itest: "首 token 之前的输入不丢"): the text used to be dropped
+// outright, because handleKeyMsg had no case for the state and the input was disabled.
+func TestInputSubmit_QueuesWhileWaiting(t *testing.T) {
+	m := testModelWaiting()
+
+	_, _ = m.Update(InputSubmitMsg("typed before the first token"))
+
+	if len(m.pendingQueue) != 1 {
+		t.Fatalf("pendingQueue length = %d, want 1", len(m.pendingQueue))
+	}
+	if m.pendingQueue[0] != "typed before the first token" {
+		t.Errorf("pendingQueue[0] = %q", m.pendingQueue[0])
+	}
+	if m.statusbar.pendingCount != 1 {
+		t.Errorf("pendingCount = %d, want 1", m.statusbar.pendingCount)
+	}
+}
+
+// The keys themselves have to REACH the input in that gap — that was the other half of the bug
+// (handleKeyMsg fell through to `return m, nil`).
+func TestKeyRouting_Waiting_TypesIntoInput(t *testing.T) {
+	m := testModelWaiting()
+
+	m.handleKeyMsg(tea.KeyPressMsg{Text: "你"})
+	_, _ = m.handleKeyMsg(tea.KeyPressMsg{Text: "好"})
+
+	if got := m.input.textarea.Value(); got != "你好" {
+		t.Errorf("input = %q, want %q", got, "你好")
 	}
 }
 

@@ -6,6 +6,16 @@
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
+  // 过程条的高度序列：10ms 采样、只记变化。这是"整轮不跳"的判据 —— 状态是瞬时的（工具一跑完
+  // 就切回摘要），读一次不算数，所以采一串。每一格是 `<高度>:<状态类名>`。
+  const trail = []
+  const sampler = setInterval(() => {
+    const h = smoke.q('.process-head')
+    const r = h ? h.getBoundingClientRect() : null
+    const entry = (r ? r.height.toFixed(1) : 'gone') + ':' + (h ? h.className.replace('process-head', '').trim() : '-')
+    if (trail[trail.length - 1] !== entry) trail.push(entry)
+  }, 10)
+
   smoke.type('.composer-input', '睡一会儿')
   smoke.click('.send-btn')
 
@@ -30,9 +40,20 @@
   if (!(await smoke.waitText('.msg-assistant .msg-content', '好验证跟随底部', 40000))) return smoke.finish()
   if (!(await smoke.waitFor(() => !smoke.q('.process-head.live'), '结束后实时条变回摘要'))) return smoke.finish()
   const settled = smoke.text('.process-head')
-  smoke.check('结束后过程条改报步数', settled.indexOf('1 步') >= 0, settled)
+  smoke.check('结束后过程条改报步数', settled.indexOf('2 步') >= 0, settled)
   smoke.check('结束后成功那步已归档（卡回到过程条里）', smoke.qa('.tool-card').length === 0,
     smoke.qa('.tool-card').length + ' 张卡')
+
+  // 整个过程条的高度必须是一个定值：实时态与摘要态之间来回切换（每一步都切一次）不能改变
+  // 它的高度，否则转录钉在底部，整片可见内容会跟着一上一下地跳。曾经就差在那条 1px 边框上
+  // （实时态有、摘要态没有 → 每次切换 2px）。
+  clearInterval(sampler)
+  const heights = [...new Set(trail.map((e) => e.split(':')[0]).filter((h) => h !== 'gone'))]
+  smoke.check('过程条高度整轮恒定（"工具在跑"与"两次调用之间"不改变高度）',
+    heights.length === 1, trail.join(' | '))
+  smoke.check('过程条出现后不再消失（整轮都占着那一行）',
+    trail[0].indexOf('gone') === 0 && trail.slice(1).every((e) => e.indexOf('gone') !== 0),
+    trail.join(' | '))
 
   // ③ 折叠会收缩高度，所以"跟随底部"必须在收缩方向也成立。要断言这一点，就得真的制造一次
   // 收缩：先展开（长高），再收起（变矮），两次都读底部距离。只读"回合结束后贴底"是空的——

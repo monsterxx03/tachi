@@ -134,9 +134,10 @@ func (m *Model) handleAgentEvent(event agent.AgentEvent) tea.Cmd {
 			expandResult := m.ExpandAtReferences(combined)
 			// Add as a normal user message in chatview for visual continuity.
 			m.chatview.AddMessage(chatMessage{Role: "user", Content: combined})
-			// Send expanded steer text to agent (non-blocking with select).
+			// Send expanded steer text to agent (non-blocking with select). Display carries
+			// the unexpanded text so a reloaded session shows what the user typed.
 			select {
-			case m.steerCh <- agent.SteerInput{Text: expandResult.Text, Images: expandResult.Images}:
+			case m.steerCh <- agent.SteerInput{Text: expandResult.Text, Display: combined, Images: expandResult.Images}:
 				m.logger.Info(context.Background(), "TUI: steer sent (pending queue)", "text", strutil.Truncate(expandResult.Text, 80))
 			default:
 				// Channel full or agent not receiving (e.g. turn mismatch).

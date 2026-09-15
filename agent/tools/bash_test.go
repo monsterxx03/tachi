@@ -3,6 +3,7 @@ package tools
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"strings"
 	"testing"
@@ -247,5 +248,51 @@ func TestBashTool_FastCommandNotBackgrounded(t *testing.T) {
 	}
 	if r.Stdout != "hello" || r.ExitCode != 0 {
 		t.Errorf("expected stdout 'hello' exit 0, got %+v", r)
+	}
+}
+
+// TestBashTool_RequiredFor pins the argument-dependent half of the schema (see
+// ArgRequirements): `list_bg` and `stop_name` are CONTROL calls that carry no command, and the
+// tool's own description is what tells the model to make them ("call this tool again with the
+// list_bg parameter set to true"). A flat required list answered those calls with
+// "missing required argument 'command'" — the model then burned a round trip re-sending one.
+func TestBashTool_RequiredFor(t *testing.T) {
+	tool := NewBashTool(BashToolConfig{ProcessManager: NewProcessManager()})
+
+	for _, args := range []string{`{"list_bg": true}`, `{"stop_name": "dev-server"}`} {
+		if err := validateArgs(tool, args); err != nil {
+			t.Fatalf("expected the control call %s to validate, got %v", args, err)
+		}
+	}
+	// Everything that STARTS or RUNS something still needs a command — background mode
+	// included, which executeLocal checks again on its own.
+	for _, args := range []string{`{}`, `{"timeout": 1000}`, `{"background": true, "bg_name": "x"}`} {
+		var missing *MissingArgError
+		if err := validateArgs(tool, args); !errors.As(err, &missing) || missing.Arg != "command" {
+			t.Fatalf("expected a missing-command error for %s, got %v", args, err)
+		}
+	}
+}
+
+// The model-facing schema keeps advertising `command` on purpose: the tool list rides in every
+// request, so changing it invalidates each session's prompt prefix. The relaxation belongs to
+// the validator alone, which is why this pins the schema instead of the validator.
+func TestBashTool_SchemaStillAdvertisesCommand(t *testing.T) {
+	required := ToSchema(NewBashTool(BashToolConfig{ProcessManager: NewProcessManager()})).Parameters.Required
+	if len(required) != 1 || required[0] != "command" {
+		t.Fatalf("the model-facing schema must keep advertising exactly [command], got %v", required)
+	}
+}
+
+// End to end through the registry — the path a model's call actually takes: the control call
+// reaches the tool and is ANSWERED (an empty process list is the answer, not an error), rather
+// than being refused at the door.
+func TestBashTool_ListBgThroughRegistry(t *testing.T) {
+	reg := NewRegistry()
+	reg.Register(NewBashTool(BashToolConfig{ProcessManager: NewProcessManager()}))
+
+	tr := reg.Invoke(context.TODO(), ToolNameBash, `{"list_bg": true}`)
+	if tr.Status != ToolResultSuccess {
+		t.Fatalf("expected list_bg to succeed, got %v (%v)", tr.Status, tr.Err)
 	}
 }

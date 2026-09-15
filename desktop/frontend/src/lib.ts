@@ -1,6 +1,6 @@
 import type { KeyboardEvent } from 'react'
 import type { SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
-import type { Message } from './types'
+import type { AttachmentInfo, Message } from './types'
 
 export function extractReminder(content: string): { reminder: string; text: string } {
   const re = /<system-reminder>([\s\S]*?)<\/system-reminder>/g
@@ -8,6 +8,22 @@ export function extractReminder(content: string): { reminder: string; text: stri
   while ((m = re.exec(content))) blocks.push(m[1].trim())
   const text = content.replace(re, '').trim()
   return { reminder: blocks.join('\n'), text }
+}
+
+// fileFromSendFileArgs reconstructs an attachment from a recorded SendFile call — the ONE
+// definition of "this call handed a file over", used by the card renderer (parts.tsx shows a
+// FileCard instead of a raw tool card) and by the fold's own rule (transcript.ts keeps the
+// delivered ones out of the process strip). It takes the args as recorded, so a reloaded
+// session renders the same card the live turn did.
+export function fileFromSendFileArgs(args: string): AttachmentInfo | null {
+  if (!args) return null
+  try {
+    const path = (JSON.parse(args) as { path?: string }).path
+    if (typeof path !== 'string' || !path) return null
+    return { path, name: path.split('/').pop() || path }
+  } catch {
+    return null
+  }
 }
 
 export function fmtTime(ts?: string): string {
@@ -82,12 +98,17 @@ export function buildTurns(sms: SessionMessage[]): Message[] {
     if (sm.role === 'user') {
       const r = extractReminder(sm.content)
       const rem = r.reminder || pendingReminder || undefined
+      // The bubble shows the user's OWN words: when the record kept them (displayContent)
+      // they win over Content, which is what was SENT — for a turn that used @-file
+      // references that is the file inlined into the message. The reminder block is still
+      // read off Content, which is where it lives.
+      const text = sm.displayContent || r.text
       // A steer (an interjection typed while the agent worked) is recorded as a user
       // message too; its iteration is the call it was injected before, while a turn's
       // own prompt has none. Nothing here decides what to DO about that — the rewind
       // menu does (see rewindTargetForMessage).
       turns.push({
-        id: nextTurnId(), role: 'user', text: r.text, reminder: rem,
+        id: nextTurnId(), role: 'user', text, reminder: rem,
         reminderCollapsed: rem ? true : undefined, ts: sm.timestamp || undefined,
         recordIndex: sm.index, steer: (sm.iteration ?? 0) > 0 || undefined,
       })

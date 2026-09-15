@@ -413,7 +413,13 @@ const type = (el, t) => {
   pure, shared by the live view and a rebuilt transcript) decides what a turn shows — one strip
   (`ProcessStrip`, `components.tsx`) standing in for its thinking blocks, tool cards and intermediate
   messages, the turn's LAST prose, and the parts that must never be hidden: a FAILED call, the call a
-  permission card is parked on, the call an AskUserQuestion form waits on, and notices. **Intermediate prose
+  permission card is parked on, the call an AskUserQuestion form waits on, and notices. **A DELIVERED file is
+  a class of its own**: a `SendFile` call that succeeded IS the file card, so `turnView` puts it in
+  `attachments` and App renders that group at the turn's TAIL (`.turn-files`, after the conclusion) — behind
+  the fold it was not merely collapsed but ABSENT from the DOM, so 「把 X 发给我」 hid its own answer behind
+  「展开时序」. It is never in the timeline as well (one card, one place, or two cards read as two files), and a
+  turn whose only tool call was the send then has nothing folded left, so it shows no strip at all.
+  **Intermediate prose
   (any but the LAST `text`) is folded whether or not the turn failed** — an exposed failure card does not drag
   its own round's text out with it, and the recall affordance is the strip's 「含 N 段过程说明」; `transcript-fold`
   pins both directions (a failing turn and a failure-free control turn). **A steer splits the turn**, and
@@ -428,13 +434,24 @@ const type = (el, t) => {
   opens every diff, since those diffs live inside the folded cards. Smoke cost: a scenario that asserts a
   *successful* tool card must expand the strip first (`.process-head`), and "no tool cards" is no longer
   evidence of "no tool calls" — assert the strip's absence too; `perm-deny` needs neither (a denied call is a
-  failed part, and failures never fold). **Do not reintroduce an "activity row" above the composer**: one
+  failed part, and failures never fold); and an ATTACHMENT card is the exception to the expand-first rule —
+  it is on screen folded, so wait for it directly (`file-find`).
+  **Do not reintroduce an "activity row" above the composer**: one
   existed, appeared and vanished once per step, and shoved the message area up and down; if it ever comes
   back, it must hold its place for the whole turn. **Do not compensate a layout change from a
   `requestAnimationFrame`** — a covered window makes WebKit stop the page's frames outright, and a
   `setTimeout` is throttled just as unpredictably. Compensate in a LAYOUT effect instead: the new content is
   in the DOM and the adjustment lands before paint. This is how the fold toggle keeps a bottom-following
   reader pinned — without it, expanding a turn slides the view up and auto-follow switches itself off.
+- **A row that alternates between two states must not change GEOMETRY — only its content may.** The
+  process row flips between the live line and the summary once per tool call, so anything that differs
+  between those two states changes the row's height that many times, and the transcript is bottom-pinned:
+  the visible content jumps with it. A `border: 1px` on the live state alone was exactly 2px of that
+  (24px live vs 22px static, twice per step for the whole turn); the ring is a `box-shadow: inset 0 0 0
+  1px` now, which draws the same edge without taking space — the same reason the codebase paints every
+  focus ring with `box-shadow`. `transcript-live` samples `.process-head`'s height every 10ms across a
+  two-call turn (live → between calls → live) and requires ONE value, plus that the row never disappears
+  mid-turn; its fixture pauses before the second call so the "between calls" state is reachable at all.
 
 - **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
   (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge
@@ -647,6 +664,19 @@ const type = (el, t) => {
   however much context the model actually received. Assert injected context at the LLM boundary (the
   `project-context` scenario) or through a rebuild; a driver waiting for `.reminder-head` on a live first
   message waits forever.
+
+- **A rebuilt transcript shows the user's OWN words, not what was SENT** (`lib.ts` + `session.Message`):
+  the `@`-file expansion happens BEFORE the agent is called, so a `user` record's `Content` is the file
+  inlined between `UNTRUSTED FILE CONTENT` markers while `displayContent` holds what was typed — and the
+  bubble reads the latter, falling back to `Content` (which is also the shape of every record written
+  before the field existed). **`Content` stays authoritative for the model**: `ConvertSessionToLLMMessages`
+  rebuilds the next request from it, so writing the raw text there instead would send a prefix the model
+  never saw (the provider's prompt cache gone from that point) and retroactively rewrite what the history
+  says it was told. The session TITLE comes from the user's own words too, or a conversation that started
+  with `@README.md 看看` gets named after the inlined file (and pays a file's worth of tokens for it).
+  **A driver cannot pin a reload by switching sessions** — that serves the in-memory copy, so the bug is
+  invisible there — which is why `at-file-reload` seeds the transcript (`scenario.seedMessages`, written
+  before the app launches) and asserts the FIRST render: that is what a restart finds.
 
 - **Backend events are subscribed in `desktop/frontend/src/agentEvents.ts`** (`useAgentStatus` /
   `useSessionUsage` / `useAgentStream`) — status, the active session's live numbers, and the agent stream that

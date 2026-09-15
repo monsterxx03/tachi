@@ -499,3 +499,34 @@ func TestConvertSessionToLLMMessages_ContinuationReminderKeepsItsIteration(t *te
 		t.Errorf("got %q, want %q", result[1].Content, want)
 	}
 }
+
+// DisplayContent is DISPLAY ONLY and must never reach the provider: Content is what the model
+// was actually sent, and the rebuilt history is replayed to it on every later turn. Sending the
+// display text instead would hand the model a different prefix than it saw (invalidating the
+// provider's prompt cache from that point) and rewrite what the history claims it was told.
+//
+// The two are deliberately DISJOINT here. In production the display IS a prefix of the content
+// (atfile keeps the user's text and appends the file to it), so "did the display leak" would be
+// unanswerable from the content alone.
+func TestConvertSessionToLLMMessages_IgnoresDisplayContent(t *testing.T) {
+	sessionMsgs := []session.Message{
+		{Type: session.MessageTypeUser, Content: "what-the-model-was-sent", DisplayContent: "what-the-user-typed"},
+		{Type: session.MessageTypeAssistant, Content: "看过了"},
+	}
+
+	result, err := ConvertSessionToLLMMessages(sessionMsgs, "anthropic")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("expected 2 messages, got %d: %+v", len(result), result)
+	}
+	if result[0].Content != "what-the-model-was-sent" {
+		t.Errorf("user message sent to the provider = %q, want the recorded content", result[0].Content)
+	}
+	for _, m := range result {
+		if strings.Contains(m.Content, "what-the-user-typed") {
+			t.Errorf("the display text leaked into the provider's history: %q", m.Content)
+		}
+	}
+}

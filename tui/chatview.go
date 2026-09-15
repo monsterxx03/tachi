@@ -342,8 +342,15 @@ func (c *ChatView) LoadHistory(sessionMsgs []session.Message) {
 	for _, msg := range sessionMsgs {
 		switch msg.Type {
 		case session.MessageTypeUser:
+			// DisplayContent when present: the user's own words. Content is what was SENT —
+			// for a turn that used @-file references that is the file inlined into the
+			// message, which is not what a reader should be shown (see session.Message).
+			content := msg.Content
+			if msg.DisplayContent != "" {
+				content = msg.DisplayContent
+			}
 			c.items = append(c.items, &messageCacheItem{msg: chatMessage{
-				Role: "user", Content: msg.Content,
+				Role: "user", Content: content,
 			}})
 		case session.MessageTypeAssistant:
 			c.items = append(c.items, &messageCacheItem{msg: chatMessage{

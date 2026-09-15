@@ -83,6 +83,19 @@ type Message struct {
 	// reminder) or legacy data written before Seq existed.
 	Seq       int       `json:"seq,omitempty"`
 	Timestamp time.Time `json:"timestamp"`
+
+	// DisplayContent is the user's OWN text for a `user` record, kept only when it differs
+	// from Content. Today exactly one thing makes them differ: @-file expansion
+	// (agent/atfile), which is done by the FRONTEND before it calls the agent — Content is
+	// what the model received (the file inlined between UNTRUSTED FILE CONTENT markers),
+	// while this is what the user typed (`@path`), which is what a transcript has to show.
+	//
+	// It is DISPLAY ONLY, and the direction matters: Content stays the authority for the
+	// conversation, because ConvertSessionToLLMMessages rebuilds the next request from it —
+	// recording the raw text instead would send a different prefix than the one the model
+	// actually saw, invalidating the provider's prompt cache and retroactively rewriting
+	// what the history says it was told.
+	DisplayContent string `json:"display_content,omitempty"`
 }
 
 // APITool is a tool definition as sent to the LLM in one API request.

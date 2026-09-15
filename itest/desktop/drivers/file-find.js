@@ -24,14 +24,27 @@
   smoke.type('.composer-input', '把 LONG.md 发给我')
   smoke.click('.send-btn')
 
-  // The turn's process is folded (a successful call is not news — see the transcript's fold
-  // rule), so the file card has to be unfolded before it exists in the DOM at all.
+  // A delivered file is NOT process: the card is pinned to the turn's tail, so it has to be on
+  // screen with the process row still folded — nothing to click first. It used to live INSIDE the
+  // fold, which is not "collapsed" but "not in the DOM at all", and the reader had to open the
+  // process row to find the file they asked for; that is what this first wait pins.
   if (!(await smoke.waitText('.msg-assistant', '已经把', 30000))) return smoke.finish()
-  smoke.qa('.chat .process-head').forEach((s) => smoke.click(s))
+  const card = await smoke.waitFor('.msg-assistant .turn-files .file-card', '附件卡出现（无需展开过程条）', 15000)
+  smoke.check('折叠态下附件卡就在屏幕上（不用点过程条）', !!card, '')
+  // …and there is exactly ONE: the strip stands in for the process, so the card must not also sit
+  // inside the timeline (two cards, one file, reads as two files).
+  smoke.check('附件卡只在尾部一处（时序里没有第二张）',
+    smoke.qa('.file-card').length === 1 && smoke.qa('.process-timeline .file-card').length === 0,
+    smoke.qa('.file-card').length + ' 张 / 时序里 ' + smoke.qa('.process-timeline .file-card').length + ' 张')
+  // The tail is the point: the file group is the LAST thing the turn renders, after its prose.
+  const parts = smoke.q('.msg-assistant .turn-parts')
+  const last = parts && parts.lastElementChild
+  smoke.check('附件组是该轮正文之后的最后一块', !!last && String(last.className).indexOf('turn-files') >= 0,
+    last ? String(last.className) : '(找不到 .turn-parts)')
+  smoke.check('一轮只发了文件就没有过程条（没有别的东西可折）', !smoke.q('.msg-assistant .process-head'),
+    smoke.q('.msg-assistant .process-head') ? '居然有过程条' : '')
 
   // A file gets to the viewer in two steps: the attachment card (预览), then the card's ⤢.
-  if (!(await smoke.waitFor('.file-card', '附件卡出现', 15000))) {
-    }
   const preview = await smoke.waitFor(
     () => smoke.qa('.file-card .file-btn').find((b) => b.textContent === '预览') || null,
     '卡片上有「预览」', 8000)

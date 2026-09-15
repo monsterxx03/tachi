@@ -103,7 +103,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	if err := sb.seedExtraRoots(sc.extraRoots); err != nil {
 		return report(sc.name, nil, []Line{{Label: "extra roots", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
-	if err := sb.seedSession("冒烟会话", sc.extraRoots); err != nil {
+	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
@@ -281,7 +281,7 @@ func fatal(format string, args ...any) {
 // app uses. They have to be seeded here because a root set is the one piece of scenario state a
 // driver cannot build: the UI's only way in is a NATIVE directory picker, which a scripted run
 // cannot click.
-func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string) error {
+func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message) error {
 	// The store's base dir IS the sessions directory (each session is <dir>/<id>/),
 	// not the config dir — pointing it one level up would put the fixture where the app
 	// never looks, and startup would quietly create its own session instead.
@@ -294,11 +294,24 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 		return err
 	}
 	mgr.SetTitle(title)
+	cur := mgr.Current()
 	if len(extraRoots) > 0 {
-		cur := mgr.Current()
 		for _, name := range sortedKeys(extraRoots) {
 			cur.AdditionalDirs = append(cur.AdditionalDirs, filepath.Join(sb.dir, name))
 		}
+	}
+	// Seeded records land BEFORE the app starts, so their first render is a read from disk —
+	// the only way to stage a restart (see scenario.seedMessages).
+	for i := range seedMessages {
+		msg := seedMessages[i]
+		if msg.Timestamp.IsZero() {
+			msg.Timestamp = time.Now()
+		}
+		if err := store.AppendMessage(cur.ID, &msg); err != nil {
+			return err
+		}
+	}
+	if len(extraRoots) > 0 || len(seedMessages) > 0 {
 		if err := mgr.UpdateMeta(cur); err != nil {
 			return err
 		}

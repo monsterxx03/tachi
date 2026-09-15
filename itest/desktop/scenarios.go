@@ -15,6 +15,8 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/commands"
 	"github.com/monsterxx03/tachi/itest/mockllm"
+	"github.com/monsterxx03/tachi/pkg/strutil"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // A scenario is one scripted conversation plus one driver: the mock decides what the
@@ -43,6 +45,12 @@ type scenario struct {
 	// From the work dir a scenario reaches one as "../<name>/…": a scripted bash command cannot
 	// know the sandbox's absolute path, and it does not have to.
 	extraRoots map[string]map[string]string
+	// seedMessages are written into the seeded session's transcript BEFORE the app launches, so
+	// the FIRST render of that session comes off disk. A driver cannot produce a reload on its
+	// own: switching sessions inside one process serves the in-memory copy, and a restart is not
+	// something a driver can do — but a seeded transcript is exactly what a restart would find,
+	// which is how at-file-reload stages its assertion.
+	seedMessages []session.Message
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
 }
@@ -534,6 +542,33 @@ func scenarios() []scenario {
 				c.check("回退还原了 shell 改过的文件", readErr == nil && string(content) == "original\n", string(content))
 			},
 		},
+		//
+		// 重启后加载一条带 @-file 的用户消息：气泡必须显示用户打的 `@path`，而不是被内联进去的
+		// 整份文件正文。展开只该活在"发给模型的那份"里（session.Message.Content），记录里另留
+		// 一份用户原文（DisplayContent），重建转写读后者。
+		//
+		// 断言必须打在**从磁盘渲染**的那一次上：进程内切会话用的是内存里的转写（气泡是前端自己
+		// 追加的原文，本来就不会错），所以这条的转写由 fixture 预置 —— 那正是重启会看到的东西。
+		// 会话里没有任何要发出去的消息，所以 mock 一个请求都不该收到。
+		//
+		{
+			name: "at-file-reload",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe at-file-reload scenario's working directory\n",
+			},
+			seedMessages: []session.Message{
+				{
+					Type: session.MessageTypeUser,
+					Content: "@README.md 看看开头\n\n--- BEGIN UNTRUSTED FILE CONTENT: README.md ---\n" +
+						"# smoke\n\nthe at-file-reload scenario's working directory\n--- END UNTRUSTED FILE CONTENT: README.md ---\n",
+					DisplayContent: "@README.md 看看开头",
+				},
+				{Type: session.MessageTypeAssistant, Content: "看过了。"},
+			},
+			after: func(c *checkCtx) {
+				c.check("预置的会话没有被多余地跑起来", len(c.requests) == 0, requestCount(c.requests))
+			},
+		},
 		// Session-scoped numbers: a brand-new session must not inherit the previous one's
 		// cache ring or cost (that bug is in docs/agents/desktop.md's list), the sidebar row must pick
 		// up the generated title from the session_title event, and creating one hands the
@@ -551,6 +586,41 @@ func scenarios() []scenario {
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				c.check("两个会话各跑了一轮", len(c.requests) == 2, requestCount(c.requests))
+
+				// @-file 的两份文本：Content 是模型收到的那份（文件被内联进去），
+				// DisplayContent 是用户打的原文。展开只该活在"发出去的那份"里 —— 会话记录
+				// 若只有展开文本，重启/切回时气泡里就是整个文件正文（这条曾经就是这样）。
+				found := 0
+				var withDisplay, plain session.Message
+				for _, f := range sessionFiles(c.home) {
+					b, err := os.ReadFile(f)
+					if err != nil {
+						continue
+					}
+					for _, line := range strings.Split(string(b), "\n") {
+						if strings.TrimSpace(line) == "" {
+							continue
+						}
+						var m session.Message
+						if json.Unmarshal([]byte(line), &m) != nil || m.Type != session.MessageTypeUser {
+							continue
+						}
+						found++
+						if m.DisplayContent != "" {
+							withDisplay = m
+						} else {
+							plain = m
+						}
+					}
+				}
+				c.check("两个会话各留下一条 user 记录", found == 2, fmt.Sprintf("%d 条", found))
+				c.check("被 @ 展开的那条留下了用户原文（DisplayContent）",
+					withDisplay.DisplayContent == "@README.md 里的说明", withDisplay.DisplayContent)
+				c.check("发出去的那份仍是展开文本（模型看到的东西不许变）",
+					strings.Contains(withDisplay.Content, "the sessions scenario's working directory"),
+					strutil.Truncate(withDisplay.Content, 120))
+				c.check("普通那条不带 DisplayContent（不写重复的字段）", plain.DisplayContent == "",
+					plain.DisplayContent)
 			},
 		},
 		//
@@ -1287,11 +1357,21 @@ permissions:
 			steps: []mockllm.Step{
 				// sleep 让这一步真的"在跑"几秒，driver 才有东西可看。
 				{Reply: bashStream("sleep 4", "call_l1")},
+				// 第二步之前故意停一下（模拟真实的首 token 延迟）：这一轮因此在"有工具在跑"与
+				// "两次调用之间"之间来回一次 —— 过程条正是每次这样切换时会改高度，把整段可见
+				// 内容上下顶。没有这一步，driver 只观察得到回合末尾那一次切换。
+				{Reply: mockllm.Stream(
+					mockllm.Pause(longTurn),
+					mockllm.ToolCallStart("call_l2", "Bash", `{"command":"echo done"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
 				{Reply: textStream(strings.Repeat("睡完了。这一段足够长，用来把转写撑过一屏，", 120)+"好验证跟随底部。", 800)},
 			},
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
-				c.check("两步都跑到了", len(c.requests) == 2, requestCount(c.requests))
+				c.check("三步都跑到了", len(c.requests) == 3, requestCount(c.requests))
 			},
 		},
 		//
@@ -1470,6 +1550,14 @@ func errText(err error) string {
 
 func requestCount(reqs []*mockllm.RecordedRequest) string {
 	return strconv.Itoa(len(reqs)) + " 个请求"
+}
+
+// sessionFiles lists the sandbox's session transcripts (every session's messages.jsonl). The
+// Go half reads these to assert what was WRITTEN, which the driver — which only sees the UI —
+// cannot: the driver proves what a reloaded bubble shows, these prove why.
+func sessionFiles(home string) []string {
+	files, _ := filepath.Glob(filepath.Join(home, ".tachi", "session", "*", "messages.jsonl"))
+	return files
 }
 
 func fileList(paths []string) string {

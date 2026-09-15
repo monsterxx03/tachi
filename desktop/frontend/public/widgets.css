@@ -216,7 +216,7 @@
 /* Nothing folded yet (a turn whose only part is the call running now): a status line, not
    a button — no caret, no hover invitation, no toggle. */
 .process-head.static { cursor: default; }
-.process-head.live { border: 1px solid var(--accent-ring); background: var(--accent-soft); color: var(--text); }
+.process-head.live { box-shadow: inset 0 0 0 1px var(--accent-ring); background: var(--accent-soft); color: var(--text); }
 .process-head.live:hover { background: var(--accent-soft); }
 .process-head.live .process-now { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .process-dot {
@@ -386,6 +386,16 @@
   display: flex;
   flex-direction: column;
   gap: 12px;
+}
+
+/* The turn's deliverables: the attachment cards of the SendFile calls it made, pinned to
+   the tail of the turn instead of their own position (transcript.ts's turnView puts them
+   outside the process fold, so the file the reader asked for is never behind a row). A
+   column of its own, so several files stack with the card gap rather than the turn gap. */
+.turn-files {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
 }
 
 /* Provider / thinking-level pickers in the composer status bar. Native

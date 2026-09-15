@@ -8,7 +8,12 @@
 ;(async () => {
   if (!(await smoke.waitFor('.composer-input', 'app 挂载（编辑器出现）'))) return smoke.finish()
 
-  smoke.type('.composer-input', '第一件事')
+  // 第一条消息带 @-file 引用：模型收到的是展开后的文件内容，但**转写里显示的**必须是用户打的
+  // 原文 —— 切回旧会话时（最后那段）会从磁盘重建转写，那里钉住这件事。
+  smoke.type('.composer-input', '@README.md 里的说明')
+  // 打了 "@" 会弹出选择器，而 Enter 会被它拿去"接受补全"而不是发送；Esc 先把它关掉，
+  // 这样提交的只有发送按钮（真实用户也是这么做的：先 Esc，或直接点发送）。
+  smoke.key('.composer-input', 'Escape')
   smoke.click('.send-btn')
   if (!(await smoke.waitFor('svg.ctx-ring[aria-label^="缓存命中率"]', '老会话出现用量环', 30000))) {
     // The numbers live in the status row, so dump it: "the ring never appeared" is only
@@ -55,6 +60,9 @@
   if (!(await smoke.waitFor(() => smoke.text('.session.active .session-title') === oldTitle, '切回旧会话', 10000))) return smoke.finish()
   const restored = await smoke.waitFor('svg.ctx-ring[aria-label^="缓存命中率"]', '切回后用量环回来', 10000)
   smoke.check('切回旧会话用量数字回来', !!restored, restored ? restored.getAttribute('aria-label') : '')
+
+  // 这一轮的 @-file 留在记录里的两份文本由 Go 侧断言（读 messages.jsonl）；"从磁盘渲染出来的
+  // 气泡长什么样"是 at-file-reload 的事 —— 在这里切会话用的是内存副本，断言不到重建路径。
 
   // The sidebar row's right-click menu. The 打开会话目录 item is asserted but NOT clicked: it
   // launches the real Finder, which would take the foreground and suspend this webview

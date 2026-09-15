@@ -38,12 +38,16 @@ type SessionMessage struct {
 	// expressed the same way (checkpoint.Record.Records is the record index where
 	// a turn's records begin), so this is what lets the transcript say "rewind to
 	// the turn that started here" without duplicating any bookkeeping.
-	Index     int    `json:"index"`
-	Role      string `json:"role"` // user/assistant/tool_call/tool_result/reminder
-	Content   string `json:"content"`
-	Timestamp string `json:"timestamp,omitempty"` // RFC3339
-	Iteration int    `json:"iteration,omitempty"` // 1-based LLM call within the turn
-	Seq       int    `json:"seq,omitempty"`       // session-wide request # (0 = not request-bound)
+	Index   int    `json:"index"`
+	Role    string `json:"role"` // user/assistant/tool_call/tool_result/reminder
+	Content string `json:"content"`
+	// DisplayContent is the user's own text when it differs from Content — only @-file
+	// expansion does that today (Content is the file inlined for the model). The transcript
+	// shows it for a user record; nothing else reads it.
+	DisplayContent string `json:"displayContent,omitempty"`
+	Timestamp      string `json:"timestamp,omitempty"` // RFC3339
+	Iteration      int    `json:"iteration,omitempty"` // 1-based LLM call within the turn
+	Seq            int    `json:"seq,omitempty"`       // session-wide request # (0 = not request-bound)
 	// Turn and Changes are the footer's data, stamped on the record that BEGINS a checkpointed
 	// turn: a transcript reloaded from disk then shows the same numbers a live one did, from
 	// the same source, without the frontend mapping record indexes to turns itself.
@@ -328,7 +332,7 @@ func buildSessionMessages(raw []session.Message, offset int, stamps map[int]turn
 			// attached (Iteration 0), an interjection belongs to the call it was
 			// injected before.
 			out = append(out, emit(SessionMessage{
-				Index: index, Role: "user", Content: rm.Content,
+				Index: index, Role: "user", Content: rm.Content, DisplayContent: rm.DisplayContent,
 				Iteration: rm.Iteration, Seq: rm.Seq, Timestamp: rm.Timestamp.Format(time.RFC3339),
 			}, stamp))
 		case session.MessageTypeReminder:
