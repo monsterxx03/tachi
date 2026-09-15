@@ -175,7 +175,7 @@ function ThinkingBlock({ thinking, collapsed, onToggle }: { thinking: string; co
   return (
     <div className="thinking-block">
       <div className={`thinking-head${collapsed ? '' : ' open'}`} onClick={onToggle} onKeyDown={actOnKey(onToggle)} tabIndex={0} title={collapsed ? '点击展开思考过程' : '点击收起思考过程'} role="button" aria-expanded={!collapsed}>
-        <span className="thinking-ico">▸</span><span className="thinking-label">thinking</span>
+        <span className="thinking-ico"><Caret open={!collapsed} /></span><span className="thinking-label">thinking</span>
       </div>
       {!collapsed && <div className="thinking-body" ref={bodyRef}>{lines.map((l, i) => <div key={i} className="thinking-line">{l}</div>)}</div>}
     </div>
@@ -244,7 +244,7 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
       onClick={foldable ? onToggle : undefined}
       onKeyDown={foldable ? actOnKey(onToggle) : undefined}
     >
-      {live ? <span className="process-dot" aria-hidden="true" /> : <span className="process-caret">▸</span>}
+      {live ? <span className="process-dot" aria-hidden="true" /> : <span className="process-caret"><Caret open={open} /></span>}
       {live ? (
         <>
           <span className="process-now">{processLiveLine(live, elapsedMs)}</span>
@@ -281,6 +281,25 @@ function CopyIcon() {
 // Small 14px stroke icons for the sidebar footer and the MCP button. They
 // replace the ad-hoc glyphs (⚙ ¤ M) whose shape depends on whichever system
 // font happens to supply them.
+// Caret is the disclosure arrow every foldable surface uses: a sidebar group, a compaction chain,
+// the thinking block, a turn's process row, a diff file, a directory in the @-picker.
+//
+// It is an ICON, not the ▸/▾ characters. Those are text glyphs: their size follows the font, and at
+// the sizes a sidebar can afford (9–12px) they draw a DOT — which is the report "the arrow is too
+// small to make out". A viewBox plus a stroke is the size the reader sees, whatever the font does.
+//
+// `open` rotates it a quarter turn (right → down) with the transition in .caret, so one component
+// covers every site. Its box is --caret-size (see base.css): one number for all of them.
+function Caret({ open }: { open?: boolean }) {
+  return (
+    <svg className="caret" viewBox="0 0 8 12" aria-hidden="true"
+      style={open === undefined ? undefined : { transform: open ? 'rotate(90deg)' : undefined }}>
+      <path d="M1.6 1.6 L6.4 6 L1.6 10.4" fill="none" stroke="currentColor" strokeWidth="1.5"
+        strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
 function SettingsIcon() {
   return (<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round"><line x1="4" y1="8" x2="20" y2="8" /><line x1="4" y1="16" x2="20" y2="16" /><circle cx="9" cy="8" r="2.2" /><circle cx="15" cy="16" r="2.2" /></svg>)
 }
@@ -657,7 +676,7 @@ function AtFilePicker({ query, items, selected, loading, refCount, onPick, onHov
               className={`at-picker-item${i === selected ? ' is-selected' : ''}`}
               onMouseDown={(e) => { e.preventDefault(); onPick(i) }}
               onMouseEnter={() => onHover(i)}>
-              <span className="at-picker-ico">{m.isDir ? '▸' : '·'}</span>
+              <span className="at-picker-ico">{m.isDir ? <Caret /> : '·'}</span>
               {/* The root label comes FIRST, as a word rather than a colour: two
                   roots can hold the same relative path, and "which one is this"
                   has to be answerable at a glance (and without colour vision). */}
@@ -851,4 +870,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle }
+export { ContextMeter, CacheRing, ProcessStrip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, Caret }

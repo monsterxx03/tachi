@@ -734,7 +734,7 @@ button.work-dir {
   overflow: hidden;
 }
 .at-picker-item.is-selected { background: var(--accent-soft); color: var(--accent-2); }
-.at-picker-ico { width: 10px; flex-shrink: 0; color: var(--text-faint); }
+.at-picker-ico { display: inline-flex; align-items: center; justify-content: center; width: 12px; flex-shrink: 0; color: var(--text-faint); }
 .at-picker-path {
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
   overflow: hidden;
@@ -1076,15 +1076,15 @@ button.work-dir {
    row already hosts 预览/打开 and the badges, and a click on those must not fold. */
 .diff-file-toggle {
   flex-shrink: 0;
-  width: 15px;
-  height: 15px;
+  width: 16px;
+  height: 16px;
   padding: 0;
   border: none;
   background: transparent;
   color: var(--text-dim);
   font-family: inherit;
-  font-size: 9px;
-  line-height: 1;
+  display: grid;
+  place-items: center;
   border-radius: var(--radius-xs);
   cursor: pointer;
 }

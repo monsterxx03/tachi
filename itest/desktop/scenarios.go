@@ -1620,6 +1620,25 @@ permissions:
 		},
 		//
 		//
+		// sidebar-text: the sidebar's own type scale. Its group headers were 14px against 13.5px
+		// rows — a hierarchy that held on paper and was invisible on screen ("项目字体太小了"), with a
+		// scatter of 8–11px fragments around it (the disclosure caret among them, which rendered as a
+		// dot). Pinned as INTENT, not as numbers: nothing in the sidebar under 12px, a group header
+		// strictly larger than a session row, and every disclosure caret at the one shared size
+		// (--caret-size) — retuning the design later is not a test failure.
+		{
+			name: "sidebar-text",
+			files: map[string]string{
+				"README.md": "# smoke\n\nsidebar-text scenario's working directory\n",
+			},
+			project: &projectSeed{
+				name:      "sidebar-proj",
+				files:     map[string]string{"README.md": "# smoke\n\nthe project's own directory\n"},
+				emptyName: "sidebar-empty",
+			},
+		},
+		//
+		//
 		// form-text: the 新建项目 / 编辑项目 dialog's type scale. Its labels and paths used to sit at
 		// 10.5–11px — the compact roots popover's sizes, which the form inherits because it renders
 		// the same rows — three steps below the 14px title and 13.5px field between them, so the

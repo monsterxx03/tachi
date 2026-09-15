@@ -173,6 +173,11 @@
   --radius-lg: 16px;
   --radius-pill: 999px;
 
+  /* The disclosure caret is one size everywhere, and it is an ICON rather than the ▸/▾ glyphs:
+     those are text, so their size follows the font, and at 9px they draw a dot ("the arrow is too
+     small to make out"). .caret uses this number for its box. */
+  --caret-size: 11px;
+
   /* Disclosure caret for the borderless <select>s. An icon rather than a
      drawn border, so it is a token too — its stroke mirrors --text-faint. */
   --icon-caret: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12'%3E%3Cpath d='M2.6 4.6 6 8l3.4-3.4' fill='none' stroke='%236b655c' stroke-width='1.5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
@@ -346,6 +351,18 @@ body {
 }
 
 /* ── Region drag handles (Wails v3 frameless) ────────────────────────────── */
+/* The disclosure caret (components.tsx's <Caret>): an inline SVG whose box is --caret-size, so
+   every fold control in the app is the same size and none of them depends on a font. The rotation
+   is the component's (a quarter turn when open); the transition lives here so opening animates
+   wherever the caret is. */
+.caret {
+  width: var(--caret-size);
+  height: var(--caret-size);
+  flex-shrink: 0;
+  vertical-align: middle;
+  transition: transform 0.15s var(--ease);
+}
+
 .drag-region { --wails-draggable: drag; }
 .no-drag { --wails-draggable: no-drag; }
 

@@ -928,6 +928,20 @@ const type = (el, t) => {
   inside the form under 12px, and the box is the width it claims — so retuning the design later is not a
   test failure.
 
+- **One caret size — and the sidebar has a type floor and an ORDER** (`--caret-size` in `base.css`,
+  `layout.css`): the disclosure carets had grown four different answers (the sidebar group toggle
+  9px, the chain caret 8px, the thinking block 9px, the turn's process row 9px, the diff panel 9px),
+  and 8–9px of ▾ is a DOT — the one control that says "these rows are a group", or "this turn has a
+  process you can open", was invisible. They are `components.tsx`'s `<Caret>` now: an inline SVG sized
+  by `--caret-size`, NOT the glyphs. A text glyph's size follows the font, so raising the font-size
+  only ever bought a slightly larger dot — 12px of ▾ is still a ~6px triangle, which is why "make the
+  arrow bigger" came back a second time after the numbers were raised. A new caret uses that component
+  rather than picking characters or numbers. The sidebar is the densest surface in the window and its hierarchy was 14px group
+  headers against 13.5px rows — true on paper, invisible on screen (the report was 「项目字体太小了」);
+  it is 15px/620 headers against 14px rows with 12.5px timestamps now, and nothing inside it is under
+  12px. `sidebar-text` pins the INTENT rather than the numbers — a floor, a strict order (header >
+  row), and every caret at the shared size — so retuning the scale later is not a test failure.
+
 ## Desktop Themes (the dark palette)
 
 - **The dark theme is Ayu Mirage-derived and its contrast is low ON PURPOSE — do not "fix" it.** The family

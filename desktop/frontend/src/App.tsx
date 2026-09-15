@@ -13,7 +13,7 @@ import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroup
 import { lastRunningAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, MCPPanel, AskForm, PermissionForm,
-  SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel,
+  SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel, Caret,
 } from './components'
 import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
@@ -1526,7 +1526,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           aria-expanded={!!openChains[row.session.id]}
           title={openChains[row.session.id] ? '收起压缩前的会话' : '展开压缩前的会话（同一段对话的上一节）'}
           onClick={() => setOpenChains((p) => ({ ...p, [row.session.id]: !p[row.session.id] }))}>
-          <span className="session-chain-caret">{openChains[row.session.id] ? '▾' : '▸'}</span>
+          <span className="session-chain-caret"><Caret open={!!openChains[row.session.id]} /></span>
           压缩前 {row.compactedFrom.length} 节
         </button>
       ) : null}
@@ -1608,7 +1608,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                     <button type="button" className="proj-toggle" aria-expanded={!collapsedProjects[group.project.id]}
                       title={collapsedProjects[group.project.id] ? '展开该项目' : '收起该项目'}
                       onClick={() => setCollapsedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] }))}>
-                      {collapsedProjects[group.project.id] ? '▸' : '▾'}
+                      <Caret open={!collapsedProjects[group.project.id]} />
                     </button>
                     {editingProject?.id === group.project.id ? (
                       <input className="project-rename" autoFocus value={editingProject.name}

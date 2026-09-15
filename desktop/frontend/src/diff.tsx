@@ -16,6 +16,7 @@ import { AgentService, type FileChangeVO, type FileDiffVO, type FindingVO, type 
 import type { Hunk } from '../bindings/github.com/monsterxx03/tachi/pkg/linediff'
 import { FilePreviewOverlay } from './filepreview'
 import { CloseButton, ViewerOverlay } from './viewer'
+import { Caret } from './components'
 import { InlineMd } from './markdown'
 
 // DIFF_FOLD_LINES is how much of a change shows before folding.
@@ -664,7 +665,7 @@ function FileDiffGroup({ file, root, multiRoot, findings, picks, onPick, open, o
       <div className="diff-file-head">
         <button type="button" className="diff-file-toggle" aria-expanded={open}
           title={open ? '收起这个文件的差异' : '展开这个文件的差异'}
-          onClick={onToggle}>{open ? '▾' : '▸'}</button>
+          onClick={onToggle}><Caret open={open} /></button>
         <span className="diff-path" title={abs}>{file.path}</span>
         {file.oldPath && file.oldPath !== file.path ? <span className="diff-badge" title={`原路径 ${file.oldPath}`}>重命名</span> : null}
         {file.created ? <span className="diff-badge is-new">新增</span> : null}

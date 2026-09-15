@@ -157,13 +157,13 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   gap: 6px;
   width: 100%;
-  padding: 5px 8px;
+  padding: 6px 8px;
   margin-top: 6px;
   background: transparent;
   border: 1px solid transparent;
   color: var(--text-dim);
   border-radius: var(--radius-sm);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
   text-align: left;
   cursor: pointer;
@@ -177,7 +177,7 @@ body.is-resizing { cursor: col-resize; user-select: none; }
    to click, name or manage here. No uppercase: the label is Chinese, where the transform
    does nothing but the wide letter-spacing still made it look like a stray caption. */
 .session-section {
-  font-size: 12px;
+  font-size: 13px;
   letter-spacing: 0.2px;
   font-weight: 600;
   color: var(--text-dim);
@@ -192,10 +192,10 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 
 .session {
   position: relative;
-  padding: 9px 10px;
+  padding: 10px 11px;
   border-radius: var(--radius-sm);
   cursor: pointer;
-  margin-bottom: 2px;
+  margin-bottom: 3px;
   transition: background 0.14s var(--ease);
 }
 .session:hover { background: var(--hover); }
@@ -218,21 +218,23 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 }
 .session.active .session-title { color: var(--text); font-weight: 560; }
 .session-title {
-  font-size: 13.5px;
+  font-size: 14px;
   color: var(--text-dim);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
+/* The row's second line. The timestamp is what the reader scans for, and 11.5px of --text-faint
+   was the smallest text in the window. */
 .session-meta {
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-faint);
-  margin-top: 3px;
+  margin-top: 4px;
   font-variant-numeric: tabular-nums;
 }
 .session-empty {
   padding: 6px 8px;
-  font-size: 11.5px;
+  font-size: 12.5px;
   color: var(--text-faint);
 }
 
@@ -246,13 +248,13 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 8px 12px;
+  padding: 9px 12px;
   margin-bottom: 12px;
   background: transparent;
   border: 1px dashed var(--border-2);
   color: var(--text-dim);
   border-radius: var(--radius-md);
-  font-size: 12.5px;
+  font-size: 13px;
   font-family: inherit;
   cursor: pointer;
   transition: background 0.16s var(--ease), border-color 0.16s var(--ease), color 0.16s var(--ease);
@@ -265,8 +267,8 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   gap: 6px;
   /* A touch taller than a session row's padding: the header carries a bigger name, and a
      group has to look like a group before its rows are read. */
-  padding: 7px 8px;
-  margin-top: 6px;
+  padding: 8px;
+  margin-top: 8px;
   border-radius: var(--radius-sm);
 }
 .proj-head:hover { background: var(--hover); }
@@ -274,8 +276,12 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   border: none;
   background: transparent;
   color: var(--text-faint);
-  font-size: 9px;
-  width: 12px;
+  /* The one control that says "these rows are a group": a <Caret>, centred in a fixed box so the
+     header's baseline does not move when the group opens. */
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
   padding: 0;
   cursor: pointer;
   font-family: inherit;
@@ -285,20 +291,21 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   flex: 1;
   min-width: 0;
   /* A group heading, and the parent of the rows below it: it has to read LARGER than
-     .session-title (13.5px), or the sidebar looks like two levels of the same size. */
-  font-size: 14px;
-  font-weight: 600;
+     .session-title (14px), or the sidebar looks like two levels of the same size. 14 vs 13.5 was
+     that failure — true on paper, invisible on screen. */
+  font-size: 15px;
+  font-weight: 620;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.proj-count { flex-shrink: 0; font-size: 11.5px; color: var(--text-faint); }
+.proj-count { flex-shrink: 0; font-size: 12.5px; color: var(--text-faint); }
 /* A project whose PRIMARY directory is gone drives nothing, so its members are editable
    again; the header says so instead of hiding the group (design §8.6). */
 .proj-bad {
   flex-shrink: 0;
-  font-size: 10px;
+  font-size: 12px;
   color: var(--amber);
   border: 1px solid var(--border-2);
   border-radius: var(--radius-xs);
@@ -332,8 +339,8 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* A refused rename (empty or duplicate name) is shown under its own header: the editor
    stays open, so the reason has to be attached to it rather than to a toast. */
 .proj-notice {
-  padding: 4px 10px 2px 22px;
-  font-size: 10.5px;
+  padding: 5px 10px 3px 24px;
+  font-size: 12px;
   color: var(--red);
 }
 /* A project's rows are indented one step, inside their own container: a header-relative
@@ -342,8 +349,8 @@ body.is-resizing { cursor: col-resize; user-select: none; }
 /* A project with no sessions yet: the header above is where the first one is created, so the
    group says so instead of looking broken (and instead of being hidden, which is worse). */
 .proj-empty {
-  padding: 4px 8px 2px;
-  font-size: 11px;
+  padding: 5px 8px 3px;
+  font-size: 12.5px;
   color: var(--text-faint);
 }
 
@@ -356,36 +363,36 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   align-items: center;
   gap: 5px;
   margin: 0 0 2px 10px;
-  padding: 3px 8px;
+  padding: 4px 8px;
   border: none;
   border-left: 2px solid var(--border-2);
   border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
   background: transparent;
   color: var(--text-faint);
   font-family: inherit;
-  font-size: 10.5px;
+  font-size: 12px;
   cursor: pointer;
 }
 .session-chain:hover { background: var(--hover); color: var(--text-dim); }
 .session-chain.is-open { color: var(--text-dim); }
-.session-chain-caret { font-size: 8px; line-height: 1; }
+.session-chain-caret { display: inline-flex; align-items: center; line-height: 1; }
 /* A session kept only as the pre-compaction half of a chain: indented under its successor, and
    its own meta says so — the title alone cannot tell the two apart. */
 .session.is-compacted { margin-left: 12px; }
-.session.is-compacted .session-title { font-size: 12.5px; color: var(--text-faint); }
+.session.is-compacted .session-title { font-size: 13px; color: var(--text-faint); }
 .session-tag {
   margin-right: 6px;
-  padding: 0 4px;
+  padding: 0 5px;
   border: 1px solid var(--border);
   border-radius: var(--radius-xs);
-  font-size: 10px;
+  font-size: 12px;
   color: var(--text-faint);
 }
 
 .sidebar-footer {
   border-top: 1px solid var(--border);
   padding-top: 10px;
-  margin-top: 8px;
+  margin-top: 10px;
 }
 /* Real <button>s (keyboard reachable), styled flat into the footer. Entries
    whose feature does not exist yet are disabled rather than left as silent
