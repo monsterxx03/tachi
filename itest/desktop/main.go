@@ -163,7 +163,29 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	// budget for them is a minute and a half of silence, so the wait ends here and the report
 	// names it. Measured twice on a machine that was busy compiling: the app was up (its session
 	// directory created) and not one assertion ever arrived.
-	if !snk.contact(driverContactWindow) {
+	// A launch that produced NOTHING AT ALL is retried once before the scenario is called dead.
+	// `open` on a bundle LaunchServices still counts as running is a no-op that reports success —
+	// and the harness kills the previous scenario's app moments earlier — so the app simply never
+	// appears: measured as the fourth scenario of a run, its sandbox left without even a state
+	// directory while the three before it were fine. One retry (logged) is the whole recovery; a
+	// real startup crash still fails, with the same named line as before.
+	const launchAttempts = 2
+	started := false
+	for attempt := 1; attempt <= launchAttempts && !started; attempt++ {
+		if snk.contact(driverContactWindow) {
+			started = true
+			break
+		}
+		if attempt == launchAttempts {
+			break
+		}
+		fmt.Printf("   · driver 未出现（第 %d 次启动）：重新启动 app\n", attempt)
+		killAll()
+		if err := sb.launch(); err != nil {
+			break
+		}
+	}
+	if !started {
 		if dom := snk.domSnapshot(); len(dom) > 0 {
 			_ = os.WriteFile(filepath.Join(dir, "dom.html"), dom, 0o644)
 		}

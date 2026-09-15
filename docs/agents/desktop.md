@@ -128,7 +128,11 @@ to tell "the page was slow" from "the page was ready".
 
 The runner also refuses to wait for a driver that never showed up at all: any line within
 `driverContactWindow` (15s, main.go) means it is running (the harness's first act is a line), and
-nothing by then fails the scenario with that as the reason — 15 seconds instead of 90.
+nothing by then fails the scenario with that as the reason — 15 seconds instead of 90. A launch that
+produced nothing AT ALL is retried once first, because one cause is the harness's own doing: `open`
+on a bundle LaunchServices still counts as running is a no-op that reports success, and the previous
+scenario's app was killed moments earlier (measured: the fourth scenario of a run, its sandbox left
+without even a state directory). The retry is logged; a real startup crash fails as before.
 
 ```js
 // React inputs ignore `el.value = …`: native setter + input event
