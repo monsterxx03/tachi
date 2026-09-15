@@ -164,6 +164,12 @@ const refuseNoSession = "没有活跃会话"
 // has to name the way out rather than only the refusal.
 const refuseDeleteRunning = "会话正在运行，请先停止这一轮再删除"
 
+// refuseDeleteProjectRunning is DeleteProject's version of the same refusal: a project
+// delete DETACHES every member (design §6.2), which rewrites their meta, so it waits for
+// the same thing a session delete waits for. Same sentence shape on purpose — the user is
+// being asked to do the same thing.
+const refuseDeleteProjectRunning = "有会话正在运行，请先停止后再删除项目"
+
 // agentOf is runOf plus the readiness rule the UI bindings share: the session exists AND
 // its agent has been built. The second return is the refusal to hand back (empty when
 // there is an agent). Callers must NOT hold d.mu.

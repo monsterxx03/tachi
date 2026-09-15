@@ -504,3 +504,163 @@ func TestDeadAdditionalRootDoesNotUndoTheProject(t *testing.T) {
 		t.Errorf("SetSessionWorkingDir = %q, want the project refusal", res)
 	}
 }
+
+// TestNewSessionInsideProject is design §6.1: creating a session inside a project is the ONE
+// place a binding is made. The project's roots are copied into the record as the session's
+// snapshot, project_id goes in with them, and from then on the ordinary resolution (project
+// first, snapshot as the fallback) takes over — including following a later project edit.
+func TestNewSessionInsideProject(t *testing.T) {
+	projectDir, extra := t.TempDir(), t.TempDir()
+	d, svc, _, pid := newProjectApp(t, "p", projectDir)
+	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, projectDir, []string{extra}), "ok")
+
+	info := svc.NewSession(pid)
+	if info.ID == "" {
+		t.Fatal("NewSession returned no session")
+	}
+	eq(t, "binding", info.ProjectID, pid)
+
+	// The record carries the snapshot AND the binding: the snapshot is what the non-desktop
+	// readers and the degraded cases see, and it is the project's roots as of now.
+	rec := d.sessionRecord(info.ID)
+	eq(t, "snapshot primary", rec.WorkingDir, projectDir)
+	eqSlices(t, "snapshot additional", rec.AdditionalDirs, []string{extra})
+
+	// The session works in the project's tree, through the one exit.
+	primary, additional := d.sessionRoots(info.ID)
+	eq(t, "resolved primary", primary, projectDir)
+	eqSlices(t, "resolved additional", additional, []string{extra})
+	eq(t, "GetSessionWorkingDir", svc.GetSessionWorkingDir(info.ID), projectDir)
+
+	// It is a member like any other: a later project edit moves it, and its snapshot stays put.
+	moved := t.TempDir()
+	eq(t, "move the project", svc.SetProjectRoots(pid, moved, nil), "ok")
+	eq(t, "member follows", svc.GetSessionWorkingDir(info.ID), moved)
+	eq(t, "snapshot untouched", d.sessionRecord(info.ID).WorkingDir, projectDir)
+
+	// And it is guarded like any other member.
+	if res := svc.SetSessionWorkingDir(info.ID, t.TempDir()); !strings.Contains(res, "管理该会话的工作区") {
+		t.Errorf("SetSessionWorkingDir on a fresh member = %q, want the project refusal", res)
+	}
+}
+
+// TestNewSessionWithUnusableProjectIsUnbound: asking for a session in a project that cannot
+// drive one (deleted, or its primary gone) yields an ORDINARY session. Binding it would create
+// a member that is degraded from birth; §8.6's fallback is for a project that disappears under
+// a session that already exists.
+func TestNewSessionWithUnusableProjectIsUnbound(t *testing.T) {
+	dead := filepath.Join(t.TempDir(), "gone")
+
+	// The manager first: it is what repoints config.BaseDir, and projects.json must land in the
+	// directory the app will read (same ordering as TestProjectReadSideValidation).
+	sm := newSessionManagerForTest(t, t.TempDir())
+	d := writeProjectsFile(t, projectJSON(t, "p1", "dead", dead))
+	d.sm = sm
+	svc := &AgentService{desk: d}
+
+	info := svc.NewSession("p1")
+	if info.ID == "" {
+		t.Fatal("NewSession returned no session")
+	}
+	eq(t, "unbound", info.ProjectID, "")
+	rec := d.sessionRecord(info.ID)
+	eq(t, "the record is unbound too", rec.ProjectID, "")
+	if rec.WorkingDir == dead {
+		t.Error("a session must not be started in a directory that does not exist")
+	}
+	// The project itself is untouched: refusing to bind is not a delete.
+	eq(t, "the project is still listed", len(svc.ListProjects()), 1)
+}
+
+// TestCreateProjectDoesNotRememberWorkspace is design §6.1's second half: a project's directory
+// is not the answer to "where should the next PROJECT-LESS session start", so creating a project
+// must not move the remembered workspace the way SetSessionWorkingDir does.
+func TestCreateProjectDoesNotRememberWorkspace(t *testing.T) {
+	_, svc, _ := newAppWithSession(t, "")
+	before := loadUIState().LastWorkspace
+	eq(t, "CreateProject", svc.CreateProject("p", t.TempDir(), nil), "ok")
+	eq(t, "lastWorkspace unchanged", loadUIState().LastWorkspace, before)
+}
+
+// TestDeleteProjectDetachesMembers is design §6.2: deleting a project hands every member an
+// ordinary session whose snapshot is refreshed to the project's roots AS OF NOW (not the stale
+// creation snapshot), clears the binding on disk and in the live manager, and refuses outright
+// while a member is mid-turn.
+func TestDeleteProjectDetachesMembers(t *testing.T) {
+	projectDir, extra := t.TempDir(), t.TempDir()
+	d, svc, sid, pid := newProjectApp(t, "p", projectDir)
+	eq(t, "SetProjectRoots", svc.SetProjectRoots(pid, projectDir, []string{extra}), "ok")
+
+	snapshotBefore := d.sessionRecord(sid).WorkingDir
+	if snapshotBefore == projectDir {
+		t.Fatal("fixture: the creation snapshot must differ from the project's directory")
+	}
+
+	// A running member refuses the delete, and nothing is written.
+	r := d.getRun(sid)
+	r.running = true
+	if got := svc.DeleteProject(pid); !strings.Contains(got, "正在运行") {
+		t.Fatalf("DeleteProject with a member running = %q, want the refusal", got)
+	}
+	eq(t, "still listed", len(svc.ListProjects()), 1)
+	eq(t, "still bound", d.sessionRecord(sid).ProjectID, pid)
+	r.running = false
+
+	eq(t, "DeleteProject", svc.DeleteProject(pid), "ok")
+
+	if got := svc.ListProjects(); len(got) != 0 {
+		t.Errorf("the project must be gone from the table, got %+v", got)
+	}
+
+	// The member is an ordinary session, on the project's current roots — deleting the
+	// container must not move the user's workspace.
+	rec := d.sessionRecord(sid)
+	eq(t, "snapshot primary", rec.WorkingDir, projectDir)
+	eqSlices(t, "snapshot additional", rec.AdditionalDirs, []string{extra})
+	eq(t, "unbound", rec.ProjectID, "")
+	// The bound manager was updated too, not just a loaded copy: otherwise the next UpdateMeta
+	// writes the binding back from the in-memory struct (see UpdateMeta's doc).
+	eq(t, "the live copy is unbound", d.getRun(sid).sm.Current().ProjectID, "")
+	// On disk as well — the next process must read the same thing.
+	loaded, err := d.sm.Load(sid)
+	must(t, err, "reload the detached session")
+	eq(t, "on disk", loaded.ProjectID, "")
+	eq(t, "on disk primary", loaded.WorkingDir, projectDir)
+
+	// Detached means editable again: the panel's read-only branch is driven by project_id.
+	roots := svc.GetSessionRoots(sid)
+	eq(t, "no project marks", roots.ProjectID, "")
+	if roots.ProjectMissing {
+		t.Error("an unbound session is not a missing project")
+	}
+	eq(t, "editable", svc.SetSessionWorkingDir(sid, t.TempDir()), "ok")
+
+	// Deleting it twice is a plain "no such project", not a second detach.
+	if got := svc.DeleteProject(pid); got != "项目不存在" {
+		t.Errorf("DeleteProject twice = %q, want 项目不存在", got)
+	}
+}
+
+// TestDeleteProjectWithDeadPrimaryKeepsTheSnapshot: a project whose own primary directory is
+// gone has no roots worth copying. The members are already on their last known-good snapshot,
+// and detaching must leave them there rather than point them at a path that does not exist.
+func TestDeleteProjectWithDeadPrimaryKeepsTheSnapshot(t *testing.T) {
+	snapshot := t.TempDir()
+	sm := newSessionManagerForTest(t, snapshot)
+	sid := sm.Current().ID
+	dead := filepath.Join(t.TempDir(), "gone")
+
+	d := writeProjectsFile(t, projectJSON(t, "p1", "dead", dead))
+	d.sm = sm
+	d.getRun(sid).sm = sm
+	must(t, d.updateSessionMeta(sid, func(s *session.Session) { s.ProjectID = "p1" }), "bind")
+	svc := &AgentService{desk: d}
+
+	eq(t, "DeleteProject", svc.DeleteProject("p1"), "ok")
+	rec := d.sessionRecord(sid)
+	eq(t, "the snapshot is the last known-good workspace", rec.WorkingDir, snapshot)
+	eq(t, "unbound", rec.ProjectID, "")
+	if got := svc.ListProjects(); len(got) != 0 {
+		t.Errorf("the project must be gone, got %+v", got)
+	}
+}

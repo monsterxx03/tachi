@@ -540,10 +540,11 @@ export interface ProjectVO {
     "sessionCount": number;
 
     /**
-     * RootsUsable is false when the project's roots no longer validate on this machine (a
-     * directory moved, unmounted or hand-edited away). Its members then fall back to their
-     * snapshots and become editable; the UI says so instead of showing dead paths as if
-     * they were live (design §8.6).
+     * RootsUsable is false when the project's PRIMARY directory no longer validates on this
+     * machine (it moved, was unmounted, or the file was hand-edited): its members then fall
+     * back to their snapshots and become editable, and the UI says so instead of showing a
+     * dead path as live (design §8.6). A vanished ADDITIONAL root does not set this — it is
+     * reported per root below, exactly as it is for a session.
      */
     "rootsUsable": boolean;
     "createdAt": string;

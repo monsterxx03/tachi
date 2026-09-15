@@ -930,7 +930,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       refreshUsage(cur.id)
       scrollToBottom(true)
     } else {
-      const ns = await AgentService.NewSession().catch(() => null)
+      const ns = await AgentService.NewSession('').catch(() => null)
       if (ns) {
         setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
         openSession(ns.id)
@@ -1041,7 +1041,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   }, [sessions, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
 
   const newChat = useCallback(async () => {
-    const ns = await AgentService.NewSession().catch(() => null)
+    const ns = await AgentService.NewSession('').catch(() => null)
     if (ns) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
       openSession(ns.id)

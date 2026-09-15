@@ -12,6 +12,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/llm"
+	"github.com/monsterxx03/tachi/pkg/logger"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -176,7 +177,15 @@ func (s *AgentService) CurrentSession() *SessionInfo {
 
 // NewSession creates a fresh session and its own per-session agent, making it
 // active. The in-memory history starts empty.
-func (s *AgentService) NewSession() SessionInfo {
+//
+// projectID is "" for an ordinary session (today's behavior, word for word). Otherwise the
+// session is created INSIDE that project (design §6.1) and this is the ONE place a binding is
+// ever made: the project's roots as they are right now are written into the record as the
+// session's snapshot, alongside project_id. A project that cannot drive a session at this
+// moment (deleted, or its primary directory gone) yields an ordinary session instead of one
+// bound to nothing — §8.6's degradation is for a project that disappears UNDER a session,
+// which is not the same as being asked for one that is not there.
+func (s *AgentService) NewSession(projectID string) SessionInfo {
 	d := s.desk
 	pname := "default"
 	if d.cfg != nil {
@@ -184,13 +193,23 @@ func (s *AgentService) NewSession() SessionInfo {
 			pname = p
 		}
 	}
-	// A new session starts in the workspace the user last used, not at $HOME: the
-	// home directory (or the filesystem root) is too wide to be an agent workspace —
-	// the @-file index would cover everything, and relative paths would resolve
-	// against a directory that is not a project. With nothing to inherit the session
-	// starts WITHOUT a workspace and the composer asks for one (see
-	// defaultWorkspaceFor / wideRootReason).
-	wd := d.defaultWorkspaceFor()
+	// Where the new session starts. A project session takes the project's roots (that is what
+	// the binding means); an ordinary one starts in the workspace the user last used, not at
+	// $HOME: the home directory (or the filesystem root) is too wide to be an agent workspace —
+	// the @-file index would cover everything, and relative paths would resolve against a
+	// directory that is not a project. With nothing to inherit the session starts WITHOUT a
+	// workspace and the composer asks for one (see defaultWorkspaceFor / wideRootReason).
+	var snapshot []string
+	boundID := ""
+	wd := ""
+	if p, primary, ok := d.projects.drives(projectID); ok {
+		// The primary comes back cleaned/expanded, since projects.json is hand-editable.
+		wd = primary
+		snapshot = append([]string(nil), p.AdditionalDirs...)
+		boundID = p.ID
+	} else {
+		wd = d.defaultWorkspaceFor()
+	}
 	sm := d.newSessionManager()
 	if sm == nil {
 		return SessionInfo{}
@@ -198,6 +217,22 @@ func (s *AgentService) NewSession() SessionInfo {
 	sess, err := sm.New(pname, wd)
 	if err != nil {
 		return SessionInfo{}
+	}
+	if boundID != "" {
+		// sm.New carries only the provider and the primary directory, so the rest of the
+		// snapshot — and the binding — are written by hand, in one update.
+		sess.ProjectID = boundID
+		sess.AdditionalDirs = snapshot
+		if err := sm.UpdateMeta(sess); err != nil {
+			// The session itself exists, and this API has no error channel to report into
+			// (it answers with SessionInfo like every other creation path). Returning a zero
+			// value would leave a session on disk that the UI never hears about, so log the
+			// half-written binding and hand the session back: the panel shows it as
+			// project-less, which is what it is until someone looks.
+			logger.New("desktop").Warn(context.Background(),
+				"NewSession: 绑定项目的 meta 写入失败，会话已创建但未绑定项目",
+				"session", sess.ID, "project", boundID, "err", err)
+		}
 	}
 
 	// Build this session's own agent. No config (bootstrap failed) → leave the

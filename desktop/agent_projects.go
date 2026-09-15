@@ -139,6 +139,72 @@ func (s *AgentService) SetProjectRoots(id, primary string, additional []string) 
 	return "ok"
 }
 
+// DeleteProject removes a project and DETACHES its members (design §6.2): each one keeps its
+// workspace, becoming an ordinary session whose snapshot is refreshed to the project's roots
+// as they are at this moment. Detaching rather than refusing or cascading is the point — after
+// a project has collected dozens of conversations, "go move each one first" is a punishment,
+// and deleting the conversations is data loss.
+//
+// Refused while any member is running a turn, like DeleteSession, because the detach rewrites
+// session meta: a turn appending to that session's directory in parallel is the clobber the
+// meta path exists to avoid. For the same reason the check and the writes share ONE critical
+// section (d.mu) — a turn starting in between would be writing while we rewrite.
+//
+// The project entry goes last: if a member's write fails, the project is still there and the
+// user can retry. (The other order would leave them detached with the container gone.)
+func (s *AgentService) DeleteProject(id string) string {
+	d := s.desk
+	p, ok := d.projects.get(id)
+	if !ok {
+		return "项目不存在"
+	}
+	members := d.memberSessions(id)
+
+	// The snapshot the members fall back to, taken BEFORE anything is written. A project that
+	// cannot drive its sessions (its own primary is gone) has no roots worth copying: the
+	// members are already on their last known-good snapshot, and overwriting that with a path
+	// that does not exist would hand bash a cwd that is not there.
+	refreshSnapshot := false
+	snapPrimary := ""
+	var snapAdditional []string
+	if _, primary, ok := d.projects.drives(id); ok {
+		refreshSnapshot = true
+		snapPrimary = primary
+		snapAdditional = append([]string(nil), p.AdditionalDirs...)
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for _, sess := range members {
+		if r := d.runs[sess.ID]; r != nil && r.running {
+			return refuseDeleteProjectRunning
+		}
+	}
+	for _, sess := range members {
+		// updateSessionMetaLocked, not updateSessionMeta: we are inside the critical section
+		// that makes the check above meaningful (see its doc).
+		if err := d.updateSessionMetaLocked(sess.ID, func(cur *session.Session) {
+			if refreshSnapshot {
+				cur.WorkingDir = snapPrimary
+				cur.AdditionalDirs = append([]string(nil), snapAdditional...)
+			}
+			cur.ProjectID = ""
+		}); err != nil {
+			return fmt.Sprintf("删除项目失败：%v", err)
+		}
+		// A live member's agent must not keep serving the tree it was pointed at while the
+		// project owned it (design §4.1/§6.2). The paths are normally identical, and the mark
+		// is what keeps that from being silently assumed.
+		if r := d.runs[sess.ID]; r != nil && r.agent != nil {
+			r.skillsStale = true
+		}
+	}
+	if err := d.projects.remove(id); err != nil {
+		return fmt.Sprintf("删除项目失败：%v", err)
+	}
+	return "ok"
+}
+
 // invalidateMemberSkills marks every LIVE member session's agent as needing its skill store
 // re-pointed, which happens at that session's next turn start (beginTurn).
 //

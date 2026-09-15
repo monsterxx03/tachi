@@ -296,6 +296,15 @@ const type = (el, t) => {
   fields travel with the conversation on COMPACTION too: `FinalizeCompact` copies `AdditionalDirs` and
   `project_id` by hand, and one it misses is silently zeroed — for a member that means the child stops
   resolving through the project and works in the snapshot instead (see `agent/compact.go`).
+- **A binding is made in exactly two places.** `NewSession(projectID)` is the only SETTER: `""` is an
+  ordinary session (unchanged), otherwise the project's roots are copied into the record as the snapshot and
+  `project_id` goes in with them; a project that cannot drive a session (deleted, primary gone) yields an
+  ordinary session rather than one bound to nothing. `DeleteProject` is the only un-setter, and it DETACHES
+  (design §6.2): members keep their workspace, with the snapshot refreshed to the project's roots as of that
+  moment, and it is refused while any member is mid-turn — the running check and the meta writes share one
+  `d.mu` critical section (`updateSessionMetaLocked`), because a turn starting in between would be writing
+  while we rewrite. §7.4's refresh event is still to come with the sidebar (P3), so today the panel a
+  frontend already has open does not hear about either operation.
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of

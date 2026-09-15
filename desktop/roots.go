@@ -258,8 +258,20 @@ func (d *desktopApp) promptRoots(id string) []string {
 // happened in between (a title, the working directory).
 func (d *desktopApp) updateSessionMeta(id string, mutate func(*session.Session)) error {
 	d.mu.Lock()
-	r := d.getRun(id)
-	d.mu.Unlock()
+	defer d.mu.Unlock()
+	return d.updateSessionMetaLocked(id, mutate)
+}
+
+// updateSessionMetaLocked is updateSessionMeta with d.mu already held, for a caller that must
+// keep its own check and this write in ONE critical section: DeleteProject's detach refuses
+// while a member is running and then rewrites that member's meta, and a turn starting in
+// between would have its session rewritten underneath it (design §6.2). The file write
+// therefore happens under d.mu, exactly as DeleteSession's does.
+//
+// Callers must hold d.mu. It reads the run map directly rather than through getRun: a meta
+// update is not a place to CREATE a run for an unknown id.
+func (d *desktopApp) updateSessionMetaLocked(id string, mutate func(*session.Session)) error {
+	r := d.runs[id]
 	if r != nil && r.sm != nil {
 		if cur := r.sm.Current(); cur != nil {
 			mutate(cur)

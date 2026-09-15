@@ -196,14 +196,8 @@ func (t *projectTable) upsert(p project) error {
 	t.load()
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	// A file we could not read is never written over: the save would replace whatever the
-	// user still has (and can repair) with only this entry. Re-read first, so repairing or
-	// deleting projects.json is all it takes to get the feature back.
-	if t.broken {
-		t.readLocked()
-	}
-	if t.broken {
-		return projectsUnreadableError(projectsPath())
+	if err := t.writableLocked(); err != nil {
+		return err
 	}
 	found := false
 	for i, existing := range t.projects {
@@ -216,6 +210,40 @@ func (t *projectTable) upsert(p project) error {
 	if !found {
 		t.projects = append(t.projects, &p)
 	}
+	return t.saveLocked()
+}
+
+// writableLocked reports whether the table may be written, re-reading the file first while it
+// is marked broken: a save would replace whatever the user still has (and can repair) with
+// only the change being made right now, so a file we could not read is never written over —
+// but repairing or deleting it must be enough to get the feature back, without a restart.
+// Callers hold t.mu.
+func (t *projectTable) writableLocked() error {
+	if t.broken {
+		t.readLocked()
+	}
+	if t.broken {
+		return projectsUnreadableError(projectsPath())
+	}
+	return nil
+}
+
+// remove deletes a project and writes the table out. It is the only delete; the caller is
+// DeleteProject, which has already detached the members.
+func (t *projectTable) remove(id string) error {
+	t.load()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if err := t.writableLocked(); err != nil {
+		return err
+	}
+	kept := make([]*project, 0, len(t.projects))
+	for _, p := range t.projects {
+		if p.ID != id {
+			kept = append(kept, p)
+		}
+	}
+	t.projects = kept
 	return t.saveLocked()
 }
 

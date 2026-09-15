@@ -99,6 +99,25 @@ export function DeletePlan(sessionID: string, path: string): $CancellablePromise
 }
 
 /**
+ * DeleteProject removes a project and DETACHES its members (design §6.2): each one keeps its
+ * workspace, becoming an ordinary session whose snapshot is refreshed to the project's roots
+ * as they are at this moment. Detaching rather than refusing or cascading is the point — after
+ * a project has collected dozens of conversations, "go move each one first" is a punishment,
+ * and deleting the conversations is data loss.
+ * 
+ * Refused while any member is running a turn, like DeleteSession, because the detach rewrites
+ * session meta: a turn appending to that session's directory in parallel is the clobber the
+ * meta path exists to avoid. For the same reason the check and the writes share ONE critical
+ * section (d.mu) — a turn starting in between would be writing while we rewrite.
+ * 
+ * The project entry goes last: if a member's write fails, the project is still there and the
+ * user can retry. (The other order would leave them detached with the container gone.)
+ */
+export function DeleteProject(id: string): $CancellablePromise<string> {
+    return $Call.ByID(3732041524, id);
+}
+
+/**
  * DeleteSession deletes a session and its per-session run state. If the
  * deleted session is the currently displayed one, activeID is cleared so the
  * UI falls back to choosing/creating a session.
@@ -321,9 +340,17 @@ export function LoadSessionMore(id: string, before: string, limit: number): $Can
 /**
  * NewSession creates a fresh session and its own per-session agent, making it
  * active. The in-memory history starts empty.
+ * 
+ * projectID is "" for an ordinary session (today's behavior, word for word). Otherwise the
+ * session is created INSIDE that project (design §6.1) and this is the ONE place a binding is
+ * ever made: the project's roots as they are right now are written into the record as the
+ * session's snapshot, alongside project_id. A project that cannot drive a session at this
+ * moment (deleted, or its primary directory gone) yields an ordinary session instead of one
+ * bound to nothing — §8.6's degradation is for a project that disappears UNDER a session,
+ * which is not the same as being asked for one that is not there.
  */
-export function NewSession(): $CancellablePromise<$models.SessionInfo> {
-    return $Call.ByID(3312312366);
+export function NewSession(projectID: string): $CancellablePromise<$models.SessionInfo> {
+    return $Call.ByID(3312312366, projectID);
 }
 
 /**
