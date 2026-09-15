@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -251,5 +252,235 @@ func TestStoreAPIRequests(t *testing.T) {
 	}
 	if len(reqs) != 3 || reqs[2].SystemPrompt != "third" {
 		t.Fatalf("manager round-trip mismatch: %+v", reqs)
+	}
+}
+
+// ── the session-list snapshot ───────────────────────────────────────────────
+//
+// FileStore memoizes the session list so that the callers needing "every session"
+// in the same breath — the desktop's sidebar asks for its rows, then for the
+// per-project counts, then for one project's members, all as separate calls — pay
+// for one directory walk instead of one each. These pin the contract that makes
+// that safe, and the one hole it is allowed to have.
+
+// newListStore returns a store holding n sessions, newest first.
+func newListStore(t *testing.T, n int) *FileStore {
+	t.Helper()
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	base := time.Now().Add(-time.Duration(n) * time.Minute)
+	for i := 0; i < n; i++ {
+		at := base.Add(time.Duration(i) * time.Minute)
+		if err := store.CreateSession(&Session{
+			ID:        fmt.Sprintf("2026-01-01-0000%02d-%08d", i, i),
+			Title:     fmt.Sprintf("会话 %d", i),
+			CreatedAt: at,
+			UpdatedAt: at,
+		}); err != nil {
+			t.Fatalf("CreateSession: %v", err)
+		}
+	}
+	return store
+}
+
+// listTitles returns the listed sessions' titles, in list order.
+func listTitles(t *testing.T, store *FileStore) []string {
+	t.Helper()
+	sessions, err := store.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	titles := make([]string, 0, len(sessions))
+	for _, s := range sessions {
+		titles = append(titles, s.Title)
+	}
+	return titles
+}
+
+// TestListSessionsServesTheSnapshot pins the point of the cache: a repeat call is
+// answered from the snapshot, not from disk.
+//
+// The metadata is removed behind the store's back first — a removal INSIDE a
+// session directory, which moves no directory mtime — so a re-scan would find
+// nothing while the snapshot still holds three titles. Turning that into "three
+// titles came back" is the only way to assert the second call never touched the
+// filesystem, which is exactly what the sidebar's three-calls-one-refresh pattern
+// depends on.
+func TestListSessionsServesTheSnapshot(t *testing.T) {
+	store := newListStore(t, 3)
+	if got := listTitles(t, store); len(got) != 3 {
+		t.Fatalf("first list: got %d titles, want 3", len(got))
+	}
+
+	entries, err := os.ReadDir(store.baseDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	for _, e := range entries {
+		if err := os.Remove(filepath.Join(store.baseDir, e.Name(), "meta.json")); err != nil {
+			t.Fatalf("remove meta.json: %v", err)
+		}
+	}
+
+	if got := listTitles(t, store); len(got) != 3 {
+		t.Errorf("second list re-read the directory: got %d titles, want the 3 the snapshot holds", len(got))
+	}
+}
+
+// TestListSessionsSeesItsOwnWrites is the other half: an in-place meta.json
+// rewrite (a rename, a title, a fresh UpdatedAt) moves no directory mtime, so the
+// stamp cannot catch it — only the write path dropping the snapshot can.
+func TestListSessionsSeesItsOwnWrites(t *testing.T) {
+	store := newListStore(t, 2)
+	sessions, err := store.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+
+	sessions[0].Title = "改名了"
+	if err := store.UpdateMeta(sessions[0]); err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+	if got := listTitles(t, store); got[0] != "改名了" {
+		t.Errorf("update not visible: got %q", got[0])
+	}
+
+	if err := store.DeleteSession(sessions[0].ID); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := listTitles(t, store); len(got) != 1 {
+		t.Errorf("delete not visible: got %d titles, want 1", len(got))
+	}
+
+	now := time.Now()
+	if err := store.CreateSession(&Session{ID: "2026-01-02-000000-aaaaaaaa", Title: "新的", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if got := listTitles(t, store); len(got) != 2 {
+		t.Errorf("create not visible: got %d titles, want 2", len(got))
+	}
+}
+
+// TestListSessionsSeesAnotherProcess pins the baseDir-mtime check, which exists
+// for the writers this store cannot hear from: a session created or deleted by a
+// second process (the TUI beside the desktop, a channel bot) moves the directory's
+// mtime, and the next read must notice.
+func TestListSessionsSeesAnotherProcess(t *testing.T) {
+	dir := t.TempDir()
+	mine, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	other, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 0 {
+		t.Fatalf("empty store: got %d titles, want 0", len(got))
+	}
+
+	now := time.Now()
+	if err := other.CreateSession(&Session{ID: "2026-02-01-000000-bbbbbbbb", Title: "别人建的", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 1 || got[0] != "别人建的" {
+		t.Errorf("a session created elsewhere was missed: got %v", got)
+	}
+
+	if err := other.DeleteSession("2026-02-01-000000-bbbbbbbb"); err != nil {
+		t.Fatalf("DeleteSession: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 0 {
+		t.Errorf("a session deleted elsewhere was missed: got %v", got)
+	}
+}
+
+// TestListSessionsHandsOutCopies pins that the snapshot is not handed out for
+// editing: a caller is free to mutate what it was given (the session manager loads
+// one into its current field and edits it in place), and the next reader must not
+// inherit that.
+func TestListSessionsHandsOutCopies(t *testing.T) {
+	store, err := NewFileStore(t.TempDir())
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	now := time.Now()
+	if err := store.CreateSession(&Session{
+		ID:             "2026-03-01-000000-cccccccc",
+		Title:          "原文",
+		AdditionalDirs: []string{"/tmp/a"},
+		CreatedAt:      now,
+		UpdatedAt:      now,
+	}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	first, err := store.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	first[0].Title = "调用方改的"
+	first[0].AdditionalDirs[0] = "/tmp/调用方改的"
+
+	second, err := store.ListSessions()
+	if err != nil {
+		t.Fatalf("ListSessions: %v", err)
+	}
+	if second[0].Title != "原文" {
+		t.Errorf("title mutation leaked into the snapshot: %q", second[0].Title)
+	}
+	if second[0].AdditionalDirs[0] != "/tmp/a" {
+		t.Errorf("AdditionalDirs mutation leaked into the snapshot: %q", second[0].AdditionalDirs[0])
+	}
+}
+
+// TestListSessionsMissesInPlaceWritesByAnotherWriter pins the snapshot's ONE hole,
+// so that a later reader finds it stated rather than assumes it is not there: a
+// second writer rewriting an EXISTING meta.json in place moves no directory mtime,
+// so this store keeps serving what it read until a create or delete follows.
+//
+// Only the title and the timestamps can go stale through it. Project membership
+// cannot: ProjectID is written by the desktop alone, and every one of those writes
+// goes through a store that invalidates.
+func TestListSessionsMissesInPlaceWritesByAnotherWriter(t *testing.T) {
+	dir := t.TempDir()
+	mine, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	other, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	now := time.Now()
+	const id = "2026-04-01-000000-dddddddd"
+	if err := other.CreateSession(&Session{ID: id, Title: "原题", CreatedAt: now.Add(-time.Minute), UpdatedAt: now.Add(-time.Minute)}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	if got := listTitles(t, mine); len(got) != 1 {
+		t.Fatalf("priming list: got %v", got)
+	}
+
+	renamed, err := other.LoadMeta(id)
+	if err != nil {
+		t.Fatalf("LoadMeta: %v", err)
+	}
+	renamed.Title = "别的进程改的"
+	if err := other.UpdateMeta(renamed); err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+	if got := listTitles(t, mine); got[0] != "原题" {
+		t.Fatalf("expected the snapshot to still hold the old title, got %q — if this now reads the new one, the hole closed and this test is obsolete", got[0])
+	}
+
+	// The staleness is bounded, not permanent: the next structural change releases it.
+	if err := other.CreateSession(&Session{ID: "2026-04-01-000000-eeeeeeee", Title: "后来的", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+	got := listTitles(t, mine)
+	if len(got) != 2 || got[1] != "别的进程改的" {
+		t.Errorf("a directory change did not release the snapshot: got %v", got)
 	}
 }

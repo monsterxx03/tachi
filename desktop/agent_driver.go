@@ -178,15 +178,49 @@ func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 
 // newSessionManager creates a fresh session manager honoring the configured
 // cleanup cap. It is the per-run analog of channel's newSessionManager.
+//
+// Every manager the desktop builds is built on the ONE store sessionStore returns:
+// the store memoizes the session list, and a turn's own metadata write (its
+// AppendMessage → UpdateMeta) is exactly the write that has to drop that memo
+// before the sidebar reads again. A manager with a store of its own would hold a
+// snapshot nothing else could invalidate.
 func (d *desktopApp) newSessionManager() *session.Manager {
-	sm, err := session.NewManager(nil)
-	if err != nil {
+	store := d.sessionStore()
+	if store == nil {
 		return nil
 	}
+	sm := session.NewManagerWithStore(store, nil)
+	// NewManagerWithStore starts uncapped; reproduce what NewManager would have
+	// given, then let the config override it.
+	sm.SetMaxKeep(session.DefaultMaxKeep)
 	if d.cfg != nil {
 		sm.SetMaxKeep(d.cfg.SessionCleanupMaxCount)
 	}
 	return sm
+}
+
+// sessionStore returns the single FileStore the desktop reads and writes sessions
+// through, creating it on first use.
+//
+// It is lazy because the earliest callers are turns, not startup, and a failure
+// here must not take the app down: nil means "no sessions", the same degradation
+// a failed bootstrap leaves behind.
+func (d *desktopApp) sessionStore() *session.FileStore {
+	d.storeMu.Lock()
+	defer d.storeMu.Unlock()
+	if d.store != nil {
+		return d.store
+	}
+	dir, err := config.SessionDir()
+	if err != nil {
+		return nil
+	}
+	store, err := session.NewFileStore(dir)
+	if err != nil {
+		return nil
+	}
+	d.store = store
+	return d.store
 }
 
 // buildAgentForSession constructs an AIAgent wired to the given session manager,

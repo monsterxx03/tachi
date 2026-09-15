@@ -96,6 +96,17 @@ type desktopApp struct {
 	mcp *mcp.Manager // shared MCP manager (nil = no MCP configured)
 	cfg *config.Config
 
+	// store is the ONE session FileStore this app reads and writes through: sm and
+	// every per-run manager are built on it (see sessionStore). Sharing it is not
+	// an optimization of its own — it is what keeps the store's memoized session
+	// list honest, because a turn appends through ITS manager and that write has to
+	// drop the snapshot the sidebar's next read would otherwise be served from.
+	//
+	// Guarded by storeMu, not mu: it is created lazily (a turn can be the first
+	// thing to need it) and must never wait on the app-wide lock.
+	storeMu sync.Mutex
+	store   *session.FileStore
+
 	// promptCache memoizes built system prompts, keyed by the exact build inputs
 	// (working directory + session ID) — see systemPromptFor. Guarded by
 	// promptMu, NOT by mu: the build is slow (it probes git) and must never run

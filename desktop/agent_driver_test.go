@@ -13,6 +13,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // promptWorkingDir extracts the Working directory line of a system prompt ("" if
@@ -295,5 +296,63 @@ func TestSetSessionWorkingDirWithoutAgentIsSafe(t *testing.T) {
 
 	if res := svc.SetSessionWorkingDir(sid, t.TempDir()); res != "ok" {
 		t.Fatalf("SetSessionWorkingDir without an agent: %s", res)
+	}
+}
+
+// firstListedTitle returns the newest listed session's title, read through the given
+// manager.
+func firstListedTitle(t *testing.T, sm *session.Manager) string {
+	t.Helper()
+	sessions, err := sm.List()
+	if err != nil {
+		t.Fatalf("List: %v", err)
+	}
+	if len(sessions) == 0 {
+		t.Fatal("session list is empty")
+	}
+	return sessions[0].Title
+}
+
+// TestEveryDesktopManagerSharesTheSessionStore pins the one property that makes the
+// session store's memoized list correct inside the desktop: every manager the app
+// builds comes from d.sessionStore(), so a write through a per-run manager — a turn's
+// AppendMessage → UpdateMeta — drops the snapshot the sidebar's next read would
+// otherwise be served from.
+//
+// The write is deliberately an in-place meta.json rewrite. That moves no directory
+// mtime, so the store's baseDir stamp cannot see it, and only a shared store can:
+// built on per-manager stores (the shape before sessionStore existed), the last read
+// here answers with the old title.
+func TestEveryDesktopManagerSharesTheSessionStore(t *testing.T) {
+	config.SetBaseDir(t.TempDir())
+	d := newTestApp()
+
+	binding := d.newSessionManager()
+	if binding == nil {
+		t.Fatal("newSessionManager returned nil")
+	}
+	sess, err := binding.New("", t.TempDir())
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	before := firstListedTitle(t, binding) // primes the snapshot
+
+	// A second manager, the way a turn gets one, writes metadata in place.
+	turn := d.newSessionManager()
+	if turn == nil {
+		t.Fatal("newSessionManager returned nil for the run")
+	}
+	loaded, err := turn.Load(sess.ID)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	loaded.Title = "回合改的"
+	if err := turn.UpdateMeta(loaded); err != nil {
+		t.Fatalf("UpdateMeta: %v", err)
+	}
+
+	if got := firstListedTitle(t, binding); got != "回合改的" {
+		t.Errorf("a write through a per-run manager did not reach the listing manager: got %q (%q before), want %q — the managers no longer share one store",
+			got, before, "回合改的")
 	}
 }

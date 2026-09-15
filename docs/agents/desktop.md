@@ -315,6 +315,16 @@ const type = (el, t) => {
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
   popping a real Finder window.
+- **Every desktop manager is built on ONE `FileStore` (`d.sessionStore()`), and that is load-bearing, not
+  tidiness.** `FileStore.ListSessions` memoizes the session list, because the sidebar asks for its rows, then
+  for the per-project counts, then for one project's members, each as a separate call — every one of them used
+  to walk the base directory and re-read every `meta.json`. A manager built any other way
+  (`session.NewManager(nil)`) holds a store of its own, whose snapshot nothing can drop: a turn's
+  `AppendMessage → UpdateMeta` runs on the per-run manager, and an in-place `meta.json` rewrite moves no
+  directory mtime, so the listing manager would keep serving the pre-turn title
+  (`TestEveryDesktopManagerSharesTheSessionStore` is the one that fails). `LoadMeta` stays un-memoized on
+  purpose — it feeds the live record and the read half of `updateSessionMeta`'s read-modify-write, where a
+  stale read is a lost write. `session/store.go`'s `FileStore` comment carries the invalidation contract.
 - **A bash `ask` rule is a question for the USER, and the desktop answers it the way ACP does — the shape
   the TUI confirmation and ACP's `session/request_permission` already use — never with a fourth
   `PermissionMode`**: every session's agent is built with `agent.PermissionModeExternal` plus a

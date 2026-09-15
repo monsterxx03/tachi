@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monsterxx03/tachi/config"
@@ -43,6 +44,37 @@ type Store interface {
 // FileStore implements Store interface using filesystem
 type FileStore struct {
 	baseDir string
+
+	// listCache memoizes the last completed session-list scan.
+	//
+	// Several callers need "every session" in the same breath and for different
+	// reasons — the desktop asks for the sidebar's rows, then for the per-project
+	// counts, then for a project's members, all through separate calls — and each
+	// of them used to walk the base directory and re-read every meta.json
+	// (measured: ~49ms for 1000 sessions, essentially all of it open/read/close).
+	// This holds one scan so the repeats are free.
+	//
+	// Correctness rests on three things:
+	//   - writes drop it (invalidate): a meta.json rewritten in place — title,
+	//     UpdatedAt — does NOT change the base directory's mtime, so the stamp
+	//     below cannot see it;
+	//   - reads re-stat baseDir and drop it when the mtime moved: that is what
+	//     covers a session created or DELETED by another process;
+	//   - a scan publishes only if no write landed while it ran (gen), so a
+	//     snapshot taken before a concurrent write can never be installed.
+	//
+	// What survives all three is another process rewriting an EXISTING meta.json
+	// in place: the snapshot then lasts until the next create, delete or baseDir
+	// change. Only the title and timestamps can go stale through that door —
+	// project membership cannot, because ProjectID is written by the desktop alone
+	// (bind on create, detach on project delete, inherit on compaction) and every
+	// one of those writes goes through a store that invalidates.
+	mu       sync.Mutex
+	cached   []*Session
+	cacheDir time.Time // baseDir's mtime when cached was read
+	cacheOK  bool
+	// gen counts writes, so a scan can tell whether the store changed under it.
+	gen uint64
 }
 
 // NewFileStore creates a new FileStore
@@ -51,6 +83,21 @@ func NewFileStore(baseDir string) (*FileStore, error) {
 		return nil, fmt.Errorf("create session dir: %w", err)
 	}
 	return &FileStore{baseDir: baseDir}, nil
+}
+
+// invalidate drops the memoized session list. Every method that can change what
+// ListSessions returns — CreateSession, UpdateMeta, DeleteSession — must call it,
+// and must call it AFTER the write, never before: a scan that starts in the gap
+// between an early invalidate and the write itself would read the old content and
+// still be published, since no write landed during it.
+//
+// Dropping a snapshot that did not need dropping costs a bool — the next
+// ListSessions is what pays for the rebuild — so when in doubt, drop it.
+func (s *FileStore) invalidate() {
+	s.mu.Lock()
+	s.gen++
+	s.cacheOK = false
+	s.mu.Unlock()
 }
 
 func (s *FileStore) sessionDir(id string) string {
@@ -79,10 +126,18 @@ func (s *FileStore) CreateSession(session *Session) error {
 	if err := fileutil.WriteFilePrivate(s.messagesPath(session.ID), []byte{}); err != nil {
 		return fmt.Errorf("create messages.jsonl: %w", err)
 	}
+	s.invalidate()
 	return nil
 }
 
-// LoadMeta loads meta.json for a session
+// LoadMeta loads meta.json for a session.
+//
+// It reads the file on every call, deliberately: this is what feeds the LIVE
+// session — the manager's current, and the read half of every metadata
+// read-modify-write (desktop's updateSessionMeta, which rewrites the whole
+// meta.json and would clobber anything a snapshot had missed in between). Only
+// ListSessions is memoized (see FileStore); serving this from that snapshot would
+// turn a stale read into a lost write.
 func (s *FileStore) LoadMeta(id string) (*Session, error) {
 	var session Session
 	if err := fileutil.ReadJSON(s.metaPath(id), &session); err != nil {
@@ -277,11 +332,66 @@ func (s *FileStore) UpdateMeta(session *Session) error {
 	if err := fileutil.WriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
 		return fmt.Errorf("write meta.json: %w", err)
 	}
+	s.invalidate()
 	return nil
 }
 
-// ListSessions returns all sessions sorted by created_at descending
+// ListSessions returns all sessions sorted by created_at descending.
+//
+// It serves the memoized snapshot when one is valid and scans otherwise; either
+// way the caller gets its own copy (see cloneSessions).
 func (s *FileStore) ListSessions() ([]*Session, error) {
+	if cached, ok := s.cachedList(); ok {
+		return cached, nil
+	}
+
+	// The generation is read BEFORE the scan and re-checked before publishing: a
+	// write that lands mid-scan must leave the cache empty rather than hand the
+	// next reader a snapshot taken from under it.
+	s.mu.Lock()
+	gen := s.gen
+	s.mu.Unlock()
+
+	sessions, err := s.scanSessions()
+	if err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(s.baseDir)
+	if err != nil {
+		// An unreadable stamp means the snapshot could never be validated, so
+		// serve this scan uncached instead of caching something unverifiable.
+		return sessions, nil
+	}
+	s.mu.Lock()
+	if s.gen == gen {
+		s.cached, s.cacheDir, s.cacheOK = sessions, info.ModTime(), true
+	}
+	s.mu.Unlock()
+
+	return cloneSessions(sessions), nil
+}
+
+// cachedList returns a copy of the memoized list when it is still valid. The base
+// directory's mtime is the whole filesystem check: one stat, and it catches
+// exactly what our own writes cannot — a session created or deleted by another
+// process (both move the directory's mtime). See FileStore for what it misses.
+func (s *FileStore) cachedList() ([]*Session, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if !s.cacheOK {
+		return nil, false
+	}
+	info, err := os.Stat(s.baseDir)
+	if err != nil || !info.ModTime().Equal(s.cacheDir) {
+		return nil, false
+	}
+	return cloneSessions(s.cached), true
+}
+
+// scanSessions reads every session's meta.json under the base directory. A
+// directory that does not parse is skipped, exactly as it always was.
+func (s *FileStore) scanSessions() ([]*Session, error) {
 	entries, err := os.ReadDir(s.baseDir)
 	if err != nil {
 		return nil, fmt.Errorf("read session dir: %w", err)
@@ -293,8 +403,7 @@ func (s *FileStore) ListSessions() ([]*Session, error) {
 			continue
 		}
 
-		id := entry.Name()
-		session, err := s.LoadMeta(id)
+		session, err := s.LoadMeta(entry.Name())
 		if err != nil {
 			continue // skip invalid sessions
 		}
@@ -310,10 +419,31 @@ func (s *FileStore) ListSessions() ([]*Session, error) {
 	return sessions, nil
 }
 
+// cloneSessions returns copies of the entries, because a snapshot outlives the
+// call that received it: a caller may mutate what it was handed (the session
+// manager loads one into its current field and edits it in place) and the next
+// reader must not see that. AdditionalDirs is the only reference field.
+func cloneSessions(in []*Session) []*Session {
+	if in == nil {
+		return nil
+	}
+	out := make([]*Session, 0, len(in))
+	for _, s := range in {
+		c := *s
+		c.AdditionalDirs = slices.Clone(s.AdditionalDirs)
+		out = append(out, &c)
+	}
+	return out
+}
+
 // DeleteSession removes a session directory
 func (s *FileStore) DeleteSession(id string) error {
 	dir := s.sessionDir(id)
-	return os.RemoveAll(dir)
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	s.invalidate()
+	return nil
 }
 
 // GenerateID generates a new session ID in format: YYYY-MM-DD-HHMMSS-uuid

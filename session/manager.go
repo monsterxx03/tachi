@@ -18,6 +18,12 @@ type Manager struct {
 	logger  *logger.Logger
 }
 
+// DefaultMaxKeep is how many sessions a manager retains when the caller sets no
+// cap of its own. It is the same number config's session_cleanup_max_count
+// defaults to, and it is named because a manager built from a custom store
+// (NewManagerWithStore) starts at zero and has to be able to ask for it.
+const DefaultMaxKeep = 100
+
 func NewManager(l *logger.Logger) (*Manager, error) {
 	dir, err := config.SessionDir()
 	if err != nil {
@@ -29,7 +35,7 @@ func NewManager(l *logger.Logger) (*Manager, error) {
 		return nil, err
 	}
 
-	return &Manager{store: store, maxKeep: 100, logger: l}, nil
+	return &Manager{store: store, maxKeep: DefaultMaxKeep, logger: l}, nil
 }
 
 // NewManagerWithStore creates a Manager with a custom store implementation

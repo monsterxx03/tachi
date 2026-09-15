@@ -231,16 +231,33 @@ export type SessionGroup<T> = { project: ProjectVO | null; rows: SessionRow<T>[]
 // the reader reports as "I made a project and nothing happened".
 //
 // The order inside a group is the order it came in (ListSessions: newest first).
+//
+// The join is ONE pass that buckets by projectId, not one pass per project: this runs on every
+// render of the app (during a turn, every streaming frame), and a per-project filter made it
+// O(projects × sessions) with a fresh Map and Set built per group — at a few thousand sessions
+// that is real work per frame, for a list whose shape is fixed until the next fetch.
 export function sessionGroups<T extends { id: string; compactedParentId?: string; projectId?: string }>(
   list: T[],
   projects: ProjectVO[],
 ): SessionGroup<T>[] {
   const known = new Set(projects.map((p) => p.id))
-  const groups: SessionGroup<T>[] = []
-  for (const p of projects) {
-    groups.push({ project: p, rows: sessionRows(list.filter((s) => s.projectId === p.id)) })
+  const byProject = new Map<string, T[]>()
+  const loose: T[] = []
+  for (const s of list) {
+    const pid = s.projectId
+    if (!pid || !known.has(pid)) {
+      loose.push(s)
+      continue
+    }
+    const bucket = byProject.get(pid)
+    if (bucket) bucket.push(s)
+    else byProject.set(pid, [s])
   }
-  const loose = list.filter((s) => !s.projectId || !known.has(s.projectId))
+
+  const groups: SessionGroup<T>[] = projects.map((p) => ({
+    project: p,
+    rows: sessionRows(byProject.get(p.id) ?? []),
+  }))
   if (loose.length > 0) groups.push({ project: null, rows: sessionRows(loose) })
   return groups
 }
