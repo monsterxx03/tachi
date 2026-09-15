@@ -566,12 +566,17 @@
 .roots-actions { display: flex; gap: 8px; }
 
 /* ── Project form (create / edit) ─────────────────────────────────────────── */
-.project-form { width: 520px; }
+/* Its own width, and its own max-width with it: the shared box caps at 380px, which silently
+   clamped the 520px below — the fields were ellipsising paths in a box narrower than any of
+   them needed to be. */
+.project-form { width: 520px; max-width: 520px; }
 .form-row { margin-top: 12px; }
 .form-label {
   display: block;
   margin-bottom: 5px;
-  font-size: 10.5px;
+  /* Not the 10.5px a compact popover label can afford: this dialog is 520px wide, so its labels
+     sat three steps below the 14px title and 13.5px field they belong to. */
+  font-size: 12.5px;
   letter-spacing: 0.04em;
   color: var(--text-faint);
 }
@@ -584,7 +589,7 @@
   border-radius: var(--radius-sm);
   color: var(--text);
   font-family: inherit;
-  font-size: 12.5px;
+  font-size: 13.5px;
   outline: none;
 }
 .form-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-ring); }
@@ -594,7 +599,7 @@
   flex: 1;
   min-width: 0;
   font-family: "SF Mono", ui-monospace, Menlo, monospace;
-  font-size: 11px;
+  font-size: 12.5px;
   color: var(--text-dim);
   background: var(--panel-solid);
   border: 1px solid var(--border-2);
@@ -606,6 +611,13 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+/* The root rows inside the form are the ROOTS PANEL's markup (its own compact 11px scale, for a
+   panel that shares the sidebar's width), so the form raises them here rather than forking the
+   component: same rows, the dialog's type scale. */
+.project-form .roots-path,
+.project-form .roots-empty,
+.project-form .roots-btn,
+.project-form .roots-add { font-size: 12.5px; }
 .form-roots {
   border: 1px solid var(--border-2);
   border-radius: var(--radius-sm);

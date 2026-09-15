@@ -868,6 +868,16 @@ const type = (el, t) => {
   The ordering is deliberate: the panel's own input field blurs on the first press, and the composer's Esc
   is the same gesture.
 
+- **A dialog that renders a PANEL's rows inherits that panel's type scale — and the shared box's max-width**
+  (`desktop/frontend/public/overlays.css`): the project form reuses the roots panel's rows (`.roots-*`),
+  sized for a compact popover beside the sidebar (11px paths and buttons), so the 520px modal read as a
+  shrunken dialog between its own 14px title and 13.5px field. Its width was clamped the same quiet way:
+  `.confirm-box`'s `max-width: 380px` beats `.project-form`'s `width: 520px`, so the fields ellipsised paths
+  they had room for. The form raises those shared sizes SCOPED to `.project-form` (the popover keeps its own
+  compact scale) and declares its own `max-width`. `form-text` pins a floor rather than the numbers — nothing
+  inside the form under 12px, and the box is the width it claims — so retuning the design later is not a
+  test failure.
+
 ## Desktop Themes (the dark palette)
 
 - **The dark theme is Ayu Mirage-derived and its contrast is low ON PURPOSE — do not "fix" it.** The family

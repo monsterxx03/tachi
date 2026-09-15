@@ -1573,6 +1573,20 @@ permissions:
 				{Reply: textStream("三张图：\n\n极小：\n\n```mermaid\ngraph LR\n  A[甲] --> B[乙]\n```\n\n中等：\n\n```mermaid\ngraph LR\n  A[读取配置] --> B[校验]\n  B --> C[建索引]\n  C --> D[跑任务]\n  D --> E[写报告]\n  E --> F[通知]\n```\n\n很高：\n\n```mermaid\nflowchart TD\n  N0[节点 0] --> N1[节点 1]\n  N1[节点 1] --> N2[节点 2]\n  N2[节点 2] --> N3[节点 3]\n  N3[节点 3] --> N4[节点 4]\n  N4[节点 4] --> N5[节点 5]\n  N5[节点 5] --> N6[节点 6]\n  N6[节点 6] --> N7[节点 7]\n  N7[节点 7] --> N8[节点 8]\n  N8[节点 8] --> N9[节点 9]\n  N9[节点 9] --> N10[节点 10]\n  N10[节点 10] --> N11[节点 11]\n  N11[节点 11] --> N12[节点 12]\n```\n\n三张都在这里。", 900)},
 			},
 		},
+		//
+		//
+		// form-text: the 新建项目 / 编辑项目 dialog's type scale. Its labels and paths used to sit at
+		// 10.5–11px — the compact roots popover's sizes, which the form inherits because it renders
+		// the same rows — three steps below the 14px title and 13.5px field between them, so the
+		// dialog read as a shrunken one. Its own width was also silently clamped: `.confirm-box`
+		// caps at 380px, which beat the form's 520px. Pinned as a FLOOR (nothing under 12px) rather
+		// than per-element sizes, so tuning the design later is not a test failure.
+		{
+			name: "form-text",
+			files: map[string]string{
+				"README.md": "# smoke\n\nform-text scenario's working directory\n",
+			},
+		},
 	}
 }
 
