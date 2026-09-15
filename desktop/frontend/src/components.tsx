@@ -495,6 +495,30 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
   )
 }
 
+// BranchChip is one root's git branch, shown beside its path. Two checkouts of the same repository
+// are otherwise indistinguishable in this list — both rows read "tachi" — and the branch is the
+// thing a reader checks before sending a turn that edits files.
+//
+// It draws its own icon rather than using a character: ⎇ and friends depend on the font, which is
+// how the disclosure carets ended up as dots (see Caret).
+function BranchChip({ branch, detached }: { branch?: string; detached?: boolean }) {
+  if (!branch) return null
+  return (
+    <span className="roots-branch"
+      title={detached ? `游离 HEAD，不在任何分支上（${branch}）` : `git 分支：${branch}`}>
+      <svg viewBox="0 0 16 16" width="11" height="11" fill="none" stroke="currentColor"
+        strokeWidth="1.6" strokeLinecap="round" aria-hidden="true">
+        <circle cx="4.6" cy="3.4" r="1.7" />
+        <circle cx="4.6" cy="12.6" r="1.7" />
+        <circle cx="11.4" cy="6.4" r="1.7" />
+        <path d="M4.6 5.1v5.8" />
+        <path d="M11.4 8.1c0 2.1-1.7 2.9-3.2 3.1" />
+      </svg>
+      {branch}
+    </span>
+  )
+}
+
 // RootsPanel is the workspace popover behind the composer's directory chip: the
 // session's primary directory plus its additional roots, and the two actions the
 // list needs — change the primary, add more.
@@ -565,6 +589,7 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
           <div className="roots-sec">主目录</div>
           <div className="roots-row">
             <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
+            <BranchChip branch={roots?.primaryBranch} detached={roots?.primaryDetached} />
           </div>
           <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
           {additional.length === 0
@@ -573,6 +598,7 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
               <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
                 <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
                 <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
+                <BranchChip branch={r.branch} detached={r.detached} />
                 {r.exists ? null : <span className="roots-stale">已失效</span>}
               </div>
             ))}
@@ -599,6 +625,7 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
           <div className="roots-sec">主目录</div>
           <div className="roots-row">
             <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
+            <BranchChip branch={roots?.primaryBranch} detached={roots?.primaryDetached} />
             <button className="roots-btn" disabled={busy} onClick={onPickPrimary}>{primary ? '更换…' : '选择…'}</button>
           </div>
 
@@ -609,6 +636,7 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
               <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
                 <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
                 <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
+                <BranchChip branch={r.branch} detached={r.detached} />
                 {r.exists ? null : (
                   <span className="roots-stale" title="目录已不存在：system prompt 不再列出它，@ 搜索也会跳过">已失效</span>
                 )}

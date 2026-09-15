@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -658,5 +659,69 @@ func TestReviewChangesGuards(t *testing.T) {
 	d.activeID = "some-session"
 	if got := svc.ReviewChanges("another-session", 0, []string{"a.go"}, ""); !strings.Contains(got, "当前会话") {
 		t.Errorf("session mismatch = %q, want a refusal", got)
+	}
+}
+
+// gitRepoForTest makes a real repository with one commit: the branch a root reports is a fact about
+// that directory, so the panel's field is tested against a repository rather than a stub.
+func gitRepoForTest(t *testing.T) string {
+	t.Helper()
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not installed")
+	}
+	dir := t.TempDir()
+	for _, args := range [][]string{
+		{"init", "-q"},
+		{"-c", "user.email=t@t", "-c", "user.name=t", "commit", "-q", "--allow-empty", "-m", "init"},
+	} {
+		if out, err := exec.Command("git", append([]string{"-C", dir}, args...)...).CombinedOutput(); err != nil {
+			t.Skipf("git %s: %v (%s)", strings.Join(args, " "), err, out)
+		}
+	}
+	return dir
+}
+
+// TestGetSessionRootsCarriesTheGitBranch pins what the workspace panel shows beside each root: the
+// branch of THAT directory, and nothing at all for one that is not in a repository.
+//
+// It is the only thing telling two checkouts of the same repository apart in that list — both rows
+// read "tachi" otherwise — which is why the branch belongs to the root rather than to the session.
+func TestGetSessionRootsCarriesTheGitBranch(t *testing.T) {
+	repo := gitRepoForTest(t)
+	plain := t.TempDir()
+	_, svc, sid := newRootsApp(t, repo)
+
+	if res := svc.AddSessionRoots(sid, []string{plain}); res != "ok" {
+		t.Fatalf("AddSessionRoots: %s", res)
+	}
+	vo := svc.GetSessionRoots(sid)
+
+	if vo.PrimaryBranch == "" {
+		t.Error("the primary root's branch is missing")
+	}
+	if vo.PrimaryDetached {
+		t.Errorf("a fresh repository reported a detached HEAD (%q)", vo.PrimaryBranch)
+	}
+	if len(vo.Additional) != 1 {
+		t.Fatalf("additional roots = %d, want 1", len(vo.Additional))
+	}
+	// The additional root is a plain directory: no branch, and no invented one.
+	if got := vo.Additional[0].Branch; got != "" {
+		t.Errorf("a directory that is not a repository reported branch %q", got)
+	}
+
+	// Detached HEAD reports the short commit, flagged — a bare hash presented as a branch name is a
+	// lie the panel would tell on every detached checkout.
+	sha, err := exec.Command("git", "-C", repo, "rev-parse", "HEAD").Output()
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	head := strings.TrimSpace(string(sha))
+	if out, err := exec.Command("git", "-C", repo, "checkout", "-q", head).CombinedOutput(); err != nil {
+		t.Fatalf("detach HEAD: %v (%s)", err, out)
+	}
+	vo = svc.GetSessionRoots(sid)
+	if !vo.PrimaryDetached || !strings.HasPrefix(head, vo.PrimaryBranch) {
+		t.Errorf("detached HEAD = (%q, detached=%v), want a prefix of %s", vo.PrimaryBranch, vo.PrimaryDetached, head)
 	}
 }

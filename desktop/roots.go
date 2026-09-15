@@ -23,6 +23,7 @@ package main
 // Design: docs/2026-09-11-desktop-multi-workspace-design.md
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -33,6 +34,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
+	"github.com/monsterxx03/tachi/pkg/shutil"
 	"github.com/monsterxx03/tachi/session"
 )
 
@@ -46,11 +48,35 @@ type SessionRootVO struct {
 	// Exists is false when the directory has since been removed or unmounted: the
 	// UI greys the entry out, and the prompt no longer advertises it.
 	Exists bool `json:"exists"`
+	// Branch is the git branch checked out in this directory ("" when it is not inside a work tree,
+	// or git is not installed), and Detached marks the one case where the name is not a branch: HEAD
+	// sits on a commit and Branch holds its short hash. The panel shows it beside each root so two
+	// checkouts of the same repository can be told apart without a terminal.
+	Branch   string `json:"branch,omitempty"`
+	Detached bool   `json:"detached,omitempty"`
+}
+
+// rootVO is one root as the panel sees it: the existence check the panel has always done, plus where
+// that tree stands in git. A root that does not exist is not probed — there is nothing to ask, and
+// `git` would be run against a path that is known to be gone.
+func rootVO(path string) SessionRootVO {
+	vo := SessionRootVO{Path: path, Exists: fileutil.IsDir(path)}
+	if vo.Exists {
+		vo.Branch, vo.Detached, _ = shutil.GitBranch(context.Background(), path)
+	}
+	return vo
 }
 
 // SessionRootsVO is a session's full root set.
 type SessionRootsVO struct {
-	Primary    string          `json:"primary"`
+	Primary string `json:"primary"`
+	// PrimaryBranch / PrimaryDetached are the primary directory's git branch — the same pair the
+	// additional roots carry, kept flat rather than nested because Primary is a bare path everywhere
+	// else that reads this VO (the chip, the composer, the @-picker's root) and turning it into an
+	// object would churn all of them for one field.
+	PrimaryBranch   string `json:"primaryBranch,omitempty"`
+	PrimaryDetached bool   `json:"primaryDetached,omitempty"`
+
 	Additional []SessionRootVO `json:"additional"`
 	// ProjectID / ProjectName are set when a desktop project owns this session's workspace.
 	// The panel then renders read-only and points at the project (design §7.2).
@@ -74,8 +100,12 @@ func (s *AgentService) GetSessionRoots(id string) SessionRootsVO {
 	sess := s.desk.sessionRecord(id)
 	primary, additional := s.desk.sessionRootsFrom(sess)
 	vo := SessionRootsVO{Primary: primary, Additional: make([]SessionRootVO, 0, len(additional))}
+	if primary != "" {
+		primaryVO := rootVO(primary)
+		vo.PrimaryBranch, vo.PrimaryDetached = primaryVO.Branch, primaryVO.Detached
+	}
 	for _, dir := range additional {
-		vo.Additional = append(vo.Additional, SessionRootVO{Path: dir, Exists: fileutil.IsDir(dir)})
+		vo.Additional = append(vo.Additional, rootVO(dir))
 	}
 	if sess != nil && sess.ProjectID != "" {
 		vo.ProjectID = sess.ProjectID

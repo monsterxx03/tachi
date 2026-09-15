@@ -1620,6 +1620,25 @@ permissions:
 		},
 		//
 		//
+		// roots-branch: the workspace panel names the git branch of each directory it lists, and
+		// nothing at all for one that is not a repository. Two checkouts of the same repository are
+		// otherwise the same row — the branch is the only thing that tells them apart, and the value
+		// itself is pinned by the desktop's own TestGetSessionRootsCarriesTheGitBranch (the driver can
+		// read the DOM but not run git, so it asserts that a REAL name is rendered, on the right row).
+		{
+			name: "roots-branch",
+			files: map[string]string{
+				"README.md": "# smoke\n\nroots-branch scenario's working directory\n",
+			},
+			gitInit: true,
+			// A root that is NOT a repository: it must come back with no branch, or the panel would
+			// dress up "not a repo" as a branch name.
+			extraRoots: map[string]map[string]string{
+				"plain-lib": {"notes.md": "plain\n"},
+			},
+		},
+		//
+		//
 		// sidebar-text: the sidebar's own type scale. Its group headers were 14px against 13.5px
 		// rows — a hierarchy that held on paper and was invisible on screen ("项目字体太小了"), with a
 		// scatter of 8–11px fragments around it (the disclosure caret among them, which rendered as a

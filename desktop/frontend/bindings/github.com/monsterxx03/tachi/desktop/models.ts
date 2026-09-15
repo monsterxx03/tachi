@@ -816,6 +816,15 @@ export interface SessionRootVO {
      * UI greys the entry out, and the prompt no longer advertises it.
      */
     "exists": boolean;
+
+    /**
+     * Branch is the git branch checked out in this directory ("" when it is not inside a work tree,
+     * or git is not installed), and Detached marks the one case where the name is not a branch: HEAD
+     * sits on a commit and Branch holds its short hash. The panel shows it beside each root so two
+     * checkouts of the same repository can be told apart without a terminal.
+     */
+    "branch"?: string;
+    "detached"?: boolean;
 }
 
 /**
@@ -823,6 +832,15 @@ export interface SessionRootVO {
  */
 export interface SessionRootsVO {
     "primary": string;
+
+    /**
+     * PrimaryBranch / PrimaryDetached are the primary directory's git branch — the same pair the
+     * additional roots carry, kept flat rather than nested because Primary is a bare path everywhere
+     * else that reads this VO (the chip, the composer, the @-picker's root) and turning it into an
+     * object would churn all of them for one field.
+     */
+    "primaryBranch"?: string;
+    "primaryDetached"?: boolean;
     "additional": SessionRootVO[] | null;
 
     /**

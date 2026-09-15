@@ -512,6 +512,23 @@
   color: var(--amber);
 }
 .roots-empty { padding: 4px 8px 2px; font-size: 11px; color: var(--text-faint); }
+/* A root's git branch, beside its path: the one thing that tells two checkouts of the same
+   repository apart, so it is a chip rather than more faint text. Mono, because branch names carry
+   slashes and dashes that are easier to read that way. */
+.roots-branch {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--veil);
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+  color: var(--text-dim);
+}
+.roots-branch svg { flex-shrink: 0; }
 .roots-error {
   margin-top: 8px;
   padding: 6px 8px;

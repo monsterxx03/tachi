@@ -22,20 +22,15 @@ func (GitReminder) Generate(ctx context.Context, rctx Context) []string {
 	// several sessions, and reporting the branch of whatever directory the app was
 	// launched from would contradict the working directory in the system prompt.
 	dir := workDir(ctx)
-	// Only fire if we're inside a git repository.
-	if !shutil.Success(ctx, dir, "git", "rev-parse", "--is-inside-work-tree") {
-		return nil
-	}
 
 	var lines []string
 
-	// Current branch (including detached HEAD state).
-	if branch, err := shutil.Output(ctx, dir, "git", "rev-parse", "--abbrev-ref", "HEAD"); err == nil {
-		if branch == "HEAD" {
+	// Current branch, including the detached case (shutil.GitBranch is the one probe; the desktop's
+	// workspace panel reads it too, so the branch shown there is the one the model is told about).
+	if branch, detached, ok := shutil.GitBranch(ctx, dir); ok {
+		if detached {
 			// Detached HEAD, show short commit hash.
-			if commit, err := shutil.Output(ctx, dir, "git", "rev-parse", "--short", "HEAD"); err == nil {
-				lines = append(lines, fmt.Sprintf("Git HEAD: detached at %s", commit))
-			}
+			lines = append(lines, fmt.Sprintf("Git HEAD: detached at %s", branch))
 		} else {
 			lines = append(lines, fmt.Sprintf("Git branch: %s", branch))
 		}

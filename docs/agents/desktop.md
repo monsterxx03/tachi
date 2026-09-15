@@ -333,6 +333,19 @@ const type = (el, t) => {
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
   popping a real Finder window.
+- **Every root in the workspace panel carries its git BRANCH** (`SessionRootVO.Branch`/`Detached`,
+  `SessionRootsVO.PrimaryBranch`/`PrimaryDetached`; `shutil.GitBranch`): that panel lists the session's
+  directories by path, and two checkouts of the same repository are then the same row — the branch is
+  the one thing that tells them apart before a turn goes and edits files. It is probed PER ROOT when
+  the panel opens (never stored: a checkout moves under you), skipped for a root that does not exist,
+  and EMPTY for one that is not a work tree — the frontend renders nothing then, so "not a repository"
+  is never dressed up as a branch name. A detached HEAD reports the short commit AND sets `Detached`,
+  because a bare hash presented as a branch is a lie the panel would tell on every detached checkout.
+  `shutil.GitBranch` is the ONE probe: the system reminder's `Git branch/HEAD` line reads it too, so
+  the branch a reader sees in the UI is the branch the model was told about. `pkg/shutil`'s test and
+  the desktop's `TestGetSessionRootsCarriesTheGitBranch` pin both halves (a real repo, a detached
+  HEAD, a plain directory, and a subdirectory of a repo); `roots-branch` drives it end to end — and
+  its fixture is one git root beside one plain root on purpose, because "no chip" is half the rule.
 - **A pasted image is stored, then attached by reference — the same route a dropped file takes**
   (`SavePastedImage`, `desktop/fileservice.go`, + `composer.tsx`'s `onPaste`): a screenshot on the
   clipboard is BYTES with no path, so the composer sends them (base64 — the only shape the page
