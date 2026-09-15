@@ -6,10 +6,13 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/monsterxx03/tachi/agent/tokenbreakdown"
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -112,6 +115,71 @@ func TestCheckpointWiringRecordsBoundaryThenSnapshot(t *testing.T) {
 	assert.Equal(t, rec.Roots[0].Tree, readCheckpointManifest(t, a).Checkpoints[0].Roots[0].Tree,
 		"the snapshot must describe the turn's start, not its middle")
 	assert.Equal(t, 1, len(readCheckpointManifest(t, a).Checkpoints))
+}
+
+// TestCheckpointRebindsAfterCompaction pins the fix for a refusal the reader reports as
+// "bash 工具会报错: turn 29 was never begun" right after a session was compacted and they
+// kept working in the new one.
+//
+// Both halves of the checkpoint binding are session-scoped — the turn's NUMBER lives in the
+// old session's manifest, and the manager resolves by session id — so a compaction that
+// swaps the session mid-turn leaves the rest of that turn with a turn number the new
+// session has never heard of. Every write-capable tool then refuses its write (by design:
+// a change a rewind cannot take back must not happen), until the turn ends and the next one
+// begins a fresh checkpoint. Rebinding right after the swap is what keeps the turn usable.
+func TestCheckpointRebindsAfterCompaction(t *testing.T) {
+	trueVal := true
+	a, work, ctx := checkpointTestAgent(t)
+	// The auto-compact trigger, and a strategy that produces a summary without an LLM.
+	a.SetCompactStrategy(&fakeCompactStrategy{summary: "摘要"})
+	a.Config.FullConfig = &config.Config{
+		Checkpoints: config.CheckpointConfig{Enabled: boolPtr(true)},
+		Compact: config.CompactConfig{
+			Auto: &trueVal, Threshold: 0.5, MaxTokens: 1024, Timeout: time.Minute,
+		},
+	}
+	a.SetContextWindow(1000)
+	a.conv.setEstimate(600, tokenbreakdown.Breakdown{}) // 60% > the 50% threshold
+
+	rs := &RunState{
+		Messages: []llm.Message{
+			{Role: "system", Content: "You are Tachi."},
+			{Role: "user", Content: "把导出改成流式"},
+			{Role: "assistant", Content: "好"},
+		},
+		Budget: NewIterationBudget(0),
+	}
+
+	// The turn starts in the parent session and records its boundary there — the state the
+	// whole problem comes from.
+	parentID := a.Config.SessionManager.Current().ID
+	a.beginCheckpointTurn(ctx, rs, "把导出改成流式", boundary(3, 2))
+	require.Equal(t, 1, rs.CheckpointTurn())
+	require.NoError(t, a.snapshotBeforeWrite(ctx, rs, tools.ToolNameWrite))
+
+	ch := make(chan AgentEvent, 16)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &runInput{UserText: "把导出改成流式"}, &llm.ChatOptions{}, ch)
+	close(ch)
+	require.True(t, compacted, "the fixture must actually compact, or this proves nothing")
+	require.NotEqual(t, parentID, a.Config.SessionManager.Current().ID,
+		"compaction must have moved the conversation into a new session")
+	// Re-bound in the new session — and that session numbers its turns from 1. (The NUMBER alone
+	// does not tell the two apart; the manifest below is what does: without the rebind the new
+	// session has no record at all, and the write below is refused with "turn 1 was never begun".)
+	require.Equal(t, 1, rs.CheckpointTurn())
+
+	// The write the reader was refused: same turn, new session.
+	require.NoError(t, os.WriteFile(filepath.Join(work, "b.txt"), []byte("v1"), 0o644))
+	require.NoError(t, a.snapshotBeforeWrite(ctx, rs, tools.ToolNameBash),
+		"a write after the compaction must not be refused")
+
+	// The checkpoint lives in the NEW session's store, labelled with this turn's prompt.
+	m := readCheckpointManifest(t, a)
+	require.Len(t, m.Checkpoints, 1, "one turn in the new session")
+	assert.Equal(t, 1, m.Checkpoints[0].Turn)
+	assert.Equal(t, "把导出改成流式", m.Checkpoints[0].UserText)
+	require.Len(t, m.Checkpoints[0].Roots, 1)
+	assert.Equal(t, work, m.Checkpoints[0].Roots[0].Root)
 }
 
 // TestCheckpointWiringEndsTheTurnWithItsChanges: the turn end records where the writes LEFT

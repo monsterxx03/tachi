@@ -522,6 +522,7 @@ func (a *AIAgent) RunConversationStream(ctx context.Context, history []llm.Messa
 			Messages: messages,
 			Opts:     opts,
 			Params:   params,
+			UserText: userMessage,
 		}, ch)
 
 		// The turn is over, however it ended — completed, stopped, or errored: record where
@@ -736,6 +737,11 @@ type runInput struct {
 	Messages []llm.Message
 	Opts     llm.ChatOptions
 	Params   *runParams
+	// UserText is this turn's message as the reader typed it. The history carries the
+	// reminder-wrapped form instead, so anything that has to LABEL the turn after the fact —
+	// the checkpoint's rewind card — needs it separately. Empty for runs nobody typed into
+	// (a fork's continuation, a one-off command).
+	UserText string
 }
 
 // runLoop is the shared event loop used by both RunConversationStream
@@ -817,7 +823,7 @@ func (a *AIAgent) runLoop(
 		// iteration's finish reason (tool_calls, stop, length). When a
 		// compaction was attempted (success or failure), skip straight to
 		// the next iteration with the new (or original) history.
-		if newCtx, compacted := a.maybeAutoCompact(ctx, rs, &opts, ch); compacted {
+		if newCtx, compacted := a.maybeAutoCompact(ctx, rs, in, &opts, ch); compacted {
 			// Compaction swaps the current session; carry the refreshed
 			// context (new session ID) forward into subsequent iterations.
 			ctx = newCtx
@@ -909,7 +915,7 @@ func (a *AIAgent) terminalError(ctx context.Context, rs *RunState, exitReason st
 // current session); on failure the original history and ctx are kept and
 // the next iteration retries — eventual success if the LLM responds before
 // hitting the limit.
-func (a *AIAgent) maybeAutoCompact(ctx context.Context, rs *RunState, opts *llm.ChatOptions, ch chan<- AgentEvent) (context.Context, bool) {
+func (a *AIAgent) maybeAutoCompact(ctx context.Context, rs *RunState, in *runInput, opts *llm.ChatOptions, ch chan<- AgentEvent) (context.Context, bool) {
 	if rs.SkipSessionWrites {
 		return ctx, false
 	}
@@ -936,6 +942,11 @@ func (a *AIAgent) maybeAutoCompact(ctx context.Context, rs *RunState, opts *llm.
 	if a.Config.SessionManager != nil && a.Config.SessionManager.Current() != nil {
 		opts.SessionID = a.Config.SessionManager.Current().ID
 		ctx = tools.WithSessionID(ctx, a.Config.SessionManager.Current().ID)
+		// The checkpoint binding is session-scoped in exactly the same way, and stale in the
+		// same way: this turn's number was recorded in the OLD session's manifest. Left alone,
+		// every write-capable tool for the rest of the turn is refused ("turn N was never
+		// begun" — the new session has no such turn) until the next turn begins one.
+		a.rebindCheckpointTurn(ctx, rs, in.UserText)
 	}
 	a.Config.Logger.Info(ctx, "Auto compact completed", "msgCount", len(rs.Messages))
 	ch <- AgentEvent{

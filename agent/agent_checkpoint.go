@@ -99,6 +99,30 @@ func (a *AIAgent) snapshotBeforeWrite(ctx context.Context, rs *RunState, toolNam
 	return m.Snapshot(ctx, turn)
 }
 
+// rebindCheckpointTurn starts a fresh checkpoint turn for the session the run is on NOW, after
+// a compaction moved the conversation into a new one.
+//
+// The binding is session-scoped twice over — the turn's number lives in the OLD session's
+// manifest, and the manager resolves by session id — so after the swap every write-capable
+// tool call for the REST of the turn is refused ("turn N was never begun": the new session's
+// manifest has no such turn). That refusal is the reported failure, and it lasts until the
+// turn ends, because only the next turn begins a new one.
+//
+// The boundary is taken FRESH rather than inherited: a checkpoint's cut point has to name a
+// position in the files it will be rewound against, and the new session's records are the
+// compaction's. The price is bounded and honest: the new session's first turn starts at the
+// compaction, so rewinding to it does not undo what this turn wrote BEFORE the move — those
+// writes belong to the parent's turns, which the parent's manifest still describes.
+//
+// A failure is logged, not fatal (beginCheckpointTurn's contract): the turn keeps running.
+func (a *AIAgent) rebindCheckpointTurn(ctx context.Context, rs *RunState, userText string) {
+	if rs == nil || rs.SkipSessionWrites {
+		return
+	}
+	rs.setCheckpointTurn(0)
+	a.beginCheckpointTurn(ctx, rs, userText, a.sessionBoundary())
+}
+
 // endCheckpointTurn records where the turn's writes LEFT the workspace (see
 // checkpoint.Manager.SnapshotEnd), which is what makes the turn's changes readable
 // exactly — from its own two trees rather than from what the tool calls declared, so a

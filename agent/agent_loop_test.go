@@ -1244,7 +1244,7 @@ func TestMaybeAutoCompact_Success(t *testing.T) {
 	ch := make(chan AgentEvent, 10)
 	ctx := context.Background()
 
-	_, compacted := a.maybeAutoCompact(ctx, rs, &llm.ChatOptions{}, ch)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &runInput{UserText: "hello"}, &llm.ChatOptions{}, ch)
 	close(ch)
 
 	assert.True(t, compacted, "should compact when estimate exceeds threshold")
@@ -1297,7 +1297,7 @@ func TestMaybeAutoCompact_StrategyError(t *testing.T) {
 	ch := make(chan AgentEvent, 10)
 	ctx := context.Background()
 
-	_, compacted := a.maybeAutoCompact(ctx, rs, &llm.ChatOptions{}, ch)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &runInput{UserText: "hello"}, &llm.ChatOptions{}, ch)
 	close(ch)
 
 	// Error does NOT stop the loop — compacted=true means the iteration was
@@ -1337,7 +1337,7 @@ func TestMaybeAutoCompact_BelowThreshold(t *testing.T) {
 	ch := make(chan AgentEvent, 10)
 	ctx := context.Background()
 
-	_, compacted := a.maybeAutoCompact(ctx, rs, &llm.ChatOptions{}, ch)
+	_, compacted := a.maybeAutoCompact(ctx, rs, &runInput{UserText: "hello"}, &llm.ChatOptions{}, ch)
 
 	assert.False(t, compacted, "should not compact when estimate is below threshold")
 	assert.Len(t, rs.Messages, 1, "messages must not be replaced")
