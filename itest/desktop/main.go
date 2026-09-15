@@ -32,6 +32,12 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// driverContactWindow is how long the runner waits for the driver to show ANY sign of life before
+// calling the run dead (see sink.contact). Longer than the app's own injection window (10s,
+// desktop/demo.go) so a page that takes its time still counts as alive, and far shorter than the
+// per-scenario budget it stands in for.
+const driverContactWindow = 15 * time.Second
+
 func main() {
 	var (
 		appPath = flag.String("app", "desktop/bin/Tachi.app", "the built app bundle to test")
@@ -150,7 +156,28 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		return report(sc.name, nil, []Line{{Label: "launch", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
-	res, reported := snk.wait(timeout)
+	// The driver's own budget only starts once it is known to be running: a sink that has heard
+	// NOTHING after this window means the driver never ran at all — the injection was lost while
+	// the page was still loading (its payload is re-issued for 10s, see desktop/demo.go), or the
+	// window never came up. Both are already decided, and waiting out the whole per-scenario
+	// budget for them is a minute and a half of silence, so the wait ends here and the report
+	// names it. Measured twice on a machine that was busy compiling: the app was up (its session
+	// directory created) and not one assertion ever arrived.
+	if !snk.contact(driverContactWindow) {
+		if dom := snk.domSnapshot(); len(dom) > 0 {
+			_ = os.WriteFile(filepath.Join(dir, "dom.html"), dom, 0o644)
+		}
+		killAll()
+		return report(sc.name, nil, []Line{{Label: "driver 载入", OK: false,
+			Detail: fmt.Sprintf("%s 内没有任何断言到达：驱动没有跑起来（注入丢失，或窗口没起来）；"+
+				"app 到底起没起，看 home/.tachi 与 debug.log", driverContactWindow)}},
+			time.Since(start), verbose)
+	}
+	rest := timeout - driverContactWindow
+	if rest < time.Second {
+		rest = time.Second
+	}
+	res, reported := snk.wait(rest)
 	// The page as the verdict found it: the artifact that always exists, and the one that
 	// carries the driver's own lines plus everything it asserted about.
 	if dom := snk.domSnapshot(); len(dom) > 0 {

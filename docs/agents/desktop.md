@@ -108,13 +108,27 @@ pkill -f TachiSmoke; kill $MOCK
 - Fixtures: `$HOME/.tachi/session/<id>/{meta.json,messages.jsonl}` (shapes as `session.Store`),
   `additional_dirs`, `desktop_ui.json`; bump `updated_at` so the app auto-loads it
 
-### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go` — two waits, ~0.75s by default)
+### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go` — a retried injection, ~0.75s in)
 
 The injection waits (`TACHI_DEMO_BOOTSTRAP_MS` / `TACHI_DEMO_LOAD_MS`, demo.go) are the floor
 on EVERY scenario in the suite, so they are kept tight and must not be trimmed by eye: too
-small and the script is silently dropped (the scenario then reports an empty
-`mock-requests.txt` and rides out its whole budget — see the comment on those vars, including
-the grid the current values were measured at).
+small and the main-thread dispatch never runs at all, and the run reports nothing (see the
+comment on those vars, including the grid the current values were measured at).
+
+The LOAD wait is no longer what stands between a slow page and a silent failure: the driver's
+payload is re-issued every `demoInjectStep` for `demoInjectWindow` (`TACHI_DEMO_INJECT_MS`, 10s
+by default), because a script injected into a document that is still loading is simply dropped —
+and losing it used to cost the scenario its WHOLE budget with nothing to show for it (measured
+twice on a machine that was busy compiling: the app was up, its session directory created, and not
+one assertion ever arrived). The repeats are safe because the payload guards on
+`window.__tachiDriverStarted`, so the first attempt that lands runs the driver and the rest return
+immediately — a scenario that reports its assertions TWICE means that guard is gone. The app logs
+one line (`demo: driver injection retried`) the first time an attempt does not take, which is how
+to tell "the page was slow" from "the page was ready".
+
+The runner also refuses to wait for a driver that never showed up at all: any line within
+`driverContactWindow` (15s, main.go) means it is running (the harness's first act is a line), and
+nothing by then fails the scenario with that as the reason — 15 seconds instead of 90.
 
 ```js
 // React inputs ignore `el.value = …`: native setter + input event

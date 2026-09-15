@@ -27,27 +27,50 @@ const demoFlagPath = "/tmp/tachi-demo.flag"
 
 // The demo bootstrap's two waits, in order: enough for the app's main loop to start (a
 // main-thread dispatch that lands before it never runs), then the page's own time to load
-// before the driver is injected.
+// before the driver's FIRST injection attempt.
+//
+// A too-small BOOTSTRAP is not slow, it is SILENT: a dispatch that lands before the main loop
+// runs is never executed at all — the driver goroutine then waits forever and the run reports
+// nothing (measured: a probe app launched with the bootstrap moved to t=0 never reached its own
+// driver). It is a floor, and the shipped 250ms keeps ~3x its measured need; turn it down only
+// with the grid to hand (`TACHI_DEMO_*_MS` lets the same binary be re-measured).
+//
+// The LOAD wait no longer has to be right on its own: an injection that lands while the document
+// is still loading is silently dropped, so the driver is injected repeatedly for a window instead
+// of once (see demoInjectWindow). This one is now only how much of a head start the first attempt
+// gets — the loading page is covered by the retries, not by this number.
 //
 // They are NOT free time, and their sum is the floor on EVERY smoke scenario — the suite
-// launches the app once per scenario, so this is paid 28 times a run. Both used to be
-// several times larger and were trimmed against measurement: with `TACHI_DEMO_*_MS` set,
-// the same binary was run at a grid of values and the whole suite re-run at each viable
-// point. What the grid says is that they trade against a SINGLE budget — the moment of
-// injection, ~250ms after launch — so shrinking one is not compensated by the other: the
-// app is launched with `open`, whose `--env` inherits this process's environment, which is
-// what makes the two knobs reachable at all.
-//
-// Too small is not slow, it is SILENT: a script injected into a document that is still
-// loading is simply lost, and `WebviewWindow.ExecJS` drops a call made before the window's
-// impl exists. The scenario then reports "driver 在预算内完成 … 等了 90s 没收到结果" with an
-// EMPTY mock-requests.txt — no driver, no model call — and the app sits there until the
-// per-scenario budget expires, which is far more expensive than the margin saved. The
-// shipped values keep ~3x that budget; turn them down only with the grid to hand.
+// launches the app once per scenario, so this is paid 28 times a run. Both used to be several
+// times larger and were trimmed against measurement: with `TACHI_DEMO_*_MS` set, the same binary
+// was run at a grid of values and the whole suite re-run at each viable point. What the grid says
+// is that they trade against a SINGLE budget — the moment of injection, ~250ms after launch — so
+// shrinking one is not compensated by the other: the app is launched with `open`, whose `--env`
+// inherits this process's environment, which is what makes the knobs reachable at all.
 var (
 	demoBootstrapDelay = envDuration("TACHI_DEMO_BOOTSTRAP_MS", 250)
 	demoLoadDelay      = envDuration("TACHI_DEMO_LOAD_MS", 500)
 )
+
+// demoInjectWindow is how long the driver keeps being injected to, and demoInjectStep how often.
+//
+// A script injected into a document that is still loading is simply lost, and Wails drops an
+// ExecJS issued before the window's impl exists — so a single shot after a fixed sleep is a race
+// against the machine, and losing it is SILENT: that run reports no assertions at all after
+// burning its whole per-scenario budget (measured twice on a machine that was busy compiling —
+// the app was up, its session directory created, and nothing ever arrived).
+//
+// What is being waited for inside this window is the React app's mount, whose length depends on
+// the machine and on what else is running, so the window is generous and the repeats are
+// idempotent (the payload guards on `window.__tachiDriverStarted`, see runJsDemo): the first
+// attempt that lands runs the driver and every later one returns immediately. The window is
+// therefore the app's own goroutine time, not a per-attempt cost — the calls are no-ops once the
+// driver is running.
+var demoInjectWindow = envDuration("TACHI_DEMO_INJECT_MS", 10000)
+
+// demoInjectStep is how often the driver is injected during that window: the distance between
+// "the page just became ready" and "the driver started", which is the whole point of the retries.
+const demoInjectStep = 200 * time.Millisecond
 
 // envDuration reads a millisecond override for one of the waits above, or returns the
 // default. It exists so the numbers can be re-measured (see the comment above) instead of
@@ -124,13 +147,12 @@ func runJsDemo(window *application.WebviewWindow) {
 	// than the next one — which loses the flag.
 	reason := keepPageAwake(window)
 
-	// Give the webview a moment to load the React app.
+	// Give the webview a moment to load the React app — the first injection attempt's head
+	// start, not a deadline: the attempts keep coming for demoInjectWindow (see demoInject).
 	time.Sleep(demoLoadDelay)
 
 	if script, ok := demoScriptFromFile(); ok {
-		window.ExecJS(fmt.Sprintf(
-			"window.__tachiDemoUnthrottled = %t; window.__tachiDemoUnthrottleError = %q;\n%s",
-			reason == "", reason, script))
+		demoInject(window, reason, script)
 		return
 	}
 
@@ -142,6 +164,40 @@ func runJsDemo(window *application.WebviewWindow) {
 	for _, msg := range messages {
 		window.ExecJS(demoScript(msg))
 		time.Sleep(7 * time.Second)
+	}
+}
+
+// demoInject drives the file's script into the page, re-issuing it until the driver is running.
+//
+// The unthrottle verdict rides in the SAME ExecJS payload as the driver: a separate call is
+// dispatched on its own, and Wails sends a script queued while the runtime is still loading in a
+// different order than the next one — which loses the flag.
+//
+// The guard is what makes the repeats safe. A page that has not loaded yet drops the script, but
+// one that lands twice would otherwise run the whole driver twice: two harnesses, every assertion
+// posted twice, and a scenario whose result is whatever the race decided.
+func demoInject(window *application.WebviewWindow, reason, script string) {
+	payload := fmt.Sprintf(
+		"(function(){\n"+
+			"if (window.__tachiDriverStarted) return;\n"+
+			"window.__tachiDriverStarted = true;\n"+
+			"window.__tachiDemoUnthrottled = %t; window.__tachiDemoUnthrottleError = %q;\n"+
+			"%s\n})()",
+		reason == "", reason, script)
+
+	deadline := time.Now().Add(demoInjectWindow)
+	for attempt := 0; ; attempt++ {
+		window.ExecJS(payload)
+		// Worth a line the first time: it means the first attempt did NOT land (the page was
+		// still loading), which is the flake this loop exists for — and how many attempts it
+		// took is the measurement that says whether demoLoadDelay is still in the right place.
+		if attempt == 1 {
+			log.Printf("demo: driver injection retried (the first attempt did not take)")
+		}
+		if !time.Now().Add(demoInjectStep).Before(deadline) {
+			return
+		}
+		time.Sleep(demoInjectStep)
 	}
 }
 

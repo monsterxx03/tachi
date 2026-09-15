@@ -161,6 +161,28 @@ func (s *sink) wait(timeout time.Duration) (Result, bool) {
 	}
 }
 
+// contact reports whether the driver has posted ANY line yet, waiting at most d.
+//
+// The harness's first act is a line ("driver 载入"), so this answers the one question a runner can
+// settle long before the driver's own budget is spent: did the driver run at all? An injection
+// lost to a still-loading document, or a window that never came up, leaves a sink that stays empty
+// forever — and every extra second spent waiting for it is silence.
+func (s *sink) contact(d time.Duration) bool {
+	deadline := time.Now().Add(d)
+	for {
+		s.mu.Lock()
+		heard := len(s.progress) > 0
+		s.mu.Unlock()
+		if heard {
+			return true
+		}
+		if time.Now().After(deadline) {
+			return false
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+}
+
 // lines returns the assertions seen so far, in order.
 func (s *sink) lines() []Line {
 	s.mu.Lock()
