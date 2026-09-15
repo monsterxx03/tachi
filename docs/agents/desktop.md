@@ -329,6 +329,27 @@ const type = (el, t) => {
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
   popping a real Finder window.
+- **A pasted image is stored, then attached by reference — the same route a dropped file takes**
+  (`SavePastedImage`, `desktop/fileservice.go`, + `composer.tsx`'s `onPaste`): a screenshot on the
+  clipboard is BYTES with no path, so the composer sends them (base64 — the only shape the page
+  has) to a binding that writes them under the SESSION's own directory (`pasted/`, beside `oneoff/`
+  and `subagent/`, so the file dies with the conversation and never appears in the user's workspace
+  diff) and answers with an ABSOLUTE `@`-reference to splice in at the caret. Everything downstream
+  is the @-file machinery that already existed: expansion turns the reference into a multi-modal
+  part, and the bubble keeps showing what the user sent. Three things to know before touching it:
+  (1) the answer is a VO, not "ok"/reason — the composer needs the REFERENCE on success and the
+  reason on failure, and a paste that silently does nothing is the same class of bug as a message
+  that silently goes nowhere; (2) **nothing is re-expanded on RELOAD** —
+  `ConvertSessionToLLMMessages` never touches `atfile`, the record keeps the expanded text (with the
+  `[图片: …]` placeholder) plus the raw display text, so the image reaches the model for the turn it
+  was sent with and a later turn sees only the placeholder (true of every `@`-image, not just
+  pastes); (3) one file per paste — a timestamp alone collided for two pastes in the same
+  millisecond (the unit test caught the second one overwriting the first), hence the short uuid in
+  the name. `paste-image` covers the whole route and asserts the pasted BYTES at the LLM boundary —
+  which requires the smoke provider to declare vision (`sandbox.go`'s `spec.vision: true`, or the
+  agent describes the image instead of attaching it, `agent/vision_fallback.go`) and the assertion to
+  read `RawBody` (the normalized request view keeps text only, so an image part is invisible to
+  `requestSeen` by construction).
 - **A send NAMES its session, and a send that does not happen SAYS SO** (`SendMessage` / `StopAndSend`,
   `desktop/agent_turn.go`): both read the session from `d.activeID` and answered `"ok"` for a message
   they never started a turn for — `startTurn`'s two escape hatches (no active session, one already

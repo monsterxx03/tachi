@@ -1,11 +1,15 @@
 package main
 
 import (
+	"bytes"
+	"encoding/base64"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
+	"github.com/monsterxx03/tachi/agent/atfile"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -129,5 +133,63 @@ func TestAtFileRootFollowsSessionWorkingDir(t *testing.T) {
 	r.sm = newSessionManagerForTest(t, dir)
 	if got := d.atFileRoot("sid"); got != dir {
 		t.Errorf("expected the session working dir %q, got %q", dir, got)
+	}
+}
+
+// TestSavePastedImageStoresUnderTheSession pins the paste path end to end, as far as this layer can
+// see it: the bytes land INSIDE the session's own directory (so a screenshot dies with the
+// conversation it was sent in and never appears in the user's workspace, where their diff would
+// show it), the answer is an @-reference — the same thing a dropped file gets — and it points at a
+// file @-file expansion classifies as an image, which is how it becomes a multi-modal part for the
+// model. Every refusal is a REASON rather than an empty answer: a paste that silently does nothing
+// is the same class of bug as a message that silently goes nowhere.
+func TestSavePastedImageStoresUnderTheSession(t *testing.T) {
+	_, svc, sid, dir := newDeleteApp(t)
+
+	// A real 1x1 PNG, base64 — the shape the webview sends (a data URL's payload).
+	const pngB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
+
+	got := svc.SavePastedImage(sid, "image/png", pngB64)
+	if got.Error != "" {
+		t.Fatalf("SavePastedImage: %s", got.Error)
+	}
+	path := strings.TrimPrefix(got.Ref, "@")
+	if path == got.Ref {
+		t.Fatalf("ref = %q, want an @-reference", got.Ref)
+	}
+	if want := filepath.Join(dir, pastedDirName) + string(filepath.Separator); !strings.HasPrefix(path, want) {
+		t.Errorf("pasted file %q is not under the session's directory (%q)", path, want)
+	}
+
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("read the pasted file: %v", err)
+	}
+	want, err := base64.StdEncoding.DecodeString(pngB64)
+	if err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if !bytes.Equal(raw, want) {
+		t.Errorf("stored %d bytes, want the %d that were pasted", len(raw), len(want))
+	}
+	if kind, _ := atfile.Classify(path); kind != atfile.KindImage {
+		t.Errorf("atfile classifies the pasted file as %v, want an image — the expansion would not attach it", kind)
+	}
+
+	// A second paste must not overwrite the first: one file per paste, whatever the name.
+	first := path
+	if again := svc.SavePastedImage(sid, "image/png", pngB64); again.Error != "" || strings.TrimPrefix(again.Ref, "@") == first {
+		t.Errorf("second paste = %+v, want its own file", again)
+	}
+
+	// Refusals, each naming what was wrong.
+	for _, tc := range []struct{ name, session, media, data string }{
+		{"not an image", sid, "application/pdf", pngB64},
+		{"no session", "", "image/png", pngB64},
+		{"undecodable", sid, "image/png", "not base64 at all!!"},
+	} {
+		if out := svc.SavePastedImage(tc.session, tc.media, tc.data); out.Error == "" {
+			t.Errorf("%s: got %+v, want a reason", tc.name, out)
+		}
 	}
 }

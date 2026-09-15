@@ -473,6 +473,16 @@ export interface OneOffVO {
 }
 
 /**
+ * PastedImageVO is what a paste produced: the @-reference to splice into the input area, or the
+ * reason it was not stored. Two fields rather than one string, so the frontend can tell "here is a
+ * reference" from "here is why not" without sniffing the text for a leading '@'.
+ */
+export interface PastedImageVO {
+    "ref"?: string;
+    "error"?: string;
+}
+
+/**
  * PlanEntryVO is one row of the plan panel's list: enough to choose between a session's
  * plans without loading them all. A session accumulates plans (one file per plan), so the
  * list is the difference between "the newest plan" and "the plans".

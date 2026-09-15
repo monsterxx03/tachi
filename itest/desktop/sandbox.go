@@ -120,6 +120,11 @@ providers:
     api_key: smoke-key
     spec:
       context_window: 128000
+      # vision: the mock accepts anything, and a provider that cannot see images makes the agent
+      # describe them instead of attaching them (agent/vision_fallback.go) — which is correct
+      # behaviour but leaves the image routes untestable. Scenarios that never send an image are
+      # unaffected: the flag only decides whether image parts are passed on as parts.
+      vision: true
 title_generation: false
 language: zh
 herdr:

@@ -28,3 +28,28 @@ func ImageMediaType(ext string) (mimeType string, ok bool) {
 	mimeType, ok = imageMediaTypesByExt[strings.ToLower(ext)]
 	return mimeType, ok
 }
+
+// imageExtByMediaType is the inverse, written out rather than derived so the preferred extension
+// for a type is STATED instead of won by a map-order tie-break: image/jpeg has two (".jpg" and
+// ".jpeg"), and a paste should be stored as the shorter one.
+var imageExtByMediaType = map[string]string{
+	"image/png":  ".png",
+	"image/jpeg": ".jpg",
+	"image/gif":  ".gif",
+	"image/webp": ".webp",
+}
+
+// ImageExtForMediaType returns the extension an image of this MIME type is stored under, for the
+// callers that hold BYTES and no path — a pasted screenshot never had a name. ok is false when the
+// type is not one of the supported images, which is what lets a paste be refused instead of written
+// under a name @-file expansion would treat as a binary file.
+//
+// Parameters are dropped and the type is lower-cased first: clipboards hand over things like
+// "image/PNG" and "image/jpeg;charset=utf-8", and neither changes what the bytes are.
+func ImageExtForMediaType(mimeType string) (ext string, ok bool) {
+	if i := strings.IndexByte(mimeType, ';'); i >= 0 {
+		mimeType = mimeType[:i]
+	}
+	ext, ok = imageExtByMediaType[strings.ToLower(strings.TrimSpace(mimeType))]
+	return ext, ok
+}

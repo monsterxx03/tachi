@@ -495,6 +495,27 @@ export function RunningSessions(): $CancellablePromise<string[] | null> {
 }
 
 /**
+ * SavePastedImage stores an image pasted into the composer and answers with the @-reference that
+ * attaches it — the SAME route a dropped file takes (ResolveDroppedPaths), because that is already
+ * how an image reaches the model: @-file expansion turns the reference into a multi-modal content
+ * part, and the bubble keeps showing the text the user sent (DisplayContent).
+ * 
+ * data is base64, and it is the only thing the webview has: a screenshot on the clipboard is bytes
+ * with no path, and a string is a shape the binding generator handles everywhere. The file name is
+ * generated — there is no name to preserve, and one paste must not overwrite the last.
+ * 
+ * It carries no root: the reference this returns is ABSOLUTE (the pasted file lives under the
+ * session directory, which is never inside a workspace root — Tachi's own state is refused as a
+ * root), and an absolute reference resolves as-is. That is also why nothing has to be re-scanned on
+ * RELOAD: a session's stored records are converted as they are (ConvertSessionToLLMMessages never
+ * expands anything), so the image is attached for the turn it was sent with and the transcript
+ * afterwards shows the reference the user typed.
+ */
+export function SavePastedImage(sessionID: string, mediaType: string, data: string): $CancellablePromise<$models.PastedImageVO> {
+    return $Call.ByID(871218941, sessionID, mediaType, data);
+}
+
+/**
  * SearchFiles returns @-file completion matches for a session.
  * 
  * The whole root set is searched (primary + the session's additional roots): an

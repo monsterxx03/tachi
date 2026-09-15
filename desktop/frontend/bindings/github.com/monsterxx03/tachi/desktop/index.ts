@@ -29,6 +29,7 @@ export type {
     OneOffListVO,
     OneOffRequestVO,
     OneOffVO,
+    PastedImageVO,
     PlanEntryVO,
     PlanStepVO,
     PlanVO,

@@ -108,6 +108,19 @@ func (c *checkCtx) requestSeen(want string) (int, bool) {
 	return 0, false
 }
 
+// rawSeen looks for a substring in the requests' RAW bodies. It is the only way to assert on an
+// IMAGE part: the normalized view keeps text only (mockllm's normalize concatenates the text parts
+// and drops the rest), so a pasted image is invisible to requestSeen by construction — which is
+// exactly why the assertion has to reach for the bytes.
+func (c *checkCtx) rawSeen(want string) (int, bool) {
+	for i, r := range c.requests {
+		if strings.Contains(string(r.RawBody), want) {
+			return i + 1, true
+		}
+	}
+	return 0, false
+}
+
 // projectRoot is the fixture's project primary directory: the tree a bound session must work
 // in, and — after the driver deletes the project — the tree its snapshot is refreshed to.
 func (c *checkCtx) projectRoot() string { return filepath.Join(c.dir, projectRootDir) }
@@ -1559,6 +1572,38 @@ permissions:
 		},
 		//
 		//
+		// paste-image: a screenshot pasted into the box must reach the model as an IMAGE. The driver
+		// dispatches a real paste event carrying PNG bytes (a screenshot on the clipboard is bytes
+		// with no path — which is why the composer stores it through a binding instead of inserting a
+		// path), and the Go side asserts those very bytes arrived at the LLM boundary: that is the
+		// only place that proves the whole route (@-reference → @-file expansion → multi-modal part)
+		// rather than its first step. It also pins WHERE the file goes: inside the session directory,
+		// never the workspace, where the user's own diff would show it.
+		{
+			name: "paste-image",
+			files: map[string]string{
+				"README.md": "# smoke\n\npaste-image scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("图看到了。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				_, seen := c.rawSeen("data:image/png;base64")
+				c.check("请求里带了图片（多模态 part 到了线路上）", seen, "请求的原始 body 里没有 data:image/png;base64")
+				_, exact := c.rawSeen(pasteImageB64[:48])
+				c.check("模型收到的正是用户粘贴的那张图（base64 原样到达）", exact,
+					"请求的原始 body 里没有粘贴图片的 base64 片段")
+				// "pasted" is desktop/fileservice.go's pastedDirName — the desktop module is not a
+				// dependency of this one, so the name is spelled here and asserted to exist.
+				pasted, _ := filepath.Glob(filepath.Join(c.home, ".tachi", "session", "*", "pasted", "*.png"))
+				c.check("粘贴的图存在会话目录的 pasted/ 下", len(pasted) == 1, fmt.Sprintf("%v", pasted))
+				inWork, _ := filepath.Glob(filepath.Join(c.work, "*", "pasted"))
+				c.check("粘贴的图没有落在用户工作区里", len(inWork) == 0, fmt.Sprintf("%v", inWork))
+			},
+		},
+		//
+		//
 		// zoom-fit: the lightbox must never MAGNIFY. fit() scales a diagram into the window, and
 		// doing that in both directions opened the same gesture at wildly different sizes depending
 		// on a thing the reader cannot see — the diagram's own natural size ("sometimes it opens
@@ -1589,6 +1634,12 @@ permissions:
 		},
 	}
 }
+
+// pasteImageB64 is the 1x1 PNG the paste-image driver pastes, as the webview sends it (a data URL's
+// payload). It is duplicated in drivers/paste-image.js — a driver cannot read a Go constant — so the
+// two must stay identical: the Go side asserts THESE bytes reached the model, which is what makes
+// the test about the paste rather than about "some image".
+const pasteImageB64 = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg=="
 
 // tallMermaid is a flowchart tall enough to matter: a vertical chain of nodes, each about a
 // line high, so the rendered figure is several hundred pixels tall.

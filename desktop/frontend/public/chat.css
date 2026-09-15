@@ -326,6 +326,17 @@
   max-width: var(--reading-width);
   margin-inline: auto;
 }
+/* ── Pasted-image notice ──────────────────────────────────────────────────── */
+/* A paste that could not be stored has no bubble to land in (nothing was sent), so it reports
+   itself here, right above the box it was pasted into. */
+.paste-notice {
+  width: 100%;
+  max-width: var(--reading-width);
+  margin: 0 auto 6px;
+  font-size: 12.5px;
+  color: var(--amber);
+}
+
 /* ── Pending queue (steer) bar ────────────────────────────────────────────── */
 /* Messages queued while a turn is running: shown above the composer, each
    removable, until the next steer point injects them or "立即发送" stops the

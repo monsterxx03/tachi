@@ -80,6 +80,10 @@ export function useComposer(deps: ComposerDeps) {
 
   const [input, setInput] = useState('')
   const [sendingNow, setSendingNow] = useState(false)
+  // Why the last pasted image was not stored ("" when the last paste was fine or there was none).
+  // A paste failure has no bubble to land in — unlike a refused message, nothing was sent — so it
+  // gets a line of its own above the box rather than being swallowed.
+  const [pasteError, setPasteError] = useState('')
   // IME composition state. Some WebKit builds fire compositionend BEFORE the Enter keydown
   // that commits the candidate, so the ref is cleared on the next macrotask — that keeps the
   // guard active for the committing Enter without swallowing a later, genuine Enter-to-send.
@@ -181,6 +185,51 @@ export function useComposer(deps: ComposerDeps) {
       if (resync) syncAtRef(ins.value, ins.caret)
     })
   }, [syncAtRef])
+
+  // A pasted image is BYTES with no path, so the backend stores it first (under the session's own
+  // directory) and answers with the @-reference to splice in at the caret — the same route a
+  // dropped file takes, which is also the route an image already travels to the model (@-file
+  // expansion turns it into a multi-modal part). Pasting TEXT is left alone: this only claims the
+  // gesture when the clipboard actually carries an image, so nothing about ordinary paste changes.
+  const onPaste = useCallback((e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+    const items = e.clipboardData?.items
+    if (!items || items.length === 0) return
+    const images: File[] = []
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i]
+      if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+      const f = item.getAsFile()
+      if (f) images.push(f)
+    }
+    if (images.length === 0) return
+    // Claimed: otherwise the browser would also paste the image's textual form (a file name, or
+    // nothing), and the reference is what belongs in the box.
+    e.preventDefault()
+    void (async () => {
+      for (const f of images) {
+        try {
+          const url = await readAsDataURL(f)
+          const res = await AgentService.SavePastedImage(currentId, f.type, url.slice(url.indexOf(',') + 1))
+          if (res?.ref) {
+            closeAt()
+            insertAtCaret(res.ref, true, false)
+            continue
+          }
+          setPasteError(res?.error || '粘贴的图片没有存下来')
+        } catch {
+          setPasteError('粘贴的图片没有存下来')
+        }
+      }
+    })()
+  }, [currentId, closeAt, insertAtCaret])
+
+  // The notice is transient: it reports a paste that did not happen, and the reader either retries
+  // (their screenshot is still on the clipboard) or moves on.
+  useEffect(() => {
+    if (!pasteError) return
+    const t = window.setTimeout(() => setPasteError(''), PASTE_NOTICE_MS)
+    return () => window.clearTimeout(t)
+  }, [pasteError])
 
   // acceptAt REPLACES the reference being typed with the picked path — it must not splice at
   // the caret, or the "@query" the user was typing survives and the text ends up with a stray
@@ -710,7 +759,24 @@ export function useComposer(deps: ComposerDeps) {
     perm: perms[currentId] || null, answerPerm: answerPermCurrent, clearPerm,
     // sending
     send, submit, answerSteer, noticeCommandResult,
+    // pasted images
+    onPaste, pasteError,
   }
+}
+
+// PASTE_NOTICE_MS is how long a failed paste stays on screen: long enough to read one line, short
+// enough that the box is clean again by the time the reader has retried the paste.
+const PASTE_NOTICE_MS = 5000
+
+// readAsDataURL reads a clipboard File — a pasted image exists only as bytes, so this is the only
+// way to reach them from the page.
+function readAsDataURL(f: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const r = new FileReader()
+    r.onload = () => resolve(String(r.result || ''))
+    r.onerror = () => reject(new Error('read failed'))
+    r.readAsDataURL(f)
+  })
 }
 
 export type ComposerApi = ReturnType<typeof useComposer>
@@ -720,7 +786,7 @@ export type ComposerApi = ReturnType<typeof useComposer>
 // value — so what is rendered and what is sent can never disagree. The <footer> around it
 // (and the status row that shares that footer) belongs to the caller.
 export function Composer({ api, running, onStop }: { api: ComposerApi; running: boolean; onStop: () => void }) {
-  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging } = api
+  const { input, setInput, composerRef, composingRef, syncAtRef, closeAt, at, setAt, acceptAt, cmdOpen, cmdMatches, cmdIdx, setCmdIdx, setCmdDismissed, cmdQuery, acceptCommand, pending, dropPending, clearPending, sendPendingNow, sendingNow, send, focusTranscript, inputStyle, startHeightDrag, onHeightKey, heightDragging, onPaste, pasteError } = api
 
   return (
     <>
@@ -755,6 +821,7 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
           aria-orientation="horizontal" aria-label="调整输入框高度" tabIndex={0}
           title="向上拖动加高输入框（↑ ↓ 也可以）"
           onPointerDown={startHeightDrag} onKeyDown={onHeightKey} />
+        {pasteError && <div className="paste-notice">⚠ {pasteError}</div>}
         {cmdOpen && (
           <CommandPicker
             items={cmdMatches}
@@ -838,7 +905,8 @@ export function Composer({ api, running, onStop }: { api: ComposerApi; running: 
               e.preventDefault()
               send()
             }}
-            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件）'} />
+            onPaste={onPaste}
+            placeholder={running ? '正在运行…输入后 Enter 将加入待发送，在工具间隙自动插入' : '发送消息给 Tachi…（Enter 发送，Shift+Enter 换行，@ 引用文件，可直接粘贴截图）'} />
           {running && (
             <button className="stop-btn" title="停止生成" onClick={onStop} aria-label="停止生成">
               <svg viewBox="0 0 24 24" width="10" height="10" fill="currentColor"><rect x="7" y="7" width="10" height="10" rx="1.5" /></svg>

@@ -11,15 +11,20 @@ package main
 // the file the agent's tools would open.
 
 import (
+	"encoding/base64"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/atfile"
+	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/fileindex"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/pkg/strutil"
 )
 
 // FileDropEvent is emitted to the frontend when files are dropped onto the
@@ -278,6 +283,78 @@ func (s *AgentService) ResolveDroppedPaths(sessionID string, paths []string) []D
 		})
 	}
 	return out
+}
+
+// PastedImageVO is what a paste produced: the @-reference to splice into the input area, or the
+// reason it was not stored. Two fields rather than one string, so the frontend can tell "here is a
+// reference" from "here is why not" without sniffing the text for a leading '@'.
+type PastedImageVO struct {
+	Ref   string `json:"ref,omitempty"`
+	Error string `json:"error,omitempty"`
+}
+
+// pastedDirName is where a session's pasted images live: beside oneoff/ and subagent/, inside the
+// session's own directory. A screenshot belongs to the conversation it was sent in and dies with
+// it — the session cleanup removes the whole directory — and it must not land in the user's
+// workspace, where it would show up in their diff.
+const pastedDirName = "pasted"
+
+// SavePastedImage stores an image pasted into the composer and answers with the @-reference that
+// attaches it — the SAME route a dropped file takes (ResolveDroppedPaths), because that is already
+// how an image reaches the model: @-file expansion turns the reference into a multi-modal content
+// part, and the bubble keeps showing the text the user sent (DisplayContent).
+//
+// data is base64, and it is the only thing the webview has: a screenshot on the clipboard is bytes
+// with no path, and a string is a shape the binding generator handles everywhere. The file name is
+// generated — there is no name to preserve, and one paste must not overwrite the last.
+//
+// It carries no root: the reference this returns is ABSOLUTE (the pasted file lives under the
+// session directory, which is never inside a workspace root — Tachi's own state is refused as a
+// root), and an absolute reference resolves as-is. That is also why nothing has to be re-scanned on
+// RELOAD: a session's stored records are converted as they are (ConvertSessionToLLMMessages never
+// expands anything), so the image is attached for the turn it was sent with and the transcript
+// afterwards shows the reference the user typed.
+func (s *AgentService) SavePastedImage(sessionID, mediaType, data string) PastedImageVO {
+	ext, ok := llm.ImageExtForMediaType(mediaType)
+	if !ok {
+		return PastedImageVO{Error: "粘贴的不是支持的图片（支持 png / jpg / gif / webp）"}
+	}
+	raw, err := base64.StdEncoding.DecodeString(stripSpace(data))
+	if err != nil || len(raw) == 0 {
+		return PastedImageVO{Error: "粘贴的图片读不出来"}
+	}
+	// Refused HERE instead of stored and annotated by expansion: a file over the model's limit
+	// would sit in the session forever and never be seen by anyone, so the reader is better told
+	// now, while the screenshot is still on their clipboard.
+	if int64(len(raw)) > llm.MaxImageSize {
+		return PastedImageVO{Error: fmt.Sprintf("粘贴的图片太大（%s，上限 %s）",
+			strutil.HumanBytes(int64(len(raw))), strutil.HumanBytes(llm.MaxImageSize))}
+	}
+	dir, err := sessionDirPath(sessionID)
+	if err != nil {
+		return PastedImageVO{Error: err.Error()}
+	}
+	sub := filepath.Join(dir, pastedDirName)
+	if err := os.MkdirAll(sub, 0o700); err != nil {
+		return PastedImageVO{Error: "保存粘贴的图片失败：" + err.Error()}
+	}
+	// Time for the eye, a short uuid for uniqueness: a millisecond timestamp alone collides when
+	// two pastes land in the same one (measured by this package's own test — the second paste
+	// overwrote the first), and a lost screenshot is not a failure the reader could notice.
+	path := filepath.Join(sub, "paste-"+time.Now().Format("20060102-150405")+"-"+strutil.ShortUUID(8)+ext)
+	if err := os.WriteFile(path, raw, 0o600); err != nil {
+		return PastedImageVO{Error: "保存粘贴的图片失败：" + err.Error()}
+	}
+	return PastedImageVO{Ref: "@" + path}
+}
+
+// stripSpace removes the whitespace a base64 payload may carry (a data URL read by a browser does
+// not add any, but a decoder rejects what it finds rather than ignoring it).
+func stripSpace(s string) string {
+	if !strings.ContainsAny(s, " \t\r\n") {
+		return s
+	}
+	return strings.NewReplacer(" ", "", "\t", "", "\r", "", "\n", "").Replace(s)
 }
 
 // kindName renders an atfile.Kind for the frontend.
