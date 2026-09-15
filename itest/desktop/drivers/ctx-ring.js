@@ -30,7 +30,14 @@
   }
 
   smoke.q('.chat').focus()
+  const fixtureId = smoke.text('.session-id')
   if (!smoke.click('.new-chat')) return smoke.fail('点击新建会话', '按钮找不到')
+  // The SWITCH is what has to be waited for, not the 欢迎屏: this scenario's fixture session is
+  // empty too, so the welcome screen is already on screen the instant it is asked for — a send
+  // that raced the switch ran its turn in the OLD session (correctly leaving the new one empty,
+  // which then reads as "the turn never started"). The titlebar names the session on screen, so
+  // that is the thing that says the switch landed.
+  if (!(await smoke.waitFor(() => smoke.text('.session-id') !== fixtureId, '切到新会话（标题栏会话 id 变了）', 10000))) return smoke.finish()
   if (!(await smoke.waitFor('.welcome', '新会话是空的（welcome 出现）', 8000))) return smoke.finish()
   smoke.log('新建会话后（还没跑 turn）', ringLabel())
 
