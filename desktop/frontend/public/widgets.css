@@ -435,10 +435,25 @@
   color: var(--text-dim);
   white-space: nowrap;
 }
-/* Hue-coded metrics: cost amber, credit green, throughput green→amber→red by
-   tier. Values come from the semantic tokens so both themes stay legible. */
-.usage-cost { color: var(--amber); font-variant-numeric: tabular-nums; font-weight: 550; }
-.usage-credit { color: var(--green); font-variant-numeric: tabular-nums; font-weight: 550; }
+/* Metrics, ranked by how much attention they may take.
+   Throughput keeps its hue at rest (green→amber→red by tier): it reports
+   whether the turn is ALIVE, which nothing else in the row says.
+   Cost and credit do not — they are a running total, and a hue-coded number
+   that never stops moving draws the eye to the one thing in the row you can
+   read off a turn footer anyway. So they rest at --text-dim like the rest of
+   the row and only take their hue on hover: the numbers stay one glance away
+   (each keeps its title), and the row is quiet while a turn runs. The same
+   amber/green, just gated behind the pointer. */
+.usage-cost,
+.usage-credit {
+  color: var(--text-dim);
+  font-variant-numeric: tabular-nums;
+  font-weight: 550;
+  cursor: default;
+  transition: color 0.15s var(--ease);
+}
+.usage-cost:hover { color: var(--amber); }
+.usage-credit:hover { color: var(--green); }
 .usage-tps { font-variant-numeric: tabular-nums; font-weight: 550; }
 .usage-tps.tps-fast { color: var(--green); }
 .usage-tps.tps-normal { color: var(--amber); }

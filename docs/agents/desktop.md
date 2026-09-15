@@ -82,7 +82,10 @@ HOME=/tmp/tachi-smoke /tmp/mock-bin &        # writes config.yaml + dumps reques
 MOCK=$!; sleep 2
 open /tmp/tachi-smoke/TachiSmoke.app \
   --env HOME=/tmp/tachi-smoke --env TACHI_DEMO=1 --env TACHI_DEMO_JS=/tmp/drive.js
-sleep 24                                     # mount (~2s) + the driver's own timing
+sleep 24                                     # mount + the driver's own timing (the app's own
+                                             # bootstrap waits are ~0.75s; see demo.go's
+                                             # TACHI_DEMO_*_MS note — this sleep is generous
+                                             # because a hand-run has no sink to wait on)
 R=$(osascript -e 'tell application "System Events" to tell process "TachiSmoke" to get {position, size} of window 1')
 I=$(echo "$R" | tr -dc '0-9, '); screencapture -x -R "$I" /tmp/tachi-smoke/shot.png
 pkill -f TachiSmoke; kill $MOCK
@@ -99,7 +102,13 @@ pkill -f TachiSmoke; kill $MOCK
 - Fixtures: `$HOME/.tachi/session/<id>/{meta.json,messages.jsonl}` (shapes as `session.Store`),
   `additional_dirs`, `desktop_ui.json`; bump `updated_at` so the app auto-loads it
 
-### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go` ~2s after mount)
+### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go` — two waits, ~0.75s by default)
+
+The injection waits (`TACHI_DEMO_BOOTSTRAP_MS` / `TACHI_DEMO_LOAD_MS`, demo.go) are the floor
+on EVERY scenario in the suite, so they are kept tight and must not be trimmed by eye: too
+small and the script is silently dropped (the scenario then reports an empty
+`mock-requests.txt` and rides out its whole budget — see the comment on those vars, including
+the grid the current values were measured at).
 
 ```js
 // React inputs ignore `el.value = …`: native setter + input event

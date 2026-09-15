@@ -25,13 +25,42 @@ func demoEnabled() bool {
 
 const demoFlagPath = "/tmp/tachi-demo.flag"
 
-// The demo bootstrap's two delays, in order: enough for the app's main loop to start (a
+// The demo bootstrap's two waits, in order: enough for the app's main loop to start (a
 // main-thread dispatch that lands before it never runs), then the page's own time to load
-// before the driver is injected. Together they are the ~2s the driver has always waited for.
-const (
-	demoBootstrapDelay = 500 * time.Millisecond
-	demoLoadDelay      = 1500 * time.Millisecond
+// before the driver is injected.
+//
+// They are NOT free time, and their sum is the floor on EVERY smoke scenario — the suite
+// launches the app once per scenario, so this is paid 28 times a run. Both used to be
+// several times larger and were trimmed against measurement: with `TACHI_DEMO_*_MS` set,
+// the same binary was run at a grid of values and the whole suite re-run at each viable
+// point. What the grid says is that they trade against a SINGLE budget — the moment of
+// injection, ~250ms after launch — so shrinking one is not compensated by the other: the
+// app is launched with `open`, whose `--env` inherits this process's environment, which is
+// what makes the two knobs reachable at all.
+//
+// Too small is not slow, it is SILENT: a script injected into a document that is still
+// loading is simply lost, and `WebviewWindow.ExecJS` drops a call made before the window's
+// impl exists. The scenario then reports "driver 在预算内完成 … 等了 90s 没收到结果" with an
+// EMPTY mock-requests.txt — no driver, no model call — and the app sits there until the
+// per-scenario budget expires, which is far more expensive than the margin saved. The
+// shipped values keep ~3x that budget; turn them down only with the grid to hand.
+var (
+	demoBootstrapDelay = envDuration("TACHI_DEMO_BOOTSTRAP_MS", 250)
+	demoLoadDelay      = envDuration("TACHI_DEMO_LOAD_MS", 500)
 )
+
+// envDuration reads a millisecond override for one of the waits above, or returns the
+// default. It exists so the numbers can be re-measured (see the comment above) instead of
+// being argued about, and so a slow or loaded machine has a way to widen them without a
+// rebuild.
+func envDuration(key string, defMS int) time.Duration {
+	if v := os.Getenv(key); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return time.Duration(n) * time.Millisecond
+		}
+	}
+	return time.Duration(defMS) * time.Millisecond
+}
 
 // demoNoActivateEnv keeps a scripted run from taking the foreground. The smoke suite sets it,
 // because it launches the app once per scenario and each launch used to steal the foreground
