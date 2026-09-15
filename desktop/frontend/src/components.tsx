@@ -484,7 +484,14 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
 // the git probe all hang off it, so "no primary" is not a state worth offering.
 // A root whose directory has vanished is shown greyed rather than dropped — does an
 // unmounted volume come back? That is the user's call, not ours.
-function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClose }: {
+//
+// A session in a PROJECT has no roots of its own to manage (design §7.2): the panel is
+// read-only and points at the project instead, because the backend refuses those three writers
+// while a project drives the session — buttons that can only fail are worse than no buttons. It
+// goes back to the editable form when the project stops driving the session (deleted, or its
+// primary is gone), which is the same rule the backend's guards use: the panel must never be
+// read-only while the writers are open, or the user has no way to fix their workspace.
+function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClose, onEditProject, onNewSessionInProject }: {
   roots: SessionRootsVO | null
   error: string
   busy: boolean
@@ -492,9 +499,16 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
   onAdd: () => void
   onRemove: (path: string) => void
   onClose: () => void
+  onEditProject: (projectId: string) => void
+  onNewSessionInProject: (projectId: string) => void
 }) {
   const primary = roots?.primary || ''
   const additional = roots?.additional || []
+  const projectId = roots?.projectId || ''
+  // A project still DRIVES this session only while it exists and its primary is usable; a
+  // projectMissing payload with a name means "still there, unusable" and with no name means
+  // "gone" (see SessionRootsVO). Both are editable here, and both say which one it is.
+  const managed = !!projectId && !roots?.projectMissing
   const boxRef = useRef<HTMLDivElement>(null)
 
   // Same dismissal contract as the MCP panel: click outside, or Esc. The chip that
@@ -518,36 +532,80 @@ function RootsPanel({ roots, error, busy, onPickPrimary, onAdd, onRemove, onClos
     <div className="popover-panel roots-panel" ref={boxRef}>
       <div className="roots-head">
         <span className="roots-title">工作区目录</span>
-        <span className="roots-sub">相对路径以主目录为准，附加目录用绝对路径访问</span>
+        <span className="roots-sub">
+          {managed
+            ? `由项目「${roots?.projectName || '项目'}」管理`
+            : '相对路径以主目录为准，附加目录用绝对路径访问'}
+        </span>
       </div>
 
-      <div className="roots-sec">主目录</div>
-      <div className="roots-row">
-        <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
-        <button className="roots-btn" disabled={busy} onClick={onPickPrimary}>{primary ? '更换…' : '选择…'}</button>
-      </div>
-
-      <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
-      {additional.length === 0
-        ? <div className="roots-empty">还没有附加目录</div>
-        : additional.map((r) => (
-          <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
-            <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
-            <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
-            {r.exists ? null : (
-              <span className="roots-stale" title="目录已不存在：system prompt 不再列出它，@ 搜索也会跳过">已失效</span>
-            )}
-            <button className="roots-btn" disabled={busy} title="从附加目录中移除" onClick={() => onRemove(r.path)}>移除</button>
+      {managed ? (
+        <>
+          {/* Read-only branch (design §7.2): the project owns these roots, the backend refuses
+              writes to them from here, and the two actions below are the way out. */}
+          <div className="roots-sec">主目录</div>
+          <div className="roots-row">
+            <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
           </div>
-        ))}
+          <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
+          {additional.length === 0
+            ? <div className="roots-empty">还没有附加目录</div>
+            : additional.map((r) => (
+              <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
+                <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
+                <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
+                {r.exists ? null : <span className="roots-stale">已失效</span>}
+              </div>
+            ))}
+          <div className="roots-note">该项目下的会话共用这组目录，修改项目会影响其中所有会话。</div>
+          <div className="roots-actions">
+            <button className="roots-add" onClick={() => onEditProject(projectId)}>编辑项目…</button>
+            <button className="roots-add" onClick={() => onNewSessionInProject(projectId)}>新建项目会话</button>
+          </div>
+        </>
+      ) : (
+        <>
+          {projectId ? (
+            // The session still carries a project_id the project no longer DRIVES (deleted, or
+            // its primary directory is gone). The panel stays editable on purpose — a read-only
+            // panel plus three refused writers would leave the user no way out (design §5) — but
+            // it must say why the project stopped applying.
+            <div className="roots-note roots-note-warn">
+              ⚠ {roots?.projectName
+                ? `项目「${roots.projectName}」的目录不可用，该会话暂时使用自己的快照，可以编辑；目录恢复后会自动回到项目。`
+                : '该项目已不存在，该会话已回到自己的工作区，可以编辑。'}
+            </div>
+          ) : null}
 
-      {error ? <div className="roots-error">{error}</div> : null}
+          <div className="roots-sec">主目录</div>
+          <div className="roots-row">
+            <span className="roots-path roots-path-main" title={primary || undefined}><bdi>{primary || '未设置'}</bdi></span>
+            <button className="roots-btn" disabled={busy} onClick={onPickPrimary}>{primary ? '更换…' : '选择…'}</button>
+          </div>
 
-      <div className="roots-actions">
-        <button className="roots-add" disabled={busy || !primary}
-          title={primary ? '添加附加目录（可多选）' : '请先设置主目录'}
-          onClick={onAdd}>＋ 添加目录</button>
-      </div>
+          <div className="roots-sec">附加目录{additional.length > 0 ? `（${additional.length}）` : ''}</div>
+          {additional.length === 0
+            ? <div className="roots-empty">还没有附加目录</div>
+            : additional.map((r) => (
+              <div key={r.path} className={`roots-row${r.exists ? '' : ' is-stale'}`}>
+                <span className="roots-name" title={r.path}>{baseName(r.path)}</span>
+                <span className="roots-path" title={r.path}><bdi>{r.path}</bdi></span>
+                {r.exists ? null : (
+                  <span className="roots-stale" title="目录已不存在：system prompt 不再列出它，@ 搜索也会跳过">已失效</span>
+                )}
+                <button className="roots-btn" disabled={busy} title="从附加目录中移除" onClick={() => onRemove(r.path)}>移除</button>
+              </div>
+            ))}
+
+          {error ? <div className="roots-error">{error}</div> : null}
+
+          <div className="roots-actions">
+            <button className="roots-add" disabled={busy || !primary}
+              title={primary ? '添加附加目录（可多选）' : '请先设置主目录'}
+              onClick={onAdd}>＋ 添加目录</button>
+          </div>
+        </>
+      )}
     </div>
   )
 }

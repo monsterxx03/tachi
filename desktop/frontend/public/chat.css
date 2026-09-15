@@ -607,6 +607,15 @@ body.is-resizing-y { cursor: row-resize; user-select: none; }
 }
 .work-dir:hover { background: var(--accent-soft); color: var(--accent-2); }
 .work-dir-ico { color: var(--text-faint); }
+/* A member session's chip wears the PROJECT's name (design §7.2): the directory belongs to
+   the project, and naming it is what tells the reader that an edit here moves neighbours too.
+   The full path stays in the chip's title. */
+.work-dir-project {
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 /* The chip is a <button> now (it opens the workspace popover rather than a folder
    picker), so the browser's own button chrome is reset away. */
 button.work-dir {

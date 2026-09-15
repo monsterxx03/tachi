@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionRows, rewindTargetForMessage } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -20,7 +20,7 @@ import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import { RewindChainOverlay } from './rewindchain'
 import type { OneOffRun } from './agentEvents'
-import type { OneOffVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
 import { useTheme, useThemeHostSync } from './theme'
 import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/tools'
@@ -28,7 +28,7 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
-import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged } from './agentEvents'
 import { useComposer, Composer, imeActive } from './composer'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
@@ -377,6 +377,27 @@ function App() {
   const [rootsOpen, setRootsOpen] = useState(false)
   const [rootsBusy, setRootsBusy] = useState(false)
   const [rootsError, setRootsError] = useState('')
+  // Projects: the sidebar's groups (design §7.1). Fetched, never derived from the sessions —
+  // a project with no members yet still has a header, and its name is joined in at render
+  // time so a rename needs no session write.
+  const [projects, setProjects] = useState<ProjectVO[]>([])
+  const [projectMenu, setProjectMenu] = useState<{ id: string; x: number; y: number } | null>(null)
+  // Renaming happens in the header itself, like a session's row.
+  const [editingProject, setEditingProject] = useState<{ id: string; name: string } | null>(null)
+  // A refused project rename (empty or duplicate name) is shown under the header's own input:
+  // the session rows swallow their rename errors because the backend cannot refuse one, and
+  // this one can.
+  const [projectNotice, setProjectNotice] = useState<{ id: string; msg: string } | null>(null)
+  // The project editor: 新建项目 (§7.3) and 编辑项目 (§7.2) are ONE form — the second is the
+  // first with the fields filled in — so a project can be created and later corrected without
+  // two different dialogs disagreeing about what a valid root is.
+  const [projectForm, setProjectForm] = useState<{
+    mode: 'create' | 'edit'; id?: string; name: string; primary: string; additional: string[]; error?: string
+  } | null>(null)
+  // Deleting a project DETACHES its members, so the box says how many sessions that is.
+  const [confirmDelProject, setConfirmDelProject] = useState<{ id: string; name: string; count: number; error?: string } | null>(null)
+  // Which groups are collapsed. Memory only, like openChains: a reopened window shows them all.
+  const [collapsedProjects, setCollapsedProjects] = useState<Record<string, boolean>>({})
   // The turn whose 「完整 diff」 is open: the files that turn changed, with the session they
   // belong to. Owned here because the chip that opens it lives in the transcript, and closed on
   // every session switch (a diff is about the session it was taken in).
@@ -677,6 +698,142 @@ function App() {
     } catch { setRoots(null) }
   }, [])
 
+  // refreshProjects re-reads the project table for the sidebar's groups. It is a separate call
+  // from the session list on purpose: the two answer different questions, and a project with no
+  // members must still render its header.
+  const refreshProjects = useCallback(async () => {
+    try {
+      setProjects((await AgentService.ListProjects()) || [])
+    } catch { /* keep what we have */ }
+  }, [])
+
+  // A project write moves the ground under sessions the frontend already rendered (design
+  // §7.4). Everything it shows was PULLED, so the backend's own write is not visible until the
+  // reader re-reads: the group headers and their names, the rows' membership, and — for the
+  // session on screen — its chip and roots panel. This is that re-read.
+  useWorkspaceChanged(useCallback(() => {
+    void refreshProjects()
+    void AgentService.ListSessions()
+      .then((list) => { if (list) setSessions(list.map((s) => ({ ...s, active: s.id === currentId }))) })
+      .catch(() => {})
+    if (currentId) void refreshWorkspace(currentId)
+  }, [refreshProjects, refreshWorkspace, currentId]))
+
+  // saveProject runs the create/edit form. Both paths go through the same two backend calls
+  // (CreateProject / SetProjectRoots) and the same refusal string, which is why the form can be
+  // one component: its job is to collect paths, not to decide what is valid.
+  const saveProject = useCallback(async () => {
+    const f = projectForm
+    if (!f) return
+    const res = f.mode === 'create'
+      ? await AgentService.CreateProject(f.name, f.primary, f.additional).catch((e) => String(e))
+      : await AgentService.SetProjectRoots(f.id || '', f.primary, f.additional).catch((e) => String(e))
+    if (res !== 'ok') {
+      setProjectForm((prev) => (prev ? { ...prev, error: res || '保存失败' } : prev))
+      return
+    }
+    // A rename that came with an edit: the form carries both, and RenameProject is the only
+    // writer of a name. Only asked when it actually changed.
+    if (f.mode === 'edit' && f.id) {
+      const before = projects.find((p) => p.id === f.id)
+      if (before && before.name !== f.name) {
+        const rres = await AgentService.RenameProject(f.id, f.name).catch((e) => String(e))
+        if (rres !== 'ok') {
+          setProjectForm((prev) => (prev ? { ...prev, error: rres || '重命名失败' } : prev))
+          return
+        }
+      }
+    }
+    setProjectForm(null)
+    // The backend also emits agent:workspace_changed, but this form OWNS the fact it just
+    // changed something — waiting for the event to come back would leave the dialog's own
+    // commit invisible for a frame.
+    await refreshProjects()
+    if (currentId) await refreshWorkspace(currentId)
+    const list = (await AgentService.ListSessions().catch(() => null)) || []
+    setSessions(list.map((s) => ({ ...s, active: s.id === currentId })))
+  }, [projectForm, projects, refreshProjects, refreshWorkspace, currentId])
+
+  // openProjectEditor opens the create form, or the edit form prefilled from a project.
+  const openProjectEditor = useCallback((p?: ProjectVO) => {
+    setProjectMenu(null)
+    setProjectForm(p
+      ? {
+        mode: 'edit', id: p.id, name: p.name, primary: p.workingDir,
+        additional: (p.additionalDirs || []).map((r) => r.path),
+      }
+      : { mode: 'create', name: '', primary: '', additional: [] })
+  }, [])
+
+  const commitProjectRename = useCallback(async (id: string, name: string) => {
+    const trimmed = name.trim()
+    // Nothing typed is the editor's own cancel (Escape, or blur with an empty box), not a
+    // refusal to report: 项目名不能为空 would be answering a keystroke that never meant to commit.
+    if (!trimmed) { setEditingProject(null); setProjectNotice(null); return }
+    const res = await AgentService.RenameProject(id, trimmed).catch((e) => String(e))
+    if (res !== 'ok') {
+      // The editor stays open with the reason under it: a refused rename that merely closes
+      // reads as "the app ignored me", and these refusals are actionable (empty / duplicate).
+      setProjectNotice({ id, msg: res || '重命名失败' })
+      return
+    }
+    setEditingProject(null)
+    setProjectNotice(null)
+    await refreshProjects()
+  }, [refreshProjects])
+
+  // deleteProject confirms first (§6.2 lists the affected session count), then detaches.
+  const deleteProject = useCallback(async (id: string) => {
+    const res = await AgentService.DeleteProject(id).catch((e) => String(e))
+    if (res !== 'ok') {
+      setConfirmDelProject((prev) => (prev && prev.id === id ? { ...prev, error: res || '删除失败' } : prev))
+      return
+    }
+    setConfirmDelProject(null)
+    await refreshProjects()
+    if (currentId) await refreshWorkspace(currentId)
+    const list = (await AgentService.ListSessions().catch(() => null)) || []
+    setSessions(list.map((s) => ({ ...s, active: s.id === currentId })))
+  }, [refreshProjects, refreshWorkspace, currentId])
+
+  // The project form's two pickers. Same Wails dialog and the same shape as the session's own
+  // (single-select for the primary, multi-select for the rest) — validation lives in the
+  // backend in both cases, so the form never has to decide what a valid root is.
+  const pickProjectPrimary = useCallback(async () => {
+    try {
+      const picked: string | string[] = await Dialogs.OpenFile({
+        CanChooseDirectories: true,
+        CanChooseFiles: false,
+        CanCreateDirectories: true,
+        AllowsMultipleSelection: false,
+        Title: '选择项目主目录',
+        Directory: projectForm?.primary || undefined,
+      })
+      if (typeof picked !== 'string' || !picked) return
+      setProjectForm((prev) => (prev ? { ...prev, primary: picked, error: undefined } : prev))
+    } catch { /* ignore */ }
+  }, [projectForm?.primary])
+
+  const addProjectRoots = useCallback(async () => {
+    try {
+      const picked: string | string[] = await Dialogs.OpenFile({
+        CanChooseDirectories: true,
+        CanChooseFiles: false,
+        CanCreateDirectories: false,
+        AllowsMultipleSelection: true,
+        Title: '添加项目附加目录（可多选）',
+        Directory: projectForm?.primary || undefined,
+      })
+      const dirs = Array.isArray(picked) ? picked : picked ? [picked] : []
+      if (dirs.length === 0) return
+      // Duplicates are dropped here only so the list the user sees matches what they picked;
+      // the backend normalizes (and drops the primary itself) on save.
+      setProjectForm((prev) => (prev
+        ? { ...prev, additional: Array.from(new Set([...prev.additional, ...dirs])), error: undefined }
+        : prev))
+    } catch { /* ignore */ }
+  }, [projectForm?.primary])
+
   // pickWorkDir opens a native folder picker (seeded at the session's current
   // working directory) and applies the chosen directory to the session. It stays
   // SINGLE-select, and separate from "add directory": which folder is primary is
@@ -917,6 +1074,7 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   const loadAll = useCallback(async () => {
     setLoading(true)
     const list = (await AgentService.ListSessions().catch(() => null)) || []
+    void refreshProjects()
     let cur = await AgentService.CurrentSession().catch(() => null)
     if (!cur && list.length > 0) cur = list[0]
     if (cur) {
@@ -1040,8 +1198,11 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     refreshWorkspace(id)
   }, [sessions, msgCache, setSessionPage, scrollToBottom, refreshRunning, refreshProvider, refreshUsage, refreshMCP, refreshWorkspace])
 
-  const newChat = useCallback(async () => {
-    const ns = await AgentService.NewSession('').catch(() => null)
+  // newChat creates a session. projectID is "" for the sidebar's own button; a project group's
+  // ＋ passes its id, which is the only way a session is ever BOUND (design §6.1) — the backend
+  // writes the snapshot and project_id, so nothing here needs to know about roots.
+  const newChat = useCallback(async (projectID = '') => {
+    const ns = await AgentService.NewSession(projectID).catch(() => null)
     if (ns) {
       setCurrentId(ns.id); setCurrentTitle(ns.title || 'Tachi')
       openSession(ns.id)
@@ -1054,11 +1215,12 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       composer.focusInput()
       refreshUsage(ns.id)
       refreshWorkspace(ns.id)
+      void refreshProjects()
       const list = (await AgentService.ListSessions().catch(() => null)) || []
       setSessions(list.map((s) => ({ ...s, active: s.id === ns.id })))
       refreshProvider()
     }
-  }, [refreshProvider, refreshWorkspace, refreshUsage, clearUsage, composer.focusInput])
+  }, [refreshProvider, refreshWorkspace, refreshProjects, refreshUsage, clearUsage, composer.focusInput])
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
@@ -1073,9 +1235,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
         // listens for Escape too (its × promises 「关闭（Esc）」), and it treats `defaultPrevented`
         // as "somebody else used this key". An unconditional preventDefault would swallow every
         // Escape before the panel's handler could see it as unclaimed.
-        if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal || chain) e.preventDefault()
+        if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal || chain
+          || projectMenu || projectForm || confirmDelProject || editingProject) e.preventDefault()
         setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setRewindMenu(null)
         setRewindCard(null); setReminderModal(null); setChain(null)
+        // The project surfaces dismiss with the same gesture. The rename editor is last: it is
+        // the one the user is typing in, so a stray Escape there closes the editor, not the
+        // window's other layers.
+        setProjectMenu(null); setConfirmDelProject(null); setEditingProject(null)
+        if (projectForm) setProjectForm(null)
         return
       }
       if (!e.metaKey) return
@@ -1092,7 +1260,8 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions])
+  }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
+    projectMenu, projectForm, confirmDelProject, editingProject])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -1104,15 +1273,15 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
   // whatever is underneath it, and a press that lands INSIDE the menu is left alone —
   // the entry's own click closes it after doing its work.
   useEffect(() => {
-    if (!menu && !rewindMenu) return
+    if (!menu && !rewindMenu && !projectMenu) return
     const onDown = (e: MouseEvent) => {
       const t = e.target as HTMLElement | null
       if (!t || t.closest('.ctx-menu')) return
-      setMenu(null); setRewindMenu(null)
+      setMenu(null); setRewindMenu(null); setProjectMenu(null)
     }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
-  }, [menu, rewindMenu])
+  }, [menu, rewindMenu, projectMenu])
 
   useEffect(() => {
     const loadProv = async () => {
@@ -1305,6 +1474,26 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     </div>
   )
 
+  // groupRows renders one group's conversation rows, each with its folded chain. A function for
+  // the same reason sessionRow is one: a project group wraps them in its own container (the
+  // indent) and the 无项目 bucket does not, and duplicating this markup twice is how the two
+  // copies would drift apart.
+  const groupRows = (rows: SessionRow<SessionItem>[]) => rows.map((row) => (
+    <Fragment key={row.session.id}>
+      {sessionRow(row.session, false)}
+      {row.compactedFrom.length > 0 ? (
+        <button type="button" className={`session-chain${openChains[row.session.id] ? ' is-open' : ''}`}
+          aria-expanded={!!openChains[row.session.id]}
+          title={openChains[row.session.id] ? '收起压缩前的会话' : '展开压缩前的会话（同一段对话的上一节）'}
+          onClick={() => setOpenChains((p) => ({ ...p, [row.session.id]: !p[row.session.id] }))}>
+          <span className="session-chain-caret">{openChains[row.session.id] ? '▾' : '▸'}</span>
+          压缩前 {row.compactedFrom.length} 节
+        </button>
+      ) : null}
+      {openChains[row.session.id] ? row.compactedFrom.map((s) => sessionRow(s, true)) : null}
+    </Fragment>
+  ))
+
   // The provider picker lists names only; the selected provider's model is
   // exposed as its tooltip instead.
   const currentProvider = providers.find((p) => (p.name ?? p.Name) === providerName)
@@ -1336,26 +1525,65 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
 
       <div className="app-body">
         <aside className={`sidebar${sidebarCollapsed ? ' collapsed' : ''}`}>
-          <button className="new-chat" onClick={newChat}><span className="new-chat-plus">＋</span> 新建会话</button>
+          <button className="new-chat" onClick={() => void newChat()}>
+            <span className="new-chat-plus">＋</span> 新建会话
+          </button>
+          {/* Projects group the list (design §7.1). A project that exists but has no members
+              yet still needs an entry point, so the sidebar opens the create form directly
+              rather than hiding the feature until a session happens to be bound. */}
+          <button className="new-project" onClick={() => openProjectEditor()}
+            title="新建项目：一组会话共用工作区的容器">
+            <span className="new-chat-plus">＋</span> 新建项目
+          </button>
           <nav className="session-list">
-            <div className="session-section">最近</div>
-            {/* One row per CONVERSATION, not per session: a compaction chain is folded into its
-                newest link, with the sessions it was compacted from underneath it (closed) — see
-                sessionRows. Rendering the raw list made the pre-compaction session look like a
-                second, identically-titled conversation. */}
-            {sessionRows(sessions).map((row) => (
-              <Fragment key={row.session.id}>
-                {sessionRow(row.session, false)}
-                {row.compactedFrom.length > 0 ? (
-                  <button type="button" className={`session-chain${openChains[row.session.id] ? ' is-open' : ''}`}
-                    aria-expanded={!!openChains[row.session.id]}
-                    title={openChains[row.session.id] ? '收起压缩前的会话' : '展开压缩前的会话（同一段对话的上一节）'}
-                    onClick={() => setOpenChains((p) => ({ ...p, [row.session.id]: !p[row.session.id] }))}>
-                    <span className="session-chain-caret">{openChains[row.session.id] ? '▾' : '▸'}</span>
-                    压缩前 {row.compactedFrom.length} 节
-                  </button>
+            {/* Groups, not one flat list (design §7.1): a project's sessions hang under its
+                header, and everything no live project owns — including a session whose
+                project_id points at a project that is gone — is the 无项目 bucket. The rows
+                themselves are the same conversation rows as before (sessionRows folds a
+                compaction chain INSIDE its group, because a chain shares its project). */}
+            {sessionGroups(sessions, projects).map((group) => (
+              <Fragment key={group.project?.id || '__loose__'}>
+                {group.project ? (
+                  <div className="proj-head" role="button" tabIndex={0}
+                    onKeyDown={actOnKey(() => setCollapsedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] })))}
+                    onContextMenu={(e) => { e.preventDefault(); setProjectMenu({ id: group.project!.id, x: e.clientX, y: e.clientY }) }}>
+                    <button type="button" className="proj-toggle" aria-expanded={!collapsedProjects[group.project.id]}
+                      title={collapsedProjects[group.project.id] ? '展开该项目' : '收起该项目'}
+                      onClick={() => setCollapsedProjects((p) => ({ ...p, [group.project!.id]: !p[group.project!.id] }))}>
+                      {collapsedProjects[group.project.id] ? '▸' : '▾'}
+                    </button>
+                    {editingProject?.id === group.project.id ? (
+                      <input className="project-rename" autoFocus value={editingProject.name}
+                        onChange={(e) => setEditingProject({ id: group.project!.id, name: e.target.value })}
+                        onKeyDown={(e) => {
+                          if (imeActive(e)) return
+                          if (e.key === 'Enter') { e.stopPropagation(); void commitProjectRename(group.project!.id, editingProject.name) }
+                          else if (e.key === 'Escape') { e.stopPropagation(); setEditingProject(null); setProjectNotice(null) }
+                        }} />
+                    ) : (
+                      <span className="proj-name" title={`主目录：${group.project.workingDir}`}
+                        onDoubleClick={() => { setEditingProject({ id: group.project!.id, name: group.project!.name }); setProjectNotice(null) }}>
+                        {group.project.name}
+                      </span>
+                    )}
+                    <span className="proj-count" title={`${group.project.sessionCount} 个会话`}>({group.project.sessionCount})</span>
+                    {group.project.rootsUsable ? null : (
+                      <span className="proj-bad" title="项目主目录不可用：成员会话暂时用自己的快照，可以编辑；修好目录后自动回到项目">目录不可用</span>
+                    )}
+                    <button type="button" className="proj-add" title="在该项目里新建会话"
+                      onClick={() => void newChat(group.project!.id)}>＋</button>
+                  </div>
+                ) : (
+                  <div className="session-section">无项目</div>
+                )}
+                {projectNotice && projectNotice.id === group.project?.id ? (
+                  <div className="proj-notice">⚠ {projectNotice.msg}</div>
                 ) : null}
-                {openChains[row.session.id] ? row.compactedFrom.map((s) => sessionRow(s, true)) : null}
+                {group.project && collapsedProjects[group.project.id] ? null : (
+                  group.project
+                    ? <div className="proj-rows">{groupRows(group.rows)}</div>
+                    : groupRows(group.rows)
+                )}
               </Fragment>
             ))}
             {sessions.length === 0 && <div className="session-empty">暂无会话</div>}
@@ -1435,12 +1663,28 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                     onPickPrimary={() => pickWorkDir(currentId)}
                     onAdd={() => addRoots(currentId)}
                     onRemove={(p) => removeRoot(currentId, p)}
+                    onEditProject={(pid) => {
+                      const p = projects.find((x) => x.id === pid)
+                      // Editing from the panel implies the project exists; if the group list is
+                      // stale the form still opens, empty, and the backend refuses a save that
+                      // names no project — better than a dead button.
+                      setRootsOpen(false)
+                      openProjectEditor(p)
+                    }}
+                    onNewSessionInProject={(pid) => { setRootsOpen(false); void newChat(pid) }}
                     onClose={() => setRootsOpen(false)} />
                 ) : null}
                 <button type="button" className="work-dir" aria-expanded={rootsOpen}
                   title={workDir ? `工作区目录：${workDir}（点击管理）` : '工作区目录（点击管理）'}
                   onClick={() => { setRootsError(''); setRootsOpen((v) => !v) }}>
-                  <span className="work-dir-ico">⌂</span>{workDir || '未设置工作目录'}
+                  <span className="work-dir-ico">⌂</span>
+                  {/* A member session wears its PROJECT's name (design §7.2): the directory is
+                      the project's, and naming the project is what tells the reader that
+                      anything they do to it moves their neighbours too. The full path is in the
+                      chip's title and in the panel. */}
+                  {roots?.projectId && !roots.projectMissing
+                    ? <span className="work-dir-project" title={workDir || undefined}>{roots.projectName || '项目'}</span>
+                    : (workDir || '未设置工作目录')}
                   {extraRootCount > 0 ? <span className="work-dir-count" title={`${extraRootCount} 个附加目录`}>+{extraRootCount}</span> : null}
                 </button>
               </div>
@@ -1608,6 +1852,96 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
           <button className="ctx-item danger" role="menuitem" disabled={runningSet.has(menu.sid)}
             title={runningSet.has(menu.sid) ? '会话正在运行，请先停止这一轮' : undefined}
             onClick={() => { const t = sessions.find((x) => x.id === menu.sid)?.title || ''; setConfirmDel({ sid: menu.sid, title: t }); setMenu(null) }}>删除</button>
+        </div>
+      )}
+      {projectMenu && (
+        <div className="ctx-menu" role="menu" style={{ left: projectMenu.x, top: projectMenu.y }} onMouseLeave={() => setProjectMenu(null)}>
+          <button className="ctx-item" role="menuitem"
+            onClick={() => {
+              const p = projects.find((x) => x.id === projectMenu.id)
+              if (p) { setEditingProject({ id: p.id, name: p.name }); setProjectNotice(null) }
+              setProjectMenu(null)
+            }}>重命名</button>
+          <button className="ctx-item" role="menuitem"
+            onClick={() => openProjectEditor(projects.find((x) => x.id === projectMenu.id))}>编辑目录…</button>
+          <button className="ctx-item danger" role="menuitem"
+            onClick={() => {
+              const p = projects.find((x) => x.id === projectMenu.id)
+              setConfirmDelProject({ id: projectMenu.id, name: p?.name || '项目', count: p?.sessionCount || 0 })
+              setProjectMenu(null)
+            }}>删除项目…</button>
+        </div>
+      )}
+      {confirmDelProject && (
+        <div className="confirm-overlay" onClick={() => setConfirmDelProject(null)}>
+          <div className="confirm-box" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-msg">删除项目「{confirmDelProject.name}」？</div>
+            {/* What the user is agreeing to, in their own terms: the sessions are NOT deleted —
+                they keep their workspace and become ordinary conversations again (§6.2). */}
+            <div className="confirm-sub">
+              {confirmDelProject.count > 0
+                ? `项目里的 ${confirmDelProject.count} 个会话会保留下来（工作区不变），只是不再由项目统一管理。`
+                : '该项目还没有会话。'}
+              {' '}项目本身会被移除，此操作不可恢复。
+            </div>
+            {confirmDelProject.error ? <div className="confirm-error">⚠ {confirmDelProject.error}</div> : null}
+            <div className="confirm-actions">
+              <button className="btn ghost" onClick={() => setConfirmDelProject(null)}>取消</button>
+              <button className="btn danger" onClick={() => { const id = confirmDelProject.id; void deleteProject(id) }}>删除项目</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {projectForm && (
+        <div className="confirm-overlay" onClick={() => setProjectForm(null)}>
+          <div className="confirm-box project-form" onClick={(e) => e.stopPropagation()}>
+            <div className="confirm-msg">{projectForm.mode === 'create' ? '新建项目' : '编辑项目'}</div>
+            <div className="confirm-sub">项目是一组会话共用的工作区：主目录加若干附加目录，项目里所有会话都跟着它走。</div>
+
+            <div className="form-row">
+              <label className="form-label" htmlFor="proj-name">名字</label>
+              <input id="proj-name" className="form-input" value={projectForm.name} placeholder="留空则取主目录的名字"
+                onChange={(e) => setProjectForm({ ...projectForm, name: e.target.value, error: undefined })} />
+            </div>
+
+            <div className="form-row">
+              <span className="form-label">主目录</span>
+              <div className="form-path">
+                <span className="form-path-value" title={projectForm.primary || undefined}>
+                  <bdi>{projectForm.primary || '未选择'}</bdi>
+                </span>
+                <button className="roots-btn" onClick={() => void pickProjectPrimary()}>
+                  {projectForm.primary ? '更换…' : '选择…'}
+                </button>
+              </div>
+            </div>
+
+            <div className="form-row">
+              <span className="form-label">附加目录</span>
+              <div className="form-roots">
+                {projectForm.additional.length === 0
+                  ? <div className="roots-empty">还没有附加目录</div>
+                  : projectForm.additional.map((p) => (
+                    <div key={p} className="roots-row">
+                      <span className="roots-path" title={p}><bdi>{p}</bdi></span>
+                      <button className="roots-btn"
+                        onClick={() => setProjectForm({
+                          ...projectForm,
+                          additional: projectForm.additional.filter((x) => x !== p),
+                          error: undefined,
+                        })}>移除</button>
+                    </div>
+                  ))}
+                <button className="roots-add" onClick={() => void addProjectRoots()}>＋ 添加目录</button>
+              </div>
+            </div>
+
+            {projectForm.error ? <div className="confirm-error">⚠ {projectForm.error}</div> : null}
+            <div className="confirm-actions">
+              <button className="btn ghost" onClick={() => setProjectForm(null)}>取消</button>
+              <button className="btn" disabled={!projectForm.primary} onClick={() => void saveProject()}>保存</button>
+            </div>
+          </div>
         </div>
       )}
       {confirmDel && (

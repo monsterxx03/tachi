@@ -60,7 +60,13 @@ into the session fixture rather than added in the UI, because the UI's only way 
 picker no driver can click — reach a seeded root from the work dir as `../<name>/…`, since a scripted bash
 command cannot know the sandbox's absolute path. A scenario that needs settings the shared sandbox config
 does not carry sets `config` — a YAML block appended to the generated `config.yaml`, which is how a
-parked-permission scenario gets its `permissions.bash.ask` rule. `smoke.type` picks the native value setter
+parked-permission scenario gets its `permissions.bash.ask` rule. A scenario that needs a desktop PROJECT
+sets `project` (the primary directory's files + its additional roots): `projects.json` and the session's
+`project_id` are seeded, because the project form can only pick directories through the same native picker.
+**A fixture has no "current session" — the app opens the NEWEST one** (`ListSessions` sorts by `CreatedAt`),
+so the session whose behaviour a driver asserts on has to be seeded LAST; seeding an unbound session after
+it made the driver assert on the wrong one, which reads exactly like "the project does not drive its member".
+`smoke.type` picks the native value setter
 by ELEMENT (textarea vs input): React ignores `el.value = …`, and a textarea's setter called on an input
 throws, so an `<input>` field (the find bar) could not be driven at all until the harness stopped assuming
 the composer's textarea.
@@ -549,6 +555,22 @@ const type = (el, t) => {
   (`sessionRows` in `lib.ts` supplies the rows), rename, and the row's right-click menu (打开会话目录 /
   重命名 / 删除). A new row-level action belongs there rather than in a second list component — and one that
   hands the screen to another app is asserted, never clicked, in a driver.
+- **The sidebar is GROUPED, and the grouping is a pure join** (`sessionGroups(sessions, projects)` in
+  `lib.ts`): one header per project (name, member count, a `＋` that creates a session INSIDE it, a
+  right-click menu for rename / edit roots / delete) and one final 无项目 bucket. Grouping happens BEFORE
+  `sessionRows`, so a compaction chain folds inside its own group. Two rules that are easy to break: a
+  session whose `projectId` names a project that is NOT in the list belongs to the bucket, because that is
+  what the backend's resolver does with it; and an EMPTY group is dropped (a project with no sessions yet is
+  still reachable from the list's 新建项目 button). The chip and the workspace panel wear the project's NAME
+  while a project drives the session, and the panel is READ-ONLY then — the three session-level writers are
+  refused by the backend, so buttons that could only fail are not offered; it stays editable (with the reason
+  spelled out) whenever the project stops driving the session, which is the same predicate the guards use.
+- **A project write re-reads the reader** (`agent:workspace_changed`, emitted by `CreateProject` /
+  `RenameProject` / `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend
+  holds a session's workspace and the sidebar's groups BY VALUE, so a rename or an edit moved nothing on
+  screen until the user switched sessions. The payload names what changed (`projectId`, and `sessionId` for a
+  detach); the handler re-reads the session on screen plus the sidebar. The driver asserts this without
+  switching: rename in the header, then the chip must say the new name (`projects`).
 
 - **A session list is a list of CONVERSATIONS, not of session dirs** (`sessionRows` in
   `desktop/frontend/src/lib.ts`): a compaction chain shares one title, so rendering `ListSessions` raw shows

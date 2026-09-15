@@ -7,7 +7,7 @@
 // guards once, next to the event that needs them, is what keeps a background session's
 // output from landing in the foreground transcript (and the reverse).
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { Events } from '@wailsio/runtime'
 import {
   AgentService,
@@ -350,4 +350,25 @@ export function useOneOffStream(currentId: string) {
   }, [currentId])
 
   return { live, result }
+}
+
+// ── Workspace changes ───────────────────────────────────────────────────────
+// A project write (create / rename / edit roots / delete) moves the workspace of every member
+// session at once, and the frontend holds that state by value: the composer's chip, the roots
+// panel, the sidebar's groups were all pulled at some earlier moment (design §7.4). Without
+// this, an already-open panel keeps naming the old directory — and a deleted project's
+// read-only branch keeps refusing edits the backend now allows.
+//
+// The handler is the caller's: it re-reads what it shows (the session on screen plus the
+// sidebar), because what is stale is not a value this hook could patch. The payload names
+// what changed for readers that want to be cleverer than that; nothing here requires it.
+export function useWorkspaceChanged(onChange: () => void): void {
+  const ref = useRef(onChange)
+  ref.current = onChange
+  useEffect(() => {
+    // The guard exists so a handler re-created every render does not re-subscribe every render
+    // (the backend emits rarely; the resubscription would be pure churn).
+    const off = Events.On('agent:workspace_changed', () => ref.current())
+    return () => off?.()
+  }, [])
 }

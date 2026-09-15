@@ -83,6 +83,7 @@ func (s *AgentService) CreateProject(name, primary string, additional []string) 
 	}
 	// Deliberately NOT rememberWorkspace(primary): a project's directory is not the answer
 	// to "where should the next PROJECT-LESS session start" (design §6.1).
+	d.emitWorkspaceChanged(p.ID, "")
 	return "ok"
 }
 
@@ -109,6 +110,8 @@ func (s *AgentService) RenameProject(id, name string) string {
 	if err := d.projects.upsert(p); err != nil {
 		return fmt.Sprintf("保存项目失败：%v", err)
 	}
+	// The sidebar's rows are labelled by joining this name in, so they have to be re-read.
+	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }
 
@@ -136,6 +139,8 @@ func (s *AgentService) SetProjectRoots(id, primary string, additional []string) 
 	// directory up on their own, the skills would not. They are INVALIDATED rather than
 	// re-pointed here — see invalidateMemberSkills.
 	d.invalidateMemberSkills(id)
+	// Every member's workspace just moved, and the frontend holds that state by value.
+	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }
 
@@ -173,6 +178,26 @@ func (s *AgentService) DeleteProject(id string) string {
 		snapAdditional = append([]string(nil), p.AdditionalDirs...)
 	}
 
+	// The check and the writes share ONE critical section, inside detachMembers; the event is
+	// sent after it AND after the table write, so a reader that reacts to it sees the finished
+	// state (and the emit never runs with d.mu held).
+	if reason := d.detachMembers(members, refreshSnapshot, snapPrimary, snapAdditional); reason != "" {
+		return reason
+	}
+	if err := d.projects.remove(id); err != nil {
+		return fmt.Sprintf("删除项目失败：%v", err)
+	}
+	d.emitWorkspaceChanged(id, "")
+	return "ok"
+}
+
+// detachMembers unbinds every member session in ONE d.mu critical section and returns "" on
+// success, or the refusal/error to show the user. Callers must NOT hold d.mu.
+//
+// refresh says whether the members' snapshot is rewritten to the project's roots (primary,
+// additional); when false the record keeps the snapshot it already had — the caller decided the
+// project has no roots worth copying (see DeleteProject).
+func (d *desktopApp) detachMembers(members []*session.Session, refresh bool, primary string, additional []string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	for _, sess := range members {
@@ -184,9 +209,9 @@ func (s *AgentService) DeleteProject(id string) string {
 		// updateSessionMetaLocked, not updateSessionMeta: we are inside the critical section
 		// that makes the check above meaningful (see its doc).
 		if err := d.updateSessionMetaLocked(sess.ID, func(cur *session.Session) {
-			if refreshSnapshot {
-				cur.WorkingDir = snapPrimary
-				cur.AdditionalDirs = append([]string(nil), snapAdditional...)
+			if refresh {
+				cur.WorkingDir = primary
+				cur.AdditionalDirs = append([]string(nil), additional...)
 			}
 			cur.ProjectID = ""
 		}); err != nil {
@@ -199,10 +224,30 @@ func (s *AgentService) DeleteProject(id string) string {
 			r.skillsStale = true
 		}
 	}
-	if err := d.projects.remove(id); err != nil {
-		return fmt.Sprintf("删除项目失败：%v", err)
+	return ""
+}
+
+// emitWorkspaceChanged tells the frontend that a project write moved the ground under some
+// session, so it re-reads what it shows (design §7.4).
+//
+// Everything the frontend knows about a session's workspace — the composer's chip, the roots
+// panel, the sidebar's groups — was PULLED at some earlier moment, while a project edit changes
+// the BACKEND's resolution. Without this event an already-open panel keeps naming the old
+// directory (and an old project name) until the user switches sessions, which is exactly the
+// "it says it worked but nothing moved" report this contract exists to prevent.
+//
+// projectID is what changed; sessionID is set when the change is about ONE session (a detach),
+// so a frontend can also act on a session it is not showing. Both are informational: the
+// reader re-reads the session it IS showing plus the sidebar, whatever the payload says.
+func (d *desktopApp) emitWorkspaceChanged(projectID, sessionID string) {
+	if d.app == nil {
+		return
 	}
-	return "ok"
+	payload := map[string]any{"projectId": projectID}
+	if sessionID != "" {
+		payload["sessionId"] = sessionID
+	}
+	d.app.Event.Emit("agent:workspace_changed", payload)
 }
 
 // invalidateMemberSkills marks every LIVE member session's agent as needing its skill store

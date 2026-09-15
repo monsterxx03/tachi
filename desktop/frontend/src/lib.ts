@@ -1,5 +1,5 @@
 import type { KeyboardEvent } from 'react'
-import type { SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { ProjectVO, SessionMessage, TurnChangesVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import type { AttachmentInfo, Message } from './types'
 
 export function extractReminder(content: string): { reminder: string; text: string } {
@@ -207,6 +207,39 @@ export function sessionRows<T extends { id: string; compactedParentId?: string }
     rows.push({ session: s, compactedFrom })
   }
   return rows
+}
+
+// SessionGroup is one group of the sidebar: a project (or null for the project-less bucket)
+// plus the rows that belong to it. Rows are the same conversation rows sessionRows builds —
+// grouping happens BEFORE folding, so a compaction chain folds inside its own group.
+export type SessionGroup<T> = { project: ProjectVO | null; rows: SessionRow<T>[] }
+
+// sessionGroups renders the sidebar's grouping (design §7.1): one group per project, plus a
+// final bucket for the sessions no live project owns.
+//
+// Membership is by ID, joined here rather than stored on the row: a session carries only
+// `projectId`, so renaming a project relabels every row with no write to any session. A
+// session whose project is not in the list — a dangling id (the project was deleted under an
+// earlier version, or projects.json lost) — lands in the project-less bucket on purpose: the
+// backend resolves it exactly that way (project first when it DRIVES the session, else the
+// session's own snapshot), and a row must not claim a group the resolver does not honour.
+//
+// The order inside a group is the order it came in (ListSessions: newest first), and empty
+// groups are dropped — a project with no conversations yet is still reachable from its
+// header, but the sidebar does not list a group with nothing under it.
+export function sessionGroups<T extends { id: string; compactedParentId?: string; projectId?: string }>(
+  list: T[],
+  projects: ProjectVO[],
+): SessionGroup<T>[] {
+  const known = new Set(projects.map((p) => p.id))
+  const groups: SessionGroup<T>[] = []
+  for (const p of projects) {
+    const mine = list.filter((s) => s.projectId === p.id)
+    if (mine.length > 0) groups.push({ project: p, rows: sessionRows(mine) })
+  }
+  const loose = list.filter((s) => !s.projectId || !known.has(s.projectId))
+  if (loose.length > 0) groups.push({ project: null, rows: sessionRows(loose) })
+  return groups
 }
 
 // fmtBytes renders a byte count the way the agent's own confirmation message

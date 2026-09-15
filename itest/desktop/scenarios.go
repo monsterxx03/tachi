@@ -45,6 +45,13 @@ type scenario struct {
 	// From the work dir a scenario reaches one as "../<name>/…": a scripted bash command cannot
 	// know the sandbox's absolute path, and it does not have to.
 	extraRoots map[string]map[string]string
+	// project seeds a desktop project (design §6.1) and BINDS the seeded session to it. Seeded
+	// for the same reason extraRoots are: the project form can only pick directories through a
+	// native picker. The seeded session's own WorkingDir stays the sandbox work dir, i.e. a
+	// deliberately STALE snapshot — every path the scenario asserts on must come from the
+	// project, and a fixture where the two agree would prove nothing. A second, UNBOUND session
+	// is seeded alongside it so the sidebar really has both of its groups.
+	project *projectSeed
 	// seedMessages are written into the seeded session's transcript BEFORE the app launches, so
 	// the FIRST render of that session comes off disk. A driver cannot produce a reload on its
 	// own: switching sessions inside one process serves the in-memory copy, and a restart is not
@@ -53,6 +60,14 @@ type scenario struct {
 	seedMessages []session.Message
 	// after runs once the driver has reported: the Go-side assertions.
 	after func(c *checkCtx)
+}
+
+// projectSeed describes the desktop-project fixture: the project's primary directory (created
+// under the sandbox, holding files) plus additional roots named the way extraRoots are.
+type projectSeed struct {
+	name       string
+	files      map[string]string
+	extraRoots map[string]map[string]string
 }
 
 // A probe is one Go-side assertion, appended to the same report the driver fills.
@@ -81,6 +96,52 @@ func (c *checkCtx) requestSeen(want string) (int, bool) {
 		}
 	}
 	return 0, false
+}
+
+// projectRoot is the fixture's project primary directory: the tree a bound session must work
+// in, and — after the driver deletes the project — the tree its snapshot is refreshed to.
+func (c *checkCtx) projectRoot() string { return filepath.Join(c.dir, projectRootDir) }
+
+// projectsFileHas reports whether the sandbox's projects.json still holds a project by that
+// name. It reads the file the desktop writes, i.e. the state the next process would find.
+func (c *checkCtx) projectsFileHas(name string) bool {
+	body, err := os.ReadFile(filepath.Join(c.home, ".tachi", "projects.json"))
+	if err != nil {
+		return false
+	}
+	var tf struct {
+		Projects []struct {
+			Name string `json:"name"`
+		} `json:"projects"`
+	}
+	if err := json.Unmarshal(body, &tf); err != nil {
+		return false
+	}
+	for _, p := range tf.Projects {
+		if p.Name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// sessionByTitle loads a seeded session's record from the sandbox store: the probes that check
+// meta (a binding, a refreshed snapshot) must read the FILE, not anything the app reported.
+func (c *checkCtx) sessionByTitle(title string) *session.Session {
+	store, err := session.NewFileStore(filepath.Join(c.home, ".tachi", "session"))
+	if err != nil {
+		return nil
+	}
+	list, err := store.ListSessions()
+	if err != nil {
+		return nil
+	}
+	for _, s := range list {
+		if s.Title == title {
+			return s
+		}
+	}
+	return nil
 }
 
 // requestAt returns request n's messages as one string (1-based, the same numbering
@@ -1407,6 +1468,58 @@ permissions:
 			after: func(c *checkCtx) {
 				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
 				c.check("删除被拒绝后没有多跑一轮", len(c.requests) == 1, requestCount(c.requests))
+			},
+		},
+		//
+		//
+		// Projects: a session bound to a project works in the PROJECT's tree, tells the reader
+		// who owns its workspace, and follows a project edit without being switched to. The
+		// seeded session's own record names the sandbox work dir (a stale snapshot), so every
+		// path below that is not that one proves resolution came from the project — and the
+		// driver's rename/delete cover the refresh contract (§7.4) and the detach (§6.2) end to
+		// end, both of which are reachable without a native picker.
+		{
+			name: "projects",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe projects scenario's STALE snapshot directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-proj",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe projects scenario's project directory\n",
+				},
+				extraRoots: map[string]map[string]string{
+					"proj-shared": {"notes.md": "lib\n"},
+				},
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("收到。", 400)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("只有一轮对话（driver 的改名与删除都不是对话）", len(c.requests) == 1, requestCount(c.requests))
+				projectRoot := c.projectRoot()
+				stale := c.work
+				prompt := c.requestAt(1)
+				// The prompt's own "Working directory" line: the project's, never the record's.
+				c.check("prompt 说的是项目主目录", strings.Contains(prompt, projectRoot),
+					fmt.Sprintf("prompt 里没有 %s", projectRoot))
+				c.check("prompt 里不是会话记录里的旧快照", !strings.Contains(prompt, stale),
+					"prompt 里出现了 "+stale)
+				c.check("project 的附加目录进了 prompt", strings.Contains(prompt, filepath.Join(c.dir, "proj-shared")),
+					fmt.Sprintf("prompt 里没有 %s", filepath.Join(c.dir, "proj-shared")))
+				// The filesystem half of the detach: the project is gone, and the member kept its
+				// workspace — by design that is the project's primary, i.e. the user does not move.
+				c.check("projects.json 里已经没有这个项目", !c.projectsFileHas("smoke-proj"),
+					"projects.json 仍然含有该项目")
+				bound := c.sessionByTitle("冒烟会话")
+				if bound == nil {
+					c.check("会话 fixture 还在", false, "找不到「冒烟会话」")
+					return
+				}
+				c.check("detach 清掉了 project_id", bound.ProjectID == "", "project_id="+bound.ProjectID)
+				c.check("detach 把快照刷成了项目主目录", bound.WorkingDir == projectRoot,
+					fmt.Sprintf("WorkingDir=%s want=%s", bound.WorkingDir, projectRoot))
 			},
 		},
 	}

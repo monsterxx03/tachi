@@ -19,6 +19,7 @@
 package main
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
@@ -103,7 +104,23 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	if err := sb.seedExtraRoots(sc.extraRoots); err != nil {
 		return report(sc.name, nil, []Line{{Label: "extra roots", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
-	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages); err != nil {
+	// The project fixture comes BEFORE the sessions: binding one of them needs its id.
+	projectID := ""
+	if sc.project != nil {
+		id, err := sb.seedProject(sc.project)
+		if err != nil {
+			return report(sc.name, nil, []Line{{Label: "project fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+		projectID = id
+		// The UNBOUND session first, so the member below is the newest one: a fixture has no
+		// "current session", and the app opens the newest (ListSessions sorts by CreatedAt).
+		// Seeding them the other way round left the driver asserting on the wrong session —
+		// which looked exactly like "the project does not drive its member".
+		if err := sb.seedSession("无项目会话", nil, nil, ""); err != nil {
+			return report(sc.name, nil, []Line{{Label: "unbound session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+	}
+	if err := sb.seedSession("冒烟会话", sc.extraRoots, sc.seedMessages, projectID); err != nil {
 		return report(sc.name, nil, []Line{{Label: "session fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
@@ -281,7 +298,7 @@ func fatal(format string, args ...any) {
 // app uses. They have to be seeded here because a root set is the one piece of scenario state a
 // driver cannot build: the UI's only way in is a NATIVE directory picker, which a scripted run
 // cannot click.
-func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message) error {
+func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]string, seedMessages []session.Message, projectID string) error {
 	// The store's base dir IS the sessions directory (each session is <dir>/<id>/),
 	// not the config dir — pointing it one level up would put the fixture where the app
 	// never looks, and startup would quietly create its own session instead.
@@ -295,6 +312,10 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 	}
 	mgr.SetTitle(title)
 	cur := mgr.Current()
+	// A member session: bound by id, and its own WorkingDir stays the sandbox work dir — the
+	// STALE snapshot the project's roots override on every read (design §3.2). Seeding the
+	// project's own path here would make the fixture unable to tell the two apart.
+	cur.ProjectID = projectID
 	if len(extraRoots) > 0 {
 		for _, name := range sortedKeys(extraRoots) {
 			cur.AdditionalDirs = append(cur.AdditionalDirs, filepath.Join(sb.dir, name))
@@ -311,12 +332,85 @@ func (sb *sandbox) seedSession(title string, extraRoots map[string]map[string]st
 			return err
 		}
 	}
-	if len(extraRoots) > 0 || len(seedMessages) > 0 {
+	if len(extraRoots) > 0 || len(seedMessages) > 0 || projectID != "" {
 		if err := mgr.UpdateMeta(cur); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// projectRootDir is the directory the project fixture's primary root lives in, under the
+// sandbox. Named once, because the seeder and the probes that assert on the path must agree.
+const projectRootDir = "project-root"
+
+// seedProject writes the project fixture: the primary directory with its files, one directory
+// per additional root, and projects.json — the same shape desktop/projects.go reads and writes
+// (a slice under "projects", camelCase keys). It returns the project ID the session is bound by.
+//
+// Only the DIRECTORY under the sandbox is created here; the project's own validity rules (a
+// primary that exists, no wide roots) are the desktop's, and this fixture deliberately sits
+// inside them so the seeded project drives its member from the first render.
+func (sb *sandbox) seedProject(p *projectSeed) (string, error) {
+	primary := filepath.Join(sb.dir, projectRootDir)
+	if err := os.MkdirAll(primary, 0o755); err != nil {
+		return "", err
+	}
+	for rel, content := range p.files {
+		full := filepath.Join(primary, rel)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			return "", err
+		}
+		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+			return "", err
+		}
+	}
+	var additional []string
+	for _, name := range sortedKeys(p.extraRoots) {
+		dir := filepath.Join(sb.dir, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return "", err
+		}
+		for rel, content := range p.extraRoots[name] {
+			full := filepath.Join(dir, rel)
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				return "", err
+			}
+			if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+				return "", err
+			}
+		}
+		additional = append(additional, dir)
+	}
+
+	// The sandbox's own shape of the file (the desktop's project/projectFile types are in another
+	// module and cannot be imported here) — but the JSON is what matters, and it is the same.
+	const id = "smoke-project"
+	type fileProject struct {
+		ID             string    `json:"id"`
+		Name           string    `json:"name"`
+		WorkingDir     string    `json:"workingDir"`
+		AdditionalDirs []string  `json:"additionalDirs,omitempty"`
+		CreatedAt      time.Time `json:"createdAt"`
+		UpdatedAt      time.Time `json:"updatedAt"`
+	}
+	body, err := json.MarshalIndent(struct {
+		Projects []fileProject `json:"projects"`
+	}{Projects: []fileProject{{
+		ID: id, Name: p.name, WorkingDir: primary, AdditionalDirs: additional,
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}}}, "", "  ")
+	if err != nil {
+		return "", err
+	}
+	base := filepath.Join(sb.home, ".tachi")
+	if err := os.MkdirAll(base, 0o755); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(filepath.Join(base, "projects.json"), body, 0o644); err != nil {
+		return "", err
+	}
+	return id, nil
 }
 
 // seedExtraRoots creates the additional workspace roots a scenario declares: one directory per

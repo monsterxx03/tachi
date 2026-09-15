@@ -231,6 +231,104 @@ body.is-resizing { cursor: col-resize; user-select: none; }
   color: var(--text-faint);
 }
 
+/* ── Project groups (design §7.1) ────────────────────────────────────────── */
+/* The secondary way to start a conversation: a quieter version of .new-chat, so it
+   does not compete with the primary button above it. */
+.new-project {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 8px 12px;
+  margin-bottom: 12px;
+  background: transparent;
+  border: 1px dashed var(--border-2);
+  color: var(--text-dim);
+  border-radius: var(--radius-md);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.16s var(--ease), border-color 0.16s var(--ease), color 0.16s var(--ease);
+}
+.new-project:hover { background: var(--accent-soft); border-color: var(--accent-line); color: var(--accent-2); }
+
+.proj-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  margin-top: 6px;
+  border-radius: var(--radius-sm);
+}
+.proj-head:hover { background: var(--hover); }
+.proj-toggle {
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 9px;
+  width: 12px;
+  padding: 0;
+  cursor: pointer;
+  font-family: inherit;
+}
+.proj-toggle:hover { color: var(--accent-2); }
+.proj-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.proj-count { flex-shrink: 0; font-size: 10.5px; color: var(--text-faint); }
+/* A project whose PRIMARY directory is gone drives nothing, so its members are editable
+   again; the header says so instead of hiding the group (design §8.6). */
+.proj-bad {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--amber);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  padding: 0 4px;
+}
+.proj-add {
+  flex-shrink: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  font-size: 13px;
+  padding: 0 4px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  font-family: inherit;
+}
+.proj-add:hover { background: var(--accent-soft); color: var(--accent-2); }
+.project-rename {
+  flex: 1;
+  min-width: 0;
+  font-family: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+  background: var(--panel-solid);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-xs);
+  padding: 2px 6px;
+  outline: none;
+}
+/* A refused rename (empty or duplicate name) is shown under its own header: the editor
+   stays open, so the reason has to be attached to it rather than to a toast. */
+.proj-notice {
+  padding: 4px 10px 2px 22px;
+  font-size: 10.5px;
+  color: var(--red);
+}
+/* A project's rows are indented one step, inside their own container: a header-relative
+   sibling selector would also indent the 无项目 bucket that follows every group. */
+.proj-rows { margin-left: 12px; }
+
 /* ── A folded compaction chain ─────────────────────────────────────────────── */
 /* A conversation that was compacted is ONE sidebar row: the newest link, with the sessions it
    came from under it, closed. The opener is a real button (the disclosure is a control, unlike

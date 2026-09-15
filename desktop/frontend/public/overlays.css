@@ -549,6 +549,69 @@
 }
 .roots-add:hover:not(:disabled) { background: var(--accent-soft); color: var(--accent-2); border-color: var(--accent-line); }
 .roots-add:disabled { opacity: 0.5; cursor: default; }
+/* The read-only branch's explanation, and the degraded case's warning: one is a statement
+   about who owns these roots, the other is the reason the panel is editable again. */
+.roots-note {
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--wash);
+  border: 1px solid var(--border);
+  font-size: 11px;
+  color: var(--text-dim);
+  line-height: 1.5;
+}
+.roots-note-warn { border-color: var(--amber); color: var(--text); }
+/* The read-only branch keeps the same two actions, side by side. */
+.roots-actions { display: flex; gap: 8px; }
+
+/* ── Project form (create / edit) ─────────────────────────────────────────── */
+.project-form { width: 520px; }
+.form-row { margin-top: 12px; }
+.form-label {
+  display: block;
+  margin-bottom: 5px;
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--text-faint);
+}
+.form-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 6px 9px;
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 12.5px;
+  outline: none;
+}
+.form-input:focus { border-color: var(--accent-line); box-shadow: 0 0 0 3px var(--accent-ring); }
+/* The picker row mirrors the roots panel's: the path takes the room, the button does not. */
+.form-path { display: flex; align-items: center; gap: 8px; }
+.form-path-value {
+  flex: 1;
+  min-width: 0;
+  font-family: "SF Mono", ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  color: var(--text-dim);
+  background: var(--panel-solid);
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  padding: 6px 9px;
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.form-roots {
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-sm);
+  padding: 6px;
+  background: var(--panel-solid);
+}
 
 /* ── Plan panel (P1) ──────────────────────────────────────────────────────── */
 /* The shared popover shell. Wider than the workspace panel because a step is a

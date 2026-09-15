@@ -1,6 +1,6 @@
 # Desktop Project（会话管理容器）设计
 
-> 版本: 1.0 | 日期: 2026-09-15 | 状态: P0 / P1 / P2 与 §14.1、§14.2 已落地；P3（UI）、P4（worktree）未实现
+> 版本: 1.0 | 日期: 2026-09-15 | 状态: P0 / P1 / P2 / P3 与 §14.1、§14.2 已落地；P4（worktree）未实现
 > 前置: [2026-09-11-desktop-multi-workspace-design.md](2026-09-11-desktop-multi-workspace-design.md)（根集语义、
 >       校验层、prompt 缓存键、`@`-file 多根已落地）
 > 关联: [desktop/roots.go](../desktop/roots.go)、[desktop/agent_session.go](../desktop/agent_session.go)、
@@ -493,7 +493,7 @@ detach 的实现要点（这是本设计里唯一一次写成员 meta，要按�
 | **P0-x（✅ 已落地，独立的小修）** | `FinalizeCompact` 丢掉 `AdditionalDirs`（§3.2）：压缩子会话显式继承附加根。它与项目无关，但正是 `project_id` 之后会踩的同一个坑 |
 | **P1 项目本体**（✅ 已落地） | `projects.json` 存储（含读取侧校验）+ 校验复用 + `Session.ProjectID` + `sessionRootsFrom` 的项目分支 + `ListProjects` / `CreateProject` / `RenameProject` / `SetProjectRoots` + `GetSessionRoots` 的只读字段与三处后端拒绝写 + `AgentConfig.RootsFunc` 让 checkpoint 走同一出口（§14.3）。**删除项目（detach）在 P2** |
 | **P2 创建与删除**（✅ 已落地） | `NewSession(projectID)` + 快照写入（不可用项目 → 建普通会话）+ `DeleteProject` 的 detach（同一临界区取 running、快照刷到删除那一刻、skill 重指）+ 绑定重生成；`/compact` 继承绑定（§3.2）已落地。前端 `agent:workspace_changed` 刷新随 P3 |
-| **P3 UI** | 侧栏分组 + 组头菜单 + 只读 RootsPanel + 新建项目对话框 + 刷新契约（§7.4）+ smoke scenario |
+| **P3 UI**（✅ 已落地） | 侧栏分组（`sessionGroups`）+ 组头菜单（重命名 / 编辑目录 / 删除项目）+ 只读 RootsPanel（项目不再驱动时恢复可编辑）+ 项目表单（新建与编辑同一套）+ 刷新契约（§7.4 的 `agent:workspace_changed`）+ `projects` smoke scenario。**组头 `＋` 之外的「新建项目」入口在侧栏顶部** |
 | **P4 worktree** | 会话级 worktree 绑定（§13）：创建 / 绑定解析 / 配置根区分 / 清理入口。依赖 P0-c；**配置根那一步（§13.5）要先做完 MCP 与 permissions 的进程级改造**，范围以那一节的结论为准 |
 | **P5（可选）** | §9 的演进项 |
 
