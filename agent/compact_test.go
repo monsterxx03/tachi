@@ -140,6 +140,34 @@ func TestFinalizeCompact_PreservesAdditionalRoots(t *testing.T) {
 	assert.Equal(t, extra[0], oldSess.AdditionalDirs[0])
 }
 
+// TestFinalizeCompact_PreservesProjectID: the desktop resolves a member session's
+// roots from its PROJECT, and the record's WorkingDir/AdditionalDirs are only the
+// snapshot taken when the session was created. A compacted child that lost the id
+// would therefore NOT look rootless: it would read that snapshot as its own roots,
+// so tools, prompt and checkpoints would agree with each other in the tree the
+// project has since moved away from — silently, with a normal-looking conversation.
+func TestFinalizeCompact_PreservesProjectID(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("anthropic", "/my/snapshot")
+	require.NoError(t, err)
+	oldSess.ProjectID = "project-42"
+	require.NoError(t, sm.UpdateMeta(oldSess))
+
+	_, err = FinalizeCompact(sm, "prompt", "summary")
+	require.NoError(t, err)
+
+	newSess := sm.Current()
+	assert.Equal(t, "project-42", newSess.ProjectID)
+
+	// On disk too: the next process must resolve the same project from meta.json.
+	loaded, err := store.LoadMeta(newSess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, "project-42", loaded.ProjectID)
+}
+
 // TestFinalizeCompact_MigratesThreadID guards against repeated auto-compact
 // on channel threads: after a compaction the new session must own the thread
 // binding and the old session must release it, so FindByThreadID (channel

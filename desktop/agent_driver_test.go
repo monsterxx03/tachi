@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/skill"
 	"github.com/monsterxx03/tachi/agent/tools"
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
@@ -227,6 +228,11 @@ func TestSessionSkillStoreWithoutWorkspace(t *testing.T) {
 // session": scan roots are fixed when the store is built, so a session that MOVES has
 // to be re-pointed. Without it the session keeps serving the OLD tree's project skills
 // — and sends Skill create's "project" target there — until it is reloaded.
+//
+// The move only MARKS the session (sessionRun.skillsStale): the caller is the UI
+// goroutine, which cannot prove this session is not mid-turn, and the reload rewrites
+// the store and the tool registry. The turn's own start applies it — before its
+// goroutine exists, which is the only such point.
 func TestSetSessionWorkingDirRepointsSkills(t *testing.T) {
 	treeA, treeB := t.TempDir(), t.TempDir()
 	writeProjectSkillFixture(t, treeA, "skill-a", "from tree A")
@@ -244,10 +250,28 @@ func TestSetSessionWorkingDirRepointsSkills(t *testing.T) {
 	if !slices.Contains(storeSkillNames(a.SkillStore()), "skill-a") {
 		t.Fatalf("fixture: the store did not start on tree A")
 	}
-	d.getRun(sid).agent = a
+	r := d.getRun(sid)
+	r.agent = a
 
 	if res := svc.SetSessionWorkingDir(sid, treeB); res != "ok" {
 		t.Fatalf("SetSessionWorkingDir: %s", res)
+	}
+
+	// Nothing happens yet, on purpose: a live agent's store is not rewritten from here.
+	if !slices.Contains(storeSkillNames(a.SkillStore()), "skill-a") {
+		t.Error("SetSessionWorkingDir must not rewrite a live agent's skill store")
+	}
+	if !r.skillsStale {
+		t.Fatal("the session must be marked as needing a skill-store reload")
+	}
+
+	ctx, cancel, _, _, ok := d.beginTurn(sid, r)
+	if !ok {
+		t.Fatal("beginTurn refused")
+	}
+	t.Cleanup(cancel)
+	if got := wdctx.Dir(ctx); got != treeB {
+		t.Errorf("the turn's working directory = %q, want %q", got, treeB)
 	}
 
 	names := storeSkillNames(a.SkillStore())
@@ -256,6 +280,9 @@ func TestSetSessionWorkingDirRepointsSkills(t *testing.T) {
 	}
 	if slices.Contains(names, "skill-a") {
 		t.Errorf("the old tree's skills must be gone, got %v", names)
+	}
+	if r.skillsStale {
+		t.Error("the reload must clear the flag")
 	}
 }
 

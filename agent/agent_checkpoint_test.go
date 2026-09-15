@@ -10,6 +10,7 @@ import (
 	"github.com/monsterxx03/tachi/agent/tools"
 	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/session"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -203,6 +204,39 @@ func TestCheckpointWiringSkipsOneOffRuns(t *testing.T) {
 // unset, and unset must mean OFF: an agent that wrote snapshots every turn into
 // a store nobody configured is exactly the surprise this default prevents (and
 // in a test that means writing outside t.TempDir()).
+// TestCheckpointRootsUsesRootsFunc pins the seam the desktop projects need: a frontend
+// whose session RECORD is not the workspace authority supplies the resolver, and the
+// checkpoint then covers exactly the trees its tools worked in. Without this the desktop
+// would keep snapshotting the snapshot — the tree the session was CREATED in — while the
+// agent wrote somewhere else, and a rewind would "restore" files nobody had touched.
+//
+// nil keeps every other entry point on the record, byte for byte.
+func TestCheckpointRootsUsesRootsFunc(t *testing.T) {
+	sess := &session.Session{
+		ID:             "s1",
+		WorkingDir:     "/from/record",
+		AdditionalDirs: []string{"/record/extra"},
+	}
+
+	a := &AIAgent{}
+	assert.Equal(t, []string{"/from/record", "/record/extra"}, a.checkpointRoots(sess))
+
+	// An empty primary is passed through as-is: the manager's root set for a session with
+	// no workspace must stay exactly what it was (one empty entry, which it drops).
+	assert.Equal(t, []string{""}, a.checkpointRoots(&session.Session{ID: "s2"}))
+
+	projected := []string{"/project/primary", "/project/extra"}
+	var seen *session.Session
+	a.Config.RootsFunc = func(s *session.Session) []string {
+		seen = s
+		return projected
+	}
+	assert.Equal(t, projected, a.checkpointRoots(sess))
+	assert.Same(t, sess, seen, "the hook resolves for the session the turn belongs to")
+
+	assert.Nil(t, a.checkpointRoots(nil), "no session, no roots")
+}
+
 func TestCheckpointWiringDisabledByConfig(t *testing.T) {
 	for _, tc := range []struct {
 		name    string

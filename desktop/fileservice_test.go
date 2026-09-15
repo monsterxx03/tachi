@@ -13,7 +13,7 @@ import (
 // newTestApp builds a desktopApp with no runs: the @-file root then falls back
 // to the process working directory, which each test pins with t.Chdir.
 func newTestApp() *desktopApp {
-	return &desktopApp{runs: make(map[string]*sessionRun), fileIndex: newFileIndex()}
+	return &desktopApp{runs: make(map[string]*sessionRun), fileIndex: newFileIndex(), projects: &projectTable{}}
 }
 
 // newSessionManagerForTest returns a session manager rooted in a temp dir

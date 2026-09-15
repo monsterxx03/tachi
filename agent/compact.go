@@ -113,6 +113,13 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	// while the tools keep writing into the others — a root set the session no longer
 	// records (and a checkpoint manager that no longer covers them).
 	newSess.AdditionalDirs = append([]string(nil), oldSess.AdditionalDirs...)
+	// ProjectID is the same trap with a wider blast radius: the desktop resolves a
+	// member's roots from the PROJECT, and WorkingDir/AdditionalDirs above are only
+	// the snapshot taken when the session was created. Dropping the id would leave the
+	// child reading that stale snapshot as its own roots — tools, prompt and checkpoints
+	// agreeing with each other in the WRONG tree (the failure RootsFunc exists to prevent),
+	// plus a sidebar group and write guards the conversation silently left.
+	newSess.ProjectID = oldSess.ProjectID
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
 	}

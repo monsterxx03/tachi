@@ -233,6 +233,15 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 		// reads the turn's working directory from the context (see
 		// systemreminder.workDir), so they describe the session, not the process.
 		MCPManager: d.mcp, // shared manager (nil when no MCP configured)
+
+		// The checkpoint's root set must be the one the tools actually worked in. In the
+		// desktop the session RECORD holds a snapshot (a project owns the real roots), so
+		// the agent resolves through the same exit the prompt and wdctx do — without this a
+		// project edit would leave each turn's snapshot covering the old tree while the
+		// tools wrote in the new one, and a rewind would then "restore" files nobody was
+		// working on (design §14.3).
+		RootsFunc: d.checkpointRootsFor,
+
 		// Plan mode's structured output. The desktop renders it as the footer's plan
 		// panel, which is exactly the "plan card UI" this flag gates registration on.
 		PlanToolEnabled: true,
@@ -268,6 +277,32 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 // SetSessionWorkingDir (agent_session.go), which re-points the store in place.
 func (d *desktopApp) sessionSkillStore(sm *session.Manager) *skill.Store {
 	return skill.NewStore(config.FindProjectRootFrom(d.sessionPrimaryDir(sm)))
+}
+
+// checkpointRootsFor is the agent-side mirror of sessionRootsFrom, handed to the agent as
+// AgentConfig.RootsFunc so a checkpoint covers exactly the tree the tools worked in
+// (design §14.3). It returns the record's own roots for a session in no project (or one
+// whose project is gone), in the same shape the agent's own default uses — including the
+// empty primary — so a plain session's snapshots are byte-for-byte what they were.
+//
+// Called from the agent's goroutine, per turn, so it must stay a pure READ of sess:
+//   - It takes no d.mu (only the project table's own lock), which is what makes that safe:
+//     the lock order is d.mu → projects.mu and this path can never invert it.
+//   - sess is the per-session manager's LIVE record, and the desktop mutates that same
+//     struct IN PLACE from the UI goroutine (updateSessionMeta). Reading fields here is
+//     therefore only as safe as the writers are: today they are SetSessionWorkingDir /
+//     AddSessionRoots / RemoveSessionRoot, and ProjectID has no writer at all yet. Whoever
+//     adds the bind/unbind API has to keep this in mind — a field written from the UI while
+//     a turn resolves its roots here is a data race the compiler will not flag. The fix
+//     belongs in the manager (hand out copies, or mutate under its lock), not here.
+func (d *desktopApp) checkpointRootsFor(sess *session.Session) []string {
+	if sess == nil {
+		return nil
+	}
+	primary, additional := d.sessionRootsFrom(sess)
+	roots := make([]string, 0, 1+len(additional))
+	roots = append(roots, primary)
+	return append(roots, additional...)
 }
 
 // sessionPrimaryDir is the primary workspace root of the session the given (per-session)

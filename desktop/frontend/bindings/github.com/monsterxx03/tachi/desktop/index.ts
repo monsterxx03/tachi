@@ -32,6 +32,7 @@ export type {
     PlanEntryVO,
     PlanStepVO,
     PlanVO,
+    ProjectVO,
     RewindChainVO,
     RewindPreviewVO,
     RewindRootVO,

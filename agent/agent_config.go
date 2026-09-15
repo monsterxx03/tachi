@@ -15,6 +15,7 @@ import (
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/llm"
 	"github.com/monsterxx03/tachi/pkg/logger"
+	"github.com/monsterxx03/tachi/session"
 )
 
 // AgentSystemConfig 是 Configure 实际需要的配置子集。
@@ -156,6 +157,18 @@ type AgentConfig struct {
 	// nil = 使用进程级共享单例（<home>/usage/，见 getGlobalUsageRecorder）。
 	// 测试注入自建 recorder 以隔离磁盘写入。
 	UsageRecorder *llm.UsageRecorder
+
+	// RootsFunc resolves the workspace roots a checkpoint should cover for a session.
+	// nil = the record's own WorkingDir + AdditionalDirs, which is what every other entry
+	// point wants (tui, acp, channel, -p leave it unset and are unaffected).
+	//
+	// The desktop sets it to the project-aware resolver: there the session RECORD is not the
+	// authority on the workspace (a project owns the roots and the record holds a snapshot
+	// taken when the session was created), so without this the agent would write in one tree
+	// while its checkpoints kept recording another — a rewind would then restore files into a
+	// directory nobody was working in, and report success. See
+	// docs/2026-09-14-desktop-project-design.md §14.3.
+	RootsFunc func(*session.Session) []string
 
 	// --- 系统配置 ---
 	SystemConfig AgentSystemConfig

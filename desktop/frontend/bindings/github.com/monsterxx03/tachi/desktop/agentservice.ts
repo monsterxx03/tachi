@@ -73,6 +73,14 @@ export function ApplyRewind(id: string, turn: number): $CancellablePromise<strin
 }
 
 /**
+ * CreateProject adds a project. name may be empty, in which case it is derived from the
+ * primary directory's base name (with -2 / -3 while it collides).
+ */
+export function CreateProject(name: string, primary: string, additional: string[] | null): $CancellablePromise<string> {
+    return $Call.ByID(2602385197, name, primary, additional);
+}
+
+/**
  * CurrentSession returns the active (displayed) session (nil if none).
  */
 export function CurrentSession(): $CancellablePromise<$models.SessionInfo | null> {
@@ -251,6 +259,15 @@ export function ListOneOffs(sessionID: string): $CancellablePromise<$models.OneO
 }
 
 /**
+ * ListProjects returns every project, newest first, for the sidebar's groups. An unknown
+ * or unreadable table yields an empty slice, never an error: the desktop must work
+ * without projects.
+ */
+export function ListProjects(): $CancellablePromise<$models.ProjectVO[] | null> {
+    return $Call.ByID(60175774);
+}
+
+/**
  * ListProviders returns the configured providers (priority-ordered).
  */
 export function ListProviders(): $CancellablePromise<config$0.ProviderConfig[] | null> {
@@ -353,6 +370,14 @@ export function PreviewRewind(id: string, turn: number): $CancellablePromise<$mo
  */
 export function RemoveSessionRoot(id: string, dir: string): $CancellablePromise<string> {
     return $Call.ByID(2668803664, id, dir);
+}
+
+/**
+ * RenameProject changes a project's name. Nothing else moves: sessions store the ID and
+ * the sidebar joins the name in, so one write relabels every row at once (design §3.3).
+ */
+export function RenameProject(id: string, name: string): $CancellablePromise<string> {
+    return $Call.ByID(3088019471, id, name);
 }
 
 /**
@@ -514,6 +539,15 @@ export function SetOneOffPanelOpen(open: boolean): $CancellablePromise<void> {
  */
 export function SetOneOffPanelWidth(px: number): $CancellablePromise<void> {
     return $Call.ByID(4191208727, px);
+}
+
+/**
+ * SetProjectRoots replaces a project's workspaces. Every member session follows on its
+ * NEXT read — no session meta is written here at all (design §2), which is what makes this
+ * a single file write however many sessions the project has.
+ */
+export function SetProjectRoots(id: string, primary: string, additional: string[] | null): $CancellablePromise<string> {
+    return $Call.ByID(1527886598, id, primary, additional);
 }
 
 /**

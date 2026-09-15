@@ -1,6 +1,6 @@
 # Desktop Project（会话管理容器）设计
 
-> 版本: 1.0 | 日期: 2026-09-15 | 状态: 项目本体未实现；§14.1/§14.2（checkpoint 根身份）、P0 收口与 P0-x 已在仓库里
+> 版本: 1.0 | 日期: 2026-09-15 | 状态: P0 / P1 与 §14.1、§14.2 已落地；P2（创建与删除）、P3（UI）、P4（worktree）未实现
 > 前置: [2026-09-11-desktop-multi-workspace-design.md](2026-09-11-desktop-multi-workspace-design.md)（根集语义、
 >       校验层、prompt 缓存键、`@`-file 多根已落地）
 > 关联: [desktop/roots.go](../desktop/roots.go)、[desktop/agent_session.go](../desktop/agent_session.go)、
@@ -491,8 +491,8 @@ detach 的实现要点（这是本设计里唯一一次写成员 meta，要按�
 | **P0 收口**（✅ 已落地，纯重构） | 根集解析收成 `sessionRoots` / `sessionRootsFrom` 一个出口，4 个直读 `Session.WorkingDir` 的消费点全部改走它（§4）；`wideRootReason` 补上 `config.BaseDir()`（§8.5）；`TestRootSetHasOneSource` 钉住"五个消费点同源" |
 | **P0-c（✅ 已落地，与项目无关）** | checkpoint 的根身份规则（§14.1/§14.2）：工作树从记录里取、影子仓库按路径命名、预览说清"这一轮记录的是哪个树"、目录不存在时明确报错。**独立于项目，可单独合**（有回归测试） |
 | **P0-x（✅ 已落地，独立的小修）** | `FinalizeCompact` 丢掉 `AdditionalDirs`（§3.2）：压缩子会话显式继承附加根。它与项目无关，但正是 `project_id` 之后会踩的同一个坑 |
-| **P1 项目本体** | `projects.json` 存储（含读取侧校验）+ 校验复用 + `Session.ProjectID` + `sessionRoots` 项目解析 + 4 个项目管理 API + 只读 + 后端拒绝写 + checkpoint 根集走同一出口（§14.3） |
-| **P2 创建与删除** | `NewSession(projectID)` + 快照写入 + `/compact` 继承绑定（§3.2）+ detach 删除（含同一临界区取 running、skill 重指）+ 绑定重生成 |
+| **P1 项目本体**（✅ 已落地） | `projects.json` 存储（含读取侧校验）+ 校验复用 + `Session.ProjectID` + `sessionRootsFrom` 的项目分支 + `ListProjects` / `CreateProject` / `RenameProject` / `SetProjectRoots` + `GetSessionRoots` 的只读字段与三处后端拒绝写 + `AgentConfig.RootsFunc` 让 checkpoint 走同一出口（§14.3）。**删除项目（detach）在 P2** |
+| **P2 创建与删除** | `NewSession(projectID)` + 快照写入 + detach 删除（含同一临界区取 running、skill 重指）+ 绑定重生成。其中 **`/compact` 继承绑定（§3.2）已落地** |
 | **P3 UI** | 侧栏分组 + 组头菜单 + 只读 RootsPanel + 新建项目对话框 + 刷新契约（§7.4）+ smoke scenario |
 | **P4 worktree** | 会话级 worktree 绑定（§13）：创建 / 绑定解析 / 配置根区分 / 清理入口。依赖 P0-c；**配置根那一步（§13.5）要先做完 MCP 与 permissions 的进程级改造**，范围以那一节的结论为准 |
 | **P5（可选）** | §9 的演进项 |

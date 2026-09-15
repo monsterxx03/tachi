@@ -528,6 +528,28 @@ export interface PlanVO {
 }
 
 /**
+ * ProjectVO is one project as the UI sees it. SessionCount and RootsUsable are computed
+ * per call so the sidebar's "(3)" and the panel's "目录不可用" never need a second round
+ * trip — and so a stale count is impossible (they are not stored anywhere).
+ */
+export interface ProjectVO {
+    "id": string;
+    "name": string;
+    "workingDir": string;
+    "additionalDirs": SessionRootVO[] | null;
+    "sessionCount": number;
+
+    /**
+     * RootsUsable is false when the project's roots no longer validate on this machine (a
+     * directory moved, unmounted or hand-edited away). Its members then fall back to their
+     * snapshots and become editable; the UI says so instead of showing dead paths as if
+     * they were live (design §8.6).
+     */
+    "rootsUsable": boolean;
+    "createdAt": string;
+}
+
+/**
  * RewindChainVO is what the rewind-chain surface needs in ONE call: the session's rewind
  * points, and — when the chain as a whole is unusable — why.
  */
@@ -680,6 +702,13 @@ export interface SessionInfo {
      * live switch (agent:session_switched) could not do.
      */
     "compactedParentId"?: string;
+
+    /**
+     * ProjectID is the desktop project this session belongs to ("" = project-less). Only the ID
+     * travels: the sidebar joins it against ListProjects() for the group's name, so renaming a
+     * project relabels every row without touching a single session (design §3.3).
+     */
+    "projectId"?: string;
 }
 
 /**
@@ -784,6 +813,22 @@ export interface SessionRootVO {
 export interface SessionRootsVO {
     "primary": string;
     "additional": SessionRootVO[] | null;
+
+    /**
+     * ProjectID / ProjectName are set when a desktop project owns this session's workspace.
+     * The panel then renders read-only and points at the project (design §7.2).
+     */
+    "projectId"?: string;
+    "projectName"?: string;
+
+    /**
+     * ProjectMissing is true when the session carries a project_id that no longer DRIVES it
+     * — the project was deleted, or its roots stopped validating (design §5). The roots above
+     * are then the session's own snapshot, and the panel must say so while staying EDITABLE:
+     * a read-only panel plus three refused writers would leave the user no way out. An empty
+     * ProjectName with this flag set means "gone"; a name means "still there, unusable".
+     */
+    "projectMissing"?: boolean;
 }
 
 /**

@@ -28,6 +28,10 @@ type SessionInfo struct {
 	// launch can rebuild the same shape from meta.json — which the frontend's own memory of the
 	// live switch (agent:session_switched) could not do.
 	CompactedParentID string `json:"compactedParentId,omitempty"`
+	// ProjectID is the desktop project this session belongs to ("" = project-less). Only the ID
+	// travels: the sidebar joins it against ListProjects() for the group's name, so renaming a
+	// project relabels every row without touching a single session (design §3.3).
+	ProjectID string `json:"projectId,omitempty"`
 }
 
 // SessionMessage mirrors a raw session message (with iteration/seq/timestamp)
@@ -418,6 +422,7 @@ func toSessionInfo(ss *session.Session) SessionInfo {
 		CreatedAt:         ss.CreatedAt,
 		UpdatedAt:         ss.UpdatedAt,
 		CompactedParentID: ss.CompactedParentID,
+		ProjectID:         ss.ProjectID,
 	}
 }
 
@@ -453,6 +458,9 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	if strings.TrimSpace(dir) == "" {
 		return "empty dir"
 	}
+	if reason := d.projectGuard(id); reason != "" {
+		return reason
+	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
 		return err.Error()
@@ -478,12 +486,12 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	// Skills move with the session: a store's scan roots are fixed when it is built
 	// (sessionSkillStore), so without this a session that changes folder would keep
 	// offering the OLD tree's project skills — and send Skill create's "project"
-	// target there — until it was reloaded. Re-pointed here, where the new directory
-	// is finally known. A session with no agent yet is fine: its agent will be built
-	// with the new directory, which is persisted above.
-	if a, _ := d.agentOf(id); a != nil {
-		a.ReloadSkillsIn(abs)
-	}
+	// target there — until it was reloaded. Marked, not reloaded: beginTurn is the only
+	// place that can prove no turn of this session is in flight, and a reload racing a
+	// running turn would rewrite the store and the tool registry under it (the same
+	// reason SetProjectRoots marks its members). A session with no agent yet is fine: its
+	// agent will be built with the new directory, which is persisted above.
+	d.markSkillsStale(id)
 	// Remember the explicit choice: the next new session starts here.
 	rememberWorkspace(abs)
 	return "ok"

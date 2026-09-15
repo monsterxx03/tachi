@@ -106,6 +106,12 @@ type desktopApp struct {
 	// fileIndex backs @-file completion in the input area (one cached path
 	// index per searched root).
 	fileIndex *fileindex.Index
+
+	// projects is the desktop project table (docs/2026-09-14-desktop-project-design.md):
+	// the named workspaces member sessions inherit their roots from. It guards its own
+	// data with its own lock and never calls back into the app, which is what makes
+	// d.mu → projects.mu a safe order. Lazy: the file is read on first use.
+	projects *projectTable
 }
 
 func newDesktopApp() *desktopApp {
@@ -113,6 +119,7 @@ func newDesktopApp() *desktopApp {
 		runs:      make(map[string]*sessionRun),
 		simCh:     nil,
 		fileIndex: newFileIndex(),
+		projects:  &projectTable{},
 	}
 }
 

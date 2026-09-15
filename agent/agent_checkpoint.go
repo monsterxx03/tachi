@@ -252,9 +252,17 @@ func (a *AIAgent) checkpointManager(ctx context.Context) *checkpoint.Manager {
 // returns (measured — it pinned a rewind behind a child process that could not
 // finish). The session's WorkingDir is the authoritative root anyway: it is what
 // /cd updates and what survives a reload.
+//
+// A frontend whose session RECORD is not the authority on the workspace supplies
+// RootsFunc (see AgentConfig.RootsFunc) — the desktop, where a project owns the roots and
+// the record is a snapshot. Resolving there is not a refinement: a checkpoint that covered
+// the wrong tree would restore the wrong tree, silently and with a success message.
 func (a *AIAgent) checkpointRoots(sess *session.Session) []string {
 	if sess == nil {
 		return nil
+	}
+	if resolve := a.Config.RootsFunc; resolve != nil {
+		return resolve(sess)
 	}
 	roots := make([]string, 0, 1+len(sess.AdditionalDirs))
 	roots = append(roots, sess.WorkingDir)

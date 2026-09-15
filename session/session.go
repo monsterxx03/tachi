@@ -17,10 +17,16 @@ type Session struct {
 	// Code's --add-dir. The effective root set is [WorkingDir, ...AdditionalDirs].
 	// Empty for sessions that never added one, so old session files read back with
 	// identical behavior.
-	AdditionalDirs []string  `json:"additional_dirs,omitempty"`
-	CreatedAt      time.Time `json:"created_at"`
-	UpdatedAt      time.Time `json:"updated_at"`
-	SkipDream      bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
+	AdditionalDirs []string `json:"additional_dirs,omitempty"`
+	// ProjectID binds this session to a desktop project (docs/2026-09-14-desktop-project-design.md):
+	// when set and the project exists, the PROJECT's roots win and WorkingDir/AdditionalDirs
+	// above hold only the snapshot taken when the session was created. Desktop-only — no other
+	// entry point resolves it, they read the snapshot as the session's own roots. Empty for every
+	// session created outside a project, so old meta.json files read back identically.
+	ProjectID string    `json:"project_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+	SkipDream bool      `json:"skip_dream,omitempty"` // exclude this session from Dream memory consolidation
 
 	// Session mode: "auto" (default), "chat", or "plan".
 	// Controls tool visibility: auto = full access, chat/plan = read-only.

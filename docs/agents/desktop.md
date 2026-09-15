@@ -270,6 +270,32 @@ const type = (el, t) => {
   `$HOME`, or one that contains `config.BaseDir()` is refused outright (Tachi's own state — shadow checkpoint
   repos, session records, worktrees — must never sit inside a workspace root). `NewSession` applies the same
   rule (`defaultWorkspaceFor` / `wideRootReason`).
+- **A desktop project OWNS its members' workspaces, and the session record becomes a snapshot.**
+  `projects.json` (next to `desktop_ui.json`; `desktop/projects.go`) holds `{名称, 主目录, 附加目录}`;
+  a member session stores only `project_id`, and every read resolves through
+  `(*desktopApp).sessionRootsFrom` — the project's roots win while the project DRIVES the session, otherwise
+  the session's own `WorkingDir`/`AdditionalDirs` (creation snapshot) are used, and `GetSessionRoots` flags
+  `projectMissing` so the panel can say so instead of showing dead paths. It is ONE predicate
+  (`projectTable.drives`) shared by the resolver, the write guards and the panel's `rootsUsable`, so a
+  session can never be project-owned for a read and editable for a write: `SetSessionWorkingDir` /
+  `AddSessionRoots` / `RemoveSessionRoot` refuse with the project's name while it drives the session, and
+  stop refusing when it no longer does (a lost `projects.json` must degrade, not lock the user out). It
+  judges the PRIMARY only: a vanished ADDITIONAL root is a fact about one directory — kept in the set,
+  reported `exists=false`, skipped by the prompt and the @-file search, exactly as for a session — and
+  never a reason to move every member back to its snapshot. Roots are validated on the way in AND on the way
+  out (the file is hand-editable), and a project's root can never be wider than a session's. A
+  `projects.json` that cannot be parsed reads as "no projects" but is NEVER written over — a save would
+  replace a file the user can still repair with just the entry being added — and `upsert` re-reads it first,
+  so repairing it is enough, with no restart. Two consequences worth remembering: editing a project writes
+  ONE file (no fan-out into session meta, which is why nothing can clobber a running turn's snapshot), and
+  the skill store is the exception, since a store's scan roots are fixed when it is built: a project edit
+  INVALIDATES every live member (`invalidateMemberSkills`) and each member re-points itself when its own
+  next turn starts — the only point that can prove it is not mid-turn. `AgentConfig.RootsFunc` carries the
+  same resolver to the agent, so a checkpoint covers the tree the tools worked in rather than the record's
+  snapshot; `nil` there means "read the record" and is what tui / acp / channel / `-p` keep doing. Snapshot
+  fields travel with the conversation on COMPACTION too: `FinalizeCompact` copies `AdditionalDirs` and
+  `project_id` by hand, and one it misses is silently zeroed — for a member that means the child stops
+  resolving through the project and works in the snapshot instead (see `agent/compact.go`).
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
@@ -306,11 +332,14 @@ const type = (el, t) => {
   (`config.FindProjectRootFrom`, `systemreminder.workDir`): a per-session thing resolved from a process
   global.
 - **A store's scan roots are FIXED when it is built** (`skill.Store` re-reads the disk on every `List`/`Load`
-  but never re-resolves its directories), so a session that MOVES is re-pointed explicitly:
-  `SetSessionWorkingDir` → `AIAgent.ReloadSkillsIn(dir)`. Without that call the session keeps serving the old
-  tree's project skills — and sends `Skill create`'s project target there — until it is reloaded. The reload
-  also clears the activation state, which is correct: the same name may resolve to another file after the
-  move.
+  but never re-resolves its directories), so a session that MOVES has to be re-pointed — and the re-pointing
+  happens in `beginTurn` and NOWHERE ELSE. A folder change (`SetSessionWorkingDir`) and a project edit
+  (`invalidateMemberSkills`) only set `sessionRun.skillsStale`: both run on the UI goroutine, which cannot
+  prove the session is not mid-turn, and `ReloadSkillsIn` rewrites `Config.SkillStore` and the tool registry
+  under whatever is reading them. The session's own next turn is quiescent by construction, and nothing but a
+  turn reads the store in between, so the deferred swap is invisible. Without it the session keeps serving
+  the old tree's project skills — and sends `Skill create`'s project target there. The reload also clears the
+  activation state, which is correct: the same name may resolve to another file after the move.
 - **The scope is the session's git root, plus the global dir** (`config.GlobalSkillsDir()` = `<base>/skills`,
   note NOT `<base>/.tachi/skills` — the two shapes differ, and a test fixture written for one is invisible to
   the other). **Additional roots are NOT scanned**: they are extra places to read and write, not a second
