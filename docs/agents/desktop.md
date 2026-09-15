@@ -434,13 +434,19 @@ const type = (el, t) => {
   would show, silently. `FileDiffVO.Root` (absolute) + `RootLabel` ("" for the primary, else the
   base name, or the full path when two roots share a basename — `rootLabels`, the SAME rule and
   strings as `AtMatch.root`, so two roots are told apart everywhere and not in two different ways),
-  and the panel resolves `abs` from the file's own root. Three traps: (1) a group's identity for
+  and the panel resolves `abs` from the file's own root. Four traps: (1) a group's identity for
   React keys and fold state is `(root, path)` — with the path alone, folding one root's file folds
   the other's (`diff.tsx`'s `keyOf`); (2) `GetTurnDiff` diffs EVERY root — a path in an additional
   root is in a DIFFERENT repository, not "outside the repository", and judging it per root reported
   every such path as belonging nowhere; (3) `checkpoint.Manager.TurnDiff`/`ChangedSinceTurn` return
   per root (`RootDiff`/`RootChanged`) and must never be merged into one text or one path set, which
-  is also why the review's scope groups by root (`ReviewOptions.ScopeRoots` → `AppendReviewScope`).
+  is also why the review's scope groups by root (`ReviewOptions.ScopeRoots` → `AppendReviewScope`);
+  (4) **every row is labelled as soon as ONE of them has to be** (`multiRoot` in `DiffFindingsPane`:
+  a file that names a root is proof the session has more than one). Labelling only the additional
+  roots left the primary's row bare, and a bare row beside a labelled one reads as belonging to no
+  tree at all — the one thing the reader was trying to find out. The primary is named 主目录
+  (`PRIMARY_ROOT_LABEL`): the roots panel's word for it, and the line the review prompt draws as
+  `(primary)`. A single-root diff is unchanged, since a lone root has nothing to be told apart from.
 - **A review's PANE reads the same diff the reviewer read, by TURN.** The run record keeps the turn
   (`OneOffKeyTurn` → `OneOffVO.Turn`, set from `reviewScope.Turn`), and the findings pane fetches
   `GetTurnChanges(sessionId, turn, …)` — so a review of changes that were committed, or deleted, since

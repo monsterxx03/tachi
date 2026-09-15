@@ -43,6 +43,12 @@
   const pane = smoke.text('.viewer-doc.is-diff')
   smoke.check('additional root 的文件带上了 root 标签', pane.indexOf('shared-lib') >= 0,
     smoke.allText('.viewer-doc.is-diff .diff-badge').join(' | '))
+  // 多根下不能有「裸」的文件行：主目录那份也说明它属于哪棵树。只标一半（additional 有、
+  // primary 没有）时，没标的那份读起来像"不属于任何一棵"——而它恰恰是主目录那棵。
+  const badgeTexts = smoke.allText('.viewer-doc.is-diff .diff-badge')
+  smoke.check('多根下每个文件都标了归属（主目录那份也有）',
+    badgeTexts.indexOf('主目录') >= 0 && badgeTexts.indexOf('shared-lib') >= 0,
+    badgeTexts.join(' | ') || '(没有徽标)')
   // 两边的行都在（内容不会被合并成一份）。
   smoke.check('两个 root 的改动都显示出来了',
     pane.indexOf('main-change') >= 0 && pane.indexOf('lib-change') >= 0, pane.slice(0, 160))

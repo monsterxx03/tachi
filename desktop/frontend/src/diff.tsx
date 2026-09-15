@@ -120,6 +120,12 @@ type PlacedFinding = { finding: FindingVO; idx: number }
 // what the reader added to it.
 type FindingPick = { checked: boolean; comment: string }
 
+// PRIMARY_ROOT_LABEL names the session's own working directory, for the surfaces that have to say
+// which tree a file is in: the roots panel's word for it, and the same line the review prompt
+// draws when it writes "(primary)" beside a directory name — so the app does not end up with two
+// vocabularies for one fact.
+const PRIMARY_ROOT_LABEL = '主目录'
+
 // defaultPick: 🐛 and ⚠️ say something is wrong, so they arrive ticked; 💡 is usually
 // "consider…" and waits to be opted into.
 export function defaultPick(severity: string): FindingPick {
@@ -321,6 +327,12 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
   // counting findings nobody can read or tick, so it gets a group of its own.
   const outsideItems = items.filter((it) => !(diff?.files || []).some(
     (f) => findingMatchesFile(f.root || diff?.root || '', it.finding.path, f.path)))
+  // Does this diff come from a session with MORE than one workspace root? A file that names a root
+  // is proof enough (the backend labels only an additional one), and it is the fact EVERY row
+  // needs: with one row labelled and the next bare, the bare one reads as belonging to no tree at
+  // all — which is exactly the question the labels exist to answer. Single-root diffs (the
+  // overwhelmingly common case) are untouched.
+  const multiRoot = (diff?.files || []).some((f) => !!f.rootLabel)
   // The report is a file like any other, and the 报告 pane renders it with the app's own
   // markdown renderer — but it is a PANE of this panel, not another overlay stacked on top.
   const reportButton = report ? (
@@ -475,7 +487,7 @@ export function DiffFindingsPane({ diff, loading, findings, note, report, hasPat
         <div className="diff-panel-empty">没有未提交的改动（可能已经提交）——「完整 diff」只能看工作树里未提交的差异</div>
       ) : null}
       {(diff?.files || []).map((f) => (
-        <FileDiffGroup key={keyOf(f)} file={f} root={diff?.root || ''}
+        <FileDiffGroup key={keyOf(f)} file={f} root={diff?.root || ''} multiRoot={multiRoot}
           findings={findingsOf(f)}
           picks={picks} onPick={onPick} open={isOpen(f)} onToggle={() => setFileOpen((p) => ({ ...p, [keyOf(f)]: !isOpen(f) }))} />
       ))}
@@ -622,9 +634,10 @@ export function TurnDiffOverlay({ sessionId, turn, paths, onClose }: {
 // The fold is CONTROLLED by the pane: which files start folded is a rule about the review
 // (a file with findings opens, one without stays shut), and the ↑/↓ walk has to be able to
 // unfold a file before it can scroll to a finding inside it. Both need one owner.
-function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: {
+function FileDiffGroup({ file, root, multiRoot, findings, picks, onPick, open, onToggle }: {
   file: FileDiffVO
   root: string
+  multiRoot: boolean
   findings: PlacedFinding[]
   picks: FindingPick[]
   onPick: (idx: number, next: FindingPick) => void
@@ -637,6 +650,12 @@ function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: 
   // silently. file.root is empty for a single-root session, where the panel's root IS the root.
   const fileRoot = file.root || root
   const abs = fileRoot && !file.path.startsWith('/') ? `${fileRoot}/${file.path}` : file.path
+  // Which tree this file is in, in the words the rest of the app uses: an additional root is
+  // named by its directory (the backend's label), the primary by 主目录 — the roots panel's own
+  // word for it, and the distinction the review prompt draws when it writes "(primary)" next to
+  // a directory name. Leaving the primary bare only works while there is nothing to compare it
+  // with; in a multi-root diff the bare row is the one you cannot place.
+  const rootName = file.rootLabel || (multiRoot && root ? PRIMARY_ROOT_LABEL : '')
   // The file's own content, the way every other file in this app is shown — the same
   // PreviewFile machinery behind the attachment cards.
   const [peek, setPeek] = useState(false)
@@ -655,11 +674,11 @@ function FileDiffGroup({ file, root, findings, picks, onPick, open, onToggle }: 
             turn, the user, a commit), these hunks are no longer what is on disk — and 预览/打开
             would show text that does not match them. Saying so is the difference between a
             historical view and a wrong one. */}
-        {/* Which additional root this file came from — shown only when there IS one
-            (file.rootLabel is empty for the primary root), so a single-root diff looks exactly
-            as it always did while two roots' same-named files stay tellable apart. */}
-        {file.rootLabel ? (
-          <span className="diff-badge" title={file.root || ''}>{file.rootLabel}</span>
+        {/* Which tree this file came from. Every row says it as soon as one of them has to
+            (see rootName above): a single-root diff is unchanged, and in a multi-root one no row
+            is left bare. */}
+        {rootName ? (
+          <span className="diff-badge" title={fileRoot}>{rootName}</span>
         ) : null}
         {file.changedSince ? (
           <span className="diff-badge" title="这个文件在这一轮之后又被改过：这里显示的是当时的内容，不是磁盘上的现在">之后又改过</span>
