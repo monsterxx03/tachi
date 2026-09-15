@@ -31,6 +31,7 @@ import (
 	"time"
 
 	"github.com/monsterxx03/tachi/agent"
+	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -131,7 +132,7 @@ func (d *desktopApp) sessionRoots(id string) (primary string, additional []strin
 	d.mu.Unlock()
 	if r != nil && r.sm != nil {
 		if cur := r.sm.Current(); cur != nil {
-			return cur.WorkingDir, append([]string(nil), cur.AdditionalDirs...)
+			return d.sessionRootsFrom(cur)
 		}
 	}
 	if d.sm == nil {
@@ -139,6 +140,29 @@ func (d *desktopApp) sessionRoots(id string) (primary string, additional []strin
 	}
 	sess, err := d.sm.Load(id)
 	if err != nil {
+		return "", nil
+	}
+	return d.sessionRootsFrom(sess)
+}
+
+// sessionRootsFrom resolves a loaded session record into the root set everything must
+// agree on: bash's cwd (wdctx), the prompt's directory and additional roots, the
+// @-file search and resolution, git diff, the plan panel, `/sh`, and the skill store's
+// scan root. It is the ONE exit, and that is the point — these consumers used to read
+// Session.WorkingDir directly in four places, so a directory change moved some of them
+// and left the others advertising the old tree.
+//
+// It takes an already-loaded record rather than an id because one caller (agent
+// construction) holds a session manager instead of the run map, and because an agent is
+// built BEFORE its run is bound (see buildAgentForSession). It takes no locks of its
+// own — only the session's fields — so it is safe to call with d.mu held, which is what
+// beginTurn and expansionRoot do.
+//
+// A session in a desktop project will be resolved here: the project's roots win, and
+// the record's own WorkingDir/AdditionalDirs become the snapshot the other entry points
+// still read. See docs/2026-09-14-desktop-project-design.md §2.
+func (d *desktopApp) sessionRootsFrom(sess *session.Session) (primary string, additional []string) {
+	if sess == nil {
 		return "", nil
 	}
 	return sess.WorkingDir, append([]string(nil), sess.AdditionalDirs...)
@@ -187,12 +211,18 @@ func (d *desktopApp) updateSessionMeta(id string, mutate func(*session.Session))
 // wideRootReason explains why a directory is too wide to be a workspace root, or
 // returns "" when it is fine.
 //
-// The rule is deliberately narrow — exactly the filesystem root and the home
-// directory, not a heuristic ("more than N files" would need the very walk this is
-// meant to prevent). Both are allowed by the OS and useless as an agent workspace:
-// the @-file index would cover the whole machine (or every dotfile the user owns),
-// the picker would be noise, and relative paths would resolve against a directory
+// The rule is deliberately narrow — the filesystem root, the home directory, and Tachi's
+// own state directory, not a heuristic ("more than N files" would need the very walk this
+// is meant to prevent). All three are allowed by the OS and useless as an agent
+// workspace: the @-file index would cover the whole machine (or every dotfile the user
+// owns), the picker would be noise, and relative paths would resolve against a directory
 // that is not a project.
+//
+// Tachi's state directory (config.BaseDir, ~/.tachi by default) is rejected together with
+// anything ABOVE it, because it holds this session's shadow checkpoint repos, every
+// session record, and the worktree checkouts: a root covering it snapshots Tachi's own
+// files, indexes them for @-completion, and makes "a worktree never sits inside a root"
+// unprovable. Same shape of judgement as the other two — one path comparison, no walk.
 func wideRootReason(path string) string {
 	clean := filepath.Clean(path)
 	if clean == string(filepath.Separator) {
@@ -201,7 +231,21 @@ func wideRootReason(path string) string {
 	if home, err := os.UserHomeDir(); err == nil && home != "" && clean == filepath.Clean(home) {
 		return "不能把家目录本身作为工作目录：@ 补全会索引整个 " + clean + "（含全部 dotfile 与无关目录）。请选择具体的项目目录。"
 	}
+	if base := config.BaseDir(); base != "" && dirContains(clean, filepath.Clean(base)) {
+		return "工作目录不能包含 Tachi 的状态目录 " + filepath.Clean(base) + "：它下面是会话记录、检查点仓库与 worktree，" +
+			"@ 补全和检查点会把 Tachi 自己的文件也算进去。请选择具体的项目目录。"
+	}
 	return ""
+}
+
+// dirContains reports whether parent is dir itself or one of its ancestors. Both paths
+// are expected to be cleaned and absolute.
+func dirContains(parent, dir string) bool {
+	rel, err := filepath.Rel(parent, dir)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 // defaultWorkspaceFor picks the directory a NEW session starts in: the one the user

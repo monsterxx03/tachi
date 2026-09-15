@@ -315,16 +315,23 @@ func (d *desktopApp) atFileRoot(sessionID string) string {
 	return d.expansionRoot(r)
 }
 
-// expansionRoot returns the @-file resolution root of a run: the session's
-// working directory when set, otherwise the process working directory — the
-// same fallback the tools' wdctx uses, so references and tool paths always
-// point at the same tree.
+// expansionRoot returns the @-file resolution root of a run: the session's primary
+// root when set, otherwise the process working directory — the same fallback the
+// tools' wdctx uses, so references and tool paths always point at the same tree.
 //
-// The caller must hold d.mu (the run's session manager is read here).
+// The primary comes from sessionRootsFrom, never from the record directly: this is one
+// of the consumers that used to read WorkingDir itself and so kept resolving @-file
+// references into the OLD tree after a directory change, while the tools had already
+// moved to the new one.
+//
+// The caller must hold d.mu (the run's session manager is read here; sessionRootsFrom
+// takes no locks of its own).
 func (d *desktopApp) expansionRoot(r *sessionRun) string {
 	if r != nil && r.sm != nil {
-		if cur := r.sm.Current(); cur != nil && cur.WorkingDir != "" {
-			return cur.WorkingDir
+		if cur := r.sm.Current(); cur != nil {
+			if primary, _ := d.sessionRootsFrom(cur); primary != "" {
+				return primary
+			}
 		}
 	}
 	return processCWD()
@@ -338,20 +345,13 @@ func processCWD() string {
 	return "."
 }
 
-// sessionWorkDir returns a session's configured working directory ("" when
-// unset). The per-session session manager is bound as soon as the session is
-// activated (AgentService.ActivateSession → prepareSession).
+// sessionWorkDir returns a session's primary root ("" when unset): the directory bash
+// runs in, relative paths resolve against, and the composer's chip names. It is a thin
+// wrapper over sessionRoots, so it can never disagree with the prompt or the @-file
+// root — the record it reads is the same one they do.
 func (d *desktopApp) sessionWorkDir(sessionID string) string {
-	d.mu.Lock()
-	r := d.getRun(sessionID)
-	d.mu.Unlock()
-	if r == nil || r.sm == nil {
-		return ""
-	}
-	if cur := r.sm.Current(); cur != nil {
-		return cur.WorkingDir
-	}
-	return ""
+	primary, _ := d.sessionRoots(sessionID)
+	return primary
 }
 
 // newFileIndex builds the @-file completion index, logging index builds under

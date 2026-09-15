@@ -188,7 +188,7 @@ func TestSessionSkillStoreFollowsTheSessionTree(t *testing.T) {
 	// session's own tree (which is what lets a project shadow it).
 	writeSkillFixture(t, config.GlobalSkillsDir(), "global-skill", "from the global scope")
 
-	store := sessionSkillStore(sm)
+	store := newTestApp().sessionSkillStore(sm)
 	names := storeSkillNames(store)
 
 	if !slices.Contains(names, "skill-a") {
@@ -212,12 +212,13 @@ func TestSessionSkillStoreFollowsTheSessionTree(t *testing.T) {
 func TestSessionSkillStoreWithoutWorkspace(t *testing.T) {
 	sm := newSessionManagerForTest(t, "")
 	sm.EndCurrent()
+	d := newTestApp()
 
 	want := []string{config.GlobalSkillsDir()}
-	if got := sessionSkillStore(sm).Dirs(); !slices.Equal(got, want) {
+	if got := d.sessionSkillStore(sm).Dirs(); !slices.Equal(got, want) {
 		t.Errorf("an empty working directory must mean the global scope only\ngot  %v\nwant %v", got, want)
 	}
-	if got := sessionSkillStore(nil).Dirs(); !slices.Equal(got, want) {
+	if got := d.sessionSkillStore(nil).Dirs(); !slices.Equal(got, want) {
 		t.Errorf("a nil session manager must not fall back to the process cwd\ngot  %v\nwant %v", got, want)
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/wdctx"
 	"github.com/monsterxx03/tachi/config"
 	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/session"
@@ -390,6 +391,97 @@ func TestWideRootsRejected(t *testing.T) {
 			t.Logf("SetSessionWorkingDir(%q) = %q", project, got)
 		}
 	})
+
+	// Tachi's own state directory: the session's shadow checkpoint repos, every session
+	// record and the worktree checkouts live under it. A root covering it snapshots and
+	// indexes Tachi's own files, and it makes "a worktree never sits inside a root"
+	// unprovable. Anything ABOVE it counts too, for the same reason.
+	t.Run("Tachi's state directory and its ancestors", func(t *testing.T) {
+		// newRootsApp sets config.BaseDir — read it AFTER, never before: it is a process
+		// global and the harness points it at a fresh temp dir on every call.
+		_, svc, sid := newRootsApp(t, t.TempDir())
+		base := config.BaseDir()
+		if base == "" {
+			t.Fatal("the test harness must have set a base dir")
+		}
+
+		for _, wide := range []string{base, filepath.Dir(base)} {
+			if got := svc.SetSessionWorkingDir(sid, wide); !strings.Contains(got, "状态目录") {
+				t.Errorf("SetSessionWorkingDir(%q) = %q, want the state-directory refusal", wide, got)
+			}
+			if got := svc.AddSessionRoots(sid, []string{wide}); !strings.Contains(got, "状态目录") {
+				t.Errorf("AddSessionRoots(%q) = %q, want the state-directory refusal", wide, got)
+			}
+		}
+		// Nothing was persisted, and the session kept the workspace it had.
+		if roots := svc.GetSessionRoots(sid); len(roots.Additional) != 0 {
+			t.Errorf("a refused root was persisted: %+v", roots.Additional)
+		}
+
+		// A directory BESIDE the state dir is a normal workspace: the rule is about
+		// covering Tachi's state, not about what anything is called.
+		if beside := t.TempDir(); svc.SetSessionWorkingDir(sid, beside) != "ok" {
+			t.Errorf("a sibling of the state dir must be a usable workspace, got %q",
+				svc.SetSessionWorkingDir(sid, beside))
+		}
+	})
+}
+
+// TestRootSetHasOneSource pins the property the project work rests on: every consumer of
+// a session's workspace — the turn's bash cwd, the prompt, the @-file root, the skill
+// store's scan root and the root APIs — reads the SAME resolved root set, so a directory
+// change moves all of them together.
+//
+// It is worth pinning because these consumers used to read Session.WorkingDir directly in
+// four separate places: a directory change moved the tools (which read the record) and
+// left the prompt and @-references advertising the previous tree, with nothing failing to
+// say so. The seam is (*desktopApp).sessionRootsFrom; this test fails if any of them goes
+// back to reading the record.
+func TestRootSetHasOneSource(t *testing.T) {
+	treeA, treeB := t.TempDir(), t.TempDir()
+	d, svc, sid := newRootsApp(t, treeA)
+
+	if got := svc.SetSessionWorkingDir(sid, treeB); got != "ok" {
+		t.Fatalf("SetSessionWorkingDir: %s", got)
+	}
+
+	// 1. The root APIs and the composer's directory chip.
+	if got := svc.GetSessionWorkingDir(sid); got != treeB {
+		t.Errorf("GetSessionWorkingDir = %q, want %q", got, treeB)
+	}
+	if roots := svc.GetSessionRoots(sid); roots.Primary != treeB {
+		t.Errorf("GetSessionRoots primary = %q, want %q", roots.Primary, treeB)
+	}
+	if primary, _ := d.sessionRoots(sid); primary != treeB {
+		t.Errorf("sessionRoots primary = %q, want %q", primary, treeB)
+	}
+
+	// 2. The @-file resolution root.
+	if r := d.getRun(sid); d.expansionRoot(r) != treeB {
+		t.Errorf("expansionRoot = %q, want %q", d.expansionRoot(r), treeB)
+	}
+
+	// 3. The turn's bash cwd (wdctx), which is what the tools actually run in.
+	r := d.getRun(sid)
+	ctx, cancel, _, _, ok := d.beginTurn(sid, r)
+	if !ok {
+		t.Fatal("beginTurn refused")
+	}
+	defer cancel()
+	if got := wdctx.Dir(ctx); got != treeB {
+		t.Errorf("the turn's working directory = %q, want %q", got, treeB)
+	}
+
+	// 4. The system prompt.
+	if prompt := d.systemPromptFor(sid); !strings.Contains(prompt, treeB) {
+		t.Errorf("prompt does not name %q", treeB)
+	}
+
+	// 5. The skill store's scan root, which is fixed when the store is built.
+	writeProjectSkillFixture(t, treeB, "skill-b", "from tree B")
+	if dirs := d.sessionSkillStore(r.sm).Dirs(); len(dirs) == 0 || dirs[0] != filepath.Join(treeB, ".tachi", "skills") {
+		t.Errorf("skill store scans %v, want %q first", dirs, filepath.Join(treeB, ".tachi", "skills"))
+	}
 }
 
 // TestDefaultWorkspaceFor: a new session inherits the workspace the user last chose,

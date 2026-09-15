@@ -264,8 +264,12 @@ const type = (el, t) => {
   returns the process CWD when the context carries none, so a rewind invoked from an RPC handler (a bare
   `context.Background()`) would rebuild its snapshot manager with root `/` and `git add -A --work-tree=/`
   would walk the whole filesystem. Workspace roots come from the SESSION (`sess.WorkingDir` + `AdditionalDirs`
-  — what `/cd` updates and what survives a reload), and a root that is `/` or `$HOME` is refused outright.
-  `NewSession` applies the same rule (`defaultWorkspaceFor` / `wideRootReason`).
+  — what `/cd` updates and what survives a reload) and go through ONE exit, `desktop/roots.go`'s
+  `sessionRoots` / `sessionRootsFrom`: the turn's `wdctx`, the prompt, the `@`-file root, git diff and the
+  skill store all read that, so they cannot drift apart after a directory change. A root that is `/`,
+  `$HOME`, or one that contains `config.BaseDir()` is refused outright (Tachi's own state — shadow checkpoint
+  repos, session records, worktrees — must never sit inside a workspace root). `NewSession` applies the same
+  rule (`defaultWorkspaceFor` / `wideRootReason`).
 - **Handing a path to the system is `attach.go`**: `OpenPath` (default app; a directory opens its Finder
   window) and `RevealPath` (`open -R`), both `stat`-ing first and returning `"ok"` or the reason. New
   open/reveal actions reuse them, and a test replaces the single `openFile` var to read the argv instead of
@@ -293,8 +297,9 @@ const type = (el, t) => {
 
 - **Skills are ON.** `DisableSkills` is the knob for the NON-interactive modes (`tachi -p`, `tachi commit`);
   this frontend has a human in front of it.
-- **The store is built per session, from that session's working directory** (`sessionSkillStore` in
-  `agent_driver.go`) and handed to the agent as `AgentConfig.SkillStore`. The DEFAULT path is the trap:
+- **The store is built per session, from that session's primary workspace root** (`sessionSkillStore` →
+  `sessionPrimaryDir` in `agent_driver.go` — the same resolver the prompt and the tools use, never the record
+  read directly) and handed to the agent as `AgentConfig.SkillStore`. The DEFAULT path is the trap:
   `initSkills()` builds `skill.NewStore(config.FindProjectRoot())` — the PROCESS cwd — and a Finder-launched
   app's cwd is `/`, so a default-built store would scan `/.tachi/skills`, offer no project skills at all, and
   point `Skill create`'s `source: project` at the filesystem root. Same shape as the system-reminder trap

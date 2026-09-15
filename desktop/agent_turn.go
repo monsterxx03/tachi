@@ -269,8 +269,15 @@ func (d *desktopApp) beginTurn(id string, r *sessionRun) (ctx context.Context, c
 
 	ctx, cancel = context.WithCancel(context.Background())
 	if r.sm != nil {
-		if cur := r.sm.Current(); cur != nil && cur.WorkingDir != "" {
-			ctx = wdctx.WithDir(ctx, cur.WorkingDir)
+		// The turn's working directory comes from the ONE root-set resolver
+		// (sessionRootsFrom), not from the record directly: the prompt, the @-file
+		// search and the skill store are all fed from there, and reading WorkingDir
+		// here is how bash ended up running in the new tree while the prompt still
+		// advertised the old one.
+		if cur := r.sm.Current(); cur != nil {
+			if primary, _ := d.sessionRootsFrom(cur); primary != "" {
+				ctx = wdctx.WithDir(ctx, primary)
+			}
 		}
 	}
 	r.turnCtx, r.turnCancel = ctx, cancel

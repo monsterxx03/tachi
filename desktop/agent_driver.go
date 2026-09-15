@@ -221,7 +221,7 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 		// and its own cwd is meaningless (macOS hands a Finder-launched app "/"), so
 		// a cwd-built store would scan "/.tachi/skills" and miss every session's
 		// project skills. Same failure shape as the reminders below, same fix.
-		SkillStore: sessionSkillStore(sm),
+		SkillStore: d.sessionSkillStore(sm),
 		// System reminders stay ON. They are the only thing that tells the agent
 		// about the project it is working in (.tachi.md, git state) and the only
 		// thing that keeps an active plan's step statuses current.
@@ -258,7 +258,7 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 // A store's scan roots are fixed when it is built, so this is the only place the
 // desktop decides them: global skills always, plus the project-level
 // .tachi/skills, .claude/skills and .cursor/skills of the session's git root.
-// The root comes from the session's working directory and never from the process
+// The root comes from the session's primary workspace root and never from the process
 // cwd (see buildAgentForSession); a session that has not picked a folder yet gets
 // the global scope alone, which is what skill.NewStore("") means.
 //
@@ -266,22 +266,24 @@ func (d *desktopApp) buildAgentForSession(ctx context.Context, sessionID string,
 // write, not a second configuration home — the same line @-references and other
 // agents' per-directory configs draw. Moving a session is handled by
 // SetSessionWorkingDir (agent_session.go), which re-points the store in place.
-func sessionSkillStore(sm *session.Manager) *skill.Store {
-	return skill.NewStore(config.FindProjectRootFrom(currentSessionDir(sm)))
+func (d *desktopApp) sessionSkillStore(sm *session.Manager) *skill.Store {
+	return skill.NewStore(config.FindProjectRootFrom(d.sessionPrimaryDir(sm)))
 }
 
-// currentSessionDir is the working directory of the session manager's current
-// session, or "" when there is none yet. It reads the manager the caller passes
-// rather than d.runs: an agent is built BEFORE its run is bound to the session
-// manager (see prepareSession), so the run lookup would still be empty here.
-func currentSessionDir(sm *session.Manager) string {
+// sessionPrimaryDir is the primary workspace root of the session the given (per-session)
+// manager has loaded, or "" when there is none yet.
+//
+// It reads the manager the caller passes rather than d.runs: an agent is built BEFORE
+// its run is bound to the session manager (see prepareSession), so the run lookup would
+// still be empty here. The directory itself comes from the same resolver the prompt, the
+// turn's wdctx and the @-file search use (sessionRootsFrom), so the skill store cannot
+// end up pointed at a tree the rest of the session has left.
+func (d *desktopApp) sessionPrimaryDir(sm *session.Manager) string {
 	if sm == nil {
 		return ""
 	}
-	if cur := sm.Current(); cur != nil {
-		return cur.WorkingDir
-	}
-	return ""
+	primary, _ := d.sessionRootsFrom(sm.Current())
+	return primary
 }
 
 // applyThinking configures the given agent's thinking level from a session's
