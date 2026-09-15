@@ -54,12 +54,26 @@ func (s *AgentService) GetState() AgentState {
 }
 
 // RunningSessions returns the IDs of sessions with an in-flight turn.
+//
+// The answer is the per-session STATE, not the busy flag (`sessionRun.running`, the guard that
+// keeps a second turn from starting; `endTurn` clears it). Both describe the same fact, but they
+// are cleared at different moments, and the frontend re-reads this list exactly once — on the
+// turn's own terminal event (`agent:event` turn_complete / error). A turn publishes that event
+// from INSIDE its event loop and only then exits to `endTurn`, so answering from the flag told
+// the frontend "the turn is over" and "this session is still running" in the same breath, with
+// nothing later to correct it: the sidebar's spinner, the stop control and the composer's queue
+// (which flushes on `agent:idle` only for a session that is not running) stayed stuck behind a
+// turn that had already finished — the intermittent full-suite failure in `rewind` and
+// `transcript-fold`. The state is set BEFORE the event is emitted (`setSessionState` runs while
+// handling that same event), so this answer can never contradict what the frontend was just
+// told. The three statuses are the same ones the frontend counts as busy.
 func (s *AgentService) RunningSessions() []string {
 	s.desk.mu.Lock()
 	defer s.desk.mu.Unlock()
 	var out []string
 	for id, r := range s.desk.runs {
-		if r.running {
+		switch r.state.Status {
+		case StatusThinking, StatusToolRunning, StatusBusy:
 			out = append(out, id)
 		}
 	}

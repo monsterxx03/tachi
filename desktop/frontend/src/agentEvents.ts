@@ -48,11 +48,22 @@ export function useAgentStatus(currentId: string): AgentState {
       if (!st?.sessionId) return
       setById((prev) => ({ ...prev, [st.sessionId]: st }))
     }
+    // seed files a session nothing has been heard about yet. The mount snapshot below is the
+    // second source of the same fact, and the two have no ordering rule between them: an app
+    // that starts working immediately (the smoke drivers; or a window opened onto a session that
+    // is already running) can have the read land AFTER the turn's own end event it predates, and
+    // then the older value wins — the session stays 运行中, with a stop control that clears
+    // nothing and a composer that queues every send behind a turn that is over. A live event is
+    // always the newer truth for a session it has named.
+    const seed = (st?: AgentState | null) => {
+      if (!st?.sessionId) return
+      setById((prev) => (prev[st.sessionId] ? prev : { ...prev, [st.sessionId]: st }))
+    }
     const off = Events.On('agent:state', (event) => file(event.data as AgentState))
     // The event only fires on change, so the displayed session's current value is fetched
     // once at mount — otherwise a window reloaded mid-turn would show 空闲 (and lose its
     // stop control) until the next transition, however long the running tool call takes.
-    AgentService.GetState().then(file).catch(() => {})
+    AgentService.GetState().then(seed).catch(() => {})
     return () => off?.()
   }, [])
   return byId[currentId] || AGENT_IDLE

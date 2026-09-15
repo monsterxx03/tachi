@@ -1,6 +1,7 @@
 package main
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -111,6 +112,56 @@ func TestMergeTrailingUserMessageKeepsOrderingAndPlainText(t *testing.T) {
 				if !strings.Contains(text, want) {
 					t.Errorf("merged text %q is missing %q", text, want)
 				}
+			}
+		})
+	}
+}
+
+// TestAFinishedTurnIsNotReportedAsRunning pins the ORDER the frontend depends on between two
+// things it learns a turn's end from: the turn's own terminal event (which is what makes it
+// re-read the running set — the only read there is) and the running set itself.
+//
+// `sessionRun.running` is the guard that keeps a second turn of the same session from starting,
+// and `endTurn` clears it. But `endTurn` runs only after the agent's event loop has exited, while
+// turn_complete is published from INSIDE that loop: answering RunningSessions from the flag told
+// the frontend "the turn is over" (its transcript concludes, its queue becomes flushable) in the
+// same breath as "this session is still running", and nothing later corrects it — the sidebar's
+// spinner, the stop control and the composer's queue all stayed stuck behind a turn that had
+// already finished. It is timing, so it shows up as an intermittent failure in a driver that
+// waits for the stop control to clear (the full suite caught it in `rewind` / `transcript-fold`).
+func TestAFinishedTurnIsNotReportedAsRunning(t *testing.T) {
+	const id = "s1"
+	cases := []struct {
+		name string
+		ev   agent.AgentEvent
+	}{
+		// A natural end: the session goes back to idle. Result is left nil — the payload's
+		// other fields (cost, checkpoint, notification) are not what this test is about.
+		{name: "turn_complete", ev: agent.AgentEvent{Type: agent.AgentEventTurnComplete}},
+		// A user-initiated stop is a normal conclusion, and any other failure is an error
+		// state; neither of them is running.
+		{name: "stopped", ev: agent.AgentEvent{Type: agent.AgentEventError,
+			Result: &agent.RunResult{ExitReason: agent.ExitReasonInterrupted}}},
+		{name: "error", ev: agent.AgentEvent{Type: agent.AgentEventError,
+			Result: &agent.RunResult{ExitReason: agent.ExitReasonError}}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			d := newTestApp()
+			d.runs[id] = &sessionRun{running: true, state: AgentState{Status: StatusThinking, Label: "思考"}}
+			svc := &AgentService{desk: d}
+
+			// The premise: a session with a turn in flight is listed.
+			if got := svc.RunningSessions(); !slices.Contains(got, id) {
+				t.Fatalf("fixture: a busy session must be listed, got %v", got)
+			}
+
+			// Whatever the frontend does when it is told the turn ended, it does after this
+			// returns — including re-reading this list.
+			d.handleEvent(id, tc.ev)
+
+			if got := svc.RunningSessions(); slices.Contains(got, id) {
+				t.Errorf("the session is still reported as running after its turn ended: %v", got)
 			}
 		})
 	}

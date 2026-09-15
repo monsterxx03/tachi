@@ -718,7 +718,20 @@ const type = (el, t) => {
   control follows the reader into an idle session; a background turn's END is never reported at all, so it
   never clears (and Stop acts on the DISPLAYED session — the dead button); a stale busy state makes the
   composer QUEUE a message instead of sending it; and the review chip waits on a neighbour's turn. Pinned by
-  the `session-running` scenario.
+  the `session-running` scenario. The mount snapshot (`GetState`) may only SEED a session that no event has
+  named yet — it is a read racing the same events, and a late one used to overwrite a newer turn-end, which
+  leaves a busy state (and a stop control) that nothing can clear.
+
+- **A session's "running" answer and the event that says its turn is over must not disagree**
+  (`RunningSessions` in `desktop/agent.go`): it answers from the per-session STATE (`StatusThinking` /
+  `StatusToolRunning` / `StatusBusy`), never from `sessionRun.running`. The flag is the guard that keeps a
+  second turn of a session from starting, and `endTurn` clears it — but a turn publishes its own `turn_complete`
+  from inside the agent's event loop and only THEN exits to `endTurn`, while the frontend re-reads the running
+  set exactly once, on that event. Answering from the flag told the frontend "the turn is over" and "this
+  session is still running" in the same breath, with nothing later to correct it: the sidebar's spinner, the
+  stop control, the delete-session guard and the composer's queue all stayed stuck behind a finished turn (an
+  intermittent full-suite failure in `rewind` / `transcript-fold`). The state is set BEFORE the event is
+  emitted, so it can never contradict it. Pinned by `TestAFinishedTurnIsNotReportedAsRunning`.
 
 - **An entry's data source must belong to the surface the entry opens** (`desktop/frontend/src/App.tsx` +
   `diff.tsx`): the turn footer's 「完整 diff」 promises *this turn* against git HEAD (its own tooltip says
