@@ -118,6 +118,12 @@ type AIAgent struct {
 	mcpOwned             bool       // Configure 前由 Config.MCPManager==nil 设定；Close 据此决定是否销毁
 	mcpSwitchMu          sync.Mutex // 串行化 MCP profile 切换（TryLock：并发切换直接失败）
 
+	// deferredMu 保护 deferredToolReminder 的惰性创建与注册。MCP 工具的
+	// 出现路径不止一条、且分属不同 goroutine（agent loop 的刷新回调、
+	// 前端的启用按钮），两个同时到达就会各建一个 reminder，注册进
+	// collector 的那个未必是后续 MarkDirty 摸到的那个。
+	deferredMu sync.Mutex
+
 	conv       *convState   // 会话级滚动状态（token 估算、compact 冷却、消息日期）
 	currentRun *RunState    // 当前运行的实时状态（loop 写，外部并发读）
 	mu         sync.RWMutex // 保护 currentRun + mode
@@ -845,29 +851,47 @@ func (a *AIAgent) sessionAwareTracker() *sessionAwareDeferredTracker {
 	return &sessionAwareDeferredTracker{a: a}
 }
 
-// NotifyDeferredToolsAdded marks the DeferredToolReminder as dirty and ensures
-// it's registered in the reminder collector so the LLM is notified of newly
-// available deferred tools on the next user message. Safe to call even when
-// the reminder hasn't been set up yet.
-func (a *AIAgent) NotifyDeferredToolsAdded() {
-	pool := a.DeferredPool()
-	if a.deferredToolReminder == nil {
-		// DeferredToolReminder hasn't been created yet (e.g., ToolSearch
-		// was disabled during init). Create one now.
-		if pool == nil {
-			return
-		}
-		a.deferredToolReminder = &systemreminder.DeferredToolReminder{
-			Provider: &deferredToolProviderAdapter{pool: pool},
-			Tracker:  a.sessionAwareTracker(),
-			Dirty:    true,
-		}
-	} else {
-		a.deferredToolReminder.Dirty = true
-	}
+// ensureDeferredReminder creates the DeferredToolReminder on first use and
+// registers it with the reminder collector exactly once, returning it (nil when
+// MCP is not configured). The once-only registration matters because the
+// collector's AddReminder only appends: calling it per notification would leave
+// the same instance in the list N times.
+func (a *AIAgent) ensureDeferredReminder() *systemreminder.DeferredToolReminder {
+	a.deferredMu.Lock()
+	defer a.deferredMu.Unlock()
 
-	// Ensure it's registered in the reminder collector
-	a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
+	if a.deferredToolReminder != nil {
+		return a.deferredToolReminder
+	}
+	pool := a.DeferredPool()
+	if pool == nil {
+		return nil
+	}
+	r := &systemreminder.DeferredToolReminder{
+		Provider: &deferredToolProviderAdapter{pool: pool},
+		Tracker:  a.sessionAwareTracker(),
+	}
+	a.deferredToolReminder = r
+	a.Config.ReminderCollector.AddReminder(r)
+	return r
+}
+
+// NotifyDeferredToolsAdded marks the DeferredToolReminder as dirty so the LLM is
+// told about newly available deferred tools on the next user message. Safe to
+// call even when the reminder hasn't been set up yet — it is created and
+// registered here on first use.
+//
+// This is the ONE entry point for "deferred tools appeared mid-session": the
+// tools must be in the pool before it is called (see AddDeferredMCPTools). A
+// caller that only writes the pool leaves the reminder un-dirtied, and the
+// once-per-session guard then keeps the model uninformed for the rest of the
+// conversation.
+func (a *AIAgent) NotifyDeferredToolsAdded() {
+	r := a.ensureDeferredReminder()
+	if r == nil {
+		return
+	}
+	r.MarkDirty()
 
 	a.Config.Logger.Info(context.Background(), "MCP: DeferredToolReminder marked dirty")
 }

@@ -212,6 +212,31 @@ func (d *desktopApp) agentOf(id string) (*agent.AIAgent, string) {
 	return r.agent, ""
 }
 
+// liveAgents returns every session whose agent has been built, for a change that
+// applies to ALL of them rather than to the displayed session.
+//
+// It exists for facts about the SHARED MCP layer: the deferred pool and the server
+// connections are one instance for the whole app, so enabling or disabling a server is
+// not a per-session event — a session sitting in the background has to learn about it
+// too, or it stays blind to tools the user just turned on. It is deliberately a snapshot
+// (the lock is released before returning) because the callers notify agents, which takes
+// each agent's own locks; holding d.mu across that would put the app-wide lock under a
+// per-agent one, the same inversion the rest of this file avoids. A run created after
+// the snapshot is not missed in practice: its agent picks the pool up as it is built.
+//
+// Callers must NOT hold d.mu.
+func (d *desktopApp) liveAgents() []*agent.AIAgent {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	out := make([]*agent.AIAgent, 0, len(d.runs))
+	for _, r := range d.runs {
+		if r.agent != nil {
+			out = append(out, r.agent)
+		}
+	}
+	return out
+}
+
 // activeRun returns the run for the currently displayed session (nil when no
 // session is active). It is the per-session source of truth for provider/agent
 // reading in the UI.

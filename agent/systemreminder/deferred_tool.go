@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 
 	"github.com/monsterxx03/tachi/pkg/strutil"
 )
@@ -32,13 +33,54 @@ type DeferredToolTracker interface {
 // With async MCP init, tools may not be known on the very first user message
 // (deferredPool is empty). The reminder fires on the first message where
 // undiscovered tools exist, whether that's message #1 or #N. It fires at
-// most once per session (HasFired guard), but can re-fire when Dirty is set
-// to true (e.g., user manually enabled an MCP server mid-session).
+// most once per session (the fired guard), but can re-fire after MarkDirty
+// (e.g., user manually enabled an MCP server mid-session).
 type DeferredToolReminder struct {
 	Provider DeferredToolProvider
 	Tracker  DeferredToolTracker
-	HasFired bool // set to true after generating output; prevents repeats
-	Dirty    bool // when true, re-fires even if HasFired (for mid-session toggle)
+
+	// mu guards the fire bookkeeping below. Generate runs on the agent's turn
+	// goroutine, while MarkDirty is reached from a frontend's OWN goroutine (a
+	// user enabling an MCP server mid-session). A plain bool would make that a
+	// data race, and a lost MarkDirty means the LLM is never told about the new
+	// tools — exactly the failure the flag exists to prevent.
+	mu       sync.Mutex
+	hasFired bool // set once output was generated; prevents repeats
+	dirty    bool // when true, re-fires even if hasFired (mid-session tool change)
+}
+
+// MarkDirty makes the reminder fire again on the next user message, even if it
+// already fired in this session. Called when deferred tools appear mid-session
+// (e.g. the user enables an MCP server).
+func (r *DeferredToolReminder) MarkDirty() {
+	r.mu.Lock()
+	r.dirty = true
+	r.mu.Unlock()
+}
+
+// shouldFire reports whether the once-per-session guard allows generating right
+// now — true on the first message, or again after a MarkDirty.
+func (r *DeferredToolReminder) shouldFire() bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return !r.hasFired || r.dirty
+}
+
+// markFired records that output was generated and clears the dirty flag.
+func (r *DeferredToolReminder) markFired() {
+	r.mu.Lock()
+	r.hasFired = true
+	r.dirty = false
+	r.mu.Unlock()
+}
+
+// clearDirty drops the dirty flag WITHOUT marking the reminder as fired, for a
+// dirty reminder that found nothing worth reporting (every tool already loaded).
+// Without it the reminder would re-inspect the pool on every later message.
+func (r *DeferredToolReminder) clearDirty() {
+	r.mu.Lock()
+	r.dirty = false
+	r.mu.Unlock()
 }
 
 func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []string {
@@ -46,7 +88,7 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 		return nil
 	}
 	// Fire at most once per session, unless marked Dirty (new tools added mid-session).
-	if r.HasFired && !r.Dirty {
+	if !r.shouldFire() {
 		return nil
 	}
 	// Don't inject at tool-result boundaries — not meaningful there.
@@ -68,14 +110,13 @@ func (r *DeferredToolReminder) Generate(ctx context.Context, rctx Context) []str
 	}
 
 	if len(undiscovered) == 0 {
-		// All tools are discovered — nothing to hint about.
-		// Keep HasFired as-is, but clear Dirty since there's nothing to report.
-		r.Dirty = false
+		// All tools are discovered — nothing to hint about. Keep hasFired as-is,
+		// but clear dirty since there's nothing to report.
+		r.clearDirty()
 		return nil
 	}
 
-	r.HasFired = true
-	r.Dirty = false
+	r.markFired()
 
 	var lines []string
 	for _, t := range undiscovered {

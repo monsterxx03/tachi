@@ -255,20 +255,16 @@ func convertLSPConfig(cfg *config.LSPConfig) *lsp.Config {
 // that uses a shared deferred pool (injected via SetSharedMCP). Mirrors the
 // final reminder-attach logic from connectMCPBackground, but skips the
 // connection / discovery phase.
+//
+// It registers the reminder UNCONDITIONALLY — no "only when the pool already
+// has tools" shortcut. The shared pool is populated in the background (see
+// populateSharedMCP), so an agent built before the servers finished connecting
+// would see an empty pool and never register; nothing would come back to
+// register later. The reminder itself is the thing that copes with an empty
+// pool (it stays silent until it has something to hint about), so registering
+// it early is both correct and sufficient.
 func (a *AIAgent) attachSharedMCPReminder() {
-	pool := a.DeferredPool()
-	if pool == nil {
-		return
-	}
-	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
-		Provider: &deferredToolProviderAdapter{pool: pool},
-		Tracker:  a.sessionAwareTracker(),
-	}
-	// The reminder fires for whichever session is active when it collects;
-	// register it whenever there are deferred tools to hint about.
-	if pool.Len() > 0 {
-		a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
-	}
+	a.ensureDeferredReminder()
 }
 
 // startMCPToolRefresher starts background tool list polling for HTTP MCP
@@ -391,20 +387,14 @@ func (a *AIAgent) connectMCPBackground(ctx context.Context, cfg *config.Config) 
 	pool := a.Config.MCPManager.Pool()
 	total := pool.Len()
 
-	// Create DeferredToolReminder (always, for potential use via toggle).
-	// Its tracker resolves the discovered set of whichever session is active
-	// when the reminder fires, so it works per session without a global set.
-	a.deferredToolReminder = &systemreminder.DeferredToolReminder{
-		Provider: &deferredToolProviderAdapter{pool: pool},
-		Tracker:  a.sessionAwareTracker(),
-	}
-
-	// Register DeferredToolReminder whenever there are deferred tools —
-	// the per-session tracker decides what still needs hinting per session.
-	if total > 0 {
-		a.Config.ReminderCollector.AddReminder(a.deferredToolReminder)
-		a.Config.Logger.Info(ctx, "MCP: DeferredToolReminder added", "total", total)
-	}
+	// Attach DeferredToolReminder so the LLM learns about deferred tools via
+	// the <system-reminder> block. It is registered unconditionally: the
+	// reminder stays silent while the pool is empty and is marked dirty by
+	// whatever adds tools later (a toggle, a profile switch, a refresh), so
+	// gating registration on `total` here only creates a state nothing can
+	// leave.
+	a.ensureDeferredReminder()
+	a.Config.Logger.Info(ctx, "MCP: DeferredToolReminder attached", "total", total)
 
 	// Start background tool list refresher for HTTP MCP servers
 	a.startMCPToolRefresher(ctx, cfg)

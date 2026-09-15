@@ -90,12 +90,33 @@ func (s *AgentService) SetMCPServerEnabled(name string, enabled bool) string {
 			}
 			d.mcp.Pool().Add(mcp.NewDeferredToolFromMCPTool(t, hint))
 		}
+		// Adding to the shared pool is only half the job: the reminder that tells
+		// the model these tools exist fires at most once per session, so without
+		// this every mid-session enable is invisible and the tools are only
+		// findable if the model happens to search for them blind.
+		//
+		// Every live agent is notified, not just the one on screen: the pool and
+		// the connection are shared by all sessions, so enabling a server is a
+		// global fact and a session parked in the background would otherwise stay
+		// blind to it. Each agent's own discovered set still decides what it is
+		// told about, so nothing leaks between sessions.
+		for _, a := range d.liveAgents() {
+			a.NotifyDeferredToolsAdded()
+		}
 		return "ok"
 	}
 	if err := d.mcp.Disconnect(name); err != nil {
 		return err.Error()
 	}
 	d.mcp.Pool().RemoveByServer(name)
+	// Mirror the cleanup TUI does on the same toggle: a tool the user had
+	// explicitly enabled must leave the registry, or the model keeps calling a
+	// tool whose server is gone. UnregisterMCPServer also drops the tools from
+	// every session's discovered set, so a later re-enable does not report them
+	// as already loaded.
+	for _, a := range d.liveAgents() {
+		a.UnregisterMCPServer(name)
+	}
 	return "ok"
 }
 

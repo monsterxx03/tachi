@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/wdctx"
@@ -98,6 +99,12 @@ type Piece struct {
 // the same wrapper tag so downstream consumers (message stripping, session
 // parsing, model prompts) only ever need to handle one tag shape.
 type Collector struct {
+	// mu guards reminders. Collection runs on the agent's turn goroutine while
+	// AddReminder can arrive from a frontend's own goroutine (the user enabling
+	// an MCP server mid-session registers a deferred-tools reminder). An
+	// unguarded slice would race on append-while-iterate, and could also hand
+	// the collector a torn view of the slice header.
+	mu        sync.RWMutex
 	reminders []Reminder
 }
 
@@ -108,7 +115,10 @@ func NewCollector(reminders ...Reminder) *Collector {
 }
 
 // AddReminder appends a reminder to the collector without rebuilding.
+// Safe to call while another goroutine collects.
 func (c *Collector) AddReminder(r Reminder) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.reminders = append(c.reminders, r)
 }
 
@@ -119,10 +129,18 @@ func (c *Collector) CollectPieces(ctx context.Context, rctx Context) []Piece {
 		return nil
 	}
 
+	// Snapshot under the lock, then generate outside it: a reminder's Generate
+	// does real work (git, memory recall) and must not block AddReminder, nor
+	// hold the collector's lock while calling back into a reminder.
+	c.mu.RLock()
+	reminders := make([]Reminder, len(c.reminders))
+	copy(reminders, c.reminders)
+	c.mu.RUnlock()
+
 	var pieces []Piece
 	var firedName string
 
-	for _, r := range c.reminders {
+	for _, r := range reminders {
 		generated := r.Generate(ctx, rctx)
 		if len(generated) == 0 {
 			continue

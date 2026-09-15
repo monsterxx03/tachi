@@ -2,6 +2,7 @@ package systemreminder
 
 import (
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -218,9 +219,89 @@ func TestDeferredToolReminder_FiresOnlyOnce(t *testing.T) {
 	if lines1 == nil {
 		t.Fatal("expected output on first call")
 	}
-	// Second call should NOT fire (HasFired = true)
+	// Second call should NOT fire (already fired)
 	lines2 := r.Generate(t.Context(), Context{})
 	if lines2 != nil {
-		t.Error("expected nil on second call (HasFired guard)")
+		t.Error("expected nil on second call (fired guard)")
 	}
+}
+
+// TestDeferredToolReminder_MarkDirtyRefires pins the mid-session path: a user
+// enabling an MCP server after the first turn adds tools to the pool, and the
+// model only learns about them because MarkDirty carries the reminder past its
+// once-per-session guard. Without it the new tools are never announced — the
+// reminder stays silent for the rest of the conversation.
+func TestDeferredToolReminder_MarkDirtyRefires(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query database"},
+			},
+		},
+	}
+	if lines := r.Generate(t.Context(), Context{}); lines == nil {
+		t.Fatal("expected output on first call")
+	}
+	if lines := r.Generate(t.Context(), Context{}); lines != nil {
+		t.Fatal("fixture: the reminder should be quiet after firing")
+	}
+
+	r.MarkDirty()
+	lines := r.Generate(t.Context(), Context{})
+	if lines == nil {
+		t.Fatal("expected MarkDirty to re-fire the reminder")
+	}
+	if !strings.Contains(lines[0], "mcp__pg__query") {
+		t.Errorf("re-fired output should name the tool, got: %s", lines[0])
+	}
+
+	// One re-fire per mark: the dirty flag is consumed, so the reminder goes
+	// quiet again rather than repeating the block on every later message.
+	if lines := r.Generate(t.Context(), Context{}); lines != nil {
+		t.Errorf("expected the reminder to go quiet after re-firing, got %v", lines)
+	}
+}
+
+// TestDeferredToolReminder_MarkDirtyWithNothingToReport covers the other half of
+// the dirty flag: when every tool is already loaded there is nothing to hint
+// about, so the reminder clears the mark without firing — otherwise it would
+// re-inspect the pool on every subsequent message for the rest of the session.
+func TestDeferredToolReminder_MarkDirtyWithNothingToReport(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query database"},
+			},
+		},
+		Tracker: &stubDeferredTracker{discovered: map[string]bool{"mcp__pg__query": true}},
+	}
+
+	r.MarkDirty()
+	if lines := r.Generate(t.Context(), Context{}); lines != nil {
+		t.Fatalf("expected no output when every tool is already loaded, got %v", lines)
+	}
+	if r.dirty {
+		t.Error("a dirty reminder that found nothing must still clear the mark")
+	}
+}
+
+// TestDeferredToolReminder_MarkDirtyIsRaceFree exercises the concurrent shape the
+// desktop actually produces: the turn goroutine generates while a frontend
+// goroutine marks dirty. Run under -race this is the regression test for the
+// unsynchronised flags the reminder used to carry.
+func TestDeferredToolReminder_MarkDirtyIsRaceFree(t *testing.T) {
+	r := &DeferredToolReminder{
+		Provider: &stubDeferredProvider{
+			tools: []DeferredToolRecord{
+				{Name: "mcp__pg__query", Description: "Query database"},
+			},
+		},
+	}
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Go(func() { r.MarkDirty() })
+		wg.Go(func() { _ = r.Generate(t.Context(), Context{}) })
+	}
+	wg.Wait()
 }
