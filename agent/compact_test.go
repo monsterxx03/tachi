@@ -105,6 +105,41 @@ func TestFinalizeCompact_PreservesProviderModelWorkingDir(t *testing.T) {
 	assert.Equal(t, oldSess.WorkingDir, newSess.WorkingDir)
 }
 
+// TestFinalizeCompact_PreservesAdditionalRoots: sm.New carries only the provider and
+// the PRIMARY directory, so every other workspace field is copied by hand in
+// FinalizeCompact — and a field missing from that block is silently zeroed rather than
+// reported. Additional roots are extra writable trees the user added; dropped here,
+// the compacted session keeps working in them (its tools and @-references do not know
+// they were forgotten) while its own record no longer admits they exist, and a
+// checkpoint no longer covers them.
+func TestFinalizeCompact_PreservesAdditionalRoots(t *testing.T) {
+	store, err := session.NewFileStore(t.TempDir())
+	require.NoError(t, err)
+	sm := session.NewManagerWithStore(store, nil)
+
+	oldSess, err := sm.New("anthropic", "/my/project")
+	require.NoError(t, err)
+	extra := []string{"/my/shared-lib", "/my/other-tree"}
+	oldSess.AdditionalDirs = append([]string(nil), extra...)
+	require.NoError(t, sm.UpdateMeta(oldSess))
+
+	_, err = FinalizeCompact(sm, "prompt", "summary")
+	require.NoError(t, err)
+
+	newSess := sm.Current()
+	assert.Equal(t, extra, newSess.AdditionalDirs)
+
+	// And the copy is on disk too, not only on the struct the manager handed back.
+	loaded, err := store.LoadMeta(newSess.ID)
+	require.NoError(t, err)
+	assert.Equal(t, extra, loaded.AdditionalDirs)
+
+	// The compacted session owns its own slice: mutating it must not reach back into
+	// the parent's record.
+	newSess.AdditionalDirs[0] = "/tmp/mutated"
+	assert.Equal(t, extra[0], oldSess.AdditionalDirs[0])
+}
+
 // TestFinalizeCompact_MigratesThreadID guards against repeated auto-compact
 // on channel threads: after a compaction the new session must own the thread
 // binding and the old session must release it, so FindByThreadID (channel

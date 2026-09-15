@@ -106,6 +106,13 @@ func FinalizeCompact(sm SessionManager, systemPrompt string, summary string) ([]
 	newSess.CompactedParentID = oldSess.ID
 	newSess.CompactedParentTitle = oldSess.Title
 	newSess.ThreadID = oldSess.ThreadID // migrate the thread binding, if any
+	// The workspace travels with the conversation. sm.New carries only the provider
+	// and the PRIMARY directory, so every other workspace field has to be copied here
+	// by hand: a field that is not listed in this block is silently zeroed, not
+	// reported. Dropping AdditionalDirs shrinks the compacted session to one tree
+	// while the tools keep writing into the others — a root set the session no longer
+	// records (and a checkpoint manager that no longer covers them).
+	newSess.AdditionalDirs = append([]string(nil), oldSess.AdditionalDirs...)
 	if err := sm.UpdateMeta(newSess); err != nil {
 		return nil, fmt.Errorf("update new session meta: %w", err)
 	}
