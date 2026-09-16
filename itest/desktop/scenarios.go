@@ -103,6 +103,9 @@ type checkCtx struct {
 	// mcp is the scenario's OAuth fixture, when it declared mcpOAuth: what the MCP client
 	// actually did against it (registrations, authorization requests, token exchanges).
 	mcp *mcpauth.Server
+	// mcpConfigBefore is the sandbox's mcp.json as it was seeded, for asserting that a
+	// panel toggle edited it by exactly one line.
+	mcpConfigBefore string
 }
 
 func (c *checkCtx) check(label string, ok bool, detail string) {
@@ -1740,6 +1743,26 @@ permissions:
 				dir := filepath.Join(c.home, ".tachi", "mcp_tokens")
 				entries, _ := os.ReadDir(dir)
 				c.check("token 落在沙箱 HOME 的 mcp_tokens 下", len(entries) > 0, dir)
+
+				// 面板的「禁用」写回了 mcp.json —— 而且是它来自的那个文件、只动了那一个值。
+				// driver 关掉 server 之后这里才读得到：文件是"结果"，不是"意图"。
+				mcpJSON := filepath.Join(c.home, ".tachi", "mcp.json")
+				raw, err := os.ReadFile(mcpJSON)
+				c.check("mcp.json 可读", err == nil, errText(err))
+				if err == nil {
+					c.check("禁用写回了 enabled: false", strings.Contains(string(raw), `"enabled": false`), string(raw))
+					c.check("写回没有动其它字段（fixture 的 timeout 与 name 还在）",
+						strings.Contains(string(raw), `"timeout": "30s"`) && strings.Contains(string(raw), "oauth-fixture"),
+						string(raw))
+					// 逐字节证明"只加了一行"：把插入的那一行从结果里摘掉，必须还原成 fixture
+					// 写下的原文。比"开头/结尾长什么样"硬 —— 它不依赖任何格式假设，而且是
+					// 这份文件里唯一能区分"外科式编辑"与"整份重写"的判据。
+					inserted := ",\n      \"enabled\": false"
+					at := strings.Index(string(raw), inserted)
+					c.check("写回 = 原文件 + 恰好一行 enabled（其余字节未动）",
+						at > 0 && string(raw)[:at]+string(raw)[at+len(inserted):] == c.mcpConfigBefore,
+						string(raw))
+				}
 			},
 		},
 	}

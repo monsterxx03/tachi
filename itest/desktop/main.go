@@ -263,7 +263,8 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	ctx := &checkCtx{
 		scenario: sc.name, dir: dir, home: sb.home, work: sb.work,
 		requests: mock.Requests(), mockErr: mock.Error(), lines: &lines,
-		mcp: mcpFixture,
+		mcp:             mcpFixture,
+		mcpConfigBefore: string(sb.mcpConfig),
 	}
 	if sc.after != nil {
 		sc.after(ctx)

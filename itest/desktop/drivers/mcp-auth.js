@@ -123,5 +123,25 @@
   smoke.check('已加载的工具显示 ✓', smoke.text(loaded).indexOf('✓') >= 0, smoke.text(loaded))
   smoke.check('已加载的工具按钮变成「禁用」', smoke.text(loaded).indexOf('禁用') >= 0, smoke.text(loaded))
 
+  // ── 6. server 级开关写回 mcp.json ───────────────────────────────────────
+  // 禁用这个 server：界面上是断开，磁盘上是它来自的那个 mcp.json 里多出 "enabled": false
+  // （fixture 写的文件本来没有这个键，所以这里同时验证了「补上一个键」这条路径）。
+  // 写回的目标文件必须是「它来自的那个」—— Go 侧读沙箱里那个文件，并确认其余内容没被动过。
+  const row4 = await smoke.waitFor(
+    () => smoke.qa('.mcp-server').find((el) => smoke.text(el).indexOf('oauth-fixture') >= 0) || null,
+    'server 行还在（准备禁用它）'
+  )
+  if (!row4) return smoke.finish()
+  smoke.click(row4.querySelector('.mcp-toggle'))
+  const off = await smoke.waitFor(
+    () => {
+      const el = smoke.qa('.mcp-server').find((s) => smoke.text(s).indexOf('oauth-fixture') >= 0)
+      return el && smoke.text(el).indexOf('未连接') >= 0 ? el : null
+    },
+    '禁用后 server 变成未连接'
+  )
+  if (!off) return smoke.finish()
+  smoke.check('禁用后不再显示已连接', smoke.text(off).indexOf('已连接') < 0, smoke.text(off))
+
   smoke.finish()
 })()

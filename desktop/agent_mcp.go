@@ -139,28 +139,79 @@ func (s *AgentService) SetMCPServerEnabled(name string, enabled bool) string {
 	}
 	if enabled {
 		res, err := d.enableMCPServer(srv)
+		// The toggle is a statement of intent about a FILE, so it is written down whatever
+		// the connection did: a connect that failed (a server that needs authorizing, a
+		// network that is down) is a reason to try again next launch, not a reason to forget
+		// the user asked for it.
+		note := d.persistMCPServerEnabled(srv, true)
 		// "needs authorization" is not "the connect failed": the user's way out is a
 		// button, not a retry. enableMCPServer has recorded it (the panel's NeedsAuth);
 		// here it is said in the panel's own words, because the error's own text is
 		// addressed to whichever frontend the reader happens to be in.
 		if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); ok {
-			return fmt.Sprintf("「%s」需要 OAuth 授权：在面板里点「授权」", name)
+			return withNote(fmt.Sprintf("「%s」需要 OAuth 授权：在面板里点「授权」", name), note)
 		}
+		return withNote(res, note)
+	}
+	discErr := d.mcp.Disconnect(name)
+	if discErr == nil {
+		d.mcp.Pool().RemoveByServer(name)
+		// Mirror the cleanup TUI does on the same toggle: a tool the user had
+		// explicitly enabled must leave the registry, or the model keeps calling a
+		// tool whose server is gone. UnregisterMCPServer also drops the tools from
+		// every session's discovered set, so a later re-enable does not report them
+		// as already loaded.
+		for _, a := range d.liveAgents() {
+			a.UnregisterMCPServer(name)
+		}
+	}
+	note := d.persistMCPServerEnabled(srv, false)
+	if discErr != nil {
+		return withNote(discErr.Error(), note)
+	}
+	return withNote("ok", note)
+}
+
+// persistMCPServerEnabled writes a toggle into the mcp.json the server came from, and returns
+// the reason it could not — or "" when there is nothing to report.
+//
+// It writes to `SourceFile`, the file the entry was READ from, and that is the whole point:
+// a server in mcp.json and one in mcp.<profile>.json are different entries in different files.
+// Writing both into the profile file would shadow the base entry (profile files override base
+// ones) and lose the change the moment the user switches back to the default profile; writing
+// both into the base file would be overridden and equally lost.
+//
+// The profile SWITCH itself is deliberately NOT persisted (no active_mcp_profile in
+// config.yaml): which profile is on is a decision about this session, and a dropdown that
+// rewrote the user's config file would make it the default for every future launch.
+//
+// A server with no SourceFile (a config assembled in code rather than read from disk) has no
+// file to disagree with, so the change simply stays runtime-only — the behavior every caller
+// had before this existed.
+func (d *desktopApp) persistMCPServerEnabled(srv *config.MCPServerConfig, enabled bool) string {
+	if srv.SourceFile == "" {
+		return ""
+	}
+	if err := config.SetServerEnabledInFile(srv.SourceFile, srv.Name, enabled); err != nil {
+		return fmt.Sprintf("没能写回 %s：%v", srv.SourceFile, err)
+	}
+	// Keep the in-memory copy in step with the file, so the panel and the next profile
+	// switch see the same thing the next launch will read.
+	flag := enabled
+	srv.Enabled = &flag
+	return ""
+}
+
+// withNote folds a persistence warning into a binding's answer, which is a single string: the
+// primary outcome first (it is what the user did), the save failure after it.
+func withNote(res, note string) string {
+	if note == "" {
 		return res
 	}
-	if err := d.mcp.Disconnect(name); err != nil {
-		return err.Error()
+	if res == "ok" {
+		return "已生效，但" + note
 	}
-	d.mcp.Pool().RemoveByServer(name)
-	// Mirror the cleanup TUI does on the same toggle: a tool the user had
-	// explicitly enabled must leave the registry, or the model keeps calling a
-	// tool whose server is gone. UnregisterMCPServer also drops the tools from
-	// every session's discovered set, so a later re-enable does not report them
-	// as already loaded.
-	for _, a := range d.liveAgents() {
-		a.UnregisterMCPServer(name)
-	}
-	return "ok"
+	return res + "（" + note + "）"
 }
 
 // SetMCPToolEnabled toggles a single MCP tool for the CURRENT session:

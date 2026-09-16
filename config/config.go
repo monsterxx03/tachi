@@ -256,6 +256,15 @@ type MCPServerConfig struct {
 	// Empty string means it came from a base file (always loaded).
 	// Set internally during config loading; not serialized.
 	Profile string `json:"-"`
+
+	// SourceFile is the mcp.json this server's definition came from — the file that WON, when
+	// several of them define the same name. Set while loading; not serialized.
+	//
+	// It exists so a change can be written back to the right place: Profile alone cannot tell
+	// the global file from the project one, and writing a server into a file it did not come
+	// from either shadows it (profile files override base files) or loses the change the next
+	// time the user switches profile.
+	SourceFile string `json:"-"`
 }
 
 // HasOAuth returns true if the server has OAuth2 configured.

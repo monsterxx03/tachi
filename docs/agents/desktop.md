@@ -428,6 +428,18 @@ const type = (el, t) => {
   it is the way out. `mcp-auth` asserts both ends: listed+greyed after connecting, and the flip to loaded after
   pressing 启用 (which is also why that press happens AFTER the turn that asserts the deferred-tools reminder:
   a loaded tool is no longer "undiscovered", so the reminder would stop naming it).
+- **A panel toggle is written back into the mcp.json the server came from** (`MCPServerConfig.SourceFile`,
+  stamped at load with the file that WON a name clash; `config.SetServerEnabledInFile` edits it). The rule is
+  "the file it came from", never "the active profile": a server in `mcp.json` and one in `mcp.<profile>.json`
+  are different entries in different files, and writing both into the profile file would shadow the base entry
+  (profile files override base files) while writing both into the base file would be overridden — either way
+  the change is lost on the next profile switch. The edit is SURGICAL (one value's bytes; indentation, key
+  order and unknown fields survive), because mcp.json is hand-written and a click should not reformat it.
+  The **profile SWITCH stays runtime-only** — nothing writes `active_mcp_profile` into config.yaml, so a
+  dropdown cannot silently make one profile the default for every future launch. A server whose `SourceFile` is
+  empty (a config assembled in code) simply keeps the old runtime-only behavior.
+  `config_test.go` pins the routing across all four files (global/project × base/profile) and the surgical
+  edit; the `mcp-auth` scenario pins the end-to-end write ("original file + exactly one line").
 - **The panel's per-server state comes from the BACKEND, never from the panel.** `MCPServerVO.NeedsAuth` is
   set wherever a connect attempt came back `*mcp.OAuthRequiredError` — at startup (`populateSharedMCP`) as
   well as on a manual enable — because a server that wants a token otherwise looks exactly like one that is

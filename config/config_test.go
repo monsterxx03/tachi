@@ -952,3 +952,212 @@ func TestLoadFrom_ProviderVisionFlag(t *testing.T) {
 
 	assert.Nil(t, cfg.Providers[2].Spec.Vision, "omitted vision stays nil (auto-detect at resolve time)")
 }
+
+// --- writing a toggle back into a user-authored mcp.json ---------------------
+//
+// The desktop's MCP panel persists 启用/禁用 into the file the server came from, and these
+// pin the two halves of that promise: the edit touches ONE value's bytes (everything else in
+// a hand-written file survives, including fields this package does not model), and the file a
+// server is written to is the one it came from — not "the active profile", which would shadow
+// a base entry or lose the change on the next profile switch.
+
+func TestSetServerEnabledInFileReplacesTheValueOnly(t *testing.T) {
+	// Shaped like a real mcp.json: hand-written key order, a nested object, an array of args,
+	// and a field (x-note) this package does not model.
+	const original = `{
+  "servers": [
+    {
+      "name": "chrome-devtools",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"],
+      "x-note": "keep me",
+      "enabled": true
+    },
+    {
+      "name": "tapd",
+      "type": "stdio",
+      "command": "mcp-server-tapd",
+      "env": {"TAPD_ACCESS_TOKEN": "secret"},
+      "enabled": true
+    }
+  ]
+}
+`
+	const want = `{
+  "servers": [
+    {
+      "name": "chrome-devtools",
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "chrome-devtools-mcp@latest"],
+      "x-note": "keep me",
+      "enabled": false
+    },
+    {
+      "name": "tapd",
+      "type": "stdio",
+      "command": "mcp-server-tapd",
+      "env": {"TAPD_ACCESS_TOKEN": "secret"},
+      "enabled": true
+    }
+  ]
+}
+`
+	path := filepath.Join(t.TempDir(), mcpConfigFileName)
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
+
+	require.NoError(t, SetServerEnabledInFile(path, "chrome-devtools", false))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(got), "only the one boolean may change")
+
+	// And the change is what the loader reports afterwards.
+	servers, err := loadMCPJSONFile(path)
+	require.NoError(t, err)
+	require.Len(t, servers, 2)
+	assert.False(t, servers[0].IsEnabled())
+	assert.True(t, servers[1].IsEnabled())
+}
+
+func TestSetServerEnabledInFileAppendsTheKeyWhenAbsent(t *testing.T) {
+	// "enabled" missing means enabled (the defaults tag), so the write APPENDS the choice —
+	// with the file's own indentation, and a comma only when the entry has other fields.
+	const original = "{\n  \"servers\": [\n    {\n      \"name\": \"a\",\n      \"type\": \"stdio\"\n    },\n    {\n      \"name\": \"b\",\n      \"type\": \"stdio\"\n    }\n  ]\n}\n"
+	const want = "{\n  \"servers\": [\n    {\n      \"name\": \"a\",\n      \"type\": \"stdio\",\n      \"enabled\": false\n    },\n    {\n      \"name\": \"b\",\n      \"type\": \"stdio\"\n    }\n  ]\n}\n"
+	path := filepath.Join(t.TempDir(), mcpConfigFileName)
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o644))
+
+	require.NoError(t, SetServerEnabledInFile(path, "a", false))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(got))
+}
+
+func TestSetServerEnabledInFileKeepsTabsAndMode(t *testing.T) {
+	// A tab-indented file (the indentation is measured from the entry, not assumed) and a
+	// mode the write must not change: it is the user's file, not one of ours.
+	const original = "{\n\t\"servers\": [\n\t\t{\n\t\t\t\"name\": \"a\",\n\t\t\t\"type\": \"stdio\"\n\t\t}\n\t]\n}\n"
+	const want = "{\n\t\"servers\": [\n\t\t{\n\t\t\t\"name\": \"a\",\n\t\t\t\"type\": \"stdio\",\n\t\t\t\"enabled\": true\n\t\t}\n\t]\n}\n"
+	path := filepath.Join(t.TempDir(), mcpConfigFileName)
+	require.NoError(t, os.WriteFile(path, []byte(original), 0o640))
+
+	require.NoError(t, SetServerEnabledInFile(path, "a", true))
+
+	got, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, want, string(got))
+	st, err := os.Stat(path)
+	require.NoError(t, err)
+	assert.Equal(t, os.FileMode(0o640), st.Mode().Perm())
+}
+
+func TestSetServerEnabledInFileRefusesOtherFilesAndBadJSON(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, mcpConfigFileName)
+	require.NoError(t, os.WriteFile(path,
+		[]byte("{\n  \"servers\": [\n    {\"name\": \"a\", \"enabled\": true}\n  ]\n}\n"), 0o644))
+
+	// A name this file does not define: a normal outcome (it may live in another file), and
+	// reported as such rather than as a parse error.
+	err := SetServerEnabledInFile(path, "elsewhere", false)
+	require.ErrorIs(t, err, errServerNotInFile)
+	after, readErr := os.ReadFile(path)
+	require.NoError(t, readErr)
+	assert.Contains(t, string(after), `"enabled": true`, "a refused write must not touch the file")
+
+	// Broken JSON is refused too — and left alone for the user to repair.
+	broken := filepath.Join(dir, "broken.json")
+	require.NoError(t, os.WriteFile(broken, []byte(`{"servers": [ {`), 0o644))
+	require.Error(t, SetServerEnabledInFile(broken, "a", false))
+	afterBroken, readErr := os.ReadFile(broken)
+	require.NoError(t, readErr)
+	assert.Equal(t, `{"servers": [ {`, string(afterBroken))
+}
+
+// TestSourceFileIsTheFileThatWon pins the routing rule the write-back depends on: a server's
+// SourceFile names the mcp.json it was READ from, with the winner of a name clash (profile
+// over base, project over global) being the one that answers.
+func TestSourceFileIsTheFileThatWon(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	globalBase := filepath.Join(globalDir, mcpConfigFileName)
+	globalProfile := filepath.Join(globalDir, mcpProfileFileName("prod"))
+	projectDir := t.TempDir()
+	projectBase := filepath.Join(projectDir, ".tachi", mcpConfigFileName)
+	projectProfile := filepath.Join(projectDir, ".tachi", mcpProfileFileName("prod"))
+
+	writeMCPJSON(t, globalBase, []MCPServerConfig{{Name: "base-only", Type: MCPTransportStdio, Command: "/bin/base"}})
+	writeMCPJSON(t, globalProfile, []MCPServerConfig{{Name: "profile-only", Type: MCPTransportStdio, Command: "/bin/profile"}})
+	writeMCPJSON(t, projectBase, []MCPServerConfig{{Name: "project-only", Type: MCPTransportStdio, Command: "/bin/project"}})
+	writeMCPJSON(t, projectProfile, []MCPServerConfig{
+		{Name: "both", Type: MCPTransportStdio, Command: "/bin/project-profile"},
+		{Name: "profile-only", Type: MCPTransportStdio, Command: "/bin/project-profile-2"},
+	})
+	// "base-only" is overridden by the PROJECT base file, so that is where a write must land.
+	writeMCPJSON(t, projectBase, []MCPServerConfig{
+		{Name: "project-only", Type: MCPTransportStdio, Command: "/bin/project"},
+		{Name: "base-only", Type: MCPTransportStdio, Command: "/bin/project-wins"},
+	})
+
+	servers, err := LoadMCPConfig("prod", projectDir)
+	require.NoError(t, err)
+	byName := map[string]string{}
+	for _, s := range servers {
+		byName[s.Name] = s.SourceFile
+	}
+	assert.Equal(t, projectBase, byName["base-only"], "the overriding file wins, not the base one")
+	assert.Equal(t, projectProfile, byName["profile-only"], "a profile file's entry belongs to the profile file")
+	assert.Equal(t, projectBase, byName["project-only"])
+	assert.Equal(t, projectProfile, byName["both"])
+}
+
+// TestToggleSurvivesAProfileRoundTrip is the whole point in one test: what the panel writes
+// for a profile server is still there — and still scoped to that profile — after a reload,
+// including a switch back to the default profile, where the server must NOT appear at all.
+func TestToggleSurvivesAProfileRoundTrip(t *testing.T) {
+	oldBase := BaseDir()
+	defer SetBaseDir(oldBase)
+	globalDir := t.TempDir()
+	SetBaseDir(globalDir)
+
+	basePath := filepath.Join(globalDir, mcpConfigFileName)
+	profilePath := filepath.Join(globalDir, mcpProfileFileName("prod"))
+	writeMCPJSON(t, basePath, []MCPServerConfig{{Name: "plain", Type: MCPTransportStdio, Command: "/bin/plain"}})
+	writeMCPJSON(t, profilePath, []MCPServerConfig{{Name: "profiled", Type: MCPTransportStdio, Command: "/bin/profiled"}})
+
+	// Turn OFF the profile server and ON the base one, each into its own file.
+	require.NoError(t, SetServerEnabledInFile(profilePath, "profiled", false))
+	require.NoError(t, SetServerEnabledInFile(basePath, "plain", true))
+
+	// The base file must not have grown a "profiled" entry (that would shadow nothing today
+	// and be lost the moment the profile changes).
+	baseRaw, err := os.ReadFile(basePath)
+	require.NoError(t, err)
+	assert.NotContains(t, string(baseRaw), "profiled")
+
+	servers, err := LoadMCPConfig("prod", "")
+	require.NoError(t, err)
+	require.Len(t, servers, 2)
+	for _, s := range servers {
+		switch s.Name {
+		case "profiled":
+			assert.False(t, s.IsEnabled(), "the profile server's toggle must survive")
+			assert.Equal(t, profilePath, s.SourceFile)
+		case "plain":
+			assert.True(t, s.IsEnabled())
+			assert.Equal(t, basePath, s.SourceFile)
+		}
+	}
+
+	// Switching back to the default profile: that server is simply not part of it.
+	servers, err = LoadMCPConfig("", "")
+	require.NoError(t, err)
+	require.Len(t, servers, 1)
+	assert.Equal(t, "plain", servers[0].Name)
+}

@@ -33,6 +33,13 @@ type sandbox struct {
 	// (see launch): set by scenarios that authorize an MCP server, because a run must not
 	// open a window on the machine it is running on.
 	browserFetch bool
+
+	// mcpConfig is the mcp.json exactly as it was seeded. The scenario's Go half compares the
+	// file AFTER the run against it: "the panel wrote back exactly one line and left the rest
+	// byte-for-byte alone" is a claim about the original bytes, so the original bytes are what
+	// the assertion needs — reconstructing them in the assertion would be a second copy of the
+	// fixture's formatting, and the copy is the part that goes stale.
+	mcpConfig []byte
 }
 
 // smokeBundleName is deliberately unique: `open -a <path>` matches bundles and
@@ -158,6 +165,7 @@ func (sb *sandbox) writeMCPConfig(srv *mcpauth.Server) error {
 	if err != nil {
 		return err
 	}
+	sb.mcpConfig = data
 	return os.WriteFile(filepath.Join(sb.home, ".tachi", "mcp.json"), data, 0o600)
 }
 
