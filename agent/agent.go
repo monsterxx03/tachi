@@ -1014,6 +1014,24 @@ func (a *AIAgent) GetLastMessages() []llm.Message {
 	return nil
 }
 
+// TurnInFlight reports whether a conversation turn is still running.
+//
+// The RunState outlives its turn (currentRun is deliberately never reset — channel
+// mode reads it between turns), so the pointer alone cannot answer this; the run's
+// own finished flag does. Both halves are read under a.mu, like every other reader
+// of currentRun.
+//
+// This is the ONE definition of "a turn is in flight": the rewind refusal and the
+// integration driver's WaitIdle both wait on it. They need it because a turn's writes
+// — its session records — land inside the run goroutine, so whoever must not race
+// them has to know whether that goroutine is still there.
+func (a *AIAgent) TurnInFlight() bool {
+	a.mu.RLock()
+	rs := a.currentRun
+	a.mu.RUnlock()
+	return rs != nil && !rs.isFinished()
+}
+
 // dispatchEvent sends an event to the hook dispatcher, if initialised.
 // It is a no-op when the hook system is disabled or has no handlers for
 // the given event. The payload is populated with the current session ID

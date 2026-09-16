@@ -69,6 +69,12 @@ type FileStore struct {
 	// project membership cannot, because ProjectID is written by the desktop alone
 	// (bind on create, detach on project delete, inherit on compaction) and every
 	// one of those writes goes through a store that invalidates.
+	//
+	// The scan's own reads are safe for a second, independent reason: meta.json is
+	// written ATOMICALLY (tmp + rename, see UpdateMeta). A rewrite in place would
+	// let this package read an empty or half-written file, and scanSessions can
+	// only treat unparsable JSON as a session to skip — a live turn's write would
+	// then silently drop its own session from another reader's list.
 	mu       sync.Mutex
 	cached   []*Session
 	cacheDir time.Time // baseDir's mtime when cached was read
@@ -118,7 +124,7 @@ func (s *FileStore) apiRequestsPath(id string) string {
 
 // CreateSession creates a new session directory and meta.json
 func (s *FileStore) CreateSession(session *Session) error {
-	if err := fileutil.WriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
+	if err := fileutil.AtomicWriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
 		return fmt.Errorf("write meta.json: %w", err)
 	}
 
@@ -137,7 +143,8 @@ func (s *FileStore) CreateSession(session *Session) error {
 // read-modify-write (desktop's updateSessionMeta, which rewrites the whole
 // meta.json and would clobber anything a snapshot had missed in between). Only
 // ListSessions is memoized (see FileStore); serving this from that snapshot would
-// turn a stale read into a lost write.
+// turn a stale read into a lost write. The read itself cannot be torn — UpdateMeta
+// publishes meta.json by rename — so a session that exists always parses.
 func (s *FileStore) LoadMeta(id string) (*Session, error) {
 	var session Session
 	if err := fileutil.ReadJSON(s.metaPath(id), &session); err != nil {
@@ -328,8 +335,15 @@ func (s *FileStore) ReplaceLastMessage(id string, msg *Message) error {
 }
 
 // UpdateMeta updates the meta.json file
+// UpdateMeta persists the given session's metadata, atomically (tmp + rename).
+//
+// Atomicity is what makes "the list is missing a session that exists" impossible:
+// a rewrite in place (os.WriteFile truncates first) would let a concurrent reader —
+// another process's ListSessions, the desktop's sidebar, a fresh store opened by
+// --resume — read an empty or half-written meta.json, which scanSessions can only
+// treat as a session to SKIP. A rename publishes the whole file or nothing at all.
 func (s *FileStore) UpdateMeta(session *Session) error {
-	if err := fileutil.WriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
+	if err := fileutil.AtomicWriteJSONPrivate(s.metaPath(session.ID), session); err != nil {
 		return fmt.Errorf("write meta.json: %w", err)
 	}
 	s.invalidate()

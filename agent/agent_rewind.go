@@ -256,10 +256,7 @@ func (a *AIAgent) recordedSystemPrompt() string {
 // boundary: the files would go back to before the summary while the
 // conversation that is really running continues in the successor session.
 func (a *AIAgent) rewindAllowed() error {
-	a.mu.RLock()
-	rs := a.currentRun
-	a.mu.RUnlock()
-	if rs != nil && !rs.isFinished() {
+	if a.TurnInFlight() {
 		return errors.New("有回合正在运行，请先停止再回退")
 	}
 	if why := a.rewindBlockedByCompaction(); why != "" {

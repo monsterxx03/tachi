@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -482,5 +483,80 @@ func TestListSessionsMissesInPlaceWritesByAnotherWriter(t *testing.T) {
 	got := listTitles(t, mine)
 	if len(got) != 2 || got[1] != "别的进程改的" {
 		t.Errorf("a directory change did not release the snapshot: got %v", got)
+	}
+}
+
+// TestListSessionsNeverMissesASessionBeingRewritten pins the half of the
+// "another writer" story that is NOT allowed to happen: a scan must never come
+// back without a session that is on disk. meta.json is written atomically (tmp +
+// rename, see UpdateMeta), so a reader racing a live turn's metadata write sees
+// the whole old file or the whole new one — never a truncated one, which
+// scanSessions can only treat as a session to skip.
+//
+// This is the reader that matters in practice: a FRESH store, opened by --resume
+// or by the desktop's sidebar, listing a home another writer (a turn, another
+// process) is rewriting this very moment. Each round is a new store, because the
+// memoized one would answer from its snapshot and never touch the filesystem.
+//
+// Without the rename this fails within a few hundred rounds (~25% of scans lost
+// the session when measured on a rewrite-in-place loop), and it fails as
+// "the session is gone", not as a parse error — the file was still being written.
+func TestListSessionsNeverMissesASessionBeingRewritten(t *testing.T) {
+	dir := t.TempDir()
+	writer, err := NewFileStore(dir)
+	if err != nil {
+		t.Fatalf("NewFileStore: %v", err)
+	}
+	now := time.Now()
+	const id = "2026-05-01-000000-ffffffff"
+	if err := writer.CreateSession(&Session{ID: id, Title: "原题", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatalf("CreateSession: %v", err)
+	}
+
+	stop := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		title := strings.Repeat("改", 300) // big enough that the write is not one atomic step
+		for {
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			meta, err := writer.LoadMeta(id)
+			if err != nil {
+				return
+			}
+			meta.Title = title
+			meta.UpdatedAt = time.Now()
+			if err := writer.UpdateMeta(meta); err != nil {
+				return
+			}
+		}
+	}()
+
+	deadline := time.Now().Add(300 * time.Millisecond)
+	scans := 0
+	for time.Now().Before(deadline) {
+		reader, err := NewFileStore(dir)
+		if err != nil {
+			t.Fatalf("NewFileStore: %v", err)
+		}
+		sessions, err := reader.ListSessions()
+		if err != nil {
+			t.Fatalf("ListSessions: %v", err)
+		}
+		scans++
+		if len(sessions) != 1 {
+			close(stop)
+			<-done
+			t.Fatalf("scan %d lost the session while it was being rewritten: got %d sessions, want 1", scans, len(sessions))
+		}
+	}
+	close(stop)
+	<-done
+	if scans < 20 {
+		t.Errorf("only %d scans ran in 300ms — too few for the loop to prove anything", scans)
 	}
 }

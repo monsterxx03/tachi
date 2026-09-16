@@ -19,6 +19,8 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -336,29 +338,50 @@ func (s *Session) Expect(text string, timeout time.Duration) {
 		"screen never contained %q", text)
 }
 
-// WaitIdle waits until the mock has seen at least n requests AND the screen
-// shows the idle statusbar. The REQUEST COUNT is the primary anchor (the
-// doc §5.3: script consumption proves the turn ended); the ● marker is
-// secondary — the reconstructed screen reflects the CURRENT dot, so it
-// turns back to ● only when the loop returns to a non-streaming state
-// (idle or a modal — "● tachi" prefixes both the bare and the
-// "· <title> · #<id>" session forms).
+// WaitIdle waits until the mock has seen at least n requests, the TURN is over,
+// and the screen shows the idle statusbar.
+//
+// The turn's own state (agent.TurnInFlight) is the anchor that matters, and it is
+// not a formality: the SCREEN lags. bubbletea renders at ~60fps, and the mock's
+// request counter rises on the mock's goroutine the moment a request arrives — so
+// "request counted + screen still showing the last idle frame" is a real state, and
+// a wait built on those two alone returns while the turn is still streaming. A spec
+// that then types (its input goes into the pending queue instead of a new turn) or
+// quits the program (Stop mid-turn: the turn's writes land after the scan that was
+// supposed to see them) fails randomly, on a loaded machine only. TurnInFlight is
+// false only once the run goroutine has left, i.e. after every write it makes.
+//
+// The screen check stays: it is what proves the UI came back to a state the spec can
+// assert against (a modal — confirmation, ask-user — is not the same as idle).
 func (s *Session) WaitIdle(n int, timeout time.Duration) {
 	s.t.Helper()
 	s.waitFor(timeout, func() bool {
-		return s.mock.RequestCount() >= n && strings.Contains(s.Screen(), "● tachi")
+		return s.mock.RequestCount() >= n &&
+			!s.agent.TurnInFlight() &&
+			strings.Contains(s.Screen(), "● tachi")
 	}, "never reached idle (%d/%d requests)", s.mock.RequestCount(), n)
 }
 
-// Stop quits the program and waits for it to exit (bounded). The cleanup
-// registered in Launch does the same, so Stop is optional — call it when a
-// scenario needs the renderer to finish before asserting something on the
-// final screen.
+// Stop quits the program and waits for it to exit (bounded), then for the turn to
+// drain (bounded). The cleanup registered in Launch does the same, so Stop is
+// optional — call it when a scenario needs the renderer to finish before asserting
+// something on the final screen.
+//
+// Draining matters for the scenario that closes the app and reopens it on the same
+// --home (--resume): quitting the PROGRAM does not stop the agent's run goroutine —
+// in the real binary the process exits and takes it along, here the process lives on.
+// A turn still writing its session would race the reopen's session list, so a closed
+// session is one whose turn is over. Best-effort: a spec mid-turn (a paused stream,
+// say) is not an error, its own waits decide.
 func (s *Session) Stop() {
 	s.p.Quit()
 	select {
 	case <-s.done:
 	case <-time.After(5 * time.Second):
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for s.agent.TurnInFlight() && time.Now().Before(deadline) {
+		time.Sleep(5 * time.Millisecond)
 	}
 }
 
@@ -377,6 +400,44 @@ func (s *Session) waitFor(timeout time.Duration, cond func() bool, failMsg strin
 	if len(tail) > maxTail {
 		tail = tail[len(tail)-maxTail:]
 	}
-	s.t.Fatalf("tui: %s\n--- screen ---\n%s\n--- mock requests: %d, mock error: %v\n--- raw tail ---\n%q",
-		fmt.Sprintf(failMsg, failArgs...), s.Screen(), s.mock.RequestCount(), s.mock.Error(), tail)
+	s.t.Fatalf("tui: %s\n--- screen ---\n%s\n--- session dir ---\n%s\n--- mock requests: %d, mock error: %v\n--- raw tail ---\n%q",
+		fmt.Sprintf(failMsg, failArgs...), s.Screen(), s.sessionDirSummary(), s.mock.RequestCount(), s.mock.Error(), tail)
+}
+
+// sessionDirSummary describes the home's session directory — one line per session,
+// with the size of each file in it — for the failure dump. A session spec that fails
+// (--resume found nothing, a turn recorded nothing) is asserting about disk state,
+// and the screen cannot tell "the session is missing" from "the session is there but
+// unparsable" or "the directory was never written". That distinction IS the
+// diagnosis, so it belongs in the dump instead of in a re-run.
+func (s *Session) sessionDirSummary() string {
+	root := filepath.Join(s.home, "session")
+	dirs, err := os.ReadDir(root)
+	if err != nil {
+		return fmt.Sprintf("%s: %v", root, err)
+	}
+	if len(dirs) == 0 {
+		return root + ": EMPTY (no session dirs)"
+	}
+	var b strings.Builder
+	for _, d := range dirs {
+		if !d.IsDir() {
+			continue
+		}
+		b.WriteString(d.Name() + ":")
+		files, err := os.ReadDir(filepath.Join(root, d.Name()))
+		if err != nil {
+			b.WriteString(" " + err.Error() + "\n")
+			continue
+		}
+		for _, f := range files {
+			size := int64(-1)
+			if info, err := f.Info(); err == nil {
+				size = info.Size()
+			}
+			fmt.Fprintf(&b, " %s=%d", f.Name(), size)
+		}
+		b.WriteString("\n")
+	}
+	return b.String()
 }
