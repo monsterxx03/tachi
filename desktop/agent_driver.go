@@ -41,6 +41,12 @@ func (d *desktopApp) initAgent(ctx context.Context) error {
 	// isolated (mirrors channel's initSharedMCP).
 	if cfg.MCPEnabled() {
 		d.mcp = mcp.NewManager(ctx, cfg, logger.New("desktop"))
+		// Every connection this manager opens now declares MCP's `roots` capability and
+		// answers it with this process's workspaces (see mcpRoots). Without it a roots-aware
+		// server — the official chrome-devtools one, for instance — confines file access to
+		// the OS temp dir, and a tool that writes into the project fails with "not within any
+		// of the configured workspace roots".
+		d.mcp.SetRootsFunc(d.mcpRoots)
 		go d.populateSharedMCP(ctx, d.mcp)
 	}
 	return nil

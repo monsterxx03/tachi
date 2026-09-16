@@ -449,6 +449,25 @@ const type = (el, t) => {
   it is the way out. `mcp-auth` asserts both ends: listed+greyed after connecting, and the flip to loaded after
   pressing 启用 (which is also why that press happens AFTER the turn that asserts the deferred-tools reminder:
   a loaded tool is no longer "undiscovered", so the reminder would stop naming it).
+- **Tachi answers MCP's `roots` capability with the process's workspaces.** `Manager.SetRootsFunc`
+  (wired in `initAgent` to `desktopApp.mcpRoots`) makes every connection declare the capability and
+  answer `roots/list` on demand. It is not optional in practice: a roots-aware server CONFINes file
+  access to what it is told, and the official chrome-devtools server, when the client declares no
+  roots at all, allows only the OS temp dir — which is the "not within any of the configured
+  workspace roots" failure, i.e. a tool that exports a file into the project dying on a path check.
+  Three things make the answer what it is: it is the UNION of every live session's workspace (the
+  desktop shares one manager, connection and pool across sessions, so a single-session answer would
+  break a background session the moment the user switched away), it holds only directories that
+  EXIST (a server realpath-resolves each root and skips the ones it cannot), and it is deduplicated
+  and sorted (servers cache it; a reshuffled list is churn). The roots the server sees are asserted
+  from the SERVER's side — the stub stdio server in `agent_mcp_test.go` exposes a tool that asks for
+  them (`TestMCPRootsReachTheServer`), because nothing about the exchange is visible from Tachi.
+- **`Client.Start` is what installs the handler for requests the SERVER sends** (`roots/list`,
+  sampling, elicitation) — not `transport.Start`, and not the SDK's convenience constructors, which
+  only start the transport. Skipping it is silent on Tachi's side and answers the server with "No
+  request handler configured": `connectStdio` / `connectHTTP` therefore build the transport and call
+  `client.Start` themselves (they must anyway, to pass the client options that carry the roots
+  handler — `NewStdioMCPClientWithOptions`, `NewStreamableHttpClient` accept none).
 - **A panel toggle is written back into the mcp.json the server came from** (`MCPServerConfig.SourceFile`,
   stamped at load with the file that WON a name clash; `config.SetServerEnabledInFile` edits it). The rule is
   "the file it came from", never "the active profile": a server in `mcp.json` and one in `mcp.<profile>.json`

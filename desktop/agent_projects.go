@@ -83,6 +83,7 @@ func (s *AgentService) CreateProject(name, primary string, additional []string) 
 	}
 	// Deliberately NOT rememberWorkspace(primary): a project's directory is not the answer
 	// to "where should the next PROJECT-LESS session start" (design §6.1).
+	d.notifyMCPRootsChanged()
 	d.emitWorkspaceChanged(p.ID, "")
 	return "ok"
 }
@@ -111,6 +112,7 @@ func (s *AgentService) RenameProject(id, name string) string {
 		return fmt.Sprintf("保存项目失败：%v", err)
 	}
 	// The sidebar's rows are labelled by joining this name in, so they have to be re-read.
+	d.notifyMCPRootsChanged()
 	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }
@@ -140,6 +142,7 @@ func (s *AgentService) SetProjectRoots(id, primary string, additional []string) 
 	// re-pointed here — see invalidateMemberSkills.
 	d.invalidateMemberSkills(id)
 	// Every member's workspace just moved, and the frontend holds that state by value.
+	d.notifyMCPRootsChanged()
 	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }
@@ -187,6 +190,7 @@ func (s *AgentService) DeleteProject(id string) string {
 	if err := d.projects.remove(id); err != nil {
 		return fmt.Sprintf("删除项目失败：%v", err)
 	}
+	d.notifyMCPRootsChanged()
 	d.emitWorkspaceChanged(id, "")
 	return "ok"
 }

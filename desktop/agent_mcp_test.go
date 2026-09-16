@@ -40,6 +40,8 @@ const (
 	stubServer = "stub"
 	// stubServerTool is the tool the stub server exposes.
 	stubServerTool = "ping"
+	// stubRootsTool asks the client for its roots (see serveStubMCP).
+	stubRootsTool = "roots"
 )
 
 // serveStubMCP runs a minimal MCP server over stdio and exits.
@@ -49,6 +51,23 @@ func serveStubMCP() {
 		mcp.NewTool(stubServerTool, mcp.WithDescription("ping the stub server")),
 		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 			return mcp.NewToolResultText("pong"), nil
+		},
+	)
+	// A second tool that ASKS THE CLIENT for its roots: the only way to see, from the server's
+	// side, whether the client declared the capability and what it answered. That is exactly
+	// what a roots-aware server does before it confines a file operation to a workspace.
+	s.AddTool(
+		mcp.NewTool(stubRootsTool, mcp.WithDescription("report the roots the client declared")),
+		func(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			res, err := s.RequestRoots(ctx, mcp.ListRootsRequest{})
+			if err != nil {
+				return mcp.NewToolResultText("error: " + err.Error()), nil
+			}
+			uris := make([]string, 0, len(res.Roots))
+			for _, r := range res.Roots {
+				uris = append(uris, r.URI)
+			}
+			return mcp.NewToolResultText(strings.Join(uris, "\n")), nil
 		},
 	)
 	if err := server.ServeStdio(s); err != nil {
@@ -152,29 +171,32 @@ func newMCPToggleApp(t *testing.T) (*desktopApp, *AgentService, string) {
 	config.SetBaseDir(t.TempDir())
 	t.Cleanup(func() { config.SetBaseDir("") })
 
-	self, err := os.Executable()
-	if err != nil {
-		t.Fatalf("locate test binary: %v", err)
-	}
-
 	d := newTestApp()
-	d.cfg = &config.Config{
-		Language: "en",
-		MCPServers: []config.MCPServerConfig{{
-			Name:    stubServer,
-			Type:    config.MCPTransportStdio,
-			Command: self,
-			Env:     map[string]string{stubServerEnv: "1"},
-			// A connect timeout of 0 would expire the context immediately.
-			Timeout: config.Duration(30 * time.Second),
-		}},
-	}
+	d.cfg = &config.Config{Language: "en", MCPServers: []config.MCPServerConfig{stubServerConfig(t)}}
 	d.mcp = tachimcp.NewManager(t.Context(), d.cfg, logger.Default())
 	d.mcp.MarkInitDone()
 
 	const sid = "s1"
 	d.runs[sid] = &sessionRun{}
 	return d, &AgentService{desk: d}, sid
+}
+
+// stubServerConfig configures the stub stdio server: this very test binary re-executed as an
+// MCP server (see TestMain).
+func stubServerConfig(t *testing.T) config.MCPServerConfig {
+	t.Helper()
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatalf("locate test binary: %v", err)
+	}
+	return config.MCPServerConfig{
+		Name:    stubServer,
+		Type:    config.MCPTransportStdio,
+		Command: self,
+		Env:     map[string]string{stubServerEnv: "1"},
+		// A connect timeout of 0 would expire the context immediately.
+		Timeout: config.Duration(30 * time.Second),
+	}
 }
 
 // stubNamedTool is a minimal tools.Tool for registry fixtures.
@@ -470,5 +492,56 @@ func TestGetMCPToolSchemaFlattensTheContract(t *testing.T) {
 	// server went away — and it must not come back as a half-filled VO.
 	if empty := svc.GetMCPToolSchema("mcp__gone__nope"); empty.Name != "" || len(empty.Parameters) != 0 {
 		t.Errorf("unknown tool = %+v, want the zero value", empty)
+	}
+}
+
+// TestMCPRootsReachTheServer pins the whole capability: Tachi declares `roots`, the server asks
+// for it, and the answer is the workspace the process is working in.
+//
+// It matters because a roots-aware server CONFINES file access to that answer — the official
+// chrome-devtools server refuses any path outside it, and, with no roots declared at all,
+// allows only the OS temp dir (which is the "not within any of the configured workspace roots"
+// failure that sent us here). Nothing about it is visible from Tachi's side, so the assertion
+// has to come from the server: the stub's `roots` tool asks the client and reports what it got.
+func TestMCPRootsReachTheServer(t *testing.T) {
+	first, second := t.TempDir(), t.TempDir()
+	// One per-session manager per session, the way the desktop holds them (sessionRecord reads
+	// the RUN's own manager, whose Current() is that session — a single shared manager would
+	// report whichever session is current for every run).
+	smA := newSessionManagerForTest(t, first)
+	smB := newSessionManagerForTest(t, second)
+	sidA, sidB := smA.Current().ID, smB.Current().ID
+
+	d := newTestApp()
+	d.cfg = &config.Config{MCPServers: []config.MCPServerConfig{stubServerConfig(t)}}
+	d.mcp = tachimcp.NewManager(t.Context(), d.cfg, logger.Default())
+	// Production wiring (initAgent does exactly this), so the test fails if that line goes.
+	d.mcp.SetRootsFunc(d.mcpRoots)
+	d.mcp.MarkInitDone()
+	d.sm = smA
+	d.getRun(sidA).sm = smA
+	d.getRun(sidB).sm = smB
+	svc := &AgentService{desk: d}
+
+	if res := svc.SetMCPServerEnabled(stubServer, true); res != "ok" {
+		t.Fatalf("SetMCPServerEnabled: %s", res)
+	}
+
+	dt := d.mcp.Pool().Get("mcp__" + stubServer + "__" + stubRootsTool)
+	if dt == nil || dt.Tool == nil {
+		t.Fatal("the stub's roots tool is not in the pool")
+	}
+	out, err := dt.Tool.ExecuteContext(t.Context(), "{}")
+	if err != nil {
+		t.Fatalf("roots tool: %v", err)
+	}
+
+	// Every session's workspace, because ONE connection serves them all: answering with only
+	// the displayed session's tree would break a background session the moment the user
+	// switched away.
+	for _, want := range []string{"file://" + first, "file://" + second} {
+		if !strings.Contains(out, want) {
+			t.Errorf("server was told %q, want it to include %s", out, want)
+		}
 	}
 }

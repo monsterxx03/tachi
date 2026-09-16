@@ -529,5 +529,8 @@ func (s *AgentService) SetSessionWorkingDir(id, dir string) string {
 	d.markSkillsStale(id)
 	// Remember the explicit choice: the next new session starts here.
 	rememberWorkspace(abs)
+	// The session's tree moved: a roots-aware MCP server has to be told, or it keeps confining
+	// file access to the directory the user just left.
+	d.notifyMCPRootsChanged()
 	return "ok"
 }

@@ -29,6 +29,10 @@ type MCPClient interface {
 	Initialize(ctx context.Context, req mcp.InitializeRequest) (*mcp.InitializeResult, error)
 	ListTools(ctx context.Context, req mcp.ListToolsRequest) (*mcp.ListToolsResult, error)
 	CallTool(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error)
+	// RootListChanges tells the server that the answer to a previous roots/list may have moved
+	// (see Manager.NotifyRootsChanged). Part of the interface because the clients are held only
+	// through it — a server that cached our workspace must be reachable to be told.
+	RootListChanges(ctx context.Context) error
 	Close() error
 }
 
@@ -74,11 +78,109 @@ type Manager struct {
 	maxResultChars int
 	resultFileDir  string
 
+	// roots answers a server's roots/list: the directories this client is working in.
+	// nil means "declare nothing", which is the right default — a client that advertises the
+	// capability owes the server an answer, and one that cannot name its workspace must not
+	// promise it. Protected by mu (set once at wiring time; read on every ask).
+	roots RootsFunc
+
 	// Tool list refresh — background polling for HTTP MCP servers.
 	refresher   *Refresher
 	toolCache   *toolListCache
 	serverTypes map[string]bool                   // server name -> is HTTP (true) or stdio (false)
 	serverCfgs  map[string]config.MCPServerConfig // server name -> config (for whitelist/blacklist filtering)
+}
+
+// Root is one workspace root as a server sees it: a file:// URI plus a display name. It is the
+// SDK's type, aliased so a caller (the desktop) can build the list without importing the MCP
+// SDK for one struct.
+type Root = mcp.Root
+
+// RootsFunc supplies the workspace roots a server may treat as its own (file:// URIs).
+//
+// It is the answer to MCP's `roots` capability: a server that supports it asks the client
+// "which directories am I working in", and several confine file access to the answer — the
+// official chrome-devtools server, for one, refuses any path outside the roots it was given
+// (and, when the client declares no roots at all, falls back to the OS temp dir alone, which
+// is why a tool that exports a file into the project fails with "not within any of the
+// configured workspace roots").
+//
+// It is a FUNCTION, not a list, because the answer changes: the desktop hosts many sessions
+// in different trees, and a root can be added or moved mid-conversation.
+type RootsFunc func() []mcp.Root
+
+// SetRootsFunc makes every connection this manager opens from now on declare the roots
+// capability (and answer roots/list with it). nil — the default — declares nothing.
+//
+// The capability is attached to the CLIENT rather than to the initialize request Tachi
+// builds, because that is where the SDK keeps it: `Client.Initialize` merges Roots into the
+// capabilities it sends as soon as a roots handler is configured, and answers the server's
+// request at the transport level. Both transports therefore have to construct their client
+// that way (see connectStdio / connectHTTP).
+func (m *Manager) SetRootsFunc(f RootsFunc) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.roots = f
+}
+
+// rootsFunc returns the configured provider, or nil.
+func (m *Manager) rootsFunc() RootsFunc {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.roots
+}
+
+// NotifyRootsChanged tells every connected server that the roots it was given may have moved, so
+// a roots-aware one re-asks instead of holding a stale workspace: chrome-devtools, for one, asks
+// once (on connect or at its first file operation) and refreshes only when the client says so —
+// so a session opened in a NEW directory after that would be denied a write there, which is the
+// failure the roots capability exists to fix, one directory later.
+//
+// Best-effort by design: a server that does not implement roots ignores the notification, and one
+// that has gone away must not fail the gesture that triggered this (adding a root, editing a
+// project) — the caller's action already succeeded.
+func (m *Manager) NotifyRootsChanged(ctx context.Context) {
+	if m.rootsFunc() == nil {
+		return // we never declared the capability; there is nothing to invalidate
+	}
+	m.mu.RLock()
+	clients := make(map[string]MCPClient, len(m.clients))
+	for name, c := range m.clients {
+		clients[name] = c
+	}
+	m.mu.RUnlock()
+
+	for name, c := range clients {
+		if err := c.RootListChanges(ctx); err != nil {
+			m.logger.Warn(ctx, "MCP: roots-changed notification failed", "server", name, "err", err)
+		}
+	}
+}
+
+// clientOptions returns the SDK options every connection is built with. Today that is the
+// roots handler (when a provider is configured) — the one capability Tachi answers.
+func (m *Manager) clientOptions() []client.ClientOption {
+	f := m.rootsFunc()
+	if f == nil {
+		return nil
+	}
+	return []client.ClientOption{client.WithRootsHandler(mcpRoots{f})}
+}
+
+// mcpRoots answers a server's roots/list by asking the provider at THAT moment: a server
+// re-asks after a roots-changed notification, and a long-lived connection must not keep
+// answering with the tree the user was in an hour ago.
+type mcpRoots struct{ fn RootsFunc }
+
+func (r mcpRoots) ListRoots(ctx context.Context, _ mcp.ListRootsRequest) (*mcp.ListRootsResult, error) {
+	roots := r.fn()
+	if roots == nil {
+		// An empty list is a legitimate answer (the client has no workspace yet); nil would
+		// marshal as `"roots": null`, which is not what the schema says.
+		roots = []mcp.Root{}
+	}
+	logger.FromContext(ctx).Info(ctx, "MCP: answered roots/list", "count", len(roots))
+	return &mcp.ListRootsResult{Roots: roots}, nil
 }
 
 // NewManager creates an empty MCP client manager from the given full config.
@@ -589,7 +691,20 @@ func (m *Manager) connectStdio(srv *config.MCPServerConfig) (MCPClient, error) {
 		env = append(env, k+"="+v)
 	}
 
-	return client.NewStdioMCPClient(command, env, srv.Args...)
+	// The transport is built by hand (rather than via NewStdioMCPClient) so the client can be
+	// given the roots handler: that convenience constructor passes no client options, and the
+	// capability has to be on the CLIENT (see clientOptions).
+	tr := transport.NewStdioWithOptions(command, env, srv.Args)
+	c := client.NewClient(tr, m.clientOptions()...)
+	// Client.Start, not transport.Start: it starts the transport AND registers the handler for
+	// requests the SERVER sends us (sampling, elicitation, roots/list). Skipping it is why a
+	// roots request answered "No request handler configured" — the SDK's own
+	// NewStdioMCPClient does the same thing in two steps, and this call is the documented
+	// requirement ("must be called before using the client").
+	if err := c.Start(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to start stdio transport: %w", err)
+	}
+	return c, nil
 }
 
 func (m *Manager) connectHTTP(ctx context.Context, srv *config.MCPServerConfig, timeout time.Duration) (MCPClient, error) {
@@ -618,7 +733,26 @@ func (m *Manager) connectHTTP(ctx context.Context, srv *config.MCPServerConfig, 
 	if srv.HasOAuth() {
 		opts = append(opts, m.oauthOption(ctx, srv))
 	}
-	return client.NewStreamableHttpClient(srv.URL, opts...)
+	// Same shape as the SDK's own NewStreamableHttpClient, plus the client options (the roots
+	// handler): the session ID has to be carried over when the transport already has one, or a
+	// server that issues one on initialize stops recognizing this client.
+	tr, err := transport.NewStreamableHTTP(srv.URL, opts...)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create http transport: %w", err)
+	}
+	clientOpts := make([]client.ClientOption, 0, 1)
+	if tr.GetSessionId() != "" {
+		clientOpts = append(clientOpts, client.WithSession())
+	}
+	clientOpts = append(clientOpts, m.clientOptions()...)
+	c := client.NewClient(tr, clientOpts...)
+	// Same reason as the stdio path: this is what installs the handler for server→client
+	// requests. For HTTP the transport's Start is a no-op unless SSE listening is enabled, so
+	// this costs nothing when nothing asks.
+	if err := c.Start(context.Background()); err != nil {
+		return nil, fmt.Errorf("failed to start http transport: %w", err)
+	}
+	return c, nil
 }
 
 // hasPersistedAuth returns true if there's a token file or DCR info file

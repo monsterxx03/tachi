@@ -49,6 +49,8 @@ func (s *stubMCPClient) CallTool(ctx context.Context, req mcp.CallToolRequest) (
 	return &mcp.CallToolResult{}, nil
 }
 
+func (s *stubMCPClient) RootListChanges(ctx context.Context) error { return nil }
+
 func (s *stubMCPClient) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()

@@ -328,6 +328,10 @@ func (d *desktopApp) prepareSession(ctx context.Context, id string) (*sessionRun
 	r.sm = sm
 	r.agentProvider = sess.ProviderName
 	d.mu.Unlock()
+	// This session's tree has just joined the set a roots-aware MCP server is told about
+	// (mcpRoots answers with every live session's workspace). Only here: the early return above
+	// means a session that was already prepared does not re-announce itself on every switch.
+	d.notifyMCPRootsChanged()
 	return r, nil
 }
 

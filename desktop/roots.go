@@ -170,6 +170,8 @@ func (s *AgentService) AddSessionRoots(id string, dirs []string) string {
 	}); err != nil {
 		return err.Error()
 	}
+	// Adding or removing a root moves the set a roots-aware MCP server sees (mcpRoots).
+	s.desk.notifyMCPRootsChanged()
 	return "ok"
 }
 
@@ -200,6 +202,8 @@ func (s *AgentService) RemoveSessionRoot(id, dir string) string {
 	}); err != nil {
 		return err.Error()
 	}
+	// Adding or removing a root moves the set a roots-aware MCP server sees (mcpRoots).
+	s.desk.notifyMCPRootsChanged()
 	return "ok"
 }
 

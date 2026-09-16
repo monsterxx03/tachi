@@ -5,12 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -654,4 +656,67 @@ func schemaItemType(items any) string {
 		return t
 	}
 	return ""
+}
+
+// notifyMCPRootsChanged tells the connected MCP servers that the process's workspace set moved.
+//
+// Called from the writers that move it — a project's roots, a session's folder or additional
+// roots, and the moment a session's run appears (its tree joins the union mcpRoots answers) —
+// because a roots-aware server asks ONCE and then trusts the answer until it is told otherwise
+// (see Manager.NotifyRootsChanged for what a stale answer costs).
+//
+// Fire-and-forget on purpose: the caller is a UI gesture that has already succeeded, and a
+// server that cannot be reached is not a reason to fail it. The context is detached for the same
+// reason as the notification itself: it must not be cancelled with whatever request triggered it.
+func (d *desktopApp) notifyMCPRootsChanged() {
+	if d.mcp == nil {
+		return
+	}
+	d.mcp.NotifyRootsChanged(context.Background())
+}
+
+// mcpRoots is what a roots-aware MCP server is told it may touch: every workspace this process
+// currently has a session in, as file:// URIs.
+//
+// The answer is the process's, not one session's, and that follows from how the desktop shares
+// MCP: ONE manager, one connection and one pool serve every session, so a server can only be
+// given one roots list. Handing it the displayed session's tree alone would deny a background
+// session's turn the moment the user switched away — the same failure this exists to fix, just
+// narrower. The union is also the honest reading of "the directories this client is working
+// in": every one of them is a directory the user opened here on purpose.
+//
+// Two rules the list has to keep:
+//   - only directories that EXIST: a server resolves each root with realpath and drops the ones
+//     it cannot resolve (chrome-devtools logs "Could not resolve configured root" and skips),
+//     so a stale root is noise at best and, for a server that treats an empty answer as "no
+//     workspace", a denial at worst;
+//   - a stable order, deduplicated: every ask produces a fresh list, and a server that caches it
+//     should see the same answer twice in a row for the same workspace set.
+func (d *desktopApp) mcpRoots() []mcp.Root {
+	d.mu.Lock()
+	ids := make([]string, 0, len(d.runs))
+	for id := range d.runs {
+		ids = append(ids, id)
+	}
+	d.mu.Unlock()
+
+	seen := make(map[string]bool, len(ids))
+	paths := make([]string, 0, len(ids)+1)
+	for _, id := range ids {
+		primary, additional := d.sessionRootsFrom(d.sessionRecord(id))
+		for _, dir := range append([]string{primary}, additional...) {
+			if dir == "" || seen[dir] || !fileutil.IsDir(dir) {
+				continue
+			}
+			seen[dir] = true
+			paths = append(paths, dir)
+		}
+	}
+	sort.Strings(paths)
+
+	roots := make([]mcp.Root, 0, len(paths))
+	for _, dir := range paths {
+		roots = append(roots, mcp.Root{URI: "file://" + dir, Name: filepath.Base(dir)})
+	}
+	return roots
 }
