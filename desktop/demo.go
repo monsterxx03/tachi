@@ -29,32 +29,23 @@ func demoEnabled() bool {
 
 const demoFlagPath = "/tmp/tachi-demo.flag"
 
-// The demo bootstrap's two waits, in order: enough for the app's main loop to start (a
-// main-thread dispatch that lands before it never runs), then the page's own time to load
-// before the driver's FIRST injection attempt.
+// demoLoadDelay is how much of a head start the driver's FIRST injection attempt gets after the
+// app reports it has finished launching. It is only a head start, never a deadline: an injection
+// that lands while the document is still loading is silently dropped, so the driver is injected
+// repeatedly for a window instead of once (see demoInjectWindow), and those retries are what
+// covers a slow load.
 //
-// A too-small BOOTSTRAP is not slow, it is SILENT: a dispatch that lands before the main loop
-// runs is never executed at all — the driver goroutine then waits forever and the run reports
-// nothing (measured: a probe app launched with the bootstrap moved to t=0 never reached its own
-// driver). It is a floor, and the shipped 250ms keeps ~3x its measured need; turn it down only
-// with the grid to hand (`TACHI_DEMO_*_MS` lets the same binary be re-measured).
+// It is NOT free time — the suite launches the app once per scenario, so this is paid once per
+// scenario — and the value below was trimmed against measurement: with `TACHI_DEMO_LOAD_MS` set,
+// the same binary was run at a grid of values and the whole suite re-run at each viable point.
+// A slow machine widens it without a rebuild, because `open` passes `--env` through from the
+// harness's own environment.
 //
-// The LOAD wait no longer has to be right on its own: an injection that lands while the document
-// is still loading is silently dropped, so the driver is injected repeatedly for a window instead
-// of once (see demoInjectWindow). This one is now only how much of a head start the first attempt
-// gets — the loading page is covered by the retries, not by this number.
-//
-// They are NOT free time, and their sum is the floor on EVERY smoke scenario — the suite
-// launches the app once per scenario, so this is paid 28 times a run. Both used to be several
-// times larger and were trimmed against measurement: with `TACHI_DEMO_*_MS` set, the same binary
-// was run at a grid of values and the whole suite re-run at each viable point. What the grid says
-// is that they trade against a SINGLE budget — the moment of injection, ~250ms after launch — so
-// shrinking one is not compensated by the other: the app is launched with `open`, whose `--env`
-// inherits this process's environment, which is what makes the knobs reachable at all.
-var (
-	demoBootstrapDelay = envDuration("TACHI_DEMO_BOOTSTRAP_MS", 250)
-	demoLoadDelay      = envDuration("TACHI_DEMO_LOAD_MS", 500)
-)
+// There used to be a BOOTSTRAP wait in front of it, for the app's main loop to start before the
+// first main-thread dispatch. main.go now starts this whole sequence from
+// ApplicationDidFinishLaunching, which IS that moment — so the guess is gone, along with its
+// `TACHI_DEMO_BOOTSTRAP_MS` knob.
+var demoLoadDelay = envDuration("TACHI_DEMO_LOAD_MS", 500)
 
 // demoInjectWindow is how long the driver keeps being injected to, and demoInjectStep how often.
 //
@@ -166,11 +157,10 @@ func runJsDemo(window *application.WebviewWindow) {
 	if window == nil {
 		return
 	}
-	// First let the app's main loop start: the two steps below are dispatched onto the main
-	// thread, and a dispatch that lands before the loop runs is never executed at all — the
-	// driver goroutine then waits forever and the run reports nothing (measured: a probe app
-	// launched with the bootstrap moved to t=0 never reached its own driver).
-	time.Sleep(demoBootstrapDelay)
+	// Nothing to wait for here: main.go calls this from ApplicationDidFinishLaunching, so the
+	// runtime the steps below dispatch onto is already up. (Waiting was what made a launch fail
+	// silently on a slow machine, and — once Wails grew a panic where it used to drop an early
+	// dispatch — kill the app outright. See webview_awake_darwin.go's awakeOnce.)
 
 	// Get the window on screen and lift WebKit's occlusion throttling BEFORE the driver runs.
 	// A scripted run happens on a machine that is in use, so its window WILL be covered by

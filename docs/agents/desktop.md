@@ -89,9 +89,9 @@ HOME=/tmp/tachi-smoke /tmp/mock-bin &        # writes config.yaml + dumps reques
 MOCK=$!; sleep 2
 open /tmp/tachi-smoke/TachiSmoke.app \
   --env HOME=/tmp/tachi-smoke --env TACHI_DEMO=1 --env TACHI_DEMO_JS=/tmp/drive.js
-sleep 24                                     # mount + the driver's own timing (the app's own
-                                             # bootstrap waits are ~0.75s; see demo.go's
-                                             # TACHI_DEMO_*_MS note — this sleep is generous
+sleep 24                                     # mount + the driver's own timing (the app waits
+                                             # for ApplicationDidFinishLaunching and then
+                                             # TACHI_DEMO_LOAD_MS, 0.5s; this sleep is generous
                                              # because a hand-run has no sink to wait on)
 R=$(osascript -e 'tell application "System Events" to tell process "TachiSmoke" to get {position, size} of window 1')
 I=$(echo "$R" | tr -dc '0-9, '); screencapture -x -R "$I" /tmp/tachi-smoke/shot.png
@@ -109,14 +109,24 @@ pkill -f TachiSmoke; kill $MOCK
 - Fixtures: `$HOME/.tachi/session/<id>/{meta.json,messages.jsonl}` (shapes as `session.Store`),
   `additional_dirs`, `desktop_ui.json`; bump `updated_at` so the app auto-loads it
 
-### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go` — a retried injection, ~0.75s in)
+### Driver JS (`TACHI_DEMO_JS`, injected by `desktop/demo.go`)
 
-The injection waits (`TACHI_DEMO_BOOTSTRAP_MS` / `TACHI_DEMO_LOAD_MS`, demo.go) are the floor
-on EVERY scenario in the suite, so they are kept tight and must not be trimmed by eye: too
-small and the main-thread dispatch never runs at all, and the run reports nothing (see the
-comment on those vars, including the grid the current values were measured at).
+**The demo starts from `ApplicationDidFinishLaunching`, never from a sleep.** Its first act is a
+dispatch onto the main thread, and Wails dereferences its platform impl there — which does not
+exist until `App.Run()` builds it. A dispatch that lands first is a nil-pointer panic in the
+goroutine, i.e. the app dies, and from outside that is indistinguishable from "the app did not
+start": no window, no driver, no log line (measured — it is why scenarios failed in clusters on a
+busy machine while the same tree passed minutes earlier). Two guards, and they are not
+redundant: main.go starts the sequence from that event (the true "runtime is up" moment), and
+`keepPageAwake` converts any too-early dispatch into a retryable reason (`awakeOnce`) so a future
+early caller cannot take the process down again. The bootstrap delay that used to guess at this,
+and its `TACHI_DEMO_BOOTSTRAP_MS` knob, are gone.
 
-The LOAD wait is no longer what stands between a slow page and a silent failure: the driver's
+What remains is `TACHI_DEMO_LOAD_MS` (demo.go), the head start the driver's first injection
+attempt gets — paid once per scenario, so it is kept tight and must not be trimmed by eye (see
+the comment on it for the grid it was measured at).
+
+The LOAD wait is not what stands between a slow page and a silent failure: the driver's
 payload is re-issued every `demoInjectStep` for `demoInjectWindow` (`TACHI_DEMO_INJECT_MS`, 10s
 by default), because a script injected into a document that is still loading is simply dropped —
 and losing it used to cost the scenario its WHOLE budget with nothing to show for it (measured
@@ -205,9 +215,10 @@ const type = (el, t) => {
   with **`open -g`**; the app starts as an **ACCESSORY** app (`activationPolicy()` in `demo.go`); and its
   window is created `Hidden: true` and ordered in by the demo bootstrap with
   `orderWindow:NSWindowBelow relativeTo:0` (on screen but at the BOTTOM of the window stack, so it neither
-  becomes key nor covers the user's work). Two traps live in that bootstrap: the show must come AFTER the
-  app's main loop starts (a main-thread dispatch before that never runs, so the driver is never injected at
-  all) and BEFORE the driver's own wait (a script injected into a loading document is simply lost). An
+  becomes key nor covers the user's work). Two ordering traps live in that bootstrap: the show must come
+  AFTER the app's runtime exists — a main-thread dispatch before `App.Run()` builds it PANICS the process
+  (see the Driver JS section; the sequence starts from `ApplicationDidFinishLaunching` for exactly this
+  reason) — and BEFORE the driver's own wait (a script injected into a loading document is simply lost). An
   interactive hand-run leaves the var unset on purpose, so `open` still brings the window forward.
 - **A covered window is no longer a paused run — demo mode keeps the page awake, deliberately.** WebKit reads
   a page's visibility off the WINDOW alone (on screen, not miniaturized, not occluded) and never off which

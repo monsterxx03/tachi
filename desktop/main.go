@@ -236,8 +236,16 @@ func main() {
 	// Optional self-test driver (TACHI_DEMO): inject JS to type & send from
 	// within the webview, so we can exercise input + state transitions without
 	// relying on system-level mouse/keyboard coordinates.
+	//
+	// It starts from ApplicationDidFinishLaunching, NOT from a goroutine that sleeps: the
+	// bootstrap's first act is a dispatch onto the main thread, and dispatching before
+	// App.Run() has built the runtime dereferences a nil platform impl inside Wails and PANICS
+	// the whole process (measured: the app appeared to "not start" — no window, no driver, no
+	// log — while a busy machine was simply slower than the sleep we used to guess with).
+	// This event is that moment, so there is nothing left to guess.
 	if demoEnabled() {
-		go runJsDemo(window)
+		app.Event.OnApplicationEvent(events.Mac.ApplicationDidFinishLaunching,
+			func(*application.ApplicationEvent) { go runJsDemo(window) })
 	}
 
 	// Run the application.

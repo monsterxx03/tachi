@@ -109,14 +109,18 @@ const (
 	awakeNoSwitch  = 3
 )
 
-// What keepPageAwake reports when the throttling could not be lifted. The first two are
+// What keepPageAwake reports when the throttling could not be lifted. All three are
 // TRANSIENT: the NSWindow and its WKWebView are created on the main thread from the Wails
-// window's own run(), i.e. after NewWithOptions has already returned, so a call that lands
-// too early legitimately finds no window yet.
+// window's own run(), i.e. after NewWithOptions has already returned, and the runtime the
+// dispatch itself needs (Wails' platform impl) does not exist until App.Run — so a call that
+// lands too early legitimately finds nothing to talk to yet.
 const (
 	reasonNoWindow  = "no native window"
 	reasonNoWebView = "webview not found in the window"
 	reasonNoSwitch  = "neither the occlusion-detection nor the timer-throttling switch answered"
+	// reasonNotReady is the answer for a dispatch issued before App.Run() has built the
+	// runtime — see awakeOnce, which is what keeps that from being fatal.
+	reasonNotReady = "app runtime not up yet"
 )
 
 // keepPageAwake lifts WebKit's occlusion throttling so the page keeps running while the
@@ -134,8 +138,8 @@ const (
 func keepPageAwake(window *application.WebviewWindow) string {
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		reason := application.InvokeSyncWithResult(func() string { return applyAwakeSwitches(window) })
-		if reason != reasonNoWindow && reason != reasonNoWebView {
+		reason := awakeOnce(window)
+		if reason != reasonNoWindow && reason != reasonNoWebView && reason != reasonNotReady {
 			return reason
 		}
 		if time.Now().After(deadline) {
@@ -143,6 +147,27 @@ func keepPageAwake(window *application.WebviewWindow) string {
 		}
 		time.Sleep(50 * time.Millisecond)
 	}
+}
+
+// awakeOnce is one dispatch, and it never panics.
+//
+// The dispatch dereferences Wails' platform impl, which is nil until App.Run() creates it, so
+// a call that lands before the runtime exists is a nil-pointer panic INSIDE the Wails call —
+// and a panic in any goroutine takes the whole process down. From outside that is invisible
+// and indistinguishable from "the app did not start": the window never loads, the driver
+// never runs, the runner reports a silent launch. It is therefore converted into the
+// retryable answer above, which is a line the driver's own report can name.
+//
+// It is a safety net, not the plan: main.go now starts the demo from
+// ApplicationDidFinishLaunching, which is the first moment the runtime is up. This is what
+// stands between a future early caller and a dead app.
+func awakeOnce(window *application.WebviewWindow) (reason string) {
+	defer func() {
+		if r := recover(); r != nil {
+			reason = reasonNotReady
+		}
+	}()
+	return application.InvokeSyncWithResult(func() string { return applyAwakeSwitches(window) })
 }
 
 // applyAwakeSwitches is ONE attempt, on the current (main) thread.
