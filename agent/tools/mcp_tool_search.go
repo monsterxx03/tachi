@@ -183,12 +183,18 @@ func (t *MCPSearchToolsTool) ExecuteContext(ctx context.Context, args string) (s
 }
 
 // schemaToPropsJSON converts PropertySchema map to JSON-compatible map.
+// A property with no usable type is emitted without the keyword — the tool
+// search result must describe the same schema the API request will carry, and
+// "type": "" is not valid JSON Schema.
 func schemaToPropsJSON(props map[string]PropertySchema) map[string]any {
 	result := make(map[string]any, len(props))
 	for name, prop := range props {
-		p := map[string]any{
-			"type":        prop.Type,
-			"description": prop.Description,
+		p := map[string]any{}
+		if prop.Type != "" {
+			p["type"] = prop.Type
+		}
+		if prop.Description != "" {
+			p["description"] = prop.Description
 		}
 		if len(prop.Enum) > 0 {
 			p["enum"] = prop.Enum

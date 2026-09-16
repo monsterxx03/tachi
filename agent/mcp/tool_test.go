@@ -359,6 +359,112 @@ func TestMCPToolProperties_UnionTypeNormalization(t *testing.T) {
 	assert.Equal(t, "missing type keyword", props["no_type"].Description)
 }
 
+func TestMCPToolProperties_ComposedSchemaType(t *testing.T) {
+	// pydantic-generated schemas declare a nullable parameter as a composition
+	// with no top-level "type" — anyOf:[{type:integer},{type:null}] for
+	// Optional[int]. Reading only the "type" keyword left such a property
+	// typeless, and the empty "type" that followed made the provider reject the
+	// ENTIRE request (every tool in the list, not just the offending one).
+	schema := mcp.ToolInputSchema{
+		Type: "object",
+		Properties: map[string]any{
+			"template_id": map[string]any{
+				"anyOf": []any{
+					map[string]any{"type": "integer"},
+					map[string]any{"type": "null"},
+				},
+				"default": nil,
+				"title":   "Template Id",
+			},
+			"label": map[string]any{
+				"oneOf": []any{
+					map[string]any{"type": "null"},
+					map[string]any{"type": "string"},
+				},
+			},
+			"nested": map[string]any{
+				"anyOf": []any{
+					map[string]any{
+						"anyOf": []any{
+							map[string]any{"type": "boolean"},
+							map[string]any{"type": "null"},
+						},
+					},
+				},
+			},
+			"narrowed": map[string]any{
+				"allOf": []any{
+					map[string]any{"$ref": "#/$defs/Node"},
+					map[string]any{"type": "object"},
+				},
+			},
+			"explicit_wins": map[string]any{
+				"type": "string",
+				"anyOf": []any{
+					map[string]any{"type": "integer"},
+					map[string]any{"type": "null"},
+				},
+			},
+			"nullable_only": map[string]any{
+				"anyOf": []any{map[string]any{"type": "null"}},
+			},
+			"ref_only": map[string]any{
+				"$ref": "#/$defs/Unresolved",
+			},
+		},
+	}
+
+	tool := MCPTool{serverTool: &mcp.Tool{Name: "get_sub_workspaces", InputSchema: schema}}
+	props := tool.Properties()
+
+	assert.Equal(t, "integer", props["template_id"].Type)
+	assert.Equal(t, "string", props["label"].Type)
+	assert.Equal(t, "boolean", props["nested"].Type)
+	assert.Equal(t, "object", props["narrowed"].Type)
+
+	// An explicit keyword is the more specific declaration — it wins.
+	assert.Equal(t, "string", props["explicit_wins"].Type)
+
+	// Nothing usable to name: the property stays typeless, and the caller
+	// (llm.ToolParameterProperty) omits the keyword rather than sending "".
+	assert.Equal(t, "", props["nullable_only"].Type)
+	assert.Equal(t, "", props["ref_only"].Type)
+}
+
+func TestPropertyType(t *testing.T) {
+	cases := []struct {
+		name string
+		in   map[string]any
+		want string
+	}{
+		{name: "plain type", in: map[string]any{"type": "string"}, want: "string"},
+		{name: "type union", in: map[string]any{"type": []any{"null", "array"}}, want: "array"},
+		{
+			name: "anyOf nullable",
+			in: map[string]any{"anyOf": []any{
+				map[string]any{"type": "integer"}, map[string]any{"type": "null"},
+			}},
+			want: "integer",
+		},
+		{
+			name: "first branch names no type",
+			in: map[string]any{"anyOf": []any{
+				map[string]any{"$ref": "#/$defs/X"}, map[string]any{"type": "number"},
+			}},
+			want: "number",
+		},
+		{name: "only null", in: map[string]any{"anyOf": []any{map[string]any{"type": "null"}}}, want: ""},
+		{name: "no type keyword", in: map[string]any{"description": "x"}, want: ""},
+		{name: "badly shaped branches", in: map[string]any{"anyOf": "not-a-list"}, want: ""},
+		{name: "non-map branch", in: map[string]any{"oneOf": []any{"string"}}, want: ""},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			assert.Equal(t, c.want, propertyType(c.in))
+		})
+	}
+}
+
 func TestTypeKeyword(t *testing.T) {
 	cases := []struct {
 		name string
@@ -366,6 +472,7 @@ func TestTypeKeyword(t *testing.T) {
 		want string
 	}{
 		{name: "plain string", in: "array", want: "array"},
+		{name: "plain null", in: "null", want: ""},
 		{name: "union with null", in: []any{"null", "array"}, want: "array"},
 		{name: "union null first", in: []any{"null", "string", "null"}, want: "string"},
 		{name: "union only null", in: []any{"null"}, want: ""},

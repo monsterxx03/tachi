@@ -65,10 +65,13 @@ func (t MCPTool) Properties() map[string]tools.PropertySchema {
 
 		ps := tools.PropertySchema{}
 
-		// JSON Schema allows "type" to be an array union (e.g. ["null","array"]),
-		// but LLM tool APIs only accept a single string type. Normalize so the
-		// LLM never receives an empty/invalid type keyword.
-		if typ := typeKeyword(propMap["type"]); typ != "" {
+		// JSON Schema allows "type" to be an array union (e.g. ["null","array"])
+		// or to be replaced by a composition (pydantic emits
+		// anyOf:[{type:integer},{type:null}] for Optional[int]), but LLM tool
+		// APIs only accept a single string type. Resolve both forms so the
+		// property keeps its real type instead of reaching the LLM as an empty
+		// one (see propertyType).
+		if typ := propertyType(propMap); typ != "" {
 			ps.Type = typ
 		}
 
@@ -132,16 +135,56 @@ func stringEnum(v any) ([]string, bool) {
 // keyword. JSON Schema permits the union form (e.g. ["null","array"]), but
 // LLM tool APIs only accept a single string type — so the union is collapsed
 // to its first non-"null" member (["null","array"] → "array", which preserves
-// the useful type while dropping the nullable marker). Returns "" when the
-// keyword is missing or contains no usable type.
+// the useful type while dropping the nullable marker). A bare "null" counts as
+// absent too: a parameter whose only accepted type is null has no value to
+// pass, and sending "type":"null" is as unhelpful as sending "". Returns ""
+// when the keyword is missing or contains no usable type.
 func typeKeyword(v any) string {
 	switch t := v.(type) {
 	case string:
+		if t == "null" {
+			return ""
+		}
 		return t
 	case []any:
 		for _, member := range t {
 			if s, ok := member.(string); ok && s != "null" {
 				return s
+			}
+		}
+	}
+	return ""
+}
+
+// composedTypeKeywords are the JSON Schema keywords that replace a "type"
+// outright with a union of subschemas: anyOf/oneOf directly, allOf because a
+// narrowing declaration (a $ref plus the constrained type) puts it there.
+var composedTypeKeywords = []string{"anyOf", "oneOf", "allOf"}
+
+// propertyType resolves the model-facing "type" of an MCP property schema. A
+// plain "type" keyword wins; otherwise the type is read out of a composition,
+// recursively, taking each union's first non-null member. Servers do serve a
+// parameter as anyOf:[{type:integer},{type:null}] with no top-level "type"
+// (pydantic's Optional[int]), and one property left typeless is not a local
+// problem: an empty "type" is invalid JSON Schema, so the provider rejects the
+// whole request — every tool in the list goes down with it. Returns "" when no
+// usable type is named, and callers must then omit the keyword.
+func propertyType(propMap map[string]any) string {
+	if typ := typeKeyword(propMap["type"]); typ != "" {
+		return typ
+	}
+	for _, keyword := range composedTypeKeywords {
+		branches, ok := propMap[keyword].([]any)
+		if !ok {
+			continue
+		}
+		for _, branch := range branches {
+			b, ok := branch.(map[string]any)
+			if !ok {
+				continue
+			}
+			if typ := propertyType(b); typ != "" {
+				return typ
 			}
 		}
 	}

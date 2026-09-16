@@ -227,6 +227,9 @@ func TestMCPSearchToolsTool_SchemaToPropsJSON(t *testing.T) {
 			Description: "Count field",
 			Items:       map[string]any{"type": "number"},
 		},
+		"untyped": {
+			Description: "no type keyword",
+		},
 	}
 
 	result := schemaToPropsJSON(props)
@@ -245,6 +248,13 @@ func TestMCPSearchToolsTool_SchemaToPropsJSON(t *testing.T) {
 	countMap := result["count"].(map[string]any)
 	if countMap["items"] == nil {
 		t.Error("expected items for count property")
+	}
+
+	// A typeless property must not report "type": "" — the schema shown to the
+	// model has to match what the API request will carry.
+	untypedMap := result["untyped"].(map[string]any)
+	if _, ok := untypedMap["type"]; ok {
+		t.Errorf("expected no type key for a typeless property, got %v", untypedMap)
 	}
 }
 

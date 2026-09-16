@@ -96,8 +96,12 @@ type ChatOptions struct {
 }
 
 // ToolParameterProperty describes a single property in a tool's parameter schema.
+// Type is omitted when empty on purpose: a property the MCP server declared
+// without a usable type (a $ref-only schema, say) must serialize as a schema
+// that constrains nothing — "type": "" is not valid JSON Schema and makes the
+// provider reject the whole request.
 type ToolParameterProperty struct {
-	Type        string   `json:"type"`
+	Type        string   `json:"type,omitempty"`
 	Description string   `json:"description"`
 	Enum        []string `json:"enum,omitempty"`    // Allowed values — mirrors tools.PropertySchema.Enum
 	Format      string   `json:"format,omitempty"`  // JSON Schema format hint (e.g. "date-time", "uri")

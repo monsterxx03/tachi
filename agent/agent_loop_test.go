@@ -535,6 +535,53 @@ func TestBuildLLMTools_ConstraintPassthrough(t *testing.T) {
 	assert.Equal(t, map[string]any{"type": "string", "enum": []string{"a", "b"}}, tags.Items)
 }
 
+func TestBuildLLMTools_EmptyTypeNeverReachesTheProvider(t *testing.T) {
+	// A property whose MCP schema named no usable type (a $ref-only schema, or
+	// a union of only nulls) must serialize WITHOUT the "type" keyword: the
+	// empty string is invalid JSON Schema, and one bad property makes the
+	// provider reject the whole request — taking every tool in the list with
+	// it, not just the offending tool.
+	schemas := []agenttools.Schema{
+		{
+			Name:        "mcp__tapd__get_sub_workspaces",
+			Description: "List sub workspaces",
+			Parameters: agenttools.ParametersSchema{
+				Type: "object",
+				Properties: map[string]agenttools.PropertySchema{
+					"workspace_id": {Type: "integer"},
+					"template_id":  {Description: "no type keyword"},
+				},
+				Required: []string{"workspace_id"},
+			},
+		},
+	}
+
+	llmTools := buildLLMTools(schemas)
+	require.Len(t, llmTools, 1)
+
+	raw, err := json.Marshal(llmTools[0])
+	require.NoError(t, err)
+
+	serialized := string(raw)
+	assert.NotContains(t, serialized, `"type":""`)
+	assert.NotContains(t, serialized, `"type": ""`)
+
+	// The typeless property keeps its description, and the typed one is intact.
+	var decoded struct {
+		Parameters struct {
+			Type       string                    `json:"type"`
+			Properties map[string]map[string]any `json:"properties"`
+			Required   []string                  `json:"required"`
+		} `json:"parameters"`
+	}
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+
+	assert.Equal(t, "object", decoded.Parameters.Type)
+	assert.Equal(t, map[string]any{"description": "no type keyword"}, decoded.Parameters.Properties["template_id"])
+	assert.Equal(t, "integer", decoded.Parameters.Properties["workspace_id"]["type"])
+	assert.Equal(t, []string{"workspace_id"}, decoded.Parameters.Required)
+}
+
 func TestBuildLLMTools_Empty(t *testing.T) {
 	llmTools := buildLLMTools(nil)
 	assert.Empty(t, llmTools)
