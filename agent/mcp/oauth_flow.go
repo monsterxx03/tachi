@@ -43,15 +43,77 @@ func oauthRedirectURI(srv *config.MCPServerConfig) string {
 	return fmt.Sprintf("http://%s:%d%s", host, port, oauthCallbackPath)
 }
 
+// ensureCallbackAddr fixes the callback host and port on the config BEFORE anything is
+// registered or exchanged.
+//
+// The order is load-bearing: dynamic client registration sends the redirect_uri (RFC 7591),
+// and the token exchange sends it again — a port picked AFTER registration would give the
+// two different values, and a server that validates redirect_uri (which is the point of
+// registering it) rejects the exchange. The recorded value is also what the user sees in
+// the consent screen, so picking late made the flow look like it was asking for a
+// different callback than the one it was listening on.
+//
+// A failure is left to the caller: an address that cannot be bound means no listener at
+// all, and the manual path still gets a usable redirect_uri from oauthRedirectURI's
+// default.
+func ensureCallbackAddr(srv *config.MCPServerConfig) error {
+	if srv.OAuth.CallbackHost == "" {
+		srv.OAuth.CallbackHost = "127.0.0.1"
+	}
+	if srv.OAuth.CallbackPort != 0 {
+		return nil
+	}
+	port, err := findAvailablePort(srv.OAuth.CallbackHost)
+	if err != nil {
+		return err
+	}
+	srv.OAuth.CallbackPort = port
+	return nil
+}
+
+// OAuthPhase is where an authorization stands, as far as a caller can act on it.
+type OAuthPhase string
+
+const (
+	// OAuthPhaseBrowser: the authorization URL was handed to the user's browser, and
+	// Tachi is listening for the redirect on the callback port.
+	OAuthPhaseBrowser OAuthPhase = "browser"
+	// OAuthPhaseWaiting: the listener is up but no browser could be opened — the user
+	// has to open AuthURL themselves.
+	OAuthPhaseWaiting OAuthPhase = "waiting"
+	// OAuthPhaseManual: there is no listener at all (the callback port range is taken),
+	// so the redirect never arrives and the only way through is pasting the URL back
+	// into CompleteManualAuth.
+	OAuthPhaseManual OAuthPhase = "manual"
+)
+
+// OAuthProgress is one step of an authorization, reported as it happens.
+//
+// AuthURL is set whenever the user has something to open or copy, which is every phase
+// but "done"; Message is the sentence a TEXT frontend shows (the TUI prints it verbatim).
+// A GUI frontend is expected to read the fields instead: it has a button to offer and a
+// place to put the URL, and it must not have to parse prose to find them.
+type OAuthProgress struct {
+	Phase   OAuthPhase
+	AuthURL string
+	Message string
+}
+
 // OAuthRequiredError signals that a server requires OAuth2 authorization
 // before tools can be discovered. The caller should run the OAuth flow
 // and then retry the connection.
+//
+// The message names both frontends' entry points on purpose: it reaches a user
+// whichever one they are in (the TUI shows it, the desktop panel shows it beside the
+// button that fixes it), and a hint that points at the other frontend is worse than
+// no hint at all.
 type OAuthRequiredError struct {
 	ServerName string
 }
 
 func (e *OAuthRequiredError) Error() string {
-	return fmt.Sprintf("MCP server %q requires OAuth authorization — run /mcp auth %s to authorize", e.ServerName, e.ServerName)
+	return fmt.Sprintf("MCP server %q requires OAuth authorization (TUI: `/mcp auth %s`; desktop: 面板里的「授权」按钮)",
+		e.ServerName, e.ServerName)
 }
 
 // RunOAuthFlow performs the interactive OAuth2 flow for an MCP server.
@@ -60,11 +122,38 @@ func (e *OAuthRequiredError) Error() string {
 //
 // If ClientID is not configured, dynamic client registration (DCR) is
 // attempted automatically. PKCE is always enabled.
-func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn func(string)) error {
+//
+// statusFn, when non-nil, receives the flow's own progress sentences (the TUI's
+// entry point). A frontend that renders structure instead of prose uses
+// RunOAuthFlowWithProgress and reads the fields.
+func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, statusFn func(string)) error {
+	return RunOAuthFlowWithProgress(ctx, srv, func(p OAuthProgress) {
+		if statusFn != nil && p.Message != "" {
+			statusFn(p.Message)
+		}
+	})
+}
+
+// RunOAuthFlowWithProgress is RunOAuthFlow with a structured progress callback.
+//
+// It exists because the two things a GUI needs — the authorization URL and the fact that
+// it now has to be opened BY HAND — are already known at every step, and the text
+// frontends' way of learning them is a sentence. Recovering a URL by parsing that
+// sentence is the coupling this callback removes.
+func RunOAuthFlowWithProgress(ctx context.Context, srv *config.MCPServerConfig, progress func(OAuthProgress)) error {
+	if progress == nil {
+		progress = func(OAuthProgress) {}
+	}
 	// Initialize OAuth config if not present — the whole flow works with
 	// auto-discovery + DCR, no manual configuration required.
 	if srv.OAuth == nil {
 		srv.OAuth = &config.MCPOAuthConfig{}
+	}
+	// The callback address first: registration and the token exchange both send the
+	// redirect_uri, so it has to be decided before either (see ensureCallbackAddr).
+	if err := ensureCallbackAddr(srv); err != nil {
+		logger.FromContext(ctx).Warn(ctx, "MCP: no free OAuth callback port, using the default",
+			"server", srv.Name, "err", err)
 	}
 
 	store, err := NewFileTokenStore(srv.TokenStorageName())
@@ -77,14 +166,14 @@ func RunOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn fun
 	}
 
 	// 1) Browser callback
-	if err := tryBrowserCallback(ctx, srv, runErrFn); err == nil {
+	if err := tryBrowserCallback(ctx, srv, store, progress); err == nil {
 		return nil
 	} else {
 		logger.FromContext(ctx).Error(ctx, "MCP: browser callback failed", err, "server", srv.Name)
 	}
 
 	// 2) Manual fallback
-	return startManualFlow(ctx, srv, runErrFn)
+	return startManualFlow(ctx, srv, store, progress)
 }
 
 // RunManualOAuthFlow performs the OAuth2 flow without attempting to open a
@@ -99,6 +188,12 @@ func RunManualOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErr
 	if srv.OAuth == nil {
 		srv.OAuth = &config.MCPOAuthConfig{}
 	}
+	// Same reason as RunOAuthFlowWithProgress: the redirect_uri is registered, so the
+	// address is fixed before registration.
+	if err := ensureCallbackAddr(srv); err != nil {
+		logger.FromContext(ctx).Warn(ctx, "MCP: no free OAuth callback port, using the default",
+			"server", srv.Name, "err", err)
+	}
 
 	store, err := NewFileTokenStore(srv.TokenStorageName())
 	if err != nil {
@@ -109,7 +204,11 @@ func RunManualOAuthFlow(ctx context.Context, srv *config.MCPServerConfig, runErr
 		return fmt.Errorf("DCR: %w", err)
 	}
 
-	return startManualFlow(ctx, srv, runErrFn)
+	return startManualFlow(ctx, srv, store, func(p OAuthProgress) {
+		if runErrFn != nil && p.Message != "" {
+			runErrFn(p.Message)
+		}
+	})
 }
 
 // CompleteManualAuth finishes the manual OAuth flow by exchanging the
@@ -202,6 +301,11 @@ func ensureClientID(ctx context.Context, srv *config.MCPServerConfig, store *Fil
 		PKCEEnabled:           true,
 		AuthServerMetadataURL: asMetaURL,
 		TokenStore:            store,
+		// The registered redirect_uri. It is sent here (RFC 7591) and again at the
+		// token exchange, and a server that validates it — which is why it is
+		// registered at all — rejects an exchange whose value differs. Same value,
+		// same source: oauthRedirectURI.
+		RedirectURI: oauthRedirectURI(srv),
 	})
 	handler.SetBaseURL(stripQueryFragment(srv.URL))
 
@@ -593,12 +697,7 @@ func (s *oauthCallbackServer) Wait(ctx context.Context) (string, error) {
 
 // --- browser flow ---
 
-func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, statusFn func(string)) error {
-	store, err := NewFileTokenStore(srv.TokenStorageName())
-	if err != nil {
-		return fmt.Errorf("token store: %w", err)
-	}
-
+func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, store *FileTokenStore, progress func(OAuthProgress)) error {
 	baseURL := stripQueryFragment(srv.URL)
 
 	if srv.OAuth.CallbackHost == "" {
@@ -640,10 +739,23 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, status
 		return fmt.Errorf("auth URL: %w", err)
 	}
 
-	// Report the auth URL to the TUI so the user can see/copy it.
-	if statusFn != nil {
-		statusFn(fmt.Sprintf("Auth URL (opening browser):\n%s", authURL))
+	// The state + verifier are persisted HERE too, not only on the manual path, because
+	// "the browser is open" and "the callback will reach this process" are different
+	// facts: the user can end up staring at a redirect URL their browser cannot deliver
+	// (a callback port behind a firewall, a browser that refuses the redirect, a paste
+	// out of the address bar). Pasting it back needs exactly these two values, and the
+	// alternative — waiting five minutes for a callback that never comes — is the
+	// behavior this saves them from.
+	if err := store.SavePendingState(ctx, &OAuthPendingState{State: state, CodeVerifier: codeVerifier}); err != nil {
+		logger.FromContext(ctx).Warn(ctx, "MCP: failed to persist pending OAuth state", "server", srv.Name, "err", err)
 	}
+
+	// Report the auth URL so the user (or a GUI) can see, copy, or open it by hand.
+	progress(OAuthProgress{
+		Phase:   OAuthPhaseBrowser,
+		AuthURL: authURL,
+		Message: fmt.Sprintf("Auth URL (opening browser):\n%s", authURL),
+	})
 
 	cb, err := startOAuthCallbackServer(srv, state)
 	if err != nil {
@@ -653,7 +765,7 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, status
 
 	// Open the browser. If that fails (e.g. headless server), bail immediately
 	// rather than waiting 5 minutes for a callback that will never arrive.
-	if err := openBrowser(authURL); err != nil {
+	if err := BrowserOpener(authURL); err != nil {
 		return fmt.Errorf("cannot open browser: %w", err)
 	}
 
@@ -670,12 +782,7 @@ func tryBrowserCallback(ctx context.Context, srv *config.MCPServerConfig, status
 
 // --- manual flow ---
 
-func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn func(string)) error {
-	store, err := NewFileTokenStore(srv.TokenStorageName())
-	if err != nil {
-		return err
-	}
-
+func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, store *FileTokenStore, progress func(OAuthProgress)) error {
 	// Resolve callback address before building the OAuth config so the
 	// redirect_uri in the auth request matches the actual listener.
 	if srv.OAuth.CallbackHost == "" {
@@ -687,7 +794,7 @@ func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn 
 			// Can't listen anywhere — skip straight to pure manual.
 			// We still need the oauthCfg to build the auth URL, but
 			// there's no point trying to listen.
-			return deliverManualInstructions(runErrFn, srv.Name, buildManualAuthURL(ctx, srv, store))
+			return deliverManualInstructions(progress, srv.Name, buildManualAuthURL(ctx, srv, store))
 		}
 		srv.OAuth.CallbackPort = p
 	}
@@ -722,16 +829,20 @@ func startManualFlow(ctx context.Context, srv *config.MCPServerConfig, runErrFn 
 
 	cb, err := startOAuthCallbackServer(srv, state)
 	if err != nil {
-		return deliverManualInstructions(runErrFn, srv.Name, authURL)
+		return deliverManualInstructions(progress, srv.Name, authURL)
 	}
 	defer cb.Close()
 
 	// Show auth URL and waiting status in one message.
-	runErrFn(fmt.Sprintf("Auth URL:\n%s\n\nWaiting for callback...", authURL))
+	progress(OAuthProgress{
+		Phase:   OAuthPhaseWaiting,
+		AuthURL: authURL,
+		Message: fmt.Sprintf("Auth URL:\n%s\n\nWaiting for callback...", authURL),
+	})
 
 	code, err := cb.Wait(ctx)
 	if errors.Is(err, ErrOAuthCallbackTimeout) {
-		return deliverManualInstructions(runErrFn, srv.Name, authURL)
+		return deliverManualInstructions(progress, srv.Name, authURL)
 	}
 	if err != nil {
 		return err
@@ -775,18 +886,25 @@ func buildManualAuthURL(ctx context.Context, srv *config.MCPServerConfig, store 
 	return authURL
 }
 
-// deliverManualInstructions informs the user how to complete the OAuth flow
-// by pasting the redirect URL back.
-func deliverManualInstructions(runErrFn func(string), serverName, authURL string) error {
-	runErrFn(fmt.Sprintf(
-		"**%s** requires OAuth authorization.\n\n"+
-			"1. Open this URL:\n   %s\n\n"+
-			"2. Complete authorization.\n\n"+
-			"3. **Copy the full URL** from your browser's address bar\n"+
-			"   (the page may not load — that's expected).\n\n"+
-			"4. Run: `/mcp auth %s <pasted-url>`",
-		serverName, authURL, serverName,
-	))
+// deliverManualInstructions tells the user how to complete the OAuth flow
+// by pasting the redirect URL back, and reports it as the manual phase.
+//
+// It is also the flow's terminal "nothing else can be tried" point, which is why it
+// returns an OAuthRequiredError: the caller's job is to get a URL out of the user, not
+// to retry anything.
+func deliverManualInstructions(progress func(OAuthProgress), serverName, authURL string) error {
+	progress(OAuthProgress{
+		Phase:   OAuthPhaseManual,
+		AuthURL: authURL,
+		Message: fmt.Sprintf(
+			"**%s** requires OAuth authorization.\n\n"+
+				"1. Open this URL:\n   %s\n\n"+
+				"2. Complete authorization.\n\n"+
+				"3. **Copy the full URL** from your browser's address bar\n"+
+				"   (the page may not load — that's expected).\n\n"+
+				"4. Hand it back to Tachi: TUI `/mcp auth %s <pasted-url>`, desktop 用 MCP 面板里的授权输入框。",
+			serverName, authURL, serverName),
+	})
 	return &OAuthRequiredError{ServerName: serverName}
 }
 
@@ -859,7 +977,17 @@ func findAvailablePort(host string) (int, error) {
 	return 0, fmt.Errorf("no port in %d-%d", oauthLocalPortStart, oauthLocalPortEnd-1)
 }
 
-func openBrowser(u string) error {
+// BrowserOpener opens a URL in the user's browser. It is a VARIABLE because one caller
+// has to replace it: a scripted desktop run (the smoke suite, a demo recording) must not
+// steal the front from whoever is at the machine, so it swaps in a headless opener that
+// just fetches the URL — which is exactly what a browser would do first, and enough for
+// an authorization endpoint that redirects straight back to the callback listener.
+//
+// Everything else calls it as-is. Nothing here knows about demo mode: the desktop package
+// owns that flag and does the swap at startup (see desktop/demo.go).
+var BrowserOpener = defaultBrowserOpener
+
+func defaultBrowserOpener(u string) error {
 	var cmd *exec.Cmd
 	switch runtime.GOOS {
 	case "darwin":

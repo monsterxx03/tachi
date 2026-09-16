@@ -16,6 +16,7 @@ split + index when a subject grows) apply to every split of it, this one include
 | **Desktop Smoke Verification** | you changed anything a driver can see (UI, events, a binding, an end-to-end flow) |
 | **Desktop Build & Signing** | you build/package the app, or debug notifications/TCC |
 | **Desktop Backend (bindings & paths)** | you touch `AgentService` — a method, a binding, a session path, an open/reveal action |
+| **Desktop MCP Auth** | you touch MCP authorization, the MCP panel's per-server state, or the deferred-tools pool/reminder path |
 | **Desktop Skills** | you touch skill discovery, or anything that changes which tree a session works in |
 | **Desktop Turn History** | you touch how a turn's history is assembled, merged or continued (the interrupted-turn path) |
 | **Desktop UI State** | you change the frontend: which module owns what, and the bug each convention prevents |
@@ -410,6 +411,50 @@ const type = (el, t) => {
   was a button that could not deliver; the TUI's prompt labels the choice `[a]lways(session)`). The switch
   sits BELOW the deny checks in `CheckBash` on purpose — "stop asking me" must never become "run what I
   forbade", and `perm-session` pins both halves.
+
+## Desktop MCP Auth (an OAuth2 server the panel can authorize)
+
+- **The panel's per-server state comes from the BACKEND, never from the panel.** `MCPServerVO.NeedsAuth` is
+  set wherever a connect attempt came back `*mcp.OAuthRequiredError` — at startup (`populateSharedMCP`) as
+  well as on a manual enable — because a server that wants a token otherwise looks exactly like one that is
+  down, and the one action that fixes it had nowhere to appear. `desktopApp`'s `mcpAuth*` fields carry their
+  own lock (never `d.mu`: they are written from a background authorization goroutine) and hold both the
+  in-flight flag (two flows would race the same callback port and the same token file) and the running flow's
+  cancel.
+- **`AuthorizeMCPServer(name)` starts the flow and returns "ok"; the progress arrives as `agent:mcp_auth`.** It
+  has to: the flow needs a browser and often a human, so there is no answer to wait for. `CompleteMCPServerAuth(name, url)`
+  is the paste-back path (`mcp.CompleteManualAuth`), and it CANCELS an in-flight flow first — both ways out
+  spend the same single-use authorization code.
+- **`enableMCPServer` is the ONE enable path.** The panel's toggle and the end of an authorization both go
+  through it, so an authorized server ends up exactly as connected as a toggled one: tools into the shared
+  pool plus `NotifyDeferredToolsAdded` for every live agent (that reminder fires at most once per session, so
+  a server connected mid-session is invisible to the model without it; the smoke scenario asserts the model
+  really was told). A new "connect a server" path belongs inside it, not beside it.
+- **The browser is a variable (`mcp.BrowserOpener`), and a scripted run replaces it.** `TACHI_DEMO_BROWSER_FETCH=1`
+  (desktop/demo.go, installed before the agent is built) turns "open the user's browser" into one HTTP GET —
+  what a browser does first anyway, and enough against an authorization endpoint that redirects straight back
+  to the callback listener. A smoke run must never open a window on the machine it is running on; a demo
+  RECORDING must, which is why this is a flag of its own rather than part of `TACHI_DEMO=1`.
+- **The callback address is fixed BEFORE anything is registered or exchanged** (`mcp.ensureCallbackAddr`):
+  dynamic client registration sends the redirect_uri (RFC 7591) and the token exchange sends it again, so a
+  port chosen after registration hands the two different values and a server that validates redirect_uri
+  rejects the exchange. For the same reason the flow persists its state + PKCE verifier on the BROWSER path
+  too, not only on the manual one: pasting the redirect URL out of the address bar has to work while the
+  callback is still pending.
+- **A 401 is one fact however it arrives.** `mcp.isAuthRequired` maps both transport sentinels
+  (`ErrOAuthAuthorizationRequired` from the OAuth handler, `ErrAuthorizationRequired` from a rejected token) to
+  `OAuthRequiredError` at the `Initialize` AND the `ListTools` step. Mapping only the later one left an
+  unauthenticated server reporting a plain connect error, so no frontend could offer the fix.
+- **The fixture is `itest/mcpauth/`, and both halves of the feature run against it.** One process, one loopback
+  origin: 401 + `WWW-Authenticate` → PRM → AS metadata → DCR → `/authorize` (302 with a code) → `/token`
+  (it refuses a verifier that does not match the challenge) → an MCP endpoint that requires the bearer. The
+  desktop's unit test drives it in-process; the `mcp-auth` smoke scenario starts it in the runner and points the
+  sandbox's `mcp.json` at it (its port is only known at run time, so that file is written per run). `desktop/`
+  reaches the package through its module `replace`: one fake, not two.
+- **The smoke scenario delays the consent step** (`mcpauth.WithAuthorizeDelay` + the runner's `mcpConsentDelay`).
+  A flow that completes in microseconds can only be asserted on after the fact — the panel's WAITING state (the
+  URL to open, the paste box) would never be on screen when the driver looks. The delay is what makes the state
+  the flow really lives in observable.
 
 ## Desktop Skills (the store belongs to the SESSION, never to the process cwd)
 

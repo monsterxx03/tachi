@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"log"
 	"strings"
 
@@ -172,6 +173,16 @@ func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 	defer mgr.MarkInitDone()
 	_, _, errs := mgr.PopulateFromConnect(ctx, d.cfg)
 	for _, err := range errs {
+		// A server that answers "OAuth authorization required" is not a load error to
+		// shrug off: it is the one failure the user can FIX from the panel, so it is
+		// recorded where the panel reads it (NeedsAuth → the 需要授权 badge and the
+		// 授权 button). Without this the badge would only appear after a manual toggle,
+		// i.e. after the user had already tried the thing that cannot work.
+		if oauthErr, ok := errors.AsType[*mcp.OAuthRequiredError](err); ok {
+			d.markMCPNeedsAuth(oauthErr.ServerName, true)
+			log.Printf("desktop MCP: %s requires OAuth authorization", oauthErr.ServerName)
+			continue
+		}
 		log.Printf("desktop MCP: load error: %v", err)
 	}
 }

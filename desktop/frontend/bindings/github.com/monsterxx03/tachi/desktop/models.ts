@@ -299,6 +299,15 @@ export interface MCPServerVO {
     "type": string;
     "connected": boolean;
     "tools": MCPToolVO[] | null;
+
+    /**
+     * NeedsAuth is true when this server answered a connection attempt with "OAuth
+     * authorization required". It exists so the panel can offer the button AND say why
+     * — a server that needs authorizing is otherwise indistinguishable from one that is
+     * down, which is what made this feature unreachable: the failure had nowhere to
+     * show up.
+     */
+    "needsAuth": boolean;
 }
 
 /**

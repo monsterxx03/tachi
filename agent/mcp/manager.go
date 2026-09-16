@@ -487,6 +487,17 @@ func (m *Manager) ConnectAll(ctx context.Context, servers []config.MCPServerConf
 	return tools, errs
 }
 
+// isAuthRequired classifies the two transport sentinels that both mean "this server wants
+// an OAuth2 token": ErrOAuthAuthorizationRequired is what the OAuth handler returns when it
+// has none to attach, and ErrAuthorizationRequired is what the server's own 401 becomes
+// when a token was attached and rejected. They are one user-visible fact, so they must not
+// take two different paths through the code — the difference is invisible from the outside
+// (whether an OAuth handler happened to be configured) and the two branches drift.
+func isAuthRequired(err error) bool {
+	return errors.Is(err, transport.ErrOAuthAuthorizationRequired) ||
+		errors.Is(err, transport.ErrAuthorizationRequired)
+}
+
 // connect establishes a connection to a single MCP server and discovers its tools.
 func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]MCPTool, error) {
 	timeout := time.Duration(srv.Timeout)
@@ -519,6 +530,14 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 
 	if _, err := c.Initialize(ctx, initReq); err != nil {
 		c.Close()
+		// A 401 can arrive here rather than at ListTools — it is the FIRST request that
+		// meets it — and it is the same fact: this server wants an OAuth2 token.
+		// Mapping only the later failure left an unauthenticated HTTP server reporting
+		// "authorization required" as a plain connect error, so no frontend could offer
+		// the one action that fixes it.
+		if isAuthRequired(err) {
+			return nil, &OAuthRequiredError{ServerName: srv.Name}
+		}
 		logger.FromContext(ctx).Error(ctx, "MCP: server initialize failed", err, "server", srv.Name, "type", srv.Type, "url", srv.URL)
 		return nil, fmt.Errorf("initialize failed: %w", err)
 	}
@@ -529,10 +548,10 @@ func (m *Manager) connect(ctx context.Context, srv *config.MCPServerConfig) ([]M
 	toolsResult, err := c.ListTools(ctx, mcp.ListToolsRequest{})
 	if err != nil {
 		c.Close()
-		// If OAuth is configured but the token isn't available yet,
-		// the transport returns ErrOAuthAuthorizationRequired.
-		// Give a user-friendly hint.
-		if errors.Is(err, transport.ErrOAuthAuthorizationRequired) {
+		// The token this client holds was not accepted (or there is none): the transport
+		// says so with one of two sentinels depending on whether an OAuth handler was
+		// attached, and both of them mean the same thing to a user.
+		if isAuthRequired(err) {
 			return nil, &OAuthRequiredError{ServerName: srv.Name}
 		}
 		logger.FromContext(ctx).Error(ctx, "MCP: server list tools failed", err, "server", srv.Name, "type", srv.Type)

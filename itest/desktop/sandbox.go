@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 )
 
@@ -28,6 +29,10 @@ type sandbox struct {
 	appPath string
 	home    string
 	work    string
+	// browserFetch asks the app to replace the MCP OAuth browser with a headless fetch
+	// (see launch): set by scenarios that authorize an MCP server, because a run must not
+	// open a window on the machine it is running on.
+	browserFetch bool
 }
 
 // smokeBundleName is deliberately unique: `open -a <path>` matches bundles and
@@ -133,6 +138,29 @@ herdr:
 	return os.WriteFile(filepath.Join(sb.home, ".tachi", "config.yaml"), []byte(cfg), 0o600)
 }
 
+// writeMCPConfig points the app at the scenario's OAuth-protected MCP server.
+//
+// mcp.json rather than config.yaml, because that is where MCP servers live (config.yaml's
+// mcp_servers field is ignored on purpose) — and the file is written per run because the
+// fixture binds a random loopback port. No "oauth" block: the point of the scenario is the
+// path a user actually takes, which is discovering that the server needs authorizing.
+func (sb *sandbox) writeMCPConfig(srv *mcpauth.Server) error {
+	cfg := map[string]any{
+		"servers": []map[string]any{{
+			"name": "oauth-fixture",
+			"type": "http",
+			"url":  srv.MCPURL,
+			// A zero timeout would expire the connect context immediately.
+			"timeout": "30s",
+		}},
+	}
+	data, err := json.MarshalIndent(cfg, "", "  ")
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(sb.home, ".tachi", "mcp.json"), data, 0o600)
+}
+
 // seedFiles writes the scenario's working-directory fixtures.
 func (sb *sandbox) seedFiles(files map[string]string) error {
 	for name, content := range files {
@@ -190,12 +218,25 @@ func (sb *sandbox) writeDriver(driversDir, scenarioName, sinkURL string) (string
 // hidden-window accessory app so nothing else activates it either — see activationPolicy and
 // demoNoActivate in desktop/demo.go, which spell out what each one was measured to fix.
 func (sb *sandbox) launch() error {
-	return run("open", "-g", sb.appPath,
-		"--env", "HOME="+sb.home,
+	env := []string{
+		"--env", "HOME=" + sb.home,
 		"--env", "TACHI_DEMO=1",
 		"--env", "TACHI_DEMO_NO_ACTIVATE=1",
-		"--env", "TACHI_DEMO_JS="+filepath.Join(sb.dir, "driver.js"),
-	)
+		"--env", "TACHI_DEMO_JS=" + filepath.Join(sb.dir, "driver.js"),
+	}
+	if sb.browserFetch {
+		// The MCP OAuth flow would otherwise open a real browser — on the machine this run
+		// is happening on. The app swaps in a headless fetch (desktop/demo.go), which is
+		// enough against the fixture's authorization endpoint: it redirects straight back
+		// to the callback listener the app already has up.
+		//
+		// The name is duplicated here rather than shared: the app's copy lives in
+		// desktop/demo.go, and the runner cannot import the app's own package. Same reason
+		// smokeExecName is duplicated (see the bundle rules).
+		env = append(env, "--env", "TACHI_DEMO_BROWSER_FETCH=1")
+	}
+	args := append([]string{"open", "-g", sb.appPath}, env...)
+	return run(args[0], args[1:]...)
 }
 
 // killAll stops any smoke instance. The executable name is unique to the sandbox, so this

@@ -28,7 +28,7 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
-import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth } from './agentEvents'
 import { useComposer, Composer, imeActive } from './composer'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
@@ -1061,7 +1061,10 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     }
   }, [refreshWorkspace])
 
-  // refreshMCP reloads the MCP servers/tools + profile for the current session.
+  // refreshMCP reloads the MCP servers/tools + profile for the current session. It is also
+  // what an authorization's "ok" event triggers (useMCPAuth): the panel holds each row's
+  // connected flag and tool list by value, so the row would otherwise keep saying 需要授权
+  // after the server came up.
   const refreshMCP = useCallback(async () => {
     try {
       const sv = (await (AgentService as any).ListMCPServers?.()) || []
@@ -1070,12 +1073,35 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
       if (prof) setMcpProfile({ active: prof.active || '', available: prof.available || [] })
     } catch { /* ignore */ }
   }, [])
+  const { auth: mcpAuth, setAuth: setMCPAuth, clearAuth: clearMCPAuth } = useMCPAuth(refreshMCP)
   const toggleServer = useCallback(async (name: string, enabled: boolean) => {
     setMcpLoading((p) => ({ ...p, [name]: true }))
-    try { await (AgentService as any).SetMCPServerEnabled?.(name, enabled) } catch { /* ignore */ }
+    // The answer is a string, not a boolean: the backend says WHY it refused, and
+    // discarding it is what made 启用 look like a no-op on a server that needs
+    // authorization (the one failure the user can do something about). It lands in the
+    // same per-server slot the authorization progress uses, so the row shows the reason
+    // exactly where it shows the fix.
+    const res = await (AgentService as any).SetMCPServerEnabled?.(name, enabled).catch((e: unknown) => String(e))
+    if (res && res !== 'ok') setMCPAuth(name, { phase: 'error', message: res, authUrl: '' })
+    else clearMCPAuth(name)
     refreshMCP()
     setMcpLoading((p) => ({ ...p, [name]: false }))
-  }, [refreshMCP])
+  }, [refreshMCP, setMCPAuth, clearMCPAuth])
+  // authorizeServer starts the OAuth flow. The call returns as soon as the flow is
+  // running — the progress (and the URL to open) arrives as agent:mcp_auth events — so the
+  // only thing to do with its answer is to show a refusal.
+  const authorizeServer = useCallback(async (name: string) => {
+    setMCPAuth(name, { phase: 'starting', message: '正在启动授权流程…', authUrl: '' })
+    const res = await (AgentService as any).AuthorizeMCPServer?.(name).catch((e: unknown) => String(e))
+    if (res && res !== 'ok') setMCPAuth(name, { phase: 'error', message: res, authUrl: '' })
+  }, [setMCPAuth])
+  // completeMCPAuth hands back the redirect URL the browser could not deliver (or the user
+  // copied faster than it arrived).
+  const completeMCPAuth = useCallback(async (name: string, url: string) => {
+    const res = await (AgentService as any).CompleteMCPServerAuth?.(name, url).catch((e: unknown) => String(e))
+    if (res && res !== 'ok') setMCPAuth(name, { phase: 'error', message: res, authUrl: '' })
+    refreshMCP()
+  }, [refreshMCP, setMCPAuth])
   const toggleTool = useCallback(async (name: string, enabled: boolean) => {
     setMcpLoading((p) => ({ ...p, [name]: true }))
     try { await (AgentService as any).SetMCPToolEnabled?.(name, enabled) } catch { /* ignore */ }
@@ -1835,10 +1861,13 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
                       servers={mcpServers}
                       loading={mcpLoading}
                       profile={mcpProfile}
+                      auth={mcpAuth}
                       onClose={() => setMcpOpen(false)}
                       onToggleServer={toggleServer}
                       onToggleTool={toggleTool}
                       onToggleProfile={toggleProfile}
+                      onAuthorize={authorizeServer}
+                      onCompleteAuth={completeMCPAuth}
                     />
                   )}
                 </span>

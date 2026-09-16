@@ -28,6 +28,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/session"
 )
@@ -37,6 +38,12 @@ import (
 // desktop/demo.go) so a page that takes its time still counts as alive, and far shorter than the
 // per-scenario budget it stands in for.
 const driverContactWindow = 15 * time.Second
+
+// mcpConsentDelay is how long the MCP OAuth fixture plays at being a consent screen before it
+// redirects back (see mcpauth.WithAuthorizeDelay). It exists so the scenario can observe the
+// state the flow spends its real time in — a panel saying "open this URL" — and it is short
+// enough to be invisible next to the app's own startup cost.
+const mcpConsentDelay = 4 * time.Second
 
 func main() {
 	var (
@@ -143,6 +150,26 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 		return report(sc.name, nil, []Line{{Label: "config", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
 	}
 
+	// The MCP OAuth fixture lives in the RUNNER, not in the sandbox: it is an HTTP server
+	// the app talks to over loopback, and its port is only known once it is up — which is
+	// why the sandbox's mcp.json is written here rather than checked in.
+	var mcpFixture *mcpauth.Server
+	if sc.mcpOAuth {
+		// The consent delay is what makes the WAITING state observable: a flow that
+		// completes in microseconds can only be asserted on after the fact, so the driver
+		// would never see the card, the URL to open, or the paste box that the real flow
+		// spends most of its time showing.
+		mcpFixture, err = mcpauth.New(mcpauth.WithAuthorizeDelay(mcpConsentDelay))
+		if err != nil {
+			return report(sc.name, nil, []Line{{Label: "mcp fixture", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+		defer mcpFixture.Close()
+		if err := sb.writeMCPConfig(mcpFixture); err != nil {
+			return report(sc.name, nil, []Line{{Label: "mcp.json", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
+		}
+		sb.browserFetch = true
+	}
+
 	snk, err := newSink()
 	if err != nil {
 		return report(sc.name, nil, []Line{{Label: "sink", OK: false, Detail: err.Error()}}, time.Since(start), verbose)
@@ -236,6 +263,7 @@ func runScenario(sc scenario, root, srcApp, driversDir string, timeout time.Dura
 	ctx := &checkCtx{
 		scenario: sc.name, dir: dir, home: sb.home, work: sb.work,
 		requests: mock.Requests(), mockErr: mock.Error(), lines: &lines,
+		mcp: mcpFixture,
 	}
 	if sc.after != nil {
 		sc.after(ctx)

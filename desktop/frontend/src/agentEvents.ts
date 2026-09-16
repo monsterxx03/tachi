@@ -383,3 +383,57 @@ export function useWorkspaceChanged(onChange: () => void): void {
     return () => off?.()
   }, [])
 }
+
+// ── MCP authorization ───────────────────────────────────────────────────────
+// One authorization is a conversation with the user: it starts, it usually needs a browser
+// opened, it can end up asking for the redirect URL to be pasted back, and it finishes by
+// connecting a server or failing. None of that fits in a return value — the binding that
+// starts a flow answers "ok" immediately and the outcome arrives later — so the progress is
+// kept here, per server, from the events.
+//
+// Per server, not globally: sessions share one pool and one set of connections, but the
+// panel lists several servers and two of them can be in different states at once (one
+// waiting for a paste while another connects).
+export type MCPAuthState = {
+  // starting | browser | waiting | manual | ok | error — the backend's own phases
+  // (MCPAuthEvent, desktop/agent_mcp.go), plus "starting" set locally before the reply.
+  phase: string
+  message: string
+  authUrl: string
+}
+
+export function useMCPAuth(onDone: () => void): {
+  auth: Record<string, MCPAuthState>
+  setAuth: (server: string, state: MCPAuthState) => void
+  clearAuth: (server: string) => void
+} {
+  const [auth, setAuth] = useState<Record<string, MCPAuthState>>({})
+  const ref = useRef(onDone)
+  ref.current = onDone
+  useEffect(() => {
+    const off = Events.On('agent:mcp_auth', (event) => {
+      const ev = event.data as { server: string; phase: string; message?: string; authUrl?: string }
+      if (!ev?.server) return
+      setAuth((prev) => ({
+        ...prev,
+        [ev.server]: { phase: ev.phase || '', message: ev.message || '', authUrl: ev.authUrl || '' },
+      }))
+      // A server that just came up has tools and a new connection state to show, and the
+      // panel holds both by value — the same reason a project write re-reads the sidebar.
+      if (ev.phase === 'ok') ref.current()
+    })
+    return () => off?.()
+  }, [])
+
+  const setOne = useCallback((server: string, state: MCPAuthState) => {
+    setAuth((prev) => ({ ...prev, [server]: state }))
+  }, [])
+  const clearOne = useCallback((server: string) => {
+    setAuth((prev) => {
+      const next = { ...prev }
+      delete next[server]
+      return next
+    })
+  }, [])
+  return { auth, setAuth: setOne, clearAuth: clearOne }
+}

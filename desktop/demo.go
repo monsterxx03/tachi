@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
 	"time"
 
+	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/wailsapp/wails/v3/pkg/application"
 )
 
@@ -107,6 +111,45 @@ func activationPolicy() application.ActivationPolicy {
 
 // demoNoActivate reports whether this run must keep its hands off the foreground.
 func demoNoActivate() bool { return os.Getenv(demoNoActivateEnv) == "1" }
+
+// demoBrowserFetchEnv replaces the MCP OAuth flow's browser with a headless fetch.
+//
+// A scripted run must not open a window on whoever's machine it is running on, and the
+// OAuth flow's whole first act is `open <authorization URL>`. With this set, that act
+// becomes an HTTP GET — which is what a browser does first anyway, and is enough to
+// complete the round trip against a test authorization server that redirects straight
+// back to the callback listener the app is already listening on.
+//
+// It is a separate flag from TACHI_DEMO=1 on purpose: a demo RECORDING should still open
+// the real browser (that is what it is demonstrating), while a smoke scenario must not.
+const demoBrowserFetchEnv = "TACHI_DEMO_BROWSER_FETCH"
+
+// installDemoBrowserOpener swaps agent/mcp's browser opener when the flag is set. It runs
+// before the agent is built, so a flow started from the UI always sees the swapped one —
+// and it is a no-op without the flag, which is what keeps the swap out of the product path.
+func installDemoBrowserOpener() {
+	if os.Getenv(demoBrowserFetchEnv) != "1" {
+		return
+	}
+	mcp.BrowserOpener = func(rawURL string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, rawURL, nil)
+		if err != nil {
+			return err
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return err
+		}
+		// The body is the authorization server's own page; the redirect it may have
+		// followed already reached the app's callback listener, which is the part that
+		// matters here.
+		_, _ = io.Copy(io.Discard, resp.Body)
+		return resp.Body.Close()
+	}
+	log.Printf("demo: MCP OAuth browser replaced by a headless fetch (%s=1)", demoBrowserFetchEnv)
+}
 
 // runJsDemo drives the WebView DOM via Wails ExecJS — a reliable way to
 // "type into the input and send" without depending on system-level mouse and

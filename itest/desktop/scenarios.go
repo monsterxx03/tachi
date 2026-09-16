@@ -14,6 +14,7 @@ import (
 
 	"github.com/monsterxx03/tachi/agent"
 	"github.com/monsterxx03/tachi/agent/commands"
+	"github.com/monsterxx03/tachi/itest/mcpauth"
 	"github.com/monsterxx03/tachi/itest/mockllm"
 	"github.com/monsterxx03/tachi/pkg/strutil"
 	"github.com/monsterxx03/tachi/session"
@@ -45,6 +46,16 @@ type scenario struct {
 	// From the work dir a scenario reaches one as "../<name>/…": a scripted bash command cannot
 	// know the sandbox's absolute path, and it does not have to.
 	extraRoots map[string]map[string]string
+	// mcpOAuth points the sandbox's mcp.json at an OAuth-protected MCP server the RUNNER
+	// starts (itest/mcpauth): the fixture binds a random loopback port, so the file is
+	// written per run rather than checked in. The app is also told to replace its browser
+	// with a headless fetch (TACHI_DEMO_BROWSER_FETCH, see desktop/demo.go), because a smoke
+	// run must never open a window on the machine it is running on — and an authorization's
+	// first act is opening one.
+	//
+	// The scenario's `after` reads the fixture (`c.mcp`) for what the client actually did:
+	// registered for a client_id, asked for PKCE, exchanged the code for a token.
+	mcpOAuth bool
 	// project seeds a desktop project (design §6.1) and BINDS the seeded session to it. Seeded
 	// for the same reason extraRoots are: the project form can only pick directories through a
 	// native picker. The seeded session's own WorkingDir stays the sandbox work dir, i.e. a
@@ -89,6 +100,9 @@ type checkCtx struct {
 	requests []*mockllm.RecordedRequest
 	mockErr  error
 	lines    *[]Line
+	// mcp is the scenario's OAuth fixture, when it declared mcpOAuth: what the MCP client
+	// actually did against it (registrations, authorization requests, token exchanges).
+	mcp *mcpauth.Server
 }
 
 func (c *checkCtx) check(label string, ok bool, detail string) {
@@ -1668,6 +1682,64 @@ permissions:
 			name: "form-text",
 			files: map[string]string{
 				"README.md": "# smoke\n\nform-text scenario's working directory\n",
+			},
+		},
+		//
+		// mcp-auth：一个 OAuth2 保护的 HTTP MCP server，从「需要授权」走到「已连接 + 工具可见」。
+		//
+		// 这条链路横跨三个进程/协议：面板（前端）→ agent/mcp 的 OAuth 流程（DCR、PKCE、回调、
+		// 换 token）→ 受保护的 MCP 端点，而授权本身是一次「打开浏览器」的动作。fixture
+		// （itest/mcpauth）在 runner 里起，mcp.json 按它的随机端口写进沙箱；浏览器被
+		// TACHI_DEMO_BROWSER_FETCH 换成 headless GET —— smoke 永远不该在别人的机器上弹出窗口。
+		//
+		// 它必须存在的原因：这条链路上没有一半在进程内可见。单测钉住 Go 的每一步，driver 钉住
+		// 「后端说了、前端画了没有」—— 而这个功能之前的形状正是流程齐全却没人能触发。
+		{
+			name:     "mcp-auth",
+			mcpOAuth: true,
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe mcp-auth scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: textStream("收到。", 400)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				if c.mcp == nil {
+					c.check("fixture 已启动", false, "mcp 为 nil —— 场景没声明 mcpOAuth")
+					return
+				}
+				// 授权真的发生过，而不是"面板显示连上了"：客户端注册了 client_id、按 PKCE
+				// 授权、并把 code 换成了 token。三样缺一，界面都不可能到那一步。
+				regs := c.mcp.Registrations()
+				c.check("动态客户端注册发生了", len(regs) == 1, strconv.Itoa(len(regs))+" 次注册")
+				if len(regs) == 1 {
+					c.check("注册带着回调地址（redirect_uri 不是空串）",
+						len(regs[0].RedirectURIs) == 1 && regs[0].RedirectURIs[0] != "",
+						regs[0].Raw)
+				}
+				auths := c.mcp.Authorizations()
+				c.check("授权请求发起了", len(auths) == 1, strconv.Itoa(len(auths))+" 次授权")
+				if len(auths) == 1 {
+					c.check("授权用了 PKCE (S256)", auths[0].ChallengeMethod == "S256", auths[0].ChallengeMethod)
+				}
+				tokens := c.mcp.TokenRequestsDone()
+				c.check("code 换到了 token", len(tokens) == 1, strconv.Itoa(len(tokens))+" 次换 token")
+				if len(tokens) == 1 {
+					c.check("换 token 带上了 code_verifier", tokens[0].CodeVerifier != "", "verifier 为空")
+				}
+				// 工具进了共享池，模型也必须被告知：reminder 一次会话只发一次，而这条 server
+				// 是启动之后才连上的 —— 不通知就等于模型永远不知道它存在。driver 负责发一轮，
+				// 这里在 LLM 边界上断言提示确实到了。
+				at, announced := c.requestSeen("mcp__oauth-fixture__echo")
+				c.check("授权后模型被告知新工具存在", announced, "命中第 "+strconv.Itoa(at)+" 条请求")
+				c.check("提示只出现在授权之后的那一轮", announced && at == 1, requestCount(c.requests))
+				c.check("只有一轮对话（driver 只发了授权之后那一条）", len(c.requests) == 1, requestCount(c.requests))
+
+				// The token really landed under THIS sandbox's HOME, not the real ~/.tachi.
+				dir := filepath.Join(c.home, ".tachi", "mcp_tokens")
+				entries, _ := os.ReadDir(dir)
+				c.check("token 落在沙箱 HOME 的 mcp_tokens 下", len(entries) > 0, dir)
 			},
 		},
 	}

@@ -2,10 +2,14 @@ package main
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
+	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
+	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
 // MCPToolVO describes one tool under an MCP server for the status-bar panel.
@@ -22,6 +26,12 @@ type MCPServerVO struct {
 	Type      string      `json:"type"`
 	Connected bool        `json:"connected"`
 	Tools     []MCPToolVO `json:"tools"`
+	// NeedsAuth is true when this server answered a connection attempt with "OAuth
+	// authorization required". It exists so the panel can offer the button AND say why
+	// — a server that needs authorizing is otherwise indistinguishable from one that is
+	// down, which is what made this feature unreachable: the failure had nowhere to
+	// show up.
+	NeedsAuth bool `json:"needsAuth"`
 }
 
 // ListMCPServers returns all configured MCP servers with their tools and, for
@@ -44,8 +54,14 @@ func (s *AgentService) ListMCPServers() []MCPServerVO {
 	}
 
 	out := make([]MCPServerVO, 0, len(d.cfg.MCPServers))
+	needsAuth := d.mcpNeedsAuthSnapshot()
 	for _, srv := range d.cfg.MCPServers {
-		vo := MCPServerVO{Name: srv.Name, Type: string(srv.Type), Connected: d.mcp.IsConnected(srv.Name)}
+		vo := MCPServerVO{
+			Name:      srv.Name,
+			Type:      string(srv.Type),
+			Connected: d.mcp.IsConnected(srv.Name),
+			NeedsAuth: needsAuth[srv.Name],
+		}
 		for _, t := range byServer[srv.Name] {
 			loaded := set != nil && set.Contains(t.Name)
 			vo.Tools = append(vo.Tools, MCPToolVO{
@@ -60,6 +76,55 @@ func (s *AgentService) ListMCPServers() []MCPServerVO {
 	return out
 }
 
+// mcpServerByName returns the configured server with this name, or nil.
+func (d *desktopApp) mcpServerByName(name string) *config.MCPServerConfig {
+	for i := range d.cfg.MCPServers {
+		if d.cfg.MCPServers[i].Name == name {
+			return &d.cfg.MCPServers[i]
+		}
+	}
+	return nil
+}
+
+// enableMCPServer connects a server and publishes what it offers: the tools go into the
+// shared deferred pool and every live agent is told the pool grew. It returns the reason
+// to show the user on failure, plus the raw error for a caller that can act on the KIND
+// of failure ("OAuth authorization required" has a button; a timeout does not).
+//
+// It is the ONE enable path — the panel's toggle and the end of an OAuth authorization
+// both come through here, because a server authorized in the panel must end up exactly as
+// connected as one the user enabled by hand, and two code paths that both "connect a
+// server" drift the moment one of them learns something the other does not.
+//
+// Adding to the shared pool is only half the job: the reminder that tells the model these
+// tools exist fires at most once per session, so without the notify every mid-session
+// enable is invisible and the tools are only findable if the model happens to search for
+// them blind. Every live agent is notified, not just the one on screen: the pool and the
+// connection are shared by all sessions, so enabling a server is a global fact and a
+// session parked in the background would otherwise stay blind to it. Each agent's own
+// discovered set still decides what it is told about, so nothing leaks between sessions.
+func (d *desktopApp) enableMCPServer(srv *config.MCPServerConfig) (string, error) {
+	tools, err := d.mcp.Reconnect(context.Background(), srv)
+	if err != nil {
+		if oauthErr, ok := errors.AsType[*mcp.OAuthRequiredError](err); ok {
+			d.markMCPNeedsAuth(oauthErr.ServerName, true)
+		}
+		return err.Error(), err
+	}
+	for _, t := range tools {
+		hint := ""
+		if srv.SearchHints != nil {
+			hint = srv.SearchHints[t.ToolName()]
+		}
+		d.mcp.Pool().Add(mcp.NewDeferredToolFromMCPTool(t, hint))
+	}
+	for _, a := range d.liveAgents() {
+		a.NotifyDeferredToolsAdded()
+	}
+	d.markMCPNeedsAuth(srv.Name, false)
+	return "ok", nil
+}
+
 // SetMCPServerEnabled connects (enabled=true) or disconnects (enabled=false) a
 // configured MCP server at runtime. It does NOT persist to mcp.json — the
 // change is runtime-only (restart reverts to config).
@@ -68,42 +133,20 @@ func (s *AgentService) SetMCPServerEnabled(name string, enabled bool) string {
 	if d.cfg == nil || d.mcp == nil {
 		return "mcp not configured"
 	}
-	var srv *config.MCPServerConfig
-	for i := range d.cfg.MCPServers {
-		if d.cfg.MCPServers[i].Name == name {
-			srv = &d.cfg.MCPServers[i]
-			break
-		}
-	}
+	srv := d.mcpServerByName(name)
 	if srv == nil {
 		return "server not found"
 	}
 	if enabled {
-		tools, err := d.mcp.Reconnect(context.Background(), srv)
-		if err != nil {
-			return err.Error()
+		res, err := d.enableMCPServer(srv)
+		// "needs authorization" is not "the connect failed": the user's way out is a
+		// button, not a retry. enableMCPServer has recorded it (the panel's NeedsAuth);
+		// here it is said in the panel's own words, because the error's own text is
+		// addressed to whichever frontend the reader happens to be in.
+		if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); ok {
+			return fmt.Sprintf("「%s」需要 OAuth 授权：在面板里点「授权」", name)
 		}
-		for _, t := range tools {
-			hint := ""
-			if srv.SearchHints != nil {
-				hint = srv.SearchHints[t.ToolName()]
-			}
-			d.mcp.Pool().Add(mcp.NewDeferredToolFromMCPTool(t, hint))
-		}
-		// Adding to the shared pool is only half the job: the reminder that tells
-		// the model these tools exist fires at most once per session, so without
-		// this every mid-session enable is invisible and the tools are only
-		// findable if the model happens to search for them blind.
-		//
-		// Every live agent is notified, not just the one on screen: the pool and
-		// the connection are shared by all sessions, so enabling a server is a
-		// global fact and a session parked in the background would otherwise stay
-		// blind to it. Each agent's own discovered set still decides what it is
-		// told about, so nothing leaks between sessions.
-		for _, a := range d.liveAgents() {
-			a.NotifyDeferredToolsAdded()
-		}
-		return "ok"
+		return res
 	}
 	if err := d.mcp.Disconnect(name); err != nil {
 		return err.Error()
@@ -183,4 +226,267 @@ func (s *AgentService) SetMCPProfile(name string) string {
 		return err.Error()
 	}
 	return "ok"
+}
+
+// --- MCP OAuth authorization ---
+//
+// An HTTP MCP server behind OAuth2 cannot be reached until a token exists, and the token
+// only comes from a browser round trip the user has to consent to. Three things make that
+// work in the desktop, and each is a place this can go silently wrong:
+//
+//   - the flow is STARTED here, from mcp.RunOAuthFlowWithProgress. A GUI needs the
+//     authorization URL and the "now open it by hand" moment as DATA — the text
+//     frontends' way of learning them is a sentence, and parsing prose for a URL is the
+//     coupling the progress callback exists to remove.
+//   - "this server needs authorizing" is REMEMBERED per server (`needsAuth`), because a
+//     server whose token is missing looks exactly like a server that is down: without it
+//     the panel has nothing to offer and the user has nothing to click.
+//   - the way out is the SAME enable path an ordinary toggle takes (enableMCPServer), so
+//     an authorized server is connected, pooled and announced identically.
+
+// MCPAuthEvent is the payload of the "agent:mcp_auth" event: one step of an
+// authorization, as the panel should render it.
+//
+// Phase is the string form of mcp.OAuthPhase for the phases the flow itself reports
+// (browser / waiting / manual), plus the two the desktop owns: "starting" before anything
+// is known, "ok" when the server is authorized AND connected, and "error" for everything
+// that is nobody's instruction.
+type MCPAuthEvent struct {
+	Server  string `json:"server"`
+	Phase   string `json:"phase"`
+	Message string `json:"message,omitempty"`
+	AuthURL string `json:"authUrl,omitempty"`
+}
+
+// The desktop's own phases, alongside mcp.OAuthPhase's (see MCPAuthEvent).
+const (
+	mcpAuthPhaseStarting = "starting"
+	mcpAuthPhaseOK       = "ok"
+	mcpAuthPhaseError    = "error"
+)
+
+// mcpAuthTimeout bounds one authorization, start to finish. It is deliberately long: the
+// waiting phases are spent on a human reading a consent screen, and the browser flow's own
+// callback wait (five minutes) has to fit inside it.
+const mcpAuthTimeout = 10 * time.Minute
+
+// AuthorizeMCPServer starts the OAuth2 flow for an HTTP MCP server and returns "ok" (or
+// the reason it will not start). The flow runs in the background and reports itself
+// through agent:mcp_auth events: it needs a browser, and often a human, so there is no
+// answer to wait for here.
+func (s *AgentService) AuthorizeMCPServer(name string) string {
+	d := s.desk
+	if d.cfg == nil || d.mcp == nil {
+		return "mcp not configured"
+	}
+	srv := d.mcpServerByName(name)
+	if srv == nil {
+		return "server not found"
+	}
+	if srv.Type != config.MCPTransportHTTP {
+		return fmt.Sprintf("只有 HTTP 类型的 MCP server 需要 OAuth 授权（「%s」是 stdio）", name)
+	}
+	if d.mcp.IsConnected(name) {
+		return "已连接：无需授权（要换一个账号，先禁用它再授权）"
+	}
+	if !d.beginMCPAuth(name) {
+		return "授权流程已经在这个 server 上进行"
+	}
+	d.emitMCPAuth(MCPAuthEvent{Server: name, Phase: mcpAuthPhaseStarting, Message: "正在启动授权流程…"})
+
+	ctx, cancel := context.WithTimeout(context.Background(), mcpAuthTimeout)
+	// The cancel is registered BEFORE the goroutine starts, so a paste that arrives while the
+	// flow is still coming up cannot miss it: the two ways out finish the SAME exchange, and
+	// letting both run would spend the authorization code twice.
+	d.setMCPAuthCancel(name, cancel)
+
+	go func() {
+		defer d.endMCPAuth(name)
+		// The context's own release: the flow may have returned early (a failure, or a
+		// cancel from the paste path), and a 10-minute timer left running is a leak that
+		// only shows up as a stuck goroutine in a profile.
+		defer cancel()
+
+		err := mcp.RunOAuthFlowWithProgress(ctx, srv, func(p mcp.OAuthProgress) {
+			d.emitMCPAuth(MCPAuthEvent{
+				Server:  name,
+				Phase:   string(p.Phase),
+				Message: p.Message,
+				AuthURL: p.AuthURL,
+			})
+		})
+		if err != nil {
+			// A flow that ended by asking for the redirect URL has ALREADY said so (it
+			// reported the manual phase with the URL). Repeating it as an error would
+			// replace the instruction with a complaint — and the instruction is the part
+			// the user can act on.
+			if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); !ok {
+				d.emitMCPAuth(MCPAuthEvent{Server: name, Phase: mcpAuthPhaseError, Message: err.Error()})
+			}
+			return
+		}
+		// A token was obtained. Stopping here would leave the user authorized and still
+		// disconnected — the flow's own entry points in the TUI reconnect for this reason.
+		if res, _ := d.enableMCPServer(srv); res != "ok" {
+			d.emitMCPAuth(MCPAuthEvent{
+				Server: name, Phase: mcpAuthPhaseError,
+				Message: "授权成功但连接失败：" + res,
+			})
+			return
+		}
+		d.reconnectMCPTokenSiblings(srv)
+		d.emitMCPAuth(MCPAuthEvent{Server: name, Phase: mcpAuthPhaseOK, Message: "授权成功，已连接"})
+	}()
+	return "ok"
+}
+
+// CompleteMCPServerAuth finishes an authorization with the redirect URL the user pasted
+// out of their browser's address bar, and returns "ok" or the reason it failed.
+//
+// This is the way through when the callback listener never receives the redirect — the
+// port is taken or firewalled, the browser refuses to follow it, or the user is simply
+// faster than the browser. It is why the flow persists its state and PKCE verifier before
+// it starts waiting (see mcp.tryBrowserCallback).
+func (s *AgentService) CompleteMCPServerAuth(name, redirectURL string) string {
+	d := s.desk
+	if d.cfg == nil || d.mcp == nil {
+		return "mcp not configured"
+	}
+	srv := d.mcpServerByName(name)
+	if srv == nil {
+		return "server not found"
+	}
+	if srv.Type != config.MCPTransportHTTP {
+		return fmt.Sprintf("只有 HTTP 类型的 MCP server 支持 OAuth 授权（「%s」是 stdio）", name)
+	}
+	if strings.TrimSpace(redirectURL) == "" {
+		return "请粘贴浏览器地址栏里的完整 URL"
+	}
+	// Any in-flight flow for this server is stopped first: both ways out exchange the
+	// same authorization code, and the code is single-use.
+	d.cancelMCPAuth(name)
+
+	ctx, cancel := context.WithTimeout(context.Background(), mcpAuthTimeout)
+	defer cancel()
+	if err := mcp.CompleteManualAuth(ctx, srv, redirectURL); err != nil {
+		return err.Error()
+	}
+	if res, err := d.enableMCPServer(srv); err != nil {
+		if _, ok := errors.AsType[*mcp.OAuthRequiredError](err); ok {
+			return fmt.Sprintf("已拿到 token，但「%s」仍要求授权：确认 token 是否对该 server 有效", name)
+		}
+		return res
+	}
+	d.reconnectMCPTokenSiblings(srv)
+	d.emitMCPAuth(MCPAuthEvent{Server: name, Phase: mcpAuthPhaseOK, Message: "授权成功，已连接"})
+	return "ok"
+}
+
+// reconnectMCPTokenSiblings connects the OTHER configured servers that share this one's
+// token (same storage key = same host), because one authorization serves all of them.
+//
+// Failures are logged and dropped: this is tidying up after a success the user already
+// got, and a sibling that stays down is a row the panel still shows with its own toggle.
+// Servers that are disabled stay off — the token being shared is not consent to run them.
+func (d *desktopApp) reconnectMCPTokenSiblings(srv *config.MCPServerConfig) {
+	key := srv.TokenStorageName()
+	for i := range d.cfg.MCPServers {
+		other := &d.cfg.MCPServers[i]
+		if other.Name == srv.Name || other.Type != config.MCPTransportHTTP {
+			continue
+		}
+		if !other.IsEnabled() || d.mcp.IsConnected(other.Name) || other.TokenStorageName() != key {
+			continue
+		}
+		if res, err := d.enableMCPServer(other); err != nil {
+			logger.New("desktop").Warn(context.Background(), "MCP: sibling reconnect failed after authorization",
+				"server", other.Name, "reason", res, "err", err)
+		}
+	}
+}
+
+// emitMCPAuth pushes one authorization step to the frontend. A nil app is the
+// simulated/test case (see emitWorkspaceChanged for the same guard).
+func (d *desktopApp) emitMCPAuth(ev MCPAuthEvent) {
+	if d.app == nil {
+		return
+	}
+	d.app.Event.Emit("agent:mcp_auth", ev)
+}
+
+// markMCPNeedsAuth records whether a server has asked for authorization and not been
+// granted one, which is what the panel's NeedsAuth badge and 授权 button are drawn from.
+func (d *desktopApp) markMCPNeedsAuth(name string, needed bool) {
+	if name == "" {
+		return
+	}
+	d.mcpAuthMu.Lock()
+	defer d.mcpAuthMu.Unlock()
+	if d.mcpAuthNeeded == nil {
+		d.mcpAuthNeeded = make(map[string]bool)
+	}
+	if needed {
+		d.mcpAuthNeeded[name] = true
+		return
+	}
+	delete(d.mcpAuthNeeded, name)
+}
+
+// mcpNeedsAuthSnapshot returns a copy of the needs-auth set, so a caller (ListMCPServers)
+// never reads the map while a connect attempt is writing it.
+func (d *desktopApp) mcpNeedsAuthSnapshot() map[string]bool {
+	d.mcpAuthMu.Lock()
+	defer d.mcpAuthMu.Unlock()
+	out := make(map[string]bool, len(d.mcpAuthNeeded))
+	for name, needed := range d.mcpAuthNeeded {
+		out[name] = needed
+	}
+	return out
+}
+
+// beginMCPAuth claims the authorization slot for a server, returning false when one is
+// already running. Two flows for one server would race the same callback port and the same
+// token file, and the user would see two browser tabs for one decision.
+func (d *desktopApp) beginMCPAuth(name string) bool {
+	d.mcpAuthMu.Lock()
+	defer d.mcpAuthMu.Unlock()
+	if d.mcpAuthInFlight == nil {
+		d.mcpAuthInFlight = make(map[string]bool)
+	}
+	if d.mcpAuthInFlight[name] {
+		return false
+	}
+	d.mcpAuthInFlight[name] = true
+	return true
+}
+
+// setMCPAuthCancel hands the running flow's cancel func to the app, so a pasted redirect
+// URL can stop it (see CompleteMCPServerAuth).
+func (d *desktopApp) setMCPAuthCancel(name string, cancel context.CancelFunc) {
+	d.mcpAuthMu.Lock()
+	defer d.mcpAuthMu.Unlock()
+	if d.mcpAuthCancels == nil {
+		d.mcpAuthCancels = make(map[string]context.CancelFunc)
+	}
+	d.mcpAuthCancels[name] = cancel
+}
+
+// cancelMCPAuth stops an in-flight flow for this server, if there is one. The flow's own
+// goroutine still owns the slot: it clears the state in endMCPAuth when it returns.
+func (d *desktopApp) cancelMCPAuth(name string) {
+	d.mcpAuthMu.Lock()
+	cancel := d.mcpAuthCancels[name]
+	delete(d.mcpAuthCancels, name)
+	d.mcpAuthMu.Unlock()
+	if cancel != nil {
+		cancel()
+	}
+}
+
+// endMCPAuth releases the authorization slot for a server.
+func (d *desktopApp) endMCPAuth(name string) {
+	d.mcpAuthMu.Lock()
+	defer d.mcpAuthMu.Unlock()
+	delete(d.mcpAuthInFlight, name)
+	delete(d.mcpAuthCancels, name)
 }

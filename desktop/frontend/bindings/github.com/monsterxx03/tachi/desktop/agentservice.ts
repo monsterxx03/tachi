@@ -73,6 +73,29 @@ export function ApplyRewind(id: string, turn: number): $CancellablePromise<strin
 }
 
 /**
+ * AuthorizeMCPServer starts the OAuth2 flow for an HTTP MCP server and returns "ok" (or
+ * the reason it will not start). The flow runs in the background and reports itself
+ * through agent:mcp_auth events: it needs a browser, and often a human, so there is no
+ * answer to wait for here.
+ */
+export function AuthorizeMCPServer(name: string): $CancellablePromise<string> {
+    return $Call.ByID(1285036042, name);
+}
+
+/**
+ * CompleteMCPServerAuth finishes an authorization with the redirect URL the user pasted
+ * out of their browser's address bar, and returns "ok" or the reason it failed.
+ * 
+ * This is the way through when the callback listener never receives the redirect — the
+ * port is taken or firewalled, the browser refuses to follow it, or the user is simply
+ * faster than the browser. It is why the flow persists its state and PKCE verifier before
+ * it starts waiting (see mcp.tryBrowserCallback).
+ */
+export function CompleteMCPServerAuth(name: string, redirectURL: string): $CancellablePromise<string> {
+    return $Call.ByID(2289909932, name, redirectURL);
+}
+
+/**
  * CreateProject adds a project. name may be empty, in which case it is derived from the
  * primary directory's base name (with -2 / -3 while it collides).
  */

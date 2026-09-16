@@ -112,6 +112,30 @@
 .mcp-tool-state.loaded { color: var(--green); }
 .mcp-tool-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+/* ── MCP authorization ───────────────────────────────────────────────────── */
+/* One server's authorization: what the flow is doing, the URL to open (or copy into a
+   browser elsewhere), and the paste box for the redirect that could not be delivered.
+   It sits under the row it belongs to — a flow is a multi-step conversation with the
+   user, so it needs room, and the row is where they just clicked. */
+.mcp-server-state.auth { color: var(--amber); }
+.mcp-auth-btn { border-color: var(--amber); color: var(--amber); }
+.mcp-auth { padding: 4px 6px 10px 16px; display: flex; flex-direction: column; gap: 6px; }
+/* The instructions are multi-line prose on purpose (they are what the flow reported), so
+   they keep their line breaks instead of collapsing into one paragraph. */
+.mcp-auth-msg { font-size: 11.5px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+.mcp-auth-msg.err { color: var(--red); }
+.mcp-auth-url, .mcp-auth-paste { display: flex; align-items: center; gap: 6px; }
+.mcp-auth-url input, .mcp-auth-paste-input {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-2);
+  border-radius: var(--radius-xs);
+  background: var(--bg-2);
+  color: var(--text-dim);
+}
+
 /* ── Context-usage popover (the composer's ring) ──────────────────────────── */
 /* The shared popover shell (.popover-panel) hanging off the ring's own box, plus
    this panel's own width/padding. Answers "the window is 80% full, of what" with

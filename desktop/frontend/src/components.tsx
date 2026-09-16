@@ -3,6 +3,7 @@ import type { Question } from '../bindings/github.com/monsterxx03/tachi/agent/to
 import { AgentService } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { DiffBlock } from './diff'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
+import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processLiveLine, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionRequest } from './types'
@@ -416,7 +417,7 @@ function ToolCard({ name, title, args, summary, ok, done, change, diffOpen, dura
   )
 }
 
-function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggleTool, onToggleProfile }: {
+function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, onToggleTool, onToggleProfile, onAuthorize, onCompleteAuth }: {
   servers: any[]
   loading: Record<string, boolean>
   profile: { active: string; available: string[] }
@@ -424,8 +425,19 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
   onToggleServer: (name: string, enabled: boolean) => void
   onToggleTool: (name: string, enabled: boolean) => void
   onToggleProfile: (name: string) => void
+  // The OAuth side. auth holds one entry per server that has been through an
+  // authorization (or a refused one) IN THIS PROCESS — a server that needs a token and has
+  // never been tried has no entry, and is offered the button purely because the backend
+  // marked it NeedsAuth. The panel keeps no state of its own: what it renders is what the
+  // backend last said, which is what makes a reloaded window agree with a live one.
+  auth: Record<string, MCPAuthState>
+  onAuthorize: (name: string) => void
+  onCompleteAuth: (name: string, redirectURL: string) => void
 }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  // One draft redirect URL per server: the panel is a list, and a paste into one row must
+  // not appear in another's box.
+  const [pasteURL, setPasteURL] = useState<Record<string, string>>({})
   const profileBusy = !!loading.__profile__
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -462,18 +474,59 @@ function MCPPanel({ servers, loading, profile, onClose, onToggleServer, onToggle
             const isOpen = !collapsed[s.name]
             const toolCount = (s.tools || []).length
             const busy = !!loading[s.name]
+            const state = auth[s.name] as MCPAuthState | undefined
+            const authPhase = state?.phase || ''
+            // The authorization card, shown while a server is being authorized or has just
+            // refused: the progress sentence, the URL to open or copy, and the paste box
+            // for the way back. It disappears the moment the row connects, because then
+            // there is nothing left to do here.
+            const authCard = state && !s.connected ? (
+              <div className="mcp-auth">
+                {state.message && (
+                  <div className={`mcp-auth-msg${authPhase === 'error' ? ' err' : ''}`}>{state.message}</div>
+                )}
+                {state.authUrl && (
+                  <div className="mcp-auth-url">
+                    <input readOnly value={state.authUrl} onFocus={(e) => e.target.select()} />
+                    <button className="mcp-toggle" onClick={() => { void navigator.clipboard?.writeText(state.authUrl) }}>复制</button>
+                  </div>
+                )}
+                {(authPhase === 'browser' || authPhase === 'waiting' || authPhase === 'manual') && (
+                  <div className="mcp-auth-paste">
+                    <input
+                      className="mcp-auth-paste-input"
+                      placeholder="浏览器打不开时：粘贴地址栏里的完整 URL"
+                      value={pasteURL[s.name] || ''}
+                      onChange={(e) => setPasteURL((p) => ({ ...p, [s.name]: e.target.value }))}
+                    />
+                    <button className="mcp-toggle" onClick={() => onCompleteAuth(s.name, pasteURL[s.name] || '')}>完成授权</button>
+                  </div>
+                )}
+              </div>
+            ) : null
             return (
               <div key={s.name} className="mcp-server">
                 <div className="mcp-server-row" role="button" tabIndex={0} aria-expanded={isOpen}
                   onClick={() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] }))}
                   onKeyDown={actOnKey(() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] })))}>
                   <span className="mcp-server-name">{s.name}</span>
-                  <span className={`mcp-server-state ${s.connected ? 'on' : 'off'}`}>{s.connected ? '已连接' : '未连接'}</span>
+                  <span className={`mcp-server-state ${s.connected ? 'on' : (s.needsAuth ? 'auth' : 'off')}`}>
+                    {s.connected ? '已连接' : (s.needsAuth ? '需要授权' : '未连接')}
+                  </span>
                   <span className="mcp-toolcount">{toolCount} 工具</span>
+                  {/* The authorize button belongs beside the toggle, not inside the
+                      expanded body: it is what the row's own state is telling the user to
+                      do, and the row is where they are looking. */}
+                  {!s.connected && s.needsAuth && (
+                    <button className="mcp-toggle mcp-auth-btn" disabled={busy} onClick={(e) => { e.stopPropagation(); onAuthorize(s.name) }}>
+                      {authPhase === 'starting' ? <><span className="mcp-spinner" /> 启动中…</> : '授权'}
+                    </button>
+                  )}
                   <button className={`mcp-toggle ${s.connected ? 'on' : ''}`} disabled={busy} onClick={(e) => { e.stopPropagation(); onToggleServer(s.name, !s.connected) }}>
                     {busy ? <><span className="mcp-spinner" /> 连接中…</> : (s.connected ? '禁用' : '启用')}
                   </button>
                 </div>
+                {authCard}
                 {isOpen && (s.tools || []).map((t) => {
                   const tbusy = !!loading[t.name]
                   return (

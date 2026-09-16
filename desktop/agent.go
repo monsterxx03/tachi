@@ -137,6 +137,24 @@ type desktopApp struct {
 	// data with its own lock and never calls back into the app, which is what makes
 	// d.mu → projects.mu a safe order. Lazy: the file is read on first use.
 	projects *projectTable
+
+	// mcpAuth is the desktop's per-server OAuth bookkeeping, guarded by mcpAuthMu (NOT
+	// mu: it is written from a background authorization goroutine, and nothing here may
+	// wait on the app-wide lock). It is deliberately not part of MCPServerConfig — that
+	// struct is the user's file, rewritten by profile switches and DCR refreshes, while
+	// "this server asked for authorization and has not got one yet" is a fact about THIS
+	// process's connection attempts.
+	//
+	//   - needed: a connect attempt came back OAuthRequiredError and no token has worked
+	//     since. Drives the panel's 需要授权 badge and its 授权 button.
+	//   - inFlight: an authorization is running. Two would race the same callback port
+	//     and the same token file.
+	//   - cancels: the running flow's cancel, so a pasted redirect URL can end it first
+	//     (both ways out exchange the same single-use authorization code).
+	mcpAuthMu       sync.Mutex
+	mcpAuthNeeded   map[string]bool
+	mcpAuthInFlight map[string]bool
+	mcpAuthCancels  map[string]context.CancelFunc
 }
 
 func newDesktopApp() *desktopApp {

@@ -107,6 +107,12 @@ func localAssetPath(r *http.Request) string {
 func main() {
 	desk := newDesktopApp()
 
+	// Scripted-run hooks, installed before anything can use them (both self-gate on
+	// their env var, so a normal launch is untouched): the MCP OAuth flow's browser is
+	// replaced by a headless fetch when a smoke scenario asks for it, because a run
+	// must never open a window on the machine it is running on.
+	installDemoBrowserOpener()
+
 	app := application.New(application.Options{
 		Name:        "Tachi",
 		Description: "Tachi — AI Agent desktop companion",
