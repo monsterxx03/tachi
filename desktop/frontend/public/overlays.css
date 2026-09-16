@@ -84,6 +84,11 @@
 .mcp-server-state.on { color: var(--green); }
 .mcp-server-state.off { color: var(--red); }
 .mcp-toolcount { margin-left: auto; font-size: 11px; color: var(--text-faint); }
+/* The row's disclosure caret (components.tsx's <Caret>). It is what makes a folded row read
+   as something that OPENS: with the tools folded by default the row is a name, a state and a
+   tool count, and a static-looking line gives a reader no reason to click it. */
+.mcp-caret { display: inline-flex; color: var(--text-faint); }
+.mcp-server-row:hover .mcp-caret { color: var(--text-dim); }
 .mcp-toggle {
   border: 1px solid var(--border-2);
   background: transparent;

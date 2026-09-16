@@ -414,6 +414,7 @@ const type = (el, t) => {
 
 ## Desktop MCP Auth (an OAuth2 server the panel can authorize)
 
+- **The MCP panel opens with every server FOLDED** (`expanded` in `MCPPanel`, empty = all folded), and that is a rule rather than a styling choice: a tools list belongs to a connected server, so "expand when connected" left an unconnected server showing nothing and the same control read as two different ones. Two consequences to keep in mind: the tool rows do not EXIST in the DOM until the row is clicked (`mcp-auth` asserts both halves — absent while folded, present after a click), and a folded row needs its caret, because a name + state + count with no disclosure mark looks like a static line. The fold is per-opening, not remembered: it lives in the component, which unmounts with the panel; persisting it belongs in `desktop_ui.json` beside the rest of the UI state.
 - **The panel's per-server state comes from the BACKEND, never from the panel.** `MCPServerVO.NeedsAuth` is
   set wherever a connect attempt came back `*mcp.OAuthRequiredError` — at startup (`populateSharedMCP`) as
   well as on a manual enable — because a server that wants a token otherwise looks exactly like one that is

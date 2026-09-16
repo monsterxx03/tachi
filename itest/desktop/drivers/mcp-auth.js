@@ -31,6 +31,13 @@
   smoke.check('行上说明为什么需要授权', smoke.text(row).indexOf('需要授权') >= 0, smoke.text(row))
   smoke.check('需要授权时给出「授权」按钮', !!row.querySelector('.mcp-auth-btn'), smoke.text(row))
 
+  // 工具列表默认是折叠的（面板打开时每条 server 只占一行）。工具那一行只有展开之后才存在于
+  // DOM 里，所以「现在看不到工具」是默认状态本身，不是错误 —— 这里把它钉住，否则以后有人把
+  // 默认改回展开，也没有第二个断言会发现。
+  const rowHead = row.querySelector('.mcp-server-row')
+  smoke.check('默认折叠：server 行没有铺开工具', !row.querySelector('.mcp-tool'), '工具行一开始就在')
+  smoke.check('折叠的行上有展开指示', !!rowHead.querySelector('.mcp-caret'), '找不到 .mcp-caret')
+
   // ── 2. 点授权:浏览器被 headless fetch 顶替 ─────────────────────────────
   smoke.click(row.querySelector('.mcp-auth-btn'))
 
@@ -62,6 +69,9 @@
   smoke.check('已连接后不再显示需要授权', smoke.text(connected).indexOf('需要授权') < 0, smoke.text(connected))
   smoke.check('工具计数不为 0', smoke.text(connected).indexOf('0 工具') < 0, smoke.text(connected))
 
+  // 工具列表要展开才看得到 —— 这正是默认折叠下的正常路径，driver 点一下行头即可。
+  smoke.click(connected.querySelector('.mcp-server-row'))
+  if (!(await smoke.waitFor('.mcp-tool-name', '展开后出现工具行'))) return smoke.finish()
   const tools = smoke.allText('.mcp-tool-name')
   smoke.check('列出来自 fixture 的工具', tools.some((t) => t.indexOf('echo') >= 0), tools.join(' | ') || '(没有工具行)')
 

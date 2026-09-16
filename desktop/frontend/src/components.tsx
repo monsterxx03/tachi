@@ -434,7 +434,20 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
   onAuthorize: (name: string) => void
   onCompleteAuth: (name: string, redirectURL: string) => void
 }) {
-  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  // Which servers the reader has opened, by name. EMPTY means "all folded", and the panel
+  // opens as a list of servers — name, state, tool count, actions — with the tools appearing
+  // on demand.
+  //
+  // The default is uniform for a reason: tools belong to a connected server, so a rule tied
+  // to that (expand when connected) leaves an unconnected server showing nothing at all, and
+  // the same control then looks like two different ones. Folded is also the only sane start
+  // for a server with dozens of tools.
+  //
+  // Not remembered across openings, and that is a choice rather than an omission: the state
+  // is this component's, the panel unmounts when it closes, and a panel reopened later should
+  // start at the top instead of reshuffling what someone left behind. Persisting it belongs
+  // in desktop_ui.json beside the other UI state, not here.
+  const [expanded, setExpanded] = useState<Record<string, boolean>>({})
   // One draft redirect URL per server: the panel is a list, and a paste into one row must
   // not appear in another's box.
   const [pasteURL, setPasteURL] = useState<Record<string, string>>({})
@@ -471,7 +484,7 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
         <div className="mcp-body">
           {servers.length === 0 && <div className="mcp-empty">未配置 MCP server（~/.tachi/mcp.json）</div>}
           {servers.map((s) => {
-            const isOpen = !collapsed[s.name]
+            const isOpen = !!expanded[s.name]
             const toolCount = (s.tools || []).length
             const busy = !!loading[s.name]
             const state = auth[s.name] as MCPAuthState | undefined
@@ -507,8 +520,15 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
             return (
               <div key={s.name} className="mcp-server">
                 <div className="mcp-server-row" role="button" tabIndex={0} aria-expanded={isOpen}
-                  onClick={() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] }))}
-                  onKeyDown={actOnKey(() => setCollapsed((p) => ({ ...p, [s.name]: !p[s.name] })))}>
+                  onClick={() => setExpanded((p) => ({ ...p, [s.name]: !p[s.name] }))}
+                  onKeyDown={actOnKey(() => setExpanded((p) => ({ ...p, [s.name]: !p[s.name] })))}>
+                  {/* The fold is the row's own control, so the row has to LOOK like one:
+                      with the tools folded by default, a name + state + count reads as a
+                      static line unless something says it opens. Same caret as the thinking
+                      block, so "this line unfolds" is already a known shape in this UI —
+                      and LEADING, the way a tree's disclosure sits before the thing it
+                      opens, because a trailing one competes with the row's buttons. */}
+                  <span className="mcp-caret" aria-hidden="true"><Caret open={isOpen} /></span>
                   <span className="mcp-server-name">{s.name}</span>
                   <span className={`mcp-server-state ${s.connected ? 'on' : (s.needsAuth ? 'auth' : 'off')}`}>
                     {s.connected ? '已连接' : (s.needsAuth ? '需要授权' : '未连接')}
