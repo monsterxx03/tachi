@@ -112,7 +112,8 @@
   animation: mcp-spin 0.7s linear infinite;
 }
 @keyframes mcp-spin { to { transform: rotate(360deg); } }
-.mcp-tool { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 16px; }
+.mcp-tool { display: flex; flex-direction: column; }
+.mcp-tool-row { display: flex; align-items: center; gap: 8px; padding: 6px 6px 6px 12px; cursor: pointer; }
 .mcp-tool-state { font-size: 11px; color: var(--text-faint); }
 .mcp-tool-state.loaded { color: var(--green); }
 .mcp-tool-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -123,6 +124,18 @@
    is the way out of the grey. */
 .mcp-tool.unloaded .mcp-tool-name { color: var(--text-faint); }
 .mcp-tool.unloaded .mcp-tool-state { color: var(--text-faint); }
+
+/* A tool's own contract, opened on click: its description and one line per parameter.
+   Fetched per tool (GetMCPToolSchema), which is why nothing here loads with the list. */
+.mcp-tool-detail { padding: 0 6px 8px 30px; display: flex; flex-direction: column; gap: 5px; }
+.mcp-tool-desc { font-size: 11.5px; color: var(--text-dim); white-space: pre-wrap; word-break: break-word; }
+.mcp-param { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px; font-size: 11.5px; }
+.mcp-param-name { color: var(--text); font-family: "SF Mono", ui-monospace, Menlo, monospace; }
+.mcp-param-req { color: var(--red); margin-left: 1px; }
+.mcp-param-type { color: var(--accent); font-family: "SF Mono", ui-monospace, Menlo, monospace; font-size: 11px; }
+.mcp-param-desc { color: var(--text-dim); flex: 1 1 100%; }
+.mcp-param-meta { color: var(--text-faint); font-size: 11px; }
+.mcp-param-none { font-size: 11.5px; color: var(--text-faint); }
 
 /* ── MCP authorization ───────────────────────────────────────────────────── */
 /* One server's authorization: what the flow is doing, the URL to open (or copy into a

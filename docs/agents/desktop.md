@@ -421,6 +421,16 @@ const type = (el, t) => {
   real window, seconds wide when one server is slow. Two things keep the panel honest about it: it re-reads on
   every open (`App.tsx`'s effect on `mcpOpen`; nothing else would ever correct a stale snapshot) and the backend
   emits `agent:mcp_ready` when the pool is settled, which a panel that was ALREADY open needs (`useMCPReady`).
+- **A tool row opens its own contract, fetched on demand** (`GetMCPToolSchema`, clicked like a server
+  row). On demand, not part of `ListMCPServers`: that list is up to a hundred rows and is re-read on every
+  panel open and after every authorization, so shipping the schemas with it would pay for the one row the
+  user clicks. The VO is FLATTENED — type resolved to a single string (see `agent/mcp/tool.go`'s
+  `propertyType`), required marks placed, enum/default/array-element type as separate fields, and the
+  parameters SORTED (the schema is a map: a list that reshuffles between two opens is worse than any order).
+  A raw inputSchema was rejected deliberately: it makes the reader reconstruct the contract from `$ref`s and
+  unions, and a schema tree in a 380px popover is unreadable. One default, not a convention: an unknown name
+  returns the zero value rather than an error, because the panel may be showing a list fetched before that
+  server went away (the detail says so).
 - **Tools in the pool are LISTED whether or not this session has loaded them, and the two must be told apart.**
   Under MCP tool search a server auto-loads nothing, so "not loaded" is the normal state and a row that simply
   disappears reads as a missing tool: unloaded rows carry `.unloaded` (greyed name and state) while loaded ones

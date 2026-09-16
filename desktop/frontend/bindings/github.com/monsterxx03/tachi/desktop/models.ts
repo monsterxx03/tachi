@@ -311,6 +311,41 @@ export interface MCPServerVO {
 }
 
 /**
+ * MCPToolParamVO is one parameter of a tool's schema, flattened for display.
+ * 
+ * Flattened rather than raw JSON on purpose: the panel's job is to answer "what does this
+ * tool want", and a raw inputSchema makes the reader reconstruct that from $refs and unions.
+ * What is lost is deliberate — nested object/array *details* collapse to their type (see
+ * ItemType), because a schema tree in a 380px popover is unreadable, and the full schema is
+ * one `MCPSearchTools` call away for anyone who needs it.
+ */
+export interface MCPToolParamVO {
+    "name": string;
+    "type": string;
+    "required": boolean;
+    "description"?: string;
+    "enum"?: string[] | null;
+    "default"?: string;
+
+    /**
+     * ItemType is an array parameter's element type ("" when unknown).
+     */
+    "itemType"?: string;
+}
+
+/**
+ * MCPToolSchemaVO is one tool's whole contract — description and parameters — for the
+ * panel's tool detail.
+ */
+export interface MCPToolSchemaVO {
+    "name": string;
+    "toolName": string;
+    "server": string;
+    "description": string;
+    "parameters": MCPToolParamVO[] | null;
+}
+
+/**
  * MCPToolVO describes one tool under an MCP server for the status-bar panel.
  */
 export interface MCPToolVO {

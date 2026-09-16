@@ -346,7 +346,19 @@ func (s *Server) handleMCP(w http.ResponseWriter, r *http.Request) {
 			"tools": []map[string]any{{
 				"name":        ToolName,
 				"description": "echo from the mcpauth fixture",
-				"inputSchema": map[string]any{"type": "object", "properties": map[string]any{}},
+				// One required string, so a caller can assert the panel renders a SCHEMA rather
+				// than a description alone: the parameter's name, type and required mark are
+				// three separate claims about three separate code paths.
+				"inputSchema": map[string]any{
+					"type": "object",
+					"properties": map[string]any{
+						"text": map[string]any{
+							"type":        "string",
+							"description": "what to echo back",
+						},
+					},
+					"required": []string{"text"},
+				},
 			}},
 		})
 	case "tools/call":

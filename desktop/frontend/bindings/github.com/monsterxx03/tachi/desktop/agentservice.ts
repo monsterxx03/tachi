@@ -166,6 +166,19 @@ export function GetContextInfo(id: string): $CancellablePromise<$models.ContextI
 }
 
 /**
+ * GetMCPToolSchema returns one pool tool's contract for the panel, or the zero value when the
+ * name is not in the pool (an unknown tool is not an error here: the panel is showing a list
+ * it fetched earlier, and a name that has since left the pool just has nothing to show).
+ * 
+ * It is a separate call rather than a field on MCPServerVO because the panel lists up to a
+ * hundred tools and fetches that list on every open (and after every authorization): the
+ * schemas would ride along every time for the one the user clicks.
+ */
+export function GetMCPToolSchema(name: string): $CancellablePromise<$models.MCPToolSchemaVO> {
+    return $Call.ByID(2595098593, name);
+}
+
+/**
  * GetMode returns the active session's mode: auto, chat or plan.
  */
 export function GetMode(): $CancellablePromise<string> {

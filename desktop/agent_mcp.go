@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -540,4 +542,116 @@ func (d *desktopApp) endMCPAuth(name string) {
 	defer d.mcpAuthMu.Unlock()
 	delete(d.mcpAuthInFlight, name)
 	delete(d.mcpAuthCancels, name)
+}
+
+// MCPToolParamVO is one parameter of a tool's schema, flattened for display.
+//
+// Flattened rather than raw JSON on purpose: the panel's job is to answer "what does this
+// tool want", and a raw inputSchema makes the reader reconstruct that from $refs and unions.
+// What is lost is deliberate — nested object/array *details* collapse to their type (see
+// ItemType), because a schema tree in a 380px popover is unreadable, and the full schema is
+// one `MCPSearchTools` call away for anyone who needs it.
+type MCPToolParamVO struct {
+	Name        string   `json:"name"`
+	Type        string   `json:"type"`
+	Required    bool     `json:"required"`
+	Description string   `json:"description,omitempty"`
+	Enum        []string `json:"enum,omitempty"`
+	Default     string   `json:"default,omitempty"`
+	// ItemType is an array parameter's element type ("" when unknown).
+	ItemType string `json:"itemType,omitempty"`
+}
+
+// MCPToolSchemaVO is one tool's whole contract — description and parameters — for the
+// panel's tool detail.
+type MCPToolSchemaVO struct {
+	Name        string           `json:"name"`
+	ToolName    string           `json:"toolName"`
+	Server      string           `json:"server"`
+	Description string           `json:"description"`
+	Parameters  []MCPToolParamVO `json:"parameters"`
+}
+
+// GetMCPToolSchema returns one pool tool's contract for the panel, or the zero value when the
+// name is not in the pool (an unknown tool is not an error here: the panel is showing a list
+// it fetched earlier, and a name that has since left the pool just has nothing to show).
+//
+// It is a separate call rather than a field on MCPServerVO because the panel lists up to a
+// hundred tools and fetches that list on every open (and after every authorization): the
+// schemas would ride along every time for the one the user clicks.
+func (s *AgentService) GetMCPToolSchema(name string) MCPToolSchemaVO {
+	d := s.desk
+	if d.mcp == nil || name == "" {
+		return MCPToolSchemaVO{}
+	}
+	dt := d.mcp.Pool().Get(name)
+	if dt == nil {
+		return MCPToolSchemaVO{}
+	}
+
+	required := make(map[string]bool, len(dt.Schema.Parameters.Required))
+	for _, r := range dt.Schema.Parameters.Required {
+		required[r] = true
+	}
+	params := make([]MCPToolParamVO, 0, len(dt.Schema.Parameters.Properties))
+	for pname, prop := range dt.Schema.Parameters.Properties {
+		vo := MCPToolParamVO{
+			Name:        pname,
+			Type:        prop.Type,
+			Required:    required[pname],
+			Description: prop.Description,
+			Enum:        prop.Enum,
+			Default:     schemaValueText(prop.Default),
+			ItemType:    schemaItemType(prop.Items),
+		}
+		if vo.Type == "" {
+			// A $ref-only property stays typeless (see agent/mcp/tool.go's propertyType);
+			// "any" is what that means to a reader, and an empty column reads as a bug.
+			vo.Type = "any"
+		}
+		params = append(params, vo)
+	}
+	// Required first, then by name: the map above has no order, and a list that reshuffles
+	// between two opens is worse than either order.
+	sort.Slice(params, func(i, j int) bool {
+		if params[i].Required != params[j].Required {
+			return params[i].Required
+		}
+		return params[i].Name < params[j].Name
+	})
+
+	return MCPToolSchemaVO{
+		Name:        dt.Name,
+		ToolName:    strings.TrimPrefix(dt.Name, "mcp__"+dt.ServerName+"__"),
+		Server:      dt.ServerName,
+		Description: dt.Description,
+		Parameters:  params,
+	}
+}
+
+// schemaValueText renders a schema default for display: a string as itself, anything else as
+// JSON (a default of `["a","b"]` should not print as Go's slice formatting).
+func schemaValueText(v any) string {
+	if v == nil {
+		return ""
+	}
+	if s, ok := v.(string); ok {
+		return s
+	}
+	if b, err := json.Marshal(v); err == nil {
+		return string(b)
+	}
+	return fmt.Sprintf("%v", v)
+}
+
+// schemaItemType digs the element type out of an array property's `items` node.
+func schemaItemType(items any) string {
+	m, ok := items.(map[string]any)
+	if !ok {
+		return ""
+	}
+	if t, ok := m["type"].(string); ok {
+		return t
+	}
+	return ""
 }

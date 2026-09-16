@@ -83,6 +83,21 @@
   smoke.check('未加载的工具行带置灰标记', !!toolRow && toolRow.classList.contains('unloaded'), toolRow ? toolRow.className : '')
   smoke.check('未加载的工具显示「未加载」', !!toolRow && smoke.text(toolRow).indexOf('未加载') >= 0, smoke.text(toolRow))
 
+  // 点开一个工具：描述与参数 schema 要能看到（列表本身只带名字与状态，schema 是点开时按需取的
+  // —— 一个 server 可能有几十个工具，而这份列表每次开面板、每次授权后都会重取）。
+  smoke.click(toolRow.querySelector('.mcp-tool-row'))
+  const detail = await smoke.waitFor('.mcp-tool-detail', '工具行展开出描述与 schema', 15000)
+  if (!detail) return smoke.finish()
+  const detailText = smoke.text(detail)
+  smoke.check('展开后显示工具描述', detailText.indexOf('echo from the mcpauth fixture') >= 0, detailText)
+  smoke.check('显示参数名', detailText.indexOf('text') >= 0, detailText)
+  smoke.check('显示参数类型', detailText.indexOf('string') >= 0, detailText)
+  smoke.check('显示必填标记', !!detail.querySelector('.mcp-param-req'), detailText)
+  smoke.check('显示参数说明', detailText.indexOf('what to echo back') >= 0, detailText)
+  smoke.click(toolRow.querySelector('.mcp-tool-row'))
+  const gone = await smoke.waitFor(() => !smoke.q('.mcp-tool-detail'), '再次点击后收起', 8000)
+  smoke.check('描述与 schema 只在展开时出现', !!gone, '')
+
   // ── 4. 授权之后的那一轮：模型要知道这些工具存在 ─────────────────────────
   // 工具进了池不等于模型知道它存在：deferred 提示一次会话只发一次，而这条 server 是会话
   // 开始之后才连上的 —— 不通知，模型就只能靠瞎猜去搜。这里真的发一条消息，让下一条请求

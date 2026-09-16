@@ -24,6 +24,8 @@ export type {
     FilePreviewVO,
     FindingVO,
     MCPServerVO,
+    MCPToolParamVO,
+    MCPToolSchemaVO,
     MCPToolVO,
     OneOffDetailVO,
     OneOffListVO,

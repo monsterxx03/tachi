@@ -430,3 +430,45 @@ func redirectOf(t *testing.T, rawURL string) string {
 	}
 	return loc
 }
+
+// TestGetMCPToolSchemaFlattensTheContract pins what the panel's tool detail renders: a tool's
+// description and one entry per parameter, with the type resolved, the required marks placed,
+// and the order stable — the pool's schema is a map, so "the same tool twice" would otherwise
+// reshuffle between two opens.
+func TestGetMCPToolSchemaFlattensTheContract(t *testing.T) {
+	d, svc, _, _ := newMCPOAuthApp(t)
+
+	orig := tachimcp.BrowserOpener
+	tachimcp.BrowserOpener = headlessBrowser()
+	t.Cleanup(func() { tachimcp.BrowserOpener = orig })
+
+	if res := svc.AuthorizeMCPServer(oauthServer); res != "ok" {
+		t.Fatalf("AuthorizeMCPServer: %s", res)
+	}
+	fullName := "mcp__" + oauthServer + "__" + mcpauth.ToolName
+	waitForMCP(t, d, oauthServer, fullName)
+
+	vo := svc.GetMCPToolSchema(fullName)
+	if vo.Name != fullName || vo.ToolName != mcpauth.ToolName || vo.Server != oauthServer {
+		t.Fatalf("identity: %+v", vo)
+	}
+	if !strings.Contains(vo.Description, "echo from the mcpauth fixture") {
+		t.Errorf("description = %q", vo.Description)
+	}
+	if len(vo.Parameters) != 1 {
+		t.Fatalf("parameters = %+v, want the fixture's one", vo.Parameters)
+	}
+	p := vo.Parameters[0]
+	if p.Name != "text" || p.Type != "string" || !p.Required {
+		t.Errorf("parameter = %+v, want a required string named text", p)
+	}
+	if p.Description != "what to echo back" {
+		t.Errorf("parameter description = %q", p.Description)
+	}
+
+	// An unknown name is not an error — the panel may be showing a list fetched before a
+	// server went away — and it must not come back as a half-filled VO.
+	if empty := svc.GetMCPToolSchema("mcp__gone__nope"); empty.Name != "" || len(empty.Parameters) != 0 {
+		t.Errorf("unknown tool = %+v, want the zero value", empty)
+	}
+}

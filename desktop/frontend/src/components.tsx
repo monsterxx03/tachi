@@ -7,7 +7,7 @@ import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
 import { processLiveLine, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionRequest } from './types'
-import type { CommandVO, ContextInfoVO, FileChangeVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
+import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
 // ContextRing is the meter itself: used fraction of the context window as a
 // ring. Purely decorative — ContextMeter (below) owns the button semantics and
@@ -451,6 +451,23 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
   // One draft redirect URL per server: the panel is a list, and a paste into one row must
   // not appear in another's box.
   const [pasteURL, setPasteURL] = useState<Record<string, string>>({})
+  // Per-tool detail: whether the row is open and, once fetched, the tool's contract. Fetched
+  // on first open rather than shipped with the list — see GetMCPToolSchema.
+  const [toolDetail, setToolDetail] = useState<Record<string, { open: boolean; loading: boolean; schema?: MCPToolSchemaVO }>>({})
+
+  // toggleToolDetail opens a tool's row and fetches its schema the first time. A tool that is
+  // already open keeps its schema: the panel re-renders on every refresh (turn end, an
+  // authorization), and refetching a hundred rows' worth of nothing on each of those is the
+  // kind of churn nobody sees but everybody pays for.
+  const toggleToolDetail = useCallback((name: string) => {
+    const willOpen = !toolDetail[name]?.open
+    setToolDetail((prev) => ({ ...prev, [name]: { open: willOpen, loading: willOpen && !prev[name]?.schema, schema: prev[name]?.schema } }))
+    if (!willOpen || toolDetail[name]?.schema) return
+    AgentService.GetMCPToolSchema(name)
+      .then((vo) => setToolDetail((prev) => ({ ...prev, [name]: { open: true, loading: false, schema: vo } })))
+      .catch(() => setToolDetail((prev) => ({ ...prev, [name]: { open: true, loading: false } })))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [toolDetail])
   const profileBusy = !!loading.__profile__
   const boxRef = useRef<HTMLDivElement>(null)
 
@@ -549,6 +566,11 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
                 {authCard}
                 {isOpen && (s.tools || []).map((t) => {
                   const tbusy = !!loading[t.name]
+                  const open = !!toolDetail[t.name]?.open
+                  const schema = toolDetail[t.name]?.schema
+                  // Deliberately not called "loading": that is this panel's prop, and shadowing
+                  // it here made `loading[t.name]` above read the local one.
+                  const schemaLoading = !!toolDetail[t.name]?.loading
                   // A tool that lives in the shared pool but is not loaded into THIS session is
                   // listed all the same, greyed — the panel is the directory of what the server
                   // offers, and hiding the unloaded half would make a 44-tool server look empty
@@ -557,11 +579,52 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
                   // told apart at a glance rather than by reading a chip.
                   return (
                     <div key={t.name} className={`mcp-tool${t.loaded ? '' : ' unloaded'}`}>
-                      <span className={`mcp-tool-state ${t.loaded ? 'loaded' : ''}`}>{t.loaded ? '✓ 已加载' : '○ 未加载'}</span>
-                      <span className="mcp-tool-name" title={t.description || ''}>{t.toolName}</span>
-                      <button className={`mcp-toggle ${t.loaded ? 'on' : ''}`} disabled={tbusy} onClick={() => onToggleTool(t.name, !t.loaded)}>
-                        {tbusy ? <><span className="mcp-spinner" /> 处理中…</> : (t.loaded ? '禁用' : '启用')}
-                      </button>
+                      <div className="mcp-tool-row" role="button" tabIndex={0} aria-expanded={open}
+                        onClick={() => toggleToolDetail(t.name)}
+                        onKeyDown={actOnKey(() => toggleToolDetail(t.name))}>
+                        <span className="mcp-caret" aria-hidden="true"><Caret open={open} /></span>
+                        <span className={`mcp-tool-state ${t.loaded ? 'loaded' : ''}`}>{t.loaded ? '✓ 已加载' : '○ 未加载'}</span>
+                        <span className="mcp-tool-name" title={t.description || ''}>{t.toolName}</span>
+                        <button className={`mcp-toggle ${t.loaded ? 'on' : ''}`} disabled={tbusy} onClick={(e) => { e.stopPropagation(); onToggleTool(t.name, !t.loaded) }}>
+                          {tbusy ? <><span className="mcp-spinner" /> 处理中…</> : (t.loaded ? '禁用' : '启用')}
+                        </button>
+                      </div>
+                      {/* The description and the parameter schema are fetched per tool, when it
+                          is opened: the list is up to a hundred rows and is re-read on every
+                          panel open, so the schemas cannot ride along with it. */}
+                      {open && (
+                        <div className="mcp-tool-detail">
+                          {schemaLoading && !schema ? (
+                            <div className="mcp-param-none">读取中…</div>
+                          ) : !schema ? (
+                            <div className="mcp-param-none">这个工具已经不在池子里了（server 可能已断开）</div>
+                          ) : (
+                            <>
+                              <div className="mcp-tool-desc">{schema.description || '（这个工具没有描述）'}</div>
+                              {(schema.parameters || []).length === 0 ? (
+                                <div className="mcp-param-none">无参数</div>
+                              ) : (
+                                (schema.parameters || []).map((p) => (
+                                  <div className="mcp-param" key={p.name}>
+                                    <span className="mcp-param-name">
+                                      {p.name}
+                                      {p.required ? <span className="mcp-param-req" title="必填">*</span> : null}
+                                    </span>
+                                    <span className="mcp-param-type">
+                                      {p.type}{p.itemType ? `[${p.itemType}]` : ''}
+                                    </span>
+                                    {p.description ? <span className="mcp-param-desc">{p.description}</span> : null}
+                                    {(p.enum || []).length > 0 ? (
+                                      <span className="mcp-param-meta">可选值：{(p.enum || []).join(' / ')}</span>
+                                    ) : null}
+                                    {p.default ? <span className="mcp-param-meta">默认：{p.default}</span> : null}
+                                  </div>
+                                ))
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
                     </div>
                   )
                 })}
