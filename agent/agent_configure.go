@@ -343,6 +343,14 @@ func (a *AIAgent) initMCPAsync(ctx context.Context, sysCfg AgentSystemConfig) (*
 	mgr := mcp.NewManager(ctx, a.Config.FullConfig, a.Config.Logger)
 	a.Config.MCPManager = mgr
 
+	// The roots answer must be in place BEFORE the background connect below: a server learns
+	// whether this client supports roots during initialize and never asks again on its own, so
+	// one that starts without the handler keeps the answer it was first given (or, with none,
+	// falls back to its own default — the OS temp dir, for chrome-devtools).
+	if a.Config.MCPRootsFunc != nil {
+		mgr.SetRootsFunc(a.Config.MCPRootsFunc)
+	}
+
 	// Register MCPSearchTools immediately so the LLM can discover tools
 	// as they come in. The pool is empty initially, so search returns
 	// nothing until MCP servers finish connecting.

@@ -89,8 +89,8 @@ func TestNewSession_WithAdditionalDirectories(t *testing.T) {
 
 	sess, ok := ta.sessions.Get(string(resp.SessionId))
 	require.True(t, ok)
-	assert.Equal(t, "/project", sess.cwd)
-	assert.Equal(t, []string{"/shared-lib", "/docs"}, sess.additionalDirs)
+	assert.Equal(t, "/project", sess.roots.Cwd())
+	assert.Equal(t, []string{"/shared-lib", "/docs"}, sess.roots.Dirs())
 
 	// session/list reports the complete ordered root list.
 	listResp, err := ta.ListSessions(t.Context(), acp.ListSessionsRequest{})
@@ -127,7 +127,7 @@ func TestLoadSession_WithAdditionalDirectories(t *testing.T) {
 
 	sessions := ta.sessions.List()
 	require.Len(t, sessions, 1)
-	assert.Equal(t, []string{"/shared-lib"}, sessions[0].additionalDirs)
+	assert.Equal(t, []string{"/shared-lib"}, sessions[0].roots.Dirs())
 }
 
 func TestResumeSession_InMemoryAppliesRequestedRoots(t *testing.T) {
@@ -151,7 +151,7 @@ func TestResumeSession_InMemoryAppliesRequestedRoots(t *testing.T) {
 	require.NoError(t, err)
 	sess, ok := ta.sessions.Get(string(sid))
 	require.True(t, ok)
-	assert.Equal(t, []string{"/new-root"}, sess.additionalDirs)
+	assert.Equal(t, []string{"/new-root"}, sess.roots.Dirs())
 
 	// Omitting the field clears the list (explicit-list only, per spec).
 	_, err = ta.ResumeSession(t.Context(), acp.ResumeSessionRequest{
@@ -160,7 +160,7 @@ func TestResumeSession_InMemoryAppliesRequestedRoots(t *testing.T) {
 		McpServers: []acp.McpServer{},
 	})
 	require.NoError(t, err)
-	assert.Nil(t, sess.additionalDirs, "omitted additionalDirectories must activate none")
+	assert.Nil(t, sess.roots.Dirs(), "omitted additionalDirectories must activate none")
 }
 
 func TestBuildSystemPromptWithRoots(t *testing.T) {

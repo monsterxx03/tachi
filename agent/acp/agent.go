@@ -113,6 +113,11 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	// constructor from FullConfig's default provider; the provider carries
 	// its config name for ledger grouping.
 	configureCtx := context.Background()
+	// This session's workspace, created BEFORE the agent: its MCP connections declare the
+	// `roots` capability during initialize (in the background, from inside the constructor) and
+	// answer with this object, while the session that owns it is built from that same agent.
+	// `session/resume` rewrites it in place — see sessionRoots.
+	roots := newSessionRoots(cwd, additionalDirs)
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
 		Logger:          t.logger,
 		PermissionMode:  agent.PermissionModeExternal,
@@ -122,6 +127,8 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 		PlanToolEnabled: true,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
+		// What a roots-aware MCP server may touch: this session's cwd + additionalDirectories.
+		MCPRootsFunc: roots.mcpRoots,
 	})
 	if err != nil {
 		return acp.NewSessionResponse{}, fmt.Errorf("configure agent: %w", err)
@@ -161,7 +168,7 @@ func (t *TachiAgent) NewSession(ctx context.Context, req acp.NewSessionRequest) 
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, additionalDirs, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, roots, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Wire up permission handler for this session
 	if t.conn != nil {
@@ -252,7 +259,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	defer sess.setPromptCancel(nil)
 
 	// Bind session's working directory to context so tools resolve relative paths correctly
-	promptCtx = wdctx.WithDir(promptCtx, sess.cwd)
+	promptCtx = wdctx.WithDir(promptCtx, sess.roots.Cwd())
 
 	// Attach ACP connection to context so tools can route file I/O through ACP.
 	if t.conn != nil {
@@ -297,7 +304,7 @@ func (t *TachiAgent) Prompt(ctx context.Context, req acp.PromptRequest) (acp.Pro
 	}
 
 	// Build system prompt (use session cwd and current mode for environment info)
-	systemPrompt := buildSystemPromptForCwd(t.cfg, sess.cwd, sess.additionalDirs, sess.agent.Mode(), sess.ID)
+	systemPrompt := buildSystemPromptForCwd(t.cfg, sess.roots.Cwd(), sess.roots.Dirs(), sess.agent.Mode(), sess.ID)
 
 	// Run the agent loop (blocking)
 	eventCh := sess.agent.RunConversationStream(promptCtx, history, userMsg, systemPrompt, llm.ChatOptions{
@@ -382,13 +389,13 @@ func (t *TachiAgent) ListSessions(ctx context.Context, req acp.ListSessionsReque
 	inMemory := make(map[string]bool)
 
 	for _, sess := range sessions {
-		if req.Cwd != nil && *req.Cwd != sess.cwd {
+		if req.Cwd != nil && *req.Cwd != sess.roots.Cwd() {
 			continue
 		}
 		info := acp.SessionInfo{
 			SessionId:             acp.SessionId(sess.ID),
-			Cwd:                   sess.cwd,
-			AdditionalDirectories: sess.additionalDirs,
+			Cwd:                   sess.roots.Cwd(),
+			AdditionalDirectories: sess.roots.Dirs(),
 		}
 		if sess.sessMgr != nil {
 			if cur := sess.sessMgr.Current(); cur != nil {
@@ -444,13 +451,17 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	// (omitted or empty = none), so the in-memory fast path applies the
 	// request's list instead of blindly no-op'ing.
 	if sess, ok := t.sessions.Get(string(req.SessionId)); ok {
-		dirs, err := validateAdditionalDirectories(sess.cwd, req.AdditionalDirectories)
+		dirs, err := validateAdditionalDirectories(sess.roots.Cwd(), req.AdditionalDirectories)
 		if err != nil {
 			return acp.ResumeSessionResponse{}, err
 		}
-		sess.mu.Lock()
-		sess.additionalDirs = dirs
-		sess.mu.Unlock()
+		sess.roots.Set(sess.roots.Cwd(), dirs)
+		// The workspace just changed, and this session's MCP connections answer the roots
+		// capability with it: a roots-aware server has to be told, or it keeps confining file
+		// access to the directories the editor has just dropped.
+		if sess.mcpMgr != nil {
+			sess.mcpMgr.NotifyRootsChanged(ctx)
+		}
 		return acp.ResumeSessionResponse{}, nil
 	}
 
@@ -492,6 +503,11 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	}
 
 	configureCtx := context.Background()
+	// This session's workspace, created BEFORE the agent: its MCP connections declare the
+	// `roots` capability during initialize (in the background, from inside the constructor) and
+	// answer with this object, while the session that owns it is built from that same agent.
+	// `session/resume` rewrites it in place — see sessionRoots.
+	roots := newSessionRoots(cwd, additionalDirs)
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
 		Resolved:        providerResolved,
 		Logger:          t.logger,
@@ -502,6 +518,8 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 		PlanToolEnabled: true,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
+		// What a roots-aware MCP server may touch: this session's cwd + additionalDirectories.
+		MCPRootsFunc: roots.mcpRoots,
 	})
 	if err != nil {
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: resume configure warning: %v", err))
@@ -516,7 +534,7 @@ func (t *TachiAgent) ResumeSession(ctx context.Context, req acp.ResumeSessionReq
 	aiAgent.SetSessionManager(diskMgr)
 
 	// Create ACP session with existing disk session manager
-	sess := t.sessions.New(ctx, cwd, additionalDirs, t.cfg, aiAgent, mcpMgr, diskMgr)
+	sess := t.sessions.New(ctx, roots, t.cfg, aiAgent, mcpMgr, diskMgr)
 
 	// Keep the ACP session addressable by the client-requested ID (see
 	// LoadSession for rationale — compact chain may have switched the
@@ -656,6 +674,11 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 
 	// Create independent AIAgent
 	configureCtx := context.Background()
+	// This session's workspace, created BEFORE the agent: its MCP connections declare the
+	// `roots` capability during initialize (in the background, from inside the constructor) and
+	// answer with this object, while the session that owns it is built from that same agent.
+	// `session/resume` rewrites it in place — see sessionRoots.
+	roots := newSessionRoots(cwd, additionalDirs)
 	aiAgent, mcpMgr, err := agent.NewAIAgentWithConfig(configureCtx, agent.AgentConfig{
 		Resolved:        providerResolved,
 		Logger:          t.logger,
@@ -666,6 +689,8 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 		PlanToolEnabled: true,
 		FullConfig:      t.cfg,
 		SystemConfig:    agent.SystemConfigFromConfig(t.cfg),
+		// What a roots-aware MCP server may touch: this session's cwd + additionalDirectories.
+		MCPRootsFunc: roots.mcpRoots,
 	})
 	if err != nil {
 		t.logger.Warn(ctx, fmt.Sprintf("ACP: LoadSession configure warning: %v", err))
@@ -708,7 +733,7 @@ func (t *TachiAgent) LoadSession(ctx context.Context, req acp.LoadSessionRequest
 	}
 
 	// Create ACP session
-	sess := t.sessions.New(ctx, cwd, additionalDirs, t.cfg, aiAgent, mcpMgr, sm)
+	sess := t.sessions.New(ctx, roots, t.cfg, aiAgent, mcpMgr, sm)
 
 	// Keep the ACP session addressable by the client-requested ID. If the
 	// compact-chain follow above loaded a different on-disk session, the

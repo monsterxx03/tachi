@@ -243,7 +243,7 @@ func handleACPCommit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 
 	aiAgent := sess.agent
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, sess.additionalDirs, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
 
 	eventCh := aiAgent.RunCommitOneOff(ctx, systemPrompt, acpOneoffSessionID(sess), config.DefaultMaxTokens, "")
 
@@ -280,7 +280,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	thinking, effort := cmds.ResolveReviewThinking(ropts,
 		aiAgent.Config.Resolved.Thinking, aiAgent.Config.Resolved.ThinkingEffort)
 
-	systemPrompt := buildSystemPromptForCwd(cfg, sess.cwd, sess.additionalDirs, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
 	opts := llm.ChatOptions{
 		MaxTokens:      config.DefaultMaxTokens,
 		Thinking:       thinking,
@@ -291,7 +291,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 	// (fail-fast on unresolvable adversarial models) and creates the report
 	// directory. Single-round reviews flow through the same path — this
 	// frontend never branches on round count. The report dir is anchored at
-	// sess.cwd (the session working directory the round's Bash/WriteFile
+	// sess.roots.Cwd() (the session working directory the round's Bash/WriteFile
 	// tools resolve against) — NOT the process CWD, which ACP clients are
 	// not required to align with (Zed starts the agent from the editor
 	// binary's directory).
@@ -301,7 +301,7 @@ func handleACPReview(ctx context.Context, sess *ACPSession, conn *acp.AgentSideC
 				return []llm.Provider{reviewProvider}, nil
 			}
 			return aiAgent.ResolveAdversarialRoundModels(sess.cfg, reviewProvider, rounds)
-		}, sess.cwd)
+		}, sess.roots.Cwd())
 	if err != nil {
 		sendTextUpdate(ctx, conn, acp.SessionId(sess.ID), err.Error())
 		return acp.StopReasonEndTurn, err
@@ -388,7 +388,7 @@ func handleACPInit(ctx context.Context, sess *ACPSession, conn *acp.AgentSideCon
 	// Build history from session
 	history := loadSessionHistory(ctx, sess)
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, sess.additionalDirs, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
 
 	eventCh := sess.agent.RunConversationStream(ctx, history, cmds.InitPromptTemplate, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
@@ -423,7 +423,7 @@ func handleACPCompact(ctx context.Context, sess *ACPSession, conn *acp.AgentSide
 		return acp.StopReasonEndTurn, nil
 	}
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, sess.additionalDirs, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
 
 	// Disk-loaded history has no system message; prepend it so the compact
 	// LLM call sees the same environment context as the live conversation
@@ -550,7 +550,7 @@ func handleACPMCPProfile(ctx context.Context, sess *ACPSession, conn *acp.AgentS
 
 	// The session's cwd scopes the project-level .tachi/mcp.<name>.json
 	// lookup (empty cwd → global scope only, same as LoadMCPServers).
-	workDir := sess.cwd
+	workDir := sess.roots.Cwd()
 	available := config.ListMCPProfiles(workDir)
 
 	if name == "" {
@@ -700,7 +700,7 @@ func handleACPSkillActivate(ctx context.Context, sess *ACPSession, conn *acp.Age
 	// Run as normal conversation turn with skill activation message
 	history := loadSessionHistory(ctx, sess)
 
-	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.cwd, sess.additionalDirs, agent.ModeAuto, sess.ID)
+	systemPrompt := buildSystemPromptForCwd(sess.cfg, sess.roots.Cwd(), sess.roots.Dirs(), agent.ModeAuto, sess.ID)
 	eventCh := sess.agent.RunConversationStream(ctx, history, msg, systemPrompt,
 		llm.ChatOptions{MaxTokens: config.DefaultMaxTokens})
 

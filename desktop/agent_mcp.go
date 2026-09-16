@@ -5,14 +5,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/monsterxx03/tachi/agent/mcp"
 	"github.com/monsterxx03/tachi/config"
-	"github.com/monsterxx03/tachi/pkg/fileutil"
 	"github.com/monsterxx03/tachi/pkg/logger"
 )
 
@@ -685,13 +683,8 @@ func (d *desktopApp) notifyMCPRootsChanged() {
 // narrower. The union is also the honest reading of "the directories this client is working
 // in": every one of them is a directory the user opened here on purpose.
 //
-// Two rules the list has to keep:
-//   - only directories that EXIST: a server resolves each root with realpath and drops the ones
-//     it cannot resolve (chrome-devtools logs "Could not resolve configured root" and skips),
-//     so a stale root is noise at best and, for a server that treats an empty answer as "no
-//     workspace", a denial at worst;
-//   - a stable order, deduplicated: every ask produces a fresh list, and a server that caches it
-//     should see the same answer twice in a row for the same workspace set.
+// The rules for turning that set into the answer itself (existing directories only, deduplicated,
+// sorted) are mcp.RootsForDirs — shared with ACP, which answers for its single session.
 func (d *desktopApp) mcpRoots() []mcp.Root {
 	d.mu.Lock()
 	ids := make([]string, 0, len(d.runs))
@@ -700,23 +693,14 @@ func (d *desktopApp) mcpRoots() []mcp.Root {
 	}
 	d.mu.Unlock()
 
-	seen := make(map[string]bool, len(ids))
-	paths := make([]string, 0, len(ids)+1)
+	dirs := make([]string, 0, len(ids)+1)
 	for _, id := range ids {
 		primary, additional := d.sessionRootsFrom(d.sessionRecord(id))
-		for _, dir := range append([]string{primary}, additional...) {
-			if dir == "" || seen[dir] || !fileutil.IsDir(dir) {
-				continue
-			}
-			seen[dir] = true
-			paths = append(paths, dir)
-		}
+		dirs = append(dirs, primary)
+		dirs = append(dirs, additional...)
 	}
-	sort.Strings(paths)
-
-	roots := make([]mcp.Root, 0, len(paths))
-	for _, dir := range paths {
-		roots = append(roots, mcp.Root{URI: "file://" + dir, Name: filepath.Base(dir)})
-	}
-	return roots
+	// The building rules (file:// URIs, existing directories only, deduplicated and sorted) live
+	// in agent/mcp: ACP answers with the same shape for its one session, and two copies of that
+	// rule would drift on exactly the cases that matter (a stale root, a reshuffled list).
+	return mcp.RootsForDirs(dirs)
 }

@@ -145,7 +145,7 @@ func newACPReviewSession(t *testing.T, cfg *config.Config, p llm.Provider) (*ACP
 	t.Cleanup(a.Close)
 	sess := &ACPSession{
 		ID:    "test-sess",
-		cwd:   t.TempDir(),
+		roots: newSessionRoots(t.TempDir(), nil),
 		cfg:   cfg,
 		agent: a,
 	}
@@ -159,7 +159,7 @@ func newACPReviewSession(t *testing.T, cfg *config.Config, p llm.Provider) (*ACP
 
 // TestHandleACPReview_MultiRound_ChainCompletes drives the full handler: 3
 // rounds must run (one fork + one LLM call each), finish with EndTurn, and
-// leave sess.history cleared. The report dir is anchored at sess.cwd (the
+// leave sess.history cleared. The report dir is anchored at sess.roots.Cwd() (the
 // ACP convention) — NOT the process CWD.
 func TestHandleACPReview_MultiRound_ChainCompletes(t *testing.T) {
 	p := &acpReviewMockProvider{name: "prov", model: "mock-model"}
@@ -185,14 +185,14 @@ func TestHandleACPReview_MultiRound_ChainCompletes(t *testing.T) {
 	if sess.agent.ToolSchemas() == nil {
 		t.Error("parent agent registry broken after round forks")
 	}
-	// The report dir was created by the orchestrator under sess.cwd — the
+	// The report dir was created by the orchestrator under sess.roots.Cwd() — the
 	// same dir the round's WriteFile resolves relative paths against (the
 	// orchestrator's os.Stat verification must see what the LLM wrote).
-	reportDir := filepath.Join(sess.cwd, ".tachi/reviews")
+	reportDir := filepath.Join(sess.roots.Cwd(), ".tachi/reviews")
 	if _, err := os.Stat(reportDir); err != nil {
-		t.Errorf("report dir not created under sess.cwd: %v", err)
+		t.Errorf("report dir not created under sess.roots.Cwd(): %v", err)
 	}
-	// Sanity: the process CWD must NOT hold the report dir (sess.cwd is a
+	// Sanity: the process CWD must NOT hold the report dir (sess.roots.Cwd() is a
 	// temp dir distinct from the test runner's CWD).
 	if _, err := os.Stat(".tachi/reviews"); !os.IsNotExist(err) {
 		t.Error("report dir must not be created under the process CWD")

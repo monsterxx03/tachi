@@ -129,7 +129,7 @@ func setupSessionWithMessages(t *testing.T, cwd string, msgs []session.Message) 
 	// LoadMessages uses sm.current — already set by New
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     cwd,
+		roots:   newSessionRoots(cwd, nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}
@@ -160,7 +160,7 @@ func TestReplaySessionHistory_EmptyMessages(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     "/empty",
+		roots:   newSessionRoots("/empty", nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}
@@ -464,7 +464,7 @@ func TestReplaySessionHistory_CachesHistory(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     "/cache-test",
+		roots:   newSessionRoots("/cache-test", nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}
@@ -517,7 +517,7 @@ func TestReplaySessionHistory_CachesHistory_WithTools(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     "/cache-tools",
+		roots:   newSessionRoots("/cache-tools", nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}
@@ -567,7 +567,7 @@ func TestReplaySessionHistory_CachesHistory_ConversionFailure(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     "/cache-fail",
+		roots:   newSessionRoots("/cache-fail", nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}
@@ -602,7 +602,7 @@ func TestReplaySessionHistory_ConcurrentSafety(t *testing.T) {
 
 			acpSess := &ACPSession{
 				ID:      sess.ID,
-				cwd:     "/concurrent",
+				roots:   newSessionRoots("/concurrent", nil),
 				cfg:     testConfig,
 				sessMgr: sm,
 			}
@@ -635,7 +635,7 @@ func TestReplaySessionHistory_LoadMessagesError(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     "/load-err",
+		roots:   newSessionRoots("/load-err", nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}
@@ -671,7 +671,7 @@ func TestReplaySessionHistory_DoesNotCacheOnConversionFailure(t *testing.T) {
 	conn, w, ch := mockACPConn(t)
 	acpSess := &ACPSession{
 		ID:      sess.ID,
-		cwd:     "/conv-fail",
+		roots:   newSessionRoots("/conv-fail", nil),
 		cfg:     testConfig,
 		sessMgr: sm,
 	}

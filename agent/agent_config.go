@@ -170,6 +170,21 @@ type AgentConfig struct {
 	// docs/2026-09-14-desktop-project-design.md §14.3.
 	RootsFunc func(*session.Session) []string
 
+	// MCPRootsFunc, when set, is what this agent's MCP connections answer the `roots`
+	// capability with: the workspaces the servers may treat as their own.
+	//
+	// nil = declare nothing, which is the right default for a caller that cannot name its
+	// workspace. A client that advertises the capability owes the server an answer, and a
+	// roots-AWARE server confines file access to it (the official chrome-devtools server allows
+	// only the OS temp dir when the client declares no roots at all — which is how a tool that
+	// exports a file into the project ends up failing a path check).
+	//
+	// ACP sets it per session (its connections are per session, so the answer is that session's
+	// cwd + additionalDirectories, and `session/resume` rewrites them in place);
+	// the desktop sets it on the shared manager instead (one connection serves every session, so
+	// the answer is the union of their workspaces — see desktopApp.mcpRoots).
+	MCPRootsFunc mcp.RootsFunc
+
 	// --- 系统配置 ---
 	SystemConfig AgentSystemConfig
 	FullConfig   *config.Config

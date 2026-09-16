@@ -198,7 +198,7 @@ func TestLoadSession_LoadsExistingSessionByCwd(t *testing.T) {
 	// Verify the ACP session was created with the same disk session ID
 	acpSess, ok := ta.sessions.Get(sessID)
 	require.True(t, ok, "ACP session should exist with the disk session ID")
-	assert.Equal(t, "/existing/project", acpSess.cwd)
+	assert.Equal(t, "/existing/project", acpSess.roots.Cwd())
 }
 
 func TestLoadSession_WithSessionId_NotFound_ReturnsError(t *testing.T) {

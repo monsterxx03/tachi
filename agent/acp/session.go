@@ -13,16 +13,65 @@ import (
 	"github.com/monsterxx03/tachi/session"
 )
 
+// sessionRoots is an ACP session's workspace: the primary cwd plus the additional directories the
+// editor declared (Additional Workspace Roots; relative paths always resolve against cwd only).
+//
+// It is an object of its own rather than two fields on ACPSession because three consumers need
+// the same answer at different times, and one of them asks before the session exists: the MCP
+// connections declare the `roots` capability during initialize (inside the agent's construction,
+// asynchronously), while the session object is built FROM that agent. `session/resume` then
+// rewrites the list in place — so a captured copy would keep answering with the tree the user
+// has already left.
+type sessionRoots struct {
+	mu   sync.Mutex
+	cwd  string
+	dirs []string
+}
+
+func newSessionRoots(cwd string, dirs []string) *sessionRoots {
+	return &sessionRoots{cwd: cwd, dirs: append([]string(nil), dirs...)}
+}
+
+// Cwd returns the primary workspace root.
+func (r *sessionRoots) Cwd() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.cwd
+}
+
+// Dirs returns the additional roots (a copy: callers build prompts from it).
+func (r *sessionRoots) Dirs() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append([]string(nil), r.dirs...)
+}
+
+// Set replaces the list — what `session/resume` does, whose additionalDirectories is the
+// complete resulting list.
+func (r *sessionRoots) Set(cwd string, dirs []string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.cwd = cwd
+	r.dirs = append([]string(nil), dirs...)
+}
+
+// mcpRoots answers MCP's roots/list for this session: its workspace, as file:// URIs. This is
+// what an ACP session hands its MCP manager, so a roots-aware server confines file access to the
+// tree the editor declared instead of falling back to the OS temp dir.
+func (r *sessionRoots) mcpRoots() []mcp.Root {
+	r.mu.Lock()
+	dirs := append([]string{r.cwd}, r.dirs...)
+	r.mu.Unlock()
+	return mcp.RootsForDirs(dirs)
+}
+
 // ACPSession represents a single ACP session with its own AIAgent instance.
 type ACPSession struct {
-	ID  string
-	cwd string
-	// additionalDirs are the additional workspace roots (absolute paths)
-	// declared for this session via ACP additionalDirectories. cwd remains
-	// the primary root; the effective root set is [cwd, ...additionalDirs].
-	// Relative paths always resolve against cwd only.
-	additionalDirs []string
-	cfg            *config.Config // for slash command handler access (provider resolution, language, etc.)
+	ID string
+	// roots is this session's workspace (see sessionRoots) — shared with the MCP connections the
+	// agent opened, which is why it is a pointer and why it is never replaced, only Set.
+	roots *sessionRoots
+	cfg   *config.Config // for slash command handler access (provider resolution, language, etc.)
 
 	agent   *agent.AIAgent
 	mcpMgr  *mcp.Manager
@@ -75,8 +124,7 @@ func NewACPSessionManager() *ACPSessionManager {
 // a direct mapping between ACP sessions and on-disk session storage.
 func (sm *ACPSessionManager) New(
 	parentCtx context.Context,
-	cwd string,
-	additionalDirs []string,
+	roots *sessionRoots,
 	cfg *config.Config,
 	aiAgent *agent.AIAgent,
 	mcpMgr *mcp.Manager,
@@ -95,15 +143,14 @@ func (sm *ACPSessionManager) New(
 	}
 
 	sess := &ACPSession{
-		ID:             id,
-		cwd:            cwd,
-		additionalDirs: additionalDirs,
-		cfg:            cfg,
-		agent:          aiAgent,
-		mcpMgr:         mcpMgr,
-		sessMgr:        sessMgr,
-		ctx:            sessCtx,
-		cancel:         sessCancel,
+		ID:      id,
+		roots:   roots,
+		cfg:     cfg,
+		agent:   aiAgent,
+		mcpMgr:  mcpMgr,
+		sessMgr: sessMgr,
+		ctx:     sessCtx,
+		cancel:  sessCancel,
 	}
 
 	sm.mu.Lock()

@@ -449,9 +449,15 @@ const type = (el, t) => {
   it is the way out. `mcp-auth` asserts both ends: listed+greyed after connecting, and the flip to loaded after
   pressing 启用 (which is also why that press happens AFTER the turn that asserts the deferred-tools reminder:
   a loaded tool is no longer "undiscovered", so the reminder would stop naming it).
-- **Tachi answers MCP's `roots` capability with the process's workspaces.** `Manager.SetRootsFunc`
-  (wired in `initAgent` to `desktopApp.mcpRoots`) makes every connection declare the capability and
-  answer `roots/list` on demand. It is not optional in practice: a roots-aware server CONFINes file
+- **Tachi answers MCP's `roots` capability with the workspaces of the frontend it is serving.**
+  `Manager.SetRootsFunc` makes every connection declare the capability and answer `roots/list` on
+  demand; the ANSWER differs by mode because the connection lifetime does — the desktop wires
+  `desktopApp.mcpRoots` on its shared manager (one connection serves every session, so the answer is
+  the union of their workspaces), while ACP wires it per session through `AgentConfig.MCPRootsFunc`
+  (its managers are per session, so the answer is that session's `cwd` + `additionalDirectories`,
+  and `session/resume` rewrites them in place — which is `agent/acp`'s `sessionRoots` object and why
+  it is an object rather than a captured copy). The shape of the answer itself (file:// URIs, only
+  directories that exist, deduplicated, sorted) is ONE rule, `mcp.RootsForDirs`, for both. It is not optional in practice: a roots-aware server CONFINes file
   access to what it is told, and the official chrome-devtools server, when the client declares no
   roots at all, allows only the OS temp dir — which is the "not within any of the configured
   workspace roots" failure, i.e. a tool that exports a file into the project dying on a path check.
