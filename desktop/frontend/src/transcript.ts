@@ -5,7 +5,7 @@
 // applies to it. They were lifted out of App.tsx because they hold no React state: reading
 // or changing them should not mean reading a 2000-line component.
 
-import { fileFromSendFileArgs, fmtDur } from './lib'
+import { fileFromSendFileArgs } from './lib'
 import type { Message, Part } from './types'
 import type { FileChangeVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -338,11 +338,19 @@ export function processSummaryLine(s: ProcessSummary): string {
   return bits.join(' · ')
 }
 
-// processLiveLine is the "what is happening now" line, shared by the turn's strip and the
-// composer's activity row: one fact, one wording — a second phrasing would drift.
-export function processLiveLine(live: LiveStep, elapsedMs?: number): string {
-  const head = `正在 ${live.name}${live.title ? ` · ${live.title}` : ''} · 第 ${live.step} 步`
-  return elapsedMs ? `${head} · ${fmtDur(elapsedMs)}` : head
+// processLiveState is the SWITCHING half of the strip's live row: what the turn is doing right
+// now — which tool, and which step.
+//
+// It is split from the elapsed time because the two change on different clocks: the state on
+// every thinking/tool transition (arbitrarily fast — the model can go 思考 → 工具 → 思考 faster
+// than a reader can register a word), the clock once a second. The strip ROLLS the first and
+// leaves the second in place (see RollingLine in components.tsx); one string for both would make
+// the roll fire on a metronome.
+//
+// The strip is the only consumer: the composer's own status row reads AgentState (label/detail)
+// from the backend, not this.
+export function processLiveState(live: LiveStep): string {
+  return `正在 ${live.name}${live.title ? ` · ${live.title}` : ''} · 第 ${live.step} 步`
 }
 
 // processStepLabel is the strip's leading count. A turn with only reasoning shows its

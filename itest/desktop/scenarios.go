@@ -1446,6 +1446,39 @@ permissions:
 			},
 		},
 		//
+		// live-roll：跑着的那几行字是"滚动"着换状态的，不是瞬切。
+		//
+		// 为什么单独一个场景：状态切换最快的地方是助手气泡里的运行占位行（正在思考… ↔ 正在执行…），
+		// 它每次 thinking/tool 转换都换一次，模型快起来就是一片闪；而"切换时有动画"这件事在别的场景
+		// 里没人钉得住。这里让一轮里必然发生两次翻转（起工具→执行，工具完模型再说话→又回思考），
+		// driver 逐次采样，每次变化都要求那一刻有动画在跑。
+		//
+		// 工具故意跑 3 秒：实时行要活着足够久，driver 才来得及等到它的标题（命令原文随 agent:tool
+		// 的第二个事件到，比实时行本身晚），也才看得清它是个滚动盒而不是一闪而过的东西。
+		{
+			name: "live-roll",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe live-roll scenario's working directory\n",
+			},
+			steps: []mockllm.Step{
+				{Reply: mockllm.Stream(
+					mockllm.Text("先跑一条命令。"),
+					mockllm.Pause(longTurn),
+					mockllm.ToolCallStart("call_r1", "Bash", `{"command":"sleep 3 && echo roll-ok"}`),
+					mockllm.Finish("tool_calls"),
+					mockllm.UsageWithCache(1500, 40, 1400, 10),
+					mockllm.Done(),
+				)},
+				{Reply: textStream("两步都跑完了。", 800)},
+			},
+			after: func(c *checkCtx) {
+				c.check("mock 脚本跑完且没有多余/缺失的请求", c.mockErr == nil, errText(c.mockErr))
+				c.check("工具结果回喂给了模型", len(c.requests) == 2, requestCount(c.requests))
+				_, ran := c.requestSeen("roll-ok")
+				c.check("那条命令真的跑了（它的输出回喂给了模型）", ran, "")
+			},
+		},
+		//
 		// 运行中的样子：工具还在跑时，过程条变成实时条（脉冲点 + 正在什么 + 第几步 + 用时），
 		// 输入框上方有同一句活动信息，正在跑的那张卡外露在过程条之外；回合结束后回到摘要、
 		// 活动行消失，而且（回复够长、内容超出一屏时）仍然贴在底部。

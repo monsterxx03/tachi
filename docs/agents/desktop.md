@@ -677,7 +677,9 @@ const type = (el, t) => {
   conclusion, step counts are per segment (N steers = N+1 strips), and a rebuild splits in the same place (the
   steer is a user record with `iteration > 0`); `steer-fold`'s Go half also proves the steered text reached the
   model as the next request's user message. A call that is merely RUNNING is not among the exposed: the live
-  row reports it (`processLiveLine`), and a call parked on a form is waiting rather than running. `TurnPart`
+  row reports it (`processLiveState` — the switching half only; the elapsed clock stays outside that string,
+  so the row can roll the state without the once-a-second clock re-triggering the roll), and a call parked on
+  a form is waiting rather than running. `TurnPart`
   stays atomic because `oneoff.tsx` replays the very same parts and exists to show them all. The open/closed
   state is per turn and presentational (never persisted), and the footer's diff chip opens the fold when it
   opens every diff, since those diffs live inside the folded cards. Smoke cost: a scenario that asserts a
@@ -701,6 +703,16 @@ const type = (el, t) => {
   focus ring with `box-shadow`. `transcript-live` samples `.process-head`'s height every 10ms across a
   two-call turn (live → between calls → live) and requires ONE value, plus that the row never disappears
   mid-turn; its fixture pauses before the second call so the "between calls" state is reachable at all.
+  **The same rule governs the live line's own text, which ROLLS when its state changes** (`RollingLine` in
+  `components.tsx`: the outgoing line leaves upward as the new one arrives, because a fast turn swaps the
+  label faster than a word can be read, and an instant swap reads as unrelated words flashing). Its box is
+  exactly `1lh` and clips; `1lh` and not an `em` estimate — a made-up `1.35em` came out 0.5px taller than the
+  summary line it replaces, and broke the height assertion above. The roll is also a THIRD case in base.css's
+  `prefers-reduced-motion` block, which otherwise has two: a STATUS indicator keeps its motion, decoration
+  loses it, and a content SWAP changes which animation plays (the slide becomes a fade, `roll-in` in
+  `widgets.css`) — freezing it would put back the instant cut the roll exists to remove. `live-roll` pins it,
+  asserting on every state change that an animation ran and that its name matches the setting, so it tests
+  both machines rather than skipping the branch it is not on.
 
 - **The titlebar is `App.tsx`'s `<header className="titlebar">`**: brand, the sidebar toggle, the session id
   (click to copy), then `titlebar-right` — the side-panel toggle and the theme switch, held at the far edge

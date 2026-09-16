@@ -216,7 +216,33 @@
 .process-head.static { cursor: default; }
 .process-head.live { box-shadow: inset 0 0 0 1px var(--accent-ring); background: var(--accent-soft); color: var(--text); }
 .process-head.live:hover { background: var(--accent-soft); }
-.process-head.live .process-now { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 560; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.process-head.live .process-now { flex: 1; min-width: 0; color: var(--accent-2); font-weight: 560; }
+/* The live row's clock. It is deliberately OUTSIDE the rolling text: it changes once a second,
+   and rolling it would make the row twitch on a metronome (see the split in processLiveState). */
+.process-elapsed { flex-shrink: 0; color: var(--text-faint); font-variant-numeric: tabular-nums; }
+/* The live row's text ROLLS when the state changes (components.tsx's RollingLine): the outgoing
+   line leaves upward while the new one arrives from below, because an instant swap is what makes
+   a fast turn read as a flicker — the model flips 思考 → 工具 → 思考 faster than the eye can
+   register a word, and what lands on screen is unrelated labels appearing and vanishing.
+   The box is exactly ONE line tall and clips; the inner holds at most two lines (the one leaving,
+   the one arriving) and slides up by one line height — `1lh`, the line height this row actually
+   has, since it is inherited rather than set here. Not an `em` guess: a made-up 1.35em came out
+   0.5px taller than the summary line it replaces, and `transcript-live` asserts the strip's height
+   to be CONSTANT across the live/summary switch for a reason — the transcript is pinned to the
+   bottom, so half a pixel of row growth moves everything on screen. */
+.roll { display: inline-block; height: 1lh; overflow: hidden; max-width: 100%; }
+.roll-inner { display: block; }
+.roll-line { display: block; height: 1lh; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.roll.rolling .roll-inner { animation: roll-up 0.18s var(--ease) both; }
+@keyframes roll-up { from { transform: translateY(0); } to { transform: translateY(-1lh); } }
+/* What the roll becomes when the reader has asked for less motion: the new line FADES IN where the
+   old one stood, instead of the old one sliding out past it. The displacement is exactly the kind of
+   motion `prefers-reduced-motion` exists to stop, but the swap itself must not become an instant
+   cut — an instant cut is what made a fast turn read as unrelated words flashing (see RollingLine's
+   comment in components.tsx). So the setting changes WHICH animation plays, not whether one does.
+   The keyframes live here, beside roll-up, so both halves of "one line arrives" are read together;
+   the rule that picks between them lives in base.css with the other reduced-motion overrides. */
+@keyframes roll-in { from { opacity: 0; } to { opacity: 1; } }
 .process-dot {
   width: 7px; height: 7px; flex-shrink: 0;
   border-radius: 50%;

@@ -461,7 +461,9 @@ body {
    broken — and in the sidebar's case the dot is the ONLY per-session running marker there
    is. Add a status indicator here when you add one; decoration stays covered by the
    blanket rule. The durations are repeated on purpose: the blanket rule uses `!important`,
-   so nothing else can bring an element's own duration back. */
+   so nothing else can bring an element's own duration back. ONE case below is neither a status
+   indicator nor decoration — a content swap, which gets a different ANIMATION instead of none —
+   and it carries its own comment there. */
 @media (prefers-reduced-motion: reduce) {
   * {
     animation-duration: 0.01ms !important;
@@ -492,4 +494,15 @@ body {
     animation-duration: 1.2s !important;
     animation-iteration-count: infinite !important;
   }
+  /* The rolling status line is the one case that is neither: it does not move to say "still
+     working", it moves because its CONTENT changed — same row, new text. The displacement goes
+     (that is what this setting is for), but a swap that becomes an instant cut is the very thing
+     the roll was added to fix, so a fade takes its place (widgets.css's roll-in, and the .roll
+     block there for the box). The leaving line is not rendered at all: with nothing to slide past,
+     there is nothing behind the arriving one to fade against.
+     One declaration, `!important` on the shorthand rather than a duration: this has to beat the
+     element's own roll-up, and widgets.css is loaded AFTER this file — a same-specificity rule
+     here would lose on source order alone. */
+  .roll.rolling .roll-line:first-child { display: none; }
+  .roll.rolling .roll-inner { animation: roll-in 0.14s var(--ease) both !important; }
 }

@@ -5,7 +5,7 @@ import { DiffBlock } from './diff'
 import { actOnKey, copyText, fmtDur, fmtShare, humanize } from './lib'
 import type { MCPAuthState } from './agentEvents'
 import type { Theme } from './theme'
-import { processLiveLine, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
+import { processLiveState, processStepLabel, processSummaryLine, type LiveStep, type ProcessSummary } from './transcript'
 import type { AtMatch, Part, PermissionDecision, PermissionRequest } from './types'
 import type { CommandVO, ContextInfoVO, FileChangeVO, MCPToolSchemaVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 
@@ -210,6 +210,71 @@ function NoticePart({ part }: { part: Part }) {
   )
 }
 
+// RollingLine renders one line of text that ROLLS when it changes — the outgoing line slides up
+// out of view while the new one comes up from below — instead of swapping instantly. An instant
+// swap is what makes a fast turn look like a flicker: the model goes 思考 → 工具 → 思考 faster
+// than a reader can register a word, and what lands on screen is unrelated labels flashing.
+//
+// Two rules keep the animation from fighting its own input:
+//
+//   - a MINIMUM DWELL before the next change is drawn (rollDwellMs). A change that arrives while
+//     the current line is still young is HELD, and the held value is always the LATEST one — so a
+//     burst shows a few readable states and ends on the true current one, instead of restarting
+//     the animation every 50ms (an animation that never plays out is a stutter, not motion);
+//   - a React `key` on the animated box, so each accepted change starts a fresh roll from the top
+//     rather than continuing a stale transform.
+//
+// Reduced motion: base.css's ONE explicit list decides, and it does not freeze this — it swaps the
+// slide for a fade (widgets.css's roll-in), because a swap that becomes an instant cut is the thing
+// the roll exists to fix. Nothing to do here; the two rules above are about pacing, not decoration.
+const rollDwellMs = 260
+
+function RollingLine({ text, className }: { text: string; className?: string }) {
+  const [pair, setPair] = useState<{ from: string | null; to: string; seq: number }>({ from: null, to: text, seq: 0 })
+  const latest = useRef(text)
+  const shownAt = useRef(Date.now())
+  const timer = useRef<number | null>(null)
+
+  useEffect(() => {
+    latest.current = text
+    if (text === pair.to) return
+    const apply = () => {
+      timer.current = null
+      const next = latest.current
+      // The last one wins: a burst that lands inside the dwell collapses into one roll onto the
+      // newest state, which is the one the reader has to end up seeing.
+      setPair((p) => (next === p.to ? p : { from: p.to, to: next, seq: p.seq + 1 }))
+      shownAt.current = Date.now()
+    }
+    const wait = Math.max(0, rollDwellMs - (Date.now() - shownAt.current))
+    if (wait === 0) {
+      apply()
+      return
+    }
+    if (timer.current === null) timer.current = window.setTimeout(apply, wait)
+  }, [text, pair.to])
+
+  useEffect(() => () => { if (timer.current !== null) window.clearTimeout(timer.current) }, [])
+
+  // The leaving line is dropped when its animation ends, and that is not tidiness: it is clipped
+  // but still TEXT (it would show up in a text extraction, and a reader of the DOM — including a
+  // smoke driver sampling the row — would see two states where the screen shows one). Dropping it
+  // also drops the `rolling` class, which takes the animation away; with the line gone the remaining
+  // one sits where the animation had just left it (top of the box, both for the slide and for the
+  // reduced-motion fade — see base.css's .roll rule, which hides the leaving line entirely).
+  // One handler serves both: animationend bubbles from whichever element carries the animation.
+  const rolling = pair.from !== null
+  return (
+    <span className={`roll${rolling ? ' rolling' : ''}${className ? ' ' + className : ''}`}>
+      <span className="roll-inner" key={pair.seq}
+        onAnimationEnd={() => setPair((p) => (p.from === null ? p : { ...p, from: null }))}>
+        {rolling ? <span className="roll-line">{pair.from}</span> : null}
+        <span className="roll-line">{pair.to}</span>
+      </span>
+    </span>
+  )
+}
+
 // ProcessStrip is one turn's process, folded into a single row: it stands in for every
 // thinking block, tool card and intermediate message of that turn, which stay behind the
 // "展开时序" toggle. The row is the summary — steps, what the tools touched, and whether
@@ -248,7 +313,8 @@ function ProcessStrip({ summary, open, onToggle, foldable, live, elapsedMs }: {
       {live ? <span className="process-dot" aria-hidden="true" /> : <span className="process-caret"><Caret open={open} /></span>}
       {live ? (
         <>
-          <span className="process-now">{processLiveLine(live, elapsedMs)}</span>
+          <RollingLine className="process-now" text={processLiveState(live)} />
+          {elapsedMs ? <span className="process-elapsed">· {fmtDur(elapsedMs)}</span> : null}
           {failed ? <span className="process-failed">⚠ {summary.failed} 步失败</span> : null}
         </>
       ) : (
@@ -1040,4 +1106,4 @@ function PermissionForm({ perm, onAnswer }: {
   )
 }
 
-export { ContextMeter, CacheRing, ProcessStrip, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, Caret }
+export { ContextMeter, CacheRing, ProcessStrip, RollingLine, ThinkingPart, ThinkingBlock, NoticePart, UserBubble, CommandPicker, CopyIcon, ToolCard, MCPPanel, RootsPanel, AtFilePicker, AskForm, PermissionForm, SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, Caret }

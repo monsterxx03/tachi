@@ -12,7 +12,7 @@ import {
 import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
-  ContextMeter, CacheRing, ProcessStrip, UserBubble, MCPPanel, AskForm, PermissionForm,
+  ContextMeter, CacheRing, ProcessStrip, RollingLine, UserBubble, MCPPanel, AskForm, PermissionForm,
   SettingsIcon, UsageIcon, MCPIcon, ThemeToggle, RootsPanel, Caret,
 } from './components'
 import { TurnPart } from './parts'
@@ -220,7 +220,16 @@ const AssistantBubble = memo(function AssistantBubble({ m, workDir, runningLabel
         {perm && onPermAnswer && !permShown && m.running ? (
           <PermissionForm perm={perm} onAnswer={onPermAnswer} />
         ) : null}
-        {m.running ? <span className="running"><span className="typing"><i></i><i></i><i></i></span>{runningLabel ?? '正在执行…'}</span> : null}
+        {m.running ? (
+          <span className="running">
+            <span className="typing"><i></i><i></i><i></i></span>
+            {/* The label flips 正在思考… ↔ 正在执行… on every thinking/tool transition — the
+                fastest-switching text in the UI, and the one that reads as a flicker when the
+                model answers quickly. It rolls (RollingLine) for the same reason the strip's
+                live row does; the dots stay put, so the row keeps a still anchor. */}
+            <RollingLine text={runningLabel ?? '正在执行…'} />
+          </span>
+        ) : null}
         {!m.running && m.stopped ? <span className="stopped-note"><span className="stop-square">⏹</span> 已停止</span> : null}
         {m.ts ? <span className="msg-ts">{fmtTime(m.ts)}</span> : null}
         {chip.files > 0 ? (
