@@ -415,6 +415,19 @@ const type = (el, t) => {
 ## Desktop MCP Auth (an OAuth2 server the panel can authorize)
 
 - **The MCP panel opens with every server FOLDED** (`expanded` in `MCPPanel`, empty = all folded), and that is a rule rather than a styling choice: a tools list belongs to a connected server, so "expand when connected" left an unconnected server showing nothing and the same control read as two different ones. Two consequences to keep in mind: the tool rows do not EXIST in the DOM until the row is clicked (`mcp-auth` asserts both halves — absent while folded, present after a click), and a folded row needs its caret, because a name + state + count with no disclosure mark looks like a static line. The fold is per-opening, not remembered: it lives in the component, which unmounts with the panel; persisting it belongs in `desktop_ui.json` beside the rest of the UI state.
+- **A connected server can be TOOL-LESS for a few seconds, and the panel must survive it.** `manager.connect`
+  registers a connection as soon as its own handshake + `tools/list` succeed, but the shared pool is filled only
+  after EVERY server has answered (`ConnectAll` waits for the slowest) — so "已连接 + 池子里还没有工具" is a
+  real window, seconds wide when one server is slow. Two things keep the panel honest about it: it re-reads on
+  every open (`App.tsx`'s effect on `mcpOpen`; nothing else would ever correct a stale snapshot) and the backend
+  emits `agent:mcp_ready` when the pool is settled, which a panel that was ALREADY open needs (`useMCPReady`).
+- **Tools in the pool are LISTED whether or not this session has loaded them, and the two must be told apart.**
+  Under MCP tool search a server auto-loads nothing, so "not loaded" is the normal state and a row that simply
+  disappears reads as a missing tool: unloaded rows carry `.unloaded` (greyed name and state) while loaded ones
+  stay at full strength (normal name, ✓ in green, the action reading 禁用). The action button is never greyed —
+  it is the way out. `mcp-auth` asserts both ends: listed+greyed after connecting, and the flip to loaded after
+  pressing 启用 (which is also why that press happens AFTER the turn that asserts the deferred-tools reminder:
+  a loaded tool is no longer "undiscovered", so the reminder would stop naming it).
 - **The panel's per-server state comes from the BACKEND, never from the panel.** `MCPServerVO.NeedsAuth` is
   set wherever a connect attempt came back `*mcp.OAuthRequiredError` — at startup (`populateSharedMCP`) as
   well as on a manual enable — because a server that wants a token otherwise looks exactly like one that is

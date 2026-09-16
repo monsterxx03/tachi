@@ -28,7 +28,7 @@ import type { PlanVO, SessionRootsVO } from '../bindings/github.com/monsterxx03/
 
 import { pushPart, finishNotice, setPartDiffs, togglePartDiff, turnDiffStat } from './transcript'
 import { useSessionTranscript } from './useTranscript'
-import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth } from './agentEvents'
+import { useAgentStatus, useSessionUsage, useAgentStream, useOneOffStream, useWorkspaceChanged, useMCPAuth, useMCPReady } from './agentEvents'
 import { useComposer, Composer, imeActive } from './composer'
 
 // ── Memoized transcript pieces ──────────────────────────────────────────────
@@ -1074,6 +1074,9 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     } catch { /* ignore */ }
   }, [])
   const { auth: mcpAuth, setAuth: setMCPAuth, clearAuth: clearMCPAuth } = useMCPAuth(refreshMCP)
+  // ...and once more when the backend says its pool is settled: a panel that was already open
+  // while the servers were still coming up would otherwise keep the empty snapshot it read.
+  useMCPReady(refreshMCP)
   const toggleServer = useCallback(async (name: string, enabled: boolean) => {
     setMcpLoading((p) => ({ ...p, [name]: true }))
     // The answer is a string, not a boolean: the backend says WHY it refused, and
@@ -1115,6 +1118,17 @@ function reviewDoneLabel(msgId: string, result: { msgId: string; run: OneOffRun 
     refreshMCP()
     setMcpLoading((p) => ({ ...p, __profile__: false }))
   }, [mcpProfile.active, refreshMCP])
+
+  // The panel's data is re-read EVERY time it opens, and that is not a nicety: the snapshot
+  // it renders can be taken while the servers are still coming up. The manager registers a
+  // connection as soon as its own handshake and tools/list succeed, but the shared pool is
+  // filled only after EVERY server has answered (ConnectAll waits for the slowest one), so
+  // "已连接 + 池子里还没有工具" is a real window — seconds wide when one server is slow. A
+  // panel opened on a snapshot from inside it showed a connected server with nothing to
+  // expand, forever, because nothing re-read afterwards.
+  useEffect(() => {
+    if (mcpOpen) refreshMCP()
+  }, [mcpOpen, refreshMCP])
 
   const commitRename = useCallback(async (id: string) => {
     const t = editTitle.trim()

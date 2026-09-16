@@ -185,6 +185,21 @@ func (d *desktopApp) populateSharedMCP(ctx context.Context, mgr *mcp.Manager) {
 		}
 		log.Printf("desktop MCP: load error: %v", err)
 	}
+	// The pool is filled only NOW — after every server has answered — while a connection is
+	// registered as soon as its own handshake and tools/list succeed. So a panel opened during
+	// those seconds renders "已连接 with no tools" from a read that was true when it was taken,
+	// and nothing else would ever correct it. This tells an open panel to re-read; a panel
+	// opened later re-reads on its own (see App.tsx).
+	d.emitMCPReady()
+}
+
+// emitMCPReady reports that the shared pool will not grow by itself any more for this
+// startup. Informational: the frontend's only use is to re-read the server list.
+func (d *desktopApp) emitMCPReady() {
+	if d.app == nil {
+		return
+	}
+	d.app.Event.Emit("agent:mcp_ready", map[string]any{})
 }
 
 // newSessionManager creates a fresh session manager honoring the configured

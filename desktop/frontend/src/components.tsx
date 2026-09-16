@@ -549,8 +549,14 @@ function MCPPanel({ servers, loading, profile, auth, onClose, onToggleServer, on
                 {authCard}
                 {isOpen && (s.tools || []).map((t) => {
                   const tbusy = !!loading[t.name]
+                  // A tool that lives in the shared pool but is not loaded into THIS session is
+                  // listed all the same, greyed — the panel is the directory of what the server
+                  // offers, and hiding the unloaded half would make a 44-tool server look empty
+                  // under tool search, which auto-loads none of them. Loaded stays at full
+                  // strength (normal name, ✓ in green, the action reading 禁用), so the two are
+                  // told apart at a glance rather than by reading a chip.
                   return (
-                    <div key={t.name} className="mcp-tool">
+                    <div key={t.name} className={`mcp-tool${t.loaded ? '' : ' unloaded'}`}>
                       <span className={`mcp-tool-state ${t.loaded ? 'loaded' : ''}`}>{t.loaded ? '✓ 已加载' : '○ 未加载'}</span>
                       <span className="mcp-tool-name" title={t.description || ''}>{t.toolName}</span>
                       <button className={`mcp-toggle ${t.loaded ? 'on' : ''}`} disabled={tbusy} onClick={() => onToggleTool(t.name, !t.loaded)}>

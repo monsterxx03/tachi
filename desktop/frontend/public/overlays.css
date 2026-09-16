@@ -116,6 +116,13 @@
 .mcp-tool-state { font-size: 11px; color: var(--text-faint); }
 .mcp-tool-state.loaded { color: var(--green); }
 .mcp-tool-name { font-size: 12px; color: var(--text); flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* A tool the server offers but this session has not loaded: listed all the same, greyed. The
+   grey is the distinction the panel has to carry — under tool search a server auto-loads
+   nothing, so an unloaded tool is the NORMAL state and "not loaded" must not read as "missing"
+   (which is what a row that is simply absent said). The action button keeps full strength: it
+   is the way out of the grey. */
+.mcp-tool.unloaded .mcp-tool-name { color: var(--text-faint); }
+.mcp-tool.unloaded .mcp-tool-state { color: var(--text-faint); }
 
 /* ── MCP authorization ───────────────────────────────────────────────────── */
 /* One server's authorization: what the flow is doing, the URL to open (or copy into a

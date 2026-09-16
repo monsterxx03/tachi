@@ -437,3 +437,18 @@ export function useMCPAuth(onDone: () => void): {
   }, [])
   return { auth, setAuth: setOne, clearAuth: clearOne }
 }
+
+// ── MCP finished coming up ──────────────────────────────────────────────────
+// The shared pool is filled only after EVERY configured server has answered, while a
+// connection counts as up as soon as its own handshake and tools/list succeed. Between those
+// two moments a server is 已连接 with no tools to list, and a panel opened on a read from
+// inside that window would show nothing and never correct itself — so the backend says when
+// the pool is settled and the panel re-reads.
+export function useMCPReady(onReady: () => void): void {
+  const ref = useRef(onReady)
+  ref.current = onReady
+  useEffect(() => {
+    const off = Events.On('agent:mcp_ready', () => ref.current())
+    return () => off?.()
+  }, [])
+}

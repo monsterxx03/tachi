@@ -75,6 +75,14 @@
   const tools = smoke.allText('.mcp-tool-name')
   smoke.check('列出来自 fixture 的工具', tools.some((t) => t.indexOf('echo') >= 0), tools.join(' | ') || '(没有工具行)')
 
+  // 池里的工具与「本会话已加载」是两件事：刚连上的 server 一个工具都没加载，但工具必须照常
+  // 列出来（置灰），否则在开启工具搜索时每个 server 看起来都是空的。这一条钉住"列出来"，
+  // 下面第 5 步钉住"能区分"。
+  const toolRow = smoke.q('.mcp-tool')
+  smoke.check('未加载的工具仍列在面板里', !!toolRow, '没有任何工具行')
+  smoke.check('未加载的工具行带置灰标记', !!toolRow && toolRow.classList.contains('unloaded'), toolRow ? toolRow.className : '')
+  smoke.check('未加载的工具显示「未加载」', !!toolRow && smoke.text(toolRow).indexOf('未加载') >= 0, smoke.text(toolRow))
+
   // ── 4. 授权之后的那一轮：模型要知道这些工具存在 ─────────────────────────
   // 工具进了池不等于模型知道它存在：deferred 提示一次会话只发一次，而这条 server 是会话
   // 开始之后才连上的 —— 不通知，模型就只能靠瞎猜去搜。这里真的发一条消息，让下一条请求
@@ -85,6 +93,35 @@
   smoke.click('.send-btn')
   if (!(await smoke.waitText('.msg-assistant .msg-content', '收到。', 30000))) return smoke.finish()
   smoke.check('授权后的第一轮拿到了回复', true)
+
+  // ── 5. 「已加载 / 未加载」分得开 ─────────────────────────────────────────
+  // 上面那几条证明未加载的工具列着且置灰；这里把它加载起来，证明两种状态在界面上真的不同
+  // （灰 → 正常色、○ → ✓、启用 → 禁用）—— 只灰不区分，等于没区分。
+  // 放在最后一轮之后：先让那一轮的请求断言到「模型被告知了未加载的工具」，再把它加载。
+  smoke.click('.mcp-btn')
+  const row2 = await smoke.waitFor(
+    () => smoke.qa('.mcp-server').find((el) => smoke.text(el).indexOf('oauth-fixture') >= 0) || null,
+    '再次打开面板'
+  )
+  if (!row2) return smoke.finish()
+  // 面板重开，折叠状态是新的（不记忆），展开一次。
+  if (!row2.querySelector('.mcp-tool')) smoke.click(row2.querySelector('.mcp-server-row'))
+  const row3 = await smoke.waitFor('.mcp-tool', '展开工具列表')
+  if (!row3) return smoke.finish()
+  smoke.check('重开面板后仍是未加载（没有自己变成已加载）', row3.classList.contains('unloaded'), row3.className)
+
+  smoke.click(row3.querySelector('.mcp-toggle'))
+  const loaded = await smoke.waitFor(
+    () => {
+      const el = smoke.q('.mcp-tool')
+      return el && !el.classList.contains('unloaded') ? el : null
+    },
+    '工具变成已加载（灰标消失）'
+  )
+  if (!loaded) return smoke.finish()
+  smoke.check('已加载的工具不再是灰的', !loaded.classList.contains('unloaded'), loaded.className)
+  smoke.check('已加载的工具显示 ✓', smoke.text(loaded).indexOf('✓') >= 0, smoke.text(loaded))
+  smoke.check('已加载的工具按钮变成「禁用」', smoke.text(loaded).indexOf('禁用') >= 0, smoke.text(loaded))
 
   smoke.finish()
 })()
