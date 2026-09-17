@@ -262,6 +262,51 @@ export function sessionGroups<T extends { id: string; compactedParentId?: string
   return groups
 }
 
+// latestSessionOf returns the session of a project that its reader most recently used, or
+// undefined when the project has no members yet — the question ⌘P answers with Enter.
+//
+// "Newest" is `updatedAt`, not `createdAt`: that is what the backend means by a project's
+// newest session (`memberSessions` in `desktop/projects.go` sorts by it), and it keeps Enter
+// from landing in an empty conversation made this morning while the one actually being worked
+// in sits above it. It deliberately does NOT track the sidebar's row order, which comes from
+// `ListSessions` (createdAt) — the palette therefore SHOWS which title Enter will open, so the
+// reader never has to know which clock the choice used.
+//
+// A session another member was compacted FROM is skipped: compaction leaves the predecessor in
+// the list as a folded-away 「压缩前」 row (`sessionRows` folds exactly these, by the same
+// `compactedParentId` link), and a conversation's newest link is the one to open.
+export function latestSessionOf<T extends { id: string; updatedAt: string; projectId?: string; compactedParentId?: string }>(
+  list: T[],
+  projectID: string,
+): T | undefined {
+  if (!projectID) return undefined
+  const members = list.filter((s) => s.projectId === projectID)
+  const hasChild = new Set<string>()
+  for (const s of members) {
+    if (s.compactedParentId && members.some((p) => p.id === s.compactedParentId)) hasChild.add(s.compactedParentId)
+  }
+  let best: T | undefined
+  for (const s of members) {
+    if (hasChild.has(s.id)) continue
+    if (!best || s.updatedAt > best.updatedAt) best = s
+  }
+  return best
+}
+
+// projectMatches reports whether a project answers a palette query: a case-insensitive
+// substring of its NAME or of one of its directories. Substring rather than a subsequence
+// match — a project name is typed whole (「tachi」, 「支付」), not spelled letter by letter, and
+// a subsequence match on one or two characters would return essentially every project. The
+// paths are searched too because a reader hunting for a project often remembers its directory
+// rather than the label someone gave it.
+export function projectMatches(p: ProjectVO, query: string): boolean {
+  const q = query.trim().toLowerCase()
+  if (!q) return true
+  if ((p.name || '').toLowerCase().includes(q)) return true
+  if ((p.workingDir || '').toLowerCase().includes(q)) return true
+  return (p.additionalDirs || []).some((r) => (r.path || '').toLowerCase().includes(q))
+}
+
 // fmtBytes renders a byte count the way the agent's own confirmation message
 // does (pkg/strutil.HumanBytes), so "README.md · 12.4 KB" on the card and
 // "✅ 文件 README.md (12.4 KB) 已加入发送队列" in the transcript agree.

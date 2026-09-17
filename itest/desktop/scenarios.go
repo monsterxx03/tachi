@@ -1667,6 +1667,52 @@ permissions:
 		},
 		//
 		//
+		// project-palette: ⌘P 是进项目的那条键盘路径 —— 在项目之间选，回车打开该项目**最近用过**
+		// 的会话，还没有会话就建第一个。三件断言都是界面上看不出来的：
+		// (1) 打开的是「最近」而不是碰巧当前的那个 —— driver 先用 ⌘N 现造一个成员（它同时是
+		// createdAt 与 updatedAt 最新的，两种「最新」在这里重合），再切回旧成员，然后 ⌘P 回车，
+		// 断言 active 回到项目组的第一行；
+		// (2) 空项目回车真的建出会话，且**绑在该项目上** —— 前端只看得见行数变了，绑定关系只有
+		// 磁盘上的 meta.json 说得清（NewSession 在项目不能驱动时会静默建一个不属于任何项目的
+		// 会话，这条就是防它的）；
+		// (3) 整个过程不碰模型 —— 一次键盘导航不该花掉任何 token。
+		{
+			name: "project-palette",
+			files: map[string]string{
+				"README.md": "# smoke\n\nthe project-palette scenario's work directory\n",
+			},
+			project: &projectSeed{
+				name: "smoke-pal",
+				files: map[string]string{
+					"README.md": "# smoke\n\nthe project-palette scenario's project directory\n",
+				},
+				// 一个空项目 = 唯一能走到「新建第一个会话」那条分支的状态。
+				emptyName: "smoke-pal-empty",
+			},
+			after: func(c *checkCtx) {
+				c.check("⌘P 的导航没有向模型发过任何请求", len(c.requests) == 0, requestCount(c.requests))
+				// meta.json 里这个字段是 project_id（session.Session 的 json tag），不是绑定层那个
+				// camelCase 的 projectId —— 前者才是磁盘上的事实。
+				bound := 0
+				for _, m := range c.sessionMetas() {
+					if m["project_id"] == "smoke-project-empty" {
+						bound++
+					}
+				}
+				c.check("⌘P 在空项目里建的会话绑在该项目上（meta.json 的 project_id）", bound == 1,
+					fmt.Sprintf("project_id=smoke-project-empty 的会话有 %d 个", bound))
+				members := 0
+				for _, m := range c.sessionMetas() {
+					if m["project_id"] == "smoke-project" {
+						members++
+					}
+				}
+				c.check("有会话的项目里有两个成员（原成员 + ⌘N 的新成员）", members == 2,
+					fmt.Sprintf("project_id=smoke-project 的会话有 %d 个", members))
+			},
+		},
+		//
+		//
 		// switch-load: the FIRST visit to a session, and following a transcript that grows without a
 		// message update. Every other switch driver re-selects a session the process already loaded
 		// (the in-memory copy), so the load-on-first-visit path — the 加载会话… placeholder, which

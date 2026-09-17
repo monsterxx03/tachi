@@ -9,7 +9,7 @@ import {
   type PermissionRequest,
   type SessionItem,
 } from './types'
-import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, type SessionRow } from './lib'
+import { buildTurns, fmtCredit, fmtDur, fmtTime, tpsTier, actOnKey, sessionGroups, rewindTargetForMessage, latestSessionOf, type SessionRow } from './lib'
 import { lastRunningAssistantIndex, lastAssistantIndex, turnView, type IndexedPart } from './transcript'
 import {
   ContextMeter, CacheRing, ProcessStrip, RollingLine, ReviewChip, UserBubble, MCPPanel, AskForm, PermissionForm,
@@ -19,6 +19,7 @@ import { TurnPart } from './parts'
 import { TurnDiffOverlay } from './diff'
 import { OneOffPanel, useOneOffs, oneOffRunLabel, ONE_OFF_PANEL_DEFAULT_WIDTH } from './oneoff'
 import { RewindChainOverlay } from './rewindchain'
+import { ProjectPalette } from './palette'
 import type { OneOffRun } from './agentEvents'
 import type { OneOffVO, ProjectVO, RewindPreviewVO, RewindTurnVO } from '../bindings/github.com/monsterxx03/tachi/desktop'
 import { PlanChip, PlanPanel } from './plan'
@@ -356,6 +357,10 @@ function App() {
   const [rewindMenu, setRewindMenu] = useState<{ x: number; y: number; msg: Message; sid: string; turns: RewindTurnVO[] | null } | null>(null)
   const [rewindCard, setRewindCard] = useState<{ sid: string; turn: number; preview: RewindPreviewVO; error?: string } | null>(null)
   const [shortcutsOpen, setShortcutsOpen] = useState(false)
+  // ⌘P: the project palette. Unlike the other overlays here it is not about the session on
+  // screen — it is the way to GET to one, so it holds no per-opening state of its own (the
+  // palette owns its query, its highlight and its refusal notice; see palette.tsx).
+  const [paletteOpen, setPaletteOpen] = useState(false)
   const [reminderModal, setReminderModal] = useState<string | null>(null)
   const [editingId, setEditingId] = useState('')
   const [editTitle, setEditTitle] = useState('')
@@ -1382,10 +1387,31 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
 
   useEffect(() => { loadAll(); refreshRunning(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [])
 
+  // pickProject answers the ⌘P palette (see palette.tsx): open the chosen project's most recent
+  // conversation, or make its first one. It returns "" when it acted — the palette then closes —
+  // or the reason to show IN the palette instead of closing it, because a refusal that dismisses
+  // the box reads as success.
+  //
+  // Creating is refused for a project that cannot drive its sessions (its primary directory is
+  // gone): the backend's NewSession falls back to the last used workspace and binds nothing when
+  // a project does not drive, so Enter on 「新建会话」 would quietly produce a 无项目 session. Its
+  // EXISTING sessions are opened as usual — those fall back to their own snapshot by design.
+  const pickProject = useCallback((p: ProjectVO) => {
+    const latest = latestSessionOf(sessions, p.id)
+    if (latest) {
+      void clickSession(latest.id)
+      return ''
+    }
+    if (!p.rootsUsable) {
+      return `「${p.name}」的主目录已不可用，不能在这里新建会话；请先在项目组上右键「编辑目录」修好它`
+    }
+    void newChat(p.id)
+    return ''
+  }, [sessions, clickSession, newChat])
+
   // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
-  // Keyboard shortcuts: Cmd+/ focuses the composer, Cmd+B toggles the sidebar,
-  // Cmd+N starts a new session. (No native menu binds them, so the webview sees
-  // the key events.)
+  // Cmd+N starts a new session, Cmd+P searches projects. (No native menu binds
+  // them, so the webview sees the key events.)
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
@@ -1394,19 +1420,21 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
         // as "somebody else used this key". An unconditional preventDefault would swallow every
         // Escape before the panel's handler could see it as unclaimed.
         if (shortcutsOpen || confirmDel || menu || rewindMenu || rewindCard || reminderModal || chain
-          || projectMenu || projectForm || confirmDelProject || editingProject) e.preventDefault()
+          || projectMenu || projectForm || confirmDelProject || editingProject || paletteOpen) e.preventDefault()
         setShortcutsOpen(false); setConfirmDel(null); setMenu(null); setRewindMenu(null)
         setRewindCard(null); setReminderModal(null); setChain(null)
         // The project surfaces dismiss with the same gesture. The rename editor is last: it is
         // the one the user is typing in, so a stray Escape there closes the editor, not the
         // window's other layers.
         setProjectMenu(null); setConfirmDelProject(null); setEditingProject(null)
+        setPaletteOpen(false)
         if (projectForm) setProjectForm(null)
         return
       }
       if (!e.metaKey) return
       if (e.key === '/' && !e.shiftKey) { e.preventDefault(); composer.focusInput() }
       else if (e.key.toLowerCase() === 'b') { e.preventDefault(); setSidebarCollapsed((v) => !v) }
+      else if (e.key.toLowerCase() === 'p' && !e.shiftKey) { e.preventDefault(); setPaletteOpen((v) => !v) }
       else if (e.key.toLowerCase() === 'n') {
         e.preventDefault()
         // ⌘N makes another conversation like the one on screen: if that session belongs to a
@@ -1432,7 +1460,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
   }, [newChat, shortcutsOpen, confirmDel, menu, rewindMenu, rewindCard, reminderModal, chain, openChain, currentId, sessions,
-    projects, projectMenu, projectForm, confirmDelProject, editingProject])
+    projects, projectMenu, projectForm, confirmDelProject, editingProject, paletteOpen])
 
   // A context menu is dismissed the way every other popover here is: a press outside it
   // (this effect), or Escape (above). `onMouseLeave` alone is NOT a dismissal — it only
@@ -2195,6 +2223,10 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
           </div>
         </div>
       )}
+      {paletteOpen && (
+        <ProjectPalette projects={projects} sessions={sessions}
+          onPick={pickProject} onClose={() => setPaletteOpen(false)} />
+      )}
       {shortcutsOpen && (
         <div className="confirm-overlay" onClick={() => setShortcutsOpen(false)}>
           <div className="confirm-box shortcuts-box" onClick={(e) => e.stopPropagation()}>
@@ -2202,6 +2234,7 @@ function reviewDoneLabel(slot: ReviewSlot, result: (ReviewSlot & { run: OneOffRu
             <div className="shortcut-section">全局</div>
             <div className="shortcut-row"><kbd>⌘ /</kbd><span>聚焦输入框</span></div>
             <div className="shortcut-row"><kbd>⌘ N</kbd><span>新建会话（当前会话属于项目时，就在该项目里新建）</span></div>
+            <div className="shortcut-row"><kbd>⌘ P</kbd><span>项目搜索（回车打开该项目最近的会话，没有就新建）</span></div>
             <div className="shortcut-row"><kbd>⌘ ⇧ H</kbd><span>回退链（本会话的可回退点）</span></div>
             <div className="shortcut-row"><kbd>⌘ B</kbd><span>折叠 / 展开侧栏</span></div>
             <div className="shortcut-row"><kbd>⌘ ?</kbd><span>显示本快捷键列表</span></div>

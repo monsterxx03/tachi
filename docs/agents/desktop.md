@@ -805,6 +805,25 @@ const type = (el, t) => {
   project-less session too. The `projects` smoke scenario asserts the DOM order, that the button carries no
   accent fill and is smaller than both a row title and a project name, and that ⌘N adds a row INSIDE the
   project group (a row count alone cannot tell which group it landed in).
+- **⌘P opens the project palette** (`desktop/frontend/src/palette.tsx`, `App.tsx`'s `pickProject`): type to
+  filter, ↑/↓, Enter, Esc — and Enter is the whole feature: open that project's most recently used
+  conversation, or make its first one. "Most recently used" is the MEMBER with the largest `updatedAt`
+  (`latestSessionOf`, `lib.ts`), which is the backend's own meaning of a project's newest session
+  (`memberSessions` in `desktop/projects.go`) — deliberately NOT the sidebar's row order, which is
+  `ListSessions` by `createdAt`; a session another member was compacted FROM is skipped, since that one is
+  the folded-away 「压缩前」 row of a conversation whose newest link is the one to open. Because the two
+  clocks can disagree, **each row says what Enter will do** (`→ <会话标题>` / `→ 新建会话`): a palette of bare
+  names would make Enter a guess. Three contracts travel with it. (1) `onPick` RETURNS the refusal reason
+  ("" = it acted), and the palette closes only on "" — a refusal that dismissed the box would read as
+  success. (2) A project whose primary directory is gone (`rootsUsable === false`) with NO members refuses to
+  create one: the backend's `NewSession` falls back to the last used workspace and binds NOTHING when a
+  project does not drive, so Enter would quietly produce a 无项目 session; its existing sessions still open
+  (those fall back to their own snapshot by design). (3) The palette reads the list the sidebar is already
+  rendering and issues no fetch on open — a second source of truth would need its own staleness story for a
+  question the sidebar has already answered. `project-palette` pins all three ends (the row texts, Enter
+  landing on the group's FIRST row after ⌘N made a newer member, the created session's `project_id` read off
+  disk, and that no model request happens at all: `project_id`, not `projectId` — meta.json's json tag, not
+  the binding's camelCase).
 - **A project write re-reads the reader** (`agent:workspace_changed`, emitted by `CreateProject` /
   `RenameProject` / `SetProjectRoots` / `DeleteProject`, handled by `useWorkspaceChanged`): the frontend
   holds a session's workspace and the sidebar's groups BY VALUE, so a rename or an edit moved nothing on
